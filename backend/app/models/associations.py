@@ -25,8 +25,8 @@ class NewsKeyword(SQLModel, table=True):
     )
 
     # Relationships
-    news_article: "NewsArticle | None" = Relationship(back_populates="keyword_links")
-    keyword: "Keyword | None" = Relationship(back_populates="news_links")
+    news_article: "NewsArticle" = Relationship(back_populates="keyword_links")
+    keyword: "Keyword" = Relationship(back_populates="news_links")
 
 
 # Resolve forward references

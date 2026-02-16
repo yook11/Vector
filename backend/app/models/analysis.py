@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import Column, ForeignKey, Index, Integer
+from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, Relationship, SQLModel
 
@@ -32,11 +32,13 @@ class AnalysisResult(SQLModel, table=True):
     ai_provider: str = Field(max_length=20, nullable=False)
     ai_model: str = Field(max_length=50, nullable=False)
     analyzed_at: datetime = Field(
-        default_factory=lambda: datetime.now(UTC), nullable=False
+        default_factory=lambda: datetime.now(UTC),
+        nullable=False,
+        sa_type=DateTime(timezone=True),
     )
 
     # Relationships
-    news_article: "NewsArticle | None" = Relationship(back_populates="analysis")
+    news_article: "NewsArticle" = Relationship(back_populates="analysis")
 
 
 # Resolve forward reference
