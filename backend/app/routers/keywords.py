@@ -7,15 +7,20 @@ from sqlmodel import func, select
 from app.dependencies import get_session
 from app.models.associations import NewsKeyword
 from app.models.keyword import Keyword
-from app.schemas.keyword import KeywordCreate, KeywordResponse, KeywordUpdate
+from app.schemas.keyword import (
+    KeywordCreate,
+    KeywordListResponse,
+    KeywordResponse,
+    KeywordUpdate,
+)
 
 router = APIRouter(prefix="/api/v1/keywords", tags=["keywords"])
 
 
-@router.get("", response_model=list[KeywordResponse])
+@router.get("", response_model=KeywordListResponse)
 async def list_keywords(
     session: AsyncSession = Depends(get_session),
-) -> list[KeywordResponse]:
+) -> KeywordListResponse:
     stmt = select(Keyword).order_by(Keyword.created_at.desc())
     result = await session.execute(stmt)
     keywords = result.scalars().all()
@@ -38,7 +43,7 @@ async def list_keywords(
                 created_at=kw.created_at,
             )
         )
-    return responses
+    return KeywordListResponse(items=responses)
 
 
 @router.post(

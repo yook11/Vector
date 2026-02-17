@@ -19,6 +19,7 @@ from app.schemas.news import (
     NewsResponse,
     PaginatedNewsResponse,
 )
+from app.services.news_fetcher import fetch_news_for_keywords
 
 router = APIRouter(prefix="/api/v1/news", tags=["news"])
 
@@ -180,14 +181,18 @@ async def fetch_news(
         stmt = select(Keyword).where(Keyword.is_active == True)  # noqa: E712
 
     result = await session.execute(stmt)
-    keywords = result.scalars().all()
+    keywords = list(result.scalars().all())
 
-    # Stub: actual fetching will be implemented in Step 6
+    fetch_result = await fetch_news_for_keywords(session, keywords)
+
     now = datetime.now(UTC)
     job_id = f"fetch-{now.strftime('%Y%m%d-%H%M%S')}"
 
     return NewsFetchResponse(
-        message="Fetch started",
+        message=(
+            f"Fetch completed: {fetch_result.new_count} new,"
+            f" {fetch_result.skipped_count} skipped"
+        ),
         keywords_count=len(keywords),
         job_id=job_id,
     )

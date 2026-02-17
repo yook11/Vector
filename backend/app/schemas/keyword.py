@@ -43,6 +43,17 @@ class KeywordResponse(BaseModel):
     created_at: datetime
 
 
+class KeywordListResponse(BaseModel):
+    """GET /api/v1/keywords response wrapper."""
+
+    model_config = ConfigDict(
+        alias_generator=to_camel,
+        populate_by_name=True,
+    )
+
+    items: list[KeywordResponse]
+
+
 class KeywordBrief(BaseModel):
     """Minimal keyword info embedded in NewsResponse."""
 
