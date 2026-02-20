@@ -24,9 +24,13 @@ class Keyword(SQLModel, table=True):
 
     # Relationships
     news_links: list["NewsKeyword"] = Relationship(back_populates="keyword")
+    user_subscriptions: list["UserKeywordSubscription"] = Relationship(
+        back_populates="keyword"
+    )
 
 
-# Resolve forward reference
+# Resolve forward references
 from app.models.associations import NewsKeyword  # noqa: E402, F811
+from app.models.user_keyword import UserKeywordSubscription  # noqa: E402, F811
 
 Keyword.model_rebuild()

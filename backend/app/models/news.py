@@ -31,10 +31,14 @@ class NewsArticle(SQLModel, table=True):
         sa_relationship_kwargs={"uselist": False},
     )
     keyword_links: list["NewsKeyword"] = Relationship(back_populates="news_article")
+    watchlist_items: list["WatchlistItem"] = Relationship(
+        back_populates="news_article"
+    )
 
 
 # Resolve forward references
 from app.models.analysis import AnalysisResult  # noqa: E402, F811
 from app.models.associations import NewsKeyword  # noqa: E402, F811
+from app.models.watchlist import WatchlistItem  # noqa: E402, F811
 
 NewsArticle.model_rebuild()
