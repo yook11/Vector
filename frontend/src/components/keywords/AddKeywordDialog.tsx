@@ -14,7 +14,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { ApiError, createKeyword } from "@/lib/api-client";
+import { ApiError, clientCreateKeyword as createKeyword } from "@/lib/client-api";
 
 export function AddKeywordDialog() {
   const router = useRouter();

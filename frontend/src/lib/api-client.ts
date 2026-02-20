@@ -23,21 +23,16 @@ function getBaseUrl(): string {
     if (internal) return internal;
     const pub = process.env.NEXT_PUBLIC_API_URL;
     if (pub) return pub;
-    if (process.env.NODE_ENV === "production") {
-      console.warn(
-        "[api-client] NEXT_PUBLIC_API_URL is not set, falling back to mock API",
-      );
-    }
-    return "http://localhost:3000/api/mock";
-  }
-  // Client-side: use public URL or fallback to mock
-  const pub = process.env.NEXT_PUBLIC_API_URL;
-  if (!pub && process.env.NODE_ENV === "production") {
-    console.warn(
-      "[api-client] NEXT_PUBLIC_API_URL is not set, falling back to mock API",
+    throw new Error(
+      "[api-client] NEXT_PUBLIC_API_URL or INTERNAL_API_URL must be set",
     );
   }
-  return pub ?? "/api/mock";
+  // Client-side: use public URL
+  const pub = process.env.NEXT_PUBLIC_API_URL;
+  if (!pub) {
+    throw new Error("[api-client] NEXT_PUBLIC_API_URL must be set");
+  }
+  return pub;
 }
 
 class ApiError extends Error {

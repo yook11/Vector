@@ -19,7 +19,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { KeywordTag } from "./KeywordTag";
 import { SubscriptionToggle } from "./SubscriptionToggle";
-import { deleteKeyword, updateKeyword } from "@/lib/api-client";
+import { clientDeleteKeyword as deleteKeyword, clientUpdateKeyword as updateKeyword } from "@/lib/client-api";
 import type { KeywordResponse } from "@/types";
 
 interface KeywordRowProps {

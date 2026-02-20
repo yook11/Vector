@@ -24,8 +24,10 @@ services:
       - ./frontend/postcss.config.js:/app/postcss.config.js
       - ./frontend/tsconfig.json:/app/tsconfig.json
       - ./frontend/next.config.js:/app/next.config.js
+      - ./frontend/.eslintrc.json:/app/.eslintrc.json
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
   # --- Backend ---
   backend:
@@ -44,6 +46,12 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
 
   # --- Database ---
   db:

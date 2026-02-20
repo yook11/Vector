@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { triggerFetch } from "@/lib/api-client";
+import { clientTriggerFetch as triggerFetch } from "@/lib/client-api";
 
 export function FetchButton() {
   const router = useRouter();
