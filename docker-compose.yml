@@ -1,8 +1,6 @@
 # ===========================================
 # Vector - Docker Compose
 # ===========================================
-# このファイルはStep 2 (Docker環境構築) で完成させる。
-# 以下はサービス構成のスケルトン。
 
 services:
   # --- Frontend ---
@@ -14,8 +12,18 @@ services:
       - "3000:3000"
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
+      - INTERNAL_API_URL=http://backend:8000/api/v1
+      - NEXTAUTH_URL=http://localhost:3000
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-vector-dev-secret-change-in-production}
     volumes:
       - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+      - ./frontend/package.json:/app/package.json
+      - ./frontend/components.json:/app/components.json
+      - ./frontend/tailwind.config.ts:/app/tailwind.config.ts
+      - ./frontend/postcss.config.js:/app/postcss.config.js
+      - ./frontend/tsconfig.json:/app/tsconfig.json
+      - ./frontend/next.config.js:/app/next.config.js
     depends_on:
       - backend
 
@@ -30,6 +38,9 @@ services:
       - .env
     volumes:
       - ./backend/app:/app/app
+      - ./backend/alembic:/app/alembic
+      - ./backend/alembic.ini:/app/alembic.ini
+      - ./backend/tests:/app/tests
     depends_on:
       db:
         condition: service_healthy
@@ -38,7 +49,7 @@ services:
   db:
     image: postgres:16-alpine
     ports:
-      - "5432:5432"
+      - "${DB_PORT:-5433}:5432"
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-vector}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vector}

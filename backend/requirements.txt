@@ -1,0 +1,17 @@
+fastapi>=0.115,<1
+uvicorn[standard]>=0.34,<1
+sqlmodel>=0.0.22,<1
+pydantic-settings>=2.7,<3
+asyncpg>=0.30,<1
+alembic>=1.14,<2
+httpx>=0.28,<1
+feedparser>=6.0,<7
+apscheduler>=3.10,<4
+structlog>=24.4,<26
+bcrypt>=4.0,<6
+python-jose[cryptography]>=3.3,<4
+email-validator>=2.0,<3
+google-genai>=1.5,<2
+ruff>=0.9,<1
+pytest>=8.3,<9
+pytest-asyncio>=0.25,<1
