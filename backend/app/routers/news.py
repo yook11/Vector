@@ -6,11 +6,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlmodel import col, func, select
 
-from app.dependencies import get_session
+from app.dependencies import get_optional_user, get_session
 from app.models.analysis import AnalysisResult
 from app.models.associations import NewsKeyword
 from app.models.keyword import Keyword
 from app.models.news import NewsArticle
+from app.models.user import User
+from app.models.user_keyword import UserKeywordSubscription
+from app.models.watchlist import WatchlistItem
 from app.schemas.analysis import AnalysisResponse
 from app.schemas.keyword import KeywordBrief
 from app.schemas.news import (
@@ -24,7 +27,22 @@ from app.services.news_fetcher import fetch_news_for_keywords
 router = APIRouter(prefix="/api/v1/news", tags=["news"])
 
 
-def _build_news_response(article: NewsArticle) -> NewsResponse:
+async def _get_watched_ids(
+    session: AsyncSession, user: User | None
+) -> set[int]:
+    """Return set of news_article_ids in the user's watchlist."""
+    if user is None:
+        return set()
+    stmt = select(WatchlistItem.news_article_id).where(
+        WatchlistItem.user_id == user.id
+    )
+    result = await session.execute(stmt)
+    return set(result.scalars().all())
+
+
+def _build_news_response(
+    article: NewsArticle, watched_ids: set[int] | None = None
+) -> NewsResponse:
     """Convert a NewsArticle ORM object to NewsResponse schema."""
     keywords = [
         KeywordBrief(
@@ -59,18 +77,21 @@ def _build_news_response(article: NewsArticle) -> NewsResponse:
         fetched_at=article.fetched_at,
         keywords=keywords,
         analysis=analysis,
+        is_watched=article.id in watched_ids if watched_ids else False,
     )
 
 
 @router.get("", response_model=PaginatedNewsResponse)
 async def list_news(
     keyword_id: int | None = Query(None, alias="keywordId"),
+    my_keywords: bool = Query(False, alias="myKeywords"),
     sentiment: str | None = None,
     min_impact: int | None = Query(None, alias="minImpact"),
     sort_by: str = Query("publishedAt", alias="sortBy"),
     sort_order: str = Query("desc", alias="sortOrder"),
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100, alias="perPage"),
+    user: User | None = Depends(get_optional_user),
     session: AsyncSession = Depends(get_session),
 ) -> PaginatedNewsResponse:
     # Base query with eager loading
@@ -79,8 +100,15 @@ async def list_news(
         selectinload(NewsArticle.keyword_links).selectinload(NewsKeyword.keyword),
     )
 
-    # Filters
-    if keyword_id is not None:
+    # myKeywords filter: only effective for authenticated users
+    if my_keywords and user is not None:
+        sub_kw_ids = select(UserKeywordSubscription.keyword_id).where(
+            UserKeywordSubscription.user_id == user.id
+        )
+        stmt = stmt.join(NewsKeyword).where(
+            NewsKeyword.keyword_id.in_(sub_kw_ids)
+        )
+    elif keyword_id is not None:
         stmt = stmt.join(NewsKeyword).where(NewsKeyword.keyword_id == keyword_id)
 
     if sentiment is not None:
@@ -126,8 +154,11 @@ async def list_news(
     result = await session.execute(stmt)
     articles = result.unique().scalars().all()
 
+    # Compute watched IDs for the user
+    watched_ids = await _get_watched_ids(session, user)
+
     return PaginatedNewsResponse(
-        items=[_build_news_response(a) for a in articles],
+        items=[_build_news_response(a, watched_ids) for a in articles],
         total=total,
         page=page,
         per_page=per_page,
@@ -138,6 +169,7 @@ async def list_news(
 @router.get("/{news_id}", response_model=NewsResponse)
 async def get_news(
     news_id: int,
+    user: User | None = Depends(get_optional_user),
     session: AsyncSession = Depends(get_session),
 ) -> NewsResponse:
     stmt = (
@@ -159,7 +191,8 @@ async def get_news(
             detail="News article not found",
         )
 
-    return _build_news_response(article)
+    watched_ids = await _get_watched_ids(session, user)
+    return _build_news_response(article, watched_ids)
 
 
 @router.post(

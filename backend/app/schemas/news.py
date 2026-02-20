@@ -23,6 +23,7 @@ class NewsResponse(BaseModel):
     fetched_at: datetime
     keywords: list[KeywordBrief] = []
     analysis: AnalysisResponse | None = None
+    is_watched: bool = False
 
 
 class PaginatedNewsResponse(BaseModel):

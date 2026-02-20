@@ -7,14 +7,17 @@ from sqlalchemy import text
 
 from app.config import settings
 from app.db import engine
-from app.routers import keywords, news
+from app.routers import auth, keywords, me, news
+from app.services.scheduler import get_last_fetch_at, start_scheduler, stop_scheduler
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Startup
+    start_scheduler()
     yield
     # Shutdown
+    stop_scheduler()
     await engine.dispose()
 
 
@@ -34,7 +37,9 @@ app.add_middleware(
 )
 
 # Register routers
+app.include_router(auth.router)
 app.include_router(keywords.router)
+app.include_router(me.router)
 app.include_router(news.router)
 
 
@@ -52,5 +57,5 @@ async def health_check() -> dict:
         "status": "ok",
         "version": "0.1.0",
         "dbConnected": db_connected,
-        "lastFetchAt": None,
+        "lastFetchAt": get_last_fetch_at(),
     }
