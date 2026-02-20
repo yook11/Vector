@@ -1,5 +1,11 @@
 import type { Metadata } from "next";
+import { Inter } from "next/font/google";
+import { Toaster } from "sonner";
+import { Header } from "@/components/layout/Header";
+import { SessionProvider } from "@/components/auth/SessionProvider";
 import "./globals.css";
+
+const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
   title: "Vector",
@@ -13,7 +19,13 @@ export default function RootLayout({
 }) {
   return (
     <html lang="ja">
-      <body>{children}</body>
+      <body className={inter.className}>
+        <SessionProvider>
+          <Header />
+          <div className="min-h-[calc(100vh-3.5rem)]">{children}</div>
+          <Toaster richColors position="bottom-right" />
+        </SessionProvider>
+      </body>
     </html>
   );
 }
