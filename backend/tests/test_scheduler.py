@@ -32,11 +32,17 @@ async def test_job_fetches_and_analyzes_successfully() -> None:
     mock_kw_result = MagicMock()
     mock_kw_result.scalars.return_value.all.return_value = [kw]
 
+    # Phase 3: no articles needing content extraction
+    mock_no_content_result = MagicMock()
+    mock_no_content_result.scalars.return_value.all.return_value = []
+
     article = MagicMock(spec=NewsArticle)
     mock_article_result = MagicMock()
     mock_article_result.scalars.return_value.all.return_value = [article]
 
-    mock_session.execute = AsyncMock(side_effect=[mock_kw_result, mock_article_result])
+    mock_session.execute = AsyncMock(
+        side_effect=[mock_kw_result, mock_no_content_result, mock_article_result]
+    )
 
     with (
         patch(
@@ -182,11 +188,17 @@ async def test_job_reports_analysis_errors() -> None:
     mock_kw_result = MagicMock()
     mock_kw_result.scalars.return_value.all.return_value = [kw]
 
+    # Phase 3: no articles needing content extraction
+    mock_no_content_result = MagicMock()
+    mock_no_content_result.scalars.return_value.all.return_value = []
+
     article = MagicMock(spec=NewsArticle)
     mock_article_result = MagicMock()
     mock_article_result.scalars.return_value.all.return_value = [article]
 
-    mock_session.execute = AsyncMock(side_effect=[mock_kw_result, mock_article_result])
+    mock_session.execute = AsyncMock(
+        side_effect=[mock_kw_result, mock_no_content_result, mock_article_result]
+    )
 
     with (
         patch(

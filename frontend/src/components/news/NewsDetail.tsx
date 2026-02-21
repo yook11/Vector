@@ -11,7 +11,7 @@ import { SentimentBadge } from "./SentimentBadge";
 import { ImpactScore } from "./ImpactScore";
 import type { NewsResponse } from "@/types";
 
-function formatDate(dateStr: string | null): string {
+function formatDate(dateStr: string | null | undefined): string {
   if (!dateStr) return "Unknown";
   return new Date(dateStr).toLocaleDateString("ja-JP", {
     year: "numeric",
@@ -119,6 +119,30 @@ export function NewsDetail({ article }: { article: NewsResponse }) {
           </CardContent>
         </Card>
       )}
+
+      {article.content ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Article Content</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="prose prose-sm max-w-none text-muted-foreground whitespace-pre-line">
+              {article.content}
+            </div>
+            {article.contentFetchedAt && (
+              <p className="mt-4 text-xs text-muted-foreground">
+                Content fetched at {formatDate(article.contentFetchedAt)}
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      ) : article.contentFetchedAt ? (
+        <Card>
+          <CardContent className="py-6 text-center text-muted-foreground text-sm">
+            Full content could not be extracted from this article.
+          </CardContent>
+        </Card>
+      ) : null}
     </div>
   );
 }

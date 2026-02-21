@@ -33,7 +33,8 @@ export function RegisterForm() {
 
     try {
       // Register via backend API
-      const baseUrl = process.env.NEXT_PUBLIC_API_URL ?? "/api/mock";
+      const baseUrl = process.env.NEXT_PUBLIC_API_URL;
+      if (!baseUrl) throw new Error("NEXT_PUBLIC_API_URL must be set");
       const res = await fetch(`${baseUrl}/auth/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

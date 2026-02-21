@@ -1,10 +1,20 @@
 "use client";
 
-import { getSession } from "next-auth/react";
+import { getSession, signOut } from "next-auth/react";
+import type {
+  KeywordCreate,
+  KeywordResponse,
+  KeywordUpdate,
+  NewsFetchRequest,
+  NewsFetchResponse,
+} from "@/types";
 
 function getBaseUrl(): string {
   const pub = process.env.NEXT_PUBLIC_API_URL;
-  return pub ?? "/api/mock";
+  if (!pub) {
+    throw new Error("[client-api] NEXT_PUBLIC_API_URL must be set");
+  }
+  return pub;
 }
 
 class ApiError extends Error {
@@ -40,6 +50,10 @@ async function clientFetch<T>(
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({ detail: res.statusText }));
+    if (res.status === 401) {
+      await signOut({ callbackUrl: "/auth/login" });
+      return undefined as T;
+    }
     throw new ApiError(res.status, body.detail ?? res.statusText);
   }
 
@@ -75,6 +89,42 @@ export async function clientRemoveFromWatchlist(
 ): Promise<void> {
   await clientFetch(`/me/watchlist/${newsArticleId}`, {
     method: "DELETE",
+  });
+}
+
+// --- Keywords ---
+
+export async function clientCreateKeyword(
+  body: KeywordCreate,
+): Promise<KeywordResponse> {
+  return clientFetch<KeywordResponse>("/keywords", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function clientUpdateKeyword(
+  id: number,
+  body: KeywordUpdate,
+): Promise<KeywordResponse> {
+  return clientFetch<KeywordResponse>(`/keywords/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function clientDeleteKeyword(id: number): Promise<void> {
+  return clientFetch<void>(`/keywords/${id}`, { method: "DELETE" });
+}
+
+// --- News ---
+
+export async function clientTriggerFetch(
+  body?: NewsFetchRequest,
+): Promise<NewsFetchResponse> {
+  return clientFetch<NewsFetchResponse>("/news/fetch", {
+    method: "POST",
+    body: JSON.stringify(body ?? {}),
   });
 }
 

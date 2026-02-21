@@ -75,6 +75,8 @@ def _build_news_response(
         source=article.source,
         published_at=article.published_at,
         fetched_at=article.fetched_at,
+        content=article.content,
+        content_fetched_at=article.content_fetched_at,
         keywords=keywords,
         analysis=analysis,
         is_watched=article.id in watched_ids if watched_ids else False,

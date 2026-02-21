@@ -14,6 +14,7 @@ from app.models.analysis import AnalysisResult
 from app.models.keyword import Keyword
 from app.models.news import NewsArticle
 from app.services.ai_analyzer import analyze_articles
+from app.services.content_extractor import extract_contents
 from app.services.news_fetcher import fetch_news_for_keywords
 
 logger = structlog.get_logger(__name__)
@@ -35,6 +36,9 @@ class SchedulerJobResult:
     fetch_new: int = 0
     fetch_skipped: int = 0
     fetch_errors: int = 0
+    content_extracted: int = 0
+    content_skipped: int = 0
+    content_errors: int = 0
     analyze_count: int = 0
     analyze_skipped: int = 0
     analyze_errors: int = 0
@@ -66,7 +70,28 @@ async def run_fetch_and_analyze() -> SchedulerJobResult:
             result.fetch_skipped = fetch_result.skipped_count
             result.fetch_errors = fetch_result.error_count
 
-            # Phase 3: Query unanalyzed articles
+            # Phase 3: Extract content for articles without content
+            no_content_stmt = select(NewsArticle).where(
+                NewsArticle.content_fetched_at == None,  # noqa: E711
+            )
+            no_content = (
+                (await session.execute(no_content_stmt)).scalars().all()
+            )
+
+            if no_content:
+                content_result = await extract_contents(
+                    session, list(no_content)
+                )
+                result.content_extracted = content_result.extracted_count
+                result.content_skipped = content_result.skipped_count
+                result.content_errors = content_result.error_count
+            else:
+                logger.info(
+                    "scheduler_content_skipped",
+                    reason="no articles without content",
+                )
+
+            # Phase 4: Query unanalyzed articles
             unanalyzed_stmt = (
                 select(NewsArticle)
                 .outerjoin(
@@ -83,7 +108,7 @@ async def run_fetch_and_analyze() -> SchedulerJobResult:
                     reason="no unanalyzed articles",
                 )
             else:
-                # Phase 4: Run AI analysis
+                # Phase 5: Run AI analysis (with content if available)
                 analyze_result = await analyze_articles(session, list(unanalyzed))
                 result.analyze_count = analyze_result.analyzed_count
                 result.analyze_skipped = analyze_result.skipped_count
@@ -102,6 +127,9 @@ async def run_fetch_and_analyze() -> SchedulerJobResult:
         fetch_new=result.fetch_new,
         fetch_skipped=result.fetch_skipped,
         fetch_errors=result.fetch_errors,
+        content_extracted=result.content_extracted,
+        content_skipped=result.content_skipped,
+        content_errors=result.content_errors,
         analyzed=result.analyze_count,
         analyze_skipped=result.analyze_skipped,
         analyze_errors=result.analyze_errors,

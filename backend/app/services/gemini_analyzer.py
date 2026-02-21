@@ -16,7 +16,7 @@ GEMINI_MODEL = "gemini-2.0-flash"
 MAX_RETRIES = 3
 RETRY_BASE_DELAY = 2.0  # seconds, exponential backoff: 2, 4, 8
 
-ANALYSIS_PROMPT = """\
+ANALYSIS_PROMPT_BASE = """\
 You are an expert tech news analyst specializing in emerging technologies \
 (quantum computing, materials informatics, advanced semiconductors, etc.) \
 with a focus on investment implications for the Japanese market.
@@ -27,7 +27,7 @@ outside the JSON.
 
 Article title: {title}
 Article description: {description}
-
+{content_section}
 Return a JSON object with exactly these fields:
 {{
   "title_ja": "Japanese translation of the article title (accurate, concise)",
@@ -47,6 +47,7 @@ Rules:
 - impact_score MUST be an integer from 1 to 10
 - key_topics should contain 2-5 Japanese topic keywords
 - If description is empty, analyze based on the title alone
+- When full article content is provided, use it for deeper analysis
 """
 
 
@@ -71,11 +72,18 @@ class GeminiAnalyzer(BaseAnalyzer):
         self,
         title: str,
         description: str | None,
+        content: str | None = None,
     ) -> AnalysisData:
         """Call Gemini API with retry and parse the response."""
-        prompt = ANALYSIS_PROMPT.format(
+        content_section = ""
+        if content:
+            truncated = content[: settings.content_max_length]
+            content_section = f"\nArticle full text:\n{truncated}\n"
+
+        prompt = ANALYSIS_PROMPT_BASE.format(
             title=title,
             description=description or "(no description available)",
+            content_section=content_section,
         )
         raw_text = await self._call_with_retry(prompt)
         return self._parse_response(raw_text)

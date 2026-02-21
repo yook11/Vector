@@ -14,7 +14,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { ApiError, createKeyword } from "@/lib/api-client";
+import { ApiError, clientCreateKeyword as createKeyword } from "@/lib/client-api";
 
 export function AddKeywordDialog() {
   const router = useRouter();
@@ -32,7 +32,7 @@ export function AddKeywordDialog() {
     try {
       await createKeyword({
         keyword: trimmed,
-        category: category.trim() || undefined,
+        category: category.trim() || "custom",
       });
       toast.success(`Added "${trimmed}"`);
       setKeyword("");

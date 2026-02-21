@@ -21,6 +21,8 @@ class NewsResponse(BaseModel):
     source: str
     published_at: datetime | None = None
     fetched_at: datetime
+    content: str | None = None
+    content_fetched_at: datetime | None = None
     keywords: list[KeywordBrief] = []
     analysis: AnalysisResponse | None = None
     is_watched: bool = False

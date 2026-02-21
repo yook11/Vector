@@ -31,6 +31,11 @@ out/
 .turbo/
 
 # ===========================
+# Generated files
+# ===========================
+frontend/openapi.json
+
+# ===========================
 # Docker
 # ===========================
 docker-compose.override.yml

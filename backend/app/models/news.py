@@ -24,6 +24,10 @@ class NewsArticle(SQLModel, table=True):
         nullable=False,
         sa_type=DateTime(timezone=True),
     )
+    content: str | None = Field(default=None)
+    content_fetched_at: datetime | None = Field(
+        default=None, sa_type=DateTime(timezone=True)
+    )
 
     # Relationships
     analysis: "AnalysisResult" = Relationship(
