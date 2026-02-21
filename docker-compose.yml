@@ -70,5 +70,62 @@ services:
       timeout: 5s
       retries: 5
 
+  # --- Redis (Task Queue Broker) ---
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    volumes:
+      - redisdata:/data
+
+  # --- taskiq worker (executes news pipeline tasks) ---
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    # "app.tasks.taskiq_worker:broker" = broker object for taskiq
+    # "app.tasks.taskiq_worker" = module for task auto-discovery
+    # If tasks split into multiple modules later, replace with "app.tasks" package.
+    command: taskiq worker app.tasks.taskiq_worker:broker app.tasks.taskiq_worker
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://vector:vector@db:5432/vector
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./backend/app:/app/app
+    depends_on:
+      backend:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # --- taskiq scheduler (sends cron-triggered tasks to Redis) ---
+  scheduler:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: taskiq scheduler app.tasks.taskiq_worker:scheduler
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://vector:vector@db:5432/vector
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./backend/app:/app/app
+    depends_on:
+      backend:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   pgdata:
+  redisdata:
