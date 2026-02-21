@@ -8,16 +8,14 @@ from sqlalchemy import text
 from app.config import settings
 from app.db import engine
 from app.routers import auth, keywords, me, news
-from app.services.scheduler import get_last_fetch_at, start_scheduler, stop_scheduler
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    # Startup
-    start_scheduler()
+    # Startup: task worker runs in a separate Docker service (worker/scheduler).
+    # Add future startup logic here if needed (e.g. cache warming, connection checks).
     yield
     # Shutdown
-    stop_scheduler()
     await engine.dispose()
 
 
@@ -57,5 +55,4 @@ async def health_check() -> dict:
         "status": "ok",
         "version": "0.1.0",
         "dbConnected": db_connected,
-        "lastFetchAt": get_last_fetch_at(),
     }

@@ -29,5 +29,8 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:3000"
     backend_url: str = "http://localhost:8000"
 
+    # Task Queue
+    redis_url: str = "redis://localhost:6379/0"
+
 
 settings = Settings()

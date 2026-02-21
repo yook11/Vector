@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlmodel import col, func, select
 
-from app.dependencies import get_optional_user, get_session
+from app.dependencies import get_current_user, get_optional_user, get_session
 from app.models.analysis import AnalysisResult
 from app.models.associations import NewsKeyword
 from app.models.keyword import Keyword
@@ -17,11 +17,13 @@ from app.models.watchlist import WatchlistItem
 from app.schemas.analysis import AnalysisResponse
 from app.schemas.keyword import KeywordBrief
 from app.schemas.news import (
+    EmbedResponse,
     NewsFetchRequest,
     NewsFetchResponse,
     NewsResponse,
     PaginatedNewsResponse,
 )
+from app.services.embedding import embed_articles
 from app.services.news_fetcher import fetch_news_for_keywords
 
 router = APIRouter(prefix="/api/v1/news", tags=["news"])
@@ -166,6 +168,92 @@ async def list_news(
         per_page=per_page,
         total_pages=math.ceil(total / per_page) if total > 0 else 0,
     )
+
+
+@router.post(
+    "/embed",
+    response_model=EmbedResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Backfill embeddings for articles that are missing them",
+)
+async def embed_news(
+    session: AsyncSession = Depends(get_session),
+    _user: User = Depends(get_current_user),
+) -> EmbedResponse:
+    """Generate vector embeddings for all articles where embedding IS NULL.
+
+    Requires authentication to prevent unintended Gemini API cost.
+    """
+    stmt = select(NewsArticle).where(NewsArticle.embedding.is_(None))
+    result = await session.execute(stmt)
+    articles = list(result.scalars().all())
+
+    if not articles:
+        return EmbedResponse(
+            message="No articles need embedding",
+            embedded_count=0,
+            skipped_count=0,
+            error_count=0,
+        )
+
+    er = await embed_articles(session, articles)
+
+    return EmbedResponse(
+        message=f"Embedding completed: {er.embedded_count} embedded, {er.error_count} errors",
+        embedded_count=er.embedded_count,
+        skipped_count=er.skipped_count,
+        error_count=er.error_count,
+    )
+
+
+@router.get(
+    "/{news_id}/similar",
+    response_model=list[NewsResponse],
+    summary="Find semantically similar articles using pgvector cosine distance",
+)
+async def get_similar_news(
+    news_id: int,
+    limit: int = Query(5, ge=1, le=20),
+    session: AsyncSession = Depends(get_session),
+) -> list[NewsResponse]:
+    """Return articles most similar to the given article, ordered by cosine distance.
+
+    Returns an empty list (not 404) if the article has no embedding yet.
+    """
+    # Fetch the source article
+    source_stmt = select(NewsArticle).where(NewsArticle.id == news_id)
+    source_result = await session.execute(source_stmt)
+    source = source_result.scalar_one_or_none()
+
+    if source is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="News article not found",
+        )
+
+    # Graceful fallback: embedding not yet generated
+    if source.embedding is None:
+        return []
+
+    # Cosine distance similarity search via pgvector column method
+    similar_stmt = (
+        select(NewsArticle)
+        .options(
+            selectinload(NewsArticle.analysis),
+            selectinload(NewsArticle.keyword_links).selectinload(NewsKeyword.keyword),
+        )
+        .where(
+            NewsArticle.id != news_id,
+            NewsArticle.embedding.is_not(None),
+        )
+        .order_by(NewsArticle.embedding.cosine_distance(source.embedding))
+        .limit(limit)
+    )
+
+    similar_result = await session.execute(similar_stmt)
+    articles = similar_result.unique().scalars().all()
+
+    return [_build_news_response(a) for a in articles]
 
 
 @router.get("/{news_id}", response_model=NewsResponse)

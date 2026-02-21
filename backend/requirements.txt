@@ -9,7 +9,12 @@ feedparser>=6.0,<7
 newspaper4k>=0.9,<1
 lxml>=5.0,<6
 lxml-html-clean>=0.4,<1
-apscheduler>=3.10,<4
+greenlet>=3.0,<4
+# Task Queue
+taskiq>=0.12,<1
+# Vector Search
+pgvector>=0.3.0,<1
+taskiq-redis>=1.0,<2
 structlog>=24.4,<26
 bcrypt>=4.0,<6
 python-jose[cryptography]>=3.3,<4
