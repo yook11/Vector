@@ -206,4 +206,14 @@ export async function removeFromWatchlist(
   });
 }
 
+/** Fetch articles semantically similar to the given article. */
+export async function getSimilarNews(
+  id: number,
+  limit = 5,
+): Promise<NewsResponse[]> {
+  return fetchApi<NewsResponse[]>(`/news/${id}/similar?limit=${limit}`, {
+    cache: "no-store",
+  });
+}
+
 export { ApiError };

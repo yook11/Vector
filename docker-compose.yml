@@ -55,7 +55,7 @@ services:
 
   # --- Database ---
   db:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     ports:
       - "${DB_PORT:-5433}:5432"
     environment:

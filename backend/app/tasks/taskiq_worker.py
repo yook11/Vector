@@ -39,6 +39,7 @@ from app.models.keyword import Keyword
 from app.models.news import NewsArticle
 from app.services.ai_analyzer import analyze_articles
 from app.services.content_extractor import extract_contents
+from app.services.embedding import embed_articles
 from app.services.news_fetcher import fetch_news_for_keywords
 
 logger = structlog.get_logger(__name__)
@@ -144,6 +145,9 @@ async def fetch_and_analyze_task(ctx: Context = TaskiqDepends()) -> dict:
         "analyze_count": 0,
         "analyze_skipped": 0,
         "analyze_errors": 0,
+        "embed_count": 0,
+        "embed_skipped": 0,
+        "embed_errors": 0,
     }
 
     async with SQLModelAsyncSession(engine) as session:
@@ -229,6 +233,34 @@ async def fetch_and_analyze_task(ctx: Context = TaskiqDepends()) -> dict:
         except Exception:
             logger.exception("taskiq_analyze_phase_failed")
             result["analyze_errors"] += 1
+
+        # Phase 5: Embedding generation
+        # Runs independently of Phase 4 — covers any article with embedding IS NULL,
+        # including articles from previous runs that failed to embed.
+        try:
+            unembedded = list(
+                (
+                    await session.execute(
+                        select(NewsArticle).where(
+                            NewsArticle.embedding.is_(None)
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            if unembedded:
+                er = await embed_articles(session, unembedded)
+                result["embed_count"] = er.embedded_count
+                result["embed_skipped"] = er.skipped_count
+                result["embed_errors"] = er.error_count
+            else:
+                logger.info(
+                    "taskiq_embed_skipped", reason="all articles have embeddings"
+                )
+        except Exception:
+            logger.exception("taskiq_embed_phase_failed")
+            result["embed_errors"] += 1
 
     logger.info("taskiq_task_completed", **result)
     return result

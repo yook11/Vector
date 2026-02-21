@@ -65,3 +65,17 @@ class NewsFetchResponse(BaseModel):
     message: str
     keywords_count: int
     job_id: str
+
+
+class EmbedResponse(BaseModel):
+    """POST /api/v1/news/embed response."""
+
+    model_config = ConfigDict(
+        alias_generator=to_camel,
+        populate_by_name=True,
+    )
+
+    message: str
+    embedded_count: int
+    skipped_count: int
+    error_count: int

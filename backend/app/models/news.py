@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, Index
+from pgvector.sqlalchemy import Vector
+from sqlalchemy import Column, DateTime, Index
 from sqlmodel import Field, Relationship, SQLModel
 
 
@@ -27,6 +28,10 @@ class NewsArticle(SQLModel, table=True):
     content: str | None = Field(default=None)
     content_fetched_at: datetime | None = Field(
         default=None, sa_type=DateTime(timezone=True)
+    )
+    embedding: list[float] | None = Field(
+        default=None,
+        sa_column=Column(Vector(768), nullable=True),
     )
 
     # Relationships
