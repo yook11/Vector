@@ -32,7 +32,7 @@ export function AddKeywordDialog() {
     try {
       await createKeyword({
         keyword: trimmed,
-        category: category.trim() || undefined,
+        category: category.trim() || "custom",
       });
       toast.success(`Added "${trimmed}"`);
       setKeyword("");

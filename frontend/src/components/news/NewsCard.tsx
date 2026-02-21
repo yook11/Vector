@@ -11,7 +11,7 @@ import { ImpactScore } from "./ImpactScore";
 import { WatchlistButton } from "./WatchlistButton";
 import type { NewsResponse } from "@/types";
 
-function formatDate(dateStr: string | null): string {
+function formatDate(dateStr: string | null | undefined): string {
   if (!dateStr) return "Unknown";
   return new Date(dateStr).toLocaleDateString("ja-JP", {
     year: "numeric",

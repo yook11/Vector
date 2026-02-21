@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     fetch_interval_hours: int = 3
     max_articles_per_fetch: int = 50
 
+    # Content extraction
+    content_max_length: int = 8000
+
     # Auth / JWT
     jwt_secret: str = "change-me-in-production-use-a-strong-random-secret"
     jwt_algorithm: str = "HS256"

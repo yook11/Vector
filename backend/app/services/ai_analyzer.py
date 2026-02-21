@@ -52,12 +52,14 @@ class BaseAnalyzer(abc.ABC):
         self,
         title: str,
         description: str | None,
+        content: str | None = None,
     ) -> AnalysisData:
         """Analyze a news article and return structured analysis data.
 
         Args:
             title: English article title.
             description: English article description/summary (may be None).
+            content: Full article text (may be None).
 
         Returns:
             AnalysisData with Japanese translation, sentiment, and score.
@@ -128,6 +130,7 @@ async def analyze_article(
         data = await analyzer.analyze(
             title=article.title_original,
             description=article.description_original,
+            content=article.content,
         )
     except AnalysisError as e:
         logger.error("analysis_failed", article_id=article.id, error=str(e))
