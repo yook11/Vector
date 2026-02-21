@@ -1,6 +1,6 @@
 "use client";
 
-import { getSession } from "next-auth/react";
+import { getSession, signOut } from "next-auth/react";
 import type {
   KeywordCreate,
   KeywordResponse,
@@ -50,6 +50,10 @@ async function clientFetch<T>(
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({ detail: res.statusText }));
+    if (res.status === 401) {
+      await signOut({ callbackUrl: "/auth/login" });
+      return undefined as T;
+    }
     throw new ApiError(res.status, body.detail ?? res.statusText);
   }
 

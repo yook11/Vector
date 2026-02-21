@@ -111,13 +111,18 @@ export const authOptions: NextAuthOptions = {
           accessTokenExpires: payload.exp * 1000,
         };
       } catch {
-        // Refresh failed — force re-login
-        return { ...token, error: "RefreshTokenError" };
+        // Refresh failed — clear tokens and force re-login
+        return {
+          ...token,
+          accessToken: undefined,
+          refreshToken: undefined,
+          error: "RefreshTokenError",
+        };
       }
     },
 
     async session({ session, token }) {
-      session.accessToken = token.accessToken as string;
+      session.accessToken = (token.accessToken as string) ?? "";
       session.error = token.error as string | undefined;
       if (token.userId) {
         session.user = {
