@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60
     jwt_refresh_expire_days: int = 30
+    jwt_refresh_grace_period_seconds: int = 10
 
     # App URLs
     frontend_url: str = "http://localhost:3000"

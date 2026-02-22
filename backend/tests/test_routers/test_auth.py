@@ -3,9 +3,11 @@
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import select
 
+from app.models.refresh_token import RefreshToken
 from app.models.user import User
-from app.services.auth_service import hash_password
+from app.services.auth_service import _hash_token, hash_password
 
 TEST_EMAIL = "test@example.com"
 TEST_PASSWORD = "SecurePass123!"
@@ -135,9 +137,76 @@ class TestRefresh:
         # New refresh token should be different (rotated)
         assert data["refreshToken"] != refresh_token
 
-    async def test_refresh_reuse_revoked_token(
+    async def test_refresh_grace_period_allows_concurrent_reuse(
         self, client: AsyncClient, db_session: AsyncSession
     ) -> None:
+        """Reuse within the grace period should succeed (concurrent request)."""
+        await _create_user(db_session)
+        login_resp = await client.post(
+            "/api/v1/auth/login",
+            json={"email": TEST_EMAIL, "password": TEST_PASSWORD},
+        )
+        old_refresh = login_resp.json()["refreshToken"]
+
+        # First refresh: rotates the token, sets revoked_at
+        first = await client.post(
+            "/api/v1/auth/refresh",
+            json={"refreshToken": old_refresh},
+        )
+        assert first.status_code == 200
+
+        # Second refresh with old token within grace period: should succeed
+        second = await client.post(
+            "/api/v1/auth/refresh",
+            json={"refreshToken": old_refresh},
+        )
+        assert second.status_code == 200
+        assert second.json()["refreshToken"] != first.json()["refreshToken"]
+
+    async def test_refresh_outside_grace_period_revokes_all(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Reuse outside the grace period triggers full token revocation."""
+        from app.config import settings
+
+        monkeypatch.setattr(settings, "jwt_refresh_grace_period_seconds", 0)
+
+        await _create_user(db_session)
+        login_resp = await client.post(
+            "/api/v1/auth/login",
+            json={"email": TEST_EMAIL, "password": TEST_PASSWORD},
+        )
+        old_refresh = login_resp.json()["refreshToken"]
+
+        # First refresh: rotates the token
+        first = await client.post(
+            "/api/v1/auth/refresh",
+            json={"refreshToken": old_refresh},
+        )
+        assert first.status_code == 200
+        new_refresh = first.json()["refreshToken"]
+
+        # Reuse old token with grace period=0: should fail
+        resp = await client.post(
+            "/api/v1/auth/refresh",
+            json={"refreshToken": old_refresh},
+        )
+        assert resp.status_code == 401
+
+        # The new token from the first refresh should also be revoked
+        resp2 = await client.post(
+            "/api/v1/auth/refresh",
+            json={"refreshToken": new_refresh},
+        )
+        assert resp2.status_code == 401
+
+    async def test_refresh_grace_period_multiple_concurrent(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        """Three concurrent reuses within grace period should all succeed."""
         await _create_user(db_session)
         login_resp = await client.post(
             "/api/v1/auth/login",
@@ -151,7 +220,42 @@ class TestRefresh:
             json={"refreshToken": old_refresh},
         )
 
-        # Second refresh with old token: should fail (reuse detection)
+        # Second and third reuses within grace period
+        resp2 = await client.post(
+            "/api/v1/auth/refresh",
+            json={"refreshToken": old_refresh},
+        )
+        assert resp2.status_code == 200
+
+        resp3 = await client.post(
+            "/api/v1/auth/refresh",
+            json={"refreshToken": old_refresh},
+        )
+        assert resp3.status_code == 200
+
+    async def test_refresh_revoked_without_revoked_at_rejects(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        """Pre-migration tokens with is_revoked=True but revoked_at=None
+        should be rejected without triggering grace period logic."""
+        await _create_user(db_session)
+        login_resp = await client.post(
+            "/api/v1/auth/login",
+            json={"email": TEST_EMAIL, "password": TEST_PASSWORD},
+        )
+        old_refresh = login_resp.json()["refreshToken"]
+
+        # Manually revoke without setting revoked_at (simulates pre-migration data)
+        token_hash = _hash_token(old_refresh)
+        stmt = select(RefreshToken).where(RefreshToken.token_hash == token_hash)
+        result = await db_session.execute(stmt)
+        db_token = result.scalar_one()
+        db_token.is_revoked = True
+        db_token.revoked_at = None
+        db_session.add(db_token)
+        await db_session.commit()
+
+        # Should be rejected (revoked_at is None → no grace period)
         resp = await client.post(
             "/api/v1/auth/refresh",
             json={"refreshToken": old_refresh},

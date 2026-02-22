@@ -1,7 +1,6 @@
-# Vector
+# Vector — プロジェクト憲法
 
 海外テックニュース収集・AI翻訳・投資分析ダッシュボード。
-次世代コンピューティング、マテリアル・インフォマティクスなど日本では情報が少ない先端分野に特化。
 
 ## 技術スタック
 
@@ -13,101 +12,115 @@
 
 ## 設計ドキュメント（必要時に参照）
 
-タスクに応じて以下を読むこと。全部一度に読む必要はない。
+タスクに応じて該当ドキュメントを読むこと。全部一度に読む必要はない。
 
-| ドキュメント | 内容 | 参照タイミング |
-|-------------|------|---------------|
-| `docs/00_PROJECT_OVERVIEW.md` | 技術スタック・フェーズ分け | プロジェクト全体像を把握したい時 |
-| `docs/01_DIRECTORY_STRUCTURE.md` | ディレクトリ構成・CLAUDE.md配置図 | ファイルの置き場所に迷った時 |
-| `docs/02_DATABASE_DESIGN.md` | ER図・テーブル定義・SQLModel例 | DB関連の作業時 |
-| `docs/03_CLAUDE_CODE_WORKFLOW.md` | タスク分解・実行順序・サブエージェント指示テンプレート | **最初に読むべき**。開発の進め方の全手順 |
-| `docs/04_API_SPECIFICATION.md` | 全エンドポイント仕様・リクエスト/レスポンス例 | API実装・フロント実装時 |
+| ドキュメント | 参照タイミング |
+|---|---|
+| `docs/00_PROJECT_OVERVIEW.md` | プロジェクト全体像を把握したい時 |
+| `docs/01_DIRECTORY_STRUCTURE.md` | ファイルの置き場所に迷った時 |
+| `docs/02_DATABASE_DESIGN.md` | DB関連の作業時 |
+| `docs/03_CLAUDE_CODE_WORKFLOW.md` | **タスク分解・サブエージェント指示の全手順** |
+| `docs/04_API_SPECIFICATION.md` | API実装・フロント実装時 |
+| `docs/05_PHASE2_PLAN.md` | Phase 2 の計画確認時 |
+| `docs/05b_TASKQUEUE_POC_REPORT.md` | タスクキュー関連の作業時 |
+
+## ワークフロー（Plan-First 必須）
+
+非自明なタスクでは、以下の4フェーズを必ず経由すること。
+
+1. **Explore** — 対象ファイルを読み、影響範囲を特定する
+2. **Plan** — 変更するファイル一覧と実装手順を提示し、承認を待つ
+3. **Implement** — 承認後にコーディングを開始する
+4. **Verify** — 実装後、完了報告前に検証コマンドを実行する
+
+### 検証プロトコル（タスク完了前に必ず実行）
+
+```bash
+# Backend
+cd backend && ruff check app/ && ruff format --check app/ && python -m pytest tests/ -x -q
+
+# Frontend
+cd frontend && npx eslint src/ && npx tsc --noEmit
+```
+
+## リサーチ義務（実装前の公式ドキュメント確認）
+
+### 原則
+ライブラリのAPI・設定・パターンについて確信が持てない場合、
+**推測でコードを書かず、必ず WebSearch / WebFetch で公式ドキュメントを確認**すること。
+内部知識だけに頼った実装は、古いAPI仕様や非推奨パターンの混入を招く。
+
+### 信頼できる情報源（ホワイトリスト）
+以下のドメインのみを情報源として使用すること。
+これ以外のドメイン（Stack Overflow、Qiita、Zenn、個人ブログ等）は参照禁止。
+
+**Backend / Frontend の技術固有URL**
+→ 各ディレクトリの `CLAUDE.md` に定義。バージョン・パスまで固定済み。
+
+**AI / インフラ / パッケージ情報（プロジェクト共通）**
+- `https://ai.google.dev/docs` — Gemini API
+- `https://docs.docker.com/` — Docker
+- `https://github.com/` — ソースコード、README、Issues
+- `https://pypi.org/` / `https://www.npmjs.com/` — バージョン情報
+
+### 検索委譲パターン
+リサーチでメインエージェントのコンテキストウィンドウを圧迫しないよう、
+以下のパターンで検索を実行すること。
+
+1. リサーチはサブエージェント（サブタスク）として実行する
+2. サブエージェントが公式ドキュメントを検索・取得する
+3. **検索結果の要約のみ**をメインプロセスに報告する（HTML全文を持ち込まない）
+4. メインエージェントは要約を元に実装を進める
 
 ## 開発ルール
 
-### 言語
-- コード中のコメント・変数名: 英語
-- CLAUDE.md・ドキュメント: 日本語
-- コミットメッセージ: 英語 (Conventional Commits)
+### 言語規約
+- コード中のコメント・変数名: **英語**
+- CLAUDE.md・ドキュメント: **日本語**
+- コミットメッセージ: **英語** (Conventional Commits、スコープ付き)
+  - 例: `feat(backend): add news fetcher service`
 
-### コミット規約
-```
-feat: 新機能           fix: バグ修正
-docs: ドキュメント      refactor: リファクタリング
-test: テスト           chore: ビルド・設定変更
-```
-スコープ付き例: `feat(backend): add news fetcher service`
+### 命名規約（レイヤー間の対応）
+
+| レイヤー | 規約 | 例 |
+|---|---|---|
+| DB (SQLModel) | snake_case | `news_article_id` |
+| API (JSON) | camelCase | `newsArticleId` |
+| TypeScript | camelCase | `newsArticleId` |
+
+### APIスキーマ管理（型共有パイプライン）
+- **SSoT（Single Source of Truth）は FastAPI の Pydantic schemas**
+- 型共有の流れ:
+  1. `backend/app/schemas/` の Pydantic モデルを定義・変更
+  2. FastAPI が `/openapi.json` を自動生成
+  3. `npm run generate-types` で `frontend/src/types/generated.ts` を自動生成
+  4. `frontend/src/types/index.ts` で re-export + narrowing
+- `generated.ts` は手動編集禁止（自動生成ファイル）
 
 ### ブランチ戦略
-- main: プロダクション
-- develop: 開発統合
-- feature/*: 機能開発 (例: feature/news-fetcher)
+- `main` → プロダクション / `develop` → 開発統合 / `feature/*` → 機能開発
 
-### コード品質
-- Frontend: ESLint + Prettier
-- Backend: ruff (linter + formatter)
-- 型安全: フロント=TypeScript strict, バック=Pydantic + type hints
+### 環境変数
+- `.env` に集約、コードでは `backend/app/config.py` 経由のみでアクセス
+- `.env.example` を参照し、直接 `os.environ` は使わないこと
+
+## 絶対に守るべき禁止事項（NEVER）
+
+1. **NEVER** 公式ドキュメントを確認せずに、不確実なAPI仕様を推測で実装してはならない
+2. **NEVER** ホワイトリスト外の情報源（Stack Overflow、Qiita、Zenn、個人ブログ等）を根拠にコードを書いてはならない
+3. **NEVER** コードの実装に着手する前に Plan フェーズを飛ばしてはならない
+4. **NEVER** 検証コマンド（lint, type check, test）を実行せずに完了報告してはならない
+5. **NEVER** Pydantic schemas（SSoT）と矛盾するAPIレスポンスを実装してはならない
+6. **NEVER** `frontend/src/types/generated.ts` を手動編集してはならない（`npm run generate-types` で自動生成のみ）
+7. **NEVER** Alembic マイグレーションなしにDBスキーマを変更してはならない
+8. **NEVER** `.env` の実際の秘匿値をコードやドキュメントにハードコードしてはならない
 
 ## サブエージェントへの指示方針
 
-### タスク委譲時のルール
-1. サブエージェントには必ず対象ディレクトリを明示する
-2. `shared/api-schema/openapi.yaml` をSingle Source of Truthとして参照させる
-3. 各サブエージェントは自ディレクトリの CLAUDE.md を最初に読む
-4. DB操作は必ず Alembic マイグレーション経由
-5. 環境変数は `.env` に集約、コードでは `backend/app/config.py` 経由でアクセス
-
-### サブエージェントに渡すコンテキスト
-タスクを委譲する際、以下を含める:
-- 対象ディレクトリパス
-- 関連するCLAUDE.mdのパス
-- 必要な設計ドキュメントのパス（1-2個に絞る）
-- 依存する他モジュールのインターフェース情報
-- 期待する成果物（ファイル名、関数名など）
-
-### 指示テンプレート
-```
-以下のタスクを実行してください。
-
-■ 対象ディレクトリ: [パス]
-■ 参照するCLAUDE.md: [パス]
-■ 参照するドキュメント: [パス]
-
-■ タスク:
-  [具体的な実装内容]
-
-■ 成果物:
-  - [ファイル名とその責務]
-
-■ 検証方法:
-  - [テスト方法]
-
-■ 制約:
-  - 非同期関数で実装すること
-  - 型ヒントを全ての関数に付けること
-  - structlog でログを出力すること
-  - エラーハンドリングを必ず実装し、生の例外を握りつぶさないこと
-  - 実装前に、これから作成・修正するファイルの概要を1-2行で説明してからコード生成を開始すること
-```
-
-## 環境変数 (.env)
-```env
-# Database
-DATABASE_URL=postgresql+asyncpg://vector:vector@db:5432/vector
-
-# AI API
-AI_PROVIDER=gemini
-GEMINI_API_KEY=your_key
-OPENAI_API_KEY=your_key
-
-# News Fetcher
-FETCH_INTERVAL_HOURS=3
-MAX_ARTICLES_PER_FETCH=50
-
-# App
-FRONTEND_URL=http://localhost:3000
-BACKEND_URL=http://localhost:8000
-```
+1. 対象ディレクトリとそのCLAUDE.mdを必ず明示する
+2. SSoTは `backend/app/schemas/` の Pydantic モデルであることを伝える
+3. 必要な設計ドキュメントは**1〜2個に絞って**渡す
+4. 指示テンプレートの詳細は `docs/03_CLAUDE_CODE_WORKFLOW.md` を参照
 
 ## 開発の始め方
 

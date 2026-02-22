@@ -1,27 +1,6 @@
 # backend/tests/ — テストガイド
 
-## 概要
-
-バックエンドの全テストをここに配置する。
-
-## 技術スタック
-
-- pytest
-- pytest-asyncio
-- httpx (AsyncClient でFastAPIの非同期テスト)
-
-## ディレクトリ構成
-
-```
-tests/
-├── CLAUDE.md
-├── conftest.py              # 共通フィクスチャ
-├── test_news_fetcher.py     # news_fetcher サービスのテスト
-├── test_ai_analyzer.py      # AI分析サービスのテスト
-└── test_routers/
-    ├── test_news.py         # /api/v1/news エンドポイント
-    └── test_keywords.py     # /api/v1/keywords エンドポイント
-```
+バックエンドの全テストをここに配置する。pytest + pytest-asyncio + httpx (AsyncClient) を使用。
 
 ## テストルール
 
@@ -33,9 +12,11 @@ tests/
 
 ### フィクスチャ (conftest.py)
 - `db_session`: テスト用 AsyncSession（テストごとにロールバック）
-- `client`: httpx.AsyncClient（FastAPI TestClient）
+- `client`: httpx.AsyncClient（未認証クライアント）
+- `test_user`: テスト用 User レコード
+- `auth_headers`: 認証済みリクエスト用ヘッダー
+- `authed_client`: 認証済み httpx.AsyncClient
 - `sample_keyword`: テスト用 Keyword レコード
-- `sample_news_article`: テスト用 NewsArticle レコード
 - テストDBは `vector_test` を使用
 
 ### モック方針
@@ -53,3 +34,4 @@ tests/
 - `backend/CLAUDE.md` — バックエンド全体のルール
 - `docs/02_DATABASE_DESIGN.md` — テーブル定義
 - `docs/04_API_SPECIFICATION.md` — 期待するレスポンス形式
+
