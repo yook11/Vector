@@ -13,6 +13,7 @@ class RefreshToken(SQLModel, table=True):
     token_hash: str = Field(max_length=255, unique=True, nullable=False)
     expires_at: datetime = Field(nullable=False, sa_type=DateTime(timezone=True))
     is_revoked: bool = Field(default=False, nullable=False)
+    revoked_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(UTC),
         nullable=False,

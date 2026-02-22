@@ -1,58 +1,39 @@
 # frontend/ — Next.js フロントエンド
 
-## 概要
-
 Next.js 14 (App Router) + TypeScript + Tailwind CSS + shadcn/ui によるダッシュボードUI。
 
-## 技術スタック
+## 公式ドキュメント参照先（リサーチ義務）
 
-- Next.js 14+ (App Router)
-- TypeScript (strict mode)
-- Tailwind CSS
-- shadcn/ui (コンポーネントライブラリ)
+実装においてAPI仕様に確信が持てない場合、推測でコードを書かず、
+必ず以下のURLを `WebFetch` して一次情報を確認すること。
 
-## ディレクトリ構成
+| ライブラリ | 公式URL（ここからFetchすること） | 注意点・制約 |
+|---|---|---|
+| Next.js 14+ | `https://nextjs.org/docs/app` | **Pages Routerは絶対に使用禁止。必ず `/app` 配下を参照すること** |
+| React | `https://react.dev/` | 旧サイト（reactjs.org）は参照しないこと |
+| shadcn/ui | `https://ui.shadcn.com/docs` | コンポーネントの追加・実装方法の確認用 |
+| Tailwind CSS | `https://tailwindcss.com/docs` | |
+| TypeScript | `https://www.typescriptlang.org/docs/` | |
+| NextAuth.js | `https://next-auth.js.org/` | **App Router 向け設定に注意。v4 を使用** |
+| openapi-typescript | `https://openapi-ts.dev/` | 型生成パイプライン (`npm run generate-types`) の設定確認用 |
 
-```
-frontend/
-├── Dockerfile
-├── package.json
-├── tsconfig.json
-├── tailwind.config.ts
-├── next.config.js
-├── components.json          # shadcn/ui 設定
-└── src/
-    ├── app/
-    │   ├── layout.tsx
-    │   ├── page.tsx           # ダッシュボード
-    │   ├── settings/page.tsx  # キーワード設定
-    │   ├── news/[id]/page.tsx # ニュース詳細
-    │   └── api/mock/          # モックAPI (Route Handlers)
-    ├── components/
-    │   ├── layout/            # Header, Sidebar, Footer
-    │   ├── news/              # NewsCard, NewsList, NewsDetail, SentimentBadge
-    │   ├── keywords/          # KeywordManager, KeywordTag
-    │   └── ui/                # shadcn/ui (自動生成、手動編集禁止)
-    ├── lib/
-    │   ├── api-client.ts      # API呼び出し (型安全)
-    │   └── utils.ts
-    ├── hooks/
-    │   ├── useNews.ts
-    │   └── useKeywords.ts
-    └── types/
-        └── index.ts           # shared/api-schema/types.ts を再エクスポート
-```
+## 型管理パイプライン
+
+- **SSoT は `backend/app/schemas/` の Pydantic モデル**
+- 型の流れ:
+  1. FastAPI が `/openapi.json` を自動生成
+  2. `npm run generate-types` で `src/types/generated.ts` を自動生成
+  3. `src/types/index.ts` で re-export + narrowing
+- **`generated.ts` は手動編集禁止**
 
 ## コーディングルール
 
 ### 全般
-- コード中のコメント・変数名は**英語**
 - ESLint + Prettier に従う
-- `any` 型の使用禁止。型は `shared/api-schema/types.ts` から導入
+- 型は `src/types/index.ts` 経由で利用（自動生成元: `/openapi.json`）
 
 ### コンポーネント設計
 - Server Components をデフォルトとし、インタラクションが必要な場合のみ `"use client"`
-- shadcn/ui の `ui/` ディレクトリは自動生成のため手動編集しない
 - コンポーネントファイル名は PascalCase (例: `NewsCard.tsx`)
 
 ### 状態管理
@@ -61,18 +42,33 @@ frontend/
 
 ### API通信
 - `lib/api-client.ts` を唯一のAPI通信レイヤーとする
-- 環境変数で接続先を切り替え:
-  ```typescript
-  const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "/api/mock";
-  ```
 - モック → 本番の切り替えは `NEXT_PUBLIC_API_URL` のみで完結させる
 
 ### スタイリング
 - Tailwind CSS のユーティリティクラスを使用
-- カスタムCSSは原則不要。必要な場合は Tailwind の `@apply` で
 - レスポンシブ対応: モバイルファーストで設計
+
+## 禁止事項（NEVER）
+
+1. **NEVER** 公式ドキュメントを確認せずに不確実なAPIの使い方を推測で書いてはならない
+2. **NEVER** Next.js の Pages Router パターン（`getServerSideProps`, `getStaticProps`, `pages/` ディレクトリ）を使ってはならない → App Router を使うこと
+3. **NEVER** `any` 型を使用してはならない → 型は `src/types/index.ts` から導入
+4. **NEVER** `components/ui/` 配下を手動編集してはならない → shadcn/ui の自動生成領域
+5. **NEVER** `lib/api-client.ts` を経由せずにAPIを直接呼び出してはならない
+6. **NEVER** Server Component で実現できる処理に `"use client"` を付けてはならない
+7. **NEVER** カスタムCSSファイルを作成してはならない → Tailwind ユーティリティで解決すること
+8. **NEVER** `useEffect` でデータフェッチしてはならない → Server Components または Route Handlers を使うこと
+9. **NEVER** API レスポンスの型を手動定義してはならない → `npm run generate-types` で自動生成された型を使うこと
+10. **NEVER** `src/types/generated.ts` を手動編集してはならない → 自動生成ファイル
+
+## 検証コマンド
+
+```bash
+# タスク完了前に必ず実行
+npx eslint src/
+npx tsc --noEmit
+```
 
 ## 参照ドキュメント
 
-- `shared/api-schema/openapi.yaml` — APIスキーマ (Single Source of Truth)
 - `docs/04_API_SPECIFICATION.md` — API仕様詳細

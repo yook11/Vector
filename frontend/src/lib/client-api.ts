@@ -17,6 +17,21 @@ function getBaseUrl(): string {
   return pub;
 }
 
+// Deduplicate concurrent getSession() calls to prevent parallel refresh
+// token rotation requests that trigger false reuse-attack detection.
+let sessionPromise: ReturnType<typeof getSession> | null = null;
+
+function getSessionOnce(): ReturnType<typeof getSession> {
+  if (!sessionPromise) {
+    sessionPromise = getSession().finally(() => {
+      setTimeout(() => {
+        sessionPromise = null;
+      }, 1000);
+    });
+  }
+  return sessionPromise;
+}
+
 class ApiError extends Error {
   constructor(
     public status: number,
@@ -33,7 +48,7 @@ async function clientFetch<T>(
 ): Promise<T> {
   const url = `${getBaseUrl()}${path}`;
 
-  const session = await getSession();
+  const session = await getSessionOnce();
   const authHeaders: Record<string, string> = {};
   if (session?.accessToken) {
     authHeaders.Authorization = `Bearer ${session.accessToken}`;

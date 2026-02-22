@@ -22,7 +22,7 @@ engine_test = create_async_engine(TEST_DATABASE_URL, echo=False, poolclass=NullP
 
 @pytest.fixture(scope="session", autouse=True)
 async def ensure_test_database() -> None:
-    """Create vector_test database if it doesn't exist."""
+    """Create vector_test database if it doesn't exist, and enable pgvector."""
     base_url = settings.database_url.rsplit("/", 1)[0] + "/postgres"
     engine = create_async_engine(
         base_url, isolation_level="AUTOCOMMIT", poolclass=NullPool
@@ -34,6 +34,11 @@ async def ensure_test_database() -> None:
         if not result.scalar():
             await conn.execute(text("CREATE DATABASE vector_test"))
     await engine.dispose()
+
+    # Enable pgvector extension in the test database
+    async with engine_test.connect() as conn:
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        await conn.commit()
 
 
 @pytest.fixture(autouse=True)

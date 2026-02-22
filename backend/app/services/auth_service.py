@@ -107,7 +107,16 @@ async def rotate_refresh_token(
         raise ValueError("Invalid refresh token")
 
     if db_token.is_revoked:
-        # Possible token reuse attack — revoke all tokens for this user
+        # Allow concurrent requests within the grace period
+        if (
+            db_token.revoked_at is not None
+            and (datetime.now(UTC) - db_token.revoked_at).total_seconds()
+            < settings.jwt_refresh_grace_period_seconds
+        ):
+            new_raw_token = await create_refresh_token(session, db_token.user_id)
+            logger.info("refresh_token_grace_period_reuse", user_id=db_token.user_id)
+            return new_raw_token, db_token.user_id
+        # Outside grace period — genuine reuse attack
         await _revoke_all_user_tokens(session, db_token.user_id)
         raise ValueError("Refresh token already revoked")
 
@@ -116,6 +125,7 @@ async def rotate_refresh_token(
 
     # Revoke the old token
     db_token.is_revoked = True
+    db_token.revoked_at = datetime.now(UTC)
     session.add(db_token)
 
     # Issue a new token
@@ -134,6 +144,8 @@ async def revoke_refresh_token(session: AsyncSession, raw_token: str) -> None:
 
     if db_token and not db_token.is_revoked:
         db_token.is_revoked = True
+        # Do NOT set revoked_at — only rotation sets it to enable grace period.
+        # Logout-revoked tokens must never be reusable.
         session.add(db_token)
         await session.commit()
         logger.info("refresh_token_revoked", user_id=db_token.user_id)
@@ -149,6 +161,8 @@ async def _revoke_all_user_tokens(session: AsyncSession, user_id: int) -> None:
     tokens = result.scalars().all()
     for token in tokens:
         token.is_revoked = True
+        # Do NOT set revoked_at — only rotation sets it to enable grace period.
+        # Security-revoked tokens must never be reusable.
         session.add(token)
     await session.commit()
     logger.warning("all_refresh_tokens_revoked", user_id=user_id, count=len(tokens))

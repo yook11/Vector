@@ -19,11 +19,18 @@ class Settings(BaseSettings):
     # Content extraction
     content_max_length: int = 8000
 
+    # Embedding rate limit
+    embed_batch_size: int = 10  # articles per API call
+    embed_batch_interval: float = 8.0  # seconds between batches (~75 RPM)
+    embed_rate_limit_delay: float = 60.0  # wait after 429
+    embed_max_consecutive_failures: int = 3  # circuit breaker
+
     # Auth / JWT
     jwt_secret: str = "change-me-in-production-use-a-strong-random-secret"
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60
     jwt_refresh_expire_days: int = 30
+    jwt_refresh_grace_period_seconds: int = 10
 
     # App URLs
     frontend_url: str = "http://localhost:3000"
