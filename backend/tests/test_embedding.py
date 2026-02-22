@@ -31,7 +31,7 @@ def test_get_embedder_returns_gemini() -> None:
 
 
 def test_get_embedder_raises_on_unknown_provider() -> None:
-    with patch("app.config.settings") as mock_settings:
+    with patch("app.services.embedding.settings") as mock_settings:
         mock_settings.ai_provider = "unknown_provider"
         with pytest.raises(ValueError, match="Unsupported AI provider"):
             get_embedder()
