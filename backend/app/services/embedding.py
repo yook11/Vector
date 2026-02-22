@@ -14,13 +14,20 @@ from app.models.news import NewsArticle
 
 logger = structlog.get_logger(__name__)
 
-BATCH_SIZE = 20      # articles per API request
-BATCH_INTERVAL = 2.0  # seconds between batches (rate limit protection; ~30 batches/min)
-MAX_CONSECUTIVE_FAILURES = 3  # abort remaining batches after this many consecutive errors
+COOLDOWN_SUCCESS_COUNT = 3  # consecutive successes before resetting adaptive interval
 
 
 class EmbeddingError(Exception):
     """Raised when embedding generation fails."""
+
+
+class RateLimitError(EmbeddingError):
+    """Raised when the API returns a rate limit error (e.g., HTTP 429).
+
+    Subclass of EmbeddingError so existing handlers still catch it,
+    but the orchestration layer can catch it specifically to apply
+    adaptive throttling instead of triggering the circuit breaker.
+    """
 
 
 @dataclass
@@ -106,9 +113,11 @@ async def embed_articles(
 ) -> EmbedResult:
     """Embed multiple articles in batches and persist embeddings to DB.
 
-    Sends BATCH_SIZE articles per API call. One batch failure counts all
-    articles in that batch as errors. After MAX_CONSECUTIVE_FAILURES consecutive
-    failures, remaining batches are aborted (circuit breaker).
+    Features:
+    - Configurable batch size and interval via settings
+    - Adaptive throttling: on RateLimitError, batch interval doubles (cap 120s)
+    - Cooldown: after COOLDOWN_SUCCESS_COUNT consecutive successes, interval resets
+    - Circuit breaker: triggers only on non-rate-limit errors (true failures)
 
     Args:
         session: SQLAlchemy async session (commit is called at the end).
@@ -119,6 +128,9 @@ async def embed_articles(
         EmbedResult with embedded/skipped/error counts.
     """
     result = EmbedResult()
+    batch_size = settings.embed_batch_size
+    batch_interval = settings.embed_batch_interval
+    max_failures = settings.embed_max_consecutive_failures
 
     if not articles:
         logger.info("embed_batch_skipped", reason="no articles provided")
@@ -136,8 +148,12 @@ async def embed_articles(
         return result
 
     consecutive_failures = 0
-    for batch_start in range(0, len(to_embed), BATCH_SIZE):
-        batch = to_embed[batch_start : batch_start + BATCH_SIZE]
+    current_interval = batch_interval  # adaptive: may increase on rate limits
+    success_streak = 0  # consecutive successes for cooldown reset
+    total_batches = 0
+
+    for batch_start in range(0, len(to_embed), batch_size):
+        batch = to_embed[batch_start : batch_start + batch_size]
         texts = [_build_embed_text(a) for a in batch]
 
         try:
@@ -148,23 +164,61 @@ async def embed_articles(
             await session.flush()
             result.embedded_count += len(batch)
             consecutive_failures = 0
+            total_batches += 1
+
+            # Cooldown: reset interval after sustained success
+            success_streak += 1
+            cooldown_met = success_streak >= COOLDOWN_SUCCESS_COUNT
+            if cooldown_met and current_interval > batch_interval:
+                logger.info(
+                    "embed_interval_reset",
+                    previous_interval=current_interval,
+                    reset_to=batch_interval,
+                    success_streak=success_streak,
+                )
+                current_interval = batch_interval
+                success_streak = 0
+
             logger.info(
                 "embed_batch_success",
                 batch_start=batch_start,
                 count=len(batch),
+                current_interval=current_interval,
             )
-        except EmbeddingError as e:
-            consecutive_failures += 1
-            result.error_count += len(batch)  # one batch failure = all items error (intentional)
+
+        except RateLimitError as e:
+            # Rate limit: do NOT count toward circuit breaker.
+            result.error_count += len(batch)
             result.errors.append(str(e))
-            # TODO: per-article fallback (embed one by one) can be added here if needed
+            success_streak = 0
+            total_batches += 1
+
+            # Adaptive throttling: double the interval (capped at 120s)
+            current_interval = min(current_interval * 2, 120.0)
+            logger.warning(
+                "embed_batch_rate_limited",
+                batch_start=batch_start,
+                count=len(batch),
+                new_interval=current_interval,
+                error=str(e),
+            )
+            # Wait for RPM window to reset before next batch
+            await asyncio.sleep(settings.embed_rate_limit_delay)
+
+        except EmbeddingError as e:
+            # Non-rate-limit error: count toward circuit breaker
+            consecutive_failures += 1
+            result.error_count += len(batch)
+            result.errors.append(str(e))
+            success_streak = 0
+            total_batches += 1
             logger.error(
                 "embed_batch_failed",
                 batch_start=batch_start,
                 count=len(batch),
                 error=str(e),
             )
-            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+            if consecutive_failures >= max_failures:
                 remaining = len(to_embed) - (batch_start + len(batch))
                 if remaining > 0:
                     result.error_count += remaining
@@ -175,8 +229,8 @@ async def embed_articles(
                     )
                 break
 
-        if batch_start + BATCH_SIZE < len(to_embed):
-            await asyncio.sleep(BATCH_INTERVAL)
+        if batch_start + batch_size < len(to_embed):
+            await asyncio.sleep(current_interval)
 
     await session.commit()
 
@@ -185,5 +239,8 @@ async def embed_articles(
         embedded=result.embedded_count,
         skipped=result.skipped_count,
         errors=result.error_count,
+        total_batches=total_batches,
+        estimated_daily_requests=total_batches,
+        rpd_limit=1000,
     )
     return result

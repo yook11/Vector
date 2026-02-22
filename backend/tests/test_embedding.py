@@ -1,16 +1,43 @@
 """Tests for the embedding service and similar articles API endpoint."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
 from app.services.embedding import (
+    COOLDOWN_SUCCESS_COUNT,
     BaseEmbedder,
     EmbedResult,
     EmbeddingError,
+    RateLimitError,
     embed_articles,
     get_embedder,
 )
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _make_article(*, has_embedding: bool = False) -> MagicMock:
+    """Create a mock article with optional embedding."""
+    a = MagicMock()
+    a.embedding = [0.1] * 768 if has_embedding else None
+    a.title_original = "Title"
+    a.content = None
+    a.description_original = None
+    return a
+
+
+def _settings_patch():
+    """Return a patch context for settings with embed_* fields."""
+    return patch("app.services.embedding.settings", **{
+        "ai_provider": "gemini",
+        "embed_batch_size": 20,
+        "embed_batch_interval": 8.0,
+        "embed_rate_limit_delay": 60.0,
+        "embed_max_consecutive_failures": 3,
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -101,15 +128,8 @@ async def test_embed_articles_batch_error_does_not_abort_other_batches() -> None
     mock_session = AsyncMock()
     mock_embedder = AsyncMock(spec=BaseEmbedder)
 
-    # Create 25 articles without embeddings (spans 2 batches of BATCH_SIZE=20)
-    articles = []
-    for _ in range(25):
-        a = MagicMock()
-        a.embedding = None
-        a.title_original = "Title"
-        a.content = None
-        a.description_original = None
-        articles.append(a)
+    # Create 25 articles without embeddings (spans 2 batches of batch_size=20)
+    articles = [_make_article() for _ in range(25)]
 
     # First batch succeeds, second batch fails
     mock_embedder.embed_batch = AsyncMock(
@@ -119,7 +139,14 @@ async def test_embed_articles_batch_error_does_not_abort_other_batches() -> None
         ]
     )
 
-    with patch("app.services.embedding.asyncio.sleep", AsyncMock()):
+    with (
+        patch("app.services.embedding.settings") as mock_settings,
+        patch("app.services.embedding.asyncio.sleep", AsyncMock()),
+    ):
+        mock_settings.embed_batch_size = 20
+        mock_settings.embed_batch_interval = 8.0
+        mock_settings.embed_rate_limit_delay = 60.0
+        mock_settings.embed_max_consecutive_failures = 3
         result = await embed_articles(mock_session, articles, embedder=mock_embedder)
 
     assert result.embedded_count == 20
@@ -153,7 +180,160 @@ async def test_embed_articles_uses_description_fallback_when_no_content() -> Non
 
 
 # ---------------------------------------------------------------------------
-# C. Similar articles API — unit tests (no DB required)
+# C. Rate limit handling
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_embed_articles_rate_limit_does_not_trigger_circuit_breaker() -> None:
+    """Three consecutive RateLimitErrors should NOT trigger the circuit breaker.
+
+    All batches should still be attempted.
+    """
+    mock_session = AsyncMock()
+    mock_embedder = AsyncMock(spec=BaseEmbedder)
+
+    # 4 batches of 10 articles each
+    articles = [_make_article() for _ in range(40)]
+
+    # All 4 batches raise RateLimitError
+    mock_embedder.embed_batch = AsyncMock(
+        side_effect=[
+            RateLimitError("rate limited"),
+            RateLimitError("rate limited"),
+            RateLimitError("rate limited"),
+            RateLimitError("rate limited"),
+        ]
+    )
+
+    with (
+        patch("app.services.embedding.settings") as mock_settings,
+        patch("app.services.embedding.asyncio.sleep", AsyncMock()),
+    ):
+        mock_settings.embed_batch_size = 10
+        mock_settings.embed_batch_interval = 8.0
+        mock_settings.embed_rate_limit_delay = 60.0
+        mock_settings.embed_max_consecutive_failures = 3
+        result = await embed_articles(mock_session, articles, embedder=mock_embedder)
+
+    # All 4 batches were attempted (circuit breaker did NOT trigger)
+    assert mock_embedder.embed_batch.call_count == 4
+    assert result.error_count == 40
+    assert result.embedded_count == 0
+
+
+@pytest.mark.asyncio
+async def test_embed_articles_rate_limit_increases_interval() -> None:
+    """After a RateLimitError, the batch interval should increase."""
+    mock_session = AsyncMock()
+    mock_embedder = AsyncMock(spec=BaseEmbedder)
+
+    # 3 batches of 10: first rate-limited, second and third succeed
+    articles = [_make_article() for _ in range(30)]
+
+    mock_embedder.embed_batch = AsyncMock(
+        side_effect=[
+            RateLimitError("rate limited"),
+            [[0.1] * 768] * 10,
+            [[0.1] * 768] * 10,
+        ]
+    )
+
+    sleep_mock = AsyncMock()
+    with (
+        patch("app.services.embedding.settings") as mock_settings,
+        patch("app.services.embedding.asyncio.sleep", sleep_mock),
+    ):
+        mock_settings.embed_batch_size = 10
+        mock_settings.embed_batch_interval = 8.0
+        mock_settings.embed_rate_limit_delay = 60.0
+        mock_settings.embed_max_consecutive_failures = 3
+        result = await embed_articles(mock_session, articles, embedder=mock_embedder)
+
+    assert result.embedded_count == 20
+    assert result.error_count == 10
+
+    # Sleep calls:
+    # 1st batch: RateLimitError → sleep(60.0) rate_limit_delay, then sleep(16.0) doubled interval
+    # 2nd batch: success → sleep(16.0) inter-batch (still doubled since only 1 success < cooldown)
+    sleep_calls = sleep_mock.call_args_list
+    assert call(60.0) in sleep_calls  # rate limit delay
+    assert call(16.0) in sleep_calls  # doubled interval (8.0 * 2)
+
+
+@pytest.mark.asyncio
+async def test_embed_articles_interval_resets_after_success_streak() -> None:
+    """After COOLDOWN_SUCCESS_COUNT consecutive successes, interval resets."""
+    mock_session = AsyncMock()
+    mock_embedder = AsyncMock(spec=BaseEmbedder)
+
+    # Need enough batches: 1 rate-limited + COOLDOWN_SUCCESS_COUNT successes + 1 more
+    total_batches = 1 + COOLDOWN_SUCCESS_COUNT + 1
+    articles = [_make_article() for _ in range(total_batches * 10)]
+
+    side_effects = [RateLimitError("rate limited")]
+    for _ in range(COOLDOWN_SUCCESS_COUNT + 1):
+        side_effects.append([[0.1] * 768] * 10)
+
+    mock_embedder.embed_batch = AsyncMock(side_effect=side_effects)
+
+    sleep_mock = AsyncMock()
+    with (
+        patch("app.services.embedding.settings") as mock_settings,
+        patch("app.services.embedding.asyncio.sleep", sleep_mock),
+    ):
+        mock_settings.embed_batch_size = 10
+        mock_settings.embed_batch_interval = 8.0
+        mock_settings.embed_rate_limit_delay = 60.0
+        mock_settings.embed_max_consecutive_failures = 3
+        result = await embed_articles(mock_session, articles, embedder=mock_embedder)
+
+    assert result.embedded_count == (COOLDOWN_SUCCESS_COUNT + 1) * 10
+
+    # After rate limit, interval doubles to 16.0
+    # After COOLDOWN_SUCCESS_COUNT successes, it should reset to 8.0
+    # The last inter-batch sleep should use the original interval
+    sleep_calls = sleep_mock.call_args_list
+    # Find the last inter-batch sleep (not rate_limit_delay)
+    inter_batch_sleeps = [c for c in sleep_calls if c != call(60.0)]
+    # The last inter-batch sleep should be 8.0 (reset interval)
+    assert inter_batch_sleeps[-1] == call(8.0)
+
+
+# ---------------------------------------------------------------------------
+# D. gemini_embedder 429 detection
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_gemini_embedder_429_raises_rate_limit_error() -> None:
+    """When Gemini API returns 429, GeminiEmbedder should raise RateLimitError."""
+    from google.genai.errors import ClientError
+
+    with (
+        patch("app.services.gemini_embedder.settings") as mock_settings,
+        patch("app.services.gemini_embedder.genai") as mock_genai,
+        patch("app.services.gemini_embedder.asyncio.sleep", AsyncMock()),
+    ):
+        mock_settings.gemini_api_key = "test-key"
+        mock_settings.embed_rate_limit_delay = 60.0
+
+        from app.services.gemini_embedder import GeminiEmbedder
+
+        embedder = GeminiEmbedder()
+
+        # Create a ClientError with code=429
+        error_429 = ClientError(429, {"error": {"message": "RESOURCE_EXHAUSTED"}})
+
+        # Always raise 429 to exhaust rate limit retries
+        embedder._client.aio.models.embed_content = AsyncMock(side_effect=error_429)
+
+        with pytest.raises(RateLimitError, match="rate limit exceeded"):
+            await embedder.embed_batch(["test text"])
+
+
+# ---------------------------------------------------------------------------
+# E. Similar articles API — unit tests (no DB required)
 # ---------------------------------------------------------------------------
 
 
