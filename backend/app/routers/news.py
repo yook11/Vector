@@ -29,15 +29,11 @@ from app.services.news_fetcher import fetch_news_for_keywords
 router = APIRouter(prefix="/api/v1/news", tags=["news"])
 
 
-async def _get_watched_ids(
-    session: AsyncSession, user: User | None
-) -> set[int]:
+async def _get_watched_ids(session: AsyncSession, user: User | None) -> set[int]:
     """Return set of news_article_ids in the user's watchlist."""
     if user is None:
         return set()
-    stmt = select(WatchlistItem.news_article_id).where(
-        WatchlistItem.user_id == user.id
-    )
+    stmt = select(WatchlistItem.news_article_id).where(WatchlistItem.user_id == user.id)
     result = await session.execute(stmt)
     return set(result.scalars().all())
 
@@ -109,9 +105,7 @@ async def list_news(
         sub_kw_ids = select(UserKeywordSubscription.keyword_id).where(
             UserKeywordSubscription.user_id == user.id
         )
-        stmt = stmt.join(NewsKeyword).where(
-            NewsKeyword.keyword_id.in_(sub_kw_ids)
-        )
+        stmt = stmt.join(NewsKeyword).where(NewsKeyword.keyword_id.in_(sub_kw_ids))
     elif keyword_id is not None:
         stmt = stmt.join(NewsKeyword).where(NewsKeyword.keyword_id == keyword_id)
 
@@ -199,7 +193,8 @@ async def embed_news(
     er = await embed_articles(session, articles)
 
     return EmbedResponse(
-        message=f"Embedding completed: {er.embedded_count} embedded, {er.error_count} errors",
+        message=f"Embedding completed: {er.embedded_count} embedded, "
+        f"{er.error_count} errors",
         embedded_count=er.embedded_count,
         skipped_count=er.skipped_count,
         error_count=er.error_count,
@@ -267,9 +262,7 @@ async def get_news(
         .where(NewsArticle.id == news_id)
         .options(
             selectinload(NewsArticle.analysis),
-            selectinload(NewsArticle.keyword_links).selectinload(
-                NewsKeyword.keyword
-            ),
+            selectinload(NewsArticle.keyword_links).selectinload(NewsKeyword.keyword),
         )
     )
     result = await session.execute(stmt)

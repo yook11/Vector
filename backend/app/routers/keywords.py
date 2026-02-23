@@ -5,9 +5,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import func, select
 
 from app.dependencies import get_current_user, get_session
-from app.models.user import User
 from app.models.associations import NewsKeyword
 from app.models.keyword import Keyword
+from app.models.user import User
 from app.schemas.keyword import (
     KeywordCreate,
     KeywordListResponse,
@@ -29,9 +29,7 @@ async def list_keywords(
 
     responses = []
     for kw in keywords:
-        count_stmt = select(func.count()).where(
-            NewsKeyword.keyword_id == kw.id
-        )
+        count_stmt = select(func.count()).where(NewsKeyword.keyword_id == kw.id)
         count_result = await session.execute(count_stmt)
         article_count = count_result.scalar_one()
 
@@ -104,9 +102,7 @@ async def update_keyword(
     await session.commit()
     await session.refresh(keyword)
 
-    count_stmt = select(func.count()).where(
-        NewsKeyword.keyword_id == keyword.id
-    )
+    count_stmt = select(func.count()).where(NewsKeyword.keyword_id == keyword.id)
     count_result = await session.execute(count_stmt)
     article_count = count_result.scalar_one()
 

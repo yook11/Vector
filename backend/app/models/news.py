@@ -17,9 +17,7 @@ class NewsArticle(SQLModel, table=True):
     description_original: str | None = Field(default=None)
     url: str = Field(max_length=2048, unique=True, nullable=False, index=True)
     source: str = Field(max_length=100, nullable=False)
-    published_at: datetime | None = Field(
-        default=None, sa_type=DateTime(timezone=True)
-    )
+    published_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
     fetched_at: datetime = Field(
         default_factory=lambda: datetime.now(UTC),
         nullable=False,
@@ -40,9 +38,7 @@ class NewsArticle(SQLModel, table=True):
         sa_relationship_kwargs={"uselist": False},
     )
     keyword_links: list["NewsKeyword"] = Relationship(back_populates="news_article")
-    watchlist_items: list["WatchlistItem"] = Relationship(
-        back_populates="news_article"
-    )
+    watchlist_items: list["WatchlistItem"] = Relationship(back_populates="news_article")
 
 
 # Resolve forward references
