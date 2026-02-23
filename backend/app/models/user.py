@@ -25,9 +25,7 @@ class User(SQLModel, table=True):
 
     # Relationships
     refresh_tokens: list["RefreshToken"] = Relationship(back_populates="user")
-    subscriptions: list["UserKeywordSubscription"] = Relationship(
-        back_populates="user"
-    )
+    subscriptions: list["UserKeywordSubscription"] = Relationship(back_populates="user")
     watchlist_items: list["WatchlistItem"] = Relationship(back_populates="user")
 
 

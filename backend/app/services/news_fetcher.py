@@ -70,9 +70,7 @@ def _parse_published_date(entry: dict) -> datetime | None:
         return None
 
 
-async def _get_existing_urls(
-    session: AsyncSession, urls: list[str]
-) -> set[str]:
+async def _get_existing_urls(session: AsyncSession, urls: list[str]) -> set[str]:
     """Check which URLs already exist in the database."""
     if not urls:
         return set()
@@ -132,9 +130,7 @@ async def fetch_news_for_keywords(
             feed = await _fetch_rss_feed(client, rss_url)
             if feed is None:
                 result.error_count += 1
-                result.errors.append(
-                    f"Failed to fetch RSS for keyword: {kw.keyword}"
-                )
+                result.errors.append(f"Failed to fetch RSS for keyword: {kw.keyword}")
                 continue
 
             if feed.bozo and not feed.entries:
@@ -144,9 +140,7 @@ async def fetch_news_for_keywords(
                     error=str(feed.bozo_exception),
                 )
                 result.error_count += 1
-                result.errors.append(
-                    f"RSS parse error for keyword: {kw.keyword}"
-                )
+                result.errors.append(f"RSS parse error for keyword: {kw.keyword}")
                 continue
 
             for entry in feed.entries:

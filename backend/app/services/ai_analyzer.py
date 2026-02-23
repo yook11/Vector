@@ -111,9 +111,7 @@ async def analyze_article(
             this exception.
     """
     # Explicit query to check if already analyzed (avoids MissingGreenlet)
-    stmt = select(AnalysisResult).where(
-        AnalysisResult.news_article_id == article.id
-    )
+    stmt = select(AnalysisResult).where(AnalysisResult.news_article_id == article.id)
     existing = (await session.execute(stmt)).scalar_one_or_none()
     if existing is not None:
         logger.info(

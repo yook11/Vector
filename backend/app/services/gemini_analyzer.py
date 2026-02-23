@@ -161,9 +161,7 @@ class GeminiAnalyzer(BaseAnalyzer):
                 raw_text=raw_text[:500],
                 error=str(e),
             )
-            raise AnalysisError(
-                f"Failed to parse Gemini response as JSON: {e}"
-            )
+            raise AnalysisError(f"Failed to parse Gemini response as JSON: {e}")
 
         # Validate required fields
         try:
@@ -173,9 +171,7 @@ class GeminiAnalyzer(BaseAnalyzer):
 
             impact_score = int(data["impact_score"])
             if not (1 <= impact_score <= 10):
-                raise ValueError(
-                    f"impact_score out of range: {impact_score}"
-                )
+                raise ValueError(f"impact_score out of range: {impact_score}")
 
             key_topics = data.get("key_topics")
             if key_topics is not None and not isinstance(key_topics, list):
@@ -195,6 +191,4 @@ class GeminiAnalyzer(BaseAnalyzer):
                 data=data,
                 error=str(e),
             )
-            raise AnalysisError(
-                f"Invalid analysis data from Gemini: {e}"
-            )
+            raise AnalysisError(f"Invalid analysis data from Gemini: {e}")

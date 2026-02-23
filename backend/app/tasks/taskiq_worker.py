@@ -29,7 +29,14 @@ import structlog
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
-from taskiq import Context, SimpleRetryMiddleware, TaskiqDepends, TaskiqEvents, TaskiqScheduler, TaskiqState
+from taskiq import (
+    Context,
+    SimpleRetryMiddleware,
+    TaskiqDepends,
+    TaskiqEvents,
+    TaskiqScheduler,
+    TaskiqState,
+)
 from taskiq.schedule_sources import LabelScheduleSource
 from taskiq_redis import ListQueueBroker, RedisAsyncResultBackend
 
@@ -227,9 +234,7 @@ async def fetch_and_analyze_task(ctx: Context = TaskiqDepends()) -> dict:
                 result["analyze_skipped"] = ar.skipped_count
                 result["analyze_errors"] = ar.error_count
             else:
-                logger.info(
-                    "taskiq_analyze_skipped", reason="no unanalyzed articles"
-                )
+                logger.info("taskiq_analyze_skipped", reason="no unanalyzed articles")
         except Exception:
             logger.exception("taskiq_analyze_phase_failed")
             result["analyze_errors"] += 1
@@ -241,9 +246,7 @@ async def fetch_and_analyze_task(ctx: Context = TaskiqDepends()) -> dict:
             unembedded = list(
                 (
                     await session.execute(
-                        select(NewsArticle).where(
-                            NewsArticle.embedding.is_(None)
-                        )
+                        select(NewsArticle).where(NewsArticle.embedding.is_(None))
                     )
                 )
                 .scalars()
