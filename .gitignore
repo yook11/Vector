@@ -50,3 +50,13 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+# ===========================
+# Claude Code
+# ===========================
+.claude/
+
+# ===========================
+# Build artifacts
+# ===========================
+frontend/tsconfig.tsbuildinfo

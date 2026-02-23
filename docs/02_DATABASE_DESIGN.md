@@ -1,4 +1,4 @@
-# データベース設計 (Phase 1)
+# データベース設計
 
 ## ER図
 
@@ -21,6 +21,9 @@ erDiagram
         string source "Google News 等"
         timestamp published_at "記事の公開日時"
         timestamp fetched_at "取得日時"
+        text content "記事全文 (newspaper4k)"
+        timestamp content_fetched_at "全文取得日時"
+        vector embedding "768次元ベクトル (pgvector)"
     }
 
     news_keywords {
@@ -43,9 +46,48 @@ erDiagram
         timestamp analyzed_at
     }
 
+    users {
+        int id PK
+        string email UK "メールアドレス"
+        string hashed_password "bcryptハッシュ"
+        string display_name "表示名"
+        boolean is_active "有効/無効"
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    refresh_tokens {
+        int id PK
+        int user_id FK
+        string token_hash UK "SHA-256ハッシュ"
+        timestamp expires_at "有効期限"
+        boolean is_revoked "無効化フラグ"
+        timestamp revoked_at "無効化日時"
+        timestamp created_at
+    }
+
+    user_keyword_subscriptions {
+        int id PK
+        int user_id FK
+        int keyword_id FK
+        timestamp created_at
+    }
+
+    watchlists {
+        int id PK
+        int user_id FK
+        int news_article_id FK
+        timestamp created_at
+    }
+
     keywords ||--o{ news_keywords : "has many"
     news_articles ||--o{ news_keywords : "has many"
     news_articles ||--o| analyses : "has one"
+    news_articles ||--o{ watchlists : "watched by"
+    users ||--o{ refresh_tokens : "has many"
+    users ||--o{ user_keyword_subscriptions : "subscribes"
+    users ||--o{ watchlists : "watches"
+    keywords ||--o{ user_keyword_subscriptions : "subscribed by"
 ```
 
 ## テーブル詳細
@@ -72,11 +114,15 @@ erDiagram
 | source | VARCHAR(100) | NOT NULL | RSS feed名 |
 | published_at | TIMESTAMPTZ | NULLABLE | 記事公開日 |
 | fetched_at | TIMESTAMPTZ | NOT NULL, DEFAULT NOW() | 取得日時 |
+| content | TEXT | NULLABLE | 記事全文（newspaper4kで取得） |
+| content_fetched_at | TIMESTAMPTZ | NULLABLE | 全文取得日時 |
+| embedding | vector(768) | NULLABLE | pgvectorベクトル（Gemini Embedding） |
 
 インデックス:
 - `idx_news_url` on `url` (UNIQUEで自動)
 - `idx_news_published` on `published_at DESC`
 - `idx_news_fetched` on `fetched_at DESC`
+- HNSW index on `embedding` (`vector_cosine_ops`)
 
 ### news_keywords (中間テーブル)
 
@@ -108,23 +154,68 @@ erDiagram
 - `idx_analyses_sentiment` on `sentiment`
 - `idx_analyses_impact` on `impact_score DESC`
 
+### users
+
+| カラム | 型 | 制約 | 備考 |
+|--------|-----|------|------|
+| id | SERIAL | PK | |
+| email | VARCHAR(255) | NOT NULL, UNIQUE, INDEX | メールアドレス |
+| hashed_password | VARCHAR(255) | NOT NULL | bcryptハッシュ |
+| display_name | VARCHAR(100) | NULLABLE | 表示名 |
+| is_active | BOOLEAN | NOT NULL, DEFAULT TRUE | アカウント有効/無効 |
+| created_at | TIMESTAMPTZ | NOT NULL, DEFAULT NOW() | |
+| updated_at | TIMESTAMPTZ | NOT NULL, DEFAULT NOW() | |
+
+### refresh_tokens
+
+| カラム | 型 | 制約 | 備考 |
+|--------|-----|------|------|
+| id | SERIAL | PK | |
+| user_id | INT | FK → users.id, NOT NULL, INDEX | |
+| token_hash | VARCHAR(255) | NOT NULL, UNIQUE | SHA-256ハッシュ |
+| expires_at | TIMESTAMPTZ | NOT NULL | 有効期限（30日） |
+| is_revoked | BOOLEAN | NOT NULL, DEFAULT FALSE | 無効化フラグ |
+| revoked_at | TIMESTAMPTZ | NULLABLE | 無効化日時（グレースピリオド判定用） |
+| created_at | TIMESTAMPTZ | NOT NULL, DEFAULT NOW() | |
+
+### user_keyword_subscriptions
+
+| カラム | 型 | 制約 | 備考 |
+|--------|-----|------|------|
+| id | SERIAL | PK | |
+| user_id | INT | FK → users.id, ON DELETE CASCADE | |
+| keyword_id | INT | FK → keywords.id, ON DELETE CASCADE | |
+| created_at | TIMESTAMPTZ | NOT NULL, DEFAULT NOW() | |
+
+制約: `UNIQUE(user_id, keyword_id)`
+
+### watchlists
+
+| カラム | 型 | 制約 | 備考 |
+|--------|-----|------|------|
+| id | SERIAL | PK | |
+| user_id | INT | FK → users.id, ON DELETE CASCADE | |
+| news_article_id | INT | FK → news_articles.id, ON DELETE CASCADE | |
+| created_at | TIMESTAMPTZ | NOT NULL, DEFAULT NOW() | |
+
+制約: `UNIQUE(user_id, news_article_id)`
+
 ## SQLModel 実装例
 
 ```python
 # models/keyword.py
 from sqlmodel import SQLModel, Field, Relationship
-from datetime import datetime
-from typing import Optional
+from datetime import UTC, datetime
 
 class Keyword(SQLModel, table=True):
     __tablename__ = "keywords"
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     keyword: str = Field(max_length=200, unique=True)
     category: str = Field(max_length=50, default="custom")
     is_active: bool = Field(default=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     # Relationships
     news_links: list["NewsKeyword"] = Relationship(back_populates="keyword")
@@ -132,20 +223,29 @@ class Keyword(SQLModel, table=True):
 
 ```python
 # models/news.py
+from pgvector.sqlalchemy import Vector
+from sqlalchemy import Column
+
 class NewsArticle(SQLModel, table=True):
     __tablename__ = "news_articles"
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     title_original: str = Field(max_length=500)
-    description_original: Optional[str] = None
+    description_original: str | None = None
     url: str = Field(max_length=2048, unique=True, index=True)
     source: str = Field(max_length=100)
-    published_at: Optional[datetime] = None
-    fetched_at: datetime = Field(default_factory=datetime.utcnow)
+    published_at: datetime | None = None
+    fetched_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    content: str | None = None
+    content_fetched_at: datetime | None = None
+    embedding: list[float] | None = Field(
+        default=None, sa_column=Column(Vector(768), nullable=True)
+    )
 
     # Relationships
-    analysis: Optional["AnalysisResult"] = Relationship(back_populates="news_article")
+    analysis: "AnalysisResult" = Relationship(back_populates="news_article")
     keyword_links: list["NewsKeyword"] = Relationship(back_populates="news_article")
+    watchlist_items: list["WatchlistItem"] = Relationship(back_populates="news_article")
 ```
 
 ```python
@@ -153,20 +253,20 @@ class NewsArticle(SQLModel, table=True):
 class AnalysisResult(SQLModel, table=True):
     __tablename__ = "analyses"
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     news_article_id: int = Field(foreign_key="news_articles.id", unique=True)
     title_ja: str = Field(max_length=500)
     summary_ja: str
     sentiment: str = Field(max_length=20)
     impact_score: int = Field(ge=1, le=10)
-    key_topics: Optional[list[str]] = Field(default=None, sa_type=JSONB)
-    reasoning: Optional[str] = None
+    key_topics: list[str] | None = Field(default=None, sa_type=JSONB)
+    reasoning: str | None = None
     ai_provider: str = Field(max_length=20)
     ai_model: str = Field(max_length=50)
-    analyzed_at: datetime = Field(default_factory=datetime.utcnow)
+    analyzed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     # Relationships
-    news_article: Optional["NewsArticle"] = Relationship(back_populates="analysis")
+    news_article: "NewsArticle" = Relationship(back_populates="analysis")
 ```
 
 ```python
@@ -174,17 +274,100 @@ class AnalysisResult(SQLModel, table=True):
 class NewsKeyword(SQLModel, table=True):
     __tablename__ = "news_keywords"
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     news_article_id: int = Field(foreign_key="news_articles.id")
     keyword_id: int = Field(foreign_key="keywords.id")
 
     # Relationships
-    news_article: Optional["NewsArticle"] = Relationship(back_populates="keyword_links")
-    keyword: Optional["Keyword"] = Relationship(back_populates="news_links")
+    news_article: "NewsArticle" = Relationship(back_populates="keyword_links")
+    keyword: "Keyword" = Relationship(back_populates="news_links")
 ```
 
-## マイグレーション方針
+```python
+# models/user.py
+class User(SQLModel, table=True):
+    __tablename__ = "users"
+
+    id: int | None = Field(default=None, primary_key=True)
+    email: str = Field(max_length=255, unique=True, index=True)
+    hashed_password: str = Field(max_length=255)
+    display_name: str | None = Field(default=None, max_length=100)
+    is_active: bool = Field(default=True)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    # Relationships
+    refresh_tokens: list["RefreshToken"] = Relationship(back_populates="user")
+    subscriptions: list["UserKeywordSubscription"] = Relationship(back_populates="user")
+    watchlist_items: list["WatchlistItem"] = Relationship(back_populates="user")
+```
+
+```python
+# models/refresh_token.py
+class RefreshToken(SQLModel, table=True):
+    __tablename__ = "refresh_tokens"
+
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="users.id", index=True)
+    token_hash: str = Field(max_length=255, unique=True)
+    expires_at: datetime
+    is_revoked: bool = Field(default=False)
+    revoked_at: datetime | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    # Relationships
+    user: "User" = Relationship(back_populates="refresh_tokens")
+```
+
+```python
+# models/user_keyword.py
+class UserKeywordSubscription(SQLModel, table=True):
+    __tablename__ = "user_keyword_subscriptions"
+    __table_args__ = (UniqueConstraint("user_id", "keyword_id"),)
+
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: int  # FK → users.id, ON DELETE CASCADE
+    keyword_id: int  # FK → keywords.id, ON DELETE CASCADE
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    # Relationships
+    user: "User" = Relationship(back_populates="subscriptions")
+    keyword: "Keyword" = Relationship(back_populates="user_subscriptions")
+```
+
+```python
+# models/watchlist.py
+class WatchlistItem(SQLModel, table=True):
+    __tablename__ = "watchlists"
+    __table_args__ = (UniqueConstraint("user_id", "news_article_id"),)
+
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: int  # FK → users.id, ON DELETE CASCADE
+    news_article_id: int  # FK → news_articles.id, ON DELETE CASCADE
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    # Relationships
+    user: "User" = Relationship(back_populates="watchlist_items")
+    news_article: "NewsArticle" = Relationship(back_populates="watchlist_items")
+```
+
+## マイグレーション
+
+### 方針
 - Alembic autogenerate で初期マイグレーション作成
 - 手動で内容を確認してからコミット
 - ダウングレードも必ず書く
 - テストDBは `vector_test` を使用
+- DBイメージは `pgvector/pgvector:pg16`（pgvector拡張が必要）
+
+### マイグレーション履歴
+
+| リビジョン | 内容 |
+|-----------|------|
+| `b751d5bc7311` | 初期テーブル: keywords, news_articles, analyses, news_keywords |
+| `e54c3f7851ce` | タイムスタンプを TIMESTAMPTZ に変換 |
+| `2d02a83aa90f` | users, refresh_tokens テーブル追加 |
+| `dc3cc7a3c587` | user_keyword_subscriptions, watchlists テーブル追加 |
+| `3a9bf03a0b5f` | news_articles に content, content_fetched_at カラム追加 |
+| `4bf262125474` | pgvector拡張有効化 + news_articles に embedding vector(768) カラム + HNSWインデックス追加 |
+| `a1b2c3d4e5f6` | refresh_tokens に revoked_at カラム追加（グレースピリオド対応） |
