@@ -104,16 +104,24 @@ cd frontend && npx eslint src/ && npx tsc --noEmit
 - `.env` に集約、コードでは `backend/app/config.py` 経由のみでアクセス
 - `.env.example` を参照し、直接 `os.environ` は使わないこと
 
-## 絶対に守るべき禁止事項（NEVER）
+## AIエージェント行動境界
 
-1. **NEVER** 公式ドキュメントを確認せずに、不確実なAPI仕様を推測で実装してはならない
-2. **NEVER** ホワイトリスト外の情報源（Stack Overflow、Qiita、Zenn、個人ブログ等）を根拠にコードを書いてはならない
-3. **NEVER** コードの実装に着手する前に Plan フェーズを飛ばしてはならない
-4. **NEVER** 検証コマンド（lint, type check, test）を実行せずに完了報告してはならない
-5. **NEVER** Pydantic schemas（SSoT）と矛盾するAPIレスポンスを実装してはならない
-6. **NEVER** `frontend/src/types/generated.ts` を手動編集してはならない（`npm run generate-types` で自動生成のみ）
-7. **NEVER** Alembic マイグレーションなしにDBスキーマを変更してはならない
-8. **NEVER** `.env` の実際の秘匿値をコードやドキュメントにハードコードしてはならない
+### Always do
+- 実装完了前に `ruff check` + `pytest` を実行、エラーは自己修正
+- 全関数に型ヒント付与
+- DB変更は Alembic マイグレーション経由のみ
+
+### Ask first
+- SQLModelモデル変更・DBスキーマ変更
+- 新規 pip パッケージ追加
+- APIレスポンス形式の破壊的変更
+
+### Never do
+- `.env` の読取・表示・編集、秘匿値のハードコード
+- 古いAPIパターン使用（Pydantic v1, Pages Router, SQLAlchemy同期）
+- 認証ロジックのバイパス・簡略化
+- テスト通過のための機能削除・無効化
+- SSoT（Pydantic schemas）と矛盾するAPIレスポンスの実装
 
 ## サブエージェントへの指示方針
 
