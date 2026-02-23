@@ -13,8 +13,9 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
 
     # News Fetcher
-    fetch_interval_hours: int = 3
+    fetch_interval_hours: int = 12
     max_articles_per_fetch: int = 50
+    max_analysis_per_run: int = 10
 
     # Content extraction
     content_max_length: int = 8000

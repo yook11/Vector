@@ -15,11 +15,15 @@ from app.models.news import NewsArticle
 
 logger = structlog.get_logger(__name__)
 
-REQUEST_INTERVAL = 1.0  # seconds between API requests (rate limit protection)
+REQUEST_INTERVAL = 5.0  # seconds between API requests (Gemini free tier RPM)
 
 
 class AnalysisError(Exception):
     """Raised when AI analysis fails."""
+
+
+class RateLimitError(AnalysisError):
+    """Raised when AI API returns 429 (rate limit exceeded)."""
 
 
 @dataclass
@@ -188,6 +192,15 @@ async def analyze_articles(
                 result.skipped_count += 1
             else:
                 result.analyzed_count += 1
+        except RateLimitError as e:
+            result.error_count += 1
+            result.errors.append(f"Article {article.id}: {e}")
+            logger.warning(
+                "analyze_batch_rate_limited",
+                article_id=article.id,
+                remaining=len(articles) - i - 1,
+            )
+            break
         except AnalysisError as e:
             result.error_count += 1
             result.errors.append(f"Article {article.id}: {e}")

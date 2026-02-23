@@ -223,6 +223,8 @@ async def fetch_and_analyze_task(ctx: Context = TaskiqDepends()) -> dict:
                             AnalysisResult.news_article_id == NewsArticle.id,
                         )
                         .where(AnalysisResult.id == None)  # noqa: E711
+                        .order_by(NewsArticle.published_at.desc())
+                        .limit(settings.max_analysis_per_run)
                     )
                 )
                 .scalars()
