@@ -3,6 +3,7 @@
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
@@ -14,6 +15,22 @@ from app.services.news_fetcher import (
     _parse_published_date,
     fetch_news_for_keywords,
 )
+
+
+def _passthrough_decode(urls: list[str]) -> dict[str, str]:
+    """Return identity mapping (no decoding)."""
+    return {u: u for u in urls}
+
+
+@pytest.fixture(autouse=True)
+def _mock_decode_urls():
+    """Mock decode_urls to passthrough by default in all fetcher tests."""
+    with patch(
+        "app.services.news_fetcher.decode_urls",
+        new_callable=AsyncMock,
+        side_effect=lambda urls, **kw: _passthrough_decode(urls),
+    ) as m:
+        yield m
 
 
 def _make_feed(entries: list[dict], bozo: bool = False) -> MagicMock:
@@ -199,3 +216,166 @@ async def test_fetch_with_empty_keywords(db_session: AsyncSession) -> None:
     assert result.new_count == 0
     assert result.skipped_count == 0
     assert result.error_count == 0
+
+
+# --- URL decoding integration tests ---
+
+
+async def test_fetch_decodes_google_news_urls(
+    db_session: AsyncSession, sample_keyword: Keyword, _mock_decode_urls: AsyncMock
+) -> None:
+    """Google News URLs should be decoded to real article URLs before storage."""
+    google_url = "https://news.google.com/rss/articles/CBMiSGh0dHBz"
+    real_url = "https://www.reuters.com/real-article"
+
+    entries = [_make_entry(title="Decoded Article", link=google_url)]
+    feed = _make_feed(entries)
+
+    # Override decode_urls to return the decoded URL
+    _mock_decode_urls.side_effect = None
+    _mock_decode_urls.return_value = {google_url: real_url}
+
+    with patch(
+        "app.services.news_fetcher._fetch_rss_feed",
+        new_callable=AsyncMock,
+        return_value=feed,
+    ):
+        result = await fetch_news_for_keywords(db_session, [sample_keyword])
+
+    assert result.new_count == 1
+
+    articles = (await db_session.execute(select(NewsArticle))).scalars().all()
+    assert len(articles) == 1
+    assert articles[0].url == real_url  # Stored the decoded URL, not the Google one
+
+    # decode_urls should only be called with the new URL (not existing ones)
+    _mock_decode_urls.assert_called_once_with([google_url])
+
+
+async def test_fetch_merges_keywords_for_same_decoded_url(
+    db_session: AsyncSession, _mock_decode_urls: AsyncMock
+) -> None:
+    """Two Google News URLs decoding to same real URL should merge."""
+    kw1 = Keyword(keyword="AI", category="tech", is_active=True)
+    kw2 = Keyword(keyword="ML", category="tech", is_active=True)
+    db_session.add_all([kw1, kw2])
+    await db_session.commit()
+    await db_session.refresh(kw1)
+    await db_session.refresh(kw2)
+
+    google_url_1 = "https://news.google.com/rss/articles/CBMi111"
+    google_url_2 = "https://news.google.com/rss/articles/CBMi222"
+    real_url = "https://www.reuters.com/same-article"
+
+    feed1 = _make_feed([_make_entry(title="Same Article", link=google_url_1)])
+    feed2 = _make_feed([_make_entry(title="Same Article", link=google_url_2)])
+
+    # Both Google URLs decode to the same real URL
+    _mock_decode_urls.side_effect = None
+    _mock_decode_urls.return_value = {
+        google_url_1: real_url,
+        google_url_2: real_url,
+    }
+
+    call_count = 0
+
+    async def _rss_side_effect(client, url):
+        nonlocal call_count
+        result = feed1 if call_count == 0 else feed2
+        call_count += 1
+        return result
+
+    with patch(
+        "app.services.news_fetcher._fetch_rss_feed",
+        new_callable=AsyncMock,
+        side_effect=_rss_side_effect,
+    ):
+        result = await fetch_news_for_keywords(db_session, [kw1, kw2])
+
+    # Should create only 1 article (not 2)
+    assert result.new_count == 1
+
+    articles = (await db_session.execute(select(NewsArticle))).scalars().all()
+    assert len(articles) == 1
+    assert articles[0].url == real_url
+
+    # Both keywords should be linked
+    links = (await db_session.execute(select(NewsKeyword))).scalars().all()
+    assert len(links) == 2
+    keyword_ids = {link.keyword_id for link in links}
+    assert keyword_ids == {kw1.id, kw2.id}
+
+
+async def test_fetch_skips_decode_for_existing_urls(
+    db_session: AsyncSession, sample_keyword: Keyword, _mock_decode_urls: AsyncMock
+) -> None:
+    """URLs already in DB should not be passed to decode_urls."""
+    existing_url = "https://news.google.com/rss/articles/existing"
+    new_url = "https://news.google.com/rss/articles/new"
+
+    # Pre-insert article with the existing Google News URL
+    existing_article = NewsArticle(
+        title_original="Existing",
+        url=existing_url,
+        source="Google News",
+    )
+    db_session.add(existing_article)
+    await db_session.commit()
+
+    entries = [
+        _make_entry(title="Existing", link=existing_url),
+        _make_entry(title="New", link=new_url),
+    ]
+    feed = _make_feed(entries)
+
+    with patch(
+        "app.services.news_fetcher._fetch_rss_feed",
+        new_callable=AsyncMock,
+        return_value=feed,
+    ):
+        result = await fetch_news_for_keywords(db_session, [sample_keyword])
+
+    assert result.new_count == 1
+    assert result.skipped_count == 1
+
+    # decode_urls should only receive the new URL, not the existing one
+    _mock_decode_urls.assert_called_once_with([new_url])
+
+
+async def test_fetch_skips_decoded_url_already_in_db(
+    db_session: AsyncSession, sample_keyword: Keyword, _mock_decode_urls: AsyncMock
+) -> None:
+    """A new Google News URL that decodes to an existing real URL should be skipped."""
+    google_url = "https://news.google.com/rss/articles/CBMiNEW"
+    real_url = "https://www.reuters.com/already-exists"
+
+    # Pre-insert article with the real (decoded) URL
+    existing_article = NewsArticle(
+        title_original="Already Exists",
+        url=real_url,
+        source="Google News",
+    )
+    db_session.add(existing_article)
+    await db_session.commit()
+
+    entries = [_make_entry(title="Decoded to Existing", link=google_url)]
+    feed = _make_feed(entries)
+
+    # Google News URL decodes to the already-existing real URL
+    _mock_decode_urls.side_effect = None
+    _mock_decode_urls.return_value = {google_url: real_url}
+
+    with patch(
+        "app.services.news_fetcher._fetch_rss_feed",
+        new_callable=AsyncMock,
+        return_value=feed,
+    ):
+        result = await fetch_news_for_keywords(db_session, [sample_keyword])
+
+    assert result.new_count == 0
+    assert result.skipped_count == 1  # post-decode duplicate
+
+    # No new articles created
+    articles = (await db_session.execute(select(NewsArticle))).scalars().all()
+    assert len(articles) == 1
+    assert articles[0].url == real_url
