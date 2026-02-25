@@ -13,11 +13,14 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
 
     # News Fetcher
-    fetch_interval_hours: int = 3
+    fetch_interval_hours: int = 12
     max_articles_per_fetch: int = 50
+    max_analysis_per_run: int = 10
 
     # Content extraction
     content_max_length: int = 8000
+    content_max_concurrent: int = 10  # max simultaneous HTTP connections
+    content_domain_delay: float = 1.0  # seconds between requests to same domain
 
     # Embedding rate limit
     embed_batch_size: int = 10  # articles per API call

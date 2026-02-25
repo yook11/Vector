@@ -16,6 +16,7 @@ from app.config import settings
 from app.models.associations import NewsKeyword
 from app.models.keyword import Keyword
 from app.models.news import NewsArticle
+from app.services.url_decoder import decode_urls
 
 GOOGLE_NEWS_RSS_URL = (
     "https://news.google.com/rss/search?q={keyword}&hl=en-US&gl=US&ceid=US:en"
@@ -153,9 +154,49 @@ async def fetch_news_for_keywords(
                 else:
                     url_to_entry[entry_url] = (entry, {kw.id})
 
-    # Phase 2: Deduplicate against DB
+    # Save original map for keyword linking of skipped articles
+    url_to_entry_orig = url_to_entry
+
+    # Phase 1.5: Pre-decode DB check (filter with Google News URLs)
+    raw_urls = list(url_to_entry.keys())
+    existing_raw_urls = await _get_existing_urls(session, raw_urls)
+
+    # Remove already-known URLs before expensive decoding
+    new_url_to_entry = {
+        url: val for url, val in url_to_entry.items() if url not in existing_raw_urls
+    }
+    pre_decode_skipped = len(url_to_entry) - len(new_url_to_entry)
+
+    # Phase 1.6: Decode only new URLs
+    new_raw_urls = list(new_url_to_entry.keys())
+    url_mapping = await decode_urls(new_raw_urls)
+
+    # Rebuild with decoded URLs, merging keyword sets for duplicates
+    decoded_url_to_entry: dict[str, tuple[dict, set[int]]] = {}
+    for original_url, (entry, keyword_ids) in new_url_to_entry.items():
+        decoded_url = url_mapping.get(original_url, original_url)
+        if decoded_url in decoded_url_to_entry:
+            decoded_url_to_entry[decoded_url][1].update(keyword_ids)
+        else:
+            decoded_url_to_entry[decoded_url] = (entry, keyword_ids)
+    url_to_entry = decoded_url_to_entry
+
+    # Phase 2: Post-decode DB check (decoded real URLs may already exist)
     all_urls = list(url_to_entry.keys())
     existing_urls = await _get_existing_urls(session, all_urls)
+
+    # Phase 2.5: Link keywords to articles skipped in pre-decode check
+    for url in existing_raw_urls:
+        if url not in url_to_entry_orig:
+            continue
+        _entry, keyword_ids = url_to_entry_orig[url]
+        stmt = select(NewsArticle).where(NewsArticle.url == url)
+        article_result = await session.execute(stmt)
+        article = article_result.scalar_one_or_none()
+        if article:
+            for kid in keyword_ids:
+                await _link_keyword_to_article(session, article.id, kid)
+    result.skipped_count += pre_decode_skipped
 
     # Phase 3: Create new articles and link keywords
     new_articles_count = 0

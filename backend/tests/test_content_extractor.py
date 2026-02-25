@@ -1,5 +1,6 @@
 """Tests for the content extractor service."""
 
+import asyncio
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
@@ -7,9 +8,12 @@ import httpx
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models.news import NewsArticle
 from app.services.content_extractor import (
     ContentExtractionResult,
+    DomainRateLimiter,
+    RobotsCache,
     _parse_article_html,
     extract_content,
     extract_contents,
@@ -51,7 +55,9 @@ class TestParseArticleHtml:
         assert result is None
 
     def test_returns_none_for_empty_html(self) -> None:
-        result = _parse_article_html("<html><body></body></html>", "https://example.com")
+        result = _parse_article_html(
+            "<html><body></body></html>", "https://example.com"
+        )
         assert result is None
 
 
@@ -74,7 +80,8 @@ class TestExtractContent:
         )
         client.get = AsyncMock(side_effect=[robots_resp, mock_response])
 
-        result = await extract_content(client, "https://example.com/article", {})
+        robots = RobotsCache()
+        result = await extract_content(client, "https://example.com/article", robots)
         assert result is not None
         assert len(result) > 50
 
@@ -90,11 +97,14 @@ class TestExtractContent:
             request=httpx.Request("GET", "https://example.com/paywall"),
         )
         error_resp.raise_for_status = lambda: (_ for _ in ()).throw(
-            httpx.HTTPStatusError("403", request=error_resp.request, response=error_resp)
+            httpx.HTTPStatusError(
+                "403", request=error_resp.request, response=error_resp
+            )
         )
         client.get = AsyncMock(side_effect=[robots_resp, error_resp])
 
-        result = await extract_content(client, "https://example.com/paywall", {})
+        robots = RobotsCache()
+        result = await extract_content(client, "https://example.com/paywall", robots)
         assert result is None
 
     @pytest.mark.asyncio
@@ -112,7 +122,8 @@ class TestExtractContent:
         )
         client.get = AsyncMock(side_effect=[robots_resp, pdf_resp])
 
-        result = await extract_content(client, "https://example.com/doc.pdf", {})
+        robots = RobotsCache()
+        result = await extract_content(client, "https://example.com/doc.pdf", robots)
         assert result is None
 
     @pytest.mark.asyncio
@@ -127,13 +138,13 @@ class TestExtractContent:
         client.get = AsyncMock(return_value=robots_resp)
 
         result = await extract_content(
-            client, "https://example.com/private/article", {}
+            client, "https://example.com/private/article", RobotsCache()
         )
         assert result is None
 
     @pytest.mark.asyncio
     async def test_caches_robots_txt(self) -> None:
-        cache: dict = {}
+        cache = RobotsCache()
         client = AsyncMock(spec=httpx.AsyncClient)
         robots_resp = httpx.Response(
             404,
@@ -148,15 +159,12 @@ class TestExtractContent:
         client.get = AsyncMock(side_effect=[robots_resp, html_resp, html_resp])
 
         await extract_content(client, "https://example.com/a1", cache)
-        assert "https://example.com/robots.txt" in cache
+        assert "example.com" in cache._cache
 
         # Second call should use cache (no additional robots.txt request)
         await extract_content(client, "https://example.com/a2", cache)
         # robots.txt was fetched only once (first call)
-        robots_calls = [
-            c for c in client.get.call_args_list
-            if "robots.txt" in str(c)
-        ]
+        robots_calls = [c for c in client.get.call_args_list if "robots.txt" in str(c)]
         assert len(robots_calls) == 1
 
 
@@ -175,9 +183,15 @@ class TestExtractContents:
         await db_session.commit()
         await db_session.refresh(article)
 
-        with patch(
-            "app.services.content_extractor.extract_content",
-            return_value="Extracted article content that is longer than fifty characters for the test to pass.",
+        with (
+            patch(
+                "app.services.content_extractor.extract_content",
+                return_value=(
+                    "Extracted article content that is longer"
+                    " than fifty characters for the test."
+                ),
+            ),
+            patch.object(settings, "content_domain_delay", 0.0),
         ):
             result = await extract_contents(db_session, [article])
 
@@ -202,9 +216,12 @@ class TestExtractContents:
         await db_session.commit()
         await db_session.refresh(article)
 
-        with patch(
-            "app.services.content_extractor.extract_content",
-            return_value=None,
+        with (
+            patch(
+                "app.services.content_extractor.extract_content",
+                return_value=None,
+            ),
+            patch.object(settings, "content_domain_delay", 0.0),
         ):
             result = await extract_contents(db_session, [article])
 
@@ -221,3 +238,186 @@ class TestExtractContents:
         assert result.extracted_count == 0
         assert result.skipped_count == 0
         assert result.error_count == 0
+
+
+class TestDomainRateLimiter:
+    """Tests for DomainRateLimiter concurrency control."""
+
+    @pytest.mark.asyncio
+    async def test_different_domains_parallel(self) -> None:
+        """Requests to different domains should run in parallel."""
+        limiter = DomainRateLimiter(max_concurrent=10, domain_delay=0.5)
+        start = asyncio.get_event_loop().time()
+
+        async def task(url: str) -> None:
+            async with limiter.acquire(url):
+                pass  # work is instant; only domain_delay matters
+
+        await asyncio.gather(
+            task("https://a.com/1"),
+            task("https://b.com/1"),
+            task("https://c.com/1"),
+        )
+
+        total = asyncio.get_event_loop().time() - start
+        # 3 different domains run in parallel → total ≈ 0.5s, not 1.5s
+        assert total < 1.0
+
+    @pytest.mark.asyncio
+    async def test_same_domain_serial(self) -> None:
+        """Requests to the same domain should be serialized with delay."""
+        limiter = DomainRateLimiter(max_concurrent=10, domain_delay=0.1)
+        timestamps: list[float] = []
+        start = asyncio.get_event_loop().time()
+
+        async def task(url: str) -> None:
+            async with limiter.acquire(url):
+                timestamps.append(asyncio.get_event_loop().time() - start)
+
+        await asyncio.gather(
+            task("https://a.com/1"),
+            task("https://a.com/2"),
+            task("https://a.com/3"),
+        )
+
+        total = asyncio.get_event_loop().time() - start
+        # 3 requests × 0.1s delay = at least 0.3s
+        assert total >= 0.3
+
+        # Each subsequent request should be delayed by ~0.1s
+        for i in range(1, len(timestamps)):
+            gap = timestamps[i] - timestamps[i - 1]
+            assert gap >= 0.09  # allow small timing tolerance
+
+    @pytest.mark.asyncio
+    async def test_respects_max_concurrent(self) -> None:
+        """Should not exceed max_concurrent simultaneous connections."""
+        limiter = DomainRateLimiter(max_concurrent=2, domain_delay=0.0)
+        concurrent_count = 0
+        max_concurrent_seen = 0
+
+        async def task(url: str) -> None:
+            nonlocal concurrent_count, max_concurrent_seen
+            async with limiter.acquire(url):
+                concurrent_count += 1
+                max_concurrent_seen = max(max_concurrent_seen, concurrent_count)
+                await asyncio.sleep(0.05)  # simulate work
+                concurrent_count -= 1
+
+        await asyncio.gather(
+            task("https://a.com/1"),
+            task("https://b.com/1"),
+            task("https://c.com/1"),
+            task("https://d.com/1"),
+        )
+
+        assert max_concurrent_seen <= 2
+
+
+class TestRobotsCache:
+    """Tests for RobotsCache deduplication."""
+
+    @pytest.mark.asyncio
+    async def test_no_duplicate_fetch(self) -> None:
+        """Same domain's robots.txt should be fetched only once."""
+        cache = RobotsCache()
+        client = AsyncMock(spec=httpx.AsyncClient)
+        robots_resp = httpx.Response(
+            404,
+            request=httpx.Request("GET", "https://example.com/robots.txt"),
+        )
+        client.get = AsyncMock(return_value=robots_resp)
+
+        await cache.check(client, "https://example.com/article1")
+        await cache.check(client, "https://example.com/article2")
+
+        # robots.txt should be fetched only once
+        assert client.get.call_count == 1
+        assert "example.com" in cache._cache
+
+
+class TestExtractContentsParallel:
+    """Tests for parallelized extract_contents behavior."""
+
+    @pytest.mark.asyncio
+    async def test_parallel_success(self, db_session: AsyncSession) -> None:
+        """Multiple articles from different domains should all succeed."""
+        articles = []
+        for i, domain in enumerate(["a.com", "b.com", "c.com"]):
+            article = NewsArticle(
+                title_original=f"Article {i}",
+                url=f"https://{domain}/article",
+                source="Test",
+                fetched_at=datetime.now(UTC),
+            )
+            db_session.add(article)
+            articles.append(article)
+        await db_session.commit()
+        for a in articles:
+            await db_session.refresh(a)
+
+        with (
+            patch(
+                "app.services.content_extractor.extract_content",
+                return_value=(
+                    "This is extracted content that exceeds"
+                    " fifty characters for the test."
+                ),
+            ),
+            patch.object(settings, "content_domain_delay", 0.0),
+        ):
+            result = await extract_contents(db_session, articles)
+
+        assert result.extracted_count == 3
+        assert result.skipped_count == 0
+        assert result.error_count == 0
+
+        for a in articles:
+            await db_session.refresh(a)
+            assert a.content is not None
+            assert a.content_fetched_at is not None
+
+    @pytest.mark.asyncio
+    async def test_partial_failure(self, db_session: AsyncSession) -> None:
+        """One article's failure should not affect others."""
+        articles = []
+        for i, domain in enumerate(["good.com", "bad.com", "ok.com"]):
+            article = NewsArticle(
+                title_original=f"Article {i}",
+                url=f"https://{domain}/article",
+                source="Test",
+                fetched_at=datetime.now(UTC),
+            )
+            db_session.add(article)
+            articles.append(article)
+        await db_session.commit()
+        for a in articles:
+            await db_session.refresh(a)
+
+        call_count = 0
+
+        async def mock_extract(
+            client: httpx.AsyncClient, url: str, robots_cache: RobotsCache
+        ) -> str | None:
+            nonlocal call_count
+            call_count += 1
+            if "bad.com" in url:
+                raise ConnectionError("simulated failure")
+            return (
+                "Extracted content that is definitely longer"
+                " than fifty characters for test pass."
+            )
+
+        with (
+            patch(
+                "app.services.content_extractor.extract_content",
+                side_effect=mock_extract,
+            ),
+            patch.object(settings, "content_domain_delay", 0.0),
+        ):
+            result = await extract_contents(db_session, articles)
+
+        assert result.extracted_count == 2
+        assert result.error_count == 1
+        assert len(result.errors) == 1
+        assert "bad.com" in result.errors[0] or "simulated failure" in result.errors[0]

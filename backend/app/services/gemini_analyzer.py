@@ -8,11 +8,16 @@ from google import genai
 from google.genai.types import GenerateContentConfig
 
 from app.config import settings
-from app.services.ai_analyzer import AnalysisData, AnalysisError, BaseAnalyzer
+from app.services.ai_analyzer import (
+    AnalysisData,
+    AnalysisError,
+    BaseAnalyzer,
+    RateLimitError,
+)
 
 logger = structlog.get_logger(__name__)
 
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = "gemini-2.5-flash-lite"
 MAX_RETRIES = 3
 RETRY_BASE_DELAY = 2.0  # seconds, exponential backoff: 2, 4, 8
 
@@ -49,6 +54,16 @@ Rules:
 - If description is empty, analyze based on the title alone
 - When full article content is provided, use it for deeper analysis
 """
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    """Check if the exception is a 429 rate limit error from the GenAI SDK."""
+    try:
+        from google.genai.errors import ClientError
+
+        return isinstance(exc, ClientError) and exc.code == 429
+    except ImportError:
+        return False
 
 
 class GeminiAnalyzer(BaseAnalyzer):
@@ -121,6 +136,18 @@ class GeminiAnalyzer(BaseAnalyzer):
             except AnalysisError:
                 raise
             except Exception as e:
+                # 429: SDK already retried 4 times (5 total attempts).
+                # Quota is exhausted — propagate immediately, no app-level retry.
+                if _is_rate_limit_error(e):
+                    logger.warning(
+                        "gemini_rate_limit_exhausted",
+                        attempt=attempt,
+                        error=str(e),
+                    )
+                    raise RateLimitError(
+                        f"Gemini API rate limit exceeded (429): {e}"
+                    ) from e
+
                 last_error = e
                 logger.warning(
                     "gemini_api_error",
