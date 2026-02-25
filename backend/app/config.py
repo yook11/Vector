@@ -19,6 +19,8 @@ class Settings(BaseSettings):
 
     # Content extraction
     content_max_length: int = 8000
+    content_max_concurrent: int = 10  # max simultaneous HTTP connections
+    content_domain_delay: float = 1.0  # seconds between requests to same domain
 
     # Embedding rate limit
     embed_batch_size: int = 10  # articles per API call
