@@ -15,7 +15,7 @@ from app.models.news import NewsArticle
 
 logger = structlog.get_logger(__name__)
 
-REQUEST_INTERVAL = 5.0  # seconds between API requests (Gemini free tier RPM)
+REQUEST_INTERVAL = 1.5  # seconds between API requests (Gemini free tier RPM)
 
 
 class AnalysisError(Exception):
@@ -181,31 +181,52 @@ async def analyze_articles(
     if analyzer is None:
         analyzer = get_analyzer()
 
+    # Detach articles so rollback/commit won't expire their attributes.
+    # rollback() expires ALL objects in the session (expire_on_commit=False
+    # only protects against commit), causing MissingGreenlet on next access.
+    for a in articles:
+        session.expunge(a)
+
     for i, article in enumerate(articles):
         # Rate limit: sleep between API requests (skip before first)
         if i > 0:
             await asyncio.sleep(REQUEST_INTERVAL)
+
+        article_id = article.id
 
         try:
             analysis = await analyze_article(session, article, analyzer)
             if analysis is None:
                 result.skipped_count += 1
             else:
+                await session.commit()
                 result.analyzed_count += 1
+                logger.info("article_saved", article_id=article_id)
         except RateLimitError as e:
+            await session.rollback()
             result.error_count += 1
-            result.errors.append(f"Article {article.id}: {e}")
+            result.errors.append(f"Article {article_id}: {e}")
             logger.warning(
                 "analyze_batch_rate_limited",
-                article_id=article.id,
+                article_id=article_id,
                 remaining=len(articles) - i - 1,
             )
             break
         except AnalysisError as e:
+            await session.rollback()
             result.error_count += 1
-            result.errors.append(f"Article {article.id}: {e}")
-
-    await session.commit()
+            result.errors.append(f"Article {article_id}: {e}")
+            continue
+        except Exception as e:
+            await session.rollback()
+            result.error_count += 1
+            result.errors.append(f"Article {article_id}: {e}")
+            logger.error(
+                "article_analysis_unexpected_error",
+                article_id=article_id,
+                error=str(e),
+            )
+            continue
 
     logger.info(
         "analyze_batch_completed",
