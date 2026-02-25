@@ -157,7 +157,9 @@ async def fetch_and_analyze_task(ctx: Context = TaskiqDepends()) -> dict:
         "embed_errors": 0,
     }
 
-    async with SQLModelAsyncSession(engine) as session:
+    # Phase 1 + 2: keywords & RSS fetch share a session to avoid detached
+    # Keyword objects (fetch_news_for_keywords accesses kw.keyword, kw.id).
+    async with SQLModelAsyncSession(engine, expire_on_commit=False) as session:
         # Phase 1: active keywords — fatal if this fails; let retry handle it.
         keywords = list(
             (
@@ -183,10 +185,11 @@ async def fetch_and_analyze_task(ctx: Context = TaskiqDepends()) -> dict:
             logger.exception("taskiq_fetch_phase_failed")
             result["fetch_errors"] += 1
 
-        # Phase 3: content extraction
-        # Intentionally runs even if Phase 2 failed: processes articles already in DB
-        # (content_fetched_at == None covers articles from previous successful fetches).
-        try:
+    # Phase 3: content extraction (independent session)
+    # Intentionally runs even if Phase 2 failed: processes articles already in DB
+    # (content_fetched_at == None covers articles from previous successful fetches).
+    try:
+        async with SQLModelAsyncSession(engine, expire_on_commit=False) as session:
             no_content = list(
                 (
                     await session.execute(
@@ -207,13 +210,15 @@ async def fetch_and_analyze_task(ctx: Context = TaskiqDepends()) -> dict:
                 logger.info(
                     "taskiq_content_skipped", reason="all articles have content"
                 )
-        except Exception:
-            logger.exception("taskiq_content_phase_failed")
-            result["content_errors"] += 1
+    except Exception:
+        logger.exception("taskiq_content_phase_failed")
+        result["content_errors"] += 1
 
-        # Phase 4: AI analysis
-        # Same rationale as Phase 3: runs independently of Phase 2/3 results.
-        try:
+    # Phase 4: AI analysis (independent session)
+    # Each article is committed individually inside analyze_articles, so even if
+    # this session is interrupted by a timeout, already-committed results survive.
+    try:
+        async with SQLModelAsyncSession(engine, expire_on_commit=False) as session:
             unanalyzed = list(
                 (
                     await session.execute(
@@ -237,14 +242,15 @@ async def fetch_and_analyze_task(ctx: Context = TaskiqDepends()) -> dict:
                 result["analyze_errors"] = ar.error_count
             else:
                 logger.info("taskiq_analyze_skipped", reason="no unanalyzed articles")
-        except Exception:
-            logger.exception("taskiq_analyze_phase_failed")
-            result["analyze_errors"] += 1
+    except Exception:
+        logger.exception("taskiq_analyze_phase_failed")
+        result["analyze_errors"] += 1
 
-        # Phase 5: Embedding generation
-        # Runs independently of Phase 4 — covers any article with embedding IS NULL,
-        # including articles from previous runs that failed to embed.
-        try:
+    # Phase 5: Embedding generation (independent session)
+    # Runs independently of Phase 4 — covers any article with embedding IS NULL,
+    # including articles from previous runs that failed to embed.
+    try:
+        async with SQLModelAsyncSession(engine, expire_on_commit=False) as session:
             unembedded = list(
                 (
                     await session.execute(
@@ -263,9 +269,9 @@ async def fetch_and_analyze_task(ctx: Context = TaskiqDepends()) -> dict:
                 logger.info(
                     "taskiq_embed_skipped", reason="all articles have embeddings"
                 )
-        except Exception:
-            logger.exception("taskiq_embed_phase_failed")
-            result["embed_errors"] += 1
+    except Exception:
+        logger.exception("taskiq_embed_phase_failed")
+        result["embed_errors"] += 1
 
     logger.info("taskiq_task_completed", **result)
     return result
