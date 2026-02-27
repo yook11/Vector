@@ -31,9 +31,8 @@ export function KeywordTable({
       <TableHeader>
         <TableRow>
           <TableHead>Keyword</TableHead>
-          <TableHead>Category</TableHead>
+          <TableHead>Categories</TableHead>
           <TableHead className="text-center">Articles</TableHead>
-          <TableHead className="text-center">Active</TableHead>
           {subscribedKeywordIds && (
             <TableHead className="text-center">Subscribe</TableHead>
           )}
