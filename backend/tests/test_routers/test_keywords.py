@@ -5,6 +5,10 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.keyword import Keyword
+from app.models.keyword_category import (
+    KeywordCategory,
+    KeywordCategoryLink,
+)
 
 
 @pytest.mark.asyncio
@@ -24,18 +28,53 @@ class TestListKeywords:
         assert len(data["items"]) == 1
         item = data["items"][0]
         assert item["keyword"] == "Quantum Computing"
-        assert item["category"] == "computing"
-        assert item["isActive"] is True
         assert item["articleCount"] == 0
+
+    async def test_returns_keywords_with_categories(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        sample_keyword: Keyword,
+        sample_keyword_categories: list[KeywordCategory],
+    ) -> None:
+        # Link keyword to a category
+        cat = sample_keyword_categories[1]  # "quantum"
+        link = KeywordCategoryLink(keyword_id=sample_keyword.id, category_id=cat.id)
+        db_session.add(link)
+        await db_session.commit()
+
+        resp = await authed_client.get("/api/v1/keywords")
+        data = resp.json()
+        item = data["items"][0]
+        assert len(item["categories"]) == 1
+        assert item["categories"][0]["slug"] == "quantum"
+        assert item["categories"][0]["name"] == "量子コンピュータ"
+
+    async def test_locale_en(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        sample_keyword: Keyword,
+        sample_keyword_categories: list[KeywordCategory],
+    ) -> None:
+        cat = sample_keyword_categories[1]  # "quantum"
+        link = KeywordCategoryLink(keyword_id=sample_keyword.id, category_id=cat.id)
+        db_session.add(link)
+        await db_session.commit()
+
+        resp = await authed_client.get("/api/v1/keywords?locale=en")
+        data = resp.json()
+        item = data["items"][0]
+        assert item["categories"][0]["name"] == "Quantum Computing"
 
     async def test_camel_case_keys(
         self, authed_client: AsyncClient, sample_keyword: Keyword
     ) -> None:
         resp = await authed_client.get("/api/v1/keywords")
         item = resp.json()["items"][0]
-        assert "isActive" in item
         assert "articleCount" in item
         assert "createdAt" in item
+        assert "categories" in item
 
 
 @pytest.mark.asyncio
@@ -43,29 +82,45 @@ class TestCreateKeyword:
     async def test_create_success(self, authed_client: AsyncClient) -> None:
         resp = await authed_client.post(
             "/api/v1/keywords",
-            json={"keyword": "Materials Informatics", "category": "materials"},
+            json={"keyword": "Materials Informatics"},
         )
         assert resp.status_code == 201
         data = resp.json()
         assert data["keyword"] == "Materials Informatics"
-        assert data["category"] == "materials"
-        assert data["isActive"] is True
+        assert data["categories"] == []
         assert data["articleCount"] == 0
 
-    async def test_create_default_category(self, authed_client: AsyncClient) -> None:
+    async def test_create_with_categories(
+        self,
+        authed_client: AsyncClient,
+        sample_keyword_categories: list[KeywordCategory],
+    ) -> None:
+        cat = sample_keyword_categories[0]  # "ai_ml"
         resp = await authed_client.post(
             "/api/v1/keywords",
-            json={"keyword": "Edge AI"},
+            json={"keyword": "Edge AI", "categoryIds": [cat.id]},
         )
         assert resp.status_code == 201
-        assert resp.json()["category"] == "custom"
+        data = resp.json()
+        assert len(data["categories"]) == 1
+        assert data["categories"][0]["slug"] == "ai_ml"
+
+    async def test_create_with_invalid_category_id(
+        self, authed_client: AsyncClient
+    ) -> None:
+        resp = await authed_client.post(
+            "/api/v1/keywords",
+            json={"keyword": "Bad Cat", "categoryIds": [99999]},
+        )
+        assert resp.status_code == 400
+        assert "not found" in resp.json()["detail"].lower()
 
     async def test_create_duplicate_409(
         self, authed_client: AsyncClient, sample_keyword: Keyword
     ) -> None:
         resp = await authed_client.post(
             "/api/v1/keywords",
-            json={"keyword": "Quantum Computing", "category": "computing"},
+            json={"keyword": "Quantum Computing"},
         )
         assert resp.status_code == 409
         assert "already exists" in resp.json()["detail"].lower()
@@ -73,20 +128,47 @@ class TestCreateKeyword:
 
 @pytest.mark.asyncio
 class TestUpdateKeyword:
-    async def test_update_is_active(
-        self, authed_client: AsyncClient, sample_keyword: Keyword
+    async def test_update_categories(
+        self,
+        authed_client: AsyncClient,
+        sample_keyword: Keyword,
+        sample_keyword_categories: list[KeywordCategory],
     ) -> None:
+        cat = sample_keyword_categories[2]  # "semiconductor"
         resp = await authed_client.patch(
             f"/api/v1/keywords/{sample_keyword.id}",
-            json={"isActive": False},
+            json={"categoryIds": [cat.id]},
         )
         assert resp.status_code == 200
-        assert resp.json()["isActive"] is False
+        data = resp.json()
+        assert len(data["categories"]) == 1
+        assert data["categories"][0]["slug"] == "semiconductor"
+
+    async def test_update_clear_categories(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        sample_keyword: Keyword,
+        sample_keyword_categories: list[KeywordCategory],
+    ) -> None:
+        # First add a category
+        cat = sample_keyword_categories[0]
+        link = KeywordCategoryLink(keyword_id=sample_keyword.id, category_id=cat.id)
+        db_session.add(link)
+        await db_session.commit()
+
+        # Then clear categories
+        resp = await authed_client.patch(
+            f"/api/v1/keywords/{sample_keyword.id}",
+            json={"categoryIds": []},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["categories"] == []
 
     async def test_update_not_found(self, authed_client: AsyncClient) -> None:
         resp = await authed_client.patch(
             "/api/v1/keywords/99999",
-            json={"isActive": False},
+            json={"categoryIds": []},
         )
         assert resp.status_code == 404
 

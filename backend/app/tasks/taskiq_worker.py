@@ -160,19 +160,11 @@ async def fetch_and_analyze_task(ctx: Context = TaskiqDepends()) -> dict:
     # Phase 1 + 2: keywords & RSS fetch share a session to avoid detached
     # Keyword objects (fetch_news_for_keywords accesses kw.keyword, kw.id).
     async with SQLModelAsyncSession(engine, expire_on_commit=False) as session:
-        # Phase 1: active keywords — fatal if this fails; let retry handle it.
-        keywords = list(
-            (
-                await session.execute(
-                    select(Keyword).where(Keyword.is_active == True)  # noqa: E712
-                )
-            )
-            .scalars()
-            .all()
-        )
+        # Phase 1: fetch all keywords — fatal if this fails; let retry handle it.
+        keywords = list((await session.execute(select(Keyword))).scalars().all())
         result["keywords_count"] = len(keywords)
         if not keywords:
-            logger.info("taskiq_task_skipped", reason="no active keywords")
+            logger.info("taskiq_task_skipped", reason="no keywords")
             return result
 
         # Phase 2: RSS fetch

@@ -3,6 +3,8 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 
+from app.schemas.keyword_category import KeywordCategoryBrief
+
 
 class KeywordCreate(BaseModel):
     """POST /api/v1/keywords request body."""
@@ -13,7 +15,7 @@ class KeywordCreate(BaseModel):
     )
 
     keyword: str
-    category: str = "custom"
+    category_ids: list[int] = []
 
 
 class KeywordUpdate(BaseModel):
@@ -24,7 +26,7 @@ class KeywordUpdate(BaseModel):
         populate_by_name=True,
     )
 
-    is_active: bool | None = None
+    category_ids: list[int] | None = None
 
 
 class KeywordResponse(BaseModel):
@@ -37,8 +39,7 @@ class KeywordResponse(BaseModel):
 
     id: int
     keyword: str
-    category: str
-    is_active: bool
+    categories: list[KeywordCategoryBrief] = []
     article_count: int = 0
     created_at: datetime
 
@@ -64,4 +65,4 @@ class KeywordBrief(BaseModel):
 
     id: int
     keyword: str
-    category: str
+    categories: list[KeywordCategoryBrief] = []

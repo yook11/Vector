@@ -7,17 +7,17 @@ import pytest
 from app.services.embedding import (
     COOLDOWN_SUCCESS_COUNT,
     BaseEmbedder,
-    EmbedResult,
     EmbeddingError,
+    EmbedResult,
     RateLimitError,
     embed_articles,
     get_embedder,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_article(*, has_embedding: bool = False) -> MagicMock:
     """Create a mock article with optional embedding."""
@@ -31,13 +31,16 @@ def _make_article(*, has_embedding: bool = False) -> MagicMock:
 
 def _settings_patch():
     """Return a patch context for settings with embed_* fields."""
-    return patch("app.services.embedding.settings", **{
-        "ai_provider": "gemini",
-        "embed_batch_size": 20,
-        "embed_batch_interval": 8.0,
-        "embed_rate_limit_delay": 60.0,
-        "embed_max_consecutive_failures": 3,
-    })
+    return patch(
+        "app.services.embedding.settings",
+        **{
+            "ai_provider": "gemini",
+            "embed_batch_size": 20,
+            "embed_batch_interval": 8.0,
+            "embed_rate_limit_delay": 60.0,
+            "embed_max_consecutive_failures": 3,
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -134,7 +137,7 @@ async def test_embed_articles_batch_error_does_not_abort_other_batches() -> None
     # First batch succeeds, second batch fails
     mock_embedder.embed_batch = AsyncMock(
         side_effect=[
-            [[0.1] * 768] * 20,   # first batch: 20 articles succeed
+            [[0.1] * 768] * 20,  # first batch: 20 articles succeed
             EmbeddingError("API timeout"),  # second batch: 5 articles fail
         ]
     )
@@ -340,8 +343,9 @@ async def test_gemini_embedder_429_raises_rate_limit_error() -> None:
 @pytest.mark.asyncio
 async def test_get_similar_news_returns_404_for_missing_article() -> None:
     from fastapi.testclient import TestClient
-    from app.main import app
+
     from app.dependencies import get_session
+    from app.main import app
 
     mock_session = AsyncMock()
     # scalar_one_or_none returns None (article not found)
@@ -364,8 +368,9 @@ async def test_get_similar_news_returns_404_for_missing_article() -> None:
 @pytest.mark.asyncio
 async def test_get_similar_news_returns_empty_list_when_no_embedding() -> None:
     from fastapi.testclient import TestClient
-    from app.main import app
+
     from app.dependencies import get_session
+    from app.main import app
 
     mock_session = AsyncMock()
     article = MagicMock()

@@ -7,10 +7,15 @@ from sqlmodel import func, select
 
 from app.dependencies import get_current_user, get_session
 from app.models.keyword import Keyword
+from app.models.keyword_category import (
+    KeywordCategory,
+    KeywordCategoryLink,
+)
 from app.models.news import NewsArticle
 from app.models.user import User
 from app.models.user_keyword import UserKeywordSubscription
 from app.models.watchlist import WatchlistItem
+from app.schemas.keyword_category import KeywordCategoryBrief
 from app.schemas.user import (
     SubscriptionCreate,
     SubscriptionListResponse,
@@ -21,6 +26,25 @@ from app.schemas.user import (
 )
 
 router = APIRouter(prefix="/api/v1/me", tags=["me"])
+
+DEFAULT_LOCALE = "ja"
+
+
+def _build_keyword_categories(
+    category_links: list[KeywordCategoryLink], locale: str = DEFAULT_LOCALE
+) -> list[KeywordCategoryBrief]:
+    """Extract translated category briefs from keyword category links."""
+    result = []
+    for link in category_links:
+        if not link.category:
+            continue
+        name = ""
+        for t in link.category.translations:
+            if t.locale == locale:
+                name = t.name
+                break
+        result.append(KeywordCategoryBrief(slug=link.category.slug, name=name))
+    return result
 
 
 # --- Subscriptions ---
@@ -34,11 +58,16 @@ async def list_subscriptions(
     stmt = (
         select(UserKeywordSubscription)
         .where(UserKeywordSubscription.user_id == user.id)
-        .options(selectinload(UserKeywordSubscription.keyword))
+        .options(
+            selectinload(UserKeywordSubscription.keyword)
+            .selectinload(Keyword.category_links)
+            .selectinload(KeywordCategoryLink.category)
+            .selectinload(KeywordCategory.translations)
+        )
         .order_by(UserKeywordSubscription.created_at.desc())
     )
     result = await session.execute(stmt)
-    subs = result.scalars().all()
+    subs = result.unique().scalars().all()
 
     return SubscriptionListResponse(
         items=[
@@ -46,7 +75,7 @@ async def list_subscriptions(
                 id=sub.id,
                 keyword_id=sub.keyword.id,
                 keyword=sub.keyword.keyword,
-                category=sub.keyword.category,
+                categories=_build_keyword_categories(sub.keyword.category_links),
                 created_at=sub.created_at,
             )
             for sub in subs
@@ -64,8 +93,18 @@ async def create_subscription(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> SubscriptionResponse:
-    # Verify keyword exists
-    keyword = await session.get(Keyword, body.keyword_id)
+    # Verify keyword exists (with category links for response)
+    stmt = (
+        select(Keyword)
+        .where(Keyword.id == body.keyword_id)
+        .options(
+            selectinload(Keyword.category_links)
+            .selectinload(KeywordCategoryLink.category)
+            .selectinload(KeywordCategory.translations)
+        )
+    )
+    result = await session.execute(stmt)
+    keyword = result.unique().scalar_one_or_none()
     if not keyword:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -93,7 +132,7 @@ async def create_subscription(
         id=sub.id,
         keyword_id=keyword.id,
         keyword=keyword.keyword,
-        category=keyword.category,
+        categories=_build_keyword_categories(keyword.category_links),
         created_at=sub.created_at,
     )
 

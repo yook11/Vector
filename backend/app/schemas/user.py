@@ -3,6 +3,8 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 
+from app.schemas.keyword_category import KeywordCategoryBrief
+
 
 class SubscriptionCreate(BaseModel):
     """POST /api/v1/me/subscriptions request body."""
@@ -26,7 +28,7 @@ class SubscriptionResponse(BaseModel):
     id: int
     keyword_id: int
     keyword: str
-    category: str
+    categories: list[KeywordCategoryBrief] = []
     created_at: datetime
 
 
