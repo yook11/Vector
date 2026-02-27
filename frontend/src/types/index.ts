@@ -27,58 +27,43 @@ export interface NewsQuery {
   locale?: string;
 }
 
-/** Investment category (brief, embedded in AnalysisResponse). */
-export interface CategoryBrief {
-  slug: string;
-  name: string;
-}
-
-/** Investment category (full, from GET /api/v1/categories). */
-export interface CategoryResponse {
-  id: number;
-  slug: string;
-  name: string;
-  description?: string | null;
-}
-
-/** Response wrapper for GET /api/v1/categories. */
-export interface CategoryListResponse {
-  items: CategoryResponse[];
-}
-
-/** Keyword category (brief, embedded in KeywordResponse / SubscriptionResponse). */
-export interface KeywordCategoryBrief {
-  slug: string;
-  name: string;
-}
-
-/** Keyword category response from GET /api/v1/keyword-categories. */
-export interface KeywordCategoryResponse {
-  id: number;
-  slug: string;
-  name: string;
-}
-
-/** Response wrapper for GET /api/v1/keyword-categories. */
-export interface KeywordCategoryListResponse {
-  items: KeywordCategoryResponse[];
-}
-
 // ---------------------------------------------------------------------------
-// Re-exports from generated types — with narrowing where needed
+// Re-exports from generated types
 // ---------------------------------------------------------------------------
 
-/** Analysis response — overridden until generated.ts is regenerated. */
-export interface AnalysisResponse {
-  title: string;
-  summary: string;
+// Investment categories
+export type CategoryBrief = components["schemas"]["CategoryBrief"];
+export type CategoryResponse = components["schemas"]["CategoryResponse"];
+export type CategoryListResponse =
+  components["schemas"]["CategoryListResponse"];
+
+// Keyword categories
+export type KeywordCategoryBrief =
+  components["schemas"]["KeywordCategoryBrief"];
+export type KeywordCategoryResponse =
+  components["schemas"]["KeywordCategoryResponse"];
+export type KeywordCategoryListResponse =
+  components["schemas"]["KeywordCategoryListResponse"];
+
+// Keywords
+export type KeywordBrief = components["schemas"]["KeywordBrief"];
+export type KeywordResponse = components["schemas"]["KeywordResponse"];
+export type KeywordListResponse =
+  components["schemas"]["KeywordListResponse"];
+export type KeywordCreate = components["schemas"]["KeywordCreate"];
+export type KeywordUpdate = components["schemas"]["KeywordUpdate"];
+
+// ---------------------------------------------------------------------------
+// Narrowed types — where generated types need refinement
+// ---------------------------------------------------------------------------
+
+/** Analysis response — narrows sentiment from string to Sentiment union. */
+export type AnalysisResponse = Omit<
+  components["schemas"]["AnalysisResponse"],
+  "sentiment"
+> & {
   sentiment: Sentiment;
-  impactScore: number;
-  reasoning?: string | null;
-  aiProvider: string;
-  analyzedAt: string;
-  investmentCategories?: CategoryBrief[];
-}
+};
 
 /** Narrow nested analysis to use our narrowed AnalysisResponse. */
 export type NewsResponse = Omit<
@@ -96,42 +81,18 @@ export type PaginatedNewsResponse = Omit<
   items: NewsResponse[];
 };
 
-// Keyword types — overridden until generated.ts is regenerated
-// (generated.ts still has stale category/isActive fields)
+// ---------------------------------------------------------------------------
+// Direct re-exports (no narrowing needed)
+// ---------------------------------------------------------------------------
 
-export interface KeywordBrief {
-  id: number;
-  keyword: string;
-  categories: KeywordCategoryBrief[];
-}
-
-export interface KeywordResponse {
-  id: number;
-  keyword: string;
-  categories: KeywordCategoryBrief[];
-  articleCount: number;
-  createdAt: string;
-}
-
-export interface KeywordListResponse {
-  items: KeywordResponse[];
-}
-
-export interface KeywordCreate {
-  keyword: string;
-  categoryIds?: number[];
-}
-
-export interface KeywordUpdate {
-  categoryIds?: number[] | null;
-}
 export type NewsFetchRequest = components["schemas"]["NewsFetchRequest"];
 export type NewsFetchResponse = components["schemas"]["NewsFetchResponse"];
 export type LoginRequest = components["schemas"]["LoginRequest"];
 export type RegisterRequest = components["schemas"]["RegisterRequest"];
 export type TokenResponse = components["schemas"]["TokenResponse"];
 export type UserResponse = components["schemas"]["UserResponse"];
-export type SubscriptionResponse = components["schemas"]["SubscriptionResponse"];
+export type SubscriptionResponse =
+  components["schemas"]["SubscriptionResponse"];
 export type SubscriptionListResponse =
   components["schemas"]["SubscriptionListResponse"];
 export type WatchlistResponse = components["schemas"]["WatchlistResponse"];

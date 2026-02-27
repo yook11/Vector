@@ -72,6 +72,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/categories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Categories
+         * @description List all investment categories ordered by slug.
+         */
+        get: operations["list_categories_api_v1_categories_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/keyword-categories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Keyword Categories
+         * @description List all keyword categories ordered by slug.
+         */
+        get: operations["list_keyword_categories_api_v1_keyword_categories_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/keywords": {
         parameters: {
             query?: never;
@@ -195,6 +235,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/news/embed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Backfill embeddings for articles that are missing them
+         * @description Generate vector embeddings for all articles where embedding IS NULL.
+         *
+         *     Requires authentication to prevent unintended Gemini API cost.
+         */
+        post: operations["embed_news_api_v1_news_embed_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/news/{news_id}/similar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Find semantically similar articles using pgvector cosine distance
+         * @description Return articles most similar to the given article, ordered by cosine distance.
+         *
+         *     Returns an empty list (not 404) if the article has no embedding yet.
+         */
+        get: operations["get_similar_news_api_v1_news__news_id__similar_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/news/{news_id}": {
         parameters: {
             query?: never;
@@ -255,16 +339,14 @@ export interface components {
          * @description AI analysis result embedded in NewsResponse.
          */
         AnalysisResponse: {
-            /** Titleja */
-            titleJa: string;
-            /** Summaryja */
-            summaryJa: string;
+            /** Title */
+            title: string;
+            /** Summary */
+            summary: string;
             /** Sentiment */
             sentiment: string;
             /** Impactscore */
             impactScore: number;
-            /** Keytopics */
-            keyTopics?: string[] | null;
             /** Reasoning */
             reasoning?: string | null;
             /** Aiprovider */
@@ -274,6 +356,57 @@ export interface components {
              * Format: date-time
              */
             analyzedAt: string;
+            /**
+             * Investmentcategories
+             * @default []
+             */
+            investmentCategories: components["schemas"]["CategoryBrief"][];
+        };
+        /**
+         * CategoryBrief
+         * @description Minimal category info embedded in AnalysisResponse.
+         */
+        CategoryBrief: {
+            /** Slug */
+            slug: string;
+            /** Name */
+            name: string;
+        };
+        /**
+         * CategoryListResponse
+         * @description Response wrapper for category list endpoint.
+         */
+        CategoryListResponse: {
+            /** Items */
+            items: components["schemas"]["CategoryResponse"][];
+        };
+        /**
+         * CategoryResponse
+         * @description Full category detail for GET /api/v1/categories.
+         */
+        CategoryResponse: {
+            /** Id */
+            id: number;
+            /** Slug */
+            slug: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description?: string | null;
+        };
+        /**
+         * EmbedResponse
+         * @description POST /api/v1/news/embed response.
+         */
+        EmbedResponse: {
+            /** Message */
+            message: string;
+            /** Embeddedcount */
+            embeddedCount: number;
+            /** Skippedcount */
+            skippedCount: number;
+            /** Errorcount */
+            errorCount: number;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -289,8 +422,41 @@ export interface components {
             id: number;
             /** Keyword */
             keyword: string;
-            /** Category */
-            category: string;
+            /**
+             * Categories
+             * @default []
+             */
+            categories: components["schemas"]["KeywordCategoryBrief"][];
+        };
+        /**
+         * KeywordCategoryBrief
+         * @description Minimal keyword category info embedded in KeywordResponse.
+         */
+        KeywordCategoryBrief: {
+            /** Slug */
+            slug: string;
+            /** Name */
+            name: string;
+        };
+        /**
+         * KeywordCategoryListResponse
+         * @description Response wrapper for keyword category list endpoint.
+         */
+        KeywordCategoryListResponse: {
+            /** Items */
+            items: components["schemas"]["KeywordCategoryResponse"][];
+        };
+        /**
+         * KeywordCategoryResponse
+         * @description Full keyword category detail for GET /api/v1/keyword-categories.
+         */
+        KeywordCategoryResponse: {
+            /** Id */
+            id: number;
+            /** Slug */
+            slug: string;
+            /** Name */
+            name: string;
         };
         /**
          * KeywordCreate
@@ -300,10 +466,10 @@ export interface components {
             /** Keyword */
             keyword: string;
             /**
-             * Category
-             * @default custom
+             * Categoryids
+             * @default []
              */
-            category: string;
+            categoryIds: number[];
         };
         /**
          * KeywordListResponse
@@ -322,10 +488,11 @@ export interface components {
             id: number;
             /** Keyword */
             keyword: string;
-            /** Category */
-            category: string;
-            /** Isactive */
-            isActive: boolean;
+            /**
+             * Categories
+             * @default []
+             */
+            categories: components["schemas"]["KeywordCategoryBrief"][];
             /**
              * Articlecount
              * @default 0
@@ -342,8 +509,8 @@ export interface components {
          * @description PATCH /api/v1/keywords/{id} request body.
          */
         KeywordUpdate: {
-            /** Isactive */
-            isActive?: boolean | null;
+            /** Categoryids */
+            categoryIds?: number[] | null;
         };
         /** LoginRequest */
         LoginRequest: {
@@ -471,8 +638,11 @@ export interface components {
             keywordId: number;
             /** Keyword */
             keyword: string;
-            /** Category */
-            category: string;
+            /**
+             * Categories
+             * @default []
+             */
+            categories: components["schemas"]["KeywordCategoryBrief"][];
             /**
              * Createdat
              * Format: date-time
@@ -706,9 +876,73 @@ export interface operations {
             };
         };
     };
+    list_categories_api_v1_categories_get: {
+        parameters: {
+            query?: {
+                locale?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CategoryListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_keyword_categories_api_v1_keyword_categories_get: {
+        parameters: {
+            query?: {
+                locale?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeywordCategoryListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_keywords_api_v1_keywords_get: {
         parameters: {
-            query?: never;
+            query?: {
+                locale?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -722,6 +956,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["KeywordListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -790,7 +1033,9 @@ export interface operations {
     };
     update_keyword_api_v1_keywords__keyword_id__patch: {
         parameters: {
-            query?: never;
+            query?: {
+                locale?: string;
+            };
             header?: never;
             path: {
                 keyword_id: number;
@@ -1006,10 +1251,12 @@ export interface operations {
                 myKeywords?: boolean;
                 sentiment?: string | null;
                 minImpact?: number | null;
+                category?: string | null;
                 sortBy?: string;
                 sortOrder?: string;
                 page?: number;
                 perPage?: number;
+                locale?: string;
             };
             header?: never;
             path?: never;
@@ -1037,9 +1284,65 @@ export interface operations {
             };
         };
     };
-    get_news_api_v1_news__news_id__get: {
+    embed_news_api_v1_news_embed_post: {
         parameters: {
             query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmbedResponse"];
+                };
+            };
+        };
+    };
+    get_similar_news_api_v1_news__news_id__similar_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                locale?: string;
+            };
+            header?: never;
+            path: {
+                news_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NewsResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_news_api_v1_news__news_id__get: {
+        parameters: {
+            query?: {
+                locale?: string;
+            };
             header?: never;
             path: {
                 news_id: number;
