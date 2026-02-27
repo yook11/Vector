@@ -37,7 +37,7 @@ async def test_task_fetches_and_analyzes_successfully() -> None:
     mock_session = AsyncMock()
     mock_ctx = _make_ctx()
 
-    kw = Keyword(id=1, keyword="Quantum", category="test", is_active=True)
+    kw = Keyword(id=1, keyword="Quantum")
     mock_kw_result = MagicMock()
     mock_kw_result.scalars.return_value.all.return_value = [kw]
 
@@ -91,7 +91,7 @@ async def test_task_fetches_and_analyzes_successfully() -> None:
 
 
 @pytest.mark.asyncio
-async def test_task_skips_when_no_active_keywords() -> None:
+async def test_task_skips_when_no_keywords() -> None:
     mock_session = AsyncMock()
     mock_ctx = _make_ctx()
 
@@ -127,7 +127,7 @@ async def test_task_skips_analysis_when_no_unanalyzed_articles() -> None:
     mock_session = AsyncMock()
     mock_ctx = _make_ctx()
 
-    kw = Keyword(id=1, keyword="AI", category="test", is_active=True)
+    kw = Keyword(id=1, keyword="AI")
     mock_kw_result = MagicMock()
     mock_kw_result.scalars.return_value.all.return_value = [kw]
 
@@ -171,7 +171,7 @@ async def test_task_skips_content_extraction_when_all_have_content() -> None:
     mock_session = AsyncMock()
     mock_ctx = _make_ctx()
 
-    kw = Keyword(id=1, keyword="Materials", category="test", is_active=True)
+    kw = Keyword(id=1, keyword="Materials")
     mock_kw_result = MagicMock()
     mock_kw_result.scalars.return_value.all.return_value = [kw]
 
@@ -215,7 +215,7 @@ async def test_task_continues_phase3_when_phase2_fails() -> None:
     mock_session = AsyncMock()
     mock_ctx = _make_ctx()
 
-    kw = Keyword(id=1, keyword="Test", category="test", is_active=True)
+    kw = Keyword(id=1, keyword="Test")
     mock_kw_result = MagicMock()
     mock_kw_result.scalars.return_value.all.return_value = [kw]
 
@@ -263,7 +263,7 @@ async def test_task_reports_analysis_errors() -> None:
     mock_session = AsyncMock()
     mock_ctx = _make_ctx()
 
-    kw = Keyword(id=1, keyword="Materials", category="test", is_active=True)
+    kw = Keyword(id=1, keyword="Materials")
     mock_kw_result = MagicMock()
     mock_kw_result.scalars.return_value.all.return_value = [kw]
 

@@ -3,6 +3,8 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 
+from app.schemas.category import CategoryBrief
+
 
 class AnalysisResponse(BaseModel):
     """AI analysis result embedded in NewsResponse."""
@@ -12,11 +14,11 @@ class AnalysisResponse(BaseModel):
         populate_by_name=True,
     )
 
-    title_ja: str
-    summary_ja: str
+    title: str
+    summary: str
     sentiment: str
     impact_score: int
-    key_topics: list[str] | None = None
     reasoning: str | None = None
     ai_provider: str
     analyzed_at: datetime
+    investment_categories: list[CategoryBrief] = []

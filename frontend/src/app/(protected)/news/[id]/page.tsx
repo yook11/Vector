@@ -18,7 +18,7 @@ export async function generateMetadata({
   try {
     const article = await getNewsById(Number(id));
     return {
-      title: `${article.analysis?.titleJa ?? article.titleOriginal} | Vector`,
+      title: `${article.analysis?.title ?? article.titleOriginal} | Vector`,
     };
   } catch {
     return { title: "Article Not Found | Vector" };

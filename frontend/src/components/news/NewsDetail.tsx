@@ -29,7 +29,7 @@ export function NewsDetail({ article }: { article: NewsResponse }) {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold leading-tight">
-          {analysis?.titleJa ?? article.titleOriginal}
+          {analysis?.title ?? article.titleOriginal}
         </h1>
         {analysis && (
           <p className="mt-2 text-sm text-muted-foreground">
@@ -78,22 +78,9 @@ export function NewsDetail({ article }: { article: NewsResponse }) {
             <div>
               <h3 className="text-sm font-semibold mb-1">Summary</h3>
               <p className="text-sm text-muted-foreground">
-                {analysis.summaryJa}
+                {analysis.summary}
               </p>
             </div>
-
-            {analysis.keyTopics && analysis.keyTopics.length > 0 && (
-              <div>
-                <h3 className="text-sm font-semibold mb-1">Key Topics</h3>
-                <div className="flex flex-wrap gap-1">
-                  {analysis.keyTopics.map((topic) => (
-                    <Badge key={topic} variant="outline">
-                      {topic}
-                    </Badge>
-                  ))}
-                </div>
-              </div>
-            )}
 
             {analysis.reasoning && (
               <div>

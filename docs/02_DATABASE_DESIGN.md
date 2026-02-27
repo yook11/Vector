@@ -35,15 +35,20 @@ erDiagram
     analyses {
         int id PK
         int news_article_id FK "1対1"
-        string title_ja "日本語タイトル"
-        text summary_ja "3行要約"
         string sentiment "positive | negative | neutral"
         int impact_score "1-10"
-        json key_topics "関連トピック配列"
         string reasoning "AI判定理由"
         string ai_provider "gemini | openai"
         string ai_model "モデル名"
         timestamp analyzed_at
+    }
+
+    analysis_translations {
+        int id PK
+        int analysis_id FK
+        string locale "ja | en"
+        string title "翻訳タイトル"
+        text summary "翻訳要約"
     }
 
     users {
@@ -83,6 +88,7 @@ erDiagram
     keywords ||--o{ news_keywords : "has many"
     news_articles ||--o{ news_keywords : "has many"
     news_articles ||--o| analyses : "has one"
+    analyses ||--o{ analysis_translations : "has many"
     news_articles ||--o{ watchlists : "watched by"
     users ||--o{ refresh_tokens : "has many"
     users ||--o{ user_keyword_subscriptions : "subscribes"
@@ -140,11 +146,8 @@ erDiagram
 |--------|-----|------|------|
 | id | SERIAL | PK | |
 | news_article_id | INT | FK, UNIQUE, ON DELETE CASCADE | 1対1保証 |
-| title_ja | VARCHAR(500) | NOT NULL | 日本語翻訳タイトル |
-| summary_ja | TEXT | NOT NULL | 3行要約 |
 | sentiment | VARCHAR(20) | NOT NULL | positive / negative / neutral |
 | impact_score | SMALLINT | NOT NULL, CHECK(1-10) | 市場影響度 |
-| key_topics | JSONB | NULLABLE | ["量子", "半導体"] 等 |
 | reasoning | TEXT | NULLABLE | 判定理由 |
 | ai_provider | VARCHAR(20) | NOT NULL | gemini / openai |
 | ai_model | VARCHAR(50) | NOT NULL | 使用モデル名 |
@@ -153,6 +156,18 @@ erDiagram
 インデックス:
 - `idx_analyses_sentiment` on `sentiment`
 - `idx_analyses_impact` on `impact_score DESC`
+
+### analysis_translations
+
+| カラム | 型 | 制約 | 備考 |
+|--------|-----|------|------|
+| id | SERIAL | PK | |
+| analysis_id | INT | FK → analyses.id, ON DELETE CASCADE | |
+| locale | VARCHAR(10) | NOT NULL | 言語コード（ja, en） |
+| title | VARCHAR(500) | NOT NULL | 翻訳タイトル |
+| summary | TEXT | NOT NULL | 翻訳要約 |
+
+制約: `UNIQUE(analysis_id, locale)`
 
 ### users
 
@@ -255,11 +270,8 @@ class AnalysisResult(SQLModel, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     news_article_id: int = Field(foreign_key="news_articles.id", unique=True)
-    title_ja: str = Field(max_length=500)
-    summary_ja: str
     sentiment: str = Field(max_length=20)
     impact_score: int = Field(ge=1, le=10)
-    key_topics: list[str] | None = Field(default=None, sa_type=JSONB)
     reasoning: str | None = None
     ai_provider: str = Field(max_length=20)
     ai_model: str = Field(max_length=50)
@@ -267,6 +279,21 @@ class AnalysisResult(SQLModel, table=True):
 
     # Relationships
     news_article: "NewsArticle" = Relationship(back_populates="analysis")
+    translations: list["AnalysisTranslation"] = Relationship(back_populates="analysis")
+
+
+class AnalysisTranslation(SQLModel, table=True):
+    __tablename__ = "analysis_translations"
+    __table_args__ = (UniqueConstraint("analysis_id", "locale"),)
+
+    id: int | None = Field(default=None, primary_key=True)
+    analysis_id: int = Field(foreign_key="analyses.id")
+    locale: str = Field(max_length=10)
+    title: str = Field(max_length=500)
+    summary: str
+
+    # Relationships
+    analysis: AnalysisResult = Relationship(back_populates="translations")
 ```
 
 ```python
@@ -371,3 +398,6 @@ class WatchlistItem(SQLModel, table=True):
 | `3a9bf03a0b5f` | news_articles に content, content_fetched_at カラム追加 |
 | `4bf262125474` | pgvector拡張有効化 + news_articles に embedding vector(768) カラム + HNSWインデックス追加 |
 | `a1b2c3d4e5f6` | refresh_tokens に revoked_at カラム追加（グレースピリオド対応） |
+| `f1a2b3c4d5e6` | investment_categories, analysis_investment_categories テーブル追加 |
+| `g2b3c4d5e6f7` | keyword_categories, 翻訳テーブル追加、keywords.category/is_active 削除 |
+| `h3c4d5e6f7g8` | analysis_translations テーブル追加、analyses から title_ja/summary_ja/key_topics 削除 |

@@ -19,23 +19,66 @@ export interface NewsQuery {
   myKeywords?: boolean;
   sentiment?: Sentiment;
   minImpact?: number;
+  category?: string;
   sortBy?: "publishedAt" | "impactScore";
   sortOrder?: "asc" | "desc";
   page?: number;
   perPage?: number;
+  locale?: string;
+}
+
+/** Investment category (brief, embedded in AnalysisResponse). */
+export interface CategoryBrief {
+  slug: string;
+  name: string;
+}
+
+/** Investment category (full, from GET /api/v1/categories). */
+export interface CategoryResponse {
+  id: number;
+  slug: string;
+  name: string;
+  description?: string | null;
+}
+
+/** Response wrapper for GET /api/v1/categories. */
+export interface CategoryListResponse {
+  items: CategoryResponse[];
+}
+
+/** Keyword category (brief, embedded in KeywordResponse / SubscriptionResponse). */
+export interface KeywordCategoryBrief {
+  slug: string;
+  name: string;
+}
+
+/** Keyword category response from GET /api/v1/keyword-categories. */
+export interface KeywordCategoryResponse {
+  id: number;
+  slug: string;
+  name: string;
+}
+
+/** Response wrapper for GET /api/v1/keyword-categories. */
+export interface KeywordCategoryListResponse {
+  items: KeywordCategoryResponse[];
 }
 
 // ---------------------------------------------------------------------------
 // Re-exports from generated types — with narrowing where needed
 // ---------------------------------------------------------------------------
 
-/** Narrow sentiment from string to Sentiment literal union. */
-export type AnalysisResponse = Omit<
-  components["schemas"]["AnalysisResponse"],
-  "sentiment"
-> & {
+/** Analysis response — overridden until generated.ts is regenerated. */
+export interface AnalysisResponse {
+  title: string;
+  summary: string;
   sentiment: Sentiment;
-};
+  impactScore: number;
+  reasoning?: string | null;
+  aiProvider: string;
+  analyzedAt: string;
+  investmentCategories?: CategoryBrief[];
+}
 
 /** Narrow nested analysis to use our narrowed AnalysisResponse. */
 export type NewsResponse = Omit<
@@ -53,12 +96,35 @@ export type PaginatedNewsResponse = Omit<
   items: NewsResponse[];
 };
 
-// Direct re-exports (no narrowing needed)
-export type KeywordBrief = components["schemas"]["KeywordBrief"];
-export type KeywordResponse = components["schemas"]["KeywordResponse"];
-export type KeywordListResponse = components["schemas"]["KeywordListResponse"];
-export type KeywordCreate = components["schemas"]["KeywordCreate"];
-export type KeywordUpdate = components["schemas"]["KeywordUpdate"];
+// Keyword types — overridden until generated.ts is regenerated
+// (generated.ts still has stale category/isActive fields)
+
+export interface KeywordBrief {
+  id: number;
+  keyword: string;
+  categories: KeywordCategoryBrief[];
+}
+
+export interface KeywordResponse {
+  id: number;
+  keyword: string;
+  categories: KeywordCategoryBrief[];
+  articleCount: number;
+  createdAt: string;
+}
+
+export interface KeywordListResponse {
+  items: KeywordResponse[];
+}
+
+export interface KeywordCreate {
+  keyword: string;
+  categoryIds?: number[];
+}
+
+export interface KeywordUpdate {
+  categoryIds?: number[] | null;
+}
 export type NewsFetchRequest = components["schemas"]["NewsFetchRequest"];
 export type NewsFetchResponse = components["schemas"]["NewsFetchResponse"];
 export type LoginRequest = components["schemas"]["LoginRequest"];

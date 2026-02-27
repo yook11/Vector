@@ -7,8 +7,12 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.analysis import AnalysisResult
+from app.models.analysis import AnalysisResult, AnalysisTranslation
 from app.models.associations import NewsKeyword
+from app.models.investment_category import (
+    AnalysisInvestmentCategory,
+    InvestmentCategory,
+)
 from app.models.keyword import Keyword
 from app.models.news import NewsArticle
 
@@ -40,20 +44,26 @@ async def _create_analysis(
     sentiment: str = "positive",
     impact_score: int = 7,
 ) -> AnalysisResult:
-    """Helper to create an analysis result."""
+    """Helper to create an analysis result with translation."""
     analysis = AnalysisResult(
         news_article_id=article.id,
-        title_ja="テスト記事",
-        summary_ja="テストの要約",
         sentiment=sentiment,
         impact_score=impact_score,
-        key_topics=["test"],
         reasoning="Test reasoning",
         ai_provider="gemini",
         ai_model="gemini-2.0-flash",
         analyzed_at=datetime.now(UTC),
     )
     session.add(analysis)
+    await session.flush()
+
+    translation = AnalysisTranslation(
+        analysis_id=analysis.id,
+        locale="ja",
+        title="テスト記事",
+        summary="テストの要約",
+    )
+    session.add(translation)
     await session.commit()
     await session.refresh(analysis)
     return analysis
@@ -103,9 +113,7 @@ class TestListNews:
         sample_keyword: Keyword,
     ) -> None:
         article = await _create_article(db_session, url="https://example.com/kw")
-        link = NewsKeyword(
-            news_article_id=article.id, keyword_id=sample_keyword.id
-        )
+        link = NewsKeyword(news_article_id=article.id, keyword_id=sample_keyword.id)
         db_session.add(link)
         await db_session.commit()
 
@@ -127,6 +135,29 @@ class TestListNews:
         await _create_analysis(db_session, a2, sentiment="negative")
 
         resp = await client.get("/api/v1/news?sentiment=positive")
+        data = resp.json()
+        assert data["total"] == 1
+
+    async def test_filter_by_category(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        sample_categories: list[InvestmentCategory],
+    ) -> None:
+        a1 = await _create_article(db_session, url="https://example.com/cat1")
+        analysis1 = await _create_analysis(db_session, a1)
+
+        # Find the growth_catalyst category
+        gc = next(c for c in sample_categories if c.slug == "growth_catalyst")
+        link = AnalysisInvestmentCategory(analysis_id=analysis1.id, category_id=gc.id)
+        db_session.add(link)
+        await db_session.commit()
+
+        # Create another article without this category
+        a2 = await _create_article(db_session, url="https://example.com/cat2")
+        await _create_analysis(db_session, a2)
+
+        resp = await client.get("/api/v1/news?category=growth_catalyst")
         data = resp.json()
         assert data["total"] == 1
 
@@ -202,8 +233,29 @@ class TestGetNews:
         resp = await client.get(f"/api/v1/news/{article.id}")
         data = resp.json()
         assert data["analysis"] is not None
-        assert data["analysis"]["titleJa"] == "テスト記事"
+        assert data["analysis"]["title"] == "テスト記事"
         assert data["analysis"]["sentiment"] == "positive"
+
+    async def test_get_with_categories(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        sample_categories: list[InvestmentCategory],
+    ) -> None:
+        article = await _create_article(db_session, url="https://example.com/cat-resp")
+        analysis = await _create_analysis(db_session, article)
+
+        gc = next(c for c in sample_categories if c.slug == "growth_catalyst")
+        link = AnalysisInvestmentCategory(analysis_id=analysis.id, category_id=gc.id)
+        db_session.add(link)
+        await db_session.commit()
+
+        resp = await client.get(f"/api/v1/news/{article.id}")
+        data = resp.json()
+        cats = data["analysis"]["investmentCategories"]
+        assert len(cats) == 1
+        assert cats[0]["slug"] == "growth_catalyst"
+        assert cats[0]["name"] == "成長期待"
 
     async def test_get_with_keywords(
         self,
@@ -212,9 +264,7 @@ class TestGetNews:
         sample_keyword: Keyword,
     ) -> None:
         article = await _create_article(db_session)
-        link = NewsKeyword(
-            news_article_id=article.id, keyword_id=sample_keyword.id
-        )
+        link = NewsKeyword(news_article_id=article.id, keyword_id=sample_keyword.id)
         db_session.add(link)
         await db_session.commit()
 
@@ -230,7 +280,7 @@ class TestFetchNews:
         self, client: AsyncClient, db_session: AsyncSession
     ) -> None:
         # Create an active keyword so fetch has something to work with
-        kw = Keyword(keyword="Test Keyword", category="custom", is_active=True)
+        kw = Keyword(keyword="Test Keyword")
         db_session.add(kw)
         await db_session.commit()
 
@@ -252,7 +302,7 @@ class TestFetchNews:
     async def test_fetch_with_keyword_ids(
         self, client: AsyncClient, db_session: AsyncSession
     ) -> None:
-        kw = Keyword(keyword="Specific Keyword", category="custom", is_active=True)
+        kw = Keyword(keyword="Specific Keyword")
         db_session.add(kw)
         await db_session.commit()
         await db_session.refresh(kw)
