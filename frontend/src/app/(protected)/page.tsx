@@ -1,5 +1,5 @@
 import { Suspense } from "react";
-import { getKeywords, getNews, getSubscriptions } from "@/lib/api-client";
+import { getCategories, getKeywords, getNews, getSubscriptions } from "@/lib/api-client";
 import { NewsList } from "@/components/news/NewsList";
 import { NewsFilters } from "@/components/news/NewsFilters";
 import { FetchButton } from "@/components/news/FetchButton";
@@ -35,6 +35,9 @@ function parseSearchParams(
   const minImpact = str("minImpact");
   if (minImpact) query.minImpact = Number(minImpact);
 
+  const category = str("category");
+  if (category) query.category = category;
+
   const sortBy = str("sortBy");
   if (sortBy === "publishedAt" || sortBy === "impactScore") {
     query.sortBy = sortBy;
@@ -58,10 +61,11 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   const raw = await searchParams;
   const query = parseSearchParams(raw);
 
-  const [newsData, keywordsData, subscriptionsData] = await Promise.all([
+  const [newsData, keywordsData, subscriptionsData, categoriesData] = await Promise.all([
     getNews(query),
     getKeywords(),
     getSubscriptions().catch(() => ({ items: [] })),
+    getCategories().catch(() => ({ items: [] })),
   ]);
 
   const subscribedKeywordIds = subscriptionsData.items.map((s) => s.keywordId);
@@ -92,7 +96,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
         </div>
 
         <Suspense>
-          <NewsFilters />
+          <NewsFilters categories={categoriesData.items} />
         </Suspense>
 
         <NewsList items={newsData.items} />

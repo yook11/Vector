@@ -1,5 +1,7 @@
 import { getServerSession } from "next-auth";
 import type {
+  CategoryListResponse,
+  KeywordCategoryListResponse,
   KeywordCreate,
   KeywordListResponse,
   KeywordResponse,
@@ -132,7 +134,7 @@ export async function createKeyword(
   });
 }
 
-/** Update a keyword (toggle active). */
+/** Update a keyword. */
 export async function updateKeyword(
   id: number,
   body: KeywordUpdate,
@@ -212,6 +214,28 @@ export async function getSimilarNews(
   limit = 5,
 ): Promise<NewsResponse[]> {
   return fetchApi<NewsResponse[]>(`/news/${id}/similar?limit=${limit}`, {
+    cache: "no-store",
+  });
+}
+
+// --- Categories ---
+
+/** Fetch all investment categories. */
+export async function getCategories(
+  locale?: string,
+): Promise<CategoryListResponse> {
+  const qs = locale ? `?locale=${locale}` : "";
+  return fetchApi<CategoryListResponse>(`/categories${qs}`, {
+    cache: "no-store",
+  });
+}
+
+/** Fetch all keyword categories. */
+export async function getKeywordCategories(
+  locale?: string,
+): Promise<KeywordCategoryListResponse> {
+  const qs = locale ? `?locale=${locale}` : "";
+  return fetchApi<KeywordCategoryListResponse>(`/keyword-categories${qs}`, {
     cache: "no-store",
   });
 }

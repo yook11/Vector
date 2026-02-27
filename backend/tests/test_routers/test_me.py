@@ -13,7 +13,7 @@ from app.models.news import NewsArticle
 @pytest.fixture
 async def second_keyword(db_session: AsyncSession) -> Keyword:
     """Create a second keyword for testing."""
-    kw = Keyword(keyword="Materials Informatics", category="materials", is_active=True)
+    kw = Keyword(keyword="Materials Informatics")
     db_session.add(kw)
     await db_session.commit()
     await db_session.refresh(kw)
@@ -78,7 +78,7 @@ class TestListSubscriptions:
         item = data["items"][0]
         assert item["keywordId"] == sample_keyword.id
         assert item["keyword"] == "Quantum Computing"
-        assert item["category"] == "computing"
+        assert item["categories"] == []
         assert "createdAt" in item
 
     async def test_requires_auth(self, client: AsyncClient) -> None:
@@ -262,9 +262,7 @@ class TestRemoveFromWatchlist:
             "/api/v1/me/watchlist",
             json={"newsArticleId": sample_article.id},
         )
-        resp = await authed_client.delete(
-            f"/api/v1/me/watchlist/{sample_article.id}"
-        )
+        resp = await authed_client.delete(f"/api/v1/me/watchlist/{sample_article.id}")
         assert resp.status_code == 204
 
         # Verify it's gone

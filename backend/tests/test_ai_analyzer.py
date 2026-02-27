@@ -8,6 +8,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from app.models.analysis import AnalysisResult
+from app.models.investment_category import (
+    AnalysisInvestmentCategory,
+    InvestmentCategory,
+)
 from app.models.news import NewsArticle
 from app.services.ai_analyzer import (
     AnalysisData,
@@ -29,18 +33,19 @@ def _make_gemini_response(
     ),
     sentiment: str = "positive",
     impact_score: int = 8,
-    key_topics: list[str] | None = None,
     reasoning: str | None = "技術的に重要な進展であり市場に好影響",
+    investment_categories: list[str] | None = None,
 ) -> str:
     """Create a valid JSON string mimicking Gemini API response."""
-    data = {
+    data: dict = {
         "title_ja": title_ja,
         "summary_ja": summary_ja,
         "sentiment": sentiment,
         "impact_score": impact_score,
-        "key_topics": key_topics or ["量子コンピューティング", "MIT", "超電導"],
         "reasoning": reasoning,
     }
+    if investment_categories is not None:
+        data["investment_categories"] = investment_categories
     return json.dumps(data, ensure_ascii=False)
 
 
@@ -82,7 +87,7 @@ def test_parse_response_valid_json() -> None:
     assert isinstance(result, AnalysisData)
     assert result.sentiment == "positive"
     assert result.impact_score == 8
-    assert result.title_ja == "量子コンピューティングの新たなブレイクスルー"
+    assert result.title == "量子コンピューティングの新たなブレイクスルー"
 
 
 def test_parse_response_strips_markdown_fences() -> None:
@@ -112,6 +117,45 @@ def test_parse_response_impact_score_out_of_range() -> None:
         analyzer._parse_response(raw)
 
 
+def test_parse_response_with_investment_categories() -> None:
+    analyzer = _create_analyzer()
+    raw = _make_gemini_response(
+        investment_categories=["growth_catalyst", "financial_signal"]
+    )
+    result = analyzer._parse_response(raw)
+    assert result.investment_categories == ["growth_catalyst", "financial_signal"]
+
+
+def test_parse_response_filters_invalid_categories() -> None:
+    analyzer = _create_analyzer()
+    raw = _make_gemini_response(
+        investment_categories=["growth_catalyst", "invalid_slug", "financial_signal"]
+    )
+    result = analyzer._parse_response(raw)
+    assert result.investment_categories == ["growth_catalyst", "financial_signal"]
+
+
+def test_parse_response_limits_to_three_categories() -> None:
+    analyzer = _create_analyzer()
+    raw = _make_gemini_response(
+        investment_categories=[
+            "growth_catalyst",
+            "financial_signal",
+            "competitive_edge",
+            "risk_mitigation",
+        ]
+    )
+    result = analyzer._parse_response(raw)
+    assert len(result.investment_categories) == 3
+
+
+def test_parse_response_no_categories_field() -> None:
+    analyzer = _create_analyzer()
+    raw = _make_gemini_response()
+    result = analyzer._parse_response(raw)
+    assert result.investment_categories is None
+
+
 # --- C. GeminiAnalyzer._call_with_retry tests ---
 
 
@@ -122,9 +166,7 @@ async def test_call_with_retry_succeeds_on_first_attempt() -> None:
     mock_response.text = _make_gemini_response()
 
     analyzer._client = MagicMock()
-    analyzer._client.aio.models.generate_content = AsyncMock(
-        return_value=mock_response
-    )
+    analyzer._client.aio.models.generate_content = AsyncMock(return_value=mock_response)
 
     result = await analyzer._call_with_retry("test prompt")
     assert result == mock_response.text
@@ -190,11 +232,10 @@ async def test_analyze_article_creates_analysis(
     mock_analyzer.model_name = "gemini-2.0-flash"
     mock_analyzer.analyze = AsyncMock(
         return_value=AnalysisData(
-            title_ja="量子ブレイクスルー",
-            summary_ja="要約テスト",
+            title="量子ブレイクスルー",
+            summary="要約テスト",
             sentiment="positive",
             impact_score=8,
-            key_topics=["量子"],
             reasoning="テスト理由",
         )
     )
@@ -207,12 +248,103 @@ async def test_analyze_article_creates_analysis(
     assert result.sentiment == "positive"
     assert result.ai_provider == "gemini"
 
-    stmt = select(AnalysisResult).where(
-        AnalysisResult.news_article_id == article.id
+    # Verify translation was created
+    from app.models.analysis import AnalysisTranslation
+
+    t_stmt = select(AnalysisTranslation).where(
+        AnalysisTranslation.analysis_id == result.id
     )
-    db_result = (await db_session.execute(stmt)).scalar_one_or_none()
-    assert db_result is not None
-    assert db_result.title_ja == "量子ブレイクスルー"
+    translation = (await db_session.execute(t_stmt)).scalar_one_or_none()
+    assert translation is not None
+    assert translation.title == "量子ブレイクスルー"
+    assert translation.locale == "ja"
+
+
+async def test_analyze_article_saves_categories(
+    db_session: AsyncSession,
+    sample_categories: list[InvestmentCategory],
+) -> None:
+    article = NewsArticle(
+        title_original="AI Chip Launch",
+        url="https://example.com/ai-chip",
+        source="Google News",
+    )
+    db_session.add(article)
+    await db_session.commit()
+    await db_session.refresh(article)
+
+    mock_analyzer = MagicMock(spec=BaseAnalyzer)
+    mock_analyzer.provider_name = "gemini"
+    mock_analyzer.model_name = "gemini-2.0-flash"
+    mock_analyzer.analyze = AsyncMock(
+        return_value=AnalysisData(
+            title="AIチップ発売",
+            summary="要約テスト",
+            sentiment="positive",
+            impact_score=9,
+            reasoning="テスト理由",
+            investment_categories=["growth_catalyst", "competitive_edge"],
+        )
+    )
+
+    result = await analyze_article(db_session, article, mock_analyzer)
+    await db_session.commit()
+
+    assert result is not None
+
+    # Verify category links were created
+    stmt = select(AnalysisInvestmentCategory).where(
+        AnalysisInvestmentCategory.analysis_id == result.id
+    )
+    links = (await db_session.execute(stmt)).scalars().all()
+    assert len(links) == 2
+
+    linked_slugs = set()
+    for link in links:
+        cat_stmt = select(InvestmentCategory).where(
+            InvestmentCategory.id == link.category_id
+        )
+        cat = (await db_session.execute(cat_stmt)).scalar_one()
+        linked_slugs.add(cat.slug)
+    assert linked_slugs == {"growth_catalyst", "competitive_edge"}
+
+
+async def test_analyze_article_ignores_unknown_category(
+    db_session: AsyncSession,
+    sample_categories: list[InvestmentCategory],
+) -> None:
+    article = NewsArticle(
+        title_original="Unknown Category Test",
+        url="https://example.com/unknown-cat",
+        source="Google News",
+    )
+    db_session.add(article)
+    await db_session.commit()
+    await db_session.refresh(article)
+
+    mock_analyzer = MagicMock(spec=BaseAnalyzer)
+    mock_analyzer.provider_name = "gemini"
+    mock_analyzer.model_name = "gemini-2.0-flash"
+    mock_analyzer.analyze = AsyncMock(
+        return_value=AnalysisData(
+            title="テスト",
+            summary="要約",
+            sentiment="neutral",
+            impact_score=5,
+            investment_categories=["nonexistent_slug"],
+        )
+    )
+
+    result = await analyze_article(db_session, article, mock_analyzer)
+    await db_session.commit()
+
+    assert result is not None
+
+    stmt = select(AnalysisInvestmentCategory).where(
+        AnalysisInvestmentCategory.analysis_id == result.id
+    )
+    links = (await db_session.execute(stmt)).scalars().all()
+    assert len(links) == 0
 
 
 async def test_analyze_article_skips_already_analyzed(
@@ -229,8 +361,6 @@ async def test_analyze_article_skips_already_analyzed(
 
     existing = AnalysisResult(
         news_article_id=article.id,
-        title_ja="既存の分析",
-        summary_ja="既存要約",
         sentiment="neutral",
         impact_score=5,
         ai_provider="gemini",
@@ -267,8 +397,8 @@ async def test_analyze_articles_batch(
     mock_analyzer.model_name = "gemini-2.0-flash"
     mock_analyzer.analyze = AsyncMock(
         return_value=AnalysisData(
-            title_ja="テスト",
-            summary_ja="要約",
+            title="テスト",
+            summary="要約",
             sentiment="neutral",
             impact_score=5,
         )
@@ -307,15 +437,15 @@ async def test_analyze_articles_handles_errors(
     mock_analyzer.analyze = AsyncMock(
         side_effect=[
             AnalysisData(
-                title_ja="成功",
-                summary_ja="要約",
+                title="成功",
+                summary="要約",
                 sentiment="positive",
                 impact_score=7,
             ),
             AnalysisError("API failed"),
             AnalysisData(
-                title_ja="成功2",
-                summary_ja="要約2",
+                title="成功2",
+                summary="要約2",
                 sentiment="negative",
                 impact_score=3,
             ),
@@ -358,18 +488,26 @@ async def test_news_endpoint_includes_analysis(
     await db_session.commit()
     await db_session.refresh(article)
 
+    from app.models.analysis import AnalysisTranslation
+
     analysis = AnalysisResult(
         news_article_id=article.id,
-        title_ja="テスト記事",
-        summary_ja="テスト要約",
         sentiment="positive",
         impact_score=8,
-        key_topics=["テスト"],
         reasoning="テスト理由",
         ai_provider="gemini",
         ai_model="gemini-2.0-flash",
     )
     db_session.add(analysis)
+    await db_session.flush()
+
+    translation = AnalysisTranslation(
+        analysis_id=analysis.id,
+        locale="ja",
+        title="テスト記事",
+        summary="テスト要約",
+    )
+    db_session.add(translation)
     await db_session.commit()
 
     response = await client.get(f"/api/v1/news/{article.id}")
@@ -377,7 +515,7 @@ async def test_news_endpoint_includes_analysis(
     assert response.status_code == 200
     data = response.json()
     assert data["analysis"] is not None
-    assert data["analysis"]["titleJa"] == "テスト記事"
+    assert data["analysis"]["title"] == "テスト記事"
     assert data["analysis"]["sentiment"] == "positive"
     assert data["analysis"]["impactScore"] == 8
     assert "aiModel" not in data["analysis"]

@@ -7,7 +7,7 @@ from sqlalchemy import text
 
 from app.config import settings
 from app.db import engine
-from app.routers import auth, keywords, me, news
+from app.routers import auth, categories, keyword_categories, keywords, me, news
 
 
 @asynccontextmanager
@@ -36,6 +36,8 @@ app.add_middleware(
 
 # Register routers
 app.include_router(auth.router)
+app.include_router(categories.router)
+app.include_router(keyword_categories.router)
 app.include_router(keywords.router)
 app.include_router(me.router)
 app.include_router(news.router)

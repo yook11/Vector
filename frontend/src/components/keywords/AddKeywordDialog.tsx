@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -14,14 +14,43 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { ApiError, clientCreateKeyword as createKeyword } from "@/lib/client-api";
+import {
+  ApiError,
+  clientCreateKeyword as createKeyword,
+} from "@/lib/client-api";
+import type { KeywordCategoryResponse } from "@/types";
 
-export function AddKeywordDialog() {
+interface AddKeywordDialogProps {
+  keywordCategories?: KeywordCategoryResponse[];
+}
+
+export function AddKeywordDialog({ keywordCategories }: AddKeywordDialogProps) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [keyword, setKeyword] = useState("");
-  const [category, setCategory] = useState("");
+  const [selectedCategoryIds, setSelectedCategoryIds] = useState<Set<number>>(
+    new Set(),
+  );
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!open) {
+      setKeyword("");
+      setSelectedCategoryIds(new Set());
+    }
+  }, [open]);
+
+  function toggleCategory(id: number) {
+    setSelectedCategoryIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -32,11 +61,9 @@ export function AddKeywordDialog() {
     try {
       await createKeyword({
         keyword: trimmed,
-        category: category.trim() || "custom",
+        categoryIds: Array.from(selectedCategoryIds),
       });
       toast.success(`Added "${trimmed}"`);
-      setKeyword("");
-      setCategory("");
       setOpen(false);
       router.refresh();
     } catch (err) {
@@ -70,15 +97,28 @@ export function AddKeywordDialog() {
               required
             />
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="category">Category (optional)</Label>
-            <Input
-              id="category"
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              placeholder="e.g. computing"
-            />
-          </div>
+          {keywordCategories && keywordCategories.length > 0 && (
+            <div className="space-y-2">
+              <Label>Categories (optional)</Label>
+              <div className="flex flex-wrap gap-2">
+                {keywordCategories.map((cat) => (
+                  <Button
+                    key={cat.id}
+                    type="button"
+                    size="sm"
+                    variant={
+                      selectedCategoryIds.has(cat.id)
+                        ? "default"
+                        : "outline"
+                    }
+                    onClick={() => toggleCategory(cat.id)}
+                  >
+                    {cat.name}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          )}
           <DialogFooter>
             <Button type="submit" disabled={loading || !keyword.trim()}>
               {loading ? "Adding..." : "Add"}

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Switch } from "@/components/ui/switch";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { TableCell, TableRow } from "@/components/ui/table";
 import {
@@ -19,7 +19,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { KeywordTag } from "./KeywordTag";
 import { SubscriptionToggle } from "./SubscriptionToggle";
-import { clientDeleteKeyword as deleteKeyword, clientUpdateKeyword as updateKeyword } from "@/lib/client-api";
+import { clientDeleteKeyword as deleteKeyword } from "@/lib/client-api";
 import type { KeywordResponse } from "@/types";
 
 interface KeywordRowProps {
@@ -29,20 +29,7 @@ interface KeywordRowProps {
 
 export function KeywordRow({ keyword, subscribedKeywordIds }: KeywordRowProps) {
   const router = useRouter();
-  const [toggling, setToggling] = useState(false);
   const [deleting, setDeleting] = useState(false);
-
-  async function handleToggle(checked: boolean) {
-    setToggling(true);
-    try {
-      await updateKeyword(keyword.id, { isActive: checked });
-      router.refresh();
-    } catch {
-      toast.error("Failed to update keyword");
-    } finally {
-      setToggling(false);
-    }
-  }
 
   async function handleDelete() {
     setDeleting(true);
@@ -60,19 +47,22 @@ export function KeywordRow({ keyword, subscribedKeywordIds }: KeywordRowProps) {
   return (
     <TableRow>
       <TableCell>
-        <KeywordTag keyword={keyword.keyword} category={keyword.category} />
+        <KeywordTag keyword={keyword.keyword} categories={keyword.categories} />
       </TableCell>
-      <TableCell className="text-muted-foreground">
-        {keyword.category}
+      <TableCell>
+        <div className="flex flex-wrap gap-1">
+          {keyword.categories && keyword.categories.length > 0 ? (
+            keyword.categories.map((cat) => (
+              <Badge key={cat.slug} variant="secondary" className="text-xs">
+                {cat.name}
+              </Badge>
+            ))
+          ) : (
+            <span className="text-muted-foreground text-sm">—</span>
+          )}
+        </div>
       </TableCell>
       <TableCell className="text-center">{keyword.articleCount}</TableCell>
-      <TableCell className="text-center">
-        <Switch
-          checked={keyword.isActive}
-          onCheckedChange={handleToggle}
-          disabled={toggling}
-        />
-      </TableCell>
       {subscribedKeywordIds && (
         <TableCell className="text-center">
           <SubscriptionToggle

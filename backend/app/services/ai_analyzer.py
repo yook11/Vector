@@ -10,7 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from app.config import settings
-from app.models.analysis import AnalysisResult
+from app.models.analysis import AnalysisResult, AnalysisTranslation
+from app.models.investment_category import (
+    AnalysisInvestmentCategory,
+    InvestmentCategory,
+)
 from app.models.news import NewsArticle
 
 logger = structlog.get_logger(__name__)
@@ -30,12 +34,12 @@ class RateLimitError(AnalysisError):
 class AnalysisData:
     """Parsed AI response data before DB persistence."""
 
-    title_ja: str
-    summary_ja: str
+    title: str
+    summary: str
     sentiment: str  # "positive" | "negative" | "neutral"
     impact_score: int  # 1-10
-    key_topics: list[str] | None = None
     reasoning: str | None = None
+    investment_categories: list[str] | None = None
 
 
 @dataclass
@@ -140,11 +144,8 @@ async def analyze_article(
 
     result = AnalysisResult(
         news_article_id=article.id,
-        title_ja=data.title_ja,
-        summary_ja=data.summary_ja,
         sentiment=data.sentiment,
         impact_score=data.impact_score,
-        key_topics=data.key_topics,
         reasoning=data.reasoning,
         ai_provider=analyzer.provider_name,
         ai_model=analyzer.model_name,
@@ -153,11 +154,34 @@ async def analyze_article(
     session.add(result)
     await session.flush()
 
+    # Persist translation
+    translation = AnalysisTranslation(
+        analysis_id=result.id,
+        locale="ja",
+        title=data.title,
+        summary=data.summary,
+    )
+    session.add(translation)
+
+    # Persist investment category links
+    if data.investment_categories:
+        cat_stmt = select(InvestmentCategory).where(
+            InvestmentCategory.slug.in_(data.investment_categories)
+        )
+        categories = (await session.execute(cat_stmt)).scalars().all()
+        for cat in categories:
+            link = AnalysisInvestmentCategory(
+                analysis_id=result.id,
+                category_id=cat.id,
+            )
+            session.add(link)
+
     logger.info(
         "analysis_completed",
         article_id=article.id,
         sentiment=data.sentiment,
         impact_score=data.impact_score,
+        categories=data.investment_categories,
     )
     return result
 

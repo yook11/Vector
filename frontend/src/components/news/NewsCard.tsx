@@ -6,6 +6,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { CategoryBadge } from "./CategoryBadge";
 import { SentimentBadge } from "./SentimentBadge";
 import { ImpactScore } from "./ImpactScore";
 import { WatchlistButton } from "./WatchlistButton";
@@ -32,7 +33,7 @@ export function NewsCard({ article }: { article: NewsResponse }) {
               href={`/news/${article.id}`}
               className="hover:underline"
             >
-              {analysis?.titleJa ?? article.titleOriginal}
+              {analysis?.title ?? article.titleOriginal}
             </Link>
           </CardTitle>
           <div className="flex items-center gap-1 shrink-0">
@@ -51,9 +52,14 @@ export function NewsCard({ article }: { article: NewsResponse }) {
         {analysis && (
           <>
             <p className="text-sm text-muted-foreground line-clamp-2">
-              {analysis.summaryJa}
+              {analysis.summary}
             </p>
-            <SentimentBadge sentiment={analysis.sentiment} />
+            <div className="flex flex-wrap gap-1">
+              <SentimentBadge sentiment={analysis.sentiment} />
+              {analysis.investmentCategories?.map((cat) => (
+                <CategoryBadge key={cat.slug} category={cat} />
+              ))}
+            </div>
           </>
         )}
         {!analysis && (

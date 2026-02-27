@@ -148,8 +148,8 @@ async def test_fetch_skips_duplicate_urls(
 
 
 async def test_fetch_links_multiple_keywords(db_session: AsyncSession) -> None:
-    kw1 = Keyword(keyword="Keyword A", category="test", is_active=True)
-    kw2 = Keyword(keyword="Keyword B", category="test", is_active=True)
+    kw1 = Keyword(keyword="Keyword A")
+    kw2 = Keyword(keyword="Keyword B")
     db_session.add_all([kw1, kw2])
     await db_session.commit()
     await db_session.refresh(kw1)
@@ -256,8 +256,8 @@ async def test_fetch_merges_keywords_for_same_decoded_url(
     db_session: AsyncSession, _mock_decode_urls: AsyncMock
 ) -> None:
     """Two Google News URLs decoding to same real URL should merge."""
-    kw1 = Keyword(keyword="AI", category="tech", is_active=True)
-    kw2 = Keyword(keyword="ML", category="tech", is_active=True)
+    kw1 = Keyword(keyword="AI")
+    kw2 = Keyword(keyword="ML")
     db_session.add_all([kw1, kw2])
     await db_session.commit()
     await db_session.refresh(kw1)

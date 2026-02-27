@@ -1,10 +1,20 @@
 from app.schemas.analysis import AnalysisResponse
+from app.schemas.category import (
+    CategoryBrief,
+    CategoryListResponse,
+    CategoryResponse,
+)
 from app.schemas.keyword import (
     KeywordBrief,
     KeywordCreate,
     KeywordListResponse,
     KeywordResponse,
     KeywordUpdate,
+)
+from app.schemas.keyword_category import (
+    KeywordCategoryBrief,
+    KeywordCategoryListResponse,
+    KeywordCategoryResponse,
 )
 from app.schemas.news import (
     NewsFetchRequest,
@@ -15,7 +25,13 @@ from app.schemas.news import (
 
 __all__ = [
     "AnalysisResponse",
+    "CategoryBrief",
+    "CategoryListResponse",
+    "CategoryResponse",
     "KeywordBrief",
+    "KeywordCategoryBrief",
+    "KeywordCategoryListResponse",
+    "KeywordCategoryResponse",
     "KeywordCreate",
     "KeywordListResponse",
     "KeywordResponse",

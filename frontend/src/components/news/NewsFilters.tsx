@@ -9,8 +9,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import type { CategoryResponse } from "@/types";
 
-export function NewsFilters() {
+interface NewsFiltersProps {
+  categories?: CategoryResponse[];
+}
+
+export function NewsFilters({ categories }: NewsFiltersProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -61,6 +66,27 @@ export function NewsFilters() {
           <SelectItem value="impactScore">Impact Score</SelectItem>
         </SelectContent>
       </Select>
+
+      {categories && categories.length > 0 && (
+        <Select
+          value={searchParams.get("category") ?? ""}
+          onValueChange={(v) =>
+            updateParam("category", v === "all" ? undefined : v)
+          }
+        >
+          <SelectTrigger className="w-[160px]">
+            <SelectValue placeholder="Category" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Categories</SelectItem>
+            {categories.map((cat) => (
+              <SelectItem key={cat.slug} value={cat.slug}>
+                {cat.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
 
       <Select
         value={searchParams.get("sortOrder") ?? ""}

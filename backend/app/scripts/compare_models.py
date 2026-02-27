@@ -85,16 +85,11 @@ def parse_response(raw_text: str) -> AnalysisData:
     if not (1 <= impact_score <= 10):
         raise ValueError(f"impact_score out of range: {impact_score}")
 
-    key_topics = data.get("key_topics")
-    if key_topics is not None and not isinstance(key_topics, list):
-        key_topics = None
-
     return AnalysisData(
-        title_ja=str(data["title_ja"]),
-        summary_ja=str(data["summary_ja"]),
+        title=str(data["title_ja"]),
+        summary=str(data["summary_ja"]),
         sentiment=sentiment,
         impact_score=impact_score,
-        key_topics=key_topics,
         reasoning=data.get("reasoning"),
     )
 
@@ -119,18 +114,27 @@ def print_comparison(
 
     assert lite_result is not None
 
-    # title_ja
-    print("\n  [title_ja]")
-    print(f"    flash:      {flash_result.title_ja}")
-    print(f"    flash-lite: {lite_result.title_ja}")
+    # Get flash title/summary from translations
+    flash_title = ""
+    flash_summary = ""
+    for t in flash_result.translations:
+        if t.locale == "ja":
+            flash_title = t.title
+            flash_summary = t.summary
+            break
 
-    # summary_ja
-    print("\n  [summary_ja]")
+    # title
+    print("\n  [title]")
+    print(f"    flash:      {flash_title}")
+    print(f"    flash-lite: {lite_result.title}")
+
+    # summary
+    print("\n  [summary]")
     print("    flash:")
-    for line in flash_result.summary_ja.split("\n"):
+    for line in flash_summary.split("\n"):
         print(f"      {line}")
     print("    flash-lite:")
-    for line in lite_result.summary_ja.split("\n"):
+    for line in lite_result.summary.split("\n"):
         print(f"      {line}")
 
     # sentiment
@@ -148,16 +152,6 @@ def print_comparison(
         f"  [impact_score]  flash: {flash_result.impact_score}"
         f" | flash-lite: {lite_result.impact_score}  (diff: {sign}{diff})"
     )
-
-    # key_topics overlap
-    flash_topics = set(flash_result.key_topics or [])
-    lite_topics = set(lite_result.key_topics or [])
-    if flash_topics or lite_topics:
-        common = flash_topics & lite_topics
-        total_unique = flash_topics | lite_topics
-        print(f"  [key_topics]  {len(common)}/{len(total_unique)} common")
-        print(f"    flash:      {', '.join(flash_topics)}")
-        print(f"    flash-lite: {', '.join(lite_topics)}")
 
     return {
         "parse_ok": True,
@@ -183,7 +177,11 @@ async def main(count: int) -> None:
                     select(AnalysisResult.news_article_id)
                 )
             )
-            .options(selectinload(NewsArticle.analysis))  # type: ignore[arg-type]
+            .options(
+                selectinload(NewsArticle.analysis).selectinload(  # type: ignore[arg-type]
+                    AnalysisResult.translations
+                )
+            )
             .order_by(NewsArticle.fetched_at.desc())  # type: ignore[union-attr]
             .limit(count)
         )

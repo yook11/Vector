@@ -13,7 +13,23 @@ from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
 from app.config import settings
 from app.dependencies import get_session
 from app.main import app
-from app.models import AnalysisResult, Keyword, NewsArticle, NewsKeyword, RefreshToken, User, UserKeywordSubscription, WatchlistItem  # noqa: F401
+from app.models import (  # noqa: F401
+    AnalysisInvestmentCategory,
+    AnalysisResult,
+    AnalysisTranslation,
+    InvestmentCategory,
+    InvestmentCategoryTranslation,
+    Keyword,
+    KeywordCategory,
+    KeywordCategoryLink,
+    KeywordCategoryTranslation,
+    NewsArticle,
+    NewsKeyword,
+    RefreshToken,
+    User,
+    UserKeywordSubscription,
+    WatchlistItem,
+)
 from app.services.auth_service import create_access_token
 
 TEST_DATABASE_URL = settings.database_url.rsplit("/", 1)[0] + "/vector_test"
@@ -54,9 +70,7 @@ async def setup_db(ensure_test_database: None) -> AsyncGenerator[None, None]:
 @pytest.fixture
 async def db_session() -> AsyncGenerator[AsyncSession, None]:
     """Provide a test database session."""
-    async with SQLModelAsyncSession(
-        engine_test, expire_on_commit=False
-    ) as session:
+    async with SQLModelAsyncSession(engine_test, expire_on_commit=False) as session:
         yield session
 
 
@@ -122,8 +136,107 @@ async def authed_client(
 @pytest.fixture
 async def sample_keyword(db_session: AsyncSession) -> Keyword:
     """Create and return a test keyword."""
-    kw = Keyword(keyword="Quantum Computing", category="computing", is_active=True)
+    kw = Keyword(keyword="Quantum Computing")
     db_session.add(kw)
     await db_session.commit()
     await db_session.refresh(kw)
     return kw
+
+
+@pytest.fixture
+async def sample_keyword_categories(
+    db_session: AsyncSession,
+) -> list[KeywordCategory]:
+    """Create and return sample keyword categories with translations."""
+    seed = [
+        ("ai_ml", "AI・ML", "AI & ML"),
+        ("quantum", "量子コンピュータ", "Quantum Computing"),
+        ("semiconductor", "半導体", "Semiconductor"),
+    ]
+    categories: list[KeywordCategory] = []
+    for slug, name_ja, name_en in seed:
+        cat = KeywordCategory(slug=slug)
+        db_session.add(cat)
+        await db_session.flush()
+        db_session.add(
+            KeywordCategoryTranslation(category_id=cat.id, locale="ja", name=name_ja)
+        )
+        db_session.add(
+            KeywordCategoryTranslation(category_id=cat.id, locale="en", name=name_en)
+        )
+        categories.append(cat)
+    await db_session.commit()
+    for cat in categories:
+        await db_session.refresh(cat)
+    return categories
+
+
+@pytest.fixture
+async def sample_categories(
+    db_session: AsyncSession,
+) -> list[InvestmentCategory]:
+    """Create and return the 6 standard investment categories with translations."""
+    seed = [
+        (
+            "competitive_edge",
+            "競争優位",
+            "Competitive Edge",
+            "技術突破、特許取得、市場シェア拡大",
+        ),
+        (
+            "financial_signal",
+            "業績シグナル",
+            "Financial Signal",
+            "決算、売上変化、利益率、資金調達",
+        ),
+        (
+            "growth_catalyst",
+            "成長期待",
+            "Growth Catalyst",
+            "新製品、市場拡大、提携など成長を示唆するニュース",
+        ),
+        (
+            "market_disruption",
+            "市場破壊",
+            "Market Disruption",
+            "新技術による既存市場への脅威、業界再編",
+        ),
+        (
+            "regulatory_shift",
+            "規制変化",
+            "Regulatory Shift",
+            "新法規、政策変更、補助金、輸出規制",
+        ),
+        (
+            "risk_mitigation",
+            "リスク回避",
+            "Risk Mitigation",
+            "訴訟勝訴、規制クリア、安全性確認など",
+        ),
+    ]
+    categories: list[InvestmentCategory] = []
+    for slug, name_ja, name_en, desc in seed:
+        cat = InvestmentCategory(slug=slug)
+        db_session.add(cat)
+        await db_session.flush()
+        db_session.add(
+            InvestmentCategoryTranslation(
+                category_id=cat.id,
+                locale="ja",
+                name=name_ja,
+                description=desc,
+            )
+        )
+        db_session.add(
+            InvestmentCategoryTranslation(
+                category_id=cat.id,
+                locale="en",
+                name=name_en,
+                description=desc,
+            )
+        )
+        categories.append(cat)
+    await db_session.commit()
+    for cat in categories:
+        await db_session.refresh(cat)
+    return categories

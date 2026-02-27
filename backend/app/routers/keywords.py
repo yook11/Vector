@@ -1,12 +1,18 @@
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from sqlmodel import func, select
 
 from app.dependencies import get_current_user, get_session
 from app.models.associations import NewsKeyword
 from app.models.keyword import Keyword
+from app.models.keyword_category import (
+    KeywordCategory,
+    KeywordCategoryLink,
+    KeywordCategoryTranslation,
+)
 from app.models.user import User
 from app.schemas.keyword import (
     KeywordCreate,
@@ -14,18 +20,45 @@ from app.schemas.keyword import (
     KeywordResponse,
     KeywordUpdate,
 )
+from app.schemas.keyword_category import KeywordCategoryBrief
 
 router = APIRouter(prefix="/api/v1/keywords", tags=["keywords"])
 
 
+def _build_categories(
+    category_links: list[KeywordCategoryLink], locale: str
+) -> list[KeywordCategoryBrief]:
+    """Extract translated category briefs from loaded category_links."""
+    result = []
+    for link in category_links:
+        if not link.category:
+            continue
+        name = ""
+        for t in link.category.translations:
+            if t.locale == locale:
+                name = t.name
+                break
+        result.append(KeywordCategoryBrief(slug=link.category.slug, name=name))
+    return result
+
+
 @router.get("", response_model=KeywordListResponse)
 async def list_keywords(
+    locale: str = Query("ja"),
     _user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> KeywordListResponse:
-    stmt = select(Keyword).order_by(Keyword.created_at.desc())
+    stmt = (
+        select(Keyword)
+        .options(
+            selectinload(Keyword.category_links)
+            .selectinload(KeywordCategoryLink.category)
+            .selectinload(KeywordCategory.translations)
+        )
+        .order_by(Keyword.created_at.desc())
+    )
     result = await session.execute(stmt)
-    keywords = result.scalars().all()
+    keywords = result.unique().scalars().all()
 
     responses = []
     for kw in keywords:
@@ -37,8 +70,7 @@ async def list_keywords(
             KeywordResponse(
                 id=kw.id,
                 keyword=kw.keyword,
-                category=kw.category,
-                is_active=kw.is_active,
+                categories=_build_categories(kw.category_links, locale),
                 article_count=article_count,
                 created_at=kw.created_at,
             )
@@ -65,16 +97,53 @@ async def create_keyword(
             detail="Keyword already exists",
         )
 
-    keyword = Keyword(keyword=body.keyword, category=body.category)
+    keyword = Keyword(keyword=body.keyword)
     session.add(keyword)
+    await session.flush()
+
+    categories: list[KeywordCategoryBrief] = []
+    if body.category_ids:
+        cat_stmt = (
+            select(KeywordCategory)
+            .options(selectinload(KeywordCategory.translations))
+            .where(KeywordCategory.id.in_(body.category_ids))
+        )
+        cat_result = await session.execute(cat_stmt)
+        valid_cats = {cat.id: cat for cat in cat_result.scalars().all()}
+
+        for cat_id in body.category_ids:
+            if cat_id not in valid_cats:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Category ID {cat_id} not found",
+                )
+            link = KeywordCategoryLink(keyword_id=keyword.id, category_id=cat_id)
+            session.add(link)
+
+        # Build response categories using loaded translations
+        cat_translations = await session.execute(
+            select(KeywordCategoryTranslation).where(
+                KeywordCategoryTranslation.category_id.in_(body.category_ids),
+                KeywordCategoryTranslation.locale == "ja",
+            )
+        )
+        trans_map = {t.category_id: t.name for t in cat_translations.scalars().all()}
+        categories = [
+            KeywordCategoryBrief(
+                slug=valid_cats[cid].slug,
+                name=trans_map.get(cid, ""),
+            )
+            for cid in body.category_ids
+            if cid in valid_cats
+        ]
+
     await session.commit()
     await session.refresh(keyword)
 
     return KeywordResponse(
         id=keyword.id,
         keyword=keyword.keyword,
-        category=keyword.category,
-        is_active=keyword.is_active,
+        categories=categories,
         article_count=0,
         created_at=keyword.created_at,
     )
@@ -84,6 +153,7 @@ async def create_keyword(
 async def update_keyword(
     keyword_id: int,
     body: KeywordUpdate,
+    locale: str = Query("ja"),
     _user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> KeywordResponse:
@@ -94,13 +164,47 @@ async def update_keyword(
             detail="Keyword not found",
         )
 
-    if body.is_active is not None:
-        keyword.is_active = body.is_active
-    keyword.updated_at = datetime.now(UTC)
+    if body.category_ids is not None:
+        # Delete existing links
+        existing_links_stmt = select(KeywordCategoryLink).where(
+            KeywordCategoryLink.keyword_id == keyword_id
+        )
+        existing_links = (await session.execute(existing_links_stmt)).scalars().all()
+        for link in existing_links:
+            await session.delete(link)
 
+        # Create new links
+        if body.category_ids:
+            cat_stmt = select(KeywordCategory).where(
+                KeywordCategory.id.in_(body.category_ids)
+            )
+            cat_result = await session.execute(cat_stmt)
+            valid_cats = {cat.id: cat for cat in cat_result.scalars().all()}
+            for cat_id in body.category_ids:
+                if cat_id not in valid_cats:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Category ID {cat_id} not found",
+                    )
+                link = KeywordCategoryLink(keyword_id=keyword_id, category_id=cat_id)
+                session.add(link)
+
+    keyword.updated_at = datetime.now(UTC)
     session.add(keyword)
     await session.commit()
-    await session.refresh(keyword)
+
+    # Reload with categories for response
+    stmt = (
+        select(Keyword)
+        .where(Keyword.id == keyword_id)
+        .options(
+            selectinload(Keyword.category_links)
+            .selectinload(KeywordCategoryLink.category)
+            .selectinload(KeywordCategory.translations)
+        )
+    )
+    result = await session.execute(stmt)
+    keyword = result.unique().scalar_one()
 
     count_stmt = select(func.count()).where(NewsKeyword.keyword_id == keyword.id)
     count_result = await session.execute(count_stmt)
@@ -109,8 +213,7 @@ async def update_keyword(
     return KeywordResponse(
         id=keyword.id,
         keyword=keyword.keyword,
-        category=keyword.category,
-        is_active=keyword.is_active,
+        categories=_build_categories(keyword.category_links, locale),
         article_count=article_count,
         created_at=keyword.created_at,
     )

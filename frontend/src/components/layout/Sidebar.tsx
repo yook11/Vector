@@ -16,7 +16,6 @@ export function Sidebar({
   subscribedKeywordIds,
   showMyKeywords,
 }: SidebarProps) {
-  const active = keywords.filter((k) => k.isActive);
   const subscribedSet = new Set(subscribedKeywordIds ?? []);
   const hasSubscriptions = subscribedSet.size > 0;
 
@@ -45,7 +44,7 @@ export function Sidebar({
           My Keywords
         </Link>
       )}
-      {active.map((kw) => (
+      {keywords.map((kw) => (
         <Link
           key={kw.id}
           href={`/?keywordId=${kw.id}`}

@@ -9,13 +9,23 @@ from sqlmodel import col, func, select
 from app.dependencies import get_current_user, get_optional_user, get_session
 from app.models.analysis import AnalysisResult
 from app.models.associations import NewsKeyword
+from app.models.investment_category import (
+    AnalysisInvestmentCategory,
+    InvestmentCategory,
+)
 from app.models.keyword import Keyword
+from app.models.keyword_category import (
+    KeywordCategory,
+    KeywordCategoryLink,
+)
 from app.models.news import NewsArticle
 from app.models.user import User
 from app.models.user_keyword import UserKeywordSubscription
 from app.models.watchlist import WatchlistItem
 from app.schemas.analysis import AnalysisResponse
+from app.schemas.category import CategoryBrief
 from app.schemas.keyword import KeywordBrief
+from app.schemas.keyword_category import KeywordCategoryBrief
 from app.schemas.news import (
     EmbedResponse,
     NewsFetchRequest,
@@ -28,6 +38,16 @@ from app.services.news_fetcher import fetch_news_for_keywords
 
 router = APIRouter(prefix="/api/v1/news", tags=["news"])
 
+DEFAULT_LOCALE = "ja"
+
+
+def _get_translated(translations: list, locale: str, field: str = "name") -> str:
+    """Get a translated field value from a list of translation objects."""
+    for t in translations:
+        if t.locale == locale:
+            return getattr(t, field, "")
+    return ""
+
 
 async def _get_watched_ids(session: AsyncSession, user: User | None) -> set[int]:
     """Return set of news_article_ids in the user's watchlist."""
@@ -39,14 +59,23 @@ async def _get_watched_ids(session: AsyncSession, user: User | None) -> set[int]
 
 
 def _build_news_response(
-    article: NewsArticle, watched_ids: set[int] | None = None
+    article: NewsArticle,
+    watched_ids: set[int] | None = None,
+    locale: str = DEFAULT_LOCALE,
 ) -> NewsResponse:
     """Convert a NewsArticle ORM object to NewsResponse schema."""
     keywords = [
         KeywordBrief(
             id=link.keyword.id,
             keyword=link.keyword.keyword,
-            category=link.keyword.category,
+            categories=[
+                KeywordCategoryBrief(
+                    slug=cl.category.slug,
+                    name=_get_translated(cl.category.translations, locale),
+                )
+                for cl in link.keyword.category_links
+                if cl.category
+            ],
         )
         for link in article.keyword_links
         if link.keyword
@@ -55,15 +84,23 @@ def _build_news_response(
     analysis = None
     if article.analysis:
         a = article.analysis
+        categories = [
+            CategoryBrief(
+                slug=link.category.slug,
+                name=_get_translated(link.category.translations, locale),
+            )
+            for link in a.category_links
+            if link.category
+        ]
         analysis = AnalysisResponse(
-            title_ja=a.title_ja,
-            summary_ja=a.summary_ja,
+            title=_get_translated(a.translations, locale, "title"),
+            summary=_get_translated(a.translations, locale, "summary"),
             sentiment=a.sentiment,
             impact_score=a.impact_score,
-            key_topics=a.key_topics,
             reasoning=a.reasoning,
             ai_provider=a.ai_provider,
             analyzed_at=a.analyzed_at,
+            investment_categories=categories,
         )
 
     return NewsResponse(
@@ -81,24 +118,39 @@ def _build_news_response(
     )
 
 
+def _news_eager_options() -> list:
+    """Return common selectinload options for news queries."""
+    return [
+        selectinload(NewsArticle.analysis)
+        .selectinload(AnalysisResult.category_links)
+        .selectinload(AnalysisInvestmentCategory.category)
+        .selectinload(InvestmentCategory.translations),
+        selectinload(NewsArticle.analysis).selectinload(AnalysisResult.translations),
+        selectinload(NewsArticle.keyword_links)
+        .selectinload(NewsKeyword.keyword)
+        .selectinload(Keyword.category_links)
+        .selectinload(KeywordCategoryLink.category)
+        .selectinload(KeywordCategory.translations),
+    ]
+
+
 @router.get("", response_model=PaginatedNewsResponse)
 async def list_news(
     keyword_id: int | None = Query(None, alias="keywordId"),
     my_keywords: bool = Query(False, alias="myKeywords"),
     sentiment: str | None = None,
     min_impact: int | None = Query(None, alias="minImpact"),
+    category: str | None = None,
     sort_by: str = Query("publishedAt", alias="sortBy"),
     sort_order: str = Query("desc", alias="sortOrder"),
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100, alias="perPage"),
+    locale: str = Query(DEFAULT_LOCALE),
     user: User | None = Depends(get_optional_user),
     session: AsyncSession = Depends(get_session),
 ) -> PaginatedNewsResponse:
-    # Base query with eager loading
-    stmt = select(NewsArticle).options(
-        selectinload(NewsArticle.analysis),
-        selectinload(NewsArticle.keyword_links).selectinload(NewsKeyword.keyword),
-    )
+    # Base query with eager loading (including category + translation chains)
+    stmt = select(NewsArticle).options(*_news_eager_options())
 
     # myKeywords filter: only effective for authenticated users
     if my_keywords and user is not None:
@@ -109,21 +161,46 @@ async def list_news(
     elif keyword_id is not None:
         stmt = stmt.join(NewsKeyword).where(NewsKeyword.keyword_id == keyword_id)
 
+    # Track whether AnalysisResult is already joined
+    analysis_joined = False
+
     if sentiment is not None:
         stmt = stmt.join(
             AnalysisResult,
             AnalysisResult.news_article_id == NewsArticle.id,
             isouter=False,
         ).where(AnalysisResult.sentiment == sentiment)
+        analysis_joined = True
 
     if min_impact is not None:
-        if sentiment is None:
+        if not analysis_joined:
             stmt = stmt.join(
                 AnalysisResult,
                 AnalysisResult.news_article_id == NewsArticle.id,
                 isouter=False,
             )
+            analysis_joined = True
         stmt = stmt.where(AnalysisResult.impact_score >= min_impact)
+
+    if category is not None:
+        if not analysis_joined:
+            stmt = stmt.join(
+                AnalysisResult,
+                AnalysisResult.news_article_id == NewsArticle.id,
+                isouter=False,
+            )
+            analysis_joined = True
+        stmt = (
+            stmt.join(
+                AnalysisInvestmentCategory,
+                AnalysisInvestmentCategory.analysis_id == AnalysisResult.id,
+            )
+            .join(
+                InvestmentCategory,
+                InvestmentCategory.id == AnalysisInvestmentCategory.category_id,
+            )
+            .where(InvestmentCategory.slug == category)
+        )
 
     # Count total before pagination
     count_stmt = select(func.count()).select_from(stmt.subquery())
@@ -135,7 +212,7 @@ async def list_news(
         "impactScore": AnalysisResult.impact_score,
     }
     sort_col = sort_column_map.get(sort_by, NewsArticle.published_at)
-    if sort_by == "impactScore" and sentiment is None and min_impact is None:
+    if sort_by == "impactScore" and not analysis_joined:
         stmt = stmt.join(
             AnalysisResult,
             AnalysisResult.news_article_id == NewsArticle.id,
@@ -156,7 +233,7 @@ async def list_news(
     watched_ids = await _get_watched_ids(session, user)
 
     return PaginatedNewsResponse(
-        items=[_build_news_response(a, watched_ids) for a in articles],
+        items=[_build_news_response(a, watched_ids, locale) for a in articles],
         total=total,
         page=page,
         per_page=per_page,
@@ -209,6 +286,7 @@ async def embed_news(
 async def get_similar_news(
     news_id: int,
     limit: int = Query(5, ge=1, le=20),
+    locale: str = Query(DEFAULT_LOCALE),
     session: AsyncSession = Depends(get_session),
 ) -> list[NewsResponse]:
     """Return articles most similar to the given article, ordered by cosine distance.
@@ -233,10 +311,7 @@ async def get_similar_news(
     # Cosine distance similarity search via pgvector column method
     similar_stmt = (
         select(NewsArticle)
-        .options(
-            selectinload(NewsArticle.analysis),
-            selectinload(NewsArticle.keyword_links).selectinload(NewsKeyword.keyword),
-        )
+        .options(*_news_eager_options())
         .where(
             NewsArticle.id != news_id,
             NewsArticle.embedding.is_not(None),
@@ -248,22 +323,20 @@ async def get_similar_news(
     similar_result = await session.execute(similar_stmt)
     articles = similar_result.unique().scalars().all()
 
-    return [_build_news_response(a) for a in articles]
+    return [_build_news_response(a, locale=locale) for a in articles]
 
 
 @router.get("/{news_id}", response_model=NewsResponse)
 async def get_news(
     news_id: int,
+    locale: str = Query(DEFAULT_LOCALE),
     user: User | None = Depends(get_optional_user),
     session: AsyncSession = Depends(get_session),
 ) -> NewsResponse:
     stmt = (
         select(NewsArticle)
         .where(NewsArticle.id == news_id)
-        .options(
-            selectinload(NewsArticle.analysis),
-            selectinload(NewsArticle.keyword_links).selectinload(NewsKeyword.keyword),
-        )
+        .options(*_news_eager_options())
     )
     result = await session.execute(stmt)
     article = result.unique().scalar_one_or_none()
@@ -275,7 +348,7 @@ async def get_news(
         )
 
     watched_ids = await _get_watched_ids(session, user)
-    return _build_news_response(article, watched_ids)
+    return _build_news_response(article, watched_ids, locale)
 
 
 @router.post(
@@ -287,14 +360,11 @@ async def fetch_news(
     body: NewsFetchRequest | None = None,
     session: AsyncSession = Depends(get_session),
 ) -> NewsFetchResponse:
-    # Determine target keywords
+    # Determine target keywords (is_active removed — all keywords are active)
     if body and body.keyword_ids:
-        stmt = select(Keyword).where(
-            Keyword.id.in_(body.keyword_ids),
-            Keyword.is_active == True,  # noqa: E712
-        )
+        stmt = select(Keyword).where(Keyword.id.in_(body.keyword_ids))
     else:
-        stmt = select(Keyword).where(Keyword.is_active == True)  # noqa: E712
+        stmt = select(Keyword)
 
     result = await session.execute(stmt)
     keywords = list(result.scalars().all())
