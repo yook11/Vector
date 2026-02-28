@@ -276,48 +276,37 @@ class TestGetNews:
 
 @pytest.mark.asyncio
 class TestFetchNews:
-    async def test_fetch_returns_202(
-        self, client: AsyncClient, db_session: AsyncSession
-    ) -> None:
-        # Create an active keyword so fetch has something to work with
-        kw = Keyword(keyword="Test Keyword")
-        db_session.add(kw)
-        await db_session.commit()
+    async def test_fetch_returns_202(self, client: AsyncClient) -> None:
+        mock_task_handle = AsyncMock()
+        mock_task_handle.task_id = "test-task-id-123"
 
         with patch(
-            "app.routers.news.fetch_news_for_keywords",
-            new_callable=AsyncMock,
-        ) as mock_fetch:
-            mock_fetch.return_value = AsyncMock(
-                new_count=5, skipped_count=2, error_count=0, errors=[]
-            )
+            "app.routers.news.fetch_and_analyze_task",
+        ) as mock_task:
+            mock_task.kiq = AsyncMock(return_value=mock_task_handle)
             resp = await client.post("/api/v1/news/fetch")
 
         assert resp.status_code == 202
         data = resp.json()
-        assert "jobId" in data
-        assert data["keywordsCount"] == 1
-        assert "5 new" in data["message"]
+        assert data["jobId"] == "test-task-id-123"
+        assert data["message"] == "Fetch task submitted"
+        assert data["keywordsCount"] is None  # all keywords
+        mock_task.kiq.assert_called_once_with(keyword_ids=None)
 
-    async def test_fetch_with_keyword_ids(
-        self, client: AsyncClient, db_session: AsyncSession
-    ) -> None:
-        kw = Keyword(keyword="Specific Keyword")
-        db_session.add(kw)
-        await db_session.commit()
-        await db_session.refresh(kw)
+    async def test_fetch_with_keyword_ids(self, client: AsyncClient) -> None:
+        mock_task_handle = AsyncMock()
+        mock_task_handle.task_id = "test-task-id-456"
 
         with patch(
-            "app.routers.news.fetch_news_for_keywords",
-            new_callable=AsyncMock,
-        ) as mock_fetch:
-            mock_fetch.return_value = AsyncMock(
-                new_count=3, skipped_count=0, error_count=0, errors=[]
-            )
+            "app.routers.news.fetch_and_analyze_task",
+        ) as mock_task:
+            mock_task.kiq = AsyncMock(return_value=mock_task_handle)
             resp = await client.post(
                 "/api/v1/news/fetch",
-                json={"keywordIds": [kw.id]},
+                json={"keywordIds": [1, 2, 3]},
             )
 
         assert resp.status_code == 202
-        assert resp.json()["keywordsCount"] == 1
+        data = resp.json()
+        assert data["keywordsCount"] == 3
+        mock_task.kiq.assert_called_once_with(keyword_ids=[1, 2, 3])

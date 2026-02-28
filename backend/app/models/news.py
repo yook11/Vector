@@ -27,6 +27,7 @@ class NewsArticle(SQLModel, table=True):
     content_fetched_at: datetime | None = Field(
         default=None, sa_type=DateTime(timezone=True)
     )
+    content_fetch_attempts: int = Field(default=0, nullable=False)
     embedding: list[float] | None = Field(
         default=None,
         sa_column=Column(Vector(768), nullable=True),

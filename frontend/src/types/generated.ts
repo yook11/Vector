@@ -305,7 +305,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Fetch News */
+        /**
+         * Fetch News
+         * @description Enqueue a news fetch task. Returns immediately with a task ID.
+         */
         post: operations["fetch_news_api_v1_news_fetch_post"];
         delete?: never;
         options?: never;
@@ -538,7 +541,7 @@ export interface components {
             /** Message */
             message: string;
             /** Keywordscount */
-            keywordsCount: number;
+            keywordsCount?: number | null;
             /** Jobid */
             jobId: string;
         };

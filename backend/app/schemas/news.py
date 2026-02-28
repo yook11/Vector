@@ -63,7 +63,7 @@ class NewsFetchResponse(BaseModel):
     )
 
     message: str
-    keywords_count: int
+    keywords_count: int | None = None  # None = all keywords targeted
     job_id: str
 
 

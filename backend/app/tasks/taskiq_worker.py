@@ -124,15 +124,21 @@ async def on_shutdown(state: TaskiqState) -> None:
 
 @broker.task(
     task_name="fetch_and_analyze",
-    timeout=600,
+    timeout=1800,  # 30 min: 5-phase pipeline with up to 200 articles
     # max_retries takes precedence over SimpleRetryMiddleware.default_retry_count.
     # retry_on_error=True is required to allow SimpleRetryMiddleware to intercept.
     max_retries=3,
     retry_on_error=True,
     schedule=[{"cron": _FETCH_CRON}],
 )
-async def fetch_and_analyze_task(ctx: Context = TaskiqDepends()) -> dict:
+async def fetch_and_analyze_task(
+    keyword_ids: list[int] | None = None,
+    ctx: Context = TaskiqDepends(),
+) -> dict:
     """Full news pipeline: fetch → content extraction → AI analysis.
+
+    Args:
+        keyword_ids: Optional list of keyword IDs to fetch. None = all keywords.
 
     Uses the engine created in on_startup (shared connection pool across tasks).
     Each phase has its own try/except so a single-phase failure does not abort
@@ -160,8 +166,19 @@ async def fetch_and_analyze_task(ctx: Context = TaskiqDepends()) -> dict:
     # Phase 1 + 2: keywords & RSS fetch share a session to avoid detached
     # Keyword objects (fetch_news_for_keywords accesses kw.keyword, kw.id).
     async with SQLModelAsyncSession(engine, expire_on_commit=False) as session:
-        # Phase 1: fetch all keywords — fatal if this fails; let retry handle it.
-        keywords = list((await session.execute(select(Keyword))).scalars().all())
+        # Phase 1: fetch keywords — fatal if this fails; let retry handle it.
+        if keyword_ids is not None:
+            keywords = list(
+                (
+                    await session.execute(
+                        select(Keyword).where(Keyword.id.in_(keyword_ids))
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        else:
+            keywords = list((await session.execute(select(Keyword))).scalars().all())
         result["keywords_count"] = len(keywords)
         if not keywords:
             logger.info("taskiq_task_skipped", reason="no keywords")
@@ -186,7 +203,9 @@ async def fetch_and_analyze_task(ctx: Context = TaskiqDepends()) -> dict:
                 (
                     await session.execute(
                         select(NewsArticle).where(
-                            NewsArticle.content_fetched_at == None  # noqa: E711
+                            NewsArticle.content_fetched_at == None,  # noqa: E711
+                            NewsArticle.content_fetch_attempts
+                            < settings.content_max_fetch_attempts,
                         )
                     )
                 )

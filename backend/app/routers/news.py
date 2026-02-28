@@ -1,5 +1,4 @@
 import math
-from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,7 +33,7 @@ from app.schemas.news import (
     PaginatedNewsResponse,
 )
 from app.services.embedding import embed_articles
-from app.services.news_fetcher import fetch_news_for_keywords
+from app.tasks.taskiq_worker import fetch_and_analyze_task
 
 router = APIRouter(prefix="/api/v1/news", tags=["news"])
 
@@ -358,27 +357,13 @@ async def get_news(
 )
 async def fetch_news(
     body: NewsFetchRequest | None = None,
-    session: AsyncSession = Depends(get_session),
 ) -> NewsFetchResponse:
-    # Determine target keywords (is_active removed — all keywords are active)
-    if body and body.keyword_ids:
-        stmt = select(Keyword).where(Keyword.id.in_(body.keyword_ids))
-    else:
-        stmt = select(Keyword)
-
-    result = await session.execute(stmt)
-    keywords = list(result.scalars().all())
-
-    fetch_result = await fetch_news_for_keywords(session, keywords)
-
-    now = datetime.now(UTC)
-    job_id = f"fetch-{now.strftime('%Y%m%d-%H%M%S')}"
+    """Enqueue a news fetch task. Returns immediately with a task ID."""
+    keyword_ids = body.keyword_ids if body else None
+    task = await fetch_and_analyze_task.kiq(keyword_ids=keyword_ids)
 
     return NewsFetchResponse(
-        message=(
-            f"Fetch completed: {fetch_result.new_count} new,"
-            f" {fetch_result.skipped_count} skipped"
-        ),
-        keywords_count=len(keywords),
-        job_id=job_id,
+        message="Fetch task submitted",
+        keywords_count=len(keyword_ids) if keyword_ids else None,
+        job_id=task.task_id,
     )

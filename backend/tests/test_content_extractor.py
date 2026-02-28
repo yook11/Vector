@@ -421,3 +421,14 @@ class TestExtractContentsParallel:
         assert result.error_count == 1
         assert len(result.errors) == 1
         assert "bad.com" in result.errors[0] or "simulated failure" in result.errors[0]
+
+        # Failed article should have incremented content_fetch_attempts
+        bad_article = articles[1]  # bad.com
+        await db_session.refresh(bad_article)
+        assert bad_article.content_fetch_attempts == 1
+        assert bad_article.content_fetched_at is None  # not set on error
+
+        # Successful articles should not have incremented content_fetch_attempts
+        for a in [articles[0], articles[2]]:
+            await db_session.refresh(a)
+            assert a.content_fetch_attempts == 0

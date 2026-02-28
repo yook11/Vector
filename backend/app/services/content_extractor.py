@@ -234,12 +234,18 @@ async def extract_contents(
         article, content, error = res
 
         if error:
+            article.content_fetch_attempts += 1
+            # Explicitly add to session to signal persistence intent in error path.
+            # Technically redundant (article is already tracked), but makes the
+            # "this change must be committed" intention clear for code reviewers.
+            session.add(article)
             result.error_count += 1
             result.errors.append(f"Article {article.id}: {error}")
             logger.warning(
                 "content_extraction_failed",
                 article_id=article.id,
                 error=str(error),
+                attempts=article.content_fetch_attempts,
             )
             continue
 

@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     content_max_length: int = 8000
     content_max_concurrent: int = 10  # max simultaneous HTTP connections
     content_domain_delay: float = 1.0  # seconds between requests to same domain
+    content_max_fetch_attempts: int = 3  # skip articles after N failed attempts
 
     # Embedding rate limit
     embed_batch_size: int = 10  # articles per API call
