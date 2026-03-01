@@ -250,7 +250,11 @@ async def fetch_news_for_sources(
         logger.info("fetch_skipped", reason="no sources provided")
         return result
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(
+        headers={
+            "User-Agent": "Mozilla/5.0 (compatible; Vector/1.0; +https://github.com/yook11/Vector)"
+        }
+    ) as client:
         for source in sources:
             logger.info(
                 "fetching_source",
