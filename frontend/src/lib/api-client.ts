@@ -1,7 +1,7 @@
 import { getServerSession } from "next-auth";
 import type {
   CategoryListResponse,
-  KeywordCategoryListResponse,
+  KeywordCategoryDetailListResponse,
   KeywordCreate,
   KeywordListResponse,
   KeywordResponse,
@@ -233,9 +233,9 @@ export async function getCategories(
 /** Fetch all keyword categories. */
 export async function getKeywordCategories(
   locale?: string,
-): Promise<KeywordCategoryListResponse> {
+): Promise<KeywordCategoryDetailListResponse> {
   const qs = locale ? `?locale=${locale}` : "";
-  return fetchApi<KeywordCategoryListResponse>(`/keyword-categories${qs}`, {
+  return fetchApi<KeywordCategoryDetailListResponse>(`/keyword-categories${qs}`, {
     cache: "no-store",
   });
 }

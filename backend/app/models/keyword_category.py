@@ -13,6 +13,7 @@ class KeywordCategory(SQLModel, table=True):
         back_populates="category"
     )
     keyword_links: list["KeywordCategoryLink"] = Relationship(back_populates="category")
+    sources: list["NewsSource"] = Relationship(back_populates="category")
 
 
 class KeywordCategoryTranslation(SQLModel, table=True):
@@ -65,5 +66,7 @@ class KeywordCategoryLink(SQLModel, table=True):
 
 # Resolve forward references
 from app.models.keyword import Keyword  # noqa: E402, F811
+from app.models.news_source import NewsSource  # noqa: E402, F811
 
+KeywordCategory.model_rebuild()
 KeywordCategoryLink.model_rebuild()

@@ -290,10 +290,10 @@ class TestFetchNews:
         data = resp.json()
         assert data["jobId"] == "test-task-id-123"
         assert data["message"] == "Fetch task submitted"
-        assert data["keywordsCount"] is None  # all keywords
-        mock_task.kiq.assert_called_once_with(keyword_ids=None)
+        assert data["sourcesCount"] is None  # all due sources
+        mock_task.kiq.assert_called_once_with(source_ids=None)
 
-    async def test_fetch_with_keyword_ids(self, client: AsyncClient) -> None:
+    async def test_fetch_with_source_ids(self, client: AsyncClient) -> None:
         mock_task_handle = AsyncMock()
         mock_task_handle.task_id = "test-task-id-456"
 
@@ -303,10 +303,10 @@ class TestFetchNews:
             mock_task.kiq = AsyncMock(return_value=mock_task_handle)
             resp = await client.post(
                 "/api/v1/news/fetch",
-                json={"keywordIds": [1, 2, 3]},
+                json={"sourceIds": [1, 2, 3]},
             )
 
         assert resp.status_code == 202
         data = resp.json()
-        assert data["keywordsCount"] == 3
-        mock_task.kiq.assert_called_once_with(keyword_ids=[1, 2, 3])
+        assert data["sourcesCount"] == 3
+        mock_task.kiq.assert_called_once_with(source_ids=[1, 2, 3])

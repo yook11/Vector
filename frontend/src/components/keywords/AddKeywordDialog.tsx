@@ -18,10 +18,10 @@ import {
   ApiError,
   clientCreateKeyword as createKeyword,
 } from "@/lib/client-api";
-import type { KeywordCategoryResponse } from "@/types";
+import type { KeywordCategoryDetailResponse } from "@/types";
 
 interface AddKeywordDialogProps {
-  keywordCategories?: KeywordCategoryResponse[];
+  keywordCategories?: KeywordCategoryDetailResponse[];
 }
 
 export function AddKeywordDialog({ keywordCategories }: AddKeywordDialogProps) {

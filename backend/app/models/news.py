@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Column, DateTime, Index
+from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer
 from sqlmodel import Field, Relationship, SQLModel
 
 
@@ -33,6 +33,17 @@ class NewsArticle(SQLModel, table=True):
         sa_column=Column(Vector(768), nullable=True),
     )
 
+    # A-2: source tracking and deduplication
+    source_id: int | None = Field(
+        default=None,
+        sa_column=Column(
+            Integer,
+            ForeignKey("news_sources.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
+    )
+    guid: str | None = Field(default=None, max_length=2048, unique=True)
+
     # Relationships
     analysis: "AnalysisResult" = Relationship(
         back_populates="news_article",
@@ -40,11 +51,16 @@ class NewsArticle(SQLModel, table=True):
     )
     keyword_links: list["NewsKeyword"] = Relationship(back_populates="news_article")
     watchlist_items: list["WatchlistItem"] = Relationship(back_populates="news_article")
+    source_ref: "NewsSource" = Relationship(
+        back_populates="articles",
+        sa_relationship_kwargs={"uselist": False},
+    )
 
 
 # Resolve forward references
 from app.models.analysis import AnalysisResult  # noqa: E402, F811
 from app.models.associations import NewsKeyword  # noqa: E402, F811
+from app.models.news_source import NewsSource  # noqa: E402, F811
 from app.models.watchlist import WatchlistItem  # noqa: E402, F811
 
 NewsArticle.model_rebuild()

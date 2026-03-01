@@ -101,7 +101,7 @@ export interface paths {
         };
         /**
          * List Keyword Categories
-         * @description List all keyword categories ordered by slug.
+         * @description List all keyword categories with nested keywords and article counts.
          */
         get: operations["list_keyword_categories_api_v1_keyword_categories_get"];
         put?: never;
@@ -442,24 +442,34 @@ export interface components {
             name: string;
         };
         /**
-         * KeywordCategoryListResponse
-         * @description Response wrapper for keyword category list endpoint.
+         * KeywordCategoryDetailListResponse
+         * @description Response wrapper for enriched keyword category list endpoint.
          */
-        KeywordCategoryListResponse: {
+        KeywordCategoryDetailListResponse: {
             /** Items */
-            items: components["schemas"]["KeywordCategoryResponse"][];
+            items: components["schemas"]["KeywordCategoryDetailResponse"][];
         };
         /**
-         * KeywordCategoryResponse
-         * @description Full keyword category detail for GET /api/v1/keyword-categories.
+         * KeywordCategoryDetailResponse
+         * @description Enriched category with articleCount and nested keywords.
          */
-        KeywordCategoryResponse: {
+        KeywordCategoryDetailResponse: {
             /** Id */
             id: number;
             /** Slug */
             slug: string;
             /** Name */
             name: string;
+            /**
+             * Articlecount
+             * @default 0
+             */
+            articleCount: number;
+            /**
+             * Keywords
+             * @default []
+             */
+            keywords: components["schemas"]["KeywordInCategory"][];
         };
         /**
          * KeywordCreate
@@ -473,6 +483,21 @@ export interface components {
              * @default []
              */
             categoryIds: number[];
+        };
+        /**
+         * KeywordInCategory
+         * @description Keyword with article count, nested in category detail response.
+         */
+        KeywordInCategory: {
+            /** Id */
+            id: number;
+            /** Keyword */
+            keyword: string;
+            /**
+             * Articlecount
+             * @default 0
+             */
+            articleCount: number;
         };
         /**
          * KeywordListResponse
@@ -530,8 +555,8 @@ export interface components {
          * @description POST /api/v1/news/fetch request body.
          */
         NewsFetchRequest: {
-            /** Keywordids */
-            keywordIds?: number[] | null;
+            /** Sourceids */
+            sourceIds?: number[] | null;
         };
         /**
          * NewsFetchResponse
@@ -540,8 +565,8 @@ export interface components {
         NewsFetchResponse: {
             /** Message */
             message: string;
-            /** Keywordscount */
-            keywordsCount?: number | null;
+            /** Sourcescount */
+            sourcesCount?: number | null;
             /** Jobid */
             jobId: string;
         };
@@ -927,7 +952,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["KeywordCategoryListResponse"];
+                    "application/json": components["schemas"]["KeywordCategoryDetailListResponse"];
                 };
             };
             /** @description Validation Error */
@@ -1251,6 +1276,7 @@ export interface operations {
         parameters: {
             query?: {
                 keywordId?: number | null;
+                kwCategoryId?: number | null;
                 myKeywords?: boolean;
                 sentiment?: string | null;
                 minImpact?: number | null;

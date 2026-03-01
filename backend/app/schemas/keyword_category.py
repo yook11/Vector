@@ -36,3 +36,42 @@ class KeywordCategoryListResponse(BaseModel):
     )
 
     items: list[KeywordCategoryResponse]
+
+
+class KeywordInCategory(BaseModel):
+    """Keyword with article count, nested in category detail response."""
+
+    model_config = ConfigDict(
+        alias_generator=to_camel,
+        populate_by_name=True,
+    )
+
+    id: int
+    keyword: str
+    article_count: int = 0
+
+
+class KeywordCategoryDetailResponse(BaseModel):
+    """Enriched category with articleCount and nested keywords."""
+
+    model_config = ConfigDict(
+        alias_generator=to_camel,
+        populate_by_name=True,
+    )
+
+    id: int
+    slug: str
+    name: str
+    article_count: int = 0
+    keywords: list[KeywordInCategory] = []
+
+
+class KeywordCategoryDetailListResponse(BaseModel):
+    """Response wrapper for enriched keyword category list endpoint."""
+
+    model_config = ConfigDict(
+        alias_generator=to_camel,
+        populate_by_name=True,
+    )
+
+    items: list[KeywordCategoryDetailResponse]

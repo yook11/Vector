@@ -4,11 +4,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.models.keyword import Keyword
 from app.models.news import NewsArticle
+from app.models.news_source import NewsSource
 from app.services.ai_analyzer import AnalyzeResult
 from app.services.content_extractor import ContentExtractionResult
-from app.services.news_fetcher import FetchResult
+from app.services.news_fetcher import FetchResult, SourceFetchResult
 from app.tasks.taskiq_worker import fetch_and_analyze_task
 
 
@@ -27,6 +27,18 @@ def _make_ctx(mock_engine: MagicMock | None = None) -> MagicMock:
     return ctx
 
 
+def _make_source(source_id: int = 1, name: str = "TestSource") -> MagicMock:
+    """Create a mock NewsSource with required attributes."""
+    source = MagicMock(spec=NewsSource)
+    source.id = source_id
+    source.name = name
+    source.fetch_interval_minutes = 720
+    source.consecutive_errors = 0
+    source.etag = None
+    source.last_modified_header = None
+    return source
+
+
 # ---------------------------------------------------------------------------
 # A. Task function unit tests
 # ---------------------------------------------------------------------------
@@ -37,9 +49,9 @@ async def test_task_fetches_and_analyzes_successfully() -> None:
     mock_session = AsyncMock()
     mock_ctx = _make_ctx()
 
-    kw = Keyword(id=1, keyword="Quantum")
-    mock_kw_result = MagicMock()
-    mock_kw_result.scalars.return_value.all.return_value = [kw]
+    source = _make_source()
+    mock_source_result = MagicMock()
+    mock_source_result.scalars.return_value.all.return_value = [source]
 
     # Phase 3: no articles needing content extraction
     mock_no_content_result = MagicMock()
@@ -50,7 +62,16 @@ async def test_task_fetches_and_analyzes_successfully() -> None:
     mock_article_result.scalars.return_value.all.return_value = [article]
 
     mock_session.execute = AsyncMock(
-        side_effect=[mock_kw_result, mock_no_content_result, mock_article_result]
+        side_effect=[mock_source_result, mock_no_content_result, mock_article_result]
+    )
+
+    fetch_result = FetchResult(
+        new_count=5,
+        skipped_count=2,
+        error_count=0,
+        source_results=[
+            SourceFetchResult(source_id=1, success=True, new_count=5, skipped_count=2)
+        ],
     )
 
     with (
@@ -59,9 +80,9 @@ async def test_task_fetches_and_analyzes_successfully() -> None:
             return_value=_mock_session_context(mock_session),
         ),
         patch(
-            "app.tasks.taskiq_worker.fetch_news_for_keywords",
+            "app.tasks.taskiq_worker.fetch_news_for_sources",
             new_callable=AsyncMock,
-            return_value=FetchResult(new_count=5, skipped_count=2, error_count=0),
+            return_value=fetch_result,
         ) as mock_fetch,
         patch(
             "app.tasks.taskiq_worker.extract_contents",
@@ -77,7 +98,7 @@ async def test_task_fetches_and_analyzes_successfully() -> None:
     ):
         result = await fetch_and_analyze_task(ctx=mock_ctx)
 
-    assert result["keywords_count"] == 1
+    assert result["sources_count"] == 1
     assert result["fetch_new"] == 5
     assert result["fetch_skipped"] == 2
     assert result["fetch_errors"] == 0
@@ -91,13 +112,13 @@ async def test_task_fetches_and_analyzes_successfully() -> None:
 
 
 @pytest.mark.asyncio
-async def test_task_skips_when_no_keywords() -> None:
+async def test_task_skips_when_no_sources() -> None:
     mock_session = AsyncMock()
     mock_ctx = _make_ctx()
 
-    mock_kw_result = MagicMock()
-    mock_kw_result.scalars.return_value.all.return_value = []
-    mock_session.execute = AsyncMock(return_value=mock_kw_result)
+    mock_source_result = MagicMock()
+    mock_source_result.scalars.return_value.all.return_value = []
+    mock_session.execute = AsyncMock(return_value=mock_source_result)
 
     with (
         patch(
@@ -105,7 +126,7 @@ async def test_task_skips_when_no_keywords() -> None:
             return_value=_mock_session_context(mock_session),
         ),
         patch(
-            "app.tasks.taskiq_worker.fetch_news_for_keywords",
+            "app.tasks.taskiq_worker.fetch_news_for_sources",
             new_callable=AsyncMock,
         ) as mock_fetch,
         patch(
@@ -115,7 +136,7 @@ async def test_task_skips_when_no_keywords() -> None:
     ):
         result = await fetch_and_analyze_task(ctx=mock_ctx)
 
-    assert result["keywords_count"] == 0
+    assert result["sources_count"] == 0
     assert result["fetch_new"] == 0
     assert result["analyze_count"] == 0
     mock_fetch.assert_not_called()
@@ -127,9 +148,9 @@ async def test_task_skips_analysis_when_no_unanalyzed_articles() -> None:
     mock_session = AsyncMock()
     mock_ctx = _make_ctx()
 
-    kw = Keyword(id=1, keyword="AI")
-    mock_kw_result = MagicMock()
-    mock_kw_result.scalars.return_value.all.return_value = [kw]
+    source = _make_source()
+    mock_source_result = MagicMock()
+    mock_source_result.scalars.return_value.all.return_value = [source]
 
     # Phase 3: no articles without content
     mock_no_content_result = MagicMock()
@@ -140,7 +161,20 @@ async def test_task_skips_analysis_when_no_unanalyzed_articles() -> None:
     mock_unanalyzed_result.scalars.return_value.all.return_value = []
 
     mock_session.execute = AsyncMock(
-        side_effect=[mock_kw_result, mock_no_content_result, mock_unanalyzed_result]
+        side_effect=[
+            mock_source_result,
+            mock_no_content_result,
+            mock_unanalyzed_result,
+        ]
+    )
+
+    fetch_result = FetchResult(
+        new_count=0,
+        skipped_count=3,
+        error_count=0,
+        source_results=[
+            SourceFetchResult(source_id=1, success=True, new_count=0, skipped_count=3)
+        ],
     )
 
     with (
@@ -149,9 +183,9 @@ async def test_task_skips_analysis_when_no_unanalyzed_articles() -> None:
             return_value=_mock_session_context(mock_session),
         ),
         patch(
-            "app.tasks.taskiq_worker.fetch_news_for_keywords",
+            "app.tasks.taskiq_worker.fetch_news_for_sources",
             new_callable=AsyncMock,
-            return_value=FetchResult(new_count=0, skipped_count=3, error_count=0),
+            return_value=fetch_result,
         ),
         patch(
             "app.tasks.taskiq_worker.analyze_articles",
@@ -160,7 +194,7 @@ async def test_task_skips_analysis_when_no_unanalyzed_articles() -> None:
     ):
         result = await fetch_and_analyze_task(ctx=mock_ctx)
 
-    assert result["keywords_count"] == 1
+    assert result["sources_count"] == 1
     assert result["fetch_skipped"] == 3
     assert result["analyze_count"] == 0
     mock_analyze.assert_not_called()
@@ -171,9 +205,9 @@ async def test_task_skips_content_extraction_when_all_have_content() -> None:
     mock_session = AsyncMock()
     mock_ctx = _make_ctx()
 
-    kw = Keyword(id=1, keyword="Materials")
-    mock_kw_result = MagicMock()
-    mock_kw_result.scalars.return_value.all.return_value = [kw]
+    source = _make_source()
+    mock_source_result = MagicMock()
+    mock_source_result.scalars.return_value.all.return_value = [source]
 
     # Phase 3: all articles already have content
     mock_no_content_result = MagicMock()
@@ -184,7 +218,20 @@ async def test_task_skips_content_extraction_when_all_have_content() -> None:
     mock_unanalyzed_result.scalars.return_value.all.return_value = []
 
     mock_session.execute = AsyncMock(
-        side_effect=[mock_kw_result, mock_no_content_result, mock_unanalyzed_result]
+        side_effect=[
+            mock_source_result,
+            mock_no_content_result,
+            mock_unanalyzed_result,
+        ]
+    )
+
+    fetch_result = FetchResult(
+        new_count=0,
+        skipped_count=5,
+        error_count=0,
+        source_results=[
+            SourceFetchResult(source_id=1, success=True, new_count=0, skipped_count=5)
+        ],
     )
 
     with (
@@ -193,9 +240,9 @@ async def test_task_skips_content_extraction_when_all_have_content() -> None:
             return_value=_mock_session_context(mock_session),
         ),
         patch(
-            "app.tasks.taskiq_worker.fetch_news_for_keywords",
+            "app.tasks.taskiq_worker.fetch_news_for_sources",
             new_callable=AsyncMock,
-            return_value=FetchResult(new_count=0, skipped_count=5, error_count=0),
+            return_value=fetch_result,
         ),
         patch(
             "app.tasks.taskiq_worker.extract_contents",
@@ -215,9 +262,9 @@ async def test_task_continues_phase3_when_phase2_fails() -> None:
     mock_session = AsyncMock()
     mock_ctx = _make_ctx()
 
-    kw = Keyword(id=1, keyword="Test")
-    mock_kw_result = MagicMock()
-    mock_kw_result.scalars.return_value.all.return_value = [kw]
+    source = _make_source()
+    mock_source_result = MagicMock()
+    mock_source_result.scalars.return_value.all.return_value = [source]
 
     article = MagicMock(spec=NewsArticle)
     mock_no_content_result = MagicMock()
@@ -227,7 +274,11 @@ async def test_task_continues_phase3_when_phase2_fails() -> None:
     mock_unanalyzed_result.scalars.return_value.all.return_value = []
 
     mock_session.execute = AsyncMock(
-        side_effect=[mock_kw_result, mock_no_content_result, mock_unanalyzed_result]
+        side_effect=[
+            mock_source_result,
+            mock_no_content_result,
+            mock_unanalyzed_result,
+        ]
     )
 
     with (
@@ -236,7 +287,7 @@ async def test_task_continues_phase3_when_phase2_fails() -> None:
             return_value=_mock_session_context(mock_session),
         ),
         patch(
-            "app.tasks.taskiq_worker.fetch_news_for_keywords",
+            "app.tasks.taskiq_worker.fetch_news_for_sources",
             new_callable=AsyncMock,
             side_effect=Exception("RSS feed unreachable"),
         ),
@@ -252,7 +303,7 @@ async def test_task_continues_phase3_when_phase2_fails() -> None:
 
     # Phase 2 error is counted, task still completes (not re-raised)
     assert result["fetch_errors"] == 1
-    assert result["keywords_count"] == 1
+    assert result["sources_count"] == 1
     # Phase 3 ran despite Phase 2 failure
     mock_extract.assert_called_once()
     assert result["content_extracted"] == 2
@@ -263,9 +314,9 @@ async def test_task_reports_analysis_errors() -> None:
     mock_session = AsyncMock()
     mock_ctx = _make_ctx()
 
-    kw = Keyword(id=1, keyword="Materials")
-    mock_kw_result = MagicMock()
-    mock_kw_result.scalars.return_value.all.return_value = [kw]
+    source = _make_source()
+    mock_source_result = MagicMock()
+    mock_source_result.scalars.return_value.all.return_value = [source]
 
     mock_no_content_result = MagicMock()
     mock_no_content_result.scalars.return_value.all.return_value = []
@@ -275,7 +326,16 @@ async def test_task_reports_analysis_errors() -> None:
     mock_article_result.scalars.return_value.all.return_value = [article]
 
     mock_session.execute = AsyncMock(
-        side_effect=[mock_kw_result, mock_no_content_result, mock_article_result]
+        side_effect=[mock_source_result, mock_no_content_result, mock_article_result]
+    )
+
+    fetch_result = FetchResult(
+        new_count=3,
+        skipped_count=0,
+        error_count=0,
+        source_results=[
+            SourceFetchResult(source_id=1, success=True, new_count=3, skipped_count=0)
+        ],
     )
 
     with (
@@ -284,9 +344,9 @@ async def test_task_reports_analysis_errors() -> None:
             return_value=_mock_session_context(mock_session),
         ),
         patch(
-            "app.tasks.taskiq_worker.fetch_news_for_keywords",
+            "app.tasks.taskiq_worker.fetch_news_for_sources",
             new_callable=AsyncMock,
-            return_value=FetchResult(new_count=3, skipped_count=0, error_count=0),
+            return_value=fetch_result,
         ),
         patch(
             "app.tasks.taskiq_worker.analyze_articles",

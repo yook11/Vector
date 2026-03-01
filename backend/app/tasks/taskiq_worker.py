@@ -25,9 +25,12 @@ Manual task submission for testing:
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import structlog
+from sqlalchemy import func
 from sqlalchemy.ext.asyncio import create_async_engine
-from sqlmodel import select
+from sqlmodel import or_, select
 from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
 from taskiq import (
     Context,
@@ -42,31 +45,32 @@ from taskiq_redis import ListQueueBroker, RedisAsyncResultBackend
 
 from app.config import settings
 from app.models.analysis import AnalysisResult
-from app.models.keyword import Keyword
 from app.models.news import NewsArticle
+from app.models.news_source import NewsSource
 from app.services.ai_analyzer import analyze_articles
 from app.services.content_extractor import extract_contents
 from app.services.embedding import embed_articles
-from app.services.news_fetcher import fetch_news_for_keywords
+from app.services.news_fetcher import fetch_news_for_sources
 
 logger = structlog.get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Cron schedule derived from settings
-# fetch_interval_hours must be a divisor of 24 for a regular cron expression.
-# 24h uses "0 0 * * *" explicitly (*/24 is non-standard in some parsers).
+# check_interval_minutes: how often the scheduler checks for sources due to fetch.
+# Must be a divisor of 60 for a regular cron expression.
 # ---------------------------------------------------------------------------
 
-_VALID_INTERVAL_HOURS = {1, 2, 3, 4, 6, 8, 12, 24}
-if settings.fetch_interval_hours not in _VALID_INTERVAL_HOURS:
+_VALID_INTERVAL_MINUTES = {5, 10, 15, 20, 30, 60}
+if settings.check_interval_minutes not in _VALID_INTERVAL_MINUTES:
     raise ValueError(
-        f"fetch_interval_hours={settings.fetch_interval_hours} is not a divisor of 24. "
-        f"Valid values: {sorted(_VALID_INTERVAL_HOURS)}"
+        f"check_interval_minutes={settings.check_interval_minutes} "
+        f"is not a divisor of 60. "
+        f"Valid values: {sorted(_VALID_INTERVAL_MINUTES)}"
     )
-if settings.fetch_interval_hours == 24:
-    _FETCH_CRON = "0 0 * * *"  # once daily at midnight
+if settings.check_interval_minutes == 60:
+    _FETCH_CRON = "0 * * * *"  # once per hour at :00
 else:
-    _FETCH_CRON = f"0 */{settings.fetch_interval_hours} * * *"
+    _FETCH_CRON = f"*/{settings.check_interval_minutes} * * * *"
 
 # ---------------------------------------------------------------------------
 # Broker and result backend
@@ -132,13 +136,13 @@ async def on_shutdown(state: TaskiqState) -> None:
     schedule=[{"cron": _FETCH_CRON}],
 )
 async def fetch_and_analyze_task(
-    keyword_ids: list[int] | None = None,
+    source_ids: list[int] | None = None,
     ctx: Context = TaskiqDepends(),
 ) -> dict:
     """Full news pipeline: fetch → content extraction → AI analysis.
 
     Args:
-        keyword_ids: Optional list of keyword IDs to fetch. None = all keywords.
+        source_ids: Optional list of source IDs to fetch. None = all due sources.
 
     Uses the engine created in on_startup (shared connection pool across tasks).
     Each phase has its own try/except so a single-phase failure does not abort
@@ -148,7 +152,7 @@ async def fetch_and_analyze_task(
     logger.info("taskiq_task_started")
     engine = ctx.state.engine
     result: dict[str, int] = {
-        "keywords_count": 0,
+        "sources_count": 0,
         "fetch_new": 0,
         "fetch_skipped": 0,
         "fetch_errors": 0,
@@ -163,33 +167,74 @@ async def fetch_and_analyze_task(
         "embed_errors": 0,
     }
 
-    # Phase 1 + 2: keywords & RSS fetch share a session to avoid detached
-    # Keyword objects (fetch_news_for_keywords accesses kw.keyword, kw.id).
+    # Phase 1 + 2: source query & RSS fetch share a session.
     async with SQLModelAsyncSession(engine, expire_on_commit=False) as session:
-        # Phase 1: fetch keywords — fatal if this fails; let retry handle it.
-        if keyword_ids is not None:
-            keywords = list(
+        # Phase 1: query sources due for fetch — fatal if this fails.
+        if source_ids is not None:
+            sources = list(
                 (
                     await session.execute(
-                        select(Keyword).where(Keyword.id.in_(keyword_ids))
+                        select(NewsSource).where(NewsSource.id.in_(source_ids))
                     )
                 )
                 .scalars()
                 .all()
             )
         else:
-            keywords = list((await session.execute(select(Keyword))).scalars().all())
-        result["keywords_count"] = len(keywords)
-        if not keywords:
-            logger.info("taskiq_task_skipped", reason="no keywords")
+            sources = list(
+                (
+                    await session.execute(
+                        select(NewsSource)
+                        .where(
+                            NewsSource.is_active == True,  # noqa: E712
+                            or_(
+                                NewsSource.next_fetch_at == None,  # noqa: E711
+                                NewsSource.next_fetch_at <= func.now(),
+                            ),
+                        )
+                        .order_by(NewsSource.next_fetch_at.asc().nulls_first())
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        result["sources_count"] = len(sources)
+        if not sources:
+            logger.info("taskiq_task_skipped", reason="no sources due for fetch")
             return result
 
-        # Phase 2: RSS fetch
+        # Phase 2: fetch articles from sources
         try:
-            fr = await fetch_news_for_keywords(session, keywords)
+            fr = await fetch_news_for_sources(session, sources)
             result["fetch_new"] = fr.new_count
             result["fetch_skipped"] = fr.skipped_count
             result["fetch_errors"] = fr.error_count
+
+            # A-5: update each source's scheduling metadata
+            now = datetime.now(UTC)
+            for sr in fr.source_results:
+                source = next((s for s in sources if s.id == sr.source_id), None)
+                if source is None:
+                    continue
+
+                source.next_fetch_at = now + timedelta(
+                    minutes=source.fetch_interval_minutes
+                )
+                source.last_fetched_at = now
+
+                if sr.success or sr.not_modified:
+                    source.consecutive_errors = 0
+                    if sr.etag is not None:
+                        source.etag = sr.etag
+                    if sr.last_modified is not None:
+                        source.last_modified_header = sr.last_modified
+                else:
+                    source.consecutive_errors += 1
+                    source.last_error_message = sr.error_message
+
+                session.add(source)
+
+            await session.commit()
         except Exception:
             logger.exception("taskiq_fetch_phase_failed")
             result["fetch_errors"] += 1

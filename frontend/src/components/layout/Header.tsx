@@ -24,12 +24,6 @@ export function Header() {
           >
             Watchlist
           </Link>
-          <Link
-            href="/settings"
-            className="text-muted-foreground transition-colors hover:text-foreground"
-          >
-            Settings
-          </Link>
         </nav>
         <div className="ml-auto flex items-center gap-2">
           <ThemeToggle />

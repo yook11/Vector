@@ -1,10 +1,9 @@
-"""News fetcher service — fetches articles from Google News RSS feeds."""
+"""News fetcher service — fetches articles from subscribed news sources."""
 
 import asyncio
 from calendar import timegm
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from urllib.parse import quote
 
 import feedparser
 import httpx
@@ -13,50 +12,37 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from app.config import settings
-from app.models.associations import NewsKeyword
-from app.models.keyword import Keyword
 from app.models.news import NewsArticle
-from app.services.url_decoder import decode_urls
+from app.models.news_source import NewsSource
 
-GOOGLE_NEWS_RSS_URL = (
-    "https://news.google.com/rss/search?q={keyword}&hl=en-US&gl=US&ceid=US:en"
-)
-DEFAULT_SOURCE = "Google News"
 HTTP_TIMEOUT = 30.0
 
 logger = structlog.get_logger(__name__)
 
 
 @dataclass
+class SourceFetchResult:
+    """Result of fetching a single source."""
+
+    source_id: int
+    success: bool = True
+    new_count: int = 0
+    skipped_count: int = 0
+    error_message: str | None = None
+    etag: str | None = None
+    last_modified: str | None = None
+    not_modified: bool = False
+
+
+@dataclass
 class FetchResult:
-    """Result of a fetch operation across all keywords."""
+    """Aggregate result across all sources."""
 
     new_count: int = 0
     skipped_count: int = 0
     error_count: int = 0
     errors: list[str] = field(default_factory=list)
-
-
-def _build_rss_url(keyword: str) -> str:
-    """Build Google News RSS search URL for a keyword."""
-    return GOOGLE_NEWS_RSS_URL.format(keyword=quote(keyword))
-
-
-async def _fetch_rss_feed(
-    client: httpx.AsyncClient, url: str
-) -> feedparser.FeedParserDict | None:
-    """Fetch and parse an RSS feed. Returns None on failure."""
-    try:
-        response = await client.get(url, timeout=HTTP_TIMEOUT)
-        response.raise_for_status()
-        feed = await asyncio.to_thread(feedparser.parse, response.text)
-        return feed
-    except httpx.HTTPStatusError as e:
-        logger.error("rss_fetch_http_error", url=url, status=e.response.status_code)
-        return None
-    except httpx.RequestError as e:
-        logger.error("rss_fetch_request_error", url=url, error=str(e))
-        return None
+    source_results: list[SourceFetchResult] = field(default_factory=list)
 
 
 def _parse_published_date(entry: dict) -> datetime | None:
@@ -71,178 +57,238 @@ def _parse_published_date(entry: dict) -> datetime | None:
         return None
 
 
-async def _get_existing_urls(session: AsyncSession, urls: list[str]) -> set[str]:
-    """Check which URLs already exist in the database."""
-    if not urls:
-        return set()
-    stmt = select(NewsArticle.url).where(NewsArticle.url.in_(urls))
-    result = await session.execute(stmt)
-    return {row[0] for row in result.all()}
+def _extract_guid(entry: dict) -> str | None:
+    """Extract a unique identifier from a feedparser entry.
 
-
-async def _link_keyword_to_article(
-    session: AsyncSession, article_id: int, keyword_id: int
-) -> bool:
-    """Create a NewsKeyword link if it doesn't already exist.
-
-    Returns True if a new link was created.
+    Prefers entry.id (which feedparser maps from <guid>), falls back to entry.link.
     """
-    existing = await session.execute(
-        select(NewsKeyword).where(
-            NewsKeyword.news_article_id == article_id,
-            NewsKeyword.keyword_id == keyword_id,
-        )
-    )
-    if existing.scalar_one_or_none():
-        return False
-    link = NewsKeyword(news_article_id=article_id, keyword_id=keyword_id)
-    session.add(link)
-    return True
+    guid = entry.get("id") or entry.get("guid")
+    if guid:
+        return guid[:2048]
+    link = entry.get("link")
+    if link:
+        return link[:2048]
+    return None
 
 
-async def fetch_news_for_keywords(
+def _extract_full_content(entry: dict) -> str | None:
+    """Extract full content from RSS entry if available.
+
+    Checks content:encoded and content fields that indicate full-text RSS feeds.
+    """
+    # feedparser normalises content:encoded into entry.content
+    content_list = entry.get("content")
+    if content_list and isinstance(content_list, list):
+        for c in content_list:
+            value = c.get("value", "")
+            # Heuristic: full text is usually > 500 chars
+            if len(value) > 500:
+                return value
+    return None
+
+
+async def _fetch_rss_source(
+    client: httpx.AsyncClient,
     session: AsyncSession,
-    keywords: list[Keyword],
-) -> FetchResult:
-    """Fetch news articles for given keywords from Google News RSS.
+    source: NewsSource,
+) -> SourceFetchResult:
+    """Fetch and process a single RSS source."""
+    result = SourceFetchResult(source_id=source.id)
 
-    Args:
-        session: Database session.
-        keywords: List of active Keyword model instances.
-
-    Returns:
-        FetchResult with counts and any error messages.
-    """
-    result = FetchResult()
-
-    if not keywords:
-        logger.info("fetch_skipped", reason="no keywords provided")
+    if not source.feed_url:
+        result.success = False
+        result.error_message = "RSS source missing feed_url"
         return result
 
-    # Phase 1: Fetch all RSS feeds and collect entries
-    # Map: url -> (entry_dict, set_of_keyword_ids)
-    url_to_entry: dict[str, tuple[dict, set[int]]] = {}
+    # Build conditional GET headers
+    headers: dict[str, str] = {}
+    if source.etag:
+        headers["If-None-Match"] = source.etag
+    if source.last_modified_header:
+        headers["If-Modified-Since"] = source.last_modified_header
 
-    async with httpx.AsyncClient() as client:
-        for kw in keywords:
-            rss_url = _build_rss_url(kw.keyword)
-            logger.info("fetching_rss", keyword=kw.keyword, url=rss_url)
+    try:
+        response = await client.get(
+            source.feed_url, headers=headers, timeout=HTTP_TIMEOUT
+        )
 
-            feed = await _fetch_rss_feed(client, rss_url)
-            if feed is None:
-                result.error_count += 1
-                result.errors.append(f"Failed to fetch RSS for keyword: {kw.keyword}")
-                continue
+        # 304 Not Modified — nothing new
+        if response.status_code == 304:
+            logger.info("feed_not_modified", source=source.name)
+            result.not_modified = True
+            return result
 
-            if feed.bozo and not feed.entries:
-                logger.warning(
-                    "rss_parse_warning",
-                    keyword=kw.keyword,
-                    error=str(feed.bozo_exception),
-                )
-                result.error_count += 1
-                result.errors.append(f"RSS parse error for keyword: {kw.keyword}")
-                continue
+        response.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        logger.error(
+            "feed_http_error",
+            source=source.name,
+            status=e.response.status_code,
+        )
+        result.success = False
+        result.error_message = f"HTTP {e.response.status_code}"
+        return result
+    except httpx.RequestError as e:
+        logger.error("feed_request_error", source=source.name, error=str(e))
+        result.success = False
+        result.error_message = str(e)
+        return result
 
-            for entry in feed.entries:
-                entry_url = entry.get("link", "")
-                if not entry_url:
-                    continue
+    # Capture ETag / Last-Modified for next conditional GET
+    result.etag = response.headers.get("ETag")
+    result.last_modified = response.headers.get("Last-Modified")
 
-                if entry_url in url_to_entry:
-                    url_to_entry[entry_url][1].add(kw.id)
-                else:
-                    url_to_entry[entry_url] = (entry, {kw.id})
+    # Parse feed
+    feed = await asyncio.to_thread(feedparser.parse, response.text)
+    if feed.bozo and not feed.entries:
+        logger.warning(
+            "feed_parse_error",
+            source=source.name,
+            error=str(feed.bozo_exception),
+        )
+        result.success = False
+        result.error_message = f"Parse error: {feed.bozo_exception}"
+        return result
 
-    # Save original map for keyword linking of skipped articles
-    url_to_entry_orig = url_to_entry
+    # Collect guids for batch dedup check
+    entry_guids: list[tuple[dict, str]] = []
+    for entry in feed.entries:
+        guid = _extract_guid(entry)
+        if guid:
+            entry_guids.append((entry, guid))
 
-    # Phase 1.5: Pre-decode DB check (filter with Google News URLs)
-    raw_urls = list(url_to_entry.keys())
-    existing_raw_urls = await _get_existing_urls(session, raw_urls)
+    if not entry_guids:
+        return result
 
-    # Remove already-known URLs before expensive decoding
-    new_url_to_entry = {
-        url: val for url, val in url_to_entry.items() if url not in existing_raw_urls
-    }
-    pre_decode_skipped = len(url_to_entry) - len(new_url_to_entry)
+    # Batch dedup: check existing guids
+    guids = [g for _, g in entry_guids]
+    existing_guids: set[str] = set()
+    # Query in chunks to avoid overly large IN clauses
+    chunk_size = 500
+    for i in range(0, len(guids), chunk_size):
+        chunk = guids[i : i + chunk_size]
+        stmt = select(NewsArticle.guid).where(NewsArticle.guid.in_(chunk))
+        rows = await session.execute(stmt)
+        existing_guids.update(row[0] for row in rows.all())
 
-    # Phase 1.6: Decode only new URLs
-    new_raw_urls = list(new_url_to_entry.keys())
-    url_mapping = await decode_urls(new_raw_urls)
+    # Also check by URL for entries where guid == link (fallback dedup)
+    urls = [entry.get("link", "") for entry, _ in entry_guids if entry.get("link")]
+    existing_urls: set[str] = set()
+    if urls:
+        for i in range(0, len(urls), chunk_size):
+            chunk = urls[i : i + chunk_size]
+            stmt = select(NewsArticle.url).where(NewsArticle.url.in_(chunk))
+            rows = await session.execute(stmt)
+            existing_urls.update(row[0] for row in rows.all())
 
-    # Rebuild with decoded URLs, merging keyword sets for duplicates
-    decoded_url_to_entry: dict[str, tuple[dict, set[int]]] = {}
-    for original_url, (entry, keyword_ids) in new_url_to_entry.items():
-        decoded_url = url_mapping.get(original_url, original_url)
-        if decoded_url in decoded_url_to_entry:
-            decoded_url_to_entry[decoded_url][1].update(keyword_ids)
-        else:
-            decoded_url_to_entry[decoded_url] = (entry, keyword_ids)
-    url_to_entry = decoded_url_to_entry
-
-    # Phase 2: Post-decode DB check (decoded real URLs may already exist)
-    all_urls = list(url_to_entry.keys())
-    existing_urls = await _get_existing_urls(session, all_urls)
-
-    # Phase 2.5: Link keywords to articles skipped in pre-decode check
-    for url in existing_raw_urls:
-        if url not in url_to_entry_orig:
-            continue
-        _entry, keyword_ids = url_to_entry_orig[url]
-        stmt = select(NewsArticle).where(NewsArticle.url == url)
-        article_result = await session.execute(stmt)
-        article = article_result.scalar_one_or_none()
-        if article:
-            for kid in keyword_ids:
-                await _link_keyword_to_article(session, article.id, kid)
-    result.skipped_count += pre_decode_skipped
-
-    # Phase 3: Create new articles and link keywords
-    new_articles_count = 0
+    # Create new articles
     max_new = settings.max_articles_per_fetch
+    new_count = 0
 
-    for url, (entry, keyword_ids) in url_to_entry.items():
-        if url in existing_urls:
-            # Article exists — just ensure keyword links
-            stmt = select(NewsArticle).where(NewsArticle.url == url)
-            article_result = await session.execute(stmt)
-            article = article_result.scalar_one_or_none()
-            if article:
-                for kid in keyword_ids:
-                    await _link_keyword_to_article(session, article.id, kid)
+    for entry, guid in entry_guids:
+        if guid in existing_guids:
             result.skipped_count += 1
             continue
 
-        if new_articles_count >= max_new:
-            logger.info("fetch_limit_reached", max=max_new)
+        entry_url = entry.get("link", "")
+        if entry_url and entry_url in existing_urls:
+            result.skipped_count += 1
+            continue
+
+        if new_count >= max_new:
+            logger.info("source_fetch_limit_reached", source=source.name, max=max_new)
             break
 
-        # Create new article
         title = entry.get("title", "")[:500]
         description = entry.get("summary") or entry.get("description")
+        full_content = _extract_full_content(entry)
+        now = datetime.now(UTC)
 
         article = NewsArticle(
             title_original=title,
             description_original=description,
-            url=url,
-            source=DEFAULT_SOURCE,
+            url=entry_url if entry_url else guid,
+            source=source.name,
+            source_id=source.id,
+            guid=guid,
             published_at=_parse_published_date(entry),
-            fetched_at=datetime.now(UTC),
+            fetched_at=now,
         )
+
+        # If RSS provides full content, store it immediately
+        if full_content:
+            article.content = full_content[: settings.content_max_length]
+            article.content_fetched_at = now
+
         session.add(article)
-        await session.flush()
+        new_count += 1
+        # Track URL so later entries in same feed don't duplicate
+        if entry_url:
+            existing_urls.add(entry_url)
+        existing_guids.add(guid)
 
-        for kid in keyword_ids:
-            await _link_keyword_to_article(session, article.id, kid)
+    result.new_count = new_count
+    return result
 
-        new_articles_count += 1
 
-    result.new_count = new_articles_count
+async def fetch_news_for_sources(
+    session: AsyncSession,
+    sources: list[NewsSource],
+) -> FetchResult:
+    """Fetch news articles from the given sources.
+
+    Args:
+        session: Database session.
+        sources: List of active NewsSource instances to fetch.
+
+    Returns:
+        FetchResult with counts, errors, and per-source results.
+    """
+    result = FetchResult()
+
+    if not sources:
+        logger.info("fetch_skipped", reason="no sources provided")
+        return result
+
+    async with httpx.AsyncClient() as client:
+        for source in sources:
+            logger.info(
+                "fetching_source",
+                source=source.name,
+                type=source.source_type,
+            )
+
+            if source.source_type == "rss":
+                source_result = await _fetch_rss_source(client, session, source)
+            else:
+                # API sources (Hacker News, Alpha Vantage) — Phase C
+                logger.warning(
+                    "unsupported_source_type",
+                    source=source.name,
+                    type=source.source_type,
+                )
+                source_result = SourceFetchResult(
+                    source_id=source.id,
+                    success=False,
+                    error_message=f"Unsupported source type: {source.source_type}",
+                )
+
+            result.source_results.append(source_result)
+            result.new_count += source_result.new_count
+            result.skipped_count += source_result.skipped_count
+
+            if not source_result.success:
+                result.error_count += 1
+                if source_result.error_message:
+                    result.errors.append(
+                        f"{source.name}: {source_result.error_message}"
+                    )
+
     await session.commit()
 
     logger.info(
         "fetch_completed",
+        sources=len(sources),
         new=result.new_count,
         skipped=result.skipped_count,
         errors=result.error_count,

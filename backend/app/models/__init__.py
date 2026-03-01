@@ -12,6 +12,7 @@ from app.models.keyword_category import (
     KeywordCategoryTranslation,
 )
 from app.models.news import NewsArticle
+from app.models.news_source import NewsSource, SourceType
 from app.models.refresh_token import RefreshToken
 from app.models.user import User
 from app.models.user_keyword import UserKeywordSubscription
@@ -29,6 +30,8 @@ __all__ = [
     "KeywordCategoryTranslation",
     "NewsArticle",
     "NewsKeyword",
+    "NewsSource",
+    "SourceType",
     "RefreshToken",
     "User",
     "UserKeywordSubscription",

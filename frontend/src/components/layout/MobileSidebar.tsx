@@ -10,18 +10,20 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
-import { Sidebar } from "./Sidebar";
-import type { KeywordResponse } from "@/types";
+import { CategorySidebar } from "./CategorySidebar";
+import type { KeywordCategoryDetailResponse } from "@/types";
 
 interface MobileSidebarProps {
-  keywords: KeywordResponse[];
+  categories: KeywordCategoryDetailResponse[];
+  activeKwCategoryId?: number;
   activeKeywordId?: number;
   subscribedKeywordIds?: number[];
   showMyKeywords?: boolean;
 }
 
 export function MobileSidebar({
-  keywords,
+  categories,
+  activeKwCategoryId,
   activeKeywordId,
   subscribedKeywordIds,
   showMyKeywords,
@@ -41,8 +43,9 @@ export function MobileSidebar({
           <SheetTitle>Filters</SheetTitle>
         </SheetHeader>
         <div onClick={() => setOpen(false)}>
-          <Sidebar
-            keywords={keywords}
+          <CategorySidebar
+            categories={categories}
+            activeKwCategoryId={activeKwCategoryId}
             activeKeywordId={activeKeywordId}
             subscribedKeywordIds={subscribedKeywordIds}
             showMyKeywords={showMyKeywords}

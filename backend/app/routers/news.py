@@ -136,6 +136,7 @@ def _news_eager_options() -> list:
 @router.get("", response_model=PaginatedNewsResponse)
 async def list_news(
     keyword_id: int | None = Query(None, alias="keywordId"),
+    kw_category_id: int | None = Query(None, alias="kwCategoryId"),
     my_keywords: bool = Query(False, alias="myKeywords"),
     sentiment: str | None = None,
     min_impact: int | None = Query(None, alias="minImpact"),
@@ -158,7 +159,17 @@ async def list_news(
         )
         stmt = stmt.join(NewsKeyword).where(NewsKeyword.keyword_id.in_(sub_kw_ids))
     elif keyword_id is not None:
+        # keywordId is the most specific filter — when both kwCategoryId and
+        # keywordId are provided, keywordId alone is sufficient because the
+        # keyword already belongs to that category. kwCategoryId stays in the
+        # URL only for frontend sidebar active-state rendering.
         stmt = stmt.join(NewsKeyword).where(NewsKeyword.keyword_id == keyword_id)
+    elif kw_category_id is not None:
+        # Filter by all keywords belonging to this keyword category
+        sub_kw_ids = select(KeywordCategoryLink.keyword_id).where(
+            KeywordCategoryLink.category_id == kw_category_id
+        )
+        stmt = stmt.join(NewsKeyword).where(NewsKeyword.keyword_id.in_(sub_kw_ids))
 
     # Track whether AnalysisResult is already joined
     analysis_joined = False
@@ -359,11 +370,11 @@ async def fetch_news(
     body: NewsFetchRequest | None = None,
 ) -> NewsFetchResponse:
     """Enqueue a news fetch task. Returns immediately with a task ID."""
-    keyword_ids = body.keyword_ids if body else None
-    task = await fetch_and_analyze_task.kiq(keyword_ids=keyword_ids)
+    source_ids = body.source_ids if body else None
+    task = await fetch_and_analyze_task.kiq(source_ids=source_ids)
 
     return NewsFetchResponse(
         message="Fetch task submitted",
-        keywords_count=len(keyword_ids) if keyword_ids else None,
+        sources_count=len(source_ids) if source_ids else None,
         job_id=task.task_id,
     )

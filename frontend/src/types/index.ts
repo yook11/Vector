@@ -16,6 +16,7 @@ export type Sentiment = "positive" | "negative" | "neutral";
 /** Query parameters for GET /news (client-side helper). */
 export interface NewsQuery {
   keywordId?: number;
+  kwCategoryId?: number;
   myKeywords?: boolean;
   sentiment?: Sentiment;
   minImpact?: number;
@@ -40,10 +41,12 @@ export type CategoryListResponse =
 // Keyword categories
 export type KeywordCategoryBrief =
   components["schemas"]["KeywordCategoryBrief"];
-export type KeywordCategoryResponse =
-  components["schemas"]["KeywordCategoryResponse"];
-export type KeywordCategoryListResponse =
-  components["schemas"]["KeywordCategoryListResponse"];
+export type KeywordInCategory =
+  components["schemas"]["KeywordInCategory"];
+export type KeywordCategoryDetailResponse =
+  components["schemas"]["KeywordCategoryDetailResponse"];
+export type KeywordCategoryDetailListResponse =
+  components["schemas"]["KeywordCategoryDetailListResponse"];
 
 // Keywords
 export type KeywordBrief = components["schemas"]["KeywordBrief"];

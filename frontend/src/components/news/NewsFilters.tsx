@@ -75,10 +75,10 @@ export function NewsFilters({ categories }: NewsFiltersProps) {
           }
         >
           <SelectTrigger className="w-[160px]">
-            <SelectValue placeholder="Category" />
+            <SelectValue placeholder="Investment" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All Categories</SelectItem>
+            <SelectItem value="all">All Investments</SelectItem>
             {categories.map((cat) => (
               <SelectItem key={cat.slug} value={cat.slug}>
                 {cat.name}

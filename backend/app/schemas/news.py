@@ -51,7 +51,7 @@ class NewsFetchRequest(BaseModel):
         populate_by_name=True,
     )
 
-    keyword_ids: list[int] | None = None
+    source_ids: list[int] | None = None
 
 
 class NewsFetchResponse(BaseModel):
@@ -63,7 +63,7 @@ class NewsFetchResponse(BaseModel):
     )
 
     message: str
-    keywords_count: int | None = None  # None = all keywords targeted
+    sources_count: int | None = None  # None = all due sources targeted
     job_id: str
 
 
