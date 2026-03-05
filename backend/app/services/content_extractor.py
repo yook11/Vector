@@ -11,7 +11,7 @@ from urllib.robotparser import RobotFileParser
 
 import httpx
 import structlog
-from newspaper import Article
+import trafilatura
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -104,14 +104,18 @@ class DomainRateLimiter:
 
 
 def _parse_article_html(html: str, url: str) -> str | None:
-    """Parse article content from HTML using newspaper4k (sync, CPU-bound).
+    """Parse article content from HTML using trafilatura (sync, CPU-bound).
 
     This function is intended to be run via asyncio.to_thread().
     """
-    article = Article(url)
-    article.html = html
-    article.parse()
-    text = article.text
+    text = trafilatura.extract(
+        html,
+        url=url,
+        favor_precision=True,
+        include_comments=False,
+        include_tables=True,
+        deduplicate=True,
+    )
     if not text or len(text.strip()) < 50:
         return None
     return text.strip()
@@ -124,7 +128,7 @@ async def extract_content(
 ) -> str | None:
     """Extract article content from a URL.
 
-    Uses httpx for async HTTP, newspaper4k parser via asyncio.to_thread().
+    Uses httpx for async HTTP, trafilatura parser via asyncio.to_thread().
     Returns None if content cannot be extracted.
     """
     # Check robots.txt

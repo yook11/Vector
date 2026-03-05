@@ -15,8 +15,12 @@ from sqlmodel import Field, Relationship, SQLModel
 class AnalysisResult(SQLModel, table=True):
     __tablename__ = "analyses"
     __table_args__ = (
+        UniqueConstraint(
+            "news_article_id", "ai_model_id", name="uq_analyses_article_model"
+        ),
         Index("idx_analyses_sentiment", "sentiment"),
         Index("idx_analyses_impact", "impact_score"),
+        Index("idx_analyses_ai_model_id", "ai_model_id"),
     )
 
     id: int | None = Field(default=None, primary_key=True)
@@ -24,15 +28,19 @@ class AnalysisResult(SQLModel, table=True):
         sa_column=Column(
             Integer,
             ForeignKey("news_articles.id", ondelete="CASCADE"),
-            unique=True,
+            nullable=False,
+        )
+    )
+    ai_model_id: int = Field(
+        sa_column=Column(
+            Integer,
+            ForeignKey("ai_models.id", ondelete="RESTRICT"),
             nullable=False,
         )
     )
     sentiment: str = Field(max_length=20, nullable=False)
     impact_score: int = Field(ge=1, le=10, nullable=False)
     reasoning: str | None = Field(default=None)
-    ai_provider: str = Field(max_length=20, nullable=False)
-    ai_model: str = Field(max_length=50, nullable=False)
     analyzed_at: datetime = Field(
         default_factory=lambda: datetime.now(UTC),
         nullable=False,
@@ -40,7 +48,8 @@ class AnalysisResult(SQLModel, table=True):
     )
 
     # Relationships
-    news_article: "NewsArticle" = Relationship(back_populates="analysis")
+    news_article: "NewsArticle" = Relationship(back_populates="analyses")
+    ai_model: "AIModel" = Relationship(back_populates="analyses")
     category_links: list["AnalysisInvestmentCategory"] = Relationship(
         back_populates="analysis"
     )
@@ -70,6 +79,7 @@ class AnalysisTranslation(SQLModel, table=True):
 
 
 # Resolve forward references
+from app.models.ai_model import AIModel  # noqa: E402, F811
 from app.models.investment_category import (  # noqa: E402
     AnalysisInvestmentCategory,  # noqa: F811
 )

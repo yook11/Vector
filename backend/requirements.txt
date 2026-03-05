@@ -6,9 +6,8 @@ asyncpg>=0.30,<1
 alembic>=1.14,<2
 httpx>=0.28,<1
 feedparser>=6.0,<7
-newspaper4k>=0.9,<1
+trafilatura>=1.12,<2
 lxml>=5.0,<6
-lxml-html-clean>=0.4,<1
 greenlet>=3.0,<4
 # Task Queue
 taskiq>=0.12,<1

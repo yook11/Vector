@@ -17,7 +17,6 @@ from app.services.ai_analyzer import (
 
 logger = structlog.get_logger(__name__)
 
-GEMINI_MODEL = "gemini-2.5-flash-lite"
 MAX_RETRIES = 3
 RETRY_BASE_DELAY = 2.0  # seconds, exponential backoff: 2, 4, 8
 
@@ -97,13 +96,14 @@ class GeminiAnalyzer(BaseAnalyzer):
 
     @property
     def model_name(self) -> str:
-        return GEMINI_MODEL
+        return settings.ai_model_name
 
     async def analyze(
         self,
         title: str,
         description: str | None,
         content: str | None = None,
+        keywords_by_category: dict[str, list[str]] | None = None,
     ) -> AnalysisData:
         """Call Gemini API with retry and parse the response."""
         content_section = ""
@@ -116,8 +116,24 @@ class GeminiAnalyzer(BaseAnalyzer):
             description=description or "(no description available)",
             content_section=content_section,
         )
+
+        if keywords_by_category:
+            lines = []
+            for cat_slug, kws in keywords_by_category.items():
+                kw_list = ", ".join(f'"{kw}"' for kw in kws)
+                lines.append(f"- {cat_slug}: [{kw_list}]")
+            candidates_block = "\n".join(lines)
+            prompt += (
+                f"\nAdditionally, select up to 3 keywords from the following "
+                f"candidates that best describe this article's topic. Return them "
+                f'in a "keywords" field as a JSON array of strings. Only select '
+                f"keywords that are clearly related to the article content. "
+                f"If none are relevant, return an empty array.\n"
+                f"Keyword candidates by category:\n{candidates_block}\n"
+            )
+
         raw_text = await self._call_with_retry(prompt)
-        return self._parse_response(raw_text)
+        return self._parse_response(raw_text, keywords_by_category)
 
     async def _call_with_retry(self, prompt: str) -> str:
         """Call Gemini API with exponential backoff retry.
@@ -132,10 +148,10 @@ class GeminiAnalyzer(BaseAnalyzer):
                 logger.info(
                     "gemini_api_call",
                     attempt=attempt,
-                    model=GEMINI_MODEL,
+                    model=settings.ai_model_name,
                 )
                 response = await self._client.aio.models.generate_content(
-                    model=GEMINI_MODEL,
+                    model=settings.ai_model_name,
                     contents=prompt,
                     config=GenerateContentConfig(
                         temperature=0.2,
@@ -180,7 +196,9 @@ class GeminiAnalyzer(BaseAnalyzer):
             f"Gemini API failed after {MAX_RETRIES} attempts: {last_error}"
         )
 
-    def _parse_response(self, raw_text: str) -> AnalysisData:
+    def _parse_response(
+        self, raw_text: str, keywords_by_category: dict[str, list[str]] | None = None
+    ) -> AnalysisData:
         """Parse and validate the JSON response from Gemini.
 
         Raises:
@@ -228,6 +246,21 @@ class GeminiAnalyzer(BaseAnalyzer):
                 if not investment_categories:
                     investment_categories = None
 
+            # Parse keywords: filter to valid candidates, max 3
+            keywords: list[str] | None = None
+            raw_keywords = data.get("keywords")
+            if isinstance(raw_keywords, list) and keywords_by_category:
+                all_candidates: set[str] = set()
+                for kws in keywords_by_category.values():
+                    all_candidates.update(kws)
+                keywords = [
+                    k
+                    for k in raw_keywords
+                    if isinstance(k, str) and k in all_candidates
+                ][:3]
+                if not keywords:
+                    keywords = None
+
             return AnalysisData(
                 title=str(data["title_ja"]),
                 summary=str(data["summary_ja"]),
@@ -235,6 +268,7 @@ class GeminiAnalyzer(BaseAnalyzer):
                 impact_score=impact_score,
                 reasoning=data.get("reasoning"),
                 investment_categories=investment_categories,
+                keywords=keywords,
             )
         except (KeyError, TypeError, ValueError) as e:
             logger.error(

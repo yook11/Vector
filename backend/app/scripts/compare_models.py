@@ -178,7 +178,7 @@ async def main(count: int) -> None:
                 )
             )
             .options(
-                selectinload(NewsArticle.analysis).selectinload(  # type: ignore[arg-type]
+                selectinload(NewsArticle.analyses).selectinload(  # type: ignore[arg-type]
                     AnalysisResult.translations
                 )
             )
@@ -227,7 +227,7 @@ async def main(count: int) -> None:
             idx=i + 1,
             total=len(articles),
             article=article,
-            flash_result=article.analysis,
+            flash_result=article.analyses[0] if article.analyses else None,
             lite_result=lite_result,
             error=error,
         )

@@ -7,6 +7,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.ai_model import AIModel
 from app.models.analysis import AnalysisResult, AnalysisTranslation
 from app.models.associations import NewsKeyword
 from app.models.investment_category import (
@@ -41,17 +42,17 @@ async def _create_article(
 async def _create_analysis(
     session: AsyncSession,
     article: NewsArticle,
+    ai_model_id: int,
     sentiment: str = "positive",
     impact_score: int = 7,
 ) -> AnalysisResult:
     """Helper to create an analysis result with translation."""
     analysis = AnalysisResult(
         news_article_id=article.id,
+        ai_model_id=ai_model_id,
         sentiment=sentiment,
         impact_score=impact_score,
         reasoning="Test reasoning",
-        ai_provider="gemini",
-        ai_model="gemini-2.0-flash",
         analyzed_at=datetime.now(UTC),
     )
     session.add(analysis)
@@ -126,13 +127,13 @@ class TestListNews:
         assert data["items"][0]["titleOriginal"] == "Test Article"
 
     async def test_filter_by_sentiment(
-        self, client: AsyncClient, db_session: AsyncSession
+        self, client: AsyncClient, db_session: AsyncSession, sample_ai_model: AIModel
     ) -> None:
         a1 = await _create_article(db_session, url="https://example.com/pos")
-        await _create_analysis(db_session, a1, sentiment="positive")
+        await _create_analysis(db_session, a1, sample_ai_model.id, sentiment="positive")
 
         a2 = await _create_article(db_session, url="https://example.com/neg")
-        await _create_analysis(db_session, a2, sentiment="negative")
+        await _create_analysis(db_session, a2, sample_ai_model.id, sentiment="negative")
 
         resp = await client.get("/api/v1/news?sentiment=positive")
         data = resp.json()
@@ -143,9 +144,10 @@ class TestListNews:
         client: AsyncClient,
         db_session: AsyncSession,
         sample_categories: list[InvestmentCategory],
+        sample_ai_model: AIModel,
     ) -> None:
         a1 = await _create_article(db_session, url="https://example.com/cat1")
-        analysis1 = await _create_analysis(db_session, a1)
+        analysis1 = await _create_analysis(db_session, a1, sample_ai_model.id)
 
         # Find the growth_catalyst category
         gc = next(c for c in sample_categories if c.slug == "growth_catalyst")
@@ -155,20 +157,20 @@ class TestListNews:
 
         # Create another article without this category
         a2 = await _create_article(db_session, url="https://example.com/cat2")
-        await _create_analysis(db_session, a2)
+        await _create_analysis(db_session, a2, sample_ai_model.id)
 
         resp = await client.get("/api/v1/news?category=growth_catalyst")
         data = resp.json()
         assert data["total"] == 1
 
     async def test_filter_by_min_impact(
-        self, client: AsyncClient, db_session: AsyncSession
+        self, client: AsyncClient, db_session: AsyncSession, sample_ai_model: AIModel
     ) -> None:
         a1 = await _create_article(db_session, url="https://example.com/high")
-        await _create_analysis(db_session, a1, impact_score=9)
+        await _create_analysis(db_session, a1, sample_ai_model.id, impact_score=9)
 
         a2 = await _create_article(db_session, url="https://example.com/low")
-        await _create_analysis(db_session, a2, impact_score=3)
+        await _create_analysis(db_session, a2, sample_ai_model.id, impact_score=3)
 
         resp = await client.get("/api/v1/news?minImpact=7")
         data = resp.json()
@@ -225,10 +227,10 @@ class TestGetNews:
         assert resp.status_code == 404
 
     async def test_get_with_analysis(
-        self, client: AsyncClient, db_session: AsyncSession
+        self, client: AsyncClient, db_session: AsyncSession, sample_ai_model: AIModel
     ) -> None:
         article = await _create_article(db_session)
-        await _create_analysis(db_session, article)
+        await _create_analysis(db_session, article, sample_ai_model.id)
 
         resp = await client.get(f"/api/v1/news/{article.id}")
         data = resp.json()
@@ -241,9 +243,10 @@ class TestGetNews:
         client: AsyncClient,
         db_session: AsyncSession,
         sample_categories: list[InvestmentCategory],
+        sample_ai_model: AIModel,
     ) -> None:
         article = await _create_article(db_session, url="https://example.com/cat-resp")
-        analysis = await _create_analysis(db_session, article)
+        analysis = await _create_analysis(db_session, article, sample_ai_model.id)
 
         gc = next(c for c in sample_categories if c.slug == "growth_catalyst")
         link = AnalysisInvestmentCategory(analysis_id=analysis.id, category_id=gc.id)

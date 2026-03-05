@@ -14,6 +14,7 @@ from app.config import settings
 from app.dependencies import get_session
 from app.main import app
 from app.models import (  # noqa: F401
+    AIModel,
     AnalysisInvestmentCategory,
     AnalysisResult,
     AnalysisTranslation,
@@ -132,6 +133,16 @@ async def authed_client(
     ) as c:
         yield c
     app.dependency_overrides.clear()
+
+
+@pytest.fixture
+async def sample_ai_model(db_session: AsyncSession) -> AIModel:
+    """Create and return a test AI model."""
+    model = AIModel(provider="gemini", name="gemini-2.0-flash")
+    db_session.add(model)
+    await db_session.commit()
+    await db_session.refresh(model)
+    return model
 
 
 @pytest.fixture

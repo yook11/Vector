@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlmodel import col, func, select
 
+from app.config import settings
 from app.dependencies import get_current_user, get_optional_user, get_session
 from app.models.analysis import AnalysisResult
 from app.models.associations import NewsKeyword
@@ -21,7 +22,7 @@ from app.models.news import NewsArticle
 from app.models.user import User
 from app.models.user_keyword import UserKeywordSubscription
 from app.models.watchlist import WatchlistItem
-from app.schemas.analysis import AnalysisResponse
+from app.schemas.analysis import AIModelBrief, AnalysisResponse
 from app.schemas.category import CategoryBrief
 from app.schemas.keyword import KeywordBrief
 from app.schemas.keyword_category import KeywordCategoryBrief
@@ -46,6 +47,11 @@ def _get_translated(translations: list, locale: str, field: str = "name") -> str
         if t.locale == locale:
             return getattr(t, field, "")
     return ""
+
+
+def _get_default_analysis(article: NewsArticle) -> AnalysisResult | None:
+    """Return the default model's analysis (filtered eager load ensures at most 1)."""
+    return article.analyses[0] if article.analyses else None
 
 
 async def _get_watched_ids(session: AsyncSession, user: User | None) -> set[int]:
@@ -81,8 +87,8 @@ def _build_news_response(
     ]
 
     analysis = None
-    if article.analysis:
-        a = article.analysis
+    a = _get_default_analysis(article)
+    if a is not None:
         categories = [
             CategoryBrief(
                 slug=link.category.slug,
@@ -97,7 +103,11 @@ def _build_news_response(
             sentiment=a.sentiment,
             impact_score=a.impact_score,
             reasoning=a.reasoning,
-            ai_provider=a.ai_provider,
+            ai_model=AIModelBrief(
+                id=a.ai_model.id,
+                provider=a.ai_model.provider,
+                name=a.ai_model.name,
+            ),
             analyzed_at=a.analyzed_at,
             investment_categories=categories,
         )
@@ -117,14 +127,24 @@ def _build_news_response(
     )
 
 
+def _analyses_filtered_load():
+    """Filtered eager load: only the default AI model's analysis."""
+    return selectinload(
+        NewsArticle.analyses.and_(
+            AnalysisResult.ai_model_id == settings.default_ai_model_id
+        )
+    )
+
+
 def _news_eager_options() -> list:
     """Return common selectinload options for news queries."""
     return [
-        selectinload(NewsArticle.analysis)
+        _analyses_filtered_load()
         .selectinload(AnalysisResult.category_links)
         .selectinload(AnalysisInvestmentCategory.category)
         .selectinload(InvestmentCategory.translations),
-        selectinload(NewsArticle.analysis).selectinload(AnalysisResult.translations),
+        _analyses_filtered_load().selectinload(AnalysisResult.translations),
+        _analyses_filtered_load().selectinload(AnalysisResult.ai_model),
         selectinload(NewsArticle.keyword_links)
         .selectinload(NewsKeyword.keyword)
         .selectinload(Keyword.category_links)
@@ -174,10 +194,15 @@ async def list_news(
     # Track whether AnalysisResult is already joined
     analysis_joined = False
 
+    # Common JOIN condition: article + default model filter
+    _analysis_join_cond = (AnalysisResult.news_article_id == NewsArticle.id) & (
+        AnalysisResult.ai_model_id == settings.default_ai_model_id
+    )
+
     if sentiment is not None:
         stmt = stmt.join(
             AnalysisResult,
-            AnalysisResult.news_article_id == NewsArticle.id,
+            _analysis_join_cond,
             isouter=False,
         ).where(AnalysisResult.sentiment == sentiment)
         analysis_joined = True
@@ -186,7 +211,7 @@ async def list_news(
         if not analysis_joined:
             stmt = stmt.join(
                 AnalysisResult,
-                AnalysisResult.news_article_id == NewsArticle.id,
+                _analysis_join_cond,
                 isouter=False,
             )
             analysis_joined = True
@@ -196,7 +221,7 @@ async def list_news(
         if not analysis_joined:
             stmt = stmt.join(
                 AnalysisResult,
-                AnalysisResult.news_article_id == NewsArticle.id,
+                _analysis_join_cond,
                 isouter=False,
             )
             analysis_joined = True
@@ -225,7 +250,7 @@ async def list_news(
     if sort_by == "impactScore" and not analysis_joined:
         stmt = stmt.join(
             AnalysisResult,
-            AnalysisResult.news_article_id == NewsArticle.id,
+            _analysis_join_cond,
             isouter=True,
         )
     stmt = stmt.order_by(

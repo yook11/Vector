@@ -281,7 +281,11 @@ async def fetch_and_analyze_task(
                         select(NewsArticle)
                         .outerjoin(
                             AnalysisResult,
-                            AnalysisResult.news_article_id == NewsArticle.id,
+                            (AnalysisResult.news_article_id == NewsArticle.id)
+                            & (
+                                AnalysisResult.ai_model_id
+                                == settings.default_ai_model_id
+                            ),
                         )
                         .where(AnalysisResult.id == None)  # noqa: E711
                         .order_by(NewsArticle.published_at.desc())
@@ -292,7 +296,11 @@ async def fetch_and_analyze_task(
                 .all()
             )
             if unanalyzed:
-                ar = await analyze_articles(session, unanalyzed)
+                ar = await analyze_articles(
+                    session,
+                    unanalyzed,
+                    ai_model_id=settings.default_ai_model_id,
+                )
                 result["analyze_count"] = ar.analyzed_count
                 result["analyze_skipped"] = ar.skipped_count
                 result["analyze_errors"] = ar.error_count

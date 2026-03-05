@@ -1,3 +1,4 @@
+from app.models.ai_model import AIModel
 from app.models.analysis import AnalysisResult, AnalysisTranslation
 from app.models.associations import NewsKeyword
 from app.models.investment_category import (
@@ -19,6 +20,7 @@ from app.models.user_keyword import UserKeywordSubscription
 from app.models.watchlist import WatchlistItem
 
 __all__ = [
+    "AIModel",
     "AnalysisInvestmentCategory",
     "AnalysisResult",
     "AnalysisTranslation",

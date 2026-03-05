@@ -10,11 +10,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from app.config import settings
+from app.models.ai_model import AIModel
 from app.models.analysis import AnalysisResult, AnalysisTranslation
+from app.models.associations import NewsKeyword
 from app.models.investment_category import (
     AnalysisInvestmentCategory,
     InvestmentCategory,
 )
+from app.models.keyword import Keyword
+from app.models.keyword_category import KeywordCategory, KeywordCategoryLink
 from app.models.news import NewsArticle
 
 logger = structlog.get_logger(__name__)
@@ -40,6 +44,7 @@ class AnalysisData:
     impact_score: int  # 1-10
     reasoning: str | None = None
     investment_categories: list[str] | None = None
+    keywords: list[str] | None = None
 
 
 @dataclass
@@ -61,6 +66,7 @@ class BaseAnalyzer(abc.ABC):
         title: str,
         description: str | None,
         content: str | None = None,
+        keywords_by_category: dict[str, list[str]] | None = None,
     ) -> AnalysisData:
         """Analyze a news article and return structured analysis data.
 
@@ -68,6 +74,8 @@ class BaseAnalyzer(abc.ABC):
             title: English article title.
             description: English article description/summary (may be None).
             content: Full article text (may be None).
+            keywords_by_category: Optional dict mapping category slug to keyword
+                names. AI selects the most relevant keywords across all categories.
 
         Returns:
             AnalysisData with Japanese translation, sentiment, and score.
@@ -104,10 +112,27 @@ def get_analyzer() -> BaseAnalyzer:
     raise ValueError(f"Unsupported AI provider: {provider}")
 
 
+async def _resolve_ai_model_id(
+    session: AsyncSession, provider: str, model_name: str
+) -> int:
+    """Look up ai_models row by provider+name. Raises ValueError if not found."""
+    stmt = select(AIModel.id).where(
+        AIModel.provider == provider, AIModel.name == model_name
+    )
+    row = (await session.execute(stmt)).scalar_one_or_none()
+    if row is None:
+        raise ValueError(
+            f"AIModel not found: provider={provider!r}, name={model_name!r}. "
+            "Register it via migration or admin first."
+        )
+    return row
+
+
 async def analyze_article(
     session: AsyncSession,
     article: NewsArticle,
     analyzer: BaseAnalyzer | None = None,
+    ai_model_id: int | None = None,
 ) -> AnalysisResult | None:
     """Analyze a single news article and persist the result.
 
@@ -118,8 +143,19 @@ async def analyze_article(
             function directly (outside analyze_articles) must handle
             this exception.
     """
+    if analyzer is None:
+        analyzer = get_analyzer()
+
+    if ai_model_id is None:
+        ai_model_id = await _resolve_ai_model_id(
+            session, analyzer.provider_name, analyzer.model_name
+        )
+
     # Explicit query to check if already analyzed (avoids MissingGreenlet)
-    stmt = select(AnalysisResult).where(AnalysisResult.news_article_id == article.id)
+    stmt = select(AnalysisResult).where(
+        AnalysisResult.news_article_id == article.id,
+        AnalysisResult.ai_model_id == ai_model_id,
+    )
     existing = (await session.execute(stmt)).scalar_one_or_none()
     if existing is not None:
         logger.info(
@@ -129,14 +165,29 @@ async def analyze_article(
         )
         return None
 
-    if analyzer is None:
-        analyzer = get_analyzer()
+    # Query all keyword candidates grouped by category
+    keywords_by_category: dict[str, list[str]] | None = None
+    stmt = (
+        select(KeywordCategory.slug, Keyword.keyword)
+        .join(
+            KeywordCategoryLink,
+            KeywordCategoryLink.category_id == KeywordCategory.id,
+        )
+        .join(Keyword, Keyword.id == KeywordCategoryLink.keyword_id)
+    )
+    rows = (await session.execute(stmt)).all()
+    if rows:
+        kw_dict: dict[str, list[str]] = {}
+        for slug, kw in rows:
+            kw_dict.setdefault(slug, []).append(kw)
+        keywords_by_category = kw_dict
 
     try:
         data = await analyzer.analyze(
             title=article.title_original,
             description=article.description_original,
             content=article.content,
+            keywords_by_category=keywords_by_category,
         )
     except AnalysisError as e:
         logger.error("analysis_failed", article_id=article.id, error=str(e))
@@ -144,11 +195,10 @@ async def analyze_article(
 
     result = AnalysisResult(
         news_article_id=article.id,
+        ai_model_id=ai_model_id,
         sentiment=data.sentiment,
         impact_score=data.impact_score,
         reasoning=data.reasoning,
-        ai_provider=analyzer.provider_name,
-        ai_model=analyzer.model_name,
         analyzed_at=datetime.now(UTC),
     )
     session.add(result)
@@ -176,12 +226,24 @@ async def analyze_article(
             )
             session.add(link)
 
+    # Persist keyword links (AI-selected tags from keyword_candidates)
+    if data.keywords:
+        kw_stmt = select(Keyword).where(Keyword.keyword.in_(data.keywords))
+        matched_kws = (await session.execute(kw_stmt)).scalars().all()
+        for kw in matched_kws:
+            link = NewsKeyword(
+                news_article_id=article.id,
+                keyword_id=kw.id,
+            )
+            session.add(link)
+
     logger.info(
         "analysis_completed",
         article_id=article.id,
         sentiment=data.sentiment,
         impact_score=data.impact_score,
         categories=data.investment_categories,
+        keywords=data.keywords,
     )
     return result
 
@@ -190,6 +252,7 @@ async def analyze_articles(
     session: AsyncSession,
     articles: list[NewsArticle],
     analyzer: BaseAnalyzer | None = None,
+    ai_model_id: int | None = None,
 ) -> AnalyzeResult:
     """Analyze multiple articles sequentially with rate limit protection.
 
@@ -219,7 +282,7 @@ async def analyze_articles(
         article_id = article.id
 
         try:
-            analysis = await analyze_article(session, article, analyzer)
+            analysis = await analyze_article(session, article, analyzer, ai_model_id)
             if analysis is None:
                 result.skipped_count += 1
             else:

@@ -7,11 +7,15 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
+from app.models.ai_model import AIModel
 from app.models.analysis import AnalysisResult
+from app.models.associations import NewsKeyword
 from app.models.investment_category import (
     AnalysisInvestmentCategory,
     InvestmentCategory,
 )
+from app.models.keyword import Keyword
+from app.models.keyword_category import KeywordCategory, KeywordCategoryLink
 from app.models.news import NewsArticle
 from app.services.ai_analyzer import (
     AnalysisData,
@@ -35,6 +39,7 @@ def _make_gemini_response(
     impact_score: int = 8,
     reasoning: str | None = "技術的に重要な進展であり市場に好影響",
     investment_categories: list[str] | None = None,
+    keywords: list[str] | None = None,
 ) -> str:
     """Create a valid JSON string mimicking Gemini API response."""
     data: dict = {
@@ -46,6 +51,8 @@ def _make_gemini_response(
     }
     if investment_categories is not None:
         data["investment_categories"] = investment_categories
+    if keywords is not None:
+        data["keywords"] = keywords
     return json.dumps(data, ensure_ascii=False)
 
 
@@ -217,6 +224,7 @@ async def test_call_with_retry_raises_after_max_retries() -> None:
 
 async def test_analyze_article_creates_analysis(
     db_session: AsyncSession,
+    sample_ai_model: AIModel,
 ) -> None:
     article = NewsArticle(
         title_original="Quantum Breakthrough",
@@ -246,7 +254,7 @@ async def test_analyze_article_creates_analysis(
     assert result is not None
     assert result.news_article_id == article.id
     assert result.sentiment == "positive"
-    assert result.ai_provider == "gemini"
+    assert result.ai_model_id == sample_ai_model.id
 
     # Verify translation was created
     from app.models.analysis import AnalysisTranslation
@@ -263,6 +271,7 @@ async def test_analyze_article_creates_analysis(
 async def test_analyze_article_saves_categories(
     db_session: AsyncSession,
     sample_categories: list[InvestmentCategory],
+    sample_ai_model: AIModel,
 ) -> None:
     article = NewsArticle(
         title_original="AI Chip Launch",
@@ -312,6 +321,7 @@ async def test_analyze_article_saves_categories(
 async def test_analyze_article_ignores_unknown_category(
     db_session: AsyncSession,
     sample_categories: list[InvestmentCategory],
+    sample_ai_model: AIModel,
 ) -> None:
     article = NewsArticle(
         title_original="Unknown Category Test",
@@ -349,6 +359,7 @@ async def test_analyze_article_ignores_unknown_category(
 
 async def test_analyze_article_skips_already_analyzed(
     db_session: AsyncSession,
+    sample_ai_model: AIModel,
 ) -> None:
     article = NewsArticle(
         title_original="Old Article",
@@ -361,15 +372,16 @@ async def test_analyze_article_skips_already_analyzed(
 
     existing = AnalysisResult(
         news_article_id=article.id,
+        ai_model_id=sample_ai_model.id,
         sentiment="neutral",
         impact_score=5,
-        ai_provider="gemini",
-        ai_model="gemini-2.0-flash",
     )
     db_session.add(existing)
     await db_session.commit()
 
     mock_analyzer = MagicMock(spec=BaseAnalyzer)
+    mock_analyzer.provider_name = "gemini"
+    mock_analyzer.model_name = "gemini-2.0-flash"
     result = await analyze_article(db_session, article, mock_analyzer)
 
     assert result is None
@@ -378,6 +390,7 @@ async def test_analyze_article_skips_already_analyzed(
 
 async def test_analyze_articles_batch(
     db_session: AsyncSession,
+    sample_ai_model: AIModel,
 ) -> None:
     articles = []
     for i in range(3):
@@ -417,6 +430,7 @@ async def test_analyze_articles_batch(
 
 async def test_analyze_articles_handles_errors(
     db_session: AsyncSession,
+    sample_ai_model: AIModel,
 ) -> None:
     articles = []
     for i in range(3):
@@ -478,6 +492,7 @@ async def test_analyze_articles_with_empty_list(
 async def test_news_endpoint_includes_analysis(
     client,
     db_session: AsyncSession,
+    sample_ai_model: AIModel,
 ) -> None:
     article = NewsArticle(
         title_original="Test Article",
@@ -492,11 +507,10 @@ async def test_news_endpoint_includes_analysis(
 
     analysis = AnalysisResult(
         news_article_id=article.id,
+        ai_model_id=sample_ai_model.id,
         sentiment="positive",
         impact_score=8,
         reasoning="テスト理由",
-        ai_provider="gemini",
-        ai_model="gemini-2.0-flash",
     )
     db_session.add(analysis)
     await db_session.flush()
@@ -518,4 +532,117 @@ async def test_news_endpoint_includes_analysis(
     assert data["analysis"]["title"] == "テスト記事"
     assert data["analysis"]["sentiment"] == "positive"
     assert data["analysis"]["impactScore"] == 8
-    assert "aiModel" not in data["analysis"]
+    assert "aiModel" in data["analysis"]
+
+
+# --- F. Keyword tagging tests ---
+
+
+def test_parse_response_with_keywords() -> None:
+    analyzer = _create_analyzer()
+    raw = _make_gemini_response(keywords=["Quantum Computing", "Error Correction"])
+    kw_by_cat = {"quantum": ["Quantum Computing", "Error Correction", "Drug Discovery"]}
+    result = analyzer._parse_response(raw, keywords_by_category=kw_by_cat)
+    assert result.keywords == ["Quantum Computing", "Error Correction"]
+
+
+def test_parse_response_filters_invalid_keywords() -> None:
+    analyzer = _create_analyzer()
+    raw = _make_gemini_response(keywords=["Quantum Computing", "Not A Candidate"])
+    kw_by_cat = {"quantum": ["Quantum Computing", "Error Correction"]}
+    result = analyzer._parse_response(raw, keywords_by_category=kw_by_cat)
+    assert result.keywords == ["Quantum Computing"]
+
+
+def test_parse_response_keywords_without_candidates() -> None:
+    """Keywords in response are ignored when no candidates were provided."""
+    analyzer = _create_analyzer()
+    raw = _make_gemini_response(keywords=["Quantum Computing"])
+    result = analyzer._parse_response(raw, keywords_by_category=None)
+    assert result.keywords is None
+
+
+def test_parse_response_limits_keywords_to_three() -> None:
+    analyzer = _create_analyzer()
+    raw = _make_gemini_response(
+        keywords=["A", "B", "C", "D"]
+    )
+    kw_by_cat = {"cat1": ["A", "B"], "cat2": ["C", "D"]}
+    result = analyzer._parse_response(raw, keywords_by_category=kw_by_cat)
+    assert len(result.keywords) == 3
+
+
+async def test_analyze_article_saves_keyword_links(
+    db_session: AsyncSession,
+    sample_keyword_categories: list[KeywordCategory],
+    sample_ai_model: AIModel,
+) -> None:
+    """AI analysis should create news_keywords links for matched keywords."""
+    # Create keywords in category
+    kw1 = Keyword(keyword="Quantum Computing")
+    kw2 = Keyword(keyword="Error Correction")
+    kw3 = Keyword(keyword="Drug Discovery")
+    db_session.add_all([kw1, kw2, kw3])
+    await db_session.flush()
+
+    # Link keywords to categories
+    for kw in [kw1, kw2, kw3]:
+        db_session.add(
+            KeywordCategoryLink(
+                keyword_id=kw.id,
+                category_id=sample_keyword_categories[0].id,
+            )
+        )
+    await db_session.flush()
+
+    article = NewsArticle(
+        title_original="Quantum Error Correction",
+        url="https://example.com/kw-tag-test",
+        source="Test Source",
+    )
+    db_session.add(article)
+    await db_session.commit()
+    await db_session.refresh(article)
+
+    mock_analyzer = MagicMock(spec=BaseAnalyzer)
+    mock_analyzer.provider_name = "gemini"
+    mock_analyzer.model_name = "gemini-2.0-flash"
+    mock_analyzer.analyze = AsyncMock(
+        return_value=AnalysisData(
+            title="量子エラー訂正",
+            summary="要約",
+            sentiment="positive",
+            impact_score=8,
+            keywords=["Quantum Computing", "Error Correction"],
+        )
+    )
+
+    result = await analyze_article(db_session, article, mock_analyzer)
+    await db_session.commit()
+
+    assert result is not None
+
+    # Verify keyword links were created
+    stmt = select(NewsKeyword).where(NewsKeyword.news_article_id == article.id)
+    links = (await db_session.execute(stmt)).scalars().all()
+    assert len(links) == 2
+
+    linked_kws = set()
+    for link in links:
+        kw_stmt = select(Keyword).where(Keyword.id == link.keyword_id)
+        kw = (await db_session.execute(kw_stmt)).scalar_one()
+        linked_kws.add(kw.keyword)
+    assert linked_kws == {"Quantum Computing", "Error Correction"}
+
+    # Verify keywords_by_category were passed to analyzer
+    call_kwargs = mock_analyzer.analyze.call_args.kwargs
+    assert "keywords_by_category" in call_kwargs
+    kw_by_cat = call_kwargs["keywords_by_category"]
+    all_kws = set()
+    for kws in kw_by_cat.values():
+        all_kws.update(kws)
+    assert all_kws == {
+        "Quantum Computing",
+        "Error Correction",
+        "Drug Discovery",
+    }

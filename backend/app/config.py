@@ -9,8 +9,13 @@ class Settings(BaseSettings):
 
     # AI
     ai_provider: str = "gemini"
+    ai_model_name: str = "gemini-2.5-flash-lite"
     gemini_api_key: str = ""
     openai_api_key: str = ""
+
+    # AI Model IDs
+    default_ai_model_id: int = 1
+    evaluation_ai_model_id: int | None = None
 
     # News Fetcher
     check_interval_minutes: int = 30

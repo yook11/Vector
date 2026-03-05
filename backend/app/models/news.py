@@ -45,10 +45,7 @@ class NewsArticle(SQLModel, table=True):
     guid: str | None = Field(default=None, max_length=2048, unique=True)
 
     # Relationships
-    analysis: "AnalysisResult" = Relationship(
-        back_populates="news_article",
-        sa_relationship_kwargs={"uselist": False},
-    )
+    analyses: list["AnalysisResult"] = Relationship(back_populates="news_article")
     keyword_links: list["NewsKeyword"] = Relationship(back_populates="news_article")
     watchlist_items: list["WatchlistItem"] = Relationship(back_populates="news_article")
     source_ref: "NewsSource" = Relationship(

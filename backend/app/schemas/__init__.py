@@ -1,4 +1,4 @@
-from app.schemas.analysis import AnalysisResponse
+from app.schemas.analysis import AIModelBrief, AnalysisResponse
 from app.schemas.category import (
     CategoryBrief,
     CategoryListResponse,
@@ -24,6 +24,7 @@ from app.schemas.news import (
 )
 
 __all__ = [
+    "AIModelBrief",
     "AnalysisResponse",
     "CategoryBrief",
     "CategoryListResponse",
