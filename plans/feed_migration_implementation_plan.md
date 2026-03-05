@@ -389,23 +389,135 @@ ORDER BY next_fetch_at ASC NULLS FIRST;
 - 旧テスト: `fetch_news_for_keywords` + `_build_rss_url` + URL decode 系 → 全削除
 - 新テスト: `fetch_news_for_sources` + `_extract_guid` + Conditional GET + 304 + full content 検出
 
-### Phase B: 取得品質の改善
+### Phase B: 取得品質の改善 + ソース管理
 
-**目標:** 本文抽出の品質・効率を向上
+**目標:** 本文抽出の品質向上、AI キーワードタグ付け、ソース管理 API/UI の構築
 
-| # | タスク | 対象ファイル |
-|---|--------|------------|
-| B-1 | trafilatura 導入 — `newspaper4k` からの移行 | `services/content_extractor.py` |
-|     | フォールバックチェーン: RSS 全文 → trafilatura → newspaper4k | |
-|     | ⚠️ 新パッケージ追加は CLAUDE.md の "Ask first" ルールに該当。`content_extractor.py` の大幅改修を伴う | |
-| B-2 | `news_keywords` の INSERT ロジック移動（ハイブリッドタグ付け） | `services/ai_analyzer.py` |
-|     | Phase A で `news_fetcher.py` から削除された `_link_keyword_to_article()` のロジックを移植 | |
-| B-3 | ソース管理 API — `news_sources` CRUD エンドポイント | `routers/news_sources.py`, `schemas/news_source.py` |
-| B-4 | ソース管理 UI — `settings/page.tsx` にソース管理セクション配置 | `frontend/src/app/(protected)/settings/page.tsx` |
-|     | - ソース一覧表示（名前、URL/エンドポイント、カテゴリ、ステータス） | |
-|     | - 追加・編集・削除 | |
-|     | - 有効/無効切替 | |
-|     | - `consecutive_errors >= 5` の警告表示 | |
+**依存関係:** B-1 / B-2 は独立して並行可能。B-3 → B-4 は順序依存。B-1/B-2 と B-3/B-4 の間に依存なし。
+
+#### B-1: trafilatura 導入 — `newspaper4k` の抽出エンジン置き換え ✅ 完了
+
+**対象ファイル:**
+- 変更: `backend/app/services/content_extractor.py` — `_parse_article_html()` 内の抽出エンジンを置き換え
+- 変更: `backend/requirements.txt` — `trafilatura` 追加、`newspaper4k` / `lxml-html-clean` 削除
+- 変更: `backend/pyproject.toml` — 同上（UV 環境用）
+
+**スコープの明確化:**
+- Phase A で RSS 全文検出（`content:encoded` → 500文字超ヒューリスティック）は `news_fetcher.py` の `_extract_full_content()` に既に実装済み
+- `content_extractor.py` は taskiq_worker Phase 3 でのみ呼ばれ、`content_fetched_at IS NULL` の記事のみが対象（RSS 全文取得済みの記事はスキップされる）
+- **従って B-1 のスコープは `_parse_article_html()` 内の `newspaper4k` → `trafilatura` 置き換えに限定**。RSS 全文フォールバックは既存のまま
+
+**実装済み内容:**
+1. `_parse_article_html()` 内で `newspaper.Article` → `trafilatura.extract()` に置き換え
+   - `trafilatura.extract(html, url=url, favor_precision=True, include_comments=False, include_tables=True, deduplicate=True)`
+   - 抽出結果が `None` または 50文字未満の場合は `None` を返す（従来と同じフォールバック挙動）
+2. `asyncio.to_thread()` ラッパーは維持（trafilatura も同期関数のため）
+3. 依存関係: `newspaper4k` + `lxml-html-clean` 削除 → `trafilatura>=1.12,<2` 追加（`requirements.txt` と `pyproject.toml` の両方）
+
+#### B-2: AI キーワードタグ付け（ハイブリッドタグ付け Phase 2） ✅ 完了
+
+**対象ファイル:**
+- 変更: `backend/app/services/ai_analyzer.py` — `analyze_article()` に `news_keywords` INSERT ロジック追加
+- 変更: `backend/app/services/gemini_analyzer.py` — プロンプトに keywords 候補リスト + タグ選択指示を追加
+- 変更: `backend/app/services/ai_analyzer.py` — `BaseAnalyzer.analyze()` のシグネチャ / `AnalysisData` に keywords フィールド追加
+- 変更: `backend/tests/test_ai_analyzer.py` — keywords タグ付けのテスト追加
+
+**背景:**
+- 旧方式（Phase A で削除済み）: `news_fetcher.py` が Google News のキーワード検索結果から `_link_keyword_to_article()` でルールベースリンク
+- 新方式: AI が記事内容を分析し、`keywords` テーブルの候補から適切なタグを選択して `news_keywords` に INSERT
+
+**実装済み内容:**
+1. `AnalysisData` に `keywords: list[str] | None = None` フィールドを追加
+2. `BaseAnalyzer.analyze()` に `keyword_candidates: list[str] | None = None` パラメータを追加（抽象メソッド）
+3. `GeminiAnalyzer.analyze()`:
+   - `keyword_candidates` が提供された場合、プロンプト末尾に「Choose up to 3 relevant keywords from: [候補リスト]」の指示を追加
+   - JSON レスポンスに `"keywords": ["keyword1", "keyword2"]` フィールドを期待
+4. `GeminiAnalyzer._parse_response()`:
+   - `keyword_candidates` パラメータを受け取り、返却された keywords を候補リストに対してバリデーション
+   - 候補に含まれないキーワードを除外、最大 3 個に制限
+5. `analyze_article()`:
+   - 記事の `source_id` → `NewsSource.category_id` → `KeywordCategoryLink` → `Keyword` の経路で候補キーワードを DB クエリ
+   - AI 分析結果の `keywords` を `news_keywords` テーブルに INSERT（`keyword.name` → `keyword.id` の逆引きで ID 解決）
+   - `source_id` が `None`（既存記事）の場合は keywords タグ付けをスキップ
+6. **空白期間の解消:** Phase A 完了〜B-2 完了の間の `news_keywords` INSERT 停止が解消された
+
+**テスト追加（5件）:**
+- `test_parse_response_with_keywords` — keywords フィールドのパース検証
+- `test_parse_response_filters_invalid_keywords` — 候補外キーワードの除外検証
+- `test_parse_response_keywords_without_candidates` — 候補なし時の空リスト検証
+- `test_parse_response_limits_keywords_to_three` — 最大 3 個制限の検証
+- `test_analyze_article_saves_keyword_links` — DB への `news_keywords` INSERT 検証（統合テスト）
+
+#### B-3: ソース管理 API — `news_sources` CRUD エンドポイント ✅ 完了
+
+**対象ファイル:**
+- 新規: `backend/app/routers/news_sources.py` — CRUD ルーター
+- 新規: `backend/app/schemas/news_source.py` — Pydantic スキーマ（SSoT）
+- 変更: `backend/app/main.py` — ルーター登録
+- 新規: `backend/tests/test_routers/test_news_sources.py` — API テスト
+- 変更: `frontend/src/types/generated.ts` — 型再生成
+
+**エンドポイント設計:**
+| メソッド | パス | 機能 |
+|---------|------|------|
+| `GET` | `/api/v1/sources` | ソース一覧（カテゴリ情報込み） |
+| `GET` | `/api/v1/sources/{id}` | ソース詳細 |
+| `POST` | `/api/v1/sources` | ソース新規作成 |
+| `PUT` | `/api/v1/sources/{id}` | ソース更新 |
+| `DELETE` | `/api/v1/sources/{id}` | ソース削除 |
+| `PATCH` | `/api/v1/sources/{id}/toggle` | 有効/無効切替 |
+
+**実装済み内容:**
+
+スキーマ（`backend/app/schemas/news_source.py`）:
+- `NewsSourceCreate` — `source_type` バリデータ（`"rss"` / `"api"` 限定）、`fetch_interval_minutes` バリデータ（15〜1440）
+- `NewsSourceUpdate` — 全フィールド `Optional`
+- `NewsSourceResponse` — `category_name: str | None` を追加（Eager load した `category.translations[0].name` から取得）
+- `NewsSourceListResponse` — `items: list[NewsSourceResponse]`, `total: int`
+
+ルーター（`backend/app/routers/news_sources.py`）:
+- 全エンドポイントで認証必須（`get_current_user` 依存）
+- Category の `translations` を Eager load し、`category_name` をレスポンスに含める
+- `PATCH toggle`: `is_active` 反転 + 再有効化時に `next_fetch_at = None`（即取得対象、D-2 準拠）
+- `main.py` に `app.include_router(news_sources.router)` を追加
+
+**テスト追加（14件）:**
+- 一覧（空・データあり）、詳細取得（正常・404）、作成（RSS・API・バリデーションエラー）、更新、削除、トグル、認証なしアクセスの網羅テスト
+
+#### B-4: ソース管理 UI — `settings/page.tsx` にソース管理セクション配置 ✅ 完了
+
+**対象ファイル:**
+- 変更: `frontend/src/app/(protected)/settings/page.tsx` — redirect 削除、ソース管理 UI 実装
+- 新規: `frontend/src/components/sources/SourceManager.tsx` — コンテナコンポーネント
+- 新規: `frontend/src/components/sources/SourceTable.tsx` — ソース一覧テーブル
+- 新規: `frontend/src/components/sources/SourceFormDialog.tsx` — 追加・編集フォームダイアログ
+- 変更: `frontend/src/lib/client-api.ts` — ソース CRUD API クライアント関数追加
+- 変更: `frontend/src/types/index.ts` — `NewsSourceResponse`, `NewsSourceListResponse`, `NewsSourceCreate`, `NewsSourceUpdate` re-export 追加
+- 変更: `frontend/src/types/generated.ts` — `npm run generate-types` で再生成
+
+**実装済み内容:**
+
+`settings/page.tsx`:
+- `redirect("/")` を削除し、サーバーコンポーネントとして実装
+- SSR でソース一覧とキーワードカテゴリを並列取得（`Promise.all`）
+- `SourceManager` コンポーネントにデータを渡す
+
+`SourceManager.tsx`:
+- ヘッダー（タイトル + 説明文）、「Add Source」ボタン（`SourceFormDialog` のトリガー）、`SourceTable` を配置
+
+`SourceTable.tsx`:
+- テーブルカラム: Name, Type（badge）, Category, URL/Endpoint, Status（Switch トグル）, Last Fetched, Actions（Edit/Delete）
+- `consecutive_errors >= 5` の場合に赤い「Error」バッジ表示
+- 削除確認は `AlertDialog` で実装
+- トグル操作は `clientToggleSource()` → `router.refresh()` で即時反映
+
+`SourceFormDialog.tsx`:
+- 作成/編集の両モードに対応（`source` props の有無で切替）
+- フォームフィールド: name, sourceType（Select: RSS/API）, feedUrl/apiEndpoint（sourceType で条件表示切替）, category（Select: カテゴリ一覧）, siteUrl, fetchIntervalMinutes（Select: 15分〜24時間のプリセット）
+- バリデーション: 必須フィールドチェック、送信後にダイアログ閉じ + `router.refresh()`
+
+`client-api.ts` — 5 関数追加:
+- `clientListSources()`, `clientCreateSource()`, `clientUpdateSource()`, `clientDeleteSource()`, `clientToggleSource()`
 
 ### Phase C: ソース拡張 + 補完
 
@@ -470,7 +582,9 @@ ORDER BY next_fetch_at ASC NULLS FIRST;
 
 ---
 
-## 検証プロトコル（Phase A 完了後）
+## 検証プロトコル
+
+### Phase A 完了後
 
 ```bash
 # Backend: lint + format + test
@@ -486,7 +600,7 @@ cd backend && alembic upgrade head
 docker compose up -d && docker compose ps
 ```
 
-### 手動確認項目
+#### 手動確認項目
 
 1. `POST /api/v1/news/fetch` でタスクがエンキューされること
 2. worker ログでソース取得が実行されること（`next_fetch_at` チェック → 対象ソース取得）
@@ -496,3 +610,28 @@ docker compose up -d && docker compose ps
 6. 304 Not Modified 時に `consecutive_errors` が増加しないこと
 7. `GET /api/v1/news` で記事が返ること
 8. 既存記事（`source_id = NULL`）が引き続き正常に表示されること
+
+### Phase B 完了後
+
+```bash
+# Backend: lint + format + test（B-1, B-2, B-3 完了後）
+cd backend && ruff check app/ && ruff format --check app/ && python -m pytest tests/ -x -q
+
+# Frontend: lint + type check（B-4 完了後）
+cd frontend && npx eslint src/ && npx tsc --noEmit
+
+# 型再生成の整合性確認（B-3 完了後）
+cd frontend && npm run generate-types && npx tsc --noEmit
+```
+
+#### 手動確認項目
+
+1. **B-1:** `content_extractor.py` が trafilatura で本文抽出できること（worker Phase 3 ログで確認）
+2. **B-2:** AI 分析後、`news_keywords` に記事×キーワードのリンクが INSERT されること
+3. **B-2:** `GET /api/v1/news/{id}` のレスポンスに `keywordLinks` が含まれること
+4. **B-3:** `GET /api/v1/sources` でシード済みの 7 ソースが返ること
+5. **B-3:** `POST /api/v1/sources` で新規ソースが作成でき、次回取得対象になること
+6. **B-3:** `PATCH /api/v1/sources/{id}/toggle` で `is_active` が切り替わること
+7. **B-4:** `/settings` ページでソース一覧が表示されること
+8. **B-4:** ソースの追加・編集・削除・有効無効切替が UI から操作できること
+9. **B-4:** `consecutive_errors >= 5` のソースに警告表示が出ること

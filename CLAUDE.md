@@ -10,6 +10,10 @@
 - AI: Gemini API (抽象化済み、差し替え可能)
 - インフラ: Docker Compose
 
+## パッケージ管理
+- Python パッケージの追加・削除は `pip` ではなく `uv pip` を使うこと
+- パッケージ追加後は `requirements.txt` も更新すること
+
 ## 設計ドキュメント（必要時に参照）
 
 タスクに応じて該当ドキュメントを読むこと。全部一度に読む必要はない。
@@ -43,34 +47,10 @@ cd backend && ruff check app/ && ruff format --check app/ && python -m pytest te
 cd frontend && npx eslint src/ && npx tsc --noEmit
 ```
 
-## リサーチ義務（実装前の公式ドキュメント確認）
+## リサーチ義務
 
-### 原則
-ライブラリのAPI・設定・パターンについて確信が持てない場合、
-**推測でコードを書かず、必ず WebSearch / WebFetch で公式ドキュメントを確認**すること。
-内部知識だけに頼った実装は、古いAPI仕様や非推奨パターンの混入を招く。
-
-### 信頼できる情報源（ホワイトリスト）
-以下のドメインのみを情報源として使用すること。
-これ以外のドメイン（Stack Overflow、Qiita、Zenn、個人ブログ等）は参照禁止。
-
-**Backend / Frontend の技術固有URL**
-→ 各ディレクトリの `CLAUDE.md` に定義。バージョン・パスまで固定済み。
-
-**AI / インフラ / パッケージ情報（プロジェクト共通）**
-- `https://ai.google.dev/docs` — Gemini API
-- `https://docs.docker.com/` — Docker
-- `https://github.com/` — ソースコード、README、Issues
-- `https://pypi.org/` / `https://www.npmjs.com/` — バージョン情報
-
-### 検索委譲パターン
-リサーチでメインエージェントのコンテキストウィンドウを圧迫しないよう、
-以下のパターンで検索を実行すること。
-
-1. リサーチはサブエージェント（サブタスク）として実行する
-2. サブエージェントが公式ドキュメントを検索・取得する
-3. **検索結果の要約のみ**をメインプロセスに報告する（HTML全文を持ち込まない）
-4. メインエージェントは要約を元に実装を進める
+ライブラリのAPIに確信が持てない場合、推測でコードを書かず `/research` スキルを使うこと。
+信頼できる情報源は各ディレクトリの `CLAUDE.md` と `/research` スキルに定義済み。
 
 ## 開発ルール
 
@@ -125,10 +105,17 @@ cd frontend && npx eslint src/ && npx tsc --noEmit
 
 ## サブエージェントへの指示方針
 
-1. 対象ディレクトリとそのCLAUDE.mdを必ず明示する
-2. SSoTは `backend/app/schemas/` の Pydantic モデルであることを伝える
-3. 必要な設計ドキュメントは**1〜2個に絞って**渡す
-4. 指示テンプレートの詳細は `docs/03_CLAUDE_CODE_WORKFLOW.md` を参照
+- 対象ディレクトリとその CLAUDE.md を明示、設計ドキュメントは1〜2個に絞る
+- 詳細は `docs/03_CLAUDE_CODE_WORKFLOW.md` を参照
+
+## スキル一覧
+
+| コマンド | 用途 |
+|---------|------|
+| `/review` | lint + テスト + 型チェックの一括検証 |
+| `/db-migrate` | Alembic マイグレーション作成ワークフロー |
+| `/gen-types` | Pydantic → OpenAPI → TypeScript 型生成 |
+| `/research` | 公式ドキュメント調査（サブエージェント実行） |
 
 ## 開発の始め方
 
