@@ -145,15 +145,12 @@ async def sample_keyword(db_session: AsyncSession) -> Keyword:
 
 
 @pytest.fixture
-async def sample_source(
-    db_session: AsyncSession, sample_keyword_categories: list[KeywordCategory]
-) -> NewsSource:
+async def sample_source(db_session: AsyncSession) -> NewsSource:
     """Create and return a test RSS news source."""
     source = NewsSource(
         name="Test Tech Source",
         source_type="rss",
         feed_url="https://example.com/feed.xml",
-        category_id=sample_keyword_categories[0].id,  # ai_ml
     )
     db_session.add(source)
     await db_session.commit()
