@@ -7,7 +7,15 @@ from sqlalchemy import text
 
 from app.config import settings
 from app.db import engine
-from app.routers import auth, categories, keyword_categories, keywords, me, news
+from app.routers import (
+    auth,
+    categories,
+    keyword_categories,
+    keywords,
+    me,
+    news,
+    news_sources,
+)
 
 
 @asynccontextmanager
@@ -41,6 +49,7 @@ app.include_router(keyword_categories.router)
 app.include_router(keywords.router)
 app.include_router(me.router)
 app.include_router(news.router)
+app.include_router(news_sources.router)
 
 
 @app.get("/api/v1/health")

@@ -316,6 +316,78 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Sources
+         * @description List all news sources.
+         */
+        get: operations["list_sources_api_v1_sources_get"];
+        put?: never;
+        /**
+         * Create Source
+         * @description Create a new news source.
+         */
+        post: operations["create_source_api_v1_sources_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sources/{source_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Source
+         * @description Get a single news source by ID.
+         */
+        get: operations["get_source_api_v1_sources__source_id__get"];
+        /**
+         * Update Source
+         * @description Update an existing news source.
+         */
+        put: operations["update_source_api_v1_sources__source_id__put"];
+        post?: never;
+        /**
+         * Delete Source
+         * @description Delete a news source.
+         */
+        delete: operations["delete_source_api_v1_sources__source_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sources/{source_id}/toggle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Toggle Source
+         * @description Toggle a news source's is_active status.
+         */
+        patch: operations["toggle_source_api_v1_sources__source_id__toggle_patch"];
+        trace?: never;
+    };
     "/api/v1/health": {
         parameters: {
             query?: never;
@@ -338,6 +410,18 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
+         * AIModelBrief
+         * @description Brief AI model info embedded in AnalysisResponse.
+         */
+        AIModelBrief: {
+            /** Id */
+            id: number;
+            /** Provider */
+            provider: string;
+            /** Name */
+            name: string;
+        };
+        /**
          * AnalysisResponse
          * @description AI analysis result embedded in NewsResponse.
          */
@@ -352,8 +436,7 @@ export interface components {
             impactScore: number;
             /** Reasoning */
             reasoning?: string | null;
-            /** Aiprovider */
-            aiProvider: string;
+            aiModel: components["schemas"]["AIModelBrief"];
             /**
              * Analyzedat
              * Format: date-time
@@ -605,6 +688,98 @@ export interface components {
              * @default false
              */
             isWatched: boolean;
+        };
+        /**
+         * NewsSourceCreate
+         * @description POST /api/v1/sources request body.
+         */
+        NewsSourceCreate: {
+            /** Name */
+            name: string;
+            /** Sourcetype */
+            sourceType: string;
+            /** Siteurl */
+            siteUrl?: string | null;
+            /** Feedurl */
+            feedUrl?: string | null;
+            /** Apiendpoint */
+            apiEndpoint?: string | null;
+            /**
+             * Fetchintervalminutes
+             * @default 720
+             */
+            fetchIntervalMinutes: number;
+        };
+        /**
+         * NewsSourceListResponse
+         * @description GET /api/v1/sources response wrapper.
+         */
+        NewsSourceListResponse: {
+            /** Items */
+            items: components["schemas"]["NewsSourceResponse"][];
+            /** Total */
+            total: number;
+        };
+        /**
+         * NewsSourceResponse
+         * @description Single news source in API responses.
+         */
+        NewsSourceResponse: {
+            /** Id */
+            id: number;
+            /** Name */
+            name: string;
+            /** Sourcetype */
+            sourceType: string;
+            /** Siteurl */
+            siteUrl?: string | null;
+            /** Isactive */
+            isActive: boolean;
+            /** Feedurl */
+            feedUrl?: string | null;
+            /** Apiendpoint */
+            apiEndpoint?: string | null;
+            /** Fetchintervalminutes */
+            fetchIntervalMinutes: number;
+            /** Nextfetchat */
+            nextFetchAt?: string | null;
+            /** Lastfetchedat */
+            lastFetchedAt?: string | null;
+            /**
+             * Consecutiveerrors
+             * @default 0
+             */
+            consecutiveErrors: number;
+            /** Lasterrormessage */
+            lastErrorMessage?: string | null;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+        };
+        /**
+         * NewsSourceUpdate
+         * @description PUT /api/v1/sources/{id} request body.
+         */
+        NewsSourceUpdate: {
+            /** Name */
+            name?: string | null;
+            /** Sourcetype */
+            sourceType?: string | null;
+            /** Siteurl */
+            siteUrl?: string | null;
+            /** Feedurl */
+            feedUrl?: string | null;
+            /** Apiendpoint */
+            apiEndpoint?: string | null;
+            /** Fetchintervalminutes */
+            fetchIntervalMinutes?: number | null;
         };
         /**
          * PaginatedNewsResponse
@@ -1420,6 +1595,185 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NewsFetchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_sources_api_v1_sources_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NewsSourceListResponse"];
+                };
+            };
+        };
+    };
+    create_source_api_v1_sources_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewsSourceCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NewsSourceResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_source_api_v1_sources__source_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NewsSourceResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_source_api_v1_sources__source_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewsSourceUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NewsSourceResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_source_api_v1_sources__source_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    toggle_source_api_v1_sources__source_id__toggle_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NewsSourceResponse"];
                 };
             };
             /** @description Validation Error */

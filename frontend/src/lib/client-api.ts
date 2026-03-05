@@ -7,6 +7,10 @@ import type {
   KeywordUpdate,
   NewsFetchRequest,
   NewsFetchResponse,
+  NewsSourceCreate,
+  NewsSourceListResponse,
+  NewsSourceResponse,
+  NewsSourceUpdate,
 } from "@/types";
 
 function getBaseUrl(): string {
@@ -140,6 +144,43 @@ export async function clientTriggerFetch(
   return clientFetch<NewsFetchResponse>("/news/fetch", {
     method: "POST",
     body: JSON.stringify(body ?? {}),
+  });
+}
+
+// --- Sources ---
+
+export async function clientListSources(): Promise<NewsSourceListResponse> {
+  return clientFetch<NewsSourceListResponse>("/sources");
+}
+
+export async function clientCreateSource(
+  body: NewsSourceCreate,
+): Promise<NewsSourceResponse> {
+  return clientFetch<NewsSourceResponse>("/sources", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function clientUpdateSource(
+  id: number,
+  body: NewsSourceUpdate,
+): Promise<NewsSourceResponse> {
+  return clientFetch<NewsSourceResponse>(`/sources/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function clientDeleteSource(id: number): Promise<void> {
+  return clientFetch<void>(`/sources/${id}`, { method: "DELETE" });
+}
+
+export async function clientToggleSource(
+  id: number,
+): Promise<NewsSourceResponse> {
+  return clientFetch<NewsSourceResponse>(`/sources/${id}/toggle`, {
+    method: "PATCH",
   });
 }
 

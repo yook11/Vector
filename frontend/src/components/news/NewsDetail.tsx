@@ -94,8 +94,7 @@ export function NewsDetail({ article }: { article: NewsResponse }) {
             <Separator />
 
             <p className="text-xs text-muted-foreground">
-              Analyzed by {analysis.aiProvider} at{" "}
-              {formatDate(analysis.analyzedAt)}
+              Analyzed at {formatDate(analysis.analyzedAt)}
             </p>
           </CardContent>
         </Card>

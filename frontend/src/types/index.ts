@@ -101,3 +101,11 @@ export type SubscriptionListResponse =
 export type WatchlistResponse = components["schemas"]["WatchlistResponse"];
 export type WatchlistListResponse =
   components["schemas"]["WatchlistListResponse"];
+
+// News sources
+export type NewsSourceResponse =
+  components["schemas"]["NewsSourceResponse"];
+export type NewsSourceListResponse =
+  components["schemas"]["NewsSourceListResponse"];
+export type NewsSourceCreate = components["schemas"]["NewsSourceCreate"];
+export type NewsSourceUpdate = components["schemas"]["NewsSourceUpdate"];
