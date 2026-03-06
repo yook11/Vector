@@ -1,6 +1,7 @@
 """News fetcher service — fetches articles from subscribed news sources."""
 
 import asyncio
+import time
 from calendar import timegm
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -12,8 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from app.config import settings
+from app.models.fetch_log import FetchLog
 from app.models.news import NewsArticle
-from app.models.news_source import NewsSource
+from app.models.news_source import NewsSource, SourceType
 
 HTTP_TIMEOUT = 30.0
 
@@ -262,10 +264,38 @@ async def fetch_news_for_sources(
                 type=source.source_type,
             )
 
-            if source.source_type == "rss":
+            start_time = time.monotonic()
+
+            if source.source_type == SourceType.RSS:
                 source_result = await _fetch_rss_source(client, session, source)
+            elif source.source_type == SourceType.API:
+                if source.api_endpoint == "hacker-news":
+                    from app.services.hacker_news import HackerNewsClient
+
+                    hn_client = HackerNewsClient(client)
+                    source_result = await hn_client.fetch_and_save_stories(
+                        source=source, session=session
+                    )
+                elif source.api_endpoint == "alpha-vantage":
+                    from app.services.alpha_vantage import AlphaVantageClient
+
+                    av_client = AlphaVantageClient(client)
+                    source_result = await av_client.fetch_and_save_articles(
+                        source=source, session=session
+                    )
+                else:
+                    logger.warning(
+                        "unsupported_api_endpoint",
+                        source=source.name,
+                        api_endpoint=source.api_endpoint,
+                    )
+                    msg = f"Unsupported API endpoint: {source.api_endpoint}"
+                    source_result = SourceFetchResult(
+                        source_id=source.id,
+                        success=False,
+                        error_message=msg,
+                    )
             else:
-                # API sources (Hacker News, Alpha Vantage) — Phase C
                 logger.warning(
                     "unsupported_source_type",
                     source=source.name,
@@ -276,6 +306,18 @@ async def fetch_news_for_sources(
                     success=False,
                     error_message=f"Unsupported source type: {source.source_type}",
                 )
+
+            duration_ms = int((time.monotonic() - start_time) * 1000)
+
+            # Record fetch log
+            fetch_log = FetchLog(
+                source_id=source.id,
+                status="success" if source_result.success else "error",
+                articles_count=source_result.new_count,
+                error_message=source_result.error_message,
+                duration_ms=duration_ms,
+            )
+            session.add(fetch_log)
 
             result.source_results.append(source_result)
             result.new_count += source_result.new_count

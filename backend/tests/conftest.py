@@ -16,6 +16,7 @@ from app.main import app
 from app.models import (  # noqa: F401
     AIModel,
     AnalysisInvestmentCategory,
+    FetchLog,
     AnalysisResult,
     AnalysisTranslation,
     InvestmentCategory,
@@ -162,6 +163,40 @@ async def sample_source(db_session: AsyncSession) -> NewsSource:
         name="Test Tech Source",
         source_type="rss",
         feed_url="https://example.com/feed.xml",
+    )
+    db_session.add(source)
+    await db_session.commit()
+    await db_session.refresh(source)
+    return source
+
+
+@pytest.fixture
+async def sample_hn_source(db_session: AsyncSession) -> NewsSource:
+    """Create and return a test Hacker News API source."""
+    source = NewsSource(
+        name="Hacker News",
+        source_type="api",
+        api_endpoint="hacker-news",
+        site_url="https://news.ycombinator.com",
+        is_active=True,
+        fetch_interval_minutes=360,
+    )
+    db_session.add(source)
+    await db_session.commit()
+    await db_session.refresh(source)
+    return source
+
+
+@pytest.fixture
+async def sample_av_source(db_session: AsyncSession) -> NewsSource:
+    """Create and return a test Alpha Vantage API source."""
+    source = NewsSource(
+        name="Alpha Vantage",
+        source_type="api",
+        api_endpoint="alpha-vantage",
+        site_url="https://www.alphavantage.co",
+        is_active=True,
+        fetch_interval_minutes=1440,
     )
     db_session.add(source)
     await db_session.commit()

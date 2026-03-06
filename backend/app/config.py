@@ -45,6 +45,18 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:3000"
     backend_url: str = "http://localhost:8000"
 
+    # Hacker News API
+    hn_api_base_url: str = "https://hn.algolia.com/api/v1"
+    hn_min_points: int = 20
+    hn_hits_per_page: int = 50
+
+    # Alpha Vantage API
+    av_api_key: str = ""
+    av_api_base_url: str = "https://www.alphavantage.co/query"
+    av_topics: str = "technology"
+    av_limit: int = 50
+    av_max_daily_requests: int = 25
+
     # Task Queue
     redis_url: str = "redis://localhost:6379/0"
 

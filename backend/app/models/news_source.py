@@ -49,9 +49,11 @@ class NewsSource(SQLModel, table=True):
 
     # Relationships
     articles: list["NewsArticle"] = Relationship(back_populates="source_ref")
+    fetch_logs: list["FetchLog"] = Relationship(back_populates="source")
 
 
 # Resolve forward references
+from app.models.fetch_log import FetchLog  # noqa: E402, F811
 from app.models.news import NewsArticle  # noqa: E402, F811
 
 NewsSource.model_rebuild()
