@@ -148,11 +148,22 @@ erDiagram
         timestamp created_at
     }
 
+    fetch_logs {
+        int id PK
+        int source_id FK "news_sources.id CASCADE"
+        string status "success | error"
+        int articles_count "取得記事数"
+        text error_message "エラー詳細"
+        int duration_ms "処理時間(ms)"
+        timestamp fetched_at "取得日時"
+    }
+
     keyword_categories ||--o{ keyword_category_translations : "has many"
     keyword_categories ||--o{ keyword_category_links : "has many"
     keywords ||--o{ keyword_category_links : "belongs to"
     keywords ||--o{ news_keywords : "has many"
     keywords ||--o{ user_keyword_subscriptions : "subscribed by"
+    news_sources ||--o{ fetch_logs : "has many"
     news_sources ||--o{ news_articles : "has many"
     news_articles ||--o{ news_keywords : "has many"
     news_articles ||--o{ analyses : "has many"
@@ -240,6 +251,21 @@ Check制約:
 - `idx_sources_active_next_fetch` on `next_fetch_at` (部分: is_active = TRUE)
 
 シードデータ: TechCrunch, FierceBiotech, BioPharma Dive 等 7フィード
+
+### fetch_logs
+
+| カラム | 型 | 制約 | 備考 |
+|--------|-----|------|------|
+| id | SERIAL | PK | |
+| source_id | INT | FK → news_sources.id, ON DELETE CASCADE, NOT NULL | ニュースソース |
+| status | VARCHAR(20) | NOT NULL | "success" / "error" |
+| articles_count | INT | NOT NULL, DEFAULT 0 | 取得記事数 |
+| error_message | TEXT | NULLABLE | エラー詳細 |
+| duration_ms | INT | NULLABLE | フェッチ処理時間（ミリ秒） |
+| fetched_at | TIMESTAMPTZ | NOT NULL, DEFAULT NOW() | 取得日時 |
+
+インデックス:
+- `ix_fetch_logs_source_id_fetched_at` on `(source_id, fetched_at)` — クォータチェック・履歴参照用
 
 ### news_articles
 
@@ -501,6 +527,24 @@ class NewsSource(SQLModel, table=True):
 
     # Relationships
     articles: list["NewsArticle"] = Relationship(back_populates="source_ref")
+    fetch_logs: list["FetchLog"] = Relationship(back_populates="source")
+```
+
+```python
+# models/fetch_log.py
+class FetchLog(SQLModel, table=True):
+    __tablename__ = "fetch_logs"
+
+    id: int | None = Field(default=None, primary_key=True)
+    source_id: int = Field(foreign_key="news_sources.id", nullable=False, index=True)
+    status: str = Field(max_length=20)  # "success" / "error"
+    articles_count: int = Field(default=0)
+    error_message: str | None = None
+    duration_ms: int | None = None
+    fetched_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    # Relationships
+    source: "NewsSource" = Relationship(back_populates="fetch_logs")
 ```
 
 ```python
@@ -755,3 +799,4 @@ HNSW インデックス（cosine similarity）で類似記事検索に対応。
 | 15 | `a3b4c5d6e7f9` | 初期 RSS フィード 7件のシードデータ投入 |
 | 16 | `a4b5c6d7e8f0` | news_sources.category_id カラム削除（FK制約含む） |
 | 17 | `a5b6c7d8e9f0` | ai_models テーブル追加、analyses 正規化（ai_provider/ai_model → ai_model_id FK、1:1 → 1:N） |
+| 18 | `a6b7c8d9e0f1` | fetch_logs テーブル追加（複合インデックス source_id + fetched_at） |
