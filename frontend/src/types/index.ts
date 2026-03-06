@@ -21,6 +21,7 @@ export interface NewsQuery {
   sentiment?: Sentiment;
   minImpact?: number;
   category?: string;
+  sourceId?: number;
   sortBy?: "publishedAt" | "impactScore";
   sortOrder?: "asc" | "desc";
   page?: number;

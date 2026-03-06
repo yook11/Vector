@@ -157,6 +157,7 @@ def _news_eager_options() -> list:
 async def list_news(
     keyword_id: int | None = Query(None, alias="keywordId"),
     kw_category_id: int | None = Query(None, alias="kwCategoryId"),
+    source_id: int | None = Query(None, alias="sourceId"),
     my_keywords: bool = Query(False, alias="myKeywords"),
     sentiment: str | None = None,
     min_impact: int | None = Query(None, alias="minImpact"),
@@ -171,6 +172,9 @@ async def list_news(
 ) -> PaginatedNewsResponse:
     # Base query with eager loading (including category + translation chains)
     stmt = select(NewsArticle).options(*_news_eager_options())
+
+    if source_id is not None:
+        stmt = stmt.where(NewsArticle.source_id == source_id)
 
     # myKeywords filter: only effective for authenticated users
     if my_keywords and user is not None:

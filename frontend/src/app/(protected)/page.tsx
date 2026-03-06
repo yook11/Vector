@@ -1,5 +1,5 @@
 import { Suspense } from "react";
-import { getCategories, getKeywordCategories, getNews, getSubscriptions } from "@/lib/api-client";
+import { getCategories, getKeywordCategories, getNews, getSources, getSubscriptions } from "@/lib/api-client";
 import { NewsList } from "@/components/news/NewsList";
 import { NewsFilters } from "@/components/news/NewsFilters";
 import { NewsPagination } from "@/components/news/NewsPagination";
@@ -37,6 +37,9 @@ function parseSearchParams(
   const minImpact = str("minImpact");
   if (minImpact) query.minImpact = Number(minImpact);
 
+  const sourceId = str("sourceId");
+  if (sourceId) query.sourceId = Number(sourceId);
+
   const category = str("category");
   if (category) query.category = category;
 
@@ -63,11 +66,12 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   const raw = await searchParams;
   const query = parseSearchParams(raw);
 
-  const [newsData, subscriptionsData, categoriesData, kwCategoriesData] = await Promise.all([
+  const [newsData, subscriptionsData, categoriesData, kwCategoriesData, sourcesData] = await Promise.all([
     getNews(query),
     getSubscriptions().catch(() => ({ items: [] })),
     getCategories().catch(() => ({ items: [] })),
     getKeywordCategories().catch(() => ({ items: [] })),
+    getSources().catch(() => ({ items: [], total: 0 })),
   ]);
 
   const subscribedKeywordIds = subscriptionsData.items.map((s) => s.keywordId);
@@ -99,7 +103,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
         </div>
 
         <Suspense>
-          <NewsFilters categories={categoriesData.items} />
+          <NewsFilters categories={categoriesData.items} sources={sourcesData.items} />
         </Suspense>
 
         <NewsList items={newsData.items} />

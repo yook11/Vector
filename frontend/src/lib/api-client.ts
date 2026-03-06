@@ -10,6 +10,7 @@ import type {
   NewsFetchResponse,
   NewsQuery,
   NewsResponse,
+  NewsSourceListResponse,
   PaginatedNewsResponse,
   SubscriptionListResponse,
   SubscriptionResponse,
@@ -238,6 +239,13 @@ export async function getKeywordCategories(
   return fetchApi<KeywordCategoryDetailListResponse>(`/keyword-categories${qs}`, {
     cache: "no-store",
   });
+}
+
+// --- News Sources ---
+
+/** Fetch all news sources (SSR-compatible). */
+export async function getSources(): Promise<NewsSourceListResponse> {
+  return fetchApi<NewsSourceListResponse>("/sources", { cache: "no-store" });
 }
 
 export { ApiError };

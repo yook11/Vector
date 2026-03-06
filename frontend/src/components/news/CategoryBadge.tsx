@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import type { CategoryBrief } from "@/types";
@@ -23,8 +24,10 @@ const fallback =
 export function CategoryBadge({ category }: { category: CategoryBrief }) {
   const className = colorMap[category.slug] ?? fallback;
   return (
-    <Badge variant="outline" className={cn("text-xs", className)}>
-      {category.name}
-    </Badge>
+    <Link href={`/?category=${category.slug}`}>
+      <Badge variant="outline" className={cn("text-xs cursor-pointer hover:opacity-80", className)}>
+        {category.name}
+      </Badge>
+    </Link>
   );
 }

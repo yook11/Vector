@@ -16,6 +16,7 @@ from app.models.investment_category import (
 )
 from app.models.keyword import Keyword
 from app.models.news import NewsArticle
+from app.models.news_source import NewsSource
 
 
 async def _create_article(
@@ -24,6 +25,7 @@ async def _create_article(
     url: str = "https://example.com/article",
     source: str = "Test Source",
     published_at: datetime | None = None,
+    source_id: int | None = None,
 ) -> NewsArticle:
     """Helper to create a news article."""
     article = NewsArticle(
@@ -32,6 +34,7 @@ async def _create_article(
         source=source,
         published_at=published_at or datetime.now(UTC),
         fetched_at=datetime.now(UTC),
+        source_id=source_id,
     )
     session.add(article)
     await session.commit()
@@ -197,6 +200,34 @@ class TestListNews:
         items = resp.json()["items"]
         assert items[0]["titleOriginal"] == "Newer"
         assert items[1]["titleOriginal"] == "Older"
+
+    async def test_filter_by_source_id(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        sample_source: NewsSource,
+    ) -> None:
+        await _create_article(
+            db_session,
+            url="https://example.com/src1",
+            source_id=sample_source.id,
+        )
+        await _create_article(db_session, url="https://example.com/src2")
+
+        resp = await client.get(f"/api/v1/news?sourceId={sample_source.id}")
+        data = resp.json()
+        assert data["total"] == 1
+        assert data["items"][0]["url"] == "https://example.com/src1"
+
+    async def test_filter_by_source_id_nonexistent(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        await _create_article(db_session)
+
+        resp = await client.get("/api/v1/news?sourceId=99999")
+        data = resp.json()
+        assert data["total"] == 0
+        assert data["items"] == []
 
     async def test_camel_case_response(
         self, client: AsyncClient, db_session: AsyncSession
