@@ -38,6 +38,7 @@ class EmbedResult:
     skipped_count: int = 0
     error_count: int = 0
     errors: list[str] = field(default_factory=list)
+    embedded_ids: list[int] = field(default_factory=list)
 
 
 class BaseEmbedder(abc.ABC):
@@ -161,6 +162,8 @@ async def embed_articles(
             for article, vector in zip(batch, vectors):
                 article.embedding = vector
                 session.add(article)
+                if article.id is not None:
+                    result.embedded_ids.append(article.id)
             await session.flush()
             result.embedded_count += len(batch)
             consecutive_failures = 0
@@ -187,23 +190,20 @@ async def embed_articles(
             )
 
         except RateLimitError as e:
-            # Rate limit: do NOT count toward circuit breaker.
+            # Daily quota exhausted — stop immediately, next scheduled run
+            # will resume. Retrying wastes time on a daily cap.
+            remaining = len(to_embed) - (batch_start + len(batch))
             result.error_count += len(batch)
             result.errors.append(str(e))
-            success_streak = 0
             total_batches += 1
-
-            # Adaptive throttling: double the interval (capped at 120s)
-            current_interval = min(current_interval * 2, 120.0)
             logger.warning(
-                "embed_batch_rate_limited",
+                "embed_rate_limit_stopping",
                 batch_start=batch_start,
                 count=len(batch),
-                new_interval=current_interval,
+                remaining=remaining,
                 error=str(e),
             )
-            # Wait for RPM window to reset before next batch
-            await asyncio.sleep(settings.embed_rate_limit_delay)
+            break
 
         except EmbeddingError as e:
             # Non-rate-limit error: count toward circuit breaker

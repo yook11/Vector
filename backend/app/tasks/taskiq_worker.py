@@ -49,6 +49,7 @@ from app.models.news import NewsArticle
 from app.models.news_source import NewsSource
 from app.services.ai_analyzer import analyze_articles
 from app.services.content_extractor import extract_contents
+from app.services.dedup import detect_duplicates
 from app.services.embedding import embed_articles
 from app.services.news_fetcher import fetch_news_for_sources
 
@@ -165,6 +166,8 @@ async def fetch_and_analyze_task(
         "embed_count": 0,
         "embed_skipped": 0,
         "embed_errors": 0,
+        "dedup_grouped": 0,
+        "dedup_new_groups": 0,
     }
 
     # Phase 1 + 2: source query & RSS fetch share a session.
@@ -200,44 +203,43 @@ async def fetch_and_analyze_task(
             )
         result["sources_count"] = len(sources)
         if not sources:
-            logger.info("taskiq_task_skipped", reason="no sources due for fetch")
-            return result
+            logger.info("taskiq_fetch_skipped", reason="no sources due for fetch")
+        else:
+            # Phase 2: fetch articles from sources (only when sources exist)
+            try:
+                fr = await fetch_news_for_sources(session, sources)
+                result["fetch_new"] = fr.new_count
+                result["fetch_skipped"] = fr.skipped_count
+                result["fetch_errors"] = fr.error_count
 
-        # Phase 2: fetch articles from sources
-        try:
-            fr = await fetch_news_for_sources(session, sources)
-            result["fetch_new"] = fr.new_count
-            result["fetch_skipped"] = fr.skipped_count
-            result["fetch_errors"] = fr.error_count
+                # A-5: update each source's scheduling metadata
+                now = datetime.now(UTC)
+                for sr in fr.source_results:
+                    source = next((s for s in sources if s.id == sr.source_id), None)
+                    if source is None:
+                        continue
 
-            # A-5: update each source's scheduling metadata
-            now = datetime.now(UTC)
-            for sr in fr.source_results:
-                source = next((s for s in sources if s.id == sr.source_id), None)
-                if source is None:
-                    continue
+                    source.next_fetch_at = now + timedelta(
+                        minutes=source.fetch_interval_minutes
+                    )
+                    source.last_fetched_at = now
 
-                source.next_fetch_at = now + timedelta(
-                    minutes=source.fetch_interval_minutes
-                )
-                source.last_fetched_at = now
+                    if sr.success or sr.not_modified:
+                        source.consecutive_errors = 0
+                        if sr.etag is not None:
+                            source.etag = sr.etag
+                        if sr.last_modified is not None:
+                            source.last_modified_header = sr.last_modified
+                    else:
+                        source.consecutive_errors += 1
+                        source.last_error_message = sr.error_message
 
-                if sr.success or sr.not_modified:
-                    source.consecutive_errors = 0
-                    if sr.etag is not None:
-                        source.etag = sr.etag
-                    if sr.last_modified is not None:
-                        source.last_modified_header = sr.last_modified
-                else:
-                    source.consecutive_errors += 1
-                    source.last_error_message = sr.error_message
+                    session.add(source)
 
-                session.add(source)
-
-            await session.commit()
-        except Exception:
-            logger.exception("taskiq_fetch_phase_failed")
-            result["fetch_errors"] += 1
+                await session.commit()
+            except Exception:
+                logger.exception("taskiq_fetch_phase_failed")
+                result["fetch_errors"] += 1
 
     # Phase 3: content extraction (independent session)
     # Intentionally runs even if Phase 2 failed: processes articles already in DB
@@ -313,6 +315,7 @@ async def fetch_and_analyze_task(
     # Phase 5: Embedding generation (independent session)
     # Runs independently of Phase 4 — covers any article with embedding IS NULL,
     # including articles from previous runs that failed to embed.
+    newly_embedded_ids: list[int] = []
     try:
         async with SQLModelAsyncSession(engine, expire_on_commit=False) as session:
             unembedded = list(
@@ -329,6 +332,7 @@ async def fetch_and_analyze_task(
                 result["embed_count"] = er.embedded_count
                 result["embed_skipped"] = er.skipped_count
                 result["embed_errors"] = er.error_count
+                newly_embedded_ids = er.embedded_ids
             else:
                 logger.info(
                     "taskiq_embed_skipped", reason="all articles have embeddings"
@@ -336,6 +340,42 @@ async def fetch_and_analyze_task(
     except Exception:
         logger.exception("taskiq_embed_phase_failed")
         result["embed_errors"] += 1
+
+    # Phase 6: Duplicate detection (independent session)
+    # Groups semantically similar articles using cosine distance.
+    # Falls back to checking ungrouped articles if no new embeddings were created.
+    try:
+        async with SQLModelAsyncSession(engine, expire_on_commit=False) as session:
+            dedup_ids = newly_embedded_ids
+            if not dedup_ids:
+                # Fallback: check ungrouped articles with embeddings (recovery)
+                ungrouped = list(
+                    (
+                        await session.execute(
+                            select(NewsArticle.id)
+                            .where(
+                                NewsArticle.embedding.is_not(None),
+                                NewsArticle.article_group_id.is_(None),
+                            )
+                            .order_by(NewsArticle.fetched_at.desc())
+                            .limit(50)
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                dedup_ids = list(ungrouped)
+
+            if dedup_ids:
+                dr = await detect_duplicates(session, dedup_ids)
+                result["dedup_grouped"] = dr.grouped
+                result["dedup_new_groups"] = dr.new_groups
+            else:
+                logger.info(
+                    "taskiq_dedup_skipped", reason="no articles to check for duplicates"
+                )
+    except Exception:
+        logger.exception("taskiq_dedup_phase_failed")
 
     logger.info("taskiq_task_completed", **result)
     return result

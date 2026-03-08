@@ -8,6 +8,7 @@ from sqlmodel import col, func, select
 from app.config import settings
 from app.dependencies import get_current_user, get_optional_user, get_session
 from app.models.analysis import AnalysisResult
+from app.models.article_group import ArticleGroup
 from app.models.associations import NewsKeyword
 from app.models.investment_category import (
     AnalysisInvestmentCategory,
@@ -112,6 +113,10 @@ def _build_news_response(
             investment_categories=categories,
         )
 
+    # Duplicate group info
+    group = getattr(article, "article_group", None)
+    dup_count = (group.article_count - 1) if group else 0
+
     return NewsResponse(
         id=article.id,
         title_original=article.title_original,
@@ -124,6 +129,8 @@ def _build_news_response(
         keywords=keywords,
         analysis=analysis,
         is_watched=article.id in watched_ids if watched_ids else False,
+        duplicate_count=dup_count,
+        article_group_id=article.article_group_id,
     )
 
 
@@ -150,6 +157,7 @@ def _news_eager_options() -> list:
         .selectinload(Keyword.category_links)
         .selectinload(KeywordCategoryLink.category)
         .selectinload(KeywordCategory.translations),
+        selectinload(NewsArticle.article_group),
     ]
 
 
@@ -162,6 +170,7 @@ async def list_news(
     sentiment: str | None = None,
     min_impact: int | None = Query(None, alias="minImpact"),
     category: str | None = None,
+    deduplicated: bool = Query(True),
     sort_by: str = Query("publishedAt", alias="sortBy"),
     sort_order: str = Query("desc", alias="sortOrder"),
     page: int = Query(1, ge=1),
@@ -172,6 +181,17 @@ async def list_news(
 ) -> PaginatedNewsResponse:
     # Base query with eager loading (including category + translation chains)
     stmt = select(NewsArticle).options(*_news_eager_options())
+
+    # Deduplication: show only canonical articles from groups
+    if deduplicated:
+        canonical_ids = select(ArticleGroup.canonical_id).where(
+            ArticleGroup.canonical_id.is_not(None)
+        )
+        stmt = stmt.where(
+            # Not in a group, OR is the canonical article of its group
+            (NewsArticle.article_group_id.is_(None))
+            | (NewsArticle.id.in_(canonical_ids))
+        )
 
     if source_id is not None:
         stmt = stmt.where(NewsArticle.source_id == source_id)
@@ -363,6 +383,38 @@ async def get_similar_news(
     articles = similar_result.unique().scalars().all()
 
     return [_build_news_response(a, locale=locale) for a in articles]
+
+
+@router.get(
+    "/groups/{group_id}",
+    response_model=list[NewsResponse],
+    summary="Get all articles in a duplicate group",
+)
+async def get_group_articles(
+    group_id: int,
+    locale: str = Query(DEFAULT_LOCALE),
+    user: User | None = Depends(get_optional_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[NewsResponse]:
+    """Return all articles belonging to a duplicate article group."""
+    group = await session.get(ArticleGroup, group_id)
+    if group is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Article group not found",
+        )
+
+    stmt = (
+        select(NewsArticle)
+        .where(NewsArticle.article_group_id == group_id)
+        .options(*_news_eager_options())
+        .order_by(NewsArticle.published_at.asc().nulls_last())
+    )
+    result = await session.execute(stmt)
+    articles = result.unique().scalars().all()
+
+    watched_ids = await _get_watched_ids(session, user)
+    return [_build_news_response(a, watched_ids, locale) for a in articles]
 
 
 @router.get("/{news_id}", response_model=NewsResponse)

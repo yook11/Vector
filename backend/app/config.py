@@ -20,7 +20,10 @@ class Settings(BaseSettings):
     # News Fetcher
     check_interval_minutes: int = 30
     max_articles_per_fetch: int = 50
-    max_analysis_per_run: int = 10
+    max_analysis_per_run: int = 200
+
+    # Analysis rate limit
+    analysis_request_interval: float = 4.0  # seconds between API requests (~15 RPM)
 
     # Content extraction
     content_max_length: int = 8000
@@ -56,6 +59,10 @@ class Settings(BaseSettings):
     av_topics: str = "technology"
     av_limit: int = 50
     av_max_daily_requests: int = 25
+
+    # Duplicate detection
+    dedup_similarity_threshold: float = 0.15  # cosine distance; lower = stricter
+    dedup_time_window_days: int = 3  # compare articles within N days
 
     # Task Queue
     redis_url: str = "redis://localhost:6379/0"
