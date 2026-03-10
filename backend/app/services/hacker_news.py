@@ -12,6 +12,7 @@ from app.config import settings
 from app.models.news import NewsArticle
 from app.models.news_source import NewsSource
 from app.services.news_fetcher import SourceFetchResult
+from app.utils.sanitize import strip_html_tags
 
 HTTP_TIMEOUT = 30.0
 
@@ -170,7 +171,7 @@ class HackerNewsClient:
                 break
 
             article = NewsArticle(
-                title_original=story.title[:500],
+                title_original=strip_html_tags(story.title)[:500],
                 description_original=None,
                 url=story.url,
                 source=source.name,

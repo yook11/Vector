@@ -18,8 +18,8 @@ GEMINI_EMBED_MODEL = "gemini-embedding-001"
 EMBED_DIMENSION = 768
 MAX_RETRIES = 3
 RETRY_BASE_DELAY = 2.0  # seconds, exponential backoff: 2, 4, 8
-RATE_LIMIT_DELAY = 30.0  # seconds to wait on 429 before retrying
-MAX_RATE_LIMIT_RETRIES = 2  # independent of normal retry budget
+RATE_LIMIT_DELAY = 10.0  # seconds to wait on 429 before retrying
+MAX_RATE_LIMIT_RETRIES = 1  # independent of normal retry budget
 
 
 def _is_rate_limit_error(exc: Exception) -> bool:
