@@ -10,6 +10,7 @@ import { CategoryBadge } from "./CategoryBadge";
 import { SentimentBadge } from "./SentimentBadge";
 import { ImpactScore } from "./ImpactScore";
 import { WatchlistButton } from "./WatchlistButton";
+import { DuplicateBadge } from "./DuplicateBadge";
 import type { NewsResponse } from "@/types";
 
 function formatDate(dateStr: string | null | undefined): string {
@@ -44,9 +45,17 @@ export function NewsCard({ article }: { article: NewsResponse }) {
             />
           </div>
         </div>
-        <p className="text-xs text-muted-foreground line-clamp-1">
-          {article.source} &middot; {formatDate(article.publishedAt)}
-        </p>
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <span className="line-clamp-1">
+            {article.source} &middot; {formatDate(article.publishedAt)}
+          </span>
+          {article.duplicateCount > 0 && article.articleGroupId != null && (
+            <DuplicateBadge
+              duplicateCount={article.duplicateCount}
+              articleGroupId={article.articleGroupId}
+            />
+          )}
+        </div>
       </CardHeader>
       <CardContent className="space-y-3">
         {analysis && (
