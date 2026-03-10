@@ -15,7 +15,7 @@ export function NewsPagination({ page, totalPages }: NewsPaginationProps) {
   if (totalPages <= 1) return null;
 
   function goToPage(p: number) {
-    const params = new URLSearchParams(searchParams.toString());
+    const params = new URLSearchParams(searchParams?.toString() ?? "");
     if (p <= 1) {
       params.delete("page");
     } else {

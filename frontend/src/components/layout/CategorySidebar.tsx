@@ -44,7 +44,7 @@ export function CategorySidebar({
 
   // Preserve existing filter params (sentiment, sortBy, etc.) when navigating
   function buildHref(overrides: Record<string, string | undefined>): string {
-    const params = new URLSearchParams(searchParams.toString());
+    const params = new URLSearchParams(searchParams?.toString() ?? "");
     // Remove category/keyword params first
     params.delete("kwCategoryId");
     params.delete("keywordId");

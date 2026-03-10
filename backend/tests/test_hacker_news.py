@@ -1,7 +1,7 @@
 """Tests for the Hacker News fetcher service."""
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -11,7 +11,6 @@ from sqlmodel import select
 from app.models.news import NewsArticle
 from app.models.news_source import NewsSource
 from app.services.hacker_news import HackerNewsClient, HNStory
-
 
 # --- Sample API response data ---
 
@@ -120,7 +119,11 @@ async def test_fetch_recent_stories_with_since_timestamp(
     await hn_client.fetch_recent_stories(since_timestamp=1771953317)
 
     call_kwargs = mock_http_client.get.call_args
-    params = call_kwargs.kwargs.get("params") or call_kwargs.args[1] if len(call_kwargs.args) > 1 else call_kwargs.kwargs.get("params", {})
+    params = (
+        call_kwargs.args[1]
+        if len(call_kwargs.args) > 1
+        else call_kwargs.kwargs.get("params", {})
+    )
     numeric_filters = params.get("numericFilters", "")
     assert "created_at_i>1771953317" in numeric_filters
 
@@ -145,9 +148,7 @@ async def test_fetch_recent_stories_api_error(
     mock_http_client: AsyncMock,
 ) -> None:
     """HTTP errors should propagate as HTTPStatusError."""
-    mock_http_client.get.return_value = _mock_hn_response(
-        data={}, status_code=429
-    )
+    mock_http_client.get.return_value = _mock_hn_response(data={}, status_code=429)
 
     hn_client = HackerNewsClient(mock_http_client)
     with pytest.raises(httpx.HTTPStatusError):
@@ -253,9 +254,7 @@ async def test_fetch_and_save_handles_http_error(
     mock_http_client: AsyncMock,
 ) -> None:
     """HTTP errors should result in SourceFetchResult(success=False)."""
-    mock_http_client.get.return_value = _mock_hn_response(
-        data={}, status_code=500
-    )
+    mock_http_client.get.return_value = _mock_hn_response(data={}, status_code=500)
 
     hn_client = HackerNewsClient(mock_http_client)
     result = await hn_client.fetch_and_save_stories(
@@ -296,9 +295,7 @@ async def test_fetch_and_save_with_last_fetched_at(
     mock_http_client.get.return_value = _mock_hn_response(data={"hits": []})
 
     hn_client = HackerNewsClient(mock_http_client)
-    await hn_client.fetch_and_save_stories(
-        source=sample_hn_source, session=db_session
-    )
+    await hn_client.fetch_and_save_stories(source=sample_hn_source, session=db_session)
 
     call_kwargs = mock_http_client.get.call_args
     params = call_kwargs.kwargs.get("params", {})

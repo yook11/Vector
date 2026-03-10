@@ -310,7 +310,7 @@ class TestGetNews:
 
 @pytest.mark.asyncio
 class TestFetchNews:
-    async def test_fetch_returns_202(self, client: AsyncClient) -> None:
+    async def test_fetch_returns_202(self, admin_client: AsyncClient) -> None:
         mock_task_handle = AsyncMock()
         mock_task_handle.task_id = "test-task-id-123"
 
@@ -318,7 +318,7 @@ class TestFetchNews:
             "app.routers.news.fetch_and_analyze_task",
         ) as mock_task:
             mock_task.kiq = AsyncMock(return_value=mock_task_handle)
-            resp = await client.post("/api/v1/news/fetch")
+            resp = await admin_client.post("/api/v1/news/fetch")
 
         assert resp.status_code == 202
         data = resp.json()
@@ -327,7 +327,7 @@ class TestFetchNews:
         assert data["sourcesCount"] is None  # all due sources
         mock_task.kiq.assert_called_once_with(source_ids=None)
 
-    async def test_fetch_with_source_ids(self, client: AsyncClient) -> None:
+    async def test_fetch_with_source_ids(self, admin_client: AsyncClient) -> None:
         mock_task_handle = AsyncMock()
         mock_task_handle.task_id = "test-task-id-456"
 
@@ -335,7 +335,7 @@ class TestFetchNews:
             "app.routers.news.fetch_and_analyze_task",
         ) as mock_task:
             mock_task.kiq = AsyncMock(return_value=mock_task_handle)
-            resp = await client.post(
+            resp = await admin_client.post(
                 "/api/v1/news/fetch",
                 json={"sourceIds": [1, 2, 3]},
             )

@@ -22,7 +22,7 @@ export function NewsFilters({ categories, sources }: NewsFiltersProps) {
 
   const updateParam = useCallback(
     (key: string, value: string | undefined) => {
-      const params = new URLSearchParams(searchParams.toString());
+      const params = new URLSearchParams(searchParams?.toString() ?? "");
       if (value) {
         params.set(key, value);
       } else {
@@ -37,7 +37,7 @@ export function NewsFilters({ categories, sources }: NewsFiltersProps) {
   return (
     <div className="flex flex-wrap gap-3">
       <Select
-        value={searchParams.get("sentiment") ?? ""}
+        value={searchParams?.get("sentiment") ?? ""}
         onValueChange={(v) =>
           updateParam("sentiment", v === "all" ? undefined : v)
         }
@@ -54,7 +54,7 @@ export function NewsFilters({ categories, sources }: NewsFiltersProps) {
       </Select>
 
       <Select
-        value={searchParams.get("sortBy") ?? ""}
+        value={searchParams?.get("sortBy") ?? ""}
         onValueChange={(v) =>
           updateParam("sortBy", v === "default" ? undefined : v)
         }
@@ -70,7 +70,7 @@ export function NewsFilters({ categories, sources }: NewsFiltersProps) {
 
       {sources && sources.length > 0 && (
         <Select
-          value={searchParams.get("sourceId") ?? ""}
+          value={searchParams?.get("sourceId") ?? ""}
           onValueChange={(v) =>
             updateParam("sourceId", v === "all" ? undefined : v)
           }
@@ -91,7 +91,7 @@ export function NewsFilters({ categories, sources }: NewsFiltersProps) {
 
       {categories && categories.length > 0 && (
         <Select
-          value={searchParams.get("category") ?? ""}
+          value={searchParams?.get("category") ?? ""}
           onValueChange={(v) =>
             updateParam("category", v === "all" ? undefined : v)
           }
@@ -111,7 +111,7 @@ export function NewsFilters({ categories, sources }: NewsFiltersProps) {
       )}
 
       <Select
-        value={searchParams.get("sortOrder") ?? ""}
+        value={searchParams?.get("sortOrder") ?? ""}
         onValueChange={(v) =>
           updateParam("sortOrder", v === "default" ? undefined : v)
         }

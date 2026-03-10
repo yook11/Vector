@@ -6,7 +6,7 @@ from sqlalchemy.orm import selectinload
 from sqlmodel import col, func, select
 
 from app.config import settings
-from app.dependencies import get_current_user, get_optional_user, get_session
+from app.dependencies import get_admin_user, get_optional_user, get_session
 from app.models.analysis import AnalysisResult
 from app.models.article_group import ArticleGroup
 from app.models.associations import NewsKeyword
@@ -308,7 +308,7 @@ async def list_news(
 )
 async def embed_news(
     session: AsyncSession = Depends(get_session),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(get_admin_user),
 ) -> EmbedResponse:
     """Generate vector embeddings for all articles where embedding IS NULL.
 
@@ -449,6 +449,7 @@ async def get_news(
 )
 async def fetch_news(
     body: NewsFetchRequest | None = None,
+    _user: User = Depends(get_admin_user),
 ) -> NewsFetchResponse:
     """Enqueue a news fetch task. Returns immediately with a task ID."""
     source_ids = body.source_ids if body else None
