@@ -70,12 +70,18 @@ async def test_detect_duplicates_no_match(db_session: AsyncSession) -> None:
     emb_b = _make_embedding(seed=999)  # very different
 
     a = await _create_article(
-        db_session, title="Article A", url="https://a.com/1",
-        embedding=emb_a, published_at=now,
+        db_session,
+        title="Article A",
+        url="https://a.com/1",
+        embedding=emb_a,
+        published_at=now,
     )
     await _create_article(
-        db_session, title="Article B", url="https://b.com/2",
-        embedding=emb_b, published_at=now,
+        db_session,
+        title="Article B",
+        url="https://b.com/2",
+        embedding=emb_b,
+        published_at=now,
     )
 
     result = await detect_duplicates(db_session, [a.id], threshold=0.15)
@@ -91,12 +97,20 @@ async def test_detect_duplicates_creates_group(db_session: AsyncSession) -> None
     emb_similar = _make_similar_embedding(emb_base, noise=0.01)
 
     a = await _create_article(
-        db_session, title="OpenAI Launches GPT-5", url="https://a.com/gpt5",
-        source="TechCrunch", embedding=emb_base, published_at=now,
+        db_session,
+        title="OpenAI Launches GPT-5",
+        url="https://a.com/gpt5",
+        source="TechCrunch",
+        embedding=emb_base,
+        published_at=now,
     )
     b = await _create_article(
-        db_session, title="OpenAI Unveils GPT-5 Model", url="https://b.com/gpt5",
-        source="Reuters", embedding=emb_similar, published_at=now + timedelta(hours=1),
+        db_session,
+        title="OpenAI Unveils GPT-5 Model",
+        url="https://b.com/gpt5",
+        source="Reuters",
+        embedding=emb_similar,
+        published_at=now + timedelta(hours=1),
     )
 
     # b is the new article to check
@@ -125,8 +139,12 @@ async def test_detect_duplicates_joins_existing_group(
     await db_session.flush()
 
     a = await _create_article(
-        db_session, title="Quantum Breakthrough", url="https://a.com/quantum",
-        embedding=emb_base, published_at=now, article_group_id=group.id,
+        db_session,
+        title="Quantum Breakthrough",
+        url="https://a.com/quantum",
+        embedding=emb_base,
+        published_at=now,
+        article_group_id=group.id,
     )
     group.canonical_id = a.id
     db_session.add(group)
@@ -135,9 +153,12 @@ async def test_detect_duplicates_joins_existing_group(
     # New similar article
     emb_similar = _make_similar_embedding(emb_base, noise=0.01)
     c = await _create_article(
-        db_session, title="Quantum Computing Breakthrough Announced",
-        url="https://c.com/quantum", source="TheVerge",
-        embedding=emb_similar, published_at=now + timedelta(hours=2),
+        db_session,
+        title="Quantum Computing Breakthrough Announced",
+        url="https://c.com/quantum",
+        source="TheVerge",
+        embedding=emb_similar,
+        published_at=now + timedelta(hours=2),
     )
 
     result = await detect_duplicates(db_session, [c.id], threshold=0.5)
@@ -164,8 +185,12 @@ async def test_detect_duplicates_skips_already_grouped(
     await db_session.flush()
 
     a = await _create_article(
-        db_session, title="Already Grouped", url="https://a.com/grouped",
-        embedding=emb, published_at=now, article_group_id=group.id,
+        db_session,
+        title="Already Grouped",
+        url="https://a.com/grouped",
+        embedding=emb,
+        published_at=now,
+        article_group_id=group.id,
     )
     group.canonical_id = a.id
     db_session.add(group)
@@ -183,12 +208,18 @@ async def test_detect_duplicates_time_window(db_session: AsyncSession) -> None:
     emb_similar = _make_similar_embedding(emb_base, noise=0.01)
 
     await _create_article(
-        db_session, title="Old Article", url="https://a.com/old",
-        embedding=emb_base, published_at=now - timedelta(days=10),
+        db_session,
+        title="Old Article",
+        url="https://a.com/old",
+        embedding=emb_base,
+        published_at=now - timedelta(days=10),
     )
     new = await _create_article(
-        db_session, title="New Similar Article", url="https://b.com/new",
-        embedding=emb_similar, published_at=now,
+        db_session,
+        title="New Similar Article",
+        url="https://b.com/new",
+        embedding=emb_similar,
+        published_at=now,
     )
 
     result = await detect_duplicates(
@@ -208,14 +239,21 @@ async def test_detect_duplicates_canonical_selection(
 
     # Earlier article
     early = await _create_article(
-        db_session, title="Early Report", url="https://a.com/early",
-        source="Reuters", embedding=emb_base,
+        db_session,
+        title="Early Report",
+        url="https://a.com/early",
+        source="Reuters",
+        embedding=emb_base,
         published_at=now - timedelta(hours=5),
     )
     # Later article
     late = await _create_article(
-        db_session, title="Late Report", url="https://b.com/late",
-        source="TechCrunch", embedding=emb_similar, published_at=now,
+        db_session,
+        title="Late Report",
+        url="https://b.com/late",
+        source="TechCrunch",
+        embedding=emb_similar,
+        published_at=now,
     )
 
     await detect_duplicates(db_session, [late.id], threshold=0.5)
