@@ -76,6 +76,7 @@ export const authOptions: NextAuthOptions = {
           );
           token.userId = payload.sub;
           token.email = payload.email;
+          token.role = payload.role;
           token.accessTokenExpires = payload.exp * 1000;
         } catch {
           // If decode fails, keep going
@@ -108,6 +109,7 @@ export const authOptions: NextAuthOptions = {
           ...token,
           accessToken: data.accessToken,
           refreshToken: data.refreshToken,
+          role: payload.role,
           accessTokenExpires: payload.exp * 1000,
         };
       } catch {
@@ -129,6 +131,7 @@ export const authOptions: NextAuthOptions = {
           ...session.user,
           id: token.userId as string,
           email: token.email as string,
+          role: token.role as string | undefined,
         };
       }
       return session;

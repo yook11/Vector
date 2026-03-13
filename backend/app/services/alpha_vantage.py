@@ -14,6 +14,7 @@ from app.models.fetch_log import FetchLog
 from app.models.news import NewsArticle
 from app.models.news_source import NewsSource
 from app.services.news_fetcher import SourceFetchResult
+from app.utils.sanitize import strip_html_tags
 
 HTTP_TIMEOUT = 30.0
 
@@ -191,8 +192,8 @@ class AlphaVantageClient:
                 published_at = now
 
             article = NewsArticle(
-                title_original=item.get("title", "")[:500],
-                description_original=item.get("summary"),
+                title_original=strip_html_tags(item.get("title", ""))[:500],
+                description_original=strip_html_tags(item.get("summary")),
                 url=url,
                 source=source.name,
                 source_id=source.id,

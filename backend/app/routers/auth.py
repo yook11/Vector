@@ -50,6 +50,7 @@ async def register(
         id=user.id,
         email=user.email,
         display_name=user.display_name,
+        role=user.role,
         is_active=user.is_active,
         created_at=user.created_at,
     )
@@ -67,7 +68,7 @@ async def login(
             detail="Invalid email or password",
         )
 
-    access_token = create_access_token(user.id, user.email)
+    access_token = create_access_token(user.id, user.email, user.role)
     refresh_token = await create_refresh_token(session, user.id)
 
     return TokenResponse(
@@ -98,7 +99,7 @@ async def refresh(
             detail="User not found or inactive",
         )
 
-    access_token = create_access_token(user.id, user.email)
+    access_token = create_access_token(user.id, user.email, user.role)
 
     return TokenResponse(
         access_token=access_token,

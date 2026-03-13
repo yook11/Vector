@@ -73,6 +73,7 @@ def upgrade() -> None:
         sa.column("site_url", sa.String),
         sa.column("is_active", sa.Boolean),
         sa.column("fetch_interval_minutes", sa.Integer),
+        sa.column("category_id", sa.Integer),
     )
     op.bulk_insert(
         sources_table,
@@ -84,6 +85,7 @@ def upgrade() -> None:
                 "site_url": site_url,
                 "is_active": True,
                 "fetch_interval_minutes": 720,
+                "category_id": 1,  # temporary; dropped in a4 migration
             }
             for name, source_type, feed_url, site_url in _SEED_SOURCES
         ],

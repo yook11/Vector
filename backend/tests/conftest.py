@@ -16,9 +16,10 @@ from app.main import app
 from app.models import (  # noqa: F401
     AIModel,
     AnalysisInvestmentCategory,
-    FetchLog,
     AnalysisResult,
     AnalysisTranslation,
+    ArticleGroup,
+    FetchLog,
     InvestmentCategory,
     InvestmentCategoryTranslation,
     Keyword,
@@ -112,7 +113,7 @@ async def test_user(db_session: AsyncSession) -> User:
 @pytest.fixture
 def auth_headers(test_user: User) -> dict[str, str]:
     """Return Authorization headers with a valid JWT for test_user."""
-    token = create_access_token(test_user.id, test_user.email)
+    token = create_access_token(test_user.id, test_user.email, test_user.role)
     return {"Authorization": f"Bearer {token}"}
 
 
@@ -125,7 +126,44 @@ async def authed_client(
     async def override_session() -> AsyncGenerator[AsyncSession, None]:
         yield db_session
 
-    token = create_access_token(test_user.id, test_user.email)
+    token = create_access_token(test_user.id, test_user.email, test_user.role)
+    app.dependency_overrides[get_session] = override_session
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+        headers={"Authorization": f"Bearer {token}"},
+    ) as c:
+        yield c
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+async def admin_user(db_session: AsyncSession) -> User:
+    """Create and return an admin test user."""
+    from app.services.auth_service import hash_password
+
+    user = User(
+        email="admin@example.com",
+        hashed_password=hash_password("AdminPass123"),
+        display_name="Admin User",
+        role="admin",
+    )
+    db_session.add(user)
+    await db_session.commit()
+    await db_session.refresh(user)
+    return user
+
+
+@pytest.fixture
+async def admin_client(
+    db_session: AsyncSession, admin_user: User
+) -> AsyncGenerator[AsyncClient, None]:
+    """Provide an httpx AsyncClient with admin auth headers pre-set."""
+
+    async def override_session() -> AsyncGenerator[AsyncSession, None]:
+        yield db_session
+
+    token = create_access_token(admin_user.id, admin_user.email, admin_user.role)
     app.dependency_overrides[get_session] = override_session
     async with AsyncClient(
         transport=ASGITransport(app=app),

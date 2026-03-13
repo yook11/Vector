@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 
 import structlog
 from google import genai
@@ -19,6 +20,8 @@ logger = structlog.get_logger(__name__)
 
 MAX_RETRIES = 3
 RETRY_BASE_DELAY = 2.0  # seconds, exponential backoff: 2, 4, 8
+MAX_RATE_LIMIT_RETRIES = 1  # independent of normal retry budget
+_DAILY_QUOTA_THRESHOLD = 120  # retryDelay above this → daily quota exhausted
 
 VALID_CATEGORIES = {
     "competitive_edge",
@@ -81,6 +84,15 @@ def _is_rate_limit_error(exc: Exception) -> bool:
         return False
 
 
+def _parse_retry_delay(exc: Exception) -> float | None:
+    """Extract retryDelay seconds from a Gemini 429 error message.
+
+    Returns the delay in seconds, or None if not found.
+    """
+    match = re.search(r"retryDelay.*?(\d+)", str(exc))
+    return float(match.group(1)) if match else None
+
+
 class GeminiAnalyzer(BaseAnalyzer):
     """Gemini API implementation of BaseAnalyzer."""
 
@@ -136,14 +148,24 @@ class GeminiAnalyzer(BaseAnalyzer):
         return self._parse_response(raw_text, keywords_by_category)
 
     async def _call_with_retry(self, prompt: str) -> str:
-        """Call Gemini API with exponential backoff retry.
+        """Call Gemini API with two-tier retry strategy.
+
+        - Rate limit (429): parse retryDelay from error. If <= threshold,
+          wait and retry without consuming normal retry budget (up to
+          MAX_RATE_LIMIT_RETRIES times). Otherwise treat as daily quota
+          exhaustion and raise immediately.
+        - Other errors: exponential backoff (2, 4, 8 seconds).
 
         Raises:
-            AnalysisError: After MAX_RETRIES failures.
+            RateLimitError: If rate limit retries exhausted or daily quota hit.
+            AnalysisError: After MAX_RETRIES failures for non-429 errors.
         """
         last_error: Exception | None = None
+        attempt = 0
+        rate_limit_retries = 0
 
-        for attempt in range(1, MAX_RETRIES + 1):
+        while attempt < MAX_RETRIES:
+            attempt += 1
             try:
                 logger.info(
                     "gemini_api_call",
@@ -168,19 +190,46 @@ class GeminiAnalyzer(BaseAnalyzer):
             except AnalysisError:
                 raise
             except Exception as e:
-                # 429: SDK already retried 4 times (5 total attempts).
-                # Quota is exhausted — propagate immediately, no app-level retry.
+                last_error = e
+
                 if _is_rate_limit_error(e):
+                    retry_delay = _parse_retry_delay(e)
+
+                    # Daily quota: retryDelay too long or missing → stop
+                    if retry_delay is None or retry_delay > _DAILY_QUOTA_THRESHOLD:
+                        logger.warning(
+                            "gemini_daily_quota_exhausted",
+                            attempt=attempt,
+                            retry_delay=retry_delay,
+                            error=str(e),
+                        )
+                        raise RateLimitError(
+                            f"Gemini daily quota exhausted (429): {e}"
+                        ) from e
+
+                    # RPM limit: wait retryDelay + margin, then retry
+                    rate_limit_retries += 1
+                    wait_seconds = retry_delay + 5
                     logger.warning(
-                        "gemini_rate_limit_exhausted",
+                        "gemini_rpm_rate_limited",
                         attempt=attempt,
+                        rate_limit_retry=rate_limit_retries,
+                        retry_delay=retry_delay,
+                        wait_seconds=wait_seconds,
                         error=str(e),
                     )
+                    if rate_limit_retries <= MAX_RATE_LIMIT_RETRIES:
+                        await asyncio.sleep(wait_seconds)
+                        attempt -= 1  # don't consume normal retry budget
+                        continue
+
+                    # RPM retries exhausted
                     raise RateLimitError(
-                        f"Gemini API rate limit exceeded (429): {e}"
+                        f"Gemini RPM limit exceeded after "
+                        f"{rate_limit_retries} retries: {e}"
                     ) from e
 
-                last_error = e
+                # Non-rate-limit error: standard exponential backoff
                 logger.warning(
                     "gemini_api_error",
                     attempt=attempt,

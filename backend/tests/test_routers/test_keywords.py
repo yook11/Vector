@@ -79,8 +79,8 @@ class TestListKeywords:
 
 @pytest.mark.asyncio
 class TestCreateKeyword:
-    async def test_create_success(self, authed_client: AsyncClient) -> None:
-        resp = await authed_client.post(
+    async def test_create_success(self, admin_client: AsyncClient) -> None:
+        resp = await admin_client.post(
             "/api/v1/keywords",
             json={"keyword": "Materials Informatics"},
         )
@@ -92,11 +92,11 @@ class TestCreateKeyword:
 
     async def test_create_with_categories(
         self,
-        authed_client: AsyncClient,
+        admin_client: AsyncClient,
         sample_keyword_categories: list[KeywordCategory],
     ) -> None:
         cat = sample_keyword_categories[0]  # "ai_ml"
-        resp = await authed_client.post(
+        resp = await admin_client.post(
             "/api/v1/keywords",
             json={"keyword": "Edge AI", "categoryIds": [cat.id]},
         )
@@ -106,9 +106,9 @@ class TestCreateKeyword:
         assert data["categories"][0]["slug"] == "ai_ml"
 
     async def test_create_with_invalid_category_id(
-        self, authed_client: AsyncClient
+        self, admin_client: AsyncClient
     ) -> None:
-        resp = await authed_client.post(
+        resp = await admin_client.post(
             "/api/v1/keywords",
             json={"keyword": "Bad Cat", "categoryIds": [99999]},
         )
@@ -116,9 +116,9 @@ class TestCreateKeyword:
         assert "not found" in resp.json()["detail"].lower()
 
     async def test_create_duplicate_409(
-        self, authed_client: AsyncClient, sample_keyword: Keyword
+        self, admin_client: AsyncClient, sample_keyword: Keyword
     ) -> None:
-        resp = await authed_client.post(
+        resp = await admin_client.post(
             "/api/v1/keywords",
             json={"keyword": "Quantum Computing"},
         )
@@ -130,12 +130,12 @@ class TestCreateKeyword:
 class TestUpdateKeyword:
     async def test_update_categories(
         self,
-        authed_client: AsyncClient,
+        admin_client: AsyncClient,
         sample_keyword: Keyword,
         sample_keyword_categories: list[KeywordCategory],
     ) -> None:
         cat = sample_keyword_categories[2]  # "semiconductor"
-        resp = await authed_client.patch(
+        resp = await admin_client.patch(
             f"/api/v1/keywords/{sample_keyword.id}",
             json={"categoryIds": [cat.id]},
         )
@@ -146,7 +146,7 @@ class TestUpdateKeyword:
 
     async def test_update_clear_categories(
         self,
-        authed_client: AsyncClient,
+        admin_client: AsyncClient,
         db_session: AsyncSession,
         sample_keyword: Keyword,
         sample_keyword_categories: list[KeywordCategory],
@@ -158,15 +158,15 @@ class TestUpdateKeyword:
         await db_session.commit()
 
         # Then clear categories
-        resp = await authed_client.patch(
+        resp = await admin_client.patch(
             f"/api/v1/keywords/{sample_keyword.id}",
             json={"categoryIds": []},
         )
         assert resp.status_code == 200
         assert resp.json()["categories"] == []
 
-    async def test_update_not_found(self, authed_client: AsyncClient) -> None:
-        resp = await authed_client.patch(
+    async def test_update_not_found(self, admin_client: AsyncClient) -> None:
+        resp = await admin_client.patch(
             "/api/v1/keywords/99999",
             json={"categoryIds": []},
         )
@@ -176,15 +176,15 @@ class TestUpdateKeyword:
 @pytest.mark.asyncio
 class TestDeleteKeyword:
     async def test_delete_success(
-        self, authed_client: AsyncClient, sample_keyword: Keyword
+        self, admin_client: AsyncClient, sample_keyword: Keyword
     ) -> None:
-        resp = await authed_client.delete(f"/api/v1/keywords/{sample_keyword.id}")
+        resp = await admin_client.delete(f"/api/v1/keywords/{sample_keyword.id}")
         assert resp.status_code == 204
 
         # Verify it's gone
-        resp = await authed_client.get("/api/v1/keywords")
+        resp = await admin_client.get("/api/v1/keywords")
         assert len(resp.json()["items"]) == 0
 
-    async def test_delete_not_found(self, authed_client: AsyncClient) -> None:
-        resp = await authed_client.delete("/api/v1/keywords/99999")
+    async def test_delete_not_found(self, admin_client: AsyncClient) -> None:
+        resp = await admin_client.delete("/api/v1/keywords/99999")
         assert resp.status_code == 404

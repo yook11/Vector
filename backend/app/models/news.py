@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from typing import Optional
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer
@@ -44,6 +45,22 @@ class NewsArticle(SQLModel, table=True):
     )
     guid: str | None = Field(default=None, max_length=2048, unique=True)
 
+    # 3B-1: duplicate article grouping
+    article_group_id: int | None = Field(
+        default=None,
+        sa_column=Column(
+            Integer,
+            ForeignKey(
+                "article_groups.id",
+                ondelete="SET NULL",
+                name="fk_news_articles_article_group_id",
+                use_alter=True,
+            ),
+            nullable=True,
+            index=True,
+        ),
+    )
+
     # Relationships
     analyses: list["AnalysisResult"] = Relationship(back_populates="news_article")
     keyword_links: list["NewsKeyword"] = Relationship(back_populates="news_article")
@@ -52,10 +69,18 @@ class NewsArticle(SQLModel, table=True):
         back_populates="articles",
         sa_relationship_kwargs={"uselist": False},
     )
+    article_group: Optional["ArticleGroup"] = Relationship(
+        back_populates="articles",
+        sa_relationship_kwargs={
+            "uselist": False,
+            "foreign_keys": "[NewsArticle.article_group_id]",
+        },
+    )
 
 
 # Resolve forward references
 from app.models.analysis import AnalysisResult  # noqa: E402, F811
+from app.models.article_group import ArticleGroup  # noqa: E402, F811
 from app.models.associations import NewsKeyword  # noqa: E402, F811
 from app.models.news_source import NewsSource  # noqa: E402, F811
 from app.models.watchlist import WatchlistItem  # noqa: E402, F811

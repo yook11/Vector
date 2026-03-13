@@ -1,7 +1,13 @@
 from datetime import UTC, datetime
+from enum import StrEnum
 
 from sqlalchemy import DateTime
 from sqlmodel import Field, Relationship, SQLModel
+
+
+class UserRole(StrEnum):
+    USER = "user"
+    ADMIN = "admin"
 
 
 class User(SQLModel, table=True):
@@ -11,6 +17,7 @@ class User(SQLModel, table=True):
     email: str = Field(max_length=255, unique=True, nullable=False, index=True)
     hashed_password: str = Field(max_length=255, nullable=False)
     display_name: str | None = Field(default=None, max_length=100)
+    role: str = Field(default=UserRole.USER, max_length=20, nullable=False)
     is_active: bool = Field(default=True, nullable=False)
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(UTC),

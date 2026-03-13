@@ -16,6 +16,7 @@ from app.config import settings
 from app.models.fetch_log import FetchLog
 from app.models.news import NewsArticle
 from app.models.news_source import NewsSource, SourceType
+from app.utils.sanitize import strip_html_tags
 
 HTTP_TIMEOUT = 30.0
 
@@ -201,8 +202,8 @@ async def _fetch_rss_source(
             logger.info("source_fetch_limit_reached", source=source.name, max=max_new)
             break
 
-        title = entry.get("title", "")[:500]
-        description = entry.get("summary") or entry.get("description")
+        title = strip_html_tags(entry.get("title", ""))[:500]
+        description = strip_html_tags(entry.get("summary") or entry.get("description"))
         full_content = _extract_full_content(entry)
         now = datetime.now(UTC)
 

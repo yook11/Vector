@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import func, select
 
-from app.dependencies import get_current_user, get_session
+from app.dependencies import get_admin_user, get_current_user, get_session
 from app.models.news_source import NewsSource
 from app.models.user import User
 from app.schemas.news_source import (
@@ -81,7 +81,7 @@ async def get_source(
 async def create_source(
     body: NewsSourceCreate,
     session: AsyncSession = Depends(get_session),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(get_admin_user),
 ) -> NewsSourceResponse:
     """Create a new news source."""
     # Validate type-specific fields
@@ -115,7 +115,7 @@ async def update_source(
     source_id: int,
     body: NewsSourceUpdate,
     session: AsyncSession = Depends(get_session),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(get_admin_user),
 ) -> NewsSourceResponse:
     """Update an existing news source."""
     source = await session.get(NewsSource, source_id)
@@ -145,7 +145,7 @@ async def update_source(
 async def delete_source(
     source_id: int,
     session: AsyncSession = Depends(get_session),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(get_admin_user),
 ) -> None:
     """Delete a news source."""
     source = await session.get(NewsSource, source_id)
@@ -165,7 +165,7 @@ async def delete_source(
 async def toggle_source(
     source_id: int,
     session: AsyncSession = Depends(get_session),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(get_admin_user),
 ) -> NewsSourceResponse:
     """Toggle a news source's is_active status."""
     source = await session.get(NewsSource, source_id)

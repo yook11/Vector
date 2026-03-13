@@ -564,9 +564,7 @@ def test_parse_response_keywords_without_candidates() -> None:
 
 def test_parse_response_limits_keywords_to_three() -> None:
     analyzer = _create_analyzer()
-    raw = _make_gemini_response(
-        keywords=["A", "B", "C", "D"]
-    )
+    raw = _make_gemini_response(keywords=["A", "B", "C", "D"])
     kw_by_cat = {"cat1": ["A", "B"], "cat2": ["C", "D"]}
     result = analyzer._parse_response(raw, keywords_by_category=kw_by_cat)
     assert len(result.keywords) == 3

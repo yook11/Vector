@@ -23,7 +23,7 @@ from app.models.news import NewsArticle
 
 logger = structlog.get_logger(__name__)
 
-REQUEST_INTERVAL = 1.5  # seconds between API requests (Gemini free tier RPM)
+REQUEST_INTERVAL = settings.analysis_request_interval
 
 
 class AnalysisError(Exception):

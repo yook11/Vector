@@ -15,6 +15,7 @@ export type Sentiment = "positive" | "negative" | "neutral";
 
 /** Query parameters for GET /news (client-side helper). */
 export interface NewsQuery {
+  q?: string;
   keywordId?: number;
   kwCategoryId?: number;
   myKeywords?: boolean;

@@ -1,5 +1,6 @@
 from app.models.ai_model import AIModel
 from app.models.analysis import AnalysisResult, AnalysisTranslation
+from app.models.article_group import ArticleGroup
 from app.models.associations import NewsKeyword
 from app.models.fetch_log import FetchLog
 from app.models.investment_category import (
@@ -22,6 +23,7 @@ from app.models.watchlist import WatchlistItem
 
 __all__ = [
     "AIModel",
+    "ArticleGroup",
     "FetchLog",
     "AnalysisInvestmentCategory",
     "AnalysisResult",
