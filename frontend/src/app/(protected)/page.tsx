@@ -3,6 +3,7 @@ import { getCategories, getKeywordCategories, getNews, getSources, getSubscripti
 import { NewsList } from "@/components/news/NewsList";
 import { NewsFilters } from "@/components/news/NewsFilters";
 import { NewsPagination } from "@/components/news/NewsPagination";
+import { SearchBar } from "@/components/news/SearchBar";
 import { CategorySidebar } from "@/components/layout/CategorySidebar";
 import { MobileSidebar } from "@/components/layout/MobileSidebar";
 import type { NewsQuery, Sentiment } from "@/types";
@@ -19,6 +20,9 @@ function parseSearchParams(
     const v = raw[key];
     return typeof v === "string" ? v : undefined;
   };
+
+  const q = str("q");
+  if (q) query.q = q;
 
   const keywordId = str("keywordId");
   if (keywordId) query.keywordId = Number(keywordId);
@@ -101,6 +105,10 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
             <h1 className="text-2xl font-bold">Dashboard</h1>
           </div>
         </div>
+
+        <Suspense>
+          <SearchBar />
+        </Suspense>
 
         <Suspense>
           <NewsFilters categories={categoriesData.items} sources={sourcesData.items} />

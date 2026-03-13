@@ -1487,6 +1487,7 @@ export interface operations {
                 minImpact?: number | null;
                 category?: string | null;
                 deduplicated?: boolean;
+                q?: string | null;
                 sortBy?: string;
                 sortOrder?: string;
                 page?: number;

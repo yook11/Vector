@@ -34,7 +34,7 @@ from app.schemas.news import (
     NewsResponse,
     PaginatedNewsResponse,
 )
-from app.services.embedding import embed_articles
+from app.services.embedding import EmbeddingError, embed_articles, embed_search_query
 from app.tasks.taskiq_worker import fetch_and_analyze_task
 
 router = APIRouter(prefix="/api/v1/news", tags=["news"])
@@ -171,6 +171,7 @@ async def list_news(
     min_impact: int | None = Query(None, alias="minImpact"),
     category: str | None = None,
     deduplicated: bool = Query(True),
+    q: str | None = Query(None, min_length=1, max_length=500),
     sort_by: str = Query("publishedAt", alias="sortBy"),
     sort_order: str = Query("desc", alias="sortOrder"),
     page: int = Query(1, ge=1),
@@ -181,6 +182,20 @@ async def list_news(
 ) -> PaginatedNewsResponse:
     # Base query with eager loading (including category + translation chains)
     stmt = select(NewsArticle).options(*_news_eager_options())
+
+    # Semantic search: embed query and filter by cosine distance
+    query_embedding: list[float] | None = None
+    if q is not None:
+        try:
+            query_embedding = await embed_search_query(q)
+        except EmbeddingError:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Search embedding generation failed. Please try again.",
+            )
+        stmt = stmt.where(NewsArticle.embedding.is_not(None))
+        distance_expr = NewsArticle.embedding.cosine_distance(query_embedding)
+        stmt = stmt.where(distance_expr < settings.semantic_search_max_distance)
 
     # Deduplication: show only canonical articles from groups
     if deduplicated:
@@ -266,20 +281,26 @@ async def list_news(
     total = (await session.execute(count_stmt)).scalar_one()
 
     # Sorting
-    sort_column_map = {
-        "publishedAt": NewsArticle.published_at,
-        "impactScore": AnalysisResult.impact_score,
-    }
-    sort_col = sort_column_map.get(sort_by, NewsArticle.published_at)
-    if sort_by == "impactScore" and not analysis_joined:
-        stmt = stmt.join(
-            AnalysisResult,
-            _analysis_join_cond,
-            isouter=True,
+    is_default_sort = sort_by == "publishedAt" and sort_order == "desc"
+    if query_embedding is not None and is_default_sort:
+        # Semantic search with default sort: order by similarity (cosine distance ASC)
+        distance_expr = NewsArticle.embedding.cosine_distance(query_embedding)
+        stmt = stmt.order_by(distance_expr.asc())
+    else:
+        sort_column_map = {
+            "publishedAt": NewsArticle.published_at,
+            "impactScore": AnalysisResult.impact_score,
+        }
+        sort_col = sort_column_map.get(sort_by, NewsArticle.published_at)
+        if sort_by == "impactScore" and not analysis_joined:
+            stmt = stmt.join(
+                AnalysisResult,
+                _analysis_join_cond,
+                isouter=True,
+            )
+        stmt = stmt.order_by(
+            col(sort_col).desc() if sort_order == "desc" else col(sort_col).asc()
         )
-    stmt = stmt.order_by(
-        col(sort_col).desc() if sort_order == "desc" else col(sort_col).asc()
-    )
 
     # Pagination
     offset = (page - 1) * per_page

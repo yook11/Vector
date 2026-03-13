@@ -141,6 +141,75 @@ class GeminiEmbedder(BaseEmbedder):
             f"Gemini embedding failed after {MAX_RETRIES} attempts: {last_error}"
         )
 
+    async def embed_query(self, text: str) -> list[float]:
+        """Embed a search query using RETRIEVAL_QUERY task type."""
+        last_error: Exception | None = None
+        attempt = 0
+        rate_limit_retries = 0
+
+        while attempt < MAX_RETRIES:
+            attempt += 1
+            try:
+                logger.info(
+                    "gemini_embed_query_call",
+                    attempt=attempt,
+                    model=GEMINI_EMBED_MODEL,
+                )
+                response = await self._client.aio.models.embed_content(
+                    model=GEMINI_EMBED_MODEL,
+                    contents=[text],
+                    config=types.EmbedContentConfig(
+                        task_type="RETRIEVAL_QUERY",
+                        output_dimensionality=EMBED_DIMENSION,
+                    ),
+                )
+                vector = response.embeddings[0].values
+                logger.info(
+                    "gemini_embed_query_success",
+                    attempt=attempt,
+                    dim=len(vector),
+                )
+                return vector
+
+            except EmbeddingError:
+                raise
+            except Exception as e:
+                last_error = e
+
+                if _is_rate_limit_error(e):
+                    rate_limit_retries += 1
+                    logger.warning(
+                        "gemini_embed_query_rate_limited",
+                        attempt=attempt,
+                        rate_limit_retry=rate_limit_retries,
+                        delay_seconds=RATE_LIMIT_DELAY,
+                        error=str(e),
+                    )
+                    if rate_limit_retries <= MAX_RATE_LIMIT_RETRIES:
+                        await asyncio.sleep(RATE_LIMIT_DELAY)
+                        attempt -= 1
+                        continue
+                    else:
+                        raise RateLimitError(
+                            f"Gemini rate limit exceeded after {rate_limit_retries} "
+                            f"rate-limit retries: {e}"
+                        )
+                else:
+                    logger.warning(
+                        "gemini_embed_query_error",
+                        attempt=attempt,
+                        max_retries=MAX_RETRIES,
+                        error=str(e),
+                        error_type=type(e).__name__,
+                    )
+                    if attempt < MAX_RETRIES:
+                        delay = RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                        await asyncio.sleep(delay)
+
+        raise EmbeddingError(
+            f"Gemini query embedding failed after {MAX_RETRIES} attempts: {last_error}"
+        )
+
     async def embed(self, text: str) -> list[float]:
         """Embed a single text (thin wrapper around embed_batch)."""
         results = await self.embed_batch([text])

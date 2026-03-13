@@ -64,6 +64,9 @@ class Settings(BaseSettings):
     dedup_similarity_threshold: float = 0.15  # cosine distance; lower = stricter
     dedup_time_window_days: int = 3  # compare articles within N days
 
+    # Semantic search
+    semantic_search_max_distance: float = 0.8  # cosine distance threshold
+
     # Task Queue
     redis_url: str = "redis://localhost:6379/0"
 

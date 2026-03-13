@@ -74,6 +74,21 @@ class BaseEmbedder(abc.ABC):
         """
         ...
 
+    @abc.abstractmethod
+    async def embed_query(self, text: str) -> list[float]:
+        """Generate embedding for a search query (RETRIEVAL_QUERY task type).
+
+        Args:
+            text: Search query text to embed.
+
+        Returns:
+            A list of floats with length == self.dimension.
+
+        Raises:
+            EmbeddingError: If the API call fails after retries.
+        """
+        ...
+
     @property
     @abc.abstractmethod
     def dimension(self) -> int:
@@ -99,6 +114,26 @@ def get_embedder() -> BaseEmbedder:
 
         return GeminiEmbedder()
     raise ValueError(f"Unsupported AI provider for embeddings: {provider}")
+
+
+async def embed_search_query(
+    text: str, embedder: BaseEmbedder | None = None
+) -> list[float]:
+    """Embed a search query using RETRIEVAL_QUERY task type.
+
+    Args:
+        text: Search query text.
+        embedder: Embedder instance; defaults to get_embedder().
+
+    Returns:
+        A list of floats representing the query embedding.
+
+    Raises:
+        EmbeddingError: If the API call fails.
+    """
+    if embedder is None:
+        embedder = get_embedder()
+    return await embedder.embed_query(text)
 
 
 def _build_embed_text(article: NewsArticle) -> str:
