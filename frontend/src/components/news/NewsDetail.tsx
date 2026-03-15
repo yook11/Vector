@@ -1,3 +1,4 @@
+import { sanitizeUrl } from "@/lib/utils";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -25,6 +26,12 @@ function formatDate(dateStr: string | null | undefined): string {
 export function NewsDetail({ article }: { article: NewsResponse }) {
   const { analysis } = article;
 
+  // --- XSS対策 Step 3: URLスキームの検証 ---
+  // article.url は外部RSSフィードから取得した値であり、信頼できない。
+  // sanitizeUrl で http/https 以外（javascript: 等）を排除する。
+  // 不正なURLの場合は null が返り、リンク自体を表示しない。
+  const safeUrl = sanitizeUrl(article.url);
+
   return (
     <div className="space-y-6">
       <div>
@@ -42,15 +49,19 @@ export function NewsDetail({ article }: { article: NewsResponse }) {
         <span>{article.source}</span>
         <Separator orientation="vertical" className="h-4" />
         <span>{formatDate(article.publishedAt)}</span>
-        <Separator orientation="vertical" className="h-4" />
-        <Link
-          href={article.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-primary hover:underline"
-        >
-          Original article
-        </Link>
+        {safeUrl !== null && (
+          <>
+            <Separator orientation="vertical" className="h-4" />
+            <Link
+              href={safeUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-primary hover:underline"
+            >
+              Original article
+            </Link>
+          </>
+        )}
       </div>
 
       {article.keywords.length > 0 && (

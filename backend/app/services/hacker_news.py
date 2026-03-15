@@ -12,7 +12,7 @@ from app.config import settings
 from app.models.news import NewsArticle
 from app.models.news_source import NewsSource
 from app.services.news_fetcher import SourceFetchResult
-from app.utils.sanitize import strip_html_tags
+from app.utils.sanitize import is_safe_url, strip_html_tags
 
 HTTP_TIMEOUT = 30.0
 
@@ -163,6 +163,18 @@ class HackerNewsClient:
                 continue
 
             if story.url in existing_urls:
+                result.skipped_count += 1
+                continue
+
+            # --- XSS対策: URLスキーム検証 ---
+            # HN APIから取得したURLも外部ユーザーの投稿データであり、信頼できない。
+            # javascript: 等の危険なスキームをDB保存前に排除する。
+            if not is_safe_url(story.url):
+                logger.warning(
+                    "unsafe_url_skipped",
+                    source=source.name,
+                    url=story.url[:200],
+                )
                 result.skipped_count += 1
                 continue
 

@@ -16,7 +16,7 @@ from app.config import settings
 from app.models.fetch_log import FetchLog
 from app.models.news import NewsArticle
 from app.models.news_source import NewsSource, SourceType
-from app.utils.sanitize import strip_html_tags
+from app.utils.sanitize import is_safe_url, strip_html_tags
 
 HTTP_TIMEOUT = 30.0
 
@@ -198,6 +198,17 @@ async def _fetch_rss_source(
             result.skipped_count += 1
             continue
 
+        # --- URL validation: reject articles with unsafe URL schemes ---
+        article_url = entry_url if entry_url else guid
+        if not is_safe_url(article_url):
+            logger.warning(
+                "unsafe_url_skipped",
+                source=source.name,
+                url=article_url[:200],
+            )
+            result.skipped_count += 1
+            continue
+
         if new_count >= max_new:
             logger.info("source_fetch_limit_reached", source=source.name, max=max_new)
             break
@@ -210,7 +221,7 @@ async def _fetch_rss_source(
         article = NewsArticle(
             title_original=title,
             description_original=description,
-            url=entry_url if entry_url else guid,
+            url=article_url,
             source=source.name,
             source_id=source.id,
             guid=guid,

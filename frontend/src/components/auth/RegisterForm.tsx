@@ -86,14 +86,25 @@ export function RegisterForm() {
               {error}
             </div>
           )}
+          {/* --- XSS対策 Step 1: フロントエンド側の入力ガイド ---
+               ホワイトリストで制限している以上、何が使えるかをユーザーに伝える。
+               maxLength / pattern はブラウザのネイティブバリデーション。
+               ただしこれらはUXのためであり、セキュリティの本体はバックエンド側。
+               攻撃者はブラウザを経由せず直接APIを叩けるため。 */}
           <div className="space-y-2">
             <Label htmlFor="displayName">Display Name</Label>
             <Input
               id="displayName"
               name="displayName"
               type="text"
-              placeholder="Your name (optional)"
+              placeholder="表示名（任意）"
+              maxLength={100}
+              pattern="[\w\s\-]+"
+              title="使用できる文字: 英数字、日本語、スペース、ハイフン、アンダースコア"
             />
+            <p className="text-xs text-muted-foreground">
+              英数字・日本語・スペース・ハイフン・アンダースコアのみ（最大100文字）
+            </p>
           </div>
           <div className="space-y-2">
             <Label htmlFor="email">Email</Label>
