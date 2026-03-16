@@ -8,7 +8,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.ai_model import AIModel
-from app.models.analysis import AnalysisResult, AnalysisTranslation
+from app.models.analysis import AnalysisResult, AnalysisTranslation, Sentiment
 from app.models.associations import NewsKeyword
 from app.models.investment_category import (
     AnalysisInvestmentCategory,
@@ -46,7 +46,7 @@ async def _create_analysis(
     session: AsyncSession,
     article: NewsArticle,
     ai_model_id: int,
-    sentiment: str = "positive",
+    sentiment: Sentiment = Sentiment.POSITIVE,
     impact_score: int = 7,
 ) -> AnalysisResult:
     """Helper to create an analysis result with translation."""
@@ -133,10 +133,10 @@ class TestListNews:
         self, client: AsyncClient, db_session: AsyncSession, sample_ai_model: AIModel
     ) -> None:
         a1 = await _create_article(db_session, url="https://example.com/pos")
-        await _create_analysis(db_session, a1, sample_ai_model.id, sentiment="positive")
+        await _create_analysis(db_session, a1, sample_ai_model.id, sentiment=Sentiment.POSITIVE)
 
         a2 = await _create_article(db_session, url="https://example.com/neg")
-        await _create_analysis(db_session, a2, sample_ai_model.id, sentiment="negative")
+        await _create_analysis(db_session, a2, sample_ai_model.id, sentiment=Sentiment.NEGATIVE)
 
         resp = await client.get("/api/v1/news?sentiment=positive")
         data = resp.json()

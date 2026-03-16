@@ -236,14 +236,14 @@ async def test_av_fetch_quota_exceeded(
     sample_av_source: NewsSource,
 ) -> None:
     """Fetch is blocked when daily quota is exceeded."""
-    from app.models.fetch_log import FetchLog
+    from app.models.fetch_log import FetchLog, FetchStatus
 
     # Insert enough fetch logs to exceed quota
     now = datetime.now(UTC)
     for _ in range(25):
         log = FetchLog(
             source_id=sample_av_source.id,
-            status="success",
+            status=FetchStatus.SUCCESS,
             articles_count=0,
             fetched_at=now,
         )

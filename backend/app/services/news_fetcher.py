@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from app.config import settings
-from app.models.fetch_log import FetchLog
+from app.models.fetch_log import FetchLog, FetchStatus
 from app.models.news import NewsArticle
 from app.models.news_source import NewsSource, SourceType
 from app.utils.sanitize import is_safe_url, strip_html_tags
@@ -324,7 +324,9 @@ async def fetch_news_for_sources(
             # Record fetch log
             fetch_log = FetchLog(
                 source_id=source.id,
-                status="success" if source_result.success else "error",
+                status=(
+                    FetchStatus.SUCCESS if source_result.success else FetchStatus.ERROR
+                ),
                 articles_count=source_result.new_count,
                 error_message=source_result.error_message,
                 duration_ms=duration_ms,

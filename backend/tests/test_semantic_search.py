@@ -7,7 +7,8 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.news import NewsArticle, NewsSource
+from app.models.news import NewsArticle
+from app.models.news_source import NewsSource, SourceType
 
 
 # ---------------------------------------------------------------------------
@@ -22,7 +23,7 @@ FAKE_QUERY_EMBEDDING = [0.1] * 768  # matches A
 async def _create_source(db_session: AsyncSession) -> NewsSource:
     source = NewsSource(
         name="Test Source",
-        source_type="rss",
+        source_type=SourceType.RSS,
         feed_url="https://example.com/feed.xml",
     )
     db_session.add(source)
@@ -138,7 +139,7 @@ async def test_semantic_search_combined_with_source_filter(
     source_a = await _create_source(db_session)
     source_b = NewsSource(
         name="Other Source",
-        source_type="rss",
+        source_type=SourceType.RSS,
         feed_url="https://other.com/feed.xml",
     )
     db_session.add(source_b)

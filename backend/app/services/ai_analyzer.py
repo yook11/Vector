@@ -11,7 +11,7 @@ from sqlmodel import select
 
 from app.config import settings
 from app.models.ai_model import AIModel
-from app.models.analysis import AnalysisResult, AnalysisTranslation
+from app.models.analysis import AnalysisResult, AnalysisTranslation, Sentiment
 from app.models.associations import NewsKeyword
 from app.models.investment_category import (
     AnalysisInvestmentCategory,
@@ -20,6 +20,7 @@ from app.models.investment_category import (
 from app.models.keyword import Keyword
 from app.models.keyword_category import KeywordCategory, KeywordCategoryLink
 from app.models.news import NewsArticle
+from app.utils.sanitize import strip_html_tags
 
 logger = structlog.get_logger(__name__)
 
@@ -40,11 +41,17 @@ class AnalysisData:
 
     title: str
     summary: str
-    sentiment: str  # "positive" | "negative" | "neutral"
-    impact_score: int  # 1-10
+    sentiment: Sentiment
+    impact_score: int
     reasoning: str | None = None
     investment_categories: list[str] | None = None
     keywords: list[str] | None = None
+
+    def __post_init__(self) -> None:
+        if not (1 <= self.impact_score <= 10):
+            raise ValueError(
+                f"impact_score must be between 1 and 10, got {self.impact_score}"
+            )
 
 
 @dataclass
@@ -193,12 +200,20 @@ async def analyze_article(
         logger.error("analysis_failed", article_id=article.id, error=str(e))
         raise
 
+    # --- XSS対策: 多層防御 (Defense in Depth) ---
+    #
+    # AI レスポンスは外部入力と同等に扱い、DB 永続化の直前でサニタイズする。
+    # strip_html_tags() は HTML タグ除去 + エンティティデコードを行う。
+    #
+    # or "" の有無は DB の NOT NULL 制約に対応:
+    #   - reasoning: nullable   → strip_html_tags(None) = None のまま OK
+    #   - title/summary: NOT NULL → None が返った場合に空文字へフォールバック
     result = AnalysisResult(
         news_article_id=article.id,
         ai_model_id=ai_model_id,
         sentiment=data.sentiment,
         impact_score=data.impact_score,
-        reasoning=data.reasoning,
+        reasoning=strip_html_tags(data.reasoning),
         analyzed_at=datetime.now(UTC),
     )
     session.add(result)
@@ -208,8 +223,8 @@ async def analyze_article(
     translation = AnalysisTranslation(
         analysis_id=result.id,
         locale="ja",
-        title=data.title,
-        summary=data.summary,
+        title=strip_html_tags(data.title) or "",
+        summary=strip_html_tags(data.summary) or "",
     )
     session.add(translation)
 

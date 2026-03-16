@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from app.models.ai_model import AIModel
-from app.models.analysis import AnalysisResult
+from app.models.analysis import AnalysisResult, Sentiment
 from app.models.associations import NewsKeyword
 from app.models.investment_category import (
     AnalysisInvestmentCategory,
@@ -92,7 +92,7 @@ def test_parse_response_valid_json() -> None:
     result = analyzer._parse_response(raw)
 
     assert isinstance(result, AnalysisData)
-    assert result.sentiment == "positive"
+    assert result.sentiment == Sentiment.POSITIVE
     assert result.impact_score == 8
     assert result.title == "量子コンピューティングの新たなブレイクスルー"
 
@@ -101,7 +101,7 @@ def test_parse_response_strips_markdown_fences() -> None:
     analyzer = _create_analyzer()
     raw = "```json\n" + _make_gemini_response() + "\n```"
     result = analyzer._parse_response(raw)
-    assert result.sentiment == "positive"
+    assert result.sentiment == Sentiment.POSITIVE
 
 
 def test_parse_response_invalid_json_raises_error() -> None:
@@ -242,7 +242,7 @@ async def test_analyze_article_creates_analysis(
         return_value=AnalysisData(
             title="量子ブレイクスルー",
             summary="要約テスト",
-            sentiment="positive",
+            sentiment=Sentiment.POSITIVE,
             impact_score=8,
             reasoning="テスト理由",
         )
@@ -253,7 +253,7 @@ async def test_analyze_article_creates_analysis(
 
     assert result is not None
     assert result.news_article_id == article.id
-    assert result.sentiment == "positive"
+    assert result.sentiment == Sentiment.POSITIVE
     assert result.ai_model_id == sample_ai_model.id
 
     # Verify translation was created
@@ -289,7 +289,7 @@ async def test_analyze_article_saves_categories(
         return_value=AnalysisData(
             title="AIチップ発売",
             summary="要約テスト",
-            sentiment="positive",
+            sentiment=Sentiment.POSITIVE,
             impact_score=9,
             reasoning="テスト理由",
             investment_categories=["growth_catalyst", "competitive_edge"],
@@ -339,7 +339,7 @@ async def test_analyze_article_ignores_unknown_category(
         return_value=AnalysisData(
             title="テスト",
             summary="要約",
-            sentiment="neutral",
+            sentiment=Sentiment.NEUTRAL,
             impact_score=5,
             investment_categories=["nonexistent_slug"],
         )
@@ -373,7 +373,7 @@ async def test_analyze_article_skips_already_analyzed(
     existing = AnalysisResult(
         news_article_id=article.id,
         ai_model_id=sample_ai_model.id,
-        sentiment="neutral",
+        sentiment=Sentiment.NEUTRAL,
         impact_score=5,
     )
     db_session.add(existing)
@@ -412,7 +412,7 @@ async def test_analyze_articles_batch(
         return_value=AnalysisData(
             title="テスト",
             summary="要約",
-            sentiment="neutral",
+            sentiment=Sentiment.NEUTRAL,
             impact_score=5,
         )
     )
@@ -453,14 +453,14 @@ async def test_analyze_articles_handles_errors(
             AnalysisData(
                 title="成功",
                 summary="要約",
-                sentiment="positive",
+                sentiment=Sentiment.POSITIVE,
                 impact_score=7,
             ),
             AnalysisError("API failed"),
             AnalysisData(
                 title="成功2",
                 summary="要約2",
-                sentiment="negative",
+                sentiment=Sentiment.NEGATIVE,
                 impact_score=3,
             ),
         ]
@@ -508,7 +508,7 @@ async def test_news_endpoint_includes_analysis(
     analysis = AnalysisResult(
         news_article_id=article.id,
         ai_model_id=sample_ai_model.id,
-        sentiment="positive",
+        sentiment=Sentiment.POSITIVE,
         impact_score=8,
         reasoning="テスト理由",
     )
@@ -609,7 +609,7 @@ async def test_analyze_article_saves_keyword_links(
         return_value=AnalysisData(
             title="量子エラー訂正",
             summary="要約",
-            sentiment="positive",
+            sentiment=Sentiment.POSITIVE,
             impact_score=8,
             keywords=["Quantum Computing", "Error Correction"],
         )

@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from app.models.fetch_log import FetchLog
+from app.models.fetch_log import FetchLog, FetchStatus
 from app.models.news_source import NewsSource
 from app.services.news_fetcher import fetch_news_for_sources
 
@@ -48,7 +48,7 @@ async def test_fetch_log_recorded_on_success(
     result = await db_session.execute(stmt)
     log = result.scalar_one()
 
-    assert log.status == "success"
+    assert log.status == FetchStatus.SUCCESS
     assert log.articles_count == 1
     assert log.error_message is None
     assert log.duration_ms is not None
@@ -85,7 +85,7 @@ async def test_fetch_log_recorded_on_error(
     result = await db_session.execute(stmt)
     log = result.scalar_one()
 
-    assert log.status == "error"
+    assert log.status == FetchStatus.ERROR
     assert log.articles_count == 0
     assert log.error_message == "HTTP 500"
     assert log.duration_ms is not None

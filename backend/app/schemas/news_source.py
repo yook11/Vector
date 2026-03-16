@@ -6,6 +6,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 
+from app.models.news_source import SourceType
 from app.utils.sanitize import validate_url_scheme
 
 # --- XSS対策: ソース名のホワイトリスト ---
@@ -27,7 +28,7 @@ class NewsSourceCreate(BaseModel):
     )
 
     name: str = Field(min_length=1, max_length=200)
-    source_type: str  # "rss" | "api"
+    source_type: SourceType
     site_url: str | None = None
     feed_url: str | None = None
     api_endpoint: str | None = None
@@ -53,13 +54,6 @@ class NewsSourceCreate(BaseModel):
                 "Source name can only contain letters, numbers, spaces, "
                 "hyphens, dots, and underscores"
             )
-        return v
-
-    @field_validator("source_type")
-    @classmethod
-    def validate_source_type(cls, v: str) -> str:
-        if v not in ("rss", "api"):
-            raise ValueError("source_type must be 'rss' or 'api'")
         return v
 
     # --- XSS対策: URLスキームのホワイトリスト ---
@@ -97,7 +91,7 @@ class NewsSourceUpdate(BaseModel):
     )
 
     name: str | None = Field(default=None, min_length=1, max_length=200)
-    source_type: str | None = None
+    source_type: SourceType | None = None
     site_url: str | None = None
     feed_url: str | None = None
     api_endpoint: str | None = None
@@ -122,13 +116,6 @@ class NewsSourceUpdate(BaseModel):
                 "Source name can only contain letters, numbers, spaces, "
                 "hyphens, dots, and underscores"
             )
-        return v
-
-    @field_validator("source_type")
-    @classmethod
-    def validate_source_type(cls, v: str | None) -> str | None:
-        if v is not None and v not in ("rss", "api"):
-            raise ValueError("source_type must be 'rss' or 'api'")
         return v
 
     @field_validator("site_url")
@@ -163,7 +150,7 @@ class NewsSourceResponse(BaseModel):
 
     id: int
     name: str
-    source_type: str
+    source_type: SourceType
     site_url: str | None = None
     is_active: bool
     feed_url: str | None = None

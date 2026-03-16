@@ -9,6 +9,7 @@ from google import genai
 from google.genai.types import GenerateContentConfig
 
 from app.config import settings
+from app.models.analysis import Sentiment
 from app.services.ai_analyzer import (
     AnalysisData,
     AnalysisError,
@@ -275,9 +276,7 @@ class GeminiAnalyzer(BaseAnalyzer):
 
         # Validate required fields
         try:
-            sentiment = data["sentiment"]
-            if sentiment not in ("positive", "negative", "neutral"):
-                raise ValueError(f"Invalid sentiment: {sentiment}")
+            sentiment = Sentiment(data["sentiment"])
 
             impact_score = int(data["impact_score"])
             if not (1 <= impact_score <= 10):
