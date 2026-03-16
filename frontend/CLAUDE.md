@@ -1,6 +1,6 @@
 # frontend/ — Next.js フロントエンド
 
-Next.js 14 (App Router) + TypeScript + Tailwind CSS + shadcn/ui によるダッシュボードUI。
+Next.js 15 (App Router) + TypeScript + Tailwind CSS + shadcn/ui によるダッシュボードUI。
 
 ## 公式ドキュメント参照先（リサーチ義務）
 

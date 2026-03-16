@@ -4,7 +4,7 @@
 
 ## 技術スタック
 
-- Frontend: Next.js 14+ (App Router, TypeScript, Tailwind CSS, shadcn/ui)
+- Frontend: Next.js 15 (App Router, TypeScript, Tailwind CSS, shadcn/ui)
 - Backend: FastAPI (Python 3.12+, SQLModel, Pydantic v2)
 - Database: PostgreSQL 16 (Alembic マイグレーション)
 - AI: Gemini API (抽象化済み、差し替え可能)
