@@ -4,7 +4,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from app.models.news_source import NewsSource
+from app.models.news_source import NewsSource, SourceType
 
 
 async def test_list_sources_empty(
@@ -23,7 +23,7 @@ async def test_list_sources(
 ) -> None:
     source = NewsSource(
         name="TechCrunch",
-        source_type="rss",
+        source_type=SourceType.RSS,
         feed_url="https://techcrunch.com/feed/",
     )
     db_session.add(source)

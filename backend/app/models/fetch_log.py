@@ -1,7 +1,13 @@
 from datetime import UTC, datetime
+from enum import StrEnum
 
 from sqlalchemy import DateTime
 from sqlmodel import Field, Relationship, SQLModel
+
+
+class FetchStatus(StrEnum):
+    SUCCESS = "success"
+    ERROR = "error"
 
 
 class FetchLog(SQLModel, table=True):
@@ -9,7 +15,7 @@ class FetchLog(SQLModel, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     source_id: int = Field(foreign_key="news_sources.id", nullable=False, index=True)
-    status: str = Field(max_length=20, nullable=False)  # "success" / "error"
+    status: FetchStatus = Field(max_length=20, nullable=False)
     articles_count: int = Field(default=0, nullable=False)
     error_message: str | None = Field(default=None)
     duration_ms: int | None = Field(default=None)

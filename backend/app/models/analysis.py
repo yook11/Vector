@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from enum import StrEnum
 
 from sqlalchemy import (
     Column,
@@ -10,6 +11,12 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlmodel import Field, Relationship, SQLModel
+
+
+class Sentiment(StrEnum):
+    POSITIVE = "positive"
+    NEGATIVE = "negative"
+    NEUTRAL = "neutral"
 
 
 class AnalysisResult(SQLModel, table=True):
@@ -38,7 +45,7 @@ class AnalysisResult(SQLModel, table=True):
             nullable=False,
         )
     )
-    sentiment: str = Field(max_length=20, nullable=False)
+    sentiment: Sentiment = Field(max_length=20, nullable=False)
     impact_score: int = Field(ge=1, le=10, nullable=False)
     reasoning: str | None = Field(default=None)
     analyzed_at: datetime = Field(

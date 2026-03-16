@@ -14,7 +14,7 @@ from app.models.fetch_log import FetchLog
 from app.models.news import NewsArticle
 from app.models.news_source import NewsSource
 from app.services.news_fetcher import SourceFetchResult
-from app.utils.sanitize import strip_html_tags
+from app.utils.sanitize import is_safe_url, strip_html_tags
 
 HTTP_TIMEOUT = 30.0
 
@@ -179,6 +179,18 @@ class AlphaVantageClient:
 
             url = item.get("url", "")
             if url in existing_urls:
+                result.skipped_count += 1
+                continue
+
+            # --- XSS対策: URLスキーム検証 ---
+            # Alpha Vantage APIから取得したURLも外部データであり、信頼できない。
+            # javascript: 等の危険なスキームをDB保存前に排除する。
+            if not is_safe_url(url):
+                logger.warning(
+                    "unsafe_url_skipped",
+                    source=source.name,
+                    url=url[:200],
+                )
                 result.skipped_count += 1
                 continue
 

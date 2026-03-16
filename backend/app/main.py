@@ -1,9 +1,10 @@
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
 from app.config import settings
 from app.db import engine
@@ -34,12 +35,43 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+# --- セキュリティヘッダ ミドルウェア (4.16.3 / 4.16.9) ---
+# X-Content-Type-Options: nosniff
+#   ブラウザの MIME スニッフィングを無効化する。
+#   Content-Type が application/json でも、ブラウザが中身を見て HTML と推測し
+#   レンダリングしてしまう問題（JSON 直接閲覧 XSS）を防止する。
+# X-Frame-Options: DENY
+#   iframe 内での表示を全面禁止し、クリックジャッキング攻撃を防止する。
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """全レスポンスにセキュリティヘッダを付与するミドルウェア。"""
+
+    async def dispatch(
+        self, request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        return response
+
+
+# Starlette/FastAPI のミドルウェア登録順序:
+# 後に登録したミドルウェアが外側にラップされるため、SecurityHeaders は
+# CORS ヘッダが設定された後の全レスポンスに適用される。
+app.add_middleware(SecurityHeadersMiddleware)
+
+# --- CORS ミドルウェア (4.16.8) ---
+# 最小権限の原則: ワイルドカード ("*") ではなく、実際に使用するメソッドと
+# ヘッダのみを許可する。
+# allow_origins: フロントエンドのオリジンのみ許可
+# allow_methods: API が受け付ける HTTP メソッドのみ
+# allow_headers: Authorization (JWT Bearer) と Content-Type (JSON body) のみ
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings.frontend_url],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 # Register routers

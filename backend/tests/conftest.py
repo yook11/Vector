@@ -30,7 +30,9 @@ from app.models import (  # noqa: F401
     NewsKeyword,
     NewsSource,
     RefreshToken,
+    SourceType,
     User,
+    UserRole,
     UserKeywordSubscription,
     WatchlistItem,
 )
@@ -146,7 +148,7 @@ async def admin_user(db_session: AsyncSession) -> User:
         email="admin@example.com",
         hashed_password=hash_password("AdminPass123"),
         display_name="Admin User",
-        role="admin",
+        role=UserRole.ADMIN,
     )
     db_session.add(user)
     await db_session.commit()
@@ -199,7 +201,7 @@ async def sample_source(db_session: AsyncSession) -> NewsSource:
     """Create and return a test RSS news source."""
     source = NewsSource(
         name="Test Tech Source",
-        source_type="rss",
+        source_type=SourceType.RSS,
         feed_url="https://example.com/feed.xml",
     )
     db_session.add(source)
@@ -213,7 +215,7 @@ async def sample_hn_source(db_session: AsyncSession) -> NewsSource:
     """Create and return a test Hacker News API source."""
     source = NewsSource(
         name="Hacker News",
-        source_type="api",
+        source_type=SourceType.API,
         api_endpoint="hacker-news",
         site_url="https://news.ycombinator.com",
         is_active=True,
@@ -230,7 +232,7 @@ async def sample_av_source(db_session: AsyncSession) -> NewsSource:
     """Create and return a test Alpha Vantage API source."""
     source = NewsSource(
         name="Alpha Vantage",
-        source_type="api",
+        source_type=SourceType.API,
         api_endpoint="alpha-vantage",
         site_url="https://www.alphavantage.co",
         is_active=True,

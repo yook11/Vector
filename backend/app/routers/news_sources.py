@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import func, select
 
 from app.dependencies import get_admin_user, get_current_user, get_session
-from app.models.news_source import NewsSource
+from app.models.news_source import NewsSource, SourceType
 from app.models.user import User
 from app.schemas.news_source import (
     NewsSourceCreate,
@@ -85,12 +85,12 @@ async def create_source(
 ) -> NewsSourceResponse:
     """Create a new news source."""
     # Validate type-specific fields
-    if body.source_type == "rss" and not body.feed_url:
+    if body.source_type == SourceType.RSS and not body.feed_url:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="feed_url is required for RSS sources",
         )
-    if body.source_type == "api" and not body.api_endpoint:
+    if body.source_type == SourceType.API and not body.api_endpoint:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="api_endpoint is required for API sources",
@@ -100,8 +100,8 @@ async def create_source(
         name=body.name,
         source_type=body.source_type,
         site_url=body.site_url,
-        feed_url=body.feed_url if body.source_type == "rss" else None,
-        api_endpoint=body.api_endpoint if body.source_type == "api" else None,
+        feed_url=body.feed_url if body.source_type == SourceType.RSS else None,
+        api_endpoint=body.api_endpoint if body.source_type == SourceType.API else None,
         fetch_interval_minutes=body.fetch_interval_minutes,
     )
     session.add(source)
