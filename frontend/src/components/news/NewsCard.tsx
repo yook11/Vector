@@ -1,17 +1,12 @@
 import Link from "next/link";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { CategoryBadge } from "./CategoryBadge";
-import { SentimentBadge } from "./SentimentBadge";
-import { ImpactScore } from "./ImpactScore";
-import { WatchlistButton } from "./WatchlistButton";
-import { DuplicateBadge } from "./DuplicateBadge";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { NewsResponse } from "@/types";
+import { CategoryBadge } from "./CategoryBadge";
+import { DuplicateBadge } from "./DuplicateBadge";
+import { ImpactScore } from "./ImpactScore";
+import { SentimentBadge } from "./SentimentBadge";
+import { WatchlistButton } from "./WatchlistButton";
 
 function formatDate(dateStr: string | null | undefined): string {
   if (!dateStr) return "Unknown";
@@ -30,10 +25,7 @@ export function NewsCard({ article }: { article: NewsResponse }) {
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between gap-2">
           <CardTitle className="text-base leading-snug">
-            <Link
-              href={`/news/${article.id}`}
-              className="hover:underline"
-            >
+            <Link href={`/news/${article.id}`} className="hover:underline">
               {analysis?.title ?? article.titleOriginal}
             </Link>
           </CardTitle>

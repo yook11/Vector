@@ -9,7 +9,7 @@ export default async function ProtectedLayout({
 }) {
   const session = await getServerSession(authOptions);
 
-  // Not logged in (defensive: middleware normally catches this first)
+  // Not logged in (defensive: proxy normally catches this first)
   if (!session) {
     redirect("/auth/login");
   }

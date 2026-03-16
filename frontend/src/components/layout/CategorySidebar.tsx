@@ -1,11 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { ChevronRight } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { ChevronRight } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 import type { KeywordCategoryDetailResponse } from "@/types";
 
 interface CategorySidebarProps {

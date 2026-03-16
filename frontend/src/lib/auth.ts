@@ -84,7 +84,7 @@ export const authOptions: NextAuthOptions = {
       }
 
       // Return token if not expired
-      if (Date.now() < (token.accessTokenExpires as number ?? 0)) {
+      if (Date.now() < ((token.accessTokenExpires as number) ?? 0)) {
         return token;
       }
 

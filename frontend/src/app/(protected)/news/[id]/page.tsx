@@ -1,11 +1,11 @@
-import { notFound } from "next/navigation";
+import type { Metadata } from "next";
 import Link from "next/link";
-import { Button } from "@/components/ui/button";
+import { notFound } from "next/navigation";
 import { NewsDetail } from "@/components/news/NewsDetail";
 import { RelatedArticles } from "@/components/news/RelatedArticles";
+import { Button } from "@/components/ui/button";
 import { ApiError, getNewsById, getSimilarNews } from "@/lib/api-client";
 import type { NewsResponse } from "@/types";
-import type { Metadata } from "next";
 
 interface NewsPageProps {
   params: Promise<{ id: string }>;

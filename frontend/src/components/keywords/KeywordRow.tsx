@@ -1,11 +1,8 @@
 "use client";
 
-import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { useState } from "react";
 import { toast } from "sonner";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { TableCell, TableRow } from "@/components/ui/table";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -17,10 +14,13 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { KeywordTag } from "./KeywordTag";
-import { SubscriptionToggle } from "./SubscriptionToggle";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { TableCell, TableRow } from "@/components/ui/table";
 import { clientDeleteKeyword as deleteKeyword } from "@/lib/client-api";
 import type { KeywordResponse } from "@/types";
+import { KeywordTag } from "./KeywordTag";
+import { SubscriptionToggle } from "./SubscriptionToggle";
 
 interface KeywordRowProps {
   keyword: KeywordResponse;

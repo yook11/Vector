@@ -3,9 +3,9 @@ import { Inter } from "next/font/google";
 import { headers } from "next/headers";
 import { ThemeProvider } from "next-themes";
 import { Toaster } from "sonner";
-import { Header } from "@/components/layout/Header";
-import { SessionProvider } from "@/components/auth/SessionProvider";
 import { AuthErrorWatcher } from "@/components/auth/AuthErrorWatcher";
+import { SessionProvider } from "@/components/auth/SessionProvider";
+import { Header } from "@/components/layout/Header";
 import "./globals.css";
 
 const inter = Inter({ subsets: ["latin"] });
@@ -22,7 +22,7 @@ export default async function RootLayout({
 }) {
   // --- XSS対策: CSP nonce の受け渡し ---
   //
-  // middleware で生成した nonce をリクエストヘッダーから読み取り、
+  // proxy で生成した nonce をリクエストヘッダーから読み取り、
   // next-themes の ThemeProvider に渡す。
   // next-themes はテーマ検出のためにインラインスクリプトを注入するが、
   // nonce を付与することで CSP の script-src ポリシーに準拠させる。

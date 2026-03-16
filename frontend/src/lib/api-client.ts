@@ -1,4 +1,5 @@
 import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
 import type {
   CategoryListResponse,
   KeywordCategoryDetailListResponse,
@@ -17,7 +18,6 @@ import type {
   WatchlistListResponse,
   WatchlistResponse,
 } from "@/types";
-import { authOptions } from "@/lib/auth";
 
 function getBaseUrl(): string {
   if (typeof window === "undefined") {
@@ -62,10 +62,7 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
   return {};
 }
 
-async function fetchApi<T>(
-  path: string,
-  options?: RequestInit,
-): Promise<T> {
+async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
   const url = `${getBaseUrl()}${path}`;
   const authHeaders = await getAuthHeaders();
   const res = await fetch(url, {
@@ -99,10 +96,9 @@ export async function getNews(
     }
   }
   const qs = params.toString();
-  return fetchApi<PaginatedNewsResponse>(
-    `/news${qs ? `?${qs}` : ""}`,
-    { cache: "no-store" },
-  );
+  return fetchApi<PaginatedNewsResponse>(`/news${qs ? `?${qs}` : ""}`, {
+    cache: "no-store",
+  });
 }
 
 /** Fetch a single news article by ID. */
@@ -245,9 +241,12 @@ export async function getKeywordCategories(
   locale?: string,
 ): Promise<KeywordCategoryDetailListResponse> {
   const qs = locale ? `?locale=${locale}` : "";
-  return fetchApi<KeywordCategoryDetailListResponse>(`/keyword-categories${qs}`, {
-    cache: "no-store",
-  });
+  return fetchApi<KeywordCategoryDetailListResponse>(
+    `/keyword-categories${qs}`,
+    {
+      cache: "no-store",
+    },
+  );
 }
 
 // --- News Sources ---

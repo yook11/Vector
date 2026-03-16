@@ -46,10 +46,7 @@ class ApiError extends Error {
   }
 }
 
-async function clientFetch<T>(
-  path: string,
-  options?: RequestInit,
-): Promise<T> {
+async function clientFetch<T>(path: string, options?: RequestInit): Promise<T> {
   const url = `${getBaseUrl()}${path}`;
 
   const session = await getSessionOnce();

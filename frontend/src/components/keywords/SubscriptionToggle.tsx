@@ -1,9 +1,9 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { clientSubscribe, clientUnsubscribe } from "@/lib/client-api";
-import { useRouter } from "next/navigation";
 
 interface SubscriptionToggleProps {
   keywordId: number;

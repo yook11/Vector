@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect } from "react";
 import { signOut, useSession } from "next-auth/react";
+import { useEffect } from "react";
 
 /**
  * Watches the session error flag and automatically signs out when

@@ -1,11 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
   Dialog,
   DialogContent,
@@ -14,6 +12,8 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -33,10 +33,7 @@ interface SourceFormDialogProps {
   trigger: React.ReactNode;
 }
 
-export function SourceFormDialog({
-  source,
-  trigger,
-}: SourceFormDialogProps) {
+export function SourceFormDialog({ source, trigger }: SourceFormDialogProps) {
   const router = useRouter();
   const isEdit = !!source;
   const [open, setOpen] = useState(false);

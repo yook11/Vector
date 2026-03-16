@@ -1,8 +1,8 @@
-import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   // --- XSS対策: Content Security Policy (CSP) ---
   //
   // CSP はブラウザに「どのリソースの読み込みを許可するか」を指示する HTTP ヘッダー。
@@ -55,7 +55,7 @@ export async function middleware(request: NextRequest) {
   // --- NextAuth 認証チェック ---
   //
   // next-auth/middleware の default export を使わず、getToken() で手動チェック。
-  // CSP ヘッダー設定と認証ロジックを単一の middleware に統合するため。
+  // CSP ヘッダー設定と認証ロジックを単一の proxy に統合するため。
   const token = await getToken({ req: request });
   const isAuthPage = request.nextUrl.pathname.startsWith("/auth");
 
@@ -69,6 +69,6 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  // 静的アセットと API ルートは CSP middleware の対象外
+  // 静的アセットと API ルートは CSP proxy の対象外
   matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"],
 };

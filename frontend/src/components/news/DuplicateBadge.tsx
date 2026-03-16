@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
 import Link from "next/link";
+import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -60,9 +60,7 @@ export function DuplicateBadge({
         <DialogHeader>
           <DialogTitle>Related Sources ({duplicateCount + 1})</DialogTitle>
         </DialogHeader>
-        {loading && (
-          <p className="text-sm text-muted-foreground">Loading...</p>
-        )}
+        {loading && <p className="text-sm text-muted-foreground">Loading...</p>}
         {articles && (
           <ul className="space-y-3">
             {articles.map((a) => (

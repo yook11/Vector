@@ -1,16 +1,11 @@
-import { sanitizeUrl } from "@/lib/utils";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import { SentimentBadge } from "./SentimentBadge";
-import { ImpactScore } from "./ImpactScore";
+import { sanitizeUrl } from "@/lib/utils";
 import type { NewsResponse } from "@/types";
+import { ImpactScore } from "./ImpactScore";
+import { SentimentBadge } from "./SentimentBadge";
 
 function formatDate(dateStr: string | null | undefined): string {
   if (!dateStr) return "Unknown";
