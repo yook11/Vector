@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from sqlalchemy import DateTime
+from sqlalchemy import DateTime, String
 from sqlmodel import Field, Relationship, SQLModel
 
 
@@ -15,7 +15,7 @@ class FetchLog(SQLModel, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     source_id: int = Field(foreign_key="news_sources.id", nullable=False, index=True)
-    status: FetchStatus = Field(max_length=20, nullable=False)
+    status: FetchStatus = Field(sa_type=String(20), nullable=False)
     articles_count: int = Field(default=0, nullable=False)
     error_message: str | None = Field(default=None)
     duration_ms: int | None = Field(default=None)
