@@ -55,6 +55,7 @@ Thumbs.db
 # Claude Code
 # ===========================
 .claude/
+skills-lock.json
 
 # ===========================
 # Build artifacts
