@@ -40,7 +40,7 @@ Step 10: 統合 & E2E                      ✅
 ## Phase 2 フロー図（完了）
 
 ```
-Step A: 認証 (NextAuth.js + JWT)         ✅
+Step A: 認証 (Better Auth BFF)             ✅
   ↓
 Step B: ユーザー機能                      ✅
   (subscriptions, watchlist)
@@ -219,25 +219,29 @@ CLAUDE.md: frontend/CLAUDE.md を参照
 
 ## Phase 2 タスク分解（完了）
 
-### Step A: 認証 (NextAuth.js + JWT) ✅
+### Step A: 認証 (Better Auth BFF) ✅
+
+初期実装は NextAuth.js + JWT だったが、Better Auth + BFF プロキシ構成に移行済み。
+
 ```
 バックエンド:
-  - models/user.py, models/refresh_token.py
-  - schemas/auth.py, schemas/user.py (UserResponse含む)
-  - routers/auth.py (register/login/refresh/logout)
-  - services/auth_service.py (JWT生成/検証, bcryptハッシュ, トークンローテーション)
-  - dependencies.py に get_current_user, get_optional_user 追加
+  - dependencies.py: CurrentUser dataclass + BFF ヘッダー認証 (X-User-ID, X-Internal-Secret)
+  - get_current_user, get_admin_user, get_optional_user
+  - 削除: models/user.py, models/refresh_token.py, routers/auth.py, services/auth_service.py, schemas/auth.py
+  - user_keyword.py, watchlist.py の user_id を INT → VARCHAR(32) に変更
 
 フロントエンド:
-  - lib/auth.ts (NextAuth authOptions, CredentialsProvider)
-  - pages/api/auth/[...nextauth].ts (NextAuth APIルート)
-  - middleware.ts (ルート保護)
-  - components/auth/ (LoginForm, RegisterForm, SessionProvider, AuthErrorWatcher)
-  - app/auth/login/, app/auth/register/ ページ
+  - lib/auth.ts (Better Auth サーバー設定: betterAuth())
+  - lib/auth-client.ts (Better Auth クライアント: createAuthClient())
+  - app/api/auth/[...all]/route.ts (Better Auth ハンドラ)
+  - app/api/proxy/[...path]/route.ts (BFF プロキシ: セッション検証 + ヘッダー付与)
+  - proxy.ts (CSP + Cookie 認証チェック)
+  - components/auth/ (LoginForm, RegisterForm, AuthErrorWatcher)
+  - 削除: SessionProvider.tsx, pages/api/auth/[...nextauth].ts, types/next-auth.d.ts
 
-Alembic:
-  - 2d02a83aa90f: users, refresh_tokens テーブル
-  - a1b2c3d4e5f6: refresh_tokens に revoked_at 追加
+DB:
+  - auth スキーマ (Better Auth CLI で管理)
+  - Alembic: b1_better_auth_schema_migration (users/refresh_tokens 削除, user_id 型変更)
 ```
 
 ### Step B: ユーザー機能 (subscriptions, watchlist) ✅
