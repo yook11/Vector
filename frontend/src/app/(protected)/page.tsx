@@ -99,8 +99,8 @@ export default async function DashboardPage({
   const subscribedKeywordIds = subscriptionsData.items.map((s) => s.keywordId);
 
   return (
-    <div className="flex">
-      <aside className="hidden lg:block w-64 border-r min-h-[calc(100vh-3.5rem)]">
+    <div className="flex h-full">
+      <aside className="hidden lg:block w-64 border-r overflow-y-auto">
         <CategorySidebar
           categories={kwCategoriesData.items}
           activeKwCategoryId={query.kwCategoryId}
@@ -110,7 +110,7 @@ export default async function DashboardPage({
         />
       </aside>
 
-      <main className="flex-1 p-6 space-y-6">
+      <main className="flex-1 p-6 space-y-6 overflow-y-auto">
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <MobileSidebar

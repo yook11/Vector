@@ -174,7 +174,7 @@ async def list_news(
     sort_by: str = Query("publishedAt", alias="sortBy"),
     sort_order: str = Query("desc", alias="sortOrder"),
     page: int = Query(1, ge=1),
-    per_page: int = Query(20, ge=1, le=100, alias="perPage"),
+    per_page: int = Query(12, ge=1, le=100, alias="perPage"),
     locale: str = Query(DEFAULT_LOCALE),
     user: CurrentUser | None = Depends(get_optional_user),
     session: AsyncSession = Depends(get_session),
@@ -211,23 +211,35 @@ async def list_news(
         stmt = stmt.where(NewsArticle.source_id == source_id)
 
     # myKeywords filter: only effective for authenticated users
+    # Use subqueries instead of JOINs to avoid duplicate rows when an article
+    # matches multiple keywords — duplicates would cause perPage undershoot
+    # after .unique() deduplication.
     if my_keywords and user is not None:
         sub_kw_ids = select(UserKeywordSubscription.keyword_id).where(
             UserKeywordSubscription.user_id == user.id
         )
-        stmt = stmt.join(NewsKeyword).where(NewsKeyword.keyword_id.in_(sub_kw_ids))
+        matching_ids = select(NewsKeyword.news_article_id).where(
+            NewsKeyword.keyword_id.in_(sub_kw_ids)
+        )
+        stmt = stmt.where(NewsArticle.id.in_(matching_ids))
     elif keyword_id is not None:
         # keywordId is the most specific filter — when both kwCategoryId and
         # keywordId are provided, keywordId alone is sufficient because the
         # keyword already belongs to that category. kwCategoryId stays in the
         # URL only for frontend sidebar active-state rendering.
-        stmt = stmt.join(NewsKeyword).where(NewsKeyword.keyword_id == keyword_id)
+        matching_ids = select(NewsKeyword.news_article_id).where(
+            NewsKeyword.keyword_id == keyword_id
+        )
+        stmt = stmt.where(NewsArticle.id.in_(matching_ids))
     elif kw_category_id is not None:
         # Filter by all keywords belonging to this keyword category
         sub_kw_ids = select(KeywordCategoryLink.keyword_id).where(
             KeywordCategoryLink.category_id == kw_category_id
         )
-        stmt = stmt.join(NewsKeyword).where(NewsKeyword.keyword_id.in_(sub_kw_ids))
+        matching_ids = select(NewsKeyword.news_article_id).where(
+            NewsKeyword.keyword_id.in_(sub_kw_ids)
+        )
+        stmt = stmt.where(NewsArticle.id.in_(matching_ids))
 
     # Track whether AnalysisResult is already joined
     analysis_joined = False

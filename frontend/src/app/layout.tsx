@@ -40,7 +40,7 @@ export default async function RootLayout({
         >
           <AuthErrorWatcher />
           <Header />
-          <div className="min-h-[calc(100vh-3.5rem)]">{children}</div>
+          <div className="h-[calc(100vh-3.5rem)]">{children}</div>
           <Toaster richColors position="bottom-right" />
         </ThemeProvider>
       </body>
