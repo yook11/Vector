@@ -7,6 +7,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    String,
     Text,
     UniqueConstraint,
 )
@@ -45,7 +46,7 @@ class AnalysisResult(SQLModel, table=True):
             nullable=False,
         )
     )
-    sentiment: Sentiment = Field(max_length=20, nullable=False)
+    sentiment: Sentiment = Field(sa_type=String(20), nullable=False)
     impact_score: int = Field(ge=1, le=10, nullable=False)
     reasoning: str | None = Field(default=None)
     analyzed_at: datetime = Field(

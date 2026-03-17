@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
 import { Menu } from "lucide-react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -10,8 +10,8 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
-import { CategorySidebar } from "./CategorySidebar";
 import type { KeywordCategoryDetailResponse } from "@/types";
+import { CategorySidebar } from "./CategorySidebar";
 
 interface MobileSidebarProps {
   categories: KeywordCategoryDetailResponse[];
@@ -42,7 +42,8 @@ export function MobileSidebar({
         <SheetHeader className="p-4 pb-0">
           <SheetTitle>Filters</SheetTitle>
         </SheetHeader>
-        <div onClick={() => setOpen(false)}>
+        {/* biome-ignore lint/a11y/noStaticElementInteractions: event delegation to close sheet on sidebar link clicks */}
+        <div role="presentation" onClick={() => setOpen(false)}>
           <CategorySidebar
             categories={categories}
             activeKwCategoryId={activeKwCategoryId}

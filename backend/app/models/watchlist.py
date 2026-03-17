@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, UniqueConstraint
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlmodel import Field, Relationship, SQLModel
 
 
@@ -11,13 +11,7 @@ class WatchlistItem(SQLModel, table=True):
     )
 
     id: int | None = Field(default=None, primary_key=True)
-    user_id: int = Field(
-        sa_column=Column(
-            Integer,
-            ForeignKey("users.id", ondelete="CASCADE"),
-            nullable=False,
-        )
-    )
+    user_id: str = Field(sa_column=Column(String(32), nullable=False, index=True))
     news_article_id: int = Field(
         sa_column=Column(
             Integer,
@@ -32,12 +26,10 @@ class WatchlistItem(SQLModel, table=True):
     )
 
     # Relationships
-    user: "User" = Relationship(back_populates="watchlist_items")
     news_article: "NewsArticle" = Relationship(back_populates="watchlist_items")
 
 
 # Resolve forward references
-from app.models.news import NewsArticle  # noqa: E402, F811
-from app.models.user import User  # noqa: E402, F811
+from app.models.news import NewsArticle  # noqa: E402
 
 WatchlistItem.model_rebuild()

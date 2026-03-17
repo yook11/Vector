@@ -1,8 +1,8 @@
 "use client";
 
+import { Search, X } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Search, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 
 const DEBOUNCE_MS = 500;

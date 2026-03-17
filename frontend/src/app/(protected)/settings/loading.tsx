@@ -9,6 +9,7 @@ export default function SettingsLoading() {
       </div>
       <div className="space-y-3">
         {Array.from({ length: 5 }).map((_, i) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: static skeleton list
           <Skeleton key={i} className="h-12 w-full" />
         ))}
       </div>

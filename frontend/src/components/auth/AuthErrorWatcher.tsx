@@ -1,21 +1,23 @@
 "use client";
 
 import { useEffect } from "react";
-import { signOut, useSession } from "next-auth/react";
+import { signOut, useSession } from "@/lib/auth-client";
 
 /**
- * Watches the session error flag and automatically signs out when
- * the refresh token has failed. This handles the case where SPA
+ * Watches the session error state and automatically signs out when
+ * the session is invalid. This handles the case where SPA
  * navigation occurs without a full page reload (no SSR re-execution).
  */
 export function AuthErrorWatcher() {
-  const { data: session } = useSession();
+  const { error } = useSession();
 
   useEffect(() => {
-    if (session?.error === "RefreshTokenError") {
-      signOut({ callbackUrl: "/auth/login" });
+    if (error) {
+      signOut().then(() => {
+        window.location.href = "/auth/login";
+      });
     }
-  }, [session?.error]);
+  }, [error]);
 
   return null;
 }

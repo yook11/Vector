@@ -2,8 +2,8 @@
 
 import { Button } from "@/components/ui/button";
 import type { NewsSourceResponse } from "@/types";
-import { SourceTable } from "./SourceTable";
 import { SourceFormDialog } from "./SourceFormDialog";
+import { SourceTable } from "./SourceTable";
 
 interface SourceManagerProps {
   initialSources: NewsSourceResponse[];

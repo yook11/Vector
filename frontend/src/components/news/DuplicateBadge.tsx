@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
 import Link from "next/link";
+import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -10,6 +10,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { clientGetGroupArticles } from "@/lib/client-api";
 import type { NewsResponse } from "@/types";
 
 function formatDate(dateStr: string | null | undefined): string {
@@ -35,12 +36,10 @@ export function DuplicateBadge({
     if (!open || articles !== null) return;
     setLoading(true);
     try {
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/news/groups/${articleGroupId}`,
-      );
-      if (res.ok) {
-        setArticles(await res.json());
-      }
+      const data = await clientGetGroupArticles(articleGroupId);
+      setArticles(data);
+    } catch {
+      // Failed to fetch group articles
     } finally {
       setLoading(false);
     }
@@ -60,9 +59,7 @@ export function DuplicateBadge({
         <DialogHeader>
           <DialogTitle>Related Sources ({duplicateCount + 1})</DialogTitle>
         </DialogHeader>
-        {loading && (
-          <p className="text-sm text-muted-foreground">Loading...</p>
-        )}
+        {loading && <p className="text-sm text-muted-foreground">Loading...</p>}
         {articles && (
           <ul className="space-y-3">
             {articles.map((a) => (

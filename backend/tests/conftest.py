@@ -29,17 +29,28 @@ from app.models import (  # noqa: F401
     NewsArticle,
     NewsKeyword,
     NewsSource,
-    RefreshToken,
     SourceType,
-    User,
-    UserRole,
     UserKeywordSubscription,
     WatchlistItem,
 )
-from app.services.auth_service import create_access_token
 
 TEST_DATABASE_URL = settings.database_url.rsplit("/", 1)[0] + "/vector_test"
 engine_test = create_async_engine(TEST_DATABASE_URL, echo=False, poolclass=NullPool)
+
+# --- BFF header-based auth helpers ---
+
+TEST_USER_ID = "test-user-id-001"
+TEST_ADMIN_ID = "test-admin-id-001"
+INTERNAL_SECRET = settings.internal_api_secret
+
+
+def _auth_headers(user_id: str, role: str = "user") -> dict[str, str]:
+    """Build X-User-ID / X-User-Role / X-Internal-Secret headers for tests."""
+    return {
+        "X-User-ID": user_id,
+        "X-User-Role": role,
+        "X-Internal-Secret": INTERNAL_SECRET,
+    }
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -97,80 +108,44 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
 
 
 @pytest.fixture
-async def test_user(db_session: AsyncSession) -> User:
-    """Create and return a test user."""
-    from app.services.auth_service import hash_password
-
-    user = User(
-        email="test@example.com",
-        hashed_password=hash_password("TestPass123"),
-        display_name="Test User",
-    )
-    db_session.add(user)
-    await db_session.commit()
-    await db_session.refresh(user)
-    return user
-
-
-@pytest.fixture
-def auth_headers(test_user: User) -> dict[str, str]:
-    """Return Authorization headers with a valid JWT for test_user."""
-    token = create_access_token(test_user.id, test_user.email, test_user.role)
-    return {"Authorization": f"Bearer {token}"}
+def auth_headers() -> dict[str, str]:
+    """Return BFF proxy auth headers for a regular test user."""
+    return _auth_headers(TEST_USER_ID)
 
 
 @pytest.fixture
 async def authed_client(
-    db_session: AsyncSession, test_user: User
+    db_session: AsyncSession,
 ) -> AsyncGenerator[AsyncClient, None]:
-    """Provide an httpx AsyncClient with auth headers pre-set."""
+    """Provide an httpx AsyncClient with BFF proxy auth headers pre-set."""
 
     async def override_session() -> AsyncGenerator[AsyncSession, None]:
         yield db_session
 
-    token = create_access_token(test_user.id, test_user.email, test_user.role)
     app.dependency_overrides[get_session] = override_session
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=_auth_headers(TEST_USER_ID),
     ) as c:
         yield c
     app.dependency_overrides.clear()
 
 
 @pytest.fixture
-async def admin_user(db_session: AsyncSession) -> User:
-    """Create and return an admin test user."""
-    from app.services.auth_service import hash_password
-
-    user = User(
-        email="admin@example.com",
-        hashed_password=hash_password("AdminPass123"),
-        display_name="Admin User",
-        role=UserRole.ADMIN,
-    )
-    db_session.add(user)
-    await db_session.commit()
-    await db_session.refresh(user)
-    return user
-
-
-@pytest.fixture
 async def admin_client(
-    db_session: AsyncSession, admin_user: User
+    db_session: AsyncSession,
 ) -> AsyncGenerator[AsyncClient, None]:
-    """Provide an httpx AsyncClient with admin auth headers pre-set."""
+    """Provide an httpx AsyncClient with admin BFF proxy auth headers pre-set."""
 
     async def override_session() -> AsyncGenerator[AsyncSession, None]:
         yield db_session
 
-    token = create_access_token(admin_user.id, admin_user.email, admin_user.role)
     app.dependency_overrides[get_session] = override_session
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=_auth_headers(TEST_ADMIN_ID, role="admin"),
     ) as c:
         yield c
     app.dependency_overrides.clear()

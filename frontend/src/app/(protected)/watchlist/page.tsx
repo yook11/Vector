@@ -1,13 +1,8 @@
-import Link from "next/link";
-import { getWatchlist } from "@/lib/api-client";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { WatchlistButton } from "@/components/news/WatchlistButton";
 import type { Metadata } from "next";
+import Link from "next/link";
+import { WatchlistButton } from "@/components/news/WatchlistButton";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { getWatchlist } from "@/lib/api-client";
 
 export const metadata: Metadata = {
   title: "Watchlist | Vector",
@@ -26,7 +21,9 @@ interface WatchlistPageProps {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }
 
-export default async function WatchlistPage({ searchParams }: WatchlistPageProps) {
+export default async function WatchlistPage({
+  searchParams,
+}: WatchlistPageProps) {
   const raw = await searchParams;
   const page = typeof raw.page === "string" ? Number(raw.page) : 1;
 

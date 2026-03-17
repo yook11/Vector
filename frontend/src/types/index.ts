@@ -43,8 +43,7 @@ export type CategoryListResponse =
 // Keyword categories
 export type KeywordCategoryBrief =
   components["schemas"]["KeywordCategoryBrief"];
-export type KeywordInCategory =
-  components["schemas"]["KeywordInCategory"];
+export type KeywordInCategory = components["schemas"]["KeywordInCategory"];
 export type KeywordCategoryDetailResponse =
   components["schemas"]["KeywordCategoryDetailResponse"];
 export type KeywordCategoryDetailListResponse =
@@ -53,8 +52,7 @@ export type KeywordCategoryDetailListResponse =
 // Keywords
 export type KeywordBrief = components["schemas"]["KeywordBrief"];
 export type KeywordResponse = components["schemas"]["KeywordResponse"];
-export type KeywordListResponse =
-  components["schemas"]["KeywordListResponse"];
+export type KeywordListResponse = components["schemas"]["KeywordListResponse"];
 export type KeywordCreate = components["schemas"]["KeywordCreate"];
 export type KeywordUpdate = components["schemas"]["KeywordUpdate"];
 
@@ -92,10 +90,6 @@ export type PaginatedNewsResponse = Omit<
 
 export type NewsFetchRequest = components["schemas"]["NewsFetchRequest"];
 export type NewsFetchResponse = components["schemas"]["NewsFetchResponse"];
-export type LoginRequest = components["schemas"]["LoginRequest"];
-export type RegisterRequest = components["schemas"]["RegisterRequest"];
-export type TokenResponse = components["schemas"]["TokenResponse"];
-export type UserResponse = components["schemas"]["UserResponse"];
 export type SubscriptionResponse =
   components["schemas"]["SubscriptionResponse"];
 export type SubscriptionListResponse =
@@ -105,8 +99,7 @@ export type WatchlistListResponse =
   components["schemas"]["WatchlistListResponse"];
 
 // News sources
-export type NewsSourceResponse =
-  components["schemas"]["NewsSourceResponse"];
+export type NewsSourceResponse = components["schemas"]["NewsSourceResponse"];
 export type NewsSourceListResponse =
   components["schemas"]["NewsSourceListResponse"];
 export type NewsSourceCreate = components["schemas"]["NewsSourceCreate"];

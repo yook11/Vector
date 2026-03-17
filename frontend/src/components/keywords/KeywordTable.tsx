@@ -5,8 +5,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { KeywordRow } from "./KeywordRow";
 import type { KeywordResponse } from "@/types";
+import { KeywordRow } from "./KeywordRow";
 
 interface KeywordTableProps {
   keywords: KeywordResponse[];

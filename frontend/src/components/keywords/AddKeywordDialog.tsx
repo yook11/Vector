@@ -1,11 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
   Dialog,
   DialogContent,
@@ -14,6 +12,8 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   ApiError,
   clientCreateKeyword as createKeyword,
@@ -107,9 +107,7 @@ export function AddKeywordDialog({ keywordCategories }: AddKeywordDialogProps) {
                     type="button"
                     size="sm"
                     variant={
-                      selectedCategoryIds.has(cat.id)
-                        ? "default"
-                        : "outline"
+                      selectedCategoryIds.has(cat.id) ? "default" : "outline"
                     }
                     onClick={() => toggleCategory(cat.id)}
                   >

@@ -6,7 +6,7 @@ from sqlalchemy.orm import selectinload
 from sqlmodel import col, func, select
 
 from app.config import settings
-from app.dependencies import get_admin_user, get_optional_user, get_session
+from app.dependencies import CurrentUser, get_admin_user, get_optional_user, get_session
 from app.models.analysis import AnalysisResult
 from app.models.article_group import ArticleGroup
 from app.models.associations import NewsKeyword
@@ -20,7 +20,6 @@ from app.models.keyword_category import (
     KeywordCategoryLink,
 )
 from app.models.news import NewsArticle
-from app.models.user import User
 from app.models.user_keyword import UserKeywordSubscription
 from app.models.watchlist import WatchlistItem
 from app.schemas.analysis import AIModelBrief, AnalysisResponse
@@ -55,7 +54,7 @@ def _get_default_analysis(article: NewsArticle) -> AnalysisResult | None:
     return article.analyses[0] if article.analyses else None
 
 
-async def _get_watched_ids(session: AsyncSession, user: User | None) -> set[int]:
+async def _get_watched_ids(session: AsyncSession, user: CurrentUser | None) -> set[int]:
     """Return set of news_article_ids in the user's watchlist."""
     if user is None:
         return set()
@@ -177,7 +176,7 @@ async def list_news(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100, alias="perPage"),
     locale: str = Query(DEFAULT_LOCALE),
-    user: User | None = Depends(get_optional_user),
+    user: CurrentUser | None = Depends(get_optional_user),
     session: AsyncSession = Depends(get_session),
 ) -> PaginatedNewsResponse:
     # Base query with eager loading (including category + translation chains)
@@ -329,7 +328,7 @@ async def list_news(
 )
 async def embed_news(
     session: AsyncSession = Depends(get_session),
-    _user: User = Depends(get_admin_user),
+    _user: CurrentUser = Depends(get_admin_user),
 ) -> EmbedResponse:
     """Generate vector embeddings for all articles where embedding IS NULL.
 
@@ -414,7 +413,7 @@ async def get_similar_news(
 async def get_group_articles(
     group_id: int,
     locale: str = Query(DEFAULT_LOCALE),
-    user: User | None = Depends(get_optional_user),
+    user: CurrentUser | None = Depends(get_optional_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[NewsResponse]:
     """Return all articles belonging to a duplicate article group."""
@@ -442,7 +441,7 @@ async def get_group_articles(
 async def get_news(
     news_id: int,
     locale: str = Query(DEFAULT_LOCALE),
-    user: User | None = Depends(get_optional_user),
+    user: CurrentUser | None = Depends(get_optional_user),
     session: AsyncSession = Depends(get_session),
 ) -> NewsResponse:
     stmt = (
@@ -470,7 +469,7 @@ async def get_news(
 )
 async def fetch_news(
     body: NewsFetchRequest | None = None,
-    _user: User = Depends(get_admin_user),
+    _user: CurrentUser = Depends(get_admin_user),
 ) -> NewsFetchResponse:
     """Enqueue a news fetch task. Returns immediately with a task ID."""
     source_ids = body.source_ids if body else None

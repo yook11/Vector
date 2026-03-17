@@ -1,8 +1,7 @@
-import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { getToken } from "next-auth/jwt";
+import { NextResponse } from "next/server";
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   // --- XSS対策: Content Security Policy (CSP) ---
   //
   // CSP はブラウザに「どのリソースの読み込みを許可するか」を指示する HTTP ヘッダー。
@@ -29,8 +28,8 @@ export async function middleware(request: NextRequest) {
     "img-src 'self' data:",
     // フォント: 自身のみ（next/font でセルフホスト済み）
     "font-src 'self'",
-    // API 接続先: 自身 + バックエンド API
-    `connect-src 'self' ${process.env.NEXT_PUBLIC_API_URL || ""}`,
+    // API 接続先: BFF 経由のため自身のみ（外部 API への直接接続は不要）
+    "connect-src 'self'",
     // フレーム埋め込み禁止（クリックジャッキング対策、X-Frame-Options: DENY と同等）
     "frame-ancestors 'none'",
     // form の送信先を自身に制限
@@ -52,14 +51,14 @@ export async function middleware(request: NextRequest) {
 
   response.headers.set("Content-Security-Policy", cspHeader);
 
-  // --- NextAuth 認証チェック ---
+  // --- Better Auth 認証チェック ---
   //
-  // next-auth/middleware の default export を使わず、getToken() で手動チェック。
-  // CSP ヘッダー設定と認証ロジックを単一の middleware に統合するため。
-  const token = await getToken({ req: request });
+  // Better Auth はセッション cookie (better-auth.session_token) を使用。
+  // cookie の存在のみで簡易チェックし、実際の検証は BFF proxy 側で行う。
+  const sessionToken = request.cookies.get("better-auth.session_token");
   const isAuthPage = request.nextUrl.pathname.startsWith("/auth");
 
-  if (!token && !isAuthPage) {
+  if (!sessionToken && !isAuthPage) {
     const signInUrl = new URL("/auth/login", request.url);
     signInUrl.searchParams.set("callbackUrl", request.nextUrl.pathname);
     return NextResponse.redirect(signInUrl);
@@ -69,6 +68,6 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  // 静的アセットと API ルートは CSP middleware の対象外
+  // 静的アセットと API ルートは CSP proxy の対象外
   matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"],
 };

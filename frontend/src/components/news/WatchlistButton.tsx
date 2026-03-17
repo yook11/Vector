@@ -1,10 +1,13 @@
 "use client";
 
-import { useState } from "react";
 import { Bookmark } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { clientAddToWatchlist, clientRemoveFromWatchlist } from "@/lib/client-api";
 import { useRouter } from "next/navigation";
+import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import {
+  clientAddToWatchlist,
+  clientRemoveFromWatchlist,
+} from "@/lib/client-api";
 
 interface WatchlistButtonProps {
   newsArticleId: number;
@@ -46,9 +49,7 @@ export function WatchlistButton({
       disabled={pending}
       title={isWatched ? "Remove from watchlist" : "Add to watchlist"}
     >
-      <Bookmark
-        className={`h-4 w-4 ${isWatched ? "fill-current" : ""}`}
-      />
+      <Bookmark className={`h-4 w-4 ${isWatched ? "fill-current" : ""}`} />
     </Button>
   );
 }

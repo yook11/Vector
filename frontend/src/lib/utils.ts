@@ -1,8 +1,8 @@
-import { clsx, type ClassValue } from "clsx"
-import { twMerge } from "tailwind-merge"
+import { type ClassValue, clsx } from "clsx";
+import { twMerge } from "tailwind-merge";
 
 export function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs))
+  return twMerge(clsx(inputs));
 }
 
 // --- XSS対策 Step 3: 出力エスケープ（URLスキームのホワイトリスト） ---
@@ -20,16 +20,16 @@ export function cn(...inputs: ClassValue[]) {
 // 不正なURLの場合は null を返し、呼び出し元でリンク自体を非表示にする。
 // null を使う理由: 空文字 "" は falsy だが「値がある」ことを暗示する。
 // null は「安全なURLが存在しない」という意味を明示的に表現できる。
-const SAFE_URL_PROTOCOLS = new Set(["http:", "https:"])
+const SAFE_URL_PROTOCOLS = new Set(["http:", "https:"]);
 
 export function sanitizeUrl(url: string): string | null {
   try {
-    const parsed = new URL(url)
+    const parsed = new URL(url);
     if (SAFE_URL_PROTOCOLS.has(parsed.protocol)) {
-      return parsed.href
+      return parsed.href;
     }
-    return null
+    return null;
   } catch {
-    return null
+    return null;
   }
 }

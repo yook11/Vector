@@ -9,7 +9,6 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from app.config import settings
 from app.db import engine
 from app.routers import (
-    auth,
     categories,
     keyword_categories,
     keywords,
@@ -71,11 +70,10 @@ app.add_middleware(
     allow_origins=[settings.frontend_url],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_headers=["Content-Type"],
 )
 
 # Register routers
-app.include_router(auth.router)
 app.include_router(categories.router)
 app.include_router(keyword_categories.router)
 app.include_router(keywords.router)

@@ -1,16 +1,20 @@
 from collections.abc import AsyncGenerator
+from dataclasses import dataclass
 
-from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jose import JWTError
+from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
 
+from app.config import settings
 from app.db import engine
-from app.models.user import User, UserRole
-from app.services.auth_service import decode_access_token, get_user_by_id
 
-_bearer_scheme = HTTPBearer(auto_error=False)
+
+@dataclass(frozen=True, slots=True)
+class CurrentUser:
+    """Lightweight user representation populated from BFF proxy headers."""
+
+    id: str
+    role: str
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
@@ -18,47 +22,34 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
-async def get_current_user(
-    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
-    session: AsyncSession = Depends(get_session),
-) -> User:
-    """Extract and validate JWT from Authorization header.
+async def get_current_user(request: Request) -> CurrentUser:
+    """Validate X-Internal-Secret and extract user from BFF proxy headers.
 
-    Returns the user or raises 401.
+    Returns CurrentUser or raises 401.
     """
-    if credentials is None:
+    secret = request.headers.get("X-Internal-Secret")
+    if secret != settings.internal_api_secret:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
-            headers={"WWW-Authenticate": "Bearer"},
         )
 
-    try:
-        payload = decode_access_token(credentials.credentials)
-        user_id = int(payload["sub"])
-    except (JWTError, KeyError, ValueError):
+    user_id = request.headers.get("X-User-ID")
+    if not user_id:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
-            headers={"WWW-Authenticate": "Bearer"},
+            detail="Not authenticated",
         )
 
-    user = await get_user_by_id(session, user_id)
-    if user is None or not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found or inactive",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    return user
+    role = request.headers.get("X-User-Role", "user")
+    return CurrentUser(id=user_id, role=role)
 
 
 async def get_admin_user(
-    current_user: User = Depends(get_current_user),
-) -> User:
+    current_user: CurrentUser = Depends(get_current_user),
+) -> CurrentUser:
     """Require the current user to have admin role. Raises 403 if not."""
-    if current_user.role != UserRole.ADMIN:
+    if current_user.role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access required",
@@ -66,22 +57,15 @@ async def get_admin_user(
     return current_user
 
 
-async def get_optional_user(
-    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
-    session: AsyncSession = Depends(get_session),
-) -> User | None:
+async def get_optional_user(request: Request) -> CurrentUser | None:
     """Like get_current_user but returns None instead of raising 401."""
-    if credentials is None:
+    secret = request.headers.get("X-Internal-Secret")
+    if secret != settings.internal_api_secret:
         return None
 
-    try:
-        payload = decode_access_token(credentials.credentials)
-        user_id = int(payload["sub"])
-    except (JWTError, KeyError, ValueError):
+    user_id = request.headers.get("X-User-ID")
+    if not user_id:
         return None
 
-    user = await get_user_by_id(session, user_id)
-    if user is None or not user.is_active:
-        return None
-
-    return user
+    role = request.headers.get("X-User-Role", "user")
+    return CurrentUser(id=user_id, role=role)

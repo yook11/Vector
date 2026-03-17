@@ -4,7 +4,7 @@
 
 ## 技術スタック
 
-- Frontend: Next.js 14+ (App Router, TypeScript, Tailwind CSS, shadcn/ui)
+- Frontend: Next.js 16 (App Router, TypeScript, Tailwind CSS, shadcn/ui, Biome)
 - Backend: FastAPI (Python 3.12+, SQLModel, Pydantic v2)
 - Database: PostgreSQL 16 (Alembic マイグレーション)
 - AI: Gemini API (抽象化済み、差し替え可能)
@@ -44,7 +44,7 @@
 cd backend && ruff check app/ && ruff format --check app/ && python -m pytest tests/ -x -q
 
 # Frontend
-cd frontend && npx eslint src/ && npx tsc --noEmit
+cd frontend && npx biome check src/ && npx tsc --noEmit
 ```
 
 ## リサーチ義務

@@ -1,19 +1,8 @@
 "use client";
 
-import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { useState } from "react";
 import { toast } from "sonner";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/switch";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -25,6 +14,17 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import {
   ApiError,
   clientDeleteSource,
@@ -108,7 +108,12 @@ export function SourceTable({ sources }: SourceTableProps) {
               <div className="flex items-center gap-2">
                 {source.name}
                 {source.consecutiveErrors >= 5 && (
-                  <Badge variant="destructive" title={source.lastErrorMessage ?? "Multiple consecutive errors"}>
+                  <Badge
+                    variant="destructive"
+                    title={
+                      source.lastErrorMessage ?? "Multiple consecutive errors"
+                    }
+                  >
                     Error
                   </Badge>
                 )}
@@ -144,16 +149,22 @@ export function SourceTable({ sources }: SourceTableProps) {
                 />
                 <AlertDialog>
                   <AlertDialogTrigger asChild>
-                    <Button variant="ghost" size="sm" className="text-destructive">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-destructive"
+                    >
                       Delete
                     </Button>
                   </AlertDialogTrigger>
                   <AlertDialogContent>
                     <AlertDialogHeader>
-                      <AlertDialogTitle>Delete &quot;{source.name}&quot;?</AlertDialogTitle>
+                      <AlertDialogTitle>
+                        Delete &quot;{source.name}&quot;?
+                      </AlertDialogTitle>
                       <AlertDialogDescription>
-                        This will permanently delete this source. Articles already
-                        fetched from this source will remain.
+                        This will permanently delete this source. Articles
+                        already fetched from this source will remain.
                       </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>

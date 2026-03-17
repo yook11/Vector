@@ -1,11 +1,17 @@
 import { Suspense } from "react";
-import { getCategories, getKeywordCategories, getNews, getSources, getSubscriptions } from "@/lib/api-client";
-import { NewsList } from "@/components/news/NewsList";
-import { NewsFilters } from "@/components/news/NewsFilters";
-import { NewsPagination } from "@/components/news/NewsPagination";
-import { SearchBar } from "@/components/news/SearchBar";
 import { CategorySidebar } from "@/components/layout/CategorySidebar";
 import { MobileSidebar } from "@/components/layout/MobileSidebar";
+import { NewsFilters } from "@/components/news/NewsFilters";
+import { NewsList } from "@/components/news/NewsList";
+import { NewsPagination } from "@/components/news/NewsPagination";
+import { SearchBar } from "@/components/news/SearchBar";
+import {
+  getCategories,
+  getKeywordCategories,
+  getNews,
+  getSources,
+  getSubscriptions,
+} from "@/lib/api-client";
 import type { NewsQuery, Sentiment } from "@/types";
 
 interface DashboardPageProps {
@@ -34,7 +40,11 @@ function parseSearchParams(
   if (myKeywords === "true") query.myKeywords = true;
 
   const sentiment = str("sentiment");
-  if (sentiment === "positive" || sentiment === "negative" || sentiment === "neutral") {
+  if (
+    sentiment === "positive" ||
+    sentiment === "negative" ||
+    sentiment === "neutral"
+  ) {
     query.sentiment = sentiment as Sentiment;
   }
 
@@ -66,11 +76,19 @@ function parseSearchParams(
   return query;
 }
 
-export default async function DashboardPage({ searchParams }: DashboardPageProps) {
+export default async function DashboardPage({
+  searchParams,
+}: DashboardPageProps) {
   const raw = await searchParams;
   const query = parseSearchParams(raw);
 
-  const [newsData, subscriptionsData, categoriesData, kwCategoriesData, sourcesData] = await Promise.all([
+  const [
+    newsData,
+    subscriptionsData,
+    categoriesData,
+    kwCategoriesData,
+    sourcesData,
+  ] = await Promise.all([
     getNews(query),
     getSubscriptions().catch(() => ({ items: [] })),
     getCategories().catch(() => ({ items: [] })),
@@ -111,15 +129,15 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
         </Suspense>
 
         <Suspense>
-          <NewsFilters categories={categoriesData.items} sources={sourcesData.items} />
+          <NewsFilters
+            categories={categoriesData.items}
+            sources={sourcesData.items}
+          />
         </Suspense>
 
         <NewsList items={newsData.items} />
 
-        <NewsPagination
-          page={newsData.page}
-          totalPages={newsData.totalPages}
-        />
+        <NewsPagination page={newsData.page} totalPages={newsData.totalPages} />
       </main>
     </div>
   );

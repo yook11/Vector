@@ -1,4 +1,5 @@
-import { getServerSession } from "next-auth";
+import { headers } from "next/headers";
+import { auth } from "@/lib/auth";
 import type {
   CategoryListResponse,
   KeywordCategoryDetailListResponse,
@@ -17,26 +18,12 @@ import type {
   WatchlistListResponse,
   WatchlistResponse,
 } from "@/types";
-import { authOptions } from "@/lib/auth";
 
-function getBaseUrl(): string {
-  if (typeof window === "undefined") {
-    // Server-side: prefer internal Docker URL for SSR
-    const internal = process.env.INTERNAL_API_URL;
-    if (internal) return internal;
-    const pub = process.env.NEXT_PUBLIC_API_URL;
-    if (pub) return pub;
-    throw new Error(
-      "[api-client] NEXT_PUBLIC_API_URL or INTERNAL_API_URL must be set",
-    );
-  }
-  // Client-side: use public URL
-  const pub = process.env.NEXT_PUBLIC_API_URL;
-  if (!pub) {
-    throw new Error("[api-client] NEXT_PUBLIC_API_URL must be set");
-  }
-  return pub;
-}
+const INTERNAL_API_URL =
+  process.env.INTERNAL_API_URL ?? "http://localhost:8000/api/v1";
+
+const INTERNAL_SECRET =
+  process.env.INTERNAL_API_SECRET ?? "change-me-in-production";
 
 class ApiError extends Error {
   constructor(
@@ -49,12 +36,17 @@ class ApiError extends Error {
 }
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
-  if (typeof window !== "undefined") return {};
-  // Server-side: get access token from NextAuth session
   try {
-    const session = await getServerSession(authOptions);
-    if (session?.accessToken) {
-      return { Authorization: `Bearer ${session.accessToken}` };
+    const session = await auth.api.getSession({
+      headers: await headers(),
+    });
+    if (session) {
+      return {
+        "X-User-ID": session.user.id,
+        "X-User-Role":
+          ((session.user as Record<string, unknown>).role as string) ?? "user",
+        "X-Internal-Secret": INTERNAL_SECRET,
+      };
     }
   } catch {
     // Session not available (e.g., during build)
@@ -62,11 +54,8 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
   return {};
 }
 
-async function fetchApi<T>(
-  path: string,
-  options?: RequestInit,
-): Promise<T> {
-  const url = `${getBaseUrl()}${path}`;
+async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
+  const url = `${INTERNAL_API_URL}${path}`;
   const authHeaders = await getAuthHeaders();
   const res = await fetch(url, {
     ...options,
@@ -99,10 +88,9 @@ export async function getNews(
     }
   }
   const qs = params.toString();
-  return fetchApi<PaginatedNewsResponse>(
-    `/news${qs ? `?${qs}` : ""}`,
-    { cache: "no-store" },
-  );
+  return fetchApi<PaginatedNewsResponse>(`/news${qs ? `?${qs}` : ""}`, {
+    cache: "no-store",
+  });
 }
 
 /** Fetch a single news article by ID. */
@@ -245,9 +233,12 @@ export async function getKeywordCategories(
   locale?: string,
 ): Promise<KeywordCategoryDetailListResponse> {
   const qs = locale ? `?locale=${locale}` : "";
-  return fetchApi<KeywordCategoryDetailListResponse>(`/keyword-categories${qs}`, {
-    cache: "no-store",
-  });
+  return fetchApi<KeywordCategoryDetailListResponse>(
+    `/keyword-categories${qs}`,
+    {
+      cache: "no-store",
+    },
+  );
 }
 
 // --- News Sources ---

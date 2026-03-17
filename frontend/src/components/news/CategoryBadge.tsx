@@ -25,7 +25,10 @@ export function CategoryBadge({ category }: { category: CategoryBrief }) {
   const className = colorMap[category.slug] ?? fallback;
   return (
     <Link href={`/?category=${category.slug}`}>
-      <Badge variant="outline" className={cn("text-xs cursor-pointer hover:opacity-80", className)}>
+      <Badge
+        variant="outline"
+        className={cn("text-xs cursor-pointer hover:opacity-80", className)}
+      >
         {category.name}
       </Badge>
     </Link>

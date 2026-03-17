@@ -1,7 +1,7 @@
 import Link from "next/link";
-import { Separator } from "@/components/ui/separator";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
 import { UserMenu } from "@/components/layout/UserMenu";
+import { Separator } from "@/components/ui/separator";
 
 export function Header() {
   return (

@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from sqlalchemy import DateTime
+from sqlalchemy import DateTime, String
 from sqlmodel import Field, Relationship, SQLModel
 
 
@@ -15,7 +15,7 @@ class NewsSource(SQLModel, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     name: str = Field(max_length=200, nullable=False)
-    source_type: SourceType = Field(max_length=20, nullable=False)
+    source_type: SourceType = Field(sa_type=String(20), nullable=False)
     site_url: str | None = Field(default=None, max_length=2048)
     is_active: bool = Field(default=True, nullable=False)
     fetch_interval_minutes: int = Field(default=720, nullable=False)

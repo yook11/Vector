@@ -6,6 +6,7 @@ export default function DashboardLoading() {
       <aside className="hidden lg:block w-64 border-r min-h-[calc(100vh-3.5rem)] p-4 space-y-2">
         <Skeleton className="h-5 w-20 mb-4" />
         {Array.from({ length: 6 }).map((_, i) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: static skeleton list
           <Skeleton key={i} className="h-8 w-full" />
         ))}
       </aside>
@@ -21,6 +22,7 @@ export default function DashboardLoading() {
         </div>
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {Array.from({ length: 6 }).map((_, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: static skeleton list
             <Skeleton key={i} className="h-48 w-full rounded-xl" />
           ))}
         </div>

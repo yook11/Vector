@@ -1,12 +1,14 @@
-import { NewsCard } from "./NewsCard";
 import type { NewsResponse } from "@/types";
+import { NewsCard } from "./NewsCard";
 
 export function NewsList({ items }: { items: NewsResponse[] }) {
   if (items.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
         <p className="text-lg font-medium">No articles found</p>
-        <p className="text-sm">Try adjusting your filters or fetch new articles.</p>
+        <p className="text-sm">
+          Try adjusting your filters or fetch new articles.
+        </p>
       </div>
     );
   }

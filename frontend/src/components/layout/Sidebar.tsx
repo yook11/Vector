@@ -1,6 +1,6 @@
 import Link from "next/link";
-import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 import type { KeywordResponse } from "@/types";
 
 interface SidebarProps {
@@ -28,7 +28,9 @@ export function Sidebar({
         href="/"
         className={cn(
           "flex items-center justify-between px-4 py-2 text-sm rounded-md transition-colors hover:bg-accent",
-          activeKeywordId === undefined && !showMyKeywords && "bg-accent font-medium",
+          activeKeywordId === undefined &&
+            !showMyKeywords &&
+            "bg-accent font-medium",
         )}
       >
         All

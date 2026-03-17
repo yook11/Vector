@@ -5,14 +5,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlmodel import func, select
 
-from app.dependencies import get_current_user, get_session
+from app.dependencies import CurrentUser, get_current_user, get_session
 from app.models.keyword import Keyword
 from app.models.keyword_category import (
     KeywordCategory,
     KeywordCategoryLink,
 )
 from app.models.news import NewsArticle
-from app.models.user import User
 from app.models.user_keyword import UserKeywordSubscription
 from app.models.watchlist import WatchlistItem
 from app.schemas.keyword_category import KeywordCategoryBrief
@@ -52,7 +51,7 @@ def _build_keyword_categories(
 
 @router.get("/subscriptions", response_model=SubscriptionListResponse)
 async def list_subscriptions(
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> SubscriptionListResponse:
     stmt = (
@@ -90,7 +89,7 @@ async def list_subscriptions(
 )
 async def create_subscription(
     body: SubscriptionCreate,
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> SubscriptionResponse:
     # Verify keyword exists (with category links for response)
@@ -143,7 +142,7 @@ async def create_subscription(
 )
 async def delete_subscription(
     keyword_id: int,
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> None:
     stmt = select(UserKeywordSubscription).where(
@@ -168,7 +167,7 @@ async def delete_subscription(
 async def list_watchlist(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100, alias="perPage"),
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> WatchlistListResponse:
     base_stmt = select(WatchlistItem).where(WatchlistItem.user_id == user.id)
@@ -215,7 +214,7 @@ async def list_watchlist(
 )
 async def add_to_watchlist(
     body: WatchlistCreate,
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> WatchlistResponse:
     # Verify article exists
@@ -260,7 +259,7 @@ async def add_to_watchlist(
 )
 async def remove_from_watchlist(
     news_article_id: int,
-    user: User = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> None:
     stmt = select(WatchlistItem).where(

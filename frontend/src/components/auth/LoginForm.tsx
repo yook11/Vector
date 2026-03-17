@@ -1,12 +1,9 @@
 "use client";
 
-import { useState } from "react";
-import { signIn } from "next-auth/react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
   Card,
   CardContent,
@@ -15,6 +12,9 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { signIn } from "@/lib/auth-client";
 
 export function LoginForm() {
   const router = useRouter();
@@ -30,15 +30,14 @@ export function LoginForm() {
     const email = formData.get("email") as string;
     const password = formData.get("password") as string;
 
-    const result = await signIn("credentials", {
+    const { error: authError } = await signIn.email({
       email,
       password,
-      redirect: false,
     });
 
     setIsPending(false);
 
-    if (result?.error) {
+    if (authError) {
       setError("Invalid email or password");
     } else {
       router.push("/");
@@ -71,12 +70,7 @@ export function LoginForm() {
           </div>
           <div className="space-y-2">
             <Label htmlFor="password">Password</Label>
-            <Input
-              id="password"
-              name="password"
-              type="password"
-              required
-            />
+            <Input id="password" name="password" type="password" required />
           </div>
         </CardContent>
         <CardFooter className="flex flex-col gap-2">
@@ -85,7 +79,10 @@ export function LoginForm() {
           </Button>
           <p className="text-sm text-muted-foreground">
             Don&apos;t have an account?{" "}
-            <Link href="/auth/register" className="underline hover:text-foreground">
+            <Link
+              href="/auth/register"
+              className="underline hover:text-foreground"
+            >
               Register
             </Link>
           </p>

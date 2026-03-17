@@ -71,8 +71,8 @@ jobs:
         run: npm ci
         working-directory: frontend
 
-      - name: ESLint
-        run: npx eslint src/
+      - name: Biome check
+        run: npx biome check src/
         working-directory: frontend
 
       - name: TypeScript type check

@@ -1,18 +1,25 @@
 import asyncio
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy.ext.asyncio import create_async_engine
+from sqlmodel import SQLModel
 
+from alembic import context
 from app.config import settings
 from app.models import *  # noqa: F401, F403  — register all models
-from sqlmodel import SQLModel
 
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 target_metadata = SQLModel.metadata
+
+
+def include_name(name: str, type_: str, parent_names: dict[str, str | None]) -> bool:
+    """Exclude the 'auth' schema from autogenerate (managed by Better Auth CLI)."""
+    if type_ == "schema":
+        return name != "auth"
+    return True
 
 
 def run_migrations_offline() -> None:
@@ -22,13 +29,18 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        include_name=include_name,
     )
     with context.begin_transaction():
         context.run_migrations()
 
 
 def do_run_migrations(connection) -> None:  # type: ignore[no-untyped-def]
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        include_name=include_name,
+    )
     with context.begin_transaction():
         context.run_migrations()
 
