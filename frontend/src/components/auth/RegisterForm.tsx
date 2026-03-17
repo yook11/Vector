@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { signIn } from "next-auth/react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,6 +14,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { signUp } from "@/lib/auth-client";
 
 export function RegisterForm() {
   const router = useRouter();
@@ -31,45 +31,26 @@ export function RegisterForm() {
     const password = formData.get("password") as string;
     const displayName = (formData.get("displayName") as string) || undefined;
 
-    try {
-      // Register via backend API
-      const baseUrl = process.env.NEXT_PUBLIC_API_URL;
-      if (!baseUrl) throw new Error("NEXT_PUBLIC_API_URL must be set");
-      const res = await fetch(`${baseUrl}/auth/register`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password, displayName }),
-      });
+    // name: Better Auth required field — fallback to email local part
+    const name = displayName || email.split("@")[0];
 
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        if (res.status === 409) {
-          setError("An account with this email already exists");
-        } else {
-          setError(body.detail ?? "Registration failed");
-        }
-        setIsPending(false);
-        return;
-      }
+    const { error: authError } = await signUp.email({
+      email,
+      password,
+      name,
+    });
 
-      // Auto-login after successful registration
-      const result = await signIn("credentials", {
-        email,
-        password,
-        redirect: false,
-      });
+    setIsPending(false);
 
-      setIsPending(false);
-
-      if (result?.error) {
-        router.push("/auth/login");
+    if (authError) {
+      if (authError.status === 409) {
+        setError("An account with this email already exists");
       } else {
-        router.push("/");
-        router.refresh();
+        setError(authError.message ?? "Registration failed");
       }
-    } catch {
-      setError("Something went wrong. Please try again.");
-      setIsPending(false);
+    } else {
+      router.push("/");
+      router.refresh();
     }
   }
 

@@ -1,40 +1,17 @@
 "use client";
 
-import { getSession, signOut } from "next-auth/react";
 import type {
   KeywordCreate,
   KeywordResponse,
   KeywordUpdate,
   NewsFetchRequest,
   NewsFetchResponse,
+  NewsResponse,
   NewsSourceCreate,
   NewsSourceListResponse,
   NewsSourceResponse,
   NewsSourceUpdate,
 } from "@/types";
-
-function getBaseUrl(): string {
-  const pub = process.env.NEXT_PUBLIC_API_URL;
-  if (!pub) {
-    throw new Error("[client-api] NEXT_PUBLIC_API_URL must be set");
-  }
-  return pub;
-}
-
-// Deduplicate concurrent getSession() calls to prevent parallel refresh
-// token rotation requests that trigger false reuse-attack detection.
-let sessionPromise: ReturnType<typeof getSession> | null = null;
-
-function getSessionOnce(): ReturnType<typeof getSession> {
-  if (!sessionPromise) {
-    sessionPromise = getSession().finally(() => {
-      setTimeout(() => {
-        sessionPromise = null;
-      }, 1000);
-    });
-  }
-  return sessionPromise;
-}
 
 class ApiError extends Error {
   constructor(
@@ -47,19 +24,13 @@ class ApiError extends Error {
 }
 
 async function clientFetch<T>(path: string, options?: RequestInit): Promise<T> {
-  const url = `${getBaseUrl()}${path}`;
-
-  const session = await getSessionOnce();
-  const authHeaders: Record<string, string> = {};
-  if (session?.accessToken) {
-    authHeaders.Authorization = `Bearer ${session.accessToken}`;
-  }
+  // All requests go through BFF proxy — no direct FastAPI access
+  const url = `/api/proxy${path}`;
 
   const res = await fetch(url, {
     ...options,
     headers: {
       "Content-Type": "application/json",
-      ...authHeaders,
       ...options?.headers,
     },
   });
@@ -67,7 +38,7 @@ async function clientFetch<T>(path: string, options?: RequestInit): Promise<T> {
   if (!res.ok) {
     const body = await res.json().catch(() => ({ detail: res.statusText }));
     if (res.status === 401) {
-      await signOut({ callbackUrl: "/auth/login" });
+      window.location.href = "/auth/login";
       return undefined as T;
     }
     throw new ApiError(res.status, body.detail ?? res.statusText);
@@ -142,6 +113,13 @@ export async function clientTriggerFetch(
     method: "POST",
     body: JSON.stringify(body ?? {}),
   });
+}
+
+/** Fetch all articles in a duplicate group. */
+export async function clientGetGroupArticles(
+  groupId: number,
+): Promise<NewsResponse[]> {
+  return clientFetch<NewsResponse[]>(`/news/groups/${groupId}`);
 }
 
 // --- Sources ---

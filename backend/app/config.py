@@ -1,8 +1,13 @@
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# backend/app/config.py -> project root is two levels up
+_ENV_FILE = Path(__file__).resolve().parent.parent.parent / ".env"
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=str(_ENV_FILE), extra="ignore")
 
     # Database
     database_url: str = "postgresql+asyncpg://vector:vector@db:5432/vector"
@@ -37,12 +42,8 @@ class Settings(BaseSettings):
     embed_rate_limit_delay: float = 60.0  # wait after 429
     embed_max_consecutive_failures: int = 3  # circuit breaker
 
-    # Auth / JWT
-    jwt_secret: str = "change-me-in-production-use-a-strong-random-secret"
-    jwt_algorithm: str = "HS256"
-    jwt_expire_minutes: int = 60
-    jwt_refresh_expire_days: int = 30
-    jwt_refresh_grace_period_seconds: int = 10
+    # Internal API (BFF proxy trust)
+    internal_api_secret: str = "change-me-in-production"
 
     # App URLs
     frontend_url: str = "http://localhost:3000"

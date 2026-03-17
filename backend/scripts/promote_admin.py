@@ -19,33 +19,36 @@ from pathlib import Path
 # Ensure the backend package is importable
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from sqlmodel import select
-from sqlmodel.ext.asyncio.session import AsyncSession
+from sqlalchemy import text
 
 from app.db import engine
-from app.models.user import User, UserRole
 
 
 async def promote_or_demote(email: str, *, demote: bool = False) -> None:
-    target_role = UserRole.USER if demote else UserRole.ADMIN
+    target_role = "user" if demote else "admin"
     action = "Demoting" if demote else "Promoting"
 
-    async with AsyncSession(engine) as session:
-        result = await session.execute(select(User).where(User.email == email))
-        user = result.scalar_one_or_none()
+    async with engine.connect() as conn:
+        result = await conn.execute(
+            text('SELECT id, role FROM auth."user" WHERE email = :email'),
+            {"email": email},
+        )
+        row = result.one_or_none()
 
-        if user is None:
+        if row is None:
             print(f"Error: User with email '{email}' not found.")
             sys.exit(1)
 
-        if user.role == target_role:
+        old_role = row.role
+        if old_role == target_role:
             print(f"User '{email}' already has role '{target_role}'.")
             return
 
-        old_role = user.role
-        user.role = target_role
-        session.add(user)
-        await session.commit()
+        await conn.execute(
+            text('UPDATE auth."user" SET role = :role WHERE email = :email'),
+            {"role": target_role, "email": email},
+        )
+        await conn.commit()
 
         print(f"{action} user '{email}': {old_role} -> {target_role}")
 

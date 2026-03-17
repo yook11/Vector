@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, UniqueConstraint
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlmodel import Field, Relationship, SQLModel
 
 
@@ -11,13 +11,7 @@ class UserKeywordSubscription(SQLModel, table=True):
     )
 
     id: int | None = Field(default=None, primary_key=True)
-    user_id: int = Field(
-        sa_column=Column(
-            Integer,
-            ForeignKey("users.id", ondelete="CASCADE"),
-            nullable=False,
-        )
-    )
+    user_id: str = Field(sa_column=Column(String(32), nullable=False, index=True))
     keyword_id: int = Field(
         sa_column=Column(
             Integer,
@@ -32,12 +26,10 @@ class UserKeywordSubscription(SQLModel, table=True):
     )
 
     # Relationships
-    user: "User" = Relationship(back_populates="subscriptions")
     keyword: "Keyword" = Relationship(back_populates="user_subscriptions")
 
 
 # Resolve forward references
-from app.models.keyword import Keyword  # noqa: E402, F811
-from app.models.user import User  # noqa: E402, F811
+from app.models.keyword import Keyword  # noqa: E402
 
 UserKeywordSubscription.model_rebuild()

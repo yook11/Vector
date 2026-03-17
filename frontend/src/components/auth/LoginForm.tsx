@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { signIn } from "next-auth/react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,6 +14,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { signIn } from "@/lib/auth-client";
 
 export function LoginForm() {
   const router = useRouter();
@@ -30,15 +30,14 @@ export function LoginForm() {
     const email = formData.get("email") as string;
     const password = formData.get("password") as string;
 
-    const result = await signIn("credentials", {
+    const { error: authError } = await signIn.email({
       email,
       password,
-      redirect: false,
     });
 
     setIsPending(false);
 
-    if (result?.error) {
+    if (authError) {
       setError("Invalid email or password");
     } else {
       router.push("/");

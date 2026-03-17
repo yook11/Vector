@@ -1,8 +1,8 @@
 "use client";
 
 import { LogOut } from "lucide-react";
-import { signOut, useSession } from "next-auth/react";
 import { Button } from "@/components/ui/button";
+import { signOut, useSession } from "@/lib/auth-client";
 
 export function UserMenu() {
   const { data: session } = useSession();
@@ -17,7 +17,10 @@ export function UserMenu() {
       <Button
         variant="ghost"
         size="sm"
-        onClick={() => signOut({ callbackUrl: "/auth/login" })}
+        onClick={async () => {
+          await signOut();
+          window.location.href = "/auth/login";
+        }}
       >
         <LogOut className="h-4 w-4 mr-1" />
         Sign out

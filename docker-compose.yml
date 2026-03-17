@@ -3,7 +3,7 @@
 # ===========================================
 
 services:
-  # --- Frontend ---
+  # --- Frontend (BFF — public entry point) ---
   frontend:
     build:
       context: ./frontend
@@ -11,10 +11,11 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
       - INTERNAL_API_URL=http://backend:8000/api/v1
-      - NEXTAUTH_URL=http://localhost:3000
-      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-vector-dev-secret-change-in-production}
+      - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:-change-me-in-production-use-a-strong-random-secret}
+      - BETTER_AUTH_URL=http://localhost:3000
+      - AUTH_DATABASE_URL=postgresql://vector:vector@db:5432/vector?search_path=auth
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-change-me-in-production}
     volumes:
       - ./frontend/src:/app/src
       - ./frontend/public:/app/public
@@ -24,18 +25,18 @@ services:
       - ./frontend/postcss.config.js:/app/postcss.config.js
       - ./frontend/tsconfig.json:/app/tsconfig.json
       - ./frontend/next.config.js:/app/next.config.js
-      - ./frontend/.eslintrc.json:/app/.eslintrc.json
     depends_on:
       backend:
         condition: service_healthy
+    networks:
+      - public
+      - internal
 
-  # --- Backend ---
+  # --- Backend (internal only — no ports exposed to host) ---
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    ports:
-      - "8000:8000"
     env_file:
       - .env
     volumes:
@@ -52,6 +53,8 @@ services:
       timeout: 5s
       retries: 10
       start_period: 30s
+    networks:
+      - internal
 
   # --- Database ---
   db:
@@ -69,12 +72,12 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - internal
 
   # --- Redis (Task Queue Broker) ---
   redis:
     image: redis:7-alpine
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -82,6 +85,8 @@ services:
       retries: 5
     volumes:
       - redisdata:/data
+    networks:
+      - internal
 
   # --- taskiq worker (executes news pipeline tasks) ---
   worker:
@@ -105,6 +110,8 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
+    networks:
+      - internal
 
   # --- taskiq scheduler (sends cron-triggered tasks to Redis) ---
   scheduler:
@@ -125,6 +132,13 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
+    networks:
+      - internal
+
+networks:
+  public:
+  internal:
+    internal: true
 
 volumes:
   pgdata:

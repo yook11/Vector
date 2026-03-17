@@ -4,7 +4,6 @@ import { headers } from "next/headers";
 import { ThemeProvider } from "next-themes";
 import { Toaster } from "sonner";
 import { AuthErrorWatcher } from "@/components/auth/AuthErrorWatcher";
-import { SessionProvider } from "@/components/auth/SessionProvider";
 import { Header } from "@/components/layout/Header";
 import "./globals.css";
 
@@ -39,12 +38,10 @@ export default async function RootLayout({
           enableSystem
           nonce={nonce}
         >
-          <SessionProvider>
-            <AuthErrorWatcher />
-            <Header />
-            <div className="min-h-[calc(100vh-3.5rem)]">{children}</div>
-            <Toaster richColors position="bottom-right" />
-          </SessionProvider>
+          <AuthErrorWatcher />
+          <Header />
+          <div className="min-h-[calc(100vh-3.5rem)]">{children}</div>
+          <Toaster richColors position="bottom-right" />
         </ThemeProvider>
       </body>
     </html>

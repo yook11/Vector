@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlmodel import func, select
 
-from app.dependencies import get_admin_user, get_current_user, get_session
+from app.dependencies import CurrentUser, get_admin_user, get_current_user, get_session
 from app.models.associations import NewsKeyword
 from app.models.keyword import Keyword
 from app.models.keyword_category import (
@@ -13,7 +13,6 @@ from app.models.keyword_category import (
     KeywordCategoryLink,
     KeywordCategoryTranslation,
 )
-from app.models.user import User
 from app.schemas.keyword import (
     KeywordCreate,
     KeywordListResponse,
@@ -45,7 +44,7 @@ def _build_categories(
 @router.get("", response_model=KeywordListResponse)
 async def list_keywords(
     locale: str = Query("ja"),
-    _user: User = Depends(get_current_user),
+    _user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> KeywordListResponse:
     stmt = (
@@ -85,7 +84,7 @@ async def list_keywords(
 )
 async def create_keyword(
     body: KeywordCreate,
-    _user: User = Depends(get_admin_user),
+    _user: CurrentUser = Depends(get_admin_user),
     session: AsyncSession = Depends(get_session),
 ) -> KeywordResponse:
     existing = await session.execute(
@@ -154,7 +153,7 @@ async def update_keyword(
     keyword_id: int,
     body: KeywordUpdate,
     locale: str = Query("ja"),
-    _user: User = Depends(get_admin_user),
+    _user: CurrentUser = Depends(get_admin_user),
     session: AsyncSession = Depends(get_session),
 ) -> KeywordResponse:
     keyword = await session.get(Keyword, keyword_id)
@@ -222,7 +221,7 @@ async def update_keyword(
 @router.delete("/{keyword_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_keyword(
     keyword_id: int,
-    _user: User = Depends(get_admin_user),
+    _user: CurrentUser = Depends(get_admin_user),
     session: AsyncSession = Depends(get_session),
 ) -> None:
     keyword = await session.get(Keyword, keyword_id)

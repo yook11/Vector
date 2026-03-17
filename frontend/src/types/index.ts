@@ -90,10 +90,6 @@ export type PaginatedNewsResponse = Omit<
 
 export type NewsFetchRequest = components["schemas"]["NewsFetchRequest"];
 export type NewsFetchResponse = components["schemas"]["NewsFetchResponse"];
-export type LoginRequest = components["schemas"]["LoginRequest"];
-export type RegisterRequest = components["schemas"]["RegisterRequest"];
-export type TokenResponse = components["schemas"]["TokenResponse"];
-export type UserResponse = components["schemas"]["UserResponse"];
 export type SubscriptionResponse =
   components["schemas"]["SubscriptionResponse"];
 export type SubscriptionListResponse =

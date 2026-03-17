@@ -10,6 +10,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { clientGetGroupArticles } from "@/lib/client-api";
 import type { NewsResponse } from "@/types";
 
 function formatDate(dateStr: string | null | undefined): string {
@@ -35,12 +36,10 @@ export function DuplicateBadge({
     if (!open || articles !== null) return;
     setLoading(true);
     try {
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/news/groups/${articleGroupId}`,
-      );
-      if (res.ok) {
-        setArticles(await res.json());
-      }
+      const data = await clientGetGroupArticles(articleGroupId);
+      setArticles(data);
+    } catch {
+      // Failed to fetch group articles
     } finally {
       setLoading(false);
     }
