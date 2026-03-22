@@ -15,24 +15,33 @@ Vector/
 │   ├── tsconfig.json
 │   ├── tailwind.config.ts
 │   ├── next.config.js
+│   ├── postcss.config.js
 │   ├── components.json                # shadcn/ui設定
 │   ├── openapi.json                   # キャッシュ済みOpenAPIスキーマ（generate-types:file用）
 │   └── src/
-│       ├── middleware.ts              # NextAuth ルート保護
+│       ├── proxy.ts                   # CSPヘッダ + Better Auth cookie認証チェック
+│       ├── globals.css
 │       ├── app/
-│       │   ├── layout.tsx             # ルートレイアウト (SessionProvider, Toaster)
+│       │   ├── layout.tsx             # ルートレイアウト (Toaster)
 │       │   ├── not-found.tsx
+│       │   ├── api/
+│       │   │   ├── auth/
+│       │   │   │   └── [...all]/
+│       │   │   │       └── route.ts   # Better Auth ハンドラ
+│       │   │   └── proxy/
+│       │   │       └── [...path]/
+│       │   │           └── route.ts   # BFF プロキシ (→ FastAPI)
 │       │   ├── auth/
 │       │   │   ├── login/
 │       │   │   │   └── page.tsx       # ログイン画面
 │       │   │   └── register/
 │       │   │       └── page.tsx       # ユーザー登録画面
 │       │   └── (protected)/           # 認証必須ルートグループ
-│       │       ├── layout.tsx         # Header含むレイアウト
+│       │       ├── layout.tsx         # Header含むレイアウト (Better Auth session)
 │       │       ├── loading.tsx
 │       │       ├── page.tsx           # ダッシュボード（ニュース一覧）
 │       │       ├── settings/
-│       │       │   ├── page.tsx       # キーワード設定画面
+│       │       │   ├── page.tsx       # キーワード・ソース設定画面
 │       │       │   └── loading.tsx
 │       │       ├── news/
 │       │       │   └── [id]/
@@ -40,22 +49,21 @@ Vector/
 │       │       │       └── not-found.tsx
 │       │       └── watchlist/
 │       │           └── page.tsx       # ウォッチリスト画面
-│       ├── pages/
-│       │   └── api/
-│       │       └── auth/
-│       │           └── [...nextauth].ts  # NextAuth APIルート
 │       ├── components/
 │       │   ├── auth/
-│       │   │   ├── AuthErrorWatcher.tsx  # リフレッシュトークンエラー監視
-│       │   │   ├── LoginForm.tsx
-│       │   │   ├── RegisterForm.tsx
-│       │   │   └── SessionProvider.tsx
+│       │   │   ├── AuthErrorWatcher.tsx  # セッションエラー監視 (useSession)
+│       │   │   ├── LoginForm.tsx         # signIn.email()
+│       │   │   └── RegisterForm.tsx      # signUp.email()
 │       │   ├── layout/
 │       │   │   ├── Header.tsx
 │       │   │   ├── Sidebar.tsx
+│       │   │   ├── CategorySidebar.tsx
 │       │   │   ├── MobileSidebar.tsx
-│       │   │   └── UserMenu.tsx
+│       │   │   ├── ThemeToggle.tsx
+│       │   │   └── UserMenu.tsx          # useSession / signOut
 │       │   ├── news/
+│       │   │   ├── CategoryBadge.tsx
+│       │   │   ├── DuplicateBadge.tsx     # 重複記事グループ表示
 │       │   │   ├── FetchButton.tsx        # 手動RSSフェッチトリガー
 │       │   │   ├── ImpactScore.tsx
 │       │   │   ├── NewsCard.tsx
@@ -64,6 +72,7 @@ Vector/
 │       │   │   ├── NewsList.tsx
 │       │   │   ├── NewsPagination.tsx
 │       │   │   ├── RelatedArticles.tsx    # pgvector類似記事表示
+│       │   │   ├── SearchBar.tsx
 │       │   │   ├── SentimentBadge.tsx
 │       │   │   └── WatchlistButton.tsx
 │       │   ├── keywords/
@@ -72,16 +81,20 @@ Vector/
 │       │   │   ├── KeywordTable.tsx
 │       │   │   ├── KeywordTag.tsx
 │       │   │   └── SubscriptionToggle.tsx
+│       │   ├── sources/
+│       │   │   ├── SourceFormDialog.tsx   # ソース作成/編集ダイアログ
+│       │   │   ├── SourceManager.tsx      # ソース管理コンテナ
+│       │   │   └── SourceTable.tsx        # ソース一覧テーブル
 │       │   └── ui/                    # shadcn/ui（自動生成、手動編集禁止）
 │       ├── lib/
-│       │   ├── api-client.ts          # サーバーサイドAPIクライアント（SSR用）
-│       │   ├── client-api.ts          # クライアントサイドAPIクライアント（use client）
-│       │   ├── auth.ts               # NextAuth設定（authOptions）
+│       │   ├── api-client.ts          # サーバーサイドAPIクライアント（SSR用、BFFヘッダー付与）
+│       │   ├── auth.ts                # Better Auth サーバー設定 (betterAuth())
+│       │   ├── auth-client.ts         # Better Auth クライアント (createAuthClient())
+│       │   ├── client-api.ts          # クライアントサイドAPIクライアント（/api/proxy経由）
 │       │   └── utils.ts              # cn() ユーティリティ
 │       └── types/
 │           ├── generated.ts           # OpenAPIから自動生成（手動編集禁止）
-│           ├── index.ts               # re-export + narrowing
-│           └── next-auth.d.ts         # NextAuth型拡張
+│           └── index.ts               # re-export + narrowing
 │
 ├── backend/
 │   ├── CLAUDE.md                      # バックエンド固有のルール
@@ -89,62 +102,83 @@ Vector/
 │   ├── requirements.txt
 │   ├── pyproject.toml
 │   ├── app/
-│   │   ├── main.py                    # FastAPIエントリーポイント
+│   │   ├── main.py                    # FastAPIエントリーポイント（SecurityHeaders, CORS）
 │   │   ├── config.py                  # 環境変数管理 (pydantic-settings)
 │   │   ├── db.py                      # DB接続・セッション管理
-│   │   ├── dependencies.py            # FastAPI DI (get_session, get_current_user, get_optional_user)
+│   │   ├── dependencies.py            # FastAPI DI (get_session, get_current_user, get_admin_user, get_optional_user)
 │   │   ├── models/
 │   │   │   ├── __init__.py
-│   │   │   ├── news.py               # NewsArticle (embedding含む)
+│   │   │   ├── news.py               # NewsArticle (embedding, article_group_id含む)
 │   │   │   ├── keyword.py            # Keyword
-│   │   │   ├── analysis.py           # AnalysisResult
+│   │   │   ├── analysis.py           # AnalysisResult, AnalysisTranslation
 │   │   │   ├── associations.py       # NewsKeyword
-│   │   │   ├── user.py               # User
-│   │   │   ├── refresh_token.py      # RefreshToken
-│   │   │   ├── user_keyword.py       # UserKeywordSubscription
-│   │   │   └── watchlist.py          # WatchlistItem
+│   │   │   ├── ai_model.py           # AIModel
+│   │   │   ├── article_group.py      # ArticleGroup (重複記事グループ)
+│   │   │   ├── fetch_log.py          # FetchLog
+│   │   │   ├── investment_category.py # InvestmentCategory, Translation, Link
+│   │   │   ├── keyword_category.py   # KeywordCategory, Translation, Link
+│   │   │   ├── news_source.py        # NewsSource, SourceType
+│   │   │   ├── user_keyword.py       # UserKeywordSubscription (user_id: str)
+│   │   │   └── watchlist.py          # WatchlistItem (user_id: str)
 │   │   ├── schemas/                   # Pydantic schemas（SSoT: 型の源泉）
 │   │   │   ├── __init__.py
-│   │   │   ├── news.py               # NewsResponse, PaginatedNewsResponse, NewsFetchRequest/Response, EmbedResponse
+│   │   │   ├── news.py               # NewsResponse, PaginatedNewsResponse, NewsFetchRequest/Response
 │   │   │   ├── keyword.py            # KeywordCreate/Update/Response/ListResponse, KeywordBrief
-│   │   │   ├── analysis.py           # AnalysisResponse
-│   │   │   ├── auth.py               # LoginRequest, RegisterRequest, TokenResponse, RefreshRequest, UserResponse
-│   │   │   └── user.py               # SubscriptionCreate/Response/ListResponse, WatchlistCreate/Response/ListResponse
+│   │   │   ├── analysis.py           # AnalysisResponse, AIModelBrief
+│   │   │   ├── category.py           # CategoryResponse/ListResponse/Brief (投資カテゴリ)
+│   │   │   ├── keyword_category.py   # KeywordCategoryResponse/ListResponse/Brief
+│   │   │   ├── news_source.py        # NewsSourceCreate/Update/Response/ListResponse
+│   │   │   └── user.py               # SubscriptionCreate/Response, WatchlistCreate/Response
 │   │   ├── routers/
 │   │   │   ├── __init__.py
-│   │   │   ├── news.py               # /api/v1/news (一覧・詳細・フェッチ・embed・similar)
+│   │   │   ├── news.py               # /api/v1/news (一覧・詳細・フェッチ・embed・similar・groups)
 │   │   │   ├── keywords.py           # /api/v1/keywords (CRUD)
-│   │   │   ├── auth.py               # /api/v1/auth (register/login/refresh/logout)
-│   │   │   └── me.py                 # /api/v1/me (subscriptions, watchlist)
+│   │   │   ├── me.py                 # /api/v1/me (subscriptions, watchlist)
+│   │   │   ├── news_sources.py       # /api/v1/sources (CRUD, admin限定)
+│   │   │   ├── categories.py         # /api/v1/categories (投資カテゴリ一覧)
+│   │   │   └── keyword_categories.py # /api/v1/keyword-categories (キーワードカテゴリ一覧)
 │   │   ├── services/
 │   │   │   ├── __init__.py
 │   │   │   ├── news_fetcher.py       # RSS取得・重複チェック・DB保存
 │   │   │   ├── ai_analyzer.py        # BaseAnalyzer抽象クラス + 分析オーケストレーション
-│   │   │   ├── gemini_analyzer.py    # GeminiAnalyzer (gemini-2.5-flash)
-│   │   │   ├── content_extractor.py  # 記事全文取得 (newspaper4k)
+│   │   │   ├── gemini_analyzer.py    # GeminiAnalyzer (gemini-2.5-flash-lite)
+│   │   │   ├── content_extractor.py  # 記事全文取得 (trafilatura)
 │   │   │   ├── embedding.py          # BaseEmbedder抽象クラス + embeddingオーケストレーション
-│   │   │   ├── gemini_embedder.py    # GeminiEmbedder (gemini-embedding-001, 768次元)
-│   │   │   └── auth_service.py       # 認証ロジック (JWT, パスワードハッシュ, トークンローテーション)
-│   │   └── tasks/
-│   │       ├── __init__.py
-│   │       └── taskiq_worker.py      # taskiqブローカー・スケジューラー・5フェーズパイプライン
+│   │   │   ├── gemini_embedder.py    # GeminiEmbedder (768次元)
+│   │   │   ├── dedup.py              # 重複記事検出・グループ化 (cosine distance)
+│   │   │   ├── hacker_news.py        # Hacker News API フェッチャー
+│   │   │   └── alpha_vantage.py      # Alpha Vantage ニュースAPI フェッチャー
+│   │   ├── tasks/
+│   │   │   ├── __init__.py
+│   │   │   └── taskiq_worker.py      # taskiqブローカー・スケジューラー・パイプライン
+│   │   ├── scripts/
+│   │   │   └── promote_admin.py      # ユーザーをadminに昇格（auth.user直接SQL）
+│   │   └── utils/
+│   │       └── logger.py             # structlog設定
 │   ├── alembic/
-│   │   ├── env.py
-│   │   └── versions/                 # マイグレーション履歴（7件）
+│   │   ├── env.py                    # authスキーマをautogenerateから除外
+│   │   └── versions/                 # マイグレーション履歴（21件）
 │   └── tests/
 │       ├── CLAUDE.md                  # テストの書き方ルール
-│       ├── conftest.py               # フィクスチャ (db_session, client, test_user, auth_headers等)
+│       ├── conftest.py               # フィクスチャ (db_session, client, BFFヘッダー認証)
 │       ├── test_news_fetcher.py
 │       ├── test_ai_analyzer.py
 │       ├── test_content_extractor.py
 │       ├── test_embedding.py
+│       ├── test_dedup.py
+│       ├── test_semantic_search.py
+│       ├── test_hacker_news.py
+│       ├── test_alpha_vantage.py
+│       ├── test_fetch_logs.py
 │       ├── test_taskiq_worker.py
 │       └── test_routers/
 │           ├── __init__.py
 │           ├── test_news.py
 │           ├── test_keywords.py
-│           ├── test_auth.py
-│           └── test_me.py
+│           ├── test_me.py
+│           ├── test_news_sources.py
+│           ├── test_categories.py
+│           └── test_keyword_categories.py
 │
 └── docs/
     ├── 00_PROJECT_OVERVIEW.md
@@ -166,6 +200,21 @@ backend/app/schemas/ (Pydantic, SSoT)
 frontend/src/types/generated.ts（手動編集禁止）
   ↓ re-export + narrowing
 frontend/src/types/index.ts
+```
+
+## 認証アーキテクチャ
+
+```
+Browser (Cookie: better-auth.session_token)
+  │
+  ├─► /api/auth/* → Better Auth Server (frontend/src/lib/auth.ts)
+  │     └── PostgreSQL auth スキーマ (user, session, account, verification)
+  │
+  └─► /api/proxy/* → BFF Proxy (frontend/src/app/api/proxy/[...path]/route.ts)
+        ├── Cookie → Better Auth session 検証
+        ├── ヘッダー付与: X-User-ID, X-User-Role, X-Internal-Secret
+        └── → FastAPI Backend (INTERNAL_API_URL)
+              └── dependencies.py: get_current_user() でヘッダー検証
 ```
 
 ## CLAUDE.md 配置と対象サブエージェント

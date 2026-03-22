@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import func, select
 
 from app.dependencies import get_session
+from app.models.article_group import ArticleGroup
 from app.models.associations import NewsKeyword
 from app.models.keyword import Keyword
 from app.models.keyword_category import (
@@ -12,6 +13,7 @@ from app.models.keyword_category import (
     KeywordCategoryLink,
     KeywordCategoryTranslation,
 )
+from app.models.news import NewsArticle
 from app.schemas.keyword_category import (
     KeywordCategoryDetailListResponse,
     KeywordCategoryDetailResponse,
@@ -27,6 +29,14 @@ async def list_keyword_categories(
     session: AsyncSession = Depends(get_session),
 ) -> KeywordCategoryDetailListResponse:
     """List all keyword categories with nested keywords and article counts."""
+
+    # 0. Subquery: visible article IDs after deduplication
+    canonical_ids = select(ArticleGroup.canonical_id).where(
+        ArticleGroup.canonical_id.is_not(None)
+    )
+    visible_article_ids = select(NewsArticle.id).where(
+        (NewsArticle.article_group_id.is_(None)) | (NewsArticle.id.in_(canonical_ids))
+    )
 
     # 1. Fetch categories with translated names
     cat_stmt = (
@@ -54,7 +64,11 @@ async def list_keyword_categories(
             ),
         )
         .join(Keyword, Keyword.id == KeywordCategoryLink.keyword_id)
-        .outerjoin(NewsKeyword, NewsKeyword.keyword_id == Keyword.id)
+        .outerjoin(
+            NewsKeyword,
+            (NewsKeyword.keyword_id == Keyword.id)
+            & (NewsKeyword.news_article_id.in_(visible_article_ids)),
+        )
         .group_by(KeywordCategoryLink.category_id, Keyword.id, Keyword.keyword)
         .order_by(Keyword.keyword)
     )
@@ -70,6 +84,7 @@ async def list_keyword_categories(
             ),
         )
         .join(NewsKeyword, NewsKeyword.keyword_id == KeywordCategoryLink.keyword_id)
+        .where(NewsKeyword.news_article_id.in_(visible_article_ids))
         .group_by(KeywordCategoryLink.category_id)
     )
     cat_count_result = await session.execute(cat_count_stmt)

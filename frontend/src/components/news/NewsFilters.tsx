@@ -124,6 +124,20 @@ export function NewsFilters({ categories, sources }: NewsFiltersProps) {
           <SelectItem value="asc">Asc</SelectItem>
         </SelectContent>
       </Select>
+
+      <Select
+        value={searchParams?.get("perPage") ?? "12"}
+        onValueChange={(v) => updateParam("perPage", v)}
+      >
+        <SelectTrigger className="w-[130px]">
+          <SelectValue placeholder="Per page" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="12">12 / page</SelectItem>
+          <SelectItem value="24">24 / page</SelectItem>
+          <SelectItem value="48">48 / page</SelectItem>
+        </SelectContent>
+      </Select>
     </div>
   );
 }
