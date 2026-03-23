@@ -1,6 +1,8 @@
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 
+from app.domain.category import CategoryName, CategorySlug
+
 
 class CategoryBrief(BaseModel):
     """Minimal category info embedded in KeywordResponse / KeywordBrief."""
@@ -10,8 +12,8 @@ class CategoryBrief(BaseModel):
         populate_by_name=True,
     )
 
-    slug: str
-    name: str
+    slug: CategorySlug
+    name: CategoryName
 
 
 class KeywordInCategory(BaseModel):
@@ -36,8 +38,8 @@ class CategoryDetailResponse(BaseModel):
     )
 
     id: int
-    slug: str
-    name: str
+    slug: CategorySlug
+    name: CategoryName
     article_count: int = 0
     keywords: list[KeywordInCategory] = []
 
