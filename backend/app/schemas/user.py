@@ -3,7 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 
-from app.schemas.keyword_category import KeywordCategoryBrief
+from app.schemas.category import CategoryBrief
 
 
 class SubscriptionCreate(BaseModel):
@@ -28,7 +28,7 @@ class SubscriptionResponse(BaseModel):
     id: int
     keyword_id: int
     keyword: str
-    categories: list[KeywordCategoryBrief] = []
+    categories: list[CategoryBrief] = []
     created_at: datetime
 
 

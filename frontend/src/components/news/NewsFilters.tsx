@@ -9,14 +9,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { CategoryResponse, NewsSourceResponse } from "@/types";
+import type { NewsSourceResponse } from "@/types";
 
 interface NewsFiltersProps {
-  categories?: CategoryResponse[];
   sources?: NewsSourceResponse[];
 }
 
-export function NewsFilters({ categories, sources }: NewsFiltersProps) {
+export function NewsFilters({ sources }: NewsFiltersProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -83,27 +82,6 @@ export function NewsFilters({ categories, sources }: NewsFiltersProps) {
             {sources.map((src) => (
               <SelectItem key={src.id} value={String(src.id)}>
                 {src.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      )}
-
-      {categories && categories.length > 0 && (
-        <Select
-          value={searchParams?.get("category") ?? ""}
-          onValueChange={(v) =>
-            updateParam("category", v === "all" ? undefined : v)
-          }
-        >
-          <SelectTrigger className="w-[160px]">
-            <SelectValue placeholder="Investment" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Investments</SelectItem>
-            {categories.map((cat) => (
-              <SelectItem key={cat.slug} value={cat.slug}>
-                {cat.name}
               </SelectItem>
             ))}
           </SelectContent>

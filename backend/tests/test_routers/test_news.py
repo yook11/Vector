@@ -10,10 +10,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.ai_model import AIModel
 from app.models.analysis import AnalysisResult, AnalysisTranslation, Sentiment
 from app.models.associations import NewsKeyword
-from app.models.investment_category import (
-    AnalysisInvestmentCategory,
-    InvestmentCategory,
-)
 from app.models.keyword import Keyword
 from app.models.news import NewsArticle
 from app.models.news_source import NewsSource
@@ -142,30 +138,6 @@ class TestListNews:
         data = resp.json()
         assert data["total"] == 1
 
-    async def test_filter_by_category(
-        self,
-        client: AsyncClient,
-        db_session: AsyncSession,
-        sample_categories: list[InvestmentCategory],
-        sample_ai_model: AIModel,
-    ) -> None:
-        a1 = await _create_article(db_session, url="https://example.com/cat1")
-        analysis1 = await _create_analysis(db_session, a1, sample_ai_model.id)
-
-        # Find the growth_catalyst category
-        gc = next(c for c in sample_categories if c.slug == "growth_catalyst")
-        link = AnalysisInvestmentCategory(analysis_id=analysis1.id, category_id=gc.id)
-        db_session.add(link)
-        await db_session.commit()
-
-        # Create another article without this category
-        a2 = await _create_article(db_session, url="https://example.com/cat2")
-        await _create_analysis(db_session, a2, sample_ai_model.id)
-
-        resp = await client.get("/api/v1/news?category=growth_catalyst")
-        data = resp.json()
-        assert data["total"] == 1
-
     async def test_filter_by_min_impact(
         self, client: AsyncClient, db_session: AsyncSession, sample_ai_model: AIModel
     ) -> None:
@@ -268,28 +240,6 @@ class TestGetNews:
         assert data["analysis"] is not None
         assert data["analysis"]["title"] == "テスト記事"
         assert data["analysis"]["sentiment"] == "positive"
-
-    async def test_get_with_categories(
-        self,
-        client: AsyncClient,
-        db_session: AsyncSession,
-        sample_categories: list[InvestmentCategory],
-        sample_ai_model: AIModel,
-    ) -> None:
-        article = await _create_article(db_session, url="https://example.com/cat-resp")
-        analysis = await _create_analysis(db_session, article, sample_ai_model.id)
-
-        gc = next(c for c in sample_categories if c.slug == "growth_catalyst")
-        link = AnalysisInvestmentCategory(analysis_id=analysis.id, category_id=gc.id)
-        db_session.add(link)
-        await db_session.commit()
-
-        resp = await client.get(f"/api/v1/news/{article.id}")
-        data = resp.json()
-        cats = data["analysis"]["investmentCategories"]
-        assert len(cats) == 1
-        assert cats[0]["slug"] == "growth_catalyst"
-        assert cats[0]["name"] == "成長期待"
 
     async def test_get_with_keywords(
         self,

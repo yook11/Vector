@@ -10,11 +10,11 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
-import type { KeywordCategoryDetailResponse } from "@/types";
+import type { CategoryDetailResponse } from "@/types";
 import { CategorySidebar } from "./CategorySidebar";
 
 interface MobileSidebarProps {
-  categories: KeywordCategoryDetailResponse[];
+  categories: CategoryDetailResponse[];
   activeKwCategoryId?: number;
   activeKeywordId?: number;
   subscribedKeywordIds?: number[];

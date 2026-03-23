@@ -21,7 +21,6 @@ export interface NewsQuery {
   myKeywords?: boolean;
   sentiment?: Sentiment;
   minImpact?: number;
-  category?: string;
   sourceId?: number;
   sortBy?: "publishedAt" | "impactScore";
   sortOrder?: "asc" | "desc";
@@ -34,20 +33,13 @@ export interface NewsQuery {
 // Re-exports from generated types
 // ---------------------------------------------------------------------------
 
-// Investment categories
+// Categories (unified — replaces both KeywordCategory and InvestmentCategory)
 export type CategoryBrief = components["schemas"]["CategoryBrief"];
-export type CategoryResponse = components["schemas"]["CategoryResponse"];
-export type CategoryListResponse =
-  components["schemas"]["CategoryListResponse"];
-
-// Keyword categories
-export type KeywordCategoryBrief =
-  components["schemas"]["KeywordCategoryBrief"];
 export type KeywordInCategory = components["schemas"]["KeywordInCategory"];
-export type KeywordCategoryDetailResponse =
-  components["schemas"]["KeywordCategoryDetailResponse"];
-export type KeywordCategoryDetailListResponse =
-  components["schemas"]["KeywordCategoryDetailListResponse"];
+export type CategoryDetailResponse =
+  components["schemas"]["CategoryDetailResponse"];
+export type CategoryDetailListResponse =
+  components["schemas"]["CategoryDetailListResponse"];
 
 // Keywords
 export type KeywordBrief = components["schemas"]["KeywordBrief"];

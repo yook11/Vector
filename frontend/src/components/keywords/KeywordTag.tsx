@@ -1,6 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import type { KeywordCategoryBrief } from "@/types";
+import type { CategoryBrief } from "@/types";
 
 const categoryColors: Record<string, string> = {
   semiconductor:
@@ -33,7 +33,7 @@ export function KeywordTag({
   categories,
 }: {
   keyword: string;
-  categories?: KeywordCategoryBrief[];
+  categories?: CategoryBrief[];
 }) {
   const primary = categories?.[0];
   const colorClass = primary

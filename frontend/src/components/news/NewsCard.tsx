@@ -2,7 +2,6 @@ import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { NewsResponse } from "@/types";
-import { CategoryBadge } from "./CategoryBadge";
 import { DuplicateBadge } from "./DuplicateBadge";
 import { ImpactScore } from "./ImpactScore";
 import { SentimentBadge } from "./SentimentBadge";
@@ -57,9 +56,6 @@ export function NewsCard({ article }: { article: NewsResponse }) {
             </p>
             <div className="flex flex-wrap gap-1">
               <SentimentBadge sentiment={analysis.sentiment} />
-              {analysis.investmentCategories?.map((cat) => (
-                <CategoryBadge key={cat.slug} category={cat} />
-              ))}
             </div>
           </>
         )}

@@ -1,8 +1,7 @@
 import { headers } from "next/headers";
 import { auth } from "@/lib/auth";
 import type {
-  CategoryListResponse,
-  KeywordCategoryDetailListResponse,
+  CategoryDetailListResponse,
   KeywordCreate,
   KeywordListResponse,
   KeywordResponse,
@@ -218,27 +217,11 @@ export async function getSimilarNews(
 
 // --- Categories ---
 
-/** Fetch all investment categories. */
-export async function getCategories(
-  locale?: string,
-): Promise<CategoryListResponse> {
-  const qs = locale ? `?locale=${locale}` : "";
-  return fetchApi<CategoryListResponse>(`/categories${qs}`, {
+/** Fetch all categories (unified — keywords + article counts). */
+export async function getCategories(): Promise<CategoryDetailListResponse> {
+  return fetchApi<CategoryDetailListResponse>("/categories", {
     cache: "no-store",
   });
-}
-
-/** Fetch all keyword categories. */
-export async function getKeywordCategories(
-  locale?: string,
-): Promise<KeywordCategoryDetailListResponse> {
-  const qs = locale ? `?locale=${locale}` : "";
-  return fetchApi<KeywordCategoryDetailListResponse>(
-    `/keyword-categories${qs}`,
-    {
-      cache: "no-store",
-    },
-  );
 }
 
 // --- News Sources ---

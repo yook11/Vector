@@ -6,10 +6,10 @@ import { useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import type { KeywordCategoryDetailResponse } from "@/types";
+import type { CategoryDetailResponse } from "@/types";
 
 interface CategorySidebarProps {
-  categories: KeywordCategoryDetailResponse[];
+  categories: CategoryDetailResponse[];
   activeKwCategoryId?: number;
   activeKeywordId?: number;
   subscribedKeywordIds?: number[];

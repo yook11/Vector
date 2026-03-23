@@ -10,22 +10,14 @@ from app.dependencies import CurrentUser, get_admin_user, get_optional_user, get
 from app.models.analysis import AnalysisResult
 from app.models.article_group import ArticleGroup
 from app.models.associations import NewsKeyword
-from app.models.investment_category import (
-    AnalysisInvestmentCategory,
-    InvestmentCategory,
-)
+from app.models.category import KeywordCategoryLink
 from app.models.keyword import Keyword
-from app.models.keyword_category import (
-    KeywordCategory,
-    KeywordCategoryLink,
-)
 from app.models.news import NewsArticle
 from app.models.user_keyword import UserKeywordSubscription
 from app.models.watchlist import WatchlistItem
 from app.schemas.analysis import AIModelBrief, AnalysisResponse
 from app.schemas.category import CategoryBrief
 from app.schemas.keyword import KeywordBrief
-from app.schemas.keyword_category import KeywordCategoryBrief
 from app.schemas.news import (
     EmbedResponse,
     NewsFetchRequest,
@@ -74,9 +66,9 @@ def _build_news_response(
             id=link.keyword.id,
             keyword=link.keyword.keyword,
             categories=[
-                KeywordCategoryBrief(
+                CategoryBrief(
                     slug=cl.category.slug,
-                    name=_get_translated(cl.category.translations, locale),
+                    name=cl.category.name,
                 )
                 for cl in link.keyword.category_links
                 if cl.category
@@ -89,14 +81,6 @@ def _build_news_response(
     analysis = None
     a = _get_default_analysis(article)
     if a is not None:
-        categories = [
-            CategoryBrief(
-                slug=link.category.slug,
-                name=_get_translated(link.category.translations, locale),
-            )
-            for link in a.category_links
-            if link.category
-        ]
         analysis = AnalysisResponse(
             title=_get_translated(a.translations, locale, "title"),
             summary=_get_translated(a.translations, locale, "summary"),
@@ -109,7 +93,6 @@ def _build_news_response(
                 name=a.ai_model.name,
             ),
             analyzed_at=a.analyzed_at,
-            investment_categories=categories,
         )
 
     # Duplicate group info
@@ -145,17 +128,12 @@ def _analyses_filtered_load():
 def _news_eager_options() -> list:
     """Return common selectinload options for news queries."""
     return [
-        _analyses_filtered_load()
-        .selectinload(AnalysisResult.category_links)
-        .selectinload(AnalysisInvestmentCategory.category)
-        .selectinload(InvestmentCategory.translations),
         _analyses_filtered_load().selectinload(AnalysisResult.translations),
         _analyses_filtered_load().selectinload(AnalysisResult.ai_model),
         selectinload(NewsArticle.keyword_links)
         .selectinload(NewsKeyword.keyword)
         .selectinload(Keyword.category_links)
-        .selectinload(KeywordCategoryLink.category)
-        .selectinload(KeywordCategory.translations),
+        .selectinload(KeywordCategoryLink.category),
         selectinload(NewsArticle.article_group),
     ]
 
@@ -168,7 +146,6 @@ async def list_news(
     my_keywords: bool = Query(False, alias="myKeywords"),
     sentiment: str | None = None,
     min_impact: int | None = Query(None, alias="minImpact"),
-    category: str | None = None,
     deduplicated: bool = Query(True),
     q: str | None = Query(None, min_length=1, max_length=500),
     sort_by: str = Query("publishedAt", alias="sortBy"),
@@ -179,7 +156,7 @@ async def list_news(
     user: CurrentUser | None = Depends(get_optional_user),
     session: AsyncSession = Depends(get_session),
 ) -> PaginatedNewsResponse:
-    # Base query with eager loading (including category + translation chains)
+    # Base query with eager loading (including category chains)
     stmt = select(NewsArticle).options(*_news_eager_options())
 
     # Semantic search: embed query and filter by cosine distance
@@ -232,7 +209,7 @@ async def list_news(
         )
         stmt = stmt.where(NewsArticle.id.in_(matching_ids))
     elif kw_category_id is not None:
-        # Filter by all keywords belonging to this keyword category
+        # Filter by all keywords belonging to this category
         sub_kw_ids = select(KeywordCategoryLink.keyword_id).where(
             KeywordCategoryLink.category_id == kw_category_id
         )
@@ -266,26 +243,6 @@ async def list_news(
             )
             analysis_joined = True
         stmt = stmt.where(AnalysisResult.impact_score >= min_impact)
-
-    if category is not None:
-        if not analysis_joined:
-            stmt = stmt.join(
-                AnalysisResult,
-                _analysis_join_cond,
-                isouter=False,
-            )
-            analysis_joined = True
-        stmt = (
-            stmt.join(
-                AnalysisInvestmentCategory,
-                AnalysisInvestmentCategory.analysis_id == AnalysisResult.id,
-            )
-            .join(
-                InvestmentCategory,
-                InvestmentCategory.id == AnalysisInvestmentCategory.category_id,
-            )
-            .where(InvestmentCategory.slug == category)
-        )
 
     # Count total before pagination
     count_stmt = select(func.count()).select_from(stmt.subquery())

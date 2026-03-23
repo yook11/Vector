@@ -6,15 +6,12 @@ from sqlalchemy.orm import selectinload
 from sqlmodel import func, select
 
 from app.dependencies import CurrentUser, get_current_user, get_session
+from app.models.category import KeywordCategoryLink
 from app.models.keyword import Keyword
-from app.models.keyword_category import (
-    KeywordCategory,
-    KeywordCategoryLink,
-)
 from app.models.news import NewsArticle
 from app.models.user_keyword import UserKeywordSubscription
 from app.models.watchlist import WatchlistItem
-from app.schemas.keyword_category import KeywordCategoryBrief
+from app.schemas.category import CategoryBrief
 from app.schemas.user import (
     SubscriptionCreate,
     SubscriptionListResponse,
@@ -26,24 +23,16 @@ from app.schemas.user import (
 
 router = APIRouter(prefix="/api/v1/me", tags=["me"])
 
-DEFAULT_LOCALE = "ja"
-
 
 def _build_keyword_categories(
-    category_links: list[KeywordCategoryLink], locale: str = DEFAULT_LOCALE
-) -> list[KeywordCategoryBrief]:
-    """Extract translated category briefs from keyword category links."""
-    result = []
-    for link in category_links:
-        if not link.category:
-            continue
-        name = ""
-        for t in link.category.translations:
-            if t.locale == locale:
-                name = t.name
-                break
-        result.append(KeywordCategoryBrief(slug=link.category.slug, name=name))
-    return result
+    category_links: list[KeywordCategoryLink],
+) -> list[CategoryBrief]:
+    """Extract category briefs from keyword category links."""
+    return [
+        CategoryBrief(slug=link.category.slug, name=link.category.name)
+        for link in category_links
+        if link.category
+    ]
 
 
 # --- Subscriptions ---
@@ -61,7 +50,6 @@ async def list_subscriptions(
             selectinload(UserKeywordSubscription.keyword)
             .selectinload(Keyword.category_links)
             .selectinload(KeywordCategoryLink.category)
-            .selectinload(KeywordCategory.translations)
         )
         .order_by(UserKeywordSubscription.created_at.desc())
     )
@@ -97,9 +85,9 @@ async def create_subscription(
         select(Keyword)
         .where(Keyword.id == body.keyword_id)
         .options(
-            selectinload(Keyword.category_links)
-            .selectinload(KeywordCategoryLink.category)
-            .selectinload(KeywordCategory.translations)
+            selectinload(Keyword.category_links).selectinload(
+                KeywordCategoryLink.category
+            )
         )
     )
     result = await session.execute(stmt)

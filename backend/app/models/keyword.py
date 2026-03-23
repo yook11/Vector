@@ -30,7 +30,7 @@ class Keyword(SQLModel, table=True):
 
 # Resolve forward references
 from app.models.associations import NewsKeyword  # noqa: E402, F811
-from app.models.keyword_category import KeywordCategoryLink  # noqa: E402, F811
+from app.models.category import KeywordCategoryLink  # noqa: E402, F811
 from app.models.user_keyword import UserKeywordSubscription  # noqa: E402, F811
 
 Keyword.model_rebuild()

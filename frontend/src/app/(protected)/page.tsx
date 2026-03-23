@@ -7,7 +7,6 @@ import { NewsPagination } from "@/components/news/NewsPagination";
 import { SearchBar } from "@/components/news/SearchBar";
 import {
   getCategories,
-  getKeywordCategories,
   getNews,
   getSources,
   getSubscriptions,
@@ -54,9 +53,6 @@ function parseSearchParams(
   const sourceId = str("sourceId");
   if (sourceId) query.sourceId = Number(sourceId);
 
-  const category = str("category");
-  if (category) query.category = category;
-
   const sortBy = str("sortBy");
   if (sortBy === "publishedAt" || sortBy === "impactScore") {
     query.sortBy = sortBy;
@@ -82,19 +78,15 @@ export default async function DashboardPage({
   const raw = await searchParams;
   const query = parseSearchParams(raw);
 
-  const [
-    newsData,
-    subscriptionsData,
-    categoriesData,
-    kwCategoriesData,
-    sourcesData,
-  ] = await Promise.all([
-    getNews(query),
-    getSubscriptions().catch(() => ({ items: [] })),
-    getCategories().catch(() => ({ items: [] })),
-    getKeywordCategories().catch(() => ({ items: [] })),
-    getSources().catch(() => ({ items: [], total: 0 })),
-  ]);
+  const [newsData, subscriptionsData, categoriesData, sourcesData] =
+    await Promise.all([
+      getNews(query),
+      getSubscriptions().catch(() => ({
+        items: [] as { keywordId: number }[],
+      })),
+      getCategories().catch(() => ({ items: [] })),
+      getSources().catch(() => ({ items: [], total: 0 })),
+    ]);
 
   const subscribedKeywordIds = subscriptionsData.items.map((s) => s.keywordId);
 
@@ -102,7 +94,7 @@ export default async function DashboardPage({
     <div className="flex h-full">
       <aside className="hidden lg:block w-64 border-r overflow-y-auto">
         <CategorySidebar
-          categories={kwCategoriesData.items}
+          categories={categoriesData.items}
           activeKwCategoryId={query.kwCategoryId}
           activeKeywordId={query.keywordId}
           subscribedKeywordIds={subscribedKeywordIds}
@@ -114,7 +106,7 @@ export default async function DashboardPage({
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <MobileSidebar
-              categories={kwCategoriesData.items}
+              categories={categoriesData.items}
               activeKwCategoryId={query.kwCategoryId}
               activeKeywordId={query.keywordId}
               subscribedKeywordIds={subscribedKeywordIds}
@@ -129,10 +121,7 @@ export default async function DashboardPage({
         </Suspense>
 
         <Suspense>
-          <NewsFilters
-            categories={categoriesData.items}
-            sources={sourcesData.items}
-          />
+          <NewsFilters sources={sourcesData.items} />
         </Suspense>
 
         <NewsList items={newsData.items} />

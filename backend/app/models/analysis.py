@@ -58,9 +58,6 @@ class AnalysisResult(SQLModel, table=True):
     # Relationships
     news_article: "NewsArticle" = Relationship(back_populates="analyses")
     ai_model: "AIModel" = Relationship(back_populates="analyses")
-    category_links: list["AnalysisInvestmentCategory"] = Relationship(
-        back_populates="analysis"
-    )
     translations: list["AnalysisTranslation"] = Relationship(back_populates="analysis")
 
 
@@ -88,9 +85,6 @@ class AnalysisTranslation(SQLModel, table=True):
 
 # Resolve forward references
 from app.models.ai_model import AIModel  # noqa: E402, F811
-from app.models.investment_category import (  # noqa: E402
-    AnalysisInvestmentCategory,  # noqa: F811
-)
 from app.models.news import NewsArticle  # noqa: E402, F811
 
 AnalysisResult.model_rebuild()

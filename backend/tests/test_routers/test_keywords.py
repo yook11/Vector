@@ -4,11 +4,8 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.category import Category, KeywordCategoryLink
 from app.models.keyword import Keyword
-from app.models.keyword_category import (
-    KeywordCategory,
-    KeywordCategoryLink,
-)
 
 
 @pytest.mark.asyncio
@@ -35,10 +32,10 @@ class TestListKeywords:
         authed_client: AsyncClient,
         db_session: AsyncSession,
         sample_keyword: Keyword,
-        sample_keyword_categories: list[KeywordCategory],
+        sample_categories: list[Category],
     ) -> None:
         # Link keyword to a category
-        cat = sample_keyword_categories[1]  # "quantum"
+        cat = sample_categories[1]  # "quantum"
         link = KeywordCategoryLink(keyword_id=sample_keyword.id, category_id=cat.id)
         db_session.add(link)
         await db_session.commit()
@@ -49,23 +46,6 @@ class TestListKeywords:
         assert len(item["categories"]) == 1
         assert item["categories"][0]["slug"] == "quantum"
         assert item["categories"][0]["name"] == "量子コンピュータ"
-
-    async def test_locale_en(
-        self,
-        authed_client: AsyncClient,
-        db_session: AsyncSession,
-        sample_keyword: Keyword,
-        sample_keyword_categories: list[KeywordCategory],
-    ) -> None:
-        cat = sample_keyword_categories[1]  # "quantum"
-        link = KeywordCategoryLink(keyword_id=sample_keyword.id, category_id=cat.id)
-        db_session.add(link)
-        await db_session.commit()
-
-        resp = await authed_client.get("/api/v1/keywords?locale=en")
-        data = resp.json()
-        item = data["items"][0]
-        assert item["categories"][0]["name"] == "Quantum Computing"
 
     async def test_camel_case_keys(
         self, authed_client: AsyncClient, sample_keyword: Keyword
@@ -93,9 +73,9 @@ class TestCreateKeyword:
     async def test_create_with_categories(
         self,
         admin_client: AsyncClient,
-        sample_keyword_categories: list[KeywordCategory],
+        sample_categories: list[Category],
     ) -> None:
-        cat = sample_keyword_categories[0]  # "ai_ml"
+        cat = sample_categories[0]  # "ai_ml"
         resp = await admin_client.post(
             "/api/v1/keywords",
             json={"keyword": "Edge AI", "categoryIds": [cat.id]},
@@ -132,9 +112,9 @@ class TestUpdateKeyword:
         self,
         admin_client: AsyncClient,
         sample_keyword: Keyword,
-        sample_keyword_categories: list[KeywordCategory],
+        sample_categories: list[Category],
     ) -> None:
-        cat = sample_keyword_categories[2]  # "semiconductor"
+        cat = sample_categories[2]  # "semiconductor"
         resp = await admin_client.patch(
             f"/api/v1/keywords/{sample_keyword.id}",
             json={"categoryIds": [cat.id]},
@@ -149,10 +129,10 @@ class TestUpdateKeyword:
         admin_client: AsyncClient,
         db_session: AsyncSession,
         sample_keyword: Keyword,
-        sample_keyword_categories: list[KeywordCategory],
+        sample_categories: list[Category],
     ) -> None:
         # First add a category
-        cat = sample_keyword_categories[0]
+        cat = sample_categories[0]
         link = KeywordCategoryLink(keyword_id=sample_keyword.id, category_id=cat.id)
         db_session.add(link)
         await db_session.commit()

@@ -13,12 +13,8 @@ from app.config import settings
 from app.models.ai_model import AIModel
 from app.models.analysis import AnalysisResult, AnalysisTranslation, Sentiment
 from app.models.associations import NewsKeyword
-from app.models.investment_category import (
-    AnalysisInvestmentCategory,
-    InvestmentCategory,
-)
+from app.models.category import Category, KeywordCategoryLink
 from app.models.keyword import Keyword
-from app.models.keyword_category import KeywordCategory, KeywordCategoryLink
 from app.models.news import NewsArticle
 from app.utils.sanitize import strip_html_tags
 
@@ -44,7 +40,6 @@ class AnalysisData:
     sentiment: Sentiment
     impact_score: int
     reasoning: str | None = None
-    investment_categories: list[str] | None = None
     keywords: list[str] | None = None
 
     def __post_init__(self) -> None:
@@ -175,10 +170,10 @@ async def analyze_article(
     # Query all keyword candidates grouped by category
     keywords_by_category: dict[str, list[str]] | None = None
     stmt = (
-        select(KeywordCategory.slug, Keyword.keyword)
+        select(Category.slug, Keyword.keyword)
         .join(
             KeywordCategoryLink,
-            KeywordCategoryLink.category_id == KeywordCategory.id,
+            KeywordCategoryLink.category_id == Category.id,
         )
         .join(Keyword, Keyword.id == KeywordCategoryLink.keyword_id)
     )
@@ -228,19 +223,6 @@ async def analyze_article(
     )
     session.add(translation)
 
-    # Persist investment category links
-    if data.investment_categories:
-        cat_stmt = select(InvestmentCategory).where(
-            InvestmentCategory.slug.in_(data.investment_categories)
-        )
-        categories = (await session.execute(cat_stmt)).scalars().all()
-        for cat in categories:
-            link = AnalysisInvestmentCategory(
-                analysis_id=result.id,
-                category_id=cat.id,
-            )
-            session.add(link)
-
     # Persist keyword links (AI-selected tags from keyword_candidates)
     if data.keywords:
         kw_stmt = select(Keyword).where(Keyword.keyword.in_(data.keywords))
@@ -257,7 +239,6 @@ async def analyze_article(
         article_id=article.id,
         sentiment=data.sentiment,
         impact_score=data.impact_score,
-        categories=data.investment_categories,
         keywords=data.keywords,
     )
     return result

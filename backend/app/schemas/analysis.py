@@ -3,8 +3,6 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 
-from app.schemas.category import CategoryBrief
-
 
 class AIModelBrief(BaseModel):
     """Brief AI model info embedded in AnalysisResponse."""
@@ -34,4 +32,3 @@ class AnalysisResponse(BaseModel):
     reasoning: str | None = None
     ai_model: AIModelBrief
     analyzed_at: datetime
-    investment_categories: list[CategoryBrief] = []

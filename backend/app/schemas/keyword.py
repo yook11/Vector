@@ -4,7 +4,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 
-from app.schemas.keyword_category import KeywordCategoryBrief
+from app.schemas.category import CategoryBrief
 
 # --- XSS対策: キーワードのホワイトリスト ---
 # キーワードは検索や一覧表示に使われるテキスト。
@@ -73,7 +73,7 @@ class KeywordResponse(BaseModel):
 
     id: int
     keyword: str
-    categories: list[KeywordCategoryBrief] = []
+    categories: list[CategoryBrief] = []
     article_count: int = 0
     created_at: datetime
 
@@ -99,4 +99,4 @@ class KeywordBrief(BaseModel):
 
     id: int
     keyword: str
-    categories: list[KeywordCategoryBrief] = []
+    categories: list[CategoryBrief] = []

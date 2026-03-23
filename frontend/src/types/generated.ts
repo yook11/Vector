@@ -4,74 +4,6 @@
  */
 
 export interface paths {
-  "/api/v1/auth/register": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    get?: never;
-    put?: never;
-    /** Register */
-    post: operations["register_api_v1_auth_register_post"];
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
-  "/api/v1/auth/login": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    get?: never;
-    put?: never;
-    /** Login */
-    post: operations["login_api_v1_auth_login_post"];
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
-  "/api/v1/auth/refresh": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    get?: never;
-    put?: never;
-    /** Refresh */
-    post: operations["refresh_api_v1_auth_refresh_post"];
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
-  "/api/v1/auth/logout": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    get?: never;
-    put?: never;
-    /** Logout */
-    post: operations["logout_api_v1_auth_logout_post"];
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
   "/api/v1/categories": {
     parameters: {
       query?: never;
@@ -81,29 +13,9 @@ export interface paths {
     };
     /**
      * List Categories
-     * @description List all investment categories ordered by slug.
+     * @description List all categories with nested keywords and article counts.
      */
     get: operations["list_categories_api_v1_categories_get"];
-    put?: never;
-    post?: never;
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
-  "/api/v1/keyword-categories": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    /**
-     * List Keyword Categories
-     * @description List all keyword categories with nested keywords and article counts.
-     */
-    get: operations["list_keyword_categories_api_v1_keyword_categories_get"];
     put?: never;
     post?: never;
     delete?: never;
@@ -462,15 +374,10 @@ export interface components {
        * Format: date-time
        */
       analyzedAt: string;
-      /**
-       * Investmentcategories
-       * @default []
-       */
-      investmentCategories: components["schemas"]["CategoryBrief"][];
     };
     /**
      * CategoryBrief
-     * @description Minimal category info embedded in AnalysisResponse.
+     * @description Minimal category info embedded in KeywordResponse / KeywordBrief.
      */
     CategoryBrief: {
       /** Slug */
@@ -479,26 +386,34 @@ export interface components {
       name: string;
     };
     /**
-     * CategoryListResponse
-     * @description Response wrapper for category list endpoint.
+     * CategoryDetailListResponse
+     * @description Response wrapper for enriched category list endpoint.
      */
-    CategoryListResponse: {
+    CategoryDetailListResponse: {
       /** Items */
-      items: components["schemas"]["CategoryResponse"][];
+      items: components["schemas"]["CategoryDetailResponse"][];
     };
     /**
-     * CategoryResponse
-     * @description Full category detail for GET /api/v1/categories.
+     * CategoryDetailResponse
+     * @description Enriched category with articleCount and nested keywords.
      */
-    CategoryResponse: {
+    CategoryDetailResponse: {
       /** Id */
       id: number;
       /** Slug */
       slug: string;
       /** Name */
       name: string;
-      /** Description */
-      description?: string | null;
+      /**
+       * Articlecount
+       * @default 0
+       */
+      articleCount: number;
+      /**
+       * Keywords
+       * @default []
+       */
+      keywords: components["schemas"]["KeywordInCategory"][];
     };
     /**
      * EmbedResponse
@@ -532,47 +447,7 @@ export interface components {
        * Categories
        * @default []
        */
-      categories: components["schemas"]["KeywordCategoryBrief"][];
-    };
-    /**
-     * KeywordCategoryBrief
-     * @description Minimal keyword category info embedded in KeywordResponse.
-     */
-    KeywordCategoryBrief: {
-      /** Slug */
-      slug: string;
-      /** Name */
-      name: string;
-    };
-    /**
-     * KeywordCategoryDetailListResponse
-     * @description Response wrapper for enriched keyword category list endpoint.
-     */
-    KeywordCategoryDetailListResponse: {
-      /** Items */
-      items: components["schemas"]["KeywordCategoryDetailResponse"][];
-    };
-    /**
-     * KeywordCategoryDetailResponse
-     * @description Enriched category with articleCount and nested keywords.
-     */
-    KeywordCategoryDetailResponse: {
-      /** Id */
-      id: number;
-      /** Slug */
-      slug: string;
-      /** Name */
-      name: string;
-      /**
-       * Articlecount
-       * @default 0
-       */
-      articleCount: number;
-      /**
-       * Keywords
-       * @default []
-       */
-      keywords: components["schemas"]["KeywordInCategory"][];
+      categories: components["schemas"]["CategoryBrief"][];
     };
     /**
      * KeywordCreate
@@ -623,7 +498,7 @@ export interface components {
        * Categories
        * @default []
        */
-      categories: components["schemas"]["KeywordCategoryBrief"][];
+      categories: components["schemas"]["CategoryBrief"][];
       /**
        * Articlecount
        * @default 0
@@ -642,16 +517,6 @@ export interface components {
     KeywordUpdate: {
       /** Categoryids */
       categoryIds?: number[] | null;
-    };
-    /** LoginRequest */
-    LoginRequest: {
-      /**
-       * Email
-       * Format: email
-       */
-      email: string;
-      /** Password */
-      password: string;
     };
     /**
      * NewsFetchRequest
@@ -723,8 +588,7 @@ export interface components {
     NewsSourceCreate: {
       /** Name */
       name: string;
-      /** Sourcetype */
-      sourceType: string;
+      sourceType: components["schemas"]["SourceType"];
       /** Siteurl */
       siteUrl?: string | null;
       /** Feedurl */
@@ -756,8 +620,7 @@ export interface components {
       id: number;
       /** Name */
       name: string;
-      /** Sourcetype */
-      sourceType: string;
+      sourceType: components["schemas"]["SourceType"];
       /** Siteurl */
       siteUrl?: string | null;
       /** Isactive */
@@ -797,8 +660,7 @@ export interface components {
     NewsSourceUpdate: {
       /** Name */
       name?: string | null;
-      /** Sourcetype */
-      sourceType?: string | null;
+      sourceType?: components["schemas"]["SourceType"] | null;
       /** Siteurl */
       siteUrl?: string | null;
       /** Feedurl */
@@ -824,23 +686,11 @@ export interface components {
       /** Totalpages */
       totalPages: number;
     };
-    /** RefreshRequest */
-    RefreshRequest: {
-      /** Refreshtoken */
-      refreshToken: string;
-    };
-    /** RegisterRequest */
-    RegisterRequest: {
-      /**
-       * Email
-       * Format: email
-       */
-      email: string;
-      /** Password */
-      password: string;
-      /** Displayname */
-      displayName?: string | null;
-    };
+    /**
+     * SourceType
+     * @enum {string}
+     */
+    SourceType: "rss" | "api";
     /**
      * SubscriptionCreate
      * @description POST /api/v1/me/subscriptions request body.
@@ -872,37 +722,7 @@ export interface components {
        * Categories
        * @default []
        */
-      categories: components["schemas"]["KeywordCategoryBrief"][];
-      /**
-       * Createdat
-       * Format: date-time
-       */
-      createdAt: string;
-    };
-    /** TokenResponse */
-    TokenResponse: {
-      /** Accesstoken */
-      accessToken: string;
-      /** Refreshtoken */
-      refreshToken: string;
-      /**
-       * Tokentype
-       * @default bearer
-       */
-      tokenType: string;
-    };
-    /** UserResponse */
-    UserResponse: {
-      /** Id */
-      id: number;
-      /** Email */
-      email: string;
-      /** Displayname */
-      displayName: string | null;
-      /** Role */
-      role: string;
-      /** Isactive */
-      isActive: boolean;
+      categories: components["schemas"]["CategoryBrief"][];
       /**
        * Createdat
        * Format: date-time
@@ -978,141 +798,9 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
-  register_api_v1_auth_register_post: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    requestBody: {
-      content: {
-        "application/json": components["schemas"]["RegisterRequest"];
-      };
-    };
-    responses: {
-      /** @description Successful Response */
-      201: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["UserResponse"];
-        };
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
-        };
-      };
-    };
-  };
-  login_api_v1_auth_login_post: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    requestBody: {
-      content: {
-        "application/json": components["schemas"]["LoginRequest"];
-      };
-    };
-    responses: {
-      /** @description Successful Response */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["TokenResponse"];
-        };
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
-        };
-      };
-    };
-  };
-  refresh_api_v1_auth_refresh_post: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    requestBody: {
-      content: {
-        "application/json": components["schemas"]["RefreshRequest"];
-      };
-    };
-    responses: {
-      /** @description Successful Response */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["TokenResponse"];
-        };
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
-        };
-      };
-    };
-  };
-  logout_api_v1_auth_logout_post: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    requestBody: {
-      content: {
-        "application/json": components["schemas"]["RefreshRequest"];
-      };
-    };
-    responses: {
-      /** @description Successful Response */
-      204: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content?: never;
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
-        };
-      };
-    };
-  };
   list_categories_api_v1_categories_get: {
     parameters: {
-      query?: {
-        locale?: string;
-      };
+      query?: never;
       header?: never;
       path?: never;
       cookie?: never;
@@ -1125,56 +813,14 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          "application/json": components["schemas"]["CategoryListResponse"];
-        };
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
-        };
-      };
-    };
-  };
-  list_keyword_categories_api_v1_keyword_categories_get: {
-    parameters: {
-      query?: {
-        locale?: string;
-      };
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    requestBody?: never;
-    responses: {
-      /** @description Successful Response */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["KeywordCategoryDetailListResponse"];
-        };
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
+          "application/json": components["schemas"]["CategoryDetailListResponse"];
         };
       };
     };
   };
   list_keywords_api_v1_keywords_get: {
     parameters: {
-      query?: {
-        locale?: string;
-      };
+      query?: never;
       header?: never;
       path?: never;
       cookie?: never;
@@ -1188,15 +834,6 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["KeywordListResponse"];
-        };
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
         };
       };
     };
@@ -1265,9 +902,7 @@ export interface operations {
   };
   update_keyword_api_v1_keywords__keyword_id__patch: {
     parameters: {
-      query?: {
-        locale?: string;
-      };
+      query?: never;
       header?: never;
       path: {
         keyword_id: number;
@@ -1485,7 +1120,6 @@ export interface operations {
         myKeywords?: boolean;
         sentiment?: string | null;
         minImpact?: number | null;
-        category?: string | null;
         deduplicated?: boolean;
         q?: string | null;
         sortBy?: string;
