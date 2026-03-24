@@ -287,9 +287,17 @@ async def test_fetch_and_save_with_last_fetched_at(
     sample_hn_source: NewsSource,
     mock_http_client: AsyncMock,
 ) -> None:
-    """last_fetched_at should be converted to unix timestamp for API filter."""
-    sample_hn_source.last_fetched_at = datetime(2026, 2, 24, 17, 0, 0, tzinfo=UTC)
-    db_session.add(sample_hn_source)
+    """last_fetched_at derived from fetch_logs should be used as API filter."""
+    from app.models.fetch_log import FetchLog, FetchStatus
+
+    # Create a successful fetch log entry
+    log = FetchLog(
+        source_id=sample_hn_source.id,
+        status=FetchStatus.SUCCESS,
+        articles_count=5,
+        fetched_at=datetime(2026, 2, 24, 17, 0, 0, tzinfo=UTC),
+    )
+    db_session.add(log)
     await db_session.commit()
 
     mock_http_client.get.return_value = _mock_hn_response(data={"hits": []})

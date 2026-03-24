@@ -14,6 +14,7 @@ taskiq>=0.12,<1
 # Vector Search
 pgvector>=0.3.0,<1
 taskiq-redis>=1.0,<2
+redis>=7.0,<8
 structlog>=24.4,<26
 bcrypt>=4.0,<6
 python-jose[cryptography]>=3.3,<4

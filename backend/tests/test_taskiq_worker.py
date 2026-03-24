@@ -32,10 +32,7 @@ def _make_source(source_id: int = 1, name: str = "TestSource") -> MagicMock:
     source = MagicMock(spec=NewsSource)
     source.id = source_id
     source.name = name
-    source.fetch_interval_minutes = 720
-    source.consecutive_errors = 0
-    source.etag = None
-    source.last_modified_header = None
+    source.is_active = True
     return source
 
 

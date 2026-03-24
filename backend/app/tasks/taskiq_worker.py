@@ -25,12 +25,9 @@ Manual task submission for testing:
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
-
 import structlog
-from sqlalchemy import func
 from sqlalchemy.ext.asyncio import create_async_engine
-from sqlmodel import or_, select
+from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
 from taskiq import (
     Context,
@@ -172,7 +169,7 @@ async def fetch_and_analyze_task(
 
     # Phase 1 + 2: source query & RSS fetch share a session.
     async with SQLModelAsyncSession(engine, expire_on_commit=False) as session:
-        # Phase 1: query sources due for fetch — fatal if this fails.
+        # Phase 1: query sources to fetch — fatal if this fails.
         if source_ids is not None:
             sources = list(
                 (
@@ -184,18 +181,13 @@ async def fetch_and_analyze_task(
                 .all()
             )
         else:
+            # Global cron: fetch all active sources every cycle
             sources = list(
                 (
                     await session.execute(
                         select(NewsSource)
-                        .where(
-                            NewsSource.is_active == True,  # noqa: E712
-                            or_(
-                                NewsSource.next_fetch_at == None,  # noqa: E711
-                                NewsSource.next_fetch_at <= func.now(),
-                            ),
-                        )
-                        .order_by(NewsSource.next_fetch_at.asc().nulls_first())
+                        .where(NewsSource.is_active == True)  # noqa: E712
+                        .order_by(NewsSource.name)
                     )
                 )
                 .scalars()
@@ -203,7 +195,7 @@ async def fetch_and_analyze_task(
             )
         result["sources_count"] = len(sources)
         if not sources:
-            logger.info("taskiq_fetch_skipped", reason="no sources due for fetch")
+            logger.info("taskiq_fetch_skipped", reason="no active sources")
         else:
             # Phase 2: fetch articles from sources (only when sources exist)
             try:
@@ -211,32 +203,6 @@ async def fetch_and_analyze_task(
                 result["fetch_new"] = fr.new_count
                 result["fetch_skipped"] = fr.skipped_count
                 result["fetch_errors"] = fr.error_count
-
-                # A-5: update each source's scheduling metadata
-                now = datetime.now(UTC)
-                for sr in fr.source_results:
-                    source = next((s for s in sources if s.id == sr.source_id), None)
-                    if source is None:
-                        continue
-
-                    source.next_fetch_at = now + timedelta(
-                        minutes=source.fetch_interval_minutes
-                    )
-                    source.last_fetched_at = now
-
-                    if sr.success or sr.not_modified:
-                        source.consecutive_errors = 0
-                        if sr.etag is not None:
-                            source.etag = sr.etag
-                        if sr.last_modified is not None:
-                            source.last_modified_header = sr.last_modified
-                    else:
-                        source.consecutive_errors += 1
-                        source.last_error_message = sr.error_message
-
-                    session.add(source)
-
-                await session.commit()
             except Exception:
                 logger.exception("taskiq_fetch_phase_failed")
                 result["fetch_errors"] += 1

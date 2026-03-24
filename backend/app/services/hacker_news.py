@@ -12,6 +12,7 @@ from app.config import settings
 from app.models.news import NewsArticle
 from app.models.news_source import NewsSource
 from app.services.news_fetcher import SourceFetchResult
+from app.services.source_helpers import get_last_successful_fetch_at
 from app.utils.sanitize import is_safe_url, strip_html_tags
 
 HTTP_TIMEOUT = 30.0
@@ -105,10 +106,11 @@ class HackerNewsClient:
         """
         result = SourceFetchResult(source_id=source.id)
 
-        # Convert last_fetched_at to unix timestamp for API filter
+        # Derive last fetch time from fetch_logs
+        last_fetched = await get_last_successful_fetch_at(session, source.id)
         since_timestamp: int | None = None
-        if source.last_fetched_at:
-            since_timestamp = int(source.last_fetched_at.timestamp())
+        if last_fetched:
+            since_timestamp = int(last_fetched.timestamp())
 
         try:
             stories = await self.fetch_recent_stories(since_timestamp)

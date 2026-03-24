@@ -40,27 +40,21 @@ export function SourceFormDialog({ source, trigger }: SourceFormDialogProps) {
   const [loading, setLoading] = useState(false);
 
   const [name, setName] = useState("");
-  const [sourceType, setSourceType] = useState("rss");
-  const [feedUrl, setFeedUrl] = useState("");
-  const [apiEndpoint, setApiEndpoint] = useState("");
+  const [sourceType, setSourceType] = useState<"rss" | "api">("rss");
+  const [endpointUrl, setEndpointUrl] = useState("");
   const [siteUrl, setSiteUrl] = useState("");
-  const [fetchInterval, setFetchInterval] = useState("720");
 
   useEffect(() => {
     if (open && source) {
       setName(source.name);
       setSourceType(source.sourceType);
-      setFeedUrl(source.feedUrl ?? "");
-      setApiEndpoint(source.apiEndpoint ?? "");
-      setSiteUrl(source.siteUrl ?? "");
-      setFetchInterval(String(source.fetchIntervalMinutes));
+      setEndpointUrl(source.endpointUrl);
+      setSiteUrl(source.siteUrl);
     } else if (open && !source) {
       setName("");
       setSourceType("rss");
-      setFeedUrl("");
-      setApiEndpoint("");
+      setEndpointUrl("");
       setSiteUrl("");
-      setFetchInterval("720");
     }
   }, [open, source]);
 
@@ -73,10 +67,8 @@ export function SourceFormDialog({ source, trigger }: SourceFormDialogProps) {
       const body = {
         name: name.trim(),
         sourceType,
-        siteUrl: siteUrl.trim() || null,
-        feedUrl: sourceType === "rss" ? feedUrl.trim() || null : null,
-        apiEndpoint: sourceType === "api" ? apiEndpoint.trim() || null : null,
-        fetchIntervalMinutes: Number(fetchInterval),
+        siteUrl: siteUrl.trim(),
+        endpointUrl: endpointUrl.trim(),
       };
 
       if (isEdit && source) {
@@ -110,14 +102,15 @@ export function SourceFormDialog({ source, trigger }: SourceFormDialogProps) {
               id="source-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. TechCrunch AI"
+              placeholder="e.g. TechCrunch"
+              maxLength={50}
               required
             />
           </div>
 
           <div className="space-y-2">
             <Label htmlFor="source-type">Type</Label>
-            <Select value={sourceType} onValueChange={setSourceType}>
+            <Select value={sourceType} onValueChange={(v) => setSourceType(v as "rss" | "api")}>
               <SelectTrigger id="source-type">
                 <SelectValue />
               </SelectTrigger>
@@ -128,54 +121,32 @@ export function SourceFormDialog({ source, trigger }: SourceFormDialogProps) {
             </Select>
           </div>
 
-          {sourceType === "rss" ? (
-            <div className="space-y-2">
-              <Label htmlFor="feed-url">Feed URL</Label>
-              <Input
-                id="feed-url"
-                value={feedUrl}
-                onChange={(e) => setFeedUrl(e.target.value)}
-                placeholder="https://example.com/feed/"
-                required
-              />
-            </div>
-          ) : (
-            <div className="space-y-2">
-              <Label htmlFor="api-endpoint">API Endpoint</Label>
-              <Input
-                id="api-endpoint"
-                value={apiEndpoint}
-                onChange={(e) => setApiEndpoint(e.target.value)}
-                placeholder="e.g. hacker-news"
-                required
-              />
-            </div>
-          )}
-
           <div className="space-y-2">
-            <Label htmlFor="site-url">Site URL (optional)</Label>
+            <Label htmlFor="endpoint-url">Endpoint URL</Label>
             <Input
-              id="site-url"
-              value={siteUrl}
-              onChange={(e) => setSiteUrl(e.target.value)}
-              placeholder="https://example.com"
+              id="endpoint-url"
+              type="url"
+              value={endpointUrl}
+              onChange={(e) => setEndpointUrl(e.target.value)}
+              placeholder={
+                sourceType === "rss"
+                  ? "https://example.com/feed/"
+                  : "https://api.example.com/v1/endpoint"
+              }
+              required
             />
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="fetch-interval">Fetch Interval (minutes)</Label>
-            <Select value={fetchInterval} onValueChange={setFetchInterval}>
-              <SelectTrigger id="fetch-interval">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="60">Every hour</SelectItem>
-                <SelectItem value="180">Every 3 hours</SelectItem>
-                <SelectItem value="360">Every 6 hours</SelectItem>
-                <SelectItem value="720">Every 12 hours</SelectItem>
-                <SelectItem value="1440">Once a day</SelectItem>
-              </SelectContent>
-            </Select>
+            <Label htmlFor="site-url">Site URL</Label>
+            <Input
+              id="site-url"
+              type="url"
+              value={siteUrl}
+              onChange={(e) => setSiteUrl(e.target.value)}
+              placeholder="https://example.com"
+              required
+            />
           </div>
 
           <DialogFooter>

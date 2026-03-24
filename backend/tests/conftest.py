@@ -195,7 +195,8 @@ async def sample_source(db_session: AsyncSession) -> NewsSource:
     source = NewsSource(
         name="Test Tech Source",
         source_type=SourceType.RSS,
-        feed_url="https://example.com/feed.xml",
+        site_url="https://example.com",
+        endpoint_url="https://example.com/feed.xml",
     )
     db_session.add(source)
     await db_session.commit()
@@ -209,10 +210,9 @@ async def sample_hn_source(db_session: AsyncSession) -> NewsSource:
     source = NewsSource(
         name="Hacker News",
         source_type=SourceType.API,
-        api_endpoint="hacker-news",
         site_url="https://news.ycombinator.com",
+        endpoint_url="https://hn.algolia.com/api/v1/search_by_date",
         is_active=True,
-        fetch_interval_minutes=360,
     )
     db_session.add(source)
     await db_session.commit()
@@ -226,10 +226,9 @@ async def sample_av_source(db_session: AsyncSession) -> NewsSource:
     source = NewsSource(
         name="Alpha Vantage",
         source_type=SourceType.API,
-        api_endpoint="alpha-vantage",
         site_url="https://www.alphavantage.co",
+        endpoint_url="https://www.alphavantage.co/query",
         is_active=True,
-        fetch_interval_minutes=1440,
     )
     db_session.add(source)
     await db_session.commit()

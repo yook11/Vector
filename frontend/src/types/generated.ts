@@ -549,16 +549,9 @@ export interface components {
             name: string;
             sourceType: components["schemas"]["SourceType"];
             /** Siteurl */
-            siteUrl?: string | null;
-            /** Feedurl */
-            feedUrl?: string | null;
-            /** Apiendpoint */
-            apiEndpoint?: string | null;
-            /**
-             * Fetchintervalminutes
-             * @default 720
-             */
-            fetchIntervalMinutes: number;
+            siteUrl: string;
+            /** Endpointurl */
+            endpointUrl: string;
         };
         /**
          * NewsSourceListResponse
@@ -581,26 +574,11 @@ export interface components {
             name: string;
             sourceType: components["schemas"]["SourceType"];
             /** Siteurl */
-            siteUrl?: string | null;
+            siteUrl: string;
+            /** Endpointurl */
+            endpointUrl: string;
             /** Isactive */
             isActive: boolean;
-            /** Feedurl */
-            feedUrl?: string | null;
-            /** Apiendpoint */
-            apiEndpoint?: string | null;
-            /** Fetchintervalminutes */
-            fetchIntervalMinutes: number;
-            /** Nextfetchat */
-            nextFetchAt?: string | null;
-            /** Lastfetchedat */
-            lastFetchedAt?: string | null;
-            /**
-             * Consecutiveerrors
-             * @default 0
-             */
-            consecutiveErrors: number;
-            /** Lasterrormessage */
-            lastErrorMessage?: string | null;
             /**
              * Createdat
              * Format: date-time
@@ -622,12 +600,8 @@ export interface components {
             sourceType?: components["schemas"]["SourceType"] | null;
             /** Siteurl */
             siteUrl?: string | null;
-            /** Feedurl */
-            feedUrl?: string | null;
-            /** Apiendpoint */
-            apiEndpoint?: string | null;
-            /** Fetchintervalminutes */
-            fetchIntervalMinutes?: number | null;
+            /** Endpointurl */
+            endpointUrl?: string | null;
         };
         /**
          * PaginatedNewsResponse

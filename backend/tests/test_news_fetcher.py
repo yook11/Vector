@@ -122,6 +122,8 @@ async def test_fetch_saves_new_articles(
     with (
         patch("app.services.news_fetcher.httpx.AsyncClient", return_value=mock_client),
         patch("app.services.news_fetcher.feedparser.parse", return_value=feed),
+        patch("app.services.news_fetcher.get_http_cache", new_callable=AsyncMock, return_value=(None, None)),
+        patch("app.services.news_fetcher.set_http_cache", new_callable=AsyncMock),
     ):
         result = await fetch_news_for_sources(db_session, [sample_source])
 
@@ -157,6 +159,8 @@ async def test_fetch_skips_duplicate_guids(
     with (
         patch("app.services.news_fetcher.httpx.AsyncClient", return_value=mock_client),
         patch("app.services.news_fetcher.feedparser.parse", return_value=feed),
+        patch("app.services.news_fetcher.get_http_cache", new_callable=AsyncMock, return_value=(None, None)),
+        patch("app.services.news_fetcher.set_http_cache", new_callable=AsyncMock),
     ):
         result = await fetch_news_for_sources(db_session, [sample_source])
 
@@ -172,7 +176,10 @@ async def test_fetch_handles_304_not_modified(
 ) -> None:
     mock_client.get.return_value = _mock_response(status_code=304)
 
-    with patch("app.services.news_fetcher.httpx.AsyncClient", return_value=mock_client):
+    with (
+        patch("app.services.news_fetcher.httpx.AsyncClient", return_value=mock_client),
+        patch("app.services.news_fetcher.get_http_cache", new_callable=AsyncMock, return_value=(None, None)),
+    ):
         result = await fetch_news_for_sources(db_session, [sample_source])
 
     assert result.new_count == 0
@@ -186,7 +193,10 @@ async def test_fetch_handles_http_error(
 ) -> None:
     mock_client.get.return_value = _mock_response(status_code=500)
 
-    with patch("app.services.news_fetcher.httpx.AsyncClient", return_value=mock_client):
+    with (
+        patch("app.services.news_fetcher.httpx.AsyncClient", return_value=mock_client),
+        patch("app.services.news_fetcher.get_http_cache", new_callable=AsyncMock, return_value=(None, None)),
+    ):
         result = await fetch_news_for_sources(db_session, [sample_source])
 
     assert result.new_count == 0
@@ -208,6 +218,8 @@ async def test_fetch_respects_max_articles_limit(
         patch("app.services.news_fetcher.httpx.AsyncClient", return_value=mock_client),
         patch("app.services.news_fetcher.feedparser.parse", return_value=feed),
         patch("app.services.news_fetcher.settings") as mock_settings,
+        patch("app.services.news_fetcher.get_http_cache", new_callable=AsyncMock, return_value=(None, None)),
+        patch("app.services.news_fetcher.set_http_cache", new_callable=AsyncMock),
     ):
         mock_settings.max_articles_per_fetch = 50
         mock_settings.content_max_length = 8000
@@ -223,20 +235,22 @@ async def test_fetch_with_empty_sources(db_session: AsyncSession) -> None:
     assert result.error_count == 0
 
 
-async def test_fetch_sends_conditional_get_headers(
+async def test_fetch_sends_conditional_get_headers_from_redis(
     db_session: AsyncSession,
     sample_source: NewsSource,
     mock_client: AsyncMock,
 ) -> None:
-    """ETag and Last-Modified should be sent as conditional GET headers."""
-    sample_source.etag = '"abc123"'
-    sample_source.last_modified_header = "Wed, 01 Jan 2025 00:00:00 GMT"
-    db_session.add(sample_source)
-    await db_session.commit()
-
+    """ETag and Last-Modified should be read from Redis and sent as headers."""
     mock_client.get.return_value = _mock_response(status_code=304)
 
-    with patch("app.services.news_fetcher.httpx.AsyncClient", return_value=mock_client):
+    with (
+        patch("app.services.news_fetcher.httpx.AsyncClient", return_value=mock_client),
+        patch(
+            "app.services.news_fetcher.get_http_cache",
+            new_callable=AsyncMock,
+            return_value=('"abc123"', "Wed, 01 Jan 2025 00:00:00 GMT"),
+        ),
+    ):
         await fetch_news_for_sources(db_session, [sample_source])
 
     call_kwargs = mock_client.get.call_args
@@ -245,12 +259,12 @@ async def test_fetch_sends_conditional_get_headers(
     assert headers["If-Modified-Since"] == "Wed, 01 Jan 2025 00:00:00 GMT"
 
 
-async def test_fetch_captures_etag_and_last_modified(
+async def test_fetch_captures_etag_and_writes_to_redis(
     db_session: AsyncSession,
     sample_source: NewsSource,
     mock_client: AsyncMock,
 ) -> None:
-    """Response ETag and Last-Modified should be captured in SourceFetchResult."""
+    """Response ETag and Last-Modified should be written to Redis."""
     entries = [_make_entry(title="Art", link="https://example.com/art")]
     feed = _make_feed(entries)
     mock_client.get.return_value = _mock_response(
@@ -264,12 +278,24 @@ async def test_fetch_captures_etag_and_last_modified(
     with (
         patch("app.services.news_fetcher.httpx.AsyncClient", return_value=mock_client),
         patch("app.services.news_fetcher.feedparser.parse", return_value=feed),
+        patch(
+            "app.services.news_fetcher.get_http_cache",
+            new_callable=AsyncMock,
+            return_value=(None, None),
+        ),
+        patch(
+            "app.services.news_fetcher.set_http_cache",
+            new_callable=AsyncMock,
+        ) as mock_set_cache,
     ):
         result = await fetch_news_for_sources(db_session, [sample_source])
 
     sr = result.source_results[0]
     assert sr.etag == '"new-etag"'
     assert sr.last_modified == "Thu, 02 Jan 2025 00:00:00 GMT"
+    mock_set_cache.assert_called_once_with(
+        sample_source.id, '"new-etag"', "Thu, 02 Jan 2025 00:00:00 GMT"
+    )
 
 
 async def test_fetch_stores_full_content_from_rss(
@@ -288,6 +314,8 @@ async def test_fetch_stores_full_content_from_rss(
     with (
         patch("app.services.news_fetcher.httpx.AsyncClient", return_value=mock_client),
         patch("app.services.news_fetcher.feedparser.parse", return_value=feed),
+        patch("app.services.news_fetcher.get_http_cache", new_callable=AsyncMock, return_value=(None, None)),
+        patch("app.services.news_fetcher.set_http_cache", new_callable=AsyncMock),
     ):
         result = await fetch_news_for_sources(db_session, [sample_source])
 

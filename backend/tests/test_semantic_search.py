@@ -24,7 +24,8 @@ async def _create_source(db_session: AsyncSession) -> NewsSource:
     source = NewsSource(
         name="Test Source",
         source_type=SourceType.RSS,
-        feed_url="https://example.com/feed.xml",
+        site_url="https://example.com",
+        endpoint_url="https://example.com/feed.xml",
     )
     db_session.add(source)
     await db_session.flush()
@@ -140,7 +141,8 @@ async def test_semantic_search_combined_with_source_filter(
     source_b = NewsSource(
         name="Other Source",
         source_type=SourceType.RSS,
-        feed_url="https://other.com/feed.xml",
+        site_url="https://other.com",
+        endpoint_url="https://other.com/feed.xml",
     )
     db_session.add(source_b)
     await db_session.flush()
