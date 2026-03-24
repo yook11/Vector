@@ -6,8 +6,8 @@ from sqlmodel import func, select
 
 from app.dependencies import get_session
 from app.models.article_group import ArticleGroup
-from app.models.associations import NewsKeyword
-from app.models.category import Category, KeywordCategoryLink
+from app.models.associations import ArticleKeyword
+from app.models.category import Category
 from app.models.keyword import Keyword
 from app.models.news import NewsArticle
 from app.schemas.category import (
@@ -33,29 +33,28 @@ async def list_categories(
         (NewsArticle.article_group_id.is_(None)) | (NewsArticle.id.in_(canonical_ids))
     )
 
-    # 1. Fetch categories (name is now a direct column, no translation JOIN)
+    # 1. Fetch categories (name is a direct column)
     cat_stmt = select(Category.id, Category.slug, Category.name).order_by(Category.slug)
     cat_result = await session.execute(cat_stmt)
     cat_rows = cat_result.all()
 
-    # 2. Fetch per-keyword article counts grouped by category
+    # 2. Fetch per-keyword article counts grouped by category (1:N via category_id)
     kw_stmt = (
         select(
-            KeywordCategoryLink.category_id,
+            Keyword.category_id,
             Keyword.id.label("keyword_id"),
-            Keyword.keyword,
-            func.count(func.distinct(NewsKeyword.news_article_id)).label(
+            Keyword.name,
+            func.count(func.distinct(ArticleKeyword.news_article_id)).label(
                 "article_count"
             ),
         )
-        .join(Keyword, Keyword.id == KeywordCategoryLink.keyword_id)
         .outerjoin(
-            NewsKeyword,
-            (NewsKeyword.keyword_id == Keyword.id)
-            & (NewsKeyword.news_article_id.in_(visible_article_ids)),
+            ArticleKeyword,
+            (ArticleKeyword.keyword_id == Keyword.id)
+            & (ArticleKeyword.news_article_id.in_(visible_article_ids)),
         )
-        .group_by(KeywordCategoryLink.category_id, Keyword.id, Keyword.keyword)
-        .order_by(Keyword.keyword)
+        .group_by(Keyword.category_id, Keyword.id, Keyword.name)
+        .order_by(Keyword.name)
     )
     kw_result = await session.execute(kw_stmt)
     kw_rows = kw_result.all()
@@ -63,14 +62,14 @@ async def list_categories(
     # 3. Fetch per-category distinct article counts
     cat_count_stmt = (
         select(
-            KeywordCategoryLink.category_id,
-            func.count(func.distinct(NewsKeyword.news_article_id)).label(
+            Keyword.category_id,
+            func.count(func.distinct(ArticleKeyword.news_article_id)).label(
                 "article_count"
             ),
         )
-        .join(NewsKeyword, NewsKeyword.keyword_id == KeywordCategoryLink.keyword_id)
-        .where(NewsKeyword.news_article_id.in_(visible_article_ids))
-        .group_by(KeywordCategoryLink.category_id)
+        .join(ArticleKeyword, ArticleKeyword.keyword_id == Keyword.id)
+        .where(ArticleKeyword.news_article_id.in_(visible_article_ids))
+        .group_by(Keyword.category_id)
     )
     cat_count_result = await session.execute(cat_count_stmt)
     cat_counts: dict[int, int] = {
@@ -83,7 +82,7 @@ async def list_categories(
         kw_by_cat[row.category_id].append(
             KeywordInCategory(
                 id=row.keyword_id,
-                keyword=row.keyword,
+                name=row.name,
                 article_count=row.article_count,
             )
         )

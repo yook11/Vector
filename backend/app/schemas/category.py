@@ -25,7 +25,7 @@ class KeywordInCategory(BaseModel):
     )
 
     id: int
-    keyword: str
+    name: str
     article_count: int = 0
 
 

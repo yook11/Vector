@@ -6,146 +6,15 @@ from sqlalchemy.orm import selectinload
 from sqlmodel import func, select
 
 from app.dependencies import CurrentUser, get_current_user, get_session
-from app.models.category import KeywordCategoryLink
-from app.models.keyword import Keyword
 from app.models.news import NewsArticle
-from app.models.user_keyword import UserKeywordSubscription
 from app.models.watchlist import WatchlistItem
-from app.schemas.category import CategoryBrief
 from app.schemas.user import (
-    SubscriptionCreate,
-    SubscriptionListResponse,
-    SubscriptionResponse,
     WatchlistCreate,
     WatchlistListResponse,
     WatchlistResponse,
 )
 
 router = APIRouter(prefix="/api/v1/me", tags=["me"])
-
-
-def _build_keyword_categories(
-    category_links: list[KeywordCategoryLink],
-) -> list[CategoryBrief]:
-    """Extract category briefs from keyword category links."""
-    return [
-        CategoryBrief(slug=link.category.slug, name=link.category.name)
-        for link in category_links
-        if link.category
-    ]
-
-
-# --- Subscriptions ---
-
-
-@router.get("/subscriptions", response_model=SubscriptionListResponse)
-async def list_subscriptions(
-    user: CurrentUser = Depends(get_current_user),
-    session: AsyncSession = Depends(get_session),
-) -> SubscriptionListResponse:
-    stmt = (
-        select(UserKeywordSubscription)
-        .where(UserKeywordSubscription.user_id == user.id)
-        .options(
-            selectinload(UserKeywordSubscription.keyword)
-            .selectinload(Keyword.category_links)
-            .selectinload(KeywordCategoryLink.category)
-        )
-        .order_by(UserKeywordSubscription.created_at.desc())
-    )
-    result = await session.execute(stmt)
-    subs = result.unique().scalars().all()
-
-    return SubscriptionListResponse(
-        items=[
-            SubscriptionResponse(
-                id=sub.id,
-                keyword_id=sub.keyword.id,
-                keyword=sub.keyword.keyword,
-                categories=_build_keyword_categories(sub.keyword.category_links),
-                created_at=sub.created_at,
-            )
-            for sub in subs
-        ]
-    )
-
-
-@router.post(
-    "/subscriptions",
-    response_model=SubscriptionResponse,
-    status_code=status.HTTP_201_CREATED,
-)
-async def create_subscription(
-    body: SubscriptionCreate,
-    user: CurrentUser = Depends(get_current_user),
-    session: AsyncSession = Depends(get_session),
-) -> SubscriptionResponse:
-    # Verify keyword exists (with category links for response)
-    stmt = (
-        select(Keyword)
-        .where(Keyword.id == body.keyword_id)
-        .options(
-            selectinload(Keyword.category_links).selectinload(
-                KeywordCategoryLink.category
-            )
-        )
-    )
-    result = await session.execute(stmt)
-    keyword = result.unique().scalar_one_or_none()
-    if not keyword:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Keyword not found",
-        )
-
-    # Check duplicate
-    existing_stmt = select(UserKeywordSubscription).where(
-        UserKeywordSubscription.user_id == user.id,
-        UserKeywordSubscription.keyword_id == body.keyword_id,
-    )
-    existing = (await session.execute(existing_stmt)).scalar_one_or_none()
-    if existing:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Already subscribed to this keyword",
-        )
-
-    sub = UserKeywordSubscription(user_id=user.id, keyword_id=body.keyword_id)
-    session.add(sub)
-    await session.commit()
-    await session.refresh(sub)
-
-    return SubscriptionResponse(
-        id=sub.id,
-        keyword_id=keyword.id,
-        keyword=keyword.keyword,
-        categories=_build_keyword_categories(keyword.category_links),
-        created_at=sub.created_at,
-    )
-
-
-@router.delete(
-    "/subscriptions/{keyword_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-)
-async def delete_subscription(
-    keyword_id: int,
-    user: CurrentUser = Depends(get_current_user),
-    session: AsyncSession = Depends(get_session),
-) -> None:
-    stmt = select(UserKeywordSubscription).where(
-        UserKeywordSubscription.user_id == user.id,
-        UserKeywordSubscription.keyword_id == keyword_id,
-    )
-    sub = (await session.execute(stmt)).scalar_one_or_none()
-    if not sub:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Subscription not found",
-        )
-
-    await session.delete(sub)
-    await session.commit()
 
 
 # --- Watchlist ---

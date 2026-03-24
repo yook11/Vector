@@ -6,8 +6,8 @@ from sqlalchemy.orm import selectinload
 from sqlmodel import func, select
 
 from app.dependencies import CurrentUser, get_admin_user, get_current_user, get_session
-from app.models.associations import NewsKeyword
-from app.models.category import Category, KeywordCategoryLink
+from app.models.associations import ArticleKeyword
+from app.models.category import Category
 from app.models.keyword import Keyword
 from app.schemas.category import CategoryBrief
 from app.schemas.keyword import (
@@ -20,50 +20,41 @@ from app.schemas.keyword import (
 router = APIRouter(prefix="/api/v1/keywords", tags=["keywords"])
 
 
-def _build_categories(
-    category_links: list[KeywordCategoryLink],
-) -> list[CategoryBrief]:
-    """Extract category briefs from loaded category_links."""
-    return [
-        CategoryBrief(slug=link.category.slug, name=link.category.name)
-        for link in category_links
-        if link.category
-    ]
-
-
 @router.get("", response_model=KeywordListResponse)
 async def list_keywords(
     _user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> KeywordListResponse:
+    # Single query: keywords with category + article count via LEFT JOIN + GROUP BY
     stmt = (
-        select(Keyword)
-        .options(
-            selectinload(Keyword.category_links).selectinload(
-                KeywordCategoryLink.category
-            )
+        select(
+            Keyword,
+            func.count(ArticleKeyword.news_article_id).label("article_count"),
         )
+        .outerjoin(ArticleKeyword, ArticleKeyword.keyword_id == Keyword.id)
+        .options(selectinload(Keyword.category))
+        .group_by(Keyword.id)
         .order_by(Keyword.created_at.desc())
     )
     result = await session.execute(stmt)
-    keywords = result.unique().scalars().all()
+    rows = result.unique().all()
 
-    responses = []
-    for kw in keywords:
-        count_stmt = select(func.count()).where(NewsKeyword.keyword_id == kw.id)
-        count_result = await session.execute(count_stmt)
-        article_count = count_result.scalar_one()
-
-        responses.append(
+    return KeywordListResponse(
+        items=[
             KeywordResponse(
                 id=kw.id,
-                keyword=kw.keyword,
-                categories=_build_categories(kw.category_links),
+                name=kw.name,
+                category=CategoryBrief(
+                    slug=kw.category.slug,
+                    name=kw.category.name,
+                ),
+                status=kw.status,
                 article_count=article_count,
                 created_at=kw.created_at,
             )
-        )
-    return KeywordListResponse(items=responses)
+            for kw, article_count in rows
+        ]
+    )
 
 
 @router.post(
@@ -76,50 +67,33 @@ async def create_keyword(
     _user: CurrentUser = Depends(get_admin_user),
     session: AsyncSession = Depends(get_session),
 ) -> KeywordResponse:
-    existing = await session.execute(
-        select(Keyword).where(Keyword.keyword == body.keyword)
-    )
+    name_value = body.name.value
+
+    existing = await session.execute(select(Keyword).where(Keyword.name == name_value))
     if existing.scalar_one_or_none():
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Keyword already exists",
         )
 
-    keyword = Keyword(keyword=body.keyword)
+    # Verify category exists
+    category = await session.get(Category, body.category_id)
+    if not category:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Category ID {body.category_id} not found",
+        )
+
+    keyword = Keyword(name=name_value, category_id=body.category_id)
     session.add(keyword)
-    await session.flush()
-
-    categories: list[CategoryBrief] = []
-    if body.category_ids:
-        cat_stmt = select(Category).where(Category.id.in_(body.category_ids))
-        cat_result = await session.execute(cat_stmt)
-        valid_cats = {cat.id: cat for cat in cat_result.scalars().all()}
-
-        for cat_id in body.category_ids:
-            if cat_id not in valid_cats:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Category ID {cat_id} not found",
-                )
-            link = KeywordCategoryLink(keyword_id=keyword.id, category_id=cat_id)
-            session.add(link)
-
-        categories = [
-            CategoryBrief(
-                slug=valid_cats[cid].slug,
-                name=valid_cats[cid].name,
-            )
-            for cid in body.category_ids
-            if cid in valid_cats
-        ]
-
     await session.commit()
     await session.refresh(keyword)
 
     return KeywordResponse(
         id=keyword.id,
-        keyword=keyword.keyword,
-        categories=categories,
+        name=keyword.name,
+        category=CategoryBrief(slug=category.slug, name=category.name),
+        status=keyword.status,
         article_count=0,
         created_at=keyword.created_at,
     )
@@ -139,54 +113,42 @@ async def update_keyword(
             detail="Keyword not found",
         )
 
-    if body.category_ids is not None:
-        # Delete existing links
-        existing_links_stmt = select(KeywordCategoryLink).where(
-            KeywordCategoryLink.keyword_id == keyword_id
-        )
-        existing_links = (await session.execute(existing_links_stmt)).scalars().all()
-        for link in existing_links:
-            await session.delete(link)
-
-        # Create new links
-        if body.category_ids:
-            cat_stmt = select(Category).where(Category.id.in_(body.category_ids))
-            cat_result = await session.execute(cat_stmt)
-            valid_cats = {cat.id: cat for cat in cat_result.scalars().all()}
-            for cat_id in body.category_ids:
-                if cat_id not in valid_cats:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=f"Category ID {cat_id} not found",
-                    )
-                link = KeywordCategoryLink(keyword_id=keyword_id, category_id=cat_id)
-                session.add(link)
+    if body.category_id is not None:
+        category = await session.get(Category, body.category_id)
+        if not category:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Category ID {body.category_id} not found",
+            )
+        keyword.category_id = body.category_id
 
     keyword.updated_at = datetime.now(UTC)
     session.add(keyword)
     await session.commit()
 
-    # Reload with categories for response
+    # Reload with category + article count
     stmt = (
-        select(Keyword)
-        .where(Keyword.id == keyword_id)
-        .options(
-            selectinload(Keyword.category_links).selectinload(
-                KeywordCategoryLink.category
-            )
+        select(
+            Keyword,
+            func.count(ArticleKeyword.news_article_id).label("article_count"),
         )
+        .outerjoin(ArticleKeyword, ArticleKeyword.keyword_id == Keyword.id)
+        .where(Keyword.id == keyword_id)
+        .options(selectinload(Keyword.category))
+        .group_by(Keyword.id)
     )
     result = await session.execute(stmt)
-    keyword = result.unique().scalar_one()
-
-    count_stmt = select(func.count()).where(NewsKeyword.keyword_id == keyword.id)
-    count_result = await session.execute(count_stmt)
-    article_count = count_result.scalar_one()
+    row = result.unique().one()
+    keyword, article_count = row
 
     return KeywordResponse(
         id=keyword.id,
-        keyword=keyword.keyword,
-        categories=_build_categories(keyword.category_links),
+        name=keyword.name,
+        category=CategoryBrief(
+            slug=keyword.category.slug,
+            name=keyword.category.name,
+        ),
+        status=keyword.status,
         article_count=article_count,
         created_at=keyword.created_at,
     )

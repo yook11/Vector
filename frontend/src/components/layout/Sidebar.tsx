@@ -6,19 +6,9 @@ import type { KeywordResponse } from "@/types";
 interface SidebarProps {
   keywords: KeywordResponse[];
   activeKeywordId?: number;
-  subscribedKeywordIds?: number[];
-  showMyKeywords?: boolean;
 }
 
-export function Sidebar({
-  keywords,
-  activeKeywordId,
-  subscribedKeywordIds,
-  showMyKeywords,
-}: SidebarProps) {
-  const subscribedSet = new Set(subscribedKeywordIds ?? []);
-  const hasSubscriptions = subscribedSet.size > 0;
-
+export function Sidebar({ keywords, activeKeywordId }: SidebarProps) {
   return (
     <div className="flex flex-col gap-1 py-4">
       <h3 className="px-4 text-sm font-semibold text-muted-foreground mb-2">
@@ -28,24 +18,11 @@ export function Sidebar({
         href="/"
         className={cn(
           "flex items-center justify-between px-4 py-2 text-sm rounded-md transition-colors hover:bg-accent",
-          activeKeywordId === undefined &&
-            !showMyKeywords &&
-            "bg-accent font-medium",
+          activeKeywordId === undefined && "bg-accent font-medium",
         )}
       >
         All
       </Link>
-      {hasSubscriptions && (
-        <Link
-          href="/?myKeywords=true"
-          className={cn(
-            "flex items-center justify-between px-4 py-2 text-sm rounded-md transition-colors hover:bg-accent",
-            showMyKeywords && "bg-accent font-medium",
-          )}
-        >
-          My Keywords
-        </Link>
-      )}
       {keywords.map((kw) => (
         <Link
           key={kw.id}
@@ -55,9 +32,7 @@ export function Sidebar({
             activeKeywordId === kw.id && "bg-accent font-medium",
           )}
         >
-          <span className="truncate">
-            {subscribedSet.has(kw.id) ? `* ${kw.keyword}` : kw.keyword}
-          </span>
+          <span className="truncate">{kw.name}</span>
           <Badge variant="secondary" className="ml-2 text-xs">
             {kw.articleCount}
           </Badge>

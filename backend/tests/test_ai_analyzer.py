@@ -9,8 +9,8 @@ from sqlmodel import select
 
 from app.models.ai_model import AIModel
 from app.models.analysis import AnalysisResult, Sentiment
-from app.models.associations import NewsKeyword
-from app.models.category import Category, KeywordCategoryLink
+from app.models.associations import ArticleKeyword
+from app.models.category import Category
 from app.models.keyword import Keyword
 from app.models.news import NewsArticle
 from app.services.ai_analyzer import (
@@ -440,22 +440,13 @@ async def test_analyze_article_saves_keyword_links(
     sample_categories: list[Category],
     sample_ai_model: AIModel,
 ) -> None:
-    """AI analysis should create news_keywords links for matched keywords."""
-    # Create keywords in category
-    kw1 = Keyword(keyword="Quantum Computing")
-    kw2 = Keyword(keyword="Error Correction")
-    kw3 = Keyword(keyword="Drug Discovery")
+    """AI analysis should create article_keywords links for matched keywords."""
+    # Create keywords with category_id (1:N)
+    cat_id = sample_categories[0].id
+    kw1 = Keyword(name="Quantum Computing", category_id=cat_id)
+    kw2 = Keyword(name="Error Correction", category_id=cat_id)
+    kw3 = Keyword(name="Drug Discovery", category_id=cat_id)
     db_session.add_all([kw1, kw2, kw3])
-    await db_session.flush()
-
-    # Link keywords to categories
-    for kw in [kw1, kw2, kw3]:
-        db_session.add(
-            KeywordCategoryLink(
-                keyword_id=kw.id,
-                category_id=sample_categories[0].id,
-            )
-        )
     await db_session.flush()
 
     article = NewsArticle(
@@ -486,7 +477,7 @@ async def test_analyze_article_saves_keyword_links(
     assert result is not None
 
     # Verify keyword links were created
-    stmt = select(NewsKeyword).where(NewsKeyword.news_article_id == article.id)
+    stmt = select(ArticleKeyword).where(ArticleKeyword.news_article_id == article.id)
     links = (await db_session.execute(stmt)).scalars().all()
     assert len(links) == 2
 
@@ -494,7 +485,7 @@ async def test_analyze_article_saves_keyword_links(
     for link in links:
         kw_stmt = select(Keyword).where(Keyword.id == link.keyword_id)
         kw = (await db_session.execute(kw_stmt)).scalar_one()
-        linked_kws.add(kw.keyword)
+        linked_kws.add(kw.name)
     assert linked_kws == {"Quantum Computing", "Error Correction"}
 
     # Verify keywords_by_category were passed to analyzer

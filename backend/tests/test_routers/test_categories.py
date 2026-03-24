@@ -4,8 +4,8 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.associations import NewsKeyword
-from app.models.category import Category, KeywordCategoryLink
+from app.models.associations import ArticleKeyword
+from app.models.category import Category
 from app.models.keyword import Keyword
 
 
@@ -76,14 +76,8 @@ class TestListCategories:
         sample_categories: list[Category],
     ) -> None:
         """Category should include article count from linked keywords."""
-        kw = Keyword(keyword="TensorFlow")
+        kw = Keyword(name="TensorFlow", category_id=sample_categories[0].id)
         db_session.add(kw)
-        await db_session.flush()
-
-        link = KeywordCategoryLink(
-            keyword_id=kw.id, category_id=sample_categories[0].id
-        )
-        db_session.add(link)
         await db_session.flush()
 
         from app.models.news import NewsArticle
@@ -96,7 +90,7 @@ class TestListCategories:
         db_session.add(article)
         await db_session.flush()
 
-        nk = NewsKeyword(news_article_id=article.id, keyword_id=kw.id)
+        nk = ArticleKeyword(news_article_id=article.id, keyword_id=kw.id)
         db_session.add(nk)
         await db_session.commit()
 
@@ -112,18 +106,12 @@ class TestListCategories:
         sample_categories: list[Category],
     ) -> None:
         """Category response should include nested keywords."""
-        kw = Keyword(keyword="PyTorch")
+        kw = Keyword(name="PyTorch", category_id=sample_categories[0].id)
         db_session.add(kw)
-        await db_session.flush()
-
-        link = KeywordCategoryLink(
-            keyword_id=kw.id, category_id=sample_categories[0].id
-        )
-        db_session.add(link)
         await db_session.commit()
 
         resp = await client.get("/api/v1/categories")
         items = resp.json()["items"]
         ai_ml = next(i for i in items if i["slug"] == "ai_ml")
         assert len(ai_ml["keywords"]) == 1
-        assert ai_ml["keywords"][0]["keyword"] == "PyTorch"
+        assert ai_ml["keywords"][0]["name"] == "PyTorch"

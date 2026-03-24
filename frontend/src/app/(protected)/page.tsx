@@ -5,12 +5,7 @@ import { NewsFilters } from "@/components/news/NewsFilters";
 import { NewsList } from "@/components/news/NewsList";
 import { NewsPagination } from "@/components/news/NewsPagination";
 import { SearchBar } from "@/components/news/SearchBar";
-import {
-  getCategories,
-  getNews,
-  getSources,
-  getSubscriptions,
-} from "@/lib/api-client";
+import { getCategories, getNews, getSources } from "@/lib/api-client";
 import type { NewsQuery, Sentiment } from "@/types";
 
 interface DashboardPageProps {
@@ -34,9 +29,6 @@ function parseSearchParams(
 
   const kwCategoryId = str("kwCategoryId");
   if (kwCategoryId) query.kwCategoryId = Number(kwCategoryId);
-
-  const myKeywords = str("myKeywords");
-  if (myKeywords === "true") query.myKeywords = true;
 
   const sentiment = str("sentiment");
   if (
@@ -78,17 +70,11 @@ export default async function DashboardPage({
   const raw = await searchParams;
   const query = parseSearchParams(raw);
 
-  const [newsData, subscriptionsData, categoriesData, sourcesData] =
-    await Promise.all([
-      getNews(query),
-      getSubscriptions().catch(() => ({
-        items: [] as { keywordId: number }[],
-      })),
-      getCategories().catch(() => ({ items: [] })),
-      getSources().catch(() => ({ items: [], total: 0 })),
-    ]);
-
-  const subscribedKeywordIds = subscriptionsData.items.map((s) => s.keywordId);
+  const [newsData, categoriesData, sourcesData] = await Promise.all([
+    getNews(query),
+    getCategories().catch(() => ({ items: [] })),
+    getSources().catch(() => ({ items: [], total: 0 })),
+  ]);
 
   return (
     <div className="flex h-full">
@@ -97,8 +83,6 @@ export default async function DashboardPage({
           categories={categoriesData.items}
           activeKwCategoryId={query.kwCategoryId}
           activeKeywordId={query.keywordId}
-          subscribedKeywordIds={subscribedKeywordIds}
-          showMyKeywords={query.myKeywords}
         />
       </aside>
 
@@ -109,8 +93,6 @@ export default async function DashboardPage({
               categories={categoriesData.items}
               activeKwCategoryId={query.kwCategoryId}
               activeKeywordId={query.keywordId}
-              subscribedKeywordIds={subscribedKeywordIds}
-              showMyKeywords={query.myKeywords}
             />
             <h1 className="text-2xl font-bold">Dashboard</h1>
           </div>

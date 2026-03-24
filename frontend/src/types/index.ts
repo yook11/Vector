@@ -18,7 +18,6 @@ export interface NewsQuery {
   q?: string;
   keywordId?: number;
   kwCategoryId?: number;
-  myKeywords?: boolean;
   sentiment?: Sentiment;
   minImpact?: number;
   sourceId?: number;
@@ -82,10 +81,6 @@ export type PaginatedNewsResponse = Omit<
 
 export type NewsFetchRequest = components["schemas"]["NewsFetchRequest"];
 export type NewsFetchResponse = components["schemas"]["NewsFetchResponse"];
-export type SubscriptionResponse =
-  components["schemas"]["SubscriptionResponse"];
-export type SubscriptionListResponse =
-  components["schemas"]["SubscriptionListResponse"];
 export type WatchlistResponse = components["schemas"]["WatchlistResponse"];
 export type WatchlistListResponse =
   components["schemas"]["WatchlistListResponse"];

@@ -12,8 +12,6 @@ import type {
   NewsResponse,
   NewsSourceListResponse,
   PaginatedNewsResponse,
-  SubscriptionListResponse,
-  SubscriptionResponse,
   WatchlistListResponse,
   WatchlistResponse,
 } from "@/types";
@@ -136,32 +134,6 @@ export async function updateKeyword(
 /** Delete a keyword. */
 export async function deleteKeyword(id: number): Promise<void> {
   return fetchApi<void>(`/keywords/${id}`, { method: "DELETE" });
-}
-
-// --- Subscriptions ---
-
-/** Fetch user's keyword subscriptions. */
-export async function getSubscriptions(): Promise<SubscriptionListResponse> {
-  return fetchApi<SubscriptionListResponse>("/me/subscriptions", {
-    cache: "no-store",
-  });
-}
-
-/** Subscribe to a keyword. */
-export async function subscribe(
-  keywordId: number,
-): Promise<SubscriptionResponse> {
-  return fetchApi<SubscriptionResponse>("/me/subscriptions", {
-    method: "POST",
-    body: JSON.stringify({ keywordId }),
-  });
-}
-
-/** Unsubscribe from a keyword. */
-export async function unsubscribe(keywordId: number): Promise<void> {
-  return fetchApi<void>(`/me/subscriptions/${keywordId}`, {
-    method: "DELETE",
-  });
 }
 
 // --- Watchlist ---

@@ -12,8 +12,8 @@ from sqlmodel import select
 from app.config import settings
 from app.models.ai_model import AIModel
 from app.models.analysis import AnalysisResult, AnalysisTranslation, Sentiment
-from app.models.associations import NewsKeyword
-from app.models.category import Category, KeywordCategoryLink
+from app.models.associations import ArticleKeyword
+from app.models.category import Category
 from app.models.keyword import Keyword
 from app.models.news import NewsArticle
 from app.utils.sanitize import strip_html_tags
@@ -167,15 +167,10 @@ async def analyze_article(
         )
         return None
 
-    # Query all keyword candidates grouped by category
+    # Query all keyword candidates grouped by category (1:N via category_id)
     keywords_by_category: dict[str, list[str]] | None = None
-    stmt = (
-        select(Category.slug, Keyword.keyword)
-        .join(
-            KeywordCategoryLink,
-            KeywordCategoryLink.category_id == Category.id,
-        )
-        .join(Keyword, Keyword.id == KeywordCategoryLink.keyword_id)
+    stmt = select(Category.slug, Keyword.name).join(
+        Keyword, Keyword.category_id == Category.id
     )
     rows = (await session.execute(stmt)).all()
     if rows:
@@ -225,10 +220,10 @@ async def analyze_article(
 
     # Persist keyword links (AI-selected tags from keyword_candidates)
     if data.keywords:
-        kw_stmt = select(Keyword).where(Keyword.keyword.in_(data.keywords))
+        kw_stmt = select(Keyword).where(Keyword.name.in_(data.keywords))
         matched_kws = (await session.execute(kw_stmt)).scalars().all()
         for kw in matched_kws:
-            link = NewsKeyword(
+            link = ArticleKeyword(
                 news_article_id=article.id,
                 keyword_id=kw.id,
             )

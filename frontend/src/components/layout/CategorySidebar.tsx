@@ -12,16 +12,12 @@ interface CategorySidebarProps {
   categories: CategoryDetailResponse[];
   activeKwCategoryId?: number;
   activeKeywordId?: number;
-  subscribedKeywordIds?: number[];
-  showMyKeywords?: boolean;
 }
 
 export function CategorySidebar({
   categories,
   activeKwCategoryId,
   activeKeywordId,
-  subscribedKeywordIds,
-  showMyKeywords,
 }: CategorySidebarProps) {
   const searchParams = useSearchParams();
   const [expanded, setExpanded] = useState<Set<number>>(() => {
@@ -39,8 +35,7 @@ export function CategorySidebar({
     });
   };
 
-  const hasSubscriptions = (subscribedKeywordIds ?? []).length > 0;
-  const isAll = !activeKwCategoryId && !activeKeywordId && !showMyKeywords;
+  const isAll = !activeKwCategoryId && !activeKeywordId;
 
   // Preserve existing filter params (sentiment, sortBy, etc.) when navigating
   function buildHref(overrides: Record<string, string | undefined>): string {
@@ -48,7 +43,6 @@ export function CategorySidebar({
     // Remove category/keyword params first
     params.delete("kwCategoryId");
     params.delete("keywordId");
-    params.delete("myKeywords");
     params.delete("page");
 
     for (const [key, value] of Object.entries(overrides)) {
@@ -77,16 +71,6 @@ export function CategorySidebar({
       >
         All
       </Link>
-
-      {/* My Keywords */}
-      {hasSubscriptions && (
-        <Link
-          href={buildHref({ myKeywords: "true" })}
-          className={cn(linkClass, showMyKeywords && "bg-accent font-medium")}
-        >
-          My Keywords
-        </Link>
-      )}
 
       {/* Category drilldown */}
       {categories.map((cat) => {
@@ -131,8 +115,6 @@ export function CategorySidebar({
                   return (
                     <Link
                       key={kw.id}
-                      // kwCategoryId is included for sidebar active-state rendering
-                      // only; the API filters by keywordId alone (see news.py elif chain).
                       href={buildHref({
                         kwCategoryId: String(cat.id),
                         keywordId: String(kw.id),
@@ -142,7 +124,7 @@ export function CategorySidebar({
                         isActiveKw && "bg-accent font-medium",
                       )}
                     >
-                      <span className="truncate">{kw.keyword}</span>
+                      <span className="truncate">{kw.name}</span>
                       <Badge variant="secondary" className="ml-2 text-xs">
                         {kw.articleCount}
                       </Badge>

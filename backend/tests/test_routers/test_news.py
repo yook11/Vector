@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.ai_model import AIModel
 from app.models.analysis import AnalysisResult, AnalysisTranslation, Sentiment
-from app.models.associations import NewsKeyword
+from app.models.associations import ArticleKeyword
 from app.models.keyword import Keyword
 from app.models.news import NewsArticle
 from app.models.news_source import NewsSource
@@ -113,7 +113,7 @@ class TestListNews:
         sample_keyword: Keyword,
     ) -> None:
         article = await _create_article(db_session, url="https://example.com/kw")
-        link = NewsKeyword(news_article_id=article.id, keyword_id=sample_keyword.id)
+        link = ArticleKeyword(news_article_id=article.id, keyword_id=sample_keyword.id)
         db_session.add(link)
         await db_session.commit()
 
@@ -248,14 +248,14 @@ class TestGetNews:
         sample_keyword: Keyword,
     ) -> None:
         article = await _create_article(db_session)
-        link = NewsKeyword(news_article_id=article.id, keyword_id=sample_keyword.id)
+        link = ArticleKeyword(news_article_id=article.id, keyword_id=sample_keyword.id)
         db_session.add(link)
         await db_session.commit()
 
         resp = await client.get(f"/api/v1/news/{article.id}")
         data = resp.json()
         assert len(data["keywords"]) == 1
-        assert data["keywords"][0]["keyword"] == "Quantum Computing"
+        assert data["keywords"][0]["name"] == "Quantum Computing"
 
 
 @pytest.mark.asyncio

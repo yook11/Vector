@@ -18,15 +18,13 @@ from app.models import (  # noqa: F401
     AnalysisResult,
     AnalysisTranslation,
     ArticleGroup,
+    ArticleKeyword,
     Category,
     FetchLog,
     Keyword,
-    KeywordCategoryLink,
     NewsArticle,
-    NewsKeyword,
     NewsSource,
     SourceType,
-    UserKeywordSubscription,
     WatchlistItem,
 )
 
@@ -158,9 +156,33 @@ async def sample_ai_model(db_session: AsyncSession) -> AIModel:
 
 
 @pytest.fixture
-async def sample_keyword(db_session: AsyncSession) -> Keyword:
-    """Create and return a test keyword."""
-    kw = Keyword(keyword="Quantum Computing")
+async def sample_categories(
+    db_session: AsyncSession,
+) -> list[Category]:
+    """Create and return sample categories (name is a direct column)."""
+    seed = [
+        ("ai_ml", "AI・ML"),
+        ("quantum", "量子コンピュータ"),
+        ("semiconductor", "半導体"),
+    ]
+    categories: list[Category] = []
+    for slug, name in seed:
+        cat = Category(slug=slug, name=name)
+        db_session.add(cat)
+        categories.append(cat)
+    await db_session.commit()
+    for cat in categories:
+        await db_session.refresh(cat)
+    return categories
+
+
+@pytest.fixture
+async def sample_keyword(
+    db_session: AsyncSession,
+    sample_categories: list[Category],
+) -> Keyword:
+    """Create and return a test keyword (requires a category)."""
+    kw = Keyword(name="Quantum Computing", category_id=sample_categories[1].id)
     db_session.add(kw)
     await db_session.commit()
     await db_session.refresh(kw)
@@ -213,24 +235,3 @@ async def sample_av_source(db_session: AsyncSession) -> NewsSource:
     await db_session.commit()
     await db_session.refresh(source)
     return source
-
-
-@pytest.fixture
-async def sample_categories(
-    db_session: AsyncSession,
-) -> list[Category]:
-    """Create and return sample categories (name is a direct column, no translations)."""
-    seed = [
-        ("ai_ml", "AI・ML"),
-        ("quantum", "量子コンピュータ"),
-        ("semiconductor", "半導体"),
-    ]
-    categories: list[Category] = []
-    for slug, name in seed:
-        cat = Category(slug=slug, name=name)
-        db_session.add(cat)
-        categories.append(cat)
-    await db_session.commit()
-    for cat in categories:
-        await db_session.refresh(cat)
-    return categories

@@ -68,7 +68,7 @@ export function NewsCard({ article }: { article: NewsResponse }) {
           <div className="flex flex-wrap gap-1">
             {article.keywords.map((kw) => (
               <Badge key={kw.id} variant="secondary" className="text-xs">
-                {kw.keyword}
+                {kw.name}
               </Badge>
             ))}
           </div>

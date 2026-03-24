@@ -9,11 +9,9 @@ from app.config import settings
 from app.dependencies import CurrentUser, get_admin_user, get_optional_user, get_session
 from app.models.analysis import AnalysisResult
 from app.models.article_group import ArticleGroup
-from app.models.associations import NewsKeyword
-from app.models.category import KeywordCategoryLink
+from app.models.associations import ArticleKeyword
 from app.models.keyword import Keyword
 from app.models.news import NewsArticle
-from app.models.user_keyword import UserKeywordSubscription
 from app.models.watchlist import WatchlistItem
 from app.schemas.analysis import AIModelBrief, AnalysisResponse
 from app.schemas.category import CategoryBrief
@@ -64,17 +62,13 @@ def _build_news_response(
     keywords = [
         KeywordBrief(
             id=link.keyword.id,
-            keyword=link.keyword.keyword,
-            categories=[
-                CategoryBrief(
-                    slug=cl.category.slug,
-                    name=cl.category.name,
-                )
-                for cl in link.keyword.category_links
-                if cl.category
-            ],
+            name=link.keyword.name,
+            category=CategoryBrief(
+                slug=link.keyword.category.slug,
+                name=link.keyword.category.name,
+            ),
         )
-        for link in article.keyword_links
+        for link in article.article_keywords
         if link.keyword
     ]
 
@@ -130,10 +124,9 @@ def _news_eager_options() -> list:
     return [
         _analyses_filtered_load().selectinload(AnalysisResult.translations),
         _analyses_filtered_load().selectinload(AnalysisResult.ai_model),
-        selectinload(NewsArticle.keyword_links)
-        .selectinload(NewsKeyword.keyword)
-        .selectinload(Keyword.category_links)
-        .selectinload(KeywordCategoryLink.category),
+        selectinload(NewsArticle.article_keywords)
+        .selectinload(ArticleKeyword.keyword)
+        .selectinload(Keyword.category),
         selectinload(NewsArticle.article_group),
     ]
 
@@ -143,7 +136,6 @@ async def list_news(
     keyword_id: int | None = Query(None, alias="keywordId"),
     kw_category_id: int | None = Query(None, alias="kwCategoryId"),
     source_id: int | None = Query(None, alias="sourceId"),
-    my_keywords: bool = Query(False, alias="myKeywords"),
     sentiment: str | None = None,
     min_impact: int | None = Query(None, alias="minImpact"),
     deduplicated: bool = Query(True),
@@ -156,7 +148,7 @@ async def list_news(
     user: CurrentUser | None = Depends(get_optional_user),
     session: AsyncSession = Depends(get_session),
 ) -> PaginatedNewsResponse:
-    # Base query with eager loading (including category chains)
+    # Base query with eager loading
     stmt = select(NewsArticle).options(*_news_eager_options())
 
     # Semantic search: embed query and filter by cosine distance
@@ -179,7 +171,6 @@ async def list_news(
             ArticleGroup.canonical_id.is_not(None)
         )
         stmt = stmt.where(
-            # Not in a group, OR is the canonical article of its group
             (NewsArticle.article_group_id.is_(None))
             | (NewsArticle.id.in_(canonical_ids))
         )
@@ -187,34 +178,16 @@ async def list_news(
     if source_id is not None:
         stmt = stmt.where(NewsArticle.source_id == source_id)
 
-    # myKeywords filter: only effective for authenticated users
-    # Use subqueries instead of JOINs to avoid duplicate rows when an article
-    # matches multiple keywords — duplicates would cause perPage undershoot
-    # after .unique() deduplication.
-    if my_keywords and user is not None:
-        sub_kw_ids = select(UserKeywordSubscription.keyword_id).where(
-            UserKeywordSubscription.user_id == user.id
-        )
-        matching_ids = select(NewsKeyword.news_article_id).where(
-            NewsKeyword.keyword_id.in_(sub_kw_ids)
-        )
-        stmt = stmt.where(NewsArticle.id.in_(matching_ids))
-    elif keyword_id is not None:
-        # keywordId is the most specific filter — when both kwCategoryId and
-        # keywordId are provided, keywordId alone is sufficient because the
-        # keyword already belongs to that category. kwCategoryId stays in the
-        # URL only for frontend sidebar active-state rendering.
-        matching_ids = select(NewsKeyword.news_article_id).where(
-            NewsKeyword.keyword_id == keyword_id
+    if keyword_id is not None:
+        matching_ids = select(ArticleKeyword.news_article_id).where(
+            ArticleKeyword.keyword_id == keyword_id
         )
         stmt = stmt.where(NewsArticle.id.in_(matching_ids))
     elif kw_category_id is not None:
-        # Filter by all keywords belonging to this category
-        sub_kw_ids = select(KeywordCategoryLink.keyword_id).where(
-            KeywordCategoryLink.category_id == kw_category_id
-        )
-        matching_ids = select(NewsKeyword.news_article_id).where(
-            NewsKeyword.keyword_id.in_(sub_kw_ids)
+        # Filter by all keywords belonging to this category (1:N via category_id)
+        sub_kw_ids = select(Keyword.id).where(Keyword.category_id == kw_category_id)
+        matching_ids = select(ArticleKeyword.news_article_id).where(
+            ArticleKeyword.keyword_id.in_(sub_kw_ids)
         )
         stmt = stmt.where(NewsArticle.id.in_(matching_ids))
 
@@ -251,7 +224,6 @@ async def list_news(
     # Sorting
     is_default_sort = sort_by == "publishedAt" and sort_order == "desc"
     if query_embedding is not None and is_default_sort:
-        # Semantic search with default sort: order by similarity (cosine distance ASC)
         distance_expr = NewsArticle.embedding.cosine_distance(query_embedding)
         stmt = stmt.order_by(distance_expr.asc())
     else:
@@ -341,7 +313,6 @@ async def get_similar_news(
 
     Returns an empty list (not 404) if the article has no embedding yet.
     """
-    # Fetch the source article
     source_stmt = select(NewsArticle).where(NewsArticle.id == news_id)
     source_result = await session.execute(source_stmt)
     source = source_result.scalar_one_or_none()
@@ -352,11 +323,9 @@ async def get_similar_news(
             detail="News article not found",
         )
 
-    # Graceful fallback: embedding not yet generated
     if source.embedding is None:
         return []
 
-    # Cosine distance similarity search via pgvector column method
     similar_stmt = (
         select(NewsArticle)
         .options(*_news_eager_options())

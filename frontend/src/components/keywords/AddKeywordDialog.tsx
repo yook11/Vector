@@ -27,41 +27,29 @@ interface AddKeywordDialogProps {
 export function AddKeywordDialog({ keywordCategories }: AddKeywordDialogProps) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  const [keyword, setKeyword] = useState("");
-  const [selectedCategoryIds, setSelectedCategoryIds] = useState<Set<number>>(
-    new Set(),
+  const [name, setName] = useState("");
+  const [selectedCategoryId, setSelectedCategoryId] = useState<number | null>(
+    null,
   );
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (!open) {
-      setKeyword("");
-      setSelectedCategoryIds(new Set());
+      setName("");
+      setSelectedCategoryId(null);
     }
   }, [open]);
 
-  function toggleCategory(id: number) {
-    setSelectedCategoryIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
-  }
-
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const trimmed = keyword.trim();
-    if (!trimmed) return;
+    const trimmed = name.trim();
+    if (!trimmed || selectedCategoryId === null) return;
 
     setLoading(true);
     try {
       await createKeyword({
-        keyword: trimmed,
-        categoryIds: Array.from(selectedCategoryIds),
+        name: trimmed,
+        categoryId: selectedCategoryId,
       });
       toast.success(`Added "${trimmed}"`);
       setOpen(false);
@@ -88,18 +76,18 @@ export function AddKeywordDialog({ keywordCategories }: AddKeywordDialogProps) {
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="keyword">Keyword</Label>
+            <Label htmlFor="keyword-name">Keyword</Label>
             <Input
-              id="keyword"
-              value={keyword}
-              onChange={(e) => setKeyword(e.target.value)}
+              id="keyword-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
               placeholder="e.g. quantum computing"
               required
             />
           </div>
           {keywordCategories && keywordCategories.length > 0 && (
             <div className="space-y-2">
-              <Label>Categories (optional)</Label>
+              <Label>Category (required)</Label>
               <div className="flex flex-wrap gap-2">
                 {keywordCategories.map((cat) => (
                   <Button
@@ -107,9 +95,9 @@ export function AddKeywordDialog({ keywordCategories }: AddKeywordDialogProps) {
                     type="button"
                     size="sm"
                     variant={
-                      selectedCategoryIds.has(cat.id) ? "default" : "outline"
+                      selectedCategoryId === cat.id ? "default" : "outline"
                     }
-                    onClick={() => toggleCategory(cat.id)}
+                    onClick={() => setSelectedCategoryId(cat.id)}
                   >
                     {cat.name}
                   </Button>
@@ -118,7 +106,10 @@ export function AddKeywordDialog({ keywordCategories }: AddKeywordDialogProps) {
             </div>
           )}
           <DialogFooter>
-            <Button type="submit" disabled={loading || !keyword.trim()}>
+            <Button
+              type="submit"
+              disabled={loading || !name.trim() || selectedCategoryId === null}
+            >
               {loading ? "Adding..." : "Add"}
             </Button>
           </DialogFooter>

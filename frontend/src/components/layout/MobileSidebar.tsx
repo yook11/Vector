@@ -17,16 +17,12 @@ interface MobileSidebarProps {
   categories: CategoryDetailResponse[];
   activeKwCategoryId?: number;
   activeKeywordId?: number;
-  subscribedKeywordIds?: number[];
-  showMyKeywords?: boolean;
 }
 
 export function MobileSidebar({
   categories,
   activeKwCategoryId,
   activeKeywordId,
-  subscribedKeywordIds,
-  showMyKeywords,
 }: MobileSidebarProps) {
   const [open, setOpen] = useState(false);
 
@@ -48,8 +44,6 @@ export function MobileSidebar({
             categories={categories}
             activeKwCategoryId={activeKwCategoryId}
             activeKeywordId={activeKeywordId}
-            subscribedKeywordIds={subscribedKeywordIds}
-            showMyKeywords={showMyKeywords}
           />
         </div>
       </SheetContent>
