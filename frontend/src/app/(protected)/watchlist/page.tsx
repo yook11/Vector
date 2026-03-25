@@ -55,7 +55,7 @@ export default async function WatchlistPage({
                       href={`/news/${item.newsArticleId}`}
                       className="hover:underline"
                     >
-                      {item.titleOriginal}
+                      {item.originalTitle}
                     </Link>
                   </CardTitle>
                   <WatchlistButton
@@ -66,7 +66,7 @@ export default async function WatchlistPage({
               </CardHeader>
               <CardContent>
                 <p className="text-xs text-muted-foreground">
-                  {item.source} &middot; {formatDate(item.publishedAt)}
+                  {item.sourceName} &middot; {formatDate(item.publishedAt)}
                   {" &middot; Saved "}
                   {formatDate(item.createdAt)}
                 </p>

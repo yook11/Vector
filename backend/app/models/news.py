@@ -1,8 +1,8 @@
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Optional
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer
+from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, func
 from sqlmodel import Field, Relationship, SQLModel
 
 
@@ -10,31 +10,57 @@ class NewsArticle(SQLModel, table=True):
     __tablename__ = "news_articles"
     __table_args__ = (
         Index("idx_news_published", "published_at", postgresql_using="btree"),
+        # Legacy index — kept for DB compat, dropped in Step 5
         Index("idx_news_fetched", "fetched_at", postgresql_using="btree"),
     )
 
     id: int | None = Field(default=None, primary_key=True)
-    title_original: str = Field(max_length=500, nullable=False)
-    description_original: str | None = Field(default=None)
-    url: str = Field(max_length=2048, unique=True, nullable=False, index=True)
-    source: str = Field(max_length=100, nullable=False)
-    published_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
-    fetched_at: datetime = Field(
-        default_factory=lambda: datetime.now(UTC),
-        nullable=False,
-        sa_type=DateTime(timezone=True),
+
+    # --- Primary columns (new schema, used by application code) ---
+    original_title: str = Field(max_length=500, nullable=False)
+    original_url: str = Field(max_length=2048, nullable=False)
+    original_content: str | None = Field(default=None)
+    original_description: str | None = Field(default=None, max_length=2000)
+    news_source_id: int = Field(
+        sa_column=Column(
+            Integer,
+            ForeignKey(
+                "news_sources.id",
+                ondelete="RESTRICT",
+                name="fk_news_articles_news_source_id",
+            ),
+            nullable=False,
+        )
     )
+    published_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
+    created_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(
+            DateTime(timezone=True),
+            server_default=func.now(),
+            nullable=False,
+        ),
+    )
+
+    # --- Legacy columns (DB NOT NULL, removed in Step 5) ---
+    title_original: str = Field(max_length=500, nullable=False)
+    url: str = Field(max_length=2048, nullable=False)
+    source: str = Field(max_length=100, nullable=False)
+    fetched_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(
+            DateTime(timezone=True),
+            server_default=func.now(),
+            nullable=False,
+        ),
+    )
+
+    # --- Legacy columns (nullable, removed in Step 5) ---
     content: str | None = Field(default=None)
     content_fetched_at: datetime | None = Field(
         default=None, sa_type=DateTime(timezone=True)
     )
     content_fetch_attempts: int = Field(default=0, nullable=False)
-    embedding: list[float] | None = Field(
-        default=None,
-        sa_column=Column(Vector(768), nullable=True),
-    )
-
-    # A-2: source tracking and deduplication
     source_id: int | None = Field(
         default=None,
         sa_column=Column(
@@ -44,8 +70,6 @@ class NewsArticle(SQLModel, table=True):
         ),
     )
     guid: str | None = Field(default=None, max_length=2048, unique=True)
-
-    # 3B-1: duplicate article grouping
     article_group_id: int | None = Field(
         default=None,
         sa_column=Column(
@@ -60,15 +84,29 @@ class NewsArticle(SQLModel, table=True):
             index=True,
         ),
     )
+    embedding: list[float] | None = Field(
+        default=None,
+        sa_column=Column(Vector(768), nullable=True),
+    )
 
-    # Relationships
-    analyses: list["AnalysisResult"] = Relationship(back_populates="news_article")
-    keyword_links: list["NewsKeyword"] = Relationship(back_populates="news_article")
-    watchlist_items: list["WatchlistItem"] = Relationship(back_populates="news_article")
-    source_ref: "NewsSource" = Relationship(
-        back_populates="articles",
+    # --- Relationships (new) ---
+    article_analysis: Optional["ArticleAnalysis"] = Relationship(
+        back_populates="news_article",
         sa_relationship_kwargs={"uselist": False},
     )
+    news_source: "NewsSource" = Relationship(
+        back_populates="articles",
+        sa_relationship_kwargs={
+            "uselist": False,
+            "foreign_keys": "[NewsArticle.news_source_id]",
+        },
+    )
+    article_keywords: list["ArticleKeyword"] = Relationship(
+        back_populates="news_article"
+    )
+    watchlist_items: list["WatchlistItem"] = Relationship(back_populates="news_article")
+
+    # --- Legacy relationships (removed in Step 5) ---
     article_group: Optional["ArticleGroup"] = Relationship(
         back_populates="articles",
         sa_relationship_kwargs={
@@ -79,9 +117,9 @@ class NewsArticle(SQLModel, table=True):
 
 
 # Resolve forward references
-from app.models.analysis import AnalysisResult  # noqa: E402, F811
+from app.models.analysis import ArticleAnalysis  # noqa: E402, F811
 from app.models.article_group import ArticleGroup  # noqa: E402, F811
-from app.models.associations import NewsKeyword  # noqa: E402, F811
+from app.models.associations import ArticleKeyword  # noqa: E402, F811
 from app.models.news_source import NewsSource  # noqa: E402, F811
 from app.models.watchlist import WatchlistItem  # noqa: E402, F811
 

@@ -20,14 +20,12 @@ import { TableCell, TableRow } from "@/components/ui/table";
 import { clientDeleteKeyword as deleteKeyword } from "@/lib/client-api";
 import type { KeywordResponse } from "@/types";
 import { KeywordTag } from "./KeywordTag";
-import { SubscriptionToggle } from "./SubscriptionToggle";
 
 interface KeywordRowProps {
   keyword: KeywordResponse;
-  subscribedKeywordIds?: Set<number>;
 }
 
-export function KeywordRow({ keyword, subscribedKeywordIds }: KeywordRowProps) {
+export function KeywordRow({ keyword }: KeywordRowProps) {
   const router = useRouter();
   const [deleting, setDeleting] = useState(false);
 
@@ -35,7 +33,7 @@ export function KeywordRow({ keyword, subscribedKeywordIds }: KeywordRowProps) {
     setDeleting(true);
     try {
       await deleteKeyword(keyword.id);
-      toast.success(`Deleted "${keyword.keyword}"`);
+      toast.success(`Deleted "${keyword.name}"`);
       router.refresh();
     } catch {
       toast.error("Failed to delete keyword");
@@ -47,30 +45,22 @@ export function KeywordRow({ keyword, subscribedKeywordIds }: KeywordRowProps) {
   return (
     <TableRow>
       <TableCell>
-        <KeywordTag keyword={keyword.keyword} categories={keyword.categories} />
+        <KeywordTag name={keyword.name} category={keyword.category} />
       </TableCell>
       <TableCell>
-        <div className="flex flex-wrap gap-1">
-          {keyword.categories && keyword.categories.length > 0 ? (
-            keyword.categories.map((cat) => (
-              <Badge key={cat.slug} variant="secondary" className="text-xs">
-                {cat.name}
-              </Badge>
-            ))
-          ) : (
-            <span className="text-muted-foreground text-sm">—</span>
-          )}
-        </div>
+        <Badge variant="secondary" className="text-xs">
+          {keyword.category.name}
+        </Badge>
       </TableCell>
       <TableCell className="text-center">{keyword.articleCount}</TableCell>
-      {subscribedKeywordIds && (
-        <TableCell className="text-center">
-          <SubscriptionToggle
-            keywordId={keyword.id}
-            isSubscribed={subscribedKeywordIds.has(keyword.id)}
-          />
-        </TableCell>
-      )}
+      <TableCell className="text-center">
+        <Badge
+          variant={keyword.status === "official" ? "default" : "outline"}
+          className="text-xs"
+        >
+          {keyword.status}
+        </Badge>
+      </TableCell>
       <TableCell className="text-right">
         <AlertDialog>
           <AlertDialogTrigger asChild>
@@ -82,7 +72,7 @@ export function KeywordRow({ keyword, subscribedKeywordIds }: KeywordRowProps) {
             <AlertDialogHeader>
               <AlertDialogTitle>Delete keyword?</AlertDialogTitle>
               <AlertDialogDescription>
-                Are you sure you want to delete &ldquo;{keyword.keyword}&rdquo;?
+                Are you sure you want to delete &ldquo;{keyword.name}&rdquo;?
                 This action cannot be undone.
               </AlertDialogDescription>
             </AlertDialogHeader>

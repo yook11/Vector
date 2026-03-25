@@ -35,7 +35,11 @@ async def test_fetch_log_recorded_on_success(
     mock_response.headers = {}
     mock_response.raise_for_status = lambda: None
 
-    with patch("app.services.news_fetcher.httpx.AsyncClient") as mock_client_cls:
+    with (
+        patch("app.services.news_fetcher.httpx.AsyncClient") as mock_client_cls,
+        patch("app.services.news_fetcher.get_http_cache", new_callable=AsyncMock, return_value=(None, None)),
+        patch("app.services.news_fetcher.set_http_cache", new_callable=AsyncMock),
+    ):
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(return_value=mock_response)
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -66,12 +70,15 @@ async def test_fetch_log_recorded_on_error(
     mock_response = AsyncMock()
     mock_response.status_code = 500
 
-    with patch("app.services.news_fetcher.httpx.AsyncClient") as mock_client_cls:
+    with (
+        patch("app.services.news_fetcher.httpx.AsyncClient") as mock_client_cls,
+        patch("app.services.news_fetcher.get_http_cache", new_callable=AsyncMock, return_value=(None, None)),
+    ):
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(
             side_effect=httpx.HTTPStatusError(
                 "Server Error",
-                request=httpx.Request("GET", sample_source.feed_url),
+                request=httpx.Request("GET", sample_source.endpoint_url),
                 response=httpx.Response(500),
             )
         )

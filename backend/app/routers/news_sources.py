@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import func, select
 
 from app.dependencies import CurrentUser, get_admin_user, get_current_user, get_session
-from app.models.news_source import NewsSource, SourceType
+from app.models.news_source import NewsSource
 from app.schemas.news_source import (
     NewsSourceCreate,
     NewsSourceListResponse,
@@ -24,14 +24,8 @@ def _to_response(source: NewsSource) -> NewsSourceResponse:
         name=source.name,
         source_type=source.source_type,
         site_url=source.site_url,
+        endpoint_url=source.endpoint_url,
         is_active=source.is_active,
-        feed_url=source.feed_url,
-        api_endpoint=source.api_endpoint,
-        fetch_interval_minutes=source.fetch_interval_minutes,
-        next_fetch_at=source.next_fetch_at,
-        last_fetched_at=source.last_fetched_at,
-        consecutive_errors=source.consecutive_errors,
-        last_error_message=source.last_error_message,
         created_at=source.created_at,
         updated_at=source.updated_at,
     )
@@ -83,25 +77,11 @@ async def create_source(
     _user: CurrentUser = Depends(get_admin_user),
 ) -> NewsSourceResponse:
     """Create a new news source."""
-    # Validate type-specific fields
-    if body.source_type == SourceType.RSS and not body.feed_url:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="feed_url is required for RSS sources",
-        )
-    if body.source_type == SourceType.API and not body.api_endpoint:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="api_endpoint is required for API sources",
-        )
-
     source = NewsSource(
         name=body.name,
         source_type=body.source_type,
         site_url=body.site_url,
-        feed_url=body.feed_url if body.source_type == SourceType.RSS else None,
-        api_endpoint=body.api_endpoint if body.source_type == SourceType.API else None,
-        fetch_interval_minutes=body.fetch_interval_minutes,
+        endpoint_url=body.endpoint_url,
     )
     session.add(source)
     await session.commit()
@@ -175,9 +155,6 @@ async def toggle_source(
         )
 
     source.is_active = not source.is_active
-    # Reset next_fetch_at when re-enabling (D-2: immediate fetch on reactivation)
-    if source.is_active:
-        source.next_fetch_at = None
     source.updated_at = datetime.now(UTC)
     session.add(source)
     await session.commit()

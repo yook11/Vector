@@ -10,44 +10,33 @@ import type { components } from "./generated";
 // Manual types — not directly derivable from OpenAPI schema
 // ---------------------------------------------------------------------------
 
-/** Sentiment categories for news analysis. */
-export type Sentiment = "positive" | "negative" | "neutral";
+/** Impact levels for news analysis. */
+export type ImpactLevel = "low" | "medium" | "high" | "critical";
 
 /** Query parameters for GET /news (client-side helper). */
 export interface NewsQuery {
   q?: string;
   keywordId?: number;
   kwCategoryId?: number;
-  myKeywords?: boolean;
-  sentiment?: Sentiment;
-  minImpact?: number;
-  category?: string;
+  impactLevel?: ImpactLevel;
   sourceId?: number;
-  sortBy?: "publishedAt" | "impactScore";
+  sortBy?: "publishedAt" | "impactLevel";
   sortOrder?: "asc" | "desc";
   page?: number;
   perPage?: number;
-  locale?: string;
 }
 
 // ---------------------------------------------------------------------------
 // Re-exports from generated types
 // ---------------------------------------------------------------------------
 
-// Investment categories
+// Categories (unified — replaces both KeywordCategory and InvestmentCategory)
 export type CategoryBrief = components["schemas"]["CategoryBrief"];
-export type CategoryResponse = components["schemas"]["CategoryResponse"];
-export type CategoryListResponse =
-  components["schemas"]["CategoryListResponse"];
-
-// Keyword categories
-export type KeywordCategoryBrief =
-  components["schemas"]["KeywordCategoryBrief"];
 export type KeywordInCategory = components["schemas"]["KeywordInCategory"];
-export type KeywordCategoryDetailResponse =
-  components["schemas"]["KeywordCategoryDetailResponse"];
-export type KeywordCategoryDetailListResponse =
-  components["schemas"]["KeywordCategoryDetailListResponse"];
+export type CategoryDetailResponse =
+  components["schemas"]["CategoryDetailResponse"];
+export type CategoryDetailListResponse =
+  components["schemas"]["CategoryDetailListResponse"];
 
 // Keywords
 export type KeywordBrief = components["schemas"]["KeywordBrief"];
@@ -60,12 +49,12 @@ export type KeywordUpdate = components["schemas"]["KeywordUpdate"];
 // Narrowed types — where generated types need refinement
 // ---------------------------------------------------------------------------
 
-/** Analysis response — narrows sentiment from string to Sentiment union. */
+/** Analysis response — narrows impactLevel from string to ImpactLevel union. */
 export type AnalysisResponse = Omit<
   components["schemas"]["AnalysisResponse"],
-  "sentiment"
+  "impactLevel"
 > & {
-  sentiment: Sentiment;
+  impactLevel: ImpactLevel;
 };
 
 /** Narrow nested analysis to use our narrowed AnalysisResponse. */
@@ -90,10 +79,6 @@ export type PaginatedNewsResponse = Omit<
 
 export type NewsFetchRequest = components["schemas"]["NewsFetchRequest"];
 export type NewsFetchResponse = components["schemas"]["NewsFetchResponse"];
-export type SubscriptionResponse =
-  components["schemas"]["SubscriptionResponse"];
-export type SubscriptionListResponse =
-  components["schemas"]["SubscriptionListResponse"];
 export type WatchlistResponse = components["schemas"]["WatchlistResponse"];
 export type WatchlistListResponse =
   components["schemas"]["WatchlistListResponse"];

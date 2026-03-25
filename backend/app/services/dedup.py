@@ -1,7 +1,10 @@
-"""Duplicate article detection service (3B-1).
+"""Duplicate article detection service.
 
 Detects semantically similar articles using pgvector cosine distance
-and groups them into ArticleGroup clusters.
+on article_analyses.embedding.
+
+Note: Article grouping (ArticleGroup) is removed in this step.
+The detection results are logged for future use (e.g. NewsEvent).
 """
 
 from __future__ import annotations
@@ -10,11 +13,11 @@ from dataclasses import dataclass
 from datetime import timedelta
 
 import structlog
-from sqlalchemy import and_, func, select, text
+from sqlalchemy import and_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models.article_group import ArticleGroup
+from app.models.analysis import ArticleAnalysis
 from app.models.news import NewsArticle
 
 logger = structlog.get_logger(__name__)
@@ -25,41 +28,41 @@ class DedupResult:
     """Result of duplicate detection run."""
 
     processed: int = 0
-    grouped: int = 0
-    new_groups: int = 0
+    duplicates_found: int = 0
 
 
 async def _find_similar_candidates(
     session: AsyncSession,
-    article: NewsArticle,
+    article_id: int,
+    embedding: list[float],
+    published_at: object,
     threshold: float,
     time_window_days: int,
-) -> list[tuple[int, float, int | None]]:
+) -> list[tuple[int, float]]:
     """Find articles similar to the given article within a time window.
 
-    Returns list of (article_id, distance, article_group_id) tuples,
-    ordered by distance ascending.
+    Uses article_analyses.embedding for cosine distance comparison.
+    Returns list of (news_article_id, distance) tuples, ordered by distance.
     """
-    if article.embedding is None or article.published_at is None:
+    if published_at is None:
         return []
 
     window = timedelta(days=time_window_days)
-    pub_start = article.published_at - window
-    pub_end = article.published_at + window
+    pub_start = published_at - window
+    pub_end = published_at + window
 
-    # Use cosine distance operator (<=>)
-    distance_expr = NewsArticle.embedding.cosine_distance(article.embedding)
+    distance_expr = ArticleAnalysis.embedding.cosine_distance(embedding)
 
     stmt = (
         select(
-            NewsArticle.id,
+            ArticleAnalysis.news_article_id,
             distance_expr.label("distance"),
-            NewsArticle.article_group_id,
         )
+        .join(NewsArticle, NewsArticle.id == ArticleAnalysis.news_article_id)
         .where(
             and_(
-                NewsArticle.id != article.id,
-                NewsArticle.embedding.is_not(None),
+                ArticleAnalysis.news_article_id != article_id,
+                ArticleAnalysis.embedding.is_not(None),
                 NewsArticle.published_at >= pub_start,
                 NewsArticle.published_at <= pub_end,
                 distance_expr < threshold,
@@ -70,98 +73,7 @@ async def _find_similar_candidates(
     )
 
     rows = (await session.execute(stmt)).all()
-    return [(row.id, row.distance, row.article_group_id) for row in rows]
-
-
-async def _select_canonical(
-    session: AsyncSession,
-    group: ArticleGroup,
-) -> int | None:
-    """Select the best canonical article for a group.
-
-    Priority: earliest published_at > has content > highest impact_score.
-    """
-    from app.models.analysis import AnalysisResult
-
-    stmt = (
-        select(
-            NewsArticle.id,
-            NewsArticle.published_at,
-            NewsArticle.content,
-            func.max(AnalysisResult.impact_score).label("max_impact"),
-        )
-        .outerjoin(AnalysisResult, AnalysisResult.news_article_id == NewsArticle.id)
-        .where(NewsArticle.article_group_id == group.id)
-        .group_by(NewsArticle.id)
-        .order_by(
-            # 1. Earliest published_at first (NULLs last)
-            NewsArticle.published_at.asc().nulls_last(),
-            # 2. Has content first
-            (NewsArticle.content.is_(None)).asc(),
-            # 3. Highest impact score first (NULLs last)
-            func.max(AnalysisResult.impact_score).desc().nulls_last(),
-        )
-        .limit(1)
-    )
-    row = (await session.execute(stmt)).first()
-    return row.id if row else None
-
-
-async def _add_to_group(
-    session: AsyncSession,
-    article: NewsArticle,
-    group_id: int,
-) -> None:
-    """Add an article to an existing group and update metadata."""
-    article.article_group_id = group_id
-    session.add(article)
-
-    # Update article_count
-    group = await session.get(ArticleGroup, group_id)
-    if group is None:
-        return
-
-    count_stmt = (
-        select(func.count())
-        .select_from(NewsArticle)
-        .where(NewsArticle.article_group_id == group_id)
-    )
-    group.article_count = (await session.scalar(count_stmt)) or 1
-
-    # Re-evaluate canonical
-    canonical_id = await _select_canonical(session, group)
-    if canonical_id is not None:
-        group.canonical_id = canonical_id
-
-    session.add(group)
-
-
-async def _create_group(
-    session: AsyncSession,
-    article: NewsArticle,
-    match_id: int,
-) -> ArticleGroup:
-    """Create a new group from two articles."""
-    group = ArticleGroup(article_count=2)
-    session.add(group)
-    await session.flush()  # get group.id
-
-    # Assign both articles to the group
-    article.article_group_id = group.id
-    session.add(article)
-
-    match_article = await session.get(NewsArticle, match_id)
-    if match_article is not None:
-        match_article.article_group_id = group.id
-        session.add(match_article)
-
-    # Select canonical
-    canonical_id = await _select_canonical(session, group)
-    if canonical_id is not None:
-        group.canonical_id = canonical_id
-    session.add(group)
-
-    return group
+    return [(row.news_article_id, row.distance) for row in rows]
 
 
 async def detect_duplicates(
@@ -170,7 +82,7 @@ async def detect_duplicates(
     threshold: float | None = None,
     time_window_days: int | None = None,
 ) -> DedupResult:
-    """Detect and group duplicate articles.
+    """Detect duplicate articles using article_analyses embeddings.
 
     Args:
         session: Async database session.
@@ -191,51 +103,43 @@ async def detect_duplicates(
     if not article_ids:
         return result
 
-    # Load articles to check
-    stmt = select(NewsArticle).where(
-        NewsArticle.id.in_(article_ids),
-        NewsArticle.embedding.is_not(None),
-        NewsArticle.article_group_id.is_(None),  # not already grouped
+    # Load analyses with embeddings for the target articles
+    stmt = (
+        select(ArticleAnalysis, NewsArticle.published_at)
+        .join(NewsArticle, NewsArticle.id == ArticleAnalysis.news_article_id)
+        .where(
+            ArticleAnalysis.news_article_id.in_(article_ids),
+            ArticleAnalysis.embedding.is_not(None),
+        )
     )
-    articles = list((await session.execute(stmt)).scalars().all())
+    rows = (await session.execute(stmt)).all()
 
-    for article in articles:
+    for analysis, published_at in rows:
         result.processed += 1
 
         candidates = await _find_similar_candidates(
-            session, article, threshold, time_window_days
+            session,
+            analysis.news_article_id,
+            analysis.embedding,
+            published_at,
+            threshold,
+            time_window_days,
         )
         if not candidates:
             continue
 
-        # Best match: closest distance
-        best_id, best_distance, best_group_id = candidates[0]
-
+        best_id, best_distance = candidates[0]
         logger.info(
             "dedup_match_found",
-            article_id=article.id,
+            article_id=analysis.news_article_id,
             match_id=best_id,
             distance=round(best_distance, 4),
-            match_group_id=best_group_id,
         )
-
-        if best_group_id is not None:
-            # Join existing group
-            await _add_to_group(session, article, best_group_id)
-        else:
-            # Create new group
-            await _create_group(session, article, best_id)
-            result.new_groups += 1
-
-        result.grouped += 1
-
-    if result.grouped > 0:
-        await session.commit()
+        result.duplicates_found += 1
 
     logger.info(
         "dedup_completed",
         processed=result.processed,
-        grouped=result.grouped,
-        new_groups=result.new_groups,
+        duplicates_found=result.duplicates_found,
     )
     return result

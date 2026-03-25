@@ -25,12 +25,9 @@ Manual task submission for testing:
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
-
 import structlog
-from sqlalchemy import func
 from sqlalchemy.ext.asyncio import create_async_engine
-from sqlmodel import or_, select
+from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
 from taskiq import (
     Context,
@@ -44,7 +41,7 @@ from taskiq.schedule_sources import LabelScheduleSource
 from taskiq_redis import ListQueueBroker, RedisAsyncResultBackend
 
 from app.config import settings
-from app.models.analysis import AnalysisResult
+from app.models.analysis import ArticleAnalysis
 from app.models.news import NewsArticle
 from app.models.news_source import NewsSource
 from app.services.ai_analyzer import analyze_articles
@@ -166,13 +163,13 @@ async def fetch_and_analyze_task(
         "embed_count": 0,
         "embed_skipped": 0,
         "embed_errors": 0,
-        "dedup_grouped": 0,
-        "dedup_new_groups": 0,
+        "dedup_processed": 0,
+        "dedup_duplicates_found": 0,
     }
 
     # Phase 1 + 2: source query & RSS fetch share a session.
     async with SQLModelAsyncSession(engine, expire_on_commit=False) as session:
-        # Phase 1: query sources due for fetch — fatal if this fails.
+        # Phase 1: query sources to fetch — fatal if this fails.
         if source_ids is not None:
             sources = list(
                 (
@@ -184,18 +181,13 @@ async def fetch_and_analyze_task(
                 .all()
             )
         else:
+            # Global cron: fetch all active sources every cycle
             sources = list(
                 (
                     await session.execute(
                         select(NewsSource)
-                        .where(
-                            NewsSource.is_active == True,  # noqa: E712
-                            or_(
-                                NewsSource.next_fetch_at == None,  # noqa: E711
-                                NewsSource.next_fetch_at <= func.now(),
-                            ),
-                        )
-                        .order_by(NewsSource.next_fetch_at.asc().nulls_first())
+                        .where(NewsSource.is_active == True)  # noqa: E712
+                        .order_by(NewsSource.name)
                     )
                 )
                 .scalars()
@@ -203,7 +195,7 @@ async def fetch_and_analyze_task(
             )
         result["sources_count"] = len(sources)
         if not sources:
-            logger.info("taskiq_fetch_skipped", reason="no sources due for fetch")
+            logger.info("taskiq_fetch_skipped", reason="no active sources")
         else:
             # Phase 2: fetch articles from sources (only when sources exist)
             try:
@@ -211,32 +203,6 @@ async def fetch_and_analyze_task(
                 result["fetch_new"] = fr.new_count
                 result["fetch_skipped"] = fr.skipped_count
                 result["fetch_errors"] = fr.error_count
-
-                # A-5: update each source's scheduling metadata
-                now = datetime.now(UTC)
-                for sr in fr.source_results:
-                    source = next((s for s in sources if s.id == sr.source_id), None)
-                    if source is None:
-                        continue
-
-                    source.next_fetch_at = now + timedelta(
-                        minutes=source.fetch_interval_minutes
-                    )
-                    source.last_fetched_at = now
-
-                    if sr.success or sr.not_modified:
-                        source.consecutive_errors = 0
-                        if sr.etag is not None:
-                            source.etag = sr.etag
-                        if sr.last_modified is not None:
-                            source.last_modified_header = sr.last_modified
-                    else:
-                        source.consecutive_errors += 1
-                        source.last_error_message = sr.error_message
-
-                    session.add(source)
-
-                await session.commit()
             except Exception:
                 logger.exception("taskiq_fetch_phase_failed")
                 result["fetch_errors"] += 1
@@ -282,14 +248,10 @@ async def fetch_and_analyze_task(
                     await session.execute(
                         select(NewsArticle)
                         .outerjoin(
-                            AnalysisResult,
-                            (AnalysisResult.news_article_id == NewsArticle.id)
-                            & (
-                                AnalysisResult.ai_model_id
-                                == settings.default_ai_model_id
-                            ),
+                            ArticleAnalysis,
+                            ArticleAnalysis.news_article_id == NewsArticle.id,
                         )
-                        .where(AnalysisResult.id == None)  # noqa: E711
+                        .where(ArticleAnalysis.id == None)  # noqa: E711
                         .order_by(NewsArticle.published_at.desc())
                         .limit(settings.max_analysis_per_run)
                     )
@@ -298,11 +260,7 @@ async def fetch_and_analyze_task(
                 .all()
             )
             if unanalyzed:
-                ar = await analyze_articles(
-                    session,
-                    unanalyzed,
-                    ai_model_id=settings.default_ai_model_id,
-                )
+                ar = await analyze_articles(session, unanalyzed)
                 result["analyze_count"] = ar.analyzed_count
                 result["analyze_skipped"] = ar.skipped_count
                 result["analyze_errors"] = ar.error_count
@@ -313,15 +271,17 @@ async def fetch_and_analyze_task(
         result["analyze_errors"] += 1
 
     # Phase 5: Embedding generation (independent session)
-    # Runs independently of Phase 4 — covers any article with embedding IS NULL,
-    # including articles from previous runs that failed to embed.
+    # Runs independently of Phase 4 — covers any analysis with embedding IS NULL,
+    # including analyses from previous runs that failed to embed.
     newly_embedded_ids: list[int] = []
     try:
         async with SQLModelAsyncSession(engine, expire_on_commit=False) as session:
             unembedded = list(
                 (
                     await session.execute(
-                        select(NewsArticle).where(NewsArticle.embedding.is_(None))
+                        select(ArticleAnalysis).where(
+                            ArticleAnalysis.embedding.is_(None)
+                        )
                     )
                 )
                 .scalars()
@@ -335,41 +295,38 @@ async def fetch_and_analyze_task(
                 newly_embedded_ids = er.embedded_ids
             else:
                 logger.info(
-                    "taskiq_embed_skipped", reason="all articles have embeddings"
+                    "taskiq_embed_skipped", reason="all analyses have embeddings"
                 )
     except Exception:
         logger.exception("taskiq_embed_phase_failed")
         result["embed_errors"] += 1
 
     # Phase 6: Duplicate detection (independent session)
-    # Groups semantically similar articles using cosine distance.
-    # Falls back to checking ungrouped articles if no new embeddings were created.
+    # Detects semantically similar articles using ArticleAnalysis embeddings.
+    # Falls back to checking recent analyses if no new embeddings were created.
     try:
         async with SQLModelAsyncSession(engine, expire_on_commit=False) as session:
             dedup_ids = newly_embedded_ids
             if not dedup_ids:
-                # Fallback: check ungrouped articles with embeddings (recovery)
-                ungrouped = list(
+                # Fallback: check recent analyses with embeddings
+                recent = list(
                     (
                         await session.execute(
-                            select(NewsArticle.id)
-                            .where(
-                                NewsArticle.embedding.is_not(None),
-                                NewsArticle.article_group_id.is_(None),
-                            )
-                            .order_by(NewsArticle.fetched_at.desc())
+                            select(ArticleAnalysis.news_article_id)
+                            .where(ArticleAnalysis.embedding.is_not(None))
+                            .order_by(ArticleAnalysis.news_article_id.desc())
                             .limit(50)
                         )
                     )
                     .scalars()
                     .all()
                 )
-                dedup_ids = list(ungrouped)
+                dedup_ids = list(recent)
 
             if dedup_ids:
                 dr = await detect_duplicates(session, dedup_ids)
-                result["dedup_grouped"] = dr.grouped
-                result["dedup_new_groups"] = dr.new_groups
+                result["dedup_processed"] = dr.processed
+                result["dedup_duplicates_found"] = dr.duplicates_found
             else:
                 logger.info(
                     "taskiq_dedup_skipped", reason="no articles to check for duplicates"

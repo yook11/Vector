@@ -49,19 +49,6 @@ async function clientFetch<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export async function clientSubscribe(keywordId: number): Promise<void> {
-  await clientFetch("/me/subscriptions", {
-    method: "POST",
-    body: JSON.stringify({ keywordId }),
-  });
-}
-
-export async function clientUnsubscribe(keywordId: number): Promise<void> {
-  await clientFetch(`/me/subscriptions/${keywordId}`, {
-    method: "DELETE",
-  });
-}
-
 export async function clientAddToWatchlist(
   newsArticleId: number,
 ): Promise<void> {

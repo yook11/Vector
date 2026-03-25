@@ -1,11 +1,8 @@
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import type { NewsResponse } from "@/types";
-import { CategoryBadge } from "./CategoryBadge";
+import type { ImpactLevel, NewsResponse } from "@/types";
 import { DuplicateBadge } from "./DuplicateBadge";
-import { ImpactScore } from "./ImpactScore";
-import { SentimentBadge } from "./SentimentBadge";
 import { WatchlistButton } from "./WatchlistButton";
 
 function formatDate(dateStr: string | null | undefined): string {
@@ -17,6 +14,13 @@ function formatDate(dateStr: string | null | undefined): string {
   });
 }
 
+const impactLevelColors: Record<ImpactLevel, string> = {
+  low: "bg-slate-100 text-slate-700",
+  medium: "bg-blue-100 text-blue-700",
+  high: "bg-orange-100 text-orange-700",
+  critical: "bg-red-100 text-red-700",
+};
+
 export function NewsCard({ article }: { article: NewsResponse }) {
   const { analysis } = article;
 
@@ -26,11 +30,18 @@ export function NewsCard({ article }: { article: NewsResponse }) {
         <div className="flex items-start justify-between gap-2">
           <CardTitle className="text-base leading-snug">
             <Link href={`/news/${article.id}`} className="hover:underline">
-              {analysis?.title ?? article.titleOriginal}
+              {analysis?.translatedTitle ?? article.originalTitle}
             </Link>
           </CardTitle>
           <div className="flex items-center gap-1 shrink-0">
-            {analysis && <ImpactScore score={analysis.impactScore} />}
+            {analysis && (
+              <Badge
+                variant="outline"
+                className={impactLevelColors[analysis.impactLevel]}
+              >
+                {analysis.impactLevel}
+              </Badge>
+            )}
             <WatchlistButton
               newsArticleId={article.id}
               isWatched={article.isWatched}
@@ -39,7 +50,7 @@ export function NewsCard({ article }: { article: NewsResponse }) {
         </div>
         <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <span className="line-clamp-1">
-            {article.source} &middot; {formatDate(article.publishedAt)}
+            {article.sourceName} &middot; {formatDate(article.publishedAt)}
           </span>
           {article.duplicateCount > 0 && article.articleGroupId != null && (
             <DuplicateBadge
@@ -51,17 +62,9 @@ export function NewsCard({ article }: { article: NewsResponse }) {
       </CardHeader>
       <CardContent className="space-y-3">
         {analysis && (
-          <>
-            <p className="text-sm text-muted-foreground line-clamp-2">
-              {analysis.summary}
-            </p>
-            <div className="flex flex-wrap gap-1">
-              <SentimentBadge sentiment={analysis.sentiment} />
-              {analysis.investmentCategories?.map((cat) => (
-                <CategoryBadge key={cat.slug} category={cat} />
-              ))}
-            </div>
-          </>
+          <p className="text-sm text-muted-foreground line-clamp-2">
+            {analysis.summary}
+          </p>
         )}
         {!analysis && (
           <p className="text-sm text-muted-foreground italic">
@@ -72,7 +75,7 @@ export function NewsCard({ article }: { article: NewsResponse }) {
           <div className="flex flex-wrap gap-1">
             {article.keywords.map((kw) => (
               <Badge key={kw.id} variant="secondary" className="text-xs">
-                {kw.keyword}
+                {kw.name}
               </Badge>
             ))}
           </div>

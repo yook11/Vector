@@ -37,16 +37,6 @@ interface SourceTableProps {
   sources: NewsSourceResponse[];
 }
 
-function formatDate(dateStr: string | null | undefined): string {
-  if (!dateStr) return "-";
-  return new Date(dateStr).toLocaleString("ja-JP", {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
 export function SourceTable({ sources }: SourceTableProps) {
   const router = useRouter();
   const [toggling, setToggling] = useState<number | null>(null);
@@ -95,37 +85,20 @@ export function SourceTable({ sources }: SourceTableProps) {
         <TableRow>
           <TableHead>Name</TableHead>
           <TableHead>Type</TableHead>
-          <TableHead>URL / Endpoint</TableHead>
+          <TableHead>Endpoint URL</TableHead>
           <TableHead className="text-center">Status</TableHead>
-          <TableHead>Last Fetched</TableHead>
           <TableHead className="text-right">Actions</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
         {sources.map((source) => (
           <TableRow key={source.id}>
-            <TableCell className="font-medium">
-              <div className="flex items-center gap-2">
-                {source.name}
-                {source.consecutiveErrors >= 5 && (
-                  <Badge
-                    variant="destructive"
-                    title={
-                      source.lastErrorMessage ?? "Multiple consecutive errors"
-                    }
-                  >
-                    Error
-                  </Badge>
-                )}
-              </div>
-            </TableCell>
+            <TableCell className="font-medium">{source.name}</TableCell>
             <TableCell>
               <Badge variant="outline">{source.sourceType.toUpperCase()}</Badge>
             </TableCell>
             <TableCell className="max-w-[200px] truncate text-xs text-muted-foreground">
-              <span title={source.feedUrl ?? source.apiEndpoint ?? ""}>
-                {source.feedUrl ?? source.apiEndpoint ?? "-"}
-              </span>
+              <span title={source.endpointUrl}>{source.endpointUrl}</span>
             </TableCell>
             <TableCell className="text-center">
               <Switch
@@ -133,9 +106,6 @@ export function SourceTable({ sources }: SourceTableProps) {
                 disabled={toggling === source.id}
                 onCheckedChange={() => handleToggle(source.id)}
               />
-            </TableCell>
-            <TableCell className="text-sm text-muted-foreground">
-              {formatDate(source.lastFetchedAt)}
             </TableCell>
             <TableCell className="text-right">
               <div className="flex items-center justify-end gap-1">

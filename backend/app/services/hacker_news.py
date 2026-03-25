@@ -1,7 +1,7 @@
 """Hacker News fetcher — Algolia HN Search API client."""
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 
 import httpx
 import structlog
@@ -12,6 +12,7 @@ from app.config import settings
 from app.models.news import NewsArticle
 from app.models.news_source import NewsSource
 from app.services.news_fetcher import SourceFetchResult
+from app.services.source_helpers import get_last_successful_fetch_at
 from app.utils.sanitize import is_safe_url, strip_html_tags
 
 HTTP_TIMEOUT = 30.0
@@ -105,10 +106,11 @@ class HackerNewsClient:
         """
         result = SourceFetchResult(source_id=source.id)
 
-        # Convert last_fetched_at to unix timestamp for API filter
+        # Derive last fetch time from fetch_logs
+        last_fetched = await get_last_successful_fetch_at(session, source.id)
         since_timestamp: int | None = None
-        if source.last_fetched_at:
-            since_timestamp = int(source.last_fetched_at.timestamp())
+        if last_fetched:
+            since_timestamp = int(last_fetched.timestamp())
 
         try:
             stories = await self.fetch_recent_stories(since_timestamp)
@@ -146,14 +148,15 @@ class HackerNewsClient:
 
         for i in range(0, len(urls), chunk_size):
             chunk = urls[i : i + chunk_size]
-            stmt = select(NewsArticle.url).where(NewsArticle.url.in_(chunk))
+            stmt = select(NewsArticle.original_url).where(
+                NewsArticle.original_url.in_(chunk)
+            )
             rows = await session.execute(stmt)
             existing_urls.update(row[0] for row in rows.all())
 
         # Create new articles
         max_new = settings.max_articles_per_fetch
         new_count = 0
-        now = datetime.now(UTC)
 
         for story in stories:
             guid = f"hn:{story.object_id}"
@@ -183,14 +186,17 @@ class HackerNewsClient:
                 break
 
             article = NewsArticle(
+                # New columns
+                original_title=strip_html_tags(story.title)[:500],
+                original_url=story.url,
+                news_source_id=source.id,
+                published_at=story.created_at,
+                # Legacy columns (DB NOT NULL, removed in Step 5)
                 title_original=strip_html_tags(story.title)[:500],
-                description_original=None,
                 url=story.url,
                 source=source.name,
                 source_id=source.id,
                 guid=guid,
-                published_at=story.created_at,
-                fetched_at=now,
             )
 
             session.add(article)

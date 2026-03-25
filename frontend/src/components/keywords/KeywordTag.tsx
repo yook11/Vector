@@ -1,6 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import type { KeywordCategoryBrief } from "@/types";
+import type { CategoryBrief } from "@/types";
 
 const categoryColors: Record<string, string> = {
   semiconductor:
@@ -29,20 +29,19 @@ const fallback =
   "bg-gray-100 text-gray-800 border-gray-200 dark:bg-gray-800/30 dark:text-gray-400 dark:border-gray-700";
 
 export function KeywordTag({
-  keyword,
-  categories,
+  name,
+  category,
 }: {
-  keyword: string;
-  categories?: KeywordCategoryBrief[];
+  name: string;
+  category?: CategoryBrief;
 }) {
-  const primary = categories?.[0];
-  const colorClass = primary
-    ? (categoryColors[primary.slug] ?? fallback)
+  const colorClass = category
+    ? (categoryColors[category.slug] ?? fallback)
     : fallback;
 
   return (
     <Badge variant="outline" className={cn("text-xs", colorClass)}>
-      {keyword}
+      {name}
     </Badge>
   );
 }

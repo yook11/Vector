@@ -5,6 +5,7 @@ import time
 from calendar import timegm
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from urllib.parse import urlparse
 
 import feedparser
 import httpx
@@ -16,6 +17,7 @@ from app.config import settings
 from app.models.fetch_log import FetchLog, FetchStatus
 from app.models.news import NewsArticle
 from app.models.news_source import NewsSource, SourceType
+from app.utils.redis_cache import get_http_cache, set_http_cache
 from app.utils.sanitize import is_safe_url, strip_html_tags
 
 HTTP_TIMEOUT = 30.0
@@ -98,21 +100,18 @@ async def _fetch_rss_source(
     """Fetch and process a single RSS source."""
     result = SourceFetchResult(source_id=source.id)
 
-    if not source.feed_url:
-        result.success = False
-        result.error_message = "RSS source missing feed_url"
-        return result
+    # Read conditional-GET headers from Redis
+    cached_etag, cached_last_modified = await get_http_cache(source.id)
 
-    # Build conditional GET headers
     headers: dict[str, str] = {}
-    if source.etag:
-        headers["If-None-Match"] = source.etag
-    if source.last_modified_header:
-        headers["If-Modified-Since"] = source.last_modified_header
+    if cached_etag:
+        headers["If-None-Match"] = cached_etag
+    if cached_last_modified:
+        headers["If-Modified-Since"] = cached_last_modified
 
     try:
         response = await client.get(
-            source.feed_url, headers=headers, timeout=HTTP_TIMEOUT
+            source.endpoint_url, headers=headers, timeout=HTTP_TIMEOUT
         )
 
         # 304 Not Modified — nothing new
@@ -140,6 +139,9 @@ async def _fetch_rss_source(
     # Capture ETag / Last-Modified for next conditional GET
     result.etag = response.headers.get("ETag")
     result.last_modified = response.headers.get("Last-Modified")
+
+    # Persist to Redis for next fetch cycle
+    await set_http_cache(source.id, result.etag, result.last_modified)
 
     # Parse feed
     feed = await asyncio.to_thread(feedparser.parse, response.text)
@@ -180,7 +182,9 @@ async def _fetch_rss_source(
     if urls:
         for i in range(0, len(urls), chunk_size):
             chunk = urls[i : i + chunk_size]
-            stmt = select(NewsArticle.url).where(NewsArticle.url.in_(chunk))
+            stmt = select(NewsArticle.original_url).where(
+                NewsArticle.original_url.in_(chunk)
+            )
             rows = await session.execute(stmt)
             existing_urls.update(row[0] for row in rows.all())
 
@@ -219,19 +223,25 @@ async def _fetch_rss_source(
         now = datetime.now(UTC)
 
         article = NewsArticle(
+            # New columns
+            original_title=title,
+            original_description=description,
+            original_url=article_url,
+            news_source_id=source.id,
+            published_at=_parse_published_date(entry),
+            # Legacy columns (DB NOT NULL, removed in Step 5)
             title_original=title,
-            description_original=description,
             url=article_url,
             source=source.name,
             source_id=source.id,
             guid=guid,
-            published_at=_parse_published_date(entry),
-            fetched_at=now,
         )
 
         # If RSS provides full content, store it immediately
         if full_content:
-            article.content = full_content[: settings.content_max_length]
+            truncated = full_content[: settings.content_max_length]
+            article.original_content = truncated
+            article.content = truncated
             article.content_fetched_at = now
 
         session.add(article)
@@ -281,14 +291,16 @@ async def fetch_news_for_sources(
             if source.source_type == SourceType.RSS:
                 source_result = await _fetch_rss_source(client, session, source)
             elif source.source_type == SourceType.API:
-                if source.api_endpoint == "hacker-news":
+                # Route to the correct API client based on endpoint_url domain
+                domain = urlparse(source.endpoint_url).hostname or ""
+                if "algolia.com" in domain:
                     from app.services.hacker_news import HackerNewsClient
 
                     hn_client = HackerNewsClient(client)
                     source_result = await hn_client.fetch_and_save_stories(
                         source=source, session=session
                     )
-                elif source.api_endpoint == "alpha-vantage":
+                elif "alphavantage.co" in domain:
                     from app.services.alpha_vantage import AlphaVantageClient
 
                     av_client = AlphaVantageClient(client)
@@ -299,9 +311,9 @@ async def fetch_news_for_sources(
                     logger.warning(
                         "unsupported_api_endpoint",
                         source=source.name,
-                        api_endpoint=source.api_endpoint,
+                        endpoint_url=source.endpoint_url,
                     )
-                    msg = f"Unsupported API endpoint: {source.api_endpoint}"
+                    msg = f"Unsupported API endpoint: {source.endpoint_url}"
                     source_result = SourceFetchResult(
                         source_id=source.id,
                         success=False,

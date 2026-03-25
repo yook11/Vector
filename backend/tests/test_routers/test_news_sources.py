@@ -24,7 +24,8 @@ async def test_list_sources(
     source = NewsSource(
         name="TechCrunch",
         source_type=SourceType.RSS,
-        feed_url="https://techcrunch.com/feed/",
+        site_url="https://techcrunch.com",
+        endpoint_url="https://techcrunch.com/feed/",
     )
     db_session.add(source)
     await db_session.commit()
@@ -35,6 +36,7 @@ async def test_list_sources(
     assert data["total"] == 1
     assert data["items"][0]["name"] == "TechCrunch"
     assert data["items"][0]["sourceType"] == "rss"
+    assert data["items"][0]["endpointUrl"] == "https://techcrunch.com/feed/"
 
 
 async def test_get_source(
@@ -45,7 +47,8 @@ async def test_get_source(
     assert response.status_code == 200
     data = response.json()
     assert data["name"] == sample_source.name
-    assert data["feedUrl"] == sample_source.feed_url
+    assert data["endpointUrl"] == sample_source.endpoint_url
+    assert data["siteUrl"] == sample_source.site_url
 
 
 async def test_get_source_not_found(
@@ -61,18 +64,17 @@ async def test_create_rss_source(
     body = {
         "name": "New RSS Source",
         "sourceType": "rss",
-        "feedUrl": "https://example.com/rss.xml",
-        "fetchIntervalMinutes": 360,
+        "siteUrl": "https://example.com",
+        "endpointUrl": "https://example.com/rss.xml",
     }
     response = await admin_client.post("/api/v1/sources", json=body)
     assert response.status_code == 201
     data = response.json()
     assert data["name"] == "New RSS Source"
     assert data["sourceType"] == "rss"
-    assert data["feedUrl"] == "https://example.com/rss.xml"
-    assert data["fetchIntervalMinutes"] == 360
+    assert data["endpointUrl"] == "https://example.com/rss.xml"
+    assert data["siteUrl"] == "https://example.com"
     assert data["isActive"] is True
-    assert data["consecutiveErrors"] == 0
 
 
 async def test_create_api_source(
@@ -81,26 +83,38 @@ async def test_create_api_source(
     body = {
         "name": "Hacker News",
         "sourceType": "api",
-        "apiEndpoint": "hacker-news",
+        "siteUrl": "https://news.ycombinator.com",
+        "endpointUrl": "https://hn.algolia.com/api/v1/search_by_date",
     }
     response = await admin_client.post("/api/v1/sources", json=body)
     assert response.status_code == 201
     data = response.json()
     assert data["sourceType"] == "api"
-    assert data["apiEndpoint"] == "hacker-news"
-    assert data["feedUrl"] is None
+    assert data["endpointUrl"] == "https://hn.algolia.com/api/v1/search_by_date"
 
 
-async def test_create_rss_source_missing_feed_url(
+async def test_create_source_missing_endpoint_url(
     admin_client: AsyncClient,
 ) -> None:
     body = {
-        "name": "No Feed URL",
+        "name": "No Endpoint",
         "sourceType": "rss",
+        "siteUrl": "https://example.com",
     }
     response = await admin_client.post("/api/v1/sources", json=body)
-    assert response.status_code == 400
-    assert "feed_url" in response.json()["detail"]
+    assert response.status_code == 422
+
+
+async def test_create_source_missing_site_url(
+    admin_client: AsyncClient,
+) -> None:
+    body = {
+        "name": "No Site URL",
+        "sourceType": "rss",
+        "endpointUrl": "https://example.com/feed.xml",
+    }
+    response = await admin_client.post("/api/v1/sources", json=body)
+    assert response.status_code == 422
 
 
 async def test_update_source(
@@ -109,13 +123,11 @@ async def test_update_source(
 ) -> None:
     body = {
         "name": "Updated Name",
-        "fetchIntervalMinutes": 60,
     }
     response = await admin_client.put(f"/api/v1/sources/{sample_source.id}", json=body)
     assert response.status_code == 200
     data = response.json()
     assert data["name"] == "Updated Name"
-    assert data["fetchIntervalMinutes"] == 60
 
 
 async def test_update_source_not_found(
@@ -164,8 +176,6 @@ async def test_toggle_source_active(
     assert response.status_code == 200
     data = response.json()
     assert data["isActive"] is True
-    # next_fetch_at should be None for immediate fetch
-    assert data["nextFetchAt"] is None
 
 
 async def test_toggle_source_not_found(

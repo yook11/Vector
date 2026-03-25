@@ -10,13 +10,9 @@ import { KeywordRow } from "./KeywordRow";
 
 interface KeywordTableProps {
   keywords: KeywordResponse[];
-  subscribedKeywordIds?: Set<number>;
 }
 
-export function KeywordTable({
-  keywords,
-  subscribedKeywordIds,
-}: KeywordTableProps) {
+export function KeywordTable({ keywords }: KeywordTableProps) {
   if (keywords.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
@@ -31,21 +27,15 @@ export function KeywordTable({
       <TableHeader>
         <TableRow>
           <TableHead>Keyword</TableHead>
-          <TableHead>Categories</TableHead>
+          <TableHead>Category</TableHead>
           <TableHead className="text-center">Articles</TableHead>
-          {subscribedKeywordIds && (
-            <TableHead className="text-center">Subscribe</TableHead>
-          )}
+          <TableHead className="text-center">Status</TableHead>
           <TableHead className="text-right">Actions</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
         {keywords.map((kw) => (
-          <KeywordRow
-            key={kw.id}
-            keyword={kw}
-            subscribedKeywordIds={subscribedKeywordIds}
-          />
+          <KeywordRow key={kw.id} keyword={kw} />
         ))}
       </TableBody>
     </Table>

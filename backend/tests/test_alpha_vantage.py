@@ -115,18 +115,20 @@ async def test_av_fetch_saves_articles(
 
     # Verify articles in DB
     await db_session.commit()
-    stmt = select(NewsArticle).where(NewsArticle.source_id == sample_av_source.id)
+    stmt = select(NewsArticle).where(NewsArticle.news_source_id == sample_av_source.id)
     rows = await db_session.execute(stmt)
     articles = rows.scalars().all()
     assert len(articles) == 2
 
-    titles = {a.title_original for a in articles}
+    titles = {a.original_title for a in articles}
     assert "AI Breakthrough in Chip Design" in titles
     assert "Quantum Computing Milestone" in titles
 
-    # Check guid format
+    # Check both new and legacy columns
     for a in articles:
         assert a.guid.startswith("av:")
+        assert a.original_url is not None
+        assert a.news_source_id == sample_av_source.id
 
 
 @pytest.mark.asyncio
@@ -138,6 +140,10 @@ async def test_av_fetch_skips_duplicates(
     # Pre-insert one article
     existing_url = "https://example.com/article-1"
     existing = NewsArticle(
+        original_title="Existing",
+        original_url=existing_url,
+        news_source_id=sample_av_source.id,
+        # Legacy columns (NOT NULL)
         title_original="Existing",
         url=existing_url,
         source=sample_av_source.name,

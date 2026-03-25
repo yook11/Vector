@@ -1,8 +1,7 @@
 import { headers } from "next/headers";
 import { auth } from "@/lib/auth";
 import type {
-  CategoryListResponse,
-  KeywordCategoryDetailListResponse,
+  CategoryDetailListResponse,
   KeywordCreate,
   KeywordListResponse,
   KeywordResponse,
@@ -13,8 +12,6 @@ import type {
   NewsResponse,
   NewsSourceListResponse,
   PaginatedNewsResponse,
-  SubscriptionListResponse,
-  SubscriptionResponse,
   WatchlistListResponse,
   WatchlistResponse,
 } from "@/types";
@@ -139,32 +136,6 @@ export async function deleteKeyword(id: number): Promise<void> {
   return fetchApi<void>(`/keywords/${id}`, { method: "DELETE" });
 }
 
-// --- Subscriptions ---
-
-/** Fetch user's keyword subscriptions. */
-export async function getSubscriptions(): Promise<SubscriptionListResponse> {
-  return fetchApi<SubscriptionListResponse>("/me/subscriptions", {
-    cache: "no-store",
-  });
-}
-
-/** Subscribe to a keyword. */
-export async function subscribe(
-  keywordId: number,
-): Promise<SubscriptionResponse> {
-  return fetchApi<SubscriptionResponse>("/me/subscriptions", {
-    method: "POST",
-    body: JSON.stringify({ keywordId }),
-  });
-}
-
-/** Unsubscribe from a keyword. */
-export async function unsubscribe(keywordId: number): Promise<void> {
-  return fetchApi<void>(`/me/subscriptions/${keywordId}`, {
-    method: "DELETE",
-  });
-}
-
 // --- Watchlist ---
 
 /** Fetch user's watchlist. */
@@ -218,27 +189,11 @@ export async function getSimilarNews(
 
 // --- Categories ---
 
-/** Fetch all investment categories. */
-export async function getCategories(
-  locale?: string,
-): Promise<CategoryListResponse> {
-  const qs = locale ? `?locale=${locale}` : "";
-  return fetchApi<CategoryListResponse>(`/categories${qs}`, {
+/** Fetch all categories (unified — keywords + article counts). */
+export async function getCategories(): Promise<CategoryDetailListResponse> {
+  return fetchApi<CategoryDetailListResponse>("/categories", {
     cache: "no-store",
   });
-}
-
-/** Fetch all keyword categories. */
-export async function getKeywordCategories(
-  locale?: string,
-): Promise<KeywordCategoryDetailListResponse> {
-  const qs = locale ? `?locale=${locale}` : "";
-  return fetchApi<KeywordCategoryDetailListResponse>(
-    `/keyword-categories${qs}`,
-    {
-      cache: "no-store",
-    },
-  );
 }
 
 // --- News Sources ---

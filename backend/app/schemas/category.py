@@ -1,21 +1,23 @@
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 
+from app.domain.category import CategoryName, CategorySlug
+
 
 class CategoryBrief(BaseModel):
-    """Minimal category info embedded in AnalysisResponse."""
+    """Minimal category info embedded in KeywordResponse / KeywordBrief."""
 
     model_config = ConfigDict(
         alias_generator=to_camel,
         populate_by_name=True,
     )
 
-    slug: str
-    name: str
+    slug: CategorySlug
+    name: CategoryName
 
 
-class CategoryResponse(BaseModel):
-    """Full category detail for GET /api/v1/categories."""
+class KeywordInCategory(BaseModel):
+    """Keyword with article count, nested in category detail response."""
 
     model_config = ConfigDict(
         alias_generator=to_camel,
@@ -23,17 +25,31 @@ class CategoryResponse(BaseModel):
     )
 
     id: int
-    slug: str
     name: str
-    description: str | None = None
+    article_count: int = 0
 
 
-class CategoryListResponse(BaseModel):
-    """Response wrapper for category list endpoint."""
+class CategoryDetailResponse(BaseModel):
+    """Enriched category with articleCount and nested keywords."""
 
     model_config = ConfigDict(
         alias_generator=to_camel,
         populate_by_name=True,
     )
 
-    items: list[CategoryResponse]
+    id: int
+    slug: CategorySlug
+    name: CategoryName
+    article_count: int = 0
+    keywords: list[KeywordInCategory] = []
+
+
+class CategoryDetailListResponse(BaseModel):
+    """Response wrapper for enriched category list endpoint."""
+
+    model_config = ConfigDict(
+        alias_generator=to_camel,
+        populate_by_name=True,
+    )
+
+    items: list[CategoryDetailResponse]

@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime
+from sqlalchemy import Column, DateTime, ForeignKey, Integer
 from sqlmodel import Field, Relationship, SQLModel
 
 
@@ -8,7 +8,22 @@ class Keyword(SQLModel, table=True):
     __tablename__ = "keywords"
 
     id: int | None = Field(default=None, primary_key=True)
-    keyword: str = Field(max_length=200, unique=True, nullable=False)
+    name: str = Field(max_length=100, unique=True, nullable=False)
+    category_id: int = Field(
+        sa_column=Column(
+            Integer,
+            ForeignKey("categories.id", ondelete="RESTRICT"),
+            nullable=False,
+            index=True,
+        )
+    )
+    status: str = Field(default="provisional", max_length=20, nullable=False)
+    is_ai_generated: bool = Field(default=False, nullable=False)
+    approved_at: datetime | None = Field(
+        default=None,
+        nullable=True,
+        sa_type=DateTime(timezone=True),
+    )
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(UTC),
         nullable=False,
@@ -21,16 +36,12 @@ class Keyword(SQLModel, table=True):
     )
 
     # Relationships
-    news_links: list["NewsKeyword"] = Relationship(back_populates="keyword")
-    user_subscriptions: list["UserKeywordSubscription"] = Relationship(
-        back_populates="keyword"
-    )
-    category_links: list["KeywordCategoryLink"] = Relationship(back_populates="keyword")
+    category: "Category" = Relationship(back_populates="keywords")
+    article_keywords: list["ArticleKeyword"] = Relationship(back_populates="keyword")
 
 
 # Resolve forward references
-from app.models.associations import NewsKeyword  # noqa: E402, F811
-from app.models.keyword_category import KeywordCategoryLink  # noqa: E402, F811
-from app.models.user_keyword import UserKeywordSubscription  # noqa: E402, F811
+from app.models.associations import ArticleKeyword  # noqa: E402, F811
+from app.models.category import Category  # noqa: E402, F811
 
 Keyword.model_rebuild()

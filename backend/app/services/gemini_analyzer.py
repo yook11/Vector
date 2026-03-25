@@ -9,7 +9,7 @@ from google import genai
 from google.genai.types import GenerateContentConfig
 
 from app.config import settings
-from app.models.analysis import Sentiment
+from app.models.analysis import ImpactLevel
 from app.services.ai_analyzer import (
     AnalysisData,
     AnalysisError,
@@ -23,15 +23,6 @@ MAX_RETRIES = 3
 RETRY_BASE_DELAY = 2.0  # seconds, exponential backoff: 2, 4, 8
 MAX_RATE_LIMIT_RETRIES = 1  # independent of normal retry budget
 _DAILY_QUOTA_THRESHOLD = 120  # retryDelay above this → daily quota exhausted
-
-VALID_CATEGORIES = {
-    "competitive_edge",
-    "financial_signal",
-    "growth_catalyst",
-    "market_disruption",
-    "regulatory_shift",
-    "risk_mitigation",
-}
 
 ANALYSIS_PROMPT_BASE = """\
 You are an expert tech news analyst specializing in emerging technologies \
@@ -51,25 +42,16 @@ Return a JSON object with exactly these fields:
   "summary_ja": "3-line summary in Japanese. Line 1: key facts. \
 Line 2: industry impact. Line 3: investment implications. \
 Separate lines with \\n",
-  "sentiment": "one of: positive, negative, neutral",
-  "impact_score": <integer 1-10, where 10 = highest market impact>,
-  "investment_categories": ["category_slug_1", "category_slug_2"],
+  "impact_level": "one of: low, medium, high, critical — how much this \
+news affects the market. low = minimal impact, medium = notable but limited, \
+high = significant market implications, critical = major market-moving event",
   "reasoning": "Brief explanation in Japanese of why you assigned \
-this sentiment and impact score"
+this impact level"
 }}
 
 Rules:
 - All Japanese text must be natural, professional Japanese
-- sentiment MUST be exactly one of: "positive", "negative", "neutral"
-- impact_score MUST be an integer from 1 to 10
-- investment_categories: choose 1-3 from EXACTLY this list: \
-"growth_catalyst" (new products, market expansion, partnerships), \
-"risk_mitigation" (lawsuit wins, regulatory clearance, safety confirmation), \
-"competitive_edge" (tech breakthroughs, patents, market share gains), \
-"regulatory_shift" (new regulations, policy changes, subsidies, export controls), \
-"financial_signal" (earnings, revenue changes, margins, fundraising), \
-"market_disruption" (new tech threatening existing markets, industry restructuring). \
-Select categories that explain WHY this sentiment/impact was assigned.
+- impact_level MUST be exactly one of: "low", "medium", "high", "critical"
 - If description is empty, analyze based on the title alone
 - When full article content is provided, use it for deeper analysis
 """
@@ -196,7 +178,6 @@ class GeminiAnalyzer(BaseAnalyzer):
                 if _is_rate_limit_error(e):
                     retry_delay = _parse_retry_delay(e)
 
-                    # Daily quota: retryDelay too long or missing → stop
                     if retry_delay is None or retry_delay > _DAILY_QUOTA_THRESHOLD:
                         logger.warning(
                             "gemini_daily_quota_exhausted",
@@ -208,7 +189,6 @@ class GeminiAnalyzer(BaseAnalyzer):
                             f"Gemini daily quota exhausted (429): {e}"
                         ) from e
 
-                    # RPM limit: wait retryDelay + margin, then retry
                     rate_limit_retries += 1
                     wait_seconds = retry_delay + 5
                     logger.warning(
@@ -221,16 +201,14 @@ class GeminiAnalyzer(BaseAnalyzer):
                     )
                     if rate_limit_retries <= MAX_RATE_LIMIT_RETRIES:
                         await asyncio.sleep(wait_seconds)
-                        attempt -= 1  # don't consume normal retry budget
+                        attempt -= 1
                         continue
 
-                    # RPM retries exhausted
                     raise RateLimitError(
                         f"Gemini RPM limit exceeded after "
                         f"{rate_limit_retries} retries: {e}"
                     ) from e
 
-                # Non-rate-limit error: standard exponential backoff
                 logger.warning(
                     "gemini_api_error",
                     attempt=attempt,
@@ -274,25 +252,8 @@ class GeminiAnalyzer(BaseAnalyzer):
             )
             raise AnalysisError(f"Failed to parse Gemini response as JSON: {e}")
 
-        # Validate required fields
         try:
-            sentiment = Sentiment(data["sentiment"])
-
-            impact_score = int(data["impact_score"])
-            if not (1 <= impact_score <= 10):
-                raise ValueError(f"impact_score out of range: {impact_score}")
-
-            # Parse investment categories: filter to valid slugs, max 3
-            raw_categories = data.get("investment_categories")
-            investment_categories: list[str] | None = None
-            if isinstance(raw_categories, list):
-                investment_categories = [
-                    c
-                    for c in raw_categories
-                    if isinstance(c, str) and c in VALID_CATEGORIES
-                ][:3]
-                if not investment_categories:
-                    investment_categories = None
+            impact_level = ImpactLevel(data["impact_level"])
 
             # Parse keywords: filter to valid candidates, max 3
             keywords: list[str] | None = None
@@ -312,10 +273,8 @@ class GeminiAnalyzer(BaseAnalyzer):
             return AnalysisData(
                 title=str(data["title_ja"]),
                 summary=str(data["summary_ja"]),
-                sentiment=sentiment,
-                impact_score=impact_score,
-                reasoning=data.get("reasoning"),
-                investment_categories=investment_categories,
+                impact_level=impact_level,
+                reasoning=str(data.get("reasoning", "")),
                 keywords=keywords,
             )
         except (KeyError, TypeError, ValueError) as e:

@@ -25,6 +25,7 @@ dependencies = [
     "taskiq>=0.12,<1",
     "taskiq-redis>=1.0,<2",
     "uvicorn[standard]>=0.34,<1",
+    "redis>=7.0,<8",
 ]
 
 [tool.ruff]

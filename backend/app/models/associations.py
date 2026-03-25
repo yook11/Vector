@@ -1,36 +1,32 @@
-from sqlalchemy import Column, ForeignKey, Integer, UniqueConstraint
+from sqlalchemy import Column, ForeignKey, Integer
 from sqlmodel import Field, Relationship, SQLModel
 
 
-class NewsKeyword(SQLModel, table=True):
-    __tablename__ = "news_keywords"
-    __table_args__ = (
-        UniqueConstraint("news_article_id", "keyword_id", name="uq_news_keyword"),
-    )
+class ArticleKeyword(SQLModel, table=True):
+    __tablename__ = "article_keywords"
 
-    id: int | None = Field(default=None, primary_key=True)
     news_article_id: int = Field(
         sa_column=Column(
             Integer,
             ForeignKey("news_articles.id", ondelete="CASCADE"),
-            nullable=False,
+            primary_key=True,
         )
     )
     keyword_id: int = Field(
         sa_column=Column(
             Integer,
             ForeignKey("keywords.id", ondelete="CASCADE"),
-            nullable=False,
+            primary_key=True,
         )
     )
 
     # Relationships
-    news_article: "NewsArticle" = Relationship(back_populates="keyword_links")
-    keyword: "Keyword" = Relationship(back_populates="news_links")
+    news_article: "NewsArticle" = Relationship(back_populates="article_keywords")
+    keyword: "Keyword" = Relationship(back_populates="article_keywords")
 
 
 # Resolve forward references
 from app.models.keyword import Keyword  # noqa: E402, F811
 from app.models.news import NewsArticle  # noqa: E402, F811
 
-NewsKeyword.model_rebuild()
+ArticleKeyword.model_rebuild()

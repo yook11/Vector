@@ -5,14 +5,8 @@ import { NewsFilters } from "@/components/news/NewsFilters";
 import { NewsList } from "@/components/news/NewsList";
 import { NewsPagination } from "@/components/news/NewsPagination";
 import { SearchBar } from "@/components/news/SearchBar";
-import {
-  getCategories,
-  getKeywordCategories,
-  getNews,
-  getSources,
-  getSubscriptions,
-} from "@/lib/api-client";
-import type { NewsQuery, Sentiment } from "@/types";
+import { getCategories, getNews, getSources } from "@/lib/api-client";
+import type { ImpactLevel, NewsQuery } from "@/types";
 
 interface DashboardPageProps {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -36,29 +30,21 @@ function parseSearchParams(
   const kwCategoryId = str("kwCategoryId");
   if (kwCategoryId) query.kwCategoryId = Number(kwCategoryId);
 
-  const myKeywords = str("myKeywords");
-  if (myKeywords === "true") query.myKeywords = true;
-
-  const sentiment = str("sentiment");
+  const impactLevel = str("impactLevel");
   if (
-    sentiment === "positive" ||
-    sentiment === "negative" ||
-    sentiment === "neutral"
+    impactLevel === "low" ||
+    impactLevel === "medium" ||
+    impactLevel === "high" ||
+    impactLevel === "critical"
   ) {
-    query.sentiment = sentiment as Sentiment;
+    query.impactLevel = impactLevel as ImpactLevel;
   }
-
-  const minImpact = str("minImpact");
-  if (minImpact) query.minImpact = Number(minImpact);
 
   const sourceId = str("sourceId");
   if (sourceId) query.sourceId = Number(sourceId);
 
-  const category = str("category");
-  if (category) query.category = category;
-
   const sortBy = str("sortBy");
-  if (sortBy === "publishedAt" || sortBy === "impactScore") {
+  if (sortBy === "publishedAt" || sortBy === "impactLevel") {
     query.sortBy = sortBy;
   }
 
@@ -82,31 +68,19 @@ export default async function DashboardPage({
   const raw = await searchParams;
   const query = parseSearchParams(raw);
 
-  const [
-    newsData,
-    subscriptionsData,
-    categoriesData,
-    kwCategoriesData,
-    sourcesData,
-  ] = await Promise.all([
+  const [newsData, categoriesData, sourcesData] = await Promise.all([
     getNews(query),
-    getSubscriptions().catch(() => ({ items: [] })),
     getCategories().catch(() => ({ items: [] })),
-    getKeywordCategories().catch(() => ({ items: [] })),
     getSources().catch(() => ({ items: [], total: 0 })),
   ]);
-
-  const subscribedKeywordIds = subscriptionsData.items.map((s) => s.keywordId);
 
   return (
     <div className="flex h-full">
       <aside className="hidden lg:block w-64 border-r overflow-y-auto">
         <CategorySidebar
-          categories={kwCategoriesData.items}
+          categories={categoriesData.items}
           activeKwCategoryId={query.kwCategoryId}
           activeKeywordId={query.keywordId}
-          subscribedKeywordIds={subscribedKeywordIds}
-          showMyKeywords={query.myKeywords}
         />
       </aside>
 
@@ -114,11 +88,9 @@ export default async function DashboardPage({
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <MobileSidebar
-              categories={kwCategoriesData.items}
+              categories={categoriesData.items}
               activeKwCategoryId={query.kwCategoryId}
               activeKeywordId={query.keywordId}
-              subscribedKeywordIds={subscribedKeywordIds}
-              showMyKeywords={query.myKeywords}
             />
             <h1 className="text-2xl font-bold">Dashboard</h1>
           </div>
@@ -129,10 +101,7 @@ export default async function DashboardPage({
         </Suspense>
 
         <Suspense>
-          <NewsFilters
-            categories={categoriesData.items}
-            sources={sourcesData.items}
-          />
+          <NewsFilters sources={sourcesData.items} />
         </Suspense>
 
         <NewsList items={newsData.items} />

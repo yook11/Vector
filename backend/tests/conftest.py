@@ -15,22 +15,16 @@ from app.dependencies import get_session
 from app.main import app
 from app.models import (  # noqa: F401
     AIModel,
-    AnalysisInvestmentCategory,
-    AnalysisResult,
-    AnalysisTranslation,
+    ArticleAnalysis,
     ArticleGroup,
+    ArticleKeyword,
+    Category,
     FetchLog,
-    InvestmentCategory,
-    InvestmentCategoryTranslation,
+    ImpactLevel,
     Keyword,
-    KeywordCategory,
-    KeywordCategoryLink,
-    KeywordCategoryTranslation,
     NewsArticle,
-    NewsKeyword,
     NewsSource,
     SourceType,
-    UserKeywordSubscription,
     WatchlistItem,
 )
 
@@ -162,9 +156,33 @@ async def sample_ai_model(db_session: AsyncSession) -> AIModel:
 
 
 @pytest.fixture
-async def sample_keyword(db_session: AsyncSession) -> Keyword:
-    """Create and return a test keyword."""
-    kw = Keyword(keyword="Quantum Computing")
+async def sample_categories(
+    db_session: AsyncSession,
+) -> list[Category]:
+    """Create and return sample categories (name is a direct column)."""
+    seed = [
+        ("ai_ml", "AI・ML"),
+        ("quantum", "量子コンピュータ"),
+        ("semiconductor", "半導体"),
+    ]
+    categories: list[Category] = []
+    for slug, name in seed:
+        cat = Category(slug=slug, name=name)
+        db_session.add(cat)
+        categories.append(cat)
+    await db_session.commit()
+    for cat in categories:
+        await db_session.refresh(cat)
+    return categories
+
+
+@pytest.fixture
+async def sample_keyword(
+    db_session: AsyncSession,
+    sample_categories: list[Category],
+) -> Keyword:
+    """Create and return a test keyword (requires a category)."""
+    kw = Keyword(name="Quantum Computing", category_id=sample_categories[1].id)
     db_session.add(kw)
     await db_session.commit()
     await db_session.refresh(kw)
@@ -177,7 +195,8 @@ async def sample_source(db_session: AsyncSession) -> NewsSource:
     source = NewsSource(
         name="Test Tech Source",
         source_type=SourceType.RSS,
-        feed_url="https://example.com/feed.xml",
+        site_url="https://example.com",
+        endpoint_url="https://example.com/feed.xml",
     )
     db_session.add(source)
     await db_session.commit()
@@ -191,10 +210,9 @@ async def sample_hn_source(db_session: AsyncSession) -> NewsSource:
     source = NewsSource(
         name="Hacker News",
         source_type=SourceType.API,
-        api_endpoint="hacker-news",
         site_url="https://news.ycombinator.com",
+        endpoint_url="https://hn.algolia.com/api/v1/search_by_date",
         is_active=True,
-        fetch_interval_minutes=360,
     )
     db_session.add(source)
     await db_session.commit()
@@ -208,111 +226,11 @@ async def sample_av_source(db_session: AsyncSession) -> NewsSource:
     source = NewsSource(
         name="Alpha Vantage",
         source_type=SourceType.API,
-        api_endpoint="alpha-vantage",
         site_url="https://www.alphavantage.co",
+        endpoint_url="https://www.alphavantage.co/query",
         is_active=True,
-        fetch_interval_minutes=1440,
     )
     db_session.add(source)
     await db_session.commit()
     await db_session.refresh(source)
     return source
-
-
-@pytest.fixture
-async def sample_keyword_categories(
-    db_session: AsyncSession,
-) -> list[KeywordCategory]:
-    """Create and return sample keyword categories with translations."""
-    seed = [
-        ("ai_ml", "AI・ML", "AI & ML"),
-        ("quantum", "量子コンピュータ", "Quantum Computing"),
-        ("semiconductor", "半導体", "Semiconductor"),
-    ]
-    categories: list[KeywordCategory] = []
-    for slug, name_ja, name_en in seed:
-        cat = KeywordCategory(slug=slug)
-        db_session.add(cat)
-        await db_session.flush()
-        db_session.add(
-            KeywordCategoryTranslation(category_id=cat.id, locale="ja", name=name_ja)
-        )
-        db_session.add(
-            KeywordCategoryTranslation(category_id=cat.id, locale="en", name=name_en)
-        )
-        categories.append(cat)
-    await db_session.commit()
-    for cat in categories:
-        await db_session.refresh(cat)
-    return categories
-
-
-@pytest.fixture
-async def sample_categories(
-    db_session: AsyncSession,
-) -> list[InvestmentCategory]:
-    """Create and return the 6 standard investment categories with translations."""
-    seed = [
-        (
-            "competitive_edge",
-            "競争優位",
-            "Competitive Edge",
-            "技術突破、特許取得、市場シェア拡大",
-        ),
-        (
-            "financial_signal",
-            "業績シグナル",
-            "Financial Signal",
-            "決算、売上変化、利益率、資金調達",
-        ),
-        (
-            "growth_catalyst",
-            "成長期待",
-            "Growth Catalyst",
-            "新製品、市場拡大、提携など成長を示唆するニュース",
-        ),
-        (
-            "market_disruption",
-            "市場破壊",
-            "Market Disruption",
-            "新技術による既存市場への脅威、業界再編",
-        ),
-        (
-            "regulatory_shift",
-            "規制変化",
-            "Regulatory Shift",
-            "新法規、政策変更、補助金、輸出規制",
-        ),
-        (
-            "risk_mitigation",
-            "リスク回避",
-            "Risk Mitigation",
-            "訴訟勝訴、規制クリア、安全性確認など",
-        ),
-    ]
-    categories: list[InvestmentCategory] = []
-    for slug, name_ja, name_en, desc in seed:
-        cat = InvestmentCategory(slug=slug)
-        db_session.add(cat)
-        await db_session.flush()
-        db_session.add(
-            InvestmentCategoryTranslation(
-                category_id=cat.id,
-                locale="ja",
-                name=name_ja,
-                description=desc,
-            )
-        )
-        db_session.add(
-            InvestmentCategoryTranslation(
-                category_id=cat.id,
-                locale="en",
-                name=name_en,
-                description=desc,
-            )
-        )
-        categories.append(cat)
-    await db_session.commit()
-    for cat in categories:
-        await db_session.refresh(cat)
-    return categories

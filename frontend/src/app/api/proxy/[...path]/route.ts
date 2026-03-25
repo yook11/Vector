@@ -10,7 +10,7 @@ const INTERNAL_SECRET =
 
 async function proxyRequest(
   request: NextRequest,
-  params: Promise<{ path: string[] }>,
+  context: { params: Promise<{ path: string[] }> },
 ) {
   const session = await auth.api.getSession({
     headers: await headers(),
@@ -20,7 +20,7 @@ async function proxyRequest(
     return NextResponse.json({ detail: "Unauthorized" }, { status: 401 });
   }
 
-  const { path } = await params;
+  const { path } = await context.params;
   const target = `${INTERNAL_API_URL}/${path.join("/")}${request.nextUrl.search}`;
 
   const proxyHeaders = new Headers();
