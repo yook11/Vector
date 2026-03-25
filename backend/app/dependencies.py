@@ -1,5 +1,6 @@
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
+from uuid import UUID
 
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,7 +14,7 @@ from app.db import engine
 class CurrentUser:
     """Lightweight user representation populated from BFF proxy headers."""
 
-    id: str
+    id: UUID
     role: str
 
 
@@ -41,8 +42,16 @@ async def get_current_user(request: Request) -> CurrentUser:
             detail="Not authenticated",
         )
 
+    try:
+        parsed_id = UUID(user_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid user ID format",
+        )
+
     role = request.headers.get("X-User-Role", "user")
-    return CurrentUser(id=user_id, role=role)
+    return CurrentUser(id=parsed_id, role=role)
 
 
 async def get_admin_user(
@@ -58,7 +67,11 @@ async def get_admin_user(
 
 
 async def get_optional_user(request: Request) -> CurrentUser | None:
-    """Like get_current_user but returns None instead of raising 401."""
+    """Like get_current_user but returns None instead of raising 401.
+
+    ただし Secret が正しく X-User-ID が存在するのに UUID として不正な場合は
+    BFF のバグなので 401 を返す（バグを握りつぶさない）。
+    """
     secret = request.headers.get("X-Internal-Secret")
     if secret != settings.internal_api_secret:
         return None
@@ -67,5 +80,13 @@ async def get_optional_user(request: Request) -> CurrentUser | None:
     if not user_id:
         return None
 
+    try:
+        parsed_id = UUID(user_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid user ID format",
+        )
+
     role = request.headers.get("X-User-Role", "user")
-    return CurrentUser(id=user_id, role=role)
+    return CurrentUser(id=parsed_id, role=role)

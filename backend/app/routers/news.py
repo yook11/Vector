@@ -13,7 +13,7 @@ from app.models.article_group import ArticleGroup
 from app.models.associations import ArticleKeyword
 from app.models.keyword import Keyword
 from app.models.news import NewsArticle
-from app.models.watchlist import WatchlistItem
+from app.models.watchlist import WatchlistEntry
 from app.schemas.analysis import AnalysisResponse
 from app.schemas.category import CategoryBrief
 from app.schemas.keyword import KeywordBrief
@@ -50,7 +50,9 @@ async def _get_watched_ids(session: AsyncSession, user: CurrentUser | None) -> s
     """Return set of news_article_ids in the user's watchlist."""
     if user is None:
         return set()
-    stmt = select(WatchlistItem.news_article_id).where(WatchlistItem.user_id == user.id)
+    stmt = select(WatchlistEntry.news_article_id).where(
+        WatchlistEntry.user_id == user.id
+    )
     result = await session.execute(stmt)
     return set(result.scalars().all())
 

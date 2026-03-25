@@ -655,8 +655,6 @@ export interface components {
      * @description Watchlist item in API responses.
      */
     WatchlistResponse: {
-      /** Id */
-      id: number;
       /** Newsarticleid */
       newsArticleId: number;
       /** Originaltitle */

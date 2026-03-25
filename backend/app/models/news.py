@@ -104,7 +104,9 @@ class NewsArticle(SQLModel, table=True):
     article_keywords: list["ArticleKeyword"] = Relationship(
         back_populates="news_article"
     )
-    watchlist_items: list["WatchlistItem"] = Relationship(back_populates="news_article")
+    watchlist_entries: list["WatchlistEntry"] = Relationship(
+        back_populates="news_article"
+    )
 
     # --- Legacy relationships (removed in Step 5) ---
     article_group: Optional["ArticleGroup"] = Relationship(
@@ -121,6 +123,6 @@ from app.models.analysis import ArticleAnalysis  # noqa: E402, F811
 from app.models.article_group import ArticleGroup  # noqa: E402, F811
 from app.models.associations import ArticleKeyword  # noqa: E402, F811
 from app.models.news_source import NewsSource  # noqa: E402, F811
-from app.models.watchlist import WatchlistItem  # noqa: E402, F811
+from app.models.watchlist import WatchlistEntry  # noqa: E402, F811
 
 NewsArticle.model_rebuild()

@@ -2,12 +2,13 @@ from app.models.ai_model import AIModel
 from app.models.analysis import ArticleAnalysis, ImpactLevel
 from app.models.article_group import ArticleGroup
 from app.models.associations import ArticleKeyword
+from app.models.auth_ref import auth_user_ref  # noqa: F401
 from app.models.category import Category
 from app.models.fetch_log import FetchLog
 from app.models.keyword import Keyword
 from app.models.news import NewsArticle
 from app.models.news_source import NewsSource, SourceType
-from app.models.watchlist import WatchlistItem
+from app.models.watchlist import WatchlistEntry
 
 __all__ = [
     "AIModel",
@@ -21,5 +22,5 @@ __all__ = [
     "NewsArticle",
     "NewsSource",
     "SourceType",
-    "WatchlistItem",
+    "WatchlistEntry",
 ]
