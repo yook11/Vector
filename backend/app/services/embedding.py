@@ -10,6 +10,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.models.analysis import ArticleAnalysis
 from app.models.news import NewsArticle
 
 logger = structlog.get_logger(__name__)
@@ -138,16 +139,16 @@ async def embed_search_query(
 
 def _build_embed_text(article: NewsArticle) -> str:
     """Build the canonical text to embed for a news article."""
-    body = article.content or article.description_original or ""
-    return f"{article.title_original}\n{body}"
+    body = article.original_content or article.original_description or ""
+    return f"{article.original_title}\n{body}"
 
 
 async def embed_articles(
     session: AsyncSession,
-    articles: list[NewsArticle],
+    analyses: list[ArticleAnalysis],
     embedder: BaseEmbedder | None = None,
 ) -> EmbedResult:
-    """Embed multiple articles in batches and persist embeddings to DB.
+    """Embed multiple article analyses in batches and persist embeddings to DB.
 
     Features:
     - Configurable batch size and interval via settings
@@ -157,7 +158,7 @@ async def embed_articles(
 
     Args:
         session: SQLAlchemy async session (commit is called at the end).
-        articles: Articles to embed. Already-embedded articles are skipped.
+        analyses: ArticleAnalysis rows to embed. Already-embedded rows are skipped.
         embedder: Embedder instance; defaults to get_embedder().
 
     Returns:
@@ -168,43 +169,55 @@ async def embed_articles(
     batch_interval = settings.embed_batch_interval
     max_failures = settings.embed_max_consecutive_failures
 
-    if not articles:
-        logger.info("embed_batch_skipped", reason="no articles provided")
+    if not analyses:
+        logger.info("embed_batch_skipped", reason="no analyses provided")
         return result
 
     if embedder is None:
         embedder = get_embedder()
 
-    # Filter out already-embedded articles
-    to_embed = [a for a in articles if a.embedding is None]
-    result.skipped_count = len(articles) - len(to_embed)
+    # Filter out already-embedded analyses
+    to_embed = [a for a in analyses if a.embedding is None]
+    result.skipped_count = len(analyses) - len(to_embed)
 
     if not to_embed:
-        logger.info("embed_batch_skipped", reason="all articles already embedded")
+        logger.info("embed_batch_skipped", reason="all analyses already embedded")
         return result
 
+    # Pre-load associated articles for text building
+    article_ids = [a.news_article_id for a in to_embed]
+    from sqlmodel import select
+
+    stmt = select(NewsArticle).where(NewsArticle.id.in_(article_ids))
+    articles_by_id: dict[int, NewsArticle] = {
+        a.id: a for a in (await session.execute(stmt)).scalars().all()
+    }
+
     consecutive_failures = 0
-    current_interval = batch_interval  # adaptive: may increase on rate limits
-    success_streak = 0  # consecutive successes for cooldown reset
+    current_interval = batch_interval
+    success_streak = 0
     total_batches = 0
 
     for batch_start in range(0, len(to_embed), batch_size):
         batch = to_embed[batch_start : batch_start + batch_size]
-        texts = [_build_embed_text(a) for a in batch]
+        texts = [
+            _build_embed_text(articles_by_id[a.news_article_id])
+            for a in batch
+            if a.news_article_id in articles_by_id
+        ]
 
         try:
             vectors = await embedder.embed_batch(texts)
-            for article, vector in zip(batch, vectors):
-                article.embedding = vector
-                session.add(article)
-                if article.id is not None:
-                    result.embedded_ids.append(article.id)
+            for analysis, vector in zip(batch, vectors):
+                analysis.embedding = vector
+                analysis.embedding_model = "text-embedding-004"
+                session.add(analysis)
+                result.embedded_ids.append(analysis.news_article_id)
             await session.flush()
             result.embedded_count += len(batch)
             consecutive_failures = 0
             total_batches += 1
 
-            # Cooldown: reset interval after sustained success
             success_streak += 1
             cooldown_met = success_streak >= COOLDOWN_SUCCESS_COUNT
             if cooldown_met and current_interval > batch_interval:
@@ -225,8 +238,6 @@ async def embed_articles(
             )
 
         except RateLimitError as e:
-            # Daily quota exhausted — stop immediately, next scheduled run
-            # will resume. Retrying wastes time on a daily cap.
             remaining = len(to_embed) - (batch_start + len(batch))
             result.error_count += len(batch)
             result.errors.append(str(e))
@@ -241,7 +252,6 @@ async def embed_articles(
             break
 
         except EmbeddingError as e:
-            # Non-rate-limit error: count toward circuit breaker
             consecutive_failures += 1
             result.error_count += len(batch)
             result.errors.append(str(e))

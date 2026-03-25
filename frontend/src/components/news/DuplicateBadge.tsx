@@ -68,10 +68,10 @@ export function DuplicateBadge({
                   href={`/news/${a.id}`}
                   className="text-sm font-medium hover:underline"
                 >
-                  {a.analysis?.title ?? a.titleOriginal}
+                  {a.analysis?.translatedTitle ?? a.originalTitle}
                 </Link>
                 <p className="text-xs text-muted-foreground mt-1">
-                  {a.source} &middot; {formatDate(a.publishedAt)}
+                  {a.sourceName} &middot; {formatDate(a.publishedAt)}
                 </p>
                 {a.analysis?.summary && (
                   <p className="text-xs text-muted-foreground mt-1 line-clamp-2">

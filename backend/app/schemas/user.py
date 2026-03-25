@@ -25,9 +25,9 @@ class WatchlistResponse(BaseModel):
 
     id: int
     news_article_id: int
-    title_original: str
-    url: str
-    source: str
+    original_title: str
+    original_url: str
+    source_name: str
     published_at: datetime | None = None
     created_at: datetime
 

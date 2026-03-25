@@ -32,7 +32,12 @@ class NewsSource(SQLModel, table=True):
     )
 
     # Relationships
-    articles: list["NewsArticle"] = Relationship(back_populates="source_ref")
+    articles: list["NewsArticle"] = Relationship(
+        back_populates="news_source",
+        sa_relationship_kwargs={
+            "foreign_keys": "[NewsArticle.news_source_id]",
+        },
+    )
     fetch_logs: list["FetchLog"] = Relationship(back_populates="source")
 
 

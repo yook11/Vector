@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.news import NewsArticle
+from app.models.news_source import NewsSource
 from app.services.content_extractor import (
     ContentExtractionResult,
     DomainRateLimiter,
@@ -73,7 +74,7 @@ class TestExtractContent:
             request=httpx.Request("GET", "https://example.com/article"),
         )
         client = AsyncMock(spec=httpx.AsyncClient)
-        # robots.txt returns 404 (no robots.txt → assume allowed)
+        # robots.txt returns 404 (no robots.txt -> assume allowed)
         robots_resp = httpx.Response(
             404,
             request=httpx.Request("GET", "https://example.com/robots.txt"),
@@ -172,8 +173,14 @@ class TestExtractContents:
     """Tests for extract_contents (batch extraction with DB persistence)."""
 
     @pytest.mark.asyncio
-    async def test_extracts_and_persists(self, db_session: AsyncSession) -> None:
+    async def test_extracts_and_persists(
+        self, db_session: AsyncSession, sample_source: NewsSource
+    ) -> None:
         article = NewsArticle(
+            original_title="Test Article",
+            original_url="https://example.com/test",
+            news_source_id=sample_source.id,
+            # Legacy columns (NOT NULL)
             title_original="Test Article",
             url="https://example.com/test",
             source="Test",
@@ -202,11 +209,18 @@ class TestExtractContents:
 
         await db_session.refresh(article)
         assert article.content is not None
+        assert article.original_content is not None
         assert article.content_fetched_at is not None
 
     @pytest.mark.asyncio
-    async def test_handles_extraction_failure(self, db_session: AsyncSession) -> None:
+    async def test_handles_extraction_failure(
+        self, db_session: AsyncSession, sample_source: NewsSource
+    ) -> None:
         article = NewsArticle(
+            original_title="Fail Article",
+            original_url="https://example.com/fail",
+            news_source_id=sample_source.id,
+            # Legacy columns (NOT NULL)
             title_original="Fail Article",
             url="https://example.com/fail",
             source="Test",
@@ -260,7 +274,7 @@ class TestDomainRateLimiter:
         )
 
         total = asyncio.get_event_loop().time() - start
-        # 3 different domains run in parallel → total ≈ 0.5s, not 1.5s
+        # 3 different domains run in parallel -> total ~= 0.5s, not 1.5s
         assert total < 1.0
 
     @pytest.mark.asyncio
@@ -281,7 +295,7 @@ class TestDomainRateLimiter:
         )
 
         total = asyncio.get_event_loop().time() - start
-        # 3 requests × 0.1s delay = at least 0.3s
+        # 3 requests x 0.1s delay = at least 0.3s
         assert total >= 0.3
 
         # Each subsequent request should be delayed by ~0.1s
@@ -340,11 +354,17 @@ class TestExtractContentsParallel:
     """Tests for parallelized extract_contents behavior."""
 
     @pytest.mark.asyncio
-    async def test_parallel_success(self, db_session: AsyncSession) -> None:
+    async def test_parallel_success(
+        self, db_session: AsyncSession, sample_source: NewsSource
+    ) -> None:
         """Multiple articles from different domains should all succeed."""
         articles = []
         for i, domain in enumerate(["a.com", "b.com", "c.com"]):
             article = NewsArticle(
+                original_title=f"Article {i}",
+                original_url=f"https://{domain}/article",
+                news_source_id=sample_source.id,
+                # Legacy columns (NOT NULL)
                 title_original=f"Article {i}",
                 url=f"https://{domain}/article",
                 source="Test",
@@ -375,14 +395,21 @@ class TestExtractContentsParallel:
         for a in articles:
             await db_session.refresh(a)
             assert a.content is not None
+            assert a.original_content is not None
             assert a.content_fetched_at is not None
 
     @pytest.mark.asyncio
-    async def test_partial_failure(self, db_session: AsyncSession) -> None:
+    async def test_partial_failure(
+        self, db_session: AsyncSession, sample_source: NewsSource
+    ) -> None:
         """One article's failure should not affect others."""
         articles = []
         for i, domain in enumerate(["good.com", "bad.com", "ok.com"]):
             article = NewsArticle(
+                original_title=f"Article {i}",
+                original_url=f"https://{domain}/article",
+                news_source_id=sample_source.id,
+                # Legacy columns (NOT NULL)
                 title_original=f"Article {i}",
                 url=f"https://{domain}/article",
                 source="Test",

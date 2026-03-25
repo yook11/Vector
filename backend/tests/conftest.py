@@ -15,12 +15,12 @@ from app.dependencies import get_session
 from app.main import app
 from app.models import (  # noqa: F401
     AIModel,
-    AnalysisResult,
-    AnalysisTranslation,
+    ArticleAnalysis,
     ArticleGroup,
     ArticleKeyword,
     Category,
     FetchLog,
+    ImpactLevel,
     Keyword,
     NewsArticle,
     NewsSource,

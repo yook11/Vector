@@ -110,7 +110,10 @@ export function SourceFormDialog({ source, trigger }: SourceFormDialogProps) {
 
           <div className="space-y-2">
             <Label htmlFor="source-type">Type</Label>
-            <Select value={sourceType} onValueChange={(v) => setSourceType(v as "rss" | "api")}>
+            <Select
+              value={sourceType}
+              onValueChange={(v) => setSourceType(v as "rss" | "api")}
+            >
               <SelectTrigger id="source-type">
                 <SelectValue />
               </SelectTrigger>

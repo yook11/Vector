@@ -10,22 +10,20 @@ import type { components } from "./generated";
 // Manual types — not directly derivable from OpenAPI schema
 // ---------------------------------------------------------------------------
 
-/** Sentiment categories for news analysis. */
-export type Sentiment = "positive" | "negative" | "neutral";
+/** Impact levels for news analysis. */
+export type ImpactLevel = "low" | "medium" | "high" | "critical";
 
 /** Query parameters for GET /news (client-side helper). */
 export interface NewsQuery {
   q?: string;
   keywordId?: number;
   kwCategoryId?: number;
-  sentiment?: Sentiment;
-  minImpact?: number;
+  impactLevel?: ImpactLevel;
   sourceId?: number;
-  sortBy?: "publishedAt" | "impactScore";
+  sortBy?: "publishedAt" | "impactLevel";
   sortOrder?: "asc" | "desc";
   page?: number;
   perPage?: number;
-  locale?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -51,12 +49,12 @@ export type KeywordUpdate = components["schemas"]["KeywordUpdate"];
 // Narrowed types — where generated types need refinement
 // ---------------------------------------------------------------------------
 
-/** Analysis response — narrows sentiment from string to Sentiment union. */
+/** Analysis response — narrows impactLevel from string to ImpactLevel union. */
 export type AnalysisResponse = Omit<
   components["schemas"]["AnalysisResponse"],
-  "sentiment"
+  "impactLevel"
 > & {
-  sentiment: Sentiment;
+  impactLevel: ImpactLevel;
 };
 
 /** Narrow nested analysis to use our narrowed AnalysisResponse. */

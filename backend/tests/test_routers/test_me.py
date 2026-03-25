@@ -7,12 +7,20 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.news import NewsArticle
+from app.models.news_source import NewsSource
 
 
 @pytest.fixture
-async def sample_article(db_session: AsyncSession) -> NewsArticle:
+async def sample_article(
+    db_session: AsyncSession, sample_source: NewsSource
+) -> NewsArticle:
     """Create a test news article."""
     article = NewsArticle(
+        # New primary columns (NOT NULL)
+        original_title="Test Article",
+        original_url="https://example.com/test",
+        news_source_id=sample_source.id,
+        # Legacy columns (NOT NULL, removed in Step 5)
         title_original="Test Article",
         url="https://example.com/test",
         source="test-source",
@@ -25,9 +33,16 @@ async def sample_article(db_session: AsyncSession) -> NewsArticle:
 
 
 @pytest.fixture
-async def second_article(db_session: AsyncSession) -> NewsArticle:
+async def second_article(
+    db_session: AsyncSession, sample_source: NewsSource
+) -> NewsArticle:
     """Create a second test news article."""
     article = NewsArticle(
+        # New primary columns (NOT NULL)
+        original_title="Second Article",
+        original_url="https://example.com/second",
+        news_source_id=sample_source.id,
+        # Legacy columns (NOT NULL, removed in Step 5)
         title_original="Second Article",
         url="https://example.com/second",
         source="test-source",
@@ -67,8 +82,8 @@ class TestListWatchlist:
         assert data["total"] == 1
         item = data["items"][0]
         assert item["newsArticleId"] == sample_article.id
-        assert item["titleOriginal"] == "Test Article"
-        assert item["source"] == "test-source"
+        assert item["originalTitle"] == "Test Article"
+        assert item["sourceName"] == "Test Tech Source"
         assert "createdAt" in item
 
     async def test_pagination(
@@ -111,7 +126,7 @@ class TestAddToWatchlist:
         assert resp.status_code == 201
         data = resp.json()
         assert data["newsArticleId"] == sample_article.id
-        assert data["titleOriginal"] == "Test Article"
+        assert data["originalTitle"] == "Test Article"
 
     async def test_add_duplicate_409(
         self,

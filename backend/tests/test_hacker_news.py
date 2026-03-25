@@ -185,8 +185,9 @@ async def test_save_new_stories(
 
     for article in articles:
         assert article.source == "Hacker News"
-        assert article.source_id == sample_hn_source.id
-        assert article.description_original is None
+        assert article.news_source_id == sample_hn_source.id
+        assert article.original_url is not None
+        assert article.original_title is not None
         assert article.published_at is not None
 
 
@@ -197,6 +198,10 @@ async def test_skip_duplicate_guid(
 ) -> None:
     """Articles with existing guid should be skipped."""
     existing = NewsArticle(
+        original_title="Existing HN Article",
+        original_url="https://www.calebleak.com/posts/dog-game/",
+        news_source_id=sample_hn_source.id,
+        # Legacy columns (NOT NULL)
         title_original="Existing HN Article",
         url="https://www.calebleak.com/posts/dog-game/",
         source="Hacker News",
@@ -226,8 +231,12 @@ async def test_skip_duplicate_url(
     sample_hn_source: NewsSource,
     mock_http_client: AsyncMock,
 ) -> None:
-    """Articles with existing url (from RSS) should be skipped."""
+    """Articles with existing original_url (from RSS) should be skipped."""
     existing = NewsArticle(
+        original_title="Same article from RSS",
+        original_url="https://www.calebleak.com/posts/dog-game/",
+        news_source_id=sample_hn_source.id,
+        # Legacy columns (NOT NULL)
         title_original="Same article from RSS",
         url="https://www.calebleak.com/posts/dog-game/",
         source="Some RSS Feed",

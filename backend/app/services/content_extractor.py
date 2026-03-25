@@ -181,8 +181,8 @@ async def _fetch_one(
     This function never raises; all errors are returned in the tuple.
     """
     try:
-        async with rate_limiter.acquire(article.url):
-            content = await extract_content(client, article.url, robots_cache)
+        async with rate_limiter.acquire(article.original_url):
+            content = await extract_content(client, article.original_url, robots_cache)
             return (article, content, None)
     except Exception as e:
         logger.warning("content_fetch_error", article_id=article.id, error=str(e))
@@ -239,9 +239,6 @@ async def extract_contents(
 
         if error:
             article.content_fetch_attempts += 1
-            # Explicitly add to session to signal persistence intent in error path.
-            # Technically redundant (article is already tracked), but makes the
-            # "this change must be committed" intention clear for code reviewers.
             session.add(article)
             result.error_count += 1
             result.errors.append(f"Article {article.id}: {error}")
@@ -253,9 +250,11 @@ async def extract_contents(
             )
             continue
 
-        article.content_fetched_at = datetime.now(UTC)
         if content is not None:
+            article.original_content = content
+            # Legacy column (removed in Step 5)
             article.content = content
+            article.content_fetched_at = datetime.now(UTC)
             result.extracted_count += 1
             logger.info(
                 "content_extracted",
@@ -263,11 +262,12 @@ async def extract_contents(
                 length=len(content),
             )
         else:
+            article.content_fetched_at = datetime.now(UTC)
             result.skipped_count += 1
             logger.info(
                 "content_extraction_empty",
                 article_id=article.id,
-                url=article.url,
+                url=article.original_url,
             )
 
         session.add(article)

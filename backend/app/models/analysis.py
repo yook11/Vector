@@ -1,91 +1,69 @@
-from datetime import UTC, datetime
+from datetime import datetime
 from enum import StrEnum
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     Column,
     DateTime,
     ForeignKey,
-    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
+    func,
 )
 from sqlmodel import Field, Relationship, SQLModel
 
 
-class Sentiment(StrEnum):
-    POSITIVE = "positive"
-    NEGATIVE = "negative"
-    NEUTRAL = "neutral"
+class ImpactLevel(StrEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
 
 
-class AnalysisResult(SQLModel, table=True):
-    __tablename__ = "analyses"
+class ArticleAnalysis(SQLModel, table=True):
+    __tablename__ = "article_analyses"
     __table_args__ = (
-        UniqueConstraint(
-            "news_article_id", "ai_model_id", name="uq_analyses_article_model"
-        ),
-        Index("idx_analyses_sentiment", "sentiment"),
-        Index("idx_analyses_impact", "impact_score"),
-        Index("idx_analyses_ai_model_id", "ai_model_id"),
+        UniqueConstraint("news_article_id", name="uq_article_analyses_news_article_id"),
     )
 
     id: int | None = Field(default=None, primary_key=True)
     news_article_id: int = Field(
         sa_column=Column(
             Integer,
-            ForeignKey("news_articles.id", ondelete="CASCADE"),
+            ForeignKey(
+                "news_articles.id",
+                ondelete="CASCADE",
+                name="fk_article_analyses_news_article_id",
+            ),
             nullable=False,
         )
     )
-    ai_model_id: int = Field(
-        sa_column=Column(
-            Integer,
-            ForeignKey("ai_models.id", ondelete="RESTRICT"),
-            nullable=False,
-        )
-    )
-    sentiment: Sentiment = Field(sa_type=String(20), nullable=False)
-    impact_score: int = Field(ge=1, le=10, nullable=False)
-    reasoning: str | None = Field(default=None)
-    analyzed_at: datetime = Field(
-        default_factory=lambda: datetime.now(UTC),
-        nullable=False,
-        sa_type=DateTime(timezone=True),
-    )
-
-    # Relationships
-    news_article: "NewsArticle" = Relationship(back_populates="analyses")
-    ai_model: "AIModel" = Relationship(back_populates="analyses")
-    translations: list["AnalysisTranslation"] = Relationship(back_populates="analysis")
-
-
-class AnalysisTranslation(SQLModel, table=True):
-    __tablename__ = "analysis_translations"
-    __table_args__ = (
-        UniqueConstraint("analysis_id", "locale", name="uq_analysis_locale"),
-    )
-
-    id: int | None = Field(default=None, primary_key=True)
-    analysis_id: int = Field(
-        sa_column=Column(
-            Integer,
-            ForeignKey("analyses.id", ondelete="CASCADE"),
-            nullable=False,
-        )
-    )
-    locale: str = Field(max_length=10, nullable=False)
-    title: str = Field(max_length=500, nullable=False)
+    translated_title: str = Field(max_length=500, nullable=False)
     summary: str = Field(sa_column=Column(Text, nullable=False))
+    impact_level: ImpactLevel = Field(sa_type=String(20), nullable=False)
+    reasoning: str = Field(sa_column=Column(Text, nullable=False))
+    ai_model: str = Field(max_length=100, nullable=False)
+    analyzed_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(
+            DateTime(timezone=True),
+            server_default=func.now(),
+            nullable=False,
+        ),
+    )
+    embedding: list[float] | None = Field(
+        default=None,
+        sa_column=Column(Vector(768), nullable=True),
+    )
+    embedding_model: str | None = Field(default=None, max_length=100)
 
     # Relationships
-    analysis: AnalysisResult = Relationship(back_populates="translations")
+    news_article: "NewsArticle" = Relationship(back_populates="article_analysis")
 
 
 # Resolve forward references
-from app.models.ai_model import AIModel  # noqa: E402, F811
 from app.models.news import NewsArticle  # noqa: E402, F811
 
-AnalysisResult.model_rebuild()
-AnalysisTranslation.model_rebuild()
+ArticleAnalysis.model_rebuild()

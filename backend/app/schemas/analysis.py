@@ -3,18 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 
-
-class AIModelBrief(BaseModel):
-    """Brief AI model info embedded in AnalysisResponse."""
-
-    model_config = ConfigDict(
-        alias_generator=to_camel,
-        populate_by_name=True,
-    )
-
-    id: int
-    provider: str
-    name: str
+from app.models.analysis import ImpactLevel
 
 
 class AnalysisResponse(BaseModel):
@@ -25,10 +14,9 @@ class AnalysisResponse(BaseModel):
         populate_by_name=True,
     )
 
-    title: str
+    translated_title: str
     summary: str
-    sentiment: str
-    impact_score: int
-    reasoning: str | None = None
-    ai_model: AIModelBrief
+    impact_level: ImpactLevel
+    reasoning: str
+    ai_model: str
     analyzed_at: datetime

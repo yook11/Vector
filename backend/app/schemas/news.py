@@ -16,16 +16,16 @@ class NewsResponse(BaseModel):
     )
 
     id: int
-    title_original: str
-    url: str
-    source: str
+    original_title: str
+    original_url: str
+    source_name: str
     published_at: datetime | None = None
-    fetched_at: datetime
-    content: str | None = None
-    content_fetched_at: datetime | None = None
+    created_at: datetime
+    original_content: str | None = None
     keywords: list[KeywordBrief] = []
     analysis: AnalysisResponse | None = None
     is_watched: bool = False
+    # Legacy: kept until article_groups removed in Step 5
     duplicate_count: int = 0
     article_group_id: int | None = None
 
@@ -65,7 +65,7 @@ class NewsFetchResponse(BaseModel):
     )
 
     message: str
-    sources_count: int | None = None  # None = all due sources targeted
+    sources_count: int | None = None
     job_id: str
 
 

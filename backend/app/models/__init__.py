@@ -1,5 +1,5 @@
 from app.models.ai_model import AIModel
-from app.models.analysis import AnalysisResult, AnalysisTranslation
+from app.models.analysis import ArticleAnalysis, ImpactLevel
 from app.models.article_group import ArticleGroup
 from app.models.associations import ArticleKeyword
 from app.models.category import Category
@@ -11,12 +11,12 @@ from app.models.watchlist import WatchlistItem
 
 __all__ = [
     "AIModel",
+    "ArticleAnalysis",
     "ArticleGroup",
     "ArticleKeyword",
-    "AnalysisResult",
-    "AnalysisTranslation",
     "Category",
     "FetchLog",
+    "ImpactLevel",
     "Keyword",
     "NewsArticle",
     "NewsSource",

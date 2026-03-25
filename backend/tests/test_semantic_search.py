@@ -1,15 +1,15 @@
 """Tests for semantic search (q parameter on GET /api/v1/news)."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.analysis import ArticleAnalysis, ImpactLevel
 from app.models.news import NewsArticle
 from app.models.news_source import NewsSource, SourceType
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -41,16 +41,35 @@ async def _create_article(
     embedding: list[float] | None = None,
 ) -> NewsArticle:
     article = NewsArticle(
+        original_title=title,
+        original_url=url,
+        news_source_id=source.id,
+        published_at=datetime.now(UTC),
+        # Legacy columns (NOT NULL)
         title_original=title,
         url=url,
         source=source.name,
         source_id=source.id,
-        published_at=datetime.now(timezone.utc),
-        fetched_at=datetime.now(timezone.utc),
-        embedding=embedding,
+        fetched_at=datetime.now(UTC),
     )
     db_session.add(article)
     await db_session.flush()
+
+    # Create ArticleAnalysis with embedding (if provided)
+    if embedding is not None:
+        analysis = ArticleAnalysis(
+            news_article_id=article.id,
+            translated_title=f"Translated: {title}",
+            summary="Test summary",
+            impact_level=ImpactLevel.MEDIUM,
+            reasoning="Test reasoning",
+            ai_model="gemini-2.0-flash",
+            embedding=embedding,
+            embedding_model="text-embedding-004",
+        )
+        db_session.add(analysis)
+        await db_session.flush()
+
     return article
 
 
@@ -90,7 +109,7 @@ async def test_semantic_search_returns_articles_with_embedding(
     assert resp.status_code == 200
     data = resp.json()
     assert data["total"] >= 1
-    assert any("AI Breakthrough" in item["titleOriginal"] for item in data["items"])
+    assert any("AI Breakthrough" in item["originalTitle"] for item in data["items"])
 
 
 @pytest.mark.asyncio
@@ -121,7 +140,7 @@ async def test_semantic_search_excludes_articles_without_embedding(
 
     assert resp.status_code == 200
     data = resp.json()
-    titles = [item["titleOriginal"] for item in data["items"]]
+    titles = [item["originalTitle"] for item in data["items"]]
     assert "With Embedding" in titles
     assert "Without Embedding" not in titles
 
@@ -172,11 +191,11 @@ async def test_semantic_search_combined_with_source_filter(
     assert resp.status_code == 200
     data = resp.json()
     assert data["total"] == 1
-    assert data["items"][0]["titleOriginal"] == "Source A Article"
+    assert data["items"][0]["originalTitle"] == "Source A Article"
 
 
 # ---------------------------------------------------------------------------
-# C. No q parameter — existing behavior unchanged
+# C. No q parameter -- existing behavior unchanged
 # ---------------------------------------------------------------------------
 
 
@@ -203,7 +222,7 @@ async def test_no_q_parameter_returns_all_articles(
     )
     await db_session.commit()
 
-    # No patching needed — embed_search_query should not be called
+    # No patching needed -- embed_search_query should not be called
     resp = await authed_client.get("/api/v1/news")
 
     assert resp.status_code == 200

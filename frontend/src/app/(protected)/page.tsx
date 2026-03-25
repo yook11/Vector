@@ -6,7 +6,7 @@ import { NewsList } from "@/components/news/NewsList";
 import { NewsPagination } from "@/components/news/NewsPagination";
 import { SearchBar } from "@/components/news/SearchBar";
 import { getCategories, getNews, getSources } from "@/lib/api-client";
-import type { NewsQuery, Sentiment } from "@/types";
+import type { ImpactLevel, NewsQuery } from "@/types";
 
 interface DashboardPageProps {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -30,23 +30,21 @@ function parseSearchParams(
   const kwCategoryId = str("kwCategoryId");
   if (kwCategoryId) query.kwCategoryId = Number(kwCategoryId);
 
-  const sentiment = str("sentiment");
+  const impactLevel = str("impactLevel");
   if (
-    sentiment === "positive" ||
-    sentiment === "negative" ||
-    sentiment === "neutral"
+    impactLevel === "low" ||
+    impactLevel === "medium" ||
+    impactLevel === "high" ||
+    impactLevel === "critical"
   ) {
-    query.sentiment = sentiment as Sentiment;
+    query.impactLevel = impactLevel as ImpactLevel;
   }
-
-  const minImpact = str("minImpact");
-  if (minImpact) query.minImpact = Number(minImpact);
 
   const sourceId = str("sourceId");
   if (sourceId) query.sourceId = Number(sourceId);
 
   const sortBy = str("sortBy");
-  if (sortBy === "publishedAt" || sortBy === "impactScore") {
+  if (sortBy === "publishedAt" || sortBy === "impactLevel") {
     query.sortBy = sortBy;
   }
 

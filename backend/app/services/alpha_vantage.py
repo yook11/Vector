@@ -166,7 +166,9 @@ class AlphaVantageClient:
 
         for i in range(0, len(urls), chunk_size):
             chunk = urls[i : i + chunk_size]
-            stmt = select(NewsArticle.url).where(NewsArticle.url.in_(chunk))
+            stmt = select(NewsArticle.original_url).where(
+                NewsArticle.original_url.in_(chunk)
+            )
             rows = await session.execute(stmt)
             existing_urls.update(row[0] for row in rows.all())
 
@@ -207,14 +209,18 @@ class AlphaVantageClient:
                 published_at = now
 
             article = NewsArticle(
+                # New columns
+                original_title=strip_html_tags(item.get("title", ""))[:500],
+                original_description=strip_html_tags(item.get("summary")),
+                original_url=url,
+                news_source_id=source.id,
+                published_at=published_at,
+                # Legacy columns (DB NOT NULL, removed in Step 5)
                 title_original=strip_html_tags(item.get("title", ""))[:500],
-                description_original=strip_html_tags(item.get("summary")),
                 url=url,
                 source=source.name,
                 source_id=source.id,
                 guid=guid,
-                published_at=published_at,
-                fetched_at=now,
             )
 
             session.add(article)

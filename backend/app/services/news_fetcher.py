@@ -182,7 +182,9 @@ async def _fetch_rss_source(
     if urls:
         for i in range(0, len(urls), chunk_size):
             chunk = urls[i : i + chunk_size]
-            stmt = select(NewsArticle.url).where(NewsArticle.url.in_(chunk))
+            stmt = select(NewsArticle.original_url).where(
+                NewsArticle.original_url.in_(chunk)
+            )
             rows = await session.execute(stmt)
             existing_urls.update(row[0] for row in rows.all())
 
@@ -221,19 +223,25 @@ async def _fetch_rss_source(
         now = datetime.now(UTC)
 
         article = NewsArticle(
+            # New columns
+            original_title=title,
+            original_description=description,
+            original_url=article_url,
+            news_source_id=source.id,
+            published_at=_parse_published_date(entry),
+            # Legacy columns (DB NOT NULL, removed in Step 5)
             title_original=title,
-            description_original=description,
             url=article_url,
             source=source.name,
             source_id=source.id,
             guid=guid,
-            published_at=_parse_published_date(entry),
-            fetched_at=now,
         )
 
         # If RSS provides full content, store it immediately
         if full_content:
-            article.content = full_content[: settings.content_max_length]
+            truncated = full_content[: settings.content_max_length]
+            article.original_content = truncated
+            article.content = truncated
             article.content_fetched_at = now
 
         session.add(article)

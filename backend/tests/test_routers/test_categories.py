@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.associations import ArticleKeyword
 from app.models.category import Category
 from app.models.keyword import Keyword
+from app.models.news_source import NewsSource
 
 
 @pytest.mark.asyncio
@@ -74,6 +75,7 @@ class TestListCategories:
         client: AsyncClient,
         db_session: AsyncSession,
         sample_categories: list[Category],
+        sample_source: NewsSource,
     ) -> None:
         """Category should include article count from linked keywords."""
         kw = Keyword(name="TensorFlow", category_id=sample_categories[0].id)
@@ -83,6 +85,11 @@ class TestListCategories:
         from app.models.news import NewsArticle
 
         article = NewsArticle(
+            # New primary columns (NOT NULL)
+            original_title="TF Article",
+            original_url="https://example.com/tf",
+            news_source_id=sample_source.id,
+            # Legacy columns (NOT NULL, removed in Step 5)
             title_original="TF Article",
             url="https://example.com/tf",
             source="Test",

@@ -36,19 +36,20 @@ export function NewsFilters({ sources }: NewsFiltersProps) {
   return (
     <div className="flex flex-wrap gap-3">
       <Select
-        value={searchParams?.get("sentiment") ?? ""}
+        value={searchParams?.get("impactLevel") ?? ""}
         onValueChange={(v) =>
-          updateParam("sentiment", v === "all" ? undefined : v)
+          updateParam("impactLevel", v === "all" ? undefined : v)
         }
       >
-        <SelectTrigger className="w-[140px]">
-          <SelectValue placeholder="Sentiment" />
+        <SelectTrigger className="w-[160px]">
+          <SelectValue placeholder="Impact Level" />
         </SelectTrigger>
         <SelectContent>
           <SelectItem value="all">All</SelectItem>
-          <SelectItem value="positive">Positive</SelectItem>
-          <SelectItem value="negative">Negative</SelectItem>
-          <SelectItem value="neutral">Neutral</SelectItem>
+          <SelectItem value="low">Low+</SelectItem>
+          <SelectItem value="medium">Medium+</SelectItem>
+          <SelectItem value="high">High+</SelectItem>
+          <SelectItem value="critical">Critical</SelectItem>
         </SelectContent>
       </Select>
 
@@ -63,7 +64,7 @@ export function NewsFilters({ sources }: NewsFiltersProps) {
         </SelectTrigger>
         <SelectContent>
           <SelectItem value="default">Latest</SelectItem>
-          <SelectItem value="impactScore">Impact Score</SelectItem>
+          <SelectItem value="impactLevel">Impact Level</SelectItem>
         </SelectContent>
       </Select>
 

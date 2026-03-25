@@ -7,8 +7,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.ai_model import AIModel
-from app.models.analysis import AnalysisResult, AnalysisTranslation, Sentiment
+from app.models.analysis import ArticleAnalysis, ImpactLevel
 from app.models.associations import ArticleKeyword
 from app.models.keyword import Keyword
 from app.models.news import NewsArticle
@@ -17,20 +16,22 @@ from app.models.news_source import NewsSource
 
 async def _create_article(
     session: AsyncSession,
+    source: NewsSource,
     title: str = "Test Article",
     url: str = "https://example.com/article",
-    source: str = "Test Source",
     published_at: datetime | None = None,
-    source_id: int | None = None,
 ) -> NewsArticle:
     """Helper to create a news article."""
     article = NewsArticle(
+        # New primary columns (NOT NULL)
+        original_title=title,
+        original_url=url,
+        news_source_id=source.id,
+        # Legacy columns (NOT NULL, removed in Step 5)
         title_original=title,
         url=url,
-        source=source,
+        source=source.name,
         published_at=published_at or datetime.now(UTC),
-        fetched_at=datetime.now(UTC),
-        source_id=source_id,
     )
     session.add(article)
     await session.commit()
@@ -41,29 +42,18 @@ async def _create_article(
 async def _create_analysis(
     session: AsyncSession,
     article: NewsArticle,
-    ai_model_id: int,
-    sentiment: Sentiment = Sentiment.POSITIVE,
-    impact_score: int = 7,
-) -> AnalysisResult:
-    """Helper to create an analysis result with translation."""
-    analysis = AnalysisResult(
+    impact_level: ImpactLevel = ImpactLevel.HIGH,
+) -> ArticleAnalysis:
+    """Helper to create an analysis result."""
+    analysis = ArticleAnalysis(
         news_article_id=article.id,
-        ai_model_id=ai_model_id,
-        sentiment=sentiment,
-        impact_score=impact_score,
+        translated_title="テスト記事",
+        summary="テストの要約",
+        impact_level=impact_level,
         reasoning="Test reasoning",
-        analyzed_at=datetime.now(UTC),
+        ai_model="gemini-2.0-flash",
     )
     session.add(analysis)
-    await session.flush()
-
-    translation = AnalysisTranslation(
-        analysis_id=analysis.id,
-        locale="ja",
-        title="テスト記事",
-        summary="テストの要約",
-    )
-    session.add(translation)
     await session.commit()
     await session.refresh(analysis)
     return analysis
@@ -81,10 +71,10 @@ class TestListNews:
         assert data["totalPages"] == 0
 
     async def test_returns_articles(
-        self, client: AsyncClient, db_session: AsyncSession
+        self, client: AsyncClient, db_session: AsyncSession, sample_source: NewsSource
     ) -> None:
-        await _create_article(db_session, url="https://example.com/1")
-        await _create_article(db_session, url="https://example.com/2")
+        await _create_article(db_session, sample_source, url="https://example.com/1")
+        await _create_article(db_session, sample_source, url="https://example.com/2")
 
         resp = await client.get("/api/v1/news")
         assert resp.status_code == 200
@@ -93,10 +83,12 @@ class TestListNews:
         assert len(data["items"]) == 2
 
     async def test_pagination(
-        self, client: AsyncClient, db_session: AsyncSession
+        self, client: AsyncClient, db_session: AsyncSession, sample_source: NewsSource
     ) -> None:
         for i in range(5):
-            await _create_article(db_session, url=f"https://example.com/{i}")
+            await _create_article(
+                db_session, sample_source, url=f"https://example.com/{i}"
+            )
 
         resp = await client.get("/api/v1/news?page=1&perPage=2")
         data = resp.json()
@@ -111,58 +103,62 @@ class TestListNews:
         client: AsyncClient,
         db_session: AsyncSession,
         sample_keyword: Keyword,
+        sample_source: NewsSource,
     ) -> None:
-        article = await _create_article(db_session, url="https://example.com/kw")
+        article = await _create_article(
+            db_session, sample_source, url="https://example.com/kw"
+        )
         link = ArticleKeyword(news_article_id=article.id, keyword_id=sample_keyword.id)
         db_session.add(link)
         await db_session.commit()
 
         # Also create an unlinked article
-        await _create_article(db_session, url="https://example.com/other")
+        await _create_article(
+            db_session, sample_source, url="https://example.com/other"
+        )
 
         resp = await client.get(f"/api/v1/news?keywordId={sample_keyword.id}")
         data = resp.json()
         assert data["total"] == 1
-        assert data["items"][0]["titleOriginal"] == "Test Article"
+        assert data["items"][0]["originalTitle"] == "Test Article"
 
-    async def test_filter_by_sentiment(
-        self, client: AsyncClient, db_session: AsyncSession, sample_ai_model: AIModel
+    async def test_filter_by_impact_level(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        sample_source: NewsSource,
     ) -> None:
-        a1 = await _create_article(db_session, url="https://example.com/pos")
-        await _create_analysis(db_session, a1, sample_ai_model.id, sentiment=Sentiment.POSITIVE)
+        a1 = await _create_article(
+            db_session, sample_source, url="https://example.com/high"
+        )
+        await _create_analysis(db_session, a1, impact_level=ImpactLevel.HIGH)
 
-        a2 = await _create_article(db_session, url="https://example.com/neg")
-        await _create_analysis(db_session, a2, sample_ai_model.id, sentiment=Sentiment.NEGATIVE)
+        a2 = await _create_article(
+            db_session, sample_source, url="https://example.com/low"
+        )
+        await _create_analysis(db_session, a2, impact_level=ImpactLevel.LOW)
 
-        resp = await client.get("/api/v1/news?sentiment=positive")
-        data = resp.json()
-        assert data["total"] == 1
-
-    async def test_filter_by_min_impact(
-        self, client: AsyncClient, db_session: AsyncSession, sample_ai_model: AIModel
-    ) -> None:
-        a1 = await _create_article(db_session, url="https://example.com/high")
-        await _create_analysis(db_session, a1, sample_ai_model.id, impact_score=9)
-
-        a2 = await _create_article(db_session, url="https://example.com/low")
-        await _create_analysis(db_session, a2, sample_ai_model.id, impact_score=3)
-
-        resp = await client.get("/api/v1/news?minImpact=7")
+        resp = await client.get("/api/v1/news?impactLevel=high")
         data = resp.json()
         assert data["total"] == 1
 
     async def test_sort_by_published_at_desc(
-        self, client: AsyncClient, db_session: AsyncSession
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        sample_source: NewsSource,
     ) -> None:
         now = datetime.now(UTC)
         await _create_article(
             db_session,
+            sample_source,
             title="Older",
             url="https://example.com/old",
             published_at=now - timedelta(days=2),
         )
         await _create_article(
             db_session,
+            sample_source,
             title="Newer",
             url="https://example.com/new",
             published_at=now,
@@ -170,8 +166,8 @@ class TestListNews:
 
         resp = await client.get("/api/v1/news?sortBy=publishedAt&sortOrder=desc")
         items = resp.json()["items"]
-        assert items[0]["titleOriginal"] == "Newer"
-        assert items[1]["titleOriginal"] == "Older"
+        assert items[0]["originalTitle"] == "Newer"
+        assert items[1]["originalTitle"] == "Older"
 
     async def test_filter_by_source_id(
         self,
@@ -181,20 +177,33 @@ class TestListNews:
     ) -> None:
         await _create_article(
             db_session,
+            sample_source,
             url="https://example.com/src1",
-            source_id=sample_source.id,
         )
-        await _create_article(db_session, url="https://example.com/src2")
+        # Create a second source for the unlinked article
+        second_source = NewsSource(
+            name="Other Source",
+            source_type="rss",
+            site_url="https://other.com",
+            endpoint_url="https://other.com/feed.xml",
+        )
+        db_session.add(second_source)
+        await db_session.commit()
+        await db_session.refresh(second_source)
+        await _create_article(db_session, second_source, url="https://example.com/src2")
 
         resp = await client.get(f"/api/v1/news?sourceId={sample_source.id}")
         data = resp.json()
         assert data["total"] == 1
-        assert data["items"][0]["url"] == "https://example.com/src1"
+        assert data["items"][0]["originalUrl"] == "https://example.com/src1"
 
     async def test_filter_by_source_id_nonexistent(
-        self, client: AsyncClient, db_session: AsyncSession
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        sample_source: NewsSource,
     ) -> None:
-        await _create_article(db_session)
+        await _create_article(db_session, sample_source)
 
         resp = await client.get("/api/v1/news?sourceId=99999")
         data = resp.json()
@@ -202,52 +211,62 @@ class TestListNews:
         assert data["items"] == []
 
     async def test_camel_case_response(
-        self, client: AsyncClient, db_session: AsyncSession
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        sample_source: NewsSource,
     ) -> None:
-        await _create_article(db_session)
+        await _create_article(db_session, sample_source)
         resp = await client.get("/api/v1/news")
         data = resp.json()
         assert "totalPages" in data
         assert "perPage" in data
         item = data["items"][0]
-        assert "titleOriginal" in item
+        assert "originalTitle" in item
         assert "publishedAt" in item
-        assert "fetchedAt" in item
+        assert "createdAt" in item
 
 
 @pytest.mark.asyncio
 class TestGetNews:
     async def test_get_existing(
-        self, client: AsyncClient, db_session: AsyncSession
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        sample_source: NewsSource,
     ) -> None:
-        article = await _create_article(db_session)
+        article = await _create_article(db_session, sample_source)
         resp = await client.get(f"/api/v1/news/{article.id}")
         assert resp.status_code == 200
-        assert resp.json()["titleOriginal"] == "Test Article"
+        assert resp.json()["originalTitle"] == "Test Article"
 
     async def test_get_not_found(self, client: AsyncClient) -> None:
         resp = await client.get("/api/v1/news/99999")
         assert resp.status_code == 404
 
     async def test_get_with_analysis(
-        self, client: AsyncClient, db_session: AsyncSession, sample_ai_model: AIModel
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        sample_source: NewsSource,
     ) -> None:
-        article = await _create_article(db_session)
-        await _create_analysis(db_session, article, sample_ai_model.id)
+        article = await _create_article(db_session, sample_source)
+        await _create_analysis(db_session, article)
 
         resp = await client.get(f"/api/v1/news/{article.id}")
         data = resp.json()
         assert data["analysis"] is not None
-        assert data["analysis"]["title"] == "テスト記事"
-        assert data["analysis"]["sentiment"] == "positive"
+        assert data["analysis"]["translatedTitle"] == "テスト記事"
+        assert data["analysis"]["impactLevel"] == "high"
 
     async def test_get_with_keywords(
         self,
         client: AsyncClient,
         db_session: AsyncSession,
         sample_keyword: Keyword,
+        sample_source: NewsSource,
     ) -> None:
-        article = await _create_article(db_session)
+        article = await _create_article(db_session, sample_source)
         link = ArticleKeyword(news_article_id=article.id, keyword_id=sample_keyword.id)
         db_session.add(link)
         await db_session.commit()

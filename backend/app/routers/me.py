@@ -33,10 +33,14 @@ async def list_watchlist(
     count_stmt = select(func.count()).select_from(base_stmt.subquery())
     total = (await session.execute(count_stmt)).scalar_one()
 
-    # Fetch paginated items with eager-loaded article
+    # Fetch paginated items with eager-loaded article + news_source
     offset = (page - 1) * per_page
     stmt = (
-        base_stmt.options(selectinload(WatchlistItem.news_article))
+        base_stmt.options(
+            selectinload(WatchlistItem.news_article).selectinload(
+                NewsArticle.news_source
+            )
+        )
         .order_by(WatchlistItem.created_at.desc())
         .offset(offset)
         .limit(per_page)
@@ -49,9 +53,11 @@ async def list_watchlist(
             WatchlistResponse(
                 id=item.id,
                 news_article_id=item.news_article.id,
-                title_original=item.news_article.title_original,
-                url=item.news_article.url,
-                source=item.news_article.source,
+                original_title=item.news_article.original_title,
+                original_url=item.news_article.original_url,
+                source_name=item.news_article.news_source.name
+                if item.news_article.news_source
+                else "",
                 published_at=item.news_article.published_at,
                 created_at=item.created_at,
             )
@@ -74,8 +80,13 @@ async def add_to_watchlist(
     user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> WatchlistResponse:
-    # Verify article exists
-    article = await session.get(NewsArticle, body.news_article_id)
+    # Verify article exists (eager load news_source for source_name)
+    article_stmt = (
+        select(NewsArticle)
+        .where(NewsArticle.id == body.news_article_id)
+        .options(selectinload(NewsArticle.news_source))
+    )
+    article = (await session.execute(article_stmt)).scalar_one_or_none()
     if not article:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -102,9 +113,9 @@ async def add_to_watchlist(
     return WatchlistResponse(
         id=item.id,
         news_article_id=article.id,
-        title_original=article.title_original,
-        url=article.url,
-        source=article.source,
+        original_title=article.original_title,
+        original_url=article.original_url,
+        source_name=article.news_source.name if article.news_source else "",
         published_at=article.published_at,
         created_at=item.created_at,
     )

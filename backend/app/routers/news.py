@@ -1,19 +1,20 @@
 import math
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import case
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-from sqlmodel import col, func, select
+from sqlmodel import func, select
 
 from app.config import settings
 from app.dependencies import CurrentUser, get_admin_user, get_optional_user, get_session
-from app.models.analysis import AnalysisResult
+from app.models.analysis import ArticleAnalysis, ImpactLevel
 from app.models.article_group import ArticleGroup
 from app.models.associations import ArticleKeyword
 from app.models.keyword import Keyword
 from app.models.news import NewsArticle
 from app.models.watchlist import WatchlistItem
-from app.schemas.analysis import AIModelBrief, AnalysisResponse
+from app.schemas.analysis import AnalysisResponse
 from app.schemas.category import CategoryBrief
 from app.schemas.keyword import KeywordBrief
 from app.schemas.news import (
@@ -28,20 +29,21 @@ from app.tasks.taskiq_worker import fetch_and_analyze_task
 
 router = APIRouter(prefix="/api/v1/news", tags=["news"])
 
-DEFAULT_LOCALE = "ja"
+# Impact level ordering for sort/filter (CASE expression)
+_impact_order_expr = case(
+    (ArticleAnalysis.impact_level == ImpactLevel.LOW, 1),
+    (ArticleAnalysis.impact_level == ImpactLevel.MEDIUM, 2),
+    (ArticleAnalysis.impact_level == ImpactLevel.HIGH, 3),
+    (ArticleAnalysis.impact_level == ImpactLevel.CRITICAL, 4),
+    else_=0,
+)
 
-
-def _get_translated(translations: list, locale: str, field: str = "name") -> str:
-    """Get a translated field value from a list of translation objects."""
-    for t in translations:
-        if t.locale == locale:
-            return getattr(t, field, "")
-    return ""
-
-
-def _get_default_analysis(article: NewsArticle) -> AnalysisResult | None:
-    """Return the default model's analysis (filtered eager load ensures at most 1)."""
-    return article.analyses[0] if article.analyses else None
+_IMPACT_LEVEL_ORDER = {
+    ImpactLevel.LOW: 1,
+    ImpactLevel.MEDIUM: 2,
+    ImpactLevel.HIGH: 3,
+    ImpactLevel.CRITICAL: 4,
+}
 
 
 async def _get_watched_ids(session: AsyncSession, user: CurrentUser | None) -> set[int]:
@@ -56,7 +58,6 @@ async def _get_watched_ids(session: AsyncSession, user: CurrentUser | None) -> s
 def _build_news_response(
     article: NewsArticle,
     watched_ids: set[int] | None = None,
-    locale: str = DEFAULT_LOCALE,
 ) -> NewsResponse:
     """Convert a NewsArticle ORM object to NewsResponse schema."""
     keywords = [
@@ -73,35 +74,29 @@ def _build_news_response(
     ]
 
     analysis = None
-    a = _get_default_analysis(article)
+    a = article.article_analysis
     if a is not None:
         analysis = AnalysisResponse(
-            title=_get_translated(a.translations, locale, "title"),
-            summary=_get_translated(a.translations, locale, "summary"),
-            sentiment=a.sentiment,
-            impact_score=a.impact_score,
+            translated_title=a.translated_title,
+            summary=a.summary,
+            impact_level=a.impact_level,
             reasoning=a.reasoning,
-            ai_model=AIModelBrief(
-                id=a.ai_model.id,
-                provider=a.ai_model.provider,
-                name=a.ai_model.name,
-            ),
+            ai_model=a.ai_model,
             analyzed_at=a.analyzed_at,
         )
 
-    # Duplicate group info
+    # Duplicate group info (legacy -- removed in Step 5)
     group = getattr(article, "article_group", None)
     dup_count = (group.article_count - 1) if group else 0
 
     return NewsResponse(
         id=article.id,
-        title_original=article.title_original,
-        url=article.url,
-        source=article.source,
+        original_title=article.original_title,
+        original_url=article.original_url,
+        source_name=article.news_source.name if article.news_source else "",
         published_at=article.published_at,
-        fetched_at=article.fetched_at,
-        content=article.content,
-        content_fetched_at=article.content_fetched_at,
+        created_at=article.created_at,
+        original_content=article.original_content,
         keywords=keywords,
         analysis=analysis,
         is_watched=article.id in watched_ids if watched_ids else False,
@@ -110,20 +105,11 @@ def _build_news_response(
     )
 
 
-def _analyses_filtered_load():
-    """Filtered eager load: only the default AI model's analysis."""
-    return selectinload(
-        NewsArticle.analyses.and_(
-            AnalysisResult.ai_model_id == settings.default_ai_model_id
-        )
-    )
-
-
 def _news_eager_options() -> list:
     """Return common selectinload options for news queries."""
     return [
-        _analyses_filtered_load().selectinload(AnalysisResult.translations),
-        _analyses_filtered_load().selectinload(AnalysisResult.ai_model),
+        selectinload(NewsArticle.article_analysis),
+        selectinload(NewsArticle.news_source),
         selectinload(NewsArticle.article_keywords)
         .selectinload(ArticleKeyword.keyword)
         .selectinload(Keyword.category),
@@ -136,15 +122,13 @@ async def list_news(
     keyword_id: int | None = Query(None, alias="keywordId"),
     kw_category_id: int | None = Query(None, alias="kwCategoryId"),
     source_id: int | None = Query(None, alias="sourceId"),
-    sentiment: str | None = None,
-    min_impact: int | None = Query(None, alias="minImpact"),
+    impact_level: ImpactLevel | None = Query(None, alias="impactLevel"),
     deduplicated: bool = Query(True),
     q: str | None = Query(None, min_length=1, max_length=500),
     sort_by: str = Query("publishedAt", alias="sortBy"),
     sort_order: str = Query("desc", alias="sortOrder"),
     page: int = Query(1, ge=1),
     per_page: int = Query(12, ge=1, le=100, alias="perPage"),
-    locale: str = Query(DEFAULT_LOCALE),
     user: CurrentUser | None = Depends(get_optional_user),
     session: AsyncSession = Depends(get_session),
 ) -> PaginatedNewsResponse:
@@ -153,6 +137,8 @@ async def list_news(
 
     # Semantic search: embed query and filter by cosine distance
     query_embedding: list[float] | None = None
+    analysis_joined = False
+
     if q is not None:
         try:
             query_embedding = await embed_search_query(q)
@@ -161,8 +147,13 @@ async def list_news(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Search embedding generation failed. Please try again.",
             )
-        stmt = stmt.where(NewsArticle.embedding.is_not(None))
-        distance_expr = NewsArticle.embedding.cosine_distance(query_embedding)
+        stmt = stmt.join(
+            ArticleAnalysis,
+            ArticleAnalysis.news_article_id == NewsArticle.id,
+        )
+        analysis_joined = True
+        stmt = stmt.where(ArticleAnalysis.embedding.is_not(None))
+        distance_expr = ArticleAnalysis.embedding.cosine_distance(query_embedding)
         stmt = stmt.where(distance_expr < settings.semantic_search_max_distance)
 
     # Deduplication: show only canonical articles from groups
@@ -176,7 +167,7 @@ async def list_news(
         )
 
     if source_id is not None:
-        stmt = stmt.where(NewsArticle.source_id == source_id)
+        stmt = stmt.where(NewsArticle.news_source_id == source_id)
 
     if keyword_id is not None:
         matching_ids = select(ArticleKeyword.news_article_id).where(
@@ -184,38 +175,22 @@ async def list_news(
         )
         stmt = stmt.where(NewsArticle.id.in_(matching_ids))
     elif kw_category_id is not None:
-        # Filter by all keywords belonging to this category (1:N via category_id)
         sub_kw_ids = select(Keyword.id).where(Keyword.category_id == kw_category_id)
         matching_ids = select(ArticleKeyword.news_article_id).where(
             ArticleKeyword.keyword_id.in_(sub_kw_ids)
         )
         stmt = stmt.where(NewsArticle.id.in_(matching_ids))
 
-    # Track whether AnalysisResult is already joined
-    analysis_joined = False
-
-    # Common JOIN condition: article + default model filter
-    _analysis_join_cond = (AnalysisResult.news_article_id == NewsArticle.id) & (
-        AnalysisResult.ai_model_id == settings.default_ai_model_id
-    )
-
-    if sentiment is not None:
-        stmt = stmt.join(
-            AnalysisResult,
-            _analysis_join_cond,
-            isouter=False,
-        ).where(AnalysisResult.sentiment == sentiment)
-        analysis_joined = True
-
-    if min_impact is not None:
+    if impact_level is not None:
+        min_order = _IMPACT_LEVEL_ORDER[impact_level]
         if not analysis_joined:
             stmt = stmt.join(
-                AnalysisResult,
-                _analysis_join_cond,
+                ArticleAnalysis,
+                ArticleAnalysis.news_article_id == NewsArticle.id,
                 isouter=False,
             )
             analysis_joined = True
-        stmt = stmt.where(AnalysisResult.impact_score >= min_impact)
+        stmt = stmt.where(_impact_order_expr >= min_order)
 
     # Count total before pagination
     count_stmt = select(func.count()).select_from(stmt.subquery())
@@ -224,22 +199,21 @@ async def list_news(
     # Sorting
     is_default_sort = sort_by == "publishedAt" and sort_order == "desc"
     if query_embedding is not None and is_default_sort:
-        distance_expr = NewsArticle.embedding.cosine_distance(query_embedding)
+        distance_expr = ArticleAnalysis.embedding.cosine_distance(query_embedding)
         stmt = stmt.order_by(distance_expr.asc())
     else:
-        sort_column_map = {
-            "publishedAt": NewsArticle.published_at,
-            "impactScore": AnalysisResult.impact_score,
-        }
-        sort_col = sort_column_map.get(sort_by, NewsArticle.published_at)
-        if sort_by == "impactScore" and not analysis_joined:
-            stmt = stmt.join(
-                AnalysisResult,
-                _analysis_join_cond,
-                isouter=True,
-            )
+        if sort_by == "impactLevel":
+            if not analysis_joined:
+                stmt = stmt.join(
+                    ArticleAnalysis,
+                    ArticleAnalysis.news_article_id == NewsArticle.id,
+                    isouter=True,
+                )
+            order_expr = _impact_order_expr
+        else:
+            order_expr = NewsArticle.published_at
         stmt = stmt.order_by(
-            col(sort_col).desc() if sort_order == "desc" else col(sort_col).asc()
+            order_expr.desc() if sort_order == "desc" else order_expr.asc()
         )
 
     # Pagination
@@ -253,7 +227,7 @@ async def list_news(
     watched_ids = await _get_watched_ids(session, user)
 
     return PaginatedNewsResponse(
-        items=[_build_news_response(a, watched_ids, locale) for a in articles],
+        items=[_build_news_response(a, watched_ids) for a in articles],
         total=total,
         page=page,
         per_page=per_page,
@@ -265,29 +239,29 @@ async def list_news(
     "/embed",
     response_model=EmbedResponse,
     status_code=status.HTTP_200_OK,
-    summary="Backfill embeddings for articles that are missing them",
+    summary="Backfill embeddings for analyses that are missing them",
 )
 async def embed_news(
     session: AsyncSession = Depends(get_session),
     _user: CurrentUser = Depends(get_admin_user),
 ) -> EmbedResponse:
-    """Generate vector embeddings for all articles where embedding IS NULL.
+    """Generate vector embeddings for all analyses where embedding IS NULL.
 
     Requires authentication to prevent unintended Gemini API cost.
     """
-    stmt = select(NewsArticle).where(NewsArticle.embedding.is_(None))
+    stmt = select(ArticleAnalysis).where(ArticleAnalysis.embedding.is_(None))
     result = await session.execute(stmt)
-    articles = list(result.scalars().all())
+    analyses = list(result.scalars().all())
 
-    if not articles:
+    if not analyses:
         return EmbedResponse(
-            message="No articles need embedding",
+            message="No analyses need embedding",
             embedded_count=0,
             skipped_count=0,
             error_count=0,
         )
 
-    er = await embed_articles(session, articles)
+    er = await embed_articles(session, analyses)
 
     return EmbedResponse(
         message=f"Embedding completed: {er.embedded_count} embedded, "
@@ -306,41 +280,49 @@ async def embed_news(
 async def get_similar_news(
     news_id: int,
     limit: int = Query(5, ge=1, le=20),
-    locale: str = Query(DEFAULT_LOCALE),
     session: AsyncSession = Depends(get_session),
 ) -> list[NewsResponse]:
     """Return articles most similar to the given article, ordered by cosine distance.
 
     Returns an empty list (not 404) if the article has no embedding yet.
     """
-    source_stmt = select(NewsArticle).where(NewsArticle.id == news_id)
-    source_result = await session.execute(source_stmt)
-    source = source_result.scalar_one_or_none()
-
-    if source is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="News article not found",
+    # Get the source article's analysis embedding
+    source_analysis = (
+        await session.execute(
+            select(ArticleAnalysis).where(ArticleAnalysis.news_article_id == news_id)
         )
+    ).scalar_one_or_none()
 
-    if source.embedding is None:
+    if source_analysis is None or source_analysis.embedding is None:
+        # Check if article exists at all
+        article_exists = (
+            await session.execute(
+                select(NewsArticle.id).where(NewsArticle.id == news_id)
+            )
+        ).scalar_one_or_none()
+        if article_exists is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="News article not found",
+            )
         return []
 
     similar_stmt = (
         select(NewsArticle)
+        .join(ArticleAnalysis, ArticleAnalysis.news_article_id == NewsArticle.id)
         .options(*_news_eager_options())
         .where(
             NewsArticle.id != news_id,
-            NewsArticle.embedding.is_not(None),
+            ArticleAnalysis.embedding.is_not(None),
         )
-        .order_by(NewsArticle.embedding.cosine_distance(source.embedding))
+        .order_by(ArticleAnalysis.embedding.cosine_distance(source_analysis.embedding))
         .limit(limit)
     )
 
     similar_result = await session.execute(similar_stmt)
     articles = similar_result.unique().scalars().all()
 
-    return [_build_news_response(a, locale=locale) for a in articles]
+    return [_build_news_response(a) for a in articles]
 
 
 @router.get(
@@ -350,7 +332,6 @@ async def get_similar_news(
 )
 async def get_group_articles(
     group_id: int,
-    locale: str = Query(DEFAULT_LOCALE),
     user: CurrentUser | None = Depends(get_optional_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[NewsResponse]:
@@ -372,13 +353,12 @@ async def get_group_articles(
     articles = result.unique().scalars().all()
 
     watched_ids = await _get_watched_ids(session, user)
-    return [_build_news_response(a, watched_ids, locale) for a in articles]
+    return [_build_news_response(a, watched_ids) for a in articles]
 
 
 @router.get("/{news_id}", response_model=NewsResponse)
 async def get_news(
     news_id: int,
-    locale: str = Query(DEFAULT_LOCALE),
     user: CurrentUser | None = Depends(get_optional_user),
     session: AsyncSession = Depends(get_session),
 ) -> NewsResponse:
@@ -397,7 +377,7 @@ async def get_news(
         )
 
     watched_ids = await _get_watched_ids(session, user)
-    return _build_news_response(article, watched_ids, locale)
+    return _build_news_response(article, watched_ids)
 
 
 @router.post(
