@@ -25,7 +25,7 @@ from app.models import (  # noqa: F401
     NewsArticle,
     NewsSource,
     SourceType,
-    WatchlistItem,
+    WatchlistEntry,
 )
 
 TEST_DATABASE_URL = settings.database_url.rsplit("/", 1)[0] + "/vector_test"
@@ -33,8 +33,8 @@ engine_test = create_async_engine(TEST_DATABASE_URL, echo=False, poolclass=NullP
 
 # --- BFF header-based auth helpers ---
 
-TEST_USER_ID = "test-user-id-001"
-TEST_ADMIN_ID = "test-admin-id-001"
+TEST_USER_ID = "00000000-0000-4000-a000-000000000001"
+TEST_ADMIN_ID = "00000000-0000-4000-a000-000000000002"
 INTERNAL_SECRET = settings.internal_api_secret
 
 
@@ -62,9 +62,10 @@ async def ensure_test_database() -> None:
             await conn.execute(text("CREATE DATABASE vector_test"))
     await engine.dispose()
 
-    # Enable pgvector extension in the test database
+    # Enable pgvector extension and create auth schema in the test database
     async with engine_test.connect() as conn:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        await conn.execute(text("CREATE SCHEMA IF NOT EXISTS auth"))
         await conn.commit()
 
 
@@ -73,6 +74,14 @@ async def setup_db(ensure_test_database: None) -> AsyncGenerator[None, None]:
     """Create tables before each test, drop after."""
     async with engine_test.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
+        # Seed auth.user rows so FK on watchlist_entries.user_id is satisfied
+        await conn.execute(
+            text(
+                'INSERT INTO auth."user" (id) VALUES (:uid1), (:uid2) '
+                "ON CONFLICT DO NOTHING"
+            ),
+            {"uid1": TEST_USER_ID, "uid2": TEST_ADMIN_ID},
+        )
     yield
     async with engine_test.begin() as conn:
         await conn.run_sync(SQLModel.metadata.drop_all)
