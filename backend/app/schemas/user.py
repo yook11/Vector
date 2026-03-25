@@ -23,7 +23,6 @@ class WatchlistResponse(BaseModel):
         populate_by_name=True,
     )
 
-    id: int
     news_article_id: int
     original_title: str
     original_url: str

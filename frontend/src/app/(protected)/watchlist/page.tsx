@@ -47,7 +47,7 @@ export default async function WatchlistPage({
       ) : (
         <div className="space-y-3">
           {data.items.map((item) => (
-            <Card key={item.id}>
+            <Card key={item.newsArticleId}>
               <CardHeader className="pb-2">
                 <div className="flex items-start justify-between gap-2">
                   <CardTitle className="text-base leading-snug">

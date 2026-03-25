@@ -7,7 +7,7 @@ from sqlmodel import func, select
 
 from app.dependencies import CurrentUser, get_current_user, get_session
 from app.models.news import NewsArticle
-from app.models.watchlist import WatchlistItem
+from app.models.watchlist import WatchlistEntry
 from app.schemas.user import (
     WatchlistCreate,
     WatchlistListResponse,
@@ -27,7 +27,7 @@ async def list_watchlist(
     user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> WatchlistListResponse:
-    base_stmt = select(WatchlistItem).where(WatchlistItem.user_id == user.id)
+    base_stmt = select(WatchlistEntry).where(WatchlistEntry.user_id == user.id)
 
     # Count total
     count_stmt = select(func.count()).select_from(base_stmt.subquery())
@@ -37,11 +37,11 @@ async def list_watchlist(
     offset = (page - 1) * per_page
     stmt = (
         base_stmt.options(
-            selectinload(WatchlistItem.news_article).selectinload(
+            selectinload(WatchlistEntry.news_article).selectinload(
                 NewsArticle.news_source
             )
         )
-        .order_by(WatchlistItem.created_at.desc())
+        .order_by(WatchlistEntry.created_at.desc())
         .offset(offset)
         .limit(per_page)
     )
@@ -51,7 +51,6 @@ async def list_watchlist(
     return WatchlistListResponse(
         items=[
             WatchlistResponse(
-                id=item.id,
                 news_article_id=item.news_article.id,
                 original_title=item.news_article.original_title,
                 original_url=item.news_article.original_url,
@@ -94,9 +93,9 @@ async def add_to_watchlist(
         )
 
     # Check duplicate
-    existing_stmt = select(WatchlistItem).where(
-        WatchlistItem.user_id == user.id,
-        WatchlistItem.news_article_id == body.news_article_id,
+    existing_stmt = select(WatchlistEntry).where(
+        WatchlistEntry.user_id == user.id,
+        WatchlistEntry.news_article_id == body.news_article_id,
     )
     existing = (await session.execute(existing_stmt)).scalar_one_or_none()
     if existing:
@@ -105,13 +104,12 @@ async def add_to_watchlist(
             detail="Article already in watchlist",
         )
 
-    item = WatchlistItem(user_id=user.id, news_article_id=body.news_article_id)
+    item = WatchlistEntry(user_id=user.id, news_article_id=body.news_article_id)
     session.add(item)
     await session.commit()
     await session.refresh(item)
 
     return WatchlistResponse(
-        id=item.id,
         news_article_id=article.id,
         original_title=article.original_title,
         original_url=article.original_url,
@@ -130,9 +128,9 @@ async def remove_from_watchlist(
     user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> None:
-    stmt = select(WatchlistItem).where(
-        WatchlistItem.user_id == user.id,
-        WatchlistItem.news_article_id == news_article_id,
+    stmt = select(WatchlistEntry).where(
+        WatchlistEntry.user_id == user.id,
+        WatchlistEntry.news_article_id == news_article_id,
     )
     item = (await session.execute(stmt)).scalar_one_or_none()
     if not item:
