@@ -7,6 +7,8 @@ Vector/
 ├── CLAUDE.md                          # ルート: プロジェクト全体のルール
 ├── docker-compose.yml                 # 全サービス定義 (frontend, backend, db, redis, worker, scheduler)
 ├── .env.example
+├── domain.md                          # ドメインモデル概要
+├── Domain_inventory.md                # ドメインインベントリ
 │
 ├── frontend/
 │   ├── CLAUDE.md                      # フロントエンド固有のルール
@@ -16,10 +18,11 @@ Vector/
 │   ├── tailwind.config.ts
 │   ├── next.config.js
 │   ├── postcss.config.js
+│   ├── biome.json                    # Biome lint/format設定
 │   ├── components.json                # shadcn/ui設定
 │   ├── openapi.json                   # キャッシュ済みOpenAPIスキーマ（generate-types:file用）
 │   └── src/
-│       ├── proxy.ts                   # CSPヘッダ + Better Auth cookie認証チェック
+│       ├── proxy.ts                   # CSPヘッダ（nonce）+ Better Auth cookie認証チェック
 │       ├── globals.css
 │       ├── app/
 │       │   ├── layout.tsx             # ルートレイアウト (Toaster)
@@ -65,7 +68,6 @@ Vector/
 │       │   │   ├── CategoryBadge.tsx
 │       │   │   ├── DuplicateBadge.tsx     # 重複記事グループ表示
 │       │   │   ├── FetchButton.tsx        # 手動RSSフェッチトリガー
-│       │   │   ├── ImpactScore.tsx
 │       │   │   ├── NewsCard.tsx
 │       │   │   ├── NewsDetail.tsx
 │       │   │   ├── NewsFilters.tsx
@@ -73,19 +75,31 @@ Vector/
 │       │   │   ├── NewsPagination.tsx
 │       │   │   ├── RelatedArticles.tsx    # pgvector類似記事表示
 │       │   │   ├── SearchBar.tsx
-│       │   │   ├── SentimentBadge.tsx
 │       │   │   └── WatchlistButton.tsx
 │       │   ├── keywords/
 │       │   │   ├── AddKeywordDialog.tsx
 │       │   │   ├── KeywordRow.tsx
 │       │   │   ├── KeywordTable.tsx
-│       │   │   ├── KeywordTag.tsx
-│       │   │   └── SubscriptionToggle.tsx
+│       │   │   └── KeywordTag.tsx
 │       │   ├── sources/
 │       │   │   ├── SourceFormDialog.tsx   # ソース作成/編集ダイアログ
 │       │   │   ├── SourceManager.tsx      # ソース管理コンテナ
 │       │   │   └── SourceTable.tsx        # ソース一覧テーブル
 │       │   └── ui/                    # shadcn/ui（自動生成、手動編集禁止）
+│       │       ├── alert-dialog.tsx
+│       │       ├── badge.tsx
+│       │       ├── button.tsx
+│       │       ├── card.tsx
+│       │       ├── dialog.tsx
+│       │       ├── input.tsx
+│       │       ├── label.tsx
+│       │       ├── select.tsx
+│       │       ├── separator.tsx
+│       │       ├── sheet.tsx
+│       │       ├── skeleton.tsx
+│       │       ├── sonner.tsx
+│       │       ├── switch.tsx
+│       │       └── table.tsx
 │       ├── lib/
 │       │   ├── api-client.ts          # サーバーサイドAPIクライアント（SSR用、BFFヘッダー付与）
 │       │   ├── auth.ts                # Better Auth サーバー設定 (betterAuth())
@@ -106,27 +120,28 @@ Vector/
 │   │   ├── config.py                  # 環境変数管理 (pydantic-settings)
 │   │   ├── db.py                      # DB接続・セッション管理
 │   │   ├── dependencies.py            # FastAPI DI (get_session, get_current_user, get_admin_user, get_optional_user)
+│   │   ├── domain/                    # DDD 値オブジェクト
+│   │   │   ├── category.py           # CategorySlug, CategoryName
+│   │   │   └── keyword.py            # KeywordName
 │   │   ├── models/
 │   │   │   ├── __init__.py
-│   │   │   ├── news.py               # NewsArticle (embedding, article_group_id含む)
+│   │   │   ├── news.py               # NewsArticle (original_title, original_url, embedding, article_group_id)
+│   │   │   ├── analysis.py           # ArticleAnalysis (translated_title_ja, summary_ja, impact_level)
+│   │   │   ├── category.py           # Category (統合済み: 旧 investment_category + keyword_category)
 │   │   │   ├── keyword.py            # Keyword
-│   │   │   ├── analysis.py           # AnalysisResult, AnalysisTranslation
-│   │   │   ├── associations.py       # NewsKeyword
+│   │   │   ├── associations.py       # ArticleKeyword
 │   │   │   ├── ai_model.py           # AIModel
 │   │   │   ├── article_group.py      # ArticleGroup (重複記事グループ)
+│   │   │   ├── auth_ref.py           # AuthUserRef (Better Auth user FK参照)
 │   │   │   ├── fetch_log.py          # FetchLog
-│   │   │   ├── investment_category.py # InvestmentCategory, Translation, Link
-│   │   │   ├── keyword_category.py   # KeywordCategory, Translation, Link
 │   │   │   ├── news_source.py        # NewsSource, SourceType
-│   │   │   ├── user_keyword.py       # UserKeywordSubscription (user_id: str)
-│   │   │   └── watchlist.py          # WatchlistItem (user_id: str)
+│   │   │   └── watchlist.py          # WatchlistEntry (user_id: UUID, 複合PK)
 │   │   ├── schemas/                   # Pydantic schemas（SSoT: 型の源泉）
 │   │   │   ├── __init__.py
 │   │   │   ├── news.py               # NewsResponse, PaginatedNewsResponse, NewsFetchRequest/Response
-│   │   │   ├── keyword.py            # KeywordCreate/Update/Response/ListResponse, KeywordBrief
 │   │   │   ├── analysis.py           # AnalysisResponse, AIModelBrief
-│   │   │   ├── category.py           # CategoryResponse/ListResponse/Brief (投資カテゴリ)
-│   │   │   ├── keyword_category.py   # KeywordCategoryResponse/ListResponse/Brief
+│   │   │   ├── category.py           # CategoryResponse/ListResponse/Brief
+│   │   │   ├── keyword.py            # KeywordCreate/Update/Response/ListResponse, KeywordBrief
 │   │   │   ├── news_source.py        # NewsSourceCreate/Update/Response/ListResponse
 │   │   │   └── user.py               # SubscriptionCreate/Response, WatchlistCreate/Response
 │   │   ├── routers/
@@ -135,8 +150,7 @@ Vector/
 │   │   │   ├── keywords.py           # /api/v1/keywords (CRUD)
 │   │   │   ├── me.py                 # /api/v1/me (subscriptions, watchlist)
 │   │   │   ├── news_sources.py       # /api/v1/sources (CRUD, admin限定)
-│   │   │   ├── categories.py         # /api/v1/categories (投資カテゴリ一覧)
-│   │   │   └── keyword_categories.py # /api/v1/keyword-categories (キーワードカテゴリ一覧)
+│   │   │   └── categories.py         # /api/v1/categories (統合カテゴリ一覧)
 │   │   ├── services/
 │   │   │   ├── __init__.py
 │   │   │   ├── news_fetcher.py       # RSS取得・重複チェック・DB保存
@@ -147,17 +161,19 @@ Vector/
 │   │   │   ├── gemini_embedder.py    # GeminiEmbedder (768次元)
 │   │   │   ├── dedup.py              # 重複記事検出・グループ化 (cosine distance)
 │   │   │   ├── hacker_news.py        # Hacker News API フェッチャー
-│   │   │   └── alpha_vantage.py      # Alpha Vantage ニュースAPI フェッチャー
+│   │   │   ├── alpha_vantage.py      # Alpha Vantage ニュースAPI フェッチャー
+│   │   │   └── source_helpers.py     # ニュースソース共通ヘルパー
 │   │   ├── tasks/
 │   │   │   ├── __init__.py
 │   │   │   └── taskiq_worker.py      # taskiqブローカー・スケジューラー・パイプライン
 │   │   ├── scripts/
-│   │   │   └── promote_admin.py      # ユーザーをadminに昇格（auth.user直接SQL）
+│   │   │   └── compare_models.py     # AIモデル比較ツール
 │   │   └── utils/
-│   │       └── logger.py             # structlog設定
+│   │       ├── sanitize.py           # XSSサニタイズ (bleach)
+│   │       └── redis_cache.py        # Redisキャッシュヘルパー
 │   ├── alembic/
 │   │   ├── env.py                    # authスキーマをautogenerateから除外
-│   │   └── versions/                 # マイグレーション履歴（21件）
+│   │   └── versions/                 # マイグレーション履歴（31件）
 │   └── tests/
 │       ├── CLAUDE.md                  # テストの書き方ルール
 │       ├── conftest.py               # フィクスチャ (db_session, client, BFFヘッダー認証)
@@ -171,23 +187,38 @@ Vector/
 │       ├── test_alpha_vantage.py
 │       ├── test_fetch_logs.py
 │       ├── test_taskiq_worker.py
-│       └── test_routers/
-│           ├── __init__.py
-│           ├── test_news.py
-│           ├── test_keywords.py
-│           ├── test_me.py
-│           ├── test_news_sources.py
-│           ├── test_categories.py
-│           └── test_keyword_categories.py
+│       ├── test_routers/
+│       │   ├── test_news.py
+│       │   ├── test_keywords.py
+│       │   ├── test_me.py
+│       │   ├── test_news_sources.py
+│       │   └── test_categories.py
+│       └── test_domain/
+│           └── test_category_values.py  # 値オブジェクトテスト
 │
-└── docs/
-    ├── 00_PROJECT_OVERVIEW.md
-    ├── 01_DIRECTORY_STRUCTURE.md       # このファイル
-    ├── 02_DATABASE_DESIGN.md
-    ├── 03_CLAUDE_CODE_WORKFLOW.md
-    ├── 04_API_SPECIFICATION.md
-    ├── 05_PHASE2_PLAN.md
-    └── 05b_TASKQUEUE_POC_REPORT.md
+├── docs/                              # 設計ドキュメント
+│   ├── 00_PROJECT_OVERVIEW.md
+│   ├── 01_DIRECTORY_STRUCTURE.md       # このファイル
+│   ├── 02_DATABASE_DESIGN.md
+│   ├── archive/
+│   │   └── 03_CLAUDE_CODE_WORKFLOW.md  # アーカイブ済み
+│   ├── 04_API_SPECIFICATION.md
+│   ├── 05_PHASE2_PLAN.md
+│   ├── 05b_TASKQUEUE_POC_REPORT.md
+│   └── 06_PROMPT_DESIGN.md
+│
+├── specs/                             # 設計仕様書
+│   ├── design-principles.md           # DDD・セキュア・バイ・デザイン設計原則
+│   ├── use-cases.md                   # ユースケース定義
+│   ├── db-redesign.md/               # DBスキーマ再設計仕様（テーブル別詳細）
+│   └── domain-analysis.md/           # ドメイン分析（エンティティ関係・不変条件）
+│
+└── plans/                             # マイグレーション計画
+    ├── migration/                     # アクティブな移行計画
+    │   ├── phase4-news-articles-and-article-analyses.md
+    │   ├── phase6a-uuid-migration.md
+    │   └── phase6b-watchlist-entries.md
+    └── archived/                      # 完了済み計画（参照用）
 ```
 
 ## 型パイプライン（SSoT → フロント型生成）

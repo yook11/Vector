@@ -4,7 +4,23 @@
 
 次世代コンピューティング、マテリアル・インフォマティクスなど、
 日本では情報が少ない先端分野の海外ニュースを自動収集し、
-AIで翻訳・要約・センチメント分析を行う投資ダッシュボード。
+AIで翻訳・要約・インパクト分析を行う投資ダッシュボード。
+
+### 解決する課題
+
+- 先端テックのニュースは英語記事が多く、日本語話者の投資家が情報を得るまでにタイムラグがある
+- ニュースに登場する企業の関連情報を複数ソース横断で確認するのが手間
+- それらを一つの場所でスピード感を持って確認できるようにする
+
+### 主要機能
+
+- テックニュースの自動収集（RSS / Hacker News API / Alpha Vantage）
+- AI翻訳・要約・インパクト分析（Gemini API）
+- セマンティック検索・類似記事推薦（pgvector）
+- 重複記事の自動検出・グループ化
+- ウォッチリスト（記事ブックマーク）
+- キーワード・ニュースソース管理（管理者向け）
+- カテゴリ別のニュースフィルタリング
 
 ## Tech Stack
 
@@ -14,7 +30,7 @@ AIで翻訳・要約・センチメント分析を行う投資ダッシュボー
 | Backend | FastAPI + Python 3.12 + SQLModel | 非同期処理、Pydantic v2 |
 | Auth | Better Auth (BFF Proxy) | Cookie ベースセッション + 内部 API ヘッダー認証 |
 | Database | PostgreSQL 16 + pgvector | Alembic マイグレーション管理 |
-| AI | Gemini API | 翻訳・要約・センチメント分析・Embedding |
+| AI | Gemini API (gemini-2.5-flash-lite) | 翻訳・要約・インパクト分析・Embedding |
 | Task Queue | taskiq + Redis | 定期実行・非同期タスク処理 |
 | CI/CD | GitHub Actions | lint + test + type check |
 | Infrastructure | Docker Compose | 6 サービス構成 |
@@ -45,9 +61,9 @@ docker compose up --build
 ### 初回利用の流れ
 
 1. `http://localhost:3000/auth/register` でアカウント登録
-2. Settings (`/settings`) でキーワードを追加（例: "Quantum Computing"）
+2. 管理者がキーワード・ニュースソースを設定（`/settings`）
 3. ダッシュボードで「Fetch News」ボタンをクリック
-4. スケジューラーが自動でAI分析を実行（間隔: `FETCH_INTERVAL_HOURS`）
+4. taskiq ワーカーが自動でニュース取得・AI分析・Embedding生成を実行
 5. ダッシュボードをリロードして翻訳・分析結果を確認
 
 ## Architecture
@@ -61,10 +77,11 @@ Browser
         ├── BFF Proxy (/api/proxy/*) → Backend (header auth)
         │
         └─► FastAPI Backend (Docker internal only)
-              ├── Header Auth (X-Internal-User-Id / X-Internal-Secret)
+              ├── Header Auth (X-User-ID / X-Internal-Secret)
               ├── News Fetcher (Google News RSS, Hacker News API, Alpha Vantage)
-              ├── AI Analyzer (Gemini API — 翻訳・要約・センチメント)
+              ├── AI Analyzer (Gemini API — 翻訳・要約・インパクト分析)
               ├── Embedding (Gemini Embedding API — pgvector)
+              ├── Dedup (cosine distance — 重複記事グループ化)
               └── PostgreSQL 16 + pgvector
 
 Redis ◄── taskiq worker (非同期タスク実行)
@@ -81,6 +98,38 @@ Redis ◄── taskiq worker (非同期タスク実行)
 | `redis` | タスクキューブローカー |
 | `worker` | taskiq ワーカー（ニュースパイプライン実行） |
 | `scheduler` | taskiq スケジューラー（cron トリガー） |
+
+## Domain Concepts
+
+詳細は [`domain.md`](domain.md) を参照。
+
+| 概念 | 説明 | モデル |
+|------|------|--------|
+| ニュース記事 | 収集・翻訳されたテックニュース | `NewsArticle` |
+| AI分析結果 | AIによる翻訳・要約・インパクト分析 | `ArticleAnalysis` |
+| キーワード | 記事のタギングに使用される検索キーワード | `Keyword` |
+| カテゴリ | キーワードと記事を分類する統合カテゴリ | `Category` |
+| ニュースソース | ニュースの収集元メディア・サイト | `NewsSource` |
+| 重複グループ | 意味的に類似した記事のグループ | `ArticleGroup` |
+| ウォッチリスト | ユーザーの記事ブックマーク | `WatchlistEntry` |
+
+### ニュース処理パイプライン
+
+```
+taskiq scheduler (cron)
+  ↓
+1. アクティブキーワード読み込み
+  ↓
+2. RSS / API フェッチ → NewsArticle 保存
+  ↓
+3. 全文取得 (trafilatura)
+  ↓
+4. AI分析 (Gemini API → ArticleAnalysis)
+  ↓
+5. Embedding生成 (Gemini Embedding API → pgvector)
+  ↓
+6. 重複検出・グループ化 (cosine distance)
+```
 
 ## Environment Variables
 
@@ -164,10 +213,12 @@ cd frontend && npm run generate-types
 
 設計ドキュメントは `docs/` を参照:
 
-- `docs/00_PROJECT_OVERVIEW.md` — プロジェクト概要
-- `docs/01_DIRECTORY_STRUCTURE.md` — ディレクトリ構成
-- `docs/02_DATABASE_DESIGN.md` — DB設計
-- `docs/03_CLAUDE_CODE_WORKFLOW.md` — 開発ワークフロー
-- `docs/04_API_SPECIFICATION.md` — API仕様
-- `docs/05_PHASE2_PLAN.md` — Phase 2 計画
-- `docs/05b_TASKQUEUE_POC_REPORT.md` — タスクキュー設計
+- [`docs/00_PROJECT_OVERVIEW.md`](docs/00_PROJECT_OVERVIEW.md) — プロジェクト概要
+- [`docs/01_DIRECTORY_STRUCTURE.md`](docs/01_DIRECTORY_STRUCTURE.md) — ディレクトリ構成
+- [`docs/02_DATABASE_DESIGN.md`](docs/02_DATABASE_DESIGN.md) — DB設計
+- [`docs/04_API_SPECIFICATION.md`](docs/04_API_SPECIFICATION.md) — API仕様
+- [`docs/05_PHASE2_PLAN.md`](docs/05_PHASE2_PLAN.md) — Phase 2 計画
+- [`docs/05b_TASKQUEUE_POC_REPORT.md`](docs/05b_TASKQUEUE_POC_REPORT.md) — タスクキュー設計
+- [`docs/06_PROMPT_DESIGN.md`](docs/06_PROMPT_DESIGN.md) — プロンプト設計ガイドライン
+
+ドメインモデルの棚卸しは [`domain.md`](domain.md) を参照。

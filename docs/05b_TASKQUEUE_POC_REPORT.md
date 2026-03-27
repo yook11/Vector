@@ -1,5 +1,11 @@
 # タスクキュー PoC レポート: arq vs taskiq (Step B-0)
 
+> **ステータス: 完了（選定結果反映済み）**
+>
+> taskiq を選定し、Step B で本番実装済み。
+> 実装の詳細は `archive/03_CLAUDE_CODE_WORKFLOW.md` の Step D (タスクキュー) を参照。
+> 以下は PoC 実施時の記録をそのまま保持している。
+
 ## 調査済み事前情報
 
 | 項目 | arq | taskiq |
@@ -305,11 +311,11 @@ scheduler:
 
 ### Step B 実装チェックリスト
 
-- [ ] `taskiq-redis>=0.5,<1` → `>=1.0,<2` に修正
-- [ ] `SimpleRetryMiddleware` をブローカーに追加
-- [ ] `retry_on_error=True` を各タスクデコレーターに追加
-- [ ] `fetch_and_analyze_task` を `Context = TaskiqDepends()` → `ctx.state.engine` 方式に変更
-- [ ] Dockerfile に `greenlet` を明示的に追加
-- [ ] `worker` と `scheduler` を別コンテナに分離（または supervisord を評価）
-- [ ] `apscheduler` を `requirements.txt` から削除
-- [ ] `backend/app/services/scheduler.py` と `main.py` の lifespan から APScheduler を削除
+- [x] `taskiq-redis>=0.5,<1` → `>=1.0,<2` に修正
+- [x] `SimpleRetryMiddleware` をブローカーに追加
+- [x] `retry_on_error=True` を各タスクデコレーターに追加
+- [x] `fetch_and_analyze_task` を `Context = TaskiqDepends()` → `ctx.state.engine` 方式に変更
+- [x] Dockerfile に `greenlet` を明示的に追加
+- [x] `worker` と `scheduler` を別コンテナに分離（2コンテナ分離方式を採用）
+- [x] `apscheduler` を `requirements.txt` から削除
+- [x] `backend/app/services/scheduler.py` と `main.py` の lifespan から APScheduler を削除

@@ -6,7 +6,6 @@ import type {
   KeywordUpdate,
   NewsFetchRequest,
   NewsFetchResponse,
-  NewsResponse,
   NewsSourceCreate,
   NewsSourceListResponse,
   NewsSourceResponse,
@@ -100,13 +99,6 @@ export async function clientTriggerFetch(
     method: "POST",
     body: JSON.stringify(body ?? {}),
   });
-}
-
-/** Fetch all articles in a duplicate group. */
-export async function clientGetGroupArticles(
-  groupId: number,
-): Promise<NewsResponse[]> {
-  return clientFetch<NewsResponse[]>(`/news/groups/${groupId}`);
 }
 
 // --- Sources ---

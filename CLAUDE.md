@@ -11,8 +11,7 @@
 - インフラ: Docker Compose
 
 ## パッケージ管理
-- Python パッケージの追加・削除は `pip` ではなく `uv pip` を使うこと
-- パッケージ追加後は `requirements.txt` も更新すること
+- パッケージ追加後は `requirements.txt`（Backend）/ `package.json`（Frontend）も更新すること
 
 ## 設計ドキュメント（必要時に参照）
 
@@ -23,29 +22,13 @@
 | `docs/00_PROJECT_OVERVIEW.md` | プロジェクト全体像を把握したい時 |
 | `docs/01_DIRECTORY_STRUCTURE.md` | ファイルの置き場所に迷った時 |
 | `docs/02_DATABASE_DESIGN.md` | DB関連の作業時 |
-| `docs/03_CLAUDE_CODE_WORKFLOW.md` | **タスク分解・サブエージェント指示の全手順** |
 | `docs/04_API_SPECIFICATION.md` | API実装・フロント実装時 |
 | `docs/05_PHASE2_PLAN.md` | Phase 2 の計画確認時 |
 | `docs/05b_TASKQUEUE_POC_REPORT.md` | タスクキュー関連の作業時 |
 
-## ワークフロー（Plan-First 必須）
+## ワークフロー
 
-非自明なタスクでは、以下の4フェーズを必ず経由すること。
-
-1. **Explore** — 対象ファイルを読み、影響範囲を特定する
-2. **Plan** — 変更するファイル一覧と実装手順を提示し、承認を待つ
-3. **Implement** — 承認後にコーディングを開始する
-4. **Verify** — 実装後、完了報告前に検証コマンドを実行する
-
-### 検証プロトコル（タスク完了前に必ず実行）
-
-```bash
-# Backend
-cd backend && ruff check app/ && ruff format --check app/ && python -m pytest tests/ -x -q
-
-# Frontend
-cd frontend && npx biome check src/ && npx tsc --noEmit
-```
+- 検証は `/review` スキルを実行すること
 
 ## リサーチ義務
 
@@ -53,12 +36,6 @@ cd frontend && npx biome check src/ && npx tsc --noEmit
 信頼できる情報源は各ディレクトリの `CLAUDE.md` と `/research` スキルに定義済み。
 
 ## 開発ルール
-
-### 言語規約
-- コード中のコメント・変数名: **英語**
-- CLAUDE.md・ドキュメント: **日本語**
-- コミットメッセージ: **英語** (Conventional Commits、スコープ付き)
-  - 例: `feat(backend): add news fetcher service`
 
 ### 命名規約（レイヤー間の対応）
 
@@ -68,14 +45,8 @@ cd frontend && npx biome check src/ && npx tsc --noEmit
 | API (JSON) | camelCase | `newsArticleId` |
 | TypeScript | camelCase | `newsArticleId` |
 
-### APIスキーマ管理（型共有パイプライン）
-- **SSoT（Single Source of Truth）は FastAPI の Pydantic schemas**
-- 型共有の流れ:
-  1. `backend/app/schemas/` の Pydantic モデルを定義・変更
-  2. FastAPI が `/openapi.json` を自動生成
-  3. `npm run generate-types` で `frontend/src/types/generated.ts` を自動生成
-  4. `frontend/src/types/index.ts` で re-export + narrowing
-- `generated.ts` は手動編集禁止（自動生成ファイル）
+### APIスキーマ管理
+- **SSoT は FastAPI の Pydantic schemas** — 型生成は `/gen-types` スキルを使用
 
 ### ブランチ戦略
 - `main` → プロダクション / `develop` → 開発統合 / `feature/*` → 機能開発
@@ -106,17 +77,7 @@ cd frontend && npx biome check src/ && npx tsc --noEmit
 ## サブエージェントへの指示方針
 
 - 対象ディレクトリとその CLAUDE.md を明示、設計ドキュメントは1〜2個に絞る
-- 詳細は `docs/03_CLAUDE_CODE_WORKFLOW.md` を参照
-
-## スキル一覧
-
-| コマンド | 用途 |
-|---------|------|
-| `/review` | lint + テスト + 型チェックの一括検証 |
-| `/db-migrate` | Alembic マイグレーション作成ワークフロー |
-| `/gen-types` | Pydantic → OpenAPI → TypeScript 型生成 |
-| `/research` | 公式ドキュメント調査（サブエージェント実行） |
 
 ## 開発の始め方
 
-`docs/03_CLAUDE_CODE_WORKFLOW.md` を読み、Step 1 から順に実行すること。
+プロジェクト全体像は `docs/00_PROJECT_OVERVIEW.md` を参照。

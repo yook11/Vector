@@ -2,7 +2,6 @@ import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { ImpactLevel, NewsResponse } from "@/types";
-import { DuplicateBadge } from "./DuplicateBadge";
 import { WatchlistButton } from "./WatchlistButton";
 
 function formatDate(dateStr: string | null | undefined): string {
@@ -52,12 +51,6 @@ export function NewsCard({ article }: { article: NewsResponse }) {
           <span className="line-clamp-1">
             {article.sourceName} &middot; {formatDate(article.publishedAt)}
           </span>
-          {article.duplicateCount > 0 && article.articleGroupId != null && (
-            <DuplicateBadge
-              duplicateCount={article.duplicateCount}
-              articleGroupId={article.articleGroupId}
-            />
-          )}
         </div>
       </CardHeader>
       <CardContent className="space-y-3">

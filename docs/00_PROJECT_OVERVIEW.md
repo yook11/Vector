@@ -14,7 +14,7 @@
 | 認証 | Better Auth (BFF Proxy) | Cookie ベースセッション + BFF ヘッダー認証 |
 | ORM | SQLModel | SQLAlchemy + Pydantic のハイブリッド |
 | Database | PostgreSQL 16 + pgvector | Alembic マイグレーション管理、auth/public スキーマ分離 |
-| AI API | Gemini API（メイン） | 抽象化して差し替え可能に |
+| AI API | Gemini API（メイン：gemini-2.5-flash-lite） | 抽象化して差し替え可能 |
 | Embedding | Gemini Embedding API | 768次元ベクトル |
 | ニュース取得 | feedparser + httpx | Google News RSS + Hacker News API + Alpha Vantage |
 | 記事抽出 | trafilatura | 全文取得・解析 |
@@ -74,7 +74,6 @@ Redis ◄── taskiq worker (非同期タスク実行)
 - Docker Compose で一発起動
 
 ### Phase 2 — 本格化（完了）
-- 認証（NextAuth.js → Better Auth BFF に移行済み）
 - ユーザーごとのキーワードサブスクリプション・ウォッチリスト
 - taskiq + Redis によるタスクキュー分離
 - pgvector によるセマンティック検索・類似記事推薦
@@ -83,10 +82,25 @@ Redis ◄── taskiq worker (非同期タスク実行)
 - 重複記事検出・グループ化
 - ニュースソース管理（RSS + Hacker News API + Alpha Vantage）
 - 投資カテゴリ・キーワードカテゴリの多言語対応
-- Biome 導入（ESLint 廃止）
-- Next.js 14 → 16 アップグレード
+- Next.js 14 → 15 アップグレード
 
-### Phase 3 — 公開
+### Phase 2.5 — リファクタリング・基盤強化（進行中）
+
+Phase 3（公開）に向けた技術基盤の刷新。DB スキーマ再設計と認証移行を軸に、DDD・セキュリティ・開発体験を改善。
+
+- **DB スキーマ再設計**（6 段階マイグレーション）
+  - Phase 0-2: カテゴリ統合、キーワードテーブル刷新
+  - Phase 3: news_sources テーブル再設計
+  - Phase 4: news_articles + article_analyses 分離（コード切替完了）
+  - Phase 6a: Better Auth UUID 移行（コード完了、マイグレーション未実行）
+  - Phase 6b: watchlists → watchlist_entries（複合 PK、コード完了、マイグレーション未実行）
+- **認証移行**: NextAuth.js + JWT → Better Auth BFF Proxy（コード完了、DB マイグレーション未実行）
+- **Next.js 15 → 16 アップグレード**
+- **ESLint → Biome 移行**
+- **DDD 値オブジェクト導入**: CategorySlug, CategoryName, KeywordName
+- **XSS 対策強化**: CSP nonce ベースヘッダー、proxy middleware でのセキュリティヘッダー付与
+
+### Phase 3 — 公開（未着手）
 - Vercel + Railway / Fly.io デプロイ
 - レート制限・課金プラン
 - 通知機能（メール / LINE）
