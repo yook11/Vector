@@ -204,47 +204,62 @@ async def dispatch_pending(
     async with SQLModelAsyncSession(engine) as session:
         # Query 1: articles needing content fetch
         ids = (
-            await session.execute(
-                select(NewsArticle.id).where(
-                    NewsArticle.original_content.is_(None),
-                    NewsArticle.skip_content_fetch == False,  # noqa: E712
-                ).limit(100)
+            (
+                await session.execute(
+                    select(NewsArticle.id)
+                    .where(
+                        NewsArticle.original_content.is_(None),
+                        NewsArticle.skip_content_fetch == False,  # noqa: E712
+                    )
+                    .limit(100)
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         for article_id in ids:
             await fetch_content.kiq(article_id)
             dispatched["fetch_content"] += 1
 
         # Query 2: articles needing AI analysis
         ids = (
-            await session.execute(
-                select(NewsArticle.id)
-                .outerjoin(
-                    ArticleAnalysis,
-                    ArticleAnalysis.news_article_id == NewsArticle.id,
+            (
+                await session.execute(
+                    select(NewsArticle.id)
+                    .outerjoin(
+                        ArticleAnalysis,
+                        ArticleAnalysis.news_article_id == NewsArticle.id,
+                    )
+                    .where(
+                        NewsArticle.original_content.is_not(None),
+                        ArticleAnalysis.id.is_(None),
+                    )
+                    .limit(100)
                 )
-                .where(
-                    NewsArticle.original_content.is_not(None),
-                    ArticleAnalysis.id.is_(None),
-                ).limit(100)
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         for article_id in ids:
             await analyze_article.kiq(article_id)
             dispatched["analyze_article"] += 1
 
         # Query 3: articles needing embedding
         ids = (
-            await session.execute(
-                select(NewsArticle.id)
-                .join(
-                    ArticleAnalysis,
-                    ArticleAnalysis.news_article_id == NewsArticle.id,
+            (
+                await session.execute(
+                    select(NewsArticle.id)
+                    .join(
+                        ArticleAnalysis,
+                        ArticleAnalysis.news_article_id == NewsArticle.id,
+                    )
+                    .where(ArticleAnalysis.embedding.is_(None))
+                    .limit(100)
                 )
-                .where(ArticleAnalysis.embedding.is_(None))
-                .limit(100)
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         for article_id in ids:
             await generate_embedding.kiq(article_id)
             dispatched["generate_embedding"] += 1
@@ -277,9 +292,7 @@ async def fetch_content(
             return
 
         robots_cache = RobotsCache()
-        async with httpx.AsyncClient(
-            headers=HEADERS, timeout=HTTP_TIMEOUT
-        ) as client:
+        async with httpx.AsyncClient(headers=HEADERS, timeout=HTTP_TIMEOUT) as client:
             try:
                 content = await extract_content(
                     client, article.original_url, robots_cache
@@ -288,18 +301,14 @@ async def fetch_content(
                 article.skip_content_fetch = True
                 session.add(article)
                 await session.commit()
-                logger.info(
-                    "fetch_content_skip", article_id=article_id, reason=str(e)
-                )
+                logger.info("fetch_content_skip", article_id=article_id, reason=str(e))
                 return
             except TemporaryFetchError:
                 if _is_last_attempt(ctx):
                     article.skip_content_fetch = True
                     session.add(article)
                     await session.commit()
-                    logger.warning(
-                        "fetch_content_max_retries", article_id=article_id
-                    )
+                    logger.warning("fetch_content_max_retries", article_id=article_id)
                     return
                 raise
 
@@ -359,9 +368,7 @@ async def analyze_article(
                 article.skip_content_fetch = True
                 session.add(article)
                 await session.commit()
-                logger.warning(
-                    "analyze_article_max_retries", article_id=article_id
-                )
+                logger.warning("analyze_article_max_retries", article_id=article_id)
                 return
             raise
         except AnalysisError as e:
@@ -404,9 +411,7 @@ async def generate_embedding(
         ).scalar_one_or_none()
 
         if analysis is None:
-            logger.warning(
-                "generate_embedding_no_analysis", article_id=article_id
-            )
+            logger.warning("generate_embedding_no_analysis", article_id=article_id)
             return
 
         # Idempotency guard

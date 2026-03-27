@@ -103,7 +103,7 @@ def print_comparison(
     error: str | None,
 ) -> dict:
     """Print side-by-side comparison and return stats."""
-    title_display = article.title_original[:60]
+    title_display = article.original_title[:60]
     print(f"\n{'=' * 70}")
     print(f"  Article {idx}/{total}: {title_display}")
     print(f"{'=' * 70}")
@@ -182,7 +182,7 @@ async def main(count: int) -> None:
                     AnalysisResult.translations
                 )
             )
-            .order_by(NewsArticle.fetched_at.desc())  # type: ignore[union-attr]
+            .order_by(NewsArticle.created_at.desc())  # type: ignore[union-attr]
             .limit(count)
         )
         result = await session.execute(stmt)
@@ -209,8 +209,8 @@ async def main(count: int) -> None:
             content_section = f"\nArticle full text:\n{truncated}\n"
 
         prompt = ANALYSIS_PROMPT_BASE.format(
-            title=article.title_original,
-            description=article.description_original or "(no description available)",
+            title=article.original_title,
+            description=article.original_description or "(no description available)",
             content_section=content_section,
         )
 
