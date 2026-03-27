@@ -1,13 +1,19 @@
 # Phase 2 実装計画
 
-> **ステータス: 全ステップ完了**
+> **ステータス: 全ステップ完了（計画凍結）**
 >
 > このドキュメントは Phase 2 の計画段階で作成されたものです。
-> 実装時に一部変更が発生しています:
+> 実装の実態は `archive/03_CLAUDE_CODE_WORKFLOW.md` の Phase 2 タスク分解セクションを参照してください。
+>
+> **計画と実装の主な差異:**
 > - 記事全文取得: newspaper4k → **trafilatura** に変更
-> - 認証: Phase 2 完了後に NextAuth.js → **Better Auth BFF** に移行（別ブランチ）
 > - タスクキュー: **taskiq** を選定（PoC 結果は `05b_TASKQUEUE_POC_REPORT.md` 参照）
+> - 認証: Phase 2 完了後に NextAuth.js → **Better Auth BFF** に移行（Phase 2.5 で実施）
 > - 記事全文取得の制限文字数は `CONTENT_MAX_LENGTH` (config.py) で管理
+> - Embedding モデル: `text-embedding-004` → **gemini-embedding-001** (768次元)
+> - DB カラム名: 計画時の `title_original` / `description_original` → 実装では `original_title` / `original_url` 等に変更（Phase 2.5 DB再設計で統一）
+> - セマンティック検索: `searchMode` パラメータは不採用、`q` パラメータでセマンティック検索を実行
+> - `/api/v1/tasks/{task_id}` エンドポイントは不採用（taskiq の内部管理で代替）
 
 ## 前提
 

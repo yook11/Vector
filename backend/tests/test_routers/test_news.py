@@ -23,14 +23,9 @@ async def _create_article(
 ) -> NewsArticle:
     """Helper to create a news article."""
     article = NewsArticle(
-        # New primary columns (NOT NULL)
         original_title=title,
         original_url=url,
         news_source_id=source.id,
-        # Legacy columns (NOT NULL, removed in Step 5)
-        title_original=title,
-        url=url,
-        source=source.name,
         published_at=published_at or datetime.now(UTC),
     )
     session.add(article)
@@ -284,7 +279,7 @@ class TestFetchNews:
         mock_task_handle.task_id = "test-task-id-123"
 
         with patch(
-            "app.routers.news.fetch_and_analyze_task",
+            "app.routers.news.fetch_metadata",
         ) as mock_task:
             mock_task.kiq = AsyncMock(return_value=mock_task_handle)
             resp = await admin_client.post("/api/v1/news/fetch")
@@ -301,7 +296,7 @@ class TestFetchNews:
         mock_task_handle.task_id = "test-task-id-456"
 
         with patch(
-            "app.routers.news.fetch_and_analyze_task",
+            "app.routers.news.fetch_metadata",
         ) as mock_task:
             mock_task.kiq = AsyncMock(return_value=mock_task_handle)
             resp = await admin_client.post(

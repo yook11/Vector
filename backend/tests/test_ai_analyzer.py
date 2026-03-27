@@ -56,14 +56,11 @@ def _create_analyzer() -> GeminiAnalyzer:
 
 
 def _create_article(source: NewsSource) -> NewsArticle:
-    """Create a NewsArticle with both old and new columns."""
+    """Create a NewsArticle for testing."""
     return NewsArticle(
         original_title="Quantum Breakthrough",
         original_url="https://example.com/quantum",
         news_source_id=source.id,
-        title_original="Quantum Breakthrough",
-        url="https://example.com/quantum",
-        source="Test Source",
         published_at=datetime.now(UTC),
     )
 
@@ -188,9 +185,6 @@ async def test_analyze_article_creates_analysis(
         original_title="Quantum Breakthrough",
         original_url="https://example.com/quantum",
         news_source_id=sample_source.id,
-        title_original="Quantum Breakthrough",
-        url="https://example.com/quantum",
-        source="Google News",
         published_at=datetime.now(UTC),
     )
     db_session.add(article)
@@ -227,9 +221,6 @@ async def test_analyze_article_skips_already_analyzed(
         original_title="Old Article",
         original_url="https://example.com/old",
         news_source_id=sample_source.id,
-        title_original="Old Article",
-        url="https://example.com/old",
-        source="Google News",
         published_at=datetime.now(UTC),
     )
     db_session.add(article)
@@ -266,9 +257,6 @@ async def test_analyze_articles_batch(
             original_title=f"Article {i}",
             original_url=f"https://example.com/batch-{i}",
             news_source_id=sample_source.id,
-            title_original=f"Article {i}",
-            url=f"https://example.com/batch-{i}",
-            source="Google News",
             published_at=datetime.now(UTC),
         )
         db_session.add(a)
@@ -310,9 +298,6 @@ async def test_analyze_articles_handles_errors(
             original_title=f"Article {i}",
             original_url=f"https://example.com/err-{i}",
             news_source_id=sample_source.id,
-            title_original=f"Article {i}",
-            url=f"https://example.com/err-{i}",
-            source="Google News",
             published_at=datetime.now(UTC),
         )
         db_session.add(a)
@@ -374,9 +359,6 @@ async def test_news_endpoint_includes_analysis(
         original_title="Test Article",
         original_url="https://example.com/integration-test",
         news_source_id=sample_source.id,
-        title_original="Test Article",
-        url="https://example.com/integration-test",
-        source="Google News",
         published_at=datetime.now(UTC),
     )
     db_session.add(article)
@@ -457,9 +439,6 @@ async def test_analyze_article_saves_keyword_links(
         original_title="Quantum Error Correction",
         original_url="https://example.com/kw-tag-test",
         news_source_id=sample_source.id,
-        title_original="Quantum Error Correction",
-        url="https://example.com/kw-tag-test",
-        source="Test Source",
         published_at=datetime.now(UTC),
     )
     db_session.add(article)

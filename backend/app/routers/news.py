@@ -9,7 +9,6 @@ from sqlmodel import func, select
 from app.config import settings
 from app.dependencies import CurrentUser, get_admin_user, get_optional_user, get_session
 from app.models.analysis import ArticleAnalysis, ImpactLevel
-from app.models.article_group import ArticleGroup
 from app.models.associations import ArticleKeyword
 from app.models.keyword import Keyword
 from app.models.news import NewsArticle
@@ -25,7 +24,7 @@ from app.schemas.news import (
     PaginatedNewsResponse,
 )
 from app.services.embedding import EmbeddingError, embed_articles, embed_search_query
-from app.tasks.taskiq_worker import fetch_and_analyze_task
+from app.tasks.pipeline_tasks import fetch_metadata
 
 router = APIRouter(prefix="/api/v1/news", tags=["news"])
 
@@ -87,10 +86,6 @@ def _build_news_response(
             analyzed_at=a.analyzed_at,
         )
 
-    # Duplicate group info (legacy -- removed in Step 5)
-    group = getattr(article, "article_group", None)
-    dup_count = (group.article_count - 1) if group else 0
-
     return NewsResponse(
         id=article.id,
         original_title=article.original_title,
@@ -102,8 +97,6 @@ def _build_news_response(
         keywords=keywords,
         analysis=analysis,
         is_watched=article.id in watched_ids if watched_ids else False,
-        duplicate_count=dup_count,
-        article_group_id=article.article_group_id,
     )
 
 
@@ -115,7 +108,6 @@ def _news_eager_options() -> list:
         selectinload(NewsArticle.article_keywords)
         .selectinload(ArticleKeyword.keyword)
         .selectinload(Keyword.category),
-        selectinload(NewsArticle.article_group),
     ]
 
 
@@ -125,7 +117,6 @@ async def list_news(
     kw_category_id: int | None = Query(None, alias="kwCategoryId"),
     source_id: int | None = Query(None, alias="sourceId"),
     impact_level: ImpactLevel | None = Query(None, alias="impactLevel"),
-    deduplicated: bool = Query(True),
     q: str | None = Query(None, min_length=1, max_length=500),
     sort_by: str = Query("publishedAt", alias="sortBy"),
     sort_order: str = Query("desc", alias="sortOrder"),
@@ -157,16 +148,6 @@ async def list_news(
         stmt = stmt.where(ArticleAnalysis.embedding.is_not(None))
         distance_expr = ArticleAnalysis.embedding.cosine_distance(query_embedding)
         stmt = stmt.where(distance_expr < settings.semantic_search_max_distance)
-
-    # Deduplication: show only canonical articles from groups
-    if deduplicated:
-        canonical_ids = select(ArticleGroup.canonical_id).where(
-            ArticleGroup.canonical_id.is_not(None)
-        )
-        stmt = stmt.where(
-            (NewsArticle.article_group_id.is_(None))
-            | (NewsArticle.id.in_(canonical_ids))
-        )
 
     if source_id is not None:
         stmt = stmt.where(NewsArticle.news_source_id == source_id)
@@ -327,37 +308,6 @@ async def get_similar_news(
     return [_build_news_response(a) for a in articles]
 
 
-@router.get(
-    "/groups/{group_id}",
-    response_model=list[NewsResponse],
-    summary="Get all articles in a duplicate group",
-)
-async def get_group_articles(
-    group_id: int,
-    user: CurrentUser | None = Depends(get_optional_user),
-    session: AsyncSession = Depends(get_session),
-) -> list[NewsResponse]:
-    """Return all articles belonging to a duplicate article group."""
-    group = await session.get(ArticleGroup, group_id)
-    if group is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Article group not found",
-        )
-
-    stmt = (
-        select(NewsArticle)
-        .where(NewsArticle.article_group_id == group_id)
-        .options(*_news_eager_options())
-        .order_by(NewsArticle.published_at.asc().nulls_last())
-    )
-    result = await session.execute(stmt)
-    articles = result.unique().scalars().all()
-
-    watched_ids = await _get_watched_ids(session, user)
-    return [_build_news_response(a, watched_ids) for a in articles]
-
-
 @router.get("/{news_id}", response_model=NewsResponse)
 async def get_news(
     news_id: int,
@@ -393,7 +343,7 @@ async def fetch_news(
 ) -> NewsFetchResponse:
     """Enqueue a news fetch task. Returns immediately with a task ID."""
     source_ids = body.source_ids if body else None
-    task = await fetch_and_analyze_task.kiq(source_ids=source_ids)
+    task = await fetch_metadata.kiq(source_ids=source_ids)
 
     return NewsFetchResponse(
         message="Fetch task submitted",

@@ -168,15 +168,6 @@ export async function removeFromWatchlist(
   });
 }
 
-/** Fetch all articles in a duplicate group. */
-export async function getGroupArticles(
-  groupId: number,
-): Promise<NewsResponse[]> {
-  return fetchApi<NewsResponse[]>(`/news/groups/${groupId}`, {
-    cache: "no-store",
-  });
-}
-
 /** Fetch articles semantically similar to the given article. */
 export async function getSimilarNews(
   id: number,

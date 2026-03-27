@@ -5,11 +5,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import func, select
 
 from app.dependencies import get_session
-from app.models.article_group import ArticleGroup
 from app.models.associations import ArticleKeyword
 from app.models.category import Category
 from app.models.keyword import Keyword
-from app.models.news import NewsArticle
 from app.schemas.category import (
     CategoryDetailListResponse,
     CategoryDetailResponse,
@@ -24,14 +22,6 @@ async def list_categories(
     session: AsyncSession = Depends(get_session),
 ) -> CategoryDetailListResponse:
     """List all categories with nested keywords and article counts."""
-
-    # 0. Subquery: visible article IDs after deduplication
-    canonical_ids = select(ArticleGroup.canonical_id).where(
-        ArticleGroup.canonical_id.is_not(None)
-    )
-    visible_article_ids = select(NewsArticle.id).where(
-        (NewsArticle.article_group_id.is_(None)) | (NewsArticle.id.in_(canonical_ids))
-    )
 
     # 1. Fetch categories (name is a direct column)
     cat_stmt = select(Category.id, Category.slug, Category.name).order_by(Category.slug)
@@ -48,11 +38,7 @@ async def list_categories(
                 "article_count"
             ),
         )
-        .outerjoin(
-            ArticleKeyword,
-            (ArticleKeyword.keyword_id == Keyword.id)
-            & (ArticleKeyword.news_article_id.in_(visible_article_ids)),
-        )
+        .outerjoin(ArticleKeyword, ArticleKeyword.keyword_id == Keyword.id)
         .group_by(Keyword.category_id, Keyword.id, Keyword.name)
         .order_by(Keyword.name)
     )
@@ -68,7 +54,6 @@ async def list_categories(
             ),
         )
         .join(ArticleKeyword, ArticleKeyword.keyword_id == Keyword.id)
-        .where(ArticleKeyword.news_article_id.in_(visible_article_ids))
         .group_by(Keyword.category_id)
     )
     cat_count_result = await session.execute(cat_count_stmt)

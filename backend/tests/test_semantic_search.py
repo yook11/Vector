@@ -45,12 +45,6 @@ async def _create_article(
         original_url=url,
         news_source_id=source.id,
         published_at=datetime.now(UTC),
-        # Legacy columns (NOT NULL)
-        title_original=title,
-        url=url,
-        source=source.name,
-        source_id=source.id,
-        fetched_at=datetime.now(UTC),
     )
     db_session.add(article)
     await db_session.flush()

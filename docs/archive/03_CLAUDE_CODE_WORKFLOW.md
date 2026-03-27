@@ -1,4 +1,4 @@
-# Claude Code 開発ワークフロー & タスク分解 (v3)
+# Claude Code 開発ワークフロー & タスク分解 (v4)
 
 ## 開発の進め方
 
@@ -46,7 +46,7 @@ Step B: ユーザー機能                      ✅
   (subscriptions, watchlist)
   ↓
 Step C: 記事全文取得                      ✅
-  (newspaper4k + content_extractor)
+  (trafilatura + content_extractor)
   ↓
 Step D: タスクキュー                      ✅
   (taskiq + Redis, APScheduler 撤去)
@@ -165,7 +165,7 @@ CLAUDE.md: backend/CLAUDE.md を参照
 
 成果物:
   - ai_analyzer.py (BaseAnalyzer 抽象クラス)
-  - gemini_analyzer.py (Gemini API 実装, gemini-2.5-flash)
+  - gemini_analyzer.py (Gemini API 実装, gemini-2.5-flash-lite)
   - tests/test_ai_analyzer.py (モックAPI)
 検証:
   - 英語記事 → 日本語翻訳・要約・センチメント
@@ -244,28 +244,34 @@ DB:
   - Alembic: b1_better_auth_schema_migration (users/refresh_tokens 削除, user_id 型変更)
 ```
 
-### Step B: ユーザー機能 (subscriptions, watchlist) ✅
+### Step B: ユーザー機能 (watchlist) ✅
+
+※ subscriptions 機能は Phase 2.5 で撤去済み（user_keyword_subscriptions テーブル → レガシー）
+
 ```
 バックエンド:
-  - models/user_keyword.py (UserKeywordSubscription)
-  - models/watchlist.py (WatchlistItem)
-  - schemas/user.py (SubscriptionCreate/Response, WatchlistCreate/Response)
-  - routers/me.py (subscriptions CRUD, watchlist CRUD)
+  - models/watchlist.py (WatchlistEntry, 複合PK: user_id + news_article_id)
+  - schemas/user.py (WatchlistCreate/Response)
+  - routers/me.py (watchlist CRUD)
 
 フロントエンド:
   - lib/client-api.ts (クライアントサイドAPI, セッションデデュプリケーション)
-  - components/keywords/SubscriptionToggle.tsx
   - components/news/WatchlistButton.tsx
   - app/(protected)/watchlist/page.tsx
 
+削除済み:
+  - models/user_keyword.py (UserKeywordSubscription)
+  - components/keywords/SubscriptionToggle.tsx
+
 Alembic:
-  - dc3cc7a3c587: user_keyword_subscriptions, watchlists テーブル
+  - dc3cc7a3c587: user_keyword_subscriptions, watchlists テーブル（初期）
+  - Phase 6b: watchlists → watchlist_entries（複合PK、user_id: UUID）
 ```
 
 ### Step C: 記事全文取得 (content_extractor) ✅
 ```
 バックエンド:
-  - services/content_extractor.py (newspaper4k, robots.txtチェック, ドメイン別レート制限)
+  - services/content_extractor.py (trafilatura, robots.txtチェック, ドメイン別レート制限)
   - news_articles に content, content_fetched_at カラム追加
   - tests/test_content_extractor.py
 
@@ -310,6 +316,136 @@ Alembic:
 
 Alembic:
   - 4bf262125474: pgvector拡張 + embedding カラム + HNSWインデックス
+```
+
+## Phase 2.5 フロー図（進行中）
+
+```
+Step F: DB再設計 Phase 0-2                  ✅
+  (カテゴリ統合、キーワード刷新)
+  ↓
+Step G: DB再設計 Phase 3                    ✅
+  (news_sources テーブル再設計)
+  ↓
+Step H: DB再設計 Phase 4                    ✅
+  (news_articles + article_analyses 分離)
+  ↓
+Step I: Better Auth UUID移行 (Phase 6a)     ✅ (コード完了、マイグレーション未実行)
+  ↓
+Step J: watchlist_entries (Phase 6b)        ✅ (コード完了、マイグレーション未実行)
+  ↓
+Step K: Next.js 15 → 16 + ESLint → Biome   ✅
+  ↓
+Step L: DDD 値オブジェクト + XSS対策        ✅
+```
+
+## Phase 2.5 タスク分解（進行中）
+
+### Step F: DB再設計 Phase 0-2（カテゴリ統合・キーワード刷新）✅
+```
+対象: backend/app/models/, backend/alembic/
+ドキュメント: specs/db-redesign.md, docs/02_DATABASE_DESIGN.md
+
+成果物:
+  - models/category.py: Category (投資カテゴリ + キーワードカテゴリ統合)
+  - models/keyword.py: Keyword (status, is_ai_generated 追加)
+  - models/associations.py: ArticleKeyword (複合PK)
+  - 削除: models/investment_category.py, models/keyword_category.py
+
+レガシー化:
+  - investment_categories, keyword_categories テーブル（Phase 5 で DROP 予定）
+
+Alembic:
+  - c1: categories 統合テーブル作成
+  - c2: keywords テーブル刷新
+```
+
+### Step G: DB再設計 Phase 3（news_sources テーブル再設計）✅
+```
+対象: backend/app/models/news_source.py, backend/app/services/source_helpers.py
+
+成果物:
+  - models/news_source.py: NewsSource (source_type, site_url, endpoint_url, is_active)
+  - services/source_helpers.py: ソース共通ヘルパー
+  - schemas/news_source.py: NewsSourceCreate/Update/Response
+  - routers/news_sources.py: /api/v1/sources (CRUD, admin限定)
+
+Alembic:
+  - c3: news_sources テーブル再設計
+```
+
+### Step H: DB再設計 Phase 4（news_articles + article_analyses 分離）✅
+```
+対象: backend/app/models/news.py, backend/app/models/analysis.py
+ドキュメント: plans/migration/phase4-news-articles-and-article-analyses.md
+
+成果物:
+  - models/news.py: NewsArticle (original_title, original_url, news_source_id, article_group_id)
+  - models/analysis.py: ArticleAnalysis (1:1 分離、translated_title_ja, summary_ja, impact_level)
+  - models/article_group.py: ArticleGroup (重複記事グループ)
+  - models/fetch_log.py: FetchLog
+  - 全ルーター・サービス・フロントエンドのコード切替完了
+
+レガシー化:
+  - 旧カラム (title_original, url, source 等) は Phase 5 で DROP 予定
+
+Alembic:
+  - c4: news_articles 新カラム追加
+  - c5: article_analyses テーブル作成
+  - c6: article_groups テーブル作成
+  - c7: fetch_logs テーブル作成
+```
+
+### Step I: Better Auth UUID移行（Phase 6a）✅
+```
+対象: backend/app/models/, backend/app/dependencies.py
+ドキュメント: plans/migration/phase6a-uuid-migration.md
+
+成果物:
+  - models/auth_ref.py: AuthUserRef (Better Auth user FK参照)
+  - dependencies.py: user_id を UUID 型で扱う
+  - watchlist_entries, keyword テーブルの user_id を UUID に変更
+
+ステータス: コード完了、DBマイグレーション未実行
+```
+
+### Step J: watchlist_entries 複合PK（Phase 6b）✅
+```
+対象: backend/app/models/watchlist.py, backend/app/schemas/user.py
+ドキュメント: plans/migration/phase6b-watchlist-entries.md
+
+成果物:
+  - models/watchlist.py: WatchlistEntry (user_id: UUID + news_article_id 複合PK)
+  - schemas/user.py: WatchlistCreate/Response (UUID対応)
+  - routers/me.py: watchlist CRUD (複合PK対応)
+
+ステータス: コード完了、DBマイグレーション未実行
+```
+
+### Step K: Next.js 15 → 16 + ESLint → Biome ✅
+```
+対象: frontend/
+
+成果物:
+  - Next.js 16 (App Router) にアップグレード
+  - ESLint を完全撤去、Biome に移行
+  - biome.json: lint/format 設定
+  - package.json: 依存関係更新
+
+削除:
+  - .eslintrc.json, eslint 関連パッケージ
+```
+
+### Step L: DDD 値オブジェクト + XSS対策 ✅
+```
+対象: backend/app/domain/, frontend/src/proxy.ts
+
+成果物:
+  - domain/category.py: CategorySlug, CategoryName 値オブジェクト
+  - domain/keyword.py: KeywordName 値オブジェクト
+  - utils/sanitize.py: XSSサニタイズ (bleach)
+  - utils/redis_cache.py: Redisキャッシュヘルパー
+  - proxy.ts: CSP nonce ベースヘッダー + セキュリティヘッダー
 ```
 
 ## エラー発生時のフロー

@@ -155,55 +155,38 @@ async def _fetch_rss_source(
         result.error_message = f"Parse error: {feed.bozo_exception}"
         return result
 
-    # Collect guids for batch dedup check
-    entry_guids: list[tuple[dict, str]] = []
+    # Collect entries with URLs for batch dedup
+    entry_urls: list[tuple[dict, str]] = []
     for entry in feed.entries:
-        guid = _extract_guid(entry)
-        if guid:
-            entry_guids.append((entry, guid))
+        url = entry.get("link", "") or _extract_guid(entry) or ""
+        if url:
+            entry_urls.append((entry, url))
 
-    if not entry_guids:
+    if not entry_urls:
         return result
 
-    # Batch dedup: check existing guids
-    guids = [g for _, g in entry_guids]
-    existing_guids: set[str] = set()
-    # Query in chunks to avoid overly large IN clauses
-    chunk_size = 500
-    for i in range(0, len(guids), chunk_size):
-        chunk = guids[i : i + chunk_size]
-        stmt = select(NewsArticle.guid).where(NewsArticle.guid.in_(chunk))
-        rows = await session.execute(stmt)
-        existing_guids.update(row[0] for row in rows.all())
-
-    # Also check by URL for entries where guid == link (fallback dedup)
-    urls = [entry.get("link", "") for entry, _ in entry_guids if entry.get("link")]
+    # Batch dedup: check existing URLs
+    urls = [u for _, u in entry_urls]
     existing_urls: set[str] = set()
-    if urls:
-        for i in range(0, len(urls), chunk_size):
-            chunk = urls[i : i + chunk_size]
-            stmt = select(NewsArticle.original_url).where(
-                NewsArticle.original_url.in_(chunk)
-            )
-            rows = await session.execute(stmt)
-            existing_urls.update(row[0] for row in rows.all())
+    chunk_size = 500
+    for i in range(0, len(urls), chunk_size):
+        chunk = urls[i : i + chunk_size]
+        stmt = select(NewsArticle.original_url).where(
+            NewsArticle.original_url.in_(chunk)
+        )
+        rows = await session.execute(stmt)
+        existing_urls.update(row[0] for row in rows.all())
 
     # Create new articles
     max_new = settings.max_articles_per_fetch
     new_count = 0
 
-    for entry, guid in entry_guids:
-        if guid in existing_guids:
-            result.skipped_count += 1
-            continue
-
-        entry_url = entry.get("link", "")
-        if entry_url and entry_url in existing_urls:
+    for entry, article_url in entry_urls:
+        if article_url in existing_urls:
             result.skipped_count += 1
             continue
 
         # --- URL validation: reject articles with unsafe URL schemes ---
-        article_url = entry_url if entry_url else guid
         if not is_safe_url(article_url):
             logger.warning(
                 "unsafe_url_skipped",
@@ -220,36 +203,24 @@ async def _fetch_rss_source(
         title = strip_html_tags(entry.get("title", ""))[:500]
         description = strip_html_tags(entry.get("summary") or entry.get("description"))
         full_content = _extract_full_content(entry)
-        now = datetime.now(UTC)
 
         article = NewsArticle(
-            # New columns
             original_title=title,
             original_description=description,
             original_url=article_url,
             news_source_id=source.id,
             published_at=_parse_published_date(entry),
-            # Legacy columns (DB NOT NULL, removed in Step 5)
-            title_original=title,
-            url=article_url,
-            source=source.name,
-            source_id=source.id,
-            guid=guid,
         )
 
         # If RSS provides full content, store it immediately
         if full_content:
             truncated = full_content[: settings.content_max_length]
             article.original_content = truncated
-            article.content = truncated
-            article.content_fetched_at = now
 
         session.add(article)
         new_count += 1
         # Track URL so later entries in same feed don't duplicate
-        if entry_url:
-            existing_urls.add(entry_url)
-        existing_guids.add(guid)
+        existing_urls.add(article_url)
 
     result.new_count = new_count
     return result

@@ -12,7 +12,6 @@ from app.models.news import NewsArticle
 from app.models.news_source import NewsSource
 from app.services.alpha_vantage import (
     AlphaVantageClient,
-    _make_guid,
     _parse_av_time,
 )
 
@@ -49,19 +48,6 @@ def test_parse_av_time_without_seconds() -> None:
     """Parse fallback YYYYMMDDTHHMM format."""
     result = _parse_av_time("20260305T1430")
     assert result == datetime(2026, 3, 5, 14, 30, 0, tzinfo=UTC)
-
-
-def test_make_guid_deterministic() -> None:
-    """Same URL always produces the same guid."""
-    url = "https://example.com/article-1"
-    assert _make_guid(url) == _make_guid(url)
-    assert _make_guid(url).startswith("av:")
-    assert len(_make_guid(url)) == 3 + 16  # "av:" + 16 hex chars
-
-
-def test_make_guid_different_urls() -> None:
-    """Different URLs produce different guids."""
-    assert _make_guid("https://a.com") != _make_guid("https://b.com")
 
 
 @pytest.mark.asyncio
@@ -124,9 +110,7 @@ async def test_av_fetch_saves_articles(
     assert "AI Breakthrough in Chip Design" in titles
     assert "Quantum Computing Milestone" in titles
 
-    # Check both new and legacy columns
     for a in articles:
-        assert a.guid.startswith("av:")
         assert a.original_url is not None
         assert a.news_source_id == sample_av_source.id
 
@@ -143,13 +127,6 @@ async def test_av_fetch_skips_duplicates(
         original_title="Existing",
         original_url=existing_url,
         news_source_id=sample_av_source.id,
-        # Legacy columns (NOT NULL)
-        title_original="Existing",
-        url=existing_url,
-        source=sample_av_source.name,
-        source_id=sample_av_source.id,
-        guid=_make_guid(existing_url),
-        fetched_at=datetime.now(UTC),
     )
     db_session.add(existing)
     await db_session.commit()

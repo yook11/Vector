@@ -156,26 +156,6 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
-  "/api/v1/news/groups/{group_id}": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    /**
-     * Get all articles in a duplicate group
-     * @description Return all articles belonging to a duplicate article group.
-     */
-    get: operations["get_group_articles_api_v1_news_groups__group_id__get"];
-    put?: never;
-    post?: never;
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
   "/api/v1/news/{news_id}": {
     parameters: {
       query?: never;
@@ -521,13 +501,6 @@ export interface components {
        * @default false
        */
       isWatched: boolean;
-      /**
-       * Duplicatecount
-       * @default 0
-       */
-      duplicateCount: number;
-      /** Articlegroupid */
-      articleGroupId?: number | null;
     };
     /**
      * NewsSourceCreate
@@ -918,7 +891,6 @@ export interface operations {
         kwCategoryId?: number | null;
         sourceId?: number | null;
         impactLevel?: components["schemas"]["ImpactLevel"] | null;
-        deduplicated?: boolean;
         q?: string | null;
         sortBy?: string;
         sortOrder?: string;
@@ -979,37 +951,6 @@ export interface operations {
       header?: never;
       path: {
         news_id: number;
-      };
-      cookie?: never;
-    };
-    requestBody?: never;
-    responses: {
-      /** @description Successful Response */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["NewsResponse"][];
-        };
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
-        };
-      };
-    };
-  };
-  get_group_articles_api_v1_news_groups__group_id__get: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path: {
-        group_id: number;
       };
       cookie?: never;
     };

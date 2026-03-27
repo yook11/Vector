@@ -163,7 +163,7 @@ async def test_save_new_stories(
     sample_hn_source: NewsSource,
     mock_http_client: AsyncMock,
 ) -> None:
-    """New HN stories should be saved to news_articles with hn:{id} guid."""
+    """New HN stories should be saved to news_articles."""
     mock_http_client.get.return_value = _mock_hn_response()
 
     hn_client = HackerNewsClient(mock_http_client)
@@ -179,51 +179,11 @@ async def test_save_new_stories(
     articles = (await db_session.execute(select(NewsArticle))).scalars().all()
     assert len(articles) == 2
 
-    guids = {a.guid for a in articles}
-    assert "hn:47139675" in guids
-    assert "hn:47140001" in guids
-
     for article in articles:
-        assert article.source == "Hacker News"
         assert article.news_source_id == sample_hn_source.id
         assert article.original_url is not None
         assert article.original_title is not None
         assert article.published_at is not None
-
-
-async def test_skip_duplicate_guid(
-    db_session: AsyncSession,
-    sample_hn_source: NewsSource,
-    mock_http_client: AsyncMock,
-) -> None:
-    """Articles with existing guid should be skipped."""
-    existing = NewsArticle(
-        original_title="Existing HN Article",
-        original_url="https://www.calebleak.com/posts/dog-game/",
-        news_source_id=sample_hn_source.id,
-        # Legacy columns (NOT NULL)
-        title_original="Existing HN Article",
-        url="https://www.calebleak.com/posts/dog-game/",
-        source="Hacker News",
-        source_id=sample_hn_source.id,
-        guid="hn:47139675",
-    )
-    db_session.add(existing)
-    await db_session.commit()
-
-    mock_http_client.get.return_value = _mock_hn_response()
-
-    hn_client = HackerNewsClient(mock_http_client)
-    result = await hn_client.fetch_and_save_stories(
-        source=sample_hn_source, session=db_session
-    )
-    await db_session.commit()
-
-    assert result.new_count == 1
-    assert result.skipped_count == 1
-
-    articles = (await db_session.execute(select(NewsArticle))).scalars().all()
-    assert len(articles) == 2
 
 
 async def test_skip_duplicate_url(
@@ -236,11 +196,6 @@ async def test_skip_duplicate_url(
         original_title="Same article from RSS",
         original_url="https://www.calebleak.com/posts/dog-game/",
         news_source_id=sample_hn_source.id,
-        # Legacy columns (NOT NULL)
-        title_original="Same article from RSS",
-        url="https://www.calebleak.com/posts/dog-game/",
-        source="Some RSS Feed",
-        guid="rss:some-guid-123",
     )
     db_session.add(existing)
     await db_session.commit()

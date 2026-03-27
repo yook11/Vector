@@ -85,14 +85,9 @@ class TestListCategories:
         from app.models.news import NewsArticle
 
         article = NewsArticle(
-            # New primary columns (NOT NULL)
             original_title="TF Article",
             original_url="https://example.com/tf",
             news_source_id=sample_source.id,
-            # Legacy columns (NOT NULL, removed in Step 5)
-            title_original="TF Article",
-            url="https://example.com/tf",
-            source="Test",
         )
         db_session.add(article)
         await db_session.flush()
