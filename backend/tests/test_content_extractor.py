@@ -1,7 +1,6 @@
 """Tests for the content extractor service."""
 
 import asyncio
-from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -14,7 +13,9 @@ from app.models.news_source import NewsSource
 from app.services.content_extractor import (
     ContentExtractionResult,
     DomainRateLimiter,
+    PermanentFetchError,
     RobotsCache,
+    TemporaryFetchError,
     _parse_article_html,
     extract_content,
     extract_contents,
@@ -87,7 +88,7 @@ class TestExtractContent:
         assert len(result) > 50
 
     @pytest.mark.asyncio
-    async def test_returns_none_on_http_error(self) -> None:
+    async def test_raises_permanent_on_403(self) -> None:
         client = AsyncMock(spec=httpx.AsyncClient)
         robots_resp = httpx.Response(
             404,
@@ -105,8 +106,45 @@ class TestExtractContent:
         client.get = AsyncMock(side_effect=[robots_resp, error_resp])
 
         robots = RobotsCache()
-        result = await extract_content(client, "https://example.com/paywall", robots)
-        assert result is None
+        with pytest.raises(PermanentFetchError, match="403"):
+            await extract_content(client, "https://example.com/paywall", robots)
+
+    @pytest.mark.asyncio
+    async def test_raises_temporary_on_500(self) -> None:
+        client = AsyncMock(spec=httpx.AsyncClient)
+        robots_resp = httpx.Response(
+            404,
+            request=httpx.Request("GET", "https://example.com/robots.txt"),
+        )
+        error_resp = httpx.Response(
+            500,
+            request=httpx.Request("GET", "https://example.com/error"),
+        )
+        error_resp.raise_for_status = lambda: (_ for _ in ()).throw(
+            httpx.HTTPStatusError(
+                "500", request=error_resp.request, response=error_resp
+            )
+        )
+        client.get = AsyncMock(side_effect=[robots_resp, error_resp])
+
+        robots = RobotsCache()
+        with pytest.raises(TemporaryFetchError, match="500"):
+            await extract_content(client, "https://example.com/error", robots)
+
+    @pytest.mark.asyncio
+    async def test_raises_temporary_on_request_error(self) -> None:
+        client = AsyncMock(spec=httpx.AsyncClient)
+        robots_resp = httpx.Response(
+            404,
+            request=httpx.Request("GET", "https://example.com/robots.txt"),
+        )
+        client.get = AsyncMock(
+            side_effect=[robots_resp, httpx.ConnectTimeout("timed out")]
+        )
+
+        robots = RobotsCache()
+        with pytest.raises(TemporaryFetchError, match="timed out"):
+            await extract_content(client, "https://example.com/slow", robots)
 
     @pytest.mark.asyncio
     async def test_returns_none_for_non_html(self) -> None:
@@ -128,7 +166,7 @@ class TestExtractContent:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_respects_robots_txt(self) -> None:
+    async def test_raises_permanent_on_robots_blocked(self) -> None:
         client = AsyncMock(spec=httpx.AsyncClient)
         robots_content = "User-agent: *\nDisallow: /private/"
         robots_resp = httpx.Response(
@@ -138,10 +176,10 @@ class TestExtractContent:
         )
         client.get = AsyncMock(return_value=robots_resp)
 
-        result = await extract_content(
-            client, "https://example.com/private/article", RobotsCache()
-        )
-        assert result is None
+        with pytest.raises(PermanentFetchError, match="robots.txt"):
+            await extract_content(
+                client, "https://example.com/private/article", RobotsCache()
+            )
 
     @pytest.mark.asyncio
     async def test_caches_robots_txt(self) -> None:
@@ -180,11 +218,6 @@ class TestExtractContents:
             original_title="Test Article",
             original_url="https://example.com/test",
             news_source_id=sample_source.id,
-            # Legacy columns (NOT NULL)
-            title_original="Test Article",
-            url="https://example.com/test",
-            source="Test",
-            fetched_at=datetime.now(UTC),
         )
         db_session.add(article)
         await db_session.commit()
@@ -208,9 +241,7 @@ class TestExtractContents:
         assert result.error_count == 0
 
         await db_session.refresh(article)
-        assert article.content is not None
         assert article.original_content is not None
-        assert article.content_fetched_at is not None
 
     @pytest.mark.asyncio
     async def test_handles_extraction_failure(
@@ -220,11 +251,6 @@ class TestExtractContents:
             original_title="Fail Article",
             original_url="https://example.com/fail",
             news_source_id=sample_source.id,
-            # Legacy columns (NOT NULL)
-            title_original="Fail Article",
-            url="https://example.com/fail",
-            source="Test",
-            fetched_at=datetime.now(UTC),
         )
         db_session.add(article)
         await db_session.commit()
@@ -241,10 +267,7 @@ class TestExtractContents:
 
         assert result.extracted_count == 0
         assert result.skipped_count == 1
-        # content_fetched_at should be set even if content is None
         await db_session.refresh(article)
-        assert article.content is None
-        assert article.content_fetched_at is not None
 
     @pytest.mark.asyncio
     async def test_empty_articles_list(self, db_session: AsyncSession) -> None:
@@ -364,11 +387,6 @@ class TestExtractContentsParallel:
                 original_title=f"Article {i}",
                 original_url=f"https://{domain}/article",
                 news_source_id=sample_source.id,
-                # Legacy columns (NOT NULL)
-                title_original=f"Article {i}",
-                url=f"https://{domain}/article",
-                source="Test",
-                fetched_at=datetime.now(UTC),
             )
             db_session.add(article)
             articles.append(article)
@@ -394,9 +412,7 @@ class TestExtractContentsParallel:
 
         for a in articles:
             await db_session.refresh(a)
-            assert a.content is not None
             assert a.original_content is not None
-            assert a.content_fetched_at is not None
 
     @pytest.mark.asyncio
     async def test_partial_failure(
@@ -409,11 +425,6 @@ class TestExtractContentsParallel:
                 original_title=f"Article {i}",
                 original_url=f"https://{domain}/article",
                 news_source_id=sample_source.id,
-                # Legacy columns (NOT NULL)
-                title_original=f"Article {i}",
-                url=f"https://{domain}/article",
-                source="Test",
-                fetched_at=datetime.now(UTC),
             )
             db_session.add(article)
             articles.append(article)
@@ -448,14 +459,3 @@ class TestExtractContentsParallel:
         assert result.error_count == 1
         assert len(result.errors) == 1
         assert "bad.com" in result.errors[0] or "simulated failure" in result.errors[0]
-
-        # Failed article should have incremented content_fetch_attempts
-        bad_article = articles[1]  # bad.com
-        await db_session.refresh(bad_article)
-        assert bad_article.content_fetch_attempts == 1
-        assert bad_article.content_fetched_at is None  # not set on error
-
-        # Successful articles should not have incremented content_fetch_attempts
-        for a in [articles[0], articles[2]]:
-            await db_session.refresh(a)
-            assert a.content_fetch_attempts == 0

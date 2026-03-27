@@ -25,9 +25,6 @@ class NewsResponse(BaseModel):
     keywords: list[KeywordBrief] = []
     analysis: AnalysisResponse | None = None
     is_watched: bool = False
-    # Legacy: kept until article_groups removed in Step 5
-    duplicate_count: int = 0
-    article_group_id: int | None = None
 
 
 class PaginatedNewsResponse(BaseModel):

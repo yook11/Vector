@@ -132,26 +132,18 @@ async def test_fetch_saves_new_articles(
 
     articles = (await db_session.execute(select(NewsArticle))).scalars().all()
     assert len(articles) == 2
-    # Check both legacy and new columns
-    assert all(a.source == "Test Tech Source" for a in articles)
     assert all(a.news_source_id == sample_source.id for a in articles)
     assert all(a.original_url is not None for a in articles)
     assert all(a.original_title is not None for a in articles)
-    assert all(a.guid is not None for a in articles)
 
 
-async def test_fetch_skips_duplicate_guids(
+async def test_fetch_skips_duplicate_urls(
     db_session: AsyncSession, sample_source: NewsSource, mock_client: AsyncMock
 ) -> None:
     existing = NewsArticle(
         original_title="Existing",
         original_url="https://example.com/existing",
         news_source_id=sample_source.id,
-        # Legacy columns (NOT NULL)
-        title_original="Existing",
-        url="https://example.com/existing",
-        source="Test Tech Source",
-        guid="https://example.com/existing",
     )
     db_session.add(existing)
     await db_session.commit()
@@ -328,5 +320,4 @@ async def test_fetch_stores_full_content_from_rss(
 
     assert result.new_count == 1
     articles = (await db_session.execute(select(NewsArticle))).scalars().all()
-    assert articles[0].content is not None
-    assert articles[0].content_fetched_at is not None
+    assert articles[0].original_content is not None

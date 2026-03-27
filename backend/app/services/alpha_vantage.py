@@ -1,6 +1,5 @@
 """Alpha Vantage News Sentiment API client."""
 
-import hashlib
 from datetime import UTC, datetime
 
 import httpx
@@ -34,12 +33,6 @@ def _parse_av_time(time_str: str) -> datetime:
     if len(time_part) >= 6:
         return datetime.strptime(time_str, "%Y%m%dT%H%M%S").replace(tzinfo=UTC)
     return datetime.strptime(time_str, "%Y%m%dT%H%M").replace(tzinfo=UTC)
-
-
-def _make_guid(url: str) -> str:
-    """Generate a deterministic guid from a URL: av:{sha256[:16]}."""
-    url_hash = hashlib.sha256(url.encode()).hexdigest()[:16]
-    return f"av:{url_hash}"
 
 
 class AlphaVantageClient:
@@ -76,8 +69,7 @@ class AlphaVantageClient:
     ) -> SourceFetchResult:
         """Fetch AV news articles and save to news_articles.
 
-        - guid format: "av:{sha256(url)[:16]}"
-        - Deduplication via batch guid/url checks (same pattern as RSS/HN)
+        - Deduplication via batch URL checks (same pattern as RSS/HN)
         - Returns SourceFetchResult with new/skipped counts
         """
         result = SourceFetchResult(source_id=source.id)
@@ -140,30 +132,21 @@ class AlphaVantageClient:
             logger.info("av_no_articles", source=source.name)
             return result
 
-        # Build guids and urls for batch dedup
+        # Build URLs for batch dedup
         articles_data: list[tuple[dict, str]] = []
         for item in feed:
             url = item.get("url", "")
             if not url:
                 continue
-            guid = _make_guid(url)
-            articles_data.append((item, guid))
+            articles_data.append((item, url))
 
         if not articles_data:
             return result
 
-        guids = [g for _, g in articles_data]
-        urls = [item.get("url", "") for item, _ in articles_data]
-        existing_guids: set[str] = set()
+        urls = [u for _, u in articles_data]
         existing_urls: set[str] = set()
 
         chunk_size = 500
-        for i in range(0, len(guids), chunk_size):
-            chunk = guids[i : i + chunk_size]
-            stmt = select(NewsArticle.guid).where(NewsArticle.guid.in_(chunk))
-            rows = await session.execute(stmt)
-            existing_guids.update(row[0] for row in rows.all())
-
         for i in range(0, len(urls), chunk_size):
             chunk = urls[i : i + chunk_size]
             stmt = select(NewsArticle.original_url).where(
@@ -177,12 +160,7 @@ class AlphaVantageClient:
         new_count = 0
         now = datetime.now(UTC)
 
-        for item, guid in articles_data:
-            if guid in existing_guids:
-                result.skipped_count += 1
-                continue
-
-            url = item.get("url", "")
+        for item, url in articles_data:
             if url in existing_urls:
                 result.skipped_count += 1
                 continue
@@ -209,23 +187,15 @@ class AlphaVantageClient:
                 published_at = now
 
             article = NewsArticle(
-                # New columns
                 original_title=strip_html_tags(item.get("title", ""))[:500],
                 original_description=strip_html_tags(item.get("summary")),
                 original_url=url,
                 news_source_id=source.id,
                 published_at=published_at,
-                # Legacy columns (DB NOT NULL, removed in Step 5)
-                title_original=strip_html_tags(item.get("title", ""))[:500],
-                url=url,
-                source=source.name,
-                source_id=source.id,
-                guid=guid,
             )
 
             session.add(article)
             new_count += 1
-            existing_guids.add(guid)
             existing_urls.add(url)
 
         result.new_count = new_count

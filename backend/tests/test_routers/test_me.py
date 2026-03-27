@@ -16,14 +16,9 @@ async def sample_article(
 ) -> NewsArticle:
     """Create a test news article."""
     article = NewsArticle(
-        # New primary columns (NOT NULL)
         original_title="Test Article",
         original_url="https://example.com/test",
         news_source_id=sample_source.id,
-        # Legacy columns (NOT NULL, removed in Step 5)
-        title_original="Test Article",
-        url="https://example.com/test",
-        source="test-source",
         published_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
     db_session.add(article)
@@ -38,14 +33,9 @@ async def second_article(
 ) -> NewsArticle:
     """Create a second test news article."""
     article = NewsArticle(
-        # New primary columns (NOT NULL)
         original_title="Second Article",
         original_url="https://example.com/second",
         news_source_id=sample_source.id,
-        # Legacy columns (NOT NULL, removed in Step 5)
-        title_original="Second Article",
-        url="https://example.com/second",
-        source="test-source",
         published_at=datetime(2026, 1, 2, tzinfo=UTC),
     )
     db_session.add(article)

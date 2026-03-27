@@ -46,10 +46,6 @@ async def _create_article_with_analysis(
         original_url=url,
         news_source_id=source.id,
         published_at=published_at or datetime.now(UTC),
-        # Legacy columns (NOT NULL)
-        title_original=title,
-        url=url,
-        source=source.name,
     )
     session.add(article)
     await session.flush()
@@ -190,9 +186,6 @@ async def test_detect_duplicates_no_embedding_skipped(
         original_url="https://a.com/no-analysis",
         news_source_id=sample_source.id,
         published_at=now,
-        title_original="No Analysis",
-        url="https://a.com/no-analysis",
-        source=sample_source.name,
     )
     db_session.add(article)
     await db_session.commit()

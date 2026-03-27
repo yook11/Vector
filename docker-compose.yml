@@ -97,10 +97,11 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    # "app.tasks.taskiq_worker:broker" = broker object for taskiq
-    # "app.tasks.taskiq_worker" = module for task auto-discovery
-    # If tasks split into multiple modules later, replace with "app.tasks" package.
-    command: taskiq worker app.tasks.taskiq_worker:broker app.tasks.taskiq_worker
+    command: >
+      taskiq worker
+      app.tasks.pipeline_tasks:broker
+      app.tasks.pipeline_tasks
+      --ack-type when_executed
     env_file:
       - .env
     environment:
@@ -122,7 +123,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: taskiq scheduler app.tasks.taskiq_worker:scheduler
+    command: taskiq scheduler app.tasks.pipeline_tasks:scheduler
     env_file:
       - .env
     environment:

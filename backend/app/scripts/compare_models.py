@@ -204,8 +204,8 @@ async def main(count: int) -> None:
 
         # Build prompt (same as GeminiAnalyzer.analyze)
         content_section = ""
-        if article.content:
-            truncated = article.content[: settings.content_max_length]
+        if article.original_content:
+            truncated = article.original_content[: settings.content_max_length]
             content_section = f"\nArticle full text:\n{truncated}\n"
 
         prompt = ANALYSIS_PROMPT_BASE.format(

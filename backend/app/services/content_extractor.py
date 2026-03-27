@@ -5,7 +5,6 @@ from collections import defaultdict
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from urllib.parse import urlparse
 from urllib.robotparser import RobotFileParser
 
@@ -22,6 +21,14 @@ logger = structlog.get_logger(__name__)
 HTTP_TIMEOUT = 30.0
 USER_AGENT = "VectorBot/1.0 (+https://github.com/vector-news)"
 HEADERS = {"User-Agent": USER_AGENT}
+
+
+class PermanentFetchError(Exception):
+    """Non-retryable fetch failure (403, 404, robots.txt blocked)."""
+
+
+class TemporaryFetchError(Exception):
+    """Retryable fetch failure (5xx, timeout, 429)."""
 
 
 @dataclass
@@ -129,26 +136,31 @@ async def extract_content(
     """Extract article content from a URL.
 
     Uses httpx for async HTTP, trafilatura parser via asyncio.to_thread().
-    Returns None if content cannot be extracted.
+
+    Returns:
+        str: Extracted article text (success).
+        None: Content parsed but quality insufficient (skip permanently).
+
+    Raises:
+        PermanentFetchError: 403, 404, robots.txt blocked — do not retry.
+        TemporaryFetchError: 5xx, timeout, 429 — safe to retry.
     """
     # Check robots.txt
     if not await robots_cache.check(client, url):
-        logger.info("content_blocked_by_robots", url=url)
-        return None
+        raise PermanentFetchError(f"robots.txt blocked: {url}")
 
     try:
         response = await client.get(url, timeout=HTTP_TIMEOUT, follow_redirects=True)
         response.raise_for_status()
     except httpx.HTTPStatusError as e:
-        logger.warning(
-            "content_fetch_http_error",
-            url=url,
-            status=e.response.status_code,
-        )
-        return None
+        status = e.response.status_code
+        if status in (403, 404, 410, 451):
+            raise PermanentFetchError(f"HTTP {status}: {url}") from e
+        # 429 / 5xx — retryable
+        raise TemporaryFetchError(f"HTTP {status}: {url}") from e
     except httpx.RequestError as e:
-        logger.warning("content_fetch_request_error", url=url, error=str(e))
-        return None
+        # Timeout, DNS, connection error — retryable
+        raise TemporaryFetchError(f"request error: {url}: {e}") from e
 
     content_type = response.headers.get("content-type", "")
     if "text/html" not in content_type:
@@ -189,6 +201,7 @@ async def _fetch_one(
         return (article, None, e)
 
 
+# TODO: Step 2 完了後に削除候補（呼び出し元なし）
 async def extract_contents(
     session: AsyncSession,
     articles: list[NewsArticle],
@@ -238,23 +251,17 @@ async def extract_contents(
         article, content, error = res
 
         if error:
-            article.content_fetch_attempts += 1
-            session.add(article)
             result.error_count += 1
             result.errors.append(f"Article {article.id}: {error}")
             logger.warning(
                 "content_extraction_failed",
                 article_id=article.id,
                 error=str(error),
-                attempts=article.content_fetch_attempts,
             )
             continue
 
         if content is not None:
             article.original_content = content
-            # Legacy column (removed in Step 5)
-            article.content = content
-            article.content_fetched_at = datetime.now(UTC)
             result.extracted_count += 1
             logger.info(
                 "content_extracted",
@@ -262,7 +269,6 @@ async def extract_contents(
                 length=len(content),
             )
         else:
-            article.content_fetched_at = datetime.now(UTC)
             result.skipped_count += 1
             logger.info(
                 "content_extraction_empty",

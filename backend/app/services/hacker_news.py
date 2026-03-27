@@ -100,8 +100,7 @@ class HackerNewsClient:
     ) -> SourceFetchResult:
         """Fetch HN stories and save to news_articles.
 
-        - guid format: "hn:{objectID}"
-        - Deduplication via batch guid/url checks (same pattern as RSS fetcher)
+        - Deduplication via batch URL checks (same pattern as RSS fetcher)
         - Returns SourceFetchResult with new/skipped counts
         """
         result = SourceFetchResult(source_id=source.id)
@@ -133,19 +132,11 @@ class HackerNewsClient:
             logger.info("hn_no_new_stories", source=source.name)
             return result
 
-        # Batch dedup: check existing guids and urls
-        guids = [f"hn:{s.object_id}" for s in stories]
+        # Batch dedup: check existing URLs
         urls = [s.url for s in stories]
-        existing_guids: set[str] = set()
         existing_urls: set[str] = set()
 
         chunk_size = 500
-        for i in range(0, len(guids), chunk_size):
-            chunk = guids[i : i + chunk_size]
-            stmt = select(NewsArticle.guid).where(NewsArticle.guid.in_(chunk))
-            rows = await session.execute(stmt)
-            existing_guids.update(row[0] for row in rows.all())
-
         for i in range(0, len(urls), chunk_size):
             chunk = urls[i : i + chunk_size]
             stmt = select(NewsArticle.original_url).where(
@@ -159,12 +150,6 @@ class HackerNewsClient:
         new_count = 0
 
         for story in stories:
-            guid = f"hn:{story.object_id}"
-
-            if guid in existing_guids:
-                result.skipped_count += 1
-                continue
-
             if story.url in existing_urls:
                 result.skipped_count += 1
                 continue
@@ -186,22 +171,14 @@ class HackerNewsClient:
                 break
 
             article = NewsArticle(
-                # New columns
                 original_title=strip_html_tags(story.title)[:500],
                 original_url=story.url,
                 news_source_id=source.id,
                 published_at=story.created_at,
-                # Legacy columns (DB NOT NULL, removed in Step 5)
-                title_original=strip_html_tags(story.title)[:500],
-                url=story.url,
-                source=source.name,
-                source_id=source.id,
-                guid=guid,
             )
 
             session.add(article)
             new_count += 1
-            existing_guids.add(guid)
             existing_urls.add(story.url)
 
         result.new_count = new_count
