@@ -4,6 +4,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 from app.domain.keyword import KeywordName
+from app.models.keyword import KeywordStatus
 from app.schemas.category import CategoryBrief
 
 
@@ -41,7 +42,7 @@ class KeywordResponse(BaseModel):
     id: int
     name: str
     category: CategoryBrief
-    status: str
+    status: KeywordStatus
     article_count: int = 0
     created_at: datetime
 

@@ -58,6 +58,11 @@ Thumbs.db
 skills-lock.json
 
 # ===========================
+# Personal notes
+# ===========================
+*.local.md
+
+# ===========================
 # Build artifacts
 # ===========================
 frontend/tsconfig.tsbuildinfo
