@@ -11,20 +11,8 @@
 - インフラ: Docker Compose
 
 ## パッケージ管理
-- パッケージ追加後は `requirements.txt`（Backend）/ `package.json`（Frontend）も更新すること
-
-## 設計ドキュメント（必要時に参照）
-
-タスクに応じて該当ドキュメントを読むこと。全部一度に読む必要はない。
-
-| ドキュメント | 参照タイミング |
-|---|---|
-| `docs/00_PROJECT_OVERVIEW.md` | プロジェクト全体像を把握したい時 |
-| `docs/01_DIRECTORY_STRUCTURE.md` | ファイルの置き場所に迷った時 |
-| `docs/02_DATABASE_DESIGN.md` | DB関連の作業時 |
-| `docs/04_API_SPECIFICATION.md` | API実装・フロント実装時 |
-| `docs/05_PHASE2_PLAN.md` | Phase 2 の計画確認時 |
-| `docs/05b_TASKQUEUE_POC_REPORT.md` | タスクキュー関連の作業時 |
+- Backend: uv add でパッケージ追加（pip install は使わない）
+- Frontend: npm install でパッケージ追加
 
 ## ワークフロー
 
@@ -64,7 +52,7 @@
 
 ### Ask first
 - SQLModelモデル変更・DBスキーマ変更
-- 新規 pip パッケージ追加
+- 新規 uv add パッケージ追加
 - APIレスポンス形式の破壊的変更
 
 ### Never do
@@ -76,8 +64,4 @@
 
 ## サブエージェントへの指示方針
 
-- 対象ディレクトリとその CLAUDE.md を明示、設計ドキュメントは1〜2個に絞る
-
-## 開発の始め方
-
-プロジェクト全体像は `docs/00_PROJECT_OVERVIEW.md` を参照。
+- 対象ディレクトリとその CLAUDE.md を明示、必要な文脈は plan ファイルや指示で提供する

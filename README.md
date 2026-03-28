@@ -211,14 +211,16 @@ cd frontend && npm run generate-types
 
 ## Documentation
 
-設計ドキュメントは `docs/` を参照:
+コードから導出可能な情報（ディレクトリ構成、DB スキーマ、API 仕様）はドキュメント化せず、
+コード自体を SSoT とする方針。`docs/` には「コードに書けないもの」のみを残す。
 
-- [`docs/00_PROJECT_OVERVIEW.md`](docs/00_PROJECT_OVERVIEW.md) — プロジェクト概要
-- [`docs/01_DIRECTORY_STRUCTURE.md`](docs/01_DIRECTORY_STRUCTURE.md) — ディレクトリ構成
-- [`docs/02_DATABASE_DESIGN.md`](docs/02_DATABASE_DESIGN.md) — DB設計
-- [`docs/04_API_SPECIFICATION.md`](docs/04_API_SPECIFICATION.md) — API仕様
-- [`docs/05_PHASE2_PLAN.md`](docs/05_PHASE2_PLAN.md) — Phase 2 計画
-- [`docs/05b_TASKQUEUE_POC_REPORT.md`](docs/05b_TASKQUEUE_POC_REPORT.md) — タスクキュー設計
-- [`docs/06_PROMPT_DESIGN.md`](docs/06_PROMPT_DESIGN.md) — プロンプト設計ガイドライン
+### 設計判断記録 (ADR)
 
-ドメインモデルの棚卸しは [`domain.md`](domain.md) を参照。
+- [`docs/adr/001_taskiq_over_arq.md`](docs/adr/001_taskiq_over_arq.md) — タスクキュー選定（taskiq 採用理由）
+- [`docs/adr/002_auth_schema_separation.md`](docs/adr/002_auth_schema_separation.md) — PostgreSQL スキーマ分離（auth / public）
+- [`docs/adr/003_bff_proxy_pattern.md`](docs/adr/003_bff_proxy_pattern.md) — BFF プロキシパターンによる認証
+
+### その他
+
+- [`docs/prompt_design.md`](docs/prompt_design.md) — AI 分析プロンプト設計ガイドライン
+- [`domain.md`](domain.md) — ドメインモデルの棚卸し
