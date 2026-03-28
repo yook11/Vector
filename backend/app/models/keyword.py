@@ -1,11 +1,33 @@
-from datetime import UTC, datetime
+from datetime import datetime
+from enum import StrEnum
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer
+from sqlalchemy import (
+    CheckConstraint,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    func,
+)
 from sqlmodel import Field, Relationship, SQLModel
+
+
+class KeywordStatus(StrEnum):
+    PROVISIONAL = "provisional"
+    OFFICIAL = "official"
+    BLACKLISTED = "blacklisted"
 
 
 class Keyword(SQLModel, table=True):
     __tablename__ = "keywords"
+    __table_args__ = (
+        CheckConstraint(
+            "(status = 'official' AND approved_at IS NOT NULL) "
+            "OR (status != 'official' AND approved_at IS NULL)",
+            name="ck_keywords_status_approved_at",
+        ),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
     name: str = Field(max_length=100, unique=True, nullable=False)
@@ -17,22 +39,30 @@ class Keyword(SQLModel, table=True):
             index=True,
         )
     )
-    status: str = Field(default="provisional", max_length=20, nullable=False)
+    status: KeywordStatus = Field(
+        default=KeywordStatus.PROVISIONAL, sa_type=String(20), nullable=False
+    )
     is_ai_generated: bool = Field(default=False, nullable=False)
     approved_at: datetime | None = Field(
         default=None,
         nullable=True,
         sa_type=DateTime(timezone=True),
     )
-    created_at: datetime = Field(
-        default_factory=lambda: datetime.now(UTC),
-        nullable=False,
-        sa_type=DateTime(timezone=True),
+    created_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(
+            DateTime(timezone=True),
+            server_default=func.now(),
+            nullable=False,
+        ),
     )
-    updated_at: datetime = Field(
-        default_factory=lambda: datetime.now(UTC),
-        nullable=False,
-        sa_type=DateTime(timezone=True),
+    updated_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(
+            DateTime(timezone=True),
+            server_default=func.now(),
+            nullable=False,
+        ),
     )
 
     # Relationships

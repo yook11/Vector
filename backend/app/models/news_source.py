@@ -1,7 +1,7 @@
-from datetime import UTC, datetime
+from datetime import datetime
 from enum import StrEnum
 
-from sqlalchemy import DateTime, String
+from sqlalchemy import CheckConstraint, Column, DateTime, String, UniqueConstraint, func
 from sqlmodel import Field, Relationship, SQLModel
 
 
@@ -12,6 +12,23 @@ class SourceType(StrEnum):
 
 class NewsSource(SQLModel, table=True):
     __tablename__ = "news_sources"
+    __table_args__ = (
+        UniqueConstraint(
+            "name", "source_type", name="uq_news_sources_name_source_type"
+        ),
+        CheckConstraint(
+            "source_type IN ('rss', 'api')",
+            name="ck_news_sources_source_type",
+        ),
+        CheckConstraint(
+            "site_url ~ '^https?://.+'",
+            name="ck_news_sources_site_url_scheme",
+        ),
+        CheckConstraint(
+            "endpoint_url ~ '^https?://.+'",
+            name="ck_news_sources_endpoint_url_scheme",
+        ),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
     name: str = Field(max_length=50, nullable=False)
@@ -20,15 +37,21 @@ class NewsSource(SQLModel, table=True):
     endpoint_url: str = Field(max_length=2048, unique=True, nullable=False)
     is_active: bool = Field(default=True, nullable=False)
 
-    created_at: datetime = Field(
-        default_factory=lambda: datetime.now(UTC),
-        nullable=False,
-        sa_type=DateTime(timezone=True),
+    created_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(
+            DateTime(timezone=True),
+            server_default=func.now(),
+            nullable=False,
+        ),
     )
-    updated_at: datetime = Field(
-        default_factory=lambda: datetime.now(UTC),
-        nullable=False,
-        sa_type=DateTime(timezone=True),
+    updated_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(
+            DateTime(timezone=True),
+            server_default=func.now(),
+            nullable=False,
+        ),
     )
 
     # Relationships
