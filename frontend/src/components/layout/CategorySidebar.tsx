@@ -4,7 +4,7 @@ import { ChevronRight } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useState } from "react";
-import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import type { CategoryDetailResponse } from "@/types";
 
@@ -56,21 +56,27 @@ export function CategorySidebar({
   }
 
   const linkClass =
-    "flex items-center justify-between px-4 py-2 text-sm rounded-md transition-colors hover:bg-accent";
+    "flex items-center justify-between px-3 py-2.5 text-sm rounded-xl transition-colors text-muted-foreground hover:text-foreground hover:bg-neutral-100 dark:hover:bg-neutral-800/40";
 
   return (
-    <div className="flex flex-col gap-1 py-4">
-      <h3 className="px-4 text-sm font-semibold text-muted-foreground mb-2">
+    <div className="flex flex-col gap-1.5 p-6">
+      <h3 className="px-3 text-sm font-semibold text-foreground mb-1">
         Categories
       </h3>
 
       {/* All */}
       <Link
         href={buildHref({})}
-        className={cn(linkClass, isAll && "bg-accent font-medium")}
+        className={cn(
+          linkClass,
+          isAll &&
+            "text-foreground font-medium bg-neutral-100 dark:bg-neutral-800/50",
+        )}
       >
         All
       </Link>
+
+      <Separator className="my-2" />
 
       {/* Category drilldown */}
       {categories.map((cat) => {
@@ -84,12 +90,12 @@ export function CategorySidebar({
               <button
                 type="button"
                 onClick={() => toggleExpand(cat.id)}
-                className="flex items-center justify-center w-8 h-8 shrink-0 text-muted-foreground hover:text-foreground transition-colors"
+                className="flex items-center justify-center size-8 shrink-0 text-muted-foreground hover:text-foreground transition-colors"
                 aria-label={isExpanded ? "Collapse" : "Expand"}
               >
                 <ChevronRight
                   className={cn(
-                    "h-4 w-4 transition-transform",
+                    "size-3.5 transition-transform",
                     isExpanded && "rotate-90",
                   )}
                 />
@@ -97,19 +103,20 @@ export function CategorySidebar({
               <Link
                 href={buildHref({ kwCategoryId: String(cat.id) })}
                 className={cn(
-                  "flex-1 flex items-center justify-between pr-4 py-2 text-sm rounded-md transition-colors hover:bg-accent",
-                  isActiveCat && "bg-accent font-medium",
+                  "flex-1 flex items-center justify-between pr-3 py-2.5 text-sm rounded-xl transition-colors text-muted-foreground hover:text-foreground hover:bg-neutral-100 dark:hover:bg-neutral-800/40",
+                  isActiveCat &&
+                    "text-foreground font-medium bg-neutral-100 dark:bg-neutral-800/50",
                 )}
               >
                 <span className="truncate">{cat.name}</span>
-                <Badge variant="secondary" className="ml-2 text-xs">
+                <span className="ml-2 text-xs tabular-nums text-neutral-400 dark:text-neutral-600">
                   {cat.articleCount}
-                </Badge>
+                </span>
               </Link>
             </div>
 
             {isExpanded && cat.keywords.length > 0 && (
-              <div className="ml-8">
+              <div className="ml-8 flex flex-col gap-0.5">
                 {cat.keywords.map((kw) => {
                   const isActiveKw = activeKeywordId === kw.id;
                   return (
@@ -121,13 +128,14 @@ export function CategorySidebar({
                       })}
                       className={cn(
                         linkClass,
-                        isActiveKw && "bg-accent font-medium",
+                        isActiveKw &&
+                          "text-foreground font-medium bg-neutral-100 dark:bg-neutral-800/50",
                       )}
                     >
                       <span className="truncate">{kw.name}</span>
-                      <Badge variant="secondary" className="ml-2 text-xs">
+                      <span className="ml-2 text-xs tabular-nums text-neutral-400 dark:text-neutral-600">
                         {kw.articleCount}
-                      </Badge>
+                      </span>
                     </Link>
                   );
                 })}

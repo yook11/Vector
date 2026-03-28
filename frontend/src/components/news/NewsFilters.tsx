@@ -34,14 +34,14 @@ export function NewsFilters({ sources }: NewsFiltersProps) {
   );
 
   return (
-    <div className="flex flex-wrap gap-3">
+    <div className="flex flex-wrap items-center gap-2.5">
       <Select
         value={searchParams?.get("impactLevel") ?? ""}
         onValueChange={(v) =>
           updateParam("impactLevel", v === "all" ? undefined : v)
         }
       >
-        <SelectTrigger className="w-[160px]">
+        <SelectTrigger className="h-9 w-[130px] text-xs border-border">
           <SelectValue placeholder="Impact Level" />
         </SelectTrigger>
         <SelectContent>
@@ -59,7 +59,7 @@ export function NewsFilters({ sources }: NewsFiltersProps) {
           updateParam("sortBy", v === "default" ? undefined : v)
         }
       >
-        <SelectTrigger className="w-[160px]">
+        <SelectTrigger className="h-9 w-[120px] text-xs border-border">
           <SelectValue placeholder="Sort by" />
         </SelectTrigger>
         <SelectContent>
@@ -75,7 +75,7 @@ export function NewsFilters({ sources }: NewsFiltersProps) {
             updateParam("sourceId", v === "all" ? undefined : v)
           }
         >
-          <SelectTrigger className="w-[160px]">
+          <SelectTrigger className="h-9 w-[130px] text-xs border-border">
             <SelectValue placeholder="Source" />
           </SelectTrigger>
           <SelectContent>
@@ -95,7 +95,7 @@ export function NewsFilters({ sources }: NewsFiltersProps) {
           updateParam("sortOrder", v === "default" ? undefined : v)
         }
       >
-        <SelectTrigger className="w-[130px]">
+        <SelectTrigger className="h-9 w-[100px] text-xs border-border">
           <SelectValue placeholder="Order" />
         </SelectTrigger>
         <SelectContent>
@@ -108,7 +108,7 @@ export function NewsFilters({ sources }: NewsFiltersProps) {
         value={searchParams?.get("perPage") ?? "12"}
         onValueChange={(v) => updateParam("perPage", v)}
       >
-        <SelectTrigger className="w-[130px]">
+        <SelectTrigger className="h-9 w-[100px] text-xs border-border">
           <SelectValue placeholder="Per page" />
         </SelectTrigger>
         <SelectContent>

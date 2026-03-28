@@ -25,16 +25,17 @@ export function NewsPagination({ page, totalPages }: NewsPaginationProps) {
   }
 
   return (
-    <div className="flex items-center justify-center gap-2 pt-4">
+    <div className="flex items-center justify-center gap-3 pt-4 pb-2">
       <Button
         variant="outline"
         size="sm"
         disabled={page <= 1}
         onClick={() => goToPage(page - 1)}
+        className="h-7 text-xs"
       >
         Previous
       </Button>
-      <span className="text-sm text-muted-foreground">
+      <span className="text-xs text-muted-foreground tabular-nums">
         {page} / {totalPages}
       </span>
       <Button
@@ -42,6 +43,7 @@ export function NewsPagination({ page, totalPages }: NewsPaginationProps) {
         size="sm"
         disabled={page >= totalPages}
         onClick={() => goToPage(page + 1)}
+        className="h-7 text-xs"
       >
         Next
       </Button>

@@ -34,9 +34,12 @@ export function MobileSidebar({
           <span className="sr-only">Toggle sidebar</span>
         </Button>
       </SheetTrigger>
-      <SheetContent side="left" className="w-64 p-0">
-        <SheetHeader className="p-4 pb-0">
-          <SheetTitle>Filters</SheetTitle>
+      <SheetContent
+        side="left"
+        className="w-72 p-0 bg-background/95 backdrop-blur-2xl border-r-0"
+      >
+        <SheetHeader className="p-5 pb-0">
+          <SheetTitle className="text-sm font-medium">Filters</SheetTitle>
         </SheetHeader>
         {/* biome-ignore lint/a11y/noStaticElementInteractions: event delegation to close sheet on sidebar link clicks */}
         <div role="presentation" onClick={() => setOpen(false)}>

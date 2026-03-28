@@ -75,8 +75,9 @@ export default async function DashboardPage({
   ]);
 
   return (
-    <div className="flex h-full">
-      <aside className="hidden lg:block w-64 border-r overflow-y-auto">
+    <div className="flex h-full gap-0">
+      {/* Sidebar */}
+      <aside className="hidden lg:flex w-64 shrink-0 flex-col border-r border-border overflow-y-auto">
         <CategorySidebar
           categories={categoriesData.items}
           activeKwCategoryId={query.kwCategoryId}
@@ -84,29 +85,37 @@ export default async function DashboardPage({
         />
       </aside>
 
-      <main className="flex-1 p-6 space-y-6 overflow-y-auto">
-        <div className="flex items-center justify-between gap-4">
+      {/* Main content */}
+      <main className="flex-1 min-w-0 flex flex-col overflow-y-auto">
+        <div className="px-8 sm:px-12 py-6 sm:py-8 flex flex-col gap-8">
+          {/* Title row */}
           <div className="flex items-center gap-3">
             <MobileSidebar
               categories={categoriesData.items}
               activeKwCategoryId={query.kwCategoryId}
               activeKeywordId={query.keywordId}
             />
-            <h1 className="text-2xl font-bold">Dashboard</h1>
+            <h1 className="text-base font-medium text-foreground">Dashboard</h1>
           </div>
+
+          {/* Controls row: Search + Filters */}
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+            <Suspense>
+              <SearchBar />
+            </Suspense>
+            <Suspense>
+              <NewsFilters sources={sourcesData.items} />
+            </Suspense>
+          </div>
+
+          {/* News grid */}
+          <NewsList items={newsData.items} />
+
+          <NewsPagination
+            page={newsData.page}
+            totalPages={newsData.totalPages}
+          />
         </div>
-
-        <Suspense>
-          <SearchBar />
-        </Suspense>
-
-        <Suspense>
-          <NewsFilters sources={sourcesData.items} />
-        </Suspense>
-
-        <NewsList items={newsData.items} />
-
-        <NewsPagination page={newsData.page} totalPages={newsData.totalPages} />
       </main>
     </div>
   );

@@ -4,56 +4,133 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    /* Apple-inspired light theme
+     * Background: #fbfbfd — cool-tinted off-white
+     * Foreground: #1d1d1f — Apple's signature near-black
+     * Primary: #0071e3 — Apple blue (single accent)
+     * Muted text: #6e6e73 — Apple secondary gray
+     * Surface: #f5f5f7 — Apple light gray
+     * Border: #e0e0e5 — barely visible divider
+     */
+    --background: 240 20% 99%;
+    --foreground: 240 3% 12%;
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    --card-foreground: 240 3% 12%;
     --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 222.2 84% 4.9%;
-    --chart-1: 12 76% 61%;
-    --chart-2: 173 58% 39%;
-    --chart-3: 197 37% 24%;
-    --chart-4: 43 74% 66%;
-    --chart-5: 27 87% 67%;
-    --radius: 0.5rem;
+    --popover-foreground: 240 3% 12%;
+    --primary: 211 100% 45%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 240 14% 97%;
+    --secondary-foreground: 240 3% 12%;
+    --muted: 240 14% 97%;
+    --muted-foreground: 240 2% 44%;
+    --accent: 240 14% 97%;
+    --accent-foreground: 240 3% 12%;
+    --destructive: 4 100% 59%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 240 6% 90%;
+    --input: 240 6% 85%;
+    --ring: 211 100% 45%;
+    --chart-1: 211 100% 45%;
+    --chart-2: 142 64% 49%;
+    --chart-3: 35 100% 50%;
+    --chart-4: 280 64% 60%;
+    --chart-5: 349 100% 59%;
+    --radius: 0.75rem;
   }
+
   .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
-    --card: 222.2 84% 4.9%;
-    --card-foreground: 210 40% 98%;
-    --popover: 222.2 84% 4.9%;
-    --popover-foreground: 210 40% 98%;
-    --primary: 210 40% 98%;
-    --primary-foreground: 222.2 47.4% 11.2%;
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 212.7 26.8% 83.9%;
-    --chart-1: 220 70% 50%;
-    --chart-2: 160 60% 45%;
-    --chart-3: 30 80% 55%;
-    --chart-4: 280 65% 60%;
-    --chart-5: 340 75% 55%;
+    /* Apple-inspired deep dark theme
+     * Background: ~neutral-950 (#0a0a0a) — deepest canvas
+     * Card: ~neutral-900 (#171717) — elevated surface
+     * Foreground: neutral-50 (#fafafa) — crisp white text
+     * Primary: #2997ff — Apple blue
+     * Border: neutral-800/60 — barely visible divider
+     * Muted text: neutral-500 — secondary information
+     */
+    --background: 0 0% 4%;
+    --foreground: 0 0% 96%;
+    --card: 0 0% 9%;
+    --card-foreground: 0 0% 96%;
+    --popover: 0 0% 9%;
+    --popover-foreground: 0 0% 96%;
+    --primary: 211 100% 58%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 0 0% 12%;
+    --secondary-foreground: 0 0% 96%;
+    --muted: 0 0% 12%;
+    --muted-foreground: 0 0% 45%;
+    --accent: 0 0% 12%;
+    --accent-foreground: 0 0% 96%;
+    --destructive: 3 100% 62%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 0 0% 18%;
+    --input: 0 0% 18%;
+    --ring: 211 100% 58%;
+    --chart-1: 211 100% 58%;
+    --chart-2: 142 63% 51%;
+    --chart-3: 37 100% 52%;
+    --chart-4: 280 87% 65%;
+    --chart-5: 349 100% 61%;
+  }
+
+  * {
+    border-color: hsl(var(--border));
+  }
+
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    font-feature-settings:
+      "kern" 1,
+      "liga" 1,
+      "calt" 1;
+  }
+
+  ::selection {
+    background-color: hsl(211 100% 45% / 0.18);
+    color: hsl(var(--foreground));
+  }
+
+  .dark ::selection {
+    background-color: hsl(211 100% 58% / 0.28);
+  }
+}
+
+@layer components {
+  /* Apple Store-style grid with thin vertical column dividers */
+  .grid-apple-dividers > * {
+    position: relative;
+  }
+  .grid-apple-dividers > *::before {
+    content: "";
+    position: absolute;
+    left: -1rem;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: hsl(var(--border));
+    display: none;
+  }
+  @media (min-width: 768px) {
+    .grid-apple-dividers > *::before {
+      display: block;
+    }
+    .grid-apple-dividers > *:nth-child(2n + 1)::before {
+      display: none;
+    }
+  }
+  @media (min-width: 1280px) {
+    .grid-apple-dividers > *:nth-child(2n + 1)::before {
+      display: block;
+    }
+    .grid-apple-dividers > *:nth-child(3n + 1)::before {
+      display: none;
+    }
   }
 }
