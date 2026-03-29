@@ -1,8 +1,18 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from sqlalchemy import CheckConstraint
-from sqlmodel import Field, Relationship, SQLModel
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.domain.category import CategoryName, CategorySlug
+from app.models.base import Base
+
+if TYPE_CHECKING:
+    from app.models.keyword import Keyword
 
 
-class Category(SQLModel, table=True):
+class Category(Base):
     __tablename__ = "categories"
     __table_args__ = (
         CheckConstraint(
@@ -15,15 +25,9 @@ class Category(SQLModel, table=True):
         ),
     )
 
-    id: int | None = Field(default=None, primary_key=True)
-    slug: str = Field(max_length=50, unique=True, nullable=False, index=True)
-    name: str = Field(max_length=50, unique=True, nullable=False)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    slug: Mapped[CategorySlug] = mapped_column(unique=True, index=True)
+    name: Mapped[CategoryName] = mapped_column(unique=True)
 
-    # Relationships
-    keywords: list["Keyword"] = Relationship(back_populates="category")
-
-
-# Resolve forward references
-from app.models.keyword import Keyword  # noqa: E402, F811
-
-Category.model_rebuild()
+    # Relationships (same Base — OK)
+    keywords: Mapped[list[Keyword]] = relationship(back_populates="category")

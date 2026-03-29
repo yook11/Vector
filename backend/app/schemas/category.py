@@ -2,6 +2,7 @@ from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 
 from app.domain.category import CategoryName, CategorySlug
+from app.domain.keyword import KeywordName
 
 
 class CategoryBrief(BaseModel):
@@ -25,7 +26,7 @@ class KeywordInCategory(BaseModel):
     )
 
     id: int
-    name: str
+    name: KeywordName
     article_count: int = 0
 
 

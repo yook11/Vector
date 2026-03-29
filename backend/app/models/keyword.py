@@ -1,16 +1,18 @@
+from __future__ import annotations
+
 from datetime import datetime
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
-from sqlalchemy import (
-    CheckConstraint,
-    Column,
-    DateTime,
-    ForeignKey,
-    Integer,
-    String,
-    func,
-)
-from sqlmodel import Field, Relationship, SQLModel
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.domain.keyword import KeywordName
+from app.models.base import Base
+
+if TYPE_CHECKING:
+    from app.models.associations import ArticleKeyword
+    from app.models.category import Category
 
 
 class KeywordStatus(StrEnum):
@@ -19,7 +21,7 @@ class KeywordStatus(StrEnum):
     BLACKLISTED = "blacklisted"
 
 
-class Keyword(SQLModel, table=True):
+class Keyword(Base):
     __tablename__ = "keywords"
     __table_args__ = (
         CheckConstraint(
@@ -29,49 +31,27 @@ class Keyword(SQLModel, table=True):
         ),
     )
 
-    id: int | None = Field(default=None, primary_key=True)
-    name: str = Field(max_length=100, unique=True, nullable=False)
-    category_id: int = Field(
-        sa_column=Column(
-            Integer,
-            ForeignKey("categories.id", ondelete="RESTRICT"),
-            nullable=False,
-            index=True,
-        )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[KeywordName] = mapped_column(unique=True)
+    category_id: Mapped[int] = mapped_column(
+        ForeignKey("categories.id", ondelete="RESTRICT"), index=True
     )
-    status: KeywordStatus = Field(
-        default=KeywordStatus.PROVISIONAL, sa_type=String(20), nullable=False
+    status: Mapped[str] = mapped_column(
+        String(20), default=KeywordStatus.PROVISIONAL, nullable=False
     )
-    is_ai_generated: bool = Field(default=False, nullable=False)
-    approved_at: datetime | None = Field(
-        default=None,
-        nullable=True,
-        sa_type=DateTime(timezone=True),
+    is_ai_generated: Mapped[bool] = mapped_column(default=False)
+    approved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
     )
-    created_at: datetime | None = Field(
-        default=None,
-        sa_column=Column(
-            DateTime(timezone=True),
-            server_default=func.now(),
-            nullable=False,
-        ),
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
     )
-    updated_at: datetime | None = Field(
-        default=None,
-        sa_column=Column(
-            DateTime(timezone=True),
-            server_default=func.now(),
-            nullable=False,
-        ),
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
     )
 
-    # Relationships
-    category: "Category" = Relationship(back_populates="keywords")
-    article_keywords: list["ArticleKeyword"] = Relationship(back_populates="keyword")
-
-
-# Resolve forward references
-from app.models.associations import ArticleKeyword  # noqa: E402, F811
-from app.models.category import Category  # noqa: E402, F811
-
-Keyword.model_rebuild()
+    # Relationships (same Base — OK)
+    category: Mapped[Category] = relationship(back_populates="keywords")
+    article_keywords: Mapped[list[ArticleKeyword]] = relationship(
+        back_populates="keyword"
+    )

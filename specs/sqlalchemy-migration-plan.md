@@ -59,19 +59,45 @@ class Keyword(Base):
 | DeclarativeBase → SQLModel | ForeignKey のみ | OK（metadata 共有） |
 | **cross-base で relationship()** | — | **NG（registry 不一致）** |
 
+### 本プランの cross-base 境界
+
+```
+ArticleKeyword (DeclarativeBase) ←FK→ NewsArticle (SQLModel)
+```
+
+- `ArticleKeyword.news_article` relationship → **削除**（cross-base）
+- `NewsArticle.article_keywords` Relationship → **削除**（cross-base）
+- FK カラム `article_keywords.news_article_id → news_articles.id` は維持
+
 ## 移行対象
 
 | モデル | 移行先 | 理由 |
 |---|---|---|
 | Category | DeclarativeBase | CategorySlug, CategoryName の VO 化 |
 | Keyword | DeclarativeBase | KeywordName の VO 化 + Category と同一 Base |
+| ArticleKeyword | DeclarativeBase | Keyword と同一 Base にして relationship を維持 |
 | 他の全モデル | SQLModel のまま | VO が不要、段階的に移行 |
+
+### cross-base 境界の設計判断
+
+ArticleKeyword も DeclarativeBase に移行し、cross-base 境界を `ArticleKeyword ↔ NewsArticle` に置く。
+
+```
+DeclarativeBase: Category ↔ Keyword ↔ ArticleKeyword  ✅ (relationship OK)
+cross-base:      ArticleKeyword ✗ NewsArticle          (FK のみ、relationship NG)
+SQLModel:        NewsArticle                            ✅
+```
+
+**理由:**
+- ArticleKeyword は単純な中間テーブル（2カラム + relationship）で移行コストが極小
+- Keyword ↔ ArticleKeyword の relationship が維持され、keywords.py の記事数カウント JOIN がそのまま動く
+- cross-base 境界がどこにあっても news.py の selectinload チェーンは書き換えが必要なため、追加コストなし
 
 ## 実装ステップ
 
 DB スキーマは変更なし。Alembic マイグレーション不要。
 
-### Step 1: 基盤 — DeclarativeBase の定義
+### Step 1: 基盤 — DeclarativeBase の定義 ✅
 
 **新規**: `app/models/base.py`
 
@@ -79,14 +105,14 @@ DB スキーマは変更なし。Alembic マイグレーション不要。
 - `Base.metadata = SQLModel.metadata` で既存 metadata を共有（向きが重要）
 - `type_annotation_map` に VO → TypeDecorator のマッピングを登録
 
-### Step 2: VO 層 — RootModel への書き換え
+### Step 2: VO 層 — RootModel への書き換え ✅
 
 **変更**: `app/domain/category.py`, `app/domain/keyword.py`
 
 - 手書きクラス (~90行) → `RootModel[str]` + `frozen=True` + `field_validator` (~15行)
 - `__get_pydantic_core_schema__` 等のボイラープレートは全て削除
 
-### Step 3: ORM 変換層 — TypeDecorator の作成
+### Step 3: ORM 変換層 — TypeDecorator の作成 ✅
 
 **新規**: `app/models/types.py`
 
@@ -95,10 +121,9 @@ DB スキーマは変更なし。Alembic マイグレーション不要。
 - `KeywordNameType(TypeDecorator)` — `impl = String(100)`
 - 全て `cache_ok = True` 必須（パフォーマンス）
 
-#### 設計判断: process_bind_param で生の str を拒否する
+#### 設計判断: process_bind_param で生の str も VO 経由でバリデーション
 
-`process_bind_param` に生の `str` が来た場合、そのまま通さず `TypeError` にする。
-str を素通しさせると VO のバリデーションをバイパスでき、VO を導入した意味がなくなるため。
+当初は生の `str` を `TypeError` で拒否する設計だったが、**str を受け取った場合も VO コンストラクタ経由でバリデーション**する方式に変更した。
 
 ```python
 def process_bind_param(self, value, dialect):
@@ -106,100 +131,149 @@ def process_bind_param(self, value, dialect):
         return None
     if isinstance(value, CategorySlug):
         return value.root
-    raise TypeError(f"Expected CategorySlug, got {type(value).__name__}")
+    if isinstance(value, str):
+        return CategorySlug(value).root  # VO 経由でバリデーション
+    raise TypeError(f"Expected CategorySlug or str, got {type(value).__name__}")
 ```
 
-### Step 4: Category モデルの移行
+**変更理由:**
+- str → VO → str の変換でバリデーションは通るため、VO バイパスにはならない
+- テストや既存サービスコード（`Keyword(name="...", ...)`）がそのまま動作
+- `Keyword.name.in_(["str1", "str2"])` のような比較も自然に書ける
+
+### Step 4: Category モデルの移行 ✅
 
 **変更**: `app/models/category.py`
 
 - `SQLModel, table=True` → `Base` 継承
 - `Field(...)` → `mapped_column(...)`
-- `__tablename__ = "categories"` を明示指定（現状も明示済み。DeclarativeBase のデフォルト命名は SQLModel と異なる可能性があるため、省略厳禁）
-- `slug: Mapped[CategorySlug]` — type_annotation_map で自動解決
+- `slug: Mapped[CategorySlug]`, `name: Mapped[CategoryName]` — type_annotation_map で自動解決
 - `__table_args__` の CHECK 制約は維持
-- `keywords: Mapped[list["Keyword"]] = relationship(...)` — 同一 Base、問題なし
+- SQLAlchemy `relationship()` + `TYPE_CHECKING` import で forward reference 解決
+- `model_rebuild()` + 末尾 import 削除
 
-### Step 5: Keyword モデルの移行
+### Step 5: Keyword モデルの移行 ✅
 
 **変更**: `app/models/keyword.py`
 
 - 同様に `Base` 継承 + `Mapped` / `mapped_column`
-- `__tablename__ = "keywords"` を明示指定（同上の理由）
 - `name: Mapped[KeywordName]`
-- `category: Mapped["Category"] = relationship(...)` — 同一 Base、問題なし
-- `article_keywords` — **cross-base のため Relationship は削除**、FK カラムのみ維持
+- `status: Mapped[str] = mapped_column(String(20), default=KeywordStatus.PROVISIONAL)` — DB ENUM を作らないよう String を明示
+- `category`, `article_keywords` の relationship は同一 Base 内で維持
+- `TYPE_CHECKING` import で `Category`, `ArticleKeyword` を解決
+- `model_rebuild()` + 末尾 import 削除
 
-### Step 6: スキーマ・サービス層の調整
+### Step 5.5: ArticleKeyword モデルの移行 ✅
 
-TypeDecorator の自動変換により、多くの箇所は変更不要。書き換えが必要な箇所を以下に整理する。
+**変更**: `app/models/associations.py`
 
-#### 書き換え不要（TypeDecorator が自動処理）
+- `Base` 継承 + `mapped_column(ForeignKey(...), primary_key=True)`
+- `keyword` relationship → 維持（同一 Base）
+- `news_article` relationship → **削除**（cross-base: NewsArticle は SQLModel のまま）
+- `TYPE_CHECKING` import で `Keyword` を解決
+- `model_rebuild()` + 末尾 import 削除
 
-- DB 読み取り後の型: `category.slug` が自動的に `CategorySlug` になる
-- ルーター層の応答組み立て: `CategoryBrief(slug=category.slug, ...)` はそのまま動く
-- WHERE 句: `Keyword.name == body.name` — TypeDecorator が bind param を変換
+**連動変更**: `app/models/news.py`
 
-#### 書き換えが必要な箇所
+- `article_keywords` Relationship → **削除**（cross-base）
+- `ArticleKeyword` の forward ref import 削除
 
-**6-1. VO の手動 unwrap を削除** (`app/routers/keywords.py`)
+### Step 6: スキーマ・サービス層の調整 ✅
+
+#### 6-1. news.py — selectinload チェーンの書き換え
+
+`NewsArticle.article_keywords` relationship が削除されたため、`_load_article_keywords()` ヘルパーで別クエリに分離。
+
+```python
+async def _load_article_keywords(
+    session: AsyncSession, article_ids: list[int]
+) -> dict[int, list[KeywordBrief]]:
+    """ArticleKeyword 起点で keyword + category を selectinload。"""
+    stmt = (
+        select(ArticleKeyword)
+        .options(selectinload(ArticleKeyword.keyword).selectinload(Keyword.category))
+        .where(ArticleKeyword.news_article_id.in_(article_ids))
+    )
+    ...
+```
+
+- `_news_eager_options()` から `article_keywords` チェーンを除去
+- `_build_news_response()` に `keywords_map` 引数を追加
+- 全エンドポイント（`list_news`, `get_news`, `get_similar_news`）で `_load_article_keywords` を呼ぶ
+
+#### 6-2. keywords.py — VO 手動 unwrap の削除
+
+TypeDecorator が str を受入れるため、`.value` による手動 unwrap が不要に:
 
 ```python
 # Before
-name_value = body.name.value                              # L70: 手動 unwrap
-existing = ... Keyword.name == name_value                 # L72: str で比較
-keyword = Keyword(name=name_value, category_id=...)       # L87: str を渡す
+name_value = body.name.value
+existing = ... Keyword.name == name_value
+keyword = Keyword(name=name_value, ...)
 
 # After
-existing = ... Keyword.name == body.name                  # VO 直接比較
-keyword = Keyword(name=body.name, category_id=...)        # VO 直接渡し
+existing = ... Keyword.name == body.name
+keyword = Keyword(name=body.name, ...)
 ```
 
-**6-2. テスト — str リテラルを VO に変更**
+#### 6-3. スキーマの name フィールドを KeywordName に統一
 
-| ファイル | 行 | 変更 |
-|---|---|---|
-| `tests/conftest.py` | L167 | `Category(slug=slug, name=name)` → `Category(slug=CategorySlug(slug), name=CategoryName(name))` |
-| `tests/conftest.py` | L182 | `Keyword(name="...", ...)` → `Keyword(name=KeywordName("..."), ...)` |
-| `tests/test_routers/test_categories.py` | L81, L111 | 同上 |
-| `tests/test_ai_analyzer.py` | L432-434 | 同上 |
+TypeDecorator が `Keyword.name` を `KeywordName` VO として返すようになったため、
+Pydantic スキーマの `name: str` フィールドが VO を拒否する問題が発生。
 
-**6-3. テスト — `.value` アクセスを `.root` に変更**
+`RootModel[str]` は `str` のサブクラスではないため、Pydantic の str バリデータが拒否する。
 
-| ファイル | 行 | 変更 |
-|---|---|---|
-| `tests/test_domain/test_category_values.py` | L189-190, L248-249 | `.slug.value` → `.slug.root` |
+**対処**: レスポンススキーマの `name` フィールドを `KeywordName` に変更
 
-**6-4. export の更新**
+| スキーマ | 変更 |
+|---|---|
+| `KeywordResponse.name` | `str` → `KeywordName` |
+| `KeywordBrief.name` | `str` → `KeywordName` |
+| `KeywordInCategory.name` | `str` → `KeywordName` |
 
-- `app/models/__init__.py`: 必要に応じて import パスを調整
+JSON 出力は同一（RootModel は root 値を plain string として出力）。
+OpenAPI スキーマは `$ref` + `$defs` 経由になるが、解決後の型は `type: string` で互換。
 
-### Step 7: Alembic 互換性の確認
+#### 6-4. ai_analyzer.py — keyword dict の str 変換
+
+AI プロンプトに渡す `keywords_by_category` dict は plain string が正しいため、
+query 結果の VO を明示的に `str()` 変換:
+
+```python
+for slug, kw in rows:
+    kw_dict.setdefault(str(slug), []).append(str(kw))
+```
+
+### Step 7: Alembic 互換性の確認（未実施）
 
 - `alembic revision --autogenerate` で差分がゼロであることを確認
 - `Base.metadata = SQLModel.metadata` により DeclarativeBase テーブルも同じ metadata に登録される
 
 ### Step 8: 検証
 
-- `ruff check` + `ruff format`
-- `pytest`
-- `alembic revision --autogenerate -m "verify_no_diff"` → 空であること
+- `ruff check` + `ruff format` ✅
+- `pytest` (216 tests passed) ✅
+- `alembic revision --autogenerate -m "verify_no_diff"` → 空であること（未実施）
 
 ## リスクと対策
 
-| リスク | 影響度 | 対策 |
-|---|---|---|
-| cross-base Relationship 定義でランタイムエラー | 高 | 定義しない。FK のみ。上記制約を遵守 |
-| Alembic が DeclarativeBase テーブルを認識しない | 中 | metadata 共有で回避。Step 7 で検証 |
-| RootModel の JSON シリアライズ形式変更 | 低 | RootModel は root をプリミティブとして出力。互換性あり |
-| TypeDecorator の cache_ok 未設定 | 中 | 全 TypeDecorator に `cache_ok = True` を必須とする |
-| CHECK 制約と VO ルールの重複 | 低 | 移行完了後に見直し。下記「後続タスク」参照 |
+| リスク | 影響度 | 対策 | 結果 |
+|---|---|---|---|
+| cross-base Relationship 定義でランタイムエラー | 高 | ArticleKeyword ↔ NewsArticle 間は FK のみ | ✅ 解決 |
+| news.py の selectinload チェーン破壊 | 高 | `_load_article_keywords()` で別クエリに分離 | ✅ 解決 |
+| Alembic が DeclarativeBase テーブルを認識しない | 中 | metadata 共有で回避。Step 7 で検証 | 未検証 |
+| RootModel の JSON シリアライズ形式変更 | 低 | RootModel は root をプリミティブとして出力。互換性あり | ✅ 問題なし |
+| TypeDecorator の cache_ok 未設定 | 中 | 全 TypeDecorator に `cache_ok = True` を必須とする | ✅ 対応済 |
+| VO がスキーマの str フィールドに渡せない | 中 | スキーマの name を KeywordName に変更 | ✅ 解決 |
+| CHECK 制約と VO ルールの重複 | 低 | 移行完了後に見直し。下記「後続タスク」参照 | 未対応 |
 
 ## 確認済み事項
 
 - **循環 import なし**: `app/domain/` → `app/models/` への依存ゼロ。`base.py` → `domain/` → 外部パッケージのみ
-- **Pydantic メソッド依存なし**: Category/Keyword に対する `.model_dump()`, `.model_validate()`, 直接 return は使用されていない。全てスキーマ経由で変換済み
+- **Pydantic メソッド依存なし**: Category/Keyword/ArticleKeyword に対する `.model_dump()`, `.model_validate()`, 直接 return は使用されていない。全てスキーマ経由で変換済み
 - **metadata 共有の向き**: `Base.metadata = SQLModel.metadata`（クラス変数として定義時に確定。後から代入しない）
+- **ArticleKeyword の移行安全性**: 単純な中間テーブル（2 FK カラム + relationship のみ）で VO 不要。TypeDecorator は使わず Base 継承 + mapped_column のみ
+- **TYPE_CHECKING import**: forward reference は `if TYPE_CHECKING:` ブロックで解決。ruff の UP037/F821 を回避
 
 ## 後続タスク（このスコープ外）
 

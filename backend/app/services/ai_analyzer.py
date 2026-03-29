@@ -144,7 +144,7 @@ async def analyze_article(
     if rows:
         kw_dict: dict[str, list[str]] = {}
         for slug, kw in rows:
-            kw_dict.setdefault(slug, []).append(kw)
+            kw_dict.setdefault(str(slug), []).append(str(kw))
         keywords_by_category = kw_dict
 
     try:
