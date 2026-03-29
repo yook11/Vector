@@ -14,6 +14,7 @@ from sqlalchemy.types import TypeDecorator
 
 from app.domain.category import CategoryName, CategorySlug
 from app.domain.keyword import KeywordName
+from app.domain.safe_url import SafeUrl
 
 
 class CategorySlugType(TypeDecorator[CategorySlug]):
@@ -77,3 +78,24 @@ class KeywordNameType(TypeDecorator[KeywordName]):
         if value is None:
             return None
         return KeywordName(value)
+
+
+class SafeUrlType(TypeDecorator[SafeUrl]):
+    """SafeUrl <-> VARCHAR(2048)."""
+
+    impl = String(2048)
+    cache_ok = True
+
+    def process_bind_param(self, value: Any, dialect: Dialect) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, SafeUrl):
+            return value.root
+        if isinstance(value, str):
+            return SafeUrl(value).root
+        raise TypeError(f"Expected SafeUrl or str, got {type(value).__name__}")
+
+    def process_result_value(self, value: Any, dialect: Dialect) -> SafeUrl | None:
+        if value is None:
+            return None
+        return SafeUrl(value)

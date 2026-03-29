@@ -294,8 +294,9 @@ async def fetch_content(
         robots_cache = RobotsCache()
         async with httpx.AsyncClient(headers=HEADERS, timeout=HTTP_TIMEOUT) as client:
             try:
+                # TODO: extract_content の引数を SafeUrl に変更する
                 content = await extract_content(
-                    client, article.original_url, robots_cache
+                    client, str(article.original_url), robots_cache
                 )
             except PermanentFetchError as e:
                 article.skip_content_fetch = True

@@ -53,7 +53,8 @@ async def list_watchlist(
             WatchlistResponse(
                 news_article_id=item.news_article.id,
                 original_title=item.news_article.original_title,
-                original_url=item.news_article.original_url,
+                # TODO: SafeUrl を WatchlistResponse に直接渡せるようスキーマ側を修正する
+                original_url=str(item.news_article.original_url),
                 source_name=item.news_article.news_source.name
                 if item.news_article.news_source
                 else "",
@@ -112,7 +113,8 @@ async def add_to_watchlist(
     return WatchlistResponse(
         news_article_id=article.id,
         original_title=article.original_title,
-        original_url=article.original_url,
+        # TODO: SafeUrl を WatchlistResponse に直接渡せるようスキーマ側を修正する
+        original_url=str(article.original_url),
         source_name=article.news_source.name if article.news_source else "",
         published_at=article.published_at,
         created_at=item.created_at,

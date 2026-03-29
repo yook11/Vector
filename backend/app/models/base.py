@@ -11,7 +11,13 @@ from sqlmodel import SQLModel
 
 from app.domain.category import CategoryName, CategorySlug
 from app.domain.keyword import KeywordName
-from app.models.types import CategoryNameType, CategorySlugType, KeywordNameType
+from app.domain.safe_url import SafeUrl
+from app.models.types import (
+    CategoryNameType,
+    CategorySlugType,
+    KeywordNameType,
+    SafeUrlType,
+)
 
 
 class Base(DeclarativeBase):
@@ -23,4 +29,5 @@ class Base(DeclarativeBase):
         CategorySlug: CategorySlugType,
         CategoryName: CategoryNameType,
         KeywordName: KeywordNameType,
+        SafeUrl: SafeUrlType,
     }
