@@ -1,21 +1,31 @@
-from datetime import datetime
-from typing import Optional
+from __future__ import annotations
 
+from datetime import datetime
+from typing import TYPE_CHECKING
+
+import sqlalchemy as sa
 from sqlalchemy import (
-    Column,
     DateTime,
     ForeignKey,
     Index,
-    Integer,
+    String,
     Text,
     UniqueConstraint,
     func,
     text,
 )
-from sqlmodel import Field, Relationship, SQLModel
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.models.base import Base
+
+if TYPE_CHECKING:
+    from app.models.article_analysis import ArticleAnalysis
+    from app.models.article_keyword import ArticleKeyword
+    from app.models.news_source import NewsSource
+    from app.models.watchlist_entry import WatchlistEntry
 
 
-class NewsArticle(SQLModel, table=True):
+class NewsArticle(Base):
     __tablename__ = "news_articles"
     __table_args__ = (
         UniqueConstraint("original_url", name="uq_news_articles_original_url"),
@@ -34,57 +44,28 @@ class NewsArticle(SQLModel, table=True):
         ),
     )
 
-    id: int | None = Field(default=None, primary_key=True)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    original_title: Mapped[str] = mapped_column(String(500))
+    original_url: Mapped[str] = mapped_column(String(2048))
+    original_content: Mapped[str | None] = mapped_column(Text())
+    original_description: Mapped[str | None] = mapped_column(String(2000))
+    news_source_id: Mapped[int] = mapped_column(
+        ForeignKey("news_sources.id", ondelete="RESTRICT"),
+    )
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    skip_content_fetch: Mapped[bool] = mapped_column(server_default=sa.false())
 
-    # --- Primary columns (new schema, used by application code) ---
-    original_title: str = Field(max_length=500, nullable=False)
-    original_url: str = Field(max_length=2048, nullable=False)
-    original_content: str | None = Field(default=None, sa_type=Text())
-    original_description: str | None = Field(default=None, max_length=2000)
-    news_source_id: int = Field(
-        sa_column=Column(
-            Integer,
-            ForeignKey(
-                "news_sources.id",
-                ondelete="RESTRICT",
-                name="fk_news_articles_news_source_id",
-            ),
-            nullable=False,
-        )
+    # Relationships
+    article_analysis: Mapped[ArticleAnalysis | None] = relationship(
+        back_populates="news_article", uselist=False
     )
-    published_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
-    created_at: datetime | None = Field(
-        default=None,
-        sa_column=Column(
-            DateTime(timezone=True),
-            server_default=func.now(),
-            nullable=False,
-        ),
-    )
-
-    skip_content_fetch: bool = Field(default=False, nullable=False)
-
-    # --- Relationships ---
-    article_analysis: Optional["ArticleAnalysis"] = Relationship(
-        back_populates="news_article",
-        sa_relationship_kwargs={"uselist": False},
-    )
-    news_source: "NewsSource" = Relationship(
-        back_populates="articles",
-        sa_relationship_kwargs={
-            "uselist": False,
-            "foreign_keys": "[NewsArticle.news_source_id]",
-        },
-    )
-    # article_keywords: cross-base (ArticleKeyword is DeclarativeBase) — FK only
-    watchlist_entries: list["WatchlistEntry"] = Relationship(
+    news_source: Mapped[NewsSource] = relationship(back_populates="articles")
+    article_keywords: Mapped[list[ArticleKeyword]] = relationship(
         back_populates="news_article"
     )
-
-
-# Resolve forward references
-from app.models.article_analysis import ArticleAnalysis  # noqa: E402, F811
-from app.models.news_source import NewsSource  # noqa: E402, F811
-from app.models.watchlist_entry import WatchlistEntry  # noqa: E402, F811
-
-NewsArticle.model_rebuild()
+    watchlist_entries: Mapped[list[WatchlistEntry]] = relationship(
+        back_populates="news_article"
+    )

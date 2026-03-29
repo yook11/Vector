@@ -1,8 +1,18 @@
+from __future__ import annotations
+
 from datetime import datetime
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
-from sqlalchemy import CheckConstraint, Column, DateTime, String, UniqueConstraint, func
-from sqlmodel import Field, Relationship, SQLModel
+import sqlalchemy as sa
+from sqlalchemy import CheckConstraint, DateTime, String, UniqueConstraint, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.models.base import Base
+
+if TYPE_CHECKING:
+    from app.models.fetch_log import FetchLog
+    from app.models.news_article import NewsArticle
 
 
 class SourceType(StrEnum):
@@ -10,7 +20,7 @@ class SourceType(StrEnum):
     API = "api"
 
 
-class NewsSource(SQLModel, table=True):
+class NewsSource(Base):
     __tablename__ = "news_sources"
     __table_args__ = (
         UniqueConstraint(
@@ -30,42 +40,20 @@ class NewsSource(SQLModel, table=True):
         ),
     )
 
-    id: int | None = Field(default=None, primary_key=True)
-    name: str = Field(max_length=50, nullable=False)
-    source_type: SourceType = Field(sa_type=String(20), nullable=False)
-    site_url: str = Field(max_length=2048, nullable=False)
-    endpoint_url: str = Field(max_length=2048, unique=True, nullable=False)
-    is_active: bool = Field(default=True, nullable=False)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(50))
+    source_type: Mapped[SourceType] = mapped_column(String(20))
+    site_url: Mapped[str] = mapped_column(String(2048))
+    endpoint_url: Mapped[str] = mapped_column(String(2048), unique=True)
+    is_active: Mapped[bool] = mapped_column(server_default=sa.true())
 
-    created_at: datetime | None = Field(
-        default=None,
-        sa_column=Column(
-            DateTime(timezone=True),
-            server_default=func.now(),
-            nullable=False,
-        ),
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
     )
-    updated_at: datetime | None = Field(
-        default=None,
-        sa_column=Column(
-            DateTime(timezone=True),
-            server_default=func.now(),
-            nullable=False,
-        ),
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
     )
 
     # Relationships
-    articles: list["NewsArticle"] = Relationship(
-        back_populates="news_source",
-        sa_relationship_kwargs={
-            "foreign_keys": "[NewsArticle.news_source_id]",
-        },
-    )
-    fetch_logs: list["FetchLog"] = Relationship(back_populates="source")
-
-
-# Resolve forward references
-from app.models.fetch_log import FetchLog  # noqa: E402, F811
-from app.models.news_article import NewsArticle  # noqa: E402, F811
-
-NewsSource.model_rebuild()
+    articles: Mapped[list[NewsArticle]] = relationship(back_populates="news_source")
+    fetch_logs: Mapped[list[FetchLog]] = relationship(back_populates="source")

@@ -9,6 +9,7 @@ from app.models.base import Base
 
 if TYPE_CHECKING:
     from app.models.keyword import Keyword
+    from app.models.news_article import NewsArticle
 
 
 class ArticleKeyword(Base):
@@ -24,6 +25,5 @@ class ArticleKeyword(Base):
     )
 
     # Relationships
-    # keyword: same Base — OK
     keyword: Mapped[Keyword] = relationship(back_populates="article_keywords")
-    # news_article: cross-base (NewsArticle is SQLModel) — FK only, no relationship
+    news_article: Mapped[NewsArticle] = relationship(back_populates="article_keywords")

@@ -1,8 +1,17 @@
-from datetime import UTC, datetime
-from enum import StrEnum
+from __future__ import annotations
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
-from sqlmodel import Field, Relationship, SQLModel
+from datetime import datetime
+from enum import StrEnum
+from typing import TYPE_CHECKING
+
+import sqlalchemy as sa
+from sqlalchemy import DateTime, ForeignKey, String, Text, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.models.base import Base
+
+if TYPE_CHECKING:
+    from app.models.news_source import NewsSource
 
 
 class FetchStatus(StrEnum):
@@ -10,37 +19,21 @@ class FetchStatus(StrEnum):
     ERROR = "error"
 
 
-class FetchLog(SQLModel, table=True):
+class FetchLog(Base):
     __tablename__ = "fetch_logs"
 
-    id: int | None = Field(default=None, primary_key=True)
-    source_id: int = Field(
-        sa_column=Column(
-            Integer,
-            ForeignKey(
-                "news_sources.id",
-                ondelete="CASCADE",
-                name="fk_fetch_logs_source_id",
-            ),
-            nullable=False,
-            index=True,
-        )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_id: Mapped[int] = mapped_column(
+        ForeignKey("news_sources.id", ondelete="CASCADE"),
+        index=True,
     )
-    status: FetchStatus = Field(sa_type=String(20), nullable=False)
-    articles_count: int = Field(default=0, nullable=False)
-    error_message: str | None = Field(default=None, sa_type=Text())
-    duration_ms: int | None = Field(default=None)
-    fetched_at: datetime = Field(
-        default_factory=lambda: datetime.now(UTC),
-        nullable=False,
-        sa_type=DateTime(timezone=True),
+    status: Mapped[FetchStatus] = mapped_column(String(20))
+    articles_count: Mapped[int] = mapped_column(server_default=sa.text("0"))
+    error_message: Mapped[str | None] = mapped_column(Text())
+    duration_ms: Mapped[int | None]
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
     )
 
-    # Relationships
-    source: "NewsSource" = Relationship(back_populates="fetch_logs")
-
-
-# Resolve forward references
-from app.models.news_source import NewsSource  # noqa: E402, F811
-
-FetchLog.model_rebuild()
+    # Relationships (same Base — OK)
+    source: Mapped[NewsSource] = relationship(back_populates="fetch_logs")

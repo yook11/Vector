@@ -1,18 +1,24 @@
+from __future__ import annotations
+
 from datetime import datetime
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
-    Column,
     DateTime,
     ForeignKey,
-    Integer,
     String,
     Text,
     UniqueConstraint,
     func,
 )
-from sqlmodel import Field, Relationship, SQLModel
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.models.base import Base
+
+if TYPE_CHECKING:
+    from app.models.news_article import NewsArticle
 
 
 class ImpactLevel(StrEnum):
@@ -22,48 +28,26 @@ class ImpactLevel(StrEnum):
     CRITICAL = "critical"
 
 
-class ArticleAnalysis(SQLModel, table=True):
+class ArticleAnalysis(Base):
     __tablename__ = "article_analyses"
     __table_args__ = (
         UniqueConstraint("news_article_id", name="uq_article_analyses_news_article_id"),
     )
 
-    id: int | None = Field(default=None, primary_key=True)
-    news_article_id: int = Field(
-        sa_column=Column(
-            Integer,
-            ForeignKey(
-                "news_articles.id",
-                ondelete="CASCADE",
-                name="fk_article_analyses_news_article_id",
-            ),
-            nullable=False,
-        )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    news_article_id: Mapped[int] = mapped_column(
+        ForeignKey("news_articles.id", ondelete="CASCADE"),
     )
-    translated_title: str = Field(max_length=500, nullable=False)
-    summary: str = Field(sa_column=Column(Text, nullable=False))
-    impact_level: ImpactLevel = Field(sa_type=String(20), nullable=False)
-    reasoning: str = Field(sa_column=Column(Text, nullable=False))
-    ai_model: str = Field(max_length=100, nullable=False)
-    analyzed_at: datetime | None = Field(
-        default=None,
-        sa_column=Column(
-            DateTime(timezone=True),
-            server_default=func.now(),
-            nullable=False,
-        ),
+    translated_title: Mapped[str] = mapped_column(String(500))
+    summary: Mapped[str] = mapped_column(Text())
+    impact_level: Mapped[ImpactLevel] = mapped_column(String(20))
+    reasoning: Mapped[str] = mapped_column(Text())
+    ai_model: Mapped[str] = mapped_column(String(100))
+    analyzed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
     )
-    embedding: list[float] | None = Field(
-        default=None,
-        sa_column=Column(Vector(768), nullable=True),
-    )
-    embedding_model: str | None = Field(default=None, max_length=100)
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(768))
+    embedding_model: Mapped[str | None] = mapped_column(String(100))
 
     # Relationships
-    news_article: "NewsArticle" = Relationship(back_populates="article_analysis")
-
-
-# Resolve forward references
-from app.models.news_article import NewsArticle  # noqa: E402, F811
-
-ArticleAnalysis.model_rebuild()
+    news_article: Mapped[NewsArticle] = relationship(back_populates="article_analysis")
