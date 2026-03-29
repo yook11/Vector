@@ -1,0 +1,29 @@
+"""DeclarativeBase for models that use domain value objects.
+
+Category, Keyword, ArticleKeyword use this Base.
+Other models remain on SQLModel.
+
+Metadata is shared: Base.metadata = SQLModel.metadata
+so that Alembic, init_db, and tests see all tables in one metadata.
+"""
+
+from __future__ import annotations
+
+from sqlalchemy.orm import DeclarativeBase
+from sqlmodel import SQLModel
+
+from app.domain.category import CategoryName, CategorySlug
+from app.domain.keyword import KeywordName
+from app.models.types import CategoryNameType, CategorySlugType, KeywordNameType
+
+
+class Base(DeclarativeBase):
+    """Shared DeclarativeBase with VO type_annotation_map."""
+
+    metadata = SQLModel.metadata  # noqa: RUF012
+
+    type_annotation_map = {  # noqa: RUF012
+        CategorySlug: CategorySlugType,
+        CategoryName: CategoryNameType,
+        KeywordName: KeywordNameType,
+    }

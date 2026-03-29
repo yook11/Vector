@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
+import { Plus_Jakarta_Sans } from "next/font/google";
 import { headers } from "next/headers";
 import { ThemeProvider } from "next-themes";
 import { Toaster } from "sonner";
@@ -7,7 +7,11 @@ import { AuthErrorWatcher } from "@/components/auth/AuthErrorWatcher";
 import { Header } from "@/components/layout/Header";
 import "./globals.css";
 
-const inter = Inter({ subsets: ["latin"] });
+const plusJakartaSans = Plus_Jakarta_Sans({
+  subsets: ["latin"],
+  variable: "--font-sans",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "Vector",
@@ -31,7 +35,9 @@ export default async function RootLayout({
 
   return (
     <html lang="ja" suppressHydrationWarning>
-      <body className={`${inter.className} bg-background text-foreground`}>
+      <body
+        className={`${plusJakartaSans.variable} font-sans bg-background text-foreground`}
+      >
         <ThemeProvider
           attribute="class"
           defaultTheme="system"
@@ -40,7 +46,7 @@ export default async function RootLayout({
         >
           <AuthErrorWatcher />
           <Header />
-          <div className="h-[calc(100vh-3.5rem)]">{children}</div>
+          <div className="mt-11 h-[calc(100dvh-2.75rem)]">{children}</div>
           <Toaster richColors position="bottom-right" />
         </ThemeProvider>
       </body>

@@ -47,12 +47,14 @@ export default async function NewsPage({ params }: NewsPageProps) {
   }
 
   return (
-    <main className="mx-auto max-w-3xl p-6 space-y-4">
-      <Button variant="ghost" size="sm" asChild>
-        <Link href="/">&larr; Back to Dashboard</Link>
-      </Button>
-      <NewsDetail article={article} />
-      <RelatedArticles articles={similarArticles} />
+    <main className="h-full overflow-y-auto">
+      <div className="mx-auto max-w-3xl px-8 sm:px-12 py-6 sm:py-8 flex flex-col gap-8">
+        <Button variant="ghost" size="sm" asChild className="text-xs">
+          <Link href="/">&larr; Back to Dashboard</Link>
+        </Button>
+        <NewsDetail article={article} />
+        <RelatedArticles articles={similarArticles} />
+      </div>
     </main>
   );
 }

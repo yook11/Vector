@@ -53,9 +53,7 @@ class NewsArticle(SQLModel, table=True):
             "foreign_keys": "[NewsArticle.news_source_id]",
         },
     )
-    article_keywords: list["ArticleKeyword"] = Relationship(
-        back_populates="news_article"
-    )
+    # article_keywords: cross-base (ArticleKeyword is DeclarativeBase) — FK only
     watchlist_entries: list["WatchlistEntry"] = Relationship(
         back_populates="news_article"
     )
@@ -63,7 +61,6 @@ class NewsArticle(SQLModel, table=True):
 
 # Resolve forward references
 from app.models.analysis import ArticleAnalysis  # noqa: E402, F811
-from app.models.associations import ArticleKeyword  # noqa: E402, F811
 from app.models.news_source import NewsSource  # noqa: E402, F811
 from app.models.watchlist import WatchlistEntry  # noqa: E402, F811
 

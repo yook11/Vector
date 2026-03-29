@@ -2,28 +2,25 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 export default function DashboardLoading() {
   return (
-    <div className="flex">
-      <aside className="hidden lg:block w-64 border-r min-h-[calc(100vh-3.5rem)] p-4 space-y-2">
-        <Skeleton className="h-5 w-20 mb-4" />
+    <div className="flex h-full gap-0">
+      <aside className="hidden lg:flex w-64 shrink-0 flex-col border-r border-border p-6 gap-4">
+        <Skeleton className="h-5 w-24 mb-1" />
         {Array.from({ length: 6 }).map((_, i) => (
           // biome-ignore lint/suspicious/noArrayIndexKey: static skeleton list
-          <Skeleton key={i} className="h-8 w-full" />
+          <Skeleton key={i} className="h-9 w-full rounded-xl" />
         ))}
       </aside>
-      <main className="flex-1 p-6 space-y-6">
-        <div className="flex items-center justify-between">
-          <Skeleton className="h-8 w-40" />
-          <Skeleton className="h-9 w-24" />
+      <main className="flex-1 min-w-0 px-8 sm:px-12 py-6 sm:py-8 flex flex-col gap-8 overflow-y-auto">
+        <Skeleton className="h-5 w-28" />
+        <div className="flex flex-wrap gap-3">
+          <Skeleton className="h-9 w-72 rounded-md" />
+          <Skeleton className="h-9 w-[130px] rounded-md" />
+          <Skeleton className="h-9 w-[120px] rounded-md" />
         </div>
-        <div className="flex gap-3">
-          <Skeleton className="h-9 w-[140px]" />
-          <Skeleton className="h-9 w-[160px]" />
-          <Skeleton className="h-9 w-[130px]" />
-        </div>
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <div className="grid gap-8 md:grid-cols-2 xl:grid-cols-3">
           {Array.from({ length: 6 }).map((_, i) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: static skeleton list
-            <Skeleton key={i} className="h-48 w-full rounded-xl" />
+            <Skeleton key={i} className="h-36 w-full rounded-xl" />
           ))}
         </div>
       </main>

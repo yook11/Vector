@@ -40,7 +40,7 @@ class KeywordResponse(BaseModel):
     )
 
     id: int
-    name: str
+    name: KeywordName
     category: CategoryBrief
     status: KeywordStatus
     article_count: int = 0
@@ -67,5 +67,5 @@ class KeywordBrief(BaseModel):
     )
 
     id: int
-    name: str
+    name: KeywordName
     category: CategoryBrief

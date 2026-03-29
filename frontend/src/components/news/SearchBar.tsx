@@ -54,23 +54,23 @@ export function SearchBar() {
   };
 
   return (
-    <div className="relative w-full max-w-md">
-      <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+    <div className="relative w-full sm:w-72 shrink-0">
+      <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
       <Input
         type="text"
         placeholder="Search articles..."
         value={value}
         onChange={handleChange}
         onKeyDown={handleKeyDown}
-        className="pl-9 pr-9"
+        className="h-9 pl-9 pr-9 text-xs border-border"
       />
       {value && (
         <button
           type="button"
           onClick={handleClear}
-          className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
         >
-          <X className="h-4 w-4" />
+          <X className="size-3.5" />
         </button>
       )}
     </div>

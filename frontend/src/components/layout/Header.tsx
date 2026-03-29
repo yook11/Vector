@@ -1,33 +1,43 @@
 import Link from "next/link";
+import { MobileNav } from "@/components/layout/MobileNav";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
 import { UserMenu } from "@/components/layout/UserMenu";
-import { Separator } from "@/components/ui/separator";
+
+const navItems = [
+  { href: "/", label: "ニュース" },
+  { href: "/watchlist", label: "分析" },
+  { href: "/settings", label: "マイページ" },
+];
 
 export function Header() {
   return (
-    <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-      <div className="flex h-14 items-center px-6">
-        <Link href="/" className="text-lg font-bold tracking-tight mr-6">
-          Vector
-        </Link>
-        <Separator orientation="vertical" className="h-6 mr-6" />
-        <nav className="flex items-center gap-4 text-sm">
+    <header className="fixed top-0 z-50 w-full border-0 bg-white/70 backdrop-blur-xl dark:bg-neutral-950/80">
+      <div className="mx-auto grid h-11 grid-cols-[1fr_auto_1fr] items-center px-5 sm:px-8">
+        <div className="flex items-center">
           <Link
             href="/"
-            className="text-muted-foreground transition-colors hover:text-foreground"
+            className="text-sm font-semibold tracking-tight opacity-90 transition-opacity hover:opacity-100"
           >
-            Dashboard
+            Vector
           </Link>
-          <Link
-            href="/watchlist"
-            className="text-muted-foreground transition-colors hover:text-foreground"
-          >
-            Watchlist
-          </Link>
+        </div>
+
+        <nav className="hidden sm:flex items-center gap-7">
+          {navItems.map((item) => (
+            <Link
+              key={item.href}
+              href={item.href}
+              className="text-xs text-foreground/60 transition-colors duration-300 hover:text-foreground"
+            >
+              {item.label}
+            </Link>
+          ))}
         </nav>
-        <div className="ml-auto flex items-center gap-2">
+
+        <div className="flex items-center justify-end gap-1">
           <ThemeToggle />
           <UserMenu />
+          <MobileNav items={navItems} />
         </div>
       </div>
     </header>

@@ -472,7 +472,7 @@ async def test_analyze_article_saves_keyword_links(
     for link in links:
         kw_stmt = select(Keyword).where(Keyword.id == link.keyword_id)
         kw = (await db_session.execute(kw_stmt)).scalar_one()
-        linked_kws.add(kw.name)
+        linked_kws.add(str(kw.name))
     assert linked_kws == {"Quantum Computing", "Error Correction"}
 
     # Verify keywords_by_category were passed to analyzer

@@ -67,9 +67,7 @@ async def create_keyword(
     _user: CurrentUser = Depends(get_admin_user),
     session: AsyncSession = Depends(get_session),
 ) -> KeywordResponse:
-    name_value = body.name.value
-
-    existing = await session.execute(select(Keyword).where(Keyword.name == name_value))
+    existing = await session.execute(select(Keyword).where(Keyword.name == body.name))
     if existing.scalar_one_or_none():
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -84,7 +82,7 @@ async def create_keyword(
             detail=f"Category ID {body.category_id} not found",
         )
 
-    keyword = Keyword(name=name_value, category_id=body.category_id)
+    keyword = Keyword(name=body.name, category_id=body.category_id)
     session.add(keyword)
     await session.commit()
     await session.refresh(keyword)

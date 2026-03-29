@@ -14,29 +14,36 @@ function formatDate(dateStr: string | null | undefined): string {
 }
 
 const impactLevelColors: Record<ImpactLevel, string> = {
-  low: "bg-slate-100 text-slate-700",
-  medium: "bg-blue-100 text-blue-700",
-  high: "bg-orange-100 text-orange-700",
-  critical: "bg-red-100 text-red-700",
+  low: "bg-neutral-100 text-neutral-500 border-neutral-200 dark:bg-neutral-800/30 dark:text-neutral-400 dark:border-neutral-700/50",
+  medium:
+    "bg-emerald-50 text-emerald-600 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-400 dark:border-emerald-800/50",
+  high: "bg-amber-50 text-amber-600 border-amber-200 dark:bg-amber-950/40 dark:text-amber-400 dark:border-amber-800/50",
+  critical:
+    "bg-red-50 text-red-600 border-red-200 dark:bg-red-950/40 dark:text-red-400 dark:border-red-800/50",
 };
 
 export function NewsCard({ article }: { article: NewsResponse }) {
   const { analysis } = article;
 
   return (
-    <Card className="transition-shadow hover:shadow-md">
-      <CardHeader className="pb-3">
-        <div className="flex items-start justify-between gap-2">
-          <CardTitle className="text-base leading-snug">
+    <Card className="border-0 bg-transparent shadow-none">
+      <CardHeader className="p-0 pb-2">
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <span className="line-clamp-1">
+            {article.sourceName} &middot; {formatDate(article.publishedAt)}
+          </span>
+        </div>
+        <div className="flex items-start justify-between gap-3 mt-1.5">
+          <CardTitle className="text-base font-medium leading-snug text-foreground">
             <Link href={`/news/${article.id}`} className="hover:underline">
               {analysis?.translatedTitle ?? article.originalTitle}
             </Link>
           </CardTitle>
-          <div className="flex items-center gap-1 shrink-0">
+          <div className="flex items-center gap-1.5 shrink-0 mt-0.5">
             {analysis && (
               <Badge
                 variant="outline"
-                className={impactLevelColors[analysis.impactLevel]}
+                className={`text-[11px] border ${impactLevelColors[analysis.impactLevel]}`}
               >
                 {analysis.impactLevel}
               </Badge>
@@ -47,15 +54,10 @@ export function NewsCard({ article }: { article: NewsResponse }) {
             />
           </div>
         </div>
-        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <span className="line-clamp-1">
-            {article.sourceName} &middot; {formatDate(article.publishedAt)}
-          </span>
-        </div>
       </CardHeader>
-      <CardContent className="space-y-3">
+      <CardContent className="p-0 flex flex-col gap-3">
         {analysis && (
-          <p className="text-sm text-muted-foreground line-clamp-2">
+          <p className="text-sm text-muted-foreground leading-relaxed line-clamp-2">
             {analysis.summary}
           </p>
         )}
@@ -65,9 +67,13 @@ export function NewsCard({ article }: { article: NewsResponse }) {
           </p>
         )}
         {article.keywords.length > 0 && (
-          <div className="flex flex-wrap gap-1">
+          <div className="flex flex-wrap gap-1.5">
             {article.keywords.map((kw) => (
-              <Badge key={kw.id} variant="secondary" className="text-xs">
+              <Badge
+                key={kw.id}
+                variant="secondary"
+                className="text-[11px] font-normal"
+              >
                 {kw.name}
               </Badge>
             ))}

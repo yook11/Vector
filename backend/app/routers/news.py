@@ -1,4 +1,5 @@
 import math
+from collections import defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import case
@@ -56,23 +57,49 @@ async def _get_watched_ids(session: AsyncSession, user: CurrentUser | None) -> s
     return set(result.scalars().all())
 
 
+async def _load_article_keywords(
+    session: AsyncSession, article_ids: list[int]
+) -> dict[int, list[KeywordBrief]]:
+    """Load keywords for articles via explicit query (cross-base boundary).
+
+    NewsArticle (SQLModel) cannot have a relationship to ArticleKeyword
+    (DeclarativeBase) due to registry mismatch. This helper bridges the gap.
+    """
+    if not article_ids:
+        return {}
+
+    stmt = (
+        select(ArticleKeyword)
+        .options(selectinload(ArticleKeyword.keyword).selectinload(Keyword.category))
+        .where(ArticleKeyword.news_article_id.in_(article_ids))
+    )
+    result = await session.execute(stmt)
+    links = result.scalars().all()
+
+    keywords_map: dict[int, list[KeywordBrief]] = defaultdict(list)
+    for link in links:
+        if link.keyword:
+            keywords_map[link.news_article_id].append(
+                KeywordBrief(
+                    id=link.keyword.id,
+                    name=link.keyword.name,
+                    category=CategoryBrief(
+                        slug=link.keyword.category.slug,
+                        name=link.keyword.category.name,
+                    ),
+                )
+            )
+
+    return dict(keywords_map)
+
+
 def _build_news_response(
     article: NewsArticle,
     watched_ids: set[int] | None = None,
+    keywords_map: dict[int, list[KeywordBrief]] | None = None,
 ) -> NewsResponse:
     """Convert a NewsArticle ORM object to NewsResponse schema."""
-    keywords = [
-        KeywordBrief(
-            id=link.keyword.id,
-            name=link.keyword.name,
-            category=CategoryBrief(
-                slug=link.keyword.category.slug,
-                name=link.keyword.category.name,
-            ),
-        )
-        for link in article.article_keywords
-        if link.keyword
-    ]
+    keywords = keywords_map.get(article.id, []) if keywords_map else []
 
     analysis = None
     a = article.article_analysis
@@ -105,9 +132,6 @@ def _news_eager_options() -> list:
     return [
         selectinload(NewsArticle.article_analysis),
         selectinload(NewsArticle.news_source),
-        selectinload(NewsArticle.article_keywords)
-        .selectinload(ArticleKeyword.keyword)
-        .selectinload(Keyword.category),
     ]
 
 
@@ -206,11 +230,13 @@ async def list_news(
     result = await session.execute(stmt)
     articles = result.unique().scalars().all()
 
-    # Compute watched IDs for the user
+    # Load keywords and watched IDs
+    article_ids = [a.id for a in articles]
+    keywords_map = await _load_article_keywords(session, article_ids)
     watched_ids = await _get_watched_ids(session, user)
 
     return PaginatedNewsResponse(
-        items=[_build_news_response(a, watched_ids) for a in articles],
+        items=[_build_news_response(a, watched_ids, keywords_map) for a in articles],
         total=total,
         page=page,
         per_page=per_page,
@@ -305,7 +331,10 @@ async def get_similar_news(
     similar_result = await session.execute(similar_stmt)
     articles = similar_result.unique().scalars().all()
 
-    return [_build_news_response(a) for a in articles]
+    article_ids = [a.id for a in articles]
+    keywords_map = await _load_article_keywords(session, article_ids)
+
+    return [_build_news_response(a, keywords_map=keywords_map) for a in articles]
 
 
 @router.get("/{news_id}", response_model=NewsResponse)
@@ -328,8 +357,9 @@ async def get_news(
             detail="News article not found",
         )
 
+    keywords_map = await _load_article_keywords(session, [article.id])
     watched_ids = await _get_watched_ids(session, user)
-    return _build_news_response(article, watched_ids)
+    return _build_news_response(article, watched_ids, keywords_map)
 
 
 @router.post(
