@@ -19,6 +19,8 @@ def include_name(name: str, type_: str, parent_names: dict[str, str | None]) -> 
     """Exclude the 'auth' schema from autogenerate (managed by Better Auth CLI)."""
     if type_ == "schema":
         return name != "auth"
+    if type_ == "table" and parent_names.get("schema_name") == "auth":
+        return False
     return True
 
 
