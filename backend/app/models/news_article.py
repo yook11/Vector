@@ -1,14 +1,36 @@
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, func
+from sqlalchemy import (
+    Column,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlmodel import Field, Relationship, SQLModel
 
 
 class NewsArticle(SQLModel, table=True):
     __tablename__ = "news_articles"
     __table_args__ = (
+        UniqueConstraint("original_url", name="uq_news_articles_original_url"),
         Index("idx_news_published", "published_at", postgresql_using="btree"),
+        Index(
+            "idx_content_fetch_pending",
+            "skip_content_fetch",
+            postgresql_where=text(
+                "original_content IS NULL AND skip_content_fetch = false"
+            ),
+        ),
+        Index(
+            "idx_news_source_published",
+            "news_source_id",
+            text("published_at DESC"),
+        ),
     )
 
     id: int | None = Field(default=None, primary_key=True)
