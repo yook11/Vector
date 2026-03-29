@@ -9,11 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from app.config import settings
-from app.models.analysis import ArticleAnalysis, ImpactLevel
-from app.models.associations import ArticleKeyword
+from app.models.article_analysis import ArticleAnalysis, ImpactLevel
+from app.models.article_keyword import ArticleKeyword
 from app.models.category import Category
 from app.models.keyword import Keyword
-from app.models.news import NewsArticle
+from app.models.news_article import NewsArticle
 from app.utils.sanitize import strip_html_tags
 
 logger = structlog.get_logger(__name__)

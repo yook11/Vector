@@ -1,14 +1,37 @@
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, func
+from sqlalchemy import (
+    Column,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    Text,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlmodel import Field, Relationship, SQLModel
 
 
 class NewsArticle(SQLModel, table=True):
     __tablename__ = "news_articles"
     __table_args__ = (
+        UniqueConstraint("original_url", name="uq_news_articles_original_url"),
         Index("idx_news_published", "published_at", postgresql_using="btree"),
+        Index(
+            "idx_content_fetch_pending",
+            "skip_content_fetch",
+            postgresql_where=text(
+                "original_content IS NULL AND skip_content_fetch = false"
+            ),
+        ),
+        Index(
+            "idx_news_source_published",
+            "news_source_id",
+            text("published_at DESC"),
+        ),
     )
 
     id: int | None = Field(default=None, primary_key=True)
@@ -16,7 +39,7 @@ class NewsArticle(SQLModel, table=True):
     # --- Primary columns (new schema, used by application code) ---
     original_title: str = Field(max_length=500, nullable=False)
     original_url: str = Field(max_length=2048, nullable=False)
-    original_content: str | None = Field(default=None)
+    original_content: str | None = Field(default=None, sa_type=Text())
     original_description: str | None = Field(default=None, max_length=2000)
     news_source_id: int = Field(
         sa_column=Column(
@@ -60,8 +83,8 @@ class NewsArticle(SQLModel, table=True):
 
 
 # Resolve forward references
-from app.models.analysis import ArticleAnalysis  # noqa: E402, F811
+from app.models.article_analysis import ArticleAnalysis  # noqa: E402, F811
 from app.models.news_source import NewsSource  # noqa: E402, F811
-from app.models.watchlist import WatchlistEntry  # noqa: E402, F811
+from app.models.watchlist_entry import WatchlistEntry  # noqa: E402, F811
 
 NewsArticle.model_rebuild()

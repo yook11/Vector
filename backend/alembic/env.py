@@ -16,9 +16,18 @@ target_metadata = SQLModel.metadata
 
 
 def include_name(name: str, type_: str, parent_names: dict[str, str | None]) -> bool:
-    """Exclude the 'auth' schema from autogenerate (managed by Better Auth CLI)."""
+    """Exclude the 'auth' schema from autogenerate reflection."""
     if type_ == "schema":
         return name != "auth"
+    if type_ == "table" and parent_names.get("schema_name") == "auth":
+        return False
+    return True
+
+
+def include_object(obj, name, type_, reflected, compare_to) -> bool:  # noqa: ANN001
+    """Exclude auth-schema objects from both model and DB sides."""
+    if type_ == "table" and getattr(obj, "schema", None) == "auth":
+        return False
     return True
 
 
@@ -30,6 +39,7 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         include_name=include_name,
+        include_object=include_object,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -40,6 +50,7 @@ def do_run_migrations(connection) -> None:  # type: ignore[no-untyped-def]
         connection=connection,
         target_metadata=target_metadata,
         include_name=include_name,
+        include_object=include_object,
     )
     with context.begin_transaction():
         context.run_migrations()

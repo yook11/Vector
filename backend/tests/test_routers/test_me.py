@@ -6,7 +6,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.news import NewsArticle
+from app.models.news_article import NewsArticle
 from app.models.news_source import NewsSource
 
 

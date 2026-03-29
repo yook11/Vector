@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.models.analysis import ArticleAnalysis
-from app.models.news import NewsArticle
+from app.models.article_analysis import ArticleAnalysis
+from app.models.news_article import NewsArticle
 from app.models.news_source import NewsSource
 from app.services.ai_analyzer import AnalysisError, RateLimitError
 from app.services.content_extractor import PermanentFetchError, TemporaryFetchError

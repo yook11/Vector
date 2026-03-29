@@ -66,6 +66,6 @@ class NewsSource(SQLModel, table=True):
 
 # Resolve forward references
 from app.models.fetch_log import FetchLog  # noqa: E402, F811
-from app.models.news import NewsArticle  # noqa: E402, F811
+from app.models.news_article import NewsArticle  # noqa: E402, F811
 
 NewsSource.model_rebuild()

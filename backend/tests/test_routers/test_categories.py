@@ -4,7 +4,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.associations import ArticleKeyword
+from app.models.article_keyword import ArticleKeyword
 from app.models.category import Category
 from app.models.keyword import Keyword
 from app.models.news_source import NewsSource
@@ -82,7 +82,7 @@ class TestListCategories:
         db_session.add(kw)
         await db_session.flush()
 
-        from app.models.news import NewsArticle
+        from app.models.news_article import NewsArticle
 
         article = NewsArticle(
             original_title="TF Article",

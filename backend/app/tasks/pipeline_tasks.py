@@ -26,8 +26,8 @@ from taskiq.schedule_sources import LabelScheduleSource
 from taskiq_redis import RedisAsyncResultBackend, RedisStreamBroker
 
 from app.config import settings
-from app.models.analysis import ArticleAnalysis
-from app.models.news import NewsArticle
+from app.models.article_analysis import ArticleAnalysis
+from app.models.news_article import NewsArticle
 from app.models.news_source import NewsSource
 from app.services.ai_analyzer import (
     AnalysisError,

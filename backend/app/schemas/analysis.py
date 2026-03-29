@@ -3,7 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 
-from app.models.analysis import ImpactLevel
+from app.models.article_analysis import ImpactLevel
 
 
 class AnalysisResponse(BaseModel):

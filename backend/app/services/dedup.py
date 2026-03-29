@@ -17,8 +17,8 @@ from sqlalchemy import and_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models.analysis import ArticleAnalysis
-from app.models.news import NewsArticle
+from app.models.article_analysis import ArticleAnalysis
+from app.models.news_article import NewsArticle
 
 logger = structlog.get_logger(__name__)
 

@@ -6,8 +6,8 @@ from sqlalchemy.orm import selectinload
 from sqlmodel import func, select
 
 from app.dependencies import CurrentUser, get_current_user, get_session
-from app.models.news import NewsArticle
-from app.models.watchlist import WatchlistEntry
+from app.models.news_article import NewsArticle
+from app.models.watchlist_entry import WatchlistEntry
 from app.schemas.user import (
     WatchlistCreate,
     WatchlistListResponse,

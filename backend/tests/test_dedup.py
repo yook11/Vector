@@ -6,8 +6,8 @@ import numpy as np
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.analysis import ArticleAnalysis, ImpactLevel
-from app.models.news import NewsArticle
+from app.models.article_analysis import ArticleAnalysis, ImpactLevel
+from app.models.news_article import NewsArticle
 from app.models.news_source import NewsSource
 from app.services.dedup import DedupResult, detect_duplicates
 
