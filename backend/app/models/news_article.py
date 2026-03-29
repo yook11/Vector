@@ -7,6 +7,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Text,
     UniqueConstraint,
     func,
     text,
@@ -38,7 +39,7 @@ class NewsArticle(SQLModel, table=True):
     # --- Primary columns (new schema, used by application code) ---
     original_title: str = Field(max_length=500, nullable=False)
     original_url: str = Field(max_length=2048, nullable=False)
-    original_content: str | None = Field(default=None)
+    original_content: str | None = Field(default=None, sa_type=Text())
     original_description: str | None = Field(default=None, max_length=2000)
     news_source_id: int = Field(
         sa_column=Column(
