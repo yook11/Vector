@@ -1,7 +1,4 @@
-"""DeclarativeBase for models that use domain value objects.
-
-Category, Keyword, ArticleKeyword use this Base.
-Other models remain on SQLModel.
+"""DeclarativeBase shared by all application models.
 
 Metadata is shared: Base.metadata = SQLModel.metadata
 so that Alembic, init_db, and tests see all tables in one metadata.

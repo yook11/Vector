@@ -1,41 +1,34 @@
+from __future__ import annotations
+
 import uuid as uuid_mod
 from datetime import datetime
+from typing import TYPE_CHECKING
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, func
+from sqlalchemy import DateTime, ForeignKey, func
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
-from sqlmodel import Field, Relationship, SQLModel
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.models.base import Base
+
+if TYPE_CHECKING:
+    from app.models.news_article import NewsArticle
 
 
-class WatchlistEntry(SQLModel, table=True):
+class WatchlistEntry(Base):
     __tablename__ = "watchlist_entries"
 
-    user_id: uuid_mod.UUID = Field(
-        sa_column=Column(
-            PgUUID(as_uuid=True),
-            ForeignKey("auth.user.id", ondelete="CASCADE"),
-            primary_key=True,
-        )
+    user_id: Mapped[uuid_mod.UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("auth.user.id", ondelete="CASCADE"),
+        primary_key=True,
     )
-    news_article_id: int = Field(
-        sa_column=Column(
-            Integer,
-            ForeignKey("news_articles.id", ondelete="CASCADE"),
-            primary_key=True,
-        )
+    news_article_id: Mapped[int] = mapped_column(
+        ForeignKey("news_articles.id", ondelete="CASCADE"),
+        primary_key=True,
     )
-    created_at: datetime = Field(
-        sa_column=Column(
-            DateTime(timezone=True),
-            nullable=False,
-            server_default=func.now(),
-        )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
     )
 
     # Relationships
-    news_article: "NewsArticle" = Relationship(back_populates="watchlist_entries")
-
-
-# Resolve forward references
-from app.models.news_article import NewsArticle  # noqa: E402
-
-WatchlistEntry.model_rebuild()
+    news_article: Mapped[NewsArticle] = relationship(back_populates="watchlist_entries")
