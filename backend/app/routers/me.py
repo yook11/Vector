@@ -53,7 +53,7 @@ async def list_watchlist(
             WatchlistResponse(
                 news_article_id=item.news_article.id,
                 original_title=item.news_article.original_title,
-                # TODO: SafeUrl を WatchlistResponse に直接渡せるようスキーマ側を修正する
+                # TODO: スキーマ側で SafeUrl を直接受け入れる
                 original_url=str(item.news_article.original_url),
                 source_name=item.news_article.news_source.name
                 if item.news_article.news_source
