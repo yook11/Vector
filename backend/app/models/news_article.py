@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
 from sqlalchemy import (
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -16,6 +17,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.domain.safe_url import SafeUrl
 from app.models.base import Base
 
 if TYPE_CHECKING:
@@ -29,6 +31,14 @@ class NewsArticle(Base):
     __tablename__ = "news_articles"
     __table_args__ = (
         UniqueConstraint("original_url", name="uq_news_articles_original_url"),
+        CheckConstraint(
+            "original_url ~ '^https?://.+'",
+            name="ck_news_articles_url_scheme",
+        ),
+        CheckConstraint(
+            "original_title != ''",
+            name="ck_news_articles_title_not_empty",
+        ),
         Index("idx_news_published", "published_at", postgresql_using="btree"),
         Index(
             "idx_content_fetch_pending",
@@ -46,7 +56,7 @@ class NewsArticle(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     original_title: Mapped[str] = mapped_column(String(500))
-    original_url: Mapped[str] = mapped_column(String(2048))
+    original_url: Mapped[SafeUrl] = mapped_column()
     original_content: Mapped[str | None] = mapped_column(Text())
     original_description: Mapped[str | None] = mapped_column(String(2000))
     news_source_id: Mapped[int] = mapped_column(

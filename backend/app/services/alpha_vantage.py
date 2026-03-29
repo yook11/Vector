@@ -153,7 +153,8 @@ class AlphaVantageClient:
                 NewsArticle.original_url.in_(chunk)
             )
             rows = await session.execute(stmt)
-            existing_urls.update(row[0] for row in rows.all())
+            # TODO: SafeUrl の __eq__ が str と互換になれば str() 不要
+            existing_urls.update(str(row[0]) for row in rows.all())
 
         # Create new articles
         max_new = settings.max_articles_per_fetch

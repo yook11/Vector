@@ -193,8 +193,10 @@ async def _fetch_one(
     This function never raises; all errors are returned in the tuple.
     """
     try:
-        async with rate_limiter.acquire(article.original_url):
-            content = await extract_content(client, article.original_url, robots_cache)
+        # TODO: extract_content の引数を SafeUrl に変更する
+        url = str(article.original_url)
+        async with rate_limiter.acquire(url):
+            content = await extract_content(client, url, robots_cache)
             return (article, content, None)
     except Exception as e:
         logger.warning("content_fetch_error", article_id=article.id, error=str(e))
