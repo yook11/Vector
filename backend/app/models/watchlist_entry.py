@@ -36,6 +36,6 @@ class WatchlistEntry(SQLModel, table=True):
 
 
 # Resolve forward references
-from app.models.news import NewsArticle  # noqa: E402
+from app.models.news_article import NewsArticle  # noqa: E402
 
 WatchlistEntry.model_rebuild()

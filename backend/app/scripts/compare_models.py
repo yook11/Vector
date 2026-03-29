@@ -17,8 +17,8 @@ from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
 
 from app.config import settings
 from app.db import engine
-from app.models.analysis import AnalysisResult
-from app.models.news import NewsArticle
+from app.models.article_analysis import AnalysisResult
+from app.models.news_article import NewsArticle
 from app.services.ai_analyzer import AnalysisData, AnalysisError
 from app.services.gemini_analyzer import (
     ANALYSIS_PROMPT_BASE,

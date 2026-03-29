@@ -6,7 +6,7 @@ from sqlalchemy.orm import selectinload
 from sqlmodel import func, select
 
 from app.dependencies import CurrentUser, get_admin_user, get_current_user, get_session
-from app.models.associations import ArticleKeyword
+from app.models.article_keyword import ArticleKeyword
 from app.models.category import Category
 from app.models.keyword import Keyword
 from app.schemas.category import CategoryBrief

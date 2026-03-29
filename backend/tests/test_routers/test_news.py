@@ -7,10 +7,10 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.analysis import ArticleAnalysis, ImpactLevel
-from app.models.associations import ArticleKeyword
+from app.models.article_analysis import ArticleAnalysis, ImpactLevel
+from app.models.article_keyword import ArticleKeyword
 from app.models.keyword import Keyword
-from app.models.news import NewsArticle
+from app.models.news_article import NewsArticle
 from app.models.news_source import NewsSource
 
 

@@ -14,7 +14,7 @@ import trafilatura
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models.news import NewsArticle
+from app.models.news_article import NewsArticle
 
 logger = structlog.get_logger(__name__)
 

@@ -60,8 +60,8 @@ class NewsArticle(SQLModel, table=True):
 
 
 # Resolve forward references
-from app.models.analysis import ArticleAnalysis  # noqa: E402, F811
+from app.models.article_analysis import ArticleAnalysis  # noqa: E402, F811
 from app.models.news_source import NewsSource  # noqa: E402, F811
-from app.models.watchlist import WatchlistEntry  # noqa: E402, F811
+from app.models.watchlist_entry import WatchlistEntry  # noqa: E402, F811
 
 NewsArticle.model_rebuild()

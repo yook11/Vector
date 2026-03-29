@@ -11,7 +11,7 @@ from app.domain.keyword import KeywordName
 from app.models.base import Base
 
 if TYPE_CHECKING:
-    from app.models.associations import ArticleKeyword
+    from app.models.article_keyword import ArticleKeyword
     from app.models.category import Category
 
 

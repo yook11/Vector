@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from app.config import settings
-from app.models.news import NewsArticle
+from app.models.news_article import NewsArticle
 from app.models.news_source import NewsSource
 from app.services.news_fetcher import SourceFetchResult
 from app.services.source_helpers import get_last_successful_fetch_at

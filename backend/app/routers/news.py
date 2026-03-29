@@ -9,11 +9,11 @@ from sqlmodel import func, select
 
 from app.config import settings
 from app.dependencies import CurrentUser, get_admin_user, get_optional_user, get_session
-from app.models.analysis import ArticleAnalysis, ImpactLevel
-from app.models.associations import ArticleKeyword
+from app.models.article_analysis import ArticleAnalysis, ImpactLevel
+from app.models.article_keyword import ArticleKeyword
 from app.models.keyword import Keyword
-from app.models.news import NewsArticle
-from app.models.watchlist import WatchlistEntry
+from app.models.news_article import NewsArticle
+from app.models.watchlist_entry import WatchlistEntry
 from app.schemas.analysis import AnalysisResponse
 from app.schemas.category import CategoryBrief
 from app.schemas.keyword import KeywordBrief

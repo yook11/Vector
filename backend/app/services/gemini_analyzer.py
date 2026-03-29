@@ -9,7 +9,7 @@ from google import genai
 from google.genai.types import GenerateContentConfig
 
 from app.config import settings
-from app.models.analysis import ImpactLevel
+from app.models.article_analysis import ImpactLevel
 from app.services.ai_analyzer import (
     AnalysisData,
     AnalysisError,

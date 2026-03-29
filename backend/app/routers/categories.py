@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import func, select
 
 from app.dependencies import get_session
-from app.models.associations import ArticleKeyword
+from app.models.article_keyword import ArticleKeyword
 from app.models.category import Category
 from app.models.keyword import Keyword
 from app.schemas.category import (
