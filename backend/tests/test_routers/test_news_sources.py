@@ -47,8 +47,9 @@ async def test_get_source(
     assert response.status_code == 200
     data = response.json()
     assert data["name"] == sample_source.name
-    assert data["endpointUrl"] == sample_source.endpoint_url
-    assert data["siteUrl"] == sample_source.site_url
+    # TODO: スキーマ層を SafeUrl 対応にした後、str() 変換を削除
+    assert data["endpointUrl"] == str(sample_source.endpoint_url)
+    assert data["siteUrl"] == str(sample_source.site_url)
 
 
 async def test_get_source_not_found(

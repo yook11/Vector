@@ -8,6 +8,7 @@ import sqlalchemy as sa
 from sqlalchemy import CheckConstraint, DateTime, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.domain import SafeUrl
 from app.models.base import Base
 
 if TYPE_CHECKING:
@@ -27,6 +28,10 @@ class NewsSource(Base):
             "name", "source_type", name="uq_news_sources_name_source_type"
         ),
         CheckConstraint(
+            "name != ''",
+            name="ck_news_sources_name_not_empty",
+        ),
+        CheckConstraint(
             "source_type IN ('rss', 'api')",
             name="ck_news_sources_source_type",
         ),
@@ -43,8 +48,8 @@ class NewsSource(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(50))
     source_type: Mapped[SourceType] = mapped_column(String(20))
-    site_url: Mapped[str] = mapped_column(String(2048))
-    endpoint_url: Mapped[str] = mapped_column(String(2048), unique=True)
+    site_url: Mapped[SafeUrl] = mapped_column()
+    endpoint_url: Mapped[SafeUrl] = mapped_column(unique=True)
     is_active: Mapped[bool] = mapped_column(server_default=sa.true())
 
     created_at: Mapped[datetime] = mapped_column(

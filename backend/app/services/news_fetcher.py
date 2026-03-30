@@ -110,8 +110,9 @@ async def _fetch_rss_source(
         headers["If-Modified-Since"] = cached_last_modified
 
     try:
+        # TODO: スキーマ層を SafeUrl 対応にした後、str() 変換を削除
         response = await client.get(
-            source.endpoint_url, headers=headers, timeout=HTTP_TIMEOUT
+            str(source.endpoint_url), headers=headers, timeout=HTTP_TIMEOUT
         )
 
         # 304 Not Modified — nothing new
@@ -264,7 +265,8 @@ async def fetch_news_for_sources(
                 source_result = await _fetch_rss_source(client, session, source)
             elif source.source_type == SourceType.API:
                 # Route to the correct API client based on endpoint_url domain
-                domain = urlparse(source.endpoint_url).hostname or ""
+                # TODO: スキーマ層を SafeUrl 対応にした後、str() 変換を削除
+                domain = urlparse(str(source.endpoint_url)).hostname or ""
                 if "algolia.com" in domain:
                     from app.services.hacker_news import HackerNewsClient
 
@@ -283,7 +285,7 @@ async def fetch_news_for_sources(
                     logger.warning(
                         "unsupported_api_endpoint",
                         source=source.name,
-                        endpoint_url=source.endpoint_url,
+                        endpoint_url=str(source.endpoint_url),
                     )
                     msg = f"Unsupported API endpoint: {source.endpoint_url}"
                     source_result = SourceFetchResult(

@@ -78,7 +78,8 @@ async def test_fetch_log_recorded_on_error(
         mock_client.get = AsyncMock(
             side_effect=httpx.HTTPStatusError(
                 "Server Error",
-                request=httpx.Request("GET", sample_source.endpoint_url),
+                # TODO: スキーマ層を SafeUrl 対応にした後、str() 変換を削除
+                request=httpx.Request("GET", str(sample_source.endpoint_url)),
                 response=httpx.Response(500),
             )
         )
