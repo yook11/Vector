@@ -1,12 +1,14 @@
-from app.schemas.analysis import AnalysisResponse
 from app.schemas.category import (
-    CategoryBrief,
     CategoryDetailListResponse,
     CategoryDetailResponse,
-    KeywordInCategory,
+)
+from app.schemas.embeds import (
+    AnalysisEmbed,
+    CategoryEmbed,
+    KeywordEmbed,
+    KeywordWithCountEmbed,
 )
 from app.schemas.keyword import (
-    KeywordBrief,
     KeywordCreate,
     KeywordListResponse,
     KeywordResponse,
@@ -20,16 +22,16 @@ from app.schemas.news import (
 )
 
 __all__ = [
-    "AnalysisResponse",
-    "CategoryBrief",
+    "AnalysisEmbed",
     "CategoryDetailListResponse",
     "CategoryDetailResponse",
-    "KeywordBrief",
+    "CategoryEmbed",
     "KeywordCreate",
-    "KeywordInCategory",
+    "KeywordEmbed",
     "KeywordListResponse",
     "KeywordResponse",
     "KeywordUpdate",
+    "KeywordWithCountEmbed",
     "NewsFetchRequest",
     "NewsFetchResponse",
     "NewsResponse",

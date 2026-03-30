@@ -9,7 +9,7 @@ from app.dependencies import CurrentUser, get_admin_user, get_current_user, get_
 from app.models.article_keyword import ArticleKeyword
 from app.models.category import Category
 from app.models.keyword import Keyword
-from app.schemas.category import CategoryBrief
+from app.schemas.embeds import CategoryEmbed
 from app.schemas.keyword import (
     KeywordCreate,
     KeywordListResponse,
@@ -44,7 +44,7 @@ async def list_keywords(
             KeywordResponse(
                 id=kw.id,
                 name=kw.name,
-                category=CategoryBrief(
+                category=CategoryEmbed(
                     slug=kw.category.slug,
                     name=kw.category.name,
                 ),
@@ -90,7 +90,7 @@ async def create_keyword(
     return KeywordResponse(
         id=keyword.id,
         name=keyword.name,
-        category=CategoryBrief(slug=category.slug, name=category.name),
+        category=CategoryEmbed(slug=category.slug, name=category.name),
         status=keyword.status,
         article_count=0,
         created_at=keyword.created_at,
@@ -142,7 +142,7 @@ async def update_keyword(
     return KeywordResponse(
         id=keyword.id,
         name=keyword.name,
-        category=CategoryBrief(
+        category=CategoryEmbed(
             slug=keyword.category.slug,
             name=keyword.category.name,
         ),

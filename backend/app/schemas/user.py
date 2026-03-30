@@ -1,27 +1,16 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
-from pydantic.alias_generators import to_camel
+from app.schemas.base import _CamelBase
 
 
-class WatchlistCreate(BaseModel):
+class WatchlistCreate(_CamelBase):
     """POST /api/v1/me/watchlist request body."""
-
-    model_config = ConfigDict(
-        alias_generator=to_camel,
-        populate_by_name=True,
-    )
 
     news_article_id: int
 
 
-class WatchlistResponse(BaseModel):
+class WatchlistResponse(_CamelBase):
     """Watchlist item in API responses."""
-
-    model_config = ConfigDict(
-        alias_generator=to_camel,
-        populate_by_name=True,
-    )
 
     news_article_id: int
     original_title: str
@@ -31,13 +20,8 @@ class WatchlistResponse(BaseModel):
     created_at: datetime
 
 
-class WatchlistListResponse(BaseModel):
+class WatchlistListResponse(_CamelBase):
     """GET /api/v1/me/watchlist response wrapper."""
-
-    model_config = ConfigDict(
-        alias_generator=to_camel,
-        populate_by_name=True,
-    )
 
     items: list[WatchlistResponse]
     total: int

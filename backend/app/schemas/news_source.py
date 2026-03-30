@@ -3,10 +3,10 @@
 import re
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
-from pydantic.alias_generators import to_camel
+from pydantic import Field, field_validator
 
 from app.models.news_source import SourceType
+from app.schemas.base import _CamelBase
 from app.utils.sanitize import validate_url_scheme
 
 # --- XSS protection: source name whitelist ---
@@ -16,13 +16,8 @@ from app.utils.sanitize import validate_url_scheme
 _SOURCE_NAME_RE = re.compile(r"^(?=.*\w)[\w \-\.]+$", re.UNICODE)
 
 
-class NewsSourceCreate(BaseModel):
+class NewsSourceCreate(_CamelBase):
     """POST /api/v1/sources request body."""
-
-    model_config = ConfigDict(
-        alias_generator=to_camel,
-        populate_by_name=True,
-    )
 
     name: str = Field(min_length=1, max_length=50)
     source_type: SourceType
@@ -57,13 +52,8 @@ class NewsSourceCreate(BaseModel):
         return validate_url_scheme(v, "endpoint_url")
 
 
-class NewsSourceUpdate(BaseModel):
+class NewsSourceUpdate(_CamelBase):
     """PUT /api/v1/sources/{id} request body."""
-
-    model_config = ConfigDict(
-        alias_generator=to_camel,
-        populate_by_name=True,
-    )
 
     name: str | None = Field(default=None, min_length=1, max_length=50)
     source_type: SourceType | None = None
@@ -102,13 +92,8 @@ class NewsSourceUpdate(BaseModel):
         return None
 
 
-class NewsSourceResponse(BaseModel):
+class NewsSourceResponse(_CamelBase):
     """Single news source in API responses."""
-
-    model_config = ConfigDict(
-        alias_generator=to_camel,
-        populate_by_name=True,
-    )
 
     id: int
     name: str
@@ -120,13 +105,8 @@ class NewsSourceResponse(BaseModel):
     updated_at: datetime
 
 
-class NewsSourceListResponse(BaseModel):
+class NewsSourceListResponse(_CamelBase):
     """GET /api/v1/sources response wrapper."""
-
-    model_config = ConfigDict(
-        alias_generator=to_camel,
-        populate_by_name=True,
-    )
 
     items: list[NewsSourceResponse]
     total: int

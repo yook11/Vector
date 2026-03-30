@@ -1,19 +1,11 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
-from pydantic.alias_generators import to_camel
-
-from app.schemas.analysis import AnalysisResponse
-from app.schemas.keyword import KeywordBrief
+from app.schemas.base import _CamelBase
+from app.schemas.embeds import AnalysisEmbed, KeywordEmbed
 
 
-class NewsResponse(BaseModel):
+class NewsResponse(_CamelBase):
     """Single news article with analysis and keywords."""
-
-    model_config = ConfigDict(
-        alias_generator=to_camel,
-        populate_by_name=True,
-    )
 
     id: int
     original_title: str
@@ -22,18 +14,13 @@ class NewsResponse(BaseModel):
     published_at: datetime | None = None
     created_at: datetime
     original_content: str | None = None
-    keywords: list[KeywordBrief] = []
-    analysis: AnalysisResponse | None = None
+    keywords: list[KeywordEmbed] = []
+    analysis: AnalysisEmbed | None = None
     is_watched: bool = False
 
 
-class PaginatedNewsResponse(BaseModel):
+class PaginatedNewsResponse(_CamelBase):
     """Paginated list of news articles."""
-
-    model_config = ConfigDict(
-        alias_generator=to_camel,
-        populate_by_name=True,
-    )
 
     items: list[NewsResponse]
     total: int
@@ -42,37 +29,22 @@ class PaginatedNewsResponse(BaseModel):
     total_pages: int
 
 
-class NewsFetchRequest(BaseModel):
+class NewsFetchRequest(_CamelBase):
     """POST /api/v1/news/fetch request body."""
-
-    model_config = ConfigDict(
-        alias_generator=to_camel,
-        populate_by_name=True,
-    )
 
     source_ids: list[int] | None = None
 
 
-class NewsFetchResponse(BaseModel):
+class NewsFetchResponse(_CamelBase):
     """POST /api/v1/news/fetch response."""
-
-    model_config = ConfigDict(
-        alias_generator=to_camel,
-        populate_by_name=True,
-    )
 
     message: str
     sources_count: int | None = None
     job_id: str
 
 
-class EmbedResponse(BaseModel):
+class EmbedResponse(_CamelBase):
     """POST /api/v1/news/embed response."""
-
-    model_config = ConfigDict(
-        alias_generator=to_camel,
-        populate_by_name=True,
-    )
 
     message: str
     embedded_count: int

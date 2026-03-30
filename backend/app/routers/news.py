@@ -13,9 +13,7 @@ from app.models.article_keyword import ArticleKeyword
 from app.models.keyword import Keyword
 from app.models.news_article import NewsArticle
 from app.models.watchlist_entry import WatchlistEntry
-from app.schemas.analysis import AnalysisResponse
-from app.schemas.category import CategoryBrief
-from app.schemas.keyword import KeywordBrief
+from app.schemas.embeds import AnalysisEmbed, CategoryEmbed, KeywordEmbed
 from app.schemas.news import (
     EmbedResponse,
     NewsFetchRequest,
@@ -62,10 +60,10 @@ def _build_news_response(
 ) -> NewsResponse:
     """Convert a NewsArticle ORM object to NewsResponse schema."""
     keywords = [
-        KeywordBrief(
+        KeywordEmbed(
             id=link.keyword.id,
             name=link.keyword.name,
-            category=CategoryBrief(
+            category=CategoryEmbed(
                 slug=link.keyword.category.slug,
                 name=link.keyword.category.name,
             ),
@@ -77,7 +75,7 @@ def _build_news_response(
     analysis = None
     a = article.article_analysis
     if a is not None:
-        analysis = AnalysisResponse(
+        analysis = AnalysisEmbed(
             translated_title=a.translated_title,
             summary=a.summary,
             impact_level=a.impact_level,
