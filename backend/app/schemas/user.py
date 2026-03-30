@@ -1,5 +1,6 @@
 from datetime import datetime
 
+from app.domain.news_source import SourceName
 from app.schemas.base import _CamelBase
 
 
@@ -15,7 +16,7 @@ class WatchlistResponse(_CamelBase):
     news_article_id: int
     original_title: str
     original_url: str
-    source_name: str
+    source_name: SourceName
     published_at: datetime | None = None
     created_at: datetime
 

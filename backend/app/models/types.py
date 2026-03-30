@@ -14,6 +14,7 @@ from sqlalchemy.types import TypeDecorator
 
 from app.domain.category import CategoryName, CategorySlug
 from app.domain.keyword import KeywordName
+from app.domain.news_source import SourceName
 from app.domain.safe_url import SafeUrl
 
 
@@ -78,6 +79,27 @@ class KeywordNameType(TypeDecorator[KeywordName]):
         if value is None:
             return None
         return KeywordName(value)
+
+
+class SourceNameType(TypeDecorator[SourceName]):
+    """SourceName <-> VARCHAR(50)."""
+
+    impl = String(50)
+    cache_ok = True
+
+    def process_bind_param(self, value: Any, dialect: Dialect) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, SourceName):
+            return value.root
+        if isinstance(value, str):
+            return SourceName(value).root
+        raise TypeError(f"Expected SourceName or str, got {type(value).__name__}")
+
+    def process_result_value(self, value: Any, dialect: Dialect) -> SourceName | None:
+        if value is None:
+            return None
+        return SourceName(value)
 
 
 class SafeUrlType(TypeDecorator[SafeUrl]):

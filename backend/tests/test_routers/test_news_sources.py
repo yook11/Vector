@@ -46,8 +46,7 @@ async def test_get_source(
     response = await authed_client.get(f"/api/v1/sources/{sample_source.id}")
     assert response.status_code == 200
     data = response.json()
-    assert data["name"] == sample_source.name
-    # TODO: スキーマ層を SafeUrl 対応にした後、str() 変換を削除
+    assert data["name"] == str(sample_source.name)
     assert data["endpointUrl"] == str(sample_source.endpoint_url)
     assert data["siteUrl"] == str(sample_source.site_url)
 

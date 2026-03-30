@@ -89,7 +89,7 @@ def _build_news_response(
         original_title=article.original_title,
         # TODO: SafeUrl を NewsResponse に直接渡せるようスキーマ側を修正する
         original_url=str(article.original_url),
-        source_name=article.news_source.name if article.news_source else "",
+        source_name=article.news_source.name,
         published_at=article.published_at,
         created_at=article.created_at,
         original_content=article.original_content,

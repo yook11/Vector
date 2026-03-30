@@ -1,5 +1,6 @@
 from datetime import datetime
 
+from app.domain.news_source import SourceName
 from app.schemas.base import _CamelBase
 from app.schemas.embeds import AnalysisEmbed, KeywordEmbed
 
@@ -10,7 +11,7 @@ class NewsResponse(_CamelBase):
     id: int
     original_title: str
     original_url: str
-    source_name: str
+    source_name: SourceName
     published_at: datetime | None = None
     created_at: datetime
     original_content: str | None = None
