@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    CheckConstraint,
     DateTime,
     ForeignKey,
     String,
@@ -32,6 +33,22 @@ class ArticleAnalysis(Base):
     __tablename__ = "article_analyses"
     __table_args__ = (
         UniqueConstraint("news_article_id", name="uq_article_analyses_news_article_id"),
+        CheckConstraint(
+            "translated_title != ''",
+            name="ck_article_analyses_translated_title_not_empty",
+        ),
+        CheckConstraint(
+            "summary != ''",
+            name="ck_article_analyses_summary_not_empty",
+        ),
+        CheckConstraint(
+            "reasoning != ''",
+            name="ck_article_analyses_reasoning_not_empty",
+        ),
+        CheckConstraint(
+            "ai_model != ''",
+            name="ck_article_analyses_ai_model_not_empty",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
