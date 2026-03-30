@@ -1,12 +1,11 @@
 """CRUD endpoints for news_sources management."""
 
-from datetime import UTC, datetime
-
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import func, select
 
 from app.dependencies import CurrentUser, get_admin_user, get_current_user, get_session
+from app.domain import SafeUrl
 from app.models.news_source import NewsSource
 from app.schemas.news_source import (
     NewsSourceCreate,
@@ -23,8 +22,9 @@ def _to_response(source: NewsSource) -> NewsSourceResponse:
         id=source.id,
         name=source.name,
         source_type=source.source_type,
-        site_url=source.site_url,
-        endpoint_url=source.endpoint_url,
+        # TODO: スキーマ層を SafeUrl 対応にした後、str() 変換を削除
+        site_url=str(source.site_url),
+        endpoint_url=str(source.endpoint_url),
         is_active=source.is_active,
         created_at=source.created_at,
         updated_at=source.updated_at,
@@ -80,8 +80,8 @@ async def create_source(
     source = NewsSource(
         name=body.name,
         source_type=body.source_type,
-        site_url=body.site_url,
-        endpoint_url=body.endpoint_url,
+        site_url=SafeUrl(body.site_url),
+        endpoint_url=SafeUrl(body.endpoint_url),
     )
     session.add(source)
     await session.commit()
@@ -106,11 +106,13 @@ async def update_source(
 
     update_data = body.model_dump(exclude_unset=True)
 
-    # Apply updates
+    # Apply updates — URL fields need SafeUrl wrapping
     for key, value in update_data.items():
+        if key in ("site_url", "endpoint_url") and value is not None:
+            value = SafeUrl(value)
         setattr(source, key, value)
 
-    source.updated_at = datetime.now(UTC)
+    # updated_at is handled by DB trigger (trg_news_sources_updated_at)
     session.add(source)
     await session.commit()
     await session.refresh(source)
@@ -155,7 +157,7 @@ async def toggle_source(
         )
 
     source.is_active = not source.is_active
-    source.updated_at = datetime.now(UTC)
+    # updated_at is handled by DB trigger (trg_news_sources_updated_at)
     session.add(source)
     await session.commit()
     await session.refresh(source)
