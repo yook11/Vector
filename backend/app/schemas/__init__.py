@@ -10,8 +10,8 @@ from app.schemas.embeds import (
 )
 from app.schemas.keyword import (
     KeywordCreate,
-    KeywordListResponse,
-    KeywordResponse,
+    KeywordDetail,
+    KeywordDetailList,
     KeywordUpdate,
 )
 from app.schemas.news import (
@@ -28,8 +28,8 @@ __all__ = [
     "CategoryEmbed",
     "KeywordCreate",
     "KeywordEmbed",
-    "KeywordListResponse",
-    "KeywordResponse",
+    "KeywordDetail",
+    "KeywordDetailList",
     "KeywordUpdate",
     "KeywordWithCountEmbed",
     "NewsFetchRequest",

@@ -21,7 +21,7 @@ class KeywordUpdate(_CamelBase):
     category_id: int | None = None
 
 
-class KeywordResponse(_CamelBase):
+class KeywordDetail(_CamelBase):
     """Keyword in API responses (list, detail)."""
 
     id: int
@@ -32,7 +32,7 @@ class KeywordResponse(_CamelBase):
     created_at: datetime
 
 
-class KeywordListResponse(_CamelBase):
-    """GET /api/v1/keywords response wrapper."""
+class KeywordDetailList(_CamelBase):
+    """GET /api/v1/keywords wrapper."""
 
-    items: list[KeywordResponse]
+    items: list[KeywordDetail]

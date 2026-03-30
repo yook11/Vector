@@ -12,19 +12,19 @@ from app.models.keyword import Keyword
 from app.schemas.embeds import CategoryEmbed
 from app.schemas.keyword import (
     KeywordCreate,
-    KeywordListResponse,
-    KeywordResponse,
+    KeywordDetail,
+    KeywordDetailList,
     KeywordUpdate,
 )
 
 router = APIRouter(prefix="/api/v1/keywords", tags=["keywords"])
 
 
-@router.get("", response_model=KeywordListResponse)
+@router.get("", response_model=KeywordDetailList)
 async def list_keywords(
     _user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
-) -> KeywordListResponse:
+) -> KeywordDetailList:
     # Single query: keywords with category + article count via LEFT JOIN + GROUP BY
     stmt = (
         select(
@@ -39,9 +39,9 @@ async def list_keywords(
     result = await session.execute(stmt)
     rows = result.unique().all()
 
-    return KeywordListResponse(
+    return KeywordDetailList(
         items=[
-            KeywordResponse(
+            KeywordDetail(
                 id=kw.id,
                 name=kw.name,
                 category=CategoryEmbed(
@@ -59,14 +59,14 @@ async def list_keywords(
 
 @router.post(
     "",
-    response_model=KeywordResponse,
+    response_model=KeywordDetail,
     status_code=status.HTTP_201_CREATED,
 )
 async def create_keyword(
     body: KeywordCreate,
     _user: CurrentUser = Depends(get_admin_user),
     session: AsyncSession = Depends(get_session),
-) -> KeywordResponse:
+) -> KeywordDetail:
     existing = await session.execute(select(Keyword).where(Keyword.name == body.name))
     if existing.scalar_one_or_none():
         raise HTTPException(
@@ -87,7 +87,7 @@ async def create_keyword(
     await session.commit()
     await session.refresh(keyword)
 
-    return KeywordResponse(
+    return KeywordDetail(
         id=keyword.id,
         name=keyword.name,
         category=CategoryEmbed(slug=category.slug, name=category.name),
@@ -97,13 +97,13 @@ async def create_keyword(
     )
 
 
-@router.patch("/{keyword_id}", response_model=KeywordResponse)
+@router.patch("/{keyword_id}", response_model=KeywordDetail)
 async def update_keyword(
     keyword_id: int,
     body: KeywordUpdate,
     _user: CurrentUser = Depends(get_admin_user),
     session: AsyncSession = Depends(get_session),
-) -> KeywordResponse:
+) -> KeywordDetail:
     keyword = await session.get(Keyword, keyword_id)
     if not keyword:
         raise HTTPException(
@@ -139,7 +139,7 @@ async def update_keyword(
     row = result.unique().one()
     keyword, article_count = row
 
-    return KeywordResponse(
+    return KeywordDetail(
         id=keyword.id,
         name=keyword.name,
         category=CategoryEmbed(
