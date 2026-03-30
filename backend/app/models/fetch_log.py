@@ -5,7 +5,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
-from sqlalchemy import DateTime, ForeignKey, String, Text, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -21,6 +21,20 @@ class FetchStatus(StrEnum):
 
 class FetchLog(Base):
     __tablename__ = "fetch_logs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('success', 'error')",
+            name="ck_fetch_logs_status",
+        ),
+        CheckConstraint(
+            "articles_count >= 0",
+            name="ck_fetch_logs_articles_count_non_negative",
+        ),
+        CheckConstraint(
+            "duration_ms IS NULL OR duration_ms >= 0",
+            name="ck_fetch_logs_duration_ms_non_negative",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     source_id: Mapped[int] = mapped_column(
