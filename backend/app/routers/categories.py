@@ -9,18 +9,18 @@ from app.models.article_keyword import ArticleKeyword
 from app.models.category import Category
 from app.models.keyword import Keyword
 from app.schemas.category import (
-    CategoryDetailListResponse,
-    CategoryDetailResponse,
+    CategoryDetail,
+    CategoryDetailList,
 )
 from app.schemas.embeds import KeywordWithCountEmbed
 
 router = APIRouter(prefix="/api/v1/categories", tags=["categories"])
 
 
-@router.get("", response_model=CategoryDetailListResponse)
+@router.get("", response_model=CategoryDetailList)
 async def list_categories(
     session: AsyncSession = Depends(get_session),
-) -> CategoryDetailListResponse:
+) -> CategoryDetailList:
     """List all categories with nested keywords and article counts."""
 
     # 1. Fetch categories (name is a direct column)
@@ -73,9 +73,9 @@ async def list_categories(
         )
 
     # 5. Build response
-    return CategoryDetailListResponse(
+    return CategoryDetailList(
         items=[
-            CategoryDetailResponse(
+            CategoryDetail(
                 id=row.id,  # type: ignore[arg-type]
                 slug=row.slug,
                 name=row.name,

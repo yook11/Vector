@@ -3,7 +3,7 @@ from app.schemas.base import _CamelBase
 from app.schemas.embeds import KeywordWithCountEmbed
 
 
-class CategoryDetailResponse(_CamelBase):
+class CategoryDetail(_CamelBase):
     """Enriched category with articleCount and nested keywords."""
 
     id: int
@@ -13,7 +13,7 @@ class CategoryDetailResponse(_CamelBase):
     keywords: list[KeywordWithCountEmbed] = []
 
 
-class CategoryDetailListResponse(_CamelBase):
-    """Response wrapper for enriched category list endpoint."""
+class CategoryDetailList(_CamelBase):
+    """Wrapper for enriched category list endpoint."""
 
-    items: list[CategoryDetailResponse]
+    items: list[CategoryDetail]

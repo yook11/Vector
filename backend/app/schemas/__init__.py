@@ -1,6 +1,6 @@
 from app.schemas.category import (
-    CategoryDetailListResponse,
-    CategoryDetailResponse,
+    CategoryDetail,
+    CategoryDetailList,
 )
 from app.schemas.embeds import (
     AnalysisEmbed,
@@ -23,8 +23,8 @@ from app.schemas.news import (
 
 __all__ = [
     "AnalysisEmbed",
-    "CategoryDetailListResponse",
-    "CategoryDetailResponse",
+    "CategoryDetail",
+    "CategoryDetailList",
     "CategoryEmbed",
     "KeywordCreate",
     "KeywordEmbed",
