@@ -152,19 +152,17 @@ export async function getWatchlist(
 
 /** Add an article to the watchlist. */
 export async function addToWatchlist(
-  newsArticleId: number,
+  newsId: number,
 ): Promise<WatchlistResponse> {
   return fetchApi<WatchlistResponse>("/me/watchlist", {
     method: "POST",
-    body: JSON.stringify({ newsArticleId }),
+    body: JSON.stringify({ newsId }),
   });
 }
 
 /** Remove an article from the watchlist. */
-export async function removeFromWatchlist(
-  newsArticleId: number,
-): Promise<void> {
-  return fetchApi<void>(`/me/watchlist/${newsArticleId}`, {
+export async function removeFromWatchlist(newsId: number): Promise<void> {
+  return fetchApi<void>(`/me/watchlist/${newsId}`, {
     method: "DELETE",
   });
 }

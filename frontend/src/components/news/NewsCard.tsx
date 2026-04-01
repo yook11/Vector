@@ -45,7 +45,7 @@ export function NewsCard({ article }: { article: NewsBrief }) {
               {article.impactLevel}
             </Badge>
             <WatchlistButton
-              newsArticleId={article.id}
+              newsId={article.id}
               isWatched={article.isWatched}
             />
           </div>

@@ -75,7 +75,7 @@ class TestListWatchlist:
     ) -> None:
         await authed_client.post(
             "/api/v1/me/watchlist",
-            json={"newsArticleId": sample_article.id},
+            json={"newsId": sample_article.id},
         )
 
         resp = await authed_client.get("/api/v1/me/watchlist")
@@ -83,7 +83,7 @@ class TestListWatchlist:
         data = resp.json()
         assert data["total"] == 1
         item = data["items"][0]
-        assert item["newsArticleId"] == sample_article.id
+        assert item["newsId"] == sample_article.id
         assert item["originalTitle"] == "Test Article"
         assert item["source"]["name"] == "Test Tech Source"
         assert "createdAt" in item
@@ -96,11 +96,11 @@ class TestListWatchlist:
     ) -> None:
         await authed_client.post(
             "/api/v1/me/watchlist",
-            json={"newsArticleId": sample_article.id},
+            json={"newsId": sample_article.id},
         )
         await authed_client.post(
             "/api/v1/me/watchlist",
-            json={"newsArticleId": second_article.id},
+            json={"newsId": second_article.id},
         )
 
         resp = await authed_client.get("/api/v1/me/watchlist?perPage=1&page=1")
@@ -123,11 +123,11 @@ class TestAddToWatchlist:
     ) -> None:
         resp = await authed_client.post(
             "/api/v1/me/watchlist",
-            json={"newsArticleId": sample_article.id},
+            json={"newsId": sample_article.id},
         )
         assert resp.status_code == 201
         data = resp.json()
-        assert data["newsArticleId"] == sample_article.id
+        assert data["newsId"] == sample_article.id
         assert data["originalTitle"] == "Test Article"
 
     async def test_add_duplicate_409(
@@ -137,11 +137,11 @@ class TestAddToWatchlist:
     ) -> None:
         await authed_client.post(
             "/api/v1/me/watchlist",
-            json={"newsArticleId": sample_article.id},
+            json={"newsId": sample_article.id},
         )
         resp = await authed_client.post(
             "/api/v1/me/watchlist",
-            json={"newsArticleId": sample_article.id},
+            json={"newsId": sample_article.id},
         )
         assert resp.status_code == 409
 
@@ -150,7 +150,7 @@ class TestAddToWatchlist:
     ) -> None:
         resp = await authed_client.post(
             "/api/v1/me/watchlist",
-            json={"newsArticleId": 99999},
+            json={"newsId": 99999},
         )
         assert resp.status_code == 404
 
@@ -164,7 +164,7 @@ class TestRemoveFromWatchlist:
     ) -> None:
         await authed_client.post(
             "/api/v1/me/watchlist",
-            json={"newsArticleId": sample_article.id},
+            json={"newsId": sample_article.id},
         )
         resp = await authed_client.delete(f"/api/v1/me/watchlist/{sample_article.id}")
         assert resp.status_code == 204
@@ -190,7 +190,7 @@ class TestNewsIsWatched:
     ) -> None:
         await authed_client.post(
             "/api/v1/me/watchlist",
-            json={"newsArticleId": sample_article.id},
+            json={"newsId": sample_article.id},
         )
 
         resp = await authed_client.get("/api/v1/news")

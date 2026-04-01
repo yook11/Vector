@@ -52,7 +52,7 @@ async def list_watchlist(
     return WatchlistListResponse(
         items=[
             WatchlistResponse(
-                news_article_id=item.news_article.id,
+                news_id=item.news_article.id,
                 original_title=item.news_article.original_title,
                 # TODO: スキーマ側で SafeUrl を直接受け入れる
                 original_url=str(item.news_article.original_url),
@@ -82,10 +82,10 @@ async def add_to_watchlist(
     user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> WatchlistResponse:
-    # Verify article exists (eager load news_source for source_name)
+    # Verify article exists (eager load news_source for source embed)
     article_stmt = (
         select(NewsArticle)
-        .where(NewsArticle.id == body.news_article_id)
+        .where(NewsArticle.id == body.news_id)
         .options(selectinload(NewsArticle.news_source))
     )
     article = (await session.execute(article_stmt)).scalar_one_or_none()
@@ -98,7 +98,7 @@ async def add_to_watchlist(
     # Check duplicate
     existing_stmt = select(WatchlistEntry).where(
         WatchlistEntry.user_id == user.id,
-        WatchlistEntry.news_article_id == body.news_article_id,
+        WatchlistEntry.news_article_id == body.news_id,
     )
     existing = (await session.execute(existing_stmt)).scalar_one_or_none()
     if existing:
@@ -107,13 +107,13 @@ async def add_to_watchlist(
             detail="Article already in watchlist",
         )
 
-    item = WatchlistEntry(user_id=user.id, news_article_id=body.news_article_id)
+    item = WatchlistEntry(user_id=user.id, news_article_id=body.news_id)
     session.add(item)
     await session.commit()
     await session.refresh(item)
 
     return WatchlistResponse(
-        news_article_id=article.id,
+        news_id=article.id,
         original_title=article.original_title,
         # TODO: SafeUrl を WatchlistResponse に直接渡せるようスキーマ側を修正する
         original_url=str(article.original_url),
@@ -127,17 +127,17 @@ async def add_to_watchlist(
 
 
 @router.delete(
-    "/watchlist/{news_article_id}",
+    "/watchlist/{news_id}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def remove_from_watchlist(
-    news_article_id: int,
+    news_id: int,
     user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> None:
     stmt = select(WatchlistEntry).where(
         WatchlistEntry.user_id == user.id,
-        WatchlistEntry.news_article_id == news_article_id,
+        WatchlistEntry.news_article_id == news_id,
     )
     item = (await session.execute(stmt)).scalar_one_or_none()
     if not item:

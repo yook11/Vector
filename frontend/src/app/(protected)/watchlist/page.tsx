@@ -48,21 +48,18 @@ export default async function WatchlistPage({
         ) : (
           <div className="flex flex-col gap-3">
             {data.items.map((item) => (
-              <Card key={item.newsArticleId} className="border-border">
+              <Card key={item.newsId} className="border-border">
                 <CardHeader className="p-4 pb-2">
                   <div className="flex items-start justify-between gap-2">
                     <CardTitle className="text-sm font-medium leading-snug">
                       <Link
-                        href={`/news/${item.newsArticleId}`}
+                        href={`/news/${item.newsId}`}
                         className="hover:underline"
                       >
                         {item.originalTitle}
                       </Link>
                     </CardTitle>
-                    <WatchlistButton
-                      newsArticleId={item.newsArticleId}
-                      isWatched={true}
-                    />
+                    <WatchlistButton newsId={item.newsId} isWatched={true} />
                   </div>
                 </CardHeader>
                 <CardContent className="px-4 pb-4 pt-0">

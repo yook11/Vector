@@ -78,7 +78,7 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
-  "/api/v1/me/watchlist/{news_article_id}": {
+  "/api/v1/me/watchlist/{news_id}": {
     parameters: {
       query?: never;
       header?: never;
@@ -89,7 +89,7 @@ export interface paths {
     put?: never;
     post?: never;
     /** Remove From Watchlist */
-    delete: operations["remove_from_watchlist_api_v1_me_watchlist__news_article_id__delete"];
+    delete: operations["remove_from_watchlist_api_v1_me_watchlist__news_id__delete"];
     options?: never;
     head?: never;
     patch?: never;
@@ -655,8 +655,8 @@ export interface components {
      * @description POST /api/v1/me/watchlist request body.
      */
     WatchlistCreate: {
-      /** Newsarticleid */
-      newsArticleId: number;
+      /** Newsid */
+      newsId: number;
     };
     /**
      * WatchlistListResponse
@@ -679,8 +679,8 @@ export interface components {
      * @description Watchlist item in API responses.
      */
     WatchlistResponse: {
-      /** Newsarticleid */
-      newsArticleId: number;
+      /** Newsid */
+      newsId: number;
       /** Originaltitle */
       originalTitle: string;
       /** Originalurl */
@@ -905,12 +905,12 @@ export interface operations {
       };
     };
   };
-  remove_from_watchlist_api_v1_me_watchlist__news_article_id__delete: {
+  remove_from_watchlist_api_v1_me_watchlist__news_id__delete: {
     parameters: {
       query?: never;
       header?: never;
       path: {
-        news_article_id: number;
+        news_id: number;
       };
       cookie?: never;
     };

@@ -7,13 +7,13 @@ from app.schemas.embeds import NewsSourceEmbed
 class WatchlistCreate(_CamelBase):
     """POST /api/v1/me/watchlist request body."""
 
-    news_article_id: int
+    news_id: int
 
 
 class WatchlistResponse(_CamelBase):
     """Watchlist item in API responses."""
 
-    news_article_id: int
+    news_id: int
     original_title: str
     original_url: str
     source: NewsSourceEmbed
