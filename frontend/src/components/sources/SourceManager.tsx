@@ -1,12 +1,12 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import type { NewsSourceResponse } from "@/types";
+import type { NewsSourceDetail } from "@/types";
 import { SourceFormDialog } from "./SourceFormDialog";
 import { SourceTable } from "./SourceTable";
 
 interface SourceManagerProps {
-  initialSources: NewsSourceResponse[];
+  initialSources: NewsSourceDetail[];
 }
 
 export function SourceManager({ initialSources }: SourceManagerProps) {

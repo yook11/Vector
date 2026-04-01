@@ -8,15 +8,15 @@ from app.dependencies import CurrentUser, get_admin_user, get_current_user, get_
 from app.models.news_source import NewsSource
 from app.schemas.news_source import (
     NewsSourceCreate,
-    NewsSourceListResponse,
-    NewsSourceResponse,
+    NewsSourceDetail,
+    NewsSourceDetailList,
 )
 
 router = APIRouter(prefix="/api/v1/sources", tags=["sources"])
 
 
-def _to_response(source: NewsSource) -> NewsSourceResponse:
-    return NewsSourceResponse(
+def _to_response(source: NewsSource) -> NewsSourceDetail:
+    return NewsSourceDetail(
         id=source.id,
         name=source.name,
         source_type=source.source_type,
@@ -28,11 +28,11 @@ def _to_response(source: NewsSource) -> NewsSourceResponse:
     )
 
 
-@router.get("", response_model=NewsSourceListResponse)
+@router.get("", response_model=NewsSourceDetailList)
 async def list_sources(
     session: AsyncSession = Depends(get_session),
     _user: CurrentUser = Depends(get_current_user),
-) -> NewsSourceListResponse:
+) -> NewsSourceDetailList:
     """List all news sources."""
     stmt = select(NewsSource).order_by(NewsSource.name)
     result = await session.execute(stmt)
@@ -41,18 +41,18 @@ async def list_sources(
     count_stmt = select(func.count()).select_from(NewsSource)
     total = (await session.execute(count_stmt)).scalar_one()
 
-    return NewsSourceListResponse(
+    return NewsSourceDetailList(
         items=[_to_response(s) for s in sources],
         total=total,
     )
 
 
-@router.get("/{source_id}", response_model=NewsSourceResponse)
+@router.get("/{source_id}", response_model=NewsSourceDetail)
 async def get_source(
     source_id: int,
     session: AsyncSession = Depends(get_session),
     _user: CurrentUser = Depends(get_current_user),
-) -> NewsSourceResponse:
+) -> NewsSourceDetail:
     """Get a single news source by ID."""
     source = await session.get(NewsSource, source_id)
     if source is None:
@@ -65,14 +65,14 @@ async def get_source(
 
 @router.post(
     "",
-    response_model=NewsSourceResponse,
+    response_model=NewsSourceDetail,
     status_code=status.HTTP_201_CREATED,
 )
 async def create_source(
     body: NewsSourceCreate,
     session: AsyncSession = Depends(get_session),
     _user: CurrentUser = Depends(get_admin_user),
-) -> NewsSourceResponse:
+) -> NewsSourceDetail:
     """Create a new news source."""
     source = NewsSource(
         name=body.name,
@@ -108,13 +108,13 @@ async def delete_source(
 
 @router.patch(
     "/{source_id}/toggle",
-    response_model=NewsSourceResponse,
+    response_model=NewsSourceDetail,
 )
 async def toggle_source(
     source_id: int,
     session: AsyncSession = Depends(get_session),
     _user: CurrentUser = Depends(get_admin_user),
-) -> NewsSourceResponse:
+) -> NewsSourceDetail:
     """Toggle a news source's is_active status."""
     source = await session.get(NewsSource, source_id)
     if source is None:

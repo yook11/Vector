@@ -7,8 +7,8 @@ import type {
   NewsFetchRequest,
   NewsFetchResponse,
   NewsSourceCreate,
-  NewsSourceListResponse,
-  NewsSourceResponse,
+  NewsSourceDetail,
+  NewsSourceDetailList,
 } from "@/types";
 
 class ApiError extends Error {
@@ -102,14 +102,14 @@ export async function clientTriggerFetch(
 
 // --- Sources ---
 
-export async function clientListSources(): Promise<NewsSourceListResponse> {
-  return clientFetch<NewsSourceListResponse>("/sources");
+export async function clientListSources(): Promise<NewsSourceDetailList> {
+  return clientFetch<NewsSourceDetailList>("/sources");
 }
 
 export async function clientCreateSource(
   body: NewsSourceCreate,
-): Promise<NewsSourceResponse> {
-  return clientFetch<NewsSourceResponse>("/sources", {
+): Promise<NewsSourceDetail> {
+  return clientFetch<NewsSourceDetail>("/sources", {
     method: "POST",
     body: JSON.stringify(body),
   });
@@ -121,8 +121,8 @@ export async function clientDeleteSource(id: number): Promise<void> {
 
 export async function clientToggleSource(
   id: number,
-): Promise<NewsSourceResponse> {
-  return clientFetch<NewsSourceResponse>(`/sources/${id}/toggle`, {
+): Promise<NewsSourceDetail> {
+  return clientFetch<NewsSourceDetail>(`/sources/${id}/toggle`, {
     method: "PATCH",
   });
 }

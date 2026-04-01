@@ -30,10 +30,10 @@ import {
   clientDeleteSource,
   clientToggleSource,
 } from "@/lib/client-api";
-import type { NewsSourceResponse } from "@/types";
+import type { NewsSourceDetail } from "@/types";
 
 interface SourceTableProps {
-  sources: NewsSourceResponse[];
+  sources: NewsSourceDetail[];
 }
 
 export function SourceTable({ sources }: SourceTableProps) {

@@ -17,7 +17,7 @@ class NewsSourceCreate(_CamelBase):
     endpoint_url: SafeUrl
 
 
-class NewsSourceResponse(_CamelBase):
+class NewsSourceDetail(_CamelBase):
     """Single news source in API responses."""
 
     id: int
@@ -30,8 +30,8 @@ class NewsSourceResponse(_CamelBase):
     updated_at: datetime
 
 
-class NewsSourceListResponse(_CamelBase):
+class NewsSourceDetailList(_CamelBase):
     """GET /api/v1/sources response wrapper."""
 
-    items: list[NewsSourceResponse]
+    items: list[NewsSourceDetail]
     total: int

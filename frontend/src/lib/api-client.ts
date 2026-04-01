@@ -11,7 +11,7 @@ import type {
   NewsFetchRequest,
   NewsFetchResponse,
   NewsQuery,
-  NewsSourceListResponse,
+  NewsSourceDetailList,
   PaginatedNewsResponse,
   WatchlistListResponse,
   WatchlistResponse,
@@ -191,8 +191,8 @@ export async function getCategories(): Promise<CategoryDetailListResponse> {
 // --- News Sources ---
 
 /** Fetch all news sources (SSR-compatible). */
-export async function getSources(): Promise<NewsSourceListResponse> {
-  return fetchApi<NewsSourceListResponse>("/sources", { cache: "no-store" });
+export async function getSources(): Promise<NewsSourceDetailList> {
+  return fetchApi<NewsSourceDetailList>("/sources", { cache: "no-store" });
 }
 
 export { ApiError };
