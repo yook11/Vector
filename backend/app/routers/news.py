@@ -13,12 +13,13 @@ from app.models.article_keyword import ArticleKeyword
 from app.models.keyword import Keyword
 from app.models.news_article import NewsArticle
 from app.models.watchlist_entry import WatchlistEntry
-from app.schemas.embeds import AnalysisEmbed, CategoryEmbed, KeywordEmbed
+from app.schemas.embeds import CategoryEmbed, KeywordEmbed, OriginalArticleEmbed
 from app.schemas.news import (
     EmbedResponse,
+    NewsBrief,
+    NewsDetail,
     NewsFetchRequest,
     NewsFetchResponse,
-    NewsResponse,
     PaginatedNewsResponse,
 )
 from app.services.embedding import EmbeddingError, embed_articles, embed_search_query
@@ -54,12 +55,9 @@ async def _get_watched_ids(session: AsyncSession, user: CurrentUser | None) -> s
     return set(result.scalars().all())
 
 
-def _build_news_response(
-    article: NewsArticle,
-    watched_ids: set[int] | None = None,
-) -> NewsResponse:
-    """Convert a NewsArticle ORM object to NewsResponse schema."""
-    keywords = [
+def _build_keyword_embeds(article: NewsArticle) -> list[KeywordEmbed]:
+    """Extract keyword embeds from a NewsArticle ORM object."""
+    return [
         KeywordEmbed(
             id=link.keyword.id,
             name=link.keyword.name,
@@ -72,30 +70,53 @@ def _build_news_response(
         if link.keyword
     ]
 
-    analysis = None
-    a = article.article_analysis
-    if a is not None:
-        analysis = AnalysisEmbed(
-            translated_title=a.translated_title,
-            summary=a.summary,
-            impact_level=a.impact_level,
-            reasoning=a.reasoning,
-            ai_model=a.ai_model,
-            analyzed_at=a.analyzed_at,
-        )
 
-    return NewsResponse(
+def _build_news_brief(
+    article: NewsArticle,
+    watched_ids: set[int] | None = None,
+) -> NewsBrief:
+    """Convert a NewsArticle ORM object to NewsBrief schema.
+
+    Requires article.article_analysis to be present (INNER JOIN).
+    """
+    a = article.article_analysis
+    return NewsBrief(
         id=article.id,
-        original_title=article.original_title,
-        # TODO: SafeUrl を NewsResponse に直接渡せるようスキーマ側を修正する
-        original_url=str(article.original_url),
+        translated_title=a.translated_title,
+        summary=a.summary,
+        impact_level=a.impact_level,
         source_name=article.news_source.name,
         published_at=article.published_at,
-        created_at=article.created_at,
-        original_content=article.original_content,
-        keywords=keywords,
-        analysis=analysis,
+        keywords=_build_keyword_embeds(article),
         is_watched=article.id in watched_ids if watched_ids else False,
+    )
+
+
+def _build_news_detail(
+    article: NewsArticle,
+    watched_ids: set[int] | None = None,
+) -> NewsDetail:
+    """Convert a NewsArticle ORM object to NewsDetail schema.
+
+    Requires article.article_analysis to be present.
+    """
+    a = article.article_analysis
+    return NewsDetail(
+        id=article.id,
+        translated_title=a.translated_title,
+        summary=a.summary,
+        impact_level=a.impact_level,
+        reasoning=a.reasoning,
+        analyzed_at=a.analyzed_at,
+        source_name=article.news_source.name,
+        published_at=article.published_at,
+        keywords=_build_keyword_embeds(article),
+        is_watched=article.id in watched_ids if watched_ids else False,
+        original=OriginalArticleEmbed(
+            title=article.original_title,
+            url=article.original_url,
+            content=article.original_content,
+        ),
     )
 
 
@@ -124,12 +145,15 @@ async def list_news(
     user: CurrentUser | None = Depends(get_optional_user),
     session: AsyncSession = Depends(get_session),
 ) -> PaginatedNewsResponse:
-    # Base query with eager loading
-    stmt = select(NewsArticle).options(*_news_eager_options())
+    # Base query: INNER JOIN ArticleAnalysis to return only analyzed articles
+    stmt = (
+        select(NewsArticle)
+        .join(ArticleAnalysis, ArticleAnalysis.news_article_id == NewsArticle.id)
+        .options(*_news_eager_options())
+    )
 
     # Semantic search: embed query and filter by cosine distance
     query_embedding: list[float] | None = None
-    analysis_joined = False
 
     if q is not None:
         try:
@@ -139,11 +163,6 @@ async def list_news(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Search embedding generation failed. Please try again.",
             )
-        stmt = stmt.join(
-            ArticleAnalysis,
-            ArticleAnalysis.news_article_id == NewsArticle.id,
-        )
-        analysis_joined = True
         stmt = stmt.where(ArticleAnalysis.embedding.is_not(None))
         distance_expr = ArticleAnalysis.embedding.cosine_distance(query_embedding)
         stmt = stmt.where(distance_expr < settings.semantic_search_max_distance)
@@ -165,13 +184,6 @@ async def list_news(
 
     if impact_level is not None:
         min_order = _IMPACT_LEVEL_ORDER[impact_level]
-        if not analysis_joined:
-            stmt = stmt.join(
-                ArticleAnalysis,
-                ArticleAnalysis.news_article_id == NewsArticle.id,
-                isouter=False,
-            )
-            analysis_joined = True
         stmt = stmt.where(_impact_order_expr >= min_order)
 
     # Count total before pagination
@@ -185,12 +197,6 @@ async def list_news(
         stmt = stmt.order_by(distance_expr.asc())
     else:
         if sort_by == "impactLevel":
-            if not analysis_joined:
-                stmt = stmt.join(
-                    ArticleAnalysis,
-                    ArticleAnalysis.news_article_id == NewsArticle.id,
-                    isouter=True,
-                )
             order_expr = _impact_order_expr
         else:
             order_expr = NewsArticle.published_at
@@ -208,7 +214,7 @@ async def list_news(
     watched_ids = await _get_watched_ids(session, user)
 
     return PaginatedNewsResponse(
-        items=[_build_news_response(a, watched_ids) for a in articles],
+        items=[_build_news_brief(a, watched_ids) for a in articles],
         total=total,
         page=page,
         per_page=per_page,
@@ -255,14 +261,14 @@ async def embed_news(
 
 @router.get(
     "/{news_id}/similar",
-    response_model=list[NewsResponse],
+    response_model=list[NewsBrief],
     summary="Find semantically similar articles using pgvector cosine distance",
 )
 async def get_similar_news(
     news_id: int,
     limit: int = Query(5, ge=1, le=20),
     session: AsyncSession = Depends(get_session),
-) -> list[NewsResponse]:
+) -> list[NewsBrief]:
     """Return articles most similar to the given article, ordered by cosine distance.
 
     Returns an empty list (not 404) if the article has no embedding yet.
@@ -303,15 +309,15 @@ async def get_similar_news(
     similar_result = await session.execute(similar_stmt)
     articles = similar_result.unique().scalars().all()
 
-    return [_build_news_response(a) for a in articles]
+    return [_build_news_brief(a) for a in articles]
 
 
-@router.get("/{news_id}", response_model=NewsResponse)
+@router.get("/{news_id}", response_model=NewsDetail)
 async def get_news(
     news_id: int,
     user: CurrentUser | None = Depends(get_optional_user),
     session: AsyncSession = Depends(get_session),
-) -> NewsResponse:
+) -> NewsDetail:
     stmt = (
         select(NewsArticle)
         .where(NewsArticle.id == news_id)
@@ -320,14 +326,14 @@ async def get_news(
     result = await session.execute(stmt)
     article = result.unique().scalar_one_or_none()
 
-    if not article:
+    if not article or article.article_analysis is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="News article not found",
         )
 
     watched_ids = await _get_watched_ids(session, user)
-    return _build_news_response(article, watched_ids)
+    return _build_news_detail(article, watched_ids)
 
 
 @router.post(

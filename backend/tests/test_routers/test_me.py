@@ -6,6 +6,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.article_analysis import ArticleAnalysis, ImpactLevel
 from app.models.news_article import NewsArticle
 from app.models.news_source import NewsSource
 
@@ -14,7 +15,7 @@ from app.models.news_source import NewsSource
 async def sample_article(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> NewsArticle:
-    """Create a test news article."""
+    """Create a test news article with analysis."""
     article = NewsArticle(
         original_title="Test Article",
         original_url="https://example.com/test",
@@ -24,6 +25,17 @@ async def sample_article(
     db_session.add(article)
     await db_session.commit()
     await db_session.refresh(article)
+
+    analysis = ArticleAnalysis(
+        news_article_id=article.id,
+        translated_title="テスト記事",
+        summary="テストの要約",
+        impact_level=ImpactLevel.HIGH,
+        reasoning="Test reasoning",
+        ai_model="gemini-2.0-flash",
+    )
+    db_session.add(analysis)
+    await db_session.commit()
     return article
 
 

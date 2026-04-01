@@ -49,20 +49,19 @@ async def _create_article(
     db_session.add(article)
     await db_session.flush()
 
-    # Create ArticleAnalysis with embedding (if provided)
-    if embedding is not None:
-        analysis = ArticleAnalysis(
-            news_article_id=article.id,
-            translated_title=f"Translated: {title}",
-            summary="Test summary",
-            impact_level=ImpactLevel.MEDIUM,
-            reasoning="Test reasoning",
-            ai_model="gemini-2.0-flash",
-            embedding=embedding,
-            embedding_model="text-embedding-004",
-        )
-        db_session.add(analysis)
-        await db_session.flush()
+    # Always create ArticleAnalysis (required by INNER JOIN); add embedding if provided
+    analysis = ArticleAnalysis(
+        news_article_id=article.id,
+        translated_title=f"Translated: {title}",
+        summary="Test summary",
+        impact_level=ImpactLevel.MEDIUM,
+        reasoning="Test reasoning",
+        ai_model="gemini-2.0-flash",
+        embedding=embedding,
+        embedding_model="text-embedding-004" if embedding else None,
+    )
+    db_session.add(analysis)
+    await db_session.flush()
 
     return article
 
@@ -103,7 +102,9 @@ async def test_semantic_search_returns_articles_with_embedding(
     assert resp.status_code == 200
     data = resp.json()
     assert data["total"] >= 1
-    assert any("AI Breakthrough" in item["originalTitle"] for item in data["items"])
+    assert any(
+        "AI Breakthrough" in item["translatedTitle"] for item in data["items"]
+    )
 
 
 @pytest.mark.asyncio
@@ -134,9 +135,9 @@ async def test_semantic_search_excludes_articles_without_embedding(
 
     assert resp.status_code == 200
     data = resp.json()
-    titles = [item["originalTitle"] for item in data["items"]]
-    assert "With Embedding" in titles
-    assert "Without Embedding" not in titles
+    titles = [item["translatedTitle"] for item in data["items"]]
+    assert "Translated: With Embedding" in titles
+    assert "Translated: Without Embedding" not in titles
 
 
 # ---------------------------------------------------------------------------
@@ -185,7 +186,7 @@ async def test_semantic_search_combined_with_source_filter(
     assert resp.status_code == 200
     data = resp.json()
     assert data["total"] == 1
-    assert data["items"][0]["originalTitle"] == "Source A Article"
+    assert data["items"][0]["translatedTitle"] == "Translated: Source A Article"
 
 
 # ---------------------------------------------------------------------------
@@ -194,11 +195,11 @@ async def test_semantic_search_combined_with_source_filter(
 
 
 @pytest.mark.asyncio
-async def test_no_q_parameter_returns_all_articles(
+async def test_no_q_parameter_returns_analyzed_articles(
     authed_client: AsyncClient,
     db_session: AsyncSession,
 ) -> None:
-    """Without q parameter, all articles are returned (existing behavior)."""
+    """Without q parameter, only analyzed articles are returned."""
     source = await _create_source(db_session)
     await _create_article(
         db_session,
@@ -212,7 +213,7 @@ async def test_no_q_parameter_returns_all_articles(
         source,
         title="Article 2",
         url="https://example.com/2",
-        embedding=None,
+        embedding=FAKE_EMBEDDING_A,
     )
     await db_session.commit()
 

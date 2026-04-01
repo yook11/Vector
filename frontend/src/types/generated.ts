@@ -287,54 +287,14 @@ export type webhooks = Record<string, never>;
 export interface components {
   schemas: {
     /**
-     * AnalysisResponse
-     * @description AI analysis result embedded in NewsResponse.
-     */
-    AnalysisResponse: {
-      /** Translatedtitle */
-      translatedTitle: string;
-      /** Summary */
-      summary: string;
-      impactLevel: components["schemas"]["ImpactLevel"];
-      /** Reasoning */
-      reasoning: string;
-      /** Aimodel */
-      aiModel: string;
-      /**
-       * Analyzedat
-       * Format: date-time
-       */
-      analyzedAt: string;
-    };
-    /**
-     * CategoryBrief
-     * @description Minimal category info embedded in KeywordResponse / KeywordBrief.
-     */
-    CategoryBrief: {
-      /** Slug */
-      slug: string;
-      /** Name */
-      name: string;
-    };
-    /**
-     * CategoryDetailListResponse
-     * @description Response wrapper for enriched category list endpoint.
-     */
-    CategoryDetailListResponse: {
-      /** Items */
-      items: components["schemas"]["CategoryDetailResponse"][];
-    };
-    /**
-     * CategoryDetailResponse
+     * CategoryDetail
      * @description Enriched category with articleCount and nested keywords.
      */
-    CategoryDetailResponse: {
+    CategoryDetail: {
       /** Id */
       id: number;
-      /** Slug */
-      slug: string;
-      /** Name */
-      name: string;
+      slug: components["schemas"]["CategorySlug"];
+      name: components["schemas"]["CategoryName"];
       /**
        * Articlecount
        * @default 0
@@ -344,8 +304,46 @@ export interface components {
        * Keywords
        * @default []
        */
-      keywords: components["schemas"]["KeywordInCategory"][];
+      keywords: components["schemas"]["KeywordStatEmbed"][];
     };
+    /**
+     * CategoryDetailList
+     * @description Wrapper for enriched category list endpoint.
+     */
+    CategoryDetailList: {
+      /** Items */
+      items: components["schemas"]["CategoryDetail"][];
+    };
+    /**
+     * CategoryEmbed
+     * @description カテゴリの基本参照情報（slug + 名前）
+     */
+    CategoryEmbed: {
+      slug: components["schemas"]["CategorySlug"];
+      name: components["schemas"]["CategoryName"];
+    };
+    /**
+     * CategoryName
+     * @description Japanese display name for a category.
+     *
+     *     Invariants:
+     *     - Contains word characters, middle dot (・), spaces, or hyphens
+     *     - Not empty or whitespace-only
+     *     - 1-50 characters
+     *     - Immutable after creation
+     */
+    CategoryName: string;
+    /**
+     * CategorySlug
+     * @description URL-safe category identifier.
+     *
+     *     Invariants:
+     *     - Starts with lowercase letter or digit
+     *     - Contains only lowercase letters, digits, and underscores
+     *     - 1-50 characters
+     *     - Immutable after creation
+     */
+    CategorySlug: string;
     /**
      * EmbedResponse
      * @description POST /api/v1/news/embed response.
@@ -371,64 +369,25 @@ export interface components {
      */
     ImpactLevel: "low" | "medium" | "high" | "critical";
     /**
-     * KeywordBrief
-     * @description Minimal keyword info embedded in NewsResponse.
-     */
-    KeywordBrief: {
-      /** Id */
-      id: number;
-      /** Name */
-      name: string;
-      category: components["schemas"]["CategoryBrief"];
-    };
-    /**
      * KeywordCreate
      * @description POST /api/v1/keywords request body.
      */
     KeywordCreate: {
-      /**
-       * Name
-       * @description Keyword tag name (1-100 chars)
-       */
-      name: string;
+      /** @description Keyword tag name (1-100 chars) */
+      name: components["schemas"]["KeywordName"];
       /** Categoryid */
       categoryId: number;
     };
     /**
-     * KeywordInCategory
-     * @description Keyword with article count, nested in category detail response.
-     */
-    KeywordInCategory: {
-      /** Id */
-      id: number;
-      /** Name */
-      name: string;
-      /**
-       * Articlecount
-       * @default 0
-       */
-      articleCount: number;
-    };
-    /**
-     * KeywordListResponse
-     * @description GET /api/v1/keywords response wrapper.
-     */
-    KeywordListResponse: {
-      /** Items */
-      items: components["schemas"]["KeywordResponse"][];
-    };
-    /**
-     * KeywordResponse
+     * KeywordDetail
      * @description Keyword in API responses (list, detail).
      */
-    KeywordResponse: {
+    KeywordDetail: {
       /** Id */
       id: number;
-      /** Name */
-      name: string;
-      category: components["schemas"]["CategoryBrief"];
-      /** Status */
-      status: string;
+      name: components["schemas"]["KeywordName"];
+      category: components["schemas"]["CategoryEmbed"];
+      status: components["schemas"]["KeywordStatus"];
       /**
        * Articlecount
        * @default 0
@@ -441,12 +400,120 @@ export interface components {
       createdAt: string;
     };
     /**
+     * KeywordDetailList
+     * @description GET /api/v1/keywords wrapper.
+     */
+    KeywordDetailList: {
+      /** Items */
+      items: components["schemas"]["KeywordDetail"][];
+    };
+    /**
+     * KeywordEmbed
+     * @description キーワードの基本参照情報（カテゴリ付き）
+     */
+    KeywordEmbed: {
+      /** Id */
+      id: number;
+      name: components["schemas"]["KeywordName"];
+      category: components["schemas"]["CategoryEmbed"];
+    };
+    /**
+     * KeywordName
+     * @description Tag name for a technology or theme within a sector.
+     *
+     *     Invariants:
+     *     - Contains at least one word character (\w)
+     *     - Only word chars (Unicode), spaces, hyphens, dots, &, /, +, #
+     *     - 1-100 characters after trimming
+     *     - Immutable after creation
+     */
+    KeywordName: string;
+    /**
+     * KeywordStatEmbed
+     * @description キーワード＋記事数（カテゴリ内集計表示用）
+     */
+    KeywordStatEmbed: {
+      /** Id */
+      id: number;
+      name: components["schemas"]["KeywordName"];
+      /**
+       * Articlecount
+       * @default 0
+       */
+      articleCount: number;
+    };
+    /**
+     * KeywordStatus
+     * @enum {string}
+     */
+    KeywordStatus: "provisional" | "official" | "blacklisted";
+    /**
      * KeywordUpdate
      * @description PATCH /api/v1/keywords/{id} request body.
      */
     KeywordUpdate: {
       /** Categoryid */
       categoryId?: number | null;
+    };
+    /**
+     * NewsBrief
+     * @description GET /api/v1/news — 一覧カード用
+     */
+    NewsBrief: {
+      /** Id */
+      id: number;
+      /** Translatedtitle */
+      translatedTitle: string;
+      /** Summary */
+      summary: string;
+      impactLevel: components["schemas"]["ImpactLevel"];
+      sourceName: components["schemas"]["SourceName"];
+      /** Publishedat */
+      publishedAt?: string | null;
+      /**
+       * Keywords
+       * @default []
+       */
+      keywords: components["schemas"]["KeywordEmbed"][];
+      /**
+       * Iswatched
+       * @default false
+       */
+      isWatched: boolean;
+    };
+    /**
+     * NewsDetail
+     * @description GET /api/v1/news/{id} — 詳細画面用
+     */
+    NewsDetail: {
+      /** Id */
+      id: number;
+      /** Translatedtitle */
+      translatedTitle: string;
+      /** Summary */
+      summary: string;
+      impactLevel: components["schemas"]["ImpactLevel"];
+      /** Reasoning */
+      reasoning: string;
+      /**
+       * Analyzedat
+       * Format: date-time
+       */
+      analyzedAt: string;
+      sourceName: components["schemas"]["SourceName"];
+      /** Publishedat */
+      publishedAt?: string | null;
+      /**
+       * Keywords
+       * @default []
+       */
+      keywords: components["schemas"]["KeywordEmbed"][];
+      /**
+       * Iswatched
+       * @default false
+       */
+      isWatched: boolean;
+      original: components["schemas"]["OriginalArticleEmbed"];
     };
     /**
      * NewsFetchRequest
@@ -469,51 +536,14 @@ export interface components {
       jobId: string;
     };
     /**
-     * NewsResponse
-     * @description Single news article with analysis and keywords.
-     */
-    NewsResponse: {
-      /** Id */
-      id: number;
-      /** Originaltitle */
-      originalTitle: string;
-      /** Originalurl */
-      originalUrl: string;
-      /** Sourcename */
-      sourceName: string;
-      /** Publishedat */
-      publishedAt?: string | null;
-      /**
-       * Createdat
-       * Format: date-time
-       */
-      createdAt: string;
-      /** Originalcontent */
-      originalContent?: string | null;
-      /**
-       * Keywords
-       * @default []
-       */
-      keywords: components["schemas"]["KeywordBrief"][];
-      analysis?: components["schemas"]["AnalysisResponse"] | null;
-      /**
-       * Iswatched
-       * @default false
-       */
-      isWatched: boolean;
-    };
-    /**
      * NewsSourceCreate
      * @description POST /api/v1/sources request body.
      */
     NewsSourceCreate: {
-      /** Name */
-      name: string;
+      name: components["schemas"]["SourceName"];
       sourceType: components["schemas"]["SourceType"];
-      /** Siteurl */
-      siteUrl: string;
-      /** Endpointurl */
-      endpointUrl: string;
+      siteUrl: components["schemas"]["SafeUrl"];
+      endpointUrl: components["schemas"]["SafeUrl"];
     };
     /**
      * NewsSourceListResponse
@@ -532,13 +562,10 @@ export interface components {
     NewsSourceResponse: {
       /** Id */
       id: number;
-      /** Name */
-      name: string;
+      name: components["schemas"]["SourceName"];
       sourceType: components["schemas"]["SourceType"];
-      /** Siteurl */
-      siteUrl: string;
-      /** Endpointurl */
-      endpointUrl: string;
+      siteUrl: components["schemas"]["SafeUrl"];
+      endpointUrl: components["schemas"]["SafeUrl"];
       /** Isactive */
       isActive: boolean;
       /**
@@ -557,13 +584,21 @@ export interface components {
      * @description PUT /api/v1/sources/{id} request body.
      */
     NewsSourceUpdate: {
-      /** Name */
-      name?: string | null;
+      name?: components["schemas"]["SourceName"] | null;
       sourceType?: components["schemas"]["SourceType"] | null;
-      /** Siteurl */
-      siteUrl?: string | null;
-      /** Endpointurl */
-      endpointUrl?: string | null;
+      siteUrl?: components["schemas"]["SafeUrl"] | null;
+      endpointUrl?: components["schemas"]["SafeUrl"] | null;
+    };
+    /**
+     * OriginalArticleEmbed
+     * @description 原文記事の参照情報（詳細画面用）
+     */
+    OriginalArticleEmbed: {
+      /** Title */
+      title: string;
+      url: components["schemas"]["SafeUrl"];
+      /** Content */
+      content?: string | null;
     };
     /**
      * PaginatedNewsResponse
@@ -571,7 +606,7 @@ export interface components {
      */
     PaginatedNewsResponse: {
       /** Items */
-      items: components["schemas"]["NewsResponse"][];
+      items: components["schemas"]["NewsBrief"][];
       /** Total */
       total: number;
       /** Page */
@@ -581,6 +616,28 @@ export interface components {
       /** Totalpages */
       totalPages: number;
     };
+    /**
+     * SafeUrl
+     * @description HTTP/HTTPS URL validated by Pydantic.
+     *
+     *     Invariants:
+     *     - Uses http or https scheme
+     *     - Valid URL structure (scheme + host at minimum)
+     *     - 1-2048 characters after trimming
+     *     - Immutable after creation
+     */
+    SafeUrl: string;
+    /**
+     * SourceName
+     * @description Display name for a news source.
+     *
+     *     Invariants:
+     *     - Contains at least one word character
+     *     - Only word chars (Unicode), spaces, hyphens, dots
+     *     - 1-50 characters after trimming
+     *     - Immutable after creation
+     */
+    SourceName: string;
     /**
      * SourceType
      * @enum {string}
@@ -634,8 +691,7 @@ export interface components {
       originalTitle: string;
       /** Originalurl */
       originalUrl: string;
-      /** Sourcename */
-      sourceName: string;
+      sourceName: components["schemas"]["SourceName"];
       /** Publishedat */
       publishedAt?: string | null;
       /**
@@ -668,7 +724,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          "application/json": components["schemas"]["CategoryDetailListResponse"];
+          "application/json": components["schemas"]["CategoryDetailList"];
         };
       };
     };
@@ -688,7 +744,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          "application/json": components["schemas"]["KeywordListResponse"];
+          "application/json": components["schemas"]["KeywordDetailList"];
         };
       };
     };
@@ -712,7 +768,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          "application/json": components["schemas"]["KeywordResponse"];
+          "application/json": components["schemas"]["KeywordDetail"];
         };
       };
       /** @description Validation Error */
@@ -776,7 +832,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          "application/json": components["schemas"]["KeywordResponse"];
+          "application/json": components["schemas"]["KeywordDetail"];
         };
       };
       /** @description Validation Error */
@@ -962,7 +1018,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          "application/json": components["schemas"]["NewsResponse"][];
+          "application/json": components["schemas"]["NewsBrief"][];
         };
       };
       /** @description Validation Error */
@@ -993,7 +1049,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          "application/json": components["schemas"]["NewsResponse"];
+          "application/json": components["schemas"]["NewsDetail"];
         };
       };
       /** @description Validation Error */

@@ -380,10 +380,9 @@ async def test_news_endpoint_includes_analysis(
 
     assert response.status_code == 200
     data = response.json()
-    assert data["analysis"] is not None
-    assert data["analysis"]["translatedTitle"] == "テスト記事"
-    assert data["analysis"]["impactLevel"] == "high"
-    assert "aiModel" in data["analysis"]
+    assert data["translatedTitle"] == "テスト記事"
+    assert data["impactLevel"] == "high"
+    assert data["original"]["title"] == "Test Article"
 
 
 # --- F. Keyword tagging tests ---

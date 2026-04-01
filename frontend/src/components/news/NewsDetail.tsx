@@ -3,7 +3,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { sanitizeUrl } from "@/lib/utils";
-import type { ImpactLevel, NewsResponse } from "@/types";
+import type { ImpactLevel, NewsDetail as NewsDetailData } from "@/types";
 
 function formatDate(dateStr: string | null | undefined): string {
   if (!dateStr) return "Unknown";
@@ -23,23 +23,19 @@ const impactLevelColors: Record<ImpactLevel, string> = {
   critical: "bg-red-100 text-red-700",
 };
 
-export function NewsDetail({ article }: { article: NewsResponse }) {
-  const { analysis } = article;
-
+export function NewsDetail({ article }: { article: NewsDetailData }) {
   // --- XSS: validate URL scheme (reject javascript: etc.) ---
-  const safeUrl = sanitizeUrl(article.originalUrl);
+  const safeUrl = sanitizeUrl(article.original.url);
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold leading-tight">
-          {analysis?.translatedTitle ?? article.originalTitle}
+          {article.translatedTitle}
         </h1>
-        {analysis && (
-          <p className="mt-2 text-sm text-muted-foreground">
-            {article.originalTitle}
-          </p>
-        )}
+        <p className="mt-2 text-sm text-muted-foreground">
+          {article.original.title}
+        </p>
       </div>
 
       <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
@@ -71,59 +67,49 @@ export function NewsDetail({ article }: { article: NewsResponse }) {
         </div>
       )}
 
-      {analysis ? (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center justify-between">
-              <span>AI Analysis</span>
-              <Badge
-                variant="outline"
-                className={impactLevelColors[analysis.impactLevel]}
-              >
-                {analysis.impactLevel}
-              </Badge>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between">
+            <span>AI Analysis</span>
+            <Badge
+              variant="outline"
+              className={impactLevelColors[article.impactLevel]}
+            >
+              {article.impactLevel}
+            </Badge>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div>
+            <h3 className="text-sm font-semibold mb-1">Summary</h3>
+            <p className="text-sm text-muted-foreground">{article.summary}</p>
+          </div>
+
+          {article.reasoning && (
             <div>
-              <h3 className="text-sm font-semibold mb-1">Summary</h3>
+              <h3 className="text-sm font-semibold mb-1">Reasoning</h3>
               <p className="text-sm text-muted-foreground">
-                {analysis.summary}
+                {article.reasoning}
               </p>
             </div>
+          )}
 
-            {analysis.reasoning && (
-              <div>
-                <h3 className="text-sm font-semibold mb-1">Reasoning</h3>
-                <p className="text-sm text-muted-foreground">
-                  {analysis.reasoning}
-                </p>
-              </div>
-            )}
+          <Separator />
 
-            <Separator />
+          <p className="text-xs text-muted-foreground">
+            Analyzed at {formatDate(article.analyzedAt)}
+          </p>
+        </CardContent>
+      </Card>
 
-            <p className="text-xs text-muted-foreground">
-              Analyzed at {formatDate(analysis.analyzedAt)}
-            </p>
-          </CardContent>
-        </Card>
-      ) : (
-        <Card>
-          <CardContent className="py-8 text-center text-muted-foreground">
-            Analysis not yet available for this article.
-          </CardContent>
-        </Card>
-      )}
-
-      {article.originalContent ? (
+      {article.original.content ? (
         <Card>
           <CardHeader>
             <CardTitle>Article Content</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="prose prose-sm max-w-none text-muted-foreground whitespace-pre-line">
-              {article.originalContent}
+              {article.original.content}
             </div>
           </CardContent>
         </Card>

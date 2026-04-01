@@ -12,7 +12,7 @@ from app.schemas.category import (
     CategoryDetail,
     CategoryDetailList,
 )
-from app.schemas.embeds import KeywordWithCountEmbed
+from app.schemas.embeds import KeywordStatEmbed
 
 router = APIRouter(prefix="/api/v1/categories", tags=["categories"])
 
@@ -62,10 +62,10 @@ async def list_categories(
     }
 
     # 4. Group keywords by category_id
-    kw_by_cat: dict[int, list[KeywordWithCountEmbed]] = defaultdict(list)
+    kw_by_cat: dict[int, list[KeywordStatEmbed]] = defaultdict(list)
     for row in kw_rows:
         kw_by_cat[row.category_id].append(
-            KeywordWithCountEmbed(
+            KeywordStatEmbed(
                 id=row.keyword_id,
                 name=row.name,
                 article_count=row.article_count,

@@ -3,10 +3,10 @@ from app.schemas.category import (
     CategoryDetailList,
 )
 from app.schemas.embeds import (
-    AnalysisEmbed,
     CategoryEmbed,
     KeywordEmbed,
-    KeywordWithCountEmbed,
+    KeywordStatEmbed,
+    OriginalArticleEmbed,
 )
 from app.schemas.keyword import (
     KeywordCreate,
@@ -15,14 +15,14 @@ from app.schemas.keyword import (
     KeywordUpdate,
 )
 from app.schemas.news import (
+    NewsBrief,
+    NewsDetail,
     NewsFetchRequest,
     NewsFetchResponse,
-    NewsResponse,
     PaginatedNewsResponse,
 )
 
 __all__ = [
-    "AnalysisEmbed",
     "CategoryDetail",
     "CategoryDetailList",
     "CategoryEmbed",
@@ -31,9 +31,11 @@ __all__ = [
     "KeywordDetail",
     "KeywordDetailList",
     "KeywordUpdate",
-    "KeywordWithCountEmbed",
+    "KeywordStatEmbed",
+    "NewsBrief",
+    "NewsDetail",
     "NewsFetchRequest",
     "NewsFetchResponse",
-    "NewsResponse",
+    "OriginalArticleEmbed",
     "PaginatedNewsResponse",
 ]

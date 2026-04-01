@@ -30,18 +30,15 @@ export interface NewsQuery {
 // Re-exports from generated types
 // ---------------------------------------------------------------------------
 
-// Categories (unified — replaces both KeywordCategory and InvestmentCategory)
-export type CategoryBrief = components["schemas"]["CategoryBrief"];
-export type KeywordInCategory = components["schemas"]["KeywordInCategory"];
-export type CategoryDetailResponse =
-  components["schemas"]["CategoryDetailResponse"];
+// Categories
+export type CategoryBrief = components["schemas"]["CategoryEmbed"];
+export type CategoryDetailResponse = components["schemas"]["CategoryDetail"];
 export type CategoryDetailListResponse =
-  components["schemas"]["CategoryDetailListResponse"];
+  components["schemas"]["CategoryDetailList"];
 
 // Keywords
-export type KeywordBrief = components["schemas"]["KeywordBrief"];
-export type KeywordResponse = components["schemas"]["KeywordResponse"];
-export type KeywordListResponse = components["schemas"]["KeywordListResponse"];
+export type KeywordResponse = components["schemas"]["KeywordDetail"];
+export type KeywordListResponse = components["schemas"]["KeywordDetailList"];
 export type KeywordCreate = components["schemas"]["KeywordCreate"];
 export type KeywordUpdate = components["schemas"]["KeywordUpdate"];
 
@@ -49,28 +46,28 @@ export type KeywordUpdate = components["schemas"]["KeywordUpdate"];
 // Narrowed types — where generated types need refinement
 // ---------------------------------------------------------------------------
 
-/** Analysis response — narrows impactLevel from string to ImpactLevel union. */
-export type AnalysisResponse = Omit<
-  components["schemas"]["AnalysisResponse"],
+/** News brief (list card) — narrows impactLevel to ImpactLevel union. */
+export type NewsBrief = Omit<
+  components["schemas"]["NewsBrief"],
   "impactLevel"
 > & {
   impactLevel: ImpactLevel;
 };
 
-/** Narrow nested analysis to use our narrowed AnalysisResponse. */
-export type NewsResponse = Omit<
-  components["schemas"]["NewsResponse"],
-  "analysis"
+/** News detail (single article) — narrows impactLevel to ImpactLevel union. */
+export type NewsDetail = Omit<
+  components["schemas"]["NewsDetail"],
+  "impactLevel"
 > & {
-  analysis?: AnalysisResponse | null;
+  impactLevel: ImpactLevel;
 };
 
-/** Narrow items to use our narrowed NewsResponse. */
+/** Narrow items to use our narrowed NewsBrief. */
 export type PaginatedNewsResponse = Omit<
   components["schemas"]["PaginatedNewsResponse"],
   "items"
 > & {
-  items: NewsResponse[];
+  items: NewsBrief[];
 };
 
 // ---------------------------------------------------------------------------

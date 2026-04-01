@@ -6,10 +6,11 @@ import type {
   KeywordListResponse,
   KeywordResponse,
   KeywordUpdate,
+  NewsBrief,
+  NewsDetail,
   NewsFetchRequest,
   NewsFetchResponse,
   NewsQuery,
-  NewsResponse,
   NewsSourceListResponse,
   PaginatedNewsResponse,
   WatchlistListResponse,
@@ -91,8 +92,8 @@ export async function getNews(
 }
 
 /** Fetch a single news article by ID. */
-export async function getNewsById(id: number): Promise<NewsResponse> {
-  return fetchApi<NewsResponse>(`/news/${id}`, { cache: "no-store" });
+export async function getNewsById(id: number): Promise<NewsDetail> {
+  return fetchApi<NewsDetail>(`/news/${id}`, { cache: "no-store" });
 }
 
 /** Trigger a manual news fetch. */
@@ -172,8 +173,8 @@ export async function removeFromWatchlist(
 export async function getSimilarNews(
   id: number,
   limit = 5,
-): Promise<NewsResponse[]> {
-  return fetchApi<NewsResponse[]>(`/news/${id}/similar?limit=${limit}`, {
+): Promise<NewsBrief[]> {
+  return fetchApi<NewsBrief[]>(`/news/${id}/similar?limit=${limit}`, {
     cache: "no-store",
   });
 }
