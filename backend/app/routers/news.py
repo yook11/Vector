@@ -13,7 +13,7 @@ from app.models.article_keyword import ArticleKeyword
 from app.models.keyword import Keyword
 from app.models.news_article import NewsArticle
 from app.models.watchlist_entry import WatchlistEntry
-from app.schemas.embeds import CategoryEmbed, KeywordEmbed, OriginalArticleEmbed
+from app.schemas.embeds import KeywordEmbed, OriginalArticleEmbed
 from app.schemas.news import (
     EmbedResponse,
     NewsBrief,
@@ -61,10 +61,6 @@ def _build_keyword_embeds(article: NewsArticle) -> list[KeywordEmbed]:
         KeywordEmbed(
             id=link.keyword.id,
             name=link.keyword.name,
-            category=CategoryEmbed(
-                slug=link.keyword.category.slug,
-                name=link.keyword.category.name,
-            ),
         )
         for link in article.article_keywords
         if link.keyword

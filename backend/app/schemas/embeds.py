@@ -18,11 +18,10 @@ class CategoryEmbed(_CamelBase):
 
 
 class KeywordEmbed(_CamelBase):
-    """キーワードの基本参照情報（カテゴリ付き）"""
+    """キーワードタグ（ニュース埋め込み用）"""
 
     id: int
     name: KeywordName
-    category: CategoryEmbed
 
 
 class KeywordStatEmbed(_CamelBase):
