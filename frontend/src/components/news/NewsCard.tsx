@@ -28,7 +28,7 @@ export function NewsCard({ article }: { article: NewsBrief }) {
       <CardHeader className="p-0 pb-2">
         <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <span className="line-clamp-1">
-            {article.sourceName} &middot; {formatDate(article.publishedAt)}
+            {article.source.name} &middot; {formatDate(article.publishedAt)}
           </span>
         </div>
         <div className="flex items-start justify-between gap-3 mt-1.5">

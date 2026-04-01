@@ -81,6 +81,7 @@ export type WatchlistListResponse =
   components["schemas"]["WatchlistListResponse"];
 
 // News sources
+export type NewsSourceEmbed = components["schemas"]["NewsSourceEmbed"];
 export type NewsSourceDetail = components["schemas"]["NewsSourceDetail"];
 export type NewsSourceDetailList =
   components["schemas"]["NewsSourceDetailList"];

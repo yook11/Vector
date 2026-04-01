@@ -9,10 +9,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { NewsSourceDetail } from "@/types";
+import type { NewsSourceEmbed } from "@/types";
 
 interface NewsFiltersProps {
-  sources?: NewsSourceDetail[];
+  sources?: NewsSourceEmbed[];
 }
 
 export function NewsFilters({ sources }: NewsFiltersProps) {

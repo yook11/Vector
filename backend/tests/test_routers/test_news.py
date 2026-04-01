@@ -208,7 +208,8 @@ class TestListNews:
         resp = await client.get(f"/api/v1/news?sourceId={sample_source.id}")
         data = resp.json()
         assert data["total"] == 1
-        assert data["items"][0]["sourceName"] == str(sample_source.name)
+        assert data["items"][0]["source"]["id"] == sample_source.id
+        assert data["items"][0]["source"]["name"] == str(sample_source.name)
 
     async def test_filter_by_source_id_nonexistent(
         self,

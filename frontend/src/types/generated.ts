@@ -462,7 +462,7 @@ export interface components {
       /** Summary */
       summary: string;
       impactLevel: components["schemas"]["ImpactLevel"];
-      sourceName: components["schemas"]["SourceName"];
+      source: components["schemas"]["NewsSourceEmbed"];
       /** Publishedat */
       publishedAt?: string | null;
       /**
@@ -495,7 +495,7 @@ export interface components {
        * Format: date-time
        */
       analyzedAt: string;
-      sourceName: components["schemas"]["SourceName"];
+      source: components["schemas"]["NewsSourceEmbed"];
       /** Publishedat */
       publishedAt?: string | null;
       /**
@@ -573,6 +573,15 @@ export interface components {
       items: components["schemas"]["NewsSourceDetail"][];
       /** Total */
       total: number;
+    };
+    /**
+     * NewsSourceEmbed
+     * @description ニュースソースの基本参照情報（フィルタ・表示用）
+     */
+    NewsSourceEmbed: {
+      /** Id */
+      id: number;
+      name: components["schemas"]["SourceName"];
     };
     /**
      * OriginalArticleEmbed
@@ -676,7 +685,7 @@ export interface components {
       originalTitle: string;
       /** Originalurl */
       originalUrl: string;
-      sourceName: components["schemas"]["SourceName"];
+      source: components["schemas"]["NewsSourceEmbed"];
       /** Publishedat */
       publishedAt?: string | null;
       /**

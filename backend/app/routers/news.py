@@ -13,7 +13,7 @@ from app.models.article_keyword import ArticleKeyword
 from app.models.keyword import Keyword
 from app.models.news_article import NewsArticle
 from app.models.watchlist_entry import WatchlistEntry
-from app.schemas.embeds import KeywordEmbed, OriginalArticleEmbed
+from app.schemas.embeds import KeywordEmbed, NewsSourceEmbed, OriginalArticleEmbed
 from app.schemas.news import (
     EmbedResponse,
     NewsBrief,
@@ -81,7 +81,10 @@ def _build_news_brief(
         translated_title=a.translated_title,
         summary=a.summary,
         impact_level=a.impact_level,
-        source_name=article.news_source.name,
+        source=NewsSourceEmbed(
+            id=article.news_source.id,
+            name=article.news_source.name,
+        ),
         published_at=article.published_at,
         keywords=_build_keyword_embeds(article),
         is_watched=article.id in watched_ids if watched_ids else False,
@@ -104,7 +107,10 @@ def _build_news_detail(
         impact_level=a.impact_level,
         reasoning=a.reasoning,
         analyzed_at=a.analyzed_at,
-        source_name=article.news_source.name,
+        source=NewsSourceEmbed(
+            id=article.news_source.id,
+            name=article.news_source.name,
+        ),
         published_at=article.published_at,
         keywords=_build_keyword_embeds(article),
         is_watched=article.id in watched_ids if watched_ids else False,

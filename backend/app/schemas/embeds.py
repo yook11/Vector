@@ -6,6 +6,7 @@ nested within a parent response schema (e.g. NewsBrief, CategoryDetail).
 
 from app.domain.category import CategoryName, CategorySlug
 from app.domain.keyword import KeywordName
+from app.domain.news_source import SourceName
 from app.domain.safe_url import SafeUrl
 from app.schemas.base import _CamelBase
 
@@ -30,6 +31,13 @@ class KeywordStatEmbed(_CamelBase):
     id: int
     name: KeywordName
     article_count: int = 0
+
+
+class NewsSourceEmbed(_CamelBase):
+    """ニュースソースの基本参照情報（フィルタ・表示用）"""
+
+    id: int
+    name: SourceName
 
 
 class OriginalArticleEmbed(_CamelBase):

@@ -67,7 +67,7 @@ export default async function WatchlistPage({
                 </CardHeader>
                 <CardContent className="px-4 pb-4 pt-0">
                   <p className="text-[11px] text-muted-foreground">
-                    {item.sourceName} &middot; {formatDate(item.publishedAt)}
+                    {item.source.name} &middot; {formatDate(item.publishedAt)}
                     {" &middot; Saved "}
                     {formatDate(item.createdAt)}
                   </p>

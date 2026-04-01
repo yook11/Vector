@@ -85,7 +85,7 @@ class TestListWatchlist:
         item = data["items"][0]
         assert item["newsArticleId"] == sample_article.id
         assert item["originalTitle"] == "Test Article"
-        assert item["sourceName"] == "Test Tech Source"
+        assert item["source"]["name"] == "Test Tech Source"
         assert "createdAt" in item
 
     async def test_pagination(

@@ -1,9 +1,8 @@
 from datetime import datetime
 
-from app.domain.news_source import SourceName
 from app.models.article_analysis import ImpactLevel
 from app.schemas.base import _CamelBase
-from app.schemas.embeds import KeywordEmbed, OriginalArticleEmbed
+from app.schemas.embeds import KeywordEmbed, NewsSourceEmbed, OriginalArticleEmbed
 
 
 class NewsBrief(_CamelBase):
@@ -13,7 +12,7 @@ class NewsBrief(_CamelBase):
     translated_title: str
     summary: str
     impact_level: ImpactLevel
-    source_name: SourceName
+    source: NewsSourceEmbed
     published_at: datetime | None = None
     keywords: list[KeywordEmbed] = []
     is_watched: bool = False
@@ -28,7 +27,7 @@ class NewsDetail(_CamelBase):
     impact_level: ImpactLevel
     reasoning: str
     analyzed_at: datetime
-    source_name: SourceName
+    source: NewsSourceEmbed
     published_at: datetime | None = None
     keywords: list[KeywordEmbed] = []
     is_watched: bool = False

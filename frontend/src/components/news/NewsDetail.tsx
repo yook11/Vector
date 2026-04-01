@@ -39,7 +39,7 @@ export function NewsDetail({ article }: { article: NewsDetailData }) {
       </div>
 
       <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
-        <span>{article.sourceName}</span>
+        <span>{article.source.name}</span>
         <Separator orientation="vertical" className="h-4" />
         <span>{formatDate(article.publishedAt)}</span>
         {safeUrl !== null && (
