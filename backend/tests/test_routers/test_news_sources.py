@@ -117,26 +117,6 @@ async def test_create_source_missing_site_url(
     assert response.status_code == 422
 
 
-async def test_update_source(
-    admin_client: AsyncClient,
-    sample_source: NewsSource,
-) -> None:
-    body = {
-        "name": "Updated Name",
-    }
-    response = await admin_client.put(f"/api/v1/sources/{sample_source.id}", json=body)
-    assert response.status_code == 200
-    data = response.json()
-    assert data["name"] == "Updated Name"
-
-
-async def test_update_source_not_found(
-    admin_client: AsyncClient,
-) -> None:
-    response = await admin_client.put("/api/v1/sources/999", json={"name": "x"})
-    assert response.status_code == 404
-
-
 async def test_delete_source(
     admin_client: AsyncClient,
     db_session: AsyncSession,

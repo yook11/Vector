@@ -10,7 +10,6 @@ from app.schemas.news_source import (
     NewsSourceCreate,
     NewsSourceListResponse,
     NewsSourceResponse,
-    NewsSourceUpdate,
 )
 
 router = APIRouter(prefix="/api/v1/sources", tags=["sources"])
@@ -81,33 +80,6 @@ async def create_source(
         site_url=body.site_url,
         endpoint_url=body.endpoint_url,
     )
-    session.add(source)
-    await session.commit()
-    await session.refresh(source)
-    return _to_response(source)
-
-
-@router.put("/{source_id}", response_model=NewsSourceResponse)
-async def update_source(
-    source_id: int,
-    body: NewsSourceUpdate,
-    session: AsyncSession = Depends(get_session),
-    _user: CurrentUser = Depends(get_admin_user),
-) -> NewsSourceResponse:
-    """Update an existing news source."""
-    source = await session.get(NewsSource, source_id)
-    if source is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="News source not found",
-        )
-
-    update_data = body.model_dump(exclude_unset=True)
-
-    for key, value in update_data.items():
-        setattr(source, key, value)
-
-    # updated_at is handled by DB trigger (trg_news_sources_updated_at)
     session.add(source)
     await session.commit()
     await session.refresh(source)

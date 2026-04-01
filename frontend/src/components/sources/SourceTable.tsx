@@ -31,7 +31,6 @@ import {
   clientToggleSource,
 } from "@/lib/client-api";
 import type { NewsSourceResponse } from "@/types";
-import { SourceFormDialog } from "./SourceFormDialog";
 
 interface SourceTableProps {
   sources: NewsSourceResponse[];
@@ -109,14 +108,6 @@ export function SourceTable({ sources }: SourceTableProps) {
             </TableCell>
             <TableCell className="text-right">
               <div className="flex items-center justify-end gap-1">
-                <SourceFormDialog
-                  source={source}
-                  trigger={
-                    <Button variant="ghost" size="sm">
-                      Edit
-                    </Button>
-                  }
-                />
                 <AlertDialog>
                   <AlertDialogTrigger asChild>
                     <Button

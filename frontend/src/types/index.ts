@@ -85,4 +85,3 @@ export type NewsSourceResponse = components["schemas"]["NewsSourceResponse"];
 export type NewsSourceListResponse =
   components["schemas"]["NewsSourceListResponse"];
 export type NewsSourceCreate = components["schemas"]["NewsSourceCreate"];
-export type NewsSourceUpdate = components["schemas"]["NewsSourceUpdate"];

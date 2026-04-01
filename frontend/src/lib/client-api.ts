@@ -9,7 +9,6 @@ import type {
   NewsSourceCreate,
   NewsSourceListResponse,
   NewsSourceResponse,
-  NewsSourceUpdate,
 } from "@/types";
 
 class ApiError extends Error {
@@ -112,16 +111,6 @@ export async function clientCreateSource(
 ): Promise<NewsSourceResponse> {
   return clientFetch<NewsSourceResponse>("/sources", {
     method: "POST",
-    body: JSON.stringify(body),
-  });
-}
-
-export async function clientUpdateSource(
-  id: number,
-  body: NewsSourceUpdate,
-): Promise<NewsSourceResponse> {
-  return clientFetch<NewsSourceResponse>(`/sources/${id}`, {
-    method: "PUT",
     body: JSON.stringify(body),
   });
 }

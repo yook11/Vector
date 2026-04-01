@@ -17,15 +17,6 @@ class NewsSourceCreate(_CamelBase):
     endpoint_url: SafeUrl
 
 
-class NewsSourceUpdate(_CamelBase):
-    """PUT /api/v1/sources/{id} request body."""
-
-    name: SourceName | None = None
-    source_type: SourceType | None = None
-    site_url: SafeUrl | None = None
-    endpoint_url: SafeUrl | None = None
-
-
 class NewsSourceResponse(_CamelBase):
     """Single news source in API responses."""
 
