@@ -6,8 +6,10 @@ from sqlalchemy.orm import selectinload
 from sqlmodel import func, select
 
 from app.config import settings
+from app.domain.category import CategorySlug
 from app.models.article_analysis import ArticleAnalysis, ImpactLevel
 from app.models.article_keyword import ArticleKeyword
+from app.models.category import Category
 from app.models.keyword import Keyword
 from app.models.news_article import NewsArticle
 from app.models.watchlist_entry import WatchlistEntry
@@ -44,7 +46,7 @@ class NewsListParams:
     """Filter / sort / pagination parameters for news list query."""
 
     keyword_id: int | None = None
-    kw_category_id: int | None = None
+    category_slug: CategorySlug | None = None
     source_id: int | None = None
     impact_level: ImpactLevel | None = None
     sort_by: str = "publishedAt"
@@ -86,10 +88,11 @@ class NewsRepository:
                 ArticleKeyword.keyword_id == params.keyword_id
             )
             stmt = stmt.where(NewsArticle.id.in_(matching_ids))
-        elif params.kw_category_id is not None:
-            sub_kw_ids = select(Keyword.id).where(
-                Keyword.category_id == params.kw_category_id
+        elif params.category_slug is not None:
+            cat_id_sub = select(Category.id).where(
+                Category.slug == params.category_slug
             )
+            sub_kw_ids = select(Keyword.id).where(Keyword.category_id.in_(cat_id_sub))
             matching_ids = select(ArticleKeyword.news_article_id).where(
                 ArticleKeyword.keyword_id.in_(sub_kw_ids)
             )

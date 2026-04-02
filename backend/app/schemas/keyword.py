@@ -2,6 +2,7 @@ from datetime import datetime
 
 from pydantic import Field
 
+from app.domain.category import CategorySlug
 from app.domain.keyword import KeywordName
 from app.models.keyword import KeywordStatus
 from app.schemas.base import _CamelBase
@@ -12,13 +13,13 @@ class KeywordCreate(_CamelBase):
     """POST /api/v1/keywords request body."""
 
     name: KeywordName = Field(description="Keyword tag name (1-100 chars)")
-    category_id: int
+    category_slug: CategorySlug
 
 
 class KeywordUpdate(_CamelBase):
     """PATCH /api/v1/keywords/{id} request body."""
 
-    category_id: int | None = None
+    category_slug: CategorySlug | None = None
 
 
 class KeywordDetail(_CamelBase):

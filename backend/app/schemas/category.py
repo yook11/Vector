@@ -6,7 +6,6 @@ from app.schemas.embeds import KeywordStatEmbed
 class CategoryDetail(_CamelBase):
     """Enriched category with articleCount and nested keywords."""
 
-    id: int
     slug: CategorySlug
     name: CategoryName
     article_count: int = 0

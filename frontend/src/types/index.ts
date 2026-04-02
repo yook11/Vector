@@ -17,7 +17,7 @@ export type ImpactLevel = "low" | "medium" | "high" | "critical";
 export interface NewsQuery {
   q?: string;
   keywordId?: number;
-  kwCategoryId?: number;
+  category?: string;
   impactLevel?: ImpactLevel;
   sourceId?: number;
   sortBy?: "publishedAt" | "impactLevel";

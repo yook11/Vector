@@ -35,10 +35,13 @@ class KeywordService:
     async def create_keyword(self, body: KeywordCreate) -> KeywordDetail:
         if await self.repo.get_by_name(body.name):
             raise DuplicateError("Keyword already exists")
-        if not await self.repo.category_exists(body.category_id):
-            raise ReferenceNotFoundError(f"Category ID {body.category_id} not found")
+        category = await self.repo.get_category_by_slug(body.category_slug)
+        if not category:
+            raise ReferenceNotFoundError(
+                f"Category slug {body.category_slug!r} not found"
+            )
 
-        keyword = Keyword(name=body.name, category_id=body.category_id)
+        keyword = Keyword(name=body.name, category_id=category.id)
         keyword = await self.repo.create(keyword)
         kw, count = await self.repo.fetch_one_with_stats(keyword.id)
         return self._build_detail(kw, count)
@@ -49,12 +52,13 @@ class KeywordService:
         keyword = await self.repo.get_by_id(keyword_id)
         if not keyword:
             raise NotFoundError("Keyword not found")
-        if body.category_id is not None:
-            if not await self.repo.category_exists(body.category_id):
+        if body.category_slug is not None:
+            category = await self.repo.get_category_by_slug(body.category_slug)
+            if not category:
                 raise ReferenceNotFoundError(
-                    f"Category ID {body.category_id} not found"
+                    f"Category slug {body.category_slug!r} not found"
                 )
-            keyword.category_id = body.category_id
+            keyword.category_id = category.id
         await self.repo.save(keyword)
         kw, count = await self.repo.fetch_one_with_stats(keyword.id)
         return self._build_detail(kw, count)

@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import CurrentUser, get_admin_user, get_optional_user, get_session
+from app.domain.category import CategorySlug
 from app.exceptions import NotFoundError
 from app.models.article_analysis import ImpactLevel
 from app.repositories.news import NewsListParams, NewsRepository
@@ -24,7 +25,7 @@ router = APIRouter(prefix="/api/v1/news", tags=["news"])
 @router.get("", response_model=PaginatedNewsResponse)
 async def list_news(
     keyword_id: int | None = Query(None, alias="keywordId"),
-    kw_category_id: int | None = Query(None, alias="kwCategoryId"),
+    category: str | None = Query(None),
     source_id: int | None = Query(None, alias="sourceId"),
     impact_level: ImpactLevel | None = Query(None, alias="impactLevel"),
     q: str | None = Query(None, min_length=1, max_length=500),
@@ -39,7 +40,7 @@ async def list_news(
     service = NewsService(NewsRepository(session))
     params = NewsListParams(
         keyword_id=keyword_id,
-        kw_category_id=kw_category_id,
+        category_slug=CategorySlug(category) if category else None,
         source_id=source_id,
         impact_level=impact_level,
         sort_by=sort_by,

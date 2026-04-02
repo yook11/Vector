@@ -55,10 +55,9 @@ class TestCreateKeyword:
     async def test_create_success(
         self, admin_client: AsyncClient, sample_categories: list[Category]
     ) -> None:
-        cat = sample_categories[0]  # "ai_ml"
         resp = await admin_client.post(
             "/api/v1/keywords",
-            json={"name": "Materials Informatics", "categoryId": cat.id},
+            json={"name": "Materials Informatics", "categorySlug": "ai_ml"},
         )
         assert resp.status_code == 201
         data = resp.json()
@@ -67,12 +66,12 @@ class TestCreateKeyword:
         assert data["articleCount"] == 0
         assert data["status"] == "provisional"
 
-    async def test_create_with_invalid_category_id(
+    async def test_create_with_invalid_category_slug(
         self, admin_client: AsyncClient, sample_categories: list[Category]
     ) -> None:
         resp = await admin_client.post(
             "/api/v1/keywords",
-            json={"name": "Bad Cat", "categoryId": 99999},
+            json={"name": "Bad Cat", "categorySlug": "nonexistent"},
         )
         assert resp.status_code == 400
         assert "not found" in resp.json()["detail"].lower()
@@ -84,7 +83,7 @@ class TestCreateKeyword:
             "/api/v1/keywords",
             json={
                 "name": "Quantum Computing",
-                "categoryId": sample_keyword.category_id,
+                "categorySlug": "quantum",
             },
         )
         assert resp.status_code == 409
@@ -99,10 +98,9 @@ class TestUpdateKeyword:
         sample_keyword: Keyword,
         sample_categories: list[Category],
     ) -> None:
-        cat = sample_categories[2]  # "semiconductor"
         resp = await admin_client.patch(
             f"/api/v1/keywords/{sample_keyword.id}",
-            json={"categoryId": cat.id},
+            json={"categorySlug": "semiconductor"},
         )
         assert resp.status_code == 200
         data = resp.json()
@@ -111,7 +109,7 @@ class TestUpdateKeyword:
     async def test_update_not_found(self, admin_client: AsyncClient) -> None:
         resp = await admin_client.patch(
             "/api/v1/keywords/99999",
-            json={"categoryId": 1},
+            json={"categorySlug": "ai_ml"},
         )
         assert resp.status_code == 404
 

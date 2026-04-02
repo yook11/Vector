@@ -18,38 +18,40 @@ import {
   ApiError,
   clientCreateKeyword as createKeyword,
 } from "@/lib/client-api";
-import type { CategoryDetailResponse } from "@/types";
+
+interface CategoryOption {
+  slug: string;
+  name: string;
+}
 
 interface AddKeywordDialogProps {
-  keywordCategories?: CategoryDetailResponse[];
+  keywordCategories?: CategoryOption[];
 }
 
 export function AddKeywordDialog({ keywordCategories }: AddKeywordDialogProps) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
-  const [selectedCategoryId, setSelectedCategoryId] = useState<number | null>(
-    null,
-  );
+  const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (!open) {
       setName("");
-      setSelectedCategoryId(null);
+      setSelectedSlug(null);
     }
   }, [open]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const trimmed = name.trim();
-    if (!trimmed || selectedCategoryId === null) return;
+    if (!trimmed || selectedSlug === null) return;
 
     setLoading(true);
     try {
       await createKeyword({
         name: trimmed,
-        categoryId: selectedCategoryId,
+        categorySlug: selectedSlug,
       });
       toast.success(`Added "${trimmed}"`);
       setOpen(false);
@@ -91,13 +93,11 @@ export function AddKeywordDialog({ keywordCategories }: AddKeywordDialogProps) {
               <div className="flex flex-wrap gap-2">
                 {keywordCategories.map((cat) => (
                   <Button
-                    key={cat.id}
+                    key={cat.slug}
                     type="button"
                     size="sm"
-                    variant={
-                      selectedCategoryId === cat.id ? "default" : "outline"
-                    }
-                    onClick={() => setSelectedCategoryId(cat.id)}
+                    variant={selectedSlug === cat.slug ? "default" : "outline"}
+                    onClick={() => setSelectedSlug(cat.slug)}
                   >
                     {cat.name}
                   </Button>
@@ -108,7 +108,7 @@ export function AddKeywordDialog({ keywordCategories }: AddKeywordDialogProps) {
           <DialogFooter>
             <Button
               type="submit"
-              disabled={loading || !name.trim() || selectedCategoryId === null}
+              disabled={loading || !name.trim() || selectedSlug === null}
             >
               {loading ? "Adding..." : "Add"}
             </Button>

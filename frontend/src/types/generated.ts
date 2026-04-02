@@ -301,8 +301,6 @@ export interface components {
      * @description Enriched category with articleCount and nested keywords.
      */
     CategoryDetail: {
-      /** Id */
-      id: number;
       slug: components["schemas"]["CategorySlug"];
       name: components["schemas"]["CategoryName"];
       /**
@@ -385,8 +383,7 @@ export interface components {
     KeywordCreate: {
       /** @description Keyword tag name (1-100 chars) */
       name: components["schemas"]["KeywordName"];
-      /** Categoryid */
-      categoryId: number;
+      categorySlug: components["schemas"]["CategorySlug"];
     };
     /**
      * KeywordDetail
@@ -461,8 +458,7 @@ export interface components {
      * @description PATCH /api/v1/keywords/{id} request body.
      */
     KeywordUpdate: {
-      /** Categoryid */
-      categoryId?: number | null;
+      categorySlug?: components["schemas"]["CategorySlug"] | null;
     };
     /**
      * NewsBrief
@@ -916,7 +912,7 @@ export interface operations {
     parameters: {
       query?: {
         keywordId?: number | null;
-        kwCategoryId?: number | null;
+        category?: string | null;
         sourceId?: number | null;
         impactLevel?: components["schemas"]["ImpactLevel"] | null;
         q?: string | null;

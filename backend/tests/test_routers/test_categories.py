@@ -59,14 +59,14 @@ class TestListCategories:
         resp = await client.get("/api/v1/categories")
         assert resp.status_code == 200
 
-    async def test_response_has_id(
+    async def test_response_shape(
         self,
         client: AsyncClient,
         sample_categories: list[Category],
     ) -> None:
         resp = await client.get("/api/v1/categories")
         item = resp.json()["items"][0]
-        assert "id" in item
+        assert "id" not in item
         assert "slug" in item
         assert "name" in item
 

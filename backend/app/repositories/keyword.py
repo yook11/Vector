@@ -2,6 +2,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlmodel import func, select
 
+from app.domain.category import CategorySlug
 from app.models.article_keyword import ArticleKeyword
 from app.models.category import Category
 from app.models.keyword import Keyword
@@ -46,9 +47,11 @@ class KeywordRepository:
         """Get a single keyword by ID."""
         return await self.session.get(Keyword, keyword_id)
 
-    async def category_exists(self, category_id: int) -> bool:
-        """Check whether a category ID is valid."""
-        return await self.session.get(Category, category_id) is not None
+    async def get_category_by_slug(self, slug: CategorySlug) -> Category | None:
+        """Look up a category by slug."""
+        stmt = select(Category).where(Category.slug == slug)
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
 
     async def get_by_name(self, name: str) -> Keyword | None:
         """Get a keyword by name for uniqueness check."""

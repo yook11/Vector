@@ -15,13 +15,13 @@ import { CategorySidebar } from "./CategorySidebar";
 
 interface MobileSidebarProps {
   categories: CategoryDetailResponse[];
-  activeKwCategoryId?: number;
+  activeCategory?: string;
   activeKeywordId?: number;
 }
 
 export function MobileSidebar({
   categories,
-  activeKwCategoryId,
+  activeCategory,
   activeKeywordId,
 }: MobileSidebarProps) {
   const [open, setOpen] = useState(false);
@@ -45,7 +45,7 @@ export function MobileSidebar({
         <div role="presentation" onClick={() => setOpen(false)}>
           <CategorySidebar
             categories={categories}
-            activeKwCategoryId={activeKwCategoryId}
+            activeCategory={activeCategory}
             activeKeywordId={activeKeywordId}
           />
         </div>

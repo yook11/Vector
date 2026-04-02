@@ -27,8 +27,8 @@ function parseSearchParams(
   const keywordId = str("keywordId");
   if (keywordId) query.keywordId = Number(keywordId);
 
-  const kwCategoryId = str("kwCategoryId");
-  if (kwCategoryId) query.kwCategoryId = Number(kwCategoryId);
+  const category = str("category");
+  if (category) query.category = category;
 
   const impactLevel = str("impactLevel");
   if (
@@ -80,7 +80,7 @@ export default async function DashboardPage({
       <aside className="hidden lg:flex w-64 shrink-0 flex-col border-r border-border overflow-y-auto">
         <CategorySidebar
           categories={categoriesData.items}
-          activeKwCategoryId={query.kwCategoryId}
+          activeCategory={query.category}
           activeKeywordId={query.keywordId}
         />
       </aside>
@@ -92,7 +92,7 @@ export default async function DashboardPage({
           <div className="flex items-center gap-3">
             <MobileSidebar
               categories={categoriesData.items}
-              activeKwCategoryId={query.kwCategoryId}
+              activeCategory={query.category}
               activeKeywordId={query.keywordId}
             />
             <h1 className="text-base font-medium text-foreground">Dashboard</h1>

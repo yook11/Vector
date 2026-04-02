@@ -10,38 +10,38 @@ import type { CategoryDetailResponse } from "@/types";
 
 interface CategorySidebarProps {
   categories: CategoryDetailResponse[];
-  activeKwCategoryId?: number;
+  activeCategory?: string;
   activeKeywordId?: number;
 }
 
 export function CategorySidebar({
   categories,
-  activeKwCategoryId,
+  activeCategory,
   activeKeywordId,
 }: CategorySidebarProps) {
   const searchParams = useSearchParams();
-  const [expanded, setExpanded] = useState<Set<number>>(() => {
-    const initial = new Set<number>();
-    if (activeKwCategoryId) initial.add(activeKwCategoryId);
+  const [expanded, setExpanded] = useState<Set<string>>(() => {
+    const initial = new Set<string>();
+    if (activeCategory) initial.add(activeCategory);
     return initial;
   });
 
-  const toggleExpand = (id: number) => {
+  const toggleExpand = (slug: string) => {
     setExpanded((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(slug)) next.delete(slug);
+      else next.add(slug);
       return next;
     });
   };
 
-  const isAll = !activeKwCategoryId && !activeKeywordId;
+  const isAll = !activeCategory && !activeKeywordId;
 
   // Preserve existing filter params (sentiment, sortBy, etc.) when navigating
   function buildHref(overrides: Record<string, string | undefined>): string {
     const params = new URLSearchParams(searchParams?.toString() ?? "");
     // Remove category/keyword params first
-    params.delete("kwCategoryId");
+    params.delete("category");
     params.delete("keywordId");
     params.delete("page");
 
@@ -81,15 +81,15 @@ export function CategorySidebar({
       {/* Category drilldown */}
       {categories.map((cat) => {
         const isActiveCat =
-          activeKwCategoryId === cat.id && activeKeywordId === undefined;
-        const isExpanded = expanded.has(cat.id);
+          activeCategory === cat.slug && activeKeywordId === undefined;
+        const isExpanded = expanded.has(cat.slug);
 
         return (
-          <div key={cat.id}>
+          <div key={cat.slug}>
             <div className="flex items-center">
               <button
                 type="button"
-                onClick={() => toggleExpand(cat.id)}
+                onClick={() => toggleExpand(cat.slug)}
                 className="flex items-center justify-center size-8 shrink-0 text-muted-foreground hover:text-foreground transition-colors"
                 aria-label={isExpanded ? "Collapse" : "Expand"}
               >
@@ -101,7 +101,7 @@ export function CategorySidebar({
                 />
               </button>
               <Link
-                href={buildHref({ kwCategoryId: String(cat.id) })}
+                href={buildHref({ category: cat.slug })}
                 className={cn(
                   "flex-1 flex items-center justify-between pr-3 py-2.5 text-sm rounded-xl transition-colors text-muted-foreground hover:text-foreground hover:bg-neutral-100 dark:hover:bg-neutral-800/40",
                   isActiveCat &&
@@ -123,7 +123,7 @@ export function CategorySidebar({
                     <Link
                       key={kw.id}
                       href={buildHref({
-                        kwCategoryId: String(cat.id),
+                        category: cat.slug,
                         keywordId: String(kw.id),
                       })}
                       className={cn(

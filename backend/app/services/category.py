@@ -34,11 +34,10 @@ class CategoryService:
         return CategoryDetailList(
             items=[
                 CategoryDetail(
-                    id=row.id,  # type: ignore[arg-type]
                     slug=row.slug,
                     name=row.name,
-                    article_count=article_counts_by_cat.get(row.id, 0),  # type: ignore[arg-type]
-                    keywords=keyword_stats_by_cat.get(row.id, []),  # type: ignore[arg-type]
+                    article_count=article_counts_by_cat.get(row.id, 0),
+                    keywords=keyword_stats_by_cat.get(row.id, []),
                 )
                 for row in cat_rows
             ]
