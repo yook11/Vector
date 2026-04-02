@@ -1,3 +1,4 @@
+from app.exceptions import NotFoundError
 from app.models.news_source import NewsSource
 from app.repositories.news_source import NewsSourceRepository
 from app.schemas.news_source import (
@@ -19,7 +20,14 @@ class NewsSourceService:
             total=count,
         )
 
-    async def get_source(self, source: NewsSource) -> NewsSourceDetail:
+    async def _get_or_raise(self, source_id: int) -> NewsSource:
+        source = await self.repo.get_by_id(source_id)
+        if source is None:
+            raise NotFoundError("News source not found")
+        return source
+
+    async def get_source(self, source_id: int) -> NewsSourceDetail:
+        source = await self._get_or_raise(source_id)
         return NewsSourceDetail.model_validate(source)
 
     async def create_source(self, body: NewsSourceCreate) -> NewsSourceDetail:
@@ -32,10 +40,12 @@ class NewsSourceService:
         source = await self.repo.create(source)
         return NewsSourceDetail.model_validate(source)
 
-    async def delete_source(self, source: NewsSource) -> None:
+    async def delete_source(self, source_id: int) -> None:
+        source = await self._get_or_raise(source_id)
         await self.repo.delete(source)
 
-    async def toggle_source(self, source: NewsSource) -> NewsSourceDetail:
+    async def toggle_source(self, source_id: int) -> NewsSourceDetail:
+        source = await self._get_or_raise(source_id)
         source.is_active = not source.is_active
         source = await self.repo.save(source)
         return NewsSourceDetail.model_validate(source)
