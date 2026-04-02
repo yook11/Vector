@@ -37,10 +37,17 @@ async def list_news(
     session: AsyncSession = Depends(get_session),
 ) -> PaginatedNewsResponse:
     """List analyzed news articles with filters and pagination."""
+    try:
+        category_slug = CategorySlug(category) if category else None
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid category slug: {category!r}",
+        )
     service = NewsService(NewsRepository(session))
     params = NewsListParams(
         keyword_id=keyword_id,
-        category_slug=CategorySlug(category) if category else None,
+        category_slug=category_slug,
         source_id=source_id,
         impact_level=impact_level,
         sort_by=sort_by,
