@@ -13,8 +13,6 @@ import type {
   NewsQuery,
   NewsSourceDetailList,
   PaginatedNewsResponse,
-  WatchlistListResponse,
-  WatchlistResponse,
 } from "@/types";
 
 const INTERNAL_API_URL =
@@ -143,18 +141,16 @@ export async function deleteKeyword(id: number): Promise<void> {
 export async function getWatchlist(
   page = 1,
   perPage = 20,
-): Promise<WatchlistListResponse> {
-  return fetchApi<WatchlistListResponse>(
+): Promise<PaginatedNewsResponse> {
+  return fetchApi<PaginatedNewsResponse>(
     `/me/watchlist?page=${page}&perPage=${perPage}`,
     { cache: "no-store" },
   );
 }
 
 /** Add an article to the watchlist. */
-export async function addToWatchlist(
-  newsId: number,
-): Promise<WatchlistResponse> {
-  return fetchApi<WatchlistResponse>("/me/watchlist", {
+export async function addToWatchlist(newsId: number): Promise<void> {
+  return fetchApi<void>("/me/watchlist", {
     method: "POST",
     body: JSON.stringify({ newsId }),
   });

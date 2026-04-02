@@ -31,10 +31,16 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
-    /** List Keywords */
+    /**
+     * List Keywords
+     * @description List all keywords with category and article count.
+     */
     get: operations["list_keywords_api_v1_keywords_get"];
     put?: never;
-    /** Create Keyword */
+    /**
+     * Create Keyword
+     * @description Create a new keyword.
+     */
     post: operations["create_keyword_api_v1_keywords_post"];
     delete?: never;
     options?: never;
@@ -52,11 +58,17 @@ export interface paths {
     get?: never;
     put?: never;
     post?: never;
-    /** Delete Keyword */
+    /**
+     * Delete Keyword
+     * @description Delete a keyword.
+     */
     delete: operations["delete_keyword_api_v1_keywords__keyword_id__delete"];
     options?: never;
     head?: never;
-    /** Update Keyword */
+    /**
+     * Update Keyword
+     * @description Update a keyword's category.
+     */
     patch: operations["update_keyword_api_v1_keywords__keyword_id__patch"];
     trace?: never;
   };
@@ -102,7 +114,10 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
-    /** List News */
+    /**
+     * List News
+     * @description List analyzed news articles with filters and pagination.
+     */
     get: operations["list_news_api_v1_news_get"];
     put?: never;
     post?: never;
@@ -124,8 +139,6 @@ export interface paths {
     /**
      * Backfill embeddings for analyses that are missing them
      * @description Generate vector embeddings for all analyses where embedding IS NULL.
-     *
-     *     Requires authentication to prevent unintended Gemini API cost.
      */
     post: operations["embed_news_api_v1_news_embed_post"];
     delete?: never;
@@ -143,9 +156,7 @@ export interface paths {
     };
     /**
      * Find semantically similar articles using pgvector cosine distance
-     * @description Return articles most similar to the given article, ordered by cosine distance.
-     *
-     *     Returns an empty list (not 404) if the article has no embedding yet.
+     * @description Return articles most similar to the given article.
      */
     get: operations["get_similar_news_api_v1_news__news_id__similar_get"];
     put?: never;
@@ -163,7 +174,10 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
-    /** Get News */
+    /**
+     * Get News
+     * @description Get a single news article with full analysis details.
+     */
     get: operations["get_news_api_v1_news__news_id__get"];
     put?: never;
     post?: never;
@@ -658,42 +672,6 @@ export interface components {
       /** Newsid */
       newsId: number;
     };
-    /**
-     * WatchlistListResponse
-     * @description GET /api/v1/me/watchlist response wrapper.
-     */
-    WatchlistListResponse: {
-      /** Items */
-      items: components["schemas"]["WatchlistResponse"][];
-      /** Total */
-      total: number;
-      /** Page */
-      page: number;
-      /** Perpage */
-      perPage: number;
-      /** Totalpages */
-      totalPages: number;
-    };
-    /**
-     * WatchlistResponse
-     * @description Watchlist item in API responses.
-     */
-    WatchlistResponse: {
-      /** Newsid */
-      newsId: number;
-      /** Originaltitle */
-      originalTitle: string;
-      /** Originalurl */
-      originalUrl: string;
-      source: components["schemas"]["NewsSourceEmbed"];
-      /** Publishedat */
-      publishedAt?: string | null;
-      /**
-       * Createdat
-       * Format: date-time
-       */
-      createdAt: string;
-    };
   };
   responses: never;
   parameters: never;
@@ -858,7 +836,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          "application/json": components["schemas"]["WatchlistListResponse"];
+          "application/json": components["schemas"]["PaginatedNewsResponse"];
         };
       };
       /** @description Validation Error */
@@ -891,7 +869,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          "application/json": components["schemas"]["WatchlistResponse"];
+          "application/json": unknown;
         };
       };
       /** @description Validation Error */

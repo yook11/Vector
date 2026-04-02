@@ -28,8 +28,8 @@ _IMPACT_LEVEL_ORDER = {
 }
 
 
-def _eager_options() -> list:
-    """Common selectinload options for news queries."""
+def news_eager_options() -> list:
+    """Selectinload options shared by news / watchlist queries."""
     return [
         selectinload(NewsArticle.article_analysis),
         selectinload(NewsArticle.news_source),
@@ -69,7 +69,7 @@ class NewsRepository:
         stmt = (
             select(NewsArticle)
             .join(ArticleAnalysis, ArticleAnalysis.news_article_id == NewsArticle.id)
-            .options(*_eager_options())
+            .options(*news_eager_options())
         )
 
         # Semantic search filter
@@ -135,7 +135,7 @@ class NewsRepository:
         stmt = (
             select(NewsArticle)
             .where(NewsArticle.id == news_id)
-            .options(*_eager_options())
+            .options(*news_eager_options())
         )
         result = await self.session.execute(stmt)
         article = result.unique().scalar_one_or_none()
@@ -165,7 +165,7 @@ class NewsRepository:
         stmt = (
             select(NewsArticle)
             .join(ArticleAnalysis, ArticleAnalysis.news_article_id == NewsArticle.id)
-            .options(*_eager_options())
+            .options(*news_eager_options())
             .where(
                 NewsArticle.id != exclude_id,
                 ArticleAnalysis.embedding.is_not(None),

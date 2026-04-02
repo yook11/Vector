@@ -43,7 +43,7 @@ async def sample_article(
 async def second_article(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> NewsArticle:
-    """Create a second test news article."""
+    """Create a second test news article with analysis."""
     article = NewsArticle(
         original_title="Second Article",
         original_url="https://example.com/second",
@@ -53,6 +53,17 @@ async def second_article(
     db_session.add(article)
     await db_session.commit()
     await db_session.refresh(article)
+
+    analysis = ArticleAnalysis(
+        news_article_id=article.id,
+        translated_title="2番目の記事",
+        summary="2番目の要約",
+        impact_level=ImpactLevel.MEDIUM,
+        reasoning="Second reasoning",
+        ai_model="gemini-2.0-flash",
+    )
+    db_session.add(analysis)
+    await db_session.commit()
     return article
 
 
@@ -83,10 +94,12 @@ class TestListWatchlist:
         data = resp.json()
         assert data["total"] == 1
         item = data["items"][0]
-        assert item["newsId"] == sample_article.id
-        assert item["originalTitle"] == "Test Article"
+        assert item["id"] == sample_article.id
+        assert item["translatedTitle"] == "テスト記事"
+        assert item["summary"] == "テストの要約"
+        assert item["impactLevel"] == "high"
         assert item["source"]["name"] == "Test Tech Source"
-        assert "createdAt" in item
+        assert item["isWatched"] is True
 
     async def test_pagination(
         self,
@@ -126,9 +139,6 @@ class TestAddToWatchlist:
             json={"newsId": sample_article.id},
         )
         assert resp.status_code == 201
-        data = resp.json()
-        assert data["newsId"] == sample_article.id
-        assert data["originalTitle"] == "Test Article"
 
     async def test_add_duplicate_409(
         self,

@@ -76,9 +76,6 @@ export type PaginatedNewsResponse = Omit<
 
 export type NewsFetchRequest = components["schemas"]["NewsFetchRequest"];
 export type NewsFetchResponse = components["schemas"]["NewsFetchResponse"];
-export type WatchlistResponse = components["schemas"]["WatchlistResponse"];
-export type WatchlistListResponse =
-  components["schemas"]["WatchlistListResponse"];
 
 // News sources
 export type NewsSourceEmbed = components["schemas"]["NewsSourceEmbed"];

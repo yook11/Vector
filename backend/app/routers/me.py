@@ -1,129 +1,44 @@
-import math
+"""Endpoints for the authenticated user (watchlist)."""
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
-from sqlmodel import func, select
 
 from app.dependencies import CurrentUser, get_current_user, get_session
-from app.models.news_article import NewsArticle
-from app.models.watchlist_entry import WatchlistEntry
-from app.schemas.embeds import NewsSourceEmbed
-from app.schemas.user import (
-    WatchlistCreate,
-    WatchlistListResponse,
-    WatchlistResponse,
-)
+from app.exceptions import DuplicateError, NotFoundError
+from app.repositories.watchlist import WatchlistRepository
+from app.schemas.news import PaginatedNewsResponse
+from app.schemas.watchlist import WatchlistCreate
+from app.services.watchlist import WatchlistService
 
 router = APIRouter(prefix="/api/v1/me", tags=["me"])
 
 
-# --- Watchlist ---
+def _service(session: AsyncSession) -> WatchlistService:
+    return WatchlistService(WatchlistRepository(session))
 
 
-@router.get("/watchlist", response_model=WatchlistListResponse)
+@router.get("/watchlist", response_model=PaginatedNewsResponse)
 async def list_watchlist(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100, alias="perPage"),
     user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
-) -> WatchlistListResponse:
-    base_stmt = select(WatchlistEntry).where(WatchlistEntry.user_id == user.id)
-
-    # Count total
-    count_stmt = select(func.count()).select_from(base_stmt.subquery())
-    total = (await session.execute(count_stmt)).scalar_one()
-
-    # Fetch paginated items with eager-loaded article + news_source
-    offset = (page - 1) * per_page
-    stmt = (
-        base_stmt.options(
-            selectinload(WatchlistEntry.news_article).selectinload(
-                NewsArticle.news_source
-            )
-        )
-        .order_by(WatchlistEntry.created_at.desc())
-        .offset(offset)
-        .limit(per_page)
-    )
-    result = await session.execute(stmt)
-    items = result.scalars().all()
-
-    return WatchlistListResponse(
-        items=[
-            WatchlistResponse(
-                news_id=item.news_article.id,
-                original_title=item.news_article.original_title,
-                # TODO: スキーマ側で SafeUrl を直接受け入れる
-                original_url=str(item.news_article.original_url),
-                source=NewsSourceEmbed(
-                    id=item.news_article.news_source.id,
-                    name=item.news_article.news_source.name,
-                ),
-                published_at=item.news_article.published_at,
-                created_at=item.created_at,
-            )
-            for item in items
-        ],
-        total=total,
-        page=page,
-        per_page=per_page,
-        total_pages=math.ceil(total / per_page) if total > 0 else 0,
-    )
+) -> PaginatedNewsResponse:
+    return await _service(session).list_watchlist(user.id, page, per_page)
 
 
-@router.post(
-    "/watchlist",
-    response_model=WatchlistResponse,
-    status_code=status.HTTP_201_CREATED,
-)
+@router.post("/watchlist", status_code=status.HTTP_201_CREATED)
 async def add_to_watchlist(
     body: WatchlistCreate,
     user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
-) -> WatchlistResponse:
-    # Verify article exists (eager load news_source for source embed)
-    article_stmt = (
-        select(NewsArticle)
-        .where(NewsArticle.id == body.news_id)
-        .options(selectinload(NewsArticle.news_source))
-    )
-    article = (await session.execute(article_stmt)).scalar_one_or_none()
-    if not article:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="News article not found",
-        )
-
-    # Check duplicate
-    existing_stmt = select(WatchlistEntry).where(
-        WatchlistEntry.user_id == user.id,
-        WatchlistEntry.news_article_id == body.news_id,
-    )
-    existing = (await session.execute(existing_stmt)).scalar_one_or_none()
-    if existing:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Article already in watchlist",
-        )
-
-    item = WatchlistEntry(user_id=user.id, news_article_id=body.news_id)
-    session.add(item)
-    await session.commit()
-    await session.refresh(item)
-
-    return WatchlistResponse(
-        news_id=article.id,
-        original_title=article.original_title,
-        # TODO: SafeUrl を WatchlistResponse に直接渡せるようスキーマ側を修正する
-        original_url=str(article.original_url),
-        source=NewsSourceEmbed(
-            id=article.news_source.id,
-            name=article.news_source.name,
-        ),
-        published_at=article.published_at,
-        created_at=item.created_at,
-    )
+) -> None:
+    try:
+        await _service(session).add_to_watchlist(user.id, body.news_id)
+    except NotFoundError as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=e.detail)
+    except DuplicateError as e:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=e.detail)
 
 
 @router.delete(
@@ -135,16 +50,7 @@ async def remove_from_watchlist(
     user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> None:
-    stmt = select(WatchlistEntry).where(
-        WatchlistEntry.user_id == user.id,
-        WatchlistEntry.news_article_id == news_id,
-    )
-    item = (await session.execute(stmt)).scalar_one_or_none()
-    if not item:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Watchlist item not found",
-        )
-
-    await session.delete(item)
-    await session.commit()
+    try:
+        await _service(session).remove_from_watchlist(user.id, news_id)
+    except NotFoundError as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=e.detail)
