@@ -69,7 +69,7 @@ async def _create_article(
 def _patch_embed_query(return_value: list[float] = FAKE_QUERY_EMBEDDING):
     """Patch embed_search_query to return a fixed vector."""
     return patch(
-        "app.routers.news.embed_search_query",
+        "app.services.news.embed_search_query",
         new_callable=AsyncMock,
         return_value=return_value,
     )
@@ -247,7 +247,7 @@ async def test_semantic_search_returns_503_on_embedding_failure(
     await db_session.commit()
 
     with patch(
-        "app.routers.news.embed_search_query",
+        "app.services.news.embed_search_query",
         new_callable=AsyncMock,
         side_effect=EmbeddingError("API down"),
     ):

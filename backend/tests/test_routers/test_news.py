@@ -317,7 +317,7 @@ class TestFetchNews:
         mock_task_handle.task_id = "test-task-id-123"
 
         with patch(
-            "app.routers.news.fetch_metadata",
+            "app.services.news.fetch_metadata",
         ) as mock_task:
             mock_task.kiq = AsyncMock(return_value=mock_task_handle)
             resp = await admin_client.post("/api/v1/news/fetch")
@@ -334,7 +334,7 @@ class TestFetchNews:
         mock_task_handle.task_id = "test-task-id-456"
 
         with patch(
-            "app.routers.news.fetch_metadata",
+            "app.services.news.fetch_metadata",
         ) as mock_task:
             mock_task.kiq = AsyncMock(return_value=mock_task_handle)
             resp = await admin_client.post(
