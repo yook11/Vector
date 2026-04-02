@@ -1,9 +1,6 @@
 "use client";
 
 import type {
-  KeywordCreate,
-  KeywordResponse,
-  KeywordUpdate,
   NewsFetchRequest,
   NewsFetchResponse,
   NewsSourceCreate,
@@ -58,31 +55,6 @@ export async function clientRemoveFromWatchlist(newsId: number): Promise<void> {
   await clientFetch(`/me/watchlist/${newsId}`, {
     method: "DELETE",
   });
-}
-
-// --- Keywords ---
-
-export async function clientCreateKeyword(
-  body: KeywordCreate,
-): Promise<KeywordResponse> {
-  return clientFetch<KeywordResponse>("/keywords", {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-}
-
-export async function clientUpdateKeyword(
-  id: number,
-  body: KeywordUpdate,
-): Promise<KeywordResponse> {
-  return clientFetch<KeywordResponse>(`/keywords/${id}`, {
-    method: "PATCH",
-    body: JSON.stringify(body),
-  });
-}
-
-export async function clientDeleteKeyword(id: number): Promise<void> {
-  return clientFetch<void>(`/keywords/${id}`, { method: "DELETE" });
 }
 
 // --- News ---

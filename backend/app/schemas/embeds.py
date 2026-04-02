@@ -4,18 +4,10 @@ These classes never appear as top-level API responses — they are always
 nested within a parent response schema (e.g. NewsBrief, CategoryDetail).
 """
 
-from app.domain.category import CategoryName, CategorySlug
 from app.domain.keyword import KeywordName
 from app.domain.news_source import SourceName
 from app.domain.safe_url import SafeUrl
 from app.schemas.base import _CamelBase
-
-
-class CategoryEmbed(_CamelBase):
-    """カテゴリの基本参照情報（slug + 名前）"""
-
-    slug: CategorySlug
-    name: CategoryName
 
 
 class KeywordEmbed(_CamelBase):

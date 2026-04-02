@@ -3,16 +3,9 @@ from app.schemas.category import (
     CategoryDetailList,
 )
 from app.schemas.embeds import (
-    CategoryEmbed,
     KeywordEmbed,
     KeywordStatEmbed,
     OriginalArticleEmbed,
-)
-from app.schemas.keyword import (
-    KeywordCreate,
-    KeywordDetail,
-    KeywordDetailList,
-    KeywordUpdate,
 )
 from app.schemas.news import (
     NewsBrief,
@@ -25,12 +18,7 @@ from app.schemas.news import (
 __all__ = [
     "CategoryDetail",
     "CategoryDetailList",
-    "CategoryEmbed",
-    "KeywordCreate",
     "KeywordEmbed",
-    "KeywordDetail",
-    "KeywordDetailList",
-    "KeywordUpdate",
     "KeywordStatEmbed",
     "NewsBrief",
     "NewsDetail",

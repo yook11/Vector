@@ -24,54 +24,6 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
-  "/api/v1/keywords": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    /**
-     * List Keywords
-     * @description List all keywords with category and article count.
-     */
-    get: operations["list_keywords_api_v1_keywords_get"];
-    put?: never;
-    /**
-     * Create Keyword
-     * @description Create a new keyword.
-     */
-    post: operations["create_keyword_api_v1_keywords_post"];
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
-  "/api/v1/keywords/{keyword_id}": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    get?: never;
-    put?: never;
-    post?: never;
-    /**
-     * Delete Keyword
-     * @description Delete a keyword.
-     */
-    delete: operations["delete_keyword_api_v1_keywords__keyword_id__delete"];
-    options?: never;
-    head?: never;
-    /**
-     * Update Keyword
-     * @description Update a keyword's category.
-     */
-    patch: operations["update_keyword_api_v1_keywords__keyword_id__patch"];
-    trace?: never;
-  };
   "/api/v1/me/watchlist": {
     parameters: {
       query?: never;
@@ -323,14 +275,6 @@ export interface components {
       items: components["schemas"]["CategoryDetail"][];
     };
     /**
-     * CategoryEmbed
-     * @description カテゴリの基本参照情報（slug + 名前）
-     */
-    CategoryEmbed: {
-      slug: components["schemas"]["CategorySlug"];
-      name: components["schemas"]["CategoryName"];
-    };
-    /**
      * CategoryName
      * @description Japanese display name for a category.
      *
@@ -377,44 +321,6 @@ export interface components {
      */
     ImpactLevel: "low" | "medium" | "high" | "critical";
     /**
-     * KeywordCreate
-     * @description POST /api/v1/keywords request body.
-     */
-    KeywordCreate: {
-      /** @description Keyword tag name (1-100 chars) */
-      name: components["schemas"]["KeywordName"];
-      categorySlug: components["schemas"]["CategorySlug"];
-    };
-    /**
-     * KeywordDetail
-     * @description Keyword in API responses (list, detail).
-     */
-    KeywordDetail: {
-      /** Id */
-      id: number;
-      name: components["schemas"]["KeywordName"];
-      category: components["schemas"]["CategoryEmbed"];
-      status: components["schemas"]["KeywordStatus"];
-      /**
-       * Articlecount
-       * @default 0
-       */
-      articleCount: number;
-      /**
-       * Createdat
-       * Format: date-time
-       */
-      createdAt: string;
-    };
-    /**
-     * KeywordDetailList
-     * @description GET /api/v1/keywords wrapper.
-     */
-    KeywordDetailList: {
-      /** Items */
-      items: components["schemas"]["KeywordDetail"][];
-    };
-    /**
      * KeywordEmbed
      * @description キーワードタグ（ニュース埋め込み用）
      */
@@ -447,18 +353,6 @@ export interface components {
        * @default 0
        */
       articleCount: number;
-    };
-    /**
-     * KeywordStatus
-     * @enum {string}
-     */
-    KeywordStatus: "provisional" | "official" | "blacklisted";
-    /**
-     * KeywordUpdate
-     * @description PATCH /api/v1/keywords/{id} request body.
-     */
-    KeywordUpdate: {
-      categorySlug?: components["schemas"]["CategorySlug"] | null;
     };
     /**
      * NewsBrief
@@ -693,123 +587,6 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["CategoryDetailList"];
-        };
-      };
-    };
-  };
-  list_keywords_api_v1_keywords_get: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    requestBody?: never;
-    responses: {
-      /** @description Successful Response */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["KeywordDetailList"];
-        };
-      };
-    };
-  };
-  create_keyword_api_v1_keywords_post: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    requestBody: {
-      content: {
-        "application/json": components["schemas"]["KeywordCreate"];
-      };
-    };
-    responses: {
-      /** @description Successful Response */
-      201: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["KeywordDetail"];
-        };
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
-        };
-      };
-    };
-  };
-  delete_keyword_api_v1_keywords__keyword_id__delete: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path: {
-        keyword_id: number;
-      };
-      cookie?: never;
-    };
-    requestBody?: never;
-    responses: {
-      /** @description Successful Response */
-      204: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content?: never;
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
-        };
-      };
-    };
-  };
-  update_keyword_api_v1_keywords__keyword_id__patch: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path: {
-        keyword_id: number;
-      };
-      cookie?: never;
-    };
-    requestBody: {
-      content: {
-        "application/json": components["schemas"]["KeywordUpdate"];
-      };
-    };
-    responses: {
-      /** @description Successful Response */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["KeywordDetail"];
-        };
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
         };
       };
     };

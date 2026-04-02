@@ -10,7 +10,6 @@ from app.config import settings
 from app.db import engine
 from app.routers import (
     categories,
-    keywords,
     me,
     news,
     news_sources,
@@ -74,7 +73,6 @@ app.add_middleware(
 
 # Register routers
 app.include_router(categories.router)
-app.include_router(keywords.router)
 app.include_router(me.router)
 app.include_router(news.router)
 app.include_router(news_sources.router)

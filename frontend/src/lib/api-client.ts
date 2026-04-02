@@ -2,10 +2,6 @@ import { headers } from "next/headers";
 import { auth } from "@/lib/auth";
 import type {
   CategoryDetailListResponse,
-  KeywordCreate,
-  KeywordListResponse,
-  KeywordResponse,
-  KeywordUpdate,
   NewsBrief,
   NewsDetail,
   NewsFetchRequest,
@@ -102,37 +98,6 @@ export async function triggerFetch(
     method: "POST",
     body: JSON.stringify(body ?? {}),
   });
-}
-
-/** Fetch all keywords. */
-export async function getKeywords(): Promise<KeywordListResponse> {
-  return fetchApi<KeywordListResponse>("/keywords", { cache: "no-store" });
-}
-
-/** Create a new keyword. */
-export async function createKeyword(
-  body: KeywordCreate,
-): Promise<KeywordResponse> {
-  return fetchApi<KeywordResponse>("/keywords", {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-}
-
-/** Update a keyword. */
-export async function updateKeyword(
-  id: number,
-  body: KeywordUpdate,
-): Promise<KeywordResponse> {
-  return fetchApi<KeywordResponse>(`/keywords/${id}`, {
-    method: "PATCH",
-    body: JSON.stringify(body),
-  });
-}
-
-/** Delete a keyword. */
-export async function deleteKeyword(id: number): Promise<void> {
-  return fetchApi<void>(`/keywords/${id}`, { method: "DELETE" });
 }
 
 // --- Watchlist ---

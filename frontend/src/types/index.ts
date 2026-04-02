@@ -31,16 +31,13 @@ export interface NewsQuery {
 // ---------------------------------------------------------------------------
 
 // Categories
-export type CategoryBrief = components["schemas"]["CategoryEmbed"];
+export type CategoryBrief = Pick<
+  components["schemas"]["CategoryDetail"],
+  "slug" | "name"
+>;
 export type CategoryDetailResponse = components["schemas"]["CategoryDetail"];
 export type CategoryDetailListResponse =
   components["schemas"]["CategoryDetailList"];
-
-// Keywords
-export type KeywordResponse = components["schemas"]["KeywordDetail"];
-export type KeywordListResponse = components["schemas"]["KeywordDetailList"];
-export type KeywordCreate = components["schemas"]["KeywordCreate"];
-export type KeywordUpdate = components["schemas"]["KeywordUpdate"];
 
 // ---------------------------------------------------------------------------
 // Narrowed types — where generated types need refinement
