@@ -26,10 +26,6 @@ class NewsSourceService:
             raise NotFoundError("News source not found")
         return source
 
-    async def get_source(self, source_id: int) -> NewsSourceDetail:
-        source = await self._get_or_raise(source_id)
-        return NewsSourceDetail.model_validate(source)
-
     async def create_source(self, body: NewsSourceCreate) -> NewsSourceDetail:
         source = NewsSource(
             name=body.name,

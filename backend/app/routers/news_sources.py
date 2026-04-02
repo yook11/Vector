@@ -29,19 +29,6 @@ async def list_sources(
     return await _service(session).list_sources()
 
 
-@router.get("/{source_id}", response_model=NewsSourceDetail)
-async def get_source(
-    source_id: int,
-    session: AsyncSession = Depends(get_session),
-    _user: CurrentUser = Depends(get_current_user),
-) -> NewsSourceDetail:
-    """Get a single news source by ID."""
-    try:
-        return await _service(session).get_source(source_id)
-    except NotFoundError as e:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=e.detail)
-
-
 @router.post(
     "",
     response_model=NewsSourceDetail,
