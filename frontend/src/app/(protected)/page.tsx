@@ -40,8 +40,8 @@ function parseSearchParams(
     query.impactLevel = impactLevel as ImpactLevel;
   }
 
-  const sourceId = str("sourceId");
-  if (sourceId) query.sourceId = Number(sourceId);
+  const source = str("source");
+  if (source) query.source = source;
 
   const sortBy = str("sortBy");
   if (sortBy === "publishedAt" || sortBy === "impactLevel") {

@@ -19,7 +19,7 @@ export interface NewsQuery {
   keywordId?: number;
   category?: string;
   impactLevel?: ImpactLevel;
-  sourceId?: number;
+  source?: string;
   sortBy?: "publishedAt" | "impactLevel";
   sortOrder?: "asc" | "desc";
   page?: number;

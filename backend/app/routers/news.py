@@ -26,7 +26,7 @@ router = APIRouter(prefix="/api/v1/news", tags=["news"])
 async def list_news(
     keyword_id: int | None = Query(None, alias="keywordId"),
     category: str | None = Query(None),
-    source_id: int | None = Query(None, alias="sourceId"),
+    source: str | None = Query(None),
     impact_level: ImpactLevel | None = Query(None, alias="impactLevel"),
     q: str | None = Query(None, min_length=1, max_length=500),
     sort_by: str = Query("publishedAt", alias="sortBy"),
@@ -48,7 +48,7 @@ async def list_news(
     params = NewsListParams(
         keyword_id=keyword_id,
         category_slug=category_slug,
-        source_id=source_id,
+        source_name=source,
         impact_level=impact_level,
         sort_by=sort_by,
         sort_order=sort_order,

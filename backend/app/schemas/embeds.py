@@ -28,7 +28,6 @@ class KeywordStatEmbed(_CamelBase):
 class NewsSourceEmbed(_CamelBase):
     """ニュースソースの基本参照情報（フィルタ・表示用）"""
 
-    id: int
     name: SourceName
 
 

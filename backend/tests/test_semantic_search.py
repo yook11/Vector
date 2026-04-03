@@ -150,7 +150,7 @@ async def test_semantic_search_combined_with_source_filter(
     authed_client: AsyncClient,
     db_session: AsyncSession,
 ) -> None:
-    """Semantic search should work with sourceId filter."""
+    """Semantic search should work with source name filter."""
     source_a = await _create_source(db_session)
     source_b = NewsSource(
         name="Other Source",
@@ -180,7 +180,7 @@ async def test_semantic_search_combined_with_source_filter(
     with _patch_embed_query():
         resp = await authed_client.get(
             "/api/v1/news",
-            params={"q": "test", "sourceId": source_a.id},
+            params={"q": "test", "source": str(source_a.name)},
         )
 
     assert resp.status_code == 200

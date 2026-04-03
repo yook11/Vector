@@ -178,7 +178,7 @@ class TestListNews:
         assert items[0]["translatedTitle"] == "新しい記事"
         assert items[1]["translatedTitle"] == "古い記事"
 
-    async def test_filter_by_source_id(
+    async def test_filter_by_source_name(
         self,
         client: AsyncClient,
         db_session: AsyncSession,
@@ -205,13 +205,14 @@ class TestListNews:
         )
         await _create_analysis(db_session, a2)
 
-        resp = await client.get(f"/api/v1/news?sourceId={sample_source.id}")
+        resp = await client.get(
+            f"/api/v1/news?source={sample_source.name}"
+        )
         data = resp.json()
         assert data["total"] == 1
-        assert data["items"][0]["source"]["id"] == sample_source.id
         assert data["items"][0]["source"]["name"] == str(sample_source.name)
 
-    async def test_filter_by_source_id_nonexistent(
+    async def test_filter_by_source_name_nonexistent(
         self,
         client: AsyncClient,
         db_session: AsyncSession,
@@ -220,7 +221,7 @@ class TestListNews:
         a = await _create_article(db_session, sample_source)
         await _create_analysis(db_session, a)
 
-        resp = await client.get("/api/v1/news?sourceId=99999")
+        resp = await client.get("/api/v1/news?source=NonExistentSource")
         data = resp.json()
         assert data["total"] == 0
         assert data["items"] == []

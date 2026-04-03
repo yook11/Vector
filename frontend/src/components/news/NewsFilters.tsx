@@ -70,9 +70,9 @@ export function NewsFilters({ sources }: NewsFiltersProps) {
 
       {sources && sources.length > 0 && (
         <Select
-          value={searchParams?.get("sourceId") ?? ""}
+          value={searchParams?.get("source") ?? ""}
           onValueChange={(v) =>
-            updateParam("sourceId", v === "all" ? undefined : v)
+            updateParam("source", v === "all" ? undefined : v)
           }
         >
           <SelectTrigger className="h-9 w-[130px] text-xs border-border">
@@ -80,11 +80,13 @@ export function NewsFilters({ sources }: NewsFiltersProps) {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Sources</SelectItem>
-            {sources.map((src) => (
-              <SelectItem key={src.id} value={String(src.id)}>
-                {src.name}
-              </SelectItem>
-            ))}
+            {[...new Map(sources.map((s) => [s.name, s])).values()].map(
+              (src) => (
+                <SelectItem key={src.name} value={src.name}>
+                  {src.name}
+                </SelectItem>
+              ),
+            )}
           </SelectContent>
         </Select>
       )}

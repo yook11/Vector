@@ -12,6 +12,7 @@ from app.models.article_keyword import ArticleKeyword
 from app.models.category import Category
 from app.models.keyword import Keyword
 from app.models.news_article import NewsArticle
+from app.models.news_source import NewsSource
 from app.models.watchlist_entry import WatchlistEntry
 
 _impact_order_expr = case(
@@ -47,7 +48,7 @@ class NewsListParams:
 
     keyword_id: int | None = None
     category_slug: CategorySlug | None = None
-    source_id: int | None = None
+    source_name: str | None = None
     impact_level: ImpactLevel | None = None
     sort_by: str = "publishedAt"
     sort_order: str = "desc"
@@ -80,8 +81,11 @@ class NewsRepository:
             distance_expr = ArticleAnalysis.embedding.cosine_distance(query_embedding)
             stmt = stmt.where(distance_expr < settings.semantic_search_max_distance)
 
-        if params.source_id is not None:
-            stmt = stmt.where(NewsArticle.news_source_id == params.source_id)
+        if params.source_name is not None:
+            source_ids = select(NewsSource.id).where(
+                NewsSource.name == params.source_name
+            )
+            stmt = stmt.where(NewsArticle.news_source_id.in_(source_ids))
 
         if params.keyword_id is not None:
             matching_ids = select(ArticleKeyword.news_article_id).where(
