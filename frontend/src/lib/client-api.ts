@@ -62,7 +62,7 @@ export async function clientRemoveFromWatchlist(newsId: number): Promise<void> {
 export async function clientTriggerFetch(
   body?: NewsFetchRequest,
 ): Promise<NewsFetchResponse> {
-  return clientFetch<NewsFetchResponse>("/news/fetch", {
+  return clientFetch<NewsFetchResponse>("/pipeline/fetch", {
     method: "POST",
     body: JSON.stringify(body ?? {}),
   });

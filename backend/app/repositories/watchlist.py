@@ -4,7 +4,7 @@ from sqlmodel import func, select
 from app.models.article_analysis import ArticleAnalysis
 from app.models.news_article import NewsArticle
 from app.models.watchlist_entry import WatchlistEntry
-from app.repositories.news import news_eager_options
+from app.repositories.articles import article_eager_options
 
 
 class WatchlistRepository:
@@ -39,7 +39,7 @@ class WatchlistRepository:
 
         offset = (page - 1) * per_page
         stmt = (
-            base.options(*news_eager_options())
+            base.options(*article_eager_options())
             .order_by(WatchlistEntry.created_at.desc())
             .offset(offset)
             .limit(per_page)

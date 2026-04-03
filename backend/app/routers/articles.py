@@ -1,29 +1,26 @@
-"""CRUD endpoints for news articles."""
+"""Read endpoints for analyzed articles."""
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies import CurrentUser, get_admin_user, get_optional_user, get_session
+from app.dependencies import CurrentUser, get_optional_user, get_session
 from app.domain.category import CategorySlug
 from app.exceptions import NotFoundError
 from app.models.article_analysis import ImpactLevel
-from app.repositories.news import NewsListParams, NewsRepository
+from app.repositories.articles import ArticleListParams, ArticleRepository
 from app.schemas.news import (
-    EmbedResponse,
     NewsBrief,
     NewsDetail,
-    NewsFetchRequest,
-    NewsFetchResponse,
     PaginatedNewsResponse,
 )
+from app.services.articles import ArticleService
 from app.services.embedding import EmbeddingError
-from app.services.news import NewsService
 
-router = APIRouter(prefix="/api/v1/news", tags=["news"])
+router = APIRouter(prefix="/api/v1/articles", tags=["articles"])
 
 
 @router.get("", response_model=PaginatedNewsResponse)
-async def list_news(
+async def list_articles(
     keyword_id: int | None = Query(None, alias="keywordId"),
     category: str | None = Query(None),
     source: str | None = Query(None),
@@ -36,7 +33,7 @@ async def list_news(
     user: CurrentUser | None = Depends(get_optional_user),
     session: AsyncSession = Depends(get_session),
 ) -> PaginatedNewsResponse:
-    """List analyzed news articles with filters and pagination."""
+    """List analyzed articles with filters and pagination."""
     try:
         category_slug = CategorySlug(category) if category else None
     except ValueError:
@@ -44,8 +41,8 @@ async def list_news(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Invalid category slug: {category!r}",
         )
-    service = NewsService(NewsRepository(session))
-    params = NewsListParams(
+    service = ArticleService(ArticleRepository(session))
+    params = ArticleListParams(
         keyword_id=keyword_id,
         category_slug=category_slug,
         source_name=source,
@@ -56,7 +53,7 @@ async def list_news(
         per_page=per_page,
     )
     try:
-        return await service.list_news(params, q, user.id if user else None)
+        return await service.list_articles(params, q, user.id if user else None)
     except EmbeddingError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -64,62 +61,33 @@ async def list_news(
         )
 
 
-@router.post(
-    "/embed",
-    response_model=EmbedResponse,
-    status_code=status.HTTP_200_OK,
-    summary="Backfill embeddings for analyses that are missing them",
-)
-async def embed_news(
-    session: AsyncSession = Depends(get_session),
-    _user: CurrentUser = Depends(get_admin_user),
-) -> EmbedResponse:
-    """Generate vector embeddings for all analyses where embedding IS NULL."""
-    service = NewsService(NewsRepository(session))
-    return await service.embed_news()
-
-
 @router.get(
-    "/{news_id}/similar",
+    "/{article_id}/similar",
     response_model=list[NewsBrief],
     summary="Find semantically similar articles using pgvector cosine distance",
 )
-async def get_similar_news(
-    news_id: int,
+async def get_similar_articles(
+    article_id: int,
     limit: int = Query(5, ge=1, le=20),
     session: AsyncSession = Depends(get_session),
 ) -> list[NewsBrief]:
     """Return articles most similar to the given article."""
-    service = NewsService(NewsRepository(session))
+    service = ArticleService(ArticleRepository(session))
     try:
-        return await service.get_similar(news_id, limit)
+        return await service.get_similar(article_id, limit)
     except NotFoundError as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=e.detail)
 
 
-@router.get("/{news_id}", response_model=NewsDetail)
-async def get_news(
-    news_id: int,
+@router.get("/{article_id}", response_model=NewsDetail)
+async def get_article(
+    article_id: int,
     user: CurrentUser | None = Depends(get_optional_user),
     session: AsyncSession = Depends(get_session),
 ) -> NewsDetail:
-    """Get a single news article with full analysis details."""
-    service = NewsService(NewsRepository(session))
+    """Get a single article with full analysis details."""
+    service = ArticleService(ArticleRepository(session))
     try:
-        return await service.get_news(news_id, user.id if user else None)
+        return await service.get_article(article_id, user.id if user else None)
     except NotFoundError as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=e.detail)
-
-
-@router.post(
-    "/fetch",
-    response_model=NewsFetchResponse,
-    status_code=status.HTTP_202_ACCEPTED,
-)
-async def fetch_news(
-    body: NewsFetchRequest | None = None,
-    _user: CurrentUser = Depends(get_admin_user),
-) -> NewsFetchResponse:
-    """Enqueue a news fetch task. Returns immediately with a task ID."""
-    source_ids = body.source_ids if body else None
-    return await NewsService.fetch_news(source_ids)

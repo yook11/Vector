@@ -1,4 +1,4 @@
-"""Tests for semantic search (q parameter on GET /api/v1/news)."""
+"""Tests for semantic search (q parameter on GET /api/v1/articles)."""
 
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
@@ -69,7 +69,7 @@ async def _create_article(
 def _patch_embed_query(return_value: list[float] = FAKE_QUERY_EMBEDDING):
     """Patch embed_search_query to return a fixed vector."""
     return patch(
-        "app.services.news.embed_search_query",
+        "app.services.articles.embed_search_query",
         new_callable=AsyncMock,
         return_value=return_value,
     )
@@ -85,7 +85,7 @@ async def test_semantic_search_returns_articles_with_embedding(
     authed_client: AsyncClient,
     db_session: AsyncSession,
 ) -> None:
-    """GET /api/v1/news?q=test should return articles with embeddings."""
+    """GET /api/v1/articles?q=test should return articles with embeddings."""
     source = await _create_source(db_session)
     await _create_article(
         db_session,
@@ -97,7 +97,7 @@ async def test_semantic_search_returns_articles_with_embedding(
     await db_session.commit()
 
     with _patch_embed_query():
-        resp = await authed_client.get("/api/v1/news", params={"q": "AI research"})
+        resp = await authed_client.get("/api/v1/articles", params={"q": "AI research"})
 
     assert resp.status_code == 200
     data = resp.json()
@@ -131,7 +131,7 @@ async def test_semantic_search_excludes_articles_without_embedding(
     await db_session.commit()
 
     with _patch_embed_query():
-        resp = await authed_client.get("/api/v1/news", params={"q": "test"})
+        resp = await authed_client.get("/api/v1/articles", params={"q": "test"})
 
     assert resp.status_code == 200
     data = resp.json()
@@ -179,7 +179,7 @@ async def test_semantic_search_combined_with_source_filter(
 
     with _patch_embed_query():
         resp = await authed_client.get(
-            "/api/v1/news",
+            "/api/v1/articles",
             params={"q": "test", "source": str(source_a.name)},
         )
 
@@ -218,7 +218,7 @@ async def test_no_q_parameter_returns_analyzed_articles(
     await db_session.commit()
 
     # No patching needed -- embed_search_query should not be called
-    resp = await authed_client.get("/api/v1/news")
+    resp = await authed_client.get("/api/v1/articles")
 
     assert resp.status_code == 200
     data = resp.json()
@@ -247,11 +247,11 @@ async def test_semantic_search_returns_503_on_embedding_failure(
     await db_session.commit()
 
     with patch(
-        "app.services.news.embed_search_query",
+        "app.services.articles.embed_search_query",
         new_callable=AsyncMock,
         side_effect=EmbeddingError("API down"),
     ):
-        resp = await authed_client.get("/api/v1/news", params={"q": "test"})
+        resp = await authed_client.get("/api/v1/articles", params={"q": "test"})
 
     assert resp.status_code == 503
     assert "embedding" in resp.json()["detail"].lower()

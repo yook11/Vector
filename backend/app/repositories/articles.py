@@ -1,3 +1,5 @@
+"""Read-only queries for analyzed articles."""
+
 from dataclasses import dataclass
 
 from sqlalchemy import case
@@ -31,8 +33,8 @@ _IMPACT_LEVEL_ORDER = {
 }
 
 
-def news_eager_options() -> list:
-    """Selectinload options shared by news / watchlist queries."""
+def article_eager_options() -> list:
+    """Selectinload options shared by article / watchlist queries."""
     return [
         selectinload(NewsArticle.article_analysis),
         selectinload(NewsArticle.news_source),
@@ -43,8 +45,8 @@ def news_eager_options() -> list:
 
 
 @dataclass(frozen=True)
-class NewsListParams:
-    """Filter / sort / pagination parameters for news list query."""
+class ArticleListParams:
+    """Filter / sort / pagination parameters for article list query."""
 
     keyword_id: int | None = None
     category_slug: CategorySlug | None = None
@@ -56,13 +58,13 @@ class NewsListParams:
     per_page: int = 12
 
 
-class NewsRepository:
+class ArticleRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
     async def fetch_analyzed_list(
         self,
-        params: NewsListParams,
+        params: ArticleListParams,
         query_embedding: list[float] | None = None,
     ) -> tuple[list[NewsArticle], int]:
         """Fetch paginated analyzed articles with filters and sorting.
@@ -72,7 +74,7 @@ class NewsRepository:
         stmt = (
             select(NewsArticle)
             .join(ArticleAnalysis, ArticleAnalysis.news_article_id == NewsArticle.id)
-            .options(*news_eager_options())
+            .options(*article_eager_options())
         )
 
         # Semantic search filter
@@ -142,7 +144,7 @@ class NewsRepository:
         stmt = (
             select(NewsArticle)
             .where(NewsArticle.id == news_id)
-            .options(*news_eager_options())
+            .options(*article_eager_options())
         )
         result = await self.session.execute(stmt)
         article = result.unique().scalar_one_or_none()
@@ -172,7 +174,7 @@ class NewsRepository:
         stmt = (
             select(NewsArticle)
             .join(ArticleAnalysis, ArticleAnalysis.news_article_id == NewsArticle.id)
-            .options(*news_eager_options())
+            .options(*article_eager_options())
             .where(
                 NewsArticle.id != exclude_id,
                 ArticleAnalysis.embedding.is_not(None),
@@ -190,9 +192,3 @@ class NewsRepository:
         )
         result = await self.session.execute(stmt)
         return set(result.scalars().all())
-
-    async def get_analyses_without_embedding(self) -> list[ArticleAnalysis]:
-        """Get all analyses that lack an embedding vector."""
-        stmt = select(ArticleAnalysis).where(ArticleAnalysis.embedding.is_(None))
-        result = await self.session.execute(stmt)
-        return list(result.scalars().all())

@@ -9,10 +9,11 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from app.config import settings
 from app.db import engine
 from app.routers import (
+    articles,
     categories,
     me,
-    news,
     news_sources,
+    pipeline,
 )
 
 
@@ -72,10 +73,11 @@ app.add_middleware(
 )
 
 # Register routers
+app.include_router(articles.router)
 app.include_router(categories.router)
 app.include_router(me.router)
-app.include_router(news.router)
 app.include_router(news_sources.router)
+app.include_router(pipeline.router)
 
 
 @app.get("/api/v1/health")

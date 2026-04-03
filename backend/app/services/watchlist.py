@@ -3,7 +3,7 @@ import math
 from app.exceptions import DuplicateError, NotFoundError
 from app.repositories.watchlist import WatchlistRepository
 from app.schemas.news import PaginatedNewsResponse
-from app.services.news import NewsService
+from app.services.articles import build_brief
 
 
 class WatchlistService:
@@ -23,7 +23,7 @@ class WatchlistService:
         watched_ids = {a.id for a in articles}
 
         return PaginatedNewsResponse(
-            items=[NewsService._build_brief(a, watched_ids) for a in articles],
+            items=[build_brief(a, watched_ids) for a in articles],
             total=total,
             page=page,
             per_page=per_page,

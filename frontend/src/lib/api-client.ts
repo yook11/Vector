@@ -80,21 +80,21 @@ export async function getNews(
     }
   }
   const qs = params.toString();
-  return fetchApi<PaginatedNewsResponse>(`/news${qs ? `?${qs}` : ""}`, {
+  return fetchApi<PaginatedNewsResponse>(`/articles${qs ? `?${qs}` : ""}`, {
     cache: "no-store",
   });
 }
 
 /** Fetch a single news article by ID. */
 export async function getNewsById(id: number): Promise<NewsDetail> {
-  return fetchApi<NewsDetail>(`/news/${id}`, { cache: "no-store" });
+  return fetchApi<NewsDetail>(`/articles/${id}`, { cache: "no-store" });
 }
 
 /** Trigger a manual news fetch. */
 export async function triggerFetch(
   body?: NewsFetchRequest,
 ): Promise<NewsFetchResponse> {
-  return fetchApi<NewsFetchResponse>("/news/fetch", {
+  return fetchApi<NewsFetchResponse>("/pipeline/fetch", {
     method: "POST",
     body: JSON.stringify(body ?? {}),
   });
@@ -133,7 +133,7 @@ export async function getSimilarNews(
   id: number,
   limit = 5,
 ): Promise<NewsBrief[]> {
-  return fetchApi<NewsBrief[]>(`/news/${id}/similar?limit=${limit}`, {
+  return fetchApi<NewsBrief[]>(`/articles/${id}/similar?limit=${limit}`, {
     cache: "no-store",
   });
 }

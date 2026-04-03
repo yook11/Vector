@@ -203,7 +203,7 @@ class TestNewsIsWatched:
             json={"newsId": sample_article.id},
         )
 
-        resp = await authed_client.get("/api/v1/news")
+        resp = await authed_client.get("/api/v1/articles")
         assert resp.status_code == 200
         items = resp.json()["items"]
         assert len(items) == 1
@@ -214,7 +214,7 @@ class TestNewsIsWatched:
         authed_client: AsyncClient,
         sample_article: NewsArticle,
     ) -> None:
-        resp = await authed_client.get("/api/v1/news")
+        resp = await authed_client.get("/api/v1/articles")
         items = resp.json()["items"]
         assert len(items) == 1
         assert items[0]["isWatched"] is False
@@ -224,7 +224,7 @@ class TestNewsIsWatched:
         client: AsyncClient,
         sample_article: NewsArticle,
     ) -> None:
-        resp = await client.get("/api/v1/news")
+        resp = await client.get("/api/v1/articles")
         items = resp.json()["items"]
         assert len(items) == 1
         assert items[0]["isWatched"] is False
