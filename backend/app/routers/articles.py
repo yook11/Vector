@@ -4,11 +4,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import CurrentUser, get_optional_user, get_session
+from app.domain.category import CategorySlug
+from app.domain.news_source import SourceName
 from app.exceptions import NotFoundError
-from app.repositories.articles import ArticleListParams, ArticleRepository
+from app.repositories.articles import ArticleRepository
 from app.schemas.articles import (
     ArticleBrief,
     ArticleDetail,
+    ArticleListParams,
+    ArticleListQuery,
     PaginatedArticleResponse,
 )
 from app.services.articles import ArticleService
@@ -23,16 +27,37 @@ def get_article_service(
     return ArticleService(ArticleRepository(session))
 
 
+def _resolve_params(params: ArticleListParams) -> ArticleListQuery:
+    """Convert raw request params to resolved query with VOs."""
+    return ArticleListQuery(
+        keyword_id=params.keyword_id,
+        category_slug=CategorySlug(params.category) if params.category else None,
+        source_name=SourceName(params.source) if params.source else None,
+        impact_level=params.impact_level,
+        q=params.q,
+        sort_by=params.sort_by,
+        sort_order=params.sort_order,
+        page=params.page,
+        per_page=params.per_page,
+    )
+
+
 @router.get("", response_model=PaginatedArticleResponse)
 async def list_articles(
-    q: str | None = Query(None, min_length=1, max_length=500),
     user: CurrentUser | None = Depends(get_optional_user),
     service: ArticleService = Depends(get_article_service),
     params: ArticleListParams = Depends(),
 ) -> PaginatedArticleResponse:
     """List analyzed articles with filters and pagination."""
     try:
-        return await service.list_articles(params, q, user.id if user else None)
+        query = _resolve_params(params)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(e),
+        )
+    try:
+        return await service.list_articles(query, user.id if user else None)
     except EmbeddingError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

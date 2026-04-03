@@ -1,15 +1,11 @@
 """Read-only queries for analyzed articles."""
 
-from typing import Annotated
-
-from fastapi import HTTPException, Query, status
 from sqlalchemy import case
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlmodel import func, select
 
 from app.config import settings
-from app.domain.category import CategorySlug
 from app.models.article_analysis import ArticleAnalysis, ImpactLevel
 from app.models.article_keyword import ArticleKeyword
 from app.models.category import Category
@@ -17,6 +13,7 @@ from app.models.keyword import Keyword
 from app.models.news_article import NewsArticle
 from app.models.news_source import NewsSource
 from app.models.watchlist_entry import WatchlistEntry
+from app.schemas.articles import ArticleListQuery, ArticleSortField, SortOrder
 
 _impact_order_expr = case(
     (ArticleAnalysis.impact_level == ImpactLevel.LOW, 1),
@@ -45,57 +42,13 @@ def article_eager_options() -> list:
     ]
 
 
-class ArticleListParams:
-    """Filter / sort / pagination parameters for article list query.
-
-    Usable as a FastAPI dependency via ``Depends()``.
-    """
-
-    __slots__ = (
-        "keyword_id",
-        "category_slug",
-        "source_name",
-        "impact_level",
-        "sort_by",
-        "sort_order",
-        "page",
-        "per_page",
-    )
-
-    def __init__(
-        self,
-        keyword_id: Annotated[int | None, Query(alias="keywordId")] = None,
-        category: Annotated[str | None, Query()] = None,
-        source: Annotated[str | None, Query()] = None,
-        impact_level: Annotated[ImpactLevel | None, Query(alias="impactLevel")] = None,
-        sort_by: Annotated[str, Query(alias="sortBy")] = "publishedAt",
-        sort_order: Annotated[str, Query(alias="sortOrder")] = "desc",
-        page: Annotated[int, Query(ge=1)] = 1,
-        per_page: Annotated[int, Query(ge=1, le=100, alias="perPage")] = 12,
-    ) -> None:
-        try:
-            self.category_slug = CategorySlug(category) if category else None
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"Invalid category slug: {category!r}",
-            )
-        self.keyword_id = keyword_id
-        self.source_name = source
-        self.impact_level = impact_level
-        self.sort_by = sort_by
-        self.sort_order = sort_order
-        self.page = page
-        self.per_page = per_page
-
-
 class ArticleRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
     async def fetch_analyzed_list(
         self,
-        params: ArticleListParams,
+        query: ArticleListQuery,
         query_embedding: list[float] | None = None,
     ) -> tuple[list[NewsArticle], int]:
         """Fetch paginated analyzed articles with filters and sorting.
@@ -114,29 +67,27 @@ class ArticleRepository:
             distance_expr = ArticleAnalysis.embedding.cosine_distance(query_embedding)
             stmt = stmt.where(distance_expr < settings.semantic_search_max_distance)
 
-        if params.source_name is not None:
+        if query.source_name is not None:
             source_ids = select(NewsSource.id).where(
-                NewsSource.name == params.source_name
+                NewsSource.name == query.source_name
             )
             stmt = stmt.where(NewsArticle.news_source_id.in_(source_ids))
 
-        if params.keyword_id is not None:
+        if query.keyword_id is not None:
             matching_ids = select(ArticleKeyword.news_article_id).where(
-                ArticleKeyword.keyword_id == params.keyword_id
+                ArticleKeyword.keyword_id == query.keyword_id
             )
             stmt = stmt.where(NewsArticle.id.in_(matching_ids))
-        elif params.category_slug is not None:
-            cat_id_sub = select(Category.id).where(
-                Category.slug == params.category_slug
-            )
+        elif query.category_slug is not None:
+            cat_id_sub = select(Category.id).where(Category.slug == query.category_slug)
             sub_kw_ids = select(Keyword.id).where(Keyword.category_id.in_(cat_id_sub))
             matching_ids = select(ArticleKeyword.news_article_id).where(
                 ArticleKeyword.keyword_id.in_(sub_kw_ids)
             )
             stmt = stmt.where(NewsArticle.id.in_(matching_ids))
 
-        if params.impact_level is not None:
-            min_order = _IMPACT_LEVEL_ORDER[params.impact_level]
+        if query.impact_level is not None:
+            min_order = _IMPACT_LEVEL_ORDER[query.impact_level]
             stmt = stmt.where(_impact_order_expr >= min_order)
 
         # Total count before pagination
@@ -145,23 +96,26 @@ class ArticleRepository:
 
         # Sorting
         is_default_sort = (
-            params.sort_by == "publishedAt" and params.sort_order == "desc"
+            query.sort_by == ArticleSortField.PUBLISHED_AT
+            and query.sort_order == SortOrder.DESC
         )
         if query_embedding is not None and is_default_sort:
             distance_expr = ArticleAnalysis.embedding.cosine_distance(query_embedding)
             stmt = stmt.order_by(distance_expr.asc())
         else:
-            if params.sort_by == "impactLevel":
+            if query.sort_by == ArticleSortField.IMPACT_LEVEL:
                 order_expr = _impact_order_expr
             else:
                 order_expr = NewsArticle.published_at
             stmt = stmt.order_by(
-                order_expr.desc() if params.sort_order == "desc" else order_expr.asc()
+                order_expr.desc()
+                if query.sort_order == SortOrder.DESC
+                else order_expr.asc()
             )
 
         # Pagination
-        offset = (params.page - 1) * params.per_page
-        stmt = stmt.offset(offset).limit(params.per_page)
+        offset = (query.page - 1) * query.per_page
+        stmt = stmt.offset(offset).limit(query.per_page)
 
         result = await self.session.execute(stmt)
         articles = list(result.unique().scalars().all())

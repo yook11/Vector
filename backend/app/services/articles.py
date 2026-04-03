@@ -4,10 +4,11 @@ import math
 
 from app.exceptions import NotFoundError
 from app.models.news_article import NewsArticle
-from app.repositories.articles import ArticleListParams, ArticleRepository
+from app.repositories.articles import ArticleRepository
 from app.schemas.articles import (
     ArticleBrief,
     ArticleDetail,
+    ArticleListQuery,
     PaginatedArticleResponse,
 )
 from app.schemas.embeds import KeywordEmbed, NewsSourceEmbed, OriginalArticleEmbed
@@ -75,25 +76,24 @@ class ArticleService:
 
     async def list_articles(
         self,
-        params: ArticleListParams,
-        q: str | None,
+        query: ArticleListQuery,
         user_id: int | None,
     ) -> PaginatedArticleResponse:
         """List analyzed articles with optional semantic search."""
         query_embedding: list[float] | None = None
-        if q is not None:
-            query_embedding = await embed_search_query(q)
+        if query.q is not None:
+            query_embedding = await embed_search_query(query.q)
 
-        articles, total = await self.repo.fetch_analyzed_list(params, query_embedding)
+        articles, total = await self.repo.fetch_analyzed_list(query, query_embedding)
 
         watched_ids = await self.repo.get_watched_ids(user_id) if user_id else set()
 
         return PaginatedArticleResponse(
             items=[build_brief(a, watched_ids) for a in articles],
             total=total,
-            page=params.page,
-            per_page=params.per_page,
-            total_pages=math.ceil(total / params.per_page) if total > 0 else 0,
+            page=query.page,
+            per_page=query.per_page,
+            total_pages=math.ceil(total / query.per_page) if total > 0 else 0,
         )
 
     async def get_article(self, news_id: int, user_id: int | None) -> ArticleDetail:
