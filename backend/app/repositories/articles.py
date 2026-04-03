@@ -1,7 +1,8 @@
 """Read-only queries for analyzed articles."""
 
-from dataclasses import dataclass
+from typing import Annotated
 
+from fastapi import HTTPException, Query, status
 from sqlalchemy import case
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -44,18 +45,48 @@ def article_eager_options() -> list:
     ]
 
 
-@dataclass(frozen=True)
 class ArticleListParams:
-    """Filter / sort / pagination parameters for article list query."""
+    """Filter / sort / pagination parameters for article list query.
 
-    keyword_id: int | None = None
-    category_slug: CategorySlug | None = None
-    source_name: str | None = None
-    impact_level: ImpactLevel | None = None
-    sort_by: str = "publishedAt"
-    sort_order: str = "desc"
-    page: int = 1
-    per_page: int = 12
+    Usable as a FastAPI dependency via ``Depends()``.
+    """
+
+    __slots__ = (
+        "keyword_id",
+        "category_slug",
+        "source_name",
+        "impact_level",
+        "sort_by",
+        "sort_order",
+        "page",
+        "per_page",
+    )
+
+    def __init__(
+        self,
+        keyword_id: Annotated[int | None, Query(alias="keywordId")] = None,
+        category: Annotated[str | None, Query()] = None,
+        source: Annotated[str | None, Query()] = None,
+        impact_level: Annotated[ImpactLevel | None, Query(alias="impactLevel")] = None,
+        sort_by: Annotated[str, Query(alias="sortBy")] = "publishedAt",
+        sort_order: Annotated[str, Query(alias="sortOrder")] = "desc",
+        page: Annotated[int, Query(ge=1)] = 1,
+        per_page: Annotated[int, Query(ge=1, le=100, alias="perPage")] = 12,
+    ) -> None:
+        try:
+            self.category_slug = CategorySlug(category) if category else None
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid category slug: {category!r}",
+            )
+        self.keyword_id = keyword_id
+        self.source_name = source
+        self.impact_level = impact_level
+        self.sort_by = sort_by
+        self.sort_order = sort_order
+        self.page = page
+        self.per_page = per_page
 
 
 class ArticleRepository:
