@@ -1,3 +1,8 @@
+from app.schemas.articles import (
+    ArticleBrief,
+    ArticleDetail,
+    PaginatedArticleResponse,
+)
 from app.schemas.category import (
     CategoryDetail,
     CategoryDetailList,
@@ -7,23 +12,22 @@ from app.schemas.embeds import (
     KeywordStatEmbed,
     OriginalArticleEmbed,
 )
-from app.schemas.news import (
-    NewsBrief,
-    NewsDetail,
-    NewsFetchRequest,
-    NewsFetchResponse,
-    PaginatedNewsResponse,
+from app.schemas.pipeline import (
+    EmbedResponse,
+    FetchRequest,
+    FetchResponse,
 )
 
 __all__ = [
+    "ArticleBrief",
+    "ArticleDetail",
     "CategoryDetail",
     "CategoryDetailList",
+    "EmbedResponse",
+    "FetchRequest",
+    "FetchResponse",
     "KeywordEmbed",
     "KeywordStatEmbed",
-    "NewsBrief",
-    "NewsDetail",
-    "NewsFetchRequest",
-    "NewsFetchResponse",
     "OriginalArticleEmbed",
-    "PaginatedNewsResponse",
+    "PaginatedArticleResponse",
 ]

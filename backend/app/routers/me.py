@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.dependencies import CurrentUser, get_current_user, get_session
 from app.exceptions import DuplicateError, NotFoundError
 from app.repositories.watchlist import WatchlistRepository
-from app.schemas.news import PaginatedNewsResponse
+from app.schemas.articles import PaginatedArticleResponse
 from app.schemas.watchlist import WatchlistCreate
 from app.services.watchlist import WatchlistService
 
@@ -17,13 +17,13 @@ def _service(session: AsyncSession) -> WatchlistService:
     return WatchlistService(WatchlistRepository(session))
 
 
-@router.get("/watchlist", response_model=PaginatedNewsResponse)
+@router.get("/watchlist", response_model=PaginatedArticleResponse)
 async def list_watchlist(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100, alias="perPage"),
     user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
-) -> PaginatedNewsResponse:
+) -> PaginatedArticleResponse:
     return await _service(session).list_watchlist(user.id, page, per_page)
 
 

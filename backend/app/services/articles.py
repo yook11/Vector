@@ -5,12 +5,12 @@ import math
 from app.exceptions import NotFoundError
 from app.models.news_article import NewsArticle
 from app.repositories.articles import ArticleListParams, ArticleRepository
-from app.schemas.embeds import KeywordEmbed, NewsSourceEmbed, OriginalArticleEmbed
-from app.schemas.news import (
-    NewsBrief,
-    NewsDetail,
-    PaginatedNewsResponse,
+from app.schemas.articles import (
+    ArticleBrief,
+    ArticleDetail,
+    PaginatedArticleResponse,
 )
+from app.schemas.embeds import KeywordEmbed, NewsSourceEmbed, OriginalArticleEmbed
 from app.services.embedding import embed_search_query
 
 
@@ -25,9 +25,9 @@ def build_keyword_embeds(article: NewsArticle) -> list[KeywordEmbed]:
 def build_brief(
     article: NewsArticle,
     watched_ids: set[int] | None = None,
-) -> NewsBrief:
+) -> ArticleBrief:
     a = article.article_analysis
-    return NewsBrief(
+    return ArticleBrief(
         id=article.id,
         translated_title=a.translated_title,
         summary=a.summary,
@@ -45,9 +45,9 @@ def build_brief(
 def build_detail(
     article: NewsArticle,
     watched_ids: set[int] | None = None,
-) -> NewsDetail:
+) -> ArticleDetail:
     a = article.article_analysis
-    return NewsDetail(
+    return ArticleDetail(
         id=article.id,
         translated_title=a.translated_title,
         summary=a.summary,
@@ -78,7 +78,7 @@ class ArticleService:
         params: ArticleListParams,
         q: str | None,
         user_id: int | None,
-    ) -> PaginatedNewsResponse:
+    ) -> PaginatedArticleResponse:
         """List analyzed articles with optional semantic search."""
         query_embedding: list[float] | None = None
         if q is not None:
@@ -88,7 +88,7 @@ class ArticleService:
 
         watched_ids = await self.repo.get_watched_ids(user_id) if user_id else set()
 
-        return PaginatedNewsResponse(
+        return PaginatedArticleResponse(
             items=[build_brief(a, watched_ids) for a in articles],
             total=total,
             page=params.page,
@@ -96,7 +96,7 @@ class ArticleService:
             total_pages=math.ceil(total / params.per_page) if total > 0 else 0,
         )
 
-    async def get_article(self, news_id: int, user_id: int | None) -> NewsDetail:
+    async def get_article(self, news_id: int, user_id: int | None) -> ArticleDetail:
         article = await self.repo.fetch_one_analyzed(news_id)
         if article is None:
             raise NotFoundError("News article not found")
@@ -104,7 +104,7 @@ class ArticleService:
         watched_ids = await self.repo.get_watched_ids(user_id) if user_id else set()
         return build_detail(article, watched_ids)
 
-    async def get_similar(self, news_id: int, limit: int) -> list[NewsBrief]:
+    async def get_similar(self, news_id: int, limit: int) -> list[ArticleBrief]:
         """Find semantically similar articles.
 
         Returns empty list if article has no embedding.

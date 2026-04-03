@@ -5,8 +5,8 @@ import { NewsFilters } from "@/components/news/NewsFilters";
 import { NewsList } from "@/components/news/NewsList";
 import { NewsPagination } from "@/components/news/NewsPagination";
 import { SearchBar } from "@/components/news/SearchBar";
-import { getCategories, getNews, getSources } from "@/lib/api-client";
-import type { ImpactLevel, NewsQuery } from "@/types";
+import { getArticles, getCategories, getSources } from "@/lib/api-client";
+import type { ArticleQuery, ImpactLevel } from "@/types";
 
 interface DashboardPageProps {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -14,8 +14,8 @@ interface DashboardPageProps {
 
 function parseSearchParams(
   raw: Record<string, string | string[] | undefined>,
-): NewsQuery {
-  const query: NewsQuery = {};
+): ArticleQuery {
+  const query: ArticleQuery = {};
   const str = (key: string) => {
     const v = raw[key];
     return typeof v === "string" ? v : undefined;
@@ -69,7 +69,7 @@ export default async function DashboardPage({
   const query = parseSearchParams(raw);
 
   const [newsData, categoriesData, sourcesData] = await Promise.all([
-    getNews(query),
+    getArticles(query),
     getCategories().catch(() => ({ items: [] })),
     getSources().catch(() => ({ items: [], total: 0 })),
   ]);

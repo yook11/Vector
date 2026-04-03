@@ -1,9 +1,9 @@
 """Pipeline service — fetch and embedding backfill operations."""
 
 from app.repositories.pipeline import PipelineRepository
-from app.schemas.news import (
+from app.schemas.pipeline import (
     EmbedResponse,
-    NewsFetchResponse,
+    FetchResponse,
 )
 from app.services.embedding import embed_articles
 from app.tasks.pipeline_tasks import fetch_metadata
@@ -35,9 +35,9 @@ class PipelineService:
         )
 
     @staticmethod
-    async def submit_fetch(source_ids: list[int] | None) -> NewsFetchResponse:
+    async def submit_fetch(source_ids: list[int] | None) -> FetchResponse:
         task = await fetch_metadata.kiq(source_ids=source_ids)
-        return NewsFetchResponse(
+        return FetchResponse(
             message="Fetch task submitted",
             sources_count=len(source_ids) if source_ids else None,
             job_id=task.task_id,

@@ -1,8 +1,8 @@
 "use client";
 
 import type {
-  NewsFetchRequest,
-  NewsFetchResponse,
+  FetchRequest,
+  FetchResponse,
   NewsSourceCreate,
   NewsSourceDetail,
   NewsSourceDetailList,
@@ -60,9 +60,9 @@ export async function clientRemoveFromWatchlist(newsId: number): Promise<void> {
 // --- News ---
 
 export async function clientTriggerFetch(
-  body?: NewsFetchRequest,
-): Promise<NewsFetchResponse> {
-  return clientFetch<NewsFetchResponse>("/pipeline/fetch", {
+  body?: FetchRequest,
+): Promise<FetchResponse> {
+  return clientFetch<FetchResponse>("/pipeline/fetch", {
     method: "POST",
     body: JSON.stringify(body ?? {}),
   });

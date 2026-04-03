@@ -3,7 +3,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { sanitizeUrl } from "@/lib/utils";
-import type { ImpactLevel, NewsDetail as NewsDetailData } from "@/types";
+import type { ImpactLevel, ArticleDetail as ArticleDetailData } from "@/types";
 
 function formatDate(dateStr: string | null | undefined): string {
   if (!dateStr) return "Unknown";
@@ -23,7 +23,7 @@ const impactLevelColors: Record<ImpactLevel, string> = {
   critical: "bg-red-100 text-red-700",
 };
 
-export function NewsDetail({ article }: { article: NewsDetailData }) {
+export function NewsDetail({ article }: { article: ArticleDetailData }) {
   // --- XSS: validate URL scheme (reject javascript: etc.) ---
   const safeUrl = sanitizeUrl(article.original.url);
 

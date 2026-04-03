@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import type { ImpactLevel, NewsBrief } from "@/types";
+import type { ImpactLevel, ArticleBrief } from "@/types";
 import { WatchlistButton } from "./WatchlistButton";
 
 function formatDate(dateStr: string | null | undefined): string {
@@ -22,7 +22,7 @@ const impactLevelColors: Record<ImpactLevel, string> = {
     "bg-red-50 text-red-600 border-red-200 dark:bg-red-950/40 dark:text-red-400 dark:border-red-800/50",
 };
 
-export function NewsCard({ article }: { article: NewsBrief }) {
+export function NewsCard({ article }: { article: ArticleBrief }) {
   return (
     <Card className="border-0 bg-transparent shadow-none">
       <CardHeader className="p-0 pb-2">

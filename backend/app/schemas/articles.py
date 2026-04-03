@@ -1,3 +1,5 @@
+"""Read-facing schemas for analyzed articles."""
+
 from datetime import datetime
 
 from app.models.article_analysis import ImpactLevel
@@ -5,8 +7,8 @@ from app.schemas.base import _CamelBase
 from app.schemas.embeds import KeywordEmbed, NewsSourceEmbed, OriginalArticleEmbed
 
 
-class NewsBrief(_CamelBase):
-    """GET /api/v1/news — 一覧カード用"""
+class ArticleBrief(_CamelBase):
+    """GET /api/v1/articles — 一覧カード用"""
 
     id: int
     translated_title: str
@@ -18,8 +20,8 @@ class NewsBrief(_CamelBase):
     is_watched: bool = False
 
 
-class NewsDetail(_CamelBase):
-    """GET /api/v1/news/{id} — 詳細画面用"""
+class ArticleDetail(_CamelBase):
+    """GET /api/v1/articles/{id} — 詳細画面用"""
 
     id: int
     translated_title: str
@@ -34,34 +36,11 @@ class NewsDetail(_CamelBase):
     original: OriginalArticleEmbed
 
 
-class PaginatedNewsResponse(_CamelBase):
-    """Paginated list of news articles."""
+class PaginatedArticleResponse(_CamelBase):
+    """Paginated list of articles."""
 
-    items: list[NewsBrief]
+    items: list[ArticleBrief]
     total: int
     page: int
     per_page: int
     total_pages: int
-
-
-class NewsFetchRequest(_CamelBase):
-    """POST /api/v1/news/fetch request body."""
-
-    source_ids: list[int] | None = None
-
-
-class NewsFetchResponse(_CamelBase):
-    """POST /api/v1/news/fetch response."""
-
-    message: str
-    sources_count: int | None = None
-    job_id: str
-
-
-class EmbedResponse(_CamelBase):
-    """POST /api/v1/news/embed response."""
-
-    message: str
-    embedded_count: int
-    skipped_count: int
-    error_count: int

@@ -5,10 +5,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import CurrentUser, get_admin_user, get_session
 from app.repositories.pipeline import PipelineRepository
-from app.schemas.news import (
+from app.schemas.pipeline import (
     EmbedResponse,
-    NewsFetchRequest,
-    NewsFetchResponse,
+    FetchRequest,
+    FetchResponse,
 )
 from app.services.pipeline import PipelineService
 
@@ -17,13 +17,13 @@ router = APIRouter(prefix="/api/v1/pipeline", tags=["pipeline"])
 
 @router.post(
     "/fetch",
-    response_model=NewsFetchResponse,
+    response_model=FetchResponse,
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def fetch_news(
-    body: NewsFetchRequest | None = None,
+    body: FetchRequest | None = None,
     _user: CurrentUser = Depends(get_admin_user),
-) -> NewsFetchResponse:
+) -> FetchResponse:
     """Enqueue a news fetch task. Returns immediately with a task ID."""
     source_ids = body.source_ids if body else None
     return await PipelineService.submit_fetch(source_ids)

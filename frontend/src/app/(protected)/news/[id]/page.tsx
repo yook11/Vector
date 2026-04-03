@@ -4,8 +4,8 @@ import { notFound } from "next/navigation";
 import { NewsDetail } from "@/components/news/NewsDetail";
 import { RelatedArticles } from "@/components/news/RelatedArticles";
 import { Button } from "@/components/ui/button";
-import { ApiError, getNewsById, getSimilarNews } from "@/lib/api-client";
-import type { NewsBrief, NewsDetail as NewsDetailData } from "@/types";
+import { ApiError, getArticleById, getSimilarArticles } from "@/lib/api-client";
+import type { ArticleBrief, ArticleDetail as ArticleDetailData } from "@/types";
 
 interface NewsPageProps {
   params: Promise<{ id: string }>;
@@ -16,7 +16,7 @@ export async function generateMetadata({
 }: NewsPageProps): Promise<Metadata> {
   const { id } = await params;
   try {
-    const article = await getNewsById(Number(id));
+    const article = await getArticleById(Number(id));
     return {
       title: `${article.translatedTitle} | Vector`,
     };
@@ -28,9 +28,9 @@ export async function generateMetadata({
 export default async function NewsPage({ params }: NewsPageProps) {
   const { id } = await params;
 
-  let article: NewsDetailData;
+  let article: ArticleDetailData;
   try {
-    article = await getNewsById(Number(id));
+    article = await getArticleById(Number(id));
   } catch (err) {
     if (err instanceof ApiError && err.status === 404) {
       notFound();
@@ -39,9 +39,9 @@ export default async function NewsPage({ params }: NewsPageProps) {
   }
 
   // Fetch similar articles — non-fatal (empty array if not yet embedded or on error)
-  let similarArticles: NewsBrief[] = [];
+  let similarArticles: ArticleBrief[] = [];
   try {
-    similarArticles = await getSimilarNews(Number(id), 5);
+    similarArticles = await getSimilarArticles(Number(id), 5);
   } catch {
     // Graceful degradation: related articles are a progressive enhancement
   }

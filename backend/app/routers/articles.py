@@ -8,10 +8,10 @@ from app.domain.category import CategorySlug
 from app.exceptions import NotFoundError
 from app.models.article_analysis import ImpactLevel
 from app.repositories.articles import ArticleListParams, ArticleRepository
-from app.schemas.news import (
-    NewsBrief,
-    NewsDetail,
-    PaginatedNewsResponse,
+from app.schemas.articles import (
+    ArticleBrief,
+    ArticleDetail,
+    PaginatedArticleResponse,
 )
 from app.services.articles import ArticleService
 from app.services.embedding import EmbeddingError
@@ -19,7 +19,7 @@ from app.services.embedding import EmbeddingError
 router = APIRouter(prefix="/api/v1/articles", tags=["articles"])
 
 
-@router.get("", response_model=PaginatedNewsResponse)
+@router.get("", response_model=PaginatedArticleResponse)
 async def list_articles(
     keyword_id: int | None = Query(None, alias="keywordId"),
     category: str | None = Query(None),
@@ -32,7 +32,7 @@ async def list_articles(
     per_page: int = Query(12, ge=1, le=100, alias="perPage"),
     user: CurrentUser | None = Depends(get_optional_user),
     session: AsyncSession = Depends(get_session),
-) -> PaginatedNewsResponse:
+) -> PaginatedArticleResponse:
     """List analyzed articles with filters and pagination."""
     try:
         category_slug = CategorySlug(category) if category else None
@@ -63,14 +63,14 @@ async def list_articles(
 
 @router.get(
     "/{article_id}/similar",
-    response_model=list[NewsBrief],
+    response_model=list[ArticleBrief],
     summary="Find semantically similar articles using pgvector cosine distance",
 )
 async def get_similar_articles(
     article_id: int,
     limit: int = Query(5, ge=1, le=20),
     session: AsyncSession = Depends(get_session),
-) -> list[NewsBrief]:
+) -> list[ArticleBrief]:
     """Return articles most similar to the given article."""
     service = ArticleService(ArticleRepository(session))
     try:
@@ -79,12 +79,12 @@ async def get_similar_articles(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=e.detail)
 
 
-@router.get("/{article_id}", response_model=NewsDetail)
+@router.get("/{article_id}", response_model=ArticleDetail)
 async def get_article(
     article_id: int,
     user: CurrentUser | None = Depends(get_optional_user),
     session: AsyncSession = Depends(get_session),
-) -> NewsDetail:
+) -> ArticleDetail:
     """Get a single article with full analysis details."""
     service = ArticleService(ArticleRepository(session))
     try:

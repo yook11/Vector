@@ -1,7 +1,7 @@
-import type { NewsBrief } from "@/types";
+import type { ArticleBrief } from "@/types";
 import { NewsCard } from "./NewsCard";
 
-export function NewsList({ items }: { items: NewsBrief[] }) {
+export function NewsList({ items }: { items: ArticleBrief[] }) {
   if (items.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
