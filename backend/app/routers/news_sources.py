@@ -1,10 +1,9 @@
 """CRUD endpoints for news_sources management."""
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import CurrentUser, get_admin_user, get_current_user, get_session
-from app.exceptions import NotFoundError
 from app.repositories.news_source import NewsSourceRepository
 from app.schemas.news_source import (
     NewsSourceCreate,
@@ -16,17 +15,19 @@ from app.services.news_source import NewsSourceService
 router = APIRouter(prefix="/api/v1/sources", tags=["sources"])
 
 
-def _service(session: AsyncSession) -> NewsSourceService:
+def get_news_source_service(
+    session: AsyncSession = Depends(get_session),
+) -> NewsSourceService:
     return NewsSourceService(NewsSourceRepository(session))
 
 
 @router.get("", response_model=NewsSourceDetailList)
 async def list_sources(
-    session: AsyncSession = Depends(get_session),
     _user: CurrentUser = Depends(get_current_user),
+    service: NewsSourceService = Depends(get_news_source_service),
 ) -> NewsSourceDetailList:
     """List all news sources."""
-    return await _service(session).list_sources()
+    return await service.list_sources()
 
 
 @router.post(
@@ -36,11 +37,11 @@ async def list_sources(
 )
 async def create_source(
     body: NewsSourceCreate,
-    session: AsyncSession = Depends(get_session),
     _user: CurrentUser = Depends(get_admin_user),
+    service: NewsSourceService = Depends(get_news_source_service),
 ) -> NewsSourceDetail:
     """Create a new news source."""
-    return await _service(session).create_source(body)
+    return await service.create_source(body)
 
 
 @router.delete(
@@ -49,14 +50,11 @@ async def create_source(
 )
 async def delete_source(
     source_id: int,
-    session: AsyncSession = Depends(get_session),
     _user: CurrentUser = Depends(get_admin_user),
+    service: NewsSourceService = Depends(get_news_source_service),
 ) -> None:
     """Delete a news source."""
-    try:
-        await _service(session).delete_source(source_id)
-    except NotFoundError as e:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=e.detail)
+    await service.delete_source(source_id)
 
 
 @router.patch(
@@ -65,11 +63,8 @@ async def delete_source(
 )
 async def toggle_source(
     source_id: int,
-    session: AsyncSession = Depends(get_session),
     _user: CurrentUser = Depends(get_admin_user),
+    service: NewsSourceService = Depends(get_news_source_service),
 ) -> NewsSourceDetail:
     """Toggle a news source's is_active status."""
-    try:
-        return await _service(session).toggle_source(source_id)
-    except NotFoundError as e:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=e.detail)
+    return await service.toggle_source(source_id)

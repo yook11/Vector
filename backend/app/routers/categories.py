@@ -9,11 +9,15 @@ from app.services.category import CategoryService
 router = APIRouter(prefix="/api/v1/categories", tags=["categories"])
 
 
+def get_category_service(
+    session: AsyncSession = Depends(get_session),
+) -> CategoryService:
+    return CategoryService(CategoryRepository(session))
+
+
 @router.get("", response_model=CategoryDetailList)
 async def list_categories(
-    session: AsyncSession = Depends(get_session),
+    service: CategoryService = Depends(get_category_service),
 ) -> CategoryDetailList:
     """List all categories with nested keywords and article counts."""
-    repo = CategoryRepository(session)
-    service = CategoryService(repo)
     return await service.list_categories()

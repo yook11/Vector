@@ -15,6 +15,12 @@ from app.services.pipeline import PipelineService
 router = APIRouter(prefix="/api/v1/pipeline", tags=["pipeline"])
 
 
+def get_pipeline_service(
+    session: AsyncSession = Depends(get_session),
+) -> PipelineService:
+    return PipelineService(PipelineRepository(session))
+
+
 @router.post(
     "/fetch",
     response_model=FetchResponse,
@@ -36,9 +42,8 @@ async def fetch_news(
     summary="Backfill embeddings for analyses that are missing them",
 )
 async def embed_news(
-    session: AsyncSession = Depends(get_session),
     _user: CurrentUser = Depends(get_admin_user),
+    service: PipelineService = Depends(get_pipeline_service),
 ) -> EmbedResponse:
     """Generate vector embeddings for all analyses where embedding IS NULL."""
-    service = PipelineService(PipelineRepository(session))
     return await service.backfill_embeddings()
