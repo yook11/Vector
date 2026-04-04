@@ -10,7 +10,7 @@ from app.schemas.base import PaginationParams
 from app.schemas.watchlist import WatchlistCreate
 from app.services.watchlist import WatchlistService
 
-router = APIRouter(prefix="/api/v1/me", tags=["me"])
+router = APIRouter(prefix="/api/v1/me", tags=["watchlist"])
 
 
 def get_watchlist_service(

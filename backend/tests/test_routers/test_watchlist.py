@@ -1,4 +1,4 @@
-"""Tests for /api/v1/me router endpoints (watchlist)."""
+"""Tests for /api/v1/me/watchlist router endpoints."""
 
 from datetime import UTC, datetime
 

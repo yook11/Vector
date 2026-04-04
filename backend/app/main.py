@@ -17,9 +17,9 @@ from app.exceptions import DuplicateError, NotFoundError
 from app.routers import (
     articles,
     categories,
-    me,
     news_sources,
     pipeline,
+    watchlist,
 )
 from app.services.embedding import EmbeddingError
 
@@ -88,7 +88,7 @@ app.add_exception_handler(EmbeddingError, embedding_error_handler)
 # Register routers
 app.include_router(articles.router)
 app.include_router(categories.router)
-app.include_router(me.router)
+app.include_router(watchlist.router)
 app.include_router(news_sources.router)
 app.include_router(pipeline.router)
 
