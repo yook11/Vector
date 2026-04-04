@@ -80,10 +80,9 @@ export async function getArticles(
     }
   }
   const qs = params.toString();
-  return fetchApi<PaginatedArticleResponse>(
-    `/articles${qs ? `?${qs}` : ""}`,
-    { cache: "no-store" },
-  );
+  return fetchApi<PaginatedArticleResponse>(`/articles${qs ? `?${qs}` : ""}`, {
+    cache: "no-store",
+  });
 }
 
 /** Fetch a single article by ID. */
