@@ -8,12 +8,11 @@ from enum import StrEnum
 from typing import Annotated
 
 from fastapi import Query
-from pydantic import BaseModel
 
 from app.domain.category import CategorySlug
 from app.domain.news_source import SourceName
 from app.models.article_analysis import ImpactLevel
-from app.schemas.base import _CamelBase
+from app.schemas.base import PaginationParams, _CamelBase
 from app.schemas.embeds import KeywordEmbed, NewsSourceEmbed, OriginalArticleEmbed
 
 # ---------------------------------------------------------------------------
@@ -36,9 +35,10 @@ class SortOrder(StrEnum):
 # ---------------------------------------------------------------------------
 
 
-class ArticleListParams(BaseModel):
+class ArticleListParams(PaginationParams):
     """Raw request parameters for article listing.
 
+    Inherits page/per_page from PaginationParams.
     Pure parameter definition — no VO conversion, no error handling.
     Used via Depends() in the Router layer.
     """
@@ -52,8 +52,6 @@ class ArticleListParams(BaseModel):
         ArticleSortField.PUBLISHED_AT
     )
     sort_order: Annotated[SortOrder, Query(alias="sortOrder")] = SortOrder.DESC
-    page: Annotated[int, Query(ge=1)] = 1
-    per_page: Annotated[int, Query(ge=1, le=100, alias="perPage")] = 12
 
 
 # ---------------------------------------------------------------------------
@@ -76,7 +74,7 @@ class ArticleListQuery:
     sort_by: ArticleSortField = ArticleSortField.PUBLISHED_AT
     sort_order: SortOrder = SortOrder.DESC
     page: int = 1
-    per_page: int = 12
+    per_page: int = 20
 
 
 class ArticleBrief(_CamelBase):

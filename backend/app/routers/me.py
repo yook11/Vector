@@ -1,11 +1,12 @@
 """Endpoints for the authenticated user (watchlist)."""
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import CurrentUser, get_current_user, get_session
 from app.repositories.watchlist import WatchlistRepository
 from app.schemas.articles import PaginatedArticleResponse
+from app.schemas.base import PaginationParams
 from app.schemas.watchlist import WatchlistCreate
 from app.services.watchlist import WatchlistService
 
@@ -20,12 +21,11 @@ def get_watchlist_service(
 
 @router.get("/watchlist", response_model=PaginatedArticleResponse)
 async def list_watchlist(
-    page: int = Query(1, ge=1),
-    per_page: int = Query(20, ge=1, le=100, alias="perPage"),
+    pagination: PaginationParams = Depends(),
     user: CurrentUser = Depends(get_current_user),
     service: WatchlistService = Depends(get_watchlist_service),
 ) -> PaginatedArticleResponse:
-    return await service.list_watchlist(user.id, page, per_page)
+    return await service.list_watchlist(user.id, pagination.page, pagination.per_page)
 
 
 @router.post("/watchlist", status_code=status.HTTP_201_CREATED)
