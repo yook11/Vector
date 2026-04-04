@@ -8,6 +8,12 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 
 from app.config import settings
 from app.db import engine
+from app.exception_handlers import (
+    duplicate_handler,
+    embedding_error_handler,
+    not_found_handler,
+)
+from app.exceptions import DuplicateError, NotFoundError
 from app.routers import (
     articles,
     categories,
@@ -15,6 +21,7 @@ from app.routers import (
     news_sources,
     pipeline,
 )
+from app.services.embedding import EmbeddingError
 
 
 @asynccontextmanager
@@ -71,6 +78,12 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["Content-Type"],
 )
+
+# Exception handlers
+app.add_exception_handler(NotFoundError, not_found_handler)
+app.add_exception_handler(DuplicateError, duplicate_handler)
+
+app.add_exception_handler(EmbeddingError, embedding_error_handler)
 
 # Register routers
 app.include_router(articles.router)
