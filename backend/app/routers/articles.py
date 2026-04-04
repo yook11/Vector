@@ -1,5 +1,7 @@
 """Read endpoints for analyzed articles."""
 
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -42,9 +44,9 @@ def _resolve_params(params: ArticleListParams) -> ArticleListQuery:
 
 @router.get("", response_model=PaginatedArticleResponse)
 async def list_articles(
+    params: Annotated[ArticleListParams, Query()],
     user: CurrentUser | None = Depends(get_optional_user),
     service: ArticleService = Depends(get_article_service),
-    params: ArticleListParams = Depends(),
 ) -> PaginatedArticleResponse:
     """List analyzed articles with filters and pagination."""
     try:
