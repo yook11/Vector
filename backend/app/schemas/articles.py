@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from typing import Annotated
@@ -31,50 +30,29 @@ class SortOrder(StrEnum):
 
 
 # ---------------------------------------------------------------------------
-# Request params (raw values) — Router layer via Depends()
+# Query parameters — VO types flow through all layers
 # ---------------------------------------------------------------------------
 
 
 class ArticleListParams(PaginationParams):
-    """Raw request parameters for article listing.
+    """Query parameters for article listing.
 
     Inherits page/per_page from PaginationParams.
-    Pure parameter definition — no VO conversion, no error handling.
-    Used via Depends() in the Router layer.
+    VO fields (CategorySlug, SourceName) are validated directly by Pydantic
+    during query parameter parsing — invalid values produce a 422 response.
+    Received in the router via Annotated[ArticleListParams, Query()] and
+    passed through to Service and Repository layers unchanged.
     """
 
     keyword_id: Annotated[int | None, Query(alias="keywordId")] = None
-    category: Annotated[str | None, Query()] = None
-    source: Annotated[str | None, Query()] = None
+    category: Annotated[CategorySlug | None, Query()] = None
+    source: Annotated[SourceName | None, Query()] = None
     impact_level: Annotated[ImpactLevel | None, Query(alias="impactLevel")] = None
     q: Annotated[str | None, Query(min_length=1, max_length=500)] = None
     sort_by: Annotated[ArticleSortField, Query(alias="sortBy")] = (
         ArticleSortField.PUBLISHED_AT
     )
     sort_order: Annotated[SortOrder, Query(alias="sortOrder")] = SortOrder.DESC
-
-
-# ---------------------------------------------------------------------------
-# Resolved query (VO types) — Service / Repository layers
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class ArticleListQuery:
-    """Resolved query with validated VO types.
-
-    Consumed by Service and Repository layers.
-    """
-
-    keyword_id: int | None = None
-    category_slug: CategorySlug | None = None
-    source_name: SourceName | None = None
-    impact_level: ImpactLevel | None = None
-    q: str | None = None
-    sort_by: ArticleSortField = ArticleSortField.PUBLISHED_AT
-    sort_order: SortOrder = SortOrder.DESC
-    page: int = 1
-    per_page: int = 20
 
 
 class ArticleBrief(_CamelBase):

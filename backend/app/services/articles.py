@@ -8,7 +8,7 @@ from app.repositories.articles import ArticleRepository
 from app.schemas.articles import (
     ArticleBrief,
     ArticleDetail,
-    ArticleListQuery,
+    ArticleListParams,
     PaginatedArticleResponse,
 )
 from app.schemas.embeds import KeywordEmbed, NewsSourceEmbed, OriginalArticleEmbed
@@ -76,7 +76,7 @@ class ArticleService:
 
     async def list_articles(
         self,
-        query: ArticleListQuery,
+        query: ArticleListParams,
         user_id: int | None,
     ) -> PaginatedArticleResponse:
         """List analyzed articles with optional semantic search."""

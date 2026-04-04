@@ -243,6 +243,27 @@ class TestListArticles:
         assert "impactLevel" in item
         assert "publishedAt" in item
 
+    async def test_invalid_category_slug_returns_422(
+        self, client: AsyncClient
+    ) -> None:
+        """CategorySlug VO rejects values not matching its slug pattern."""
+        resp = await client.get("/api/v1/articles?category=INVALID-slug")
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert isinstance(detail, list)
+        assert detail[0]["loc"] == ["query", "category"]
+        assert "CategorySlug" in detail[0]["msg"]
+
+    async def test_invalid_source_name_returns_422(
+        self, client: AsyncClient
+    ) -> None:
+        """SourceName VO rejects values containing disallowed characters."""
+        resp = await client.get("/api/v1/articles?source=<bad>")
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert isinstance(detail, list)
+        assert detail[0]["loc"] == ["query", "source"]
+
 
 @pytest.mark.asyncio
 class TestGetArticle:

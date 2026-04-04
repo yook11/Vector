@@ -13,7 +13,7 @@ from app.models.keyword import Keyword
 from app.models.news_article import NewsArticle
 from app.models.news_source import NewsSource
 from app.models.watchlist_entry import WatchlistEntry
-from app.schemas.articles import ArticleListQuery, ArticleSortField, SortOrder
+from app.schemas.articles import ArticleListParams, ArticleSortField, SortOrder
 
 _impact_order_expr = case(
     (ArticleAnalysis.impact_level == ImpactLevel.LOW, 1),
@@ -48,7 +48,7 @@ class ArticleRepository:
 
     async def fetch_analyzed_list(
         self,
-        query: ArticleListQuery,
+        query: ArticleListParams,
         query_embedding: list[float] | None = None,
     ) -> tuple[list[NewsArticle], int]:
         """Fetch paginated analyzed articles with filters and sorting.
@@ -67,10 +67,8 @@ class ArticleRepository:
             distance_expr = ArticleAnalysis.embedding.cosine_distance(query_embedding)
             stmt = stmt.where(distance_expr < settings.semantic_search_max_distance)
 
-        if query.source_name is not None:
-            source_ids = select(NewsSource.id).where(
-                NewsSource.name == query.source_name
-            )
+        if query.source is not None:
+            source_ids = select(NewsSource.id).where(NewsSource.name == query.source)
             stmt = stmt.where(NewsArticle.news_source_id.in_(source_ids))
 
         if query.keyword_id is not None:
@@ -78,8 +76,8 @@ class ArticleRepository:
                 ArticleKeyword.keyword_id == query.keyword_id
             )
             stmt = stmt.where(NewsArticle.id.in_(matching_ids))
-        elif query.category_slug is not None:
-            cat_id_sub = select(Category.id).where(Category.slug == query.category_slug)
+        elif query.category is not None:
+            cat_id_sub = select(Category.id).where(Category.slug == query.category)
             sub_kw_ids = select(Keyword.id).where(Keyword.category_id.in_(cat_id_sub))
             matching_ids = select(ArticleKeyword.news_article_id).where(
                 ArticleKeyword.keyword_id.in_(sub_kw_ids)
