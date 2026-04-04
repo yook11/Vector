@@ -1,4 +1,5 @@
 import { headers } from "next/headers";
+import { ApiError, normalizeErrorDetail } from "@/lib/api-error";
 import { auth } from "@/lib/auth";
 import type {
   ArticleBrief,
@@ -16,16 +17,6 @@ const INTERNAL_API_URL =
 
 const INTERNAL_SECRET =
   process.env.INTERNAL_API_SECRET ?? "change-me-in-production";
-
-class ApiError extends Error {
-  constructor(
-    public status: number,
-    public detail: string,
-  ) {
-    super(detail);
-    this.name = "ApiError";
-  }
-}
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
   try {
@@ -59,8 +50,9 @@ async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
   });
 
   if (!res.ok) {
-    const body = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new ApiError(res.status, body.detail ?? res.statusText);
+    const body = await res.json().catch(() => null);
+    const detail = normalizeErrorDetail(body) || res.statusText;
+    throw new ApiError(res.status, detail);
   }
 
   // 204 No Content

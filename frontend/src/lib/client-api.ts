@@ -1,5 +1,6 @@
 "use client";
 
+import { ApiError, normalizeErrorDetail } from "@/lib/api-error";
 import type {
   FetchRequest,
   FetchResponse,
@@ -7,16 +8,6 @@ import type {
   NewsSourceDetail,
   NewsSourceDetailList,
 } from "@/types";
-
-class ApiError extends Error {
-  constructor(
-    public status: number,
-    public detail: string,
-  ) {
-    super(detail);
-    this.name = "ApiError";
-  }
-}
 
 async function clientFetch<T>(path: string, options?: RequestInit): Promise<T> {
   // All requests go through BFF proxy — no direct FastAPI access
@@ -31,12 +22,13 @@ async function clientFetch<T>(path: string, options?: RequestInit): Promise<T> {
   });
 
   if (!res.ok) {
-    const body = await res.json().catch(() => ({ detail: res.statusText }));
+    const body = await res.json().catch(() => null);
     if (res.status === 401) {
       window.location.href = "/auth/login";
       return undefined as T;
     }
-    throw new ApiError(res.status, body.detail ?? res.statusText);
+    const detail = normalizeErrorDetail(body) || res.statusText;
+    throw new ApiError(res.status, detail);
   }
 
   if (res.status === 204) return undefined as T;
