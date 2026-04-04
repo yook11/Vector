@@ -16,7 +16,13 @@ class _CamelBase(BaseModel):
 
 
 class PaginationParams(BaseModel):
-    """Common pagination parameters used via Depends()."""
+    """Common pagination parameters.
+
+    Consumed via ``Annotated[PaginationParams, Query()]`` (or a subclass
+    thereof) in router signatures. Do not use with ``Depends()`` — that
+    pattern silently drops non-scalar fields in subclasses (e.g. VO types)
+    without emitting any warning. See feedback_vo_boundary memory.
+    """
 
     page: Annotated[int, Query(ge=1)] = 1
     per_page: Annotated[int, Query(ge=1, le=100, alias="perPage")] = 20
