@@ -150,6 +150,33 @@ class TestListArticles:
         data = resp.json()
         assert data["total"] == 1
 
+    async def test_filter_by_impact_level_is_exact_match(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        sample_source: NewsSource,
+    ) -> None:
+        """impactLevel=medium must NOT return high/critical articles."""
+        a_medium = await _create_article(
+            db_session, sample_source, url="https://example.com/medium"
+        )
+        await _create_analysis(db_session, a_medium, impact_level=ImpactLevel.MEDIUM)
+        a_high = await _create_article(
+            db_session, sample_source, url="https://example.com/high"
+        )
+        await _create_analysis(db_session, a_high, impact_level=ImpactLevel.HIGH)
+        a_critical = await _create_article(
+            db_session, sample_source, url="https://example.com/critical"
+        )
+        await _create_analysis(
+            db_session, a_critical, impact_level=ImpactLevel.CRITICAL
+        )
+
+        resp = await client.get("/api/v1/articles?impactLevel=medium")
+        data = resp.json()
+        assert data["total"] == 1
+        assert data["items"][0]["impactLevel"] == "medium"
+
     async def test_sort_by_published_at_desc(
         self,
         client: AsyncClient,
@@ -174,7 +201,7 @@ class TestListArticles:
         )
         await _create_analysis(db_session, newer, translated_title="新しい記事")
 
-        resp = await client.get("/api/v1/articles?sortBy=publishedAt&sortOrder=desc")
+        resp = await client.get("/api/v1/articles?sortOrder=desc")
         items = resp.json()["items"]
         assert items[0]["translatedTitle"] == "新しい記事"
         assert items[1]["translatedTitle"] == "古い記事"

@@ -1,34 +1,18 @@
 """Read-only queries for analyzed articles."""
 
-from sqlalchemy import case
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-from sqlmodel import func, select
 
 from app.config import settings
-from app.models.article_analysis import ArticleAnalysis, ImpactLevel
+from app.models.article_analysis import ArticleAnalysis
 from app.models.article_keyword import ArticleKeyword
 from app.models.category import Category
 from app.models.keyword import Keyword
 from app.models.news_article import NewsArticle
 from app.models.news_source import NewsSource
 from app.models.watchlist_entry import WatchlistEntry
-from app.schemas.articles import ArticleListParams, ArticleSortField, SortOrder
-
-_impact_order_expr = case(
-    (ArticleAnalysis.impact_level == ImpactLevel.LOW, 1),
-    (ArticleAnalysis.impact_level == ImpactLevel.MEDIUM, 2),
-    (ArticleAnalysis.impact_level == ImpactLevel.HIGH, 3),
-    (ArticleAnalysis.impact_level == ImpactLevel.CRITICAL, 4),
-    else_=0,
-)
-
-_IMPACT_LEVEL_ORDER = {
-    ImpactLevel.LOW: 1,
-    ImpactLevel.MEDIUM: 2,
-    ImpactLevel.HIGH: 3,
-    ImpactLevel.CRITICAL: 4,
-}
+from app.schemas.articles import ArticleListParams, SortOrder
 
 
 def article_eager_options() -> list:
@@ -87,31 +71,18 @@ class ArticleRepository:
             stmt = stmt.where(NewsArticle.id.in_(matching_ids))
 
         if query.impact_level is not None:
-            min_order = _IMPACT_LEVEL_ORDER[query.impact_level]
-            stmt = stmt.where(_impact_order_expr >= min_order)
+            stmt = stmt.where(ArticleAnalysis.impact_level == query.impact_level)
 
         # Total count before pagination
         count_stmt = select(func.count()).select_from(stmt.subquery())
         total = (await self.session.execute(count_stmt)).scalar_one()
 
-        # Sorting
-        is_default_sort = (
-            query.sort_by == ArticleSortField.PUBLISHED_AT
-            and query.sort_order == SortOrder.DESC
+        # Sorting (always by published_at)
+        stmt = stmt.order_by(
+            NewsArticle.published_at.desc()
+            if query.sort_order == SortOrder.DESC
+            else NewsArticle.published_at.asc()
         )
-        if query_embedding is not None and is_default_sort:
-            distance_expr = ArticleAnalysis.embedding.cosine_distance(query_embedding)
-            stmt = stmt.order_by(distance_expr.asc())
-        else:
-            if query.sort_by == ArticleSortField.IMPACT_LEVEL:
-                order_expr = _impact_order_expr
-            else:
-                order_expr = NewsArticle.published_at
-            stmt = stmt.order_by(
-                order_expr.desc()
-                if query.sort_order == SortOrder.DESC
-                else order_expr.asc()
-            )
 
         # Pagination
         offset = (query.page - 1) * query.per_page

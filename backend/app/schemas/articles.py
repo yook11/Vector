@@ -20,11 +20,6 @@ from app.schemas.embeds import KeywordEmbed, NewsSourceEmbed, OriginalArticleEmb
 # ---------------------------------------------------------------------------
 
 
-class ArticleSortField(StrEnum):
-    PUBLISHED_AT = "publishedAt"
-    IMPACT_LEVEL = "impactLevel"
-
-
 class SortOrder(StrEnum):
     ASC = "asc"
     DESC = "desc"
@@ -50,9 +45,6 @@ class ArticleListParams(PaginationParams):
     source: Annotated[SourceName | None, Query()] = None
     impact_level: Annotated[ImpactLevel | None, Query(alias="impactLevel")] = None
     q: Annotated[str | None, Query(min_length=1, max_length=500)] = None
-    sort_by: Annotated[ArticleSortField, Query(alias="sortBy")] = (
-        ArticleSortField.PUBLISHED_AT
-    )
     sort_order: Annotated[SortOrder, Query(alias="sortOrder")] = SortOrder.DESC
 
 

@@ -46,25 +46,10 @@ export function NewsFilters({ sources }: NewsFiltersProps) {
         </SelectTrigger>
         <SelectContent>
           <SelectItem value="all">All</SelectItem>
-          <SelectItem value="low">Low+</SelectItem>
-          <SelectItem value="medium">Medium+</SelectItem>
-          <SelectItem value="high">High+</SelectItem>
+          <SelectItem value="low">Low</SelectItem>
+          <SelectItem value="medium">Medium</SelectItem>
+          <SelectItem value="high">High</SelectItem>
           <SelectItem value="critical">Critical</SelectItem>
-        </SelectContent>
-      </Select>
-
-      <Select
-        value={searchParams?.get("sortBy") ?? ""}
-        onValueChange={(v) =>
-          updateParam("sortBy", v === "default" ? undefined : v)
-        }
-      >
-        <SelectTrigger className="h-9 w-[120px] text-xs border-border">
-          <SelectValue placeholder="Sort by" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="default">Latest</SelectItem>
-          <SelectItem value="impactLevel">Impact Level</SelectItem>
         </SelectContent>
       </Select>
 

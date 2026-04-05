@@ -20,7 +20,6 @@ export interface ArticleQuery {
   category?: string;
   impactLevel?: ImpactLevel;
   source?: string;
-  sortBy?: "publishedAt" | "impactLevel";
   sortOrder?: "asc" | "desc";
   page?: number;
   perPage?: number;

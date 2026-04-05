@@ -43,11 +43,6 @@ function parseSearchParams(
   const source = str("source");
   if (source) query.source = source;
 
-  const sortBy = str("sortBy");
-  if (sortBy === "publishedAt" || sortBy === "impactLevel") {
-    query.sortBy = sortBy;
-  }
-
   const sortOrder = str("sortOrder");
   if (sortOrder === "asc" || sortOrder === "desc") {
     query.sortOrder = sortOrder;
