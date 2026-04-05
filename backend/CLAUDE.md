@@ -1,6 +1,6 @@
 # backend/ — FastAPI バックエンド
 
-FastAPI + Python 3.12 + SQLModel による非同期APIサーバー。
+FastAPI + Python 3.12 + SQLAlchemy 2.0 による非同期APIサーバー。
 
 ## API設計
 
