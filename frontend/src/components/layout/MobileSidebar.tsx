@@ -16,13 +16,13 @@ import { CategorySidebar } from "./CategorySidebar";
 interface MobileSidebarProps {
   categories: CategoryDetailResponse[];
   activeCategory?: string;
-  activeKeywordId?: number;
+  activeKeyword?: string;
 }
 
 export function MobileSidebar({
   categories,
   activeCategory,
-  activeKeywordId,
+  activeKeyword,
 }: MobileSidebarProps) {
   const [open, setOpen] = useState(false);
 
@@ -46,7 +46,7 @@ export function MobileSidebar({
           <CategorySidebar
             categories={categories}
             activeCategory={activeCategory}
-            activeKeywordId={activeKeywordId}
+            activeKeyword={activeKeyword}
           />
         </div>
       </SheetContent>

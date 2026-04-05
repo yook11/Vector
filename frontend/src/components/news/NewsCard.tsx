@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import type { ImpactLevel, ArticleBrief } from "@/types";
+import type { ArticleBrief, ImpactLevel } from "@/types";
 import { WatchlistButton } from "./WatchlistButton";
 
 function formatDate(dateStr: string | null | undefined): string {
@@ -59,7 +59,7 @@ export function NewsCard({ article }: { article: ArticleBrief }) {
           <div className="flex flex-wrap gap-1.5">
             {article.keywords.map((kw) => (
               <Badge
-                key={kw.id}
+                key={kw.name}
                 variant="secondary"
                 className="text-[11px] font-normal"
               >

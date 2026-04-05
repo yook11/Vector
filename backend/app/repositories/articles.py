@@ -71,9 +71,11 @@ class ArticleRepository:
             source_ids = select(NewsSource.id).where(NewsSource.name == query.source)
             stmt = stmt.where(NewsArticle.news_source_id.in_(source_ids))
 
-        if query.keyword_id is not None:
-            matching_ids = select(ArticleKeyword.news_article_id).where(
-                ArticleKeyword.keyword_id == query.keyword_id
+        if query.keyword is not None:
+            matching_ids = (
+                select(ArticleKeyword.news_article_id)
+                .join(Keyword, Keyword.id == ArticleKeyword.keyword_id)
+                .where(Keyword.name == query.keyword)
             )
             stmt = stmt.where(NewsArticle.id.in_(matching_ids))
         elif query.category is not None:

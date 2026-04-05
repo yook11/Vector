@@ -9,6 +9,7 @@ from typing import Annotated
 from fastapi import Query
 
 from app.domain.category import CategorySlug
+from app.domain.keyword import KeywordName
 from app.domain.news_source import SourceName
 from app.models.article_analysis import ImpactLevel
 from app.schemas.base import PaginationParams, _CamelBase
@@ -38,13 +39,13 @@ class ArticleListParams(PaginationParams):
     """Query parameters for article listing.
 
     Inherits page/per_page from PaginationParams.
-    VO fields (CategorySlug, SourceName) are validated directly by Pydantic
-    during query parameter parsing — invalid values produce a 422 response.
-    Received in the router via Annotated[ArticleListParams, Query()] and
-    passed through to Service and Repository layers unchanged.
+    VO fields (CategorySlug, KeywordName, SourceName) are validated directly by
+    Pydantic during query parameter parsing — invalid values produce a 422
+    response. Received in the router via Annotated[ArticleListParams, Query()]
+    and passed through to Service and Repository layers unchanged.
     """
 
-    keyword_id: Annotated[int | None, Query(alias="keywordId")] = None
+    keyword: Annotated[KeywordName | None, Query()] = None
     category: Annotated[CategorySlug | None, Query()] = None
     source: Annotated[SourceName | None, Query()] = None
     impact_level: Annotated[ImpactLevel | None, Query(alias="impactLevel")] = None

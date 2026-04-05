@@ -13,14 +13,12 @@ from app.schemas.base import _CamelBase
 class KeywordEmbed(_CamelBase):
     """キーワードタグ（ニュース埋め込み用）"""
 
-    id: int
     name: KeywordName
 
 
 class KeywordStatEmbed(_CamelBase):
     """キーワード＋記事数（カテゴリ内集計表示用）"""
 
-    id: int
     name: KeywordName
     article_count: int = 0
 

@@ -68,9 +68,13 @@ class TestListArticles:
     async def test_returns_analyzed_articles(
         self, client: AsyncClient, db_session: AsyncSession, sample_source: NewsSource
     ) -> None:
-        a1 = await _create_article(db_session, sample_source, url="https://example.com/1")
+        a1 = await _create_article(
+            db_session, sample_source, url="https://example.com/1"
+        )
         await _create_analysis(db_session, a1)
-        a2 = await _create_article(db_session, sample_source, url="https://example.com/2")
+        a2 = await _create_article(
+            db_session, sample_source, url="https://example.com/2"
+        )
         await _create_analysis(db_session, a2)
         # Unanalyzed article should be excluded
         await _create_article(db_session, sample_source, url="https://example.com/3")
@@ -119,7 +123,9 @@ class TestListArticles:
         )
         await _create_analysis(db_session, other)
 
-        resp = await client.get(f"/api/v1/articles?keywordId={sample_keyword.id}")
+        resp = await client.get(
+            "/api/v1/articles", params={"keyword": str(sample_keyword.name)}
+        )
         data = resp.json()
         assert data["total"] == 1
         assert data["items"][0]["translatedTitle"] == "テスト記事"
@@ -158,9 +164,7 @@ class TestListArticles:
             url="https://example.com/old",
             published_at=now - timedelta(days=2),
         )
-        await _create_analysis(
-            db_session, older, translated_title="古い記事"
-        )
+        await _create_analysis(db_session, older, translated_title="古い記事")
         newer = await _create_article(
             db_session,
             sample_source,
@@ -168,9 +172,7 @@ class TestListArticles:
             url="https://example.com/new",
             published_at=now,
         )
-        await _create_analysis(
-            db_session, newer, translated_title="新しい記事"
-        )
+        await _create_analysis(db_session, newer, translated_title="新しい記事")
 
         resp = await client.get("/api/v1/articles?sortBy=publishedAt&sortOrder=desc")
         items = resp.json()["items"]
@@ -204,9 +206,7 @@ class TestListArticles:
         )
         await _create_analysis(db_session, a2)
 
-        resp = await client.get(
-            f"/api/v1/articles?source={sample_source.name}"
-        )
+        resp = await client.get(f"/api/v1/articles?source={sample_source.name}")
         data = resp.json()
         assert data["total"] == 1
         assert data["items"][0]["source"]["name"] == str(sample_source.name)
@@ -243,9 +243,7 @@ class TestListArticles:
         assert "impactLevel" in item
         assert "publishedAt" in item
 
-    async def test_invalid_category_slug_returns_422(
-        self, client: AsyncClient
-    ) -> None:
+    async def test_invalid_category_slug_returns_422(self, client: AsyncClient) -> None:
         """CategorySlug VO rejects values not matching its slug pattern."""
         resp = await client.get("/api/v1/articles?category=INVALID-slug")
         assert resp.status_code == 422
@@ -254,9 +252,7 @@ class TestListArticles:
         assert detail[0]["loc"] == ["query", "category"]
         assert "CategorySlug" in detail[0]["msg"]
 
-    async def test_invalid_source_name_returns_422(
-        self, client: AsyncClient
-    ) -> None:
+    async def test_invalid_source_name_returns_422(self, client: AsyncClient) -> None:
         """SourceName VO rejects values containing disallowed characters."""
         resp = await client.get("/api/v1/articles?source=<bad>")
         assert resp.status_code == 422

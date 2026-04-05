@@ -406,8 +406,6 @@ export interface components {
      * @description キーワードタグ（ニュース埋め込み用）
      */
     KeywordEmbed: {
-      /** Id */
-      id: number;
       name: components["schemas"]["KeywordName"];
     };
     /**
@@ -426,8 +424,6 @@ export interface components {
      * @description キーワード＋記事数（カテゴリ内集計表示用）
      */
     KeywordStatEmbed: {
-      /** Id */
-      id: number;
       name: components["schemas"]["KeywordName"];
       /**
        * Articlecount
@@ -580,7 +576,7 @@ export interface operations {
       query?: {
         page?: number;
         perPage?: number;
-        keywordId?: number | null;
+        keyword?: components["schemas"]["KeywordName"] | null;
         category?: components["schemas"]["CategorySlug"] | null;
         source?: components["schemas"]["SourceName"] | null;
         impactLevel?: components["schemas"]["ImpactLevel"] | null;

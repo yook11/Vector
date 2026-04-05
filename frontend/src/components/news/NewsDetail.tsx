@@ -3,7 +3,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { sanitizeUrl } from "@/lib/utils";
-import type { ImpactLevel, ArticleDetail as ArticleDetailData } from "@/types";
+import type { ArticleDetail as ArticleDetailData, ImpactLevel } from "@/types";
 
 function formatDate(dateStr: string | null | undefined): string {
   if (!dateStr) return "Unknown";
@@ -60,7 +60,7 @@ export function NewsDetail({ article }: { article: ArticleDetailData }) {
       {article.keywords.length > 0 && (
         <div className="flex flex-wrap gap-1">
           {article.keywords.map((kw) => (
-            <Badge key={kw.id} variant="secondary">
+            <Badge key={kw.name} variant="secondary">
               {kw.name}
             </Badge>
           ))}

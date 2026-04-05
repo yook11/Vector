@@ -22,15 +22,14 @@ class CategoryRepository:
 
     async def fetch_keyword_stats(
         self,
-    ) -> list[Row[tuple[int, int, str, int]]]:
+    ) -> list[Row[tuple[int, str, int]]]:
         """Fetch per-keyword article counts grouped by category.
 
-        Returns rows of (category_id, keyword_id, name, article_count).
+        Returns rows of (category_id, name, article_count).
         """
         stmt = (
             select(
                 Keyword.category_id,
-                Keyword.id.label("keyword_id"),
                 Keyword.name,
                 func.count(func.distinct(ArticleKeyword.news_article_id)).label(
                     "article_count"

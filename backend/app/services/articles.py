@@ -17,7 +17,7 @@ from app.services.embedding import embed_search_query
 
 def build_keyword_embeds(article: NewsArticle) -> list[KeywordEmbed]:
     return [
-        KeywordEmbed(id=link.keyword.id, name=link.keyword.name)
+        KeywordEmbed(name=link.keyword.name)
         for link in article.article_keywords
         if link.keyword
     ]

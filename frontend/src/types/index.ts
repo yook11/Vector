@@ -16,7 +16,7 @@ export type ImpactLevel = "low" | "medium" | "high" | "critical";
 /** Query parameters for GET /articles (client-side helper). */
 export interface ArticleQuery {
   q?: string;
-  keywordId?: number;
+  keyword?: string;
   category?: string;
   impactLevel?: ImpactLevel;
   source?: string;

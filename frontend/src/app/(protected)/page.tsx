@@ -24,8 +24,8 @@ function parseSearchParams(
   const q = str("q");
   if (q) query.q = q;
 
-  const keywordId = str("keywordId");
-  if (keywordId) query.keywordId = Number(keywordId);
+  const keyword = str("keyword");
+  if (keyword) query.keyword = keyword;
 
   const category = str("category");
   if (category) query.category = category;
@@ -81,7 +81,7 @@ export default async function DashboardPage({
         <CategorySidebar
           categories={categoriesData.items}
           activeCategory={query.category}
-          activeKeywordId={query.keywordId}
+          activeKeyword={query.keyword}
         />
       </aside>
 
@@ -93,7 +93,7 @@ export default async function DashboardPage({
             <MobileSidebar
               categories={categoriesData.items}
               activeCategory={query.category}
-              activeKeywordId={query.keywordId}
+              activeKeyword={query.keyword}
             />
             <h1 className="text-base font-medium text-foreground">Dashboard</h1>
           </div>

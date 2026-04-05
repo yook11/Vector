@@ -11,13 +11,13 @@ import type { CategoryDetailResponse } from "@/types";
 interface CategorySidebarProps {
   categories: CategoryDetailResponse[];
   activeCategory?: string;
-  activeKeywordId?: number;
+  activeKeyword?: string;
 }
 
 export function CategorySidebar({
   categories,
   activeCategory,
-  activeKeywordId,
+  activeKeyword,
 }: CategorySidebarProps) {
   const searchParams = useSearchParams();
   const [expanded, setExpanded] = useState<Set<string>>(() => {
@@ -35,14 +35,14 @@ export function CategorySidebar({
     });
   };
 
-  const isAll = !activeCategory && !activeKeywordId;
+  const isAll = !activeCategory && !activeKeyword;
 
   // Preserve existing filter params (sentiment, sortBy, etc.) when navigating
   function buildHref(overrides: Record<string, string | undefined>): string {
     const params = new URLSearchParams(searchParams?.toString() ?? "");
     // Remove category/keyword params first
     params.delete("category");
-    params.delete("keywordId");
+    params.delete("keyword");
     params.delete("page");
 
     for (const [key, value] of Object.entries(overrides)) {
@@ -81,7 +81,7 @@ export function CategorySidebar({
       {/* Category drilldown */}
       {categories.map((cat) => {
         const isActiveCat =
-          activeCategory === cat.slug && activeKeywordId === undefined;
+          activeCategory === cat.slug && activeKeyword === undefined;
         const isExpanded = expanded.has(cat.slug);
 
         return (
@@ -118,13 +118,13 @@ export function CategorySidebar({
             {isExpanded && cat.keywords.length > 0 && (
               <div className="ml-8 flex flex-col gap-0.5">
                 {cat.keywords.map((kw) => {
-                  const isActiveKw = activeKeywordId === kw.id;
+                  const isActiveKw = activeKeyword === kw.name;
                   return (
                     <Link
-                      key={kw.id}
+                      key={kw.name}
                       href={buildHref({
                         category: cat.slug,
-                        keywordId: String(kw.id),
+                        keyword: kw.name,
                       })}
                       className={cn(
                         linkClass,

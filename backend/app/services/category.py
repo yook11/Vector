@@ -25,7 +25,6 @@ class CategoryService:
         for row in kw_rows:
             keyword_stats_by_cat[row.category_id].append(
                 KeywordStatEmbed(
-                    id=row.keyword_id,
                     name=row.name,
                     article_count=row.article_count,
                 )
