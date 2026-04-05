@@ -7,6 +7,7 @@ from enum import StrEnum
 from typing import Annotated
 
 from fastapi import Query
+from pydantic import field_validator
 
 from app.domain.category import CategorySlug
 from app.domain.keyword import KeywordName
@@ -46,6 +47,20 @@ class ArticleListParams(PaginationParams):
     impact_level: Annotated[ImpactLevel | None, Query(alias="impactLevel")] = None
     q: Annotated[str | None, Query(min_length=1, max_length=500)] = None
     sort_order: Annotated[SortOrder, Query(alias="sortOrder")] = SortOrder.DESC
+
+    @field_validator("q", mode="after")
+    @classmethod
+    def _normalize_q(cls, v: str | None) -> str | None:
+        """Normalize the search query so cache keys collapse trivial variants.
+
+        Strips surrounding whitespace, lowercases, and collapses internal
+        whitespace runs into a single space. Returns None for empty results
+        so downstream code treats blank queries as absent.
+        """
+        if v is None:
+            return None
+        normalized = " ".join(v.lower().split())
+        return normalized or None
 
 
 class ArticleBrief(_CamelBase):
