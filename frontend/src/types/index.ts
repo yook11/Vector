@@ -13,13 +13,13 @@ import type { components } from "./generated";
 /** Impact levels for news analysis. */
 export type ImpactLevel = "low" | "medium" | "high" | "critical";
 
-/** Query parameters for GET /news (client-side helper). */
-export interface NewsQuery {
+/** Query parameters for GET /articles (client-side helper). */
+export interface ArticleQuery {
   q?: string;
-  keywordId?: number;
-  kwCategoryId?: number;
+  keyword?: string;
+  category?: string;
   impactLevel?: ImpactLevel;
-  sourceId?: number;
+  source?: string;
   sortBy?: "publishedAt" | "impactLevel";
   sortOrder?: "asc" | "desc";
   page?: number;
@@ -30,62 +30,53 @@ export interface NewsQuery {
 // Re-exports from generated types
 // ---------------------------------------------------------------------------
 
-// Categories (unified — replaces both KeywordCategory and InvestmentCategory)
-export type CategoryBrief = components["schemas"]["CategoryBrief"];
-export type KeywordInCategory = components["schemas"]["KeywordInCategory"];
-export type CategoryDetailResponse =
-  components["schemas"]["CategoryDetailResponse"];
+// Categories
+export type CategoryBrief = Pick<
+  components["schemas"]["CategoryDetail"],
+  "slug" | "name"
+>;
+export type CategoryDetailResponse = components["schemas"]["CategoryDetail"];
 export type CategoryDetailListResponse =
-  components["schemas"]["CategoryDetailListResponse"];
-
-// Keywords
-export type KeywordBrief = components["schemas"]["KeywordBrief"];
-export type KeywordResponse = components["schemas"]["KeywordResponse"];
-export type KeywordListResponse = components["schemas"]["KeywordListResponse"];
-export type KeywordCreate = components["schemas"]["KeywordCreate"];
-export type KeywordUpdate = components["schemas"]["KeywordUpdate"];
+  components["schemas"]["CategoryDetailList"];
 
 // ---------------------------------------------------------------------------
 // Narrowed types — where generated types need refinement
 // ---------------------------------------------------------------------------
 
-/** Analysis response — narrows impactLevel from string to ImpactLevel union. */
-export type AnalysisResponse = Omit<
-  components["schemas"]["AnalysisResponse"],
+/** Article brief (list card) — narrows impactLevel to ImpactLevel union. */
+export type ArticleBrief = Omit<
+  components["schemas"]["ArticleBrief"],
   "impactLevel"
 > & {
   impactLevel: ImpactLevel;
 };
 
-/** Narrow nested analysis to use our narrowed AnalysisResponse. */
-export type NewsResponse = Omit<
-  components["schemas"]["NewsResponse"],
-  "analysis"
+/** Article detail (single article) — narrows impactLevel to ImpactLevel union. */
+export type ArticleDetail = Omit<
+  components["schemas"]["ArticleDetail"],
+  "impactLevel"
 > & {
-  analysis?: AnalysisResponse | null;
+  impactLevel: ImpactLevel;
 };
 
-/** Narrow items to use our narrowed NewsResponse. */
-export type PaginatedNewsResponse = Omit<
-  components["schemas"]["PaginatedNewsResponse"],
+/** Narrow items to use our narrowed ArticleBrief. */
+export type PaginatedArticleResponse = Omit<
+  components["schemas"]["PaginatedArticleResponse"],
   "items"
 > & {
-  items: NewsResponse[];
+  items: ArticleBrief[];
 };
 
 // ---------------------------------------------------------------------------
 // Direct re-exports (no narrowing needed)
 // ---------------------------------------------------------------------------
 
-export type NewsFetchRequest = components["schemas"]["NewsFetchRequest"];
-export type NewsFetchResponse = components["schemas"]["NewsFetchResponse"];
-export type WatchlistResponse = components["schemas"]["WatchlistResponse"];
-export type WatchlistListResponse =
-  components["schemas"]["WatchlistListResponse"];
+export type FetchRequest = components["schemas"]["FetchRequest"];
+export type FetchResponse = components["schemas"]["FetchResponse"];
 
 // News sources
-export type NewsSourceResponse = components["schemas"]["NewsSourceResponse"];
-export type NewsSourceListResponse =
-  components["schemas"]["NewsSourceListResponse"];
+export type NewsSourceEmbed = components["schemas"]["NewsSourceEmbed"];
+export type NewsSourceDetail = components["schemas"]["NewsSourceDetail"];
+export type NewsSourceDetailList =
+  components["schemas"]["NewsSourceDetailList"];
 export type NewsSourceCreate = components["schemas"]["NewsSourceCreate"];
-export type NewsSourceUpdate = components["schemas"]["NewsSourceUpdate"];

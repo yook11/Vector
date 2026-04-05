@@ -4,6 +4,66 @@
  */
 
 export interface paths {
+  "/api/v1/articles": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List Articles
+     * @description List analyzed articles with filters and pagination.
+     */
+    get: operations["list_articles_api_v1_articles_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/articles/{article_id}/similar": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Find semantically similar articles using pgvector cosine distance
+     * @description Return articles most similar to the given article.
+     */
+    get: operations["get_similar_articles_api_v1_articles__article_id__similar_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/articles/{article_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Article
+     * @description Get a single article with full analysis details.
+     */
+    get: operations["get_article_api_v1_articles__article_id__get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/categories": {
     parameters: {
       query?: never;
@@ -24,42 +84,6 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
-  "/api/v1/keywords": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    /** List Keywords */
-    get: operations["list_keywords_api_v1_keywords_get"];
-    put?: never;
-    /** Create Keyword */
-    post: operations["create_keyword_api_v1_keywords_post"];
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
-  "/api/v1/keywords/{keyword_id}": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    get?: never;
-    put?: never;
-    post?: never;
-    /** Delete Keyword */
-    delete: operations["delete_keyword_api_v1_keywords__keyword_id__delete"];
-    options?: never;
-    head?: never;
-    /** Update Keyword */
-    patch: operations["update_keyword_api_v1_keywords__keyword_id__patch"];
-    trace?: never;
-  };
   "/api/v1/me/watchlist": {
     parameters: {
       query?: never;
@@ -78,7 +102,7 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
-  "/api/v1/me/watchlist/{news_article_id}": {
+  "/api/v1/me/watchlist/{news_id}": {
     parameters: {
       query?: never;
       header?: never;
@@ -89,105 +113,7 @@ export interface paths {
     put?: never;
     post?: never;
     /** Remove From Watchlist */
-    delete: operations["remove_from_watchlist_api_v1_me_watchlist__news_article_id__delete"];
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
-  "/api/v1/news": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    /** List News */
-    get: operations["list_news_api_v1_news_get"];
-    put?: never;
-    post?: never;
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
-  "/api/v1/news/embed": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    get?: never;
-    put?: never;
-    /**
-     * Backfill embeddings for analyses that are missing them
-     * @description Generate vector embeddings for all analyses where embedding IS NULL.
-     *
-     *     Requires authentication to prevent unintended Gemini API cost.
-     */
-    post: operations["embed_news_api_v1_news_embed_post"];
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
-  "/api/v1/news/{news_id}/similar": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    /**
-     * Find semantically similar articles using pgvector cosine distance
-     * @description Return articles most similar to the given article, ordered by cosine distance.
-     *
-     *     Returns an empty list (not 404) if the article has no embedding yet.
-     */
-    get: operations["get_similar_news_api_v1_news__news_id__similar_get"];
-    put?: never;
-    post?: never;
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
-  "/api/v1/news/{news_id}": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    /** Get News */
-    get: operations["get_news_api_v1_news__news_id__get"];
-    put?: never;
-    post?: never;
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
-  "/api/v1/news/fetch": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    get?: never;
-    put?: never;
-    /**
-     * Fetch News
-     * @description Enqueue a news fetch task. Returns immediately with a task ID.
-     */
-    post: operations["fetch_news_api_v1_news_fetch_post"];
-    delete?: never;
+    delete: operations["remove_from_watchlist_api_v1_me_watchlist__news_id__delete"];
     options?: never;
     head?: never;
     patch?: never;
@@ -224,16 +150,8 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
-    /**
-     * Get Source
-     * @description Get a single news source by ID.
-     */
-    get: operations["get_source_api_v1_sources__source_id__get"];
-    /**
-     * Update Source
-     * @description Update an existing news source.
-     */
-    put: operations["update_source_api_v1_sources__source_id__put"];
+    get?: never;
+    put?: never;
     post?: never;
     /**
      * Delete Source
@@ -265,6 +183,46 @@ export interface paths {
     patch: operations["toggle_source_api_v1_sources__source_id__toggle_patch"];
     trace?: never;
   };
+  "/api/v1/pipeline/fetch": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Fetch News
+     * @description Enqueue a news fetch task. Returns immediately with a task ID.
+     */
+    post: operations["fetch_news_api_v1_pipeline_fetch_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/pipeline/embed": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Backfill embeddings for analyses that are missing them
+     * @description Generate vector embeddings for all analyses where embedding IS NULL.
+     */
+    post: operations["embed_news_api_v1_pipeline_embed_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/health": {
     parameters: {
       query?: never;
@@ -287,10 +245,38 @@ export type webhooks = Record<string, never>;
 export interface components {
   schemas: {
     /**
-     * AnalysisResponse
-     * @description AI analysis result embedded in NewsResponse.
+     * ArticleBrief
+     * @description GET /api/v1/articles — 一覧カード用
      */
-    AnalysisResponse: {
+    ArticleBrief: {
+      /** Id */
+      id: number;
+      /** Translatedtitle */
+      translatedTitle: string;
+      /** Summary */
+      summary: string;
+      impactLevel: components["schemas"]["ImpactLevel"];
+      source: components["schemas"]["NewsSourceEmbed"];
+      /** Publishedat */
+      publishedAt?: string | null;
+      /**
+       * Keywords
+       * @default []
+       */
+      keywords: components["schemas"]["KeywordEmbed"][];
+      /**
+       * Iswatched
+       * @default false
+       */
+      isWatched: boolean;
+    };
+    /**
+     * ArticleDetail
+     * @description GET /api/v1/articles/{id} — 詳細画面用
+     */
+    ArticleDetail: {
+      /** Id */
+      id: number;
       /** Translatedtitle */
       translatedTitle: string;
       /** Summary */
@@ -298,43 +284,38 @@ export interface components {
       impactLevel: components["schemas"]["ImpactLevel"];
       /** Reasoning */
       reasoning: string;
-      /** Aimodel */
-      aiModel: string;
       /**
        * Analyzedat
        * Format: date-time
        */
       analyzedAt: string;
+      source: components["schemas"]["NewsSourceEmbed"];
+      /** Publishedat */
+      publishedAt?: string | null;
+      /**
+       * Keywords
+       * @default []
+       */
+      keywords: components["schemas"]["KeywordEmbed"][];
+      /**
+       * Iswatched
+       * @default false
+       */
+      isWatched: boolean;
+      original: components["schemas"]["OriginalArticleEmbed"];
     };
     /**
-     * CategoryBrief
-     * @description Minimal category info embedded in KeywordResponse / KeywordBrief.
+     * ArticleSortField
+     * @enum {string}
      */
-    CategoryBrief: {
-      /** Slug */
-      slug: string;
-      /** Name */
-      name: string;
-    };
+    ArticleSortField: "publishedAt" | "impactLevel";
     /**
-     * CategoryDetailListResponse
-     * @description Response wrapper for enriched category list endpoint.
-     */
-    CategoryDetailListResponse: {
-      /** Items */
-      items: components["schemas"]["CategoryDetailResponse"][];
-    };
-    /**
-     * CategoryDetailResponse
+     * CategoryDetail
      * @description Enriched category with articleCount and nested keywords.
      */
-    CategoryDetailResponse: {
-      /** Id */
-      id: number;
-      /** Slug */
-      slug: string;
-      /** Name */
-      name: string;
+    CategoryDetail: {
+      slug: components["schemas"]["CategorySlug"];
+      name: components["schemas"]["CategoryName"];
       /**
        * Articlecount
        * @default 0
@@ -344,11 +325,41 @@ export interface components {
        * Keywords
        * @default []
        */
-      keywords: components["schemas"]["KeywordInCategory"][];
+      keywords: components["schemas"]["KeywordStatEmbed"][];
     };
     /**
+     * CategoryDetailList
+     * @description Wrapper for enriched category list endpoint.
+     */
+    CategoryDetailList: {
+      /** Items */
+      items: components["schemas"]["CategoryDetail"][];
+    };
+    /**
+     * CategoryName
+     * @description Japanese display name for a category.
+     *
+     *     Invariants:
+     *     - Contains word characters, middle dot (・), spaces, or hyphens
+     *     - Not empty or whitespace-only
+     *     - 1-50 characters
+     *     - Immutable after creation
+     */
+    CategoryName: string;
+    /**
+     * CategorySlug
+     * @description URL-safe category identifier.
+     *
+     *     Invariants:
+     *     - Starts with lowercase letter or digit
+     *     - Contains only lowercase letters, digits, and underscores
+     *     - 1-50 characters
+     *     - Immutable after creation
+     */
+    CategorySlug: string;
+    /**
      * EmbedResponse
-     * @description POST /api/v1/news/embed response.
+     * @description POST /api/v1/pipeline/embed response.
      */
     EmbedResponse: {
       /** Message */
@@ -359,6 +370,26 @@ export interface components {
       skippedCount: number;
       /** Errorcount */
       errorCount: number;
+    };
+    /**
+     * FetchRequest
+     * @description POST /api/v1/pipeline/fetch request body.
+     */
+    FetchRequest: {
+      /** Sourceids */
+      sourceIds?: number[] | null;
+    };
+    /**
+     * FetchResponse
+     * @description POST /api/v1/pipeline/fetch response.
+     */
+    FetchResponse: {
+      /** Message */
+      message: string;
+      /** Sourcescount */
+      sourcesCount?: number | null;
+      /** Jobid */
+      jobId: string;
     };
     /** HTTPValidationError */
     HTTPValidationError: {
@@ -371,174 +402,56 @@ export interface components {
      */
     ImpactLevel: "low" | "medium" | "high" | "critical";
     /**
-     * KeywordBrief
-     * @description Minimal keyword info embedded in NewsResponse.
+     * KeywordEmbed
+     * @description キーワードタグ（ニュース埋め込み用）
      */
-    KeywordBrief: {
-      /** Id */
-      id: number;
-      /** Name */
-      name: string;
-      category: components["schemas"]["CategoryBrief"];
+    KeywordEmbed: {
+      name: components["schemas"]["KeywordName"];
     };
     /**
-     * KeywordCreate
-     * @description POST /api/v1/keywords request body.
+     * KeywordName
+     * @description Tag name for a technology or theme within a sector.
+     *
+     *     Invariants:
+     *     - Contains at least one word character (\w)
+     *     - Only word chars (Unicode), spaces, hyphens, dots, &, /, +, #
+     *     - 1-100 characters after trimming
+     *     - Immutable after creation
      */
-    KeywordCreate: {
-      /**
-       * Name
-       * @description Keyword tag name (1-100 chars)
-       */
-      name: string;
-      /** Categoryid */
-      categoryId: number;
-    };
+    KeywordName: string;
     /**
-     * KeywordInCategory
-     * @description Keyword with article count, nested in category detail response.
+     * KeywordStatEmbed
+     * @description キーワード＋記事数（カテゴリ内集計表示用）
      */
-    KeywordInCategory: {
-      /** Id */
-      id: number;
-      /** Name */
-      name: string;
+    KeywordStatEmbed: {
+      name: components["schemas"]["KeywordName"];
       /**
        * Articlecount
        * @default 0
        */
       articleCount: number;
-    };
-    /**
-     * KeywordListResponse
-     * @description GET /api/v1/keywords response wrapper.
-     */
-    KeywordListResponse: {
-      /** Items */
-      items: components["schemas"]["KeywordResponse"][];
-    };
-    /**
-     * KeywordResponse
-     * @description Keyword in API responses (list, detail).
-     */
-    KeywordResponse: {
-      /** Id */
-      id: number;
-      /** Name */
-      name: string;
-      category: components["schemas"]["CategoryBrief"];
-      /** Status */
-      status: string;
-      /**
-       * Articlecount
-       * @default 0
-       */
-      articleCount: number;
-      /**
-       * Createdat
-       * Format: date-time
-       */
-      createdAt: string;
-    };
-    /**
-     * KeywordUpdate
-     * @description PATCH /api/v1/keywords/{id} request body.
-     */
-    KeywordUpdate: {
-      /** Categoryid */
-      categoryId?: number | null;
-    };
-    /**
-     * NewsFetchRequest
-     * @description POST /api/v1/news/fetch request body.
-     */
-    NewsFetchRequest: {
-      /** Sourceids */
-      sourceIds?: number[] | null;
-    };
-    /**
-     * NewsFetchResponse
-     * @description POST /api/v1/news/fetch response.
-     */
-    NewsFetchResponse: {
-      /** Message */
-      message: string;
-      /** Sourcescount */
-      sourcesCount?: number | null;
-      /** Jobid */
-      jobId: string;
-    };
-    /**
-     * NewsResponse
-     * @description Single news article with analysis and keywords.
-     */
-    NewsResponse: {
-      /** Id */
-      id: number;
-      /** Originaltitle */
-      originalTitle: string;
-      /** Originalurl */
-      originalUrl: string;
-      /** Sourcename */
-      sourceName: string;
-      /** Publishedat */
-      publishedAt?: string | null;
-      /**
-       * Createdat
-       * Format: date-time
-       */
-      createdAt: string;
-      /** Originalcontent */
-      originalContent?: string | null;
-      /**
-       * Keywords
-       * @default []
-       */
-      keywords: components["schemas"]["KeywordBrief"][];
-      analysis?: components["schemas"]["AnalysisResponse"] | null;
-      /**
-       * Iswatched
-       * @default false
-       */
-      isWatched: boolean;
     };
     /**
      * NewsSourceCreate
      * @description POST /api/v1/sources request body.
      */
     NewsSourceCreate: {
-      /** Name */
-      name: string;
+      name: components["schemas"]["SourceName"];
       sourceType: components["schemas"]["SourceType"];
-      /** Siteurl */
-      siteUrl: string;
-      /** Endpointurl */
-      endpointUrl: string;
+      siteUrl: components["schemas"]["SafeUrl"];
+      endpointUrl: components["schemas"]["SafeUrl"];
     };
     /**
-     * NewsSourceListResponse
-     * @description GET /api/v1/sources response wrapper.
-     */
-    NewsSourceListResponse: {
-      /** Items */
-      items: components["schemas"]["NewsSourceResponse"][];
-      /** Total */
-      total: number;
-    };
-    /**
-     * NewsSourceResponse
+     * NewsSourceDetail
      * @description Single news source in API responses.
      */
-    NewsSourceResponse: {
+    NewsSourceDetail: {
       /** Id */
       id: number;
-      /** Name */
-      name: string;
+      name: components["schemas"]["SourceName"];
       sourceType: components["schemas"]["SourceType"];
-      /** Siteurl */
-      siteUrl: string;
-      /** Endpointurl */
-      endpointUrl: string;
+      siteUrl: components["schemas"]["SafeUrl"];
+      endpointUrl: components["schemas"]["SafeUrl"];
       /** Isactive */
       isActive: boolean;
       /**
@@ -553,25 +466,40 @@ export interface components {
       updatedAt: string;
     };
     /**
-     * NewsSourceUpdate
-     * @description PUT /api/v1/sources/{id} request body.
+     * NewsSourceDetailList
+     * @description GET /api/v1/sources response wrapper.
      */
-    NewsSourceUpdate: {
-      /** Name */
-      name?: string | null;
-      sourceType?: components["schemas"]["SourceType"] | null;
-      /** Siteurl */
-      siteUrl?: string | null;
-      /** Endpointurl */
-      endpointUrl?: string | null;
+    NewsSourceDetailList: {
+      /** Items */
+      items: components["schemas"]["NewsSourceDetail"][];
+      /** Total */
+      total: number;
     };
     /**
-     * PaginatedNewsResponse
-     * @description Paginated list of news articles.
+     * NewsSourceEmbed
+     * @description ニュースソースの基本参照情報（フィルタ・表示用）
      */
-    PaginatedNewsResponse: {
+    NewsSourceEmbed: {
+      name: components["schemas"]["SourceName"];
+    };
+    /**
+     * OriginalArticleEmbed
+     * @description 原文記事の参照情報（詳細画面用）
+     */
+    OriginalArticleEmbed: {
+      /** Title */
+      title: string;
+      url: components["schemas"]["SafeUrl"];
+      /** Content */
+      content?: string | null;
+    };
+    /**
+     * PaginatedArticleResponse
+     * @description Paginated list of articles.
+     */
+    PaginatedArticleResponse: {
       /** Items */
-      items: components["schemas"]["NewsResponse"][];
+      items: components["schemas"]["ArticleBrief"][];
       /** Total */
       total: number;
       /** Page */
@@ -581,6 +509,33 @@ export interface components {
       /** Totalpages */
       totalPages: number;
     };
+    /**
+     * SafeUrl
+     * @description HTTP/HTTPS URL validated by Pydantic.
+     *
+     *     Invariants:
+     *     - Uses http or https scheme
+     *     - Valid URL structure (scheme + host at minimum)
+     *     - 1-2048 characters after trimming
+     *     - Immutable after creation
+     */
+    SafeUrl: string;
+    /**
+     * SortOrder
+     * @enum {string}
+     */
+    SortOrder: "asc" | "desc";
+    /**
+     * SourceName
+     * @description Display name for a news source.
+     *
+     *     Invariants:
+     *     - Contains at least one word character
+     *     - Only word chars (Unicode), spaces, hyphens, dots
+     *     - 1-50 characters after trimming
+     *     - Immutable after creation
+     */
+    SourceName: string;
     /**
      * SourceType
      * @enum {string}
@@ -604,45 +559,8 @@ export interface components {
      * @description POST /api/v1/me/watchlist request body.
      */
     WatchlistCreate: {
-      /** Newsarticleid */
-      newsArticleId: number;
-    };
-    /**
-     * WatchlistListResponse
-     * @description GET /api/v1/me/watchlist response wrapper.
-     */
-    WatchlistListResponse: {
-      /** Items */
-      items: components["schemas"]["WatchlistResponse"][];
-      /** Total */
-      total: number;
-      /** Page */
-      page: number;
-      /** Perpage */
-      perPage: number;
-      /** Totalpages */
-      totalPages: number;
-    };
-    /**
-     * WatchlistResponse
-     * @description Watchlist item in API responses.
-     */
-    WatchlistResponse: {
-      /** Newsarticleid */
-      newsArticleId: number;
-      /** Originaltitle */
-      originalTitle: string;
-      /** Originalurl */
-      originalUrl: string;
-      /** Sourcename */
-      sourceName: string;
-      /** Publishedat */
-      publishedAt?: string | null;
-      /**
-       * Createdat
-       * Format: date-time
-       */
-      createdAt: string;
+      /** Newsid */
+      newsId: number;
     };
   };
   responses: never;
@@ -653,6 +571,109 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+  list_articles_api_v1_articles_get: {
+    parameters: {
+      query?: {
+        page?: number;
+        perPage?: number;
+        keyword?: components["schemas"]["KeywordName"] | null;
+        category?: components["schemas"]["CategorySlug"] | null;
+        source?: components["schemas"]["SourceName"] | null;
+        impactLevel?: components["schemas"]["ImpactLevel"] | null;
+        q?: string | null;
+        sortBy?: components["schemas"]["ArticleSortField"];
+        sortOrder?: components["schemas"]["SortOrder"];
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PaginatedArticleResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  get_similar_articles_api_v1_articles__article_id__similar_get: {
+    parameters: {
+      query?: {
+        limit?: number;
+      };
+      header?: never;
+      path: {
+        article_id: number;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ArticleBrief"][];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  get_article_api_v1_articles__article_id__get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        article_id: number;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ArticleDetail"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
   list_categories_api_v1_categories_get: {
     parameters: {
       query?: never;
@@ -668,124 +689,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          "application/json": components["schemas"]["CategoryDetailListResponse"];
-        };
-      };
-    };
-  };
-  list_keywords_api_v1_keywords_get: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    requestBody?: never;
-    responses: {
-      /** @description Successful Response */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["KeywordListResponse"];
-        };
-      };
-    };
-  };
-  create_keyword_api_v1_keywords_post: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    requestBody: {
-      content: {
-        "application/json": components["schemas"]["KeywordCreate"];
-      };
-    };
-    responses: {
-      /** @description Successful Response */
-      201: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["KeywordResponse"];
-        };
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
-        };
-      };
-    };
-  };
-  delete_keyword_api_v1_keywords__keyword_id__delete: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path: {
-        keyword_id: number;
-      };
-      cookie?: never;
-    };
-    requestBody?: never;
-    responses: {
-      /** @description Successful Response */
-      204: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content?: never;
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
-        };
-      };
-    };
-  };
-  update_keyword_api_v1_keywords__keyword_id__patch: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path: {
-        keyword_id: number;
-      };
-      cookie?: never;
-    };
-    requestBody: {
-      content: {
-        "application/json": components["schemas"]["KeywordUpdate"];
-      };
-    };
-    responses: {
-      /** @description Successful Response */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["KeywordResponse"];
-        };
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
+          "application/json": components["schemas"]["CategoryDetailList"];
         };
       };
     };
@@ -808,7 +712,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          "application/json": components["schemas"]["WatchlistListResponse"];
+          "application/json": components["schemas"]["PaginatedArticleResponse"];
         };
       };
       /** @description Validation Error */
@@ -841,7 +745,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          "application/json": components["schemas"]["WatchlistResponse"];
+          "application/json": unknown;
         };
       };
       /** @description Validation Error */
@@ -855,12 +759,12 @@ export interface operations {
       };
     };
   };
-  remove_from_watchlist_api_v1_me_watchlist__news_article_id__delete: {
+  remove_from_watchlist_api_v1_me_watchlist__news_id__delete: {
     parameters: {
       query?: never;
       header?: never;
       path: {
-        news_article_id: number;
+        news_id: number;
       };
       cookie?: never;
     };
@@ -872,162 +776,6 @@ export interface operations {
           [name: string]: unknown;
         };
         content?: never;
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
-        };
-      };
-    };
-  };
-  list_news_api_v1_news_get: {
-    parameters: {
-      query?: {
-        keywordId?: number | null;
-        kwCategoryId?: number | null;
-        sourceId?: number | null;
-        impactLevel?: components["schemas"]["ImpactLevel"] | null;
-        q?: string | null;
-        sortBy?: string;
-        sortOrder?: string;
-        page?: number;
-        perPage?: number;
-      };
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    requestBody?: never;
-    responses: {
-      /** @description Successful Response */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["PaginatedNewsResponse"];
-        };
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
-        };
-      };
-    };
-  };
-  embed_news_api_v1_news_embed_post: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    requestBody?: never;
-    responses: {
-      /** @description Successful Response */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["EmbedResponse"];
-        };
-      };
-    };
-  };
-  get_similar_news_api_v1_news__news_id__similar_get: {
-    parameters: {
-      query?: {
-        limit?: number;
-      };
-      header?: never;
-      path: {
-        news_id: number;
-      };
-      cookie?: never;
-    };
-    requestBody?: never;
-    responses: {
-      /** @description Successful Response */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["NewsResponse"][];
-        };
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
-        };
-      };
-    };
-  };
-  get_news_api_v1_news__news_id__get: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path: {
-        news_id: number;
-      };
-      cookie?: never;
-    };
-    requestBody?: never;
-    responses: {
-      /** @description Successful Response */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["NewsResponse"];
-        };
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
-        };
-      };
-    };
-  };
-  fetch_news_api_v1_news_fetch_post: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    requestBody?: {
-      content: {
-        "application/json": components["schemas"]["NewsFetchRequest"] | null;
-      };
-    };
-    responses: {
-      /** @description Successful Response */
-      202: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["NewsFetchResponse"];
-        };
       };
       /** @description Validation Error */
       422: {
@@ -1055,7 +803,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          "application/json": components["schemas"]["NewsSourceListResponse"];
+          "application/json": components["schemas"]["NewsSourceDetailList"];
         };
       };
     };
@@ -1079,73 +827,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          "application/json": components["schemas"]["NewsSourceResponse"];
-        };
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
-        };
-      };
-    };
-  };
-  get_source_api_v1_sources__source_id__get: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path: {
-        source_id: number;
-      };
-      cookie?: never;
-    };
-    requestBody?: never;
-    responses: {
-      /** @description Successful Response */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["NewsSourceResponse"];
-        };
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
-        };
-      };
-    };
-  };
-  update_source_api_v1_sources__source_id__put: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path: {
-        source_id: number;
-      };
-      cookie?: never;
-    };
-    requestBody: {
-      content: {
-        "application/json": components["schemas"]["NewsSourceUpdate"];
-      };
-    };
-    responses: {
-      /** @description Successful Response */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["NewsSourceResponse"];
+          "application/json": components["schemas"]["NewsSourceDetail"];
         };
       };
       /** @description Validation Error */
@@ -1205,7 +887,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          "application/json": components["schemas"]["NewsSourceResponse"];
+          "application/json": components["schemas"]["NewsSourceDetail"];
         };
       };
       /** @description Validation Error */
@@ -1215,6 +897,59 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  fetch_news_api_v1_pipeline_fetch_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: {
+      content: {
+        "application/json": components["schemas"]["FetchRequest"] | null;
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["FetchResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  embed_news_api_v1_pipeline_embed_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["EmbedResponse"];
         };
       };
     };

@@ -1,19 +1,15 @@
 import { headers } from "next/headers";
+import { ApiError, normalizeErrorDetail } from "@/lib/api-error";
 import { auth } from "@/lib/auth";
 import type {
+  ArticleBrief,
+  ArticleDetail,
+  ArticleQuery,
   CategoryDetailListResponse,
-  KeywordCreate,
-  KeywordListResponse,
-  KeywordResponse,
-  KeywordUpdate,
-  NewsFetchRequest,
-  NewsFetchResponse,
-  NewsQuery,
-  NewsResponse,
-  NewsSourceListResponse,
-  PaginatedNewsResponse,
-  WatchlistListResponse,
-  WatchlistResponse,
+  FetchRequest,
+  FetchResponse,
+  NewsSourceDetailList,
+  PaginatedArticleResponse,
 } from "@/types";
 
 const INTERNAL_API_URL =
@@ -21,16 +17,6 @@ const INTERNAL_API_URL =
 
 const INTERNAL_SECRET =
   process.env.INTERNAL_API_SECRET ?? "change-me-in-production";
-
-class ApiError extends Error {
-  constructor(
-    public status: number,
-    public detail: string,
-  ) {
-    super(detail);
-    this.name = "ApiError";
-  }
-}
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
   try {
@@ -64,8 +50,9 @@ async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
   });
 
   if (!res.ok) {
-    const body = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new ApiError(res.status, body.detail ?? res.statusText);
+    const body = await res.json().catch(() => null);
+    const detail = normalizeErrorDetail(body) || res.statusText;
+    throw new ApiError(res.status, detail);
   }
 
   // 204 No Content
@@ -74,10 +61,10 @@ async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-/** Fetch paginated news list with optional filters. */
-export async function getNews(
-  query?: NewsQuery,
-): Promise<PaginatedNewsResponse> {
+/** Fetch paginated article list with optional filters. */
+export async function getArticles(
+  query?: ArticleQuery,
+): Promise<PaginatedArticleResponse> {
   const params = new URLSearchParams();
   if (query) {
     for (const [key, value] of Object.entries(query)) {
@@ -85,55 +72,24 @@ export async function getNews(
     }
   }
   const qs = params.toString();
-  return fetchApi<PaginatedNewsResponse>(`/news${qs ? `?${qs}` : ""}`, {
+  return fetchApi<PaginatedArticleResponse>(`/articles${qs ? `?${qs}` : ""}`, {
     cache: "no-store",
   });
 }
 
-/** Fetch a single news article by ID. */
-export async function getNewsById(id: number): Promise<NewsResponse> {
-  return fetchApi<NewsResponse>(`/news/${id}`, { cache: "no-store" });
+/** Fetch a single article by ID. */
+export async function getArticleById(id: number): Promise<ArticleDetail> {
+  return fetchApi<ArticleDetail>(`/articles/${id}`, { cache: "no-store" });
 }
 
 /** Trigger a manual news fetch. */
 export async function triggerFetch(
-  body?: NewsFetchRequest,
-): Promise<NewsFetchResponse> {
-  return fetchApi<NewsFetchResponse>("/news/fetch", {
+  body?: FetchRequest,
+): Promise<FetchResponse> {
+  return fetchApi<FetchResponse>("/pipeline/fetch", {
     method: "POST",
     body: JSON.stringify(body ?? {}),
   });
-}
-
-/** Fetch all keywords. */
-export async function getKeywords(): Promise<KeywordListResponse> {
-  return fetchApi<KeywordListResponse>("/keywords", { cache: "no-store" });
-}
-
-/** Create a new keyword. */
-export async function createKeyword(
-  body: KeywordCreate,
-): Promise<KeywordResponse> {
-  return fetchApi<KeywordResponse>("/keywords", {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-}
-
-/** Update a keyword. */
-export async function updateKeyword(
-  id: number,
-  body: KeywordUpdate,
-): Promise<KeywordResponse> {
-  return fetchApi<KeywordResponse>(`/keywords/${id}`, {
-    method: "PATCH",
-    body: JSON.stringify(body),
-  });
-}
-
-/** Delete a keyword. */
-export async function deleteKeyword(id: number): Promise<void> {
-  return fetchApi<void>(`/keywords/${id}`, { method: "DELETE" });
 }
 
 // --- Watchlist ---
@@ -142,38 +98,34 @@ export async function deleteKeyword(id: number): Promise<void> {
 export async function getWatchlist(
   page = 1,
   perPage = 20,
-): Promise<WatchlistListResponse> {
-  return fetchApi<WatchlistListResponse>(
+): Promise<PaginatedArticleResponse> {
+  return fetchApi<PaginatedArticleResponse>(
     `/me/watchlist?page=${page}&perPage=${perPage}`,
     { cache: "no-store" },
   );
 }
 
 /** Add an article to the watchlist. */
-export async function addToWatchlist(
-  newsArticleId: number,
-): Promise<WatchlistResponse> {
-  return fetchApi<WatchlistResponse>("/me/watchlist", {
+export async function addToWatchlist(newsId: number): Promise<void> {
+  return fetchApi<void>("/me/watchlist", {
     method: "POST",
-    body: JSON.stringify({ newsArticleId }),
+    body: JSON.stringify({ newsId }),
   });
 }
 
 /** Remove an article from the watchlist. */
-export async function removeFromWatchlist(
-  newsArticleId: number,
-): Promise<void> {
-  return fetchApi<void>(`/me/watchlist/${newsArticleId}`, {
+export async function removeFromWatchlist(newsId: number): Promise<void> {
+  return fetchApi<void>(`/me/watchlist/${newsId}`, {
     method: "DELETE",
   });
 }
 
 /** Fetch articles semantically similar to the given article. */
-export async function getSimilarNews(
+export async function getSimilarArticles(
   id: number,
   limit = 5,
-): Promise<NewsResponse[]> {
-  return fetchApi<NewsResponse[]>(`/news/${id}/similar?limit=${limit}`, {
+): Promise<ArticleBrief[]> {
+  return fetchApi<ArticleBrief[]>(`/articles/${id}/similar?limit=${limit}`, {
     cache: "no-store",
   });
 }
@@ -190,8 +142,8 @@ export async function getCategories(): Promise<CategoryDetailListResponse> {
 // --- News Sources ---
 
 /** Fetch all news sources (SSR-compatible). */
-export async function getSources(): Promise<NewsSourceListResponse> {
-  return fetchApi<NewsSourceListResponse>("/sources", { cache: "no-store" });
+export async function getSources(): Promise<NewsSourceDetailList> {
+  return fetchApi<NewsSourceDetailList>("/sources", { cache: "no-store" });
 }
 
 export { ApiError };

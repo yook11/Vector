@@ -9,6 +9,7 @@ from sqlalchemy import CheckConstraint, DateTime, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.domain import SafeUrl
+from app.domain.news_source import SourceName
 from app.models.base import Base
 
 if TYPE_CHECKING:
@@ -46,7 +47,7 @@ class NewsSource(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(50))
+    name: Mapped[SourceName] = mapped_column()
     source_type: Mapped[SourceType] = mapped_column(String(20))
     site_url: Mapped[SafeUrl] = mapped_column()
     endpoint_url: Mapped[SafeUrl] = mapped_column(unique=True)

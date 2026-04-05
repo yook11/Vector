@@ -330,7 +330,7 @@ async def test_get_similar_news_returns_404_for_missing_article() -> None:
     app.dependency_overrides[get_session] = override_get_session
     try:
         client = TestClient(app)
-        response = client.get("/api/v1/news/9999/similar")
+        response = client.get("/api/v1/articles/9999/similar")
         assert response.status_code == 404
     finally:
         app.dependency_overrides.clear()
@@ -357,7 +357,7 @@ async def test_get_similar_news_returns_empty_list_when_no_embedding() -> None:
     app.dependency_overrides[get_session] = override_get_session
     try:
         client = TestClient(app)
-        response = client.get("/api/v1/news/1/similar")
+        response = client.get("/api/v1/articles/1/similar")
         assert response.status_code == 200
         assert response.json() == []
     finally:

@@ -1,4 +1,4 @@
-"""Tests for semantic search (q parameter on GET /api/v1/news)."""
+"""Tests for semantic search (q parameter on GET /api/v1/articles)."""
 
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
@@ -49,20 +49,19 @@ async def _create_article(
     db_session.add(article)
     await db_session.flush()
 
-    # Create ArticleAnalysis with embedding (if provided)
-    if embedding is not None:
-        analysis = ArticleAnalysis(
-            news_article_id=article.id,
-            translated_title=f"Translated: {title}",
-            summary="Test summary",
-            impact_level=ImpactLevel.MEDIUM,
-            reasoning="Test reasoning",
-            ai_model="gemini-2.0-flash",
-            embedding=embedding,
-            embedding_model="text-embedding-004",
-        )
-        db_session.add(analysis)
-        await db_session.flush()
+    # Always create ArticleAnalysis (required by INNER JOIN); add embedding if provided
+    analysis = ArticleAnalysis(
+        news_article_id=article.id,
+        translated_title=f"Translated: {title}",
+        summary="Test summary",
+        impact_level=ImpactLevel.MEDIUM,
+        reasoning="Test reasoning",
+        ai_model="gemini-2.0-flash",
+        embedding=embedding,
+        embedding_model="text-embedding-004" if embedding else None,
+    )
+    db_session.add(analysis)
+    await db_session.flush()
 
     return article
 
@@ -70,7 +69,7 @@ async def _create_article(
 def _patch_embed_query(return_value: list[float] = FAKE_QUERY_EMBEDDING):
     """Patch embed_search_query to return a fixed vector."""
     return patch(
-        "app.routers.news.embed_search_query",
+        "app.services.articles.embed_search_query",
         new_callable=AsyncMock,
         return_value=return_value,
     )
@@ -86,7 +85,7 @@ async def test_semantic_search_returns_articles_with_embedding(
     authed_client: AsyncClient,
     db_session: AsyncSession,
 ) -> None:
-    """GET /api/v1/news?q=test should return articles with embeddings."""
+    """GET /api/v1/articles?q=test should return articles with embeddings."""
     source = await _create_source(db_session)
     await _create_article(
         db_session,
@@ -98,12 +97,14 @@ async def test_semantic_search_returns_articles_with_embedding(
     await db_session.commit()
 
     with _patch_embed_query():
-        resp = await authed_client.get("/api/v1/news", params={"q": "AI research"})
+        resp = await authed_client.get("/api/v1/articles", params={"q": "AI research"})
 
     assert resp.status_code == 200
     data = resp.json()
     assert data["total"] >= 1
-    assert any("AI Breakthrough" in item["originalTitle"] for item in data["items"])
+    assert any(
+        "AI Breakthrough" in item["translatedTitle"] for item in data["items"]
+    )
 
 
 @pytest.mark.asyncio
@@ -130,13 +131,13 @@ async def test_semantic_search_excludes_articles_without_embedding(
     await db_session.commit()
 
     with _patch_embed_query():
-        resp = await authed_client.get("/api/v1/news", params={"q": "test"})
+        resp = await authed_client.get("/api/v1/articles", params={"q": "test"})
 
     assert resp.status_code == 200
     data = resp.json()
-    titles = [item["originalTitle"] for item in data["items"]]
-    assert "With Embedding" in titles
-    assert "Without Embedding" not in titles
+    titles = [item["translatedTitle"] for item in data["items"]]
+    assert "Translated: With Embedding" in titles
+    assert "Translated: Without Embedding" not in titles
 
 
 # ---------------------------------------------------------------------------
@@ -149,7 +150,7 @@ async def test_semantic_search_combined_with_source_filter(
     authed_client: AsyncClient,
     db_session: AsyncSession,
 ) -> None:
-    """Semantic search should work with sourceId filter."""
+    """Semantic search should work with source name filter."""
     source_a = await _create_source(db_session)
     source_b = NewsSource(
         name="Other Source",
@@ -178,14 +179,14 @@ async def test_semantic_search_combined_with_source_filter(
 
     with _patch_embed_query():
         resp = await authed_client.get(
-            "/api/v1/news",
-            params={"q": "test", "sourceId": source_a.id},
+            "/api/v1/articles",
+            params={"q": "test", "source": str(source_a.name)},
         )
 
     assert resp.status_code == 200
     data = resp.json()
     assert data["total"] == 1
-    assert data["items"][0]["originalTitle"] == "Source A Article"
+    assert data["items"][0]["translatedTitle"] == "Translated: Source A Article"
 
 
 # ---------------------------------------------------------------------------
@@ -194,11 +195,11 @@ async def test_semantic_search_combined_with_source_filter(
 
 
 @pytest.mark.asyncio
-async def test_no_q_parameter_returns_all_articles(
+async def test_no_q_parameter_returns_analyzed_articles(
     authed_client: AsyncClient,
     db_session: AsyncSession,
 ) -> None:
-    """Without q parameter, all articles are returned (existing behavior)."""
+    """Without q parameter, only analyzed articles are returned."""
     source = await _create_source(db_session)
     await _create_article(
         db_session,
@@ -212,12 +213,12 @@ async def test_no_q_parameter_returns_all_articles(
         source,
         title="Article 2",
         url="https://example.com/2",
-        embedding=None,
+        embedding=FAKE_EMBEDDING_A,
     )
     await db_session.commit()
 
     # No patching needed -- embed_search_query should not be called
-    resp = await authed_client.get("/api/v1/news")
+    resp = await authed_client.get("/api/v1/articles")
 
     assert resp.status_code == 200
     data = resp.json()
@@ -246,11 +247,11 @@ async def test_semantic_search_returns_503_on_embedding_failure(
     await db_session.commit()
 
     with patch(
-        "app.routers.news.embed_search_query",
+        "app.services.articles.embed_search_query",
         new_callable=AsyncMock,
         side_effect=EmbeddingError("API down"),
     ):
-        resp = await authed_client.get("/api/v1/news", params={"q": "test"})
+        resp = await authed_client.get("/api/v1/articles", params={"q": "test"})
 
     assert resp.status_code == 503
     assert "embedding" in resp.json()["detail"].lower()

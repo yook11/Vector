@@ -21,21 +21,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  ApiError,
-  clientCreateSource,
-  clientUpdateSource,
-} from "@/lib/client-api";
-import type { NewsSourceResponse } from "@/types";
+import { ApiError, clientCreateSource } from "@/lib/client-api";
 
 interface SourceFormDialogProps {
-  source?: NewsSourceResponse;
   trigger: React.ReactNode;
 }
 
-export function SourceFormDialog({ source, trigger }: SourceFormDialogProps) {
+export function SourceFormDialog({ trigger }: SourceFormDialogProps) {
   const router = useRouter();
-  const isEdit = !!source;
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
 
@@ -45,18 +38,13 @@ export function SourceFormDialog({ source, trigger }: SourceFormDialogProps) {
   const [siteUrl, setSiteUrl] = useState("");
 
   useEffect(() => {
-    if (open && source) {
-      setName(source.name);
-      setSourceType(source.sourceType);
-      setEndpointUrl(source.endpointUrl);
-      setSiteUrl(source.siteUrl);
-    } else if (open && !source) {
+    if (open) {
       setName("");
       setSourceType("rss");
       setEndpointUrl("");
       setSiteUrl("");
     }
-  }, [open, source]);
+  }, [open]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -64,20 +52,13 @@ export function SourceFormDialog({ source, trigger }: SourceFormDialogProps) {
 
     setLoading(true);
     try {
-      const body = {
+      await clientCreateSource({
         name: name.trim(),
         sourceType,
         siteUrl: siteUrl.trim(),
         endpointUrl: endpointUrl.trim(),
-      };
-
-      if (isEdit && source) {
-        await clientUpdateSource(source.id, body);
-        toast.success(`Updated "${name.trim()}"`);
-      } else {
-        await clientCreateSource(body);
-        toast.success(`Added "${name.trim()}"`);
-      }
+      });
+      toast.success(`Added "${name.trim()}"`);
       setOpen(false);
       router.refresh();
     } catch (err) {
@@ -93,7 +74,7 @@ export function SourceFormDialog({ source, trigger }: SourceFormDialogProps) {
       <DialogTrigger asChild>{trigger}</DialogTrigger>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>{isEdit ? "Edit Source" : "Add Source"}</DialogTitle>
+          <DialogTitle>Add Source</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
@@ -154,7 +135,7 @@ export function SourceFormDialog({ source, trigger }: SourceFormDialogProps) {
 
           <DialogFooter>
             <Button type="submit" disabled={loading || !name.trim()}>
-              {loading ? "Saving..." : isEdit ? "Save" : "Add"}
+              {loading ? "Saving..." : "Add"}
             </Button>
           </DialogFooter>
         </form>

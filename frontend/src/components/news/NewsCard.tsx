@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import type { ImpactLevel, NewsResponse } from "@/types";
+import type { ArticleBrief, ImpactLevel } from "@/types";
 import { WatchlistButton } from "./WatchlistButton";
 
 function formatDate(dateStr: string | null | undefined): string {
@@ -22,55 +22,44 @@ const impactLevelColors: Record<ImpactLevel, string> = {
     "bg-red-50 text-red-600 border-red-200 dark:bg-red-950/40 dark:text-red-400 dark:border-red-800/50",
 };
 
-export function NewsCard({ article }: { article: NewsResponse }) {
-  const { analysis } = article;
-
+export function NewsCard({ article }: { article: ArticleBrief }) {
   return (
     <Card className="border-0 bg-transparent shadow-none">
       <CardHeader className="p-0 pb-2">
         <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <span className="line-clamp-1">
-            {article.sourceName} &middot; {formatDate(article.publishedAt)}
+            {article.source.name} &middot; {formatDate(article.publishedAt)}
           </span>
         </div>
         <div className="flex items-start justify-between gap-3 mt-1.5">
           <CardTitle className="text-base font-medium leading-snug text-foreground">
             <Link href={`/news/${article.id}`} className="hover:underline">
-              {analysis?.translatedTitle ?? article.originalTitle}
+              {article.translatedTitle}
             </Link>
           </CardTitle>
           <div className="flex items-center gap-1.5 shrink-0 mt-0.5">
-            {analysis && (
-              <Badge
-                variant="outline"
-                className={`text-[11px] border ${impactLevelColors[analysis.impactLevel]}`}
-              >
-                {analysis.impactLevel}
-              </Badge>
-            )}
+            <Badge
+              variant="outline"
+              className={`text-[11px] border ${impactLevelColors[article.impactLevel]}`}
+            >
+              {article.impactLevel}
+            </Badge>
             <WatchlistButton
-              newsArticleId={article.id}
+              newsId={article.id}
               isWatched={article.isWatched}
             />
           </div>
         </div>
       </CardHeader>
       <CardContent className="p-0 flex flex-col gap-3">
-        {analysis && (
-          <p className="text-sm text-muted-foreground leading-relaxed line-clamp-2">
-            {analysis.summary}
-          </p>
-        )}
-        {!analysis && (
-          <p className="text-sm text-muted-foreground italic">
-            Analysis pending...
-          </p>
-        )}
+        <p className="text-sm text-muted-foreground leading-relaxed line-clamp-2">
+          {article.summary}
+        </p>
         {article.keywords.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
             {article.keywords.map((kw) => (
               <Badge
-                key={kw.id}
+                key={kw.name}
                 variant="secondary"
                 className="text-[11px] font-normal"
               >

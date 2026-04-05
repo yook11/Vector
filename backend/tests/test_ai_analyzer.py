@@ -376,14 +376,13 @@ async def test_news_endpoint_includes_analysis(
     db_session.add(analysis)
     await db_session.commit()
 
-    response = await client.get(f"/api/v1/news/{article.id}")
+    response = await client.get(f"/api/v1/articles/{article.id}")
 
     assert response.status_code == 200
     data = response.json()
-    assert data["analysis"] is not None
-    assert data["analysis"]["translatedTitle"] == "テスト記事"
-    assert data["analysis"]["impactLevel"] == "high"
-    assert "aiModel" in data["analysis"]
+    assert data["translatedTitle"] == "テスト記事"
+    assert data["impactLevel"] == "high"
+    assert data["original"]["title"] == "Test Article"
 
 
 # --- F. Keyword tagging tests ---

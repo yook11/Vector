@@ -1,8 +1,8 @@
-import type { NewsResponse } from "@/types";
+import type { ArticleBrief } from "@/types";
 import { NewsCard } from "./NewsCard";
 
 interface RelatedArticlesProps {
-  articles: NewsResponse[];
+  articles: ArticleBrief[];
 }
 
 export function RelatedArticles({ articles }: RelatedArticlesProps) {

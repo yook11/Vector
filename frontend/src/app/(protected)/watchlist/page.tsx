@@ -1,21 +1,11 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { WatchlistButton } from "@/components/news/WatchlistButton";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { NewsList } from "@/components/news/NewsList";
 import { getWatchlist } from "@/lib/api-client";
 
 export const metadata: Metadata = {
   title: "Watchlist | Vector",
 };
-
-function formatDate(dateStr: string | null | undefined): string {
-  if (!dateStr) return "Unknown";
-  return new Date(dateStr).toLocaleDateString("ja-JP", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
-}
 
 interface WatchlistPageProps {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -31,7 +21,7 @@ export default async function WatchlistPage({
 
   return (
     <main className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-3xl px-8 sm:px-12 py-6 sm:py-8 flex flex-col gap-8">
+      <div className="mx-auto max-w-5xl px-8 sm:px-12 py-6 sm:py-8 flex flex-col gap-8">
         <h1 className="text-base font-medium">Watchlist</h1>
 
         {data.items.length === 0 ? (
@@ -46,35 +36,7 @@ export default async function WatchlistPage({
             </p>
           </div>
         ) : (
-          <div className="flex flex-col gap-3">
-            {data.items.map((item) => (
-              <Card key={item.newsArticleId} className="border-border">
-                <CardHeader className="p-4 pb-2">
-                  <div className="flex items-start justify-between gap-2">
-                    <CardTitle className="text-sm font-medium leading-snug">
-                      <Link
-                        href={`/news/${item.newsArticleId}`}
-                        className="hover:underline"
-                      >
-                        {item.originalTitle}
-                      </Link>
-                    </CardTitle>
-                    <WatchlistButton
-                      newsArticleId={item.newsArticleId}
-                      isWatched={true}
-                    />
-                  </div>
-                </CardHeader>
-                <CardContent className="px-4 pb-4 pt-0">
-                  <p className="text-[11px] text-muted-foreground">
-                    {item.sourceName} &middot; {formatDate(item.publishedAt)}
-                    {" &middot; Saved "}
-                    {formatDate(item.createdAt)}
-                  </p>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
+          <NewsList items={data.items} />
         )}
 
         {data.totalPages > 1 && (

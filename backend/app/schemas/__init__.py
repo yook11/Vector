@@ -1,37 +1,33 @@
-from app.schemas.analysis import AnalysisResponse
+from app.schemas.articles import (
+    ArticleBrief,
+    ArticleDetail,
+    PaginatedArticleResponse,
+)
 from app.schemas.category import (
-    CategoryBrief,
-    CategoryDetailListResponse,
-    CategoryDetailResponse,
-    KeywordInCategory,
+    CategoryDetail,
+    CategoryDetailList,
 )
-from app.schemas.keyword import (
-    KeywordBrief,
-    KeywordCreate,
-    KeywordListResponse,
-    KeywordResponse,
-    KeywordUpdate,
+from app.schemas.embeds import (
+    KeywordEmbed,
+    KeywordStatEmbed,
+    OriginalArticleEmbed,
 )
-from app.schemas.news import (
-    NewsFetchRequest,
-    NewsFetchResponse,
-    NewsResponse,
-    PaginatedNewsResponse,
+from app.schemas.pipeline import (
+    EmbedResponse,
+    FetchRequest,
+    FetchResponse,
 )
 
 __all__ = [
-    "AnalysisResponse",
-    "CategoryBrief",
-    "CategoryDetailListResponse",
-    "CategoryDetailResponse",
-    "KeywordBrief",
-    "KeywordCreate",
-    "KeywordInCategory",
-    "KeywordListResponse",
-    "KeywordResponse",
-    "KeywordUpdate",
-    "NewsFetchRequest",
-    "NewsFetchResponse",
-    "NewsResponse",
-    "PaginatedNewsResponse",
+    "ArticleBrief",
+    "ArticleDetail",
+    "CategoryDetail",
+    "CategoryDetailList",
+    "EmbedResponse",
+    "FetchRequest",
+    "FetchResponse",
+    "KeywordEmbed",
+    "KeywordStatEmbed",
+    "OriginalArticleEmbed",
+    "PaginatedArticleResponse",
 ]

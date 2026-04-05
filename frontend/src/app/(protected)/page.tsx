@@ -5,8 +5,8 @@ import { NewsFilters } from "@/components/news/NewsFilters";
 import { NewsList } from "@/components/news/NewsList";
 import { NewsPagination } from "@/components/news/NewsPagination";
 import { SearchBar } from "@/components/news/SearchBar";
-import { getCategories, getNews, getSources } from "@/lib/api-client";
-import type { ImpactLevel, NewsQuery } from "@/types";
+import { getArticles, getCategories, getSources } from "@/lib/api-client";
+import type { ArticleQuery, ImpactLevel } from "@/types";
 
 interface DashboardPageProps {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -14,8 +14,8 @@ interface DashboardPageProps {
 
 function parseSearchParams(
   raw: Record<string, string | string[] | undefined>,
-): NewsQuery {
-  const query: NewsQuery = {};
+): ArticleQuery {
+  const query: ArticleQuery = {};
   const str = (key: string) => {
     const v = raw[key];
     return typeof v === "string" ? v : undefined;
@@ -24,11 +24,11 @@ function parseSearchParams(
   const q = str("q");
   if (q) query.q = q;
 
-  const keywordId = str("keywordId");
-  if (keywordId) query.keywordId = Number(keywordId);
+  const keyword = str("keyword");
+  if (keyword) query.keyword = keyword;
 
-  const kwCategoryId = str("kwCategoryId");
-  if (kwCategoryId) query.kwCategoryId = Number(kwCategoryId);
+  const category = str("category");
+  if (category) query.category = category;
 
   const impactLevel = str("impactLevel");
   if (
@@ -40,8 +40,8 @@ function parseSearchParams(
     query.impactLevel = impactLevel as ImpactLevel;
   }
 
-  const sourceId = str("sourceId");
-  if (sourceId) query.sourceId = Number(sourceId);
+  const source = str("source");
+  if (source) query.source = source;
 
   const sortBy = str("sortBy");
   if (sortBy === "publishedAt" || sortBy === "impactLevel") {
@@ -69,7 +69,7 @@ export default async function DashboardPage({
   const query = parseSearchParams(raw);
 
   const [newsData, categoriesData, sourcesData] = await Promise.all([
-    getNews(query),
+    getArticles(query),
     getCategories().catch(() => ({ items: [] })),
     getSources().catch(() => ({ items: [], total: 0 })),
   ]);
@@ -80,8 +80,8 @@ export default async function DashboardPage({
       <aside className="hidden lg:flex w-64 shrink-0 flex-col border-r border-border overflow-y-auto">
         <CategorySidebar
           categories={categoriesData.items}
-          activeKwCategoryId={query.kwCategoryId}
-          activeKeywordId={query.keywordId}
+          activeCategory={query.category}
+          activeKeyword={query.keyword}
         />
       </aside>
 
@@ -92,8 +92,8 @@ export default async function DashboardPage({
           <div className="flex items-center gap-3">
             <MobileSidebar
               categories={categoriesData.items}
-              activeKwCategoryId={query.kwCategoryId}
-              activeKeywordId={query.keywordId}
+              activeCategory={query.category}
+              activeKeyword={query.keyword}
             />
             <h1 className="text-base font-medium text-foreground">Dashboard</h1>
           </div>

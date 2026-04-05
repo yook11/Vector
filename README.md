@@ -27,7 +27,7 @@ AIで翻訳・要約・インパクト分析を行う投資ダッシュボード
 | Layer | Technology | Notes |
 |-------|-----------|-------|
 | Frontend | Next.js 16 (App Router) + TypeScript | Tailwind CSS + shadcn/ui + Biome |
-| Backend | FastAPI + Python 3.12 + SQLModel | 非同期処理、Pydantic v2 |
+| Backend | FastAPI + Python 3.12 + SQLAlchemy 2.0 | 非同期処理、Pydantic v2 |
 | Auth | Better Auth (BFF Proxy) | Cookie ベースセッション + 内部 API ヘッダー認証 |
 | Database | PostgreSQL 16 + pgvector | Alembic マイグレーション管理 |
 | AI | Gemini API (gemini-2.5-flash-lite) | 翻訳・要約・インパクト分析・Embedding |
@@ -78,7 +78,7 @@ Browser
         │
         └─► FastAPI Backend (Docker internal only)
               ├── Header Auth (X-User-ID / X-Internal-Secret)
-              ├── News Fetcher (Google News RSS, Hacker News API, Alpha Vantage)
+              ├── News Fetcher (RSS Feeds, Hacker News API, Alpha Vantage)
               ├── AI Analyzer (Gemini API — 翻訳・要約・インパクト分析)
               ├── Embedding (Gemini Embedding API — pgvector)
               ├── Dedup (cosine distance — 重複記事グループ化)
@@ -101,8 +101,6 @@ Redis ◄── taskiq worker (非同期タスク実行)
 
 ## Domain Concepts
 
-詳細は [`domain.md`](domain.md) を参照。
-
 | 概念 | 説明 | モデル |
 |------|------|--------|
 | ニュース記事 | 収集・翻訳されたテックニュース | `NewsArticle` |
@@ -110,7 +108,7 @@ Redis ◄── taskiq worker (非同期タスク実行)
 | キーワード | 記事のタギングに使用される検索キーワード | `Keyword` |
 | カテゴリ | キーワードと記事を分類する統合カテゴリ | `Category` |
 | ニュースソース | ニュースの収集元メディア・サイト | `NewsSource` |
-| 重複グループ | 意味的に類似した記事のグループ | `ArticleGroup` |
+| フェッチログ | ニュース取得の実行履歴 | `FetchLog` |
 | ウォッチリスト | ユーザーの記事ブックマーク | `WatchlistEntry` |
 
 ### ニュース処理パイプライン

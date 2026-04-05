@@ -8,13 +8,20 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 
 from app.config import settings
 from app.db import engine
-from app.routers import (
-    categories,
-    keywords,
-    me,
-    news,
-    news_sources,
+from app.exception_handlers import (
+    duplicate_handler,
+    embedding_error_handler,
+    not_found_handler,
 )
+from app.exceptions import DuplicateError, NotFoundError
+from app.routers import (
+    articles,
+    categories,
+    news_sources,
+    pipeline,
+    watchlist,
+)
+from app.services.embedding import EmbeddingError
 
 
 @asynccontextmanager
@@ -72,12 +79,18 @@ app.add_middleware(
     allow_headers=["Content-Type"],
 )
 
+# Exception handlers
+app.add_exception_handler(NotFoundError, not_found_handler)
+app.add_exception_handler(DuplicateError, duplicate_handler)
+
+app.add_exception_handler(EmbeddingError, embedding_error_handler)
+
 # Register routers
+app.include_router(articles.router)
 app.include_router(categories.router)
-app.include_router(keywords.router)
-app.include_router(me.router)
-app.include_router(news.router)
+app.include_router(watchlist.router)
 app.include_router(news_sources.router)
+app.include_router(pipeline.router)
 
 
 @app.get("/api/v1/health")

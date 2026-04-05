@@ -39,25 +39,6 @@ async def test_list_sources(
     assert data["items"][0]["endpointUrl"] == "https://techcrunch.com/feed/"
 
 
-async def test_get_source(
-    authed_client: AsyncClient,
-    sample_source: NewsSource,
-) -> None:
-    response = await authed_client.get(f"/api/v1/sources/{sample_source.id}")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["name"] == sample_source.name
-    # TODO: スキーマ層を SafeUrl 対応にした後、str() 変換を削除
-    assert data["endpointUrl"] == str(sample_source.endpoint_url)
-    assert data["siteUrl"] == str(sample_source.site_url)
-
-
-async def test_get_source_not_found(
-    authed_client: AsyncClient,
-) -> None:
-    response = await authed_client.get("/api/v1/sources/999")
-    assert response.status_code == 404
-
 
 async def test_create_rss_source(
     admin_client: AsyncClient,
@@ -116,26 +97,6 @@ async def test_create_source_missing_site_url(
     }
     response = await admin_client.post("/api/v1/sources", json=body)
     assert response.status_code == 422
-
-
-async def test_update_source(
-    admin_client: AsyncClient,
-    sample_source: NewsSource,
-) -> None:
-    body = {
-        "name": "Updated Name",
-    }
-    response = await admin_client.put(f"/api/v1/sources/{sample_source.id}", json=body)
-    assert response.status_code == 200
-    data = response.json()
-    assert data["name"] == "Updated Name"
-
-
-async def test_update_source_not_found(
-    admin_client: AsyncClient,
-) -> None:
-    response = await admin_client.put("/api/v1/sources/999", json={"name": "x"})
-    assert response.status_code == 404
 
 
 async def test_delete_source(

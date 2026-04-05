@@ -1,7 +1,6 @@
-"""Tests for /api/v1/news router endpoints."""
+"""Tests for /api/v1/articles router endpoints."""
 
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import AsyncClient
@@ -38,11 +37,12 @@ async def _create_analysis(
     session: AsyncSession,
     article: NewsArticle,
     impact_level: ImpactLevel = ImpactLevel.HIGH,
+    translated_title: str = "テスト記事",
 ) -> ArticleAnalysis:
     """Helper to create an analysis result."""
     analysis = ArticleAnalysis(
         news_article_id=article.id,
-        translated_title="テスト記事",
+        translated_title=translated_title,
         summary="テストの要約",
         impact_level=impact_level,
         reasoning="Test reasoning",
@@ -55,9 +55,9 @@ async def _create_analysis(
 
 
 @pytest.mark.asyncio
-class TestListNews:
+class TestListArticles:
     async def test_empty_list(self, client: AsyncClient) -> None:
-        resp = await client.get("/api/v1/news")
+        resp = await client.get("/api/v1/articles")
         assert resp.status_code == 200
         data = resp.json()
         assert data["items"] == []
@@ -65,13 +65,21 @@ class TestListNews:
         assert data["page"] == 1
         assert data["totalPages"] == 0
 
-    async def test_returns_articles(
+    async def test_returns_analyzed_articles(
         self, client: AsyncClient, db_session: AsyncSession, sample_source: NewsSource
     ) -> None:
-        await _create_article(db_session, sample_source, url="https://example.com/1")
-        await _create_article(db_session, sample_source, url="https://example.com/2")
+        a1 = await _create_article(
+            db_session, sample_source, url="https://example.com/1"
+        )
+        await _create_analysis(db_session, a1)
+        a2 = await _create_article(
+            db_session, sample_source, url="https://example.com/2"
+        )
+        await _create_analysis(db_session, a2)
+        # Unanalyzed article should be excluded
+        await _create_article(db_session, sample_source, url="https://example.com/3")
 
-        resp = await client.get("/api/v1/news")
+        resp = await client.get("/api/v1/articles")
         assert resp.status_code == 200
         data = resp.json()
         assert data["total"] == 2
@@ -81,11 +89,12 @@ class TestListNews:
         self, client: AsyncClient, db_session: AsyncSession, sample_source: NewsSource
     ) -> None:
         for i in range(5):
-            await _create_article(
+            article = await _create_article(
                 db_session, sample_source, url=f"https://example.com/{i}"
             )
+            await _create_analysis(db_session, article)
 
-        resp = await client.get("/api/v1/news?page=1&perPage=2")
+        resp = await client.get("/api/v1/articles?page=1&perPage=2")
         data = resp.json()
         assert data["total"] == 5
         assert len(data["items"]) == 2
@@ -103,19 +112,23 @@ class TestListNews:
         article = await _create_article(
             db_session, sample_source, url="https://example.com/kw"
         )
+        await _create_analysis(db_session, article)
         link = ArticleKeyword(news_article_id=article.id, keyword_id=sample_keyword.id)
         db_session.add(link)
         await db_session.commit()
 
-        # Also create an unlinked article
-        await _create_article(
+        # Unlinked + analyzed article
+        other = await _create_article(
             db_session, sample_source, url="https://example.com/other"
         )
+        await _create_analysis(db_session, other)
 
-        resp = await client.get(f"/api/v1/news?keywordId={sample_keyword.id}")
+        resp = await client.get(
+            "/api/v1/articles", params={"keyword": str(sample_keyword.name)}
+        )
         data = resp.json()
         assert data["total"] == 1
-        assert data["items"][0]["originalTitle"] == "Test Article"
+        assert data["items"][0]["translatedTitle"] == "テスト記事"
 
     async def test_filter_by_impact_level(
         self,
@@ -133,7 +146,7 @@ class TestListNews:
         )
         await _create_analysis(db_session, a2, impact_level=ImpactLevel.LOW)
 
-        resp = await client.get("/api/v1/news?impactLevel=high")
+        resp = await client.get("/api/v1/articles?impactLevel=high")
         data = resp.json()
         assert data["total"] == 1
 
@@ -144,37 +157,40 @@ class TestListNews:
         sample_source: NewsSource,
     ) -> None:
         now = datetime.now(UTC)
-        await _create_article(
+        older = await _create_article(
             db_session,
             sample_source,
             title="Older",
             url="https://example.com/old",
             published_at=now - timedelta(days=2),
         )
-        await _create_article(
+        await _create_analysis(db_session, older, translated_title="古い記事")
+        newer = await _create_article(
             db_session,
             sample_source,
             title="Newer",
             url="https://example.com/new",
             published_at=now,
         )
+        await _create_analysis(db_session, newer, translated_title="新しい記事")
 
-        resp = await client.get("/api/v1/news?sortBy=publishedAt&sortOrder=desc")
+        resp = await client.get("/api/v1/articles?sortBy=publishedAt&sortOrder=desc")
         items = resp.json()["items"]
-        assert items[0]["originalTitle"] == "Newer"
-        assert items[1]["originalTitle"] == "Older"
+        assert items[0]["translatedTitle"] == "新しい記事"
+        assert items[1]["translatedTitle"] == "古い記事"
 
-    async def test_filter_by_source_id(
+    async def test_filter_by_source_name(
         self,
         client: AsyncClient,
         db_session: AsyncSession,
         sample_source: NewsSource,
     ) -> None:
-        await _create_article(
+        a1 = await _create_article(
             db_session,
             sample_source,
             url="https://example.com/src1",
         )
+        await _create_analysis(db_session, a1)
         # Create a second source for the unlinked article
         second_source = NewsSource(
             name="Other Source",
@@ -185,22 +201,26 @@ class TestListNews:
         db_session.add(second_source)
         await db_session.commit()
         await db_session.refresh(second_source)
-        await _create_article(db_session, second_source, url="https://example.com/src2")
+        a2 = await _create_article(
+            db_session, second_source, url="https://example.com/src2"
+        )
+        await _create_analysis(db_session, a2)
 
-        resp = await client.get(f"/api/v1/news?sourceId={sample_source.id}")
+        resp = await client.get(f"/api/v1/articles?source={sample_source.name}")
         data = resp.json()
         assert data["total"] == 1
-        assert data["items"][0]["originalUrl"] == "https://example.com/src1"
+        assert data["items"][0]["source"]["name"] == str(sample_source.name)
 
-    async def test_filter_by_source_id_nonexistent(
+    async def test_filter_by_source_name_nonexistent(
         self,
         client: AsyncClient,
         db_session: AsyncSession,
         sample_source: NewsSource,
     ) -> None:
-        await _create_article(db_session, sample_source)
+        a = await _create_article(db_session, sample_source)
+        await _create_analysis(db_session, a)
 
-        resp = await client.get("/api/v1/news?sourceId=99999")
+        resp = await client.get("/api/v1/articles?source=NonExistentSource")
         data = resp.json()
         assert data["total"] == 0
         assert data["items"] == []
@@ -211,19 +231,38 @@ class TestListNews:
         db_session: AsyncSession,
         sample_source: NewsSource,
     ) -> None:
-        await _create_article(db_session, sample_source)
-        resp = await client.get("/api/v1/news")
+        a = await _create_article(db_session, sample_source)
+        await _create_analysis(db_session, a)
+        resp = await client.get("/api/v1/articles")
         data = resp.json()
         assert "totalPages" in data
         assert "perPage" in data
         item = data["items"][0]
-        assert "originalTitle" in item
+        assert "translatedTitle" in item
+        assert "summary" in item
+        assert "impactLevel" in item
         assert "publishedAt" in item
-        assert "createdAt" in item
+
+    async def test_invalid_category_slug_returns_422(self, client: AsyncClient) -> None:
+        """CategorySlug VO rejects values not matching its slug pattern."""
+        resp = await client.get("/api/v1/articles?category=INVALID-slug")
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert isinstance(detail, list)
+        assert detail[0]["loc"] == ["query", "category"]
+        assert "CategorySlug" in detail[0]["msg"]
+
+    async def test_invalid_source_name_returns_422(self, client: AsyncClient) -> None:
+        """SourceName VO rejects values containing disallowed characters."""
+        resp = await client.get("/api/v1/articles?source=<bad>")
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert isinstance(detail, list)
+        assert detail[0]["loc"] == ["query", "source"]
 
 
 @pytest.mark.asyncio
-class TestGetNews:
+class TestGetArticle:
     async def test_get_existing(
         self,
         client: AsyncClient,
@@ -231,12 +270,25 @@ class TestGetNews:
         sample_source: NewsSource,
     ) -> None:
         article = await _create_article(db_session, sample_source)
-        resp = await client.get(f"/api/v1/news/{article.id}")
+        await _create_analysis(db_session, article)
+        resp = await client.get(f"/api/v1/articles/{article.id}")
         assert resp.status_code == 200
-        assert resp.json()["originalTitle"] == "Test Article"
+        data = resp.json()
+        assert data["translatedTitle"] == "テスト記事"
+        assert data["original"]["title"] == "Test Article"
 
     async def test_get_not_found(self, client: AsyncClient) -> None:
-        resp = await client.get("/api/v1/news/99999")
+        resp = await client.get("/api/v1/articles/99999")
+        assert resp.status_code == 404
+
+    async def test_get_unanalyzed_returns_404(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        sample_source: NewsSource,
+    ) -> None:
+        article = await _create_article(db_session, sample_source)
+        resp = await client.get(f"/api/v1/articles/{article.id}")
         assert resp.status_code == 404
 
     async def test_get_with_analysis(
@@ -248,11 +300,13 @@ class TestGetNews:
         article = await _create_article(db_session, sample_source)
         await _create_analysis(db_session, article)
 
-        resp = await client.get(f"/api/v1/news/{article.id}")
+        resp = await client.get(f"/api/v1/articles/{article.id}")
         data = resp.json()
-        assert data["analysis"] is not None
-        assert data["analysis"]["translatedTitle"] == "テスト記事"
-        assert data["analysis"]["impactLevel"] == "high"
+        assert data["translatedTitle"] == "テスト記事"
+        assert data["impactLevel"] == "high"
+        assert data["reasoning"] == "Test reasoning"
+        assert data["original"]["title"] == "Test Article"
+        assert data["original"]["url"] == "https://example.com/article"
 
     async def test_get_with_keywords(
         self,
@@ -262,49 +316,12 @@ class TestGetNews:
         sample_source: NewsSource,
     ) -> None:
         article = await _create_article(db_session, sample_source)
+        await _create_analysis(db_session, article)
         link = ArticleKeyword(news_article_id=article.id, keyword_id=sample_keyword.id)
         db_session.add(link)
         await db_session.commit()
 
-        resp = await client.get(f"/api/v1/news/{article.id}")
+        resp = await client.get(f"/api/v1/articles/{article.id}")
         data = resp.json()
         assert len(data["keywords"]) == 1
         assert data["keywords"][0]["name"] == "Quantum Computing"
-
-
-@pytest.mark.asyncio
-class TestFetchNews:
-    async def test_fetch_returns_202(self, admin_client: AsyncClient) -> None:
-        mock_task_handle = AsyncMock()
-        mock_task_handle.task_id = "test-task-id-123"
-
-        with patch(
-            "app.routers.news.fetch_metadata",
-        ) as mock_task:
-            mock_task.kiq = AsyncMock(return_value=mock_task_handle)
-            resp = await admin_client.post("/api/v1/news/fetch")
-
-        assert resp.status_code == 202
-        data = resp.json()
-        assert data["jobId"] == "test-task-id-123"
-        assert data["message"] == "Fetch task submitted"
-        assert data["sourcesCount"] is None  # all due sources
-        mock_task.kiq.assert_called_once_with(source_ids=None)
-
-    async def test_fetch_with_source_ids(self, admin_client: AsyncClient) -> None:
-        mock_task_handle = AsyncMock()
-        mock_task_handle.task_id = "test-task-id-456"
-
-        with patch(
-            "app.routers.news.fetch_metadata",
-        ) as mock_task:
-            mock_task.kiq = AsyncMock(return_value=mock_task_handle)
-            resp = await admin_client.post(
-                "/api/v1/news/fetch",
-                json={"sourceIds": [1, 2, 3]},
-            )
-
-        assert resp.status_code == 202
-        data = resp.json()
-        assert data["sourcesCount"] == 3
-        mock_task.kiq.assert_called_once_with(source_ids=[1, 2, 3])
