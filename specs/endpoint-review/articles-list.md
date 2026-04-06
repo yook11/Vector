@@ -140,23 +140,47 @@ F2 は個人ユーザーの watchlist が大きい場合に問題になる。`Wa
 3. **`sort_by` パラメータ削除**: `ArticleSortField` enum ごと廃止。`ArticleListParams` から `sort_by` フィールド削除
 4. **セマンティック検索のソート分岐削除**: `is_default_sort` ローカル変数と `if query_embedding is not None and is_default_sort` 分岐を削除。ソート節は1行に圧縮
 
+### SortBy の再導入（キャッシュ設計と同時に確定）
+
+前回の決定で `sort_by` を廃止したが、セマンティック検索の位置づけを再整理した結果、`SortBy` を導入する。
+
+**背景**: セマンティック検索は「高機能な LIKE 検索」であり、トピック類似度フィルタにすぎない。将来的には LLM 推論による因果関係ベースの検索に発展させる構想がある（[semantic-search-evolution.md](../semantic-search-evolution.md)）。現段階ではフィルタとソートの役割分離を維持しつつ、関連度ソートの選択肢を提供する。
+
+```python
+class SortBy(StrEnum):
+    DATE = "date"
+    RELEVANCE = "relevance"
+```
+
+| 条件 | ソート |
+|---|---|
+| q なし（sort_by 問わず） | `published_at {sort_order}, id DESC` |
+| q あり + `sort_by=date` | `published_at {sort_order}, id DESC` |
+| q あり + `sort_by=relevance` | `cosine_distance ASC, published_at DESC, id DESC`（`sort_order` 無視） |
+
+- `sort_by` のデフォルトは `DATE`
+- q なしで `sort_by=relevance` を指定しても 422 にせず、黙って日付順にフォールバック
+- **全ケースで `id DESC` を最終タイブレーカーに入れる** — バッチフェッチで `published_at` が同秒の記事が複数存在しうるため、offset ページネーションの決定性を保証する
+
 ### 派生的に削除されるもの
 
 | 対象 | 場所 | 理由 |
 |---|---|---|
 | `_IMPACT_LEVEL_ORDER` dict | [repositories/articles.py:26-31](backend/app/repositories/articles.py#L26-L31) | `>=` 比較がなくなり参照されなくなる |
 | `_impact_order_expr` CASE 式 | [repositories/articles.py:18-24](backend/app/repositories/articles.py#L18-L24) | `sort_by=impactLevel` 廃止で参照元が消える |
-| `ArticleSortField` enum | [schemas/articles.py:23-25](backend/app/schemas/articles.py#L23-L25) | ソート対象が1軸のみになるので不要 |
-| `is_default_sort` ローカル変数 | [repositories/articles.py:98-101](backend/app/repositories/articles.py#L98-L101) | ソート分岐自体が消える |
+| `ArticleSortField` enum | [schemas/articles.py:23-25](backend/app/schemas/articles.py#L23-L25) | `SortBy(DATE, RELEVANCE)` に置き換え |
+| `is_default_sort` ローカル変数 | [repositories/articles.py:98-101](backend/app/repositories/articles.py#L98-L101) | ソート分岐を書き直す |
 
 ### 最終的なソートコード
 
 ```python
-stmt = stmt.order_by(
-    NewsArticle.published_at.desc()
-    if query.sort_order == SortOrder.DESC
-    else NewsArticle.published_at.asc()
-)
+# q あり + RELEVANCE の場合
+if query_embedding is not None and query.sort_by == SortBy.RELEVANCE:
+    distance_expr = ArticleAnalysis.embedding.cosine_distance(query_embedding)
+    stmt = stmt.order_by(distance_expr.asc(), NewsArticle.published_at.desc(), NewsArticle.id.desc())
+else:
+    order = NewsArticle.published_at.desc() if query.sort_order == SortOrder.DESC else NewsArticle.published_at.asc()
+    stmt = stmt.order_by(order, NewsArticle.id.desc())
 ```
 
 ### 最終的な `ArticleListParams`
@@ -168,11 +192,21 @@ class ArticleListParams(PaginationParams):
     source: Annotated[SourceName | None, Query()] = None
     impact_level: Annotated[ImpactLevel | None, Query(alias="impactLevel")] = None
     q: Annotated[str | None, Query(min_length=1, max_length=500)] = None
+    sort_by: Annotated[SortBy, Query(alias="sortBy")] = SortBy.DATE
     sort_order: Annotated[SortOrder, Query(alias="sortOrder")] = SortOrder.DESC
 ```
 
+### セマンティック検索の将来構想
+
+詳細は [specs/semantic-search-evolution.md](../semantic-search-evolution.md) に記録。
+
+現状の embedding（`original_title + original_content`）はトピック類似度しか捉えられない。段階的な改善パスとして:
+1. `reasoning` を embedding 対象に含める（低コスト、因果的な記述を活用）
+2. エンティティグラフ（企業・政策・技術の関係構造）
+3. LLM re-ranking（候補を絞ってから LLM で因果判定）
+
 ### 他レイヤーへの波及（実装時に対応が必要）
 
-- **フロントエンド**: `sortBy` を送信/参照している箇所の削除。ソートフィールド選択 UI があれば削除。`/gen-types` で型再生成
-- **バックエンドテスト**: `test_sort_by_published_at_desc` の `?sortBy=publishedAt` 指定を削除（削除されたパラメータのため 422 になる）。`impact_level` 完全一致挙動のテストを1本追加（medium 指定で high/critical が返らないことを保証）
+- **フロントエンド**: `sortBy` パラメータの値を `publishedAt` / `impactLevel` から `date` / `relevance` に変更。`/gen-types` で型再生成
+- **バックエンドテスト**: `impact_level` 完全一致挙動のテストを1本追加（medium 指定で high/critical が返らないことを保証）。`sort_by=relevance` + `q` の組み合わせテスト追加
 - **articles-detail / articles-similar のレビュー時**: `_impact_order_expr` / `ArticleSortField` が他のエンドポイントから参照されていないことを確認する（現状は article list のみで使用されているはず）

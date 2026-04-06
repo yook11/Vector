@@ -270,6 +270,67 @@ class TestListArticles:
         assert "impactLevel" in item
         assert "publishedAt" in item
 
+    async def test_date_sort_tiebreaker_uses_id_desc(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        sample_source: NewsSource,
+    ) -> None:
+        """When published_at is identical, articles are ordered by id DESC."""
+        same_time = datetime(2025, 1, 1, tzinfo=UTC)
+        a1 = await _create_article(
+            db_session,
+            sample_source,
+            title="First",
+            url="https://example.com/tie1",
+            published_at=same_time,
+        )
+        await _create_analysis(db_session, a1, translated_title="先の記事")
+        a2 = await _create_article(
+            db_session,
+            sample_source,
+            title="Second",
+            url="https://example.com/tie2",
+            published_at=same_time,
+        )
+        await _create_analysis(db_session, a2, translated_title="後の記事")
+
+        resp = await client.get("/api/v1/articles")
+        items = resp.json()["items"]
+        assert items[0]["translatedTitle"] == "後の記事"
+        assert items[1]["translatedTitle"] == "先の記事"
+
+    async def test_sort_by_relevance_without_q_falls_back_to_date(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        sample_source: NewsSource,
+    ) -> None:
+        """sortBy=relevance without q silently falls back to date order."""
+        now = datetime.now(UTC)
+        older = await _create_article(
+            db_session,
+            sample_source,
+            title="Older",
+            url="https://example.com/fb1",
+            published_at=now - timedelta(days=1),
+        )
+        await _create_analysis(db_session, older, translated_title="古い記事")
+        newer = await _create_article(
+            db_session,
+            sample_source,
+            title="Newer",
+            url="https://example.com/fb2",
+            published_at=now,
+        )
+        await _create_analysis(db_session, newer, translated_title="新しい記事")
+
+        resp = await client.get("/api/v1/articles?sortBy=relevance")
+        assert resp.status_code == 200
+        items = resp.json()["items"]
+        assert items[0]["translatedTitle"] == "新しい記事"
+        assert items[1]["translatedTitle"] == "古い記事"
+
     async def test_invalid_category_slug_returns_422(self, client: AsyncClient) -> None:
         """CategorySlug VO rejects values not matching its slug pattern."""
         resp = await client.get("/api/v1/articles?category=INVALID-slug")

@@ -33,10 +33,7 @@ def build_brief(
         translated_title=a.translated_title,
         summary=a.summary,
         impact_level=a.impact_level,
-        source=NewsSourceEmbed(
-            id=article.news_source.id,
-            name=article.news_source.name,
-        ),
+        source=NewsSourceEmbed(name=article.news_source.name),
         published_at=article.published_at,
         keywords=build_keyword_embeds(article),
         is_watched=article.id in watched_ids if watched_ids else False,
@@ -55,10 +52,7 @@ def build_detail(
         impact_level=a.impact_level,
         reasoning=a.reasoning,
         analyzed_at=a.analyzed_at,
-        source=NewsSourceEmbed(
-            id=article.news_source.id,
-            name=article.news_source.name,
-        ),
+        source=NewsSourceEmbed(name=article.news_source.name),
         published_at=article.published_at,
         keywords=build_keyword_embeds(article),
         is_watched=article.id in watched_ids if watched_ids else False,
