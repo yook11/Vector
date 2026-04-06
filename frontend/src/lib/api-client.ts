@@ -10,6 +10,7 @@ import type {
   FetchResponse,
   NewsSourceDetailList,
   PaginatedArticleResponse,
+  SemanticSearchQuery,
 } from "@/types";
 
 const INTERNAL_API_URL =
@@ -75,6 +76,20 @@ export async function getArticles(
   return fetchApi<PaginatedArticleResponse>(`/articles${qs ? `?${qs}` : ""}`, {
     cache: "no-store",
   });
+}
+
+/** Search articles by semantic similarity. */
+export async function searchArticles(
+  query: SemanticSearchQuery,
+): Promise<PaginatedArticleResponse> {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (value !== undefined) params.set(key, String(value));
+  }
+  return fetchApi<PaginatedArticleResponse>(
+    `/articles/search?${params.toString()}`,
+    { cache: "no-store" },
+  );
 }
 
 /** Fetch a single article by ID. */

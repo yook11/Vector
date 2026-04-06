@@ -1,12 +1,9 @@
-"""Read-only queries for analyzed articles."""
+"""Read-only queries for articles (listing, detail, similar, watchlist)."""
 
-from typing import Any
-
-from sqlalchemy import ColumnElement, Select, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.config import settings
 from app.models.article_analysis import ArticleAnalysis
 from app.models.article_keyword import ArticleKeyword
 from app.models.category import Category
@@ -14,7 +11,7 @@ from app.models.keyword import Keyword
 from app.models.news_article import NewsArticle
 from app.models.news_source import NewsSource
 from app.models.watchlist_entry import WatchlistEntry
-from app.schemas.articles import ArticleListParams, SortBy, SortOrder
+from app.schemas.articles import ArticleListParams, SortOrder
 
 
 def article_eager_options() -> list:
@@ -30,50 +27,20 @@ class ArticleRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
-    # -- public ---------------------------------------------------------
+    # -- public: listing ------------------------------------------------
 
-    async def fetch_analyzed_list(
+    async def fetch_articles(
         self,
         query: ArticleListParams,
-        query_embedding: list[float] | None = None,
     ) -> tuple[list[NewsArticle], int]:
-        """Fetch paginated analyzed articles with filters and sorting.
-
-        Returns (articles, total_count).
-        """
-        stmt, distance_expr = self._build_filtered_query(query, query_embedding)
-        total = await self._count(stmt)
-        stmt = self._apply_sort(stmt, query.sort_by, query.sort_order, distance_expr)
-        stmt = self._apply_pagination(stmt, query.page, query.per_page)
-
-        result = await self.session.execute(stmt)
-        articles = list(result.unique().scalars().all())
-        return articles, total
-
-    # -- private --------------------------------------------------------
-
-    def _build_filtered_query(
-        self,
-        query: ArticleListParams,
-        query_embedding: list[float] | None,
-    ) -> tuple[Select[Any], ColumnElement[float] | None]:
-        """Build base query with all filters applied.
-
-        Returns (statement, distance_expr). distance_expr is None when
-        no semantic search is active.
-        """
+        """Fetch paginated article list for news browsing."""
         stmt = (
             select(NewsArticle)
             .join(ArticleAnalysis, ArticleAnalysis.news_article_id == NewsArticle.id)
             .options(*article_eager_options())
         )
 
-        distance_expr: ColumnElement[float] | None = None
-        if query_embedding is not None:
-            stmt = stmt.where(ArticleAnalysis.embedding.is_not(None))
-            distance_expr = ArticleAnalysis.embedding.cosine_distance(query_embedding)
-            stmt = stmt.where(distance_expr < settings.semantic_search_max_distance)
-
+        # Filters
         if query.source is not None:
             source_ids = select(NewsSource.id).where(NewsSource.name == query.source)
             stmt = stmt.where(NewsArticle.news_source_id.in_(source_ids))
@@ -96,36 +63,24 @@ class ArticleRepository:
         if query.impact_level is not None:
             stmt = stmt.where(ArticleAnalysis.impact_level == query.impact_level)
 
-        return stmt, distance_expr
+        # Count
+        count_stmt = select(func.count()).select_from(stmt.subquery())
+        total = (await self.session.execute(count_stmt)).scalar_one()
 
-    @staticmethod
-    def _apply_sort(
-        stmt: Select[Any],
-        sort_by: SortBy,
-        sort_order: SortOrder,
-        distance_expr: ColumnElement[float] | None,
-    ) -> Select[Any]:
-        if distance_expr is not None and sort_by == SortBy.RELEVANCE:
-            return stmt.order_by(
-                distance_expr.asc(),
-                NewsArticle.published_at.desc(),
-                NewsArticle.id.desc(),
-            )
+        # Sort
         order = (
             NewsArticle.published_at.desc()
-            if sort_order == SortOrder.DESC
+            if query.sort_order == SortOrder.DESC
             else NewsArticle.published_at.asc()
         )
-        return stmt.order_by(order, NewsArticle.id.desc())
+        stmt = stmt.order_by(order, NewsArticle.id.desc())
 
-    @staticmethod
-    def _apply_pagination(stmt: Select[Any], page: int, per_page: int) -> Select[Any]:
-        offset = (page - 1) * per_page
-        return stmt.offset(offset).limit(per_page)
+        # Paginate
+        offset = (query.page - 1) * query.per_page
+        stmt = stmt.offset(offset).limit(query.per_page)
 
-    async def _count(self, stmt: Select[Any]) -> int:
-        count_stmt = select(func.count()).select_from(stmt.subquery())
-        return (await self.session.execute(count_stmt)).scalar_one()
+        result = await self.session.execute(stmt)
+        return list(result.unique().scalars().all()), total
 
     async def fetch_one_analyzed(self, news_id: int) -> NewsArticle | None:
         """Fetch a single article with analysis eager-loaded.

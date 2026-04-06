@@ -67,8 +67,30 @@ F2 は個人ユーザーの watchlist が大きい場合に問題になる。`Wa
 | # | 問題 | 場所 |
 |---|---|---|
 | F4 | **`NewsSourceEmbed(id=..., name=...)` と書いているが `NewsSourceEmbed` に `id` フィールドはない** — Pydantic v2 のデフォルト `extra="ignore"` で `id` 引数は黙って捨てられている。死コード | [services/articles.py:37-39](backend/app/services/articles.py#L37-L39), [services/articles.py:58-61](backend/app/services/articles.py#L58-L61) |
+| F9 | **`fetch_analyzed_list` が通常一覧とセマンティック検索を1メソッドで処理している** — 根本的に異なるデータ取得パターンが同一メソッドに混在。詳細は下記 | [repositories/articles.py:35-51](backend/app/repositories/articles.py#L35-L51) |
 
-これはスキーマから `id` を抜いた時に Service 層の呼び出し側が取り残されたもの。挙動は正しい（黙って捨てられる）が、読んだ人を混乱させる。
+F4 はスキーマから `id` を抜いた時に Service 層の呼び出し側が取り残されたもの。挙動は正しい（黙って捨てられる）が、読んだ人を混乱させる。
+
+#### F9: 通常一覧とセマンティック検索の混在（構造的問題）
+
+**問題の本質**: 通常の記事一覧とセマンティック検索は、データの取り方自体が異なる操作である。
+
+| | 通常一覧 | セマンティック検索 |
+|---|---|---|
+| 入口 | DB から条件に合う記事を取得 | クエリをベクトル化 → 全記事とベクトル比較 → 閾値で足切り |
+| フィルタ | source / keyword / category / impact_level | 上記 + cosine distance < threshold |
+| ソート | 常に `published_at` | `sort_by` に応じて distance or `published_at` |
+| `sort_by` の意味 | **無意味**（RELEVANCE を指定しても distance がない） | 有意味（DATE or RELEVANCE を選択） |
+
+にもかかわらず、現在の `fetch_analyzed_list` は `query_embedding: list[float] | None` で分岐し、1メソッドで両方を処理している。
+
+**構造的な兆候**:
+
+1. `_build_filtered_query` が `tuple[Select, ColumnElement[float] | None]` を返す — `distance_expr` の Optional が `_apply_sort` まで伝搬する
+2. `_apply_sort` が `distance_expr is not None and sort_by == RELEVANCE` で条件分岐 — None チェックのリレー
+3. Service 層は `query.q is not None` で embedding を取得するかどうかを判断しているのに、その判断結果を Repository に `Optional` として渡し、Repository 側でもう一度同じ分岐をしている
+
+**対処方針**: エンドポイント・Service・Repository・Schema の全層で分離する（詳細は「決定事項: エンドポイント分離」を参照）
 
 ### 6. 異常系・境界条件
 
@@ -95,9 +117,10 @@ F2 は個人ユーザーの watchlist が大きい場合に問題になる。`Wa
 
 | # | 論点 | 深刻度 | 対処方針 |
 |---|---|---|---|
+| F9 | `fetch_analyzed_list` が通常一覧とセマンティック検索を混在処理 | **blocker** | 全層分離: エンドポイント (`/articles` + `/articles/search`) / Service (`ArticleService` + `ArticleSearchService`) / Repository (`fetch_articles` + `search_articles`) / Schema (`ArticleListParams` + `ArticleSearchParams`)。詳細は「決定事項: エンドポイント分離」 |
+| F5 | q + 明示ソートが静かに distance ソートに上書きされる | **resolved** | F9 のエンドポイント分離で解消。検索エンドポイントでは `q` 必須・`sort_by` が有効。一覧エンドポイントには `q` も `sort_by` も存在しない |
 | F4 | `NewsSourceEmbed(id=...)` 死コード | should-fix | `id=...` を削除（2箇所） |
 | F1 | `Keyword.category` の無駄な eager load | should-fix | `.selectinload(Keyword.category)` を削除 |
-| F5 | q + 明示ソートが静かに distance ソートに上書きされる | **resolved** | `q` を純粋フィルタ化し、ソートは常に `published_at` に固定。`sort_by` パラメータごと削除。詳細は「決定事項」 |
 | F6 | keyword + category 同時指定で category 無視 | discuss | (A) 両方 AND で適用 / (B) 422 で拒否 / (C) 現状維持 + ドキュメント化。フロント側のサイドバー実装を見ると keyword が選ばれたら category も同じものが自動でセットされる運用なので、現状維持が無難か |
 | F7 | impact_level の ">=" 挙動 | **resolved** | (B) 完全一致に変更。`_IMPACT_LEVEL_ORDER` dict は削除 |
 | F2 | watchlist 全件ロード | nice-to-have | 当面保留。watchlist が実際に大きくなったら対処 |
@@ -109,42 +132,84 @@ F2 は個人ユーザーの watchlist が大きい場合に問題になる。`Wa
 
 ## 決定事項
 
-### 設計方針: フィルタとソートの役割を明確に分離
+### 決定1: impact_level を完全一致に変更
 
-**フィルタ（対象集合を絞る）** — すべて同じ役割として扱う
+旧: `>=`（"以上"）→ 新: `==`（完全一致）。`_IMPACT_LEVEL_ORDER` dict と `_impact_order_expr` CASE 式は削除。
 
-| パラメータ | 挙動 |
-|---|---|
-| `category` | カテゴリ slug で絞る |
-| `keyword` | キーワード名で絞る |
-| `source` | ソース名で絞る |
-| `impact_level` | **完全一致** で絞る (旧: `>=` "以上") |
-| `q` | 意味的類似度がしきい値以下のものだけ残す。**純粋にフィルタ。並び順には一切関与しない** |
+### 決定2: エンドポイント分離 — 記事一覧とセマンティック検索
 
-**ソート（並び順を決める）** — 選択肢は1軸のみ
+#### 背景と判断根拠
 
-- 常に `NewsArticle.published_at`
-- `sort_order` で新しい順 / 古い順を切り替え
-- デフォルト: 新しい順 (`DESC`)
+通常の記事一覧とセマンティック検索は**根本的に異なる操作**である（F9 参照）。さらに:
 
-### なぜ `q` をフィルタとして扱うか
+- セマンティック検索は将来、LLM 推論による因果関係ベースの検索に発展させることが確定している（[semantic-search-evolution.md](../semantic-search-evolution.md)）
+- `sort_by=relevance` は検索時にのみ意味があり、一覧では無意味（F5）
+- 1つのエンドポイントに `q` の有無で分岐するロジックを詰め込むと、Router・Service・Repository の全層で Optional の伝搬と条件分岐が発生する
 
-`q` が効く場面で「類似度順」と「日付順」のどちらも正当なユースケース（例: 「AI チップの最新ニュース」）だが、ニュースプラットフォームの性質上、**関連性の担保はしきい値で十分** で、**「このトピックの新しい記事を見たい」が主要ユースケース**。
+**判断: 別の操作なら、全層で分ける。**
 
-ソートモード切り替え（relevance vs publishedAt）を導入すると API が複雑化する割に、ユーザーが意識するメンタルモデルは「キーワードで絞って、新着順で見る」の一つで十分。シンプルさを優先。
+#### エンドポイント設計
 
-### 具体的な変更（[backend/app/repositories/articles.py](backend/app/repositories/articles.py) 中心）
+| Method | Path | 用途 | Service |
+|---|---|---|---|
+| GET | `/api/v1/articles` | 記事一覧（フィルタ + 日付ソート） | `ArticleService` |
+| GET | `/api/v1/articles/search` | セマンティック検索（`q` 必須） | `ArticleSearchService` |
+| GET | `/api/v1/articles/{id}` | 記事詳細 | `ArticleService` |
+| GET | `/api/v1/articles/{id}/similar` | 類似記事 | `ArticleService` |
 
-1. **import 整理**: `from sqlmodel import func, select` → `from sqlalchemy import case, func, select` に統合
-2. **impact_level を完全一致に**: `_impact_order_expr >= min_order` → `ArticleAnalysis.impact_level == query.impact_level`
-3. **`sort_by` パラメータ削除**: `ArticleSortField` enum ごと廃止。`ArticleListParams` から `sort_by` フィールド削除
-4. **セマンティック検索のソート分岐削除**: `is_default_sort` ローカル変数と `if query_embedding is not None and is_default_sort` 分岐を削除。ソート節は1行に圧縮
+**`similar` は `ArticleService` に残す。** セマンティック検索（ユーザーのテキスト入力 → ベクトル化 → 探索）と類似記事（既存記事の embedding → ナビゲーション）は、cosine distance を使う点は同じだが**ドメイン上の操作が異なる**:
 
-### SortBy の再導入（キャッシュ設計と同時に確定）
+| | セマンティック検索 | 類似記事 |
+|---|---|---|
+| 入力 | ユーザーが入力したテキスト | 既存の記事 |
+| ベクトルの出所 | テキストをその場で embed | 記事の既存 embedding |
+| 操作の意味 | **探索** — 「このトピックの記事を探す」 | **ナビゲーション** — 「この記事に近い記事を見る」 |
 
-前回の決定で `sort_by` を廃止したが、セマンティック検索の位置づけを再整理した結果、`SortBy` を導入する。
+#### 全層の対応関係
 
-**背景**: セマンティック検索は「高機能な LIKE 検索」であり、トピック類似度フィルタにすぎない。将来的には LLM 推論による因果関係ベースの検索に発展させる構想がある（[semantic-search-evolution.md](../semantic-search-evolution.md)）。現段階ではフィルタとソートの役割分離を維持しつつ、関連度ソートの選択肢を提供する。
+```
+Router                    Service                    Repository
+─────────────────────     ───────────────────────     ─────────────────────
+articles.py               ArticleService              ArticleRepository
+  GET /articles             list_articles()              fetch_articles()
+  GET /articles/{id}        get_article()                fetch_one_analyzed()
+  GET /articles/{id}/similar get_similar()               fetch_similar()
+
+article_search.py         ArticleSearchService        ArticleRepository (共有)
+  GET /articles/search      search()                     search_articles()
+```
+
+Repository は1ファイルのまま。メソッド名で一覧（`fetch_articles`）と検索（`search_articles`）を区別する。共通処理（`_base_query`, `_apply_content_filters`, `_apply_pagination`, `_count`）はプライベートメソッドで共有。
+
+#### Schema 分離
+
+```python
+# 一覧用: q なし、sort_by なし
+class ArticleListParams(PaginationParams):
+    keyword: Annotated[KeywordName | None, Query()] = None
+    category: Annotated[CategorySlug | None, Query()] = None
+    source: Annotated[SourceName | None, Query()] = None
+    impact_level: Annotated[ImpactLevel | None, Query(alias="impactLevel")] = None
+    sort_order: Annotated[SortOrder, Query(alias="sortOrder")] = SortOrder.DESC
+
+# 検索用: q 必須、sort_by あり
+class ArticleSearchParams(PaginationParams):
+    q: Annotated[str, Query(min_length=1, max_length=500)]
+    sort_by: Annotated[SortBy, Query(alias="sortBy")] = SortBy.RELEVANCE
+    keyword: Annotated[KeywordName | None, Query()] = None
+    category: Annotated[CategorySlug | None, Query()] = None
+    source: Annotated[SourceName | None, Query()] = None
+    impact_level: Annotated[ImpactLevel | None, Query(alias="impactLevel")] = None
+    sort_order: Annotated[SortOrder, Query(alias="sortOrder")] = SortOrder.DESC
+```
+
+型レベルで保証されること:
+- 一覧に `q` は存在しない → セマンティック検索のコードパスに入りようがない
+- 検索で `q` は必須 → `None` チェック不要
+- `sort_by` は検索専用 → 一覧で `relevance` が指定される問題が消滅（F5 解消）
+- `SortBy` のデフォルトは `RELEVANCE`（検索なら関連度順が自然）
+
+`SortBy` enum は維持:
 
 ```python
 class SortBy(StrEnum):
@@ -152,61 +217,27 @@ class SortBy(StrEnum):
     RELEVANCE = "relevance"
 ```
 
-| 条件 | ソート |
-|---|---|
-| q なし（sort_by 問わず） | `published_at {sort_order}, id DESC` |
-| q あり + `sort_by=date` | `published_at {sort_order}, id DESC` |
-| q あり + `sort_by=relevance` | `cosine_distance ASC, published_at DESC, id DESC`（`sort_order` 無視） |
+#### ソート規則
 
-- `sort_by` のデフォルトは `DATE`
-- q なしで `sort_by=relevance` を指定しても 422 にせず、黙って日付順にフォールバック
-- **全ケースで `id DESC` を最終タイブレーカーに入れる** — バッチフェッチで `published_at` が同秒の記事が複数存在しうるため、offset ページネーションの決定性を保証する
-
-### 派生的に削除されるもの
-
-| 対象 | 場所 | 理由 |
+| エンドポイント | 条件 | ソート |
 |---|---|---|
-| `_IMPACT_LEVEL_ORDER` dict | [repositories/articles.py:26-31](backend/app/repositories/articles.py#L26-L31) | `>=` 比較がなくなり参照されなくなる |
-| `_impact_order_expr` CASE 式 | [repositories/articles.py:18-24](backend/app/repositories/articles.py#L18-L24) | `sort_by=impactLevel` 廃止で参照元が消える |
-| `ArticleSortField` enum | [schemas/articles.py:23-25](backend/app/schemas/articles.py#L23-L25) | `SortBy(DATE, RELEVANCE)` に置き換え |
-| `is_default_sort` ローカル変数 | [repositories/articles.py:98-101](backend/app/repositories/articles.py#L98-L101) | ソート分岐を書き直す |
+| `/articles` | — | `published_at {sort_order}, id DESC` |
+| `/articles/search` | `sort_by=relevance` | `cosine_distance ASC, published_at DESC, id DESC` |
+| `/articles/search` | `sort_by=date` | `published_at {sort_order}, id DESC` |
 
-### 最終的なソートコード
-
-```python
-# q あり + RELEVANCE の場合
-if query_embedding is not None and query.sort_by == SortBy.RELEVANCE:
-    distance_expr = ArticleAnalysis.embedding.cosine_distance(query_embedding)
-    stmt = stmt.order_by(distance_expr.asc(), NewsArticle.published_at.desc(), NewsArticle.id.desc())
-else:
-    order = NewsArticle.published_at.desc() if query.sort_order == SortOrder.DESC else NewsArticle.published_at.asc()
-    stmt = stmt.order_by(order, NewsArticle.id.desc())
-```
-
-### 最終的な `ArticleListParams`
-
-```python
-class ArticleListParams(PaginationParams):
-    keyword: Annotated[KeywordName | None, Query()] = None
-    category: Annotated[CategorySlug | None, Query()] = None
-    source: Annotated[SourceName | None, Query()] = None
-    impact_level: Annotated[ImpactLevel | None, Query(alias="impactLevel")] = None
-    q: Annotated[str | None, Query(min_length=1, max_length=500)] = None
-    sort_by: Annotated[SortBy, Query(alias="sortBy")] = SortBy.DATE
-    sort_order: Annotated[SortOrder, Query(alias="sortOrder")] = SortOrder.DESC
-```
+全ケースで `id DESC` を最終タイブレーカーに入れる（offset ページネーションの決定性保証）。
 
 ### セマンティック検索の将来構想
 
-詳細は [specs/semantic-search-evolution.md](../semantic-search-evolution.md) に記録。
+詳細は [semantic-search-evolution.md](../semantic-search-evolution.md) に記録。
 
-現状の embedding（`original_title + original_content`）はトピック類似度しか捉えられない。段階的な改善パスとして:
+現状の embedding（`original_title + original_content`）はトピック類似度しか捉えられない。因果関係ベースの検索への発展が確定しており、`ArticleSearchService` への集約はその準備でもある。段階的な改善パス:
 1. `reasoning` を embedding 対象に含める（低コスト、因果的な記述を活用）
 2. エンティティグラフ（企業・政策・技術の関係構造）
 3. LLM re-ranking（候補を絞ってから LLM で因果判定）
 
 ### 他レイヤーへの波及（実装時に対応が必要）
 
-- **フロントエンド**: `sortBy` パラメータの値を `publishedAt` / `impactLevel` から `date` / `relevance` に変更。`/gen-types` で型再生成
-- **バックエンドテスト**: `impact_level` 完全一致挙動のテストを1本追加（medium 指定で high/critical が返らないことを保証）。`sort_by=relevance` + `q` の組み合わせテスト追加
-- **articles-detail / articles-similar のレビュー時**: `_impact_order_expr` / `ArticleSortField` が他のエンドポイントから参照されていないことを確認する（現状は article list のみで使用されているはず）
+- **フロントエンド**: `GET /api/v1/articles?q=...` → `GET /api/v1/articles/search?q=...` に変更（**破壊的変更**）。`/gen-types` で型再生成
+- **バックエンドテスト**: 検索エンドポイントのテストを新規作成（`embed_search_query` を mock）。一覧テストから `q` 関連を除去。`impact_level` 完全一致挙動のテスト追加
+- **articles-detail / articles-similar のレビュー時**: `similar` は `ArticleService` に残す方針を前提にレビューする

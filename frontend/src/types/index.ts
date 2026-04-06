@@ -13,9 +13,21 @@ import type { components } from "./generated";
 /** Impact levels for news analysis. */
 export type ImpactLevel = "low" | "medium" | "high" | "critical";
 
-/** Query parameters for GET /articles (client-side helper). */
+/** Query parameters for GET /articles (article listing). */
 export interface ArticleQuery {
-  q?: string;
+  keyword?: string;
+  category?: string;
+  impactLevel?: ImpactLevel;
+  source?: string;
+  sortOrder?: "asc" | "desc";
+  page?: number;
+  perPage?: number;
+}
+
+/** Query parameters for GET /articles/search (semantic search). */
+export interface SemanticSearchQuery {
+  q: string;
+  sortBy?: "date" | "relevance";
   keyword?: string;
   category?: string;
   impactLevel?: ImpactLevel;

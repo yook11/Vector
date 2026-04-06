@@ -12,7 +12,6 @@ from app.schemas.articles import (
     PaginatedArticleResponse,
 )
 from app.schemas.embeds import KeywordEmbed, NewsSourceEmbed, OriginalArticleEmbed
-from app.services.embedding import embed_search_query
 
 
 def build_keyword_embeds(article: NewsArticle) -> list[KeywordEmbed]:
@@ -73,12 +72,8 @@ class ArticleService:
         query: ArticleListParams,
         user_id: int | None,
     ) -> PaginatedArticleResponse:
-        """List analyzed articles with optional semantic search."""
-        query_embedding: list[float] | None = None
-        if query.q is not None:
-            query_embedding = await embed_search_query(query.q)
-
-        articles, total = await self.repo.fetch_analyzed_list(query, query_embedding)
+        """List analyzed articles for news browsing."""
+        articles, total = await self.repo.fetch_articles(query)
 
         watched_ids = await self.repo.get_watched_ids(user_id) if user_id else set()
 
