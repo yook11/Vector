@@ -1,6 +1,6 @@
 """Read-only queries for articles (listing, detail, similar, watchlist)."""
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -98,34 +98,32 @@ class ArticleRepository:
             return None
         return article
 
-    async def get_analysis(self, news_id: int) -> ArticleAnalysis | None:
-        """Get analysis for a given article (for similar-article lookup)."""
-        stmt = select(ArticleAnalysis).where(ArticleAnalysis.news_article_id == news_id)
-        result = await self.session.execute(stmt)
-        return result.scalar_one_or_none()
+    async def fetch_similar_to(self, news_id: int, limit: int) -> list[NewsArticle]:
+        """Fetch articles similar to the given article, ordered by cosine distance.
 
-    async def article_exists(self, news_id: int) -> bool:
-        """Check whether an article exists."""
-        stmt = select(NewsArticle.id).where(NewsArticle.id == news_id)
-        result = await self.session.execute(stmt)
-        return result.scalar_one_or_none() is not None
+        Returns an empty list when the article does not exist or has no embedding.
+        """
+        source_embedding = (
+            select(ArticleAnalysis.embedding)
+            .where(
+                ArticleAnalysis.news_article_id == news_id,
+                ArticleAnalysis.embedding.is_not(None),
+            )
+            .cte("source_embedding")
+        )
 
-    async def fetch_similar(
-        self,
-        embedding: list[float],
-        exclude_id: int,
-        limit: int,
-    ) -> list[NewsArticle]:
-        """Fetch articles similar to the given embedding, ordered by cosine distance."""
         stmt = (
             select(NewsArticle)
             .join(ArticleAnalysis, ArticleAnalysis.news_article_id == NewsArticle.id)
+            .join(source_embedding, true())
             .options(*article_eager_options())
             .where(
-                NewsArticle.id != exclude_id,
+                NewsArticle.id != news_id,
                 ArticleAnalysis.embedding.is_not(None),
             )
-            .order_by(ArticleAnalysis.embedding.cosine_distance(embedding))
+            .order_by(
+                ArticleAnalysis.embedding.cosine_distance(source_embedding.c.embedding)
+            )
             .limit(limit)
         )
         result = await self.session.execute(stmt)

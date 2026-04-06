@@ -94,17 +94,6 @@ class ArticleService:
         return build_detail(article, watched_ids)
 
     async def get_similar(self, news_id: int, limit: int) -> list[ArticleBrief]:
-        """Find semantically similar articles.
-
-        Returns empty list if article has no embedding.
-        Raises NotFoundError if article does not exist.
-        """
-        analysis = await self.repo.get_analysis(news_id)
-
-        if analysis is None or analysis.embedding is None:
-            if not await self.repo.article_exists(news_id):
-                raise NotFoundError("News article not found")
-            return []
-
-        articles = await self.repo.fetch_similar(analysis.embedding, news_id, limit)
+        """Find semantically similar articles."""
+        articles = await self.repo.fetch_similar_to(news_id, limit)
         return [build_brief(a) for a in articles]

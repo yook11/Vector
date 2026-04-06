@@ -38,6 +38,7 @@ async def _create_analysis(
     article: NewsArticle,
     impact_level: ImpactLevel = ImpactLevel.HIGH,
     translated_title: str = "テスト記事",
+    embedding: list[float] | None = None,
 ) -> ArticleAnalysis:
     """Helper to create an analysis result."""
     analysis = ArticleAnalysis(
@@ -47,6 +48,7 @@ async def _create_analysis(
         impact_level=impact_level,
         reasoning="Test reasoning",
         ai_model="gemini-2.0-flash",
+        embedding=embedding,
     )
     session.add(analysis)
     await session.commit()
@@ -382,3 +384,120 @@ class TestGetArticle:
         data = resp.json()
         assert len(data["keywords"]) == 1
         assert data["keywords"][0]["name"] == "Quantum Computing"
+
+
+# Dimension must match Vector(768) in the model.
+_DIM = 768
+
+
+def _make_embedding(base: float) -> list[float]:
+    """Create a 768-dim embedding filled with a constant value, then normalized."""
+    vec = [base] * _DIM
+    norm = (base**2 * _DIM) ** 0.5
+    return [v / norm for v in vec]
+
+
+# Two close embeddings and one distant.
+EMBEDDING_A = _make_embedding(1.0)
+EMBEDDING_B = _make_embedding(0.95)
+EMBEDDING_FAR = _make_embedding(-1.0)
+
+
+@pytest.mark.asyncio
+class TestSimilarArticles:
+    async def test_nonexistent_article_returns_empty_list(
+        self, client: AsyncClient
+    ) -> None:
+        resp = await client.get("/api/v1/articles/99999/similar")
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    async def test_article_without_embedding_returns_empty_list(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        sample_source: NewsSource,
+    ) -> None:
+        article = await _create_article(db_session, sample_source)
+        await _create_analysis(db_session, article)
+
+        resp = await client.get(f"/api/v1/articles/{article.id}/similar")
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    async def test_returns_similar_articles_ordered_by_distance(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        sample_source: NewsSource,
+    ) -> None:
+        source = await _create_article(
+            db_session, sample_source, url="https://example.com/src"
+        )
+        await _create_analysis(db_session, source, embedding=EMBEDDING_A)
+
+        close = await _create_article(
+            db_session, sample_source, url="https://example.com/close"
+        )
+        await _create_analysis(
+            db_session, close, translated_title="近い記事", embedding=EMBEDDING_B
+        )
+
+        far = await _create_article(
+            db_session, sample_source, url="https://example.com/far"
+        )
+        await _create_analysis(
+            db_session, far, translated_title="遠い記事", embedding=EMBEDDING_FAR
+        )
+
+        resp = await client.get(f"/api/v1/articles/{source.id}/similar")
+        assert resp.status_code == 200
+        items = resp.json()
+        assert len(items) == 2
+        assert items[0]["translatedTitle"] == "近い記事"
+        assert items[1]["translatedTitle"] == "遠い記事"
+
+    async def test_excludes_source_article(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        sample_source: NewsSource,
+    ) -> None:
+        a1 = await _create_article(
+            db_session, sample_source, url="https://example.com/a1"
+        )
+        await _create_analysis(db_session, a1, embedding=EMBEDDING_A)
+
+        a2 = await _create_article(
+            db_session, sample_source, url="https://example.com/a2"
+        )
+        await _create_analysis(db_session, a2, embedding=EMBEDDING_A)
+
+        resp = await client.get(f"/api/v1/articles/{a1.id}/similar")
+        items = resp.json()
+        returned_ids = [item["id"] for item in items]
+        assert a1.id not in returned_ids
+        assert a2.id in returned_ids
+
+    async def test_respects_limit_parameter(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        sample_source: NewsSource,
+    ) -> None:
+        source = await _create_article(
+            db_session, sample_source, url="https://example.com/main"
+        )
+        await _create_analysis(db_session, source, embedding=EMBEDDING_A)
+
+        for i in range(5):
+            art = await _create_article(
+                db_session, sample_source, url=f"https://example.com/s{i}"
+            )
+            await _create_analysis(db_session, art, embedding=EMBEDDING_B)
+
+        resp = await client.get(
+            f"/api/v1/articles/{source.id}/similar", params={"limit": 2}
+        )
+        assert resp.status_code == 200
+        assert len(resp.json()) == 2
