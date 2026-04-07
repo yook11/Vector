@@ -75,8 +75,7 @@ class SemanticSearchRepository:
         stmt = self._apply_sort(stmt, query.sort_by, query.sort_order, distance_expr)
 
         # Paginate
-        offset = (query.page - 1) * query.per_page
-        stmt = stmt.offset(offset).limit(query.per_page)
+        stmt = stmt.offset(query.offset).limit(query.limit)
 
         result = await self.session.execute(stmt)
         return list(result.unique().scalars().all()), total

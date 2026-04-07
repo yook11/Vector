@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import CurrentUser, get_optional_user, get_session
 from app.repositories.articles import ArticleRepository
+from app.repositories.watchlist import WatchlistRepository
 from app.schemas.articles import (
     ArticleBrief,
     ArticleDetail,
@@ -21,7 +22,7 @@ router = APIRouter(prefix="/api/v1/articles", tags=["articles"])
 def get_article_service(
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> ArticleService:
-    return ArticleService(ArticleRepository(session))
+    return ArticleService(ArticleRepository(session), WatchlistRepository(session))
 
 
 @router.get("")

@@ -6,8 +6,8 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import CurrentUser, get_optional_user, get_session
-from app.repositories.articles import ArticleRepository
 from app.repositories.semantic_search import SemanticSearchRepository
+from app.repositories.watchlist import WatchlistRepository
 from app.schemas.articles import PaginatedArticleResponse, SemanticSearchParams
 from app.services.semantic_search import SemanticSearchService
 
@@ -19,7 +19,7 @@ def get_semantic_search_service(
 ) -> SemanticSearchService:
     return SemanticSearchService(
         search_repo=SemanticSearchRepository(session),
-        article_repo=ArticleRepository(session),
+        watchlist_repo=WatchlistRepository(session),
     )
 
 

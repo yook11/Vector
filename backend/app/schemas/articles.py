@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 from fastapi import Query
 from pydantic import field_validator
+
+if TYPE_CHECKING:
+    from app.schemas.base import PaginationParams
 
 from app.domain.category import CategorySlug
 from app.domain.keyword import KeywordName
@@ -113,3 +116,18 @@ class PaginatedArticleResponse(_CamelBase):
     page: int
     per_page: int
     total_pages: int
+
+    @classmethod
+    def create(
+        cls,
+        items: list[ArticleBrief],
+        total: int,
+        pagination: PaginationParams,
+    ) -> PaginatedArticleResponse:
+        return cls(
+            items=items,
+            total=total,
+            page=pagination.page,
+            per_page=pagination.per_page,
+            total_pages=pagination.total_pages(total),
+        )

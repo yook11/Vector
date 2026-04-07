@@ -1,4 +1,4 @@
-"""Read-only queries for articles (listing, detail, similar, watchlist)."""
+"""Read-only queries for articles (listing, detail, similar)."""
 
 from sqlalchemy import func, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,7 +10,6 @@ from app.models.category import Category
 from app.models.keyword import Keyword
 from app.models.news_article import NewsArticle
 from app.models.news_source import NewsSource
-from app.models.watchlist_entry import WatchlistEntry
 from app.schemas.articles import ArticleListParams, SortOrder
 
 
@@ -76,8 +75,7 @@ class ArticleRepository:
         stmt = stmt.order_by(order, NewsArticle.id.desc())
 
         # Paginate
-        offset = (query.page - 1) * query.per_page
-        stmt = stmt.offset(offset).limit(query.per_page)
+        stmt = stmt.offset(query.offset).limit(query.limit)
 
         result = await self.session.execute(stmt)
         return list(result.unique().scalars().all()), total
@@ -128,11 +126,3 @@ class ArticleRepository:
         )
         result = await self.session.execute(stmt)
         return list(result.unique().scalars().all())
-
-    async def get_watched_ids(self, user_id: int) -> set[int]:
-        """Return set of news_article_ids in the user's watchlist."""
-        stmt = select(WatchlistEntry.news_article_id).where(
-            WatchlistEntry.user_id == user_id
-        )
-        result = await self.session.execute(stmt)
-        return set(result.scalars().all())

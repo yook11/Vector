@@ -5,6 +5,7 @@ from app.models.article_analysis import ArticleAnalysis
 from app.models.news_article import NewsArticle
 from app.models.watchlist_entry import WatchlistEntry
 from app.repositories.articles import article_eager_options
+from app.schemas.base import PaginationParams
 
 
 class WatchlistRepository:
@@ -14,8 +15,7 @@ class WatchlistRepository:
     async def fetch_watched_articles(
         self,
         user_id: int,
-        page: int,
-        per_page: int,
+        pagination: PaginationParams,
     ) -> tuple[list[NewsArticle], int]:
         """Fetch paginated watched articles (analyzed only).
 
@@ -37,12 +37,11 @@ class WatchlistRepository:
         count_stmt = select(func.count()).select_from(base.subquery())
         total = (await self.session.execute(count_stmt)).scalar_one()
 
-        offset = (page - 1) * per_page
         stmt = (
             base.options(*article_eager_options())
             .order_by(WatchlistEntry.created_at.desc())
-            .offset(offset)
-            .limit(per_page)
+            .offset(pagination.offset)
+            .limit(pagination.limit)
         )
         result = await self.session.execute(stmt)
         articles = list(result.unique().scalars().all())
@@ -69,6 +68,14 @@ class WatchlistRepository:
         entry = WatchlistEntry(user_id=user_id, news_article_id=news_id)
         self.session.add(entry)
         await self.session.commit()
+
+    async def get_watched_ids(self, user_id: int) -> set[int]:
+        """Return set of news_article_ids in the user's watchlist."""
+        stmt = select(WatchlistEntry.news_article_id).where(
+            WatchlistEntry.user_id == user_id
+        )
+        result = await self.session.execute(stmt)
+        return set(result.scalars().all())
 
     async def remove_entry(self, entry: WatchlistEntry) -> None:
         """Delete an existing watchlist entry."""

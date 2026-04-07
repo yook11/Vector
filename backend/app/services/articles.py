@@ -1,10 +1,9 @@
 """Article reading service — list, detail, similar."""
 
-import math
-
 from app.exceptions import NotFoundError
 from app.models.news_article import NewsArticle
 from app.repositories.articles import ArticleRepository
+from app.repositories.watchlist import WatchlistRepository
 from app.schemas.articles import (
     ArticleBrief,
     ArticleDetail,
@@ -64,8 +63,13 @@ def build_detail(
 
 
 class ArticleService:
-    def __init__(self, repo: ArticleRepository) -> None:
+    def __init__(
+        self,
+        repo: ArticleRepository,
+        watchlist_repo: WatchlistRepository,
+    ) -> None:
         self.repo = repo
+        self.watchlist_repo = watchlist_repo
 
     async def list_articles(
         self,
@@ -75,14 +79,14 @@ class ArticleService:
         """List analyzed articles for news browsing."""
         articles, total = await self.repo.fetch_articles(query)
 
-        watched_ids = await self.repo.get_watched_ids(user_id) if user_id else set()
+        watched_ids = (
+            await self.watchlist_repo.get_watched_ids(user_id) if user_id else set()
+        )
 
-        return PaginatedArticleResponse(
+        return PaginatedArticleResponse.create(
             items=[build_brief(a, watched_ids) for a in articles],
             total=total,
-            page=query.page,
-            per_page=query.per_page,
-            total_pages=math.ceil(total / query.per_page) if total > 0 else 0,
+            pagination=query,
         )
 
     async def get_article(self, news_id: int, user_id: int | None) -> ArticleDetail:
@@ -90,7 +94,9 @@ class ArticleService:
         if article is None:
             raise NotFoundError("News article not found")
 
-        watched_ids = await self.repo.get_watched_ids(user_id) if user_id else set()
+        watched_ids = (
+            await self.watchlist_repo.get_watched_ids(user_id) if user_id else set()
+        )
         return build_detail(article, watched_ids)
 
     async def get_similar(self, news_id: int, limit: int) -> list[ArticleBrief]:

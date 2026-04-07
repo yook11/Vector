@@ -1,3 +1,4 @@
+import math
 from typing import Annotated
 
 from fastapi import Query
@@ -26,3 +27,14 @@ class PaginationParams(BaseModel):
 
     page: Annotated[int, Query(ge=1)] = 1
     per_page: Annotated[int, Query(ge=1, le=100, alias="perPage")] = 20
+
+    @property
+    def offset(self) -> int:
+        return (self.page - 1) * self.per_page
+
+    @property
+    def limit(self) -> int:
+        return self.per_page
+
+    def total_pages(self, total: int) -> int:
+        return math.ceil(total / self.per_page) if total > 0 else 0
