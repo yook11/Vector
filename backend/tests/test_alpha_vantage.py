@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
@@ -59,7 +60,7 @@ async def test_av_fetch_skips_when_no_api_key(
     mock_http = AsyncMock(spec=httpx.AsyncClient)
 
     with patch("app.services.alpha_vantage.settings") as mock_settings:
-        mock_settings.av_api_key = ""
+        mock_settings.av_api_key = SecretStr("")
         mock_settings.av_api_base_url = "https://www.alphavantage.co/query"
 
         client = AlphaVantageClient(mock_http)
@@ -85,7 +86,7 @@ async def test_av_fetch_saves_articles(
     mock_http.get = AsyncMock(return_value=mock_response)
 
     with patch("app.services.alpha_vantage.settings") as mock_settings:
-        mock_settings.av_api_key = "test-key"
+        mock_settings.av_api_key = SecretStr("test-key")
         mock_settings.av_api_base_url = "https://www.alphavantage.co/query"
         mock_settings.av_topics = "technology"
         mock_settings.av_limit = 50
@@ -140,7 +141,7 @@ async def test_av_fetch_skips_duplicates(
     mock_http.get = AsyncMock(return_value=mock_response)
 
     with patch("app.services.alpha_vantage.settings") as mock_settings:
-        mock_settings.av_api_key = "test-key"
+        mock_settings.av_api_key = SecretStr("test-key")
         mock_settings.av_api_base_url = "https://www.alphavantage.co/query"
         mock_settings.av_topics = "technology"
         mock_settings.av_limit = 50
@@ -171,7 +172,7 @@ async def test_av_fetch_handles_api_error_response(
     mock_http.get = AsyncMock(return_value=mock_response)
 
     with patch("app.services.alpha_vantage.settings") as mock_settings:
-        mock_settings.av_api_key = "test-key"
+        mock_settings.av_api_key = SecretStr("test-key")
         mock_settings.av_api_base_url = "https://www.alphavantage.co/query"
         mock_settings.av_topics = "technology"
         mock_settings.av_limit = 50
@@ -200,7 +201,7 @@ async def test_av_fetch_handles_http_error(
     )
 
     with patch("app.services.alpha_vantage.settings") as mock_settings:
-        mock_settings.av_api_key = "test-key"
+        mock_settings.av_api_key = SecretStr("test-key")
         mock_settings.av_api_base_url = "https://www.alphavantage.co/query"
         mock_settings.av_topics = "technology"
         mock_settings.av_limit = 50
@@ -236,7 +237,7 @@ async def test_av_fetch_quota_exceeded(
     mock_http = AsyncMock(spec=httpx.AsyncClient)
 
     with patch("app.services.alpha_vantage.settings") as mock_settings:
-        mock_settings.av_api_key = "test-key"
+        mock_settings.av_api_key = SecretStr("test-key")
         mock_settings.av_api_base_url = "https://www.alphavantage.co/query"
         mock_settings.av_max_daily_requests = 25
 

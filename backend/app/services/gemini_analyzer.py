@@ -80,7 +80,7 @@ class GeminiAnalyzer(BaseAnalyzer):
     """Gemini API implementation of BaseAnalyzer."""
 
     def __init__(self) -> None:
-        api_key = settings.gemini_api_key
+        api_key = settings.gemini_api_key.get_secret_value()
         if not api_key:
             raise AnalysisError("GEMINI_API_KEY is not configured")
         self._client = genai.Client(api_key=api_key)

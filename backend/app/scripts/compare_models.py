@@ -161,7 +161,7 @@ def print_comparison(
 
 
 async def main(count: int) -> None:
-    api_key = settings.gemini_api_key
+    api_key = settings.gemini_api_key.get_secret_value()
     if not api_key:
         print("ERROR: GEMINI_API_KEY is not configured", file=sys.stderr)
         sys.exit(1)

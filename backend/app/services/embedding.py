@@ -122,8 +122,12 @@ async def embed_search_query(
 ) -> list[float]:
     """Embed a search query using RETRIEVAL_QUERY task type.
 
+    Checks the Redis embedding cache first; on miss, calls the embedder and
+    writes the result back to the cache. Cache failures degrade gracefully to
+    a direct API call.
+
     Args:
-        text: Search query text.
+        text: Search query text (expected to be pre-normalized by the caller).
         embedder: Embedder instance; defaults to get_embedder().
 
     Returns:
@@ -132,9 +136,17 @@ async def embed_search_query(
     Raises:
         EmbeddingError: If the API call fails.
     """
+    from app.utils.embedding_cache import get_query_embedding, set_query_embedding
+
+    cached = await get_query_embedding(text)
+    if cached is not None:
+        return cached
+
     if embedder is None:
         embedder = get_embedder()
-    return await embedder.embed_query(text)
+    vector = await embedder.embed_query(text)
+    await set_query_embedding(text, vector)
+    return vector
 
 
 def _build_embed_text(article: NewsArticle) -> str:

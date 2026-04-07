@@ -1,10 +1,9 @@
 """Article reading service — list, detail, similar."""
 
-import math
-
 from app.exceptions import NotFoundError
 from app.models.news_article import NewsArticle
 from app.repositories.articles import ArticleRepository
+from app.repositories.watchlist import WatchlistRepository
 from app.schemas.articles import (
     ArticleBrief,
     ArticleDetail,
@@ -12,7 +11,6 @@ from app.schemas.articles import (
     PaginatedArticleResponse,
 )
 from app.schemas.embeds import KeywordEmbed, NewsSourceEmbed, OriginalArticleEmbed
-from app.services.embedding import embed_search_query
 
 
 def build_keyword_embeds(article: NewsArticle) -> list[KeywordEmbed]:
@@ -33,10 +31,7 @@ def build_brief(
         translated_title=a.translated_title,
         summary=a.summary,
         impact_level=a.impact_level,
-        source=NewsSourceEmbed(
-            id=article.news_source.id,
-            name=article.news_source.name,
-        ),
+        source=NewsSourceEmbed(name=article.news_source.name),
         published_at=article.published_at,
         keywords=build_keyword_embeds(article),
         is_watched=article.id in watched_ids if watched_ids else False,
@@ -55,10 +50,7 @@ def build_detail(
         impact_level=a.impact_level,
         reasoning=a.reasoning,
         analyzed_at=a.analyzed_at,
-        source=NewsSourceEmbed(
-            id=article.news_source.id,
-            name=article.news_source.name,
-        ),
+        source=NewsSourceEmbed(name=article.news_source.name),
         published_at=article.published_at,
         keywords=build_keyword_embeds(article),
         is_watched=article.id in watched_ids if watched_ids else False,
@@ -71,29 +63,30 @@ def build_detail(
 
 
 class ArticleService:
-    def __init__(self, repo: ArticleRepository) -> None:
+    def __init__(
+        self,
+        repo: ArticleRepository,
+        watchlist_repo: WatchlistRepository,
+    ) -> None:
         self.repo = repo
+        self.watchlist_repo = watchlist_repo
 
     async def list_articles(
         self,
         query: ArticleListParams,
         user_id: int | None,
     ) -> PaginatedArticleResponse:
-        """List analyzed articles with optional semantic search."""
-        query_embedding: list[float] | None = None
-        if query.q is not None:
-            query_embedding = await embed_search_query(query.q)
+        """List analyzed articles for news browsing."""
+        articles, total = await self.repo.fetch_articles(query)
 
-        articles, total = await self.repo.fetch_analyzed_list(query, query_embedding)
+        watched_ids = (
+            await self.watchlist_repo.get_watched_ids(user_id) if user_id else set()
+        )
 
-        watched_ids = await self.repo.get_watched_ids(user_id) if user_id else set()
-
-        return PaginatedArticleResponse(
+        return PaginatedArticleResponse.create(
             items=[build_brief(a, watched_ids) for a in articles],
             total=total,
-            page=query.page,
-            per_page=query.per_page,
-            total_pages=math.ceil(total / query.per_page) if total > 0 else 0,
+            pagination=query,
         )
 
     async def get_article(self, news_id: int, user_id: int | None) -> ArticleDetail:
@@ -101,21 +94,12 @@ class ArticleService:
         if article is None:
             raise NotFoundError("News article not found")
 
-        watched_ids = await self.repo.get_watched_ids(user_id) if user_id else set()
+        watched_ids = (
+            await self.watchlist_repo.get_watched_ids(user_id) if user_id else set()
+        )
         return build_detail(article, watched_ids)
 
     async def get_similar(self, news_id: int, limit: int) -> list[ArticleBrief]:
-        """Find semantically similar articles.
-
-        Returns empty list if article has no embedding.
-        Raises NotFoundError if article does not exist.
-        """
-        analysis = await self.repo.get_analysis(news_id)
-
-        if analysis is None or analysis.embedding is None:
-            if not await self.repo.article_exists(news_id):
-                raise NotFoundError("News article not found")
-            return []
-
-        articles = await self.repo.fetch_similar(analysis.embedding, news_id, limit)
+        """Find semantically similar articles."""
+        articles = await self.repo.fetch_similar_to(news_id, limit)
         return [build_brief(a) for a in articles]

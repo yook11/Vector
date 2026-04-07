@@ -305,11 +305,6 @@ export interface components {
       original: components["schemas"]["OriginalArticleEmbed"];
     };
     /**
-     * ArticleSortField
-     * @enum {string}
-     */
-    ArticleSortField: "publishedAt" | "impactLevel";
-    /**
      * CategoryDetail
      * @description Enriched category with articleCount and nested keywords.
      */
@@ -581,7 +576,6 @@ export interface operations {
         source?: components["schemas"]["SourceName"] | null;
         impactLevel?: components["schemas"]["ImpactLevel"] | null;
         q?: string | null;
-        sortBy?: components["schemas"]["ArticleSortField"];
         sortOrder?: components["schemas"]["SortOrder"];
       };
       header?: never;

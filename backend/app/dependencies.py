@@ -1,8 +1,11 @@
+import secrets
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
+from enum import StrEnum
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
 
@@ -10,12 +13,17 @@ from app.config import settings
 from app.db import engine
 
 
+class UserRole(StrEnum):
+    USER = "user"
+    ADMIN = "admin"
+
+
 @dataclass(frozen=True, slots=True)
 class CurrentUser:
     """Lightweight user representation populated from BFF proxy headers."""
 
     id: UUID
-    role: str
+    role: UserRole
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
@@ -23,42 +31,32 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
-async def get_current_user(request: Request) -> CurrentUser:
+async def get_current_user(
+    x_user_id: Annotated[UUID, Header()],
+    x_user_role: Annotated[UserRole, Header()],
+    x_internal_secret: Annotated[str | None, Header()] = None,
+) -> CurrentUser:
     """Validate X-Internal-Secret and extract user from BFF proxy headers.
 
-    Returns CurrentUser or raises 401.
+    Required headers: X-User-ID (UUID), X-User-Role (user|admin).
+    Missing or invalid values return 422 (FastAPI type validation).
+    Invalid secret returns 401.
     """
-    secret = request.headers.get("X-Internal-Secret")
-    if secret != settings.internal_api_secret:
+    if not x_internal_secret or not secrets.compare_digest(
+        x_internal_secret, settings.internal_api_secret.get_secret_value()
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
         )
-
-    user_id = request.headers.get("X-User-ID")
-    if not user_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated",
-        )
-
-    try:
-        parsed_id = UUID(user_id)
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid user ID format",
-        )
-
-    role = request.headers.get("X-User-Role", "user")
-    return CurrentUser(id=parsed_id, role=role)
+    return CurrentUser(id=x_user_id, role=x_user_role)
 
 
 async def get_admin_user(
-    current_user: CurrentUser = Depends(get_current_user),
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
 ) -> CurrentUser:
     """Require the current user to have admin role. Raises 403 if not."""
-    if current_user.role != "admin":
+    if current_user.role != UserRole.ADMIN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access required",
@@ -66,27 +64,26 @@ async def get_admin_user(
     return current_user
 
 
-async def get_optional_user(request: Request) -> CurrentUser | None:
-    """Like get_current_user but returns None instead of raising 401.
+async def get_optional_user(
+    x_internal_secret: Annotated[str | None, Header()] = None,
+    x_user_id: Annotated[UUID | None, Header()] = None,
+    x_user_role: Annotated[UserRole | None, Header()] = None,
+) -> CurrentUser | None:
+    """Return CurrentUser if authenticated, None otherwise.
 
-    ただし Secret が正しく X-User-ID が存在するのに UUID として不正な場合は
-    BFF のバグなので 401 を返す（バグを握りつぶさない）。
+    All headers are optional. Invalid UUID/Role values return 422
+    (FastAPI type validation). X-User-ID present without X-User-Role
+    is a BFF bug and returns 401.
     """
-    secret = request.headers.get("X-Internal-Secret")
-    if secret != settings.internal_api_secret:
+    if not x_internal_secret or not secrets.compare_digest(
+        x_internal_secret, settings.internal_api_secret.get_secret_value()
+    ):
         return None
-
-    user_id = request.headers.get("X-User-ID")
-    if not user_id:
+    if x_user_id is None:
         return None
-
-    try:
-        parsed_id = UUID(user_id)
-    except ValueError:
+    if x_user_role is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid user ID format",
+            detail="Not authenticated",
         )
-
-    role = request.headers.get("X-User-Role", "user")
-    return CurrentUser(id=parsed_id, role=role)
+    return CurrentUser(id=x_user_id, role=x_user_role)

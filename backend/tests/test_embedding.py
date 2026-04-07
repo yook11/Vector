@@ -3,6 +3,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import SecretStr
 
 from app.services.embedding import (
     BaseEmbedder,
@@ -59,7 +60,7 @@ def _settings_patch():
 def test_get_embedder_returns_gemini() -> None:
     with patch("app.config.settings") as mock_settings:
         mock_settings.ai_provider = "gemini"
-        mock_settings.gemini_api_key = "test-key"
+        mock_settings.gemini_api_key = SecretStr("test-key")
         with patch("app.services.gemini_embedder.GeminiEmbedder") as MockEmbedder:
             mock_instance = MagicMock(spec=BaseEmbedder)
             MockEmbedder.return_value = mock_instance
@@ -289,7 +290,7 @@ async def test_gemini_embedder_429_raises_rate_limit_error() -> None:
         patch("app.services.gemini_embedder.genai"),
         patch("app.services.gemini_embedder.asyncio.sleep", AsyncMock()),
     ):
-        mock_settings.gemini_api_key = "test-key"
+        mock_settings.gemini_api_key = SecretStr("test-key")
         mock_settings.embed_rate_limit_delay = 60.0
 
         from app.services.gemini_embedder import GeminiEmbedder
@@ -305,60 +306,3 @@ async def test_gemini_embedder_429_raises_rate_limit_error() -> None:
         with pytest.raises(RateLimitError, match="rate limit exceeded"):
             await embedder.embed_batch(["test text"])
 
-
-# ---------------------------------------------------------------------------
-# E. Similar articles API — unit tests (no DB required)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_get_similar_news_returns_404_for_missing_article() -> None:
-    from fastapi.testclient import TestClient
-
-    from app.dependencies import get_session
-    from app.main import app
-
-    mock_session = AsyncMock()
-    # scalar_one_or_none returns None (article not found)
-    mock_result = MagicMock()
-    mock_result.scalar_one_or_none.return_value = None
-    mock_session.execute = AsyncMock(return_value=mock_result)
-
-    async def override_get_session():
-        yield mock_session
-
-    app.dependency_overrides[get_session] = override_get_session
-    try:
-        client = TestClient(app)
-        response = client.get("/api/v1/articles/9999/similar")
-        assert response.status_code == 404
-    finally:
-        app.dependency_overrides.clear()
-
-
-@pytest.mark.asyncio
-async def test_get_similar_news_returns_empty_list_when_no_embedding() -> None:
-    from fastapi.testclient import TestClient
-
-    from app.dependencies import get_session
-    from app.main import app
-
-    mock_session = AsyncMock()
-    article = MagicMock()
-    article.embedding = None  # no embedding yet
-
-    mock_result = MagicMock()
-    mock_result.scalar_one_or_none.return_value = article
-    mock_session.execute = AsyncMock(return_value=mock_result)
-
-    async def override_get_session():
-        yield mock_session
-
-    app.dependency_overrides[get_session] = override_get_session
-    try:
-        client = TestClient(app)
-        response = client.get("/api/v1/articles/1/similar")
-        assert response.status_code == 200
-        assert response.json() == []
-    finally:
-        app.dependency_overrides.clear()

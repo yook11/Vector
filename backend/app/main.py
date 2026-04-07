@@ -19,6 +19,7 @@ from app.routers import (
     categories,
     news_sources,
     pipeline,
+    semantic_search,
     watchlist,
 )
 from app.services.embedding import EmbeddingError
@@ -86,6 +87,9 @@ app.add_exception_handler(DuplicateError, duplicate_handler)
 app.add_exception_handler(EmbeddingError, embedding_error_handler)
 
 # Register routers
+# NOTE: semantic_search must be registered before articles
+# so that /articles/search is matched before /articles/{article_id}
+app.include_router(semantic_search.router)
 app.include_router(articles.router)
 app.include_router(categories.router)
 app.include_router(watchlist.router)

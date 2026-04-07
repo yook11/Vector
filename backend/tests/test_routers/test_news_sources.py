@@ -147,9 +147,9 @@ async def test_toggle_source_not_found(
     assert response.status_code == 404
 
 
-async def test_unauthenticated_access(
+async def test_missing_auth_headers(
     client: AsyncClient,
 ) -> None:
-    """All source endpoints require authentication."""
+    """Missing required headers return 422 (FastAPI type validation)."""
     response = await client.get("/api/v1/sources")
-    assert response.status_code == 401
+    assert response.status_code == 422

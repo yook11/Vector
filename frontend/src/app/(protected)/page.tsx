@@ -5,30 +5,41 @@ import { NewsFilters } from "@/components/news/NewsFilters";
 import { NewsList } from "@/components/news/NewsList";
 import { NewsPagination } from "@/components/news/NewsPagination";
 import { SearchBar } from "@/components/news/SearchBar";
-import { getArticles, getCategories, getSources } from "@/lib/api-client";
-import type { ArticleQuery, ImpactLevel } from "@/types";
+import {
+  getArticles,
+  getCategories,
+  getSources,
+  searchArticles,
+} from "@/lib/api-client";
+import type { ImpactLevel } from "@/types";
 
 interface DashboardPageProps {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }
 
-function parseSearchParams(
+function parseCommonFilters(
   raw: Record<string, string | string[] | undefined>,
-): ArticleQuery {
-  const query: ArticleQuery = {};
+) {
   const str = (key: string) => {
     const v = raw[key];
     return typeof v === "string" ? v : undefined;
   };
 
-  const q = str("q");
-  if (q) query.q = q;
+  const filters: {
+    keyword?: string;
+    category?: string;
+    impactLevel?: ImpactLevel;
+    source?: string;
+    sortOrder?: "asc" | "desc";
+    page?: number;
+    perPage?: number;
+  } = {};
 
   const keyword = str("keyword");
-  if (keyword) query.keyword = keyword;
+  if (keyword) filters.keyword = keyword;
 
   const category = str("category");
-  if (category) query.category = category;
+  if (category) filters.category = category;
 
   const impactLevel = str("impactLevel");
   if (
@@ -37,39 +48,38 @@ function parseSearchParams(
     impactLevel === "high" ||
     impactLevel === "critical"
   ) {
-    query.impactLevel = impactLevel as ImpactLevel;
+    filters.impactLevel = impactLevel as ImpactLevel;
   }
 
   const source = str("source");
-  if (source) query.source = source;
-
-  const sortBy = str("sortBy");
-  if (sortBy === "publishedAt" || sortBy === "impactLevel") {
-    query.sortBy = sortBy;
-  }
+  if (source) filters.source = source;
 
   const sortOrder = str("sortOrder");
   if (sortOrder === "asc" || sortOrder === "desc") {
-    query.sortOrder = sortOrder;
+    filters.sortOrder = sortOrder;
   }
 
   const page = str("page");
-  if (page) query.page = Number(page);
+  if (page) filters.page = Number(page);
 
   const perPage = str("perPage");
-  if (perPage) query.perPage = Number(perPage);
+  if (perPage) filters.perPage = Number(perPage);
 
-  return query;
+  return { filters, q: str("q") };
 }
 
 export default async function DashboardPage({
   searchParams,
 }: DashboardPageProps) {
   const raw = await searchParams;
-  const query = parseSearchParams(raw);
+  const { filters, q } = parseCommonFilters(raw);
+
+  const fetchNews = q
+    ? searchArticles({ q, ...filters })
+    : getArticles(filters);
 
   const [newsData, categoriesData, sourcesData] = await Promise.all([
-    getArticles(query),
+    fetchNews,
     getCategories().catch(() => ({ items: [] })),
     getSources().catch(() => ({ items: [], total: 0 })),
   ]);
@@ -80,8 +90,8 @@ export default async function DashboardPage({
       <aside className="hidden lg:flex w-64 shrink-0 flex-col border-r border-border overflow-y-auto">
         <CategorySidebar
           categories={categoriesData.items}
-          activeCategory={query.category}
-          activeKeyword={query.keyword}
+          activeCategory={filters.category}
+          activeKeyword={filters.keyword}
         />
       </aside>
 
@@ -92,8 +102,8 @@ export default async function DashboardPage({
           <div className="flex items-center gap-3">
             <MobileSidebar
               categories={categoriesData.items}
-              activeCategory={query.category}
-              activeKeyword={query.keyword}
+              activeCategory={filters.category}
+              activeKeyword={filters.keyword}
             />
             <h1 className="text-base font-medium text-foreground">Dashboard</h1>
           </div>
