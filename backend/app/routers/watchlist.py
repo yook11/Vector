@@ -16,25 +16,25 @@ router = APIRouter(prefix="/api/v1/me", tags=["watchlist"])
 
 
 def get_watchlist_service(
-    session: AsyncSession = Depends(get_session),
+    session: Annotated[AsyncSession, Depends(get_session)],
 ) -> WatchlistService:
     return WatchlistService(WatchlistRepository(session))
 
 
-@router.get("/watchlist", response_model=PaginatedArticleResponse)
+@router.get("/watchlist")
 async def list_watchlist(
     pagination: Annotated[PaginationParams, Query()],
-    user: CurrentUser = Depends(get_current_user),
-    service: WatchlistService = Depends(get_watchlist_service),
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    service: Annotated[WatchlistService, Depends(get_watchlist_service)],
 ) -> PaginatedArticleResponse:
-    return await service.list_watchlist(user.id, pagination.page, pagination.per_page)
+    return await service.list_watchlist(user.id, pagination)
 
 
 @router.post("/watchlist", status_code=status.HTTP_201_CREATED)
 async def add_to_watchlist(
     body: WatchlistCreate,
-    user: CurrentUser = Depends(get_current_user),
-    service: WatchlistService = Depends(get_watchlist_service),
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    service: Annotated[WatchlistService, Depends(get_watchlist_service)],
 ) -> None:
     await service.add_to_watchlist(user.id, body.news_id)
 
@@ -45,7 +45,7 @@ async def add_to_watchlist(
 )
 async def remove_from_watchlist(
     news_id: int,
-    user: CurrentUser = Depends(get_current_user),
-    service: WatchlistService = Depends(get_watchlist_service),
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    service: Annotated[WatchlistService, Depends(get_watchlist_service)],
 ) -> None:
     await service.remove_from_watchlist(user.id, news_id)

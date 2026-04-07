@@ -3,6 +3,7 @@ import math
 from app.exceptions import DuplicateError, NotFoundError
 from app.repositories.watchlist import WatchlistRepository
 from app.schemas.articles import PaginatedArticleResponse
+from app.schemas.base import PaginationParams
 from app.services.articles import build_brief
 
 
@@ -13,11 +14,10 @@ class WatchlistService:
     async def list_watchlist(
         self,
         user_id: int,
-        page: int,
-        per_page: int,
+        pagination: PaginationParams,
     ) -> PaginatedArticleResponse:
         articles, total = await self.repo.fetch_watched_articles(
-            user_id, page, per_page
+            user_id, pagination.page, pagination.per_page
         )
         # All items are in the user's watchlist — build watched_ids from result
         watched_ids = {a.id for a in articles}
@@ -25,9 +25,9 @@ class WatchlistService:
         return PaginatedArticleResponse(
             items=[build_brief(a, watched_ids) for a in articles],
             total=total,
-            page=page,
-            per_page=per_page,
-            total_pages=math.ceil(total / per_page) if total > 0 else 0,
+            page=pagination.page,
+            per_page=pagination.per_page,
+            total_pages=math.ceil(total / pagination.per_page) if total > 0 else 0,
         )
 
     async def add_to_watchlist(self, user_id: int, news_id: int) -> None:
