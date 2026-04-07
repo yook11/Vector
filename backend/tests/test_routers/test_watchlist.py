@@ -122,9 +122,10 @@ class TestListWatchlist:
         assert len(data["items"]) == 1
         assert data["totalPages"] == 2
 
-    async def test_requires_auth(self, client: AsyncClient) -> None:
+    async def test_missing_auth_headers(self, client: AsyncClient) -> None:
+        """Missing required headers return 422 (FastAPI type validation)."""
         resp = await client.get("/api/v1/me/watchlist")
-        assert resp.status_code == 401
+        assert resp.status_code == 422
 
 
 @pytest.mark.asyncio
