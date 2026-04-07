@@ -1,5 +1,6 @@
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
+from enum import StrEnum
 from uuid import UUID
 
 from fastapi import Depends, HTTPException, Request, status
@@ -10,12 +11,17 @@ from app.config import settings
 from app.db import engine
 
 
+class UserRole(StrEnum):
+    USER = "user"
+    ADMIN = "admin"
+
+
 @dataclass(frozen=True, slots=True)
 class CurrentUser:
     """Lightweight user representation populated from BFF proxy headers."""
 
     id: UUID
-    role: str
+    role: UserRole
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
@@ -50,7 +56,11 @@ async def get_current_user(request: Request) -> CurrentUser:
             detail="Invalid user ID format",
         )
 
-    role = request.headers.get("X-User-Role", "user")
+    raw_role = request.headers.get("X-User-Role", UserRole.USER)
+    try:
+        role = UserRole(raw_role)
+    except ValueError:
+        role = UserRole.USER
     return CurrentUser(id=parsed_id, role=role)
 
 
@@ -58,7 +68,7 @@ async def get_admin_user(
     current_user: CurrentUser = Depends(get_current_user),
 ) -> CurrentUser:
     """Require the current user to have admin role. Raises 403 if not."""
-    if current_user.role != "admin":
+    if current_user.role != UserRole.ADMIN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access required",
@@ -88,5 +98,9 @@ async def get_optional_user(request: Request) -> CurrentUser | None:
             detail="Invalid user ID format",
         )
 
-    role = request.headers.get("X-User-Role", "user")
+    raw_role = request.headers.get("X-User-Role", UserRole.USER)
+    try:
+        role = UserRole(raw_role)
+    except ValueError:
+        role = UserRole.USER
     return CurrentUser(id=parsed_id, role=role)
