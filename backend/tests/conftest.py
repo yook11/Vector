@@ -33,7 +33,7 @@ engine_test = create_async_engine(TEST_DATABASE_URL, echo=False, poolclass=NullP
 
 TEST_USER_ID = "00000000-0000-4000-a000-000000000001"
 TEST_ADMIN_ID = "00000000-0000-4000-a000-000000000002"
-INTERNAL_SECRET = settings.internal_api_secret
+INTERNAL_SECRET = settings.internal_api_secret.get_secret_value()
 
 
 def _auth_headers(user_id: str, role: str = "user") -> dict[str, str]:

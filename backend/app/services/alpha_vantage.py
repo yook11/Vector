@@ -41,7 +41,7 @@ class AlphaVantageClient:
     def __init__(self, http_client: httpx.AsyncClient) -> None:
         self.http_client = http_client
         self.base_url = settings.av_api_base_url
-        self.api_key = settings.av_api_key
+        self.api_key = settings.av_api_key.get_secret_value()
 
     async def _check_daily_quota(
         self, source: NewsSource, session: AsyncSession

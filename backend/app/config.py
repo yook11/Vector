@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # backend/app/config.py -> project root is two levels up
@@ -15,8 +16,8 @@ class Settings(BaseSettings):
     # AI
     ai_provider: str = "gemini"
     ai_model_name: str = "gemini-2.5-flash-lite"
-    gemini_api_key: str = ""
-    openai_api_key: str = ""
+    gemini_api_key: SecretStr = SecretStr("")
+    openai_api_key: SecretStr = SecretStr("")
 
     # News Fetcher
     check_interval_minutes: int = 30
@@ -39,7 +40,7 @@ class Settings(BaseSettings):
     embed_max_consecutive_failures: int = 3  # circuit breaker
 
     # Internal API (BFF proxy trust)
-    internal_api_secret: str = "change-me-in-production"
+    internal_api_secret: SecretStr = SecretStr("change-me-in-production")
 
     # App URLs
     frontend_url: str = "http://localhost:3000"
@@ -51,7 +52,7 @@ class Settings(BaseSettings):
     hn_hits_per_page: int = 50
 
     # Alpha Vantage API
-    av_api_key: str = ""
+    av_api_key: SecretStr = SecretStr("")
     av_api_base_url: str = "https://www.alphavantage.co/query"
     av_topics: str = "technology"
     av_limit: int = 50

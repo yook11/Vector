@@ -1,3 +1,4 @@
+import secrets
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from enum import StrEnum
@@ -41,7 +42,9 @@ async def get_current_user(
     Missing or invalid values return 422 (FastAPI type validation).
     Invalid secret returns 401.
     """
-    if x_internal_secret != settings.internal_api_secret:
+    if not x_internal_secret or not secrets.compare_digest(
+        x_internal_secret, settings.internal_api_secret.get_secret_value()
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
@@ -72,7 +75,9 @@ async def get_optional_user(
     (FastAPI type validation). X-User-ID present without X-User-Role
     is a BFF bug and returns 401.
     """
-    if x_internal_secret != settings.internal_api_secret:
+    if not x_internal_secret or not secrets.compare_digest(
+        x_internal_secret, settings.internal_api_secret.get_secret_value()
+    ):
         return None
     if x_user_id is None:
         return None

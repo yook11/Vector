@@ -38,7 +38,7 @@ class GeminiEmbedder(BaseEmbedder):
     """Gemini gemini-embedding-001 implementation of BaseEmbedder."""
 
     def __init__(self) -> None:
-        api_key = settings.gemini_api_key
+        api_key = settings.gemini_api_key.get_secret_value()
         if not api_key:
             raise EmbeddingError("GEMINI_API_KEY is not configured")
         self._client = genai.Client(api_key=api_key)

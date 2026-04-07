@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
@@ -51,7 +52,7 @@ def _make_gemini_response(
 def _create_analyzer() -> GeminiAnalyzer:
     """Create a GeminiAnalyzer with mocked settings."""
     with patch("app.services.gemini_analyzer.settings") as mock_gs:
-        mock_gs.gemini_api_key = "test-key"
+        mock_gs.gemini_api_key = SecretStr("test-key")
         return GeminiAnalyzer()
 
 
@@ -72,7 +73,7 @@ def test_get_analyzer_returns_gemini_by_default() -> None:
     with patch("app.services.ai_analyzer.settings") as mock_settings:
         mock_settings.ai_provider = "gemini"
         with patch("app.services.gemini_analyzer.settings") as mock_gs:
-            mock_gs.gemini_api_key = "test-key"
+            mock_gs.gemini_api_key = SecretStr("test-key")
             analyzer = get_analyzer()
     assert isinstance(analyzer, GeminiAnalyzer)
     assert analyzer.provider_name == "gemini"

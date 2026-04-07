@@ -3,6 +3,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import SecretStr
 
 from app.services.embedding import (
     BaseEmbedder,
@@ -59,7 +60,7 @@ def _settings_patch():
 def test_get_embedder_returns_gemini() -> None:
     with patch("app.config.settings") as mock_settings:
         mock_settings.ai_provider = "gemini"
-        mock_settings.gemini_api_key = "test-key"
+        mock_settings.gemini_api_key = SecretStr("test-key")
         with patch("app.services.gemini_embedder.GeminiEmbedder") as MockEmbedder:
             mock_instance = MagicMock(spec=BaseEmbedder)
             MockEmbedder.return_value = mock_instance
@@ -289,7 +290,7 @@ async def test_gemini_embedder_429_raises_rate_limit_error() -> None:
         patch("app.services.gemini_embedder.genai"),
         patch("app.services.gemini_embedder.asyncio.sleep", AsyncMock()),
     ):
-        mock_settings.gemini_api_key = "test-key"
+        mock_settings.gemini_api_key = SecretStr("test-key")
         mock_settings.embed_rate_limit_delay = 60.0
 
         from app.services.gemini_embedder import GeminiEmbedder
