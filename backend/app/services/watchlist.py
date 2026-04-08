@@ -14,12 +14,12 @@ class WatchlistService:
         user_id: int,
         pagination: PaginationParams,
     ) -> PaginatedArticleResponse:
-        articles, total = await self.repo.fetch_watched_articles(user_id, pagination)
+        analyses, total = await self.repo.fetch_watched_articles(user_id, pagination)
         # All items are in the user's watchlist — build watched_ids from result
-        watched_ids = {a.article_analysis.id for a in articles}
+        watched_ids = {a.id for a in analyses}
 
         return PaginatedArticleResponse.create(
-            items=[build_brief(a, watched_ids) for a in articles],
+            items=[build_brief(a, watched_ids) for a in analyses],
             total=total,
             pagination=pagination,
         )

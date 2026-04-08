@@ -4,7 +4,6 @@ from typing import Any
 
 from sqlalchemy import ColumnElement, Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.config import settings
 from app.models.article_analysis import ArticleAnalysis
@@ -13,6 +12,7 @@ from app.models.category import Category
 from app.models.keyword import Keyword
 from app.models.news_article import NewsArticle
 from app.models.news_source import NewsSource
+from app.repositories.articles import article_eager_options_brief
 from app.schemas.articles import SemanticSearchParams, SortBy, SortOrder
 
 
@@ -24,18 +24,12 @@ class SemanticSearchRepository:
         self,
         query: SemanticSearchParams,
         query_embedding: list[float],
-    ) -> tuple[list[NewsArticle], int]:
+    ) -> tuple[list[ArticleAnalysis], int]:
         """Search articles by semantic similarity with filters and pagination."""
         stmt = (
-            select(NewsArticle)
-            .join(ArticleAnalysis, ArticleAnalysis.news_article_id == NewsArticle.id)
-            .options(
-                selectinload(NewsArticle.article_analysis),
-                selectinload(NewsArticle.news_source),
-                selectinload(NewsArticle.article_keywords).selectinload(
-                    ArticleKeyword.keyword
-                ),
-            )
+            select(ArticleAnalysis)
+            .join(ArticleAnalysis.news_article)
+            .options(*article_eager_options_brief())
         )
 
         # Embedding similarity filter
@@ -56,14 +50,14 @@ class SemanticSearchRepository:
                 .join(Keyword, Keyword.id == ArticleKeyword.keyword_id)
                 .where(Keyword.name == query.keyword)
             )
-            stmt = stmt.where(NewsArticle.id.in_(matching_ids))
+            stmt = stmt.where(ArticleAnalysis.news_article_id.in_(matching_ids))
         elif query.category is not None:
             cat_id_sub = select(Category.id).where(Category.slug == query.category)
             sub_kw_ids = select(Keyword.id).where(Keyword.category_id.in_(cat_id_sub))
             matching_ids = select(ArticleKeyword.news_article_id).where(
                 ArticleKeyword.keyword_id.in_(sub_kw_ids)
             )
-            stmt = stmt.where(NewsArticle.id.in_(matching_ids))
+            stmt = stmt.where(ArticleAnalysis.news_article_id.in_(matching_ids))
 
         if query.impact_level is not None:
             stmt = stmt.where(ArticleAnalysis.impact_level == query.impact_level)
@@ -95,11 +89,11 @@ class SemanticSearchRepository:
             return stmt.order_by(
                 distance_expr.asc(),
                 NewsArticle.published_at.desc(),
-                NewsArticle.id.desc(),
+                ArticleAnalysis.id.desc(),
             )
         order = (
             NewsArticle.published_at.desc()
             if sort_order == SortOrder.DESC
             else NewsArticle.published_at.asc()
         )
-        return stmt.order_by(order, NewsArticle.id.desc())
+        return stmt.order_by(order, ArticleAnalysis.id.desc())

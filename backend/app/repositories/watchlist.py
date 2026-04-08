@@ -2,9 +2,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import func, select
 
 from app.models.article_analysis import ArticleAnalysis
-from app.models.news_article import NewsArticle
 from app.models.watchlist_entry import WatchlistEntry
-from app.repositories.articles import article_eager_options
+from app.repositories.articles import article_eager_options_brief
 from app.schemas.base import PaginationParams
 
 
@@ -16,14 +15,14 @@ class WatchlistRepository:
         self,
         user_id: int,
         pagination: PaginationParams,
-    ) -> tuple[list[NewsArticle], int]:
+    ) -> tuple[list[ArticleAnalysis], int]:
         """Fetch paginated watched articles (analyzed only).
 
-        Returns (articles, total_count).
+        Returns (analyses, total_count).
         """
         base = (
-            select(NewsArticle)
-            .join(ArticleAnalysis, ArticleAnalysis.news_article_id == NewsArticle.id)
+            select(ArticleAnalysis)
+            .join(ArticleAnalysis.news_article)
             .join(
                 WatchlistEntry,
                 WatchlistEntry.article_analysis_id == ArticleAnalysis.id,
@@ -35,15 +34,15 @@ class WatchlistRepository:
         total = (await self.session.execute(count_stmt)).scalar_one()
 
         stmt = (
-            base.options(*article_eager_options())
+            base.options(*article_eager_options_brief())
             .order_by(WatchlistEntry.created_at.desc())
             .offset(pagination.offset)
             .limit(pagination.limit)
         )
         result = await self.session.execute(stmt)
-        articles = list(result.unique().scalars().all())
+        analyses = list(result.unique().scalars().all())
 
-        return articles, total
+        return analyses, total
 
     async def find_entry(self, user_id: int, article_id: int) -> WatchlistEntry | None:
         """Find a watchlist entry for the given user and article."""

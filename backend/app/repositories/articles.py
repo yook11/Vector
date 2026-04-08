@@ -2,7 +2,7 @@
 
 from sqlalchemy import func, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import contains_eager, defer, selectinload
 
 from app.models.article_analysis import ArticleAnalysis
 from app.models.article_keyword import ArticleKeyword
@@ -13,12 +13,28 @@ from app.models.news_source import NewsSource
 from app.schemas.articles import ArticleListParams, SortOrder
 
 
-def article_eager_options() -> list:
-    """Selectinload options shared by article / watchlist queries."""
+def article_eager_options_brief() -> list:
+    """一覧用. 呼び出し側で .join(ArticleAnalysis.news_article) が必要."""
     return [
-        selectinload(NewsArticle.article_analysis),
-        selectinload(NewsArticle.news_source),
-        selectinload(NewsArticle.article_keywords).selectinload(ArticleKeyword.keyword),
+        contains_eager(ArticleAnalysis.news_article).options(
+            defer(NewsArticle.original_content, raiseload=True),
+            selectinload(NewsArticle.news_source),
+            selectinload(NewsArticle.article_keywords).selectinload(
+                ArticleKeyword.keyword
+            ),
+        ),
+    ]
+
+
+def article_eager_options_detail() -> list:
+    """詳細用. 呼び出し側で .join(ArticleAnalysis.news_article) が必要."""
+    return [
+        contains_eager(ArticleAnalysis.news_article).options(
+            selectinload(NewsArticle.news_source),
+            selectinload(NewsArticle.article_keywords).selectinload(
+                ArticleKeyword.keyword
+            ),
+        ),
     ]
 
 
@@ -31,12 +47,12 @@ class ArticleRepository:
     async def fetch_articles(
         self,
         query: ArticleListParams,
-    ) -> tuple[list[NewsArticle], int]:
+    ) -> tuple[list[ArticleAnalysis], int]:
         """Fetch paginated article list for news browsing."""
         stmt = (
-            select(NewsArticle)
-            .join(ArticleAnalysis, ArticleAnalysis.news_article_id == NewsArticle.id)
-            .options(*article_eager_options())
+            select(ArticleAnalysis)
+            .join(ArticleAnalysis.news_article)
+            .options(*article_eager_options_brief())
         )
 
         # Filters
@@ -50,14 +66,14 @@ class ArticleRepository:
                 .join(Keyword, Keyword.id == ArticleKeyword.keyword_id)
                 .where(Keyword.name == query.keyword)
             )
-            stmt = stmt.where(NewsArticle.id.in_(matching_ids))
+            stmt = stmt.where(ArticleAnalysis.news_article_id.in_(matching_ids))
         elif query.category is not None:
             cat_id_sub = select(Category.id).where(Category.slug == query.category)
             sub_kw_ids = select(Keyword.id).where(Keyword.category_id.in_(cat_id_sub))
             matching_ids = select(ArticleKeyword.news_article_id).where(
                 ArticleKeyword.keyword_id.in_(sub_kw_ids)
             )
-            stmt = stmt.where(NewsArticle.id.in_(matching_ids))
+            stmt = stmt.where(ArticleAnalysis.news_article_id.in_(matching_ids))
 
         if query.impact_level is not None:
             stmt = stmt.where(ArticleAnalysis.impact_level == query.impact_level)
@@ -72,7 +88,7 @@ class ArticleRepository:
             if query.sort_order == SortOrder.DESC
             else NewsArticle.published_at.asc()
         )
-        stmt = stmt.order_by(order, NewsArticle.id.desc())
+        stmt = stmt.order_by(order, ArticleAnalysis.id.desc())
 
         # Paginate
         stmt = stmt.offset(query.offset).limit(query.limit)
@@ -80,21 +96,23 @@ class ArticleRepository:
         result = await self.session.execute(stmt)
         return list(result.unique().scalars().all()), total
 
-    async def fetch_one_analyzed(self, article_id: int) -> NewsArticle | None:
+    async def fetch_one_analyzed(self, article_id: int) -> ArticleAnalysis | None:
         """Fetch a single article with analysis eager-loaded.
 
         Returns None if not found or not analyzed.
         """
         stmt = (
-            select(NewsArticle)
-            .join(ArticleAnalysis, ArticleAnalysis.news_article_id == NewsArticle.id)
+            select(ArticleAnalysis)
+            .join(ArticleAnalysis.news_article)
             .where(ArticleAnalysis.id == article_id)
-            .options(*article_eager_options())
+            .options(*article_eager_options_detail())
         )
         result = await self.session.execute(stmt)
         return result.unique().scalar_one_or_none()
 
-    async def fetch_similar_to(self, article_id: int, limit: int) -> list[NewsArticle]:
+    async def fetch_similar_to(
+        self, article_id: int, limit: int
+    ) -> list[ArticleAnalysis]:
         """Fetch articles similar to the given article, ordered by cosine distance.
 
         Returns an empty list when the article does not exist or has no embedding.
@@ -109,10 +127,10 @@ class ArticleRepository:
         )
 
         stmt = (
-            select(NewsArticle)
-            .join(ArticleAnalysis, ArticleAnalysis.news_article_id == NewsArticle.id)
+            select(ArticleAnalysis)
+            .join(ArticleAnalysis.news_article)
             .join(source_embedding, true())
-            .options(*article_eager_options())
+            .options(*article_eager_options_brief())
             .where(
                 ArticleAnalysis.id != article_id,
                 ArticleAnalysis.embedding.is_not(None),

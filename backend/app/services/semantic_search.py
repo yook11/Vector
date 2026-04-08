@@ -23,12 +23,12 @@ class SemanticSearchService:
     ) -> PaginatedArticleResponse:
         """Search articles by semantic similarity to the user's query text."""
         query_embedding = await embed_search_query(query.q)
-        articles, total = await self.search_repo.search_articles(query, query_embedding)
+        analyses, total = await self.search_repo.search_articles(query, query_embedding)
         watched_ids = (
             await self.watchlist_repo.get_watched_ids(user_id) if user_id else set()
         )
         return PaginatedArticleResponse.create(
-            items=[build_brief(a, watched_ids) for a in articles],
+            items=[build_brief(a, watched_ids) for a in analyses],
             total=total,
             pagination=query,
         )
