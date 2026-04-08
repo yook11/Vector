@@ -19,9 +19,9 @@ def article_eager_options_brief() -> list:
         contains_eager(ArticleAnalysis.news_article).options(
             defer(NewsArticle.original_content, raiseload=True),
             selectinload(NewsArticle.news_source),
-            selectinload(NewsArticle.article_keywords).selectinload(
-                ArticleKeyword.keyword
-            ),
+        ),
+        selectinload(ArticleAnalysis.article_keywords).selectinload(
+            ArticleKeyword.keyword
         ),
     ]
 
@@ -31,9 +31,9 @@ def article_eager_options_detail() -> list:
     return [
         contains_eager(ArticleAnalysis.news_article).options(
             selectinload(NewsArticle.news_source),
-            selectinload(NewsArticle.article_keywords).selectinload(
-                ArticleKeyword.keyword
-            ),
+        ),
+        selectinload(ArticleAnalysis.article_keywords).selectinload(
+            ArticleKeyword.keyword
         ),
     ]
 
@@ -62,18 +62,18 @@ class ArticleRepository:
 
         if query.keyword is not None:
             matching_ids = (
-                select(ArticleKeyword.news_article_id)
+                select(ArticleKeyword.article_analysis_id)
                 .join(Keyword, Keyword.id == ArticleKeyword.keyword_id)
                 .where(Keyword.name == query.keyword)
             )
-            stmt = stmt.where(ArticleAnalysis.news_article_id.in_(matching_ids))
+            stmt = stmt.where(ArticleAnalysis.id.in_(matching_ids))
         elif query.category is not None:
             cat_id_sub = select(Category.id).where(Category.slug == query.category)
             sub_kw_ids = select(Keyword.id).where(Keyword.category_id.in_(cat_id_sub))
-            matching_ids = select(ArticleKeyword.news_article_id).where(
+            matching_ids = select(ArticleKeyword.article_analysis_id).where(
                 ArticleKeyword.keyword_id.in_(sub_kw_ids)
             )
-            stmt = stmt.where(ArticleAnalysis.news_article_id.in_(matching_ids))
+            stmt = stmt.where(ArticleAnalysis.id.in_(matching_ids))
 
         if query.impact_level is not None:
             stmt = stmt.where(ArticleAnalysis.impact_level == query.impact_level)

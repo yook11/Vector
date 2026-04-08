@@ -4,6 +4,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.article_analysis import ArticleAnalysis
 from app.models.article_keyword import ArticleKeyword
 from app.models.category import Category
 from app.models.keyword import Keyword
@@ -92,7 +93,18 @@ class TestListCategories:
         db_session.add(article)
         await db_session.flush()
 
-        nk = ArticleKeyword(news_article_id=article.id, keyword_id=kw.id)
+        analysis = ArticleAnalysis(
+            news_article_id=article.id,
+            translated_title="TF記事",
+            summary="要約",
+            impact_level="high",
+            reasoning="理由",
+            ai_model="test",
+        )
+        db_session.add(analysis)
+        await db_session.flush()
+
+        nk = ArticleKeyword(article_analysis_id=analysis.id, keyword_id=kw.id)
         db_session.add(nk)
         await db_session.commit()
 

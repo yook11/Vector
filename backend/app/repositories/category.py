@@ -31,7 +31,7 @@ class CategoryRepository:
             select(
                 Keyword.category_id,
                 Keyword.name,
-                func.count(func.distinct(ArticleKeyword.news_article_id)).label(
+                func.count(func.distinct(ArticleKeyword.article_analysis_id)).label(
                     "article_count"
                 ),
             )
@@ -52,7 +52,7 @@ class CategoryRepository:
         stmt = (
             select(
                 Keyword.category_id,
-                func.count(func.distinct(ArticleKeyword.news_article_id)).label(
+                func.count(func.distinct(ArticleKeyword.article_analysis_id)).label(
                     "article_count"
                 ),
             )

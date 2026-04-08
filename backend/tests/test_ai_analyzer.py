@@ -465,7 +465,9 @@ async def test_analyze_article_saves_keyword_links(
     assert result is not None
 
     # Verify keyword links were created
-    stmt = select(ArticleKeyword).where(ArticleKeyword.news_article_id == article.id)
+    stmt = select(ArticleKeyword).where(
+        ArticleKeyword.article_analysis_id == result.id
+    )
     links = (await db_session.execute(stmt)).scalars().all()
     assert len(links) == 2
 

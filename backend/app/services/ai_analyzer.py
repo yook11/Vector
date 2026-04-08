@@ -177,7 +177,7 @@ async def analyze_article(
         matched_kws = (await session.execute(kw_stmt)).scalars().all()
         for kw in matched_kws:
             link = ArticleKeyword(
-                news_article_id=article.id,
+                article_analysis_id=analysis.id,
                 keyword_id=kw.id,
             )
             session.add(link)

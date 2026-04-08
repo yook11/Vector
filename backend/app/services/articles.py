@@ -16,7 +16,7 @@ from app.schemas.embeds import KeywordEmbed, NewsSourceEmbed, OriginalArticleEmb
 def build_keyword_embeds(analysis: ArticleAnalysis) -> list[KeywordEmbed]:
     return [
         KeywordEmbed(name=link.keyword.name)
-        for link in analysis.news_article.article_keywords
+        for link in analysis.article_keywords
         if link.keyword
     ]
 
