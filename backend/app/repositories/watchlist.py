@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import func, select
 
@@ -13,7 +15,7 @@ class WatchlistRepository:
 
     async def fetch_watched_articles(
         self,
-        user_id: int,
+        user_id: UUID,
         pagination: PaginationParams,
     ) -> tuple[list[ArticleAnalysis], int]:
         """Fetch paginated watched articles (analyzed only).
@@ -44,7 +46,7 @@ class WatchlistRepository:
 
         return analyses, total
 
-    async def find_entry(self, user_id: int, article_id: int) -> WatchlistEntry | None:
+    async def find_entry(self, user_id: UUID, article_id: int) -> WatchlistEntry | None:
         """Find a watchlist entry for the given user and article."""
         stmt = select(WatchlistEntry).where(
             WatchlistEntry.user_id == user_id,
@@ -59,13 +61,13 @@ class WatchlistRepository:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none() is not None
 
-    async def add_entry(self, user_id: int, article_id: int) -> None:
+    async def add_entry(self, user_id: UUID, article_id: int) -> None:
         """Create a new watchlist entry."""
         entry = WatchlistEntry(user_id=user_id, article_analysis_id=article_id)
         self.session.add(entry)
         await self.session.commit()
 
-    async def get_watched_ids(self, user_id: int) -> set[int]:
+    async def get_watched_ids(self, user_id: UUID) -> set[int]:
         """Return set of article_analysis IDs in the user's watchlist."""
         stmt = select(WatchlistEntry.article_analysis_id).where(
             WatchlistEntry.user_id == user_id
