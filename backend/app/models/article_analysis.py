@@ -20,6 +20,7 @@ from app.models.base import Base
 
 if TYPE_CHECKING:
     from app.models.news_article import NewsArticle
+    from app.models.watchlist_entry import WatchlistEntry
 
 
 class ImpactLevel(StrEnum):
@@ -68,3 +69,6 @@ class ArticleAnalysis(Base):
 
     # Relationships
     news_article: Mapped[NewsArticle] = relationship(back_populates="article_analysis")
+    watchlist_entries: Mapped[list[WatchlistEntry]] = relationship(
+        back_populates="article_analysis"
+    )

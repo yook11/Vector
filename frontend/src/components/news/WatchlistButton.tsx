@@ -10,12 +10,12 @@ import {
 } from "@/lib/client-api";
 
 interface WatchlistButtonProps {
-  newsId: number;
+  articleId: number;
   isWatched: boolean;
 }
 
 export function WatchlistButton({
-  newsId,
+  articleId,
   isWatched: initialIsWatched,
 }: WatchlistButtonProps) {
   const [isWatched, setIsWatched] = useState(initialIsWatched);
@@ -26,10 +26,10 @@ export function WatchlistButton({
     setPending(true);
     try {
       if (isWatched) {
-        await clientRemoveFromWatchlist(newsId);
+        await clientRemoveFromWatchlist(articleId);
         setIsWatched(false);
       } else {
-        await clientAddToWatchlist(newsId);
+        await clientAddToWatchlist(articleId);
         setIsWatched(true);
       }
       router.refresh();

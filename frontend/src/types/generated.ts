@@ -4,6 +4,26 @@
  */
 
 export interface paths {
+  "/api/v1/articles/search": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Search Articles
+     * @description Search articles by semantic similarity to the given query text.
+     */
+    get: operations["search_articles_api_v1_articles_search_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/articles": {
     parameters: {
       query?: never;
@@ -102,7 +122,7 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
-  "/api/v1/me/watchlist/{news_id}": {
+  "/api/v1/me/watchlist/{article_id}": {
     parameters: {
       query?: never;
       header?: never;
@@ -113,7 +133,7 @@ export interface paths {
     put?: never;
     post?: never;
     /** Remove From Watchlist */
-    delete: operations["remove_from_watchlist_api_v1_me_watchlist__news_id__delete"];
+    delete: operations["remove_from_watchlist_api_v1_me_watchlist__article_id__delete"];
     options?: never;
     head?: never;
     patch?: never;
@@ -516,6 +536,11 @@ export interface components {
      */
     SafeUrl: string;
     /**
+     * SortBy
+     * @enum {string}
+     */
+    SortBy: "date" | "relevance";
+    /**
      * SortOrder
      * @enum {string}
      */
@@ -536,6 +561,11 @@ export interface components {
      * @enum {string}
      */
     SourceType: "rss" | "api";
+    /**
+     * UserRole
+     * @enum {string}
+     */
+    UserRole: "user" | "admin";
     /** ValidationError */
     ValidationError: {
       /** Location */
@@ -554,8 +584,8 @@ export interface components {
      * @description POST /api/v1/me/watchlist request body.
      */
     WatchlistCreate: {
-      /** Newsid */
-      newsId: number;
+      /** Articleid */
+      articleId: number;
     };
   };
   responses: never;
@@ -566,6 +596,49 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+  search_articles_api_v1_articles_search_get: {
+    parameters: {
+      query: {
+        page?: number;
+        perPage?: number;
+        q: string;
+        sortBy?: components["schemas"]["SortBy"];
+        keyword?: components["schemas"]["KeywordName"] | null;
+        category?: components["schemas"]["CategorySlug"] | null;
+        source?: components["schemas"]["SourceName"] | null;
+        impactLevel?: components["schemas"]["ImpactLevel"] | null;
+        sortOrder?: components["schemas"]["SortOrder"];
+      };
+      header?: {
+        "x-internal-secret"?: string | null;
+        "x-user-id"?: string | null;
+        "x-user-role"?: components["schemas"]["UserRole"] | null;
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PaginatedArticleResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
   list_articles_api_v1_articles_get: {
     parameters: {
       query?: {
@@ -575,10 +648,13 @@ export interface operations {
         category?: components["schemas"]["CategorySlug"] | null;
         source?: components["schemas"]["SourceName"] | null;
         impactLevel?: components["schemas"]["ImpactLevel"] | null;
-        q?: string | null;
         sortOrder?: components["schemas"]["SortOrder"];
       };
-      header?: never;
+      header?: {
+        "x-internal-secret"?: string | null;
+        "x-user-id"?: string | null;
+        "x-user-role"?: components["schemas"]["UserRole"] | null;
+      };
       path?: never;
       cookie?: never;
     };
@@ -640,7 +716,11 @@ export interface operations {
   get_article_api_v1_articles__article_id__get: {
     parameters: {
       query?: never;
-      header?: never;
+      header?: {
+        "x-internal-secret"?: string | null;
+        "x-user-id"?: string | null;
+        "x-user-role"?: components["schemas"]["UserRole"] | null;
+      };
       path: {
         article_id: number;
       };
@@ -694,7 +774,11 @@ export interface operations {
         page?: number;
         perPage?: number;
       };
-      header?: never;
+      header: {
+        "x-user-id": string;
+        "x-user-role": components["schemas"]["UserRole"];
+        "x-internal-secret"?: string | null;
+      };
       path?: never;
       cookie?: never;
     };
@@ -723,7 +807,11 @@ export interface operations {
   add_to_watchlist_api_v1_me_watchlist_post: {
     parameters: {
       query?: never;
-      header?: never;
+      header: {
+        "x-user-id": string;
+        "x-user-role": components["schemas"]["UserRole"];
+        "x-internal-secret"?: string | null;
+      };
       path?: never;
       cookie?: never;
     };
@@ -753,12 +841,16 @@ export interface operations {
       };
     };
   };
-  remove_from_watchlist_api_v1_me_watchlist__news_id__delete: {
+  remove_from_watchlist_api_v1_me_watchlist__article_id__delete: {
     parameters: {
       query?: never;
-      header?: never;
+      header: {
+        "x-user-id": string;
+        "x-user-role": components["schemas"]["UserRole"];
+        "x-internal-secret"?: string | null;
+      };
       path: {
-        news_id: number;
+        article_id: number;
       };
       cookie?: never;
     };
@@ -785,7 +877,11 @@ export interface operations {
   list_sources_api_v1_sources_get: {
     parameters: {
       query?: never;
-      header?: never;
+      header: {
+        "x-user-id": string;
+        "x-user-role": components["schemas"]["UserRole"];
+        "x-internal-secret"?: string | null;
+      };
       path?: never;
       cookie?: never;
     };
@@ -800,12 +896,25 @@ export interface operations {
           "application/json": components["schemas"]["NewsSourceDetailList"];
         };
       };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
     };
   };
   create_source_api_v1_sources_post: {
     parameters: {
       query?: never;
-      header?: never;
+      header: {
+        "x-user-id": string;
+        "x-user-role": components["schemas"]["UserRole"];
+        "x-internal-secret"?: string | null;
+      };
       path?: never;
       cookie?: never;
     };
@@ -838,7 +947,11 @@ export interface operations {
   delete_source_api_v1_sources__source_id__delete: {
     parameters: {
       query?: never;
-      header?: never;
+      header: {
+        "x-user-id": string;
+        "x-user-role": components["schemas"]["UserRole"];
+        "x-internal-secret"?: string | null;
+      };
       path: {
         source_id: number;
       };
@@ -867,7 +980,11 @@ export interface operations {
   toggle_source_api_v1_sources__source_id__toggle_patch: {
     parameters: {
       query?: never;
-      header?: never;
+      header: {
+        "x-user-id": string;
+        "x-user-role": components["schemas"]["UserRole"];
+        "x-internal-secret"?: string | null;
+      };
       path: {
         source_id: number;
       };
@@ -898,7 +1015,11 @@ export interface operations {
   fetch_news_api_v1_pipeline_fetch_post: {
     parameters: {
       query?: never;
-      header?: never;
+      header: {
+        "x-user-id": string;
+        "x-user-role": components["schemas"]["UserRole"];
+        "x-internal-secret"?: string | null;
+      };
       path?: never;
       cookie?: never;
     };
@@ -931,7 +1052,11 @@ export interface operations {
   embed_news_api_v1_pipeline_embed_post: {
     parameters: {
       query?: never;
-      header?: never;
+      header: {
+        "x-user-id": string;
+        "x-user-role": components["schemas"]["UserRole"];
+        "x-internal-secret"?: string | null;
+      };
       path?: never;
       cookie?: never;
     };
@@ -944,6 +1069,15 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["EmbedResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
         };
       };
     };

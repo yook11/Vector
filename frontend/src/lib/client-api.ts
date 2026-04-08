@@ -36,15 +36,17 @@ async function clientFetch<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export async function clientAddToWatchlist(newsId: number): Promise<void> {
+export async function clientAddToWatchlist(articleId: number): Promise<void> {
   await clientFetch("/me/watchlist", {
     method: "POST",
-    body: JSON.stringify({ newsId }),
+    body: JSON.stringify({ articleId }),
   });
 }
 
-export async function clientRemoveFromWatchlist(newsId: number): Promise<void> {
-  await clientFetch(`/me/watchlist/${newsId}`, {
+export async function clientRemoveFromWatchlist(
+  articleId: number,
+): Promise<void> {
+  await clientFetch(`/me/watchlist/${articleId}`, {
     method: "DELETE",
   });
 }

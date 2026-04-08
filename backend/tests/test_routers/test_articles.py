@@ -329,25 +329,18 @@ class TestGetArticle:
         sample_source: NewsSource,
     ) -> None:
         article = await _create_article(db_session, sample_source)
-        await _create_analysis(db_session, article)
-        resp = await client.get(f"/api/v1/articles/{article.id}")
+        analysis = await _create_analysis(db_session, article)
+        resp = await client.get(f"/api/v1/articles/{analysis.id}")
         assert resp.status_code == 200
         data = resp.json()
         assert data["translatedTitle"] == "テスト記事"
         assert data["original"]["title"] == "Test Article"
 
-    async def test_get_not_found(self, client: AsyncClient) -> None:
-        resp = await client.get("/api/v1/articles/99999")
-        assert resp.status_code == 404
-
-    async def test_get_unanalyzed_returns_404(
+    async def test_get_nonexistent_returns_404(
         self,
         client: AsyncClient,
-        db_session: AsyncSession,
-        sample_source: NewsSource,
     ) -> None:
-        article = await _create_article(db_session, sample_source)
-        resp = await client.get(f"/api/v1/articles/{article.id}")
+        resp = await client.get("/api/v1/articles/99999")
         assert resp.status_code == 404
 
     async def test_get_with_analysis(
@@ -357,9 +350,9 @@ class TestGetArticle:
         sample_source: NewsSource,
     ) -> None:
         article = await _create_article(db_session, sample_source)
-        await _create_analysis(db_session, article)
+        analysis = await _create_analysis(db_session, article)
 
-        resp = await client.get(f"/api/v1/articles/{article.id}")
+        resp = await client.get(f"/api/v1/articles/{analysis.id}")
         data = resp.json()
         assert data["translatedTitle"] == "テスト記事"
         assert data["impactLevel"] == "high"
@@ -375,12 +368,12 @@ class TestGetArticle:
         sample_source: NewsSource,
     ) -> None:
         article = await _create_article(db_session, sample_source)
-        await _create_analysis(db_session, article)
+        analysis = await _create_analysis(db_session, article)
         link = ArticleKeyword(news_article_id=article.id, keyword_id=sample_keyword.id)
         db_session.add(link)
         await db_session.commit()
 
-        resp = await client.get(f"/api/v1/articles/{article.id}")
+        resp = await client.get(f"/api/v1/articles/{analysis.id}")
         data = resp.json()
         assert len(data["keywords"]) == 1
         assert data["keywords"][0]["name"] == "Quantum Computing"
@@ -419,9 +412,9 @@ class TestSimilarArticles:
         sample_source: NewsSource,
     ) -> None:
         article = await _create_article(db_session, sample_source)
-        await _create_analysis(db_session, article)
+        analysis = await _create_analysis(db_session, article)
 
-        resp = await client.get(f"/api/v1/articles/{article.id}/similar")
+        resp = await client.get(f"/api/v1/articles/{analysis.id}/similar")
         assert resp.status_code == 200
         assert resp.json() == []
 
@@ -434,7 +427,7 @@ class TestSimilarArticles:
         source = await _create_article(
             db_session, sample_source, url="https://example.com/src"
         )
-        await _create_analysis(db_session, source, embedding=EMBEDDING_A)
+        source_analysis = await _create_analysis(db_session, source, embedding=EMBEDDING_A)
 
         close = await _create_article(
             db_session, sample_source, url="https://example.com/close"
@@ -450,7 +443,7 @@ class TestSimilarArticles:
             db_session, far, translated_title="遠い記事", embedding=EMBEDDING_FAR
         )
 
-        resp = await client.get(f"/api/v1/articles/{source.id}/similar")
+        resp = await client.get(f"/api/v1/articles/{source_analysis.id}/similar")
         assert resp.status_code == 200
         items = resp.json()
         assert len(items) == 2
@@ -466,18 +459,18 @@ class TestSimilarArticles:
         a1 = await _create_article(
             db_session, sample_source, url="https://example.com/a1"
         )
-        await _create_analysis(db_session, a1, embedding=EMBEDDING_A)
+        a1_analysis = await _create_analysis(db_session, a1, embedding=EMBEDDING_A)
 
         a2 = await _create_article(
             db_session, sample_source, url="https://example.com/a2"
         )
-        await _create_analysis(db_session, a2, embedding=EMBEDDING_A)
+        a2_analysis = await _create_analysis(db_session, a2, embedding=EMBEDDING_A)
 
-        resp = await client.get(f"/api/v1/articles/{a1.id}/similar")
+        resp = await client.get(f"/api/v1/articles/{a1_analysis.id}/similar")
         items = resp.json()
         returned_ids = [item["id"] for item in items]
-        assert a1.id not in returned_ids
-        assert a2.id in returned_ids
+        assert a1_analysis.id not in returned_ids
+        assert a2_analysis.id in returned_ids
 
     async def test_respects_limit_parameter(
         self,
@@ -488,7 +481,7 @@ class TestSimilarArticles:
         source = await _create_article(
             db_session, sample_source, url="https://example.com/main"
         )
-        await _create_analysis(db_session, source, embedding=EMBEDDING_A)
+        source_analysis = await _create_analysis(db_session, source, embedding=EMBEDDING_A)
 
         for i in range(5):
             art = await _create_article(
@@ -497,7 +490,7 @@ class TestSimilarArticles:
             await _create_analysis(db_session, art, embedding=EMBEDDING_B)
 
         resp = await client.get(
-            f"/api/v1/articles/{source.id}/similar", params={"limit": 2}
+            f"/api/v1/articles/{source_analysis.id}/similar", params={"limit": 2}
         )
         assert resp.status_code == 200
         assert len(resp.json()) == 2

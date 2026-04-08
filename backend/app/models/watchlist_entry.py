@@ -11,7 +11,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
 
 if TYPE_CHECKING:
-    from app.models.news_article import NewsArticle
+    from app.models.article_analysis import ArticleAnalysis
 
 
 class WatchlistEntry(Base):
@@ -22,8 +22,8 @@ class WatchlistEntry(Base):
         ForeignKey("auth.user.id", ondelete="CASCADE"),
         primary_key=True,
     )
-    news_article_id: Mapped[int] = mapped_column(
-        ForeignKey("news_articles.id", ondelete="CASCADE"),
+    article_analysis_id: Mapped[int] = mapped_column(
+        ForeignKey("article_analyses.id", ondelete="CASCADE"),
         primary_key=True,
     )
     created_at: Mapped[datetime] = mapped_column(
@@ -31,4 +31,6 @@ class WatchlistEntry(Base):
     )
 
     # Relationships
-    news_article: Mapped[NewsArticle] = relationship(back_populates="watchlist_entries")
+    article_analysis: Mapped[ArticleAnalysis] = relationship(
+        back_populates="watchlist_entries"
+    )

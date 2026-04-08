@@ -1,7 +1,7 @@
 """Article reading service — list, detail, similar."""
 
 from app.exceptions import NotFoundError
-from app.models.news_article import NewsArticle
+from app.models.article_analysis import ArticleAnalysis
 from app.repositories.articles import ArticleRepository
 from app.repositories.watchlist import WatchlistRepository
 from app.schemas.articles import (
@@ -13,51 +13,51 @@ from app.schemas.articles import (
 from app.schemas.embeds import KeywordEmbed, NewsSourceEmbed, OriginalArticleEmbed
 
 
-def build_keyword_embeds(article: NewsArticle) -> list[KeywordEmbed]:
+def build_keyword_embeds(analysis: ArticleAnalysis) -> list[KeywordEmbed]:
     return [
         KeywordEmbed(name=link.keyword.name)
-        for link in article.article_keywords
+        for link in analysis.news_article.article_keywords
         if link.keyword
     ]
 
 
 def build_brief(
-    article: NewsArticle,
+    analysis: ArticleAnalysis,
     watched_ids: set[int] | None = None,
 ) -> ArticleBrief:
-    a = article.article_analysis
+    na = analysis.news_article
     return ArticleBrief(
-        id=article.id,
-        translated_title=a.translated_title,
-        summary=a.summary,
-        impact_level=a.impact_level,
-        source=NewsSourceEmbed(name=article.news_source.name),
-        published_at=article.published_at,
-        keywords=build_keyword_embeds(article),
-        is_watched=article.id in watched_ids if watched_ids else False,
+        id=analysis.id,
+        translated_title=analysis.translated_title,
+        summary=analysis.summary,
+        impact_level=analysis.impact_level,
+        source=NewsSourceEmbed(name=na.news_source.name),
+        published_at=na.published_at,
+        keywords=build_keyword_embeds(analysis),
+        is_watched=analysis.id in watched_ids if watched_ids else False,
     )
 
 
 def build_detail(
-    article: NewsArticle,
+    analysis: ArticleAnalysis,
     watched_ids: set[int] | None = None,
 ) -> ArticleDetail:
-    a = article.article_analysis
+    na = analysis.news_article
     return ArticleDetail(
-        id=article.id,
-        translated_title=a.translated_title,
-        summary=a.summary,
-        impact_level=a.impact_level,
-        reasoning=a.reasoning,
-        analyzed_at=a.analyzed_at,
-        source=NewsSourceEmbed(name=article.news_source.name),
-        published_at=article.published_at,
-        keywords=build_keyword_embeds(article),
-        is_watched=article.id in watched_ids if watched_ids else False,
+        id=analysis.id,
+        translated_title=analysis.translated_title,
+        summary=analysis.summary,
+        impact_level=analysis.impact_level,
+        reasoning=analysis.reasoning,
+        analyzed_at=analysis.analyzed_at,
+        source=NewsSourceEmbed(name=na.news_source.name),
+        published_at=na.published_at,
+        keywords=build_keyword_embeds(analysis),
+        is_watched=analysis.id in watched_ids if watched_ids else False,
         original=OriginalArticleEmbed(
-            title=article.original_title,
-            url=article.original_url,
-            content=article.original_content,
+            title=na.original_title,
+            url=na.original_url,
+            content=na.original_content,
         ),
     )
 
@@ -77,29 +77,29 @@ class ArticleService:
         user_id: int | None,
     ) -> PaginatedArticleResponse:
         """List analyzed articles for news browsing."""
-        articles, total = await self.repo.fetch_articles(query)
+        analyses, total = await self.repo.fetch_articles(query)
 
         watched_ids = (
             await self.watchlist_repo.get_watched_ids(user_id) if user_id else set()
         )
 
         return PaginatedArticleResponse.create(
-            items=[build_brief(a, watched_ids) for a in articles],
+            items=[build_brief(a, watched_ids) for a in analyses],
             total=total,
             pagination=query,
         )
 
-    async def get_article(self, news_id: int, user_id: int | None) -> ArticleDetail:
-        article = await self.repo.fetch_one_analyzed(news_id)
-        if article is None:
+    async def get_article(self, article_id: int, user_id: int | None) -> ArticleDetail:
+        analysis = await self.repo.fetch_one_analyzed(article_id)
+        if analysis is None:
             raise NotFoundError("News article not found")
 
         watched_ids = (
             await self.watchlist_repo.get_watched_ids(user_id) if user_id else set()
         )
-        return build_detail(article, watched_ids)
+        return build_detail(analysis, watched_ids)
 
-    async def get_similar(self, news_id: int, limit: int) -> list[ArticleBrief]:
+    async def get_similar(self, article_id: int, limit: int) -> list[ArticleBrief]:
         """Find semantically similar articles."""
-        articles = await self.repo.fetch_similar_to(news_id, limit)
-        return [build_brief(a) for a in articles]
+        analyses = await self.repo.fetch_similar_to(article_id, limit)
+        return [build_brief(a) for a in analyses]
