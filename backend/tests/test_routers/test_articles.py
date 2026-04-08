@@ -114,8 +114,10 @@ class TestListArticles:
         article = await _create_article(
             db_session, sample_source, url="https://example.com/kw"
         )
-        await _create_analysis(db_session, article)
-        link = ArticleKeyword(news_article_id=article.id, keyword_id=sample_keyword.id)
+        analysis = await _create_analysis(db_session, article)
+        link = ArticleKeyword(
+            article_analysis_id=analysis.id, keyword_id=sample_keyword.id
+        )
         db_session.add(link)
         await db_session.commit()
 
@@ -369,7 +371,9 @@ class TestGetArticle:
     ) -> None:
         article = await _create_article(db_session, sample_source)
         analysis = await _create_analysis(db_session, article)
-        link = ArticleKeyword(news_article_id=article.id, keyword_id=sample_keyword.id)
+        link = ArticleKeyword(
+            article_analysis_id=analysis.id, keyword_id=sample_keyword.id
+        )
         db_session.add(link)
         await db_session.commit()
 

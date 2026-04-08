@@ -19,6 +19,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
 
 if TYPE_CHECKING:
+    from app.models.article_keyword import ArticleKeyword
     from app.models.news_article import NewsArticle
     from app.models.watchlist_entry import WatchlistEntry
 
@@ -69,6 +70,9 @@ class ArticleAnalysis(Base):
 
     # Relationships
     news_article: Mapped[NewsArticle] = relationship(back_populates="article_analysis")
+    article_keywords: Mapped[list[ArticleKeyword]] = relationship(
+        back_populates="article_analysis"
+    )
     watchlist_entries: Mapped[list[WatchlistEntry]] = relationship(
         back_populates="article_analysis"
     )
