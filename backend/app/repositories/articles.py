@@ -80,23 +80,21 @@ class ArticleRepository:
         result = await self.session.execute(stmt)
         return list(result.unique().scalars().all()), total
 
-    async def fetch_one_analyzed(self, news_id: int) -> NewsArticle | None:
+    async def fetch_one_analyzed(self, article_id: int) -> NewsArticle | None:
         """Fetch a single article with analysis eager-loaded.
 
         Returns None if not found or not analyzed.
         """
         stmt = (
             select(NewsArticle)
-            .where(NewsArticle.id == news_id)
+            .join(ArticleAnalysis, ArticleAnalysis.news_article_id == NewsArticle.id)
+            .where(ArticleAnalysis.id == article_id)
             .options(*article_eager_options())
         )
         result = await self.session.execute(stmt)
-        article = result.unique().scalar_one_or_none()
-        if article is None or article.article_analysis is None:
-            return None
-        return article
+        return result.unique().scalar_one_or_none()
 
-    async def fetch_similar_to(self, news_id: int, limit: int) -> list[NewsArticle]:
+    async def fetch_similar_to(self, article_id: int, limit: int) -> list[NewsArticle]:
         """Fetch articles similar to the given article, ordered by cosine distance.
 
         Returns an empty list when the article does not exist or has no embedding.
@@ -104,7 +102,7 @@ class ArticleRepository:
         source_embedding = (
             select(ArticleAnalysis.embedding)
             .where(
-                ArticleAnalysis.news_article_id == news_id,
+                ArticleAnalysis.id == article_id,
                 ArticleAnalysis.embedding.is_not(None),
             )
             .cte("source_embedding")
@@ -116,7 +114,7 @@ class ArticleRepository:
             .join(source_embedding, true())
             .options(*article_eager_options())
             .where(
-                NewsArticle.id != news_id,
+                ArticleAnalysis.id != article_id,
                 ArticleAnalysis.embedding.is_not(None),
             )
             .order_by(

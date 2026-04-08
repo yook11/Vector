@@ -16,7 +16,7 @@ class WatchlistService:
     ) -> PaginatedArticleResponse:
         articles, total = await self.repo.fetch_watched_articles(user_id, pagination)
         # All items are in the user's watchlist — build watched_ids from result
-        watched_ids = {a.id for a in articles}
+        watched_ids = {a.article_analysis.id for a in articles}
 
         return PaginatedArticleResponse.create(
             items=[build_brief(a, watched_ids) for a in articles],
@@ -24,17 +24,17 @@ class WatchlistService:
             pagination=pagination,
         )
 
-    async def add_to_watchlist(self, user_id: int, news_id: int) -> None:
-        if not await self.repo.article_exists(news_id):
+    async def add_to_watchlist(self, user_id: int, article_id: int) -> None:
+        if not await self.repo.article_exists(article_id):
             raise NotFoundError("News article not found")
 
-        if await self.repo.find_entry(user_id, news_id):
+        if await self.repo.find_entry(user_id, article_id):
             raise DuplicateError("Article already in watchlist")
 
-        await self.repo.add_entry(user_id, news_id)
+        await self.repo.add_entry(user_id, article_id)
 
-    async def remove_from_watchlist(self, user_id: int, news_id: int) -> None:
-        entry = await self.repo.find_entry(user_id, news_id)
+    async def remove_from_watchlist(self, user_id: int, article_id: int) -> None:
+        entry = await self.repo.find_entry(user_id, article_id)
         if entry is None:
             raise NotFoundError("Watchlist item not found")
 

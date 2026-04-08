@@ -36,16 +36,16 @@ async def add_to_watchlist(
     user: Annotated[CurrentUser, Depends(get_current_user)],
     service: Annotated[WatchlistService, Depends(get_watchlist_service)],
 ) -> None:
-    await service.add_to_watchlist(user.id, body.news_id)
+    await service.add_to_watchlist(user.id, body.article_id)
 
 
 @router.delete(
-    "/watchlist/{news_id}",
+    "/watchlist/{article_id}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def remove_from_watchlist(
-    news_id: int,
+    article_id: int,
     user: Annotated[CurrentUser, Depends(get_current_user)],
     service: Annotated[WatchlistService, Depends(get_watchlist_service)],
 ) -> None:
-    await service.remove_from_watchlist(user.id, news_id)
+    await service.remove_from_watchlist(user.id, article_id)

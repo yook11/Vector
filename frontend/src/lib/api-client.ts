@@ -121,16 +121,16 @@ export async function getWatchlist(
 }
 
 /** Add an article to the watchlist. */
-export async function addToWatchlist(newsId: number): Promise<void> {
+export async function addToWatchlist(articleId: number): Promise<void> {
   return fetchApi<void>("/me/watchlist", {
     method: "POST",
-    body: JSON.stringify({ newsId }),
+    body: JSON.stringify({ articleId }),
   });
 }
 
 /** Remove an article from the watchlist. */
-export async function removeFromWatchlist(newsId: number): Promise<void> {
-  return fetchApi<void>(`/me/watchlist/${newsId}`, {
+export async function removeFromWatchlist(articleId: number): Promise<void> {
+  return fetchApi<void>(`/me/watchlist/${articleId}`, {
     method: "DELETE",
   });
 }

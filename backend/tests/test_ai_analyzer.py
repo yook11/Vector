@@ -376,8 +376,9 @@ async def test_news_endpoint_includes_analysis(
     )
     db_session.add(analysis)
     await db_session.commit()
+    await db_session.refresh(analysis)
 
-    response = await client.get(f"/api/v1/articles/{article.id}")
+    response = await client.get(f"/api/v1/articles/{analysis.id}")
 
     assert response.status_code == 200
     data = response.json()

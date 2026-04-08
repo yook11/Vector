@@ -24,7 +24,6 @@ if TYPE_CHECKING:
     from app.models.article_analysis import ArticleAnalysis
     from app.models.article_keyword import ArticleKeyword
     from app.models.news_source import NewsSource
-    from app.models.watchlist_entry import WatchlistEntry
 
 
 class NewsArticle(Base):
@@ -74,8 +73,5 @@ class NewsArticle(Base):
     )
     news_source: Mapped[NewsSource] = relationship(back_populates="articles")
     article_keywords: Mapped[list[ArticleKeyword]] = relationship(
-        back_populates="news_article"
-    )
-    watchlist_entries: Mapped[list[WatchlistEntry]] = relationship(
         back_populates="news_article"
     )

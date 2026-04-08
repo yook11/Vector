@@ -27,14 +27,14 @@ def build_brief(
 ) -> ArticleBrief:
     a = article.article_analysis
     return ArticleBrief(
-        id=article.id,
+        id=a.id,
         translated_title=a.translated_title,
         summary=a.summary,
         impact_level=a.impact_level,
         source=NewsSourceEmbed(name=article.news_source.name),
         published_at=article.published_at,
         keywords=build_keyword_embeds(article),
-        is_watched=article.id in watched_ids if watched_ids else False,
+        is_watched=a.id in watched_ids if watched_ids else False,
     )
 
 
@@ -44,7 +44,7 @@ def build_detail(
 ) -> ArticleDetail:
     a = article.article_analysis
     return ArticleDetail(
-        id=article.id,
+        id=a.id,
         translated_title=a.translated_title,
         summary=a.summary,
         impact_level=a.impact_level,
@@ -53,7 +53,7 @@ def build_detail(
         source=NewsSourceEmbed(name=article.news_source.name),
         published_at=article.published_at,
         keywords=build_keyword_embeds(article),
-        is_watched=article.id in watched_ids if watched_ids else False,
+        is_watched=a.id in watched_ids if watched_ids else False,
         original=OriginalArticleEmbed(
             title=article.original_title,
             url=article.original_url,
@@ -89,8 +89,8 @@ class ArticleService:
             pagination=query,
         )
 
-    async def get_article(self, news_id: int, user_id: int | None) -> ArticleDetail:
-        article = await self.repo.fetch_one_analyzed(news_id)
+    async def get_article(self, article_id: int, user_id: int | None) -> ArticleDetail:
+        article = await self.repo.fetch_one_analyzed(article_id)
         if article is None:
             raise NotFoundError("News article not found")
 
@@ -99,7 +99,7 @@ class ArticleService:
         )
         return build_detail(article, watched_ids)
 
-    async def get_similar(self, news_id: int, limit: int) -> list[ArticleBrief]:
+    async def get_similar(self, article_id: int, limit: int) -> list[ArticleBrief]:
         """Find semantically similar articles."""
-        articles = await self.repo.fetch_similar_to(news_id, limit)
+        articles = await self.repo.fetch_similar_to(article_id, limit)
         return [build_brief(a) for a in articles]
