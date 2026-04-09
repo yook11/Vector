@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import CurrentUser, get_current_user, get_session
+from app.repositories.articles import ArticleRepository
 from app.repositories.watchlist import WatchlistRepository
 from app.schemas.articles import PaginatedArticleResponse
 from app.schemas.base import PaginationParams
@@ -18,7 +19,7 @@ router = APIRouter(prefix="/api/v1/me", tags=["watchlist"])
 def get_watchlist_service(
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> WatchlistService:
-    return WatchlistService(WatchlistRepository(session))
+    return WatchlistService(WatchlistRepository(session), ArticleRepository(session))
 
 
 @router.get("/watchlist")

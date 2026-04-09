@@ -55,12 +55,6 @@ class WatchlistRepository:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def article_exists(self, article_id: int) -> bool:
-        """Check whether an analyzed article exists."""
-        stmt = select(ArticleAnalysis.id).where(ArticleAnalysis.id == article_id)
-        result = await self.session.execute(stmt)
-        return result.scalar_one_or_none() is not None
-
     async def add_entry(self, user_id: UUID, article_id: int) -> None:
         """Create a new watchlist entry."""
         entry = WatchlistEntry(user_id=user_id, article_analysis_id=article_id)

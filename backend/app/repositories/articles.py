@@ -1,6 +1,6 @@
 """Read-only queries for articles (listing, detail, similar)."""
 
-from sqlalchemy import func, select, true
+from sqlalchemy import exists, func, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import contains_eager, defer, selectinload
 
@@ -109,6 +109,12 @@ class ArticleRepository:
         )
         result = await self.session.execute(stmt)
         return result.unique().scalar_one_or_none()
+
+    async def exists_analyzed(self, article_id: int) -> bool:
+        """Check whether an analyzed article exists."""
+        stmt = select(exists().where(ArticleAnalysis.id == article_id))
+        result = await self.session.execute(stmt)
+        return result.scalar_one()
 
     async def fetch_similar_to(
         self, article_id: int, limit: int

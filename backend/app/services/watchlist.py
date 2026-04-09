@@ -1,6 +1,7 @@
 from uuid import UUID
 
 from app.exceptions import DuplicateError, NotFoundError
+from app.repositories.articles import ArticleRepository
 from app.repositories.watchlist import WatchlistRepository
 from app.schemas.articles import PaginatedArticleResponse
 from app.schemas.base import PaginationParams
@@ -8,8 +9,13 @@ from app.services.articles import build_brief
 
 
 class WatchlistService:
-    def __init__(self, repo: WatchlistRepository) -> None:
+    def __init__(
+        self,
+        repo: WatchlistRepository,
+        article_repo: ArticleRepository,
+    ) -> None:
         self.repo = repo
+        self.article_repo = article_repo
 
     async def list_watchlist(
         self,
@@ -27,7 +33,7 @@ class WatchlistService:
         )
 
     async def add_to_watchlist(self, user_id: UUID, article_id: int) -> None:
-        if not await self.repo.article_exists(article_id):
+        if not await self.article_repo.exists_analyzed(article_id):
             raise NotFoundError("News article not found")
 
         if await self.repo.find_entry(user_id, article_id):
