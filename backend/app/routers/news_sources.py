@@ -5,7 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies import CurrentUser, get_admin_user, get_current_user, get_session
+from app.dependencies import CurrentUser, get_admin_user, get_session
 from app.repositories.news_source import NewsSourceRepository
 from app.schemas.news_source import (
     NewsSourceCreate,
@@ -25,7 +25,7 @@ def get_news_source_service(
 
 @router.get("", response_model=NewsSourceDetailList)
 async def list_sources(
-    _user: Annotated[CurrentUser, Depends(get_current_user)],
+    _user: Annotated[CurrentUser, Depends(get_admin_user)],
     service: Annotated[NewsSourceService, Depends(get_news_source_service)],
 ) -> NewsSourceDetailList:
     """List all news sources."""
