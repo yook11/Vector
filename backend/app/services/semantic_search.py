@@ -24,9 +24,12 @@ class SemanticSearchService:
         """Search articles by semantic similarity to the user's query text."""
         query_embedding = await embed_search_query(query.q)
         analyses, total = await self.search_repo.search_articles(query, query_embedding)
-        watched_ids = (
-            await self.watchlist_repo.get_watched_ids(user_id) if user_id else set()
-        )
+
+        watched_ids: set[int] = set()
+        if user_id and analyses:
+            article_ids = {a.id for a in analyses}
+            watched_ids = await self.watchlist_repo.watched_among(user_id, article_ids)
+
         return PaginatedArticleResponse.create(
             items=[build_brief(a, watched_ids) for a in analyses],
             total=total,

@@ -64,10 +64,15 @@ class WatchlistRepository:
         self.session.add(entry)
         await self.session.commit()
 
-    async def get_watched_ids(self, user_id: UUID) -> set[int]:
-        """Return set of article_analysis IDs in the user's watchlist."""
+    async def watched_among(self, user_id: UUID, article_ids: set[int]) -> set[int]:
+        """Return the subset of article_ids that the user is watching.
+
+        Precondition: article_ids must be non-empty. Callers should skip
+        this method when there are no articles to check.
+        """
         stmt = select(WatchlistEntry.article_analysis_id).where(
-            WatchlistEntry.user_id == user_id
+            WatchlistEntry.user_id == user_id,
+            WatchlistEntry.article_analysis_id.in_(article_ids),
         )
         result = await self.session.execute(stmt)
         return set(result.scalars().all())

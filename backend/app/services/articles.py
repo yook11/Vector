@@ -79,9 +79,10 @@ class ArticleService:
         """List analyzed articles for news browsing."""
         analyses, total = await self.repo.fetch_articles(query)
 
-        watched_ids = (
-            await self.watchlist_repo.get_watched_ids(user_id) if user_id else set()
-        )
+        watched_ids: set[int] = set()
+        if user_id and analyses:
+            article_ids = {a.id for a in analyses}
+            watched_ids = await self.watchlist_repo.watched_among(user_id, article_ids)
 
         return PaginatedArticleResponse.create(
             items=[build_brief(a, watched_ids) for a in analyses],
@@ -94,9 +95,11 @@ class ArticleService:
         if analysis is None:
             raise NotFoundError("News article not found")
 
-        watched_ids = (
-            await self.watchlist_repo.get_watched_ids(user_id) if user_id else set()
-        )
+        watched_ids: set[int] = set()
+        if user_id:
+            watched_ids = await self.watchlist_repo.watched_among(
+                user_id, {analysis.id}
+            )
         return build_detail(analysis, watched_ids)
 
     async def get_similar(self, article_id: int, limit: int) -> list[ArticleBrief]:
