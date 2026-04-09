@@ -111,8 +111,8 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
-    /** List Watchlist */
-    get: operations["list_watchlist_api_v1_me_watchlist_get"];
+    /** List Articles In Watchlist */
+    get: operations["list_articles_in_watchlist_api_v1_me_watchlist_get"];
     put?: never;
     /** Add To Watchlist */
     post: operations["add_to_watchlist_api_v1_me_watchlist_post"];
@@ -768,7 +768,7 @@ export interface operations {
       };
     };
   };
-  list_watchlist_api_v1_me_watchlist_get: {
+  list_articles_in_watchlist_api_v1_me_watchlist_get: {
     parameters: {
       query?: {
         page?: number;

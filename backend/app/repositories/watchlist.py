@@ -1,3 +1,6 @@
+from uuid import UUID
+
+from sqlalchemy import delete, exists
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import func, select
 
@@ -13,7 +16,7 @@ class WatchlistRepository:
 
     async def fetch_watched_articles(
         self,
-        user_id: int,
+        user_id: UUID,
         pagination: PaginationParams,
     ) -> tuple[list[ArticleAnalysis], int]:
         """Fetch paginated watched articles (analyzed only).
@@ -44,36 +47,45 @@ class WatchlistRepository:
 
         return analyses, total
 
-    async def find_entry(self, user_id: int, article_id: int) -> WatchlistEntry | None:
-        """Find a watchlist entry for the given user and article."""
-        stmt = select(WatchlistEntry).where(
-            WatchlistEntry.user_id == user_id,
-            WatchlistEntry.article_analysis_id == article_id,
+    async def is_watched(self, user_id: UUID, article_id: int) -> bool:
+        """Check whether the user is already watching the article."""
+        stmt = select(
+            exists().where(
+                WatchlistEntry.user_id == user_id,
+                WatchlistEntry.article_analysis_id == article_id,
+            )
         )
         result = await self.session.execute(stmt)
-        return result.scalar_one_or_none()
+        return result.scalar_one()
 
-    async def article_exists(self, article_id: int) -> bool:
-        """Check whether an analyzed article exists."""
-        stmt = select(ArticleAnalysis.id).where(ArticleAnalysis.id == article_id)
-        result = await self.session.execute(stmt)
-        return result.scalar_one_or_none() is not None
-
-    async def add_entry(self, user_id: int, article_id: int) -> None:
-        """Create a new watchlist entry."""
+    async def watch(self, user_id: UUID, article_id: int) -> None:
+        """Add an article to the user's watchlist."""
         entry = WatchlistEntry(user_id=user_id, article_analysis_id=article_id)
         self.session.add(entry)
         await self.session.commit()
 
-    async def get_watched_ids(self, user_id: int) -> set[int]:
-        """Return set of article_analysis IDs in the user's watchlist."""
+    async def watched_among(self, user_id: UUID, article_ids: set[int]) -> set[int]:
+        """Return the subset of article_ids that the user is watching.
+
+        Precondition: article_ids must be non-empty. Callers should skip
+        this method when there are no articles to check.
+        """
         stmt = select(WatchlistEntry.article_analysis_id).where(
-            WatchlistEntry.user_id == user_id
+            WatchlistEntry.user_id == user_id,
+            WatchlistEntry.article_analysis_id.in_(article_ids),
         )
         result = await self.session.execute(stmt)
         return set(result.scalars().all())
 
-    async def remove_entry(self, entry: WatchlistEntry) -> None:
-        """Delete an existing watchlist entry."""
-        await self.session.delete(entry)
+    async def unwatch(self, user_id: UUID, article_id: int) -> int:
+        """Remove an article from the user's watchlist.
+
+        Returns the number of deleted rows.
+        """
+        stmt = delete(WatchlistEntry).where(
+            WatchlistEntry.user_id == user_id,
+            WatchlistEntry.article_analysis_id == article_id,
+        )
+        result = await self.session.execute(stmt)
         await self.session.commit()
+        return result.rowcount
