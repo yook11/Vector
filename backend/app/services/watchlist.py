@@ -36,14 +36,12 @@ class WatchlistService:
         if not await self.article_repo.exists_analyzed(article_id):
             raise NotFoundError("News article not found")
 
-        if await self.repo.find_entry(user_id, article_id):
+        if await self.repo.is_watched(user_id, article_id):
             raise DuplicateError("Article already in watchlist")
 
-        await self.repo.add_entry(user_id, article_id)
+        await self.repo.watch(user_id, article_id)
 
     async def remove_from_watchlist(self, user_id: UUID, article_id: int) -> None:
-        entry = await self.repo.find_entry(user_id, article_id)
-        if entry is None:
+        deleted = await self.repo.unwatch(user_id, article_id)
+        if deleted == 0:
             raise NotFoundError("Watchlist item not found")
-
-        await self.repo.remove_entry(entry)

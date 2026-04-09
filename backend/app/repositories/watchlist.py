@@ -1,5 +1,6 @@
 from uuid import UUID
 
+from sqlalchemy import delete, exists
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import func, select
 
@@ -46,17 +47,19 @@ class WatchlistRepository:
 
         return analyses, total
 
-    async def find_entry(self, user_id: UUID, article_id: int) -> WatchlistEntry | None:
-        """Find a watchlist entry for the given user and article."""
-        stmt = select(WatchlistEntry).where(
-            WatchlistEntry.user_id == user_id,
-            WatchlistEntry.article_analysis_id == article_id,
+    async def is_watched(self, user_id: UUID, article_id: int) -> bool:
+        """Check whether the user is already watching the article."""
+        stmt = select(
+            exists().where(
+                WatchlistEntry.user_id == user_id,
+                WatchlistEntry.article_analysis_id == article_id,
+            )
         )
         result = await self.session.execute(stmt)
-        return result.scalar_one_or_none()
+        return result.scalar_one()
 
-    async def add_entry(self, user_id: UUID, article_id: int) -> None:
-        """Create a new watchlist entry."""
+    async def watch(self, user_id: UUID, article_id: int) -> None:
+        """Add an article to the user's watchlist."""
         entry = WatchlistEntry(user_id=user_id, article_analysis_id=article_id)
         self.session.add(entry)
         await self.session.commit()
@@ -69,7 +72,15 @@ class WatchlistRepository:
         result = await self.session.execute(stmt)
         return set(result.scalars().all())
 
-    async def remove_entry(self, entry: WatchlistEntry) -> None:
-        """Delete an existing watchlist entry."""
-        await self.session.delete(entry)
+    async def unwatch(self, user_id: UUID, article_id: int) -> int:
+        """Remove an article from the user's watchlist.
+
+        Returns the number of deleted rows.
+        """
+        stmt = delete(WatchlistEntry).where(
+            WatchlistEntry.user_id == user_id,
+            WatchlistEntry.article_analysis_id == article_id,
+        )
+        result = await self.session.execute(stmt)
         await self.session.commit()
+        return result.rowcount
