@@ -5,12 +5,7 @@ import { NewsFilters } from "@/components/news/NewsFilters";
 import { NewsList } from "@/components/news/NewsList";
 import { NewsPagination } from "@/components/news/NewsPagination";
 import { SearchBar } from "@/components/news/SearchBar";
-import {
-  getArticles,
-  getCategories,
-  getSources,
-  searchArticles,
-} from "@/lib/api-client";
+import { getArticles, getCategories, searchArticles } from "@/lib/api-client";
 import type { ImpactLevel } from "@/types";
 
 interface DashboardPageProps {
@@ -29,7 +24,6 @@ function parseCommonFilters(
     keyword?: string;
     category?: string;
     impactLevel?: ImpactLevel;
-    source?: string;
     sortOrder?: "asc" | "desc";
     page?: number;
     perPage?: number;
@@ -50,9 +44,6 @@ function parseCommonFilters(
   ) {
     filters.impactLevel = impactLevel as ImpactLevel;
   }
-
-  const source = str("source");
-  if (source) filters.source = source;
 
   const sortOrder = str("sortOrder");
   if (sortOrder === "asc" || sortOrder === "desc") {
@@ -78,10 +69,9 @@ export default async function DashboardPage({
     ? searchArticles({ q, ...filters })
     : getArticles(filters);
 
-  const [newsData, categoriesData, sourcesData] = await Promise.all([
+  const [newsData, categoriesData] = await Promise.all([
     fetchNews,
     getCategories().catch(() => ({ items: [] })),
-    getSources().catch(() => ({ items: [], total: 0 })),
   ]);
 
   return (
@@ -114,7 +104,7 @@ export default async function DashboardPage({
               <SearchBar />
             </Suspense>
             <Suspense>
-              <NewsFilters sources={sourcesData.items} />
+              <NewsFilters />
             </Suspense>
           </div>
 
