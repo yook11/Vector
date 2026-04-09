@@ -605,7 +605,6 @@ export interface operations {
         sortBy?: components["schemas"]["SortBy"];
         keyword?: components["schemas"]["KeywordName"] | null;
         category?: components["schemas"]["CategorySlug"] | null;
-        source?: components["schemas"]["SourceName"] | null;
         impactLevel?: components["schemas"]["ImpactLevel"] | null;
         sortOrder?: components["schemas"]["SortOrder"];
       };
@@ -646,7 +645,6 @@ export interface operations {
         perPage?: number;
         keyword?: components["schemas"]["KeywordName"] | null;
         category?: components["schemas"]["CategorySlug"] | null;
-        source?: components["schemas"]["SourceName"] | null;
         impactLevel?: components["schemas"]["ImpactLevel"] | null;
         sortOrder?: components["schemas"]["SortOrder"];
       };

@@ -11,7 +11,6 @@ from app.models.article_keyword import ArticleKeyword
 from app.models.category import Category
 from app.models.keyword import Keyword
 from app.models.news_article import NewsArticle
-from app.models.news_source import NewsSource
 from app.repositories.articles import article_eager_options_brief
 from app.schemas.articles import SemanticSearchParams, SortBy, SortOrder
 
@@ -40,10 +39,6 @@ class SemanticSearchRepository:
         stmt = stmt.where(distance_expr < settings.semantic_search_max_distance)
 
         # Content filters
-        if query.source is not None:
-            source_ids = select(NewsSource.id).where(NewsSource.name == query.source)
-            stmt = stmt.where(NewsArticle.news_source_id.in_(source_ids))
-
         if query.keyword is not None:
             matching_ids = (
                 select(ArticleKeyword.article_analysis_id)

@@ -9,7 +9,6 @@ from app.models.article_keyword import ArticleKeyword
 from app.models.category import Category
 from app.models.keyword import Keyword
 from app.models.news_article import NewsArticle
-from app.models.news_source import NewsSource
 from app.schemas.articles import ArticleListParams, SortOrder
 
 
@@ -56,10 +55,6 @@ class ArticleRepository:
         )
 
         # Filters
-        if query.source is not None:
-            source_ids = select(NewsSource.id).where(NewsSource.name == query.source)
-            stmt = stmt.where(NewsArticle.news_source_id.in_(source_ids))
-
         if query.keyword is not None:
             matching_ids = (
                 select(ArticleKeyword.article_analysis_id)

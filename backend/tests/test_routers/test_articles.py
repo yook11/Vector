@@ -210,52 +210,6 @@ class TestListArticles:
         assert items[0]["translatedTitle"] == "新しい記事"
         assert items[1]["translatedTitle"] == "古い記事"
 
-    async def test_filter_by_source_name(
-        self,
-        client: AsyncClient,
-        db_session: AsyncSession,
-        sample_source: NewsSource,
-    ) -> None:
-        a1 = await _create_article(
-            db_session,
-            sample_source,
-            url="https://example.com/src1",
-        )
-        await _create_analysis(db_session, a1)
-        # Create a second source for the unlinked article
-        second_source = NewsSource(
-            name="Other Source",
-            source_type="rss",
-            site_url="https://other.com",
-            endpoint_url="https://other.com/feed.xml",
-        )
-        db_session.add(second_source)
-        await db_session.commit()
-        await db_session.refresh(second_source)
-        a2 = await _create_article(
-            db_session, second_source, url="https://example.com/src2"
-        )
-        await _create_analysis(db_session, a2)
-
-        resp = await client.get(f"/api/v1/articles?source={sample_source.name}")
-        data = resp.json()
-        assert data["total"] == 1
-        assert data["items"][0]["source"]["name"] == str(sample_source.name)
-
-    async def test_filter_by_source_name_nonexistent(
-        self,
-        client: AsyncClient,
-        db_session: AsyncSession,
-        sample_source: NewsSource,
-    ) -> None:
-        a = await _create_article(db_session, sample_source)
-        await _create_analysis(db_session, a)
-
-        resp = await client.get("/api/v1/articles?source=NonExistentSource")
-        data = resp.json()
-        assert data["total"] == 0
-        assert data["items"] == []
-
     async def test_camel_case_response(
         self,
         client: AsyncClient,
@@ -312,14 +266,6 @@ class TestListArticles:
         assert isinstance(detail, list)
         assert detail[0]["loc"] == ["query", "category"]
         assert "CategorySlug" in detail[0]["msg"]
-
-    async def test_invalid_source_name_returns_422(self, client: AsyncClient) -> None:
-        """SourceName VO rejects values containing disallowed characters."""
-        resp = await client.get("/api/v1/articles?source=<bad>")
-        assert resp.status_code == 422
-        detail = resp.json()["detail"]
-        assert isinstance(detail, list)
-        assert detail[0]["loc"] == ["query", "source"]
 
 
 @pytest.mark.asyncio

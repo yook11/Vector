@@ -145,56 +145,7 @@ async def test_semantic_search_excludes_articles_without_embedding(
 
 
 # ---------------------------------------------------------------------------
-# B. Combined with existing filters
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_semantic_search_combined_with_source_filter(
-    authed_client: AsyncClient,
-    db_session: AsyncSession,
-) -> None:
-    """Semantic search should work with source name filter."""
-    source_a = await _create_source(db_session)
-    source_b = NewsSource(
-        name="Other Source",
-        source_type=SourceType.RSS,
-        site_url="https://other.com",
-        endpoint_url="https://other.com/feed.xml",
-    )
-    db_session.add(source_b)
-    await db_session.flush()
-
-    await _create_article(
-        db_session,
-        source_a,
-        title="Source A Article",
-        url="https://example.com/a",
-        embedding=FAKE_EMBEDDING_A,
-    )
-    await _create_article(
-        db_session,
-        source_b,
-        title="Source B Article",
-        url="https://other.com/b",
-        embedding=FAKE_EMBEDDING_A,
-    )
-    await db_session.commit()
-
-    with _patch_embed_query():
-        resp = await authed_client.get(
-            "/api/v1/articles/search",
-            params={"q": "test", "source": str(source_a.name)},
-        )
-
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["total"] == 1
-    assert data["items"][0]["translatedTitle"] == "Translated: Source A Article"
-
-
-# ---------------------------------------------------------------------------
-# C. No q parameter -- existing behavior unchanged
+# B. No q parameter -- existing behavior unchanged
 # ---------------------------------------------------------------------------
 
 
