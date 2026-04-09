@@ -23,12 +23,12 @@ def get_watchlist_service(
 
 
 @router.get("/watchlist")
-async def list_watchlist(
+async def list_articles_in_watchlist(
     pagination: Annotated[PaginationParams, Query()],
     user: Annotated[CurrentUser, Depends(get_current_user)],
     service: Annotated[WatchlistService, Depends(get_watchlist_service)],
 ) -> PaginatedArticleResponse:
-    return await service.list_watchlist(user.id, pagination)
+    return await service.list_articles_in_watchlist(user.id, pagination)
 
 
 @router.post("/watchlist", status_code=status.HTTP_201_CREATED)

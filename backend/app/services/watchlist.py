@@ -17,7 +17,7 @@ class WatchlistService:
         self.repo = repo
         self.article_repo = article_repo
 
-    async def list_watchlist(
+    async def list_articles_in_watchlist(
         self,
         user_id: UUID,
         pagination: PaginationParams,
