@@ -14,7 +14,6 @@ if TYPE_CHECKING:
 
 from app.domain.category import CategorySlug
 from app.domain.keyword import KeywordName
-from app.domain.news_source import SourceName
 from app.models.article_analysis import ImpactLevel
 from app.schemas.base import PaginationParams, _CamelBase
 from app.schemas.embeds import KeywordEmbed, NewsSourceEmbed, OriginalArticleEmbed
@@ -51,7 +50,6 @@ class ArticleListParams(PaginationParams):
 
     keyword: Annotated[KeywordName | None, Query()] = None
     category: Annotated[CategorySlug | None, Query()] = None
-    source: Annotated[SourceName | None, Query()] = None
     impact_level: Annotated[ImpactLevel | None, Query(alias="impactLevel")] = None
     sort_order: Annotated[SortOrder, Query(alias="sortOrder")] = SortOrder.DESC
 
@@ -68,7 +66,6 @@ class SemanticSearchParams(PaginationParams):
     sort_by: Annotated[SortBy, Query(alias="sortBy")] = SortBy.RELEVANCE
     keyword: Annotated[KeywordName | None, Query()] = None
     category: Annotated[CategorySlug | None, Query()] = None
-    source: Annotated[SourceName | None, Query()] = None
     impact_level: Annotated[ImpactLevel | None, Query(alias="impactLevel")] = None
     sort_order: Annotated[SortOrder, Query(alias="sortOrder")] = SortOrder.DESC
 

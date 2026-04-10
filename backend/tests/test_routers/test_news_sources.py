@@ -8,9 +8,9 @@ from app.models.news_source import NewsSource, SourceType
 
 
 async def test_list_sources_empty(
-    authed_client: AsyncClient,
+    admin_client: AsyncClient,
 ) -> None:
-    response = await authed_client.get("/api/v1/sources")
+    response = await admin_client.get("/api/v1/sources")
     assert response.status_code == 200
     data = response.json()
     assert data["items"] == []
@@ -18,7 +18,7 @@ async def test_list_sources_empty(
 
 
 async def test_list_sources(
-    authed_client: AsyncClient,
+    admin_client: AsyncClient,
     db_session: AsyncSession,
 ) -> None:
     source = NewsSource(
@@ -30,13 +30,21 @@ async def test_list_sources(
     db_session.add(source)
     await db_session.commit()
 
-    response = await authed_client.get("/api/v1/sources")
+    response = await admin_client.get("/api/v1/sources")
     assert response.status_code == 200
     data = response.json()
     assert data["total"] == 1
     assert data["items"][0]["name"] == "TechCrunch"
     assert data["items"][0]["sourceType"] == "rss"
     assert data["items"][0]["endpointUrl"] == "https://techcrunch.com/feed/"
+
+
+async def test_list_sources_forbidden_for_non_admin(
+    authed_client: AsyncClient,
+) -> None:
+    """Non-admin users get 403 on the management list endpoint."""
+    response = await authed_client.get("/api/v1/sources")
+    assert response.status_code == 403
 
 
 

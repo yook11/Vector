@@ -9,13 +9,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { NewsSourceEmbed } from "@/types";
 
-interface NewsFiltersProps {
-  sources?: NewsSourceEmbed[];
-}
-
-export function NewsFilters({ sources }: NewsFiltersProps) {
+export function NewsFilters() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -52,29 +47,6 @@ export function NewsFilters({ sources }: NewsFiltersProps) {
           <SelectItem value="critical">Critical</SelectItem>
         </SelectContent>
       </Select>
-
-      {sources && sources.length > 0 && (
-        <Select
-          value={searchParams?.get("source") ?? ""}
-          onValueChange={(v) =>
-            updateParam("source", v === "all" ? undefined : v)
-          }
-        >
-          <SelectTrigger className="h-9 w-[130px] text-xs border-border">
-            <SelectValue placeholder="Source" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Sources</SelectItem>
-            {[...new Map(sources.map((s) => [s.name, s])).values()].map(
-              (src) => (
-                <SelectItem key={src.name} value={src.name}>
-                  {src.name}
-                </SelectItem>
-              ),
-            )}
-          </SelectContent>
-        </Select>
-      )}
 
       <Select
         value={searchParams?.get("sortOrder") ?? ""}
