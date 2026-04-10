@@ -30,8 +30,17 @@ class NewsSourceRepository:
         await self.session.delete(source)
         await self.session.commit()
 
-    async def save(self, source: NewsSource) -> NewsSource:
-        """Persist changes to an existing news source."""
+    async def activate(self, source: NewsSource) -> NewsSource:
+        """Mark a news source as active and persist the change."""
+        source.is_active = True
+        self.session.add(source)
+        await self.session.commit()
+        await self.session.refresh(source)
+        return source
+
+    async def deactivate(self, source: NewsSource) -> NewsSource:
+        """Mark a news source as inactive and persist the change."""
+        source.is_active = False
         self.session.add(source)
         await self.session.commit()
         await self.session.refresh(source)

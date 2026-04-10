@@ -27,8 +27,9 @@ import {
 } from "@/components/ui/table";
 import {
   ApiError,
+  clientActivateSource,
+  clientDeactivateSource,
   clientDeleteSource,
-  clientToggleSource,
 } from "@/lib/client-api";
 import type { NewsSourceDetail } from "@/types";
 
@@ -40,17 +41,19 @@ export function SourceTable({ sources }: SourceTableProps) {
   const router = useRouter();
   const [toggling, setToggling] = useState<number | null>(null);
 
-  async function handleToggle(id: number) {
-    setToggling(id);
+  async function handleToggle(source: NewsSourceDetail) {
+    setToggling(source.id);
     try {
-      const updated = await clientToggleSource(id);
+      const updated = source.isActive
+        ? await clientDeactivateSource(source.id)
+        : await clientActivateSource(source.id);
       toast.success(
         `${updated.name} ${updated.isActive ? "enabled" : "disabled"}`,
       );
       router.refresh();
     } catch (err) {
       toast.error(
-        err instanceof ApiError ? err.detail : "Failed to toggle source",
+        err instanceof ApiError ? err.detail : "Failed to update source",
       );
     } finally {
       setToggling(null);
@@ -103,7 +106,7 @@ export function SourceTable({ sources }: SourceTableProps) {
               <Switch
                 checked={source.isActive}
                 disabled={toggling === source.id}
-                onCheckedChange={() => handleToggle(source.id)}
+                onCheckedChange={() => handleToggle(source)}
               />
             </TableCell>
             <TableCell className="text-right">
