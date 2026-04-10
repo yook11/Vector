@@ -183,7 +183,7 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
-  "/api/v1/admin/sources/{source_id}/toggle": {
+  "/api/v1/admin/sources/{source_id}/activate": {
     parameters: {
       query?: never;
       header?: never;
@@ -197,10 +197,30 @@ export interface paths {
     options?: never;
     head?: never;
     /**
-     * Toggle Source
-     * @description Toggle a news source's is_active status.
+     * Activate Source
+     * @description Activate a news source.
      */
-    patch: operations["toggle_source_api_v1_admin_sources__source_id__toggle_patch"];
+    patch: operations["activate_source_api_v1_admin_sources__source_id__activate_patch"];
+    trace?: never;
+  };
+  "/api/v1/admin/sources/{source_id}/deactivate": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /**
+     * Deactivate Source
+     * @description Deactivate a news source.
+     */
+    patch: operations["deactivate_source_api_v1_admin_sources__source_id__deactivate_patch"];
     trace?: never;
   };
   "/api/v1/admin/pipeline/fetch": {
@@ -973,7 +993,42 @@ export interface operations {
       };
     };
   };
-  toggle_source_api_v1_admin_sources__source_id__toggle_patch: {
+  activate_source_api_v1_admin_sources__source_id__activate_patch: {
+    parameters: {
+      query?: never;
+      header: {
+        "x-user-id": string;
+        "x-user-role": components["schemas"]["UserRole"];
+        "x-internal-secret"?: string | null;
+      };
+      path: {
+        source_id: number;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["NewsSourceDetail"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  deactivate_source_api_v1_admin_sources__source_id__deactivate_patch: {
     parameters: {
       query?: never;
       header: {

@@ -45,7 +45,6 @@ async def test_list_news_sources_forbidden_for_non_admin(
     assert response.status_code == 403
 
 
-
 async def test_create_rss_source(
     admin_client: AsyncClient,
 ) -> None:
@@ -126,30 +125,48 @@ async def test_delete_news_source_not_found(
     assert response.status_code == 404
 
 
-async def test_toggle_source_active(
+async def test_deactivate_source(
     admin_client: AsyncClient,
     sample_source: NewsSource,
 ) -> None:
-    # Initially active
     assert sample_source.is_active is True
 
-    # Toggle off
-    response = await admin_client.patch(f"/api/v1/admin/sources/{sample_source.id}/toggle")
+    response = await admin_client.patch(
+        f"/api/v1/admin/sources/{sample_source.id}/deactivate"
+    )
     assert response.status_code == 200
     data = response.json()
     assert data["isActive"] is False
 
-    # Toggle back on
-    response = await admin_client.patch(f"/api/v1/admin/sources/{sample_source.id}/toggle")
+
+async def test_activate_source(
+    admin_client: AsyncClient,
+    db_session: AsyncSession,
+    sample_source: NewsSource,
+) -> None:
+    sample_source.is_active = False
+    db_session.add(sample_source)
+    await db_session.commit()
+
+    response = await admin_client.patch(
+        f"/api/v1/admin/sources/{sample_source.id}/activate"
+    )
     assert response.status_code == 200
     data = response.json()
     assert data["isActive"] is True
 
 
-async def test_toggle_source_not_found(
+async def test_activate_source_not_found(
     admin_client: AsyncClient,
 ) -> None:
-    response = await admin_client.patch("/api/v1/admin/sources/999/toggle")
+    response = await admin_client.patch("/api/v1/admin/sources/999/activate")
+    assert response.status_code == 404
+
+
+async def test_deactivate_source_not_found(
+    admin_client: AsyncClient,
+) -> None:
+    response = await admin_client.patch("/api/v1/admin/sources/999/deactivate")
     assert response.status_code == 404
 
 

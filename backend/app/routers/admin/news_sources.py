@@ -49,10 +49,19 @@ async def delete_news_source(
     await service.delete_source(source_id)
 
 
-@router.patch("/{source_id}/toggle")
-async def toggle_source(
+@router.patch("/{source_id}/activate")
+async def activate_source(
     source_id: int,
     service: Annotated[NewsSourceService, Depends(get_news_source_service)],
 ) -> NewsSourceDetail:
-    """Toggle a news source's is_active status."""
-    return await service.toggle_source(source_id)
+    """Activate a news source."""
+    return await service.activate_source(source_id)
+
+
+@router.patch("/{source_id}/deactivate")
+async def deactivate_source(
+    source_id: int,
+    service: Annotated[NewsSourceService, Depends(get_news_source_service)],
+) -> NewsSourceDetail:
+    """Deactivate a news source."""
+    return await service.deactivate_source(source_id)

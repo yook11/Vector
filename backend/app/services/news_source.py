@@ -38,8 +38,12 @@ class NewsSourceService:
         source = await self._get_or_raise(source_id)
         await self.repo.delete(source)
 
-    async def toggle_source(self, source_id: int) -> NewsSourceDetail:
+    async def activate_source(self, source_id: int) -> NewsSourceDetail:
         source = await self._get_or_raise(source_id)
-        source.is_active = not source.is_active
-        source = await self.repo.save(source)
+        source = await self.repo.activate(source)
+        return NewsSourceDetail.model_validate(source)
+
+    async def deactivate_source(self, source_id: int) -> NewsSourceDetail:
+        source = await self._get_or_raise(source_id)
+        source = await self.repo.deactivate(source)
         return NewsSourceDetail.model_validate(source)

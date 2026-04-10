@@ -81,10 +81,18 @@ export async function clientDeleteSource(id: number): Promise<void> {
   return clientFetch<void>(`/admin/sources/${id}`, { method: "DELETE" });
 }
 
-export async function clientToggleSource(
+export async function clientActivateSource(
   id: number,
 ): Promise<NewsSourceDetail> {
-  return clientFetch<NewsSourceDetail>(`/admin/sources/${id}/toggle`, {
+  return clientFetch<NewsSourceDetail>(`/admin/sources/${id}/activate`, {
+    method: "PATCH",
+  });
+}
+
+export async function clientDeactivateSource(
+  id: number,
+): Promise<NewsSourceDetail> {
+  return clientFetch<NewsSourceDetail>(`/admin/sources/${id}/deactivate`, {
     method: "PATCH",
   });
 }
