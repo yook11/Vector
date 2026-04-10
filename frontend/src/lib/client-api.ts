@@ -56,7 +56,7 @@ export async function clientRemoveFromWatchlist(
 export async function clientTriggerFetch(
   body?: FetchRequest,
 ): Promise<FetchResponse> {
-  return clientFetch<FetchResponse>("/pipeline/fetch", {
+  return clientFetch<FetchResponse>("/admin/pipeline/fetch", {
     method: "POST",
     body: JSON.stringify(body ?? {}),
   });
@@ -65,26 +65,26 @@ export async function clientTriggerFetch(
 // --- Sources ---
 
 export async function clientListSources(): Promise<NewsSourceDetailList> {
-  return clientFetch<NewsSourceDetailList>("/sources");
+  return clientFetch<NewsSourceDetailList>("/admin/sources");
 }
 
 export async function clientCreateSource(
   body: NewsSourceCreate,
 ): Promise<NewsSourceDetail> {
-  return clientFetch<NewsSourceDetail>("/sources", {
+  return clientFetch<NewsSourceDetail>("/admin/sources", {
     method: "POST",
     body: JSON.stringify(body),
   });
 }
 
 export async function clientDeleteSource(id: number): Promise<void> {
-  return clientFetch<void>(`/sources/${id}`, { method: "DELETE" });
+  return clientFetch<void>(`/admin/sources/${id}`, { method: "DELETE" });
 }
 
 export async function clientToggleSource(
   id: number,
 ): Promise<NewsSourceDetail> {
-  return clientFetch<NewsSourceDetail>(`/sources/${id}/toggle`, {
+  return clientFetch<NewsSourceDetail>(`/admin/sources/${id}/toggle`, {
     method: "PATCH",
   });
 }

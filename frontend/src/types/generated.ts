@@ -139,7 +139,7 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
-  "/api/v1/sources": {
+  "/api/v1/admin/sources": {
     parameters: {
       query?: never;
       header?: never;
@@ -150,20 +150,20 @@ export interface paths {
      * List Sources
      * @description List all news sources.
      */
-    get: operations["list_sources_api_v1_sources_get"];
+    get: operations["list_sources_api_v1_admin_sources_get"];
     put?: never;
     /**
      * Create Source
      * @description Create a new news source.
      */
-    post: operations["create_source_api_v1_sources_post"];
+    post: operations["create_source_api_v1_admin_sources_post"];
     delete?: never;
     options?: never;
     head?: never;
     patch?: never;
     trace?: never;
   };
-  "/api/v1/sources/{source_id}": {
+  "/api/v1/admin/sources/{source_id}": {
     parameters: {
       query?: never;
       header?: never;
@@ -177,13 +177,13 @@ export interface paths {
      * Delete Source
      * @description Delete a news source.
      */
-    delete: operations["delete_source_api_v1_sources__source_id__delete"];
+    delete: operations["delete_source_api_v1_admin_sources__source_id__delete"];
     options?: never;
     head?: never;
     patch?: never;
     trace?: never;
   };
-  "/api/v1/sources/{source_id}/toggle": {
+  "/api/v1/admin/sources/{source_id}/toggle": {
     parameters: {
       query?: never;
       header?: never;
@@ -200,10 +200,10 @@ export interface paths {
      * Toggle Source
      * @description Toggle a news source's is_active status.
      */
-    patch: operations["toggle_source_api_v1_sources__source_id__toggle_patch"];
+    patch: operations["toggle_source_api_v1_admin_sources__source_id__toggle_patch"];
     trace?: never;
   };
-  "/api/v1/pipeline/fetch": {
+  "/api/v1/admin/pipeline/fetch": {
     parameters: {
       query?: never;
       header?: never;
@@ -216,14 +216,14 @@ export interface paths {
      * Fetch News
      * @description Enqueue a news fetch task. Returns immediately with a task ID.
      */
-    post: operations["fetch_news_api_v1_pipeline_fetch_post"];
+    post: operations["fetch_news_api_v1_admin_pipeline_fetch_post"];
     delete?: never;
     options?: never;
     head?: never;
     patch?: never;
     trace?: never;
   };
-  "/api/v1/pipeline/embed": {
+  "/api/v1/admin/pipeline/embed": {
     parameters: {
       query?: never;
       header?: never;
@@ -236,7 +236,7 @@ export interface paths {
      * Backfill embeddings for analyses that are missing them
      * @description Generate vector embeddings for all analyses where embedding IS NULL.
      */
-    post: operations["embed_news_api_v1_pipeline_embed_post"];
+    post: operations["embed_news_api_v1_admin_pipeline_embed_post"];
     delete?: never;
     options?: never;
     head?: never;
@@ -374,7 +374,7 @@ export interface components {
     CategorySlug: string;
     /**
      * EmbedResponse
-     * @description POST /api/v1/pipeline/embed response.
+     * @description POST /api/v1/admin/pipeline/embed response.
      */
     EmbedResponse: {
       /** Message */
@@ -388,7 +388,7 @@ export interface components {
     };
     /**
      * FetchRequest
-     * @description POST /api/v1/pipeline/fetch request body.
+     * @description POST /api/v1/admin/pipeline/fetch request body.
      */
     FetchRequest: {
       /** Sourceids */
@@ -396,7 +396,7 @@ export interface components {
     };
     /**
      * FetchResponse
-     * @description POST /api/v1/pipeline/fetch response.
+     * @description POST /api/v1/admin/pipeline/fetch response.
      */
     FetchResponse: {
       /** Message */
@@ -448,7 +448,7 @@ export interface components {
     };
     /**
      * NewsSourceCreate
-     * @description POST /api/v1/sources request body.
+     * @description POST /api/v1/admin/sources request body.
      */
     NewsSourceCreate: {
       name: components["schemas"]["SourceName"];
@@ -482,13 +482,11 @@ export interface components {
     };
     /**
      * NewsSourceDetailList
-     * @description GET /api/v1/sources response wrapper.
+     * @description GET /api/v1/admin/sources response wrapper.
      */
     NewsSourceDetailList: {
       /** Items */
       items: components["schemas"]["NewsSourceDetail"][];
-      /** Total */
-      total: number;
     };
     /**
      * NewsSourceEmbed
@@ -872,7 +870,7 @@ export interface operations {
       };
     };
   };
-  list_sources_api_v1_sources_get: {
+  list_sources_api_v1_admin_sources_get: {
     parameters: {
       query?: never;
       header: {
@@ -905,7 +903,7 @@ export interface operations {
       };
     };
   };
-  create_source_api_v1_sources_post: {
+  create_source_api_v1_admin_sources_post: {
     parameters: {
       query?: never;
       header: {
@@ -942,7 +940,7 @@ export interface operations {
       };
     };
   };
-  delete_source_api_v1_sources__source_id__delete: {
+  delete_source_api_v1_admin_sources__source_id__delete: {
     parameters: {
       query?: never;
       header: {
@@ -975,7 +973,7 @@ export interface operations {
       };
     };
   };
-  toggle_source_api_v1_sources__source_id__toggle_patch: {
+  toggle_source_api_v1_admin_sources__source_id__toggle_patch: {
     parameters: {
       query?: never;
       header: {
@@ -1010,7 +1008,7 @@ export interface operations {
       };
     };
   };
-  fetch_news_api_v1_pipeline_fetch_post: {
+  fetch_news_api_v1_admin_pipeline_fetch_post: {
     parameters: {
       query?: never;
       header: {
@@ -1047,7 +1045,7 @@ export interface operations {
       };
     };
   };
-  embed_news_api_v1_pipeline_embed_post: {
+  embed_news_api_v1_admin_pipeline_embed_post: {
     parameters: {
       query?: never;
       header: {

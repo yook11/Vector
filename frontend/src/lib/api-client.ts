@@ -101,7 +101,7 @@ export async function getArticleById(id: number): Promise<ArticleDetail> {
 export async function triggerFetch(
   body?: FetchRequest,
 ): Promise<FetchResponse> {
-  return fetchApi<FetchResponse>("/pipeline/fetch", {
+  return fetchApi<FetchResponse>("/admin/pipeline/fetch", {
     method: "POST",
     body: JSON.stringify(body ?? {}),
   });
@@ -158,7 +158,9 @@ export async function getCategories(): Promise<CategoryDetailListResponse> {
 
 /** Fetch all news sources (SSR-compatible). */
 export async function getSources(): Promise<NewsSourceDetailList> {
-  return fetchApi<NewsSourceDetailList>("/sources", { cache: "no-store" });
+  return fetchApi<NewsSourceDetailList>("/admin/sources", {
+    cache: "no-store",
+  });
 }
 
 export { ApiError };
