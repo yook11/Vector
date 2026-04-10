@@ -1,5 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import func, select
+from sqlmodel import select
 
 from app.models.news_source import NewsSource
 
@@ -13,11 +13,6 @@ class NewsSourceRepository:
         stmt = select(NewsSource).order_by(NewsSource.name)
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
-
-    async def get_count(self) -> int:
-        """Get total count of news sources."""
-        stmt = select(func.count()).select_from(NewsSource)
-        return (await self.session.execute(stmt)).scalar_one()
 
     async def get_by_id(self, source_id: int) -> NewsSource | None:
         """Get a single news source by ID. Returns None if not found."""

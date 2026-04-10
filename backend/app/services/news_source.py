@@ -12,12 +12,10 @@ class NewsSourceService:
     def __init__(self, repo: NewsSourceRepository) -> None:
         self.repo = repo
 
-    async def list_sources(self) -> NewsSourceDetailList:
+    async def get_all(self) -> NewsSourceDetailList:
         sources = await self.repo.get_all()
-        count = await self.repo.get_count()
         return NewsSourceDetailList(
             items=[NewsSourceDetail.model_validate(s) for s in sources],
-            total=count,
         )
 
     async def _get_or_raise(self, source_id: int) -> NewsSource:

@@ -15,10 +15,9 @@ from app.exception_handlers import (
 )
 from app.exceptions import DuplicateError, NotFoundError
 from app.routers import (
+    admin,
     articles,
     categories,
-    news_sources,
-    pipeline,
     semantic_search,
     watchlist,
 )
@@ -93,8 +92,7 @@ app.include_router(semantic_search.router)
 app.include_router(articles.router)
 app.include_router(categories.router)
 app.include_router(watchlist.router)
-app.include_router(news_sources.router)
-app.include_router(pipeline.router)
+app.include_router(admin.admin_router)
 
 
 @app.get("/api/v1/health")

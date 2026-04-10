@@ -10,11 +10,10 @@ from app.models.news_source import NewsSource, SourceType
 async def test_list_sources_empty(
     admin_client: AsyncClient,
 ) -> None:
-    response = await admin_client.get("/api/v1/sources")
+    response = await admin_client.get("/api/v1/admin/sources")
     assert response.status_code == 200
     data = response.json()
     assert data["items"] == []
-    assert data["total"] == 0
 
 
 async def test_list_sources(
@@ -30,10 +29,9 @@ async def test_list_sources(
     db_session.add(source)
     await db_session.commit()
 
-    response = await admin_client.get("/api/v1/sources")
+    response = await admin_client.get("/api/v1/admin/sources")
     assert response.status_code == 200
     data = response.json()
-    assert data["total"] == 1
     assert data["items"][0]["name"] == "TechCrunch"
     assert data["items"][0]["sourceType"] == "rss"
     assert data["items"][0]["endpointUrl"] == "https://techcrunch.com/feed/"
@@ -43,7 +41,7 @@ async def test_list_sources_forbidden_for_non_admin(
     authed_client: AsyncClient,
 ) -> None:
     """Non-admin users get 403 on the management list endpoint."""
-    response = await authed_client.get("/api/v1/sources")
+    response = await authed_client.get("/api/v1/admin/sources")
     assert response.status_code == 403
 
 
@@ -57,7 +55,7 @@ async def test_create_rss_source(
         "siteUrl": "https://example.com",
         "endpointUrl": "https://example.com/rss.xml",
     }
-    response = await admin_client.post("/api/v1/sources", json=body)
+    response = await admin_client.post("/api/v1/admin/sources", json=body)
     assert response.status_code == 201
     data = response.json()
     assert data["name"] == "New RSS Source"
@@ -76,7 +74,7 @@ async def test_create_api_source(
         "siteUrl": "https://news.ycombinator.com",
         "endpointUrl": "https://hn.algolia.com/api/v1/search_by_date",
     }
-    response = await admin_client.post("/api/v1/sources", json=body)
+    response = await admin_client.post("/api/v1/admin/sources", json=body)
     assert response.status_code == 201
     data = response.json()
     assert data["sourceType"] == "api"
@@ -91,7 +89,7 @@ async def test_create_source_missing_endpoint_url(
         "sourceType": "rss",
         "siteUrl": "https://example.com",
     }
-    response = await admin_client.post("/api/v1/sources", json=body)
+    response = await admin_client.post("/api/v1/admin/sources", json=body)
     assert response.status_code == 422
 
 
@@ -103,7 +101,7 @@ async def test_create_source_missing_site_url(
         "sourceType": "rss",
         "endpointUrl": "https://example.com/feed.xml",
     }
-    response = await admin_client.post("/api/v1/sources", json=body)
+    response = await admin_client.post("/api/v1/admin/sources", json=body)
     assert response.status_code == 422
 
 
@@ -112,7 +110,7 @@ async def test_delete_source(
     db_session: AsyncSession,
     sample_source: NewsSource,
 ) -> None:
-    response = await admin_client.delete(f"/api/v1/sources/{sample_source.id}")
+    response = await admin_client.delete(f"/api/v1/admin/sources/{sample_source.id}")
     assert response.status_code == 204
 
     # Verify deleted
@@ -124,7 +122,7 @@ async def test_delete_source(
 async def test_delete_source_not_found(
     admin_client: AsyncClient,
 ) -> None:
-    response = await admin_client.delete("/api/v1/sources/999")
+    response = await admin_client.delete("/api/v1/admin/sources/999")
     assert response.status_code == 404
 
 
@@ -136,13 +134,13 @@ async def test_toggle_source_active(
     assert sample_source.is_active is True
 
     # Toggle off
-    response = await admin_client.patch(f"/api/v1/sources/{sample_source.id}/toggle")
+    response = await admin_client.patch(f"/api/v1/admin/sources/{sample_source.id}/toggle")
     assert response.status_code == 200
     data = response.json()
     assert data["isActive"] is False
 
     # Toggle back on
-    response = await admin_client.patch(f"/api/v1/sources/{sample_source.id}/toggle")
+    response = await admin_client.patch(f"/api/v1/admin/sources/{sample_source.id}/toggle")
     assert response.status_code == 200
     data = response.json()
     assert data["isActive"] is True
@@ -151,7 +149,7 @@ async def test_toggle_source_active(
 async def test_toggle_source_not_found(
     admin_client: AsyncClient,
 ) -> None:
-    response = await admin_client.patch("/api/v1/sources/999/toggle")
+    response = await admin_client.patch("/api/v1/admin/sources/999/toggle")
     assert response.status_code == 404
 
 
@@ -159,5 +157,5 @@ async def test_missing_auth_headers(
     client: AsyncClient,
 ) -> None:
     """Missing required headers return 422 (FastAPI type validation)."""
-    response = await client.get("/api/v1/sources")
+    response = await client.get("/api/v1/admin/sources")
     assert response.status_code == 422

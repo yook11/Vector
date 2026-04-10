@@ -1,9 +1,11 @@
 """Admin endpoints for pipeline operations (fetch, embed)."""
 
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies import CurrentUser, get_admin_user, get_session
+from app.dependencies import get_session
 from app.repositories.pipeline import PipelineRepository
 from app.schemas.pipeline import (
     EmbedResponse,
@@ -12,11 +14,11 @@ from app.schemas.pipeline import (
 )
 from app.services.pipeline import PipelineService
 
-router = APIRouter(prefix="/api/v1/pipeline", tags=["pipeline"])
+router = APIRouter(prefix="/pipeline", tags=["admin:pipeline"])
 
 
 def get_pipeline_service(
-    session: AsyncSession = Depends(get_session),
+    session: Annotated[AsyncSession, Depends(get_session)],
 ) -> PipelineService:
     return PipelineService(PipelineRepository(session))
 
@@ -28,7 +30,6 @@ def get_pipeline_service(
 )
 async def fetch_news(
     body: FetchRequest | None = None,
-    _user: CurrentUser = Depends(get_admin_user),
 ) -> FetchResponse:
     """Enqueue a news fetch task. Returns immediately with a task ID."""
     source_ids = body.source_ids if body else None
@@ -42,8 +43,7 @@ async def fetch_news(
     summary="Backfill embeddings for analyses that are missing them",
 )
 async def embed_news(
-    _user: CurrentUser = Depends(get_admin_user),
-    service: PipelineService = Depends(get_pipeline_service),
+    service: Annotated[PipelineService, Depends(get_pipeline_service)],
 ) -> EmbedResponse:
     """Generate vector embeddings for all analyses where embedding IS NULL."""
     return await service.backfill_embeddings()

@@ -2,10 +2,10 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies import CurrentUser, get_admin_user, get_session
+from app.dependencies import get_session
 from app.repositories.news_source import NewsSourceRepository
 from app.schemas.news_source import (
     NewsSourceCreate,
@@ -14,7 +14,7 @@ from app.schemas.news_source import (
 )
 from app.services.news_source import NewsSourceService
 
-router = APIRouter(prefix="/api/v1/sources", tags=["sources"])
+router = APIRouter(prefix="/sources", tags=["admin:sources"])
 
 
 def get_news_source_service(
@@ -25,21 +25,19 @@ def get_news_source_service(
 
 @router.get("", response_model=NewsSourceDetailList)
 async def list_sources(
-    _user: Annotated[CurrentUser, Depends(get_admin_user)],
     service: Annotated[NewsSourceService, Depends(get_news_source_service)],
 ) -> NewsSourceDetailList:
     """List all news sources."""
-    return await service.list_sources()
+    return await service.get_all()
 
 
 @router.post(
     "",
     response_model=NewsSourceDetail,
-    status_code=status.HTTP_201_CREATED,
+    status_code=201,
 )
 async def create_source(
     body: NewsSourceCreate,
-    _user: Annotated[CurrentUser, Depends(get_admin_user)],
     service: Annotated[NewsSourceService, Depends(get_news_source_service)],
 ) -> NewsSourceDetail:
     """Create a new news source."""
@@ -48,11 +46,10 @@ async def create_source(
 
 @router.delete(
     "/{source_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
+    status_code=204,
 )
 async def delete_source(
     source_id: int,
-    _user: Annotated[CurrentUser, Depends(get_admin_user)],
     service: Annotated[NewsSourceService, Depends(get_news_source_service)],
 ) -> None:
     """Delete a news source."""
@@ -65,7 +62,6 @@ async def delete_source(
 )
 async def toggle_source(
     source_id: int,
-    _user: Annotated[CurrentUser, Depends(get_admin_user)],
     service: Annotated[NewsSourceService, Depends(get_news_source_service)],
 ) -> NewsSourceDetail:
     """Toggle a news source's is_active status."""
