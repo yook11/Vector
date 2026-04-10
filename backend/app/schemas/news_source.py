@@ -9,7 +9,7 @@ from app.schemas.base import _CamelBase
 
 
 class NewsSourceCreate(_CamelBase):
-    """POST /api/v1/sources request body."""
+    """POST /api/v1/admin/sources request body."""
 
     name: SourceName
     source_type: SourceType
@@ -31,7 +31,6 @@ class NewsSourceDetail(_CamelBase):
 
 
 class NewsSourceDetailList(_CamelBase):
-    """GET /api/v1/sources response wrapper."""
+    """GET /api/v1/admin/sources response wrapper."""
 
     items: list[NewsSourceDetail]
-    total: int

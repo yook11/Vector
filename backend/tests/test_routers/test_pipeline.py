@@ -1,4 +1,4 @@
-"""Tests for /api/v1/pipeline router endpoints."""
+"""Tests for /api/v1/admin/pipeline router endpoints."""
 
 from unittest.mock import AsyncMock, patch
 
@@ -16,7 +16,7 @@ class TestFetchNews:
             "app.services.pipeline.fetch_metadata",
         ) as mock_task:
             mock_task.kiq = AsyncMock(return_value=mock_task_handle)
-            resp = await admin_client.post("/api/v1/pipeline/fetch")
+            resp = await admin_client.post("/api/v1/admin/pipeline/fetch")
 
         assert resp.status_code == 202
         data = resp.json()
@@ -34,7 +34,7 @@ class TestFetchNews:
         ) as mock_task:
             mock_task.kiq = AsyncMock(return_value=mock_task_handle)
             resp = await admin_client.post(
-                "/api/v1/pipeline/fetch",
+                "/api/v1/admin/pipeline/fetch",
                 json={"sourceIds": [1, 2, 3]},
             )
 
