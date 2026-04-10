@@ -147,16 +147,16 @@ export interface paths {
       cookie?: never;
     };
     /**
-     * List Sources
+     * List News Sources
      * @description List all news sources.
      */
-    get: operations["list_sources_api_v1_admin_sources_get"];
+    get: operations["list_news_sources_api_v1_admin_sources_get"];
     put?: never;
     /**
-     * Create Source
+     * Create News Source
      * @description Create a new news source.
      */
-    post: operations["create_source_api_v1_admin_sources_post"];
+    post: operations["create_news_source_api_v1_admin_sources_post"];
     delete?: never;
     options?: never;
     head?: never;
@@ -174,10 +174,10 @@ export interface paths {
     put?: never;
     post?: never;
     /**
-     * Delete Source
+     * Delete News Source
      * @description Delete a news source.
      */
-    delete: operations["delete_source_api_v1_admin_sources__source_id__delete"];
+    delete: operations["delete_news_source_api_v1_admin_sources__source_id__delete"];
     options?: never;
     head?: never;
     patch?: never;
@@ -870,7 +870,7 @@ export interface operations {
       };
     };
   };
-  list_sources_api_v1_admin_sources_get: {
+  list_news_sources_api_v1_admin_sources_get: {
     parameters: {
       query?: never;
       header: {
@@ -903,7 +903,7 @@ export interface operations {
       };
     };
   };
-  create_source_api_v1_admin_sources_post: {
+  create_news_source_api_v1_admin_sources_post: {
     parameters: {
       query?: never;
       header: {
@@ -940,7 +940,7 @@ export interface operations {
       };
     };
   };
-  delete_source_api_v1_admin_sources__source_id__delete: {
+  delete_news_source_api_v1_admin_sources__source_id__delete: {
     parameters: {
       query?: never;
       header: {

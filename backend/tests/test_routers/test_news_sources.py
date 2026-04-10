@@ -7,7 +7,7 @@ from sqlmodel import select
 from app.models.news_source import NewsSource, SourceType
 
 
-async def test_list_sources_empty(
+async def test_list_news_sources_empty(
     admin_client: AsyncClient,
 ) -> None:
     response = await admin_client.get("/api/v1/admin/sources")
@@ -16,7 +16,7 @@ async def test_list_sources_empty(
     assert data["items"] == []
 
 
-async def test_list_sources(
+async def test_list_news_sources(
     admin_client: AsyncClient,
     db_session: AsyncSession,
 ) -> None:
@@ -37,7 +37,7 @@ async def test_list_sources(
     assert data["items"][0]["endpointUrl"] == "https://techcrunch.com/feed/"
 
 
-async def test_list_sources_forbidden_for_non_admin(
+async def test_list_news_sources_forbidden_for_non_admin(
     authed_client: AsyncClient,
 ) -> None:
     """Non-admin users get 403 on the management list endpoint."""
@@ -81,7 +81,7 @@ async def test_create_api_source(
     assert data["endpointUrl"] == "https://hn.algolia.com/api/v1/search_by_date"
 
 
-async def test_create_source_missing_endpoint_url(
+async def test_create_news_source_missing_endpoint_url(
     admin_client: AsyncClient,
 ) -> None:
     body = {
@@ -93,7 +93,7 @@ async def test_create_source_missing_endpoint_url(
     assert response.status_code == 422
 
 
-async def test_create_source_missing_site_url(
+async def test_create_news_source_missing_site_url(
     admin_client: AsyncClient,
 ) -> None:
     body = {
@@ -105,7 +105,7 @@ async def test_create_source_missing_site_url(
     assert response.status_code == 422
 
 
-async def test_delete_source(
+async def test_delete_news_source(
     admin_client: AsyncClient,
     db_session: AsyncSession,
     sample_source: NewsSource,
@@ -119,7 +119,7 @@ async def test_delete_source(
     assert result.scalar_one_or_none() is None
 
 
-async def test_delete_source_not_found(
+async def test_delete_news_source_not_found(
     admin_client: AsyncClient,
 ) -> None:
     response = await admin_client.delete("/api/v1/admin/sources/999")

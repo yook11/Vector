@@ -23,20 +23,16 @@ def get_news_source_service(
     return NewsSourceService(NewsSourceRepository(session))
 
 
-@router.get("", response_model=NewsSourceDetailList)
-async def list_sources(
+@router.get("")
+async def list_news_sources(
     service: Annotated[NewsSourceService, Depends(get_news_source_service)],
 ) -> NewsSourceDetailList:
     """List all news sources."""
     return await service.get_all()
 
 
-@router.post(
-    "",
-    response_model=NewsSourceDetail,
-    status_code=201,
-)
-async def create_source(
+@router.post("", status_code=201)
+async def create_news_source(
     body: NewsSourceCreate,
     service: Annotated[NewsSourceService, Depends(get_news_source_service)],
 ) -> NewsSourceDetail:
@@ -44,11 +40,8 @@ async def create_source(
     return await service.create_source(body)
 
 
-@router.delete(
-    "/{source_id}",
-    status_code=204,
-)
-async def delete_source(
+@router.delete("/{source_id}", status_code=204)
+async def delete_news_source(
     source_id: int,
     service: Annotated[NewsSourceService, Depends(get_news_source_service)],
 ) -> None:
@@ -56,10 +49,7 @@ async def delete_source(
     await service.delete_source(source_id)
 
 
-@router.patch(
-    "/{source_id}/toggle",
-    response_model=NewsSourceDetail,
-)
+@router.patch("/{source_id}/toggle")
 async def toggle_source(
     source_id: int,
     service: Annotated[NewsSourceService, Depends(get_news_source_service)],
