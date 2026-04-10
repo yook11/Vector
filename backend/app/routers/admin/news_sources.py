@@ -24,7 +24,7 @@ def get_news_source_service(
 
 
 @router.get("")
-async def list_sources(
+async def list_news_sources(
     service: Annotated[NewsSourceService, Depends(get_news_source_service)],
 ) -> NewsSourceDetailList:
     """List all news sources."""
@@ -32,7 +32,7 @@ async def list_sources(
 
 
 @router.post("", status_code=201)
-async def create_source(
+async def create_news_source(
     body: NewsSourceCreate,
     service: Annotated[NewsSourceService, Depends(get_news_source_service)],
 ) -> NewsSourceDetail:
@@ -41,7 +41,7 @@ async def create_source(
 
 
 @router.delete("/{source_id}", status_code=204)
-async def delete_source(
+async def delete_news_source(
     source_id: int,
     service: Annotated[NewsSourceService, Depends(get_news_source_service)],
 ) -> None:
