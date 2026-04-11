@@ -26,11 +26,3 @@ class NewsSourceRepository:
     async def delete(self, source: NewsSource) -> None:
         """Delete a news source."""
         await self.session.delete(source)
-
-    async def activate(self, source: NewsSource) -> None:
-        """Mark a news source as active."""
-        source.is_active = True
-
-    async def deactivate(self, source: NewsSource) -> None:
-        """Mark a news source as inactive."""
-        source.is_active = False
