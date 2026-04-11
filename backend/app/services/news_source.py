@@ -31,7 +31,7 @@ class NewsSourceService:
             site_url=body.site_url,
             endpoint_url=body.endpoint_url,
         )
-        source = await self.repo.create(source)
+        await self.repo.create(source)
         return NewsSourceDetail.model_validate(source)
 
     async def delete_source(self, source_id: int) -> None:
@@ -40,10 +40,10 @@ class NewsSourceService:
 
     async def activate_source(self, source_id: int) -> NewsSourceDetail:
         source = await self._get_or_raise(source_id)
-        source = await self.repo.activate(source)
+        await self.repo.activate(source)
         return NewsSourceDetail.model_validate(source)
 
     async def deactivate_source(self, source_id: int) -> NewsSourceDetail:
         source = await self._get_or_raise(source_id)
-        source = await self.repo.deactivate(source)
+        await self.repo.deactivate(source)
         return NewsSourceDetail.model_validate(source)

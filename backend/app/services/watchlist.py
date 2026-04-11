@@ -42,6 +42,6 @@ class WatchlistService:
         await self.repo.watch(user_id, article_id)
 
     async def remove_from_watchlist(self, user_id: UUID, article_id: int) -> None:
-        deleted = await self.repo.unwatch(user_id, article_id)
-        if deleted == 0:
+        if not await self.repo.is_watched(user_id, article_id):
             raise NotFoundError("Watchlist item not found")
+        await self.repo.unwatch(user_id, article_id)

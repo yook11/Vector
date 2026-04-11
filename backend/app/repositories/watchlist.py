@@ -62,7 +62,6 @@ class WatchlistRepository:
         """Add an article to the user's watchlist."""
         entry = WatchlistEntry(user_id=user_id, article_analysis_id=article_id)
         self.session.add(entry)
-        await self.session.commit()
 
     async def watched_among(self, user_id: UUID, article_ids: set[int]) -> set[int]:
         """Return the subset of article_ids that the user is watching.
@@ -77,15 +76,13 @@ class WatchlistRepository:
         result = await self.session.execute(stmt)
         return set(result.scalars().all())
 
-    async def unwatch(self, user_id: UUID, article_id: int) -> int:
+    async def unwatch(self, user_id: UUID, article_id: int) -> None:
         """Remove an article from the user's watchlist.
 
-        Returns the number of deleted rows.
+        Existence check is the caller's responsibility.
         """
         stmt = delete(WatchlistEntry).where(
             WatchlistEntry.user_id == user_id,
             WatchlistEntry.article_analysis_id == article_id,
         )
-        result = await self.session.execute(stmt)
-        await self.session.commit()
-        return result.rowcount
+        await self.session.execute(stmt)

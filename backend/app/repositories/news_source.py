@@ -18,30 +18,19 @@ class NewsSourceRepository:
         """Get a single news source by ID. Returns None if not found."""
         return await self.session.get(NewsSource, source_id)
 
-    async def create(self, source: NewsSource) -> NewsSource:
-        """Persist a new news source and return the refreshed instance."""
+    async def create(self, source: NewsSource) -> None:
+        """Persist a new news source. Flushes to assign the primary key."""
         self.session.add(source)
-        await self.session.commit()
-        await self.session.refresh(source)
-        return source
+        await self.session.flush()
 
     async def delete(self, source: NewsSource) -> None:
         """Delete a news source."""
         await self.session.delete(source)
-        await self.session.commit()
 
-    async def activate(self, source: NewsSource) -> NewsSource:
-        """Mark a news source as active and persist the change."""
+    async def activate(self, source: NewsSource) -> None:
+        """Mark a news source as active."""
         source.is_active = True
-        self.session.add(source)
-        await self.session.commit()
-        await self.session.refresh(source)
-        return source
 
-    async def deactivate(self, source: NewsSource) -> NewsSource:
-        """Mark a news source as inactive and persist the change."""
+    async def deactivate(self, source: NewsSource) -> None:
+        """Mark a news source as inactive."""
         source.is_active = False
-        self.session.add(source)
-        await self.session.commit()
-        await self.session.refresh(source)
-        return source

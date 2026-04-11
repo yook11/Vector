@@ -97,7 +97,14 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
     """Provide an httpx AsyncClient with DI-overridden session."""
 
     async def override_session() -> AsyncGenerator[AsyncSession, None]:
-        yield db_session
+        # Fixtures may leave an open autobegin transaction on db_session
+        # (e.g., from refresh after seed commits). Close it so the override
+        # can open a fresh transaction that mirrors the production
+        # get_session behavior.
+        if db_session.in_transaction():
+            await db_session.commit()
+        async with db_session.begin():
+            yield db_session
 
     app.dependency_overrides[get_session] = override_session
     async with AsyncClient(
@@ -121,7 +128,14 @@ async def authed_client(
     """Provide an httpx AsyncClient with BFF proxy auth headers pre-set."""
 
     async def override_session() -> AsyncGenerator[AsyncSession, None]:
-        yield db_session
+        # Fixtures may leave an open autobegin transaction on db_session
+        # (e.g., from refresh after seed commits). Close it so the override
+        # can open a fresh transaction that mirrors the production
+        # get_session behavior.
+        if db_session.in_transaction():
+            await db_session.commit()
+        async with db_session.begin():
+            yield db_session
 
     app.dependency_overrides[get_session] = override_session
     async with AsyncClient(
@@ -140,7 +154,14 @@ async def admin_client(
     """Provide an httpx AsyncClient with admin BFF proxy auth headers pre-set."""
 
     async def override_session() -> AsyncGenerator[AsyncSession, None]:
-        yield db_session
+        # Fixtures may leave an open autobegin transaction on db_session
+        # (e.g., from refresh after seed commits). Close it so the override
+        # can open a fresh transaction that mirrors the production
+        # get_session behavior.
+        if db_session.in_transaction():
+            await db_session.commit()
+        async with db_session.begin():
+            yield db_session
 
     app.dependency_overrides[get_session] = override_session
     async with AsyncClient(
