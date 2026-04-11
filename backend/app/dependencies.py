@@ -29,9 +29,14 @@ class CurrentUser:
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
     """Yield a session with an active transaction.
 
-    The transaction commits on successful exit and rolls back on any exception
-    (including domain exceptions raised by services). Repositories must NOT
-    commit or refresh; they may flush when ID assignment is required.
+    Commits on successful exit, rolls back on any exception (including domain
+    exceptions raised by services). Repositories must NOT commit or refresh;
+    they may flush when ID assignment is required.
+
+    Service mutations on existing entities are persisted automatically by the
+    Unit of Work when this transaction commits — Service does not call save
+    explicitly. New entities and deletions go through Repository.create /
+    Repository.delete. See docs/adr/004_unit_of_work_service_convention.md.
     """
     async with SQLModelAsyncSession(engine) as session:
         async with session.begin():
