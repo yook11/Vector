@@ -40,10 +40,10 @@ class NewsSourceService:
 
     async def activate_source(self, source_id: int) -> NewsSourceDetail:
         source = await self._get_or_raise(source_id)
-        await self.repo.activate(source)
+        source.activate()
         return NewsSourceDetail.model_validate(source)
 
     async def deactivate_source(self, source_id: int) -> NewsSourceDetail:
         source = await self._get_or_raise(source_id)
-        await self.repo.deactivate(source)
+        source.deactivate()
         return NewsSourceDetail.model_validate(source)

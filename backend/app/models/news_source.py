@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
@@ -63,3 +63,14 @@ class NewsSource(Base):
     # Relationships
     articles: Mapped[list[NewsArticle]] = relationship(back_populates="news_source")
     fetch_logs: Mapped[list[FetchLog]] = relationship(back_populates="source")
+
+    # Domain methods
+    def activate(self) -> None:
+        """Mark this news source as active."""
+        self.is_active = True
+        self.updated_at = datetime.now(UTC)
+
+    def deactivate(self) -> None:
+        """Mark this news source as inactive."""
+        self.is_active = False
+        self.updated_at = datetime.now(UTC)
