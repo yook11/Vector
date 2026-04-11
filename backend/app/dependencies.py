@@ -27,8 +27,15 @@ class CurrentUser:
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
+    """Yield a session with an active transaction.
+
+    The transaction commits on successful exit and rolls back on any exception
+    (including domain exceptions raised by services). Repositories must NOT
+    commit or refresh; they may flush when ID assignment is required.
+    """
     async with SQLModelAsyncSession(engine) as session:
-        yield session
+        async with session.begin():
+            yield session
 
 
 async def get_current_user(
