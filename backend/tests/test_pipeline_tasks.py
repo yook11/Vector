@@ -516,7 +516,7 @@ class TestGenerateEmbedding:
         mock_session.get = AsyncMock(return_value=article)
 
         mock_embedder = AsyncMock()
-        mock_embedder.embed = AsyncMock(return_value=[0.1] * 768)
+        mock_embedder.embed_document = AsyncMock(return_value=[0.1] * 768)
 
         with (
             patch(
@@ -552,7 +552,7 @@ class TestGenerateEmbedding:
         mock_session.get = AsyncMock(return_value=article)
 
         mock_embedder = AsyncMock()
-        mock_embedder.embed = AsyncMock(side_effect=EmbeddingError("API down"))
+        mock_embedder.embed_document = AsyncMock(side_effect=EmbeddingError("API down"))
 
         with (
             patch(
