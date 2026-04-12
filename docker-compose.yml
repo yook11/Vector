@@ -116,6 +116,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
     networks:
+      - public
       - internal
 
   # --- taskiq scheduler (sends cron-triggered tasks to Redis) ---
