@@ -425,7 +425,7 @@ async def generate_embedding(
 
         embedder = get_embedder()
         text = _build_embed_text(article)
-        vector = await embedder.embed(text)
+        vector = await embedder.embed_document(text)
 
         analysis.embedding = vector
         analysis.embedding_model = "text-embedding-004"

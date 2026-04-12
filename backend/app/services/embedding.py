@@ -19,16 +19,19 @@ COOLDOWN_SUCCESS_COUNT = 3  # consecutive successes before resetting adaptive in
 
 
 class EmbeddingError(Exception):
-    """Raised when embedding generation fails."""
+    """Raised when embedding generation fails (base / unclassifiable)."""
 
 
 class RateLimitError(EmbeddingError):
-    """Raised when the API returns a rate limit error (e.g., HTTP 429).
+    """HTTP 429 — rate limit exceeded."""
 
-    Subclass of EmbeddingError so existing handlers still catch it,
-    but the orchestration layer can catch it specifically to apply
-    adaptive throttling instead of triggering the circuit breaker.
-    """
+
+class TransientError(EmbeddingError):
+    """5xx, network errors, timeouts — expected to recover with time."""
+
+
+class InvalidInputError(EmbeddingError):
+    """4xx (except 429) — input-caused, permanent. Retry is pointless."""
 
 
 @dataclass
@@ -43,63 +46,149 @@ class EmbedResult:
 
 
 class BaseEmbedder(abc.ABC):
-    """Abstract base class for text embedders."""
+    """Template Method base for text embedders.
 
-    @abc.abstractmethod
-    async def embed(self, text: str) -> list[float]:
-        """Generate a dense vector embedding for a single text.
+    Subclasses implement two hooks:
+    - ``_call_api``: raw SDK call (no error handling)
+    - ``_translate_error``: classify SDK exceptions into the error hierarchy
 
-        Args:
-            text: Input text to embed.
+    Retry logic, delay strategy, and error-handling policy live here.
+    """
 
-        Returns:
-            A list of floats with length == self.dimension.
+    MAX_RETRIES = 3
+    RETRY_BASE_DELAY = 2.0  # exponential backoff: 2, 4, 8
+    RATE_LIMIT_DELAY = 10.0
+    MAX_RATE_LIMIT_RETRIES = 1
 
-        Raises:
-            EmbeddingError: If the API call fails after retries.
-        """
-        ...
-
-    @abc.abstractmethod
-    async def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        """Generate embeddings for multiple texts in a single API call.
-
-        Args:
-            texts: List of input texts to embed.
-
-        Returns:
-            A list of float lists, one per input text, each of length self.dimension.
-
-        Raises:
-            EmbeddingError: If the API call fails after retries.
-        """
-        ...
-
-    @abc.abstractmethod
-    async def embed_query(self, text: str) -> list[float]:
-        """Generate embedding for a search query (RETRIEVAL_QUERY task type).
-
-        Args:
-            text: Search query text to embed.
-
-        Returns:
-            A list of floats with length == self.dimension.
-
-        Raises:
-            EmbeddingError: If the API call fails after retries.
-        """
-        ...
+    def __init__(self, *, dimension: int, provider_name: str) -> None:
+        self._dimension = dimension
+        self._provider_name = provider_name
 
     @property
-    @abc.abstractmethod
     def dimension(self) -> int:
-        """Return the output vector dimension (e.g., 768)."""
-        ...
+        """Output vector dimension (e.g., 768)."""
+        return self._dimension
 
     @property
-    @abc.abstractmethod
     def provider_name(self) -> str:
-        """Return the provider identifier (e.g., 'gemini')."""
+        """Provider identifier (e.g., 'gemini')."""
+        return self._provider_name
+
+    # ── public API (concrete) ───────────────────────────────────
+
+    async def embed_document(self, text: str) -> list[float]:
+        """Embed a single document text."""
+        vectors = await self._embed_with_retry(text, "RETRIEVAL_DOCUMENT")
+        return vectors[0]
+
+    async def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        """Embed multiple document texts in a single API call."""
+        return await self._embed_with_retry(texts, "RETRIEVAL_DOCUMENT")
+
+    async def embed_query(self, text: str) -> list[float]:
+        """Embed a search query."""
+        vectors = await self._embed_with_retry(text, "RETRIEVAL_QUERY")
+        return vectors[0]
+
+    # ── retry engine ────────────────────────────────────────────
+
+    async def _embed_with_retry(
+        self, contents: str | list[str], task_type: str
+    ) -> list[list[float]]:
+        """Call the provider API with two-tier retry.
+
+        - RateLimitError: fixed delay, independent budget (max 1)
+        - TransientError: exponential backoff (max MAX_RETRIES)
+        - InvalidInputError / EmbeddingError: immediate raise
+        """
+        last_error: Exception | None = None
+        attempt = 0
+        rate_limit_retries = 0
+
+        while attempt < self.MAX_RETRIES:
+            attempt += 1
+            try:
+                logger.info(
+                    "embed_api_call",
+                    provider=self.provider_name,
+                    attempt=attempt,
+                    task_type=task_type,
+                    batch_size=len(contents) if isinstance(contents, list) else 1,
+                )
+                vectors = await self._call_api(contents, task_type)
+                logger.info(
+                    "embed_api_success",
+                    provider=self.provider_name,
+                    attempt=attempt,
+                    count=len(vectors),
+                )
+                return vectors
+
+            except EmbeddingError:
+                raise
+            except Exception as exc:
+                last_error = exc
+                error = self._translate_error(exc)
+
+                if isinstance(error, RateLimitError):
+                    rate_limit_retries += 1
+                    logger.warning(
+                        "embed_rate_limited",
+                        provider=self.provider_name,
+                        attempt=attempt,
+                        rate_limit_retry=rate_limit_retries,
+                        delay_seconds=self.RATE_LIMIT_DELAY,
+                        error=str(exc),
+                    )
+                    if rate_limit_retries <= self.MAX_RATE_LIMIT_RETRIES:
+                        await asyncio.sleep(self.RATE_LIMIT_DELAY)
+                        attempt -= 1  # don't consume normal retry budget
+                        continue
+                    raise error from exc
+
+                if isinstance(error, InvalidInputError):
+                    raise error from exc
+
+                if isinstance(error, TransientError):
+                    logger.warning(
+                        "embed_transient_error",
+                        provider=self.provider_name,
+                        attempt=attempt,
+                        max_retries=self.MAX_RETRIES,
+                        error=str(exc),
+                        error_type=type(exc).__name__,
+                    )
+                    if attempt < self.MAX_RETRIES:
+                        delay = self.RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                        await asyncio.sleep(delay)
+                    continue
+
+                # Unknown error — don't retry
+                raise error from exc
+
+        raise EmbeddingError(
+            f"Embedding failed after {self.MAX_RETRIES} attempts: {last_error}"
+        )
+
+    # ── abstract hooks (subclass provides) ──────────────────────
+
+    @abc.abstractmethod
+    async def _call_api(
+        self, contents: str | list[str], task_type: str
+    ) -> list[list[float]]:
+        """Call the provider SDK. Return a list of vectors.
+
+        Must return ``list[list[float]]`` even for a single text.
+        Must NOT catch exceptions — let them propagate to _embed_with_retry.
+        """
+        ...
+
+    @abc.abstractmethod
+    def _translate_error(self, exc: Exception) -> EmbeddingError:
+        """Classify an SDK exception into the error hierarchy.
+
+        Return (not raise) the appropriate EmbeddingError subclass.
+        """
         ...
 
 
@@ -219,7 +308,7 @@ async def embed_articles(
         ]
 
         try:
-            vectors = await embedder.embed_batch(texts)
+            vectors = await embedder.embed_documents(texts)
             for analysis, vector in zip(batch, vectors):
                 analysis.embedding = vector
                 analysis.embedding_model = "text-embedding-004"
