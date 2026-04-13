@@ -1,14 +1,20 @@
 """AI analyzer service — abstract base and orchestration layer."""
 
+from __future__ import annotations
+
 import abc
 import asyncio
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, ClassVar
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from app.config import settings
+from app.infra.redis.rate_limiter import (
+    RateLimitExceededError as _RateLimitExceededError,
+)
 from app.models.article_analysis import ArticleAnalysis, ImpactLevel
 from app.models.article_keyword import ArticleKeyword
 from app.models.category import Category
@@ -16,17 +22,30 @@ from app.models.keyword import Keyword
 from app.models.news_article import NewsArticle
 from app.utils.sanitize import strip_html_tags
 
-logger = structlog.get_logger(__name__)
+if TYPE_CHECKING:
+    from app.infra.redis.rate_limiter import RateLimiter
 
-REQUEST_INTERVAL = settings.analysis_request_interval
+logger = structlog.get_logger(__name__)
 
 
 class AnalysisError(Exception):
-    """Raised when AI analysis fails."""
+    """Raised when AI analysis fails (base / unclassifiable)."""
 
 
 class RateLimitError(AnalysisError):
-    """Raised when AI API returns 429 (rate limit exceeded)."""
+    """HTTP 429 — rate limit exceeded."""
+
+
+class TransientError(AnalysisError):
+    """5xx, network errors, timeouts — expected to recover with time."""
+
+
+class InvalidInputError(AnalysisError):
+    """4xx (except 429) — input-caused, permanent. Retry is pointless."""
+
+
+class DailyQuotaExhaustedError(AnalysisError):
+    """RPD limit reached — no more requests allowed today."""
 
 
 @dataclass
@@ -51,7 +70,53 @@ class AnalyzeResult:
 
 
 class BaseAnalyzer(abc.ABC):
-    """Abstract base class for AI analyzers."""
+    """Template Method base for AI analyzers.
+
+    Subclasses implement three hooks:
+    - ``analyze``: prompt building + response parsing (public API)
+    - ``_call_api``: raw SDK call (no error handling)
+    - ``_translate_error``: classify SDK exceptions into the error hierarchy
+
+    Subclasses must declare these ClassVars:
+    - ``MODEL``: model identifier (e.g. ``"gemini-2.5-flash-lite"``)
+    - ``RPM``: requests-per-minute limit, or ``None`` if unlimited
+    - ``RPD``: requests-per-day limit, or ``None`` if unlimited
+
+    Retry logic, delay strategy, and error-handling policy live here.
+    """
+
+    MODEL: ClassVar[str]
+    RPM: ClassVar[int | None]
+    RPD: ClassVar[int | None]
+
+    MAX_RETRIES = 3
+    RETRY_BASE_DELAY = 2.0  # exponential backoff: 2, 4, 8
+    RATE_LIMIT_DELAY = 10.0
+    MAX_RATE_LIMIT_RETRIES = 1
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        super().__init_subclass__(**kwargs)
+        if getattr(cls, "__abstractmethods__", None):
+            return
+        for attr in ("MODEL", "RPM", "RPD"):
+            if attr not in cls.__dict__:
+                raise TypeError(f"{cls.__name__} must define ClassVar '{attr}'")
+
+    def __init__(
+        self,
+        *,
+        rpm_limiter: RateLimiter | None = None,
+        rpd_limiter: RateLimiter | None = None,
+    ) -> None:
+        self._rpm_limiter = rpm_limiter
+        self._rpd_limiter = rpd_limiter
+
+    @property
+    def model_name(self) -> str:
+        """Model identifier (e.g., 'gemini-2.5-flash-lite')."""
+        return self.MODEL
+
+    # ── abstract hooks (subclass provides) ──────────────────────
 
     @abc.abstractmethod
     async def analyze(
@@ -78,21 +143,141 @@ class BaseAnalyzer(abc.ABC):
         """
         ...
 
-    @property
     @abc.abstractmethod
-    def provider_name(self) -> str:
-        """Return the provider identifier (e.g., 'gemini')."""
+    async def _call_api(self, prompt: str) -> str:
+        """Call the provider SDK. Return the raw text response.
+
+        Must NOT catch exceptions — let them propagate to _call_with_retry.
+        """
         ...
 
-    @property
     @abc.abstractmethod
-    def model_name(self) -> str:
-        """Return the model identifier (e.g., 'gemini-2.0-flash')."""
+    def _translate_error(self, exc: Exception) -> AnalysisError:
+        """Classify an SDK exception into the error hierarchy.
+
+        Return (not raise) the appropriate AnalysisError subclass.
+        """
         ...
+
+    # ── retry engine ────────────────────────────────────────────
+
+    async def _call_with_retry(self, prompt: str) -> str:
+        """Call the provider API with two-tier retry.
+
+        - RateLimitError: fixed delay, independent budget (max 1)
+        - TransientError: exponential backoff (max MAX_RETRIES)
+        - InvalidInputError / AnalysisError: immediate raise
+        """
+        last_error: Exception | None = None
+        attempt = 0
+        rate_limit_retries = 0
+
+        while attempt < self.MAX_RETRIES:
+            attempt += 1
+            try:
+                # Acquire rate-limit slots (RPD first — fail fast)
+                if self._rpd_limiter is not None:
+                    await self._rpd_limiter.acquire()
+                if self._rpm_limiter is not None:
+                    await self._rpm_limiter.acquire()
+
+                logger.info(
+                    "analyzer_api_call",
+                    model=self.model_name,
+                    attempt=attempt,
+                )
+                result = await self._call_api(prompt)
+                logger.info(
+                    "analyzer_api_success",
+                    model=self.model_name,
+                    attempt=attempt,
+                )
+                return result
+
+            except AnalysisError:
+                raise
+            except _RateLimitExceededError as exc:
+                raise DailyQuotaExhaustedError(str(exc)) from exc
+            except Exception as exc:
+                last_error = exc
+                error = self._translate_error(exc)
+
+                if isinstance(error, RateLimitError):
+                    rate_limit_retries += 1
+                    logger.warning(
+                        "analyzer_rate_limited",
+                        model=self.model_name,
+                        attempt=attempt,
+                        rate_limit_retry=rate_limit_retries,
+                        delay_seconds=self.RATE_LIMIT_DELAY,
+                        error=str(exc),
+                    )
+                    if rate_limit_retries <= self.MAX_RATE_LIMIT_RETRIES:
+                        await asyncio.sleep(self.RATE_LIMIT_DELAY)
+                        attempt -= 1  # don't consume normal retry budget
+                        continue
+                    raise error from exc
+
+                if isinstance(error, InvalidInputError):
+                    raise error from exc
+
+                if isinstance(error, TransientError):
+                    logger.warning(
+                        "analyzer_transient_error",
+                        model=self.model_name,
+                        attempt=attempt,
+                        max_retries=self.MAX_RETRIES,
+                        error=str(exc),
+                        error_type=type(exc).__name__,
+                    )
+                    if attempt < self.MAX_RETRIES:
+                        delay = self.RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                        await asyncio.sleep(delay)
+                    continue
+
+                # Unknown error — don't retry
+                raise error from exc
+
+        raise AnalysisError(
+            f"Analysis failed after {self.MAX_RETRIES} attempts: {last_error}"
+        )
+
+
+def _build_limiters(
+    analyzer_cls: type[BaseAnalyzer],
+) -> dict[str, RateLimiter | None]:
+    """Read ClassVars and build RateLimiter instances."""
+    from app.infra.redis.cache import _get_client
+    from app.infra.redis.rate_limiter import RateLimiter
+
+    redis = _get_client()
+    rpm_limiter: RateLimiter | None = None
+    rpd_limiter: RateLimiter | None = None
+
+    if analyzer_cls.RPM is not None:
+        rpm_limiter = RateLimiter(
+            redis=redis,
+            key=f"ratelimit:{analyzer_cls.MODEL}:rpm",
+            max_requests=analyzer_cls.RPM,
+            window_seconds=60,
+            block=True,
+        )
+    if analyzer_cls.RPD is not None:
+        rpd_limiter = RateLimiter(
+            redis=redis,
+            key=f"ratelimit:{analyzer_cls.MODEL}:rpd",
+            max_requests=analyzer_cls.RPD,
+            window_seconds=86400,
+            block=False,
+        )
+    return {"rpm_limiter": rpm_limiter, "rpd_limiter": rpd_limiter}
 
 
 def get_analyzer() -> BaseAnalyzer:
     """Factory: return an analyzer instance based on settings.ai_provider.
+
+    Reads ClassVars (RPM, RPD) from the analyzer class and builds
+    RateLimiter instances to inject via the constructor.
 
     Raises:
         ValueError: If ai_provider is not supported.
@@ -101,7 +286,8 @@ def get_analyzer() -> BaseAnalyzer:
     if provider == "gemini":
         from app.services.gemini_analyzer import GeminiAnalyzer
 
-        return GeminiAnalyzer()
+        limiters = _build_limiters(GeminiAnalyzer)
+        return GeminiAnalyzer(**limiters)
     raise ValueError(f"Unsupported AI provider: {provider}")
 
 
@@ -196,7 +382,11 @@ async def analyze_articles(
     articles: list[NewsArticle],
     analyzer: BaseAnalyzer | None = None,
 ) -> AnalyzeResult:
-    """Analyze multiple articles sequentially with rate limit protection.
+    """Analyze multiple articles sequentially.
+
+    Rate limiting is handled by the analyzer's RateLimiter instances
+    (acquired inside ``_call_with_retry``).  This function only manages
+    iteration, DB persistence, and error accumulation.
 
     AnalysisError from individual articles is caught and accumulated
     in AnalyzeResult.errors so that the batch continues processing.
@@ -215,9 +405,6 @@ async def analyze_articles(
         session.expunge(a)
 
     for i, article in enumerate(articles):
-        if i > 0:
-            await asyncio.sleep(REQUEST_INTERVAL)
-
         article_id = article.id
 
         try:
@@ -228,6 +415,18 @@ async def analyze_articles(
                 await session.commit()
                 result.analyzed_count += 1
                 logger.info("article_saved", article_id=article_id)
+        except DailyQuotaExhaustedError as e:
+            await session.rollback()
+            remaining = len(articles) - i
+            result.error_count += remaining
+            result.errors.append(str(e))
+            logger.warning(
+                "analyze_daily_quota_exhausted",
+                article_id=article_id,
+                remaining=remaining,
+                error=str(e),
+            )
+            break
         except RateLimitError as e:
             await session.rollback()
             result.error_count += 1

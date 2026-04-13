@@ -15,7 +15,6 @@ class Settings(BaseSettings):
 
     # AI
     ai_provider: str = "gemini"
-    ai_model_name: str = "gemini-2.5-flash-lite"
     gemini_api_key: SecretStr = SecretStr("")
     openai_api_key: SecretStr = SecretStr("")
 
@@ -24,8 +23,8 @@ class Settings(BaseSettings):
     max_articles_per_fetch: int = 50
     max_analysis_per_run: int = 200
 
-    # Analysis rate limit
-    analysis_request_interval: float = 4.0  # seconds between API requests (~15 RPM)
+    # Analysis
+    max_analysis_consecutive_failures: int = 3  # circuit breaker
 
     # Content extraction
     content_max_length: int = 8000
