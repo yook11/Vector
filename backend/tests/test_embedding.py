@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import SecretStr
 
-from app.services.embedding import (
+from app.ai.embedding import (
     BaseEmbedder,
     DailyQuotaExhaustedError,
     EmbeddingError,
@@ -44,7 +44,7 @@ def _make_article_mock() -> MagicMock:
 def _settings_patch():
     """Return a patch context for settings with embed_* fields."""
     return patch(
-        "app.services.embedding.settings",
+        "app.ai.embedding.service.settings",
         **{
             "ai_provider": "gemini",
             "embed_batch_size": 20,
@@ -62,7 +62,7 @@ def test_get_embedder_returns_gemini() -> None:
     with patch("app.config.settings") as mock_settings:
         mock_settings.ai_provider = "gemini"
         mock_settings.gemini_api_key = SecretStr("test-key")
-        with patch("app.services.gemini_embedder.GeminiEmbedder") as MockEmbedder:
+        with patch("app.ai.embedding.providers.gemini.GeminiEmbedder") as MockEmbedder:
             mock_instance = MagicMock(spec=BaseEmbedder)
             MockEmbedder.return_value = mock_instance
             result = get_embedder()
@@ -71,7 +71,7 @@ def test_get_embedder_returns_gemini() -> None:
 
 
 def test_get_embedder_raises_on_unknown_provider() -> None:
-    with patch("app.services.embedding.settings") as mock_settings:
+    with patch("app.ai.embedding.factory.settings") as mock_settings:
         mock_settings.ai_provider = "unknown_provider"
         with pytest.raises(ValueError, match="Unsupported AI provider"):
             get_embedder()
@@ -179,7 +179,7 @@ async def test_embed_articles_batch_error_does_not_abort_other_batches() -> None
         ]
     )
 
-    with patch("app.services.embedding.settings") as mock_settings:
+    with patch("app.ai.embedding.service.settings") as mock_settings:
         mock_settings.embed_batch_size = 20
         mock_settings.embed_max_consecutive_failures = 3
         result = await embed_articles(mock_session, analyses, embedder=mock_embedder)
@@ -257,7 +257,7 @@ async def test_embed_articles_rate_limit_stops_immediately() -> None:
         side_effect=RateLimitError("rate limited"),
     )
 
-    with patch("app.services.embedding.settings") as mock_settings:
+    with patch("app.ai.embedding.service.settings") as mock_settings:
         mock_settings.embed_batch_size = 10
         mock_settings.embed_max_consecutive_failures = 3
         result = await embed_articles(mock_session, analyses, embedder=mock_embedder)
@@ -279,13 +279,13 @@ async def test_gemini_embedder_429_raises_rate_limit_error() -> None:
     from google.genai.errors import ClientError
 
     with (
-        patch("app.services.gemini_embedder.settings") as mock_settings,
-        patch("app.services.gemini_embedder.genai"),
-        patch("app.services.embedding.asyncio.sleep", AsyncMock()),
+        patch("app.ai.embedding.providers.gemini.settings") as mock_settings,
+        patch("app.ai.embedding.providers.gemini.genai"),
+        patch("app.ai.embedding.base.asyncio.sleep", AsyncMock()),
     ):
         mock_settings.gemini_api_key = SecretStr("test-key")
 
-        from app.services.gemini_embedder import GeminiEmbedder
+        from app.ai.embedding.providers.gemini import GeminiEmbedder
 
         embedder = GeminiEmbedder()
 
@@ -373,7 +373,7 @@ async def test_transient_error_retries_with_backoff() -> None:
             [[0.1, 0.2, 0.3]],  # attempt 2: success
         ]
     )
-    with patch("app.services.embedding.asyncio.sleep", AsyncMock()) as mock_sleep:
+    with patch("app.ai.embedding.base.asyncio.sleep", AsyncMock()) as mock_sleep:
         result = await embedder.embed_document("text")
 
     assert result == [0.1, 0.2, 0.3]
@@ -390,7 +390,7 @@ async def test_transient_error_exhausts_retries() -> None:
             RuntimeError("err3"),
         ]
     )
-    with patch("app.services.embedding.asyncio.sleep", AsyncMock()):
+    with patch("app.ai.embedding.base.asyncio.sleep", AsyncMock()):
         with pytest.raises(EmbeddingError, match="3 attempts"):
             await embedder.embed_document("text")
 
@@ -406,7 +406,7 @@ async def test_rate_limit_retries_independently() -> None:
             [[0.1, 0.2, 0.3]],  # success
         ]
     )
-    with patch("app.services.embedding.asyncio.sleep", AsyncMock()) as mock_sleep:
+    with patch("app.ai.embedding.base.asyncio.sleep", AsyncMock()) as mock_sleep:
         result = await embedder.embed_document("text")
 
     assert result == [0.1, 0.2, 0.3]
@@ -422,7 +422,7 @@ async def test_rate_limit_exhausts_raises() -> None:
             _RateLimitSDKError("429 second"),
         ]
     )
-    with patch("app.services.embedding.asyncio.sleep", AsyncMock()):
+    with patch("app.ai.embedding.base.asyncio.sleep", AsyncMock()):
         with pytest.raises(RateLimitError):
             await embedder.embed_document("text")
 
@@ -430,7 +430,7 @@ async def test_rate_limit_exhausts_raises() -> None:
 @pytest.mark.asyncio
 async def test_invalid_input_error_no_retry() -> None:
     embedder = StubEmbedder(side_effects=[_InvalidInputSDKError("bad input")])
-    with patch("app.services.embedding.asyncio.sleep", AsyncMock()) as mock_sleep:
+    with patch("app.ai.embedding.base.asyncio.sleep", AsyncMock()) as mock_sleep:
         with pytest.raises(InvalidInputError, match="bad input"):
             await embedder.embed_document("text")
 
@@ -502,7 +502,7 @@ async def test_daily_quota_exhausted_stops_all_batches() -> None:
         side_effect=DailyQuotaExhaustedError("RPD exhausted"),
     )
 
-    with patch("app.services.embedding.settings") as mock_settings:
+    with patch("app.ai.embedding.service.settings") as mock_settings:
         mock_settings.embed_batch_size = 10
         mock_settings.embed_max_consecutive_failures = 3
         result = await embed_articles(mock_session, analyses, embedder=mock_embedder)

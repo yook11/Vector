@@ -1,11 +1,11 @@
 """Pipeline service — fetch and embedding backfill operations."""
 
+from app.ai.embedding import embed_articles
 from app.repositories.pipeline import PipelineRepository
 from app.schemas.pipeline import (
     EmbedResponse,
     FetchResponse,
 )
-from app.services.embedding import embed_articles
 from app.tasks.pipeline_tasks import fetch_metadata
 
 
