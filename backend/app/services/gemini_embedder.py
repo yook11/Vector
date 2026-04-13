@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from google import genai
 from google.genai import types
 from google.genai.errors import ClientError
@@ -15,15 +17,25 @@ from app.services.embedding import (
     TransientError,
 )
 
-GEMINI_EMBED_MODEL = "gemini-embedding-001"
-EMBED_DIMENSION = 768
+if TYPE_CHECKING:
+    from app.infra.redis.rate_limiter import RateLimiter
 
 
 class GeminiEmbedder(BaseEmbedder):
     """Gemini gemini-embedding-001 implementation of BaseEmbedder."""
 
-    def __init__(self) -> None:
-        super().__init__(dimension=EMBED_DIMENSION, provider_name="gemini")
+    MODEL = "gemini-embedding-001"
+    DIMENSION = 768
+    RPM = 500
+    RPD = 1500
+
+    def __init__(
+        self,
+        *,
+        rpm_limiter: RateLimiter | None = None,
+        rpd_limiter: RateLimiter | None = None,
+    ) -> None:
+        super().__init__(rpm_limiter=rpm_limiter, rpd_limiter=rpd_limiter)
         api_key = settings.gemini_api_key.get_secret_value()
         if not api_key:
             raise EmbeddingError("GEMINI_API_KEY is not configured")
@@ -38,11 +50,11 @@ class GeminiEmbedder(BaseEmbedder):
         - list contents → batchEmbedContents (15 RPM)
         """
         response = await self._client.aio.models.embed_content(
-            model=GEMINI_EMBED_MODEL,
+            model=self.MODEL,
             contents=contents,
             config=types.EmbedContentConfig(
                 task_type=task_type,
-                output_dimensionality=EMBED_DIMENSION,
+                output_dimensionality=self.DIMENSION,
             ),
         )
         return [e.values for e in response.embeddings]

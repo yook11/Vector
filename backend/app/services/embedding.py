@@ -5,17 +5,22 @@ from __future__ import annotations
 import abc
 import asyncio
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, ClassVar
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.infra.redis.rate_limiter import (
+    RateLimitExceededError as _RateLimitExceededError,
+)
 from app.models.article_analysis import ArticleAnalysis
 from app.models.news_article import NewsArticle
 
-logger = structlog.get_logger(__name__)
+if TYPE_CHECKING:
+    from app.infra.redis.rate_limiter import RateLimiter
 
-COOLDOWN_SUCCESS_COUNT = 3  # consecutive successes before resetting adaptive interval
+logger = structlog.get_logger(__name__)
 
 
 class EmbeddingError(Exception):
@@ -32,6 +37,10 @@ class TransientError(EmbeddingError):
 
 class InvalidInputError(EmbeddingError):
     """4xx (except 429) — input-caused, permanent. Retry is pointless."""
+
+
+class DailyQuotaExhaustedError(EmbeddingError):
+    """RPD limit reached — no more requests allowed today."""
 
 
 @dataclass
@@ -52,27 +61,51 @@ class BaseEmbedder(abc.ABC):
     - ``_call_api``: raw SDK call (no error handling)
     - ``_translate_error``: classify SDK exceptions into the error hierarchy
 
+    Subclasses must declare these ClassVars:
+    - ``MODEL``: model identifier (e.g. ``"gemini-embedding-001"``)
+    - ``DIMENSION``: output vector dimension (e.g. ``768``)
+    - ``RPM``: requests-per-minute limit, or ``None`` if unlimited
+    - ``RPD``: requests-per-day limit, or ``None`` if unlimited
+
     Retry logic, delay strategy, and error-handling policy live here.
     """
+
+    MODEL: ClassVar[str]
+    DIMENSION: ClassVar[int]
+    RPM: ClassVar[int | None]
+    RPD: ClassVar[int | None]
 
     MAX_RETRIES = 3
     RETRY_BASE_DELAY = 2.0  # exponential backoff: 2, 4, 8
     RATE_LIMIT_DELAY = 10.0
     MAX_RATE_LIMIT_RETRIES = 1
 
-    def __init__(self, *, dimension: int, provider_name: str) -> None:
-        self._dimension = dimension
-        self._provider_name = provider_name
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        super().__init_subclass__(**kwargs)
+        if getattr(cls, "__abstractmethods__", None):
+            return
+        for attr in ("MODEL", "DIMENSION", "RPM", "RPD"):
+            if attr not in cls.__dict__:
+                raise TypeError(f"{cls.__name__} must define ClassVar '{attr}'")
+
+    def __init__(
+        self,
+        *,
+        rpm_limiter: RateLimiter | None = None,
+        rpd_limiter: RateLimiter | None = None,
+    ) -> None:
+        self._rpm_limiter = rpm_limiter
+        self._rpd_limiter = rpd_limiter
 
     @property
     def dimension(self) -> int:
         """Output vector dimension (e.g., 768)."""
-        return self._dimension
+        return self.DIMENSION
 
     @property
-    def provider_name(self) -> str:
-        """Provider identifier (e.g., 'gemini')."""
-        return self._provider_name
+    def model_name(self) -> str:
+        """Model identifier (e.g., 'gemini-embedding-001')."""
+        return self.MODEL
 
     # ── public API (concrete) ───────────────────────────────────
 
@@ -108,9 +141,15 @@ class BaseEmbedder(abc.ABC):
         while attempt < self.MAX_RETRIES:
             attempt += 1
             try:
+                # Acquire rate-limit slots (RPD first — fail fast)
+                if self._rpd_limiter is not None:
+                    await self._rpd_limiter.acquire()
+                if self._rpm_limiter is not None:
+                    await self._rpm_limiter.acquire()
+
                 logger.info(
                     "embed_api_call",
-                    provider=self.provider_name,
+                    model=self.model_name,
                     attempt=attempt,
                     task_type=task_type,
                     batch_size=len(contents) if isinstance(contents, list) else 1,
@@ -118,7 +157,7 @@ class BaseEmbedder(abc.ABC):
                 vectors = await self._call_api(contents, task_type)
                 logger.info(
                     "embed_api_success",
-                    provider=self.provider_name,
+                    model=self.model_name,
                     attempt=attempt,
                     count=len(vectors),
                 )
@@ -126,6 +165,8 @@ class BaseEmbedder(abc.ABC):
 
             except EmbeddingError:
                 raise
+            except _RateLimitExceededError as exc:
+                raise DailyQuotaExhaustedError(str(exc)) from exc
             except Exception as exc:
                 last_error = exc
                 error = self._translate_error(exc)
@@ -134,7 +175,7 @@ class BaseEmbedder(abc.ABC):
                     rate_limit_retries += 1
                     logger.warning(
                         "embed_rate_limited",
-                        provider=self.provider_name,
+                        model=self.model_name,
                         attempt=attempt,
                         rate_limit_retry=rate_limit_retries,
                         delay_seconds=self.RATE_LIMIT_DELAY,
@@ -152,7 +193,7 @@ class BaseEmbedder(abc.ABC):
                 if isinstance(error, TransientError):
                     logger.warning(
                         "embed_transient_error",
-                        provider=self.provider_name,
+                        model=self.model_name,
                         attempt=attempt,
                         max_retries=self.MAX_RETRIES,
                         error=str(exc),
@@ -192,8 +233,41 @@ class BaseEmbedder(abc.ABC):
         ...
 
 
+def _build_limiters(
+    embedder_cls: type[BaseEmbedder],
+) -> dict[str, RateLimiter | None]:
+    """Read ClassVars and build RateLimiter instances."""
+    from app.infra.redis.cache import _get_client
+    from app.infra.redis.rate_limiter import RateLimiter
+
+    redis = _get_client()
+    rpm_limiter: RateLimiter | None = None
+    rpd_limiter: RateLimiter | None = None
+
+    if embedder_cls.RPM is not None:
+        rpm_limiter = RateLimiter(
+            redis=redis,
+            key=f"ratelimit:{embedder_cls.MODEL}:rpm",
+            max_requests=embedder_cls.RPM,
+            window_seconds=60,
+            block=True,
+        )
+    if embedder_cls.RPD is not None:
+        rpd_limiter = RateLimiter(
+            redis=redis,
+            key=f"ratelimit:{embedder_cls.MODEL}:rpd",
+            max_requests=embedder_cls.RPD,
+            window_seconds=86400,
+            block=False,
+        )
+    return {"rpm_limiter": rpm_limiter, "rpd_limiter": rpd_limiter}
+
+
 def get_embedder() -> BaseEmbedder:
     """Factory: return an embedder instance based on settings.ai_provider.
+
+    Reads ClassVars (RPM, RPD) from the embedder class and builds
+    RateLimiter instances to inject via the constructor.
 
     Raises:
         ValueError: If ai_provider is not supported.
@@ -202,7 +276,8 @@ def get_embedder() -> BaseEmbedder:
     if provider == "gemini":
         from app.services.gemini_embedder import GeminiEmbedder
 
-        return GeminiEmbedder()
+        limiters = _build_limiters(GeminiEmbedder)
+        return GeminiEmbedder(**limiters)
     raise ValueError(f"Unsupported AI provider for embeddings: {provider}")
 
 
@@ -251,11 +326,9 @@ async def embed_articles(
 ) -> EmbedResult:
     """Embed multiple article analyses in batches and persist embeddings to DB.
 
-    Features:
-    - Configurable batch size and interval via settings
-    - Adaptive throttling: on RateLimitError, batch interval doubles (cap 120s)
-    - Cooldown: after COOLDOWN_SUCCESS_COUNT consecutive successes, interval resets
-    - Circuit breaker: triggers only on non-rate-limit errors (true failures)
+    Rate limiting is handled by the embedder's RateLimiter instances
+    (acquired inside ``_embed_with_retry``).  This function only manages
+    batching, circuit breaker, and DB persistence.
 
     Args:
         session: SQLAlchemy async session (commit is called at the end).
@@ -267,7 +340,6 @@ async def embed_articles(
     """
     result = EmbedResult()
     batch_size = settings.embed_batch_size
-    batch_interval = settings.embed_batch_interval
     max_failures = settings.embed_max_consecutive_failures
 
     if not analyses:
@@ -295,9 +367,6 @@ async def embed_articles(
     }
 
     consecutive_failures = 0
-    current_interval = batch_interval
-    success_streak = 0
-    total_batches = 0
 
     for batch_start in range(0, len(to_embed), batch_size):
         batch = to_embed[batch_start : batch_start + batch_size]
@@ -311,38 +380,35 @@ async def embed_articles(
             vectors = await embedder.embed_documents(texts)
             for analysis, vector in zip(batch, vectors):
                 analysis.embedding = vector
-                analysis.embedding_model = "text-embedding-004"
+                analysis.embedding_model = embedder.MODEL
                 session.add(analysis)
                 result.embedded_ids.append(analysis.news_article_id)
             await session.flush()
             result.embedded_count += len(batch)
             consecutive_failures = 0
-            total_batches += 1
-
-            success_streak += 1
-            cooldown_met = success_streak >= COOLDOWN_SUCCESS_COUNT
-            if cooldown_met and current_interval > batch_interval:
-                logger.info(
-                    "embed_interval_reset",
-                    previous_interval=current_interval,
-                    reset_to=batch_interval,
-                    success_streak=success_streak,
-                )
-                current_interval = batch_interval
-                success_streak = 0
 
             logger.info(
                 "embed_batch_success",
                 batch_start=batch_start,
                 count=len(batch),
-                current_interval=current_interval,
             )
+
+        except DailyQuotaExhaustedError as e:
+            remaining = len(to_embed) - batch_start
+            result.error_count += remaining
+            result.errors.append(str(e))
+            logger.warning(
+                "embed_daily_quota_exhausted",
+                batch_start=batch_start,
+                remaining=remaining,
+                error=str(e),
+            )
+            break
 
         except RateLimitError as e:
             remaining = len(to_embed) - (batch_start + len(batch))
             result.error_count += len(batch)
             result.errors.append(str(e))
-            total_batches += 1
             logger.warning(
                 "embed_rate_limit_stopping",
                 batch_start=batch_start,
@@ -356,8 +422,6 @@ async def embed_articles(
             consecutive_failures += 1
             result.error_count += len(batch)
             result.errors.append(str(e))
-            success_streak = 0
-            total_batches += 1
             logger.error(
                 "embed_batch_failed",
                 batch_start=batch_start,
@@ -375,9 +439,6 @@ async def embed_articles(
                     )
                 break
 
-        if batch_start + batch_size < len(to_embed):
-            await asyncio.sleep(current_interval)
-
     await session.commit()
 
     logger.info(
@@ -385,8 +446,5 @@ async def embed_articles(
         embedded=result.embedded_count,
         skipped=result.skipped_count,
         errors=result.error_count,
-        total_batches=total_batches,
-        estimated_daily_requests=total_batches,
-        rpd_limit=1000,
     )
     return result
