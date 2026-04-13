@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
+from app.ai.embedding import EmbeddingError
 from app.config import settings
 from app.db import engine
 from app.exception_handlers import (
@@ -21,7 +22,6 @@ from app.routers import (
     semantic_search,
     watchlist,
 )
-from app.services.embedding import EmbeddingError
 
 
 @asynccontextmanager

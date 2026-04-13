@@ -8,14 +8,14 @@ from google import genai
 from google.genai import types
 from google.genai.errors import ClientError
 
-from app.config import settings
-from app.services.embedding import (
-    BaseEmbedder,
+from app.ai.embedding.base import BaseEmbedder
+from app.ai.embedding.errors import (
     EmbeddingError,
     InvalidInputError,
     RateLimitError,
     TransientError,
 )
+from app.config import settings
 
 if TYPE_CHECKING:
     from app.infra.redis.rate_limiter import RateLimiter
@@ -46,8 +46,8 @@ class GeminiEmbedder(BaseEmbedder):
     ) -> list[list[float]]:
         """Call Gemini embed_content API.
 
-        - str contents  → embedContent  (500 RPM)
-        - list contents → batchEmbedContents (15 RPM)
+        - str contents  -> embedContent  (500 RPM)
+        - list contents -> batchEmbedContents (15 RPM)
         """
         response = await self._client.aio.models.embed_content(
             model=self.MODEL,
@@ -77,7 +77,7 @@ class GeminiEmbedder(BaseEmbedder):
         ):
             return RateLimitError(str(exc))
 
-        # Network / timeout / unknown → transient
+        # Network / timeout / unknown -> transient
         if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
             return TransientError(str(exc))
 

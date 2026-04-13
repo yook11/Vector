@@ -25,6 +25,7 @@ from taskiq import (
 from taskiq.schedule_sources import LabelScheduleSource
 from taskiq_redis import RedisAsyncResultBackend, RedisStreamBroker
 
+from app.ai.embedding import _build_embed_text, get_embedder
 from app.config import settings
 from app.models.article_analysis import ArticleAnalysis
 from app.models.news_article import NewsArticle
@@ -49,7 +50,6 @@ from app.services.content_extractor import (
     TemporaryFetchError,
     extract_content,
 )
-from app.services.embedding import _build_embed_text, get_embedder
 from app.services.news_fetcher import fetch_news_for_sources
 
 logger = structlog.get_logger(__name__)

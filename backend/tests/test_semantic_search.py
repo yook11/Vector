@@ -191,7 +191,7 @@ async def test_semantic_search_returns_503_on_embedding_failure(
     db_session: AsyncSession,
 ) -> None:
     """When embedding generation fails, return 503."""
-    from app.services.embedding import EmbeddingError
+    from app.ai.embedding import EmbeddingError
 
     source = await _create_source(db_session)
     await _create_article(

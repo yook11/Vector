@@ -8,8 +8,8 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette import status
 
+from app.ai.embedding import EmbeddingError
 from app.exceptions import DuplicateError, NotFoundError
-from app.services.embedding import EmbeddingError
 
 
 async def not_found_handler(_request: Request, exc: NotFoundError) -> JSONResponse:

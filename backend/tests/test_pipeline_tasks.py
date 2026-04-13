@@ -4,12 +4,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.ai.embedding import EmbeddingError
 from app.models.article_analysis import ArticleAnalysis
 from app.models.news_article import NewsArticle
 from app.models.news_source import NewsSource
 from app.services.ai_analyzer import AnalysisError, RateLimitError
 from app.services.content_extractor import PermanentFetchError, TemporaryFetchError
-from app.services.embedding import EmbeddingError
 from app.services.news_fetcher import FetchResult, SourceFetchResult
 
 
