@@ -18,7 +18,7 @@ import json
 
 import structlog
 
-from app.utils.redis_cache import _get_client
+from app.infra.redis.cache import _get_client
 
 logger = structlog.get_logger(__name__)
 

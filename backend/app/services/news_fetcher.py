@@ -14,10 +14,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from app.config import settings
+from app.infra.redis.cache import get_http_cache, set_http_cache
 from app.models.fetch_log import FetchLog, FetchStatus
 from app.models.news_article import NewsArticle
 from app.models.news_source import NewsSource, SourceType
-from app.utils.redis_cache import get_http_cache, set_http_cache
 from app.utils.sanitize import is_safe_url, strip_html_tags
 
 HTTP_TIMEOUT = 30.0
