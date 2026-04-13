@@ -19,6 +19,7 @@ from app.services.ai_analyzer import (
     AnalysisData,
     AnalysisError,
     BaseAnalyzer,
+    DailyQuotaExhaustedError,
     analyze_article,
     analyze_articles,
     get_analyzer,
@@ -72,11 +73,15 @@ def _create_article(source: NewsSource) -> NewsArticle:
 def test_get_analyzer_returns_gemini_by_default() -> None:
     with patch("app.services.ai_analyzer.settings") as mock_settings:
         mock_settings.ai_provider = "gemini"
-        with patch("app.services.gemini_analyzer.settings") as mock_gs:
-            mock_gs.gemini_api_key = SecretStr("test-key")
-            analyzer = get_analyzer()
+        with patch(
+            "app.services.ai_analyzer._build_limiters",
+            return_value={"rpm_limiter": None, "rpd_limiter": None},
+        ):
+            with patch("app.services.gemini_analyzer.settings") as mock_gs:
+                mock_gs.gemini_api_key = SecretStr("test-key")
+                analyzer = get_analyzer()
     assert isinstance(analyzer, GeminiAnalyzer)
-    assert analyzer.provider_name == "gemini"
+    assert analyzer.model_name == "gemini-2.5-flash-lite"
 
 
 def test_get_analyzer_raises_for_unsupported_provider() -> None:
@@ -84,6 +89,31 @@ def test_get_analyzer_raises_for_unsupported_provider() -> None:
         mock_settings.ai_provider = "unknown"
         with pytest.raises(ValueError, match="Unsupported AI provider"):
             get_analyzer()
+
+
+# --- A2. ClassVar enforcement tests ---
+
+
+def test_base_analyzer_rejects_subclass_without_classvar() -> None:
+    """Concrete subclass without MODEL/RPM/RPD must raise TypeError."""
+    with pytest.raises(TypeError, match="must define ClassVar"):
+
+        class BadAnalyzer(BaseAnalyzer):
+            MODEL = "test"
+            RPM = 10
+            # RPD missing
+
+            async def analyze(
+                self,
+                title,
+                description,
+                content=None,
+                keywords_by_category=None,
+            ): ...
+
+            async def _call_api(self, prompt): ...
+
+            def _translate_error(self, exc): ...
 
 
 # --- B. GeminiAnalyzer._parse_response tests ---
@@ -119,60 +149,61 @@ def test_parse_response_invalid_impact_level_raises_error() -> None:
         analyzer._parse_response(raw)
 
 
-# --- C. GeminiAnalyzer._call_with_retry tests ---
+# --- C. BaseAnalyzer._call_with_retry tests ---
 
 
 async def test_call_with_retry_succeeds_on_first_attempt() -> None:
     analyzer = _create_analyzer()
-
-    mock_response = MagicMock()
-    mock_response.text = _make_gemini_response()
-
-    analyzer._client = MagicMock()
-    analyzer._client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+    analyzer._call_api = AsyncMock(return_value=_make_gemini_response())
 
     result = await analyzer._call_with_retry("test prompt")
-    assert result == mock_response.text
-    analyzer._client.aio.models.generate_content.assert_called_once()
+    assert result == _make_gemini_response()
+    analyzer._call_api.assert_called_once()
 
 
-async def test_call_with_retry_retries_on_failure() -> None:
+async def test_call_with_retry_retries_on_transient_error() -> None:
     analyzer = _create_analyzer()
-
-    mock_response = MagicMock()
-    mock_response.text = _make_gemini_response()
-
-    analyzer._client = MagicMock()
-    analyzer._client.aio.models.generate_content = AsyncMock(
-        side_effect=[Exception("Connection timeout"), mock_response]
+    analyzer._call_api = AsyncMock(
+        side_effect=[ConnectionError("timeout"), _make_gemini_response()]
     )
 
     with patch(
-        "app.services.gemini_analyzer.asyncio.sleep",
+        "app.services.ai_analyzer.asyncio.sleep",
         new_callable=AsyncMock,
     ):
         result = await analyzer._call_with_retry("test prompt")
 
-    assert result == mock_response.text
-    assert analyzer._client.aio.models.generate_content.call_count == 2
+    assert result == _make_gemini_response()
+    assert analyzer._call_api.call_count == 2
 
 
 async def test_call_with_retry_raises_after_max_retries() -> None:
     analyzer = _create_analyzer()
-
-    analyzer._client = MagicMock()
-    analyzer._client.aio.models.generate_content = AsyncMock(
-        side_effect=Exception("API unavailable")
-    )
+    analyzer._call_api = AsyncMock(side_effect=ConnectionError("API unavailable"))
 
     with patch(
-        "app.services.gemini_analyzer.asyncio.sleep",
+        "app.services.ai_analyzer.asyncio.sleep",
         new_callable=AsyncMock,
     ):
         with pytest.raises(AnalysisError, match="failed after 3 attempts"):
             await analyzer._call_with_retry("test prompt")
 
-    assert analyzer._client.aio.models.generate_content.call_count == 3
+    assert analyzer._call_api.call_count == 3
+
+
+async def test_call_with_retry_acquires_rate_limit() -> None:
+    """Rate limiters are called before _call_api."""
+    analyzer = _create_analyzer()
+    rpm_limiter = AsyncMock()
+    rpd_limiter = AsyncMock()
+    analyzer._rpm_limiter = rpm_limiter
+    analyzer._rpd_limiter = rpd_limiter
+    analyzer._call_api = AsyncMock(return_value="response")
+
+    await analyzer._call_with_retry("test prompt")
+
+    rpd_limiter.acquire.assert_awaited_once()
+    rpm_limiter.acquire.assert_awaited_once()
 
 
 # --- D. Orchestration tests (with DB) ---
@@ -193,8 +224,8 @@ async def test_analyze_article_creates_analysis(
     await db_session.refresh(article)
 
     mock_analyzer = MagicMock(spec=BaseAnalyzer)
-    mock_analyzer.provider_name = "gemini"
-    mock_analyzer.model_name = "gemini-2.0-flash"
+    mock_analyzer.MODEL = "gemini-2.5-flash-lite"
+    mock_analyzer.model_name = "gemini-2.5-flash-lite"
     mock_analyzer.analyze = AsyncMock(
         return_value=AnalysisData(
             title="量子ブレイクスルー",
@@ -211,7 +242,7 @@ async def test_analyze_article_creates_analysis(
     assert result.news_article_id == article.id
     assert result.impact_level == ImpactLevel.HIGH
     assert result.translated_title == "量子ブレイクスルー"
-    assert result.ai_model == "gemini-2.0-flash"
+    assert result.ai_model == "gemini-2.5-flash-lite"
 
 
 async def test_analyze_article_skips_already_analyzed(
@@ -234,14 +265,14 @@ async def test_analyze_article_skips_already_analyzed(
         summary="既存要約",
         impact_level=ImpactLevel.MEDIUM,
         reasoning="既存理由",
-        ai_model="gemini-2.0-flash",
+        ai_model="gemini-2.5-flash-lite",
     )
     db_session.add(existing)
     await db_session.commit()
 
     mock_analyzer = MagicMock(spec=BaseAnalyzer)
-    mock_analyzer.provider_name = "gemini"
-    mock_analyzer.model_name = "gemini-2.0-flash"
+    mock_analyzer.MODEL = "gemini-2.5-flash-lite"
+    mock_analyzer.model_name = "gemini-2.5-flash-lite"
     result = await analyze_article(db_session, article, mock_analyzer)
 
     assert result is None
@@ -267,8 +298,8 @@ async def test_analyze_articles_batch(
         await db_session.refresh(a)
 
     mock_analyzer = MagicMock(spec=BaseAnalyzer)
-    mock_analyzer.provider_name = "gemini"
-    mock_analyzer.model_name = "gemini-2.0-flash"
+    mock_analyzer.MODEL = "gemini-2.5-flash-lite"
+    mock_analyzer.model_name = "gemini-2.5-flash-lite"
     mock_analyzer.analyze = AsyncMock(
         return_value=AnalysisData(
             title="テスト",
@@ -278,11 +309,7 @@ async def test_analyze_articles_batch(
         )
     )
 
-    with patch(
-        "app.services.ai_analyzer.asyncio.sleep",
-        new_callable=AsyncMock,
-    ):
-        result = await analyze_articles(db_session, articles, mock_analyzer)
+    result = await analyze_articles(db_session, articles, mock_analyzer)
 
     assert result.analyzed_count == 3
     assert result.skipped_count == 0
@@ -308,8 +335,8 @@ async def test_analyze_articles_handles_errors(
         await db_session.refresh(a)
 
     mock_analyzer = MagicMock(spec=BaseAnalyzer)
-    mock_analyzer.provider_name = "gemini"
-    mock_analyzer.model_name = "gemini-2.0-flash"
+    mock_analyzer.MODEL = "gemini-2.5-flash-lite"
+    mock_analyzer.model_name = "gemini-2.5-flash-lite"
     mock_analyzer.analyze = AsyncMock(
         side_effect=[
             AnalysisData(
@@ -328,11 +355,7 @@ async def test_analyze_articles_handles_errors(
         ]
     )
 
-    with patch(
-        "app.services.ai_analyzer.asyncio.sleep",
-        new_callable=AsyncMock,
-    ):
-        result = await analyze_articles(db_session, articles, mock_analyzer)
+    result = await analyze_articles(db_session, articles, mock_analyzer)
 
     assert result.analyzed_count == 2
     assert result.error_count == 1
@@ -346,6 +369,43 @@ async def test_analyze_articles_with_empty_list(
     assert result.analyzed_count == 0
     assert result.skipped_count == 0
     assert result.error_count == 0
+
+
+# --- D2. DailyQuotaExhaustedError stops all ---
+
+
+async def test_daily_quota_exhausted_stops_all_articles(
+    db_session: AsyncSession,
+    sample_source: NewsSource,
+) -> None:
+    """DailyQuotaExhaustedError stops immediately, counting all remaining as errors."""
+    articles = []
+    for i in range(5):
+        a = NewsArticle(
+            original_title=f"Article {i}",
+            original_url=f"https://example.com/quota-{i}",
+            news_source_id=sample_source.id,
+            published_at=datetime.now(UTC),
+        )
+        db_session.add(a)
+        articles.append(a)
+    await db_session.commit()
+    for a in articles:
+        await db_session.refresh(a)
+
+    mock_analyzer = MagicMock(spec=BaseAnalyzer)
+    mock_analyzer.MODEL = "gemini-2.5-flash-lite"
+    mock_analyzer.model_name = "gemini-2.5-flash-lite"
+    mock_analyzer.analyze = AsyncMock(
+        side_effect=DailyQuotaExhaustedError("RPD exhausted"),
+    )
+
+    result = await analyze_articles(db_session, articles, mock_analyzer)
+
+    # First article triggers DailyQuotaExhaustedError — all 5 counted as errors
+    assert result.analyzed_count == 0
+    assert result.error_count == 5
+    assert len(result.errors) == 1
 
 
 # --- E. Integration test (API response) ---
@@ -372,7 +432,7 @@ async def test_news_endpoint_includes_analysis(
         summary="テスト要約",
         impact_level=ImpactLevel.HIGH,
         reasoning="テスト理由",
-        ai_model="gemini-2.0-flash",
+        ai_model="gemini-2.5-flash-lite",
     )
     db_session.add(analysis)
     await db_session.commit()
@@ -447,8 +507,8 @@ async def test_analyze_article_saves_keyword_links(
     await db_session.refresh(article)
 
     mock_analyzer = MagicMock(spec=BaseAnalyzer)
-    mock_analyzer.provider_name = "gemini"
-    mock_analyzer.model_name = "gemini-2.0-flash"
+    mock_analyzer.MODEL = "gemini-2.5-flash-lite"
+    mock_analyzer.model_name = "gemini-2.5-flash-lite"
     mock_analyzer.analyze = AsyncMock(
         return_value=AnalysisData(
             title="量子エラー訂正",
@@ -465,9 +525,7 @@ async def test_analyze_article_saves_keyword_links(
     assert result is not None
 
     # Verify keyword links were created
-    stmt = select(ArticleKeyword).where(
-        ArticleKeyword.article_analysis_id == result.id
-    )
+    stmt = select(ArticleKeyword).where(ArticleKeyword.article_analysis_id == result.id)
     links = (await db_session.execute(stmt)).scalars().all()
     assert len(links) == 2
 

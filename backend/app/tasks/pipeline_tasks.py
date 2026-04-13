@@ -33,6 +33,9 @@ from app.services.ai_analyzer import (
     AnalysisError,
 )
 from app.services.ai_analyzer import (
+    DailyQuotaExhaustedError as AnalysisDailyQuotaError,
+)
+from app.services.ai_analyzer import (
     RateLimitError as AnalysisRateLimitError,
 )
 from app.services.ai_analyzer import (
@@ -363,6 +366,12 @@ async def analyze_article(
             analysis = await _analyze_article_svc(session, article)
             if analysis is not None:
                 await session.commit()
+        except AnalysisDailyQuotaError:
+            logger.warning(
+                "analyze_article_daily_quota",
+                article_id=article_id,
+            )
+            return
         except AnalysisRateLimitError:
             if _is_last_attempt(ctx):
                 article.original_content = None
