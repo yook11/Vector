@@ -26,7 +26,7 @@ class GeminiEmbedder(BaseEmbedder):
 
     MODEL = "gemini-embedding-001"
     DIMENSION = 768
-    RPM = 500
+    RPM = 15  # batchEmbedContents endpoint (SDK always uses this)
     RPD = 1500
 
     def __init__(
