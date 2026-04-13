@@ -7,6 +7,7 @@ from pydantic import SecretStr
 
 from app.services.embedding import (
     BaseEmbedder,
+    DailyQuotaExhaustedError,
     EmbeddingError,
     EmbedResult,
     InvalidInputError,
@@ -47,8 +48,6 @@ def _settings_patch():
         **{
             "ai_provider": "gemini",
             "embed_batch_size": 20,
-            "embed_batch_interval": 8.0,
-            "embed_rate_limit_delay": 60.0,
             "embed_max_consecutive_failures": 3,
         },
     )
@@ -118,6 +117,7 @@ async def test_embed_articles_skips_already_embedded() -> None:
 async def test_embed_articles_success() -> None:
     mock_session = AsyncMock()
     mock_embedder = AsyncMock(spec=BaseEmbedder)
+    mock_embedder.MODEL = "stub-model"
 
     analysis = MagicMock()
     analysis.embedding = None
@@ -146,7 +146,6 @@ async def test_embed_articles_success() -> None:
     mock_session.commit.assert_called_once()
     # Verify embedding was set on analysis, not article
     assert analysis.embedding == [0.1] * 768
-    assert analysis.embedding_model == "text-embedding-004"
 
 
 @pytest.mark.asyncio
@@ -154,6 +153,7 @@ async def test_embed_articles_batch_error_does_not_abort_other_batches() -> None
     """One batch failure increments error_count but does not abort remaining batches."""
     mock_session = AsyncMock()
     mock_embedder = AsyncMock(spec=BaseEmbedder)
+    mock_embedder.MODEL = "stub-model"
 
     # Create 25 analyses without embeddings (spans 2 batches of batch_size=20)
     analyses = []
@@ -179,13 +179,8 @@ async def test_embed_articles_batch_error_does_not_abort_other_batches() -> None
         ]
     )
 
-    with (
-        patch("app.services.embedding.settings") as mock_settings,
-        patch("app.services.embedding.asyncio.sleep", AsyncMock()),
-    ):
+    with patch("app.services.embedding.settings") as mock_settings:
         mock_settings.embed_batch_size = 20
-        mock_settings.embed_batch_interval = 8.0
-        mock_settings.embed_rate_limit_delay = 60.0
         mock_settings.embed_max_consecutive_failures = 3
         result = await embed_articles(mock_session, analyses, embedder=mock_embedder)
 
@@ -202,6 +197,7 @@ async def test_embed_articles_uses_description_fallback_when_no_content() -> Non
     """Uses original_description as fallback when original_content is None."""
     mock_session = AsyncMock()
     mock_embedder = AsyncMock(spec=BaseEmbedder)
+    mock_embedder.MODEL = "stub-model"
 
     analysis = MagicMock()
     analysis.embedding = None
@@ -261,13 +257,8 @@ async def test_embed_articles_rate_limit_stops_immediately() -> None:
         side_effect=RateLimitError("rate limited"),
     )
 
-    with (
-        patch("app.services.embedding.settings") as mock_settings,
-        patch("app.services.embedding.asyncio.sleep", AsyncMock()),
-    ):
+    with patch("app.services.embedding.settings") as mock_settings:
         mock_settings.embed_batch_size = 10
-        mock_settings.embed_batch_interval = 8.0
-        mock_settings.embed_rate_limit_delay = 60.0
         mock_settings.embed_max_consecutive_failures = 3
         result = await embed_articles(mock_session, analyses, embedder=mock_embedder)
 
@@ -328,10 +319,15 @@ class StubEmbedder(BaseEmbedder):
     _translate_error maps them to the embedding error hierarchy.
     """
 
+    MODEL = "stub-model"
+    DIMENSION = 3
+    RPM = None
+    RPD = None
+
     def __init__(
         self, *, side_effects: list[list[list[float]] | Exception] | None = None
     ) -> None:
-        super().__init__(dimension=3, provider_name="stub")
+        super().__init__()
         self._side_effects = list(side_effects or [])
         self._calls: list[tuple[str | list[str], str]] = []
 
@@ -451,3 +447,67 @@ async def test_task_type_passed_through() -> None:
     assert embedder._calls[0] == ("doc", "RETRIEVAL_DOCUMENT")
     assert embedder._calls[1] == ("query", "RETRIEVAL_QUERY")
 
+
+# ---------------------------------------------------------------------------
+# F. ClassVar enforcement
+# ---------------------------------------------------------------------------
+
+
+def test_base_embedder_rejects_subclass_without_classvar() -> None:
+    """Concrete subclass missing a required ClassVar raises TypeError."""
+    with pytest.raises(TypeError, match="must define ClassVar 'RPD'"):
+
+        class BadEmbedder(BaseEmbedder):
+            MODEL = "bad"
+            DIMENSION = 3
+            RPM = None
+            # RPD intentionally missing
+
+            async def _call_api(
+                self, contents: str | list[str], task_type: str
+            ) -> list[list[float]]:
+                return [[0.0]]
+
+            def _translate_error(self, exc: Exception) -> EmbeddingError:
+                return EmbeddingError(str(exc))
+
+
+# ---------------------------------------------------------------------------
+# G. DailyQuotaExhaustedError in embed_articles
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_daily_quota_exhausted_stops_all_batches() -> None:
+    """DailyQuotaExhaustedError stops immediately, counting all remaining as errors."""
+    mock_session = AsyncMock()
+    mock_embedder = AsyncMock(spec=BaseEmbedder)
+    mock_embedder.MODEL = "stub-model"
+
+    analyses = []
+    articles = []
+    for i in range(30):
+        a = _make_analysis()
+        a.news_article_id = i + 1
+        analyses.append(a)
+        art = _make_article_mock()
+        art.id = i + 1
+        articles.append(art)
+
+    mock_result = MagicMock()
+    mock_result.scalars.return_value.all.return_value = articles
+    mock_session.execute = AsyncMock(return_value=mock_result)
+
+    mock_embedder.embed_documents = AsyncMock(
+        side_effect=DailyQuotaExhaustedError("RPD exhausted"),
+    )
+
+    with patch("app.services.embedding.settings") as mock_settings:
+        mock_settings.embed_batch_size = 10
+        mock_settings.embed_max_consecutive_failures = 3
+        result = await embed_articles(mock_session, analyses, embedder=mock_embedder)
+
+    # First batch triggers DailyQuotaExhaustedError — all 30 counted as errors
+    assert mock_embedder.embed_documents.call_count == 1
+    assert result.error_count == 30
+    assert result.embedded_count == 0

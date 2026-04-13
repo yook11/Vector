@@ -33,10 +33,8 @@ class Settings(BaseSettings):
     content_domain_delay: float = 1.0  # seconds between requests to same domain
     content_max_fetch_attempts: int = 3  # skip articles after N failed attempts
 
-    # Embedding rate limit
+    # Embedding
     embed_batch_size: int = 10  # articles per API call
-    embed_batch_interval: float = 8.0  # seconds between batches (~75 RPM)
-    embed_rate_limit_delay: float = 60.0  # wait after 429
     embed_max_consecutive_failures: int = 3  # circuit breaker
 
     # Internal API (BFF proxy trust)

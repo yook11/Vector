@@ -428,7 +428,7 @@ async def generate_embedding(
         vector = await embedder.embed_document(text)
 
         analysis.embedding = vector
-        analysis.embedding_model = "text-embedding-004"
+        analysis.embedding_model = embedder.MODEL
         session.add(analysis)
         await session.commit()
 

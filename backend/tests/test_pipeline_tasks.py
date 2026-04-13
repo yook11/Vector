@@ -76,7 +76,10 @@ class TestFetchMetadata:
             error_count=0,
             source_results=[
                 SourceFetchResult(
-                    source_id=1, success=True, new_count=5, skipped_count=2,
+                    source_id=1,
+                    success=True,
+                    new_count=5,
+                    skipped_count=2,
                 )
             ],
         )
@@ -516,6 +519,7 @@ class TestGenerateEmbedding:
         mock_session.get = AsyncMock(return_value=article)
 
         mock_embedder = AsyncMock()
+        mock_embedder.MODEL = "gemini-embedding-001"
         mock_embedder.embed_document = AsyncMock(return_value=[0.1] * 768)
 
         with (
@@ -531,7 +535,7 @@ class TestGenerateEmbedding:
             await generate_embedding(article_id=1, ctx=mock_ctx)
 
         assert analysis.embedding == [0.1] * 768
-        assert analysis.embedding_model == "text-embedding-004"
+        assert analysis.embedding_model == "gemini-embedding-001"
         mock_session.commit.assert_called()
 
     @pytest.mark.asyncio
