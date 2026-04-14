@@ -7,20 +7,20 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
 from taskiq import Context, TaskiqDepends
 
-from app.models.article_analysis import ArticleAnalysis
-from app.models.news_article import NewsArticle
-from app.services.ai_analyzer import (
+from app.ai.analyzer import (
     AnalysisError,
 )
-from app.services.ai_analyzer import (
+from app.ai.analyzer import (
     DailyQuotaExhaustedError as AnalysisDailyQuotaError,
 )
-from app.services.ai_analyzer import (
+from app.ai.analyzer import (
     RateLimitError as AnalysisRateLimitError,
 )
-from app.services.ai_analyzer import (
+from app.ai.analyzer import (
     analyze_article as _analyze_article_svc,
 )
+from app.models.article_analysis import ArticleAnalysis
+from app.models.news_article import NewsArticle
 from app.tasks.brokers import broker_analysis, is_last_attempt
 
 logger = structlog.get_logger(__name__)

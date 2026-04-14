@@ -10,16 +10,15 @@ from google import genai
 from google.genai.errors import ClientError
 from google.genai.types import GenerateContentConfig
 
-from app.config import settings
-from app.models.article_analysis import ImpactLevel
-from app.services.ai_analyzer import (
-    AnalysisData,
+from app.ai.analyzer.base import AnalysisData, BaseAnalyzer
+from app.ai.analyzer.errors import (
     AnalysisError,
-    BaseAnalyzer,
     InvalidInputError,
     RateLimitError,
     TransientError,
 )
+from app.config import settings
+from app.models.article_analysis import ImpactLevel
 
 if TYPE_CHECKING:
     from app.infra.redis.rate_limiter import RateLimiter

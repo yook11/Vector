@@ -15,17 +15,24 @@ from sqlalchemy.orm import selectinload
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
 
+from app.ai.analyzer import AnalysisData, AnalysisError
+from app.ai.analyzer.providers.gemini import (
+    ANALYSIS_PROMPT_BASE,
+)
 from app.config import settings
 from app.db import engine
 from app.models.article_analysis import AnalysisResult
 from app.models.news_article import NewsArticle
-from app.services.ai_analyzer import AnalysisData, AnalysisError
-from app.services.gemini_analyzer import (
-    ANALYSIS_PROMPT_BASE,
-    MAX_RETRIES,
-    RETRY_BASE_DELAY,
-    _is_rate_limit_error,
-)
+
+# NOTE: MAX_RETRIES, RETRY_BASE_DELAY, _is_rate_limit_error were removed
+# in a prior refactoring. This script needs a separate fix to work again.
+MAX_RETRIES = 3
+RETRY_BASE_DELAY = 2.0
+
+
+def _is_rate_limit_error(e: Exception) -> bool:
+    return "429" in str(e).lower() or "rate limit" in str(e).lower()
+
 
 FLASH_LITE_MODEL = "gemini-2.5-flash-lite"
 REQUEST_INTERVAL = 4.0  # seconds between API calls (flash-lite: 15 RPM)
