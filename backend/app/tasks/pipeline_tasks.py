@@ -209,12 +209,10 @@ async def dispatch_pending(
         ids = (
             (
                 await session.execute(
-                    select(NewsArticle.id)
-                    .where(
+                    select(NewsArticle.id).where(
                         NewsArticle.original_content.is_(None),
                         NewsArticle.skip_content_fetch == False,  # noqa: E712
                     )
-                    .limit(100)
                 )
             )
             .scalars()
@@ -237,7 +235,6 @@ async def dispatch_pending(
                         NewsArticle.original_content.is_not(None),
                         ArticleAnalysis.id.is_(None),
                     )
-                    .limit(100)
                 )
             )
             .scalars()
@@ -257,7 +254,6 @@ async def dispatch_pending(
                         ArticleAnalysis.news_article_id == NewsArticle.id,
                     )
                     .where(ArticleAnalysis.embedding.is_(None))
-                    .limit(100)
                 )
             )
             .scalars()

@@ -21,6 +21,4 @@ class EmbedResponse(_CamelBase):
     """POST /api/v1/admin/pipeline/embed response."""
 
     message: str
-    embedded_count: int
-    skipped_count: int
-    error_count: int
+    dispatched_count: int

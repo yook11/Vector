@@ -1,12 +1,11 @@
 """Pipeline service — fetch and embedding backfill operations."""
 
-from app.ai.embedding import embed_articles
 from app.repositories.pipeline import PipelineRepository
 from app.schemas.pipeline import (
     EmbedResponse,
     FetchResponse,
 )
-from app.tasks.pipeline_tasks import fetch_metadata
+from app.tasks.pipeline_tasks import fetch_metadata, generate_embedding
 
 
 class PipelineService:
@@ -14,24 +13,16 @@ class PipelineService:
         self.repo = repo
 
     async def backfill_embeddings(self) -> EmbedResponse:
-        analyses = await self.repo.get_analyses_without_embedding()
+        article_ids = await self.repo.get_article_ids_without_embedding()
 
-        if not analyses:
-            return EmbedResponse(
-                message="No analyses need embedding",
-                embedded_count=0,
-                skipped_count=0,
-                error_count=0,
-            )
-
-        er = await embed_articles(self.repo.session, analyses)
+        for article_id in article_ids:
+            await generate_embedding.kiq(article_id)
 
         return EmbedResponse(
-            message=f"Embedding completed: {er.embedded_count} embedded, "
-            f"{er.error_count} errors",
-            embedded_count=er.embedded_count,
-            skipped_count=er.skipped_count,
-            error_count=er.error_count,
+            message="Embedding tasks dispatched"
+            if article_ids
+            else "No articles need embedding",
+            dispatched_count=len(article_ids),
         )
 
     @staticmethod

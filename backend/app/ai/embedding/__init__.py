@@ -10,22 +10,18 @@ from app.ai.embedding.errors import (
 )
 from app.ai.embedding.factory import get_embedder
 from app.ai.embedding.service import (
-    EmbedResult,
     _build_embed_text,
-    embed_articles,
     embed_search_query,
 )
 
 __all__ = [
     "BaseEmbedder",
     "DailyQuotaExhaustedError",
-    "EmbedResult",
     "EmbeddingError",
     "InvalidInputError",
     "RateLimitError",
     "TransientError",
     "_build_embed_text",
-    "embed_articles",
     "embed_search_query",
     "get_embedder",
 ]
