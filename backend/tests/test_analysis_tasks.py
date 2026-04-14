@@ -54,7 +54,7 @@ def _make_article(
 
 class TestAnalyzeArticle:
     @pytest.mark.asyncio
-    async def test_idempotency_guard(self) -> None:
+    async def test_idempotency_guard_chains_embedding(self) -> None:
         from app.tasks.analysis_tasks import analyze_article
 
         mock_session = AsyncMock()
@@ -65,13 +65,18 @@ class TestAnalyzeArticle:
         mock_exec.scalar_one_or_none.return_value = existing_analysis
         mock_session.execute = AsyncMock(return_value=mock_exec)
 
-        with patch(
-            "app.tasks.analysis_tasks.SQLModelAsyncSession",
-            return_value=_mock_session_context(mock_session),
+        with (
+            patch(
+                "app.tasks.analysis_tasks.SQLModelAsyncSession",
+                return_value=_mock_session_context(mock_session),
+            ),
+            patch("app.tasks.embedding_tasks.generate_embedding") as mock_embed,
         ):
+            mock_embed.kiq = AsyncMock()
             await analyze_article(article_id=1, ctx=mock_ctx)
 
         mock_session.commit.assert_not_called()
+        mock_embed.kiq.assert_called_once_with(1)
 
     @pytest.mark.asyncio
     async def test_safety_block_marks_article(self) -> None:

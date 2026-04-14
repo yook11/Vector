@@ -46,7 +46,7 @@ async def analyze_article(
     engine = ctx.state.engine
 
     async with SQLModelAsyncSession(engine, expire_on_commit=False) as session:
-        # Idempotency guard
+        # Idempotency guard — chain forward even if already analyzed
         existing = (
             await session.execute(
                 select(ArticleAnalysis).where(
@@ -55,6 +55,7 @@ async def analyze_article(
             )
         ).scalar_one_or_none()
         if existing is not None:
+            await generate_embedding.kiq(article_id)
             return
 
         article = await session.get(NewsArticle, article_id)

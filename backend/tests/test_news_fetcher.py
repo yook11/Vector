@@ -122,7 +122,11 @@ async def test_fetch_saves_new_articles(
     with (
         patch("app.services.news_fetcher.httpx.AsyncClient", return_value=mock_client),
         patch("app.services.news_fetcher.feedparser.parse", return_value=feed),
-        patch("app.services.news_fetcher.get_http_cache", new_callable=AsyncMock, return_value=(None, None)),
+        patch(
+            "app.services.news_fetcher.get_http_cache",
+            new_callable=AsyncMock,
+            return_value=(None, None),
+        ),
         patch("app.services.news_fetcher.set_http_cache", new_callable=AsyncMock),
     ):
         result = await fetch_news_for_sources(db_session, [sample_source])
@@ -158,7 +162,11 @@ async def test_fetch_skips_duplicate_urls(
     with (
         patch("app.services.news_fetcher.httpx.AsyncClient", return_value=mock_client),
         patch("app.services.news_fetcher.feedparser.parse", return_value=feed),
-        patch("app.services.news_fetcher.get_http_cache", new_callable=AsyncMock, return_value=(None, None)),
+        patch(
+            "app.services.news_fetcher.get_http_cache",
+            new_callable=AsyncMock,
+            return_value=(None, None),
+        ),
         patch("app.services.news_fetcher.set_http_cache", new_callable=AsyncMock),
     ):
         result = await fetch_news_for_sources(db_session, [sample_source])
@@ -177,7 +185,11 @@ async def test_fetch_handles_304_not_modified(
 
     with (
         patch("app.services.news_fetcher.httpx.AsyncClient", return_value=mock_client),
-        patch("app.services.news_fetcher.get_http_cache", new_callable=AsyncMock, return_value=(None, None)),
+        patch(
+            "app.services.news_fetcher.get_http_cache",
+            new_callable=AsyncMock,
+            return_value=(None, None),
+        ),
     ):
         result = await fetch_news_for_sources(db_session, [sample_source])
 
@@ -194,7 +206,11 @@ async def test_fetch_handles_http_error(
 
     with (
         patch("app.services.news_fetcher.httpx.AsyncClient", return_value=mock_client),
-        patch("app.services.news_fetcher.get_http_cache", new_callable=AsyncMock, return_value=(None, None)),
+        patch(
+            "app.services.news_fetcher.get_http_cache",
+            new_callable=AsyncMock,
+            return_value=(None, None),
+        ),
     ):
         result = await fetch_news_for_sources(db_session, [sample_source])
 
@@ -217,7 +233,11 @@ async def test_fetch_respects_max_articles_limit(
         patch("app.services.news_fetcher.httpx.AsyncClient", return_value=mock_client),
         patch("app.services.news_fetcher.feedparser.parse", return_value=feed),
         patch("app.services.news_fetcher.settings") as mock_settings,
-        patch("app.services.news_fetcher.get_http_cache", new_callable=AsyncMock, return_value=(None, None)),
+        patch(
+            "app.services.news_fetcher.get_http_cache",
+            new_callable=AsyncMock,
+            return_value=(None, None),
+        ),
         patch("app.services.news_fetcher.set_http_cache", new_callable=AsyncMock),
     ):
         mock_settings.max_articles_per_fetch = 50
@@ -313,7 +333,11 @@ async def test_fetch_stores_full_content_from_rss(
     with (
         patch("app.services.news_fetcher.httpx.AsyncClient", return_value=mock_client),
         patch("app.services.news_fetcher.feedparser.parse", return_value=feed),
-        patch("app.services.news_fetcher.get_http_cache", new_callable=AsyncMock, return_value=(None, None)),
+        patch(
+            "app.services.news_fetcher.get_http_cache",
+            new_callable=AsyncMock,
+            return_value=(None, None),
+        ),
         patch("app.services.news_fetcher.set_http_cache", new_callable=AsyncMock),
     ):
         result = await fetch_news_for_sources(db_session, [sample_source])
@@ -321,3 +345,37 @@ async def test_fetch_stores_full_content_from_rss(
     assert result.new_count == 1
     articles = (await db_session.execute(select(NewsArticle))).scalars().all()
     assert articles[0].original_content is not None
+    # Full-content article should be in content_ready_ids
+    assert articles[0].id in result.content_ready_ids
+    assert articles[0].id in result.new_article_ids
+
+
+async def test_fetch_populates_new_article_ids(
+    db_session: AsyncSession, sample_source: NewsSource, mock_client: AsyncMock
+) -> None:
+    """new_article_ids should contain IDs of all newly created articles."""
+    entries = [
+        _make_entry(title="A1", link="https://example.com/a1"),
+        _make_entry(title="A2", link="https://example.com/a2"),
+    ]
+    feed = _make_feed(entries)
+    mock_client.get.return_value = _mock_response(text="<rss>mock</rss>")
+
+    cache_patch = patch(
+        "app.services.news_fetcher.get_http_cache",
+        new_callable=AsyncMock,
+        return_value=(None, None),
+    )
+    with (
+        patch("app.services.news_fetcher.httpx.AsyncClient", return_value=mock_client),
+        patch("app.services.news_fetcher.feedparser.parse", return_value=feed),
+        cache_patch,
+        patch("app.services.news_fetcher.set_http_cache", new_callable=AsyncMock),
+    ):
+        result = await fetch_news_for_sources(db_session, [sample_source])
+
+    assert len(result.new_article_ids) == 2
+    assert result.content_ready_ids == []
+    for aid in result.new_article_ids:
+        assert isinstance(aid, int)
+        assert aid > 0

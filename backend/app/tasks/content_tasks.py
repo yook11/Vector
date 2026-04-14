@@ -46,8 +46,9 @@ async def fetch_content(
             logger.warning("fetch_content_not_found", article_id=article_id)
             return
 
-        # Idempotency guard
+        # Idempotency guard — chain forward even if already fetched
         if article.original_content is not None:
+            await analyze_article.kiq(article_id)
             return
 
         robots_cache = RobotsCache()

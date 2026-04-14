@@ -53,8 +53,8 @@ def _make_article(
 
 class TestFetchContent:
     @pytest.mark.asyncio
-    async def test_idempotency_guard(self) -> None:
-        """Already-fetched article should return immediately."""
+    async def test_idempotency_guard_chains_analyze(self) -> None:
+        """Already-fetched article should chain to analyze_article."""
         from app.tasks.content_tasks import fetch_content
 
         mock_session = AsyncMock()
@@ -63,13 +63,18 @@ class TestFetchContent:
         article = _make_article(original_content="already fetched")
         mock_session.get = AsyncMock(return_value=article)
 
-        with patch(
-            "app.tasks.content_tasks.SQLModelAsyncSession",
-            return_value=_mock_session_context(mock_session),
+        with (
+            patch(
+                "app.tasks.content_tasks.SQLModelAsyncSession",
+                return_value=_mock_session_context(mock_session),
+            ),
+            patch("app.tasks.analysis_tasks.analyze_article") as mock_analyze,
         ):
+            mock_analyze.kiq = AsyncMock()
             await fetch_content(article_id=1, ctx=mock_ctx)
 
         mock_session.commit.assert_not_called()
+        mock_analyze.kiq.assert_called_once_with(1)
 
     @pytest.mark.asyncio
     async def test_permanent_error_sets_skip(self) -> None:

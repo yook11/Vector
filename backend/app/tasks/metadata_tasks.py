@@ -1,4 +1,4 @@
-"""Metadata tasks — RSS/HN feed fetch and pending article dispatch."""
+"""Metadata tasks — RSS/HN feed fetch and direct dispatch to downstream queues."""
 
 from __future__ import annotations
 
@@ -7,8 +7,6 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
 from taskiq import Context, TaskiqDepends
 
-from app.models.article_analysis import ArticleAnalysis
-from app.models.news_article import NewsArticle
 from app.models.news_source import NewsSource
 from app.services.news_fetcher import fetch_news_for_sources
 from app.tasks.brokers import _FETCH_CRON, broker_metadata
@@ -65,7 +63,16 @@ async def fetch_metadata(
 
         fr = await fetch_news_for_sources(session, sources)
 
-    await dispatch_pending.kiq()
+    # Dispatch new articles directly to downstream queues
+    from app.tasks.analysis_tasks import analyze_article
+    from app.tasks.content_tasks import fetch_content
+
+    content_ready = set(fr.content_ready_ids)
+    for article_id in fr.new_article_ids:
+        if article_id in content_ready:
+            await analyze_article.kiq(article_id)
+        else:
+            await fetch_content.kiq(article_id)
 
     result = {
         "sources_count": len(sources),
@@ -75,83 +82,3 @@ async def fetch_metadata(
     }
     logger.info("fetch_metadata_completed", **result)
     return result
-
-
-@broker_metadata.task(
-    task_name="dispatch_pending",
-    timeout=60,
-    max_retries=1,
-    retry_on_error=True,
-)
-async def dispatch_pending(
-    ctx: Context = TaskiqDepends(),
-) -> dict:
-    """Scan DB for unprocessed articles and enqueue per-article tasks."""
-    from app.tasks.analysis_tasks import analyze_article
-    from app.tasks.content_tasks import fetch_content
-    from app.tasks.embedding_tasks import generate_embedding
-
-    engine = ctx.state.engine
-    dispatched = {"fetch_content": 0, "analyze_article": 0, "generate_embedding": 0}
-
-    async with SQLModelAsyncSession(engine) as session:
-        # Query 1: articles needing content fetch
-        ids = (
-            (
-                await session.execute(
-                    select(NewsArticle.id).where(
-                        NewsArticle.original_content.is_(None),
-                        NewsArticle.skip_content_fetch == False,  # noqa: E712
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-        for article_id in ids:
-            await fetch_content.kiq(article_id)
-            dispatched["fetch_content"] += 1
-
-        # Query 2: articles needing AI analysis
-        ids = (
-            (
-                await session.execute(
-                    select(NewsArticle.id)
-                    .outerjoin(
-                        ArticleAnalysis,
-                        ArticleAnalysis.news_article_id == NewsArticle.id,
-                    )
-                    .where(
-                        NewsArticle.original_content.is_not(None),
-                        ArticleAnalysis.id.is_(None),
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-        for article_id in ids:
-            await analyze_article.kiq(article_id)
-            dispatched["analyze_article"] += 1
-
-        # Query 3: articles needing embedding
-        ids = (
-            (
-                await session.execute(
-                    select(NewsArticle.id)
-                    .join(
-                        ArticleAnalysis,
-                        ArticleAnalysis.news_article_id == NewsArticle.id,
-                    )
-                    .where(ArticleAnalysis.embedding.is_(None))
-                )
-            )
-            .scalars()
-            .all()
-        )
-        for article_id in ids:
-            await generate_embedding.kiq(article_id)
-            dispatched["generate_embedding"] += 1
-
-    logger.info("dispatch_pending_completed", **dispatched)
-    return dispatched
