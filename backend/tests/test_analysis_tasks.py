@@ -4,9 +4,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.ai.analyzer import AnalysisError, RateLimitError
 from app.models.article_analysis import ArticleAnalysis
 from app.models.news_article import NewsArticle
-from app.services.ai_analyzer import AnalysisError, RateLimitError
 
 
 def _mock_session_context(mock_session: AsyncMock) -> MagicMock:

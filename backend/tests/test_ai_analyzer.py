@@ -9,13 +9,7 @@ from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from app.models.article_analysis import ArticleAnalysis, ImpactLevel
-from app.models.article_keyword import ArticleKeyword
-from app.models.category import Category
-from app.models.keyword import Keyword
-from app.models.news_article import NewsArticle
-from app.models.news_source import NewsSource
-from app.services.ai_analyzer import (
+from app.ai.analyzer import (
     AnalysisData,
     AnalysisError,
     BaseAnalyzer,
@@ -24,7 +18,13 @@ from app.services.ai_analyzer import (
     analyze_articles,
     get_analyzer,
 )
-from app.services.gemini_analyzer import GeminiAnalyzer
+from app.ai.analyzer.providers.gemini import GeminiAnalyzer
+from app.models.article_analysis import ArticleAnalysis, ImpactLevel
+from app.models.article_keyword import ArticleKeyword
+from app.models.category import Category
+from app.models.keyword import Keyword
+from app.models.news_article import NewsArticle
+from app.models.news_source import NewsSource
 
 # --- Helpers ---
 
@@ -52,7 +52,7 @@ def _make_gemini_response(
 
 def _create_analyzer() -> GeminiAnalyzer:
     """Create a GeminiAnalyzer with mocked settings."""
-    with patch("app.services.gemini_analyzer.settings") as mock_gs:
+    with patch("app.ai.analyzer.providers.gemini.settings") as mock_gs:
         mock_gs.gemini_api_key = SecretStr("test-key")
         return GeminiAnalyzer()
 
@@ -71,13 +71,13 @@ def _create_article(source: NewsSource) -> NewsArticle:
 
 
 def test_get_analyzer_returns_gemini_by_default() -> None:
-    with patch("app.services.ai_analyzer.settings") as mock_settings:
+    with patch("app.ai.analyzer.factory.settings") as mock_settings:
         mock_settings.ai_provider = "gemini"
         with patch(
-            "app.services.ai_analyzer._build_limiters",
+            "app.ai.analyzer.factory._build_limiters",
             return_value={"rpm_limiter": None, "rpd_limiter": None},
         ):
-            with patch("app.services.gemini_analyzer.settings") as mock_gs:
+            with patch("app.ai.analyzer.providers.gemini.settings") as mock_gs:
                 mock_gs.gemini_api_key = SecretStr("test-key")
                 analyzer = get_analyzer()
     assert isinstance(analyzer, GeminiAnalyzer)
@@ -85,7 +85,7 @@ def test_get_analyzer_returns_gemini_by_default() -> None:
 
 
 def test_get_analyzer_raises_for_unsupported_provider() -> None:
-    with patch("app.services.ai_analyzer.settings") as mock_settings:
+    with patch("app.ai.analyzer.factory.settings") as mock_settings:
         mock_settings.ai_provider = "unknown"
         with pytest.raises(ValueError, match="Unsupported AI provider"):
             get_analyzer()
@@ -168,7 +168,7 @@ async def test_call_with_retry_retries_on_transient_error() -> None:
     )
 
     with patch(
-        "app.services.ai_analyzer.asyncio.sleep",
+        "app.ai.analyzer.base.asyncio.sleep",
         new_callable=AsyncMock,
     ):
         result = await analyzer._call_with_retry("test prompt")
@@ -182,7 +182,7 @@ async def test_call_with_retry_raises_after_max_retries() -> None:
     analyzer._call_api = AsyncMock(side_effect=ConnectionError("API unavailable"))
 
     with patch(
-        "app.services.ai_analyzer.asyncio.sleep",
+        "app.ai.analyzer.base.asyncio.sleep",
         new_callable=AsyncMock,
     ):
         with pytest.raises(AnalysisError, match="failed after 3 attempts"):
