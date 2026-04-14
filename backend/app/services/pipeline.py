@@ -5,7 +5,8 @@ from app.schemas.pipeline import (
     EmbedResponse,
     FetchResponse,
 )
-from app.tasks.pipeline_tasks import fetch_metadata, generate_embedding
+from app.tasks.embedding_tasks import generate_embedding
+from app.tasks.metadata_tasks import fetch_metadata
 
 
 class PipelineService:

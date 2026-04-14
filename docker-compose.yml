@@ -2,6 +2,28 @@
 # Vector - Docker Compose
 # ===========================================
 
+# --- Shared worker config (anchor only, not a service) ---
+x-worker-base: &worker-base
+  build:
+    context: ./backend
+    dockerfile: Dockerfile
+  env_file:
+    - .env
+  environment:
+    - DATABASE_URL=postgresql+asyncpg://vector:vector@db:5432/vector
+    - REDIS_URL=redis://redis:6379/0
+  volumes:
+    - ./backend/app:/app/app
+  depends_on:
+    backend:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  restart: unless-stopped
+  networks:
+    - public
+    - internal
+
 services:
   # --- Frontend (BFF — public entry point) ---
   frontend:
@@ -92,52 +114,43 @@ services:
     networks:
       - internal
 
-  # --- taskiq worker (executes news pipeline tasks) ---
-  worker:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+  # --- taskiq workers (one per pipeline queue) ---
+  worker-metadata:
+    <<: *worker-base
     command: >
       taskiq worker
-      app.tasks.pipeline_tasks:broker
-      app.tasks.pipeline_tasks
+      app.tasks.metadata_tasks:broker_metadata
+      app.tasks.metadata_tasks
       --ack-type when_executed
-    env_file:
-      - .env
-    environment:
-      - DATABASE_URL=postgresql+asyncpg://vector:vector@db:5432/vector
-      - REDIS_URL=redis://redis:6379/0
-    volumes:
-      - ./backend/app:/app/app
-    depends_on:
-      backend:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    restart: unless-stopped
-    networks:
-      - public
-      - internal
 
-  # --- taskiq scheduler (sends cron-triggered tasks to Redis) ---
+  worker-content:
+    <<: *worker-base
+    command: >
+      taskiq worker
+      app.tasks.content_tasks:broker_content
+      app.tasks.content_tasks
+      --ack-type when_executed
+
+  worker-analysis:
+    <<: *worker-base
+    command: >
+      taskiq worker
+      app.tasks.analysis_tasks:broker_analysis
+      app.tasks.analysis_tasks
+      --ack-type when_executed
+
+  worker-embedding:
+    <<: *worker-base
+    command: >
+      taskiq worker
+      app.tasks.embedding_tasks:broker_embedding
+      app.tasks.embedding_tasks
+      --ack-type when_executed
+
+  # --- taskiq scheduler (metadata broker only — fetch_metadata cron) ---
   scheduler:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    command: taskiq scheduler app.tasks.pipeline_tasks:scheduler
-    env_file:
-      - .env
-    environment:
-      - DATABASE_URL=postgresql+asyncpg://vector:vector@db:5432/vector
-      - REDIS_URL=redis://redis:6379/0
-    volumes:
-      - ./backend/app:/app/app
-    depends_on:
-      backend:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    restart: unless-stopped
+    <<: *worker-base
+    command: taskiq scheduler app.tasks.brokers:scheduler_metadata
     networks:
       - internal
 
