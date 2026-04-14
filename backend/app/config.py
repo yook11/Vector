@@ -32,10 +32,6 @@ class Settings(BaseSettings):
     content_domain_delay: float = 1.0  # seconds between requests to same domain
     content_max_fetch_attempts: int = 3  # skip articles after N failed attempts
 
-    # Embedding
-    embed_batch_size: int = 10  # articles per API call
-    embed_max_consecutive_failures: int = 3  # circuit breaker
-
     # Internal API (BFF proxy trust)
     internal_api_secret: SecretStr = SecretStr("change-me-in-production")
 

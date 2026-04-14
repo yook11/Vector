@@ -39,11 +39,11 @@ async def fetch_news(
 @router.post(
     "/embed",
     response_model=EmbedResponse,
-    status_code=status.HTTP_200_OK,
-    summary="Backfill embeddings for analyses that are missing them",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Dispatch embedding tasks for analyses that are missing them",
 )
 async def embed_news(
     service: Annotated[PipelineService, Depends(get_pipeline_service)],
 ) -> EmbedResponse:
-    """Generate vector embeddings for all analyses where embedding IS NULL."""
+    """Enqueue generate_embedding tasks for all articles missing embeddings."""
     return await service.backfill_embeddings()
