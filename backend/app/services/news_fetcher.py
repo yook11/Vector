@@ -37,6 +37,7 @@ class SourceFetchResult:
     etag: str | None = None
     last_modified: str | None = None
     not_modified: bool = False
+    new_articles: list[NewsArticle] = field(default_factory=list)
 
 
 @dataclass
@@ -48,6 +49,8 @@ class FetchResult:
     error_count: int = 0
     errors: list[str] = field(default_factory=list)
     source_results: list[SourceFetchResult] = field(default_factory=list)
+    new_article_ids: list[int] = field(default_factory=list)
+    content_ready_ids: list[int] = field(default_factory=list)
 
 
 def _parse_published_date(entry: dict) -> datetime | None:
@@ -220,6 +223,7 @@ async def _fetch_rss_source(
             article.original_content = truncated
 
         session.add(article)
+        result.new_articles.append(article)
         new_count += 1
         # Track URL so later entries in same feed don't duplicate
         existing_urls.add(article_url)
@@ -331,6 +335,13 @@ async def fetch_news_for_sources(
                     )
 
     await session.commit()
+
+    # Extract IDs after commit (expire_on_commit=False in caller)
+    for sr in result.source_results:
+        for article in sr.new_articles:
+            result.new_article_ids.append(article.id)
+            if article.original_content is not None:
+                result.content_ready_ids.append(article.id)
 
     logger.info(
         "fetch_completed",

@@ -179,6 +179,7 @@ class HackerNewsClient:
             )
 
             session.add(article)
+            result.new_articles.append(article)
             new_count += 1
             existing_urls.add(story.url)
 
