@@ -25,7 +25,7 @@ async def fetch_news(
     body: FetchRequest | None = None,
 ) -> FetchResponse:
     """Enqueue a news fetch task. Returns immediately with a task ID."""
-    from app.tasks.metadata_tasks import fetch_metadata
+    from app.tasks.collection_tasks import fetch_metadata
 
     source_ids = body.source_ids if body else None
     task = await fetch_metadata.kiq(source_ids=source_ids)
@@ -46,7 +46,7 @@ async def embed_news(
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> EmbedResponse:
     """Enqueue generate_embedding tasks for all articles missing embeddings."""
-    from app.tasks.embedding_tasks import generate_embedding
+    from app.tasks.analysis_tasks import generate_embedding
 
     repo = PipelineRepository(session)
     article_ids = await repo.get_article_ids_without_embedding()

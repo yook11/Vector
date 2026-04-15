@@ -55,7 +55,7 @@ def _make_article(
 class TestGenerateEmbedding:
     @pytest.mark.asyncio
     async def test_idempotency_guard(self) -> None:
-        from app.tasks.embedding_tasks import generate_embedding
+        from app.tasks.analysis_tasks import generate_embedding
 
         mock_session = AsyncMock()
         mock_ctx = _make_ctx()
@@ -67,7 +67,7 @@ class TestGenerateEmbedding:
         mock_session.execute = AsyncMock(return_value=mock_exec)
 
         with patch(
-            "app.tasks.embedding_tasks.SQLModelAsyncSession",
+            "app.tasks.analysis_tasks.SQLModelAsyncSession",
             return_value=_mock_session_context(mock_session),
         ):
             await generate_embedding(article_id=1, ctx=mock_ctx)
@@ -76,7 +76,7 @@ class TestGenerateEmbedding:
 
     @pytest.mark.asyncio
     async def test_embeds_and_commits(self) -> None:
-        from app.tasks.embedding_tasks import generate_embedding
+        from app.tasks.analysis_tasks import generate_embedding
 
         mock_session = AsyncMock()
         mock_ctx = _make_ctx()
@@ -97,11 +97,11 @@ class TestGenerateEmbedding:
 
         with (
             patch(
-                "app.tasks.embedding_tasks.SQLModelAsyncSession",
+                "app.tasks.analysis_tasks.SQLModelAsyncSession",
                 return_value=_mock_session_context(mock_session),
             ),
             patch(
-                "app.tasks.embedding_tasks.get_embedder",
+                "app.tasks.analysis_tasks.get_embedder",
                 return_value=mock_embedder,
             ),
         ):
@@ -113,7 +113,7 @@ class TestGenerateEmbedding:
 
     @pytest.mark.asyncio
     async def test_embedding_error_raises(self) -> None:
-        from app.tasks.embedding_tasks import generate_embedding
+        from app.tasks.analysis_tasks import generate_embedding
 
         mock_session = AsyncMock()
         mock_ctx = _make_ctx()
@@ -135,11 +135,11 @@ class TestGenerateEmbedding:
 
         with (
             patch(
-                "app.tasks.embedding_tasks.SQLModelAsyncSession",
+                "app.tasks.analysis_tasks.SQLModelAsyncSession",
                 return_value=_mock_session_context(mock_session),
             ),
             patch(
-                "app.tasks.embedding_tasks.get_embedder",
+                "app.tasks.analysis_tasks.get_embedder",
                 return_value=mock_embedder,
             ),
         ):

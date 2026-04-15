@@ -39,7 +39,7 @@ def _make_ctx(
 class TestFetchMetadata:
     @pytest.mark.asyncio
     async def test_fetches_and_dispatches_content(self) -> None:
-        from app.tasks.metadata_tasks import fetch_metadata
+        from app.tasks.collection_tasks import fetch_metadata
 
         mock_session = AsyncMock()
         mock_ctx = _make_ctx()
@@ -63,15 +63,15 @@ class TestFetchMetadata:
 
         with (
             patch(
-                "app.tasks.metadata_tasks.SQLModelAsyncSession",
+                "app.tasks.collection_tasks.SQLModelAsyncSession",
                 return_value=_mock_session_context(mock_session),
             ),
             patch(
-                "app.tasks.metadata_tasks.fetch_news_for_sources",
+                "app.tasks.collection_tasks.fetch_news_for_sources",
                 new_callable=AsyncMock,
                 return_value=fetch_result,
             ) as mock_fetch,
-            patch("app.tasks.content_tasks.fetch_content") as mock_fc,
+            patch("app.tasks.collection_tasks.fetch_content") as mock_fc,
             patch("app.tasks.analysis_tasks.analyze_article") as mock_aa,
         ):
             mock_fc.kiq = AsyncMock()
@@ -87,7 +87,7 @@ class TestFetchMetadata:
     @pytest.mark.asyncio
     async def test_dispatches_content_ready_to_analysis(self) -> None:
         """Full-text RSS articles go directly to analyze_article."""
-        from app.tasks.metadata_tasks import fetch_metadata
+        from app.tasks.collection_tasks import fetch_metadata
 
         mock_session = AsyncMock()
         mock_ctx = _make_ctx()
@@ -111,15 +111,15 @@ class TestFetchMetadata:
 
         with (
             patch(
-                "app.tasks.metadata_tasks.SQLModelAsyncSession",
+                "app.tasks.collection_tasks.SQLModelAsyncSession",
                 return_value=_mock_session_context(mock_session),
             ),
             patch(
-                "app.tasks.metadata_tasks.fetch_news_for_sources",
+                "app.tasks.collection_tasks.fetch_news_for_sources",
                 new_callable=AsyncMock,
                 return_value=fetch_result,
             ),
-            patch("app.tasks.content_tasks.fetch_content") as mock_fc,
+            patch("app.tasks.collection_tasks.fetch_content") as mock_fc,
             patch("app.tasks.analysis_tasks.analyze_article") as mock_aa,
         ):
             mock_fc.kiq = AsyncMock()
@@ -133,7 +133,7 @@ class TestFetchMetadata:
 
     @pytest.mark.asyncio
     async def test_skips_when_no_sources(self) -> None:
-        from app.tasks.metadata_tasks import fetch_metadata
+        from app.tasks.collection_tasks import fetch_metadata
 
         mock_session = AsyncMock()
         mock_ctx = _make_ctx()
@@ -143,7 +143,7 @@ class TestFetchMetadata:
         mock_session.execute = AsyncMock(return_value=mock_result)
 
         with patch(
-            "app.tasks.metadata_tasks.SQLModelAsyncSession",
+            "app.tasks.collection_tasks.SQLModelAsyncSession",
             return_value=_mock_session_context(mock_session),
         ):
             result = await fetch_metadata(ctx=mock_ctx)

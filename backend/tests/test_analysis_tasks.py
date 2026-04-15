@@ -70,7 +70,7 @@ class TestAnalyzeArticle:
                 "app.tasks.analysis_tasks.SQLModelAsyncSession",
                 return_value=_mock_session_context(mock_session),
             ),
-            patch("app.tasks.embedding_tasks.generate_embedding") as mock_embed,
+            patch("app.tasks.analysis_tasks.generate_embedding") as mock_embed,
         ):
             mock_embed.kiq = AsyncMock()
             await analyze_article(article_id=1, ctx=mock_ctx)
@@ -162,7 +162,7 @@ class TestAnalyzeArticle:
                 new_callable=AsyncMock,
                 return_value=analysis,
             ),
-            patch("app.tasks.embedding_tasks.generate_embedding") as mock_embed,
+            patch("app.tasks.analysis_tasks.generate_embedding") as mock_embed,
         ):
             mock_embed.kiq = AsyncMock()
             await analyze_article(article_id=1, ctx=mock_ctx)
