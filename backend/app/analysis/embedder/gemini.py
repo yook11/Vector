@@ -4,14 +4,17 @@ from __future__ import annotations
 
 from google import genai
 from google.genai import types
-from google.genai.errors import ClientError
+from google.genai.errors import APIError, ServerError
 
 from app.analysis.embedder.base import BaseEmbedder
 from app.analysis.errors import (
     AnalysisDomainError,
+    ConfigurationError,
     InvalidInputError,
+    NetworkError,
+    ProviderError,
     RateLimitError,
-    TransientError,
+    UnclassifiedError,
 )
 from app.config import settings
 
@@ -27,7 +30,7 @@ class GeminiEmbedder(BaseEmbedder):
     def __init__(self) -> None:
         api_key = settings.gemini_api_key.get_secret_value()
         if not api_key:
-            raise AnalysisDomainError("GEMINI_API_KEY is not configured")
+            raise ConfigurationError("GEMINI_API_KEY is not configured")
         self._client = genai.Client(api_key=api_key)
 
     async def _call_api(
@@ -49,25 +52,36 @@ class GeminiEmbedder(BaseEmbedder):
         return [e.values for e in response.embeddings]
 
     def _translate_error(self, exc: Exception) -> AnalysisDomainError:
-        """Classify Gemini SDK exceptions into the error hierarchy."""
-        if isinstance(exc, ClientError):
-            if exc.code == 429:
-                return RateLimitError(str(exc))
-            if 400 <= exc.code < 500:
-                return InvalidInputError(str(exc))
-            if exc.code >= 500:
-                return TransientError(str(exc))
+        """Classify Gemini SDK exceptions by cause origin."""
+        if isinstance(exc, APIError):
+            status = exc.status or ""
+            message = exc.message or ""
 
-        # Fallback: check string for common rate limit indicators
-        error_str = str(exc).lower()
-        if any(
-            p in error_str
-            for p in ("429", "resource_exhausted", "rate limit", "quota exceeded")
-        ):
-            return RateLimitError(str(exc))
+            if "reported as leaked" in message:
+                return ConfigurationError(f"API key leaked: {message}")
 
-        # Network / timeout / unknown -> transient
+            if status in (
+                "UNAUTHENTICATED",
+                "PERMISSION_DENIED",
+                "FAILED_PRECONDITION",
+                "NOT_FOUND",
+            ):
+                return ConfigurationError(f"{status}: {message}")
+
+            if status in ("INVALID_ARGUMENT", "DEADLINE_EXCEEDED"):
+                return InvalidInputError(f"{status}: {message}")
+
+            if status == "RESOURCE_EXHAUSTED":
+                return RateLimitError(f"{status}: {message}")
+
+            if isinstance(exc, ServerError):
+                return ProviderError(f"{status}: {message}")
+
+            return UnclassifiedError(
+                f"Unhandled APIError {exc.code} {status}: {message}"
+            )
+
         if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
-            return TransientError(str(exc))
+            return NetworkError(f"{type(exc).__name__}: {exc}")
 
-        return AnalysisDomainError(str(exc))
+        return UnclassifiedError(f"{type(exc).__name__}: {exc}")

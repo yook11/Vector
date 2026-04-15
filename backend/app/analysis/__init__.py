@@ -6,10 +6,13 @@ from app.analysis.embedder.base import BaseEmbedder
 from app.analysis.embedder.factory import get_embedder
 from app.analysis.errors import (
     AnalysisDomainError,
+    ConfigurationError,
     DailyQuotaExhaustedError,
     InvalidInputError,
+    NetworkError,
+    ProviderError,
     RateLimitError,
-    TransientError,
+    UnclassifiedError,
 )
 from app.analysis.service import _build_embed_text, analyze_article, analyze_articles
 
@@ -19,10 +22,13 @@ __all__ = [
     "AnalyzeResult",
     "BaseAnalyzer",
     "BaseEmbedder",
+    "ConfigurationError",
     "DailyQuotaExhaustedError",
     "InvalidInputError",
+    "NetworkError",
+    "ProviderError",
     "RateLimitError",
-    "TransientError",
+    "UnclassifiedError",
     "_build_embed_text",
     "analyze_article",
     "analyze_articles",

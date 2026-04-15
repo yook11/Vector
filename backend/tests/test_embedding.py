@@ -9,8 +9,8 @@ from app.analysis import (
     AnalysisDomainError,
     BaseEmbedder,
     InvalidInputError,
+    ProviderError,
     RateLimitError,
-    TransientError,
     get_embedder,
 )
 
@@ -59,7 +59,15 @@ async def test_gemini_embedder_429_raises_rate_limit_error() -> None:
         embedder = GeminiEmbedder()
 
         # Create a ClientError with code=429
-        error_429 = ClientError(429, {"error": {"message": "RESOURCE_EXHAUSTED"}})
+        error_429 = ClientError(
+            429,
+            {
+                "error": {
+                    "message": "RESOURCE_EXHAUSTED",
+                    "status": "RESOURCE_EXHAUSTED",
+                }
+            },
+        )
 
         embedder._client.aio.models.embed_content = AsyncMock(side_effect=error_429)
 
@@ -108,7 +116,7 @@ class StubEmbedder(BaseEmbedder):
     def _translate_error(self, exc: Exception) -> AnalysisDomainError:
         if isinstance(exc, _InvalidInputSDKError):
             return InvalidInputError(str(exc))
-        return TransientError(str(exc))
+        return ProviderError(str(exc))
 
 
 @pytest.mark.asyncio
@@ -130,7 +138,7 @@ async def test_embed_documents_returns_all_vectors() -> None:
 async def test_embed_once_translates_sdk_error() -> None:
     """SDK exceptions are translated via _translate_error."""
     embedder = StubEmbedder(side_effects=[RuntimeError("API error")])
-    with pytest.raises(TransientError):
+    with pytest.raises(ProviderError):
         await embedder.embed_document("text")
     assert len(embedder._calls) == 1
 

@@ -10,6 +10,7 @@ from app.analysis.analyzer.base import AnalyzeResult, BaseAnalyzer
 from app.analysis.analyzer.factory import get_analyzer
 from app.analysis.errors import (
     AnalysisDomainError,
+    ConfigurationError,
     DailyQuotaExhaustedError,
     RateLimitError,
 )
@@ -152,6 +153,18 @@ async def analyze_articles(
             result.errors.append(str(e))
             logger.warning(
                 "analyze_daily_quota_exhausted",
+                article_id=article_id,
+                remaining=remaining,
+                error=str(e),
+            )
+            break
+        except ConfigurationError as e:
+            await session.rollback()
+            remaining = len(articles) - i
+            result.error_count += remaining
+            result.errors.append(str(e))
+            logger.warning(
+                "analyze_configuration_error",
                 article_id=article_id,
                 remaining=remaining,
                 error=str(e),

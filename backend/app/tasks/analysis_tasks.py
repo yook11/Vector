@@ -11,7 +11,10 @@ from taskiq import Context, TaskiqDepends
 
 from app.analysis import (
     AnalysisDomainError,
+    ConfigurationError,
     InvalidInputError,
+    NetworkError,
+    ProviderError,
     _build_embed_text,
     get_analyzer,
     get_embedder,
@@ -132,6 +135,13 @@ async def analyze_article(
                 article_id=article_id,
             )
             return
+        except ConfigurationError as e:
+            logger.warning(
+                "analyze_article_configuration_error",
+                article_id=article_id,
+                reason=str(e),
+            )
+            return
         except AnalysisRateLimitError:
             if is_last_attempt(ctx):
                 article.original_content = None
@@ -141,15 +151,35 @@ async def analyze_article(
                 logger.warning("analyze_article_max_retries", article_id=article_id)
                 return
             raise
-        except AnalysisDomainError as e:
-            # Safety block or permanent AI failure
+        except (ProviderError, NetworkError) as e:
+            if is_last_attempt(ctx):
+                logger.warning(
+                    "analyze_article_transient_max_retries",
+                    article_id=article_id,
+                    reason=str(e),
+                )
+                return
+            raise
+        except InvalidInputError as e:
             await session.rollback()
             article.original_content = None
             article.skip_content_fetch = True
             session.add(article)
             await session.commit()
             logger.warning(
-                "analyze_article_safety_block",
+                "analyze_article_invalid_input",
+                article_id=article_id,
+                reason=str(e),
+            )
+            return
+        except AnalysisDomainError as e:
+            await session.rollback()
+            article.original_content = None
+            article.skip_content_fetch = True
+            session.add(article)
+            await session.commit()
+            logger.warning(
+                "analyze_article_domain_error",
                 article_id=article_id,
                 reason=str(e),
             )
@@ -216,6 +246,13 @@ async def generate_embedding(
                 article_id=article_id,
             )
             return
+        except ConfigurationError as e:
+            logger.warning(
+                "generate_embedding_configuration_error",
+                article_id=article_id,
+                reason=str(e),
+            )
+            return
         except InvalidInputError as e:
             logger.warning(
                 "generate_embedding_invalid_input",
@@ -226,6 +263,15 @@ async def generate_embedding(
         except AnalysisRateLimitError:
             if is_last_attempt(ctx):
                 logger.warning("generate_embedding_max_retries", article_id=article_id)
+                return
+            raise
+        except (ProviderError, NetworkError) as e:
+            if is_last_attempt(ctx):
+                logger.warning(
+                    "generate_embedding_transient_max_retries",
+                    article_id=article_id,
+                    reason=str(e),
+                )
                 return
             raise
         except AnalysisDomainError as e:

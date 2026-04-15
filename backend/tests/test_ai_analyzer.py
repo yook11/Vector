@@ -14,7 +14,8 @@ from app.analysis import (
     AnalysisDomainError,
     BaseAnalyzer,
     DailyQuotaExhaustedError,
-    TransientError,
+    NetworkError,
+    ProviderError,
     analyze_article,
     analyze_articles,
     get_analyzer,
@@ -135,14 +136,14 @@ def test_parse_response_strips_markdown_fences() -> None:
 
 def test_parse_response_invalid_json_raises_error() -> None:
     analyzer = _create_analyzer()
-    with pytest.raises(AnalysisDomainError, match="Failed to parse"):
+    with pytest.raises(ProviderError, match="Failed to parse"):
         analyzer._parse_response("this is not json")
 
 
 def test_parse_response_invalid_impact_level_raises_error() -> None:
     analyzer = _create_analyzer()
     raw = _make_gemini_response(impact_level="extreme")
-    with pytest.raises(AnalysisDomainError, match="Invalid"):
+    with pytest.raises(ProviderError, match="Invalid"):
         analyzer._parse_response(raw)
 
 
@@ -163,18 +164,16 @@ async def test_call_once_translates_sdk_error() -> None:
     analyzer = _create_analyzer()
     analyzer._call_api = AsyncMock(side_effect=ConnectionError("timeout"))
 
-    with pytest.raises(TransientError):
+    with pytest.raises(NetworkError):
         await analyzer._call_once("test prompt")
 
 
 async def test_call_once_passes_through_domain_error() -> None:
     """AnalysisDomainError from _call_api is re-raised as-is."""
     analyzer = _create_analyzer()
-    analyzer._call_api = AsyncMock(
-        side_effect=AnalysisDomainError("empty response")
-    )
+    analyzer._call_api = AsyncMock(side_effect=ProviderError("empty response"))
 
-    with pytest.raises(AnalysisDomainError, match="empty response"):
+    with pytest.raises(ProviderError, match="empty response"):
         await analyzer._call_once("test prompt")
 
 
