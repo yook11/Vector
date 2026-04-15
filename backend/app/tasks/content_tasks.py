@@ -7,8 +7,7 @@ import structlog
 from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
 from taskiq import Context, TaskiqDepends
 
-from app.models.news_article import NewsArticle
-from app.services.content_extractor import (
+from app.collection.content_extractor import (
     HEADERS,
     HTTP_TIMEOUT,
     PermanentFetchError,
@@ -16,6 +15,7 @@ from app.services.content_extractor import (
     TemporaryFetchError,
     extract_content,
 )
+from app.models.news_article import NewsArticle
 from app.tasks.brokers import broker_content, is_last_attempt
 
 logger = structlog.get_logger(__name__)

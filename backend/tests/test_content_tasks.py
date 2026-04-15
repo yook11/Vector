@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.collection.content_extractor import PermanentFetchError, TemporaryFetchError
 from app.models.news_article import NewsArticle
-from app.services.content_extractor import PermanentFetchError, TemporaryFetchError
 
 
 def _mock_session_context(mock_session: AsyncMock) -> MagicMock:

@@ -8,12 +8,12 @@ from sqlalchemy import func as sa_func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
+from app.collection.news_fetcher import SourceFetchResult
+from app.collection.source_helpers import get_last_successful_fetch_at
 from app.config import settings
 from app.models.fetch_log import FetchLog
 from app.models.news_article import NewsArticle
 from app.models.news_source import NewsSource
-from app.services.news_fetcher import SourceFetchResult
-from app.services.source_helpers import get_last_successful_fetch_at
 from app.utils.sanitize import is_safe_url, strip_html_tags
 
 HTTP_TIMEOUT = 30.0

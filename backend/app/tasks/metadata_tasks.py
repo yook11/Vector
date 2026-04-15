@@ -7,8 +7,8 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
 from taskiq import Context, TaskiqDepends
 
+from app.collection.news_fetcher import fetch_news_for_sources
 from app.models.news_source import NewsSource
-from app.services.news_fetcher import fetch_news_for_sources
 from app.tasks.brokers import _FETCH_CRON, broker_metadata
 
 logger = structlog.get_logger(__name__)

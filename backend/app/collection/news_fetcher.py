@@ -272,14 +272,14 @@ async def fetch_news_for_sources(
                 # TODO: スキーマ層を SafeUrl 対応にした後、str() 変換を削除
                 domain = urlparse(str(source.endpoint_url)).hostname or ""
                 if "algolia.com" in domain:
-                    from app.services.hacker_news import HackerNewsClient
+                    from app.collection.hacker_news import HackerNewsClient
 
                     hn_client = HackerNewsClient(client)
                     source_result = await hn_client.fetch_and_save_stories(
                         source=source, session=session
                     )
                 elif "alphavantage.co" in domain:
-                    from app.services.alpha_vantage import AlphaVantageClient
+                    from app.collection.alpha_vantage import AlphaVantageClient
 
                     av_client = AlphaVantageClient(client)
                     source_result = await av_client.fetch_and_save_articles(

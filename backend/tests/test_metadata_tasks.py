@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.collection.news_fetcher import FetchResult, SourceFetchResult
 from app.models.news_source import NewsSource
-from app.services.news_fetcher import FetchResult, SourceFetchResult
 
 
 def _mock_session_context(mock_session: AsyncMock) -> MagicMock:
