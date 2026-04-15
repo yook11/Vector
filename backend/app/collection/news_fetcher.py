@@ -13,8 +13,8 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
+from app.collection.http_cache import get_http_cache, set_http_cache
 from app.config import settings
-from app.infra.redis.cache import get_http_cache, set_http_cache
 from app.models.fetch_log import FetchLog, FetchStatus
 from app.models.news_article import NewsArticle
 from app.models.news_source import NewsSource, SourceType

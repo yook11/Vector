@@ -31,7 +31,7 @@ async def embed_search_query(
     Raises:
         SearchError: If the API call fails.
     """
-    from app.infra.redis.embedding_cache import get_query_embedding, set_query_embedding
+    from app.search.embedding_cache import get_query_embedding, set_query_embedding
 
     cached = await get_query_embedding(text)
     if cached is not None:
