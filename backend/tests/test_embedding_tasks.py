@@ -93,6 +93,8 @@ class TestGenerateEmbedding:
 
         mock_embedder = AsyncMock()
         mock_embedder.MODEL = "gemini-embedding-001"
+        mock_embedder.RPM = 15
+        mock_embedder.RPD = 1500
         mock_embedder.embed_document = AsyncMock(return_value=[0.1] * 768)
 
         with (
@@ -104,6 +106,10 @@ class TestGenerateEmbedding:
                 "app.tasks.analysis_tasks.get_embedder",
                 return_value=mock_embedder,
             ),
+            patch(
+                "app.tasks.analysis_tasks._build_limiters",
+                return_value=(None, None),
+            ),
         ):
             await generate_embedding(article_id=1, ctx=mock_ctx)
 
@@ -112,7 +118,8 @@ class TestGenerateEmbedding:
         mock_session.commit.assert_called()
 
     @pytest.mark.asyncio
-    async def test_embedding_error_raises(self) -> None:
+    async def test_embedding_domain_error_returns(self) -> None:
+        """AnalysisDomainError is caught and logged, not re-raised."""
         from app.tasks.analysis_tasks import generate_embedding
 
         mock_session = AsyncMock()
@@ -129,6 +136,9 @@ class TestGenerateEmbedding:
         mock_session.get = AsyncMock(return_value=article)
 
         mock_embedder = AsyncMock()
+        mock_embedder.MODEL = "gemini-embedding-001"
+        mock_embedder.RPM = 15
+        mock_embedder.RPD = 1500
         mock_embedder.embed_document = AsyncMock(
             side_effect=AnalysisDomainError("API down")
         )
@@ -142,6 +152,11 @@ class TestGenerateEmbedding:
                 "app.tasks.analysis_tasks.get_embedder",
                 return_value=mock_embedder,
             ),
+            patch(
+                "app.tasks.analysis_tasks._build_limiters",
+                return_value=(None, None),
+            ),
         ):
-            with pytest.raises(AnalysisDomainError):
-                await generate_embedding(article_id=1, ctx=mock_ctx)
+            await generate_embedding(article_id=1, ctx=mock_ctx)
+
+        mock_session.commit.assert_not_awaited()

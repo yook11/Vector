@@ -14,6 +14,7 @@ from app.analysis import (
     AnalysisDomainError,
     BaseAnalyzer,
     DailyQuotaExhaustedError,
+    TransientError,
     analyze_article,
     analyze_articles,
     get_analyzer,
@@ -73,13 +74,9 @@ def _create_article(source: NewsSource) -> NewsArticle:
 def test_get_analyzer_returns_gemini_by_default() -> None:
     with patch("app.analysis.analyzer.factory.settings") as mock_settings:
         mock_settings.ai_provider = "gemini"
-        with patch(
-            "app.analysis.analyzer.factory._build_limiters",
-            return_value={"rpm_limiter": None, "rpd_limiter": None},
-        ):
-            with patch("app.analysis.analyzer.gemini.settings") as mock_gs:
-                mock_gs.gemini_api_key = SecretStr("test-key")
-                analyzer = get_analyzer()
+        with patch("app.analysis.analyzer.gemini.settings") as mock_gs:
+            mock_gs.gemini_api_key = SecretStr("test-key")
+            analyzer = get_analyzer()
     assert isinstance(analyzer, GeminiAnalyzer)
     assert analyzer.model_name == "gemini-2.5-flash-lite"
 
@@ -149,61 +146,36 @@ def test_parse_response_invalid_impact_level_raises_error() -> None:
         analyzer._parse_response(raw)
 
 
-# --- C. BaseAnalyzer._call_with_retry tests ---
+# --- C. BaseAnalyzer._call_once tests ---
 
 
-async def test_call_with_retry_succeeds_on_first_attempt() -> None:
+async def test_call_once_succeeds() -> None:
     analyzer = _create_analyzer()
     analyzer._call_api = AsyncMock(return_value=_make_gemini_response())
 
-    result = await analyzer._call_with_retry("test prompt")
+    result = await analyzer._call_once("test prompt")
     assert result == _make_gemini_response()
     analyzer._call_api.assert_called_once()
 
 
-async def test_call_with_retry_retries_on_transient_error() -> None:
+async def test_call_once_translates_sdk_error() -> None:
+    """SDK exceptions are translated via _translate_error."""
+    analyzer = _create_analyzer()
+    analyzer._call_api = AsyncMock(side_effect=ConnectionError("timeout"))
+
+    with pytest.raises(TransientError):
+        await analyzer._call_once("test prompt")
+
+
+async def test_call_once_passes_through_domain_error() -> None:
+    """AnalysisDomainError from _call_api is re-raised as-is."""
     analyzer = _create_analyzer()
     analyzer._call_api = AsyncMock(
-        side_effect=[ConnectionError("timeout"), _make_gemini_response()]
+        side_effect=AnalysisDomainError("empty response")
     )
 
-    with patch(
-        "app.analysis.analyzer.base.asyncio.sleep",
-        new_callable=AsyncMock,
-    ):
-        result = await analyzer._call_with_retry("test prompt")
-
-    assert result == _make_gemini_response()
-    assert analyzer._call_api.call_count == 2
-
-
-async def test_call_with_retry_raises_after_max_retries() -> None:
-    analyzer = _create_analyzer()
-    analyzer._call_api = AsyncMock(side_effect=ConnectionError("API unavailable"))
-
-    with patch(
-        "app.analysis.analyzer.base.asyncio.sleep",
-        new_callable=AsyncMock,
-    ):
-        with pytest.raises(AnalysisDomainError, match="failed after 3 attempts"):
-            await analyzer._call_with_retry("test prompt")
-
-    assert analyzer._call_api.call_count == 3
-
-
-async def test_call_with_retry_acquires_rate_limit() -> None:
-    """Rate limiters are called before _call_api."""
-    analyzer = _create_analyzer()
-    rpm_limiter = AsyncMock()
-    rpd_limiter = AsyncMock()
-    analyzer._rpm_limiter = rpm_limiter
-    analyzer._rpd_limiter = rpd_limiter
-    analyzer._call_api = AsyncMock(return_value="response")
-
-    await analyzer._call_with_retry("test prompt")
-
-    rpd_limiter.acquire.assert_awaited_once()
-    rpm_limiter.acquire.assert_awaited_once()
+    with pytest.raises(AnalysisDomainError, match="empty response"):
+        await analyzer._call_once("test prompt")
 
 
 # --- D. Orchestration tests (with DB) ---
