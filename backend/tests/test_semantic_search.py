@@ -69,7 +69,7 @@ async def _create_article(
 def _patch_embed_query(return_value: list[float] = FAKE_QUERY_EMBEDDING):
     """Patch embed_search_query to return a fixed vector."""
     return patch(
-        "app.services.semantic_search.embed_search_query",
+        "app.search.service.embed_search_query",
         new_callable=AsyncMock,
         return_value=return_value,
     )
@@ -187,7 +187,7 @@ async def test_semantic_search_returns_503_on_embedding_failure(
     db_session: AsyncSession,
 ) -> None:
     """When embedding generation fails, return 503."""
-    from app.analysis.errors import AnalysisDomainError
+    from app.search.errors import SearchError
 
     source = await _create_source(db_session)
     await _create_article(
@@ -198,9 +198,9 @@ async def test_semantic_search_returns_503_on_embedding_failure(
     await db_session.commit()
 
     with patch(
-        "app.services.semantic_search.embed_search_query",
+        "app.search.service.embed_search_query",
         new_callable=AsyncMock,
-        side_effect=AnalysisDomainError("API down"),
+        side_effect=SearchError("API down"),
     ):
         resp = await authed_client.get("/api/v1/articles/search", params={"q": "test"})
 
