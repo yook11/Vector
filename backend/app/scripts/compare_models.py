@@ -15,8 +15,8 @@ from sqlalchemy.orm import selectinload
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
 
-from app.ai.analyzer import AnalysisData, AnalysisError
-from app.ai.analyzer.providers.gemini import (
+from app.analysis import AnalysisData, AnalysisDomainError
+from app.analysis.analyzer.gemini import (
     ANALYSIS_PROMPT_BASE,
 )
 from app.config import settings
@@ -53,19 +53,19 @@ async def call_flash_lite(client: genai.Client, prompt: str) -> str:
                 ),
             )
             if response.text is None:
-                raise AnalysisError("Flash-lite returned empty response")
+                raise AnalysisDomainError("Flash-lite returned empty response")
             return response.text
-        except AnalysisError:
+        except AnalysisDomainError:
             raise
         except Exception as e:
             if _is_rate_limit_error(e):
-                raise AnalysisError(f"Rate limit exceeded: {e}") from e
+                raise AnalysisDomainError(f"Rate limit exceeded: {e}") from e
             last_error = e
             if attempt < MAX_RETRIES:
                 delay = RETRY_BASE_DELAY * (2 ** (attempt - 1))
                 await asyncio.sleep(delay)
 
-    raise AnalysisError(
+    raise AnalysisDomainError(
         f"Flash-lite API failed after {MAX_RETRIES} attempts: {last_error}"
     )
 

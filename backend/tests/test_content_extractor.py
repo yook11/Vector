@@ -7,10 +7,7 @@ import httpx
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
-from app.models.news_article import NewsArticle
-from app.models.news_source import NewsSource
-from app.services.content_extractor import (
+from app.collection.content_extractor import (
     ContentExtractionResult,
     DomainRateLimiter,
     PermanentFetchError,
@@ -20,6 +17,9 @@ from app.services.content_extractor import (
     extract_content,
     extract_contents,
 )
+from app.config import settings
+from app.models.news_article import NewsArticle
+from app.models.news_source import NewsSource
 
 SAMPLE_HTML = """
 <html>
@@ -225,7 +225,7 @@ class TestExtractContents:
 
         with (
             patch(
-                "app.services.content_extractor.extract_content",
+                "app.collection.content_extractor.extract_content",
                 return_value=(
                     "Extracted article content that is longer"
                     " than fifty characters for the test."
@@ -258,7 +258,7 @@ class TestExtractContents:
 
         with (
             patch(
-                "app.services.content_extractor.extract_content",
+                "app.collection.content_extractor.extract_content",
                 return_value=None,
             ),
             patch.object(settings, "content_domain_delay", 0.0),
@@ -396,7 +396,7 @@ class TestExtractContentsParallel:
 
         with (
             patch(
-                "app.services.content_extractor.extract_content",
+                "app.collection.content_extractor.extract_content",
                 return_value=(
                     "This is extracted content that exceeds"
                     " fifty characters for the test."
@@ -448,7 +448,7 @@ class TestExtractContentsParallel:
 
         with (
             patch(
-                "app.services.content_extractor.extract_content",
+                "app.collection.content_extractor.extract_content",
                 side_effect=mock_extract,
             ),
             patch.object(settings, "content_domain_delay", 0.0),

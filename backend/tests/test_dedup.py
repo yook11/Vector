@@ -6,10 +6,10 @@ import numpy as np
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.analysis.dedup import DedupResult, detect_duplicates
 from app.models.article_analysis import ArticleAnalysis, ImpactLevel
 from app.models.news_article import NewsArticle
 from app.models.news_source import NewsSource
-from app.services.dedup import DedupResult, detect_duplicates
 
 
 def _make_embedding(seed: int = 0, dim: int = 768) -> list[float]:

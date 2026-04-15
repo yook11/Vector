@@ -13,7 +13,7 @@ class TestFetchNews:
         mock_task_handle.task_id = "test-task-id-123"
 
         with patch(
-            "app.tasks.metadata_tasks.fetch_metadata",
+            "app.tasks.collection_tasks.fetch_metadata",
         ) as mock_task:
             mock_task.kiq = AsyncMock(return_value=mock_task_handle)
             resp = await admin_client.post("/api/v1/admin/pipeline/fetch")
@@ -30,7 +30,7 @@ class TestFetchNews:
         mock_task_handle.task_id = "test-task-id-456"
 
         with patch(
-            "app.tasks.metadata_tasks.fetch_metadata",
+            "app.tasks.collection_tasks.fetch_metadata",
         ) as mock_task:
             mock_task.kiq = AsyncMock(return_value=mock_task_handle)
             resp = await admin_client.post(
@@ -52,7 +52,7 @@ class TestEmbedNews:
                 "app.routers.admin.pipeline.PipelineRepository",
             ) as mock_repo_cls,
             patch(
-                "app.tasks.embedding_tasks.generate_embedding",
+                "app.tasks.analysis_tasks.generate_embedding",
             ) as mock_embed,
         ):
             mock_repo = AsyncMock()
@@ -74,7 +74,7 @@ class TestEmbedNews:
                 "app.routers.admin.pipeline.PipelineRepository",
             ) as mock_repo_cls,
             patch(
-                "app.tasks.embedding_tasks.generate_embedding",
+                "app.tasks.analysis_tasks.generate_embedding",
             ) as mock_embed,
         ):
             mock_repo = AsyncMock()

@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.ai.analyzer import AnalysisError, RateLimitError
+from app.analysis import AnalysisDomainError, RateLimitError
 from app.models.article_analysis import ArticleAnalysis
 from app.models.news_article import NewsArticle
 
@@ -70,7 +70,7 @@ class TestAnalyzeArticle:
                 "app.tasks.analysis_tasks.SQLModelAsyncSession",
                 return_value=_mock_session_context(mock_session),
             ),
-            patch("app.tasks.embedding_tasks.generate_embedding") as mock_embed,
+            patch("app.tasks.analysis_tasks.generate_embedding") as mock_embed,
         ):
             mock_embed.kiq = AsyncMock()
             await analyze_article(article_id=1, ctx=mock_ctx)
@@ -100,7 +100,7 @@ class TestAnalyzeArticle:
             patch(
                 "app.tasks.analysis_tasks._analyze_article_svc",
                 new_callable=AsyncMock,
-                side_effect=AnalysisError("Safety block"),
+                side_effect=AnalysisDomainError("Safety block"),
             ),
         ):
             await analyze_article(article_id=1, ctx=mock_ctx)
@@ -162,7 +162,7 @@ class TestAnalyzeArticle:
                 new_callable=AsyncMock,
                 return_value=analysis,
             ),
-            patch("app.tasks.embedding_tasks.generate_embedding") as mock_embed,
+            patch("app.tasks.analysis_tasks.generate_embedding") as mock_embed,
         ):
             mock_embed.kiq = AsyncMock()
             await analyze_article(article_id=1, ctx=mock_ctx)

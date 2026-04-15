@@ -6,10 +6,10 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import CurrentUser, get_optional_user, get_session
-from app.repositories.semantic_search import SemanticSearchRepository
 from app.repositories.watchlist import WatchlistRepository
 from app.schemas.articles import PaginatedArticleResponse, SemanticSearchParams
-from app.services.semantic_search import SemanticSearchService
+from app.search.repository import SemanticSearchRepository
+from app.search.service import SemanticSearchService
 
 router = APIRouter(prefix="/api/v1/articles", tags=["semantic-search"])
 

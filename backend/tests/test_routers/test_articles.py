@@ -377,7 +377,9 @@ class TestSimilarArticles:
         source = await _create_article(
             db_session, sample_source, url="https://example.com/src"
         )
-        source_analysis = await _create_analysis(db_session, source, embedding=EMBEDDING_A)
+        source_analysis = await _create_analysis(
+            db_session, source, embedding=EMBEDDING_A
+        )
 
         close = await _create_article(
             db_session, sample_source, url="https://example.com/close"
@@ -431,7 +433,9 @@ class TestSimilarArticles:
         source = await _create_article(
             db_session, sample_source, url="https://example.com/main"
         )
-        source_analysis = await _create_analysis(db_session, source, embedding=EMBEDDING_A)
+        source_analysis = await _create_analysis(
+            db_session, source, embedding=EMBEDDING_A
+        )
 
         for i in range(5):
             art = await _create_article(

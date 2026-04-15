@@ -10,9 +10,9 @@ from google import genai
 from google.genai.errors import ClientError
 from google.genai.types import GenerateContentConfig
 
-from app.ai.analyzer.base import AnalysisData, BaseAnalyzer
-from app.ai.analyzer.errors import (
-    AnalysisError,
+from app.analysis.analyzer.base import AnalysisData, BaseAnalyzer
+from app.analysis.errors import (
+    AnalysisDomainError,
     InvalidInputError,
     RateLimitError,
     TransientError,
@@ -74,7 +74,7 @@ class GeminiAnalyzer(BaseAnalyzer):
         super().__init__(rpm_limiter=rpm_limiter, rpd_limiter=rpd_limiter)
         api_key = settings.gemini_api_key.get_secret_value()
         if not api_key:
-            raise AnalysisError("GEMINI_API_KEY is not configured")
+            raise AnalysisDomainError("GEMINI_API_KEY is not configured")
         self._client = genai.Client(api_key=api_key)
 
     async def analyze(
@@ -125,10 +125,10 @@ class GeminiAnalyzer(BaseAnalyzer):
             ),
         )
         if response.text is None:
-            raise AnalysisError("Gemini returned empty response")
+            raise AnalysisDomainError("Gemini returned empty response")
         return response.text
 
-    def _translate_error(self, exc: Exception) -> AnalysisError:
+    def _translate_error(self, exc: Exception) -> AnalysisDomainError:
         """Classify Gemini SDK exceptions into the error hierarchy."""
         if isinstance(exc, ClientError):
             if exc.code == 429:
@@ -150,7 +150,7 @@ class GeminiAnalyzer(BaseAnalyzer):
         if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
             return TransientError(str(exc))
 
-        return AnalysisError(str(exc))
+        return AnalysisDomainError(str(exc))
 
     def _parse_response(
         self, raw_text: str, keywords_by_category: dict[str, list[str]] | None = None
@@ -174,7 +174,7 @@ class GeminiAnalyzer(BaseAnalyzer):
                 raw_text=raw_text[:500],
                 error=str(e),
             )
-            raise AnalysisError(f"Failed to parse Gemini response as JSON: {e}")
+            raise AnalysisDomainError(f"Failed to parse Gemini response as JSON: {e}")
 
         try:
             impact_level = ImpactLevel(data["impact_level"])
@@ -207,4 +207,4 @@ class GeminiAnalyzer(BaseAnalyzer):
                 data=data,
                 error=str(e),
             )
-            raise AnalysisError(f"Invalid analysis data from Gemini: {e}")
+            raise AnalysisDomainError(f"Invalid analysis data from Gemini: {e}")

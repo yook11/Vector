@@ -8,13 +8,13 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from app.models.news_article import NewsArticle
-from app.models.news_source import NewsSource
-from app.services.news_fetcher import (
+from app.collection.news_fetcher import (
     _extract_guid,
     _parse_published_date,
     fetch_news_for_sources,
 )
+from app.models.news_article import NewsArticle
+from app.models.news_source import NewsSource
 
 
 def _make_feed(entries: list[dict], bozo: bool = False) -> MagicMock:
@@ -120,14 +120,16 @@ async def test_fetch_saves_new_articles(
     mock_client.get.return_value = _mock_response(text="<rss>mock</rss>")
 
     with (
-        patch("app.services.news_fetcher.httpx.AsyncClient", return_value=mock_client),
-        patch("app.services.news_fetcher.feedparser.parse", return_value=feed),
         patch(
-            "app.services.news_fetcher.get_http_cache",
+            "app.collection.news_fetcher.httpx.AsyncClient", return_value=mock_client
+        ),
+        patch("app.collection.news_fetcher.feedparser.parse", return_value=feed),
+        patch(
+            "app.collection.news_fetcher.get_http_cache",
             new_callable=AsyncMock,
             return_value=(None, None),
         ),
-        patch("app.services.news_fetcher.set_http_cache", new_callable=AsyncMock),
+        patch("app.collection.news_fetcher.set_http_cache", new_callable=AsyncMock),
     ):
         result = await fetch_news_for_sources(db_session, [sample_source])
 
@@ -160,14 +162,16 @@ async def test_fetch_skips_duplicate_urls(
     mock_client.get.return_value = _mock_response(text="<rss>mock</rss>")
 
     with (
-        patch("app.services.news_fetcher.httpx.AsyncClient", return_value=mock_client),
-        patch("app.services.news_fetcher.feedparser.parse", return_value=feed),
         patch(
-            "app.services.news_fetcher.get_http_cache",
+            "app.collection.news_fetcher.httpx.AsyncClient", return_value=mock_client
+        ),
+        patch("app.collection.news_fetcher.feedparser.parse", return_value=feed),
+        patch(
+            "app.collection.news_fetcher.get_http_cache",
             new_callable=AsyncMock,
             return_value=(None, None),
         ),
-        patch("app.services.news_fetcher.set_http_cache", new_callable=AsyncMock),
+        patch("app.collection.news_fetcher.set_http_cache", new_callable=AsyncMock),
     ):
         result = await fetch_news_for_sources(db_session, [sample_source])
 
@@ -184,9 +188,11 @@ async def test_fetch_handles_304_not_modified(
     mock_client.get.return_value = _mock_response(status_code=304)
 
     with (
-        patch("app.services.news_fetcher.httpx.AsyncClient", return_value=mock_client),
         patch(
-            "app.services.news_fetcher.get_http_cache",
+            "app.collection.news_fetcher.httpx.AsyncClient", return_value=mock_client
+        ),
+        patch(
+            "app.collection.news_fetcher.get_http_cache",
             new_callable=AsyncMock,
             return_value=(None, None),
         ),
@@ -205,9 +211,11 @@ async def test_fetch_handles_http_error(
     mock_client.get.return_value = _mock_response(status_code=500)
 
     with (
-        patch("app.services.news_fetcher.httpx.AsyncClient", return_value=mock_client),
         patch(
-            "app.services.news_fetcher.get_http_cache",
+            "app.collection.news_fetcher.httpx.AsyncClient", return_value=mock_client
+        ),
+        patch(
+            "app.collection.news_fetcher.get_http_cache",
             new_callable=AsyncMock,
             return_value=(None, None),
         ),
@@ -230,15 +238,17 @@ async def test_fetch_respects_max_articles_limit(
     mock_client.get.return_value = _mock_response(text="<rss>mock</rss>")
 
     with (
-        patch("app.services.news_fetcher.httpx.AsyncClient", return_value=mock_client),
-        patch("app.services.news_fetcher.feedparser.parse", return_value=feed),
-        patch("app.services.news_fetcher.settings") as mock_settings,
         patch(
-            "app.services.news_fetcher.get_http_cache",
+            "app.collection.news_fetcher.httpx.AsyncClient", return_value=mock_client
+        ),
+        patch("app.collection.news_fetcher.feedparser.parse", return_value=feed),
+        patch("app.collection.news_fetcher.settings") as mock_settings,
+        patch(
+            "app.collection.news_fetcher.get_http_cache",
             new_callable=AsyncMock,
             return_value=(None, None),
         ),
-        patch("app.services.news_fetcher.set_http_cache", new_callable=AsyncMock),
+        patch("app.collection.news_fetcher.set_http_cache", new_callable=AsyncMock),
     ):
         mock_settings.max_articles_per_fetch = 50
         mock_settings.content_max_length = 8000
@@ -263,9 +273,11 @@ async def test_fetch_sends_conditional_get_headers_from_redis(
     mock_client.get.return_value = _mock_response(status_code=304)
 
     with (
-        patch("app.services.news_fetcher.httpx.AsyncClient", return_value=mock_client),
         patch(
-            "app.services.news_fetcher.get_http_cache",
+            "app.collection.news_fetcher.httpx.AsyncClient", return_value=mock_client
+        ),
+        patch(
+            "app.collection.news_fetcher.get_http_cache",
             new_callable=AsyncMock,
             return_value=('"abc123"', "Wed, 01 Jan 2025 00:00:00 GMT"),
         ),
@@ -295,15 +307,17 @@ async def test_fetch_captures_etag_and_writes_to_redis(
     )
 
     with (
-        patch("app.services.news_fetcher.httpx.AsyncClient", return_value=mock_client),
-        patch("app.services.news_fetcher.feedparser.parse", return_value=feed),
         patch(
-            "app.services.news_fetcher.get_http_cache",
+            "app.collection.news_fetcher.httpx.AsyncClient", return_value=mock_client
+        ),
+        patch("app.collection.news_fetcher.feedparser.parse", return_value=feed),
+        patch(
+            "app.collection.news_fetcher.get_http_cache",
             new_callable=AsyncMock,
             return_value=(None, None),
         ),
         patch(
-            "app.services.news_fetcher.set_http_cache",
+            "app.collection.news_fetcher.set_http_cache",
             new_callable=AsyncMock,
         ) as mock_set_cache,
     ):
@@ -331,14 +345,16 @@ async def test_fetch_stores_full_content_from_rss(
     mock_client.get.return_value = _mock_response(text="<rss>mock</rss>")
 
     with (
-        patch("app.services.news_fetcher.httpx.AsyncClient", return_value=mock_client),
-        patch("app.services.news_fetcher.feedparser.parse", return_value=feed),
         patch(
-            "app.services.news_fetcher.get_http_cache",
+            "app.collection.news_fetcher.httpx.AsyncClient", return_value=mock_client
+        ),
+        patch("app.collection.news_fetcher.feedparser.parse", return_value=feed),
+        patch(
+            "app.collection.news_fetcher.get_http_cache",
             new_callable=AsyncMock,
             return_value=(None, None),
         ),
-        patch("app.services.news_fetcher.set_http_cache", new_callable=AsyncMock),
+        patch("app.collection.news_fetcher.set_http_cache", new_callable=AsyncMock),
     ):
         result = await fetch_news_for_sources(db_session, [sample_source])
 
@@ -362,15 +378,17 @@ async def test_fetch_populates_new_article_ids(
     mock_client.get.return_value = _mock_response(text="<rss>mock</rss>")
 
     cache_patch = patch(
-        "app.services.news_fetcher.get_http_cache",
+        "app.collection.news_fetcher.get_http_cache",
         new_callable=AsyncMock,
         return_value=(None, None),
     )
     with (
-        patch("app.services.news_fetcher.httpx.AsyncClient", return_value=mock_client),
-        patch("app.services.news_fetcher.feedparser.parse", return_value=feed),
+        patch(
+            "app.collection.news_fetcher.httpx.AsyncClient", return_value=mock_client
+        ),
+        patch("app.collection.news_fetcher.feedparser.parse", return_value=feed),
         cache_patch,
-        patch("app.services.news_fetcher.set_http_cache", new_callable=AsyncMock),
+        patch("app.collection.news_fetcher.set_http_cache", new_callable=AsyncMock),
     ):
         result = await fetch_news_for_sources(db_session, [sample_source])
 

@@ -6,13 +6,13 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from app.ai.analyzer.base import AnalyzeResult, BaseAnalyzer
-from app.ai.analyzer.errors import (
-    AnalysisError,
+from app.analysis.analyzer.base import AnalyzeResult, BaseAnalyzer
+from app.analysis.analyzer.factory import get_analyzer
+from app.analysis.errors import (
+    AnalysisDomainError,
     DailyQuotaExhaustedError,
     RateLimitError,
 )
-from app.ai.analyzer.factory import get_analyzer
 from app.models.article_analysis import ArticleAnalysis
 from app.models.article_keyword import ArticleKeyword
 from app.models.category import Category
@@ -33,7 +33,7 @@ async def analyze_article(
     Returns the created ArticleAnalysis, or None if already analyzed.
 
     Raises:
-        AnalysisError: If the AI provider fails. Callers using this
+        AnalysisDomainError: If the AI provider fails. Callers using this
             function directly (outside analyze_articles) must handle
             this exception.
     """
@@ -72,7 +72,7 @@ async def analyze_article(
             content=article.original_content,
             keywords_by_category=keywords_by_category,
         )
-    except AnalysisError as e:
+    except AnalysisDomainError as e:
         logger.error("analysis_failed", article_id=article.id, error=str(e))
         raise
 
@@ -120,7 +120,7 @@ async def analyze_articles(
     (acquired inside ``_call_with_retry``).  This function only manages
     iteration, DB persistence, and error accumulation.
 
-    AnalysisError from individual articles is caught and accumulated
+    AnalysisDomainError from individual articles is caught and accumulated
     in AnalyzeResult.errors so that the batch continues processing.
     """
     result = AnalyzeResult()
@@ -169,7 +169,7 @@ async def analyze_articles(
                 remaining=len(articles) - i - 1,
             )
             break
-        except AnalysisError as e:
+        except AnalysisDomainError as e:
             await session.rollback()
             result.error_count += 1
             result.errors.append(f"Article {article_id}: {e}")
@@ -192,3 +192,9 @@ async def analyze_articles(
         errors=result.error_count,
     )
     return result
+
+
+def _build_embed_text(article: NewsArticle) -> str:
+    """Build the canonical text to embed for a news article."""
+    body = article.original_content or article.original_description or ""
+    return f"{article.original_title}\n{body}"

@@ -8,9 +8,9 @@ from typing import TYPE_CHECKING, ClassVar
 
 import structlog
 
-from app.ai.embedding.errors import (
+from app.analysis.errors import (
+    AnalysisDomainError,
     DailyQuotaExhaustedError,
-    EmbeddingError,
     InvalidInputError,
     RateLimitError,
     TransientError,
@@ -103,7 +103,7 @@ class BaseEmbedder(abc.ABC):
 
         - RateLimitError: fixed delay, independent budget (max 1)
         - TransientError: exponential backoff (max MAX_RETRIES)
-        - InvalidInputError / EmbeddingError: immediate raise
+        - InvalidInputError / AnalysisDomainError: immediate raise
         """
         last_error: Exception | None = None
         attempt = 0
@@ -134,7 +134,7 @@ class BaseEmbedder(abc.ABC):
                 )
                 return vectors
 
-            except EmbeddingError:
+            except AnalysisDomainError:
                 raise
             except _RateLimitExceededError as exc:
                 raise DailyQuotaExhaustedError(str(exc)) from exc
@@ -178,7 +178,7 @@ class BaseEmbedder(abc.ABC):
                 # Unknown error — don't retry
                 raise error from exc
 
-        raise EmbeddingError(
+        raise AnalysisDomainError(
             f"Embedding failed after {self.MAX_RETRIES} attempts: {last_error}"
         )
 
@@ -196,9 +196,9 @@ class BaseEmbedder(abc.ABC):
         ...
 
     @abc.abstractmethod
-    def _translate_error(self, exc: Exception) -> EmbeddingError:
+    def _translate_error(self, exc: Exception) -> AnalysisDomainError:
         """Classify an SDK exception into the error hierarchy.
 
-        Return (not raise) the appropriate EmbeddingError subclass.
+        Return (not raise) the appropriate AnalysisDomainError subclass.
         """
         ...

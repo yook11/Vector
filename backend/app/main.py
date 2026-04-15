@@ -6,22 +6,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
-from app.ai.embedding import EmbeddingError
 from app.config import settings
 from app.db import engine
 from app.exception_handlers import (
     duplicate_handler,
-    embedding_error_handler,
     not_found_handler,
+    search_error_handler,
 )
 from app.exceptions import DuplicateError, NotFoundError
 from app.routers import (
     admin,
     articles,
     categories,
-    semantic_search,
     watchlist,
 )
+from app.search.errors import SearchError
+from app.search.router import router as search_router
 
 
 @asynccontextmanager
@@ -83,12 +83,12 @@ app.add_middleware(
 app.add_exception_handler(NotFoundError, not_found_handler)
 app.add_exception_handler(DuplicateError, duplicate_handler)
 
-app.add_exception_handler(EmbeddingError, embedding_error_handler)
+app.add_exception_handler(SearchError, search_error_handler)
 
 # Register routers
 # NOTE: semantic_search must be registered before articles
 # so that /articles/search is matched before /articles/{article_id}
-app.include_router(semantic_search.router)
+app.include_router(search_router)
 app.include_router(articles.router)
 app.include_router(categories.router)
 app.include_router(watchlist.router)

@@ -8,8 +8,8 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette import status
 
-from app.ai.embedding import EmbeddingError
 from app.exceptions import DuplicateError, NotFoundError
+from app.search.errors import SearchError
 
 
 async def not_found_handler(_request: Request, exc: NotFoundError) -> JSONResponse:
@@ -26,9 +26,7 @@ async def duplicate_handler(_request: Request, exc: DuplicateError) -> JSONRespo
     )
 
 
-async def embedding_error_handler(
-    _request: Request, _exc: EmbeddingError
-) -> JSONResponse:
+async def search_error_handler(_request: Request, _exc: SearchError) -> JSONResponse:
     return JSONResponse(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         content={"detail": "Search embedding generation failed. Please try again."},
