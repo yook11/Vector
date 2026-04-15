@@ -9,6 +9,7 @@ from taskiq import Context, TaskiqDepends
 
 from app.analysis import (
     AnalysisDomainError,
+    InvalidInputError,
     _build_embed_text,
     get_embedder,
 )
@@ -140,7 +141,36 @@ async def generate_embedding(
 
         embedder = get_embedder()
         text = _build_embed_text(article)
-        vector = await embedder.embed_document(text)
+
+        try:
+            vector = await embedder.embed_document(text)
+        except AnalysisDailyQuotaError:
+            logger.warning(
+                "generate_embedding_daily_quota",
+                article_id=article_id,
+            )
+            return
+        except InvalidInputError as e:
+            logger.warning(
+                "generate_embedding_invalid_input",
+                article_id=article_id,
+                reason=str(e),
+            )
+            return
+        except AnalysisRateLimitError:
+            if is_last_attempt(ctx):
+                logger.warning(
+                    "generate_embedding_max_retries", article_id=article_id
+                )
+                return
+            raise
+        except AnalysisDomainError as e:
+            logger.warning(
+                "generate_embedding_domain_error",
+                article_id=article_id,
+                reason=str(e),
+            )
+            return
 
         analysis.embedding = vector
         analysis.embedding_model = embedder.MODEL
