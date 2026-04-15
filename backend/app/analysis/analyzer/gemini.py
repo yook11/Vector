@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
 
 import structlog
 from google import genai
@@ -19,9 +18,6 @@ from app.analysis.errors import (
 )
 from app.config import settings
 from app.models.article_analysis import ImpactLevel
-
-if TYPE_CHECKING:
-    from app.infra.redis.rate_limiter import RateLimiter
 
 logger = structlog.get_logger(__name__)
 
@@ -65,13 +61,7 @@ class GeminiAnalyzer(BaseAnalyzer):
     RPM = 50
     RPD = 1500
 
-    def __init__(
-        self,
-        *,
-        rpm_limiter: RateLimiter | None = None,
-        rpd_limiter: RateLimiter | None = None,
-    ) -> None:
-        super().__init__(rpm_limiter=rpm_limiter, rpd_limiter=rpd_limiter)
+    def __init__(self) -> None:
         api_key = settings.gemini_api_key.get_secret_value()
         if not api_key:
             raise AnalysisDomainError("GEMINI_API_KEY is not configured")
@@ -111,7 +101,7 @@ class GeminiAnalyzer(BaseAnalyzer):
                 f"Keyword candidates by category:\n{candidates_block}\n"
             )
 
-        raw_text = await self._call_with_retry(prompt)
+        raw_text = await self._call_once(prompt)
         return self._parse_response(raw_text, keywords_by_category)
 
     async def _call_api(self, prompt: str) -> str:

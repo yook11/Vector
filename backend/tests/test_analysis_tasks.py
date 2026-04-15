@@ -92,10 +92,23 @@ class TestAnalyzeArticle:
         article = _make_article(original_content="some content")
         mock_session.get = AsyncMock(return_value=article)
 
+        mock_analyzer = MagicMock()
+        mock_analyzer.MODEL = "gemini-2.5-flash-lite"
+        mock_analyzer.RPM = 50
+        mock_analyzer.RPD = 1500
+
         with (
             patch(
                 "app.tasks.analysis_tasks.SQLModelAsyncSession",
                 return_value=_mock_session_context(mock_session),
+            ),
+            patch(
+                "app.tasks.analysis_tasks.get_analyzer",
+                return_value=mock_analyzer,
+            ),
+            patch(
+                "app.tasks.analysis_tasks._build_limiters",
+                return_value=(None, None),
             ),
             patch(
                 "app.tasks.analysis_tasks._analyze_article_svc",
@@ -122,10 +135,23 @@ class TestAnalyzeArticle:
         article = _make_article(original_content="some content")
         mock_session.get = AsyncMock(return_value=article)
 
+        mock_analyzer = MagicMock()
+        mock_analyzer.MODEL = "gemini-2.5-flash-lite"
+        mock_analyzer.RPM = 50
+        mock_analyzer.RPD = 1500
+
         with (
             patch(
                 "app.tasks.analysis_tasks.SQLModelAsyncSession",
                 return_value=_mock_session_context(mock_session),
+            ),
+            patch(
+                "app.tasks.analysis_tasks.get_analyzer",
+                return_value=mock_analyzer,
+            ),
+            patch(
+                "app.tasks.analysis_tasks._build_limiters",
+                return_value=(None, None),
             ),
             patch(
                 "app.tasks.analysis_tasks._analyze_article_svc",
@@ -152,10 +178,23 @@ class TestAnalyzeArticle:
 
         analysis = MagicMock(spec=ArticleAnalysis)
 
+        mock_analyzer = MagicMock()
+        mock_analyzer.MODEL = "gemini-2.5-flash-lite"
+        mock_analyzer.RPM = 50
+        mock_analyzer.RPD = 1500
+
         with (
             patch(
                 "app.tasks.analysis_tasks.SQLModelAsyncSession",
                 return_value=_mock_session_context(mock_session),
+            ),
+            patch(
+                "app.tasks.analysis_tasks.get_analyzer",
+                return_value=mock_analyzer,
+            ),
+            patch(
+                "app.tasks.analysis_tasks._build_limiters",
+                return_value=(None, None),
             ),
             patch(
                 "app.tasks.analysis_tasks._analyze_article_svc",

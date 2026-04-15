@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from google import genai
 from google.genai import types
 from google.genai.errors import ClientError
@@ -17,9 +15,6 @@ from app.analysis.errors import (
 )
 from app.config import settings
 
-if TYPE_CHECKING:
-    from app.infra.redis.rate_limiter import RateLimiter
-
 
 class GeminiEmbedder(BaseEmbedder):
     """Gemini gemini-embedding-001 implementation of BaseEmbedder."""
@@ -29,13 +24,7 @@ class GeminiEmbedder(BaseEmbedder):
     RPM = 15  # batchEmbedContents endpoint (SDK always uses this)
     RPD = 1500
 
-    def __init__(
-        self,
-        *,
-        rpm_limiter: RateLimiter | None = None,
-        rpd_limiter: RateLimiter | None = None,
-    ) -> None:
-        super().__init__(rpm_limiter=rpm_limiter, rpd_limiter=rpd_limiter)
+    def __init__(self) -> None:
         api_key = settings.gemini_api_key.get_secret_value()
         if not api_key:
             raise AnalysisDomainError("GEMINI_API_KEY is not configured")

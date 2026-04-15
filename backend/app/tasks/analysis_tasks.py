@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import structlog
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
@@ -11,10 +13,8 @@ from app.analysis import (
     AnalysisDomainError,
     InvalidInputError,
     _build_embed_text,
+    get_analyzer,
     get_embedder,
-)
-from app.analysis import (
-    DailyQuotaExhaustedError as AnalysisDailyQuotaError,
 )
 from app.analysis import (
     RateLimitError as AnalysisRateLimitError,
@@ -22,11 +22,59 @@ from app.analysis import (
 from app.analysis import (
     analyze_article as _analyze_article_svc,
 )
+from app.infra.redis.rate_limiter import (
+    RateLimitExceededError as _RateLimitExceededError,
+)
 from app.models.article_analysis import ArticleAnalysis
 from app.models.news_article import NewsArticle
 from app.tasks.brokers import broker_analysis, broker_embedding, is_last_attempt
 
+if TYPE_CHECKING:
+    from app.infra.redis.rate_limiter import RateLimiter
+
 logger = structlog.get_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Rate limiter construction
+# ---------------------------------------------------------------------------
+
+
+def _build_limiters(
+    model: str,
+    rpm: int | None,
+    rpd: int | None,
+) -> tuple[RateLimiter | None, RateLimiter | None]:
+    """Build RPM and RPD rate limiters for a model.
+
+    Returns:
+        (rpm_limiter, rpd_limiter) tuple. Either may be None.
+    """
+    from app.infra.redis.cache import _get_client
+    from app.infra.redis.rate_limiter import RateLimiter
+
+    redis = _get_client()
+    rpm_limiter: RateLimiter | None = None
+    rpd_limiter: RateLimiter | None = None
+
+    if rpm is not None:
+        rpm_limiter = RateLimiter(
+            redis=redis,
+            key=f"ratelimit:{model}:rpm",
+            max_requests=rpm,
+            window_seconds=60,
+            block=True,
+        )
+    if rpd is not None:
+        rpd_limiter = RateLimiter(
+            redis=redis,
+            key=f"ratelimit:{model}:rpd",
+            max_requests=rpd,
+            window_seconds=86400,
+            block=False,
+        )
+    return rpm_limiter, rpd_limiter
+
 
 # ---------------------------------------------------------------------------
 # Analysis
@@ -64,11 +112,21 @@ async def analyze_article(
             logger.warning("analyze_article_not_found", article_id=article_id)
             return
 
+        analyzer = get_analyzer()
+        rpm_limiter, rpd_limiter = _build_limiters(
+            analyzer.MODEL, analyzer.RPM, analyzer.RPD
+        )
+
         try:
-            analysis = await _analyze_article_svc(session, article)
+            if rpd_limiter is not None:
+                await rpd_limiter.acquire()
+            if rpm_limiter is not None:
+                await rpm_limiter.acquire()
+
+            analysis = await _analyze_article_svc(session, article, analyzer)
             if analysis is not None:
                 await session.commit()
-        except AnalysisDailyQuotaError:
+        except _RateLimitExceededError:
             logger.warning(
                 "analyze_article_daily_quota",
                 article_id=article_id,
@@ -140,11 +198,19 @@ async def generate_embedding(
             return
 
         embedder = get_embedder()
+        rpm_limiter, rpd_limiter = _build_limiters(
+            embedder.MODEL, embedder.RPM, embedder.RPD
+        )
         text = _build_embed_text(article)
 
         try:
+            if rpd_limiter is not None:
+                await rpd_limiter.acquire()
+            if rpm_limiter is not None:
+                await rpm_limiter.acquire()
+
             vector = await embedder.embed_document(text)
-        except AnalysisDailyQuotaError:
+        except _RateLimitExceededError:
             logger.warning(
                 "generate_embedding_daily_quota",
                 article_id=article_id,
@@ -159,9 +225,7 @@ async def generate_embedding(
             return
         except AnalysisRateLimitError:
             if is_last_attempt(ctx):
-                logger.warning(
-                    "generate_embedding_max_retries", article_id=article_id
-                )
+                logger.warning("generate_embedding_max_retries", article_id=article_id)
                 return
             raise
         except AnalysisDomainError as e:

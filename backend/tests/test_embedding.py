@@ -51,7 +51,6 @@ async def test_gemini_embedder_429_raises_rate_limit_error() -> None:
     with (
         patch("app.analysis.embedder.gemini.settings") as mock_settings,
         patch("app.analysis.embedder.gemini.genai"),
-        patch("app.analysis.embedder.base.asyncio.sleep", AsyncMock()),
     ):
         mock_settings.gemini_api_key = SecretStr("test-key")
 
@@ -62,7 +61,6 @@ async def test_gemini_embedder_429_raises_rate_limit_error() -> None:
         # Create a ClientError with code=429
         error_429 = ClientError(429, {"error": {"message": "RESOURCE_EXHAUSTED"}})
 
-        # Always raise 429 to exhaust rate limit retries
         embedder._client.aio.models.embed_content = AsyncMock(side_effect=error_429)
 
         with pytest.raises(RateLimitError):
@@ -70,12 +68,8 @@ async def test_gemini_embedder_429_raises_rate_limit_error() -> None:
 
 
 # ---------------------------------------------------------------------------
-# E. BaseEmbedder._embed_with_retry (StubEmbedder)
+# E. BaseEmbedder._embed_once (StubEmbedder)
 # ---------------------------------------------------------------------------
-
-
-class _RateLimitSDKError(Exception):
-    """Simulates a provider SDK rate-limit response (not an AnalysisDomainError)."""
 
 
 class _InvalidInputSDKError(Exception):
@@ -97,7 +91,6 @@ class StubEmbedder(BaseEmbedder):
     def __init__(
         self, *, side_effects: list[list[list[float]] | Exception] | None = None
     ) -> None:
-        super().__init__()
         self._side_effects = list(side_effects or [])
         self._calls: list[tuple[str | list[str], str]] = []
 
@@ -113,8 +106,6 @@ class StubEmbedder(BaseEmbedder):
         return [[0.1, 0.2, 0.3]]
 
     def _translate_error(self, exc: Exception) -> AnalysisDomainError:
-        if isinstance(exc, _RateLimitSDKError):
-            return RateLimitError(str(exc))
         if isinstance(exc, _InvalidInputSDKError):
             return InvalidInputError(str(exc))
         return TransientError(str(exc))
@@ -136,76 +127,20 @@ async def test_embed_documents_returns_all_vectors() -> None:
 
 
 @pytest.mark.asyncio
-async def test_transient_error_retries_with_backoff() -> None:
-    embedder = StubEmbedder(
-        side_effects=[
-            RuntimeError("timeout"),  # attempt 1: transient
-            [[0.1, 0.2, 0.3]],  # attempt 2: success
-        ]
-    )
-    with patch("app.analysis.embedder.base.asyncio.sleep", AsyncMock()) as mock_sleep:
-        result = await embedder.embed_document("text")
-
-    assert result == [0.1, 0.2, 0.3]
-    assert len(embedder._calls) == 2
-    mock_sleep.assert_called_once_with(2.0)  # first backoff: 2^0 * 2.0
-
-
-@pytest.mark.asyncio
-async def test_transient_error_exhausts_retries() -> None:
-    embedder = StubEmbedder(
-        side_effects=[
-            RuntimeError("err1"),
-            RuntimeError("err2"),
-            RuntimeError("err3"),
-        ]
-    )
-    with patch("app.analysis.embedder.base.asyncio.sleep", AsyncMock()):
-        with pytest.raises(AnalysisDomainError, match="3 attempts"):
-            await embedder.embed_document("text")
-
-    assert len(embedder._calls) == 3
-
-
-@pytest.mark.asyncio
-async def test_rate_limit_retries_independently() -> None:
-    """Rate limit retry uses fixed delay, doesn't consume normal budget."""
-    embedder = StubEmbedder(
-        side_effects=[
-            _RateLimitSDKError("429"),  # rate limit retry 1
-            [[0.1, 0.2, 0.3]],  # success
-        ]
-    )
-    with patch("app.analysis.embedder.base.asyncio.sleep", AsyncMock()) as mock_sleep:
-        result = await embedder.embed_document("text")
-
-    assert result == [0.1, 0.2, 0.3]
-    mock_sleep.assert_called_once_with(10.0)  # fixed RATE_LIMIT_DELAY
-
-
-@pytest.mark.asyncio
-async def test_rate_limit_exhausts_raises() -> None:
-    """Exceeding MAX_RATE_LIMIT_RETRIES raises RateLimitError."""
-    embedder = StubEmbedder(
-        side_effects=[
-            _RateLimitSDKError("429 first"),
-            _RateLimitSDKError("429 second"),
-        ]
-    )
-    with patch("app.analysis.embedder.base.asyncio.sleep", AsyncMock()):
-        with pytest.raises(RateLimitError):
-            await embedder.embed_document("text")
+async def test_embed_once_translates_sdk_error() -> None:
+    """SDK exceptions are translated via _translate_error."""
+    embedder = StubEmbedder(side_effects=[RuntimeError("API error")])
+    with pytest.raises(TransientError):
+        await embedder.embed_document("text")
+    assert len(embedder._calls) == 1
 
 
 @pytest.mark.asyncio
 async def test_invalid_input_error_no_retry() -> None:
     embedder = StubEmbedder(side_effects=[_InvalidInputSDKError("bad input")])
-    with patch("app.analysis.embedder.base.asyncio.sleep", AsyncMock()) as mock_sleep:
-        with pytest.raises(InvalidInputError, match="bad input"):
-            await embedder.embed_document("text")
-
+    with pytest.raises(InvalidInputError, match="bad input"):
+        await embedder.embed_document("text")
     assert len(embedder._calls) == 1
-    mock_sleep.assert_not_called()
 
 
 @pytest.mark.asyncio

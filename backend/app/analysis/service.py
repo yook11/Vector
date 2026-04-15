@@ -116,9 +116,7 @@ async def analyze_articles(
 ) -> AnalyzeResult:
     """Analyze multiple articles sequentially.
 
-    Rate limiting is handled by the analyzer's RateLimiter instances
-    (acquired inside ``_call_with_retry``).  This function only manages
-    iteration, DB persistence, and error accumulation.
+    This function manages iteration, DB persistence, and error accumulation.
 
     AnalysisDomainError from individual articles is caught and accumulated
     in AnalyzeResult.errors so that the batch continues processing.

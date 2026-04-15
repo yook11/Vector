@@ -93,6 +93,8 @@ class TestGenerateEmbedding:
 
         mock_embedder = AsyncMock()
         mock_embedder.MODEL = "gemini-embedding-001"
+        mock_embedder.RPM = 15
+        mock_embedder.RPD = 1500
         mock_embedder.embed_document = AsyncMock(return_value=[0.1] * 768)
 
         with (
@@ -103,6 +105,10 @@ class TestGenerateEmbedding:
             patch(
                 "app.tasks.analysis_tasks.get_embedder",
                 return_value=mock_embedder,
+            ),
+            patch(
+                "app.tasks.analysis_tasks._build_limiters",
+                return_value=(None, None),
             ),
         ):
             await generate_embedding(article_id=1, ctx=mock_ctx)
@@ -130,6 +136,9 @@ class TestGenerateEmbedding:
         mock_session.get = AsyncMock(return_value=article)
 
         mock_embedder = AsyncMock()
+        mock_embedder.MODEL = "gemini-embedding-001"
+        mock_embedder.RPM = 15
+        mock_embedder.RPD = 1500
         mock_embedder.embed_document = AsyncMock(
             side_effect=AnalysisDomainError("API down")
         )
@@ -142,6 +151,10 @@ class TestGenerateEmbedding:
             patch(
                 "app.tasks.analysis_tasks.get_embedder",
                 return_value=mock_embedder,
+            ),
+            patch(
+                "app.tasks.analysis_tasks._build_limiters",
+                return_value=(None, None),
             ),
         ):
             await generate_embedding(article_id=1, ctx=mock_ctx)
