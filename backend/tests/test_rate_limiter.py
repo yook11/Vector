@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.infra.redis.rate_limiter import RateLimiter, RateLimitExceededError
+from app.analysis.rate_limiter import RateLimiter, RateLimitExceededError
 
 
 def _make_mock_redis(script_results: list[list]) -> MagicMock:
@@ -52,7 +52,7 @@ async def test_acquire_blocking_waits_then_succeeds() -> None:
     limiter = RateLimiter(
         redis=mock_redis, key="test:rpm", max_requests=10, window_seconds=60
     )
-    with patch("app.infra.redis.rate_limiter.asyncio.sleep", AsyncMock()) as mock_sleep:
+    with patch("app.analysis.rate_limiter.asyncio.sleep", AsyncMock()) as mock_sleep:
         await limiter.acquire()
 
     # Should have slept once: (999.0 + 60) - 1000.0 = 59.0
@@ -67,7 +67,7 @@ async def test_lua_script_receives_correct_args() -> None:
         redis=mock_redis, key="ratelimit:model:rpm", max_requests=500, window_seconds=60
     )
 
-    with patch("app.infra.redis.rate_limiter.uuid.uuid4") as mock_uuid:
+    with patch("app.analysis.rate_limiter.uuid.uuid4") as mock_uuid:
         mock_uuid.return_value.hex = "abc123"
         await limiter.acquire()
 

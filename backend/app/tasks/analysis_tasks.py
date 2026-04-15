@@ -22,7 +22,7 @@ from app.analysis import (
 from app.analysis import (
     analyze_article as _analyze_article_svc,
 )
-from app.infra.redis.rate_limiter import (
+from app.analysis.rate_limiter import (
     RateLimitExceededError as _RateLimitExceededError,
 )
 from app.models.article_analysis import ArticleAnalysis
@@ -30,7 +30,7 @@ from app.models.news_article import NewsArticle
 from app.tasks.brokers import broker_analysis, broker_embedding, is_last_attempt
 
 if TYPE_CHECKING:
-    from app.infra.redis.rate_limiter import RateLimiter
+    from app.analysis.rate_limiter import RateLimiter
 
 logger = structlog.get_logger(__name__)
 
@@ -50,10 +50,10 @@ def _build_limiters(
     Returns:
         (rpm_limiter, rpd_limiter) tuple. Either may be None.
     """
-    from app.infra.redis.cache import _get_client
-    from app.infra.redis.rate_limiter import RateLimiter
+    from app.analysis.rate_limiter import RateLimiter
+    from app.redis import get_redis
 
-    redis = _get_client()
+    redis = get_redis()
     rpm_limiter: RateLimiter | None = None
     rpd_limiter: RateLimiter | None = None
 

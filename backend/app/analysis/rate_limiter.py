@@ -1,4 +1,4 @@
-"""Redis ZSET sliding-window rate limiter.
+"""Redis ZSET sliding-window rate limiter for AI API calls.
 
 Each ``acquire()`` call atomically checks capacity and records the
 request via a Lua script.  Expired entries (older than *window_seconds*)
