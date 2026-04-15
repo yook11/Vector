@@ -179,7 +179,9 @@ class TestRemoveFromWatchlist:
             "/api/v1/me/watchlist",
             json={"articleId": sample_article.article_analysis.id},
         )
-        resp = await authed_client.delete(f"/api/v1/me/watchlist/{sample_article.article_analysis.id}")
+        resp = await authed_client.delete(
+            f"/api/v1/me/watchlist/{sample_article.article_analysis.id}"
+        )
         assert resp.status_code == 204
 
         # Verify it's gone

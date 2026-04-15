@@ -37,7 +37,11 @@ async def test_fetch_log_recorded_on_success(
 
     with (
         patch("app.services.news_fetcher.httpx.AsyncClient") as mock_client_cls,
-        patch("app.services.news_fetcher.get_http_cache", new_callable=AsyncMock, return_value=(None, None)),
+        patch(
+            "app.services.news_fetcher.get_http_cache",
+            new_callable=AsyncMock,
+            return_value=(None, None),
+        ),
         patch("app.services.news_fetcher.set_http_cache", new_callable=AsyncMock),
     ):
         mock_client = AsyncMock()
@@ -72,7 +76,11 @@ async def test_fetch_log_recorded_on_error(
 
     with (
         patch("app.services.news_fetcher.httpx.AsyncClient") as mock_client_cls,
-        patch("app.services.news_fetcher.get_http_cache", new_callable=AsyncMock, return_value=(None, None)),
+        patch(
+            "app.services.news_fetcher.get_http_cache",
+            new_callable=AsyncMock,
+            return_value=(None, None),
+        ),
     ):
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(

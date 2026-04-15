@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from app.ai.embedding.base import BaseEmbedder
-from app.ai.embedding.factory import get_embedder
+from app.analysis.embedder.base import BaseEmbedder
+from app.analysis.embedder.factory import get_embedder
 from app.models.news_article import NewsArticle
 
 

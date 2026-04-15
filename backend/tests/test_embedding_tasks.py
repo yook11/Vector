@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.ai.embedding import EmbeddingError
+from app.analysis import AnalysisDomainError
 from app.models.article_analysis import ArticleAnalysis
 from app.models.news_article import NewsArticle
 
@@ -129,7 +129,9 @@ class TestGenerateEmbedding:
         mock_session.get = AsyncMock(return_value=article)
 
         mock_embedder = AsyncMock()
-        mock_embedder.embed_document = AsyncMock(side_effect=EmbeddingError("API down"))
+        mock_embedder.embed_document = AsyncMock(
+            side_effect=AnalysisDomainError("API down")
+        )
 
         with (
             patch(
@@ -141,5 +143,5 @@ class TestGenerateEmbedding:
                 return_value=mock_embedder,
             ),
         ):
-            with pytest.raises(EmbeddingError):
+            with pytest.raises(AnalysisDomainError):
                 await generate_embedding(article_id=1, ctx=mock_ctx)

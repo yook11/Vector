@@ -5,9 +5,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import SecretStr
 
-from app.ai.embedding import (
+from app.analysis import (
+    AnalysisDomainError,
     BaseEmbedder,
-    EmbeddingError,
     InvalidInputError,
     RateLimitError,
     TransientError,
@@ -23,7 +23,7 @@ def test_get_embedder_returns_gemini() -> None:
     with patch("app.config.settings") as mock_settings:
         mock_settings.ai_provider = "gemini"
         mock_settings.gemini_api_key = SecretStr("test-key")
-        with patch("app.ai.embedding.providers.gemini.GeminiEmbedder") as MockEmbedder:
+        with patch("app.analysis.embedder.gemini.GeminiEmbedder") as MockEmbedder:
             mock_instance = MagicMock(spec=BaseEmbedder)
             MockEmbedder.return_value = mock_instance
             result = get_embedder()
@@ -32,7 +32,7 @@ def test_get_embedder_returns_gemini() -> None:
 
 
 def test_get_embedder_raises_on_unknown_provider() -> None:
-    with patch("app.ai.embedding.factory.settings") as mock_settings:
+    with patch("app.analysis.embedder.factory.settings") as mock_settings:
         mock_settings.ai_provider = "unknown_provider"
         with pytest.raises(ValueError, match="Unsupported AI provider"):
             get_embedder()
@@ -49,13 +49,13 @@ async def test_gemini_embedder_429_raises_rate_limit_error() -> None:
     from google.genai.errors import ClientError
 
     with (
-        patch("app.ai.embedding.providers.gemini.settings") as mock_settings,
-        patch("app.ai.embedding.providers.gemini.genai"),
-        patch("app.ai.embedding.base.asyncio.sleep", AsyncMock()),
+        patch("app.analysis.embedder.gemini.settings") as mock_settings,
+        patch("app.analysis.embedder.gemini.genai"),
+        patch("app.analysis.embedder.base.asyncio.sleep", AsyncMock()),
     ):
         mock_settings.gemini_api_key = SecretStr("test-key")
 
-        from app.ai.embedding.providers.gemini import GeminiEmbedder
+        from app.analysis.embedder.gemini import GeminiEmbedder
 
         embedder = GeminiEmbedder()
 
@@ -75,11 +75,11 @@ async def test_gemini_embedder_429_raises_rate_limit_error() -> None:
 
 
 class _RateLimitSDKError(Exception):
-    """Simulates a provider SDK rate-limit response (not an EmbeddingError)."""
+    """Simulates a provider SDK rate-limit response (not an AnalysisDomainError)."""
 
 
 class _InvalidInputSDKError(Exception):
-    """Simulates a provider SDK client error (not an EmbeddingError)."""
+    """Simulates a provider SDK client error (not an AnalysisDomainError)."""
 
 
 class StubEmbedder(BaseEmbedder):
@@ -112,7 +112,7 @@ class StubEmbedder(BaseEmbedder):
             return effect
         return [[0.1, 0.2, 0.3]]
 
-    def _translate_error(self, exc: Exception) -> EmbeddingError:
+    def _translate_error(self, exc: Exception) -> AnalysisDomainError:
         if isinstance(exc, _RateLimitSDKError):
             return RateLimitError(str(exc))
         if isinstance(exc, _InvalidInputSDKError):
@@ -143,7 +143,7 @@ async def test_transient_error_retries_with_backoff() -> None:
             [[0.1, 0.2, 0.3]],  # attempt 2: success
         ]
     )
-    with patch("app.ai.embedding.base.asyncio.sleep", AsyncMock()) as mock_sleep:
+    with patch("app.analysis.embedder.base.asyncio.sleep", AsyncMock()) as mock_sleep:
         result = await embedder.embed_document("text")
 
     assert result == [0.1, 0.2, 0.3]
@@ -160,8 +160,8 @@ async def test_transient_error_exhausts_retries() -> None:
             RuntimeError("err3"),
         ]
     )
-    with patch("app.ai.embedding.base.asyncio.sleep", AsyncMock()):
-        with pytest.raises(EmbeddingError, match="3 attempts"):
+    with patch("app.analysis.embedder.base.asyncio.sleep", AsyncMock()):
+        with pytest.raises(AnalysisDomainError, match="3 attempts"):
             await embedder.embed_document("text")
 
     assert len(embedder._calls) == 3
@@ -176,7 +176,7 @@ async def test_rate_limit_retries_independently() -> None:
             [[0.1, 0.2, 0.3]],  # success
         ]
     )
-    with patch("app.ai.embedding.base.asyncio.sleep", AsyncMock()) as mock_sleep:
+    with patch("app.analysis.embedder.base.asyncio.sleep", AsyncMock()) as mock_sleep:
         result = await embedder.embed_document("text")
 
     assert result == [0.1, 0.2, 0.3]
@@ -192,7 +192,7 @@ async def test_rate_limit_exhausts_raises() -> None:
             _RateLimitSDKError("429 second"),
         ]
     )
-    with patch("app.ai.embedding.base.asyncio.sleep", AsyncMock()):
+    with patch("app.analysis.embedder.base.asyncio.sleep", AsyncMock()):
         with pytest.raises(RateLimitError):
             await embedder.embed_document("text")
 
@@ -200,7 +200,7 @@ async def test_rate_limit_exhausts_raises() -> None:
 @pytest.mark.asyncio
 async def test_invalid_input_error_no_retry() -> None:
     embedder = StubEmbedder(side_effects=[_InvalidInputSDKError("bad input")])
-    with patch("app.ai.embedding.base.asyncio.sleep", AsyncMock()) as mock_sleep:
+    with patch("app.analysis.embedder.base.asyncio.sleep", AsyncMock()) as mock_sleep:
         with pytest.raises(InvalidInputError, match="bad input"):
             await embedder.embed_document("text")
 
@@ -238,5 +238,5 @@ def test_base_embedder_rejects_subclass_without_classvar() -> None:
             ) -> list[list[float]]:
                 return [[0.0]]
 
-            def _translate_error(self, exc: Exception) -> EmbeddingError:
-                return EmbeddingError(str(exc))
+            def _translate_error(self, exc: Exception) -> AnalysisDomainError:
+                return AnalysisDomainError(str(exc))

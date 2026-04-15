@@ -7,16 +7,16 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
 from taskiq import Context, TaskiqDepends
 
-from app.ai.analyzer import (
-    AnalysisError,
+from app.analysis import (
+    AnalysisDomainError,
 )
-from app.ai.analyzer import (
+from app.analysis import (
     DailyQuotaExhaustedError as AnalysisDailyQuotaError,
 )
-from app.ai.analyzer import (
+from app.analysis import (
     RateLimitError as AnalysisRateLimitError,
 )
-from app.ai.analyzer import (
+from app.analysis import (
     analyze_article as _analyze_article_svc,
 )
 from app.models.article_analysis import ArticleAnalysis
@@ -82,7 +82,7 @@ async def analyze_article(
                 logger.warning("analyze_article_max_retries", article_id=article_id)
                 return
             raise
-        except AnalysisError as e:
+        except AnalysisDomainError as e:
             # Safety block or permanent AI failure
             await session.rollback()
             article.original_content = None

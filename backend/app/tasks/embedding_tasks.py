@@ -7,7 +7,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
 from taskiq import Context, TaskiqDepends
 
-from app.ai.embedding import _build_embed_text, get_embedder
+from app.analysis import _build_embed_text, get_embedder
 from app.models.article_analysis import ArticleAnalysis
 from app.models.news_article import NewsArticle
 from app.tasks.brokers import broker_embedding

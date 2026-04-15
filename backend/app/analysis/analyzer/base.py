@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING, ClassVar
 
 import structlog
 
-from app.ai.analyzer.errors import (
-    AnalysisError,
+from app.analysis.errors import (
+    AnalysisDomainError,
     DailyQuotaExhaustedError,
     InvalidInputError,
     RateLimitError,
@@ -118,7 +118,7 @@ class BaseAnalyzer(abc.ABC):
             AnalysisData with Japanese translation, impact level, and reasoning.
 
         Raises:
-            AnalysisError: If analysis fails after retries.
+            AnalysisDomainError: If analysis fails after retries.
         """
         ...
 
@@ -131,10 +131,10 @@ class BaseAnalyzer(abc.ABC):
         ...
 
     @abc.abstractmethod
-    def _translate_error(self, exc: Exception) -> AnalysisError:
+    def _translate_error(self, exc: Exception) -> AnalysisDomainError:
         """Classify an SDK exception into the error hierarchy.
 
-        Return (not raise) the appropriate AnalysisError subclass.
+        Return (not raise) the appropriate AnalysisDomainError subclass.
         """
         ...
 
@@ -173,7 +173,7 @@ class BaseAnalyzer(abc.ABC):
                 )
                 return result
 
-            except AnalysisError:
+            except AnalysisDomainError:
                 raise
             except _RateLimitExceededError as exc:
                 raise DailyQuotaExhaustedError(str(exc)) from exc
@@ -217,6 +217,6 @@ class BaseAnalyzer(abc.ABC):
                 # Unknown error — don't retry
                 raise error from exc
 
-        raise AnalysisError(
+        raise AnalysisDomainError(
             f"Analysis failed after {self.MAX_RETRIES} attempts: {last_error}"
         )

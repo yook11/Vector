@@ -8,9 +8,9 @@ from google import genai
 from google.genai import types
 from google.genai.errors import ClientError
 
-from app.ai.embedding.base import BaseEmbedder
-from app.ai.embedding.errors import (
-    EmbeddingError,
+from app.analysis.embedder.base import BaseEmbedder
+from app.analysis.errors import (
+    AnalysisDomainError,
     InvalidInputError,
     RateLimitError,
     TransientError,
@@ -38,7 +38,7 @@ class GeminiEmbedder(BaseEmbedder):
         super().__init__(rpm_limiter=rpm_limiter, rpd_limiter=rpd_limiter)
         api_key = settings.gemini_api_key.get_secret_value()
         if not api_key:
-            raise EmbeddingError("GEMINI_API_KEY is not configured")
+            raise AnalysisDomainError("GEMINI_API_KEY is not configured")
         self._client = genai.Client(api_key=api_key)
 
     async def _call_api(
@@ -59,7 +59,7 @@ class GeminiEmbedder(BaseEmbedder):
         )
         return [e.values for e in response.embeddings]
 
-    def _translate_error(self, exc: Exception) -> EmbeddingError:
+    def _translate_error(self, exc: Exception) -> AnalysisDomainError:
         """Classify Gemini SDK exceptions into the error hierarchy."""
         if isinstance(exc, ClientError):
             if exc.code == 429:
@@ -81,4 +81,4 @@ class GeminiEmbedder(BaseEmbedder):
         if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
             return TransientError(str(exc))
 
-        return EmbeddingError(str(exc))
+        return AnalysisDomainError(str(exc))

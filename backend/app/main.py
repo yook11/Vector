@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
-from app.ai.embedding import EmbeddingError
+from app.analysis.errors import AnalysisDomainError
 from app.config import settings
 from app.db import engine
 from app.exception_handlers import (
@@ -83,7 +83,7 @@ app.add_middleware(
 app.add_exception_handler(NotFoundError, not_found_handler)
 app.add_exception_handler(DuplicateError, duplicate_handler)
 
-app.add_exception_handler(EmbeddingError, embedding_error_handler)
+app.add_exception_handler(AnalysisDomainError, embedding_error_handler)
 
 # Register routers
 # NOTE: semantic_search must be registered before articles

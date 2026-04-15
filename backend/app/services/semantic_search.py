@@ -1,6 +1,6 @@
 """Semantic search service — embedding-based analytical exploration."""
 
-from app.ai.embedding import embed_search_query
+from app.ai.embedding.service import embed_search_query
 from app.repositories.semantic_search import SemanticSearchRepository
 from app.repositories.watchlist import WatchlistRepository
 from app.schemas.articles import PaginatedArticleResponse, SemanticSearchParams

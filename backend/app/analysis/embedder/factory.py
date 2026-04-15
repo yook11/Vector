@@ -1,10 +1,10 @@
-"""Analyzer factory and rate limiter construction."""
+"""Embedder factory and rate limiter construction."""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from app.ai.analyzer.base import BaseAnalyzer
+from app.analysis.embedder.base import BaseEmbedder
 from app.config import settings
 
 if TYPE_CHECKING:
@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 
 def _build_limiters(
-    analyzer_cls: type[BaseAnalyzer],
+    embedder_cls: type[BaseEmbedder],
 ) -> dict[str, RateLimiter | None]:
     """Read ClassVars and build RateLimiter instances."""
     from app.infra.redis.cache import _get_client
@@ -22,29 +22,29 @@ def _build_limiters(
     rpm_limiter: RateLimiter | None = None
     rpd_limiter: RateLimiter | None = None
 
-    if analyzer_cls.RPM is not None:
+    if embedder_cls.RPM is not None:
         rpm_limiter = RateLimiter(
             redis=redis,
-            key=f"ratelimit:{analyzer_cls.MODEL}:rpm",
-            max_requests=analyzer_cls.RPM,
+            key=f"ratelimit:{embedder_cls.MODEL}:rpm",
+            max_requests=embedder_cls.RPM,
             window_seconds=60,
             block=True,
         )
-    if analyzer_cls.RPD is not None:
+    if embedder_cls.RPD is not None:
         rpd_limiter = RateLimiter(
             redis=redis,
-            key=f"ratelimit:{analyzer_cls.MODEL}:rpd",
-            max_requests=analyzer_cls.RPD,
+            key=f"ratelimit:{embedder_cls.MODEL}:rpd",
+            max_requests=embedder_cls.RPD,
             window_seconds=86400,
             block=False,
         )
     return {"rpm_limiter": rpm_limiter, "rpd_limiter": rpd_limiter}
 
 
-def get_analyzer() -> BaseAnalyzer:
-    """Factory: return an analyzer instance based on settings.ai_provider.
+def get_embedder() -> BaseEmbedder:
+    """Factory: return an embedder instance based on settings.ai_provider.
 
-    Reads ClassVars (RPM, RPD) from the analyzer class and builds
+    Reads ClassVars (RPM, RPD) from the embedder class and builds
     RateLimiter instances to inject via the constructor.
 
     Raises:
@@ -52,8 +52,8 @@ def get_analyzer() -> BaseAnalyzer:
     """
     provider = settings.ai_provider.lower()
     if provider == "gemini":
-        from app.ai.analyzer.providers.gemini import GeminiAnalyzer
+        from app.analysis.embedder.gemini import GeminiEmbedder
 
-        limiters = _build_limiters(GeminiAnalyzer)
-        return GeminiAnalyzer(**limiters)
-    raise ValueError(f"Unsupported AI provider: {provider}")
+        limiters = _build_limiters(GeminiEmbedder)
+        return GeminiEmbedder(**limiters)
+    raise ValueError(f"Unsupported AI provider for embeddings: {provider}")

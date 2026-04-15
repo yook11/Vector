@@ -9,16 +9,16 @@ from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from app.ai.analyzer import (
+from app.analysis import (
     AnalysisData,
-    AnalysisError,
+    AnalysisDomainError,
     BaseAnalyzer,
     DailyQuotaExhaustedError,
     analyze_article,
     analyze_articles,
     get_analyzer,
 )
-from app.ai.analyzer.providers.gemini import GeminiAnalyzer
+from app.analysis.analyzer.gemini import GeminiAnalyzer
 from app.models.article_analysis import ArticleAnalysis, ImpactLevel
 from app.models.article_keyword import ArticleKeyword
 from app.models.category import Category
@@ -52,7 +52,7 @@ def _make_gemini_response(
 
 def _create_analyzer() -> GeminiAnalyzer:
     """Create a GeminiAnalyzer with mocked settings."""
-    with patch("app.ai.analyzer.providers.gemini.settings") as mock_gs:
+    with patch("app.analysis.analyzer.gemini.settings") as mock_gs:
         mock_gs.gemini_api_key = SecretStr("test-key")
         return GeminiAnalyzer()
 
@@ -71,13 +71,13 @@ def _create_article(source: NewsSource) -> NewsArticle:
 
 
 def test_get_analyzer_returns_gemini_by_default() -> None:
-    with patch("app.ai.analyzer.factory.settings") as mock_settings:
+    with patch("app.analysis.analyzer.factory.settings") as mock_settings:
         mock_settings.ai_provider = "gemini"
         with patch(
-            "app.ai.analyzer.factory._build_limiters",
+            "app.analysis.analyzer.factory._build_limiters",
             return_value={"rpm_limiter": None, "rpd_limiter": None},
         ):
-            with patch("app.ai.analyzer.providers.gemini.settings") as mock_gs:
+            with patch("app.analysis.analyzer.gemini.settings") as mock_gs:
                 mock_gs.gemini_api_key = SecretStr("test-key")
                 analyzer = get_analyzer()
     assert isinstance(analyzer, GeminiAnalyzer)
@@ -85,7 +85,7 @@ def test_get_analyzer_returns_gemini_by_default() -> None:
 
 
 def test_get_analyzer_raises_for_unsupported_provider() -> None:
-    with patch("app.ai.analyzer.factory.settings") as mock_settings:
+    with patch("app.analysis.analyzer.factory.settings") as mock_settings:
         mock_settings.ai_provider = "unknown"
         with pytest.raises(ValueError, match="Unsupported AI provider"):
             get_analyzer()
@@ -138,14 +138,14 @@ def test_parse_response_strips_markdown_fences() -> None:
 
 def test_parse_response_invalid_json_raises_error() -> None:
     analyzer = _create_analyzer()
-    with pytest.raises(AnalysisError, match="Failed to parse"):
+    with pytest.raises(AnalysisDomainError, match="Failed to parse"):
         analyzer._parse_response("this is not json")
 
 
 def test_parse_response_invalid_impact_level_raises_error() -> None:
     analyzer = _create_analyzer()
     raw = _make_gemini_response(impact_level="extreme")
-    with pytest.raises(AnalysisError, match="Invalid"):
+    with pytest.raises(AnalysisDomainError, match="Invalid"):
         analyzer._parse_response(raw)
 
 
@@ -168,7 +168,7 @@ async def test_call_with_retry_retries_on_transient_error() -> None:
     )
 
     with patch(
-        "app.ai.analyzer.base.asyncio.sleep",
+        "app.analysis.analyzer.base.asyncio.sleep",
         new_callable=AsyncMock,
     ):
         result = await analyzer._call_with_retry("test prompt")
@@ -182,10 +182,10 @@ async def test_call_with_retry_raises_after_max_retries() -> None:
     analyzer._call_api = AsyncMock(side_effect=ConnectionError("API unavailable"))
 
     with patch(
-        "app.ai.analyzer.base.asyncio.sleep",
+        "app.analysis.analyzer.base.asyncio.sleep",
         new_callable=AsyncMock,
     ):
-        with pytest.raises(AnalysisError, match="failed after 3 attempts"):
+        with pytest.raises(AnalysisDomainError, match="failed after 3 attempts"):
             await analyzer._call_with_retry("test prompt")
 
     assert analyzer._call_api.call_count == 3
@@ -345,7 +345,7 @@ async def test_analyze_articles_handles_errors(
                 impact_level=ImpactLevel.HIGH,
                 reasoning="理由1",
             ),
-            AnalysisError("API failed"),
+            AnalysisDomainError("API failed"),
             AnalysisData(
                 title="成功2",
                 summary="要約2",
