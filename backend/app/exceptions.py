@@ -1,12 +1,12 @@
-"""Domain exceptions raised by the service layer.
+"""Service 層から送出されるドメイン例外。
 
-Each exception type maps to a specific HTTP status code.
-The router layer catches these and converts to HTTPException.
+各例外クラスは特定の HTTP ステータスコードに対応する。
+Router 層でこれらを捕捉し HTTPException に変換する。
 """
 
 
 class NotFoundError(Exception):
-    """Target resource does not exist → 404."""
+    """対象のリソースが存在しない → 404。"""
 
     def __init__(self, detail: str) -> None:
         self.detail = detail
@@ -14,7 +14,7 @@ class NotFoundError(Exception):
 
 
 class DuplicateError(Exception):
-    """Unique constraint would be violated → 409."""
+    """ユニーク制約違反になる → 409。"""
 
     def __init__(self, detail: str) -> None:
         self.detail = detail
@@ -22,7 +22,7 @@ class DuplicateError(Exception):
 
 
 class ReferenceNotFoundError(Exception):
-    """Referenced entity does not exist → 400."""
+    """参照先のエンティティが存在しない → 400。"""
 
     def __init__(self, detail: str) -> None:
         self.detail = detail
