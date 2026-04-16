@@ -17,18 +17,23 @@ def _mock_session_context(mock_session: AsyncMock) -> MagicMock:
 
 
 def _make_ctx(
-    mock_engine: MagicMock | None = None,
+    session_factory: MagicMock | None = None,
     retry_count: int = 0,
     max_retries: int = 0,
 ) -> MagicMock:
-    """Create a mock taskiq Context with state.engine and message labels."""
+    """Create a mock taskiq Context with state.session_factory and labels."""
     ctx = MagicMock()
-    ctx.state.engine = mock_engine or MagicMock()
+    ctx.state.session_factory = session_factory or MagicMock()
     ctx.message.labels = {
         "retry_count": retry_count,
         "max_retries": max_retries,
     }
     return ctx
+
+
+def _patch_session_factory(ctx: MagicMock, mock_session: AsyncMock) -> None:
+    """Wire ctx.state.session_factory() to yield mock_session via async cm."""
+    ctx.state.session_factory.return_value = _mock_session_context(mock_session)
 
 
 # ---------------------------------------------------------------------------
@@ -43,6 +48,7 @@ class TestFetchMetadata:
 
         mock_session = AsyncMock()
         mock_ctx = _make_ctx()
+        _patch_session_factory(mock_ctx, mock_session)
 
         source = MagicMock(spec=NewsSource)
         source.id = 1
@@ -62,10 +68,6 @@ class TestFetchMetadata:
         )
 
         with (
-            patch(
-                "app.tasks.collection_tasks.SQLModelAsyncSession",
-                return_value=_mock_session_context(mock_session),
-            ),
             patch(
                 "app.tasks.collection_tasks.fetch_news_for_sources",
                 new_callable=AsyncMock,
@@ -91,6 +93,7 @@ class TestFetchMetadata:
 
         mock_session = AsyncMock()
         mock_ctx = _make_ctx()
+        _patch_session_factory(mock_ctx, mock_session)
 
         source = MagicMock(spec=NewsSource)
         source.id = 1
@@ -110,10 +113,6 @@ class TestFetchMetadata:
         )
 
         with (
-            patch(
-                "app.tasks.collection_tasks.SQLModelAsyncSession",
-                return_value=_mock_session_context(mock_session),
-            ),
             patch(
                 "app.tasks.collection_tasks.fetch_news_for_sources",
                 new_callable=AsyncMock,
@@ -137,15 +136,12 @@ class TestFetchMetadata:
 
         mock_session = AsyncMock()
         mock_ctx = _make_ctx()
+        _patch_session_factory(mock_ctx, mock_session)
 
         mock_result = MagicMock()
         mock_result.scalars.return_value.all.return_value = []
         mock_session.execute = AsyncMock(return_value=mock_result)
 
-        with patch(
-            "app.tasks.collection_tasks.SQLModelAsyncSession",
-            return_value=_mock_session_context(mock_session),
-        ):
-            result = await fetch_metadata(ctx=mock_ctx)
+        result = await fetch_metadata(ctx=mock_ctx)
 
         assert result["sources_count"] == 0

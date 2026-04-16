@@ -2,22 +2,13 @@
 
 from __future__ import annotations
 
-import httpx
 import structlog
 from sqlmodel import select
-from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
 from taskiq import Context, TaskiqDepends
 
-from app.collection.content_extractor import (
-    HEADERS,
-    HTTP_TIMEOUT,
-    PermanentFetchError,
-    RobotsCache,
-    TemporaryFetchError,
-    extract_content,
-)
+from app.collection.article_body_fetcher import ArticleBodyFetcher, TemporaryFetchError
+from app.collection.content_service import ContentFetchService, mark_article_skipped
 from app.collection.news_fetcher import fetch_news_for_sources
-from app.models.news_article import NewsArticle
 from app.models.news_source import NewsSource
 from app.tasks.brokers import (
     _FETCH_CRON,
@@ -46,9 +37,9 @@ async def fetch_metadata(
 ) -> dict:
     """Batch RSS/HN metadata fetch, then dispatch pending articles."""
     logger.info("fetch_metadata_started")
-    engine = ctx.state.engine
+    session_factory = ctx.state.session_factory
 
-    async with SQLModelAsyncSession(engine, expire_on_commit=False) as session:
+    async with session_factory() as session:
         if source_ids is not None:
             sources = list(
                 (
@@ -116,52 +107,19 @@ async def fetch_content(
     """Fetch full article content for a single article."""
     from app.tasks.analysis_tasks import analyze_article
 
-    engine = ctx.state.engine
+    session_factory = ctx.state.session_factory
+    body_fetcher = ArticleBodyFetcher()
+    svc = ContentFetchService(session_factory, body_fetcher)
 
-    async with SQLModelAsyncSession(engine) as session:
-        article = await session.get(NewsArticle, article_id)
-        if article is None:
-            logger.warning("fetch_content_not_found", article_id=article_id)
+    try:
+        result = await svc.execute(article_id)
+    except TemporaryFetchError:
+        if is_last_attempt(ctx):
+            await mark_article_skipped(session_factory, article_id)
+            logger.warning("fetch_content_max_retries", article_id=article_id)
             return
+        raise
 
-        # Idempotency guard — chain forward even if already fetched
-        if article.original_content is not None:
-            await analyze_article.kiq(article_id)
-            return
-
-        robots_cache = RobotsCache()
-        async with httpx.AsyncClient(headers=HEADERS, timeout=HTTP_TIMEOUT) as client:
-            try:
-                # TODO: extract_content の引数を SafeUrl に変更する
-                content = await extract_content(
-                    client, str(article.original_url), robots_cache
-                )
-            except PermanentFetchError as e:
-                article.skip_content_fetch = True
-                session.add(article)
-                await session.commit()
-                logger.info("fetch_content_skip", article_id=article_id, reason=str(e))
-                return
-            except TemporaryFetchError:
-                if is_last_attempt(ctx):
-                    article.skip_content_fetch = True
-                    session.add(article)
-                    await session.commit()
-                    logger.warning("fetch_content_max_retries", article_id=article_id)
-                    return
-                raise
-
-        if content is None:
-            article.skip_content_fetch = True
-            session.add(article)
-            await session.commit()
-            logger.info(
-                "fetch_content_skip", article_id=article_id, reason="quality_gate"
-            )
-            return
-
-        article.original_content = content
-        session.add(article)
-        await session.commit()
-
-    await analyze_article.kiq(article_id)
+    # Chain to analyze only when body is available (body = prerequisite for analysis)
+    if result.status in ("fetched", "already_exists"):
+        await analyze_article.kiq(article_id)
