@@ -1,8 +1,9 @@
-"""Value object for validated HTTP/HTTPS URLs.
+"""検証済み HTTP/HTTPS URL の値オブジェクト。
 
-SafeUrl ensures a URL uses a safe scheme (http or https) and has a valid
-structure. Validation delegates to Pydantic's AnyHttpUrl, but the stored
-value is the original string (after strip) — no normalization is applied.
+SafeUrl は URL が安全なスキーム (http または https) を使い、
+正しい構造を持つことを保証する。検証は Pydantic の AnyHttpUrl に
+委譲するが、格納される値は元の文字列 (strip 後) で、
+正規化は行わない。
 """
 
 from __future__ import annotations
@@ -23,13 +24,13 @@ _MAX_LENGTH = 2048
 
 
 class SafeUrl(RootModel[str]):
-    """HTTP/HTTPS URL validated by Pydantic.
+    """Pydantic によって検証された HTTP/HTTPS URL。
 
     Invariants:
-    - Uses http or https scheme
-    - Valid URL structure (scheme + host at minimum)
-    - 1-2048 characters after trimming
-    - Immutable after creation
+    - http または https スキームを使用
+    - 有効な URL 構造 (最低でも scheme + host)
+    - トリム後 1-2048 文字
+    - 生成後は不変
     """
 
     model_config = ConfigDict(frozen=True)

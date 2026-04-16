@@ -1,7 +1,7 @@
-"""Value objects for the Category entity.
+"""Category エンティティの値オブジェクト。
 
-CategorySlug: URL-safe identifier for categories (e.g. "ai_ml", "semiconductor").
-CategoryName: Japanese display name for categories (e.g. "AI・ML", "半導体").
+CategorySlug: カテゴリの URL セーフな識別子 (例: "ai_ml", "semiconductor")。
+CategoryName: カテゴリの日本語表示名 (例: "AI・ML", "半導体")。
 """
 
 from __future__ import annotations
@@ -17,13 +17,13 @@ _NAME_MAX_LENGTH = 50
 
 
 class CategorySlug(RootModel[str]):
-    """URL-safe category identifier.
+    """URL セーフなカテゴリ識別子。
 
     Invariants:
-    - Starts with lowercase letter or digit
-    - Contains only lowercase letters, digits, and underscores
-    - 1-50 characters
-    - Immutable after creation
+    - 先頭は小文字または数字
+    - 使用可能な文字は小文字・数字・アンダースコアのみ
+    - 1-50 文字
+    - 生成後は不変
     """
 
     model_config = ConfigDict(frozen=True)
@@ -45,7 +45,7 @@ class CategorySlug(RootModel[str]):
 
     @property
     def value(self) -> str:
-        """Backward compat — prefer .root in new code."""
+        """後方互換用。新規コードでは .root を使用すること。"""
         return self.root
 
     def __str__(self) -> str:
@@ -56,13 +56,13 @@ class CategorySlug(RootModel[str]):
 
 
 class CategoryName(RootModel[str]):
-    """Japanese display name for a category.
+    """カテゴリの日本語表示名。
 
     Invariants:
-    - Contains word characters, middle dot (・), spaces, or hyphens
-    - Not empty or whitespace-only
-    - 1-50 characters
-    - Immutable after creation
+    - ワード文字・中黒 (・)・空白・ハイフンで構成
+    - 空文字列や空白のみは不可
+    - 1-50 文字
+    - 生成後は不変
     """
 
     model_config = ConfigDict(frozen=True)
@@ -90,7 +90,7 @@ class CategoryName(RootModel[str]):
 
     @property
     def value(self) -> str:
-        """Backward compat — prefer .root in new code."""
+        """後方互換用。新規コードでは .root を使用すること。"""
         return self.root
 
     def __str__(self) -> str:
