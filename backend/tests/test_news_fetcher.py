@@ -338,7 +338,11 @@ async def test_fetch_stores_full_content_from_rss(
 ) -> None:
     """RSS エントリに全文 (>500 文字) があれば即座に保存する。"""
     long_content = "A" * 600
-    entry = _make_entry(title="Full Content", link="https://example.com/full")
+    entry = _make_entry(
+        title="Full Content",
+        link="https://example.com/full",
+        published_parsed=time.gmtime(1700000000),
+    )
     entry["content"] = [{"value": long_content, "type": "text/html"}]
 
     feed = _make_feed([entry])
