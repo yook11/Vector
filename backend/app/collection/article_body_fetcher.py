@@ -1,13 +1,12 @@
-"""Article body fetcher — fetches full article text from a URL.
+"""記事本文フェッチャ — URL から記事本文を取得する。
 
-Single-responsibility class: given a URL, return the article body text or
-``None`` (when the quality gate rejects it). Permanent and temporary failure
-modes are surfaced as exceptions so callers can split business vs. retry
-decisions.
+単一責務のクラス: URL を受け取り、本文テキストを返すか、品質ゲートで
+弾かれた場合は ``None`` を返す。恒久的な失敗と一時的な失敗は例外として
+分離し、呼び出し側でビジネス判断とリトライ判断を切り分けられるようにする。
 
-Internal implementation (``RobotsCache``, ``httpx`` client lifecycle,
-``trafilatura`` parser) is encapsulated here; callers depend only on the
-``URL -> body | None`` contract.
+内部実装（``RobotsCache``、``httpx`` クライアントのライフサイクル、
+``trafilatura`` パーサ）はここで隠蔽され、呼び出し側は
+``URL -> 本文 | None`` の契約にのみ依存する。
 """
 
 from __future__ import annotations
@@ -29,18 +28,18 @@ HEADERS = {"User-Agent": USER_AGENT}
 
 
 class PermanentFetchError(Exception):
-    """Non-retryable fetch failure (403, 404, robots.txt blocked)."""
+    """リトライ不可のフェッチ失敗（403 / 404 / robots.txt で拒否）。"""
 
 
 class TemporaryFetchError(Exception):
-    """Retryable fetch failure (5xx, timeout, 429)."""
+    """リトライ可能なフェッチ失敗（5xx / タイムアウト / 429）。"""
 
 
 class _RobotsCache:
-    """Thread-safe robots.txt cache for concurrent access.
+    """並行アクセス対応の robots.txt キャッシュ。
 
-    Uses per-domain ``asyncio.Lock`` to prevent duplicate fetches when
-    multiple coroutines check the same domain concurrently.
+    同じドメインを複数コルーチンが同時参照した際の重複フェッチを防ぐため、
+    ドメイン単位の ``asyncio.Lock`` を用いる。
     """
 
     def __init__(self) -> None:
@@ -48,7 +47,7 @@ class _RobotsCache:
         self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
     async def check(self, client: httpx.AsyncClient, url: str) -> bool:
-        """Check if the URL is allowed by robots.txt. Returns True if allowed."""
+        """URL が robots.txt で許可されているか判定する。許可なら True。"""
         parsed = urlparse(url)
         domain = parsed.netloc
         robots_url = f"{parsed.scheme}://{domain}/robots.txt"
@@ -58,7 +57,7 @@ class _RobotsCache:
                 rp = self._cache[domain]
                 return rp is None or rp.can_fetch(USER_AGENT, url)
 
-            # First access: fetch robots.txt and cache
+            # 初回アクセス: robots.txt を取得してキャッシュする
             try:
                 resp = await client.get(robots_url, timeout=10.0)
                 if resp.status_code == 200:
@@ -66,7 +65,7 @@ class _RobotsCache:
                     rp.parse(resp.text.splitlines())
                     self._cache[domain] = rp
                 else:
-                    # No robots.txt or error → assume allowed
+                    # robots.txt が存在しない/エラー → 許可とみなす
                     self._cache[domain] = None
             except httpx.HTTPError:
                 self._cache[domain] = None
@@ -76,9 +75,9 @@ class _RobotsCache:
 
 
 def _parse_article_html(html: str, url: str) -> str | None:
-    """Parse article content from HTML using trafilatura (sync, CPU-bound).
+    """trafilatura で HTML から記事本文を抽出する（同期・CPU バウンド）。
 
-    This function is intended to be run via ``asyncio.to_thread()``.
+    本関数は ``asyncio.to_thread()`` 経由で呼ぶことを想定している。
     """
     text = trafilatura.extract(
         html,
@@ -94,25 +93,25 @@ def _parse_article_html(html: str, url: str) -> str | None:
 
 
 class ArticleBodyFetcher:
-    """URL → article body text fetcher.
+    """URL から記事本文テキストを取得するフェッチャ。
 
-    The caller depends only on ``fetch(url) -> str | None``; the robots cache
-    and HTTP client lifecycle are internal.
+    呼び出し側は ``fetch(url) -> str | None`` の契約のみに依存する。
+    robots キャッシュや HTTP クライアントのライフサイクルは内部で完結する。
     """
 
     def __init__(self) -> None:
         self._robots_cache = _RobotsCache()
 
     async def fetch(self, url: str) -> str | None:
-        """Fetch the article body for the given URL.
+        """指定 URL の記事本文を取得する。
 
         Returns:
-            str: Extracted article body text.
-            None: Content-Type mismatch or quality gate rejected (permanent).
+            str: 抽出した記事本文テキスト。
+            None: Content-Type が不一致、または品質ゲートで棄却（恒久的）。
 
         Raises:
-            PermanentFetchError: robots.txt blocked / 403 / 404 / 410 / 451.
-            TemporaryFetchError: 5xx / 429 / timeout / network error.
+            PermanentFetchError: robots.txt 拒否 / 403 / 404 / 410 / 451。
+            TemporaryFetchError: 5xx / 429 / タイムアウト / ネットワークエラー。
         """
         async with httpx.AsyncClient(headers=HEADERS, timeout=HTTP_TIMEOUT) as client:
             if not await self._robots_cache.check(client, url):
@@ -127,10 +126,10 @@ class ArticleBodyFetcher:
                 status = e.response.status_code
                 if status in (403, 404, 410, 451):
                     raise PermanentFetchError(f"HTTP {status}: {url}") from e
-                # 429 / 5xx — retryable
+                # 429 / 5xx はリトライ可能
                 raise TemporaryFetchError(f"HTTP {status}: {url}") from e
             except httpx.RequestError as e:
-                # Timeout, DNS, connection error — retryable
+                # タイムアウト / DNS / 接続エラーはリトライ可能
                 raise TemporaryFetchError(f"request error: {url}: {e}") from e
 
             content_type = response.headers.get("content-type", "")

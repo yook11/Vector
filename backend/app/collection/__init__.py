@@ -1,1 +1,1 @@
-"""Collection domain — news article fetching and content extraction."""
+"""Collection ドメイン — ニュース記事の取得と本文抽出を担う。"""

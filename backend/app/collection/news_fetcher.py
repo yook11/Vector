@@ -1,4 +1,4 @@
-"""News fetcher service — fetches articles from subscribed news sources."""
+"""ニュースフェッチャサービス — 登録済みニュースソースから記事を取得する。"""
 
 import asyncio
 import time
@@ -27,7 +27,7 @@ logger = structlog.get_logger(__name__)
 
 @dataclass
 class SourceFetchResult:
-    """Result of fetching a single source."""
+    """単一ソースのフェッチ結果。"""
 
     source_id: int
     success: bool = True
@@ -42,7 +42,7 @@ class SourceFetchResult:
 
 @dataclass
 class FetchResult:
-    """Aggregate result across all sources."""
+    """全ソース横断の集計結果。"""
 
     new_count: int = 0
     skipped_count: int = 0
@@ -54,7 +54,7 @@ class FetchResult:
 
 
 def _parse_published_date(entry: dict) -> datetime | None:
-    """Extract published datetime from a feedparser entry."""
+    """feedparser エントリから公開日時を抽出する。"""
     time_struct = entry.get("published_parsed") or entry.get("updated_parsed")
     if time_struct is None:
         return None
@@ -66,9 +66,10 @@ def _parse_published_date(entry: dict) -> datetime | None:
 
 
 def _extract_guid(entry: dict) -> str | None:
-    """Extract a unique identifier from a feedparser entry.
+    """feedparser エントリから一意な識別子を抽出する。
 
-    Prefers entry.id (which feedparser maps from <guid>), falls back to entry.link.
+    entry.id（feedparser が <guid> をマップしたもの）を優先し、
+    無い場合は entry.link にフォールバックする。
     """
     guid = entry.get("id") or entry.get("guid")
     if guid:
@@ -80,16 +81,16 @@ def _extract_guid(entry: dict) -> str | None:
 
 
 def _extract_full_content(entry: dict) -> str | None:
-    """Extract full content from RSS entry if available.
+    """RSS エントリに含まれる全文コンテンツを抽出する（存在すれば）。
 
-    Checks content:encoded and content fields that indicate full-text RSS feeds.
+    全文配信を示す content:encoded や content フィールドを確認する。
     """
-    # feedparser normalises content:encoded into entry.content
+    # feedparser は content:encoded を entry.content に正規化する
     content_list = entry.get("content")
     if content_list and isinstance(content_list, list):
         for c in content_list:
             value = c.get("value", "")
-            # Heuristic: full text is usually > 500 chars
+            # ヒューリスティック: 全文は通常 500 文字超
             if len(value) > 500:
                 return value
     return None
@@ -100,10 +101,10 @@ async def _fetch_rss_source(
     session: AsyncSession,
     source: NewsSource,
 ) -> SourceFetchResult:
-    """Fetch and process a single RSS source."""
+    """RSS ソース 1 件を取得・処理する。"""
     result = SourceFetchResult(source_id=source.id)
 
-    # Read conditional-GET headers from Redis
+    # 条件付き GET 用のヘッダを Redis から読み出す
     cached_etag, cached_last_modified = await get_http_cache(source.id)
 
     headers: dict[str, str] = {}
@@ -118,7 +119,7 @@ async def _fetch_rss_source(
             str(source.endpoint_url), headers=headers, timeout=HTTP_TIMEOUT
         )
 
-        # 304 Not Modified — nothing new
+        # 304 Not Modified — 新着なし
         if response.status_code == 304:
             logger.info("feed_not_modified", source=source.name)
             result.not_modified = True
@@ -140,14 +141,14 @@ async def _fetch_rss_source(
         result.error_message = str(e)
         return result
 
-    # Capture ETag / Last-Modified for next conditional GET
+    # 次回の条件付き GET に備えて ETag / Last-Modified を保持
     result.etag = response.headers.get("ETag")
     result.last_modified = response.headers.get("Last-Modified")
 
-    # Persist to Redis for next fetch cycle
+    # 次回のフェッチサイクルのため Redis に永続化
     await set_http_cache(source.id, result.etag, result.last_modified)
 
-    # Parse feed
+    # フィードをパース
     feed = await asyncio.to_thread(feedparser.parse, response.text)
     if feed.bozo and not feed.entries:
         logger.warning(
@@ -159,7 +160,7 @@ async def _fetch_rss_source(
         result.error_message = f"Parse error: {feed.bozo_exception}"
         return result
 
-    # Collect entries with URLs for batch dedup
+    # 一括重複排除用に URL 付きエントリを収集
     entry_urls: list[tuple[dict, str]] = []
     for entry in feed.entries:
         url = entry.get("link", "") or _extract_guid(entry) or ""
@@ -169,7 +170,7 @@ async def _fetch_rss_source(
     if not entry_urls:
         return result
 
-    # Batch dedup: check existing URLs
+    # 一括重複排除: 既存 URL を確認
     urls = [u for _, u in entry_urls]
     existing_urls: set[str] = set()
     chunk_size = 500
@@ -182,7 +183,7 @@ async def _fetch_rss_source(
         # TODO: SafeUrl の __eq__ が str と互換になれば str() 不要
         existing_urls.update(str(row[0]) for row in rows.all())
 
-    # Create new articles
+    # 新規記事を作成
     max_new = settings.max_articles_per_fetch
     new_count = 0
 
@@ -191,7 +192,7 @@ async def _fetch_rss_source(
             result.skipped_count += 1
             continue
 
-        # --- URL validation: reject articles with unsafe URL schemes ---
+        # --- URL 検証: 危険なスキームの記事を除外 ---
         if not is_safe_url(article_url):
             logger.warning(
                 "unsafe_url_skipped",
@@ -217,7 +218,7 @@ async def _fetch_rss_source(
             published_at=_parse_published_date(entry),
         )
 
-        # If RSS provides full content, store it immediately
+        # RSS が全文を提供している場合はそのまま保存する
         if full_content:
             truncated = full_content[: settings.content_max_length]
             article.original_content = truncated
@@ -225,7 +226,7 @@ async def _fetch_rss_source(
         session.add(article)
         result.new_articles.append(article)
         new_count += 1
-        # Track URL so later entries in same feed don't duplicate
+        # 同一フィード内の後続エントリで重複しないよう URL を記録
         existing_urls.add(article_url)
 
     result.new_count = new_count
@@ -236,14 +237,14 @@ async def fetch_news_for_sources(
     session: AsyncSession,
     sources: list[NewsSource],
 ) -> FetchResult:
-    """Fetch news articles from the given sources.
+    """指定したソースからニュース記事を取得する。
 
     Args:
-        session: Database session.
-        sources: List of active NewsSource instances to fetch.
+        session: DB セッション。
+        sources: 取得対象のアクティブな NewsSource のリスト。
 
     Returns:
-        FetchResult with counts, errors, and per-source results.
+        件数・エラー・ソース別結果を含む FetchResult。
     """
     result = FetchResult()
 
@@ -268,7 +269,7 @@ async def fetch_news_for_sources(
             if source.source_type == SourceType.RSS:
                 source_result = await _fetch_rss_source(client, session, source)
             elif source.source_type == SourceType.API:
-                # Route to the correct API client based on endpoint_url domain
+                # endpoint_url のドメインに応じて API クライアントを振り分ける
                 # TODO: スキーマ層を SafeUrl 対応にした後、str() 変換を削除
                 domain = urlparse(str(source.endpoint_url)).hostname or ""
                 if "algolia.com" in domain:
@@ -311,7 +312,7 @@ async def fetch_news_for_sources(
 
             duration_ms = int((time.monotonic() - start_time) * 1000)
 
-            # Record fetch log
+            # フェッチログを記録
             fetch_log = FetchLog(
                 source_id=source.id,
                 status=(
@@ -336,7 +337,7 @@ async def fetch_news_for_sources(
 
     await session.commit()
 
-    # Extract IDs after commit (expire_on_commit=False in caller)
+    # コミット後に ID を取り出す（呼び出し側は expire_on_commit=False 前提）
     for sr in result.source_results:
         for article in sr.new_articles:
             result.new_article_ids.append(article.id)

@@ -1,8 +1,9 @@
-"""Async Redis helper for HTTP conditional-GET cache (etag / last-modified).
+"""HTTP 条件付き GET キャッシュ（etag / last-modified）用の非同期 Redis ヘルパー。
 
-Keys are scoped per news-source and expire after 7 days (covers fetch intervals
-well beyond the typical 12-hour cycle).  All functions are fire-and-forget safe:
-a Redis outage degrades to a full download on the next fetch — no data loss.
+キーはニュースソース単位でスコープされ、7 日で失効する
+（通常の 12 時間サイクルを十分に超えるフェッチ間隔をカバーする）。
+いずれの関数も fire-and-forget で安全に扱え、Redis 障害時は次回フェッチで
+フルダウンロードに縮退するだけでデータ欠損は発生しない。
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from app.redis import get_redis
 logger = structlog.get_logger(__name__)
 
 _KEY_PREFIX = "source"
-_TTL_SECONDS = 7 * 24 * 3600  # 7 days
+_TTL_SECONDS = 7 * 24 * 3600  # 7 日
 
 
 def _cache_key(source_id: int) -> str:
@@ -24,7 +25,10 @@ def _cache_key(source_id: int) -> str:
 
 
 async def get_http_cache(source_id: int) -> tuple[str | None, str | None]:
-    """Return ``(etag, last_modified)`` for *source_id*, or ``(None, None)``."""
+    """``source_id`` の ``(etag, last_modified)`` を返す。
+
+    未登録時は ``(None, None)`` を返す。
+    """
     try:
         client = get_redis()
         raw = await client.get(_cache_key(source_id))
@@ -44,7 +48,7 @@ async def set_http_cache(
     etag: str | None,
     last_modified: str | None,
 ) -> None:
-    """Persist *etag* and *last_modified* for *source_id* with a 7-day TTL."""
+    """``source_id`` に対して ``etag`` と ``last_modified`` を 7 日 TTL で保存する。"""
     if etag is None and last_modified is None:
         return
     try:

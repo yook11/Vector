@@ -1,7 +1,8 @@
-"""Helper functions for NewsSource-related queries.
+"""NewsSource 関連クエリのヘルパー関数群。
 
-Keeps derived-attribute logic (e.g. last successful fetch time) in one place
-so that multiple callers (HN client, AV client, router) share the same query.
+派生属性のロジック（例: 直近の成功フェッチ時刻）を 1 箇所に集約し、
+複数の呼び出し側（HN クライアント、AV クライアント、router）で
+同一のクエリを共有できるようにする。
 """
 
 from __future__ import annotations
@@ -19,10 +20,10 @@ async def get_last_successful_fetch_at(
     session: AsyncSession,
     source_id: int,
 ) -> datetime | None:
-    """Return the most recent successful fetch timestamp for *source_id*.
+    """指定 ``source_id`` における直近の成功フェッチ時刻を返す。
 
-    Derived from ``fetch_logs`` rather than stored on the source model,
-    so the value is always consistent with the actual fetch history.
+    ソースモデルに保存するのではなく ``fetch_logs`` から導出するため、
+    実際のフェッチ履歴と常に整合が取れる。
     """
     stmt = select(func.max(FetchLog.fetched_at)).where(
         FetchLog.source_id == source_id,
