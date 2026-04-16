@@ -1,7 +1,8 @@
-"""Lightweight schemas embedded inside other API responses.
+"""他の API レスポンスに埋め込まれる軽量スキーマ群。
 
-These classes never appear as top-level API responses — they are always
-nested within a parent response schema (e.g. NewsBrief, CategoryDetail).
+これらのクラスはトップレベルの API レスポンスにはならない。
+常に親レスポンススキーマ（NewsBrief, CategoryDetail など）内に
+ネストされて利用される。
 """
 
 from app.domain.keyword import KeywordName

@@ -1,4 +1,4 @@
-"""Read-facing schemas for analyzed articles."""
+"""分析済み記事の読み取り向けスキーマ。"""
 
 from __future__ import annotations
 
@@ -34,18 +34,19 @@ class SortOrder(StrEnum):
 
 
 # ---------------------------------------------------------------------------
-# Query parameters — VO types flow through all layers
+# クエリパラメータ — VO 型を全レイヤーに通す
 # ---------------------------------------------------------------------------
 
 
 class ArticleListParams(PaginationParams):
-    """Query parameters for article listing (news browsing).
+    """記事一覧（ニュース閲覧）用のクエリパラメータ。
 
-    Inherits page/per_page from PaginationParams.
-    VO fields (CategorySlug, KeywordName, SourceName) are validated directly by
-    Pydantic during query parameter parsing — invalid values produce a 422
-    response. Received in the router via Annotated[ArticleListParams, Query()]
-    and passed through to Service and Repository layers unchanged.
+    page/per_page は PaginationParams から継承する。
+    VO フィールド（CategorySlug, KeywordName, SourceName）は
+    クエリパラメータのパース時に Pydantic が直接検証し、
+    不正値は 422 レスポンスを返す。ルーターでは
+    Annotated[ArticleListParams, Query()] として受け取り、
+    Service / Repository レイヤーへそのまま受け渡す。
     """
 
     keyword: Annotated[KeywordName | None, Query()] = None
@@ -55,11 +56,11 @@ class ArticleListParams(PaginationParams):
 
 
 class SemanticSearchParams(PaginationParams):
-    """Query parameters for semantic search (analytical exploration).
+    """セマンティック検索（分析探索）用のクエリパラメータ。
 
-    Separate from ArticleListParams because listing and search are
-    fundamentally different operations. Filter fields overlap today but
-    will diverge as search gains investment-analysis-specific filters.
+    一覧と検索は本質的に別の操作なので ArticleListParams とは分離する。
+    現状のフィルタ項目は重複しているが、検索側は投資分析固有の
+    フィルタが増えるにつれて分岐していく想定。
     """
 
     q: Annotated[str, Query(min_length=1, max_length=500)]
@@ -72,7 +73,7 @@ class SemanticSearchParams(PaginationParams):
     @field_validator("q", mode="after")
     @classmethod
     def _normalize_q(cls, v: str) -> str:
-        """Normalize the search query so cache keys collapse trivial variants."""
+        """キャッシュキーの些細な差異を吸収するため検索クエリを正規化する。"""
         return " ".join(v.lower().split())
 
 
@@ -106,7 +107,7 @@ class ArticleDetail(_CamelBase):
 
 
 class PaginatedArticleResponse(_CamelBase):
-    """Paginated list of articles."""
+    """記事のページネーション付きリスト。"""
 
     items: list[ArticleBrief]
     total: int

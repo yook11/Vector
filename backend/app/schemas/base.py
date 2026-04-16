@@ -7,7 +7,7 @@ from pydantic.alias_generators import to_camel
 
 
 class _CamelBase(BaseModel):
-    """Project-wide schema base with camelCase alias generation."""
+    """camelCase エイリアス生成を備えた全体共通スキーマ基底。"""
 
     model_config = ConfigDict(
         alias_generator=to_camel,
@@ -17,12 +17,12 @@ class _CamelBase(BaseModel):
 
 
 class PaginationParams(BaseModel):
-    """Common pagination parameters.
+    """共通のページネーションパラメータ。
 
-    Consumed via ``Annotated[PaginationParams, Query()]`` (or a subclass
-    thereof) in router signatures. Do not use with ``Depends()`` — that
-    pattern silently drops non-scalar fields in subclasses (e.g. VO types)
-    without emitting any warning. See feedback_vo_boundary memory.
+    ルーターシグネチャでは ``Annotated[PaginationParams, Query()]``
+    （またはそのサブクラス）として受け取る。``Depends()`` は使わないこと。
+    ``Depends()`` はサブクラスの非スカラフィールド（VO 型など）を
+    警告なしに黙って落とすため。feedback_vo_boundary memory を参照。
     """
 
     page: Annotated[int, Query(ge=1)] = 1
