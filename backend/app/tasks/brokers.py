@@ -1,12 +1,12 @@
-"""Broker definitions and shared infrastructure for pipeline task queues.
+"""パイプライン用タスクキューの broker 定義と共通基盤。
 
-4 brokers, one per pipeline step:
-  - broker_metadata:  RSS/HN metadata fetch + dispatch
-  - broker_content:   per-article content extraction
-  - broker_analysis:  AI analysis
-  - broker_embedding: vector embedding generation
+パイプラインの各ステップに対応する 4 つの broker:
+  - broker_metadata:  RSS/HN メタデータ取得 + dispatch
+  - broker_content:   記事単位のコンテンツ抽出
+  - broker_analysis:  AI 分析
+  - broker_embedding: ベクトル埋め込み生成
 
-Workers: one per broker (see docker-compose.yml).
+Workers: broker ごとに 1 つ（docker-compose.yml を参照）。
 Scheduler: taskiq scheduler app.tasks.brokers:scheduler_metadata
 """
 
@@ -30,7 +30,7 @@ from app.config import settings
 logger = structlog.get_logger(__name__)
 
 # ---------------------------------------------------------------------------
-# Cron schedule derived from settings
+# settings から導出する cron スケジュール
 # ---------------------------------------------------------------------------
 
 _VALID_INTERVAL_MINUTES = {5, 10, 15, 20, 30, 60}
@@ -74,7 +74,7 @@ broker_analysis = _make_broker("pipeline:analysis")
 broker_embedding = _make_broker("pipeline:embedding")
 
 # ---------------------------------------------------------------------------
-# Scheduler (metadata broker only — fetch_metadata is the only cron task)
+# Scheduler（metadata broker のみ — cron タスクは fetch_metadata だけ）
 # ---------------------------------------------------------------------------
 
 scheduler_metadata = TaskiqScheduler(
@@ -83,7 +83,7 @@ scheduler_metadata = TaskiqScheduler(
 )
 
 # ---------------------------------------------------------------------------
-# Lifecycle hooks — each broker gets its own engine
+# ライフサイクルフック — broker ごとに独自の engine を持つ
 # ---------------------------------------------------------------------------
 
 
@@ -111,12 +111,12 @@ _register_lifecycle(broker_analysis, "analysis")
 _register_lifecycle(broker_embedding, "embedding")
 
 # ---------------------------------------------------------------------------
-# Helpers (shared across task modules)
+# ヘルパー（タスクモジュール間で共有）
 # ---------------------------------------------------------------------------
 
 
 def is_last_attempt(ctx: Context) -> bool:
-    """Return True if SimpleRetryMiddleware will not retry after this attempt."""
+    """この試行後に SimpleRetryMiddleware がリトライしない場合 True を返す。"""
     labels = ctx.message.labels
     retry_count = int(labels.get("retry_count", 0))
     max_retries = int(labels.get("max_retries", 0))

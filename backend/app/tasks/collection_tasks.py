@@ -1,4 +1,4 @@
-"""Collection tasks — RSS/HN feed fetch and per-article content extraction."""
+"""収集タスク — RSS/HN フィード取得と記事単位のコンテンツ抽出。"""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ async def fetch_metadata(
     source_ids: list[int] | None = None,
     ctx: Context = TaskiqDepends(),
 ) -> dict:
-    """Batch RSS/HN metadata fetch, then dispatch pending articles."""
+    """RSS/HN のメタデータをまとめて取得し、未処理記事を dispatch する。"""
     logger.info("fetch_metadata_started")
     session_factory = ctx.state.session_factory
 
@@ -69,7 +69,7 @@ async def fetch_metadata(
 
         fr = await fetch_news_for_sources(session, sources)
 
-    # Dispatch new articles directly to downstream queues
+    # 新規記事を下流キューへ直接 dispatch する
     from app.tasks.analysis_tasks import analyze_article
 
     content_ready = set(fr.content_ready_ids)
@@ -104,7 +104,7 @@ async def fetch_content(
     article_id: int,
     ctx: Context = TaskiqDepends(),
 ) -> None:
-    """Fetch full article content for a single article."""
+    """単一記事の本文コンテンツを取得する。"""
     from app.tasks.analysis_tasks import analyze_article
 
     session_factory = ctx.state.session_factory
@@ -120,6 +120,6 @@ async def fetch_content(
             return
         raise
 
-    # Chain to analyze only when body is available (body = prerequisite for analysis)
+    # body が取得できた場合のみ analyze にチェーン（body は分析の前提条件）
     if result.status in ("fetched", "already_exists"):
         await analyze_article.kiq(article_id)
