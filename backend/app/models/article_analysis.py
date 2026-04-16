@@ -68,7 +68,7 @@ class ArticleAnalysis(Base):
     embedding: Mapped[list[float] | None] = mapped_column(Vector(768))
     embedding_model: Mapped[str | None] = mapped_column(String(100))
 
-    # Relationships
+    # リレーション
     news_article: Mapped[NewsArticle] = relationship(back_populates="article_analysis")
     article_keywords: Mapped[list[ArticleKeyword]] = relationship(
         back_populates="article_analysis"

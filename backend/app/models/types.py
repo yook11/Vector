@@ -1,7 +1,7 @@
-"""SQLAlchemy TypeDecorators for domain value objects.
+"""ドメイン値オブジェクト向けの SQLAlchemy TypeDecorator 群。
 
-Each TypeDecorator converts between a VO (Python side) and a plain string (DB side).
-Raw str is accepted and validated through the VO constructor (no bypass).
+各 TypeDecorator は VO（Python 側）とプレーン文字列（DB 側）を相互変換する。
+生の str も受け付けるが、VO コンストラクタを通して検証される（バイパス不可）。
 """
 
 from __future__ import annotations

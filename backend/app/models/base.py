@@ -1,7 +1,7 @@
-"""DeclarativeBase shared by all application models.
+"""全アプリケーションモデル共通の DeclarativeBase。
 
-Metadata is shared: Base.metadata = SQLModel.metadata
-so that Alembic, init_db, and tests see all tables in one metadata.
+Metadata は共有: Base.metadata = SQLModel.metadata
+これにより Alembic・init_db・テストが単一メタデータで全テーブルを参照する。
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from app.models.types import (
 
 
 class Base(DeclarativeBase):
-    """Shared DeclarativeBase with VO type_annotation_map."""
+    """VO の type_annotation_map を備えた共通 DeclarativeBase。"""
 
     metadata = SQLModel.metadata  # noqa: RUF012
 

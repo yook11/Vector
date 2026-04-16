@@ -30,7 +30,7 @@ class WatchlistEntry(Base):
         DateTime(timezone=True), server_default=func.now()
     )
 
-    # Relationships
+    # リレーション
     article_analysis: Mapped[ArticleAnalysis] = relationship(
         back_populates="watchlist_entries"
     )

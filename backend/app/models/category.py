@@ -29,5 +29,5 @@ class Category(Base):
     slug: Mapped[CategorySlug] = mapped_column(unique=True, index=True)
     name: Mapped[CategoryName] = mapped_column(unique=True)
 
-    # Relationships (same Base — OK)
+    # リレーション（同一 Base のため OK）
     keywords: Mapped[list[Keyword]] = relationship(back_populates="category")
