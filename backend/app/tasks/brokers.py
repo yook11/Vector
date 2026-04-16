@@ -13,7 +13,8 @@ Scheduler: taskiq scheduler app.tasks.brokers:scheduler_metadata
 from __future__ import annotations
 
 import structlog
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
 from taskiq import (
     Context,
     SimpleRetryMiddleware,
@@ -90,6 +91,11 @@ def _register_lifecycle(broker: RedisStreamBroker, label: str) -> None:
     @broker.on_event(TaskiqEvents.WORKER_STARTUP)
     async def on_startup(state: TaskiqState) -> None:
         state.engine = create_async_engine(settings.database_url, echo=False)
+        state.session_factory = async_sessionmaker(
+            state.engine,
+            class_=SQLModelAsyncSession,
+            expire_on_commit=False,
+        )
         logger.info(f"{label}_worker_startup")
 
     @broker.on_event(TaskiqEvents.WORKER_SHUTDOWN)
