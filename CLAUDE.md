@@ -33,6 +33,10 @@
 | API (JSON) | camelCase | `newsArticleId` |
 | TypeScript | camelCase | `newsArticleId` |
 
+### コメント言語
+- ドックストリング・説明コメント（`#`）は日本語
+- 機能的コメント（`# type: ignore`, `# noqa`, `# TODO:` 等）・実装識別子・エラー/ログメッセージは英語
+
 ### APIスキーマ管理
 - **SSoT は FastAPI の Pydantic schemas** — 型生成は `/gen-types` スキルを使用
 
