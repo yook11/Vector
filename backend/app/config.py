@@ -51,10 +51,6 @@ class Settings(BaseSettings):
     av_limit: int = 50
     av_max_daily_requests: int = 25
 
-    # Duplicate detection
-    dedup_similarity_threshold: float = 0.15  # cosine distance; lower = stricter
-    dedup_time_window_days: int = 3  # compare articles within N days
-
     # Semantic search
     semantic_search_max_distance: float = 0.8  # cosine distance threshold
 

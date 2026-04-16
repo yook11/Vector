@@ -1,4 +1,4 @@
-"""Analysis domain — AI analysis, embedding, and deduplication."""
+"""Analysis domain — AI analysis and embedding."""
 
 from app.analysis.analyzer.base import AnalysisData, BaseAnalyzer
 from app.analysis.analyzer.factory import get_analyzer
