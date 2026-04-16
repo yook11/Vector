@@ -38,11 +38,11 @@ async def test_fetch_log_recorded_on_success(
     with (
         patch("app.collection.news_fetcher.httpx.AsyncClient") as mock_client_cls,
         patch(
-            "app.collection.news_fetcher.get_http_cache",
+            "app.collection.rss_fetcher.get_http_cache",
             new_callable=AsyncMock,
             return_value=(None, None),
         ),
-        patch("app.collection.news_fetcher.set_http_cache", new_callable=AsyncMock),
+        patch("app.collection.rss_fetcher.set_http_cache", new_callable=AsyncMock),
     ):
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(return_value=mock_response)
@@ -77,7 +77,7 @@ async def test_fetch_log_recorded_on_error(
     with (
         patch("app.collection.news_fetcher.httpx.AsyncClient") as mock_client_cls,
         patch(
-            "app.collection.news_fetcher.get_http_cache",
+            "app.collection.rss_fetcher.get_http_cache",
             new_callable=AsyncMock,
             return_value=(None, None),
         ),
@@ -86,7 +86,6 @@ async def test_fetch_log_recorded_on_error(
         mock_client.get = AsyncMock(
             side_effect=httpx.HTTPStatusError(
                 "Server Error",
-                # TODO: スキーマ層を SafeUrl 対応にした後、str() 変換を削除
                 request=httpx.Request("GET", str(sample_source.endpoint_url)),
                 response=httpx.Response(500),
             )
