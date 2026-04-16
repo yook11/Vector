@@ -23,7 +23,7 @@ class WatchlistService:
         pagination: PaginationParams,
     ) -> PaginatedArticleResponse:
         analyses, total = await self.repo.fetch_watched_articles(user_id, pagination)
-        # All items are in the user's watchlist — build watched_ids from result
+        # 全件がウォッチリスト内の記事なので結果から watched_ids を構築
         watched_ids = {a.id for a in analyses}
 
         return PaginatedArticleResponse.create(

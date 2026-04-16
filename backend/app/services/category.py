@@ -10,17 +10,17 @@ class CategoryService:
         self.repo = repo
 
     async def list_categories(self) -> CategoryDetailList:
-        """Build CategoryDetailList from repository data."""
+        """リポジトリから取得したデータで CategoryDetailList を構築する。"""
         cat_rows = await self.repo.fetch_categories()
         kw_rows = await self.repo.fetch_keyword_stats()
         count_rows = await self.repo.fetch_category_article_counts()
 
-        # category_id -> article_count
+        # category_id -> article_count のマッピング
         article_counts_by_cat: dict[int, int] = {
             row.category_id: row.article_count for row in count_rows
         }
 
-        # Group keywords by category_id
+        # キーワードを category_id でグルーピングする
         keyword_stats_by_cat: dict[int, list[KeywordStatEmbed]] = defaultdict(list)
         for row in kw_rows:
             keyword_stats_by_cat[row.category_id].append(
