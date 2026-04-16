@@ -5,7 +5,7 @@ from collections.abc import AsyncGenerator
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
@@ -83,6 +83,16 @@ async def setup_db(ensure_test_database: None) -> AsyncGenerator[None, None]:
     yield
     async with engine_test.begin() as conn:
         await conn.run_sync(SQLModel.metadata.drop_all)
+
+
+@pytest.fixture
+def session_factory() -> async_sessionmaker[AsyncSession]:
+    """Provide a session factory for testing Service classes."""
+    return async_sessionmaker(
+        engine_test,
+        class_=SQLModelAsyncSession,
+        expire_on_commit=False,
+    )
 
 
 @pytest.fixture

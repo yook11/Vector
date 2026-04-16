@@ -11,16 +11,14 @@ from sqlmodel import select
 
 from app.analysis import (
     AnalysisData,
-    AnalysisDomainError,
     BaseAnalyzer,
-    DailyQuotaExhaustedError,
+    InvalidInputError,
     NetworkError,
     ProviderError,
-    analyze_article,
-    analyze_articles,
     get_analyzer,
 )
 from app.analysis.analyzer.gemini import GeminiAnalyzer
+from app.analysis.service import ArticleAnalysisService
 from app.models.article_analysis import ArticleAnalysis, ImpactLevel
 from app.models.article_keyword import ArticleKeyword
 from app.models.category import Category
@@ -182,6 +180,7 @@ async def test_call_once_passes_through_domain_error() -> None:
 
 async def test_analyze_article_creates_analysis(
     db_session: AsyncSession,
+    session_factory,
     sample_source: NewsSource,
 ) -> None:
     article = NewsArticle(
@@ -206,18 +205,24 @@ async def test_analyze_article_creates_analysis(
         )
     )
 
-    result = await analyze_article(db_session, article, mock_analyzer)
-    await db_session.commit()
+    svc = ArticleAnalysisService(session_factory)
+    result = await svc.execute(article.id, mock_analyzer)
 
-    assert result is not None
-    assert result.news_article_id == article.id
-    assert result.impact_level == ImpactLevel.HIGH
-    assert result.translated_title == "量子ブレイクスルー"
-    assert result.ai_model == "gemini-2.5-flash-lite"
+    assert result.status == "created"
+    assert result.analysis_id is not None
+
+    stmt = select(ArticleAnalysis).where(
+        ArticleAnalysis.news_article_id == article.id,
+    )
+    analysis = (await db_session.execute(stmt)).scalar_one()
+    assert analysis.impact_level == ImpactLevel.HIGH
+    assert analysis.translated_title == "量子ブレイクスルー"
+    assert analysis.ai_model == "gemini-2.5-flash-lite"
 
 
 async def test_analyze_article_skips_already_analyzed(
     db_session: AsyncSession,
+    session_factory,
     sample_source: NewsSource,
 ) -> None:
     article = NewsArticle(
@@ -244,139 +249,48 @@ async def test_analyze_article_skips_already_analyzed(
     mock_analyzer = MagicMock(spec=BaseAnalyzer)
     mock_analyzer.MODEL = "gemini-2.5-flash-lite"
     mock_analyzer.model_name = "gemini-2.5-flash-lite"
-    result = await analyze_article(db_session, article, mock_analyzer)
 
-    assert result is None
+    svc = ArticleAnalysisService(session_factory)
+    result = await svc.execute(article.id, mock_analyzer)
+
+    assert result.status == "already_exists"
     mock_analyzer.analyze.assert_not_called()
 
 
-async def test_analyze_articles_batch(
+async def test_analyze_article_skips_on_invalid_input(
     db_session: AsyncSession,
+    session_factory,
     sample_source: NewsSource,
 ) -> None:
-    articles = []
-    for i in range(3):
-        a = NewsArticle(
-            original_title=f"Article {i}",
-            original_url=f"https://example.com/batch-{i}",
-            news_source_id=sample_source.id,
-            published_at=datetime.now(UTC),
-        )
-        db_session.add(a)
-        articles.append(a)
+    """InvalidInputError should mark article as skipped."""
+    article = NewsArticle(
+        original_title="Bad Article",
+        original_url="https://example.com/bad",
+        news_source_id=sample_source.id,
+        published_at=datetime.now(UTC),
+    )
+    db_session.add(article)
     await db_session.commit()
-    for a in articles:
-        await db_session.refresh(a)
+    await db_session.refresh(article)
 
     mock_analyzer = MagicMock(spec=BaseAnalyzer)
     mock_analyzer.MODEL = "gemini-2.5-flash-lite"
     mock_analyzer.model_name = "gemini-2.5-flash-lite"
     mock_analyzer.analyze = AsyncMock(
-        return_value=AnalysisData(
-            title="テスト",
-            summary="要約",
-            impact_level=ImpactLevel.MEDIUM,
-            reasoning="理由",
-        )
+        side_effect=InvalidInputError("too long"),
     )
 
-    result = await analyze_articles(db_session, articles, mock_analyzer)
+    article_id = article.id
+    svc = ArticleAnalysisService(session_factory)
+    result = await svc.execute(article_id, mock_analyzer)
 
-    assert result.analyzed_count == 3
-    assert result.skipped_count == 0
-    assert result.error_count == 0
+    assert result.status == "skipped"
 
-
-async def test_analyze_articles_handles_errors(
-    db_session: AsyncSession,
-    sample_source: NewsSource,
-) -> None:
-    articles = []
-    for i in range(3):
-        a = NewsArticle(
-            original_title=f"Article {i}",
-            original_url=f"https://example.com/err-{i}",
-            news_source_id=sample_source.id,
-            published_at=datetime.now(UTC),
-        )
-        db_session.add(a)
-        articles.append(a)
-    await db_session.commit()
-    for a in articles:
-        await db_session.refresh(a)
-
-    mock_analyzer = MagicMock(spec=BaseAnalyzer)
-    mock_analyzer.MODEL = "gemini-2.5-flash-lite"
-    mock_analyzer.model_name = "gemini-2.5-flash-lite"
-    mock_analyzer.analyze = AsyncMock(
-        side_effect=[
-            AnalysisData(
-                title="成功",
-                summary="要約",
-                impact_level=ImpactLevel.HIGH,
-                reasoning="理由1",
-            ),
-            AnalysisDomainError("API failed"),
-            AnalysisData(
-                title="成功2",
-                summary="要約2",
-                impact_level=ImpactLevel.LOW,
-                reasoning="理由2",
-            ),
-        ]
-    )
-
-    result = await analyze_articles(db_session, articles, mock_analyzer)
-
-    assert result.analyzed_count == 2
-    assert result.error_count == 1
-    assert len(result.errors) == 1
-
-
-async def test_analyze_articles_with_empty_list(
-    db_session: AsyncSession,
-) -> None:
-    result = await analyze_articles(db_session, [])
-    assert result.analyzed_count == 0
-    assert result.skipped_count == 0
-    assert result.error_count == 0
-
-
-# --- D2. DailyQuotaExhaustedError stops all ---
-
-
-async def test_daily_quota_exhausted_stops_all_articles(
-    db_session: AsyncSession,
-    sample_source: NewsSource,
-) -> None:
-    """DailyQuotaExhaustedError stops immediately, counting all remaining as errors."""
-    articles = []
-    for i in range(5):
-        a = NewsArticle(
-            original_title=f"Article {i}",
-            original_url=f"https://example.com/quota-{i}",
-            news_source_id=sample_source.id,
-            published_at=datetime.now(UTC),
-        )
-        db_session.add(a)
-        articles.append(a)
-    await db_session.commit()
-    for a in articles:
-        await db_session.refresh(a)
-
-    mock_analyzer = MagicMock(spec=BaseAnalyzer)
-    mock_analyzer.MODEL = "gemini-2.5-flash-lite"
-    mock_analyzer.model_name = "gemini-2.5-flash-lite"
-    mock_analyzer.analyze = AsyncMock(
-        side_effect=DailyQuotaExhaustedError("RPD exhausted"),
-    )
-
-    result = await analyze_articles(db_session, articles, mock_analyzer)
-
-    # First article triggers DailyQuotaExhaustedError — all 5 counted as errors
-    assert result.analyzed_count == 0
-    assert result.error_count == 5
-    assert len(result.errors) == 1
+    # Service committed in its own session — expire cached objects
+    db_session.expire_all()
+    refreshed = await db_session.get(NewsArticle, article_id)
+    assert refreshed.skip_content_fetch is True
+    assert refreshed.original_content is None
 
 
 # --- E. Integration test (API response) ---
@@ -455,11 +369,11 @@ def test_parse_response_limits_keywords_to_three() -> None:
 
 async def test_analyze_article_saves_keyword_links(
     db_session: AsyncSession,
+    session_factory,
     sample_categories: list[Category],
     sample_source: NewsSource,
 ) -> None:
     """AI analysis should create article_keywords links for matched keywords."""
-    # Create keywords with category_id (1:N)
     cat_id = sample_categories[0].id
     kw1 = Keyword(name="Quantum Computing", category_id=cat_id)
     kw2 = Keyword(name="Error Correction", category_id=cat_id)
@@ -490,13 +404,14 @@ async def test_analyze_article_saves_keyword_links(
         )
     )
 
-    result = await analyze_article(db_session, article, mock_analyzer)
-    await db_session.commit()
-
-    assert result is not None
+    svc = ArticleAnalysisService(session_factory)
+    result = await svc.execute(article.id, mock_analyzer)
+    assert result.status == "created"
 
     # Verify keyword links were created
-    stmt = select(ArticleKeyword).where(ArticleKeyword.article_analysis_id == result.id)
+    stmt = select(ArticleKeyword).where(
+        ArticleKeyword.article_analysis_id == result.analysis_id,
+    )
     links = (await db_session.execute(stmt)).scalars().all()
     assert len(links) == 2
 
