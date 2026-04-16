@@ -1,4 +1,4 @@
-"""Admin endpoints for pipeline operations (fetch, embed)."""
+"""パイプライン操作（fetch, embed）用の管理者エンドポイント。"""
 
 from typing import Annotated
 
@@ -24,7 +24,7 @@ router = APIRouter(prefix="/pipeline", tags=["admin:pipeline"])
 async def fetch_news(
     body: FetchRequest | None = None,
 ) -> FetchResponse:
-    """Enqueue a news fetch task. Returns immediately with a task ID."""
+    """ニュース取得タスクをキュー投入し、タスク ID を即座に返す。"""
     from app.tasks.collection_tasks import fetch_metadata
 
     source_ids = body.source_ids if body else None
@@ -40,12 +40,12 @@ async def fetch_news(
     "/embed",
     response_model=EmbedResponse,
     status_code=status.HTTP_202_ACCEPTED,
-    summary="Dispatch embedding tasks for analyses that are missing them",
+    summary="埋め込み未生成の分析に対して埋め込みタスクをディスパッチする",
 )
 async def embed_news(
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> EmbedResponse:
-    """Enqueue generate_embedding tasks for all articles missing embeddings."""
+    """埋め込み未生成の全記事に対して generate_embedding タスクを投入する。"""
     from app.tasks.analysis_tasks import generate_embedding
 
     repo = PipelineRepository(session)

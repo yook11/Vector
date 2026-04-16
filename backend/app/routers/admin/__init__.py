@@ -1,8 +1,8 @@
-"""Admin router package.
+"""管理者用ルーターパッケージ。
 
-Aggregates admin-only sub-routers under /api/v1/admin/*.
-Router-level get_admin_user dependency enforces admin auth for every endpoint
-in this package. Individual endpoints must NOT repeat the dependency.
+管理者専用のサブルーターを /api/v1/admin/* 配下に集約する。
+ルーターレベルの get_admin_user 依存がこのパッケージ内の全エンドポイントで
+管理者認証を強制する。個別エンドポイントで同依存を重複指定しないこと。
 """
 
 from fastapi import APIRouter, Depends

@@ -1,4 +1,4 @@
-"""Endpoints for the authenticated user (watchlist)."""
+"""認証ユーザー向けエンドポイント（ウォッチリスト）。"""
 
 from typing import Annotated
 

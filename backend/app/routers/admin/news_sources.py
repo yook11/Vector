@@ -1,4 +1,4 @@
-"""CRUD endpoints for news_sources management."""
+"""news_sources 管理のための CRUD エンドポイント。"""
 
 from typing import Annotated
 
@@ -27,7 +27,7 @@ def get_news_source_service(
 async def list_news_sources(
     service: Annotated[NewsSourceService, Depends(get_news_source_service)],
 ) -> NewsSourceDetailList:
-    """List all news sources."""
+    """全ニュースソースを一覧取得する。"""
     return await service.get_all()
 
 
@@ -36,7 +36,7 @@ async def create_news_source(
     body: NewsSourceCreate,
     service: Annotated[NewsSourceService, Depends(get_news_source_service)],
 ) -> NewsSourceDetail:
-    """Create a new news source."""
+    """新しいニュースソースを作成する。"""
     return await service.create_source(body)
 
 
@@ -45,7 +45,7 @@ async def delete_news_source(
     source_id: int,
     service: Annotated[NewsSourceService, Depends(get_news_source_service)],
 ) -> None:
-    """Delete a news source."""
+    """ニュースソースを削除する。"""
     await service.delete_source(source_id)
 
 
@@ -54,7 +54,7 @@ async def activate_source(
     source_id: int,
     service: Annotated[NewsSourceService, Depends(get_news_source_service)],
 ) -> NewsSourceDetail:
-    """Activate a news source."""
+    """ニュースソースを有効化する。"""
     return await service.activate_source(source_id)
 
 
@@ -63,5 +63,5 @@ async def deactivate_source(
     source_id: int,
     service: Annotated[NewsSourceService, Depends(get_news_source_service)],
 ) -> NewsSourceDetail:
-    """Deactivate a news source."""
+    """ニュースソースを無効化する。"""
     return await service.deactivate_source(source_id)

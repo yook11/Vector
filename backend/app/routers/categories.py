@@ -19,5 +19,5 @@ def get_category_service(
 async def list_categories(
     service: CategoryService = Depends(get_category_service),
 ) -> CategoryDetailList:
-    """List all categories with nested keywords and article counts."""
+    """全カテゴリをネストされたキーワードと記事件数付きで一覧取得する。"""
     return await service.list_categories()
