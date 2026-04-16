@@ -1,4 +1,4 @@
-"""Tests for EmbeddingService (DB integration tests)."""
+"""EmbeddingService のテスト (DB 統合テスト)。"""
 
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
@@ -15,7 +15,7 @@ from app.models.news_source import NewsSource
 
 
 def _mock_embedder(vector: list[float] | None = None) -> MagicMock:
-    """Create a mock embedder that returns a fixed vector."""
+    """固定ベクトルを返すモック embedder を作成する。"""
     embedder = MagicMock(spec=BaseEmbedder)
     embedder.MODEL = "gemini-embedding-001"
     embedder.model_name = "gemini-embedding-001"
@@ -30,7 +30,7 @@ async def test_embedding_creates_vector(
     session_factory,
     sample_source: NewsSource,
 ) -> None:
-    """EmbeddingService should persist embedding on existing analysis."""
+    """EmbeddingService は既存分析に対して embedding を永続化する。"""
     article = NewsArticle(
         original_title="Test Article",
         original_url="https://example.com/embed-test",
@@ -61,7 +61,7 @@ async def test_embedding_creates_vector(
     assert result.status == "created"
     embedder.embed_document.assert_called_once()
 
-    # Verify persisted embedding (Service committed in its own session)
+    # 永続化された embedding を確認 (Service は独自セッションで commit 済み)
     db_session.expire_all()
     stmt = select(ArticleAnalysis).where(
         ArticleAnalysis.news_article_id == article_id,
@@ -77,7 +77,7 @@ async def test_embedding_idempotency(
     session_factory,
     sample_source: NewsSource,
 ) -> None:
-    """Already-embedded analysis returns already_exists without calling API."""
+    """embedding 済み分析は API を呼ばずに already_exists を返す。"""
     article = NewsArticle(
         original_title="Already Embedded",
         original_url="https://example.com/idempotent",
@@ -114,7 +114,7 @@ async def test_embedding_no_analysis_raises(
     session_factory,
     sample_source: NewsSource,
 ) -> None:
-    """Missing analysis raises ValueError."""
+    """分析が存在しない場合は ValueError を送出する。"""
     article = NewsArticle(
         original_title="No Analysis",
         original_url="https://example.com/no-analysis",

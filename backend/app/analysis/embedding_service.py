@@ -1,4 +1,4 @@
-"""Embedding service — vector generation and DB persistence."""
+"""Embedding サービス — ベクトル生成と DB 永続化を担う。"""
 
 from __future__ import annotations
 
@@ -17,59 +17,59 @@ logger = structlog.get_logger(__name__)
 
 @dataclass(frozen=True)
 class EmbeddingResult:
-    """Result of embedding generation use case."""
+    """埋め込み生成ユースケースの結果。"""
 
     status: Literal["created", "already_exists"]
 
 
 def build_embed_text(article: NewsArticle) -> str:
-    """Build the canonical text to embed for a news article."""
+    """記事を埋め込み対象とする際の正規テキストを組み立てる。"""
     body = article.original_content or article.original_description or ""
     return f"{article.original_title}\n{body}"
 
 
 class EmbeddingService:
-    """Atomic use case: generate embedding for a single article and persist.
+    """1 記事の埋め込み生成と永続化を行うアトミックなユースケース。
 
-    Session management is internal — callers provide only a session factory.
+    セッションの管理はサービス内部で完結し、呼び出し側は session factory のみ渡す。
     """
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
 
     async def execute(self, article_id: int, embedder: BaseEmbedder) -> EmbeddingResult:
-        """Generate embedding for a single article's analysis.
+        """1 記事の analysis に対する埋め込みベクトルを生成する。
 
         Returns:
-            EmbeddingResult with status.
+            status を含む EmbeddingResult。
 
         Raises:
-            AnalysisDomainError subclasses — caller must handle retry decisions.
+            AnalysisDomainError のサブクラス。リトライ判断は呼び出し側の責務。
         """
         async with self._session_factory() as session:
             repo = AnalysisRepository(session)
 
-            # Analysis must exist (chained from analyze_article)
+            # analysis は事前に生成済みである前提（analyze_article から連鎖される）
             analysis = await repo.find_by_article_id(article_id)
             if analysis is None:
                 msg = f"No analysis found for article {article_id}"
                 raise ValueError(msg)
 
-            # Idempotency check
+            # 冪等性チェック
             if analysis.embedding is not None:
                 return EmbeddingResult("already_exists")
 
-            # Fetch article for text
+            # 埋め込み対象テキスト用に記事を取得
             article = await repo.get_article(article_id)
             if article is None:
                 msg = f"Article {article_id} not found"
                 raise ValueError(msg)
 
-            # Generate embedding (all errors propagate to Task)
+            # 埋め込み生成（エラーはすべて Task 層まで伝播させる）
             text = build_embed_text(article)
             vector = await embedder.embed_document(text)
 
-            # Persist
+            # 永続化
             await repo.save_embedding(analysis, vector, embedder.MODEL)
             await session.commit()
 

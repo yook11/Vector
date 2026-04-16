@@ -1,4 +1,4 @@
-"""Tests for /api/v1/me/watchlist router endpoints."""
+"""/api/v1/me/watchlist ルーターエンドポイントのテスト。"""
 
 from datetime import UTC, datetime
 
@@ -15,7 +15,7 @@ from app.models.news_source import NewsSource
 async def sample_article(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> NewsArticle:
-    """Create a test news article with analysis."""
+    """分析付きのテスト用ニュース記事を作成する。"""
     article = NewsArticle(
         original_title="Test Article",
         original_url="https://example.com/test",
@@ -44,7 +44,7 @@ async def sample_article(
 async def second_article(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> NewsArticle:
-    """Create a second test news article with analysis."""
+    """分析付きの 2 件目のテスト用ニュース記事を作成する。"""
     article = NewsArticle(
         original_title="Second Article",
         original_url="https://example.com/second",
@@ -125,7 +125,7 @@ class TestListWatchlist:
         assert data["totalPages"] == 2
 
     async def test_missing_auth_headers(self, client: AsyncClient) -> None:
-        """Missing required headers return 422 (FastAPI type validation)."""
+        """必須ヘッダーが無い場合は 422 (FastAPI の型バリデーション)。"""
         resp = await client.get("/api/v1/me/watchlist")
         assert resp.status_code == 422
 
@@ -184,7 +184,7 @@ class TestRemoveFromWatchlist:
         )
         assert resp.status_code == 204
 
-        # Verify it's gone
+        # 削除されたことを確認
         resp = await authed_client.get("/api/v1/me/watchlist")
         assert resp.json()["total"] == 0
 

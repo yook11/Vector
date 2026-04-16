@@ -1,5 +1,5 @@
-"""Search domain errors."""
+"""Search ドメインのエラー定義。"""
 
 
 class SearchError(Exception):
-    """Raised when a search operation fails (e.g. embedding generation)."""
+    """検索処理が失敗したときに送出される(例: embedding 生成失敗)。"""

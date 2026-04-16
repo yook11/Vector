@@ -1,7 +1,7 @@
-"""Global exception handlers for domain exceptions.
+"""ドメイン例外に対するグローバル例外ハンドラ。
 
-Each handler converts a domain exception to an appropriate HTTP response.
-Registered in main.py via app.add_exception_handler().
+各ハンドラはドメイン例外を対応する HTTP レスポンスに変換する。
+main.py の ``app.add_exception_handler()`` で登録する。
 """
 
 from fastapi import Request

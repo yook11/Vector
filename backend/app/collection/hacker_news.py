@@ -1,4 +1,4 @@
-"""Hacker News fetcher — Algolia HN Search API client."""
+"""Hacker News フェッチャ — Algolia HN Search API クライアント。"""
 
 from dataclasses import dataclass
 from datetime import datetime
@@ -22,7 +22,7 @@ logger = structlog.get_logger(__name__)
 
 @dataclass
 class HNStory:
-    """Intermediate representation of a Hacker News story."""
+    """Hacker News ストーリーの中間表現。"""
 
     object_id: str
     title: str
@@ -35,7 +35,7 @@ class HNStory:
 
 
 class HackerNewsClient:
-    """Algolia HN Search API client."""
+    """Algolia HN Search API クライアント。"""
 
     def __init__(self, http_client: httpx.AsyncClient) -> None:
         self.http_client = http_client
@@ -45,14 +45,15 @@ class HackerNewsClient:
         self,
         since_timestamp: int | None = None,
     ) -> list[HNStory]:
-        """Fetch recent stories from Algolia HN Search API.
+        """Algolia HN Search API から最近のストーリーを取得する。
 
         Args:
-            since_timestamp: Unix timestamp. Only fetch stories created after this.
-                             None for first fetch (no time filter).
+            since_timestamp: Unix タイムスタンプ。これ以降に作成された
+                             ストーリーのみ取得する。初回は ``None``
+                             （時間フィルタなし）。
 
         Returns:
-            List of HNStory (stories without external URL are excluded).
+            HNStory のリスト（外部 URL を持たないストーリーは除外）。
         """
         params: dict[str, str | int] = {
             "tags": "story",
@@ -98,14 +99,14 @@ class HackerNewsClient:
         source: NewsSource,
         session: AsyncSession,
     ) -> SourceFetchResult:
-        """Fetch HN stories and save to news_articles.
+        """HN のストーリーを取得し news_articles に保存する。
 
-        - Deduplication via batch URL checks (same pattern as RSS fetcher)
-        - Returns SourceFetchResult with new/skipped counts
+        - URL の一括突合で重複排除する（RSS フェッチャと同パターン）
+        - 新規/スキップ件数を含む SourceFetchResult を返す
         """
         result = SourceFetchResult(source_id=source.id)
 
-        # Derive last fetch time from fetch_logs
+        # fetch_logs から直近フェッチ時刻を導出
         last_fetched = await get_last_successful_fetch_at(session, source.id)
         since_timestamp: int | None = None
         if last_fetched:
@@ -132,7 +133,7 @@ class HackerNewsClient:
             logger.info("hn_no_new_stories", source=source.name)
             return result
 
-        # Batch dedup: check existing URLs
+        # 一括重複排除: 既存 URL を確認
         urls = [s.url for s in stories]
         existing_urls: set[str] = set()
 
@@ -146,7 +147,7 @@ class HackerNewsClient:
             # TODO: SafeUrl の __eq__ が str と互換になれば str() 不要
             existing_urls.update(str(row[0]) for row in rows.all())
 
-        # Create new articles
+        # 新規記事を作成
         max_new = settings.max_articles_per_fetch
         new_count = 0
 

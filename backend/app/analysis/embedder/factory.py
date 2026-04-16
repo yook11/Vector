@@ -1,4 +1,4 @@
-"""Embedder factory."""
+"""Embedder のファクトリ。"""
 
 from __future__ import annotations
 
@@ -7,10 +7,10 @@ from app.config import settings
 
 
 def get_embedder() -> BaseEmbedder:
-    """Factory: return an embedder instance based on settings.ai_provider.
+    """``settings.ai_provider`` に応じた embedder インスタンスを返すファクトリ。
 
     Raises:
-        ValueError: If ai_provider is not supported.
+        ValueError: サポートされていない ai_provider が指定された場合。
     """
     provider = settings.ai_provider.lower()
     if provider == "gemini":

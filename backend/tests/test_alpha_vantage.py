@@ -1,4 +1,4 @@
-"""Tests for Alpha Vantage News Sentiment API client."""
+"""Alpha Vantage News Sentiment API クライアントのテスト。"""
 
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -40,13 +40,13 @@ SAMPLE_AV_RESPONSE = {
 
 
 def test_parse_av_time_with_seconds() -> None:
-    """Parse standard YYYYMMDDTHHMMSS format."""
+    """標準の YYYYMMDDTHHMMSS 形式をパースする。"""
     result = _parse_av_time("20260305T143000")
     assert result == datetime(2026, 3, 5, 14, 30, 0, tzinfo=UTC)
 
 
 def test_parse_av_time_without_seconds() -> None:
-    """Parse fallback YYYYMMDDTHHMM format."""
+    """フォールバックの YYYYMMDDTHHMM 形式をパースする。"""
     result = _parse_av_time("20260305T1430")
     assert result == datetime(2026, 3, 5, 14, 30, 0, tzinfo=UTC)
 
@@ -56,7 +56,7 @@ async def test_av_fetch_skips_when_no_api_key(
     db_session: AsyncSession,
     sample_av_source: NewsSource,
 ) -> None:
-    """When av_api_key is empty, fetch is skipped (not an error)."""
+    """av_api_key が空の場合、fetch はスキップされる (エラーではない)。"""
     mock_http = AsyncMock(spec=httpx.AsyncClient)
 
     with patch("app.collection.alpha_vantage.settings") as mock_settings:
@@ -76,7 +76,7 @@ async def test_av_fetch_saves_articles(
     db_session: AsyncSession,
     sample_av_source: NewsSource,
 ) -> None:
-    """Successful AV fetch creates NewsArticle records."""
+    """AV fetch が成功すると NewsArticle レコードが作成される。"""
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.json.return_value = SAMPLE_AV_RESPONSE
@@ -100,7 +100,7 @@ async def test_av_fetch_saves_articles(
     assert result.new_count == 2
     assert result.skipped_count == 0
 
-    # Verify articles in DB
+    # DB 内の記事を確認
     await db_session.commit()
     stmt = select(NewsArticle).where(NewsArticle.news_source_id == sample_av_source.id)
     rows = await db_session.execute(stmt)
@@ -121,8 +121,8 @@ async def test_av_fetch_skips_duplicates(
     db_session: AsyncSession,
     sample_av_source: NewsSource,
 ) -> None:
-    """Already existing articles are skipped."""
-    # Pre-insert one article
+    """既に存在する記事はスキップされる。"""
+    # 1 件の記事を事前登録
     existing_url = "https://example.com/article-1"
     existing = NewsArticle(
         original_title="Existing",
@@ -160,7 +160,7 @@ async def test_av_fetch_handles_api_error_response(
     db_session: AsyncSession,
     sample_av_source: NewsSource,
 ) -> None:
-    """AV API returns HTTP 200 with Information field on error."""
+    """AV API はエラー時も HTTP 200 で Information フィールドを返す。"""
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.json.return_value = {
@@ -190,7 +190,7 @@ async def test_av_fetch_handles_http_error(
     db_session: AsyncSession,
     sample_av_source: NewsSource,
 ) -> None:
-    """HTTP errors are handled gracefully."""
+    """HTTP エラーが適切にハンドリングされる。"""
     mock_http = AsyncMock(spec=httpx.AsyncClient)
     mock_http.get = AsyncMock(
         side_effect=httpx.HTTPStatusError(
@@ -219,10 +219,10 @@ async def test_av_fetch_quota_exceeded(
     db_session: AsyncSession,
     sample_av_source: NewsSource,
 ) -> None:
-    """Fetch is blocked when daily quota is exceeded."""
+    """日次クォータ超過時は fetch がブロックされる。"""
     from app.models.fetch_log import FetchLog, FetchStatus
 
-    # Insert enough fetch logs to exceed quota
+    # クォータを超過するのに十分な fetch ログを挿入
     now = datetime.now(UTC)
     for _ in range(25):
         log = FetchLog(

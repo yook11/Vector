@@ -1,4 +1,4 @@
-"""Alpha Vantage News Sentiment API client."""
+"""Alpha Vantage News Sentiment API クライアント。"""
 
 from datetime import UTC, datetime
 
@@ -22,12 +22,12 @@ logger = structlog.get_logger(__name__)
 
 
 def _parse_av_time(time_str: str) -> datetime:
-    """Parse Alpha Vantage time_published string to UTC datetime.
+    """Alpha Vantage の time_published 文字列を UTC datetime に変換する。
 
-    Standard format: YYYYMMDDTHHMMSS (15 chars, with seconds).
-    Fallback: YYYYMMDDTHHMM (13 chars, without seconds).
+    標準形式: YYYYMMDDTHHMMSS（15 文字、秒あり）。
+    フォールバック: YYYYMMDDTHHMM（13 文字、秒なし）。
     """
-    # Use length to disambiguate since strptime may parse %M/%S as 1 digit
+    # strptime は %M/%S を 1 桁でも受け付けてしまうため、長さで判別する
     t_pos = time_str.find("T")
     time_part = time_str[t_pos + 1 :] if t_pos >= 0 else ""
     if len(time_part) >= 6:
@@ -36,7 +36,7 @@ def _parse_av_time(time_str: str) -> datetime:
 
 
 class AlphaVantageClient:
-    """Alpha Vantage News Sentiment API client."""
+    """Alpha Vantage News Sentiment API クライアント。"""
 
     def __init__(self, http_client: httpx.AsyncClient) -> None:
         self.http_client = http_client
@@ -46,7 +46,7 @@ class AlphaVantageClient:
     async def _check_daily_quota(
         self, source: NewsSource, session: AsyncSession
     ) -> bool:
-        """Return True if daily quota has NOT been exceeded."""
+        """日次クォータを超過していなければ True を返す。"""
         today_start = datetime.now(UTC).replace(
             hour=0, minute=0, second=0, microsecond=0
         )
@@ -67,10 +67,10 @@ class AlphaVantageClient:
         source: NewsSource,
         session: AsyncSession,
     ) -> SourceFetchResult:
-        """Fetch AV news articles and save to news_articles.
+        """Alpha Vantage のニュース記事を取得し news_articles に保存する。
 
-        - Deduplication via batch URL checks (same pattern as RSS/HN)
-        - Returns SourceFetchResult with new/skipped counts
+        - URL の一括突合で重複排除する（RSS/HN と同パターン）
+        - 新規/スキップ件数を含む SourceFetchResult を返す
         """
         result = SourceFetchResult(source_id=source.id)
 
@@ -78,14 +78,14 @@ class AlphaVantageClient:
             logger.info("av_skipped_no_api_key", source=source.name)
             return result
 
-        # Check daily quota
+        # 日次クォータをチェック
         if not await self._check_daily_quota(source, session):
             logger.warning("av_daily_quota_exceeded", source=source.name)
             result.success = False
             result.error_message = "Daily API quota exceeded"
             return result
 
-        # Derive last fetch time from fetch_logs
+        # fetch_logs から直近フェッチ時刻を導出
         last_fetched = await get_last_successful_fetch_at(session, source.id)
 
         params: dict[str, str | int] = {
@@ -120,7 +120,7 @@ class AlphaVantageClient:
 
         data = response.json()
 
-        # AV returns HTTP 200 with {"Information": "..."} on errors
+        # AV はエラー時も HTTP 200 + {"Information": "..."} を返す
         if "Information" in data:
             logger.error("av_api_error", source=source.name, info=data["Information"])
             result.success = False
@@ -132,7 +132,7 @@ class AlphaVantageClient:
             logger.info("av_no_articles", source=source.name)
             return result
 
-        # Build URLs for batch dedup
+        # 一括重複排除用に URL を組み立てる
         articles_data: list[tuple[dict, str]] = []
         for item in feed:
             url = item.get("url", "")
@@ -156,7 +156,7 @@ class AlphaVantageClient:
             # TODO: SafeUrl の __eq__ が str と互換になれば str() 不要
             existing_urls.update(str(row[0]) for row in rows.all())
 
-        # Create new articles
+        # 新規記事を作成
         max_new = settings.max_articles_per_fetch
         new_count = 0
         now = datetime.now(UTC)

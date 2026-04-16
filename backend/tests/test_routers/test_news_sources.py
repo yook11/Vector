@@ -1,4 +1,4 @@
-"""Tests for the news_sources CRUD API."""
+"""news_sources CRUD API のテスト。"""
 
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,7 +40,7 @@ async def test_list_news_sources(
 async def test_list_news_sources_forbidden_for_non_admin(
     authed_client: AsyncClient,
 ) -> None:
-    """Non-admin users get 403 on the management list endpoint."""
+    """非管理者は管理用リストエンドポイントで 403 を受け取る。"""
     response = await authed_client.get("/api/v1/admin/sources")
     assert response.status_code == 403
 
@@ -112,7 +112,7 @@ async def test_delete_news_source(
     response = await admin_client.delete(f"/api/v1/admin/sources/{sample_source.id}")
     assert response.status_code == 204
 
-    # Verify deleted
+    # 削除されたことを確認
     stmt = select(NewsSource).where(NewsSource.id == sample_source.id)
     result = await db_session.execute(stmt)
     assert result.scalar_one_or_none() is None
@@ -173,6 +173,6 @@ async def test_deactivate_source_not_found(
 async def test_missing_auth_headers(
     client: AsyncClient,
 ) -> None:
-    """Missing required headers return 422 (FastAPI type validation)."""
+    """必須ヘッダーが無い場合は 422 (FastAPI の型バリデーション)。"""
     response = await client.get("/api/v1/admin/sources")
     assert response.status_code == 422

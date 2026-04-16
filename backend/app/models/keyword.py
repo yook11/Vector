@@ -50,7 +50,7 @@ class Keyword(Base):
         DateTime(timezone=True), server_default=func.now()
     )
 
-    # Relationships (same Base — OK)
+    # リレーション（同一 Base のため OK）
     category: Mapped[Category] = relationship(back_populates="keywords")
     article_keywords: Mapped[list[ArticleKeyword]] = relationship(
         back_populates="keyword"

@@ -1,4 +1,4 @@
-"""Tests for the Redis ZSET sliding-window rate limiter."""
+"""Redis ZSET スライディングウィンドウ方式のレートリミッターのテスト。"""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -8,7 +8,7 @@ from app.analysis.rate_limiter import RateLimiter, RateLimitExceededError
 
 
 def _make_mock_redis(script_results: list[list]) -> MagicMock:
-    """Create a mock Redis client with a scripted register_script."""
+    """register_script をスクリプト化したモック Redis クライアントを作成する。"""
     mock_redis = MagicMock()
     mock_script = AsyncMock(side_effect=script_results)
     mock_redis.register_script.return_value = mock_script
@@ -17,17 +17,17 @@ def _make_mock_redis(script_results: list[list]) -> MagicMock:
 
 @pytest.mark.asyncio
 async def test_acquire_succeeds_when_under_limit() -> None:
-    """Slot available: script returns [1, 0, now] and acquire returns."""
+    """空きあり: スクリプトが [1, 0, now] を返し acquire が成功する。"""
     mock_redis = _make_mock_redis([[1, 0, "1000.0"]])
     limiter = RateLimiter(
         redis=mock_redis, key="test:rpm", max_requests=10, window_seconds=60
     )
-    await limiter.acquire()  # should not raise
+    await limiter.acquire()  # 例外を送出しないこと
 
 
 @pytest.mark.asyncio
 async def test_acquire_raises_when_non_blocking_and_full() -> None:
-    """Non-blocking mode raises RateLimitExceededError at capacity."""
+    """非ブロックモードでは上限到達時に RateLimitExceededError を送出する。"""
     mock_redis = _make_mock_redis([[0, "990.0", "1000.0"]])
     limiter = RateLimiter(
         redis=mock_redis,
@@ -42,11 +42,11 @@ async def test_acquire_raises_when_non_blocking_and_full() -> None:
 
 @pytest.mark.asyncio
 async def test_acquire_blocking_waits_then_succeeds() -> None:
-    """Blocking mode: first call full, second call succeeds after sleep."""
+    """ブロックモード: 初回は満杯、sleep 後の 2 回目で成功する。"""
     mock_redis = _make_mock_redis(
         [
-            [0, "999.0", "1000.0"],  # first: at capacity
-            [1, 0, "1060.1"],  # second: slot freed
+            [0, "999.0", "1000.0"],  # 1 回目: 満杯
+            [1, 0, "1060.1"],  # 2 回目: 空きができた
         ]
     )
     limiter = RateLimiter(
@@ -55,13 +55,13 @@ async def test_acquire_blocking_waits_then_succeeds() -> None:
     with patch("app.analysis.rate_limiter.asyncio.sleep", AsyncMock()) as mock_sleep:
         await limiter.acquire()
 
-    # Should have slept once: (999.0 + 60) - 1000.0 = 59.0
+    # sleep は 1 回: (999.0 + 60) - 1000.0 = 59.0 であるはず
     mock_sleep.assert_called_once_with(59.0)
 
 
 @pytest.mark.asyncio
 async def test_lua_script_receives_correct_args() -> None:
-    """Verify the Lua script is called with the right keys and args."""
+    """Lua スクリプトが正しい keys と args で呼び出されることを検証する。"""
     mock_redis = _make_mock_redis([[1, 0, "1000.0"]])
     limiter = RateLimiter(
         redis=mock_redis, key="ratelimit:model:rpm", max_requests=500, window_seconds=60
@@ -76,7 +76,7 @@ async def test_lua_script_receives_correct_args() -> None:
     call_kwargs = script.call_args
     assert call_kwargs.kwargs["keys"] == ["ratelimit:model:rpm"]
     args = call_kwargs.kwargs["args"]
-    assert args[0] == 500  # max_requests
-    assert args[1] == 60  # window_seconds
-    assert args[2] == "abc123"  # member
-    assert args[3] == 120  # ttl = 60 + 60
+    assert args[0] == 500  # max_requests であること
+    assert args[1] == 60  # window_seconds であること
+    assert args[2] == "abc123"  # member であること
+    assert args[3] == 120  # ttl = 60 + 60 であること

@@ -1,7 +1,7 @@
-"""Value objects for the Keyword entity.
+"""Keyword エンティティの値オブジェクト。
 
-KeywordName: A tag representing a specific technology or theme within a sector.
-Examples: "large language model", "AI/ML", "C++", "Node.js", "量子エラー訂正"
+KeywordName: セクター内の特定技術やテーマを表すタグ。
+例: "large language model", "AI/ML", "C++", "Node.js", "量子エラー訂正"
 """
 
 from __future__ import annotations
@@ -16,13 +16,14 @@ _KEYWORD_MAX_LENGTH = 100
 
 
 class KeywordName(RootModel[str]):
-    """Tag name for a technology or theme within a sector.
+    """セクター内の技術やテーマを表すタグ名。
 
     Invariants:
-    - Contains at least one word character (\\w)
-    - Only word chars (Unicode), spaces, hyphens, dots, &, /, +, #
-    - 1-100 characters after trimming
-    - Immutable after creation
+    - 少なくとも 1 つのワード文字 (\\w) を含む
+    - 使用可能文字は Unicode ワード文字・空白・ハイフン・ドット・
+      &・/・+・#
+    - トリム後 1-100 文字
+    - 生成後は不変
     """
 
     model_config = ConfigDict(frozen=True)
@@ -53,7 +54,7 @@ class KeywordName(RootModel[str]):
 
     @property
     def value(self) -> str:
-        """Backward compat — prefer .root in new code."""
+        """後方互換用。新規コードでは .root を使用すること。"""
         return self.root
 
     def __str__(self) -> str:

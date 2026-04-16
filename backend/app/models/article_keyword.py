@@ -24,7 +24,7 @@ class ArticleKeyword(Base):
         primary_key=True,
     )
 
-    # Relationships
+    # リレーション
     keyword: Mapped[Keyword] = relationship(back_populates="article_keywords")
     article_analysis: Mapped[ArticleAnalysis] = relationship(
         back_populates="article_keywords"

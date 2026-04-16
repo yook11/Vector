@@ -1,4 +1,4 @@
-"""Tests for SafeUrl value object."""
+"""SafeUrl 値オブジェクトのテスト。"""
 
 import json
 

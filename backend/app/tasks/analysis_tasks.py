@@ -1,4 +1,4 @@
-"""Analysis tasks — AI-powered article analysis and vector embedding."""
+"""分析タスク — AI による記事分析とベクトル埋め込み生成。"""
 
 from __future__ import annotations
 
@@ -42,10 +42,10 @@ def _build_limiters(
     rpm: int | None,
     rpd: int | None,
 ) -> tuple[RateLimiter | None, RateLimiter | None]:
-    """Build RPM and RPD rate limiters for a model.
+    """モデル用の RPM / RPD レートリミッターを構築する。
 
     Returns:
-        (rpm_limiter, rpd_limiter) tuple. Either may be None.
+        (rpm_limiter, rpd_limiter) のタプル。どちらも None になりうる。
     """
     from app.analysis.rate_limiter import RateLimiter
     from app.redis import get_redis
@@ -88,11 +88,11 @@ async def analyze_article(
     article_id: int,
     ctx: Context = TaskiqDepends(),
 ) -> None:
-    """Run AI analysis on a single article."""
+    """単一記事に対して AI 分析を実行する。"""
     session_factory = ctx.state.session_factory
     analyzer = get_analyzer()
 
-    # Rate limit acquire (caller's responsibility)
+    # Rate limit acquire は呼び出し側の責任
     rpm_limiter, rpd_limiter = _build_limiters(
         analyzer.MODEL, analyzer.RPM, analyzer.RPD
     )
@@ -105,7 +105,7 @@ async def analyze_article(
         logger.warning("analyze_article_daily_quota", article_id=article_id)
         return
 
-    # Service call (session managed internally)
+    # Service 呼び出し（session は内部で管理）
     svc = ArticleAnalysisService(session_factory)
     try:
         result = await svc.execute(article_id, analyzer)
@@ -133,7 +133,7 @@ async def analyze_article(
             return
         raise
 
-    # Chain to next step
+    # 次ステップへチェーン
     if result.status in ("created", "already_exists"):
         await generate_embedding.kiq(article_id)
 
@@ -153,11 +153,11 @@ async def generate_embedding(
     article_id: int,
     ctx: Context = TaskiqDepends(),
 ) -> None:
-    """Generate vector embedding for a single article's analysis."""
+    """単一記事の分析結果に対してベクトル埋め込みを生成する。"""
     session_factory = ctx.state.session_factory
     embedder = get_embedder()
 
-    # Rate limit acquire (caller's responsibility)
+    # Rate limit acquire は呼び出し側の責任
     rpm_limiter, rpd_limiter = _build_limiters(
         embedder.MODEL, embedder.RPM, embedder.RPD
     )
@@ -170,7 +170,7 @@ async def generate_embedding(
         logger.warning("generate_embedding_daily_quota", article_id=article_id)
         return
 
-    # Service call (session managed internally)
+    # Service 呼び出し（session は内部で管理）
     svc = EmbeddingService(session_factory)
     try:
         await svc.execute(article_id, embedder)

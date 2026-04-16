@@ -1,4 +1,4 @@
-"""Tests for Category value objects (CategorySlug, CategoryName)."""
+"""Category 値オブジェクト (CategorySlug, CategoryName) のテスト。"""
 
 import json
 
@@ -15,11 +15,11 @@ class TestCategorySlug:
     def test_valid_slug(self) -> None:
         slug = CategorySlug("ai_ml")
         assert slug.root == "ai_ml"
-        assert slug.value == "ai_ml"  # backward compat
+        assert slug.value == "ai_ml"  # 後方互換用
         assert str(slug) == "ai_ml"
 
     def test_numeric_start(self) -> None:
-        """Digit-first slugs are valid (e.g. 5g_telecom)."""
+        """数字始まりの slug は有効 (例: 5g_telecom)。"""
         slug = CategorySlug("5g_telecom")
         assert slug.root == "5g_telecom"
 
@@ -99,7 +99,7 @@ class TestCategoryName:
     def test_valid_japanese(self) -> None:
         name = CategoryName("AI・ML")
         assert name.root == "AI・ML"
-        assert name.value == "AI・ML"  # backward compat
+        assert name.value == "AI・ML"  # 後方互換用
         assert str(name) == "AI・ML"
 
     def test_valid_ascii(self) -> None:
@@ -175,14 +175,14 @@ class TestCategoryName:
 # Pydantic Integration Tests
 # ---------------------------------------------------------------------------
 class TestPydanticIntegration:
-    """Verify value objects work as Pydantic model fields."""
+    """値オブジェクトが Pydantic モデルのフィールドとして機能することを確認する。"""
 
     class SampleModel(BaseModel):
         slug: CategorySlug
         name: CategoryName
 
     def test_model_from_str(self) -> None:
-        """String inputs are validated and converted to value objects."""
+        """文字列入力はバリデートされ値オブジェクトへ変換される。"""
         m = self.SampleModel(slug="ai_ml", name="AI・ML")
         assert isinstance(m.slug, CategorySlug)
         assert isinstance(m.name, CategoryName)
@@ -190,7 +190,7 @@ class TestPydanticIntegration:
         assert m.name.root == "AI・ML"
 
     def test_model_from_value_object(self) -> None:
-        """Value object inputs are accepted as-is."""
+        """値オブジェクトを入力するとそのまま受け入れられる。"""
         slug = CategorySlug("ai_ml")
         name = CategoryName("AI・ML")
         m = self.SampleModel(slug=slug, name=name)
@@ -198,7 +198,7 @@ class TestPydanticIntegration:
         assert isinstance(m.name, CategoryName)
 
     def test_model_dump_unwraps_to_str(self) -> None:
-        """model_dump() returns plain strings, not nested objects."""
+        """model_dump() はネストしたオブジェクトではなく素の文字列を返す。"""
         m = self.SampleModel(slug="ai_ml", name="AI・ML")
         data = m.model_dump()
         assert data == {"slug": "ai_ml", "name": "AI・ML"}
@@ -206,7 +206,7 @@ class TestPydanticIntegration:
         assert isinstance(data["name"], str)
 
     def test_model_dump_json(self) -> None:
-        """JSON serialization produces flat strings."""
+        """JSON シリアライズはフラットな文字列を生成する。"""
         m = self.SampleModel(slug="ai_ml", name="AI・ML")
         data = json.loads(m.model_dump_json())
         assert data["slug"] == "ai_ml"
@@ -221,17 +221,17 @@ class TestPydanticIntegration:
             self.SampleModel(slug="ai_ml", name="<script>alert(1)</script>")
 
     def test_json_schema_is_string_type(self) -> None:
-        """OpenAPI / JSON Schema should show type: string."""
+        """OpenAPI / JSON Schema では type: string と表示されるべき。"""
         schema = self.SampleModel.model_json_schema()
-        # RootModel generates $ref + $defs; verify the resolved type
+        # RootModel は $ref + $defs を生成するので解決後の型を検証
         assert schema["$defs"]["CategorySlug"]["type"] == "string"
         assert schema["$defs"]["CategoryName"]["type"] == "string"
 
     def test_from_attributes(self) -> None:
-        """Simulate ORM → schema conversion with from_attributes=True."""
+        """from_attributes=True での ORM → schema 変換をシミュレートする。"""
 
         class OrmLike:
-            """Mimics a SQLModel row with plain str attributes."""
+            """素の str 属性を持つ SQLModel 行を模したクラス。"""
 
             def __init__(self, slug: str, name: str) -> None:
                 self.slug = slug

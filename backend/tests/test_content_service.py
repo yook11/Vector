@@ -1,4 +1,4 @@
-"""Tests for ContentFetchService (DB integration tests)."""
+"""ContentFetchService のテスト (DB 統合テスト)。"""
 
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
@@ -20,7 +20,7 @@ def _mock_body_fetcher(
     return_value: str | None = None,
     side_effect: Exception | None = None,
 ) -> MagicMock:
-    """Create a mock ArticleBodyFetcher."""
+    """モックの ArticleBodyFetcher を作成する。"""
     fetcher = MagicMock(spec=ArticleBodyFetcher)
     if side_effect is not None:
         fetcher.fetch = AsyncMock(side_effect=side_effect)
@@ -53,7 +53,7 @@ async def test_fetched_persists_content(
     session_factory,
     sample_source: NewsSource,
 ) -> None:
-    """Successful body fetch should persist original_content and return 'fetched'."""
+    """本文取得成功時は original_content を保存し 'fetched' を返す。"""
     article = await _make_article(
         db_session, sample_source, "https://example.com/fetched"
     )
@@ -78,7 +78,7 @@ async def test_already_exists_skips_fetch(
     session_factory,
     sample_source: NewsSource,
 ) -> None:
-    """Article that already has content should return 'already_exists' without fetch."""
+    """本文を持つ記事は fetch せず 'already_exists' を返す。"""
     article = await _make_article(
         db_session,
         sample_source,
@@ -100,7 +100,7 @@ async def test_permanent_error_marks_skip(
     session_factory,
     sample_source: NewsSource,
 ) -> None:
-    """PermanentFetchError should mark article skipped and return 'skipped'."""
+    """PermanentFetchError 時は記事を skipped とマークし 'skipped' を返す。"""
     article = await _make_article(
         db_session, sample_source, "https://example.com/forbidden"
     )
@@ -124,7 +124,7 @@ async def test_quality_gate_marks_skip(
     session_factory,
     sample_source: NewsSource,
 ) -> None:
-    """body_fetcher returning None should mark article skipped."""
+    """body_fetcher が None を返したら記事を skipped とマークする。"""
     article = await _make_article(
         db_session, sample_source, "https://example.com/minimal"
     )
@@ -146,7 +146,7 @@ async def test_article_not_found_returns_skipped(
     db_session: AsyncSession,
     session_factory,
 ) -> None:
-    """Missing article should return 'skipped' without calling fetcher."""
+    """記事が見つからない場合は fetcher を呼ばず 'skipped' を返す。"""
     body_fetcher = _mock_body_fetcher()
     svc = ContentFetchService(session_factory, body_fetcher)
     result = await svc.execute(999999)
@@ -160,7 +160,7 @@ async def test_temporary_error_propagates(
     session_factory,
     sample_source: NewsSource,
 ) -> None:
-    """TemporaryFetchError must propagate — Task owns retry decisions."""
+    """TemporaryFetchError は伝播させる (リトライ判断は Task の責務)。"""
     article = await _make_article(
         db_session, sample_source, "https://example.com/temp-error"
     )
@@ -172,7 +172,7 @@ async def test_temporary_error_propagates(
     with pytest.raises(TemporaryFetchError):
         await svc.execute(article_id)
 
-    # Article should NOT be marked skipped on temporary error
+    # 一時エラーでは記事を skipped にマークしないこと
     db_session.expire_all()
     refreshed = await db_session.get(NewsArticle, article_id)
     assert refreshed is not None
@@ -184,7 +184,7 @@ async def test_mark_article_skipped_utility(
     session_factory,
     sample_source: NewsSource,
 ) -> None:
-    """Utility should set skip_content_fetch=True for the given article."""
+    """ユーティリティは指定記事の skip_content_fetch=True を設定する。"""
     article = await _make_article(
         db_session, sample_source, "https://example.com/mark-skip"
     )
@@ -199,5 +199,5 @@ async def test_mark_article_skipped_utility(
 
 
 async def test_mark_article_skipped_missing_article(session_factory) -> None:
-    """Utility on missing article should not raise."""
+    """存在しない記事に対してユーティリティを呼んでも例外を送出しない。"""
     await mark_article_skipped(session_factory, 999999)

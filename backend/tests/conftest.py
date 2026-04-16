@@ -1,4 +1,4 @@
-"""Shared test fixtures for backend tests."""
+"""バックエンドテスト共通のフィクスチャ。"""
 
 from collections.abc import AsyncGenerator
 
@@ -37,7 +37,7 @@ INTERNAL_SECRET = settings.internal_api_secret.get_secret_value()
 
 
 def _auth_headers(user_id: str, role: str = "user") -> dict[str, str]:
-    """Build X-User-ID / X-User-Role / X-Internal-Secret headers for tests."""
+    """テスト用に X-User-ID / X-User-Role / X-Internal-Secret ヘッダーを組み立てる。"""
     return {
         "X-User-ID": user_id,
         "X-User-Role": role,
@@ -47,7 +47,7 @@ def _auth_headers(user_id: str, role: str = "user") -> dict[str, str]:
 
 @pytest.fixture(scope="session", autouse=True)
 async def ensure_test_database() -> None:
-    """Create vector_test database if it doesn't exist, and enable pgvector."""
+    """vector_test DB が無ければ作成し、pgvector を有効化する。"""
     base_url = settings.database_url.rsplit("/", 1)[0] + "/postgres"
     engine = create_async_engine(
         base_url, isolation_level="AUTOCOMMIT", poolclass=NullPool
@@ -60,7 +60,7 @@ async def ensure_test_database() -> None:
             await conn.execute(text("CREATE DATABASE vector_test"))
     await engine.dispose()
 
-    # Enable pgvector extension and create auth schema in the test database
+    # テスト DB に pgvector 拡張と auth スキーマを用意する
     async with engine_test.connect() as conn:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.execute(text("CREATE SCHEMA IF NOT EXISTS auth"))
@@ -69,10 +69,10 @@ async def ensure_test_database() -> None:
 
 @pytest.fixture(autouse=True)
 async def setup_db(ensure_test_database: None) -> AsyncGenerator[None, None]:
-    """Create tables before each test, drop after."""
+    """各テスト前にテーブルを作成し、終了後に破棄する。"""
     async with engine_test.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
-        # Seed auth.user rows so FK on watchlist_entries.user_id is satisfied
+        # watchlist_entries.user_id の FK を満たすため auth.user を seed する
         await conn.execute(
             text(
                 'INSERT INTO auth."user" (id) VALUES (:uid1), (:uid2) '
@@ -87,7 +87,7 @@ async def setup_db(ensure_test_database: None) -> AsyncGenerator[None, None]:
 
 @pytest.fixture
 def session_factory() -> async_sessionmaker[AsyncSession]:
-    """Provide a session factory for testing Service classes."""
+    """Service クラスのテスト用に session factory を提供する。"""
     return async_sessionmaker(
         engine_test,
         class_=SQLModelAsyncSession,
@@ -97,20 +97,19 @@ def session_factory() -> async_sessionmaker[AsyncSession]:
 
 @pytest.fixture
 async def db_session() -> AsyncGenerator[AsyncSession, None]:
-    """Provide a test database session."""
+    """テスト用 DB セッションを提供する。"""
     async with SQLModelAsyncSession(engine_test, expire_on_commit=False) as session:
         yield session
 
 
 @pytest.fixture
 async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
-    """Provide an httpx AsyncClient with DI-overridden session."""
+    """DI でセッションを差し替えた httpx AsyncClient を提供する。"""
 
     async def override_session() -> AsyncGenerator[AsyncSession, None]:
-        # Fixtures may leave an open autobegin transaction on db_session
-        # (e.g., from refresh after seed commits). Close it so the override
-        # can open a fresh transaction that mirrors the production
-        # get_session behavior.
+        # db_session には autobegin されたトランザクションが残ることがある
+        # (seed の refresh など)。本番の get_session と同様に新しい
+        # トランザクションを開始するため、ここで一度 commit しておく。
         if db_session.in_transaction():
             await db_session.commit()
         async with db_session.begin():
@@ -127,7 +126,7 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
 
 @pytest.fixture
 def auth_headers() -> dict[str, str]:
-    """Return BFF proxy auth headers for a regular test user."""
+    """通常ユーザー用の BFF プロキシ認証ヘッダーを返す。"""
     return _auth_headers(TEST_USER_ID)
 
 
@@ -135,13 +134,12 @@ def auth_headers() -> dict[str, str]:
 async def authed_client(
     db_session: AsyncSession,
 ) -> AsyncGenerator[AsyncClient, None]:
-    """Provide an httpx AsyncClient with BFF proxy auth headers pre-set."""
+    """BFF プロキシ認証ヘッダーを付与済みの httpx AsyncClient を提供する。"""
 
     async def override_session() -> AsyncGenerator[AsyncSession, None]:
-        # Fixtures may leave an open autobegin transaction on db_session
-        # (e.g., from refresh after seed commits). Close it so the override
-        # can open a fresh transaction that mirrors the production
-        # get_session behavior.
+        # db_session には autobegin されたトランザクションが残ることがある
+        # (seed の refresh など)。本番の get_session と同様に新しい
+        # トランザクションを開始するため、ここで一度 commit しておく。
         if db_session.in_transaction():
             await db_session.commit()
         async with db_session.begin():
@@ -161,13 +159,12 @@ async def authed_client(
 async def admin_client(
     db_session: AsyncSession,
 ) -> AsyncGenerator[AsyncClient, None]:
-    """Provide an httpx AsyncClient with admin BFF proxy auth headers pre-set."""
+    """管理者用 BFF プロキシ認証ヘッダーを付与済みの httpx AsyncClient を提供する。"""
 
     async def override_session() -> AsyncGenerator[AsyncSession, None]:
-        # Fixtures may leave an open autobegin transaction on db_session
-        # (e.g., from refresh after seed commits). Close it so the override
-        # can open a fresh transaction that mirrors the production
-        # get_session behavior.
+        # db_session には autobegin されたトランザクションが残ることがある
+        # (seed の refresh など)。本番の get_session と同様に新しい
+        # トランザクションを開始するため、ここで一度 commit しておく。
         if db_session.in_transaction():
             await db_session.commit()
         async with db_session.begin():
@@ -187,7 +184,7 @@ async def admin_client(
 async def sample_categories(
     db_session: AsyncSession,
 ) -> list[Category]:
-    """Create and return sample categories (name is a direct column)."""
+    """サンプルカテゴリを作成して返す (name は通常のカラム)。"""
     seed = [
         ("ai_ml", "AI・ML"),
         ("quantum", "量子コンピュータ"),
@@ -209,7 +206,7 @@ async def sample_keyword(
     db_session: AsyncSession,
     sample_categories: list[Category],
 ) -> Keyword:
-    """Create and return a test keyword (requires a category)."""
+    """テスト用キーワードを作成して返す (カテゴリが必須)。"""
     kw = Keyword(name="Quantum Computing", category_id=sample_categories[1].id)
     db_session.add(kw)
     await db_session.commit()
@@ -219,7 +216,7 @@ async def sample_keyword(
 
 @pytest.fixture
 async def sample_source(db_session: AsyncSession) -> NewsSource:
-    """Create and return a test RSS news source."""
+    """テスト用 RSS ニュースソースを作成して返す。"""
     source = NewsSource(
         name="Test Tech Source",
         source_type=SourceType.RSS,
@@ -234,7 +231,7 @@ async def sample_source(db_session: AsyncSession) -> NewsSource:
 
 @pytest.fixture
 async def sample_hn_source(db_session: AsyncSession) -> NewsSource:
-    """Create and return a test Hacker News API source."""
+    """テスト用 Hacker News API ソースを作成して返す。"""
     source = NewsSource(
         name="Hacker News",
         source_type=SourceType.API,
@@ -250,7 +247,7 @@ async def sample_hn_source(db_session: AsyncSession) -> NewsSource:
 
 @pytest.fixture
 async def sample_av_source(db_session: AsyncSession) -> NewsSource:
-    """Create and return a test Alpha Vantage API source."""
+    """テスト用 Alpha Vantage API ソースを作成して返す。"""
     source = NewsSource(
         name="Alpha Vantage",
         source_type=SourceType.API,

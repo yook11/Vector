@@ -1,4 +1,4 @@
-"""Tests for the AI analyzer service."""
+"""AI アナライザーサービスのテスト。"""
 
 import json
 from datetime import UTC, datetime
@@ -38,7 +38,7 @@ def _make_gemini_response(
     reasoning: str | None = "技術的に重要な進展であり市場に好影響",
     keywords: list[str] | None = None,
 ) -> str:
-    """Create a valid JSON string mimicking Gemini API response."""
+    """Gemini API レスポンスを模した有効な JSON 文字列を作成する。"""
     data: dict = {
         "title_ja": title_ja,
         "summary_ja": summary_ja,
@@ -51,14 +51,14 @@ def _make_gemini_response(
 
 
 def _create_analyzer() -> GeminiAnalyzer:
-    """Create a GeminiAnalyzer with mocked settings."""
+    """settings をモックして GeminiAnalyzer を生成する。"""
     with patch("app.analysis.analyzer.gemini.settings") as mock_gs:
         mock_gs.gemini_api_key = SecretStr("test-key")
         return GeminiAnalyzer()
 
 
 def _create_article(source: NewsSource) -> NewsArticle:
-    """Create a NewsArticle for testing."""
+    """テスト用の NewsArticle を作成する。"""
     return NewsArticle(
         original_title="Quantum Breakthrough",
         original_url="https://example.com/quantum",
@@ -91,13 +91,13 @@ def test_get_analyzer_raises_for_unsupported_provider() -> None:
 
 
 def test_base_analyzer_rejects_subclass_without_classvar() -> None:
-    """Concrete subclass without MODEL/RPM/RPD must raise TypeError."""
+    """MODEL/RPM/RPD を定義しない具象サブクラスは TypeError を送出する。"""
     with pytest.raises(TypeError, match="must define ClassVar"):
 
         class BadAnalyzer(BaseAnalyzer):
             MODEL = "test"
             RPM = 10
-            # RPD missing
+            # RPD は未定義
 
             async def analyze(
                 self,
@@ -158,7 +158,7 @@ async def test_call_once_succeeds() -> None:
 
 
 async def test_call_once_translates_sdk_error() -> None:
-    """SDK exceptions are translated via _translate_error."""
+    """SDK 例外は _translate_error で変換される。"""
     analyzer = _create_analyzer()
     analyzer._call_api = AsyncMock(side_effect=ConnectionError("timeout"))
 
@@ -167,7 +167,7 @@ async def test_call_once_translates_sdk_error() -> None:
 
 
 async def test_call_once_passes_through_domain_error() -> None:
-    """AnalysisDomainError from _call_api is re-raised as-is."""
+    """_call_api からの AnalysisDomainError はそのまま再送出される。"""
     analyzer = _create_analyzer()
     analyzer._call_api = AsyncMock(side_effect=ProviderError("empty response"))
 
@@ -262,7 +262,7 @@ async def test_analyze_article_skips_on_invalid_input(
     session_factory,
     sample_source: NewsSource,
 ) -> None:
-    """InvalidInputError should mark article as skipped."""
+    """InvalidInputError は記事を skipped としてマークすべき。"""
     article = NewsArticle(
         original_title="Bad Article",
         original_url="https://example.com/bad",
@@ -286,7 +286,7 @@ async def test_analyze_article_skips_on_invalid_input(
 
     assert result.status == "skipped"
 
-    # Service committed in its own session — expire cached objects
+    # Service は独自セッションで commit しているのでキャッシュを expire
     db_session.expire_all()
     refreshed = await db_session.get(NewsArticle, article_id)
     assert refreshed.skip_content_fetch is True
@@ -352,7 +352,7 @@ def test_parse_response_filters_invalid_keywords() -> None:
 
 
 def test_parse_response_keywords_without_candidates() -> None:
-    """Keywords in response are ignored when no candidates were provided."""
+    """候補が渡されない場合、レスポンス内の keywords は無視される。"""
     analyzer = _create_analyzer()
     raw = _make_gemini_response(keywords=["Quantum Computing"])
     result = analyzer._parse_response(raw, keywords_by_category=None)
@@ -373,7 +373,7 @@ async def test_analyze_article_saves_keyword_links(
     sample_categories: list[Category],
     sample_source: NewsSource,
 ) -> None:
-    """AI analysis should create article_keywords links for matched keywords."""
+    """AI 分析はマッチしたキーワードに対し article_keywords リンクを生成する。"""
     cat_id = sample_categories[0].id
     kw1 = Keyword(name="Quantum Computing", category_id=cat_id)
     kw2 = Keyword(name="Error Correction", category_id=cat_id)
@@ -408,7 +408,7 @@ async def test_analyze_article_saves_keyword_links(
     result = await svc.execute(article.id, mock_analyzer)
     assert result.status == "created"
 
-    # Verify keyword links were created
+    # キーワードリンクが作成されていることを確認
     stmt = select(ArticleKeyword).where(
         ArticleKeyword.article_analysis_id == result.analysis_id,
     )
@@ -422,7 +422,7 @@ async def test_analyze_article_saves_keyword_links(
         linked_kws.add(str(kw.name))
     assert linked_kws == {"Quantum Computing", "Error Correction"}
 
-    # Verify keywords_by_category were passed to analyzer
+    # keywords_by_category が analyzer に渡されていることを確認
     call_kwargs = mock_analyzer.analyze.call_args.kwargs
     assert "keywords_by_category" in call_kwargs
     kw_by_cat = call_kwargs["keywords_by_category"]

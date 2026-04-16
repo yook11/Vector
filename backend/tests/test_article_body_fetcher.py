@@ -1,4 +1,4 @@
-"""Tests for the article body fetcher."""
+"""記事本文フェッチャーのテスト。"""
 
 from unittest.mock import AsyncMock, patch
 
@@ -31,14 +31,14 @@ investment from major technology companies.</p>
 
 
 def _mock_async_client(responses: list[httpx.Response | Exception]) -> AsyncMock:
-    """Build an AsyncClient mock whose ``get`` returns/raises in sequence."""
+    """``get`` が順に返す/raise する AsyncClient モックを構築する。"""
     client = AsyncMock(spec=httpx.AsyncClient)
     client.get = AsyncMock(side_effect=responses)
     return client
 
 
 def _patch_client(client: AsyncMock):
-    """Patch ``httpx.AsyncClient`` so fetch() uses the given mock client."""
+    """``httpx.AsyncClient`` を patch して fetch() が指定モックを使うようにする。"""
     return patch(
         "app.collection.article_body_fetcher.httpx.AsyncClient",
         return_value=_as_async_cm(client),
@@ -46,7 +46,7 @@ def _patch_client(client: AsyncMock):
 
 
 def _as_async_cm(value: object) -> AsyncMock:
-    """Wrap a value in an async context manager mock."""
+    """値を async context manager モックでラップする。"""
     cm = AsyncMock()
     cm.__aenter__ = AsyncMock(return_value=value)
     cm.__aexit__ = AsyncMock(return_value=None)
@@ -154,7 +154,7 @@ class TestArticleBodyFetcher:
 
     @pytest.mark.asyncio
     async def test_returns_none_for_minimal_content(self) -> None:
-        """Quality gate rejects content that's too short after parsing."""
+        """品質ゲートによりパース後に短すぎるコンテンツは拒否される。"""
         robots_resp = httpx.Response(
             404,
             request=httpx.Request("GET", "https://example.com/robots.txt"),
@@ -190,7 +190,7 @@ class TestArticleBodyFetcher:
 
     @pytest.mark.asyncio
     async def test_caches_robots_txt_across_calls(self) -> None:
-        """Same domain's robots.txt should be fetched only once across fetch() calls."""
+        """同一ドメインの robots.txt は fetch() 呼び出し間で 1 回だけ取得される。"""
         robots_resp = httpx.Response(
             404,
             request=httpx.Request("GET", "https://example.com/robots.txt"),
@@ -207,7 +207,7 @@ class TestArticleBodyFetcher:
             headers={"content-type": "text/html"},
             request=httpx.Request("GET", "https://example.com/a2"),
         )
-        # Two fetches reuse the same fetcher instance (shared robots cache)
+        # 2 回の fetch は同じ fetcher インスタンスを再利用 (robots cache 共有)
         client_1 = _mock_async_client([robots_resp, html_resp_1])
         client_2 = _mock_async_client([html_resp_2])
 
@@ -217,7 +217,7 @@ class TestArticleBodyFetcher:
         with _patch_client(client_2):
             await fetcher.fetch("https://example.com/a2")
 
-        # Second fetch should not re-request robots.txt
+        # 2 回目の fetch では robots.txt を再リクエストしないはず
         robots_calls_1 = [
             c for c in client_1.get.call_args_list if "robots.txt" in str(c)
         ]

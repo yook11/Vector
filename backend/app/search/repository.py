@@ -1,4 +1,4 @@
-"""Queries for semantic search over analyzed articles."""
+"""分析済み記事に対するセマンティック検索クエリ。"""
 
 from typing import Any
 
@@ -24,21 +24,21 @@ class SemanticSearchRepository:
         query: SemanticSearchParams,
         query_embedding: list[float],
     ) -> tuple[list[ArticleAnalysis], int]:
-        """Search articles by semantic similarity with filters and pagination."""
+        """セマンティック類似度に基づき記事を検索する (フィルタ+ページング付き)。"""
         stmt = (
             select(ArticleAnalysis)
             .join(ArticleAnalysis.news_article)
             .options(*article_eager_options_brief())
         )
 
-        # Embedding similarity filter
+        # Embedding 類似度フィルタ
         stmt = stmt.where(ArticleAnalysis.embedding.is_not(None))
         distance_expr: ColumnElement[float] = ArticleAnalysis.embedding.cosine_distance(
             query_embedding
         )
         stmt = stmt.where(distance_expr < settings.semantic_search_max_distance)
 
-        # Content filters
+        # コンテンツフィルタ
         if query.keyword is not None:
             matching_ids = (
                 select(ArticleKeyword.article_analysis_id)
@@ -57,13 +57,13 @@ class SemanticSearchRepository:
         if query.impact_level is not None:
             stmt = stmt.where(ArticleAnalysis.impact_level == query.impact_level)
 
-        # Count
+        # 件数取得
         total = await self._count(stmt)
 
-        # Sort
+        # ソート
         stmt = self._apply_sort(stmt, query.sort_by, query.sort_order, distance_expr)
 
-        # Paginate
+        # ページング
         stmt = stmt.offset(query.offset).limit(query.limit)
 
         result = await self.session.execute(stmt)

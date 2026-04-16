@@ -1,4 +1,4 @@
-"""Pydantic schemas for news_sources CRUD endpoints (SSoT)."""
+"""news_sources CRUD エンドポイントの Pydantic スキーマ（SSoT）。"""
 
 from datetime import datetime
 
@@ -9,7 +9,7 @@ from app.schemas.base import _CamelBase
 
 
 class NewsSourceCreate(_CamelBase):
-    """POST /api/v1/admin/sources request body."""
+    """POST /api/v1/admin/sources のリクエストボディ。"""
 
     name: SourceName
     source_type: SourceType
@@ -18,7 +18,7 @@ class NewsSourceCreate(_CamelBase):
 
 
 class NewsSourceDetail(_CamelBase):
-    """Single news source in API responses."""
+    """API レスポンスにおける単一ニュースソース。"""
 
     id: int
     name: SourceName
@@ -31,6 +31,6 @@ class NewsSourceDetail(_CamelBase):
 
 
 class NewsSourceDetailList(_CamelBase):
-    """GET /api/v1/admin/sources response wrapper."""
+    """GET /api/v1/admin/sources のレスポンスラッパー。"""
 
     items: list[NewsSourceDetail]

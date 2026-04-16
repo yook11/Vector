@@ -1,4 +1,4 @@
-"""Tests for embedding tasks (generate_embedding)."""
+"""Embedding タスク (generate_embedding) のテスト。"""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -11,7 +11,7 @@ def _make_ctx(
     retry_count: int = 0,
     max_retries: int = 0,
 ) -> MagicMock:
-    """Create a mock taskiq Context with state.session_factory and labels."""
+    """state.session_factory と labels を持つ taskiq Context のモックを作成する。"""
     ctx = MagicMock()
     ctx.state.session_factory = MagicMock()
     ctx.message.labels = {
@@ -22,7 +22,7 @@ def _make_ctx(
 
 
 def _patch_embedder() -> MagicMock:
-    """Return a mock embedder with ClassVar attributes."""
+    """ClassVar 属性を持つモック embedder を返す。"""
     mock_embedder = MagicMock()
     mock_embedder.MODEL = "gemini-embedding-001"
     mock_embedder.RPM = 15
@@ -63,7 +63,7 @@ class TestGenerateEmbedding:
 
         mock_svc_cls.return_value.execute.assert_called_once()
         call_args = mock_svc_cls.return_value.execute.call_args
-        assert call_args[0][0] == 1  # article_id
+        assert call_args[0][0] == 1  # article_id であること
 
     @pytest.mark.asyncio
     async def test_already_exists_succeeds(self) -> None:
@@ -139,5 +139,5 @@ class TestGenerateEmbedding:
             mock_svc_cls.return_value.execute = AsyncMock(
                 side_effect=RateLimitError("429"),
             )
-            # Should not raise on last attempt
+            # 最終試行では例外を送出しないこと
             await generate_embedding(article_id=1, ctx=mock_ctx)

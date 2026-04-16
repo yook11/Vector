@@ -1,4 +1,4 @@
-"""Analysis domain — AI analysis and embedding."""
+"""Analysis ドメイン — AI による記事分析と埋め込みベクトル生成を担う。"""
 
 from app.analysis.analyzer.base import AnalysisData, BaseAnalyzer
 from app.analysis.analyzer.factory import get_analyzer

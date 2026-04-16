@@ -1,4 +1,4 @@
-"""Read endpoints for analyzed articles."""
+"""分析済み記事の参照系エンドポイント。"""
 
 from typing import Annotated
 
@@ -31,20 +31,20 @@ async def list_articles(
     user: Annotated[CurrentUser | None, Depends(get_optional_user)],
     service: Annotated[ArticleService, Depends(get_article_service)],
 ) -> PaginatedArticleResponse:
-    """List analyzed articles with filters and pagination."""
+    """分析済み記事をフィルタとページネーション付きで一覧取得する。"""
     return await service.list_articles(params, user.id if user else None)
 
 
 @router.get(
     "/{article_id}/similar",
-    summary="Find semantically similar articles using pgvector cosine distance",
+    summary="pgvector のコサイン距離で意味的に類似した記事を検索する",
 )
 async def get_similar_articles(
     article_id: int,
     service: Annotated[ArticleService, Depends(get_article_service)],
     limit: Annotated[int, Query(ge=1, le=20)] = 5,
 ) -> list[ArticleBrief]:
-    """Return articles most similar to the given article."""
+    """指定記事に最も類似した記事を返す。"""
     return await service.get_similar(article_id, limit)
 
 
@@ -54,5 +54,5 @@ async def get_article(
     user: Annotated[CurrentUser | None, Depends(get_optional_user)],
     service: Annotated[ArticleService, Depends(get_article_service)],
 ) -> ArticleDetail:
-    """Get a single article with full analysis details."""
+    """単一記事を完全な分析情報付きで取得する。"""
     return await service.get_article(article_id, user.id if user else None)

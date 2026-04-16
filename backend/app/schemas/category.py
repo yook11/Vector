@@ -4,7 +4,7 @@ from app.schemas.embeds import KeywordStatEmbed
 
 
 class CategoryDetail(_CamelBase):
-    """Enriched category with articleCount and nested keywords."""
+    """articleCount とネストしたキーワードを備えたカテゴリ詳細。"""
 
     slug: CategorySlug
     name: CategoryName
@@ -13,6 +13,6 @@ class CategoryDetail(_CamelBase):
 
 
 class CategoryDetailList(_CamelBase):
-    """Wrapper for enriched category list endpoint."""
+    """カテゴリ詳細一覧エンドポイント用のラッパー。"""
 
     items: list[CategoryDetail]

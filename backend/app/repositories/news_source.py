@@ -9,20 +9,20 @@ class NewsSourceRepository:
         self.session = session
 
     async def get_all(self) -> list[NewsSource]:
-        """Get all news sources ordered by name."""
+        """name 順で全ニュースソースを取得する."""
         stmt = select(NewsSource).order_by(NewsSource.name)
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
     async def get_by_id(self, source_id: int) -> NewsSource | None:
-        """Get a single news source by ID. Returns None if not found."""
+        """ID でニュースソースを 1 件取得する. 見つからなければ None."""
         return await self.session.get(NewsSource, source_id)
 
     async def create(self, source: NewsSource) -> None:
-        """Persist a new news source. Flushes to assign the primary key."""
+        """新規ニュースソースを永続化する. PK 採番のため flush する."""
         self.session.add(source)
         await self.session.flush()
 
     async def delete(self, source: NewsSource) -> None:
-        """Delete a news source."""
+        """ニュースソースを削除する."""
         await self.session.delete(source)

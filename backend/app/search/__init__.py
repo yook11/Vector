@@ -1,1 +1,1 @@
-"""Search domain — semantic search over analyzed articles."""
+"""Search ドメイン — 分析済み記事に対するセマンティック検索。"""

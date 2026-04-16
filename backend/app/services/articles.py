@@ -1,4 +1,4 @@
-"""Article reading service — list, detail, similar."""
+"""記事閲覧サービス — 一覧/詳細/類似記事。"""
 
 from app.exceptions import NotFoundError
 from app.models.article_analysis import ArticleAnalysis
@@ -76,7 +76,7 @@ class ArticleService:
         query: ArticleListParams,
         user_id: int | None,
     ) -> PaginatedArticleResponse:
-        """List analyzed articles for news browsing."""
+        """ニュース閲覧用に分析済み記事を一覧取得する。"""
         analyses, total = await self.repo.fetch_articles(query)
 
         watched_ids: set[int] = set()
@@ -103,6 +103,6 @@ class ArticleService:
         return build_detail(analysis, watched_ids)
 
     async def get_similar(self, article_id: int, limit: int) -> list[ArticleBrief]:
-        """Find semantically similar articles."""
+        """意味的に類似する記事を検索する。"""
         analyses = await self.repo.fetch_similar_to(article_id, limit)
         return [build_brief(a) for a in analyses]

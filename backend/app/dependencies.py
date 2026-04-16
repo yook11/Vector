@@ -20,23 +20,23 @@ class UserRole(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class CurrentUser:
-    """Lightweight user representation populated from BFF proxy headers."""
+    """BFF プロキシヘッダから構築する軽量なユーザー表現。"""
 
     id: UUID
     role: UserRole
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
-    """Yield a session with an active transaction.
+    """トランザクション開始済みのセッションを yield する。
 
-    Commits on successful exit, rolls back on any exception (including domain
-    exceptions raised by services). Repositories must NOT commit or refresh;
-    they may flush when ID assignment is required.
+    正常終了時にコミット、例外発生時（Service が投げるドメイン例外を含む）
+    はロールバックする。Repository はコミットや refresh を呼んではならない。
+    ID の払い出しが必要なときのみ flush してよい。
 
-    Service mutations on existing entities are persisted automatically by the
-    Unit of Work when this transaction commits — Service does not call save
-    explicitly. New entities and deletions go through Repository.create /
-    Repository.delete. See docs/adr/004_unit_of_work_service_convention.md.
+    既存エンティティへの変更は、Service が明示的に save を呼ばなくても
+    本トランザクションのコミット時に Unit of Work が自動で永続化する。
+    新規作成・削除は Repository.create / Repository.delete 経由で行う。
+    詳細は docs/adr/004_unit_of_work_service_convention.md を参照。
     """
     async with SQLModelAsyncSession(engine) as session:
         async with session.begin():
@@ -48,11 +48,11 @@ async def get_current_user(
     x_user_role: Annotated[UserRole, Header()],
     x_internal_secret: Annotated[str | None, Header()] = None,
 ) -> CurrentUser:
-    """Validate X-Internal-Secret and extract user from BFF proxy headers.
+    """X-Internal-Secret を検証し、BFF プロキシヘッダからユーザーを取り出す。
 
-    Required headers: X-User-ID (UUID), X-User-Role (user|admin).
-    Missing or invalid values return 422 (FastAPI type validation).
-    Invalid secret returns 401.
+    必須ヘッダ: X-User-ID (UUID), X-User-Role (user|admin)。
+    ヘッダが欠落・型不正の場合は 422（FastAPI の型バリデーション）。
+    シークレット不一致の場合は 401。
     """
     if not x_internal_secret or not secrets.compare_digest(
         x_internal_secret, settings.internal_api_secret.get_secret_value()
@@ -67,7 +67,7 @@ async def get_current_user(
 async def get_admin_user(
     current_user: Annotated[CurrentUser, Depends(get_current_user)],
 ) -> CurrentUser:
-    """Require the current user to have admin role. Raises 403 if not."""
+    """現在のユーザーが admin ロールを持つことを要求する。持たない場合は 403。"""
     if current_user.role != UserRole.ADMIN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -81,11 +81,11 @@ async def get_optional_user(
     x_user_id: Annotated[UUID | None, Header()] = None,
     x_user_role: Annotated[UserRole | None, Header()] = None,
 ) -> CurrentUser | None:
-    """Return CurrentUser if authenticated, None otherwise.
+    """認証済みなら CurrentUser を返し、そうでなければ None を返す。
 
-    All headers are optional. Invalid UUID/Role values return 422
-    (FastAPI type validation). X-User-ID present without X-User-Role
-    is a BFF bug and returns 401.
+    すべてのヘッダは任意。UUID や Role の値が不正なら 422（FastAPI の
+    型バリデーション）。X-User-ID はあるのに X-User-Role が無い場合は
+    BFF 側のバグなので 401 を返す。
     """
     if not x_internal_secret or not secrets.compare_digest(
         x_internal_secret, settings.internal_api_secret.get_secret_value()

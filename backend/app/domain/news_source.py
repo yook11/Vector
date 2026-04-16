@@ -1,6 +1,6 @@
-"""Value objects for the NewsSource entity.
+"""NewsSource エンティティの値オブジェクト。
 
-SourceName: Display name for a news source (e.g. "TechCrunch", "Hacker News").
+SourceName: ニュースソースの表示名 (例: "TechCrunch", "Hacker News")。
 """
 
 from __future__ import annotations
@@ -15,13 +15,13 @@ _NAME_MAX_LENGTH = 50
 
 
 class SourceName(RootModel[str]):
-    """Display name for a news source.
+    """ニュースソースの表示名。
 
     Invariants:
-    - Contains at least one word character
-    - Only word chars (Unicode), spaces, hyphens, dots
-    - 1-50 characters after trimming
-    - Immutable after creation
+    - 少なくとも 1 つのワード文字を含む
+    - 使用可能文字は Unicode ワード文字・空白・ハイフン・ドット
+    - トリム後 1-50 文字
+    - 生成後は不変
     """
 
     model_config = ConfigDict(frozen=True)

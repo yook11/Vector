@@ -12,9 +12,9 @@ class CategoryRepository:
         self.session = session
 
     async def fetch_categories(self) -> list[Row[tuple[int, str, str]]]:
-        """Fetch all categories ordered by slug.
+        """slug 順で全カテゴリを取得する.
 
-        Returns rows of (id, slug, name).
+        (id, slug, name) の行を返す.
         """
         stmt = select(Category.id, Category.slug, Category.name).order_by(Category.slug)
         result = await self.session.execute(stmt)
@@ -23,9 +23,9 @@ class CategoryRepository:
     async def fetch_keyword_stats(
         self,
     ) -> list[Row[tuple[int, str, int]]]:
-        """Fetch per-keyword article counts grouped by category.
+        """カテゴリ別にキーワードごとの記事数を取得する.
 
-        Returns rows of (category_id, name, article_count).
+        (category_id, name, article_count) の行を返す.
         """
         stmt = (
             select(
@@ -45,9 +45,9 @@ class CategoryRepository:
     async def fetch_category_article_counts(
         self,
     ) -> list[Row[tuple[int, int]]]:
-        """Fetch per-category distinct article counts.
+        """カテゴリごとのユニーク記事数を取得する.
 
-        Returns rows of (category_id, article_count).
+        (category_id, article_count) の行を返す.
         """
         stmt = (
             select(

@@ -26,16 +26,16 @@ from app.search.router import router as search_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    # Startup: task worker runs in a separate Docker service (worker/scheduler).
-    # Add future startup logic here if needed (e.g. cache warming, connection checks).
+    # 起動時: タスクワーカーは別の Docker サービス（worker/scheduler）で動作する。
+    # 必要に応じてキャッシュのウォーミングや接続チェックなどをここに追加する。
     yield
-    # Shutdown
+    # 終了処理
     await engine.dispose()
 
 
 app = FastAPI(
     title="Vector API",
-    description="Tech news aggregation & AI analysis platform",
+    description="テックニュースの収集と AI 分析プラットフォーム",
     version="0.1.0",
     lifespan=lifespan,
 )
@@ -79,15 +79,15 @@ app.add_middleware(
     allow_headers=["Content-Type"],
 )
 
-# Exception handlers
+# 例外ハンドラ
 app.add_exception_handler(NotFoundError, not_found_handler)
 app.add_exception_handler(DuplicateError, duplicate_handler)
 
 app.add_exception_handler(SearchError, search_error_handler)
 
-# Register routers
-# NOTE: semantic_search must be registered before articles
-# so that /articles/search is matched before /articles/{article_id}
+# ルーター登録
+# NOTE: /articles/search を /articles/{article_id} より先にマッチさせるため、
+# semantic_search を articles より先に登録する必要がある。
 app.include_router(search_router)
 app.include_router(articles.router)
 app.include_router(categories.router)

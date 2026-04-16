@@ -49,5 +49,5 @@ class FetchLog(Base):
         DateTime(timezone=True), server_default=func.now()
     )
 
-    # Relationships (same Base — OK)
+    # リレーション（同一 Base のため OK）
     source: Mapped[NewsSource] = relationship(back_populates="fetch_logs")

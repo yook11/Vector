@@ -60,17 +60,17 @@ class NewsSource(Base):
         DateTime(timezone=True), server_default=func.now()
     )
 
-    # Relationships
+    # リレーション
     articles: Mapped[list[NewsArticle]] = relationship(back_populates="news_source")
     fetch_logs: Mapped[list[FetchLog]] = relationship(back_populates="source")
 
-    # Domain methods
+    # ドメインメソッド
     def activate(self) -> None:
-        """Mark this news source as active."""
+        """このニュースソースを有効化する。"""
         self.is_active = True
         self.updated_at = datetime.now(UTC)
 
     def deactivate(self) -> None:
-        """Mark this news source as inactive."""
+        """このニュースソースを無効化する。"""
         self.is_active = False
         self.updated_at = datetime.now(UTC)

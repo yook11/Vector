@@ -1,4 +1,4 @@
-"""Tests for semantic search (GET /api/v1/articles/search)."""
+"""セマンティック検索 (GET /api/v1/articles/search) のテスト。"""
 
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
@@ -15,9 +15,9 @@ from app.models.news_source import NewsSource, SourceType
 # Helpers
 # ---------------------------------------------------------------------------
 
-FAKE_EMBEDDING_A = [0.1] * 768  # "close" to query
-FAKE_EMBEDDING_B = [0.9] * 768  # "far" from query
-FAKE_QUERY_EMBEDDING = [0.1] * 768  # matches A
+FAKE_EMBEDDING_A = [0.1] * 768  # クエリに "近い"
+FAKE_EMBEDDING_B = [0.9] * 768  # クエリから "遠い"
+FAKE_QUERY_EMBEDDING = [0.1] * 768  # A にマッチ
 
 
 async def _create_source(db_session: AsyncSession) -> NewsSource:
@@ -49,7 +49,7 @@ async def _create_article(
     db_session.add(article)
     await db_session.flush()
 
-    # Always create ArticleAnalysis (required by INNER JOIN); add embedding if provided
+    # ArticleAnalysis は INNER JOIN のため常に作成し、embedding があれば付与する
     analysis = ArticleAnalysis(
         news_article_id=article.id,
         translated_title=f"Translated: {title}",
@@ -67,7 +67,7 @@ async def _create_article(
 
 
 def _patch_embed_query(return_value: list[float] = FAKE_QUERY_EMBEDDING):
-    """Patch embed_search_query to return a fixed vector."""
+    """embed_search_query を固定ベクトルを返すように patch する。"""
     return patch(
         "app.search.service.embed_search_query",
         new_callable=AsyncMock,
@@ -85,7 +85,7 @@ async def test_semantic_search_returns_articles_with_embedding(
     authed_client: AsyncClient,
     db_session: AsyncSession,
 ) -> None:
-    """GET /api/v1/articles/search?q=test should return articles with embeddings."""
+    """GET /api/v1/articles/search?q=test は embedding 付きの記事を返す。"""
     source = await _create_source(db_session)
     await _create_article(
         db_session,
@@ -112,7 +112,7 @@ async def test_semantic_search_excludes_articles_without_embedding(
     authed_client: AsyncClient,
     db_session: AsyncSession,
 ) -> None:
-    """Articles without embeddings should be excluded from semantic search results."""
+    """embedding の無い記事はセマンティック検索結果から除外される。"""
     source = await _create_source(db_session)
     await _create_article(
         db_session,
@@ -150,7 +150,7 @@ async def test_no_q_parameter_returns_analyzed_articles(
     authed_client: AsyncClient,
     db_session: AsyncSession,
 ) -> None:
-    """Without q parameter, only analyzed articles are returned."""
+    """q パラメータなしでは分析済み記事のみを返す。"""
     source = await _create_source(db_session)
     await _create_article(
         db_session,
@@ -168,7 +168,7 @@ async def test_no_q_parameter_returns_analyzed_articles(
     )
     await db_session.commit()
 
-    # No patching needed -- embed_search_query should not be called
+    # embed_search_query は呼ばれないので patch 不要
     resp = await authed_client.get("/api/v1/articles")
 
     assert resp.status_code == 200
@@ -186,7 +186,7 @@ async def test_semantic_search_returns_503_on_embedding_failure(
     authed_client: AsyncClient,
     db_session: AsyncSession,
 ) -> None:
-    """When embedding generation fails, return 503."""
+    """embedding 生成が失敗した場合は 503 を返す。"""
     from app.search.errors import SearchError
 
     source = await _create_source(db_session)

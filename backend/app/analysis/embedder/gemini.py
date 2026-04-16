@@ -1,4 +1,4 @@
-"""Gemini embedding implementation using gemini-embedding-001."""
+"""gemini-embedding-001 を用いた Gemini Embedder 実装。"""
 
 from __future__ import annotations
 
@@ -20,11 +20,11 @@ from app.config import settings
 
 
 class GeminiEmbedder(BaseEmbedder):
-    """Gemini gemini-embedding-001 implementation of BaseEmbedder."""
+    """BaseEmbedder の gemini-embedding-001 実装。"""
 
     MODEL = "gemini-embedding-001"
     DIMENSION = 768
-    RPM = 15  # batchEmbedContents endpoint (SDK always uses this)
+    RPM = 15  # batchEmbedContents エンドポイント（SDK は常にこちらを使う）
     RPD = 1500
 
     def __init__(self) -> None:
@@ -36,10 +36,10 @@ class GeminiEmbedder(BaseEmbedder):
     async def _call_api(
         self, contents: str | list[str], task_type: str
     ) -> list[list[float]]:
-        """Call Gemini embed_content API.
+        """Gemini の embed_content API を呼び出す。
 
-        - str contents  -> embedContent  (500 RPM)
-        - list contents -> batchEmbedContents (15 RPM)
+        - contents が str のとき  -> embedContent  (500 RPM)
+        - contents が list のとき -> batchEmbedContents (15 RPM)
         """
         response = await self._client.aio.models.embed_content(
             model=self.MODEL,
@@ -52,7 +52,7 @@ class GeminiEmbedder(BaseEmbedder):
         return [e.values for e in response.embeddings]
 
     def _translate_error(self, exc: Exception) -> AnalysisDomainError:
-        """Classify Gemini SDK exceptions by cause origin."""
+        """Gemini SDK の例外を原因の所在で分類する。"""
         if isinstance(exc, APIError):
             status = exc.status or ""
             message = exc.message or ""

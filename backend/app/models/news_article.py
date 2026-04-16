@@ -66,7 +66,7 @@ class NewsArticle(Base):
     )
     skip_content_fetch: Mapped[bool] = mapped_column(server_default=sa.false())
 
-    # Relationships
+    # リレーション
     article_analysis: Mapped[ArticleAnalysis | None] = relationship(
         back_populates="news_article", uselist=False
     )

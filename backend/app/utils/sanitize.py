@@ -1,4 +1,4 @@
-"""Text sanitization utilities for cleaning fetched content."""
+"""取得したコンテンツをクリーンアップするテキスト整形ユーティリティ。"""
 
 import html
 import re
@@ -19,10 +19,10 @@ _SAFE_URL_SCHEMES = {"http", "https"}
 
 
 def is_safe_url(url: str) -> bool:
-    """Check if a URL has a safe scheme (http or https only).
+    """URL が安全なスキーム (http または https) かを判定する。
 
-    Used by fetchers to filter out articles with dangerous URL schemes
-    before saving to the database.
+    フェッチャーが危険な URL スキームを持つ記事を
+    DB 保存前に除外するために使う。
     """
     try:
         parsed = urlparse(url)
@@ -32,10 +32,10 @@ def is_safe_url(url: str) -> bool:
 
 
 def validate_url_scheme(url: str, field_name: str = "url") -> str:
-    """Validate that a URL uses http or https scheme.
+    """URL が http または https スキームであることを検証する。
 
-    Raises ValueError for Pydantic field_validator compatibility.
-    Used in Pydantic schemas to reject unsafe URLs at the API boundary.
+    Pydantic の field_validator 互換のため不正時は ValueError を送出。
+    API 境界で安全でない URL を拒否する Pydantic スキーマで使用。
     """
     if not is_safe_url(url):
         raise ValueError(f"{field_name} must be a valid http or https URL")
@@ -43,9 +43,9 @@ def validate_url_scheme(url: str, field_name: str = "url") -> str:
 
 
 def strip_html_tags(text: str | None) -> str | None:
-    """Strip HTML tags and decode HTML entities from text.
+    """テキストから HTML タグを除去し HTML エンティティをデコードする。
 
-    Returns None if input is None.
+    入力が None の場合は None を返す。
     """
     if text is None:
         return None
