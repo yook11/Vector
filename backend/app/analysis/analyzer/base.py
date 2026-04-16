@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import abc
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import ClassVar
 
 import structlog
@@ -23,16 +23,6 @@ class AnalysisData:
     impact_level: ImpactLevel
     reasoning: str
     keywords: list[str] | None = None
-
-
-@dataclass
-class AnalyzeResult:
-    """Result of analyzing articles: counts of success/skip/error."""
-
-    analyzed_count: int = 0
-    skipped_count: int = 0
-    error_count: int = 0
-    errors: list[str] = field(default_factory=list)
 
 
 class BaseAnalyzer(abc.ABC):

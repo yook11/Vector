@@ -5,31 +5,25 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import structlog
-from sqlmodel import select
-from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
 from taskiq import Context, TaskiqDepends
 
 from app.analysis import (
-    AnalysisDomainError,
     ConfigurationError,
-    InvalidInputError,
+    DailyQuotaExhaustedError,
     NetworkError,
     ProviderError,
-    _build_embed_text,
+    UnclassifiedError,
     get_analyzer,
     get_embedder,
 )
 from app.analysis import (
     RateLimitError as AnalysisRateLimitError,
 )
-from app.analysis import (
-    analyze_article as _analyze_article_svc,
-)
+from app.analysis.embedding_service import EmbeddingService
 from app.analysis.rate_limiter import (
     RateLimitExceededError as _RateLimitExceededError,
 )
-from app.models.article_analysis import ArticleAnalysis
-from app.models.news_article import NewsArticle
+from app.analysis.service import ArticleAnalysisService, mark_article_skipped
 from app.tasks.brokers import broker_analysis, broker_embedding, is_last_attempt
 
 if TYPE_CHECKING:
@@ -95,97 +89,53 @@ async def analyze_article(
     ctx: Context = TaskiqDepends(),
 ) -> None:
     """Run AI analysis on a single article."""
-    engine = ctx.state.engine
+    session_factory = ctx.state.session_factory
+    analyzer = get_analyzer()
 
-    async with SQLModelAsyncSession(engine, expire_on_commit=False) as session:
-        # Idempotency guard — chain forward even if already analyzed
-        existing = (
-            await session.execute(
-                select(ArticleAnalysis).where(
-                    ArticleAnalysis.news_article_id == article_id
-                )
-            )
-        ).scalar_one_or_none()
-        if existing is not None:
-            await generate_embedding.kiq(article_id)
-            return
+    # Rate limit acquire (caller's responsibility)
+    rpm_limiter, rpd_limiter = _build_limiters(
+        analyzer.MODEL, analyzer.RPM, analyzer.RPD
+    )
+    try:
+        if rpd_limiter is not None:
+            await rpd_limiter.acquire()
+        if rpm_limiter is not None:
+            await rpm_limiter.acquire()
+    except _RateLimitExceededError:
+        logger.warning("analyze_article_daily_quota", article_id=article_id)
+        return
 
-        article = await session.get(NewsArticle, article_id)
-        if article is None:
-            logger.warning("analyze_article_not_found", article_id=article_id)
-            return
-
-        analyzer = get_analyzer()
-        rpm_limiter, rpd_limiter = _build_limiters(
-            analyzer.MODEL, analyzer.RPM, analyzer.RPD
+    # Service call (session managed internally)
+    svc = ArticleAnalysisService(session_factory)
+    try:
+        result = await svc.execute(article_id, analyzer)
+    except (ConfigurationError, DailyQuotaExhaustedError) as e:
+        logger.warning(
+            "analyze_article_no_retry",
+            article_id=article_id,
+            reason=str(e),
         )
-
-        try:
-            if rpd_limiter is not None:
-                await rpd_limiter.acquire()
-            if rpm_limiter is not None:
-                await rpm_limiter.acquire()
-
-            analysis = await _analyze_article_svc(session, article, analyzer)
-            if analysis is not None:
-                await session.commit()
-        except _RateLimitExceededError:
+        return
+    except (
+        AnalysisRateLimitError,
+        ProviderError,
+        NetworkError,
+        UnclassifiedError,
+    ) as e:
+        if is_last_attempt(ctx):
+            if isinstance(e, AnalysisRateLimitError):
+                await mark_article_skipped(session_factory, article_id)
             logger.warning(
-                "analyze_article_daily_quota",
-                article_id=article_id,
-            )
-            return
-        except ConfigurationError as e:
-            logger.warning(
-                "analyze_article_configuration_error",
+                "analyze_article_max_retries",
                 article_id=article_id,
                 reason=str(e),
             )
             return
-        except AnalysisRateLimitError:
-            if is_last_attempt(ctx):
-                article.original_content = None
-                article.skip_content_fetch = True
-                session.add(article)
-                await session.commit()
-                logger.warning("analyze_article_max_retries", article_id=article_id)
-                return
-            raise
-        except (ProviderError, NetworkError) as e:
-            if is_last_attempt(ctx):
-                logger.warning(
-                    "analyze_article_transient_max_retries",
-                    article_id=article_id,
-                    reason=str(e),
-                )
-                return
-            raise
-        except InvalidInputError as e:
-            await session.rollback()
-            article.original_content = None
-            article.skip_content_fetch = True
-            session.add(article)
-            await session.commit()
-            logger.warning(
-                "analyze_article_invalid_input",
-                article_id=article_id,
-                reason=str(e),
-            )
-            return
-        except AnalysisDomainError as e:
-            await session.rollback()
-            article.original_content = None
-            article.skip_content_fetch = True
-            session.add(article)
-            await session.commit()
-            logger.warning(
-                "analyze_article_domain_error",
-                article_id=article_id,
-                reason=str(e),
-            )
-            return
+        raise
 
-    await generate_embedding.kiq(article_id)
+    # Chain to next step
+    if result.status in ("created", "already_exists"):
+        await generate_embedding.kiq(article_id)
 
 
 # ---------------------------------------------------------------------------
@@ -204,87 +154,44 @@ async def generate_embedding(
     ctx: Context = TaskiqDepends(),
 ) -> None:
     """Generate vector embedding for a single article's analysis."""
-    engine = ctx.state.engine
+    session_factory = ctx.state.session_factory
+    embedder = get_embedder()
 
-    async with SQLModelAsyncSession(engine, expire_on_commit=False) as session:
-        analysis = (
-            await session.execute(
-                select(ArticleAnalysis).where(
-                    ArticleAnalysis.news_article_id == article_id
-                )
-            )
-        ).scalar_one_or_none()
+    # Rate limit acquire (caller's responsibility)
+    rpm_limiter, rpd_limiter = _build_limiters(
+        embedder.MODEL, embedder.RPM, embedder.RPD
+    )
+    try:
+        if rpd_limiter is not None:
+            await rpd_limiter.acquire()
+        if rpm_limiter is not None:
+            await rpm_limiter.acquire()
+    except _RateLimitExceededError:
+        logger.warning("generate_embedding_daily_quota", article_id=article_id)
+        return
 
-        if analysis is None:
-            logger.warning("generate_embedding_no_analysis", article_id=article_id)
-            return
-
-        # Idempotency guard
-        if analysis.embedding is not None:
-            return
-
-        article = await session.get(NewsArticle, article_id)
-        if article is None:
-            return
-
-        embedder = get_embedder()
-        rpm_limiter, rpd_limiter = _build_limiters(
-            embedder.MODEL, embedder.RPM, embedder.RPD
+    # Service call (session managed internally)
+    svc = EmbeddingService(session_factory)
+    try:
+        await svc.execute(article_id, embedder)
+    except (ConfigurationError, DailyQuotaExhaustedError) as e:
+        logger.warning(
+            "generate_embedding_no_retry",
+            article_id=article_id,
+            reason=str(e),
         )
-        text = _build_embed_text(article)
-
-        try:
-            if rpd_limiter is not None:
-                await rpd_limiter.acquire()
-            if rpm_limiter is not None:
-                await rpm_limiter.acquire()
-
-            vector = await embedder.embed_document(text)
-        except _RateLimitExceededError:
+        return
+    except (
+        AnalysisRateLimitError,
+        ProviderError,
+        NetworkError,
+        UnclassifiedError,
+    ) as e:
+        if is_last_attempt(ctx):
             logger.warning(
-                "generate_embedding_daily_quota",
-                article_id=article_id,
-            )
-            return
-        except ConfigurationError as e:
-            logger.warning(
-                "generate_embedding_configuration_error",
+                "generate_embedding_max_retries",
                 article_id=article_id,
                 reason=str(e),
             )
             return
-        except InvalidInputError as e:
-            logger.warning(
-                "generate_embedding_invalid_input",
-                article_id=article_id,
-                reason=str(e),
-            )
-            return
-        except AnalysisRateLimitError:
-            if is_last_attempt(ctx):
-                logger.warning("generate_embedding_max_retries", article_id=article_id)
-                return
-            raise
-        except (ProviderError, NetworkError) as e:
-            if is_last_attempt(ctx):
-                logger.warning(
-                    "generate_embedding_transient_max_retries",
-                    article_id=article_id,
-                    reason=str(e),
-                )
-                return
-            raise
-        except AnalysisDomainError as e:
-            logger.warning(
-                "generate_embedding_domain_error",
-                article_id=article_id,
-                reason=str(e),
-            )
-            return
-
-        analysis.embedding = vector
-        analysis.embedding_model = embedder.MODEL
-        session.add(analysis)
-        await session.commit()
-
-    logger.info("generate_embedding_completed", article_id=article_id)
+        raise
