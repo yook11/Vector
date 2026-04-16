@@ -6,8 +6,8 @@ import structlog
 from sqlmodel import select
 from taskiq import Context, TaskiqDepends
 
-from app.collection.article_body_fetcher import ArticleBodyFetcher, TemporaryFetchError
 from app.collection.content_service import ContentFetchService, mark_article_skipped
+from app.collection.html_extractor import ArticleHtmlExtractor, TemporaryFetchError
 from app.collection.news_fetcher import fetch_news_for_sources
 from app.models.news_source import NewsSource
 from app.tasks.brokers import (
@@ -108,8 +108,8 @@ async def fetch_content(
     from app.tasks.analysis_tasks import analyze_article
 
     session_factory = ctx.state.session_factory
-    body_fetcher = ArticleBodyFetcher()
-    svc = ContentFetchService(session_factory, body_fetcher)
+    html_extractor = ArticleHtmlExtractor()
+    svc = ContentFetchService(session_factory, html_extractor)
 
     try:
         result = await svc.execute(article_id)

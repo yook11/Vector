@@ -341,7 +341,10 @@ async def fetch_news_for_sources(
     for sr in result.source_results:
         for article in sr.new_articles:
             result.new_article_ids.append(article.id)
-            if article.original_content is not None:
+            if (
+                article.original_content is not None
+                and article.published_at is not None
+            ):
                 result.content_ready_ids.append(article.id)
 
     logger.info(

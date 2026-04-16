@@ -1,17 +1,41 @@
-"""記事本文フェッチャーのテスト。"""
+"""HTML 抽出層のテスト。"""
 
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 
-from app.collection.article_body_fetcher import (
-    ArticleBodyFetcher,
+from app.collection.html_extractor import (
+    ArticleHtmlExtractor,
+    HtmlExtractionResult,
     PermanentFetchError,
     TemporaryFetchError,
+    _parse_extracted_date,
 )
 
 SAMPLE_HTML = """
+<html>
+<head>
+<title>Test Article</title>
+<meta property="article:published_time" content="2026-03-15T10:30:00Z" />
+</head>
+<body>
+<article>
+<h1>Quantum Computing Breakthrough</h1>
+<p>Researchers have achieved a significant milestone in quantum computing.
+The team demonstrated error-corrected logical qubits operating at
+unprecedented fidelity levels, marking a crucial step toward practical
+quantum computers. This breakthrough could accelerate the development
+of quantum applications in drug discovery, materials science, and
+cryptography. Industry experts predict this will attract substantial
+investment from major technology companies.</p>
+</article>
+</body>
+</html>
+"""
+
+SAMPLE_HTML_NO_DATE = """
 <html>
 <head><title>Test Article</title></head>
 <body>
@@ -40,7 +64,7 @@ def _mock_async_client(responses: list[httpx.Response | Exception]) -> AsyncMock
 def _patch_client(client: AsyncMock):
     """``httpx.AsyncClient`` を patch して fetch() が指定モックを使うようにする。"""
     return patch(
-        "app.collection.article_body_fetcher.httpx.AsyncClient",
+        "app.collection.html_extractor.httpx.AsyncClient",
         return_value=_as_async_cm(client),
     )
 
@@ -53,7 +77,23 @@ def _as_async_cm(value: object) -> AsyncMock:
     return cm
 
 
-class TestArticleBodyFetcher:
+class TestParseExtractedDate:
+    def test_parses_iso_datetime(self) -> None:
+        result = _parse_extracted_date("2026-03-15T10:30:00")
+        assert result == datetime(2026, 3, 15, 10, 30, 0, tzinfo=UTC)
+
+    def test_parses_date_only(self) -> None:
+        result = _parse_extracted_date("2026-03-15")
+        assert result == datetime(2026, 3, 15, 0, 0, 0, tzinfo=UTC)
+
+    def test_returns_none_for_none(self) -> None:
+        assert _parse_extracted_date(None) is None
+
+    def test_returns_none_for_invalid(self) -> None:
+        assert _parse_extracted_date("not-a-date") is None
+
+
+class TestArticleHtmlExtractor:
     @pytest.mark.asyncio
     async def test_fetches_body_from_url(self) -> None:
         robots_resp = httpx.Response(
@@ -68,12 +108,13 @@ class TestArticleBodyFetcher:
         )
         client = _mock_async_client([robots_resp, html_resp])
 
-        fetcher = ArticleBodyFetcher()
+        extractor = ArticleHtmlExtractor()
         with _patch_client(client):
-            result = await fetcher.fetch("https://example.com/article")
+            result = await extractor.fetch("https://example.com/article")
 
-        assert result is not None
-        assert len(result) > 50
+        assert isinstance(result, HtmlExtractionResult)
+        assert result.body is not None
+        assert len(result.body) > 50
 
     @pytest.mark.asyncio
     async def test_raises_permanent_on_403(self) -> None:
@@ -92,9 +133,9 @@ class TestArticleBodyFetcher:
         )
         client = _mock_async_client([robots_resp, error_resp])
 
-        fetcher = ArticleBodyFetcher()
+        extractor = ArticleHtmlExtractor()
         with _patch_client(client), pytest.raises(PermanentFetchError, match="403"):
-            await fetcher.fetch("https://example.com/paywall")
+            await extractor.fetch("https://example.com/paywall")
 
     @pytest.mark.asyncio
     async def test_raises_temporary_on_500(self) -> None:
@@ -113,9 +154,9 @@ class TestArticleBodyFetcher:
         )
         client = _mock_async_client([robots_resp, error_resp])
 
-        fetcher = ArticleBodyFetcher()
+        extractor = ArticleHtmlExtractor()
         with _patch_client(client), pytest.raises(TemporaryFetchError, match="500"):
-            await fetcher.fetch("https://example.com/error")
+            await extractor.fetch("https://example.com/error")
 
     @pytest.mark.asyncio
     async def test_raises_temporary_on_request_error(self) -> None:
@@ -125,15 +166,15 @@ class TestArticleBodyFetcher:
         )
         client = _mock_async_client([robots_resp, httpx.ConnectTimeout("timed out")])
 
-        fetcher = ArticleBodyFetcher()
+        extractor = ArticleHtmlExtractor()
         with (
             _patch_client(client),
             pytest.raises(TemporaryFetchError, match="timed out"),
         ):
-            await fetcher.fetch("https://example.com/slow")
+            await extractor.fetch("https://example.com/slow")
 
     @pytest.mark.asyncio
-    async def test_returns_none_for_non_html(self) -> None:
+    async def test_returns_empty_result_for_non_html(self) -> None:
         robots_resp = httpx.Response(
             404,
             request=httpx.Request("GET", "https://example.com/robots.txt"),
@@ -146,15 +187,16 @@ class TestArticleBodyFetcher:
         )
         client = _mock_async_client([robots_resp, pdf_resp])
 
-        fetcher = ArticleBodyFetcher()
+        extractor = ArticleHtmlExtractor()
         with _patch_client(client):
-            result = await fetcher.fetch("https://example.com/doc.pdf")
+            result = await extractor.fetch("https://example.com/doc.pdf")
 
-        assert result is None
+        assert result.body is None
+        assert result.published_at is None
 
     @pytest.mark.asyncio
-    async def test_returns_none_for_minimal_content(self) -> None:
-        """品質ゲートによりパース後に短すぎるコンテンツは拒否される。"""
+    async def test_returns_none_body_for_minimal_content(self) -> None:
+        """品質ゲートによりパース後に短すぎるコンテンツは body=None になる。"""
         robots_resp = httpx.Response(
             404,
             request=httpx.Request("GET", "https://example.com/robots.txt"),
@@ -168,11 +210,11 @@ class TestArticleBodyFetcher:
         )
         client = _mock_async_client([robots_resp, html_resp])
 
-        fetcher = ArticleBodyFetcher()
+        extractor = ArticleHtmlExtractor()
         with _patch_client(client):
-            result = await fetcher.fetch("https://example.com/short")
+            result = await extractor.fetch("https://example.com/short")
 
-        assert result is None
+        assert result.body is None
 
     @pytest.mark.asyncio
     async def test_raises_permanent_on_robots_blocked(self) -> None:
@@ -184,9 +226,9 @@ class TestArticleBodyFetcher:
         )
         client = _mock_async_client([robots_resp])
 
-        fetcher = ArticleBodyFetcher()
+        extractor = ArticleHtmlExtractor()
         with _patch_client(client), pytest.raises(PermanentFetchError, match="robots"):
-            await fetcher.fetch("https://example.com/private/article")
+            await extractor.fetch("https://example.com/private/article")
 
     @pytest.mark.asyncio
     async def test_caches_robots_txt_across_calls(self) -> None:
@@ -207,15 +249,15 @@ class TestArticleBodyFetcher:
             headers={"content-type": "text/html"},
             request=httpx.Request("GET", "https://example.com/a2"),
         )
-        # 2 回の fetch は同じ fetcher インスタンスを再利用 (robots cache 共有)
+        # 2 回の fetch は同じ extractor インスタンスを再利用 (robots cache 共有)
         client_1 = _mock_async_client([robots_resp, html_resp_1])
         client_2 = _mock_async_client([html_resp_2])
 
-        fetcher = ArticleBodyFetcher()
+        extractor = ArticleHtmlExtractor()
         with _patch_client(client_1):
-            await fetcher.fetch("https://example.com/a1")
+            await extractor.fetch("https://example.com/a1")
         with _patch_client(client_2):
-            await fetcher.fetch("https://example.com/a2")
+            await extractor.fetch("https://example.com/a2")
 
         # 2 回目の fetch では robots.txt を再リクエストしないはず
         robots_calls_1 = [

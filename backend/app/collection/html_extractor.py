@@ -1,18 +1,20 @@
-"""記事本文フェッチャ — URL から記事本文を取得する。
+"""HTML 抽出層 — URL から記事本文と公開日時を取得する。
 
-単一責務のクラス: URL を受け取り、本文テキストを返すか、品質ゲートで
-弾かれた場合は ``None`` を返す。恒久的な失敗と一時的な失敗は例外として
-分離し、呼び出し側でビジネス判断とリトライ判断を切り分けられるようにする。
+単一責務のクラス: URL を受け取り、HTML から本文テキストと公開日時を
+抽出して返す。恒久的な失敗と一時的な失敗は例外として分離し、
+呼び出し側でビジネス判断とリトライ判断を切り分けられるようにする。
 
 内部実装（``RobotsCache``、``httpx`` クライアントのライフサイクル、
 ``trafilatura`` パーサ）はここで隠蔽され、呼び出し側は
-``URL -> 本文 | None`` の契約にのみ依存する。
+``URL -> HtmlExtractionResult`` の契約にのみ依存する。
 """
 
 from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from urllib.parse import urlparse
 from urllib.robotparser import RobotFileParser
 
@@ -33,6 +35,14 @@ class PermanentFetchError(Exception):
 
 class TemporaryFetchError(Exception):
     """リトライ可能なフェッチ失敗（5xx / タイムアウト / 429）。"""
+
+
+@dataclass(frozen=True)
+class HtmlExtractionResult:
+    """HTML 抽出結果。本文と公開日時をそれぞれ独立に保持する。"""
+
+    body: str | None
+    published_at: datetime | None
 
 
 class _RobotsCache:
@@ -74,40 +84,71 @@ class _RobotsCache:
             return rp is None or rp.can_fetch(USER_AGENT, url)
 
 
-def _parse_article_html(html: str, url: str) -> str | None:
-    """trafilatura で HTML から記事本文を抽出する（同期・CPU バウンド）。
+def _parse_extracted_date(date_str: str | None) -> datetime | None:
+    """trafilatura が返す日付文字列を datetime に変換する。
+
+    trafilatura は htmldate 経由で日付を抽出し、outputformat に応じた
+    文字列を返す。TZ 情報は失われるため UTC として扱う。
+    """
+    if not date_str:
+        return None
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(date_str, fmt).replace(tzinfo=UTC)
+        except ValueError:
+            continue
+    return None
+
+
+def _extract_from_html(html: str, url: str) -> HtmlExtractionResult:
+    """trafilatura で HTML から記事本文と公開日時を抽出する（同期・CPU バウンド）。
 
     本関数は ``asyncio.to_thread()`` 経由で呼ぶことを想定している。
     """
-    text = trafilatura.extract(
+    result = trafilatura.bare_extraction(
         html,
         url=url,
         favor_precision=True,
         include_comments=False,
         include_tables=True,
         deduplicate=True,
+        with_metadata=True,
+        date_extraction_params={
+            "original_date": True,
+            "extensive_search": True,
+            "max_date": datetime.now(UTC).strftime("%Y-%m-%d"),
+            "outputformat": "%Y-%m-%dT%H:%M:%S",
+        },
     )
-    if not text or len(text.strip()) < 50:
-        return None
-    return text.strip()
+
+    if result is None:
+        return HtmlExtractionResult(body=None, published_at=None)
+
+    # 本文の品質ゲート: 50 文字未満は棄却
+    text = result.get("text")
+    body = text.strip() if text and len(text.strip()) >= 50 else None
+
+    published_at = _parse_extracted_date(result.get("date"))
+
+    return HtmlExtractionResult(body=body, published_at=published_at)
 
 
-class ArticleBodyFetcher:
-    """URL から記事本文テキストを取得するフェッチャ。
+class ArticleHtmlExtractor:
+    """URL から記事本文と公開日時を取得する抽出器。
 
-    呼び出し側は ``fetch(url) -> str | None`` の契約のみに依存する。
+    呼び出し側は ``fetch(url) -> HtmlExtractionResult`` の契約のみに依存する。
     robots キャッシュや HTTP クライアントのライフサイクルは内部で完結する。
     """
 
     def __init__(self) -> None:
         self._robots_cache = _RobotsCache()
 
-    async def fetch(self, url: str) -> str | None:
-        """指定 URL の記事本文を取得する。
+    async def fetch(self, url: str) -> HtmlExtractionResult:
+        """指定 URL の HTML から記事本文と公開日時を抽出する。
 
         Returns:
-            str: 抽出した記事本文テキスト。
-            None: Content-Type が不一致、または品質ゲートで棄却（恒久的）。
+            HtmlExtractionResult: body と published_at を独立に保持。
+            Content-Type が不一致の場合は両方 None。
 
         Raises:
             PermanentFetchError: robots.txt 拒否 / 403 / 404 / 410 / 451。
@@ -135,12 +176,12 @@ class ArticleBodyFetcher:
             content_type = response.headers.get("content-type", "")
             if "text/html" not in content_type:
                 logger.info("content_not_html", url=url, content_type=content_type)
-                return None
+                return HtmlExtractionResult(body=None, published_at=None)
 
             try:
-                text = await asyncio.to_thread(_parse_article_html, response.text, url)
+                result = await asyncio.to_thread(_extract_from_html, response.text, url)
             except Exception as e:
                 logger.warning("content_parse_error", url=url, error=str(e))
-                return None
+                return HtmlExtractionResult(body=None, published_at=None)
 
-            return text
+            return result

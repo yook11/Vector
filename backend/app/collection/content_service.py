@@ -1,7 +1,7 @@
-"""コンテンツ取得サービス — 記事本文の取得と永続化を編成する。
+"""コンテンツ取得サービス — 記事本文と公開日時の取得・永続化を編成する。
 
 アトミックなユースケース: ``article_id`` を受け取り、レコードを読み込んで
-本文取得を :class:`ArticleBodyFetcher` に委譲し、結果を永続化する
+HTML 抽出を :class:`ArticleHtmlExtractor` に委譲し、結果を永続化する
 （または恒久スキップとしてマークする）。セッション管理は内部で完結する。
 """
 
@@ -13,13 +13,18 @@ from typing import Literal
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.collection.article_body_fetcher import (
-    ArticleBodyFetcher,
+from app.collection.html_extractor import (
+    ArticleHtmlExtractor,
     PermanentFetchError,
 )
 from app.models.news_article import NewsArticle
 
 logger = structlog.get_logger(__name__)
+
+
+def _needs_enrichment(article: NewsArticle) -> bool:
+    """記事が HTML エンリッチメントを必要とするか判定する。"""
+    return article.original_content is None or article.published_at is None
 
 
 @dataclass(frozen=True)
@@ -30,24 +35,24 @@ class ContentFetchResult:
 
 
 class ContentFetchService:
-    """1 記事の本文取得と永続化を行うアトミックなユースケース。
+    """1 記事の本文・公開日時取得と永続化を行うアトミックなユースケース。
 
     責務を明確に分離している:
       1. 記事レコードの読み込み（DB）。
-      2. 本文テキストの取得（``ArticleBodyFetcher`` へ委譲）。
-      3. 本文の永続化、または恒久スキップとしてマーク。
+      2. HTML からの本文・公開日時抽出（``ArticleHtmlExtractor`` へ委譲）。
+      3. 結果の永続化: content と published_at を独立に判断。
     """
 
     def __init__(
         self,
         session_factory: async_sessionmaker[AsyncSession],
-        body_fetcher: ArticleBodyFetcher,
+        html_extractor: ArticleHtmlExtractor,
     ) -> None:
         self._session_factory = session_factory
-        self._body_fetcher = body_fetcher
+        self._html_extractor = html_extractor
 
     async def execute(self, article_id: int) -> ContentFetchResult:
-        """記事本文を取得し永続化する。
+        """記事本文と公開日時を取得し永続化する。
 
         Returns:
             status を持つ ContentFetchResult。
@@ -61,12 +66,12 @@ class ContentFetchService:
             if article is None:
                 logger.warning("content_fetch_article_not_found", article_id=article_id)
                 return ContentFetchResult("skipped")
-            if article.original_content is not None:
+            if not _needs_enrichment(article):
                 return ContentFetchResult("already_exists")
 
-            # 2. 本文取得を委譲
+            # 2. HTML 抽出を委譲
             try:
-                content = await self._body_fetcher.fetch(str(article.original_url))
+                extraction = await self._html_extractor.fetch(str(article.original_url))
             except PermanentFetchError as e:
                 article.skip_content_fetch = True
                 session.add(article)
@@ -78,8 +83,21 @@ class ContentFetchService:
                 )
                 return ContentFetchResult("skipped")
 
-            # 品質ゲートで棄却された場合は恒久スキップ
-            if content is None:
+            # 3. 結果を独立に適用
+            updated = False
+
+            # 本文: 未取得かつ抽出成功の場合のみ保存
+            if article.original_content is None and extraction.body is not None:
+                article.original_content = extraction.body
+                updated = True
+
+            # 公開日時: 未取得かつ抽出成功の場合のみ保存
+            if article.published_at is None and extraction.published_at is not None:
+                article.published_at = extraction.published_at
+                updated = True
+
+            # 本文も日時も取れなかった場合は恒久スキップ
+            if not updated and extraction.body is None:
                 article.skip_content_fetch = True
                 session.add(article)
                 await session.commit()
@@ -90,11 +108,14 @@ class ContentFetchService:
                 )
                 return ContentFetchResult("skipped")
 
-            # 3. 永続化
-            article.original_content = content
             session.add(article)
             await session.commit()
-            logger.info("content_fetch_completed", article_id=article_id)
+            logger.info(
+                "content_fetch_completed",
+                article_id=article_id,
+                body_extracted=extraction.body is not None,
+                date_extracted=extraction.published_at is not None,
+            )
             return ContentFetchResult("fetched")
 
 

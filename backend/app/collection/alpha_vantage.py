@@ -159,7 +159,6 @@ class AlphaVantageClient:
         # 新規記事を作成
         max_new = settings.max_articles_per_fetch
         new_count = 0
-        now = datetime.now(UTC)
 
         for item, url in articles_data:
             if url in existing_urls:
@@ -185,7 +184,7 @@ class AlphaVantageClient:
             try:
                 published_at = _parse_av_time(item["time_published"])
             except (ValueError, KeyError):
-                published_at = now
+                published_at = None
 
             article = NewsArticle(
                 original_title=strip_html_tags(item.get("title", ""))[:500],
