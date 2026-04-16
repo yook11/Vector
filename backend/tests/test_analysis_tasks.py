@@ -1,4 +1,4 @@
-"""Tests for analysis tasks (analyze_article)."""
+"""分析タスク (analyze_article) のテスト。"""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -11,7 +11,7 @@ def _make_ctx(
     retry_count: int = 0,
     max_retries: int = 0,
 ) -> MagicMock:
-    """Create a mock taskiq Context with state.session_factory and labels."""
+    """state.session_factory と labels を持つ taskiq Context のモックを作成する。"""
     ctx = MagicMock()
     ctx.state.session_factory = MagicMock()
     ctx.message.labels = {
@@ -22,7 +22,7 @@ def _make_ctx(
 
 
 def _patch_analyzer() -> tuple:
-    """Return patch context managers for get_analyzer + _build_limiters."""
+    """get_analyzer と _build_limiters 用の patch context を返す。"""
     mock_analyzer = MagicMock()
     mock_analyzer.MODEL = "test-model"
     mock_analyzer.RPM = 50

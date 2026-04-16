@@ -1,4 +1,4 @@
-"""Tests for FetchLog recording in news_fetcher."""
+"""news_fetcher での FetchLog 記録のテスト。"""
 
 from unittest.mock import AsyncMock, patch
 
@@ -16,7 +16,7 @@ async def test_fetch_log_recorded_on_success(
     db_session: AsyncSession,
     sample_source: NewsSource,
 ) -> None:
-    """Successful RSS fetch records a FetchLog with status='success'."""
+    """RSS fetch が成功すると status='success' の FetchLog が記録される。"""
     rss_xml = """<?xml version="1.0" encoding="UTF-8"?>
     <rss version="2.0">
     <channel>
@@ -68,7 +68,7 @@ async def test_fetch_log_recorded_on_error(
     db_session: AsyncSession,
     sample_source: NewsSource,
 ) -> None:
-    """Failed RSS fetch records a FetchLog with status='error'."""
+    """RSS fetch が失敗すると status='error' の FetchLog が記録される。"""
     import httpx
 
     mock_response = AsyncMock()
@@ -111,7 +111,7 @@ async def test_fetch_log_recorded_on_error(
 async def test_fetch_log_not_created_when_no_sources(
     db_session: AsyncSession,
 ) -> None:
-    """No FetchLog is created when sources list is empty."""
+    """sources リストが空の場合は FetchLog が作成されない。"""
     await fetch_news_for_sources(db_session, [])
 
     stmt = select(FetchLog)

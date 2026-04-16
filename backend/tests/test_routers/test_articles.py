@@ -1,4 +1,4 @@
-"""Tests for /api/v1/articles router endpoints."""
+"""/api/v1/articles ルーターエンドポイントのテスト。"""
 
 from datetime import UTC, datetime, timedelta
 
@@ -20,7 +20,7 @@ async def _create_article(
     url: str = "https://example.com/article",
     published_at: datetime | None = None,
 ) -> NewsArticle:
-    """Helper to create a news article."""
+    """ニュース記事を作成するヘルパー。"""
     article = NewsArticle(
         original_title=title,
         original_url=url,
@@ -40,7 +40,7 @@ async def _create_analysis(
     translated_title: str = "テスト記事",
     embedding: list[float] | None = None,
 ) -> ArticleAnalysis:
-    """Helper to create an analysis result."""
+    """分析結果を作成するヘルパー。"""
     analysis = ArticleAnalysis(
         news_article_id=article.id,
         translated_title=translated_title,
@@ -78,7 +78,7 @@ class TestListArticles:
             db_session, sample_source, url="https://example.com/2"
         )
         await _create_analysis(db_session, a2)
-        # Unanalyzed article should be excluded
+        # 未分析の記事は除外されるはず
         await _create_article(db_session, sample_source, url="https://example.com/3")
 
         resp = await client.get("/api/v1/articles")
@@ -121,7 +121,7 @@ class TestListArticles:
         db_session.add(link)
         await db_session.commit()
 
-        # Unlinked + analyzed article
+        # キーワード紐付けなしで分析済みの記事
         other = await _create_article(
             db_session, sample_source, url="https://example.com/other"
         )
@@ -160,7 +160,7 @@ class TestListArticles:
         db_session: AsyncSession,
         sample_source: NewsSource,
     ) -> None:
-        """impactLevel=medium must NOT return high/critical articles."""
+        """impactLevel=medium は high/critical の記事を返してはいけない。"""
         a_medium = await _create_article(
             db_session, sample_source, url="https://example.com/medium"
         )
@@ -234,7 +234,7 @@ class TestListArticles:
         db_session: AsyncSession,
         sample_source: NewsSource,
     ) -> None:
-        """When published_at is identical, articles are ordered by id DESC."""
+        """published_at が同一の場合は id DESC で並び替える。"""
         same_time = datetime(2025, 1, 1, tzinfo=UTC)
         a1 = await _create_article(
             db_session,
@@ -259,7 +259,7 @@ class TestListArticles:
         assert items[1]["translatedTitle"] == "先の記事"
 
     async def test_invalid_category_slug_returns_422(self, client: AsyncClient) -> None:
-        """CategorySlug VO rejects values not matching its slug pattern."""
+        """CategorySlug VO は slug パターンに合わない値を拒否する。"""
         resp = await client.get("/api/v1/articles?category=INVALID-slug")
         assert resp.status_code == 422
         detail = resp.json()["detail"]
@@ -329,18 +329,18 @@ class TestGetArticle:
         assert data["keywords"][0]["name"] == "Quantum Computing"
 
 
-# Dimension must match Vector(768) in the model.
+# 次元はモデルの Vector(768) と一致させる必要がある
 _DIM = 768
 
 
 def _make_embedding(base: float) -> list[float]:
-    """Create a 768-dim embedding filled with a constant value, then normalized."""
+    """定数値で埋めて正規化した 768 次元 embedding を作成する。"""
     vec = [base] * _DIM
     norm = (base**2 * _DIM) ** 0.5
     return [v / norm for v in vec]
 
 
-# Two close embeddings and one distant.
+# 近い embedding 2 つと遠い embedding 1 つ
 EMBEDDING_A = _make_embedding(1.0)
 EMBEDDING_B = _make_embedding(0.95)
 EMBEDDING_FAR = _make_embedding(-1.0)

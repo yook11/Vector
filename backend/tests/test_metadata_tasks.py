@@ -1,4 +1,4 @@
-"""Tests for metadata tasks (fetch_metadata)."""
+"""メタデータタスク (fetch_metadata) のテスト。"""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -9,7 +9,7 @@ from app.models.news_source import NewsSource
 
 
 def _mock_session_context(mock_session: AsyncMock) -> MagicMock:
-    """Create a mock async context manager that yields mock_session."""
+    """mock_session を返す async context manager モックを作成する。"""
     ctx = MagicMock()
     ctx.__aenter__ = AsyncMock(return_value=mock_session)
     ctx.__aexit__ = AsyncMock(return_value=None)
@@ -21,7 +21,7 @@ def _make_ctx(
     retry_count: int = 0,
     max_retries: int = 0,
 ) -> MagicMock:
-    """Create a mock taskiq Context with state.session_factory and labels."""
+    """state.session_factory と labels を持つ taskiq Context のモックを作成する。"""
     ctx = MagicMock()
     ctx.state.session_factory = session_factory or MagicMock()
     ctx.message.labels = {
@@ -32,7 +32,7 @@ def _make_ctx(
 
 
 def _patch_session_factory(ctx: MagicMock, mock_session: AsyncMock) -> None:
-    """Wire ctx.state.session_factory() to yield mock_session via async cm."""
+    """ctx.state.session_factory() が async cm 経由で mock_session を返すようにする。"""
     ctx.state.session_factory.return_value = _mock_session_context(mock_session)
 
 
@@ -88,7 +88,7 @@ class TestFetchMetadata:
 
     @pytest.mark.asyncio
     async def test_dispatches_content_ready_to_analysis(self) -> None:
-        """Full-text RSS articles go directly to analyze_article."""
+        """全文 RSS 記事は analyze_article に直接流す。"""
         from app.tasks.collection_tasks import fetch_metadata
 
         mock_session = AsyncMock()
@@ -125,9 +125,9 @@ class TestFetchMetadata:
             mock_aa.kiq = AsyncMock()
             await fetch_metadata(ctx=mock_ctx)
 
-        # article 11 needs content fetch
+        # article 11 は content fetch が必要
         mock_fc.kiq.assert_called_once_with(11)
-        # articles 10, 12 have content ready — go to analysis
+        # article 10, 12 は content 準備済みなので analysis へ
         assert mock_aa.kiq.call_count == 2
 
     @pytest.mark.asyncio

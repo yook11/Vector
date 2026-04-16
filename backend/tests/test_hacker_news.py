@@ -1,4 +1,4 @@
-"""Tests for the Hacker News fetcher service."""
+"""Hacker News フェッチャーサービスのテスト。"""
 
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock
@@ -64,7 +64,7 @@ def _mock_hn_response(
     data: dict | None = None,
     status_code: int = 200,
 ) -> httpx.Response:
-    """Create a mock httpx response for HN API."""
+    """HN API 向けのモック httpx レスポンスを作成する。"""
     import json
 
     return httpx.Response(
@@ -77,7 +77,7 @@ def _mock_hn_response(
 
 @pytest.fixture
 def mock_http_client() -> AsyncMock:
-    """Provide a mock httpx.AsyncClient for HN tests."""
+    """HN テスト用の httpx.AsyncClient モックを提供する。"""
     client = AsyncMock(spec=httpx.AsyncClient)
     return client
 
@@ -88,7 +88,7 @@ def mock_http_client() -> AsyncMock:
 async def test_fetch_recent_stories_success(
     mock_http_client: AsyncMock,
 ) -> None:
-    """Stories are fetched and url=None entries are filtered out."""
+    """Story を取得し url=None のエントリはフィルタ除外される。"""
     mock_http_client.get.return_value = _mock_hn_response()
 
     hn_client = HackerNewsClient(mock_http_client)
@@ -112,7 +112,7 @@ async def test_fetch_recent_stories_success(
 async def test_fetch_recent_stories_with_since_timestamp(
     mock_http_client: AsyncMock,
 ) -> None:
-    """since_timestamp should be included in numericFilters."""
+    """since_timestamp は numericFilters に含まれる。"""
     mock_http_client.get.return_value = _mock_hn_response(data={"hits": []})
 
     hn_client = HackerNewsClient(mock_http_client)
@@ -131,7 +131,7 @@ async def test_fetch_recent_stories_with_since_timestamp(
 async def test_fetch_recent_stories_without_since_timestamp(
     mock_http_client: AsyncMock,
 ) -> None:
-    """Without since_timestamp, numericFilters should only have points filter."""
+    """since_timestamp がない場合 numericFilters は points フィルタのみ。"""
     mock_http_client.get.return_value = _mock_hn_response(data={"hits": []})
 
     hn_client = HackerNewsClient(mock_http_client)
@@ -147,7 +147,7 @@ async def test_fetch_recent_stories_without_since_timestamp(
 async def test_fetch_recent_stories_api_error(
     mock_http_client: AsyncMock,
 ) -> None:
-    """HTTP errors should propagate as HTTPStatusError."""
+    """HTTP エラーは HTTPStatusError として伝播する。"""
     mock_http_client.get.return_value = _mock_hn_response(data={}, status_code=429)
 
     hn_client = HackerNewsClient(mock_http_client)
@@ -163,7 +163,7 @@ async def test_save_new_stories(
     sample_hn_source: NewsSource,
     mock_http_client: AsyncMock,
 ) -> None:
-    """New HN stories should be saved to news_articles."""
+    """新規 HN story は news_articles に保存される。"""
     mock_http_client.get.return_value = _mock_hn_response()
 
     hn_client = HackerNewsClient(mock_http_client)
@@ -191,7 +191,7 @@ async def test_skip_duplicate_url(
     sample_hn_source: NewsSource,
     mock_http_client: AsyncMock,
 ) -> None:
-    """Articles with existing original_url (from RSS) should be skipped."""
+    """original_url が既存 (RSS 経由) の記事はスキップされる。"""
     existing = NewsArticle(
         original_title="Same article from RSS",
         original_url="https://www.calebleak.com/posts/dog-game/",
@@ -217,7 +217,7 @@ async def test_fetch_and_save_handles_http_error(
     sample_hn_source: NewsSource,
     mock_http_client: AsyncMock,
 ) -> None:
-    """HTTP errors should result in SourceFetchResult(success=False)."""
+    """HTTP エラー時は SourceFetchResult(success=False) となる。"""
     mock_http_client.get.return_value = _mock_hn_response(data={}, status_code=500)
 
     hn_client = HackerNewsClient(mock_http_client)
@@ -234,7 +234,7 @@ async def test_fetch_and_save_handles_network_error(
     sample_hn_source: NewsSource,
     mock_http_client: AsyncMock,
 ) -> None:
-    """Network errors should result in SourceFetchResult(success=False)."""
+    """ネットワークエラー時は SourceFetchResult(success=False) となる。"""
     mock_http_client.get.side_effect = httpx.ConnectError("Connection refused")
 
     hn_client = HackerNewsClient(mock_http_client)
@@ -251,10 +251,10 @@ async def test_fetch_and_save_with_last_fetched_at(
     sample_hn_source: NewsSource,
     mock_http_client: AsyncMock,
 ) -> None:
-    """last_fetched_at derived from fetch_logs should be used as API filter."""
+    """fetch_logs から導出した last_fetched_at が API フィルタに使われる。"""
     from app.models.fetch_log import FetchLog, FetchStatus
 
-    # Create a successful fetch log entry
+    # 成功した fetch ログを 1 件作成
     log = FetchLog(
         source_id=sample_hn_source.id,
         status=FetchStatus.SUCCESS,
@@ -280,7 +280,7 @@ async def test_fetch_and_save_empty_response(
     sample_hn_source: NewsSource,
     mock_http_client: AsyncMock,
 ) -> None:
-    """Empty API response should return success with 0 new articles."""
+    """API レスポンスが空でも success=True かつ new_count=0 を返す。"""
     mock_http_client.get.return_value = _mock_hn_response(data={"hits": []})
 
     hn_client = HackerNewsClient(mock_http_client)

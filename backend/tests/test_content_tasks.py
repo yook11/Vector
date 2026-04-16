@@ -1,4 +1,4 @@
-"""Tests for content tasks (fetch_content)."""
+"""コンテンツタスク (fetch_content) のテスト。"""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -11,7 +11,7 @@ def _make_ctx(
     retry_count: int = 0,
     max_retries: int = 0,
 ) -> MagicMock:
-    """Create a mock taskiq Context with state.session_factory and labels."""
+    """state.session_factory と labels を持つ taskiq Context のモックを作成する。"""
     ctx = MagicMock()
     ctx.state.session_factory = MagicMock()
     ctx.message.labels = {
@@ -112,7 +112,7 @@ class TestFetchContent:
             mock_svc_cls.return_value.execute = AsyncMock(
                 side_effect=TemporaryFetchError("HTTP 500"),
             )
-            # Should not raise on last attempt
+            # 最終試行では例外を送出しないこと
             await fetch_content(article_id=1, ctx=mock_ctx)
 
         mock_mark.assert_called_once_with(mock_ctx.state.session_factory, 1)

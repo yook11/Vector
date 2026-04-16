@@ -1,4 +1,4 @@
-"""Tests for /api/v1/categories router endpoints."""
+"""/api/v1/categories ルーターエンドポイントのテスト。"""
 
 import pytest
 from httpx import AsyncClient
@@ -56,7 +56,7 @@ class TestListCategories:
         assert slugs == sorted(slugs)
 
     async def test_no_auth_required(self, client: AsyncClient) -> None:
-        """Categories endpoint should not require authentication."""
+        """カテゴリエンドポイントは認証を要求しない。"""
         resp = await client.get("/api/v1/categories")
         assert resp.status_code == 200
 
@@ -78,7 +78,7 @@ class TestListCategories:
         sample_categories: list[Category],
         sample_source: NewsSource,
     ) -> None:
-        """Category should include article count from linked keywords."""
+        """カテゴリには紐付くキーワード経由の記事数が含まれる。"""
         kw = Keyword(name="TensorFlow", category_id=sample_categories[0].id)
         db_session.add(kw)
         await db_session.flush()
@@ -119,7 +119,7 @@ class TestListCategories:
         db_session: AsyncSession,
         sample_categories: list[Category],
     ) -> None:
-        """Category response should include nested keywords."""
+        """カテゴリレスポンスにはネストしたキーワードが含まれる。"""
         kw = Keyword(name="PyTorch", category_id=sample_categories[0].id)
         db_session.add(kw)
         await db_session.commit()

@@ -1,4 +1,4 @@
-"""Tests for the embedding service and similar articles API endpoint."""
+"""Embedding サービスと類似記事 API エンドポイントのテスト。"""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -45,7 +45,7 @@ def test_get_embedder_raises_on_unknown_provider() -> None:
 
 @pytest.mark.asyncio
 async def test_gemini_embedder_429_raises_rate_limit_error() -> None:
-    """When Gemini API returns 429, GeminiEmbedder should raise RateLimitError."""
+    """Gemini API が 429 を返したら GeminiEmbedder は RateLimitError を送出する。"""
     from google.genai.errors import ClientError
 
     with (
@@ -58,7 +58,7 @@ async def test_gemini_embedder_429_raises_rate_limit_error() -> None:
 
         embedder = GeminiEmbedder()
 
-        # Create a ClientError with code=429
+        # code=429 の ClientError を作成
         error_429 = ClientError(
             429,
             {
@@ -81,14 +81,14 @@ async def test_gemini_embedder_429_raises_rate_limit_error() -> None:
 
 
 class _InvalidInputSDKError(Exception):
-    """Simulates a provider SDK client error (not an AnalysisDomainError)."""
+    """プロバイダ SDK のクライアントエラーを模す (AnalysisDomainError ではない)。"""
 
 
 class StubEmbedder(BaseEmbedder):
-    """Test-only subclass that records _call_api calls and raises on demand.
+    """テスト用サブクラス。_call_api の呼び出しを記録し、任意で例外を送出する。
 
-    _call_api raises plain exceptions (simulating SDK errors).
-    _translate_error maps them to the embedding error hierarchy.
+    _call_api は素の例外を送出する (SDK エラーを模す)。
+    _translate_error が embedding エラー階層へマップする。
     """
 
     MODEL = "stub-model"
@@ -136,7 +136,7 @@ async def test_embed_documents_returns_all_vectors() -> None:
 
 @pytest.mark.asyncio
 async def test_embed_once_translates_sdk_error() -> None:
-    """SDK exceptions are translated via _translate_error."""
+    """SDK 例外は _translate_error で変換される。"""
     embedder = StubEmbedder(side_effects=[RuntimeError("API error")])
     with pytest.raises(ProviderError):
         await embedder.embed_document("text")
@@ -167,14 +167,14 @@ async def test_task_type_passed_through() -> None:
 
 
 def test_base_embedder_rejects_subclass_without_classvar() -> None:
-    """Concrete subclass missing a required ClassVar raises TypeError."""
+    """必須 ClassVar を欠く具象サブクラスは TypeError を送出する。"""
     with pytest.raises(TypeError, match="must define ClassVar 'RPD'"):
 
         class BadEmbedder(BaseEmbedder):
             MODEL = "bad"
             DIMENSION = 3
             RPM = None
-            # RPD intentionally missing
+            # RPD は意図的に未定義
 
             async def _call_api(
                 self, contents: str | list[str], task_type: str

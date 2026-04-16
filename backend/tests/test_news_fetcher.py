@@ -1,4 +1,4 @@
-"""Tests for the news fetcher service (source-based)."""
+"""ニュースフェッチャーサービス (source ベース) のテスト。"""
 
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -18,7 +18,7 @@ from app.models.news_source import NewsSource
 
 
 def _make_feed(entries: list[dict], bozo: bool = False) -> MagicMock:
-    """Create a mock feedparser FeedParserDict."""
+    """feedparser の FeedParserDict モックを作成する。"""
     feed = MagicMock()
     feed.entries = entries
     feed.bozo = bozo
@@ -33,12 +33,12 @@ def _make_entry(
     guid: str | None = None,
     published_parsed: time.struct_time | None = None,
 ) -> dict:
-    """Create a mock RSS feed entry."""
+    """RSS フィードエントリのモックを作成する。"""
     entry: dict = {"title": title, "link": link, "summary": summary}
     if guid:
         entry["id"] = guid
     else:
-        entry["id"] = link  # feedparser maps <guid> to entry.id
+        entry["id"] = link  # feedparser は <guid> を entry.id にマップする
     if published_parsed:
         entry["published_parsed"] = published_parsed
     return entry
@@ -90,7 +90,7 @@ def _mock_response(
     text: str = "",
     headers: dict | None = None,
 ) -> httpx.Response:
-    """Create a mock httpx response."""
+    """httpx レスポンスのモックを作成する。"""
     resp = httpx.Response(
         status_code=status_code,
         text=text,
@@ -102,7 +102,7 @@ def _mock_response(
 
 @pytest.fixture
 def mock_client() -> AsyncMock:
-    """Provide a mock httpx.AsyncClient."""
+    """モック httpx.AsyncClient を提供する。"""
     client = AsyncMock(spec=httpx.AsyncClient)
     client.__aenter__ = AsyncMock(return_value=client)
     client.__aexit__ = AsyncMock(return_value=None)
@@ -269,7 +269,7 @@ async def test_fetch_sends_conditional_get_headers_from_redis(
     sample_source: NewsSource,
     mock_client: AsyncMock,
 ) -> None:
-    """ETag and Last-Modified should be read from Redis and sent as headers."""
+    """ETag と Last-Modified は Redis から読み出しヘッダーとして送信する。"""
     mock_client.get.return_value = _mock_response(status_code=304)
 
     with (
@@ -295,7 +295,7 @@ async def test_fetch_captures_etag_and_writes_to_redis(
     sample_source: NewsSource,
     mock_client: AsyncMock,
 ) -> None:
-    """Response ETag and Last-Modified should be written to Redis."""
+    """レスポンスの ETag と Last-Modified は Redis に書き込む。"""
     entries = [_make_entry(title="Art", link="https://example.com/art")]
     feed = _make_feed(entries)
     mock_client.get.return_value = _mock_response(
@@ -336,7 +336,7 @@ async def test_fetch_stores_full_content_from_rss(
     sample_source: NewsSource,
     mock_client: AsyncMock,
 ) -> None:
-    """If RSS entry has full content (>500 chars), store it immediately."""
+    """RSS エントリに全文 (>500 文字) があれば即座に保存する。"""
     long_content = "A" * 600
     entry = _make_entry(title="Full Content", link="https://example.com/full")
     entry["content"] = [{"value": long_content, "type": "text/html"}]
@@ -361,7 +361,7 @@ async def test_fetch_stores_full_content_from_rss(
     assert result.new_count == 1
     articles = (await db_session.execute(select(NewsArticle))).scalars().all()
     assert articles[0].original_content is not None
-    # Full-content article should be in content_ready_ids
+    # 全文つきの記事は content_ready_ids に含まれるべき
     assert articles[0].id in result.content_ready_ids
     assert articles[0].id in result.new_article_ids
 
@@ -369,7 +369,7 @@ async def test_fetch_stores_full_content_from_rss(
 async def test_fetch_populates_new_article_ids(
     db_session: AsyncSession, sample_source: NewsSource, mock_client: AsyncMock
 ) -> None:
-    """new_article_ids should contain IDs of all newly created articles."""
+    """new_article_ids には新規作成された全記事の ID が含まれる。"""
     entries = [
         _make_entry(title="A1", link="https://example.com/a1"),
         _make_entry(title="A2", link="https://example.com/a2"),

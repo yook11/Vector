@@ -1,4 +1,4 @@
-"""Tests for /api/v1/admin/pipeline router endpoints."""
+"""/api/v1/admin/pipeline ルーターエンドポイントのテスト。"""
 
 from unittest.mock import AsyncMock, patch
 
@@ -22,7 +22,7 @@ class TestFetchNews:
         data = resp.json()
         assert data["jobId"] == "test-task-id-123"
         assert data["message"] == "Fetch task submitted"
-        assert data["sourcesCount"] is None  # all due sources
+        assert data["sourcesCount"] is None  # 期限切れの全ソース
         mock_task.kiq.assert_called_once_with(source_ids=None)
 
     async def test_fetch_with_source_ids(self, admin_client: AsyncClient) -> None:
