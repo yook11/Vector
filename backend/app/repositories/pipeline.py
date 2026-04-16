@@ -1,4 +1,4 @@
-"""Queries for pipeline operations."""
+"""パイプライン処理向けのクエリ群."""
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
@@ -12,7 +12,7 @@ class PipelineRepository:
         self.session = session
 
     async def get_article_ids_without_embedding(self) -> list[int]:
-        """Get article IDs that have an analysis but no embedding vector."""
+        """分析済みだが embedding 未生成の記事 ID を取得する."""
         stmt = (
             select(NewsArticle.id)
             .join(
