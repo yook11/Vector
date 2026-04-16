@@ -1,4 +1,4 @@
-"""Abstract base analyzer with single-call API invocation."""
+"""API を単発呼び出しする抽象 Analyzer 基底クラス。"""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ logger = structlog.get_logger(__name__)
 
 @dataclass
 class AnalysisData:
-    """Parsed AI response data before DB persistence."""
+    """DB 永続化前のパース済み AI レスポンス。"""
 
     title: str
     summary: str
@@ -26,19 +26,19 @@ class AnalysisData:
 
 
 class BaseAnalyzer(abc.ABC):
-    """Template Method base for AI analyzers.
+    """AI analyzer のテンプレートメソッド基底。
 
-    Subclasses implement three hooks:
-    - ``analyze``: prompt building + response parsing (public API)
-    - ``_call_api``: raw SDK call (no error handling)
-    - ``_translate_error``: classify SDK exceptions into the error hierarchy
+    サブクラスは以下 3 つのフックを実装する:
+    - ``analyze``: プロンプトの構築とレスポンス解析（公開 API）
+    - ``_call_api``: SDK の生呼び出し（エラー処理なし）
+    - ``_translate_error``: SDK 例外をエラー階層に分類する
 
-    Subclasses must declare these ClassVars:
-    - ``MODEL``: model identifier (e.g. ``"gemini-2.5-flash-lite"``)
-    - ``RPM``: requests-per-minute limit, or ``None`` if unlimited
-    - ``RPD``: requests-per-day limit, or ``None`` if unlimited
+    また以下の ClassVar を宣言する必要がある:
+    - ``MODEL``: モデル識別子（例: ``"gemini-2.5-flash-lite"``）
+    - ``RPM``: 1 分あたりリクエスト上限。無制限なら ``None``
+    - ``RPD``: 1 日あたりリクエスト上限。無制限なら ``None``
 
-    Rate limiting and retry are handled by the task layer.
+    レート制限とリトライは Task 層の責務。
     """
 
     MODEL: ClassVar[str]
@@ -55,10 +55,10 @@ class BaseAnalyzer(abc.ABC):
 
     @property
     def model_name(self) -> str:
-        """Model identifier (e.g., 'gemini-2.5-flash-lite')."""
+        """モデル識別子（例: 'gemini-2.5-flash-lite'）。"""
         return self.MODEL
 
-    # ── abstract hooks (subclass provides) ──────────────────────
+    # ── 抽象フック（サブクラスが実装） ──────────────────────
 
     @abc.abstractmethod
     async def analyze(
@@ -68,45 +68,46 @@ class BaseAnalyzer(abc.ABC):
         content: str | None = None,
         keywords_by_category: dict[str, list[str]] | None = None,
     ) -> AnalysisData:
-        """Analyze a news article and return structured analysis data.
+        """記事を分析し、構造化した分析データを返す。
 
         Args:
-            title: English article title.
-            description: English article description/summary (may be None).
-            content: Full article text (may be None).
-            keywords_by_category: Optional dict mapping category slug to keyword
-                names. AI selects the most relevant keywords across all categories.
+            title: 英語記事タイトル。
+            description: 英語記事の概要（None の場合あり）。
+            content: 記事本文全文（None の場合あり）。
+            keywords_by_category: カテゴリ別キーワード候補の辞書（任意）。
+                キーはカテゴリ slug、値はキーワード名のリスト。
+                AI が全カテゴリを横断して最も関連性の高いものを選ぶ。
 
         Returns:
-            AnalysisData with Japanese translation, impact level, and reasoning.
+            日本語訳・インパクトレベル・根拠を含む AnalysisData。
 
         Raises:
-            AnalysisDomainError: If analysis fails.
+            AnalysisDomainError: 分析に失敗した場合。
         """
         ...
 
     @abc.abstractmethod
     async def _call_api(self, prompt: str) -> str:
-        """Call the provider SDK. Return the raw text response.
+        """プロバイダー SDK を呼び出し、生のテキストレスポンスを返す。
 
-        Must NOT catch exceptions — let them propagate to _call_once.
+        例外は捕捉せず ``_call_once`` に伝播させること。
         """
         ...
 
     @abc.abstractmethod
     def _translate_error(self, exc: Exception) -> AnalysisDomainError:
-        """Classify an SDK exception into the error hierarchy.
+        """SDK 例外をエラー階層に分類する。
 
-        Return (not raise) the appropriate AnalysisDomainError subclass.
+        対応する AnalysisDomainError サブクラスを raise ではなく return で返す。
         """
         ...
 
-    # ── single-call invocation ──────────────────────────────────
+    # ── 単発呼び出し ──────────────────────────────────
 
     async def _call_once(self, prompt: str) -> str:
-        """Call the provider API once and translate errors.
+        """プロバイダー API を 1 回呼び出し、例外をエラー階層に変換する。
 
-        No retry, no rate limiting — those are the task layer's concern.
+        リトライとレート制限は Task 層の責務。
         """
         try:
             logger.info("analyzer_api_call", model=self.model_name)

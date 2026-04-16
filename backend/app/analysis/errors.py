@@ -1,37 +1,37 @@
-"""Analysis domain error hierarchy.
+"""Analysis ドメインのエラー階層。
 
-Classified by cause origin so that receivers can immediately determine
-"what happened" and "whose problem it is".
+原因の所在で分類することで、受け取り側が「何が起きたか」「誰の問題か」を
+即座に判断できるようにする。
 """
 
 
 class AnalysisDomainError(Exception):
-    """Base for all analysis domain errors (analyzer + embedder)."""
+    """Analysis ドメイン全般のエラー基底（analyzer と embedder の両方を含む）。"""
 
 
 class InvalidInputError(AnalysisDomainError):
-    """Input problem (bad prompt, too long) — skip this article."""
+    """入力側の問題（不正なプロンプト、長すぎる等）。該当記事をスキップする。"""
 
 
 class ConfigurationError(AnalysisDomainError):
-    """Configuration / authentication problem — stop all, notify operator."""
+    """設定または認証の問題。全処理を停止し運用者に通知する。"""
 
 
 class ProviderError(AnalysisDomainError):
-    """Provider-side problem (Google 5xx, broken response) — retry later."""
+    """プロバイダー側の問題（Google の 5xx、壊れたレスポンス等）。後でリトライする。"""
 
 
 class NetworkError(AnalysisDomainError):
-    """Communication problem (timeout, connection refused) — retry later."""
+    """通信の問題（タイムアウト、接続拒否等）。後でリトライする。"""
 
 
 class RateLimitError(AnalysisDomainError):
-    """Rate limit exceeded (HTTP 429 / RESOURCE_EXHAUSTED) — wait and retry."""
+    """レート制限の超過（HTTP 429 / RESOURCE_EXHAUSTED）。待機してからリトライする。"""
 
 
 class DailyQuotaExhaustedError(AnalysisDomainError):
-    """RPD limit reached — stop until tomorrow."""
+    """1 日あたりのリクエスト上限（RPD）到達。翌日まで停止する。"""
 
 
 class UnclassifiedError(AnalysisDomainError):
-    """Unknown cause — log and investigate."""
+    """原因不明。ログに残して調査する。"""

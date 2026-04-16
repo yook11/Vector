@@ -1,4 +1,4 @@
-"""Abstract base embedder with single-call API invocation."""
+"""API を単発呼び出しする抽象 Embedder 基底クラス。"""
 
 from __future__ import annotations
 
@@ -13,19 +13,19 @@ logger = structlog.get_logger(__name__)
 
 
 class BaseEmbedder(abc.ABC):
-    """Template Method base for text embedders.
+    """テキスト embedder のテンプレートメソッド基底。
 
-    Subclasses implement two hooks:
-    - ``_call_api``: raw SDK call (no error handling)
-    - ``_translate_error``: classify SDK exceptions into the error hierarchy
+    サブクラスは以下 2 つのフックを実装する:
+    - ``_call_api``: SDK の生呼び出し（エラー処理なし）
+    - ``_translate_error``: SDK 例外をエラー階層に分類する
 
-    Subclasses must declare these ClassVars:
-    - ``MODEL``: model identifier (e.g. ``"gemini-embedding-001"``)
-    - ``DIMENSION``: output vector dimension (e.g. ``768``)
-    - ``RPM``: requests-per-minute limit, or ``None`` if unlimited
-    - ``RPD``: requests-per-day limit, or ``None`` if unlimited
+    また以下の ClassVar を宣言する必要がある:
+    - ``MODEL``: モデル識別子（例: ``"gemini-embedding-001"``）
+    - ``DIMENSION``: 出力ベクトルの次元数（例: ``768``）
+    - ``RPM``: 1 分あたりリクエスト上限。無制限なら ``None``
+    - ``RPD``: 1 日あたりリクエスト上限。無制限なら ``None``
 
-    Rate limiting and retry are handled by the task layer.
+    レート制限とリトライは Task 層の責務。
     """
 
     MODEL: ClassVar[str]
@@ -43,38 +43,38 @@ class BaseEmbedder(abc.ABC):
 
     @property
     def dimension(self) -> int:
-        """Output vector dimension (e.g., 768)."""
+        """出力ベクトルの次元数（例: 768）。"""
         return self.DIMENSION
 
     @property
     def model_name(self) -> str:
-        """Model identifier (e.g., 'gemini-embedding-001')."""
+        """モデル識別子（例: 'gemini-embedding-001'）。"""
         return self.MODEL
 
-    # -- public API (concrete) -------------------------------------------
+    # -- 公開 API（具象） -------------------------------------------------
 
     async def embed_document(self, text: str) -> list[float]:
-        """Embed a single document text."""
+        """単一のドキュメントテキストを埋め込む。"""
         vectors = await self._embed_once(text, "RETRIEVAL_DOCUMENT")
         return vectors[0]
 
     async def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        """Embed multiple document texts in a single API call."""
+        """複数のドキュメントテキストを 1 回の API 呼び出しで埋め込む。"""
         return await self._embed_once(texts, "RETRIEVAL_DOCUMENT")
 
     async def embed_query(self, text: str) -> list[float]:
-        """Embed a search query."""
+        """検索クエリを埋め込む。"""
         vectors = await self._embed_once(text, "RETRIEVAL_QUERY")
         return vectors[0]
 
-    # -- single-call invocation ------------------------------------------
+    # -- 単発呼び出し ----------------------------------------------------
 
     async def _embed_once(
         self, contents: str | list[str], task_type: str
     ) -> list[list[float]]:
-        """Call the provider API once and translate errors.
+        """プロバイダー API を 1 回呼び出し、例外をエラー階層に変換する。
 
-        No retry, no rate limiting — those are the task layer's concern.
+        リトライとレート制限は Task 層の責務。
         """
         try:
             logger.info(
@@ -95,23 +95,23 @@ class BaseEmbedder(abc.ABC):
         except Exception as exc:
             raise self._translate_error(exc) from exc
 
-    # -- abstract hooks (subclass provides) ------------------------------
+    # -- 抽象フック（サブクラスが実装） ------------------------------
 
     @abc.abstractmethod
     async def _call_api(
         self, contents: str | list[str], task_type: str
     ) -> list[list[float]]:
-        """Call the provider SDK. Return a list of vectors.
+        """プロバイダー SDK を呼び出し、ベクトルのリストを返す。
 
-        Must return ``list[list[float]]`` even for a single text.
-        Must NOT catch exceptions — let them propagate to _embed_once.
+        単一テキストの場合でも ``list[list[float]]`` を返すこと。
+        例外は捕捉せず ``_embed_once`` に伝播させること。
         """
         ...
 
     @abc.abstractmethod
     def _translate_error(self, exc: Exception) -> AnalysisDomainError:
-        """Classify an SDK exception into the error hierarchy.
+        """SDK 例外をエラー階層に分類する。
 
-        Return (not raise) the appropriate AnalysisDomainError subclass.
+        対応する AnalysisDomainError サブクラスを raise ではなく return で返す。
         """
         ...

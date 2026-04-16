@@ -1,4 +1,4 @@
-"""Analysis repository — DB operations for the analysis domain."""
+"""Analysis リポジトリ — analysis ドメインの DB 操作を担う。"""
 
 from __future__ import annotations
 
@@ -13,24 +13,24 @@ from app.models.news_article import NewsArticle
 
 
 class AnalysisRepository:
-    """Encapsulates SQL operations for article analysis and embedding."""
+    """記事分析と埋め込み関連の SQL 操作をカプセル化する。"""
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
     async def find_by_article_id(self, article_id: int) -> ArticleAnalysis | None:
-        """Find existing analysis for idempotency check."""
+        """冪等性チェック用に、既存の分析結果を検索する。"""
         stmt = select(ArticleAnalysis).where(
             ArticleAnalysis.news_article_id == article_id,
         )
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
     async def get_article(self, article_id: int) -> NewsArticle | None:
-        """Fetch a news article by ID."""
+        """ID から記事を取得する。"""
         return await self._session.get(NewsArticle, article_id)
 
     async def get_keywords_by_category(self) -> dict[str, list[str]] | None:
-        """Fetch all keyword candidates grouped by category slug."""
+        """カテゴリ slug をキーにまとめたキーワード候補一覧を取得する。"""
         stmt = select(Category.slug, Keyword.name).join(
             Keyword,
             Keyword.category_id == Category.id,
@@ -48,7 +48,7 @@ class AnalysisRepository:
         analysis: ArticleAnalysis,
         keyword_names: list[str] | None,
     ) -> ArticleAnalysis:
-        """Persist analysis result and keyword links (flush, no commit)."""
+        """分析結果とキーワード紐付けを永続化する（flush のみ、commit しない）。"""
         self._session.add(analysis)
         await self._session.flush()
 
@@ -70,13 +70,13 @@ class AnalysisRepository:
         vector: list[float],
         model: str,
     ) -> None:
-        """Persist embedding result on an existing analysis."""
+        """既存の analysis に埋め込みベクトルを保存する。"""
         analysis.embedding = vector
         analysis.embedding_model = model
         self._session.add(analysis)
 
     async def mark_article_skipped(self, article: NewsArticle) -> None:
-        """Mark an article for permanent skip."""
+        """記事を恒久的にスキップ対象としてマークする。"""
         article.original_content = None
         article.skip_content_fetch = True
         self._session.add(article)

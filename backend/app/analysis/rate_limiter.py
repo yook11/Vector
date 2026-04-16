@@ -1,19 +1,18 @@
-"""Redis ZSET sliding-window rate limiter for AI API calls.
+"""AI API 呼び出し向けの Redis ZSET スライディングウィンドウ・レートリミッター。
 
-Each ``acquire()`` call atomically checks capacity and records the
-request via a Lua script.  Expired entries (older than *window_seconds*)
-are pruned in the same script.
+``acquire()`` は Lua スクリプトを介して容量チェックとリクエスト記録を
+アトミックに実行する。*window_seconds* より古いエントリは同じスクリプト内で削除する。
 
-Timing uses Redis server time (``redis.call('TIME')``) as the single
-source of truth so that clock skew across distributed workers does not
-affect correctness.
+時刻には Redis サーバー時刻（``redis.call('TIME')``）を
+Single Source of Truth として用いる。
+分散ワーカー間でクロックがずれていても正しく動くようにするため。
 
-If the set already has *max_requests* members the limiter either sleeps
-until the oldest entry expires (``block=True`` — RPM) or raises
-``RateLimitExceededError`` immediately (``block=False`` — RPD).
+ZSET のメンバ数が *max_requests* に達している場合、``block=True`` であれば
+最古のエントリが期限切れになるまでスリープし（RPM 用途）、
+``block=False`` であれば ``RateLimitExceededError`` を即座に送出する（RPD 用途）。
 
-Members are UUIDs (guaranteed unique); scores are Redis server
-timestamps.  The Lua script ensures check-and-add is atomic.
+メンバには UUID を用いて一意性を保証し、スコアには Redis サーバー時刻を用いる。
+Lua スクリプトによって check-and-add はアトミックに保たれる。
 """
 
 from __future__ import annotations
@@ -28,12 +27,12 @@ logger = structlog.get_logger(__name__)
 
 
 class RateLimitExceededError(Exception):
-    """Rate limit exceeded and blocking is disabled."""
+    """レート制限超過かつ block 無効時に送出される例外。"""
 
 
-# Lua script: get server time -> prune -> count -> conditionally add.
-# Returns: [1, 0, now_str] on success,
-#          [0, oldest_score_str, now_str] when at capacity.
+# Lua スクリプト: サーバー時刻取得 -> 期限切れ削除 -> カウント -> 条件付き追加。
+# 戻り値: 成功時は [1, 0, now_str]、
+#         満杯時は [0, oldest_score_str, now_str]。
 _ACQUIRE_SCRIPT = """
 local key = KEYS[1]
 local max_requests = tonumber(ARGV[1])
@@ -64,7 +63,7 @@ return {0, oldest_score, tostring(now)}
 
 
 class RateLimiter:
-    """Distributed sliding-window rate limiter backed by Redis ZSET."""
+    """Redis ZSET による分散スライディングウィンドウ・レートリミッター。"""
 
     def __init__(
         self,
@@ -83,10 +82,10 @@ class RateLimiter:
         self._script = redis.register_script(_ACQUIRE_SCRIPT)
 
     async def acquire(self) -> None:
-        """Acquire a rate-limit slot.
+        """レート制限のスロットを 1 つ取得する。
 
-        - ``block=True``: sleep until a slot frees up, then proceed.
-        - ``block=False``: raise ``RateLimitExceededError`` if full.
+        - ``block=True``: スロットが空くまでスリープしてから処理を続行する。
+        - ``block=False``: 満杯なら ``RateLimitExceededError`` を送出する。
         """
         while True:
             member = uuid.uuid4().hex
@@ -102,7 +101,7 @@ class RateLimiter:
             if acquired:
                 return
 
-            # At capacity
+            # 満杯
             if not self._block:
                 raise RateLimitExceededError(
                     f"Rate limit exceeded: {self._max_requests} "

@@ -1,4 +1,4 @@
-"""Gemini AI analyzer — concrete implementation using Google GenAI SDK."""
+"""Gemini AI analyzer — Google GenAI SDK を用いた具象実装。"""
 
 from __future__ import annotations
 
@@ -58,7 +58,7 @@ Rules:
 
 
 class GeminiAnalyzer(BaseAnalyzer):
-    """Gemini API implementation of BaseAnalyzer."""
+    """BaseAnalyzer の Gemini API 実装。"""
 
     MODEL = "gemini-2.5-flash-lite"
     RPM = 50
@@ -77,7 +77,7 @@ class GeminiAnalyzer(BaseAnalyzer):
         content: str | None = None,
         keywords_by_category: dict[str, list[str]] | None = None,
     ) -> AnalysisData:
-        """Build prompt, call API with retry, and parse the response."""
+        """プロンプトを構築し API を呼び出してレスポンスを解析する。"""
         content_section = ""
         if content:
             truncated = content[: settings.content_max_length]
@@ -108,7 +108,7 @@ class GeminiAnalyzer(BaseAnalyzer):
         return self._parse_response(raw_text, keywords_by_category)
 
     async def _call_api(self, prompt: str) -> str:
-        """Call Gemini generate_content API."""
+        """Gemini の generate_content API を呼び出す。"""
         response = await self._client.aio.models.generate_content(
             model=self.MODEL,
             contents=prompt,
@@ -122,7 +122,7 @@ class GeminiAnalyzer(BaseAnalyzer):
         return response.text
 
     def _translate_error(self, exc: Exception) -> AnalysisDomainError:
-        """Classify Gemini SDK exceptions by cause origin."""
+        """Gemini SDK の例外を原因の所在で分類する。"""
         if isinstance(exc, APIError):
             status = exc.status or ""
             message = exc.message or ""
@@ -159,10 +159,10 @@ class GeminiAnalyzer(BaseAnalyzer):
     def _parse_response(
         self, raw_text: str, keywords_by_category: dict[str, list[str]] | None = None
     ) -> AnalysisData:
-        """Parse and validate the JSON response from Gemini."""
+        """Gemini からの JSON レスポンスを解析・検証する。"""
         text = raw_text.strip()
 
-        # Strip markdown code fences if present
+        # Markdown のコードフェンスがあれば除去
         if text.startswith("```"):
             first_newline = text.index("\n")
             text = text[first_newline + 1 :]
@@ -183,7 +183,7 @@ class GeminiAnalyzer(BaseAnalyzer):
         try:
             impact_level = ImpactLevel(data["impact_level"])
 
-            # Parse keywords: filter to valid candidates, max 3
+            # keywords をパース: 有効な候補のみを残し、最大 3 件に絞る
             keywords: list[str] | None = None
             raw_keywords = data.get("keywords")
             if isinstance(raw_keywords, list) and keywords_by_category:

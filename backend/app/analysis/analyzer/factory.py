@@ -1,4 +1,4 @@
-"""Analyzer factory."""
+"""Analyzer のファクトリ。"""
 
 from __future__ import annotations
 
@@ -7,10 +7,10 @@ from app.config import settings
 
 
 def get_analyzer() -> BaseAnalyzer:
-    """Factory: return an analyzer instance based on settings.ai_provider.
+    """``settings.ai_provider`` に応じた analyzer インスタンスを返すファクトリ。
 
     Raises:
-        ValueError: If ai_provider is not supported.
+        ValueError: サポートされていない ai_provider が指定された場合。
     """
     provider = settings.ai_provider.lower()
     if provider == "gemini":
