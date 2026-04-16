@@ -1,4 +1,4 @@
-"""Semantic search endpoint for embedding-based article exploration."""
+"""Embedding ベースの記事探索向けセマンティック検索エンドポイント。"""
 
 from typing import Annotated
 
@@ -29,5 +29,5 @@ async def search_articles(
     user: CurrentUser | None = Depends(get_optional_user),
     service: SemanticSearchService = Depends(get_semantic_search_service),
 ) -> PaginatedArticleResponse:
-    """Search articles by semantic similarity to the given query text."""
+    """指定クエリテキストとのセマンティック類似度で記事を検索する。"""
     return await service.search(params, user.id if user else None)

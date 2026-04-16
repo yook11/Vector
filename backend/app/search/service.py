@@ -1,4 +1,4 @@
-"""Semantic search service — embedding-based analytical exploration."""
+"""セマンティック検索サービス — embedding ベースの分析的探索。"""
 
 from __future__ import annotations
 
@@ -15,11 +15,11 @@ from app.services.articles import build_brief
 async def embed_search_query(
     text: str, embedder: BaseEmbedder | None = None
 ) -> list[float]:
-    """Embed a search query using RETRIEVAL_QUERY task type.
+    """RETRIEVAL_QUERY タスクタイプで検索クエリを embedding 化する。
 
-    Checks the Redis embedding cache first; on miss, calls the embedder and
-    writes the result back to the cache. Cache failures degrade gracefully to
-    a direct API call.
+    まず Redis embedding キャッシュを確認し、miss 時のみ embedder を呼んで
+    結果をキャッシュに書き戻す。キャッシュ障害時は直接 API 呼び出しへ
+    グレースフルに降格する。
 
     Args:
         text: Search query text (expected to be pre-normalized by the caller).
@@ -63,7 +63,7 @@ class SemanticSearchService:
         query: SemanticSearchParams,
         user_id: int | None,
     ) -> PaginatedArticleResponse:
-        """Search articles by semantic similarity to the user's query text."""
+        """ユーザーのクエリテキストとのセマンティック類似度で記事を検索する。"""
         query_embedding = await embed_search_query(query.q)
         analyses, total = await self.search_repo.search_articles(query, query_embedding)
 
