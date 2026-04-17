@@ -29,7 +29,7 @@ async def fetch_news(
     source_ids 指定時はソースごとに個別タスクを dispatch、
     未指定時は dispatch_sources で全アクティブソースを dispatch。
     """
-    from app.tasks.collection_tasks import dispatch_sources, fetch_source_metadata
+    from app.collection.tasks import dispatch_sources, fetch_source_metadata
 
     source_ids = body.source_ids if body else None
 
@@ -58,7 +58,7 @@ async def embed_news(
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> EmbedResponse:
     """埋め込み未生成の全記事に対して generate_embedding タスクを投入する。"""
-    from app.tasks.analysis_tasks import generate_embedding
+    from app.analysis.tasks import generate_embedding
 
     repo = PipelineRepository(session)
     article_ids = await repo.get_article_ids_without_embedding()

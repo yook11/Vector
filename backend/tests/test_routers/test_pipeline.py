@@ -16,7 +16,7 @@ class TestFetchNews:
         mock_task_handle.task_id = "test-task-id-123"
 
         with patch(
-            "app.tasks.collection_tasks.dispatch_sources",
+            "app.collection.tasks.dispatch_sources",
         ) as mock_task:
             mock_task.kiq = AsyncMock(return_value=mock_task_handle)
             resp = await admin_client.post("/api/v1/admin/pipeline/fetch")
@@ -30,7 +30,7 @@ class TestFetchNews:
     async def test_fetch_with_source_ids(self, admin_client: AsyncClient) -> None:
         """source_ids 指定時はソースごとに fetch_source_metadata を dispatch する。"""
         with patch(
-            "app.tasks.collection_tasks.fetch_source_metadata",
+            "app.collection.tasks.fetch_source_metadata",
         ) as mock_task:
             mock_task.kiq = AsyncMock()
             resp = await admin_client.post(
@@ -53,7 +53,7 @@ class TestEmbedNews:
                 "app.routers.admin.pipeline.PipelineRepository",
             ) as mock_repo_cls,
             patch(
-                "app.tasks.analysis_tasks.generate_embedding",
+                "app.analysis.tasks.generate_embedding",
             ) as mock_embed,
         ):
             mock_repo = AsyncMock()
@@ -75,7 +75,7 @@ class TestEmbedNews:
                 "app.routers.admin.pipeline.PipelineRepository",
             ) as mock_repo_cls,
             patch(
-                "app.tasks.analysis_tasks.generate_embedding",
+                "app.analysis.tasks.generate_embedding",
             ) as mock_embed,
         ):
             mock_repo = AsyncMock()

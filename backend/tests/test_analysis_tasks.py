@@ -38,25 +38,25 @@ def _patch_analyzer() -> tuple:
 class TestAnalyzeArticle:
     @pytest.mark.asyncio
     async def test_already_exists_chains_embedding(self) -> None:
-        from app.tasks.analysis_tasks import analyze_article
+        from app.analysis.tasks import analyze_article
 
         mock_ctx = _make_ctx()
         mock_result = MagicMock(status="already_exists")
 
         with (
             patch(
-                "app.tasks.analysis_tasks.get_analyzer",
+                "app.analysis.tasks.get_analyzer",
                 return_value=_patch_analyzer(),
             ),
             patch(
-                "app.tasks.analysis_tasks._build_limiters",
+                "app.analysis.tasks._build_limiters",
                 return_value=(None, None),
             ),
             patch(
-                "app.tasks.analysis_tasks.ArticleAnalysisService",
+                "app.analysis.tasks.ArticleAnalysisService",
             ) as mock_svc_cls,
             patch(
-                "app.tasks.analysis_tasks.generate_embedding",
+                "app.analysis.tasks.generate_embedding",
             ) as mock_embed,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
@@ -69,25 +69,25 @@ class TestAnalyzeArticle:
 
     @pytest.mark.asyncio
     async def test_success_chains_embedding(self) -> None:
-        from app.tasks.analysis_tasks import analyze_article
+        from app.analysis.tasks import analyze_article
 
         mock_ctx = _make_ctx()
         mock_result = MagicMock(status="created")
 
         with (
             patch(
-                "app.tasks.analysis_tasks.get_analyzer",
+                "app.analysis.tasks.get_analyzer",
                 return_value=_patch_analyzer(),
             ),
             patch(
-                "app.tasks.analysis_tasks._build_limiters",
+                "app.analysis.tasks._build_limiters",
                 return_value=(None, None),
             ),
             patch(
-                "app.tasks.analysis_tasks.ArticleAnalysisService",
+                "app.analysis.tasks.ArticleAnalysisService",
             ) as mock_svc_cls,
             patch(
-                "app.tasks.analysis_tasks.generate_embedding",
+                "app.analysis.tasks.generate_embedding",
             ) as mock_embed,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
@@ -100,25 +100,25 @@ class TestAnalyzeArticle:
 
     @pytest.mark.asyncio
     async def test_skipped_does_not_chain(self) -> None:
-        from app.tasks.analysis_tasks import analyze_article
+        from app.analysis.tasks import analyze_article
 
         mock_ctx = _make_ctx()
         mock_result = MagicMock(status="skipped")
 
         with (
             patch(
-                "app.tasks.analysis_tasks.get_analyzer",
+                "app.analysis.tasks.get_analyzer",
                 return_value=_patch_analyzer(),
             ),
             patch(
-                "app.tasks.analysis_tasks._build_limiters",
+                "app.analysis.tasks._build_limiters",
                 return_value=(None, None),
             ),
             patch(
-                "app.tasks.analysis_tasks.ArticleAnalysisService",
+                "app.analysis.tasks.ArticleAnalysisService",
             ) as mock_svc_cls,
             patch(
-                "app.tasks.analysis_tasks.generate_embedding",
+                "app.analysis.tasks.generate_embedding",
             ) as mock_embed,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
@@ -131,21 +131,21 @@ class TestAnalyzeArticle:
 
     @pytest.mark.asyncio
     async def test_rate_limit_raises_for_retry(self) -> None:
-        from app.tasks.analysis_tasks import analyze_article
+        from app.analysis.tasks import analyze_article
 
         mock_ctx = _make_ctx(retry_count=0, max_retries=2)
 
         with (
             patch(
-                "app.tasks.analysis_tasks.get_analyzer",
+                "app.analysis.tasks.get_analyzer",
                 return_value=_patch_analyzer(),
             ),
             patch(
-                "app.tasks.analysis_tasks._build_limiters",
+                "app.analysis.tasks._build_limiters",
                 return_value=(None, None),
             ),
             patch(
-                "app.tasks.analysis_tasks.ArticleAnalysisService",
+                "app.analysis.tasks.ArticleAnalysisService",
             ) as mock_svc_cls,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
@@ -156,24 +156,24 @@ class TestAnalyzeArticle:
 
     @pytest.mark.asyncio
     async def test_rate_limit_last_attempt_marks_skipped(self) -> None:
-        from app.tasks.analysis_tasks import analyze_article
+        from app.analysis.tasks import analyze_article
 
         mock_ctx = _make_ctx(retry_count=2, max_retries=2)
 
         with (
             patch(
-                "app.tasks.analysis_tasks.get_analyzer",
+                "app.analysis.tasks.get_analyzer",
                 return_value=_patch_analyzer(),
             ),
             patch(
-                "app.tasks.analysis_tasks._build_limiters",
+                "app.analysis.tasks._build_limiters",
                 return_value=(None, None),
             ),
             patch(
-                "app.tasks.analysis_tasks.ArticleAnalysisService",
+                "app.analysis.tasks.ArticleAnalysisService",
             ) as mock_svc_cls,
             patch(
-                "app.tasks.analysis_tasks.mark_article_skipped",
+                "app.analysis.tasks.mark_article_skipped",
                 new_callable=AsyncMock,
             ) as mock_skip,
         ):

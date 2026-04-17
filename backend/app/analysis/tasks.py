@@ -1,4 +1,8 @@
-"""分析タスク — AI による記事分析とベクトル埋め込み生成。"""
+"""分析タスク — パイプラインの後段。
+
+collection.tasks.fetch_content から呼び出される。
+analyze_article → generate_embedding
+"""
 
 from __future__ import annotations
 
@@ -24,7 +28,7 @@ from app.analysis.rate_limiter import (
     RateLimitExceededError as _RateLimitExceededError,
 )
 from app.analysis.service import ArticleAnalysisService, mark_article_skipped
-from app.tasks.brokers import broker_analysis, broker_embedding, is_last_attempt
+from app.brokers import broker_analysis, broker_embedding, is_last_attempt
 
 if TYPE_CHECKING:
     from app.analysis.rate_limiter import RateLimiter

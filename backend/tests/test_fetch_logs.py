@@ -32,7 +32,7 @@ async def test_fetch_log_recorded_on_success(
     sample_source: NewsSource,
 ) -> None:
     """フェッチ成功時に status='success' の FetchLog が記録される。"""
-    from app.tasks.collection_tasks import fetch_source_metadata
+    from app.collection.tasks import fetch_source_metadata
 
     article = MagicMock(spec=NewsArticle)
     article.id = 1
@@ -56,10 +56,10 @@ async def test_fetch_log_recorded_on_success(
 
     with (
         patch(
-            "app.tasks.collection_tasks.get_fetcher",
+            "app.collection.tasks.get_fetcher",
             return_value=mock_fetcher,
         ),
-        patch("app.tasks.collection_tasks.fetch_content") as mock_fc,
+        patch("app.collection.tasks.fetch_content") as mock_fc,
     ):
         mock_fc.kiq = AsyncMock()
         await fetch_source_metadata(source_id=sample_source.id, ctx=mock_ctx)
@@ -81,7 +81,7 @@ async def test_fetch_log_recorded_on_error(
     sample_source: NewsSource,
 ) -> None:
     """フェッチ失敗時に status='error' の FetchLog が記録される。"""
-    from app.tasks.collection_tasks import fetch_source_metadata
+    from app.collection.tasks import fetch_source_metadata
 
     fetch_result = SourceFetchResult(
         source_id=sample_source.id,
@@ -98,7 +98,7 @@ async def test_fetch_log_recorded_on_error(
     mock_ctx = _make_ctx(session_factory)
 
     with patch(
-        "app.tasks.collection_tasks.get_fetcher",
+        "app.collection.tasks.get_fetcher",
         return_value=mock_fetcher,
     ):
         await fetch_source_metadata(source_id=sample_source.id, ctx=mock_ctx)

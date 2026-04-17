@@ -38,22 +38,22 @@ def _patch_embedder() -> MagicMock:
 class TestGenerateEmbedding:
     @pytest.mark.asyncio
     async def test_created_succeeds(self) -> None:
-        from app.tasks.analysis_tasks import generate_embedding
+        from app.analysis.tasks import generate_embedding
 
         mock_ctx = _make_ctx()
         mock_result = MagicMock(status="created")
 
         with (
             patch(
-                "app.tasks.analysis_tasks.get_embedder",
+                "app.analysis.tasks.get_embedder",
                 return_value=_patch_embedder(),
             ),
             patch(
-                "app.tasks.analysis_tasks._build_limiters",
+                "app.analysis.tasks._build_limiters",
                 return_value=(None, None),
             ),
             patch(
-                "app.tasks.analysis_tasks.EmbeddingService",
+                "app.analysis.tasks.EmbeddingService",
             ) as mock_svc_cls,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
@@ -67,22 +67,22 @@ class TestGenerateEmbedding:
 
     @pytest.mark.asyncio
     async def test_already_exists_succeeds(self) -> None:
-        from app.tasks.analysis_tasks import generate_embedding
+        from app.analysis.tasks import generate_embedding
 
         mock_ctx = _make_ctx()
         mock_result = MagicMock(status="already_exists")
 
         with (
             patch(
-                "app.tasks.analysis_tasks.get_embedder",
+                "app.analysis.tasks.get_embedder",
                 return_value=_patch_embedder(),
             ),
             patch(
-                "app.tasks.analysis_tasks._build_limiters",
+                "app.analysis.tasks._build_limiters",
                 return_value=(None, None),
             ),
             patch(
-                "app.tasks.analysis_tasks.EmbeddingService",
+                "app.analysis.tasks.EmbeddingService",
             ) as mock_svc_cls,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
@@ -94,21 +94,21 @@ class TestGenerateEmbedding:
 
     @pytest.mark.asyncio
     async def test_rate_limit_raises_for_retry(self) -> None:
-        from app.tasks.analysis_tasks import generate_embedding
+        from app.analysis.tasks import generate_embedding
 
         mock_ctx = _make_ctx(retry_count=0, max_retries=2)
 
         with (
             patch(
-                "app.tasks.analysis_tasks.get_embedder",
+                "app.analysis.tasks.get_embedder",
                 return_value=_patch_embedder(),
             ),
             patch(
-                "app.tasks.analysis_tasks._build_limiters",
+                "app.analysis.tasks._build_limiters",
                 return_value=(None, None),
             ),
             patch(
-                "app.tasks.analysis_tasks.EmbeddingService",
+                "app.analysis.tasks.EmbeddingService",
             ) as mock_svc_cls,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
@@ -119,21 +119,21 @@ class TestGenerateEmbedding:
 
     @pytest.mark.asyncio
     async def test_rate_limit_last_attempt_returns(self) -> None:
-        from app.tasks.analysis_tasks import generate_embedding
+        from app.analysis.tasks import generate_embedding
 
         mock_ctx = _make_ctx(retry_count=2, max_retries=2)
 
         with (
             patch(
-                "app.tasks.analysis_tasks.get_embedder",
+                "app.analysis.tasks.get_embedder",
                 return_value=_patch_embedder(),
             ),
             patch(
-                "app.tasks.analysis_tasks._build_limiters",
+                "app.analysis.tasks._build_limiters",
                 return_value=(None, None),
             ),
             patch(
-                "app.tasks.analysis_tasks.EmbeddingService",
+                "app.analysis.tasks.EmbeddingService",
             ) as mock_svc_cls,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(

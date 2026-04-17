@@ -1,4 +1,8 @@
-"""収集タスク — ソースごとのメタデータ取得と記事単位のコンテンツ抽出。"""
+"""収集タスク — パイプラインの前段。
+
+dispatch_sources → fetch_source_metadata → fetch_content
+fetch_content 完了後、analysis.tasks.analyze_article へチェーン。
+"""
 
 from __future__ import annotations
 
@@ -9,6 +13,12 @@ import structlog
 from sqlmodel import select
 from taskiq import Context, TaskiqDepends
 
+from app.brokers import (
+    _FETCH_CRON,
+    broker_content,
+    broker_metadata,
+    is_last_attempt,
+)
 from app.collection.extraction.extractor import (
     ArticleHtmlExtractor,
     TemporaryFetchError,
@@ -20,12 +30,6 @@ from app.collection.extraction.service import (
 from app.collection.ingestion.registry import get_fetcher
 from app.models.fetch_log import FetchLog, FetchStatus
 from app.models.news_source import NewsSource
-from app.tasks.brokers import (
-    _FETCH_CRON,
-    broker_content,
-    broker_metadata,
-    is_last_attempt,
-)
 
 logger = structlog.get_logger(__name__)
 
@@ -125,7 +129,7 @@ async def fetch_source_metadata(
         await session.commit()
 
     # 新規記事を下流キューへ dispatch
-    from app.tasks.analysis_tasks import analyze_article
+    from app.analysis.tasks import analyze_article
 
     for article in source_result.new_articles:
         if article.original_content is not None and article.published_at is not None:
@@ -159,7 +163,7 @@ async def fetch_content(
     ctx: Context = TaskiqDepends(),
 ) -> None:
     """単一記事の本文コンテンツを取得する。"""
-    from app.tasks.analysis_tasks import analyze_article
+    from app.analysis.tasks import analyze_article
 
     session_factory = ctx.state.session_factory
     html_extractor = ArticleHtmlExtractor()
