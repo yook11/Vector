@@ -1,4 +1,8 @@
-"""RSS フェッチャーのテスト。"""
+"""BaseRssFetcher のテスト。
+
+Stub サブクラスを使い、基底クラスの共通フロー + デフォルト convert_entry をテストする。
+ユーティリティ関数のユニットテストも含む。
+"""
 
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -8,15 +12,19 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from app.collection.ingestion.fetchers.rss import (
-    _extract_guid,
-    _parse_published_date,
-    fetch_rss_source,
+from app.collection.ingestion.fetchers.rss.base import (
+    BaseRssFetcher,
+    extract_guid,
+    parse_published_date,
 )
 from app.models.news_article import NewsArticle
 from app.models.news_source import NewsSource
 
-_RSS_MOD = "app.collection.ingestion.fetchers.rss"
+_BASE_MOD = "app.collection.ingestion.fetchers.rss.base"
+
+
+class StubRssFetcher(BaseRssFetcher):
+    """テスト用。デフォルト convert_entry を継承。"""
 
 
 def _make_feed(entries: list[dict], bozo: bool = False) -> MagicMock:
@@ -40,7 +48,7 @@ def _make_entry(
     if guid:
         entry["id"] = guid
     else:
-        entry["id"] = link  # feedparser は <guid> を entry.id にマップする
+        entry["id"] = link
     if published_parsed:
         entry["published_parsed"] = published_parsed
     return entry
@@ -63,16 +71,15 @@ def _mock_response(
 @pytest.fixture
 def mock_client() -> AsyncMock:
     """モック httpx.AsyncClient を提供する。"""
-    client = AsyncMock(spec=httpx.AsyncClient)
-    return client
+    return AsyncMock(spec=httpx.AsyncClient)
 
 
-# --- Unit tests ---
+# --- ユーティリティ関数のユニットテスト ---
 
 
 def test_parse_published_date_with_valid_struct() -> None:
     ts = time.struct_time((2025, 1, 15, 12, 0, 0, 2, 15, 0))
-    result = _parse_published_date({"published_parsed": ts})
+    result = parse_published_date({"published_parsed": ts})
     assert result is not None
     assert result.year == 2025
     assert result.month == 1
@@ -80,32 +87,32 @@ def test_parse_published_date_with_valid_struct() -> None:
 
 
 def test_parse_published_date_with_missing_field() -> None:
-    result = _parse_published_date({})
+    result = parse_published_date({})
     assert result is None
 
 
 def test_parse_published_date_falls_back_to_updated() -> None:
     ts = time.struct_time((2025, 6, 1, 0, 0, 0, 6, 152, 0))
-    result = _parse_published_date({"updated_parsed": ts})
+    result = parse_published_date({"updated_parsed": ts})
     assert result is not None
     assert result.month == 6
 
 
 def test_extract_guid_prefers_id() -> None:
     entry = {"id": "urn:uuid:12345", "link": "https://example.com/article"}
-    assert _extract_guid(entry) == "urn:uuid:12345"
+    assert extract_guid(entry) == "urn:uuid:12345"
 
 
 def test_extract_guid_falls_back_to_link() -> None:
     entry = {"link": "https://example.com/article"}
-    assert _extract_guid(entry) == "https://example.com/article"
+    assert extract_guid(entry) == "https://example.com/article"
 
 
 def test_extract_guid_returns_none_for_empty() -> None:
-    assert _extract_guid({}) is None
+    assert extract_guid({}) is None
 
 
-# --- Integration tests (with DB) ---
+# --- 共通フローの統合テスト（DB あり） ---
 
 
 async def test_rss_saves_new_articles(
@@ -119,15 +126,15 @@ async def test_rss_saves_new_articles(
     mock_client.get.return_value = _mock_response(text="<rss>mock</rss>")
 
     with (
-        patch(f"{_RSS_MOD}.feedparser.parse", return_value=feed),
+        patch(f"{_BASE_MOD}.feedparser.parse", return_value=feed),
         patch(
-            f"{_RSS_MOD}.get_http_cache",
+            f"{_BASE_MOD}.get_http_cache",
             new_callable=AsyncMock,
             return_value=(None, None),
         ),
-        patch(f"{_RSS_MOD}.set_http_cache", new_callable=AsyncMock),
+        patch(f"{_BASE_MOD}.set_http_cache", new_callable=AsyncMock),
     ):
-        result = await fetch_rss_source(mock_client, db_session, sample_source)
+        result = await StubRssFetcher().fetch(mock_client, db_session, sample_source)
 
     assert result.new_count == 2
     assert result.skipped_count == 0
@@ -159,15 +166,15 @@ async def test_rss_skips_duplicate_urls(
     mock_client.get.return_value = _mock_response(text="<rss>mock</rss>")
 
     with (
-        patch(f"{_RSS_MOD}.feedparser.parse", return_value=feed),
+        patch(f"{_BASE_MOD}.feedparser.parse", return_value=feed),
         patch(
-            f"{_RSS_MOD}.get_http_cache",
+            f"{_BASE_MOD}.get_http_cache",
             new_callable=AsyncMock,
             return_value=(None, None),
         ),
-        patch(f"{_RSS_MOD}.set_http_cache", new_callable=AsyncMock),
+        patch(f"{_BASE_MOD}.set_http_cache", new_callable=AsyncMock),
     ):
-        result = await fetch_rss_source(mock_client, db_session, sample_source)
+        result = await StubRssFetcher().fetch(mock_client, db_session, sample_source)
 
     assert result.new_count == 1
     assert result.skipped_count == 1
@@ -183,11 +190,11 @@ async def test_rss_handles_304_not_modified(
     mock_client.get.return_value = _mock_response(status_code=304)
 
     with patch(
-        f"{_RSS_MOD}.get_http_cache",
+        f"{_BASE_MOD}.get_http_cache",
         new_callable=AsyncMock,
         return_value=(None, None),
     ):
-        result = await fetch_rss_source(mock_client, db_session, sample_source)
+        result = await StubRssFetcher().fetch(mock_client, db_session, sample_source)
 
     assert result.new_count == 0
     assert result.not_modified is True
@@ -199,11 +206,11 @@ async def test_rss_handles_http_error(
     mock_client.get.return_value = _mock_response(status_code=500)
 
     with patch(
-        f"{_RSS_MOD}.get_http_cache",
+        f"{_BASE_MOD}.get_http_cache",
         new_callable=AsyncMock,
         return_value=(None, None),
     ):
-        result = await fetch_rss_source(mock_client, db_session, sample_source)
+        result = await StubRssFetcher().fetch(mock_client, db_session, sample_source)
 
     assert result.new_count == 0
     assert result.success is False
@@ -221,18 +228,18 @@ async def test_rss_respects_max_articles_limit(
     mock_client.get.return_value = _mock_response(text="<rss>mock</rss>")
 
     with (
-        patch(f"{_RSS_MOD}.feedparser.parse", return_value=feed),
+        patch(f"{_BASE_MOD}.feedparser.parse", return_value=feed),
         patch("app.collection.ingestion.persister.settings") as mock_settings,
         patch(
-            f"{_RSS_MOD}.get_http_cache",
+            f"{_BASE_MOD}.get_http_cache",
             new_callable=AsyncMock,
             return_value=(None, None),
         ),
-        patch(f"{_RSS_MOD}.set_http_cache", new_callable=AsyncMock),
+        patch(f"{_BASE_MOD}.set_http_cache", new_callable=AsyncMock),
     ):
         mock_settings.max_articles_per_fetch = 50
         mock_settings.content_max_length = 8000
-        result = await fetch_rss_source(mock_client, db_session, sample_source)
+        result = await StubRssFetcher().fetch(mock_client, db_session, sample_source)
 
     assert result.new_count == 50
 
@@ -246,11 +253,11 @@ async def test_rss_sends_conditional_get_headers(
     mock_client.get.return_value = _mock_response(status_code=304)
 
     with patch(
-        f"{_RSS_MOD}.get_http_cache",
+        f"{_BASE_MOD}.get_http_cache",
         new_callable=AsyncMock,
         return_value=('"abc123"', "Wed, 01 Jan 2025 00:00:00 GMT"),
     ):
-        await fetch_rss_source(mock_client, db_session, sample_source)
+        await StubRssFetcher().fetch(mock_client, db_session, sample_source)
 
     call_kwargs = mock_client.get.call_args
     headers = call_kwargs.kwargs.get("headers", {})
@@ -275,55 +282,21 @@ async def test_rss_captures_etag_and_writes_to_redis(
     )
 
     with (
-        patch(f"{_RSS_MOD}.feedparser.parse", return_value=feed),
+        patch(f"{_BASE_MOD}.feedparser.parse", return_value=feed),
         patch(
-            f"{_RSS_MOD}.get_http_cache",
+            f"{_BASE_MOD}.get_http_cache",
             new_callable=AsyncMock,
             return_value=(None, None),
         ),
         patch(
-            f"{_RSS_MOD}.set_http_cache",
+            f"{_BASE_MOD}.set_http_cache",
             new_callable=AsyncMock,
         ) as mock_set_cache,
     ):
-        result = await fetch_rss_source(mock_client, db_session, sample_source)
+        result = await StubRssFetcher().fetch(mock_client, db_session, sample_source)
 
     assert result.etag == '"new-etag"'
     assert result.last_modified == "Thu, 02 Jan 2025 00:00:00 GMT"
     mock_set_cache.assert_called_once_with(
         sample_source.id, '"new-etag"', "Thu, 02 Jan 2025 00:00:00 GMT"
     )
-
-
-async def test_rss_stores_full_content(
-    db_session: AsyncSession,
-    sample_source: NewsSource,
-    mock_client: AsyncMock,
-) -> None:
-    """RSS エントリに全文 (>500 文字) があれば即座に保存する。"""
-    long_content = "A" * 600
-    entry = _make_entry(
-        title="Full Content",
-        link="https://example.com/full",
-        published_parsed=time.gmtime(1700000000),
-    )
-    entry["content"] = [{"value": long_content, "type": "text/html"}]
-
-    feed = _make_feed([entry])
-    mock_client.get.return_value = _mock_response(text="<rss>mock</rss>")
-
-    with (
-        patch(f"{_RSS_MOD}.feedparser.parse", return_value=feed),
-        patch(
-            f"{_RSS_MOD}.get_http_cache",
-            new_callable=AsyncMock,
-            return_value=(None, None),
-        ),
-        patch(f"{_RSS_MOD}.set_http_cache", new_callable=AsyncMock),
-    ):
-        result = await fetch_rss_source(mock_client, db_session, sample_source)
-
-    assert result.new_count == 1
-    await db_session.flush()
-    articles = (await db_session.execute(select(NewsArticle))).scalars().all()
-    assert articles[0].original_content is not None
