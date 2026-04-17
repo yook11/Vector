@@ -1,8 +1,7 @@
 """ソースレジストリ — SourceName からフェッチャーへのマッピング。
 
 全ソースを登録し、ソース名に応じた SourceFetcher を返す。
-RSS ソースは同一 RssFetcher インスタンスを共有し、
-API ソースは個別のフェッチャーを持つ。
+各ソースは固有のフェッチャーインスタンスを持つ。
 """
 
 from __future__ import annotations
@@ -33,20 +32,32 @@ def _build_registry() -> dict[SourceName, SourceFetcher]:
     """全ソースのフェッチャーを登録する。"""
     from app.collection.ingestion.fetchers.alpha_vantage import AlphaVantageFetcher
     from app.collection.ingestion.fetchers.hacker_news import HackerNewsFetcher
-    from app.collection.ingestion.fetchers.rss import RssFetcher
-
-    rss = RssFetcher()
+    from app.collection.ingestion.fetchers.rss.biopharma_dive import BioPharmaFetcher
+    from app.collection.ingestion.fetchers.rss.cointelegraph import (
+        CointelegraphFetcher,
+    )
+    from app.collection.ingestion.fetchers.rss.fierce_biotech import (
+        FierceBiotechFetcher,
+    )
+    from app.collection.ingestion.fetchers.rss.itmedia import ITmediaFetcher
+    from app.collection.ingestion.fetchers.rss.quantum_insider import (
+        QuantumInsiderFetcher,
+    )
+    from app.collection.ingestion.fetchers.rss.techcrunch import TechCrunchFetcher
+    from app.collection.ingestion.fetchers.rss.yahoo_finance import (
+        YahooFinanceFetcher,
+    )
 
     return {
-        # RSS ソース（同一インスタンスを共有）
-        SourceName("TechCrunch"): rss,
-        SourceName("The Verge"): rss,
-        SourceName("Ars Technica"): rss,
-        SourceName("Wired"): rss,
-        SourceName("MIT Technology Review"): rss,
-        SourceName("VentureBeat"): rss,
-        SourceName("The Register"): rss,
-        # API ソース（個別フェッチャー）
+        # RSS ソース（ソースごとに個別フェッチャー）
+        SourceName("TechCrunch"): TechCrunchFetcher(),
+        SourceName("FierceBiotech"): FierceBiotechFetcher(),
+        SourceName("BioPharma Dive"): BioPharmaFetcher(),
+        SourceName("The Quantum Insider"): QuantumInsiderFetcher(),
+        SourceName("Cointelegraph"): CointelegraphFetcher(),
+        SourceName("Yahoo Finance"): YahooFinanceFetcher(),
+        SourceName("ITmedia"): ITmediaFetcher(),
+        # API ソース
         SourceName("Hacker News"): HackerNewsFetcher(),
         SourceName("Alpha Vantage"): AlphaVantageFetcher(),
     }
