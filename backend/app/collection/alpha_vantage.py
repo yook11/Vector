@@ -1,4 +1,4 @@
-"""Alpha Vantage News Sentiment API クライアント。"""
+"""Alpha Vantage News Sentiment API フェッチャー。"""
 
 from datetime import UTC, datetime
 
@@ -8,13 +8,17 @@ from sqlalchemy import func as sa_func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from app.collection.news_fetcher import SourceFetchResult
+from app.collection.article_persister import (
+    ArticleCandidate,
+    SourceFetchResult,
+    persist_new_articles,
+    to_safe_url,
+)
 from app.collection.source_helpers import get_last_successful_fetch_at
 from app.config import settings
 from app.models.fetch_log import FetchLog
-from app.models.news_article import NewsArticle
 from app.models.news_source import NewsSource
-from app.utils.sanitize import is_safe_url, strip_html_tags
+from app.utils.sanitize import strip_html_tags
 
 HTTP_TIMEOUT = 30.0
 
@@ -35,13 +39,8 @@ def _parse_av_time(time_str: str) -> datetime:
     return datetime.strptime(time_str, "%Y%m%dT%H%M").replace(tzinfo=UTC)
 
 
-class AlphaVantageClient:
-    """Alpha Vantage News Sentiment API クライアント。"""
-
-    def __init__(self, http_client: httpx.AsyncClient) -> None:
-        self.http_client = http_client
-        self.base_url = settings.av_api_base_url
-        self.api_key = settings.av_api_key.get_secret_value()
+class AlphaVantageFetcher:
+    """Alpha Vantage News Sentiment API フェッチャー。"""
 
     async def _check_daily_quota(
         self, source: NewsSource, session: AsyncSession
@@ -62,19 +61,17 @@ class AlphaVantageClient:
         count = result.scalar_one()
         return count < settings.av_max_daily_requests
 
-    async def fetch_and_save_articles(
+    async def fetch(
         self,
-        source: NewsSource,
+        client: httpx.AsyncClient,
         session: AsyncSession,
+        source: NewsSource,
     ) -> SourceFetchResult:
-        """Alpha Vantage のニュース記事を取得し news_articles に保存する。
-
-        - URL の一括突合で重複排除する（RSS/HN と同パターン）
-        - 新規/スキップ件数を含む SourceFetchResult を返す
-        """
+        """Alpha Vantage のニュース記事を取得し ArticleCandidate 経由で永続化する。"""
         result = SourceFetchResult(source_id=source.id)
 
-        if not self.api_key:
+        api_key = settings.av_api_key.get_secret_value()
+        if not api_key:
             logger.info("av_skipped_no_api_key", source=source.name)
             return result
 
@@ -93,14 +90,14 @@ class AlphaVantageClient:
             "topics": settings.av_topics,
             "sort": "LATEST",
             "limit": settings.av_limit,
-            "apikey": self.api_key,
+            "apikey": api_key,
         }
         if last_fetched:
             params["time_from"] = last_fetched.strftime("%Y%m%dT%H%M")
 
         try:
-            response = await self.http_client.get(
-                self.base_url, params=params, timeout=HTTP_TIMEOUT
+            response = await client.get(
+                settings.av_api_base_url, params=params, timeout=HTTP_TIMEOUT
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
@@ -132,43 +129,15 @@ class AlphaVantageClient:
             logger.info("av_no_articles", source=source.name)
             return result
 
-        # 一括重複排除用に URL を組み立てる
-        articles_data: list[tuple[dict, str]] = []
+        # フィードアイテムを ArticleCandidate に変換
+        candidates: list[ArticleCandidate] = []
         for item in feed:
             url = item.get("url", "")
             if not url:
                 continue
-            articles_data.append((item, url))
 
-        if not articles_data:
-            return result
-
-        urls = [u for _, u in articles_data]
-        existing_urls: set[str] = set()
-
-        chunk_size = 500
-        for i in range(0, len(urls), chunk_size):
-            chunk = urls[i : i + chunk_size]
-            stmt = select(NewsArticle.original_url).where(
-                NewsArticle.original_url.in_(chunk)
-            )
-            rows = await session.execute(stmt)
-            # TODO: SafeUrl の __eq__ が str と互換になれば str() 不要
-            existing_urls.update(str(row[0]) for row in rows.all())
-
-        # 新規記事を作成
-        max_new = settings.max_articles_per_fetch
-        new_count = 0
-
-        for item, url in articles_data:
-            if url in existing_urls:
-                result.skipped_count += 1
-                continue
-
-            # --- XSS対策: URLスキーム検証 ---
-            # Alpha Vantage APIから取得したURLも外部データであり、信頼できない。
-            # javascript: 等の危険なスキームをDB保存前に排除する。
-            if not is_safe_url(url):
+            safe_url = to_safe_url(url)
+            if safe_url is None:
                 logger.warning(
                     "unsafe_url_skipped",
                     source=source.name,
@@ -177,33 +146,33 @@ class AlphaVantageClient:
                 result.skipped_count += 1
                 continue
 
-            if new_count >= max_new:
-                logger.info("av_fetch_limit_reached", source=source.name, max=max_new)
-                break
-
             try:
                 published_at = _parse_av_time(item["time_published"])
             except (ValueError, KeyError):
                 published_at = None
 
-            article = NewsArticle(
-                original_title=strip_html_tags(item.get("title", ""))[:500],
-                original_description=strip_html_tags(item.get("summary")),
-                original_url=url,
-                news_source_id=source.id,
-                published_at=published_at,
+            candidates.append(
+                ArticleCandidate(
+                    url=safe_url,
+                    title=strip_html_tags(item.get("title", ""))[:500],
+                    description=strip_html_tags(item.get("summary")),
+                    published_at=published_at,
+                )
             )
 
-            session.add(article)
-            result.new_articles.append(article)
-            new_count += 1
-            existing_urls.add(url)
+        if not candidates:
+            return result
 
-        result.new_count = new_count
+        # 永続化を共通ロジックに委譲
+        persist_result = await persist_new_articles(session, source, candidates)
+        result.new_count = persist_result.new_count
+        result.skipped_count += persist_result.skipped_count
+        result.new_articles = persist_result.new_articles
+
         logger.info(
             "av_fetch_completed",
             source=source.name,
-            new=new_count,
+            new=result.new_count,
             skipped=result.skipped_count,
         )
         return result

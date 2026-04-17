@@ -6,14 +6,17 @@ from datetime import datetime
 import httpx
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import select
 
-from app.collection.news_fetcher import SourceFetchResult
+from app.collection.article_persister import (
+    ArticleCandidate,
+    SourceFetchResult,
+    persist_new_articles,
+    to_safe_url,
+)
 from app.collection.source_helpers import get_last_successful_fetch_at
 from app.config import settings
-from app.models.news_article import NewsArticle
 from app.models.news_source import NewsSource
-from app.utils.sanitize import is_safe_url, strip_html_tags
+from app.utils.sanitize import strip_html_tags
 
 HTTP_TIMEOUT = 30.0
 
@@ -34,20 +37,18 @@ class HNStory:
     num_comments: int
 
 
-class HackerNewsClient:
-    """Algolia HN Search API クライアント。"""
+class HackerNewsFetcher:
+    """Algolia HN Search API フェッチャー。"""
 
-    def __init__(self, http_client: httpx.AsyncClient) -> None:
-        self.http_client = http_client
-        self.base_url = settings.hn_api_base_url
-
-    async def fetch_recent_stories(
+    async def _fetch_recent_stories(
         self,
+        client: httpx.AsyncClient,
         since_timestamp: int | None = None,
     ) -> list[HNStory]:
         """Algolia HN Search API から最近のストーリーを取得する。
 
         Args:
+            client: HTTP クライアント。
             since_timestamp: Unix タイムスタンプ。これ以降に作成された
                              ストーリーのみ取得する。初回は ``None``
                              （時間フィルタなし）。
@@ -65,8 +66,8 @@ class HackerNewsClient:
             numeric_filters.append(f"created_at_i>{since_timestamp}")
         params["numericFilters"] = ",".join(numeric_filters)
 
-        response = await self.http_client.get(
-            f"{self.base_url}/search_by_date",
+        response = await client.get(
+            f"{settings.hn_api_base_url}/search_by_date",
             params=params,
             timeout=HTTP_TIMEOUT,
         )
@@ -94,16 +95,13 @@ class HackerNewsClient:
 
         return stories
 
-    async def fetch_and_save_stories(
+    async def fetch(
         self,
-        source: NewsSource,
+        client: httpx.AsyncClient,
         session: AsyncSession,
+        source: NewsSource,
     ) -> SourceFetchResult:
-        """HN のストーリーを取得し news_articles に保存する。
-
-        - URL の一括突合で重複排除する（RSS フェッチャと同パターン）
-        - 新規/スキップ件数を含む SourceFetchResult を返す
-        """
+        """HN のストーリーを取得し ArticleCandidate 経由で永続化する。"""
         result = SourceFetchResult(source_id=source.id)
 
         # fetch_logs から直近フェッチ時刻を導出
@@ -113,7 +111,7 @@ class HackerNewsClient:
             since_timestamp = int(last_fetched.timestamp())
 
         try:
-            stories = await self.fetch_recent_stories(since_timestamp)
+            stories = await self._fetch_recent_stories(client, since_timestamp)
         except httpx.HTTPStatusError as e:
             logger.error(
                 "hn_http_error",
@@ -133,33 +131,11 @@ class HackerNewsClient:
             logger.info("hn_no_new_stories", source=source.name)
             return result
 
-        # 一括重複排除: 既存 URL を確認
-        urls = [s.url for s in stories]
-        existing_urls: set[str] = set()
-
-        chunk_size = 500
-        for i in range(0, len(urls), chunk_size):
-            chunk = urls[i : i + chunk_size]
-            stmt = select(NewsArticle.original_url).where(
-                NewsArticle.original_url.in_(chunk)
-            )
-            rows = await session.execute(stmt)
-            # TODO: SafeUrl の __eq__ が str と互換になれば str() 不要
-            existing_urls.update(str(row[0]) for row in rows.all())
-
-        # 新規記事を作成
-        max_new = settings.max_articles_per_fetch
-        new_count = 0
-
+        # ストーリーを ArticleCandidate に変換（SafeUrl 検証付き）
+        candidates: list[ArticleCandidate] = []
         for story in stories:
-            if story.url in existing_urls:
-                result.skipped_count += 1
-                continue
-
-            # --- XSS対策: URLスキーム検証 ---
-            # HN APIから取得したURLも外部ユーザーの投稿データであり、信頼できない。
-            # javascript: 等の危険なスキームをDB保存前に排除する。
-            if not is_safe_url(story.url):
+            safe_url = to_safe_url(story.url)
+            if safe_url is None:
                 logger.warning(
                     "unsafe_url_skipped",
                     source=source.name,
@@ -168,27 +144,27 @@ class HackerNewsClient:
                 result.skipped_count += 1
                 continue
 
-            if new_count >= max_new:
-                logger.info("hn_fetch_limit_reached", source=source.name, max=max_new)
-                break
-
-            article = NewsArticle(
-                original_title=strip_html_tags(story.title)[:500],
-                original_url=story.url,
-                news_source_id=source.id,
-                published_at=story.created_at,
+            candidates.append(
+                ArticleCandidate(
+                    url=safe_url,
+                    title=strip_html_tags(story.title)[:500],
+                    published_at=story.created_at,
+                )
             )
 
-            session.add(article)
-            result.new_articles.append(article)
-            new_count += 1
-            existing_urls.add(story.url)
+        if not candidates:
+            return result
 
-        result.new_count = new_count
+        # 永続化を共通ロジックに委譲
+        persist_result = await persist_new_articles(session, source, candidates)
+        result.new_count = persist_result.new_count
+        result.skipped_count += persist_result.skipped_count
+        result.new_articles = persist_result.new_articles
+
         logger.info(
             "hn_fetch_completed",
             source=source.name,
-            new=new_count,
+            new=result.new_count,
             skipped=result.skipped_count,
         )
         return result

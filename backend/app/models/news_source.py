@@ -25,9 +25,7 @@ class SourceType(StrEnum):
 class NewsSource(Base):
     __tablename__ = "news_sources"
     __table_args__ = (
-        UniqueConstraint(
-            "name", "source_type", name="uq_news_sources_name_source_type"
-        ),
+        UniqueConstraint("name", name="uq_news_sources_name"),
         CheckConstraint(
             "name != ''",
             name="ck_news_sources_name_not_empty",

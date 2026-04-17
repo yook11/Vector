@@ -1,7 +1,8 @@
-"""RSS フェッチャー — RSS ソースから記事を取得・永続化する。
+"""RSS フェッチャー — RSS ソースから記事を取得する。
 
 単一の RSS ソースに対し、条件付き GET でフィードを取得し、
-エントリをパースして新規記事を DB に保存する。
+エントリをパースして ArticleCandidate に変換する。
+永続化は article_persister に委譲する。
 HTTP キャッシュ（ETag / Last-Modified）は Redis 経由で管理する。
 """
 
@@ -12,15 +13,15 @@ from datetime import UTC, datetime
 import feedparser
 import httpx
 import structlog
-from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import select
 
+from app.collection.article_persister import (
+    ArticleCandidate,
+    SourceFetchResult,
+    persist_new_articles,
+    to_safe_url,
+)
 from app.collection.http_cache import get_http_cache, set_http_cache
-from app.collection.news_fetcher import SourceFetchResult
-from app.config import settings
-from app.domain.safe_url import SafeUrl
-from app.models.news_article import NewsArticle
 from app.models.news_source import NewsSource
 from app.utils.sanitize import strip_html_tags
 
@@ -70,14 +71,6 @@ def _extract_full_content(entry: dict) -> str | None:
             if len(value) > 500:
                 return value
     return None
-
-
-def _to_safe_url(raw: str) -> SafeUrl | None:
-    """生文字列を SafeUrl に変換する。不正な URL は None を返す。"""
-    try:
-        return SafeUrl(raw)
-    except (ValueError, ValidationError):
-        return None
 
 
 async def fetch_rss_source(
@@ -143,13 +136,13 @@ async def fetch_rss_source(
         result.error_message = f"Parse error: {feed.bozo_exception}"
         return result
 
-    # エントリの URL を SafeUrl に変換し、不正な URL は除外
-    entry_urls: list[tuple[dict, SafeUrl]] = []
+    # エントリを ArticleCandidate に変換
+    candidates: list[ArticleCandidate] = []
     for entry in feed.entries:
         raw_url = entry.get("link", "") or _extract_guid(entry) or ""
         if not raw_url:
             continue
-        safe_url = _to_safe_url(raw_url)
+        safe_url = to_safe_url(raw_url)
         if safe_url is None:
             logger.warning(
                 "unsafe_url_skipped",
@@ -158,58 +151,40 @@ async def fetch_rss_source(
             )
             result.skipped_count += 1
             continue
-        entry_urls.append((entry, safe_url))
 
-    if not entry_urls:
+        candidates.append(
+            ArticleCandidate(
+                url=safe_url,
+                title=strip_html_tags(entry.get("title", ""))[:500],
+                description=strip_html_tags(
+                    entry.get("summary") or entry.get("description")
+                ),
+                content=_extract_full_content(entry),
+                published_at=_parse_published_date(entry),
+            )
+        )
+
+    if not candidates:
         return result
 
-    # 一括重複排除: 既存 URL を確認
-    urls = [u for _, u in entry_urls]
-    existing_urls: set[SafeUrl] = set()
-    chunk_size = 500
-    for i in range(0, len(urls), chunk_size):
-        chunk = urls[i : i + chunk_size]
-        stmt = select(NewsArticle.original_url).where(
-            NewsArticle.original_url.in_(chunk)
-        )
-        rows = await session.execute(stmt)
-        existing_urls.update(row[0] for row in rows.all())
+    # 永続化を共通ロジックに委譲
+    persist_result = await persist_new_articles(session, source, candidates)
 
-    # 新規記事を作成
-    max_new = settings.max_articles_per_fetch
-    new_count = 0
-
-    for entry, article_url in entry_urls:
-        if article_url in existing_urls:
-            result.skipped_count += 1
-            continue
-
-        if new_count >= max_new:
-            logger.info("source_fetch_limit_reached", source=source.name, max=max_new)
-            break
-
-        title = strip_html_tags(entry.get("title", ""))[:500]
-        description = strip_html_tags(entry.get("summary") or entry.get("description"))
-        full_content = _extract_full_content(entry)
-
-        article = NewsArticle(
-            original_title=title,
-            original_description=description,
-            original_url=article_url,
-            news_source_id=source.id,
-            published_at=_parse_published_date(entry),
-        )
-
-        # RSS が全文を提供している場合はそのまま保存する
-        if full_content:
-            truncated = full_content[: settings.content_max_length]
-            article.original_content = truncated
-
-        session.add(article)
-        result.new_articles.append(article)
-        new_count += 1
-        # 同一フィード内の後続エントリで重複しないよう URL を記録
-        existing_urls.add(article_url)
-
-    result.new_count = new_count
+    # persist_result の値を result にマージ（HTTP キャッシュ情報は保持）
+    result.new_count = persist_result.new_count
+    result.skipped_count += persist_result.skipped_count
+    result.new_articles = persist_result.new_articles
     return result
+
+
+class RssFetcher:
+    """SourceFetcher Protocol を満たす RSS フェッチャー。"""
+
+    async def fetch(
+        self,
+        client: httpx.AsyncClient,
+        session: AsyncSession,
+        source: NewsSource,
+    ) -> SourceFetchResult:
+        """RSS ソースの記事を取得する。"""
+        return await fetch_rss_source(client, session, source)

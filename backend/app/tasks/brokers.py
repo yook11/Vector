@@ -74,7 +74,7 @@ broker_analysis = _make_broker("pipeline:analysis")
 broker_embedding = _make_broker("pipeline:embedding")
 
 # ---------------------------------------------------------------------------
-# Scheduler（metadata broker のみ — cron タスクは fetch_metadata だけ）
+# Scheduler（metadata broker のみ — cron タスクは dispatch_sources だけ）
 # ---------------------------------------------------------------------------
 
 scheduler_metadata = TaskiqScheduler(
