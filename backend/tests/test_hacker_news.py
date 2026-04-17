@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from app.collection.hacker_news import HackerNewsFetcher, HNStory
+from app.collection.ingestion.fetchers.hacker_news import HackerNewsFetcher, HNStory
 from app.models.news_article import NewsArticle
 from app.models.news_source import NewsSource
 

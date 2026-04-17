@@ -9,9 +9,15 @@ import structlog
 from sqlmodel import select
 from taskiq import Context, TaskiqDepends
 
-from app.collection.content_service import ContentFetchService, mark_article_skipped
-from app.collection.html_extractor import ArticleHtmlExtractor, TemporaryFetchError
-from app.collection.source_registry import get_fetcher
+from app.collection.extraction.extractor import (
+    ArticleHtmlExtractor,
+    TemporaryFetchError,
+)
+from app.collection.extraction.service import (
+    ContentFetchService,
+    mark_article_skipped,
+)
+from app.collection.ingestion.registry import get_fetcher
 from app.models.fetch_log import FetchLog, FetchStatus
 from app.models.news_source import NewsSource
 from app.tasks.brokers import (

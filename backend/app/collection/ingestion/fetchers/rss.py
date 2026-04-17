@@ -2,7 +2,7 @@
 
 単一の RSS ソースに対し、条件付き GET でフィードを取得し、
 エントリをパースして ArticleCandidate に変換する。
-永続化は article_persister に委譲する。
+永続化は persister に委譲する。
 HTTP キャッシュ（ETag / Last-Modified）は Redis 経由で管理する。
 """
 
@@ -15,13 +15,13 @@ import httpx
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.collection.article_persister import (
+from app.collection.ingestion.fetchers.http_cache import get_http_cache, set_http_cache
+from app.collection.ingestion.persister import (
     ArticleCandidate,
     SourceFetchResult,
     persist_new_articles,
     to_safe_url,
 )
-from app.collection.http_cache import get_http_cache, set_http_cache
 from app.models.news_source import NewsSource
 from app.utils.sanitize import strip_html_tags
 

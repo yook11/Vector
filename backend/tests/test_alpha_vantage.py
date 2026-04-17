@@ -9,7 +9,7 @@ from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from app.collection.alpha_vantage import (
+from app.collection.ingestion.fetchers.alpha_vantage import (
     AlphaVantageFetcher,
     _parse_av_time,
 )
@@ -59,7 +59,7 @@ async def test_av_fetch_skips_when_no_api_key(
     """av_api_key が空の場合、fetch はスキップされる (エラーではない)。"""
     mock_http = AsyncMock(spec=httpx.AsyncClient)
 
-    with patch("app.collection.alpha_vantage.settings") as mock_settings:
+    with patch("app.collection.ingestion.fetchers.alpha_vantage.settings") as mock_settings:
         mock_settings.av_api_key = SecretStr("")
         mock_settings.av_api_base_url = "https://www.alphavantage.co/query"
 
@@ -85,7 +85,7 @@ async def test_av_fetch_saves_articles(
     mock_http = AsyncMock(spec=httpx.AsyncClient)
     mock_http.get = AsyncMock(return_value=mock_response)
 
-    with patch("app.collection.alpha_vantage.settings") as mock_settings:
+    with patch("app.collection.ingestion.fetchers.alpha_vantage.settings") as mock_settings:
         mock_settings.av_api_key = SecretStr("test-key")
         mock_settings.av_api_base_url = "https://www.alphavantage.co/query"
         mock_settings.av_topics = "technology"
@@ -141,7 +141,7 @@ async def test_av_fetch_skips_duplicates(
     mock_http = AsyncMock(spec=httpx.AsyncClient)
     mock_http.get = AsyncMock(return_value=mock_response)
 
-    with patch("app.collection.alpha_vantage.settings") as mock_settings:
+    with patch("app.collection.ingestion.fetchers.alpha_vantage.settings") as mock_settings:
         mock_settings.av_api_key = SecretStr("test-key")
         mock_settings.av_api_base_url = "https://www.alphavantage.co/query"
         mock_settings.av_topics = "technology"
@@ -173,7 +173,7 @@ async def test_av_fetch_handles_api_error_response(
     mock_http = AsyncMock(spec=httpx.AsyncClient)
     mock_http.get = AsyncMock(return_value=mock_response)
 
-    with patch("app.collection.alpha_vantage.settings") as mock_settings:
+    with patch("app.collection.ingestion.fetchers.alpha_vantage.settings") as mock_settings:
         mock_settings.av_api_key = SecretStr("test-key")
         mock_settings.av_api_base_url = "https://www.alphavantage.co/query"
         mock_settings.av_topics = "technology"
@@ -202,7 +202,7 @@ async def test_av_fetch_handles_http_error(
         )
     )
 
-    with patch("app.collection.alpha_vantage.settings") as mock_settings:
+    with patch("app.collection.ingestion.fetchers.alpha_vantage.settings") as mock_settings:
         mock_settings.av_api_key = SecretStr("test-key")
         mock_settings.av_api_base_url = "https://www.alphavantage.co/query"
         mock_settings.av_topics = "technology"
@@ -238,7 +238,7 @@ async def test_av_fetch_quota_exceeded(
 
     mock_http = AsyncMock(spec=httpx.AsyncClient)
 
-    with patch("app.collection.alpha_vantage.settings") as mock_settings:
+    with patch("app.collection.ingestion.fetchers.alpha_vantage.settings") as mock_settings:
         mock_settings.av_api_key = SecretStr("test-key")
         mock_settings.av_api_base_url = "https://www.alphavantage.co/query"
         mock_settings.av_max_daily_requests = 25

@@ -13,7 +13,7 @@ from typing import Literal
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.collection.html_extractor import (
+from app.collection.extraction.extractor import (
     ArticleHtmlExtractor,
     PermanentFetchError,
 )

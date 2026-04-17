@@ -12,7 +12,7 @@ from typing import Protocol, runtime_checkable
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.collection.article_persister import SourceFetchResult
+from app.collection.ingestion.persister import SourceFetchResult
 from app.domain.news_source import SourceName
 from app.models.news_source import NewsSource
 
@@ -31,9 +31,9 @@ class SourceFetcher(Protocol):
 
 def _build_registry() -> dict[SourceName, SourceFetcher]:
     """全ソースのフェッチャーを登録する。"""
-    from app.collection.alpha_vantage import AlphaVantageFetcher
-    from app.collection.hacker_news import HackerNewsFetcher
-    from app.collection.rss_fetcher import RssFetcher
+    from app.collection.ingestion.fetchers.alpha_vantage import AlphaVantageFetcher
+    from app.collection.ingestion.fetchers.hacker_news import HackerNewsFetcher
+    from app.collection.ingestion.fetchers.rss import RssFetcher
 
     rss = RssFetcher()
 

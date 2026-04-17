@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from app.collection.article_persister import (
+from app.collection.ingestion.persister import (
     ArticleCandidate,
     persist_new_articles,
     to_safe_url,
@@ -109,7 +109,7 @@ async def test_persist_respects_max_articles_limit(
         for i in range(60)
     ]
 
-    with patch("app.collection.article_persister.settings") as mock_settings:
+    with patch("app.collection.ingestion.persister.settings") as mock_settings:
         mock_settings.max_articles_per_fetch = 50
         mock_settings.content_max_length = 8000
         result = await persist_new_articles(db_session, sample_source, candidates)
