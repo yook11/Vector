@@ -16,6 +16,8 @@ from app.collection.ingestion.fetchers.rss import (
 from app.models.news_article import NewsArticle
 from app.models.news_source import NewsSource
 
+_RSS_MOD = "app.collection.ingestion.fetchers.rss"
+
 
 def _make_feed(entries: list[dict], bozo: bool = False) -> MagicMock:
     """feedparser の FeedParserDict モックを作成する。"""
@@ -117,13 +119,13 @@ async def test_rss_saves_new_articles(
     mock_client.get.return_value = _mock_response(text="<rss>mock</rss>")
 
     with (
-        patch("app.collection.ingestion.fetchers.rss.feedparser.parse", return_value=feed),
+        patch(f"{_RSS_MOD}.feedparser.parse", return_value=feed),
         patch(
-            "app.collection.ingestion.fetchers.rss.get_http_cache",
+            f"{_RSS_MOD}.get_http_cache",
             new_callable=AsyncMock,
             return_value=(None, None),
         ),
-        patch("app.collection.ingestion.fetchers.rss.set_http_cache", new_callable=AsyncMock),
+        patch(f"{_RSS_MOD}.set_http_cache", new_callable=AsyncMock),
     ):
         result = await fetch_rss_source(mock_client, db_session, sample_source)
 
@@ -157,13 +159,13 @@ async def test_rss_skips_duplicate_urls(
     mock_client.get.return_value = _mock_response(text="<rss>mock</rss>")
 
     with (
-        patch("app.collection.ingestion.fetchers.rss.feedparser.parse", return_value=feed),
+        patch(f"{_RSS_MOD}.feedparser.parse", return_value=feed),
         patch(
-            "app.collection.ingestion.fetchers.rss.get_http_cache",
+            f"{_RSS_MOD}.get_http_cache",
             new_callable=AsyncMock,
             return_value=(None, None),
         ),
-        patch("app.collection.ingestion.fetchers.rss.set_http_cache", new_callable=AsyncMock),
+        patch(f"{_RSS_MOD}.set_http_cache", new_callable=AsyncMock),
     ):
         result = await fetch_rss_source(mock_client, db_session, sample_source)
 
@@ -181,7 +183,7 @@ async def test_rss_handles_304_not_modified(
     mock_client.get.return_value = _mock_response(status_code=304)
 
     with patch(
-        "app.collection.ingestion.fetchers.rss.get_http_cache",
+        f"{_RSS_MOD}.get_http_cache",
         new_callable=AsyncMock,
         return_value=(None, None),
     ):
@@ -197,7 +199,7 @@ async def test_rss_handles_http_error(
     mock_client.get.return_value = _mock_response(status_code=500)
 
     with patch(
-        "app.collection.ingestion.fetchers.rss.get_http_cache",
+        f"{_RSS_MOD}.get_http_cache",
         new_callable=AsyncMock,
         return_value=(None, None),
     ):
@@ -219,14 +221,14 @@ async def test_rss_respects_max_articles_limit(
     mock_client.get.return_value = _mock_response(text="<rss>mock</rss>")
 
     with (
-        patch("app.collection.ingestion.fetchers.rss.feedparser.parse", return_value=feed),
+        patch(f"{_RSS_MOD}.feedparser.parse", return_value=feed),
         patch("app.collection.ingestion.persister.settings") as mock_settings,
         patch(
-            "app.collection.ingestion.fetchers.rss.get_http_cache",
+            f"{_RSS_MOD}.get_http_cache",
             new_callable=AsyncMock,
             return_value=(None, None),
         ),
-        patch("app.collection.ingestion.fetchers.rss.set_http_cache", new_callable=AsyncMock),
+        patch(f"{_RSS_MOD}.set_http_cache", new_callable=AsyncMock),
     ):
         mock_settings.max_articles_per_fetch = 50
         mock_settings.content_max_length = 8000
@@ -244,7 +246,7 @@ async def test_rss_sends_conditional_get_headers(
     mock_client.get.return_value = _mock_response(status_code=304)
 
     with patch(
-        "app.collection.ingestion.fetchers.rss.get_http_cache",
+        f"{_RSS_MOD}.get_http_cache",
         new_callable=AsyncMock,
         return_value=('"abc123"', "Wed, 01 Jan 2025 00:00:00 GMT"),
     ):
@@ -273,14 +275,14 @@ async def test_rss_captures_etag_and_writes_to_redis(
     )
 
     with (
-        patch("app.collection.ingestion.fetchers.rss.feedparser.parse", return_value=feed),
+        patch(f"{_RSS_MOD}.feedparser.parse", return_value=feed),
         patch(
-            "app.collection.ingestion.fetchers.rss.get_http_cache",
+            f"{_RSS_MOD}.get_http_cache",
             new_callable=AsyncMock,
             return_value=(None, None),
         ),
         patch(
-            "app.collection.ingestion.fetchers.rss.set_http_cache",
+            f"{_RSS_MOD}.set_http_cache",
             new_callable=AsyncMock,
         ) as mock_set_cache,
     ):
@@ -311,13 +313,13 @@ async def test_rss_stores_full_content(
     mock_client.get.return_value = _mock_response(text="<rss>mock</rss>")
 
     with (
-        patch("app.collection.ingestion.fetchers.rss.feedparser.parse", return_value=feed),
+        patch(f"{_RSS_MOD}.feedparser.parse", return_value=feed),
         patch(
-            "app.collection.ingestion.fetchers.rss.get_http_cache",
+            f"{_RSS_MOD}.get_http_cache",
             new_callable=AsyncMock,
             return_value=(None, None),
         ),
-        patch("app.collection.ingestion.fetchers.rss.set_http_cache", new_callable=AsyncMock),
+        patch(f"{_RSS_MOD}.set_http_cache", new_callable=AsyncMock),
     ):
         result = await fetch_rss_source(mock_client, db_session, sample_source)
 

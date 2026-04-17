@@ -46,7 +46,7 @@ class TestDispatchSources:
     @pytest.mark.asyncio
     async def test_dispatches_all_active_sources(self) -> None:
         """全アクティブソースに対して fetch_source_metadata を dispatch する。"""
-        from app.tasks.collection_tasks import dispatch_sources
+        from app.collection.tasks import dispatch_sources
 
         mock_session = AsyncMock()
         mock_ctx = _make_ctx()
@@ -60,7 +60,7 @@ class TestDispatchSources:
         mock_result.scalars.return_value.all.return_value = [source_a, source_b]
         mock_session.execute = AsyncMock(return_value=mock_result)
 
-        with patch("app.tasks.collection_tasks.fetch_source_metadata") as mock_fsm:
+        with patch("app.collection.tasks.fetch_source_metadata") as mock_fsm:
             mock_fsm.kiq = AsyncMock()
             result = await dispatch_sources(ctx=mock_ctx)
 
@@ -72,7 +72,7 @@ class TestDispatchSources:
     @pytest.mark.asyncio
     async def test_skips_when_no_sources(self) -> None:
         """アクティブソースが無い場合は dispatch しない。"""
-        from app.tasks.collection_tasks import dispatch_sources
+        from app.collection.tasks import dispatch_sources
 
         mock_session = AsyncMock()
         mock_ctx = _make_ctx()
@@ -96,7 +96,7 @@ class TestFetchSourceMetadata:
     @pytest.mark.asyncio
     async def test_fetches_and_dispatches_content(self) -> None:
         """新規記事を fetch_content に dispatch する。"""
-        from app.tasks.collection_tasks import fetch_source_metadata
+        from app.collection.tasks import fetch_source_metadata
 
         mock_session = AsyncMock()
         mock_ctx = _make_ctx()
@@ -129,11 +129,11 @@ class TestFetchSourceMetadata:
 
         with (
             patch(
-                "app.tasks.collection_tasks.get_fetcher",
+                "app.collection.tasks.get_fetcher",
                 return_value=mock_fetcher,
             ),
-            patch("app.tasks.collection_tasks.fetch_content") as mock_fc,
-            patch("app.tasks.analysis_tasks.analyze_article") as mock_aa,
+            patch("app.collection.tasks.fetch_content") as mock_fc,
+            patch("app.analysis.tasks.analyze_article") as mock_aa,
         ):
             mock_fc.kiq = AsyncMock()
             mock_aa.kiq = AsyncMock()
@@ -147,7 +147,7 @@ class TestFetchSourceMetadata:
     @pytest.mark.asyncio
     async def test_dispatches_content_ready_to_analysis(self) -> None:
         """全文 RSS 記事は analyze_article に直接流す。"""
-        from app.tasks.collection_tasks import fetch_source_metadata
+        from app.collection.tasks import fetch_source_metadata
 
         mock_session = AsyncMock()
         mock_ctx = _make_ctx()
@@ -182,11 +182,11 @@ class TestFetchSourceMetadata:
 
         with (
             patch(
-                "app.tasks.collection_tasks.get_fetcher",
+                "app.collection.tasks.get_fetcher",
                 return_value=mock_fetcher,
             ),
-            patch("app.tasks.collection_tasks.fetch_content") as mock_fc,
-            patch("app.tasks.analysis_tasks.analyze_article") as mock_aa,
+            patch("app.collection.tasks.fetch_content") as mock_fc,
+            patch("app.analysis.tasks.analyze_article") as mock_aa,
         ):
             mock_fc.kiq = AsyncMock()
             mock_aa.kiq = AsyncMock()
@@ -200,7 +200,7 @@ class TestFetchSourceMetadata:
     @pytest.mark.asyncio
     async def test_returns_not_found_for_missing_source(self) -> None:
         """存在しないソース ID の場合は not_found を返す。"""
-        from app.tasks.collection_tasks import fetch_source_metadata
+        from app.collection.tasks import fetch_source_metadata
 
         mock_session = AsyncMock()
         mock_ctx = _make_ctx()

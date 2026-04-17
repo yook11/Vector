@@ -119,32 +119,32 @@ services:
     <<: *worker-base
     command: >
       taskiq worker
-      app.tasks.brokers:broker_metadata
-      app.tasks.collection_tasks
+      app.brokers:broker_metadata
+      app.collection.tasks
       --ack-type when_executed
 
   worker-content:
     <<: *worker-base
     command: >
       taskiq worker
-      app.tasks.brokers:broker_content
-      app.tasks.collection_tasks
+      app.brokers:broker_content
+      app.collection.tasks
       --ack-type when_executed
 
   worker-analysis:
     <<: *worker-base
     command: >
       taskiq worker
-      app.tasks.brokers:broker_analysis
-      app.tasks.analysis_tasks
+      app.brokers:broker_analysis
+      app.analysis.tasks
       --ack-type when_executed
 
   worker-embedding:
     <<: *worker-base
     command: >
       taskiq worker
-      app.tasks.brokers:broker_embedding
-      app.tasks.analysis_tasks
+      app.brokers:broker_embedding
+      app.analysis.tasks
       --ack-type when_executed
 
   # --- taskiq scheduler (metadata broker only — fetch_metadata cron) ---
@@ -152,8 +152,8 @@ services:
     <<: *worker-base
     command: >
       taskiq scheduler
-      app.tasks.brokers:scheduler_metadata
-      app.tasks.collection_tasks
+      app.brokers:scheduler_metadata
+      app.collection.tasks
     networks:
       - internal
 

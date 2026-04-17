@@ -7,7 +7,7 @@
   - broker_embedding: ベクトル埋め込み生成
 
 Workers: broker ごとに 1 つ（docker-compose.yml を参照）。
-Scheduler: taskiq scheduler app.tasks.brokers:scheduler_metadata
+Scheduler: taskiq scheduler app.brokers:scheduler_metadata
 """
 
 from __future__ import annotations
