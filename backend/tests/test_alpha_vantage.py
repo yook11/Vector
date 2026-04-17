@@ -92,7 +92,6 @@ async def test_av_fetch_saves_articles(
         mock_settings.av_api_base_url = "https://www.alphavantage.co/query"
         mock_settings.av_topics = "technology"
         mock_settings.av_limit = 50
-        mock_settings.av_max_daily_requests = 25
         mock_settings.max_articles_per_fetch = 50
         mock_settings.content_max_length = 8000
 
@@ -148,7 +147,6 @@ async def test_av_fetch_skips_duplicates(
         mock_settings.av_api_base_url = "https://www.alphavantage.co/query"
         mock_settings.av_topics = "technology"
         mock_settings.av_limit = 50
-        mock_settings.av_max_daily_requests = 25
         mock_settings.max_articles_per_fetch = 50
         mock_settings.content_max_length = 8000
 
@@ -180,7 +178,6 @@ async def test_av_fetch_handles_api_error_response(
         mock_settings.av_api_base_url = "https://www.alphavantage.co/query"
         mock_settings.av_topics = "technology"
         mock_settings.av_limit = 50
-        mock_settings.av_max_daily_requests = 25
 
         fetcher = AlphaVantageFetcher()
         result = await fetcher.fetch(mock_http, db_session, sample_av_source)
@@ -209,7 +206,6 @@ async def test_av_fetch_handles_http_error(
         mock_settings.av_api_base_url = "https://www.alphavantage.co/query"
         mock_settings.av_topics = "technology"
         mock_settings.av_limit = 50
-        mock_settings.av_max_daily_requests = 25
 
         fetcher = AlphaVantageFetcher()
         result = await fetcher.fetch(mock_http, db_session, sample_av_source)
@@ -218,36 +214,6 @@ async def test_av_fetch_handles_http_error(
     assert result.error_message == "HTTP 503"
 
 
-@pytest.mark.asyncio
-async def test_av_fetch_quota_exceeded(
-    db_session: AsyncSession,
-    sample_av_source: NewsSource,
-) -> None:
-    """日次クォータ超過時は fetch がブロックされる。"""
-    from app.models.fetch_log import FetchLog, FetchStatus
-
-    # クォータを超過するのに十分な fetch ログを挿入
-    now = datetime.now(UTC)
-    for _ in range(25):
-        log = FetchLog(
-            source_id=sample_av_source.id,
-            status=FetchStatus.SUCCESS,
-            articles_count=0,
-            fetched_at=now,
-        )
-        db_session.add(log)
-    await db_session.commit()
-
-    mock_http = AsyncMock(spec=httpx.AsyncClient)
-
-    with patch(f"{_AV_MOD}.settings") as mock_settings:
-        mock_settings.av_api_key = SecretStr("test-key")
-        mock_settings.av_api_base_url = "https://www.alphavantage.co/query"
-        mock_settings.av_max_daily_requests = 25
-
-        fetcher = AlphaVantageFetcher()
-        result = await fetcher.fetch(mock_http, db_session, sample_av_source)
-
-    assert result.success is False
-    assert "quota" in result.error_message.lower()
-    mock_http.get.assert_not_called()
+def test_declares_daily_request_limit() -> None:
+    """ClassVar DAILY_REQUEST_LIMIT が宣言されている。"""
+    assert AlphaVantageFetcher.DAILY_REQUEST_LIMIT == 25

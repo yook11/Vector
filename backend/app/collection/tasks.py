@@ -27,6 +27,7 @@ from app.collection.extraction.service import (
     ContentFetchService,
     mark_article_skipped,
 )
+from app.collection.ingestion.quota import check_daily_quota
 from app.collection.ingestion.registry import get_fetcher
 from app.models.fetch_log import FetchLog, FetchStatus
 from app.models.news_source import NewsSource
@@ -109,6 +110,20 @@ async def fetch_source_metadata(
             return {"source_id": source_id, "status": "not_found"}
 
         fetcher = get_fetcher(source)
+
+        daily_limit = getattr(fetcher, "DAILY_REQUEST_LIMIT", None)
+        if daily_limit is not None:
+            if not await check_daily_quota(source.id, daily_limit):
+                logger.info(
+                    "fetch_source_metadata_quota_exceeded",
+                    source_id=source_id,
+                    source=source.name,
+                )
+                return {
+                    "source_id": source_id,
+                    "status": "skipped",
+                    "reason": "daily_quota",
+                }
 
         start_time = time.monotonic()
         async with httpx.AsyncClient(headers={"User-Agent": _USER_AGENT}) as client:

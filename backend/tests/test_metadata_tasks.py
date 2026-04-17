@@ -198,6 +198,114 @@ class TestFetchSourceMetadata:
         mock_fc.kiq.assert_called_once_with(11)
 
     @pytest.mark.asyncio
+    async def test_skips_when_daily_quota_exceeded(self) -> None:
+        """クォータ超過時は fetcher.fetch を呼ばず skipped を返す。"""
+        from app.collection.tasks import fetch_source_metadata
+
+        mock_session = AsyncMock()
+        mock_ctx = _make_ctx()
+        _patch_session_factory(mock_ctx, mock_session)
+
+        source = MagicMock(spec=NewsSource)
+        source.id = 1
+        source.name = "AV Source"
+        mock_session.get = AsyncMock(return_value=source)
+
+        mock_fetcher = AsyncMock()
+        mock_fetcher.DAILY_REQUEST_LIMIT = 25
+
+        with (
+            patch(
+                "app.collection.tasks.get_fetcher",
+                return_value=mock_fetcher,
+            ),
+            patch(
+                "app.collection.tasks.check_daily_quota",
+                return_value=False,
+            ) as mock_quota,
+        ):
+            result = await fetch_source_metadata(source_id=1, ctx=mock_ctx)
+
+        assert result["status"] == "skipped"
+        assert result["reason"] == "daily_quota"
+        mock_quota.assert_called_once_with(1, 25)
+        mock_fetcher.fetch.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_proceeds_when_daily_quota_available(self) -> None:
+        """クォータに余裕がある場合は通常フローで fetch を実行する。"""
+        from app.collection.tasks import fetch_source_metadata
+
+        mock_session = AsyncMock()
+        mock_ctx = _make_ctx()
+        _patch_session_factory(mock_ctx, mock_session)
+
+        source = MagicMock(spec=NewsSource)
+        source.id = 1
+        source.name = "AV Source"
+        mock_session.get = AsyncMock(return_value=source)
+
+        fetch_result = SourceFetchResult(
+            source_id=1, success=True, new_count=0, new_articles=[]
+        )
+        mock_fetcher = AsyncMock()
+        mock_fetcher.DAILY_REQUEST_LIMIT = 25
+        mock_fetcher.fetch = AsyncMock(return_value=fetch_result)
+
+        with (
+            patch(
+                "app.collection.tasks.get_fetcher",
+                return_value=mock_fetcher,
+            ),
+            patch(
+                "app.collection.tasks.check_daily_quota",
+                return_value=True,
+            ) as mock_quota,
+        ):
+            result = await fetch_source_metadata(source_id=1, ctx=mock_ctx)
+
+        mock_quota.assert_called_once_with(1, 25)
+        mock_fetcher.fetch.assert_called_once()
+        assert result["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_skips_quota_check_for_fetcher_without_limit(self) -> None:
+        """DAILY_REQUEST_LIMIT を持たない Fetcher ではクォータチェックをスキップする。"""
+        from app.collection.tasks import fetch_source_metadata
+
+        mock_session = AsyncMock()
+        mock_ctx = _make_ctx()
+        _patch_session_factory(mock_ctx, mock_session)
+
+        source = MagicMock(spec=NewsSource)
+        source.id = 1
+        source.name = "RSS Source"
+        mock_session.get = AsyncMock(return_value=source)
+
+        fetch_result = SourceFetchResult(
+            source_id=1, success=True, new_count=0, new_articles=[]
+        )
+        mock_fetcher = AsyncMock()
+        # DAILY_REQUEST_LIMIT を持たない
+        del mock_fetcher.DAILY_REQUEST_LIMIT
+        mock_fetcher.fetch = AsyncMock(return_value=fetch_result)
+
+        with (
+            patch(
+                "app.collection.tasks.get_fetcher",
+                return_value=mock_fetcher,
+            ),
+            patch(
+                "app.collection.tasks.check_daily_quota",
+            ) as mock_quota,
+        ):
+            result = await fetch_source_metadata(source_id=1, ctx=mock_ctx)
+
+        mock_quota.assert_not_called()
+        mock_fetcher.fetch.assert_called_once()
+        assert result["success"] is True
+
+    @pytest.mark.asyncio
     async def test_returns_not_found_for_missing_source(self) -> None:
         """存在しないソース ID の場合は not_found を返す。"""
         from app.collection.tasks import fetch_source_metadata
