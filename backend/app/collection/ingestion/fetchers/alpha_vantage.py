@@ -1,12 +1,11 @@
 """Alpha Vantage News Sentiment API フェッチャー。"""
 
 from datetime import UTC, datetime
+from typing import ClassVar
 
 import httpx
 import structlog
-from sqlalchemy import func as sa_func
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import select
 
 from app.collection.ingestion.fetchers.source_helpers import (
     get_last_successful_fetch_at,
@@ -18,7 +17,6 @@ from app.collection.ingestion.persister import (
     to_safe_url,
 )
 from app.config import settings
-from app.models.fetch_log import FetchLog
 from app.models.news_source import NewsSource
 from app.utils.sanitize import strip_html_tags
 
@@ -44,24 +42,7 @@ def _parse_av_time(time_str: str) -> datetime:
 class AlphaVantageFetcher:
     """Alpha Vantage News Sentiment API フェッチャー。"""
 
-    async def _check_daily_quota(
-        self, source: NewsSource, session: AsyncSession
-    ) -> bool:
-        """日次クォータを超過していなければ True を返す。"""
-        today_start = datetime.now(UTC).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
-        stmt = (
-            select(sa_func.count())
-            .select_from(FetchLog)
-            .where(
-                FetchLog.source_id == source.id,
-                FetchLog.fetched_at >= today_start,
-            )
-        )
-        result = await session.execute(stmt)
-        count = result.scalar_one()
-        return count < settings.av_max_daily_requests
+    DAILY_REQUEST_LIMIT: ClassVar[int | None] = 25
 
     async def fetch(
         self,
@@ -75,13 +56,6 @@ class AlphaVantageFetcher:
         api_key = settings.av_api_key.get_secret_value()
         if not api_key:
             logger.info("av_skipped_no_api_key", source=source.name)
-            return result
-
-        # 日次クォータをチェック
-        if not await self._check_daily_quota(source, session):
-            logger.warning("av_daily_quota_exceeded", source=source.name)
-            result.success = False
-            result.error_message = "Daily API quota exceeded"
             return result
 
         # fetch_logs から直近フェッチ時刻を導出
