@@ -1,14 +1,29 @@
-"""news_fetcher での FetchLog 記録のテスト。"""
+"""fetch_source_metadata での FetchLog 記録のテスト。"""
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from app.collection.news_fetcher import fetch_news_for_sources
+from app.collection.article_persister import SourceFetchResult
 from app.models.fetch_log import FetchLog, FetchStatus
+from app.models.news_article import NewsArticle
 from app.models.news_source import NewsSource
+
+
+def _mock_session_context(mock_session: AsyncSession) -> MagicMock:
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=mock_session)
+    ctx.__aexit__ = AsyncMock(return_value=None)
+    return ctx
+
+
+def _make_ctx(session_factory: MagicMock) -> MagicMock:
+    ctx = MagicMock()
+    ctx.state.session_factory = session_factory
+    ctx.message.labels = {"retry_count": 0, "max_retries": 0}
+    return ctx
 
 
 @pytest.mark.asyncio
@@ -16,41 +31,38 @@ async def test_fetch_log_recorded_on_success(
     db_session: AsyncSession,
     sample_source: NewsSource,
 ) -> None:
-    """RSS fetch が成功すると status='success' の FetchLog が記録される。"""
-    rss_xml = """<?xml version="1.0" encoding="UTF-8"?>
-    <rss version="2.0">
-    <channel>
-        <title>Test</title>
-        <item>
-            <title>Article 1</title>
-            <link>https://example.com/article-1</link>
-            <guid>guid-1</guid>
-        </item>
-    </channel>
-    </rss>"""
+    """フェッチ成功時に status='success' の FetchLog が記録される。"""
+    from app.tasks.collection_tasks import fetch_source_metadata
 
-    mock_response = AsyncMock()
-    mock_response.status_code = 200
-    mock_response.text = rss_xml
-    mock_response.headers = {}
-    mock_response.raise_for_status = lambda: None
+    article = MagicMock(spec=NewsArticle)
+    article.id = 1
+    article.original_content = None
+    article.published_at = None
+
+    fetch_result = SourceFetchResult(
+        source_id=sample_source.id,
+        success=True,
+        new_count=1,
+        new_articles=[article],
+    )
+
+    mock_fetcher = AsyncMock()
+    mock_fetcher.fetch = AsyncMock(return_value=fetch_result)
+
+    # session_factory として db_session を返す factory を使う
+    session_factory = MagicMock()
+    session_factory.return_value = _mock_session_context(db_session)
+    mock_ctx = _make_ctx(session_factory)
 
     with (
-        patch("app.collection.news_fetcher.httpx.AsyncClient") as mock_client_cls,
         patch(
-            "app.collection.rss_fetcher.get_http_cache",
-            new_callable=AsyncMock,
-            return_value=(None, None),
+            "app.tasks.collection_tasks.get_fetcher",
+            return_value=mock_fetcher,
         ),
-        patch("app.collection.rss_fetcher.set_http_cache", new_callable=AsyncMock),
+        patch("app.tasks.collection_tasks.fetch_content") as mock_fc,
     ):
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(return_value=mock_response)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-        mock_client_cls.return_value = mock_client
-
-        await fetch_news_for_sources(db_session, [sample_source])
+        mock_fc.kiq = AsyncMock()
+        await fetch_source_metadata(source_id=sample_source.id, ctx=mock_ctx)
 
     stmt = select(FetchLog).where(FetchLog.source_id == sample_source.id)
     result = await db_session.execute(stmt)
@@ -68,33 +80,28 @@ async def test_fetch_log_recorded_on_error(
     db_session: AsyncSession,
     sample_source: NewsSource,
 ) -> None:
-    """RSS fetch が失敗すると status='error' の FetchLog が記録される。"""
-    import httpx
+    """フェッチ失敗時に status='error' の FetchLog が記録される。"""
+    from app.tasks.collection_tasks import fetch_source_metadata
 
-    mock_response = AsyncMock()
-    mock_response.status_code = 500
+    fetch_result = SourceFetchResult(
+        source_id=sample_source.id,
+        success=False,
+        new_count=0,
+        error_message="HTTP 500",
+    )
 
-    with (
-        patch("app.collection.news_fetcher.httpx.AsyncClient") as mock_client_cls,
-        patch(
-            "app.collection.rss_fetcher.get_http_cache",
-            new_callable=AsyncMock,
-            return_value=(None, None),
-        ),
+    mock_fetcher = AsyncMock()
+    mock_fetcher.fetch = AsyncMock(return_value=fetch_result)
+
+    session_factory = MagicMock()
+    session_factory.return_value = _mock_session_context(db_session)
+    mock_ctx = _make_ctx(session_factory)
+
+    with patch(
+        "app.tasks.collection_tasks.get_fetcher",
+        return_value=mock_fetcher,
     ):
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(
-            side_effect=httpx.HTTPStatusError(
-                "Server Error",
-                request=httpx.Request("GET", str(sample_source.endpoint_url)),
-                response=httpx.Response(500),
-            )
-        )
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-        mock_client_cls.return_value = mock_client
-
-        await fetch_news_for_sources(db_session, [sample_source])
+        await fetch_source_metadata(source_id=sample_source.id, ctx=mock_ctx)
 
     stmt = select(FetchLog).where(FetchLog.source_id == sample_source.id)
     result = await db_session.execute(stmt)
@@ -104,15 +111,3 @@ async def test_fetch_log_recorded_on_error(
     assert log.articles_count == 0
     assert log.error_message == "HTTP 500"
     assert log.duration_ms is not None
-
-
-@pytest.mark.asyncio
-async def test_fetch_log_not_created_when_no_sources(
-    db_session: AsyncSession,
-) -> None:
-    """sources リストが空の場合は FetchLog が作成されない。"""
-    await fetch_news_for_sources(db_session, [])
-
-    stmt = select(FetchLog)
-    result = await db_session.execute(stmt)
-    assert result.scalars().all() == []

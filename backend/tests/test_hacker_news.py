@@ -1,4 +1,4 @@
-"""Hacker News フェッチャーサービスのテスト。"""
+"""Hacker News フェッチャーのテスト。"""
 
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock
@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from app.collection.hacker_news import HackerNewsClient, HNStory
+from app.collection.hacker_news import HackerNewsFetcher, HNStory
 from app.models.news_article import NewsArticle
 from app.models.news_source import NewsSource
 
@@ -82,7 +82,7 @@ def mock_http_client() -> AsyncMock:
     return client
 
 
-# --- HackerNewsClient.fetch_recent_stories tests ---
+# --- HackerNewsFetcher._fetch_recent_stories tests ---
 
 
 async def test_fetch_recent_stories_success(
@@ -91,8 +91,8 @@ async def test_fetch_recent_stories_success(
     """Story を取得し url=None のエントリはフィルタ除外される。"""
     mock_http_client.get.return_value = _mock_hn_response()
 
-    hn_client = HackerNewsClient(mock_http_client)
-    stories = await hn_client.fetch_recent_stories()
+    fetcher = HackerNewsFetcher()
+    stories = await fetcher._fetch_recent_stories(mock_http_client)
 
     assert len(stories) == 2
     assert all(isinstance(s, HNStory) for s in stories)
@@ -115,8 +115,8 @@ async def test_fetch_recent_stories_with_since_timestamp(
     """since_timestamp は numericFilters に含まれる。"""
     mock_http_client.get.return_value = _mock_hn_response(data={"hits": []})
 
-    hn_client = HackerNewsClient(mock_http_client)
-    await hn_client.fetch_recent_stories(since_timestamp=1771953317)
+    fetcher = HackerNewsFetcher()
+    await fetcher._fetch_recent_stories(mock_http_client, since_timestamp=1771953317)
 
     call_kwargs = mock_http_client.get.call_args
     params = (
@@ -134,8 +134,8 @@ async def test_fetch_recent_stories_without_since_timestamp(
     """since_timestamp がない場合 numericFilters は points フィルタのみ。"""
     mock_http_client.get.return_value = _mock_hn_response(data={"hits": []})
 
-    hn_client = HackerNewsClient(mock_http_client)
-    await hn_client.fetch_recent_stories()
+    fetcher = HackerNewsFetcher()
+    await fetcher._fetch_recent_stories(mock_http_client)
 
     call_kwargs = mock_http_client.get.call_args
     params = call_kwargs.kwargs.get("params", {})
@@ -150,12 +150,12 @@ async def test_fetch_recent_stories_api_error(
     """HTTP エラーは HTTPStatusError として伝播する。"""
     mock_http_client.get.return_value = _mock_hn_response(data={}, status_code=429)
 
-    hn_client = HackerNewsClient(mock_http_client)
+    fetcher = HackerNewsFetcher()
     with pytest.raises(httpx.HTTPStatusError):
-        await hn_client.fetch_recent_stories()
+        await fetcher._fetch_recent_stories(mock_http_client)
 
 
-# --- HackerNewsClient.fetch_and_save_stories tests ---
+# --- HackerNewsFetcher.fetch tests ---
 
 
 async def test_save_new_stories(
@@ -166,9 +166,9 @@ async def test_save_new_stories(
     """新規 HN story は news_articles に保存される。"""
     mock_http_client.get.return_value = _mock_hn_response()
 
-    hn_client = HackerNewsClient(mock_http_client)
-    result = await hn_client.fetch_and_save_stories(
-        source=sample_hn_source, session=db_session
+    fetcher = HackerNewsFetcher()
+    result = await fetcher.fetch(
+        client=mock_http_client, session=db_session, source=sample_hn_source
     )
     await db_session.commit()
 
@@ -202,9 +202,9 @@ async def test_skip_duplicate_url(
 
     mock_http_client.get.return_value = _mock_hn_response()
 
-    hn_client = HackerNewsClient(mock_http_client)
-    result = await hn_client.fetch_and_save_stories(
-        source=sample_hn_source, session=db_session
+    fetcher = HackerNewsFetcher()
+    result = await fetcher.fetch(
+        client=mock_http_client, session=db_session, source=sample_hn_source
     )
     await db_session.commit()
 
@@ -212,7 +212,7 @@ async def test_skip_duplicate_url(
     assert result.skipped_count == 1
 
 
-async def test_fetch_and_save_handles_http_error(
+async def test_fetch_handles_http_error(
     db_session: AsyncSession,
     sample_hn_source: NewsSource,
     mock_http_client: AsyncMock,
@@ -220,16 +220,16 @@ async def test_fetch_and_save_handles_http_error(
     """HTTP エラー時は SourceFetchResult(success=False) となる。"""
     mock_http_client.get.return_value = _mock_hn_response(data={}, status_code=500)
 
-    hn_client = HackerNewsClient(mock_http_client)
-    result = await hn_client.fetch_and_save_stories(
-        source=sample_hn_source, session=db_session
+    fetcher = HackerNewsFetcher()
+    result = await fetcher.fetch(
+        client=mock_http_client, session=db_session, source=sample_hn_source
     )
 
     assert result.success is False
     assert "HTTP 500" in result.error_message
 
 
-async def test_fetch_and_save_handles_network_error(
+async def test_fetch_handles_network_error(
     db_session: AsyncSession,
     sample_hn_source: NewsSource,
     mock_http_client: AsyncMock,
@@ -237,16 +237,16 @@ async def test_fetch_and_save_handles_network_error(
     """ネットワークエラー時は SourceFetchResult(success=False) となる。"""
     mock_http_client.get.side_effect = httpx.ConnectError("Connection refused")
 
-    hn_client = HackerNewsClient(mock_http_client)
-    result = await hn_client.fetch_and_save_stories(
-        source=sample_hn_source, session=db_session
+    fetcher = HackerNewsFetcher()
+    result = await fetcher.fetch(
+        client=mock_http_client, session=db_session, source=sample_hn_source
     )
 
     assert result.success is False
     assert result.error_message is not None
 
 
-async def test_fetch_and_save_with_last_fetched_at(
+async def test_fetch_with_last_fetched_at(
     db_session: AsyncSession,
     sample_hn_source: NewsSource,
     mock_http_client: AsyncMock,
@@ -266,8 +266,10 @@ async def test_fetch_and_save_with_last_fetched_at(
 
     mock_http_client.get.return_value = _mock_hn_response(data={"hits": []})
 
-    hn_client = HackerNewsClient(mock_http_client)
-    await hn_client.fetch_and_save_stories(source=sample_hn_source, session=db_session)
+    fetcher = HackerNewsFetcher()
+    await fetcher.fetch(
+        client=mock_http_client, session=db_session, source=sample_hn_source
+    )
 
     call_kwargs = mock_http_client.get.call_args
     params = call_kwargs.kwargs.get("params", {})
@@ -275,7 +277,7 @@ async def test_fetch_and_save_with_last_fetched_at(
     assert "created_at_i>" in numeric_filters
 
 
-async def test_fetch_and_save_empty_response(
+async def test_fetch_empty_response(
     db_session: AsyncSession,
     sample_hn_source: NewsSource,
     mock_http_client: AsyncMock,
@@ -283,9 +285,9 @@ async def test_fetch_and_save_empty_response(
     """API レスポンスが空でも success=True かつ new_count=0 を返す。"""
     mock_http_client.get.return_value = _mock_hn_response(data={"hits": []})
 
-    hn_client = HackerNewsClient(mock_http_client)
-    result = await hn_client.fetch_and_save_stories(
-        source=sample_hn_source, session=db_session
+    fetcher = HackerNewsFetcher()
+    result = await fetcher.fetch(
+        client=mock_http_client, session=db_session, source=sample_hn_source
     )
 
     assert result.success is True

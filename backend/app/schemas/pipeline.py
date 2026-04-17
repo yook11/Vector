@@ -13,8 +13,8 @@ class FetchResponse(_CamelBase):
     """POST /api/v1/admin/pipeline/fetch のレスポンス。"""
 
     message: str
-    sources_count: int | None = None
-    job_id: str
+    dispatched_count: int | None = None
+    job_id: str | None = None
 
 
 class EmbedResponse(_CamelBase):

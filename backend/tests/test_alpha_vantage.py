@@ -1,4 +1,4 @@
-"""Alpha Vantage News Sentiment API クライアントのテスト。"""
+"""Alpha Vantage News Sentiment API フェッチャーのテスト。"""
 
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from app.collection.alpha_vantage import (
-    AlphaVantageClient,
+    AlphaVantageFetcher,
     _parse_av_time,
 )
 from app.models.news_article import NewsArticle
@@ -63,8 +63,8 @@ async def test_av_fetch_skips_when_no_api_key(
         mock_settings.av_api_key = SecretStr("")
         mock_settings.av_api_base_url = "https://www.alphavantage.co/query"
 
-        client = AlphaVantageClient(mock_http)
-        result = await client.fetch_and_save_articles(sample_av_source, db_session)
+        fetcher = AlphaVantageFetcher()
+        result = await fetcher.fetch(mock_http, db_session, sample_av_source)
 
     assert result.success is True
     assert result.new_count == 0
@@ -92,9 +92,10 @@ async def test_av_fetch_saves_articles(
         mock_settings.av_limit = 50
         mock_settings.av_max_daily_requests = 25
         mock_settings.max_articles_per_fetch = 50
+        mock_settings.content_max_length = 8000
 
-        client = AlphaVantageClient(mock_http)
-        result = await client.fetch_and_save_articles(sample_av_source, db_session)
+        fetcher = AlphaVantageFetcher()
+        result = await fetcher.fetch(mock_http, db_session, sample_av_source)
 
     assert result.success is True
     assert result.new_count == 2
@@ -147,9 +148,10 @@ async def test_av_fetch_skips_duplicates(
         mock_settings.av_limit = 50
         mock_settings.av_max_daily_requests = 25
         mock_settings.max_articles_per_fetch = 50
+        mock_settings.content_max_length = 8000
 
-        client = AlphaVantageClient(mock_http)
-        result = await client.fetch_and_save_articles(sample_av_source, db_session)
+        fetcher = AlphaVantageFetcher()
+        result = await fetcher.fetch(mock_http, db_session, sample_av_source)
 
     assert result.new_count == 1
     assert result.skipped_count == 1
@@ -178,8 +180,8 @@ async def test_av_fetch_handles_api_error_response(
         mock_settings.av_limit = 50
         mock_settings.av_max_daily_requests = 25
 
-        client = AlphaVantageClient(mock_http)
-        result = await client.fetch_and_save_articles(sample_av_source, db_session)
+        fetcher = AlphaVantageFetcher()
+        result = await fetcher.fetch(mock_http, db_session, sample_av_source)
 
     assert result.success is False
     assert "API call frequency exceeded" in result.error_message
@@ -207,8 +209,8 @@ async def test_av_fetch_handles_http_error(
         mock_settings.av_limit = 50
         mock_settings.av_max_daily_requests = 25
 
-        client = AlphaVantageClient(mock_http)
-        result = await client.fetch_and_save_articles(sample_av_source, db_session)
+        fetcher = AlphaVantageFetcher()
+        result = await fetcher.fetch(mock_http, db_session, sample_av_source)
 
     assert result.success is False
     assert result.error_message == "HTTP 503"
@@ -241,8 +243,8 @@ async def test_av_fetch_quota_exceeded(
         mock_settings.av_api_base_url = "https://www.alphavantage.co/query"
         mock_settings.av_max_daily_requests = 25
 
-        client = AlphaVantageClient(mock_http)
-        result = await client.fetch_and_save_articles(sample_av_source, db_session)
+        fetcher = AlphaVantageFetcher()
+        result = await fetcher.fetch(mock_http, db_session, sample_av_source)
 
     assert result.success is False
     assert "quota" in result.error_message.lower()

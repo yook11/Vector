@@ -8,12 +8,15 @@ from httpx import AsyncClient
 
 @pytest.mark.asyncio
 class TestFetchNews:
-    async def test_fetch_returns_202(self, admin_client: AsyncClient) -> None:
+    async def test_fetch_without_source_ids_dispatches_all(
+        self, admin_client: AsyncClient
+    ) -> None:
+        """source_ids 未指定時は dispatch_sources を呼ぶ。"""
         mock_task_handle = AsyncMock()
         mock_task_handle.task_id = "test-task-id-123"
 
         with patch(
-            "app.tasks.collection_tasks.fetch_metadata",
+            "app.tasks.collection_tasks.dispatch_sources",
         ) as mock_task:
             mock_task.kiq = AsyncMock(return_value=mock_task_handle)
             resp = await admin_client.post("/api/v1/admin/pipeline/fetch")
@@ -21,18 +24,15 @@ class TestFetchNews:
         assert resp.status_code == 202
         data = resp.json()
         assert data["jobId"] == "test-task-id-123"
-        assert data["message"] == "Fetch task submitted"
-        assert data["sourcesCount"] is None  # 期限切れの全ソース
-        mock_task.kiq.assert_called_once_with(source_ids=None)
+        assert data["message"] == "Dispatch task submitted"
+        mock_task.kiq.assert_called_once()
 
     async def test_fetch_with_source_ids(self, admin_client: AsyncClient) -> None:
-        mock_task_handle = AsyncMock()
-        mock_task_handle.task_id = "test-task-id-456"
-
+        """source_ids 指定時はソースごとに fetch_source_metadata を dispatch する。"""
         with patch(
-            "app.tasks.collection_tasks.fetch_metadata",
+            "app.tasks.collection_tasks.fetch_source_metadata",
         ) as mock_task:
-            mock_task.kiq = AsyncMock(return_value=mock_task_handle)
+            mock_task.kiq = AsyncMock()
             resp = await admin_client.post(
                 "/api/v1/admin/pipeline/fetch",
                 json={"sourceIds": [1, 2, 3]},
@@ -40,8 +40,9 @@ class TestFetchNews:
 
         assert resp.status_code == 202
         data = resp.json()
-        assert data["sourcesCount"] == 3
-        mock_task.kiq.assert_called_once_with(source_ids=[1, 2, 3])
+        assert data["dispatchedCount"] == 3
+        assert data["message"] == "Fetch tasks submitted"
+        assert mock_task.kiq.call_count == 3
 
 
 @pytest.mark.asyncio

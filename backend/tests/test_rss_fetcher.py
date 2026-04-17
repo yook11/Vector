@@ -220,7 +220,7 @@ async def test_rss_respects_max_articles_limit(
 
     with (
         patch("app.collection.rss_fetcher.feedparser.parse", return_value=feed),
-        patch("app.collection.rss_fetcher.settings") as mock_settings,
+        patch("app.collection.article_persister.settings") as mock_settings,
         patch(
             "app.collection.rss_fetcher.get_http_cache",
             new_callable=AsyncMock,

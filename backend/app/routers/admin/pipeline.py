@@ -24,14 +24,26 @@ router = APIRouter(prefix="/pipeline", tags=["admin:pipeline"])
 async def fetch_news(
     body: FetchRequest | None = None,
 ) -> FetchResponse:
-    """ニュース取得タスクをキュー投入し、タスク ID を即座に返す。"""
-    from app.tasks.collection_tasks import fetch_metadata
+    """ニュース取得タスクをキュー投入する。
+
+    source_ids 指定時はソースごとに個別タスクを dispatch、
+    未指定時は dispatch_sources で全アクティブソースを dispatch。
+    """
+    from app.tasks.collection_tasks import dispatch_sources, fetch_source_metadata
 
     source_ids = body.source_ids if body else None
-    task = await fetch_metadata.kiq(source_ids=source_ids)
+
+    if source_ids:
+        for sid in source_ids:
+            await fetch_source_metadata.kiq(sid)
+        return FetchResponse(
+            message="Fetch tasks submitted",
+            dispatched_count=len(source_ids),
+        )
+
+    task = await dispatch_sources.kiq()
     return FetchResponse(
-        message="Fetch task submitted",
-        sources_count=len(source_ids) if source_ids else None,
+        message="Dispatch task submitted",
         job_id=task.task_id,
     )
 
