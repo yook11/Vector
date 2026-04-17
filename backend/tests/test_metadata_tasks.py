@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.collection.article_persister import SourceFetchResult
+from app.collection.ingestion.persister import SourceFetchResult
 from app.models.news_article import NewsArticle
 from app.models.news_source import NewsSource
 

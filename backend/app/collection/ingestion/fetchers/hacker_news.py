@@ -7,13 +7,15 @@ import httpx
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.collection.article_persister import (
+from app.collection.ingestion.fetchers.source_helpers import (
+    get_last_successful_fetch_at,
+)
+from app.collection.ingestion.persister import (
     ArticleCandidate,
     SourceFetchResult,
     persist_new_articles,
     to_safe_url,
 )
-from app.collection.source_helpers import get_last_successful_fetch_at
 from app.config import settings
 from app.models.news_source import NewsSource
 from app.utils.sanitize import strip_html_tags

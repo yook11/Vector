@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from app.collection.html_extractor import (
+from app.collection.extraction.extractor import (
     ArticleHtmlExtractor,
     HtmlExtractionResult,
     PermanentFetchError,
@@ -64,7 +64,7 @@ def _mock_async_client(responses: list[httpx.Response | Exception]) -> AsyncMock
 def _patch_client(client: AsyncMock):
     """``httpx.AsyncClient`` を patch して fetch() が指定モックを使うようにする。"""
     return patch(
-        "app.collection.html_extractor.httpx.AsyncClient",
+        "app.collection.extraction.extractor.httpx.AsyncClient",
         return_value=_as_async_cm(client),
     )
 

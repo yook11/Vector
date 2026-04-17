@@ -6,13 +6,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.collection.content_service import ContentFetchService, mark_article_skipped
-from app.collection.html_extractor import (
+from app.collection.extraction.extractor import (
     ArticleHtmlExtractor,
     HtmlExtractionResult,
     PermanentFetchError,
     TemporaryFetchError,
 )
+from app.collection.extraction.service import ContentFetchService, mark_article_skipped
 from app.models.news_article import NewsArticle
 from app.models.news_source import NewsSource
 

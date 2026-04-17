@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from app.collection.source_registry import SourceFetcher, get_fetcher
+from app.collection.ingestion.registry import SourceFetcher, get_fetcher
 from app.domain.news_source import SourceName
 from app.models.news_source import NewsSource
 
