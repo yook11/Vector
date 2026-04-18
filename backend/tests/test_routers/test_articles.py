@@ -7,10 +7,10 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article_analysis import ArticleAnalysis, ImpactLevel
-from app.models.article_keyword import ArticleKeyword
-from app.models.keyword import Keyword
+from app.models.category import Category
 from app.models.news_article import NewsArticle
 from app.models.news_source import NewsSource
+from app.models.topic import Topic
 
 
 async def _create_article(
@@ -33,9 +33,20 @@ async def _create_article(
     return article
 
 
+async def _create_topic(
+    session: AsyncSession, category_id: int, name: str = "test topic"
+) -> Topic:
+    """テスト用トピックを作成するヘルパー。"""
+    topic = Topic(name=name, category_id=category_id)
+    session.add(topic)
+    await session.flush()
+    return topic
+
+
 async def _create_analysis(
     session: AsyncSession,
     article: NewsArticle,
+    topic_id: int,
     impact_level: ImpactLevel = ImpactLevel.HIGH,
     translated_title: str = "テスト記事",
     embedding: list[float] | None = None,
@@ -49,6 +60,7 @@ async def _create_analysis(
         reasoning="Test reasoning",
         ai_model="gemini-2.0-flash",
         embedding=embedding,
+        topic_id=topic_id,
     )
     session.add(analysis)
     await session.commit()
@@ -68,16 +80,21 @@ class TestListArticles:
         assert data["totalPages"] == 0
 
     async def test_returns_analyzed_articles(
-        self, client: AsyncClient, db_session: AsyncSession, sample_source: NewsSource
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        sample_source: NewsSource,
+        sample_categories: list[Category],
     ) -> None:
+        topic = await _create_topic(db_session, sample_categories[0].id)
         a1 = await _create_article(
             db_session, sample_source, url="https://example.com/1"
         )
-        await _create_analysis(db_session, a1)
+        await _create_analysis(db_session, a1, topic_id=topic.id)
         a2 = await _create_article(
             db_session, sample_source, url="https://example.com/2"
         )
-        await _create_analysis(db_session, a2)
+        await _create_analysis(db_session, a2, topic_id=topic.id)
         # 未分析の記事は除外されるはず
         await _create_article(db_session, sample_source, url="https://example.com/3")
 
@@ -88,13 +105,18 @@ class TestListArticles:
         assert len(data["items"]) == 2
 
     async def test_pagination(
-        self, client: AsyncClient, db_session: AsyncSession, sample_source: NewsSource
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        sample_source: NewsSource,
+        sample_categories: list[Category],
     ) -> None:
+        topic = await _create_topic(db_session, sample_categories[0].id)
         for i in range(5):
             article = await _create_article(
                 db_session, sample_source, url=f"https://example.com/{i}"
             )
-            await _create_analysis(db_session, article)
+            await _create_analysis(db_session, article, topic_id=topic.id)
 
         resp = await client.get("/api/v1/articles?page=1&perPage=2")
         data = resp.json()
@@ -104,31 +126,34 @@ class TestListArticles:
         assert data["perPage"] == 2
         assert data["totalPages"] == 3
 
-    async def test_filter_by_keyword(
+    async def test_filter_by_topic(
         self,
         client: AsyncClient,
         db_session: AsyncSession,
-        sample_keyword: Keyword,
+        sample_categories: list[Category],
         sample_source: NewsSource,
     ) -> None:
-        article = await _create_article(
-            db_session, sample_source, url="https://example.com/kw"
+        """トピック名でフィルターした記事のみ返す。"""
+        target_topic = await _create_topic(
+            db_session, sample_categories[1].id, name="quantum computing"
         )
-        analysis = await _create_analysis(db_session, article)
-        link = ArticleKeyword(
-            article_analysis_id=analysis.id, keyword_id=sample_keyword.id
+        other_topic = await _create_topic(
+            db_session, sample_categories[0].id, name="deep learning"
         )
-        db_session.add(link)
-        await db_session.commit()
 
-        # キーワード紐付けなしで分析済みの記事
+        article = await _create_article(
+            db_session, sample_source, url="https://example.com/tp"
+        )
+        await _create_analysis(db_session, article, topic_id=target_topic.id)
+
+        # 別トピックの分析済み記事
         other = await _create_article(
             db_session, sample_source, url="https://example.com/other"
         )
-        await _create_analysis(db_session, other)
+        await _create_analysis(db_session, other, topic_id=other_topic.id)
 
         resp = await client.get(
-            "/api/v1/articles", params={"keyword": str(sample_keyword.name)}
+            "/api/v1/articles", params={"topic": "quantum computing"}
         )
         data = resp.json()
         assert data["total"] == 1
@@ -139,16 +164,22 @@ class TestListArticles:
         client: AsyncClient,
         db_session: AsyncSession,
         sample_source: NewsSource,
+        sample_categories: list[Category],
     ) -> None:
+        topic = await _create_topic(db_session, sample_categories[0].id)
         a1 = await _create_article(
             db_session, sample_source, url="https://example.com/high"
         )
-        await _create_analysis(db_session, a1, impact_level=ImpactLevel.HIGH)
+        await _create_analysis(
+            db_session, a1, topic_id=topic.id, impact_level=ImpactLevel.HIGH
+        )
 
         a2 = await _create_article(
             db_session, sample_source, url="https://example.com/low"
         )
-        await _create_analysis(db_session, a2, impact_level=ImpactLevel.LOW)
+        await _create_analysis(
+            db_session, a2, topic_id=topic.id, impact_level=ImpactLevel.LOW
+        )
 
         resp = await client.get("/api/v1/articles?impactLevel=high")
         data = resp.json()
@@ -159,21 +190,27 @@ class TestListArticles:
         client: AsyncClient,
         db_session: AsyncSession,
         sample_source: NewsSource,
+        sample_categories: list[Category],
     ) -> None:
         """impactLevel=medium は high/critical の記事を返してはいけない。"""
+        topic = await _create_topic(db_session, sample_categories[0].id)
         a_medium = await _create_article(
             db_session, sample_source, url="https://example.com/medium"
         )
-        await _create_analysis(db_session, a_medium, impact_level=ImpactLevel.MEDIUM)
+        await _create_analysis(
+            db_session, a_medium, topic_id=topic.id, impact_level=ImpactLevel.MEDIUM
+        )
         a_high = await _create_article(
             db_session, sample_source, url="https://example.com/high"
         )
-        await _create_analysis(db_session, a_high, impact_level=ImpactLevel.HIGH)
+        await _create_analysis(
+            db_session, a_high, topic_id=topic.id, impact_level=ImpactLevel.HIGH
+        )
         a_critical = await _create_article(
             db_session, sample_source, url="https://example.com/critical"
         )
         await _create_analysis(
-            db_session, a_critical, impact_level=ImpactLevel.CRITICAL
+            db_session, a_critical, topic_id=topic.id, impact_level=ImpactLevel.CRITICAL
         )
 
         resp = await client.get("/api/v1/articles?impactLevel=medium")
@@ -186,7 +223,9 @@ class TestListArticles:
         client: AsyncClient,
         db_session: AsyncSession,
         sample_source: NewsSource,
+        sample_categories: list[Category],
     ) -> None:
+        topic = await _create_topic(db_session, sample_categories[0].id)
         now = datetime.now(UTC)
         older = await _create_article(
             db_session,
@@ -195,7 +234,9 @@ class TestListArticles:
             url="https://example.com/old",
             published_at=now - timedelta(days=2),
         )
-        await _create_analysis(db_session, older, translated_title="古い記事")
+        await _create_analysis(
+            db_session, older, topic_id=topic.id, translated_title="古い記事"
+        )
         newer = await _create_article(
             db_session,
             sample_source,
@@ -203,7 +244,9 @@ class TestListArticles:
             url="https://example.com/new",
             published_at=now,
         )
-        await _create_analysis(db_session, newer, translated_title="新しい記事")
+        await _create_analysis(
+            db_session, newer, topic_id=topic.id, translated_title="新しい記事"
+        )
 
         resp = await client.get("/api/v1/articles?sortOrder=desc")
         items = resp.json()["items"]
@@ -215,9 +258,11 @@ class TestListArticles:
         client: AsyncClient,
         db_session: AsyncSession,
         sample_source: NewsSource,
+        sample_categories: list[Category],
     ) -> None:
+        topic = await _create_topic(db_session, sample_categories[0].id)
         a = await _create_article(db_session, sample_source)
-        await _create_analysis(db_session, a)
+        await _create_analysis(db_session, a, topic_id=topic.id)
         resp = await client.get("/api/v1/articles")
         data = resp.json()
         assert "totalPages" in data
@@ -233,8 +278,10 @@ class TestListArticles:
         client: AsyncClient,
         db_session: AsyncSession,
         sample_source: NewsSource,
+        sample_categories: list[Category],
     ) -> None:
         """published_at が同一の場合は id DESC で並び替える。"""
+        topic = await _create_topic(db_session, sample_categories[0].id)
         same_time = datetime(2025, 1, 1, tzinfo=UTC)
         a1 = await _create_article(
             db_session,
@@ -243,7 +290,9 @@ class TestListArticles:
             url="https://example.com/tie1",
             published_at=same_time,
         )
-        await _create_analysis(db_session, a1, translated_title="先の記事")
+        await _create_analysis(
+            db_session, a1, topic_id=topic.id, translated_title="先の記事"
+        )
         a2 = await _create_article(
             db_session,
             sample_source,
@@ -251,7 +300,9 @@ class TestListArticles:
             url="https://example.com/tie2",
             published_at=same_time,
         )
-        await _create_analysis(db_session, a2, translated_title="後の記事")
+        await _create_analysis(
+            db_session, a2, topic_id=topic.id, translated_title="後の記事"
+        )
 
         resp = await client.get("/api/v1/articles")
         items = resp.json()["items"]
@@ -275,9 +326,11 @@ class TestGetArticle:
         client: AsyncClient,
         db_session: AsyncSession,
         sample_source: NewsSource,
+        sample_categories: list[Category],
     ) -> None:
+        topic = await _create_topic(db_session, sample_categories[0].id)
         article = await _create_article(db_session, sample_source)
-        analysis = await _create_analysis(db_session, article)
+        analysis = await _create_analysis(db_session, article, topic_id=topic.id)
         resp = await client.get(f"/api/v1/articles/{analysis.id}")
         assert resp.status_code == 200
         data = resp.json()
@@ -296,9 +349,11 @@ class TestGetArticle:
         client: AsyncClient,
         db_session: AsyncSession,
         sample_source: NewsSource,
+        sample_categories: list[Category],
     ) -> None:
+        topic = await _create_topic(db_session, sample_categories[0].id)
         article = await _create_article(db_session, sample_source)
-        analysis = await _create_analysis(db_session, article)
+        analysis = await _create_analysis(db_session, article, topic_id=topic.id)
 
         resp = await client.get(f"/api/v1/articles/{analysis.id}")
         data = resp.json()
@@ -308,25 +363,23 @@ class TestGetArticle:
         assert data["original"]["title"] == "Test Article"
         assert data["original"]["url"] == "https://example.com/article"
 
-    async def test_get_with_keywords(
+    async def test_get_with_topic(
         self,
         client: AsyncClient,
         db_session: AsyncSession,
-        sample_keyword: Keyword,
+        sample_categories: list[Category],
         sample_source: NewsSource,
     ) -> None:
-        article = await _create_article(db_session, sample_source)
-        analysis = await _create_analysis(db_session, article)
-        link = ArticleKeyword(
-            article_analysis_id=analysis.id, keyword_id=sample_keyword.id
+        """記事詳細レスポンスにトピック情報が含まれる。"""
+        topic = await _create_topic(
+            db_session, sample_categories[1].id, name="quantum computing"
         )
-        db_session.add(link)
-        await db_session.commit()
+        article = await _create_article(db_session, sample_source)
+        analysis = await _create_analysis(db_session, article, topic_id=topic.id)
 
         resp = await client.get(f"/api/v1/articles/{analysis.id}")
         data = resp.json()
-        assert len(data["keywords"]) == 1
-        assert data["keywords"][0]["name"] == "Quantum Computing"
+        assert data["topic"]["name"] == "quantum computing"
 
 
 # 次元はモデルの Vector(768) と一致させる必要がある
@@ -360,9 +413,11 @@ class TestSimilarArticles:
         client: AsyncClient,
         db_session: AsyncSession,
         sample_source: NewsSource,
+        sample_categories: list[Category],
     ) -> None:
+        topic = await _create_topic(db_session, sample_categories[0].id)
         article = await _create_article(db_session, sample_source)
-        analysis = await _create_analysis(db_session, article)
+        analysis = await _create_analysis(db_session, article, topic_id=topic.id)
 
         resp = await client.get(f"/api/v1/articles/{analysis.id}/similar")
         assert resp.status_code == 200
@@ -373,26 +428,36 @@ class TestSimilarArticles:
         client: AsyncClient,
         db_session: AsyncSession,
         sample_source: NewsSource,
+        sample_categories: list[Category],
     ) -> None:
+        topic = await _create_topic(db_session, sample_categories[0].id)
         source = await _create_article(
             db_session, sample_source, url="https://example.com/src"
         )
         source_analysis = await _create_analysis(
-            db_session, source, embedding=EMBEDDING_A
+            db_session, source, topic_id=topic.id, embedding=EMBEDDING_A
         )
 
         close = await _create_article(
             db_session, sample_source, url="https://example.com/close"
         )
         await _create_analysis(
-            db_session, close, translated_title="近い記事", embedding=EMBEDDING_B
+            db_session,
+            close,
+            topic_id=topic.id,
+            translated_title="近い記事",
+            embedding=EMBEDDING_B,
         )
 
         far = await _create_article(
             db_session, sample_source, url="https://example.com/far"
         )
         await _create_analysis(
-            db_session, far, translated_title="遠い記事", embedding=EMBEDDING_FAR
+            db_session,
+            far,
+            topic_id=topic.id,
+            translated_title="遠い記事",
+            embedding=EMBEDDING_FAR,
         )
 
         resp = await client.get(f"/api/v1/articles/{source_analysis.id}/similar")
@@ -407,16 +472,22 @@ class TestSimilarArticles:
         client: AsyncClient,
         db_session: AsyncSession,
         sample_source: NewsSource,
+        sample_categories: list[Category],
     ) -> None:
+        topic = await _create_topic(db_session, sample_categories[0].id)
         a1 = await _create_article(
             db_session, sample_source, url="https://example.com/a1"
         )
-        a1_analysis = await _create_analysis(db_session, a1, embedding=EMBEDDING_A)
+        a1_analysis = await _create_analysis(
+            db_session, a1, topic_id=topic.id, embedding=EMBEDDING_A
+        )
 
         a2 = await _create_article(
             db_session, sample_source, url="https://example.com/a2"
         )
-        a2_analysis = await _create_analysis(db_session, a2, embedding=EMBEDDING_A)
+        a2_analysis = await _create_analysis(
+            db_session, a2, topic_id=topic.id, embedding=EMBEDDING_A
+        )
 
         resp = await client.get(f"/api/v1/articles/{a1_analysis.id}/similar")
         items = resp.json()
@@ -429,19 +500,23 @@ class TestSimilarArticles:
         client: AsyncClient,
         db_session: AsyncSession,
         sample_source: NewsSource,
+        sample_categories: list[Category],
     ) -> None:
+        topic = await _create_topic(db_session, sample_categories[0].id)
         source = await _create_article(
             db_session, sample_source, url="https://example.com/main"
         )
         source_analysis = await _create_analysis(
-            db_session, source, embedding=EMBEDDING_A
+            db_session, source, topic_id=topic.id, embedding=EMBEDDING_A
         )
 
         for i in range(5):
             art = await _create_article(
                 db_session, sample_source, url=f"https://example.com/s{i}"
             )
-            await _create_analysis(db_session, art, embedding=EMBEDDING_B)
+            await _create_analysis(
+                db_session, art, topic_id=topic.id, embedding=EMBEDDING_B
+            )
 
         resp = await client.get(
             f"/api/v1/articles/{source_analysis.id}/similar", params={"limit": 2}

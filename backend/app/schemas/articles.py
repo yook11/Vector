@@ -13,10 +13,9 @@ if TYPE_CHECKING:
     from app.schemas.base import PaginationParams
 
 from app.domain.category import CategorySlug
-from app.domain.keyword import KeywordName
 from app.models.article_analysis import ImpactLevel
 from app.schemas.base import PaginationParams, _CamelBase
-from app.schemas.embeds import KeywordEmbed, NewsSourceEmbed, OriginalArticleEmbed
+from app.schemas.embeds import NewsSourceEmbed, OriginalArticleEmbed, TopicEmbed
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -42,14 +41,13 @@ class ArticleListParams(PaginationParams):
     """記事一覧（ニュース閲覧）用のクエリパラメータ。
 
     page/per_page は PaginationParams から継承する。
-    VO フィールド（CategorySlug, KeywordName, SourceName）は
-    クエリパラメータのパース時に Pydantic が直接検証し、
-    不正値は 422 レスポンスを返す。ルーターでは
-    Annotated[ArticleListParams, Query()] として受け取り、
+    VO フィールド（CategorySlug）はクエリパラメータのパース時に
+    Pydantic が直接検証し、不正値は 422 レスポンスを返す。
+    ルーターでは Annotated[ArticleListParams, Query()] として受け取り、
     Service / Repository レイヤーへそのまま受け渡す。
     """
 
-    keyword: Annotated[KeywordName | None, Query()] = None
+    topic: Annotated[str | None, Query()] = None
     category: Annotated[CategorySlug | None, Query()] = None
     impact_level: Annotated[ImpactLevel | None, Query(alias="impactLevel")] = None
     sort_order: Annotated[SortOrder, Query(alias="sortOrder")] = SortOrder.DESC
@@ -65,7 +63,7 @@ class SemanticSearchParams(PaginationParams):
 
     q: Annotated[str, Query(min_length=1, max_length=500)]
     sort_by: Annotated[SortBy, Query(alias="sortBy")] = SortBy.RELEVANCE
-    keyword: Annotated[KeywordName | None, Query()] = None
+    topic: Annotated[str | None, Query()] = None
     category: Annotated[CategorySlug | None, Query()] = None
     impact_level: Annotated[ImpactLevel | None, Query(alias="impactLevel")] = None
     sort_order: Annotated[SortOrder, Query(alias="sortOrder")] = SortOrder.DESC
@@ -86,7 +84,7 @@ class ArticleBrief(_CamelBase):
     impact_level: ImpactLevel
     source: NewsSourceEmbed
     published_at: datetime | None = None
-    keywords: list[KeywordEmbed] = []
+    topic: TopicEmbed | None = None
     is_watched: bool = False
 
 
@@ -101,7 +99,7 @@ class ArticleDetail(_CamelBase):
     analyzed_at: datetime
     source: NewsSourceEmbed
     published_at: datetime | None = None
-    keywords: list[KeywordEmbed] = []
+    topic: TopicEmbed | None = None
     is_watched: bool = False
     original: OriginalArticleEmbed
 

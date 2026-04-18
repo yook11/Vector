@@ -22,7 +22,8 @@ class AnalysisData:
     summary: str
     impact_level: ImpactLevel
     reasoning: str
-    keywords: list[str] | None = None
+    category_slug: str
+    topic_name: str
 
 
 class BaseAnalyzer(abc.ABC):
@@ -66,7 +67,7 @@ class BaseAnalyzer(abc.ABC):
         title: str,
         description: str | None,
         content: str | None = None,
-        keywords_by_category: dict[str, list[str]] | None = None,
+        existing_topics_by_category: dict[str, list[str]] | None = None,
     ) -> AnalysisData:
         """記事を分析し、構造化した分析データを返す。
 
@@ -74,12 +75,11 @@ class BaseAnalyzer(abc.ABC):
             title: 英語記事タイトル。
             description: 英語記事の概要（None の場合あり）。
             content: 記事本文全文（None の場合あり）。
-            keywords_by_category: カテゴリ別キーワード候補の辞書（任意）。
-                キーはカテゴリ slug、値はキーワード名のリスト。
-                AI が全カテゴリを横断して最も関連性の高いものを選ぶ。
+            existing_topics_by_category: カテゴリ別の既存トピック名リスト（任意）。
+                AI が既存トピックを参照してラベルの一貫性を保つためのガイド。
 
         Returns:
-            日本語訳・インパクトレベル・根拠を含む AnalysisData。
+            カテゴリ・トピック・日本語訳・インパクトレベル・根拠を含む AnalysisData。
 
         Raises:
             AnalysisDomainError: 分析に失敗した場合。

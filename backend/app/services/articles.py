@@ -10,15 +10,13 @@ from app.schemas.articles import (
     ArticleListParams,
     PaginatedArticleResponse,
 )
-from app.schemas.embeds import KeywordEmbed, NewsSourceEmbed, OriginalArticleEmbed
+from app.schemas.embeds import NewsSourceEmbed, OriginalArticleEmbed, TopicEmbed
 
 
-def build_keyword_embeds(analysis: ArticleAnalysis) -> list[KeywordEmbed]:
-    return [
-        KeywordEmbed(name=link.keyword.name)
-        for link in analysis.article_keywords
-        if link.keyword
-    ]
+def build_topic_embed(analysis: ArticleAnalysis) -> TopicEmbed | None:
+    if analysis.topic is None:
+        return None
+    return TopicEmbed(name=analysis.topic.name)
 
 
 def build_brief(
@@ -33,7 +31,7 @@ def build_brief(
         impact_level=analysis.impact_level,
         source=NewsSourceEmbed(name=na.news_source.name),
         published_at=na.published_at,
-        keywords=build_keyword_embeds(analysis),
+        topic=build_topic_embed(analysis),
         is_watched=analysis.id in watched_ids if watched_ids else False,
     )
 
@@ -52,7 +50,7 @@ def build_detail(
         analyzed_at=analysis.analyzed_at,
         source=NewsSourceEmbed(name=na.news_source.name),
         published_at=na.published_at,
-        keywords=build_keyword_embeds(analysis),
+        topic=build_topic_embed(analysis),
         is_watched=analysis.id in watched_ids if watched_ids else False,
         original=OriginalArticleEmbed(
             title=na.original_title,

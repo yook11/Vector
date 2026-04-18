@@ -93,7 +93,7 @@ export interface paths {
     };
     /**
      * List Categories
-     * @description List all categories with nested keywords and article counts.
+     * @description List all categories with nested topics and article counts.
      */
     get: operations["list_categories_api_v1_categories_get"];
     put?: never;
@@ -299,11 +299,8 @@ export interface components {
       source: components["schemas"]["NewsSourceEmbed"];
       /** Publishedat */
       publishedAt?: string | null;
-      /**
-       * Keywords
-       * @default []
-       */
-      keywords: components["schemas"]["KeywordEmbed"][];
+      /** Topic */
+      topic?: components["schemas"]["TopicEmbed"] | null;
       /**
        * Iswatched
        * @default false
@@ -332,11 +329,8 @@ export interface components {
       source: components["schemas"]["NewsSourceEmbed"];
       /** Publishedat */
       publishedAt?: string | null;
-      /**
-       * Keywords
-       * @default []
-       */
-      keywords: components["schemas"]["KeywordEmbed"][];
+      /** Topic */
+      topic?: components["schemas"]["TopicEmbed"] | null;
       /**
        * Iswatched
        * @default false
@@ -346,7 +340,7 @@ export interface components {
     };
     /**
      * CategoryDetail
-     * @description Enriched category with articleCount and nested keywords.
+     * @description articleCount とネストしたトピックを備えたカテゴリ詳細。
      */
     CategoryDetail: {
       slug: components["schemas"]["CategorySlug"];
@@ -357,10 +351,10 @@ export interface components {
        */
       articleCount: number;
       /**
-       * Keywords
+       * Topics
        * @default []
        */
-      keywords: components["schemas"]["KeywordStatEmbed"][];
+      topics: components["schemas"]["TopicStatEmbed"][];
     };
     /**
      * CategoryDetailList
@@ -437,29 +431,29 @@ export interface components {
      */
     ImpactLevel: "low" | "medium" | "high" | "critical";
     /**
-     * KeywordEmbed
-     * @description キーワードタグ（ニュース埋め込み用）
+     * TopicEmbed
+     * @description トピックタグ（ニュース埋め込み用）
      */
-    KeywordEmbed: {
-      name: components["schemas"]["KeywordName"];
+    TopicEmbed: {
+      name: components["schemas"]["TopicName"];
     };
     /**
-     * KeywordName
-     * @description Tag name for a technology or theme within a sector.
+     * TopicName
+     * @description AI 生成の分類ラベル名。正規化済みの英語小文字。
      *
      *     Invariants:
-     *     - Contains at least one word character (\w)
-     *     - Only word chars (Unicode), spaces, hyphens, dots, &, /, +, #
-     *     - 1-100 characters after trimming
+     *     - Starts and ends with alphanumeric
+     *     - Only lowercase letters, digits, spaces, hyphens
+     *     - 2-100 characters
      *     - Immutable after creation
      */
-    KeywordName: string;
+    TopicName: string;
     /**
-     * KeywordStatEmbed
-     * @description キーワード＋記事数（カテゴリ内集計表示用）
+     * TopicStatEmbed
+     * @description トピック＋記事数（カテゴリ内集計表示用）
      */
-    KeywordStatEmbed: {
-      name: components["schemas"]["KeywordName"];
+    TopicStatEmbed: {
+      name: components["schemas"]["TopicName"];
       /**
        * Articlecount
        * @default 0
@@ -621,7 +615,7 @@ export interface operations {
         perPage?: number;
         q: string;
         sortBy?: components["schemas"]["SortBy"];
-        keyword?: components["schemas"]["KeywordName"] | null;
+        topic?: string | null;
         category?: components["schemas"]["CategorySlug"] | null;
         impactLevel?: components["schemas"]["ImpactLevel"] | null;
         sortOrder?: components["schemas"]["SortOrder"];
@@ -661,7 +655,7 @@ export interface operations {
       query?: {
         page?: number;
         perPage?: number;
-        keyword?: components["schemas"]["KeywordName"] | null;
+        topic?: string | null;
         category?: components["schemas"]["CategorySlug"] | null;
         impactLevel?: components["schemas"]["ImpactLevel"] | null;
         sortOrder?: components["schemas"]["SortOrder"];

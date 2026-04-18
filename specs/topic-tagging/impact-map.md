@@ -81,8 +81,8 @@
 
 ## 7. マイグレーション
 
+既存データを削除し、新しい Topic 体系でゼロから蓄積する方針。
+
 | ステップ | 内容 |
 |---|---|
-| Alembic 1 | `topics` テーブル作成 + `article_analyses.topic_id` 追加 (NULL 許可) |
-| データ移行 | 既存記事の再分析 or 旧 keyword → topic のマッピング |
-| Alembic 2 | `topic_id` NOT NULL 化 + `keywords`, `article_keywords` 削除 |
+| Alembic | 既存データクリア → 旧テーブル削除 → `topics` 作成 → `topic_id` FK 追加 (NOT NULL) |

@@ -19,8 +19,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
 
 if TYPE_CHECKING:
-    from app.models.article_keyword import ArticleKeyword
     from app.models.news_article import NewsArticle
+    from app.models.topic import Topic
     from app.models.watchlist_entry import WatchlistEntry
 
 
@@ -67,12 +67,13 @@ class ArticleAnalysis(Base):
     )
     embedding: Mapped[list[float] | None] = mapped_column(Vector(768))
     embedding_model: Mapped[str | None] = mapped_column(String(100))
+    topic_id: Mapped[int] = mapped_column(
+        ForeignKey("topics.id", ondelete="RESTRICT"), index=True
+    )
 
     # リレーション
     news_article: Mapped[NewsArticle] = relationship(back_populates="article_analysis")
-    article_keywords: Mapped[list[ArticleKeyword]] = relationship(
-        back_populates="article_analysis"
-    )
+    topic: Mapped[Topic] = relationship()
     watchlist_entries: Mapped[list[WatchlistEntry]] = relationship(
         back_populates="article_analysis"
     )

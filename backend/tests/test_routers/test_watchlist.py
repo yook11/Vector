@@ -7,15 +7,23 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article_analysis import ArticleAnalysis, ImpactLevel
+from app.models.category import Category
 from app.models.news_article import NewsArticle
 from app.models.news_source import NewsSource
+from app.models.topic import Topic
 
 
 @pytest.fixture
 async def sample_article(
-    db_session: AsyncSession, sample_source: NewsSource
+    db_session: AsyncSession,
+    sample_categories: list[Category],
+    sample_source: NewsSource,
 ) -> NewsArticle:
     """分析付きのテスト用ニュース記事を作成する。"""
+    topic = Topic(name="watchlist test", category_id=sample_categories[0].id)
+    db_session.add(topic)
+    await db_session.flush()
+
     article = NewsArticle(
         original_title="Test Article",
         original_url="https://example.com/test",
@@ -23,8 +31,7 @@ async def sample_article(
         published_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
     db_session.add(article)
-    await db_session.commit()
-    await db_session.refresh(article)
+    await db_session.flush()
 
     analysis = ArticleAnalysis(
         news_article_id=article.id,
@@ -33,6 +40,7 @@ async def sample_article(
         impact_level=ImpactLevel.HIGH,
         reasoning="Test reasoning",
         ai_model="gemini-2.0-flash",
+        topic_id=topic.id,
     )
     db_session.add(analysis)
     await db_session.commit()
@@ -42,9 +50,15 @@ async def sample_article(
 
 @pytest.fixture
 async def second_article(
-    db_session: AsyncSession, sample_source: NewsSource
+    db_session: AsyncSession,
+    sample_categories: list[Category],
+    sample_source: NewsSource,
 ) -> NewsArticle:
     """分析付きの 2 件目のテスト用ニュース記事を作成する。"""
+    topic = Topic(name="second test", category_id=sample_categories[0].id)
+    db_session.add(topic)
+    await db_session.flush()
+
     article = NewsArticle(
         original_title="Second Article",
         original_url="https://example.com/second",
@@ -52,8 +66,7 @@ async def second_article(
         published_at=datetime(2026, 1, 2, tzinfo=UTC),
     )
     db_session.add(article)
-    await db_session.commit()
-    await db_session.refresh(article)
+    await db_session.flush()
 
     analysis = ArticleAnalysis(
         news_article_id=article.id,
@@ -62,6 +75,7 @@ async def second_article(
         impact_level=ImpactLevel.MEDIUM,
         reasoning="Second reasoning",
         ai_model="gemini-2.0-flash",
+        topic_id=topic.id,
     )
     db_session.add(analysis)
     await db_session.commit()

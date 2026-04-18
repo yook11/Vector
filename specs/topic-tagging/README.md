@@ -29,8 +29,7 @@
 | [concept-model.md](concept-model.md) | Topic の定義、Category との関係、正規化ルール | 確定 |
 | [impact-map.md](impact-map.md) | 変更の全体マップ (全レイヤーの影響範囲) | 確定 |
 | [ai-pipeline.md](ai-pipeline.md) | プロンプト設計、パース、正規化、永続化フロー | 確定 |
-| data-model.md | topics テーブル設計、マイグレーション計画 | 未着手 |
-| migration.md | 既存データ移行、旧テーブル削除の手順 | 未着手 |
+| [data-model.md](data-model.md) | topics テーブル設計、モデル定義、マイグレーション計画 | 確定 |
 
 ## 関連
 

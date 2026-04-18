@@ -8,9 +8,9 @@ from app.schemas.category import (
     CategoryDetailList,
 )
 from app.schemas.embeds import (
-    KeywordEmbed,
-    KeywordStatEmbed,
     OriginalArticleEmbed,
+    TopicEmbed,
+    TopicStatEmbed,
 )
 from app.schemas.pipeline import (
     EmbedResponse,
@@ -26,8 +26,8 @@ __all__ = [
     "EmbedResponse",
     "FetchRequest",
     "FetchResponse",
-    "KeywordEmbed",
-    "KeywordStatEmbed",
     "OriginalArticleEmbed",
+    "TopicEmbed",
+    "TopicStatEmbed",
     "PaginatedArticleResponse",
 ]

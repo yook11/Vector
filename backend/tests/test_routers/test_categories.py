@@ -5,10 +5,9 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article_analysis import ArticleAnalysis
-from app.models.article_keyword import ArticleKeyword
 from app.models.category import Category
-from app.models.keyword import Keyword
 from app.models.news_source import NewsSource
+from app.models.topic import Topic
 
 
 @pytest.mark.asyncio
@@ -78,9 +77,9 @@ class TestListCategories:
         sample_categories: list[Category],
         sample_source: NewsSource,
     ) -> None:
-        """カテゴリには紐付くキーワード経由の記事数が含まれる。"""
-        kw = Keyword(name="TensorFlow", category_id=sample_categories[0].id)
-        db_session.add(kw)
+        """カテゴリにはトピック経由の記事数が含まれる。"""
+        topic = Topic(name="tensorflow", category_id=sample_categories[0].id)
+        db_session.add(topic)
         await db_session.flush()
 
         from app.models.news_article import NewsArticle
@@ -100,12 +99,9 @@ class TestListCategories:
             impact_level="high",
             reasoning="理由",
             ai_model="test",
+            topic_id=topic.id,
         )
         db_session.add(analysis)
-        await db_session.flush()
-
-        nk = ArticleKeyword(article_analysis_id=analysis.id, keyword_id=kw.id)
-        db_session.add(nk)
         await db_session.commit()
 
         resp = await client.get("/api/v1/categories")
@@ -113,19 +109,42 @@ class TestListCategories:
         ai_ml = next(i for i in items if i["slug"] == "ai_ml")
         assert ai_ml["articleCount"] == 1
 
-    async def test_nested_keywords(
+    async def test_nested_topics(
         self,
         client: AsyncClient,
         db_session: AsyncSession,
         sample_categories: list[Category],
+        sample_source: NewsSource,
     ) -> None:
-        """カテゴリレスポンスにはネストしたキーワードが含まれる。"""
-        kw = Keyword(name="PyTorch", category_id=sample_categories[0].id)
-        db_session.add(kw)
+        """カテゴリレスポンスにはネストしたトピック統計が含まれる。"""
+        topic = Topic(name="pytorch", category_id=sample_categories[0].id)
+        db_session.add(topic)
+        await db_session.flush()
+
+        from app.models.news_article import NewsArticle
+
+        article = NewsArticle(
+            original_title="PyTorch Article",
+            original_url="https://example.com/pytorch",
+            news_source_id=sample_source.id,
+        )
+        db_session.add(article)
+        await db_session.flush()
+
+        analysis = ArticleAnalysis(
+            news_article_id=article.id,
+            translated_title="PyTorch記事",
+            summary="要約",
+            impact_level="high",
+            reasoning="理由",
+            ai_model="test",
+            topic_id=topic.id,
+        )
+        db_session.add(analysis)
         await db_session.commit()
 
         resp = await client.get("/api/v1/categories")
         items = resp.json()["items"]
         ai_ml = next(i for i in items if i["slug"] == "ai_ml")
-        assert len(ai_ml["keywords"]) == 1
-        assert ai_ml["keywords"][0]["name"] == "PyTorch"
+        assert len(ai_ml["topics"]) == 1
+        assert ai_ml["topics"][0]["name"] == "pytorch"

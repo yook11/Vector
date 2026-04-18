@@ -2,7 +2,7 @@ from collections import defaultdict
 
 from app.repositories.category import CategoryRepository
 from app.schemas.category import CategoryDetail, CategoryDetailList
-from app.schemas.embeds import KeywordStatEmbed
+from app.schemas.embeds import TopicStatEmbed
 
 
 class CategoryService:
@@ -12,7 +12,7 @@ class CategoryService:
     async def list_categories(self) -> CategoryDetailList:
         """リポジトリから取得したデータで CategoryDetailList を構築する。"""
         cat_rows = await self.repo.fetch_categories()
-        kw_rows = await self.repo.fetch_keyword_stats()
+        topic_rows = await self.repo.fetch_topic_stats()
         count_rows = await self.repo.fetch_category_article_counts()
 
         # category_id -> article_count のマッピング
@@ -20,11 +20,11 @@ class CategoryService:
             row.category_id: row.article_count for row in count_rows
         }
 
-        # キーワードを category_id でグルーピングする
-        keyword_stats_by_cat: dict[int, list[KeywordStatEmbed]] = defaultdict(list)
-        for row in kw_rows:
-            keyword_stats_by_cat[row.category_id].append(
-                KeywordStatEmbed(
+        # トピックを category_id でグルーピングする
+        topic_stats_by_cat: dict[int, list[TopicStatEmbed]] = defaultdict(list)
+        for row in topic_rows:
+            topic_stats_by_cat[row.category_id].append(
+                TopicStatEmbed(
                     name=row.name,
                     article_count=row.article_count,
                 )
@@ -36,7 +36,7 @@ class CategoryService:
                     slug=row.slug,
                     name=row.name,
                     article_count=article_counts_by_cat.get(row.id, 0),
-                    keywords=keyword_stats_by_cat.get(row.id, []),
+                    topics=topic_stats_by_cat.get(row.id, []),
                 )
                 for row in cat_rows
             ]

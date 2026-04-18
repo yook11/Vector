@@ -2,9 +2,9 @@ from sqlalchemy import Row
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import func, select
 
-from app.models.article_keyword import ArticleKeyword
+from app.models.article_analysis import ArticleAnalysis
 from app.models.category import Category
-from app.models.keyword import Keyword
+from app.models.topic import Topic
 
 
 class CategoryRepository:
@@ -20,24 +20,22 @@ class CategoryRepository:
         result = await self.session.execute(stmt)
         return list(result.all())
 
-    async def fetch_keyword_stats(
+    async def fetch_topic_stats(
         self,
     ) -> list[Row[tuple[int, str, int]]]:
-        """カテゴリ別にキーワードごとの記事数を取得する.
+        """カテゴリ別にトピックごとの記事数を取得する.
 
         (category_id, name, article_count) の行を返す.
         """
         stmt = (
             select(
-                Keyword.category_id,
-                Keyword.name,
-                func.count(func.distinct(ArticleKeyword.article_analysis_id)).label(
-                    "article_count"
-                ),
+                Topic.category_id,
+                Topic.name,
+                func.count(ArticleAnalysis.id).label("article_count"),
             )
-            .outerjoin(ArticleKeyword, ArticleKeyword.keyword_id == Keyword.id)
-            .group_by(Keyword.category_id, Keyword.id, Keyword.name)
-            .order_by(Keyword.name)
+            .outerjoin(ArticleAnalysis, ArticleAnalysis.topic_id == Topic.id)
+            .group_by(Topic.category_id, Topic.id, Topic.name)
+            .order_by(Topic.name)
         )
         result = await self.session.execute(stmt)
         return list(result.all())
@@ -48,16 +46,15 @@ class CategoryRepository:
         """カテゴリごとのユニーク記事数を取得する.
 
         (category_id, article_count) の行を返す.
+        Topic 経由で article_analyses を集計する。
         """
         stmt = (
             select(
-                Keyword.category_id,
-                func.count(func.distinct(ArticleKeyword.article_analysis_id)).label(
-                    "article_count"
-                ),
+                Topic.category_id,
+                func.count(ArticleAnalysis.id).label("article_count"),
             )
-            .join(ArticleKeyword, ArticleKeyword.keyword_id == Keyword.id)
-            .group_by(Keyword.category_id)
+            .join(ArticleAnalysis, ArticleAnalysis.topic_id == Topic.id)
+            .group_by(Topic.category_id)
         )
         result = await self.session.execute(stmt)
         return list(result.all())
