@@ -270,7 +270,7 @@ class TestFetchSourceMetadata:
 
     @pytest.mark.asyncio
     async def test_skips_quota_check_for_fetcher_without_limit(self) -> None:
-        """DAILY_REQUEST_LIMIT を持たない Fetcher ではクォータチェックをスキップする。"""
+        """DAILY_REQUEST_LIMIT を持たない Fetcher ではクォータチェックをスキップ。"""
         from app.collection.tasks import fetch_source_metadata
 
         mock_session = AsyncMock()
