@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -27,6 +28,49 @@ logger = structlog.get_logger(__name__)
 HTTP_TIMEOUT = 30.0
 USER_AGENT = "VectorBot/1.0 (+https://github.com/vector-news)"
 HEADERS = {"User-Agent": USER_AGENT}
+
+# HTML meta charset を検出する正規表現（先頭バイト列から探す）
+_META_CHARSET_RE = re.compile(
+    rb'<meta\s+charset\s*=\s*["\']?\s*([^"\'\s;>]+)', re.IGNORECASE
+)
+_META_HTTP_EQUIV_CHARSET_RE = re.compile(rb"charset\s*=\s*([^\s\"';>]+)", re.IGNORECASE)
+_SNIFF_BYTES = 2048
+
+
+def _decode_html_response(response: httpx.Response) -> str:
+    """HTTP レスポンスの HTML を正しいエンコーディングでデコードする。
+
+    httpx はHTTP Content-Type ヘッダーの charset を優先するが、
+    charset が明示されていない場合は UTF-8 にフォールバックする。
+    日本語サイト（IT media 等）では HTTP ヘッダーに charset がなく
+    HTML の ``<meta charset="Shift_JIS">`` でのみ宣言されるケースがあり、
+    その場合 httpx のデフォルト UTF-8 デコードで文字化けが発生する。
+
+    本関数は Content-Type に charset がない場合のみ HTML meta charset を
+    スニッフィングし、正しいエンコーディングでデコードする。
+    """
+    # Content-Type ヘッダーに charset があれば httpx のデコードを信頼する
+    if response.charset_encoding is not None:
+        return response.text
+
+    # HTML 先頭バイトから meta charset を探す
+    raw = response.content
+    head = raw[:_SNIFF_BYTES]
+
+    match = _META_CHARSET_RE.search(head) or _META_HTTP_EQUIV_CHARSET_RE.search(head)
+    if match:
+        encoding = match.group(1).decode("ascii", errors="ignore").strip()
+        try:
+            return raw.decode(encoding)
+        except (UnicodeDecodeError, LookupError):
+            logger.warning(
+                "html_charset_decode_failed",
+                declared_charset=encoding,
+                url=str(response.url),
+            )
+
+    # meta charset もなければ httpx のデフォルト（UTF-8）にフォールバック
+    return response.text
 
 
 class PermanentFetchError(Exception):
@@ -179,7 +223,8 @@ class ArticleHtmlExtractor:
                 return HtmlExtractionResult(body=None, published_at=None)
 
             try:
-                result = await asyncio.to_thread(_extract_from_html, response.text, url)
+                html_text = _decode_html_response(response)
+                result = await asyncio.to_thread(_extract_from_html, html_text, url)
             except Exception as e:
                 logger.warning("content_parse_error", url=url, error=str(e))
                 return HtmlExtractionResult(body=None, published_at=None)
