@@ -86,9 +86,7 @@ class ArticleAnalysisService:
                 )
 
             # Topic の find-or-create
-            topic_id = await repo.find_or_create_topic(
-                data.topic_name, category_id
-            )
+            topic_id = await repo.find_or_create_topic(data.topic_name, category_id)
 
             # サニタイズと永続化
             analysis = ArticleAnalysis(
