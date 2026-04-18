@@ -11,6 +11,7 @@ from app.collection.extraction.extractor import (
     HtmlExtractionResult,
     PermanentFetchError,
     TemporaryFetchError,
+    _decode_html_response,
     _parse_extracted_date,
 )
 
@@ -268,3 +269,113 @@ class TestArticleHtmlExtractor:
         ]
         assert len(robots_calls_1) == 1
         assert len(robots_calls_2) == 0
+
+
+class TestDecodeHtmlResponse:
+    """_decode_html_response のエンコーディング検出テスト。"""
+
+    def test_uses_response_text_when_charset_in_content_type(self) -> None:
+        """Content-Type に charset があれば httpx のデコード結果をそのまま使う。"""
+        resp = httpx.Response(
+            200,
+            text="<html><body>テスト</body></html>",
+            headers={"content-type": "text/html; charset=utf-8"},
+            request=httpx.Request("GET", "https://example.com/article"),
+        )
+        assert _decode_html_response(resp) == "<html><body>テスト</body></html>"
+
+    def test_decodes_shift_jis_from_meta_charset(self) -> None:
+        """Content-Type に charset がなく meta charset="Shift_JIS" の場合、
+        バイト列から Shift_JIS でデコードする。"""
+        html_text = (
+            '<html><head><meta charset="Shift_JIS"></head>'
+            "<body><p>日本語テスト記事</p></body></html>"
+        )
+        sjis_bytes = html_text.encode("shift_jis")
+
+        resp = httpx.Response(
+            200,
+            content=sjis_bytes,
+            headers={"content-type": "text/html"},
+            request=httpx.Request("GET", "https://www.itmedia.co.jp/article"),
+        )
+        decoded = _decode_html_response(resp)
+        assert "日本語テスト記事" in decoded
+
+    def test_decodes_from_http_equiv_charset(self) -> None:
+        """meta http-equiv の charset 指定からもデコードできる。"""
+        html_text = (
+            "<html><head>"
+            '<meta http-equiv="Content-Type" content="text/html; charset=Shift_JIS">'
+            "</head><body><p>テスト本文</p></body></html>"
+        )
+        sjis_bytes = html_text.encode("shift_jis")
+
+        resp = httpx.Response(
+            200,
+            content=sjis_bytes,
+            headers={"content-type": "text/html"},
+            request=httpx.Request("GET", "https://www.itmedia.co.jp/article"),
+        )
+        decoded = _decode_html_response(resp)
+        assert "テスト本文" in decoded
+
+    def test_falls_back_to_response_text_when_no_charset(self) -> None:
+        """meta charset もなければ httpx デフォルト（UTF-8）にフォールバックする。"""
+        resp = httpx.Response(
+            200,
+            text="<html><body>plain text</body></html>",
+            headers={"content-type": "text/html"},
+            request=httpx.Request("GET", "https://example.com/article"),
+        )
+        assert "plain text" in _decode_html_response(resp)
+
+    def test_falls_back_on_invalid_charset(self) -> None:
+        """meta charset が不正なエンコーディング名でもクラッシュしない。"""
+        html_bytes = b'<html><head><meta charset="not-a-real-encoding"></head><body>ok</body></html>'
+        resp = httpx.Response(
+            200,
+            content=html_bytes,
+            headers={"content-type": "text/html"},
+            request=httpx.Request("GET", "https://example.com/article"),
+        )
+        result = _decode_html_response(resp)
+        assert isinstance(result, str)
+
+    @pytest.mark.asyncio
+    async def test_extractor_handles_shift_jis_html(self) -> None:
+        """ArticleHtmlExtractor が Shift_JIS の HTML を文字化けなく抽出する。"""
+        html_text = (
+            '<html><head><meta charset="Shift_JIS"></head>'
+            "<body><article>"
+            "<h1>量子コンピューティングの進展</h1>"
+            "<p>研究者たちは量子コンピューティングにおける重要なマイルストーンを達成した。"
+            "チームはエラー訂正された論理量子ビットが前例のない忠実度で動作することを実証し、"
+            "実用的な量子コンピュータへの重要な一歩を踏み出した。"
+            "この進展は、創薬、材料科学、暗号技術における量子アプリケーションの開発を加速させる可能性がある。"
+            "</p></article></body></html>"
+        )
+        sjis_bytes = html_text.encode("shift_jis")
+
+        robots_resp = httpx.Response(
+            404,
+            request=httpx.Request("GET", "https://www.itmedia.co.jp/robots.txt"),
+        )
+        html_resp = httpx.Response(
+            200,
+            content=sjis_bytes,
+            headers={"content-type": "text/html"},
+            request=httpx.Request(
+                "GET", "https://www.itmedia.co.jp/news/articles/test.html"
+            ),
+        )
+        client = _mock_async_client([robots_resp, html_resp])
+
+        extractor = ArticleHtmlExtractor()
+        with _patch_client(client):
+            result = await extractor.fetch(
+                "https://www.itmedia.co.jp/news/articles/test.html"
+            )
+
+        assert result.body is not None
+        assert "量子コンピューティング" in result.body
