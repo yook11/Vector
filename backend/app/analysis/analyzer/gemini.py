@@ -27,16 +27,16 @@ logger = structlog.get_logger(__name__)
 
 VALID_CATEGORIES = frozenset(
     [
-        "ai_ml",
-        "biotech",
+        "ai",
+        "bio",
+        "computing",
         "energy",
-        "fintech",
         "materials",
-        "quantum",
+        "network",
         "robotics",
+        "security",
         "semiconductor",
         "space",
-        "telecom",
     ]
 )
 
@@ -54,17 +54,20 @@ Article description: {description}
 Classify this article following these steps:
 
 Step 1 — Determine the category.
+Classify by the article's primary artifact/output domain, NOT by the \
+technology used. For example, "AI discovers new material" belongs to \
+materials (the output), not ai (the tool).
 Select the single most relevant category from:
-- ai_ml: Artificial intelligence and machine learning
-- biotech: Biotechnology, pharmaceuticals, genomics
-- energy: Energy generation, storage, and sustainability
-- fintech: Financial technology, digital payments, blockchain
-- materials: Materials science, advanced materials, nanomaterials
-- quantum: Quantum computing, quantum sensing, quantum networking
-- robotics: Robotics, autonomous vehicles, industrial automation
-- semiconductor: Chip design, manufacturing, lithography, and policy
-- space: Space launch, satellites, lunar exploration
-- telecom: Telecommunications, 5G/6G, network infrastructure
+- ai: AI models, services, agents, and AI industry developments
+- robotics: Autonomous robots, self-driving vehicles, drones, eVTOL
+- semiconductor: Chip design, manufacturing, lithography, packaging
+- computing: Quantum, neuromorphic, photonic, DNA computing
+- network: 6G, Open RAN, AI-RAN, SDN, submarine cables, DC interconnect
+- security: PQC, confidential computing, FHE, ZKP, AI security
+- space: Satellites, rockets, space exploration, orbital infrastructure
+- bio: Genome editing, gene therapy, synthetic biology, mRNA, AI drug discovery
+- materials: Novel materials, 3D printing, nanofabrication
+- energy: Fusion, SMR, next-gen batteries, hydrogen, advanced geothermal
 
 Step 2 — Determine the topic.
 Given the category, assign a concise topic label that captures what \
@@ -75,7 +78,7 @@ this article is specifically about. Rules:
 {existing_topics_section}
 Return a JSON object with fields in this exact order:
 {{
-  "category": "one of the category slugs above",
+  "category": "one of the 10 category slugs above (e.g. \"semiconductor\")",
   "topic": "concise topic label, 2-4 words, lowercase English",
   "title_ja": "Japanese translation of the article title (accurate, concise)",
   "summary_ja": "3-line summary in Japanese. Line 1: key facts. \

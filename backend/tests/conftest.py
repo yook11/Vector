@@ -185,8 +185,8 @@ async def sample_categories(
 ) -> list[Category]:
     """サンプルカテゴリを作成して返す (name は通常のカラム)。"""
     seed = [
-        ("ai_ml", "AI・ML"),
-        ("quantum", "量子コンピュータ"),
+        ("ai", "AI"),
+        ("computing", "次世代コンピューティング"),
         ("semiconductor", "半導体"),
     ]
     categories: list[Category] = []

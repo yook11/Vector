@@ -29,8 +29,8 @@ class TestListCategories:
         assert len(data["items"]) == 3
 
         slugs = [item["slug"] for item in data["items"]]
-        assert "ai_ml" in slugs
-        assert "quantum" in slugs
+        assert "ai" in slugs
+        assert "computing" in slugs
         assert "semiconductor" in slugs
 
     async def test_name_from_direct_column(
@@ -41,8 +41,8 @@ class TestListCategories:
         resp = await client.get("/api/v1/categories")
         items = resp.json()["items"]
         name_map = {item["slug"]: item["name"] for item in items}
-        assert name_map["ai_ml"] == "AI・ML"
-        assert name_map["quantum"] == "量子コンピュータ"
+        assert name_map["ai"] == "AI"
+        assert name_map["computing"] == "次世代コンピューティング"
 
     async def test_ordered_by_slug(
         self,
@@ -106,8 +106,8 @@ class TestListCategories:
 
         resp = await client.get("/api/v1/categories")
         items = resp.json()["items"]
-        ai_ml = next(i for i in items if i["slug"] == "ai_ml")
-        assert ai_ml["articleCount"] == 1
+        ai_cat = next(i for i in items if i["slug"] == "ai")
+        assert ai_cat["articleCount"] == 1
 
     async def test_nested_topics(
         self,
@@ -145,6 +145,6 @@ class TestListCategories:
 
         resp = await client.get("/api/v1/categories")
         items = resp.json()["items"]
-        ai_ml = next(i for i in items if i["slug"] == "ai_ml")
-        assert len(ai_ml["topics"]) == 1
-        assert ai_ml["topics"][0]["name"] == "pytorch"
+        ai_cat = next(i for i in items if i["slug"] == "ai")
+        assert len(ai_cat["topics"]) == 1
+        assert ai_cat["topics"][0]["name"] == "pytorch"

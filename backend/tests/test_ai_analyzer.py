@@ -29,7 +29,7 @@ from app.models.topic import Topic
 
 
 def _make_gemini_response(
-    category: str = "quantum",
+    category: str = "computing",
     topic: str = "quantum computing breakthrough",
     title_ja: str = "量子コンピューティングの新たなブレイクスルー",
     summary_ja: str = (
@@ -123,7 +123,7 @@ def test_parse_response_valid_json() -> None:
     assert isinstance(result, AnalysisData)
     assert result.impact_level == ImpactLevel.HIGH
     assert result.title == "量子コンピューティングの新たなブレイクスルー"
-    assert result.category_slug == "quantum"
+    assert result.category_slug == "computing"
     assert result.topic_name == "quantum computing breakthrough"
 
 
@@ -205,7 +205,7 @@ async def test_analyze_article_creates_analysis(
             summary="要約テスト",
             impact_level=ImpactLevel.HIGH,
             reasoning="テスト理由",
-            category_slug="quantum",
+            category_slug="computing",
             topic_name="quantum breakthrough",
         )
     )
@@ -356,9 +356,9 @@ async def test_news_endpoint_includes_analysis(
 def test_parse_response_extracts_category_and_topic() -> None:
     """category_slug と topic_name が正しくパースされる。"""
     analyzer = _create_analyzer()
-    raw = _make_gemini_response(category="ai_ml", topic="large language models")
+    raw = _make_gemini_response(category="ai", topic="large language models")
     result = analyzer._parse_response(raw)
-    assert result.category_slug == "ai_ml"
+    assert result.category_slug == "ai"
     assert result.topic_name == "large language models"
 
 
@@ -404,7 +404,7 @@ async def test_analyze_article_creates_topic_link(
             summary="要約",
             impact_level=ImpactLevel.HIGH,
             reasoning="理由",
-            category_slug="quantum",
+            category_slug="computing",
             topic_name="quantum error correction",
         )
     )
