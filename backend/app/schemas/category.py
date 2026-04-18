@@ -1,15 +1,15 @@
 from app.domain.category import CategoryName, CategorySlug
 from app.schemas.base import _CamelBase
-from app.schemas.embeds import KeywordStatEmbed
+from app.schemas.embeds import TopicStatEmbed
 
 
 class CategoryDetail(_CamelBase):
-    """articleCount とネストしたキーワードを備えたカテゴリ詳細。"""
+    """articleCount とネストしたトピックを備えたカテゴリ詳細。"""
 
     slug: CategorySlug
     name: CategoryName
     article_count: int = 0
-    keywords: list[KeywordStatEmbed] = []
+    topics: list[TopicStatEmbed] = []
 
 
 class CategoryDetailList(_CamelBase):

@@ -13,9 +13,9 @@ from sqlalchemy.engine import Dialect
 from sqlalchemy.types import TypeDecorator
 
 from app.domain.category import CategoryName, CategorySlug
-from app.domain.keyword import KeywordName
 from app.domain.news_source import SourceName
 from app.domain.safe_url import SafeUrl
+from app.domain.topic import TopicName
 
 
 class CategorySlugType(TypeDecorator[CategorySlug]):
@@ -60,8 +60,8 @@ class CategoryNameType(TypeDecorator[CategoryName]):
         return CategoryName(value)
 
 
-class KeywordNameType(TypeDecorator[KeywordName]):
-    """KeywordName <-> VARCHAR(100)."""
+class TopicNameType(TypeDecorator[TopicName]):
+    """TopicName <-> VARCHAR(100)."""
 
     impl = String(100)
     cache_ok = True
@@ -69,16 +69,16 @@ class KeywordNameType(TypeDecorator[KeywordName]):
     def process_bind_param(self, value: Any, dialect: Dialect) -> str | None:
         if value is None:
             return None
-        if isinstance(value, KeywordName):
+        if isinstance(value, TopicName):
             return value.root
         if isinstance(value, str):
-            return KeywordName(value).root
-        raise TypeError(f"Expected KeywordName or str, got {type(value).__name__}")
+            return TopicName(value).root
+        raise TypeError(f"Expected TopicName or str, got {type(value).__name__}")
 
-    def process_result_value(self, value: Any, dialect: Dialect) -> KeywordName | None:
+    def process_result_value(self, value: Any, dialect: Dialect) -> TopicName | None:
         if value is None:
             return None
-        return KeywordName(value)
+        return TopicName(value)
 
 
 class SourceNameType(TypeDecorator[SourceName]):

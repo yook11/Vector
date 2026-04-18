@@ -9,7 +9,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.analyzer.base import BaseAnalyzer
-from app.analysis.errors import InvalidInputError
+from app.analysis.errors import InvalidInputError, ProviderError
 from app.analysis.repository import AnalysisRepository
 from app.models.article_analysis import ArticleAnalysis
 from app.utils.sanitize import strip_html_tags
@@ -58,8 +58,8 @@ class ArticleAnalysisService:
                 logger.warning("analysis_article_not_found", article_id=article_id)
                 return AnalysisResult("skipped")
 
-            # キーワード候補を取得
-            keywords_by_category = await repo.get_keywords_by_category()
+            # 既存トピックを取得（プロンプトのガイド用）
+            existing_topics = await repo.get_existing_topics_by_category()
 
             # AI による分析
             try:
@@ -67,7 +67,7 @@ class ArticleAnalysisService:
                     title=article.original_title,
                     description=article.original_description,
                     content=article.original_content,
-                    keywords_by_category=keywords_by_category,
+                    existing_topics_by_category=existing_topics,
                 )
             except InvalidInputError:
                 await repo.mark_article_skipped(article)
@@ -78,6 +78,16 @@ class ArticleAnalysisService:
                 )
                 return AnalysisResult("skipped")
 
+            # カテゴリ ID を取得
+            category_id = await repo.get_category_id_by_slug(data.category_slug)
+            if category_id is None:
+                raise ProviderError(
+                    f"AI returned unknown category slug: {data.category_slug!r}"
+                )
+
+            # Topic の find-or-create
+            topic_id = await repo.find_or_create_topic(data.topic_name, category_id)
+
             # サニタイズと永続化
             analysis = ArticleAnalysis(
                 news_article_id=article.id,
@@ -86,15 +96,17 @@ class ArticleAnalysisService:
                 impact_level=data.impact_level,
                 reasoning=strip_html_tags(data.reasoning) or "",
                 ai_model=analyzer.model_name,
+                topic_id=topic_id,
             )
-            await repo.save_analysis(analysis, data.keywords)
+            await repo.save_analysis(analysis)
             await session.commit()
 
             logger.info(
                 "analysis_completed",
                 article_id=article_id,
                 impact_level=data.impact_level,
-                keywords=data.keywords,
+                category=data.category_slug,
+                topic=data.topic_name,
             )
             return AnalysisResult("created", analysis_id=analysis.id)
 

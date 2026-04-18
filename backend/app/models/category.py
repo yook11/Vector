@@ -9,7 +9,7 @@ from app.domain.category import CategoryName, CategorySlug
 from app.models.base import Base
 
 if TYPE_CHECKING:
-    from app.models.keyword import Keyword
+    from app.models.topic import Topic
 
 
 class Category(Base):
@@ -30,4 +30,4 @@ class Category(Base):
     name: Mapped[CategoryName] = mapped_column(unique=True)
 
     # リレーション（同一 Base のため OK）
-    keywords: Mapped[list[Keyword]] = relationship(back_populates="category")
+    topics: Mapped[list[Topic]] = relationship(back_populates="category")

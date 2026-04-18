@@ -21,7 +21,7 @@ function parseCommonFilters(
   };
 
   const filters: {
-    keyword?: string;
+    topic?: string;
     category?: string;
     impactLevel?: ImpactLevel;
     sortOrder?: "asc" | "desc";
@@ -29,8 +29,8 @@ function parseCommonFilters(
     perPage?: number;
   } = {};
 
-  const keyword = str("keyword");
-  if (keyword) filters.keyword = keyword;
+  const topic = str("topic");
+  if (topic) filters.topic = topic;
 
   const category = str("category");
   if (category) filters.category = category;
@@ -81,7 +81,7 @@ export default async function DashboardPage({
         <CategorySidebar
           categories={categoriesData.items}
           activeCategory={filters.category}
-          activeKeyword={filters.keyword}
+          activeTopic={filters.topic}
         />
       </aside>
 
@@ -93,7 +93,7 @@ export default async function DashboardPage({
             <MobileSidebar
               categories={categoriesData.items}
               activeCategory={filters.category}
-              activeKeyword={filters.keyword}
+              activeTopic={filters.topic}
             />
             <h1 className="text-base font-medium text-foreground">Dashboard</h1>
           </div>

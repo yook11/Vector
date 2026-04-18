@@ -57,14 +57,10 @@ export function NewsDetail({ article }: { article: ArticleDetailData }) {
         )}
       </div>
 
-      {article.keywords.length > 0 && (
-        <div className="flex flex-wrap gap-1">
-          {article.keywords.map((kw) => (
-            <Badge key={kw.name} variant="secondary">
-              {kw.name}
-            </Badge>
-          ))}
-        </div>
+      {article.topic && (
+        <Badge variant="secondary" className="w-fit">
+          {article.topic.name}
+        </Badge>
       )}
 
       <Card>

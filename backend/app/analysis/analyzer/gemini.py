@@ -20,14 +20,29 @@ from app.analysis.errors import (
     UnclassifiedError,
 )
 from app.config import settings
+from app.domain.topic import normalize_topic_name
 from app.models.article_analysis import ImpactLevel
 
 logger = structlog.get_logger(__name__)
 
+VALID_CATEGORIES = frozenset(
+    [
+        "ai_ml",
+        "biotech",
+        "energy",
+        "fintech",
+        "materials",
+        "quantum",
+        "robotics",
+        "semiconductor",
+        "space",
+        "telecom",
+    ]
+)
+
 ANALYSIS_PROMPT_BASE = """\
 You are an expert tech news analyst specializing in emerging technologies \
-(quantum computing, materials informatics, advanced semiconductors, etc.) \
-with a focus on investment implications for the Japanese market.
+with a focus on investment implications.
 
 Analyze the following English tech news article and respond ONLY with \
 a valid JSON object. Do not include markdown code fences or any text \
@@ -36,15 +51,38 @@ outside the JSON.
 Article title: {title}
 Article description: {description}
 {content_section}
-Return a JSON object with exactly these fields:
+Classify this article following these steps:
+
+Step 1 — Determine the category.
+Select the single most relevant category from:
+- ai_ml: Artificial intelligence and machine learning
+- biotech: Biotechnology, pharmaceuticals, genomics
+- energy: Energy generation, storage, and sustainability
+- fintech: Financial technology, digital payments, blockchain
+- materials: Materials science, advanced materials, nanomaterials
+- quantum: Quantum computing, quantum sensing, quantum networking
+- robotics: Robotics, autonomous vehicles, industrial automation
+- semiconductor: Chip design, manufacturing, lithography, and policy
+- space: Space launch, satellites, lunar exploration
+- telecom: Telecommunications, 5G/6G, network infrastructure
+
+Step 2 — Determine the topic.
+Given the category, assign a concise topic label that captures what \
+this article is specifically about. Rules:
+- Lowercase English, 2-4 words, no articles (a/an/the)
+- Use established terminology within the category
+- Be specific: prefer "euv lithography advancement" over "semiconductor news"
+{existing_topics_section}
+Return a JSON object with fields in this exact order:
 {{
+  "category": "one of the category slugs above",
+  "topic": "concise topic label, 2-4 words, lowercase English",
   "title_ja": "Japanese translation of the article title (accurate, concise)",
   "summary_ja": "3-line summary in Japanese. Line 1: key facts. \
 Line 2: industry impact. Line 3: investment implications. \
 Separate lines with \\n",
   "impact_level": "one of: low, medium, high, critical — how much this \
-news affects the market. low = minimal impact, medium = notable but limited, \
-high = significant market implications, critical = major market-moving event",
+news affects the market",
   "reasoning": "Brief explanation in Japanese of why you assigned \
 this impact level"
 }}
@@ -55,6 +93,24 @@ Rules:
 - If description is empty, analyze based on the title alone
 - When full article content is provided, use it for deeper analysis
 """
+
+
+def _build_existing_topics_section(
+    topics_by_category: dict[str, list[str]] | None,
+) -> str:
+    """カテゴリ内の既存 Topic リスト（上位30件）をプロンプトに挿入する。"""
+    if not topics_by_category:
+        return ""
+
+    lines = [
+        "Existing topics by category (use these if applicable, "
+        "create a new one only if none fit):"
+    ]
+    for cat_slug, topics in topics_by_category.items():
+        topic_list = ", ".join(f'"{t}"' for t in topics[:30])
+        lines.append(f"- {cat_slug}: [{topic_list}]")
+
+    return "\n".join(lines) + "\n"
 
 
 class GeminiAnalyzer(BaseAnalyzer):
@@ -75,7 +131,7 @@ class GeminiAnalyzer(BaseAnalyzer):
         title: str,
         description: str | None,
         content: str | None = None,
-        keywords_by_category: dict[str, list[str]] | None = None,
+        existing_topics_by_category: dict[str, list[str]] | None = None,
     ) -> AnalysisData:
         """プロンプトを構築し API を呼び出してレスポンスを解析する。"""
         content_section = ""
@@ -83,29 +139,19 @@ class GeminiAnalyzer(BaseAnalyzer):
             truncated = content[: settings.content_max_length]
             content_section = f"\nArticle full text:\n{truncated}\n"
 
+        existing_topics_section = _build_existing_topics_section(
+            existing_topics_by_category,
+        )
+
         prompt = ANALYSIS_PROMPT_BASE.format(
             title=title,
             description=description or "(no description available)",
             content_section=content_section,
+            existing_topics_section=existing_topics_section,
         )
 
-        if keywords_by_category:
-            lines = []
-            for cat_slug, kws in keywords_by_category.items():
-                kw_list = ", ".join(f'"{kw}"' for kw in kws)
-                lines.append(f"- {cat_slug}: [{kw_list}]")
-            candidates_block = "\n".join(lines)
-            prompt += (
-                f"\nAdditionally, select up to 3 keywords from the following "
-                f"candidates that best describe this article's topic. Return them "
-                f'in a "keywords" field as a JSON array of strings. Only select '
-                f"keywords that are clearly related to the article content. "
-                f"If none are relevant, return an empty array.\n"
-                f"Keyword candidates by category:\n{candidates_block}\n"
-            )
-
         raw_text = await self._call_once(prompt)
-        return self._parse_response(raw_text, keywords_by_category)
+        return self._parse_response(raw_text)
 
     async def _call_api(self, prompt: str) -> str:
         """Gemini の generate_content API を呼び出す。"""
@@ -156,9 +202,7 @@ class GeminiAnalyzer(BaseAnalyzer):
 
         return UnclassifiedError(f"{type(exc).__name__}: {exc}")
 
-    def _parse_response(
-        self, raw_text: str, keywords_by_category: dict[str, list[str]] | None = None
-    ) -> AnalysisData:
+    def _parse_response(self, raw_text: str) -> AnalysisData:
         """Gemini からの JSON レスポンスを解析・検証する。"""
         text = raw_text.strip()
 
@@ -181,29 +225,27 @@ class GeminiAnalyzer(BaseAnalyzer):
             raise ProviderError(f"Failed to parse Gemini response as JSON: {e}")
 
         try:
-            impact_level = ImpactLevel(data["impact_level"])
+            # category バリデーション
+            category = str(data["category"]).strip().lower()
+            if category not in VALID_CATEGORIES:
+                raise ProviderError(
+                    f"Invalid category from Gemini: {category!r}. "
+                    f"Expected one of: {sorted(VALID_CATEGORIES)}"
+                )
 
-            # keywords をパース: 有効な候補のみを残し、最大 3 件に絞る
-            keywords: list[str] | None = None
-            raw_keywords = data.get("keywords")
-            if isinstance(raw_keywords, list) and keywords_by_category:
-                all_candidates: set[str] = set()
-                for kws in keywords_by_category.values():
-                    all_candidates.update(kws)
-                keywords = [
-                    k
-                    for k in raw_keywords
-                    if isinstance(k, str) and k in all_candidates
-                ][:3]
-                if not keywords:
-                    keywords = None
+            # topic 正規化
+            raw_topic = str(data["topic"])
+            topic_name = normalize_topic_name(raw_topic)
+
+            impact_level = ImpactLevel(data["impact_level"])
 
             return AnalysisData(
                 title=str(data["title_ja"]),
                 summary=str(data["summary_ja"]),
                 impact_level=impact_level,
                 reasoning=str(data.get("reasoning", "")),
-                keywords=keywords,
+                category_slug=category,
+                topic_name=topic_name,
             )
         except (KeyError, TypeError, ValueError) as e:
             logger.error(

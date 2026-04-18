@@ -20,33 +20,33 @@ from app.analysis import (
 from app.analysis.analyzer.gemini import GeminiAnalyzer
 from app.analysis.service import ArticleAnalysisService
 from app.models.article_analysis import ArticleAnalysis, ImpactLevel
-from app.models.article_keyword import ArticleKeyword
 from app.models.category import Category
-from app.models.keyword import Keyword
 from app.models.news_article import NewsArticle
 from app.models.news_source import NewsSource
+from app.models.topic import Topic
 
 # --- Helpers ---
 
 
 def _make_gemini_response(
+    category: str = "quantum",
+    topic: str = "quantum computing breakthrough",
     title_ja: str = "量子コンピューティングの新たなブレイクスルー",
     summary_ja: str = (
         "MITが新手法を発表。\n半導体業界に大きな影響。\n投資家にとっては追い風。"
     ),
     impact_level: str = "high",
     reasoning: str | None = "技術的に重要な進展であり市場に好影響",
-    keywords: list[str] | None = None,
 ) -> str:
     """Gemini API レスポンスを模した有効な JSON 文字列を作成する。"""
     data: dict = {
+        "category": category,
+        "topic": topic,
         "title_ja": title_ja,
         "summary_ja": summary_ja,
         "impact_level": impact_level,
         "reasoning": reasoning,
     }
-    if keywords is not None:
-        data["keywords"] = keywords
     return json.dumps(data, ensure_ascii=False)
 
 
@@ -104,7 +104,7 @@ def test_base_analyzer_rejects_subclass_without_classvar() -> None:
                 title,
                 description,
                 content=None,
-                keywords_by_category=None,
+                existing_topics_by_category=None,
             ): ...
 
             async def _call_api(self, prompt): ...
@@ -123,6 +123,8 @@ def test_parse_response_valid_json() -> None:
     assert isinstance(result, AnalysisData)
     assert result.impact_level == ImpactLevel.HIGH
     assert result.title == "量子コンピューティングの新たなブレイクスルー"
+    assert result.category_slug == "quantum"
+    assert result.topic_name == "quantum computing breakthrough"
 
 
 def test_parse_response_strips_markdown_fences() -> None:
@@ -181,6 +183,7 @@ async def test_call_once_passes_through_domain_error() -> None:
 async def test_analyze_article_creates_analysis(
     db_session: AsyncSession,
     session_factory,
+    sample_categories: list[Category],
     sample_source: NewsSource,
 ) -> None:
     article = NewsArticle(
@@ -202,29 +205,39 @@ async def test_analyze_article_creates_analysis(
             summary="要約テスト",
             impact_level=ImpactLevel.HIGH,
             reasoning="テスト理由",
+            category_slug="quantum",
+            topic_name="quantum breakthrough",
         )
     )
 
+    article_id = article.id
     svc = ArticleAnalysisService(session_factory)
-    result = await svc.execute(article.id, mock_analyzer)
+    result = await svc.execute(article_id, mock_analyzer)
 
     assert result.status == "created"
     assert result.analysis_id is not None
 
+    db_session.expire_all()
     stmt = select(ArticleAnalysis).where(
-        ArticleAnalysis.news_article_id == article.id,
+        ArticleAnalysis.news_article_id == article_id,
     )
     analysis = (await db_session.execute(stmt)).scalar_one()
     assert analysis.impact_level == ImpactLevel.HIGH
     assert analysis.translated_title == "量子ブレイクスルー"
     assert analysis.ai_model == "gemini-2.5-flash-lite"
+    assert analysis.topic_id is not None
 
 
 async def test_analyze_article_skips_already_analyzed(
     db_session: AsyncSession,
     session_factory,
+    sample_categories: list[Category],
     sample_source: NewsSource,
 ) -> None:
+    topic = Topic(name="old topic", category_id=sample_categories[0].id)
+    db_session.add(topic)
+    await db_session.flush()
+
     article = NewsArticle(
         original_title="Old Article",
         original_url="https://example.com/old",
@@ -232,8 +245,7 @@ async def test_analyze_article_skips_already_analyzed(
         published_at=datetime.now(UTC),
     )
     db_session.add(article)
-    await db_session.commit()
-    await db_session.refresh(article)
+    await db_session.flush()
 
     existing = ArticleAnalysis(
         news_article_id=article.id,
@@ -242,6 +254,7 @@ async def test_analyze_article_skips_already_analyzed(
         impact_level=ImpactLevel.MEDIUM,
         reasoning="既存理由",
         ai_model="gemini-2.5-flash-lite",
+        topic_id=topic.id,
     )
     db_session.add(existing)
     await db_session.commit()
@@ -299,8 +312,13 @@ async def test_analyze_article_skips_on_invalid_input(
 async def test_news_endpoint_includes_analysis(
     client,
     db_session: AsyncSession,
+    sample_categories: list[Category],
     sample_source: NewsSource,
 ) -> None:
+    topic = Topic(name="integration test", category_id=sample_categories[0].id)
+    db_session.add(topic)
+    await db_session.flush()
+
     article = NewsArticle(
         original_title="Test Article",
         original_url="https://example.com/integration-test",
@@ -308,8 +326,7 @@ async def test_news_endpoint_includes_analysis(
         published_at=datetime.now(UTC),
     )
     db_session.add(article)
-    await db_session.commit()
-    await db_session.refresh(article)
+    await db_session.flush()
 
     analysis = ArticleAnalysis(
         news_article_id=article.id,
@@ -318,6 +335,7 @@ async def test_news_endpoint_includes_analysis(
         impact_level=ImpactLevel.HIGH,
         reasoning="テスト理由",
         ai_model="gemini-2.5-flash-lite",
+        topic_id=topic.id,
     )
     db_session.add(analysis)
     await db_session.commit()
@@ -332,58 +350,44 @@ async def test_news_endpoint_includes_analysis(
     assert data["original"]["title"] == "Test Article"
 
 
-# --- F. Keyword tagging tests ---
+# --- F. Topic tagging tests ---
 
 
-def test_parse_response_with_keywords() -> None:
+def test_parse_response_extracts_category_and_topic() -> None:
+    """category_slug と topic_name が正しくパースされる。"""
     analyzer = _create_analyzer()
-    raw = _make_gemini_response(keywords=["Quantum Computing", "Error Correction"])
-    kw_by_cat = {"quantum": ["Quantum Computing", "Error Correction", "Drug Discovery"]}
-    result = analyzer._parse_response(raw, keywords_by_category=kw_by_cat)
-    assert result.keywords == ["Quantum Computing", "Error Correction"]
+    raw = _make_gemini_response(category="ai_ml", topic="large language models")
+    result = analyzer._parse_response(raw)
+    assert result.category_slug == "ai_ml"
+    assert result.topic_name == "large language models"
 
 
-def test_parse_response_filters_invalid_keywords() -> None:
+def test_parse_response_normalizes_topic() -> None:
+    """大文字入力が小文字に正規化される。"""
     analyzer = _create_analyzer()
-    raw = _make_gemini_response(keywords=["Quantum Computing", "Not A Candidate"])
-    kw_by_cat = {"quantum": ["Quantum Computing", "Error Correction"]}
-    result = analyzer._parse_response(raw, keywords_by_category=kw_by_cat)
-    assert result.keywords == ["Quantum Computing"]
+    raw = _make_gemini_response(topic="Quantum Computing Breakthrough")
+    result = analyzer._parse_response(raw)
+    assert result.topic_name == "quantum computing breakthrough"
 
 
-def test_parse_response_keywords_without_candidates() -> None:
-    """候補が渡されない場合、レスポンス内の keywords は無視される。"""
+def test_parse_response_rejects_invalid_category() -> None:
+    """不正なカテゴリで ProviderError を送出する。"""
     analyzer = _create_analyzer()
-    raw = _make_gemini_response(keywords=["Quantum Computing"])
-    result = analyzer._parse_response(raw, keywords_by_category=None)
-    assert result.keywords is None
+    raw = _make_gemini_response(category="invalid_category")
+    with pytest.raises(ProviderError, match="Invalid category"):
+        analyzer._parse_response(raw)
 
 
-def test_parse_response_limits_keywords_to_three() -> None:
-    analyzer = _create_analyzer()
-    raw = _make_gemini_response(keywords=["A", "B", "C", "D"])
-    kw_by_cat = {"cat1": ["A", "B"], "cat2": ["C", "D"]}
-    result = analyzer._parse_response(raw, keywords_by_category=kw_by_cat)
-    assert len(result.keywords) == 3
-
-
-async def test_analyze_article_saves_keyword_links(
+async def test_analyze_article_creates_topic_link(
     db_session: AsyncSession,
     session_factory,
     sample_categories: list[Category],
     sample_source: NewsSource,
 ) -> None:
-    """AI 分析はマッチしたキーワードに対し article_keywords リンクを生成する。"""
-    cat_id = sample_categories[0].id
-    kw1 = Keyword(name="Quantum Computing", category_id=cat_id)
-    kw2 = Keyword(name="Error Correction", category_id=cat_id)
-    kw3 = Keyword(name="Drug Discovery", category_id=cat_id)
-    db_session.add_all([kw1, kw2, kw3])
-    await db_session.flush()
-
+    """AI 分析は Topic を find-or-create し ArticleAnalysis.topic_id を設定する。"""
     article = NewsArticle(
         original_title="Quantum Error Correction",
-        original_url="https://example.com/kw-tag-test",
+        original_url="https://example.com/topic-tag-test",
         news_source_id=sample_source.id,
         published_at=datetime.now(UTC),
     )
@@ -399,8 +403,9 @@ async def test_analyze_article_saves_keyword_links(
             title="量子エラー訂正",
             summary="要約",
             impact_level=ImpactLevel.HIGH,
-            keywords=["Quantum Computing", "Error Correction"],
             reasoning="理由",
+            category_slug="quantum",
+            topic_name="quantum error correction",
         )
     )
 
@@ -408,29 +413,19 @@ async def test_analyze_article_saves_keyword_links(
     result = await svc.execute(article.id, mock_analyzer)
     assert result.status == "created"
 
-    # キーワードリンクが作成されていることを確認
-    stmt = select(ArticleKeyword).where(
-        ArticleKeyword.article_analysis_id == result.analysis_id,
+    # ArticleAnalysis.topic_id が設定されていることを確認
+    db_session.expire_all()
+    stmt = select(ArticleAnalysis).where(
+        ArticleAnalysis.id == result.analysis_id,
     )
-    links = (await db_session.execute(stmt)).scalars().all()
-    assert len(links) == 2
+    analysis = (await db_session.execute(stmt)).scalar_one()
+    assert analysis.topic_id is not None
 
-    linked_kws = set()
-    for link in links:
-        kw_stmt = select(Keyword).where(Keyword.id == link.keyword_id)
-        kw = (await db_session.execute(kw_stmt)).scalar_one()
-        linked_kws.add(str(kw.name))
-    assert linked_kws == {"Quantum Computing", "Error Correction"}
+    # Topic レコードが作成されていることを確認
+    topic_stmt = select(Topic).where(Topic.id == analysis.topic_id)
+    topic = (await db_session.execute(topic_stmt)).scalar_one()
+    assert str(topic.name) == "quantum error correction"
 
-    # keywords_by_category が analyzer に渡されていることを確認
+    # existing_topics_by_category が analyzer に渡されていることを確認
     call_kwargs = mock_analyzer.analyze.call_args.kwargs
-    assert "keywords_by_category" in call_kwargs
-    kw_by_cat = call_kwargs["keywords_by_category"]
-    all_kws = set()
-    for kws in kw_by_cat.values():
-        all_kws.update(kws)
-    assert all_kws == {
-        "Quantum Computing",
-        "Error Correction",
-        "Drug Discovery",
-    }
+    assert "existing_topics_by_category" in call_kwargs

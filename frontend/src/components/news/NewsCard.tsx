@@ -55,18 +55,10 @@ export function NewsCard({ article }: { article: ArticleBrief }) {
         <p className="text-sm text-muted-foreground leading-relaxed line-clamp-2">
           {article.summary}
         </p>
-        {article.keywords.length > 0 && (
-          <div className="flex flex-wrap gap-1.5">
-            {article.keywords.map((kw) => (
-              <Badge
-                key={kw.name}
-                variant="secondary"
-                className="text-[11px] font-normal"
-              >
-                {kw.name}
-              </Badge>
-            ))}
-          </div>
+        {article.topic && (
+          <Badge variant="secondary" className="text-[11px] font-normal w-fit">
+            {article.topic.name}
+          </Badge>
         )}
       </CardContent>
     </Card>

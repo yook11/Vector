@@ -15,14 +15,13 @@ from app.dependencies import get_session
 from app.main import app
 from app.models import (  # noqa: F401
     ArticleAnalysis,
-    ArticleKeyword,
     Category,
     FetchLog,
     ImpactLevel,
-    Keyword,
     NewsArticle,
     NewsSource,
     SourceType,
+    Topic,
     WatchlistEntry,
 )
 
@@ -202,16 +201,16 @@ async def sample_categories(
 
 
 @pytest.fixture
-async def sample_keyword(
+async def sample_topic(
     db_session: AsyncSession,
     sample_categories: list[Category],
-) -> Keyword:
-    """テスト用キーワードを作成して返す (カテゴリが必須)。"""
-    kw = Keyword(name="Quantum Computing", category_id=sample_categories[1].id)
-    db_session.add(kw)
+) -> Topic:
+    """テスト用トピックを作成して返す（カテゴリが必須）。"""
+    topic = Topic(name="quantum computing", category_id=sample_categories[1].id)
+    db_session.add(topic)
     await db_session.commit()
-    await db_session.refresh(kw)
-    return kw
+    await db_session.refresh(topic)
+    return topic
 
 
 @pytest.fixture

@@ -11,13 +11,13 @@ import type { CategoryDetailResponse } from "@/types";
 interface CategorySidebarProps {
   categories: CategoryDetailResponse[];
   activeCategory?: string;
-  activeKeyword?: string;
+  activeTopic?: string;
 }
 
 export function CategorySidebar({
   categories,
   activeCategory,
-  activeKeyword,
+  activeTopic,
 }: CategorySidebarProps) {
   const searchParams = useSearchParams();
   const [expanded, setExpanded] = useState<Set<string>>(() => {
@@ -35,14 +35,14 @@ export function CategorySidebar({
     });
   };
 
-  const isAll = !activeCategory && !activeKeyword;
+  const isAll = !activeCategory && !activeTopic;
 
   // Preserve existing filter params (sentiment, sortBy, etc.) when navigating
   function buildHref(overrides: Record<string, string | undefined>): string {
     const params = new URLSearchParams(searchParams?.toString() ?? "");
-    // Remove category/keyword params first
+    // Remove category/topic params first
     params.delete("category");
-    params.delete("keyword");
+    params.delete("topic");
     params.delete("page");
 
     for (const [key, value] of Object.entries(overrides)) {
@@ -81,7 +81,7 @@ export function CategorySidebar({
       {/* Category drilldown */}
       {categories.map((cat) => {
         const isActiveCat =
-          activeCategory === cat.slug && activeKeyword === undefined;
+          activeCategory === cat.slug && activeTopic === undefined;
         const isExpanded = expanded.has(cat.slug);
 
         return (
@@ -115,26 +115,26 @@ export function CategorySidebar({
               </Link>
             </div>
 
-            {isExpanded && cat.keywords.length > 0 && (
+            {isExpanded && cat.topics.length > 0 && (
               <div className="ml-8 flex flex-col gap-0.5">
-                {cat.keywords.map((kw) => {
-                  const isActiveKw = activeKeyword === kw.name;
+                {cat.topics.map((t) => {
+                  const isActiveTopic = activeTopic === t.name;
                   return (
                     <Link
-                      key={kw.name}
+                      key={t.name}
                       href={buildHref({
                         category: cat.slug,
-                        keyword: kw.name,
+                        topic: t.name,
                       })}
                       className={cn(
                         linkClass,
-                        isActiveKw &&
+                        isActiveTopic &&
                           "text-foreground font-medium bg-neutral-100 dark:bg-neutral-800/50",
                       )}
                     >
-                      <span className="truncate">{kw.name}</span>
+                      <span className="truncate">{t.name}</span>
                       <span className="ml-2 text-xs tabular-nums text-neutral-400 dark:text-neutral-600">
-                        {kw.articleCount}
+                        {t.articleCount}
                       </span>
                     </Link>
                   );

@@ -10,8 +10,10 @@ from sqlmodel import select
 from app.analysis.embedder.base import BaseEmbedder
 from app.analysis.embedding_service import EmbeddingService
 from app.models.article_analysis import ArticleAnalysis, ImpactLevel
+from app.models.category import Category
 from app.models.news_article import NewsArticle
 from app.models.news_source import NewsSource
+from app.models.topic import Topic
 
 
 def _mock_embedder(vector: list[float] | None = None) -> MagicMock:
@@ -28,9 +30,14 @@ def _mock_embedder(vector: list[float] | None = None) -> MagicMock:
 async def test_embedding_creates_vector(
     db_session: AsyncSession,
     session_factory,
+    sample_categories: list[Category],
     sample_source: NewsSource,
 ) -> None:
     """EmbeddingService は既存分析に対して embedding を永続化する。"""
+    topic = Topic(name="embedding test", category_id=sample_categories[0].id)
+    db_session.add(topic)
+    await db_session.flush()
+
     article = NewsArticle(
         original_title="Test Article",
         original_url="https://example.com/embed-test",
@@ -39,8 +46,7 @@ async def test_embedding_creates_vector(
         original_content="Test content for embedding",
     )
     db_session.add(article)
-    await db_session.commit()
-    await db_session.refresh(article)
+    await db_session.flush()
 
     analysis = ArticleAnalysis(
         news_article_id=article.id,
@@ -49,6 +55,7 @@ async def test_embedding_creates_vector(
         impact_level=ImpactLevel.MEDIUM,
         reasoning="テスト理由",
         ai_model="gemini-2.5-flash-lite",
+        topic_id=topic.id,
     )
     db_session.add(analysis)
     await db_session.commit()
@@ -75,9 +82,14 @@ async def test_embedding_creates_vector(
 async def test_embedding_idempotency(
     db_session: AsyncSession,
     session_factory,
+    sample_categories: list[Category],
     sample_source: NewsSource,
 ) -> None:
     """embedding 済み分析は API を呼ばずに already_exists を返す。"""
+    topic = Topic(name="idempotent test", category_id=sample_categories[0].id)
+    db_session.add(topic)
+    await db_session.flush()
+
     article = NewsArticle(
         original_title="Already Embedded",
         original_url="https://example.com/idempotent",
@@ -85,8 +97,7 @@ async def test_embedding_idempotency(
         published_at=datetime.now(UTC),
     )
     db_session.add(article)
-    await db_session.commit()
-    await db_session.refresh(article)
+    await db_session.flush()
 
     analysis = ArticleAnalysis(
         news_article_id=article.id,
@@ -97,6 +108,7 @@ async def test_embedding_idempotency(
         ai_model="gemini-2.5-flash-lite",
         embedding=[0.2] * 768,
         embedding_model="gemini-embedding-001",
+        topic_id=topic.id,
     )
     db_session.add(analysis)
     await db_session.commit()

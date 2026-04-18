@@ -7,10 +7,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.article_analysis import ArticleAnalysis
-from app.models.article_keyword import ArticleKeyword
 from app.models.category import Category
-from app.models.keyword import Keyword
 from app.models.news_article import NewsArticle
+from app.models.topic import Topic
 from app.repositories.articles import article_eager_options_brief
 from app.schemas.articles import SemanticSearchParams, SortBy, SortOrder
 
@@ -39,20 +38,13 @@ class SemanticSearchRepository:
         stmt = stmt.where(distance_expr < settings.semantic_search_max_distance)
 
         # コンテンツフィルタ
-        if query.keyword is not None:
-            matching_ids = (
-                select(ArticleKeyword.article_analysis_id)
-                .join(Keyword, Keyword.id == ArticleKeyword.keyword_id)
-                .where(Keyword.name == query.keyword)
-            )
-            stmt = stmt.where(ArticleAnalysis.id.in_(matching_ids))
+        if query.topic is not None:
+            topic_id_sub = select(Topic.id).where(Topic.name == query.topic)
+            stmt = stmt.where(ArticleAnalysis.topic_id.in_(topic_id_sub))
         elif query.category is not None:
             cat_id_sub = select(Category.id).where(Category.slug == query.category)
-            sub_kw_ids = select(Keyword.id).where(Keyword.category_id.in_(cat_id_sub))
-            matching_ids = select(ArticleKeyword.article_analysis_id).where(
-                ArticleKeyword.keyword_id.in_(sub_kw_ids)
-            )
-            stmt = stmt.where(ArticleAnalysis.id.in_(matching_ids))
+            topic_id_sub = select(Topic.id).where(Topic.category_id.in_(cat_id_sub))
+            stmt = stmt.where(ArticleAnalysis.topic_id.in_(topic_id_sub))
 
         if query.impact_level is not None:
             stmt = stmt.where(ArticleAnalysis.impact_level == query.impact_level)

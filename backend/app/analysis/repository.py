@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
+
+from sqlalchemy import func
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
+from app.domain.topic import TopicName
 from app.models.article_analysis import ArticleAnalysis
-from app.models.article_keyword import ArticleKeyword
 from app.models.category import Category
-from app.models.keyword import Keyword
 from app.models.news_article import NewsArticle
+from app.models.topic import Topic
 
 
 class AnalysisRepository:
@@ -29,39 +33,61 @@ class AnalysisRepository:
         """ID から記事を取得する。"""
         return await self._session.get(NewsArticle, article_id)
 
-    async def get_keywords_by_category(self) -> dict[str, list[str]] | None:
-        """カテゴリ slug をキーにまとめたキーワード候補一覧を取得する。"""
-        stmt = select(Category.slug, Keyword.name).join(
-            Keyword,
-            Keyword.category_id == Category.id,
+    async def get_existing_topics_by_category(
+        self,
+    ) -> dict[str, list[str]] | None:
+        """カテゴリ別に既存 Topic を記事数降順で取得する（各上位30件）。"""
+        stmt = (
+            select(Category.slug, Topic.name)
+            .join(Topic, Topic.category_id == Category.id)
+            .join(ArticleAnalysis, ArticleAnalysis.topic_id == Topic.id)
+            .group_by(Category.slug, Topic.id, Topic.name)
+            .order_by(Category.slug, func.count().desc())
         )
         rows = (await self._session.execute(stmt)).all()
         if not rows:
             return None
-        result: dict[str, list[str]] = {}
-        for slug, kw in rows:
-            result.setdefault(str(slug), []).append(str(kw))
-        return result
 
-    async def save_analysis(
-        self,
-        analysis: ArticleAnalysis,
-        keyword_names: list[str] | None,
-    ) -> ArticleAnalysis:
-        """分析結果とキーワード紐付けを永続化する（flush のみ、commit しない）。"""
-        self._session.add(analysis)
+        result: dict[str, list[str]] = defaultdict(list)
+        for slug, topic_name in rows:
+            topics = result[str(slug)]
+            if len(topics) < 30:
+                topics.append(str(topic_name))
+        return dict(result)
+
+    async def get_category_id_by_slug(self, slug: str) -> int | None:
+        """カテゴリ slug から ID を取得する。"""
+        stmt = select(Category.id).where(Category.slug == slug)
+        return (await self._session.execute(stmt)).scalar_one_or_none()
+
+    async def find_or_create_topic(self, name: str, category_id: int) -> int:
+        """Topic を検索し、なければ作成して ID を返す。
+
+        並行分析時の UNIQUE 制約違反に対して ON CONFLICT DO NOTHING で対応する。
+        """
+        topic_name = TopicName(name)
+
+        # ON CONFLICT DO NOTHING で INSERT を試みる
+        insert_stmt = (
+            pg_insert(Topic)
+            .values(name=topic_name, category_id=category_id)
+            .on_conflict_do_nothing(constraint="uq_topics_name_category_id")
+        )
+        await self._session.execute(insert_stmt)
         await self._session.flush()
 
-        if keyword_names:
-            stmt = select(Keyword).where(Keyword.name.in_(keyword_names))
-            matched = (await self._session.execute(stmt)).scalars().all()
-            for kw in matched:
-                link = ArticleKeyword(
-                    article_analysis_id=analysis.id,
-                    keyword_id=kw.id,
-                )
-                self._session.add(link)
+        # INSERT が成功しても競合でも、SELECT で取得する
+        select_stmt = select(Topic.id).where(
+            Topic.name == topic_name,
+            Topic.category_id == category_id,
+        )
+        topic_id = (await self._session.execute(select_stmt)).scalar_one()
+        return topic_id
 
+    async def save_analysis(self, analysis: ArticleAnalysis) -> ArticleAnalysis:
+        """分析結果を永続化する（flush のみ、commit しない）。"""
+        self._session.add(analysis)
+        await self._session.flush()
         return analysis
 
     async def save_embedding(
