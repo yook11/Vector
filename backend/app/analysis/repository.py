@@ -99,4 +99,3 @@ class AnalysisRepository:
             ArticleEntity.article_analysis_id == analysis_id
         )
         return list((await self._session.execute(stmt)).scalars().all())
-
