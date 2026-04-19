@@ -14,13 +14,16 @@ from app.models.news_source import NewsSource
     [
         "TechCrunch",
         "FierceBiotech",
-        "BioPharma Dive",
         "The Quantum Insider",
-        "Cointelegraph",
-        "Yahoo Finance",
-        "ITmedia",
+        "IEEE Spectrum",
+        "NASA",
+        "Microsoft Research",
+        "Krebs on Security",
+        "VentureBeat",
+        "Spaceflight Now",
+        "ITmedia AI+",
+        "JPCERT/CC",
         "Hacker News",
-        "Alpha Vantage",
     ],
 )
 def test_get_fetcher_returns_source_fetcher(source_name: str) -> None:

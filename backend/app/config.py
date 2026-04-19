@@ -47,12 +47,6 @@ class Settings(BaseSettings):
     hn_min_points: int = 20
     hn_hits_per_page: int = 50
 
-    # Alpha Vantage API
-    av_api_key: SecretStr = SecretStr("")
-    av_api_base_url: str = "https://www.alphavantage.co/query"
-    av_topics: str = "technology"
-    av_limit: int = 50
-
     # セマンティック検索
     semantic_search_max_distance: float = 0.8  # コサイン距離のしきい値
 

@@ -10,7 +10,7 @@ from typing import Any
 
 from pydantic import ConfigDict, RootModel, field_validator
 
-_NAME_PATTERN = re.compile(r"^(?=.*\w)[\w \-\.]+$", re.UNICODE)
+_NAME_PATTERN = re.compile(r"^(?=.*\w)[\w \-\.+/]+$", re.UNICODE)
 _NAME_MAX_LENGTH = 50
 
 
@@ -42,7 +42,7 @@ class SourceName(RootModel[str]):
         if not _NAME_PATTERN.fullmatch(v):
             msg = (
                 "Source name can only contain letters, numbers, spaces, "
-                f"hyphens, dots, and underscores. Got: {v!r}"
+                f"hyphens, dots, underscores, plus signs, and slashes. Got: {v!r}"
             )
             raise ValueError(msg)
         return v
