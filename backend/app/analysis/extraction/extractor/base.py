@@ -70,15 +70,15 @@ class BaseExtractor(abc.ABC):
     async def extract(
         self,
         title: str,
-        description: str | None,
-        content: str | None = None,
+        content: str,
     ) -> ExtractionData:
         """記事から事実を抽出し、構造化データを返す。
 
+        Article の存在が content の品質を保証する（50 文字以上）。
+
         Args:
-            title: 英語記事タイトル。
-            description: 英語記事の概要。
-            content: 記事本文全文。
+            title: 英語記事タイトル（Article.original_title）。
+            content: 記事本文全文（Article.original_content）。
 
         Returns:
             翻訳タイトル・事実ベース要約・エンティティリストを含む ExtractionData。

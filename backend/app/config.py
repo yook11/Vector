@@ -30,7 +30,6 @@ class Settings(BaseSettings):
     max_analysis_consecutive_failures: int = 3  # サーキットブレーカー
 
     # 本文抽出
-    content_max_length: int = 8000
     content_max_concurrent: int = 10  # 同時 HTTP 接続数の上限
     content_domain_delay: float = 1.0  # 同一ドメインへのリクエスト間隔（秒）
     content_max_fetch_attempts: int = 3  # N 回失敗した記事はスキップ

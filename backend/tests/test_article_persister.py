@@ -111,7 +111,6 @@ async def test_persist_respects_max_articles_limit(
 
     with patch("app.collection.ingestion.persister.settings") as mock_settings:
         mock_settings.max_articles_per_fetch = 50
-        mock_settings.content_max_length = 8000
         result = await persist_new_articles(db_session, sample_source, candidates)
 
     assert result.new_count == 50
