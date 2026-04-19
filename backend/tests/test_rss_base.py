@@ -238,7 +238,6 @@ async def test_rss_respects_max_articles_limit(
         patch(f"{_BASE_MOD}.set_http_cache", new_callable=AsyncMock),
     ):
         mock_settings.max_articles_per_fetch = 50
-        mock_settings.content_max_length = 8000
         result = await StubRssFetcher().fetch(mock_client, db_session, sample_source)
 
     assert result.new_count == 50

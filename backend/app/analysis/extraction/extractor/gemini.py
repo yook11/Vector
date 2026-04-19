@@ -39,8 +39,10 @@ You must respond ONLY with a valid JSON object. Do not include markdown \
 code fences or any text outside the JSON.
 
 Article title: {title}
-Article description: {description}
-{content_section}
+
+Article full text:
+{content}
+
 Extract the following:
 
 1. title_ja — Accurate Japanese translation of the article title.
@@ -84,6 +86,7 @@ class GeminiExtractor(BaseExtractor):
     MODEL = "gemini-2.5-flash-lite"
     RPM = 50
     RPD = 1500
+    CONTENT_MAX_LENGTH = 8000
 
     def __init__(self) -> None:
         api_key = settings.gemini_api_key.get_secret_value()
@@ -94,19 +97,14 @@ class GeminiExtractor(BaseExtractor):
     async def extract(
         self,
         title: str,
-        description: str | None,
-        content: str | None = None,
+        content: str,
     ) -> ExtractionData:
         """プロンプトを構築し API を呼び出して抽出結果を解析する。"""
-        content_section = ""
-        if content:
-            truncated = content[: settings.content_max_length]
-            content_section = f"\nArticle full text:\n{truncated}\n"
+        truncated = content[: self.CONTENT_MAX_LENGTH]
 
         prompt = EXTRACTION_PROMPT.format(
             title=title,
-            description=description or "(no description available)",
-            content_section=content_section,
+            content=truncated,
         )
 
         raw_text = await self._call_once(prompt)

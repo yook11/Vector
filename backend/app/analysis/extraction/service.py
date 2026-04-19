@@ -62,7 +62,6 @@ class ExtractionService:
             try:
                 data = await extractor.extract(
                     title=article.original_title,
-                    description=None,
                     content=article.original_content,
                 )
             except InvalidInputError:
