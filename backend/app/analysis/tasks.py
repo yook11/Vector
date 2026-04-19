@@ -25,8 +25,11 @@ from app.analysis import (
 from app.analysis.classification_service import ClassificationService
 from app.analysis.classifier.factory import get_classifier
 from app.analysis.embedding_service import EmbeddingService
-from app.analysis.extraction_service import ExtractionService, mark_article_skipped
-from app.analysis.extractor.factory import get_extractor
+from app.analysis.extraction import (
+    ExtractionService,
+    get_extractor,
+    mark_article_skipped,
+)
 from app.analysis.rate_limiter import (
     RateLimitExceededError as _RateLimitExceededError,
 )

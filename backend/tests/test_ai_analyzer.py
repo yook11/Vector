@@ -19,9 +19,13 @@ from app.analysis import (
 from app.analysis.classification_service import ClassificationService
 from app.analysis.classifier.base import BaseClassifier, ClassificationData
 from app.analysis.classifier.gemini import GeminiClassifier
-from app.analysis.extraction_service import ExtractionService
-from app.analysis.extractor.base import BaseExtractor, EntityData, ExtractionData
-from app.analysis.extractor.gemini import GeminiExtractor
+from app.analysis.extraction.extractor.base import (
+    BaseExtractor,
+    EntityData,
+    ExtractionData,
+)
+from app.analysis.extraction.extractor.gemini import GeminiExtractor
+from app.analysis.extraction.service import ExtractionService
 from app.models.article_analysis import ArticleAnalysis, ImpactLevel
 from app.models.article_entity import ArticleEntity, EntityType
 from app.models.category import Category
@@ -69,7 +73,7 @@ def _make_classification_response(
 
 def _create_extractor() -> GeminiExtractor:
     """settings をモックして GeminiExtractor を生成する。"""
-    with patch("app.analysis.extractor.gemini.settings") as mock_gs:
+    with patch("app.analysis.extraction.extractor.gemini.settings") as mock_gs:
         mock_gs.gemini_api_key = SecretStr("test-key")
         return GeminiExtractor()
 
@@ -85,9 +89,9 @@ def _create_classifier() -> GeminiClassifier:
 
 
 def test_get_extractor_returns_gemini_by_default() -> None:
-    with patch("app.analysis.extractor.factory.settings") as mock_settings:
+    with patch("app.analysis.extraction.extractor.factory.settings") as mock_settings:
         mock_settings.ai_provider = "gemini"
-        with patch("app.analysis.extractor.gemini.settings") as mock_gs:
+        with patch("app.analysis.extraction.extractor.gemini.settings") as mock_gs:
             mock_gs.gemini_api_key = SecretStr("test-key")
             extractor = get_extractor()
     assert isinstance(extractor, GeminiExtractor)
@@ -105,7 +109,7 @@ def test_get_classifier_returns_gemini_by_default() -> None:
 
 
 def test_get_extractor_raises_for_unsupported_provider() -> None:
-    with patch("app.analysis.extractor.factory.settings") as mock_settings:
+    with patch("app.analysis.extraction.extractor.factory.settings") as mock_settings:
         mock_settings.ai_provider = "unknown"
         with pytest.raises(ValueError, match="Unsupported AI provider"):
             get_extractor()
@@ -276,6 +280,67 @@ async def test_classifier_call_once_translates_sdk_error() -> None:
 
     with pytest.raises(NetworkError):
         await classifier._call_once("test prompt")
+
+
+# --- E2. Domain model unit tests (DB 不要) ---
+
+
+def test_article_analysis_from_extraction_sanitizes_html() -> None:
+    analysis = ArticleAnalysis.from_extraction(
+        article_id=1,
+        title_ja="<b>タイトル</b>",
+        summary_ja="<p>要約</p>",
+        entities=[("MIT", EntityType.COMPANY)],
+        model_name="test-model",
+    )
+    assert analysis.translated_title == "タイトル"
+    assert analysis.summary == "要約"
+    assert analysis.ai_model == "test-model"
+    assert analysis.news_article_id == 1
+
+
+def test_article_analysis_from_extraction_builds_entities() -> None:
+    analysis = ArticleAnalysis.from_extraction(
+        article_id=1,
+        title_ja="タイトル",
+        summary_ja="要約",
+        entities=[
+            ("MIT", EntityType.COMPANY),
+            ("CRISPR", EntityType.TECHNOLOGY),
+        ],
+        model_name="test-model",
+    )
+    assert len(analysis.entities) == 2
+    assert analysis.entities[0].name == "MIT"
+    assert analysis.entities[0].type == EntityType.COMPANY
+    assert analysis.entities[1].name == "CRISPR"
+    assert analysis.entities[1].type == EntityType.TECHNOLOGY
+
+
+def test_article_analysis_from_extraction_empty_string_guard() -> None:
+    analysis = ArticleAnalysis.from_extraction(
+        article_id=1,
+        title_ja="<br/>",
+        summary_ja="<br/>",
+        entities=[],
+        model_name="test-model",
+    )
+    assert analysis.translated_title == ""
+    assert analysis.summary == ""
+    assert analysis.entities == []
+
+
+def test_news_article_discard_content() -> None:
+    article = NewsArticle(
+        original_title="Test",
+        original_url="https://example.com/test",
+        original_content="some content",
+        news_source_id=1,
+        skip_content_fetch=False,
+    )
+    article.discard_content()
+    assert article.original_content is None
+    assert article.skip_content_fetch is True
 
 
 # --- F. ExtractionService orchestration tests ---

@@ -20,7 +20,7 @@ from app.analysis.errors import (
     RateLimitError,
     UnclassifiedError,
 )
-from app.analysis.extractor.base import EntityData
+from app.analysis.extraction.extractor.base import EntityData
 from app.config import settings
 from app.domain.topic import normalize_topic_name
 from app.models.article_analysis import ImpactLevel

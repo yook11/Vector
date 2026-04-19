@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.classifier.base import BaseClassifier
 from app.analysis.errors import ProviderError
-from app.analysis.extractor.base import EntityData
+from app.analysis.extraction.extractor.base import EntityData
 from app.analysis.repository import AnalysisRepository
 from app.models.article_entity import EntityType
 from app.utils.sanitize import strip_html_tags

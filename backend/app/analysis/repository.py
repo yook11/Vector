@@ -13,7 +13,6 @@ from app.domain.topic import TopicName
 from app.models.article_analysis import ArticleAnalysis
 from app.models.article_entity import ArticleEntity
 from app.models.category import Category
-from app.models.news_article import NewsArticle
 from app.models.topic import Topic
 
 
@@ -29,10 +28,6 @@ class AnalysisRepository:
             ArticleAnalysis.news_article_id == article_id,
         )
         return (await self._session.execute(stmt)).scalar_one_or_none()
-
-    async def get_article(self, article_id: int) -> NewsArticle | None:
-        """ID から記事を取得する。"""
-        return await self._session.get(NewsArticle, article_id)
 
     async def get_existing_topics_by_category(
         self,
@@ -85,12 +80,6 @@ class AnalysisRepository:
         topic_id = (await self._session.execute(select_stmt)).scalar_one()
         return topic_id
 
-    async def save_analysis(self, analysis: ArticleAnalysis) -> ArticleAnalysis:
-        """分析結果を永続化する（flush のみ、commit しない）。"""
-        self._session.add(analysis)
-        await self._session.flush()
-        return analysis
-
     async def save_embedding(
         self,
         analysis: ArticleAnalysis,
@@ -110,9 +99,3 @@ class AnalysisRepository:
             ArticleEntity.article_analysis_id == analysis_id
         )
         return list((await self._session.execute(stmt)).scalars().all())
-
-    async def mark_article_skipped(self, article: NewsArticle) -> None:
-        """記事を恒久的にスキップ対象としてマークする。"""
-        article.original_content = None
-        article.skip_content_fetch = True
-        self._session.add(article)

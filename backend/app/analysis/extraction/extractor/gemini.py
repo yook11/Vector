@@ -18,7 +18,11 @@ from app.analysis.errors import (
     RateLimitError,
     UnclassifiedError,
 )
-from app.analysis.extractor.base import BaseExtractor, EntityData, ExtractionData
+from app.analysis.extraction.extractor.base import (
+    BaseExtractor,
+    EntityData,
+    ExtractionData,
+)
 from app.config import settings
 from app.models.article_entity import EntityType
 

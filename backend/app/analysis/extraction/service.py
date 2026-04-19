@@ -9,11 +9,9 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.errors import InvalidInputError
-from app.analysis.extractor.base import BaseExtractor
-from app.analysis.repository import AnalysisRepository
+from app.analysis.extraction.extractor.base import BaseExtractor
+from app.analysis.extraction.repository import ExtractionRepository
 from app.models.article_analysis import ArticleAnalysis
-from app.models.article_entity import ArticleEntity
-from app.utils.sanitize import strip_html_tags
 
 logger = structlog.get_logger(__name__)
 
@@ -48,12 +46,11 @@ class ExtractionService:
             AnalysisDomainError のサブクラス（InvalidInputError を除く）。
         """
         async with self._session_factory() as session:
-            repo = AnalysisRepository(session)
+            repo = ExtractionRepository(session)
 
             # 冪等性チェック
-            existing = await repo.find_by_article_id(article_id)
-            if existing is not None:
-                return ExtractionResult("already_exists", analysis_id=existing.id)
+            if await repo.is_already_analyzed(article_id):
+                return ExtractionResult("already_exists")
 
             # 記事を取得
             article = await repo.get_article(article_id)
@@ -69,7 +66,7 @@ class ExtractionService:
                     content=article.original_content,
                 )
             except InvalidInputError:
-                await repo.mark_article_skipped(article)
+                article.discard_content()
                 await session.commit()
                 logger.warning(
                     "extraction_invalid_input",
@@ -77,26 +74,15 @@ class ExtractionService:
                 )
                 return ExtractionResult("skipped")
 
-            # ArticleAnalysis 作成（Stage 2 の結果は未設定）
-            analysis = ArticleAnalysis(
-                news_article_id=article.id,
-                translated_title=strip_html_tags(data.title_ja) or "",
-                summary=strip_html_tags(data.summary_ja) or "",
-                ai_model=extractor.model_name,
-                # Stage 2 で設定される: topic_id, impact_level, reasoning
+            # ArticleAnalysis 作成（cascade で entities も永続化）
+            analysis = ArticleAnalysis.from_extraction(
+                article_id=article.id,
+                title_ja=data.title_ja,
+                summary_ja=data.summary_ja,
+                entities=[(e.name, e.type) for e in data.entities],
+                model_name=extractor.model_name,
             )
             await repo.save_analysis(analysis)
-
-            # エンティティ保存
-            for entity_data in data.entities:
-                entity = ArticleEntity(
-                    article_analysis_id=analysis.id,
-                    name=entity_data.name,
-                    type=entity_data.type,
-                )
-                session.add(entity)
-            await session.flush()
-
             await session.commit()
 
             logger.info(
@@ -114,7 +100,7 @@ async def mark_article_skipped(
 ) -> None:
     """記事を恒久的にスキップ対象としてマークする（Task の最終試行時に使用）。"""
     async with session_factory() as session:
-        repo = AnalysisRepository(session)
+        repo = ExtractionRepository(session)
         article = await repo.get_article(article_id)
         if article is not None:
             await repo.mark_article_skipped(article)
