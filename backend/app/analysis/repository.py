@@ -113,6 +113,5 @@ class AnalysisRepository:
 
     async def mark_article_skipped(self, article: NewsArticle) -> None:
         """記事を恒久的にスキップ対象としてマークする。"""
-        article.original_content = None
-        article.skip_content_fetch = True
+        article.discard_content()
         self._session.add(article)

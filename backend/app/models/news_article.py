@@ -71,3 +71,8 @@ class NewsArticle(Base):
         back_populates="news_article", uselist=False
     )
     news_source: Mapped[NewsSource] = relationship(back_populates="articles")
+
+    def discard_content(self) -> None:
+        """本文を破棄し、再取得・再分析の対象から外す。"""
+        self.original_content = None
+        self.skip_content_fetch = True

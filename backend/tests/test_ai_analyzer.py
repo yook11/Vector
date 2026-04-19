@@ -278,6 +278,67 @@ async def test_classifier_call_once_translates_sdk_error() -> None:
         await classifier._call_once("test prompt")
 
 
+# --- E2. Domain model unit tests (DB 不要) ---
+
+
+def test_article_analysis_from_extraction_sanitizes_html() -> None:
+    analysis = ArticleAnalysis.from_extraction(
+        article_id=1,
+        title_ja="<b>タイトル</b>",
+        summary_ja="<p>要約</p>",
+        entities=[("MIT", EntityType.COMPANY)],
+        model_name="test-model",
+    )
+    assert analysis.translated_title == "タイトル"
+    assert analysis.summary == "要約"
+    assert analysis.ai_model == "test-model"
+    assert analysis.news_article_id == 1
+
+
+def test_article_analysis_from_extraction_builds_entities() -> None:
+    analysis = ArticleAnalysis.from_extraction(
+        article_id=1,
+        title_ja="タイトル",
+        summary_ja="要約",
+        entities=[
+            ("MIT", EntityType.COMPANY),
+            ("CRISPR", EntityType.TECHNOLOGY),
+        ],
+        model_name="test-model",
+    )
+    assert len(analysis.entities) == 2
+    assert analysis.entities[0].name == "MIT"
+    assert analysis.entities[0].type == EntityType.COMPANY
+    assert analysis.entities[1].name == "CRISPR"
+    assert analysis.entities[1].type == EntityType.TECHNOLOGY
+
+
+def test_article_analysis_from_extraction_empty_string_guard() -> None:
+    analysis = ArticleAnalysis.from_extraction(
+        article_id=1,
+        title_ja="<br/>",
+        summary_ja="<br/>",
+        entities=[],
+        model_name="test-model",
+    )
+    assert analysis.translated_title == ""
+    assert analysis.summary == ""
+    assert analysis.entities == []
+
+
+def test_news_article_discard_content() -> None:
+    article = NewsArticle(
+        original_title="Test",
+        original_url="https://example.com/test",
+        original_content="some content",
+        news_source_id=1,
+        skip_content_fetch=False,
+    )
+    article.discard_content()
+    assert article.original_content is None
+    assert article.skip_content_fetch is True
+
+
 # --- F. ExtractionService orchestration tests ---
 
 

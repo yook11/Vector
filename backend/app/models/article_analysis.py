@@ -16,10 +16,11 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.models.article_entity import ArticleEntity, EntityType
 from app.models.base import Base
+from app.utils.sanitize import strip_html_tags
 
 if TYPE_CHECKING:
-    from app.models.article_entity import ArticleEntity
     from app.models.news_article import NewsArticle
     from app.models.topic import Topic
     from app.models.watchlist_entry import WatchlistEntry
@@ -77,3 +78,25 @@ class ArticleAnalysis(Base):
     entities: Mapped[list[ArticleEntity]] = relationship(
         back_populates="article_analysis", cascade="all, delete-orphan"
     )
+
+    @classmethod
+    def from_extraction(
+        cls,
+        *,
+        article_id: int,
+        title_ja: str,
+        summary_ja: str,
+        entities: list[tuple[str, EntityType]],
+        model_name: str,
+    ) -> ArticleAnalysis:
+        """Stage 1 の抽出結果から分析オブジェクトを構築する。
+
+        サニタイズと Entity の組み立てはモデルの不変条件として内部で処理する。
+        """
+        return cls(
+            news_article_id=article_id,
+            translated_title=strip_html_tags(title_ja) or "",
+            summary=strip_html_tags(summary_ja) or "",
+            ai_model=model_name,
+            entities=[ArticleEntity(name=name, type=etype) for name, etype in entities],
+        )
