@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from app.collection.ingestion.fetchers.hacker_news import HackerNewsFetcher, HNStory
-from app.models.news_article import NewsArticle
+from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
 
 # --- Sample API response data ---
@@ -163,7 +163,7 @@ async def test_save_new_stories(
     sample_hn_source: NewsSource,
     mock_http_client: AsyncMock,
 ) -> None:
-    """新規 HN story は news_articles に保存される。"""
+    """新規 HN story は discovered_articles に保存される。"""
     mock_http_client.get.return_value = _mock_hn_response()
 
     fetcher = HackerNewsFetcher()
@@ -176,14 +176,13 @@ async def test_save_new_stories(
     assert result.new_count == 2
     assert result.skipped_count == 0
 
-    articles = (await db_session.execute(select(NewsArticle))).scalars().all()
+    articles = (await db_session.execute(select(DiscoveredArticle))).scalars().all()
     assert len(articles) == 2
 
     for article in articles:
         assert article.news_source_id == sample_hn_source.id
         assert article.original_url is not None
         assert article.original_title is not None
-        assert article.published_at is not None
 
 
 async def test_skip_duplicate_url(
@@ -192,7 +191,7 @@ async def test_skip_duplicate_url(
     mock_http_client: AsyncMock,
 ) -> None:
     """original_url が既存 (RSS 経由) の記事はスキップされる。"""
-    existing = NewsArticle(
+    existing = DiscoveredArticle(
         original_title="Same article from RSS",
         original_url="https://www.calebleak.com/posts/dog-game/",
         news_source_id=sample_hn_source.id,

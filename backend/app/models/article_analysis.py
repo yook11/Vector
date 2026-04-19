@@ -21,7 +21,7 @@ from app.models.base import Base
 from app.utils.sanitize import strip_html_tags
 
 if TYPE_CHECKING:
-    from app.models.news_article import NewsArticle
+    from app.models.article import Article
     from app.models.topic import Topic
     from app.models.watchlist_entry import WatchlistEntry
 
@@ -36,7 +36,7 @@ class ImpactLevel(StrEnum):
 class ArticleAnalysis(Base):
     __tablename__ = "article_analyses"
     __table_args__ = (
-        UniqueConstraint("news_article_id", name="uq_article_analyses_news_article_id"),
+        UniqueConstraint("article_id", name="uq_article_analyses_article_id"),
         CheckConstraint(
             "translated_title != ''",
             name="ck_article_analyses_translated_title_not_empty",
@@ -52,8 +52,8 @@ class ArticleAnalysis(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    news_article_id: Mapped[int] = mapped_column(
-        ForeignKey("news_articles.id", ondelete="CASCADE"),
+    article_id: Mapped[int] = mapped_column(
+        ForeignKey("articles.id", ondelete="CASCADE"),
     )
     translated_title: Mapped[str] = mapped_column(String(500))
     summary: Mapped[str] = mapped_column(Text())
@@ -70,7 +70,7 @@ class ArticleAnalysis(Base):
     )
 
     # リレーション
-    news_article: Mapped[NewsArticle] = relationship(back_populates="article_analysis")
+    article: Mapped[Article] = relationship(back_populates="article_analysis")
     topic: Mapped[Topic | None] = relationship()
     watchlist_entries: Mapped[list[WatchlistEntry]] = relationship(
         back_populates="article_analysis"
@@ -94,7 +94,7 @@ class ArticleAnalysis(Base):
         サニタイズと Entity の組み立てはモデルの不変条件として内部で処理する。
         """
         return cls(
-            news_article_id=article_id,
+            article_id=article_id,
             translated_title=strip_html_tags(title_ja) or "",
             summary=strip_html_tags(summary_ja) or "",
             ai_model=model_name,

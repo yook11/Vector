@@ -23,14 +23,14 @@ def build_brief(
     analysis: ArticleAnalysis,
     watched_ids: set[int] | None = None,
 ) -> ArticleBrief:
-    na = analysis.news_article
+    a = analysis.article
     return ArticleBrief(
         id=analysis.id,
         translated_title=analysis.translated_title,
         summary=analysis.summary,
         impact_level=analysis.impact_level,
-        source=NewsSourceEmbed(name=na.news_source.name),
-        published_at=na.published_at,
+        source=NewsSourceEmbed(name=a.news_source.name),
+        published_at=a.published_at,
         topic=build_topic_embed(analysis),
         is_watched=analysis.id in watched_ids if watched_ids else False,
     )
@@ -40,7 +40,7 @@ def build_detail(
     analysis: ArticleAnalysis,
     watched_ids: set[int] | None = None,
 ) -> ArticleDetail:
-    na = analysis.news_article
+    a = analysis.article
     return ArticleDetail(
         id=analysis.id,
         translated_title=analysis.translated_title,
@@ -48,14 +48,14 @@ def build_detail(
         impact_level=analysis.impact_level,
         reasoning=analysis.reasoning,
         analyzed_at=analysis.analyzed_at,
-        source=NewsSourceEmbed(name=na.news_source.name),
-        published_at=na.published_at,
+        source=NewsSourceEmbed(name=a.news_source.name),
+        published_at=a.published_at,
         topic=build_topic_embed(analysis),
         is_watched=analysis.id in watched_ids if watched_ids else False,
         original=OriginalArticleEmbed(
-            title=na.original_title,
-            url=na.original_url,
-            content=na.original_content,
+            title=a.original_title,
+            url=a.original_url,
+            content=a.original_content,
         ),
     )
 

@@ -184,5 +184,5 @@ class BaseRssFetcher:
         # persist_result の値を result にマージ（HTTP キャッシュ情報は保持）
         result.new_count = persist_result.new_count
         result.skipped_count += persist_result.skipped_count
-        result.new_articles = persist_result.new_articles
+        result.new_discovered = persist_result.new_discovered
         return result

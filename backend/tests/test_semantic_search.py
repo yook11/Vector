@@ -7,9 +7,10 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis, ImpactLevel
 from app.models.category import Category
-from app.models.news_article import NewsArticle
+from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource, SourceType
 from app.models.topic import Topic
 
@@ -52,11 +53,19 @@ async def _create_article(
     title: str = "Test Article",
     url: str = "https://example.com/1",
     embedding: list[float] | None = None,
-) -> NewsArticle:
-    article = NewsArticle(
+) -> Article:
+    discovered = DiscoveredArticle(
         original_title=title,
         original_url=url,
         news_source_id=source.id,
+    )
+    db_session.add(discovered)
+    await db_session.flush()
+
+    article = Article(
+        discovered_article_id=discovered.id,
+        original_title=title,
+        original_content="Search test content.",
         published_at=datetime.now(UTC),
     )
     db_session.add(article)
@@ -64,7 +73,7 @@ async def _create_article(
 
     # ArticleAnalysis は INNER JOIN のため常に作成し、embedding があれば付与する
     analysis = ArticleAnalysis(
-        news_article_id=article.id,
+        article_id=article.id,
         translated_title=f"Translated: {title}",
         summary="Test summary",
         impact_level=ImpactLevel.MEDIUM,

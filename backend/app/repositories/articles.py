@@ -4,29 +4,34 @@ from sqlalchemy import exists, func, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import contains_eager, defer, selectinload
 
+from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis
 from app.models.category import Category
-from app.models.news_article import NewsArticle
+from app.models.discovered_article import DiscoveredArticle
 from app.models.topic import Topic
 from app.schemas.articles import ArticleListParams, SortOrder
 
 
 def article_eager_options_brief() -> list:
-    """一覧用. 呼び出し側で .join(ArticleAnalysis.news_article) が必要."""
+    """一覧用. 呼び出し側で .join(ArticleAnalysis.article) が必要."""
     return [
-        contains_eager(ArticleAnalysis.news_article).options(
-            defer(NewsArticle.original_content, raiseload=True),
-            selectinload(NewsArticle.news_source),
+        contains_eager(ArticleAnalysis.article).options(
+            defer(Article.original_content, raiseload=True),
+            selectinload(Article.discovered_article).selectinload(
+                DiscoveredArticle.news_source
+            ),
         ),
         selectinload(ArticleAnalysis.topic),
     ]
 
 
 def article_eager_options_detail() -> list:
-    """詳細用. 呼び出し側で .join(ArticleAnalysis.news_article) が必要."""
+    """詳細用. 呼び出し側で .join(ArticleAnalysis.article) が必要."""
     return [
-        contains_eager(ArticleAnalysis.news_article).options(
-            selectinload(NewsArticle.news_source),
+        contains_eager(ArticleAnalysis.article).options(
+            selectinload(Article.discovered_article).selectinload(
+                DiscoveredArticle.news_source
+            ),
         ),
         selectinload(ArticleAnalysis.topic),
     ]
@@ -45,7 +50,7 @@ class ArticleRepository:
         """ニュース閲覧用にページング済みの記事一覧を取得する."""
         stmt = (
             select(ArticleAnalysis)
-            .join(ArticleAnalysis.news_article)
+            .join(ArticleAnalysis.article)
             .where(ArticleAnalysis.topic_id.is_not(None))
             .options(*article_eager_options_brief())
         )
@@ -68,9 +73,9 @@ class ArticleRepository:
 
         # ソート
         order = (
-            NewsArticle.published_at.desc()
+            Article.published_at.desc()
             if query.sort_order == SortOrder.DESC
-            else NewsArticle.published_at.asc()
+            else Article.published_at.asc()
         )
         stmt = stmt.order_by(order, ArticleAnalysis.id.desc())
 
@@ -87,7 +92,7 @@ class ArticleRepository:
         """
         stmt = (
             select(ArticleAnalysis)
-            .join(ArticleAnalysis.news_article)
+            .join(ArticleAnalysis.article)
             .where(
                 ArticleAnalysis.id == article_id,
                 ArticleAnalysis.topic_id.is_not(None),
@@ -121,7 +126,7 @@ class ArticleRepository:
 
         stmt = (
             select(ArticleAnalysis)
-            .join(ArticleAnalysis.news_article)
+            .join(ArticleAnalysis.article)
             .join(source_embedding, true())
             .options(*article_eager_options_brief())
             .where(

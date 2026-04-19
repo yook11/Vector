@@ -17,7 +17,7 @@ from app.collection.ingestion.fetchers.rss.base import (
     extract_guid,
     parse_published_date,
 )
-from app.models.news_article import NewsArticle
+from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
 
 _BASE_MOD = "app.collection.ingestion.fetchers.rss.base"
@@ -140,7 +140,7 @@ async def test_rss_saves_new_articles(
     assert result.skipped_count == 0
 
     await db_session.flush()
-    articles = (await db_session.execute(select(NewsArticle))).scalars().all()
+    articles = (await db_session.execute(select(DiscoveredArticle))).scalars().all()
     assert len(articles) == 2
     assert all(a.news_source_id == sample_source.id for a in articles)
     assert all(a.original_url is not None for a in articles)
@@ -150,7 +150,7 @@ async def test_rss_saves_new_articles(
 async def test_rss_skips_duplicate_urls(
     db_session: AsyncSession, sample_source: NewsSource, mock_client: AsyncMock
 ) -> None:
-    existing = NewsArticle(
+    existing = DiscoveredArticle(
         original_title="Existing",
         original_url="https://example.com/existing",
         news_source_id=sample_source.id,
@@ -180,7 +180,7 @@ async def test_rss_skips_duplicate_urls(
     assert result.skipped_count == 1
 
     await db_session.flush()
-    articles = (await db_session.execute(select(NewsArticle))).scalars().all()
+    articles = (await db_session.execute(select(DiscoveredArticle))).scalars().all()
     assert len(articles) == 2
 
 

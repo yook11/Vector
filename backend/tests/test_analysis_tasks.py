@@ -155,7 +155,8 @@ class TestExtractContent:
                 await extract_content(article_id=1, ctx=mock_ctx)
 
     @pytest.mark.asyncio
-    async def test_rate_limit_last_attempt_marks_skipped(self) -> None:
+    async def test_rate_limit_last_attempt_returns(self) -> None:
+        """最終試行では例外を送出せず return する。"""
         from app.analysis.tasks import extract_content
 
         mock_ctx = _make_ctx(retry_count=2, max_retries=2)
@@ -172,20 +173,12 @@ class TestExtractContent:
             patch(
                 "app.analysis.tasks.ExtractionService",
             ) as mock_svc_cls,
-            patch(
-                "app.analysis.tasks.mark_article_skipped",
-                new_callable=AsyncMock,
-            ) as mock_skip,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
                 side_effect=RateLimitError("429"),
             )
+            # 最終試行では例外を送出しない
             await extract_content(article_id=1, ctx=mock_ctx)
-
-        mock_skip.assert_called_once_with(
-            mock_ctx.state.session_factory,
-            1,
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -313,8 +306,8 @@ class TestClassifyContent:
                 await classify_content(article_id=1, ctx=mock_ctx)
 
     @pytest.mark.asyncio
-    async def test_rate_limit_last_attempt_does_not_skip(self) -> None:
-        """classify_content は最終試行でも mark_article_skipped しない。"""
+    async def test_rate_limit_last_attempt_returns(self) -> None:
+        """classify_content は最終試行で例外を送出せず return する。"""
         from app.analysis.tasks import classify_content
 
         mock_ctx = _make_ctx(retry_count=2, max_retries=2)
@@ -331,14 +324,8 @@ class TestClassifyContent:
             patch(
                 "app.analysis.tasks.ClassificationService",
             ) as mock_svc_cls,
-            patch(
-                "app.analysis.tasks.mark_article_skipped",
-                new_callable=AsyncMock,
-            ) as mock_skip,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
                 side_effect=RateLimitError("429"),
             )
             await classify_content(article_id=1, ctx=mock_ctx)
-
-        mock_skip.assert_not_called()

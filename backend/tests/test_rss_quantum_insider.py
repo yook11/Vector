@@ -10,7 +10,7 @@ from sqlmodel import select
 from app.collection.ingestion.fetchers.rss.quantum_insider import (
     QuantumInsiderFetcher,
 )
-from app.models.news_article import NewsArticle
+from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
 
 _BASE_MOD = "app.collection.ingestion.fetchers.rss.base"
@@ -92,5 +92,6 @@ async def test_rss_stores_full_content(
 
     assert result.new_count == 1
     await db_session.flush()
-    articles = (await db_session.execute(select(NewsArticle))).scalars().all()
-    assert articles[0].original_content is not None
+    articles = (await db_session.execute(select(DiscoveredArticle))).scalars().all()
+    assert len(articles) == 1
+    assert articles[0].original_title == "Full Content"

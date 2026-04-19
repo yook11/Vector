@@ -26,10 +26,11 @@ from app.analysis.extraction.extractor.base import (
 )
 from app.analysis.extraction.extractor.gemini import GeminiExtractor
 from app.analysis.extraction.service import ExtractionService
+from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis, ImpactLevel
 from app.models.article_entity import ArticleEntity, EntityType
 from app.models.category import Category
-from app.models.news_article import NewsArticle
+from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
 from app.models.topic import Topic
 
@@ -296,7 +297,7 @@ def test_article_analysis_from_extraction_sanitizes_html() -> None:
     assert analysis.translated_title == "タイトル"
     assert analysis.summary == "要約"
     assert analysis.ai_model == "test-model"
-    assert analysis.news_article_id == 1
+    assert analysis.article_id == 1
 
 
 def test_article_analysis_from_extraction_builds_entities() -> None:
@@ -330,19 +331,6 @@ def test_article_analysis_from_extraction_empty_string_guard() -> None:
     assert analysis.entities == []
 
 
-def test_news_article_discard_content() -> None:
-    article = NewsArticle(
-        original_title="Test",
-        original_url="https://example.com/test",
-        original_content="some content",
-        news_source_id=1,
-        skip_content_fetch=False,
-    )
-    article.discard_content()
-    assert article.original_content is None
-    assert article.skip_content_fetch is True
-
-
 # --- F. ExtractionService orchestration tests ---
 
 
@@ -351,10 +339,17 @@ async def test_extraction_creates_analysis_and_entities(
     session_factory,
     sample_source: NewsSource,
 ) -> None:
-    article = NewsArticle(
+    discovered = DiscoveredArticle(
         original_title="Quantum Breakthrough",
         original_url="https://example.com/quantum",
         news_source_id=sample_source.id,
+    )
+    db_session.add(discovered)
+    await db_session.flush()
+    article = Article(
+        discovered_article_id=discovered.id,
+        original_title="Quantum Breakthrough",
+        original_content="Full content here.",
         published_at=datetime.now(UTC),
     )
     db_session.add(article)
@@ -386,7 +381,7 @@ async def test_extraction_creates_analysis_and_entities(
     analysis = (
         await db_session.execute(
             select(ArticleAnalysis).where(
-                ArticleAnalysis.news_article_id == article_id,
+                ArticleAnalysis.article_id == article_id,
             )
         )
     ).scalar_one()
@@ -417,17 +412,24 @@ async def test_extraction_skips_already_analyzed(
     db_session.add(topic)
     await db_session.flush()
 
-    article = NewsArticle(
+    discovered = DiscoveredArticle(
         original_title="Old Article",
         original_url="https://example.com/old",
         news_source_id=sample_source.id,
+    )
+    db_session.add(discovered)
+    await db_session.flush()
+    article = Article(
+        discovered_article_id=discovered.id,
+        original_title="Old Article",
+        original_content="Old content.",
         published_at=datetime.now(UTC),
     )
     db_session.add(article)
     await db_session.flush()
 
     existing = ArticleAnalysis(
-        news_article_id=article.id,
+        article_id=article.id,
         translated_title="既存タイトル",
         summary="既存要約",
         impact_level=ImpactLevel.MEDIUM,
@@ -446,15 +448,22 @@ async def test_extraction_skips_already_analyzed(
     mock_extractor.extract.assert_not_called()
 
 
-async def test_extraction_marks_skipped_on_invalid_input(
+async def test_extraction_returns_skipped_on_invalid_input(
     db_session: AsyncSession,
     session_factory,
     sample_source: NewsSource,
 ) -> None:
-    article = NewsArticle(
+    discovered = DiscoveredArticle(
         original_title="Bad Article",
         original_url="https://example.com/bad",
         news_source_id=sample_source.id,
+    )
+    db_session.add(discovered)
+    await db_session.flush()
+    article = Article(
+        discovered_article_id=discovered.id,
+        original_title="Bad Article",
+        original_content="Bad content.",
         published_at=datetime.now(UTC),
     )
     db_session.add(article)
@@ -472,10 +481,6 @@ async def test_extraction_marks_skipped_on_invalid_input(
 
     assert result.status == "skipped"
 
-    db_session.expire_all()
-    refreshed = await db_session.get(NewsArticle, article_id)
-    assert refreshed.skip_content_fetch is True
-
 
 # --- G. ClassificationService orchestration tests ---
 
@@ -487,10 +492,17 @@ async def test_classification_creates_topic(
     sample_source: NewsSource,
 ) -> None:
     """Stage 1 完了後の記事に対して Stage 2 が Topic を作成し分類を完了する。"""
-    article = NewsArticle(
+    discovered = DiscoveredArticle(
         original_title="Quantum Breakthrough",
         original_url="https://example.com/classify-test",
         news_source_id=sample_source.id,
+    )
+    db_session.add(discovered)
+    await db_session.flush()
+    article = Article(
+        discovered_article_id=discovered.id,
+        original_title="Quantum Breakthrough",
+        original_content="Content for classification.",
         published_at=datetime.now(UTC),
     )
     db_session.add(article)
@@ -498,7 +510,7 @@ async def test_classification_creates_topic(
 
     # Stage 1 の結果（topic_id なし）
     analysis = ArticleAnalysis(
-        news_article_id=article.id,
+        article_id=article.id,
         translated_title="量子ブレイクスルー",
         summary="要約テスト",
         ai_model="gemini-2.5-flash-lite",
@@ -556,17 +568,24 @@ async def test_classification_skips_already_classified(
     db_session.add(topic)
     await db_session.flush()
 
-    article = NewsArticle(
+    discovered = DiscoveredArticle(
         original_title="Classified Article",
         original_url="https://example.com/already-classified",
         news_source_id=sample_source.id,
+    )
+    db_session.add(discovered)
+    await db_session.flush()
+    article = Article(
+        discovered_article_id=discovered.id,
+        original_title="Classified Article",
+        original_content="Classified content.",
         published_at=datetime.now(UTC),
     )
     db_session.add(article)
     await db_session.flush()
 
     analysis = ArticleAnalysis(
-        news_article_id=article.id,
+        article_id=article.id,
         translated_title="分類済みタイトル",
         summary="分類済み要約",
         impact_level=ImpactLevel.MEDIUM,
@@ -598,17 +617,24 @@ async def test_news_endpoint_includes_analysis(
     db_session.add(topic)
     await db_session.flush()
 
-    article = NewsArticle(
+    discovered = DiscoveredArticle(
         original_title="Test Article",
         original_url="https://example.com/integration-test",
         news_source_id=sample_source.id,
+    )
+    db_session.add(discovered)
+    await db_session.flush()
+    article = Article(
+        discovered_article_id=discovered.id,
+        original_title="Test Article",
+        original_content="Integration test content.",
         published_at=datetime.now(UTC),
     )
     db_session.add(article)
     await db_session.flush()
 
     analysis = ArticleAnalysis(
-        news_article_id=article.id,
+        article_id=article.id,
         translated_title="テスト記事",
         summary="テスト要約",
         impact_level=ImpactLevel.HIGH,

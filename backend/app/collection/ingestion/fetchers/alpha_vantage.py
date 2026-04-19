@@ -143,7 +143,7 @@ class AlphaVantageFetcher:
         persist_result = await persist_new_articles(session, source, candidates)
         result.new_count = persist_result.new_count
         result.skipped_count += persist_result.skipped_count
-        result.new_articles = persist_result.new_articles
+        result.new_discovered = persist_result.new_discovered
 
         logger.info(
             "av_fetch_completed",

@@ -6,9 +6,10 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis, ImpactLevel
 from app.models.category import Category
-from app.models.news_article import NewsArticle
+from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
 from app.models.topic import Topic
 
@@ -19,12 +20,19 @@ async def _create_article(
     title: str = "Test Article",
     url: str = "https://example.com/article",
     published_at: datetime | None = None,
-) -> NewsArticle:
-    """ニュース記事を作成するヘルパー。"""
-    article = NewsArticle(
+) -> Article:
+    """DiscoveredArticle + Article を作成するヘルパー。"""
+    discovered = DiscoveredArticle(
         original_title=title,
         original_url=url,
         news_source_id=source.id,
+    )
+    session.add(discovered)
+    await session.flush()
+    article = Article(
+        discovered_article_id=discovered.id,
+        original_title=title,
+        original_content="Test content.",
         published_at=published_at or datetime.now(UTC),
     )
     session.add(article)
@@ -45,7 +53,7 @@ async def _create_topic(
 
 async def _create_analysis(
     session: AsyncSession,
-    article: NewsArticle,
+    article: Article,
     topic_id: int,
     impact_level: ImpactLevel = ImpactLevel.HIGH,
     translated_title: str = "テスト記事",
@@ -53,7 +61,7 @@ async def _create_analysis(
 ) -> ArticleAnalysis:
     """分析結果を作成するヘルパー。"""
     analysis = ArticleAnalysis(
-        news_article_id=article.id,
+        article_id=article.id,
         translated_title=translated_title,
         summary="テストの要約",
         impact_level=impact_level,

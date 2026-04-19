@@ -3,8 +3,8 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
+from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis
-from app.models.news_article import NewsArticle
 
 
 class PipelineRepository:
@@ -14,10 +14,10 @@ class PipelineRepository:
     async def get_article_ids_without_embedding(self) -> list[int]:
         """分析済みだが embedding 未生成の記事 ID を取得する."""
         stmt = (
-            select(NewsArticle.id)
+            select(Article.id)
             .join(
                 ArticleAnalysis,
-                ArticleAnalysis.news_article_id == NewsArticle.id,
+                ArticleAnalysis.article_id == Article.id,
             )
             .where(ArticleAnalysis.embedding.is_(None))
         )

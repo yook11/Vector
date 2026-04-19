@@ -14,12 +14,13 @@ from app.config import settings
 from app.dependencies import get_session
 from app.main import app
 from app.models import (  # noqa: F401
+    Article,
     ArticleAnalysis,
     ArticleEntity,
     Category,
+    DiscoveredArticle,
     FetchLog,
     ImpactLevel,
-    NewsArticle,
     NewsSource,
     SourceType,
     Topic,

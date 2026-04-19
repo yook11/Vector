@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import select
 
 from app.collection.extraction.extractor import (
     ArticleHtmlExtractor,
@@ -12,8 +13,9 @@ from app.collection.extraction.extractor import (
     PermanentFetchError,
     TemporaryFetchError,
 )
-from app.collection.extraction.service import ContentFetchService, mark_article_skipped
-from app.models.news_article import NewsArticle
+from app.collection.extraction.service import ContentFetchService
+from app.models.article import Article
+from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
 
 
@@ -33,53 +35,50 @@ def _mock_html_extractor(
     return extractor
 
 
-async def _make_article(
+async def _make_discovered(
     db_session: AsyncSession,
     source: NewsSource,
     url: str,
-    original_content: str | None = None,
-    published_at: datetime | None = None,
-) -> NewsArticle:
-    article = NewsArticle(
+) -> DiscoveredArticle:
+    """テスト用 DiscoveredArticle を作成する。"""
+    discovered = DiscoveredArticle(
         original_title="Test Article",
         original_url=url,
         news_source_id=source.id,
-        published_at=published_at,
-        original_content=original_content,
     )
-    db_session.add(article)
+    db_session.add(discovered)
     await db_session.commit()
-    await db_session.refresh(article)
-    return article
+    await db_session.refresh(discovered)
+    return discovered
 
 
-async def test_fetched_persists_content(
+async def test_fetched_creates_article(
     db_session: AsyncSession,
     session_factory,
     sample_source: NewsSource,
 ) -> None:
-    """本文取得成功時は original_content を保存し 'fetched' を返す。"""
-    article = await _make_article(
+    """本文取得成功時は Article 行を作成し 'fetched' を返す。"""
+    discovered = await _make_discovered(
         db_session, sample_source, "https://example.com/fetched"
     )
-    article_id = article.id
 
     extracted_date = datetime(2026, 3, 15, 10, 30, 0, tzinfo=UTC)
     extractor = _mock_html_extractor(
         body="Full article body text.", published_at=extracted_date
     )
     svc = ContentFetchService(session_factory, extractor)
-    result = await svc.execute(article_id)
+    result = await svc.execute(discovered.id)
 
     assert result.status == "fetched"
+    assert result.article_id is not None
     extractor.fetch.assert_called_once_with("https://example.com/fetched")
 
+    # Service は独自セッションで commit するため、テスト用セッションで再読込する
     db_session.expire_all()
-    refreshed = await db_session.get(NewsArticle, article_id)
-    assert refreshed is not None
-    assert refreshed.original_content == "Full article body text."
-    assert refreshed.published_at == extracted_date
-    assert refreshed.skip_content_fetch is False
+    article = await db_session.get(Article, result.article_id)
+    assert article is not None
+    assert article.original_content == "Full article body text."
+    assert article.published_at == extracted_date
 
 
 async def test_already_exists_skips_fetch(
@@ -87,133 +86,75 @@ async def test_already_exists_skips_fetch(
     session_factory,
     sample_source: NewsSource,
 ) -> None:
-    """本文と公開日時を共に持つ記事は fetch せず 'already_exists' を返す。"""
-    article = await _make_article(
-        db_session,
-        sample_source,
-        "https://example.com/existing",
-        original_content="Already here.",
+    """既に Article が存在する場合は fetch せず 'already_exists' を返す。"""
+    discovered = await _make_discovered(
+        db_session, sample_source, "https://example.com/existing"
+    )
+    # Article を先に作成
+    article = Article(
+        discovered_article_id=discovered.id,
+        original_title="Already here",
+        original_content="Existing content.",
         published_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
-    article_id = article.id
+    db_session.add(article)
+    await db_session.commit()
+    await db_session.refresh(article)
 
     extractor = _mock_html_extractor()
     svc = ContentFetchService(session_factory, extractor)
-    result = await svc.execute(article_id)
+    result = await svc.execute(discovered.id)
 
     assert result.status == "already_exists"
+    assert result.article_id == article.id
     extractor.fetch.assert_not_called()
 
 
-async def test_content_exists_but_no_date_triggers_fetch(
+async def test_permanent_error_returns_skipped(
     db_session: AsyncSession,
     session_factory,
     sample_source: NewsSource,
 ) -> None:
-    """本文ありだが公開日時なしの記事は HTML 抽出を実行する。"""
-    article = await _make_article(
-        db_session,
-        sample_source,
-        "https://example.com/content-no-date",
-        original_content="Existing content.",
-        published_at=None,
-    )
-    article_id = article.id
-
-    extracted_date = datetime(2026, 3, 15, tzinfo=UTC)
-    extractor = _mock_html_extractor(body="New body text.", published_at=extracted_date)
-    svc = ContentFetchService(session_factory, extractor)
-    result = await svc.execute(article_id)
-
-    assert result.status == "fetched"
-
-    db_session.expire_all()
-    refreshed = await db_session.get(NewsArticle, article_id)
-    assert refreshed is not None
-    # 既存の本文は上書きしない
-    assert refreshed.original_content == "Existing content."
-    # 日付は新たに保存される
-    assert refreshed.published_at == extracted_date
-
-
-async def test_body_fails_but_date_succeeds(
-    db_session: AsyncSession,
-    session_factory,
-    sample_source: NewsSource,
-) -> None:
-    """本文抽出失敗でも日付だけ取れた場合は日付を保存し 'fetched' を返す。"""
-    article = await _make_article(
-        db_session, sample_source, "https://example.com/paywall-date"
-    )
-    article_id = article.id
-
-    extracted_date = datetime(2026, 4, 10, 14, 0, 0, tzinfo=UTC)
-    extractor = _mock_html_extractor(body=None, published_at=extracted_date)
-    svc = ContentFetchService(session_factory, extractor)
-    result = await svc.execute(article_id)
-
-    assert result.status == "fetched"
-
-    db_session.expire_all()
-    refreshed = await db_session.get(NewsArticle, article_id)
-    assert refreshed is not None
-    assert refreshed.original_content is None
-    assert refreshed.published_at == extracted_date
-    assert refreshed.skip_content_fetch is False
-
-
-async def test_permanent_error_marks_skip(
-    db_session: AsyncSession,
-    session_factory,
-    sample_source: NewsSource,
-) -> None:
-    """PermanentFetchError 時は記事を skipped とマークし 'skipped' を返す。"""
-    article = await _make_article(
+    """PermanentFetchError 時は Article を作成せず 'skipped' を返す。"""
+    discovered = await _make_discovered(
         db_session, sample_source, "https://example.com/forbidden"
     )
-    article_id = article.id
 
     extractor = _mock_html_extractor(side_effect=PermanentFetchError("HTTP 403"))
     svc = ContentFetchService(session_factory, extractor)
-    result = await svc.execute(article_id)
+    result = await svc.execute(discovered.id)
 
     assert result.status == "skipped"
+    assert result.article_id is None
 
-    db_session.expire_all()
-    refreshed = await db_session.get(NewsArticle, article_id)
-    assert refreshed is not None
-    assert refreshed.skip_content_fetch is True
-    assert refreshed.original_content is None
+    # Article が作成されていないことを確認
+    articles = (await db_session.execute(select(Article))).scalars().all()
+    assert len(articles) == 0
 
 
-async def test_quality_gate_marks_skip(
+async def test_quality_gate_returns_skipped(
     db_session: AsyncSession,
     session_factory,
     sample_source: NewsSource,
 ) -> None:
-    """body も published_at も取れなかった場合は skipped とマークする。"""
-    article = await _make_article(
+    """body が取れなかった場合は Article を作成せず skipped を返す。"""
+    discovered = await _make_discovered(
         db_session, sample_source, "https://example.com/minimal"
     )
-    article_id = article.id
 
     extractor = _mock_html_extractor(body=None, published_at=None)
     svc = ContentFetchService(session_factory, extractor)
-    result = await svc.execute(article_id)
+    result = await svc.execute(discovered.id)
 
     assert result.status == "skipped"
-
-    db_session.expire_all()
-    refreshed = await db_session.get(NewsArticle, article_id)
-    assert refreshed is not None
-    assert refreshed.skip_content_fetch is True
+    assert result.article_id is None
 
 
-async def test_article_not_found_returns_skipped(
+async def test_discovered_not_found_returns_skipped(
     db_session: AsyncSession,
     session_factory,
 ) -> None:
-    """記事が見つからない場合は fetcher を呼ばず 'skipped' を返す。"""
+    """DiscoveredArticle が見つからない場合は fetcher を呼ばず 'skipped' を返す。"""
     extractor = _mock_html_extractor()
     svc = ContentFetchService(session_factory, extractor)
     result = await svc.execute(999999)
@@ -228,43 +169,16 @@ async def test_temporary_error_propagates(
     sample_source: NewsSource,
 ) -> None:
     """TemporaryFetchError は伝播させる (リトライ判断は Task の責務)。"""
-    article = await _make_article(
+    discovered = await _make_discovered(
         db_session, sample_source, "https://example.com/temp-error"
     )
-    article_id = article.id
 
     extractor = _mock_html_extractor(side_effect=TemporaryFetchError("HTTP 500"))
     svc = ContentFetchService(session_factory, extractor)
 
     with pytest.raises(TemporaryFetchError):
-        await svc.execute(article_id)
+        await svc.execute(discovered.id)
 
-    # 一時エラーでは記事を skipped にマークしないこと
-    db_session.expire_all()
-    refreshed = await db_session.get(NewsArticle, article_id)
-    assert refreshed is not None
-    assert refreshed.skip_content_fetch is False
-
-
-async def test_mark_article_skipped_utility(
-    db_session: AsyncSession,
-    session_factory,
-    sample_source: NewsSource,
-) -> None:
-    """ユーティリティは指定記事の skip_content_fetch=True を設定する。"""
-    article = await _make_article(
-        db_session, sample_source, "https://example.com/mark-skip"
-    )
-    article_id = article.id
-
-    await mark_article_skipped(session_factory, article_id)
-
-    db_session.expire_all()
-    refreshed = await db_session.get(NewsArticle, article_id)
-    assert refreshed is not None
-    assert refreshed.skip_content_fetch is True
-
-
-async def test_mark_article_skipped_missing_article(session_factory) -> None:
-    """存在しない記事に対してユーティリティを呼んでも例外を送出しない。"""
-    await mark_article_skipped(session_factory, 999999)
+    # Article が作成されていないことを確認
+    articles = (await db_session.execute(select(Article))).scalars().all()
+    assert len(articles) == 0
