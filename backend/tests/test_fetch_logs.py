@@ -7,8 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from app.collection.ingestion.persister import SourceFetchResult
+from app.models.discovered_article import DiscoveredArticle
 from app.models.fetch_log import FetchLog, FetchStatus
-from app.models.news_article import NewsArticle
 from app.models.news_source import NewsSource
 
 
@@ -34,16 +34,14 @@ async def test_fetch_log_recorded_on_success(
     """フェッチ成功時に status='success' の FetchLog が記録される。"""
     from app.collection.tasks import fetch_source_metadata
 
-    article = MagicMock(spec=NewsArticle)
-    article.id = 1
-    article.original_content = None
-    article.published_at = None
+    discovered = MagicMock(spec=DiscoveredArticle)
+    discovered.id = 1
 
     fetch_result = SourceFetchResult(
         source_id=sample_source.id,
         success=True,
         new_count=1,
-        new_articles=[article],
+        new_discovered=[discovered],
     )
 
     mock_fetcher = AsyncMock()

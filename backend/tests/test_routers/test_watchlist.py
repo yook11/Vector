@@ -6,9 +6,10 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis, ImpactLevel
 from app.models.category import Category
-from app.models.news_article import NewsArticle
+from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
 from app.models.topic import Topic
 
@@ -18,23 +19,31 @@ async def sample_article(
     db_session: AsyncSession,
     sample_categories: list[Category],
     sample_source: NewsSource,
-) -> NewsArticle:
-    """分析付きのテスト用ニュース記事を作成する。"""
+) -> Article:
+    """分析付きのテスト用記事を作成する。"""
     topic = Topic(name="watchlist test", category_id=sample_categories[0].id)
     db_session.add(topic)
     await db_session.flush()
 
-    article = NewsArticle(
+    discovered = DiscoveredArticle(
         original_title="Test Article",
         original_url="https://example.com/test",
         news_source_id=sample_source.id,
+    )
+    db_session.add(discovered)
+    await db_session.flush()
+
+    article = Article(
+        discovered_article_id=discovered.id,
+        original_title="Test Article",
+        original_content="Test content.",
         published_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
     db_session.add(article)
     await db_session.flush()
 
     analysis = ArticleAnalysis(
-        news_article_id=article.id,
+        article_id=article.id,
         translated_title="テスト記事",
         summary="テストの要約",
         impact_level=ImpactLevel.HIGH,
@@ -53,23 +62,31 @@ async def second_article(
     db_session: AsyncSession,
     sample_categories: list[Category],
     sample_source: NewsSource,
-) -> NewsArticle:
-    """分析付きの 2 件目のテスト用ニュース記事を作成する。"""
+) -> Article:
+    """分析付きの 2 件目のテスト用記事を作成する。"""
     topic = Topic(name="second test", category_id=sample_categories[0].id)
     db_session.add(topic)
     await db_session.flush()
 
-    article = NewsArticle(
+    discovered = DiscoveredArticle(
         original_title="Second Article",
         original_url="https://example.com/second",
         news_source_id=sample_source.id,
+    )
+    db_session.add(discovered)
+    await db_session.flush()
+
+    article = Article(
+        discovered_article_id=discovered.id,
+        original_title="Second Article",
+        original_content="Second content.",
         published_at=datetime(2026, 1, 2, tzinfo=UTC),
     )
     db_session.add(article)
     await db_session.flush()
 
     analysis = ArticleAnalysis(
-        news_article_id=article.id,
+        article_id=article.id,
         translated_title="2番目の記事",
         summary="2番目の要約",
         impact_level=ImpactLevel.MEDIUM,
@@ -98,7 +115,7 @@ class TestListWatchlist:
     async def test_returns_watchlist_items(
         self,
         authed_client: AsyncClient,
-        sample_article: NewsArticle,
+        sample_article: Article,
     ) -> None:
         await authed_client.post(
             "/api/v1/me/watchlist",
@@ -120,8 +137,8 @@ class TestListWatchlist:
     async def test_pagination(
         self,
         authed_client: AsyncClient,
-        sample_article: NewsArticle,
-        second_article: NewsArticle,
+        sample_article: Article,
+        second_article: Article,
     ) -> None:
         await authed_client.post(
             "/api/v1/me/watchlist",
@@ -149,7 +166,7 @@ class TestAddToWatchlist:
     async def test_add_success(
         self,
         authed_client: AsyncClient,
-        sample_article: NewsArticle,
+        sample_article: Article,
     ) -> None:
         resp = await authed_client.post(
             "/api/v1/me/watchlist",
@@ -160,7 +177,7 @@ class TestAddToWatchlist:
     async def test_add_duplicate_409(
         self,
         authed_client: AsyncClient,
-        sample_article: NewsArticle,
+        sample_article: Article,
     ) -> None:
         await authed_client.post(
             "/api/v1/me/watchlist",
@@ -187,7 +204,7 @@ class TestRemoveFromWatchlist:
     async def test_remove_success(
         self,
         authed_client: AsyncClient,
-        sample_article: NewsArticle,
+        sample_article: Article,
     ) -> None:
         await authed_client.post(
             "/api/v1/me/watchlist",
@@ -215,7 +232,7 @@ class TestNewsIsWatched:
     async def test_news_list_includes_is_watched(
         self,
         authed_client: AsyncClient,
-        sample_article: NewsArticle,
+        sample_article: Article,
     ) -> None:
         await authed_client.post(
             "/api/v1/me/watchlist",
@@ -231,7 +248,7 @@ class TestNewsIsWatched:
     async def test_news_list_is_watched_false_when_not_in_watchlist(
         self,
         authed_client: AsyncClient,
-        sample_article: NewsArticle,
+        sample_article: Article,
     ) -> None:
         resp = await authed_client.get("/api/v1/articles")
         items = resp.json()["items"]
@@ -241,7 +258,7 @@ class TestNewsIsWatched:
     async def test_news_list_is_watched_false_for_unauthenticated(
         self,
         client: AsyncClient,
-        sample_article: NewsArticle,
+        sample_article: Article,
     ) -> None:
         resp = await client.get("/api/v1/articles")
         items = resp.json()["items"]

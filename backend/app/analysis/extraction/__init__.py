@@ -2,11 +2,7 @@
 
 from app.analysis.extraction.extractor.base import BaseExtractor, ExtractionData
 from app.analysis.extraction.extractor.factory import get_extractor
-from app.analysis.extraction.service import (
-    ExtractionResult,
-    ExtractionService,
-    mark_article_skipped,
-)
+from app.analysis.extraction.service import ExtractionResult, ExtractionService
 
 __all__ = [
     "BaseExtractor",
@@ -14,5 +10,4 @@ __all__ = [
     "ExtractionResult",
     "ExtractionService",
     "get_extractor",
-    "mark_article_skipped",
 ]

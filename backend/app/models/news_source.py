@@ -13,8 +13,8 @@ from app.domain.news_source import SourceName
 from app.models.base import Base
 
 if TYPE_CHECKING:
+    from app.models.discovered_article import DiscoveredArticle
     from app.models.fetch_log import FetchLog
-    from app.models.news_article import NewsArticle
 
 
 class SourceType(StrEnum):
@@ -59,7 +59,9 @@ class NewsSource(Base):
     )
 
     # リレーション
-    articles: Mapped[list[NewsArticle]] = relationship(back_populates="news_source")
+    discovered_articles: Mapped[list[DiscoveredArticle]] = relationship(
+        back_populates="news_source"
+    )
     fetch_logs: Mapped[list[FetchLog]] = relationship(back_populates="source")
 
     # ドメインメソッド

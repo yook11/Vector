@@ -12,7 +12,7 @@ from app.collection.ingestion.persister import (
     to_safe_url,
 )
 from app.domain.safe_url import SafeUrl
-from app.models.news_article import NewsArticle
+from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
 
 # --- Unit tests ---
@@ -58,10 +58,10 @@ async def test_persist_saves_new_articles(
 
     assert result.new_count == 2
     assert result.skipped_count == 0
-    assert len(result.new_articles) == 2
+    assert len(result.new_discovered) == 2
 
     await db_session.flush()
-    articles = (await db_session.execute(select(NewsArticle))).scalars().all()
+    articles = (await db_session.execute(select(DiscoveredArticle))).scalars().all()
     assert len(articles) == 2
     assert all(a.news_source_id == sample_source.id for a in articles)
 
@@ -71,7 +71,7 @@ async def test_persist_skips_duplicate_urls(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
     """既存 URL は重複排除される。"""
-    existing = NewsArticle(
+    existing = DiscoveredArticle(
         original_title="Existing",
         original_url="https://example.com/existing",
         news_source_id=sample_source.id,
@@ -118,28 +118,6 @@ async def test_persist_respects_max_articles_limit(
 
 
 @pytest.mark.asyncio
-async def test_persist_stores_content(
-    db_session: AsyncSession, sample_source: NewsSource
-) -> None:
-    """content が設定されている候補は original_content に保存される。"""
-    candidates = [
-        ArticleCandidate(
-            url=SafeUrl("https://example.com/full"),
-            title="Full Content Article",
-            content="A" * 600,
-        ),
-    ]
-
-    result = await persist_new_articles(db_session, sample_source, candidates)
-
-    assert result.new_count == 1
-    await db_session.flush()
-    articles = (await db_session.execute(select(NewsArticle))).scalars().all()
-    assert articles[0].original_content is not None
-    assert len(articles[0].original_content) == 600
-
-
-@pytest.mark.asyncio
 async def test_persist_with_empty_candidates(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
@@ -148,7 +126,7 @@ async def test_persist_with_empty_candidates(
 
     assert result.new_count == 0
     assert result.skipped_count == 0
-    assert result.new_articles == []
+    assert result.new_discovered == []
 
 
 @pytest.mark.asyncio

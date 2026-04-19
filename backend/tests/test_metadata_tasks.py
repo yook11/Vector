@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.collection.ingestion.persister import SourceFetchResult
-from app.models.news_article import NewsArticle
+from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
 
 
@@ -95,7 +95,7 @@ class TestDispatchSources:
 class TestFetchSourceMetadata:
     @pytest.mark.asyncio
     async def test_fetches_and_dispatches_content(self) -> None:
-        """新規記事を fetch_content に dispatch する。"""
+        """新規記事を全件 fetch_content に dispatch する。"""
         from app.collection.tasks import fetch_source_metadata
 
         mock_session = AsyncMock()
@@ -107,21 +107,17 @@ class TestFetchSourceMetadata:
         source.name = "Test Source"
         mock_session.get = AsyncMock(return_value=source)
 
-        article_a = MagicMock(spec=NewsArticle)
-        article_a.id = 10
-        article_a.original_content = None
-        article_a.published_at = None
+        discovered_a = MagicMock(spec=DiscoveredArticle)
+        discovered_a.id = 10
 
-        article_b = MagicMock(spec=NewsArticle)
-        article_b.id = 11
-        article_b.original_content = None
-        article_b.published_at = None
+        discovered_b = MagicMock(spec=DiscoveredArticle)
+        discovered_b.id = 11
 
         fetch_result = SourceFetchResult(
             source_id=1,
             success=True,
             new_count=2,
-            new_articles=[article_a, article_b],
+            new_discovered=[discovered_a, discovered_b],
         )
 
         mock_fetcher = AsyncMock()
@@ -133,69 +129,16 @@ class TestFetchSourceMetadata:
                 return_value=mock_fetcher,
             ),
             patch("app.collection.tasks.fetch_content") as mock_fc,
-            patch("app.analysis.tasks.extract_content") as mock_aa,
         ):
             mock_fc.kiq = AsyncMock()
-            mock_aa.kiq = AsyncMock()
             result = await fetch_source_metadata(source_id=1, ctx=mock_ctx)
 
         assert result["new_count"] == 2
         assert result["success"] is True
+        # 全件 fetch_content へ dispatch
         assert mock_fc.kiq.call_count == 2
-        mock_aa.kiq.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_dispatches_content_ready_to_analysis(self) -> None:
-        """全文 RSS 記事は extract_content に直接流す。"""
-        from app.collection.tasks import fetch_source_metadata
-
-        mock_session = AsyncMock()
-        mock_ctx = _make_ctx()
-        _patch_session_factory(mock_ctx, mock_session)
-
-        source = MagicMock(spec=NewsSource)
-        source.id = 1
-        source.name = "Test Source"
-        mock_session.get = AsyncMock(return_value=source)
-
-        from datetime import UTC, datetime
-
-        article_ready = MagicMock(spec=NewsArticle)
-        article_ready.id = 10
-        article_ready.original_content = "Full content here..."
-        article_ready.published_at = datetime(2025, 1, 1, tzinfo=UTC)
-
-        article_need_content = MagicMock(spec=NewsArticle)
-        article_need_content.id = 11
-        article_need_content.original_content = None
-        article_need_content.published_at = None
-
-        fetch_result = SourceFetchResult(
-            source_id=1,
-            success=True,
-            new_count=2,
-            new_articles=[article_ready, article_need_content],
-        )
-
-        mock_fetcher = AsyncMock()
-        mock_fetcher.fetch = AsyncMock(return_value=fetch_result)
-
-        with (
-            patch(
-                "app.collection.tasks.get_fetcher",
-                return_value=mock_fetcher,
-            ),
-            patch("app.collection.tasks.fetch_content") as mock_fc,
-            patch("app.analysis.tasks.extract_content") as mock_aa,
-        ):
-            mock_fc.kiq = AsyncMock()
-            mock_aa.kiq = AsyncMock()
-            await fetch_source_metadata(source_id=1, ctx=mock_ctx)
-
-        # article 10 は content 準備済みなので analysis へ
-        mock_aa.kiq.assert_called_once_with(10)
-        # article 11 は content fetch が必要
-        mock_fc.kiq.assert_called_once_with(11)
+        mock_fc.kiq.assert_any_call(10)
+        mock_fc.kiq.assert_any_call(11)
 
     @pytest.mark.asyncio
     async def test_skips_when_daily_quota_exceeded(self) -> None:
@@ -246,7 +189,7 @@ class TestFetchSourceMetadata:
         mock_session.get = AsyncMock(return_value=source)
 
         fetch_result = SourceFetchResult(
-            source_id=1, success=True, new_count=0, new_articles=[]
+            source_id=1, success=True, new_count=0, new_discovered=[]
         )
         mock_fetcher = AsyncMock()
         mock_fetcher.DAILY_REQUEST_LIMIT = 25
@@ -283,7 +226,7 @@ class TestFetchSourceMetadata:
         mock_session.get = AsyncMock(return_value=source)
 
         fetch_result = SourceFetchResult(
-            source_id=1, success=True, new_count=0, new_articles=[]
+            source_id=1, success=True, new_count=0, new_discovered=[]
         )
         mock_fetcher = AsyncMock()
         # DAILY_REQUEST_LIMIT を持たない

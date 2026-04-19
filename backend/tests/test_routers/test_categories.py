@@ -4,8 +4,10 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis
 from app.models.category import Category
+from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
 from app.models.topic import Topic
 
@@ -82,18 +84,23 @@ class TestListCategories:
         db_session.add(topic)
         await db_session.flush()
 
-        from app.models.news_article import NewsArticle
-
-        article = NewsArticle(
+        discovered = DiscoveredArticle(
             original_title="TF Article",
             original_url="https://example.com/tf",
             news_source_id=sample_source.id,
+        )
+        db_session.add(discovered)
+        await db_session.flush()
+        article = Article(
+            discovered_article_id=discovered.id,
+            original_title="TF Article",
+            original_content="TF content.",
         )
         db_session.add(article)
         await db_session.flush()
 
         analysis = ArticleAnalysis(
-            news_article_id=article.id,
+            article_id=article.id,
             translated_title="TF記事",
             summary="要約",
             impact_level="high",
@@ -121,18 +128,23 @@ class TestListCategories:
         db_session.add(topic)
         await db_session.flush()
 
-        from app.models.news_article import NewsArticle
-
-        article = NewsArticle(
+        discovered = DiscoveredArticle(
             original_title="PyTorch Article",
             original_url="https://example.com/pytorch",
             news_source_id=sample_source.id,
+        )
+        db_session.add(discovered)
+        await db_session.flush()
+        article = Article(
+            discovered_article_id=discovered.id,
+            original_title="PyTorch Article",
+            original_content="PyTorch content.",
         )
         db_session.add(article)
         await db_session.flush()
 
         analysis = ArticleAnalysis(
-            news_article_id=article.id,
+            article_id=article.id,
             translated_title="PyTorch記事",
             summary="要約",
             impact_level="high",

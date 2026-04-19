@@ -25,7 +25,7 @@ class WatchlistRepository:
         """
         base = (
             select(ArticleAnalysis)
-            .join(ArticleAnalysis.news_article)
+            .join(ArticleAnalysis.article)
             .join(
                 WatchlistEntry,
                 WatchlistEntry.article_analysis_id == ArticleAnalysis.id,

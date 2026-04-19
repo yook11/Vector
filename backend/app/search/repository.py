@@ -6,9 +6,9 @@ from sqlalchemy import ColumnElement, Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis
 from app.models.category import Category
-from app.models.news_article import NewsArticle
 from app.models.topic import Topic
 from app.repositories.articles import article_eager_options_brief
 from app.schemas.articles import SemanticSearchParams, SortBy, SortOrder
@@ -26,7 +26,7 @@ class SemanticSearchRepository:
         """セマンティック類似度に基づき記事を検索する (フィルタ+ページング付き)。"""
         stmt = (
             select(ArticleAnalysis)
-            .join(ArticleAnalysis.news_article)
+            .join(ArticleAnalysis.article)
             .options(*article_eager_options_brief())
         )
 
@@ -78,12 +78,12 @@ class SemanticSearchRepository:
         if sort_by == SortBy.RELEVANCE:
             return stmt.order_by(
                 distance_expr.asc(),
-                NewsArticle.published_at.desc(),
+                Article.published_at.desc(),
                 ArticleAnalysis.id.desc(),
             )
         order = (
-            NewsArticle.published_at.desc()
+            Article.published_at.desc()
             if sort_order == SortOrder.DESC
-            else NewsArticle.published_at.asc()
+            else Article.published_at.asc()
         )
         return stmt.order_by(order, ArticleAnalysis.id.desc())

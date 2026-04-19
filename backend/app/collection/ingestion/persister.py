@@ -16,7 +16,7 @@ from sqlmodel import select
 
 from app.config import settings
 from app.domain.safe_url import SafeUrl
-from app.models.news_article import NewsArticle
+from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
 
 logger = structlog.get_logger(__name__)
@@ -48,7 +48,7 @@ class SourceFetchResult:
     etag: str | None = None
     last_modified: str | None = None
     not_modified: bool = False
-    new_articles: list[NewsArticle] = field(default_factory=list)
+    new_discovered: list[DiscoveredArticle] = field(default_factory=list)
 
 
 def to_safe_url(raw: str) -> SafeUrl | None:
@@ -72,7 +72,7 @@ async def persist_new_articles(
         candidates: フェッチャーが生成した記事候補リスト。
 
     Returns:
-        新規/スキップ件数と新規記事を含む SourceFetchResult。
+        新規/スキップ件数と新規発見記事を含む SourceFetchResult。
     """
     result = SourceFetchResult(source_id=source.id)
 
@@ -85,13 +85,13 @@ async def persist_new_articles(
     chunk_size = 500
     for i in range(0, len(urls), chunk_size):
         chunk = urls[i : i + chunk_size]
-        stmt = select(NewsArticle.original_url).where(
-            NewsArticle.original_url.in_(chunk)
+        stmt = select(DiscoveredArticle.original_url).where(
+            DiscoveredArticle.original_url.in_(chunk)
         )
         rows = await session.execute(stmt)
         existing_urls.update(row[0] for row in rows.all())
 
-    # 新規記事を作成
+    # 新規 discovered_articles を作成
     max_new = settings.max_articles_per_fetch
     new_count = 0
 
@@ -104,19 +104,14 @@ async def persist_new_articles(
             logger.info("source_fetch_limit_reached", source=source.name, max=max_new)
             break
 
-        article = NewsArticle(
+        discovered = DiscoveredArticle(
             original_title=candidate.title,
-            original_description=candidate.description,
             original_url=candidate.url,
             news_source_id=source.id,
-            published_at=candidate.published_at,
         )
 
-        if candidate.content:
-            article.original_content = candidate.content[: settings.content_max_length]
-
-        session.add(article)
-        result.new_articles.append(article)
+        session.add(discovered)
+        result.new_discovered.append(discovered)
         new_count += 1
         # 同一バッチ内の後続候補で重複しないよう URL を記録
         existing_urls.add(candidate.url)

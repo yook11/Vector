@@ -13,7 +13,7 @@ from app.collection.ingestion.fetchers.alpha_vantage import (
     AlphaVantageFetcher,
     _parse_av_time,
 )
-from app.models.news_article import NewsArticle
+from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
 
 _AV_MOD = "app.collection.ingestion.fetchers.alpha_vantage"
@@ -78,7 +78,7 @@ async def test_av_fetch_saves_articles(
     db_session: AsyncSession,
     sample_av_source: NewsSource,
 ) -> None:
-    """AV fetch が成功すると NewsArticle レコードが作成される。"""
+    """AV fetch が成功すると DiscoveredArticle レコードが作成される。"""
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.json.return_value = SAMPLE_AV_RESPONSE
@@ -104,7 +104,9 @@ async def test_av_fetch_saves_articles(
 
     # DB 内の記事を確認
     await db_session.commit()
-    stmt = select(NewsArticle).where(NewsArticle.news_source_id == sample_av_source.id)
+    stmt = select(DiscoveredArticle).where(
+        DiscoveredArticle.news_source_id == sample_av_source.id
+    )
     rows = await db_session.execute(stmt)
     articles = rows.scalars().all()
     assert len(articles) == 2
@@ -126,7 +128,7 @@ async def test_av_fetch_skips_duplicates(
     """既に存在する記事はスキップされる。"""
     # 1 件の記事を事前登録
     existing_url = "https://example.com/article-1"
-    existing = NewsArticle(
+    existing = DiscoveredArticle(
         original_title="Existing",
         original_url=existing_url,
         news_source_id=sample_av_source.id,

@@ -32,7 +32,7 @@ class TestFetchContent:
         from app.collection.tasks import fetch_content
 
         mock_ctx = _make_ctx()
-        mock_result = MagicMock(status="fetched")
+        mock_result = MagicMock(status="fetched", article_id=42)
 
         with (
             patch("app.collection.tasks.ContentFetchService") as mock_svc_cls,
@@ -40,17 +40,17 @@ class TestFetchContent:
         ):
             mock_svc_cls.return_value.execute = AsyncMock(return_value=mock_result)
             mock_analyze.kiq = AsyncMock()
-            await fetch_content(article_id=1, ctx=mock_ctx)
+            await fetch_content(discovered_article_id=1, ctx=mock_ctx)
 
         mock_svc_cls.return_value.execute.assert_called_once_with(1)
-        mock_analyze.kiq.assert_called_once_with(1)
+        mock_analyze.kiq.assert_called_once_with(42)
 
     @pytest.mark.asyncio
     async def test_already_exists_chains_analyze(self) -> None:
         from app.collection.tasks import fetch_content
 
         mock_ctx = _make_ctx()
-        mock_result = MagicMock(status="already_exists")
+        mock_result = MagicMock(status="already_exists", article_id=42)
 
         with (
             patch("app.collection.tasks.ContentFetchService") as mock_svc_cls,
@@ -58,16 +58,16 @@ class TestFetchContent:
         ):
             mock_svc_cls.return_value.execute = AsyncMock(return_value=mock_result)
             mock_analyze.kiq = AsyncMock()
-            await fetch_content(article_id=1, ctx=mock_ctx)
+            await fetch_content(discovered_article_id=1, ctx=mock_ctx)
 
-        mock_analyze.kiq.assert_called_once_with(1)
+        mock_analyze.kiq.assert_called_once_with(42)
 
     @pytest.mark.asyncio
     async def test_skipped_does_not_chain(self) -> None:
         from app.collection.tasks import fetch_content
 
         mock_ctx = _make_ctx()
-        mock_result = MagicMock(status="skipped")
+        mock_result = MagicMock(status="skipped", article_id=None)
 
         with (
             patch("app.collection.tasks.ContentFetchService") as mock_svc_cls,
@@ -75,7 +75,7 @@ class TestFetchContent:
         ):
             mock_svc_cls.return_value.execute = AsyncMock(return_value=mock_result)
             mock_analyze.kiq = AsyncMock()
-            await fetch_content(article_id=1, ctx=mock_ctx)
+            await fetch_content(discovered_article_id=1, ctx=mock_ctx)
 
         mock_analyze.kiq.assert_not_called()
 
@@ -92,27 +92,20 @@ class TestFetchContent:
                 side_effect=TemporaryFetchError("HTTP 500"),
             )
             with pytest.raises(TemporaryFetchError):
-                await fetch_content(article_id=1, ctx=mock_ctx)
+                await fetch_content(discovered_article_id=1, ctx=mock_ctx)
 
     @pytest.mark.asyncio
-    async def test_temporary_error_last_attempt_marks_skip(self) -> None:
+    async def test_temporary_error_last_attempt_returns(self) -> None:
+        """最終試行では例外を送出せず return する。"""
         from app.collection.tasks import fetch_content
 
         mock_ctx = _make_ctx(retry_count=3, max_retries=3)
 
-        with (
-            patch(
-                "app.collection.tasks.ContentFetchService",
-            ) as mock_svc_cls,
-            patch(
-                "app.collection.tasks.mark_article_skipped",
-                new_callable=AsyncMock,
-            ) as mock_mark,
-        ):
+        with patch(
+            "app.collection.tasks.ContentFetchService",
+        ) as mock_svc_cls:
             mock_svc_cls.return_value.execute = AsyncMock(
                 side_effect=TemporaryFetchError("HTTP 500"),
             )
             # 最終試行では例外を送出しないこと
-            await fetch_content(article_id=1, ctx=mock_ctx)
-
-        mock_mark.assert_called_once_with(mock_ctx.state.session_factory, 1)
+            await fetch_content(discovered_article_id=1, ctx=mock_ctx)

@@ -62,12 +62,10 @@ class ExtractionService:
             try:
                 data = await extractor.extract(
                     title=article.original_title,
-                    description=article.original_description,
+                    description=None,
                     content=article.original_content,
                 )
             except InvalidInputError:
-                article.discard_content()
-                await session.commit()
                 logger.warning(
                     "extraction_invalid_input",
                     article_id=article_id,
@@ -92,16 +90,3 @@ class ExtractionService:
                 entity_count=len(data.entities),
             )
             return ExtractionResult("created", analysis_id=analysis.id)
-
-
-async def mark_article_skipped(
-    session_factory: async_sessionmaker[AsyncSession],
-    article_id: int,
-) -> None:
-    """記事を恒久的にスキップ対象としてマークする（Task の最終試行時に使用）。"""
-    async with session_factory() as session:
-        repo = ExtractionRepository(session)
-        article = await repo.get_article(article_id)
-        if article is not None:
-            await repo.mark_article_skipped(article)
-            await session.commit()

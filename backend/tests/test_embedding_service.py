@@ -9,9 +9,10 @@ from sqlmodel import select
 
 from app.analysis.embedder.base import BaseEmbedder
 from app.analysis.embedding_service import EmbeddingService
+from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis, ImpactLevel
 from app.models.category import Category
-from app.models.news_article import NewsArticle
+from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
 from app.models.topic import Topic
 
@@ -38,17 +39,24 @@ async def test_embedding_creates_vector(
     db_session.add(topic)
     await db_session.flush()
 
-    article = NewsArticle(
+    discovered = DiscoveredArticle(
         original_title="Test Article",
         original_url="https://example.com/embed-test",
         news_source_id=sample_source.id,
+    )
+    db_session.add(discovered)
+    await db_session.flush()
+    article = Article(
+        discovered_article_id=discovered.id,
+        original_title="Test Article",
+        original_content="Embedding test content.",
         published_at=datetime.now(UTC),
     )
     db_session.add(article)
     await db_session.flush()
 
     analysis = ArticleAnalysis(
-        news_article_id=article.id,
+        article_id=article.id,
         translated_title="テスト記事",
         summary="テスト要約",
         impact_level=ImpactLevel.MEDIUM,
@@ -70,7 +78,7 @@ async def test_embedding_creates_vector(
     # 永続化された embedding を確認 (Service は独自セッションで commit 済み)
     db_session.expire_all()
     stmt = select(ArticleAnalysis).where(
-        ArticleAnalysis.news_article_id == article_id,
+        ArticleAnalysis.article_id == article_id,
     )
     refreshed = (await db_session.execute(stmt)).scalar_one()
     assert refreshed.embedding is not None
@@ -89,17 +97,24 @@ async def test_embedding_idempotency(
     db_session.add(topic)
     await db_session.flush()
 
-    article = NewsArticle(
+    discovered = DiscoveredArticle(
         original_title="Already Embedded",
         original_url="https://example.com/idempotent",
         news_source_id=sample_source.id,
+    )
+    db_session.add(discovered)
+    await db_session.flush()
+    article = Article(
+        discovered_article_id=discovered.id,
+        original_title="Already Embedded",
+        original_content="Idempotent content.",
         published_at=datetime.now(UTC),
     )
     db_session.add(article)
     await db_session.flush()
 
     analysis = ArticleAnalysis(
-        news_article_id=article.id,
+        article_id=article.id,
         translated_title="既存タイトル",
         summary="既存要約",
         impact_level=ImpactLevel.LOW,
@@ -126,10 +141,17 @@ async def test_embedding_no_analysis_raises(
     sample_source: NewsSource,
 ) -> None:
     """分析が存在しない場合は ValueError を送出する。"""
-    article = NewsArticle(
+    discovered = DiscoveredArticle(
         original_title="No Analysis",
         original_url="https://example.com/no-analysis",
         news_source_id=sample_source.id,
+    )
+    db_session.add(discovered)
+    await db_session.flush()
+    article = Article(
+        discovered_article_id=discovered.id,
+        original_title="No Analysis",
+        original_content="No analysis content.",
         published_at=datetime.now(UTC),
     )
     db_session.add(article)

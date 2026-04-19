@@ -25,7 +25,7 @@ class AnalysisRepository:
     async def find_by_article_id(self, article_id: int) -> ArticleAnalysis | None:
         """冪等性チェック用に、既存の分析結果を検索する。"""
         stmt = select(ArticleAnalysis).where(
-            ArticleAnalysis.news_article_id == article_id,
+            ArticleAnalysis.article_id == article_id,
         )
         return (await self._session.execute(stmt)).scalar_one_or_none()
 

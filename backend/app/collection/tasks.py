@@ -23,10 +23,7 @@ from app.collection.extraction.extractor import (
     ArticleHtmlExtractor,
     TemporaryFetchError,
 )
-from app.collection.extraction.service import (
-    ContentFetchService,
-    mark_article_skipped,
-)
+from app.collection.extraction.service import ContentFetchService
 from app.collection.ingestion.quota import check_daily_quota
 from app.collection.ingestion.registry import get_fetcher
 from app.models.fetch_log import FetchLog, FetchStatus
@@ -143,14 +140,9 @@ async def fetch_source_metadata(
         session.add(fetch_log)
         await session.commit()
 
-    # 新規記事を下流キューへ dispatch
-    from app.analysis.tasks import extract_content
-
-    for article in source_result.new_articles:
-        if article.original_content is not None and article.published_at is not None:
-            await extract_content.kiq(article.id)
-        else:
-            await fetch_content.kiq(article.id)
+    # 全件 fetch_content へ dispatch
+    for discovered in source_result.new_discovered:
+        await fetch_content.kiq(discovered.id)
 
     result = {
         "source_id": source_id,
@@ -174,10 +166,10 @@ async def fetch_source_metadata(
     retry_on_error=True,
 )
 async def fetch_content(
-    article_id: int,
+    discovered_article_id: int,
     ctx: Context = TaskiqDepends(),
 ) -> None:
-    """単一記事の本文コンテンツを取得する。"""
+    """単一記事の本文コンテンツを取得し Article 行を作成する。"""
     from app.analysis.tasks import extract_content
 
     session_factory = ctx.state.session_factory
@@ -185,14 +177,16 @@ async def fetch_content(
     svc = ContentFetchService(session_factory, html_extractor)
 
     try:
-        result = await svc.execute(article_id)
+        result = await svc.execute(discovered_article_id)
     except TemporaryFetchError:
         if is_last_attempt(ctx):
-            await mark_article_skipped(session_factory, article_id)
-            logger.warning("fetch_content_max_retries", article_id=article_id)
+            logger.warning(
+                "fetch_content_max_retries",
+                discovered_article_id=discovered_article_id,
+            )
             return
         raise
 
-    # body が取得できた場合のみ analyze にチェーン（body は分析の前提条件）
+    # Article が作成された場合のみ分析にチェーン
     if result.status in ("fetched", "already_exists"):
-        await extract_content.kiq(article_id)
+        await extract_content.kiq(result.article_id)

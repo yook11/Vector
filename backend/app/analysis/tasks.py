@@ -25,11 +25,7 @@ from app.analysis import (
 from app.analysis.classification_service import ClassificationService
 from app.analysis.classifier.factory import get_classifier
 from app.analysis.embedding_service import EmbeddingService
-from app.analysis.extraction import (
-    ExtractionService,
-    get_extractor,
-    mark_article_skipped,
-)
+from app.analysis.extraction import ExtractionService, get_extractor
 from app.analysis.rate_limiter import (
     RateLimitExceededError as _RateLimitExceededError,
 )
@@ -132,8 +128,6 @@ async def extract_content(
         UnclassifiedError,
     ) as e:
         if is_last_attempt(ctx):
-            if isinstance(e, AnalysisRateLimitError):
-                await mark_article_skipped(session_factory, article_id)
             logger.warning(
                 "extract_content_max_retries",
                 article_id=article_id,
