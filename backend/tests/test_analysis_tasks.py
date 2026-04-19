@@ -1,4 +1,4 @@
-"""分析タスク (analyze_article) のテスト。"""
+"""分析タスク (extract_content / classify_content) のテスト。"""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -21,156 +21,156 @@ def _make_ctx(
     return ctx
 
 
-def _patch_analyzer() -> tuple:
-    """get_analyzer と _build_limiters 用の patch context を返す。"""
-    mock_analyzer = MagicMock()
-    mock_analyzer.MODEL = "test-model"
-    mock_analyzer.RPM = 50
-    mock_analyzer.RPD = 1500
-    return mock_analyzer
+def _patch_provider() -> MagicMock:
+    """extractor/classifier 用のモックを返す。"""
+    mock = MagicMock()
+    mock.MODEL = "test-model"
+    mock.RPM = 50
+    mock.RPD = 1500
+    return mock
 
 
 # ---------------------------------------------------------------------------
-# analyze_article
+# extract_content
 # ---------------------------------------------------------------------------
 
 
-class TestAnalyzeArticle:
+class TestExtractContent:
     @pytest.mark.asyncio
-    async def test_already_exists_chains_embedding(self) -> None:
-        from app.analysis.tasks import analyze_article
+    async def test_already_exists_chains_classify(self) -> None:
+        from app.analysis.tasks import extract_content
 
         mock_ctx = _make_ctx()
         mock_result = MagicMock(status="already_exists")
 
         with (
             patch(
-                "app.analysis.tasks.get_analyzer",
-                return_value=_patch_analyzer(),
+                "app.analysis.tasks.get_extractor",
+                return_value=_patch_provider(),
             ),
             patch(
                 "app.analysis.tasks._build_limiters",
                 return_value=(None, None),
             ),
             patch(
-                "app.analysis.tasks.ArticleAnalysisService",
+                "app.analysis.tasks.ExtractionService",
             ) as mock_svc_cls,
             patch(
-                "app.analysis.tasks.generate_embedding",
-            ) as mock_embed,
+                "app.analysis.tasks.classify_content",
+            ) as mock_classify,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
                 return_value=mock_result,
             )
-            mock_embed.kiq = AsyncMock()
-            await analyze_article(article_id=1, ctx=mock_ctx)
+            mock_classify.kiq = AsyncMock()
+            await extract_content(article_id=1, ctx=mock_ctx)
 
-        mock_embed.kiq.assert_called_once_with(1)
+        mock_classify.kiq.assert_called_once_with(1)
 
     @pytest.mark.asyncio
-    async def test_success_chains_embedding(self) -> None:
-        from app.analysis.tasks import analyze_article
+    async def test_created_chains_classify(self) -> None:
+        from app.analysis.tasks import extract_content
 
         mock_ctx = _make_ctx()
         mock_result = MagicMock(status="created")
 
         with (
             patch(
-                "app.analysis.tasks.get_analyzer",
-                return_value=_patch_analyzer(),
+                "app.analysis.tasks.get_extractor",
+                return_value=_patch_provider(),
             ),
             patch(
                 "app.analysis.tasks._build_limiters",
                 return_value=(None, None),
             ),
             patch(
-                "app.analysis.tasks.ArticleAnalysisService",
+                "app.analysis.tasks.ExtractionService",
             ) as mock_svc_cls,
             patch(
-                "app.analysis.tasks.generate_embedding",
-            ) as mock_embed,
+                "app.analysis.tasks.classify_content",
+            ) as mock_classify,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
                 return_value=mock_result,
             )
-            mock_embed.kiq = AsyncMock()
-            await analyze_article(article_id=1, ctx=mock_ctx)
+            mock_classify.kiq = AsyncMock()
+            await extract_content(article_id=1, ctx=mock_ctx)
 
-        mock_embed.kiq.assert_called_once_with(1)
+        mock_classify.kiq.assert_called_once_with(1)
 
     @pytest.mark.asyncio
     async def test_skipped_does_not_chain(self) -> None:
-        from app.analysis.tasks import analyze_article
+        from app.analysis.tasks import extract_content
 
         mock_ctx = _make_ctx()
         mock_result = MagicMock(status="skipped")
 
         with (
             patch(
-                "app.analysis.tasks.get_analyzer",
-                return_value=_patch_analyzer(),
+                "app.analysis.tasks.get_extractor",
+                return_value=_patch_provider(),
             ),
             patch(
                 "app.analysis.tasks._build_limiters",
                 return_value=(None, None),
             ),
             patch(
-                "app.analysis.tasks.ArticleAnalysisService",
+                "app.analysis.tasks.ExtractionService",
             ) as mock_svc_cls,
             patch(
-                "app.analysis.tasks.generate_embedding",
-            ) as mock_embed,
+                "app.analysis.tasks.classify_content",
+            ) as mock_classify,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
                 return_value=mock_result,
             )
-            mock_embed.kiq = AsyncMock()
-            await analyze_article(article_id=1, ctx=mock_ctx)
+            mock_classify.kiq = AsyncMock()
+            await extract_content(article_id=1, ctx=mock_ctx)
 
-        mock_embed.kiq.assert_not_called()
+        mock_classify.kiq.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_rate_limit_raises_for_retry(self) -> None:
-        from app.analysis.tasks import analyze_article
+        from app.analysis.tasks import extract_content
 
         mock_ctx = _make_ctx(retry_count=0, max_retries=2)
 
         with (
             patch(
-                "app.analysis.tasks.get_analyzer",
-                return_value=_patch_analyzer(),
+                "app.analysis.tasks.get_extractor",
+                return_value=_patch_provider(),
             ),
             patch(
                 "app.analysis.tasks._build_limiters",
                 return_value=(None, None),
             ),
             patch(
-                "app.analysis.tasks.ArticleAnalysisService",
+                "app.analysis.tasks.ExtractionService",
             ) as mock_svc_cls,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
                 side_effect=RateLimitError("429"),
             )
             with pytest.raises(RateLimitError):
-                await analyze_article(article_id=1, ctx=mock_ctx)
+                await extract_content(article_id=1, ctx=mock_ctx)
 
     @pytest.mark.asyncio
     async def test_rate_limit_last_attempt_marks_skipped(self) -> None:
-        from app.analysis.tasks import analyze_article
+        from app.analysis.tasks import extract_content
 
         mock_ctx = _make_ctx(retry_count=2, max_retries=2)
 
         with (
             patch(
-                "app.analysis.tasks.get_analyzer",
-                return_value=_patch_analyzer(),
+                "app.analysis.tasks.get_extractor",
+                return_value=_patch_provider(),
             ),
             patch(
                 "app.analysis.tasks._build_limiters",
                 return_value=(None, None),
             ),
             patch(
-                "app.analysis.tasks.ArticleAnalysisService",
+                "app.analysis.tasks.ExtractionService",
             ) as mock_svc_cls,
             patch(
                 "app.analysis.tasks.mark_article_skipped",
@@ -180,9 +180,165 @@ class TestAnalyzeArticle:
             mock_svc_cls.return_value.execute = AsyncMock(
                 side_effect=RateLimitError("429"),
             )
-            await analyze_article(article_id=1, ctx=mock_ctx)
+            await extract_content(article_id=1, ctx=mock_ctx)
 
         mock_skip.assert_called_once_with(
             mock_ctx.state.session_factory,
             1,
         )
+
+
+# ---------------------------------------------------------------------------
+# classify_content
+# ---------------------------------------------------------------------------
+
+
+class TestClassifyContent:
+    @pytest.mark.asyncio
+    async def test_classified_chains_embedding(self) -> None:
+        from app.analysis.tasks import classify_content
+
+        mock_ctx = _make_ctx()
+        mock_result = MagicMock(status="classified")
+
+        with (
+            patch(
+                "app.analysis.tasks.get_classifier",
+                return_value=_patch_provider(),
+            ),
+            patch(
+                "app.analysis.tasks._build_limiters",
+                return_value=(None, None),
+            ),
+            patch(
+                "app.analysis.tasks.ClassificationService",
+            ) as mock_svc_cls,
+            patch(
+                "app.analysis.tasks.generate_embedding",
+            ) as mock_embed,
+        ):
+            mock_svc_cls.return_value.execute = AsyncMock(
+                return_value=mock_result,
+            )
+            mock_embed.kiq = AsyncMock()
+            await classify_content(article_id=1, ctx=mock_ctx)
+
+        mock_embed.kiq.assert_called_once_with(1)
+
+    @pytest.mark.asyncio
+    async def test_already_classified_chains_embedding(self) -> None:
+        from app.analysis.tasks import classify_content
+
+        mock_ctx = _make_ctx()
+        mock_result = MagicMock(status="already_classified")
+
+        with (
+            patch(
+                "app.analysis.tasks.get_classifier",
+                return_value=_patch_provider(),
+            ),
+            patch(
+                "app.analysis.tasks._build_limiters",
+                return_value=(None, None),
+            ),
+            patch(
+                "app.analysis.tasks.ClassificationService",
+            ) as mock_svc_cls,
+            patch(
+                "app.analysis.tasks.generate_embedding",
+            ) as mock_embed,
+        ):
+            mock_svc_cls.return_value.execute = AsyncMock(
+                return_value=mock_result,
+            )
+            mock_embed.kiq = AsyncMock()
+            await classify_content(article_id=1, ctx=mock_ctx)
+
+        mock_embed.kiq.assert_called_once_with(1)
+
+    @pytest.mark.asyncio
+    async def test_skipped_does_not_chain(self) -> None:
+        from app.analysis.tasks import classify_content
+
+        mock_ctx = _make_ctx()
+        mock_result = MagicMock(status="skipped")
+
+        with (
+            patch(
+                "app.analysis.tasks.get_classifier",
+                return_value=_patch_provider(),
+            ),
+            patch(
+                "app.analysis.tasks._build_limiters",
+                return_value=(None, None),
+            ),
+            patch(
+                "app.analysis.tasks.ClassificationService",
+            ) as mock_svc_cls,
+            patch(
+                "app.analysis.tasks.generate_embedding",
+            ) as mock_embed,
+        ):
+            mock_svc_cls.return_value.execute = AsyncMock(
+                return_value=mock_result,
+            )
+            mock_embed.kiq = AsyncMock()
+            await classify_content(article_id=1, ctx=mock_ctx)
+
+        mock_embed.kiq.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_raises_for_retry(self) -> None:
+        from app.analysis.tasks import classify_content
+
+        mock_ctx = _make_ctx(retry_count=0, max_retries=2)
+
+        with (
+            patch(
+                "app.analysis.tasks.get_classifier",
+                return_value=_patch_provider(),
+            ),
+            patch(
+                "app.analysis.tasks._build_limiters",
+                return_value=(None, None),
+            ),
+            patch(
+                "app.analysis.tasks.ClassificationService",
+            ) as mock_svc_cls,
+        ):
+            mock_svc_cls.return_value.execute = AsyncMock(
+                side_effect=RateLimitError("429"),
+            )
+            with pytest.raises(RateLimitError):
+                await classify_content(article_id=1, ctx=mock_ctx)
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_last_attempt_does_not_skip(self) -> None:
+        """classify_content は最終試行でも mark_article_skipped しない。"""
+        from app.analysis.tasks import classify_content
+
+        mock_ctx = _make_ctx(retry_count=2, max_retries=2)
+
+        with (
+            patch(
+                "app.analysis.tasks.get_classifier",
+                return_value=_patch_provider(),
+            ),
+            patch(
+                "app.analysis.tasks._build_limiters",
+                return_value=(None, None),
+            ),
+            patch(
+                "app.analysis.tasks.ClassificationService",
+            ) as mock_svc_cls,
+            patch(
+                "app.analysis.tasks.mark_article_skipped",
+                new_callable=AsyncMock,
+            ) as mock_skip,
+        ):
+            mock_svc_cls.return_value.execute = AsyncMock(
+                side_effect=RateLimitError("429"),
+            )
+            await classify_content(article_id=1, ctx=mock_ctx)
+
+        mock_skip.assert_not_called()

@@ -1,4 +1,5 @@
 from app.models.article_analysis import ArticleAnalysis, ImpactLevel
+from app.models.article_entity import ArticleEntity, EntityType
 from app.models.auth_ref import auth_user_ref  # noqa: F401
 from app.models.category import Category
 from app.models.fetch_log import FetchLog
@@ -9,7 +10,9 @@ from app.models.watchlist_entry import WatchlistEntry
 
 __all__ = [
     "ArticleAnalysis",
+    "ArticleEntity",
     "Category",
+    "EntityType",
     "FetchLog",
     "ImpactLevel",
     "NewsArticle",

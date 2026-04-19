@@ -15,6 +15,7 @@ from app.dependencies import get_session
 from app.main import app
 from app.models import (  # noqa: F401
     ArticleAnalysis,
+    ArticleEntity,
     Category,
     FetchLog,
     ImpactLevel,

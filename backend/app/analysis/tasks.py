@@ -1,7 +1,7 @@
 """分析タスク — パイプラインの後段。
 
 collection.tasks.fetch_content から呼び出される。
-analyze_article → generate_embedding
+extract_content → classify_content → generate_embedding
 """
 
 from __future__ import annotations
@@ -17,17 +17,19 @@ from app.analysis import (
     NetworkError,
     ProviderError,
     UnclassifiedError,
-    get_analyzer,
     get_embedder,
 )
 from app.analysis import (
     RateLimitError as AnalysisRateLimitError,
 )
+from app.analysis.classification_service import ClassificationService
+from app.analysis.classifier.factory import get_classifier
 from app.analysis.embedding_service import EmbeddingService
+from app.analysis.extraction_service import ExtractionService, mark_article_skipped
+from app.analysis.extractor.factory import get_extractor
 from app.analysis.rate_limiter import (
     RateLimitExceededError as _RateLimitExceededError,
 )
-from app.analysis.service import ArticleAnalysisService, mark_article_skipped
 from app.brokers import broker_analysis, broker_embedding, is_last_attempt
 
 if TYPE_CHECKING:
@@ -78,27 +80,27 @@ def _build_limiters(
 
 
 # ---------------------------------------------------------------------------
-# Analysis
+# Extraction (Stage 1)
 # ---------------------------------------------------------------------------
 
 
 @broker_analysis.task(
-    task_name="analyze_article",
+    task_name="extract_content",
     timeout=180,
     max_retries=2,
     retry_on_error=True,
 )
-async def analyze_article(
+async def extract_content(
     article_id: int,
     ctx: Context = TaskiqDepends(),
 ) -> None:
-    """単一記事に対して AI 分析を実行する。"""
+    """単一記事に対して事実抽出（Stage 1）を実行する。"""
     session_factory = ctx.state.session_factory
-    analyzer = get_analyzer()
+    extractor = get_extractor()
 
     # Rate limit acquire は呼び出し側の責任
     rpm_limiter, rpd_limiter = _build_limiters(
-        analyzer.MODEL, analyzer.RPM, analyzer.RPD
+        extractor.MODEL, extractor.RPM, extractor.RPD
     )
     try:
         if rpd_limiter is not None:
@@ -106,16 +108,16 @@ async def analyze_article(
         if rpm_limiter is not None:
             await rpm_limiter.acquire()
     except _RateLimitExceededError:
-        logger.warning("analyze_article_daily_quota", article_id=article_id)
+        logger.warning("extract_content_daily_quota", article_id=article_id)
         return
 
     # Service 呼び出し（session は内部で管理）
-    svc = ArticleAnalysisService(session_factory)
+    svc = ExtractionService(session_factory)
     try:
-        result = await svc.execute(article_id, analyzer)
+        result = await svc.execute(article_id, extractor)
     except (ConfigurationError, DailyQuotaExhaustedError) as e:
         logger.warning(
-            "analyze_article_no_retry",
+            "extract_content_no_retry",
             article_id=article_id,
             reason=str(e),
         )
@@ -130,7 +132,7 @@ async def analyze_article(
             if isinstance(e, AnalysisRateLimitError):
                 await mark_article_skipped(session_factory, article_id)
             logger.warning(
-                "analyze_article_max_retries",
+                "extract_content_max_retries",
                 article_id=article_id,
                 reason=str(e),
             )
@@ -139,6 +141,69 @@ async def analyze_article(
 
     # 次ステップへチェーン
     if result.status in ("created", "already_exists"):
+        await classify_content.kiq(article_id)
+
+
+# ---------------------------------------------------------------------------
+# Classification (Stage 2)
+# ---------------------------------------------------------------------------
+
+
+@broker_analysis.task(
+    task_name="classify_content",
+    timeout=180,
+    max_retries=2,
+    retry_on_error=True,
+)
+async def classify_content(
+    article_id: int,
+    ctx: Context = TaskiqDepends(),
+) -> None:
+    """単一記事に対して分類（Stage 2）を実行する。"""
+    session_factory = ctx.state.session_factory
+    classifier = get_classifier()
+
+    # Rate limit acquire は呼び出し側の責任
+    rpm_limiter, rpd_limiter = _build_limiters(
+        classifier.MODEL, classifier.RPM, classifier.RPD
+    )
+    try:
+        if rpd_limiter is not None:
+            await rpd_limiter.acquire()
+        if rpm_limiter is not None:
+            await rpm_limiter.acquire()
+    except _RateLimitExceededError:
+        logger.warning("classify_content_daily_quota", article_id=article_id)
+        return
+
+    # Service 呼び出し（session は内部で管理）
+    svc = ClassificationService(session_factory)
+    try:
+        result = await svc.execute(article_id, classifier)
+    except (ConfigurationError, DailyQuotaExhaustedError) as e:
+        logger.warning(
+            "classify_content_no_retry",
+            article_id=article_id,
+            reason=str(e),
+        )
+        return
+    except (
+        AnalysisRateLimitError,
+        ProviderError,
+        NetworkError,
+        UnclassifiedError,
+    ) as e:
+        if is_last_attempt(ctx):
+            logger.warning(
+                "classify_content_max_retries",
+                article_id=article_id,
+                reason=str(e),
+            )
+            return
+        raise
+
+    # 次ステップへチェーン
+    if result.status in ("classified", "already_classified"):
         await generate_embedding.kiq(article_id)
 
 

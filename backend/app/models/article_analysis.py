@@ -19,6 +19,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
 
 if TYPE_CHECKING:
+    from app.models.article_entity import ArticleEntity
     from app.models.news_article import NewsArticle
     from app.models.topic import Topic
     from app.models.watchlist_entry import WatchlistEntry
@@ -44,10 +45,6 @@ class ArticleAnalysis(Base):
             name="ck_article_analyses_summary_not_empty",
         ),
         CheckConstraint(
-            "reasoning != ''",
-            name="ck_article_analyses_reasoning_not_empty",
-        ),
-        CheckConstraint(
             "ai_model != ''",
             name="ck_article_analyses_ai_model_not_empty",
         ),
@@ -59,21 +56,24 @@ class ArticleAnalysis(Base):
     )
     translated_title: Mapped[str] = mapped_column(String(500))
     summary: Mapped[str] = mapped_column(Text())
-    impact_level: Mapped[ImpactLevel] = mapped_column(String(20))
-    reasoning: Mapped[str] = mapped_column(Text())
+    impact_level: Mapped[ImpactLevel | None] = mapped_column(String(20))
+    reasoning: Mapped[str | None] = mapped_column(Text())
     ai_model: Mapped[str] = mapped_column(String(100))
     analyzed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
     embedding: Mapped[list[float] | None] = mapped_column(Vector(768))
     embedding_model: Mapped[str | None] = mapped_column(String(100))
-    topic_id: Mapped[int] = mapped_column(
+    topic_id: Mapped[int | None] = mapped_column(
         ForeignKey("topics.id", ondelete="RESTRICT"), index=True
     )
 
     # リレーション
     news_article: Mapped[NewsArticle] = relationship(back_populates="article_analysis")
-    topic: Mapped[Topic] = relationship()
+    topic: Mapped[Topic | None] = relationship()
     watchlist_entries: Mapped[list[WatchlistEntry]] = relationship(
         back_populates="article_analysis"
+    )
+    entities: Mapped[list[ArticleEntity]] = relationship(
+        back_populates="article_analysis", cascade="all, delete-orphan"
     )
