@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     gemini_api_key: SecretStr = SecretStr("")
     openai_api_key: SecretStr = SecretStr("")
 
+    # Embedding (TEI ローカルサーバー)
+    embedding_base_url: str = "http://embedding:80"
+
     # ニュース取得
     check_interval_minutes: int = 30
     max_articles_per_fetch: int = 50

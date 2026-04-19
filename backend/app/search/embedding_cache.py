@@ -1,7 +1,7 @@
 """検索クエリ embedding の非同期 Redis キャッシュ。
 
 クエリテキストの SHA256 をキーとして embedding ベクトルをキャッシュし、
-繰り返し検索時に Gemini API 呼び出しをスキップする。呼び出し側は事前に
+繰り返し検索時に TEI サーバーへの呼び出しをスキップする。呼び出し側は事前に
 正規化済みのテキストを渡す想定 (``ArticleListParams._normalize_q`` 参照)
 で、軽微なバリエーションは同じキーに集約される。Fire-and-forget で安全:
 Redis 障害時は ``get`` が None を返し ``set`` は黙って no-op となり、
@@ -19,7 +19,7 @@ from app.redis import get_redis
 
 logger = structlog.get_logger(__name__)
 
-_KEY_PREFIX = "embed:query"
+_KEY_PREFIX = "embed:query:ruri-v3-310m"
 _TTL_SECONDS = 7 * 24 * 3600  # 7 日 — 同一入力の embedding は決定的
 
 

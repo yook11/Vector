@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.embedder.base import BaseEmbedder
 from app.analysis.repository import AnalysisRepository
-from app.models.news_article import NewsArticle
+from app.models.article_analysis import ArticleAnalysis
 
 logger = structlog.get_logger(__name__)
 
@@ -22,10 +22,9 @@ class EmbeddingResult:
     status: Literal["created", "already_exists"]
 
 
-def build_embed_text(article: NewsArticle) -> str:
-    """記事を埋め込み対象とする際の正規テキストを組み立てる。"""
-    body = article.original_content or article.original_description or ""
-    return f"{article.original_title}\n{body}"
+def build_embed_text(analysis: ArticleAnalysis) -> str:
+    """分析結果から埋め込み対象の正規テキストを組み立てる。"""
+    return f"{analysis.translated_title}\n{analysis.summary}"
 
 
 class EmbeddingService:
@@ -59,14 +58,8 @@ class EmbeddingService:
             if analysis.embedding is not None:
                 return EmbeddingResult("already_exists")
 
-            # 埋め込み対象テキスト用に記事を取得
-            article = await repo.get_article(article_id)
-            if article is None:
-                msg = f"Article {article_id} not found"
-                raise ValueError(msg)
-
             # 埋め込み生成（エラーはすべて Task 層まで伝播させる）
-            text = build_embed_text(article)
+            text = build_embed_text(analysis)
             vector = await embedder.embed_document(text)
 
             # 永続化

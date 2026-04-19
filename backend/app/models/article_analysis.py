@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
-from pgvector.sqlalchemy import Vector
+from pgvector.sqlalchemy import HALFVEC
 from sqlalchemy import (
     CheckConstraint,
     DateTime,
@@ -62,7 +62,7 @@ class ArticleAnalysis(Base):
     analyzed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
-    embedding: Mapped[list[float] | None] = mapped_column(Vector(768))
+    embedding: Mapped[list[float] | None] = mapped_column(HALFVEC(768))
     embedding_model: Mapped[str | None] = mapped_column(String(100))
     topic_id: Mapped[int | None] = mapped_column(
         ForeignKey("topics.id", ondelete="RESTRICT"), index=True

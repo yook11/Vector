@@ -19,8 +19,8 @@ from app.models.topic import Topic
 def _mock_embedder(vector: list[float] | None = None) -> MagicMock:
     """固定ベクトルを返すモック embedder を作成する。"""
     embedder = MagicMock(spec=BaseEmbedder)
-    embedder.MODEL = "gemini-embedding-001"
-    embedder.model_name = "gemini-embedding-001"
+    embedder.MODEL = "cl-nagoya/ruri-v3-310m"
+    embedder.model_name = "cl-nagoya/ruri-v3-310m"
     embedder.embed_document = AsyncMock(
         return_value=vector or [0.1] * 768,
     )
@@ -43,7 +43,6 @@ async def test_embedding_creates_vector(
         original_url="https://example.com/embed-test",
         news_source_id=sample_source.id,
         published_at=datetime.now(UTC),
-        original_content="Test content for embedding",
     )
     db_session.add(article)
     await db_session.flush()
@@ -66,7 +65,7 @@ async def test_embedding_creates_vector(
     result = await svc.execute(article_id, embedder)
 
     assert result.status == "created"
-    embedder.embed_document.assert_called_once()
+    embedder.embed_document.assert_called_once_with("テスト記事\nテスト要約")
 
     # 永続化された embedding を確認 (Service は独自セッションで commit 済み)
     db_session.expire_all()
@@ -75,8 +74,8 @@ async def test_embedding_creates_vector(
     )
     refreshed = (await db_session.execute(stmt)).scalar_one()
     assert refreshed.embedding is not None
-    assert len(refreshed.embedding) == 768
-    assert refreshed.embedding_model == "gemini-embedding-001"
+    assert len(refreshed.embedding.to_list()) == 768
+    assert refreshed.embedding_model == "cl-nagoya/ruri-v3-310m"
 
 
 async def test_embedding_idempotency(
@@ -107,7 +106,7 @@ async def test_embedding_idempotency(
         reasoning="既存理由",
         ai_model="gemini-2.5-flash-lite",
         embedding=[0.2] * 768,
-        embedding_model="gemini-embedding-001",
+        embedding_model="cl-nagoya/ruri-v3-310m",
         topic_id=topic.id,
     )
     db_session.add(analysis)
