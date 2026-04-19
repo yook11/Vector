@@ -117,6 +117,7 @@ services:
   # --- Embedding inference (TEI) ---
   embedding:
     image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9
+    platform: linux/amd64
     command: --model-id cl-nagoya/ruri-v3-310m --port 80
     volumes:
       - embedding-model:/data
