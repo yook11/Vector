@@ -24,9 +24,9 @@ def _make_ctx(
 def _patch_embedder() -> MagicMock:
     """ClassVar 属性を持つモック embedder を返す。"""
     mock_embedder = MagicMock()
-    mock_embedder.MODEL = "gemini-embedding-001"
-    mock_embedder.RPM = 15
-    mock_embedder.RPD = 1500
+    mock_embedder.MODEL = "cl-nagoya/ruri-v3-310m"
+    mock_embedder.RPM = None
+    mock_embedder.RPD = None
     return mock_embedder
 
 

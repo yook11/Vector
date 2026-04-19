@@ -1,78 +1,69 @@
 """Embedding サービスと類似記事 API エンドポイントのテスト。"""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
+import httpx
 import pytest
-from pydantic import SecretStr
 
 from app.analysis import (
     AnalysisDomainError,
     BaseEmbedder,
     InvalidInputError,
+    NetworkError,
     ProviderError,
-    RateLimitError,
     get_embedder,
 )
+from app.analysis.embedder.ruri import RuriEmbedder
 
 # ---------------------------------------------------------------------------
 # A. Factory and configuration
 # ---------------------------------------------------------------------------
 
 
-def test_get_embedder_returns_gemini() -> None:
-    with patch("app.config.settings") as mock_settings:
-        mock_settings.ai_provider = "gemini"
-        mock_settings.gemini_api_key = SecretStr("test-key")
-        with patch("app.analysis.embedder.gemini.GeminiEmbedder") as MockEmbedder:
-            mock_instance = MagicMock(spec=BaseEmbedder)
-            MockEmbedder.return_value = mock_instance
-            result = get_embedder()
-            MockEmbedder.assert_called_once()
-            assert result is mock_instance
-
-
-def test_get_embedder_raises_on_unknown_provider() -> None:
+def test_get_embedder_returns_ruri() -> None:
     with patch("app.analysis.embedder.factory.settings") as mock_settings:
-        mock_settings.ai_provider = "unknown_provider"
-        with pytest.raises(ValueError, match="Unsupported AI provider"):
-            get_embedder()
+        mock_settings.embedding_base_url = "http://localhost:8080"
+        result = get_embedder()
+        assert isinstance(result, RuriEmbedder)
 
 
 # ---------------------------------------------------------------------------
-# D. gemini_embedder 429 detection
+# D. RuriEmbedder._translate_error
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_gemini_embedder_429_raises_rate_limit_error() -> None:
-    """Gemini API が 429 を返したら GeminiEmbedder は RateLimitError を送出する。"""
-    from google.genai.errors import ClientError
+def test_ruri_connect_error_raises_network_error() -> None:
+    """接続エラーは NetworkError に分類される。"""
+    embedder = RuriEmbedder(base_url="http://localhost:8080")
+    result = embedder._translate_error(httpx.ConnectError("Connection refused"))
+    assert isinstance(result, NetworkError)
 
-    with (
-        patch("app.analysis.embedder.gemini.settings") as mock_settings,
-        patch("app.analysis.embedder.gemini.genai"),
-    ):
-        mock_settings.gemini_api_key = SecretStr("test-key")
 
-        from app.analysis.embedder.gemini import GeminiEmbedder
+def test_ruri_timeout_raises_network_error() -> None:
+    """タイムアウトは NetworkError に分類される。"""
+    embedder = RuriEmbedder(base_url="http://localhost:8080")
+    result = embedder._translate_error(httpx.ReadTimeout("Timed out"))
+    assert isinstance(result, NetworkError)
 
-        embedder = GeminiEmbedder()
 
-        # code=429 の ClientError を作成
-        error_429 = ClientError(
-            429,
-            {
-                "error": {
-                    "message": "RESOURCE_EXHAUSTED",
-                    "status": "RESOURCE_EXHAUSTED",
-                }
-            },
-        )
+def test_ruri_500_raises_provider_error() -> None:
+    """HTTP 500 は ProviderError に分類される。"""
+    embedder = RuriEmbedder(base_url="http://localhost:8080")
+    request = httpx.Request("POST", "http://localhost:8080/embed")
+    response = httpx.Response(500, text="Internal Server Error", request=request)
+    exc = httpx.HTTPStatusError("Server Error", request=request, response=response)
+    result = embedder._translate_error(exc)
+    assert isinstance(result, ProviderError)
 
-        embedder._client.aio.models.embed_content = AsyncMock(side_effect=error_429)
 
-        with pytest.raises(RateLimitError):
-            await embedder.embed_documents(["test text"])
+def test_ruri_400_raises_invalid_input_error() -> None:
+    """HTTP 400 は InvalidInputError に分類される。"""
+    embedder = RuriEmbedder(base_url="http://localhost:8080")
+    request = httpx.Request("POST", "http://localhost:8080/embed")
+    response = httpx.Response(400, text="Bad Request", request=request)
+    exc = httpx.HTTPStatusError("Bad Request", request=request, response=response)
+    result = embedder._translate_error(exc)
+    assert isinstance(result, InvalidInputError)
 
 
 # ---------------------------------------------------------------------------
@@ -100,12 +91,12 @@ class StubEmbedder(BaseEmbedder):
         self, *, side_effects: list[list[list[float]] | Exception] | None = None
     ) -> None:
         self._side_effects = list(side_effects or [])
-        self._calls: list[tuple[str | list[str], str]] = []
+        self._calls: list[tuple[str | list[str]]] = []
 
     async def _call_api(
-        self, contents: str | list[str], task_type: str
+        self, contents: str | list[str]
     ) -> list[list[float]]:
-        self._calls.append((contents, task_type))
+        self._calls.append((contents,))
         if self._side_effects:
             effect = self._side_effects.pop(0)
             if isinstance(effect, Exception):
@@ -152,13 +143,38 @@ async def test_invalid_input_error_no_retry() -> None:
 
 
 @pytest.mark.asyncio
-async def test_task_type_passed_through() -> None:
+async def test_prefix_applied() -> None:
+    """プレフィックスなしの StubEmbedder はテキストをそのまま渡す。"""
     embedder = StubEmbedder()
     await embedder.embed_document("doc")
     await embedder.embed_query("query")
 
-    assert embedder._calls[0] == ("doc", "RETRIEVAL_DOCUMENT")
-    assert embedder._calls[1] == ("query", "RETRIEVAL_QUERY")
+    assert embedder._calls[0] == ("doc",)
+    assert embedder._calls[1] == ("query",)
+
+
+class PrefixedStubEmbedder(StubEmbedder):
+    """プレフィックス付きの StubEmbedder。"""
+
+    MODEL = "stub-model"
+    DIMENSION = 3
+    RPM = None
+    RPD = None
+    DOCUMENT_PREFIX = "P: "
+    QUERY_PREFIX = "Q: "
+
+
+@pytest.mark.asyncio
+async def test_prefix_prepended_to_text() -> None:
+    """プレフィックスが定義されている場合、テキスト先頭に付与される。"""
+    embedder = PrefixedStubEmbedder()
+    await embedder.embed_document("doc")
+    await embedder.embed_query("query")
+    await embedder.embed_documents(["a", "b"])
+
+    assert embedder._calls[0] == ("P: doc",)
+    assert embedder._calls[1] == ("Q: query",)
+    assert embedder._calls[2] == (["P: a", "P: b"],)
 
 
 # ---------------------------------------------------------------------------
@@ -177,7 +193,7 @@ def test_base_embedder_rejects_subclass_without_classvar() -> None:
             # RPD は意図的に未定義
 
             async def _call_api(
-                self, contents: str | list[str], task_type: str
+                self, contents: str | list[str]
             ) -> list[list[float]]:
                 return [[0.0]]
 

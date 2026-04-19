@@ -114,6 +114,21 @@ services:
     networks:
       - internal
 
+  # --- Embedding inference (TEI) ---
+  embedding:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9
+    command: --model-id cl-nagoya/ruri-v3-310m --port 80
+    volumes:
+      - embedding-model:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    networks:
+      - internal
+
   # --- taskiq workers (one per pipeline queue) ---
   worker-metadata:
     <<: *worker-base
@@ -146,6 +161,13 @@ services:
       app.brokers:broker_embedding
       app.analysis.tasks
       --ack-type when_executed
+    depends_on:
+      backend:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      embedding:
+        condition: service_healthy
 
   # --- taskiq scheduler (metadata broker only — fetch_metadata cron) ---
   scheduler:
@@ -165,3 +187,4 @@ networks:
 volumes:
   pgdata:
   redisdata:
+  embedding-model:

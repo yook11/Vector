@@ -20,10 +20,12 @@ class BaseEmbedder(abc.ABC):
     - ``_translate_error``: SDK 例外をエラー階層に分類する
 
     また以下の ClassVar を宣言する必要がある:
-    - ``MODEL``: モデル識別子（例: ``"gemini-embedding-001"``）
+    - ``MODEL``: モデル識別子（例: ``"cl-nagoya/ruri-v3-310m"``）
     - ``DIMENSION``: 出力ベクトルの次元数（例: ``768``）
     - ``RPM``: 1 分あたりリクエスト上限。無制限なら ``None``
     - ``RPD``: 1 日あたりリクエスト上限。無制限なら ``None``
+    - ``DOCUMENT_PREFIX``: 文書埋め込み時のプレフィックス（空なら付与しない）
+    - ``QUERY_PREFIX``: 検索クエリ埋め込み時のプレフィックス
 
     レート制限とリトライは Task 層の責務。
     """
@@ -32,6 +34,8 @@ class BaseEmbedder(abc.ABC):
     DIMENSION: ClassVar[int]
     RPM: ClassVar[int | None]
     RPD: ClassVar[int | None]
+    DOCUMENT_PREFIX: ClassVar[str] = ""
+    QUERY_PREFIX: ClassVar[str] = ""
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
@@ -55,23 +59,25 @@ class BaseEmbedder(abc.ABC):
 
     async def embed_document(self, text: str) -> list[float]:
         """単一のドキュメントテキストを埋め込む。"""
-        vectors = await self._embed_once(text, "RETRIEVAL_DOCUMENT")
+        prefixed = f"{self.DOCUMENT_PREFIX}{text}" if self.DOCUMENT_PREFIX else text
+        vectors = await self._embed_once(prefixed)
         return vectors[0]
 
     async def embed_documents(self, texts: list[str]) -> list[list[float]]:
         """複数のドキュメントテキストを 1 回の API 呼び出しで埋め込む。"""
-        return await self._embed_once(texts, "RETRIEVAL_DOCUMENT")
+        if self.DOCUMENT_PREFIX:
+            texts = [f"{self.DOCUMENT_PREFIX}{t}" for t in texts]
+        return await self._embed_once(texts)
 
     async def embed_query(self, text: str) -> list[float]:
         """検索クエリを埋め込む。"""
-        vectors = await self._embed_once(text, "RETRIEVAL_QUERY")
+        prefixed = f"{self.QUERY_PREFIX}{text}" if self.QUERY_PREFIX else text
+        vectors = await self._embed_once(prefixed)
         return vectors[0]
 
     # -- 単発呼び出し ----------------------------------------------------
 
-    async def _embed_once(
-        self, contents: str | list[str], task_type: str
-    ) -> list[list[float]]:
+    async def _embed_once(self, contents: str | list[str]) -> list[list[float]]:
         """プロバイダー API を 1 回呼び出し、例外をエラー階層に変換する。
 
         リトライとレート制限は Task 層の責務。
@@ -80,10 +86,9 @@ class BaseEmbedder(abc.ABC):
             logger.info(
                 "embed_api_call",
                 model=self.model_name,
-                task_type=task_type,
                 batch_size=len(contents) if isinstance(contents, list) else 1,
             )
-            vectors = await self._call_api(contents, task_type)
+            vectors = await self._call_api(contents)
             logger.info(
                 "embed_api_success",
                 model=self.model_name,
@@ -98,9 +103,7 @@ class BaseEmbedder(abc.ABC):
     # -- 抽象フック（サブクラスが実装） ------------------------------
 
     @abc.abstractmethod
-    async def _call_api(
-        self, contents: str | list[str], task_type: str
-    ) -> list[list[float]]:
+    async def _call_api(self, contents: str | list[str]) -> list[list[float]]:
         """プロバイダー SDK を呼び出し、ベクトルのリストを返す。
 
         単一テキストの場合でも ``list[list[float]]`` を返すこと。
