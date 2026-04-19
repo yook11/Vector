@@ -11,6 +11,7 @@ from sqlmodel import select
 
 from app.domain.topic import TopicName
 from app.models.article_analysis import ArticleAnalysis
+from app.models.article_entity import ArticleEntity
 from app.models.category import Category
 from app.models.news_article import NewsArticle
 from app.models.topic import Topic
@@ -100,6 +101,15 @@ class AnalysisRepository:
         analysis.embedding = vector
         analysis.embedding_model = model
         self._session.add(analysis)
+
+    async def get_entities_by_analysis_id(
+        self, analysis_id: int
+    ) -> list[ArticleEntity]:
+        """Stage 2 の入力用にエンティティを取得する。"""
+        stmt = select(ArticleEntity).where(
+            ArticleEntity.article_analysis_id == analysis_id
+        )
+        return list((await self._session.execute(stmt)).scalars().all())
 
     async def mark_article_skipped(self, article: NewsArticle) -> None:
         """記事を恒久的にスキップ対象としてマークする。"""

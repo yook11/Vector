@@ -133,7 +133,7 @@ class TestFetchSourceMetadata:
                 return_value=mock_fetcher,
             ),
             patch("app.collection.tasks.fetch_content") as mock_fc,
-            patch("app.analysis.tasks.analyze_article") as mock_aa,
+            patch("app.analysis.tasks.extract_content") as mock_aa,
         ):
             mock_fc.kiq = AsyncMock()
             mock_aa.kiq = AsyncMock()
@@ -146,7 +146,7 @@ class TestFetchSourceMetadata:
 
     @pytest.mark.asyncio
     async def test_dispatches_content_ready_to_analysis(self) -> None:
-        """全文 RSS 記事は analyze_article に直接流す。"""
+        """全文 RSS 記事は extract_content に直接流す。"""
         from app.collection.tasks import fetch_source_metadata
 
         mock_session = AsyncMock()
@@ -186,7 +186,7 @@ class TestFetchSourceMetadata:
                 return_value=mock_fetcher,
             ),
             patch("app.collection.tasks.fetch_content") as mock_fc,
-            patch("app.analysis.tasks.analyze_article") as mock_aa,
+            patch("app.analysis.tasks.extract_content") as mock_aa,
         ):
             mock_fc.kiq = AsyncMock()
             mock_aa.kiq = AsyncMock()

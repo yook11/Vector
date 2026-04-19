@@ -46,6 +46,7 @@ class ArticleRepository:
         stmt = (
             select(ArticleAnalysis)
             .join(ArticleAnalysis.news_article)
+            .where(ArticleAnalysis.topic_id.is_not(None))
             .options(*article_eager_options_brief())
         )
 
@@ -87,7 +88,10 @@ class ArticleRepository:
         stmt = (
             select(ArticleAnalysis)
             .join(ArticleAnalysis.news_article)
-            .where(ArticleAnalysis.id == article_id)
+            .where(
+                ArticleAnalysis.id == article_id,
+                ArticleAnalysis.topic_id.is_not(None),
+            )
             .options(*article_eager_options_detail())
         )
         result = await self.session.execute(stmt)
@@ -123,6 +127,7 @@ class ArticleRepository:
             .where(
                 ArticleAnalysis.id != article_id,
                 ArticleAnalysis.embedding.is_not(None),
+                ArticleAnalysis.topic_id.is_not(None),
             )
             .order_by(
                 ArticleAnalysis.embedding.cosine_distance(source_embedding.c.embedding)

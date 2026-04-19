@@ -36,7 +36,7 @@ class TestFetchContent:
 
         with (
             patch("app.collection.tasks.ContentFetchService") as mock_svc_cls,
-            patch("app.analysis.tasks.analyze_article") as mock_analyze,
+            patch("app.analysis.tasks.extract_content") as mock_analyze,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(return_value=mock_result)
             mock_analyze.kiq = AsyncMock()
@@ -54,7 +54,7 @@ class TestFetchContent:
 
         with (
             patch("app.collection.tasks.ContentFetchService") as mock_svc_cls,
-            patch("app.analysis.tasks.analyze_article") as mock_analyze,
+            patch("app.analysis.tasks.extract_content") as mock_analyze,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(return_value=mock_result)
             mock_analyze.kiq = AsyncMock()
@@ -71,7 +71,7 @@ class TestFetchContent:
 
         with (
             patch("app.collection.tasks.ContentFetchService") as mock_svc_cls,
-            patch("app.analysis.tasks.analyze_article") as mock_analyze,
+            patch("app.analysis.tasks.extract_content") as mock_analyze,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(return_value=mock_result)
             mock_analyze.kiq = AsyncMock()

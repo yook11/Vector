@@ -30,8 +30,11 @@ class SemanticSearchRepository:
             .options(*article_eager_options_brief())
         )
 
-        # Embedding 類似度フィルタ
-        stmt = stmt.where(ArticleAnalysis.embedding.is_not(None))
+        # Stage 2 未完了の記事を除外 + Embedding 類似度フィルタ
+        stmt = stmt.where(
+            ArticleAnalysis.topic_id.is_not(None),
+            ArticleAnalysis.embedding.is_not(None),
+        )
         distance_expr: ColumnElement[float] = ArticleAnalysis.embedding.cosine_distance(
             query_embedding
         )

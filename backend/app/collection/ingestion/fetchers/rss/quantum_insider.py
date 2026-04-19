@@ -15,7 +15,7 @@ class QuantumInsiderFetcher(BaseRssFetcher):
 
     content:encoded があれば original_content に格納する。
     これにより fetch_content タスクがスキップされ、
-    直接 analyze_article にチェーンされる（tasks.py の分岐条件による）。
+    直接 extract_content にチェーンされる（tasks.py の分岐条件による）。
     """
 
     def convert_entry(self, entry: dict) -> ArticleCandidate | None:

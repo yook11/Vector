@@ -49,7 +49,7 @@ class EmbeddingService:
         async with self._session_factory() as session:
             repo = AnalysisRepository(session)
 
-            # analysis は事前に生成済みである前提（analyze_article から連鎖される）
+            # analysis は事前に生成済みである前提（classify_content から連鎖される）
             analysis = await repo.find_by_article_id(article_id)
             if analysis is None:
                 msg = f"No analysis found for article {article_id}"

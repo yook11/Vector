@@ -1,7 +1,7 @@
 """収集タスク — パイプラインの前段。
 
 dispatch_sources → fetch_source_metadata → fetch_content
-fetch_content 完了後、analysis.tasks.analyze_article へチェーン。
+fetch_content 完了後、analysis.tasks.extract_content へチェーン。
 """
 
 from __future__ import annotations
@@ -144,11 +144,11 @@ async def fetch_source_metadata(
         await session.commit()
 
     # 新規記事を下流キューへ dispatch
-    from app.analysis.tasks import analyze_article
+    from app.analysis.tasks import extract_content
 
     for article in source_result.new_articles:
         if article.original_content is not None and article.published_at is not None:
-            await analyze_article.kiq(article.id)
+            await extract_content.kiq(article.id)
         else:
             await fetch_content.kiq(article.id)
 
@@ -178,7 +178,7 @@ async def fetch_content(
     ctx: Context = TaskiqDepends(),
 ) -> None:
     """単一記事の本文コンテンツを取得する。"""
-    from app.analysis.tasks import analyze_article
+    from app.analysis.tasks import extract_content
 
     session_factory = ctx.state.session_factory
     html_extractor = ArticleHtmlExtractor()
@@ -195,4 +195,4 @@ async def fetch_content(
 
     # body が取得できた場合のみ analyze にチェーン（body は分析の前提条件）
     if result.status in ("fetched", "already_exists"):
-        await analyze_article.kiq(article_id)
+        await extract_content.kiq(article_id)

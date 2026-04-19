@@ -1,15 +1,16 @@
-"""Gemini AI analyzer — Google GenAI SDK を用いた具象実装。"""
+"""Gemini 実装の Classifier — Stage 2。"""
 
 from __future__ import annotations
 
 import json
+from enum import StrEnum
 
 import structlog
 from google import genai
 from google.genai.errors import APIError, ServerError
 from google.genai.types import GenerateContentConfig
 
-from app.analysis.analyzer.base import AnalysisData, BaseAnalyzer
+from app.analysis.classifier.base import BaseClassifier, ClassificationData
 from app.analysis.errors import (
     AnalysisDomainError,
     ConfigurationError,
@@ -19,82 +20,102 @@ from app.analysis.errors import (
     RateLimitError,
     UnclassifiedError,
 )
+from app.analysis.extractor.base import EntityData
 from app.config import settings
 from app.domain.topic import normalize_topic_name
 from app.models.article_analysis import ImpactLevel
 
 logger = structlog.get_logger(__name__)
 
-VALID_CATEGORIES = frozenset(
-    [
-        "ai",
-        "bio",
-        "computing",
-        "energy",
-        "materials",
-        "network",
-        "robotics",
-        "security",
-        "semiconductor",
-        "space",
-    ]
-)
 
-ANALYSIS_PROMPT_BASE = """\
-You are an expert tech news analyst specializing in emerging technologies \
-with a focus on investment implications.
+class ValidCategory(StrEnum):
+    """LLM 出力の検証に使うカテゴリ slug。"""
 
-Analyze the following English tech news article and respond ONLY with \
-a valid JSON object. Do not include markdown code fences or any text \
-outside the JSON.
+    AI = "ai"
+    BIO = "bio"
+    COMPUTING = "computing"
+    ENERGY = "energy"
+    MATERIALS = "materials"
+    NETWORK = "network"
+    ROBOTICS = "robotics"
+    SECURITY = "security"
+    SEMICONDUCTOR = "semiconductor"
+    SPACE = "space"
 
-Article title: {title}
-Article description: {description}
-{content_section}
-Classify this article following these steps:
+
+CLASSIFICATION_PROMPT = """\
+You are an expert tech news classifier specializing in emerging technologies.
+
+You will be given a structured summary of a tech news article (already \
+translated to Japanese). Based on this summary, classify the article.
+
+You must respond ONLY with a valid JSON object. Do not include markdown \
+code fences or any text outside the JSON.
+
+Title: {title_ja}
+
+Summary:
+{summary_ja}
+
+Entities:
+{entities_section}
 
 Step 1 — Determine the category.
 Classify by the article's primary artifact/output domain, NOT by the \
 technology used. For example, "AI discovers new material" belongs to \
 materials (the output), not ai (the tool).
-Select the single most relevant category from:
-- ai: AI models, services, agents, and AI industry developments
-- robotics: Autonomous robots, self-driving vehicles, drones, eVTOL
-- semiconductor: Chip design, manufacturing, lithography, packaging
-- computing: Quantum, neuromorphic, photonic, DNA computing
-- network: 6G, Open RAN, AI-RAN, SDN, submarine cables, DC interconnect
-- security: PQC, confidential computing, FHE, ZKP, AI security
-- space: Satellites, rockets, space exploration, orbital infrastructure
-- bio: Genome editing, gene therapy, synthetic biology, mRNA, AI drug discovery
-- materials: Novel materials, 3D printing, nanofabrication
-- energy: Fusion, SMR, next-gen batteries, hydrogen, advanced geothermal
+
+Select the single most relevant category:
+- ai: AI models, services, agents, and AI industry developments.
+  Examples: new LLM release, AI startup funding, AI regulation.
+  NOT: AI used as a tool in another domain.
+- robotics: Autonomous robots, self-driving vehicles, drones, eVTOL.
+  Examples: humanoid robot demo, autonomous taxi launch, drone delivery.
+  Boundary: If about chips FOR robots → semiconductor.
+- semiconductor: Chip design, manufacturing, lithography, packaging.
+  Examples: new process node, EUV advancement, chiplet packaging.
+  Boundary: If about quantum chips → computing.
+- computing: Quantum, neuromorphic, photonic, DNA computing.
+  Examples: quantum error correction, neuromorphic chip, optical computing.
+- network: 6G, Open RAN, AI-RAN, SDN, submarine cables, DC interconnect.
+  Examples: 6G trial, Open RAN deployment, subsea cable project.
+- security: PQC, confidential computing, FHE, ZKP, AI security.
+  Examples: post-quantum standard, zero-knowledge proof system.
+  Boundary: If about cybersecurity incident → only if novel defense tech.
+- space: Satellites, rockets, space exploration, orbital infrastructure.
+  Examples: rocket launch, satellite constellation, Mars mission.
+- bio: Genome editing, gene therapy, synthetic biology, mRNA, AI drug discovery.
+  Examples: CRISPR therapy approval, mRNA vaccine, protein structure prediction.
+  Boundary: "AI discovers new drug" → bio (the output is the drug).
+- materials: Novel materials, 3D printing, nanofabrication.
+  Examples: room-temp superconductor, carbon nanotube breakthrough, metamaterials.
+  Boundary: "AI discovers new material" → materials.
+- energy: Fusion, SMR, next-gen batteries, hydrogen, advanced geothermal.
+  Examples: fusion milestone, solid-state battery, green hydrogen plant.
 
 Step 2 — Determine the topic.
-Given the category, assign a concise topic label that captures what \
-this article is specifically about. Rules:
+Given the category, assign a concise topic label. Rules:
 - Lowercase English, 2-4 words, no articles (a/an/the)
 - Use established terminology within the category
 - Be specific: prefer "euv lithography advancement" over "semiconductor news"
 {existing_topics_section}
-Return a JSON object with fields in this exact order:
-{{
-  "category": "one of the 10 category slugs above (e.g. \"semiconductor\")",
-  "topic": "concise topic label, 2-4 words, lowercase English",
-  "title_ja": "Japanese translation of the article title (accurate, concise)",
-  "summary_ja": "3-line summary in Japanese. Line 1: key facts. \
-Line 2: industry impact. Line 3: investment implications. \
-Separate lines with \\n",
-  "impact_level": "one of: low, medium, high, critical — how much this \
-news affects the market",
-  "reasoning": "Brief explanation in Japanese of why you assigned \
-this impact level"
-}}
+Step 3 — Assess impact level (provisional).
+- low: Incremental update, minor product feature
+- medium: Notable development within a specific sector
+- high: Significant industry shift, major product launch, large funding round
+- critical: Paradigm-changing breakthrough, major regulatory change
 
-Rules:
-- All Japanese text must be natural, professional Japanese
-- impact_level MUST be exactly one of: "low", "medium", "high", "critical"
-- If description is empty, analyze based on the title alone
-- When full article content is provided, use it for deeper analysis
+Step 4 — Provide reasoning.
+Brief explanation in Japanese of why you assigned this category, topic, \
+and impact level.
+
+Return a JSON object:
+{{
+  "category": "one of the 10 category slugs",
+  "topic": "concise topic label",
+  "impact_level": "low|medium|high|critical",
+  "reasoning": "Japanese explanation"
+}}
 """
 
 
@@ -116,8 +137,15 @@ def _build_existing_topics_section(
     return "\n".join(lines) + "\n"
 
 
-class GeminiAnalyzer(BaseAnalyzer):
-    """BaseAnalyzer の Gemini API 実装。"""
+def _build_entities_section(entities: list[EntityData]) -> str:
+    """エンティティリストをプロンプト挿入用テキストに整形する。"""
+    if not entities:
+        return "(none)"
+    return ", ".join(f"{e.name} ({e.type.value})" for e in entities)
+
+
+class GeminiClassifier(BaseClassifier):
+    """BaseClassifier の Gemini API 実装。"""
 
     MODEL = "gemini-2.5-flash-lite"
     RPM = 50
@@ -129,27 +157,23 @@ class GeminiAnalyzer(BaseAnalyzer):
             raise ConfigurationError("GEMINI_API_KEY is not configured")
         self._client = genai.Client(api_key=api_key)
 
-    async def analyze(
+    async def classify(
         self,
-        title: str,
-        description: str | None,
-        content: str | None = None,
+        title_ja: str,
+        summary_ja: str,
+        entities: list[EntityData],
         existing_topics_by_category: dict[str, list[str]] | None = None,
-    ) -> AnalysisData:
-        """プロンプトを構築し API を呼び出してレスポンスを解析する。"""
-        content_section = ""
-        if content:
-            truncated = content[: settings.content_max_length]
-            content_section = f"\nArticle full text:\n{truncated}\n"
-
+    ) -> ClassificationData:
+        """Stage 1 の出力を分類する。原文は読まない。"""
+        entities_section = _build_entities_section(entities)
         existing_topics_section = _build_existing_topics_section(
             existing_topics_by_category,
         )
 
-        prompt = ANALYSIS_PROMPT_BASE.format(
-            title=title,
-            description=description or "(no description available)",
-            content_section=content_section,
+        prompt = CLASSIFICATION_PROMPT.format(
+            title_ja=title_ja,
+            summary_ja=summary_ja,
+            entities_section=entities_section,
             existing_topics_section=existing_topics_section,
         )
 
@@ -163,7 +187,7 @@ class GeminiAnalyzer(BaseAnalyzer):
             contents=prompt,
             config=GenerateContentConfig(
                 temperature=0.2,
-                max_output_tokens=2048,
+                max_output_tokens=1024,
             ),
         )
         if response.text is None:
@@ -205,11 +229,10 @@ class GeminiAnalyzer(BaseAnalyzer):
 
         return UnclassifiedError(f"{type(exc).__name__}: {exc}")
 
-    def _parse_response(self, raw_text: str) -> AnalysisData:
+    def _parse_response(self, raw_text: str) -> ClassificationData:
         """Gemini からの JSON レスポンスを解析・検証する。"""
         text = raw_text.strip()
 
-        # Markdown のコードフェンスがあれば除去
         if text.startswith("```"):
             first_newline = text.index("\n")
             text = text[first_newline + 1 :]
@@ -221,39 +244,37 @@ class GeminiAnalyzer(BaseAnalyzer):
             data = json.loads(text)
         except json.JSONDecodeError as e:
             logger.error(
-                "gemini_json_parse_error",
+                "classifier_json_parse_error",
                 raw_text=raw_text[:500],
                 error=str(e),
             )
             raise ProviderError(f"Failed to parse Gemini response as JSON: {e}")
 
         try:
-            # category バリデーション
             category = str(data["category"]).strip().lower()
-            if category not in VALID_CATEGORIES:
+            try:
+                ValidCategory(category)
+            except ValueError:
                 raise ProviderError(
                     f"Invalid category from Gemini: {category!r}. "
-                    f"Expected one of: {sorted(VALID_CATEGORIES)}"
+                    f"Expected one of: {[c.value for c in ValidCategory]}"
                 )
 
-            # topic 正規化
             raw_topic = str(data["topic"])
             topic_name = normalize_topic_name(raw_topic)
 
             impact_level = ImpactLevel(data["impact_level"])
 
-            return AnalysisData(
-                title=str(data["title_ja"]),
-                summary=str(data["summary_ja"]),
-                impact_level=impact_level,
-                reasoning=str(data.get("reasoning", "")),
+            return ClassificationData(
                 category_slug=category,
                 topic_name=topic_name,
+                impact_level=impact_level,
+                reasoning=str(data.get("reasoning", "")),
             )
         except (KeyError, TypeError, ValueError) as e:
             logger.error(
-                "gemini_validation_error",
+                "classifier_validation_error",
                 data=data,
                 error=str(e),
             )
-            raise ProviderError(f"Invalid analysis data from Gemini: {e}")
+            raise ProviderError(f"Invalid classification data from Gemini: {e}")
