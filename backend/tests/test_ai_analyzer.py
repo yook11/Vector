@@ -19,9 +19,13 @@ from app.analysis import (
 from app.analysis.classification_service import ClassificationService
 from app.analysis.classifier.base import BaseClassifier, ClassificationData
 from app.analysis.classifier.gemini import GeminiClassifier
-from app.analysis.extraction_service import ExtractionService
-from app.analysis.extractor.base import BaseExtractor, EntityData, ExtractionData
-from app.analysis.extractor.gemini import GeminiExtractor
+from app.analysis.extraction.extractor.base import (
+    BaseExtractor,
+    EntityData,
+    ExtractionData,
+)
+from app.analysis.extraction.extractor.gemini import GeminiExtractor
+from app.analysis.extraction.service import ExtractionService
 from app.models.article_analysis import ArticleAnalysis, ImpactLevel
 from app.models.article_entity import ArticleEntity, EntityType
 from app.models.category import Category
@@ -69,7 +73,7 @@ def _make_classification_response(
 
 def _create_extractor() -> GeminiExtractor:
     """settings をモックして GeminiExtractor を生成する。"""
-    with patch("app.analysis.extractor.gemini.settings") as mock_gs:
+    with patch("app.analysis.extraction.extractor.gemini.settings") as mock_gs:
         mock_gs.gemini_api_key = SecretStr("test-key")
         return GeminiExtractor()
 
@@ -85,9 +89,9 @@ def _create_classifier() -> GeminiClassifier:
 
 
 def test_get_extractor_returns_gemini_by_default() -> None:
-    with patch("app.analysis.extractor.factory.settings") as mock_settings:
+    with patch("app.analysis.extraction.extractor.factory.settings") as mock_settings:
         mock_settings.ai_provider = "gemini"
-        with patch("app.analysis.extractor.gemini.settings") as mock_gs:
+        with patch("app.analysis.extraction.extractor.gemini.settings") as mock_gs:
             mock_gs.gemini_api_key = SecretStr("test-key")
             extractor = get_extractor()
     assert isinstance(extractor, GeminiExtractor)
@@ -105,7 +109,7 @@ def test_get_classifier_returns_gemini_by_default() -> None:
 
 
 def test_get_extractor_raises_for_unsupported_provider() -> None:
-    with patch("app.analysis.extractor.factory.settings") as mock_settings:
+    with patch("app.analysis.extraction.extractor.factory.settings") as mock_settings:
         mock_settings.ai_provider = "unknown"
         with pytest.raises(ValueError, match="Unsupported AI provider"):
             get_extractor()

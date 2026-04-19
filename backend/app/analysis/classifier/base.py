@@ -9,7 +9,7 @@ from typing import ClassVar
 import structlog
 
 from app.analysis.errors import AnalysisDomainError
-from app.analysis.extractor.base import EntityData
+from app.analysis.extraction.extractor.base import EntityData
 from app.models.article_analysis import ImpactLevel
 
 logger = structlog.get_logger(__name__)

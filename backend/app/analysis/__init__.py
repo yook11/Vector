@@ -23,9 +23,13 @@ from app.analysis.errors import (
     RateLimitError,
     UnclassifiedError,
 )
-from app.analysis.extraction_service import ExtractionResult, ExtractionService
-from app.analysis.extractor.base import BaseExtractor, ExtractionData
-from app.analysis.extractor.factory import get_extractor
+from app.analysis.extraction import (
+    BaseExtractor,
+    ExtractionData,
+    ExtractionResult,
+    ExtractionService,
+    get_extractor,
+)
 
 __all__ = [
     "AnalysisDomainError",

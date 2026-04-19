@@ -9,8 +9,8 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.errors import InvalidInputError
-from app.analysis.extractor.base import BaseExtractor
-from app.analysis.repository import AnalysisRepository
+from app.analysis.extraction.extractor.base import BaseExtractor
+from app.analysis.extraction.repository import ExtractionRepository
 from app.models.article_analysis import ArticleAnalysis
 
 logger = structlog.get_logger(__name__)
@@ -46,12 +46,11 @@ class ExtractionService:
             AnalysisDomainError のサブクラス（InvalidInputError を除く）。
         """
         async with self._session_factory() as session:
-            repo = AnalysisRepository(session)
+            repo = ExtractionRepository(session)
 
             # 冪等性チェック
-            existing = await repo.find_by_article_id(article_id)
-            if existing is not None:
-                return ExtractionResult("already_exists", analysis_id=existing.id)
+            if await repo.is_already_analyzed(article_id):
+                return ExtractionResult("already_exists")
 
             # 記事を取得
             article = await repo.get_article(article_id)
@@ -101,7 +100,7 @@ async def mark_article_skipped(
 ) -> None:
     """記事を恒久的にスキップ対象としてマークする（Task の最終試行時に使用）。"""
     async with session_factory() as session:
-        repo = AnalysisRepository(session)
+        repo = ExtractionRepository(session)
         article = await repo.get_article(article_id)
         if article is not None:
             await repo.mark_article_skipped(article)
