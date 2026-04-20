@@ -1,11 +1,10 @@
 """AI Extractor / Classifier / Service のテスト。"""
 
-import json
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
@@ -17,15 +16,15 @@ from app.analysis import (
     get_extractor,
 )
 from app.analysis.classification_service import ClassificationService
-from app.analysis.classifier.base import BaseClassifier, ClassificationData
+from app.analysis.classifier.base import BaseClassifier
 from app.analysis.classifier.gemini import GeminiClassifier
-from app.analysis.extraction.extractor.base import (
-    BaseExtractor,
-    EntityData,
-    ExtractionData,
-)
+from app.analysis.classifier.schema import ClassificationResponse, ValidCategory
+from app.analysis.extraction.extractor.base import BaseExtractor
 from app.analysis.extraction.extractor.gemini import GeminiExtractor
+from app.analysis.extraction.schema import EntityResponse, ExtractionResponse
 from app.analysis.extraction.service import ExtractionService
+from app.domain.entity import EntityName, EntityType
+from app.domain.topic import TopicName
 from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis, ImpactLevel
 from app.models.article_entity import ArticleEntity
@@ -40,35 +39,35 @@ from app.models.topic import Topic
 def _make_extraction_response(
     title_ja: str = "量子コンピューティングの新たなブレイクスルー",
     summary_ja: str = "MITが新手法を発表。量子エラー訂正の分野で大きな進展。",
-    entities: list[dict] | None = None,
-) -> str:
-    """GeminiExtractor のレスポンスを模した JSON 文字列を作成する。"""
+    entities: list[tuple[str, str]] | None = None,
+) -> ExtractionResponse:
+    """ExtractionResponse を生成するヘルパー。"""
     if entities is None:
         entities = [
-            {"name": "MIT", "type": "company"},
-            {"name": "Quantum LDPC", "type": "technology"},
+            ("MIT", "company"),
+            ("Quantum LDPC", "technology"),
         ]
-    return json.dumps(
-        {"title_ja": title_ja, "summary_ja": summary_ja, "entities": entities},
-        ensure_ascii=False,
+    return ExtractionResponse(
+        title_ja=title_ja,
+        summary_ja=summary_ja,
+        entities=[
+            EntityResponse(name=EntityName(n), type=EntityType(t)) for n, t in entities
+        ],
     )
 
 
 def _make_classification_response(
-    category: str = "computing",
+    category: ValidCategory = ValidCategory.COMPUTING,
     topic: str = "quantum computing breakthrough",
-    impact_level: str = "high",
+    impact_level: ImpactLevel = ImpactLevel.HIGH,
     reasoning: str = "技術的に重要な進展",
-) -> str:
-    """GeminiClassifier のレスポンスを模した JSON 文字列を作成する。"""
-    return json.dumps(
-        {
-            "category": category,
-            "topic": topic,
-            "impact_level": impact_level,
-            "reasoning": reasoning,
-        },
-        ensure_ascii=False,
+) -> ClassificationResponse:
+    """ClassificationResponse を生成するヘルパー。"""
+    return ClassificationResponse(
+        category=category,
+        topic=TopicName(topic),
+        impact_level=impact_level,
+        reasoning=reasoning,
     )
 
 
@@ -151,91 +150,110 @@ def test_base_classifier_rejects_subclass_without_classvar() -> None:
             def _translate_error(self, exc): ...
 
 
-# --- B. GeminiExtractor._parse_response tests ---
+# --- B. ExtractionResponse schema tests ---
 
 
-def test_extractor_parse_valid_json() -> None:
-    extractor = _create_extractor()
-    raw = _make_extraction_response()
-    result = extractor._parse_response(raw)
-
-    assert isinstance(result, ExtractionData)
-    assert result.title_ja == "量子コンピューティングの新たなブレイクスルー"
-    assert len(result.entities) == 2
-    assert result.entities[0].type == "company"
-
-
-def test_extractor_parse_strips_markdown_fences() -> None:
-    extractor = _create_extractor()
-    raw = "```json\n" + _make_extraction_response() + "\n```"
-    result = extractor._parse_response(raw)
-    assert result.title_ja == "量子コンピューティングの新たなブレイクスルー"
-
-
-def test_extractor_parse_invalid_json_raises_error() -> None:
-    extractor = _create_extractor()
-    with pytest.raises(ProviderError, match="Failed to parse"):
-        extractor._parse_response("this is not json")
-
-
-def test_extractor_parse_deduplicates_entities() -> None:
-    extractor = _create_extractor()
-    raw = _make_extraction_response(
+def test_extraction_response_preserves_entity_name_case() -> None:
+    resp = ExtractionResponse(
+        title_ja="t",
+        summary_ja="s",
         entities=[
-            {"name": "TSMC", "type": "company"},
-            {"name": "tsmc", "type": "company"},
-        ]
+            EntityResponse(name=EntityName("NVIDIA"), type=EntityType("Company")),
+        ],
     )
-    result = extractor._parse_response(raw)
-    assert len(result.entities) == 1
+    assert resp.entities[0].name.root == "NVIDIA"
+    assert resp.entities[0].type.root == "company"
 
 
-def test_extractor_parse_accepts_any_entity_type() -> None:
-    extractor = _create_extractor()
-    raw = _make_extraction_response(
+def test_extraction_response_deduplicates_entities_case_insensitive() -> None:
+    resp = ExtractionResponse(
+        title_ja="t",
+        summary_ja="s",
         entities=[
-            {"name": "MIT", "type": "company"},
-            {"name": "Biden", "type": "person"},
-        ]
+            EntityResponse(name=EntityName("TSMC"), type=EntityType("company")),
+            EntityResponse(name=EntityName("tsmc"), type=EntityType("COMPANY")),
+        ],
     )
-    result = extractor._parse_response(raw)
-    assert len(result.entities) == 2
-    assert result.entities[1].type == "person"
+    assert len(resp.entities) == 1
+    assert resp.entities[0].name.root == "TSMC"
 
 
-# --- C. GeminiClassifier._parse_response tests ---
+def test_extraction_response_accepts_any_entity_type() -> None:
+    resp = ExtractionResponse(
+        title_ja="t",
+        summary_ja="s",
+        entities=[
+            EntityResponse(name=EntityName("MIT"), type=EntityType("company")),
+            EntityResponse(name=EntityName("Biden"), type=EntityType("person")),
+        ],
+    )
+    assert len(resp.entities) == 2
+    assert resp.entities[1].type.root == "person"
 
 
-def test_classifier_parse_valid_json() -> None:
-    classifier = _create_classifier()
-    raw = _make_classification_response()
-    result = classifier._parse_response(raw)
-
-    assert isinstance(result, ClassificationData)
-    assert result.category_slug == "computing"
-    assert result.topic_name == "quantum computing breakthrough"
-    assert result.impact_level == ImpactLevel.HIGH
+def test_extraction_response_rejects_empty_title() -> None:
+    with pytest.raises(ValidationError):
+        ExtractionResponse(
+            title_ja="",
+            summary_ja="s",
+            entities=[],
+        )
 
 
-def test_classifier_parse_normalizes_topic() -> None:
-    classifier = _create_classifier()
-    raw = _make_classification_response(topic="Quantum Computing Breakthrough")
-    result = classifier._parse_response(raw)
-    assert result.topic_name == "quantum computing breakthrough"
+def test_entity_name_rejects_empty() -> None:
+    with pytest.raises(ValidationError):
+        EntityName("  ")
 
 
-def test_classifier_parse_rejects_invalid_category() -> None:
-    classifier = _create_classifier()
-    raw = _make_classification_response(category="invalid_category")
-    with pytest.raises(ProviderError, match="Invalid category"):
-        classifier._parse_response(raw)
+def test_entity_type_normalizes_lowercase() -> None:
+    etype = EntityType("COMPANY")
+    assert etype.root == "company"
 
 
-def test_classifier_parse_rejects_invalid_impact_level() -> None:
-    classifier = _create_classifier()
-    raw = _make_classification_response(impact_level="extreme")
-    with pytest.raises(ProviderError, match="Invalid"):
-        classifier._parse_response(raw)
+# --- C. ClassificationResponse schema tests ---
+
+
+def test_classification_response_valid() -> None:
+    resp = ClassificationResponse(
+        category=ValidCategory.COMPUTING,
+        topic=TopicName("quantum computing breakthrough"),
+        impact_level=ImpactLevel.HIGH,
+        reasoning="理由",
+    )
+    assert resp.category == ValidCategory.COMPUTING
+    assert resp.topic.root == "quantum computing breakthrough"
+    assert resp.impact_level == ImpactLevel.HIGH
+
+
+def test_classification_response_normalizes_topic() -> None:
+    resp = ClassificationResponse(
+        category=ValidCategory.COMPUTING,
+        topic=TopicName("Quantum Computing Breakthrough"),
+        impact_level=ImpactLevel.HIGH,
+    )
+    assert resp.topic.root == "quantum computing breakthrough"
+
+
+def test_classification_response_rejects_invalid_category() -> None:
+    with pytest.raises(ValidationError):
+        ClassificationResponse.model_validate(
+            {
+                "category": "invalid_category",
+                "topic": "foo bar",
+                "impact_level": "high",
+            }
+        )
+
+
+def test_classification_response_rejects_invalid_impact_level() -> None:
+    with pytest.raises(ValidationError):
+        ClassificationResponse.model_validate(
+            {
+                "category": "computing",
+                "topic": "foo bar",
+                "impact_level": "extreme",
+            }
+        )
 
 
 # --- D. BaseExtractor._call_once tests ---
@@ -243,10 +261,11 @@ def test_classifier_parse_rejects_invalid_impact_level() -> None:
 
 async def test_extractor_call_once_succeeds() -> None:
     extractor = _create_extractor()
-    extractor._call_api = AsyncMock(return_value=_make_extraction_response())
+    expected = _make_extraction_response()
+    extractor._call_api = AsyncMock(return_value=expected)
 
     result = await extractor._call_once("test prompt")
-    assert result == _make_extraction_response()
+    assert result is expected
 
 
 async def test_extractor_call_once_translates_sdk_error() -> None:
@@ -270,10 +289,11 @@ async def test_extractor_call_once_passes_through_domain_error() -> None:
 
 async def test_classifier_call_once_succeeds() -> None:
     classifier = _create_classifier()
-    classifier._call_api = AsyncMock(return_value=_make_classification_response())
+    expected = _make_classification_response()
+    classifier._call_api = AsyncMock(return_value=expected)
 
     result = await classifier._call_once("test prompt")
-    assert result == _make_classification_response()
+    assert result is expected
 
 
 async def test_classifier_call_once_translates_sdk_error() -> None:
@@ -290,9 +310,13 @@ async def test_classifier_call_once_translates_sdk_error() -> None:
 def test_article_analysis_from_extraction_sanitizes_html() -> None:
     analysis = ArticleAnalysis.from_extraction(
         article_id=1,
-        title_ja="<b>タイトル</b>",
-        summary_ja="<p>要約</p>",
-        entities=[("MIT", "company")],
+        response=ExtractionResponse(
+            title_ja="<b>タイトル</b>",
+            summary_ja="<p>要約</p>",
+            entities=[
+                EntityResponse(name=EntityName("MIT"), type=EntityType("company"))
+            ],
+        ),
         model_name="test-model",
     )
     assert analysis.translated_title == "タイトル"
@@ -304,12 +328,16 @@ def test_article_analysis_from_extraction_sanitizes_html() -> None:
 def test_article_analysis_from_extraction_builds_entities() -> None:
     analysis = ArticleAnalysis.from_extraction(
         article_id=1,
-        title_ja="タイトル",
-        summary_ja="要約",
-        entities=[
-            ("MIT", "company"),
-            ("CRISPR", "technology"),
-        ],
+        response=ExtractionResponse(
+            title_ja="タイトル",
+            summary_ja="要約",
+            entities=[
+                EntityResponse(name=EntityName("MIT"), type=EntityType("company")),
+                EntityResponse(
+                    name=EntityName("CRISPR"), type=EntityType("technology")
+                ),
+            ],
+        ),
         model_name="test-model",
     )
     assert len(analysis.entities) == 2
@@ -322,9 +350,11 @@ def test_article_analysis_from_extraction_builds_entities() -> None:
 def test_article_analysis_from_extraction_empty_string_guard() -> None:
     analysis = ArticleAnalysis.from_extraction(
         article_id=1,
-        title_ja="<br/>",
-        summary_ja="<br/>",
-        entities=[],
+        response=ExtractionResponse(
+            title_ja="<br/>",
+            summary_ja="<br/>",
+            entities=[],
+        ),
         model_name="test-model",
     )
     assert analysis.translated_title == ""
@@ -361,13 +391,10 @@ async def test_extraction_creates_analysis_and_entities(
     mock_extractor.MODEL = "gemini-2.5-flash-lite"
     mock_extractor.model_name = "gemini-2.5-flash-lite"
     mock_extractor.extract = AsyncMock(
-        return_value=ExtractionData(
+        return_value=_make_extraction_response(
             title_ja="量子ブレイクスルー",
             summary_ja="要約テスト",
-            entities=[
-                EntityData(name="MIT", type="company"),
-                EntityData(name="CRISPR", type="technology"),
-            ],
+            entities=[("MIT", "company"), ("CRISPR", "technology")],
         )
     )
 
@@ -529,9 +556,9 @@ async def test_classification_creates_topic(
 
     mock_classifier = MagicMock(spec=BaseClassifier)
     mock_classifier.classify = AsyncMock(
-        return_value=ClassificationData(
-            category_slug="computing",
-            topic_name="quantum computing breakthrough",
+        return_value=_make_classification_response(
+            category=ValidCategory.COMPUTING,
+            topic="quantum computing breakthrough",
             impact_level=ImpactLevel.HIGH,
             reasoning="理由テスト",
         )

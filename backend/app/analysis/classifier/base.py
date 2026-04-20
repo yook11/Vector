@@ -3,26 +3,15 @@
 from __future__ import annotations
 
 import abc
-from dataclasses import dataclass
 from typing import ClassVar
 
 import structlog
 
+from app.analysis.classifier.schema import ClassificationResponse
 from app.analysis.errors import AnalysisDomainError
-from app.analysis.extraction.extractor.base import EntityData
-from app.models.article_analysis import ImpactLevel
+from app.analysis.extraction.schema import EntityResponse
 
 logger = structlog.get_logger(__name__)
-
-
-@dataclass
-class ClassificationData:
-    """DB 永続化前のパース済み分類結果。"""
-
-    category_slug: str
-    topic_name: str
-    impact_level: ImpactLevel
-    reasoning: str
 
 
 class BaseClassifier(abc.ABC):
@@ -65,9 +54,9 @@ class BaseClassifier(abc.ABC):
         self,
         title_ja: str,
         summary_ja: str,
-        entities: list[EntityData],
+        entities: list[EntityResponse],
         existing_topics_by_category: dict[str, list[str]] | None = None,
-    ) -> ClassificationData:
+    ) -> ClassificationResponse:
         """Stage 1 の出力を分類し、カテゴリ・トピック・インパクトを返す。
 
         Args:
@@ -77,7 +66,7 @@ class BaseClassifier(abc.ABC):
             existing_topics_by_category: カテゴリ別の既存トピック名リスト。
 
         Returns:
-            カテゴリ・トピック・インパクト・根拠を含む ClassificationData。
+            カテゴリ・トピック・インパクト・根拠を含む ClassificationResponse。
 
         Raises:
             AnalysisDomainError: 分類に失敗した場合。
@@ -85,8 +74,8 @@ class BaseClassifier(abc.ABC):
         ...
 
     @abc.abstractmethod
-    async def _call_api(self, prompt: str) -> str:
-        """プロバイダー SDK を呼び出し、生のテキストレスポンスを返す。"""
+    async def _call_api(self, prompt: str) -> ClassificationResponse:
+        """プロバイダー SDK を呼び出し、構造化レスポンスを返す。"""
         ...
 
     @abc.abstractmethod
@@ -96,7 +85,7 @@ class BaseClassifier(abc.ABC):
 
     # -- 単発呼び出し --
 
-    async def _call_once(self, prompt: str) -> str:
+    async def _call_once(self, prompt: str) -> ClassificationResponse:
         """プロバイダー API を 1 回呼び出し、例外をエラー階層に変換する。"""
         try:
             logger.info("classifier_api_call", model=self.model_name)

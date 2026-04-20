@@ -10,8 +10,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.classifier.base import BaseClassifier
 from app.analysis.errors import ProviderError
-from app.analysis.extraction.extractor.base import EntityData
+from app.analysis.extraction.schema import EntityResponse
 from app.analysis.repository import AnalysisRepository
+from app.domain.entity import EntityName, EntityType
 from app.utils.sanitize import strip_html_tags
 
 logger = structlog.get_logger(__name__)
@@ -62,41 +63,44 @@ class ClassificationService:
 
             # DB からエンティティ読み出し
             db_entities = await repo.get_entities_by_analysis_id(analysis.id)
-            entities = [EntityData(name=e.name, type=e.type) for e in db_entities]
+            entities = [
+                EntityResponse(name=EntityName(e.name), type=EntityType(e.type))
+                for e in db_entities
+            ]
 
             # 既存トピック取得（プロンプトガイド用）
             existing_topics = await repo.get_existing_topics_by_category()
 
             # AI による分類
-            data = await classifier.classify(
+            response = await classifier.classify(
                 title_ja=analysis.translated_title,
                 summary_ja=analysis.summary,
                 entities=entities,
                 existing_topics_by_category=existing_topics,
             )
 
-            # カテゴリ ID を取得
-            category_id = await repo.get_category_id_by_slug(data.category_slug)
+            # カテゴリ ID を取得（ValidCategory.value で slug 文字列取得）
+            category_id = await repo.get_category_id_by_slug(response.category.value)
             if category_id is None:
                 raise ProviderError(
-                    f"AI returned unknown category slug: {data.category_slug!r}"
+                    f"AI returned unknown category slug: {response.category.value!r}"
                 )
 
             # Topic の find-or-create
-            topic_id = await repo.find_or_create_topic(data.topic_name, category_id)
+            topic_id = await repo.find_or_create_topic(response.topic.root, category_id)
 
             # ArticleAnalysis 更新
             analysis.topic_id = topic_id
-            analysis.impact_level = data.impact_level
-            analysis.reasoning = strip_html_tags(data.reasoning) or ""
+            analysis.impact_level = response.impact_level
+            analysis.reasoning = strip_html_tags(response.reasoning) or ""
 
             await session.commit()
 
             logger.info(
                 "classification_completed",
                 article_id=article_id,
-                impact_level=data.impact_level,
-                category=data.category_slug,
-                topic=data.topic_name,
+                impact_level=response.impact_level,
+                category=response.category.value,
+                topic=response.topic.root,
             )
             return ClassificationResult("classified")

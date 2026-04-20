@@ -74,9 +74,7 @@ class ExtractionService:
             # ArticleAnalysis 作成（cascade で entities も永続化）
             analysis = ArticleAnalysis.from_extraction(
                 article_id=article.id,
-                title_ja=data.title_ja,
-                summary_ja=data.summary_ja,
-                entities=[(e.name, e.type) for e in data.entities],
+                response=data,
                 model_name=extractor.model_name,
             )
             await repo.save_analysis(analysis)
