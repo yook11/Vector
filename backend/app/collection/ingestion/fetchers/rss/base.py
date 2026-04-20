@@ -5,8 +5,6 @@
 """
 
 import asyncio
-from calendar import timegm
-from datetime import UTC, datetime
 
 import feedparser
 import httpx
@@ -19,29 +17,12 @@ from app.collection.ingestion.persister import (
     ArticleCandidate,
     PersistResult,
     persist_new_articles,
-    to_safe_url,
 )
 from app.models.news_source import NewsSource
-from app.utils.sanitize import strip_html_tags
 
 HTTP_TIMEOUT = 30.0
 
 logger = structlog.get_logger(__name__)
-
-
-# --- ユーティリティ関数（サブクラスからも利用可能） ---
-
-
-def parse_published_date(entry: dict) -> datetime | None:
-    """feedparser エントリから公開日時を抽出する。"""
-    time_struct = entry.get("published_parsed") or entry.get("updated_parsed")
-    if time_struct is None:
-        return None
-    try:
-        timestamp = timegm(time_struct)
-        return datetime.fromtimestamp(timestamp, tz=UTC)
-    except (ValueError, OverflowError, OSError):
-        return None
 
 
 def extract_guid(entry: dict) -> str | None:
@@ -59,20 +40,6 @@ def extract_guid(entry: dict) -> str | None:
     return None
 
 
-def extract_full_content(entry: dict) -> str | None:
-    """RSS エントリに含まれる全文コンテンツを抽出する（存在すれば）。
-
-    feedparser は content:encoded を entry.content に正規化する。
-    """
-    content_list = entry.get("content")
-    if content_list and isinstance(content_list, list):
-        for c in content_list:
-            value = c.get("value", "")
-            if value:
-                return value
-    return None
-
-
 class BaseRssFetcher:
     """RSS フェッチャーの基底クラス。
 
@@ -87,20 +54,8 @@ class BaseRssFetcher:
         ソース固有のロジックが必要な場合はオーバーライドする。
         """
         raw_url = entry.get("link", "") or extract_guid(entry) or ""
-        if not raw_url:
-            return None
-
-        safe_url = to_safe_url(raw_url)
-        if safe_url is None:
-            return None
-
-        return ArticleCandidate(
-            url=safe_url,
-            title=strip_html_tags(entry.get("title", ""))[:500],
-            description=strip_html_tags(
-                entry.get("summary") or entry.get("description")
-            ),
-            published_at=parse_published_date(entry),
+        return ArticleCandidate.from_external(
+            raw_url=raw_url, raw_title=entry.get("title", "")
         )
 
     async def fetch(
