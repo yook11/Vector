@@ -28,7 +28,7 @@ from app.analysis.extraction.extractor.gemini import GeminiExtractor
 from app.analysis.extraction.service import ExtractionService
 from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis, ImpactLevel
-from app.models.article_entity import ArticleEntity, EntityType
+from app.models.article_entity import ArticleEntity
 from app.models.category import Category
 from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
@@ -162,7 +162,7 @@ def test_extractor_parse_valid_json() -> None:
     assert isinstance(result, ExtractionData)
     assert result.title_ja == "量子コンピューティングの新たなブレイクスルー"
     assert len(result.entities) == 2
-    assert result.entities[0].type == EntityType.COMPANY
+    assert result.entities[0].type == "company"
 
 
 def test_extractor_parse_strips_markdown_fences() -> None:
@@ -190,16 +190,17 @@ def test_extractor_parse_deduplicates_entities() -> None:
     assert len(result.entities) == 1
 
 
-def test_extractor_parse_skips_invalid_entity_type() -> None:
+def test_extractor_parse_accepts_any_entity_type() -> None:
     extractor = _create_extractor()
     raw = _make_extraction_response(
         entities=[
             {"name": "MIT", "type": "company"},
-            {"name": "foo", "type": "invalid_type"},
+            {"name": "Biden", "type": "person"},
         ]
     )
     result = extractor._parse_response(raw)
-    assert len(result.entities) == 1
+    assert len(result.entities) == 2
+    assert result.entities[1].type == "person"
 
 
 # --- C. GeminiClassifier._parse_response tests ---
@@ -291,7 +292,7 @@ def test_article_analysis_from_extraction_sanitizes_html() -> None:
         article_id=1,
         title_ja="<b>タイトル</b>",
         summary_ja="<p>要約</p>",
-        entities=[("MIT", EntityType.COMPANY)],
+        entities=[("MIT", "company")],
         model_name="test-model",
     )
     assert analysis.translated_title == "タイトル"
@@ -306,16 +307,16 @@ def test_article_analysis_from_extraction_builds_entities() -> None:
         title_ja="タイトル",
         summary_ja="要約",
         entities=[
-            ("MIT", EntityType.COMPANY),
-            ("CRISPR", EntityType.TECHNOLOGY),
+            ("MIT", "company"),
+            ("CRISPR", "technology"),
         ],
         model_name="test-model",
     )
     assert len(analysis.entities) == 2
     assert analysis.entities[0].name == "MIT"
-    assert analysis.entities[0].type == EntityType.COMPANY
+    assert analysis.entities[0].type == "company"
     assert analysis.entities[1].name == "CRISPR"
-    assert analysis.entities[1].type == EntityType.TECHNOLOGY
+    assert analysis.entities[1].type == "technology"
 
 
 def test_article_analysis_from_extraction_empty_string_guard() -> None:
@@ -364,8 +365,8 @@ async def test_extraction_creates_analysis_and_entities(
             title_ja="量子ブレイクスルー",
             summary_ja="要約テスト",
             entities=[
-                EntityData(name="MIT", type=EntityType.COMPANY),
-                EntityData(name="CRISPR", type=EntityType.TECHNOLOGY),
+                EntityData(name="MIT", type="company"),
+                EntityData(name="CRISPR", type="technology"),
             ],
         )
     )
@@ -521,7 +522,7 @@ async def test_classification_creates_topic(
     entity = ArticleEntity(
         article_analysis_id=analysis.id,
         name="MIT",
-        type=EntityType.COMPANY,
+        type="company",
     )
     db_session.add(entity)
     await db_session.commit()
