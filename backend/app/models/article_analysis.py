@@ -16,7 +16,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.article_entity import ArticleEntity, EntityType
+from app.models.article_entity import ArticleEntity
 from app.models.base import Base
 from app.utils.sanitize import strip_html_tags
 
@@ -86,7 +86,7 @@ class ArticleAnalysis(Base):
         article_id: int,
         title_ja: str,
         summary_ja: str,
-        entities: list[tuple[str, EntityType]],
+        entities: list[tuple[str, str]],
         model_name: str,
     ) -> ArticleAnalysis:
         """Stage 1 の抽出結果から分析オブジェクトを構築する。

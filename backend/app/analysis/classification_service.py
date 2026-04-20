@@ -12,7 +12,6 @@ from app.analysis.classifier.base import BaseClassifier
 from app.analysis.errors import ProviderError
 from app.analysis.extraction.extractor.base import EntityData
 from app.analysis.repository import AnalysisRepository
-from app.models.article_entity import EntityType
 from app.utils.sanitize import strip_html_tags
 
 logger = structlog.get_logger(__name__)
@@ -63,9 +62,7 @@ class ClassificationService:
 
             # DB からエンティティ読み出し
             db_entities = await repo.get_entities_by_analysis_id(analysis.id)
-            entities = [
-                EntityData(name=e.name, type=EntityType(e.type)) for e in db_entities
-            ]
+            entities = [EntityData(name=e.name, type=e.type) for e in db_entities]
 
             # 既存トピック取得（プロンプトガイド用）
             existing_topics = await repo.get_existing_topics_by_category()

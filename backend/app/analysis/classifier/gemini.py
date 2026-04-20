@@ -141,7 +141,7 @@ def _build_entities_section(entities: list[EntityData]) -> str:
     """エンティティリストをプロンプト挿入用テキストに整形する。"""
     if not entities:
         return "(none)"
-    return ", ".join(f"{e.name} ({e.type.value})" for e in entities)
+    return ", ".join(f"{e.name} ({e.type})" for e in entities)
 
 
 class GeminiClassifier(BaseClassifier):

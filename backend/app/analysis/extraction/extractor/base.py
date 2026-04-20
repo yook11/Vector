@@ -9,7 +9,6 @@ from typing import ClassVar
 import structlog
 
 from app.analysis.errors import AnalysisDomainError
-from app.models.article_entity import EntityType
 
 logger = structlog.get_logger(__name__)
 
@@ -19,7 +18,7 @@ class EntityData:
     """抽出されたエンティティ 1 件。"""
 
     name: str
-    type: EntityType
+    type: str
 
 
 @dataclass

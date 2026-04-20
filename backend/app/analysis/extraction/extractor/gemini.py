@@ -24,11 +24,8 @@ from app.analysis.extraction.extractor.base import (
     ExtractionData,
 )
 from app.config import settings
-from app.models.article_entity import EntityType
 
 logger = structlog.get_logger(__name__)
-
-_VALID_ENTITY_TYPES = frozenset(t.value for t in EntityType)
 
 EXTRACTION_PROMPT = """\
 You are a tech news content extractor. Your job is to extract factual \
@@ -59,11 +56,9 @@ Extract the following:
    Reconstruct the facts written in the article accurately in Japanese.
 
 3. entities — A structured list of named entities mentioned in the article.
-   Entity types:
-   - "company": Companies and organizations (e.g. Anthropic, TSMC, NASA)
-   - "product": Products and services (e.g. Claude 4, GPT-5, Falcon 9)
-   - "technology": Technologies and frameworks \
-(e.g. constitutional AI, EUV lithography, CRISPR)
+   Classify each entity with a short type label \
+(e.g. "company", "product", "technology", "person", "organization", \
+"country", "regulation", "vulnerability", etc.).
    Rules:
    - Only extract entities explicitly mentioned in the article
    - Do NOT include generic terms ("AI", "semiconductor", etc.)
@@ -74,7 +69,7 @@ Return a JSON object:
   "title_ja": "Japanese title",
   "summary_ja": "Factual Japanese summary",
   "entities": [
-    {{"name": "EntityName", "type": "company|product|technology"}}
+    {{"name": "EntityName", "type": "type_label"}}
   ]
 }}
 """
@@ -198,12 +193,7 @@ class GeminiExtractor(BaseExtractor):
                 name = str(raw["name"]).strip()
                 entity_type = str(raw["type"]).strip().lower()
 
-                if entity_type not in _VALID_ENTITY_TYPES:
-                    logger.warning(
-                        "extractor_invalid_entity_type",
-                        name=name,
-                        type=entity_type,
-                    )
+                if not name or not entity_type:
                     continue
 
                 key = (name.lower(), entity_type)
@@ -211,7 +201,7 @@ class GeminiExtractor(BaseExtractor):
                     continue
                 seen.add(key)
 
-                entities.append(EntityData(name=name, type=EntityType(entity_type)))
+                entities.append(EntityData(name=name, type=entity_type))
 
             return ExtractionData(
                 title_ja=title_ja,
