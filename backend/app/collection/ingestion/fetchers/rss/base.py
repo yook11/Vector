@@ -17,7 +17,7 @@ from app.collection.errors import PermanentFetchError, TemporaryFetchError
 from app.collection.ingestion.fetchers.http_cache import get_http_cache, set_http_cache
 from app.collection.ingestion.persister import (
     ArticleCandidate,
-    SourceFetchResult,
+    PersistResult,
     persist_new_articles,
     to_safe_url,
 )
@@ -108,7 +108,7 @@ class BaseRssFetcher:
         client: httpx.AsyncClient,
         session: AsyncSession,
         source: NewsSource,
-    ) -> SourceFetchResult:
+    ) -> PersistResult:
         """RSS ソース 1 件を取得・処理する。
 
         Raises:
@@ -132,7 +132,7 @@ class BaseRssFetcher:
             # 304 Not Modified — 新着なし（正常系として空結果を返す）
             if response.status_code == 304:
                 logger.info("feed_not_modified", source=source.name)
-                return SourceFetchResult()
+                return PersistResult()
 
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
@@ -170,6 +170,6 @@ class BaseRssFetcher:
                 candidates.append(candidate)
 
         if not candidates:
-            return SourceFetchResult()
+            return PersistResult()
 
         return await persist_new_articles(session, source, candidates)

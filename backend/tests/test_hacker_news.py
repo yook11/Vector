@@ -1,7 +1,8 @@
 """Hacker News フェッチャーのテスト。"""
 
+from collections.abc import Generator
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -12,6 +13,8 @@ from app.collection.errors import PermanentFetchError, TemporaryFetchError
 from app.collection.ingestion.fetchers.hacker_news import HackerNewsFetcher, HNStory
 from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
+
+_HN_MOD = "app.collection.ingestion.fetchers.hacker_news"
 
 # --- Sample API response data ---
 
@@ -81,6 +84,23 @@ def mock_http_client() -> AsyncMock:
     """HN テスト用の httpx.AsyncClient モックを提供する。"""
     client = AsyncMock(spec=httpx.AsyncClient)
     return client
+
+
+@pytest.fixture(autouse=True)
+def mock_hn_fetch_state() -> Generator[dict[str, AsyncMock], None, None]:
+    """HN 増分取得 state (Redis) を全テストでデフォルト mock する。"""
+    with (
+        patch(
+            f"{_HN_MOD}.get_last_fetched_at",
+            new_callable=AsyncMock,
+            return_value=None,
+        ) as mock_get,
+        patch(
+            f"{_HN_MOD}.set_last_fetched_at",
+            new_callable=AsyncMock,
+        ) as mock_set,
+    ):
+        yield {"get": mock_get, "set": mock_set}
 
 
 # --- HackerNewsFetcher._fetch_recent_stories tests ---
@@ -254,24 +274,16 @@ async def test_fetch_temporary_error_on_network_failure(
         )
 
 
-async def test_fetch_with_last_fetched_at(
+async def test_fetch_uses_last_fetched_at_from_redis(
     db_session: AsyncSession,
     sample_hn_source: NewsSource,
     mock_http_client: AsyncMock,
+    mock_hn_fetch_state: dict[str, AsyncMock],
 ) -> None:
-    """fetch_logs から導出した last_fetched_at が API フィルタに使われる。"""
-    from app.models.fetch_log import FetchLog, FetchStatus
-
-    # 成功した fetch ログを 1 件作成
-    log = FetchLog(
-        source_id=sample_hn_source.id,
-        status=FetchStatus.SUCCESS,
-        articles_count=5,
-        fetched_at=datetime(2026, 2, 24, 17, 0, 0, tzinfo=UTC),
+    """Redis に保存された last_fetched_at が API フィルタに使われる。"""
+    mock_hn_fetch_state["get"].return_value = datetime(
+        2026, 2, 24, 17, 0, 0, tzinfo=UTC
     )
-    db_session.add(log)
-    await db_session.commit()
-
     mock_http_client.get.return_value = _mock_hn_response(data={"hits": []})
 
     fetcher = HackerNewsFetcher()
@@ -283,6 +295,44 @@ async def test_fetch_with_last_fetched_at(
     params = call_kwargs.kwargs.get("params", {})
     numeric_filters = params.get("numericFilters", "")
     assert "created_at_i>" in numeric_filters
+
+
+async def test_fetch_updates_last_fetched_at_on_success(
+    db_session: AsyncSession,
+    sample_hn_source: NewsSource,
+    mock_http_client: AsyncMock,
+    mock_hn_fetch_state: dict[str, AsyncMock],
+) -> None:
+    """成功時は Redis の last_fetched_at を現在時刻で更新する。"""
+    mock_http_client.get.return_value = _mock_hn_response(data={"hits": []})
+
+    fetcher = HackerNewsFetcher()
+    await fetcher.fetch(
+        client=mock_http_client, session=db_session, source=sample_hn_source
+    )
+
+    mock_hn_fetch_state["set"].assert_awaited_once()
+    args, _ = mock_hn_fetch_state["set"].call_args
+    assert args[0] == sample_hn_source.id
+    assert isinstance(args[1], datetime)
+
+
+async def test_fetch_does_not_update_state_on_error(
+    db_session: AsyncSession,
+    sample_hn_source: NewsSource,
+    mock_http_client: AsyncMock,
+    mock_hn_fetch_state: dict[str, AsyncMock],
+) -> None:
+    """fetch 失敗時は last_fetched_at を更新しない。"""
+    mock_http_client.get.return_value = _mock_hn_response(data={}, status_code=500)
+
+    fetcher = HackerNewsFetcher()
+    with pytest.raises(TemporaryFetchError):
+        await fetcher.fetch(
+            client=mock_http_client, session=db_session, source=sample_hn_source
+        )
+
+    mock_hn_fetch_state["set"].assert_not_called()
 
 
 async def test_fetch_empty_response(
