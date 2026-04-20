@@ -13,6 +13,7 @@ import httpx
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.collection.errors import PermanentFetchError, TemporaryFetchError
 from app.collection.ingestion.fetchers.http_cache import get_http_cache, set_http_cache
 from app.collection.ingestion.persister import (
     ArticleCandidate,
@@ -108,9 +109,12 @@ class BaseRssFetcher:
         session: AsyncSession,
         source: NewsSource,
     ) -> SourceFetchResult:
-        """RSS ソース 1 件を取得・処理する。"""
-        result = SourceFetchResult(source_id=source.id)
+        """RSS ソース 1 件を取得・処理する。
 
+        Raises:
+            PermanentFetchError: 403 / 404 / 410 / 451、フィードのパース失敗。
+            TemporaryFetchError: 429 / 5xx / タイムアウト / ネットワークエラー。
+        """
         # 条件付き GET 用のヘッダを Redis から読み出す
         cached_etag, cached_last_modified = await get_http_cache(source.id)
 
@@ -125,34 +129,26 @@ class BaseRssFetcher:
                 str(source.endpoint_url), headers=headers, timeout=HTTP_TIMEOUT
             )
 
-            # 304 Not Modified — 新着なし
+            # 304 Not Modified — 新着なし（正常系として空結果を返す）
             if response.status_code == 304:
                 logger.info("feed_not_modified", source=source.name)
-                result.not_modified = True
-                return result
+                return SourceFetchResult()
 
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
-            logger.error(
-                "feed_http_error",
-                source=source.name,
-                status=e.response.status_code,
-            )
-            result.success = False
-            result.error_message = f"HTTP {e.response.status_code}"
-            return result
+            status = e.response.status_code
+            logger.error("feed_http_error", source=source.name, status=status)
+            if status in (403, 404, 410, 451):
+                raise PermanentFetchError(f"HTTP {status}: {source.name}") from e
+            raise TemporaryFetchError(f"HTTP {status}: {source.name}") from e
         except httpx.RequestError as e:
             logger.error("feed_request_error", source=source.name, error=str(e))
-            result.success = False
-            result.error_message = str(e)
-            return result
-
-        # 次回の条件付き GET に備えて ETag / Last-Modified を保持
-        result.etag = response.headers.get("ETag")
-        result.last_modified = response.headers.get("Last-Modified")
+            raise TemporaryFetchError(f"request error: {source.name}: {e}") from e
 
         # 次回のフェッチサイクルのため Redis に永続化
-        await set_http_cache(source.id, result.etag, result.last_modified)
+        etag = response.headers.get("ETag")
+        last_modified = response.headers.get("Last-Modified")
+        await set_http_cache(source.id, etag, last_modified)
 
         # フィードをパース
         feed = await asyncio.to_thread(feedparser.parse, response.text)
@@ -162,27 +158,18 @@ class BaseRssFetcher:
                 source=source.name,
                 error=str(feed.bozo_exception),
             )
-            result.success = False
-            result.error_message = f"Parse error: {feed.bozo_exception}"
-            return result
+            raise PermanentFetchError(
+                f"feed parse error: {source.name}: {feed.bozo_exception}"
+            )
 
         # エントリを ArticleCandidate に変換
         candidates: list[ArticleCandidate] = []
         for entry in feed.entries:
             candidate = self.convert_entry(entry)
-            if candidate is None:
-                result.skipped_count += 1
-                continue
-            candidates.append(candidate)
+            if candidate is not None:
+                candidates.append(candidate)
 
         if not candidates:
-            return result
+            return SourceFetchResult()
 
-        # 永続化を共通ロジックに委譲
-        persist_result = await persist_new_articles(session, source, candidates)
-
-        # persist_result の値を result にマージ（HTTP キャッシュ情報は保持）
-        result.new_count = persist_result.new_count
-        result.skipped_count += persist_result.skipped_count
-        result.new_discovered = persist_result.new_discovered
-        return result
+        return await persist_new_articles(session, source, candidates)

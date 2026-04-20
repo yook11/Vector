@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
+from app.collection.errors import PermanentFetchError, TemporaryFetchError
 from app.collection.ingestion.fetchers.hacker_news import HackerNewsFetcher, HNStory
 from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
@@ -172,9 +173,7 @@ async def test_save_new_stories(
     )
     await db_session.commit()
 
-    assert result.success is True
-    assert result.new_count == 2
-    assert result.skipped_count == 0
+    assert len(result.new_discovered) == 2
 
     articles = (await db_session.execute(select(DiscoveredArticle))).scalars().all()
     assert len(articles) == 2
@@ -207,42 +206,52 @@ async def test_skip_duplicate_url(
     )
     await db_session.commit()
 
-    assert result.new_count == 1
-    assert result.skipped_count == 1
+    assert len(result.new_discovered) == 1
 
 
-async def test_fetch_handles_http_error(
+async def test_fetch_temporary_error_on_5xx(
     db_session: AsyncSession,
     sample_hn_source: NewsSource,
     mock_http_client: AsyncMock,
 ) -> None:
-    """HTTP エラー時は SourceFetchResult(success=False) となる。"""
+    """5xx は TemporaryFetchError を raise する。"""
     mock_http_client.get.return_value = _mock_hn_response(data={}, status_code=500)
 
     fetcher = HackerNewsFetcher()
-    result = await fetcher.fetch(
-        client=mock_http_client, session=db_session, source=sample_hn_source
-    )
-
-    assert result.success is False
-    assert "HTTP 500" in result.error_message
+    with pytest.raises(TemporaryFetchError):
+        await fetcher.fetch(
+            client=mock_http_client, session=db_session, source=sample_hn_source
+        )
 
 
-async def test_fetch_handles_network_error(
+async def test_fetch_permanent_error_on_404(
     db_session: AsyncSession,
     sample_hn_source: NewsSource,
     mock_http_client: AsyncMock,
 ) -> None:
-    """ネットワークエラー時は SourceFetchResult(success=False) となる。"""
+    """404 は PermanentFetchError を raise する。"""
+    mock_http_client.get.return_value = _mock_hn_response(data={}, status_code=404)
+
+    fetcher = HackerNewsFetcher()
+    with pytest.raises(PermanentFetchError):
+        await fetcher.fetch(
+            client=mock_http_client, session=db_session, source=sample_hn_source
+        )
+
+
+async def test_fetch_temporary_error_on_network_failure(
+    db_session: AsyncSession,
+    sample_hn_source: NewsSource,
+    mock_http_client: AsyncMock,
+) -> None:
+    """ネットワークエラーは TemporaryFetchError を raise する。"""
     mock_http_client.get.side_effect = httpx.ConnectError("Connection refused")
 
     fetcher = HackerNewsFetcher()
-    result = await fetcher.fetch(
-        client=mock_http_client, session=db_session, source=sample_hn_source
-    )
-
-    assert result.success is False
-    assert result.error_message is not None
+    with pytest.raises(TemporaryFetchError):
+        await fetcher.fetch(
+            client=mock_http_client, session=db_session, source=sample_hn_source
+        )
 
 
 async def test_fetch_with_last_fetched_at(
@@ -281,7 +290,7 @@ async def test_fetch_empty_response(
     sample_hn_source: NewsSource,
     mock_http_client: AsyncMock,
 ) -> None:
-    """API レスポンスが空でも success=True かつ new_count=0 を返す。"""
+    """API レスポンスが空なら空の SourceFetchResult を返す。"""
     mock_http_client.get.return_value = _mock_hn_response(data={"hits": []})
 
     fetcher = HackerNewsFetcher()
@@ -289,6 +298,4 @@ async def test_fetch_empty_response(
         client=mock_http_client, session=db_session, source=sample_hn_source
     )
 
-    assert result.success is True
-    assert result.new_count == 0
-    assert result.skipped_count == 0
+    assert result.new_discovered == []

@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.collection.errors import PermanentFetchError, TemporaryFetchError
 from app.collection.ingestion.persister import SourceFetchResult
 from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
@@ -114,9 +115,6 @@ class TestFetchSourceMetadata:
         discovered_b.id = 11
 
         fetch_result = SourceFetchResult(
-            source_id=1,
-            success=True,
-            new_count=2,
             new_discovered=[discovered_a, discovered_b],
         )
 
@@ -134,7 +132,7 @@ class TestFetchSourceMetadata:
             result = await fetch_source_metadata(source_id=1, ctx=mock_ctx)
 
         assert result["new_count"] == 2
-        assert result["success"] is True
+        assert result["status"] == "success"
         # 全件 fetch_content へ dispatch
         assert mock_fc.kiq.call_count == 2
         mock_fc.kiq.assert_any_call(10)
@@ -188,9 +186,7 @@ class TestFetchSourceMetadata:
         source.name = "AV Source"
         mock_session.get = AsyncMock(return_value=source)
 
-        fetch_result = SourceFetchResult(
-            source_id=1, success=True, new_count=0, new_discovered=[]
-        )
+        fetch_result = SourceFetchResult(new_discovered=[])
         mock_fetcher = AsyncMock()
         mock_fetcher.DAILY_REQUEST_LIMIT = 25
         mock_fetcher.fetch = AsyncMock(return_value=fetch_result)
@@ -209,7 +205,7 @@ class TestFetchSourceMetadata:
 
         mock_quota.assert_called_once_with(1, 25)
         mock_fetcher.fetch.assert_called_once()
-        assert result["success"] is True
+        assert result["status"] == "success"
 
     @pytest.mark.asyncio
     async def test_skips_quota_check_for_fetcher_without_limit(self) -> None:
@@ -225,9 +221,7 @@ class TestFetchSourceMetadata:
         source.name = "RSS Source"
         mock_session.get = AsyncMock(return_value=source)
 
-        fetch_result = SourceFetchResult(
-            source_id=1, success=True, new_count=0, new_discovered=[]
-        )
+        fetch_result = SourceFetchResult(new_discovered=[])
         mock_fetcher = AsyncMock()
         # DAILY_REQUEST_LIMIT を持たない
         del mock_fetcher.DAILY_REQUEST_LIMIT
@@ -246,7 +240,93 @@ class TestFetchSourceMetadata:
 
         mock_quota.assert_not_called()
         mock_fetcher.fetch.assert_called_once()
-        assert result["success"] is True
+        assert result["status"] == "success"
+
+    @pytest.mark.asyncio
+    async def test_permanent_error_records_error_status(self) -> None:
+        """PermanentFetchError を捕捉して status=error を返す (raise しない)。"""
+        from app.collection.tasks import fetch_source_metadata
+
+        mock_session = AsyncMock()
+        mock_ctx = _make_ctx()
+        _patch_session_factory(mock_ctx, mock_session)
+
+        source = MagicMock(spec=NewsSource)
+        source.id = 1
+        source.name = "Broken Source"
+        mock_session.get = AsyncMock(return_value=source)
+
+        mock_fetcher = AsyncMock()
+        mock_fetcher.fetch = AsyncMock(
+            side_effect=PermanentFetchError("HTTP 404: Broken Source")
+        )
+
+        with (
+            patch(
+                "app.collection.tasks.get_fetcher",
+                return_value=mock_fetcher,
+            ),
+            patch("app.collection.tasks.fetch_content") as mock_fc,
+        ):
+            mock_fc.kiq = AsyncMock()
+            result = await fetch_source_metadata(source_id=1, ctx=mock_ctx)
+
+        assert result["status"] == "error"
+        assert result["new_count"] == 0
+        mock_fc.kiq.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_temporary_error_raises_for_retry(self) -> None:
+        """TemporaryFetchError は retry 可能なので raise する。"""
+        from app.collection.tasks import fetch_source_metadata
+
+        mock_session = AsyncMock()
+        mock_ctx = _make_ctx(retry_count=0, max_retries=2)
+        _patch_session_factory(mock_ctx, mock_session)
+
+        source = MagicMock(spec=NewsSource)
+        source.id = 1
+        source.name = "Flaky Source"
+        mock_session.get = AsyncMock(return_value=source)
+
+        mock_fetcher = AsyncMock()
+        mock_fetcher.fetch = AsyncMock(
+            side_effect=TemporaryFetchError("HTTP 500: Flaky Source")
+        )
+
+        with patch(
+            "app.collection.tasks.get_fetcher",
+            return_value=mock_fetcher,
+        ):
+            with pytest.raises(TemporaryFetchError):
+                await fetch_source_metadata(source_id=1, ctx=mock_ctx)
+
+    @pytest.mark.asyncio
+    async def test_temporary_error_last_attempt_returns(self) -> None:
+        """TemporaryFetchError でも最終試行では飲み込んで status=error を返す。"""
+        from app.collection.tasks import fetch_source_metadata
+
+        mock_session = AsyncMock()
+        mock_ctx = _make_ctx(retry_count=2, max_retries=2)
+        _patch_session_factory(mock_ctx, mock_session)
+
+        source = MagicMock(spec=NewsSource)
+        source.id = 1
+        source.name = "Flaky Source"
+        mock_session.get = AsyncMock(return_value=source)
+
+        mock_fetcher = AsyncMock()
+        mock_fetcher.fetch = AsyncMock(
+            side_effect=TemporaryFetchError("HTTP 500: Flaky Source")
+        )
+
+        with patch(
+            "app.collection.tasks.get_fetcher",
+            return_value=mock_fetcher,
+        ):
+            result = await fetch_source_metadata(source_id=1, ctx=mock_ctx)
+
+        assert result["status"] == "error"
 
     @pytest.mark.asyncio
     async def test_returns_not_found_for_missing_source(self) -> None:

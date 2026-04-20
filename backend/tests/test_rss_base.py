@@ -12,6 +12,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
+from app.collection.errors import PermanentFetchError, TemporaryFetchError
 from app.collection.ingestion.fetchers.rss.base import (
     BaseRssFetcher,
     extract_guid,
@@ -136,8 +137,7 @@ async def test_rss_saves_new_articles(
     ):
         result = await StubRssFetcher().fetch(mock_client, db_session, sample_source)
 
-    assert result.new_count == 2
-    assert result.skipped_count == 0
+    assert len(result.new_discovered) == 2
 
     await db_session.flush()
     articles = (await db_session.execute(select(DiscoveredArticle))).scalars().all()
@@ -176,8 +176,7 @@ async def test_rss_skips_duplicate_urls(
     ):
         result = await StubRssFetcher().fetch(mock_client, db_session, sample_source)
 
-    assert result.new_count == 1
-    assert result.skipped_count == 1
+    assert len(result.new_discovered) == 1
 
     await db_session.flush()
     articles = (await db_session.execute(select(DiscoveredArticle))).scalars().all()
@@ -187,6 +186,7 @@ async def test_rss_skips_duplicate_urls(
 async def test_rss_handles_304_not_modified(
     db_session: AsyncSession, sample_source: NewsSource, mock_client: AsyncMock
 ) -> None:
+    """304 は例外ではなく空結果として返される。"""
     mock_client.get.return_value = _mock_response(status_code=304)
 
     with patch(
@@ -196,13 +196,13 @@ async def test_rss_handles_304_not_modified(
     ):
         result = await StubRssFetcher().fetch(mock_client, db_session, sample_source)
 
-    assert result.new_count == 0
-    assert result.not_modified is True
+    assert result.new_discovered == []
 
 
-async def test_rss_handles_http_error(
+async def test_rss_temporary_error_on_5xx(
     db_session: AsyncSession, sample_source: NewsSource, mock_client: AsyncMock
 ) -> None:
+    """5xx は TemporaryFetchError を raise する。"""
     mock_client.get.return_value = _mock_response(status_code=500)
 
     with patch(
@@ -210,11 +210,58 @@ async def test_rss_handles_http_error(
         new_callable=AsyncMock,
         return_value=(None, None),
     ):
-        result = await StubRssFetcher().fetch(mock_client, db_session, sample_source)
+        with pytest.raises(TemporaryFetchError):
+            await StubRssFetcher().fetch(mock_client, db_session, sample_source)
 
-    assert result.new_count == 0
-    assert result.success is False
-    assert result.error_message is not None
+
+async def test_rss_permanent_error_on_404(
+    db_session: AsyncSession, sample_source: NewsSource, mock_client: AsyncMock
+) -> None:
+    """404 は PermanentFetchError を raise する。"""
+    mock_client.get.return_value = _mock_response(status_code=404)
+
+    with patch(
+        f"{_BASE_MOD}.get_http_cache",
+        new_callable=AsyncMock,
+        return_value=(None, None),
+    ):
+        with pytest.raises(PermanentFetchError):
+            await StubRssFetcher().fetch(mock_client, db_session, sample_source)
+
+
+async def test_rss_temporary_error_on_network_failure(
+    db_session: AsyncSession, sample_source: NewsSource, mock_client: AsyncMock
+) -> None:
+    """接続エラーは TemporaryFetchError を raise する。"""
+    mock_client.get.side_effect = httpx.ConnectError("connection refused")
+
+    with patch(
+        f"{_BASE_MOD}.get_http_cache",
+        new_callable=AsyncMock,
+        return_value=(None, None),
+    ):
+        with pytest.raises(TemporaryFetchError):
+            await StubRssFetcher().fetch(mock_client, db_session, sample_source)
+
+
+async def test_rss_permanent_error_on_bozo_feed(
+    db_session: AsyncSession, sample_source: NewsSource, mock_client: AsyncMock
+) -> None:
+    """feedparser bozo でエントリが空なら PermanentFetchError を raise する。"""
+    feed = _make_feed(entries=[], bozo=True)
+    mock_client.get.return_value = _mock_response(text="<not-valid>")
+
+    with (
+        patch(f"{_BASE_MOD}.feedparser.parse", return_value=feed),
+        patch(
+            f"{_BASE_MOD}.get_http_cache",
+            new_callable=AsyncMock,
+            return_value=(None, None),
+        ),
+        patch(f"{_BASE_MOD}.set_http_cache", new_callable=AsyncMock),
+    ):
+        with pytest.raises(PermanentFetchError):
+            await StubRssFetcher().fetch(mock_client, db_session, sample_source)
 
 
 async def test_rss_respects_max_articles_limit(
@@ -240,7 +287,7 @@ async def test_rss_respects_max_articles_limit(
         mock_settings.max_articles_per_fetch = 50
         result = await StubRssFetcher().fetch(mock_client, db_session, sample_source)
 
-    assert result.new_count == 50
+    assert len(result.new_discovered) == 50
 
 
 async def test_rss_sends_conditional_get_headers(
@@ -292,10 +339,8 @@ async def test_rss_captures_etag_and_writes_to_redis(
             new_callable=AsyncMock,
         ) as mock_set_cache,
     ):
-        result = await StubRssFetcher().fetch(mock_client, db_session, sample_source)
+        await StubRssFetcher().fetch(mock_client, db_session, sample_source)
 
-    assert result.etag == '"new-etag"'
-    assert result.last_modified == "Thu, 02 Jan 2025 00:00:00 GMT"
     mock_set_cache.assert_called_once_with(
         sample_source.id, '"new-etag"', "Thu, 02 Jan 2025 00:00:00 GMT"
     )

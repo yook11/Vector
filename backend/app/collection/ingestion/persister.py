@@ -38,16 +38,8 @@ class ArticleCandidate:
 
 @dataclass
 class SourceFetchResult:
-    """単一ソースのフェッチ結果。"""
+    """単一ソースのフェッチ結果 — 下流キューへ dispatch する新規発見記事を保持する。"""
 
-    source_id: int
-    success: bool = True
-    new_count: int = 0
-    skipped_count: int = 0
-    error_message: str | None = None
-    etag: str | None = None
-    last_modified: str | None = None
-    not_modified: bool = False
     new_discovered: list[DiscoveredArticle] = field(default_factory=list)
 
 
@@ -72,9 +64,9 @@ async def persist_new_articles(
         candidates: フェッチャーが生成した記事候補リスト。
 
     Returns:
-        新規/スキップ件数と新規発見記事を含む SourceFetchResult。
+        新規発見記事を含む SourceFetchResult。
     """
-    result = SourceFetchResult(source_id=source.id)
+    result = SourceFetchResult()
 
     if not candidates:
         return result
@@ -93,14 +85,12 @@ async def persist_new_articles(
 
     # 新規 discovered_articles を作成
     max_new = settings.max_articles_per_fetch
-    new_count = 0
 
     for candidate in candidates:
         if candidate.url in existing_urls:
-            result.skipped_count += 1
             continue
 
-        if new_count >= max_new:
+        if len(result.new_discovered) >= max_new:
             logger.info("source_fetch_limit_reached", source=source.name, max=max_new)
             break
 
@@ -112,9 +102,7 @@ async def persist_new_articles(
 
         session.add(discovered)
         result.new_discovered.append(discovered)
-        new_count += 1
         # 同一バッチ内の後続候補で重複しないよう URL を記録
         existing_urls.add(candidate.url)
 
-    result.new_count = new_count
     return result

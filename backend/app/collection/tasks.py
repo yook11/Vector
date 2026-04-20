@@ -19,9 +19,10 @@ from app.brokers import (
     broker_metadata,
     is_last_attempt,
 )
-from app.collection.errors import TemporaryFetchError
+from app.collection.errors import PermanentFetchError, TemporaryFetchError
 from app.collection.extraction.extractor import ArticleHtmlExtractor
 from app.collection.extraction.service import ContentFetchService
+from app.collection.ingestion.persister import SourceFetchResult
 from app.collection.ingestion.quota import check_daily_quota
 from app.collection.ingestion.registry import get_fetcher
 from app.models.fetch_log import FetchLog, FetchStatus
@@ -121,21 +122,53 @@ async def fetch_source_metadata(
                 }
 
         start_time = time.monotonic()
-        async with httpx.AsyncClient(headers={"User-Agent": _USER_AGENT}) as client:
-            source_result = await fetcher.fetch(client, session, source)
-        duration_ms = int((time.monotonic() - start_time) * 1000)
+        status = FetchStatus.SUCCESS
+        error_message: str | None = None
+        source_result = SourceFetchResult()
 
-        # FetchLog を記録
-        fetch_log = FetchLog(
-            source_id=source.id,
-            status=(
-                FetchStatus.SUCCESS if source_result.success else FetchStatus.ERROR
-            ),
-            articles_count=source_result.new_count,
-            error_message=source_result.error_message,
-            duration_ms=duration_ms,
+        async with httpx.AsyncClient(headers={"User-Agent": _USER_AGENT}) as client:
+            try:
+                source_result = await fetcher.fetch(client, session, source)
+            except PermanentFetchError as e:
+                status = FetchStatus.ERROR
+                error_message = str(e)
+            except TemporaryFetchError as e:
+                duration_ms = int((time.monotonic() - start_time) * 1000)
+                session.add(
+                    FetchLog(
+                        source_id=source.id,
+                        status=FetchStatus.ERROR,
+                        articles_count=0,
+                        error_message=str(e),
+                        duration_ms=duration_ms,
+                    )
+                )
+                await session.commit()
+                if is_last_attempt(ctx):
+                    logger.warning(
+                        "fetch_source_metadata_max_retries",
+                        source_id=source_id,
+                        error=str(e),
+                    )
+                    return {
+                        "source_id": source_id,
+                        "status": "error",
+                        "reason": str(e),
+                    }
+                raise
+
+        duration_ms = int((time.monotonic() - start_time) * 1000)
+        new_count = len(source_result.new_discovered)
+
+        session.add(
+            FetchLog(
+                source_id=source.id,
+                status=status,
+                articles_count=new_count,
+                error_message=error_message,
+                duration_ms=duration_ms,
+            )
         )
-        session.add(fetch_log)
         await session.commit()
 
     # 全件 fetch_content へ dispatch
@@ -144,9 +177,8 @@ async def fetch_source_metadata(
 
     result = {
         "source_id": source_id,
-        "new_count": source_result.new_count,
-        "skipped_count": source_result.skipped_count,
-        "success": source_result.success,
+        "new_count": new_count,
+        "status": status.value,
     }
     logger.info("fetch_source_metadata_completed", **result)
     return result

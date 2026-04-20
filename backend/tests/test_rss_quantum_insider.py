@@ -90,7 +90,7 @@ async def test_rss_stores_full_content(
             mock_client, db_session, sample_source
         )
 
-    assert result.new_count == 1
+    assert len(result.new_discovered) == 1
     await db_session.flush()
     articles = (await db_session.execute(select(DiscoveredArticle))).scalars().all()
     assert len(articles) == 1

@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
+from app.collection.errors import PermanentFetchError
 from app.collection.ingestion.persister import SourceFetchResult
 from app.models.discovered_article import DiscoveredArticle
 from app.models.fetch_log import FetchLog, FetchStatus
@@ -37,12 +38,7 @@ async def test_fetch_log_recorded_on_success(
     discovered = MagicMock(spec=DiscoveredArticle)
     discovered.id = 1
 
-    fetch_result = SourceFetchResult(
-        source_id=sample_source.id,
-        success=True,
-        new_count=1,
-        new_discovered=[discovered],
-    )
+    fetch_result = SourceFetchResult(new_discovered=[discovered])
 
     mock_fetcher = AsyncMock()
     mock_fetcher.fetch = AsyncMock(return_value=fetch_result)
@@ -74,22 +70,17 @@ async def test_fetch_log_recorded_on_success(
 
 
 @pytest.mark.asyncio
-async def test_fetch_log_recorded_on_error(
+async def test_fetch_log_recorded_on_permanent_error(
     db_session: AsyncSession,
     sample_source: NewsSource,
 ) -> None:
-    """フェッチ失敗時に status='error' の FetchLog が記録される。"""
+    """PermanentFetchError を捕捉して status='error' の FetchLog が記録される。"""
     from app.collection.tasks import fetch_source_metadata
 
-    fetch_result = SourceFetchResult(
-        source_id=sample_source.id,
-        success=False,
-        new_count=0,
-        error_message="HTTP 500",
-    )
-
     mock_fetcher = AsyncMock()
-    mock_fetcher.fetch = AsyncMock(return_value=fetch_result)
+    mock_fetcher.fetch = AsyncMock(
+        side_effect=PermanentFetchError("HTTP 404: Test Source")
+    )
 
     session_factory = MagicMock()
     session_factory.return_value = _mock_session_context(db_session)
@@ -107,5 +98,5 @@ async def test_fetch_log_recorded_on_error(
 
     assert log.status == FetchStatus.ERROR
     assert log.articles_count == 0
-    assert log.error_message == "HTTP 500"
+    assert log.error_message == "HTTP 404: Test Source"
     assert log.duration_ms is not None
