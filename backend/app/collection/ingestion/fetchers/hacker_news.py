@@ -16,11 +16,9 @@ from app.collection.ingestion.persister import (
     ArticleCandidate,
     PersistResult,
     persist_new_articles,
-    to_safe_url,
 )
 from app.config import settings
 from app.models.news_source import NewsSource
-from app.utils.sanitize import strip_html_tags
 
 HTTP_TIMEOUT = 30.0
 
@@ -136,25 +134,20 @@ class HackerNewsFetcher:
             logger.info("hn_no_new_stories", source=source.name)
             return PersistResult()
 
-        # ストーリーを ArticleCandidate に変換（SafeUrl 検証付き）
+        # ストーリーを ArticleCandidate に変換（SafeUrl 検証・タイトル整形は内部で担保）
         candidates: list[ArticleCandidate] = []
         for story in stories:
-            safe_url = to_safe_url(story.url)
-            if safe_url is None:
+            candidate = ArticleCandidate.from_external(
+                raw_url=story.url, raw_title=story.title
+            )
+            if candidate is None:
                 logger.warning(
-                    "unsafe_url_skipped",
+                    "hn_candidate_rejected",
                     source=source.name,
                     url=story.url[:200],
                 )
                 continue
-
-            candidates.append(
-                ArticleCandidate(
-                    url=safe_url,
-                    title=strip_html_tags(story.title)[:500],
-                    published_at=story.created_at,
-                )
-            )
+            candidates.append(candidate)
 
         if not candidates:
             return PersistResult()

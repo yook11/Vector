@@ -13,11 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
-from app.collection.ingestion.fetchers.rss.base import (
-    BaseRssFetcher,
-    extract_guid,
-    parse_published_date,
-)
+from app.collection.ingestion.fetchers.rss.base import BaseRssFetcher, extract_guid
 from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
 
@@ -76,27 +72,6 @@ def mock_client() -> AsyncMock:
 
 
 # --- ユーティリティ関数のユニットテスト ---
-
-
-def test_parse_published_date_with_valid_struct() -> None:
-    ts = time.struct_time((2025, 1, 15, 12, 0, 0, 2, 15, 0))
-    result = parse_published_date({"published_parsed": ts})
-    assert result is not None
-    assert result.year == 2025
-    assert result.month == 1
-    assert result.day == 15
-
-
-def test_parse_published_date_with_missing_field() -> None:
-    result = parse_published_date({})
-    assert result is None
-
-
-def test_parse_published_date_falls_back_to_updated() -> None:
-    ts = time.struct_time((2025, 6, 1, 0, 0, 0, 6, 152, 0))
-    result = parse_published_date({"updated_parsed": ts})
-    assert result is not None
-    assert result.month == 6
 
 
 def test_extract_guid_prefers_id() -> None:

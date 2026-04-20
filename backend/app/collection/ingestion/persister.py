@@ -7,7 +7,6 @@ URL 重複排除、max_articles 制限、session.add を一箇所に集約する
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
 
 import structlog
 from pydantic import ValidationError
@@ -18,22 +17,44 @@ from app.config import settings
 from app.domain.safe_url import SafeUrl
 from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
+from app.utils.sanitize import strip_html_tags
 
 logger = structlog.get_logger(__name__)
+
+_TITLE_MAX_LENGTH = 500
 
 
 @dataclass(frozen=True)
 class ArticleCandidate:
     """フェッチャーが生成する記事の中間表現。
 
-    ソース固有のデータ構造から変換された、永続化前の正規化済みデータ。
+    外部配信形式 (RSS / HN API 等) から ingestion 境界を越える際の正規化済みデータ。
+    生文字列からの構築は ``from_external`` 経由で行い、URL 安全性と
+    タイトル整形 (HTML 除去・長さ上限) を構造的に保証する。
     """
 
     url: SafeUrl
     title: str
-    description: str | None = None
-    content: str | None = None
-    published_at: datetime | None = None
+
+    @classmethod
+    def from_external(cls, *, raw_url: str, raw_title: str) -> ArticleCandidate | None:
+        """外部ソースの生文字列から候補を構築する。
+
+        正規化に失敗する（不正 URL / 空タイトル）場合は ``None`` を返し、
+        呼び出し側でエントリをスキップする運用を想定する。
+        """
+        if not raw_url:
+            return None
+        try:
+            safe_url = SafeUrl(raw_url)
+        except (ValueError, ValidationError):
+            return None
+
+        clean_title = (strip_html_tags(raw_title) or "")[:_TITLE_MAX_LENGTH]
+        if not clean_title:
+            return None
+
+        return cls(url=safe_url, title=clean_title)
 
 
 @dataclass
@@ -41,14 +62,6 @@ class PersistResult:
     """``persist_new_articles`` の内部結果 — 実際に新規追加された DiscoveredArticle。"""
 
     new_discovered: list[DiscoveredArticle] = field(default_factory=list)
-
-
-def to_safe_url(raw: str) -> SafeUrl | None:
-    """生文字列を SafeUrl に変換する。不正な URL は None を返す。"""
-    try:
-        return SafeUrl(raw)
-    except (ValueError, ValidationError):
-        return None
 
 
 async def persist_new_articles(
