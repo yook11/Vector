@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import json
-
 import structlog
 from google import genai
 from google.genai.errors import APIError, ServerError
 from google.genai.types import GenerateContentConfig
+from pydantic import ValidationError
 
 from app.analysis.errors import (
     AnalysisDomainError,
@@ -18,11 +17,8 @@ from app.analysis.errors import (
     RateLimitError,
     UnclassifiedError,
 )
-from app.analysis.extraction.extractor.base import (
-    BaseExtractor,
-    EntityData,
-    ExtractionData,
-)
+from app.analysis.extraction.extractor.base import BaseExtractor
+from app.analysis.extraction.schema import ExtractionResponse
 from app.config import settings
 
 logger = structlog.get_logger(__name__)
@@ -31,9 +27,6 @@ EXTRACTION_PROMPT = """\
 You are a tech news content extractor. Your job is to extract factual \
 information from English tech news articles and output structured data \
 in Japanese.
-
-You must respond ONLY with a valid JSON object. Do not include markdown \
-code fences or any text outside the JSON.
 
 Article title: {title}
 
@@ -62,16 +55,6 @@ Extract the following:
    Rules:
    - Only extract entities explicitly mentioned in the article
    - Do NOT include generic terms ("AI", "semiconductor", etc.)
-   - Remove duplicates
-
-Return a JSON object:
-{{
-  "title_ja": "Japanese title",
-  "summary_ja": "Factual Japanese summary",
-  "entities": [
-    {{"name": "EntityName", "type": "type_label"}}
-  ]
-}}
 """
 
 
@@ -93,8 +76,8 @@ class GeminiExtractor(BaseExtractor):
         self,
         title: str,
         content: str,
-    ) -> ExtractionData:
-        """プロンプトを構築し API を呼び出して抽出結果を解析する。"""
+    ) -> ExtractionResponse:
+        """プロンプトを構築し API を呼び出して構造化レスポンスを返す。"""
         truncated = content[: self.CONTENT_MAX_LENGTH]
 
         prompt = EXTRACTION_PROMPT.format(
@@ -102,25 +85,33 @@ class GeminiExtractor(BaseExtractor):
             content=truncated,
         )
 
-        raw_text = await self._call_once(prompt)
-        return self._parse_response(raw_text)
+        return await self._call_once(prompt)
 
-    async def _call_api(self, prompt: str) -> str:
-        """Gemini の generate_content API を呼び出す。"""
+    async def _call_api(self, prompt: str) -> ExtractionResponse:
+        """Gemini の generate_content API を呼び出し構造化出力を受け取る。"""
         response = await self._client.aio.models.generate_content(
             model=self.MODEL,
             contents=prompt,
             config=GenerateContentConfig(
                 temperature=0.2,
                 max_output_tokens=2048,
+                response_mime_type="application/json",
+                response_schema=ExtractionResponse,
             ),
         )
-        if response.text is None:
-            raise ProviderError("Gemini returned empty response")
-        return response.text
+        parsed = response.parsed
+        if not isinstance(parsed, ExtractionResponse):
+            raise ProviderError(
+                "Gemini did not return ExtractionResponse "
+                f"(got {type(parsed).__name__})"
+            )
+        return parsed
 
     def _translate_error(self, exc: Exception) -> AnalysisDomainError:
         """Gemini SDK の例外を原因の所在で分類する。"""
+        if isinstance(exc, ValidationError):
+            return ProviderError(f"Invalid extraction response schema: {exc}")
+
         if isinstance(exc, APIError):
             status = exc.status or ""
             message = exc.message or ""
@@ -153,65 +144,3 @@ class GeminiExtractor(BaseExtractor):
             return NetworkError(f"{type(exc).__name__}: {exc}")
 
         return UnclassifiedError(f"{type(exc).__name__}: {exc}")
-
-    def _parse_response(self, raw_text: str) -> ExtractionData:
-        """Gemini からの JSON レスポンスを解析・検証する。"""
-        text = raw_text.strip()
-
-        if text.startswith("```"):
-            first_newline = text.index("\n")
-            text = text[first_newline + 1 :]
-        if text.endswith("```"):
-            text = text[:-3]
-        text = text.strip()
-
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError as e:
-            logger.error(
-                "extractor_json_parse_error",
-                raw_text=raw_text[:500],
-                error=str(e),
-            )
-            raise ProviderError(f"Failed to parse Gemini response as JSON: {e}")
-
-        try:
-            title_ja = str(data["title_ja"]).strip()
-            summary_ja = str(data["summary_ja"]).strip()
-
-            if not title_ja:
-                raise ProviderError("title_ja is empty")
-            if not summary_ja:
-                raise ProviderError("summary_ja is empty")
-
-            # エンティティのパースと検証
-            raw_entities = data.get("entities", [])
-            seen: set[tuple[str, str]] = set()
-            entities: list[EntityData] = []
-
-            for raw in raw_entities:
-                name = str(raw["name"]).strip()
-                entity_type = str(raw["type"]).strip().lower()
-
-                if not name or not entity_type:
-                    continue
-
-                key = (name.lower(), entity_type)
-                if key in seen:
-                    continue
-                seen.add(key)
-
-                entities.append(EntityData(name=name, type=entity_type))
-
-            return ExtractionData(
-                title_ja=title_ja,
-                summary_ja=summary_ja,
-                entities=entities,
-            )
-        except (KeyError, TypeError) as e:
-            logger.error(
-                "extractor_validation_error",
-                data=data,
-                error=str(e),
-            )
-            raise ProviderError(f"Invalid extraction data from Gemini: {e}")

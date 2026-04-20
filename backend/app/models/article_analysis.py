@@ -21,6 +21,7 @@ from app.models.base import Base
 from app.utils.sanitize import strip_html_tags
 
 if TYPE_CHECKING:
+    from app.analysis.extraction.schema import ExtractionResponse
     from app.models.article import Article
     from app.models.topic import Topic
     from app.models.watchlist_entry import WatchlistEntry
@@ -84,9 +85,7 @@ class ArticleAnalysis(Base):
         cls,
         *,
         article_id: int,
-        title_ja: str,
-        summary_ja: str,
-        entities: list[tuple[str, str]],
+        response: ExtractionResponse,
         model_name: str,
     ) -> ArticleAnalysis:
         """Stage 1 の抽出結果から分析オブジェクトを構築する。
@@ -95,8 +94,11 @@ class ArticleAnalysis(Base):
         """
         return cls(
             article_id=article_id,
-            translated_title=strip_html_tags(title_ja) or "",
-            summary=strip_html_tags(summary_ja) or "",
+            translated_title=strip_html_tags(response.title_ja) or "",
+            summary=strip_html_tags(response.summary_ja) or "",
             ai_model=model_name,
-            entities=[ArticleEntity(name=name, type=etype) for name, etype in entities],
+            entities=[
+                ArticleEntity(name=e.name.root, type=e.type.root)
+                for e in response.entities
+            ],
         )

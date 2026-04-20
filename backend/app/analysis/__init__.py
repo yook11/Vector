@@ -4,8 +4,9 @@ from app.analysis.classification_service import (
     ClassificationResult,
     ClassificationService,
 )
-from app.analysis.classifier.base import BaseClassifier, ClassificationData
+from app.analysis.classifier.base import BaseClassifier
 from app.analysis.classifier.factory import get_classifier
+from app.analysis.classifier.schema import ClassificationResponse, ValidCategory
 from app.analysis.embedder.base import BaseEmbedder
 from app.analysis.embedder.factory import get_embedder
 from app.analysis.embedding_service import (
@@ -25,7 +26,8 @@ from app.analysis.errors import (
 )
 from app.analysis.extraction import (
     BaseExtractor,
-    ExtractionData,
+    EntityResponse,
+    ExtractionResponse,
     ExtractionResult,
     ExtractionService,
     get_extractor,
@@ -36,14 +38,15 @@ __all__ = [
     "BaseClassifier",
     "BaseEmbedder",
     "BaseExtractor",
-    "ClassificationData",
+    "ClassificationResponse",
     "ClassificationResult",
     "ClassificationService",
     "ConfigurationError",
     "DailyQuotaExhaustedError",
     "EmbeddingResult",
     "EmbeddingService",
-    "ExtractionData",
+    "EntityResponse",
+    "ExtractionResponse",
     "ExtractionResult",
     "ExtractionService",
     "InvalidInputError",
@@ -51,6 +54,7 @@ __all__ = [
     "ProviderError",
     "RateLimitError",
     "UnclassifiedError",
+    "ValidCategory",
     "build_embed_text",
     "get_classifier",
     "get_embedder",

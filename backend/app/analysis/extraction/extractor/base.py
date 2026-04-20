@@ -3,31 +3,14 @@
 from __future__ import annotations
 
 import abc
-from dataclasses import dataclass
 from typing import ClassVar
 
 import structlog
 
 from app.analysis.errors import AnalysisDomainError
+from app.analysis.extraction.schema import ExtractionResponse
 
 logger = structlog.get_logger(__name__)
-
-
-@dataclass
-class EntityData:
-    """抽出されたエンティティ 1 件。"""
-
-    name: str
-    type: str
-
-
-@dataclass
-class ExtractionData:
-    """DB 永続化前のパース済み抽出結果。"""
-
-    title_ja: str
-    summary_ja: str
-    entities: list[EntityData]
 
 
 class BaseExtractor(abc.ABC):
@@ -70,7 +53,7 @@ class BaseExtractor(abc.ABC):
         self,
         title: str,
         content: str,
-    ) -> ExtractionData:
+    ) -> ExtractionResponse:
         """記事から事実を抽出し、構造化データを返す。
 
         Article の存在が content の品質を保証する（50 文字以上）。
@@ -80,7 +63,7 @@ class BaseExtractor(abc.ABC):
             content: 記事本文全文（Article.original_content）。
 
         Returns:
-            翻訳タイトル・事実ベース要約・エンティティリストを含む ExtractionData。
+            翻訳タイトル・事実ベース要約・エンティティリストを含む ExtractionResponse。
 
         Raises:
             AnalysisDomainError: 抽出に失敗した場合。
@@ -88,8 +71,8 @@ class BaseExtractor(abc.ABC):
         ...
 
     @abc.abstractmethod
-    async def _call_api(self, prompt: str) -> str:
-        """プロバイダー SDK を呼び出し、生のテキストレスポンスを返す。"""
+    async def _call_api(self, prompt: str) -> ExtractionResponse:
+        """プロバイダー SDK を呼び出し、構造化レスポンスを返す。"""
         ...
 
     @abc.abstractmethod
@@ -99,7 +82,7 @@ class BaseExtractor(abc.ABC):
 
     # -- 単発呼び出し --
 
-    async def _call_once(self, prompt: str) -> str:
+    async def _call_once(self, prompt: str) -> ExtractionResponse:
         """プロバイダー API を 1 回呼び出し、例外をエラー階層に変換する。"""
         try:
             logger.info("extractor_api_call", model=self.model_name)
