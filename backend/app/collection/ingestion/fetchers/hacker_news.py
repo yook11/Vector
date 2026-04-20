@@ -7,6 +7,7 @@ import httpx
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.collection.errors import PermanentFetchError, TemporaryFetchError
 from app.collection.ingestion.fetchers.source_helpers import (
     get_last_successful_fetch_at,
 )
@@ -103,9 +104,12 @@ class HackerNewsFetcher:
         session: AsyncSession,
         source: NewsSource,
     ) -> SourceFetchResult:
-        """HN のストーリーを取得し ArticleCandidate 経由で永続化する。"""
-        result = SourceFetchResult(source_id=source.id)
+        """HN のストーリーを取得し ArticleCandidate 経由で永続化する。
 
+        Raises:
+            PermanentFetchError: 403 / 404 / 410 / 451。
+            TemporaryFetchError: 429 / 5xx / タイムアウト / ネットワークエラー。
+        """
         # fetch_logs から直近フェッチ時刻を導出
         last_fetched = await get_last_successful_fetch_at(session, source.id)
         since_timestamp: int | None = None
@@ -115,23 +119,18 @@ class HackerNewsFetcher:
         try:
             stories = await self._fetch_recent_stories(client, since_timestamp)
         except httpx.HTTPStatusError as e:
-            logger.error(
-                "hn_http_error",
-                source=source.name,
-                status=e.response.status_code,
-            )
-            result.success = False
-            result.error_message = f"HTTP {e.response.status_code}"
-            return result
+            status = e.response.status_code
+            logger.error("hn_http_error", source=source.name, status=status)
+            if status in (403, 404, 410, 451):
+                raise PermanentFetchError(f"HTTP {status}: {source.name}") from e
+            raise TemporaryFetchError(f"HTTP {status}: {source.name}") from e
         except httpx.RequestError as e:
             logger.error("hn_request_error", source=source.name, error=str(e))
-            result.success = False
-            result.error_message = str(e)
-            return result
+            raise TemporaryFetchError(f"request error: {source.name}: {e}") from e
 
         if not stories:
             logger.info("hn_no_new_stories", source=source.name)
-            return result
+            return SourceFetchResult()
 
         # ストーリーを ArticleCandidate に変換（SafeUrl 検証付き）
         candidates: list[ArticleCandidate] = []
@@ -143,7 +142,6 @@ class HackerNewsFetcher:
                     source=source.name,
                     url=story.url[:200],
                 )
-                result.skipped_count += 1
                 continue
 
             candidates.append(
@@ -155,18 +153,12 @@ class HackerNewsFetcher:
             )
 
         if not candidates:
-            return result
+            return SourceFetchResult()
 
-        # 永続化を共通ロジックに委譲
-        persist_result = await persist_new_articles(session, source, candidates)
-        result.new_count = persist_result.new_count
-        result.skipped_count += persist_result.skipped_count
-        result.new_discovered = persist_result.new_discovered
-
+        result = await persist_new_articles(session, source, candidates)
         logger.info(
             "hn_fetch_completed",
             source=source.name,
-            new=result.new_count,
-            skipped=result.skipped_count,
+            new=len(result.new_discovered),
         )
         return result

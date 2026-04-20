@@ -93,9 +93,7 @@ class StubEmbedder(BaseEmbedder):
         self._side_effects = list(side_effects or [])
         self._calls: list[tuple[str | list[str]]] = []
 
-    async def _call_api(
-        self, contents: str | list[str]
-    ) -> list[list[float]]:
+    async def _call_api(self, contents: str | list[str]) -> list[list[float]]:
         self._calls.append((contents,))
         if self._side_effects:
             effect = self._side_effects.pop(0)
@@ -192,9 +190,7 @@ def test_base_embedder_rejects_subclass_without_classvar() -> None:
             RPM = None
             # RPD は意図的に未定義
 
-            async def _call_api(
-                self, contents: str | list[str]
-            ) -> list[list[float]]:
+            async def _call_api(self, contents: str | list[str]) -> list[list[float]]:
                 return [[0.0]]
 
             def _translate_error(self, exc: Exception) -> AnalysisDomainError:

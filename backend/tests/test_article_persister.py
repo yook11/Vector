@@ -56,8 +56,6 @@ async def test_persist_saves_new_articles(
 
     result = await persist_new_articles(db_session, sample_source, candidates)
 
-    assert result.new_count == 2
-    assert result.skipped_count == 0
     assert len(result.new_discovered) == 2
 
     await db_session.flush()
@@ -92,8 +90,7 @@ async def test_persist_skips_duplicate_urls(
 
     result = await persist_new_articles(db_session, sample_source, candidates)
 
-    assert result.new_count == 1
-    assert result.skipped_count == 1
+    assert len(result.new_discovered) == 1
 
 
 @pytest.mark.asyncio
@@ -113,7 +110,7 @@ async def test_persist_respects_max_articles_limit(
         mock_settings.max_articles_per_fetch = 50
         result = await persist_new_articles(db_session, sample_source, candidates)
 
-    assert result.new_count == 50
+    assert len(result.new_discovered) == 50
 
 
 @pytest.mark.asyncio
@@ -123,8 +120,6 @@ async def test_persist_with_empty_candidates(
     """空の候補リストでは何も保存されない。"""
     result = await persist_new_articles(db_session, sample_source, [])
 
-    assert result.new_count == 0
-    assert result.skipped_count == 0
     assert result.new_discovered == []
 
 
@@ -146,5 +141,4 @@ async def test_persist_deduplicates_within_batch(
 
     result = await persist_new_articles(db_session, sample_source, candidates)
 
-    assert result.new_count == 1
-    assert result.skipped_count == 1
+    assert len(result.new_discovered) == 1

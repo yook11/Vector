@@ -331,7 +331,10 @@ class TestDecodeHtmlResponse:
 
     def test_falls_back_on_invalid_charset(self) -> None:
         """meta charset が不正なエンコーディング名でもクラッシュしない。"""
-        html_bytes = b'<html><head><meta charset="not-a-real-encoding"></head><body>ok</body></html>'
+        html_bytes = (
+            b'<html><head><meta charset="not-a-real-encoding">'
+            b"</head><body>ok</body></html>"
+        )
         resp = httpx.Response(
             200,
             content=html_bytes,
