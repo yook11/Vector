@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.collection.extraction.extractor import TemporaryFetchError
+from app.collection.errors import TemporaryFetchError
 
 
 def _make_ctx(
