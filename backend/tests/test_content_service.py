@@ -7,11 +7,10 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
+from app.collection.errors import PermanentFetchError, TemporaryFetchError
 from app.collection.extraction.extractor import (
     ArticleHtmlExtractor,
     HtmlExtractionResult,
-    PermanentFetchError,
-    TemporaryFetchError,
 )
 from app.collection.extraction.service import ContentFetchService
 from app.models.article import Article

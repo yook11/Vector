@@ -19,10 +19,8 @@ from app.brokers import (
     broker_metadata,
     is_last_attempt,
 )
-from app.collection.extraction.extractor import (
-    ArticleHtmlExtractor,
-    TemporaryFetchError,
-)
+from app.collection.errors import TemporaryFetchError
+from app.collection.extraction.extractor import ArticleHtmlExtractor
 from app.collection.extraction.service import ContentFetchService
 from app.collection.ingestion.quota import check_daily_quota
 from app.collection.ingestion.registry import get_fetcher

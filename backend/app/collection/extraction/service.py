@@ -15,10 +15,8 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
-from app.collection.extraction.extractor import (
-    ArticleHtmlExtractor,
-    PermanentFetchError,
-)
+from app.collection.errors import PermanentFetchError
+from app.collection.extraction.extractor import ArticleHtmlExtractor
 from app.models.article import Article
 from app.models.discovered_article import DiscoveredArticle
 

@@ -23,6 +23,8 @@ import httpx
 import structlog
 import trafilatura
 
+from app.collection.errors import PermanentFetchError, TemporaryFetchError
+
 logger = structlog.get_logger(__name__)
 
 HTTP_TIMEOUT = 30.0
@@ -71,14 +73,6 @@ def _decode_html_response(response: httpx.Response) -> str:
 
     # meta charset もなければ httpx のデフォルト（UTF-8）にフォールバック
     return response.text
-
-
-class PermanentFetchError(Exception):
-    """リトライ不可のフェッチ失敗（403 / 404 / robots.txt で拒否）。"""
-
-
-class TemporaryFetchError(Exception):
-    """リトライ可能なフェッチ失敗（5xx / タイムアウト / 429）。"""
 
 
 @dataclass(frozen=True)
