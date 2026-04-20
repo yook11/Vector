@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import time
 
-import httpx
 import structlog
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 from taskiq import Context, TaskiqDepends
 
@@ -22,15 +22,35 @@ from app.brokers import (
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
 from app.collection.extraction.extractor import ArticleHtmlExtractor
 from app.collection.extraction.service import ContentFetchService
-from app.collection.ingestion.persister import SourceFetchResult
-from app.collection.ingestion.quota import check_daily_quota
-from app.collection.ingestion.registry import get_fetcher
+from app.collection.ingestion.service import SourceFetchService
 from app.models.fetch_log import FetchLog, FetchStatus
 from app.models.news_source import NewsSource
 
 logger = structlog.get_logger(__name__)
 
-_USER_AGENT = "Mozilla/5.0 (compatible; Vector/1.0; +https://github.com/yook11/Vector)"
+
+async def _record_fetch_log(
+    session_factory: async_sessionmaker[AsyncSession],
+    source_id: int,
+    status: FetchStatus,
+    articles_count: int,
+    error_message: str | None,
+    start_time: float,
+) -> None:
+    """単一 FetchLog 行を書き込む。Task 層の「実行結果記録」責務。"""
+    duration_ms = int((time.monotonic() - start_time) * 1000)
+    async with session_factory() as session:
+        session.add(
+            FetchLog(
+                source_id=source_id,
+                status=status,
+                articles_count=articles_count,
+                error_message=error_message,
+                duration_ms=duration_ms,
+            )
+        )
+        await session.commit()
+
 
 # ---------------------------------------------------------------------------
 # Metadata fetch — dispatch
@@ -94,94 +114,45 @@ async def fetch_source_metadata(
     """単一ソースのメタデータを取得し、新規記事を下流キューへ dispatch する。"""
     logger.info("fetch_source_metadata_started", source_id=source_id)
     session_factory = ctx.state.session_factory
+    svc = SourceFetchService(session_factory)
+    start_time = time.monotonic()
 
-    async with session_factory() as session:
-        source = await session.get(NewsSource, source_id)
-        if source is None:
-            logger.warning(
-                "fetch_source_metadata_skipped",
-                source_id=source_id,
-                reason="source not found",
-            )
-            return {"source_id": source_id, "status": "not_found"}
-
-        fetcher = get_fetcher(source)
-
-        daily_limit = getattr(fetcher, "DAILY_REQUEST_LIMIT", None)
-        if daily_limit is not None:
-            if not await check_daily_quota(source.id, daily_limit):
-                logger.info(
-                    "fetch_source_metadata_quota_exceeded",
-                    source_id=source_id,
-                    source=source.name,
-                )
-                return {
-                    "source_id": source_id,
-                    "status": "skipped",
-                    "reason": "daily_quota",
-                }
-
-        start_time = time.monotonic()
-        status = FetchStatus.SUCCESS
-        error_message: str | None = None
-        source_result = SourceFetchResult()
-
-        async with httpx.AsyncClient(headers={"User-Agent": _USER_AGENT}) as client:
-            try:
-                source_result = await fetcher.fetch(client, session, source)
-            except PermanentFetchError as e:
-                status = FetchStatus.ERROR
-                error_message = str(e)
-            except TemporaryFetchError as e:
-                duration_ms = int((time.monotonic() - start_time) * 1000)
-                session.add(
-                    FetchLog(
-                        source_id=source.id,
-                        status=FetchStatus.ERROR,
-                        articles_count=0,
-                        error_message=str(e),
-                        duration_ms=duration_ms,
-                    )
-                )
-                await session.commit()
-                if is_last_attempt(ctx):
-                    logger.warning(
-                        "fetch_source_metadata_max_retries",
-                        source_id=source_id,
-                        error=str(e),
-                    )
-                    return {
-                        "source_id": source_id,
-                        "status": "error",
-                        "reason": str(e),
-                    }
-                raise
-
-        duration_ms = int((time.monotonic() - start_time) * 1000)
-        new_count = len(source_result.new_discovered)
-
-        session.add(
-            FetchLog(
-                source_id=source.id,
-                status=status,
-                articles_count=new_count,
-                error_message=error_message,
-                duration_ms=duration_ms,
-            )
+    try:
+        result = await svc.execute(source_id)
+    except PermanentFetchError as e:
+        await _record_fetch_log(
+            session_factory, source_id, FetchStatus.ERROR, 0, str(e), start_time
         )
-        await session.commit()
+        return {"source_id": source_id, "status": "error", "reason": str(e)}
+    except TemporaryFetchError as e:
+        await _record_fetch_log(
+            session_factory, source_id, FetchStatus.ERROR, 0, str(e), start_time
+        )
+        if is_last_attempt(ctx):
+            logger.warning(
+                "fetch_source_metadata_max_retries",
+                source_id=source_id,
+                error=str(e),
+            )
+            return {"source_id": source_id, "status": "error", "reason": str(e)}
+        raise
 
-    # 全件 fetch_content へ dispatch
-    for discovered in source_result.new_discovered:
+    if result.status == "not_found":
+        return {"source_id": source_id, "status": "not_found"}
+    if result.status == "skipped_quota":
+        return {"source_id": source_id, "status": "skipped", "reason": "daily_quota"}
+
+    new_count = len(result.new_discovered)
+    await _record_fetch_log(
+        session_factory, source_id, FetchStatus.SUCCESS, new_count, None, start_time
+    )
+
+    for discovered in result.new_discovered:
         await fetch_content.kiq(discovered.id)
 
-    result = {
-        "source_id": source_id,
-        "new_count": new_count,
-        "status": status.value,
-    }
-    logger.info("fetch_source_metadata_completed", **result)
-    return result
+    payload = {"source_id": source_id, "new_count": new_count, "status": "success"}
+    logger.info("fetch_source_metadata_completed", **payload)
+    return payload
 
 
 # ---------------------------------------------------------------------------

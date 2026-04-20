@@ -1,11 +1,15 @@
-"""メタデータタスク (dispatch_sources / fetch_source_metadata) のテスト。"""
+"""メタデータタスク (dispatch_sources / fetch_source_metadata) のテスト。
+
+Task 層は SourceFetchService を呼ぶだけ — ビジネス判断は Service に閉じているため、
+ここでは Service を mock し、Task の分岐 (status ディスパッチ + retry) を検証する。
+"""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
-from app.collection.ingestion.persister import SourceFetchResult
+from app.collection.ingestion.service import SourceFetchResult
 from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
 
@@ -36,6 +40,20 @@ def _make_ctx(
 def _patch_session_factory(ctx: MagicMock, mock_session: AsyncMock) -> None:
     """ctx.state.session_factory() が async cm 経由で mock_session を返すようにする。"""
     ctx.state.session_factory.return_value = _mock_session_context(mock_session)
+
+
+def _patch_service(result_or_exc) -> object:  # noqa: ANN001
+    """SourceFetchService.execute を mock する context manager を返す。"""
+    if isinstance(result_or_exc, BaseException):
+        execute = AsyncMock(side_effect=result_or_exc)
+    else:
+        execute = AsyncMock(return_value=result_or_exc)
+    svc = MagicMock()
+    svc.execute = execute
+    return patch(
+        "app.collection.tasks.SourceFetchService",
+        return_value=svc,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -99,33 +117,20 @@ class TestFetchSourceMetadata:
         """新規記事を全件 fetch_content に dispatch する。"""
         from app.collection.tasks import fetch_source_metadata
 
-        mock_session = AsyncMock()
         mock_ctx = _make_ctx()
-        _patch_session_factory(mock_ctx, mock_session)
-
-        source = MagicMock(spec=NewsSource)
-        source.id = 1
-        source.name = "Test Source"
-        mock_session.get = AsyncMock(return_value=source)
-
         discovered_a = MagicMock(spec=DiscoveredArticle)
         discovered_a.id = 10
-
         discovered_b = MagicMock(spec=DiscoveredArticle)
         discovered_b.id = 11
 
         fetch_result = SourceFetchResult(
+            status="fetched",
             new_discovered=[discovered_a, discovered_b],
         )
 
-        mock_fetcher = AsyncMock()
-        mock_fetcher.fetch = AsyncMock(return_value=fetch_result)
-
         with (
-            patch(
-                "app.collection.tasks.get_fetcher",
-                return_value=mock_fetcher,
-            ),
+            _patch_service(fetch_result),
+            patch("app.collection.tasks._record_fetch_log", new_callable=AsyncMock),
             patch("app.collection.tasks.fetch_content") as mock_fc,
         ):
             mock_fc.kiq = AsyncMock()
@@ -133,146 +138,78 @@ class TestFetchSourceMetadata:
 
         assert result["new_count"] == 2
         assert result["status"] == "success"
-        # 全件 fetch_content へ dispatch
         assert mock_fc.kiq.call_count == 2
         mock_fc.kiq.assert_any_call(10)
         mock_fc.kiq.assert_any_call(11)
 
     @pytest.mark.asyncio
-    async def test_skips_when_daily_quota_exceeded(self) -> None:
-        """クォータ超過時は fetcher.fetch を呼ばず skipped を返す。"""
+    async def test_skipped_quota_returns_early(self) -> None:
+        """Service が status='skipped_quota' を返したら下流 dispatch しない。"""
         from app.collection.tasks import fetch_source_metadata
 
-        mock_session = AsyncMock()
         mock_ctx = _make_ctx()
-        _patch_session_factory(mock_ctx, mock_session)
-
-        source = MagicMock(spec=NewsSource)
-        source.id = 1
-        source.name = "AV Source"
-        mock_session.get = AsyncMock(return_value=source)
-
-        mock_fetcher = AsyncMock()
-        mock_fetcher.DAILY_REQUEST_LIMIT = 25
+        fetch_result = SourceFetchResult(status="skipped_quota")
 
         with (
+            _patch_service(fetch_result),
             patch(
-                "app.collection.tasks.get_fetcher",
-                return_value=mock_fetcher,
-            ),
-            patch(
-                "app.collection.tasks.check_daily_quota",
-                return_value=False,
-            ) as mock_quota,
+                "app.collection.tasks._record_fetch_log",
+                new_callable=AsyncMock,
+            ) as mock_log,
+            patch("app.collection.tasks.fetch_content") as mock_fc,
         ):
+            mock_fc.kiq = AsyncMock()
             result = await fetch_source_metadata(source_id=1, ctx=mock_ctx)
 
         assert result["status"] == "skipped"
         assert result["reason"] == "daily_quota"
-        mock_quota.assert_called_once_with(1, 25)
-        mock_fetcher.fetch.assert_not_called()
+        mock_fc.kiq.assert_not_called()
+        mock_log.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_proceeds_when_daily_quota_available(self) -> None:
-        """クォータに余裕がある場合は通常フローで fetch を実行する。"""
+    async def test_not_found_returns_early(self) -> None:
+        """Service が status='not_found' を返したら not_found を返す。"""
         from app.collection.tasks import fetch_source_metadata
 
-        mock_session = AsyncMock()
         mock_ctx = _make_ctx()
-        _patch_session_factory(mock_ctx, mock_session)
-
-        source = MagicMock(spec=NewsSource)
-        source.id = 1
-        source.name = "AV Source"
-        mock_session.get = AsyncMock(return_value=source)
-
-        fetch_result = SourceFetchResult(new_discovered=[])
-        mock_fetcher = AsyncMock()
-        mock_fetcher.DAILY_REQUEST_LIMIT = 25
-        mock_fetcher.fetch = AsyncMock(return_value=fetch_result)
+        fetch_result = SourceFetchResult(status="not_found")
 
         with (
+            _patch_service(fetch_result),
             patch(
-                "app.collection.tasks.get_fetcher",
-                return_value=mock_fetcher,
-            ),
-            patch(
-                "app.collection.tasks.check_daily_quota",
-                return_value=True,
-            ) as mock_quota,
+                "app.collection.tasks._record_fetch_log",
+                new_callable=AsyncMock,
+            ) as mock_log,
+            patch("app.collection.tasks.fetch_content") as mock_fc,
         ):
-            result = await fetch_source_metadata(source_id=1, ctx=mock_ctx)
+            mock_fc.kiq = AsyncMock()
+            result = await fetch_source_metadata(source_id=999, ctx=mock_ctx)
 
-        mock_quota.assert_called_once_with(1, 25)
-        mock_fetcher.fetch.assert_called_once()
-        assert result["status"] == "success"
-
-    @pytest.mark.asyncio
-    async def test_skips_quota_check_for_fetcher_without_limit(self) -> None:
-        """DAILY_REQUEST_LIMIT を持たない Fetcher ではクォータチェックをスキップ。"""
-        from app.collection.tasks import fetch_source_metadata
-
-        mock_session = AsyncMock()
-        mock_ctx = _make_ctx()
-        _patch_session_factory(mock_ctx, mock_session)
-
-        source = MagicMock(spec=NewsSource)
-        source.id = 1
-        source.name = "RSS Source"
-        mock_session.get = AsyncMock(return_value=source)
-
-        fetch_result = SourceFetchResult(new_discovered=[])
-        mock_fetcher = AsyncMock()
-        # DAILY_REQUEST_LIMIT を持たない
-        del mock_fetcher.DAILY_REQUEST_LIMIT
-        mock_fetcher.fetch = AsyncMock(return_value=fetch_result)
-
-        with (
-            patch(
-                "app.collection.tasks.get_fetcher",
-                return_value=mock_fetcher,
-            ),
-            patch(
-                "app.collection.tasks.check_daily_quota",
-            ) as mock_quota,
-        ):
-            result = await fetch_source_metadata(source_id=1, ctx=mock_ctx)
-
-        mock_quota.assert_not_called()
-        mock_fetcher.fetch.assert_called_once()
-        assert result["status"] == "success"
+        assert result["status"] == "not_found"
+        mock_fc.kiq.assert_not_called()
+        mock_log.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_permanent_error_records_error_status(self) -> None:
         """PermanentFetchError を捕捉して status=error を返す (raise しない)。"""
         from app.collection.tasks import fetch_source_metadata
 
-        mock_session = AsyncMock()
         mock_ctx = _make_ctx()
-        _patch_session_factory(mock_ctx, mock_session)
-
-        source = MagicMock(spec=NewsSource)
-        source.id = 1
-        source.name = "Broken Source"
-        mock_session.get = AsyncMock(return_value=source)
-
-        mock_fetcher = AsyncMock()
-        mock_fetcher.fetch = AsyncMock(
-            side_effect=PermanentFetchError("HTTP 404: Broken Source")
-        )
 
         with (
+            _patch_service(PermanentFetchError("HTTP 404: Broken Source")),
             patch(
-                "app.collection.tasks.get_fetcher",
-                return_value=mock_fetcher,
-            ),
+                "app.collection.tasks._record_fetch_log",
+                new_callable=AsyncMock,
+            ) as mock_log,
             patch("app.collection.tasks.fetch_content") as mock_fc,
         ):
             mock_fc.kiq = AsyncMock()
             result = await fetch_source_metadata(source_id=1, ctx=mock_ctx)
 
         assert result["status"] == "error"
-        assert result["new_count"] == 0
+        assert "404" in result["reason"]
+        mock_log.assert_awaited_once()
         mock_fc.kiq.assert_not_called()
 
     @pytest.mark.asyncio
@@ -280,23 +217,11 @@ class TestFetchSourceMetadata:
         """TemporaryFetchError は retry 可能なので raise する。"""
         from app.collection.tasks import fetch_source_metadata
 
-        mock_session = AsyncMock()
         mock_ctx = _make_ctx(retry_count=0, max_retries=2)
-        _patch_session_factory(mock_ctx, mock_session)
 
-        source = MagicMock(spec=NewsSource)
-        source.id = 1
-        source.name = "Flaky Source"
-        mock_session.get = AsyncMock(return_value=source)
-
-        mock_fetcher = AsyncMock()
-        mock_fetcher.fetch = AsyncMock(
-            side_effect=TemporaryFetchError("HTTP 500: Flaky Source")
-        )
-
-        with patch(
-            "app.collection.tasks.get_fetcher",
-            return_value=mock_fetcher,
+        with (
+            _patch_service(TemporaryFetchError("HTTP 500: Flaky Source")),
+            patch("app.collection.tasks._record_fetch_log", new_callable=AsyncMock),
         ):
             with pytest.raises(TemporaryFetchError):
                 await fetch_source_metadata(source_id=1, ctx=mock_ctx)
@@ -306,39 +231,12 @@ class TestFetchSourceMetadata:
         """TemporaryFetchError でも最終試行では飲み込んで status=error を返す。"""
         from app.collection.tasks import fetch_source_metadata
 
-        mock_session = AsyncMock()
         mock_ctx = _make_ctx(retry_count=2, max_retries=2)
-        _patch_session_factory(mock_ctx, mock_session)
 
-        source = MagicMock(spec=NewsSource)
-        source.id = 1
-        source.name = "Flaky Source"
-        mock_session.get = AsyncMock(return_value=source)
-
-        mock_fetcher = AsyncMock()
-        mock_fetcher.fetch = AsyncMock(
-            side_effect=TemporaryFetchError("HTTP 500: Flaky Source")
-        )
-
-        with patch(
-            "app.collection.tasks.get_fetcher",
-            return_value=mock_fetcher,
+        with (
+            _patch_service(TemporaryFetchError("HTTP 500: Flaky Source")),
+            patch("app.collection.tasks._record_fetch_log", new_callable=AsyncMock),
         ):
             result = await fetch_source_metadata(source_id=1, ctx=mock_ctx)
 
         assert result["status"] == "error"
-
-    @pytest.mark.asyncio
-    async def test_returns_not_found_for_missing_source(self) -> None:
-        """存在しないソース ID の場合は not_found を返す。"""
-        from app.collection.tasks import fetch_source_metadata
-
-        mock_session = AsyncMock()
-        mock_ctx = _make_ctx()
-        _patch_session_factory(mock_ctx, mock_session)
-
-        mock_session.get = AsyncMock(return_value=None)
-
-        result = await fetch_source_metadata(source_id=999, ctx=mock_ctx)
-
-        assert result["status"] == "not_found"

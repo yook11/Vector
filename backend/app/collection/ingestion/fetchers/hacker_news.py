@@ -1,19 +1,20 @@
 """Hacker News フェッチャ — Algolia HN Search API クライアント。"""
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 
 import httpx
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
-from app.collection.ingestion.fetchers.source_helpers import (
-    get_last_successful_fetch_at,
+from app.collection.ingestion.fetchers.hn_fetch_state import (
+    get_last_fetched_at,
+    set_last_fetched_at,
 )
 from app.collection.ingestion.persister import (
     ArticleCandidate,
-    SourceFetchResult,
+    PersistResult,
     persist_new_articles,
     to_safe_url,
 )
@@ -103,15 +104,15 @@ class HackerNewsFetcher:
         client: httpx.AsyncClient,
         session: AsyncSession,
         source: NewsSource,
-    ) -> SourceFetchResult:
+    ) -> PersistResult:
         """HN のストーリーを取得し ArticleCandidate 経由で永続化する。
 
         Raises:
             PermanentFetchError: 403 / 404 / 410 / 451。
             TemporaryFetchError: 429 / 5xx / タイムアウト / ネットワークエラー。
         """
-        # fetch_logs から直近フェッチ時刻を導出
-        last_fetched = await get_last_successful_fetch_at(session, source.id)
+        # HN 固有の増分取得 state を Redis から読む
+        last_fetched = await get_last_fetched_at(source.id)
         since_timestamp: int | None = None
         if last_fetched:
             since_timestamp = int(last_fetched.timestamp())
@@ -128,9 +129,12 @@ class HackerNewsFetcher:
             logger.error("hn_request_error", source=source.name, error=str(e))
             raise TemporaryFetchError(f"request error: {source.name}: {e}") from e
 
+        # 成功した時点で次回の増分取得キーを更新
+        await set_last_fetched_at(source.id, datetime.now(UTC))
+
         if not stories:
             logger.info("hn_no_new_stories", source=source.name)
-            return SourceFetchResult()
+            return PersistResult()
 
         # ストーリーを ArticleCandidate に変換（SafeUrl 検証付き）
         candidates: list[ArticleCandidate] = []
@@ -153,7 +157,7 @@ class HackerNewsFetcher:
             )
 
         if not candidates:
-            return SourceFetchResult()
+            return PersistResult()
 
         result = await persist_new_articles(session, source, candidates)
         logger.info(

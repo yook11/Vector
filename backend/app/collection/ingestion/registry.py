@@ -11,7 +11,7 @@ from typing import Protocol, runtime_checkable
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.collection.ingestion.persister import SourceFetchResult
+from app.collection.ingestion.persister import PersistResult
 from app.domain.news_source import SourceName
 from app.models.news_source import NewsSource
 
@@ -25,7 +25,7 @@ class SourceFetcher(Protocol):
         client: httpx.AsyncClient,
         session: AsyncSession,
         source: NewsSource,
-    ) -> SourceFetchResult: ...
+    ) -> PersistResult: ...
 
 
 def _build_registry() -> dict[SourceName, SourceFetcher]:

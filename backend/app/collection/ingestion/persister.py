@@ -37,8 +37,8 @@ class ArticleCandidate:
 
 
 @dataclass
-class SourceFetchResult:
-    """単一ソースのフェッチ結果 — 下流キューへ dispatch する新規発見記事を保持する。"""
+class PersistResult:
+    """``persist_new_articles`` の内部結果 — 実際に新規追加された DiscoveredArticle。"""
 
     new_discovered: list[DiscoveredArticle] = field(default_factory=list)
 
@@ -55,7 +55,7 @@ async def persist_new_articles(
     session: AsyncSession,
     source: NewsSource,
     candidates: list[ArticleCandidate],
-) -> SourceFetchResult:
+) -> PersistResult:
     """ArticleCandidate リストを重複排除して DB に保存する。
 
     Args:
@@ -64,9 +64,9 @@ async def persist_new_articles(
         candidates: フェッチャーが生成した記事候補リスト。
 
     Returns:
-        新規発見記事を含む SourceFetchResult。
+        新規発見記事を含む PersistResult。
     """
-    result = SourceFetchResult()
+    result = PersistResult()
 
     if not candidates:
         return result
