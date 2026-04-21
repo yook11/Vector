@@ -1,18 +1,18 @@
-"""Hacker News フェッチャーのテスト。"""
+"""Hacker News フェッチャーのテスト。
+
+Fetcher の責務は "外部 API → ArticleCandidate dict" の変換に限定されるため、
+DB 永続化や重複排除に関するテストは ``test_source_fetch_service.py`` 側で行う。
+"""
 
 from collections.abc import Generator
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import select
 
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
 from app.collection.ingestion.fetchers.hacker_news import HackerNewsFetcher, HNStory
-from app.models.discovered_article import DiscoveredArticle
-from app.models.news_source import NewsSource
 
 _HN_MOD = "app.collection.ingestion.fetchers.hacker_news"
 
@@ -84,6 +84,15 @@ def mock_http_client() -> AsyncMock:
     """HN テスト用の httpx.AsyncClient モックを提供する。"""
     client = AsyncMock(spec=httpx.AsyncClient)
     return client
+
+
+def _sample_hn_source() -> MagicMock:
+    """DB 非依存の HN NewsSource ダミー。"""
+    source = MagicMock()
+    source.id = 1
+    source.name = "Hacker News"
+    source.endpoint_url = "https://hn.algolia.com/api/v1/search_by_date"
+    return source
 
 
 @pytest.fixture(autouse=True)
@@ -179,59 +188,24 @@ async def test_fetch_recent_stories_api_error(
 # --- HackerNewsFetcher.fetch tests ---
 
 
-async def test_save_new_stories(
-    db_session: AsyncSession,
-    sample_hn_source: NewsSource,
+async def test_fetch_returns_candidates_for_stories(
     mock_http_client: AsyncMock,
 ) -> None:
-    """新規 HN story は discovered_articles に保存される。"""
+    """HN story が ArticleCandidate の dict に変換される。"""
     mock_http_client.get.return_value = _mock_hn_response()
 
     fetcher = HackerNewsFetcher()
-    result = await fetcher.fetch(
-        client=mock_http_client, session=db_session, source=sample_hn_source
+    candidates = await fetcher.fetch(
+        client=mock_http_client, source=_sample_hn_source()
     )
-    await db_session.commit()
 
-    assert len(result.new_discovered) == 2
-
-    articles = (await db_session.execute(select(DiscoveredArticle))).scalars().all()
-    assert len(articles) == 2
-
-    for article in articles:
-        assert article.news_source_id == sample_hn_source.id
-        assert article.original_url is not None
-        assert article.original_title is not None
-
-
-async def test_skip_duplicate_url(
-    db_session: AsyncSession,
-    sample_hn_source: NewsSource,
-    mock_http_client: AsyncMock,
-) -> None:
-    """original_url が既存 (RSS 経由) の記事はスキップされる。"""
-    existing = DiscoveredArticle(
-        original_title="Same article from RSS",
-        original_url="https://www.calebleak.com/posts/dog-game/",
-        news_source_id=sample_hn_source.id,
-    )
-    db_session.add(existing)
-    await db_session.commit()
-
-    mock_http_client.get.return_value = _mock_hn_response()
-
-    fetcher = HackerNewsFetcher()
-    result = await fetcher.fetch(
-        client=mock_http_client, session=db_session, source=sample_hn_source
-    )
-    await db_session.commit()
-
-    assert len(result.new_discovered) == 1
+    assert len(candidates) == 2
+    titles = {c.title for c in candidates.values()}
+    assert "I'm helping my dog vibe code games" in titles
+    assert "New Rust release v2.0" in titles
 
 
 async def test_fetch_temporary_error_on_5xx(
-    db_session: AsyncSession,
-    sample_hn_source: NewsSource,
     mock_http_client: AsyncMock,
 ) -> None:
     """5xx は TemporaryFetchError を raise する。"""
@@ -239,14 +213,10 @@ async def test_fetch_temporary_error_on_5xx(
 
     fetcher = HackerNewsFetcher()
     with pytest.raises(TemporaryFetchError):
-        await fetcher.fetch(
-            client=mock_http_client, session=db_session, source=sample_hn_source
-        )
+        await fetcher.fetch(client=mock_http_client, source=_sample_hn_source())
 
 
 async def test_fetch_permanent_error_on_404(
-    db_session: AsyncSession,
-    sample_hn_source: NewsSource,
     mock_http_client: AsyncMock,
 ) -> None:
     """404 は PermanentFetchError を raise する。"""
@@ -254,14 +224,10 @@ async def test_fetch_permanent_error_on_404(
 
     fetcher = HackerNewsFetcher()
     with pytest.raises(PermanentFetchError):
-        await fetcher.fetch(
-            client=mock_http_client, session=db_session, source=sample_hn_source
-        )
+        await fetcher.fetch(client=mock_http_client, source=_sample_hn_source())
 
 
 async def test_fetch_temporary_error_on_network_failure(
-    db_session: AsyncSession,
-    sample_hn_source: NewsSource,
     mock_http_client: AsyncMock,
 ) -> None:
     """ネットワークエラーは TemporaryFetchError を raise する。"""
@@ -269,14 +235,10 @@ async def test_fetch_temporary_error_on_network_failure(
 
     fetcher = HackerNewsFetcher()
     with pytest.raises(TemporaryFetchError):
-        await fetcher.fetch(
-            client=mock_http_client, session=db_session, source=sample_hn_source
-        )
+        await fetcher.fetch(client=mock_http_client, source=_sample_hn_source())
 
 
 async def test_fetch_uses_last_fetched_at_from_redis(
-    db_session: AsyncSession,
-    sample_hn_source: NewsSource,
     mock_http_client: AsyncMock,
     mock_hn_fetch_state: dict[str, AsyncMock],
 ) -> None:
@@ -287,9 +249,7 @@ async def test_fetch_uses_last_fetched_at_from_redis(
     mock_http_client.get.return_value = _mock_hn_response(data={"hits": []})
 
     fetcher = HackerNewsFetcher()
-    await fetcher.fetch(
-        client=mock_http_client, session=db_session, source=sample_hn_source
-    )
+    await fetcher.fetch(client=mock_http_client, source=_sample_hn_source())
 
     call_kwargs = mock_http_client.get.call_args
     params = call_kwargs.kwargs.get("params", {})
@@ -298,28 +258,23 @@ async def test_fetch_uses_last_fetched_at_from_redis(
 
 
 async def test_fetch_updates_last_fetched_at_on_success(
-    db_session: AsyncSession,
-    sample_hn_source: NewsSource,
     mock_http_client: AsyncMock,
     mock_hn_fetch_state: dict[str, AsyncMock],
 ) -> None:
     """成功時は Redis の last_fetched_at を現在時刻で更新する。"""
     mock_http_client.get.return_value = _mock_hn_response(data={"hits": []})
+    source = _sample_hn_source()
 
     fetcher = HackerNewsFetcher()
-    await fetcher.fetch(
-        client=mock_http_client, session=db_session, source=sample_hn_source
-    )
+    await fetcher.fetch(client=mock_http_client, source=source)
 
     mock_hn_fetch_state["set"].assert_awaited_once()
     args, _ = mock_hn_fetch_state["set"].call_args
-    assert args[0] == sample_hn_source.id
+    assert args[0] == source.id
     assert isinstance(args[1], datetime)
 
 
 async def test_fetch_does_not_update_state_on_error(
-    db_session: AsyncSession,
-    sample_hn_source: NewsSource,
     mock_http_client: AsyncMock,
     mock_hn_fetch_state: dict[str, AsyncMock],
 ) -> None:
@@ -328,24 +283,20 @@ async def test_fetch_does_not_update_state_on_error(
 
     fetcher = HackerNewsFetcher()
     with pytest.raises(TemporaryFetchError):
-        await fetcher.fetch(
-            client=mock_http_client, session=db_session, source=sample_hn_source
-        )
+        await fetcher.fetch(client=mock_http_client, source=_sample_hn_source())
 
     mock_hn_fetch_state["set"].assert_not_called()
 
 
 async def test_fetch_empty_response(
-    db_session: AsyncSession,
-    sample_hn_source: NewsSource,
     mock_http_client: AsyncMock,
 ) -> None:
-    """API レスポンスが空なら空の SourceFetchResult を返す。"""
+    """API レスポンスが空なら空 dict を返す。"""
     mock_http_client.get.return_value = _mock_hn_response(data={"hits": []})
 
     fetcher = HackerNewsFetcher()
-    result = await fetcher.fetch(
-        client=mock_http_client, session=db_session, source=sample_hn_source
+    candidates = await fetcher.fetch(
+        client=mock_http_client, source=_sample_hn_source()
     )
 
-    assert result.new_discovered == []
+    assert candidates == {}

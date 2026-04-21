@@ -1,7 +1,8 @@
 """RSS 基底フェッチャー — Template Method パターンによる共通フロー。
 
-条件付き GET（ETag / Last-Modified）→ feedparser → convert_entry → persist
-の共通フローを保持し、エントリ変換ロジックをサブクラスでオーバーライド可能にする。
+条件付き GET（ETag / Last-Modified）→ feedparser → convert_entry の共通フローを
+保持し、エントリ変換ロジックをサブクラスでオーバーライド可能にする。
+永続化は呼び出し側 (``SourceFetchService``) の責務。
 """
 
 import asyncio
@@ -9,15 +10,10 @@ import asyncio
 import feedparser
 import httpx
 import structlog
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
+from app.collection.ingestion.candidate import ArticleCandidate
 from app.collection.ingestion.fetchers.http_cache import get_http_cache, set_http_cache
-from app.collection.ingestion.persister import (
-    ArticleCandidate,
-    PersistResult,
-    persist_new_articles,
-)
 from app.domain.safe_url import SafeUrl
 from app.models.news_source import NewsSource
 
@@ -62,10 +58,9 @@ class BaseRssFetcher:
     async def fetch(
         self,
         client: httpx.AsyncClient,
-        session: AsyncSession,
         source: NewsSource,
-    ) -> PersistResult:
-        """RSS ソース 1 件を取得・処理する。
+    ) -> dict[SafeUrl, ArticleCandidate]:
+        """RSS ソース 1 件を取得し ``ArticleCandidate`` の dict を返す。
 
         Raises:
             PermanentFetchError: 403 / 404 / 410 / 451、フィードのパース失敗。
@@ -85,10 +80,10 @@ class BaseRssFetcher:
                 str(source.endpoint_url), headers=headers, timeout=HTTP_TIMEOUT
             )
 
-            # 304 Not Modified — 新着なし（正常系として空結果を返す）
+            # 304 Not Modified — 新着なし（正常系として空 dict を返す）
             if response.status_code == 304:
                 logger.info("feed_not_modified", source=source.name)
-                return PersistResult()
+                return {}
 
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
@@ -126,7 +121,4 @@ class BaseRssFetcher:
             if candidate is not None:
                 candidates.setdefault(candidate.url, candidate)
 
-        if not candidates:
-            return PersistResult()
-
-        return await persist_new_articles(session, source, candidates)
+        return candidates

@@ -2,8 +2,8 @@
 
 import re
 
+from app.collection.ingestion.candidate import ArticleCandidate
 from app.collection.ingestion.fetchers.rss.base import BaseRssFetcher, extract_guid
-from app.collection.ingestion.persister import ArticleCandidate
 
 # [ITmedia PC USER], [ITmedia エンタープライズ] 等の接頭辞を除去する。
 # \w+ ではなく [^\]]+ を使用: 空白やマルチバイト文字を含むセクション名に対応。
