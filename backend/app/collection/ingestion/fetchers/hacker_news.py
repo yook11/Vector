@@ -18,6 +18,7 @@ from app.collection.ingestion.persister import (
     persist_new_articles,
 )
 from app.config import settings
+from app.domain.safe_url import SafeUrl
 from app.models.news_source import NewsSource
 
 HTTP_TIMEOUT = 30.0
@@ -135,7 +136,8 @@ class HackerNewsFetcher:
             return PersistResult()
 
         # ストーリーを ArticleCandidate に変換（SafeUrl 検証・タイトル整形は内部で担保）
-        candidates: list[ArticleCandidate] = []
+        # dict 組み立てにより URL 重複は先勝ちで型レベル排除される
+        candidates: dict[SafeUrl, ArticleCandidate] = {}
         for story in stories:
             candidate = ArticleCandidate.from_external(
                 raw_url=story.url, raw_title=story.title
@@ -147,7 +149,7 @@ class HackerNewsFetcher:
                     url=story.url[:200],
                 )
                 continue
-            candidates.append(candidate)
+            candidates.setdefault(candidate.url, candidate)
 
         if not candidates:
             return PersistResult()

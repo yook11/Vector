@@ -24,10 +24,12 @@ import structlog
 import trafilatura
 
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
+from app.utils.sanitize import strip_html_tags
 
 logger = structlog.get_logger(__name__)
 
 HTTP_TIMEOUT = 30.0
+_TITLE_MAX_LENGTH = 500
 USER_AGENT = "VectorBot/1.0 (+https://github.com/vector-news)"
 HEADERS = {"User-Agent": USER_AGENT}
 
@@ -77,9 +79,10 @@ def _decode_html_response(response: httpx.Response) -> str:
 
 @dataclass(frozen=True)
 class HtmlExtractionResult:
-    """HTML 抽出結果。本文と公開日時をそれぞれ独立に保持する。"""
+    """HTML 抽出結果。本文・タイトル・公開日時をそれぞれ独立に保持する。"""
 
     body: str | None
+    title: str | None
     published_at: datetime | None
 
 
@@ -160,15 +163,20 @@ def _extract_from_html(html: str, url: str) -> HtmlExtractionResult:
     )
 
     if result is None:
-        return HtmlExtractionResult(body=None, published_at=None)
+        return HtmlExtractionResult(body=None, title=None, published_at=None)
 
     # 本文の品質ゲート: 50 文字未満は棄却
     text = result.get("text")
     body = text.strip() if text and len(text.strip()) >= 50 else None
 
+    # タイトル: trafilatura が OGP / Twitter Card / JSON-LD / <title> / h1 の順で抽出。
+    # HTML タグ除去と 500 文字上限で整形し、空なら None。
+    cleaned_title = strip_html_tags(result.get("title"))
+    title = cleaned_title[:_TITLE_MAX_LENGTH] if cleaned_title else None
+
     published_at = _parse_extracted_date(result.get("date"))
 
-    return HtmlExtractionResult(body=body, published_at=published_at)
+    return HtmlExtractionResult(body=body, title=title, published_at=published_at)
 
 
 class ArticleHtmlExtractor:
@@ -182,11 +190,11 @@ class ArticleHtmlExtractor:
         self._robots_cache = _RobotsCache()
 
     async def fetch(self, url: str) -> HtmlExtractionResult:
-        """指定 URL の HTML から記事本文と公開日時を抽出する。
+        """指定 URL の HTML から記事本文・タイトル・公開日時を抽出する。
 
         Returns:
-            HtmlExtractionResult: body と published_at を独立に保持。
-            Content-Type が不一致の場合は両方 None。
+            HtmlExtractionResult: body / title / published_at を独立に保持。
+            Content-Type が不一致の場合は全て None。
 
         Raises:
             PermanentFetchError: robots.txt 拒否 / 403 / 404 / 410 / 451。
@@ -214,13 +222,13 @@ class ArticleHtmlExtractor:
             content_type = response.headers.get("content-type", "")
             if "text/html" not in content_type:
                 logger.info("content_not_html", url=url, content_type=content_type)
-                return HtmlExtractionResult(body=None, published_at=None)
+                return HtmlExtractionResult(body=None, title=None, published_at=None)
 
             try:
                 html_text = _decode_html_response(response)
                 result = await asyncio.to_thread(_extract_from_html, html_text, url)
             except Exception as e:
                 logger.warning("content_parse_error", url=url, error=str(e))
-                return HtmlExtractionResult(body=None, published_at=None)
+                return HtmlExtractionResult(body=None, title=None, published_at=None)
 
             return result

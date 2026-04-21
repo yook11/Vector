@@ -67,14 +67,17 @@ class PersistResult:
 async def persist_new_articles(
     session: AsyncSession,
     source: NewsSource,
-    candidates: list[ArticleCandidate],
+    candidates: dict[SafeUrl, ArticleCandidate],
 ) -> PersistResult:
-    """ArticleCandidate リストを重複排除して DB に保存する。
+    """ArticleCandidate を DB に保存する。
+
+    入力 dict のキー一意性により URL 重複は型レベルで排除されている。
+    本関数は DB 既存 URL との突き合わせのみを行う。
 
     Args:
         session: DB セッション（コミットは呼び出し側の責任）。
         source: 記事の取得元ソース。
-        candidates: フェッチャーが生成した記事候補リスト。
+        candidates: 呼び出し側で URL 重複排除済みの候補 dict。
 
     Returns:
         新規発見記事を含む PersistResult。
@@ -84,8 +87,8 @@ async def persist_new_articles(
     if not candidates:
         return result
 
-    # 一括重複排除: 既存 URL を確認
-    urls = [c.url for c in candidates]
+    # DB 既存 URL を確認（existing_urls は「DB 既存」のみを意味する）
+    urls = list(candidates.keys())
     existing_urls: set[SafeUrl] = set()
     chunk_size = 500
     for i in range(0, len(urls), chunk_size):
@@ -99,8 +102,8 @@ async def persist_new_articles(
     # 新規 discovered_articles を作成
     max_new = settings.max_articles_per_fetch
 
-    for candidate in candidates:
-        if candidate.url in existing_urls:
+    for url, candidate in candidates.items():
+        if url in existing_urls:
             continue
 
         if len(result.new_discovered) >= max_new:
@@ -109,13 +112,11 @@ async def persist_new_articles(
 
         discovered = DiscoveredArticle(
             original_title=candidate.title,
-            original_url=candidate.url,
+            original_url=url,
             news_source_id=source.id,
         )
 
         session.add(discovered)
         result.new_discovered.append(discovered)
-        # 同一バッチ内の後続候補で重複しないよう URL を記録
-        existing_urls.add(candidate.url)
 
     return result

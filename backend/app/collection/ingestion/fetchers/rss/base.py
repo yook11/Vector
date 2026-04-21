@@ -18,6 +18,7 @@ from app.collection.ingestion.persister import (
     PersistResult,
     persist_new_articles,
 )
+from app.domain.safe_url import SafeUrl
 from app.models.news_source import NewsSource
 
 HTTP_TIMEOUT = 30.0
@@ -118,11 +119,12 @@ class BaseRssFetcher:
             )
 
         # エントリを ArticleCandidate に変換
-        candidates: list[ArticleCandidate] = []
+        # dict 組み立てにより URL 重複は先勝ちで型レベル排除される
+        candidates: dict[SafeUrl, ArticleCandidate] = {}
         for entry in feed.entries:
             candidate = self.convert_entry(entry)
             if candidate is not None:
-                candidates.append(candidate)
+                candidates.setdefault(candidate.url, candidate)
 
         if not candidates:
             return PersistResult()

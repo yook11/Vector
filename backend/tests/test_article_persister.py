@@ -69,17 +69,13 @@ def test_from_external_truncates_long_title() -> None:
 async def test_persist_saves_new_articles(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
-    """ArticleCandidate リストが DB に保存される。"""
-    candidates = [
-        ArticleCandidate(
-            url=SafeUrl("https://example.com/1"),
-            title="Article 1",
-        ),
-        ArticleCandidate(
-            url=SafeUrl("https://example.com/2"),
-            title="Article 2",
-        ),
-    ]
+    """ArticleCandidate dict が DB に保存される。"""
+    url_1 = SafeUrl("https://example.com/1")
+    url_2 = SafeUrl("https://example.com/2")
+    candidates = {
+        url_1: ArticleCandidate(url=url_1, title="Article 1"),
+        url_2: ArticleCandidate(url=url_2, title="Article 2"),
+    }
 
     result = await persist_new_articles(db_session, sample_source, candidates)
 
@@ -104,16 +100,12 @@ async def test_persist_skips_duplicate_urls(
     db_session.add(existing)
     await db_session.commit()
 
-    candidates = [
-        ArticleCandidate(
-            url=SafeUrl("https://example.com/existing"),
-            title="Existing",
-        ),
-        ArticleCandidate(
-            url=SafeUrl("https://example.com/new"),
-            title="New One",
-        ),
-    ]
+    url_existing = SafeUrl("https://example.com/existing")
+    url_new = SafeUrl("https://example.com/new")
+    candidates = {
+        url_existing: ArticleCandidate(url=url_existing, title="Existing"),
+        url_new: ArticleCandidate(url=url_new, title="New One"),
+    }
 
     result = await persist_new_articles(db_session, sample_source, candidates)
 
@@ -125,13 +117,10 @@ async def test_persist_respects_max_articles_limit(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
     """max_articles_per_fetch の上限を超えない。"""
-    candidates = [
-        ArticleCandidate(
-            url=SafeUrl(f"https://example.com/{i}"),
-            title=f"Article {i}",
-        )
-        for i in range(60)
-    ]
+    candidates: dict[SafeUrl, ArticleCandidate] = {}
+    for i in range(60):
+        url = SafeUrl(f"https://example.com/{i}")
+        candidates[url] = ArticleCandidate(url=url, title=f"Article {i}")
 
     with patch("app.collection.ingestion.persister.settings") as mock_settings:
         mock_settings.max_articles_per_fetch = 50
@@ -144,28 +133,7 @@ async def test_persist_respects_max_articles_limit(
 async def test_persist_with_empty_candidates(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
-    """空の候補リストでは何も保存されない。"""
-    result = await persist_new_articles(db_session, sample_source, [])
+    """空の候補 dict では何も保存されない。"""
+    result = await persist_new_articles(db_session, sample_source, {})
 
     assert result.new_discovered == []
-
-
-@pytest.mark.asyncio
-async def test_persist_deduplicates_within_batch(
-    db_session: AsyncSession, sample_source: NewsSource
-) -> None:
-    """同一バッチ内の重複 URL は 2 件目以降がスキップされる。"""
-    candidates = [
-        ArticleCandidate(
-            url=SafeUrl("https://example.com/dup"),
-            title="First",
-        ),
-        ArticleCandidate(
-            url=SafeUrl("https://example.com/dup"),
-            title="Second",
-        ),
-    ]
-
-    result = await persist_new_articles(db_session, sample_source, candidates)
-
-    assert len(result.new_discovered) == 1
