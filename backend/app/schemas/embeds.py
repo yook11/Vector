@@ -35,4 +35,3 @@ class OriginalArticleEmbed(_CamelBase):
 
     title: str
     url: SafeUrl
-    content: str | None = None

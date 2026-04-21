@@ -55,7 +55,6 @@ def build_detail(
         original=OriginalArticleEmbed(
             title=a.original_title,
             url=a.original_url,
-            content=a.original_content,
         ),
     )
 
