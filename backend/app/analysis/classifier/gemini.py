@@ -26,67 +26,64 @@ logger = structlog.get_logger(__name__)
 
 
 CLASSIFICATION_PROMPT = """\
-You are an expert tech news classifier specializing in emerging technologies.
+あなたは先端技術分野のテックニュース分類の専門家です。
 
-You will be given a structured summary of a tech news article (already \
-translated to Japanese). Based on this summary, classify the article.
+タイトル: {title_ja}
 
-Title: {title_ja}
-
-Summary:
+サマリー:
 {summary_ja}
 
-Entities:
+エンティティ:
 {entities_section}
 
-Step 1 — Determine the category.
-Classify by the article's primary artifact/output domain, NOT by the \
-technology used. For example, "AI discovers new material" belongs to \
-materials (the output), not ai (the tool).
+Step 1 — category を決定する。
+記事が最終的に何を生み出す領域か（主な artifact / output）で分類してください。\
+使われている技術ではなく、出力される成果物の領域を見ます。\
+例: 「AI が新材料を発見」は materials（成果物）であって ai（手段）ではありません。
 
-Select the single most relevant category:
-- ai: AI models, services, agents, and AI industry developments.
-  Examples: new LLM release, AI startup funding, AI regulation.
-  NOT: AI used as a tool in another domain.
-- robotics: Autonomous robots, self-driving vehicles, drones, eVTOL.
-  Examples: humanoid robot demo, autonomous taxi launch, drone delivery.
-  Boundary: If about chips FOR robots → semiconductor.
-- semiconductor: Chip design, manufacturing, lithography, packaging.
-  Examples: new process node, EUV advancement, chiplet packaging.
-  Boundary: If about quantum chips → computing.
-- computing: Quantum, neuromorphic, photonic, DNA computing.
-  Examples: quantum error correction, neuromorphic chip, optical computing.
-- network: 6G, Open RAN, AI-RAN, SDN, submarine cables, DC interconnect.
-  Examples: 6G trial, Open RAN deployment, subsea cable project.
-- security: PQC, confidential computing, FHE, ZKP, AI security.
-  Examples: post-quantum standard, zero-knowledge proof system.
-  Boundary: If about cybersecurity incident → only if novel defense tech.
-- space: Satellites, rockets, space exploration, orbital infrastructure.
-  Examples: rocket launch, satellite constellation, Mars mission.
-- bio: Genome editing, gene therapy, synthetic biology, mRNA, AI drug discovery.
-  Examples: CRISPR therapy approval, mRNA vaccine, protein structure prediction.
-  Boundary: "AI discovers new drug" → bio (the output is the drug).
-- materials: Novel materials, 3D printing, nanofabrication.
-  Examples: room-temp superconductor, carbon nanotube breakthrough, metamaterials.
-  Boundary: "AI discovers new material" → materials.
-- energy: Fusion, SMR, next-gen batteries, hydrogen, advanced geothermal.
-  Examples: fusion milestone, solid-state battery, green hydrogen plant.
+以下から最も関連の強い category を 1 つだけ選択してください（slug は英語）:
+- ai: AI モデル・サービス・エージェント、AI 業界の動向
+  例: 新しい LLM のリリース、AI スタートアップの資金調達、AI 規制
+  対象外: 他領域でツールとして使われた AI
+- robotics: 自律ロボット、自動運転車、ドローン、eVTOL
+  例: ヒューマノイドロボットのデモ、自動運転タクシー、ドローン配送
+  境界: ロボット向けのチップが主題なら semiconductor
+- semiconductor: チップ設計、製造、リソグラフィ、パッケージング
+  例: 新プロセスノード、EUV 進展、チップレットパッケージング
+  境界: 量子チップなら computing
+- computing: 量子、ニューロモーフィック、光、DNA コンピューティング
+  例: 量子誤り訂正、ニューロモーフィックチップ、光コンピューティング
+- network: 6G、Open RAN、AI-RAN、SDN、海底ケーブル、データセンター間接続
+  例: 6G 実証、Open RAN 導入、海底ケーブル敷設
+- security: PQC、コンフィデンシャルコンピューティング、FHE、ZKP、AI セキュリティ
+  例: 耐量子暗号標準、ゼロ知識証明システム
+  境界: サイバー攻撃事例は新しい防御技術に関する場合のみ
+- space: 衛星、ロケット、宇宙探査、軌道インフラ
+  例: ロケット打ち上げ、衛星コンステレーション、火星探査
+- bio: ゲノム編集、遺伝子治療、合成生物学、mRNA、AI 創薬
+  例: CRISPR 治療承認、mRNA ワクチン、タンパク質構造予測
+  境界: 「AI が新薬を発見」は bio（成果物が薬）
+- materials: 新素材、3D プリンティング、ナノ加工
+  例: 常温超伝導体、カーボンナノチューブのブレイクスルー、メタマテリアル
+  境界: 「AI が新材料を発見」は materials
+- energy: 核融合、SMR、次世代電池、水素、先端地熱
+  例: 核融合マイルストーン、全固体電池、グリーン水素プラント
 
-Step 2 — Determine the topic.
-Given the category, assign a concise topic label. Rules:
-- Lowercase English, 2-4 words, no articles (a/an/the)
-- Use established terminology within the category
-- Be specific: prefer "euv lithography advancement" over "semiconductor news"
+Step 2 — topic を決定する。
+選んだ category 内で、簡潔な topic ラベルを割り当ててください。ルール:
+- 小文字英語、2〜4 語、冠詞（a/an/the）不可
+- category 内で確立された用語を使う
+- 具体的に: 「semiconductor news」ではなく「euv lithography advancement」のように
 {existing_topics_section}
-Step 3 — Assess impact level (provisional).
-- low: Incremental update, minor product feature
-- medium: Notable development within a specific sector
-- high: Significant industry shift, major product launch, large funding round
-- critical: Paradigm-changing breakthrough, major regulatory change
+Step 3 — impact_level を評価する（暫定）。
+- low: 漸進的アップデート、マイナーな製品機能
+- medium: 特定セクター内の注目すべき動向
+- high: 業界の大きな変化、主要な製品ローンチ、大型資金調達
+- critical: パラダイムを変えるブレイクスルー、重大な規制変更
 
-Step 4 — Provide reasoning.
-Brief explanation in Japanese of why you assigned this category, topic, \
-and impact level.
+Step 4 — reasoning を記述する。
+なぜこの category / topic / impact_level を割り当てたのかを、\
+日本語で簡潔に説明してください。
 """
 
 
