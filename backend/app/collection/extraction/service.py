@@ -3,7 +3,7 @@
 アトミックなユースケース: ``discovered_article_id`` を受け取り、
 DB ルックアップ (:class:`DiscoveredArticleRepository`) の sum type 結果で分岐し、
 未抽出ケースでは HTML 抽出を :class:`ArticleHtmlExtractor` に委譲し、
-:class:`ArticleExtractedContent` の品質ゲートを通過すれば
+成功ケース (:class:`ExtractedContent`) では
 :class:`ArticleRepository` 経由で Article 行を作成する。
 セッション管理は内部で完結する。
 """
@@ -18,12 +18,15 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.collection.errors import PermanentFetchError
 from app.collection.extraction.candidate import (
     AlreadyExtracted,
-    ArticleExtractedContent,
     DiscoveredNotFound,
     UnextractedDiscoveredArticle,
     UnextractedFound,
 )
-from app.collection.extraction.extractor import ArticleHtmlExtractor
+from app.collection.extraction.extractor import (
+    ArticleHtmlExtractor,
+    ExtractedContent,
+    ExtractionEmpty,
+)
 from app.collection.extraction.repository import (
     ArticleRepository,
     DiscoveredArticleRepository,
@@ -117,23 +120,23 @@ class ContentFetchService:
             )
             return Skipped()
 
-        content = ArticleExtractedContent.from_extraction(extraction)
-        if content is None:
-            logger.info(
-                "content_fetch_skip",
-                discovered_article_id=unextracted.id,
-                reason="quality_gate",
-            )
-            return Skipped()
+        match extraction:
+            case ExtractionEmpty(reason=reason):
+                logger.info(
+                    "content_fetch_skip",
+                    discovered_article_id=unextracted.id,
+                    reason=reason,
+                )
+                return Skipped()
+            case ExtractedContent() as content:
+                article = article_repo.create(unextracted.id, content)
+                await session.commit()
+                await session.refresh(article)
 
-        article = article_repo.create(unextracted.id, content)
-        await session.commit()
-        await session.refresh(article)
-
-        logger.info(
-            "content_fetch_completed",
-            discovered_article_id=unextracted.id,
-            article_id=article.id,
-            date_extracted=content.published_at is not None,
-        )
-        return Fetched(article_id=article.id)
+                logger.info(
+                    "content_fetch_completed",
+                    discovered_article_id=unextracted.id,
+                    article_id=article.id,
+                    date_extracted=content.published_at is not None,
+                )
+                return Fetched(article_id=article.id)

@@ -13,12 +13,12 @@ from sqlmodel import select
 
 from app.collection.extraction.candidate import (
     AlreadyExtracted,
-    ArticleExtractedContent,
     DiscoveredArticleLookup,
     DiscoveredNotFound,
     UnextractedDiscoveredArticle,
     UnextractedFound,
 )
+from app.collection.extraction.extractor import ExtractedContent
 from app.models.article import Article
 from app.models.discovered_article import DiscoveredArticle
 
@@ -61,9 +61,7 @@ class ArticleRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    def create(
-        self, discovered_article_id: int, content: ArticleExtractedContent
-    ) -> Article:
+    def create(self, discovered_article_id: int, content: ExtractedContent) -> Article:
         """Article をセッションに追加して返す（commit / refresh は呼び出し側）。"""
         article = Article(
             discovered_article_id=discovered_article_id,

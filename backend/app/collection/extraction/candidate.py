@@ -1,11 +1,6 @@
 """抽出候補 VO — extraction 境界の中間表現と Repo ルックアップ結果型。
 
-HTML 抽出の生結果 (:class:`HtmlExtractionResult`) を Article 永続化に耐える
-形に正規化した :class:`ArticleExtractedContent` と、
-DiscoveredArticle の抽出可否を型で表現する sum type を提供する。
-
 - :class:`PublishedAt` — tzinfo=UTC を invariant として保持する公開日時 VO。
-- :class:`ArticleExtractedContent` — title/body 必須・published_at 任意の永続化候補。
 - :class:`UnextractedDiscoveredArticle` — Article 未生成の DiscoveredArticle を表現。
 - :data:`DiscoveredArticleLookup` — Repo が返すルックアップ結果 sum type。
 """
@@ -14,15 +9,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Self
+from typing import Self
 
 from app.domain.safe_url import SafeUrl
-
-if TYPE_CHECKING:
-    from app.collection.extraction.extractor import HtmlExtractionResult
-
-_TITLE_MAX_LENGTH = 500
-_BODY_MIN_LENGTH = 50
 
 
 @dataclass(frozen=True)
@@ -50,41 +39,6 @@ class PublishedAt:
             except ValueError:
                 continue
         return None
-
-
-@dataclass(frozen=True)
-class ArticleExtractedContent:
-    """Article 永続化候補 — 品質ゲートを通過した抽出結果。
-
-    invariant:
-      - ``title``: 非空、500 文字以内
-      - ``body``: 50 文字以上
-      - ``published_at``: 任意
-    """
-
-    title: str
-    body: str
-    published_at: PublishedAt | None
-
-    def __post_init__(self) -> None:
-        if not self.title:
-            raise ValueError("title must be non-empty")
-        if len(self.title) > _TITLE_MAX_LENGTH:
-            raise ValueError(f"title exceeds {_TITLE_MAX_LENGTH} chars")
-        if len(self.body) < _BODY_MIN_LENGTH:
-            raise ValueError(f"body must be at least {_BODY_MIN_LENGTH} chars")
-
-    @classmethod
-    def from_extraction(cls, result: HtmlExtractionResult) -> Self | None:
-        """生抽出結果から候補を構築する。品質ゲート未達なら ``None``。"""
-        if result.title is None or result.body is None:
-            return None
-        published_at = (
-            PublishedAt(result.published_at)
-            if result.published_at is not None
-            else None
-        )
-        return cls(title=result.title, body=result.body, published_at=published_at)
 
 
 @dataclass(frozen=True)

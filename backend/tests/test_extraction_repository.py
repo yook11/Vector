@@ -10,11 +10,11 @@ from sqlmodel import select
 
 from app.collection.extraction.candidate import (
     AlreadyExtracted,
-    ArticleExtractedContent,
     DiscoveredNotFound,
     PublishedAt,
     UnextractedFound,
 )
+from app.collection.extraction.extractor import ExtractedContent
 from app.collection.extraction.repository import (
     ArticleRepository,
     DiscoveredArticleRepository,
@@ -94,7 +94,7 @@ async def test_article_repository_create_adds_to_session(
     discovered = await _make_discovered(
         db_session, sample_source, "https://example.com/create"
     )
-    content = ArticleExtractedContent(
+    content = ExtractedContent(
         title="Extracted",
         body="x" * 60,
         published_at=PublishedAt(datetime(2026, 3, 1, tzinfo=UTC)),
@@ -116,7 +116,7 @@ async def test_article_repository_create_accepts_none_published_at(
     discovered = await _make_discovered(
         db_session, sample_source, "https://example.com/no-date"
     )
-    content = ArticleExtractedContent(title="t", body="x" * 60, published_at=None)
+    content = ExtractedContent(title="t", body="x" * 60, published_at=None)
 
     repo = ArticleRepository(db_session)
     article = repo.create(discovered.id, content)
@@ -133,7 +133,7 @@ async def test_article_repository_does_not_commit(
     discovered = await _make_discovered(
         db_session, sample_source, "https://example.com/no-commit"
     )
-    content = ArticleExtractedContent(title="t", body="x" * 60, published_at=None)
+    content = ExtractedContent(title="t", body="x" * 60, published_at=None)
 
     repo = ArticleRepository(db_session)
     repo.create(discovered.id, content)
