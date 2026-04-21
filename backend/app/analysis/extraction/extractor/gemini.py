@@ -24,37 +24,41 @@ from app.config import settings
 logger = structlog.get_logger(__name__)
 
 EXTRACTION_PROMPT = """\
-You are a tech news content extractor. Your job is to extract factual \
-information from English tech news articles and output structured data \
-in Japanese.
+あなたはテックニュース記事から事実情報を抽出するアシスタントです。\
+入力記事は日本語または英語のいずれかで、出力は常に日本語の構造化データで返します。
 
-Article title: {title}
+記事タイトル: {title}
 
-Article full text:
+記事本文:
 {content}
 
-Extract the following:
+以下の 3 項目を抽出してください。
 
-1. title_ja — Accurate Japanese translation of the article title.
+1. title_ja — 記事タイトルの自然な日本語表現。
+   - 記事が英語なら正確に和訳する
+   - 記事が日本語ならそのまま、または意味を保ったまま整える
+   - 過度な意訳・要約はしない
 
-2. summary_ja — A factual Japanese summary of the article.
-   Include:
-   - Who did what, where (subjects and actions)
-   - Specific numbers: amounts, scale, dates, version numbers, performance metrics
-   - Technical novelty: what is new, how it differs from existing approaches
-   Do NOT include:
-   - Your own judgment, evaluation, or speculation
-   - Industry impact assessment
-   - Investment implications or market predictions
-   Reconstruct the facts written in the article accurately in Japanese.
+2. summary_ja — 記事内容の事実ベースの日本語要約。
+   含めるべき情報:
+   - 誰が・どこで・何をしたか（主体と行動）
+   - 具体的な数値（金額、規模、日付、バージョン、性能指標など）
+   - 技術的新規性（何が新しく、既存手法とどう違うか）
+   含めてはいけない情報:
+   - あなた自身の判断・評価・推測
+   - 業界へのインパクト評価
+   - 投資判断や市場予測
+   記事に書かれた事実を正確に日本語で再構成してください。
 
-3. entities — A structured list of named entities mentioned in the article.
-   Classify each entity with a short type label \
-(e.g. "company", "product", "technology", "person", "organization", \
-"country", "regulation", "vulnerability", etc.).
-   Rules:
-   - Only extract entities explicitly mentioned in the article
-   - Do NOT include generic terms ("AI", "semiconductor", etc.)
+3. entities — 記事中で明示的に言及された固有表現のリスト。
+   各エンティティには短い type ラベル（英語）を付与してください。\
+例: "company", "product", "technology", "person", "organization", \
+"country", "regulation", "vulnerability" など。
+   ルール:
+   - 記事中で明示されているものだけを抽出する
+   - 一般名詞（"AI", "semiconductor" など）は含めない
+   - エンティティ名 (name) は記事に登場する表記のまま \
+（英語なら英語、日本語なら日本語）で残す
 """
 
 
