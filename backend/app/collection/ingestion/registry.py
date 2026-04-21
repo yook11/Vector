@@ -9,23 +9,26 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 import httpx
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.collection.ingestion.persister import PersistResult
+from app.collection.ingestion.candidate import ArticleCandidate
 from app.domain.news_source import SourceName
+from app.domain.safe_url import SafeUrl
 from app.models.news_source import NewsSource
 
 
 @runtime_checkable
 class SourceFetcher(Protocol):
-    """ソースフェッチャーの共通インターフェース。"""
+    """ソースフェッチャーの共通インターフェース。
+
+    Fetcher は外部配信形式を ``ArticleCandidate`` に正規化して返すだけで、
+    DB 永続化は ``SourceFetchService`` 側の責務とする。
+    """
 
     async def fetch(
         self,
         client: httpx.AsyncClient,
-        session: AsyncSession,
         source: NewsSource,
-    ) -> PersistResult: ...
+    ) -> dict[SafeUrl, ArticleCandidate]: ...
 
 
 def _build_registry() -> dict[SourceName, SourceFetcher]:

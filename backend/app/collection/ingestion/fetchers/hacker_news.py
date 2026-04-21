@@ -5,17 +5,12 @@ from datetime import UTC, datetime
 
 import httpx
 import structlog
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
+from app.collection.ingestion.candidate import ArticleCandidate
 from app.collection.ingestion.fetchers.hn_fetch_state import (
     get_last_fetched_at,
     set_last_fetched_at,
-)
-from app.collection.ingestion.persister import (
-    ArticleCandidate,
-    PersistResult,
-    persist_new_articles,
 )
 from app.config import settings
 from app.domain.safe_url import SafeUrl
@@ -101,10 +96,9 @@ class HackerNewsFetcher:
     async def fetch(
         self,
         client: httpx.AsyncClient,
-        session: AsyncSession,
         source: NewsSource,
-    ) -> PersistResult:
-        """HN のストーリーを取得し ArticleCandidate 経由で永続化する。
+    ) -> dict[SafeUrl, ArticleCandidate]:
+        """HN のストーリーを取得し ``ArticleCandidate`` の dict を返す。
 
         Raises:
             PermanentFetchError: 403 / 404 / 410 / 451。
@@ -133,7 +127,7 @@ class HackerNewsFetcher:
 
         if not stories:
             logger.info("hn_no_new_stories", source=source.name)
-            return PersistResult()
+            return {}
 
         # ストーリーを ArticleCandidate に変換（SafeUrl 検証・タイトル整形は内部で担保）
         # dict 組み立てにより URL 重複は先勝ちで型レベル排除される
@@ -151,13 +145,4 @@ class HackerNewsFetcher:
                 continue
             candidates.setdefault(candidate.url, candidate)
 
-        if not candidates:
-            return PersistResult()
-
-        result = await persist_new_articles(session, source, candidates)
-        logger.info(
-            "hn_fetch_completed",
-            source=source.name,
-            new=len(result.new_discovered),
-        )
-        return result
+        return candidates
