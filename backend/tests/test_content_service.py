@@ -66,8 +66,9 @@ async def test_fetched_creates_article(
     )
 
     extracted_date = datetime(2026, 3, 15, 10, 30, 0, tzinfo=UTC)
+    body = "Full article body text used for extraction tests, long enough."
     extractor = _mock_html_extractor(
-        body="Full article body text.",
+        body=body,
         title="Extracted Title",
         published_at=extracted_date,
     )
@@ -83,7 +84,7 @@ async def test_fetched_creates_article(
     article = await db_session.get(Article, result.article_id)
     assert article is not None
     assert article.original_title == "Extracted Title"
-    assert article.original_content == "Full article body text."
+    assert article.original_content == body
     assert article.published_at == extracted_date
 
 

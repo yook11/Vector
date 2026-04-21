@@ -1,8 +1,10 @@
 """コンテンツ取得サービス — 記事本文と公開日時の取得・Article 行の作成を編成する。
 
 アトミックなユースケース: ``discovered_article_id`` を受け取り、
-DiscoveredArticle からURL を取得して HTML 抽出を
-:class:`ArticleHtmlExtractor` に委譲し、品質を満たせば Article 行を作成する。
+DB ルックアップ (:class:`DiscoveredArticleRepository`) の sum type 結果で分岐し、
+未抽出ケースでは HTML 抽出を :class:`ArticleHtmlExtractor` に委譲し、
+:class:`ArticleExtractedContent` の品質ゲートを通過すれば
+:class:`ArticleRepository` 経由で Article 行を作成する。
 セッション管理は内部で完結する。
 """
 
@@ -13,12 +15,20 @@ from typing import Literal
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from sqlalchemy.orm import selectinload
 
 from app.collection.errors import PermanentFetchError
+from app.collection.extraction.candidate import (
+    AlreadyExtracted,
+    ArticleExtractedContent,
+    DiscoveredNotFound,
+    UnextractedDiscoveredArticle,
+    UnextractedFound,
+)
 from app.collection.extraction.extractor import ArticleHtmlExtractor
-from app.models.article import Article
-from app.models.discovered_article import DiscoveredArticle
+from app.collection.extraction.repository import (
+    ArticleRepository,
+    DiscoveredArticleRepository,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -35,9 +45,9 @@ class ContentFetchService:
     """1 記事の本文・公開日時取得と Article 行作成を行うアトミックなユースケース。
 
     責務を明確に分離している:
-      1. DiscoveredArticle の読み込み（DB）。
+      1. DiscoveredArticle の状態ルックアップ（Repository）。
       2. HTML からの本文・公開日時抽出（``ArticleHtmlExtractor`` へ委譲）。
-      3. 品質を満たす場合に Article 行を作成。
+      3. 品質ゲート通過時の Article 行作成（Repository 経由）。
     """
 
     def __init__(
@@ -58,61 +68,56 @@ class ContentFetchService:
             TemporaryFetchError: リトライ可能な失敗。判断は呼び出し側（Task）。
         """
         async with self._session_factory() as session:
-            # 1. DiscoveredArticle を読み込む
-            discovered = await session.get(
-                DiscoveredArticle,
-                discovered_article_id,
-                options=[selectinload(DiscoveredArticle.article)],
-            )
-            if discovered is None:
-                logger.warning(
-                    "content_fetch_discovered_not_found",
-                    discovered_article_id=discovered_article_id,
-                )
-                return ContentFetchResult("skipped")
+            discovered_repo = DiscoveredArticleRepository(session)
+            article_repo = ArticleRepository(session)
 
-            # 冪等性チェック: 既に Article が存在する場合
-            if discovered.article is not None:
-                return ContentFetchResult(
-                    "already_exists", article_id=discovered.article.id
-                )
+            match await discovered_repo.lookup_for_extraction(discovered_article_id):
+                case DiscoveredNotFound():
+                    logger.warning(
+                        "content_fetch_discovered_not_found",
+                        discovered_article_id=discovered_article_id,
+                    )
+                    return ContentFetchResult("skipped")
+                case AlreadyExtracted(article_id=article_id):
+                    return ContentFetchResult("already_exists", article_id=article_id)
+                case UnextractedFound(article=unextracted):
+                    return await self._fetch_and_persist(
+                        session, article_repo, unextracted
+                    )
 
-            # 2. HTML 抽出を委譲
-            try:
-                extraction = await self._html_extractor.fetch(discovered.original_url)
-            except PermanentFetchError as e:
-                logger.info(
-                    "content_fetch_skip",
-                    discovered_article_id=discovered_article_id,
-                    reason=str(e),
-                )
-                return ContentFetchResult("skipped")
-
-            # 3. 品質チェック: 分析に必要な本文・タイトルが揃わなければスキップ
-            if extraction.body is None or extraction.title is None:
-                logger.info(
-                    "content_fetch_skip",
-                    discovered_article_id=discovered_article_id,
-                    reason="quality_gate",
-                )
-                return ContentFetchResult("skipped")
-
-            # 4. Article 行を作成 (Stage 2 が分析品質を担保: HTML から抽出した
-            # title を採用し、Stage 1 の discovered.original_title は参照しない)
-            article = Article(
-                discovered_article_id=discovered.id,
-                original_title=extraction.title,
-                original_content=extraction.body,
-                published_at=extraction.published_at,
-            )
-            session.add(article)
-            await session.commit()
-            await session.refresh(article)
-
+    async def _fetch_and_persist(
+        self,
+        session: AsyncSession,
+        article_repo: ArticleRepository,
+        unextracted: UnextractedDiscoveredArticle,
+    ) -> ContentFetchResult:
+        try:
+            extraction = await self._html_extractor.fetch(unextracted.url)
+        except PermanentFetchError as e:
             logger.info(
-                "content_fetch_completed",
-                discovered_article_id=discovered_article_id,
-                article_id=article.id,
-                date_extracted=extraction.published_at is not None,
+                "content_fetch_skip",
+                discovered_article_id=unextracted.id,
+                reason=str(e),
             )
-            return ContentFetchResult("fetched", article_id=article.id)
+            return ContentFetchResult("skipped")
+
+        content = ArticleExtractedContent.from_extraction(extraction)
+        if content is None:
+            logger.info(
+                "content_fetch_skip",
+                discovered_article_id=unextracted.id,
+                reason="quality_gate",
+            )
+            return ContentFetchResult("skipped")
+
+        article = article_repo.create(unextracted.id, content)
+        await session.commit()
+        await session.refresh(article)
+
+        logger.info(
+            "content_fetch_completed",
+            discovered_article_id=unextracted.id,
+            article_id=article.id,
+            date_extracted=content.published_at is not None,
+        )
+        return ContentFetchResult("fetched", article_id=article.id)
