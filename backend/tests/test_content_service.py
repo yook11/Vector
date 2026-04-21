@@ -13,6 +13,7 @@ from app.collection.extraction.extractor import (
     HtmlExtractionResult,
 )
 from app.collection.extraction.service import ContentFetchService
+from app.domain.safe_url import SafeUrl
 from app.models.article import Article
 from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
@@ -65,8 +66,9 @@ async def test_fetched_creates_article(
     )
 
     extracted_date = datetime(2026, 3, 15, 10, 30, 0, tzinfo=UTC)
+    body = "Full article body text used for extraction tests, long enough."
     extractor = _mock_html_extractor(
-        body="Full article body text.",
+        body=body,
         title="Extracted Title",
         published_at=extracted_date,
     )
@@ -75,14 +77,14 @@ async def test_fetched_creates_article(
 
     assert result.status == "fetched"
     assert result.article_id is not None
-    extractor.fetch.assert_called_once_with("https://example.com/fetched")
+    extractor.fetch.assert_called_once_with(SafeUrl("https://example.com/fetched"))
 
     # Service は独自セッションで commit するため、テスト用セッションで再読込する
     db_session.expire_all()
     article = await db_session.get(Article, result.article_id)
     assert article is not None
     assert article.original_title == "Extracted Title"
-    assert article.original_content == "Full article body text."
+    assert article.original_content == body
     assert article.published_at == extracted_date
 
 
