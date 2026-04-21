@@ -13,6 +13,7 @@ from app.collection.extraction.extractor import (
     HtmlExtractionResult,
 )
 from app.collection.extraction.service import ContentFetchService
+from app.domain.safe_url import SafeUrl
 from app.models.article import Article
 from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
@@ -75,7 +76,7 @@ async def test_fetched_creates_article(
 
     assert result.status == "fetched"
     assert result.article_id is not None
-    extractor.fetch.assert_called_once_with("https://example.com/fetched")
+    extractor.fetch.assert_called_once_with(SafeUrl("https://example.com/fetched"))
 
     # Service は独自セッションで commit するため、テスト用セッションで再読込する
     db_session.expire_all()

@@ -24,6 +24,8 @@ import structlog
 import trafilatura
 
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
+from app.collection.extraction.candidate import PublishedAt
+from app.domain.safe_url import SafeUrl
 from app.utils.sanitize import strip_html_tags
 
 logger = structlog.get_logger(__name__)
@@ -125,22 +127,6 @@ class _RobotsCache:
             return rp is None or rp.can_fetch(USER_AGENT, url)
 
 
-def _parse_extracted_date(date_str: str | None) -> datetime | None:
-    """trafilatura が返す日付文字列を datetime に変換する。
-
-    trafilatura は htmldate 経由で日付を抽出し、outputformat に応じた
-    文字列を返す。TZ 情報は失われるため UTC として扱う。
-    """
-    if not date_str:
-        return None
-    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
-        try:
-            return datetime.strptime(date_str, fmt).replace(tzinfo=UTC)
-        except ValueError:
-            continue
-    return None
-
-
 def _extract_from_html(html: str, url: str) -> HtmlExtractionResult:
     """trafilatura で HTML から記事本文と公開日時を抽出する（同期・CPU バウンド）。
 
@@ -174,7 +160,8 @@ def _extract_from_html(html: str, url: str) -> HtmlExtractionResult:
     cleaned_title = strip_html_tags(result.get("title"))
     title = cleaned_title[:_TITLE_MAX_LENGTH] if cleaned_title else None
 
-    published_at = _parse_extracted_date(result.get("date"))
+    parsed_published = PublishedAt.parse(result.get("date"))
+    published_at = parsed_published.value if parsed_published is not None else None
 
     return HtmlExtractionResult(body=body, title=title, published_at=published_at)
 
@@ -189,7 +176,7 @@ class ArticleHtmlExtractor:
     def __init__(self) -> None:
         self._robots_cache = _RobotsCache()
 
-    async def fetch(self, url: str) -> HtmlExtractionResult:
+    async def fetch(self, url: SafeUrl) -> HtmlExtractionResult:
         """指定 URL の HTML から記事本文・タイトル・公開日時を抽出する。
 
         Returns:
@@ -200,35 +187,36 @@ class ArticleHtmlExtractor:
             PermanentFetchError: robots.txt 拒否 / 403 / 404 / 410 / 451。
             TemporaryFetchError: 5xx / 429 / タイムアウト / ネットワークエラー。
         """
+        url_str = str(url)
         async with httpx.AsyncClient(headers=HEADERS, timeout=HTTP_TIMEOUT) as client:
-            if not await self._robots_cache.check(client, url):
-                raise PermanentFetchError(f"robots.txt blocked: {url}")
+            if not await self._robots_cache.check(client, url_str):
+                raise PermanentFetchError(f"robots.txt blocked: {url_str}")
 
             try:
                 response = await client.get(
-                    url, timeout=HTTP_TIMEOUT, follow_redirects=True
+                    url_str, timeout=HTTP_TIMEOUT, follow_redirects=True
                 )
                 response.raise_for_status()
             except httpx.HTTPStatusError as e:
                 status = e.response.status_code
                 if status in (403, 404, 410, 451):
-                    raise PermanentFetchError(f"HTTP {status}: {url}") from e
+                    raise PermanentFetchError(f"HTTP {status}: {url_str}") from e
                 # 429 / 5xx はリトライ可能
-                raise TemporaryFetchError(f"HTTP {status}: {url}") from e
+                raise TemporaryFetchError(f"HTTP {status}: {url_str}") from e
             except httpx.RequestError as e:
                 # タイムアウト / DNS / 接続エラーはリトライ可能
-                raise TemporaryFetchError(f"request error: {url}: {e}") from e
+                raise TemporaryFetchError(f"request error: {url_str}: {e}") from e
 
             content_type = response.headers.get("content-type", "")
             if "text/html" not in content_type:
-                logger.info("content_not_html", url=url, content_type=content_type)
+                logger.info("content_not_html", url=url_str, content_type=content_type)
                 return HtmlExtractionResult(body=None, title=None, published_at=None)
 
             try:
                 html_text = _decode_html_response(response)
-                result = await asyncio.to_thread(_extract_from_html, html_text, url)
+                result = await asyncio.to_thread(_extract_from_html, html_text, url_str)
             except Exception as e:
-                logger.warning("content_parse_error", url=url, error=str(e))
+                logger.warning("content_parse_error", url=url_str, error=str(e))
                 return HtmlExtractionResult(body=None, title=None, published_at=None)
 
             return result

@@ -14,10 +14,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Self
+from typing import TYPE_CHECKING, Self
 
-from app.collection.extraction.extractor import HtmlExtractionResult
 from app.domain.safe_url import SafeUrl
+
+if TYPE_CHECKING:
+    from app.collection.extraction.extractor import HtmlExtractionResult
 
 _TITLE_MAX_LENGTH = 500
 _BODY_MIN_LENGTH = 50

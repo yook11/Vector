@@ -79,9 +79,7 @@ class ContentFetchService:
 
             # 2. HTML 抽出を委譲
             try:
-                extraction = await self._html_extractor.fetch(
-                    str(discovered.original_url)
-                )
+                extraction = await self._html_extractor.fetch(discovered.original_url)
             except PermanentFetchError as e:
                 logger.info(
                     "content_fetch_skip",

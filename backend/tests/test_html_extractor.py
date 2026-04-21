@@ -1,6 +1,5 @@
 """HTML 抽出層のテスト。"""
 
-from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -11,8 +10,8 @@ from app.collection.extraction.extractor import (
     ArticleHtmlExtractor,
     HtmlExtractionResult,
     _decode_html_response,
-    _parse_extracted_date,
 )
+from app.domain.safe_url import SafeUrl
 
 SAMPLE_HTML = """
 <html>
@@ -77,22 +76,6 @@ def _as_async_cm(value: object) -> AsyncMock:
     return cm
 
 
-class TestParseExtractedDate:
-    def test_parses_iso_datetime(self) -> None:
-        result = _parse_extracted_date("2026-03-15T10:30:00")
-        assert result == datetime(2026, 3, 15, 10, 30, 0, tzinfo=UTC)
-
-    def test_parses_date_only(self) -> None:
-        result = _parse_extracted_date("2026-03-15")
-        assert result == datetime(2026, 3, 15, 0, 0, 0, tzinfo=UTC)
-
-    def test_returns_none_for_none(self) -> None:
-        assert _parse_extracted_date(None) is None
-
-    def test_returns_none_for_invalid(self) -> None:
-        assert _parse_extracted_date("not-a-date") is None
-
-
 class TestArticleHtmlExtractor:
     @pytest.mark.asyncio
     async def test_fetches_body_from_url(self) -> None:
@@ -110,7 +93,7 @@ class TestArticleHtmlExtractor:
 
         extractor = ArticleHtmlExtractor()
         with _patch_client(client):
-            result = await extractor.fetch("https://example.com/article")
+            result = await extractor.fetch(SafeUrl("https://example.com/article"))
 
         assert isinstance(result, HtmlExtractionResult)
         assert result.body is not None
@@ -135,7 +118,7 @@ class TestArticleHtmlExtractor:
 
         extractor = ArticleHtmlExtractor()
         with _patch_client(client), pytest.raises(PermanentFetchError, match="403"):
-            await extractor.fetch("https://example.com/paywall")
+            await extractor.fetch(SafeUrl("https://example.com/paywall"))
 
     @pytest.mark.asyncio
     async def test_raises_temporary_on_500(self) -> None:
@@ -156,7 +139,7 @@ class TestArticleHtmlExtractor:
 
         extractor = ArticleHtmlExtractor()
         with _patch_client(client), pytest.raises(TemporaryFetchError, match="500"):
-            await extractor.fetch("https://example.com/error")
+            await extractor.fetch(SafeUrl("https://example.com/error"))
 
     @pytest.mark.asyncio
     async def test_raises_temporary_on_request_error(self) -> None:
@@ -171,7 +154,7 @@ class TestArticleHtmlExtractor:
             _patch_client(client),
             pytest.raises(TemporaryFetchError, match="timed out"),
         ):
-            await extractor.fetch("https://example.com/slow")
+            await extractor.fetch(SafeUrl("https://example.com/slow"))
 
     @pytest.mark.asyncio
     async def test_returns_empty_result_for_non_html(self) -> None:
@@ -189,7 +172,7 @@ class TestArticleHtmlExtractor:
 
         extractor = ArticleHtmlExtractor()
         with _patch_client(client):
-            result = await extractor.fetch("https://example.com/doc.pdf")
+            result = await extractor.fetch(SafeUrl("https://example.com/doc.pdf"))
 
         assert result.body is None
         assert result.published_at is None
@@ -212,7 +195,7 @@ class TestArticleHtmlExtractor:
 
         extractor = ArticleHtmlExtractor()
         with _patch_client(client):
-            result = await extractor.fetch("https://example.com/short")
+            result = await extractor.fetch(SafeUrl("https://example.com/short"))
 
         assert result.body is None
 
@@ -228,7 +211,7 @@ class TestArticleHtmlExtractor:
 
         extractor = ArticleHtmlExtractor()
         with _patch_client(client), pytest.raises(PermanentFetchError, match="robots"):
-            await extractor.fetch("https://example.com/private/article")
+            await extractor.fetch(SafeUrl("https://example.com/private/article"))
 
     @pytest.mark.asyncio
     async def test_caches_robots_txt_across_calls(self) -> None:
@@ -255,9 +238,9 @@ class TestArticleHtmlExtractor:
 
         extractor = ArticleHtmlExtractor()
         with _patch_client(client_1):
-            await extractor.fetch("https://example.com/a1")
+            await extractor.fetch(SafeUrl("https://example.com/a1"))
         with _patch_client(client_2):
-            await extractor.fetch("https://example.com/a2")
+            await extractor.fetch(SafeUrl("https://example.com/a2"))
 
         # 2 回目の fetch では robots.txt を再リクエストしないはず
         robots_calls_1 = [
@@ -376,7 +359,7 @@ class TestDecodeHtmlResponse:
         extractor = ArticleHtmlExtractor()
         with _patch_client(client):
             result = await extractor.fetch(
-                "https://www.itmedia.co.jp/news/articles/test.html"
+                SafeUrl("https://www.itmedia.co.jp/news/articles/test.html")
             )
 
         assert result.body is not None
