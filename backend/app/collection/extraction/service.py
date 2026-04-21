@@ -90,8 +90,8 @@ class ContentFetchService:
                 )
                 return ContentFetchResult("skipped")
 
-            # 3. 品質チェック: 本文が取れなければスキップ
-            if extraction.body is None:
+            # 3. 品質チェック: 分析に必要な本文・タイトルが揃わなければスキップ
+            if extraction.body is None or extraction.title is None:
                 logger.info(
                     "content_fetch_skip",
                     discovered_article_id=discovered_article_id,
@@ -99,10 +99,11 @@ class ContentFetchService:
                 )
                 return ContentFetchResult("skipped")
 
-            # 4. Article 行を作成
+            # 4. Article 行を作成 (Stage 2 が分析品質を担保: HTML から抽出した
+            # title を採用し、Stage 1 の discovered.original_title は参照しない)
             article = Article(
                 discovered_article_id=discovered.id,
-                original_title=discovered.original_title,
+                original_title=extraction.title,
                 original_content=extraction.body,
                 published_at=extraction.published_at,
             )

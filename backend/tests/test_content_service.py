@@ -20,6 +20,7 @@ from app.models.news_source import NewsSource
 
 def _mock_html_extractor(
     body: str | None = None,
+    title: str | None = None,
     published_at: datetime | None = None,
     side_effect: Exception | None = None,
 ) -> MagicMock:
@@ -29,7 +30,9 @@ def _mock_html_extractor(
         extractor.fetch = AsyncMock(side_effect=side_effect)
     else:
         extractor.fetch = AsyncMock(
-            return_value=HtmlExtractionResult(body=body, published_at=published_at)
+            return_value=HtmlExtractionResult(
+                body=body, title=title, published_at=published_at
+            )
         )
     return extractor
 
@@ -63,7 +66,9 @@ async def test_fetched_creates_article(
 
     extracted_date = datetime(2026, 3, 15, 10, 30, 0, tzinfo=UTC)
     extractor = _mock_html_extractor(
-        body="Full article body text.", published_at=extracted_date
+        body="Full article body text.",
+        title="Extracted Title",
+        published_at=extracted_date,
     )
     svc = ContentFetchService(session_factory, extractor)
     result = await svc.execute(discovered.id)
@@ -76,6 +81,7 @@ async def test_fetched_creates_article(
     db_session.expire_all()
     article = await db_session.get(Article, result.article_id)
     assert article is not None
+    assert article.original_title == "Extracted Title"
     assert article.original_content == "Full article body text."
     assert article.published_at == extracted_date
 
@@ -131,17 +137,35 @@ async def test_permanent_error_returns_skipped(
     assert len(articles) == 0
 
 
-async def test_quality_gate_returns_skipped(
+async def test_quality_gate_skipped_when_body_missing(
     db_session: AsyncSession,
     session_factory,
     sample_source: NewsSource,
 ) -> None:
     """body が取れなかった場合は Article を作成せず skipped を返す。"""
     discovered = await _make_discovered(
-        db_session, sample_source, "https://example.com/minimal"
+        db_session, sample_source, "https://example.com/no-body"
     )
 
-    extractor = _mock_html_extractor(body=None, published_at=None)
+    extractor = _mock_html_extractor(body=None, title="Title only")
+    svc = ContentFetchService(session_factory, extractor)
+    result = await svc.execute(discovered.id)
+
+    assert result.status == "skipped"
+    assert result.article_id is None
+
+
+async def test_quality_gate_skipped_when_title_missing(
+    db_session: AsyncSession,
+    session_factory,
+    sample_source: NewsSource,
+) -> None:
+    """title が取れなかった場合は Article を作成せず skipped を返す。"""
+    discovered = await _make_discovered(
+        db_session, sample_source, "https://example.com/no-title"
+    )
+
+    extractor = _mock_html_extractor(body="Body only text.", title=None)
     svc = ContentFetchService(session_factory, extractor)
     result = await svc.execute(discovered.id)
 
