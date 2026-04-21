@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.collection.errors import TemporaryFetchError
+from app.collection.extraction.service import AlreadyExists, Fetched, Skipped
 
 
 def _make_ctx(
@@ -32,13 +33,14 @@ class TestFetchContent:
         from app.collection.tasks import fetch_content
 
         mock_ctx = _make_ctx()
-        mock_result = MagicMock(status="fetched", article_id=42)
 
         with (
             patch("app.collection.tasks.ContentFetchService") as mock_svc_cls,
             patch("app.analysis.tasks.extract_content") as mock_analyze,
         ):
-            mock_svc_cls.return_value.execute = AsyncMock(return_value=mock_result)
+            mock_svc_cls.return_value.execute = AsyncMock(
+                return_value=Fetched(article_id=42)
+            )
             mock_analyze.kiq = AsyncMock()
             await fetch_content(discovered_article_id=1, ctx=mock_ctx)
 
@@ -50,13 +52,14 @@ class TestFetchContent:
         from app.collection.tasks import fetch_content
 
         mock_ctx = _make_ctx()
-        mock_result = MagicMock(status="already_exists", article_id=42)
 
         with (
             patch("app.collection.tasks.ContentFetchService") as mock_svc_cls,
             patch("app.analysis.tasks.extract_content") as mock_analyze,
         ):
-            mock_svc_cls.return_value.execute = AsyncMock(return_value=mock_result)
+            mock_svc_cls.return_value.execute = AsyncMock(
+                return_value=AlreadyExists(article_id=42)
+            )
             mock_analyze.kiq = AsyncMock()
             await fetch_content(discovered_article_id=1, ctx=mock_ctx)
 
@@ -67,13 +70,12 @@ class TestFetchContent:
         from app.collection.tasks import fetch_content
 
         mock_ctx = _make_ctx()
-        mock_result = MagicMock(status="skipped", article_id=None)
 
         with (
             patch("app.collection.tasks.ContentFetchService") as mock_svc_cls,
             patch("app.analysis.tasks.extract_content") as mock_analyze,
         ):
-            mock_svc_cls.return_value.execute = AsyncMock(return_value=mock_result)
+            mock_svc_cls.return_value.execute = AsyncMock(return_value=Skipped())
             mock_analyze.kiq = AsyncMock()
             await fetch_content(discovered_article_id=1, ctx=mock_ctx)
 

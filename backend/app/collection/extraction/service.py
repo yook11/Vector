@@ -11,7 +11,6 @@ DB ルックアップ (:class:`DiscoveredArticleRepository`) の sum type 結果
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -34,11 +33,28 @@ logger = structlog.get_logger(__name__)
 
 
 @dataclass(frozen=True)
-class ContentFetchResult:
-    """コンテンツ取得ユースケースの結果。"""
+class Fetched:
+    """コンテンツ取得結果: HTML から抽出して Article 行を新規作成した。"""
 
-    status: Literal["fetched", "already_exists", "skipped"]
-    article_id: int | None = None
+    article_id: int
+
+
+@dataclass(frozen=True)
+class AlreadyExists:
+    """コンテンツ取得結果: Article が既に存在しており冪等にスキップした。"""
+
+    article_id: int
+
+
+@dataclass(frozen=True)
+class Skipped:
+    """コンテンツ取得結果: 抽出をスキップした。
+
+    品質ゲート未達 / 永続的失敗 / DiscoveredArticle 不在 のいずれか。
+    """
+
+
+ContentFetchResult = Fetched | AlreadyExists | Skipped
 
 
 class ContentFetchService:
@@ -62,7 +78,7 @@ class ContentFetchService:
         """記事本文と公開日時を取得し Article 行を作成する。
 
         Returns:
-            status と article_id を持つ ContentFetchResult。
+            Fetched / AlreadyExists / Skipped のいずれか。
 
         Raises:
             TemporaryFetchError: リトライ可能な失敗。判断は呼び出し側（Task）。
@@ -77,9 +93,9 @@ class ContentFetchService:
                         "content_fetch_discovered_not_found",
                         discovered_article_id=discovered_article_id,
                     )
-                    return ContentFetchResult("skipped")
+                    return Skipped()
                 case AlreadyExtracted(article_id=article_id):
-                    return ContentFetchResult("already_exists", article_id=article_id)
+                    return AlreadyExists(article_id=article_id)
                 case UnextractedFound(article=unextracted):
                     return await self._fetch_and_persist(
                         session, article_repo, unextracted
@@ -99,7 +115,7 @@ class ContentFetchService:
                 discovered_article_id=unextracted.id,
                 reason=str(e),
             )
-            return ContentFetchResult("skipped")
+            return Skipped()
 
         content = ArticleExtractedContent.from_extraction(extraction)
         if content is None:
@@ -108,7 +124,7 @@ class ContentFetchService:
                 discovered_article_id=unextracted.id,
                 reason="quality_gate",
             )
-            return ContentFetchResult("skipped")
+            return Skipped()
 
         article = article_repo.create(unextracted.id, content)
         await session.commit()
@@ -120,4 +136,4 @@ class ContentFetchService:
             article_id=article.id,
             date_extracted=content.published_at is not None,
         )
-        return ContentFetchResult("fetched", article_id=article.id)
+        return Fetched(article_id=article.id)
