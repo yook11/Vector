@@ -8,7 +8,7 @@ function formatDate(dateStr: string | null | undefined): string {
   if (!dateStr) return "Unknown";
   return new Date(dateStr).toLocaleDateString("ja-JP", {
     year: "numeric",
-    month: "short",
+    month: "long",
     day: "numeric",
   });
 }
@@ -24,42 +24,47 @@ const impactLevelColors: Record<ImpactLevel, string> = {
 
 export function NewsCard({ article }: { article: ArticleBrief }) {
   return (
-    <Card className="border-0 bg-transparent shadow-none">
-      <CardHeader className="p-0 pb-2">
-        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <span className="line-clamp-1">
-            {article.source.name} &middot; {formatDate(article.publishedAt)}
-          </span>
-        </div>
-        <div className="flex items-start justify-between gap-3 mt-1.5">
-          <CardTitle className="text-base font-medium leading-snug text-foreground">
-            <Link href={`/news/${article.id}`} className="hover:underline">
-              {article.translatedTitle}
-            </Link>
-          </CardTitle>
-          <div className="flex items-center gap-1.5 shrink-0 mt-0.5">
-            <Badge
-              variant="outline"
-              className={`text-[11px] border ${impactLevelColors[article.impactLevel]}`}
-            >
-              {article.impactLevel}
-            </Badge>
-            <WatchlistButton
-              articleId={article.id}
-              isWatched={article.isWatched}
-            />
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent className="p-0 flex flex-col gap-3">
-        <p className="text-sm text-muted-foreground leading-relaxed line-clamp-2">
-          {article.summary}
-        </p>
+    <Card className="relative flex flex-col items-center text-center border-0 bg-transparent shadow-none px-4 py-8 h-full sm:px-6">
+      <div className="absolute top-4 right-4 sm:top-6 sm:right-6">
+        <WatchlistButton
+          articleId={article.id}
+          isWatched={article.isWatched}
+        />
+      </div>
+
+      {/* Top Tags area */}
+      <div className="flex items-center justify-center gap-2 mb-6 h-6">
+        <Badge
+          variant="outline"
+          className={`text-[10px] tracking-widest uppercase px-2.5 py-0.5 border ${impactLevelColors[article.impactLevel]}`}
+        >
+          {article.impactLevel}
+        </Badge>
         {article.topic && (
-          <Badge variant="secondary" className="text-[11px] font-normal w-fit">
+          <Badge variant="secondary" className="text-[10px] tracking-widest uppercase px-2.5 py-0.5 bg-neutral-100 text-neutral-600 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-400 border-transparent">
             {article.topic.name}
           </Badge>
         )}
+      </div>
+
+      <CardHeader className="p-0 max-w-[280px] flex-grow flex flex-col justify-start items-center">
+        <CardTitle className="text-[15px] sm:text-base font-medium leading-snug text-foreground pb-4 hover:text-primary transition-colors">
+          <Link href={`/news/${article.id}`}>
+            {article.translatedTitle}
+          </Link>
+        </CardTitle>
+        <p className="text-[13px] text-muted-foreground line-clamp-3 leading-relaxed">
+          {article.summary}
+        </p>
+      </CardHeader>
+      
+      <CardContent className="p-0 w-full flex flex-col items-center mt-6">
+        <p className="text-[13px] font-medium text-foreground mb-1">
+          {article.source.name}
+        </p>
+        <p className="text-[12px] text-muted-foreground">
+          {formatDate(article.publishedAt)}
+        </p>
       </CardContent>
     </Card>
   );
