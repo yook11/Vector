@@ -26,10 +26,7 @@ export function NewsCard({ article }: { article: ArticleBrief }) {
   return (
     <Card className="relative flex flex-col items-center text-center border-0 bg-transparent shadow-none px-4 py-8 h-full sm:px-6">
       <div className="absolute top-4 right-4 sm:top-6 sm:right-6">
-        <WatchlistButton
-          articleId={article.id}
-          isWatched={article.isWatched}
-        />
+        <WatchlistButton articleId={article.id} isWatched={article.isWatched} />
       </div>
 
       {/* Top Tags area */}
@@ -41,7 +38,10 @@ export function NewsCard({ article }: { article: ArticleBrief }) {
           {article.impactLevel}
         </Badge>
         {article.topic && (
-          <Badge variant="secondary" className="text-[10px] tracking-widest uppercase px-2.5 py-0.5 bg-neutral-100 text-neutral-600 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-400 border-transparent">
+          <Badge
+            variant="secondary"
+            className="text-[10px] tracking-widest uppercase px-2.5 py-0.5 bg-neutral-100 text-neutral-600 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-400 border-transparent"
+          >
             {article.topic.name}
           </Badge>
         )}
@@ -49,15 +49,13 @@ export function NewsCard({ article }: { article: ArticleBrief }) {
 
       <CardHeader className="p-0 max-w-[280px] flex-grow flex flex-col justify-start items-center">
         <CardTitle className="text-[15px] sm:text-base font-medium leading-snug text-foreground pb-4 hover:text-primary transition-colors">
-          <Link href={`/news/${article.id}`}>
-            {article.translatedTitle}
-          </Link>
+          <Link href={`/news/${article.id}`}>{article.translatedTitle}</Link>
         </CardTitle>
         <p className="text-[13px] text-muted-foreground line-clamp-3 leading-relaxed">
           {article.summary}
         </p>
       </CardHeader>
-      
+
       <CardContent className="p-0 w-full flex flex-col items-center mt-6">
         <p className="text-[13px] font-medium text-foreground mb-1">
           {article.source.name}

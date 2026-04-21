@@ -39,7 +39,10 @@ export function NewsDetail({ article }: { article: ArticleDetailData }) {
           {article.impactLevel}
         </Badge>
         {article.topic && (
-          <Badge variant="secondary" className="text-[10px] tracking-widest uppercase px-2.5 py-0.5 bg-neutral-100 text-neutral-600 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-400 border-transparent">
+          <Badge
+            variant="secondary"
+            className="text-[10px] tracking-widest uppercase px-2.5 py-0.5 bg-neutral-100 text-neutral-600 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-400 border-transparent"
+          >
             {article.topic.name}
           </Badge>
         )}
@@ -57,7 +60,9 @@ export function NewsDetail({ article }: { article: ArticleDetailData }) {
 
       {/* Meta Section */}
       <div className="flex flex-wrap items-center justify-center gap-3 text-[13px] text-muted-foreground mb-12">
-        <span className="font-medium text-foreground">{article.source.name}</span>
+        <span className="font-medium text-foreground">
+          {article.source.name}
+        </span>
         <Separator orientation="vertical" className="h-4" />
         <span>{formatDate(article.publishedAt)}</span>
         {safeUrl !== null && (
