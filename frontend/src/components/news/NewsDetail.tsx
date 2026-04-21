@@ -97,19 +97,6 @@ export function NewsDetail({ article }: { article: ArticleDetailData }) {
           </p>
         </CardContent>
       </Card>
-
-      {article.original.content ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Article Content</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="prose prose-sm max-w-none text-muted-foreground whitespace-pre-line">
-              {article.original.content}
-            </div>
-          </CardContent>
-        </Card>
-      ) : null}
     </div>
   );
 }

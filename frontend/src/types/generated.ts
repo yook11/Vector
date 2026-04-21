@@ -13,7 +13,7 @@ export interface paths {
     };
     /**
      * Search Articles
-     * @description Search articles by semantic similarity to the given query text.
+     * @description 指定クエリテキストとのセマンティック類似度で記事を検索する。
      */
     get: operations["search_articles_api_v1_articles_search_get"];
     put?: never;
@@ -33,7 +33,7 @@ export interface paths {
     };
     /**
      * List Articles
-     * @description List analyzed articles with filters and pagination.
+     * @description 分析済み記事をフィルタとページネーション付きで一覧取得する。
      */
     get: operations["list_articles_api_v1_articles_get"];
     put?: never;
@@ -52,8 +52,8 @@ export interface paths {
       cookie?: never;
     };
     /**
-     * Find semantically similar articles using pgvector cosine distance
-     * @description Return articles most similar to the given article.
+     * pgvector のコサイン距離で意味的に類似した記事を検索する
+     * @description 指定記事に最も類似した記事を返す。
      */
     get: operations["get_similar_articles_api_v1_articles__article_id__similar_get"];
     put?: never;
@@ -73,7 +73,7 @@ export interface paths {
     };
     /**
      * Get Article
-     * @description Get a single article with full analysis details.
+     * @description 単一記事を完全な分析情報付きで取得する。
      */
     get: operations["get_article_api_v1_articles__article_id__get"];
     put?: never;
@@ -93,7 +93,7 @@ export interface paths {
     };
     /**
      * List Categories
-     * @description List all categories with nested topics and article counts.
+     * @description 全カテゴリをネストされたキーワードと記事件数付きで一覧取得する。
      */
     get: operations["list_categories_api_v1_categories_get"];
     put?: never;
@@ -148,13 +148,13 @@ export interface paths {
     };
     /**
      * List News Sources
-     * @description List all news sources.
+     * @description 全ニュースソースを一覧取得する。
      */
     get: operations["list_news_sources_api_v1_admin_sources_get"];
     put?: never;
     /**
      * Create News Source
-     * @description Create a new news source.
+     * @description 新しいニュースソースを作成する。
      */
     post: operations["create_news_source_api_v1_admin_sources_post"];
     delete?: never;
@@ -175,7 +175,7 @@ export interface paths {
     post?: never;
     /**
      * Delete News Source
-     * @description Delete a news source.
+     * @description ニュースソースを削除する。
      */
     delete: operations["delete_news_source_api_v1_admin_sources__source_id__delete"];
     options?: never;
@@ -198,7 +198,7 @@ export interface paths {
     head?: never;
     /**
      * Activate Source
-     * @description Activate a news source.
+     * @description ニュースソースを有効化する。
      */
     patch: operations["activate_source_api_v1_admin_sources__source_id__activate_patch"];
     trace?: never;
@@ -218,7 +218,7 @@ export interface paths {
     head?: never;
     /**
      * Deactivate Source
-     * @description Deactivate a news source.
+     * @description ニュースソースを無効化する。
      */
     patch: operations["deactivate_source_api_v1_admin_sources__source_id__deactivate_patch"];
     trace?: never;
@@ -234,7 +234,10 @@ export interface paths {
     put?: never;
     /**
      * Fetch News
-     * @description Enqueue a news fetch task. Returns immediately with a task ID.
+     * @description ニュース取得タスクをキュー投入する。
+     *
+     *     source_ids 指定時はソースごとに個別タスクを dispatch、
+     *     未指定時は dispatch_sources で全アクティブソースを dispatch。
      */
     post: operations["fetch_news_api_v1_admin_pipeline_fetch_post"];
     delete?: never;
@@ -253,8 +256,8 @@ export interface paths {
     get?: never;
     put?: never;
     /**
-     * Backfill embeddings for analyses that are missing them
-     * @description Generate vector embeddings for all analyses where embedding IS NULL.
+     * 埋め込み未生成の分析に対して埋め込みタスクをディスパッチする
+     * @description 埋め込み未生成の全記事に対して generate_embedding タスクを投入する。
      */
     post: operations["embed_news_api_v1_admin_pipeline_embed_post"];
     delete?: never;
@@ -299,7 +302,6 @@ export interface components {
       source: components["schemas"]["NewsSourceEmbed"];
       /** Publishedat */
       publishedAt?: string | null;
-      /** Topic */
       topic?: components["schemas"]["TopicEmbed"] | null;
       /**
        * Iswatched
@@ -329,7 +331,6 @@ export interface components {
       source: components["schemas"]["NewsSourceEmbed"];
       /** Publishedat */
       publishedAt?: string | null;
-      /** Topic */
       topic?: components["schemas"]["TopicEmbed"] | null;
       /**
        * Iswatched
@@ -358,7 +359,7 @@ export interface components {
     };
     /**
      * CategoryDetailList
-     * @description Wrapper for enriched category list endpoint.
+     * @description カテゴリ詳細一覧エンドポイント用のラッパー。
      */
     CategoryDetailList: {
       /** Items */
@@ -366,43 +367,39 @@ export interface components {
     };
     /**
      * CategoryName
-     * @description Japanese display name for a category.
+     * @description カテゴリの日本語表示名。
      *
      *     Invariants:
-     *     - Contains word characters, middle dot (・), spaces, or hyphens
-     *     - Not empty or whitespace-only
-     *     - 1-50 characters
-     *     - Immutable after creation
+     *     - ワード文字・中黒 (・)・空白・ハイフンで構成
+     *     - 空文字列や空白のみは不可
+     *     - 1-50 文字
+     *     - 生成後は不変
      */
     CategoryName: string;
     /**
      * CategorySlug
-     * @description URL-safe category identifier.
+     * @description URL セーフなカテゴリ識別子。
      *
      *     Invariants:
-     *     - Starts with lowercase letter or digit
-     *     - Contains only lowercase letters, digits, and underscores
-     *     - 1-50 characters
-     *     - Immutable after creation
+     *     - 先頭は小文字または数字
+     *     - 使用可能な文字は小文字・数字・アンダースコアのみ
+     *     - 1-50 文字
+     *     - 生成後は不変
      */
     CategorySlug: string;
     /**
      * EmbedResponse
-     * @description POST /api/v1/admin/pipeline/embed response.
+     * @description POST /api/v1/admin/pipeline/embed のレスポンス。
      */
     EmbedResponse: {
       /** Message */
       message: string;
-      /** Embeddedcount */
-      embeddedCount: number;
-      /** Skippedcount */
-      skippedCount: number;
-      /** Errorcount */
-      errorCount: number;
+      /** Dispatchedcount */
+      dispatchedCount: number;
     };
     /**
      * FetchRequest
-     * @description POST /api/v1/admin/pipeline/fetch request body.
+     * @description POST /api/v1/admin/pipeline/fetch のリクエストボディ。
      */
     FetchRequest: {
       /** Sourceids */
@@ -410,15 +407,15 @@ export interface components {
     };
     /**
      * FetchResponse
-     * @description POST /api/v1/admin/pipeline/fetch response.
+     * @description POST /api/v1/admin/pipeline/fetch のレスポンス。
      */
     FetchResponse: {
       /** Message */
       message: string;
-      /** Sourcescount */
-      sourcesCount?: number | null;
+      /** Dispatchedcount */
+      dispatchedCount?: number | null;
       /** Jobid */
-      jobId: string;
+      jobId?: string | null;
     };
     /** HTTPValidationError */
     HTTPValidationError: {
@@ -431,38 +428,8 @@ export interface components {
      */
     ImpactLevel: "low" | "medium" | "high" | "critical";
     /**
-     * TopicEmbed
-     * @description トピックタグ（ニュース埋め込み用）
-     */
-    TopicEmbed: {
-      name: components["schemas"]["TopicName"];
-    };
-    /**
-     * TopicName
-     * @description AI 生成の分類ラベル名。正規化済みの英語小文字。
-     *
-     *     Invariants:
-     *     - Starts and ends with alphanumeric
-     *     - Only lowercase letters, digits, spaces, hyphens
-     *     - 2-100 characters
-     *     - Immutable after creation
-     */
-    TopicName: string;
-    /**
-     * TopicStatEmbed
-     * @description トピック＋記事数（カテゴリ内集計表示用）
-     */
-    TopicStatEmbed: {
-      name: components["schemas"]["TopicName"];
-      /**
-       * Articlecount
-       * @default 0
-       */
-      articleCount: number;
-    };
-    /**
      * NewsSourceCreate
-     * @description POST /api/v1/admin/sources request body.
+     * @description POST /api/v1/admin/sources のリクエストボディ。
      */
     NewsSourceCreate: {
       name: components["schemas"]["SourceName"];
@@ -472,7 +439,7 @@ export interface components {
     };
     /**
      * NewsSourceDetail
-     * @description Single news source in API responses.
+     * @description API レスポンスにおける単一ニュースソース。
      */
     NewsSourceDetail: {
       /** Id */
@@ -496,7 +463,7 @@ export interface components {
     };
     /**
      * NewsSourceDetailList
-     * @description GET /api/v1/admin/sources response wrapper.
+     * @description GET /api/v1/admin/sources のレスポンスラッパー。
      */
     NewsSourceDetailList: {
       /** Items */
@@ -517,12 +484,10 @@ export interface components {
       /** Title */
       title: string;
       url: components["schemas"]["SafeUrl"];
-      /** Content */
-      content?: string | null;
     };
     /**
      * PaginatedArticleResponse
-     * @description Paginated list of articles.
+     * @description 記事のページネーション付きリスト。
      */
     PaginatedArticleResponse: {
       /** Items */
@@ -538,13 +503,13 @@ export interface components {
     };
     /**
      * SafeUrl
-     * @description HTTP/HTTPS URL validated by Pydantic.
+     * @description Pydantic によって検証された HTTP/HTTPS URL。
      *
      *     Invariants:
-     *     - Uses http or https scheme
-     *     - Valid URL structure (scheme + host at minimum)
-     *     - 1-2048 characters after trimming
-     *     - Immutable after creation
+     *     - http または https スキームを使用
+     *     - 有効な URL 構造 (最低でも scheme + host)
+     *     - トリム後 1-2048 文字
+     *     - 生成後は不変
      */
     SafeUrl: string;
     /**
@@ -559,13 +524,13 @@ export interface components {
     SortOrder: "asc" | "desc";
     /**
      * SourceName
-     * @description Display name for a news source.
+     * @description ニュースソースの表示名。
      *
      *     Invariants:
-     *     - Contains at least one word character
-     *     - Only word chars (Unicode), spaces, hyphens, dots
-     *     - 1-50 characters after trimming
-     *     - Immutable after creation
+     *     - 少なくとも 1 つのワード文字を含む
+     *     - 使用可能文字は Unicode ワード文字・空白・ハイフン・ドット
+     *     - トリム後 1-50 文字
+     *     - 生成後は不変
      */
     SourceName: string;
     /**
@@ -573,6 +538,40 @@ export interface components {
      * @enum {string}
      */
     SourceType: "rss" | "api";
+    /**
+     * TopicEmbed
+     * @description トピックタグ（ニュース埋め込み用）
+     */
+    TopicEmbed: {
+      name: components["schemas"]["TopicName"];
+    };
+    /**
+     * TopicName
+     * @description AI 生成の分類ラベル名。正規化済みの英語小文字。
+     *
+     *     入力は自動で正規化される（小文字化、空白/ハイフン正規化）。
+     *     VO 自身が「正規化済み」を保証する状態型。
+     *
+     *     Invariants:
+     *     - 先頭・末尾は英数字
+     *     - 中間は英数字・スペース・ハイフンのみ
+     *     - 2-100 文字
+     *     - 小文字のみ
+     *     - 生成後は不変
+     */
+    TopicName: string;
+    /**
+     * TopicStatEmbed
+     * @description トピック＋記事数（カテゴリ内集計表示用）
+     */
+    TopicStatEmbed: {
+      name: components["schemas"]["TopicName"];
+      /**
+       * Articlecount
+       * @default 0
+       */
+      articleCount: number;
+    };
     /**
      * UserRole
      * @enum {string}
@@ -593,7 +592,7 @@ export interface components {
     };
     /**
      * WatchlistCreate
-     * @description POST /api/v1/me/watchlist request body.
+     * @description POST /api/v1/me/watchlist のリクエストボディ。
      */
     WatchlistCreate: {
       /** Articleid */
@@ -1108,7 +1107,7 @@ export interface operations {
     requestBody?: never;
     responses: {
       /** @description Successful Response */
-      200: {
+      202: {
         headers: {
           [name: string]: unknown;
         };

@@ -29,6 +29,7 @@ def article_eager_options_detail() -> list:
     """詳細用. 呼び出し側で .join(ArticleAnalysis.article) が必要."""
     return [
         contains_eager(ArticleAnalysis.article).options(
+            defer(Article.original_content, raiseload=True),
             selectinload(Article.discovered_article).selectinload(
                 DiscoveredArticle.news_source
             ),
