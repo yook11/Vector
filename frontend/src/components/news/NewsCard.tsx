@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import type { ArticleBrief, ImpactLevel } from "@/types";
 import { WatchlistButton } from "./WatchlistButton";
 
@@ -24,46 +24,49 @@ const impactLevelColors: Record<ImpactLevel, string> = {
 
 export function NewsCard({ article }: { article: ArticleBrief }) {
   return (
-    <Card className="relative flex flex-col items-center text-center border-0 bg-transparent shadow-none px-4 py-8 h-full sm:px-6">
-      <div className="absolute top-4 right-4 sm:top-6 sm:right-6">
-        <WatchlistButton articleId={article.id} isWatched={article.isWatched} />
-      </div>
-
-      {/* Top Tags area */}
-      <div className="flex items-center justify-center gap-2 mb-6 h-6">
-        <Badge
-          variant="outline"
-          className={`text-[10px] tracking-widest uppercase px-2.5 py-0.5 border ${impactLevelColors[article.impactLevel]}`}
-        >
-          {article.impactLevel}
-        </Badge>
-        {article.topic && (
+    <Card className="flex h-full flex-col border-0 bg-transparent p-0 shadow-none gap-0">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-2">
           <Badge
-            variant="secondary"
-            className="text-[10px] tracking-widest uppercase px-2.5 py-0.5 bg-neutral-100 text-neutral-600 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-400 border-transparent"
+            variant="outline"
+            className={`text-[10px] tracking-widest uppercase px-2 py-0.5 border ${impactLevelColors[article.impactLevel]}`}
           >
-            {article.topic.name}
+            {article.impactLevel}
           </Badge>
-        )}
+          {article.topic && (
+            <Badge
+              variant="outline"
+              className="text-[10px] tracking-widest uppercase px-2 py-0.5 border border-neutral-200 bg-transparent text-neutral-600 dark:border-neutral-700/60 dark:text-neutral-400"
+            >
+              {article.topic.name}
+            </Badge>
+          )}
+        </div>
+        <div className="-mt-1 -mr-1 shrink-0">
+          <WatchlistButton
+            articleId={article.id}
+            isWatched={article.isWatched}
+          />
+        </div>
       </div>
 
-      <CardHeader className="p-0 max-w-[280px] flex-grow flex flex-col justify-start items-center">
-        <CardTitle className="text-[15px] sm:text-base font-medium leading-snug text-foreground pb-4 hover:text-primary transition-colors">
-          <Link href={`/news/${article.id}`}>{article.translatedTitle}</Link>
-        </CardTitle>
-        <p className="text-[13px] text-muted-foreground line-clamp-3 leading-relaxed">
-          {article.summary}
-        </p>
-      </CardHeader>
+      <Link href={`/news/${article.id}`} className="group mt-5 block">
+        <h3 className="text-[18px] font-medium leading-[1.3] tracking-[-0.01em] text-foreground line-clamp-3 group-hover:text-primary transition-colors">
+          {article.translatedTitle}
+        </h3>
+      </Link>
 
-      <CardContent className="p-0 w-full flex flex-col items-center mt-6">
-        <p className="text-[13px] font-medium text-foreground mb-1">
+      <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground line-clamp-2">
+        {article.summary}
+      </p>
+
+      <div className="mt-auto flex items-center gap-1.5 pt-5 text-[11px] text-muted-foreground">
+        <span className="font-medium text-foreground/80">
           {article.source.name}
-        </p>
-        <p className="text-[12px] text-muted-foreground">
-          {formatDate(article.publishedAt)}
-        </p>
-      </CardContent>
+        </span>
+        <span className="text-muted-foreground/50">·</span>
+        <span>{formatDate(article.publishedAt)}</span>
+      </div>
     </Card>
   );
 }
