@@ -21,7 +21,12 @@ from app.brokers import (
 )
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
 from app.collection.extraction.extractor import ArticleHtmlExtractor
-from app.collection.extraction.service import ContentFetchService
+from app.collection.extraction.service import (
+    AlreadyExists,
+    ContentFetchService,
+    Fetched,
+    Skipped,
+)
 from app.collection.ingestion.service import SourceFetchService
 from app.models.fetch_log import FetchLog, FetchStatus
 from app.models.news_source import NewsSource
@@ -188,6 +193,9 @@ async def fetch_content(
             return
         raise
 
-    # Article が作成された場合のみ分析にチェーン
-    if result.status in ("fetched", "already_exists"):
-        await extract_content.kiq(result.article_id)
+    # Article が存在するケース (新規作成 / 冪等ヒット) のみ分析にチェーン
+    match result:
+        case Fetched(article_id=aid) | AlreadyExists(article_id=aid):
+            await extract_content.kiq(aid)
+        case Skipped():
+            pass
