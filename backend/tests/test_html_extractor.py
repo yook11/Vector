@@ -1,14 +1,17 @@
 """HTML 抽出層のテスト。"""
 
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
+from app.collection.extraction.candidate import PublishedAt
 from app.collection.extraction.extractor import (
     ArticleHtmlExtractor,
-    HtmlExtractionResult,
+    ExtractedContent,
+    ExtractionEmpty,
     _decode_html_response,
 )
 from app.domain.safe_url import SafeUrl
@@ -95,9 +98,9 @@ class TestArticleHtmlExtractor:
         with _patch_client(client):
             result = await extractor.fetch(SafeUrl("https://example.com/article"))
 
-        assert isinstance(result, HtmlExtractionResult)
-        assert result.body is not None
+        assert isinstance(result, ExtractedContent)
         assert len(result.body) > 50
+        assert result.title
 
     @pytest.mark.asyncio
     async def test_raises_permanent_on_403(self) -> None:
@@ -174,12 +177,12 @@ class TestArticleHtmlExtractor:
         with _patch_client(client):
             result = await extractor.fetch(SafeUrl("https://example.com/doc.pdf"))
 
-        assert result.body is None
-        assert result.published_at is None
+        assert isinstance(result, ExtractionEmpty)
+        assert result.reason == "not_html"
 
     @pytest.mark.asyncio
-    async def test_returns_none_body_for_minimal_content(self) -> None:
-        """品質ゲートによりパース後に短すぎるコンテンツは body=None になる。"""
+    async def test_returns_empty_for_minimal_content(self) -> None:
+        """品質ゲートにより短すぎるコンテンツは ExtractionEmpty になる。"""
         robots_resp = httpx.Response(
             404,
             request=httpx.Request("GET", "https://example.com/robots.txt"),
@@ -197,7 +200,8 @@ class TestArticleHtmlExtractor:
         with _patch_client(client):
             result = await extractor.fetch(SafeUrl("https://example.com/short"))
 
-        assert result.body is None
+        assert isinstance(result, ExtractionEmpty)
+        assert result.reason in ("quality_gate", "parse_error")
 
     @pytest.mark.asyncio
     async def test_raises_permanent_on_robots_blocked(self) -> None:
@@ -251,6 +255,31 @@ class TestArticleHtmlExtractor:
         ]
         assert len(robots_calls_1) == 1
         assert len(robots_calls_2) == 0
+
+
+class TestExtractedContentInvariant:
+    """ExtractedContent のコンストラクタ invariant。"""
+
+    def test_rejects_empty_title(self) -> None:
+        with pytest.raises(ValueError, match="title"):
+            ExtractedContent(title="", body="x" * 60, published_at=None)
+
+    def test_rejects_title_over_limit(self) -> None:
+        with pytest.raises(ValueError, match="title"):
+            ExtractedContent(title="x" * 501, body="x" * 60, published_at=None)
+
+    def test_rejects_short_body(self) -> None:
+        with pytest.raises(ValueError, match="body"):
+            ExtractedContent(title="t", body="x" * 10, published_at=None)
+
+    def test_accepts_valid_fields(self) -> None:
+        content = ExtractedContent(
+            title="t",
+            body="x" * 60,
+            published_at=PublishedAt(datetime(2026, 4, 1, tzinfo=UTC)),
+        )
+        assert content.title == "t"
+        assert content.published_at is not None
 
 
 class TestDecodeHtmlResponse:
@@ -362,5 +391,5 @@ class TestDecodeHtmlResponse:
                 SafeUrl("https://www.itmedia.co.jp/news/articles/test.html")
             )
 
-        assert result.body is not None
+        assert isinstance(result, ExtractedContent)
         assert "量子コンピューティング" in result.body

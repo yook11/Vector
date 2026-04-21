@@ -16,6 +16,7 @@ import re
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Literal
 from urllib.parse import urlparse
 from urllib.robotparser import RobotFileParser
 
@@ -32,6 +33,7 @@ logger = structlog.get_logger(__name__)
 
 HTTP_TIMEOUT = 30.0
 _TITLE_MAX_LENGTH = 500
+_BODY_MIN_LENGTH = 50
 USER_AGENT = "VectorBot/1.0 (+https://github.com/vector-news)"
 HEADERS = {"User-Agent": USER_AGENT}
 
@@ -79,13 +81,44 @@ def _decode_html_response(response: httpx.Response) -> str:
     return response.text
 
 
-@dataclass(frozen=True)
-class HtmlExtractionResult:
-    """HTML 抽出結果。本文・タイトル・公開日時をそれぞれ独立に保持する。"""
+ExtractionEmptyReason = Literal["not_html", "parse_error", "quality_gate"]
 
-    body: str | None
-    title: str | None
-    published_at: datetime | None
+
+@dataclass(frozen=True)
+class ExtractedContent:
+    """抽出成功: 品質ゲートを通過した本文・タイトル。
+
+    invariant:
+      - ``title``: 非空、500 文字以内
+      - ``body``: 50 文字以上
+      - ``published_at``: 任意（記事によっては取得不能で妥当）
+    """
+
+    title: str
+    body: str
+    published_at: PublishedAt | None
+
+    def __post_init__(self) -> None:
+        if not self.title:
+            raise ValueError("title must be non-empty")
+        if len(self.title) > _TITLE_MAX_LENGTH:
+            raise ValueError(f"title exceeds {_TITLE_MAX_LENGTH} chars")
+        if len(self.body) < _BODY_MIN_LENGTH:
+            raise ValueError(f"body must be at least {_BODY_MIN_LENGTH} chars")
+
+
+@dataclass(frozen=True)
+class ExtractionEmpty:
+    """抽出不能: Content-Type 不一致 / パース失敗 / 品質ゲート未達。
+
+    ``reason`` は観測性のためだけに保持する（現状の呼び出し側は
+    全ケースを同一に扱うが、メトリクスとログに理由を載せる）。
+    """
+
+    reason: ExtractionEmptyReason
+
+
+HtmlExtractionResult = ExtractedContent | ExtractionEmpty
 
 
 class _RobotsCache:
@@ -149,21 +182,25 @@ def _extract_from_html(html: str, url: str) -> HtmlExtractionResult:
     )
 
     if result is None:
-        return HtmlExtractionResult(body=None, title=None, published_at=None)
+        return ExtractionEmpty(reason="parse_error")
 
     # 本文の品質ゲート: 50 文字未満は棄却
     text = result.get("text")
-    body = text.strip() if text and len(text.strip()) >= 50 else None
+    body = text.strip() if text and len(text.strip()) >= _BODY_MIN_LENGTH else None
 
     # タイトル: trafilatura が OGP / Twitter Card / JSON-LD / <title> / h1 の順で抽出。
     # HTML タグ除去と 500 文字上限で整形し、空なら None。
     cleaned_title = strip_html_tags(result.get("title"))
     title = cleaned_title[:_TITLE_MAX_LENGTH] if cleaned_title else None
 
-    parsed_published = PublishedAt.parse(result.get("date"))
-    published_at = parsed_published.value if parsed_published is not None else None
+    if body is None or title is None:
+        return ExtractionEmpty(reason="quality_gate")
 
-    return HtmlExtractionResult(body=body, title=title, published_at=published_at)
+    return ExtractedContent(
+        title=title,
+        body=body,
+        published_at=PublishedAt.parse(result.get("date")),
+    )
 
 
 class ArticleHtmlExtractor:
@@ -180,8 +217,8 @@ class ArticleHtmlExtractor:
         """指定 URL の HTML から記事本文・タイトル・公開日時を抽出する。
 
         Returns:
-            HtmlExtractionResult: body / title / published_at を独立に保持。
-            Content-Type が不一致の場合は全て None。
+            HtmlExtractionResult: ``ExtractedContent``（成功）または
+            ``ExtractionEmpty``（Content-Type 不一致 / パース失敗 / 品質ゲート未達）。
 
         Raises:
             PermanentFetchError: robots.txt 拒否 / 403 / 404 / 410 / 451。
@@ -210,13 +247,11 @@ class ArticleHtmlExtractor:
             content_type = response.headers.get("content-type", "")
             if "text/html" not in content_type:
                 logger.info("content_not_html", url=url_str, content_type=content_type)
-                return HtmlExtractionResult(body=None, title=None, published_at=None)
+                return ExtractionEmpty(reason="not_html")
 
             try:
                 html_text = _decode_html_response(response)
-                result = await asyncio.to_thread(_extract_from_html, html_text, url_str)
+                return await asyncio.to_thread(_extract_from_html, html_text, url_str)
             except Exception as e:
                 logger.warning("content_parse_error", url=url_str, error=str(e))
-                return HtmlExtractionResult(body=None, title=None, published_at=None)
-
-            return result
+                return ExtractionEmpty(reason="parse_error")
