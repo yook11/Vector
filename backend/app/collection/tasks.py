@@ -20,12 +20,12 @@ from app.brokers import (
     is_last_attempt,
 )
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
+from app.collection.extraction.candidate import DiscoveredNotFound
 from app.collection.extraction.extractor import ArticleHtmlExtractor
 from app.collection.extraction.service import (
-    AlreadyExists,
+    ArticleReady,
     ContentFetchService,
-    Fetched,
-    Skipped,
+    ExtractionFailed,
 )
 from app.collection.ingestion.service import SourceFetchService
 from app.models.fetch_log import FetchLog, FetchStatus
@@ -193,9 +193,9 @@ async def fetch_content(
             return
         raise
 
-    # Article が存在するケース (新規作成 / 冪等ヒット) のみ分析にチェーン
+    # Article 行が揃ったときのみ分析にチェーン
     match result:
-        case Fetched(article_id=aid) | AlreadyExists(article_id=aid):
+        case ArticleReady(article_id=aid):
             await extract_content.kiq(aid)
-        case Skipped():
-            pass
+        case DiscoveredNotFound() | ExtractionFailed():
+            pass  # service 側でログ済み

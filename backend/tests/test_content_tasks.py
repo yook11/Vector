@@ -5,7 +5,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.collection.errors import TemporaryFetchError
-from app.collection.extraction.service import AlreadyExists, Fetched, Skipped
+from app.collection.extraction.candidate import DiscoveredNotFound
+from app.collection.extraction.service import ArticleReady, ExtractionFailed
 
 
 def _make_ctx(
@@ -29,7 +30,8 @@ def _make_ctx(
 
 class TestFetchContent:
     @pytest.mark.asyncio
-    async def test_fetched_chains_analyze(self) -> None:
+    async def test_article_ready_chains_analyze(self) -> None:
+        """ArticleReady を受け取ったら article_id を下流にチェーンする。"""
         from app.collection.tasks import fetch_content
 
         mock_ctx = _make_ctx()
@@ -39,7 +41,7 @@ class TestFetchContent:
             patch("app.analysis.tasks.extract_content") as mock_analyze,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
-                return_value=Fetched(article_id=42)
+                return_value=ArticleReady(article_id=42)
             )
             mock_analyze.kiq = AsyncMock()
             await fetch_content(discovered_article_id=1, ctx=mock_ctx)
@@ -48,7 +50,8 @@ class TestFetchContent:
         mock_analyze.kiq.assert_called_once_with(42)
 
     @pytest.mark.asyncio
-    async def test_already_exists_chains_analyze(self) -> None:
+    async def test_extraction_failed_does_not_chain(self) -> None:
+        """ExtractionFailed（外部/品質の問題）は下流へチェーンしない。"""
         from app.collection.tasks import fetch_content
 
         mock_ctx = _make_ctx()
@@ -58,15 +61,16 @@ class TestFetchContent:
             patch("app.analysis.tasks.extract_content") as mock_analyze,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
-                return_value=AlreadyExists(article_id=42)
+                return_value=ExtractionFailed(reason="quality_gate")
             )
             mock_analyze.kiq = AsyncMock()
             await fetch_content(discovered_article_id=1, ctx=mock_ctx)
 
-        mock_analyze.kiq.assert_called_once_with(42)
+        mock_analyze.kiq.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_skipped_does_not_chain(self) -> None:
+    async def test_discovered_not_found_does_not_chain(self) -> None:
+        """DiscoveredNotFound（DB 不整合）は下流へチェーンしない。"""
         from app.collection.tasks import fetch_content
 
         mock_ctx = _make_ctx()
@@ -75,7 +79,9 @@ class TestFetchContent:
             patch("app.collection.tasks.ContentFetchService") as mock_svc_cls,
             patch("app.analysis.tasks.extract_content") as mock_analyze,
         ):
-            mock_svc_cls.return_value.execute = AsyncMock(return_value=Skipped())
+            mock_svc_cls.return_value.execute = AsyncMock(
+                return_value=DiscoveredNotFound()
+            )
             mock_analyze.kiq = AsyncMock()
             await fetch_content(discovered_article_id=1, ctx=mock_ctx)
 
