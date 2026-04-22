@@ -6,6 +6,7 @@ from sqlalchemy.orm import contains_eager, defer, selectinload
 
 from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis
+from app.models.article_extraction import ArticleExtraction
 from app.models.category import Category
 from app.models.discovered_article import DiscoveredArticle
 from app.models.topic import Topic
@@ -13,9 +14,11 @@ from app.schemas.articles import ArticleListParams, SortOrder
 
 
 def article_eager_options_brief() -> list:
-    """一覧用. 呼び出し側で .join(ArticleAnalysis.article) が必要."""
+    """一覧用. 呼び出し側で extraction → article まで join 済みであること."""
     return [
-        contains_eager(ArticleAnalysis.article).options(
+        contains_eager(ArticleAnalysis.extraction)
+        .contains_eager(ArticleExtraction.article)
+        .options(
             defer(Article.original_content, raiseload=True),
             selectinload(Article.discovered_article).selectinload(
                 DiscoveredArticle.news_source
@@ -26,9 +29,11 @@ def article_eager_options_brief() -> list:
 
 
 def article_eager_options_detail() -> list:
-    """詳細用. 呼び出し側で .join(ArticleAnalysis.article) が必要."""
+    """詳細用. 呼び出し側で extraction → article まで join 済みであること."""
     return [
-        contains_eager(ArticleAnalysis.article).options(
+        contains_eager(ArticleAnalysis.extraction)
+        .contains_eager(ArticleExtraction.article)
+        .options(
             defer(Article.original_content, raiseload=True),
             selectinload(Article.discovered_article).selectinload(
                 DiscoveredArticle.news_source
@@ -51,8 +56,8 @@ class ArticleRepository:
         """ニュース閲覧用にページング済みの記事一覧を取得する."""
         stmt = (
             select(ArticleAnalysis)
-            .join(ArticleAnalysis.article)
-            .where(ArticleAnalysis.topic_id.is_not(None))
+            .join(ArticleAnalysis.extraction)
+            .join(ArticleExtraction.article)
             .options(*article_eager_options_brief())
         )
 
@@ -93,11 +98,9 @@ class ArticleRepository:
         """
         stmt = (
             select(ArticleAnalysis)
-            .join(ArticleAnalysis.article)
-            .where(
-                ArticleAnalysis.id == article_id,
-                ArticleAnalysis.topic_id.is_not(None),
-            )
+            .join(ArticleAnalysis.extraction)
+            .join(ArticleExtraction.article)
+            .where(ArticleAnalysis.id == article_id)
             .options(*article_eager_options_detail())
         )
         result = await self.session.execute(stmt)
@@ -127,13 +130,13 @@ class ArticleRepository:
 
         stmt = (
             select(ArticleAnalysis)
-            .join(ArticleAnalysis.article)
+            .join(ArticleAnalysis.extraction)
+            .join(ArticleExtraction.article)
             .join(source_embedding, true())
             .options(*article_eager_options_brief())
             .where(
                 ArticleAnalysis.id != article_id,
                 ArticleAnalysis.embedding.is_not(None),
-                ArticleAnalysis.topic_id.is_not(None),
             )
             .order_by(
                 ArticleAnalysis.embedding.cosine_distance(source_embedding.c.embedding)

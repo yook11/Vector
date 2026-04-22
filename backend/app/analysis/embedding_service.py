@@ -9,6 +9,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.embedder.base import BaseEmbedder
+from app.analysis.extraction.repository import ExtractionRepository
 from app.analysis.repository import AnalysisRepository
 from app.models.article_analysis import ArticleAnalysis
 
@@ -17,9 +18,13 @@ logger = structlog.get_logger(__name__)
 
 @dataclass(frozen=True)
 class EmbeddingResult:
-    """埋め込み生成ユースケースの結果。"""
+    """埋め込み生成ユースケースの結果。
 
-    status: Literal["created", "already_exists"]
+    ``skipped`` は extraction が存在しない、または対応する analysis がない
+    （=OutOfScope として rejection 側に振れた）ケース。
+    """
+
+    status: Literal["created", "already_exists", "skipped"]
 
 
 def build_embed_text(analysis: ArticleAnalysis) -> str:
@@ -46,13 +51,24 @@ class EmbeddingService:
             AnalysisDomainError のサブクラス。リトライ判断は呼び出し側の責務。
         """
         async with self._session_factory() as session:
-            repo = AnalysisRepository(session)
+            extraction_repo = ExtractionRepository(session)
+            analysis_repo = AnalysisRepository(session)
 
-            # analysis は事前に生成済みである前提（classify_content から連鎖される）
-            analysis = await repo.find_by_article_id(article_id)
+            # extraction → analysis の順で辿る（rejected 記事は analysis がなく skip）
+            extraction = await extraction_repo.find_by_article_id(article_id)
+            if extraction is None:
+                logger.warning("embedding_extraction_not_found", article_id=article_id)
+                return EmbeddingResult("skipped")
+
+            analysis = await analysis_repo.find_by_extraction_id(extraction.id)
             if analysis is None:
-                msg = f"No analysis found for article {article_id}"
-                raise ValueError(msg)
+                # rejected 側に振れたか、まだ分類が終わっていない
+                logger.warning(
+                    "embedding_analysis_not_found",
+                    article_id=article_id,
+                    extraction_id=extraction.id,
+                )
+                return EmbeddingResult("skipped")
 
             # 冪等性チェック
             if analysis.embedding is not None:
@@ -63,7 +79,7 @@ class EmbeddingService:
             vector = await embedder.embed_document(text)
 
             # 永続化
-            await repo.save_embedding(analysis, vector, embedder.MODEL)
+            await analysis_repo.save_embedding(analysis, vector, embedder.MODEL)
             await session.commit()
 
             logger.info(

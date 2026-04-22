@@ -18,7 +18,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
 
 if TYPE_CHECKING:
-    from app.models.article_analysis import ArticleAnalysis
+    from app.models.article_extraction import ArticleExtraction
     from app.models.discovered_article import DiscoveredArticle
     from app.models.news_source import NewsSource
 
@@ -53,7 +53,7 @@ class Article(Base):
     discovered_article: Mapped[DiscoveredArticle] = relationship(
         back_populates="article"
     )
-    article_analysis: Mapped[ArticleAnalysis | None] = relationship(
+    extraction: Mapped[ArticleExtraction | None] = relationship(
         back_populates="article", uselist=False
     )
 

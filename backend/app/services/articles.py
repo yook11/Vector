@@ -13,9 +13,7 @@ from app.schemas.articles import (
 from app.schemas.embeds import NewsSourceEmbed, OriginalArticleEmbed, TopicEmbed
 
 
-def build_topic_embed(analysis: ArticleAnalysis) -> TopicEmbed | None:
-    if analysis.topic is None:
-        return None
+def build_topic_embed(analysis: ArticleAnalysis) -> TopicEmbed:
     return TopicEmbed(name=analysis.topic.name)
 
 
@@ -23,7 +21,7 @@ def build_brief(
     analysis: ArticleAnalysis,
     watched_ids: set[int] | None = None,
 ) -> ArticleBrief:
-    a = analysis.article
+    a = analysis.extraction.article
     return ArticleBrief(
         id=analysis.id,
         translated_title=analysis.translated_title,
@@ -40,7 +38,7 @@ def build_detail(
     analysis: ArticleAnalysis,
     watched_ids: set[int] | None = None,
 ) -> ArticleDetail:
-    a = analysis.article
+    a = analysis.extraction.article
     return ArticleDetail(
         id=analysis.id,
         translated_title=analysis.translated_title,

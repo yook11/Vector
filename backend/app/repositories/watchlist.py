@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import func, select
 
 from app.models.article_analysis import ArticleAnalysis
+from app.models.article_extraction import ArticleExtraction
 from app.models.watchlist_entry import WatchlistEntry
 from app.repositories.articles import article_eager_options_brief
 from app.schemas.base import PaginationParams
@@ -25,7 +26,8 @@ class WatchlistRepository:
         """
         base = (
             select(ArticleAnalysis)
-            .join(ArticleAnalysis.article)
+            .join(ArticleAnalysis.extraction)
+            .join(ArticleExtraction.article)
             .join(
                 WatchlistEntry,
                 WatchlistEntry.article_analysis_id == ArticleAnalysis.id,

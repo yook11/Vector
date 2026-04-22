@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis, ImpactLevel
+from app.models.article_extraction import ArticleExtraction
 from app.models.category import Category
 from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
@@ -59,9 +60,17 @@ async def _create_analysis(
     translated_title: str = "テスト記事",
     embedding: list[float] | None = None,
 ) -> ArticleAnalysis:
-    """分析結果を作成するヘルパー。"""
-    analysis = ArticleAnalysis(
+    """extraction + analysis を作成するヘルパー。"""
+    extraction = ArticleExtraction(
         article_id=article.id,
+        translated_title=translated_title,
+        summary="テストの要約",
+        ai_model="gemini-2.0-flash",
+    )
+    session.add(extraction)
+    await session.flush()
+    analysis = ArticleAnalysis(
+        extraction_id=extraction.id,
         translated_title=translated_title,
         summary="テストの要約",
         impact_level=impact_level,

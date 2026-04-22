@@ -9,7 +9,13 @@ from google.genai.types import GenerateContentConfig
 from pydantic import ValidationError
 
 from app.analysis.classifier.base import BaseClassifier
-from app.analysis.classifier.schema import ClassificationResponse
+from app.analysis.classifier.schema import (
+    ClassificationRawResponse,
+    ClassificationResponse,
+    Classified,
+    OutOfScope,
+    ValidCategory,
+)
 from app.analysis.errors import (
     AnalysisDomainError,
     ConfigurationError,
@@ -68,22 +74,31 @@ Step 1 — category を決定する。
   境界: 「AI が新材料を発見」は materials
 - energy: 核融合、SMR、次世代電池、水素、先端地熱
   例: 核融合マイルストーン、全固体電池、グリーン水素プラント
+- out_of_scope: 上記 10 カテゴリのいずれにも該当しない
+  例: 先端技術と無関係な記事\
+（ビジネス一般、エンタメ、スポーツ、政治、ゴシップ等）、\
+IT 業界の話題であっても先端要素を含まないもの\
+（一般的な SaaS リリース、通常の会社情報等）、\
+境界事例で既存の 10 カテゴリに分類できないもの
 
 Step 2 — topic を決定する。
 選んだ category 内で、簡潔な topic ラベルを割り当ててください。ルール:
 - 小文字英語、2〜4 語、冠詞（a/an/the）不可
 - category 内で確立された用語を使う
 - 具体的に: 「semiconductor news」ではなく「euv lithography advancement」のように
+- out_of_scope の場合は記事内容を端的に表す自然な topic（例: "celebrity gossip",
+  "generic saas release"）で構いません
 {existing_topics_section}
-Step 3 — impact_level を評価する（暫定）。
-- low: 漸進的アップデート、マイナーな製品機能
+Step 3 — impact_level を評価する。
+- low: 漸進的アップデート、マイナーな製品機能、あるいは対象外記事
 - medium: 特定セクター内の注目すべき動向
 - high: 業界の大きな変化、主要な製品ローンチ、大型資金調達
 - critical: パラダイムを変えるブレイクスルー、重大な規制変更
 
 Step 4 — reasoning を記述する。
 なぜこの category / topic / impact_level を割り当てたのかを、\
-日本語で簡潔に説明してください。
+日本語で簡潔に説明してください。out_of_scope を選んだ場合は「なぜ既存 10 カテゴリに\
+該当しないか」を明示してください。
 """
 
 
@@ -110,6 +125,23 @@ def _build_entities_section(entities: list[EntityResponse]) -> str:
     if not entities:
         return "(none)"
     return ", ".join(f"{e.name.root} ({e.type.root})" for e in entities)
+
+
+def _to_domain(raw: ClassificationRawResponse) -> ClassificationResponse:
+    """フラットな AI レスポンスをドメイン型 tagged union に詰め替える。
+
+    category=OUT_OF_SCOPE のときは topic / impact_level を捨て OutOfScope に、
+    それ以外は全フィールドを Classified に移す。この関数が唯一の分岐点であり、
+    以降のコードは union の ``match`` / ``isinstance`` で型安全に扱える。
+    """
+    if raw.category == ValidCategory.OUT_OF_SCOPE:
+        return OutOfScope(reasoning=raw.reasoning)
+    return Classified(
+        category=raw.category,
+        topic=raw.topic,
+        impact_level=raw.impact_level,
+        reasoning=raw.reasoning,
+    )
 
 
 class GeminiClassifier(BaseClassifier):
@@ -156,16 +188,16 @@ class GeminiClassifier(BaseClassifier):
                 temperature=0.2,
                 max_output_tokens=1024,
                 response_mime_type="application/json",
-                response_schema=ClassificationResponse,
+                response_schema=ClassificationRawResponse,
             ),
         )
         parsed = response.parsed
-        if not isinstance(parsed, ClassificationResponse):
+        if not isinstance(parsed, ClassificationRawResponse):
             raise ProviderError(
-                f"Gemini did not return ClassificationResponse "
+                f"Gemini did not return ClassificationRawResponse "
                 f"(got {type(parsed).__name__})"
             )
-        return parsed
+        return _to_domain(parsed)
 
     def _translate_error(self, exc: Exception) -> AnalysisDomainError:
         """Gemini SDK の例外を原因の所在で分類する。"""

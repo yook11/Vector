@@ -1,0 +1,53 @@
+"""Stage 2 で対象外（OutOfScope）と判定された extraction の記録。
+
+article_analyses とは同一 extraction に対して排他（DB トリガーで強制）。
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import TYPE_CHECKING
+
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.models.base import Base
+
+if TYPE_CHECKING:
+    from app.models.article_extraction import ArticleExtraction
+
+
+class ArticleRejection(Base):
+    __tablename__ = "article_rejections"
+    __table_args__ = (
+        UniqueConstraint("extraction_id", name="uq_article_rejections_extraction_id"),
+        CheckConstraint(
+            "reasoning != ''",
+            name="ck_article_rejections_reasoning_not_empty",
+        ),
+        CheckConstraint(
+            "ai_model != ''",
+            name="ck_article_rejections_ai_model_not_empty",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    extraction_id: Mapped[int] = mapped_column(
+        ForeignKey("article_extractions.id", ondelete="CASCADE"),
+    )
+    reasoning: Mapped[str] = mapped_column(Text())
+    ai_model: Mapped[str] = mapped_column(String(100))
+    rejected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    # リレーション
+    extraction: Mapped[ArticleExtraction] = relationship(back_populates="rejection")

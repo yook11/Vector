@@ -1,4 +1,4 @@
-"""Analysis リポジトリ — analysis ドメインの DB 操作を担う。"""
+"""Analysis リポジトリ — Stage 2 以降（分類・埋め込み）の DB 操作を担う。"""
 
 from __future__ import annotations
 
@@ -22,12 +22,18 @@ class AnalysisRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def find_by_article_id(self, article_id: int) -> ArticleAnalysis | None:
-        """冪等性チェック用に、既存の分析結果を検索する。"""
+    async def find_by_extraction_id(self, extraction_id: int) -> ArticleAnalysis | None:
+        """冪等性チェック用に、extraction に紐づく分析結果を検索する。"""
         stmt = select(ArticleAnalysis).where(
-            ArticleAnalysis.article_id == article_id,
+            ArticleAnalysis.extraction_id == extraction_id,
         )
         return (await self._session.execute(stmt)).scalar_one_or_none()
+
+    async def save_analysis(self, analysis: ArticleAnalysis) -> ArticleAnalysis:
+        """分析結果を永続化する（flush のみ、commit しない）。"""
+        self._session.add(analysis)
+        await self._session.flush()
+        return analysis
 
     async def get_existing_topics_by_category(
         self,
@@ -63,7 +69,6 @@ class AnalysisRepository:
         """
         topic_name = TopicName(name)
 
-        # ON CONFLICT DO NOTHING で INSERT を試みる
         insert_stmt = (
             pg_insert(Topic)
             .values(name=topic_name, category_id=category_id)
@@ -72,7 +77,6 @@ class AnalysisRepository:
         await self._session.execute(insert_stmt)
         await self._session.flush()
 
-        # INSERT が成功しても競合でも、SELECT で取得する
         select_stmt = select(Topic.id).where(
             Topic.name == topic_name,
             Topic.category_id == category_id,
@@ -91,11 +95,11 @@ class AnalysisRepository:
         analysis.embedding_model = model
         self._session.add(analysis)
 
-    async def get_entities_by_analysis_id(
-        self, analysis_id: int
+    async def get_entities_by_extraction_id(
+        self, extraction_id: int
     ) -> list[ArticleEntity]:
-        """Stage 2 の入力用にエンティティを取得する。"""
+        """Stage 2 の入力用に extraction 配下のエンティティを取得する。"""
         stmt = select(ArticleEntity).where(
-            ArticleEntity.article_analysis_id == analysis_id
+            ArticleEntity.article_extraction_id == extraction_id
         )
         return list((await self._session.execute(stmt)).scalars().all())
