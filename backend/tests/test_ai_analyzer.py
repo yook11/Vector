@@ -18,7 +18,12 @@ from app.analysis import (
 from app.analysis.classification_service import ClassificationService
 from app.analysis.classifier.base import BaseClassifier
 from app.analysis.classifier.gemini import GeminiClassifier
-from app.analysis.classifier.schema import ClassificationResponse, ValidCategory
+from app.analysis.classifier.schema import (
+    ClassificationResponse,
+    Classified,
+    OutOfScope,
+    ValidCategory,
+)
 from app.analysis.extraction.extractor.base import BaseExtractor
 from app.analysis.extraction.extractor.gemini import GeminiExtractor
 from app.analysis.extraction.schema import EntityResponse, ExtractionResponse
@@ -28,6 +33,8 @@ from app.domain.topic import TopicName
 from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis, ImpactLevel
 from app.models.article_entity import ArticleEntity
+from app.models.article_extraction import ArticleExtraction
+from app.models.article_rejection import ArticleRejection
 from app.models.category import Category
 from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
@@ -56,14 +63,14 @@ def _make_extraction_response(
     )
 
 
-def _make_classification_response(
+def _make_classified(
     category: ValidCategory = ValidCategory.COMPUTING,
     topic: str = "quantum computing breakthrough",
     impact_level: ImpactLevel = ImpactLevel.HIGH,
     reasoning: str = "技術的に重要な進展",
-) -> ClassificationResponse:
-    """ClassificationResponse を生成するヘルパー。"""
-    return ClassificationResponse(
+) -> Classified:
+    """Classified を生成するヘルパー。"""
+    return Classified(
         category=category,
         topic=TopicName(topic),
         impact_level=impact_level,
@@ -83,6 +90,42 @@ def _create_classifier() -> GeminiClassifier:
     with patch("app.analysis.classifier.gemini.settings") as mock_gs:
         mock_gs.gemini_api_key = SecretStr("test-key")
         return GeminiClassifier()
+
+
+async def _create_article_with_extraction(
+    db_session: AsyncSession,
+    source: NewsSource,
+    *,
+    url: str,
+    title: str = "Test Article",
+    translated_title: str = "テスト記事",
+    summary: str = "要約テスト",
+) -> tuple[Article, ArticleExtraction]:
+    """Stage 1 完了済みの記事（article + extraction）を作成するヘルパー。"""
+    discovered = DiscoveredArticle(
+        original_title=title,
+        original_url=url,
+        news_source_id=source.id,
+    )
+    db_session.add(discovered)
+    await db_session.flush()
+    article = Article(
+        discovered_article_id=discovered.id,
+        original_title=title,
+        original_content="Content.",
+        published_at=datetime.now(UTC),
+    )
+    db_session.add(article)
+    await db_session.flush()
+    extraction = ArticleExtraction(
+        article_id=article.id,
+        translated_title=translated_title,
+        summary=summary,
+        ai_model="gemini-2.5-flash-lite",
+    )
+    db_session.add(extraction)
+    await db_session.flush()
+    return article, extraction
 
 
 # --- A. Factory tests ---
@@ -210,11 +253,11 @@ def test_entity_type_normalizes_lowercase() -> None:
     assert etype.root == "company"
 
 
-# --- C. ClassificationResponse schema tests ---
+# --- C. Classification schema tests ---
 
 
-def test_classification_response_valid() -> None:
-    resp = ClassificationResponse(
+def test_classified_valid() -> None:
+    resp = Classified(
         category=ValidCategory.COMPUTING,
         topic=TopicName("quantum computing breakthrough"),
         impact_level=ImpactLevel.HIGH,
@@ -225,35 +268,48 @@ def test_classification_response_valid() -> None:
     assert resp.impact_level == ImpactLevel.HIGH
 
 
-def test_classification_response_normalizes_topic() -> None:
-    resp = ClassificationResponse(
+def test_classified_normalizes_topic() -> None:
+    resp = Classified(
         category=ValidCategory.COMPUTING,
         topic=TopicName("Quantum Computing Breakthrough"),
         impact_level=ImpactLevel.HIGH,
+        reasoning="理由",
     )
     assert resp.topic.root == "quantum computing breakthrough"
 
 
-def test_classification_response_rejects_invalid_category() -> None:
+def test_classified_rejects_invalid_category() -> None:
     with pytest.raises(ValidationError):
-        ClassificationResponse.model_validate(
+        Classified.model_validate(
             {
                 "category": "invalid_category",
                 "topic": "foo bar",
                 "impact_level": "high",
+                "reasoning": "r",
             }
         )
 
 
-def test_classification_response_rejects_invalid_impact_level() -> None:
+def test_classified_rejects_invalid_impact_level() -> None:
     with pytest.raises(ValidationError):
-        ClassificationResponse.model_validate(
+        Classified.model_validate(
             {
                 "category": "computing",
                 "topic": "foo bar",
                 "impact_level": "extreme",
+                "reasoning": "r",
             }
         )
+
+
+def test_out_of_scope_valid() -> None:
+    resp = OutOfScope(reasoning="技術的な先端要素を含まない")
+    assert resp.reasoning == "技術的な先端要素を含まない"
+
+
+def test_out_of_scope_rejects_empty_reasoning() -> None:
+    with pytest.raises(ValidationError):
+        OutOfScope(reasoning="")
 
 
 # --- D. BaseExtractor._call_once tests ---
@@ -289,7 +345,7 @@ async def test_extractor_call_once_passes_through_domain_error() -> None:
 
 async def test_classifier_call_once_succeeds() -> None:
     classifier = _create_classifier()
-    expected = _make_classification_response()
+    expected: ClassificationResponse = _make_classified()
     classifier._call_api = AsyncMock(return_value=expected)
 
     result = await classifier._call_once("test prompt")
@@ -307,8 +363,8 @@ async def test_classifier_call_once_translates_sdk_error() -> None:
 # --- E2. Domain model unit tests (DB 不要) ---
 
 
-def test_article_analysis_from_extraction_sanitizes_html() -> None:
-    analysis = ArticleAnalysis.from_extraction(
+def test_article_extraction_from_response_sanitizes_html() -> None:
+    extraction = ArticleExtraction.from_extraction_response(
         article_id=1,
         response=ExtractionResponse(
             title_ja="<b>タイトル</b>",
@@ -319,14 +375,14 @@ def test_article_analysis_from_extraction_sanitizes_html() -> None:
         ),
         model_name="test-model",
     )
-    assert analysis.translated_title == "タイトル"
-    assert analysis.summary == "要約"
-    assert analysis.ai_model == "test-model"
-    assert analysis.article_id == 1
+    assert extraction.translated_title == "タイトル"
+    assert extraction.summary == "要約"
+    assert extraction.ai_model == "test-model"
+    assert extraction.article_id == 1
 
 
-def test_article_analysis_from_extraction_builds_entities() -> None:
-    analysis = ArticleAnalysis.from_extraction(
+def test_article_extraction_from_response_builds_entities() -> None:
+    extraction = ArticleExtraction.from_extraction_response(
         article_id=1,
         response=ExtractionResponse(
             title_ja="タイトル",
@@ -340,15 +396,15 @@ def test_article_analysis_from_extraction_builds_entities() -> None:
         ),
         model_name="test-model",
     )
-    assert len(analysis.entities) == 2
-    assert analysis.entities[0].name == "MIT"
-    assert analysis.entities[0].type == "company"
-    assert analysis.entities[1].name == "CRISPR"
-    assert analysis.entities[1].type == "technology"
+    assert len(extraction.entities) == 2
+    assert extraction.entities[0].name == "MIT"
+    assert extraction.entities[0].type == "company"
+    assert extraction.entities[1].name == "CRISPR"
+    assert extraction.entities[1].type == "technology"
 
 
-def test_article_analysis_from_extraction_empty_string_guard() -> None:
-    analysis = ArticleAnalysis.from_extraction(
+def test_article_extraction_from_response_empty_string_guard() -> None:
+    extraction = ArticleExtraction.from_extraction_response(
         article_id=1,
         response=ExtractionResponse(
             title_ja="<br/>",
@@ -357,15 +413,15 @@ def test_article_analysis_from_extraction_empty_string_guard() -> None:
         ),
         model_name="test-model",
     )
-    assert analysis.translated_title == ""
-    assert analysis.summary == ""
-    assert analysis.entities == []
+    assert extraction.translated_title == ""
+    assert extraction.summary == ""
+    assert extraction.entities == []
 
 
 # --- F. ExtractionService orchestration tests ---
 
 
-async def test_extraction_creates_analysis_and_entities(
+async def test_extraction_creates_extraction_and_entities(
     db_session: AsyncSession,
     session_factory,
     sample_source: NewsSource,
@@ -403,24 +459,23 @@ async def test_extraction_creates_analysis_and_entities(
     result = await svc.execute(article_id, mock_extractor)
 
     assert result.status == "created"
-    assert result.analysis_id is not None
+    assert result.extraction_id is not None
 
     db_session.expire_all()
-    analysis = (
+    extraction = (
         await db_session.execute(
-            select(ArticleAnalysis).where(
-                ArticleAnalysis.article_id == article_id,
+            select(ArticleExtraction).where(
+                ArticleExtraction.article_id == article_id,
             )
         )
     ).scalar_one()
-    assert analysis.translated_title == "量子ブレイクスルー"
-    assert analysis.topic_id is None  # Stage 2 未実行
+    assert extraction.translated_title == "量子ブレイクスルー"
 
     entities = list(
         (
             await db_session.execute(
                 select(ArticleEntity).where(
-                    ArticleEntity.article_analysis_id == analysis.id,
+                    ArticleEntity.article_extraction_id == extraction.id,
                 )
             )
         )
@@ -430,42 +485,17 @@ async def test_extraction_creates_analysis_and_entities(
     assert len(entities) == 2
 
 
-async def test_extraction_skips_already_analyzed(
+async def test_extraction_skips_already_extracted(
     db_session: AsyncSession,
     session_factory,
-    sample_categories: list[Category],
     sample_source: NewsSource,
 ) -> None:
-    topic = Topic(name="old topic", category_id=sample_categories[0].id)
-    db_session.add(topic)
-    await db_session.flush()
-
-    discovered = DiscoveredArticle(
-        original_title="Old Article",
-        original_url="https://example.com/old",
-        news_source_id=sample_source.id,
+    _, _ = await _create_article_with_extraction(
+        db_session, sample_source, url="https://example.com/old", title="Old Article"
     )
-    db_session.add(discovered)
-    await db_session.flush()
-    article = Article(
-        discovered_article_id=discovered.id,
-        original_title="Old Article",
-        original_content="Old content.",
-        published_at=datetime.now(UTC),
-    )
-    db_session.add(article)
-    await db_session.flush()
-
-    existing = ArticleAnalysis(
-        article_id=article.id,
-        translated_title="既存タイトル",
-        summary="既存要約",
-        impact_level=ImpactLevel.MEDIUM,
-        reasoning="既存理由",
-        ai_model="gemini-2.5-flash-lite",
-        topic_id=topic.id,
-    )
-    db_session.add(existing)
+    article = (
+        await db_session.execute(select(Article).limit(1))
+    ).scalar_one()
     await db_session.commit()
 
     mock_extractor = MagicMock(spec=BaseExtractor)
@@ -519,44 +549,25 @@ async def test_classification_creates_topic(
     sample_categories: list[Category],
     sample_source: NewsSource,
 ) -> None:
-    """Stage 1 完了後の記事に対して Stage 2 が Topic を作成し分類を完了する。"""
-    discovered = DiscoveredArticle(
-        original_title="Quantum Breakthrough",
-        original_url="https://example.com/classify-test",
-        news_source_id=sample_source.id,
-    )
-    db_session.add(discovered)
-    await db_session.flush()
-    article = Article(
-        discovered_article_id=discovered.id,
-        original_title="Quantum Breakthrough",
-        original_content="Content for classification.",
-        published_at=datetime.now(UTC),
-    )
-    db_session.add(article)
-    await db_session.flush()
-
-    # Stage 1 の結果（topic_id なし）
-    analysis = ArticleAnalysis(
-        article_id=article.id,
+    """Stage 1 完了後の記事に対して Stage 2 が Topic を作成し analysis を生成する。"""
+    article, extraction = await _create_article_with_extraction(
+        db_session,
+        sample_source,
+        url="https://example.com/classify-test",
+        title="Quantum Breakthrough",
         translated_title="量子ブレイクスルー",
-        summary="要約テスト",
-        ai_model="gemini-2.5-flash-lite",
     )
-    db_session.add(analysis)
-    await db_session.flush()
-
     entity = ArticleEntity(
-        article_analysis_id=analysis.id,
-        name="MIT",
-        type="company",
+        article_extraction_id=extraction.id, name="MIT", type="company"
     )
     db_session.add(entity)
     await db_session.commit()
 
     mock_classifier = MagicMock(spec=BaseClassifier)
+    mock_classifier.MODEL = "gemini-2.5-flash-lite"
+    mock_classifier.model_name = "gemini-2.5-flash-lite"
     mock_classifier.classify = AsyncMock(
-        return_value=_make_classification_response(
+        return_value=_make_classified(
             category=ValidCategory.COMPUTING,
             topic="quantum computing breakthrough",
             impact_level=ImpactLevel.HIGH,
@@ -565,25 +576,71 @@ async def test_classification_creates_topic(
     )
 
     article_id = article.id
-    analysis_id = analysis.id
+    extraction_id = extraction.id
     svc = ClassificationService(session_factory)
     result = await svc.execute(article_id, mock_classifier)
     assert result.status == "classified"
 
     db_session.expire_all()
-    updated = (
+    analysis = (
         await db_session.execute(
-            select(ArticleAnalysis).where(ArticleAnalysis.id == analysis_id)
+            select(ArticleAnalysis).where(ArticleAnalysis.extraction_id == extraction_id)
         )
     ).scalar_one()
-    assert updated.topic_id is not None
-    assert updated.impact_level == ImpactLevel.HIGH
-    assert updated.reasoning == "理由テスト"
+    assert analysis.topic_id is not None
+    assert analysis.impact_level == ImpactLevel.HIGH
+    assert analysis.reasoning == "理由テスト"
 
     topic = (
-        await db_session.execute(select(Topic).where(Topic.id == updated.topic_id))
+        await db_session.execute(select(Topic).where(Topic.id == analysis.topic_id))
     ).scalar_one()
     assert str(topic.name) == "quantum computing breakthrough"
+
+
+async def test_classification_persists_rejection_when_out_of_scope(
+    db_session: AsyncSession,
+    session_factory,
+    sample_source: NewsSource,
+) -> None:
+    """AI が OutOfScope を返したときに ArticleRejection が永続化されチェーンが止まる。"""
+    article, extraction = await _create_article_with_extraction(
+        db_session,
+        sample_source,
+        url="https://example.com/out-of-scope",
+        title="Sports News",
+        translated_title="スポーツニュース",
+    )
+    await db_session.commit()
+
+    mock_classifier = MagicMock(spec=BaseClassifier)
+    mock_classifier.MODEL = "gemini-2.5-flash-lite"
+    mock_classifier.model_name = "gemini-2.5-flash-lite"
+    mock_classifier.classify = AsyncMock(
+        return_value=OutOfScope(reasoning="先端技術の話題ではない")
+    )
+
+    extraction_id = extraction.id
+    svc = ClassificationService(session_factory)
+    result = await svc.execute(article.id, mock_classifier)
+    assert result.status == "rejected"
+
+    db_session.expire_all()
+    rejection = (
+        await db_session.execute(
+            select(ArticleRejection).where(
+                ArticleRejection.extraction_id == extraction_id
+            )
+        )
+    ).scalar_one()
+    assert rejection.reasoning == "先端技術の話題ではない"
+    analysis = (
+        await db_session.execute(
+            select(ArticleAnalysis).where(
+                ArticleAnalysis.extraction_id == extraction_id
+            )
+        )
+    ).scalar_one_or_none()
+    assert analysis is None
 
 
 async def test_classification_skips_already_classified(
@@ -596,24 +653,16 @@ async def test_classification_skips_already_classified(
     db_session.add(topic)
     await db_session.flush()
 
-    discovered = DiscoveredArticle(
-        original_title="Classified Article",
-        original_url="https://example.com/already-classified",
-        news_source_id=sample_source.id,
+    article, extraction = await _create_article_with_extraction(
+        db_session,
+        sample_source,
+        url="https://example.com/already-classified",
+        title="Classified Article",
+        translated_title="分類済みタイトル",
+        summary="分類済み要約",
     )
-    db_session.add(discovered)
-    await db_session.flush()
-    article = Article(
-        discovered_article_id=discovered.id,
-        original_title="Classified Article",
-        original_content="Classified content.",
-        published_at=datetime.now(UTC),
-    )
-    db_session.add(article)
-    await db_session.flush()
-
     analysis = ArticleAnalysis(
-        article_id=article.id,
+        extraction_id=extraction.id,
         translated_title="分類済みタイトル",
         summary="分類済み要約",
         impact_level=ImpactLevel.MEDIUM,
@@ -632,6 +681,33 @@ async def test_classification_skips_already_classified(
     mock_classifier.classify.assert_not_called()
 
 
+async def test_classification_skips_already_rejected(
+    db_session: AsyncSession,
+    session_factory,
+    sample_source: NewsSource,
+) -> None:
+    article, extraction = await _create_article_with_extraction(
+        db_session,
+        sample_source,
+        url="https://example.com/already-rejected",
+        title="Rejected Article",
+    )
+    rejection = ArticleRejection(
+        extraction_id=extraction.id,
+        reasoning="対象外",
+        ai_model="gemini-2.5-flash-lite",
+    )
+    db_session.add(rejection)
+    await db_session.commit()
+
+    mock_classifier = MagicMock(spec=BaseClassifier)
+    svc = ClassificationService(session_factory)
+    result = await svc.execute(article.id, mock_classifier)
+
+    assert result.status == "already_rejected"
+    mock_classifier.classify.assert_not_called()
+
+
 # --- H. Integration test (API response) ---
 
 
@@ -645,24 +721,16 @@ async def test_news_endpoint_includes_analysis(
     db_session.add(topic)
     await db_session.flush()
 
-    discovered = DiscoveredArticle(
-        original_title="Test Article",
-        original_url="https://example.com/integration-test",
-        news_source_id=sample_source.id,
+    _, extraction = await _create_article_with_extraction(
+        db_session,
+        sample_source,
+        url="https://example.com/integration-test",
+        title="Test Article",
+        translated_title="テスト記事",
+        summary="テスト要約",
     )
-    db_session.add(discovered)
-    await db_session.flush()
-    article = Article(
-        discovered_article_id=discovered.id,
-        original_title="Test Article",
-        original_content="Integration test content.",
-        published_at=datetime.now(UTC),
-    )
-    db_session.add(article)
-    await db_session.flush()
-
     analysis = ArticleAnalysis(
-        article_id=article.id,
+        extraction_id=extraction.id,
         translated_title="テスト記事",
         summary="テスト要約",
         impact_level=ImpactLevel.HIGH,

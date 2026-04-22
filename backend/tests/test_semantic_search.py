@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis, ImpactLevel
+from app.models.article_extraction import ArticleExtraction
 from app.models.category import Category
 from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource, SourceType
@@ -71,9 +72,18 @@ async def _create_article(
     db_session.add(article)
     await db_session.flush()
 
+    extraction = ArticleExtraction(
+        article_id=article.id,
+        translated_title=f"Translated: {title}",
+        summary="Test summary",
+        ai_model="gemini-2.0-flash",
+    )
+    db_session.add(extraction)
+    await db_session.flush()
+
     # ArticleAnalysis は INNER JOIN のため常に作成し、embedding があれば付与する
     analysis = ArticleAnalysis(
-        article_id=article.id,
+        extraction_id=extraction.id,
         translated_title=f"Translated: {title}",
         summary="Test summary",
         impact_level=ImpactLevel.MEDIUM,

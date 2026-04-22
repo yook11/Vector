@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis
+from app.models.article_extraction import ArticleExtraction
 from app.models.category import Category
 from app.models.topic import Topic
 from app.repositories.articles import article_eager_options_brief
@@ -26,15 +27,13 @@ class SemanticSearchRepository:
         """セマンティック類似度に基づき記事を検索する (フィルタ+ページング付き)。"""
         stmt = (
             select(ArticleAnalysis)
-            .join(ArticleAnalysis.article)
+            .join(ArticleAnalysis.extraction)
+            .join(ArticleExtraction.article)
             .options(*article_eager_options_brief())
         )
 
-        # Stage 2 未完了の記事を除外 + Embedding 類似度フィルタ
-        stmt = stmt.where(
-            ArticleAnalysis.topic_id.is_not(None),
-            ArticleAnalysis.embedding.is_not(None),
-        )
+        # Embedding が未生成の記事は検索対象外
+        stmt = stmt.where(ArticleAnalysis.embedding.is_not(None))
         distance_expr: ColumnElement[float] = ArticleAnalysis.embedding.cosine_distance(
             query_embedding
         )

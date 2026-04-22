@@ -5,6 +5,7 @@ from sqlmodel import select
 
 from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis
+from app.models.article_extraction import ArticleExtraction
 
 
 class PipelineRepository:
@@ -15,9 +16,10 @@ class PipelineRepository:
         """分析済みだが embedding 未生成の記事 ID を取得する."""
         stmt = (
             select(Article.id)
+            .join(ArticleExtraction, ArticleExtraction.article_id == Article.id)
             .join(
                 ArticleAnalysis,
-                ArticleAnalysis.article_id == Article.id,
+                ArticleAnalysis.extraction_id == ArticleExtraction.id,
             )
             .where(ArticleAnalysis.embedding.is_(None))
         )

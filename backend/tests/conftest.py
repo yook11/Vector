@@ -17,6 +17,8 @@ from app.models import (  # noqa: F401
     Article,
     ArticleAnalysis,
     ArticleEntity,
+    ArticleExtraction,
+    ArticleRejection,
     Category,
     DiscoveredArticle,
     FetchLog,

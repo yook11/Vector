@@ -1,8 +1,9 @@
 """Stage 2 分類 AI レスポンスの Pydantic スキーマ。
 
-ClassificationResponse は Gemini SDK の ``response_schema`` に渡され、
-受信時に構造・列挙妥当性を保証する境界型。ValidCategory は AI が
-出力可能なカテゴリを列挙し、StrEnum として AI 境界専用に利用する。
+AI 境界は常にフラットな ``ClassificationRawResponse`` で受ける（category は
+OUT_OF_SCOPE 含む 11 種類から 1 つ選択）。classifier 実装内で ``Classified`` か
+``OutOfScope`` のドメイン型に詰め替え、呼び出し側は ``match`` / ``isinstance``
+で型ディスパッチする。これにより「分類できたか否か」が型そのもので保証される。
 """
 
 from __future__ import annotations
@@ -16,10 +17,11 @@ from app.models.article_analysis import ImpactLevel
 
 
 class ValidCategory(StrEnum):
-    """AI が出力可能なカテゴリ slug。
+    """AI が出力可能なカテゴリ slug（11 種類）。
 
-    ``CategorySlug`` とは目的が異なる: こちらは AI 境界で許容する
-    値の集合、``CategorySlug`` は slug 書式の任意文字列を表す VO。
+    先端技術の 10 カテゴリ + OUT_OF_SCOPE。AI は常にいずれか 1 つを選択する。
+    OUT_OF_SCOPE は「上記 10 カテゴリのいずれにも該当しない」を示す 11 番目の
+    選択肢であり、Service 層で Rejection 側に振り分ける signal となる。
     """
 
     AI = "ai"
@@ -32,15 +34,14 @@ class ValidCategory(StrEnum):
     SECURITY = "security"
     SEMICONDUCTOR = "semiconductor"
     SPACE = "space"
+    OUT_OF_SCOPE = "out_of_scope"
 
 
-class ClassificationResponse(BaseModel):
-    """Stage 2 分類の構造化レスポンス。
+class ClassificationRawResponse(BaseModel):
+    """Gemini SDK の ``response_schema`` に渡す境界型（フラット）。
 
-    Invariants:
-    - category は ValidCategory の列挙値
-    - topic は TopicName として正規化・検証済み
-    - impact_level は ImpactLevel の列挙値
+    AI の出力フォーマットは単一に保ち（精度のため）、ドメイン層への
+    詰め替えは classifier 実装内で行う。
     """
 
     model_config = ConfigDict(frozen=True)
@@ -48,4 +49,28 @@ class ClassificationResponse(BaseModel):
     category: ValidCategory
     topic: TopicName
     impact_level: ImpactLevel
-    reasoning: str = Field(default="")
+    reasoning: str = Field(min_length=1)
+
+
+class Classified(BaseModel):
+    """分類に成功したケース（Stage 2 で既存 10 カテゴリのいずれかに分類）。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    category: ValidCategory
+    topic: TopicName
+    impact_level: ImpactLevel
+    reasoning: str = Field(min_length=1)
+
+
+class OutOfScope(BaseModel):
+    """先端テック領域外、または既存 10 カテゴリに分類不能なケース。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    reasoning: str = Field(min_length=1)
+
+
+ClassificationResponse = Classified | OutOfScope
+"""Stage 2 分類の結果型。Service はこの union を受け取り、``match`` / ``isinstance``
+で型ディスパッチする。型そのものが「分類できた／できなかった」を表現する。"""

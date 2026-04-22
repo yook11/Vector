@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis
+from app.models.article_extraction import ArticleExtraction
 from app.models.category import Category
 from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
@@ -99,8 +100,16 @@ class TestListCategories:
         db_session.add(article)
         await db_session.flush()
 
-        analysis = ArticleAnalysis(
+        extraction = ArticleExtraction(
             article_id=article.id,
+            translated_title="TF記事",
+            summary="要約",
+            ai_model="test",
+        )
+        db_session.add(extraction)
+        await db_session.flush()
+        analysis = ArticleAnalysis(
+            extraction_id=extraction.id,
             translated_title="TF記事",
             summary="要約",
             impact_level="high",
@@ -143,8 +152,16 @@ class TestListCategories:
         db_session.add(article)
         await db_session.flush()
 
-        analysis = ArticleAnalysis(
+        extraction = ArticleExtraction(
             article_id=article.id,
+            translated_title="PyTorch記事",
+            summary="要約",
+            ai_model="test",
+        )
+        db_session.add(extraction)
+        await db_session.flush()
+        analysis = ArticleAnalysis(
+            extraction_id=extraction.id,
             translated_title="PyTorch記事",
             summary="要約",
             impact_level="high",

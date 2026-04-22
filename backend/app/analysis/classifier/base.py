@@ -18,6 +18,7 @@ class BaseClassifier(abc.ABC):
     """Stage 2 — Classification のテンプレートメソッド基底。
 
     Stage 1 の構造化出力に対して判断を下す。原文は読まない。
+    分類結果は Classified | OutOfScope の tagged union（``ClassificationResponse``）。
 
     サブクラスは以下 3 つのフックを実装する:
     - ``classify``: プロンプト構築とレスポンス解析（公開 API）
@@ -57,7 +58,7 @@ class BaseClassifier(abc.ABC):
         entities: list[EntityResponse],
         existing_topics_by_category: dict[str, list[str]] | None = None,
     ) -> ClassificationResponse:
-        """Stage 1 の出力を分類し、カテゴリ・トピック・インパクトを返す。
+        """Stage 1 の出力を分類し、Classified か OutOfScope のいずれかを返す。
 
         Args:
             title_ja: 日本語翻訳タイトル。
@@ -66,7 +67,8 @@ class BaseClassifier(abc.ABC):
             existing_topics_by_category: カテゴリ別の既存トピック名リスト。
 
         Returns:
-            カテゴリ・トピック・インパクト・根拠を含む ClassificationResponse。
+            ``Classified`` または ``OutOfScope``。呼び出し側は ``kind`` フィールド
+            または ``isinstance`` / ``match`` で場合分けする。
 
         Raises:
             AnalysisDomainError: 分類に失敗した場合。

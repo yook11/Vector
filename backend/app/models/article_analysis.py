@@ -16,13 +16,10 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.article_entity import ArticleEntity
 from app.models.base import Base
-from app.utils.sanitize import strip_html_tags
 
 if TYPE_CHECKING:
-    from app.analysis.extraction.schema import ExtractionResponse
-    from app.models.article import Article
+    from app.models.article_extraction import ArticleExtraction
     from app.models.topic import Topic
     from app.models.watchlist_entry import WatchlistEntry
 
@@ -35,9 +32,15 @@ class ImpactLevel(StrEnum):
 
 
 class ArticleAnalysis(Base):
+    """Stage 2 で Classified と判定された extraction の分析結果。
+
+    translated_title / summary は extractions から複製保持し、analysis 単独で
+    「ユーザーに見せる分析結果」として自己完結する。
+    """
+
     __tablename__ = "article_analyses"
     __table_args__ = (
-        UniqueConstraint("article_id", name="uq_article_analyses_article_id"),
+        UniqueConstraint("extraction_id", name="uq_article_analyses_extraction_id"),
         CheckConstraint(
             "translated_title != ''",
             name="ck_article_analyses_translated_title_not_empty",
@@ -50,55 +53,57 @@ class ArticleAnalysis(Base):
             "ai_model != ''",
             name="ck_article_analyses_ai_model_not_empty",
         ),
+        CheckConstraint(
+            "reasoning != ''",
+            name="ck_article_analyses_reasoning_not_empty",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    article_id: Mapped[int] = mapped_column(
-        ForeignKey("articles.id", ondelete="CASCADE"),
+    extraction_id: Mapped[int] = mapped_column(
+        ForeignKey("article_extractions.id", ondelete="CASCADE"),
     )
     translated_title: Mapped[str] = mapped_column(String(500))
     summary: Mapped[str] = mapped_column(Text())
-    impact_level: Mapped[ImpactLevel | None] = mapped_column(String(20))
-    reasoning: Mapped[str | None] = mapped_column(Text())
+    impact_level: Mapped[ImpactLevel] = mapped_column(String(20))
+    reasoning: Mapped[str] = mapped_column(Text())
     ai_model: Mapped[str] = mapped_column(String(100))
     analyzed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
     embedding: Mapped[list[float] | None] = mapped_column(HALFVEC(768))
     embedding_model: Mapped[str | None] = mapped_column(String(100))
-    topic_id: Mapped[int | None] = mapped_column(
+    topic_id: Mapped[int] = mapped_column(
         ForeignKey("topics.id", ondelete="RESTRICT"), index=True
     )
 
     # リレーション
-    article: Mapped[Article] = relationship(back_populates="article_analysis")
-    topic: Mapped[Topic | None] = relationship()
+    extraction: Mapped[ArticleExtraction] = relationship(back_populates="analysis")
+    topic: Mapped[Topic] = relationship()
     watchlist_entries: Mapped[list[WatchlistEntry]] = relationship(
         back_populates="article_analysis"
     )
-    entities: Mapped[list[ArticleEntity]] = relationship(
-        back_populates="article_analysis", cascade="all, delete-orphan"
-    )
 
     @classmethod
-    def from_extraction(
+    def from_classification(
         cls,
         *,
-        article_id: int,
-        response: ExtractionResponse,
+        extraction: ArticleExtraction,
+        topic_id: int,
+        impact_level: ImpactLevel,
+        reasoning: str,
         model_name: str,
     ) -> ArticleAnalysis:
-        """Stage 1 の抽出結果から分析オブジェクトを構築する。
+        """Stage 2 の分類結果から分析オブジェクトを構築する。
 
-        サニタイズと Entity の組み立てはモデルの不変条件として内部で処理する。
+        translated_title / summary は extraction から複製する（自己完結の保証）。
         """
         return cls(
-            article_id=article_id,
-            translated_title=strip_html_tags(response.title_ja) or "",
-            summary=strip_html_tags(response.summary_ja) or "",
+            extraction_id=extraction.id,
+            translated_title=extraction.translated_title,
+            summary=extraction.summary,
+            topic_id=topic_id,
+            impact_level=impact_level,
+            reasoning=reasoning,
             ai_model=model_name,
-            entities=[
-                ArticleEntity(name=e.name.root, type=e.type.root)
-                for e in response.entities
-            ],
         )

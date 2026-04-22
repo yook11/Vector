@@ -6,7 +6,12 @@ from app.analysis.classification_service import (
 )
 from app.analysis.classifier.base import BaseClassifier
 from app.analysis.classifier.factory import get_classifier
-from app.analysis.classifier.schema import ClassificationResponse, ValidCategory
+from app.analysis.classifier.schema import (
+    ClassificationResponse,
+    Classified,
+    OutOfScope,
+    ValidCategory,
+)
 from app.analysis.embedder.base import BaseEmbedder
 from app.analysis.embedder.factory import get_embedder
 from app.analysis.embedding_service import (
@@ -41,6 +46,7 @@ __all__ = [
     "ClassificationResponse",
     "ClassificationResult",
     "ClassificationService",
+    "Classified",
     "ConfigurationError",
     "DailyQuotaExhaustedError",
     "EmbeddingResult",
@@ -51,6 +57,7 @@ __all__ = [
     "ExtractionService",
     "InvalidInputError",
     "NetworkError",
+    "OutOfScope",
     "ProviderError",
     "RateLimitError",
     "UnclassifiedError",

@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.analysis.errors import InvalidInputError
 from app.analysis.extraction.extractor.base import BaseExtractor
 from app.analysis.extraction.repository import ExtractionRepository
-from app.models.article_analysis import ArticleAnalysis
+from app.models.article_extraction import ArticleExtraction
 
 logger = structlog.get_logger(__name__)
 
@@ -21,7 +21,7 @@ class ExtractionResult:
     """Stage 1 抽出ユースケースの結果。"""
 
     status: Literal["created", "already_exists", "skipped"]
-    analysis_id: int | None = None
+    extraction_id: int | None = None
 
 
 class ExtractionService:
@@ -40,7 +40,7 @@ class ExtractionService:
         """1 記事に対して事実抽出を実行する。
 
         Returns:
-            status と必要に応じた analysis_id を含む ExtractionResult。
+            status と必要に応じた extraction_id を含む ExtractionResult。
 
         Raises:
             AnalysisDomainError のサブクラス（InvalidInputError を除く）。
@@ -49,7 +49,7 @@ class ExtractionService:
             repo = ExtractionRepository(session)
 
             # 冪等性チェック
-            if await repo.is_already_analyzed(article_id):
+            if await repo.find_by_article_id(article_id) is not None:
                 return ExtractionResult("already_exists")
 
             # 記事を取得
@@ -71,19 +71,19 @@ class ExtractionService:
                 )
                 return ExtractionResult("skipped")
 
-            # ArticleAnalysis 作成（cascade で entities も永続化）
-            analysis = ArticleAnalysis.from_extraction(
+            # ArticleExtraction 作成（cascade で entities も永続化）
+            extraction = ArticleExtraction.from_extraction_response(
                 article_id=article.id,
                 response=data,
                 model_name=extractor.model_name,
             )
-            await repo.save_analysis(analysis)
+            await repo.save_extraction(extraction)
             await session.commit()
 
             logger.info(
                 "extraction_completed",
                 article_id=article_id,
-                analysis_id=analysis.id,
+                extraction_id=extraction.id,
                 entity_count=len(data.entities),
             )
-            return ExtractionResult("created", analysis_id=analysis.id)
+            return ExtractionResult("created", extraction_id=extraction.id)

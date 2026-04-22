@@ -1,6 +1,8 @@
 from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis, ImpactLevel
 from app.models.article_entity import ArticleEntity
+from app.models.article_extraction import ArticleExtraction
+from app.models.article_rejection import ArticleRejection
 from app.models.auth_ref import auth_user_ref  # noqa: F401
 from app.models.category import Category
 from app.models.discovered_article import DiscoveredArticle
@@ -13,6 +15,8 @@ __all__ = [
     "Article",
     "ArticleAnalysis",
     "ArticleEntity",
+    "ArticleExtraction",
+    "ArticleRejection",
     "Category",
     "DiscoveredArticle",
     "FetchLog",

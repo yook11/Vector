@@ -10,7 +10,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
 
 if TYPE_CHECKING:
-    from app.models.article_analysis import ArticleAnalysis
+    from app.models.article_extraction import ArticleExtraction
 
 
 class ArticleEntity(Base):
@@ -18,11 +18,11 @@ class ArticleEntity(Base):
     __table_args__ = (Index("ix_article_entities_name_type", "name", "type"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    article_analysis_id: Mapped[int] = mapped_column(
-        ForeignKey("article_analyses.id", ondelete="CASCADE"), index=True
+    article_extraction_id: Mapped[int] = mapped_column(
+        ForeignKey("article_extractions.id", ondelete="CASCADE"), index=True
     )
     name: Mapped[str] = mapped_column(String(200))
     type: Mapped[str] = mapped_column(String(50))
 
     # リレーション
-    article_analysis: Mapped[ArticleAnalysis] = relationship(back_populates="entities")
+    extraction: Mapped[ArticleExtraction] = relationship(back_populates="entities")
