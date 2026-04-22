@@ -65,7 +65,11 @@ class AlreadyExtracted:
 
 @dataclass(frozen=True)
 class DiscoveredNotFound:
-    """ルックアップ結果: DiscoveredArticle が存在しない。"""
+    """DiscoveredArticle が存在しない事実 — データ不整合を表す。
+
+    Repository のルックアップ結果であると同時に、Service が外部へ返す結果型の
+    一員でもある（「抽出を試みていない」という事実は両レイヤーで同一）。
+    """
 
 
 DiscoveredArticleLookup = UnextractedFound | AlreadyExtracted | DiscoveredNotFound

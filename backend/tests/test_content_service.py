@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
-from app.collection.extraction.candidate import PublishedAt
+from app.collection.extraction.candidate import DiscoveredNotFound, PublishedAt
 from app.collection.extraction.extractor import (
     ArticleHtmlExtractor,
     ExtractedContent,
@@ -17,10 +17,9 @@ from app.collection.extraction.extractor import (
     HtmlExtractionResult,
 )
 from app.collection.extraction.service import (
-    AlreadyExists,
+    ArticleReady,
     ContentFetchService,
-    Fetched,
-    Skipped,
+    ExtractionFailed,
 )
 from app.domain.safe_url import SafeUrl
 from app.models.article import Article
@@ -80,7 +79,7 @@ async def test_fetched_creates_article(
     session_factory,
     sample_source: NewsSource,
 ) -> None:
-    """本文取得成功時は Article 行を作成し Fetched を返す。"""
+    """本文取得成功時は Article 行を作成し ArticleReady を返す。"""
     discovered = await _make_discovered(
         db_session, sample_source, "https://example.com/fetched"
     )
@@ -97,7 +96,7 @@ async def test_fetched_creates_article(
     svc = ContentFetchService(session_factory, extractor)
     result = await svc.execute(discovered.id)
 
-    assert isinstance(result, Fetched)
+    assert isinstance(result, ArticleReady)
     extractor.fetch.assert_called_once_with(SafeUrl("https://example.com/fetched"))
 
     # Service は独自セッションで commit するため、テスト用セッションで再読込する
@@ -114,7 +113,7 @@ async def test_already_exists_skips_fetch(
     session_factory,
     sample_source: NewsSource,
 ) -> None:
-    """既に Article が存在する場合は fetch せず AlreadyExists を返す。"""
+    """既に Article が存在する場合は fetch せず ArticleReady を返す。"""
     discovered = await _make_discovered(
         db_session, sample_source, "https://example.com/existing"
     )
@@ -133,17 +132,17 @@ async def test_already_exists_skips_fetch(
     svc = ContentFetchService(session_factory, extractor)
     result = await svc.execute(discovered.id)
 
-    assert isinstance(result, AlreadyExists)
+    assert isinstance(result, ArticleReady)
     assert result.article_id == article.id
     extractor.fetch.assert_not_called()
 
 
-async def test_permanent_error_returns_skipped(
+async def test_permanent_error_returns_extraction_failed(
     db_session: AsyncSession,
     session_factory,
     sample_source: NewsSource,
 ) -> None:
-    """PermanentFetchError 時は Article を作成せず Skipped を返す。"""
+    """PermanentFetchError 時は Article を作成せず ExtractionFailed を返す。"""
     discovered = await _make_discovered(
         db_session, sample_source, "https://example.com/forbidden"
     )
@@ -152,19 +151,20 @@ async def test_permanent_error_returns_skipped(
     svc = ContentFetchService(session_factory, extractor)
     result = await svc.execute(discovered.id)
 
-    assert isinstance(result, Skipped)
+    assert isinstance(result, ExtractionFailed)
+    assert result.reason == "permanent_fetch_error"
 
     # Article が作成されていないことを確認
     articles = (await db_session.execute(select(Article))).scalars().all()
     assert len(articles) == 0
 
 
-async def test_quality_gate_skipped_returns_skipped(
+async def test_quality_gate_returns_extraction_failed(
     db_session: AsyncSession,
     session_factory,
     sample_source: NewsSource,
 ) -> None:
-    """抽出失敗 (ExtractionEmpty) の場合は Article を作成せず Skipped を返す。"""
+    """quality_gate 失敗時は ExtractionFailed(reason="quality_gate") を返す。"""
     discovered = await _make_discovered(
         db_session, sample_source, "https://example.com/quality-gate"
     )
@@ -173,15 +173,16 @@ async def test_quality_gate_skipped_returns_skipped(
     svc = ContentFetchService(session_factory, extractor)
     result = await svc.execute(discovered.id)
 
-    assert isinstance(result, Skipped)
+    assert isinstance(result, ExtractionFailed)
+    assert result.reason == "quality_gate"
 
 
-async def test_not_html_returns_skipped(
+async def test_not_html_returns_extraction_failed(
     db_session: AsyncSession,
     session_factory,
     sample_source: NewsSource,
 ) -> None:
-    """Content-Type 不一致 (not_html) の場合も Skipped を返す。"""
+    """Content-Type 不一致 (not_html) は ExtractionFailed(reason="not_html") を返す。"""
     discovered = await _make_discovered(
         db_session, sample_source, "https://example.com/not-html"
     )
@@ -190,19 +191,20 @@ async def test_not_html_returns_skipped(
     svc = ContentFetchService(session_factory, extractor)
     result = await svc.execute(discovered.id)
 
-    assert isinstance(result, Skipped)
+    assert isinstance(result, ExtractionFailed)
+    assert result.reason == "not_html"
 
 
-async def test_discovered_not_found_returns_skipped(
+async def test_discovered_not_found_returns_not_found(
     db_session: AsyncSession,
     session_factory,
 ) -> None:
-    """DiscoveredArticle が見つからない場合は fetcher を呼ばず Skipped を返す。"""
+    """DiscoveredArticle 不在時は fetcher を呼ばず DiscoveredNotFound を返す。"""
     extractor = _mock_html_extractor(return_value=_empty())
     svc = ContentFetchService(session_factory, extractor)
     result = await svc.execute(999999)
 
-    assert isinstance(result, Skipped)
+    assert isinstance(result, DiscoveredNotFound)
     extractor.fetch.assert_not_called()
 
 
