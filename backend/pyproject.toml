@@ -24,7 +24,7 @@ dependencies = [
     "pgvector>=0.3.0,<1",
     "taskiq>=0.12.2,<1",
     "taskiq-redis>=1.0,<2",
-    "uvicorn[standard]>=0.34,<1",
+    "uvicorn[standard]>=0.45.0,<1",
     "redis>=7.4.0,<8",
 ]
 
