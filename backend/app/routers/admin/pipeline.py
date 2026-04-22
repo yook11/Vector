@@ -18,7 +18,6 @@ router = APIRouter(prefix="/pipeline", tags=["admin:pipeline"])
 
 @router.post(
     "/fetch",
-    response_model=FetchResponse,
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def fetch_news(
@@ -50,7 +49,6 @@ async def fetch_news(
 
 @router.post(
     "/embed",
-    response_model=EmbedResponse,
     status_code=status.HTTP_202_ACCEPTED,
     summary="埋め込み未生成の分析に対して埋め込みタスクをディスパッチする",
 )

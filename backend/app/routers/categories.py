@@ -1,3 +1,5 @@
+from typing import Annotated
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,14 +12,14 @@ router = APIRouter(prefix="/api/v1/categories", tags=["categories"])
 
 
 def get_category_service(
-    session: AsyncSession = Depends(get_session),
+    session: Annotated[AsyncSession, Depends(get_session)],
 ) -> CategoryService:
     return CategoryService(CategoryRepository(session))
 
 
-@router.get("", response_model=CategoryDetailList)
+@router.get("")
 async def list_categories(
-    service: CategoryService = Depends(get_category_service),
+    service: Annotated[CategoryService, Depends(get_category_service)],
 ) -> CategoryDetailList:
     """全カテゴリをネストされたキーワードと記事件数付きで一覧取得する。"""
     return await service.list_categories()

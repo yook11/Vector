@@ -1,6 +1,7 @@
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
+import structlog
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
@@ -22,6 +23,8 @@ from app.routers import (
 )
 from app.search.errors import SearchError
 from app.search.router import router as search_router
+
+logger = structlog.get_logger(__name__)
 
 
 @asynccontextmanager
@@ -102,8 +105,8 @@ async def health_check() -> dict:
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
             db_connected = True
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("health_check_db_unreachable", error=str(exc))
 
     return {
         "status": "ok",

@@ -15,7 +15,7 @@ router = APIRouter(prefix="/api/v1/articles", tags=["semantic-search"])
 
 
 def get_semantic_search_service(
-    session: AsyncSession = Depends(get_session),
+    session: Annotated[AsyncSession, Depends(get_session)],
 ) -> SemanticSearchService:
     return SemanticSearchService(
         search_repo=SemanticSearchRepository(session),
@@ -23,11 +23,11 @@ def get_semantic_search_service(
     )
 
 
-@router.get("/search", response_model=PaginatedArticleResponse)
+@router.get("/search")
 async def search_articles(
     params: Annotated[SemanticSearchParams, Query()],
-    user: CurrentUser | None = Depends(get_optional_user),
-    service: SemanticSearchService = Depends(get_semantic_search_service),
+    user: Annotated[CurrentUser | None, Depends(get_optional_user)],
+    service: Annotated[SemanticSearchService, Depends(get_semantic_search_service)],
 ) -> PaginatedArticleResponse:
     """指定クエリテキストとのセマンティック類似度で記事を検索する。"""
     return await service.search(params, user.id if user else None)
