@@ -187,7 +187,7 @@ async def test_embedding_skipped_when_analysis_missing(
     session_factory,
     sample_source: NewsSource,
 ) -> None:
-    """extraction はあるが analysis がない（rejected 済み or Stage 2 未完了）場合は skipped。"""
+    """analysis のない extraction（rejected 済み / Stage 2 未完了）は skip。"""
     discovered = DiscoveredArticle(
         original_title="Rejected",
         original_url="https://example.com/rejected",

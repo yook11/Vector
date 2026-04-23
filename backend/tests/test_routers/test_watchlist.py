@@ -229,9 +229,7 @@ class TestRemoveFromWatchlist:
             "/api/v1/me/watchlist",
             json={"articleId": sample_article.id},
         )
-        resp = await authed_client.delete(
-            f"/api/v1/me/watchlist/{sample_article.id}"
-        )
+        resp = await authed_client.delete(f"/api/v1/me/watchlist/{sample_article.id}")
         assert resp.status_code == 204
 
         # 削除されたことを確認

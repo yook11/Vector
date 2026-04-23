@@ -493,9 +493,7 @@ async def test_extraction_skips_already_extracted(
     _, _ = await _create_article_with_extraction(
         db_session, sample_source, url="https://example.com/old", title="Old Article"
     )
-    article = (
-        await db_session.execute(select(Article).limit(1))
-    ).scalar_one()
+    article = (await db_session.execute(select(Article).limit(1))).scalar_one()
     await db_session.commit()
 
     mock_extractor = MagicMock(spec=BaseExtractor)
@@ -584,7 +582,9 @@ async def test_classification_creates_topic(
     db_session.expire_all()
     analysis = (
         await db_session.execute(
-            select(ArticleAnalysis).where(ArticleAnalysis.extraction_id == extraction_id)
+            select(ArticleAnalysis).where(
+                ArticleAnalysis.extraction_id == extraction_id
+            )
         )
     ).scalar_one()
     assert analysis.topic_id is not None
@@ -602,7 +602,7 @@ async def test_classification_persists_rejection_when_out_of_scope(
     session_factory,
     sample_source: NewsSource,
 ) -> None:
-    """AI が OutOfScope を返したときに ArticleRejection が永続化されチェーンが止まる。"""
+    """AI が OutOfScope を返したときに Rejection が永続化されチェーンが止まる。"""
     article, extraction = await _create_article_with_extraction(
         db_session,
         sample_source,
