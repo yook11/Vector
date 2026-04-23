@@ -1894,7 +1894,7 @@ wheels = [
 
 [[package]]
 name = "trafilatura"
-version = "1.12.2"
+version = "2.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "certifi" },
@@ -1905,9 +1905,9 @@ dependencies = [
     { name = "lxml" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d0/cd/77e4403b61d5da59063bb65ee894cf951c6f1137658499947adc040102f5/trafilatura-1.12.2.tar.gz", hash = "sha256:4c9cb1434f7e13ef0b16cb44ee1d44e84523ec7268940b9559c374e7effc9a96", size = 2987179, upload-time = "2024-09-10T12:42:48.459Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/06/25/e3ebeefdebfdfae8c4a4396f5a6ea51fc6fa0831d63ce338e5090a8003dc/trafilatura-2.0.0.tar.gz", hash = "sha256:ceb7094a6ecc97e72fea73c7dba36714c5c5b577b6470e4520dca893706d6247", size = 253404, upload-time = "2024-12-03T15:23:24.16Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/79/14/d69c627444a7e93bee0425cd05e11a30dfb7a1b471e990ad0aafbb234307/trafilatura-1.12.2-py3-none-any.whl", hash = "sha256:6df5b666f625c9579a50d7cc715005f450fa75606696aceab73eeda0a76dbe96", size = 132246, upload-time = "2024-09-10T12:42:30.696Z" },
+    { url = "https://files.pythonhosted.org/packages/8a/b6/097367f180b6383a3581ca1b86fcae284e52075fa941d1232df35293363c/trafilatura-2.0.0-py3-none-any.whl", hash = "sha256:77eb5d1e993747f6f20938e1de2d840020719735690c840b9a1024803a4cd51d", size = 132557, upload-time = "2024-12-03T15:23:21.41Z" },
 ]
 
 [[package]]
@@ -2070,7 +2070,7 @@ requires-dist = [
     { name = "structlog", specifier = ">=24.4,<26" },
     { name = "taskiq", specifier = ">=0.12.2,<1" },
     { name = "taskiq-redis", specifier = ">=1.0,<2" },
-    { name = "trafilatura", specifier = ">=1.12,<2" },
+    { name = "trafilatura", specifier = ">=2.0,<3" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.45.0,<1" },
 ]
 
