@@ -251,6 +251,54 @@ def test_entity_type_normalizes_lowercase() -> None:
     assert etype.root == "company"
 
 
+# --- B3. TopicName VO tests ---
+
+
+def test_topic_name_normalizes_hyphen_to_space() -> None:
+    assert TopicName("ai-agents").root == "ai agents"
+    assert TopicName("AI-Agents").root == "ai agents"
+    assert TopicName("post-quantum cryptography").root == "post quantum cryptography"
+
+
+def test_topic_name_normalizes_underscore_to_space() -> None:
+    assert TopicName("generative_ai").root == "generative ai"
+
+
+def test_topic_name_collapses_consecutive_separators() -> None:
+    assert TopicName("ai  --  agents").root == "ai agents"
+    assert TopicName("ai---agents").root == "ai agents"
+
+
+def test_topic_name_accepts_single_word() -> None:
+    assert TopicName("llm").root == "llm"
+    assert TopicName("6g").root == "6g"
+
+
+def test_topic_name_accepts_three_words_exactly() -> None:
+    assert TopicName("small modular reactor").root == "small modular reactor"
+    assert TopicName("post-quantum cryptography").root == "post quantum cryptography"
+
+
+def test_topic_name_rejects_four_or_more_words() -> None:
+    with pytest.raises(ValidationError, match="at most 3 words"):
+        TopicName("ai driven business process automation")
+
+
+def test_topic_name_rejects_four_words_from_hyphen_expansion() -> None:
+    with pytest.raises(ValidationError, match="at most 3 words"):
+        TopicName("ai-driven-business-process-automation")
+
+
+def test_topic_name_rejects_stopword_article() -> None:
+    with pytest.raises(ValidationError, match="stopwords"):
+        TopicName("the llm")
+
+
+def test_topic_name_rejects_stopword_preposition() -> None:
+    with pytest.raises(ValidationError, match="stopwords"):
+        TopicName("ai in finance")
+
+
 # --- C. Classification schema tests ---
 
 
