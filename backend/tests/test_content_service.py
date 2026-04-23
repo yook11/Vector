@@ -25,10 +25,10 @@ from app.collection.extraction.service import (
     ContentFetchService,
     ExtractionFailed,
 )
-from app.domain.safe_url import SafeUrl
 from app.models.article import Article
 from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
+from app.shared.value_objects.safe_url import SafeUrl
 
 
 def _mock_html_extractor(

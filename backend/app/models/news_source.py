@@ -8,9 +8,9 @@ import sqlalchemy as sa
 from sqlalchemy import CheckConstraint, DateTime, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.domain import SafeUrl
-from app.domain.news_source import SourceName
+from app.collection.domain.value_objects.source import SourceName
 from app.models.base import Base
+from app.shared.value_objects.safe_url import SafeUrl
 
 if TYPE_CHECKING:
     from app.models.discovered_article import DiscoveredArticle

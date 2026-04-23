@@ -14,10 +14,10 @@ from app.collection.extraction.repository import (
     ArticleRepository,
     DiscoveredArticleRepository,
 )
-from app.domain.safe_url import SafeUrl
 from app.models.article import Article
 from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
+from app.shared.value_objects.safe_url import SafeUrl
 
 
 async def _make_discovered(

@@ -8,15 +8,9 @@ from pydantic import SecretStr, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from app.analysis import (
-    InvalidInputError,
-    NetworkError,
-    ProviderError,
-    get_classifier,
-    get_extractor,
-)
 from app.analysis.classification_service import ClassificationService
 from app.analysis.classifier.base import BaseClassifier
+from app.analysis.classifier.factory import get_classifier
 from app.analysis.classifier.gemini import GeminiClassifier
 from app.analysis.classifier.schema import (
     ClassificationResponse,
@@ -24,12 +18,14 @@ from app.analysis.classifier.schema import (
     OutOfScope,
     ValidCategory,
 )
+from app.analysis.domain.value_objects.entity import EntityName, EntityType
+from app.analysis.domain.value_objects.topic import TopicName
+from app.analysis.errors import InvalidInputError, NetworkError, ProviderError
 from app.analysis.extraction.extractor.base import BaseExtractor
+from app.analysis.extraction.extractor.factory import get_extractor
 from app.analysis.extraction.extractor.gemini import GeminiExtractor
 from app.analysis.extraction.schema import EntityResponse, ExtractionResponse
 from app.analysis.extraction.service import ExtractionService
-from app.domain.entity import EntityName, EntityType
-from app.domain.topic import TopicName
 from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis, ImpactLevel
 from app.models.article_entity import ArticleEntity

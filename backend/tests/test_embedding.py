@@ -5,15 +5,15 @@ from unittest.mock import patch
 import httpx
 import pytest
 
-from app.analysis import (
+from app.analysis.embedder.base import BaseEmbedder
+from app.analysis.embedder.factory import get_embedder
+from app.analysis.embedder.ruri import RuriEmbedder
+from app.analysis.errors import (
     AnalysisDomainError,
-    BaseEmbedder,
     InvalidInputError,
     NetworkError,
     ProviderError,
-    get_embedder,
 )
-from app.analysis.embedder.ruri import RuriEmbedder
 
 # ---------------------------------------------------------------------------
 # A. Factory and configuration

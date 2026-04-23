@@ -10,12 +10,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.classifier.base import BaseClassifier
 from app.analysis.classifier.schema import Classified, OutOfScope
+from app.analysis.domain.value_objects.entity import EntityName, EntityType
 from app.analysis.errors import ProviderError
 from app.analysis.extraction.repository import ExtractionRepository
 from app.analysis.extraction.schema import EntityResponse
 from app.analysis.rejection_repository import RejectionRepository
 from app.analysis.repository import AnalysisRepository
-from app.domain.entity import EntityName, EntityType
 from app.models.article_analysis import ArticleAnalysis
 from app.models.article_extraction import ArticleExtraction
 from app.models.article_rejection import ArticleRejection

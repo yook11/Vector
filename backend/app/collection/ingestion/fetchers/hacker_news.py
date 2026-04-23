@@ -13,8 +13,8 @@ from app.collection.ingestion.fetchers.hn_fetch_state import (
     set_last_fetched_at,
 )
 from app.config import settings
-from app.domain.safe_url import SafeUrl
 from app.models.news_source import NewsSource
+from app.shared.value_objects.safe_url import SafeUrl
 
 HTTP_TIMEOUT = 30.0
 

@@ -9,7 +9,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from app.domain.topic import TopicName
+from app.analysis.domain.value_objects.topic import TopicName
 from app.models.article_analysis import ArticleAnalysis
 from app.models.article_entity import ArticleEntity
 from app.models.category import Category

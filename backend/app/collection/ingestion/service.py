@@ -30,9 +30,9 @@ from app.collection.ingestion.quota import check_daily_quota
 from app.collection.ingestion.registry import get_fetcher
 from app.collection.ingestion.repository import DiscoveredArticleRepository
 from app.config import settings
-from app.domain.safe_url import SafeUrl
 from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
+from app.shared.value_objects.safe_url import SafeUrl
 
 logger = structlog.get_logger(__name__)
 

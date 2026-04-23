@@ -14,7 +14,7 @@ from app.collection.extraction.extractor import (
     ExtractionEmpty,
     _decode_html_response,
 )
-from app.domain.safe_url import SafeUrl
+from app.shared.value_objects.safe_url import SafeUrl
 
 SAMPLE_HTML = """
 <html>

@@ -10,10 +10,10 @@ from typing import Protocol, runtime_checkable
 
 import httpx
 
+from app.collection.domain.value_objects.source import SourceName
 from app.collection.ingestion.candidate import ArticleCandidate
-from app.domain.news_source import SourceName
-from app.domain.safe_url import SafeUrl
 from app.models.news_source import NewsSource
+from app.shared.value_objects.safe_url import SafeUrl
 
 
 @runtime_checkable

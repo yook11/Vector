@@ -1,7 +1,7 @@
 """ArticleCandidate.from_external のユニットテスト。"""
 
 from app.collection.ingestion.candidate import ArticleCandidate
-from app.domain.safe_url import SafeUrl
+from app.shared.value_objects.safe_url import SafeUrl
 
 
 def test_from_external_with_valid_input() -> None:
