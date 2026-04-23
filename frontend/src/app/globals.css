@@ -1,81 +1,155 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  /* Apple-inspired light theme
+   * Background: #fbfbfd — cool-tinted off-white
+   * Foreground: #1d1d1f — Apple's signature near-black
+   * Primary: #0071e3 — Apple blue (single accent)
+   * Muted text: #6e6e73 — Apple secondary gray
+   * Surface: #f5f5f7 — Apple light gray
+   * Border: #e0e0e5 — barely visible divider
+   */
+  --background: hsl(240 20% 99%);
+  --foreground: hsl(240 3% 12%);
+  --card: hsl(0 0% 100%);
+  --card-foreground: hsl(240 3% 12%);
+  --popover: hsl(0 0% 100%);
+  --popover-foreground: hsl(240 3% 12%);
+  --primary: hsl(211 100% 45%);
+  --primary-foreground: hsl(0 0% 100%);
+  --secondary: hsl(240 14% 97%);
+  --secondary-foreground: hsl(240 3% 12%);
+  --muted: hsl(240 14% 97%);
+  --muted-foreground: hsl(240 2% 44%);
+  --accent: hsl(240 14% 97%);
+  --accent-foreground: hsl(240 3% 12%);
+  --destructive: hsl(4 100% 59%);
+  --destructive-foreground: hsl(0 0% 100%);
+  --border: hsl(240 6% 90%);
+  --input: hsl(240 6% 85%);
+  --ring: hsl(211 100% 45%);
+  --chart-1: hsl(211 100% 45%);
+  --chart-2: hsl(142 64% 49%);
+  --chart-3: hsl(35 100% 50%);
+  --chart-4: hsl(280 64% 60%);
+  --chart-5: hsl(349 100% 59%);
+  --radius: 0.75rem;
+}
+
+.dark {
+  /* Apple-inspired deep dark theme
+   * Background: ~neutral-950 (#0a0a0a) — deepest canvas
+   * Card: ~neutral-900 (#171717) — elevated surface
+   * Foreground: neutral-50 (#fafafa) — crisp white text
+   * Primary: #2997ff — Apple blue
+   * Border: neutral-800/60 — barely visible divider
+   * Muted text: neutral-500 — secondary information
+   */
+  --background: hsl(0 0% 4%);
+  --foreground: hsl(0 0% 96%);
+  --card: hsl(0 0% 9%);
+  --card-foreground: hsl(0 0% 96%);
+  --popover: hsl(0 0% 9%);
+  --popover-foreground: hsl(0 0% 96%);
+  --primary: hsl(211 100% 58%);
+  --primary-foreground: hsl(0 0% 100%);
+  --secondary: hsl(0 0% 12%);
+  --secondary-foreground: hsl(0 0% 96%);
+  --muted: hsl(0 0% 12%);
+  --muted-foreground: hsl(0 0% 45%);
+  --accent: hsl(0 0% 12%);
+  --accent-foreground: hsl(0 0% 96%);
+  --destructive: hsl(3 100% 62%);
+  --destructive-foreground: hsl(0 0% 100%);
+  --border: hsl(0 0% 18%);
+  --input: hsl(0 0% 18%);
+  --ring: hsl(211 100% 58%);
+  --chart-1: hsl(211 100% 58%);
+  --chart-2: hsl(142 63% 51%);
+  --chart-3: hsl(37 100% 52%);
+  --chart-4: hsl(280 87% 65%);
+  --chart-5: hsl(349 100% 61%);
+}
+
+@theme inline {
+  /* shadcn/ui カラートークンのブリッジ */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  /* Border radius: generous rounding */
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+
+  /* Apple-like type scale: tight tracking, generous leading */
+  --text-xs: 0.75rem;
+  --text-xs--line-height: 1.125rem;
+  --text-xs--letter-spacing: -0.006em;
+  --text-sm: 0.875rem;
+  --text-sm--line-height: 1.375rem;
+  --text-sm--letter-spacing: -0.008em;
+  --text-base: 1rem;
+  --text-base--line-height: 1.625rem;
+  --text-base--letter-spacing: -0.011em;
+  --text-lg: 1.125rem;
+  --text-lg--line-height: 1.75rem;
+  --text-lg--letter-spacing: -0.014em;
+  --text-xl: 1.25rem;
+  --text-xl--line-height: 1.875rem;
+  --text-xl--letter-spacing: -0.017em;
+  --text-2xl: 1.5rem;
+  --text-2xl--line-height: 2rem;
+  --text-2xl--letter-spacing: -0.019em;
+  --text-3xl: 1.875rem;
+  --text-3xl--line-height: 2.375rem;
+  --text-3xl--letter-spacing: -0.022em;
+  --text-4xl: 2.25rem;
+  --text-4xl--line-height: 2.75rem;
+  --text-4xl--letter-spacing: -0.025em;
+  --text-5xl: 3rem;
+  --text-5xl--line-height: 3.5rem;
+  --text-5xl--letter-spacing: -0.028em;
+  --text-6xl: 3.75rem;
+  --text-6xl--line-height: 4.25rem;
+  --text-6xl--letter-spacing: -0.032em;
+
+  /* Letter spacing (Apple-like tightness) */
+  --tracking-tightest: -0.04em;
+  --tracking-tighter: -0.025em;
+  --tracking-tight: -0.015em;
+  --tracking-normal: -0.011em;
+}
 
 @layer base {
-  :root {
-    /* Apple-inspired light theme
-     * Background: #fbfbfd — cool-tinted off-white
-     * Foreground: #1d1d1f — Apple's signature near-black
-     * Primary: #0071e3 — Apple blue (single accent)
-     * Muted text: #6e6e73 — Apple secondary gray
-     * Surface: #f5f5f7 — Apple light gray
-     * Border: #e0e0e5 — barely visible divider
-     */
-    --background: 240 20% 99%;
-    --foreground: 240 3% 12%;
-    --card: 0 0% 100%;
-    --card-foreground: 240 3% 12%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 240 3% 12%;
-    --primary: 211 100% 45%;
-    --primary-foreground: 0 0% 100%;
-    --secondary: 240 14% 97%;
-    --secondary-foreground: 240 3% 12%;
-    --muted: 240 14% 97%;
-    --muted-foreground: 240 2% 44%;
-    --accent: 240 14% 97%;
-    --accent-foreground: 240 3% 12%;
-    --destructive: 4 100% 59%;
-    --destructive-foreground: 0 0% 100%;
-    --border: 240 6% 90%;
-    --input: 240 6% 85%;
-    --ring: 211 100% 45%;
-    --chart-1: 211 100% 45%;
-    --chart-2: 142 64% 49%;
-    --chart-3: 35 100% 50%;
-    --chart-4: 280 64% 60%;
-    --chart-5: 349 100% 59%;
-    --radius: 0.75rem;
-  }
-
-  .dark {
-    /* Apple-inspired deep dark theme
-     * Background: ~neutral-950 (#0a0a0a) — deepest canvas
-     * Card: ~neutral-900 (#171717) — elevated surface
-     * Foreground: neutral-50 (#fafafa) — crisp white text
-     * Primary: #2997ff — Apple blue
-     * Border: neutral-800/60 — barely visible divider
-     * Muted text: neutral-500 — secondary information
-     */
-    --background: 0 0% 4%;
-    --foreground: 0 0% 96%;
-    --card: 0 0% 9%;
-    --card-foreground: 0 0% 96%;
-    --popover: 0 0% 9%;
-    --popover-foreground: 0 0% 96%;
-    --primary: 211 100% 58%;
-    --primary-foreground: 0 0% 100%;
-    --secondary: 0 0% 12%;
-    --secondary-foreground: 0 0% 96%;
-    --muted: 0 0% 12%;
-    --muted-foreground: 0 0% 45%;
-    --accent: 0 0% 12%;
-    --accent-foreground: 0 0% 96%;
-    --destructive: 3 100% 62%;
-    --destructive-foreground: 0 0% 100%;
-    --border: 0 0% 18%;
-    --input: 0 0% 18%;
-    --ring: 211 100% 58%;
-    --chart-1: 211 100% 58%;
-    --chart-2: 142 63% 51%;
-    --chart-3: 37 100% 52%;
-    --chart-4: 280 87% 65%;
-    --chart-5: 349 100% 61%;
-  }
-
   * {
-    border-color: hsl(var(--border));
+    border-color: var(--border);
   }
 
   html {
@@ -94,7 +168,7 @@
 
   ::selection {
     background-color: hsl(211 100% 45% / 0.18);
-    color: hsl(var(--foreground));
+    color: var(--foreground);
   }
 
   .dark ::selection {
@@ -102,34 +176,34 @@
   }
 }
 
-@layer components {
-  /* Apple Store-style grid with thin vertical column dividers */
-  .grid-apple-dividers > * {
+/* Apple Store-style grid with thin vertical column dividers */
+@utility grid-apple-dividers {
+  & > * {
     position: relative;
   }
-  .grid-apple-dividers > *::before {
+  & > *::before {
     content: "";
     position: absolute;
     left: -1rem;
     top: 0;
     bottom: 0;
     width: 1px;
-    background: hsl(var(--border));
+    background: var(--border);
     display: none;
   }
   @media (min-width: 768px) {
-    .grid-apple-dividers > *::before {
+    & > *::before {
       display: block;
     }
-    .grid-apple-dividers > *:nth-child(2n + 1)::before {
+    & > *:nth-child(2n + 1)::before {
       display: none;
     }
   }
   @media (min-width: 1280px) {
-    .grid-apple-dividers > *:nth-child(2n + 1)::before {
+    & > *:nth-child(2n + 1)::before {
       display: block;
     }
-    .grid-apple-dividers > *:nth-child(3n + 1)::before {
+    & > *:nth-child(3n + 1)::before {
       display: none;
     }
   }
