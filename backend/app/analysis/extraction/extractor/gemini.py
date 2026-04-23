@@ -66,8 +66,8 @@ class GeminiExtractor(BaseExtractor):
     """BaseExtractor の Gemini API 実装。"""
 
     MODEL = "gemini-2.5-flash-lite"
-    RPM = 50
-    RPD = 1500
+    RPM = 100
+    RPD = 3000
     CONTENT_MAX_LENGTH = 8000
 
     def __init__(self) -> None:

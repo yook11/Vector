@@ -83,27 +83,50 @@ IT 業界の話題であっても先端要素を含まないもの\
 境界事例で既存の 10 カテゴリに分類できないもの
 
 Step 2 — topic を決定する。
-選んだ category 内で、記事の「主題（subject）」を表す topic ラベルを割り当ててください。
+選んだ category 内で、記事の「主題（subject）」を表す topic ラベルを割り当てます。\
+topic は「どの技術サブセクターの話か」を表す語です\
+（× 動作対象、× 応用先、× 製品名）。
+
+【主役の判定ルール — 主題は技術サブセクター】
+記事の主役は常に「記事の中核にある技術的サブセクター」です。
+「AI が何を操作・改善・自動化するか」は topic の主役ではありません。
+AI をツールとして使う記事は、使われている AI 技術の型で分類します:
+
+- メール整理・会議要約・秘書業務を AI が行う → topic = "ai agents"
+- Gmail の AI Overviews や生成機能の話 → topic = "generative ai"
+- LLM 自体の性能・手法・ベンチマーク → topic = "llm"
+- AI がチップ設計を支援する記事は、成果物がチップなので\
+category = semiconductor、topic は該当する半導体サブセクター
+
+「ai-driven X」「ai in X」「X with ai」「ai-powered X」のような命名は禁止です。\
+X は応用先であって主題ではありません。
 
 【トピック選択の優先順位】
-1. 既存トピックの中に主題が同じものがあれば、必ずそれを再利用する
-2. 既存に該当が無い場合のみ、新規トピックを作る
-3. 迷ったら既存トピックを選ぶ
+1. 既存トピック（後述）に主題が合うものがあれば、必ず再利用する
+2. 既存に該当が無い場合のみ、新規作成する
+3. 迷ったら既存を選ぶ（粒度を粗く保つのが目的）
 
 【新規トピックを作る場合のルール】
 1. 業界で確立されたサブセクター名を使う
-   例: 「neuromorphic chip」OK、「nvidia chip launch」NG
+   例: OK "neuromorphic chip", "photonic computing"
+   例: NG "nvidia chip launch", "battery manufacturing plant"
 2. 会社名・製品名を含めない
-   例: 「openai release」NG、「llm」OK
+   例: NG "openai release", "tesla fsd"
+   例: OK "llm", "autonomous driving"
 3. 動詞・イベント名を含めない
-   例: 「launch」「acquisition」「debugging」「development」を語末に付けない
+   例: NG "launch", "acquisition", "debugging", "development"（語末も不可）
 4. 既存トピックの派生バリエーションを作らない
-   例: 「ai agents」が既に存在するときに「ai agent debugging」を作らない
-5. 命名形式: 小文字英語、2〜4 語、冠詞（a/an/the）不可
+   例: 既に "ai agents" があるとき "ai agent debugging" を新規作成しない
+5. 応用先・対象領域を topic に含めない（【主役の判定ルール】参照）
+6. 命名形式:
+   - 小文字英語
+   - 最大 3 語（単一空白区切り、ハイフン不可）
+   - 冠詞・前置詞（a / an / the / in / of）不可
+   - 語末は必ず名詞
 
 【out_of_scope の場合】
 記事内容を端的に表す自然な topic（例: "celebrity gossip", "generic saas release"）\
-で構いません。同じガイドラインを満たさなくてもよい。
+で構いません。ただし 3 語・ハイフン不可・冠詞不可の構文制約は VO 側で強制されます。
 {existing_topics_section}
 Step 2.5 — topic_label_ja を決定する。
 topic に対応する日本語の表示ラベル（最大 20 文字）を出力してください。
@@ -178,8 +201,8 @@ class GeminiClassifier(BaseClassifier):
     """BaseClassifier の Gemini API 実装。"""
 
     MODEL = "gemini-2.5-flash-lite"
-    RPM = 50
-    RPD = 1500
+    RPM = 100
+    RPD = 3000
 
     def __init__(self) -> None:
         api_key = settings.gemini_api_key.get_secret_value()
