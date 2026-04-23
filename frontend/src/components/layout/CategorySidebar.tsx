@@ -134,7 +134,7 @@ export function CategorySidebar({
                           "text-foreground font-medium bg-neutral-100 dark:bg-neutral-800/50",
                       )}
                     >
-                      <span className="truncate">{t.name}</span>
+                      <span className="truncate">{t.labelJa}</span>
                       {t.recentCount > 0 && (
                         <span className="ml-2 text-xs tabular-nums text-neutral-400 dark:text-neutral-600">
                           {t.recentCount}

@@ -38,7 +38,7 @@ export function NewsCard({ article }: { article: ArticleBrief }) {
               variant="outline"
               className="text-[10px] tracking-widest uppercase px-2 py-0.5 border border-neutral-200 bg-transparent text-neutral-600 dark:border-neutral-700/60 dark:text-neutral-400"
             >
-              {article.topic.name}
+              {article.topic.labelJa}
             </Badge>
           )}
         </div>

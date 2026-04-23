@@ -26,6 +26,7 @@ class CategoryService:
             topic_stats_by_cat[row.category_id].append(
                 TopicStatEmbed(
                     name=row.name,
+                    label_ja=row.label_ja,
                     recent_count=row.recent_count,
                 )
             )

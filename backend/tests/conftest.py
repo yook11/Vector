@@ -210,7 +210,11 @@ async def sample_topic(
     sample_categories: list[Category],
 ) -> Topic:
     """テスト用トピックを作成して返す（カテゴリが必須）。"""
-    topic = Topic(name="quantum computing", category_id=sample_categories[1].id)
+    topic = Topic(
+        name="quantum computing",
+        label_ja="量子コンピューティング",
+        category_id=sample_categories[1].id,
+    )
     db_session.add(topic)
     await db_session.commit()
     await db_session.refresh(topic)

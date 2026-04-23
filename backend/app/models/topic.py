@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, UniqueConstraint, func
+from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.domain.topic import TopicName
@@ -24,6 +24,9 @@ class Topic(Base):
     category_id: Mapped[int] = mapped_column(
         ForeignKey("categories.id", ondelete="RESTRICT"), index=True
     )
+    # シードトピックは手動キュレーション、AI 動的生成は AI が日本語ラベルも同時出力。
+    # DB 物理制約は再分析完了後の rev_H で NOT NULL を付与する。
+    label_ja: Mapped[str] = mapped_column(String(200))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

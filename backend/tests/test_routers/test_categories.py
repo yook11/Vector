@@ -83,7 +83,11 @@ class TestListCategories:
         sample_source: NewsSource,
     ) -> None:
         """直近 24 時間に分類された記事は recentCount に含まれる。"""
-        topic = Topic(name="tensorflow", category_id=sample_categories[0].id)
+        topic = Topic(
+            name="tensorflow",
+            label_ja="TensorFlow",
+            category_id=sample_categories[0].id,
+        )
         db_session.add(topic)
         await db_session.flush()
 
@@ -134,7 +138,11 @@ class TestListCategories:
         sample_source: NewsSource,
     ) -> None:
         """24 時間より前に分類された記事は recentCount に含まれない。"""
-        topic = Topic(name="tensorflow", category_id=sample_categories[0].id)
+        topic = Topic(
+            name="tensorflow",
+            label_ja="TensorFlow",
+            category_id=sample_categories[0].id,
+        )
         db_session.add(topic)
         await db_session.flush()
 
@@ -186,7 +194,11 @@ class TestListCategories:
         sample_source: NewsSource,
     ) -> None:
         """カテゴリレスポンスにはネストしたトピック統計が含まれる。"""
-        topic = Topic(name="pytorch", category_id=sample_categories[0].id)
+        topic = Topic(
+            name="pytorch",
+            label_ja="PyTorch",
+            category_id=sample_categories[0].id,
+        )
         db_session.add(topic)
         await db_session.flush()
 

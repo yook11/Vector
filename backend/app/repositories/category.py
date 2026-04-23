@@ -26,10 +26,10 @@ class CategoryRepository:
 
     async def fetch_topic_stats(
         self,
-    ) -> list[Row[tuple[int, str, int]]]:
+    ) -> list[Row[tuple[int, str, str, int]]]:
         """カテゴリ別にトピックごとの直近 24 時間の記事数を取得する.
 
-        (category_id, name, recent_count) の行を返す.
+        (category_id, name, label_ja, recent_count) の行を返す.
         24 時間以内に分類された記事がないトピックも recent_count=0 で含める.
         """
         cutoff = datetime.now(UTC) - SIDEBAR_RECENT_WINDOW
@@ -37,6 +37,7 @@ class CategoryRepository:
             select(
                 Topic.category_id,
                 Topic.name,
+                Topic.label_ja,
                 func.count(ArticleAnalysis.id).label("recent_count"),
             )
             .outerjoin(
@@ -44,7 +45,7 @@ class CategoryRepository:
                 (ArticleAnalysis.topic_id == Topic.id)
                 & (ArticleAnalysis.analyzed_at > cutoff),
             )
-            .group_by(Topic.category_id, Topic.id, Topic.name)
+            .group_by(Topic.category_id, Topic.id, Topic.name, Topic.label_ja)
             .order_by(Topic.name)
         )
         result = await self.session.execute(stmt)
