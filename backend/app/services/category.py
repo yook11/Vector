@@ -15,9 +15,9 @@ class CategoryService:
         topic_rows = await self.repo.fetch_topic_stats()
         count_rows = await self.repo.fetch_category_article_counts()
 
-        # category_id -> article_count のマッピング
-        article_counts_by_cat: dict[int, int] = {
-            row.category_id: row.article_count for row in count_rows
+        # category_id -> recent_count のマッピング
+        recent_counts_by_cat: dict[int, int] = {
+            row.category_id: row.recent_count for row in count_rows
         }
 
         # トピックを category_id でグルーピングする
@@ -26,7 +26,7 @@ class CategoryService:
             topic_stats_by_cat[row.category_id].append(
                 TopicStatEmbed(
                     name=row.name,
-                    article_count=row.article_count,
+                    recent_count=row.recent_count,
                 )
             )
 
@@ -35,7 +35,7 @@ class CategoryService:
                 CategoryDetail(
                     slug=row.slug,
                     name=row.name,
-                    article_count=article_counts_by_cat.get(row.id, 0),
+                    recent_count=recent_counts_by_cat.get(row.id, 0),
                     topics=topic_stats_by_cat.get(row.id, []),
                 )
                 for row in cat_rows

@@ -1,5 +1,7 @@
 """/api/v1/categories ルーターエンドポイントのテスト。"""
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -73,14 +75,14 @@ class TestListCategories:
         assert "slug" in item
         assert "name" in item
 
-    async def test_article_count(
+    async def test_recent_count_includes_recent_analysis(
         self,
         client: AsyncClient,
         db_session: AsyncSession,
         sample_categories: list[Category],
         sample_source: NewsSource,
     ) -> None:
-        """カテゴリにはトピック経由の記事数が含まれる。"""
+        """直近 24 時間に分類された記事は recentCount に含まれる。"""
         topic = Topic(name="tensorflow", category_id=sample_categories[0].id)
         db_session.add(topic)
         await db_session.flush()
@@ -99,7 +101,6 @@ class TestListCategories:
         )
         db_session.add(article)
         await db_session.flush()
-
         extraction = ArticleExtraction(
             article_id=article.id,
             translated_title="TF記事",
@@ -123,7 +124,59 @@ class TestListCategories:
         resp = await client.get("/api/v1/categories")
         items = resp.json()["items"]
         ai_cat = next(i for i in items if i["slug"] == "ai")
-        assert ai_cat["articleCount"] == 1
+        assert ai_cat["recentCount"] == 1
+
+    async def test_recent_count_excludes_old_analysis(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        sample_categories: list[Category],
+        sample_source: NewsSource,
+    ) -> None:
+        """24 時間より前に分類された記事は recentCount に含まれない。"""
+        topic = Topic(name="tensorflow", category_id=sample_categories[0].id)
+        db_session.add(topic)
+        await db_session.flush()
+
+        discovered = DiscoveredArticle(
+            original_title="TF Article Old",
+            original_url="https://example.com/tf-old",
+            news_source_id=sample_source.id,
+        )
+        db_session.add(discovered)
+        await db_session.flush()
+        article = Article(
+            discovered_article_id=discovered.id,
+            original_title="TF Article Old",
+            original_content="TF content.",
+        )
+        db_session.add(article)
+        await db_session.flush()
+        extraction = ArticleExtraction(
+            article_id=article.id,
+            translated_title="TF記事",
+            summary="要約",
+            ai_model="test",
+        )
+        db_session.add(extraction)
+        await db_session.flush()
+        analysis = ArticleAnalysis(
+            extraction_id=extraction.id,
+            translated_title="TF記事",
+            summary="要約",
+            impact_level="high",
+            reasoning="理由",
+            ai_model="test",
+            topic_id=topic.id,
+            analyzed_at=datetime.now(UTC) - timedelta(hours=25),
+        )
+        db_session.add(analysis)
+        await db_session.commit()
+
+        resp = await client.get("/api/v1/categories")
+        items = resp.json()["items"]
+        ai_cat = next(i for i in items if i["slug"] == "ai")
+        assert ai_cat["recentCount"] == 0
 
     async def test_nested_topics(
         self,
