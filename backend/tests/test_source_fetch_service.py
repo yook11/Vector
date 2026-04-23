@@ -13,9 +13,9 @@ from sqlmodel import select
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
 from app.collection.ingestion.candidate import ArticleCandidate
 from app.collection.ingestion.service import SourceFetchService
-from app.domain.safe_url import SafeUrl
 from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
+from app.shared.value_objects.safe_url import SafeUrl
 
 
 @pytest.mark.asyncio

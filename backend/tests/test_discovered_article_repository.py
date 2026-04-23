@@ -4,9 +4,9 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collection.ingestion.repository import DiscoveredArticleRepository
-from app.domain.safe_url import SafeUrl
 from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
+from app.shared.value_objects.safe_url import SafeUrl
 
 
 @pytest.mark.asyncio

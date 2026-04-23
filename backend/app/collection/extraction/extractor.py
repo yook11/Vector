@@ -26,7 +26,7 @@ import trafilatura
 
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
 from app.collection.extraction.candidate import PublishedAt
-from app.domain.safe_url import SafeUrl
+from app.shared.value_objects.safe_url import SafeUrl
 from app.utils.sanitize import strip_html_tags
 
 logger = structlog.get_logger(__name__)

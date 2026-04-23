@@ -12,7 +12,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.domain.topic import TopicName
+from app.analysis.domain.value_objects.topic import TopicName
 from app.models.article_analysis import ImpactLevel
 
 

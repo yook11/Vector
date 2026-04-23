@@ -5,8 +5,8 @@ from __future__ import annotations
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from app.domain.safe_url import SafeUrl
 from app.models.discovered_article import DiscoveredArticle
+from app.shared.value_objects.safe_url import SafeUrl
 
 
 class DiscoveredArticleRepository:

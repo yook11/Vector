@@ -9,10 +9,9 @@ from __future__ import annotations
 from sqlalchemy.orm import DeclarativeBase
 from sqlmodel import SQLModel
 
+from app.analysis.domain.value_objects.topic import TopicName
+from app.collection.domain.value_objects.source import SourceName
 from app.domain.category import CategoryName, CategorySlug
-from app.domain.news_source import SourceName
-from app.domain.safe_url import SafeUrl
-from app.domain.topic import TopicName
 from app.models.types import (
     CategoryNameType,
     CategorySlugType,
@@ -20,6 +19,7 @@ from app.models.types import (
     SourceNameType,
     TopicNameType,
 )
+from app.shared.value_objects.safe_url import SafeUrl
 
 
 class Base(DeclarativeBase):

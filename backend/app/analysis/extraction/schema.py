@@ -10,7 +10,7 @@ from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.domain.entity import EntityName, EntityType
+from app.analysis.domain.value_objects.entity import EntityName, EntityType
 
 
 class EntityResponse(BaseModel):

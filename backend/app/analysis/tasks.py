@@ -11,21 +11,22 @@ from typing import TYPE_CHECKING
 import structlog
 from taskiq import Context, TaskiqDepends
 
-from app.analysis import (
+from app.analysis.classification_service import ClassificationService
+from app.analysis.classifier.factory import get_classifier
+from app.analysis.embedder.factory import get_embedder
+from app.analysis.embedding_service import EmbeddingService
+from app.analysis.errors import (
     ConfigurationError,
     DailyQuotaExhaustedError,
     NetworkError,
     ProviderError,
     UnclassifiedError,
-    get_embedder,
 )
-from app.analysis import (
+from app.analysis.errors import (
     RateLimitError as AnalysisRateLimitError,
 )
-from app.analysis.classification_service import ClassificationService
-from app.analysis.classifier.factory import get_classifier
-from app.analysis.embedding_service import EmbeddingService
-from app.analysis.extraction import ExtractionService, get_extractor
+from app.analysis.extraction.extractor.factory import get_extractor
+from app.analysis.extraction.service import ExtractionService
 from app.analysis.rate_limiter import (
     RateLimitExceededError as _RateLimitExceededError,
 )

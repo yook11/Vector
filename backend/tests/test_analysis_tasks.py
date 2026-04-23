@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.analysis import RateLimitError
+from app.analysis.errors import RateLimitError
 
 
 def _make_ctx(

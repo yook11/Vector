@@ -1,69 +1,11 @@
-"""Analysis ドメイン — AI による記事分析と埋め込みベクトル生成を担う。"""
+"""Analysis BC — AI による記事分析と埋め込みベクトル生成。
 
-from app.analysis.classification_service import (
-    ClassificationResult,
-    ClassificationService,
-)
-from app.analysis.classifier.base import BaseClassifier
-from app.analysis.classifier.factory import get_classifier
-from app.analysis.classifier.schema import (
-    ClassificationResponse,
-    Classified,
-    OutOfScope,
-    ValidCategory,
-)
-from app.analysis.embedder.base import BaseEmbedder
-from app.analysis.embedder.factory import get_embedder
-from app.analysis.embedding_service import (
-    EmbeddingResult,
-    EmbeddingService,
-    build_embed_text,
-)
-from app.analysis.errors import (
-    AnalysisDomainError,
-    ConfigurationError,
-    DailyQuotaExhaustedError,
-    InvalidInputError,
-    NetworkError,
-    ProviderError,
-    RateLimitError,
-    UnclassifiedError,
-)
-from app.analysis.extraction import (
-    BaseExtractor,
-    EntityResponse,
-    ExtractionResponse,
-    ExtractionResult,
-    ExtractionService,
-    get_extractor,
-)
+公開 API は各サブモジュール (``errors``, ``classification_service``,
+``embedding_service``, ``classifier``, ``embedder``, ``extraction``,
+``domain``) から直接 import する。
 
-__all__ = [
-    "AnalysisDomainError",
-    "BaseClassifier",
-    "BaseEmbedder",
-    "BaseExtractor",
-    "ClassificationResponse",
-    "ClassificationResult",
-    "ClassificationService",
-    "Classified",
-    "ConfigurationError",
-    "DailyQuotaExhaustedError",
-    "EmbeddingResult",
-    "EmbeddingService",
-    "EntityResponse",
-    "ExtractionResponse",
-    "ExtractionResult",
-    "ExtractionService",
-    "InvalidInputError",
-    "NetworkError",
-    "OutOfScope",
-    "ProviderError",
-    "RateLimitError",
-    "UnclassifiedError",
-    "ValidCategory",
-    "build_embed_text",
-    "get_classifier",
-    "get_embedder",
-    "get_extractor",
-]
+本 ``__init__.py`` を重い re-export ハブにすると、
+``app.analysis.domain.value_objects.*`` をサブパッケージ経由で読むだけで
+``app.analysis`` 配下のサービス層（classification_service 等）が初期化され、
+``app.models.base`` との循環 import を誘発するため、意図的に空にしている。
+"""

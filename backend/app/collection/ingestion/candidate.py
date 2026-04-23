@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from pydantic import ValidationError
 
-from app.domain.safe_url import SafeUrl
+from app.shared.value_objects.safe_url import SafeUrl
 from app.utils.sanitize import strip_html_tags
 
 _TITLE_MAX_LENGTH = 500

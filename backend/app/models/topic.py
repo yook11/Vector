@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.domain.topic import TopicName
+from app.analysis.domain.value_objects.topic import TopicName
 from app.models.base import Base
 
 if TYPE_CHECKING:
