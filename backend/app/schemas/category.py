@@ -4,11 +4,14 @@ from app.schemas.embeds import TopicStatEmbed
 
 
 class CategoryDetail(_CamelBase):
-    """articleCount とネストしたトピックを備えたカテゴリ詳細。"""
+    """カテゴリ詳細。
+
+    recentCount は直近 24 時間に AI 分類が完了した記事数。
+    """
 
     slug: CategorySlug
     name: CategoryName
-    article_count: int = 0
+    recent_count: int = 0
     topics: list[TopicStatEmbed] = []
 
 

@@ -1,3 +1,5 @@
+from datetime import UTC, datetime, timedelta
+
 from sqlalchemy import Row
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import func, select
@@ -5,6 +7,8 @@ from sqlmodel import func, select
 from app.models.article_analysis import ArticleAnalysis
 from app.models.category import Category
 from app.models.topic import Topic
+
+SIDEBAR_RECENT_WINDOW = timedelta(hours=24)
 
 
 class CategoryRepository:
@@ -23,17 +27,23 @@ class CategoryRepository:
     async def fetch_topic_stats(
         self,
     ) -> list[Row[tuple[int, str, int]]]:
-        """カテゴリ別にトピックごとの記事数を取得する.
+        """カテゴリ別にトピックごとの直近 24 時間の記事数を取得する.
 
-        (category_id, name, article_count) の行を返す.
+        (category_id, name, recent_count) の行を返す.
+        24 時間以内に分類された記事がないトピックも recent_count=0 で含める.
         """
+        cutoff = datetime.now(UTC) - SIDEBAR_RECENT_WINDOW
         stmt = (
             select(
                 Topic.category_id,
                 Topic.name,
-                func.count(ArticleAnalysis.id).label("article_count"),
+                func.count(ArticleAnalysis.id).label("recent_count"),
             )
-            .outerjoin(ArticleAnalysis, ArticleAnalysis.topic_id == Topic.id)
+            .outerjoin(
+                ArticleAnalysis,
+                (ArticleAnalysis.topic_id == Topic.id)
+                & (ArticleAnalysis.analyzed_at > cutoff),
+            )
             .group_by(Topic.category_id, Topic.id, Topic.name)
             .order_by(Topic.name)
         )
@@ -43,17 +53,19 @@ class CategoryRepository:
     async def fetch_category_article_counts(
         self,
     ) -> list[Row[tuple[int, int]]]:
-        """カテゴリごとのユニーク記事数を取得する.
+        """カテゴリごとの直近 24 時間に分類された記事数を取得する.
 
-        (category_id, article_count) の行を返す.
-        Topic 経由で article_analyses を集計する。
+        (category_id, recent_count) の行を返す.
+        24 時間以内の分類がないカテゴリは結果に含まれない（呼び出し側で 0 を補完する）.
         """
+        cutoff = datetime.now(UTC) - SIDEBAR_RECENT_WINDOW
         stmt = (
             select(
                 Topic.category_id,
-                func.count(ArticleAnalysis.id).label("article_count"),
+                func.count(ArticleAnalysis.id).label("recent_count"),
             )
             .join(ArticleAnalysis, ArticleAnalysis.topic_id == Topic.id)
+            .where(ArticleAnalysis.analyzed_at > cutoff)
             .group_by(Topic.category_id)
         )
         result = await self.session.execute(stmt)

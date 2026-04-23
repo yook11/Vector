@@ -18,10 +18,10 @@ class TopicEmbed(_CamelBase):
 
 
 class TopicStatEmbed(_CamelBase):
-    """トピック＋記事数（カテゴリ内集計表示用）"""
+    """トピック＋直近24時間に AI 分類が完了した記事数（カテゴリ内集計表示用）"""
 
     name: TopicName
-    article_count: int = 0
+    recent_count: int = 0
 
 
 class NewsSourceEmbed(_CamelBase):

@@ -341,16 +341,18 @@ export interface components {
     };
     /**
      * CategoryDetail
-     * @description articleCount とネストしたトピックを備えたカテゴリ詳細。
+     * @description カテゴリ詳細。
+     *
+     *     recentCount は直近 24 時間に AI 分類が完了した記事数。
      */
     CategoryDetail: {
       slug: components["schemas"]["CategorySlug"];
       name: components["schemas"]["CategoryName"];
       /**
-       * Articlecount
+       * Recentcount
        * @default 0
        */
-      articleCount: number;
+      recentCount: number;
       /**
        * Topics
        * @default []
@@ -562,15 +564,15 @@ export interface components {
     TopicName: string;
     /**
      * TopicStatEmbed
-     * @description トピック＋記事数（カテゴリ内集計表示用）
+     * @description トピック＋直近24時間に AI 分類が完了した記事数（カテゴリ内集計表示用）
      */
     TopicStatEmbed: {
       name: components["schemas"]["TopicName"];
       /**
-       * Articlecount
+       * Recentcount
        * @default 0
        */
-      articleCount: number;
+      recentCount: number;
     };
     /**
      * UserRole

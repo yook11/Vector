@@ -109,9 +109,11 @@ export function CategorySidebar({
                 )}
               >
                 <span className="truncate">{cat.name}</span>
-                <span className="ml-2 text-xs tabular-nums text-neutral-400 dark:text-neutral-600">
-                  {cat.articleCount}
-                </span>
+                {cat.recentCount > 0 && (
+                  <span className="ml-2 text-xs tabular-nums text-neutral-400 dark:text-neutral-600">
+                    {cat.recentCount}
+                  </span>
+                )}
               </Link>
             </div>
 
@@ -133,9 +135,11 @@ export function CategorySidebar({
                       )}
                     >
                       <span className="truncate">{t.name}</span>
-                      <span className="ml-2 text-xs tabular-nums text-neutral-400 dark:text-neutral-600">
-                        {t.articleCount}
-                      </span>
+                      {t.recentCount > 0 && (
+                        <span className="ml-2 text-xs tabular-nums text-neutral-400 dark:text-neutral-600">
+                          {t.recentCount}
+                        </span>
+                      )}
                     </Link>
                   );
                 })}

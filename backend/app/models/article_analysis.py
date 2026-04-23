@@ -9,6 +9,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     String,
     Text,
     UniqueConstraint,
@@ -56,6 +57,12 @@ class ArticleAnalysis(Base):
         CheckConstraint(
             "reasoning != ''",
             name="ck_article_analyses_reasoning_not_empty",
+        ),
+        # サイドバーの直近 24 時間集計クエリ向けの複合インデックス
+        Index(
+            "ix_article_analyses_topic_id_analyzed_at",
+            "topic_id",
+            "analyzed_at",
         ),
     )
 
