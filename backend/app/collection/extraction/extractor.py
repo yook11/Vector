@@ -184,13 +184,14 @@ def _extract_from_html(html: str, url: str) -> HtmlExtractionResult:
     if result is None:
         return ExtractionEmpty(reason="parse_error")
 
+    # trafilatura 2.0 以降、bare_extraction() は Document インスタンスを返す
     # 本文の品質ゲート: 50 文字未満は棄却
-    text = result.get("text")
+    text = result.text
     body = text.strip() if text and len(text.strip()) >= _BODY_MIN_LENGTH else None
 
     # タイトル: trafilatura が OGP / Twitter Card / JSON-LD / <title> / h1 の順で抽出。
     # HTML タグ除去と 500 文字上限で整形し、空なら None。
-    cleaned_title = strip_html_tags(result.get("title"))
+    cleaned_title = strip_html_tags(result.title)
     title = cleaned_title[:_TITLE_MAX_LENGTH] if cleaned_title else None
 
     if body is None or title is None:
@@ -199,7 +200,7 @@ def _extract_from_html(html: str, url: str) -> HtmlExtractionResult:
     return ExtractedContent(
         title=title,
         body=body,
-        published_at=PublishedAt.parse(result.get("date")),
+        published_at=PublishedAt.parse(result.date),
     )
 
 
