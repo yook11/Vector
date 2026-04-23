@@ -15,12 +15,14 @@ class TopicEmbed(_CamelBase):
     """トピックタグ（ニュース埋め込み用）"""
 
     name: TopicName
+    label_ja: str
 
 
 class TopicStatEmbed(_CamelBase):
     """トピック＋直近24時間に AI 分類が完了した記事数（カテゴリ内集計表示用）"""
 
     name: TopicName
+    label_ja: str
     recent_count: int = 0
 
 

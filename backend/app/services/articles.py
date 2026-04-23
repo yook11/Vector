@@ -14,7 +14,7 @@ from app.schemas.embeds import NewsSourceEmbed, OriginalArticleEmbed, TopicEmbed
 
 
 def build_topic_embed(analysis: ArticleAnalysis) -> TopicEmbed:
-    return TopicEmbed(name=analysis.topic.name)
+    return TopicEmbed(name=analysis.topic.name, label_ja=analysis.topic.label_ja)
 
 
 def build_brief(

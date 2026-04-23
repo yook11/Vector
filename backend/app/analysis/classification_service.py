@@ -157,7 +157,7 @@ class ClassificationService:
                 f"AI returned unknown category slug: {classified.category.value!r}"
             )
         topic_id = await analysis_repo.find_or_create_topic(
-            classified.topic.root, category_id
+            classified.topic.root, classified.topic_label_ja, category_id
         )
         analysis = ArticleAnalysis.from_classification(
             extraction=extraction,

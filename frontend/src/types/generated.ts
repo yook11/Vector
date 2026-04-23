@@ -546,6 +546,8 @@ export interface components {
      */
     TopicEmbed: {
       name: components["schemas"]["TopicName"];
+      /** Labelja */
+      labelJa: string;
     };
     /**
      * TopicName
@@ -568,6 +570,8 @@ export interface components {
      */
     TopicStatEmbed: {
       name: components["schemas"]["TopicName"];
+      /** Labelja */
+      labelJa: string;
       /**
        * Recentcount
        * @default 0

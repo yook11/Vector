@@ -74,7 +74,11 @@ async def sample_article(
     sample_source: NewsSource,
 ) -> ArticleAnalysis:
     """分析付きのテスト用記事（analysis を返す）。"""
-    topic = Topic(name="watchlist test", category_id=sample_categories[0].id)
+    topic = Topic(
+        name="watchlist test",
+        label_ja="ウォッチリストテスト",
+        category_id=sample_categories[0].id,
+    )
     db_session.add(topic)
     await db_session.flush()
 
@@ -100,7 +104,11 @@ async def second_article(
     sample_source: NewsSource,
 ) -> ArticleAnalysis:
     """分析付きの 2 件目のテスト用記事（analysis を返す）。"""
-    topic = Topic(name="second test", category_id=sample_categories[0].id)
+    topic = Topic(
+        name="second test",
+        label_ja="セカンドテスト",
+        category_id=sample_categories[0].id,
+    )
     db_session.add(topic)
     await db_session.flush()
 

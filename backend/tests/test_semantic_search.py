@@ -28,7 +28,7 @@ async def _create_topic(
     db_session: AsyncSession, category_id: int, name: str = "search test"
 ) -> Topic:
     """テスト用トピックを作成するヘルパー。"""
-    topic = Topic(name=name, category_id=category_id)
+    topic = Topic(name=name, label_ja=name, category_id=category_id)
     db_session.add(topic)
     await db_session.flush()
     return topic

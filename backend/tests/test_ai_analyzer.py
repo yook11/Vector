@@ -66,6 +66,7 @@ def _make_extraction_response(
 def _make_classified(
     category: ValidCategory = ValidCategory.COMPUTING,
     topic: str = "quantum computing breakthrough",
+    topic_label_ja: str = "量子コンピューティング進展",
     impact_level: ImpactLevel = ImpactLevel.HIGH,
     reasoning: str = "技術的に重要な進展",
 ) -> Classified:
@@ -73,6 +74,7 @@ def _make_classified(
     return Classified(
         category=category,
         topic=TopicName(topic),
+        topic_label_ja=topic_label_ja,
         impact_level=impact_level,
         reasoning=reasoning,
     )
@@ -260,6 +262,7 @@ def test_classified_valid() -> None:
     resp = Classified(
         category=ValidCategory.COMPUTING,
         topic=TopicName("quantum computing breakthrough"),
+        topic_label_ja="量子コンピューティング進展",
         impact_level=ImpactLevel.HIGH,
         reasoning="理由",
     )
@@ -272,6 +275,7 @@ def test_classified_normalizes_topic() -> None:
     resp = Classified(
         category=ValidCategory.COMPUTING,
         topic=TopicName("Quantum Computing Breakthrough"),
+        topic_label_ja="量子コンピューティング進展",
         impact_level=ImpactLevel.HIGH,
         reasoning="理由",
     )
@@ -284,6 +288,7 @@ def test_classified_rejects_invalid_category() -> None:
             {
                 "category": "invalid_category",
                 "topic": "foo bar",
+                "topic_label_ja": "ラベル",
                 "impact_level": "high",
                 "reasoning": "r",
             }
@@ -296,6 +301,7 @@ def test_classified_rejects_invalid_impact_level() -> None:
             {
                 "category": "computing",
                 "topic": "foo bar",
+                "topic_label_ja": "ラベル",
                 "impact_level": "extreme",
                 "reasoning": "r",
             }
@@ -649,7 +655,11 @@ async def test_classification_skips_already_classified(
     sample_categories: list[Category],
     sample_source: NewsSource,
 ) -> None:
-    topic = Topic(name="existing topic", category_id=sample_categories[0].id)
+    topic = Topic(
+        name="existing topic",
+        label_ja="既存トピック",
+        category_id=sample_categories[0].id,
+    )
     db_session.add(topic)
     await db_session.flush()
 
@@ -717,7 +727,11 @@ async def test_news_endpoint_includes_analysis(
     sample_categories: list[Category],
     sample_source: NewsSource,
 ) -> None:
-    topic = Topic(name="integration test", category_id=sample_categories[0].id)
+    topic = Topic(
+        name="integration test",
+        label_ja="統合テスト",
+        category_id=sample_categories[0].id,
+    )
     db_session.add(topic)
     await db_session.flush()
 

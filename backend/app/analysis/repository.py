@@ -37,24 +37,32 @@ class AnalysisRepository:
 
     async def get_existing_topics_by_category(
         self,
-    ) -> dict[str, list[str]] | None:
-        """カテゴリ別に既存 Topic を記事数降順で取得する（各上位30件）。"""
+    ) -> dict[str, list[tuple[str, str]]] | None:
+        """カテゴリ別に全 Topic を取得する（(name, label_ja) のペア）。
+
+        AI 再利用判定の精度向上のため、シードと AI 動的生成の両方を
+        漏れなく提示する（記事数降順、上限なし）。シード topic は
+        analyses 件数が 0 でも提示対象に含めるため LEFT JOIN 集計する。
+        """
         stmt = (
-            select(Category.slug, Topic.name)
+            select(
+                Category.slug,
+                Topic.name,
+                Topic.label_ja,
+                func.count(ArticleAnalysis.id).label("analysis_count"),
+            )
             .join(Topic, Topic.category_id == Category.id)
-            .join(ArticleAnalysis, ArticleAnalysis.topic_id == Topic.id)
-            .group_by(Category.slug, Topic.id, Topic.name)
-            .order_by(Category.slug, func.count().desc())
+            .outerjoin(ArticleAnalysis, ArticleAnalysis.topic_id == Topic.id)
+            .group_by(Category.slug, Topic.id, Topic.name, Topic.label_ja)
+            .order_by(Category.slug, func.count(ArticleAnalysis.id).desc())
         )
         rows = (await self._session.execute(stmt)).all()
         if not rows:
             return None
 
-        result: dict[str, list[str]] = defaultdict(list)
-        for slug, topic_name in rows:
-            topics = result[str(slug)]
-            if len(topics) < 30:
-                topics.append(str(topic_name))
+        result: dict[str, list[tuple[str, str]]] = defaultdict(list)
+        for slug, topic_name, label_ja, _ in rows:
+            result[str(slug)].append((str(topic_name), str(label_ja)))
         return dict(result)
 
     async def get_category_id_by_slug(self, slug: str) -> int | None:
@@ -62,16 +70,21 @@ class AnalysisRepository:
         stmt = select(Category.id).where(Category.slug == slug)
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
-    async def find_or_create_topic(self, name: str, category_id: int) -> int:
+    async def find_or_create_topic(
+        self, name: str, label_ja: str, category_id: int
+    ) -> int:
         """Topic を検索し、なければ作成して ID を返す。
 
-        並行分析時の UNIQUE 制約違反に対して ON CONFLICT DO NOTHING で対応する。
+        新規作成時のみ AI 出力の label_ja を採用する。既存 topic の
+        label_ja は DB 値を信頼し更新しない（シード手動キュレーション値の
+        ブレを避けるため）。並行分析時の UNIQUE 制約違反に対しては
+        ON CONFLICT DO NOTHING で対応する。
         """
         topic_name = TopicName(name)
 
         insert_stmt = (
             pg_insert(Topic)
-            .values(name=topic_name, category_id=category_id)
+            .values(name=topic_name, label_ja=label_ja, category_id=category_id)
             .on_conflict_do_nothing(constraint="uq_topics_name_category_id")
         )
         await self._session.execute(insert_stmt)

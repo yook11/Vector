@@ -85,7 +85,11 @@ async def test_embedding_creates_vector(
     sample_source: NewsSource,
 ) -> None:
     """EmbeddingService は既存分析に対して embedding を永続化する。"""
-    topic = Topic(name="embedding test", category_id=sample_categories[0].id)
+    topic = Topic(
+        name="embedding test",
+        label_ja="埋め込みテスト",
+        category_id=sample_categories[0].id,
+    )
     db_session.add(topic)
     await db_session.flush()
 
@@ -127,7 +131,11 @@ async def test_embedding_idempotency(
     sample_source: NewsSource,
 ) -> None:
     """embedding 済み分析は API を呼ばずに already_exists を返す。"""
-    topic = Topic(name="idempotent test", category_id=sample_categories[0].id)
+    topic = Topic(
+        name="idempotent test",
+        label_ja="冪等性テスト",
+        category_id=sample_categories[0].id,
+    )
     db_session.add(topic)
     await db_session.flush()
 
