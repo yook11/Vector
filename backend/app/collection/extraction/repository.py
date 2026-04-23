@@ -11,13 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlmodel import select
 
-from app.collection.extraction.candidate import (
-    AlreadyExtracted,
-    DiscoveredArticleLookup,
-    DiscoveredNotFound,
-    UnextractedDiscoveredArticle,
-    UnextractedFound,
-)
 from app.collection.extraction.extractor import ExtractedContent
 from app.models.article import Article
 from app.models.discovered_article import DiscoveredArticle
@@ -29,30 +22,18 @@ class DiscoveredArticleRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def lookup_for_extraction(
-        self, discovered_article_id: int
-    ) -> DiscoveredArticleLookup:
-        """抽出対象の状態を 1 クエリで判定して sum type で返す。
+    async def find(self, discovered_article_id: int) -> DiscoveredArticle | None:
+        """ID で DiscoveredArticle を 1 件取得する。
 
-        - 行が存在しない → :class:`DiscoveredNotFound`
-        - 行はあるが Article 未生成 → :class:`UnextractedFound`
-        - 既に Article が存在する → :class:`AlreadyExtracted`
+        既存 Article の有無判定用に ``article`` リレーションを事前ロードする。
+        「抽出済み / 未抽出 / 異常」というビジネス解釈は Service の責務。
         """
         stmt = (
             select(DiscoveredArticle)
             .where(DiscoveredArticle.id == discovered_article_id)
             .options(selectinload(DiscoveredArticle.article))
         )
-        discovered = (await self._session.execute(stmt)).scalar_one_or_none()
-        if discovered is None:
-            return DiscoveredNotFound()
-        if discovered.article is not None:
-            return AlreadyExtracted(article_id=discovered.article.id)
-        return UnextractedFound(
-            article=UnextractedDiscoveredArticle(
-                id=discovered.id, url=discovered.original_url
-            )
-        )
+        return (await self._session.execute(stmt)).scalar_one_or_none()
 
 
 class ArticleRepository:

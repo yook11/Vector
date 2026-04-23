@@ -7,8 +7,12 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from app.collection.errors import PermanentFetchError, TemporaryFetchError
-from app.collection.extraction.candidate import DiscoveredNotFound, PublishedAt
+from app.collection.errors import (
+    DiscoveredArticleMissing,
+    PermanentFetchError,
+    TemporaryFetchError,
+)
+from app.collection.extraction.candidate import PublishedAt
 from app.collection.extraction.extractor import (
     ArticleHtmlExtractor,
     ExtractedContent,
@@ -195,16 +199,18 @@ async def test_not_html_returns_extraction_failed(
     assert result.reason == "not_html"
 
 
-async def test_discovered_not_found_returns_not_found(
+async def test_discovered_missing_raises_exception(
     db_session: AsyncSession,
     session_factory,
 ) -> None:
-    """DiscoveredArticle 不在時は fetcher を呼ばず DiscoveredNotFound を返す。"""
+    """DiscoveredArticle 不在時は fetcher を呼ばず例外を raise する。"""
     extractor = _mock_html_extractor(return_value=_empty())
     svc = ContentFetchService(session_factory, extractor)
-    result = await svc.execute(999999)
 
-    assert isinstance(result, DiscoveredNotFound)
+    with pytest.raises(DiscoveredArticleMissing) as exc_info:
+        await svc.execute(999999)
+
+    assert exc_info.value.discovered_article_id == 999999
     extractor.fetch.assert_not_called()
 
 

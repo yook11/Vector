@@ -5,11 +5,13 @@
 HTML 抽出を :class:`ArticleHtmlExtractor` に委譲、成功時 (:class:`ExtractedContent`)
 は :class:`ArticleRepository` 経由で Article 行を作成する。
 
-結果型は「分析に進められるか」を直接表現し、進めない場合は原因の所在で分類する:
+結果型は「分析に進められるか」を直接表現する:
 
-- :class:`ArticleReady`      — Article 行あり（新規抽出 / 冪等ヒット 両方）
-- :class:`DiscoveredNotFound` — 事前判定で対象なし（DB 側の不整合）
-- :class:`ExtractionFailed`  — 抽出を試みたが本文を得られなかった（外部 / 品質）
+- :class:`ArticleReady`     — Article 行あり（新規抽出 / 冪等ヒット 両方）
+- :class:`ExtractionFailed` — 抽出を試みたが本文を得られなかった（外部 / 品質）
+
+DB 側の不整合（行が存在しない）はビジネス状態ではなく異常系なので、
+:class:`DiscoveredArticleMissing` 例外として呼び出し側へ伝播させる。
 """
 
 from __future__ import annotations
@@ -20,11 +22,7 @@ from typing import Literal
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.collection.errors import PermanentFetchError
-from app.collection.extraction.candidate import (
-    AlreadyExtracted,
-    DiscoveredNotFound,
-)
+from app.collection.errors import DiscoveredArticleMissing, PermanentFetchError
 from app.collection.extraction.extractor import (
     ArticleHtmlExtractor,
     ExtractionEmpty,
@@ -63,7 +61,7 @@ class ExtractionFailed:
     reason: ExtractionFailureReason
 
 
-ContentFetchResult = ArticleReady | DiscoveredNotFound | ExtractionFailed
+ContentFetchResult = ArticleReady | ExtractionFailed
 
 
 class ContentFetchService:
@@ -87,42 +85,36 @@ class ContentFetchService:
         """記事本文と公開日時を取得し Article 行を作成する。
 
         Returns:
-            ArticleReady / DiscoveredNotFound / ExtractionFailed のいずれか。
+            ArticleReady / ExtractionFailed のいずれか。
 
         Raises:
+            DiscoveredArticleMissing: DB に対象行が存在しない異常系。
             TemporaryFetchError: リトライ可能な失敗。判断は呼び出し側（Task）。
         """
         async with self._session_factory() as session:
-            lookup = await DiscoveredArticleRepository(session).lookup_for_extraction(
+            discovered = await DiscoveredArticleRepository(session).find(
                 discovered_article_id
             )
 
-            # 事前判定 (1): DB 不整合 — 抽出は試みていない
-            if isinstance(lookup, DiscoveredNotFound):
-                logger.warning(
-                    "content_fetch_discovered_not_found",
-                    discovered_article_id=discovered_article_id,
-                )
-                return DiscoveredNotFound()
+            if discovered is None:
+                raise DiscoveredArticleMissing(discovered_article_id)
 
-            # 事前判定 (2): 冪等ヒット — 既に Article あり
-            if isinstance(lookup, AlreadyExtracted):
+            # 冪等ヒット: 既に Article あり
+            if discovered.article is not None:
                 logger.info(
                     "content_already_extracted",
                     discovered_article_id=discovered_article_id,
-                    article_id=lookup.article_id,
+                    article_id=discovered.article.id,
                 )
-                return ArticleReady(article_id=lookup.article_id)
+                return ArticleReady(article_id=discovered.article.id)
 
-            # 抽出対象: happy path — 以降 lookup は UnextractedFound に narrow 済み
-            unextracted = lookup.article
-
+            # 抽出対象: happy path
             try:
-                extraction = await self._html_extractor.fetch(unextracted.url)
+                extraction = await self._html_extractor.fetch(discovered.original_url)
             except PermanentFetchError as e:
                 logger.info(
                     "content_extraction_failed",
-                    discovered_article_id=unextracted.id,
+                    discovered_article_id=discovered.id,
                     reason="permanent_fetch_error",
                     detail=str(e),
                 )
@@ -131,19 +123,19 @@ class ContentFetchService:
             if isinstance(extraction, ExtractionEmpty):
                 logger.info(
                     "content_extraction_failed",
-                    discovered_article_id=unextracted.id,
+                    discovered_article_id=discovered.id,
                     reason=extraction.reason,
                 )
                 return ExtractionFailed(reason=extraction.reason)
 
             # 品質ゲート通過: Article 行を作成
-            article = ArticleRepository(session).create(unextracted.id, extraction)
+            article = ArticleRepository(session).create(discovered.id, extraction)
             await session.commit()
             await session.refresh(article)
 
             logger.info(
                 "content_fetch_completed",
-                discovered_article_id=unextracted.id,
+                discovered_article_id=discovered.id,
                 article_id=article.id,
                 date_extracted=extraction.published_at is not None,
             )
