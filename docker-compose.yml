@@ -43,7 +43,6 @@ services:
       - ./frontend/public:/app/public
       - ./frontend/package.json:/app/package.json
       - ./frontend/components.json:/app/components.json
-      - ./frontend/tailwind.config.ts:/app/tailwind.config.ts
       - ./frontend/postcss.config.js:/app/postcss.config.js
       - ./frontend/tsconfig.json:/app/tsconfig.json
       - ./frontend/next.config.js:/app/next.config.js
