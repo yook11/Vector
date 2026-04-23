@@ -8,12 +8,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from app.collection.extraction.candidate import (
-    AlreadyExtracted,
-    DiscoveredNotFound,
-    PublishedAt,
-    UnextractedFound,
-)
+from app.collection.extraction.candidate import PublishedAt
 from app.collection.extraction.extractor import ExtractedContent
 from app.collection.extraction.repository import (
     ArticleRepository,
@@ -40,15 +35,15 @@ async def _make_discovered(
 
 
 @pytest.mark.asyncio
-async def test_lookup_returns_not_found_for_missing_id(
+async def test_find_returns_none_for_missing_id(
     db_session: AsyncSession,
 ) -> None:
     repo = DiscoveredArticleRepository(db_session)
-    assert isinstance(await repo.lookup_for_extraction(999999), DiscoveredNotFound)
+    assert await repo.find(999999) is None
 
 
 @pytest.mark.asyncio
-async def test_lookup_returns_unextracted_when_article_absent(
+async def test_find_returns_discovered_without_article(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
     discovered = await _make_discovered(
@@ -56,15 +51,16 @@ async def test_lookup_returns_unextracted_when_article_absent(
     )
 
     repo = DiscoveredArticleRepository(db_session)
-    result = await repo.lookup_for_extraction(discovered.id)
+    result = await repo.find(discovered.id)
 
-    assert isinstance(result, UnextractedFound)
-    assert result.article.id == discovered.id
-    assert result.article.url == SafeUrl("https://example.com/unextracted")
+    assert result is not None
+    assert result.id == discovered.id
+    assert result.original_url == SafeUrl("https://example.com/unextracted")
+    assert result.article is None
 
 
 @pytest.mark.asyncio
-async def test_lookup_returns_already_extracted_when_article_exists(
+async def test_find_eager_loads_article_relation(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
     discovered = await _make_discovered(
@@ -81,10 +77,11 @@ async def test_lookup_returns_already_extracted_when_article_exists(
     await db_session.refresh(article)
 
     repo = DiscoveredArticleRepository(db_session)
-    result = await repo.lookup_for_extraction(discovered.id)
+    result = await repo.find(discovered.id)
 
-    assert isinstance(result, AlreadyExtracted)
-    assert result.article_id == article.id
+    assert result is not None
+    assert result.article is not None
+    assert result.article.id == article.id
 
 
 @pytest.mark.asyncio

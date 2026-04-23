@@ -4,8 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.collection.errors import TemporaryFetchError
-from app.collection.extraction.candidate import DiscoveredNotFound
+from app.collection.errors import DiscoveredArticleMissing, TemporaryFetchError
 from app.collection.extraction.service import ArticleReady, ExtractionFailed
 
 
@@ -69,8 +68,8 @@ class TestFetchContent:
         mock_analyze.kiq.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_discovered_not_found_does_not_chain(self) -> None:
-        """DiscoveredNotFound（DB 不整合）は下流へチェーンしない。"""
+    async def test_discovered_missing_does_not_chain(self) -> None:
+        """DiscoveredArticleMissing（DB 不整合）は捕捉して下流へチェーンしない。"""
         from app.collection.tasks import fetch_content
 
         mock_ctx = _make_ctx()
@@ -80,9 +79,10 @@ class TestFetchContent:
             patch("app.analysis.tasks.extract_content") as mock_analyze,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
-                return_value=DiscoveredNotFound()
+                side_effect=DiscoveredArticleMissing(1)
             )
             mock_analyze.kiq = AsyncMock()
+            # 例外は task 内で握り潰され、呼び出し側には伝播しない
             await fetch_content(discovered_article_id=1, ctx=mock_ctx)
 
         mock_analyze.kiq.assert_not_called()
