@@ -12,8 +12,8 @@ from pydantic import field_validator
 if TYPE_CHECKING:
     from app.schemas.base import PaginationParams
 
+from app.analysis.domain.value_objects.impact_level import ImpactLevel
 from app.domain.category import CategorySlug
-from app.models.article_analysis import ImpactLevel
 from app.schemas.base import PaginationParams, _CamelBase
 from app.schemas.embeds import NewsSourceEmbed, OriginalArticleEmbed, TopicEmbed
 
