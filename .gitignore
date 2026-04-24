@@ -6,6 +6,14 @@
 .env.*.local
 
 # ===========================
+# Database backups / dumps
+# ===========================
+backups/
+*.sql
+*.dump
+*.dump.gz
+
+# ===========================
 # Python / Backend
 # ===========================
 __pycache__/
