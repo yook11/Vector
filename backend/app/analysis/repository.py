@@ -1,4 +1,12 @@
-"""Analysis リポジトリ — Stage 2 以降（分類・埋め込み）の DB 操作を担う。"""
+"""Analysis リポジトリ — Stage 3 (embedding) のみが利用するレガシー Repository。
+
+Stage 2 (分類) は ``app/analysis/classification/repository.py`` のドメイン版に
+移行済み。本ファイルは ``app/analysis/embedding_service.py`` が依存している
+``find_by_extraction_id`` / ``save_embedding`` のためにのみ残置されている。
+
+Stage 3 のドメイン化と同時に削除予定。HTTP handler / router 層からの直接 import
+は禁止 (Stage 2 の旧 import は PR-D で全て除去済み)。
+"""
 
 from __future__ import annotations
 
