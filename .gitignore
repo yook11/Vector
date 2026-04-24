@@ -62,7 +62,8 @@ Thumbs.db
 # ===========================
 # Claude Code
 # ===========================
-.claude/
+.claude/*
+!.claude/commands/
 skills-lock.json
 
 # ===========================
