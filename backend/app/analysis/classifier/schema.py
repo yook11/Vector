@@ -12,8 +12,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.analysis.domain.value_objects.impact_level import ImpactLevel
 from app.analysis.domain.value_objects.topic import TopicName
-from app.models.article_analysis import ImpactLevel
 
 
 class ValidCategory(StrEnum):

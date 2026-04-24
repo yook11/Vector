@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from pgvector.sqlalchemy import HALFVEC
@@ -17,6 +16,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.analysis.domain.value_objects.impact_level import ImpactLevel
 from app.models.base import Base
 
 if TYPE_CHECKING:
@@ -25,11 +25,7 @@ if TYPE_CHECKING:
     from app.models.watchlist_entry import WatchlistEntry
 
 
-class ImpactLevel(StrEnum):
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
-    CRITICAL = "critical"
+__all__ = ["ArticleAnalysis", "ImpactLevel"]
 
 
 class ArticleAnalysis(Base):

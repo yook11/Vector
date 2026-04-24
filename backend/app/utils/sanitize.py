@@ -2,6 +2,7 @@
 
 import html
 import re
+import unicodedata
 from urllib.parse import urlparse
 
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -51,3 +52,22 @@ def strip_html_tags(text: str | None) -> str | None:
         return None
     cleaned = _TAG_RE.sub("", text)
     return html.unescape(cleaned).strip()
+
+
+def normalize_text(text: str) -> str:
+    """ドメイン境界で AI 出力テキストを正規化する。
+
+    HTML タグ除去 + HTML エンティティデコード + Unicode NFKC 正規化 +
+    C0/C1 制御文字除去 (タブ・改行は保持) + 前後空白除去。
+
+    用途: Stage 2 分類ドメインの Draft 境界で Classified.reasoning などを
+    sanitize する。strip_html_tags と異なり Unicode 正規化と制御文字除去を
+    含むため、AI 応答経由の混入を防ぐ。
+    """
+    cleaned = _TAG_RE.sub("", text)
+    cleaned = html.unescape(cleaned)
+    cleaned = unicodedata.normalize("NFKC", cleaned)
+    cleaned = "".join(
+        ch for ch in cleaned if unicodedata.category(ch) != "Cc" or ch in "\t\n"
+    )
+    return cleaned.strip()
