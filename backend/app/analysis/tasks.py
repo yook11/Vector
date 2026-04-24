@@ -11,7 +11,11 @@ from typing import TYPE_CHECKING
 import structlog
 from taskiq import Context, TaskiqDepends
 
-from app.analysis.classification_service import ClassificationService
+from app.analysis.classification.service import (
+    AlreadyClassifiedOutcome,
+    ClassificationService,
+    ClassifiedOutcome,
+)
 from app.analysis.classifier.factory import get_classifier
 from app.analysis.embedder.factory import get_embedder
 from app.analysis.embedding_service import EmbeddingService
@@ -200,8 +204,8 @@ async def classify_content(
             return
         raise
 
-    # 次ステップへチェーン
-    if result.status in ("classified", "already_classified"):
+    # 次ステップへチェーン (Classified / AlreadyClassified のみ embedding に進む)
+    if isinstance(result, (ClassifiedOutcome, AlreadyClassifiedOutcome)):
         await generate_embedding.kiq(article_id)
 
 
