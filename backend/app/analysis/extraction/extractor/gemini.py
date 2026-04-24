@@ -17,8 +17,8 @@ from app.analysis.errors import (
     RateLimitError,
     UnclassifiedError,
 )
+from app.analysis.extraction.domain import ExtractionResult
 from app.analysis.extraction.extractor.base import BaseExtractor
-from app.analysis.extraction.schema import ExtractionResponse
 from app.config import settings
 
 logger = structlog.get_logger(__name__)
@@ -80,7 +80,7 @@ class GeminiExtractor(BaseExtractor):
         self,
         title: str,
         content: str,
-    ) -> ExtractionResponse:
+    ) -> ExtractionResult:
         """プロンプトを構築し API を呼び出して構造化レスポンスを返す。"""
         truncated = content[: self.CONTENT_MAX_LENGTH]
 
@@ -91,7 +91,7 @@ class GeminiExtractor(BaseExtractor):
 
         return await self._call_once(prompt)
 
-    async def _call_api(self, prompt: str) -> ExtractionResponse:
+    async def _call_api(self, prompt: str) -> ExtractionResult:
         """Gemini の generate_content API を呼び出し構造化出力を受け取る。"""
         response = await self._client.aio.models.generate_content(
             model=self.MODEL,
@@ -100,21 +100,20 @@ class GeminiExtractor(BaseExtractor):
                 temperature=0.2,
                 max_output_tokens=2048,
                 response_mime_type="application/json",
-                response_schema=ExtractionResponse,
+                response_schema=ExtractionResult,
             ),
         )
         parsed = response.parsed
-        if not isinstance(parsed, ExtractionResponse):
+        if not isinstance(parsed, ExtractionResult):
             raise ProviderError(
-                "Gemini did not return ExtractionResponse "
-                f"(got {type(parsed).__name__})"
+                f"Gemini did not return ExtractionResult (got {type(parsed).__name__})"
             )
         return parsed
 
     def _translate_error(self, exc: Exception) -> AnalysisDomainError:
         """Gemini SDK の例外を原因の所在で分類する。"""
         if isinstance(exc, ValidationError):
-            return ProviderError(f"Invalid extraction response schema: {exc}")
+            return ProviderError(f"Invalid extraction result schema: {exc}")
 
         if isinstance(exc, APIError):
             status = exc.status or ""

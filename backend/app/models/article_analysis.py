@@ -95,7 +95,9 @@ class ArticleAnalysis(Base):
     def from_classification(
         cls,
         *,
-        extraction: ArticleExtraction,
+        extraction_id: int,
+        translated_title: str,
+        summary: str,
         topic_id: int,
         impact_level: ImpactLevel,
         reasoning: str,
@@ -104,11 +106,12 @@ class ArticleAnalysis(Base):
         """Stage 2 の分類結果から分析オブジェクトを構築する。
 
         translated_title / summary は extraction から複製する（自己完結の保証）。
+        呼び出し側 (Service) が Extraction ドメイン Entity からこれらを渡す。
         """
         return cls(
-            extraction_id=extraction.id,
-            translated_title=extraction.translated_title,
-            summary=extraction.summary,
+            extraction_id=extraction_id,
+            translated_title=translated_title,
+            summary=summary,
             topic_id=topic_id,
             impact_level=impact_level,
             reasoning=reasoning,

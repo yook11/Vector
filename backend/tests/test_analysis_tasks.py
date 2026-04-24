@@ -37,11 +37,12 @@ def _patch_provider() -> MagicMock:
 
 class TestExtractContent:
     @pytest.mark.asyncio
-    async def test_already_exists_chains_classify(self) -> None:
+    async def test_extraction_returned_chains_classify(self) -> None:
+        """Extraction が返れば (新規 or 冪等ヒット) 後続 classify に chain する。"""
         from app.analysis.tasks import extract_content
 
         mock_ctx = _make_ctx()
-        mock_result = MagicMock(status="already_exists")
+        mock_extraction = MagicMock()  # Extraction entity のスタンド
 
         with (
             patch(
@@ -60,7 +61,7 @@ class TestExtractContent:
             ) as mock_classify,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
-                return_value=mock_result,
+                return_value=mock_extraction,
             )
             mock_classify.kiq = AsyncMock()
             await extract_content(article_id=1, ctx=mock_ctx)
@@ -68,11 +69,11 @@ class TestExtractContent:
         mock_classify.kiq.assert_called_once_with(1)
 
     @pytest.mark.asyncio
-    async def test_created_chains_classify(self) -> None:
+    async def test_none_does_not_chain(self) -> None:
+        """None が返れば (記事不在 / InvalidInput) chain しない。"""
         from app.analysis.tasks import extract_content
 
         mock_ctx = _make_ctx()
-        mock_result = MagicMock(status="created")
 
         with (
             patch(
@@ -91,38 +92,7 @@ class TestExtractContent:
             ) as mock_classify,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
-                return_value=mock_result,
-            )
-            mock_classify.kiq = AsyncMock()
-            await extract_content(article_id=1, ctx=mock_ctx)
-
-        mock_classify.kiq.assert_called_once_with(1)
-
-    @pytest.mark.asyncio
-    async def test_skipped_does_not_chain(self) -> None:
-        from app.analysis.tasks import extract_content
-
-        mock_ctx = _make_ctx()
-        mock_result = MagicMock(status="skipped")
-
-        with (
-            patch(
-                "app.analysis.tasks.get_extractor",
-                return_value=_patch_provider(),
-            ),
-            patch(
-                "app.analysis.tasks._build_limiters",
-                return_value=(None, None),
-            ),
-            patch(
-                "app.analysis.tasks.ExtractionService",
-            ) as mock_svc_cls,
-            patch(
-                "app.analysis.tasks.classify_content",
-            ) as mock_classify,
-        ):
-            mock_svc_cls.return_value.execute = AsyncMock(
-                return_value=mock_result,
+                return_value=None,
             )
             mock_classify.kiq = AsyncMock()
             await extract_content(article_id=1, ctx=mock_ctx)

@@ -23,10 +23,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.article_entity import ArticleEntity
 from app.models.base import Base
-from app.utils.sanitize import strip_html_tags
 
 if TYPE_CHECKING:
-    from app.analysis.extraction.schema import ExtractionResponse
     from app.models.article import Article
     from app.models.article_analysis import ArticleAnalysis
     from app.models.article_rejection import ArticleRejection
@@ -72,26 +70,3 @@ class ArticleExtraction(Base):
     rejection: Mapped[ArticleRejection | None] = relationship(
         back_populates="extraction", uselist=False
     )
-
-    @classmethod
-    def from_extraction_response(
-        cls,
-        *,
-        article_id: int,
-        response: ExtractionResponse,
-        model_name: str,
-    ) -> ArticleExtraction:
-        """Stage 1 の AI レスポンスから抽出オブジェクトを構築する。
-
-        サニタイズと Entity の組み立てはモデルの不変条件として内部で処理する。
-        """
-        return cls(
-            article_id=article_id,
-            translated_title=strip_html_tags(response.title_ja) or "",
-            summary=strip_html_tags(response.summary_ja) or "",
-            ai_model=model_name,
-            entities=[
-                ArticleEntity(name=e.name.root, type=e.type.root)
-                for e in response.entities
-            ],
-        )

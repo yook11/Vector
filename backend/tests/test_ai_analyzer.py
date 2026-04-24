@@ -21,10 +21,10 @@ from app.analysis.classifier.schema import (
 from app.analysis.domain.value_objects.entity import EntityName, EntityType
 from app.analysis.domain.value_objects.topic import TopicName
 from app.analysis.errors import InvalidInputError, NetworkError, ProviderError
+from app.analysis.extraction.domain import Entity, ExtractionResult
 from app.analysis.extraction.extractor.base import BaseExtractor
 from app.analysis.extraction.extractor.factory import get_extractor
 from app.analysis.extraction.extractor.gemini import GeminiExtractor
-from app.analysis.extraction.schema import EntityResponse, ExtractionResponse
 from app.analysis.extraction.service import ExtractionService
 from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis, ImpactLevel
@@ -39,23 +39,21 @@ from app.models.topic import Topic
 # --- Helpers ---
 
 
-def _make_extraction_response(
+def _make_extraction_result(
     title_ja: str = "量子コンピューティングの新たなブレイクスルー",
     summary_ja: str = "MITが新手法を発表。量子エラー訂正の分野で大きな進展。",
     entities: list[tuple[str, str]] | None = None,
-) -> ExtractionResponse:
-    """ExtractionResponse を生成するヘルパー。"""
+) -> ExtractionResult:
+    """ExtractionResult を生成するヘルパー。"""
     if entities is None:
         entities = [
             ("MIT", "company"),
             ("Quantum LDPC", "technology"),
         ]
-    return ExtractionResponse(
+    return ExtractionResult(
         title_ja=title_ja,
         summary_ja=summary_ja,
-        entities=[
-            EntityResponse(name=EntityName(n), type=EntityType(t)) for n, t in entities
-        ],
+        entities=[Entity(name=EntityName(n), type=EntityType(t)) for n, t in entities],
     )
 
 
@@ -191,51 +189,70 @@ def test_base_classifier_rejects_subclass_without_classvar() -> None:
             def _translate_error(self, exc): ...
 
 
-# --- B. ExtractionResponse schema tests ---
+# --- B. ExtractionResult domain tests ---
 
 
-def test_extraction_response_preserves_entity_name_case() -> None:
-    resp = ExtractionResponse(
+def test_extraction_result_preserves_entity_name_case() -> None:
+    resp = ExtractionResult(
         title_ja="t",
         summary_ja="s",
         entities=[
-            EntityResponse(name=EntityName("NVIDIA"), type=EntityType("Company")),
+            Entity(name=EntityName("NVIDIA"), type=EntityType("Company")),
         ],
     )
     assert resp.entities[0].name.root == "NVIDIA"
     assert resp.entities[0].type.root == "company"
 
 
-def test_extraction_response_deduplicates_entities_case_insensitive() -> None:
-    resp = ExtractionResponse(
+def test_extraction_result_deduplicates_entities_case_insensitive() -> None:
+    resp = ExtractionResult(
         title_ja="t",
         summary_ja="s",
         entities=[
-            EntityResponse(name=EntityName("TSMC"), type=EntityType("company")),
-            EntityResponse(name=EntityName("tsmc"), type=EntityType("COMPANY")),
+            Entity(name=EntityName("TSMC"), type=EntityType("company")),
+            Entity(name=EntityName("tsmc"), type=EntityType("COMPANY")),
         ],
     )
     assert len(resp.entities) == 1
     assert resp.entities[0].name.root == "TSMC"
 
 
-def test_extraction_response_accepts_any_entity_type() -> None:
-    resp = ExtractionResponse(
+def test_extraction_result_accepts_any_entity_type() -> None:
+    resp = ExtractionResult(
         title_ja="t",
         summary_ja="s",
         entities=[
-            EntityResponse(name=EntityName("MIT"), type=EntityType("company")),
-            EntityResponse(name=EntityName("Biden"), type=EntityType("person")),
+            Entity(name=EntityName("MIT"), type=EntityType("company")),
+            Entity(name=EntityName("Biden"), type=EntityType("person")),
         ],
     )
     assert len(resp.entities) == 2
     assert resp.entities[1].type.root == "person"
 
 
-def test_extraction_response_rejects_empty_title() -> None:
+def test_extraction_result_sanitizes_html_in_title_and_summary() -> None:
+    resp = ExtractionResult(
+        title_ja="<b>タイトル</b>",
+        summary_ja="<p>要約</p>",
+        entities=[],
+    )
+    assert resp.title_ja == "タイトル"
+    assert resp.summary_ja == "要約"
+
+
+def test_extraction_result_rejects_empty_title() -> None:
     with pytest.raises(ValidationError):
-        ExtractionResponse(
+        ExtractionResult(
             title_ja="",
+            summary_ja="s",
+            entities=[],
+        )
+
+
+def test_extraction_result_rejects_title_that_becomes_empty_after_sanitize() -> None:
+    with pytest.raises(ValidationError):
+        ExtractionResult(
+            title_ja="<br/>",
             summary_ja="s",
             entities=[],
         )
@@ -367,7 +384,7 @@ def test_out_of_scope_rejects_empty_reasoning() -> None:
 
 async def test_extractor_call_once_succeeds() -> None:
     extractor = _create_extractor()
-    expected = _make_extraction_response()
+    expected = _make_extraction_result()
     extractor._call_api = AsyncMock(return_value=expected)
 
     result = await extractor._call_once("test prompt")
@@ -410,62 +427,73 @@ async def test_classifier_call_once_translates_sdk_error() -> None:
         await classifier._call_once("test prompt")
 
 
-# --- E2. Domain model unit tests (DB 不要) ---
+# --- E2. Extraction domain factory tests (DB 不要) ---
 
 
-def test_article_extraction_from_response_sanitizes_html() -> None:
-    extraction = ArticleExtraction.from_extraction_response(
-        article_id=1,
-        response=ExtractionResponse(
-            title_ja="<b>タイトル</b>",
-            summary_ja="<p>要約</p>",
-            entities=[
-                EntityResponse(name=EntityName("MIT"), type=EntityType("company"))
-            ],
-        ),
-        model_name="test-model",
+def test_extraction_from_result_copies_fields() -> None:
+    from app.analysis.extraction.domain import Extraction
+
+    result = ExtractionResult(
+        title_ja="タイトル",
+        summary_ja="要約",
+        entities=[
+            Entity(name=EntityName("MIT"), type=EntityType("company")),
+            Entity(name=EntityName("CRISPR"), type=EntityType("technology")),
+        ],
     )
+    extracted_at = datetime.now(UTC)
+    extraction = Extraction.from_result(
+        result,
+        id=42,
+        ai_model="test-model",
+        extracted_at=extracted_at,
+    )
+
+    assert extraction.id == 42
     assert extraction.translated_title == "タイトル"
     assert extraction.summary == "要約"
     assert extraction.ai_model == "test-model"
-    assert extraction.article_id == 1
-
-
-def test_article_extraction_from_response_builds_entities() -> None:
-    extraction = ArticleExtraction.from_extraction_response(
-        article_id=1,
-        response=ExtractionResponse(
-            title_ja="タイトル",
-            summary_ja="要約",
-            entities=[
-                EntityResponse(name=EntityName("MIT"), type=EntityType("company")),
-                EntityResponse(
-                    name=EntityName("CRISPR"), type=EntityType("technology")
-                ),
-            ],
-        ),
-        model_name="test-model",
-    )
+    assert extraction.extracted_at == extracted_at
     assert len(extraction.entities) == 2
-    assert extraction.entities[0].name == "MIT"
-    assert extraction.entities[0].type == "company"
-    assert extraction.entities[1].name == "CRISPR"
-    assert extraction.entities[1].type == "technology"
+    assert extraction.entities[0].name.root == "MIT"
+    assert extraction.entities[1].type.root == "technology"
 
 
-def test_article_extraction_from_response_empty_string_guard() -> None:
-    extraction = ArticleExtraction.from_extraction_response(
-        article_id=1,
-        response=ExtractionResponse(
-            title_ja="<br/>",
-            summary_ja="<br/>",
-            entities=[],
-        ),
-        model_name="test-model",
-    )
-    assert extraction.translated_title == ""
-    assert extraction.summary == ""
-    assert extraction.entities == []
+def test_extraction_rejects_empty_translated_title() -> None:
+    from app.analysis.extraction.domain import Extraction
+
+    with pytest.raises(ValueError, match="translated_title"):
+        Extraction(
+            id=1,
+            translated_title="",
+            summary="s",
+            entities=(),
+            ai_model="m",
+            extracted_at=datetime.now(UTC),
+        )
+
+
+def test_extraction_rejects_duplicated_entities() -> None:
+    from app.analysis.extraction.domain import Extraction
+
+    with pytest.raises(ValueError, match="deduplicated"):
+        Extraction(
+            id=1,
+            translated_title="t",
+            summary="s",
+            entities=(
+                Entity(name=EntityName("MIT"), type=EntityType("company")),
+                Entity(name=EntityName("mit"), type=EntityType("company")),
+            ),
+            ai_model="m",
+            extracted_at=datetime.now(UTC),
+        )
+
+
+def test_entity_dedup_key_is_case_insensitive_on_name() -> None:
+    a = Entity(name=EntityName("NVIDIA"), type=EntityType("company"))
+    b = Entity(name=EntityName("nvidia"), type=EntityType("company"))
+    assert a.dedup_key() == b.dedup_key()
 
 
 # --- F. ExtractionService orchestration tests ---
@@ -497,7 +525,7 @@ async def test_extraction_creates_extraction_and_entities(
     mock_extractor.MODEL = "gemini-2.5-flash-lite"
     mock_extractor.model_name = "gemini-2.5-flash-lite"
     mock_extractor.extract = AsyncMock(
-        return_value=_make_extraction_response(
+        return_value=_make_extraction_result(
             title_ja="量子ブレイクスルー",
             summary_ja="要約テスト",
             entities=[("MIT", "company"), ("CRISPR", "technology")],
@@ -506,10 +534,12 @@ async def test_extraction_creates_extraction_and_entities(
 
     article_id = article.id
     svc = ExtractionService(session_factory)
-    result = await svc.execute(article_id, mock_extractor)
+    extraction = await svc.execute(article_id, mock_extractor)
 
-    assert result.status == "created"
-    assert result.extraction_id is not None
+    assert extraction is not None
+    assert extraction.id > 0
+    assert extraction.translated_title == "量子ブレイクスルー"
+    assert len(extraction.entities) == 2
 
     db_session.expire_all()
     extraction = (
@@ -548,9 +578,9 @@ async def test_extraction_skips_already_extracted(
 
     mock_extractor = MagicMock(spec=BaseExtractor)
     svc = ExtractionService(session_factory)
-    result = await svc.execute(article.id, mock_extractor)
+    extraction = await svc.execute(article.id, mock_extractor)
 
-    assert result.status == "already_exists"
+    assert extraction is not None  # 冪等ヒットでも chain 継続
     mock_extractor.extract.assert_not_called()
 
 
@@ -583,9 +613,9 @@ async def test_extraction_returns_skipped_on_invalid_input(
 
     article_id = article.id
     svc = ExtractionService(session_factory)
-    result = await svc.execute(article_id, mock_extractor)
+    extraction = await svc.execute(article_id, mock_extractor)
 
-    assert result.status == "skipped"
+    assert extraction is None
 
 
 # --- G. ClassificationService orchestration tests ---

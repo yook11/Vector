@@ -25,7 +25,7 @@ from app.analysis.errors import (
     RateLimitError,
     UnclassifiedError,
 )
-from app.analysis.extraction.schema import EntityResponse
+from app.analysis.extraction.domain import Entity
 from app.config import settings
 
 logger = structlog.get_logger(__name__)
@@ -172,7 +172,7 @@ def _build_existing_topics_section(
     return "\n".join(lines) + "\n"
 
 
-def _build_entities_section(entities: list[EntityResponse]) -> str:
+def _build_entities_section(entities: list[Entity]) -> str:
     """エンティティリストをプロンプト挿入用テキストに整形する。"""
     if not entities:
         return "(none)"
@@ -214,7 +214,7 @@ class GeminiClassifier(BaseClassifier):
         self,
         title_ja: str,
         summary_ja: str,
-        entities: list[EntityResponse],
+        entities: list[Entity],
         existing_topics_by_category: dict[str, list[tuple[str, str]]] | None = None,
     ) -> ClassificationResponse:
         """Stage 1 の出力を分類する。原文は読まない。"""

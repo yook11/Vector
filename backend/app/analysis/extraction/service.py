@@ -2,26 +2,15 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Literal
-
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.errors import InvalidInputError
+from app.analysis.extraction.domain import Extraction
 from app.analysis.extraction.extractor.base import BaseExtractor
 from app.analysis.extraction.repository import ExtractionRepository
-from app.models.article_extraction import ArticleExtraction
 
 logger = structlog.get_logger(__name__)
-
-
-@dataclass(frozen=True)
-class ExtractionResult:
-    """Stage 1 抽出ユースケースの結果。"""
-
-    status: Literal["created", "already_exists", "skipped"]
-    extraction_id: int | None = None
 
 
 class ExtractionService:
@@ -29,6 +18,10 @@ class ExtractionService:
 
     Stage 1: 原文を読み、翻訳タイトル・事実ベース要約・エンティティを抽出する。
     分類（カテゴリ・トピック・インパクト）は Stage 2 の責務。
+
+    戻り値は ``Extraction | None``:
+    - ``Extraction``: 新規抽出 or 冪等ヒット (どちらも後続 Stage 2 に chain)
+    - ``None``: 記事欠落 or 入力不正 (chain しない)
     """
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
@@ -36,11 +29,8 @@ class ExtractionService:
 
     async def execute(
         self, article_id: int, extractor: BaseExtractor
-    ) -> ExtractionResult:
+    ) -> Extraction | None:
         """1 記事に対して事実抽出を実行する。
-
-        Returns:
-            status と必要に応じた extraction_id を含む ExtractionResult。
 
         Raises:
             AnalysisDomainError のサブクラス（InvalidInputError を除く）。
@@ -49,18 +39,19 @@ class ExtractionService:
             repo = ExtractionRepository(session)
 
             # 冪等性チェック
-            if await repo.find_by_article_id(article_id) is not None:
-                return ExtractionResult("already_exists")
+            existing = await repo.find_by_article_id(article_id)
+            if existing is not None:
+                return existing
 
             # 記事を取得
             article = await repo.get_article(article_id)
             if article is None:
                 logger.warning("extraction_article_not_found", article_id=article_id)
-                return ExtractionResult("skipped")
+                return None
 
             # AI による抽出
             try:
-                data = await extractor.extract(
+                result = await extractor.extract(
                     title=article.original_title,
                     content=article.original_content,
                 )
@@ -69,21 +60,28 @@ class ExtractionService:
                     "extraction_invalid_input",
                     article_id=article_id,
                 )
-                return ExtractionResult("skipped")
+                return None
 
-            # ArticleExtraction 作成（cascade で entities も永続化）
-            extraction = ArticleExtraction.from_extraction_response(
+            # 永続化 (Repository は identity のみ返す)
+            persisted = await repo.save(
+                result,
                 article_id=article.id,
-                response=data,
-                model_name=extractor.model_name,
+                ai_model=extractor.model_name,
             )
-            await repo.save_extraction(extraction)
             await session.commit()
+
+            # 永続化結果と分析結果を組み合わせて Entity を組み立てる
+            extraction = Extraction.from_result(
+                result,
+                id=persisted.id,
+                ai_model=extractor.model_name,
+                extracted_at=persisted.extracted_at,
+            )
 
             logger.info(
                 "extraction_completed",
                 article_id=article_id,
                 extraction_id=extraction.id,
-                entity_count=len(data.entities),
+                entity_count=len(result.entities),
             )
-            return ExtractionResult("created", extraction_id=extraction.id)
+            return extraction
