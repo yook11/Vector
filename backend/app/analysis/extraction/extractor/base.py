@@ -8,7 +8,7 @@ from typing import ClassVar
 import structlog
 
 from app.analysis.errors import AnalysisDomainError
-from app.analysis.extraction.schema import ExtractionResponse
+from app.analysis.extraction.domain import ExtractionResult
 
 logger = structlog.get_logger(__name__)
 
@@ -53,7 +53,7 @@ class BaseExtractor(abc.ABC):
         self,
         title: str,
         content: str,
-    ) -> ExtractionResponse:
+    ) -> ExtractionResult:
         """記事から事実を抽出し、構造化データを返す。
 
         Article の存在が content の品質を保証する（50 文字以上）。
@@ -63,7 +63,7 @@ class BaseExtractor(abc.ABC):
             content: 記事本文全文（Article.original_content）。
 
         Returns:
-            翻訳タイトル・事実ベース要約・エンティティリストを含む ExtractionResponse。
+            翻訳タイトル・事実ベース要約・エンティティリストを含む ExtractionResult。
 
         Raises:
             AnalysisDomainError: 抽出に失敗した場合。
@@ -71,7 +71,7 @@ class BaseExtractor(abc.ABC):
         ...
 
     @abc.abstractmethod
-    async def _call_api(self, prompt: str) -> ExtractionResponse:
+    async def _call_api(self, prompt: str) -> ExtractionResult:
         """プロバイダー SDK を呼び出し、構造化レスポンスを返す。"""
         ...
 
@@ -82,7 +82,7 @@ class BaseExtractor(abc.ABC):
 
     # -- 単発呼び出し --
 
-    async def _call_once(self, prompt: str) -> ExtractionResponse:
+    async def _call_once(self, prompt: str) -> ExtractionResult:
         """プロバイダー API を 1 回呼び出し、例外をエラー階層に変換する。"""
         try:
             logger.info("extractor_api_call", model=self.model_name)

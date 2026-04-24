@@ -11,7 +11,6 @@ from sqlmodel import select
 
 from app.analysis.domain.value_objects.topic import TopicName
 from app.models.article_analysis import ArticleAnalysis
-from app.models.article_entity import ArticleEntity
 from app.models.category import Category
 from app.models.topic import Topic
 
@@ -107,12 +106,3 @@ class AnalysisRepository:
         analysis.embedding = vector
         analysis.embedding_model = model
         self._session.add(analysis)
-
-    async def get_entities_by_extraction_id(
-        self, extraction_id: int
-    ) -> list[ArticleEntity]:
-        """Stage 2 の入力用に extraction 配下のエンティティを取得する。"""
-        stmt = select(ArticleEntity).where(
-            ArticleEntity.article_extraction_id == extraction_id
-        )
-        return list((await self._session.execute(stmt)).scalars().all())

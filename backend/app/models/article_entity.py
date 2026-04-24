@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import ForeignKey, Index, String
+from sqlalchemy import ForeignKey, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.analysis.domain.value_objects.entity import EntityName, EntityType
 from app.models.base import Base
 
 if TYPE_CHECKING:
@@ -21,8 +22,8 @@ class ArticleEntity(Base):
     article_extraction_id: Mapped[int] = mapped_column(
         ForeignKey("article_extractions.id", ondelete="CASCADE"), index=True
     )
-    name: Mapped[str] = mapped_column(String(200))
-    type: Mapped[str] = mapped_column(String(50))
+    name: Mapped[EntityName] = mapped_column()
+    type: Mapped[EntityType] = mapped_column()
 
     # リレーション
     extraction: Mapped[ArticleExtraction] = relationship(back_populates="entities")

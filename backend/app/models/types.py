@@ -12,6 +12,7 @@ from sqlalchemy import String
 from sqlalchemy.engine import Dialect
 from sqlalchemy.types import TypeDecorator
 
+from app.analysis.domain.value_objects.entity import EntityName, EntityType
 from app.analysis.domain.value_objects.topic import TopicName
 from app.collection.domain.value_objects.source import SourceName
 from app.domain.category import CategoryName, CategorySlug
@@ -100,6 +101,48 @@ class SourceNameType(TypeDecorator[SourceName]):
         if value is None:
             return None
         return SourceName(value)
+
+
+class EntityNameType(TypeDecorator[EntityName]):
+    """EntityName <-> VARCHAR(200)."""
+
+    impl = String(200)
+    cache_ok = True
+
+    def process_bind_param(self, value: Any, dialect: Dialect) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, EntityName):
+            return value.root
+        if isinstance(value, str):
+            return EntityName(value).root
+        raise TypeError(f"Expected EntityName or str, got {type(value).__name__}")
+
+    def process_result_value(self, value: Any, dialect: Dialect) -> EntityName | None:
+        if value is None:
+            return None
+        return EntityName(value)
+
+
+class EntityTypeType(TypeDecorator[EntityType]):
+    """EntityType <-> VARCHAR(50)."""
+
+    impl = String(50)
+    cache_ok = True
+
+    def process_bind_param(self, value: Any, dialect: Dialect) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, EntityType):
+            return value.root
+        if isinstance(value, str):
+            return EntityType(value).root
+        raise TypeError(f"Expected EntityType or str, got {type(value).__name__}")
+
+    def process_result_value(self, value: Any, dialect: Dialect) -> EntityType | None:
+        if value is None:
+            return None
+        return EntityType(value)
 
 
 class SafeUrlType(TypeDecorator[SafeUrl]):

@@ -9,7 +9,7 @@ import structlog
 
 from app.analysis.classifier.schema import ClassificationResponse
 from app.analysis.errors import AnalysisDomainError
-from app.analysis.extraction.schema import EntityResponse
+from app.analysis.extraction.domain import Entity
 
 logger = structlog.get_logger(__name__)
 
@@ -55,7 +55,7 @@ class BaseClassifier(abc.ABC):
         self,
         title_ja: str,
         summary_ja: str,
-        entities: list[EntityResponse],
+        entities: list[Entity],
         existing_topics_by_category: dict[str, list[tuple[str, str]]] | None = None,
     ) -> ClassificationResponse:
         """Stage 1 の出力を分類し、Classified か OutOfScope のいずれかを返す。

@@ -114,7 +114,7 @@ async def extract_content(
     # Service 呼び出し（session は内部で管理）
     svc = ExtractionService(session_factory)
     try:
-        result = await svc.execute(article_id, extractor)
+        extraction = await svc.execute(article_id, extractor)
     except (ConfigurationError, DailyQuotaExhaustedError) as e:
         logger.warning(
             "extract_content_no_retry",
@@ -137,8 +137,8 @@ async def extract_content(
             return
         raise
 
-    # 次ステップへチェーン
-    if result.status in ("created", "already_exists"):
+    # 次ステップへチェーン（extraction が Extraction Entity として返るとき）
+    if extraction is not None:
         await classify_content.kiq(article_id)
 
 
