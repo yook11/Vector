@@ -159,10 +159,11 @@ class TestExtractContent:
 class TestClassifyContent:
     @pytest.mark.asyncio
     async def test_classified_chains_embedding(self) -> None:
+        from app.analysis.classification.service import ClassifiedOutcome
         from app.analysis.tasks import classify_content
 
         mock_ctx = _make_ctx()
-        mock_result = MagicMock(status="classified")
+        mock_result = ClassifiedOutcome(analysis=MagicMock())
 
         with (
             patch(
@@ -190,10 +191,11 @@ class TestClassifyContent:
 
     @pytest.mark.asyncio
     async def test_already_classified_chains_embedding(self) -> None:
+        from app.analysis.classification.service import AlreadyClassifiedOutcome
         from app.analysis.tasks import classify_content
 
         mock_ctx = _make_ctx()
-        mock_result = MagicMock(status="already_classified")
+        mock_result = AlreadyClassifiedOutcome(analysis=MagicMock())
 
         with (
             patch(
@@ -221,10 +223,11 @@ class TestClassifyContent:
 
     @pytest.mark.asyncio
     async def test_skipped_does_not_chain(self) -> None:
+        from app.analysis.classification.service import SkippedOutcome
         from app.analysis.tasks import classify_content
 
         mock_ctx = _make_ctx()
-        mock_result = MagicMock(status="skipped")
+        mock_result = SkippedOutcome(reason="extraction_not_found")
 
         with (
             patch(

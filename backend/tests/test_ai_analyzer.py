@@ -8,7 +8,13 @@ from pydantic import SecretStr, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from app.analysis.classification_service import ClassificationService
+from app.analysis.classification.service import (
+    AlreadyClassifiedOutcome,
+    AlreadyRejectedOutcome,
+    ClassificationService,
+    ClassifiedOutcome,
+    RejectedOutcome,
+)
 from app.analysis.classifier.base import BaseClassifier
 from app.analysis.classifier.factory import get_classifier
 from app.analysis.classifier.gemini import GeminiClassifier
@@ -657,7 +663,7 @@ async def test_classification_creates_topic(
     extraction_id = extraction.id
     svc = ClassificationService(session_factory)
     result = await svc.execute(article_id, mock_classifier)
-    assert result.status == "classified"
+    assert isinstance(result, ClassifiedOutcome)
 
     db_session.expire_all()
     analysis = (
@@ -702,7 +708,7 @@ async def test_classification_persists_rejection_when_out_of_scope(
     extraction_id = extraction.id
     svc = ClassificationService(session_factory)
     result = await svc.execute(article.id, mock_classifier)
-    assert result.status == "rejected"
+    assert isinstance(result, RejectedOutcome)
 
     db_session.expire_all()
     rejection = (
@@ -761,7 +767,7 @@ async def test_classification_skips_already_classified(
     svc = ClassificationService(session_factory)
     result = await svc.execute(article.id, mock_classifier)
 
-    assert result.status == "already_classified"
+    assert isinstance(result, AlreadyClassifiedOutcome)
     mock_classifier.classify.assert_not_called()
 
 
@@ -788,7 +794,7 @@ async def test_classification_skips_already_rejected(
     svc = ClassificationService(session_factory)
     result = await svc.execute(article.id, mock_classifier)
 
-    assert result.status == "already_rejected"
+    assert isinstance(result, AlreadyRejectedOutcome)
     mock_classifier.classify.assert_not_called()
 
 
