@@ -378,7 +378,7 @@ async def test_execute_propagates_retryable_errors(
 
 
 def test_build_text_joins_title_and_summary_with_newline() -> None:
-    """旧 ``build_embed_text`` と同一フォーマット契約を維持する。"""
+    """``translated_title`` と ``summary`` を改行で連結する契約を保証する。"""
     from datetime import datetime as _dt
 
     from app.analysis.classification.domain.analysis import Analysis

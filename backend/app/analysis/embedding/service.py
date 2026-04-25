@@ -193,7 +193,6 @@ class EmbeddingService:
     def _build_text(analysis: Analysis) -> str:
         """分析結果から埋め込み対象の正規テキストを組み立てる。
 
-        旧 ``embedding_service.build_embed_text`` と同一ロジック。
         ``translated_title`` と ``summary`` を改行で連結する。
         """
         return f"{analysis.translated_title}\n{analysis.summary}"
