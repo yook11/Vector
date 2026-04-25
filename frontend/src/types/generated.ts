@@ -298,7 +298,6 @@ export interface components {
       translatedTitle: string;
       /** Summary */
       summary: string;
-      impactLevel: components["schemas"]["ImpactLevel"];
       source: components["schemas"]["NewsSourceEmbed"];
       /** Publishedat */
       publishedAt?: string | null;
@@ -320,7 +319,6 @@ export interface components {
       translatedTitle: string;
       /** Summary */
       summary: string;
-      impactLevel: components["schemas"]["ImpactLevel"];
       /** Reasoning */
       reasoning: string;
       /**
@@ -424,11 +422,6 @@ export interface components {
       /** Detail */
       detail?: components["schemas"]["ValidationError"][];
     };
-    /**
-     * ImpactLevel
-     * @enum {string}
-     */
-    ImpactLevel: "low" | "medium" | "high" | "critical";
     /**
      * NewsSourceCreate
      * @description POST /api/v1/admin/sources のリクエストボディ。
@@ -624,7 +617,6 @@ export interface operations {
         sortBy?: components["schemas"]["SortBy"];
         /** @description Outbound primary filter key. Accepts a category slug. */
         category?: components["schemas"]["CategorySlug"] | null;
-        impactLevel?: components["schemas"]["ImpactLevel"] | null;
         sortOrder?: components["schemas"]["SortOrder"];
       };
       header?: {
@@ -664,7 +656,6 @@ export interface operations {
         perPage?: number;
         /** @description Outbound primary filter key. Accepts a category slug. */
         category?: components["schemas"]["CategorySlug"] | null;
-        impactLevel?: components["schemas"]["ImpactLevel"] | null;
         sortOrder?: components["schemas"]["SortOrder"];
       };
       header?: {
