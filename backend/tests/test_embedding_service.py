@@ -9,7 +9,7 @@ from sqlmodel import select
 from app.analysis.embedder.base import BaseEmbedder
 from app.analysis.embedding_service import EmbeddingService
 from app.models.article import Article
-from app.models.article_analysis import ArticleAnalysis, ImpactLevel
+from app.models.article_analysis import ArticleAnalysis
 from app.models.article_extraction import ArticleExtraction
 from app.models.category import Category
 from app.models.discovered_article import DiscoveredArticle
@@ -67,7 +67,6 @@ async def _build_extraction_with_analysis(
         extraction_id=extraction.id,
         translated_title=translated_title,
         summary=summary,
-        impact_level=ImpactLevel.MEDIUM,
         reasoning="テスト理由",
         ai_model="gemini-2.5-flash-lite",
         topic_id=topic.id,

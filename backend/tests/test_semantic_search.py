@@ -8,7 +8,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article
-from app.models.article_analysis import ArticleAnalysis, ImpactLevel
+from app.models.article_analysis import ArticleAnalysis
 from app.models.article_extraction import ArticleExtraction
 from app.models.category import Category
 from app.models.discovered_article import DiscoveredArticle
@@ -86,7 +86,6 @@ async def _create_article(
         extraction_id=extraction.id,
         translated_title=f"Translated: {title}",
         summary="Test summary",
-        impact_level=ImpactLevel.MEDIUM,
         reasoning="Test reasoning",
         ai_model="gemini-2.0-flash",
         embedding=embedding,

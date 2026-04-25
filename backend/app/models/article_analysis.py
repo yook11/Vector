@@ -68,7 +68,7 @@ class ArticleAnalysis(Base):
     )
     translated_title: Mapped[str] = mapped_column(String(500))
     summary: Mapped[str] = mapped_column(Text())
-    impact_level: Mapped[ImpactLevel] = mapped_column(String(20))
+    impact_level: Mapped[ImpactLevel | None] = mapped_column(String(20), nullable=True)
     reasoning: Mapped[str] = mapped_column(Text())
     ai_model: Mapped[str] = mapped_column(String(100))
     analyzed_at: Mapped[datetime] = mapped_column(
@@ -95,7 +95,7 @@ class ArticleAnalysis(Base):
         translated_title: str,
         summary: str,
         topic_id: int,
-        impact_level: ImpactLevel,
+        impact_level: ImpactLevel | None = None,
         reasoning: str,
         model_name: str,
     ) -> ArticleAnalysis:

@@ -216,7 +216,6 @@ class ClassificationService:
             "classification_completed",
             article_id=article_id,
             extraction_id=extraction_id,
-            impact_level=draft.impact_level,
             category=classified.category.value,
             topic=draft.topic_name.root,
         )

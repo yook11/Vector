@@ -23,7 +23,6 @@ from typing import Any, Self
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.analysis.classifier.schema import Classified
-from app.analysis.domain.value_objects.impact_level import ImpactLevel
 from app.analysis.domain.value_objects.topic import TopicName
 from app.utils.sanitize import normalize_text
 
@@ -51,7 +50,6 @@ class AnalysisDraft(BaseModel):
     summary: str = Field(min_length=1, max_length=4000)
     topic_name: TopicName
     topic_label_ja: str
-    impact_level: ImpactLevel
     reasoning: str = Field(min_length=1, max_length=2000)
 
     @field_validator("translated_title", "summary", "reasoning", mode="before")
@@ -99,7 +97,6 @@ class AnalysisDraft(BaseModel):
             summary=summary,
             topic_name=classified.topic,
             topic_label_ja=classified.topic_label_ja,
-            impact_level=classified.impact_level,
             reasoning=classified.reasoning,
         )
 
@@ -134,7 +131,6 @@ class Analysis:
     translated_title: str
     summary: str
     topic_id: int
-    impact_level: ImpactLevel
     reasoning: str
     ai_model: str
     analyzed_at: datetime
@@ -179,7 +175,6 @@ class Analysis:
             translated_title=draft.translated_title,
             summary=draft.summary,
             topic_id=topic_id,
-            impact_level=draft.impact_level,
             reasoning=draft.reasoning,
             ai_model=ai_model,
             analyzed_at=analyzed_at,

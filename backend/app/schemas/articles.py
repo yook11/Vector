@@ -91,7 +91,7 @@ class ArticleBrief(_CamelBase):
     id: int
     translated_title: str
     summary: str
-    impact_level: ImpactLevel
+    impact_level: ImpactLevel | None = None
     source: NewsSourceEmbed
     published_at: datetime | None = None
     topic: TopicEmbed | None = None
@@ -104,7 +104,7 @@ class ArticleDetail(_CamelBase):
     id: int
     translated_title: str
     summary: str
-    impact_level: ImpactLevel
+    impact_level: ImpactLevel | None = None
     reasoning: str
     analyzed_at: datetime
     source: NewsSourceEmbed
