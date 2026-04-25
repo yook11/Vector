@@ -2,7 +2,7 @@
 
 import re
 
-from app.collection.ingestion.candidate import ArticleCandidate
+from app.collection.ingestion.domain import ArticleCandidate
 from app.collection.ingestion.fetchers.rss.base import BaseRssFetcher, extract_guid
 
 # [ITmedia PC USER], [ITmedia エンタープライズ] 等の接頭辞を除去する。

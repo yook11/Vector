@@ -12,7 +12,7 @@ import httpx
 import structlog
 
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
-from app.collection.ingestion.candidate import ArticleCandidate
+from app.collection.ingestion.domain import ArticleCandidate
 from app.collection.ingestion.fetchers.http_cache import get_http_cache, set_http_cache
 from app.models.news_source import NewsSource
 from app.shared.value_objects.safe_url import SafeUrl
