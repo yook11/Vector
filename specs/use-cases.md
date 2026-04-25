@@ -66,4 +66,4 @@
 
 ## 検討事項
 
-- importanceLevel（NewsSource）と impactLevel（ArticleAnalysis）の具体的な値域（3段階 / 5段階等）はAI分析パイプライン設計時に決定する
+- importanceLevel（NewsSource）の具体的な値域（3段階 / 5段階等）はAI分析パイプライン設計時に決定する（旧 `impactLevel`（ArticleAnalysis）は 2026-04 に完全廃止）

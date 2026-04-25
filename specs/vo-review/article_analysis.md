@@ -12,8 +12,7 @@
 | 2 | `news_article_id` | `int` | NOT NULL, FK, UNIQUE | 変更不要 | FK + UniqueConstraint で保護済み |
 | 3 | `translated_title` | `str` (max 500) | NOT NULL | **CHECK 制約追加** | 作成パスが1つ（AI分析パイプライン）。空文字列を防ぐ CHECK のみ |
 | 4 | `summary` | `str` (Text) | NOT NULL | **CHECK 制約追加** | 同上。AI生成テキストだが空を許容すべきでない |
-| 5 | `impact_level` | `ImpactLevel` (StrEnum) | NOT NULL | 変更不要 | Enum + 既存 CHECK 制約で保護済み |
-| 6 | `reasoning` | `str` (Text) | NOT NULL | **CHECK 制約追加** | 同上。影響度判定の根拠が空では意味がない |
+| 5 | `reasoning` | `str` (Text) | NOT NULL | **CHECK 制約追加** | 同上。判定の根拠が空では意味がない |
 | 7 | `ai_model` | `str` (max 100) | NOT NULL | **CHECK 制約追加** | モデル名が空では監査に使えない |
 | 8 | `analyzed_at` | `datetime` (TZ) | NOT NULL | 変更不要 | server_default=func.now() で DB に委譲済み |
 | 9 | `embedding` | `Vector(768) \| None` | NULL | 変更不要 | pgvector 専用型。後から非同期で付与される |
@@ -54,12 +53,6 @@
 - **作成パス**: `ai_analyzer.py:166` — Gemini 応答の `summary_ja` を `strip_html_tags()` 後に格納
 - **読み取りパス**: `routers/news.py:82` → `AnalysisResponse.summary`
 - **対策**: DB CHECK `summary != ''`
-
-### impact_level — 変更不要
-
-- **既存の保護**: `ImpactLevel(StrEnum)` + DB CHECK `impact_level IN ('low','medium','high','critical')`
-- **作成パス**: `gemini_analyzer.py:256` — `ImpactLevel(data["impact_level"])` で Enum バリデーション済み
-- **読み取りパス**: ルーターでフィルタリング・ソート・レスポンスに使用
 
 ### reasoning — CHECK 制約追加
 
@@ -117,4 +110,6 @@ CHECK 制約追加後、`strip_html_tags()` が None/空を返した場合は In
 
 - **VO 対象**: なし（全フィールドが単一パスで作成）
 - **CHECK 制約追加**: `translated_title`, `summary`, `reasoning`, `ai_model` の4フィールド
-- **変更不要**: `id`, `news_article_id`, `impact_level`(既存CHECK), `analyzed_at`, `embedding`, `embedding_model`
+- **変更不要**: `id`, `news_article_id`, `analyzed_at`, `embedding`, `embedding_model`
+
+> **記録**: 旧 `impact_level`（StrEnum + CHECK 制約）は 2026-04 に完全廃止した。本ドキュメントの行 5 と「impact_level — 変更不要」節は削除済み。

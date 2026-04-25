@@ -45,7 +45,7 @@
 ### 各レイヤーの役割分担
 
 - **文字種制御はアプリ層（値オブジェクト）**: `\w` の挙動が PostgreSQL のロケール設定に依存するため、DB CHECK に正規表現を入れない
-- **DB 層は長さ・非空・UNIQUE・enum のみ**: 最終防衛線として機能。プロンプトインジェクションで LLM が不正な impact_level を返しても CHECK 制約が拒否する
+- **DB 層は長さ・非空・UNIQUE・enum のみ**: 最終防衛線として機能。プロンプトインジェクションで LLM が不正な値を返しても CHECK 制約が拒否する
 - **FK は整合性の保証**: RESTRICT で親レコードの不正削除を防止、CASCADE で依存レコードの自動クリーンアップ
 
 ## 4. 内部データと外部データの区別
@@ -54,7 +54,7 @@
 |------|--------|---------|-----|
 | 内部データ | 管理者・システム | 値オブジェクトで文字種制限 | CategoryName, KeywordName, NewsSourceName |
 | 外部データ | 外部ソース（RSS等） | サニタイズ・バリデーション | original_title, description_original, original_content |
-| AI 出力 | LLM | 出力バリデーション + DB CHECK | impact_level, summary, reasoning |
+| AI 出力 | LLM | 出力バリデーション + DB CHECK | category, topic, summary, reasoning |
 
 内部データは「不正な値が存在できない」設計が可能。外部データはこちらが制御できないため、保存時の防御で対応する。
 
@@ -102,12 +102,14 @@ Redis 再起動でキューが消えても、`description_original` がフォー
 | embedding | ArticleAnalysis | AI が記事内容から生成したベクトル表現 |
 | news_event_id | ArticleAnalysis（将来） | embedding 分析によるクラスタリング結果 |
 | translated_title | ArticleAnalysis | LLM が生成した翻訳 |
-| summary, impact_level, reasoning | ArticleAnalysis | LLM が生成した分析結果 |
+| summary, reasoning | ArticleAnalysis | LLM が生成した分析結果 |
 
 判断基準: **その属性は記事が最初から持っているか、それとも分析して初めてわかることか？**
 
 - 記事が持っている → NewsArticle（original_title, original_url, description_original, original_content, published_at）
-- 分析の結果 → ArticleAnalysis（embedding, translated_title, summary, impact_level, reasoning）
+- 分析の結果 → ArticleAnalysis（embedding, translated_title, summary, reasoning）
+
+> **記録**: 旧 `impact_level`（業界インパクト度 4 段階 enum）は 2026-04 に完全廃止した。LLM の判定が実用上有効でなかったため、代替指標を立てずに撤去している。これにより Analysis アグリゲートには現在「優先度」概念が存在しない。
 
 ## 8. 不変エンティティは updated_at を持たない
 
