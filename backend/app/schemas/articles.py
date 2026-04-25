@@ -37,6 +37,22 @@ class SortOrder(StrEnum):
 # ---------------------------------------------------------------------------
 
 
+# topic は外向き第一級フィルタキー。TopicName VO の正規化済み name をそのまま受ける。
+# サイドバー UI が消えても URL 直叩き互換と将来の動的 Topic フィルタ UI で
+# 再利用するため残置する。
+_TOPIC_QUERY_DESCRIPTION = (
+    "Outbound primary filter key. Accepts a normalized topic name."
+)
+
+# category は AI 分類器の固定 11 軸（内部分類軸）。サイドバー UI 撤去（2026-04）後は
+# 外向き API では deprecated 扱い。外部クライアントは topic フィルタを使うこと。
+_CATEGORY_QUERY_DESCRIPTION = (
+    "Deprecated. Sidebar UI was removed in 2026-04. "
+    "Reserved for the internal classifier axis. "
+    "Outbound clients should use the `topic` filter instead."
+)
+
+
 class ArticleListParams(PaginationParams):
     """記事一覧（ニュース閲覧）用のクエリパラメータ。
 
@@ -47,8 +63,11 @@ class ArticleListParams(PaginationParams):
     Service / Repository レイヤーへそのまま受け渡す。
     """
 
-    topic: Annotated[str | None, Query()] = None
-    category: Annotated[CategorySlug | None, Query()] = None
+    topic: Annotated[str | None, Query(description=_TOPIC_QUERY_DESCRIPTION)] = None
+    category: Annotated[
+        CategorySlug | None,
+        Query(deprecated=True, description=_CATEGORY_QUERY_DESCRIPTION),
+    ] = None
     impact_level: Annotated[ImpactLevel | None, Query(alias="impactLevel")] = None
     sort_order: Annotated[SortOrder, Query(alias="sortOrder")] = SortOrder.DESC
 
@@ -63,8 +82,11 @@ class SemanticSearchParams(PaginationParams):
 
     q: Annotated[str, Query(min_length=1, max_length=500)]
     sort_by: Annotated[SortBy, Query(alias="sortBy")] = SortBy.RELEVANCE
-    topic: Annotated[str | None, Query()] = None
-    category: Annotated[CategorySlug | None, Query()] = None
+    topic: Annotated[str | None, Query(description=_TOPIC_QUERY_DESCRIPTION)] = None
+    category: Annotated[
+        CategorySlug | None,
+        Query(deprecated=True, description=_CATEGORY_QUERY_DESCRIPTION),
+    ] = None
     impact_level: Annotated[ImpactLevel | None, Query(alias="impactLevel")] = None
     sort_order: Annotated[SortOrder, Query(alias="sortOrder")] = SortOrder.DESC
 
