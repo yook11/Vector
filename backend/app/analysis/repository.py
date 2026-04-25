@@ -29,12 +29,6 @@ class AnalysisRepository:
         )
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
-    async def save_analysis(self, analysis: ArticleAnalysis) -> ArticleAnalysis:
-        """分析結果を永続化する（flush のみ、commit しない）。"""
-        self._session.add(analysis)
-        await self._session.flush()
-        return analysis
-
     async def save_embedding(
         self,
         analysis: ArticleAnalysis,
