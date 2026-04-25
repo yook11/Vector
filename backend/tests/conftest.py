@@ -22,7 +22,6 @@ from app.models import (  # noqa: F401
     Category,
     DiscoveredArticle,
     FetchLog,
-    ImpactLevel,
     NewsSource,
     SourceType,
     Topic,

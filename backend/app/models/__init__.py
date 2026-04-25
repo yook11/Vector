@@ -1,5 +1,5 @@
 from app.models.article import Article
-from app.models.article_analysis import ArticleAnalysis, ImpactLevel
+from app.models.article_analysis import ArticleAnalysis
 from app.models.article_entity import ArticleEntity
 from app.models.article_extraction import ArticleExtraction
 from app.models.article_rejection import ArticleRejection
@@ -20,7 +20,6 @@ __all__ = [
     "Category",
     "DiscoveredArticle",
     "FetchLog",
-    "ImpactLevel",
     "NewsSource",
     "SourceType",
     "Topic",
