@@ -7,7 +7,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article
-from app.models.article_analysis import ArticleAnalysis, ImpactLevel
+from app.models.article_analysis import ArticleAnalysis
 from app.models.article_extraction import ArticleExtraction
 from app.models.category import Category
 from app.models.discovered_article import DiscoveredArticle
@@ -56,7 +56,6 @@ async def _create_analysis(
     session: AsyncSession,
     article: Article,
     topic_id: int,
-    impact_level: ImpactLevel = ImpactLevel.HIGH,
     translated_title: str = "テスト記事",
     embedding: list[float] | None = None,
 ) -> ArticleAnalysis:
@@ -73,7 +72,6 @@ async def _create_analysis(
         extraction_id=extraction.id,
         translated_title=translated_title,
         summary="テストの要約",
-        impact_level=impact_level,
         reasoning="Test reasoning",
         ai_model="gemini-2.0-flash",
         embedding=embedding,
@@ -143,65 +141,6 @@ class TestListArticles:
         assert data["perPage"] == 2
         assert data["totalPages"] == 3
 
-    async def test_filter_by_impact_level(
-        self,
-        client: AsyncClient,
-        db_session: AsyncSession,
-        sample_source: NewsSource,
-        sample_categories: list[Category],
-    ) -> None:
-        topic = await _create_topic(db_session, sample_categories[0].id)
-        a1 = await _create_article(
-            db_session, sample_source, url="https://example.com/high"
-        )
-        await _create_analysis(
-            db_session, a1, topic_id=topic.id, impact_level=ImpactLevel.HIGH
-        )
-
-        a2 = await _create_article(
-            db_session, sample_source, url="https://example.com/low"
-        )
-        await _create_analysis(
-            db_session, a2, topic_id=topic.id, impact_level=ImpactLevel.LOW
-        )
-
-        resp = await client.get("/api/v1/articles?impactLevel=high")
-        data = resp.json()
-        assert data["total"] == 1
-
-    async def test_filter_by_impact_level_is_exact_match(
-        self,
-        client: AsyncClient,
-        db_session: AsyncSession,
-        sample_source: NewsSource,
-        sample_categories: list[Category],
-    ) -> None:
-        """impactLevel=medium は high/critical の記事を返してはいけない。"""
-        topic = await _create_topic(db_session, sample_categories[0].id)
-        a_medium = await _create_article(
-            db_session, sample_source, url="https://example.com/medium"
-        )
-        await _create_analysis(
-            db_session, a_medium, topic_id=topic.id, impact_level=ImpactLevel.MEDIUM
-        )
-        a_high = await _create_article(
-            db_session, sample_source, url="https://example.com/high"
-        )
-        await _create_analysis(
-            db_session, a_high, topic_id=topic.id, impact_level=ImpactLevel.HIGH
-        )
-        a_critical = await _create_article(
-            db_session, sample_source, url="https://example.com/critical"
-        )
-        await _create_analysis(
-            db_session, a_critical, topic_id=topic.id, impact_level=ImpactLevel.CRITICAL
-        )
-
-        resp = await client.get("/api/v1/articles?impactLevel=medium")
-        data = resp.json()
-        assert data["total"] == 1
-        assert data["items"][0]["impactLevel"] == "medium"
-
     async def test_sort_by_published_at_desc(
         self,
         client: AsyncClient,
@@ -254,7 +193,6 @@ class TestListArticles:
         item = data["items"][0]
         assert "translatedTitle" in item
         assert "summary" in item
-        assert "impactLevel" in item
         assert "publishedAt" in item
 
     async def test_date_sort_tiebreaker_uses_id_desc(
@@ -409,7 +347,6 @@ class TestGetArticle:
         resp = await client.get(f"/api/v1/articles/{analysis.id}")
         data = resp.json()
         assert data["translatedTitle"] == "テスト記事"
-        assert data["impactLevel"] == "high"
         assert data["reasoning"] == "Test reasoning"
         assert data["original"]["title"] == "Test Article"
         assert data["original"]["url"] == "https://example.com/article"

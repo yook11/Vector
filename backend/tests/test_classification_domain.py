@@ -90,7 +90,7 @@ class TestAnalysisDraftRejection:
                 summary="ok",
                 topic_name=TopicName(root="ai"),
                 topic_label_ja="ラベル",
-                    reasoning="reason",
+                reasoning="reason",
             )
 
     def test_rejects_title_that_becomes_empty_after_sanitization(self) -> None:
@@ -100,7 +100,7 @@ class TestAnalysisDraftRejection:
                 summary="ok",
                 topic_name=TopicName(root="ai"),
                 topic_label_ja="ラベル",
-                    reasoning="reason",
+                reasoning="reason",
             )
 
     def test_rejects_translated_title_over_500_chars(self) -> None:
@@ -110,7 +110,7 @@ class TestAnalysisDraftRejection:
                 summary="ok",
                 topic_name=TopicName(root="ai"),
                 topic_label_ja="ラベル",
-                    reasoning="reason",
+                reasoning="reason",
             )
 
     def test_rejects_summary_over_4000_chars(self) -> None:
@@ -120,7 +120,7 @@ class TestAnalysisDraftRejection:
                 summary="a" * 4001,
                 topic_name=TopicName(root="ai"),
                 topic_label_ja="ラベル",
-                    reasoning="reason",
+                reasoning="reason",
             )
 
     def test_rejects_reasoning_over_2000_chars(self) -> None:
@@ -130,7 +130,7 @@ class TestAnalysisDraftRejection:
                 summary="ok",
                 topic_name=TopicName(root="ai"),
                 topic_label_ja="ラベル",
-                    reasoning="a" * 2001,
+                reasoning="a" * 2001,
             )
 
 
@@ -142,7 +142,7 @@ class TestAnalysisDraftTopicLabelJa:
                 summary="ok",
                 topic_name=TopicName(root="ai"),
                 topic_label_ja="",
-                    reasoning="reason",
+                reasoning="reason",
             )
 
     def test_rejects_label_over_20_chars(self) -> None:
@@ -152,7 +152,7 @@ class TestAnalysisDraftTopicLabelJa:
                 summary="ok",
                 topic_name=TopicName(root="ai"),
                 topic_label_ja="あ" * 21,
-                    reasoning="reason",
+                reasoning="reason",
             )
 
     def test_rejects_label_with_newline(self) -> None:
@@ -162,7 +162,7 @@ class TestAnalysisDraftTopicLabelJa:
                 summary="ok",
                 topic_name=TopicName(root="ai"),
                 topic_label_ja="line1\nline2",
-                    reasoning="reason",
+                reasoning="reason",
             )
 
     def test_rejects_label_with_url_scheme(self) -> None:
@@ -172,7 +172,7 @@ class TestAnalysisDraftTopicLabelJa:
                 summary="ok",
                 topic_name=TopicName(root="ai"),
                 topic_label_ja="http://evil",
-                    reasoning="reason",
+                reasoning="reason",
             )
 
 
