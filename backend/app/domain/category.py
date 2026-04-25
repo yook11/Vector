@@ -37,7 +37,7 @@ class CategorySlug(RootModel[str]):
         v = v.strip()
         if not _SLUG_PATTERN.fullmatch(v):
             msg = (
-                "CategorySlug must start with a lowercase letter or digit, "
+                "Category slug must start with a lowercase letter or digit, "
                 f"contain only [a-z0-9_], and be 1-50 chars. Got: {v!r}"
             )
             raise ValueError(msg)

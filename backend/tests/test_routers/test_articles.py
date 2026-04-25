@@ -333,7 +333,16 @@ class TestListArticles:
         detail = resp.json()["detail"]
         assert isinstance(detail, list)
         assert detail[0]["loc"] == ["query", "category"]
-        assert "CategorySlug" in detail[0]["msg"]
+        assert "Category slug" in detail[0]["msg"]
+
+    async def test_invalid_category_message_does_not_leak_vo_name(
+        self, client: AsyncClient
+    ) -> None:
+        """422 エラーメッセージに内部 VO クラス名 (CategorySlug) を含めない。"""
+        resp = await client.get("/api/v1/articles?category=INVALID-slug")
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert "CategorySlug" not in detail[0]["msg"]
 
     async def test_brief_response_includes_topic_label_ja(
         self,
