@@ -143,7 +143,6 @@ class ClassificationService:
             response = await classifier.classify(
                 title_ja=extraction.translated_title,
                 summary_ja=extraction.summary,
-                entities=list(extraction.entities),
             )
 
             match response:

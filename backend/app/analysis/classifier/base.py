@@ -9,7 +9,6 @@ import structlog
 
 from app.analysis.classifier.schema import ClassificationResponse
 from app.analysis.errors import AnalysisDomainError
-from app.analysis.extraction.domain import Entity
 
 logger = structlog.get_logger(__name__)
 
@@ -55,14 +54,12 @@ class BaseClassifier(abc.ABC):
         self,
         title_ja: str,
         summary_ja: str,
-        entities: list[Entity],
     ) -> ClassificationResponse:
         """Stage 1 の出力を分類し、Classified か OutOfScope のいずれかを返す。
 
         Args:
             title_ja: 日本語翻訳タイトル。
             summary_ja: 事実ベースの日本語要約。
-            entities: 抽出済みエンティティリスト。
 
         Returns:
             ``Classified`` または ``OutOfScope``。呼び出し側は ``kind`` フィールド
