@@ -30,8 +30,8 @@ class ArticleRejection(Base):
     __table_args__ = (
         UniqueConstraint("extraction_id", name="uq_article_rejections_extraction_id"),
         CheckConstraint(
-            "reasoning != ''",
-            name="ck_article_rejections_reasoning_not_empty",
+            "investor_take != ''",
+            name="ck_article_rejections_investor_take_not_empty",
         ),
         CheckConstraint(
             "ai_model != ''",
@@ -43,7 +43,7 @@ class ArticleRejection(Base):
     extraction_id: Mapped[int] = mapped_column(
         ForeignKey("article_extractions.id", ondelete="CASCADE"),
     )
-    reasoning: Mapped[str] = mapped_column(Text())
+    investor_take: Mapped[str] = mapped_column(Text())
     ai_model: Mapped[str] = mapped_column(String(100))
     rejected_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

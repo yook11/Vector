@@ -50,8 +50,8 @@ class ArticleAnalysis(Base):
             name="ck_article_analyses_ai_model_not_empty",
         ),
         CheckConstraint(
-            "reasoning != ''",
-            name="ck_article_analyses_reasoning_not_empty",
+            "investor_take != ''",
+            name="ck_article_analyses_investor_take_not_empty",
         ),
         # サイドバーの直近 24 時間集計クエリ向けの複合インデックス
         Index(
@@ -67,7 +67,7 @@ class ArticleAnalysis(Base):
     )
     translated_title: Mapped[str] = mapped_column(String(500))
     summary: Mapped[str] = mapped_column(Text())
-    reasoning: Mapped[str] = mapped_column(Text())
+    investor_take: Mapped[str] = mapped_column(Text())
     ai_model: Mapped[str] = mapped_column(String(100))
     analyzed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -93,7 +93,7 @@ class ArticleAnalysis(Base):
         translated_title: str,
         summary: str,
         topic_id: int,
-        reasoning: str,
+        investor_take: str,
         model_name: str,
     ) -> ArticleAnalysis:
         """Stage 2 の分類結果から分析オブジェクトを構築する。
@@ -106,6 +106,6 @@ class ArticleAnalysis(Base):
             translated_title=translated_title,
             summary=summary,
             topic_id=topic_id,
-            reasoning=reasoning,
+            investor_take=investor_take,
             ai_model=model_name,
         )

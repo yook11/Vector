@@ -100,7 +100,7 @@ class ArticleDetail(_CamelBase):
     id: int
     translated_title: str
     summary: str
-    reasoning: str
+    investor_take: str
     analyzed_at: datetime
     source: NewsSourceEmbed
     published_at: datetime | None = None

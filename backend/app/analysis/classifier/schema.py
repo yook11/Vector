@@ -49,7 +49,7 @@ class ClassificationRawResponse(BaseModel):
     category: ValidCategory
     topic: TopicName
     topic_label_ja: str = Field(min_length=1, max_length=20)
-    reasoning: str = Field(min_length=1)
+    investor_take: str = Field(min_length=1)
 
 
 class Classified(BaseModel):
@@ -60,7 +60,7 @@ class Classified(BaseModel):
     category: ValidCategory
     topic: TopicName
     topic_label_ja: str = Field(min_length=1, max_length=20)
-    reasoning: str = Field(min_length=1)
+    investor_take: str = Field(min_length=1)
 
 
 class OutOfScope(BaseModel):
@@ -68,7 +68,7 @@ class OutOfScope(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    reasoning: str = Field(min_length=1)
+    investor_take: str = Field(min_length=1)
 
 
 ClassificationResponse = Classified | OutOfScope

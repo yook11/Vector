@@ -74,7 +74,7 @@ class AnalysisRepository:
             translated_title=draft.translated_title,
             summary=draft.summary,
             topic_id=topic_id,
-            reasoning=draft.reasoning,
+            investor_take=draft.investor_take,
             ai_model=ai_model,
         )
         self._session.add(orm)
@@ -151,7 +151,7 @@ class AnalysisRepository:
             translated_title=orm.translated_title,
             summary=orm.summary,
             topic_id=orm.topic_id,
-            reasoning=orm.reasoning,
+            investor_take=orm.investor_take,
             ai_model=orm.ai_model,
             analyzed_at=orm.analyzed_at,
         )

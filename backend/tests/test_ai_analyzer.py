@@ -67,14 +67,14 @@ def _make_classified(
     category: ValidCategory = ValidCategory.COMPUTING,
     topic: str = "quantum computing breakthrough",
     topic_label_ja: str = "量子コンピューティング進展",
-    reasoning: str = "技術的に重要な進展",
+    investor_take: str = "技術的に重要な進展",
 ) -> Classified:
     """Classified を生成するヘルパー。"""
     return Classified(
         category=category,
         topic=TopicName(topic),
         topic_label_ja=topic_label_ja,
-        reasoning=reasoning,
+        investor_take=investor_take,
     )
 
 
@@ -328,7 +328,7 @@ def test_classified_valid() -> None:
         category=ValidCategory.COMPUTING,
         topic=TopicName("quantum computing breakthrough"),
         topic_label_ja="量子コンピューティング進展",
-        reasoning="理由",
+        investor_take="理由",
     )
     assert resp.category == ValidCategory.COMPUTING
     assert resp.topic.root == "quantum computing breakthrough"
@@ -339,7 +339,7 @@ def test_classified_normalizes_topic() -> None:
         category=ValidCategory.COMPUTING,
         topic=TopicName("Quantum Computing Breakthrough"),
         topic_label_ja="量子コンピューティング進展",
-        reasoning="理由",
+        investor_take="理由",
     )
     assert resp.topic.root == "quantum computing breakthrough"
 
@@ -351,19 +351,19 @@ def test_classified_rejects_invalid_category() -> None:
                 "category": "invalid_category",
                 "topic": "foo bar",
                 "topic_label_ja": "ラベル",
-                "reasoning": "r",
+                "investor_take": "r",
             }
         )
 
 
 def test_out_of_scope_valid() -> None:
-    resp = OutOfScope(reasoning="技術的な先端要素を含まない")
-    assert resp.reasoning == "技術的な先端要素を含まない"
+    resp = OutOfScope(investor_take="技術的な先端要素を含まない")
+    assert resp.investor_take == "技術的な先端要素を含まない"
 
 
-def test_out_of_scope_rejects_empty_reasoning() -> None:
+def test_out_of_scope_rejects_empty_investor_take() -> None:
     with pytest.raises(ValidationError):
-        OutOfScope(reasoning="")
+        OutOfScope(investor_take="")
 
 
 # --- D. BaseExtractor._call_once tests ---
@@ -635,7 +635,7 @@ async def test_classification_creates_topic(
         return_value=_make_classified(
             category=ValidCategory.COMPUTING,
             topic="quantum computing breakthrough",
-            reasoning="理由テスト",
+            investor_take="理由テスト",
         )
     )
 
@@ -654,7 +654,7 @@ async def test_classification_creates_topic(
         )
     ).scalar_one()
     assert analysis.topic_id is not None
-    assert analysis.reasoning == "理由テスト"
+    assert analysis.investor_take == "理由テスト"
 
     topic = (
         await db_session.execute(select(Topic).where(Topic.id == analysis.topic_id))
@@ -681,7 +681,7 @@ async def test_classification_persists_rejection_when_out_of_scope(
     mock_classifier.MODEL = "gemini-2.5-flash-lite"
     mock_classifier.model_name = "gemini-2.5-flash-lite"
     mock_classifier.classify = AsyncMock(
-        return_value=OutOfScope(reasoning="先端技術の話題ではない")
+        return_value=OutOfScope(investor_take="先端技術の話題ではない")
     )
 
     extraction_id = extraction.id
@@ -697,7 +697,7 @@ async def test_classification_persists_rejection_when_out_of_scope(
             )
         )
     ).scalar_one()
-    assert rejection.reasoning == "先端技術の話題ではない"
+    assert rejection.investor_take == "先端技術の話題ではない"
     analysis = (
         await db_session.execute(
             select(ArticleAnalysis).where(
@@ -734,7 +734,7 @@ async def test_classification_skips_already_classified(
         extraction_id=extraction.id,
         translated_title="分類済みタイトル",
         summary="分類済み要約",
-        reasoning="既存理由",
+        investor_take="既存理由",
         ai_model="gemini-2.5-flash-lite",
         topic_id=topic.id,
     )
@@ -762,7 +762,7 @@ async def test_classification_skips_already_rejected(
     )
     rejection = ArticleRejection(
         extraction_id=extraction.id,
-        reasoning="対象外",
+        investor_take="対象外",
         ai_model="gemini-2.5-flash-lite",
     )
     db_session.add(rejection)
@@ -805,7 +805,7 @@ async def test_news_endpoint_includes_analysis(
         extraction_id=extraction.id,
         translated_title="テスト記事",
         summary="テスト要約",
-        reasoning="テスト理由",
+        investor_take="テスト理由",
         ai_model="gemini-2.5-flash-lite",
         topic_id=topic.id,
     )

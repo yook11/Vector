@@ -67,7 +67,7 @@ async def _build_extraction_with_analysis(
         extraction_id=extraction.id,
         translated_title=translated_title,
         summary=summary,
-        reasoning="テスト理由",
+        investor_take="テスト理由",
         ai_model="gemini-2.5-flash-lite",
         topic_id=topic.id,
         embedding=embedding,

@@ -3,7 +3,7 @@
 2 つの型で OutOfScope の概念を表す:
 
 - ``RejectionDraft`` — AI 境界型 ``OutOfScope`` を sanitize したドメイン入力。
-  reasoning のみを持ち、Stage 1 データは複製しない (ユーザーには見せないため)。
+  investor_take のみを持ち、Stage 1 データは複製しない (ユーザーには見せないため)。
 - ``Rejection`` — 対象外判定の記録 Entity。identity (id) と記録時刻
   (rejected_at) を持つ。
 
@@ -31,36 +31,36 @@ from app.utils.sanitize import normalize_text
 class RejectionDraft(BaseModel):
     """Stage 2 で OutOfScope 判定された記録のドメイン入力。
 
-    AI 境界型 ``OutOfScope`` を受けて sanitize した後の状態。reasoning のみを
+    AI 境界型 ``OutOfScope`` を受けて sanitize した後の状態。investor_take のみを
     持ち、Stage 1 のデータは複製しない (ユーザーには見せないため)。
 
     Invariants:
-    - ``reasoning``: sanitize 後 1-2000 文字 (Prompt Injection DoS 対策で上限)
+    - ``investor_take``: sanitize 後 1-2000 文字 (Prompt Injection DoS 対策で上限)
     - frozen: 生成後は不変
     """
 
     model_config = ConfigDict(frozen=True)
 
-    reasoning: str = Field(min_length=1, max_length=2000)
+    investor_take: str = Field(min_length=1, max_length=2000)
 
-    @field_validator("reasoning", mode="before")
+    @field_validator("investor_take", mode="before")
     @classmethod
     def _sanitize(cls, v: Any) -> Any:
         if isinstance(v, str):
             return normalize_text(v) or ""
         return v
 
-    @field_validator("reasoning")
+    @field_validator("investor_take")
     @classmethod
     def _not_empty(cls, v: str) -> str:
         if not v:
-            raise ValueError("reasoning must be non-empty after sanitization")
+            raise ValueError("investor_take must be non-empty after sanitization")
         return v
 
     @classmethod
     def from_out_of_scope(cls, out_of_scope: OutOfScope) -> Self:
         """AI 境界型 ``OutOfScope`` を受けて Draft を構築する。"""
-        return cls(reasoning=out_of_scope.reasoning)
+        return cls(investor_take=out_of_scope.investor_take)
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,7 +73,7 @@ class Rejection:
 
     Invariants:
     - id / extraction_id は正の整数
-    - reasoning / ai_model は非空
+    - investor_take / ai_model は非空
     - rejected_at は記録時刻
 
     ``__post_init__`` の検査は DB CHECK + FK NOT NULL と一致する。通常は
@@ -82,13 +82,13 @@ class Rejection:
 
     id: int
     extraction_id: int
-    reasoning: str
+    investor_take: str
     ai_model: str
     rejected_at: datetime
 
     def __post_init__(self) -> None:
-        if not self.reasoning:
-            raise ValueError("Rejection.reasoning must be non-empty")
+        if not self.investor_take:
+            raise ValueError("Rejection.investor_take must be non-empty")
         if not self.ai_model:
             raise ValueError("Rejection.ai_model must be non-empty")
         if self.id <= 0:
@@ -110,7 +110,7 @@ class Rejection:
         return cls(
             id=id,
             extraction_id=extraction_id,
-            reasoning=draft.reasoning,
+            investor_take=draft.investor_take,
             ai_model=ai_model,
             rejected_at=rejected_at,
         )

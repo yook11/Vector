@@ -86,7 +86,7 @@ async def _create_article(
         extraction_id=extraction.id,
         translated_title=f"Translated: {title}",
         summary="Test summary",
-        reasoning="Test reasoning",
+        investor_take="Test investor_take",
         ai_model="gemini-2.0-flash",
         embedding=embedding,
         embedding_model="text-embedding-004" if embedding else None,
