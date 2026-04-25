@@ -20,15 +20,15 @@ from app.brokers import (
     is_last_attempt,
 )
 from app.collection.errors import (
-    DiscoveredArticleMissing,
     PermanentFetchError,
     TemporaryFetchError,
 )
 from app.collection.extraction.extractor import ArticleHtmlExtractor
 from app.collection.extraction.service import (
-    ArticleReady,
+    AlreadyFetchedOutcome,
+    ContentFetchedOutcome,
     ContentFetchService,
-    ExtractionFailed,
+    ContentFetchSkippedOutcome,
 )
 from app.collection.ingestion.service import SourceFetchService
 from app.models.fetch_log import FetchLog, FetchStatus
@@ -186,14 +186,7 @@ async def fetch_content(
     svc = ContentFetchService(session_factory, html_extractor)
 
     try:
-        result = await svc.execute(discovered_article_id)
-    except DiscoveredArticleMissing:
-        # DB 不整合: enqueue 後の削除や環境取り違え等。リトライ不能なので捨てる
-        logger.warning(
-            "fetch_content_discovered_missing",
-            discovered_article_id=discovered_article_id,
-        )
-        return
+        outcome = await svc.execute(discovered_article_id)
     except TemporaryFetchError:
         if is_last_attempt(ctx):
             logger.warning(
@@ -204,8 +197,11 @@ async def fetch_content(
         raise
 
     # Article 行が揃ったときのみ分析にチェーン
-    match result:
-        case ArticleReady(article_id=aid):
-            await extract_content.kiq(aid)
-        case ExtractionFailed():
+    match outcome:
+        case (
+            ContentFetchedOutcome(article=article)
+            | AlreadyFetchedOutcome(article=article)
+        ):
+            await extract_content.kiq(article.id)
+        case ContentFetchSkippedOutcome():
             pass  # service 側でログ済み
