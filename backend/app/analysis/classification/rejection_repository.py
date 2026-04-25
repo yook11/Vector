@@ -52,7 +52,7 @@ class RejectionRepository:
         """
         orm = ArticleRejection(
             extraction_id=extraction_id,
-            reasoning=draft.reasoning,
+            investor_take=draft.investor_take,
             ai_model=ai_model,
         )
         self._session.add(orm)
@@ -66,7 +66,7 @@ class RejectionRepository:
         return Rejection(
             id=orm.id,
             extraction_id=orm.extraction_id,
-            reasoning=orm.reasoning,
+            investor_take=orm.investor_take,
             ai_model=orm.ai_model,
             rejected_at=orm.rejected_at,
         )

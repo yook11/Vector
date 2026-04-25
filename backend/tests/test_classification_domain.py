@@ -22,7 +22,7 @@ def _make_classified(**overrides: object) -> Classified:
         "category": ValidCategory.AI,
         "topic": TopicName(root="ai agents"),
         "topic_label_ja": "AIエージェント",
-        "reasoning": "Significant advancement in agent autonomy.",
+        "investor_take": "Significant advancement in agent autonomy.",
     }
     defaults.update(overrides)
     return Classified(**defaults)  # type: ignore[arg-type]
@@ -34,17 +34,17 @@ def _make_classified(**overrides: object) -> Classified:
 
 
 class TestAnalysisDraftSanitize:
-    def test_strips_html_tags_from_title_summary_reasoning(self) -> None:
+    def test_strips_html_tags_from_title_summary_investor_take(self) -> None:
         draft = AnalysisDraft(
             translated_title="<b>Title</b>",
             summary="<p>Summary <i>here</i></p>",
             topic_name=TopicName(root="ai agents"),
             topic_label_ja="AIエージェント",
-            reasoning="<script>bad()</script>Reason",
+            investor_take="<script>bad()</script>Reason",
         )
         assert draft.translated_title == "Title"
         assert draft.summary == "Summary here"
-        assert draft.reasoning == "bad()Reason"
+        assert draft.investor_take == "bad()Reason"
 
     def test_strips_c0_c1_control_chars(self) -> None:
         # C0 (\x00-\x1f, タブ/改行除く) と C1 (\x7f-\x9f) は除去対象。
@@ -53,11 +53,11 @@ class TestAnalysisDraftSanitize:
             summary="ok\x01summary",
             topic_name=TopicName(root="ai"),
             topic_label_ja="ラベル",
-            reasoning="reason\x7fok",
+            investor_take="reason\x7fok",
         )
         assert "\x00" not in draft.translated_title
         assert "\x01" not in draft.summary
-        assert "\x7f" not in draft.reasoning
+        assert "\x7f" not in draft.investor_take
 
     def test_normalizes_nfkc(self) -> None:
         # NFKC は半角→全角の互換分解を畳む。
@@ -66,7 +66,7 @@ class TestAnalysisDraftSanitize:
             summary="ok",
             topic_name=TopicName(root="ai"),
             topic_label_ja="ラベル",
-            reasoning="reason",
+            investor_take="reason",
         )
         assert draft.translated_title == "Hello"
 
@@ -76,10 +76,10 @@ class TestAnalysisDraftSanitize:
             summary="line1\nline2",
             topic_name=TopicName(root="ai"),
             topic_label_ja="ラベル",
-            reasoning="reason\twith\ttabs",
+            investor_take="reason\twith\ttabs",
         )
         assert "\n" in draft.summary
-        assert "\t" in draft.reasoning
+        assert "\t" in draft.investor_take
 
 
 class TestAnalysisDraftRejection:
@@ -90,7 +90,7 @@ class TestAnalysisDraftRejection:
                 summary="ok",
                 topic_name=TopicName(root="ai"),
                 topic_label_ja="ラベル",
-                reasoning="reason",
+                investor_take="reason",
             )
 
     def test_rejects_title_that_becomes_empty_after_sanitization(self) -> None:
@@ -100,7 +100,7 @@ class TestAnalysisDraftRejection:
                 summary="ok",
                 topic_name=TopicName(root="ai"),
                 topic_label_ja="ラベル",
-                reasoning="reason",
+                investor_take="reason",
             )
 
     def test_rejects_translated_title_over_500_chars(self) -> None:
@@ -110,7 +110,7 @@ class TestAnalysisDraftRejection:
                 summary="ok",
                 topic_name=TopicName(root="ai"),
                 topic_label_ja="ラベル",
-                reasoning="reason",
+                investor_take="reason",
             )
 
     def test_rejects_summary_over_4000_chars(self) -> None:
@@ -120,17 +120,17 @@ class TestAnalysisDraftRejection:
                 summary="a" * 4001,
                 topic_name=TopicName(root="ai"),
                 topic_label_ja="ラベル",
-                reasoning="reason",
+                investor_take="reason",
             )
 
-    def test_rejects_reasoning_over_2000_chars(self) -> None:
+    def test_rejects_investor_take_over_2000_chars(self) -> None:
         with pytest.raises(ValidationError):
             AnalysisDraft(
                 translated_title="title",
                 summary="ok",
                 topic_name=TopicName(root="ai"),
                 topic_label_ja="ラベル",
-                reasoning="a" * 2001,
+                investor_take="a" * 2001,
             )
 
 
@@ -142,7 +142,7 @@ class TestAnalysisDraftTopicLabelJa:
                 summary="ok",
                 topic_name=TopicName(root="ai"),
                 topic_label_ja="",
-                reasoning="reason",
+                investor_take="reason",
             )
 
     def test_rejects_label_over_20_chars(self) -> None:
@@ -152,7 +152,7 @@ class TestAnalysisDraftTopicLabelJa:
                 summary="ok",
                 topic_name=TopicName(root="ai"),
                 topic_label_ja="あ" * 21,
-                reasoning="reason",
+                investor_take="reason",
             )
 
     def test_rejects_label_with_newline(self) -> None:
@@ -162,7 +162,7 @@ class TestAnalysisDraftTopicLabelJa:
                 summary="ok",
                 topic_name=TopicName(root="ai"),
                 topic_label_ja="line1\nline2",
-                reasoning="reason",
+                investor_take="reason",
             )
 
     def test_rejects_label_with_url_scheme(self) -> None:
@@ -172,13 +172,13 @@ class TestAnalysisDraftTopicLabelJa:
                 summary="ok",
                 topic_name=TopicName(root="ai"),
                 topic_label_ja="http://evil",
-                reasoning="reason",
+                investor_take="reason",
             )
 
 
 class TestAnalysisDraftFromClassified:
     def test_builds_draft_with_sanitized_values(self) -> None:
-        classified = _make_classified(reasoning="<b>bold</b>reason")
+        classified = _make_classified(investor_take="<b>bold</b>reason")
         draft = AnalysisDraft.from_classified(
             classified,
             translated_title="<i>title</i>",
@@ -186,7 +186,7 @@ class TestAnalysisDraftFromClassified:
         )
         assert draft.translated_title == "title"
         assert draft.summary == "summary"
-        assert draft.reasoning == "boldreason"
+        assert draft.investor_take == "boldreason"
         assert draft.topic_name == classified.topic
 
     def test_draft_is_frozen(self) -> None:
@@ -211,7 +211,7 @@ def _make_analysis(**overrides: object) -> Analysis:
         "translated_title": "title",
         "summary": "summary",
         "topic_id": 3,
-        "reasoning": "reason",
+        "investor_take": "reason",
         "ai_model": "gemini-2.5-pro",
         "analyzed_at": datetime(2026, 1, 1, tzinfo=UTC),
     }
@@ -226,7 +226,7 @@ class TestAnalysisPostInit:
 
     @pytest.mark.parametrize(
         "field",
-        ["translated_title", "summary", "reasoning", "ai_model"],
+        ["translated_title", "summary", "investor_take", "ai_model"],
     )
     def test_rejects_empty_string_fields(self, field: str) -> None:
         with pytest.raises(ValueError):
@@ -266,7 +266,7 @@ class TestAnalysisFromDraft:
         assert analysis.ai_model == "gemini-2.5-pro"
         assert analysis.analyzed_at == analyzed_at
         assert analysis.translated_title == draft.translated_title
-        assert analysis.reasoning == draft.reasoning
+        assert analysis.investor_take == draft.investor_take
 
 
 # ---------------------------------------------------------------------------
@@ -276,38 +276,38 @@ class TestAnalysisFromDraft:
 
 class TestRejectionDraft:
     def test_strips_html_and_normalizes(self) -> None:
-        draft = RejectionDraft(reasoning="<b>off-topic</b>\x00 article")
-        assert "<b>" not in draft.reasoning
-        assert "\x00" not in draft.reasoning
+        draft = RejectionDraft(investor_take="<b>off-topic</b>\x00 article")
+        assert "<b>" not in draft.investor_take
+        assert "\x00" not in draft.investor_take
 
-    def test_rejects_empty_reasoning(self) -> None:
+    def test_rejects_empty_investor_take(self) -> None:
         with pytest.raises(ValidationError):
-            RejectionDraft(reasoning="")
+            RejectionDraft(investor_take="")
 
-    def test_rejects_reasoning_that_becomes_empty(self) -> None:
+    def test_rejects_investor_take_that_becomes_empty(self) -> None:
         with pytest.raises(ValidationError):
-            RejectionDraft(reasoning="<i></i>")
+            RejectionDraft(investor_take="<i></i>")
 
-    def test_rejects_reasoning_over_2000_chars(self) -> None:
+    def test_rejects_investor_take_over_2000_chars(self) -> None:
         with pytest.raises(ValidationError):
-            RejectionDraft(reasoning="a" * 2001)
+            RejectionDraft(investor_take="a" * 2001)
 
     def test_from_out_of_scope_sanitizes(self) -> None:
-        out_of_scope = OutOfScope(reasoning="<b>not tech</b>")
+        out_of_scope = OutOfScope(investor_take="<b>not tech</b>")
         draft = RejectionDraft.from_out_of_scope(out_of_scope)
-        assert draft.reasoning == "not tech"
+        assert draft.investor_take == "not tech"
 
     def test_is_frozen(self) -> None:
-        draft = RejectionDraft(reasoning="reason")
+        draft = RejectionDraft(investor_take="reason")
         with pytest.raises(ValidationError):
-            draft.reasoning = "mutated"  # type: ignore[misc]
+            draft.investor_take = "mutated"  # type: ignore[misc]
 
 
 def _make_rejection(**overrides: object) -> Rejection:
     defaults: dict[str, object] = {
         "id": 1,
         "extraction_id": 2,
-        "reasoning": "out of scope",
+        "investor_take": "out of scope",
         "ai_model": "gemini-2.5-pro",
         "rejected_at": datetime(2026, 1, 1, tzinfo=UTC),
     }
@@ -320,7 +320,7 @@ class TestRejectionPostInit:
         rejection = _make_rejection()
         assert rejection.id == 1
 
-    @pytest.mark.parametrize("field", ["reasoning", "ai_model"])
+    @pytest.mark.parametrize("field", ["investor_take", "ai_model"])
     def test_rejects_empty_string_fields(self, field: str) -> None:
         with pytest.raises(ValueError):
             _make_rejection(**{field: ""})
@@ -339,7 +339,7 @@ class TestRejectionPostInit:
 
 class TestRejectionFromDraft:
     def test_combines_draft_with_identity(self) -> None:
-        draft = RejectionDraft.from_out_of_scope(OutOfScope(reasoning="not tech"))
+        draft = RejectionDraft.from_out_of_scope(OutOfScope(investor_take="not tech"))
         rejected_at = datetime(2026, 4, 25, tzinfo=UTC)
         rejection = Rejection.from_draft(
             draft,
@@ -352,4 +352,4 @@ class TestRejectionFromDraft:
         assert rejection.extraction_id == 7
         assert rejection.ai_model == "gemini-2.5-pro"
         assert rejection.rejected_at == rejected_at
-        assert rejection.reasoning == draft.reasoning
+        assert rejection.investor_take == draft.investor_take

@@ -72,7 +72,7 @@ async def _create_analysis(
         extraction_id=extraction.id,
         translated_title=translated_title,
         summary="テストの要約",
-        reasoning="Test reasoning",
+        investor_take="Test investor_take",
         ai_model="gemini-2.0-flash",
         embedding=embedding,
         topic_id=topic_id,
@@ -377,7 +377,7 @@ class TestGetArticle:
         resp = await client.get(f"/api/v1/articles/{analysis.id}")
         data = resp.json()
         assert data["translatedTitle"] == "テスト記事"
-        assert data["reasoning"] == "Test reasoning"
+        assert data["investorTake"] == "Test investor_take"
         assert data["original"]["title"] == "Test Article"
         assert data["original"]["url"] == "https://example.com/article"
 

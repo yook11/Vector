@@ -24,7 +24,7 @@ async def _build_article_with_analysis(
     title: str,
     translated_title: str,
     summary: str,
-    reasoning: str,
+    investor_take: str,
     published_at: datetime,
 ) -> tuple[Article, ArticleAnalysis]:
     discovered = DiscoveredArticle(
@@ -54,7 +54,7 @@ async def _build_article_with_analysis(
         extraction_id=extraction.id,
         translated_title=translated_title,
         summary=summary,
-        reasoning=reasoning,
+        investor_take=investor_take,
         ai_model="gemini-2.0-flash",
         topic_id=topic.id,
     )
@@ -88,7 +88,7 @@ async def sample_article(
         title="Test Article",
         translated_title="テスト記事",
         summary="テストの要約",
-        reasoning="Test reasoning",
+        investor_take="Test investor_take",
         published_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
     return analysis
@@ -117,7 +117,7 @@ async def second_article(
         title="Second Article",
         translated_title="2番目の記事",
         summary="2番目の要約",
-        reasoning="Second reasoning",
+        investor_take="Second investor_take",
         published_at=datetime(2026, 1, 2, tzinfo=UTC),
     )
     return analysis

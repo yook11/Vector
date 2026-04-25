@@ -38,7 +38,7 @@ class AnalysisDraft(BaseModel):
     Invariants (validators で構造的に保証):
     - ``translated_title``: sanitize 後 1-500 文字
     - ``summary``: sanitize 後 1-4000 文字
-    - ``reasoning``: sanitize 後 1-2000 文字 (Prompt Injection DoS 対策で上限)
+    - ``investor_take``: sanitize 後 1-2000 文字 (Prompt Injection DoS 対策で上限)
     - ``topic_name``: ``TopicName`` VO で正規化済み
     - ``topic_label_ja``: 1-20 文字、HTML タグ / 改行 / URL スキーム禁止
     - frozen: 生成後は不変
@@ -50,16 +50,16 @@ class AnalysisDraft(BaseModel):
     summary: str = Field(min_length=1, max_length=4000)
     topic_name: TopicName
     topic_label_ja: str
-    reasoning: str = Field(min_length=1, max_length=2000)
+    investor_take: str = Field(min_length=1, max_length=2000)
 
-    @field_validator("translated_title", "summary", "reasoning", mode="before")
+    @field_validator("translated_title", "summary", "investor_take", mode="before")
     @classmethod
     def _sanitize(cls, v: Any) -> Any:
         if isinstance(v, str):
             return normalize_text(v) or ""
         return v
 
-    @field_validator("translated_title", "summary", "reasoning")
+    @field_validator("translated_title", "summary", "investor_take")
     @classmethod
     def _not_empty(cls, v: str) -> str:
         if not v:
@@ -97,7 +97,7 @@ class AnalysisDraft(BaseModel):
             summary=summary,
             topic_name=classified.topic,
             topic_label_ja=classified.topic_label_ja,
-            reasoning=classified.reasoning,
+            investor_take=classified.investor_take,
         )
 
 
@@ -119,7 +119,7 @@ class Analysis:
 
     Invariants:
     - id / extraction_id / topic_id は正の整数
-    - translated_title / summary / reasoning / ai_model は非空
+    - translated_title / summary / investor_take / ai_model は非空
     - analyzed_at は記録時刻
 
     ``__post_init__`` の検査は DB CHECK + FK NOT NULL と一致する。通常は
@@ -131,7 +131,7 @@ class Analysis:
     translated_title: str
     summary: str
     topic_id: int
-    reasoning: str
+    investor_take: str
     ai_model: str
     analyzed_at: datetime
 
@@ -140,8 +140,8 @@ class Analysis:
             raise ValueError("Analysis.translated_title must be non-empty")
         if not self.summary:
             raise ValueError("Analysis.summary must be non-empty")
-        if not self.reasoning:
-            raise ValueError("Analysis.reasoning must be non-empty")
+        if not self.investor_take:
+            raise ValueError("Analysis.investor_take must be non-empty")
         if not self.ai_model:
             raise ValueError("Analysis.ai_model must be non-empty")
         if self.id <= 0:
@@ -175,7 +175,7 @@ class Analysis:
             translated_title=draft.translated_title,
             summary=draft.summary,
             topic_id=topic_id,
-            reasoning=draft.reasoning,
+            investor_take=draft.investor_take,
             ai_model=ai_model,
             analyzed_at=analyzed_at,
         )

@@ -117,7 +117,7 @@ class TestListCategories:
             extraction_id=extraction.id,
             translated_title="TF記事",
             summary="要約",
-            reasoning="理由",
+            investor_take="理由",
             ai_model="test",
             topic_id=topic.id,
         )
@@ -171,7 +171,7 @@ class TestListCategories:
             extraction_id=extraction.id,
             translated_title="TF記事",
             summary="要約",
-            reasoning="理由",
+            investor_take="理由",
             ai_model="test",
             topic_id=topic.id,
             analyzed_at=datetime.now(UTC) - timedelta(hours=25),
@@ -227,7 +227,7 @@ class TestListCategories:
             extraction_id=extraction.id,
             translated_title="PyTorch記事",
             summary="要約",
-            reasoning="理由",
+            investor_take="理由",
             ai_model="test",
             topic_id=topic.id,
         )

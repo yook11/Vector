@@ -319,8 +319,8 @@ export interface components {
       translatedTitle: string;
       /** Summary */
       summary: string;
-      /** Reasoning */
-      reasoning: string;
+      /** Investortake */
+      investorTake: string;
       /**
        * Analyzedat
        * Format: date-time

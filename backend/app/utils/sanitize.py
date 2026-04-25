@@ -60,7 +60,7 @@ def normalize_text(text: str) -> str:
     HTML タグ除去 + HTML エンティティデコード + Unicode NFKC 正規化 +
     C0/C1 制御文字除去 (タブ・改行は保持) + 前後空白除去。
 
-    用途: Stage 2 分類ドメインの Draft 境界で Classified.reasoning などを
+    用途: Stage 2 分類ドメインの Draft 境界で Classified.investor_take などを
     sanitize する。strip_html_tags と異なり Unicode 正規化と制御文字除去を
     含むため、AI 応答経由の混入を防ぐ。
     """

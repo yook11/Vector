@@ -69,13 +69,13 @@ export function NewsDetail({ article }: { article: ArticleDetailData }) {
           </p>
         </div>
 
-        {article.reasoning && (
+        {article.investorTake && (
           <div className="space-y-4 text-left">
             <h3 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-              Reasoning
+              Investor Take
             </h3>
             <p className="text-[15px] leading-relaxed text-foreground sm:text-base">
-              {article.reasoning}
+              {article.investorTake}
             </p>
           </div>
         )}

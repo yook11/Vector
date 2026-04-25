@@ -42,7 +42,7 @@ def build_detail(
         id=analysis.id,
         translated_title=analysis.translated_title,
         summary=analysis.summary,
-        reasoning=analysis.reasoning,
+        investor_take=analysis.investor_take,
         analyzed_at=analysis.analyzed_at,
         source=NewsSourceEmbed(name=a.news_source.name),
         published_at=a.published_at,
