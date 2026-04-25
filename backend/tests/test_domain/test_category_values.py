@@ -37,31 +37,31 @@ class TestCategorySlug:
         assert slug.root == "ai_ml"
 
     def test_rejects_uppercase(self) -> None:
-        with pytest.raises(ValidationError, match="CategorySlug"):
+        with pytest.raises(ValidationError, match="Category slug"):
             CategorySlug("AI_ML")
 
     def test_rejects_empty(self) -> None:
-        with pytest.raises(ValidationError, match="CategorySlug"):
+        with pytest.raises(ValidationError, match="Category slug"):
             CategorySlug("")
 
     def test_rejects_whitespace_only(self) -> None:
-        with pytest.raises(ValidationError, match="CategorySlug"):
+        with pytest.raises(ValidationError, match="Category slug"):
             CategorySlug("   ")
 
     def test_rejects_over_50(self) -> None:
-        with pytest.raises(ValidationError, match="CategorySlug"):
+        with pytest.raises(ValidationError, match="Category slug"):
             CategorySlug("a" * 51)
 
     def test_rejects_hyphen(self) -> None:
-        with pytest.raises(ValidationError, match="CategorySlug"):
+        with pytest.raises(ValidationError, match="Category slug"):
             CategorySlug("ai-ml")
 
     def test_rejects_space(self) -> None:
-        with pytest.raises(ValidationError, match="CategorySlug"):
+        with pytest.raises(ValidationError, match="Category slug"):
             CategorySlug("ai ml")
 
     def test_rejects_underscore_start(self) -> None:
-        with pytest.raises(ValidationError, match="CategorySlug"):
+        with pytest.raises(ValidationError, match="Category slug"):
             CategorySlug("_ai_ml")
 
     def test_rejects_non_string(self) -> None:
