@@ -56,7 +56,6 @@ class BaseClassifier(abc.ABC):
         title_ja: str,
         summary_ja: str,
         entities: list[Entity],
-        existing_topics_by_category: dict[str, list[tuple[str, str]]] | None = None,
     ) -> ClassificationResponse:
         """Stage 1 の出力を分類し、Classified か OutOfScope のいずれかを返す。
 
@@ -64,8 +63,6 @@ class BaseClassifier(abc.ABC):
             title_ja: 日本語翻訳タイトル。
             summary_ja: 事実ベースの日本語要約。
             entities: 抽出済みエンティティリスト。
-            existing_topics_by_category: カテゴリ別の既存トピック (name, label_ja)
-                ペアのリスト。AI が再利用判定するための提示用。
 
         Returns:
             ``Classified`` または ``OutOfScope``。呼び出し側は ``kind`` フィールド

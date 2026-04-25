@@ -147,7 +147,7 @@ export async function getSimilarArticles(
 
 // --- Categories ---
 
-/** Fetch all categories (unified — topics + article counts). */
+/** Fetch all categories with recent article counts. */
 export async function getCategories(): Promise<CategoryDetailListResponse> {
   return fetchApi<CategoryDetailListResponse>("/categories", {
     cache: "no-store",

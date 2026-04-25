@@ -10,7 +10,6 @@ from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis
 from app.models.article_extraction import ArticleExtraction
 from app.models.category import Category
-from app.models.topic import Topic
 from app.repositories.articles import article_eager_options_brief
 from app.schemas.articles import SemanticSearchParams, SortBy, SortOrder
 
@@ -42,8 +41,7 @@ class SemanticSearchRepository:
         # コンテンツフィルタ
         if query.category is not None:
             cat_id_sub = select(Category.id).where(Category.slug == query.category)
-            topic_id_sub = select(Topic.id).where(Topic.category_id.in_(cat_id_sub))
-            stmt = stmt.where(ArticleAnalysis.topic_id.in_(topic_id_sub))
+            stmt = stmt.where(ArticleAnalysis.category_id.in_(cat_id_sub))
 
         # 件数取得
         total = await self._count(stmt)

@@ -21,9 +21,9 @@ export function NewsCard({ article }: { article: ArticleBrief }) {
           {article.topic && (
             <Badge
               variant="outline"
-              className="text-[10px] tracking-widest uppercase px-2 py-0.5 border border-neutral-200 bg-transparent text-neutral-600 dark:border-neutral-700/60 dark:text-neutral-400"
+              className="text-[10px] tracking-widest uppercase px-2 py-0.5 truncate max-w-[14rem] border border-neutral-200 bg-transparent text-neutral-600 dark:border-neutral-700/60 dark:text-neutral-400"
             >
-              {article.topic.labelJa}
+              {article.topic}
             </Badge>
           )}
         </div>

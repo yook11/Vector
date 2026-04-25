@@ -16,11 +16,11 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.analysis.domain.value_objects.topic import TopicName
 from app.models.base import Base
 
 if TYPE_CHECKING:
     from app.models.article_extraction import ArticleExtraction
-    from app.models.topic import Topic
     from app.models.watchlist_entry import WatchlistEntry
 
 
@@ -32,6 +32,10 @@ class ArticleAnalysis(Base):
 
     translated_title / summary は extractions から複製保持し、analysis 単独で
     「ユーザーに見せる分析結果」として自己完結する。
+
+    Topic は 2026-04 の決定で表示専用属性に降格し、独立テーブルから当行の
+    自由記述カラム（TopicName VO 列）に移動した。Category は第一級フィルタ軸
+    として直接 FK を持つ。
     """
 
     __tablename__ = "article_analyses"
@@ -53,10 +57,20 @@ class ArticleAnalysis(Base):
             "investor_take != ''",
             name="ck_article_analyses_investor_take_not_empty",
         ),
-        # サイドバーの直近 24 時間集計クエリ向けの複合インデックス
+        CheckConstraint(
+            "topic <> ''",
+            name="ck_article_analyses_topic_not_empty",
+        ),
+        # TopicName VO の正規表現と揃える DB 側多層防御。
+        CheckConstraint(
+            r"topic ~ '^[a-z0-9]+( [a-z0-9]+){0,2}$'",
+            name="ck_article_analyses_topic_format",
+        ),
+        # サイドバーの直近 24 時間集計クエリ向けの複合インデックス。
+        # 単独 ix_article_analyses_category_id は作らない（複合の左端でカバー）。
         Index(
-            "ix_article_analyses_topic_id_analyzed_at",
-            "topic_id",
+            "ix_article_analyses_category_id_analyzed_at",
+            "category_id",
             "analyzed_at",
         ),
     )
@@ -74,38 +88,16 @@ class ArticleAnalysis(Base):
     )
     embedding: Mapped[list[float] | None] = mapped_column(HALFVEC(768))
     embedding_model: Mapped[str | None] = mapped_column(String(100))
-    topic_id: Mapped[int] = mapped_column(
-        ForeignKey("topics.id", ondelete="RESTRICT"), index=True
+    # 表示専用の自由記述ラベル。TopicNameType により VO ↔ str を双方向強制。
+    topic: Mapped[TopicName] = mapped_column()
+    # 第一級フィルタ軸。リレーションは YAGNI で持たない（必要時に
+    # selectinload を強制する形で別途追加する）。
+    category_id: Mapped[int] = mapped_column(
+        ForeignKey("categories.id", ondelete="RESTRICT"),
     )
 
     # リレーション
     extraction: Mapped[ArticleExtraction] = relationship(back_populates="analysis")
-    topic: Mapped[Topic] = relationship()
     watchlist_entries: Mapped[list[WatchlistEntry]] = relationship(
         back_populates="article_analysis"
     )
-
-    @classmethod
-    def from_classification(
-        cls,
-        *,
-        extraction_id: int,
-        translated_title: str,
-        summary: str,
-        topic_id: int,
-        investor_take: str,
-        model_name: str,
-    ) -> ArticleAnalysis:
-        """Stage 2 の分類結果から分析オブジェクトを構築する。
-
-        translated_title / summary は extraction から複製する（自己完結の保証）。
-        呼び出し側 (Service) が Extraction ドメイン Entity からこれらを渡す。
-        """
-        return cls(
-            extraction_id=extraction_id,
-            translated_title=translated_title,
-            summary=summary,
-            topic_id=topic_id,
-            investor_take=investor_take,
-            ai_model=model_name,
-        )

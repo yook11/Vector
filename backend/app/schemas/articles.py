@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 from app.domain.category import CategorySlug
 from app.schemas.base import PaginationParams, _CamelBase
-from app.schemas.embeds import NewsSourceEmbed, OriginalArticleEmbed, TopicEmbed
+from app.schemas.embeds import NewsSourceEmbed, OriginalArticleEmbed
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -83,14 +83,18 @@ class SemanticSearchParams(PaginationParams):
 
 
 class ArticleBrief(_CamelBase):
-    """GET /api/v1/articles — 一覧カード用"""
+    """GET /api/v1/articles — 一覧カード用
+
+    topic は表示専用属性として降格された 3 語以内英語フレーズ。DB NOT NULL +
+    CHECK で非空を保証するため Optional ではない。
+    """
 
     id: int
     translated_title: str
     summary: str
     source: NewsSourceEmbed
     published_at: datetime | None = None
-    topic: TopicEmbed | None = None
+    topic: str
     is_watched: bool = False
 
 
@@ -104,7 +108,7 @@ class ArticleDetail(_CamelBase):
     analyzed_at: datetime
     source: NewsSourceEmbed
     published_at: datetime | None = None
-    topic: TopicEmbed | None = None
+    topic: str
     is_watched: bool = False
     original: OriginalArticleEmbed
 

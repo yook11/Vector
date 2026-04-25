@@ -10,11 +10,7 @@ from app.schemas.articles import (
     ArticleListParams,
     PaginatedArticleResponse,
 )
-from app.schemas.embeds import NewsSourceEmbed, OriginalArticleEmbed, TopicEmbed
-
-
-def build_topic_embed(analysis: ArticleAnalysis) -> TopicEmbed:
-    return TopicEmbed(name=analysis.topic.name, label_ja=analysis.topic.label_ja)
+from app.schemas.embeds import NewsSourceEmbed, OriginalArticleEmbed
 
 
 def build_brief(
@@ -28,7 +24,7 @@ def build_brief(
         summary=analysis.summary,
         source=NewsSourceEmbed(name=a.news_source.name),
         published_at=a.published_at,
-        topic=build_topic_embed(analysis),
+        topic=str(analysis.topic),
         is_watched=analysis.id in watched_ids if watched_ids else False,
     )
 
@@ -46,7 +42,7 @@ def build_detail(
         analyzed_at=analysis.analyzed_at,
         source=NewsSourceEmbed(name=a.news_source.name),
         published_at=a.published_at,
-        topic=build_topic_embed(analysis),
+        topic=str(analysis.topic),
         is_watched=analysis.id in watched_ids if watched_ids else False,
         original=OriginalArticleEmbed(
             title=a.original_title,

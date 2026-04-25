@@ -13,7 +13,6 @@ from app.models.article_extraction import ArticleExtraction
 from app.models.category import Category
 from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource, SourceType
-from app.models.topic import Topic
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -22,16 +21,6 @@ from app.models.topic import Topic
 FAKE_EMBEDDING_A = [0.1] * 768  # クエリに "近い"
 FAKE_EMBEDDING_B = [0.9] * 768  # クエリから "遠い"
 FAKE_QUERY_EMBEDDING = [0.1] * 768  # A にマッチ
-
-
-async def _create_topic(
-    db_session: AsyncSession, category_id: int, name: str = "search test"
-) -> Topic:
-    """テスト用トピックを作成するヘルパー。"""
-    topic = Topic(name=name, label_ja=name, category_id=category_id)
-    db_session.add(topic)
-    await db_session.flush()
-    return topic
 
 
 async def _create_source(db_session: AsyncSession) -> NewsSource:
@@ -50,7 +39,8 @@ async def _create_article(
     db_session: AsyncSession,
     source: NewsSource,
     *,
-    topic_id: int,
+    category_id: int,
+    topic: str = "search test",
     title: str = "Test Article",
     url: str = "https://example.com/1",
     embedding: list[float] | None = None,
@@ -90,7 +80,8 @@ async def _create_article(
         ai_model="gemini-2.0-flash",
         embedding=embedding,
         embedding_model="text-embedding-004" if embedding else None,
-        topic_id=topic_id,
+        topic=topic,
+        category_id=category_id,
     )
     db_session.add(analysis)
     await db_session.flush()
@@ -120,11 +111,10 @@ async def test_semantic_search_returns_articles_with_embedding(
 ) -> None:
     """GET /api/v1/articles/search?q=test は embedding 付きの記事を返す。"""
     source = await _create_source(db_session)
-    topic = await _create_topic(db_session, sample_categories[0].id)
     await _create_article(
         db_session,
         source,
-        topic_id=topic.id,
+        category_id=sample_categories[0].id,
         title="AI Breakthrough",
         url="https://example.com/ai",
         embedding=FAKE_EMBEDDING_A,
@@ -150,11 +140,11 @@ async def test_semantic_search_excludes_articles_without_embedding(
 ) -> None:
     """embedding の無い記事はセマンティック検索結果から除外される。"""
     source = await _create_source(db_session)
-    topic = await _create_topic(db_session, sample_categories[0].id)
+    cat_id = sample_categories[0].id
     await _create_article(
         db_session,
         source,
-        topic_id=topic.id,
+        category_id=cat_id,
         title="With Embedding",
         url="https://example.com/with",
         embedding=FAKE_EMBEDDING_A,
@@ -162,7 +152,7 @@ async def test_semantic_search_excludes_articles_without_embedding(
     await _create_article(
         db_session,
         source,
-        topic_id=topic.id,
+        category_id=cat_id,
         title="Without Embedding",
         url="https://example.com/without",
         embedding=None,
@@ -192,11 +182,11 @@ async def test_no_q_parameter_returns_analyzed_articles(
 ) -> None:
     """q パラメータなしでは分析済み記事のみを返す。"""
     source = await _create_source(db_session)
-    topic = await _create_topic(db_session, sample_categories[0].id)
+    cat_id = sample_categories[0].id
     await _create_article(
         db_session,
         source,
-        topic_id=topic.id,
+        category_id=cat_id,
         title="Article 1",
         url="https://example.com/1",
         embedding=FAKE_EMBEDDING_A,
@@ -204,7 +194,7 @@ async def test_no_q_parameter_returns_analyzed_articles(
     await _create_article(
         db_session,
         source,
-        topic_id=topic.id,
+        category_id=cat_id,
         title="Article 2",
         url="https://example.com/2",
         embedding=FAKE_EMBEDDING_A,
@@ -234,11 +224,10 @@ async def test_semantic_search_returns_503_on_embedding_failure(
     from app.search.errors import SearchError
 
     source = await _create_source(db_session)
-    topic = await _create_topic(db_session, sample_categories[0].id)
     await _create_article(
         db_session,
         source,
-        topic_id=topic.id,
+        category_id=sample_categories[0].id,
         embedding=FAKE_EMBEDDING_A,
     )
     await db_session.commit()

@@ -12,13 +12,12 @@ from app.models.article_extraction import ArticleExtraction
 from app.models.category import Category
 from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
-from app.models.topic import Topic
 
 
 async def _build_article_with_analysis(
     db_session: AsyncSession,
     source: NewsSource,
-    topic: Topic,
+    category_id: int,
     *,
     url: str,
     title: str,
@@ -26,6 +25,7 @@ async def _build_article_with_analysis(
     summary: str,
     investor_take: str,
     published_at: datetime,
+    topic: str = "watchlist test",
 ) -> tuple[Article, ArticleAnalysis]:
     discovered = DiscoveredArticle(
         original_title=title,
@@ -56,7 +56,8 @@ async def _build_article_with_analysis(
         summary=summary,
         investor_take=investor_take,
         ai_model="gemini-2.0-flash",
-        topic_id=topic.id,
+        topic=topic,
+        category_id=category_id,
     )
     db_session.add(analysis)
     await db_session.commit()
@@ -72,24 +73,17 @@ async def sample_article(
     sample_source: NewsSource,
 ) -> ArticleAnalysis:
     """分析付きのテスト用記事（analysis を返す）。"""
-    topic = Topic(
-        name="watchlist test",
-        label_ja="ウォッチリストテスト",
-        category_id=sample_categories[0].id,
-    )
-    db_session.add(topic)
-    await db_session.flush()
-
     _, analysis = await _build_article_with_analysis(
         db_session,
         sample_source,
-        topic,
+        sample_categories[0].id,
         url="https://example.com/test",
         title="Test Article",
         translated_title="テスト記事",
         summary="テストの要約",
         investor_take="Test investor_take",
         published_at=datetime(2026, 1, 1, tzinfo=UTC),
+        topic="watchlist test",
     )
     return analysis
 
@@ -101,24 +95,17 @@ async def second_article(
     sample_source: NewsSource,
 ) -> ArticleAnalysis:
     """分析付きの 2 件目のテスト用記事（analysis を返す）。"""
-    topic = Topic(
-        name="second test",
-        label_ja="セカンドテスト",
-        category_id=sample_categories[0].id,
-    )
-    db_session.add(topic)
-    await db_session.flush()
-
     _, analysis = await _build_article_with_analysis(
         db_session,
         sample_source,
-        topic,
+        sample_categories[0].id,
         url="https://example.com/second",
         title="Second Article",
         translated_title="2番目の記事",
         summary="2番目の要約",
         investor_take="Second investor_take",
         published_at=datetime(2026, 1, 2, tzinfo=UTC),
+        topic="second test",
     )
     return analysis
 

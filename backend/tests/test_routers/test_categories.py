@@ -12,7 +12,6 @@ from app.models.article_extraction import ArticleExtraction
 from app.models.category import Category
 from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
-from app.models.topic import Topic
 
 
 @pytest.mark.asyncio
@@ -74,6 +73,8 @@ class TestListCategories:
         assert "id" not in item
         assert "slug" in item
         assert "name" in item
+        # Topic 降格後 (2026-04) は CategoryDetail.topics は廃止された。
+        assert "topics" not in item
 
     async def test_recent_count_includes_recent_analysis(
         self,
@@ -83,14 +84,6 @@ class TestListCategories:
         sample_source: NewsSource,
     ) -> None:
         """直近 24 時間に分類された記事は recentCount に含まれる。"""
-        topic = Topic(
-            name="tensorflow",
-            label_ja="TensorFlow",
-            category_id=sample_categories[0].id,
-        )
-        db_session.add(topic)
-        await db_session.flush()
-
         discovered = DiscoveredArticle(
             original_title="TF Article",
             original_url="https://example.com/tf",
@@ -119,7 +112,8 @@ class TestListCategories:
             summary="要約",
             investor_take="理由",
             ai_model="test",
-            topic_id=topic.id,
+            topic="tensorflow",
+            category_id=sample_categories[0].id,
         )
         db_session.add(analysis)
         await db_session.commit()
@@ -137,14 +131,6 @@ class TestListCategories:
         sample_source: NewsSource,
     ) -> None:
         """24 時間より前に分類された記事は recentCount に含まれない。"""
-        topic = Topic(
-            name="tensorflow",
-            label_ja="TensorFlow",
-            category_id=sample_categories[0].id,
-        )
-        db_session.add(topic)
-        await db_session.flush()
-
         discovered = DiscoveredArticle(
             original_title="TF Article Old",
             original_url="https://example.com/tf-old",
@@ -173,7 +159,8 @@ class TestListCategories:
             summary="要約",
             investor_take="理由",
             ai_model="test",
-            topic_id=topic.id,
+            topic="tensorflow",
+            category_id=sample_categories[0].id,
             analyzed_at=datetime.now(UTC) - timedelta(hours=25),
         )
         db_session.add(analysis)
@@ -183,59 +170,3 @@ class TestListCategories:
         items = resp.json()["items"]
         ai_cat = next(i for i in items if i["slug"] == "ai")
         assert ai_cat["recentCount"] == 0
-
-    async def test_nested_topics(
-        self,
-        client: AsyncClient,
-        db_session: AsyncSession,
-        sample_categories: list[Category],
-        sample_source: NewsSource,
-    ) -> None:
-        """カテゴリレスポンスにはネストしたトピック統計が含まれる。"""
-        topic = Topic(
-            name="pytorch",
-            label_ja="PyTorch",
-            category_id=sample_categories[0].id,
-        )
-        db_session.add(topic)
-        await db_session.flush()
-
-        discovered = DiscoveredArticle(
-            original_title="PyTorch Article",
-            original_url="https://example.com/pytorch",
-            news_source_id=sample_source.id,
-        )
-        db_session.add(discovered)
-        await db_session.flush()
-        article = Article(
-            discovered_article_id=discovered.id,
-            original_title="PyTorch Article",
-            original_content="PyTorch content.",
-        )
-        db_session.add(article)
-        await db_session.flush()
-
-        extraction = ArticleExtraction(
-            article_id=article.id,
-            translated_title="PyTorch記事",
-            summary="要約",
-            ai_model="test",
-        )
-        db_session.add(extraction)
-        await db_session.flush()
-        analysis = ArticleAnalysis(
-            extraction_id=extraction.id,
-            translated_title="PyTorch記事",
-            summary="要約",
-            investor_take="理由",
-            ai_model="test",
-            topic_id=topic.id,
-        )
-        db_session.add(analysis)
-        await db_session.commit()
-
-        resp = await client.get("/api/v1/categories")
-        items = resp.json()["items"]
-        ai_cat = next(i for i in items if i["slug"] == "ai")
-        assert len(ai_cat["topics"]) == 1
-        assert ai_cat["topics"][0]["name"] == "pytorch"

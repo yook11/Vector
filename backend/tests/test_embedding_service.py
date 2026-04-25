@@ -14,7 +14,6 @@ from app.models.article_extraction import ArticleExtraction
 from app.models.category import Category
 from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
-from app.models.topic import Topic
 
 
 def _mock_embedder(vector: list[float] | None = None) -> MagicMock:
@@ -31,12 +30,13 @@ def _mock_embedder(vector: list[float] | None = None) -> MagicMock:
 async def _build_extraction_with_analysis(
     db_session: AsyncSession,
     source: NewsSource,
-    topic: Topic,
+    category_id: int,
     *,
     url: str,
     title: str,
     translated_title: str,
     summary: str,
+    topic: str = "embedding test",
     embedding: list[float] | None = None,
 ) -> tuple[Article, ArticleExtraction, ArticleAnalysis]:
     """Stage 1+2 完了済みの article / extraction / analysis を作成する。"""
@@ -69,7 +69,8 @@ async def _build_extraction_with_analysis(
         summary=summary,
         investor_take="テスト理由",
         ai_model="gemini-2.5-flash-lite",
-        topic_id=topic.id,
+        topic=topic,
+        category_id=category_id,
         embedding=embedding,
         embedding_model="cl-nagoya/ruri-v3-310m" if embedding is not None else None,
     )
@@ -84,18 +85,10 @@ async def test_embedding_creates_vector(
     sample_source: NewsSource,
 ) -> None:
     """EmbeddingService は既存分析に対して embedding を永続化する。"""
-    topic = Topic(
-        name="embedding test",
-        label_ja="埋め込みテスト",
-        category_id=sample_categories[0].id,
-    )
-    db_session.add(topic)
-    await db_session.flush()
-
     article, extraction, _ = await _build_extraction_with_analysis(
         db_session,
         sample_source,
-        topic,
+        sample_categories[0].id,
         url="https://example.com/embed-test",
         title="Test Article",
         translated_title="テスト記事",
@@ -130,22 +123,15 @@ async def test_embedding_idempotency(
     sample_source: NewsSource,
 ) -> None:
     """embedding 済み分析は API を呼ばずに already_exists を返す。"""
-    topic = Topic(
-        name="idempotent test",
-        label_ja="冪等性テスト",
-        category_id=sample_categories[0].id,
-    )
-    db_session.add(topic)
-    await db_session.flush()
-
     article, _, _ = await _build_extraction_with_analysis(
         db_session,
         sample_source,
-        topic,
+        sample_categories[0].id,
         url="https://example.com/idempotent",
         title="Already Embedded",
         translated_title="既存タイトル",
         summary="既存要約",
+        topic="idempotent test",
         embedding=[0.2] * 768,
     )
     await db_session.commit()

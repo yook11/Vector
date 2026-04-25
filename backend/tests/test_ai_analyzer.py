@@ -40,7 +40,6 @@ from app.models.article_rejection import ArticleRejection
 from app.models.category import Category
 from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
-from app.models.topic import Topic
 
 # --- Helpers ---
 
@@ -65,15 +64,13 @@ def _make_extraction_result(
 
 def _make_classified(
     category: ValidCategory = ValidCategory.COMPUTING,
-    topic: str = "quantum computing breakthrough",
-    topic_label_ja: str = "量子コンピューティング進展",
+    topic: str = "quantum computing",
     investor_take: str = "技術的に重要な進展",
 ) -> Classified:
     """Classified を生成するヘルパー。"""
     return Classified(
         category=category,
         topic=TopicName(topic),
-        topic_label_ja=topic_label_ja,
         investor_take=investor_take,
     )
 
@@ -326,22 +323,20 @@ def test_topic_name_rejects_stopword_preposition() -> None:
 def test_classified_valid() -> None:
     resp = Classified(
         category=ValidCategory.COMPUTING,
-        topic=TopicName("quantum computing breakthrough"),
-        topic_label_ja="量子コンピューティング進展",
+        topic=TopicName("quantum computing"),
         investor_take="理由",
     )
     assert resp.category == ValidCategory.COMPUTING
-    assert resp.topic.root == "quantum computing breakthrough"
+    assert resp.topic.root == "quantum computing"
 
 
 def test_classified_normalizes_topic() -> None:
     resp = Classified(
         category=ValidCategory.COMPUTING,
-        topic=TopicName("Quantum Computing Breakthrough"),
-        topic_label_ja="量子コンピューティング進展",
+        topic=TopicName("Quantum Computing"),
         investor_take="理由",
     )
-    assert resp.topic.root == "quantum computing breakthrough"
+    assert resp.topic.root == "quantum computing"
 
 
 def test_classified_rejects_invalid_category() -> None:
@@ -350,7 +345,6 @@ def test_classified_rejects_invalid_category() -> None:
             {
                 "category": "invalid_category",
                 "topic": "foo bar",
-                "topic_label_ja": "ラベル",
                 "investor_take": "r",
             }
         )
@@ -608,13 +602,13 @@ async def test_extraction_returns_skipped_on_invalid_input(
 # --- G. ClassificationService orchestration tests ---
 
 
-async def test_classification_creates_topic(
+async def test_classification_persists_topic_and_category(
     db_session: AsyncSession,
     session_factory,
     sample_categories: list[Category],
     sample_source: NewsSource,
 ) -> None:
-    """Stage 1 完了後の記事に対して Stage 2 が Topic を作成し analysis を生成する。"""
+    """Stage 2 が topic と category_id を含む analysis を生成する。"""
     article, extraction = await _create_article_with_extraction(
         db_session,
         sample_source,
@@ -628,13 +622,19 @@ async def test_classification_creates_topic(
     db_session.add(entity)
     await db_session.commit()
 
+    expected_category_id = next(
+        (c.id for c in sample_categories if str(c.slug) == "computing"),
+        None,
+    )
+    assert expected_category_id is not None
+
     mock_classifier = MagicMock(spec=BaseClassifier)
     mock_classifier.MODEL = "gemini-2.5-flash-lite"
     mock_classifier.model_name = "gemini-2.5-flash-lite"
     mock_classifier.classify = AsyncMock(
         return_value=_make_classified(
             category=ValidCategory.COMPUTING,
-            topic="quantum computing breakthrough",
+            topic="quantum computing",
             investor_take="理由テスト",
         )
     )
@@ -653,13 +653,9 @@ async def test_classification_creates_topic(
             )
         )
     ).scalar_one()
-    assert analysis.topic_id is not None
+    assert str(analysis.topic) == "quantum computing"
+    assert analysis.category_id == expected_category_id
     assert analysis.investor_take == "理由テスト"
-
-    topic = (
-        await db_session.execute(select(Topic).where(Topic.id == analysis.topic_id))
-    ).scalar_one()
-    assert str(topic.name) == "quantum computing breakthrough"
 
 
 async def test_classification_persists_rejection_when_out_of_scope(
@@ -714,14 +710,6 @@ async def test_classification_skips_already_classified(
     sample_categories: list[Category],
     sample_source: NewsSource,
 ) -> None:
-    topic = Topic(
-        name="existing topic",
-        label_ja="既存トピック",
-        category_id=sample_categories[0].id,
-    )
-    db_session.add(topic)
-    await db_session.flush()
-
     article, extraction = await _create_article_with_extraction(
         db_session,
         sample_source,
@@ -736,7 +724,8 @@ async def test_classification_skips_already_classified(
         summary="分類済み要約",
         investor_take="既存理由",
         ai_model="gemini-2.5-flash-lite",
-        topic_id=topic.id,
+        topic="existing topic",
+        category_id=sample_categories[0].id,
     )
     db_session.add(analysis)
     await db_session.commit()
@@ -785,14 +774,6 @@ async def test_news_endpoint_includes_analysis(
     sample_categories: list[Category],
     sample_source: NewsSource,
 ) -> None:
-    topic = Topic(
-        name="integration test",
-        label_ja="統合テスト",
-        category_id=sample_categories[0].id,
-    )
-    db_session.add(topic)
-    await db_session.flush()
-
     _, extraction = await _create_article_with_extraction(
         db_session,
         sample_source,
@@ -807,7 +788,8 @@ async def test_news_endpoint_includes_analysis(
         summary="テスト要約",
         investor_take="テスト理由",
         ai_model="gemini-2.5-flash-lite",
-        topic_id=topic.id,
+        topic="integration test",
+        category_id=sample_categories[0].id,
     )
     db_session.add(analysis)
     await db_session.commit()

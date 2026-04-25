@@ -32,9 +32,9 @@ export function NewsDetail({ article }: { article: ArticleDetailData }) {
         {article.topic && (
           <Badge
             variant="secondary"
-            className="text-[10px] tracking-widest uppercase px-2.5 py-0.5 bg-neutral-100 text-neutral-600 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-400 border-transparent"
+            className="text-[10px] tracking-widest uppercase px-2.5 py-0.5 truncate max-w-[14rem] bg-neutral-100 text-neutral-600 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-400 border-transparent"
           >
-            {article.topic.labelJa}
+            {article.topic}
           </Badge>
         )}
       </div>

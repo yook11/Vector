@@ -9,8 +9,6 @@ from app.schemas.category import (
 )
 from app.schemas.embeds import (
     OriginalArticleEmbed,
-    TopicEmbed,
-    TopicStatEmbed,
 )
 from app.schemas.pipeline import (
     EmbedResponse,
@@ -27,7 +25,5 @@ __all__ = [
     "FetchRequest",
     "FetchResponse",
     "OriginalArticleEmbed",
-    "TopicEmbed",
-    "TopicStatEmbed",
     "PaginatedArticleResponse",
 ]

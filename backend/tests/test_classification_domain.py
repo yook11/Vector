@@ -21,7 +21,6 @@ def _make_classified(**overrides: object) -> Classified:
     defaults: dict[str, object] = {
         "category": ValidCategory.AI,
         "topic": TopicName(root="ai agents"),
-        "topic_label_ja": "AIエージェント",
         "investor_take": "Significant advancement in agent autonomy.",
     }
     defaults.update(overrides)
@@ -39,7 +38,6 @@ class TestAnalysisDraftSanitize:
             translated_title="<b>Title</b>",
             summary="<p>Summary <i>here</i></p>",
             topic_name=TopicName(root="ai agents"),
-            topic_label_ja="AIエージェント",
             investor_take="<script>bad()</script>Reason",
         )
         assert draft.translated_title == "Title"
@@ -52,7 +50,6 @@ class TestAnalysisDraftSanitize:
             translated_title="title\x00x",
             summary="ok\x01summary",
             topic_name=TopicName(root="ai"),
-            topic_label_ja="ラベル",
             investor_take="reason\x7fok",
         )
         assert "\x00" not in draft.translated_title
@@ -65,7 +62,6 @@ class TestAnalysisDraftSanitize:
             translated_title="Hello",  # 全角英字を含む
             summary="ok",
             topic_name=TopicName(root="ai"),
-            topic_label_ja="ラベル",
             investor_take="reason",
         )
         assert draft.translated_title == "Hello"
@@ -75,7 +71,6 @@ class TestAnalysisDraftSanitize:
             translated_title="title",
             summary="line1\nline2",
             topic_name=TopicName(root="ai"),
-            topic_label_ja="ラベル",
             investor_take="reason\twith\ttabs",
         )
         assert "\n" in draft.summary
@@ -89,7 +84,6 @@ class TestAnalysisDraftRejection:
                 translated_title="",
                 summary="ok",
                 topic_name=TopicName(root="ai"),
-                topic_label_ja="ラベル",
                 investor_take="reason",
             )
 
@@ -99,7 +93,6 @@ class TestAnalysisDraftRejection:
                 translated_title="<b></b>",
                 summary="ok",
                 topic_name=TopicName(root="ai"),
-                topic_label_ja="ラベル",
                 investor_take="reason",
             )
 
@@ -109,7 +102,6 @@ class TestAnalysisDraftRejection:
                 translated_title="a" * 501,
                 summary="ok",
                 topic_name=TopicName(root="ai"),
-                topic_label_ja="ラベル",
                 investor_take="reason",
             )
 
@@ -119,7 +111,6 @@ class TestAnalysisDraftRejection:
                 translated_title="title",
                 summary="a" * 4001,
                 topic_name=TopicName(root="ai"),
-                topic_label_ja="ラベル",
                 investor_take="reason",
             )
 
@@ -129,50 +120,7 @@ class TestAnalysisDraftRejection:
                 translated_title="title",
                 summary="ok",
                 topic_name=TopicName(root="ai"),
-                topic_label_ja="ラベル",
                 investor_take="a" * 2001,
-            )
-
-
-class TestAnalysisDraftTopicLabelJa:
-    def test_rejects_empty_label(self) -> None:
-        with pytest.raises(ValidationError):
-            AnalysisDraft(
-                translated_title="title",
-                summary="ok",
-                topic_name=TopicName(root="ai"),
-                topic_label_ja="",
-                investor_take="reason",
-            )
-
-    def test_rejects_label_over_20_chars(self) -> None:
-        with pytest.raises(ValidationError):
-            AnalysisDraft(
-                translated_title="title",
-                summary="ok",
-                topic_name=TopicName(root="ai"),
-                topic_label_ja="あ" * 21,
-                investor_take="reason",
-            )
-
-    def test_rejects_label_with_newline(self) -> None:
-        with pytest.raises(ValidationError):
-            AnalysisDraft(
-                translated_title="title",
-                summary="ok",
-                topic_name=TopicName(root="ai"),
-                topic_label_ja="line1\nline2",
-                investor_take="reason",
-            )
-
-    def test_rejects_label_with_url_scheme(self) -> None:
-        with pytest.raises(ValidationError):
-            AnalysisDraft(
-                translated_title="title",
-                summary="ok",
-                topic_name=TopicName(root="ai"),
-                topic_label_ja="http://evil",
-                investor_take="reason",
             )
 
 
@@ -210,7 +158,8 @@ def _make_analysis(**overrides: object) -> Analysis:
         "extraction_id": 2,
         "translated_title": "title",
         "summary": "summary",
-        "topic_id": 3,
+        "topic": TopicName(root="ai agents"),
+        "category_id": 3,
         "investor_take": "reason",
         "ai_model": "gemini-2.5-pro",
         "analyzed_at": datetime(2026, 1, 1, tzinfo=UTC),
@@ -232,7 +181,7 @@ class TestAnalysisPostInit:
         with pytest.raises(ValueError):
             _make_analysis(**{field: ""})
 
-    @pytest.mark.parametrize("field", ["id", "extraction_id", "topic_id"])
+    @pytest.mark.parametrize("field", ["id", "extraction_id", "category_id"])
     @pytest.mark.parametrize("value", [0, -1])
     def test_rejects_non_positive_identifiers(self, field: str, value: int) -> None:
         with pytest.raises(ValueError):
@@ -256,13 +205,14 @@ class TestAnalysisFromDraft:
             draft,
             id=42,
             extraction_id=7,
-            topic_id=3,
+            category_id=3,
             ai_model="gemini-2.5-pro",
             analyzed_at=analyzed_at,
         )
         assert analysis.id == 42
         assert analysis.extraction_id == 7
-        assert analysis.topic_id == 3
+        assert analysis.category_id == 3
+        assert analysis.topic == draft.topic_name
         assert analysis.ai_model == "gemini-2.5-pro"
         assert analysis.analyzed_at == analyzed_at
         assert analysis.translated_title == draft.translated_title

@@ -290,6 +290,9 @@ export interface components {
     /**
      * ArticleBrief
      * @description GET /api/v1/articles — 一覧カード用
+     *
+     *     topic は表示専用属性として降格された 3 語以内英語フレーズ。DB NOT NULL +
+     *     CHECK で非空を保証するため Optional ではない。
      */
     ArticleBrief: {
       /** Id */
@@ -301,7 +304,8 @@ export interface components {
       source: components["schemas"]["NewsSourceEmbed"];
       /** Publishedat */
       publishedAt?: string | null;
-      topic?: components["schemas"]["TopicEmbed"] | null;
+      /** Topic */
+      topic: string;
       /**
        * Iswatched
        * @default false
@@ -329,7 +333,8 @@ export interface components {
       source: components["schemas"]["NewsSourceEmbed"];
       /** Publishedat */
       publishedAt?: string | null;
-      topic?: components["schemas"]["TopicEmbed"] | null;
+      /** Topic */
+      topic: string;
       /**
        * Iswatched
        * @default false
@@ -351,11 +356,6 @@ export interface components {
        * @default 0
        */
       recentCount: number;
-      /**
-       * Topics
-       * @default []
-       */
-      topics: components["schemas"]["TopicStatEmbed"][];
     };
     /**
      * CategoryDetailList
@@ -533,46 +533,6 @@ export interface components {
      * @enum {string}
      */
     SourceType: "rss" | "api";
-    /**
-     * TopicEmbed
-     * @description トピックタグ（ニュース埋め込み用）
-     */
-    TopicEmbed: {
-      name: components["schemas"]["TopicName"];
-      /** Labelja */
-      labelJa: string;
-    };
-    /**
-     * TopicName
-     * @description AI 生成の分類ラベル名。正規化済みの英語小文字。
-     *
-     *     入力は自動で正規化される（小文字化、ハイフン／アンダースコアを空白に、
-     *     連続空白を単一空白に）。VO 自身が「正規化済み」を保証する状態型。
-     *
-     *     Invariants:
-     *     - 英数字トークンを単一空白で連結した形式
-     *     - 先頭・末尾は英数字
-     *     - 2-100 文字
-     *     - 小文字のみ
-     *     - 最大 3 語
-     *     - 冠詞・前置詞を含まない
-     *     - 生成後は不変
-     */
-    TopicName: string;
-    /**
-     * TopicStatEmbed
-     * @description トピック＋直近24時間に AI 分類が完了した記事数（カテゴリ内集計表示用）
-     */
-    TopicStatEmbed: {
-      name: components["schemas"]["TopicName"];
-      /** Labelja */
-      labelJa: string;
-      /**
-       * Recentcount
-       * @default 0
-       */
-      recentCount: number;
-    };
     /**
      * UserRole
      * @enum {string}

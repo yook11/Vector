@@ -9,7 +9,6 @@ from app.models.article_analysis import ArticleAnalysis
 from app.models.article_extraction import ArticleExtraction
 from app.models.category import Category
 from app.models.discovered_article import DiscoveredArticle
-from app.models.topic import Topic
 from app.schemas.articles import ArticleListParams, SortOrder
 
 
@@ -24,7 +23,6 @@ def article_eager_options_brief() -> list:
                 DiscoveredArticle.news_source
             ),
         ),
-        selectinload(ArticleAnalysis.topic),
     ]
 
 
@@ -39,7 +37,6 @@ def article_eager_options_detail() -> list:
                 DiscoveredArticle.news_source
             ),
         ),
-        selectinload(ArticleAnalysis.topic),
     ]
 
 
@@ -64,8 +61,7 @@ class ArticleRepository:
         # フィルタ
         if query.category is not None:
             cat_id_sub = select(Category.id).where(Category.slug == query.category)
-            topic_id_sub = select(Topic.id).where(Topic.category_id.in_(cat_id_sub))
-            stmt = stmt.where(ArticleAnalysis.topic_id.in_(topic_id_sub))
+            stmt = stmt.where(ArticleAnalysis.category_id.in_(cat_id_sub))
 
         # 総件数
         count_stmt = select(func.count()).select_from(stmt.subquery())
