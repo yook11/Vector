@@ -2,7 +2,6 @@
 
 from typing import Annotated
 
-import structlog
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,8 +10,6 @@ from app.repositories.watchlist import WatchlistRepository
 from app.schemas.articles import PaginatedArticleResponse, SemanticSearchParams
 from app.search.repository import SemanticSearchRepository
 from app.search.service import SemanticSearchService
-
-logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1/articles", tags=["semantic-search"])
 
@@ -33,6 +30,4 @@ async def search_articles(
     service: Annotated[SemanticSearchService, Depends(get_semantic_search_service)],
 ) -> PaginatedArticleResponse:
     """指定クエリテキストとのセマンティック類似度で記事を検索する。"""
-    if params.category is not None:
-        logger.info("legacy_category_query_received", category=str(params.category))
     return await service.search(params, user.id if user else None)

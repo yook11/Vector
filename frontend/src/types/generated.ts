@@ -553,14 +553,16 @@ export interface components {
      * TopicName
      * @description AI 生成の分類ラベル名。正規化済みの英語小文字。
      *
-     *     入力は自動で正規化される（小文字化、空白/ハイフン正規化）。
-     *     VO 自身が「正規化済み」を保証する状態型。
+     *     入力は自動で正規化される（小文字化、ハイフン／アンダースコアを空白に、
+     *     連続空白を単一空白に）。VO 自身が「正規化済み」を保証する状態型。
      *
      *     Invariants:
+     *     - 英数字トークンを単一空白で連結した形式
      *     - 先頭・末尾は英数字
-     *     - 中間は英数字・スペース・ハイフンのみ
      *     - 2-100 文字
      *     - 小文字のみ
+     *     - 最大 3 語
+     *     - 冠詞・前置詞を含まない
      *     - 生成後は不変
      */
     TopicName: string;
@@ -620,7 +622,7 @@ export interface operations {
         perPage?: number;
         q: string;
         sortBy?: components["schemas"]["SortBy"];
-        topic?: string | null;
+        /** @description Outbound primary filter key. Accepts a category slug. */
         category?: components["schemas"]["CategorySlug"] | null;
         impactLevel?: components["schemas"]["ImpactLevel"] | null;
         sortOrder?: components["schemas"]["SortOrder"];
@@ -660,7 +662,7 @@ export interface operations {
       query?: {
         page?: number;
         perPage?: number;
-        topic?: string | null;
+        /** @description Outbound primary filter key. Accepts a category slug. */
         category?: components["schemas"]["CategorySlug"] | null;
         impactLevel?: components["schemas"]["ImpactLevel"] | null;
         sortOrder?: components["schemas"]["SortOrder"];

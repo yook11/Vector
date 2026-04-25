@@ -21,16 +21,12 @@ function parseCommonFilters(
   };
 
   const filters: {
-    topic?: string;
     category?: string;
     impactLevel?: ImpactLevel;
     sortOrder?: "asc" | "desc";
     page?: number;
     perPage?: number;
   } = {};
-
-  const topic = str("topic");
-  if (topic) filters.topic = topic;
 
   const category = str("category");
   if (category) filters.category = category;
@@ -81,7 +77,6 @@ export default async function DashboardPage({
         <CategorySidebar
           categories={categoriesData.items}
           activeCategory={filters.category}
-          activeTopic={filters.topic}
         />
       </aside>
 
@@ -93,7 +88,6 @@ export default async function DashboardPage({
             <MobileSidebar
               categories={categoriesData.items}
               activeCategory={filters.category}
-              activeTopic={filters.topic}
             />
             <h1 className="text-base font-medium text-foreground">Dashboard</h1>
           </div>
