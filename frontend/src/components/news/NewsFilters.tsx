@@ -31,24 +31,6 @@ export function NewsFilters() {
   return (
     <div className="flex flex-wrap items-center gap-2.5">
       <Select
-        value={searchParams?.get("impactLevel") ?? ""}
-        onValueChange={(v) =>
-          updateParam("impactLevel", v === "all" ? undefined : v)
-        }
-      >
-        <SelectTrigger className="h-9 w-[130px] text-xs border-border">
-          <SelectValue placeholder="Impact Level" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="all">All</SelectItem>
-          <SelectItem value="low">Low</SelectItem>
-          <SelectItem value="medium">Medium</SelectItem>
-          <SelectItem value="high">High</SelectItem>
-          <SelectItem value="critical">Critical</SelectItem>
-        </SelectContent>
-      </Select>
-
-      <Select
         value={searchParams?.get("sortOrder") ?? ""}
         onValueChange={(v) =>
           updateParam("sortOrder", v === "default" ? undefined : v)

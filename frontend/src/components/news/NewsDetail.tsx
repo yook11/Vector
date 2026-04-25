@@ -3,7 +3,7 @@ import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { sanitizeUrl } from "@/lib/utils";
-import type { ArticleDetail as ArticleDetailData, ImpactLevel } from "@/types";
+import type { ArticleDetail as ArticleDetailData } from "@/types";
 import { WatchlistButton } from "./WatchlistButton";
 
 function formatDate(dateStr: string | null | undefined): string {
@@ -17,15 +17,6 @@ function formatDate(dateStr: string | null | undefined): string {
   });
 }
 
-const impactLevelColors: Record<ImpactLevel, string> = {
-  low: "bg-neutral-100 text-neutral-500 border-neutral-200 dark:bg-neutral-800/30 dark:text-neutral-400 dark:border-neutral-700/50",
-  medium:
-    "bg-emerald-50 text-emerald-600 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-400 dark:border-emerald-800/50",
-  high: "bg-amber-50 text-amber-600 border-amber-200 dark:bg-amber-950/40 dark:text-amber-400 dark:border-amber-800/50",
-  critical:
-    "bg-red-50 text-red-600 border-red-200 dark:bg-red-950/40 dark:text-red-400 dark:border-red-800/50",
-};
-
 export function NewsDetail({ article }: { article: ArticleDetailData }) {
   // --- XSS: validate URL scheme (reject javascript: etc.) ---
   const safeUrl = sanitizeUrl(article.original.url);
@@ -38,12 +29,6 @@ export function NewsDetail({ article }: { article: ArticleDetailData }) {
 
       {/* Top Badges */}
       <div className="mb-8 flex items-center justify-center gap-2">
-        <Badge
-          variant="outline"
-          className={`text-[10px] tracking-widest uppercase px-2.5 py-0.5 border ${impactLevelColors[article.impactLevel]}`}
-        >
-          {article.impactLevel}
-        </Badge>
         {article.topic && (
           <Badge
             variant="secondary"

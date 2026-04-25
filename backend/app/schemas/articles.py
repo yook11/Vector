@@ -12,7 +12,6 @@ from pydantic import field_validator
 if TYPE_CHECKING:
     from app.schemas.base import PaginationParams
 
-from app.analysis.domain.value_objects.impact_level import ImpactLevel
 from app.domain.category import CategorySlug
 from app.schemas.base import PaginationParams, _CamelBase
 from app.schemas.embeds import NewsSourceEmbed, OriginalArticleEmbed, TopicEmbed
@@ -57,7 +56,6 @@ class ArticleListParams(PaginationParams):
         CategorySlug | None,
         Query(description=_CATEGORY_QUERY_DESCRIPTION),
     ] = None
-    impact_level: Annotated[ImpactLevel | None, Query(alias="impactLevel")] = None
     sort_order: Annotated[SortOrder, Query(alias="sortOrder")] = SortOrder.DESC
 
 
@@ -75,7 +73,6 @@ class SemanticSearchParams(PaginationParams):
         CategorySlug | None,
         Query(description=_CATEGORY_QUERY_DESCRIPTION),
     ] = None
-    impact_level: Annotated[ImpactLevel | None, Query(alias="impactLevel")] = None
     sort_order: Annotated[SortOrder, Query(alias="sortOrder")] = SortOrder.DESC
 
     @field_validator("q", mode="after")
@@ -91,7 +88,6 @@ class ArticleBrief(_CamelBase):
     id: int
     translated_title: str
     summary: str
-    impact_level: ImpactLevel | None = None
     source: NewsSourceEmbed
     published_at: datetime | None = None
     topic: TopicEmbed | None = None
@@ -104,7 +100,6 @@ class ArticleDetail(_CamelBase):
     id: int
     translated_title: str
     summary: str
-    impact_level: ImpactLevel | None = None
     reasoning: str
     analyzed_at: datetime
     source: NewsSourceEmbed

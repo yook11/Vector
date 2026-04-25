@@ -6,7 +6,6 @@ import { NewsList } from "@/components/news/NewsList";
 import { NewsPagination } from "@/components/news/NewsPagination";
 import { SearchBar } from "@/components/news/SearchBar";
 import { getArticles, getCategories, searchArticles } from "@/lib/api-client";
-import type { ImpactLevel } from "@/types";
 
 interface DashboardPageProps {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -22,7 +21,6 @@ function parseCommonFilters(
 
   const filters: {
     category?: string;
-    impactLevel?: ImpactLevel;
     sortOrder?: "asc" | "desc";
     page?: number;
     perPage?: number;
@@ -30,16 +28,6 @@ function parseCommonFilters(
 
   const category = str("category");
   if (category) filters.category = category;
-
-  const impactLevel = str("impactLevel");
-  if (
-    impactLevel === "low" ||
-    impactLevel === "medium" ||
-    impactLevel === "high" ||
-    impactLevel === "critical"
-  ) {
-    filters.impactLevel = impactLevel as ImpactLevel;
-  }
 
   const sortOrder = str("sortOrder");
   if (sortOrder === "asc" || sortOrder === "desc") {

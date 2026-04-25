@@ -67,9 +67,6 @@ class ArticleRepository:
             topic_id_sub = select(Topic.id).where(Topic.category_id.in_(cat_id_sub))
             stmt = stmt.where(ArticleAnalysis.topic_id.in_(topic_id_sub))
 
-        if query.impact_level is not None:
-            stmt = stmt.where(ArticleAnalysis.impact_level == query.impact_level)
-
         # 総件数
         count_stmt = select(func.count()).select_from(stmt.subquery())
         total = (await self.session.execute(count_stmt)).scalar_one()
