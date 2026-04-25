@@ -7,7 +7,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article
-from app.models.article_analysis import ArticleAnalysis, ImpactLevel
+from app.models.article_analysis import ArticleAnalysis
 from app.models.article_extraction import ArticleExtraction
 from app.models.category import Category
 from app.models.discovered_article import DiscoveredArticle
@@ -24,7 +24,6 @@ async def _build_article_with_analysis(
     title: str,
     translated_title: str,
     summary: str,
-    impact_level: ImpactLevel,
     reasoning: str,
     published_at: datetime,
 ) -> tuple[Article, ArticleAnalysis]:
@@ -55,7 +54,6 @@ async def _build_article_with_analysis(
         extraction_id=extraction.id,
         translated_title=translated_title,
         summary=summary,
-        impact_level=impact_level,
         reasoning=reasoning,
         ai_model="gemini-2.0-flash",
         topic_id=topic.id,
@@ -90,7 +88,6 @@ async def sample_article(
         title="Test Article",
         translated_title="テスト記事",
         summary="テストの要約",
-        impact_level=ImpactLevel.HIGH,
         reasoning="Test reasoning",
         published_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
@@ -120,7 +117,6 @@ async def second_article(
         title="Second Article",
         translated_title="2番目の記事",
         summary="2番目の要約",
-        impact_level=ImpactLevel.MEDIUM,
         reasoning="Second reasoning",
         published_at=datetime(2026, 1, 2, tzinfo=UTC),
     )
@@ -157,7 +153,6 @@ class TestListWatchlist:
         assert item["id"] == sample_article.id
         assert item["translatedTitle"] == "テスト記事"
         assert item["summary"] == "テストの要約"
-        assert item["impactLevel"] == "high"
         assert item["source"]["name"] == "Test Tech Source"
         assert item["isWatched"] is True
 

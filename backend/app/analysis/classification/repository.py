@@ -74,7 +74,6 @@ class AnalysisRepository:
             translated_title=draft.translated_title,
             summary=draft.summary,
             topic_id=topic_id,
-            impact_level=draft.impact_level,
             reasoning=draft.reasoning,
             ai_model=ai_model,
         )
@@ -152,7 +151,6 @@ class AnalysisRepository:
             translated_title=orm.translated_title,
             summary=orm.summary,
             topic_id=orm.topic_id,
-            impact_level=orm.impact_level,
             reasoning=orm.reasoning,
             ai_model=orm.ai_model,
             analyzed_at=orm.analyzed_at,

@@ -12,7 +12,6 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.analysis.domain.value_objects.impact_level import ImpactLevel
 from app.analysis.domain.value_objects.topic import TopicName
 
 
@@ -50,7 +49,6 @@ class ClassificationRawResponse(BaseModel):
     category: ValidCategory
     topic: TopicName
     topic_label_ja: str = Field(min_length=1, max_length=20)
-    impact_level: ImpactLevel
     reasoning: str = Field(min_length=1)
 
 
@@ -62,7 +60,6 @@ class Classified(BaseModel):
     category: ValidCategory
     topic: TopicName
     topic_label_ja: str = Field(min_length=1, max_length=20)
-    impact_level: ImpactLevel
     reasoning: str = Field(min_length=1)
 
 

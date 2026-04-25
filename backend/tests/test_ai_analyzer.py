@@ -33,7 +33,7 @@ from app.analysis.extraction.extractor.factory import get_extractor
 from app.analysis.extraction.extractor.gemini import GeminiExtractor
 from app.analysis.extraction.service import ExtractionService
 from app.models.article import Article
-from app.models.article_analysis import ArticleAnalysis, ImpactLevel
+from app.models.article_analysis import ArticleAnalysis
 from app.models.article_entity import ArticleEntity
 from app.models.article_extraction import ArticleExtraction
 from app.models.article_rejection import ArticleRejection
@@ -67,7 +67,6 @@ def _make_classified(
     category: ValidCategory = ValidCategory.COMPUTING,
     topic: str = "quantum computing breakthrough",
     topic_label_ja: str = "量子コンピューティング進展",
-    impact_level: ImpactLevel = ImpactLevel.HIGH,
     reasoning: str = "技術的に重要な進展",
 ) -> Classified:
     """Classified を生成するヘルパー。"""
@@ -75,7 +74,6 @@ def _make_classified(
         category=category,
         topic=TopicName(topic),
         topic_label_ja=topic_label_ja,
-        impact_level=impact_level,
         reasoning=reasoning,
     )
 
@@ -330,12 +328,10 @@ def test_classified_valid() -> None:
         category=ValidCategory.COMPUTING,
         topic=TopicName("quantum computing breakthrough"),
         topic_label_ja="量子コンピューティング進展",
-        impact_level=ImpactLevel.HIGH,
         reasoning="理由",
     )
     assert resp.category == ValidCategory.COMPUTING
     assert resp.topic.root == "quantum computing breakthrough"
-    assert resp.impact_level == ImpactLevel.HIGH
 
 
 def test_classified_normalizes_topic() -> None:
@@ -343,7 +339,6 @@ def test_classified_normalizes_topic() -> None:
         category=ValidCategory.COMPUTING,
         topic=TopicName("Quantum Computing Breakthrough"),
         topic_label_ja="量子コンピューティング進展",
-        impact_level=ImpactLevel.HIGH,
         reasoning="理由",
     )
     assert resp.topic.root == "quantum computing breakthrough"
@@ -356,20 +351,6 @@ def test_classified_rejects_invalid_category() -> None:
                 "category": "invalid_category",
                 "topic": "foo bar",
                 "topic_label_ja": "ラベル",
-                "impact_level": "high",
-                "reasoning": "r",
-            }
-        )
-
-
-def test_classified_rejects_invalid_impact_level() -> None:
-    with pytest.raises(ValidationError):
-        Classified.model_validate(
-            {
-                "category": "computing",
-                "topic": "foo bar",
-                "topic_label_ja": "ラベル",
-                "impact_level": "extreme",
                 "reasoning": "r",
             }
         )
@@ -654,7 +635,6 @@ async def test_classification_creates_topic(
         return_value=_make_classified(
             category=ValidCategory.COMPUTING,
             topic="quantum computing breakthrough",
-            impact_level=ImpactLevel.HIGH,
             reasoning="理由テスト",
         )
     )
@@ -674,7 +654,6 @@ async def test_classification_creates_topic(
         )
     ).scalar_one()
     assert analysis.topic_id is not None
-    assert analysis.impact_level == ImpactLevel.HIGH
     assert analysis.reasoning == "理由テスト"
 
     topic = (
@@ -755,7 +734,6 @@ async def test_classification_skips_already_classified(
         extraction_id=extraction.id,
         translated_title="分類済みタイトル",
         summary="分類済み要約",
-        impact_level=ImpactLevel.MEDIUM,
         reasoning="既存理由",
         ai_model="gemini-2.5-flash-lite",
         topic_id=topic.id,
@@ -827,7 +805,6 @@ async def test_news_endpoint_includes_analysis(
         extraction_id=extraction.id,
         translated_title="テスト記事",
         summary="テスト要約",
-        impact_level=ImpactLevel.HIGH,
         reasoning="テスト理由",
         ai_model="gemini-2.5-flash-lite",
         topic_id=topic.id,
@@ -841,5 +818,4 @@ async def test_news_endpoint_includes_analysis(
     assert response.status_code == 200
     data = response.json()
     assert data["translatedTitle"] == "テスト記事"
-    assert data["impactLevel"] == "high"
     assert data["original"]["title"] == "Test Article"

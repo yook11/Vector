@@ -14,7 +14,6 @@ from pydantic import ValidationError
 from app.analysis.classification.domain.analysis import Analysis, AnalysisDraft
 from app.analysis.classification.domain.rejection import Rejection, RejectionDraft
 from app.analysis.classifier.schema import Classified, OutOfScope, ValidCategory
-from app.analysis.domain.value_objects.impact_level import ImpactLevel
 from app.analysis.domain.value_objects.topic import TopicName
 
 
@@ -23,7 +22,6 @@ def _make_classified(**overrides: object) -> Classified:
         "category": ValidCategory.AI,
         "topic": TopicName(root="ai agents"),
         "topic_label_ja": "AIエージェント",
-        "impact_level": ImpactLevel.HIGH,
         "reasoning": "Significant advancement in agent autonomy.",
     }
     defaults.update(overrides)
@@ -42,7 +40,6 @@ class TestAnalysisDraftSanitize:
             summary="<p>Summary <i>here</i></p>",
             topic_name=TopicName(root="ai agents"),
             topic_label_ja="AIエージェント",
-            impact_level=ImpactLevel.HIGH,
             reasoning="<script>bad()</script>Reason",
         )
         assert draft.translated_title == "Title"
@@ -56,7 +53,6 @@ class TestAnalysisDraftSanitize:
             summary="ok\x01summary",
             topic_name=TopicName(root="ai"),
             topic_label_ja="ラベル",
-            impact_level=ImpactLevel.LOW,
             reasoning="reason\x7fok",
         )
         assert "\x00" not in draft.translated_title
@@ -70,7 +66,6 @@ class TestAnalysisDraftSanitize:
             summary="ok",
             topic_name=TopicName(root="ai"),
             topic_label_ja="ラベル",
-            impact_level=ImpactLevel.LOW,
             reasoning="reason",
         )
         assert draft.translated_title == "Hello"
@@ -81,7 +76,6 @@ class TestAnalysisDraftSanitize:
             summary="line1\nline2",
             topic_name=TopicName(root="ai"),
             topic_label_ja="ラベル",
-            impact_level=ImpactLevel.LOW,
             reasoning="reason\twith\ttabs",
         )
         assert "\n" in draft.summary
@@ -96,8 +90,7 @@ class TestAnalysisDraftRejection:
                 summary="ok",
                 topic_name=TopicName(root="ai"),
                 topic_label_ja="ラベル",
-                impact_level=ImpactLevel.LOW,
-                reasoning="reason",
+                    reasoning="reason",
             )
 
     def test_rejects_title_that_becomes_empty_after_sanitization(self) -> None:
@@ -107,8 +100,7 @@ class TestAnalysisDraftRejection:
                 summary="ok",
                 topic_name=TopicName(root="ai"),
                 topic_label_ja="ラベル",
-                impact_level=ImpactLevel.LOW,
-                reasoning="reason",
+                    reasoning="reason",
             )
 
     def test_rejects_translated_title_over_500_chars(self) -> None:
@@ -118,8 +110,7 @@ class TestAnalysisDraftRejection:
                 summary="ok",
                 topic_name=TopicName(root="ai"),
                 topic_label_ja="ラベル",
-                impact_level=ImpactLevel.LOW,
-                reasoning="reason",
+                    reasoning="reason",
             )
 
     def test_rejects_summary_over_4000_chars(self) -> None:
@@ -129,8 +120,7 @@ class TestAnalysisDraftRejection:
                 summary="a" * 4001,
                 topic_name=TopicName(root="ai"),
                 topic_label_ja="ラベル",
-                impact_level=ImpactLevel.LOW,
-                reasoning="reason",
+                    reasoning="reason",
             )
 
     def test_rejects_reasoning_over_2000_chars(self) -> None:
@@ -140,8 +130,7 @@ class TestAnalysisDraftRejection:
                 summary="ok",
                 topic_name=TopicName(root="ai"),
                 topic_label_ja="ラベル",
-                impact_level=ImpactLevel.LOW,
-                reasoning="a" * 2001,
+                    reasoning="a" * 2001,
             )
 
 
@@ -153,8 +142,7 @@ class TestAnalysisDraftTopicLabelJa:
                 summary="ok",
                 topic_name=TopicName(root="ai"),
                 topic_label_ja="",
-                impact_level=ImpactLevel.LOW,
-                reasoning="reason",
+                    reasoning="reason",
             )
 
     def test_rejects_label_over_20_chars(self) -> None:
@@ -164,8 +152,7 @@ class TestAnalysisDraftTopicLabelJa:
                 summary="ok",
                 topic_name=TopicName(root="ai"),
                 topic_label_ja="あ" * 21,
-                impact_level=ImpactLevel.LOW,
-                reasoning="reason",
+                    reasoning="reason",
             )
 
     def test_rejects_label_with_newline(self) -> None:
@@ -175,8 +162,7 @@ class TestAnalysisDraftTopicLabelJa:
                 summary="ok",
                 topic_name=TopicName(root="ai"),
                 topic_label_ja="line1\nline2",
-                impact_level=ImpactLevel.LOW,
-                reasoning="reason",
+                    reasoning="reason",
             )
 
     def test_rejects_label_with_url_scheme(self) -> None:
@@ -186,8 +172,7 @@ class TestAnalysisDraftTopicLabelJa:
                 summary="ok",
                 topic_name=TopicName(root="ai"),
                 topic_label_ja="http://evil",
-                impact_level=ImpactLevel.LOW,
-                reasoning="reason",
+                    reasoning="reason",
             )
 
 
@@ -203,7 +188,6 @@ class TestAnalysisDraftFromClassified:
         assert draft.summary == "summary"
         assert draft.reasoning == "boldreason"
         assert draft.topic_name == classified.topic
-        assert draft.impact_level == ImpactLevel.HIGH
 
     def test_draft_is_frozen(self) -> None:
         draft = AnalysisDraft.from_classified(
@@ -227,7 +211,6 @@ def _make_analysis(**overrides: object) -> Analysis:
         "translated_title": "title",
         "summary": "summary",
         "topic_id": 3,
-        "impact_level": ImpactLevel.HIGH,
         "reasoning": "reason",
         "ai_model": "gemini-2.5-pro",
         "analyzed_at": datetime(2026, 1, 1, tzinfo=UTC),
@@ -284,7 +267,6 @@ class TestAnalysisFromDraft:
         assert analysis.analyzed_at == analyzed_at
         assert analysis.translated_title == draft.translated_title
         assert analysis.reasoning == draft.reasoning
-        assert analysis.impact_level == draft.impact_level
 
 
 # ---------------------------------------------------------------------------
