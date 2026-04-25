@@ -141,9 +141,12 @@ async def run_forge(topic: str, slug: str | None, base_dir: Path) -> None:
 
 def _resolve_topic(raw: str) -> str:
     """引数がファイルパスなら読み込み、そうでなければテキストとして扱う。"""
-    candidate = Path(raw)
-    if candidate.exists() and candidate.is_file():
-        return candidate.read_text(encoding="utf-8")
+    try:
+        candidate = Path(raw)
+        if candidate.exists() and candidate.is_file():
+            return candidate.read_text(encoding="utf-8")
+    except OSError:
+        pass
     return raw
 
 
