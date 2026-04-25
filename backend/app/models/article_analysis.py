@@ -66,6 +66,14 @@ class ArticleAnalysis(Base):
             r"topic ~ '^[a-z0-9]+( [a-z0-9]+){0,2}$'",
             name="ck_article_analyses_topic_format",
         ),
+        # embedding と embedding_model は片方だけ NULL の状態を許さない。
+        # ドメインの「未生成 ⇔ 生成済み」2 状態モデルを DB で構造的に強制する
+        # (defense-in-depth として Repository._to_domain でも検知)。
+        CheckConstraint(
+            "(embedding IS NULL AND embedding_model IS NULL) "
+            "OR (embedding IS NOT NULL AND embedding_model IS NOT NULL)",
+            name="ck_article_analyses_embedding_consistency",
+        ),
         # サイドバーの直近 24 時間集計クエリ向けの複合インデックス。
         # 単独 ix_article_analyses_category_id は作らない（複合の左端でカバー）。
         Index(
