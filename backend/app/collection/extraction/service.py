@@ -5,13 +5,17 @@
 HTML 抽出を :class:`ArticleHtmlExtractor` に委譲、成功時 (:class:`ExtractedContent`)
 は :class:`ArticleRepository` 経由で Article 行を作成する。
 
-結果型は「分析に進められるか」を直接表現する:
+戻り値は ``ContentFetchOutcome`` tagged union:
 
-- :class:`ArticleReady`     — Article 行あり（新規抽出 / 冪等ヒット 両方）
-- :class:`ExtractionFailed` — 抽出を試みたが本文を得られなかった（外部 / 品質）
+- :class:`ContentFetchedOutcome`     — 新規抽出で Article 行を作成した。
+- :class:`AlreadyFetchedOutcome`     — 既に Article 行が存在した（冪等ヒット
+  / 並行レース敗北の合流）。
+- :class:`ContentFetchSkippedOutcome` — 抽出をスキップした (``discovered_not_found``
+  / ``permanent_fetch_error`` / 抽出器が返す ``ExtractionEmptyReason``)。
 
-DB 側の不整合（行が存在しない）はビジネス状態ではなく異常系なので、
-:class:`DiscoveredArticleMissing` 例外として呼び出し側へ伝播させる。
+呼び出し側 (Task) は ``ContentFetchedOutcome`` / ``AlreadyFetchedOutcome`` の
+``article.id`` を下流にチェーンし、``ContentFetchSkippedOutcome`` は dispose する。
+``TemporaryFetchError`` のみ Service 境界の外（Task）でリトライ判断する。
 """
 
 from __future__ import annotations
@@ -22,12 +26,13 @@ from typing import Literal
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.collection.errors import DiscoveredArticleMissing, PermanentFetchError
+from app.collection.errors import PermanentFetchError
 from app.collection.extraction.domain import Article
 from app.collection.extraction.domain.article import ArticleDraft
 from app.collection.extraction.extractor import (
     ArticleHtmlExtractor,
     ExtractionEmpty,
+    ExtractionEmptyReason,
 )
 from app.collection.extraction.repository import (
     ArticleRepository,
@@ -37,33 +42,45 @@ from app.collection.extraction.repository import (
 logger = structlog.get_logger(__name__)
 
 
-ExtractionFailureReason = Literal[
-    "permanent_fetch_error",  # 外部サイト: 403/404/410/451
-    "not_html",  # 外部サイト: Content-Type 不一致
-    "parse_error",  # コンテンツ品質: trafilatura パース失敗
-    "quality_gate",  # コンテンツ品質: 本文短すぎ等
-]
+ContentFetchSkipReason = (
+    Literal["discovered_not_found", "permanent_fetch_error"] | ExtractionEmptyReason
+)
 
 
-@dataclass(frozen=True)
-class ArticleReady:
-    """分析フェーズに進める状態 — Article 行が存在する。
+@dataclass(frozen=True, slots=True)
+class ContentFetchedOutcome:
+    """新規抽出で Article 行を作成した状態。"""
 
-    新規抽出と冪等ヒット（既に Article があった）の両方を含む。caller は
-    どちらの経路で来たかを区別せず、``article_id`` を下流にチェーンするだけでよい。
+    article: Article
+
+
+@dataclass(frozen=True, slots=True)
+class AlreadyFetchedOutcome:
+    """既に Article 行が存在した状態 (冪等ヒット / 並行レース合流)。"""
+
+    article: Article
+
+
+@dataclass(frozen=True, slots=True)
+class ContentFetchSkippedOutcome:
+    """抽出をスキップした状態。
+
+    ``discovered_not_found``: DB に DiscoveredArticle 行が無い (enqueue 後の
+    削除など、運用では稀)。``permanent_fetch_error``: 403/404/410/451 など
+    リトライ不能な外部失敗。``ExtractionEmptyReason``: Content-Type 不一致 /
+    パース失敗 / 品質ゲート未達 (extractor が SSoT)。
+
+    観測性のため ``discovered_article_id`` を保持するが、URL や本文・スタック
+    トレースは含めない (秘匿情報の漏出を避け、ログ側で必要な詳細を出す)。
     """
 
-    article_id: int
+    reason: ContentFetchSkipReason
+    discovered_article_id: int
 
 
-@dataclass(frozen=True)
-class ExtractionFailed:
-    """抽出を試みたが本文を得られなかった — 外部 HTTP or コンテンツ品質の問題。"""
-
-    reason: ExtractionFailureReason
-
-
-ContentFetchResult = ArticleReady | ExtractionFailed
+ContentFetchOutcome = (
+    ContentFetchedOutcome | AlreadyFetchedOutcome | ContentFetchSkippedOutcome
+)
 
 
 class ContentFetchService:
@@ -83,14 +100,13 @@ class ContentFetchService:
         self._session_factory = session_factory
         self._html_extractor = html_extractor
 
-    async def execute(self, discovered_article_id: int) -> ContentFetchResult:
+    async def execute(self, discovered_article_id: int) -> ContentFetchOutcome:
         """記事本文と公開日時を取得し Article 行を作成する。
 
         Returns:
-            ArticleReady / ExtractionFailed のいずれか。
+            ``ContentFetchOutcome``: 新規抽出 / 冪等ヒット / スキップのいずれか。
 
         Raises:
-            DiscoveredArticleMissing: DB に対象行が存在しない異常系。
             TemporaryFetchError: リトライ可能な失敗。判断は呼び出し側（Task）。
         """
         async with self._session_factory() as session:
@@ -99,7 +115,16 @@ class ContentFetchService:
 
             lookup = await lookup_repo.find_by_id(discovered_article_id)
             if lookup is None:
-                raise DiscoveredArticleMissing(discovered_article_id)
+                # DB 不整合: enqueue 後の手動削除や環境取り違え等。
+                # 運用では稀だが grep キーは維持して既存ダッシュボードを死なせない。
+                logger.warning(
+                    "fetch_content_discovered_missing",
+                    discovered_article_id=discovered_article_id,
+                )
+                return ContentFetchSkippedOutcome(
+                    reason="discovered_not_found",
+                    discovered_article_id=discovered_article_id,
+                )
 
             # 冪等ヒット: 既に Article あり
             if lookup.existing_article is not None:
@@ -108,7 +133,7 @@ class ContentFetchService:
                     discovered_article_id=lookup.id,
                     article_id=lookup.existing_article.id,
                 )
-                return ArticleReady(article_id=lookup.existing_article.id)
+                return AlreadyFetchedOutcome(article=lookup.existing_article)
 
             # 抽出対象: happy path
             try:
@@ -120,7 +145,10 @@ class ContentFetchService:
                     reason="permanent_fetch_error",
                     detail=str(e),
                 )
-                return ExtractionFailed(reason="permanent_fetch_error")
+                return ContentFetchSkippedOutcome(
+                    reason="permanent_fetch_error",
+                    discovered_article_id=lookup.id,
+                )
 
             if isinstance(extraction, ExtractionEmpty):
                 logger.info(
@@ -128,7 +156,10 @@ class ContentFetchService:
                     discovered_article_id=lookup.id,
                     reason=extraction.reason,
                 )
-                return ExtractionFailed(reason=extraction.reason)
+                return ContentFetchSkippedOutcome(
+                    reason=extraction.reason,
+                    discovered_article_id=lookup.id,
+                )
 
             # AI 境界 → Draft (sanitize / DoS 上限の defense-in-depth)
             draft = ArticleDraft.from_extracted(extraction)
@@ -149,7 +180,7 @@ class ContentFetchService:
                     discovered_article_id=lookup.id,
                     article_id=existing.id,
                 )
-                return ArticleReady(article_id=existing.id)
+                return AlreadyFetchedOutcome(article=existing)
 
             await session.commit()
 
@@ -163,6 +194,6 @@ class ContentFetchService:
                 "content_fetch_completed",
                 discovered_article_id=lookup.id,
                 article_id=article.id,
-                date_extracted=article.published_at is not None,
+                has_published_at=article.published_at is not None,
             )
-            return ArticleReady(article_id=article.id)
+            return ContentFetchedOutcome(article=article)
