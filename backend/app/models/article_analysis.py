@@ -16,7 +16,6 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.analysis.domain.value_objects.impact_level import ImpactLevel
 from app.models.base import Base
 
 if TYPE_CHECKING:
@@ -25,7 +24,7 @@ if TYPE_CHECKING:
     from app.models.watchlist_entry import WatchlistEntry
 
 
-__all__ = ["ArticleAnalysis", "ImpactLevel"]
+__all__ = ["ArticleAnalysis"]
 
 
 class ArticleAnalysis(Base):
@@ -68,7 +67,6 @@ class ArticleAnalysis(Base):
     )
     translated_title: Mapped[str] = mapped_column(String(500))
     summary: Mapped[str] = mapped_column(Text())
-    impact_level: Mapped[ImpactLevel | None] = mapped_column(String(20), nullable=True)
     reasoning: Mapped[str] = mapped_column(Text())
     ai_model: Mapped[str] = mapped_column(String(100))
     analyzed_at: Mapped[datetime] = mapped_column(
@@ -95,7 +93,6 @@ class ArticleAnalysis(Base):
         translated_title: str,
         summary: str,
         topic_id: int,
-        impact_level: ImpactLevel | None = None,
         reasoning: str,
         model_name: str,
     ) -> ArticleAnalysis:
@@ -109,7 +106,6 @@ class ArticleAnalysis(Base):
             translated_title=translated_title,
             summary=summary,
             topic_id=topic_id,
-            impact_level=impact_level,
             reasoning=reasoning,
             ai_model=model_name,
         )
