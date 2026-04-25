@@ -1,6 +1,5 @@
 from app.domain.category import CategoryName, CategorySlug
 from app.schemas.base import _CamelBase
-from app.schemas.embeds import TopicStatEmbed
 
 
 class CategoryDetail(_CamelBase):
@@ -12,7 +11,6 @@ class CategoryDetail(_CamelBase):
     slug: CategorySlug
     name: CategoryName
     recent_count: int = 0
-    topics: list[TopicStatEmbed] = []
 
 
 class CategoryDetailList(_CamelBase):

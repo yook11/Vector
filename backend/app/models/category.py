@@ -1,15 +1,10 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from sqlalchemy import CheckConstraint
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.domain.category import CategoryName, CategorySlug
 from app.models.base import Base
-
-if TYPE_CHECKING:
-    from app.models.topic import Topic
 
 
 class Category(Base):
@@ -28,6 +23,3 @@ class Category(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     slug: Mapped[CategorySlug] = mapped_column(unique=True, index=True)
     name: Mapped[CategoryName] = mapped_column(unique=True)
-
-    # リレーション（同一 Base のため OK）
-    topics: Mapped[list[Topic]] = relationship(back_populates="category")

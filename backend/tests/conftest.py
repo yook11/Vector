@@ -24,7 +24,6 @@ from app.models import (  # noqa: F401
     FetchLog,
     NewsSource,
     SourceType,
-    Topic,
     WatchlistEntry,
 )
 
@@ -201,23 +200,6 @@ async def sample_categories(
     for cat in categories:
         await db_session.refresh(cat)
     return categories
-
-
-@pytest.fixture
-async def sample_topic(
-    db_session: AsyncSession,
-    sample_categories: list[Category],
-) -> Topic:
-    """テスト用トピックを作成して返す（カテゴリが必須）。"""
-    topic = Topic(
-        name="quantum computing",
-        label_ja="量子コンピューティング",
-        category_id=sample_categories[1].id,
-    )
-    db_session.add(topic)
-    await db_session.commit()
-    await db_session.refresh(topic)
-    return topic
 
 
 @pytest.fixture

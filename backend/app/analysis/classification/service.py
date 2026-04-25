@@ -139,15 +139,11 @@ class ClassificationService:
                 )
                 return AlreadyRejectedOutcome(rejection=existing_rejection)
 
-            # 既存トピック取得（プロンプトガイド用）
-            existing_topics = await analysis_repo.get_existing_topics_by_category()
-
             # AI による分類（ドメイン tagged union で受け取る）
             response = await classifier.classify(
                 title_ja=extraction.translated_title,
                 summary_ja=extraction.summary,
                 entities=list(extraction.entities),
-                existing_topics_by_category=existing_topics,
             )
 
             match response:
@@ -201,13 +197,10 @@ class ClassificationService:
                 f"AI returned unknown category slug: {classified.category.value!r}"
             )
 
-        topic_id = await analysis_repo.find_or_create_topic(
-            draft.topic_name, draft.topic_label_ja, category_id
-        )
         persisted = await analysis_repo.save(
             draft,
             extraction_id=extraction_id,
-            topic_id=topic_id,
+            category_id=category_id,
             ai_model=model_name,
         )
         await session.commit()
@@ -224,7 +217,7 @@ class ClassificationService:
             draft,
             id=persisted.id,
             extraction_id=extraction_id,
-            topic_id=topic_id,
+            category_id=category_id,
             ai_model=model_name,
             analyzed_at=persisted.analyzed_at,
         )

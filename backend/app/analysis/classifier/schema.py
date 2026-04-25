@@ -41,14 +41,14 @@ class ClassificationRawResponse(BaseModel):
     """Gemini SDK の ``response_schema`` に渡す境界型（フラット）。
 
     AI の出力フォーマットは単一に保ち（精度のため）、ドメイン層への
-    詰め替えは classifier 実装内で行う。
+    詰め替えは classifier 実装内で行う。topic は表示専用属性として降格
+    された自由記述ラベル（TopicName VO 正規化済み、最大 3 語）。
     """
 
     model_config = ConfigDict(frozen=True)
 
     category: ValidCategory
     topic: TopicName
-    topic_label_ja: str = Field(min_length=1, max_length=20)
     investor_take: str = Field(min_length=1)
 
 
@@ -59,7 +59,6 @@ class Classified(BaseModel):
 
     category: ValidCategory
     topic: TopicName
-    topic_label_ja: str = Field(min_length=1, max_length=20)
     investor_take: str = Field(min_length=1)
 
 

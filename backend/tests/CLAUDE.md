@@ -16,7 +16,7 @@
 - `test_user`: テスト用 User レコード
 - `auth_headers`: 認証済みリクエスト用ヘッダー
 - `authed_client`: 認証済み httpx.AsyncClient
-- `sample_topic`: テスト用 Topic レコード
+- `sample_categories`: テスト用 Category レコード（ai / computing / semiconductor）
 - テストDBは `vector_test` を使用
 
 ### モック方針
