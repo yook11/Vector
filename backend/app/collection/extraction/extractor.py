@@ -25,7 +25,10 @@ import structlog
 import trafilatura
 
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
-from app.collection.extraction.candidate import PublishedAt
+from app.collection.extraction.domain.article import (
+    _ARTICLE_BODY_MIN_LENGTH as _BODY_MIN_LENGTH,
+)
+from app.collection.extraction.domain.value_objects import PublishedAt
 from app.shared.value_objects.safe_url import SafeUrl
 from app.utils.sanitize import strip_html_tags
 
@@ -33,7 +36,6 @@ logger = structlog.get_logger(__name__)
 
 HTTP_TIMEOUT = 30.0
 _TITLE_MAX_LENGTH = 500
-_BODY_MIN_LENGTH = 50
 USER_AGENT = "VectorBot/1.0 (+https://github.com/vector-news)"
 HEADERS = {"User-Agent": USER_AGENT}
 
