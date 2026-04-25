@@ -195,6 +195,36 @@ class TestListArticles:
         assert "summary" in item
         assert "publishedAt" in item
 
+    async def test_response_does_not_contain_impact_level(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        sample_source: NewsSource,
+        sample_categories: list[Category],
+    ) -> None:
+        """API contract: impactLevel must not appear on list items."""
+        topic = await _create_topic(db_session, sample_categories[0].id)
+        article = await _create_article(db_session, sample_source)
+        await _create_analysis(db_session, article, topic_id=topic.id)
+        resp = await client.get("/api/v1/articles")
+        item = resp.json()["items"][0]
+        assert "impactLevel" not in item
+
+    async def test_legacy_impact_level_query_is_ignored(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        sample_source: NewsSource,
+        sample_categories: list[Category],
+    ) -> None:
+        """Old clients passing ?impactLevel=... must still get a 200."""
+        topic = await _create_topic(db_session, sample_categories[0].id)
+        article = await _create_article(db_session, sample_source)
+        await _create_analysis(db_session, article, topic_id=topic.id)
+        resp = await client.get("/api/v1/articles?impactLevel=high")
+        assert resp.status_code == 200
+        assert resp.json()["total"] == 1
+
     async def test_date_sort_tiebreaker_uses_id_desc(
         self,
         client: AsyncClient,
