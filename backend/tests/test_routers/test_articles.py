@@ -143,39 +143,6 @@ class TestListArticles:
         assert data["perPage"] == 2
         assert data["totalPages"] == 3
 
-    async def test_filter_by_topic(
-        self,
-        client: AsyncClient,
-        db_session: AsyncSession,
-        sample_categories: list[Category],
-        sample_source: NewsSource,
-    ) -> None:
-        """トピック名でフィルターした記事のみ返す。"""
-        target_topic = await _create_topic(
-            db_session, sample_categories[1].id, name="quantum computing"
-        )
-        other_topic = await _create_topic(
-            db_session, sample_categories[0].id, name="deep learning"
-        )
-
-        article = await _create_article(
-            db_session, sample_source, url="https://example.com/tp"
-        )
-        await _create_analysis(db_session, article, topic_id=target_topic.id)
-
-        # 別トピックの分析済み記事
-        other = await _create_article(
-            db_session, sample_source, url="https://example.com/other"
-        )
-        await _create_analysis(db_session, other, topic_id=other_topic.id)
-
-        resp = await client.get(
-            "/api/v1/articles", params={"topic": "quantum computing"}
-        )
-        data = resp.json()
-        assert data["total"] == 1
-        assert data["items"][0]["translatedTitle"] == "テスト記事"
-
     async def test_filter_by_impact_level(
         self,
         client: AsyncClient,
@@ -368,14 +335,14 @@ class TestListArticles:
         assert item["topic"]["name"] == "quantum computing"
         assert item["topic"]["labelJa"] == "量子コンピューティング"
 
-    async def test_deprecated_category_param_still_filters(
+    async def test_filter_by_category(
         self,
         client: AsyncClient,
         db_session: AsyncSession,
         sample_source: NewsSource,
         sample_categories: list[Category],
     ) -> None:
-        """category param は deprecated だが受理され、フィルタも引き続き動作する。"""
+        """category パラメータは指定スラッグ配下の Topic に紐づく記事のみ返す。"""
         ai_topic = await _create_topic(
             db_session, sample_categories[0].id, name="deep learning"
         )

@@ -40,10 +40,7 @@ class SemanticSearchRepository:
         stmt = stmt.where(distance_expr < settings.semantic_search_max_distance)
 
         # コンテンツフィルタ
-        if query.topic is not None:
-            topic_id_sub = select(Topic.id).where(Topic.name == query.topic)
-            stmt = stmt.where(ArticleAnalysis.topic_id.in_(topic_id_sub))
-        elif query.category is not None:
+        if query.category is not None:
             cat_id_sub = select(Category.id).where(Category.slug == query.category)
             topic_id_sub = select(Topic.id).where(Topic.category_id.in_(cat_id_sub))
             stmt = stmt.where(ArticleAnalysis.topic_id.in_(topic_id_sub))

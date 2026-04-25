@@ -15,7 +15,6 @@ export type ImpactLevel = "low" | "medium" | "high" | "critical";
 
 /** Query parameters for GET /articles (article listing). */
 export interface ArticleQuery {
-  topic?: string;
   category?: string;
   impactLevel?: ImpactLevel;
   source?: string;
@@ -28,7 +27,6 @@ export interface ArticleQuery {
 export interface SemanticSearchQuery {
   q: string;
   sortBy?: "date" | "relevance";
-  topic?: string;
   category?: string;
   impactLevel?: ImpactLevel;
   source?: string;

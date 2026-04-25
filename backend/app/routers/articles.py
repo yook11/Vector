@@ -2,7 +2,6 @@
 
 from typing import Annotated
 
-import structlog
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,8 +15,6 @@ from app.schemas.articles import (
     PaginatedArticleResponse,
 )
 from app.services.articles import ArticleService
-
-logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1/articles", tags=["articles"])
 
@@ -35,8 +32,6 @@ async def list_articles(
     service: Annotated[ArticleService, Depends(get_article_service)],
 ) -> PaginatedArticleResponse:
     """分析済み記事をフィルタとページネーション付きで一覧取得する。"""
-    if params.category is not None:
-        logger.info("legacy_category_query_received", category=str(params.category))
     return await service.list_articles(params, user.id if user else None)
 
 
