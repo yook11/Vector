@@ -7,7 +7,7 @@ import httpx
 import structlog
 
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
-from app.collection.ingestion.candidate import ArticleCandidate
+from app.collection.ingestion.domain import ArticleCandidate
 from app.collection.ingestion.fetchers.hn_fetch_state import (
     get_last_fetched_at,
     set_last_fetched_at,

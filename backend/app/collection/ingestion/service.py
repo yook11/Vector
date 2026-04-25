@@ -25,7 +25,7 @@ import httpx
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.collection.ingestion.candidate import ArticleCandidate
+from app.collection.ingestion.domain import ArticleCandidate
 from app.collection.ingestion.quota import check_daily_quota
 from app.collection.ingestion.registry import get_fetcher
 from app.collection.ingestion.repository import DiscoveredArticleRepository

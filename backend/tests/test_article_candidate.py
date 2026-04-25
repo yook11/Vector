@@ -1,6 +1,6 @@
 """ArticleCandidate.from_external のユニットテスト。"""
 
-from app.collection.ingestion.candidate import ArticleCandidate
+from app.collection.ingestion.domain import ArticleCandidate
 from app.shared.value_objects.safe_url import SafeUrl
 
 

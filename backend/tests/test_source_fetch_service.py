@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
-from app.collection.ingestion.candidate import ArticleCandidate
+from app.collection.ingestion.domain import ArticleCandidate
 from app.collection.ingestion.service import SourceFetchService
 from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource

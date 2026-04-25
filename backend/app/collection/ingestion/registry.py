@@ -11,7 +11,7 @@ from typing import Protocol, runtime_checkable
 import httpx
 
 from app.collection.domain.value_objects.source import SourceName
-from app.collection.ingestion.candidate import ArticleCandidate
+from app.collection.ingestion.domain import ArticleCandidate
 from app.models.news_source import NewsSource
 from app.shared.value_objects.safe_url import SafeUrl
 
