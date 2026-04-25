@@ -335,6 +335,64 @@ class TestListArticles:
         assert detail[0]["loc"] == ["query", "category"]
         assert "CategorySlug" in detail[0]["msg"]
 
+    async def test_brief_response_includes_topic_label_ja(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        sample_source: NewsSource,
+        sample_categories: list[Category],
+    ) -> None:
+        """ArticleBrief のレスポンスに topic.labelJa が camelCase で含まれる。"""
+        topic = Topic(
+            name="quantum computing",
+            label_ja="量子コンピューティング",
+            category_id=sample_categories[1].id,
+        )
+        db_session.add(topic)
+        await db_session.flush()
+        article = await _create_article(db_session, sample_source)
+        await _create_analysis(db_session, article, topic_id=topic.id)
+
+        resp = await client.get("/api/v1/articles")
+        data = resp.json()
+        item = data["items"][0]
+        assert item["topic"]["name"] == "quantum computing"
+        assert item["topic"]["labelJa"] == "量子コンピューティング"
+
+    async def test_deprecated_category_param_still_filters(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        sample_source: NewsSource,
+        sample_categories: list[Category],
+    ) -> None:
+        """category param は deprecated だが受理され、フィルタも引き続き動作する。"""
+        ai_topic = await _create_topic(
+            db_session, sample_categories[0].id, name="deep learning"
+        )
+        computing_topic = await _create_topic(
+            db_session, sample_categories[1].id, name="quantum computing"
+        )
+
+        target = await _create_article(
+            db_session, sample_source, url="https://example.com/ai"
+        )
+        await _create_analysis(
+            db_session, target, topic_id=ai_topic.id, translated_title="AI 記事"
+        )
+        other = await _create_article(
+            db_session, sample_source, url="https://example.com/qc"
+        )
+        await _create_analysis(
+            db_session, other, topic_id=computing_topic.id, translated_title="量子記事"
+        )
+
+        resp = await client.get("/api/v1/articles?category=ai")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 1
+        assert data["items"][0]["translatedTitle"] == "AI 記事"
+
 
 @pytest.mark.asyncio
 class TestGetArticle:
