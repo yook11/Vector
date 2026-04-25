@@ -38,7 +38,6 @@ RPD=1500 の制約下で無駄が大きい。
 
 現行の 3 行要約フォーマット（事実 / 業界影響 / 投資示唆）は、
 Line 2・3 で LLM に判断・推測を要求している。
-これは `impact_level` + `reasoning` と役割が重複し、
 要約本来の「事実を正確に伝える」品質を希釈している。
 
 ## 設計方針
@@ -47,7 +46,8 @@ Line 2・3 で LLM に判断・推測を要求している。
 
 LLM に求めるのは **事実の抽出と構造化** のみ。
 影響度評価・投資判断は将来的にデータ駆動（株価相関・過去パターン分析等）で行う。
-現時点の `impact_level` は暫定値として残すが、LLM の推測であることを前提とする。
+
+> **記録**: 旧 `impact_level`（業界インパクト度 4 段階 enum）は本ドキュメント当時「LLM の暫定値」として残されていたが、2026-04 に完全廃止された。本ドキュメント以下の `impact_level` 言及は歴史的経緯として残している。
 
 ### 分割の軸: 原文が要るか要らないか
 
@@ -134,7 +134,6 @@ Stage 1 の構造化出力に対して判断を下す。原文は読まない。
 {
   "category": "ai",
   "topic": "constitutional ai advancement",
-  "impact_level": "high",
   "reasoning": "..."
 }
 ```
@@ -146,11 +145,6 @@ Stage 1 の構造化出力に対して判断を下す。原文は読まない。
 - 境界ケースの例示（例: 「AI が新素材を発見」→ materials）
 - 除外条件の明示
 - Few-shot 例
-
-### impact_level（暫定）
-
-現段階では LLM の推測値として残す。
-将来的にデータ駆動の評価（株価相関、過去ニュースとのパターン分析等）に置換する。
 
 ## データモデル
 
@@ -164,7 +158,6 @@ Stage 1 と Stage 2 の結果を1つのテーブルに保持する。
 | `translated_title` | String(500) | NOT EMPTY | NOT EMPTY | Stage 1 で必ず書く |
 | `summary` | Text | NOT EMPTY | NOT EMPTY | Stage 1 で必ず書く |
 | `topic_id` | FK | NOT NULL | **nullable** | 未分類状態が存在する |
-| `impact_level` | String(20) | NOT NULL | **nullable** | 未分類状態が存在する |
 | `reasoning` | Text | NOT EMPTY | **nullable** | 未分類状態が存在する |
 
 `topic_id IS NULL` = 抽出済み・未分類。これは抽出と分類が別の関心事であるというドメインの反映。
@@ -231,7 +224,7 @@ extract_content → Stage 1 LLM
 
 classify_content → DB から Stage 1 結果を読み出し (translated_title, summary, entities)
   → Stage 2 LLM
-  → ArticleAnalysis 更新 (topic_id, impact_level, reasoning)
+  → ArticleAnalysis 更新 (topic_id, reasoning)
   → generate_embedding.kiq(article_id)
 ```
 
@@ -248,7 +241,6 @@ classify_content → DB から Stage 1 結果を読み出し (translated_title, 
 | entities | なし | `[{name, type}]` 構造化リスト（3型） |
 | Stage 2 の入力 | 原文 | Stage 1 の出力のみ（DB から読み出し） |
 | カテゴリ定義の詳細度 | 各 1 行 | 詳細化可能（原文トークン不要） |
-| impact_level の位置づけ | LLM の最終判断 | 暫定値（将来データ駆動に置換） |
 | 中間状態 | 存在しない | 抽出済み・未分類（`topic_id IS NULL`） |
 
 ## Trend Detection（軸2）との接続

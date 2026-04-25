@@ -27,7 +27,6 @@ class NewsResponse(_CamelBase):
 class AnalysisEmbed(_CamelBase):
     translated_title: str
     summary: str
-    impact_level: ImpactLevel
     reasoning: str
     ai_model: str
     analyzed_at: datetime
@@ -54,7 +53,6 @@ class AnalysisEmbed(_CamelBase):
 |---|---|---|
 | translated_title | o | o |
 | summary | o | o |
-| impact_level | o | o |
 | source_name | o | o |
 | published_at | o | o |
 | keywords | o | o |
@@ -75,7 +73,7 @@ class AnalysisEmbed(_CamelBase):
 
 ### 4. analysis フィールドが Optional である必要がない
 
-本文がない記事 → AI 分析に回さない → 一覧に出す必要がない。一覧を分析済みのみに絞れば、`translated_title` / `summary` / `impact_level` は必ず存在する。これらを required にすることで型が嘘をつかなくなる。
+本文がない記事 → AI 分析に回さない → 一覧に出す必要がない。一覧を分析済みのみに絞れば、`translated_title` / `summary` は必ず存在する。これらを required にすることで型が嘘をつかなくなる。
 
 ### 5. 表示不要なフィールドの露出
 
@@ -92,7 +90,6 @@ class NewsBrief(_CamelBase):
     id: int
     translated_title: str
     summary: str
-    impact_level: ImpactLevel
     source_name: SourceName
     published_at: datetime | None = None
     keywords: list[KeywordEmbed] = []
@@ -124,7 +121,6 @@ class NewsDetail(_CamelBase):
     id: int
     translated_title: str
     summary: str
-    impact_level: ImpactLevel
     reasoning: str
     analyzed_at: datetime
     source_name: SourceName
