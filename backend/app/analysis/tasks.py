@@ -18,7 +18,14 @@ from app.analysis.classification.service import (
 )
 from app.analysis.classifier.factory import get_classifier
 from app.analysis.embedder.factory import get_embedder
-from app.analysis.embedding_service import EmbeddingService
+from app.analysis.embedding.service import (
+    AlreadyEmbeddedOutcome,
+    EmbeddedOutcome,
+    EmbeddingService,
+)
+from app.analysis.embedding.service import (
+    SkippedOutcome as EmbeddingSkippedOutcome,
+)
 from app.analysis.errors import (
     ConfigurationError,
     DailyQuotaExhaustedError,
@@ -244,7 +251,7 @@ async def generate_embedding(
     # Service 呼び出し（session は内部で管理）
     svc = EmbeddingService(session_factory)
     try:
-        await svc.execute(article_id, embedder)
+        result = await svc.execute(article_id, embedder)
     except (ConfigurationError, DailyQuotaExhaustedError) as e:
         logger.warning(
             "generate_embedding_no_retry",
@@ -266,3 +273,24 @@ async def generate_embedding(
             )
             return
         raise
+
+    # Outcome に応じた task 層サマリーログ (Service 内のドメインログとは別軸)
+    if isinstance(result, EmbeddedOutcome):
+        logger.info(
+            "generate_embedding_completed",
+            article_id=article_id,
+            analysis_id=result.embedding.analysis_id,
+            model=result.embedding.model_name,
+        )
+    elif isinstance(result, AlreadyEmbeddedOutcome):
+        logger.info(
+            "generate_embedding_already_exists",
+            article_id=article_id,
+            analysis_id=result.embedding.analysis_id,
+        )
+    elif isinstance(result, EmbeddingSkippedOutcome):
+        logger.info(
+            "generate_embedding_skipped",
+            article_id=article_id,
+            reason=result.reason,
+        )
