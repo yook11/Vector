@@ -110,6 +110,9 @@ _register_lifecycle(broker_content, "content")
 _register_lifecycle(broker_analysis, "analysis")
 _register_lifecycle(broker_embedding, "embedding")
 
+# scheduler に back-fill cron を登録するため、import で副作用を起こす。
+import app.maintenance.tasks  # noqa: E402, F401
+
 # ---------------------------------------------------------------------------
 # ヘルパー（タスクモジュール間で共有）
 # ---------------------------------------------------------------------------
