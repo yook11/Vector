@@ -5,8 +5,19 @@ import { auth } from "@/lib/auth";
 const INTERNAL_API_URL =
   process.env.INTERNAL_API_URL ?? "http://localhost:8000/api/v1";
 
-const INTERNAL_SECRET =
-  process.env.INTERNAL_API_SECRET ?? "change-me-in-production";
+// BFF プロキシとバックエンドの共有秘密。
+// デフォルト値や `??` フォールバックは持たせない: 未設定時はモジュール
+// 読込時に throw して fail-fast にする (build / 起動時に発覚させる)。
+// 値は `openssl rand -hex 32` などで生成し `.env` で必ず設定する。
+const INTERNAL_SECRET = (() => {
+  const value = process.env.INTERNAL_API_SECRET;
+  if (!value) {
+    throw new Error(
+      "INTERNAL_API_SECRET is required; generate one with `openssl rand -hex 32`",
+    );
+  }
+  return value;
+})();
 
 async function proxyRequest(
   request: NextRequest,
