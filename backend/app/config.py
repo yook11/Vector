@@ -1,10 +1,24 @@
 from pathlib import Path
 
-from pydantic import SecretStr
+from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # backend/app/config.py から 2 階層上がプロジェクトルート
 _ENV_FILE = Path(__file__).resolve().parent.parent.parent / ".env"
+
+# BFF プロキシ認証で fail-open にしないため、起動時に拒否する既知の弱秘密。
+# `.env.example` のプレースホルダや典型的な暫定値が production にそのまま
+# 残るのを防ぐ（INTERNAL_API_SECRET 偽装による admin 権限取得対策）。
+_KNOWN_WEAK_INTERNAL_SECRETS = frozenset(
+    {
+        "change-me-in-production",
+        "change-me",
+        "changeme",
+        "secret",
+        "password",
+    }
+)
+_INTERNAL_API_SECRET_MIN_LENGTH = 32
 
 
 class Settings(BaseSettings):
@@ -35,7 +49,10 @@ class Settings(BaseSettings):
     content_max_fetch_attempts: int = 3  # N 回失敗した記事はスキップ
 
     # 内部 API（BFF プロキシ信頼）
-    internal_api_secret: SecretStr = SecretStr("change-me-in-production")
+    # デフォルト値を持たせない: .env で必ず強い乱数を設定させる（生成例:
+    # `openssl rand -hex 32`）。未設定や弱秘密の場合は起動時に
+    # ValidationError で落とす（_validate_internal_api_secret 参照）。
+    internal_api_secret: SecretStr
 
     # アプリ URL
     frontend_url: str = "http://localhost:3000"
@@ -57,6 +74,28 @@ class Settings(BaseSettings):
     backfill_extractions_enabled: bool = False
     backfill_classifications_enabled: bool = False
     backfill_embeddings_enabled: bool = False
+
+    @field_validator("internal_api_secret")
+    @classmethod
+    def _validate_internal_api_secret(cls, v: SecretStr) -> SecretStr:
+        """BFF とバックエンド間の共有秘密に対する起動時バリデーション。
+
+        既知の弱秘密や短すぎる値を ValidationError として弾き、
+        `.env` の設定漏れがサイレントに fail-open するのを防ぐ。
+        """
+        raw = v.get_secret_value()
+        if raw.lower() in _KNOWN_WEAK_INTERNAL_SECRETS:
+            raise ValueError(
+                "INTERNAL_API_SECRET is set to a known weak default; "
+                "generate a new one with `openssl rand -hex 32`"
+            )
+        if len(raw) < _INTERNAL_API_SECRET_MIN_LENGTH:
+            raise ValueError(
+                "INTERNAL_API_SECRET must be at least "
+                f"{_INTERNAL_API_SECRET_MIN_LENGTH} characters; "
+                "generate one with `openssl rand -hex 32`"
+            )
+        return v
 
 
 settings = Settings()
