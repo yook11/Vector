@@ -1,17 +1,45 @@
 """メタデータタスク (dispatch_sources / fetch_source_metadata) のテスト。
 
 Task 層は SourceFetchService を呼ぶだけ — ビジネス判断は Service に閉じているため、
-ここでは Service を mock し、Task の分岐 (status ディスパッチ + retry) を検証する。
+ここでは Service を mock し、Task の分岐 (Outcome variant + retry) を検証する。
 """
 
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
-from app.collection.ingestion.service import SourceFetchResult
-from app.models.discovered_article import DiscoveredArticle
+from app.collection.ingestion.service import (
+    QuotaSkippedOutcome,
+    SourceFetchedOutcome,
+    SourceNotFoundOutcome,
+)
 from app.models.news_source import NewsSource
+
+
+def _entity(
+    article_id: int,
+    *,
+    news_source_id: int = 1,
+    url: str | None = None,
+    title: str = "Title",
+):
+    """frozen+slots dataclass の Entity を **実値** で構築する。
+
+    MagicMock(spec=Entity) は frozen+slots と相性が悪いため、テスト全体で実値を使う
+    (backend §6-4)。
+    """
+    from app.collection.ingestion.domain import DiscoveredArticleEntity
+    from app.shared.value_objects.safe_url import SafeUrl
+
+    return DiscoveredArticleEntity(
+        id=article_id,
+        news_source_id=news_source_id,
+        url=SafeUrl(url or f"https://example.com/{article_id}"),
+        title=title,
+        discovered_at=datetime.now(UTC),
+    )
 
 
 def _mock_session_context(mock_session: AsyncMock) -> MagicMock:
@@ -114,22 +142,16 @@ class TestDispatchSources:
 class TestFetchSourceMetadata:
     @pytest.mark.asyncio
     async def test_fetches_and_dispatches_content(self) -> None:
-        """新規記事を全件 fetch_content に dispatch する。"""
+        """SourceFetchedOutcome の Entity を全件 fetch_content に dispatch する。"""
         from app.collection.tasks import fetch_source_metadata
 
         mock_ctx = _make_ctx()
-        discovered_a = MagicMock(spec=DiscoveredArticle)
-        discovered_a.id = 10
-        discovered_b = MagicMock(spec=DiscoveredArticle)
-        discovered_b.id = 11
-
-        fetch_result = SourceFetchResult(
-            status="fetched",
-            new_discovered=[discovered_a, discovered_b],
+        outcome = SourceFetchedOutcome(
+            new_discovered=[_entity(10), _entity(11)],
         )
 
         with (
-            _patch_service(fetch_result),
+            _patch_service(outcome),
             patch("app.collection.tasks._record_fetch_log", new_callable=AsyncMock),
             patch("app.collection.tasks.fetch_content") as mock_fc,
         ):
@@ -143,15 +165,14 @@ class TestFetchSourceMetadata:
         mock_fc.kiq.assert_any_call(11)
 
     @pytest.mark.asyncio
-    async def test_skipped_quota_returns_early(self) -> None:
-        """Service が status='skipped_quota' を返したら下流 dispatch しない。"""
+    async def test_quota_skipped_returns_early(self) -> None:
+        """QuotaSkippedOutcome では下流 dispatch も FetchLog 記録もしない。"""
         from app.collection.tasks import fetch_source_metadata
 
         mock_ctx = _make_ctx()
-        fetch_result = SourceFetchResult(status="skipped_quota")
 
         with (
-            _patch_service(fetch_result),
+            _patch_service(QuotaSkippedOutcome()),
             patch(
                 "app.collection.tasks._record_fetch_log",
                 new_callable=AsyncMock,
@@ -168,14 +189,13 @@ class TestFetchSourceMetadata:
 
     @pytest.mark.asyncio
     async def test_not_found_returns_early(self) -> None:
-        """Service が status='not_found' を返したら not_found を返す。"""
+        """SourceNotFoundOutcome では status='not_found' を返す。"""
         from app.collection.tasks import fetch_source_metadata
 
         mock_ctx = _make_ctx()
-        fetch_result = SourceFetchResult(status="not_found")
 
         with (
-            _patch_service(fetch_result),
+            _patch_service(SourceNotFoundOutcome()),
             patch(
                 "app.collection.tasks._record_fetch_log",
                 new_callable=AsyncMock,

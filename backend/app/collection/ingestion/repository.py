@@ -10,9 +10,6 @@
   (重複 URL は単に skip される)。
 - ``find_by_url``: URL から既存 ``DiscoveredArticle`` を Entity として復元する
   (永続化の双対)。
-
-``fetch_existing_urls`` / ``add`` は Service 経路の漸進的移行のため残置している。
-PR3 で Service が ``save_many`` ベースに切り替わった時点で削除予定。
 """
 
 from __future__ import annotations
@@ -34,7 +31,6 @@ from app.shared.value_objects.safe_url import SafeUrl
 class DiscoveredArticleRepository:
     """``DiscoveredArticle`` に対する DB 操作をカプセル化する。"""
 
-    _URL_CHUNK_SIZE = 500
     # 1 トランザクションあたりの save_many 上限。fetcher 1 回分の現実的な上限
     # (max_articles_per_fetch ≪ 1000) を大幅に上回る防御的キャップ。
     _SAVE_MANY_LIMIT: Final[int] = 1000
@@ -104,32 +100,6 @@ class DiscoveredArticleRepository:
         stmt = select(DiscoveredArticle).where(DiscoveredArticle.original_url == url)
         orm = (await self._session.execute(stmt)).scalar_one_or_none()
         return self._to_domain(orm) if orm is not None else None
-
-    async def fetch_existing_urls(self, urls: list[SafeUrl]) -> set[SafeUrl]:
-        """指定 URL の中で既に DB に存在するものを返す。
-
-        PostgreSQL の IN-clause パラメタ上限を避けるため ``_URL_CHUNK_SIZE`` 件ずつ
-        チャンク分割して問い合わせる。
-
-        NOTE: ``save_many`` の ``ON CONFLICT DO NOTHING`` で構造的に重複排除する
-        ように Service を切り替えた時点で削除予定。
-        """
-        existing: set[SafeUrl] = set()
-        for i in range(0, len(urls), self._URL_CHUNK_SIZE):
-            chunk = urls[i : i + self._URL_CHUNK_SIZE]
-            stmt = select(DiscoveredArticle.original_url).where(
-                DiscoveredArticle.original_url.in_(chunk)
-            )
-            rows = await self._session.execute(stmt)
-            existing.update(row[0] for row in rows.all())
-        return existing
-
-    def add(self, discovered: DiscoveredArticle) -> None:
-        """新規 DiscoveredArticle をセッションに追加する（commit は呼び出し側）。
-
-        NOTE: ``save_many`` への移行のため残置。PR3 で削除予定。
-        """
-        self._session.add(discovered)
 
     @staticmethod
     def _to_domain(orm: DiscoveredArticle) -> DiscoveredArticleEntity:
