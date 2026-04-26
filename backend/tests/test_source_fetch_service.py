@@ -1,7 +1,7 @@
 """SourceFetchService のテスト。
 
 Service は fetch 失敗を例外として伝播する (retry 判断は呼び出し側の Task)。
-永続化オーケストレーション (重複排除 / 上限制御 / session.add) は本 Service の責務。
+永続化オーケストレーション (重複排除 / 上限制御 / save_many) は本 Service の責務。
 """
 
 from unittest.mock import AsyncMock, patch
@@ -12,7 +12,12 @@ from sqlmodel import select
 
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
 from app.collection.ingestion.domain import ArticleCandidate
-from app.collection.ingestion.service import SourceFetchService
+from app.collection.ingestion.service import (
+    QuotaSkippedOutcome,
+    SourceFetchedOutcome,
+    SourceFetchService,
+    SourceNotFoundOutcome,
+)
 from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
 from app.shared.value_objects.safe_url import SafeUrl
@@ -22,21 +27,20 @@ from app.shared.value_objects.safe_url import SafeUrl
 async def test_execute_returns_not_found_for_missing_source(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """存在しない source_id の場合は status='not_found' を返す。"""
+    """存在しない source_id の場合は SourceNotFoundOutcome を返す。"""
     svc = SourceFetchService(session_factory)
 
     result = await svc.execute(source_id=9999)
 
-    assert result.status == "not_found"
-    assert result.new_discovered == []
+    assert isinstance(result, SourceNotFoundOutcome)
 
 
 @pytest.mark.asyncio
-async def test_execute_returns_skipped_quota_when_exceeded(
+async def test_execute_returns_quota_skipped_when_exceeded(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """DAILY_REQUEST_LIMIT を持つ fetcher でクォータ超過なら status='skipped_quota'。"""
+    """DAILY_REQUEST_LIMIT を持つ fetcher でクォータ超過なら QuotaSkippedOutcome。"""
     mock_fetcher = AsyncMock()
     mock_fetcher.DAILY_REQUEST_LIMIT = 25
 
@@ -53,7 +57,7 @@ async def test_execute_returns_skipped_quota_when_exceeded(
         svc = SourceFetchService(session_factory)
         result = await svc.execute(source_id=sample_source.id)
 
-    assert result.status == "skipped_quota"
+    assert isinstance(result, QuotaSkippedOutcome)
     mock_fetcher.fetch.assert_not_called()
 
 
@@ -81,7 +85,7 @@ async def test_execute_skips_quota_check_for_fetcher_without_limit(
         result = await svc.execute(source_id=sample_source.id)
 
     mock_quota.assert_not_called()
-    assert result.status == "fetched"
+    assert isinstance(result, SourceFetchedOutcome)
 
 
 @pytest.mark.asyncio
@@ -108,9 +112,9 @@ async def test_execute_persists_new_candidates(
         svc = SourceFetchService(session_factory)
         result = await svc.execute(source_id=sample_source.id)
 
-    assert result.status == "fetched"
+    assert isinstance(result, SourceFetchedOutcome)
     assert len(result.new_discovered) == 2
-    assert all(a.news_source_id == sample_source.id for a in result.new_discovered)
+    assert all(e.news_source_id == sample_source.id for e in result.new_discovered)
 
     async with session_factory() as verify:
         rows = (await verify.execute(select(DiscoveredArticle))).scalars().all()
@@ -122,7 +126,7 @@ async def test_execute_skips_duplicate_urls(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """既に DB に存在する URL は重複排除される。"""
+    """既に DB に存在する URL は ON CONFLICT で構造的に skip される。"""
     async with session_factory() as seed:
         seed.add(
             DiscoveredArticle(
@@ -151,8 +155,8 @@ async def test_execute_skips_duplicate_urls(
         svc = SourceFetchService(session_factory)
         result = await svc.execute(source_id=sample_source.id)
 
-    assert len(result.new_discovered) == 1
-    assert result.new_discovered[0].original_url == url_new
+    assert isinstance(result, SourceFetchedOutcome)
+    assert {str(e.url) for e in result.new_discovered} == {"https://example.com/new"}
 
 
 @pytest.mark.asyncio
@@ -181,6 +185,7 @@ async def test_execute_respects_max_articles_limit(
         svc = SourceFetchService(session_factory)
         result = await svc.execute(source_id=sample_source.id)
 
+    assert isinstance(result, SourceFetchedOutcome)
     assert len(result.new_discovered) == 50
 
 
@@ -201,7 +206,7 @@ async def test_execute_with_empty_candidates(
         svc = SourceFetchService(session_factory)
         result = await svc.execute(source_id=sample_source.id)
 
-    assert result.status == "fetched"
+    assert isinstance(result, SourceFetchedOutcome)
     assert result.new_discovered == []
 
 

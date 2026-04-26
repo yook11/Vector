@@ -1,7 +1,7 @@
 """DiscoveredArticleRepository の統合テスト。
 
-PR 2: Entity / Draft ベースの API (``save_many`` / ``find_by_url``) を追加。
-``ON CONFLICT (original_url) DO NOTHING RETURNING`` による並行レース対応を検証する。
+Entity / Draft ベースの API (``save_many`` / ``find_by_url``) を検証する。
+``ON CONFLICT (original_url) DO NOTHING RETURNING`` による並行レース対応を含む。
 """
 
 from __future__ import annotations
@@ -31,62 +31,6 @@ def _draft(
         ArticleCandidate(url=SafeUrl(url), title=title),
         news_source_id=news_source_id,
     )
-
-
-# ---------------------------------------------------------------------------
-# fetch_existing_urls / add (PR 1 以前から存在する API)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_fetch_existing_urls_returns_empty_for_no_urls(
-    db_session: AsyncSession,
-) -> None:
-    repo = DiscoveredArticleRepository(db_session)
-
-    existing = await repo.fetch_existing_urls([])
-
-    assert existing == set()
-
-
-@pytest.mark.asyncio
-async def test_fetch_existing_urls_returns_only_persisted_urls(
-    db_session: AsyncSession, sample_source: NewsSource
-) -> None:
-    """DB に存在する URL のみが返り、未登録 URL は含まれない。"""
-    persisted = DiscoveredArticle(
-        original_title="Persisted",
-        original_url="https://example.com/persisted",
-        news_source_id=sample_source.id,
-    )
-    db_session.add(persisted)
-    await db_session.commit()
-
-    repo = DiscoveredArticleRepository(db_session)
-    url_existing = SafeUrl("https://example.com/persisted")
-    url_new = SafeUrl("https://example.com/new")
-
-    existing = await repo.fetch_existing_urls([url_existing, url_new])
-
-    assert existing == {url_existing}
-
-
-@pytest.mark.asyncio
-async def test_add_registers_discovered_article_in_session(
-    db_session: AsyncSession, sample_source: NewsSource
-) -> None:
-    """add は session 経由で永続化対象に登録する。"""
-    repo = DiscoveredArticleRepository(db_session)
-    discovered = DiscoveredArticle(
-        original_title="New",
-        original_url=SafeUrl("https://example.com/new"),
-        news_source_id=sample_source.id,
-    )
-
-    repo.add(discovered)
-    await db_session.flush()
-
-    assert discovered.id is not None
 
 
 # ---------------------------------------------------------------------------

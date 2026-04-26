@@ -7,6 +7,7 @@ fetch_content 完了後、analysis.tasks.extract_content へチェーン。
 from __future__ import annotations
 
 import time
+from typing import assert_never
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -30,7 +31,12 @@ from app.collection.extraction.service import (
     ContentFetchService,
     ContentFetchSkippedOutcome,
 )
-from app.collection.ingestion.service import SourceFetchService
+from app.collection.ingestion.service import (
+    QuotaSkippedOutcome,
+    SourceFetchedOutcome,
+    SourceFetchService,
+    SourceNotFoundOutcome,
+)
 from app.models.fetch_log import FetchLog, FetchStatus
 from app.models.news_source import NewsSource
 
@@ -126,7 +132,7 @@ async def fetch_source_metadata(
     start_time = time.monotonic()
 
     try:
-        result = await svc.execute(source_id)
+        outcome = await svc.execute(source_id)
     except PermanentFetchError as e:
         await _record_fetch_log(
             session_factory, source_id, FetchStatus.ERROR, 0, str(e), start_time
@@ -145,22 +151,36 @@ async def fetch_source_metadata(
             return {"source_id": source_id, "status": "error", "reason": str(e)}
         raise
 
-    if result.status == "not_found":
-        return {"source_id": source_id, "status": "not_found"}
-    if result.status == "skipped_quota":
-        return {"source_id": source_id, "status": "skipped", "reason": "daily_quota"}
-
-    new_count = len(result.new_discovered)
-    await _record_fetch_log(
-        session_factory, source_id, FetchStatus.SUCCESS, new_count, None, start_time
-    )
-
-    for discovered in result.new_discovered:
-        await fetch_content.kiq(discovered.id)
-
-    payload = {"source_id": source_id, "new_count": new_count, "status": "success"}
-    logger.info("fetch_source_metadata_completed", **payload)
-    return payload
+    match outcome:
+        case SourceNotFoundOutcome():
+            return {"source_id": source_id, "status": "not_found"}
+        case QuotaSkippedOutcome():
+            return {
+                "source_id": source_id,
+                "status": "skipped",
+                "reason": "daily_quota",
+            }
+        case SourceFetchedOutcome(new_discovered=discovered):
+            new_count = len(discovered)
+            await _record_fetch_log(
+                session_factory,
+                source_id,
+                FetchStatus.SUCCESS,
+                new_count,
+                None,
+                start_time,
+            )
+            for entity in discovered:
+                await fetch_content.kiq(entity.id)
+            payload = {
+                "source_id": source_id,
+                "new_count": new_count,
+                "status": "success",
+            }
+            logger.info("fetch_source_metadata_completed", **payload)
+            return payload
+        case _:
+            assert_never(outcome)
 
 
 # ---------------------------------------------------------------------------
