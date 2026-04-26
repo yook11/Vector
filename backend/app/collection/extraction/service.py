@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal
+from urllib.parse import urlsplit, urlunsplit
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -40,6 +41,16 @@ from app.collection.extraction.repository import (
 )
 
 logger = structlog.get_logger(__name__)
+
+
+def _safe_url_for_log(url: str) -> str:
+    """ログ出力用に URL のクエリとフラグメントを除去する。
+
+    トラッキング ID やセッショントークンがクエリに混入している可能性を考慮し、
+    scheme + host + path のみを残す。
+    """
+    parts = urlsplit(url)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
 
 
 ContentFetchSkipReason = (
@@ -116,10 +127,13 @@ class ContentFetchService:
             lookup = await lookup_repo.find_by_id(discovered_article_id)
             if lookup is None:
                 # DB 不整合: enqueue 後の手動削除や環境取り違え等。
-                # 運用では稀だが grep キーは維持して既存ダッシュボードを死なせない。
+                # 運用では稀だが reason 別集計のため統一形で出す。
                 logger.warning(
-                    "fetch_content_discovered_missing",
+                    "content_fetch_skipped",
                     discovered_article_id=discovered_article_id,
+                    source_id=None,
+                    reason="discovered_not_found",
+                    url=None,
                 )
                 return ContentFetchSkippedOutcome(
                     reason="discovered_not_found",
@@ -140,9 +154,11 @@ class ContentFetchService:
                 extraction = await self._html_extractor.fetch(lookup.original_url)
             except PermanentFetchError as e:
                 logger.info(
-                    "content_extraction_failed",
+                    "content_fetch_skipped",
                     discovered_article_id=lookup.id,
+                    source_id=lookup.news_source_id,
                     reason="permanent_fetch_error",
+                    url=_safe_url_for_log(str(lookup.original_url)),
                     detail=str(e),
                 )
                 return ContentFetchSkippedOutcome(
@@ -152,9 +168,11 @@ class ContentFetchService:
 
             if isinstance(extraction, ExtractionEmpty):
                 logger.info(
-                    "content_extraction_failed",
+                    "content_fetch_skipped",
                     discovered_article_id=lookup.id,
+                    source_id=lookup.news_source_id,
                     reason=extraction.reason,
+                    url=_safe_url_for_log(str(lookup.original_url)),
                 )
                 return ContentFetchSkippedOutcome(
                     reason=extraction.reason,

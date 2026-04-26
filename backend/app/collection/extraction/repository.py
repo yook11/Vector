@@ -48,6 +48,7 @@ class DiscoveredLookup:
     """
 
     id: int
+    news_source_id: int
     original_url: SafeUrl
     existing_article: Article | None
 
@@ -114,6 +115,7 @@ class DiscoveredArticleLookupRepository:
         existing = _article_from_orm(orm.article) if orm.article is not None else None
         return DiscoveredLookup(
             id=orm.id,
+            news_source_id=orm.news_source_id,
             original_url=orm.original_url,
             existing_article=existing,
         )
