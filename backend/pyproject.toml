@@ -41,3 +41,7 @@ select = ["E", "F", "I", "UP", "S", "FAST"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "unit: DB やネットワークを必要としない純粋なロジック・ドメイン層のテスト",
+    "integration: 実 DB / httpx Client / 外部 IO を実体的に使うテスト",
+]

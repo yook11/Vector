@@ -46,6 +46,38 @@ def _auth_headers(user_id: str, role: str = "user") -> dict[str, str]:
     }
 
 
+_INTEGRATION_FIXTURES = frozenset(
+    {
+        "db_session",
+        "client",
+        "authed_client",
+        "admin_client",
+        "session_factory",
+        "sample_categories",
+        "sample_source",
+        "sample_hn_source",
+        "sample_av_source",
+    }
+)
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    """fixture 依存から unit / integration マーカーを自動付与する。
+
+    DB セッション・httpx Client・seed データなどの integration 用 fixture を
+    要求するテストは integration、それ以外は unit として扱う。autouse の
+    ensure_test_database / setup_db はパッケージ全体の前提なので無視する。
+    """
+    for item in items:
+        fixtures = set(getattr(item, "fixturenames", ()))
+        if fixtures & _INTEGRATION_FIXTURES:
+            item.add_marker(pytest.mark.integration)
+        else:
+            item.add_marker(pytest.mark.unit)
+
+
 @pytest.fixture(scope="session", autouse=True)
 async def ensure_test_database() -> None:
     """vector_test DB が無ければ作成し、pgvector を有効化する。"""
