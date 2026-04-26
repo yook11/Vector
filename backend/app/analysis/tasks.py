@@ -6,7 +6,7 @@ extract_content → classify_content → generate_embedding
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import structlog
 from taskiq import Context, TaskiqDepends
@@ -55,11 +55,15 @@ logger = structlog.get_logger(__name__)
 
 
 def _build_limiters(
+    role: Literal["extract", "classify", "embed"],
     model: str,
     rpm: int | None,
     rpd: int | None,
 ) -> tuple[RateLimiter | None, RateLimiter | None]:
-    """モデル用の RPM / RPD レートリミッターを構築する。
+    """役割 (extract/classify/embed) ごとに独立した RPM/RPD リミッターを構築する。
+
+    role を Redis キーに含めることで、同一モデルを複数役割で使う場合でも
+    レート制御カウンターが共有されない。
 
     Returns:
         (rpm_limiter, rpd_limiter) のタプル。どちらも None になりうる。
@@ -74,7 +78,7 @@ def _build_limiters(
     if rpm is not None:
         rpm_limiter = RateLimiter(
             redis=redis,
-            key=f"ratelimit:{model}:rpm",
+            key=f"ratelimit:{role}:{model}:rpm",
             max_requests=rpm,
             window_seconds=60,
             block=True,
@@ -82,7 +86,7 @@ def _build_limiters(
     if rpd is not None:
         rpd_limiter = RateLimiter(
             redis=redis,
-            key=f"ratelimit:{model}:rpd",
+            key=f"ratelimit:{role}:{model}:rpd",
             max_requests=rpd,
             window_seconds=86400,
             block=False,
@@ -111,7 +115,7 @@ async def extract_content(
 
     # Rate limit acquire は呼び出し側の責任
     rpm_limiter, rpd_limiter = _build_limiters(
-        extractor.MODEL, extractor.RPM, extractor.RPD
+        "extract", extractor.MODEL, extractor.RPM, extractor.RPD
     )
     try:
         if rpd_limiter is not None:
@@ -174,7 +178,7 @@ async def classify_content(
 
     # Rate limit acquire は呼び出し側の責任
     rpm_limiter, rpd_limiter = _build_limiters(
-        classifier.MODEL, classifier.RPM, classifier.RPD
+        "classify", classifier.MODEL, classifier.RPM, classifier.RPD
     )
     try:
         if rpd_limiter is not None:
@@ -237,7 +241,7 @@ async def generate_embedding(
 
     # Rate limit acquire は呼び出し側の責任
     rpm_limiter, rpd_limiter = _build_limiters(
-        embedder.MODEL, embedder.RPM, embedder.RPD
+        "embed", embedder.MODEL, embedder.RPM, embedder.RPD
     )
     try:
         if rpd_limiter is not None:

@@ -98,7 +98,7 @@ class GeminiClassifier(BaseClassifier):
 
     MODEL = "gemini-2.5-flash-lite"
     RPM = 100
-    RPD = 3000
+    RPD = 1500
 
     def __init__(self) -> None:
         api_key = settings.gemini_api_key.get_secret_value()
