@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
+from structlog.testing import capture_logs
 
 from app.collection.errors import (
     PermanentFetchError,
@@ -245,6 +246,88 @@ async def test_not_html_returns_skipped(
 # ---------------------------------------------------------------------------
 # Exception propagation
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# content_fetch_skipped ログ統一フォーマット (PR3)
+# ---------------------------------------------------------------------------
+
+
+def _find_skipped_log(logs: list[dict], reason: str) -> dict | None:
+    """指定 reason の content_fetch_skipped イベントを 1 件返す。"""
+    for entry in logs:
+        if (
+            entry.get("event") == "content_fetch_skipped"
+            and entry.get("reason") == reason
+        ):
+            return entry
+    return None
+
+
+async def test_skipped_log_unified_for_discovered_not_found(
+    db_session: AsyncSession,
+    session_factory,
+) -> None:
+    """discovered_not_found 経路で content_fetch_skipped が必須キーで出る。"""
+    extractor = _mock_html_extractor(return_value=_empty())
+    svc = ContentFetchService(session_factory, extractor)
+
+    with capture_logs() as logs:
+        await svc.execute(999999)
+
+    entry = _find_skipped_log(logs, "discovered_not_found")
+    assert entry is not None
+    assert entry["discovered_article_id"] == 999999
+    assert entry["source_id"] is None
+    assert entry["url"] is None
+
+
+async def test_skipped_log_unified_for_permanent_error(
+    db_session: AsyncSession,
+    session_factory,
+    sample_source: NewsSource,
+) -> None:
+    """permanent_fetch_error 経路で source_id と 安全 URL を含む。"""
+    discovered = await _make_discovered(
+        db_session,
+        sample_source,
+        "https://example.com/forbidden?utm_source=rss&token=abc#frag",
+    )
+    extractor = _mock_html_extractor(side_effect=PermanentFetchError("HTTP 403"))
+    svc = ContentFetchService(session_factory, extractor)
+
+    with capture_logs() as logs:
+        await svc.execute(discovered.id)
+
+    entry = _find_skipped_log(logs, "permanent_fetch_error")
+    assert entry is not None
+    assert entry["discovered_article_id"] == discovered.id
+    assert entry["source_id"] == sample_source.id
+    assert entry["url"] == "https://example.com/forbidden"
+
+
+async def test_skipped_log_unified_for_extraction_empty(
+    db_session: AsyncSession,
+    session_factory,
+    sample_source: NewsSource,
+) -> None:
+    """ExtractionEmpty 経路で reason / source_id / 安全 URL を含む。"""
+    discovered = await _make_discovered(
+        db_session,
+        sample_source,
+        "https://example.com/quality?utm_campaign=foo",
+    )
+    extractor = _mock_html_extractor(return_value=_empty(reason="quality_gate"))
+    svc = ContentFetchService(session_factory, extractor)
+
+    with capture_logs() as logs:
+        await svc.execute(discovered.id)
+
+    entry = _find_skipped_log(logs, "quality_gate")
+    assert entry is not None
+    assert entry["discovered_article_id"] == discovered.id
+    assert entry["source_id"] == sample_source.id
+    assert entry["url"] == "https://example.com/quality"
 
 
 async def test_temporary_error_propagates(
