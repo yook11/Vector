@@ -34,10 +34,10 @@ services:
       - "3000:3000"
     environment:
       - INTERNAL_API_URL=http://backend:8000/api/v1
-      - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:-change-me-in-production-use-a-strong-random-secret}
+      - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET is required; generate one with `openssl rand -hex 32` and set it in .env}
       - BETTER_AUTH_URL=http://localhost:3000
       - AUTH_DATABASE_URL=postgresql://vector:vector@db:5432/vector?search_path=auth
-      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-change-me-in-production}
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:?INTERNAL_API_SECRET is required; generate one with `openssl rand -hex 32` and set it in .env}
     volumes:
       - ./frontend/src:/app/src
       - ./frontend/public:/app/public
@@ -87,7 +87,7 @@ services:
       - "${DB_PORT:-5433}:5432"
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-vector}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vector}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required; set a strong value in .env}
       POSTGRES_DB: ${POSTGRES_DB:-vector}
     volumes:
       - pgdata:/var/lib/postgresql/data
