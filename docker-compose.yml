@@ -169,6 +169,24 @@ services:
       embedding:
         condition: service_healthy
 
+  # --- Weekly digest worker + scheduler (snapshot 生成専用、resource 分離) ---
+  worker-digest:
+    <<: *worker-base
+    command: >
+      taskiq worker
+      app.brokers:broker_digest
+      app.digest.tasks.snapshot
+      --ack-type when_executed
+
+  scheduler-digest:
+    <<: *worker-base
+    command: >
+      taskiq scheduler
+      app.brokers:scheduler_digest
+      app.digest.tasks.snapshot
+    networks:
+      - internal
+
   # --- taskiq scheduler (metadata broker only — fetch_metadata cron) ---
   scheduler:
     <<: *worker-base
