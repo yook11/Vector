@@ -1,4 +1,3 @@
-import secrets
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from enum import StrEnum
@@ -6,11 +5,18 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import Depends, Header, HTTPException, status
+from jose import JWTError, jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
 
 from app.config import settings
 from app.db import engine
+
+# BFF (Next.js) と backend (FastAPI) 間の内部 API 認証は HS256 JWT で行う。
+# BFF が Better Auth セッションから user_id / role を取り出して短期 JWT に署名し、
+# backend は同じ secret で検証する。INTERNAL_API_SECRET 漏洩時の悪用ウィンドウを
+# JWT 有効期限 (~60 秒) に限定するための構造。
+_JWT_ALGORITHM = "HS256"
 
 
 class UserRole(StrEnum):
@@ -20,7 +26,7 @@ class UserRole(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class CurrentUser:
-    """BFF プロキシヘッダから構築する軽量なユーザー表現。"""
+    """BFF が署名した内部 JWT の claim から構築する軽量なユーザー表現。"""
 
     id: UUID
     role: UserRole
@@ -43,25 +49,60 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
             yield session
 
 
-async def get_current_user(
-    x_user_id: Annotated[UUID, Header()],
-    x_user_role: Annotated[UserRole, Header()],
-    x_internal_secret: Annotated[str | None, Header()] = None,
-) -> CurrentUser:
-    """X-Internal-Secret を検証し、BFF プロキシヘッダからユーザーを取り出す。
+def _decode_internal_jwt(authorization: str | None) -> dict[str, object] | None:
+    """`Authorization: Bearer <jwt>` から claim dict を取り出す。
 
-    必須ヘッダ: X-User-ID (UUID), X-User-Role (user|admin)。
-    ヘッダが欠落・型不正の場合は 422（FastAPI の型バリデーション）。
-    シークレット不一致の場合は 401。
-    """
-    if not x_internal_secret or not secrets.compare_digest(
-        x_internal_secret, settings.internal_api_secret.get_secret_value()
-    ):
+    署名不正・期限切れ・形式不正はすべて None で表現し、呼び出し側で 401 か
+    None フォールバックかを判断する。"""
+    if not authorization:
+        return None
+    if not authorization.startswith("Bearer "):
+        return None
+    token = authorization.removeprefix("Bearer ").strip()
+    if not token:
+        return None
+    try:
+        return jwt.decode(
+            token,
+            settings.internal_api_secret.get_secret_value(),
+            algorithms=[_JWT_ALGORITHM],
+        )
+    except JWTError:
+        return None
+
+
+def _user_from_claims(payload: dict[str, object]) -> CurrentUser | None:
+    """JWT claim から CurrentUser を組み立てる。claim 不正なら None。"""
+    sub = payload.get("sub")
+    role = payload.get("role")
+    if not isinstance(sub, str) or not isinstance(role, str):
+        return None
+    try:
+        return CurrentUser(id=UUID(sub), role=UserRole(role))
+    except ValueError:
+        return None
+
+
+async def get_current_user(
+    authorization: Annotated[str | None, Header()] = None,
+) -> CurrentUser:
+    """`Authorization: Bearer <jwt>` を検証し CurrentUser を返す。
+
+    BFF が HS256 で署名した短期 JWT を期待する。署名不正・期限切れ・
+    claim 不正 (sub/role 欠落 or 値不正) はいずれも 401。"""
+    payload = _decode_internal_jwt(authorization)
+    if payload is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
         )
-    return CurrentUser(id=x_user_id, role=x_user_role)
+    user = _user_from_claims(payload)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+        )
+    return user
 
 
 async def get_admin_user(
@@ -77,25 +118,16 @@ async def get_admin_user(
 
 
 async def get_optional_user(
-    x_internal_secret: Annotated[str | None, Header()] = None,
-    x_user_id: Annotated[UUID | None, Header()] = None,
-    x_user_role: Annotated[UserRole | None, Header()] = None,
+    authorization: Annotated[str | None, Header()] = None,
 ) -> CurrentUser | None:
     """認証済みなら CurrentUser を返し、そうでなければ None を返す。
 
-    すべてのヘッダは任意。UUID や Role の値が不正なら 422（FastAPI の
-    型バリデーション）。X-User-ID はあるのに X-User-Role が無い場合は
-    BFF 側のバグなので 401 を返す。
+    JWT が無い・署名不正・期限切れ・claim 不正のいずれも一律 None。
+    認証必須エンドポイントとは異なり、未認証アクセスを許容する場面で使う。
     """
-    if not x_internal_secret or not secrets.compare_digest(
-        x_internal_secret, settings.internal_api_secret.get_secret_value()
-    ):
+    if authorization is None:
         return None
-    if x_user_id is None:
+    payload = _decode_internal_jwt(authorization)
+    if payload is None:
         return None
-    if x_user_role is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated",
-        )
-    return CurrentUser(id=x_user_id, role=x_user_role)
+    return _user_from_claims(payload)

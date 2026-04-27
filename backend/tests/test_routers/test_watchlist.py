@@ -165,9 +165,9 @@ class TestListWatchlist:
         assert data["totalPages"] == 2
 
     async def test_missing_auth_headers(self, client: AsyncClient) -> None:
-        """必須ヘッダーが無い場合は 422 (FastAPI の型バリデーション)。"""
+        """Authorization ヘッダーが無い場合は 401 (BFF JWT 未提示)。"""
         resp = await client.get("/api/v1/me/watchlist")
-        assert resp.status_code == 422
+        assert resp.status_code == 401
 
 
 @pytest.mark.asyncio

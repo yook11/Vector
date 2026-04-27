@@ -1,9 +1,11 @@
 """バックエンドテスト共通のフィクスチャ。"""
 
+import time
 from collections.abc import AsyncGenerator
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from jose import jwt
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -30,20 +32,36 @@ from app.models import (  # noqa: F401
 TEST_DATABASE_URL = settings.database_url.rsplit("/", 1)[0] + "/vector_test"
 engine_test = create_async_engine(TEST_DATABASE_URL, echo=False, poolclass=NullPool)
 
-# --- BFF header-based auth helpers ---
+# --- BFF JWT auth helpers ---
+# BFF (Next.js) は Better Auth セッションから user_id/role を取り出して
+# HS256 JWT に署名し、backend に Authorization: Bearer で渡す。本ヘルパは
+# テストで同じ secret を使って疑似 BFF として JWT を発行する。
 
 TEST_USER_ID = "00000000-0000-4000-a000-000000000001"
 TEST_ADMIN_ID = "00000000-0000-4000-a000-000000000002"
 INTERNAL_SECRET = settings.internal_api_secret.get_secret_value()
+_JWT_ALGORITHM = "HS256"
+_JWT_TTL_SECONDS = 60
+
+
+def make_internal_jwt(user_id: str, role: str = "user") -> str:
+    """テスト用に BFF 模擬の HS256 JWT を発行する。"""
+    now = int(time.time())
+    return jwt.encode(
+        {
+            "sub": user_id,
+            "role": role,
+            "iat": now,
+            "exp": now + _JWT_TTL_SECONDS,
+        },
+        INTERNAL_SECRET,
+        algorithm=_JWT_ALGORITHM,
+    )
 
 
 def _auth_headers(user_id: str, role: str = "user") -> dict[str, str]:
-    """テスト用に X-User-ID / X-User-Role / X-Internal-Secret ヘッダーを組み立てる。"""
-    return {
-        "X-User-ID": user_id,
-        "X-User-Role": role,
-        "X-Internal-Secret": INTERNAL_SECRET,
-    }
+    """テスト用 Authorization: Bearer <jwt> ヘッダを組み立てる。"""
+    return {"Authorization": f"Bearer {make_internal_jwt(user_id, role)}"}
 
 
 _INTEGRATION_FIXTURES = frozenset(
