@@ -35,6 +35,18 @@ const INTERNAL_JWT_SIGNING_KEY = new TextEncoder().encode(INTERNAL_API_SECRET);
 const INTERNAL_JWT_ALGORITHM = "HS256";
 const INTERNAL_JWT_TTL = "60s";
 
+// backend `UserRole` (`backend/app/dependencies.py`) と整合する許可 role。
+// Better Auth `additionalFields.role` の型は `string` で将来追加され得るため、
+// JWT 署名前に proxy 層で allowlist narrowing して未知値を `user` に縮退させる。
+const INTERNAL_JWT_ALLOWED_ROLES = ["user", "admin"] as const;
+type InternalJwtRole = (typeof INTERNAL_JWT_ALLOWED_ROLES)[number];
+
+function narrowRole(value: string): InternalJwtRole {
+  return (INTERNAL_JWT_ALLOWED_ROLES as readonly string[]).includes(value)
+    ? (value as InternalJwtRole)
+    : "user";
+}
+
 /**
  * BFF→backend 間の認証 JWT を 1 リクエスト分だけ発行する。
  *
@@ -45,7 +57,8 @@ const INTERNAL_JWT_TTL = "60s";
 export async function buildInternalAuthHeaders(
   session: Session,
 ): Promise<Record<string, string>> {
-  const token = await new SignJWT({ role: session.user.role })
+  const role = narrowRole(session.user.role);
+  const token = await new SignJWT({ role })
     .setProtectedHeader({ alg: INTERNAL_JWT_ALGORITHM })
     .setSubject(session.user.id)
     .setIssuedAt()
