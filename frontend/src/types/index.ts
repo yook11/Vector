@@ -62,3 +62,11 @@ export type NewsSourceDetail = components["schemas"]["NewsSourceDetail"];
 export type NewsSourceDetailList =
   components["schemas"]["NewsSourceDetailList"];
 export type NewsSourceCreate = components["schemas"]["NewsSourceCreate"];
+
+// Weekly trends
+export type WeeklyTrendsResponse =
+  components["schemas"]["WeeklyTrendsResponse"];
+export type WeeklyCategoryTrends = components["schemas"]["_CategoryTrendsOut"];
+export type WeeklyEntityTrend = components["schemas"]["_EntityTrendOut"];
+export type WeeklyTopicTrend = components["schemas"]["_TopicTrendOut"];
+export type WeeklyNewEntity = components["schemas"]["_NewEntityOut"];

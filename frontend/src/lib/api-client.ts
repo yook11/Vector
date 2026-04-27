@@ -16,6 +16,7 @@ import type {
   NewsSourceDetailList,
   PaginatedArticleResponse,
   SemanticSearchQuery,
+  WeeklyTrendsResponse,
 } from "@/types";
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
@@ -141,6 +142,15 @@ export async function getCategories(): Promise<CategoryDetailListResponse> {
 export async function getSources(): Promise<NewsSourceDetailList> {
   return fetchApi<NewsSourceDetailList>("/admin/sources", {
     cache: "no-store",
+  });
+}
+
+// --- Weekly Trends ---
+
+/** Fetch the latest weekly trends snapshot (or null state if not yet generated). */
+export async function getWeeklyTrends(): Promise<WeeklyTrendsResponse> {
+  return fetchApi<WeeklyTrendsResponse>("/weekly-trends", {
+    next: { revalidate: 86400 },
   });
 }
 
