@@ -195,7 +195,7 @@ class TrendsRepository:
             )
         )
         rows = (await self._session.execute(stmt)).all()
-        return tuple(
+        new_entities = tuple(
             NewEntity(
                 name=row.display_name,
                 type=row.type,
@@ -203,6 +203,9 @@ class TrendsRepository:
             )
             for row in rows
         )
+        # snapshot 側の上位 N 件 truncate が意味を持つよう
+        # current_count 降順で確定する。
+        return tuple(sorted(new_entities, key=lambda e: e.current_count, reverse=True))
 
     async def count_source_analyses(
         self, *, current_start: datetime, current_end: datetime

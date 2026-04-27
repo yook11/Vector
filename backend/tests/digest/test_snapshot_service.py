@@ -22,6 +22,7 @@ from app.digest.application.snapshot import (
     Skipped,
     WeeklyTrendsSnapshotService,
 )
+from app.digest.config import DEFAULT_LIMIT
 from app.digest.repository.snapshots import SnapshotRepository
 from app.models.category import Category
 
@@ -170,6 +171,47 @@ class TestGenerateForWeek:
         assert len(sections) == len(sample_categories)
         category_ids = {s["category_id"] for s in sections}
         assert category_ids == {c.id for c in sample_categories}
+
+    @pytest.mark.asyncio
+    async def test_caps_each_list_at_default_limit(
+        self,
+        db_session: AsyncSession,
+        session_factory: async_sessionmaker[AsyncSession],
+        sample_categories: list[Category],
+        seed_analysis: SeedAnalysis,
+    ) -> None:
+        """new_entities は ``DEFAULT_LIMIT`` 件で truncate される (上位 N 件のみ残す)。
+
+        Phase 1A の new entity 集計は閾値が緩く (current_count >= 1)、現実データ
+        では 1 カテゴリ 1000+ 件に膨らむ。snapshot 段階で上限を切ることで JSONB
+        肥大化と UI 描画のノイズを構造的に防ぐ (Phase 1B の LLM 入力にも有利)。
+        """
+        cat = sample_categories[0]
+        # DEFAULT_LIMIT (=20) を超える new entity を仕込む。
+        # 各 entity に異なる count を持たせ、上位が確実に残るよう降順スコアにする。
+        for i in range(25):
+            for hour in range(25 - i):  # entity_0 が最多、entity_24 が最少
+                await seed_analysis(
+                    category_id=cat.id,
+                    analyzed_at=_jst(2026, 4, 14 + (hour // 24), hour=hour % 24),
+                    entities=[(f"entity_{i:02d}", "company")],
+                )
+        await db_session.commit()
+
+        service = WeeklyTrendsSnapshotService(session_factory)
+        await service.generate_for_week(WEEK_START)
+
+        repo = SnapshotRepository(db_session)
+        snapshot = await repo.find_by_week(WEEK_START)
+        assert snapshot is not None
+        section = next(
+            s for s in snapshot.bundle["sections"] if s["category_id"] == cat.id
+        )
+        assert len(section["new_entities"]) == DEFAULT_LIMIT
+        # 上位 (entity_00 = 25 件) が残っており、最下位 (entity_24 = 1 件) は落ちる
+        names = [e["name"] for e in section["new_entities"]]
+        assert "entity_00" in names
+        assert "entity_24" not in names
 
 
 # ---------------------------------------------------------------------------

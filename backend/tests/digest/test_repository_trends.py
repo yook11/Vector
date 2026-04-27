@@ -581,6 +581,48 @@ class TestGetNewEntities:
         )
         assert len(results) == 1
 
+    @pytest.mark.asyncio
+    async def test_sorted_by_current_count_desc(
+        self,
+        db_session: AsyncSession,
+        sample_categories: list[Category],
+        seed_analysis: SeedAnalysis,
+    ) -> None:
+        """current_count 降順で返る (snapshot 上位 N 件 truncate の前提)。
+
+        snapshot 生成側で `[:DEFAULT_LIMIT]` slice するため、最も登場件数の
+        多い entity が先頭に来ていないと意味のある truncate にならない。
+        """
+        cat = sample_categories[0]
+        # 3 件登場の Loud, 1 件のみの Quiet, 2 件登場の Mid を仕込む
+        for hour in range(3):
+            await seed_analysis(
+                category_id=cat.id,
+                analyzed_at=_jst(2026, 4, 14, hour=hour),
+                entities=[("Loud", "company")],
+            )
+        await seed_analysis(
+            category_id=cat.id,
+            analyzed_at=_jst(2026, 4, 15, hour=9),
+            entities=[("Quiet", "company")],
+        )
+        for hour in range(2):
+            await seed_analysis(
+                category_id=cat.id,
+                analyzed_at=_jst(2026, 4, 16, hour=hour),
+                entities=[("Mid", "company")],
+            )
+
+        repo = TrendsRepository(db_session)
+        results = await repo.get_new_entities(
+            category_id=cat.id,
+            current_start=WEEK_START,
+            current_end=WEEK_END,
+            lookback_start=LOOKBACK_START,
+        )
+        names = [str(r.name) for r in results]
+        assert names == ["Loud", "Mid", "Quiet"]
+
 
 # ---------------------------------------------------------------------------
 # count_source_analyses
