@@ -10,7 +10,7 @@ x-worker-base: &worker-base
   env_file:
     - .env
   environment:
-    - DATABASE_URL=postgresql+asyncpg://vector:vector@db:5432/vector
+    - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-vector}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-vector}
     - REDIS_URL=redis://redis:6379/0
   volumes:
     - ./backend/app:/app/app
@@ -36,7 +36,7 @@ services:
       - INTERNAL_API_URL=http://backend:8000/api/v1
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET is required; generate one with `openssl rand -hex 32` and set it in .env}
       - BETTER_AUTH_URL=http://localhost:3000
-      - AUTH_DATABASE_URL=postgresql://vector:vector@db:5432/vector?search_path=auth
+      - AUTH_DATABASE_URL=postgresql://${POSTGRES_USER:-vector}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-vector}?search_path=auth
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:?INTERNAL_API_SECRET is required; generate one with `openssl rand -hex 32` and set it in .env}
     volumes:
       - ./frontend/src:/app/src
@@ -61,7 +61,7 @@ services:
     env_file:
       - .env
     environment:
-      - DATABASE_URL=postgresql+asyncpg://vector:vector@db:5432/vector
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-vector}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-vector}
       - REDIS_URL=redis://redis:6379/0
     volumes:
       - ./backend/app:/app/app
@@ -92,7 +92,7 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U vector -d vector"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vector} -d ${POSTGRES_DB:-vector}"]
       interval: 5s
       timeout: 5s
       retries: 5
