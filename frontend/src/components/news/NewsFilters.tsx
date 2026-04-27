@@ -1,7 +1,6 @@
 "use client";
 
-import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   Select,
   SelectContent,
@@ -9,24 +8,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useUpdateSearchParams } from "@/lib/search-params-client";
 
 export function NewsFilters() {
-  const router = useRouter();
   const searchParams = useSearchParams();
+  const updateSearchParams = useUpdateSearchParams();
 
-  const updateParam = useCallback(
-    (key: string, value: string | undefined) => {
-      const params = new URLSearchParams(searchParams?.toString() ?? "");
-      if (value) {
-        params.set(key, value);
-      } else {
-        params.delete(key);
-      }
-      params.delete("page");
-      router.push(`/?${params.toString()}`);
-    },
-    [router, searchParams],
-  );
+  const updateParam = (key: string, value: string | undefined) => {
+    updateSearchParams({ [key]: value, page: undefined });
+  };
 
   return (
     <div className="flex flex-wrap items-center gap-2.5">

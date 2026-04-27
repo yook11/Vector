@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
 import { Separator } from "@/components/ui/separator";
+import { useBuildSearchParamsHref } from "@/lib/search-params-client";
 import { cn } from "@/lib/utils";
 import type { CategoryDetailResponse } from "@/types";
 
@@ -15,24 +15,14 @@ export function CategorySidebar({
   categories,
   activeCategory,
 }: CategorySidebarProps) {
-  const searchParams = useSearchParams();
+  const buildHrefBase = useBuildSearchParamsHref();
 
   const isAll = !activeCategory;
 
-  // Preserve existing filter params (sentiment, sortBy, etc.) when navigating
-  function buildHref(overrides: Record<string, string | undefined>): string {
-    const params = new URLSearchParams(searchParams?.toString() ?? "");
-    params.delete("category");
-    params.delete("page");
-
-    for (const [key, value] of Object.entries(overrides)) {
-      if (value !== undefined) {
-        params.set(key, value);
-      }
-    }
-
-    const qs = params.toString();
-    return qs ? `/?${qs}` : "/";
+  // Preserve existing filter params (sortOrder, perPage, q etc.) but reset
+  // category and page when navigating between category facets.
+  function buildHref(category: string | undefined): string {
+    return buildHrefBase({ category, page: undefined });
   }
 
   const linkClass =
@@ -46,7 +36,7 @@ export function CategorySidebar({
 
       {/* All */}
       <Link
-        href={buildHref({})}
+        href={buildHref(undefined)}
         className={cn(
           linkClass,
           isAll &&
@@ -63,7 +53,7 @@ export function CategorySidebar({
         return (
           <Link
             key={cat.slug}
-            href={buildHref({ category: cat.slug })}
+            href={buildHref(cat.slug)}
             className={cn(
               linkClass,
               isActiveCat &&

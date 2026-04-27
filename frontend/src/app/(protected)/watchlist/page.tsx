@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { NewsList } from "@/components/news/NewsList";
+import { NewsPagination } from "@/components/news/NewsPagination";
 import { getWatchlist } from "@/lib/api-client";
+import { parseArticleQuery } from "@/lib/search-params";
 
 export const metadata: Metadata = {
   title: "Watchlist | Vector",
@@ -15,7 +17,8 @@ export default async function WatchlistPage({
   searchParams,
 }: WatchlistPageProps) {
   const raw = await searchParams;
-  const page = typeof raw.page === "string" ? Number(raw.page) : 1;
+  const { query } = parseArticleQuery(raw);
+  const page = query.page ?? 1;
 
   const data = await getWatchlist(page);
 
@@ -39,29 +42,7 @@ export default async function WatchlistPage({
           <NewsList items={data.items} />
         )}
 
-        {data.totalPages > 1 && (
-          <div className="flex justify-center gap-2">
-            {page > 1 && (
-              <Link
-                href={`/watchlist?page=${page - 1}`}
-                className="text-xs text-muted-foreground hover:text-foreground"
-              >
-                Previous
-              </Link>
-            )}
-            <span className="text-xs text-muted-foreground tabular-nums">
-              Page {data.page} of {data.totalPages}
-            </span>
-            {page < data.totalPages && (
-              <Link
-                href={`/watchlist?page=${page + 1}`}
-                className="text-xs text-muted-foreground hover:text-foreground"
-              >
-                Next
-              </Link>
-            )}
-          </div>
-        )}
+        <NewsPagination page={data.page} totalPages={data.totalPages} />
       </div>
     </main>
   );
