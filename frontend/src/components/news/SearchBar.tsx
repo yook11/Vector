@@ -1,15 +1,16 @@
 "use client";
 
 import { Search, X } from "lucide-react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Input } from "@/components/ui/input";
+import { useUpdateSearchParams } from "@/lib/search-params-client";
 
 const DEBOUNCE_MS = 500;
 
 export function SearchBar() {
-  const router = useRouter();
   const searchParams = useSearchParams();
+  const updateSearchParams = useUpdateSearchParams();
   const currentQ = searchParams?.get("q") ?? "";
   const [value, setValue] = useState(currentQ);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -21,16 +22,10 @@ export function SearchBar() {
 
   const navigate = useCallback(
     (q: string) => {
-      const params = new URLSearchParams(searchParams?.toString() ?? "");
-      if (q.trim()) {
-        params.set("q", q.trim());
-      } else {
-        params.delete("q");
-      }
-      params.delete("page");
-      router.push(`/?${params.toString()}`);
+      const trimmed = q.trim();
+      updateSearchParams({ q: trimmed || undefined, page: undefined });
     },
-    [router, searchParams],
+    [updateSearchParams],
   );
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {

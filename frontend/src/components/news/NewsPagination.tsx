@@ -1,7 +1,7 @@
 "use client";
 
-import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { useUpdateSearchParams } from "@/lib/search-params-client";
 
 interface NewsPaginationProps {
   page: number;
@@ -9,19 +9,12 @@ interface NewsPaginationProps {
 }
 
 export function NewsPagination({ page, totalPages }: NewsPaginationProps) {
-  const router = useRouter();
-  const searchParams = useSearchParams();
+  const updateSearchParams = useUpdateSearchParams();
 
   if (totalPages <= 1) return null;
 
   function goToPage(p: number) {
-    const params = new URLSearchParams(searchParams?.toString() ?? "");
-    if (p <= 1) {
-      params.delete("page");
-    } else {
-      params.set("page", String(p));
-    }
-    router.push(`/?${params.toString()}`);
+    updateSearchParams({ page: p <= 1 ? undefined : String(p) });
   }
 
   return (

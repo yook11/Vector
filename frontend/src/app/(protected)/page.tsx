@@ -6,48 +6,17 @@ import { NewsList } from "@/components/news/NewsList";
 import { NewsPagination } from "@/components/news/NewsPagination";
 import { SearchBar } from "@/components/news/SearchBar";
 import { getArticles, getCategories, searchArticles } from "@/lib/api-client";
+import { parseArticleQuery } from "@/lib/search-params";
 
 interface DashboardPageProps {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
-}
-
-function parseCommonFilters(
-  raw: Record<string, string | string[] | undefined>,
-) {
-  const str = (key: string) => {
-    const v = raw[key];
-    return typeof v === "string" ? v : undefined;
-  };
-
-  const filters: {
-    category?: string;
-    sortOrder?: "asc" | "desc";
-    page?: number;
-    perPage?: number;
-  } = {};
-
-  const category = str("category");
-  if (category) filters.category = category;
-
-  const sortOrder = str("sortOrder");
-  if (sortOrder === "asc" || sortOrder === "desc") {
-    filters.sortOrder = sortOrder;
-  }
-
-  const page = str("page");
-  if (page) filters.page = Number(page);
-
-  const perPage = str("perPage");
-  if (perPage) filters.perPage = Number(perPage);
-
-  return { filters, q: str("q") };
 }
 
 export default async function DashboardPage({
   searchParams,
 }: DashboardPageProps) {
   const raw = await searchParams;
-  const { filters, q } = parseCommonFilters(raw);
+  const { query: filters, q } = parseArticleQuery(raw);
 
   const fetchNews = q
     ? searchArticles({ q, ...filters })
