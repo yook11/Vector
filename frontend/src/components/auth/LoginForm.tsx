@@ -93,7 +93,7 @@ export function LoginForm() {
             {isPending ? "Signing in…" : "Sign in"}
           </Button>
           <p className="text-sm text-muted-foreground">
-            Don&apos;t have an account?{" "}
+            Don’t have an account?{" "}
             <Link
               href="/auth/register"
               className="underline hover:text-foreground"

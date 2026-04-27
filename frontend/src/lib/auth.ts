@@ -7,7 +7,7 @@ const pool = new Pool({
   connectionString: process.env.AUTH_DATABASE_URL,
 });
 
-// Direct all Better Auth queries to the 'auth' schema
+// Better Auth のクエリは全て 'auth' スキーマに向ける
 pool.on("connect", (client: PoolClient) => {
   client.query("SET search_path TO auth, public");
 });

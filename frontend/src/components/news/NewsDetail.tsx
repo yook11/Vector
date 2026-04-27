@@ -78,7 +78,7 @@ export function NewsDetail({ article }: { article: ArticleDetailData }) {
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1.5 rounded-full border border-border px-5 py-2.5 text-[13px] font-medium text-foreground transition-colors hover:bg-accent"
             >
-              Read original article
+              Read Original Article
               <ExternalLink aria-hidden="true" className="h-3.5 w-3.5" />
             </Link>
           )}
