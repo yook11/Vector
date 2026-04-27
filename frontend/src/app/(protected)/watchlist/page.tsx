@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { NewsList } from "@/components/news/NewsList";
 import { NewsPagination } from "@/components/news/NewsPagination";
-import { getWatchlist } from "@/lib/api-client";
+import { getWatchlist } from "@/features/watchlist/api/get-watchlist";
 import { parseArticleQuery } from "@/lib/search-params/server";
 
 export const metadata: Metadata = {

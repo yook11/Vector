@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { HotEntityList } from "@/components/weekly-trends/HotEntityList";
 import { HotTopicList } from "@/components/weekly-trends/HotTopicList";
 import { NewEntityList } from "@/components/weekly-trends/NewEntityList";
-import { getWeeklyTrends } from "@/lib/api-client";
+import { getWeeklyTrends } from "@/features/digest/api/get-weekly-trends";
 import { formatDate } from "@/lib/date";
 
 export const metadata: Metadata = {

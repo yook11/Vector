@@ -25,12 +25,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  ApiError,
-  clientActivateSource,
-  clientDeactivateSource,
-  clientDeleteSource,
-} from "@/lib/client-api";
+import { activateSource } from "@/features/sources/api/activate-source";
+import { deactivateSource } from "@/features/sources/api/deactivate-source";
+import { deleteSource } from "@/features/sources/api/delete-source";
+import { ApiError } from "@/lib/api/error";
 import type { NewsSourceDetail } from "@/types";
 
 interface SourceTableProps {
@@ -45,8 +43,8 @@ export function SourceTable({ sources }: SourceTableProps) {
     setToggling(source.id);
     try {
       const updated = source.isActive
-        ? await clientDeactivateSource(source.id)
-        : await clientActivateSource(source.id);
+        ? await deactivateSource(source.id)
+        : await activateSource(source.id);
       toast.success(
         `${updated.name} ${updated.isActive ? "enabled" : "disabled"}`,
       );
@@ -62,7 +60,7 @@ export function SourceTable({ sources }: SourceTableProps) {
 
   async function handleDelete(id: number, name: string) {
     try {
-      await clientDeleteSource(id);
+      await deleteSource(id);
       toast.success(`Deleted "${name}"`);
       router.refresh();
     } catch (err) {
