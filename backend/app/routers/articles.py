@@ -38,13 +38,18 @@ async def list_articles(
 @router.get(
     "/{article_id}/similar",
     summary="pgvector のコサイン距離で意味的に類似した記事を検索する",
+    dependencies=[Depends(get_optional_user)],
 )
 async def get_similar_articles(
     article_id: int,
     service: Annotated[ArticleService, Depends(get_article_service)],
     limit: Annotated[int, Query(ge=1, le=20)] = 5,
 ) -> list[ArticleBrief]:
-    """指定記事に最も類似した記事を返す。"""
+    """指定記事に最も類似した記事を返す。
+
+    認証は任意。レスポンス自体はユーザー非依存だが、他の articles
+    エンドポイントと認可境界を揃えるため検証だけ通す。
+    """
     return await service.get_similar(article_id, limit)
 
 
