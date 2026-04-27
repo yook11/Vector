@@ -1,3 +1,4 @@
+import { getSessionCookie } from "better-auth/cookies";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 
@@ -53,9 +54,13 @@ export async function proxy(request: NextRequest) {
 
   // --- Better Auth 認証チェック ---
   //
-  // Better Auth はセッション cookie (better-auth.session_token) を使用。
-  // cookie の存在のみで簡易チェックし、実際の検証は BFF proxy 側で行う。
-  const sessionToken = request.cookies.get("better-auth.session_token");
+  // Better Auth はセッション cookie を使用。cookie 名は環境により切り替わる:
+  //   - HTTP (dev): `better-auth.session_token`
+  //   - HTTPS (prod): `__Secure-better-auth.session_token`
+  // Better Auth の `getSessionCookie` ヘルパーが BETTER_AUTH_URL から
+  // useSecureCookies を判定し正しい cookie 名で取得するため、proxy 側で
+  // 名前をハードコードしない。実際の検証は BFF proxy 側で行う。
+  const sessionToken = getSessionCookie(request);
   const isAuthPage = request.nextUrl.pathname.startsWith("/auth");
 
   if (!sessionToken && !isAuthPage) {
