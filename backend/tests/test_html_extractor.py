@@ -1,5 +1,6 @@
 """HTML 抽出層のテスト。"""
 
+import socket
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
@@ -15,6 +16,21 @@ from app.collection.extraction.extractor import (
     _decode_html_response,
 )
 from app.shared.value_objects.safe_url import SafeUrl
+
+
+@pytest.fixture(autouse=True)
+def _stub_dns_resolver():
+    """全テストで実 DNS を叩かないように ``_resolve_host`` を public IP 固定にする。
+
+    SSRF/DNS 関連のシナリオを検証したいテストは、本 fixture の上に
+    個別 patch を重ねて override する。
+    """
+    with patch(
+        "app.shared.security.ssrf_guard._resolve_host",
+        new=AsyncMock(return_value=["8.8.8.8"]),
+    ):
+        yield
+
 
 SAMPLE_HTML = """
 <html>
@@ -216,6 +232,108 @@ class TestArticleHtmlExtractor:
         extractor = ArticleHtmlExtractor()
         with _patch_client(client), pytest.raises(PermanentFetchError, match="robots"):
             await extractor.fetch(SafeUrl("https://example.com/private/article"))
+
+    @pytest.mark.asyncio
+    async def test_raises_permanent_when_host_resolves_to_private_ip(self) -> None:
+        """ホスト名の DNS 解決結果が private IP なら fetch せず PermanentFetchError。"""
+        extractor = ArticleHtmlExtractor()
+        with patch(
+            "app.shared.security.ssrf_guard._resolve_host",
+            new=AsyncMock(return_value=["172.18.0.5"]),
+        ):
+            with pytest.raises(PermanentFetchError, match="non-public address"):
+                await extractor.fetch(SafeUrl("https://internal-trick.example.com/"))
+
+    @pytest.mark.asyncio
+    async def test_raises_permanent_when_host_resolves_to_link_local(self) -> None:
+        """A レコードがクラウドメタデータ (169.254.169.254) を指しているケース。"""
+        extractor = ArticleHtmlExtractor()
+        with patch(
+            "app.shared.security.ssrf_guard._resolve_host",
+            new=AsyncMock(return_value=["169.254.169.254"]),
+        ):
+            with pytest.raises(PermanentFetchError, match="169.254.169.254"):
+                await extractor.fetch(SafeUrl("https://metadata-attack.example.com/"))
+
+    @pytest.mark.asyncio
+    async def test_raises_temporary_on_dns_failure(self) -> None:
+        """DNS 解決失敗は一時的失敗としてリトライ可能な分類にする。"""
+        extractor = ArticleHtmlExtractor()
+        with patch(
+            "app.shared.security.ssrf_guard._resolve_host",
+            new=AsyncMock(side_effect=socket.gaierror("nope")),
+        ):
+            with pytest.raises(TemporaryFetchError, match="DNS resolution failed"):
+                await extractor.fetch(SafeUrl("https://nonexistent.invalid/"))
+
+    @pytest.mark.asyncio
+    async def test_raises_permanent_on_3xx_redirect(self) -> None:
+        """3xx は follow せず明示的に拒否する (リダイレクト経由の SSRF 回避)。"""
+        robots_resp = httpx.Response(
+            404,
+            request=httpx.Request("GET", "https://example.com/robots.txt"),
+        )
+        redirect_resp = httpx.Response(
+            302,
+            headers={"location": "http://169.254.169.254/"},
+            request=httpx.Request("GET", "https://example.com/article"),
+        )
+        client = _mock_async_client([robots_resp, redirect_resp])
+
+        extractor = ArticleHtmlExtractor()
+        with (
+            _patch_client(client),
+            pytest.raises(PermanentFetchError, match="redirect not followed"),
+        ):
+            await extractor.fetch(SafeUrl("https://example.com/article"))
+
+    @pytest.mark.asyncio
+    async def test_raises_permanent_on_oversized_content_length_header(self) -> None:
+        """Content-Length が上限超過なら本文を読まずに拒否する。"""
+        robots_resp = httpx.Response(
+            404,
+            request=httpx.Request("GET", "https://example.com/robots.txt"),
+        )
+        huge_resp = httpx.Response(
+            200,
+            content=b"<html><body>ok</body></html>",
+            headers={
+                "content-type": "text/html",
+                "content-length": str(20 * 1024 * 1024),
+            },
+            request=httpx.Request("GET", "https://example.com/huge"),
+        )
+        client = _mock_async_client([robots_resp, huge_resp])
+
+        extractor = ArticleHtmlExtractor()
+        with (
+            _patch_client(client),
+            pytest.raises(PermanentFetchError, match="response too large"),
+        ):
+            await extractor.fetch(SafeUrl("https://example.com/huge"))
+
+    @pytest.mark.asyncio
+    async def test_raises_permanent_on_oversized_actual_body(self) -> None:
+        """Content-Length が無くても、実バイト数が上限超過なら拒否する。"""
+        robots_resp = httpx.Response(
+            404,
+            request=httpx.Request("GET", "https://example.com/robots.txt"),
+        )
+        huge_body = b"x" * (11 * 1024 * 1024)  # 11 MiB
+        huge_resp = httpx.Response(
+            200,
+            content=huge_body,
+            headers={"content-type": "text/html"},
+            request=httpx.Request("GET", "https://example.com/huge2"),
+        )
+        client = _mock_async_client([robots_resp, huge_resp])
+
+        extractor = ArticleHtmlExtractor()
+        with (
+            _patch_client(client),
+            pytest.raises(PermanentFetchError, match="response too large"),
+        ):
+            await extractor.fetch(SafeUrl("https://example.com/huge2"))
 
     @pytest.mark.asyncio
     async def test_caches_robots_txt_across_calls(self) -> None:

@@ -88,6 +88,52 @@ class TestSafeUrl:
 
 
 # ---------------------------------------------------------------------------
+# SafeUrl — SSRF Defense (IP リテラル拒否)
+# ---------------------------------------------------------------------------
+class TestSafeUrlBlocksPrivateIpLiterals:
+    """ホストが private/loopback/link-local/... の IP リテラルなら拒否する。
+
+    DNS 名はここでは判定不能なので拒否されない (実フェッチ層の責務)。
+    """
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://127.0.0.1/",
+            "http://127.0.0.1:8000/admin",
+            "http://10.0.0.1/",
+            "http://172.16.0.1/",
+            "http://192.168.1.1/",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://0.0.0.0/",
+            "http://224.0.0.1/",
+            "http://[::1]/",
+            "http://[fe80::1]/",
+            "http://[fc00::1]/",
+        ],
+    )
+    def test_rejects_private_ip_literal(self, url: str) -> None:
+        with pytest.raises(ValidationError, match="private/loopback IP literal"):
+            SafeUrl(url)
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://8.8.8.8/",
+            "https://1.1.1.1/dns-query",
+            "http://[2001:4860:4860::8888]/",
+        ],
+    )
+    def test_accepts_public_ip_literal(self, url: str) -> None:
+        SafeUrl(url)
+
+    def test_accepts_dns_name(self) -> None:
+        # DNS 名は SafeUrl 単独では判定しない
+        SafeUrl("https://example.com/")
+        SafeUrl("https://backend/")  # docker compose のサービス名は実フェッチ層で判定
+
+
+# ---------------------------------------------------------------------------
 # Pydantic Integration Tests
 # ---------------------------------------------------------------------------
 class TestPydanticIntegration:
