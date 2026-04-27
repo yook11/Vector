@@ -6,8 +6,9 @@
 - snapshot 在ると最新週の bundle が camelCase で返る
 - 複数週がある場合は week_start DESC で 1 件目を返す
 - 認証は任意 (BFF プロキシヘッダなしでも 200)
-- bundle JSONB が破損していて Pydantic validate に失敗したら 500 propagate
-  (生成側の不具合を fallback で隠さない)
+- bundle JSONB が破損していて Pydantic validate に失敗したらルーターは
+  捕まえずに伝播させる (生成側の不具合を fallback で隠さない:
+  feedback_failure_visibility)。本番では FastAPI が 500 に変換する
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from datetime import date
 
 import pytest
 from httpx import AsyncClient
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.digest.domain.trend import (
@@ -107,16 +109,22 @@ class TestWeeklyTrendsEndpoint:
         resp = await client.get("/api/v1/weekly-trends")
         assert resp.status_code == 200
 
-    async def test_corrupt_bundle_propagates_as_500(
+    async def test_corrupt_bundle_propagates_validation_error(
         self,
         client: AsyncClient,
         db_session: AsyncSession,
     ) -> None:
-        """bundle JSONB が schema 違反なら 500 で表面化させる (failure_visibility)。"""
+        """bundle JSONB が schema 違反ならルーターは捕まえずに伝播させる。
+
+        本番では FastAPI が unhandled exception を 500 に変換する。テストでは
+        ASGITransport(raise_app_exceptions=True) のため ValidationError 自体を
+        確認することで「ルーターが try/except で隠していない」ことを構造的に
+        保証する (feedback_failure_visibility)。
+        """
         db_session.add(
             _snapshot(date(2026, 4, 20), bundle={"week_start": "not-a-date"})
         )
         await db_session.commit()
 
-        resp = await client.get("/api/v1/weekly-trends")
-        assert resp.status_code == 500
+        with pytest.raises(ValidationError):
+            await client.get("/api/v1/weekly-trends")
