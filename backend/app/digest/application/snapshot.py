@@ -25,7 +25,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.digest.config import NEW_ENTITY_LOOKBACK_WEEKS, WEEK_TZ
+from app.digest.config import DEFAULT_LIMIT, NEW_ENTITY_LOOKBACK_WEEKS, WEEK_TZ
 from app.digest.domain.trend import WeeklyCategoryTrends, WeeklyTrendsBundle
 from app.digest.repository.snapshots import SnapshotRepository
 from app.digest.repository.trends import TrendsRepository
@@ -180,13 +180,16 @@ class WeeklyTrendsSnapshotService:
             current_end=current_end,
             lookback_start=lookback_start,
         )
+        # new entity の集計は閾値が緩く (current_count >= 1) 1 カテゴリで 1000+ 件に
+        # 膨らむため、各リストを上位 ``DEFAULT_LIMIT`` 件で truncate して JSONB 肥大化と
+        # UI ノイズを構造的に抑える (hot 系は閾値で既に小さいが対称性のため同じ扱い)。
         return WeeklyCategoryTrends(
             category_id=category.id,
             category_slug=category.slug,
             category_name=category.name,
-            trending_entities=entities,
-            trending_topics=topics,
-            new_entities=new_entities,
+            trending_entities=entities[:DEFAULT_LIMIT],
+            trending_topics=topics[:DEFAULT_LIMIT],
+            new_entities=new_entities[:DEFAULT_LIMIT],
         )
 
     @staticmethod
