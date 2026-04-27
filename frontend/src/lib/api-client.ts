@@ -1,6 +1,7 @@
 import { headers } from "next/headers";
-import { ApiError, normalizeErrorDetail } from "@/lib/api-error";
+import { ApiError } from "@/lib/api-error";
 import { auth } from "@/lib/auth";
+import { requestJson } from "@/lib/fetcher";
 import {
   buildInternalAuthHeaders,
   INTERNAL_API_URL,
@@ -32,27 +33,14 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
 }
 
 async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
-  const url = `${INTERNAL_API_URL}${path}`;
   const authHeaders = await getAuthHeaders();
-  const res = await fetch(url, {
+  return requestJson<T>(`${INTERNAL_API_URL}${path}`, {
     ...options,
     headers: {
-      "Content-Type": "application/json",
       ...authHeaders,
       ...options?.headers,
     },
   });
-
-  if (!res.ok) {
-    const body = await res.json().catch(() => null);
-    const detail = normalizeErrorDetail(body) || res.statusText;
-    throw new ApiError(res.status, detail);
-  }
-
-  // 204 No Content
-  if (res.status === 204) return undefined as T;
-
-  return res.json() as Promise<T>;
 }
 
 /** Fetch paginated article list with optional filters. */

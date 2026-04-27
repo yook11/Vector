@@ -1,6 +1,7 @@
 "use client";
 
-import { ApiError, normalizeErrorDetail } from "@/lib/api-error";
+import { ApiError } from "@/lib/api-error";
+import { requestJson } from "@/lib/fetcher";
 import type {
   FetchRequest,
   FetchResponse,
@@ -11,29 +12,11 @@ import type {
 
 async function clientFetch<T>(path: string, options?: RequestInit): Promise<T> {
   // All requests go through BFF proxy — no direct FastAPI access
-  const url = `/api/proxy${path}`;
-
-  const res = await fetch(url, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...options?.headers,
+  return requestJson<T>(`/api/proxy${path}`, options, {
+    onUnauthorized: () => {
+      window.location.href = "/auth/login";
     },
   });
-
-  if (!res.ok) {
-    const body = await res.json().catch(() => null);
-    if (res.status === 401) {
-      window.location.href = "/auth/login";
-      return undefined as T;
-    }
-    const detail = normalizeErrorDetail(body) || res.statusText;
-    throw new ApiError(res.status, detail);
-  }
-
-  if (res.status === 204) return undefined as T;
-
-  return res.json() as Promise<T>;
 }
 
 export async function clientAddToWatchlist(articleId: number): Promise<void> {
