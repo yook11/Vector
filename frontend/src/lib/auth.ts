@@ -29,10 +29,9 @@ export const auth = betterAuth({
     },
   },
   session: {
-    cookieCache: {
-      enabled: true,
-      maxAge: 5 * 60, // 5 minutes
-    },
+    // cookieCache は無効化: 有効にすると最大 maxAge 秒間 stale な role / session が
+    // 認可判定に使われ、admin 降格や session revoke の即時反映が効かなくなる。
+    cookieCache: { enabled: false },
   },
   trustedOrigins: [requireEnv("BETTER_AUTH_URL")],
   advanced: {
