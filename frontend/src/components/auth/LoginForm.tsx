@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -20,6 +20,7 @@ export function LoginForm() {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [isPending, setIsPending] = useState(false);
+  const emailRef = useRef<HTMLInputElement>(null);
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -39,6 +40,7 @@ export function LoginForm() {
 
     if (authError) {
       setError("Invalid email or password");
+      emailRef.current?.focus();
     } else {
       router.push("/");
       router.refresh();
@@ -54,28 +56,41 @@ export function LoginForm() {
       <form onSubmit={handleSubmit}>
         <CardContent className="space-y-4">
           {error && (
-            <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+            <div
+              role="alert"
+              aria-live="polite"
+              className="rounded-md bg-destructive/10 p-3 text-sm text-destructive"
+            >
               {error}
             </div>
           )}
           <div className="space-y-2">
             <Label htmlFor="email">Email</Label>
             <Input
+              ref={emailRef}
               id="email"
               name="email"
               type="email"
               placeholder="you@example.com"
+              autoComplete="email"
+              spellCheck={false}
               required
             />
           </div>
           <div className="space-y-2">
             <Label htmlFor="password">Password</Label>
-            <Input id="password" name="password" type="password" required />
+            <Input
+              id="password"
+              name="password"
+              type="password"
+              autoComplete="current-password"
+              required
+            />
           </div>
         </CardContent>
         <CardFooter className="flex flex-col gap-2">
           <Button type="submit" className="w-full" disabled={isPending}>
-            {isPending ? "Signing in..." : "Sign in"}
+            {isPending ? "Signing in…" : "Sign in"}
           </Button>
           <p className="text-sm text-muted-foreground">
             Don&apos;t have an account?{" "}
