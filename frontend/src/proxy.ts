@@ -60,7 +60,16 @@ export async function proxy(request: NextRequest) {
 
   if (!sessionToken && !isAuthPage) {
     const signInUrl = new URL("/auth/login", request.url);
-    signInUrl.searchParams.set("callbackUrl", request.nextUrl.pathname);
+    // Open redirect 対策: protocol-relative URL (`//evil.com`) や絶対 URL を
+    // 埋め込ませない。`request.nextUrl.pathname` は通常 `/...` だが、
+    // 将来的に LoginForm が `searchParams.get("callbackUrl")` を読んで
+    // `router.push` する実装に発展した場合に備えて構造的に弾いておく。
+    const pathname = request.nextUrl.pathname;
+    const isInternalPath =
+      pathname.startsWith("/") && !pathname.startsWith("//");
+    if (isInternalPath) {
+      signInUrl.searchParams.set("callbackUrl", pathname);
+    }
     return NextResponse.redirect(signInUrl);
   }
 

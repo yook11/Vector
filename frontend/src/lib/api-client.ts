@@ -1,6 +1,10 @@
 import { headers } from "next/headers";
 import { ApiError, normalizeErrorDetail } from "@/lib/api-error";
 import { auth } from "@/lib/auth";
+import {
+  buildInternalAuthHeaders,
+  INTERNAL_API_URL,
+} from "@/lib/internal-api-config";
 import type {
   ArticleBrief,
   ArticleDetail,
@@ -13,35 +17,13 @@ import type {
   SemanticSearchQuery,
 } from "@/types";
 
-const INTERNAL_API_URL =
-  process.env.INTERNAL_API_URL ?? "http://localhost:8000/api/v1";
-
-// BFF プロキシとバックエンドの共有秘密。
-// デフォルト値や `??` フォールバックは持たせない: 未設定時はモジュール
-// 読込時に throw して fail-fast にする (build / 起動時に発覚させる)。
-// 値は `openssl rand -hex 32` などで生成し `.env` で必ず設定する。
-const INTERNAL_SECRET = (() => {
-  const value = process.env.INTERNAL_API_SECRET;
-  if (!value) {
-    throw new Error(
-      "INTERNAL_API_SECRET is required; generate one with `openssl rand -hex 32`",
-    );
-  }
-  return value;
-})();
-
 async function getAuthHeaders(): Promise<Record<string, string>> {
   try {
     const session = await auth.api.getSession({
       headers: await headers(),
     });
     if (session) {
-      return {
-        "X-User-ID": session.user.id,
-        "X-User-Role":
-          ((session.user as Record<string, unknown>).role as string) ?? "user",
-        "X-Internal-Secret": INTERNAL_SECRET,
-      };
+      return buildInternalAuthHeaders(session);
     }
   } catch {
     // Session not available (e.g., during build)

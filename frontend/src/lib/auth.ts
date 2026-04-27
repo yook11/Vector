@@ -1,6 +1,7 @@
 import { betterAuth } from "better-auth";
 import type { PoolClient } from "pg";
 import { Pool } from "pg";
+import { requireEnv } from "@/lib/internal-api-config";
 
 const pool = new Pool({
   connectionString: process.env.AUTH_DATABASE_URL,
@@ -33,7 +34,7 @@ export const auth = betterAuth({
       maxAge: 5 * 60, // 5 minutes
     },
   },
-  trustedOrigins: [process.env.BETTER_AUTH_URL ?? "http://localhost:3000"],
+  trustedOrigins: [requireEnv("BETTER_AUTH_URL")],
   advanced: {
     database: {
       generateId: "uuid",
