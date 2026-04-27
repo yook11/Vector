@@ -2,8 +2,7 @@ import type { Metadata } from "next";
 import { Plus_Jakarta_Sans } from "next/font/google";
 import { headers } from "next/headers";
 import { ThemeProvider } from "next-themes";
-import { Toaster } from "sonner";
-import { AuthErrorWatcher } from "@/components/auth/AuthErrorWatcher";
+import { ClientGlobals } from "@/components/layout/ClientGlobals";
 import { Header } from "@/components/layout/Header";
 import "./globals.css";
 
@@ -44,10 +43,9 @@ export default async function RootLayout({
           enableSystem
           nonce={nonce}
         >
-          <AuthErrorWatcher />
           <Header />
           <div className="mt-11 h-[calc(100dvh-2.75rem)]">{children}</div>
-          <Toaster richColors position="bottom-right" />
+          <ClientGlobals />
         </ThemeProvider>
       </body>
     </html>
