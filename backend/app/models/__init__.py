@@ -9,6 +9,7 @@ from app.models.discovered_article import DiscoveredArticle
 from app.models.fetch_log import FetchLog
 from app.models.news_source import NewsSource, SourceType
 from app.models.watchlist_entry import WatchlistEntry
+from app.models.weekly_trends_snapshot import WeeklyTrendsSnapshot
 
 __all__ = [
     "Article",
@@ -22,4 +23,5 @@ __all__ = [
     "NewsSource",
     "SourceType",
     "WatchlistEntry",
+    "WeeklyTrendsSnapshot",
 ]
