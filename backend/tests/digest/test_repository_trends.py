@@ -284,8 +284,9 @@ class TestGetTrendingEntities:
     ) -> None:
         """``NVIDIA`` と ``Nvidia`` は同一エンティティとして集約される (lower(name))。
 
-        display 名は GROUP の MIN(name) (辞書順最小) を採用するので
-        ``NVIDIA`` と ``Nvidia`` 混在なら ``NVIDIA`` が選ばれる。
+        display 名は GROUP の MIN(name) (Postgres の locale 依存) を 1 つ採用する。
+        どの casing が選ばれるかは実装の責務外で、casing が保持されること
+        (= lowercase 化されない) のみ検証する。
         """
         cat = sample_categories[0]
         for i in range(3):
@@ -318,7 +319,8 @@ class TestGetTrendingEntities:
         trend = results[0]
         assert trend.current_count == 5
         assert trend.previous_count == 2
-        assert str(trend.name) == "NVIDIA"  # MIN(name) by ASCII
+        assert str(trend.name).lower() == "nvidia"
+        assert str(trend.name) in {"NVIDIA", "Nvidia"}  # casing 保持 (lowercase でない)
 
     @pytest.mark.asyncio
     async def test_returns_empty_when_no_data(

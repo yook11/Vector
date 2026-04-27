@@ -28,9 +28,7 @@ SeedAnalysis = Callable[..., Awaitable[ArticleAnalysis]]
 
 
 @pytest.fixture
-def seed_analysis(
-    db_session: AsyncSession, sample_source: NewsSource
-) -> SeedAnalysis:
+def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAnalysis:
     """1 件の ``ArticleAnalysis`` を関連 ORM ごと seed するファクトリ。
 
     Args (キーワード引数):
@@ -74,9 +72,7 @@ def seed_analysis(
             translated_title=f"seed-{n}",
             summary="summary body",
             ai_model="test",
-            entities=[
-                ArticleEntity(name=name, type=type_) for name, type_ in entities
-            ],
+            entities=[ArticleEntity(name=name, type=type_) for name, type_ in entities],
         )
         db_session.add(extraction)
         await db_session.flush()
