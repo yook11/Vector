@@ -54,6 +54,9 @@ export interface paths {
     /**
      * pgvector のコサイン距離で意味的に類似した記事を検索する
      * @description 指定記事に最も類似した記事を返す。
+     *
+     *     認証は任意。レスポンス自体はユーザー非依存だが、他の articles
+     *     エンドポイントと認可境界を揃えるため検証だけ通す。
      */
     get: operations["get_similar_articles_api_v1_articles__article_id__similar_get"];
     put?: never;
@@ -94,6 +97,9 @@ export interface paths {
     /**
      * List Categories
      * @description 全カテゴリをネストされたキーワードと記事件数付きで一覧取得する。
+     *
+     *     認証は任意 (BFF プロキシヘッダがあれば検証、無ければ匿名扱い)。
+     *     レスポンスはユーザー非依存だが、認可境界の一貫性のため検証だけ通す。
      */
     get: operations["list_categories_api_v1_categories_get"];
     put?: never;
@@ -134,6 +140,26 @@ export interface paths {
     post?: never;
     /** Remove From Watchlist */
     delete: operations["remove_from_watchlist_api_v1_me_watchlist__article_id__delete"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/weekly-trends": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Weekly Trends
+     * @description 最新週の weekly trends snapshot を返す (なければ空状態)。
+     */
+    get: operations["get_weekly_trends_api_v1_weekly_trends_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
     options?: never;
     head?: never;
     patch?: never;
@@ -398,6 +424,30 @@ export interface components {
       dispatchedCount: number;
     };
     /**
+     * EntityName
+     * @description エンティティの固有名。
+     *
+     *     Invariants:
+     *     - NFKC 正規化 + 前後空白除去 + 連続空白を単一半角空白に統合
+     *     - 正規化後 1-200 文字
+     *     - 大文字小文字は保持（"NVIDIA" を表示用にそのまま維持）
+     *     - 生成後は不変
+     *
+     *     `match_key` プロパティは正規化済み文字列を str.lower() した値を返す。
+     *     重複検出・JOIN キーに使う。casefold は使わない (AI 抽出 casing は文脈情報)。
+     */
+    EntityName: string;
+    /**
+     * EntityType
+     * @description エンティティ種別ラベル。
+     *
+     *     Invariants:
+     *     - トリム後 1-50 文字
+     *     - 小文字に正規化
+     *     - 生成後は不変
+     */
+    EntityType: string;
+    /**
      * FetchRequest
      * @description POST /api/v1/admin/pipeline/fetch のリクエストボディ。
      */
@@ -503,6 +553,8 @@ export interface components {
      *     Invariants:
      *     - http または https スキームを使用
      *     - 有効な URL 構造 (最低でも scheme + host)
+     *     - ホストが IP リテラルなら ``PublicIpAddress`` として valid
+     *       (例: ``http://169.254.169.254/`` は拒否)
      *     - トリム後 1-2048 文字
      *     - 生成後は不変
      */
@@ -534,6 +586,23 @@ export interface components {
      */
     SourceType: "rss" | "api";
     /**
+     * TopicName
+     * @description AI 生成の分類ラベル名。正規化済みの英語小文字。
+     *
+     *     入力は自動で正規化される（小文字化、ハイフン／アンダースコアを空白に、
+     *     連続空白を単一空白に）。VO 自身が「正規化済み」を保証する状態型。
+     *
+     *     Invariants:
+     *     - 英数字トークンを単一空白で連結した形式
+     *     - 先頭・末尾は英数字
+     *     - 2-100 文字
+     *     - 小文字のみ
+     *     - 最大 3 語
+     *     - 冠詞・前置詞を含まない
+     *     - 生成後は不変
+     */
+    TopicName: string;
+    /**
      * UserRole
      * @enum {string}
      */
@@ -558,6 +627,65 @@ export interface components {
     WatchlistCreate: {
       /** Articleid */
       articleId: number;
+    };
+    /**
+     * WeeklyTrendsResponse
+     * @description GET /api/v1/weekly-trends のレスポンス。
+     *
+     *     snapshot 不在時は ``empty()`` を呼び、全フィールド null + 空 categories で返す。
+     */
+    WeeklyTrendsResponse: {
+      /** Weekstart */
+      weekStart: string | null;
+      /** Weekend */
+      weekEnd: string | null;
+      /** Generatedat */
+      generatedAt: string | null;
+      /** Sourceanalysiscount */
+      sourceAnalysisCount: number | null;
+      /** Categories */
+      categories: components["schemas"]["_CategoryTrendsOut"][];
+    };
+    /** _CategoryTrendsOut */
+    _CategoryTrendsOut: {
+      /** Categoryid */
+      categoryId: number;
+      categorySlug: components["schemas"]["CategorySlug"];
+      categoryName: components["schemas"]["CategoryName"];
+      /** Trendingentities */
+      trendingEntities: components["schemas"]["_EntityTrendOut"][];
+      /** Trendingtopics */
+      trendingTopics: components["schemas"]["_TopicTrendOut"][];
+      /** Newentities */
+      newEntities: components["schemas"]["_NewEntityOut"][];
+    };
+    /** _EntityTrendOut */
+    _EntityTrendOut: {
+      name: components["schemas"]["EntityName"];
+      type: components["schemas"]["EntityType"];
+      /** Currentcount */
+      currentCount: number;
+      /** Previouscount */
+      previousCount: number;
+      /** Hotnessscore */
+      hotnessScore: number;
+    };
+    /** _NewEntityOut */
+    _NewEntityOut: {
+      name: components["schemas"]["EntityName"];
+      type: components["schemas"]["EntityType"];
+      /** Currentcount */
+      currentCount: number;
+    };
+    /** _TopicTrendOut */
+    _TopicTrendOut: {
+      topic: components["schemas"]["TopicName"];
+      /** Currentcount */
+      currentCount: number;
+      /** Previouscount */
+      previousCount: number;
+      /** Hotnessscore */
+      hotnessScore: number;
     };
   };
   responses: never;
@@ -653,7 +781,11 @@ export interface operations {
       query?: {
         limit?: number;
       };
-      header?: never;
+      header?: {
+        "x-internal-secret"?: string | null;
+        "x-user-id"?: string | null;
+        "x-user-role"?: components["schemas"]["UserRole"] | null;
+      };
       path: {
         article_id: number;
       };
@@ -719,7 +851,11 @@ export interface operations {
   list_categories_api_v1_categories_get: {
     parameters: {
       query?: never;
-      header?: never;
+      header?: {
+        "x-internal-secret"?: string | null;
+        "x-user-id"?: string | null;
+        "x-user-role"?: components["schemas"]["UserRole"] | null;
+      };
       path?: never;
       cookie?: never;
     };
@@ -732,6 +868,15 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["CategoryDetailList"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
         };
       };
     };
@@ -830,6 +975,39 @@ export interface operations {
           [name: string]: unknown;
         };
         content?: never;
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  get_weekly_trends_api_v1_weekly_trends_get: {
+    parameters: {
+      query?: never;
+      header?: {
+        "x-internal-secret"?: string | null;
+        "x-user-id"?: string | null;
+        "x-user-role"?: components["schemas"]["UserRole"] | null;
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["WeeklyTrendsResponse"];
+        };
       };
       /** @description Validation Error */
       422: {
