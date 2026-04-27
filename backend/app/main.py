@@ -108,7 +108,10 @@ async def health_check() -> dict:
             await conn.execute(text("SELECT 1"))
             db_connected = True
     except Exception as exc:
-        logger.warning("health_check_db_unreachable", error=str(exc))
+        logger.warning(
+            "health_check_db_unreachable",
+            error_type=type(exc).__name__,
+        )
 
     return {
         "status": "ok",
