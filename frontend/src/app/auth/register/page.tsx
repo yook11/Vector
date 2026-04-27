@@ -1,4 +1,4 @@
-import { RegisterForm } from "@/components/auth/RegisterForm";
+import { RegisterForm } from "@/features/auth/components/RegisterForm";
 
 export const metadata = {
   title: "Register - Vector",

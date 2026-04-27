@@ -1,3 +1,4 @@
+import { WatchlistButton } from "@/features/watchlist/components/WatchlistButton";
 import type { ArticleBrief } from "@/types";
 import { NewsCard } from "./NewsCard";
 
@@ -13,7 +14,16 @@ export function RelatedArticles({ articles }: RelatedArticlesProps) {
       <h2 className="text-lg font-semibold">関連記事</h2>
       <div className="space-y-3">
         {articles.map((article) => (
-          <NewsCard key={article.id} article={article} />
+          <NewsCard
+            key={article.id}
+            article={article}
+            actionSlot={
+              <WatchlistButton
+                articleId={article.id}
+                isWatched={article.isWatched}
+              />
+            }
+          />
         ))}
       </div>
     </section>
