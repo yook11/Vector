@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
-import { SourceManager } from "@/components/sources/SourceManager";
 import { getSources } from "@/features/sources/api/get-sources";
+import { SourceManager } from "@/features/sources/components/SourceManager";
 
 export const metadata: Metadata = {
   title: "Settings | Vector",

@@ -1,11 +1,17 @@
 import Link from "next/link";
+import type { ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { formatDate } from "@/lib/date";
 import type { ArticleBrief } from "@/types";
-import { WatchlistButton } from "./WatchlistButton";
 
-export function NewsCard({ article }: { article: ArticleBrief }) {
+export function NewsCard({
+  article,
+  actionSlot,
+}: {
+  article: ArticleBrief;
+  actionSlot?: ReactNode;
+}) {
   return (
     <Card className="flex h-full flex-col border-0 bg-transparent p-0 shadow-none gap-0">
       <div className="flex items-start justify-between gap-3">
@@ -19,12 +25,7 @@ export function NewsCard({ article }: { article: ArticleBrief }) {
             </Badge>
           )}
         </div>
-        <div className="-mt-1 -mr-1 shrink-0">
-          <WatchlistButton
-            articleId={article.id}
-            isWatched={article.isWatched}
-          />
-        </div>
+        {actionSlot && <div className="-mt-1 -mr-1 shrink-0">{actionSlot}</div>}
       </div>
 
       <Link href={`/news/${article.id}`} className="group mt-5 block">

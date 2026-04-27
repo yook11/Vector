@@ -1,3 +1,4 @@
+import { WatchlistButton } from "@/features/watchlist/components/WatchlistButton";
 import type { ArticleBrief } from "@/types";
 import { NewsCard } from "./NewsCard";
 
@@ -16,7 +17,16 @@ export function NewsList({ items }: { items: ArticleBrief[] }) {
   return (
     <div className="grid gap-x-8 gap-y-0 md:grid-cols-2 xl:grid-cols-3 grid-apple-dividers [&>*]:py-6 [&>*]:border-b [&>*]:border-border">
       {items.map((article) => (
-        <NewsCard key={article.id} article={article} />
+        <NewsCard
+          key={article.id}
+          article={article}
+          actionSlot={
+            <WatchlistButton
+              articleId={article.id}
+              isWatched={article.isWatched}
+            />
+          }
+        />
       ))}
     </div>
   );
