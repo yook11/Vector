@@ -36,6 +36,7 @@ import httpx
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.collection.errors import PermanentFetchError, TemporaryFetchError
 from app.collection.ingestion.domain import (
     ArticleCandidate,
     DiscoveredArticleDraft,
@@ -46,6 +47,8 @@ from app.collection.ingestion.registry import get_fetcher
 from app.collection.ingestion.repository import DiscoveredArticleRepository
 from app.config import settings
 from app.models.news_source import NewsSource
+from app.shared.security.safe_http import make_safe_async_client
+from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 from app.shared.value_objects.safe_url import SafeUrl
 
 logger = structlog.get_logger(__name__)
@@ -109,13 +112,19 @@ class SourceFetchService:
                 )
                 return QuotaSkippedOutcome()
 
-            async with httpx.AsyncClient(
+            # SSRF defense は make_safe_async_client の event_hook に集約済み。
+            # 政策層 (ssrf_guard) の例外は fetch 層のセマンティクスに翻訳する。
+            async with make_safe_async_client(
                 headers={"User-Agent": _USER_AGENT},
-                follow_redirects=False,
                 verify=True,
                 timeout=_HTTP_TIMEOUT,
             ) as client:
-                candidates = await fetcher.fetch(client, source)
+                try:
+                    candidates = await fetcher.fetch(client, source)
+                except HostBlockedError as e:
+                    raise PermanentFetchError(str(e)) from e
+                except HostResolutionError as e:
+                    raise TemporaryFetchError(str(e)) from e
 
             new_discovered = await self._persist(session, source, candidates)
             await session.commit()

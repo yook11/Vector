@@ -108,7 +108,8 @@ class TestEntityNameInvariants:
     def test_normalized_length_used_for_check(self) -> None:
         """空白統合後の長さで判定する (元 201 文字 → 統合後 200 文字なら OK)。"""
         # "a " * 100 + "a" = 201 文字、collapse 後は変わらず 201 (空白は1個ずつ)
-        # collapse が効くケース: "a  " * 100 + "a" = 301 文字 → "a " * 100 + "a" = 201 文字
+        # collapse が効くケース: "a  " * 100 + "a" = 301 文字
+        # → "a " * 100 + "a" = 201 文字
         # ここでは strip + 連続空白統合の効果が長さ判定に効くことを示す
         raw = "a" + " " * 50 + "b"  # 元 52 文字、統合後 "a b" = 3 文字
         name = EntityName(raw)

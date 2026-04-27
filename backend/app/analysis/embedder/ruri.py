@@ -1,6 +1,13 @@
 """cl-nagoya/ruri-v3-310m を用いた Ruri Embedder 実装。
 
 TEI (Text Embeddings Inference) サーバーへの HTTP リクエストでベクトルを取得する。
+
+Note:
+    本モジュールは docker compose 内 ``embedding:80`` への内部固定通信のみを
+    行うため、SSRF 検証付きの ``make_safe_async_client`` ではなく
+    ``httpx.AsyncClient`` を直接使う (内部 IP に解決される TEI へ届かなくなる)。
+    Ruff の ``TID251`` 禁止は ``pyproject.toml`` の per-file-ignore で除外済み。
+    将来 internal client が複数になったら専用ファクトリへの昇格を検討する。
 """
 
 from __future__ import annotations

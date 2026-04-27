@@ -29,11 +29,8 @@ from app.collection.extraction.domain.article import (
     _ARTICLE_BODY_MIN_LENGTH as _BODY_MIN_LENGTH,
 )
 from app.collection.extraction.domain.value_objects import PublishedAt
-from app.shared.security.ssrf_guard import (
-    HostBlockedError,
-    HostResolutionError,
-    ensure_host_is_public,
-)
+from app.shared.security.safe_http import make_safe_async_client
+from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 from app.shared.value_objects.safe_url import SafeUrl
 from app.utils.sanitize import strip_html_tags
 
@@ -144,8 +141,12 @@ class _RobotsCache:
         self._cache: dict[str, RobotFileParser | None] = {}
         self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
-    async def check(self, client: httpx.AsyncClient, url: str) -> bool:
-        """URL が robots.txt で許可されているか判定する。許可なら True。"""
+    async def check(self, client: httpx.AsyncClient, url: str) -> bool:  # noqa: TID251
+        """URL が robots.txt で許可されているか判定する。許可なら True。
+
+        ``client`` は ``make_safe_async_client`` 経由で構築されており、event_hook
+        により本メソッド内の ``client.get`` でも SSRF 検証が走る (Vuln 5)。
+        """
         parsed = urlparse(url)
         domain = parsed.netloc
         robots_url = f"{parsed.scheme}://{domain}/robots.txt"
@@ -239,75 +240,78 @@ class ArticleHtmlExtractor:
         """
         url_str = str(url)
 
-        # SSRF defense: ホスト名を DNS 解決し全アドレスが public か検証する。
-        # SafeUrl 単独では IP リテラルしか弾けないため、ここで DNS 名を網羅する。
-        # 例外は政策層 (ssrf_guard) のものなので fetch 層のセマンティクスに翻訳する。
-        parsed_host = urlparse(url_str).hostname
-        if parsed_host:
+        # SSRF defense は make_safe_async_client の event_hook に集約済み。
+        # 全 client.get / client.post 直前で ensure_host_is_public が走り、
+        # 政策層の例外 (HostBlockedError / HostResolutionError) が伝播する。
+        async with make_safe_async_client(
+            headers=HEADERS, timeout=HTTP_TIMEOUT
+        ) as client:
             try:
-                await ensure_host_is_public(parsed_host)
+                if not await self._robots_cache.check(client, url_str):
+                    raise PermanentFetchError(f"robots.txt blocked: {url_str}")
+
+                try:
+                    response = await client.get(url_str, timeout=HTTP_TIMEOUT)
+                    # 3xx は raise_for_status では拾われない: 明示的に弾く。
+                    # follow_redirects=False (make_safe_async_client の default)
+                    # は Location 経由 SSRF を遮断する。
+                    if 300 <= response.status_code < 400:
+                        logger.info(
+                            "redirect_not_followed",
+                            url=url_str,
+                            status=response.status_code,
+                            location=response.headers.get("location", "")[:200],
+                        )
+                        raise PermanentFetchError(
+                            f"redirect not followed: HTTP "
+                            f"{response.status_code}: {url_str}"
+                        )
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as e:
+                    status = e.response.status_code
+                    if status in (403, 404, 410, 451):
+                        raise PermanentFetchError(f"HTTP {status}: {url_str}") from e
+                    # 429 / 5xx はリトライ可能
+                    raise TemporaryFetchError(f"HTTP {status}: {url_str}") from e
+                except httpx.RequestError as e:
+                    # タイムアウト / DNS / 接続エラーはリトライ可能
+                    raise TemporaryFetchError(f"request error: {url_str}: {e}") from e
+
+                # レスポンスサイズ上限: 内部エンドポイントから巨大レスポンスを
+                # 引き出される攻撃面を閉じる (Content-Length 自己申告 + 実バイト数)。
+                content_length_header = response.headers.get("content-length")
+                if content_length_header is not None:
+                    try:
+                        if int(content_length_header) > _MAX_RESPONSE_BYTES:
+                            raise PermanentFetchError(
+                                f"response too large (content-length="
+                                f"{content_length_header}): {url_str}"
+                            )
+                    except ValueError:
+                        pass
+                if len(response.content) > _MAX_RESPONSE_BYTES:
+                    raise PermanentFetchError(
+                        f"response too large ({len(response.content)} bytes): {url_str}"
+                    )
+
+                content_type = response.headers.get("content-type", "")
+                if "text/html" not in content_type:
+                    logger.info(
+                        "content_not_html", url=url_str, content_type=content_type
+                    )
+                    return ExtractionEmpty(reason="not_html")
+
+                try:
+                    html_text = _decode_html_response(response)
+                    return await asyncio.to_thread(
+                        _extract_from_html, html_text, url_str
+                    )
+                except Exception as e:
+                    logger.warning("content_parse_error", url=url_str, error=str(e))
+                    return ExtractionEmpty(reason="parse_error")
             except HostBlockedError as e:
+                # SSRF 検証で内部 IP に解決された (event_hook 起源)
                 raise PermanentFetchError(str(e)) from e
             except HostResolutionError as e:
+                # DNS 解決失敗はリトライ可能
                 raise TemporaryFetchError(str(e)) from e
-
-        async with httpx.AsyncClient(headers=HEADERS, timeout=HTTP_TIMEOUT) as client:
-            if not await self._robots_cache.check(client, url_str):
-                raise PermanentFetchError(f"robots.txt blocked: {url_str}")
-
-            try:
-                # follow_redirects=False: リダイレクトを介した SSRF を防ぐ。
-                # Location が公開ホストでも、再度の DNS 検証なしに辿るのは危険。
-                response = await client.get(
-                    url_str, timeout=HTTP_TIMEOUT, follow_redirects=False
-                )
-                # 3xx は raise_for_status では拾われない: 明示的に弾く。
-                if 300 <= response.status_code < 400:
-                    logger.info(
-                        "redirect_not_followed",
-                        url=url_str,
-                        status=response.status_code,
-                        location=response.headers.get("location", "")[:200],
-                    )
-                    raise PermanentFetchError(
-                        f"redirect not followed: HTTP {response.status_code}: {url_str}"
-                    )
-                response.raise_for_status()
-            except httpx.HTTPStatusError as e:
-                status = e.response.status_code
-                if status in (403, 404, 410, 451):
-                    raise PermanentFetchError(f"HTTP {status}: {url_str}") from e
-                # 429 / 5xx はリトライ可能
-                raise TemporaryFetchError(f"HTTP {status}: {url_str}") from e
-            except httpx.RequestError as e:
-                # タイムアウト / DNS / 接続エラーはリトライ可能
-                raise TemporaryFetchError(f"request error: {url_str}: {e}") from e
-
-            # レスポンスサイズ上限: 内部エンドポイントから巨大レスポンスを引き出される
-            # 攻撃面を閉じる (Content-Length 自己申告 + 実バイト数の両方をチェック)。
-            content_length_header = response.headers.get("content-length")
-            if content_length_header is not None:
-                try:
-                    if int(content_length_header) > _MAX_RESPONSE_BYTES:
-                        raise PermanentFetchError(
-                            f"response too large (content-length="
-                            f"{content_length_header}): {url_str}"
-                        )
-                except ValueError:
-                    pass
-            if len(response.content) > _MAX_RESPONSE_BYTES:
-                raise PermanentFetchError(
-                    f"response too large ({len(response.content)} bytes): {url_str}"
-                )
-
-            content_type = response.headers.get("content-type", "")
-            if "text/html" not in content_type:
-                logger.info("content_not_html", url=url_str, content_type=content_type)
-                return ExtractionEmpty(reason="not_html")
-
-            try:
-                html_text = _decode_html_response(response)
-                return await asyncio.to_thread(_extract_from_html, html_text, url_str)
-            except Exception as e:
-                logger.warning("content_parse_error", url=url_str, error=str(e))
-                return ExtractionEmpty(reason="parse_error")

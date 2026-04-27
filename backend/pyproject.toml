@@ -33,10 +33,19 @@ target-version = "py312"
 line-length = 88
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "S", "FAST"]
+select = ["E", "F", "I", "UP", "S", "FAST", "TID"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"httpx.AsyncClient".msg = "Use app.shared.security.safe_http.make_safe_async_client instead. Direct httpx.AsyncClient bypasses SSRF defense."
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "S105", "S106", "S311"]
+"tests/**" = ["S101", "S105", "S106", "S311", "TID251"]
+"app/shared/security/safe_http.py" = ["TID251"]
+"app/analysis/embedder/ruri.py" = ["TID251"]
+# fetcher は呼び出し側 (Service) から AsyncClient を受け取って使う側なので、
+# 型ヒントとしての参照のみ。本ファイル群で AsyncClient を直接構築することはない。
+"app/collection/ingestion/fetchers/**" = ["TID251"]
+"app/collection/ingestion/registry.py" = ["TID251"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
