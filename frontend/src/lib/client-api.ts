@@ -1,7 +1,7 @@
 "use client";
 
-import { ApiError } from "@/lib/api-error";
-import { requestJson } from "@/lib/fetcher";
+import { ApiError } from "@/lib/api/error";
+import { requestJson } from "@/lib/api/fetcher";
 import type {
   FetchRequest,
   FetchResponse,

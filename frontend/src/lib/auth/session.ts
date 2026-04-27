@@ -7,7 +7,7 @@
  * 持たずに済む。
  */
 
-import type { auth } from "@/lib/auth";
+import type { auth } from "@/lib/auth/auth";
 
 export type Session = NonNullable<
   Awaited<ReturnType<typeof auth.api.getSession>>

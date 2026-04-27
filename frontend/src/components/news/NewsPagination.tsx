@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import { useUpdateSearchParams } from "@/lib/search-params-client";
+import { useUpdateSearchParams } from "@/lib/search-params/client";
 
 interface NewsPaginationProps {
   page: number;

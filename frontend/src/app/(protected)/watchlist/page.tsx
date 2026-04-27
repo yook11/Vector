@@ -3,7 +3,7 @@ import Link from "next/link";
 import { NewsList } from "@/components/news/NewsList";
 import { NewsPagination } from "@/components/news/NewsPagination";
 import { getWatchlist } from "@/lib/api-client";
-import { parseArticleQuery } from "@/lib/search-params";
+import { parseArticleQuery } from "@/lib/search-params/server";
 
 export const metadata: Metadata = {
   title: "Watchlist | Vector",

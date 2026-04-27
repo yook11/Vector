@@ -3,7 +3,7 @@ import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { formatDate } from "@/lib/date";
-import { sanitizeUrl } from "@/lib/utils";
+import { sanitizeUrl } from "@/lib/utils/sanitize-url";
 import type { ArticleDetail as ArticleDetailData } from "@/types";
 import { WatchlistButton } from "./WatchlistButton";
 

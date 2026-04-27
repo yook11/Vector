@@ -1,7 +1,7 @@
 import { betterAuth } from "better-auth";
 import type { PoolClient } from "pg";
 import { Pool } from "pg";
-import { requireEnv } from "@/lib/internal-api-config";
+import { requireEnv } from "@/lib/api/internal-config";
 
 const pool = new Pool({
   connectionString: process.env.AUTH_DATABASE_URL,

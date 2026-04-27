@@ -6,7 +6,7 @@ import { NewsList } from "@/components/news/NewsList";
 import { NewsPagination } from "@/components/news/NewsPagination";
 import { SearchBar } from "@/components/news/SearchBar";
 import { getArticles, getCategories, searchArticles } from "@/lib/api-client";
-import { parseArticleQuery } from "@/lib/search-params";
+import { parseArticleQuery } from "@/lib/search-params/server";
 
 interface DashboardPageProps {
   searchParams: Promise<Record<string, string | string[] | undefined>>;

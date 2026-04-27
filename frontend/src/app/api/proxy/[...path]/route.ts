@@ -1,11 +1,11 @@
 import { headers } from "next/headers";
 import { type NextRequest, NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
 import {
   buildInternalAuthHeaders,
   INTERNAL_API_URL,
   requireEnv,
-} from "@/lib/internal-api-config";
+} from "@/lib/api/internal-config";
+import { auth } from "@/lib/auth/auth";
 
 // CSRF: state を変更するリクエストは同一オリジンからのみ受け付ける。
 // Better Auth の SameSite=Lax cookie に加えた多層防御。
