@@ -173,6 +173,6 @@ async def test_deactivate_source_not_found(
 async def test_missing_auth_headers(
     client: AsyncClient,
 ) -> None:
-    """必須ヘッダーが無い場合は 422 (FastAPI の型バリデーション)。"""
+    """Authorization ヘッダーが無い場合は 401 (BFF JWT 未提示)。"""
     response = await client.get("/api/v1/admin/sources")
-    assert response.status_code == 422
+    assert response.status_code == 401

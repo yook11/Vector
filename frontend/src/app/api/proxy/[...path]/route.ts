@@ -68,7 +68,7 @@ async function proxyRequest(
     request.headers.get("Content-Type") ?? "application/json",
   );
   for (const [name, value] of Object.entries(
-    buildInternalAuthHeaders(session),
+    await buildInternalAuthHeaders(session),
   )) {
     proxyHeaders.set(name, value);
   }

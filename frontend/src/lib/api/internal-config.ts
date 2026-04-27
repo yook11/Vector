@@ -9,6 +9,7 @@
  * 読込時に throw して fail-fast にする (build / 起動時に発覚させる)。
  */
 
+import { SignJWT } from "jose";
 import type { Session } from "@/lib/auth/session";
 
 export function requireEnv(name: string, hint?: string): string {
@@ -22,21 +23,33 @@ export function requireEnv(name: string, hint?: string): string {
 
 export const INTERNAL_API_URL = requireEnv("INTERNAL_API_URL");
 
-export const INTERNAL_API_SECRET = requireEnv(
+const INTERNAL_API_SECRET = requireEnv(
   "INTERNAL_API_SECRET",
   "generate one with `openssl rand -hex 32`",
 );
 
+// HS256 署名鍵: モジュール読込時に 1 度だけバイト列化してキャッシュする。
+// secret 文字列は >=32 バイト (backend Settings._validate_internal_api_secret で保証)。
+const INTERNAL_JWT_SIGNING_KEY = new TextEncoder().encode(INTERNAL_API_SECRET);
+
+const INTERNAL_JWT_ALGORITHM = "HS256";
+const INTERNAL_JWT_TTL = "60s";
+
 /**
- * Build the auth headers required by the backend internal API:
- * X-User-ID / X-User-Role / X-Internal-Secret.
+ * BFF→backend 間の認証 JWT を 1 リクエスト分だけ発行する。
+ *
+ * Better Auth セッションから `user.id` / `user.role` を取り出し HS256 で署名。
+ * backend は同じ INTERNAL_API_SECRET で検証する (`backend/app/dependencies.py`)。
+ * 有効期限を 60 秒に絞ることで、secret 漏洩時の悪用ウィンドウを構造的に短縮する。
  */
-export function buildInternalAuthHeaders(
+export async function buildInternalAuthHeaders(
   session: Session,
-): Record<string, string> {
-  return {
-    "X-User-ID": session.user.id,
-    "X-User-Role": session.user.role,
-    "X-Internal-Secret": INTERNAL_API_SECRET,
-  };
+): Promise<Record<string, string>> {
+  const token = await new SignJWT({ role: session.user.role })
+    .setProtectedHeader({ alg: INTERNAL_JWT_ALGORITHM })
+    .setSubject(session.user.id)
+    .setIssuedAt()
+    .setExpirationTime(INTERNAL_JWT_TTL)
+    .sign(INTERNAL_JWT_SIGNING_KEY);
+  return { Authorization: `Bearer ${token}` };
 }
