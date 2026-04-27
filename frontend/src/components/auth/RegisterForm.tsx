@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -20,6 +20,8 @@ export function RegisterForm() {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [isPending, setIsPending] = useState(false);
+  const displayNameRef = useRef<HTMLInputElement>(null);
+  const emailRef = useRef<HTMLInputElement>(null);
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -45,8 +47,10 @@ export function RegisterForm() {
     if (authError) {
       if (authError.status === 409) {
         setError("An account with this email already exists");
+        emailRef.current?.focus();
       } else {
         setError(authError.message ?? "Registration failed");
+        displayNameRef.current?.focus();
       }
     } else {
       router.push("/");
@@ -63,7 +67,11 @@ export function RegisterForm() {
       <form onSubmit={handleSubmit}>
         <CardContent className="space-y-4">
           {error && (
-            <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+            <div
+              role="alert"
+              aria-live="polite"
+              className="rounded-md bg-destructive/10 p-3 text-sm text-destructive"
+            >
               {error}
             </div>
           )}
@@ -75,10 +83,13 @@ export function RegisterForm() {
           <div className="space-y-2">
             <Label htmlFor="displayName">Display Name</Label>
             <Input
+              ref={displayNameRef}
               id="displayName"
               name="displayName"
               type="text"
               placeholder="表示名（任意）"
+              autoComplete="nickname"
+              spellCheck={false}
               maxLength={100}
               pattern="[\w\s\-]+"
               title="使用できる文字: 英数字、日本語、スペース、ハイフン、アンダースコア"
@@ -90,10 +101,13 @@ export function RegisterForm() {
           <div className="space-y-2">
             <Label htmlFor="email">Email</Label>
             <Input
+              ref={emailRef}
               id="email"
               name="email"
               type="email"
               placeholder="you@example.com"
+              autoComplete="email"
+              spellCheck={false}
               required
             />
           </div>
@@ -104,6 +118,7 @@ export function RegisterForm() {
               name="password"
               type="password"
               placeholder="Minimum 8 characters"
+              autoComplete="new-password"
               required
               minLength={8}
             />
@@ -111,7 +126,7 @@ export function RegisterForm() {
         </CardContent>
         <CardFooter className="flex flex-col gap-2">
           <Button type="submit" className="w-full" disabled={isPending}>
-            {isPending ? "Creating account..." : "Create account"}
+            {isPending ? "Creating account…" : "Create account"}
           </Button>
           <p className="text-sm text-muted-foreground">
             Already have an account?{" "}
