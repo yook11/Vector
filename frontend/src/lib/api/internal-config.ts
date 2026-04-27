@@ -9,7 +9,7 @@
  * 読込時に throw して fail-fast にする (build / 起動時に発覚させる)。
  */
 
-import type { Session } from "@/lib/session";
+import type { Session } from "@/lib/auth/session";
 
 export function requireEnv(name: string, hint?: string): string {
   const value = process.env[name];

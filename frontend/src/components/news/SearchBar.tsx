@@ -4,7 +4,7 @@ import { Search, X } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Input } from "@/components/ui/input";
-import { useUpdateSearchParams } from "@/lib/search-params-client";
+import { useUpdateSearchParams } from "@/lib/search-params/client";
 
 const DEBOUNCE_MS = 500;
 

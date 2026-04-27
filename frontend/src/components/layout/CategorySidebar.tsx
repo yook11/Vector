@@ -2,8 +2,8 @@
 
 import Link from "next/link";
 import { Separator } from "@/components/ui/separator";
-import { useBuildSearchParamsHref } from "@/lib/search-params-client";
-import { cn } from "@/lib/utils";
+import { useBuildSearchParamsHref } from "@/lib/search-params/client";
+import { cn } from "@/lib/utils/cn";
 import type { CategoryDetailResponse } from "@/types";
 
 interface CategorySidebarProps {

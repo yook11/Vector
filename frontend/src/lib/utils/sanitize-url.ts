@@ -1,10 +1,3 @@
-import { type ClassValue, clsx } from "clsx";
-import { twMerge } from "tailwind-merge";
-
-export function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs));
-}
-
 // --- XSS対策 Step 3: 出力エスケープ（URLスキームのホワイトリスト） ---
 //
 // 動的URLを href 属性に渡す場合、javascript: スキーム等による

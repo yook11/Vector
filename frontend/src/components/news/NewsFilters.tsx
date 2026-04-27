@@ -8,7 +8,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useUpdateSearchParams } from "@/lib/search-params-client";
+import { useUpdateSearchParams } from "@/lib/search-params/client";
 
 export function NewsFilters() {
   const searchParams = useSearchParams();

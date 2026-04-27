@@ -1,11 +1,11 @@
 import { headers } from "next/headers";
-import { ApiError } from "@/lib/api-error";
-import { auth } from "@/lib/auth";
-import { requestJson } from "@/lib/fetcher";
+import { ApiError } from "@/lib/api/error";
+import { requestJson } from "@/lib/api/fetcher";
 import {
   buildInternalAuthHeaders,
   INTERNAL_API_URL,
-} from "@/lib/internal-api-config";
+} from "@/lib/api/internal-config";
+import { auth } from "@/lib/auth/auth";
 import type {
   ArticleBrief,
   ArticleDetail,

@@ -1,4 +1,4 @@
-import { ApiError, normalizeErrorDetail } from "@/lib/api-error";
+import { ApiError, normalizeErrorDetail } from "@/lib/api/error";
 
 export type FetcherHooks = {
   onUnauthorized?: () => void;
