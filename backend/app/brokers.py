@@ -1,13 +1,16 @@
 """パイプライン用タスクキューの broker 定義と共通基盤。
 
-パイプラインの各ステップに対応する 4 つの broker:
+broker:
   - broker_metadata:  RSS/HN メタデータ取得 + dispatch
   - broker_content:   記事単位のコンテンツ抽出
   - broker_analysis:  AI 分析
   - broker_embedding: ベクトル埋め込み生成
+  - broker_digest:    週次トレンド snapshot 生成 (cron 駆動)
 
 Workers: broker ごとに 1 つ（docker-compose.yml を参照）。
-Scheduler: taskiq scheduler app.brokers:scheduler_metadata
+Scheduler:
+  - taskiq scheduler app.brokers:scheduler_metadata (back-fill 用 cron)
+  - taskiq scheduler app.brokers:scheduler_digest (週次 snapshot 用 cron)
 """
 
 from __future__ import annotations
@@ -72,14 +75,19 @@ broker_metadata = _make_broker("pipeline:metadata")
 broker_content = _make_broker("pipeline:content")
 broker_analysis = _make_broker("pipeline:analysis")
 broker_embedding = _make_broker("pipeline:embedding")
+broker_digest = _make_broker("digest")
 
 # ---------------------------------------------------------------------------
-# Scheduler（metadata broker のみ — cron タスクは dispatch_sources だけ）
+# Scheduler — cron 駆動を持つ broker ごとに 1 つ
 # ---------------------------------------------------------------------------
 
 scheduler_metadata = TaskiqScheduler(
     broker=broker_metadata,
     sources=[LabelScheduleSource(broker_metadata)],
+)
+scheduler_digest = TaskiqScheduler(
+    broker=broker_digest,
+    sources=[LabelScheduleSource(broker_digest)],
 )
 
 # ---------------------------------------------------------------------------
@@ -109,8 +117,9 @@ _register_lifecycle(broker_metadata, "metadata")
 _register_lifecycle(broker_content, "content")
 _register_lifecycle(broker_analysis, "analysis")
 _register_lifecycle(broker_embedding, "embedding")
+_register_lifecycle(broker_digest, "digest")
 
-# scheduler に back-fill cron を登録するため、import で副作用を起こす。
+# scheduler に cron を登録するため、import で副作用を起こす。
 import app.maintenance.tasks  # noqa: E402, F401
 
 # ---------------------------------------------------------------------------
