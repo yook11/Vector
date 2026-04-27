@@ -51,9 +51,9 @@ export function NewsDetail({ article }: { article: ArticleDetailData }) {
       {/* AI Analysis Section */}
       <div className="mt-4 w-full max-w-2xl space-y-10 border-t border-border pt-12">
         <div className="space-y-4 text-left">
-          <h3 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+          <h2 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
             AI Summary
-          </h3>
+          </h2>
           <p className="text-[15px] leading-relaxed text-foreground sm:text-base">
             {article.summary}
           </p>
@@ -61,9 +61,9 @@ export function NewsDetail({ article }: { article: ArticleDetailData }) {
 
         {article.investorTake && (
           <div className="space-y-4 text-left">
-            <h3 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+            <h2 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
               Investor Take
-            </h3>
+            </h2>
             <p className="text-[15px] leading-relaxed text-foreground sm:text-base">
               {article.investorTake}
             </p>
@@ -78,8 +78,8 @@ export function NewsDetail({ article }: { article: ArticleDetailData }) {
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1.5 rounded-full border border-border px-5 py-2.5 text-[13px] font-medium text-foreground transition-colors hover:bg-accent"
             >
-              Read original article
-              <ExternalLink className="h-3.5 w-3.5" />
+              Read Original Article
+              <ExternalLink aria-hidden="true" className="h-3.5 w-3.5" />
             </Link>
           )}
           <p className="text-[11px] text-muted-foreground">

@@ -124,7 +124,7 @@ export function SourceTable({ sources }: SourceTableProps) {
                   <AlertDialogContent>
                     <AlertDialogHeader>
                       <AlertDialogTitle>
-                        Delete &quot;{source.name}&quot;?
+                        Delete “{source.name}”?
                       </AlertDialogTitle>
                       <AlertDialogDescription>
                         This will permanently delete this source. Articles

@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -36,6 +36,7 @@ export function SourceFormDialog({ trigger }: SourceFormDialogProps) {
   const [sourceType, setSourceType] = useState<"rss" | "api">("rss");
   const [endpointUrl, setEndpointUrl] = useState("");
   const [siteUrl, setSiteUrl] = useState("");
+  const nameRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (open) {
@@ -64,6 +65,7 @@ export function SourceFormDialog({ trigger }: SourceFormDialogProps) {
     } catch (err) {
       const msg = err instanceof ApiError ? err.detail : "Operation failed";
       toast.error(msg);
+      nameRef.current?.focus();
     } finally {
       setLoading(false);
     }
@@ -80,10 +82,12 @@ export function SourceFormDialog({ trigger }: SourceFormDialogProps) {
           <div className="space-y-2">
             <Label htmlFor="source-name">Name</Label>
             <Input
+              ref={nameRef}
               id="source-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. TechCrunch"
+              spellCheck={false}
               maxLength={50}
               required
             />
@@ -117,6 +121,8 @@ export function SourceFormDialog({ trigger }: SourceFormDialogProps) {
                   ? "https://example.com/feed/"
                   : "https://api.example.com/v1/endpoint"
               }
+              autoComplete="url"
+              spellCheck={false}
               required
             />
           </div>
@@ -129,13 +135,15 @@ export function SourceFormDialog({ trigger }: SourceFormDialogProps) {
               value={siteUrl}
               onChange={(e) => setSiteUrl(e.target.value)}
               placeholder="https://example.com"
+              autoComplete="url"
+              spellCheck={false}
               required
             />
           </div>
 
           <DialogFooter>
             <Button type="submit" disabled={loading || !name.trim()}>
-              {loading ? "Saving..." : "Add"}
+              {loading ? "Saving…" : "Add"}
             </Button>
           </DialogFooter>
         </form>

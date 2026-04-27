@@ -46,6 +46,7 @@ export function WatchlistButton({
     }
   }
 
+  const label = isWatched ? "Remove from watchlist" : "Add to watchlist";
   return (
     <Button
       variant="ghost"
@@ -53,9 +54,14 @@ export function WatchlistButton({
       className="h-8 w-8"
       onClick={handleToggle}
       disabled={pending}
-      title={isWatched ? "Remove from watchlist" : "Add to watchlist"}
+      aria-label={label}
+      aria-pressed={isWatched}
+      title={label}
     >
-      <Bookmark className={`h-4 w-4 ${isWatched ? "fill-current" : ""}`} />
+      <Bookmark
+        aria-hidden="true"
+        className={`h-4 w-4 ${isWatched ? "fill-current" : ""}`}
+      />
     </Button>
   );
 }

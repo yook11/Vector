@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { Suspense } from "react";
 import { NewsDetail } from "@/components/news/NewsDetail";
 import { RelatedArticles } from "@/components/news/RelatedArticles";
 import { Button } from "@/components/ui/button";
@@ -25,26 +26,52 @@ export async function generateMetadata({
   }
 }
 
+async function RelatedArticlesAsync({
+  articlesPromise,
+}: {
+  articlesPromise: Promise<ArticleBrief[]>;
+}) {
+  // Related articles are a progressive enhancement: failure must not break
+  // the page, but we still log so embed/index regressions stay visible.
+  let articles: ArticleBrief[] = [];
+  try {
+    articles = await articlesPromise;
+  } catch (err) {
+    console.error("Failed to load similar articles", err);
+  }
+  return <RelatedArticles articles={articles} />;
+}
+
+function RelatedArticlesSkeleton() {
+  return (
+    <section className="space-y-3" aria-hidden="true">
+      <div className="h-6 w-24 rounded bg-muted/60 animate-pulse" />
+      <div className="space-y-3">
+        {[0, 1, 2].map((i) => (
+          <div key={i} className="h-24 rounded-md bg-muted/40 animate-pulse" />
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export default async function NewsPage({ params }: NewsPageProps) {
   const { id } = await params;
+  const articleId = Number(id);
+
+  // Fire both fetches in parallel. The similar-articles promise is forwarded
+  // to a Suspense'd child so it can stream in after the article renders.
+  const articlePromise = getArticleById(articleId);
+  const similarPromise = getSimilarArticles(articleId, 5);
 
   let article: ArticleDetailData;
   try {
-    article = await getArticleById(Number(id));
+    article = await articlePromise;
   } catch (err) {
     if (err instanceof ApiError && err.status === 404) {
       notFound();
     }
     throw err;
-  }
-
-  // Related articles are a progressive enhancement: failure must not break
-  // the page, but we still log so embed/index regressions stay visible.
-  let similarArticles: ArticleBrief[] = [];
-  try {
-    similarArticles = await getSimilarArticles(Number(id), 5);
-  } catch (err) {
-    console.error("Failed to load similar articles", err);
   }
 
   return (
@@ -54,7 +81,9 @@ export default async function NewsPage({ params }: NewsPageProps) {
           <Link href="/">&larr; Back to Dashboard</Link>
         </Button>
         <NewsDetail article={article} />
-        <RelatedArticles articles={similarArticles} />
+        <Suspense fallback={<RelatedArticlesSkeleton />}>
+          <RelatedArticlesAsync articlesPromise={similarPromise} />
+        </Suspense>
       </div>
     </main>
   );
