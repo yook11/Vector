@@ -2,20 +2,10 @@ import { ExternalLink } from "lucide-react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { formatDate } from "@/lib/date";
 import { sanitizeUrl } from "@/lib/utils";
 import type { ArticleDetail as ArticleDetailData } from "@/types";
 import { WatchlistButton } from "./WatchlistButton";
-
-function formatDate(dateStr: string | null | undefined): string {
-  if (!dateStr) return "Unknown";
-  return new Date(dateStr).toLocaleDateString("ja-JP", {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
 
 export function NewsDetail({ article }: { article: ArticleDetailData }) {
   // --- XSS: validate URL scheme (reject javascript: etc.) ---
@@ -55,7 +45,7 @@ export function NewsDetail({ article }: { article: ArticleDetailData }) {
           {article.source.name}
         </span>
         <Separator orientation="vertical" className="h-4" />
-        <span>{formatDate(article.publishedAt)}</span>
+        <span>{formatDate(article.publishedAt, { withTime: true })}</span>
       </div>
 
       {/* AI Analysis Section */}
@@ -93,7 +83,7 @@ export function NewsDetail({ article }: { article: ArticleDetailData }) {
             </Link>
           )}
           <p className="text-[11px] text-muted-foreground">
-            Analyzed at {formatDate(article.analyzedAt)}
+            Analyzed at {formatDate(article.analyzedAt, { withTime: true })}
           </p>
         </div>
       </div>

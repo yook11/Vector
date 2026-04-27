@@ -1,17 +1,9 @@
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
+import { formatDate } from "@/lib/date";
 import type { ArticleBrief } from "@/types";
 import { WatchlistButton } from "./WatchlistButton";
-
-function formatDate(dateStr: string | null | undefined): string {
-  if (!dateStr) return "Unknown";
-  return new Date(dateStr).toLocaleDateString("ja-JP", {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
-}
 
 export function NewsCard({ article }: { article: ArticleBrief }) {
   return (
