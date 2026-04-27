@@ -9,6 +9,8 @@
  * 読込時に throw して fail-fast にする (build / 起動時に発覚させる)。
  */
 
+import type { Session } from "@/lib/session";
+
 export function requireEnv(name: string, hint?: string): string {
   const value = process.env[name];
   if (!value) {
@@ -26,25 +28,15 @@ export const INTERNAL_API_SECRET = requireEnv(
 );
 
 /**
- * Better Auth Session の最低限の shape。
- * `role` は `additionalFields` で追加されているため型上は明示できず、
- * 内部で安全に narrow する。型安全な session 拡張は別タスク (role 型拡張) で実施。
- */
-type SessionLike = { user: { id: string } };
-
-/**
  * Build the auth headers required by the backend internal API:
  * X-User-ID / X-User-Role / X-Internal-Secret.
  */
 export function buildInternalAuthHeaders(
-  session: SessionLike,
+  session: Session,
 ): Record<string, string> {
-  const role =
-    ((session.user as Record<string, unknown>).role as string | undefined) ??
-    "user";
   return {
     "X-User-ID": session.user.id,
-    "X-User-Role": role,
+    "X-User-Role": session.user.role,
     "X-Internal-Secret": INTERNAL_API_SECRET,
   };
 }

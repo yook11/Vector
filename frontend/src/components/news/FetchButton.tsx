@@ -12,8 +12,7 @@ export function FetchButton() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
 
-  if ((session?.user as Record<string, unknown> | undefined)?.role !== "admin")
-    return null;
+  if (session?.user.role !== "admin") return null;
 
   async function handleFetch() {
     setLoading(true);
