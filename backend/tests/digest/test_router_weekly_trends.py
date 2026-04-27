@@ -47,7 +47,11 @@ def _bundle_with_section(week_start: date) -> WeeklyTrendsBundle:
 
 
 def _snapshot(week_start: date, *, bundle: dict | None = None) -> WeeklyTrendsSnapshot:
-    serialized = bundle if bundle is not None else _bundle_with_section(week_start).model_dump(mode="json")
+    serialized = (
+        bundle
+        if bundle is not None
+        else _bundle_with_section(week_start).model_dump(mode="json")
+    )
     return WeeklyTrendsSnapshot(
         week_start=week_start,
         bundle=serialized,

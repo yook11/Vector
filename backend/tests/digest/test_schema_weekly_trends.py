@@ -22,7 +22,7 @@ class TestEmptyState:
     def test_absent_snapshot_serializes_with_nulls(self) -> None:
         """snapshot 不在時は週情報が null + categories が空 list。"""
         resp = WeeklyTrendsResponse.empty()
-        dumped = resp.model_dump(by_alias=True)
+        dumped = resp.model_dump(mode="json", by_alias=True)
         assert dumped["weekStart"] is None
         assert dumped["weekEnd"] is None
         assert dumped["generatedAt"] is None
@@ -47,9 +47,7 @@ class TestFromSnapshot:
             trending_topics=(
                 TopicTrend(topic="ai agents", current_count=12, previous_count=1),
             ),
-            new_entities=(
-                NewEntity(name="Acme", type="company", current_count=3),
-            ),
+            new_entities=(NewEntity(name="Acme", type="company", current_count=3),),
         )
         return WeeklyTrendsBundle(week_start=date(2026, 4, 20), sections=(section,))
 
@@ -60,7 +58,7 @@ class TestFromSnapshot:
             generated_at=datetime(2026, 4, 21, 0, 5, tzinfo=UTC),
             source_analysis_count=328,
         )
-        dumped = resp.model_dump(by_alias=True)
+        dumped = resp.model_dump(mode="json", by_alias=True)
         assert dumped["weekStart"] == "2026-04-20"
         assert dumped["weekEnd"] == "2026-04-27"
         assert dumped["generatedAt"] is not None
@@ -94,6 +92,6 @@ class TestFromSnapshot:
             generated_at=datetime(2026, 4, 14, 0, 5, tzinfo=UTC),
             source_analysis_count=0,
         )
-        dumped = resp.model_dump(by_alias=True)
+        dumped = resp.model_dump(mode="json", by_alias=True)
         assert dumped["weekStart"] == "2026-04-13"
         assert dumped["weekEnd"] == "2026-04-20"

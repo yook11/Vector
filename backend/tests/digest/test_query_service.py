@@ -16,7 +16,9 @@ from app.digest.domain.trend import WeeklyTrendsBundle
 from app.models.weekly_trends_snapshot import WeeklyTrendsSnapshot
 
 
-def _snapshot(week_start: date, *, source_analysis_count: int = 10) -> WeeklyTrendsSnapshot:
+def _snapshot(
+    week_start: date, *, source_analysis_count: int = 10
+) -> WeeklyTrendsSnapshot:
     bundle = WeeklyTrendsBundle(week_start=week_start, sections=())
     return WeeklyTrendsSnapshot(
         week_start=week_start,
