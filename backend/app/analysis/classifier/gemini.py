@@ -25,6 +25,7 @@ from app.analysis.errors import (
     RateLimitError,
     UnclassifiedError,
 )
+from app.analysis.prompt_safety import sanitize_for_untrusted_block
 from app.config import settings
 
 logger = structlog.get_logger(__name__)
@@ -113,8 +114,8 @@ class GeminiClassifier(BaseClassifier):
     ) -> ClassificationResponse:
         """Stage 1 の出力を分類する。原文は読まない。"""
         prompt = CLASSIFICATION_PROMPT.format(
-            title_ja=title_ja,
-            summary_ja=summary_ja,
+            title_ja=sanitize_for_untrusted_block(title_ja),
+            summary_ja=sanitize_for_untrusted_block(summary_ja),
         )
 
         return await self._call_once(prompt)
