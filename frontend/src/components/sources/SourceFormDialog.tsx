@@ -21,7 +21,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ApiError, clientCreateSource } from "@/lib/client-api";
+import { createSource } from "@/features/sources/api/create-source";
+import { ApiError } from "@/lib/api/error";
 
 interface SourceFormDialogProps {
   trigger: React.ReactNode;
@@ -53,7 +54,7 @@ export function SourceFormDialog({ trigger }: SourceFormDialogProps) {
 
     setLoading(true);
     try {
-      await clientCreateSource({
+      await createSource({
         name: name.trim(),
         sourceType,
         siteUrl: siteUrl.trim(),

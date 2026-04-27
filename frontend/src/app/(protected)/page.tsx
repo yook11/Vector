@@ -5,7 +5,9 @@ import { NewsFilters } from "@/components/news/NewsFilters";
 import { NewsList } from "@/components/news/NewsList";
 import { NewsPagination } from "@/components/news/NewsPagination";
 import { SearchBar } from "@/components/news/SearchBar";
-import { getArticles, getCategories, searchArticles } from "@/lib/api-client";
+import { getArticles } from "@/features/news/api/get-articles";
+import { getCategories } from "@/features/news/api/get-categories";
+import { searchArticles } from "@/features/news/api/search-articles";
 import { parseArticleQuery } from "@/lib/search-params/server";
 
 interface DashboardPageProps {
