@@ -120,6 +120,7 @@ _register_lifecycle(broker_embedding, "embedding")
 _register_lifecycle(broker_digest, "digest")
 
 # scheduler に cron を登録するため、import で副作用を起こす。
+import app.digest.tasks.snapshot  # noqa: E402, F401
 import app.maintenance.tasks  # noqa: E402, F401
 
 # ---------------------------------------------------------------------------
