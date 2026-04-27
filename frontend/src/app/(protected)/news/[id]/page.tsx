@@ -38,12 +38,13 @@ export default async function NewsPage({ params }: NewsPageProps) {
     throw err;
   }
 
-  // Fetch similar articles — non-fatal (empty array if not yet embedded or on error)
+  // Related articles are a progressive enhancement: failure must not break
+  // the page, but we still log so embed/index regressions stay visible.
   let similarArticles: ArticleBrief[] = [];
   try {
     similarArticles = await getSimilarArticles(Number(id), 5);
-  } catch {
-    // Graceful degradation: related articles are a progressive enhancement
+  } catch (err) {
+    console.error("Failed to load similar articles", err);
   }
 
   return (

@@ -3,6 +3,7 @@
 import { Bookmark } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
   clientAddToWatchlist,
@@ -33,8 +34,13 @@ export function WatchlistButton({
         setIsWatched(true);
       }
       router.refresh();
-    } catch {
-      // Revert on error
+    } catch (err) {
+      console.error("Watchlist toggle failed", err);
+      toast.error(
+        isWatched
+          ? "Failed to remove from watchlist"
+          : "Failed to add to watchlist",
+      );
     } finally {
       setPending(false);
     }
