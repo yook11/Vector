@@ -5,6 +5,7 @@ import { UserMenu } from "@/components/layout/UserMenu";
 
 const navItems = [
   { href: "/", label: "ニュース" },
+  { href: "/weekly-trends", label: "ウィークリー" },
   { href: "/watchlist", label: "ウォッチリスト" },
   { href: "/settings", label: "マイページ" },
 ];
