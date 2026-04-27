@@ -20,6 +20,7 @@ from app.collection.ingestion.service import (
 )
 from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
+from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 from app.shared.value_objects.safe_url import SafeUrl
 
 
@@ -245,4 +246,50 @@ async def test_execute_propagates_temporary_error(
     ):
         svc = SourceFetchService(session_factory)
         with pytest.raises(TemporaryFetchError):
+            await svc.execute(source_id=sample_source.id)
+
+
+@pytest.mark.asyncio
+async def test_execute_translates_host_blocked_to_permanent(
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """SSRF 検証で internal IP に解決された場合は PermanentFetchError に翻訳する。
+
+    実運用では make_safe_async_client の event_hook が fetcher.fetch 内の
+    client.get 直前で HostBlockedError を raise するシナリオに対応する。
+    """
+    mock_fetcher = AsyncMock()
+    del mock_fetcher.DAILY_REQUEST_LIMIT
+    mock_fetcher.fetch = AsyncMock(
+        side_effect=HostBlockedError("non-public address: backend -> 172.18.0.5")
+    )
+
+    with patch(
+        "app.collection.ingestion.service.get_fetcher",
+        return_value=mock_fetcher,
+    ):
+        svc = SourceFetchService(session_factory)
+        with pytest.raises(PermanentFetchError, match="non-public address"):
+            await svc.execute(source_id=sample_source.id)
+
+
+@pytest.mark.asyncio
+async def test_execute_translates_host_resolution_error_to_temporary(
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """DNS 解決失敗 (HostResolutionError) は TemporaryFetchError に翻訳する。"""
+    mock_fetcher = AsyncMock()
+    del mock_fetcher.DAILY_REQUEST_LIMIT
+    mock_fetcher.fetch = AsyncMock(
+        side_effect=HostResolutionError("DNS resolution failed for host: nope.invalid")
+    )
+
+    with patch(
+        "app.collection.ingestion.service.get_fetcher",
+        return_value=mock_fetcher,
+    ):
+        svc = SourceFetchService(session_factory)
+        with pytest.raises(TemporaryFetchError, match="DNS resolution failed"):
             await svc.execute(source_id=sample_source.id)

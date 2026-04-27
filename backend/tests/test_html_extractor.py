@@ -80,9 +80,9 @@ def _mock_async_client(responses: list[httpx.Response | Exception]) -> AsyncMock
 
 
 def _patch_client(client: AsyncMock):
-    """``httpx.AsyncClient`` を patch して fetch() が指定モックを使うようにする。"""
+    """``make_safe_async_client`` を patch して fetch() がモックを使うようにする。"""
     return patch(
-        "app.collection.extraction.extractor.httpx.AsyncClient",
+        "app.collection.extraction.extractor.make_safe_async_client",
         return_value=_as_async_cm(client),
     )
 
