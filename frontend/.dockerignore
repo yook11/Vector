@@ -1,0 +1,13 @@
+# build artifacts / dependencies (image で再生成・再 install する)
+node_modules
+.next
+
+# secret leak 防止 (compose の environment 経由で注入する)
+.env
+.env.*
+
+# image に不要 (履歴 / IDE / OS 副産物)
+.git
+.gitignore
+.vscode
+.DS_Store
