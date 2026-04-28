@@ -7,6 +7,6 @@ export async function getSimilarArticles(
   limit = 5,
 ): Promise<ArticleBrief[]> {
   return serverFetch<ArticleBrief[]>(`/articles/${id}/similar?limit=${limit}`, {
-    cache: "no-store",
+    next: { revalidate: 3600, tags: ["articles"] },
   });
 }
