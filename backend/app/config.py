@@ -61,11 +61,6 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:3000"
     backend_url: str = "http://localhost:8000"
 
-    # Hacker News API
-    hn_api_base_url: str = "https://hn.algolia.com/api/v1"
-    hn_min_points: int = 20
-    hn_hits_per_page: int = 50
-
     # セマンティック検索
     semantic_search_max_distance: float = 0.8  # コサイン距離のしきい値
 
