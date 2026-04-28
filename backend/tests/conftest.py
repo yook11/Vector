@@ -96,9 +96,19 @@ def pytest_collection_modifyitems(
             item.add_marker(pytest.mark.unit)
 
 
-@pytest.fixture(scope="session", autouse=True)
-async def ensure_test_database() -> None:
-    """vector_test DB が無ければ作成し、pgvector を有効化する。"""
+_test_db_initialized = False
+
+
+async def _ensure_test_database_once() -> None:
+    """vector_test DB と pgvector / auth スキーマを確保する (idempotent, 初回のみ)。
+
+    integration テスト初回起動時にだけ呼ばれる。unit テストのみの実行 (CI の
+    backend-unit job 等、postgres service 無しの環境) ではそもそも呼ばれないため、
+    DB 接続も発生しない。
+    """
+    global _test_db_initialized
+    if _test_db_initialized:
+        return
     base_url = settings.database_url.rsplit("/", 1)[0] + "/postgres"
     engine = create_async_engine(
         base_url, isolation_level="AUTOCOMMIT", poolclass=NullPool
@@ -111,17 +121,15 @@ async def ensure_test_database() -> None:
             await conn.execute(text("CREATE DATABASE vector_test"))
     await engine.dispose()
 
-    # テスト DB に pgvector 拡張と auth スキーマを用意する
     async with engine_test.connect() as conn:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.execute(text("CREATE SCHEMA IF NOT EXISTS auth"))
         await conn.commit()
+    _test_db_initialized = True
 
 
 @pytest.fixture(autouse=True)
-async def setup_db(
-    request: pytest.FixtureRequest, ensure_test_database: None
-) -> AsyncGenerator[None, None]:
+async def setup_db(request: pytest.FixtureRequest) -> AsyncGenerator[None, None]:
     """integration テストのみ、各テスト前にテーブルを作成し終了後に破棄する。
 
     unit テスト (pytest_collection_modifyitems で自動分類) は DB を触らないため
@@ -131,6 +139,7 @@ async def setup_db(
     if "integration" not in request.keywords:
         yield
         return
+    await _ensure_test_database_once()
     async with engine_test.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
         # watchlist_entries.user_id の FK を満たすため auth.user を seed する

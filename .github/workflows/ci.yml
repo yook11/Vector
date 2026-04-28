@@ -7,8 +7,49 @@ on:
     branches: [main, develop]
 
 jobs:
-  backend:
-    name: Backend (lint + test)
+  backend-unit:
+    name: Backend (unit + lint)
+    runs-on: ubuntu-latest
+
+    env:
+      # unit テストは実際には接続しないが、conftest が settings.database_url を
+      # モジュール load 時に参照するため URL 形式 validation を満たすダミーが必要。
+      DATABASE_URL: postgresql+asyncpg://vector:vector@localhost:5432/unit_dummy
+      # CI 専用のダミー値。本番値とは無関係で、Settings の長さ要件 (>=32) を
+      # 満たすために 64 桁の hex を直書きする (秘密ではない)。
+      INTERNAL_API_SECRET: ci0000000000000000000000000000000000000000000000000000000000000000
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/requirements.txt
+
+      - name: Install dependencies
+        run: uv pip install --system -r requirements.txt
+        working-directory: backend
+
+      - name: Ruff lint
+        run: ruff check app/
+        working-directory: backend
+
+      - name: Ruff format check
+        run: ruff format --check app/
+        working-directory: backend
+
+      - name: Run unit tests
+        run: python -m pytest tests/ -m unit -x -q --durations=20
+        working-directory: backend
+
+  backend-integration:
+    name: Backend (integration)
     runs-on: ubuntu-latest
 
     services:
@@ -49,16 +90,8 @@ jobs:
         run: uv pip install --system -r requirements.txt
         working-directory: backend
 
-      - name: Ruff lint
-        run: ruff check app/
-        working-directory: backend
-
-      - name: Ruff format check
-        run: ruff format --check app/
-        working-directory: backend
-
-      - name: Run tests
-        run: python -m pytest tests/ -x -q --durations=20
+      - name: Run integration tests
+        run: python -m pytest tests/ -m integration -x -q --durations=20
         working-directory: backend
 
   frontend:
