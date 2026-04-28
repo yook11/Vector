@@ -57,6 +57,7 @@ export function LoginForm() {
         <CardContent className="space-y-4">
           {error && (
             <div
+              id="login-error"
               role="alert"
               aria-live="polite"
               className="rounded-md bg-destructive/10 p-3 text-sm text-destructive"
@@ -75,6 +76,8 @@ export function LoginForm() {
               autoComplete="email"
               spellCheck={false}
               required
+              aria-invalid={error ? true : undefined}
+              aria-describedby={error ? "login-error" : undefined}
             />
           </div>
           <div className="space-y-2">
@@ -85,6 +88,8 @@ export function LoginForm() {
               type="password"
               autoComplete="current-password"
               required
+              aria-invalid={error ? true : undefined}
+              aria-describedby={error ? "login-error" : undefined}
             />
           </div>
         </CardContent>

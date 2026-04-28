@@ -70,6 +70,7 @@ export function RegisterForm() {
         <CardContent className="space-y-4">
           {error && (
             <div
+              id="register-error"
               role="alert"
               aria-live="polite"
               className="rounded-md bg-destructive/10 p-3 text-sm text-destructive"
@@ -95,8 +96,12 @@ export function RegisterForm() {
               maxLength={100}
               pattern="[\w\s\-]+"
               title="使用できる文字: 英数字、日本語、スペース、ハイフン、アンダースコア"
+              aria-describedby={
+                error ? "register-error displayname-help" : "displayname-help"
+              }
+              aria-invalid={error ? true : undefined}
             />
-            <p className="text-xs text-muted-foreground">
+            <p id="displayname-help" className="text-xs text-muted-foreground">
               英数字・日本語・スペース・ハイフン・アンダースコアのみ（最大100文字）
             </p>
           </div>
@@ -111,6 +116,8 @@ export function RegisterForm() {
               autoComplete="email"
               spellCheck={false}
               required
+              aria-invalid={error ? true : undefined}
+              aria-describedby={error ? "register-error" : undefined}
             />
           </div>
           <div className="space-y-2">
@@ -123,6 +130,8 @@ export function RegisterForm() {
               autoComplete="new-password"
               required
               minLength={8}
+              aria-invalid={error ? true : undefined}
+              aria-describedby={error ? "register-error" : undefined}
             />
           </div>
         </CardContent>
