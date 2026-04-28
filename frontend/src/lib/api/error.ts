@@ -1,6 +1,6 @@
 /**
- * Shared error types and helpers for both server-side (api-client.ts)
- * and client-side (client-api.ts) fetchers.
+ * Shared error types and helpers for both server-side (server-fetcher.ts)
+ * and client-side (client-fetcher.ts) fetchers.
  */
 
 export class ApiError extends Error {
