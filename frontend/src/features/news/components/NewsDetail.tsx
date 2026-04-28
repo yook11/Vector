@@ -2,7 +2,7 @@ import { ExternalLink } from "lucide-react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { WatchlistButton } from "@/features/watchlist/components/WatchlistButton";
+import { WatchlistButton } from "@/features/watchlist";
 import { formatDate } from "@/lib/date";
 import { sanitizeUrl } from "@/lib/utils/sanitize-url";
 import type { ArticleDetail as ArticleDetailData } from "@/types";

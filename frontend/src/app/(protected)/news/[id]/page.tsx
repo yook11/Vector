@@ -3,10 +3,12 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { Button } from "@/components/ui/button";
-import { getArticleById } from "@/features/news/api/get-article-by-id";
-import { getSimilarArticles } from "@/features/news/api/get-similar-articles";
-import { NewsDetail } from "@/features/news/components/NewsDetail";
-import { RelatedArticles } from "@/features/news/components/RelatedArticles";
+import {
+  getArticleById,
+  getSimilarArticles,
+  NewsDetail,
+  RelatedArticles,
+} from "@/features/news";
 import { ApiError } from "@/lib/api/error";
 import type { ArticleBrief, ArticleDetail as ArticleDetailData } from "@/types";
 

@@ -29,5 +29,150 @@
     "parser": {
       "tailwindDirectives": true
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["src/features/news/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "@/features/sources",
+                      "@/features/sources/**",
+                      "@/features/auth",
+                      "@/features/auth/**",
+                      "@/features/digest",
+                      "@/features/digest/**"
+                    ],
+                    "message": "Do not import other features directly. features/news may compose features/watchlist via its public API '@/features/watchlist' only."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/features/watchlist/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "@/features/news",
+                      "@/features/news/**",
+                      "@/features/sources",
+                      "@/features/sources/**",
+                      "@/features/auth",
+                      "@/features/auth/**",
+                      "@/features/digest",
+                      "@/features/digest/**"
+                    ],
+                    "message": "Do not import other features. Use the feature's public API '@/features/<name>'."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/features/sources/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "@/features/news",
+                      "@/features/news/**",
+                      "@/features/watchlist",
+                      "@/features/watchlist/**",
+                      "@/features/auth",
+                      "@/features/auth/**",
+                      "@/features/digest",
+                      "@/features/digest/**"
+                    ],
+                    "message": "Do not import other features. Use the feature's public API '@/features/<name>'."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/features/auth/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "@/features/news",
+                      "@/features/news/**",
+                      "@/features/watchlist",
+                      "@/features/watchlist/**",
+                      "@/features/sources",
+                      "@/features/sources/**",
+                      "@/features/digest",
+                      "@/features/digest/**"
+                    ],
+                    "message": "Do not import other features. Use the feature's public API '@/features/<name>'."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/features/digest/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "@/features/news",
+                      "@/features/news/**",
+                      "@/features/watchlist",
+                      "@/features/watchlist/**",
+                      "@/features/sources",
+                      "@/features/sources/**",
+                      "@/features/auth",
+                      "@/features/auth/**"
+                    ],
+                    "message": "Do not import other features. Use the feature's public API '@/features/<name>'."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }

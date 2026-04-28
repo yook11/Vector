@@ -1,4 +1,4 @@
-import { WatchlistButton } from "@/features/watchlist/components/WatchlistButton";
+import { WatchlistButton } from "@/features/watchlist";
 import type { ArticleBrief } from "@/types";
 import { NewsCard } from "./NewsCard";
 
