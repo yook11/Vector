@@ -33,8 +33,10 @@ export function RegisterForm() {
     const password = formData.get("password") as string;
     const displayName = (formData.get("displayName") as string) || undefined;
 
-    // name: Better Auth required field — fallback to email local part
-    const name = displayName || email.split("@")[0];
+    // name: Better Auth required field — fallback to email local part, then to
+    // raw email (`split("@")[0]` の戻り値型は `string | undefined` だが、type=email
+    // を通った文字列で undefined にはならない; 型システム上の安全のため email を保険に)
+    const name = displayName || email.split("@")[0] || email;
 
     const { error: authError } = await signUp.email({
       email,
