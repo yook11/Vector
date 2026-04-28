@@ -9,11 +9,17 @@ import type { CategoryDetailResponse } from "@/types";
 interface CategorySidebarProps {
   categories: CategoryDetailResponse[];
   activeCategory?: string;
+  /**
+   * 各カテゴリ Link クリック時のフック。MobileSidebar から渡されて Sheet を
+   * 閉じるなどに使われる。デスクトップ表示では渡さない。
+   */
+  onNavigate?: () => void;
 }
 
 export function CategorySidebar({
   categories,
   activeCategory,
+  onNavigate,
 }: CategorySidebarProps) {
   const buildHrefBase = useBuildSearchParamsHref();
 
@@ -37,6 +43,8 @@ export function CategorySidebar({
       {/* All */}
       <Link
         href={buildHref(undefined)}
+        onClick={onNavigate}
+        aria-current={isAll ? "page" : undefined}
         className={cn(
           linkClass,
           isAll &&
@@ -54,6 +62,8 @@ export function CategorySidebar({
           <Link
             key={cat.slug}
             href={buildHref(cat.slug)}
+            onClick={onNavigate}
+            aria-current={isActiveCat ? "page" : undefined}
             className={cn(
               linkClass,
               isActiveCat &&

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { MobileNav } from "@/components/layout/MobileNav";
+import { NavLink } from "@/components/layout/NavLink";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
 import { UserMenu } from "@/components/layout/UserMenu";
 
@@ -25,13 +26,13 @@ export function Header() {
 
         <nav className="hidden sm:flex items-center gap-7">
           {navItems.map((item) => (
-            <Link
+            <NavLink
               key={item.href}
               href={item.href}
               className="text-xs text-foreground/60 transition-colors duration-300 hover:text-foreground"
             >
               {item.label}
-            </Link>
+            </NavLink>
           ))}
         </nav>
 

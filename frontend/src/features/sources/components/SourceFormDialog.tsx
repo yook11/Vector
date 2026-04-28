@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -78,6 +79,9 @@ export function SourceFormDialog({ trigger }: SourceFormDialogProps) {
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>Add Source</DialogTitle>
+          <DialogDescription className="sr-only">
+            新しい RSS / API ソースを追加します
+          </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">

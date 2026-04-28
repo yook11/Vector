@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import {
   Sheet,
   SheetContent,
+  SheetDescription,
   SheetHeader,
   SheetTitle,
   SheetTrigger,
@@ -29,7 +30,7 @@ export function MobileSidebar({
       <SheetTrigger asChild>
         <Button variant="ghost" size="icon" className="lg:hidden">
           <Menu aria-hidden="true" className="h-5 w-5" />
-          <span className="sr-only">Toggle sidebar</span>
+          <span className="sr-only">サイドバーを開く</span>
         </Button>
       </SheetTrigger>
       <SheetContent
@@ -38,14 +39,15 @@ export function MobileSidebar({
       >
         <SheetHeader className="p-5 pb-0">
           <SheetTitle className="text-sm font-medium">Filters</SheetTitle>
+          <SheetDescription className="sr-only">
+            カテゴリでニュース一覧を絞り込む
+          </SheetDescription>
         </SheetHeader>
-        {/* biome-ignore lint/a11y/noStaticElementInteractions: event delegation to close sheet on sidebar link clicks */}
-        <div role="presentation" onClick={() => setOpen(false)}>
-          <CategorySidebar
-            categories={categories}
-            activeCategory={activeCategory}
-          />
-        </div>
+        <CategorySidebar
+          categories={categories}
+          activeCategory={activeCategory}
+          onNavigate={() => setOpen(false)}
+        />
       </SheetContent>
     </Sheet>
   );

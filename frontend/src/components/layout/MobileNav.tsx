@@ -1,12 +1,13 @@
 "use client";
 
 import { Menu } from "lucide-react";
-import Link from "next/link";
 import { useState } from "react";
+import { NavLink } from "@/components/layout/NavLink";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
   SheetContent,
+  SheetDescription,
   SheetHeader,
   SheetTitle,
   SheetTrigger,
@@ -35,17 +36,20 @@ export function MobileNav({ items }: MobileNavProps) {
           <SheetTitle className="text-left text-sm font-medium tracking-tight">
             Vector
           </SheetTitle>
+          <SheetDescription className="sr-only">
+            主要ページへのナビゲーション
+          </SheetDescription>
         </SheetHeader>
         <nav className="flex flex-col gap-1 mt-10">
           {items.map((item) => (
-            <Link
+            <NavLink
               key={item.href}
               href={item.href}
               onClick={() => setOpen(false)}
               className="px-3 py-2.5 text-sm text-muted-foreground rounded-xl transition-colors duration-200 hover:text-foreground hover:bg-neutral-100 dark:hover:bg-neutral-800/40"
             >
               {item.label}
-            </Link>
+            </NavLink>
           ))}
         </nav>
       </SheetContent>
