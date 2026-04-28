@@ -54,7 +54,7 @@ jobs:
         working-directory: backend
 
       - name: Run tests
-        run: python -m pytest tests/ -x -q
+        run: python -m pytest tests/ -x -q --durations=20
         working-directory: backend
 
   frontend:
