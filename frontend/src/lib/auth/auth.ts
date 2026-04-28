@@ -3,6 +3,7 @@ import "server-only";
 import { betterAuth } from "better-auth";
 import type { PoolClient } from "pg";
 import { Pool } from "pg";
+import { v7 as uuidv7 } from "uuid";
 import { requireEnv } from "@/lib/api/internal-config";
 
 const pool = new Pool({
@@ -38,7 +39,9 @@ export const auth = betterAuth({
   trustedOrigins: [requireEnv("BETTER_AUTH_URL")],
   advanced: {
     database: {
-      generateId: "uuid",
+      // UUIDv7 (時刻順) を採用。crypto.randomUUID() の v4 はランダム順で
+      // B-tree index が断片化するため、書込負荷下の性能を見据えて v7 を選択。
+      generateId: () => uuidv7(),
     },
   },
 });
