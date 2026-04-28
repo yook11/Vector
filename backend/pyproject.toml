@@ -26,6 +26,7 @@ dependencies = [
     "taskiq-redis>=1.0,<2",
     "uvicorn[standard]>=0.46.0,<1",
     "redis>=7.4.0,<8",
+    "openai>=2.32.0",
 ]
 
 [tool.ruff]

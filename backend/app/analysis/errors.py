@@ -33,5 +33,13 @@ class DailyQuotaExhaustedError(AnalysisDomainError):
     """1 日あたりのリクエスト上限（RPD）到達。翌日まで停止する。"""
 
 
+class InsufficientBalanceError(AnalysisDomainError):
+    """プロバイダーの残高不足（DeepSeek の HTTP 402 等）。
+
+    ConfigurationError と同様に、リトライしても解消しないため task は no-retry に
+    回す。AI_PROVIDER の env 切替で別プロバイダーに退避する運用想定。
+    """
+
+
 class UnclassifiedError(AnalysisDomainError):
     """原因不明。ログに残して調査する。"""
