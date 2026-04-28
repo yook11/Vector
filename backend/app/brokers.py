@@ -28,6 +28,8 @@ from taskiq import (
 from taskiq.schedule_sources import LabelScheduleSource
 from taskiq_redis import RedisAsyncResultBackend, RedisStreamBroker
 
+from app.analysis.classifier.deepseek import DeepSeekClassifier
+from app.analysis.extraction.extractor.gemini import GeminiExtractor
 from app.config import settings
 
 logger = structlog.get_logger(__name__)
@@ -118,6 +120,28 @@ _register_lifecycle(broker_content, "content")
 _register_lifecycle(broker_analysis, "analysis")
 _register_lifecycle(broker_embedding, "embedding")
 _register_lifecycle(broker_digest, "digest")
+
+# ---------------------------------------------------------------------------
+# AI アダプター wiring — broker_analysis 専用 composition root
+# ---------------------------------------------------------------------------
+# Provider 選択は本ファイルで hardcode する設計（Pure DI）。切替は env 変更
+# ではなくコード変更 + worker restart。Stage 1 と Stage 2 で別の抽象を別の
+# クラスに紐付けるため、共有 env による誤切替の余地が構造的に生じない。
+
+
+@broker_analysis.on_event(TaskiqEvents.WORKER_STARTUP)
+async def _wire_analysis_adapters(state: TaskiqState) -> None:
+    """Stage 1 / Stage 2 の AI アダプターを worker 起動時に構築する。"""
+    state.extractor = GeminiExtractor()
+    state.classifier = DeepSeekClassifier()
+    logger.info(
+        "analysis_adapters_wired",
+        extractor=type(state.extractor).__name__,
+        extractor_model=state.extractor.MODEL,
+        classifier=type(state.classifier).__name__,
+        classifier_model=state.classifier.MODEL,
+    )
+
 
 # scheduler に cron を登録するため、import で副作用を起こす。
 import app.digest.tasks.snapshot  # noqa: E402, F401

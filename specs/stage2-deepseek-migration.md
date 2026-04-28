@@ -1,6 +1,24 @@
 # Stage 2 (Classification) DeepSeek-V4-Flash 移行
 
-> ステータス: 設計確定 + 実機 PoC 検証済（実装待ち）。最終更新 2026-04-28。
+> ステータス: PR-A merged (2026-04-28)、shadow run 完了 (PR-B)、cutover は Pure DI refactor に経路変更。最終更新 2026-04-28。
+
+## 更新履歴 (2026-04-28 追補)
+
+PR-A merge 後、PR-B (shadow run) を実施した結果に基づいて cutover 段で **構造的バグ**を発見した:
+
+- `settings.ai_provider` を Stage 1 / Stage 2 が共有していたため、`AI_PROVIDER=deepseek` を立てると Stage 1 (extraction) の factory が `ValueError("Unsupported AI provider: deepseek")` で落ち、パイプライン全停止する
+- 既存 PR #220 (env 切替決定 PR) は前提崩壊により stale。本問題を **Pure DI refactor (新ブランチ `refactor/ai-adapter-pure-di`)** で解決する方針に変更
+- DI refactor で `AI_PROVIDER` env と `get_classifier()` / `get_extractor()` factory は完全廃止、`backend/app/brokers.py` の composition root (`_wire_analysis_adapters`) に provider hardcode で集約。切替は env 変更ではなくコード変更 + worker restart になる
+- 以下「論点 6」「論点 7」「リスク」「ロールアウト Phase 4」「PR-C」の env 切替記述は **DI refactor merge までの歴史的経緯**として残す（rollout 手順の最新版は本セクション末尾に追記）
+
+新ロールアウト (DI refactor 経路):
+
+| Phase | アクション | 備考 |
+|---|---|---|
+| 0–3 | (旧通り) PR-A merge → PR-B 実行 → 判定基準クリア | 完了 |
+| 4 | `refactor/ai-adapter-pure-di` PR を merge | composition root で `state.classifier = DeepSeekClassifier()` |
+| 5 | worker-analysis を rebuild + restart | `analysis_adapters_wired` ログで切替確認 |
+| 6 | 24h メトリクス監視 | 異常時は composition root を `GeminiClassifier()` に戻す revert PR |
 
 ## 概要
 
@@ -156,7 +174,7 @@ DeepSeek の出力強制 4 階層を比較した結果（PoC 検証済）:
 | Per-call output キャップ | `max_tokens=512` | `DeepSeekClassifier._call_api` |
 | Per-call input キャップ | `summary_ja` 8000 chars truncate | `DeepSeekClassifier._call_api` |
 | HTTP 402 (Insufficient Balance) | `InsufficientBalanceError` で fail fast、taskiq 非リトライ | `DeepSeekClassifier._translate_error` |
-| Kill switch | `AI_PROVIDER=gemini` env 切替 (論点 6 で確保) | 既存 factory |
+| Kill switch | composition root を `GeminiClassifier()` に差し戻す revert PR + worker restart | brokers.py |
 
 残高プローブ / 通知 / Logfire 観測は別 PR (独立した「DeepSeek 運用基盤」spec)。
 

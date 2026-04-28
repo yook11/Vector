@@ -37,7 +37,8 @@ class InsufficientBalanceError(AnalysisDomainError):
     """プロバイダーの残高不足（DeepSeek の HTTP 402 等）。
 
     ConfigurationError と同様に、リトライしても解消しないため task は no-retry に
-    回す。AI_PROVIDER の env 切替で別プロバイダーに退避する運用想定。
+    回す。退避は brokers.py の composition root を別アダプターに差し替える
+    コード変更（PR）で行う。
     """
 
 

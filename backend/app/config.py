@@ -28,7 +28,9 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://vector:vector@db:5432/vector"
 
     # AI
-    ai_provider: str = "gemini"
+    # Stage 1 (extraction) と Stage 2 (classification) のアダプター選択は env では
+    # なく brokers.py の composition root (_wire_analysis_adapters) で hardcode する。
+    # 切替はコード変更 + worker restart で行うため、ここに provider 名は持たない。
     gemini_api_key: SecretStr = SecretStr("")
     openai_api_key: SecretStr = SecretStr("")
     deepseek_api_key: SecretStr = SecretStr("")

@@ -16,7 +16,7 @@ from app.analysis.classification.service import (
     ClassificationService,
     ClassifiedOutcome,
 )
-from app.analysis.classifier.factory import get_classifier
+from app.analysis.classifier.base import BaseClassifier
 from app.analysis.embedder.factory import get_embedder
 from app.analysis.embedding.service import (
     AlreadyEmbeddedOutcome,
@@ -37,7 +37,7 @@ from app.analysis.errors import (
 from app.analysis.errors import (
     RateLimitError as AnalysisRateLimitError,
 )
-from app.analysis.extraction.extractor.factory import get_extractor
+from app.analysis.extraction.extractor.base import BaseExtractor
 from app.analysis.extraction.service import ExtractionService
 from app.analysis.rate_limiter import (
     RateLimitExceededError as _RateLimitExceededError,
@@ -112,7 +112,7 @@ async def extract_content(
 ) -> None:
     """単一記事に対して事実抽出（Stage 1）を実行する。"""
     session_factory = ctx.state.session_factory
-    extractor = get_extractor()
+    extractor: BaseExtractor = ctx.state.extractor
 
     # Rate limit acquire は呼び出し側の責任
     rpm_limiter, rpd_limiter = _build_limiters(
@@ -175,7 +175,7 @@ async def classify_content(
 ) -> None:
     """単一記事に対して分類（Stage 2）を実行する。"""
     session_factory = ctx.state.session_factory
-    classifier = get_classifier()
+    classifier: BaseClassifier = ctx.state.classifier
 
     # Rate limit acquire は呼び出し側の責任
     rpm_limiter, rpd_limiter = _build_limiters(

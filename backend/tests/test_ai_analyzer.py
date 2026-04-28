@@ -17,7 +17,6 @@ from app.analysis.classification.service import (
 )
 from app.analysis.classifier.base import BaseClassifier
 from app.analysis.classifier.deepseek import DeepSeekClassifier
-from app.analysis.classifier.factory import get_classifier
 from app.analysis.classifier.gemini import GeminiClassifier
 from app.analysis.classifier.schema import (
     ClassificationRawResponse,
@@ -40,7 +39,6 @@ from app.analysis.errors import (
 )
 from app.analysis.extraction.domain import Entity, ExtractionResult
 from app.analysis.extraction.extractor.base import BaseExtractor
-from app.analysis.extraction.extractor.factory import get_extractor
 from app.analysis.extraction.extractor.gemini import GeminiExtractor
 from app.analysis.extraction.service import ExtractionService
 from app.models.article import Article
@@ -141,53 +139,6 @@ async def _create_article_with_extraction(
     db_session.add(extraction)
     await db_session.flush()
     return article, extraction
-
-
-# --- A. Factory tests ---
-
-
-def test_get_extractor_returns_gemini_by_default() -> None:
-    with patch("app.analysis.extraction.extractor.factory.settings") as mock_settings:
-        mock_settings.ai_provider = "gemini"
-        with patch("app.analysis.extraction.extractor.gemini.settings") as mock_gs:
-            mock_gs.gemini_api_key = SecretStr("test-key")
-            extractor = get_extractor()
-    assert isinstance(extractor, GeminiExtractor)
-    assert extractor.model_name == "gemini-2.5-flash-lite"
-
-
-def test_get_classifier_returns_gemini_by_default() -> None:
-    with patch("app.analysis.classifier.factory.settings") as mock_settings:
-        mock_settings.ai_provider = "gemini"
-        with patch("app.analysis.classifier.gemini.settings") as mock_gs:
-            mock_gs.gemini_api_key = SecretStr("test-key")
-            classifier = get_classifier()
-    assert isinstance(classifier, GeminiClassifier)
-    assert classifier.model_name == "gemini-2.5-flash-lite"
-
-
-def test_get_classifier_returns_deepseek_when_configured() -> None:
-    with patch("app.analysis.classifier.factory.settings") as mock_settings:
-        mock_settings.ai_provider = "deepseek"
-        with patch("app.analysis.classifier.deepseek.settings") as mock_ds:
-            mock_ds.deepseek_api_key = SecretStr("test-key")
-            classifier = get_classifier()
-    assert isinstance(classifier, DeepSeekClassifier)
-    assert classifier.model_name == "deepseek-v4-flash"
-
-
-def test_get_classifier_raises_for_unsupported_provider() -> None:
-    with patch("app.analysis.classifier.factory.settings") as mock_settings:
-        mock_settings.ai_provider = "unknown"
-        with pytest.raises(ValueError, match="Unsupported AI provider"):
-            get_classifier()
-
-
-def test_get_extractor_raises_for_unsupported_provider() -> None:
-    with patch("app.analysis.extraction.extractor.factory.settings") as mock_settings:
-        mock_settings.ai_provider = "unknown"
-        with pytest.raises(ValueError, match="Unsupported AI provider"):
-            get_extractor()
 
 
 # --- A2. ClassVar enforcement tests ---
