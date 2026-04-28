@@ -1,13 +1,15 @@
 import { Suspense } from "react";
 import { CategorySidebar } from "@/components/layout/CategorySidebar";
 import { MobileSidebar } from "@/components/layout/MobileSidebar";
-import { getArticles } from "@/features/news/api/get-articles";
-import { getCategories } from "@/features/news/api/get-categories";
-import { searchArticles } from "@/features/news/api/search-articles";
-import { NewsFilters } from "@/features/news/components/NewsFilters";
-import { NewsList } from "@/features/news/components/NewsList";
-import { NewsPagination } from "@/features/news/components/NewsPagination";
-import { SearchBar } from "@/features/news/components/SearchBar";
+import {
+  getArticles,
+  getCategories,
+  NewsFilters,
+  NewsList,
+  NewsPagination,
+  SearchBar,
+  searchArticles,
+} from "@/features/news";
 import { parseArticleQuery } from "@/lib/search-params/server";
 
 interface DashboardPageProps {

@@ -1,8 +1,10 @@
 import type { Metadata } from "next";
-import { getWeeklyTrends } from "@/features/digest/api/get-weekly-trends";
-import { HotEntityList } from "@/features/digest/components/HotEntityList";
-import { HotTopicList } from "@/features/digest/components/HotTopicList";
-import { NewEntityList } from "@/features/digest/components/NewEntityList";
+import {
+  getWeeklyTrends,
+  HotEntityList,
+  HotTopicList,
+  NewEntityList,
+} from "@/features/digest";
 import { formatDate } from "@/lib/date";
 
 export const metadata: Metadata = {
