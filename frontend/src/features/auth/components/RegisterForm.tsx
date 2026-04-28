@@ -16,6 +16,50 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { signUp } from "@/lib/auth/auth-client";
 
+// Better Auth signUp.email が返す既知エラーコード → ユーザ向け固定文言。
+// allowlist 設計: 未知コードや未来の変更で `authError.message` を素のまま
+// 表示すると、内部実装語彙の漏洩や文言の不安定化が起きるため、ここに載って
+// いないものはすべて generic 文言に丸める。
+//
+// 既知コードの根拠: node_modules/@better-auth/core/dist/error/codes.mjs
+// USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL は status 422 で返る (旧コードの 409 判定は dead)
+const REGISTER_ERROR_MESSAGES: Record<string, string> = {
+  USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL:
+    "An account with this email already exists",
+  USER_ALREADY_EXISTS: "An account with this email already exists",
+  PASSWORD_TOO_SHORT: "Password must be at least 8 characters",
+  PASSWORD_TOO_LONG: "Password is too long",
+  INVALID_EMAIL: "Please enter a valid email address",
+};
+
+const GENERIC_VALIDATION_MESSAGE = "Please check your input and try again";
+const GENERIC_FAILURE_MESSAGE = "Registration failed. Please try again later.";
+
+interface AuthErrorLike {
+  status?: number;
+  code?: string;
+  error?: { code?: string };
+}
+
+function resolveRegisterError(authError: AuthErrorLike): {
+  message: string;
+  field: "email" | "displayName";
+} {
+  const code = authError.code ?? authError.error?.code;
+  const known = code ? REGISTER_ERROR_MESSAGES[code] : undefined;
+  if (code && known) {
+    const isEmailIssue =
+      code === "USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL" ||
+      code === "USER_ALREADY_EXISTS" ||
+      code === "INVALID_EMAIL";
+    return { message: known, field: isEmailIssue ? "email" : "displayName" };
+  }
+  if (authError.status === 400 || authError.status === 422) {
+    return { message: GENERIC_VALIDATION_MESSAGE, field: "displayName" };
+  }
+  return { message: GENERIC_FAILURE_MESSAGE, field: "displayName" };
+}
+
 export function RegisterForm() {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
@@ -47,11 +91,11 @@ export function RegisterForm() {
     setIsPending(false);
 
     if (authError) {
-      if (authError.status === 409) {
-        setError("An account with this email already exists");
+      const { message, field } = resolveRegisterError(authError);
+      setError(message);
+      if (field === "email") {
         emailRef.current?.focus();
       } else {
-        setError(authError.message ?? "Registration failed");
         displayNameRef.current?.focus();
       }
     } else {

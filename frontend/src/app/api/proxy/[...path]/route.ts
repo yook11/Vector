@@ -17,6 +17,22 @@ const TRUSTED_ORIGIN = new URL(requireEnv("BETTER_AUTH_URL")).origin;
 // `..` 単独セグメントは別途明示的に拒否し、URL 解釈ライブラリ依存の挙動差を避ける。
 const PATH_SEGMENT_PATTERN = /^[A-Za-z0-9._\-~]+$/;
 
+// backend からブラウザへ素通しさせるレスポンスヘッダの allowlist。
+// これ以外は捨てる:
+//   - Set-Cookie: backend session を BFF 越しに漏らすとセッション偽装の温床
+//   - Authorization / X-Internal-*: 内部 JWT 等の漏洩防止
+//   - Server / X-Powered-By: backend のフィンガープリンティング防止
+//   - Access-Control-*: CORS は Next.js 側で完結させる (backend のヘッダは混入させない)
+//   - Content-Encoding / Content-Length: fetch が自動で decode/再計算するため転送すると二重処理になる
+const FORWARDED_RESPONSE_HEADERS = [
+  "content-type",
+  "cache-control",
+  "etag",
+  "last-modified",
+  "vary",
+  "content-language",
+] as const;
+
 function isOriginAllowed(request: NextRequest): boolean {
   const origin = request.headers.get("Origin");
   if (!origin) {
@@ -77,12 +93,21 @@ async function proxyRequest(
     body: hasBody ? await request.arrayBuffer() : undefined,
   });
 
+  const responseHeaders = new Headers();
+  for (const name of FORWARDED_RESPONSE_HEADERS) {
+    const value = res.headers.get(name);
+    if (value !== null) {
+      responseHeaders.set(name, value);
+    }
+  }
+  if (!responseHeaders.has("content-type")) {
+    responseHeaders.set("content-type", "application/json");
+  }
+
   return new NextResponse(res.body, {
     status: res.status,
     statusText: res.statusText,
-    headers: {
-      "Content-Type": res.headers.get("Content-Type") ?? "application/json",
-    },
+    headers: responseHeaders,
   });
 }
 
