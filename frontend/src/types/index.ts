@@ -4,31 +4,31 @@
  * Schema types are derived from backend/app/schemas/ via openapi-typescript.
  * Run `npm run generate-types` to regenerate types/generated.ts.
  */
-import type { components } from "./generated";
+import type { components, operations } from "./generated";
 
 // ---------------------------------------------------------------------------
-// Manual types — not directly derivable from OpenAPI schema
+// Query parameter types — derived from `operations[...].parameters.query`.
+// 手書きで `category?: string` 等を維持すると backend スキーマとの乖離 (例:
+// `source` のような廃止/未実装キー) を frontend が抱え込む。OpenAPI を SSoT
+// にして派生させ、backend が optional + nullable で表現するキーは frontend
+// 側で `null` を剥がして optional のみに揃える。
 // ---------------------------------------------------------------------------
+
+type StripNull<T> = { [K in keyof T]: Exclude<T[K], null> };
 
 /** Query parameters for GET /articles (article listing). */
-export interface ArticleQuery {
-  category?: string;
-  source?: string;
-  sortOrder?: "asc" | "desc";
-  page?: number;
-  perPage?: number;
-}
+export type ArticleQuery = StripNull<
+  NonNullable<
+    operations["list_articles_api_v1_articles_get"]["parameters"]["query"]
+  >
+>;
 
 /** Query parameters for GET /articles/search (semantic search). */
-export interface SemanticSearchQuery {
-  q: string;
-  sortBy?: "date" | "relevance";
-  category?: string;
-  source?: string;
-  sortOrder?: "asc" | "desc";
-  page?: number;
-  perPage?: number;
-}
+export type SemanticSearchQuery = StripNull<
+  NonNullable<
+    operations["search_articles_api_v1_articles_search_get"]["parameters"]["query"]
+  >
+>;
 
 // ---------------------------------------------------------------------------
 // Re-exports from generated types

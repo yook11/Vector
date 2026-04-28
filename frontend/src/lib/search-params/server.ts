@@ -35,9 +35,6 @@ export function parseArticleQuery(raw: RawSearchParams): {
   const category = str("category");
   if (category) query.category = category;
 
-  const source = str("source");
-  if (source) query.source = source;
-
   const sortOrder = str("sortOrder");
   if (sortOrder === "asc" || sortOrder === "desc") {
     query.sortOrder = sortOrder;
