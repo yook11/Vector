@@ -1,9 +1,9 @@
-import { serverFetch } from "@/lib/api/server-fetcher";
+import { publicServerFetch } from "@/lib/api/server-fetcher";
 import type { CategoryDetailListResponse } from "@/types";
 
-/** Fetch all categories with recent article counts. */
+/** Fetch all categories with recent article counts (response is user-independent). */
 export async function getCategories(): Promise<CategoryDetailListResponse> {
-  return serverFetch<CategoryDetailListResponse>("/categories", {
+  return publicServerFetch<CategoryDetailListResponse>("/categories", {
     next: { revalidate: 3600, tags: ["categories"] },
   });
 }
