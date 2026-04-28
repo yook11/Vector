@@ -119,8 +119,18 @@ async def ensure_test_database() -> None:
 
 
 @pytest.fixture(autouse=True)
-async def setup_db(ensure_test_database: None) -> AsyncGenerator[None, None]:
-    """各テスト前にテーブルを作成し、終了後に破棄する。"""
+async def setup_db(
+    request: pytest.FixtureRequest, ensure_test_database: None
+) -> AsyncGenerator[None, None]:
+    """integration テストのみ、各テスト前にテーブルを作成し終了後に破棄する。
+
+    unit テスト (pytest_collection_modifyitems で自動分類) は DB を触らないため
+    create_all/drop_all を毎回流すのは純粋な無駄。integration マーカーが付いた
+    テストにのみ DDL を流す。
+    """
+    if "integration" not in request.keywords:
+        yield
+        return
     async with engine_test.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
         # watchlist_entries.user_id の FK を満たすため auth.user を seed する
