@@ -14,6 +14,6 @@ export async function getArticles(
   const qs = params.toString();
   return serverFetch<PaginatedArticleResponse>(
     `/articles${qs ? `?${qs}` : ""}`,
-    { cache: "no-store" },
+    { next: { revalidate: 300, tags: ["articles"] } },
   );
 }
