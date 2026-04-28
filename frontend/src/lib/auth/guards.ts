@@ -18,6 +18,7 @@ import "server-only";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth/auth";
+import { narrowRole } from "@/lib/auth/role";
 import type { Session } from "@/lib/auth/session";
 
 export async function getCurrentSession(): Promise<Session | null> {
@@ -36,7 +37,7 @@ export async function requireSession(): Promise<Session> {
 
 export async function requireAdmin(): Promise<Session> {
   const session = await requireSession();
-  if (session.user.role !== "admin") {
+  if (narrowRole(session.user.role) !== "admin") {
     redirect("/");
   }
   return session;

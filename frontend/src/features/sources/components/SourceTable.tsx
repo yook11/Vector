@@ -25,11 +25,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { activateSource } from "@/features/sources/api/activate-source";
-import { deactivateSource } from "@/features/sources/api/deactivate-source";
-import { deleteSource } from "@/features/sources/api/delete-source";
 import { ApiError } from "@/lib/api/error";
 import type { NewsSourceDetail } from "@/types";
+import { activateSource } from "../api/activate-source";
+import { deactivateSource } from "../api/deactivate-source";
+import { deleteSource } from "../api/delete-source";
 
 interface SourceTableProps {
   sources: NewsSourceDetail[];
