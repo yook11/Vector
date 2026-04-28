@@ -13,4 +13,8 @@ def get_classifier() -> BaseClassifier:
         from app.analysis.classifier.gemini import GeminiClassifier
 
         return GeminiClassifier()
+    if provider == "deepseek":
+        from app.analysis.classifier.deepseek import DeepSeekClassifier
+
+        return DeepSeekClassifier()
     raise ValueError(f"Unsupported AI provider: {provider}")
