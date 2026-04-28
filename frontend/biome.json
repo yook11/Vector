@@ -42,6 +42,8 @@
                 "patterns": [
                   {
                     "group": [
+                      "@/features/news",
+                      "@/features/news/**",
                       "@/features/sources",
                       "@/features/sources/**",
                       "@/features/auth",
@@ -49,7 +51,7 @@
                       "@/features/digest",
                       "@/features/digest/**"
                     ],
-                    "message": "Do not import other features directly. features/news may compose features/watchlist via its public API '@/features/watchlist' only."
+                    "message": "features/news 内では自 feature を deep path / Public API 経由で import せず相対 import を使うこと。他 features 直接参照も禁止 (features/watchlist のみ Public API '@/features/watchlist' 経由で compose 可)。"
                   }
                 ]
               }
@@ -69,6 +71,8 @@
                 "patterns": [
                   {
                     "group": [
+                      "@/features/watchlist",
+                      "@/features/watchlist/**",
                       "@/features/news",
                       "@/features/news/**",
                       "@/features/sources",
@@ -78,7 +82,7 @@
                       "@/features/digest",
                       "@/features/digest/**"
                     ],
-                    "message": "Do not import other features. Use the feature's public API '@/features/<name>'."
+                    "message": "features/watchlist 内では自 feature を deep path / Public API 経由で import せず相対 import を使うこと。他 features は Public API '@/features/<name>' のみ。"
                   }
                 ]
               }
@@ -98,6 +102,8 @@
                 "patterns": [
                   {
                     "group": [
+                      "@/features/sources",
+                      "@/features/sources/**",
                       "@/features/news",
                       "@/features/news/**",
                       "@/features/watchlist",
@@ -107,7 +113,7 @@
                       "@/features/digest",
                       "@/features/digest/**"
                     ],
-                    "message": "Do not import other features. Use the feature's public API '@/features/<name>'."
+                    "message": "features/sources 内では自 feature を deep path / Public API 経由で import せず相対 import を使うこと。他 features は Public API '@/features/<name>' のみ。"
                   }
                 ]
               }
@@ -127,6 +133,8 @@
                 "patterns": [
                   {
                     "group": [
+                      "@/features/auth",
+                      "@/features/auth/**",
                       "@/features/news",
                       "@/features/news/**",
                       "@/features/watchlist",
@@ -136,7 +144,7 @@
                       "@/features/digest",
                       "@/features/digest/**"
                     ],
-                    "message": "Do not import other features. Use the feature's public API '@/features/<name>'."
+                    "message": "features/auth 内では自 feature を deep path / Public API 経由で import せず相対 import を使うこと。他 features は Public API '@/features/<name>' のみ。"
                   }
                 ]
               }
@@ -156,6 +164,8 @@
                 "patterns": [
                   {
                     "group": [
+                      "@/features/digest",
+                      "@/features/digest/**",
                       "@/features/news",
                       "@/features/news/**",
                       "@/features/watchlist",
@@ -165,7 +175,7 @@
                       "@/features/auth",
                       "@/features/auth/**"
                     ],
-                    "message": "Do not import other features. Use the feature's public API '@/features/<name>'."
+                    "message": "features/digest 内では自 feature を deep path / Public API 経由で import せず相対 import を使うこと。他 features は Public API '@/features/<name>' のみ。"
                   }
                 ]
               }

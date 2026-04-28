@@ -21,8 +21,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { createSource } from "@/features/sources/api/create-source";
 import { ApiError } from "@/lib/api/error";
+import { createSource } from "../api/create-source";
 
 interface SourceFormDialogProps {
   trigger: React.ReactNode;

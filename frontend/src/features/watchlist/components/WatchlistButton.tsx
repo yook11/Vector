@@ -5,8 +5,8 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { addToWatchlist } from "@/features/watchlist/api/add-to-watchlist";
-import { removeFromWatchlist } from "@/features/watchlist/api/remove-from-watchlist";
+import { addToWatchlist } from "../api/add-to-watchlist";
+import { removeFromWatchlist } from "../api/remove-from-watchlist";
 
 interface WatchlistButtonProps {
   articleId: number;
