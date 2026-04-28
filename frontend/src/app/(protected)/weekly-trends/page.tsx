@@ -11,10 +11,6 @@ export const metadata: Metadata = {
   title: "Weekly Trends | Vector",
 };
 
-// snapshot は worker-digest により JST 月曜 00:05 に週次更新されるため、
-// 24 時間 ISR で十分。
-export const revalidate = 86400;
-
 export default async function WeeklyTrendsPage() {
   const data = await getWeeklyTrends();
 

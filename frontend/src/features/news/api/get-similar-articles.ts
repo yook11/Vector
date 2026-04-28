@@ -1,3 +1,4 @@
+import { cacheLife, cacheTag } from "next/cache";
 import { publicServerFetch } from "@/lib/api/server-fetcher";
 import type { ArticleBrief } from "@/types";
 
@@ -6,8 +7,10 @@ export async function getSimilarArticles(
   id: number,
   limit = 5,
 ): Promise<ArticleBrief[]> {
+  "use cache";
+  cacheLife("hours");
+  cacheTag("articles", `article:${id}`);
   return publicServerFetch<ArticleBrief[]>(
     `/articles/${id}/similar?limit=${limit}`,
-    { next: { revalidate: 3600, tags: ["articles"] } },
   );
 }
