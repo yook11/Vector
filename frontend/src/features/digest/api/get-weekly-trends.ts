@@ -1,9 +1,11 @@
-import { serverFetch } from "@/lib/api/server-fetcher";
+import { cacheLife, cacheTag } from "next/cache";
+import { publicServerFetch } from "@/lib/api/server-fetcher";
 import type { WeeklyTrendsResponse } from "@/types";
 
-/** Fetch the latest weekly trends snapshot (or null state if not yet generated). */
+/** Fetch the latest weekly trends snapshot (response is user-independent). */
 export async function getWeeklyTrends(): Promise<WeeklyTrendsResponse> {
-  return serverFetch<WeeklyTrendsResponse>("/weekly-trends", {
-    next: { revalidate: 86400 },
-  });
+  "use cache";
+  cacheLife("days");
+  cacheTag("weekly-trends");
+  return publicServerFetch<WeeklyTrendsResponse>("/weekly-trends");
 }
