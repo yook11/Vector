@@ -32,7 +32,7 @@ export function CategorySidebar({
   }
 
   const linkClass =
-    "flex items-center justify-between px-3 py-2.5 text-sm rounded-xl transition-colors text-muted-foreground hover:text-foreground hover:bg-neutral-100 dark:hover:bg-neutral-800/40";
+    "flex items-center justify-between px-3 py-2.5 text-sm rounded-xl transition-colors text-muted-foreground hover:text-foreground hover:bg-accent";
 
   return (
     <div className="flex flex-col gap-1.5 p-6">
@@ -47,8 +47,7 @@ export function CategorySidebar({
         aria-current={isAll ? "page" : undefined}
         className={cn(
           linkClass,
-          isAll &&
-            "text-foreground font-medium bg-neutral-100 dark:bg-neutral-800/50",
+          isAll && "text-foreground font-medium bg-accent",
         )}
       >
         All
@@ -66,13 +65,12 @@ export function CategorySidebar({
             aria-current={isActiveCat ? "page" : undefined}
             className={cn(
               linkClass,
-              isActiveCat &&
-                "text-foreground font-medium bg-neutral-100 dark:bg-neutral-800/50",
+              isActiveCat && "text-foreground font-medium bg-accent",
             )}
           >
             <span className="truncate">{cat.name}</span>
             {cat.recentCount > 0 && (
-              <span className="ml-2 text-xs tabular-nums text-neutral-400 dark:text-neutral-600">
+              <span className="ml-2 text-xs tabular-nums text-muted-foreground/60">
                 {cat.recentCount}
               </span>
             )}
