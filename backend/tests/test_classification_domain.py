@@ -193,30 +193,9 @@ class TestAnalysisPostInit:
             analysis.id = 999  # type: ignore[misc]
 
 
-class TestAnalysisFromDraft:
-    def test_combines_draft_with_identity(self) -> None:
-        draft = AnalysisDraft.from_classified(
-            _make_classified(),
-            translated_title="title",
-            summary="summary",
-        )
-        analyzed_at = datetime(2026, 4, 25, tzinfo=UTC)
-        analysis = Analysis.from_draft(
-            draft,
-            id=42,
-            extraction_id=7,
-            category_id=3,
-            ai_model="gemini-2.5-pro",
-            analyzed_at=analyzed_at,
-        )
-        assert analysis.id == 42
-        assert analysis.extraction_id == 7
-        assert analysis.category_id == 3
-        assert analysis.topic == draft.topic_name
-        assert analysis.ai_model == "gemini-2.5-pro"
-        assert analysis.analyzed_at == analyzed_at
-        assert analysis.translated_title == draft.translated_title
-        assert analysis.investor_take == draft.investor_take
+# Analysis.from_draft / Rejection.from_draft は Pattern A' リファクタで廃止
+# (Repository.save が直接 Entity を返すため Service 内での組み立て不要、
+# spec §8 / typed-pipeline-preconditions.md)。
 
 
 # ---------------------------------------------------------------------------
@@ -287,19 +266,4 @@ class TestRejectionPostInit:
             rejection.id = 999  # type: ignore[misc]
 
 
-class TestRejectionFromDraft:
-    def test_combines_draft_with_identity(self) -> None:
-        draft = RejectionDraft.from_out_of_scope(OutOfScope(investor_take="not tech"))
-        rejected_at = datetime(2026, 4, 25, tzinfo=UTC)
-        rejection = Rejection.from_draft(
-            draft,
-            id=99,
-            extraction_id=7,
-            ai_model="gemini-2.5-pro",
-            rejected_at=rejected_at,
-        )
-        assert rejection.id == 99
-        assert rejection.extraction_id == 7
-        assert rejection.ai_model == "gemini-2.5-pro"
-        assert rejection.rejected_at == rejected_at
-        assert rejection.investor_take == draft.investor_take
+# Rejection.from_draft も廃止 (上記 Analysis.from_draft と同じ理由)。

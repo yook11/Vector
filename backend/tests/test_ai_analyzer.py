@@ -8,9 +8,8 @@ from pydantic import SecretStr, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
+from app.analysis.classification.domain.ready import ReadyForClassification
 from app.analysis.classification.service import (
-    AlreadyClassifiedOutcome,
-    AlreadyRejectedOutcome,
     ClassificationService,
     ClassifiedOutcome,
     RejectedOutcome,
@@ -864,8 +863,14 @@ async def test_classification_persists_topic_and_category(
 
     article_id = article.id
     extraction_id = extraction.id
+    ready = ReadyForClassification(
+        article_id=article_id,
+        extraction_id=extraction_id,
+        translated_title=extraction.translated_title,
+        summary=extraction.summary,
+    )
     svc = ClassificationService(session_factory)
-    result = await svc.execute(article_id, mock_classifier)
+    result = await svc.execute(ready, mock_classifier)
     assert isinstance(result, ClassifiedOutcome)
 
     db_session.expire_all()
@@ -904,8 +909,14 @@ async def test_classification_persists_rejection_when_out_of_scope(
     )
 
     extraction_id = extraction.id
+    ready = ReadyForClassification(
+        article_id=article.id,
+        extraction_id=extraction_id,
+        translated_title=extraction.translated_title,
+        summary=extraction.summary,
+    )
     svc = ClassificationService(session_factory)
-    result = await svc.execute(article.id, mock_classifier)
+    result = await svc.execute(ready, mock_classifier)
     assert isinstance(result, RejectedOutcome)
 
     db_session.expire_all()
@@ -927,65 +938,11 @@ async def test_classification_persists_rejection_when_out_of_scope(
     assert analysis is None
 
 
-async def test_classification_skips_already_classified(
-    db_session: AsyncSession,
-    session_factory,
-    sample_categories: list[Category],
-    sample_source: NewsSource,
-) -> None:
-    article, extraction = await _create_article_with_extraction(
-        db_session,
-        sample_source,
-        url="https://example.com/already-classified",
-        title="Classified Article",
-        translated_title="分類済みタイトル",
-        summary="分類済み要約",
-    )
-    analysis = ArticleAnalysis(
-        extraction_id=extraction.id,
-        translated_title="分類済みタイトル",
-        summary="分類済み要約",
-        investor_take="既存理由",
-        ai_model="gemini-2.5-flash-lite",
-        topic="existing topic",
-        category_id=sample_categories[0].id,
-    )
-    db_session.add(analysis)
-    await db_session.commit()
-
-    mock_classifier = MagicMock(spec=BaseClassifier)
-    svc = ClassificationService(session_factory)
-    result = await svc.execute(article.id, mock_classifier)
-
-    assert isinstance(result, AlreadyClassifiedOutcome)
-    mock_classifier.classify.assert_not_called()
-
-
-async def test_classification_skips_already_rejected(
-    db_session: AsyncSession,
-    session_factory,
-    sample_source: NewsSource,
-) -> None:
-    article, extraction = await _create_article_with_extraction(
-        db_session,
-        sample_source,
-        url="https://example.com/already-rejected",
-        title="Rejected Article",
-    )
-    rejection = ArticleRejection(
-        extraction_id=extraction.id,
-        investor_take="対象外",
-        ai_model="gemini-2.5-flash-lite",
-    )
-    db_session.add(rejection)
-    await db_session.commit()
-
-    mock_classifier = MagicMock(spec=BaseClassifier)
-    svc = ClassificationService(session_factory)
-    result = await svc.execute(article.id, mock_classifier)
-
-    assert isinstance(result, AlreadyRejectedOutcome)
-    mock_classifier.classify.assert_not_called()
+# Pattern A' (typed-pipeline-preconditions.md) リファクタにより、
+# 「既に classify 済み」「既に rejected 済み」の precondition 判定は
+# `ReadyForClassification.try_advance_from` に移動した。Service.execute は
+# precondition 分岐を持たず、対応するテストは
+# `tests/test_ready_for_classification.py` に存在する。
 
 
 # --- H. Integration test (API response) ---
