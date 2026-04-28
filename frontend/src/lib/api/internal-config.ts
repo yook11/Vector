@@ -1,13 +1,18 @@
 /**
  * BFF プロキシとバックエンド間の内部 API 接続設定 + 認可ヘッダ生成。
  *
- * `lib/api-client.ts` (Server Component から呼ぶ fetcher) と
+ * `lib/api/server-fetcher.ts` (Server Component から呼ぶ fetcher) と
  * `app/api/proxy/[...path]/route.ts` (BFF プロキシ Route Handler) の
  * 両方から参照される共通設定。
  *
  * デフォルト値や `??` フォールバックは持たせない方針 — 未設定時はモジュール
  * 読込時に throw して fail-fast にする (build / 起動時に発覚させる)。
+ *
+ * `import "server-only"` で client component からの誤 import を build error
+ * 化し、`INTERNAL_API_SECRET` がフロント bundle に滲み出す事故を構造的に防ぐ。
  */
+
+import "server-only";
 
 import { SignJWT } from "jose";
 import type { Session } from "@/lib/auth/session";

@@ -1,10 +1,12 @@
+import "server-only";
+
 import { betterAuth } from "better-auth";
 import type { PoolClient } from "pg";
 import { Pool } from "pg";
 import { requireEnv } from "@/lib/api/internal-config";
 
 const pool = new Pool({
-  connectionString: process.env.AUTH_DATABASE_URL,
+  connectionString: requireEnv("AUTH_DATABASE_URL"),
 });
 
 // Better Auth のクエリは全て 'auth' スキーマに向ける

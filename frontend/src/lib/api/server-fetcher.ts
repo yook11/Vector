@@ -8,19 +8,18 @@
  * features 側はこの関数だけを利用し、認証や URL 解決を意識しない。
  */
 
-import { headers } from "next/headers";
+import "server-only";
+
 import { requestJson } from "@/lib/api/fetcher";
 import {
   buildInternalAuthHeaders,
   INTERNAL_API_URL,
 } from "@/lib/api/internal-config";
-import { auth } from "@/lib/auth/auth";
+import { getCurrentSession } from "@/lib/auth/guards";
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
   try {
-    const session = await auth.api.getSession({
-      headers: await headers(),
-    });
+    const session = await getCurrentSession();
     if (session) {
       return await buildInternalAuthHeaders(session);
     }
