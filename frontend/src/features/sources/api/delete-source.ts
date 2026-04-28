@@ -1,7 +1,12 @@
-"use client";
+"use server";
 
-import { clientFetch } from "@/lib/api/client-fetcher";
+import { revalidateTag } from "next/cache";
+import { serverFetch } from "@/lib/api/server-fetcher";
+import { requireAdminForAction } from "@/lib/auth/guards";
 
+/** Delete a news source (admin-only Server Action). */
 export async function deleteSource(id: number): Promise<void> {
-  return clientFetch<void>(`/admin/sources/${id}`, { method: "DELETE" });
+  await requireAdminForAction();
+  await serverFetch<void>(`/admin/sources/${id}`, { method: "DELETE" });
+  revalidateTag("sources", "max");
 }
