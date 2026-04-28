@@ -1,7 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useOptimistic, useTransition } from "react";
 import { toast } from "sonner";
 import {
   AlertDialog,
@@ -25,7 +24,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { ApiError } from "@/lib/api/error";
 import type { NewsSourceDetail } from "@/types";
 import { activateSource } from "../api/activate-source";
 import { deactivateSource } from "../api/deactivate-source";
@@ -35,42 +33,62 @@ interface SourceTableProps {
   sources: NewsSourceDetail[];
 }
 
+type OptimisticAction =
+  | { type: "toggle"; id: number; isActive: boolean }
+  | { type: "delete"; id: number };
+
+function reducer(
+  state: NewsSourceDetail[],
+  action: OptimisticAction,
+): NewsSourceDetail[] {
+  switch (action.type) {
+    case "toggle":
+      return state.map((s) =>
+        s.id === action.id ? { ...s, isActive: action.isActive } : s,
+      );
+    case "delete":
+      return state.filter((s) => s.id !== action.id);
+  }
+}
+
+function errorMessage(err: unknown, fallback: string): string {
+  return err instanceof Error && err.message ? err.message : fallback;
+}
+
 export function SourceTable({ sources }: SourceTableProps) {
-  const router = useRouter();
-  const [toggling, setToggling] = useState<number | null>(null);
+  const [optimisticSources, applyOptimistic] = useOptimistic(sources, reducer);
+  const [pending, startTransition] = useTransition();
 
-  async function handleToggle(source: NewsSourceDetail) {
-    setToggling(source.id);
-    try {
-      const updated = source.isActive
-        ? await deactivateSource(source.id)
-        : await activateSource(source.id);
-      toast.success(
-        `${updated.name} ${updated.isActive ? "enabled" : "disabled"}`,
-      );
-      router.refresh();
-    } catch (err) {
-      toast.error(
-        err instanceof ApiError ? err.detail : "Failed to update source",
-      );
-    } finally {
-      setToggling(null);
-    }
+  function handleToggle(source: NewsSourceDetail) {
+    startTransition(async () => {
+      const next = !source.isActive;
+      applyOptimistic({ type: "toggle", id: source.id, isActive: next });
+      try {
+        const updated = next
+          ? await activateSource(source.id)
+          : await deactivateSource(source.id);
+        toast.success(
+          `${updated.name} ${updated.isActive ? "enabled" : "disabled"}`,
+        );
+      } catch (err) {
+        toast.error(errorMessage(err, "Failed to update source"));
+      }
+    });
   }
 
-  async function handleDelete(id: number, name: string) {
-    try {
-      await deleteSource(id);
-      toast.success(`Deleted "${name}"`);
-      router.refresh();
-    } catch (err) {
-      toast.error(
-        err instanceof ApiError ? err.detail : "Failed to delete source",
-      );
-    }
+  function handleDelete(id: number, name: string) {
+    startTransition(async () => {
+      applyOptimistic({ type: "delete", id });
+      try {
+        await deleteSource(id);
+        toast.success(`Deleted "${name}"`);
+      } catch (err) {
+        toast.error(errorMessage(err, "Failed to delete source"));
+      }
+    });
   }
 
-  if (sources.length === 0) {
+  if (optimisticSources.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
         <p className="text-lg font-medium">No sources configured</p>
@@ -91,7 +109,7 @@ export function SourceTable({ sources }: SourceTableProps) {
         </TableRow>
       </TableHeader>
       <TableBody>
-        {sources.map((source) => (
+        {optimisticSources.map((source) => (
           <TableRow key={source.id}>
             <TableCell className="font-medium">{source.name}</TableCell>
             <TableCell>
@@ -103,7 +121,7 @@ export function SourceTable({ sources }: SourceTableProps) {
             <TableCell className="text-center">
               <Switch
                 checked={source.isActive}
-                disabled={toggling === source.id}
+                disabled={pending}
                 onCheckedChange={() => handleToggle(source)}
               />
             </TableCell>
@@ -115,6 +133,7 @@ export function SourceTable({ sources }: SourceTableProps) {
                       variant="ghost"
                       size="sm"
                       className="text-destructive"
+                      disabled={pending}
                     >
                       Delete
                     </Button>

@@ -42,3 +42,31 @@ export async function requireAdmin(): Promise<Session> {
   }
   return session;
 }
+
+/**
+ * Server Action / Route Handler 用: 認証済みでなければ throw する。
+ *
+ * `requireSession()` と違い `redirect()` はせず、Error を投げる。
+ * Server Action 内で投げると React が呼び出し側 (Client) の `catch` に
+ * 配送するので、`useOptimistic` の自動 revert + toast 表示が成立する。
+ */
+export async function requireSessionForAction(): Promise<Session> {
+  const session = await getCurrentSession();
+  if (!session) throw new Error("Unauthorized");
+  return session;
+}
+
+/**
+ * Server Action / Route Handler 用: admin でなければ throw する。
+ *
+ * defense in depth: backend 側でも JWT の role claim を検証しているが、
+ * Server Action は proxy.ts のガードを経由しないため frontend 層でも
+ * 確実に止める。
+ */
+export async function requireAdminForAction(): Promise<Session> {
+  const session = await requireSessionForAction();
+  if (narrowRole(session.user.role) !== "admin") {
+    throw new Error("Forbidden");
+  }
+  return session;
+}

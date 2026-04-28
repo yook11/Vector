@@ -1,8 +1,7 @@
 "use client";
 
 import { Bookmark } from "lucide-react";
-import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useOptimistic, useTransition } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { addToWatchlist } from "../api/add-to-watchlist";
@@ -15,36 +14,37 @@ interface WatchlistButtonProps {
 
 export function WatchlistButton({
   articleId,
-  isWatched: initialIsWatched,
+  isWatched,
 }: WatchlistButtonProps) {
-  const [isWatched, setIsWatched] = useState(initialIsWatched);
-  const [pending, setPending] = useState(false);
-  const router = useRouter();
+  const [optimisticIsWatched, setOptimisticIsWatched] =
+    useOptimistic(isWatched);
+  const [pending, startTransition] = useTransition();
 
-  async function handleToggle() {
-    setPending(true);
-    try {
-      if (isWatched) {
-        await removeFromWatchlist(articleId);
-        setIsWatched(false);
-      } else {
-        await addToWatchlist(articleId);
-        setIsWatched(true);
+  function handleToggle() {
+    startTransition(async () => {
+      const next = !optimisticIsWatched;
+      setOptimisticIsWatched(next);
+      try {
+        if (next) {
+          await addToWatchlist(articleId);
+        } else {
+          await removeFromWatchlist(articleId);
+        }
+      } catch (err) {
+        // throw 時は React が optimistic state を base に自動 revert する。
+        console.error("Watchlist toggle failed", err);
+        toast.error(
+          next
+            ? "Failed to add to watchlist"
+            : "Failed to remove from watchlist",
+        );
       }
-      router.refresh();
-    } catch (err) {
-      console.error("Watchlist toggle failed", err);
-      toast.error(
-        isWatched
-          ? "Failed to remove from watchlist"
-          : "Failed to add to watchlist",
-      );
-    } finally {
-      setPending(false);
-    }
+    });
   }
 
-  const label = isWatched ? "Remove from watchlist" : "Add to watchlist";
+  const label = optimisticIsWatched
+    ? "Remove from watchlist"
+    : "Add to watchlist";
   return (
     <Button
       variant="ghost"
@@ -53,12 +53,12 @@ export function WatchlistButton({
       onClick={handleToggle}
       disabled={pending}
       aria-label={label}
-      aria-pressed={isWatched}
+      aria-pressed={optimisticIsWatched}
       title={label}
     >
       <Bookmark
         aria-hidden="true"
-        className={`h-4 w-4 ${isWatched ? "fill-current" : ""}`}
+        className={`h-4 w-4 ${optimisticIsWatched ? "fill-current" : ""}`}
       />
     </Button>
   );

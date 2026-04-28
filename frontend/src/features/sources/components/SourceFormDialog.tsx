@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -22,7 +21,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ApiError } from "@/lib/api/error";
 import { createSource } from "../api/create-source";
 
 interface SourceFormDialogProps {
@@ -30,7 +28,6 @@ interface SourceFormDialogProps {
 }
 
 export function SourceFormDialog({ trigger }: SourceFormDialogProps) {
-  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
 
@@ -63,9 +60,10 @@ export function SourceFormDialog({ trigger }: SourceFormDialogProps) {
       });
       toast.success(`Added "${name.trim()}"`);
       setOpen(false);
-      router.refresh();
+      // Server Action 内で revalidateTag("sources") 済み → router.refresh() 不要
     } catch (err) {
-      const msg = err instanceof ApiError ? err.detail : "Operation failed";
+      const msg =
+        err instanceof Error && err.message ? err.message : "Operation failed";
       toast.error(msg);
       nameRef.current?.focus();
     } finally {
