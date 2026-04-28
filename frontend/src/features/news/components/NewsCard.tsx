@@ -1,7 +1,6 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
-import { Card } from "@/components/ui/card";
 import { formatDate } from "@/lib/date";
 import type { ArticleBrief } from "@/types";
 
@@ -13,13 +12,13 @@ export function NewsCard({
   actionSlot?: ReactNode;
 }) {
   return (
-    <Card className="flex h-full flex-col border-0 bg-transparent p-0 shadow-none gap-0">
+    <article className="flex h-full flex-col">
       <div className="flex items-start justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
           {article.topic && (
             <Badge
               variant="outline"
-              className="text-[10px] tracking-widest uppercase px-2 py-0.5 truncate max-w-[14rem] border border-neutral-200 bg-transparent text-neutral-600 dark:border-neutral-700/60 dark:text-neutral-400"
+              className="text-[10px] tracking-widest uppercase px-2 py-0.5 truncate max-w-[14rem] text-muted-foreground"
             >
               {article.topic}
             </Badge>
@@ -45,6 +44,6 @@ export function NewsCard({
         <span className="text-muted-foreground/50">·</span>
         <span>{formatDate(article.publishedAt)}</span>
       </div>
-    </Card>
+    </article>
   );
 }
