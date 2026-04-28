@@ -11,8 +11,10 @@ from typing import TYPE_CHECKING, Literal
 import structlog
 from taskiq import Context, TaskiqDepends
 
+from app.analysis.classification.domain.ready import ReadyForClassification
+from app.analysis.classification.rejection_repository import RejectionRepository
+from app.analysis.classification.repository import AnalysisRepository
 from app.analysis.classification.service import (
-    AlreadyClassifiedOutcome,
     ClassificationService,
     ClassifiedOutcome,
 )
@@ -153,13 +155,23 @@ async def extract_content(
             return
         raise
 
-    # 次ステップへチェーン（extraction が Extraction Entity として返るとき）
+    # Stage D へ chain (Pattern A': 上流 Task が下流 Ready を構築 — spec §7.1)
     if extraction is not None:
-        await classify_content.kiq(article_id)
+        async with session_factory() as session:
+            analysis_repo = AnalysisRepository(session)
+            rejection_repo = RejectionRepository(session)
+            ready = await ReadyForClassification.try_advance_from(
+                extraction,
+                article_id=article_id,
+                analysis_repo=analysis_repo,
+                rejection_repo=rejection_repo,
+            )
+        if ready is not None:
+            await classify_content.kiq(ready)
 
 
 # ---------------------------------------------------------------------------
-# Classification (Stage 2)
+# Classification (Stage D)
 # ---------------------------------------------------------------------------
 
 
@@ -170,12 +182,17 @@ async def extract_content(
     retry_on_error=True,
 )
 async def classify_content(
-    article_id: int,
+    ready: ReadyForClassification,
     ctx: Context = TaskiqDepends(),
 ) -> None:
-    """単一記事に対して分類（Stage 2）を実行する。"""
+    """単一 extraction に対して分類 (Stage D) を実行する。
+
+    Pattern A': 受け取った Ready 型は precondition (extraction 存在 + 未分類 +
+    未却下) を構造保証している。本 task は再 fetch / None check を行わない。
+    """
     session_factory = ctx.state.session_factory
     classifier: BaseClassifier = ctx.state.classifier
+    article_id = ready.article_id  # log + Phase 1 transitional embedding chain 用
 
     # Rate limit acquire は呼び出し側の責任
     rpm_limiter, rpd_limiter = _build_limiters(
@@ -193,7 +210,7 @@ async def classify_content(
     # Service 呼び出し（session は内部で管理）
     svc = ClassificationService(session_factory)
     try:
-        result = await svc.execute(article_id, classifier)
+        result = await svc.execute(ready, classifier)
     except (
         ConfigurationError,
         DailyQuotaExhaustedError,
@@ -220,8 +237,10 @@ async def classify_content(
             return
         raise
 
-    # 次ステップへチェーン (Classified / AlreadyClassified のみ embedding に進む)
-    if isinstance(result, (ClassifiedOutcome, AlreadyClassifiedOutcome)):
+    # 次ステップへ chain (Phase 1: ClassifiedOutcome のみ。AlreadyClassified は廃止
+    # = ready 構築時点で try_advance_from が None で止めるため到達しない)。
+    # Phase 2 で `ReadyForEmbedding.try_advance_from(result.analysis, ...)` に置換予定。
+    if isinstance(result, ClassifiedOutcome):
         await generate_embedding.kiq(article_id)
 
 

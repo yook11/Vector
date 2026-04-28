@@ -95,22 +95,3 @@ class Rejection:
             raise ValueError("Rejection.id must be positive")
         if self.extraction_id <= 0:
             raise ValueError("Rejection.extraction_id must be positive")
-
-    @classmethod
-    def from_draft(
-        cls,
-        draft: RejectionDraft,
-        *,
-        id: int,
-        extraction_id: int,
-        ai_model: str,
-        rejected_at: datetime,
-    ) -> Self:
-        """Draft に DB が付与した identity を組み合わせて Entity を組み立てる。"""
-        return cls(
-            id=id,
-            extraction_id=extraction_id,
-            investor_take=draft.investor_take,
-            ai_model=ai_model,
-            rejected_at=rejected_at,
-        )

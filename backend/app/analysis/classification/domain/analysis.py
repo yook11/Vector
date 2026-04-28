@@ -1,12 +1,12 @@
-"""Analysis アグリゲート — Stage 2 で Classified 判定された分析結果。
+"""Analysis アグリゲート — Stage D で Classified 判定された分析結果。
 
-2 つの型で Stage 2 Classified の概念を表す:
+2 つの型で Classified の概念を表す:
 
 - ``AnalysisDraft`` — AI 境界型 ``Classified`` を sanitize / 正規化した
   ドメイン入力。永続化前の状態で、extraction_id / category_id / ai_model など
   Service が解決するフィールドは含まない。
 - ``Analysis`` — システムに記録された分析結果 Entity。identity (id) と
-  記録時刻 (analyzed_at) を持ち、Stage 3 (embedding) や FE 出口
+  記録時刻 (analyzed_at) を持ち、Stage E (embedding) や FE 出口
   (`/api/v1/articles/{id}` / watchlist articleId) が参照する型。
 
 Topic は 2026-04 の決定（memory: project_topic_filter_decision.md）により
@@ -21,8 +21,10 @@ Topic を別 Aggregate に切り出す将来計画はない
 （feedback_aggregate_over_individual_vo.md: 保証はアグリゲート単位）。
 
 変換は ``AnalysisDraft.from_classified`` (AI 境界 → Draft) と
-``Analysis.from_draft`` (Draft + identity → Entity)、Repository._to_domain
-(ORM → Entity) が担う。
+Repository.save (Draft + identity → ORM → Entity)、Repository._to_domain
+(ORM → Entity) が担う。Pattern A' (typed-pipeline-preconditions.md §8) で
+``Analysis.from_draft`` ファクトリは廃止された (Repository.save が直接 Entity を
+返すため Service 内での組み立て不要)。
 """
 
 from __future__ import annotations
@@ -149,33 +151,3 @@ class Analysis:
             raise ValueError("Analysis.extraction_id must be positive")
         if self.category_id <= 0:
             raise ValueError("Analysis.category_id must be positive")
-
-    @classmethod
-    def from_draft(
-        cls,
-        draft: AnalysisDraft,
-        *,
-        id: int,
-        extraction_id: int,
-        category_id: int,
-        ai_model: str,
-        analyzed_at: datetime,
-    ) -> Self:
-        """Draft に identity を合成して永続化済み Entity を組み立てる。
-
-        Repository.save が返した ``id`` / ``analyzed_at``、Service が
-        ``get_category_id_by_slug`` で解決した ``category_id``、classifier から
-        受け取った ``ai_model`` を合わせて「記録された Entity」を構成する
-        ドメインファクトリ。
-        """
-        return cls(
-            id=id,
-            extraction_id=extraction_id,
-            translated_title=draft.translated_title,
-            summary=draft.summary,
-            topic=draft.topic_name,
-            category_id=category_id,
-            investor_take=draft.investor_take,
-            ai_model=ai_model,
-            analyzed_at=analyzed_at,
-        )
