@@ -1,5 +1,6 @@
 """分析タスク (extract_content / classify_content) のテスト。"""
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -7,27 +8,38 @@ import pytest
 from app.analysis.errors import RateLimitError
 
 
+def _make_provider_fake() -> MagicMock:
+    """extractor/classifier 用のスタブ。MODEL/RPM/RPD を持つ。"""
+    fake = MagicMock()
+    fake.MODEL = "test-model"
+    fake.RPM = 50
+    fake.RPD = 1500
+    return fake
+
+
 def _make_ctx(
+    *,
+    extractor: MagicMock | None = None,
+    classifier: MagicMock | None = None,
     retry_count: int = 0,
     max_retries: int = 0,
 ) -> MagicMock:
-    """state.session_factory と labels を持つ taskiq Context のモックを作成する。"""
+    """taskiq Context モック。
+
+    composition root が attach する `state.extractor` / `state.classifier` を
+    任意に注入できる。`session_factory` と `message.labels` も合わせて備える。
+    """
     ctx = MagicMock()
-    ctx.state.session_factory = MagicMock()
+    ctx.state = SimpleNamespace(session_factory=MagicMock())
+    if extractor is not None:
+        ctx.state.extractor = extractor
+    if classifier is not None:
+        ctx.state.classifier = classifier
     ctx.message.labels = {
         "retry_count": retry_count,
         "max_retries": max_retries,
     }
     return ctx
-
-
-def _patch_provider() -> MagicMock:
-    """extractor/classifier 用のモックを返す。"""
-    mock = MagicMock()
-    mock.MODEL = "test-model"
-    mock.RPM = 50
-    mock.RPD = 1500
-    return mock
 
 
 # ---------------------------------------------------------------------------
@@ -41,14 +53,10 @@ class TestExtractContent:
         """Extraction が返れば (新規 or 冪等ヒット) 後続 classify に chain する。"""
         from app.analysis.tasks import extract_content
 
-        mock_ctx = _make_ctx()
+        mock_ctx = _make_ctx(extractor=_make_provider_fake())
         mock_extraction = MagicMock()  # Extraction entity のスタンド
 
         with (
-            patch(
-                "app.analysis.tasks.get_extractor",
-                return_value=_patch_provider(),
-            ),
             patch(
                 "app.analysis.tasks._build_limiters",
                 return_value=(None, None),
@@ -73,13 +81,9 @@ class TestExtractContent:
         """None が返れば (記事不在 / InvalidInput) chain しない。"""
         from app.analysis.tasks import extract_content
 
-        mock_ctx = _make_ctx()
+        mock_ctx = _make_ctx(extractor=_make_provider_fake())
 
         with (
-            patch(
-                "app.analysis.tasks.get_extractor",
-                return_value=_patch_provider(),
-            ),
             patch(
                 "app.analysis.tasks._build_limiters",
                 return_value=(None, None),
@@ -103,13 +107,11 @@ class TestExtractContent:
     async def test_rate_limit_raises_for_retry(self) -> None:
         from app.analysis.tasks import extract_content
 
-        mock_ctx = _make_ctx(retry_count=0, max_retries=2)
+        mock_ctx = _make_ctx(
+            extractor=_make_provider_fake(), retry_count=0, max_retries=2
+        )
 
         with (
-            patch(
-                "app.analysis.tasks.get_extractor",
-                return_value=_patch_provider(),
-            ),
             patch(
                 "app.analysis.tasks._build_limiters",
                 return_value=(None, None),
@@ -129,13 +131,11 @@ class TestExtractContent:
         """最終試行では例外を送出せず return する。"""
         from app.analysis.tasks import extract_content
 
-        mock_ctx = _make_ctx(retry_count=2, max_retries=2)
+        mock_ctx = _make_ctx(
+            extractor=_make_provider_fake(), retry_count=2, max_retries=2
+        )
 
         with (
-            patch(
-                "app.analysis.tasks.get_extractor",
-                return_value=_patch_provider(),
-            ),
             patch(
                 "app.analysis.tasks._build_limiters",
                 return_value=(None, None),
@@ -162,14 +162,10 @@ class TestClassifyContent:
         from app.analysis.classification.service import ClassifiedOutcome
         from app.analysis.tasks import classify_content
 
-        mock_ctx = _make_ctx()
+        mock_ctx = _make_ctx(classifier=_make_provider_fake())
         mock_result = ClassifiedOutcome(analysis=MagicMock())
 
         with (
-            patch(
-                "app.analysis.tasks.get_classifier",
-                return_value=_patch_provider(),
-            ),
             patch(
                 "app.analysis.tasks._build_limiters",
                 return_value=(None, None),
@@ -194,14 +190,10 @@ class TestClassifyContent:
         from app.analysis.classification.service import AlreadyClassifiedOutcome
         from app.analysis.tasks import classify_content
 
-        mock_ctx = _make_ctx()
+        mock_ctx = _make_ctx(classifier=_make_provider_fake())
         mock_result = AlreadyClassifiedOutcome(analysis=MagicMock())
 
         with (
-            patch(
-                "app.analysis.tasks.get_classifier",
-                return_value=_patch_provider(),
-            ),
             patch(
                 "app.analysis.tasks._build_limiters",
                 return_value=(None, None),
@@ -226,14 +218,10 @@ class TestClassifyContent:
         from app.analysis.classification.service import SkippedOutcome
         from app.analysis.tasks import classify_content
 
-        mock_ctx = _make_ctx()
+        mock_ctx = _make_ctx(classifier=_make_provider_fake())
         mock_result = SkippedOutcome(reason="extraction_not_found")
 
         with (
-            patch(
-                "app.analysis.tasks.get_classifier",
-                return_value=_patch_provider(),
-            ),
             patch(
                 "app.analysis.tasks._build_limiters",
                 return_value=(None, None),
@@ -257,13 +245,11 @@ class TestClassifyContent:
     async def test_rate_limit_raises_for_retry(self) -> None:
         from app.analysis.tasks import classify_content
 
-        mock_ctx = _make_ctx(retry_count=0, max_retries=2)
+        mock_ctx = _make_ctx(
+            classifier=_make_provider_fake(), retry_count=0, max_retries=2
+        )
 
         with (
-            patch(
-                "app.analysis.tasks.get_classifier",
-                return_value=_patch_provider(),
-            ),
             patch(
                 "app.analysis.tasks._build_limiters",
                 return_value=(None, None),
@@ -283,13 +269,11 @@ class TestClassifyContent:
         """classify_content は最終試行で例外を送出せず return する。"""
         from app.analysis.tasks import classify_content
 
-        mock_ctx = _make_ctx(retry_count=2, max_retries=2)
+        mock_ctx = _make_ctx(
+            classifier=_make_provider_fake(), retry_count=2, max_retries=2
+        )
 
         with (
-            patch(
-                "app.analysis.tasks.get_classifier",
-                return_value=_patch_provider(),
-            ),
             patch(
                 "app.analysis.tasks._build_limiters",
                 return_value=(None, None),

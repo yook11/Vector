@@ -7,9 +7,10 @@ spec の判定基準を計測する:
 - Pydantic 検証失敗率: < 1%
 - per-call レイテンシ: Gemini 比 1.5× 以内
 
-Sample は ``article_extractions`` の最新 N 件 (default 100)。``AI_PROVIDER`` 設定は
-触らず、両 classifier を直接 import して並列呼び出しする。本スクリプトは PR-B の
-検証専用で、判定完了後 (PR-C 完了時) に削除する想定。
+Sample は ``article_extractions`` の最新 N 件 (default 100)。両 classifier を
+直接 import して並列呼び出しするため、production の adapter wiring
+(brokers.py の composition root) には影響しない。本スクリプトは PR-B の検証
+専用で、判定完了後 (cutover 完了時) に削除する想定。
 
 Usage:
     docker compose exec backend python scripts/compare_classifiers.py
