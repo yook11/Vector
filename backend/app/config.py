@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     ai_provider: str = "gemini"
     gemini_api_key: SecretStr = SecretStr("")
     openai_api_key: SecretStr = SecretStr("")
+    deepseek_api_key: SecretStr = SecretStr("")
 
     # Embedding (TEI ローカルサーバー)
     embedding_base_url: str = "http://embedding:80"

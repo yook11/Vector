@@ -29,6 +29,7 @@ from app.analysis.embedding.service import (
 from app.analysis.errors import (
     ConfigurationError,
     DailyQuotaExhaustedError,
+    InsufficientBalanceError,
     NetworkError,
     ProviderError,
     UnclassifiedError,
@@ -193,7 +194,11 @@ async def classify_content(
     svc = ClassificationService(session_factory)
     try:
         result = await svc.execute(article_id, classifier)
-    except (ConfigurationError, DailyQuotaExhaustedError) as e:
+    except (
+        ConfigurationError,
+        DailyQuotaExhaustedError,
+        InsufficientBalanceError,
+    ) as e:
         logger.warning(
             "classify_content_no_retry",
             article_id=article_id,
