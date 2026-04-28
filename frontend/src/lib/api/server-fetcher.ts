@@ -23,8 +23,14 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
     if (session) {
       return await buildInternalAuthHeaders(session);
     }
-  } catch {
-    // Session not available (e.g., during build)
+  } catch (error) {
+    // Session unavailable (typically prerender / build context where
+    // `headers()` cannot be resolved). Surface it so genuine failures don't
+    // hide behind the same silent catch.
+    console.warn(
+      "[server-fetcher] session unavailable, sending unauthenticated request",
+      error,
+    );
   }
   return {};
 }

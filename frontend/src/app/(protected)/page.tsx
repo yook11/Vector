@@ -28,7 +28,7 @@ export default async function DashboardPage({
 
   const [newsData, categoriesData] = await Promise.all([
     fetchNews,
-    getCategories().catch(() => ({ items: [] })),
+    getCategories(),
   ]);
 
   return (
