@@ -33,6 +33,9 @@ Vector のニュースソース選定・段階的拡張の決定記録。
 
 | ファイル | 内容 |
 |---------|------|
-| [phase-plan.md](./phase-plan.md) | Phase 1a/1b/2 のソースセットと実装順序 |
-| [verification.md](./verification.md) | リサーチ主張の検証結果サマリ |
+| [roadmap.md](./roadmap.md) | **改訂後の段階導入計画 (2026-04-27 改訂)** ← forward-looking な意思決定はここを一次情報源 |
+| [phase-0-hn.md](./phase-0-hn.md) | Phase 0: Hacker News 登録漏れの解消と sliding window 設計修正 |
+| [verification-2026-04-27.md](./verification-2026-04-27.md) | Phase 1b/2 候補の生フィード再検証 (実測ベース) |
+| [phase-plan.md](./phase-plan.md) | 原計画 (2026-04-22)。履歴として保持。最新計画は roadmap.md |
+| [verification.md](./verification.md) | 外部リサーチ主張の検証結果 (2026-04-22) |
 | [scoring.md](./scoring.md) | スコアリングフレームワークとマスターリスト |

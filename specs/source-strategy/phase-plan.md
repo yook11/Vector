@@ -7,7 +7,7 @@
 | ソース | タイプ | フィードURL | 主要分野 | 備考 |
 |--------|--------|-----------|---------|------|
 | TechCrunch | RSS | `techcrunch.com/feed/` | AI/Tech全般 | スニペット、Trafilatura必須 |
-| Hacker News | API | `hacker-news.firebaseio.com/v0/` | 全分野 (シグナル層) | 既存フェッチャー稼働中 |
+| Hacker News | API | `hn.algolia.com/api/v1/search_by_date` | 全分野 (シグナル層) | Phase 0 (2026-04-29) で sliding window 設計に修正、初投入 (詳細: `phase-0-hn.md`) |
 | The Quantum Insider | RSS | `thequantuminsider.com/feed/` | Next-gen Computing | `content:encoded` 対応済み |
 | FierceBiotech | RSS | `fiercebiotech.com/rss/xml` | Biotech | スニペット |
 | ITmedia | RSS | ※下記「ITmedia分割」参照 | Tech日本語 | 分割対応 |

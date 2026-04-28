@@ -1,20 +1,23 @@
 """Hacker News フェッチャ — Algolia HN Search API クライアント。"""
 
+import time
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 
 import httpx
 import structlog
 
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
 from app.collection.ingestion.domain import ArticleCandidate
-from app.collection.ingestion.fetchers.hn_fetch_state import (
-    get_last_fetched_at,
-    set_last_fetched_at,
-)
-from app.config import settings
 from app.models.news_source import NewsSource
 from app.shared.value_objects.safe_url import SafeUrl
+
+# HN フェッチャー固有の運用値。Settings (環境変数経由) には載せない。
+# 動的に切り替える運用要件が出た時点でコンストラクタ DI に昇格させる。
+HN_API_BASE_URL = "https://hn.algolia.com/api/v1"
+HN_MIN_POINTS = 20
+HN_HITS_PER_PAGE = 100
+HN_SLIDING_WINDOW_SECONDS = 86400  # 24h
 
 HTTP_TIMEOUT = 30.0
 
@@ -36,36 +39,32 @@ class HNStory:
 
 
 class HackerNewsFetcher:
-    """Algolia HN Search API フェッチャー。"""
+    """Algolia HN Search API フェッチャー。
+
+    毎サイクル直近 ``HN_SLIDING_WINDOW_SECONDS`` 秒以内に投稿された
+    ``points>HN_MIN_POINTS`` のストーリーを全件取得する sliding window 設計。
+    increment 用の Redis state は持たず、dedup は repository 層の
+    ``ON CONFLICT DO NOTHING`` に委ねる。
+    """
 
     async def _fetch_recent_stories(
         self,
         client: httpx.AsyncClient,
-        since_timestamp: int | None = None,
     ) -> list[HNStory]:
-        """Algolia HN Search API から最近のストーリーを取得する。
-
-        Args:
-            client: HTTP クライアント。
-            since_timestamp: Unix タイムスタンプ。これ以降に作成された
-                             ストーリーのみ取得する。初回は ``None``
-                             （時間フィルタなし）。
+        """Algolia HN Search API から sliding window 内のストーリーを取得する。
 
         Returns:
             HNStory のリスト（外部 URL を持たないストーリーは除外）。
         """
+        since = int(time.time()) - HN_SLIDING_WINDOW_SECONDS
         params: dict[str, str | int] = {
             "tags": "story",
-            "hitsPerPage": settings.hn_hits_per_page,
+            "hitsPerPage": HN_HITS_PER_PAGE,
+            "numericFilters": f"points>{HN_MIN_POINTS},created_at_i>{since}",
         }
 
-        numeric_filters = [f"points>{settings.hn_min_points}"]
-        if since_timestamp:
-            numeric_filters.append(f"created_at_i>{since_timestamp}")
-        params["numericFilters"] = ",".join(numeric_filters)
-
         response = await client.get(
-            f"{settings.hn_api_base_url}/search_by_date",
+            f"{HN_API_BASE_URL}/search_by_date",
             params=params,
             timeout=HTTP_TIMEOUT,
         )
@@ -104,14 +103,8 @@ class HackerNewsFetcher:
             PermanentFetchError: 403 / 404 / 410 / 451。
             TemporaryFetchError: 429 / 5xx / タイムアウト / ネットワークエラー。
         """
-        # HN 固有の増分取得 state を Redis から読む
-        last_fetched = await get_last_fetched_at(source.id)
-        since_timestamp: int | None = None
-        if last_fetched:
-            since_timestamp = int(last_fetched.timestamp())
-
         try:
-            stories = await self._fetch_recent_stories(client, since_timestamp)
+            stories = await self._fetch_recent_stories(client)
         except httpx.HTTPStatusError as e:
             status = e.response.status_code
             logger.error("hn_http_error", source=source.name, status=status)
@@ -121,9 +114,6 @@ class HackerNewsFetcher:
         except httpx.RequestError as e:
             logger.error("hn_request_error", source=source.name, error=str(e))
             raise TemporaryFetchError(f"request error: {source.name}: {e}") from e
-
-        # 成功した時点で次回の増分取得キーを更新
-        await set_last_fetched_at(source.id, datetime.now(UTC))
 
         if not stories:
             logger.info("hn_no_new_stories", source=source.name)
