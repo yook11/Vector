@@ -153,7 +153,6 @@ class ClassificationService:
             logger.info(
                 "classification_concurrent_write",
                 extraction_id=ready.extraction_id,
-                article_id=ready.article_id,
             )
             saved = await analysis_repo.find_by_extraction_id(ready.extraction_id)
             if saved is None:
@@ -165,7 +164,7 @@ class ClassificationService:
 
         logger.info(
             "classification_completed",
-            article_id=ready.article_id,
+            analysis_id=saved.id,
             extraction_id=ready.extraction_id,
             category=classified.category.value,
             topic=draft.topic_name.root,
@@ -195,7 +194,6 @@ class ClassificationService:
             logger.info(
                 "rejection_concurrent_write",
                 extraction_id=ready.extraction_id,
-                article_id=ready.article_id,
             )
             saved = await rejection_repo.find_by_extraction_id(ready.extraction_id)
             if saved is None:
@@ -206,7 +204,6 @@ class ClassificationService:
 
         logger.info(
             "classification_rejected",
-            article_id=ready.article_id,
             extraction_id=ready.extraction_id,
         )
         return RejectedOutcome(rejection=saved)

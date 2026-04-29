@@ -1,7 +1,7 @@
 """EmbeddingRepository の DB 統合テスト。
 
-save (条件付き UPDATE) / find_by_analysis_id / _to_domain (整合性検査) を
-実 PostgreSQL に対して検証する。
+is_embedded_for / save (条件付き UPDATE + RETURNING) / find_by_analysis_id /
+_to_domain (整合性検査) を実 PostgreSQL に対して検証する。
 """
 
 from __future__ import annotations
@@ -136,12 +136,59 @@ async def test_find_restores_embedding_entity(
 
 
 # ---------------------------------------------------------------------------
-# save (条件付き UPDATE)
+# is_embedded_for — cheap exists 判定 (try_advance_from 用)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_save_writes_embedding_and_model_atomically(
+async def test_is_embedded_for_returns_false_when_embedding_null(
+    db_session: AsyncSession,
+    sample_source: NewsSource,
+    sample_categories: list[Category],
+) -> None:
+    analysis = await _build_analysis(
+        db_session,
+        sample_source,
+        sample_categories[0].id,
+        url="https://example.com/exists-null",
+    )
+    repo = EmbeddingRepository(db_session)
+    assert await repo.is_embedded_for(analysis.id) is False
+
+
+@pytest.mark.asyncio
+async def test_is_embedded_for_returns_true_when_embedding_present(
+    db_session: AsyncSession,
+    sample_source: NewsSource,
+    sample_categories: list[Category],
+) -> None:
+    analysis = await _build_analysis(
+        db_session,
+        sample_source,
+        sample_categories[0].id,
+        url="https://example.com/exists-yes",
+        embedding=_zero_vector(),
+        embedding_model="cl-nagoya/ruri-v3-310m",
+    )
+    repo = EmbeddingRepository(db_session)
+    assert await repo.is_embedded_for(analysis.id) is True
+
+
+@pytest.mark.asyncio
+async def test_is_embedded_for_returns_false_for_missing_analysis(
+    db_session: AsyncSession,
+) -> None:
+    repo = EmbeddingRepository(db_session)
+    assert await repo.is_embedded_for(999_999) is False
+
+
+# ---------------------------------------------------------------------------
+# save (条件付き UPDATE + RETURNING → Entity | None)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_save_writes_embedding_and_returns_entity(
     db_session: AsyncSession,
     sample_source: NewsSource,
     sample_categories: list[Category],
@@ -162,7 +209,9 @@ async def test_save_writes_embedding_and_model_atomically(
     )
     await db_session.commit()
 
-    assert saved is True
+    assert isinstance(saved, Embedding)
+    assert saved.analysis_id == analysis_id
+    assert saved.model_name == "cl-nagoya/ruri-v3-310m"
     db_session.expire_all()
     refetched = await db_session.get(ArticleAnalysis, analysis_id)
     assert refetched is not None
@@ -171,12 +220,12 @@ async def test_save_writes_embedding_and_model_atomically(
 
 
 @pytest.mark.asyncio
-async def test_save_returns_false_on_concurrent_write(
+async def test_save_returns_none_on_concurrent_write(
     db_session: AsyncSession,
     sample_source: NewsSource,
     sample_categories: list[Category],
 ) -> None:
-    """既に他ワーカーが書いた行への 2 度目の save は False を返す。"""
+    """既に他ワーカーが書いた行への 2 度目の save は None を返す。"""
     analysis = await _build_analysis(
         db_session,
         sample_source,
@@ -194,7 +243,7 @@ async def test_save_returns_false_on_concurrent_write(
         model_name="cl-nagoya/ruri-v3-310m",
     )
 
-    assert saved is False
+    assert saved is None
     db_session.expire_all()
     refetched = await db_session.get(ArticleAnalysis, analysis_id)
     assert refetched is not None
@@ -206,7 +255,7 @@ async def test_save_returns_false_on_concurrent_write(
 
 
 @pytest.mark.asyncio
-async def test_save_returns_false_for_unknown_analysis_id(
+async def test_save_returns_none_for_unknown_analysis_id(
     db_session: AsyncSession,
 ) -> None:
     repo = EmbeddingRepository(db_session)
@@ -215,7 +264,7 @@ async def test_save_returns_false_for_unknown_analysis_id(
         analysis_id=999_999,
         model_name="cl-nagoya/ruri-v3-310m",
     )
-    assert saved is False
+    assert saved is None
 
 
 # ---------------------------------------------------------------------------

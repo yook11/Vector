@@ -43,15 +43,10 @@ class ReadyForClassification(BaseModel):
     - 全フィールドが Extraction の copy のため派生フィールド invariant は持たない
       (upstream の `Extraction.__post_init__` が保証済 — spec §6.2 / §6.3)
     - frozen: 生成後は不変 (Stage 間 passport として副作用なしに受け渡せる)
-
-    `article_id` は Phase 1 transitional フィールド: classify_content task 後の
-    `generate_embedding.kiq(article_id)` chain に必要 (Phase 2 で `ReadyForEmbedding`
-    導入後に削除予定)。
     """
 
     model_config = ConfigDict(frozen=True)
 
-    article_id: int
     extraction_id: int
     translated_title: str
     summary: str
@@ -61,7 +56,6 @@ class ReadyForClassification(BaseModel):
         cls,
         extraction: Extraction,
         *,
-        article_id: int,
         analysis_repo: AnalysisExistenceProtocol,
         rejection_repo: RejectionExistenceProtocol,
     ) -> ReadyForClassification | None:
@@ -77,7 +71,6 @@ class ReadyForClassification(BaseModel):
 
         Args:
             extraction: 上流 Stage C で永続化された Extraction Entity
-            article_id: Phase 1 chain 用の article 識別子 (Phase 2 で削除予定)
             analysis_repo: cheap exists 判定可能な Analysis Repository
             rejection_repo: cheap exists 判定可能な Rejection Repository
         """
@@ -86,7 +79,6 @@ class ReadyForClassification(BaseModel):
         if await rejection_repo.exists_for_extraction(extraction.id):
             return None
         return cls(
-            article_id=article_id,
             extraction_id=extraction.id,
             translated_title=extraction.translated_title,
             summary=extraction.summary,

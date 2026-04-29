@@ -59,7 +59,6 @@ async def main() -> None:
                     continue
                 ready = await ReadyForClassification.try_advance_from(
                     extraction,
-                    article_id=article_id,
                     analysis_repo=analysis_repo,
                     rejection_repo=rejection_repo,
                 )

@@ -1,8 +1,10 @@
 """分析タスク (extract_content / classify_content) のテスト。
 
-Phase 1 リファクタ後 (typed-pipeline-preconditions.md): classify_content は
+Phase 1 / 2 リファクタ後 (typed-pipeline-preconditions.md): classify_content は
 `ReadyForClassification` を受け取り、extract_content は Ready を構築して chain。
-Skipped / AlreadyClassified Outcome は廃止 (Ready の `try_advance_from` で代替)。
+classify_content の下流 chain は `ReadyForEmbedding` を構築して
+`generate_embedding.kiq(ready_emb)` する。Skipped / AlreadyClassified /
+AlreadyEmbedded Outcome は廃止 (Ready の `try_advance_from` で代替)。
 """
 
 from types import SimpleNamespace
@@ -11,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.analysis.classification.domain.ready import ReadyForClassification
+from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.errors import RateLimitError
 
 
@@ -44,12 +47,18 @@ def _make_ctx(
     return ctx
 
 
-def _make_ready(article_id: int = 1, extraction_id: int = 2) -> ReadyForClassification:
+def _make_ready(extraction_id: int = 2) -> ReadyForClassification:
     return ReadyForClassification(
-        article_id=article_id,
         extraction_id=extraction_id,
         translated_title="title",
         summary="summary",
+    )
+
+
+def _make_ready_emb(analysis_id: int = 100) -> ReadyForEmbedding:
+    return ReadyForEmbedding(
+        analysis_id=analysis_id,
+        text_for_embedding="title\nsummary",
     )
 
 
@@ -67,7 +76,7 @@ class TestExtractContent:
         mock_ctx = _make_ctx(extractor=_make_provider_fake())
         mock_extraction = MagicMock()
         mock_extraction.id = 42
-        ready = _make_ready(article_id=1, extraction_id=42)
+        ready = _make_ready(extraction_id=42)
 
         with (
             patch(
@@ -184,14 +193,15 @@ class TestExtractContent:
 
 class TestClassifyContent:
     @pytest.mark.asyncio
-    async def test_classified_chains_embedding(self) -> None:
-        """ClassifiedOutcome → embedding chain (Phase 1 は article_id で chain)。"""
+    async def test_classified_chains_embedding_with_ready(self) -> None:
+        """ClassifiedOutcome → ReadyForEmbedding を構築して embedding chain。"""
         from app.analysis.classification.service import ClassifiedOutcome
         from app.analysis.tasks import classify_content
 
         mock_ctx = _make_ctx(classifier=_make_provider_fake())
         mock_result = ClassifiedOutcome(analysis=MagicMock())
-        ready = _make_ready(article_id=1, extraction_id=2)
+        ready = _make_ready(extraction_id=2)
+        ready_emb = _make_ready_emb(analysis_id=100)
 
         with (
             patch(
@@ -199,13 +209,45 @@ class TestClassifyContent:
                 return_value=(None, None),
             ),
             patch("app.analysis.tasks.ClassificationService") as mock_svc_cls,
+            patch(
+                "app.analysis.tasks.ReadyForEmbedding.try_advance_from",
+                new=AsyncMock(return_value=ready_emb),
+            ),
             patch("app.analysis.tasks.generate_embedding") as mock_embed,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(return_value=mock_result)
             mock_embed.kiq = AsyncMock()
             await classify_content(ready=ready, ctx=mock_ctx)
 
-        mock_embed.kiq.assert_awaited_once_with(1)
+        mock_embed.kiq.assert_awaited_once_with(ready_emb)
+
+    @pytest.mark.asyncio
+    async def test_classified_does_not_chain_when_advance_returns_none(self) -> None:
+        """ClassifiedOutcome でも embedding precondition 未充足なら chain しない。"""
+        from app.analysis.classification.service import ClassifiedOutcome
+        from app.analysis.tasks import classify_content
+
+        mock_ctx = _make_ctx(classifier=_make_provider_fake())
+        mock_result = ClassifiedOutcome(analysis=MagicMock())
+        ready = _make_ready(extraction_id=2)
+
+        with (
+            patch(
+                "app.analysis.tasks._build_limiters",
+                return_value=(None, None),
+            ),
+            patch("app.analysis.tasks.ClassificationService") as mock_svc_cls,
+            patch(
+                "app.analysis.tasks.ReadyForEmbedding.try_advance_from",
+                new=AsyncMock(return_value=None),
+            ),
+            patch("app.analysis.tasks.generate_embedding") as mock_embed,
+        ):
+            mock_svc_cls.return_value.execute = AsyncMock(return_value=mock_result)
+            mock_embed.kiq = AsyncMock()
+            await classify_content(ready=ready, ctx=mock_ctx)
+
+        mock_embed.kiq.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_rejected_does_not_chain(self) -> None:
@@ -215,7 +257,7 @@ class TestClassifyContent:
 
         mock_ctx = _make_ctx(classifier=_make_provider_fake())
         mock_result = RejectedOutcome(rejection=MagicMock())
-        ready = _make_ready(article_id=1, extraction_id=2)
+        ready = _make_ready(extraction_id=2)
 
         with (
             patch(

@@ -1,7 +1,8 @@
 """embedding ドメイン層のユニットテスト (DB 不要)。
 
 EmbeddingVector の次元・有限性・サニティ範囲、EmbeddingDraft.from_inference、
-Embedding.from_draft / __post_init__ の不変条件を検証する。
+Embedding の __post_init__ 不変条件を検証する。Phase 2 で Embedding.from_draft
+は廃止 (Repository.save が直接 Entity を返すため)。
 """
 
 from __future__ import annotations
@@ -144,48 +145,46 @@ class TestEmbeddingDraftFromInference:
 
 
 # ---------------------------------------------------------------------------
-# Embedding.from_draft / __post_init__
+# Embedding.__post_init__ — invariants (Phase 2 で from_draft 廃止、直接構築)
 # ---------------------------------------------------------------------------
 
 
-class TestEmbeddingFromDraft:
-    def test_synthesizes_identity_and_model_name(self) -> None:
-        draft = EmbeddingDraft.from_inference(vector=[0.1] * EMBEDDING_DIMENSION)
-        embedding = Embedding.from_draft(
-            draft, analysis_id=42, model_name="cl-nagoya/ruri-v3-310m"
+def _make_vector() -> EmbeddingVector:
+    return EmbeddingVector(root=_vec(0.1))
+
+
+class TestEmbeddingInvariants:
+    def test_constructs_with_valid_fields(self) -> None:
+        embedding = Embedding(
+            analysis_id=42,
+            vector=_make_vector(),
+            model_name="cl-nagoya/ruri-v3-310m",
         )
         assert embedding.analysis_id == 42
         assert embedding.model_name == "cl-nagoya/ruri-v3-310m"
-        assert embedding.vector is draft.vector
 
     def test_rejects_zero_analysis_id(self) -> None:
-        draft = EmbeddingDraft.from_inference(vector=[0.1] * EMBEDDING_DIMENSION)
         with pytest.raises(ValueError, match="analysis_id must be positive"):
-            Embedding.from_draft(draft, analysis_id=0, model_name="m")
+            Embedding(analysis_id=0, vector=_make_vector(), model_name="m")
 
     def test_rejects_negative_analysis_id(self) -> None:
-        draft = EmbeddingDraft.from_inference(vector=[0.1] * EMBEDDING_DIMENSION)
         with pytest.raises(ValueError, match="analysis_id must be positive"):
-            Embedding.from_draft(draft, analysis_id=-1, model_name="m")
+            Embedding(analysis_id=-1, vector=_make_vector(), model_name="m")
 
     def test_rejects_empty_model_name(self) -> None:
-        draft = EmbeddingDraft.from_inference(vector=[0.1] * EMBEDDING_DIMENSION)
         with pytest.raises(ValueError, match="model_name must be non-empty"):
-            Embedding.from_draft(draft, analysis_id=1, model_name="")
+            Embedding(analysis_id=1, vector=_make_vector(), model_name="")
 
     def test_rejects_model_name_over_100_chars(self) -> None:
-        draft = EmbeddingDraft.from_inference(vector=[0.1] * EMBEDDING_DIMENSION)
         with pytest.raises(ValueError, match="at most 100 chars"):
-            Embedding.from_draft(draft, analysis_id=1, model_name="x" * 101)
+            Embedding(analysis_id=1, vector=_make_vector(), model_name="x" * 101)
 
     def test_accepts_model_name_at_100_chars(self) -> None:
-        draft = EmbeddingDraft.from_inference(vector=[0.1] * EMBEDDING_DIMENSION)
-        Embedding.from_draft(draft, analysis_id=1, model_name="x" * 100)
+        Embedding(analysis_id=1, vector=_make_vector(), model_name="x" * 100)
 
 
 class TestEmbeddingFrozen:
     def test_frozen_dataclass_assignment_rejected(self) -> None:
-        draft = EmbeddingDraft.from_inference(vector=[0.1] * EMBEDDING_DIMENSION)
-        embedding = Embedding.from_draft(draft, analysis_id=1, model_name="m")
+        embedding = Embedding(analysis_id=1, vector=_make_vector(), model_name="m")
         with pytest.raises(AttributeError):
             embedding.analysis_id = 2  # type: ignore[misc]

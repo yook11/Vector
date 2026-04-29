@@ -1,6 +1,6 @@
-"""Embedding アグリゲート — Stage 3 で生成された埋め込みベクトル。
+"""Embedding アグリゲート — Stage E で生成された埋め込みベクトル。
 
-2 つの型で Stage 3 の概念を表す:
+2 つの型で Stage E の概念を表す:
 
 - ``EmbeddingDraft`` — AI 境界の ``list[float]`` を ``EmbeddingVector`` VO に
   正規化したドメイン入力。永続化前の状態で、analysis_id / model_name は
@@ -8,9 +8,11 @@
 - ``Embedding`` — システムに記録された埋め込み Entity。identity は
   ``analysis_id`` (DB 同一行ゆえの妥協、別テーブル化時に独立 PK が出る前提)。
 
-変換は ``EmbeddingDraft.from_inference`` (AI 境界 → Draft) と
-``Embedding.from_draft`` (Draft + identity → Entity)、Repository._to_domain
-(ORM → Entity) が担う。
+変換は ``EmbeddingDraft.from_inference`` (AI 境界 → Draft) と Repository.save
+(Draft + identity → Entity)、Repository._to_domain (ORM → Entity) が担う。
+Pattern A' (typed-pipeline-preconditions.md §8) で ``Embedding.from_draft``
+ファクトリは廃止された (Repository.save が直接 Entity を返すため Service 内
+での組み立て不要)。
 """
 
 from __future__ import annotations
@@ -85,22 +87,3 @@ class Embedding:
                 f"Embedding.model_name must be at most {_MODEL_NAME_MAX_LENGTH} chars, "
                 f"got {len(self.model_name)}"
             )
-
-    @classmethod
-    def from_draft(
-        cls,
-        draft: EmbeddingDraft,
-        *,
-        analysis_id: int,
-        model_name: str,
-    ) -> Self:
-        """Draft に identity と model_name を合成して永続化済み Entity を組み立てる。
-
-        Repository.save が成功した後、Service が呼び出して Outcome に詰める
-        ためのドメインファクトリ。ビジネスロジック変換はせず identity 合成のみ。
-        """
-        return cls(
-            analysis_id=analysis_id,
-            vector=draft.vector,
-            model_name=model_name,
-        )
