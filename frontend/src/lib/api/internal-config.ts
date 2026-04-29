@@ -16,15 +16,7 @@ import "server-only";
 import { SignJWT } from "jose";
 import { narrowRole } from "@/lib/auth/role";
 import type { Session } from "@/lib/auth/session";
-
-export function requireEnv(name: string, hint?: string): string {
-  const value = process.env[name];
-  if (!value) {
-    const suffix = hint ? `; ${hint}` : "";
-    throw new Error(`${name} is required${suffix}`);
-  }
-  return value;
-}
+import { requireEnv } from "@/lib/env";
 
 export const INTERNAL_API_URL = requireEnv("INTERNAL_API_URL");
 

@@ -4,7 +4,7 @@ import { betterAuth } from "better-auth";
 import type { PoolClient } from "pg";
 import { Pool } from "pg";
 import { v7 as uuidv7 } from "uuid";
-import { requireEnv } from "@/lib/api/internal-config";
+import { requireEnv } from "@/lib/env";
 
 const pool = new Pool({
   connectionString: requireEnv("AUTH_DATABASE_URL"),
