@@ -1,6 +1,6 @@
 """Extraction BC のドメイン概念。
 
-2 つの型で Stage 1 の概念を表す:
+2 つの型で Stage C の概念を表す:
 
 - ``ExtractionResult`` — AI が記事を分析した結果として期待するもの。
   Gemini の ``response_schema`` として渡す契約型と、ドメイン不変条件
@@ -11,8 +11,7 @@
   記録時刻 (extracted_at) を持ち、classification 以降の処理が継続的に
   扱う概念。
 
-変換は Repository.save (``ExtractionResult`` → ``Extraction``) と
-Repository.find (ORM → ``Extraction``) が担う。
+変換は Repository.save が直接 ``Extraction`` を返す (Pattern A' Phase 3)。
 """
 
 from __future__ import annotations
@@ -112,27 +111,3 @@ class Extraction:
                     f"Extraction.entities must be deduplicated, duplicated: {key!r}"
                 )
             seen.add(key)
-
-    @classmethod
-    def from_result(
-        cls,
-        result: ExtractionResult,
-        *,
-        id: int,
-        ai_model: str,
-        extracted_at: datetime,
-    ) -> Extraction:
-        """分析結果に DB が付与した identity を組み合わせて Entity を組み立てる。
-
-        Repository.save が返した identity (``id`` / ``extracted_at``) と、
-        元の ``ExtractionResult`` / ``ai_model`` を合わせて「記録された Entity」
-        を構成するドメインファクトリ。
-        """
-        return cls(
-            id=id,
-            translated_title=result.title_ja,
-            summary=result.summary_ja,
-            entities=tuple(result.entities),
-            ai_model=ai_model,
-            extracted_at=extracted_at,
-        )

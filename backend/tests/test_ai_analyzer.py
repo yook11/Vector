@@ -37,9 +37,14 @@ from app.analysis.errors import (
     UnclassifiedError,
 )
 from app.analysis.extraction.domain import Entity, ExtractionResult
+from app.analysis.extraction.domain.ready import ReadyForExtraction
 from app.analysis.extraction.extractor.base import BaseExtractor
 from app.analysis.extraction.extractor.gemini import GeminiExtractor
-from app.analysis.extraction.service import ExtractionService
+from app.analysis.extraction.service import (
+    ExtractedOutcome,
+    ExtractionService,
+    InvalidInputOutcome,
+)
 from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis
 from app.models.article_entity import ArticleEntity
@@ -630,36 +635,7 @@ def test_tool_schema_disallows_additional_properties() -> None:
     assert CLASSIFICATION_TOOL_SCHEMA["additionalProperties"] is False
 
 
-# --- E2. Extraction domain factory tests (DB 不要) ---
-
-
-def test_extraction_from_result_copies_fields() -> None:
-    from app.analysis.extraction.domain import Extraction
-
-    result = ExtractionResult(
-        title_ja="タイトル",
-        summary_ja="要約",
-        entities=[
-            Entity(name=EntityName("MIT"), type=EntityType("company")),
-            Entity(name=EntityName("CRISPR"), type=EntityType("technology")),
-        ],
-    )
-    extracted_at = datetime.now(UTC)
-    extraction = Extraction.from_result(
-        result,
-        id=42,
-        ai_model="test-model",
-        extracted_at=extracted_at,
-    )
-
-    assert extraction.id == 42
-    assert extraction.translated_title == "タイトル"
-    assert extraction.summary == "要約"
-    assert extraction.ai_model == "test-model"
-    assert extraction.extracted_at == extracted_at
-    assert len(extraction.entities) == 2
-    assert extraction.entities[0].name.root == "MIT"
-    assert extraction.entities[1].type.root == "technology"
+# --- E2. Extraction domain invariants (DB 不要) ---
 
 
 def test_extraction_rejects_empty_translated_title() -> None:
@@ -736,29 +712,35 @@ async def test_extraction_creates_extraction_and_entities(
     )
 
     article_id = article.id
+    ready = ReadyForExtraction(
+        article_id=article_id,
+        original_title=article.original_title,
+        original_content=article.original_content,
+    )
     svc = ExtractionService(session_factory)
-    extraction = await svc.execute(article_id, mock_extractor)
+    outcome = await svc.execute(ready, mock_extractor)
 
-    assert extraction is not None
+    assert isinstance(outcome, ExtractedOutcome)
+    extraction = outcome.extraction
     assert extraction.id > 0
     assert extraction.translated_title == "量子ブレイクスルー"
     assert len(extraction.entities) == 2
 
     db_session.expire_all()
-    extraction = (
+    persisted = (
         await db_session.execute(
             select(ArticleExtraction).where(
                 ArticleExtraction.article_id == article_id,
             )
         )
     ).scalar_one()
-    assert extraction.translated_title == "量子ブレイクスルー"
+    assert persisted.translated_title == "量子ブレイクスルー"
 
     entities = list(
         (
             await db_session.execute(
                 select(ArticleEntity).where(
-                    ArticleEntity.article_extraction_id == extraction.id,
+                    ArticleEntity.article_extraction_id == persisted.id,
                 )
             )
         )
@@ -768,26 +750,41 @@ async def test_extraction_creates_extraction_and_entities(
     assert len(entities) == 2
 
 
-async def test_extraction_skips_already_extracted(
+async def test_extraction_race_winner_read_back(
     db_session: AsyncSession,
     session_factory,
     sample_source: NewsSource,
 ) -> None:
-    _, _ = await _create_article_with_extraction(
-        db_session, sample_source, url="https://example.com/old", title="Old Article"
+    """事前に extraction が存在する場合 (race 敗北の代理) でも勝者を読み戻して合流。"""
+    article, existing = await _create_article_with_extraction(
+        db_session, sample_source, url="https://example.com/race", title="Race"
     )
-    article = (await db_session.execute(select(Article).limit(1))).scalar_one()
     await db_session.commit()
 
     mock_extractor = MagicMock(spec=BaseExtractor)
+    mock_extractor.MODEL = "gemini-2.5-flash-lite"
+    mock_extractor.model_name = "gemini-2.5-flash-lite"
+    mock_extractor.extract = AsyncMock(
+        return_value=_make_extraction_result(
+            title_ja="重複側",
+            summary_ja="重複側要約",
+        )
+    )
+
+    ready = ReadyForExtraction(
+        article_id=article.id,
+        original_title=article.original_title,
+        original_content=article.original_content,
+    )
     svc = ExtractionService(session_factory)
-    extraction = await svc.execute(article.id, mock_extractor)
+    outcome = await svc.execute(ready, mock_extractor)
 
-    assert extraction is not None  # 冪等ヒットでも chain 継続
-    mock_extractor.extract.assert_not_called()
+    assert isinstance(outcome, ExtractedOutcome)
+    # 勝者 (DB 上の既存行) を読み戻している
+    assert outcome.extraction.id == existing.id
 
 
-async def test_extraction_returns_skipped_on_invalid_input(
+async def test_extraction_returns_invalid_input_outcome(
     db_session: AsyncSession,
     session_factory,
     sample_source: NewsSource,
@@ -814,11 +811,15 @@ async def test_extraction_returns_skipped_on_invalid_input(
         side_effect=InvalidInputError("too long"),
     )
 
-    article_id = article.id
+    ready = ReadyForExtraction(
+        article_id=article.id,
+        original_title=article.original_title,
+        original_content=article.original_content,
+    )
     svc = ExtractionService(session_factory)
-    extraction = await svc.execute(article_id, mock_extractor)
+    outcome = await svc.execute(ready, mock_extractor)
 
-    assert extraction is None
+    assert isinstance(outcome, InvalidInputOutcome)
 
 
 # --- G. ClassificationService orchestration tests ---

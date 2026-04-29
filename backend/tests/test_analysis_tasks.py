@@ -1,10 +1,12 @@
 """分析タスク (extract_content / classify_content) のテスト。
 
-Phase 1 / 2 リファクタ後 (typed-pipeline-preconditions.md): classify_content は
-`ReadyForClassification` を受け取り、extract_content は Ready を構築して chain。
-classify_content の下流 chain は `ReadyForEmbedding` を構築して
-`generate_embedding.kiq(ready_emb)` する。Skipped / AlreadyClassified /
-AlreadyEmbedded Outcome は廃止 (Ready の `try_advance_from` で代替)。
+Phase 1 / 2 / 3 リファクタ後 (typed-pipeline-preconditions.md):
+- extract_content は ``ReadyForExtraction`` を受け取り、ExtractedOutcome なら
+  ``ReadyForClassification`` を構築して chain
+- classify_content は ``ReadyForClassification`` を受け取り、ClassifiedOutcome
+  なら ``ReadyForEmbedding`` を構築して chain
+- Skipped / AlreadyClassified / AlreadyEmbedded Outcome は廃止 (Ready の
+  ``try_advance_from`` で代替)
 """
 
 from types import SimpleNamespace
@@ -15,6 +17,7 @@ import pytest
 from app.analysis.classification.domain.ready import ReadyForClassification
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.errors import RateLimitError
+from app.analysis.extraction.domain.ready import ReadyForExtraction
 
 
 def _make_provider_fake() -> MagicMock:
@@ -47,6 +50,14 @@ def _make_ctx(
     return ctx
 
 
+def _make_ready_extraction(article_id: int = 1) -> ReadyForExtraction:
+    return ReadyForExtraction(
+        article_id=article_id,
+        original_title="Title",
+        original_content="content",
+    )
+
+
 def _make_ready(extraction_id: int = 2) -> ReadyForClassification:
     return ReadyForClassification(
         extraction_id=extraction_id,
@@ -70,13 +81,15 @@ def _make_ready_emb(analysis_id: int = 100) -> ReadyForEmbedding:
 class TestExtractContent:
     @pytest.mark.asyncio
     async def test_chains_classify_with_ready_when_advance_succeeds(self) -> None:
-        """Ready が構築できれば classify_content.kiq(ready) で chain する。"""
+        """ExtractedOutcome → Ready 構築 → classify_content.kiq(ready) で chain。"""
+        from app.analysis.extraction.service import ExtractedOutcome
         from app.analysis.tasks import extract_content
 
         mock_ctx = _make_ctx(extractor=_make_provider_fake())
         mock_extraction = MagicMock()
         mock_extraction.id = 42
-        ready = _make_ready(extraction_id=42)
+        mock_outcome = ExtractedOutcome(extraction=mock_extraction)
+        ready_class = _make_ready(extraction_id=42)
 
         with (
             patch(
@@ -86,23 +99,24 @@ class TestExtractContent:
             patch("app.analysis.tasks.ExtractionService") as mock_svc_cls,
             patch(
                 "app.analysis.tasks.ReadyForClassification.try_advance_from",
-                new=AsyncMock(return_value=ready),
+                new=AsyncMock(return_value=ready_class),
             ),
             patch("app.analysis.tasks.classify_content") as mock_classify,
         ):
-            mock_svc_cls.return_value.execute = AsyncMock(return_value=mock_extraction)
+            mock_svc_cls.return_value.execute = AsyncMock(return_value=mock_outcome)
             mock_classify.kiq = AsyncMock()
-            await extract_content(article_id=1, ctx=mock_ctx)
+            await extract_content(ready=_make_ready_extraction(), ctx=mock_ctx)
 
-        mock_classify.kiq.assert_awaited_once_with(ready)
+        mock_classify.kiq.assert_awaited_once_with(ready_class)
 
     @pytest.mark.asyncio
     async def test_does_not_chain_when_advance_returns_none(self) -> None:
         """precondition 未充足 (try_advance_from が None) なら chain しない。"""
+        from app.analysis.extraction.service import ExtractedOutcome
         from app.analysis.tasks import extract_content
 
         mock_ctx = _make_ctx(extractor=_make_provider_fake())
-        mock_extraction = MagicMock()
+        mock_outcome = ExtractedOutcome(extraction=MagicMock())
 
         with (
             patch(
@@ -116,15 +130,18 @@ class TestExtractContent:
             ),
             patch("app.analysis.tasks.classify_content") as mock_classify,
         ):
-            mock_svc_cls.return_value.execute = AsyncMock(return_value=mock_extraction)
+            mock_svc_cls.return_value.execute = AsyncMock(return_value=mock_outcome)
             mock_classify.kiq = AsyncMock()
-            await extract_content(article_id=1, ctx=mock_ctx)
+            await extract_content(ready=_make_ready_extraction(), ctx=mock_ctx)
 
         mock_classify.kiq.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_does_not_chain_when_extraction_is_none(self) -> None:
-        """ExtractionService が None なら try_advance_from を呼ばず chain しない。"""
+    async def test_invalid_input_does_not_chain(self) -> None:
+        """InvalidInputOutcome は chain しない。"""
+        from app.analysis.extraction.service import (
+            InvalidInputOutcome as ExtractionInvalidInputOutcome,
+        )
         from app.analysis.tasks import extract_content
 
         mock_ctx = _make_ctx(extractor=_make_provider_fake())
@@ -137,9 +154,11 @@ class TestExtractContent:
             patch("app.analysis.tasks.ExtractionService") as mock_svc_cls,
             patch("app.analysis.tasks.classify_content") as mock_classify,
         ):
-            mock_svc_cls.return_value.execute = AsyncMock(return_value=None)
+            mock_svc_cls.return_value.execute = AsyncMock(
+                return_value=ExtractionInvalidInputOutcome(),
+            )
             mock_classify.kiq = AsyncMock()
-            await extract_content(article_id=1, ctx=mock_ctx)
+            await extract_content(ready=_make_ready_extraction(), ctx=mock_ctx)
 
         mock_classify.kiq.assert_not_called()
 
@@ -162,7 +181,7 @@ class TestExtractContent:
                 side_effect=RateLimitError("429"),
             )
             with pytest.raises(RateLimitError):
-                await extract_content(article_id=1, ctx=mock_ctx)
+                await extract_content(ready=_make_ready_extraction(), ctx=mock_ctx)
 
     @pytest.mark.asyncio
     async def test_rate_limit_last_attempt_returns(self) -> None:
@@ -183,7 +202,7 @@ class TestExtractContent:
             mock_svc_cls.return_value.execute = AsyncMock(
                 side_effect=RateLimitError("429"),
             )
-            await extract_content(article_id=1, ctx=mock_ctx)
+            await extract_content(ready=_make_ready_extraction(), ctx=mock_ctx)
 
 
 # ---------------------------------------------------------------------------

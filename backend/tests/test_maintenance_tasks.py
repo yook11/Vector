@@ -154,11 +154,15 @@ async def test_extractions_budget_exhausted_skips_dispatch() -> None:
 @pytest.mark.asyncio
 async def test_extractions_continues_when_one_kiq_fails() -> None:
     """1 件目 kiq が例外を上げても 2 件目以降は dispatch される。"""
+    from app.analysis.extraction.domain.ready import ReadyForExtraction
     from app.maintenance import tasks
 
     ctx = _ctx_with_session_factory()
+    fake_article = MagicMock()
+    fake_session = MagicMock()
+    fake_session.get = AsyncMock(return_value=fake_article)
     ctx.state.session_factory.return_value.__aenter__ = AsyncMock(
-        return_value=MagicMock()
+        return_value=fake_session
     )
     ctx.state.session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -167,6 +171,10 @@ async def test_extractions_continues_when_one_kiq_fails() -> None:
 
     extract_task = MagicMock()
     extract_task.kiq = AsyncMock(side_effect=[RuntimeError("queue down"), None, None])
+
+    ready = ReadyForExtraction(
+        article_id=1, original_title="Title", original_content="content"
+    )
 
     with (
         patch.object(tasks.settings, "backfill_extractions_enabled", True),
@@ -179,11 +187,99 @@ async def test_extractions_continues_when_one_kiq_fails() -> None:
             "app.maintenance.tasks.consume_daily_budget",
             new=AsyncMock(return_value=3),
         ),
+        patch(
+            "app.analysis.extraction.domain.ready.ReadyForExtraction.try_advance_from",
+            new=AsyncMock(return_value=ready),
+        ),
         patch("app.analysis.tasks.extract_content", extract_task),
     ):
         await tasks.backfill_extractions(ctx=ctx)
 
     assert extract_task.kiq.await_count == 3
+
+
+# ---------------------------------------------------------------------------
+# Pattern A' gatekeeper: article 不在 / try_advance_from None で skip
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_extractions_skips_when_article_missing() -> None:
+    """session.get が None なら kiq せず skip する。"""
+    from app.maintenance import tasks
+
+    ctx = _ctx_with_session_factory()
+    fake_session = MagicMock()
+    fake_session.get = AsyncMock(return_value=None)
+    ctx.state.session_factory.return_value.__aenter__ = AsyncMock(
+        return_value=fake_session
+    )
+    ctx.state.session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    backlog_instance = MagicMock()
+    backlog_instance.article_ids_pending_extraction = AsyncMock(return_value=[42])
+
+    extract_task = MagicMock()
+    extract_task.kiq = AsyncMock()
+
+    with (
+        patch.object(tasks.settings, "backfill_extractions_enabled", True),
+        patch("app.maintenance.tasks.PipelineBacklog", return_value=backlog_instance),
+        patch(
+            "app.maintenance.tasks._update_circuit_breaker",
+            new=AsyncMock(return_value=1),
+        ),
+        patch(
+            "app.maintenance.tasks.consume_daily_budget",
+            new=AsyncMock(return_value=1),
+        ),
+        patch("app.analysis.tasks.extract_content", extract_task),
+    ):
+        await tasks.backfill_extractions(ctx=ctx)
+
+    extract_task.kiq.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_extractions_skips_when_advance_returns_none() -> None:
+    """ReadyForExtraction.try_advance_from が None なら kiq せず skip する。"""
+    from app.maintenance import tasks
+
+    ctx = _ctx_with_session_factory()
+    fake_article = MagicMock()
+    fake_session = MagicMock()
+    fake_session.get = AsyncMock(return_value=fake_article)
+    ctx.state.session_factory.return_value.__aenter__ = AsyncMock(
+        return_value=fake_session
+    )
+    ctx.state.session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    backlog_instance = MagicMock()
+    backlog_instance.article_ids_pending_extraction = AsyncMock(return_value=[42])
+
+    extract_task = MagicMock()
+    extract_task.kiq = AsyncMock()
+
+    with (
+        patch.object(tasks.settings, "backfill_extractions_enabled", True),
+        patch("app.maintenance.tasks.PipelineBacklog", return_value=backlog_instance),
+        patch(
+            "app.maintenance.tasks._update_circuit_breaker",
+            new=AsyncMock(return_value=1),
+        ),
+        patch(
+            "app.maintenance.tasks.consume_daily_budget",
+            new=AsyncMock(return_value=1),
+        ),
+        patch(
+            "app.analysis.extraction.domain.ready.ReadyForExtraction.try_advance_from",
+            new=AsyncMock(return_value=None),
+        ),
+        patch("app.analysis.tasks.extract_content", extract_task),
+    ):
+        await tasks.backfill_extractions(ctx=ctx)
+
+    extract_task.kiq.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

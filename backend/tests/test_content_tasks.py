@@ -3,6 +3,9 @@
 PR 2b: Outcome union 切替。``DiscoveredArticleMissing`` 例外捕捉が
 ``ContentFetchSkippedOutcome("discovered_not_found")`` の Service 戻り値で
 置き換えられたことを検証する。
+
+Phase 3 (typed-pipeline-extraction) で chain は ``article_id`` 直渡しから
+``ReadyForExtraction`` 構築 + ``kiq(ready)`` に変更されている。
 """
 
 from datetime import UTC, datetime
@@ -10,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.analysis.extraction.domain.ready import ReadyForExtraction
 from app.collection.errors import TemporaryFetchError
 from app.collection.extraction.domain import Article, PublishedAt
 from app.collection.extraction.service import (
@@ -25,7 +29,12 @@ def _make_ctx(
 ) -> MagicMock:
     """state.session_factory と labels を持つ taskiq Context のモックを作成する。"""
     ctx = MagicMock()
+    fake_session = MagicMock()
     ctx.state.session_factory = MagicMock()
+    ctx.state.session_factory.return_value.__aenter__ = AsyncMock(
+        return_value=fake_session
+    )
+    ctx.state.session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
     ctx.message.labels = {
         "retry_count": retry_count,
         "max_retries": max_retries,
@@ -52,13 +61,20 @@ def _article(id: int = 42) -> Article:
 class TestFetchContent:
     @pytest.mark.asyncio
     async def test_fetched_outcome_chains_analyze(self) -> None:
-        """ContentFetchedOutcome を受け取ったら article.id を下流にチェーンする。"""
+        """ContentFetchedOutcome を受け取ったら Ready を構築し下流にチェーンする。"""
         from app.collection.tasks import fetch_content
 
         mock_ctx = _make_ctx()
+        ready = ReadyForExtraction(
+            article_id=42, original_title="Title", original_content="x" * 60
+        )
 
         with (
             patch("app.collection.tasks.ContentFetchService") as mock_svc_cls,
+            patch(
+                "app.analysis.extraction.domain.ready.ReadyForExtraction.try_advance_from",
+                new=AsyncMock(return_value=ready),
+            ),
             patch("app.analysis.tasks.extract_content") as mock_analyze,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
@@ -68,17 +84,24 @@ class TestFetchContent:
             await fetch_content(discovered_article_id=1, ctx=mock_ctx)
 
         mock_svc_cls.return_value.execute.assert_called_once_with(1)
-        mock_analyze.kiq.assert_called_once_with(42)
+        mock_analyze.kiq.assert_called_once_with(ready)
 
     @pytest.mark.asyncio
     async def test_already_fetched_outcome_chains_analyze(self) -> None:
-        """AlreadyFetchedOutcome (冪等ヒット) も article.id を下流にチェーンする。"""
+        """AlreadyFetchedOutcome (冪等ヒット) も Ready を構築し下流にチェーンする。"""
         from app.collection.tasks import fetch_content
 
         mock_ctx = _make_ctx()
+        ready = ReadyForExtraction(
+            article_id=99, original_title="Title", original_content="x" * 60
+        )
 
         with (
             patch("app.collection.tasks.ContentFetchService") as mock_svc_cls,
+            patch(
+                "app.analysis.extraction.domain.ready.ReadyForExtraction.try_advance_from",
+                new=AsyncMock(return_value=ready),
+            ),
             patch("app.analysis.tasks.extract_content") as mock_analyze,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
@@ -87,7 +110,30 @@ class TestFetchContent:
             mock_analyze.kiq = AsyncMock()
             await fetch_content(discovered_article_id=1, ctx=mock_ctx)
 
-        mock_analyze.kiq.assert_called_once_with(99)
+        mock_analyze.kiq.assert_called_once_with(ready)
+
+    @pytest.mark.asyncio
+    async def test_does_not_chain_when_advance_returns_none(self) -> None:
+        """precondition 未充足 (try_advance_from が None) なら chain しない。"""
+        from app.collection.tasks import fetch_content
+
+        mock_ctx = _make_ctx()
+
+        with (
+            patch("app.collection.tasks.ContentFetchService") as mock_svc_cls,
+            patch(
+                "app.analysis.extraction.domain.ready.ReadyForExtraction.try_advance_from",
+                new=AsyncMock(return_value=None),
+            ),
+            patch("app.analysis.tasks.extract_content") as mock_analyze,
+        ):
+            mock_svc_cls.return_value.execute = AsyncMock(
+                return_value=ContentFetchedOutcome(article=_article(id=42))
+            )
+            mock_analyze.kiq = AsyncMock()
+            await fetch_content(discovered_article_id=1, ctx=mock_ctx)
+
+        mock_analyze.kiq.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_skipped_outcome_does_not_chain(self) -> None:

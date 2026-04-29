@@ -75,7 +75,9 @@ class GeminiExtractor(BaseExtractor):
     MODEL = "gemini-2.5-flash-lite"
     RPM = 100
     RPD = 1500
-    CONTENT_MAX_LENGTH = 8000
+    # Gemini 固有の入力整形 (本文を切り詰めて投入)。system 不変条件としての hard cap
+    # (200_000 char) は ReadyForExtraction.MAX_CONTENT_LENGTH 側で別途保証される。
+    CONTENT_MAX_LENGTH = 20_000
 
     def __init__(self) -> None:
         api_key = settings.gemini_api_key.get_secret_value()

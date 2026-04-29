@@ -199,6 +199,8 @@ async def fetch_content(
     ctx: Context = TaskiqDepends(),
 ) -> None:
     """単一記事の本文コンテンツを取得し Article 行を作成する。"""
+    from app.analysis.extraction.domain.ready import ReadyForExtraction
+    from app.analysis.extraction.repository import ExtractionRepository
     from app.analysis.tasks import extract_content
 
     session_factory = ctx.state.session_factory
@@ -216,12 +218,21 @@ async def fetch_content(
             return
         raise
 
-    # Article 行が揃ったときのみ分析にチェーン
+    # Stage C へ chain (Pattern A': 上流 Task が下流 Ready を構築 — spec §7.1)
     match outcome:
         case (
             ContentFetchedOutcome(article=article)
             | AlreadyFetchedOutcome(article=article)
         ):
-            await extract_content.kiq(article.id)
+            async with session_factory() as session:
+                extraction_repo = ExtractionRepository(session)
+                ready = await ReadyForExtraction.try_advance_from(
+                    article_id=article.id,
+                    original_title=article.title,
+                    original_content=article.body,
+                    extraction_repo=extraction_repo,
+                )
+            if ready is not None:
+                await extract_content.kiq(ready)
         case ContentFetchSkippedOutcome():
             pass  # service 側でログ済み
