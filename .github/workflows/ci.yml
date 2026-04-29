@@ -218,13 +218,26 @@ jobs:
           PGPASSWORD: vector
         run: psql -h localhost -U vector -d vector -c "CREATE SCHEMA IF NOT EXISTS auth"
 
+      # `setup-node@v6` は `~/.npm` 全体を cache 対象にするが key が
+      # `package-lock.json` のハッシュ。npx で fetch される `_npx/<spec hash>/`
+      # はバージョンを変えると別 subdir に展開されるため、lockfile が変わらない
+      # PR では新 spec の `_npx` が populate されても hit 扱いで save されず
+      # 永続化されない。CLI バージョンを直接 key にした専用 cache を別建てし、
+      # `_npx` (展開先) と `_cacache` (tarball) を恒久キャッシュする。
+      - name: Cache Better Auth CLI (npx tarball + extracted)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.npm/_npx
+            ~/.npm/_cacache
+          key: better-auth-cli-${{ runner.os }}-1.4.21
+
       - name: Apply Better Auth schema
         # `auth.ts` は `import "server-only"` を持つため CLI が load できない。
         # CLI 専用の `auth.cli.ts` (server-only なし、runtime と同 config) を
         # 経由する。frontend/src/lib/auth/auth.cli.ts のドキュメントを参照。
-        # バージョンは @latest ではなく明示 pin。`@latest` は毎 PR 走るたびに
-        # npm レジストリへ問い合わせて再 download するため、pin + setup-node の
-        # `~/.npm` (npx tarball cache を含む) で 2 回目以降は cache hit する。
+        # バージョンは @latest ではなく明示 pin。直前の `actions/cache` で
+        # `_npx` が restore されていれば npx の install を skip して即起動。
         run: npx --yes @better-auth/cli@1.4.21 migrate --config src/lib/auth/auth.cli.ts -y
         working-directory: frontend
 
