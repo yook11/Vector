@@ -14,7 +14,7 @@ export const metadata: Metadata = {
 export default async function WeeklyTrendsPage() {
   const data = await getWeeklyTrends();
 
-  if (!data.weekStart || data.categories.length === 0) {
+  if (data.state === "empty") {
     return (
       <main className="h-full overflow-y-auto">
         <div className="mx-auto max-w-5xl px-8 sm:px-12 py-6 sm:py-8 flex flex-col gap-8">
@@ -39,11 +39,9 @@ export default async function WeeklyTrendsPage() {
           <h1 className="text-base font-medium">Weekly Trends</h1>
           <p className="text-xs text-muted-foreground">
             {formatDate(data.weekStart)} – {formatDate(data.weekEnd)}
-            {data.sourceAnalysisCount !== null && (
-              <span className="ml-2">
-                · {data.sourceAnalysisCount} 件の分析を集計
-              </span>
-            )}
+            <span className="ml-2">
+              · {data.sourceAnalysisCount} 件の分析を集計
+            </span>
           </p>
         </header>
 

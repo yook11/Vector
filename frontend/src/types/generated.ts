@@ -177,7 +177,7 @@ export interface paths {
     };
     /**
      * Get Weekly Trends
-     * @description 最新週の weekly trends snapshot を返す (なければ空状態)。
+     * @description 最新週の weekly trends snapshot を返す (なければ state="empty")。
      */
     get: operations["get_weekly_trends_api_v1_weekly_trends_get"];
     put?: never;
@@ -442,6 +442,17 @@ export interface components {
       dispatchedCount: number;
     };
     /**
+     * EmptyWeeklyTrends
+     * @description snapshot 未生成の状態 (週情報フィールドは存在しない)。
+     */
+    EmptyWeeklyTrends: {
+      /**
+       * @description discriminator enum property added by openapi-typescript
+       * @enum {string}
+       */
+      state: "empty";
+    };
+    /**
      * EntityName
      * @description エンティティの固有名。
      *
@@ -565,6 +576,36 @@ export interface components {
       totalPages: number;
     };
     /**
+     * ReadyWeeklyTrends
+     * @description snapshot 生成済の状態。
+     */
+    ReadyWeeklyTrends: {
+      /**
+       * @description discriminator enum property added by openapi-typescript
+       * @enum {string}
+       */
+      state: "ready";
+      /**
+       * Weekstart
+       * Format: date
+       */
+      weekStart: string;
+      /**
+       * Weekend
+       * Format: date
+       */
+      weekEnd: string;
+      /**
+       * Generatedat
+       * Format: date-time
+       */
+      generatedAt: string;
+      /** Sourceanalysiscount */
+      sourceAnalysisCount: number;
+      /** Categories */
+      categories: components["schemas"]["_CategoryTrendsOut"][];
+    };
+    /**
      * SafeUrl
      * @description Pydantic によって検証された HTTP/HTTPS URL。
      *
@@ -651,24 +692,6 @@ export interface components {
     WatchlistIds: {
       /** Ids */
       ids: number[];
-    };
-    /**
-     * WeeklyTrendsResponse
-     * @description GET /api/v1/weekly-trends のレスポンス。
-     *
-     *     snapshot 不在時は ``empty()`` を呼び、全フィールド null + 空 categories で返す。
-     */
-    WeeklyTrendsResponse: {
-      /** Weekstart */
-      weekStart: string | null;
-      /** Weekend */
-      weekEnd: string | null;
-      /** Generatedat */
-      generatedAt: string | null;
-      /** Sourceanalysiscount */
-      sourceAnalysisCount: number | null;
-      /** Categories */
-      categories: components["schemas"]["_CategoryTrendsOut"][];
     };
     /** _CategoryTrendsOut */
     _CategoryTrendsOut: {
@@ -1035,7 +1058,9 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          "application/json": components["schemas"]["WeeklyTrendsResponse"];
+          "application/json":
+            | components["schemas"]["ReadyWeeklyTrends"]
+            | components["schemas"]["EmptyWeeklyTrends"];
         };
       };
       /** @description Validation Error */
