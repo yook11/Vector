@@ -93,16 +93,23 @@ def upgrade() -> None:
     """)
 
     # 5. シーケンスリセット
+    # fresh DB / CI 初回など空テーブルでは COALESCE(MAX(id), 0) が 0 となり、
+    # 2-arg `setval(seq, 0)` が "out of bounds (1..)" で fail する。
+    # 3-arg 形式 `setval(seq, value, is_called=false)` を使うと「次の nextval()
+    # が指定値を返す」セマンティクスになるので、`MAX(id)+1` を渡せば既存データ
+    # ありでも next=MAX+1 (従来と等価)、空なら next=1 から開始する。
     op.execute("""
         SELECT setval(
             pg_get_serial_sequence('discovered_articles', 'id'),
-            COALESCE((SELECT MAX(id) FROM discovered_articles), 0)
+            COALESCE((SELECT MAX(id) FROM discovered_articles), 0) + 1,
+            false
         )
     """)
     op.execute("""
         SELECT setval(
             pg_get_serial_sequence('articles', 'id'),
-            COALESCE((SELECT MAX(id) FROM articles), 0)
+            COALESCE((SELECT MAX(id) FROM articles), 0) + 1,
+            false
         )
     """)
 
@@ -184,8 +191,12 @@ def downgrade() -> None:
     )
 
     # 新しい制約・カラムを削除
-    op.drop_constraint("uq_article_analyses_article_id", "article_analyses", type_="unique")
-    op.drop_constraint("fk_article_analyses_article_id", "article_analyses", type_="foreignkey")
+    op.drop_constraint(
+        "uq_article_analyses_article_id", "article_analyses", type_="unique"
+    )
+    op.drop_constraint(
+        "fk_article_analyses_article_id", "article_analyses", type_="foreignkey"
+    )
     op.drop_column("article_analyses", "article_id")
 
     # テーブル削除
