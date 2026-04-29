@@ -1,10 +1,14 @@
 /**
- * URL search params の SSR 側ユーティリティ (純関数のみ)。
+ * news 一覧用 URL search params の SSR 側パーサ (純関数)。
  *
- * `app/(protected)/page.tsx` / `app/(protected)/watchlist/page.tsx` の
- * Server Component から `searchParams` を `ArticleQuery` に正規化するために使う。
+ * `app/(protected)/page.tsx` / `app/(protected)/watchlist/page.tsx` の Server
+ * Component から `searchParams` を `ArticleQuery` に正規化する。zod preprocess
+ * helper (`SingleString` / `PositiveIntFromString` / `SortOrder`) は news 同梱
+ * (現状 news 以外の caller なし。将来再利用要件が出た時点で `lib/zod-helpers/`
+ * に昇格する想定)。
  *
- * Client 側のフック (`useUpdateSearchParams` 等) は `search-params-client.ts`。
+ * Client 側のフック (`useUpdateSearchParams` 等) は `lib/search-params/client.ts`
+ * に残留 (URL 更新自体は cross-cutting)。
  */
 
 import { z } from "zod";

@@ -11,3 +11,4 @@ export { NewsList } from "./components/NewsList";
 export { NewsPagination } from "./components/NewsPagination";
 export { RelatedArticles } from "./components/RelatedArticles";
 export { SearchBar } from "./components/SearchBar";
+export { parseArticleQuery } from "./search-params";

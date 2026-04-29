@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseArticleQuery } from "./server";
+import { parseArticleQuery } from "./search-params";
 
 describe("parseArticleQuery", () => {
   describe("category", () => {

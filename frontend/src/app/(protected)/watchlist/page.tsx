@@ -1,9 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Suspense } from "react";
-import { NewsList, NewsPagination } from "@/features/news";
+import { NewsList, NewsPagination, parseArticleQuery } from "@/features/news";
 import { getWatchlist } from "@/features/watchlist";
-import { parseArticleQuery } from "@/lib/search-params/server";
 
 export const metadata: Metadata = {
   title: "Watchlist | Vector",

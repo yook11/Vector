@@ -7,11 +7,11 @@ import {
   NewsFilters,
   NewsList,
   NewsPagination,
+  parseArticleQuery,
   SearchBar,
   searchArticles,
 } from "@/features/news";
 import { getWatchlistIds } from "@/features/watchlist";
-import { parseArticleQuery } from "@/lib/search-params/server";
 
 interface DashboardPageProps {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
