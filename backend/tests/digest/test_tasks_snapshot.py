@@ -1,25 +1,37 @@
-"""generate_weekly_snapshot タスクのテスト。
+"""generate_weekly_snapshot タスクのテスト (Phase 4)。
 
 検証する観点:
 - ``schedule`` ラベルに JST 月曜 00:05 相当の cron (= UTC 日曜 15:05) が登録される
-- ``ctx.state.session_factory`` を Service にそのまま渡す
-- ``Generated`` / ``Skipped`` どちらの戻り値でも logger.info で完了を観測できる
+- ctx.state.session_factory + Ready 構築 + Service.execute(ready) の dispatch
+- ``ReadyForDigest.try_advance_from`` が None を返したら Service を呼ばずに
+  early return する
 - Service が例外を上げた場合は捕まえずに伝播する (failure_visibility 原則)
 """
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
+from zoneinfo import ZoneInfo
 
 import pytest
 
-from app.digest.application.snapshot import Generated, Skipped
+from app.digest.application.snapshot import Generated
+from app.digest.domain.ready import ReadyForDigest
+
+JST = ZoneInfo("Asia/Tokyo")
 
 
 def _ctx_with_session_factory() -> MagicMock:
+    """taskiq Context の最小 fake。``async with session_factory()`` を fake する。"""
     ctx = MagicMock()
-    ctx.state.session_factory = MagicMock(name="session_factory")
+
+    session = MagicMock()
+    session_ctx = MagicMock()
+    session_ctx.__aenter__ = AsyncMock(return_value=session)
+    session_ctx.__aexit__ = AsyncMock(return_value=None)
+    factory = MagicMock(return_value=session_ctx)
+    ctx.state.session_factory = factory
     return ctx
 
 
@@ -45,45 +57,62 @@ class TestSchedule:
 
 class TestRun:
     @pytest.mark.asyncio
-    async def test_invokes_service_with_session_factory(self) -> None:
-        """ctx.state.session_factory をそのまま Service コンストラクタに渡す。"""
+    async def test_invokes_service_with_ready(self) -> None:
+        """try_advance_from で Ready が返ったら Service.execute(ready) を呼ぶ。"""
         from app.digest.tasks import snapshot
 
         ctx = _ctx_with_session_factory()
+        target_week = date(2026, 4, 20)
+        ready = ReadyForDigest(week_start=target_week, force=False)
+
         service = MagicMock()
-        service.generate_for_latest_completed_week = AsyncMock(
-            return_value=Generated(
-                week_start=date(2026, 4, 20), source_analysis_count=42
-            )
+        service.execute = AsyncMock(
+            return_value=Generated(week_start=target_week, source_analysis_count=42)
         )
 
-        with patch(
-            "app.digest.tasks.snapshot.WeeklyTrendsSnapshotService",
-            return_value=service,
-        ) as service_cls:
-            await snapshot.generate_weekly_snapshot(ctx=ctx)
-
-        service_cls.assert_called_once_with(ctx.state.session_factory)
-        service.generate_for_latest_completed_week.assert_awaited_once_with()
-
-    @pytest.mark.asyncio
-    async def test_handles_skipped_outcome(self) -> None:
-        """Skipped が返っても例外なく完了する (Service の判断を尊重)。"""
-        from app.digest.tasks import snapshot
-
-        ctx = _ctx_with_session_factory()
-        service = MagicMock()
-        service.generate_for_latest_completed_week = AsyncMock(
-            return_value=Skipped(week_start=date(2026, 4, 20))
-        )
-
-        with patch(
-            "app.digest.tasks.snapshot.WeeklyTrendsSnapshotService",
-            return_value=service,
+        with (
+            patch(
+                "app.digest.tasks.snapshot.now_in_jst",
+                return_value=datetime(2026, 4, 27, 0, 5, tzinfo=JST),
+            ),
+            patch.object(
+                ReadyForDigest, "try_advance_from", new=AsyncMock(return_value=ready)
+            ),
+            patch(
+                "app.digest.tasks.snapshot.WeeklyTrendsSnapshotService",
+                return_value=service,
+            ) as service_cls,
         ):
             await snapshot.generate_weekly_snapshot(ctx=ctx)
 
-        service.generate_for_latest_completed_week.assert_awaited_once_with()
+        service_cls.assert_called_once_with(ctx.state.session_factory)
+        service.execute.assert_awaited_once_with(ready)
+
+    @pytest.mark.asyncio
+    async def test_skips_service_when_ready_is_none(self) -> None:
+        """try_advance_from が None を返したら Service.execute は呼ばれない。"""
+        from app.digest.tasks import snapshot
+
+        ctx = _ctx_with_session_factory()
+        service = MagicMock()
+        service.execute = AsyncMock()
+
+        with (
+            patch(
+                "app.digest.tasks.snapshot.now_in_jst",
+                return_value=datetime(2026, 4, 27, 0, 5, tzinfo=JST),
+            ),
+            patch.object(
+                ReadyForDigest, "try_advance_from", new=AsyncMock(return_value=None)
+            ),
+            patch(
+                "app.digest.tasks.snapshot.WeeklyTrendsSnapshotService",
+                return_value=service,
+            ),
+        ):
+            await snapshot.generate_weekly_snapshot(ctx=ctx)
+
+        service.execute.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_propagates_service_exception(self) -> None:
@@ -91,12 +120,19 @@ class TestRun:
         from app.digest.tasks import snapshot
 
         ctx = _ctx_with_session_factory()
+        ready = ReadyForDigest(week_start=date(2026, 4, 20), force=False)
+
         service = MagicMock()
-        service.generate_for_latest_completed_week = AsyncMock(
-            side_effect=RuntimeError("aggregation failed")
-        )
+        service.execute = AsyncMock(side_effect=RuntimeError("aggregation failed"))
 
         with (
+            patch(
+                "app.digest.tasks.snapshot.now_in_jst",
+                return_value=datetime(2026, 4, 27, 0, 5, tzinfo=JST),
+            ),
+            patch.object(
+                ReadyForDigest, "try_advance_from", new=AsyncMock(return_value=ready)
+            ),
             patch(
                 "app.digest.tasks.snapshot.WeeklyTrendsSnapshotService",
                 return_value=service,

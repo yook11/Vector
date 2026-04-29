@@ -5,13 +5,14 @@
   を JST 月曜起点で集計し、``weekly_trends_snapshots`` に 1 行 INSERT する
 
 責務分離:
-- ビジネスロジックは ``WeeklyTrendsSnapshotService`` 側 (集計 / 既存判定 /
-  トランザクション境界 / Outcome 判断)
-- ここはキュー機構 (cron 起動 + ``ctx.state.session_factory`` 注入) のみ
+- 入口 task は cron 引数 (`force=False` 固定) から ``ReadyForDigest`` を構築し
+  ``WeeklyTrendsSnapshotService.execute(ready)`` に委譲する gatekeeper
+- ビジネスロジック (集計 / 保存) は Service 側
+- precondition (既存 snapshot 判定) は ``ReadyForDigest.try_advance_from`` 側
 
 エラー方針 (feedback_failure_visibility.md):
 - 例外は捕まえずに伝播させる (taskiq 側の retry/log に委ねる)
-- ``Skipped`` (既存 snapshot と並行レース敗北) は正常終了として扱う
+- 既存 snapshot あり (Ready が None) は正常終了として扱う
 """
 
 from __future__ import annotations
@@ -20,11 +21,10 @@ import structlog
 from taskiq import Context, TaskiqDepends
 
 from app.brokers import broker_digest
-from app.digest.application.snapshot import (
-    Generated,
-    Skipped,
-    WeeklyTrendsSnapshotService,
-)
+from app.digest.application.snapshot import WeeklyTrendsSnapshotService
+from app.digest.domain.ready import ReadyForDigest
+from app.digest.domain.week import latest_completed_week_start, now_in_jst
+from app.digest.repository.snapshots import SnapshotRepository
 
 logger = structlog.get_logger(__name__)
 
@@ -39,17 +39,26 @@ logger = structlog.get_logger(__name__)
 async def generate_weekly_snapshot(ctx: Context = TaskiqDepends()) -> None:
     """直近完了週 (JST 月曜起点) の weekly trends snapshot を生成する。"""
     session_factory = ctx.state.session_factory
+    week_start = latest_completed_week_start(now_in_jst())
+
+    async with session_factory() as session:
+        snapshot_repo = SnapshotRepository(session)
+        ready = await ReadyForDigest.try_advance_from(
+            week_start=week_start,
+            force=False,
+            snapshot_repo=snapshot_repo,
+        )
+    if ready is None:
+        logger.info(
+            "weekly_snapshot_task_skipped",
+            week_start=week_start.isoformat(),
+        )
+        return
+
     service = WeeklyTrendsSnapshotService(session_factory)
-    outcome = await service.generate_for_latest_completed_week()
-    match outcome:
-        case Generated(week_start=ws, source_analysis_count=n):
-            logger.info(
-                "weekly_snapshot_task_generated",
-                week_start=ws.isoformat(),
-                source_analysis_count=n,
-            )
-        case Skipped(week_start=ws):
-            logger.info(
-                "weekly_snapshot_task_skipped",
-                week_start=ws.isoformat(),
-            )
+    outcome = await service.execute(ready)
+    logger.info(
+        "weekly_snapshot_task_generated",
+        week_start=outcome.week_start.isoformat(),
+        source_analysis_count=outcome.source_analysis_count,
+    )
