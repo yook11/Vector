@@ -3,6 +3,8 @@ export { getArticles } from "./api/get-articles";
 export { getCategories } from "./api/get-categories";
 export { getSimilarArticles } from "./api/get-similar-articles";
 export { searchArticles } from "./api/search-articles";
+export { CategorySidebar } from "./components/CategorySidebar";
+export { MobileSidebar } from "./components/MobileSidebar";
 export { NewsDetail } from "./components/NewsDetail";
 export { NewsFilters } from "./components/NewsFilters";
 export { NewsList } from "./components/NewsList";

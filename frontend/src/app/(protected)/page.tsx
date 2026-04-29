@@ -1,9 +1,9 @@
 import { Suspense } from "react";
-import { CategorySidebar } from "@/components/layout/CategorySidebar";
-import { MobileSidebar } from "@/components/layout/MobileSidebar";
 import {
+  CategorySidebar,
   getArticles,
   getCategories,
+  MobileSidebar,
   NewsFilters,
   NewsList,
   NewsPagination,

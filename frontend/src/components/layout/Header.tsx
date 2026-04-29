@@ -2,7 +2,7 @@ import Link from "next/link";
 import { MobileNav } from "@/components/layout/MobileNav";
 import { NavLink } from "@/components/layout/NavLink";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
-import { UserMenu } from "@/components/layout/UserMenu";
+import { UserMenu } from "@/features/auth";
 
 const navItems = [
   { href: "/", label: "ニュース" },
