@@ -87,7 +87,7 @@ class ReadyForDigest(BaseModel):
 
         Note:
             `cls()` 構築を最初に行うことで ``model_validator`` (月曜判定) を
-            外部 Repository 呼び出しより先に発火させ、無効入力で DB を叩かないようにする。
+            外部 Repository 呼び出しより先に発火させ、無効入力で DB を叩かない。
         """
         candidate = cls(week_start=week_start, force=force)
         if not force and await snapshot_repo.exists_for_week(week_start):
