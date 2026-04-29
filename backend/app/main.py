@@ -29,7 +29,7 @@ logger = structlog.get_logger(__name__)
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # 起動時: タスクワーカーは別の Docker サービス（worker/scheduler）で動作する。
     # 必要に応じてキャッシュのウォーミングや接続チェックなどをここに追加する。
     yield
