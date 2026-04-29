@@ -120,6 +120,7 @@ export function SourceTable({ sources }: SourceTableProps) {
                 checked={source.isActive}
                 disabled={pending}
                 onCheckedChange={() => handleToggle(source)}
+                aria-label={`「${source.name}」の有効化を切り替える`}
               />
             </TableCell>
             <TableCell className="text-right">
