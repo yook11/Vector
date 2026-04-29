@@ -5,8 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies import CurrentUser, get_optional_user, get_session
-from app.repositories.watchlist import WatchlistRepository
+from app.dependencies import get_session
 from app.schemas.articles import PaginatedArticleResponse, SemanticSearchParams
 from app.search.repository import SemanticSearchRepository
 from app.search.service import SemanticSearchService
@@ -17,17 +16,17 @@ router = APIRouter(prefix="/api/v1/articles", tags=["semantic-search"])
 def get_semantic_search_service(
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> SemanticSearchService:
-    return SemanticSearchService(
-        search_repo=SemanticSearchRepository(session),
-        watchlist_repo=WatchlistRepository(session),
-    )
+    return SemanticSearchService(search_repo=SemanticSearchRepository(session))
 
 
 @router.get("/search")
 async def search_articles(
     params: Annotated[SemanticSearchParams, Query()],
-    user: Annotated[CurrentUser | None, Depends(get_optional_user)],
     service: Annotated[SemanticSearchService, Depends(get_semantic_search_service)],
 ) -> PaginatedArticleResponse:
-    """指定クエリテキストとのセマンティック類似度で記事を検索する。"""
-    return await service.search(params, user.id if user else None)
+    """指定クエリテキストとのセマンティック類似度で記事を検索する。
+
+    レスポンスは user 非依存。per-user の watchlist 状態は
+    GET /api/v1/me/watchlist/ids で別取得し frontend で merge する。
+    """
+    return await service.search(params)

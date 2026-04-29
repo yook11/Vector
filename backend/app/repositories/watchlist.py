@@ -49,6 +49,16 @@ class WatchlistRepository:
 
         return analyses, total
 
+    async def list_ids(self, user_id: UUID) -> list[int]:
+        """ユーザーがウォッチ中の article_analysis_id を新しい順に返す."""
+        stmt = (
+            select(WatchlistEntry.article_analysis_id)
+            .where(WatchlistEntry.user_id == user_id)
+            .order_by(WatchlistEntry.created_at.desc())
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
     async def is_watched(self, user_id: UUID, article_id: int) -> bool:
         """ユーザーが当該記事を既にウォッチ中かを判定する."""
         stmt = select(
@@ -64,19 +74,6 @@ class WatchlistRepository:
         """ユーザーのウォッチリストに記事を追加する."""
         entry = WatchlistEntry(user_id=user_id, article_analysis_id=article_id)
         self.session.add(entry)
-
-    async def watched_among(self, user_id: UUID, article_ids: set[int]) -> set[int]:
-        """article_ids のうちユーザーがウォッチ中のものを返す.
-
-        事前条件: article_ids は非空であること. 対象が空の場合は
-        呼び出し側でこのメソッドの呼び出しをスキップする.
-        """
-        stmt = select(WatchlistEntry.article_analysis_id).where(
-            WatchlistEntry.user_id == user_id,
-            WatchlistEntry.article_analysis_id.in_(article_ids),
-        )
-        result = await self.session.execute(stmt)
-        return set(result.scalars().all())
 
     async def unwatch(self, user_id: UUID, article_id: int) -> None:
         """ユーザーのウォッチリストから記事を削除する.

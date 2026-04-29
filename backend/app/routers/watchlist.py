@@ -10,7 +10,7 @@ from app.repositories.articles import ArticleRepository
 from app.repositories.watchlist import WatchlistRepository
 from app.schemas.articles import PaginatedArticleResponse
 from app.schemas.base import PaginationParams
-from app.schemas.watchlist import WatchlistCreate
+from app.schemas.watchlist import WatchlistCreate, WatchlistIds
 from app.services.watchlist import WatchlistService
 
 router = APIRouter(prefix="/api/v1/me", tags=["watchlist"])
@@ -20,6 +20,16 @@ def get_watchlist_service(
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> WatchlistService:
     return WatchlistService(WatchlistRepository(session), ArticleRepository(session))
+
+
+@router.get("/watchlist/ids")
+async def list_watchlist_ids(
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    service: Annotated[WatchlistService, Depends(get_watchlist_service)],
+) -> WatchlistIds:
+    """ウォッチ中の article_id 集合を返す (per-user, cache 不可)。"""
+    ids = await service.list_ids(user.id)
+    return WatchlistIds(ids=ids)
 
 
 @router.get("/watchlist")
