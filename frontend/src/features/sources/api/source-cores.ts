@@ -1,7 +1,7 @@
 /**
  * Server Action 内部の HTTP 構築ロジック (pure 関数群)。
  *
- * 副作用 (guard / revalidateTag) は wrapper 側の Server Action に残し、
+ * 副作用 (guard / updateTag) は wrapper 側の Server Action に残し、
  * ここでは fetcher を引数で受けて path / RequestInit を組み立てるだけにする。
  * これにより `vi.fn()` を fetcher として渡せばテスト可能 (Phase 1 の proxy 抽出
  * と同じ思想)。

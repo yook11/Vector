@@ -69,4 +69,48 @@ test.describe("Watchlist add/remove flow", () => {
       .first()
       .click();
   });
+
+  test("watchlist 追加後に aria-pressed が flicker しない", async ({
+    page,
+  }) => {
+    // PR-Z2 で `revalidateTag(_, "max") + refresh()` から `updateTag` 単独に
+    // 移行した。`updateTag` は同一 Server Action リクエスト内で server data
+    // cache を吹き飛ばし current route を再生成するため、`useOptimistic` の
+    // base が `getWatchlistIds` の新値で同期される前に "false" に戻る flicker
+    // が起きないことが要件。1 秒間 (200ms x 5 回) `aria-pressed` を観測して
+    // 一度も "true" 以外を返さないことを確認する。
+    await page.goto("/");
+    await expect(
+      page.getByRole("heading", { name: "Dashboard" }),
+    ).toBeVisible();
+    const candidateCount = await page
+      .locator('button[aria-pressed="false"]')
+      .count();
+    test.skip(
+      candidateCount === 0,
+      "Dashboard 上に未 watch 記事が無いため skip (seed 依存)",
+    );
+    const targetButton = await page
+      .locator('button[aria-pressed="false"]')
+      .first()
+      .elementHandle();
+    if (targetButton === null) {
+      throw new Error("expected at least one unwatched button");
+    }
+    await targetButton.click();
+    // optimistic で即 "true" に変わることを確認した上で、Server Action 完了後
+    // も "true" を維持し続けることを 1 秒間観測する。
+    await expect
+      .poll(async () => await targetButton.getAttribute("aria-pressed"))
+      .toBe("true");
+    for (let i = 0; i < 5; i++) {
+      await page.waitForTimeout(200);
+      expect(await targetButton.getAttribute("aria-pressed")).toBe("true");
+    }
+    // 原状回復
+    await page
+      .getByRole("button", { name: "Remove from watchlist" })
+      .first()
+      .click();
+  });
 });
