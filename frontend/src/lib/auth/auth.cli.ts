@@ -1,0 +1,63 @@
+// Better Auth CLI (`@better-auth/cli migrate`) からのみ読まれる schema 定義用
+// config。runtime からは絶対に import しない。
+//
+// なぜ別ファイルか:
+//   - `./auth.ts` は `import "server-only"` を持ち、CLI が ESM resolution する
+//     際にサーバ用の guard で fail する (公式 README の制約)。
+//   - server-only を外すと client component から間違って auth インスタンスを
+//     掴めてしまい security guard が崩れるため、runtime ファイルは触らない。
+//
+// 重複の維持責任:
+//   - 本ファイルの betterAuth(...) 引数は schema に効く範囲で `./auth.ts` と
+//     一致させること。具体的には: database / emailAndPassword /
+//     user.additionalFields / session の各フィールド。
+//   - 例外として `advanced.database.generateId` は意図的に異なる値を持つ:
+//       * runtime (auth.ts): `() => uuidv7()` で UUID v7 (時刻順) を生成
+//       * CLI (本ファイル):  `"uuid"` 文字列で Better Auth CLI に uuid 列型
+//         での schema 生成を指示する (CLI は generateId === "uuid" でしか
+//         postgres uuid 型を選択しない、`get-migration.mjs:185` 参照)
+//     uuid 列は v7 文字列も受け取れるため runtime と整合する。
+
+import { betterAuth } from "better-auth";
+import type { PoolClient } from "pg";
+import { Pool } from "pg";
+import { requireEnv } from "@/lib/env";
+
+const pool = new Pool({
+  connectionString: requireEnv("AUTH_DATABASE_URL"),
+});
+
+pool.on("connect", (client: PoolClient) => {
+  client.query("SET search_path TO auth, public");
+});
+
+export const auth = betterAuth({
+  database: pool,
+  basePath: "/api/auth",
+  emailAndPassword: {
+    enabled: true,
+    minPasswordLength: 8,
+  },
+  user: {
+    additionalFields: {
+      role: {
+        type: "string",
+        defaultValue: "user",
+        input: false,
+      },
+    },
+  },
+  session: {
+    cookieCache: { enabled: false },
+  },
+  trustedOrigins: [requireEnv("BETTER_AUTH_URL")],
+  advanced: {
+    database: {
+      // 文字列 "uuid" を渡すと CLI は uuid 列型で schema を生成する。runtime
+      // は auth.ts 側の uuidv7() で実 ID を生成するが、uuid 列はその出力 (v7)
+      // も accept するため整合する。auth.ts の関数 generateId 経路だと CLI 側
+      // では `text` になってしまう (上記 docstring 参照)。
+      generateId: "uuid",
+    },
+  },
+});
