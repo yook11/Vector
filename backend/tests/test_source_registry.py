@@ -27,6 +27,7 @@ from app.models.news_source import NewsSource
         "CleanTechnica",
         "Electrek",
         "SpaceNews",
+        "The Register",
         "Hacker News",
     ],
 )
