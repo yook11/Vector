@@ -10,9 +10,13 @@
 - 例外は捕まえず raise する (CLI / Task の retry に委ねる:
   feedback_failure_visibility.md)
 
-戻り値の tagged union:
-- ``Generated``: 新規生成または ``--force`` 上書きで snapshot を保存した
-- ``Skipped``: 既存 snapshot があり ``force=False`` だったため何もしなかった
+Pattern A' での Stage F:
+- 起動時に ``ReadyForDigest`` を受け取り、precondition (既存 snapshot 判定) は
+  Ready 側で吸収済み
+- ``execute(ready)`` は集計 + save に専念し、戻り値は ``Generated`` の単一
+  variant
+- race 敗北 (force=False で同時 INSERT 競合) は ``find_by_week`` で勝者を読み戻し
+  ``Generated`` に合流する (Phase 1-3 同型)
 """
 
 from __future__ import annotations
@@ -26,6 +30,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.digest.config import DEFAULT_LIMIT, NEW_ENTITY_LOOKBACK_WEEKS, WEEK_TZ
+from app.digest.domain.ready import ReadyForDigest
 from app.digest.domain.trend import WeeklyCategoryTrends, WeeklyTrendsBundle
 from app.digest.repository.snapshots import SnapshotRepository
 from app.digest.repository.trends import TrendsRepository
@@ -38,26 +43,20 @@ _WEEK = timedelta(days=7)
 
 
 # ---------------------------------------------------------------------------
-# Outcome — Service 戻り値の tagged union
+# Outcome — Service 戻り値の単一 variant
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
 class Generated:
-    """新規生成または ``--force`` 上書きで snapshot を保存した。"""
+    """新規生成または ``force=True`` 上書きで snapshot を保存した。
+
+    既存 snapshot ありかつ ``force=False`` の skip ケースは ``Ready.try_advance_from``
+    で吸収済みのため Service.execute の戻り値からは消えている (Pattern A')。
+    """
 
     week_start: date
     source_analysis_count: int
-
-
-@dataclass(frozen=True, slots=True)
-class Skipped:
-    """既存 snapshot があり ``force=False`` だったため何もしなかった。"""
-
-    week_start: date
-
-
-SnapshotResult = Generated | Skipped
 
 
 # ---------------------------------------------------------------------------
@@ -74,37 +73,24 @@ class WeeklyTrendsSnapshotService:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
 
-    async def generate_for_latest_completed_week(
-        self, *, force: bool = False
-    ) -> SnapshotResult:
-        """直近完了週 (= 今がいる週の前週) を JST 月曜起点で算出して生成する。"""
-        now = datetime.now(ZoneInfo(WEEK_TZ))
-        week_start = self._completed_week_start_for(now)
-        return await self.generate_for_week(week_start, force=force)
+    async def execute(self, ready: ReadyForDigest) -> Generated:
+        """``ready`` で指定された週の snapshot を集計・永続化する。
 
-    async def generate_for_week(
-        self, week_start: date, *, force: bool = False
-    ) -> SnapshotResult:
-        """指定 week (JST 月曜開始日) の snapshot を生成する。"""
+        precondition (既存 snapshot 判定) は ``ReadyForDigest.try_advance_from``
+        側で吸収済み。本メソッドは集計 + save に専念する。
+
+        race 敗北 (``force=False`` 経路で同時 INSERT 競合) は ``find_by_week`` で
+        勝者を読み戻し ``Generated`` に合流する (Phase 1-3 同型)。
+        """
         async with self._session_factory() as session:
             snapshot_repo = SnapshotRepository(session)
+            trends_repo = TrendsRepository(session)
+            categories = await self._fetch_categories(session)
 
-            if not force:
-                existing = await snapshot_repo.find_by_week(week_start)
-                if existing is not None:
-                    logger.info(
-                        "snapshot_skipped_existing",
-                        week_start=week_start.isoformat(),
-                    )
-                    return Skipped(week_start=week_start)
-
-            current_start = self._jst_midnight_utc(week_start)
+            current_start = self._jst_midnight_utc(ready.week_start)
             current_end = current_start + _WEEK
             previous_start = current_start - _WEEK
             lookback_start = current_start - _WEEK * NEW_ENTITY_LOOKBACK_WEEKS
-
-            trends_repo = TrendsRepository(session)
-            categories = await self._fetch_categories(session)
 
             sections_list: list[WeeklyCategoryTrends] = []
             for cat in categories:
@@ -122,35 +108,40 @@ class WeeklyTrendsSnapshotService:
             source_count = await trends_repo.count_source_analyses(
                 current_start=current_start, current_end=current_end
             )
-            bundle = WeeklyTrendsBundle(week_start=week_start, sections=sections)
+            bundle = WeeklyTrendsBundle(week_start=ready.week_start, sections=sections)
 
             snapshot = WeeklyTrendsSnapshot(
-                week_start=week_start,
+                week_start=ready.week_start,
                 bundle=bundle.model_dump(mode="json"),
                 source_analysis_count=source_count,
             )
-            if force:
-                await snapshot_repo.upsert(snapshot)
-            else:
-                inserted = await snapshot_repo.insert_if_absent(snapshot)
-                if not inserted:
-                    # 並行レース敗北: 別プロセスが先に generate した
-                    await session.rollback()
-                    logger.info(
-                        "snapshot_skipped_concurrent_insert",
-                        week_start=week_start.isoformat(),
-                    )
-                    return Skipped(week_start=week_start)
-
+            saved = await snapshot_repo.save(snapshot, force=ready.force)
             await session.commit()
+
+            if saved is None:
+                # race 敗北 (force=False で他 worker が先行 INSERT): 勝者を読み戻す
+                logger.info(
+                    "digest_concurrent_write",
+                    week_start=ready.week_start.isoformat(),
+                )
+                saved = await snapshot_repo.find_by_week(ready.week_start)
+                if saved is None:
+                    raise RuntimeError(
+                        "digest_race_winner_missing: "
+                        f"week_start={ready.week_start.isoformat()}"
+                    )
+
             logger.info(
                 "snapshot_generated",
-                week_start=week_start.isoformat(),
+                week_start=ready.week_start.isoformat(),
                 category_count=len(sections),
                 source_analysis_count=source_count,
-                forced=force,
+                forced=ready.force,
             )
-            return Generated(week_start=week_start, source_analysis_count=source_count)
+            return Generated(
+                week_start=ready.week_start,
+                source_analysis_count=source_count,
+            )
 
     @staticmethod
     async def _build_section(
@@ -208,15 +199,3 @@ class WeeklyTrendsSnapshotService:
             tzinfo=ZoneInfo(WEEK_TZ),
         )
         return jst_midnight.astimezone(UTC)
-
-    @staticmethod
-    def _completed_week_start_for(now: datetime) -> date:
-        """``now`` (JST 想定の tz-aware datetime) における直近完了週の月曜日。
-
-        例: JST 2026-04-27 (月) 00:05 → 2026-04-20 (= 前週月曜)
-            JST 2026-04-26 (日) 23:50 → 2026-04-13 (= 完了済み週の月曜)
-        """
-        today = now.date()
-        days_since_monday = today.weekday()
-        current_monday = today - timedelta(days=days_since_monday)
-        return current_monday - _WEEK
