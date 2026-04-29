@@ -21,7 +21,10 @@ test.describe("Login flow (UI 経由)", () => {
     await page.getByLabel("Password").fill("wrong-password");
     await page.getByRole("button", { name: "Sign in" }).click();
 
-    await expect(page.getByRole("alert")).toHaveText(
+    // `getByRole("alert")` だと Next.js の `#__next-route-announcer__` (空文字)
+    // と LoginForm のエラー div が両方 match して strict mode violation になる。
+    // LoginForm 側に固有の id (#login-error) があるのでそれで scope する。
+    await expect(page.locator("#login-error")).toHaveText(
       /Invalid email or password/,
     );
     // login 画面に留まる (auto-redirect しない)
