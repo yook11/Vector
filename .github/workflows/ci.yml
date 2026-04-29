@@ -118,3 +118,17 @@ jobs:
       - name: TypeScript type check
         run: npx tsc --noEmit
         working-directory: frontend
+
+      - name: Vitest (unit)
+        run: npm run test:coverage
+        working-directory: frontend
+        # Phase 1 は optional 扱い。Phase 4 でこの行を削除して required 化する。
+        continue-on-error: true
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-coverage
+          path: frontend/coverage/
+          retention-days: 7
