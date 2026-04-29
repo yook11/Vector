@@ -130,3 +130,173 @@ jobs:
           name: frontend-coverage
           path: frontend/coverage/
           retention-days: 7
+
+  frontend-e2e-smoke:
+    name: Frontend (E2E smoke)
+    runs-on: ubuntu-latest
+    # smoke スコープは anon project (login + register、4 ケース)。
+    # - login: seed migration の health check + Better Auth 経路の regression 検出
+    # - register: 新規ユーザ登録 + client-side validation の regression 検出
+    # watchlist / search / weekly-trends / source-admin は seed 状態に依存して
+    # flaky になりうるためローカル only。Phase 4 で個別 CI 化を検討する。
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: vector
+          POSTGRES_PASSWORD: vector
+          POSTGRES_DB: vector
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U vector -d vector"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # backend
+      DATABASE_URL: postgresql+asyncpg://vector:vector@localhost:5432/vector
+      REDIS_URL: redis://localhost:6379/0
+      # frontend (Better Auth + 内部 API プロキシ)
+      AUTH_DATABASE_URL: postgresql://vector:vector@localhost:5432/vector?search_path=auth
+      BETTER_AUTH_URL: http://localhost:3000
+      INTERNAL_API_URL: http://localhost:8000/api/v1
+      NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
+      # CI 専用のダミー値。本番値とは無関係で、Settings の長さ要件 (>=32) を
+      # 満たすために 64 桁の hex を直書きする (秘密ではない)。
+      INTERNAL_API_SECRET: ci0000000000000000000000000000000000000000000000000000000000000000
+      BETTER_AUTH_SECRET: ci1111111111111111111111111111111111111111111111111111111111111111
+
+    steps:
+      - uses: actions/checkout@v6
+
+      # ---- backend (alembic upgrade で seed migration を含む全 head を適用) ----
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: uv pip install --system -r requirements.txt
+        working-directory: backend
+
+      # ---- frontend (build + start を background) ----
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
+
+      # auth スキーマと Better Auth テーブル群は alembic 管理外 (ADR 002)。
+      # i4_seed_e2e_users が auth.user / auth.account に bulk_insert するので、
+      # alembic upgrade head の前に schema が存在している必要がある。
+      # 1. psql で `auth` スキーマだけ作る (alembic b1 が CREATE SCHEMA IF NOT
+      #    EXISTS する処理と同等。idempotent)
+      # 2. Better Auth CLI が auth.user / auth.account / auth.session を生成
+      - name: Create auth schema (pre-Better Auth)
+        env:
+          PGPASSWORD: vector
+        run: psql -h localhost -U vector -d vector -c "CREATE SCHEMA IF NOT EXISTS auth"
+
+      - name: Apply Better Auth schema
+        # `auth.ts` は `import "server-only"` を持つため CLI が load できない。
+        # CLI 専用の `auth.cli.ts` (server-only なし、runtime と同 config) を
+        # 経由する。frontend/src/lib/auth/auth.cli.ts のドキュメントを参照。
+        run: npx @better-auth/cli@latest migrate --config src/lib/auth/auth.cli.ts -y
+        working-directory: frontend
+
+      - name: Apply alembic migrations (includes E2E seed)
+        # auth.user / auth.account を Better Auth CLI が先に生成したので、
+        # i4_seed_e2e_users の bulk_insert がここで成功する。
+        run: alembic upgrade head
+        working-directory: backend
+
+      - name: Install Playwright chromium
+        run: npx playwright install --with-deps chromium
+        working-directory: frontend
+
+      - name: Build frontend
+        run: npm run build
+        working-directory: frontend
+
+      - name: Start backend (uvicorn, background)
+        run: |
+          nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 \
+            > "${RUNNER_TEMP}/backend.log" 2>&1 &
+          echo $! > "${RUNNER_TEMP}/backend.pid"
+        working-directory: backend
+
+      - name: Start frontend (next start, background)
+        run: |
+          nohup npm start -- --port 3000 \
+            > "${RUNNER_TEMP}/frontend.log" 2>&1 &
+          echo $! > "${RUNNER_TEMP}/frontend.pid"
+        working-directory: frontend
+
+      - name: Wait for backend health
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:8000/api/v1/health > /dev/null; then
+              echo "backend ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "backend failed to become healthy in 60s"
+          cat "${RUNNER_TEMP}/backend.log" || true
+          exit 1
+
+      - name: Wait for frontend
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:3000/auth/login > /dev/null; then
+              echo "frontend ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "frontend failed to become healthy in 60s"
+          cat "${RUNNER_TEMP}/frontend.log" || true
+          exit 1
+
+      - name: Run E2E smoke (anon project)
+        run: npx playwright test --project=anon
+        working-directory: frontend
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 7
+
+      - name: Upload server logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-server-logs
+          path: |
+            ${{ runner.temp }}/backend.log
+            ${{ runner.temp }}/frontend.log
+          retention-days: 7
