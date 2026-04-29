@@ -20,6 +20,7 @@ import "server-only";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth/auth";
+import { buildLoginCallbackUrl } from "@/lib/auth/login-redirect-url";
 import { narrowRole } from "@/lib/auth/role";
 import type { Session } from "@/lib/auth/session";
 
@@ -46,51 +47,21 @@ export async function requireAdmin(): Promise<Session> {
 }
 
 /**
- * Server Action から呼ぶ用の login redirect URL を組み立てる。
- *
- * Server Action は browser からの fetch なので Referer header が submit 元
- * page の URL になる。これを callbackUrl として埋め込み、ログイン後に元の
- * page へ戻す。Open redirect 防止として:
- *   - same-origin 以外は捨てる (URL parser に通して例外なら捨てる)
- *   - protocol-relative (`//evil.com`) は捨てる
- *   - `/auth/*` 自体への redirect は callbackUrl 無し (再帰防止)
- */
-async function buildLoginRedirectUrl(): Promise<string> {
-  const reqHeaders = await headers();
-  const referer = reqHeaders.get("referer");
-  if (!referer) return "/auth/login";
-
-  let pathname: string;
-  let search: string;
-  try {
-    const url = new URL(referer);
-    pathname = url.pathname;
-    search = url.search;
-  } catch {
-    return "/auth/login";
-  }
-
-  if (!pathname.startsWith("/") || pathname.startsWith("//")) {
-    return "/auth/login";
-  }
-  if (pathname.startsWith("/auth")) {
-    return "/auth/login";
-  }
-  return `/auth/login?callbackUrl=${encodeURIComponent(pathname + search)}`;
-}
-
-/**
  * Server Action 用: 未認証なら `/auth/login?callbackUrl=...` に redirect する。
  *
  * Next.js の `redirect()` は `NEXT_REDIRECT` 特殊 throw で client に伝搬し、
  * browser が自動的に navigate する (caller の `try/catch` は通過するだけで
  * catch block は実行されない)。これにより session 切れた状態でボタン連打
  * しても toast 連発で詰まらず、自然にログインフローへ誘導される。
+ *
+ * referer から callbackUrl を組み立てる純粋ロジックは
+ * `lib/auth/login-redirect-url.ts::buildLoginCallbackUrl` に切り出してある。
  */
 export async function requireSessionForAction(): Promise<Session> {
   const session = await getCurrentSession();
   if (!session) {
-    redirect(await buildLoginRedirectUrl());
+    const reqHeaders = await headers();
+    redirect(buildLoginCallbackUrl(reqHeaders.get("referer")));
   }
   return session;
 }

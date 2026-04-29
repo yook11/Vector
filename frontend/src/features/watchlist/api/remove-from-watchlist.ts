@@ -3,13 +3,12 @@
 import { refresh, revalidateTag } from "next/cache";
 import { serverEmpty } from "@/lib/api/server-fetcher";
 import { requireSessionForAction } from "@/lib/auth/guards";
+import { removeFromWatchlistCore } from "./watchlist-cores";
 
 /** Remove an article from the watchlist (Server Action). */
 export async function removeFromWatchlist(articleId: number): Promise<void> {
   await requireSessionForAction();
-  await serverEmpty(`/me/watchlist/${articleId}`, {
-    method: "DELETE",
-  });
+  await removeFromWatchlistCore(articleId, serverEmpty);
   // Pattern B: per-user watchlist Set tag のみ無効化。
   revalidateTag("watchlist:me", "max");
   // cacheComponents 有効時は Server Action 完了で current route の自動再
