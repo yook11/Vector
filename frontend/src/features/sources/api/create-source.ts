@@ -1,6 +1,6 @@
 "use server";
 
-import { revalidateTag } from "next/cache";
+import { updateTag } from "next/cache";
 import { serverFetch } from "@/lib/api/server-fetcher";
 import { requireAdminForAction } from "@/lib/auth/guards";
 import type { NewsSourceCreate, NewsSourceDetail } from "@/types";
@@ -12,6 +12,6 @@ export async function createSource(
 ): Promise<NewsSourceDetail> {
   await requireAdminForAction();
   const created = await createSourceCore(body, serverFetch);
-  revalidateTag("sources", "max");
+  updateTag("sources");
   return created;
 }
