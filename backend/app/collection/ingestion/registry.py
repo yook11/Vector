@@ -37,6 +37,9 @@ def _build_registry() -> dict[SourceName, SourceFetcher]:
     from app.collection.ingestion.fetchers.rss.cleantechnica import (
         CleanTechnicaFetcher,
     )
+    from app.collection.ingestion.fetchers.rss.eetimes_japan import (
+        EETimesJapanFetcher,
+    )
     from app.collection.ingestion.fetchers.rss.electrek import ElectrekFetcher
     from app.collection.ingestion.fetchers.rss.engadget import EngadgetFetcher
     from app.collection.ingestion.fetchers.rss.fierce_biotech import (
@@ -46,6 +49,9 @@ def _build_registry() -> dict[SourceName, SourceFetcher]:
         IEEESpectrumFetcher,
     )
     from app.collection.ingestion.fetchers.rss.itmedia import ITmediaFetcher
+    from app.collection.ingestion.fetchers.rss.itmedia_news import (
+        ITmediaNewsFetcher,
+    )
     from app.collection.ingestion.fetchers.rss.jpcert import JPCERTFetcher
     from app.collection.ingestion.fetchers.rss.krebs_on_security import (
         KrebsOnSecurityFetcher,
@@ -53,6 +59,7 @@ def _build_registry() -> dict[SourceName, SourceFetcher]:
     from app.collection.ingestion.fetchers.rss.microsoft_research import (
         MicrosoftResearchFetcher,
     )
+    from app.collection.ingestion.fetchers.rss.monoist import MONOistFetcher
     from app.collection.ingestion.fetchers.rss.nasa import NASAFetcher
     from app.collection.ingestion.fetchers.rss.quantum_insider import (
         QuantumInsiderFetcher,
@@ -83,6 +90,9 @@ def _build_registry() -> dict[SourceName, SourceFetcher]:
         SourceName("Electrek"): ElectrekFetcher(),
         SourceName("SpaceNews"): SpaceNewsFetcher(),
         SourceName("The Register"): TheRegisterFetcher(),
+        SourceName("MONOist"): MONOistFetcher(),
+        SourceName("EE Times Japan"): EETimesJapanFetcher(),
+        SourceName("ITmedia NEWS"): ITmediaNewsFetcher(),
         # API ソース
         SourceName("Hacker News"): HackerNewsFetcher(),
     }
