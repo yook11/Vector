@@ -26,7 +26,10 @@ export function NewsFilters() {
           updateParam("sortOrder", v === "default" ? undefined : v)
         }
       >
-        <SelectTrigger className="h-9 w-[100px] text-xs border-border">
+        <SelectTrigger
+          className="h-9 w-[100px] text-xs border-border"
+          aria-label="並び順"
+        >
           <SelectValue placeholder="Order" />
         </SelectTrigger>
         <SelectContent>
@@ -39,7 +42,10 @@ export function NewsFilters() {
         value={searchParams?.get("perPage") ?? "12"}
         onValueChange={(v) => updateParam("perPage", v)}
       >
-        <SelectTrigger className="h-9 w-[100px] text-xs border-border">
+        <SelectTrigger
+          className="h-9 w-[100px] text-xs border-border"
+          aria-label="1ページあたりの件数"
+        >
           <SelectValue placeholder="Per page" />
         </SelectTrigger>
         <SelectContent>
