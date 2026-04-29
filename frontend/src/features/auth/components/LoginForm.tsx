@@ -15,6 +15,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { signIn } from "@/lib/auth/auth-client";
+import { LoginSchema } from "../schemas/auth";
 
 export function LoginForm() {
   const router = useRouter();
@@ -28,13 +29,19 @@ export function LoginForm() {
     setIsPending(true);
 
     const formData = new FormData(e.currentTarget);
-    const email = formData.get("email") as string;
-    const password = formData.get("password") as string;
-
-    const { error: authError } = await signIn.email({
-      email,
-      password,
+    const parsed = LoginSchema.safeParse({
+      email: formData.get("email") ?? "",
+      password: formData.get("password") ?? "",
     });
+
+    if (!parsed.success) {
+      setError("Please enter a valid email and password");
+      setIsPending(false);
+      emailRef.current?.focus();
+      return;
+    }
+
+    const { error: authError } = await signIn.email(parsed.data);
 
     setIsPending(false);
 

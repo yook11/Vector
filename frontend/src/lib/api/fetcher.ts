@@ -2,10 +2,12 @@ import { ApiError, normalizeErrorDetail } from "@/lib/api/error";
 
 const REQUEST_TIMEOUT_MS = 10_000;
 
-export async function requestJson<T>(
+// timeout / error 正規化を requestJson と requestEmpty で共有するための内部関数。
+// 成功時は Response をそのまま返し、JSON 解析等は呼び出し側に委ねる。
+async function executeRequest(
   url: string,
   options?: RequestInit,
-): Promise<T> {
+): Promise<Response> {
   // backend hang で UI が無限ロードに張り付くのを防ぐため、固定 10 秒で
   // abort する。呼び出し側が独自 signal を渡してきた場合は AbortSignal.any
   // で OR-merge し、どちらの abort も尊重する。
@@ -34,9 +36,7 @@ export async function requestJson<T>(
       throw new ApiError(res.status, detail);
     }
 
-    if (res.status === 204) return undefined as T;
-
-    return res.json() as Promise<T>;
+    return res;
   } catch (err) {
     // タイムアウト由来の AbortError は ApiError(408) に正規化して上層に
     // 伝える。呼び出し側が渡した external signal による abort はそのまま
@@ -52,4 +52,21 @@ export async function requestJson<T>(
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+export async function requestJson<T>(
+  url: string,
+  options?: RequestInit,
+): Promise<T> {
+  const res = await executeRequest(url, options);
+  return res.json() as Promise<T>;
+}
+
+// 204 No Content など body を持たない endpoint 専用。response body は捨てる。
+// requestJson<void> のような嘘の型 (シグネチャ上は何でも返せる) を避けるため分離。
+export async function requestEmpty(
+  url: string,
+  options?: RequestInit,
+): Promise<void> {
+  await executeRequest(url, options);
 }

@@ -15,6 +15,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { signUp } from "@/lib/auth/auth-client";
+import { RegisterSchema } from "../schemas/auth";
 
 // Better Auth signUp.email が返す既知エラーコード → ユーザ向け固定文言。
 // allowlist 設計: 未知コードや未来の変更で `authError.message` を素のまま
@@ -73,9 +74,20 @@ export function RegisterForm() {
     setIsPending(true);
 
     const formData = new FormData(e.currentTarget);
-    const email = formData.get("email") as string;
-    const password = formData.get("password") as string;
-    const displayName = (formData.get("displayName") as string) || undefined;
+    const parsed = RegisterSchema.safeParse({
+      email: formData.get("email") ?? "",
+      password: formData.get("password") ?? "",
+      displayName: formData.get("displayName") ?? "",
+    });
+
+    if (!parsed.success) {
+      setError(GENERIC_VALIDATION_MESSAGE);
+      setIsPending(false);
+      emailRef.current?.focus();
+      return;
+    }
+
+    const { email, password, displayName } = parsed.data;
 
     // name: Better Auth required field — fallback to email local part, then to
     // raw email (`split("@")[0]` の戻り値型は `string | undefined` だが、type=email
