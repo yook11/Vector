@@ -49,21 +49,58 @@
 | 4 | Electrek | EN | +8-9 | EV / Energy | base RSS 流用 |
 | 5 | SpaceNews | EN | +5-6 | Space | base RSS 流用 |
 
-実装パターン (1 ソース = 1 PR の小粒度を想定):
+### 着手分割 (2026-04-29 確定)
+
+5 ソースのうち **The Register のみリダイレクタ正規化が必要**、他 4 本は
+`BaseRssFetcher` 継承クラス宣言のみで実装可能 (構造同型 ~7 行)。PR 単位は
+2 つに分割する:
+
+- **PR-1 (Phase 1a-rss): 軽量 4 本** (Engadget / CleanTechnica / Electrek /
+  SpaceNews) — 1 PR にまとめる。固有挙動なし、`test_rss_base.py` の共通フロー
+  テストでカバー、registry smoke テストのみ追加
+- **PR-2 (Phase 1b-tregister): The Register** — 単独 PR。`convert_entry`
+  上書き + URL 正規化のテストを厚く
+
+着手順は **PR-1 を先行 → deploy / 1-2 サイクル観測 → PR-2**。軽量先行で
+リスク低い変更を流通、観測中に PR-2 のテストを設計する。
+
+### The Register リダイレクタ解決方針 (2026-04-29 確定 → PR-2 で実装)
+
+実フィード (`https://www.theregister.com/headlines.atom`) を 3 アイテム実測:
+
+```
+<link href="https://go.theregister.com/feed/www.theregister.com/2026/04/28/.../"/>
+```
+
+- `/feed/` 以降のパスがそのまま `https://www.theregister.com/...` の実 URL に
+  対応
+- 全エントリで構造一貫
+- `feedburner:origLink` 等の代替フィールドはフィード XML に存在せず
+
+**採用: 案 C (URL パス抽出)**
+
+```python
+def convert_entry(self, entry):
+    raw_link = entry.get("link", "")
+    if "go.theregister.com/feed/" in raw_link:
+        real_url = "https://" + raw_link.split("/feed/", 1)[1]
+    else:
+        real_url = raw_link
+    # ArticleCandidate.from_external(...) へ
+```
+
+却下:
+
+- **案 A (HEAD)**: ネットワーク往復 +1 / アイテム、タイムアウトリスク
+- **案 B (origLink)**: 実フィード XML に存在せず実装不可
+
+実装パターン (各 PR 共通):
 
 1. Alembic migration (news_sources INSERT)
 2. fetcher 実装 (RSS 系は既存 `BaseRssFetcher` 流用が原則)
 3. `registry.py` に追加
-4. テスト追加
+4. テスト追加 (固有挙動あれば独自テスト、なければ smoke のみ)
 5. dispatch 1 サイクル後のスモークテスト (`source_fetch_completed` ログ確認)
-
-The Register のリダイレクタ解決方針 (要設計判断):
-
-- 案 A: HEAD リクエストで Location を引く (1 アイテムごとに 1 リクエスト追加)
-- 案 B: フィード内の `<feedburner:origLink>` 等を使う (実フィードに含まれるか
-  要確認)
-- 案 C: `go.theregister.com/feed/...` パスから実 URL を文字列抽出 (URL 構造に
-  規則性があるか要確認)
 
 ## Phase 2: 日本語 Phase 2 主力 (3 ソース)
 
