@@ -1,6 +1,12 @@
 import { getSessionCookie } from "better-auth/cookies";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
+import { sanitizeCallbackUrl } from "@/lib/proxy/callback-url";
+import {
+  buildCspDirectives,
+  buildCspHeader,
+  generateNonce,
+} from "@/lib/proxy/csp";
 
 export async function proxy(request: NextRequest) {
   // --- XSS対策: Content Security Policy (CSP) ---
@@ -13,33 +19,10 @@ export async function proxy(request: NextRequest) {
   //   - リクエストごとに暗号学的に安全な乱数（nonce）を生成
   //   - <script nonce="xxx"> を持つ正規スクリプトのみ実行を許可
   //   - 攻撃者が注入したスクリプトは nonce を知らないため実行されない
-  const nonce = Buffer.from(crypto.randomUUID()).toString("base64");
-
-  const cspDirectives = [
-    // デフォルトで全リソースを自身のオリジンに制限
-    "default-src 'self'",
-    // スクリプト: nonce 付きのみ許可
-    // 'strict-dynamic' により、nonce 付きスクリプトが読み込む子スクリプトも
-    // 自動的に信頼される（Next.js のコード分割チャンク読み込みに必要）
-    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : ""}`,
-    // スタイル: 自身 + unsafe-inline（Tailwind CSS の動的クラス挿入に必要）
-    // TODO: 将来的に nonce ベースへ移行を検討
-    "style-src 'self' 'unsafe-inline'",
-    // 画像: 自身 + data URI（アイコン等）
-    "img-src 'self' data:",
-    // フォント: 自身のみ（next/font でセルフホスト済み）
-    "font-src 'self'",
-    // API 接続先: BFF 経由のため自身のみ（外部 API への直接接続は不要）
-    "connect-src 'self'",
-    // フレーム埋め込み禁止（クリックジャッキング対策、X-Frame-Options: DENY と同等）
-    "frame-ancestors 'none'",
-    // form の送信先を自身に制限
-    "form-action 'self'",
-    // base タグの href を自身に制限（base タグインジェクション対策）
-    "base-uri 'self'",
-  ];
-
-  const cspHeader = cspDirectives.join("; ");
+  const nonce = generateNonce();
+  const cspHeader = buildCspHeader(
+    buildCspDirectives(nonce, process.env.NODE_ENV === "development"),
+  );
 
   // リクエストヘッダーに nonce を埋め込み、Server Component から読み取れるようにする
   const requestHeaders = new Headers(request.headers);
@@ -69,11 +52,9 @@ export async function proxy(request: NextRequest) {
     // 埋め込ませない。`request.nextUrl.pathname` は通常 `/...` だが、
     // 将来的に LoginForm が `searchParams.get("callbackUrl")` を読んで
     // `router.push` する実装に発展した場合に備えて構造的に弾いておく。
-    const pathname = request.nextUrl.pathname;
-    const isInternalPath =
-      pathname.startsWith("/") && !pathname.startsWith("//");
-    if (isInternalPath) {
-      signInUrl.searchParams.set("callbackUrl", pathname);
+    const callbackUrl = sanitizeCallbackUrl(request.nextUrl.pathname);
+    if (callbackUrl) {
+      signInUrl.searchParams.set("callbackUrl", callbackUrl);
     }
     return NextResponse.redirect(signInUrl);
   }
