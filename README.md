@@ -27,7 +27,7 @@ AIで翻訳・要約・インパクト分析を行う投資ダッシュボード
 | Layer | Technology | Notes |
 |-------|-----------|-------|
 | Frontend | Next.js 16 (App Router) + TypeScript | Tailwind CSS + shadcn/ui + Biome |
-| Backend | FastAPI + Python 3.12 + SQLAlchemy 2.0 | 非同期処理、Pydantic v2 |
+| Backend | FastAPI + Python 3.13 + SQLAlchemy 2.0 | 非同期処理、Pydantic v2 |
 | Auth | Better Auth (BFF Proxy) | Cookie ベースセッション + 内部 API ヘッダー認証 |
 | Database | PostgreSQL 16 + pgvector | Alembic マイグレーション管理 |
 | AI | Gemini API (gemini-2.5-flash-lite) | 翻訳・要約・インパクト分析・Embedding |

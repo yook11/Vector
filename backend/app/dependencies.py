@@ -32,7 +32,7 @@ class CurrentUser:
     role: UserRole
 
 
-async def get_session() -> AsyncGenerator[AsyncSession, None]:
+async def get_session() -> AsyncGenerator[AsyncSession]:
     """トランザクション開始済みのセッションを yield する。
 
     正常終了時にコミット、例外発生時（Service が投げるドメイン例外を含む）
