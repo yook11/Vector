@@ -8,16 +8,19 @@
 //     掴めてしまい security guard が崩れるため、runtime ファイルは触らない。
 //
 // 重複の維持責任:
-//   - 本ファイルの betterAuth(...) 引数は `./auth.ts` と完全一致させること。
-//   - schema に効くフィールド (database / emailAndPassword / user
-//     additionalFields / session / advanced.database) を変更したら必ず両方を
-//     更新する。drift すると CI の `npx @better-auth/cli migrate` で生成される
-//     schema が runtime と乖離する。
+//   - 本ファイルの betterAuth(...) 引数は schema に効く範囲で `./auth.ts` と
+//     一致させること。具体的には: database / emailAndPassword /
+//     user.additionalFields / session の各フィールド。
+//   - 例外として `advanced.database.generateId` は意図的に異なる値を持つ:
+//       * runtime (auth.ts): `() => uuidv7()` で UUID v7 (時刻順) を生成
+//       * CLI (本ファイル):  `"uuid"` 文字列で Better Auth CLI に uuid 列型
+//         での schema 生成を指示する (CLI は generateId === "uuid" でしか
+//         postgres uuid 型を選択しない、`get-migration.mjs:185` 参照)
+//     uuid 列は v7 文字列も受け取れるため runtime と整合する。
 
 import { betterAuth } from "better-auth";
 import type { PoolClient } from "pg";
 import { Pool } from "pg";
-import { v7 as uuidv7 } from "uuid";
 import { requireEnv } from "@/lib/env";
 
 const pool = new Pool({
@@ -50,7 +53,11 @@ export const auth = betterAuth({
   trustedOrigins: [requireEnv("BETTER_AUTH_URL")],
   advanced: {
     database: {
-      generateId: () => uuidv7(),
+      // 文字列 "uuid" を渡すと CLI は uuid 列型で schema を生成する。runtime
+      // は auth.ts 側の uuidv7() で実 ID を生成するが、uuid 列はその出力 (v7)
+      // も accept するため整合する。auth.ts の関数 generateId 経路だと CLI 側
+      // では `text` になってしまう (上記 docstring 参照)。
+      generateId: "uuid",
     },
   },
 });
