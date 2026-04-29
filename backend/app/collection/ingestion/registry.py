@@ -34,6 +34,11 @@ class SourceFetcher(Protocol):
 def _build_registry() -> dict[SourceName, SourceFetcher]:
     """全ソースのフェッチャーを登録する。"""
     from app.collection.ingestion.fetchers.hacker_news import HackerNewsFetcher
+    from app.collection.ingestion.fetchers.rss.cleantechnica import (
+        CleanTechnicaFetcher,
+    )
+    from app.collection.ingestion.fetchers.rss.electrek import ElectrekFetcher
+    from app.collection.ingestion.fetchers.rss.engadget import EngadgetFetcher
     from app.collection.ingestion.fetchers.rss.fierce_biotech import (
         FierceBiotechFetcher,
     )
@@ -55,6 +60,7 @@ def _build_registry() -> dict[SourceName, SourceFetcher]:
     from app.collection.ingestion.fetchers.rss.spaceflight_now import (
         SpaceflightNowFetcher,
     )
+    from app.collection.ingestion.fetchers.rss.spacenews import SpaceNewsFetcher
     from app.collection.ingestion.fetchers.rss.techcrunch import TechCrunchFetcher
     from app.collection.ingestion.fetchers.rss.venturebeat import VentureBeatFetcher
 
@@ -71,6 +77,10 @@ def _build_registry() -> dict[SourceName, SourceFetcher]:
         SourceName("Spaceflight Now"): SpaceflightNowFetcher(),
         SourceName("ITmedia AI+"): ITmediaFetcher(),
         SourceName("JPCERT/CC"): JPCERTFetcher(),
+        SourceName("Engadget"): EngadgetFetcher(),
+        SourceName("CleanTechnica"): CleanTechnicaFetcher(),
+        SourceName("Electrek"): ElectrekFetcher(),
+        SourceName("SpaceNews"): SpaceNewsFetcher(),
         # API ソース
         SourceName("Hacker News"): HackerNewsFetcher(),
     }
