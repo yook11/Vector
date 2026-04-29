@@ -1,9 +1,9 @@
 """GET /api/v1/weekly-trends ルーターの E2E テスト。
 
 検証する観点:
-- snapshot 不在時は 200 + 全フィールド null + 空 categories (failure_visibility 原則:
-  500 にはせず空状態を表現する。「生成されていない」は故障ではないため)
-- snapshot 在ると最新週の bundle が camelCase で返る
+- snapshot 不在時は 200 + state="empty" のみ (failure_visibility 原則:
+  500 にはせず空状態を discriminated union で表現する)
+- snapshot 在ると最新週の bundle が state="ready" + camelCase で返る
 - 複数週がある場合は week_start DESC で 1 件目を返す
 - 認証は任意 (BFF プロキシヘッダなしでも 200)
 - bundle JSONB が破損していて Pydantic validate に失敗したらルーターは
@@ -63,17 +63,12 @@ def _snapshot(week_start: date, *, bundle: dict | None = None) -> WeeklyTrendsSn
 
 @pytest.mark.asyncio
 class TestWeeklyTrendsEndpoint:
-    async def test_empty_state_returns_200_with_nulls(
+    async def test_empty_state_returns_200_with_state_empty(
         self, client: AsyncClient
     ) -> None:
         resp = await client.get("/api/v1/weekly-trends")
         assert resp.status_code == 200
-        data = resp.json()
-        assert data["weekStart"] is None
-        assert data["weekEnd"] is None
-        assert data["generatedAt"] is None
-        assert data["sourceAnalysisCount"] is None
-        assert data["categories"] == []
+        assert resp.json() == {"state": "empty"}
 
     async def test_returns_latest_snapshot(
         self,
@@ -87,6 +82,7 @@ class TestWeeklyTrendsEndpoint:
         resp = await client.get("/api/v1/weekly-trends")
         assert resp.status_code == 200
         data = resp.json()
+        assert data["state"] == "ready"
         assert data["weekStart"] == "2026-04-20"
         assert data["weekEnd"] == "2026-04-27"
         assert data["sourceAnalysisCount"] == 42

@@ -1,7 +1,8 @@
 """WeeklyTrendsResponse schema の期待動作。
 
-API レスポンスの keys は camelCase に揃える (Vector 全体規約)。snapshot 不在時
-の「空状態」を nullable + 空 list で表現できることをテスト境界で固定する。
+API レスポンスの keys は camelCase に揃える (Vector 全体規約)。snapshot 不在時の
+「空状態」と生成済の「ready 状態」を ``state`` discriminator で構造的に分けて
+表現できることをテスト境界で固定する。
 """
 
 from __future__ import annotations
@@ -15,19 +16,18 @@ from app.digest.domain.trend import (
     WeeklyCategoryTrends,
     WeeklyTrendsBundle,
 )
-from app.digest.schemas.weekly_trends import WeeklyTrendsResponse
+from app.digest.schemas.weekly_trends import (
+    empty_weekly_trends,
+    weekly_trends_from_snapshot,
+)
 
 
 class TestEmptyState:
-    def test_absent_snapshot_serializes_with_nulls(self) -> None:
-        """snapshot 不在時は週情報が null + categories が空 list。"""
-        resp = WeeklyTrendsResponse.empty()
+    def test_absent_snapshot_serializes_with_state_empty(self) -> None:
+        """snapshot 不在時は state="empty" のみで他フィールドは出力されない。"""
+        resp = empty_weekly_trends()
         dumped = resp.model_dump(mode="json", by_alias=True)
-        assert dumped["weekStart"] is None
-        assert dumped["weekEnd"] is None
-        assert dumped["generatedAt"] is None
-        assert dumped["sourceAnalysisCount"] is None
-        assert dumped["categories"] == []
+        assert dumped == {"state": "empty"}
 
 
 class TestFromSnapshot:
@@ -53,12 +53,13 @@ class TestFromSnapshot:
 
     def test_camel_case_keys(self) -> None:
         bundle = self._bundle()
-        resp = WeeklyTrendsResponse.from_snapshot(
+        resp = weekly_trends_from_snapshot(
             bundle=bundle,
             generated_at=datetime(2026, 4, 21, 0, 5, tzinfo=UTC),
             source_analysis_count=328,
         )
         dumped = resp.model_dump(mode="json", by_alias=True)
+        assert dumped["state"] == "ready"
         assert dumped["weekStart"] == "2026-04-20"
         assert dumped["weekEnd"] == "2026-04-27"
         assert dumped["generatedAt"] is not None
@@ -87,11 +88,12 @@ class TestFromSnapshot:
 
     def test_week_end_is_week_start_plus_seven_days(self) -> None:
         bundle = WeeklyTrendsBundle(week_start=date(2026, 4, 13), sections=())
-        resp = WeeklyTrendsResponse.from_snapshot(
+        resp = weekly_trends_from_snapshot(
             bundle=bundle,
             generated_at=datetime(2026, 4, 14, 0, 5, tzinfo=UTC),
             source_analysis_count=0,
         )
         dumped = resp.model_dump(mode="json", by_alias=True)
+        assert dumped["state"] == "ready"
         assert dumped["weekStart"] == "2026-04-13"
         assert dumped["weekEnd"] == "2026-04-20"

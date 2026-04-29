@@ -67,8 +67,13 @@ export type NewsSourceDetailList =
 export type NewsSourceCreate = components["schemas"]["NewsSourceCreate"];
 
 // Weekly trends
-export type WeeklyTrendsResponse =
-  components["schemas"]["WeeklyTrendsResponse"];
+// `WeeklyTrendsResponse` は backend で Annotated[Union, Field(discriminator)] alias
+// として定義されており、独立した component schema を持たない (response inline)。
+// `state` discriminator で frontend が narrowing できるよう、生成済の 2 状態
+// schema をここで union として再構築する。
+export type ReadyWeeklyTrends = components["schemas"]["ReadyWeeklyTrends"];
+export type EmptyWeeklyTrends = components["schemas"]["EmptyWeeklyTrends"];
+export type WeeklyTrendsResponse = ReadyWeeklyTrends | EmptyWeeklyTrends;
 export type WeeklyCategoryTrends = components["schemas"]["_CategoryTrendsOut"];
 export type WeeklyEntityTrend = components["schemas"]["_EntityTrendOut"];
 export type WeeklyTopicTrend = components["schemas"]["_TopicTrendOut"];
