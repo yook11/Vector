@@ -27,6 +27,7 @@ export default defineConfig({
         "src/lib/proxy/callback-url.ts",
         "src/features/news/search-params.ts",
         "src/features/sources/api/source-cores.ts",
+        "src/features/sources/schemas/source.ts",
         "src/features/watchlist/api/watchlist-cores.ts",
         "src/features/auth/components/LoginForm.tsx",
         "src/features/auth/components/RegisterForm.tsx",

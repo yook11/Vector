@@ -23,6 +23,11 @@ import {
 } from "@/components/ui/select";
 import { toastError } from "@/lib/utils/toast-error";
 import { createSource } from "../api/create-source";
+import {
+  NewSourceSchema,
+  type SourceType,
+  SourceTypeSchema,
+} from "../schemas/source";
 
 interface SourceFormDialogProps {
   trigger: React.ReactNode;
@@ -39,22 +44,20 @@ async function action(
   _prev: FormState,
   formData: FormData,
 ): Promise<FormState> {
-  const name = String(formData.get("name") ?? "").trim();
-  if (!name) {
+  // SSoT: NewSourceSchema が SourceName / SafeUrl / SourceType の不変条件を
+  // 表現する。Server Action 直叩き耐性 (defense-in-depth) も同 schema が担う。
+  const parseResult = NewSourceSchema.safeParse(Object.fromEntries(formData));
+  if (!parseResult.success) {
+    const firstIssue = parseResult.error.issues[0];
     return {
       status: "error",
-      error: new Error("Name is required"),
-      fallback: "Name is required",
+      error: parseResult.error,
+      fallback: firstIssue?.message ?? "入力内容を確認してください",
     };
   }
   try {
-    await createSource({
-      name,
-      sourceType: (formData.get("sourceType") as "rss" | "api") ?? "rss",
-      siteUrl: String(formData.get("siteUrl") ?? "").trim(),
-      endpointUrl: String(formData.get("endpointUrl") ?? "").trim(),
-    });
-    return { status: "ok", createdName: name };
+    await createSource(parseResult.data);
+    return { status: "ok", createdName: parseResult.data.name };
   } catch (err) {
     return {
       status: "error",
@@ -66,7 +69,7 @@ async function action(
 
 export function SourceFormDialog({ trigger }: SourceFormDialogProps) {
   const [open, setOpen] = useState(false);
-  const [sourceType, setSourceType] = useState<"rss" | "api">("rss");
+  const [sourceType, setSourceType] = useState<SourceType>("rss");
   const nameRef = useRef<HTMLInputElement>(null);
   const [state, formAction, pending] = useActionState(action, INITIAL_STATE);
 
@@ -74,7 +77,7 @@ export function SourceFormDialog({ trigger }: SourceFormDialogProps) {
     if (state.status === "ok") {
       toast.success(`Added "${state.createdName}"`);
       setOpen(false);
-      // createSource 内で revalidateTag("sources") 済 → router.refresh() 不要
+      // createSource 内で updateTag("sources") 済 → router.refresh() 不要
     } else if (state.status === "error") {
       toastError(state.error, state.fallback);
       nameRef.current?.focus();
@@ -118,7 +121,12 @@ export function SourceFormDialog({ trigger }: SourceFormDialogProps) {
             <Select
               name="sourceType"
               value={sourceType}
-              onValueChange={(v) => setSourceType(v as "rss" | "api")}
+              onValueChange={(v) => {
+                // Radix Select は value を string で渡してくる。SourceTypeSchema
+                // で narrow して `as` cast を避ける (SourceType の SSoT 経路維持)。
+                const parsed = SourceTypeSchema.safeParse(v);
+                if (parsed.success) setSourceType(parsed.data);
+              }}
             >
               <SelectTrigger id="source-type">
                 <SelectValue />
