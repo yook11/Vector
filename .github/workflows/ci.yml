@@ -228,6 +228,11 @@ jobs:
       - name: Apply alembic migrations (includes E2E seed)
         # auth.user / auth.account を Better Auth CLI が先に生成したので、
         # i4_seed_e2e_users の bulk_insert がここで成功する。
+        # ALEMBIC_ALLOW_DESTRUCTIVE は 4d16d9b326a0 (topics drop, article_analyses
+        # wipe) の安全 guard 用。fresh DB で wipe 対象データは存在しないため
+        # CI では問題なく許可できる。
+        env:
+          ALEMBIC_ALLOW_DESTRUCTIVE: yes-i-know
         run: alembic upgrade head
         working-directory: backend
 
