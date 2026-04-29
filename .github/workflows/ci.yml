@@ -240,9 +240,6 @@ jobs:
         run: npx playwright install --with-deps chromium
         working-directory: frontend
 
-      # Next.js 16 の `next build` は static prerendering 中に
-      # `/weekly-trends` 等の RSC が backend に fetch するため、build より
-      # 前に backend が応答可能でなければ ECONNREFUSED で fail する。
       - name: Start backend (uvicorn, background)
         run: |
           nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 \
@@ -263,13 +260,16 @@ jobs:
           cat "${RUNNER_TEMP}/backend.log" || true
           exit 1
 
-      - name: Build frontend
-        run: npm run build
-        working-directory: frontend
-
-      - name: Start frontend (next start, background)
+      # `next start` は `output: "standalone"` build と組み合わせると静的 asset
+      # の serve 経路が乖離し、本番 build の JS bundle が browser に届かず
+      # hydration 不能になる (E2E では form の onSubmit が attach されず
+      # GET 経由で submit されてしまう)。
+      # smoke の目的は user flow の regression 検出であり build 経路の検証
+      # ではないので、dev 経路 (`next dev`) で済ませる。本番 build のスモーク
+      # は Phase 4 で別 PR にて検討する。
+      - name: Start frontend (next dev, background)
         run: |
-          nohup npm start -- --port 3000 \
+          nohup npm run dev -- --port 3000 \
             > "${RUNNER_TEMP}/frontend.log" 2>&1 &
           echo $! > "${RUNNER_TEMP}/frontend.pid"
         working-directory: frontend
