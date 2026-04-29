@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -28,47 +28,65 @@ interface SourceFormDialogProps {
   trigger: React.ReactNode;
 }
 
+type FormState =
+  | { status: "idle" }
+  | { status: "ok"; createdName: string }
+  | { status: "error"; error: unknown; fallback: string };
+
+const INITIAL_STATE: FormState = { status: "idle" };
+
+async function action(
+  _prev: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const name = String(formData.get("name") ?? "").trim();
+  if (!name) {
+    return {
+      status: "error",
+      error: new Error("Name is required"),
+      fallback: "Name is required",
+    };
+  }
+  try {
+    await createSource({
+      name,
+      sourceType: (formData.get("sourceType") as "rss" | "api") ?? "rss",
+      siteUrl: String(formData.get("siteUrl") ?? "").trim(),
+      endpointUrl: String(formData.get("endpointUrl") ?? "").trim(),
+    });
+    return { status: "ok", createdName: name };
+  } catch (err) {
+    return {
+      status: "error",
+      error: err,
+      fallback: "ソースの追加に失敗しました",
+    };
+  }
+}
+
 export function SourceFormDialog({ trigger }: SourceFormDialogProps) {
   const [open, setOpen] = useState(false);
-  const [loading, setLoading] = useState(false);
-
-  const [name, setName] = useState("");
   const [sourceType, setSourceType] = useState<"rss" | "api">("rss");
-  const [endpointUrl, setEndpointUrl] = useState("");
-  const [siteUrl, setSiteUrl] = useState("");
   const nameRef = useRef<HTMLInputElement>(null);
+  const [state, formAction, pending] = useActionState(action, INITIAL_STATE);
 
   useEffect(() => {
-    if (open) {
-      setName("");
-      setSourceType("rss");
-      setEndpointUrl("");
-      setSiteUrl("");
-    }
-  }, [open]);
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!name.trim()) return;
-
-    setLoading(true);
-    try {
-      await createSource({
-        name: name.trim(),
-        sourceType,
-        siteUrl: siteUrl.trim(),
-        endpointUrl: endpointUrl.trim(),
-      });
-      toast.success(`Added "${name.trim()}"`);
+    if (state.status === "ok") {
+      toast.success(`Added "${state.createdName}"`);
       setOpen(false);
-      // Server Action 内で revalidateTag("sources") 済み → router.refresh() 不要
-    } catch (err) {
-      toastError(err, "ソースの追加に失敗しました");
+      // createSource 内で revalidateTag("sources") 済 → router.refresh() 不要
+    } else if (state.status === "error") {
+      toastError(state.error, state.fallback);
       nameRef.current?.focus();
-    } finally {
-      setLoading(false);
     }
-  }
+  }, [state]);
+
+  // Dialog close で DialogContent (form 含む) は unmount されるため input は
+  // 自然 reset されるが、sourceType は親 Component で保持しているため open 切替時に
+  // 明示リセットする。
+  useEffect(() => {
+    if (open) setSourceType("rss");
+  }, [open]);
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -80,14 +98,14 @@ export function SourceFormDialog({ trigger }: SourceFormDialogProps) {
             新しい RSS / API ソースを追加します
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form action={formAction} className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="source-name">Name</Label>
             <Input
               ref={nameRef}
               id="source-name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
+              name="name"
+              defaultValue=""
               placeholder="e.g. TechCrunch"
               spellCheck={false}
               maxLength={50}
@@ -98,6 +116,7 @@ export function SourceFormDialog({ trigger }: SourceFormDialogProps) {
           <div className="space-y-2">
             <Label htmlFor="source-type">Type</Label>
             <Select
+              name="sourceType"
               value={sourceType}
               onValueChange={(v) => setSourceType(v as "rss" | "api")}
             >
@@ -115,9 +134,9 @@ export function SourceFormDialog({ trigger }: SourceFormDialogProps) {
             <Label htmlFor="endpoint-url">Endpoint URL</Label>
             <Input
               id="endpoint-url"
+              name="endpointUrl"
               type="url"
-              value={endpointUrl}
-              onChange={(e) => setEndpointUrl(e.target.value)}
+              defaultValue=""
               placeholder={
                 sourceType === "rss"
                   ? "https://example.com/feed/"
@@ -133,9 +152,9 @@ export function SourceFormDialog({ trigger }: SourceFormDialogProps) {
             <Label htmlFor="site-url">Site URL</Label>
             <Input
               id="site-url"
+              name="siteUrl"
               type="url"
-              value={siteUrl}
-              onChange={(e) => setSiteUrl(e.target.value)}
+              defaultValue=""
               placeholder="https://example.com"
               autoComplete="url"
               spellCheck={false}
@@ -144,8 +163,8 @@ export function SourceFormDialog({ trigger }: SourceFormDialogProps) {
           </div>
 
           <DialogFooter>
-            <Button type="submit" disabled={loading || !name.trim()}>
-              {loading ? "Saving…" : "Add"}
+            <Button type="submit" disabled={pending}>
+              {pending ? "Saving…" : "Add"}
             </Button>
           </DialogFooter>
         </form>
