@@ -62,6 +62,7 @@ def _build_registry() -> dict[SourceName, SourceFetcher]:
     )
     from app.collection.ingestion.fetchers.rss.spacenews import SpaceNewsFetcher
     from app.collection.ingestion.fetchers.rss.techcrunch import TechCrunchFetcher
+    from app.collection.ingestion.fetchers.rss.the_register import TheRegisterFetcher
     from app.collection.ingestion.fetchers.rss.venturebeat import VentureBeatFetcher
 
     return {
@@ -81,6 +82,7 @@ def _build_registry() -> dict[SourceName, SourceFetcher]:
         SourceName("CleanTechnica"): CleanTechnicaFetcher(),
         SourceName("Electrek"): ElectrekFetcher(),
         SourceName("SpaceNews"): SpaceNewsFetcher(),
+        SourceName("The Register"): TheRegisterFetcher(),
         # API ソース
         SourceName("Hacker News"): HackerNewsFetcher(),
     }
