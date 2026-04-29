@@ -49,6 +49,9 @@ export type ArticleDetail = components["schemas"]["ArticleDetail"];
 export type PaginatedArticleResponse =
   components["schemas"]["PaginatedArticleResponse"];
 
+// Watchlist
+export type WatchlistIds = components["schemas"]["WatchlistIds"];
+
 // ---------------------------------------------------------------------------
 // Direct re-exports (no narrowing needed)
 // ---------------------------------------------------------------------------

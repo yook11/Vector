@@ -1,5 +1,6 @@
 "use server";
 
+import { revalidateTag } from "next/cache";
 import { serverFetch } from "@/lib/api/server-fetcher";
 import { requireSessionForAction } from "@/lib/auth/guards";
 
@@ -9,4 +10,6 @@ export async function removeFromWatchlist(articleId: number): Promise<void> {
   await serverFetch<void>(`/me/watchlist/${articleId}`, {
     method: "DELETE",
   });
+  // Pattern B: per-user watchlist Set tag のみ無効化。
+  revalidateTag("watchlist:me", "max");
 }

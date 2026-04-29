@@ -9,6 +9,7 @@ import {
   NewsDetail,
   RelatedArticles,
 } from "@/features/news";
+import { getWatchlistIds } from "@/features/watchlist";
 import { ApiError } from "@/lib/api/error";
 import type { ArticleBrief, ArticleDetail as ArticleDetailData } from "@/types";
 
@@ -32,8 +33,10 @@ export async function generateMetadata({
 
 async function RelatedArticlesAsync({
   articlesPromise,
+  watchedIds,
 }: {
   articlesPromise: Promise<ArticleBrief[]>;
+  watchedIds: Set<number>;
 }) {
   // Related articles are a progressive enhancement: failure must not break
   // the page, but we still log so embed/index regressions stay visible.
@@ -43,7 +46,7 @@ async function RelatedArticlesAsync({
   } catch (err) {
     console.error("Failed to load similar articles", err);
   }
-  return <RelatedArticles articles={articles} />;
+  return <RelatedArticles articles={articles} watchedIds={watchedIds} />;
 }
 
 function RelatedArticlesSkeleton() {
@@ -63,10 +66,12 @@ export default async function NewsPage({ params }: NewsPageProps) {
   const { id } = await params;
   const articleId = Number(id);
 
-  // Fire both fetches in parallel. The similar-articles promise is forwarded
-  // to a Suspense'd child so it can stream in after the article renders.
+  // Fire all fetches in parallel. similar は Suspense'd child に forward。
+  // article 単独で 404 判定したいので await は分割する (Promise.all だと
+  // watchlist 側の失敗を 404 と誤認しうる)。
   const articlePromise = getArticleById(articleId);
   const similarPromise = getSimilarArticles(articleId, 5);
+  const watchedIdsPromise = getWatchlistIds();
 
   let article: ArticleDetailData;
   try {
@@ -77,6 +82,7 @@ export default async function NewsPage({ params }: NewsPageProps) {
     }
     throw err;
   }
+  const watchedIds = await watchedIdsPromise;
 
   return (
     <main className="h-full overflow-y-auto">
@@ -84,9 +90,12 @@ export default async function NewsPage({ params }: NewsPageProps) {
         <Button variant="ghost" size="sm" asChild className="text-xs">
           <Link href="/">&larr; Back to Dashboard</Link>
         </Button>
-        <NewsDetail article={article} />
+        <NewsDetail article={article} isWatched={watchedIds.has(article.id)} />
         <Suspense fallback={<RelatedArticlesSkeleton />}>
-          <RelatedArticlesAsync articlesPromise={similarPromise} />
+          <RelatedArticlesAsync
+            articlesPromise={similarPromise}
+            watchedIds={watchedIds}
+          />
         </Suspense>
       </div>
     </main>

@@ -10,6 +10,7 @@ import {
   SearchBar,
   searchArticles,
 } from "@/features/news";
+import { getWatchlistIds } from "@/features/watchlist";
 import { parseArticleQuery } from "@/lib/search-params/server";
 
 interface DashboardPageProps {
@@ -26,9 +27,10 @@ export default async function DashboardPage({
     ? searchArticles({ q, ...filters })
     : getArticles(filters);
 
-  const [newsData, categoriesData] = await Promise.all([
+  const [newsData, categoriesData, watchedIds] = await Promise.all([
     fetchNews,
     getCategories(),
+    getWatchlistIds(),
   ]);
 
   return (
@@ -64,7 +66,7 @@ export default async function DashboardPage({
           </div>
 
           {/* News grid */}
-          <NewsList items={newsData.items} />
+          <NewsList items={newsData.items} watchedIds={watchedIds} />
 
           <NewsPagination
             page={newsData.page}

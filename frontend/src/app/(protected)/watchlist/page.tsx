@@ -31,9 +31,13 @@ async function WatchlistContent({ page }: { page: number }) {
     );
   }
 
+  // /watchlist 配下の記事は全件 watched が定義上自明なので、追加 fetch を
+  // せず item ID から直接 Set を作る。
+  const watchedIds = new Set(data.items.map((a) => a.id));
+
   return (
     <>
-      <NewsList items={data.items} />
+      <NewsList items={data.items} watchedIds={watchedIds} />
       <NewsPagination page={data.page} totalPages={data.totalPages} />
     </>
   );

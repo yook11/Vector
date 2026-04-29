@@ -1,5 +1,6 @@
 "use server";
 
+import { revalidateTag } from "next/cache";
 import { serverFetch } from "@/lib/api/server-fetcher";
 import { requireSessionForAction } from "@/lib/auth/guards";
 
@@ -10,7 +11,7 @@ export async function addToWatchlist(articleId: number): Promise<void> {
     method: "POST",
     body: JSON.stringify({ articleId }),
   });
-  // getWatchlist は user-specific で no-store のため tag invalidation 不要。
-  // 一覧の isWatched フラグは per-user キャッシュ TTL までは stale だが、
-  // optimistic UI が即時反映するので体感上は問題ない。
+  // Pattern B: per-user watchlist Set tag のみ無効化。`articles` cache は
+  // user 非依存なので mutation で動かさない (本 user 以外への影響ゼロ)。
+  revalidateTag("watchlist:me", "max");
 }

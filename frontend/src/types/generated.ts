@@ -14,6 +14,9 @@ export interface paths {
     /**
      * Search Articles
      * @description 指定クエリテキストとのセマンティック類似度で記事を検索する。
+     *
+     *     レスポンスは user 非依存。per-user の watchlist 状態は
+     *     GET /api/v1/me/watchlist/ids で別取得し frontend で merge する。
      */
     get: operations["search_articles_api_v1_articles_search_get"];
     put?: never;
@@ -34,6 +37,9 @@ export interface paths {
     /**
      * List Articles
      * @description 分析済み記事をフィルタとページネーション付きで一覧取得する。
+     *
+     *     レスポンスは user 非依存。per-user の watchlist 状態は
+     *     GET /api/v1/me/watchlist/ids で別取得し frontend で merge する。
      */
     get: operations["list_articles_api_v1_articles_get"];
     put?: never;
@@ -54,9 +60,6 @@ export interface paths {
     /**
      * pgvector のコサイン距離で意味的に類似した記事を検索する
      * @description 指定記事に最も類似した記事を返す。
-     *
-     *     認証は任意。レスポンス自体はユーザー非依存だが、他の articles
-     *     エンドポイントと認可境界を揃えるため検証だけ通す。
      */
     get: operations["get_similar_articles_api_v1_articles__article_id__similar_get"];
     put?: never;
@@ -102,6 +105,26 @@ export interface paths {
      *     レスポンスはユーザー非依存だが、認可境界の一貫性のため検証だけ通す。
      */
     get: operations["list_categories_api_v1_categories_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/me/watchlist/ids": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List Watchlist Ids
+     * @description ウォッチ中の article_id 集合を返す (per-user, cache 不可)。
+     */
+    get: operations["list_watchlist_ids_api_v1_me_watchlist_ids_get"];
     put?: never;
     post?: never;
     delete?: never;
@@ -319,6 +342,11 @@ export interface components {
      *
      *     topic は表示専用属性として降格された 3 語以内英語フレーズ。DB NOT NULL +
      *     CHECK で非空を保証するため Optional ではない。
+     *
+     *     per-user の watchlist 状態はこのスキーマには含めない。frontend は
+     *     GET /api/v1/me/watchlist/ids を別途取得し render 時に Set lookup で
+     *     merge する (Pattern B)。これにより /articles レスポンスは user 非依存
+     *     となり HTTP cache/CDN 上で安全に共有できる。
      */
     ArticleBrief: {
       /** Id */
@@ -332,11 +360,6 @@ export interface components {
       publishedAt?: string | null;
       /** Topic */
       topic: string;
-      /**
-       * Iswatched
-       * @default false
-       */
-      isWatched: boolean;
     };
     /**
      * ArticleDetail
@@ -361,11 +384,6 @@ export interface components {
       publishedAt?: string | null;
       /** Topic */
       topic: string;
-      /**
-       * Iswatched
-       * @default false
-       */
-      isWatched: boolean;
       original: components["schemas"]["OriginalArticleEmbed"];
     };
     /**
@@ -602,11 +620,6 @@ export interface components {
      *     - 生成後は不変
      */
     TopicName: string;
-    /**
-     * UserRole
-     * @enum {string}
-     */
-    UserRole: "user" | "admin";
     /** ValidationError */
     ValidationError: {
       /** Location */
@@ -627,6 +640,17 @@ export interface components {
     WatchlistCreate: {
       /** Articleid */
       articleId: number;
+    };
+    /**
+     * WatchlistIds
+     * @description GET /api/v1/me/watchlist/ids のレスポンス。
+     *
+     *     記事リソースから per-user フラグを切り離し、frontend が render 時に
+     *     Set lookup で merge するための per-user メンバーシップ ID 集合。
+     */
+    WatchlistIds: {
+      /** Ids */
+      ids: number[];
     };
     /**
      * WeeklyTrendsResponse
@@ -707,11 +731,7 @@ export interface operations {
         category?: components["schemas"]["CategorySlug"] | null;
         sortOrder?: components["schemas"]["SortOrder"];
       };
-      header?: {
-        "x-internal-secret"?: string | null;
-        "x-user-id"?: string | null;
-        "x-user-role"?: components["schemas"]["UserRole"] | null;
-      };
+      header?: never;
       path?: never;
       cookie?: never;
     };
@@ -746,11 +766,7 @@ export interface operations {
         category?: components["schemas"]["CategorySlug"] | null;
         sortOrder?: components["schemas"]["SortOrder"];
       };
-      header?: {
-        "x-internal-secret"?: string | null;
-        "x-user-id"?: string | null;
-        "x-user-role"?: components["schemas"]["UserRole"] | null;
-      };
+      header?: never;
       path?: never;
       cookie?: never;
     };
@@ -781,11 +797,7 @@ export interface operations {
       query?: {
         limit?: number;
       };
-      header?: {
-        "x-internal-secret"?: string | null;
-        "x-user-id"?: string | null;
-        "x-user-role"?: components["schemas"]["UserRole"] | null;
-      };
+      header?: never;
       path: {
         article_id: number;
       };
@@ -816,11 +828,7 @@ export interface operations {
   get_article_api_v1_articles__article_id__get: {
     parameters: {
       query?: never;
-      header?: {
-        "x-internal-secret"?: string | null;
-        "x-user-id"?: string | null;
-        "x-user-role"?: components["schemas"]["UserRole"] | null;
-      };
+      header?: never;
       path: {
         article_id: number;
       };
@@ -852,9 +860,7 @@ export interface operations {
     parameters: {
       query?: never;
       header?: {
-        "x-internal-secret"?: string | null;
-        "x-user-id"?: string | null;
-        "x-user-role"?: components["schemas"]["UserRole"] | null;
+        authorization?: string | null;
       };
       path?: never;
       cookie?: never;
@@ -881,16 +887,45 @@ export interface operations {
       };
     };
   };
+  list_watchlist_ids_api_v1_me_watchlist_ids_get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["WatchlistIds"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
   list_articles_in_watchlist_api_v1_me_watchlist_get: {
     parameters: {
       query?: {
         page?: number;
         perPage?: number;
       };
-      header: {
-        "x-user-id": string;
-        "x-user-role": components["schemas"]["UserRole"];
-        "x-internal-secret"?: string | null;
+      header?: {
+        authorization?: string | null;
       };
       path?: never;
       cookie?: never;
@@ -920,10 +955,8 @@ export interface operations {
   add_to_watchlist_api_v1_me_watchlist_post: {
     parameters: {
       query?: never;
-      header: {
-        "x-user-id": string;
-        "x-user-role": components["schemas"]["UserRole"];
-        "x-internal-secret"?: string | null;
+      header?: {
+        authorization?: string | null;
       };
       path?: never;
       cookie?: never;
@@ -957,10 +990,8 @@ export interface operations {
   remove_from_watchlist_api_v1_me_watchlist__article_id__delete: {
     parameters: {
       query?: never;
-      header: {
-        "x-user-id": string;
-        "x-user-role": components["schemas"]["UserRole"];
-        "x-internal-secret"?: string | null;
+      header?: {
+        authorization?: string | null;
       };
       path: {
         article_id: number;
@@ -991,9 +1022,7 @@ export interface operations {
     parameters: {
       query?: never;
       header?: {
-        "x-internal-secret"?: string | null;
-        "x-user-id"?: string | null;
-        "x-user-role"?: components["schemas"]["UserRole"] | null;
+        authorization?: string | null;
       };
       path?: never;
       cookie?: never;
@@ -1023,10 +1052,8 @@ export interface operations {
   list_news_sources_api_v1_admin_sources_get: {
     parameters: {
       query?: never;
-      header: {
-        "x-user-id": string;
-        "x-user-role": components["schemas"]["UserRole"];
-        "x-internal-secret"?: string | null;
+      header?: {
+        authorization?: string | null;
       };
       path?: never;
       cookie?: never;
@@ -1056,10 +1083,8 @@ export interface operations {
   create_news_source_api_v1_admin_sources_post: {
     parameters: {
       query?: never;
-      header: {
-        "x-user-id": string;
-        "x-user-role": components["schemas"]["UserRole"];
-        "x-internal-secret"?: string | null;
+      header?: {
+        authorization?: string | null;
       };
       path?: never;
       cookie?: never;
@@ -1093,10 +1118,8 @@ export interface operations {
   delete_news_source_api_v1_admin_sources__source_id__delete: {
     parameters: {
       query?: never;
-      header: {
-        "x-user-id": string;
-        "x-user-role": components["schemas"]["UserRole"];
-        "x-internal-secret"?: string | null;
+      header?: {
+        authorization?: string | null;
       };
       path: {
         source_id: number;
@@ -1126,10 +1149,8 @@ export interface operations {
   activate_source_api_v1_admin_sources__source_id__activate_patch: {
     parameters: {
       query?: never;
-      header: {
-        "x-user-id": string;
-        "x-user-role": components["schemas"]["UserRole"];
-        "x-internal-secret"?: string | null;
+      header?: {
+        authorization?: string | null;
       };
       path: {
         source_id: number;
@@ -1161,10 +1182,8 @@ export interface operations {
   deactivate_source_api_v1_admin_sources__source_id__deactivate_patch: {
     parameters: {
       query?: never;
-      header: {
-        "x-user-id": string;
-        "x-user-role": components["schemas"]["UserRole"];
-        "x-internal-secret"?: string | null;
+      header?: {
+        authorization?: string | null;
       };
       path: {
         source_id: number;
@@ -1196,10 +1215,8 @@ export interface operations {
   fetch_news_api_v1_admin_pipeline_fetch_post: {
     parameters: {
       query?: never;
-      header: {
-        "x-user-id": string;
-        "x-user-role": components["schemas"]["UserRole"];
-        "x-internal-secret"?: string | null;
+      header?: {
+        authorization?: string | null;
       };
       path?: never;
       cookie?: never;
@@ -1233,10 +1250,8 @@ export interface operations {
   embed_news_api_v1_admin_pipeline_embed_post: {
     parameters: {
       query?: never;
-      header: {
-        "x-user-id": string;
-        "x-user-role": components["schemas"]["UserRole"];
-        "x-internal-secret"?: string | null;
+      header?: {
+        authorization?: string | null;
       };
       path?: never;
       cookie?: never;

@@ -4,9 +4,14 @@ import { NewsCard } from "./NewsCard";
 
 interface RelatedArticlesProps {
   articles: ArticleBrief[];
+  /** Pattern B: 親 page から渡される watched ID 集合。 */
+  watchedIds: Set<number>;
 }
 
-export function RelatedArticles({ articles }: RelatedArticlesProps) {
+export function RelatedArticles({
+  articles,
+  watchedIds,
+}: RelatedArticlesProps) {
   if (articles.length === 0) return null;
 
   return (
@@ -20,7 +25,7 @@ export function RelatedArticles({ articles }: RelatedArticlesProps) {
             actionSlot={
               <WatchlistButton
                 articleId={article.id}
-                isWatched={article.isWatched}
+                isWatched={watchedIds.has(article.id)}
               />
             }
           />
