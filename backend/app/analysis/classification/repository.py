@@ -44,6 +44,12 @@ class AnalysisRepository:
         orm = (await self._session.execute(stmt)).scalar_one_or_none()
         return self._to_domain(orm) if orm is not None else None
 
+    async def find_by_id(self, analysis_id: int) -> Analysis | None:
+        """PK 検索 (Stage E 経路 backfill_embeddings から使用)。"""
+        stmt = select(ArticleAnalysis).where(ArticleAnalysis.id == analysis_id)
+        orm = (await self._session.execute(stmt)).scalar_one_or_none()
+        return self._to_domain(orm) if orm is not None else None
+
     async def save(
         self,
         draft: AnalysisDraft,

@@ -19,14 +19,13 @@ from app.analysis.classification.service import (
     ClassifiedOutcome,
 )
 from app.analysis.classifier.base import BaseClassifier
-from app.analysis.embedder.factory import get_embedder
+from app.analysis.embedder.base import BaseEmbedder
+from app.analysis.embedding.domain.ready import ReadyForEmbedding
+from app.analysis.embedding.repository import EmbeddingRepository
 from app.analysis.embedding.service import (
-    AlreadyEmbeddedOutcome,
     EmbeddedOutcome,
     EmbeddingService,
-)
-from app.analysis.embedding.service import (
-    SkippedOutcome as EmbeddingSkippedOutcome,
+    InvalidInputOutcome,
 )
 from app.analysis.errors import (
     ConfigurationError,
@@ -162,7 +161,6 @@ async def extract_content(
             rejection_repo = RejectionRepository(session)
             ready = await ReadyForClassification.try_advance_from(
                 extraction,
-                article_id=article_id,
                 analysis_repo=analysis_repo,
                 rejection_repo=rejection_repo,
             )
@@ -192,7 +190,6 @@ async def classify_content(
     """
     session_factory = ctx.state.session_factory
     classifier: BaseClassifier = ctx.state.classifier
-    article_id = ready.article_id  # log + Phase 1 transitional embedding chain 用
 
     # Rate limit acquire は呼び出し側の責任
     rpm_limiter, rpd_limiter = _build_limiters(
@@ -204,7 +201,10 @@ async def classify_content(
         if rpm_limiter is not None:
             await rpm_limiter.acquire()
     except _RateLimitExceededError:
-        logger.warning("classify_content_daily_quota", article_id=article_id)
+        logger.warning(
+            "classify_content_daily_quota",
+            extraction_id=ready.extraction_id,
+        )
         return
 
     # Service 呼び出し（session は内部で管理）
@@ -218,7 +218,7 @@ async def classify_content(
     ) as e:
         logger.warning(
             "classify_content_no_retry",
-            article_id=article_id,
+            extraction_id=ready.extraction_id,
             reason=str(e),
         )
         return
@@ -231,21 +231,29 @@ async def classify_content(
         if is_last_attempt(ctx):
             logger.warning(
                 "classify_content_max_retries",
-                article_id=article_id,
+                extraction_id=ready.extraction_id,
                 reason=str(e),
             )
             return
         raise
 
-    # 次ステップへ chain (Phase 1: ClassifiedOutcome のみ。AlreadyClassified は廃止
-    # = ready 構築時点で try_advance_from が None で止めるため到達しない)。
-    # Phase 2 で `ReadyForEmbedding.try_advance_from(result.analysis, ...)` に置換予定。
+    # Stage E へ chain (Pattern A': 上流 Task が下流 Ready を構築 — spec §7.1)。
+    # ClassifiedOutcome の analysis から ReadyForEmbedding を構築する。
+    # AlreadyClassified / Skipped Outcome は廃止 (ready 構築時点で
+    # try_advance_from が None で止めるため到達しない)。
     if isinstance(result, ClassifiedOutcome):
-        await generate_embedding.kiq(article_id)
+        async with session_factory() as session:
+            embedding_repo = EmbeddingRepository(session)
+            ready_emb = await ReadyForEmbedding.try_advance_from(
+                result.analysis,
+                embedding_repo,
+            )
+        if ready_emb is not None:
+            await generate_embedding.kiq(ready_emb)
 
 
 # ---------------------------------------------------------------------------
-# Embedding
+# Embedding (Stage E)
 # ---------------------------------------------------------------------------
 
 
@@ -256,12 +264,17 @@ async def classify_content(
     retry_on_error=True,
 )
 async def generate_embedding(
-    article_id: int,
+    ready: ReadyForEmbedding,
     ctx: Context = TaskiqDepends(),
 ) -> None:
-    """単一記事の分析結果に対してベクトル埋め込みを生成する。"""
+    """単一 analysis に対してベクトル埋め込みを生成する (Stage E)。
+
+    Pattern A': 受け取った Ready 型は precondition (analysis 存在 + embedding
+    未生成 + text 非空) を構造保証している。本 task は再 fetch / None check を
+    行わない。
+    """
     session_factory = ctx.state.session_factory
-    embedder = get_embedder()
+    embedder: BaseEmbedder = ctx.state.embedder
 
     # Rate limit acquire は呼び出し側の責任
     rpm_limiter, rpd_limiter = _build_limiters(
@@ -273,17 +286,20 @@ async def generate_embedding(
         if rpm_limiter is not None:
             await rpm_limiter.acquire()
     except _RateLimitExceededError:
-        logger.warning("generate_embedding_daily_quota", article_id=article_id)
+        logger.warning(
+            "generate_embedding_daily_quota",
+            analysis_id=ready.analysis_id,
+        )
         return
 
     # Service 呼び出し（session は内部で管理）
     svc = EmbeddingService(session_factory)
     try:
-        result = await svc.execute(article_id, embedder)
+        result = await svc.execute(ready, embedder)
     except (ConfigurationError, DailyQuotaExhaustedError) as e:
         logger.warning(
             "generate_embedding_no_retry",
-            article_id=article_id,
+            analysis_id=ready.analysis_id,
             reason=str(e),
         )
         return
@@ -296,7 +312,7 @@ async def generate_embedding(
         if is_last_attempt(ctx):
             logger.warning(
                 "generate_embedding_max_retries",
-                article_id=article_id,
+                analysis_id=ready.analysis_id,
                 reason=str(e),
             )
             return
@@ -306,19 +322,11 @@ async def generate_embedding(
     if isinstance(result, EmbeddedOutcome):
         logger.info(
             "generate_embedding_completed",
-            article_id=article_id,
             analysis_id=result.embedding.analysis_id,
             model=result.embedding.model_name,
         )
-    elif isinstance(result, AlreadyEmbeddedOutcome):
+    elif isinstance(result, InvalidInputOutcome):
         logger.info(
-            "generate_embedding_already_exists",
-            article_id=article_id,
-            analysis_id=result.embedding.analysis_id,
-        )
-    elif isinstance(result, EmbeddingSkippedOutcome):
-        logger.info(
-            "generate_embedding_skipped",
-            article_id=article_id,
-            reason=result.reason,
+            "generate_embedding_invalid_input",
+            analysis_id=ready.analysis_id,
         )

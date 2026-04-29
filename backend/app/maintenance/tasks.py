@@ -203,7 +203,6 @@ async def backfill_classifications(ctx: Context = TaskiqDepends()) -> None:
                     continue
                 ready = await ReadyForClassification.try_advance_from(
                     extraction,
-                    article_id=article_id,
                     analysis_repo=analysis_repo,
                     rejection_repo=rejection_repo,
                 )
@@ -242,7 +241,12 @@ async def backfill_classifications(ctx: Context = TaskiqDepends()) -> None:
     schedule=[{"cron": "*/10 * * * *"}],
 )
 async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
-    """embedding NULL の analysis を発見し generate_embedding を再投入する。"""
+    """embedding NULL の analysis を発見し generate_embedding を再投入する。
+
+    Pattern A' (spec §3.4 / §7.2) maintenance task として、自身が gatekeeper を
+    兼ねる: 各 analysis_id ごとに `ReadyForEmbedding.try_advance_from` を呼び、
+    成立するもののみ `kiq(ready)` で再投入する。
+    """
     if not settings.backfill_embeddings_enabled:
         logger.info("backfill_embeddings_disabled")
         return
@@ -252,7 +256,7 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
 
     async with session_factory() as session:
         backlog = PipelineBacklog(session)
-        ids = await backlog.article_ids_pending_embedding(
+        ids = await backlog.analysis_ids_pending_embedding(
             created_before=before,
             created_after=after,
             limit=EMBEDDINGS_LIMIT,
@@ -274,17 +278,35 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
         logger.warning("backfill_embeddings_daily_budget_exhausted", found=found)
         return
 
+    from app.analysis.classification.repository import AnalysisRepository
+    from app.analysis.embedding.domain.ready import ReadyForEmbedding
+    from app.analysis.embedding.repository import EmbeddingRepository
     from app.analysis.tasks import generate_embedding
 
     requeued = 0
-    for article_id in ids[:granted]:
+    skipped = 0
+    for analysis_id in ids[:granted]:
         try:
-            await generate_embedding.kiq(article_id)
+            async with session_factory() as session:
+                analysis_repo = AnalysisRepository(session)
+                embedding_repo = EmbeddingRepository(session)
+                analysis = await analysis_repo.find_by_id(analysis_id)
+                if analysis is None:
+                    skipped += 1
+                    continue
+                ready = await ReadyForEmbedding.try_advance_from(
+                    analysis,
+                    embedding_repo,
+                )
+            if ready is None:
+                skipped += 1
+                continue
+            await generate_embedding.kiq(ready)
             requeued += 1
         except Exception as e:  # noqa: BLE001
             logger.warning(
                 "backfill_embeddings_kiq_failed",
-                article_id=article_id,
+                analysis_id=analysis_id,
                 error=str(e),
             )
             continue
@@ -294,4 +316,5 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
         found=found,
         granted=granted,
         requeued=requeued,
+        skipped=skipped,
     )

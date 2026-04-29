@@ -861,10 +861,8 @@ async def test_classification_persists_topic_and_category(
         )
     )
 
-    article_id = article.id
     extraction_id = extraction.id
     ready = ReadyForClassification(
-        article_id=article_id,
         extraction_id=extraction_id,
         translated_title=extraction.translated_title,
         summary=extraction.summary,

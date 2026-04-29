@@ -1,12 +1,15 @@
 """EmbeddingService (app.analysis.embedding.service) の DB 統合テスト。
 
-Outcome tagged union (``EmbeddedOutcome`` / ``AlreadyEmbeddedOutcome`` /
-``SkippedOutcome``) と Service フローの全経路を検証する:
+Pattern A' (typed-pipeline-preconditions.md §1.1) に従い Outcome は
+``EmbeddedOutcome | InvalidInputOutcome`` の 2 variants に縮退している。
+precondition 分岐 (extraction_not_found / analysis_pending / analysis_rejected /
+既存 embedding) は ``ReadyForEmbedding.try_advance_from`` 側責務に移管したため
+本ファイルでは扱わない (test_ready_for_embedding.py 参照)。
 
-- 正常系 (新規生成 → 永続化)
-- 冪等ヒット (既存埋め込み)
-- skipped: extraction_not_found / analysis_pending / analysis_rejected /
-  invalid_input
+検証する経路:
+- 正常系 (新規生成 → 永続化 → EmbeddedOutcome)
+- 並行 race 敗北 → 読戻し → EmbeddedOutcome 合流
+- InvalidInput (embedder が InvalidInputError) → InvalidInputOutcome
 - エラー伝搬: RateLimit / Provider / Network は Task 層に伝搬
 """
 
@@ -20,12 +23,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.embedder.base import BaseEmbedder
 from app.analysis.embedding.domain.embedding import Embedding
+from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.domain.value_objects import EMBEDDING_DIMENSION
 from app.analysis.embedding.service import (
-    AlreadyEmbeddedOutcome,
     EmbeddedOutcome,
     EmbeddingService,
-    SkippedOutcome,
+    InvalidInputOutcome,
 )
 from app.analysis.errors import (
     InvalidInputError,
@@ -36,7 +39,6 @@ from app.analysis.errors import (
 from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis
 from app.models.article_extraction import ArticleExtraction
-from app.models.article_rejection import ArticleRejection
 from app.models.category import Category
 from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
@@ -132,6 +134,12 @@ async def _build_analysis(
     return analysis
 
 
+def _make_ready(
+    analysis_id: int, *, text: str = "分析タイトル\n分析要約"
+) -> ReadyForEmbedding:
+    return ReadyForEmbedding(analysis_id=analysis_id, text_for_embedding=text)
+
+
 # ---------------------------------------------------------------------------
 # Happy path: EmbeddedOutcome
 # ---------------------------------------------------------------------------
@@ -151,12 +159,12 @@ async def test_execute_returns_embedded_outcome_and_persists(
     extraction = await _build_extraction(db_session, article)
     analysis = await _build_analysis(db_session, extraction, sample_categories[0].id)
     await db_session.commit()
-    article_id = article.id
     analysis_id = analysis.id
 
     embedder = _mock_embedder()
     svc = EmbeddingService(session_factory)
-    result = await svc.execute(article_id, embedder)
+    ready = _make_ready(analysis_id)
+    result = await svc.execute(ready, embedder)
 
     assert isinstance(result, EmbeddedOutcome)
     assert isinstance(result.embedding, Embedding)
@@ -172,144 +180,60 @@ async def test_execute_returns_embedded_outcome_and_persists(
 
 
 # ---------------------------------------------------------------------------
-# Idempotency: AlreadyEmbeddedOutcome
+# Race 敗北: 既に埋め込まれた行に対する save → None → 読戻し → EmbeddedOutcome 合流
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_execute_returns_already_embedded_when_existing(
+async def test_execute_reads_back_winner_when_save_loses_race(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
     sample_categories: list[Category],
 ) -> None:
-    """既存埋め込み → embedder 呼ばずに AlreadyEmbeddedOutcome。"""
+    """Ready 構築後に他ワーカーが先に書き込んだ場合、save は None を返し
+    Service が ``find_by_analysis_id`` で勝者を読戻して EmbeddedOutcome に合流する。
+    """
     article = await _build_article(
-        db_session, sample_source, url="https://example.com/already-embedded"
+        db_session, sample_source, url="https://example.com/race"
     )
     extraction = await _build_extraction(db_session, article)
-    await _build_analysis(
+    analysis = await _build_analysis(
         db_session,
         extraction,
         sample_categories[0].id,
         embedding=[0.4] * EMBEDDING_DIMENSION,
     )
     await db_session.commit()
-    article_id = article.id
+    analysis_id = analysis.id
 
     embedder = _mock_embedder()
     svc = EmbeddingService(session_factory)
-    result = await svc.execute(article_id, embedder)
+    # Ready 構築自体は precondition (is_embedded_for) 済みの前提だが、本テストでは
+    # race 状況をシミュレートするため Ready を直接構築して execute に渡す。
+    ready = _make_ready(analysis_id)
+    result = await svc.execute(ready, embedder)
 
-    assert isinstance(result, AlreadyEmbeddedOutcome)
+    assert isinstance(result, EmbeddedOutcome)
+    # 勝者 (先に書き込まれた値) を読戻している
     assert result.embedding.model_name == "cl-nagoya/ruri-v3-310m"
-    embedder.embed_document.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
-# Skipped: extraction_not_found
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_execute_skipped_when_extraction_missing(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-    sample_source: NewsSource,
-) -> None:
-    """Stage 1 未完了 → SkippedOutcome(extraction_not_found)。"""
-    article = await _build_article(
-        db_session, sample_source, url="https://example.com/no-extraction"
-    )
-    await db_session.commit()
-    article_id = article.id
-
-    embedder = _mock_embedder()
-    svc = EmbeddingService(session_factory)
-    result = await svc.execute(article_id, embedder)
-
-    assert isinstance(result, SkippedOutcome)
-    assert result.reason == "extraction_not_found"
-    embedder.embed_document.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# Skipped: analysis_pending (extraction あり、analysis/rejection 共に無し)
+# InvalidInput: embedder が InvalidInputError を投げた
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_execute_skipped_when_analysis_pending(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-    sample_source: NewsSource,
-) -> None:
-    """Stage 2 未完了 → SkippedOutcome(analysis_pending)。"""
-    article = await _build_article(
-        db_session, sample_source, url="https://example.com/pending"
-    )
-    await _build_extraction(db_session, article)
-    await db_session.commit()
-    article_id = article.id
-
-    embedder = _mock_embedder()
-    svc = EmbeddingService(session_factory)
-    result = await svc.execute(article_id, embedder)
-
-    assert isinstance(result, SkippedOutcome)
-    assert result.reason == "analysis_pending"
-    embedder.embed_document.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# Skipped: analysis_rejected (extraction あり、rejection あり、analysis 無し)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_execute_skipped_when_analysis_rejected(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-    sample_source: NewsSource,
-) -> None:
-    """Stage 2 で OutOfScope → SkippedOutcome(analysis_rejected)。"""
-    article = await _build_article(
-        db_session, sample_source, url="https://example.com/rejected"
-    )
-    extraction = await _build_extraction(db_session, article)
-    rejection = ArticleRejection(
-        extraction_id=extraction.id,
-        investor_take="対象外と判定された理由",
-        ai_model="gemini-2.5-flash-lite",
-    )
-    db_session.add(rejection)
-    await db_session.commit()
-    article_id = article.id
-
-    embedder = _mock_embedder()
-    svc = EmbeddingService(session_factory)
-    result = await svc.execute(article_id, embedder)
-
-    assert isinstance(result, SkippedOutcome)
-    assert result.reason == "analysis_rejected"
-    embedder.embed_document.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# Skipped: invalid_input (embedder が InvalidInputError を投げた)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_execute_skipped_when_embedder_raises_invalid_input(
+async def test_execute_returns_invalid_input_outcome_when_embedder_rejects(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
     sample_categories: list[Category],
 ) -> None:
-    """embedder が InvalidInputError → SkippedOutcome(invalid_input)。
+    """embedder が InvalidInputError → InvalidInputOutcome。
 
-    DB は変更されないこと (commit が呼ばれない) も検証する。
+    DB は変更されないこと (save が呼ばれない) も検証する。
     """
     article = await _build_article(
         db_session, sample_source, url="https://example.com/invalid"
@@ -317,15 +241,14 @@ async def test_execute_skipped_when_embedder_raises_invalid_input(
     extraction = await _build_extraction(db_session, article)
     analysis = await _build_analysis(db_session, extraction, sample_categories[0].id)
     await db_session.commit()
-    article_id = article.id
     analysis_id = analysis.id
 
     embedder = _mock_embedder(raises=InvalidInputError("input rejected"))
     svc = EmbeddingService(session_factory)
-    result = await svc.execute(article_id, embedder)
+    ready = _make_ready(analysis_id)
+    result = await svc.execute(ready, embedder)
 
-    assert isinstance(result, SkippedOutcome)
-    assert result.reason == "invalid_input"
+    assert isinstance(result, InvalidInputOutcome)
 
     db_session.expire_all()
     refetched = await db_session.get(ArticleAnalysis, analysis_id)
@@ -362,37 +285,12 @@ async def test_execute_propagates_retryable_errors(
         url=f"https://example.com/error-{type(exc).__name__}",
     )
     extraction = await _build_extraction(db_session, article)
-    await _build_analysis(db_session, extraction, sample_categories[0].id)
+    analysis = await _build_analysis(db_session, extraction, sample_categories[0].id)
     await db_session.commit()
-    article_id = article.id
+    analysis_id = analysis.id
 
     embedder = _mock_embedder(raises=exc)
     svc = EmbeddingService(session_factory)
+    ready = _make_ready(analysis_id)
     with pytest.raises(type(exc)):
-        await svc.execute(article_id, embedder)
-
-
-# ---------------------------------------------------------------------------
-# _build_text: 結合フォーマット契約
-# ---------------------------------------------------------------------------
-
-
-def test_build_text_joins_title_and_summary_with_newline() -> None:
-    """``translated_title`` と ``summary`` を改行で連結する契約を保証する。"""
-    from datetime import datetime as _dt
-
-    from app.analysis.classification.domain.analysis import Analysis
-    from app.analysis.domain.value_objects.topic import TopicName
-
-    analysis = Analysis(
-        id=1,
-        extraction_id=1,
-        translated_title="タイトルです",
-        summary="要約です",
-        topic=TopicName(root="topic"),
-        category_id=1,
-        investor_take="視点",
-        ai_model="m",
-        analyzed_at=_dt(2026, 4, 25, tzinfo=UTC),
-    )
-    assert EmbeddingService._build_text(analysis) == "タイトルです\n要約です"
+        await svc.execute(ready, embedder)

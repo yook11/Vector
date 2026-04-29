@@ -81,21 +81,21 @@ class PipelineBacklog:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
-    async def article_ids_pending_embedding(
+    async def analysis_ids_pending_embedding(
         self,
         *,
         created_before: datetime,
         created_after: datetime,
         limit: int,
     ) -> list[int]:
-        """analysis はあるが embedding が NULL な Article ID を返す (Stage 3 残)."""
+        """analysis はあるが embedding が NULL な Analysis ID を返す (Stage E 残)."""
         stmt = (
-            select(Article.id)
-            .join(ArticleExtraction, ArticleExtraction.article_id == Article.id)
+            select(ArticleAnalysis.id)
             .join(
-                ArticleAnalysis,
-                ArticleAnalysis.extraction_id == ArticleExtraction.id,
+                ArticleExtraction,
+                ArticleExtraction.id == ArticleAnalysis.extraction_id,
             )
+            .join(Article, Article.id == ArticleExtraction.article_id)
             .where(
                 ArticleAnalysis.embedding.is_(None),
                 Article.created_at < created_before,

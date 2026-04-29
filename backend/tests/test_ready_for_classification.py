@@ -57,26 +57,23 @@ class TestTryAdvanceFromPreconditionMet:
 
         ready = await ReadyForClassification.try_advance_from(
             extraction,
-            article_id=7,
             analysis_repo=analysis_repo,
             rejection_repo=rejection_repo,
         )
 
         assert ready is not None
         assert ready.extraction_id == 42
-        assert ready.article_id == 7
         assert ready.translated_title == extraction.translated_title
         assert ready.summary == extraction.summary
 
     @pytest.mark.asyncio
     async def test_calls_exists_for_extraction_with_extraction_id(self) -> None:
-        """exists 判定は extraction.id をキーに行う (article_id ではなく)。"""
+        """exists 判定は extraction.id をキーに行う。"""
         extraction = _make_extraction(id=99)
         analysis_repo, rejection_repo = _make_repo_mocks()
 
         await ReadyForClassification.try_advance_from(
             extraction,
-            article_id=1,
             analysis_repo=analysis_repo,
             rejection_repo=rejection_repo,
         )
@@ -94,7 +91,6 @@ class TestTryAdvanceFromPreconditionNotMet:
 
         ready = await ReadyForClassification.try_advance_from(
             extraction,
-            article_id=7,
             analysis_repo=analysis_repo,
             rejection_repo=rejection_repo,
         )
@@ -111,7 +107,6 @@ class TestTryAdvanceFromPreconditionNotMet:
 
         ready = await ReadyForClassification.try_advance_from(
             extraction,
-            article_id=7,
             analysis_repo=analysis_repo,
             rejection_repo=rejection_repo,
         )
@@ -130,7 +125,6 @@ class TestReadyForClassificationImmutability:
     def test_is_frozen(self) -> None:
         """frozen=True のため field 書き換えは ValidationError。"""
         ready = ReadyForClassification(
-            article_id=1,
             extraction_id=2,
             translated_title="title",
             summary="summary",
@@ -142,8 +136,7 @@ class TestReadyForClassificationImmutability:
         """構築時に Pydantic が int を validate する。"""
         with pytest.raises(ValidationError):
             ReadyForClassification(
-                article_id="not-an-int",  # type: ignore[arg-type]
-                extraction_id=1,
+                extraction_id="not-an-int",  # type: ignore[arg-type]
                 translated_title="t",
                 summary="s",
             )

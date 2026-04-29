@@ -239,7 +239,7 @@ async def test_pending_classification_excludes_articles_with_analysis(
 
 
 # ---------------------------------------------------------------------------
-# article_ids_pending_embedding
+# analysis_ids_pending_embedding (Phase 2: Article ID → Analysis ID)
 # ---------------------------------------------------------------------------
 
 
@@ -249,7 +249,7 @@ async def test_pending_embedding_returns_analysis_with_null_embedding(
     sample_source: NewsSource,
     sample_categories: list[Category],
 ) -> None:
-    """analysis.embedding IS NULL の Article が境界内なら返る。"""
+    """analysis.embedding IS NULL の Analysis ID が境界内なら返る。"""
     now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
     article = await _make_article(
         db_session,
@@ -266,27 +266,27 @@ async def test_pending_embedding_returns_analysis_with_null_embedding(
     db_session.add(extraction)
     await db_session.commit()
     await db_session.refresh(extraction)
-    db_session.add(
-        ArticleAnalysis(
-            extraction_id=extraction.id,
-            translated_title="tt",
-            summary="ss",
-            investor_take="it",
-            ai_model="m",
-            topic="ai chip",
-            category_id=sample_categories[0].id,
-            # embedding / embedding_model はあえて未指定 → NULL
-        )
+    analysis = ArticleAnalysis(
+        extraction_id=extraction.id,
+        translated_title="tt",
+        summary="ss",
+        investor_take="it",
+        ai_model="m",
+        topic="ai chip",
+        category_id=sample_categories[0].id,
+        # embedding / embedding_model はあえて未指定 → NULL
     )
+    db_session.add(analysis)
     await db_session.commit()
+    await db_session.refresh(analysis)
 
     backlog = PipelineBacklog(db_session)
-    ids = await backlog.article_ids_pending_embedding(
+    ids = await backlog.analysis_ids_pending_embedding(
         created_before=now - timedelta(minutes=30),
         created_after=now - timedelta(days=7),
         limit=10,
     )
-    assert article.id in ids
+    assert analysis.id in ids
 
 
 @pytest.mark.asyncio
@@ -312,25 +312,25 @@ async def test_pending_embedding_excludes_already_embedded(
     db_session.add(extraction)
     await db_session.commit()
     await db_session.refresh(extraction)
-    db_session.add(
-        ArticleAnalysis(
-            extraction_id=extraction.id,
-            translated_title="tt",
-            summary="ss",
-            investor_take="it",
-            ai_model="m",
-            topic="ai chip",
-            category_id=sample_categories[0].id,
-            embedding=[0.1] * 768,
-            embedding_model="ruri-v3-310m",
-        )
+    analysis = ArticleAnalysis(
+        extraction_id=extraction.id,
+        translated_title="tt",
+        summary="ss",
+        investor_take="it",
+        ai_model="m",
+        topic="ai chip",
+        category_id=sample_categories[0].id,
+        embedding=[0.1] * 768,
+        embedding_model="ruri-v3-310m",
     )
+    db_session.add(analysis)
     await db_session.commit()
+    await db_session.refresh(analysis)
 
     backlog = PipelineBacklog(db_session)
-    ids = await backlog.article_ids_pending_embedding(
+    ids = await backlog.analysis_ids_pending_embedding(
         created_before=now - timedelta(minutes=30),
         created_after=now - timedelta(days=7),
         limit=10,
     )
-    assert article.id not in ids
+    assert analysis.id not in ids
