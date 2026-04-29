@@ -23,6 +23,10 @@ from app.models.news_source import NewsSource
         "Spaceflight Now",
         "ITmedia AI+",
         "JPCERT/CC",
+        "Engadget",
+        "CleanTechnica",
+        "Electrek",
+        "SpaceNews",
         "Hacker News",
     ],
 )
