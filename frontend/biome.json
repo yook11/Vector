@@ -198,6 +198,31 @@
           }
         }
       }
+    },
+    {
+      "includes": [
+        "src/app/**",
+        "src/components/**",
+        "src/lib/**",
+        "src/proxy.ts"
+      ],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["@/features/*/**"],
+                    "message": "features 配下は Public API '@/features/<name>' 経由のみ。内部実装への deep import は禁止。"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
     }
   ]
 }
