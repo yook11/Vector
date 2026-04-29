@@ -43,6 +43,15 @@ describe("buildLoginCallbackUrl", () => {
       expect(buildLoginCallbackUrl("//evil.com")).toBe("/auth/login");
     });
 
+    it("URL parser 経由で `//` 始まりに正規化された pathname も fallback", () => {
+      // new URL("https://example.com//evil").pathname === "//evil"
+      // (URL spec は pathname の重複 `/` を保持する。これは login redirect の
+      //  protocol-relative bypass と同等の脅威 — 構造的に弾く必要がある)
+      expect(buildLoginCallbackUrl("https://example.com//evil")).toBe(
+        "/auth/login",
+      );
+    });
+
     it("treats /auth/* referer as login-loop and falls back", () => {
       expect(buildLoginCallbackUrl("https://example.com/auth/login")).toBe(
         "/auth/login",
