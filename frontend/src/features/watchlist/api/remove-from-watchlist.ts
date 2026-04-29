@@ -1,13 +1,13 @@
 "use server";
 
 import { refresh, revalidateTag } from "next/cache";
-import { serverFetch } from "@/lib/api/server-fetcher";
+import { serverEmpty } from "@/lib/api/server-fetcher";
 import { requireSessionForAction } from "@/lib/auth/guards";
 
 /** Remove an article from the watchlist (Server Action). */
 export async function removeFromWatchlist(articleId: number): Promise<void> {
   await requireSessionForAction();
-  await serverFetch<void>(`/me/watchlist/${articleId}`, {
+  await serverEmpty(`/me/watchlist/${articleId}`, {
     method: "DELETE",
   });
   // Pattern B: per-user watchlist Set tag のみ無効化。

@@ -16,7 +16,7 @@
 
 import "server-only";
 
-import { requestJson } from "@/lib/api/fetcher";
+import { requestEmpty, requestJson } from "@/lib/api/fetcher";
 import {
   buildInternalAuthHeaders,
   INTERNAL_API_URL,
@@ -34,6 +34,21 @@ export async function serverFetch<T>(
 ): Promise<T> {
   const authHeaders = await getAuthHeaders();
   return requestJson<T>(`${INTERNAL_API_URL}${path}`, {
+    ...options,
+    headers: {
+      ...authHeaders,
+      ...options?.headers,
+    },
+  });
+}
+
+// 204 No Content 期待 endpoint 専用。serverFetch<void> の嘘の型を避けるため分離。
+export async function serverEmpty(
+  path: string,
+  options?: RequestInit,
+): Promise<void> {
+  const authHeaders = await getAuthHeaders();
+  await requestEmpty(`${INTERNAL_API_URL}${path}`, {
     ...options,
     headers: {
       ...authHeaders,
