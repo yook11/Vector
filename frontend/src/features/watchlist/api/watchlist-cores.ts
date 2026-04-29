@@ -1,7 +1,7 @@
 /**
  * Server Action 内部の HTTP 構築ロジック (pure 関数群)。
  *
- * 副作用 (guard / revalidateTag / refresh) は wrapper 側の Server Action に残す。
+ * 副作用 (guard / updateTag) は wrapper 側の Server Action に残す。
  * 詳細は features/sources/api/source-cores.ts のコメント参照。
  */
 

@@ -1,6 +1,6 @@
 "use server";
 
-import { revalidateTag } from "next/cache";
+import { updateTag } from "next/cache";
 import { serverFetch } from "@/lib/api/server-fetcher";
 import { requireAdminForAction } from "@/lib/auth/guards";
 import type { NewsSourceDetail } from "@/types";
@@ -10,6 +10,6 @@ import { deactivateSourceCore } from "./source-cores";
 export async function deactivateSource(id: number): Promise<NewsSourceDetail> {
   await requireAdminForAction();
   const updated = await deactivateSourceCore(id, serverFetch);
-  revalidateTag("sources", "max");
+  updateTag("sources");
   return updated;
 }
