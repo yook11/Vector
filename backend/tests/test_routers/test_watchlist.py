@@ -141,7 +141,8 @@ class TestListWatchlist:
         assert item["translatedTitle"] == "テスト記事"
         assert item["summary"] == "テストの要約"
         assert item["source"]["name"] == "Test Tech Source"
-        assert item["isWatched"] is True
+        # Pattern B: ArticleBrief から isWatched は削除済み
+        assert "isWatched" not in item
 
     async def test_pagination(
         self,
@@ -231,12 +232,63 @@ class TestRemoveFromWatchlist:
         assert resp.status_code == 404
 
 
-# --- News isWatched integration ---
+# --- Watchlist IDs (Pattern B) ---
 
 
 @pytest.mark.asyncio
-class TestNewsIsWatched:
-    async def test_news_list_includes_is_watched(
+class TestListWatchlistIds:
+    async def test_empty_returns_empty_ids(self, authed_client: AsyncClient) -> None:
+        resp = await authed_client.get("/api/v1/me/watchlist/ids")
+        assert resp.status_code == 200
+        assert resp.json() == {"ids": []}
+
+    async def test_returns_ids_newest_first(
+        self,
+        authed_client: AsyncClient,
+        sample_article: ArticleAnalysis,
+        second_article: ArticleAnalysis,
+    ) -> None:
+        await authed_client.post(
+            "/api/v1/me/watchlist",
+            json={"articleId": sample_article.id},
+        )
+        await authed_client.post(
+            "/api/v1/me/watchlist",
+            json={"articleId": second_article.id},
+        )
+
+        resp = await authed_client.get("/api/v1/me/watchlist/ids")
+        assert resp.status_code == 200
+        # 後に追加した second_article が先頭
+        assert resp.json() == {"ids": [second_article.id, sample_article.id]}
+
+    async def test_unauthenticated_returns_401(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/v1/me/watchlist/ids")
+        assert resp.status_code == 401
+
+
+# --- Articles レスポンスから isWatched が消えていることの保証 ---
+
+
+@pytest.mark.asyncio
+class TestArticlesNoIsWatched:
+    async def test_articles_list_does_not_include_is_watched(
+        self,
+        authed_client: AsyncClient,
+        sample_article: ArticleAnalysis,
+    ) -> None:
+        """Pattern B: per-user フラグは記事スキーマに含まない (cache 安全のため)。"""
+        await authed_client.post(
+            "/api/v1/me/watchlist",
+            json={"articleId": sample_article.id},
+        )
+
+        resp = await authed_client.get("/api/v1/articles")
+        items = resp.json()["items"]
+        assert len(items) == 1
+        assert "isWatched" not in items[0]
+
+    async def test_article_detail_does_not_include_is_watched(
         self,
         authed_client: AsyncClient,
         sample_article: ArticleAnalysis,
@@ -246,28 +298,6 @@ class TestNewsIsWatched:
             json={"articleId": sample_article.id},
         )
 
-        resp = await authed_client.get("/api/v1/articles")
+        resp = await authed_client.get(f"/api/v1/articles/{sample_article.id}")
         assert resp.status_code == 200
-        items = resp.json()["items"]
-        assert len(items) == 1
-        assert items[0]["isWatched"] is True
-
-    async def test_news_list_is_watched_false_when_not_in_watchlist(
-        self,
-        authed_client: AsyncClient,
-        sample_article: ArticleAnalysis,
-    ) -> None:
-        resp = await authed_client.get("/api/v1/articles")
-        items = resp.json()["items"]
-        assert len(items) == 1
-        assert items[0]["isWatched"] is False
-
-    async def test_news_list_is_watched_false_for_unauthenticated(
-        self,
-        client: AsyncClient,
-        sample_article: ArticleAnalysis,
-    ) -> None:
-        resp = await client.get("/api/v1/articles")
-        items = resp.json()["items"]
-        assert len(items) == 1
-        assert items[0]["isWatched"] is False
+        assert "isWatched" not in resp.json()

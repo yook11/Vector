@@ -87,6 +87,11 @@ class ArticleBrief(_CamelBase):
 
     topic は表示専用属性として降格された 3 語以内英語フレーズ。DB NOT NULL +
     CHECK で非空を保証するため Optional ではない。
+
+    per-user の watchlist 状態はこのスキーマには含めない。frontend は
+    GET /api/v1/me/watchlist/ids を別途取得し render 時に Set lookup で
+    merge する (Pattern B)。これにより /articles レスポンスは user 非依存
+    となり HTTP cache/CDN 上で安全に共有できる。
     """
 
     id: int
@@ -95,7 +100,6 @@ class ArticleBrief(_CamelBase):
     source: NewsSourceEmbed
     published_at: datetime | None = None
     topic: str
-    is_watched: bool = False
 
 
 class ArticleDetail(_CamelBase):
@@ -109,7 +113,6 @@ class ArticleDetail(_CamelBase):
     source: NewsSourceEmbed
     published_at: datetime | None = None
     topic: str
-    is_watched: bool = False
     original: OriginalArticleEmbed
 
 

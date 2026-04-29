@@ -5,7 +5,6 @@ from __future__ import annotations
 from app.analysis.embedder.base import BaseEmbedder
 from app.analysis.embedder.factory import get_embedder
 from app.analysis.errors import AnalysisDomainError
-from app.repositories.watchlist import WatchlistRepository
 from app.schemas.articles import PaginatedArticleResponse, SemanticSearchParams
 from app.search.errors import SearchError
 from app.search.repository import SemanticSearchRepository
@@ -50,30 +49,19 @@ async def embed_search_query(
 
 
 class SemanticSearchService:
-    def __init__(
-        self,
-        search_repo: SemanticSearchRepository,
-        watchlist_repo: WatchlistRepository,
-    ) -> None:
+    def __init__(self, search_repo: SemanticSearchRepository) -> None:
         self.search_repo = search_repo
-        self.watchlist_repo = watchlist_repo
 
     async def search(
         self,
         query: SemanticSearchParams,
-        user_id: int | None,
     ) -> PaginatedArticleResponse:
         """ユーザーのクエリテキストとのセマンティック類似度で記事を検索する。"""
         query_embedding = await embed_search_query(query.q)
         analyses, total = await self.search_repo.search_articles(query, query_embedding)
 
-        watched_ids: set[int] = set()
-        if user_id and analyses:
-            article_ids = {a.id for a in analyses}
-            watched_ids = await self.watchlist_repo.watched_among(user_id, article_ids)
-
         return PaginatedArticleResponse.create(
-            items=[build_brief(a, watched_ids) for a in analyses],
+            items=[build_brief(a) for a in analyses],
             total=total,
             pagination=query,
         )

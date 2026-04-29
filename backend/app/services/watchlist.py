@@ -23,14 +23,15 @@ class WatchlistService:
         pagination: PaginationParams,
     ) -> PaginatedArticleResponse:
         analyses, total = await self.repo.fetch_watched_articles(user_id, pagination)
-        # 全件がウォッチリスト内の記事なので結果から watched_ids を構築
-        watched_ids = {a.id for a in analyses}
-
         return PaginatedArticleResponse.create(
-            items=[build_brief(a, watched_ids) for a in analyses],
+            items=[build_brief(a) for a in analyses],
             total=total,
             pagination=pagination,
         )
+
+    async def list_ids(self, user_id: UUID) -> list[int]:
+        """ユーザーがウォッチ中の article_id を新しい順に返す。"""
+        return await self.repo.list_ids(user_id)
 
     async def add_to_watchlist(self, user_id: UUID, article_id: int) -> None:
         if not await self.article_repo.exists_analyzed(article_id):

@@ -5,9 +5,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies import CurrentUser, get_optional_user, get_session
+from app.dependencies import get_session
 from app.repositories.articles import ArticleRepository
-from app.repositories.watchlist import WatchlistRepository
 from app.schemas.articles import (
     ArticleBrief,
     ArticleDetail,
@@ -22,42 +21,39 @@ router = APIRouter(prefix="/api/v1/articles", tags=["articles"])
 def get_article_service(
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> ArticleService:
-    return ArticleService(ArticleRepository(session), WatchlistRepository(session))
+    return ArticleService(ArticleRepository(session))
 
 
 @router.get("")
 async def list_articles(
     params: Annotated[ArticleListParams, Query()],
-    user: Annotated[CurrentUser | None, Depends(get_optional_user)],
     service: Annotated[ArticleService, Depends(get_article_service)],
 ) -> PaginatedArticleResponse:
-    """分析済み記事をフィルタとページネーション付きで一覧取得する。"""
-    return await service.list_articles(params, user.id if user else None)
+    """分析済み記事をフィルタとページネーション付きで一覧取得する。
+
+    レスポンスは user 非依存。per-user の watchlist 状態は
+    GET /api/v1/me/watchlist/ids で別取得し frontend で merge する。
+    """
+    return await service.list_articles(params)
 
 
 @router.get(
     "/{article_id}/similar",
     summary="pgvector のコサイン距離で意味的に類似した記事を検索する",
-    dependencies=[Depends(get_optional_user)],
 )
 async def get_similar_articles(
     article_id: int,
     service: Annotated[ArticleService, Depends(get_article_service)],
     limit: Annotated[int, Query(ge=1, le=20)] = 5,
 ) -> list[ArticleBrief]:
-    """指定記事に最も類似した記事を返す。
-
-    認証は任意。レスポンス自体はユーザー非依存だが、他の articles
-    エンドポイントと認可境界を揃えるため検証だけ通す。
-    """
+    """指定記事に最も類似した記事を返す。"""
     return await service.get_similar(article_id, limit)
 
 
 @router.get("/{article_id}")
 async def get_article(
     article_id: int,
-    user: Annotated[CurrentUser | None, Depends(get_optional_user)],
     service: Annotated[ArticleService, Depends(get_article_service)],
 ) -> ArticleDetail:
     """単一記事を完全な分析情報付きで取得する。"""
-    return await service.get_article(article_id, user.id if user else None)
+    return await service.get_article(article_id)
