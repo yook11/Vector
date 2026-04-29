@@ -116,8 +116,34 @@ ITmedia / Impress 系。改変禁止 ToS は `README.md:25-29` の運用方針 (
 | 3 | ITmedia NEWS | JA | +25-35 | AI / Semi / Security 速報 | 流量極大、AI+ との重複可能性は dedup で構造排除 |
 
 ITmedia 系は同じドメイン階層に複数フィードを載せている。条件付き GET
-(ETag / Last-Modified) の独立性に問題が出ないか、ITmedia NEWS 投入後
-1 日観察してから他 2 本を追加する順序を推奨。
+(ETag / Last-Modified) の独立性は `BaseRssFetcher.get_http_cache(source.id)` が
+DB `source.id` ベースで Redis キーを分離するため、構造的に保証される。
+
+### 着手分割 (2026-04-29 確定 → PR-3 で実装)
+
+2026-04-29 の WebFetch 4 件実測 (3 新ソース + 既存 ITmedia AI+) で全フィードが
+以下を満たすことを確認:
+
+- HTTP 200 で取得可能
+- `<title>` の `[XXX]` prefix が観測されず → 既存 `ITmediaFetcher` の prefix
+  除去ロジックは現状 no-op
+- `<link>` は直接 URL (`go.xxx.com/feed/` 風のリダイレクタなし)
+- `<guid>` / `<id>` なし → link が一意識別子
+  (`BaseRssFetcher` デフォルトの `extract_guid` フォールバックで吸収)
+- description は snippet〜partial (~80-180字)、Trafilatura 本文取得依存度は
+  他 RSS と同等
+
+→ **3 本とも構造同型** (`BaseRssFetcher` 継承の ~7 行クラス宣言のみで実装可能、
+Phase 1a 軽量 4 本と同パターン)
+
+**PR-3 (Phase 2-ja): 3 本一括投入** — 1 PR にまとめる。全 3 本とも
+`is_active=true` で投入し、流量過多の場合は SQL `UPDATE news_sources SET
+is_active=false WHERE name='...'` で個別停止 (worker 再起動不要、`tasks.py`
+の `WHERE NewsSource.is_active == True` で次回 dispatch から弾く)。
+
+既存 `ITmediaFetcher` (`itmedia.py`) は触らない。4 ソース実測で prefix が
+観測されないため、Phase 2 の 3 本は `BaseRssFetcher` 直接継承を選択。
+`ITmedia AI+` 用の保険として `ITmediaFetcher` は残す。Phase 2 スコープ外。
 
 ## Phase 3: ニッチ・後段 (要追加判断)
 

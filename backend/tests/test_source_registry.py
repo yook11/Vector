@@ -28,6 +28,9 @@ from app.models.news_source import NewsSource
         "Electrek",
         "SpaceNews",
         "The Register",
+        "MONOist",
+        "EE Times Japan",
+        "ITmedia NEWS",
         "Hacker News",
     ],
 )
