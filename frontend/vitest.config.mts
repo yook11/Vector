@@ -12,6 +12,9 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       reporter: ["text", "json-summary", "html"],
+      // 各 path には対応する *.test.{ts,tsx} が存在する必要がある。
+      // ファイル移動時はこの list を更新しないと coverage 集計から silent に外れるため、
+      // PR レビュー時に対応テストの存在を確認すること。
       include: [
         "src/lib/utils/sanitize-url.ts",
         "src/lib/auth/role.ts",
@@ -19,10 +22,10 @@ export default defineConfig({
         "src/lib/auth/login-redirect-url.ts",
         "src/lib/api/error.ts",
         "src/lib/api/fetcher.ts",
-        "src/lib/search-params/server.ts",
         "src/lib/date.ts",
         "src/lib/proxy/csp.ts",
         "src/lib/proxy/callback-url.ts",
+        "src/features/news/search-params.ts",
         "src/features/sources/api/source-cores.ts",
         "src/features/watchlist/api/watchlist-cores.ts",
         "src/features/auth/components/LoginForm.tsx",
