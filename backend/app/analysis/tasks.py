@@ -25,7 +25,9 @@ from app.analysis.embedding.repository import EmbeddingRepository
 from app.analysis.embedding.service import (
     EmbeddedOutcome,
     EmbeddingService,
-    InvalidInputOutcome,
+)
+from app.analysis.embedding.service import (
+    InvalidInputOutcome as EmbeddingInvalidInputOutcome,
 )
 from app.analysis.errors import (
     ConfigurationError,
@@ -38,8 +40,15 @@ from app.analysis.errors import (
 from app.analysis.errors import (
     RateLimitError as AnalysisRateLimitError,
 )
+from app.analysis.extraction.domain.ready import ReadyForExtraction
 from app.analysis.extraction.extractor.base import BaseExtractor
-from app.analysis.extraction.service import ExtractionService
+from app.analysis.extraction.service import (
+    ExtractedOutcome,
+    ExtractionService,
+)
+from app.analysis.extraction.service import (
+    InvalidInputOutcome as ExtractionInvalidInputOutcome,
+)
 from app.analysis.rate_limiter import (
     RateLimitExceededError as _RateLimitExceededError,
 )
@@ -108,10 +117,15 @@ def _build_limiters(
     retry_on_error=True,
 )
 async def extract_content(
-    article_id: int,
+    ready: ReadyForExtraction,
     ctx: Context = TaskiqDepends(),
 ) -> None:
-    """単一記事に対して事実抽出（Stage 1）を実行する。"""
+    """単一記事に対して事実抽出 (Stage C) を実行する。
+
+    Pattern A': 受け取った Ready 型は precondition (article 存在 + extraction 未生成
+    + 本文サイズ ≤ hard cap) を構造保証している。本 task は再 fetch / None check を
+    行わない。
+    """
     session_factory = ctx.state.session_factory
     extractor: BaseExtractor = ctx.state.extractor
 
@@ -125,17 +139,17 @@ async def extract_content(
         if rpm_limiter is not None:
             await rpm_limiter.acquire()
     except _RateLimitExceededError:
-        logger.warning("extract_content_daily_quota", article_id=article_id)
+        logger.warning("extract_content_daily_quota", article_id=ready.article_id)
         return
 
     # Service 呼び出し（session は内部で管理）
     svc = ExtractionService(session_factory)
     try:
-        extraction = await svc.execute(article_id, extractor)
+        result = await svc.execute(ready, extractor)
     except (ConfigurationError, DailyQuotaExhaustedError) as e:
         logger.warning(
             "extract_content_no_retry",
-            article_id=article_id,
+            article_id=ready.article_id,
             reason=str(e),
         )
         return
@@ -148,24 +162,29 @@ async def extract_content(
         if is_last_attempt(ctx):
             logger.warning(
                 "extract_content_max_retries",
-                article_id=article_id,
+                article_id=ready.article_id,
                 reason=str(e),
             )
             return
         raise
 
     # Stage D へ chain (Pattern A': 上流 Task が下流 Ready を構築 — spec §7.1)
-    if extraction is not None:
+    if isinstance(result, ExtractedOutcome):
         async with session_factory() as session:
             analysis_repo = AnalysisRepository(session)
             rejection_repo = RejectionRepository(session)
-            ready = await ReadyForClassification.try_advance_from(
-                extraction,
+            ready_class = await ReadyForClassification.try_advance_from(
+                result.extraction,
                 analysis_repo=analysis_repo,
                 rejection_repo=rejection_repo,
             )
-        if ready is not None:
-            await classify_content.kiq(ready)
+        if ready_class is not None:
+            await classify_content.kiq(ready_class)
+    elif isinstance(result, ExtractionInvalidInputOutcome):
+        logger.info(
+            "extract_content_invalid_input",
+            article_id=ready.article_id,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -325,7 +344,7 @@ async def generate_embedding(
             analysis_id=result.embedding.analysis_id,
             model=result.embedding.model_name,
         )
-    elif isinstance(result, InvalidInputOutcome):
+    elif isinstance(result, EmbeddingInvalidInputOutcome):
         logger.info(
             "generate_embedding_invalid_input",
             analysis_id=ready.analysis_id,
