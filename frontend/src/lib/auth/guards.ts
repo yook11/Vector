@@ -9,8 +9,10 @@
  * 使い分け:
  * - Server Component / Layout: `requireSession()` / `requireAdmin()`
  *   未認証/権限不足時は `redirect()` で UX フローへ。
- * - Route Handler / Server Action: `getCurrentSession()` で取得し、
- *   nullable の戻り値を見て自前で 401/403 を返す (redirect は API 文脈に不適)。
+ * - Server Action: `requireSessionForAction()` / `requireAdminForAction()`
+ *   未認証は `redirect()` で `/auth/login?callbackUrl=...` に誘導 (toast
+ *   無限ループ防止)、admin 権限不足は throw して client catch + toast
+ *   (権限不足はログイン誘導しても解決しないため UX を分離)
  */
 
 import "server-only";
@@ -44,20 +46,62 @@ export async function requireAdmin(): Promise<Session> {
 }
 
 /**
- * Server Action / Route Handler 用: 認証済みでなければ throw する。
+ * Server Action から呼ぶ用の login redirect URL を組み立てる。
  *
- * `requireSession()` と違い `redirect()` はせず、Error を投げる。
- * Server Action 内で投げると React が呼び出し側 (Client) の `catch` に
- * 配送するので、`useOptimistic` の自動 revert + toast 表示が成立する。
+ * Server Action は browser からの fetch なので Referer header が submit 元
+ * page の URL になる。これを callbackUrl として埋め込み、ログイン後に元の
+ * page へ戻す。Open redirect 防止として:
+ *   - same-origin 以外は捨てる (URL parser に通して例外なら捨てる)
+ *   - protocol-relative (`//evil.com`) は捨てる
+ *   - `/auth/*` 自体への redirect は callbackUrl 無し (再帰防止)
+ */
+async function buildLoginRedirectUrl(): Promise<string> {
+  const reqHeaders = await headers();
+  const referer = reqHeaders.get("referer");
+  if (!referer) return "/auth/login";
+
+  let pathname: string;
+  let search: string;
+  try {
+    const url = new URL(referer);
+    pathname = url.pathname;
+    search = url.search;
+  } catch {
+    return "/auth/login";
+  }
+
+  if (!pathname.startsWith("/") || pathname.startsWith("//")) {
+    return "/auth/login";
+  }
+  if (pathname.startsWith("/auth")) {
+    return "/auth/login";
+  }
+  return `/auth/login?callbackUrl=${encodeURIComponent(pathname + search)}`;
+}
+
+/**
+ * Server Action 用: 未認証なら `/auth/login?callbackUrl=...` に redirect する。
+ *
+ * Next.js の `redirect()` は `NEXT_REDIRECT` 特殊 throw で client に伝搬し、
+ * browser が自動的に navigate する (caller の `try/catch` は通過するだけで
+ * catch block は実行されない)。これにより session 切れた状態でボタン連打
+ * しても toast 連発で詰まらず、自然にログインフローへ誘導される。
  */
 export async function requireSessionForAction(): Promise<Session> {
   const session = await getCurrentSession();
-  if (!session) throw new Error("Unauthorized");
+  if (!session) {
+    redirect(await buildLoginRedirectUrl());
+  }
   return session;
 }
 
 /**
- * Server Action / Route Handler 用: admin でなければ throw する。
+ * Server Action 用: admin でなければ throw する。
+ *
+ * 未ログインは `requireSessionForAction()` 側で redirect 済み。本関数で
+ * throw するのは「ログイン済みだが admin ではない」403 ケースのみ。
+ * 権限不足はログイン誘導しても解決しないので、client catch で toast
+ * 「権限がありません」を出す UX が正しい。
  *
  * defense in depth: backend 側でも JWT の role claim を検証しているが、
  * Server Action は proxy.ts のガードを経由しないため frontend 層でも

@@ -21,6 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { toastError } from "@/lib/utils/toast-error";
 import { createSource } from "../api/create-source";
 
 interface SourceFormDialogProps {
@@ -62,9 +63,7 @@ export function SourceFormDialog({ trigger }: SourceFormDialogProps) {
       setOpen(false);
       // Server Action 内で revalidateTag("sources") 済み → router.refresh() 不要
     } catch (err) {
-      const msg =
-        err instanceof Error && err.message ? err.message : "Operation failed";
-      toast.error(msg);
+      toastError(err, "ソースの追加に失敗しました");
       nameRef.current?.focus();
     } finally {
       setLoading(false);
