@@ -2,7 +2,16 @@ import { WatchlistButton } from "@/features/watchlist";
 import type { ArticleBrief } from "@/types";
 import { NewsCard } from "./NewsCard";
 
-export function NewsList({ items }: { items: ArticleBrief[] }) {
+interface NewsListProps {
+  items: ArticleBrief[];
+  /**
+   * 認証済 user の watched article ID 集合 (Pattern B)。
+   * 未ログインや未取得時は空 Set を渡す。
+   */
+  watchedIds: Set<number>;
+}
+
+export function NewsList({ items, watchedIds }: NewsListProps) {
   if (items.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
@@ -23,7 +32,7 @@ export function NewsList({ items }: { items: ArticleBrief[] }) {
           actionSlot={
             <WatchlistButton
               articleId={article.id}
-              isWatched={article.isWatched}
+              isWatched={watchedIds.has(article.id)}
             />
           }
         />

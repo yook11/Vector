@@ -7,14 +7,20 @@ import { formatDate } from "@/lib/date";
 import { sanitizeUrl } from "@/lib/utils/sanitize-url";
 import type { ArticleDetail as ArticleDetailData } from "@/types";
 
-export function NewsDetail({ article }: { article: ArticleDetailData }) {
+interface NewsDetailProps {
+  article: ArticleDetailData;
+  /** Pattern B: ウォッチ状態は record の外から注入する。 */
+  isWatched: boolean;
+}
+
+export function NewsDetail({ article, isWatched }: NewsDetailProps) {
   // --- XSS: validate URL scheme (reject javascript: etc.) ---
   const safeUrl = sanitizeUrl(article.original.url);
 
   return (
     <div className="relative mx-auto flex max-w-4xl flex-col items-center px-4 py-8 text-center sm:py-12">
       <div className="absolute right-4 top-8 sm:top-12">
-        <WatchlistButton articleId={article.id} isWatched={article.isWatched} />
+        <WatchlistButton articleId={article.id} isWatched={isWatched} />
       </div>
 
       {/* Top Badges */}
