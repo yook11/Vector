@@ -1,9 +1,8 @@
 /**
- * BFF プロキシとバックエンド間の内部 API 接続設定 + 認可ヘッダ生成。
+ * BFF とバックエンド間の内部 API 接続設定 + 認可ヘッダ生成。
  *
- * `lib/api/server-fetcher.ts` (Server Component から呼ぶ fetcher) と
- * `app/api/proxy/[...path]/route.ts` (BFF プロキシ Route Handler) の
- * 両方から参照される共通設定。
+ * `lib/api/server-fetcher.ts` (Server Component / Server Action から呼ぶ
+ * fetcher) から参照される共通設定。
  *
  * デフォルト値や `??` フォールバックは持たせない方針 — 未設定時はモジュール
  * 読込時に throw して fail-fast にする (build / 起動時に発覚させる)。
