@@ -101,4 +101,27 @@ src/
 ```bash
 npx biome check src/
 npx tsc --noEmit
+npm test
 ```
+
+## テスト
+
+### 実行コマンド
+- `npm test` — 1 回実行 (CI と同じ)
+- `npm run test:watch` — 開発中の watch
+- `npm run test:coverage` — カバレッジ付き
+
+### 配置規約
+- co-locate: 対象ファイルと同階層に `<name>.test.ts` を置く
+  例: `src/lib/utils/sanitize-url.ts` ↔ `src/lib/utils/sanitize-url.test.ts`
+- vitest glob: `src/**/*.{test,spec}.{ts,tsx}`
+- Next.js routing には影響しない (route segment は `route.ts` `page.tsx` `layout.tsx` のみ)
+
+### Phase 1 スコープ (現状)
+- 対象は **純関数のみ** (security-critical な判定ロジック中心)
+- Server Action / Component / E2E は Phase 2 以降
+
+### 禁止事項
+- **NEVER** test 内で実 DB / 実 API を叩いてはならない
+- **NEVER** `vi.mock` で features 横断 module を mock してはならない (テスト対象を絞る)
+- **NEVER** test ファイルで `any` 型を使用してはならない (`as unknown as Foo` で対応)

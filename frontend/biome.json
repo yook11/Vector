@@ -32,6 +32,21 @@
   },
   "overrides": [
     {
+      "includes": [
+        "src/**/*.test.ts",
+        "src/**/*.test.tsx",
+        "vitest.config.mts",
+        "vitest.setup.ts"
+      ],
+      "linter": {
+        "rules": {
+          "style": {
+            "noNonNullAssertion": "off"
+          }
+        }
+      }
+    },
+    {
       "includes": ["src/features/news/**"],
       "linter": {
         "rules": {
