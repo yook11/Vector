@@ -7,11 +7,11 @@ interface ErrorProps {
   reset: () => void;
 }
 
-export default function WeeklyTrendsError({ error, reset }: ErrorProps) {
+export default function NewsDetailError({ error, reset }: ErrorProps) {
   return (
     <ErrorMessage
-      title="Weekly Trends"
-      description="週次トレンドの取得に失敗しました"
+      title="記事の取得に失敗しました"
+      description="記事が一時的に表示できません。再試行するか、一覧に戻ってください"
       error={error}
       reset={reset}
     />
