@@ -19,16 +19,28 @@ import "server-only";
 
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import { cache } from "react";
 import { auth } from "@/lib/auth/auth";
 import { buildLoginCallbackUrl } from "@/lib/auth/login-redirect-url";
 import { narrowRole } from "@/lib/auth/role";
 import type { Session } from "@/lib/auth/session";
 
-export async function getCurrentSession(): Promise<Session | null> {
+/**
+ * 現在の Better Auth session を取得する。
+ *
+ * `React.cache` で wrap することで、同一 React Request scope で複数回
+ * 呼ばれても backend (Postgres) への問い合わせは 1 回に集約される。
+ * `requireSession` / `requireSessionForAction` / `requireAdminForAction` /
+ * `serverFetch` の `getAuthHeaders` / `getWatchlistIds` 等から共通で
+ * 呼ばれるため、wrap なしだと 1 リクエストで 4-5 回 DB hit していた。
+ *
+ * cross-request leak は構造的に発生しない (`cache` は per-Request scope)。
+ */
+export const getCurrentSession = cache(async (): Promise<Session | null> => {
   return auth.api.getSession({
     headers: await headers(),
   });
-}
+});
 
 export async function requireSession(): Promise<Session> {
   const session = await getCurrentSession();
