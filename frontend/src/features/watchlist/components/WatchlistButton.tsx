@@ -2,8 +2,8 @@
 
 import { Bookmark } from "lucide-react";
 import { useOptimistic, useTransition } from "react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { toastError } from "@/lib/utils/toast-error";
 import { addToWatchlist } from "../api/add-to-watchlist";
 import { removeFromWatchlist } from "../api/remove-from-watchlist";
 
@@ -32,11 +32,14 @@ export function WatchlistButton({
         }
       } catch (err) {
         // throw 時は React が optimistic state を base に自動 revert する。
+        // 401 (未認証) は requireSessionForAction が redirect する経路に乗る
+        // ので、ここに来るのは backend エラーや 5xx 等の操作失敗のみ。
         console.error("Watchlist toggle failed", err);
-        toast.error(
+        toastError(
+          err,
           next
-            ? "Failed to add to watchlist"
-            : "Failed to remove from watchlist",
+            ? "ウォッチリストへの追加に失敗しました"
+            : "ウォッチリストから削除できませんでした",
         );
       }
     });

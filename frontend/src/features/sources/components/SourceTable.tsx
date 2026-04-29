@@ -24,6 +24,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { toastError } from "@/lib/utils/toast-error";
 import type { NewsSourceDetail } from "@/types";
 import { activateSource } from "../api/activate-source";
 import { deactivateSource } from "../api/deactivate-source";
@@ -51,10 +52,6 @@ function reducer(
   }
 }
 
-function errorMessage(err: unknown, fallback: string): string {
-  return err instanceof Error && err.message ? err.message : fallback;
-}
-
 export function SourceTable({ sources }: SourceTableProps) {
   const [optimisticSources, applyOptimistic] = useOptimistic(sources, reducer);
   const [pending, startTransition] = useTransition();
@@ -71,7 +68,7 @@ export function SourceTable({ sources }: SourceTableProps) {
           `${updated.name} ${updated.isActive ? "enabled" : "disabled"}`,
         );
       } catch (err) {
-        toast.error(errorMessage(err, "Failed to update source"));
+        toastError(err, "ソースの更新に失敗しました");
       }
     });
   }
@@ -83,7 +80,7 @@ export function SourceTable({ sources }: SourceTableProps) {
         await deleteSource(id);
         toast.success(`Deleted "${name}"`);
       } catch (err) {
-        toast.error(errorMessage(err, "Failed to delete source"));
+        toastError(err, "ソースの削除に失敗しました");
       }
     });
   }
