@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { Component, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Server Action は **相対 path** で mock する。`@/features/watchlist/api/...` の
@@ -164,6 +165,58 @@ describe("WatchlistButton — 失敗時の挙動", () => {
     expect(mocks.toastError).toHaveBeenCalledWith(
       error,
       "ウォッチリストから削除できませんでした",
+    );
+  });
+});
+
+// 本物の Next.js 環境では redirect() throw を framework renderer が受けて
+// navigation するが、jsdom test では受け手がない。ErrorBoundary を被せて
+// React の transition error 経路で受け止め、(a) toastError 不発火
+// (b) 再 throw が起きていること を positively 検証する。
+class CaptureBoundary extends Component<
+  { children: ReactNode; onCapture: (err: unknown) => void },
+  { caught: boolean }
+> {
+  state = { caught: false };
+  static getDerivedStateFromError() {
+    return { caught: true };
+  }
+  componentDidCatch(err: unknown) {
+    this.props.onCapture(err);
+  }
+  render() {
+    return this.state.caught ? null : this.props.children;
+  }
+}
+
+describe("WatchlistButton — redirect throw を握り潰さない", () => {
+  it("Server Action が NEXT_REDIRECT を throw すると toastError は呼ばれず redirect error が再 throw される", async () => {
+    const redirectError = Object.assign(new Error("NEXT_REDIRECT"), {
+      digest: "NEXT_REDIRECT;replace;/auth/login?callbackUrl=%2F;307;",
+    });
+    mocks.addToWatchlist.mockRejectedValue(redirectError);
+
+    const captured: unknown[] = [];
+    const user = userEvent.setup();
+    render(
+      <CaptureBoundary onCapture={(e) => captured.push(e)}>
+        <WatchlistButton articleId={1} isWatched={false} />
+      </CaptureBoundary>,
+    );
+    const button = getButton();
+
+    await user.click(button);
+
+    // 再 throw → ErrorBoundary が capture することを待つ
+    await waitFor(() => {
+      expect(captured).toHaveLength(1);
+    });
+    expect(captured[0]).toBe(redirectError);
+    // 再 throw 経路に乗るため、自前の handler は未実行
+    expect(mocks.toastError).not.toHaveBeenCalled();
+    expect(consoleErrorSpy).not.toHaveBeenCalledWith(
+      "Watchlist toggle failed",
+      redirectError,
     );
   });
 });

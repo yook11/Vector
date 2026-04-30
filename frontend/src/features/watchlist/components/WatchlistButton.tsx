@@ -4,6 +4,7 @@ import { Bookmark } from "lucide-react";
 import { useOptimistic, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils/cn";
+import { isRedirectError } from "@/lib/utils/redirect-error";
 import { toastError } from "@/lib/utils/toast-error";
 import { addToWatchlist } from "../api/add-to-watchlist";
 import { removeFromWatchlist } from "../api/remove-from-watchlist";
@@ -33,8 +34,11 @@ export function WatchlistButton({
         }
       } catch (err) {
         // throw 時は React が optimistic state を base に自動 revert する。
-        // 401 (未認証) は requireSessionForAction が redirect する経路に乗る
-        // ので、ここに来るのは backend エラーや 5xx 等の操作失敗のみ。
+        // 401 (未認証) は requireSessionForAction が redirect throw する経路に
+        // 乗るため、digest 判定で再 throw して Next.js navigation を起動させる
+        // (握り潰すと login 画面に遷移できず toast だけが出る silent fail に
+        // なる)。それ以外は backend エラー / 5xx 等の操作失敗。
+        if (isRedirectError(err)) throw err;
         console.error("Watchlist toggle failed", err);
         toastError(
           err,
