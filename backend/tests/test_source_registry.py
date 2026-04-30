@@ -19,7 +19,7 @@ from app.models.news_source import NewsSource
         "NASA",
         "Microsoft Research",
         "Krebs on Security",
-        "VentureBeat",
+        # VentureBeat は Phase 1a' で新 Protocol registry (strategy.py) に移行済み
         "Spaceflight Now",
         "ITmedia AI+",
         "JPCERT/CC",

@@ -1,7 +1,13 @@
 """収集タスク — パイプラインの前段。
 
-dispatch_sources → fetch_source_metadata → fetch_content
-fetch_content 完了後、analysis.tasks.extract_content へチェーン。
+旧経路: dispatch_sources → fetch_source_metadata → fetch_content
+        → analysis.tasks.extract_content
+新経路: dispatch_sources → fetch_source_metadata (Strangler dispatch)
+        → ingest_source (新 Protocol Fetcher で 1 段取り込み)
+        → analysis.tasks.extract_content
+
+新ルート対象ソースは ``app.collection.ingestion.strategy.NEW_ROUTE_SOURCE_NAMES``
+で hardcode 管理。Phase 1c-C 完了時に旧経路を削除し、新ルート 1 本に収束させる。
 """
 
 from __future__ import annotations
@@ -125,9 +131,27 @@ async def fetch_source_metadata(
     source_id: int,
     ctx: Context = TaskiqDepends(),
 ) -> dict:
-    """単一ソースのメタデータを取得し、新規記事を下流キューへ dispatch する。"""
-    logger.info("fetch_source_metadata_started", source_id=source_id)
+    """単一ソースのメタデータを取得し、新規記事を下流キューへ dispatch する。
+
+    Strangler 移行期: 新ルート対象 (``NEW_ROUTE_SOURCE_NAMES``) は
+    ``ingest_source`` task へ振り替え、それ以外は従来通り
+    ``SourceFetchService`` → ``fetch_content.kiq`` 経路で処理する。
+    """
+    from app.collection.ingestion.strategy import NEW_ROUTE_SOURCE_NAMES
+
     session_factory = ctx.state.session_factory
+    async with session_factory() as session:
+        source = await session.get(NewsSource, source_id)
+    if source is not None and str(source.name) in NEW_ROUTE_SOURCE_NAMES:
+        await ingest_source.kiq(source_id)
+        logger.info(
+            "fetch_source_metadata_dispatched_new_route",
+            source_id=source_id,
+            source=source.name,
+        )
+        return {"source_id": source_id, "status": "dispatched_new_route"}
+
+    logger.info("fetch_source_metadata_started", source_id=source_id)
     svc = SourceFetchService(session_factory)
     start_time = time.monotonic()
 
@@ -236,3 +260,118 @@ async def fetch_content(
                 await extract_content.kiq(ready)
         case ContentFetchSkippedOutcome():
             pass  # service 側でログ済み
+
+
+# ---------------------------------------------------------------------------
+# New-route ingestion (Strangler 移行期)
+# ---------------------------------------------------------------------------
+
+
+@broker_content.task(
+    task_name="ingest_source",
+    timeout=300,
+    max_retries=2,
+    retry_on_error=True,
+)
+async def ingest_source(
+    source_id: int,
+    ctx: Context = TaskiqDepends(),
+) -> dict:
+    """新 Protocol Fetcher 経由でソースを 1 段で取り込む (Strangler 移行期)。
+
+    旧経路の ``fetch_source_metadata`` → ``fetch_content`` が 2 段階で行う
+    「URL 列挙 → HTML 本文取得」を、新 Protocol では Fetcher が
+    ``FetchedArticle`` (本文込み) を直接返すため 1 段で完結させる。
+
+    Stage C への chain は ``fetch_content`` と同じパターンで
+    ``ReadyForExtraction.try_advance_from`` → ``extract_content.kiq``。
+    """
+    from app.analysis.extraction.domain.ready import ReadyForExtraction
+    from app.analysis.extraction.repository import ExtractionRepository
+    from app.analysis.tasks import extract_content
+    from app.collection.ingestion.ingestion_service import (
+        IngestedOutcome,
+        IngestionService,
+        SourceNotFoundOutcome,
+    )
+    from app.collection.ingestion.strategy import NEW_ROUTE_FETCHERS
+
+    logger.info("ingest_source_started", source_id=source_id)
+    session_factory = ctx.state.session_factory
+    start_time = time.monotonic()
+
+    async with session_factory() as session:
+        source = await session.get(NewsSource, source_id)
+    if source is None:
+        logger.warning("ingest_source_not_found", source_id=source_id)
+        return {"source_id": source_id, "status": "not_found"}
+
+    fetcher_factory = NEW_ROUTE_FETCHERS.get(str(source.name))
+    if fetcher_factory is None:
+        logger.warning(
+            "ingest_source_not_in_new_route",
+            source_id=source_id,
+            source=source.name,
+        )
+        return {"source_id": source_id, "status": "not_in_new_route"}
+
+    svc = IngestionService(session_factory, fetcher_factory)
+
+    try:
+        outcome = await svc.execute(source_id)
+    except PermanentFetchError as e:
+        await _record_fetch_log(
+            session_factory, source_id, FetchStatus.ERROR, 0, str(e), start_time
+        )
+        return {"source_id": source_id, "status": "error", "reason": str(e)}
+    except TemporaryFetchError as e:
+        await _record_fetch_log(
+            session_factory, source_id, FetchStatus.ERROR, 0, str(e), start_time
+        )
+        if is_last_attempt(ctx):
+            logger.warning(
+                "ingest_source_max_retries",
+                source_id=source_id,
+                error=str(e),
+            )
+            return {"source_id": source_id, "status": "error", "reason": str(e)}
+        raise
+
+    match outcome:
+        case SourceNotFoundOutcome():
+            return {"source_id": source_id, "status": "not_found"}
+        case IngestedOutcome(persisted=articles, failed_count=fc, skipped_count=sc):
+            persisted_count = len(articles)
+            await _record_fetch_log(
+                session_factory,
+                source_id,
+                FetchStatus.SUCCESS,
+                persisted_count,
+                None,
+                start_time,
+            )
+            async with session_factory() as session:
+                extraction_repo = ExtractionRepository(session)
+                pending: list = []
+                for article in articles:
+                    ready = await ReadyForExtraction.try_advance_from(
+                        article_id=article.id,
+                        original_title=article.title,
+                        original_content=article.body,
+                        extraction_repo=extraction_repo,
+                    )
+                    if ready is not None:
+                        pending.append(ready)
+            for ready in pending:
+                await extract_content.kiq(ready)
+            payload = {
+                "source_id": source_id,
+                "status": "success",
+                "persisted_count": persisted_count,
+                "failed_count": fc,
+                "skipped_count": sc,
+            }
+            logger.info("ingest_source_completed", **payload)
+            return payload
+        case _:
+            assert_never(outcome)
