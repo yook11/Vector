@@ -70,7 +70,6 @@ def _build_registry() -> dict[SourceName, SourceFetcher]:
     from app.collection.ingestion.fetchers.rss.spacenews import SpaceNewsFetcher
     from app.collection.ingestion.fetchers.rss.techcrunch import TechCrunchFetcher
     from app.collection.ingestion.fetchers.rss.the_register import TheRegisterFetcher
-    from app.collection.ingestion.fetchers.rss.venturebeat import VentureBeatFetcher
 
     return {
         # RSS ソース（ソースごとに個別フェッチャー）
@@ -81,7 +80,9 @@ def _build_registry() -> dict[SourceName, SourceFetcher]:
         SourceName("NASA"): NASAFetcher(),
         SourceName("Microsoft Research"): MicrosoftResearchFetcher(),
         SourceName("Krebs on Security"): KrebsOnSecurityFetcher(),
-        SourceName("VentureBeat"): VentureBeatFetcher(),
+        # NOTE: VentureBeat は collection-acquisition-redesign Phase 1a' で
+        # 新 Protocol Fetcher (`fetchers/venturebeat.py`) に移行済み。Strangler
+        # 移行期間中は ``strategy.NEW_ROUTE_FETCHERS`` 経由で取り込まれる。
         SourceName("Spaceflight Now"): SpaceflightNowFetcher(),
         SourceName("ITmedia AI+"): ITmediaFetcher(),
         SourceName("JPCERT/CC"): JPCERTFetcher(),

@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+	xmlns:content="http://purl.org/rss/1.0/modules/content/"
+	xmlns:wfw="http://wellformedweb.org/CommentAPI/"
+	xmlns:dc="http://purl.org/dc/elements/1.1/"
+	xmlns:atom="http://www.w3.org/2005/Atom"
+	xmlns:sy="http://purl.org/rss/1.0/modules/syndication/"
+	xmlns:slash="http://purl.org/rss/1.0/modules/slash/"
+	xmlns:media="http://search.yahoo.com/mrss/">
+<channel>
+	<title>VentureBeat</title>
+	<atom:link href="https://venturebeat.com/feed/" rel="self" type="application/rss+xml" />
+	<link>https://venturebeat.com/</link>
+	<description>Transformative tech coverage that matters</description>
+	<lastBuildDate>Wed, 30 Apr 2026 22:00:00 +0000</lastBuildDate>
+	<language>en-US</language>
+	<sy:updatePeriod>hourly</sy:updatePeriod>
+	<sy:updateFrequency>1</sy:updateFrequency>
+	<item>
+		<title>AI startup raises Series B for generative model tooling</title>
+		<link>https://venturebeat.com/ai/ai-startup-raises-series-b/</link>
+		<dc:creator><![CDATA[Jane Doe]]></dc:creator>
+		<pubDate>Wed, 30 Apr 2026 17:00:00 +0000</pubDate>
+		<category><![CDATA[AI]]></category>
+		<category><![CDATA[Funding]]></category>
+		<guid isPermaLink="false">https://venturebeat.com/?p=1234567</guid>
+		<description><![CDATA[<p>A generative AI startup announced a $50M Series B led by major venture firms today, aiming to expand its enterprise tooling for fine-tuning and inference workflows. The company plans to use the capital to hire engineers and accelerate go-to-market efforts.</p><p>This is the second major funding round for the startup, which previously raised a Series A round eighteen months ago. Investors say the company benefits from increasing demand for managed AI infrastructure, and the round was significantly oversubscribed amid intense investor interest in the segment.</p>]]></description>
+		<content:encoded><![CDATA[<p>A generative AI startup announced a $50M Series B led by major venture firms today, aiming to expand its enterprise tooling for fine-tuning and inference workflows. The company plans to use the capital to hire engineers and accelerate go-to-market efforts.</p><p>This is the second major funding round for the startup, which previously raised a Series A round eighteen months ago. Investors say the company benefits from increasing demand for managed AI infrastructure, and the round was significantly oversubscribed amid intense investor interest in the segment.</p><p>The company will also expand its sales footprint into the EU and APAC during the next year, leveraging partnerships with cloud providers to streamline deployment workflows for large enterprise customers.</p>]]></content:encoded>
+		<media:content url="https://venturebeat.com/wp-content/uploads/2026/04/cover.jpg" medium="image" />
+	</item>
+	<item>
+		<title>Short post</title>
+		<link>https://venturebeat.com/short-post/</link>
+		<dc:creator><![CDATA[John Smith]]></dc:creator>
+		<pubDate>Wed, 30 Apr 2026 16:00:00 +0000</pubDate>
+		<guid isPermaLink="false">https://venturebeat.com/?p=1234568</guid>
+		<description><![CDATA[<p>Too short.</p>]]></description>
+	</item>
+</channel>
+</rss>
