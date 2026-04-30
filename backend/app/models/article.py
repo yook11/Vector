@@ -16,6 +16,8 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
+from app.models.types import SafeUrlType
+from app.shared.value_objects.safe_url import SafeUrl
 
 if TYPE_CHECKING:
     from app.models.article_extraction import ArticleExtraction
@@ -31,17 +33,27 @@ class Article(Base):
         UniqueConstraint(
             "discovered_article_id", name="uq_articles_discovered_article_id"
         ),
+        UniqueConstraint("source_url", name="uq_articles_source_url"),
         CheckConstraint(
             "original_title != ''",
             name="ck_articles_title_not_empty",
         ),
+        CheckConstraint(
+            "source_url ~ '^https?://.+'",
+            name="ck_articles_source_url_scheme",
+        ),
         Index("idx_articles_published", "published_at"),
+        Index("ix_articles_source_id", "source_id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     discovered_article_id: Mapped[int] = mapped_column(
         ForeignKey("discovered_articles.id", ondelete="CASCADE"),
     )
+    source_id: Mapped[int] = mapped_column(
+        ForeignKey("news_sources.id", ondelete="RESTRICT"),
+    )
+    source_url: Mapped[SafeUrl] = mapped_column(SafeUrlType)
     original_title: Mapped[str] = mapped_column(String(500))
     original_content: Mapped[str] = mapped_column(Text())
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

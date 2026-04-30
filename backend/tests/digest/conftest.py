@@ -61,6 +61,8 @@ def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAn
 
         article = Article(
             discovered_article_id=discovered.id,
+            source_id=discovered.news_source_id,
+            source_url=discovered.original_url,
             original_title=f"seed-{n}",
             original_content="x" * 60,
         )

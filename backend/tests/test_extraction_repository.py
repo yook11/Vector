@@ -48,6 +48,25 @@ def _draft(
     return ArticleDraft(title="Title", body=body, published_at=published_at)
 
 
+async def _save(
+    repo: ArticleRepository,
+    draft: ArticleDraft,
+    discovered: DiscoveredArticle,
+) -> PersistedArticleId | None:
+    """テスト用 ``ArticleRepository.save`` ラッパ。``DiscoveredArticle`` から
+    ``source_id`` / ``source_url`` を派生させる。
+
+    Phase 0b で ``save`` の引数に ``source_id`` / ``source_url`` が必須化された
+    ため、テスト側はここで束ねて取り回す。
+    """
+    return await repo.save(
+        draft,
+        discovered_article_id=discovered.id,
+        source_id=discovered.news_source_id,
+        source_url=discovered.original_url,
+    )
+
+
 # ---------------------------------------------------------------------------
 # DiscoveredArticleLookupRepository.find_by_id
 # ---------------------------------------------------------------------------
@@ -87,6 +106,8 @@ async def test_find_by_id_eager_loads_article_as_entity(
     )
     article = ArticleORM(
         discovered_article_id=discovered.id,
+        source_id=discovered.news_source_id,
+        source_url=discovered.original_url,
         original_title="seed",
         original_content="body body body body body body body body body body",
         published_at=datetime(2026, 1, 1, tzinfo=UTC),
@@ -124,7 +145,7 @@ async def test_save_returns_persisted_id(
     )
 
     repo = ArticleRepository(db_session)
-    persisted = await repo.save(draft, discovered_article_id=discovered.id)
+    persisted = await _save(repo, draft, discovered)
 
     assert isinstance(persisted, PersistedArticleId)
     assert persisted.id > 0
@@ -146,7 +167,7 @@ async def test_save_persists_draft_payload(
     )
 
     repo = ArticleRepository(db_session)
-    persisted = await repo.save(draft, discovered_article_id=discovered.id)
+    persisted = await _save(repo, draft, discovered)
     assert persisted is not None
     await db_session.commit()
 
@@ -166,7 +187,7 @@ async def test_save_accepts_none_published_at(
     )
 
     repo = ArticleRepository(db_session)
-    persisted = await repo.save(_draft(), discovered_article_id=discovered.id)
+    persisted = await _save(repo, _draft(), discovered)
     assert persisted is not None
     await db_session.commit()
 
@@ -188,11 +209,11 @@ async def test_save_returns_none_on_duplicate_in_same_session(
     )
     repo = ArticleRepository(db_session)
 
-    first = await repo.save(_draft(), discovered_article_id=discovered.id)
+    first = await _save(repo, _draft(), discovered)
     await db_session.commit()
     assert first is not None
 
-    second = await repo.save(_draft(), discovered_article_id=discovered.id)
+    second = await _save(repo, _draft(), discovered)
     assert second is None
 
 
@@ -206,7 +227,7 @@ async def test_save_does_not_commit(
     )
 
     repo = ArticleRepository(db_session)
-    persisted = await repo.save(_draft(), discovered_article_id=discovered.id)
+    persisted = await _save(repo, _draft(), discovered)
     assert persisted is not None
 
     # ロールバックで消える = コミットされていない
@@ -228,7 +249,7 @@ async def test_find_by_discovered_article_id_returns_entity(
         db_session, sample_source, "https://example.com/find"
     )
     repo = ArticleRepository(db_session)
-    persisted = await repo.save(_draft(), discovered_article_id=discovered.id)
+    persisted = await _save(repo, _draft(), discovered)
     await db_session.commit()
     assert persisted is not None
 
@@ -270,7 +291,7 @@ async def test_concurrent_save_returns_one_persisted_one_none(
     async def _save_in_new_session() -> PersistedArticleId | None:
         async with session_factory() as session:
             repo = ArticleRepository(session)
-            persisted = await repo.save(_draft(), discovered_article_id=discovered.id)
+            persisted = await _save(repo, _draft(), discovered)
             await session.commit()
             return persisted
 
