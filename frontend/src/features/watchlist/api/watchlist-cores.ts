@@ -3,25 +3,32 @@
  *
  * 副作用 (guard / updateTag) は wrapper 側の Server Action に残す。
  * 詳細は features/sources/api/source-cores.ts のコメント参照。
+ *
+ * PR-Y3 で旧 `serverEmpty` から `typedServer` (openapi-fetch ベース) に移行
+ * した exemplar。path / method / body の型は generated.ts の paths から自動
+ * 導出される。
  */
 
-import type { serverEmpty } from "@/lib/api/server-fetcher";
+import { apiVoid, type typedServer } from "@/lib/api/typed-server-fetcher";
 
 export async function addToWatchlistCore(
   articleId: number,
-  fetcher: typeof serverEmpty,
+  fetcher: typeof typedServer,
 ): Promise<void> {
-  await fetcher("/me/watchlist", {
-    method: "POST",
-    body: JSON.stringify({ articleId }),
-  });
+  await apiVoid(
+    fetcher.POST("/api/v1/me/watchlist", {
+      body: { articleId },
+    }),
+  );
 }
 
 export async function removeFromWatchlistCore(
   articleId: number,
-  fetcher: typeof serverEmpty,
+  fetcher: typeof typedServer,
 ): Promise<void> {
-  await fetcher(`/me/watchlist/${articleId}`, {
-    method: "DELETE",
-  });
+  await apiVoid(
+    fetcher.DELETE("/api/v1/me/watchlist/{article_id}", {
+      params: { path: { article_id: articleId } },
+    }),
+  );
 }
