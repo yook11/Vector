@@ -7,17 +7,28 @@ test.describe("Watchlist add/remove flow", () => {
   // 前 run で fail し残った entry をクリーンアップしてから本テストに入る。
   // /watchlist で全 Remove を順に click することで実現する (Dashboard 経由だと
   // aria-pressed=true のカードが上位に並ぶ等の page state を仮定できないため)。
+  // 安全弁として最大反復回数を `MAX_CLEANUP_ITERATIONS` に制限する。万が一
+  // Server Action が `toHaveCount(remaining - 1)` を満たさなくなる回帰が
+  // 入った際に、E2E が無限ループに陥らず明示的に fail する。
+  const MAX_CLEANUP_ITERATIONS = 50;
   test.beforeEach(async ({ page }) => {
     await page.goto("/watchlist");
     const removeButtons = page.getByRole("button", {
       name: "Remove from watchlist",
     });
     let remaining = await removeButtons.count();
+    let iterations = 0;
     while (remaining > 0) {
+      if (iterations >= MAX_CLEANUP_ITERATIONS) {
+        throw new Error(
+          `watchlist cleanup did not converge after ${MAX_CLEANUP_ITERATIONS} iterations (remaining=${remaining})`,
+        );
+      }
       await removeButtons.first().click();
       // Server Action 経由の reflect (optimistic 解除 + revalidation) を待つ
       await expect(removeButtons).toHaveCount(remaining - 1);
       remaining -= 1;
+      iterations += 1;
     }
   });
 
@@ -29,12 +40,14 @@ test.describe("Watchlist add/remove flow", () => {
       page.getByRole("heading", { name: "Dashboard" }),
     ).toBeVisible();
 
-    // click 後に aria-label が "Add" → "Remove" に変わるため、label ベースの
-    // lazy ロケータは別ボタンに resolve してしまう。Playwright の locator は
-    // 評価のたびに DOM を再走査するので、stable な reference を得るために
-    // `elementHandle()` で固定する。useOptimistic は同じ React コンポーネント
-    // ツリーを再 render するだけなので、DOM ノード自体は同一性を保ち、handle
-    // も valid のまま。
+    // 注: 通常の Playwright ベストプラクティスは locator-based assertion で
+    // あり `elementHandle()` は legacy API。ただしこのケースでは click 後に
+    // aria-pressed や aria-label が変わって locator の評価対象 (DOM 集合) が
+    // 変動するため、locator では「最初に identify した同一ノード」を追跡できない。
+    // useOptimistic は同じ React ツリーを再 render するのみで DOM ノード自体は
+    // 同一性を保つので、`elementHandle()` で stable な reference を取って
+    // click 前後の aria-pressed 推移を観測する。data-testid を付与するという
+    // 案もあるが、本番 DOM に test 専用 attribute を増やす副作用を避けたい。
     const firstUnwatchedLocator = page
       .locator('button[aria-pressed="false"]')
       .first();
@@ -90,6 +103,8 @@ test.describe("Watchlist add/remove flow", () => {
       candidateCount === 0,
       "Dashboard 上に未 watch 記事が無いため skip (seed 依存)",
     );
+    // `elementHandle()` を使う理由は前テストのコメントを参照。click 前後の
+    // aria-pressed を同一 DOM ノードで観測するために stable な reference が必要。
     const targetButton = await page
       .locator('button[aria-pressed="false"]')
       .first()

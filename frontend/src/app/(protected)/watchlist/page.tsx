@@ -78,7 +78,11 @@ export default async function WatchlistPage({
   return (
     <PageContainer>
       <h1 className="text-base font-medium">Watchlist</h1>
-      <Suspense key={page} fallback={<WatchlistSkeleton />}>
+      {/* URL searchParams を JSON 化して Suspense key に与えることで、
+          searchParams が変化したときに fallback (skeleton) を再表示する。
+          dashboard 側 (`(protected)/page.tsx`) と統一した戦略。今後
+          searchParams が増えた際に key 候補の追加漏れを防ぐ。 */}
+      <Suspense key={JSON.stringify({ page })} fallback={<WatchlistSkeleton />}>
         <WatchlistContent page={page} />
       </Suspense>
     </PageContainer>

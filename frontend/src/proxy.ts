@@ -63,6 +63,13 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  // 静的アセットと API ルートは CSP proxy の対象外
+  // 静的アセットと API ルートは CSP proxy の対象外。
+  //
+  // `_next/data` を除外していない理由: `_next/data/*.json` は Pages Router
+  // 専用のデータ取得エンドポイントで、App Router 採用の Vector では生成
+  // されない。除外パターンに含めると将来の Next.js が App Router 配下で
+  // この path を別用途に流用した際に CSP が抜ける危険があるため、現在は
+  // 意図的に matcher に書かない (Next.js 公式 doc の middleware matcher
+  // 例も App Router プロジェクトでは `_next/data` を除外していない)。
   matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"],
 };
