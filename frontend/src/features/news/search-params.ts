@@ -12,9 +12,8 @@
  */
 
 import { z } from "zod";
+import type { SearchParams } from "@/lib/types/route";
 import type { ArticleQuery } from "@/types";
-
-type RawSearchParams = Record<string, string | string[] | undefined>;
 
 // raw searchParams は string | string[] | undefined。string 単一値以外は
 // undefined に丸めて zod に渡し、未指定キーと同等に扱う。
@@ -46,7 +45,7 @@ const ArticleQueryParamsSchema = z.object({
  * SSR の `searchParams` を `ArticleQuery` + 検索クエリ q に正規化する。
  * 数値は NaN を弾き、未指定キーはオブジェクトに含めない。
  */
-export function parseArticleQuery(raw: RawSearchParams): {
+export function parseArticleQuery(raw: SearchParams): {
   query: ArticleQuery;
   q?: string;
 } {
@@ -62,5 +61,7 @@ export function parseArticleQuery(raw: RawSearchParams): {
   if (rest.page !== undefined) query.page = rest.page;
   if (rest.perPage !== undefined) query.perPage = rest.perPage;
 
-  return { query, q };
+  // exactOptionalPropertyTypes 下で q?: string に undefined を明示代入
+  // できないため、未指定時は q キー自体を省く。
+  return q !== undefined ? { query, q } : { query };
 }

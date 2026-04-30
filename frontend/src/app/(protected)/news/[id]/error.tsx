@@ -1,13 +1,9 @@
 "use client";
 
 import { ErrorMessage } from "@/components/feedback/ErrorMessage";
+import type { ErrorPageProps } from "@/lib/types/error-page";
 
-interface ErrorProps {
-  error: Error & { digest?: string };
-  reset: () => void;
-}
-
-export default function NewsDetailError({ error, reset }: ErrorProps) {
+export default function NewsDetailError({ error, reset }: ErrorPageProps) {
   return (
     <ErrorMessage
       title="記事の取得に失敗しました"

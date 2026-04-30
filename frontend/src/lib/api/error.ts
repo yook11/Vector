@@ -2,6 +2,10 @@
  * Shared error types and helpers for the server-side fetcher (server-fetcher.ts).
  */
 
+import type { components } from "@/types/generated";
+
+type ValidationError = components["schemas"]["ValidationError"];
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -10,6 +14,17 @@ export class ApiError extends Error {
     super(detail);
     this.name = "ApiError";
   }
+}
+
+// Pydantic ValidationError の runtime narrow。generated.ts の shape
+// (loc: (string|number)[], msg: string, type: string) のうち、UI 表示に
+// 必須となる loc / msg のみを runtime 検証する。`in` operator narrowing で
+// `as { ... }` cast を避け、generated 型と SSoT 接続する。
+function isValidationError(e: unknown): e is ValidationError {
+  if (e === null || typeof e !== "object") return false;
+  if (!("loc" in e) || !Array.isArray(e.loc)) return false;
+  if (!("msg" in e) || typeof e.msg !== "string") return false;
+  return true;
 }
 
 /**
@@ -24,24 +39,22 @@ export class ApiError extends Error {
  */
 export function normalizeErrorDetail(body: unknown): string {
   if (!body || typeof body !== "object" || !("detail" in body)) return "";
-  const detail = (body as { detail: unknown }).detail;
+  // TS 4.9+ の `in` narrow により body.detail は unknown としてアクセス可。
+  const detail: unknown = body.detail;
 
   if (typeof detail === "string") return detail;
 
   if (Array.isArray(detail)) {
     return detail
+      .filter(isValidationError)
       .map((e) => {
-        if (!e || typeof e !== "object") return "";
-        const { loc, msg } = e as { loc?: unknown[]; msg?: string };
         // loc is typically ["query", "fieldName"] or ["body", "nested", ...]
         // Skip the source prefix (first element) to show only the field path.
-        const field = Array.isArray(loc)
-          ? loc
-              .slice(1)
-              .map((part) => String(part))
-              .join(".")
-          : "";
-        return field && msg ? `${field}: ${msg}` : (msg ?? "");
+        const field = e.loc
+          .slice(1)
+          .map((part) => String(part))
+          .join(".");
+        return field ? `${field}: ${e.msg}` : e.msg;
       })
       .filter(Boolean)
       .join("; ");

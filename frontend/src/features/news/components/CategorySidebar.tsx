@@ -43,8 +43,8 @@ export function CategorySidebar({
       {/* All */}
       <Link
         href={buildHref(undefined)}
-        onClick={onNavigate}
-        aria-current={isAll ? "page" : undefined}
+        {...(onNavigate && { onClick: onNavigate })}
+        {...(isAll && { "aria-current": "page" as const })}
         className={cn(
           linkClass,
           isAll && "text-foreground font-medium bg-accent",
@@ -61,8 +61,8 @@ export function CategorySidebar({
           <Link
             key={cat.slug}
             href={buildHref(cat.slug)}
-            onClick={onNavigate}
-            aria-current={isActiveCat ? "page" : undefined}
+            {...(onNavigate && { onClick: onNavigate })}
+            {...(isActiveCat && { "aria-current": "page" as const })}
             className={cn(
               linkClass,
               isActiveCat && "text-foreground font-medium bg-accent",

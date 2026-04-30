@@ -25,6 +25,10 @@ export function MobileSidebar({
 }: MobileSidebarProps) {
   const [open, setOpen] = useState(false);
 
+  // EOP 下で undefined を CategorySidebar の optional activeCategory に
+  // 明示代入できないため、条件付き spread で「未指定 or 値あり」を表現する。
+  const categoryProps = activeCategory !== undefined ? { activeCategory } : {};
+
   return (
     <Sheet open={open} onOpenChange={setOpen}>
       <SheetTrigger asChild>
@@ -45,7 +49,7 @@ export function MobileSidebar({
         </SheetHeader>
         <CategorySidebar
           categories={categories}
-          activeCategory={activeCategory}
+          {...categoryProps}
           onNavigate={() => setOpen(false)}
         />
       </SheetContent>

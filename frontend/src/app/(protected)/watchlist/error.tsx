@@ -1,13 +1,9 @@
 "use client";
 
 import { ErrorMessage } from "@/components/feedback/ErrorMessage";
+import type { ErrorPageProps } from "@/lib/types/error-page";
 
-interface ErrorProps {
-  error: Error & { digest?: string };
-  reset: () => void;
-}
-
-export default function WatchlistError({ error, reset }: ErrorProps) {
+export default function WatchlistError({ error, reset }: ErrorPageProps) {
   return (
     <ErrorMessage
       title="ウォッチリストの取得に失敗しました"

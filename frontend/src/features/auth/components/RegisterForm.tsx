@@ -57,8 +57,11 @@ function resolveAuthError(authError: SignUpError): {
   focus: "email" | "password" | "displayName";
 } {
   const code = authError.code ?? authError.error?.code;
-  if (code && code in REGISTER_ERROR_MESSAGES) {
-    const message = REGISTER_ERROR_MESSAGES[code];
+  // noUncheckedIndexedAccess: true により Record<string, string>[code] は
+  // string | undefined になるため、message を明示的に narrow する。
+  const message =
+    code !== undefined ? REGISTER_ERROR_MESSAGES[code] : undefined;
+  if (code && message !== undefined) {
     if (
       code === "USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL" ||
       code === "USER_ALREADY_EXISTS" ||
@@ -93,11 +96,14 @@ async function action(
   const parsed = RegisterSchema.safeParse(Object.fromEntries(formData));
   if (!parsed.success) {
     const { fieldErrors } = z.flattenError(parsed.error);
-    const fe: RegisterFieldErrors = {
-      email: fieldErrors.email?.[0],
-      password: fieldErrors.password?.[0],
-      displayName: fieldErrors.displayName?.[0],
-    };
+    // EOP 下で Partial<Record<...>> に undefined 明示代入はできないため、
+    // 値ありフィールドのみ条件付きで組む。
+    const fe: RegisterFieldErrors = {};
+    if (fieldErrors.email?.[0] !== undefined) fe.email = fieldErrors.email[0];
+    if (fieldErrors.password?.[0] !== undefined)
+      fe.password = fieldErrors.password[0];
+    if (fieldErrors.displayName?.[0] !== undefined)
+      fe.displayName = fieldErrors.displayName[0];
     // focus 優先度: email > password > displayName (form の上から順)
     const focus: "email" | "password" | "displayName" = fe.email
       ? "email"
