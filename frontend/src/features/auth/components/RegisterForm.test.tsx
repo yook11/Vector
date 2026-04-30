@@ -2,31 +2,36 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({
-  signUpEmail: vi.fn(),
-  push: vi.fn(),
-  refresh: vi.fn(),
-}));
+const mocks = vi.hoisted(() => {
+  // createRouterMock と等価の shape を inline で生成。helper 自身は beforeEach
+  // での再初期化に使い、3 ファイルで重複していた inline 定義を 1 箇所に集約。
+  return {
+    signUpEmail: vi.fn(),
+    router: {
+      push: vi.fn(),
+      replace: vi.fn(),
+      refresh: vi.fn(),
+      back: vi.fn(),
+      forward: vi.fn(),
+      prefetch: vi.fn(),
+    },
+  };
+});
 
 vi.mock("@/lib/auth/auth-client", () => ({
   signUp: { email: mocks.signUpEmail },
 }));
 
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({
-    push: mocks.push,
-    refresh: mocks.refresh,
-    replace: vi.fn(),
-    back: vi.fn(),
-    forward: vi.fn(),
-    prefetch: vi.fn(),
-  }),
+  useRouter: () => mocks.router,
 }));
 
+import { createRouterMock } from "@/test/router-mock";
 import { RegisterForm } from "./RegisterForm";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  Object.assign(mocks.router, createRouterMock());
 });
 
 const fillValidForm = async (
@@ -153,8 +158,8 @@ describe("RegisterForm — signUp 成功", () => {
         name: "Alice",
       });
     });
-    expect(mocks.push).toHaveBeenCalledWith("/");
-    expect(mocks.refresh).toHaveBeenCalled();
+    expect(mocks.router.push).toHaveBeenCalledWith("/");
+    expect(mocks.router.refresh).toHaveBeenCalled();
   });
 
   it("displayName 空のとき name は email の local part にフォールバック", async () => {
@@ -202,7 +207,7 @@ describe("RegisterForm — Better Auth error code → email field", () => {
       "aria-invalid",
       "true",
     );
-    expect(mocks.push).not.toHaveBeenCalled();
+    expect(mocks.router.push).not.toHaveBeenCalled();
   });
 });
 

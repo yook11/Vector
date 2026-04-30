@@ -2,31 +2,40 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({
-  signInEmail: vi.fn(),
-  push: vi.fn(),
-  refresh: vi.fn(),
-}));
+const mocks = vi.hoisted(() => {
+  // createRouterMock と等価の shape を inline で生成。vi.hoisted は top-level
+  // に巻き上げられるため import を持ち込むと循環を起こしやすく、router-mock の
+  // helper は beforeEach での再初期化に使う形で取り回す。
+  return {
+    signInEmail: vi.fn(),
+    router: {
+      push: vi.fn(),
+      replace: vi.fn(),
+      refresh: vi.fn(),
+      back: vi.fn(),
+      forward: vi.fn(),
+      prefetch: vi.fn(),
+    },
+  };
+});
 
 vi.mock("@/lib/auth/auth-client", () => ({
   signIn: { email: mocks.signInEmail },
 }));
 
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({
-    push: mocks.push,
-    refresh: mocks.refresh,
-    replace: vi.fn(),
-    back: vi.fn(),
-    forward: vi.fn(),
-    prefetch: vi.fn(),
-  }),
+  useRouter: () => mocks.router,
 }));
 
+import { createRouterMock } from "@/test/router-mock";
 import { LoginForm } from "./LoginForm";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // helper で都度新しい vi.fn 一式を組み立て、前 test の invocation history を
+  // 持ち越さない。3 ファイルで重複していた inline 定義を 1 箇所 (router-mock.ts)
+  // に集約。
+  Object.assign(mocks.router, createRouterMock());
 });
 
 const fillForm = async (
@@ -34,12 +43,8 @@ const fillForm = async (
   email: string,
   password: string,
 ) => {
-  if (email !== "") {
-    await user.type(screen.getByLabelText("Email"), email);
-  }
-  if (password !== "") {
-    await user.type(screen.getByLabelText("Password"), password);
-  }
+  await user.type(screen.getByLabelText("Email"), email);
+  await user.type(screen.getByLabelText("Password"), password);
 };
 
 describe("LoginForm — 初期表示", () => {
@@ -136,8 +141,8 @@ describe("LoginForm — signIn 戻り値", () => {
       email: "user@example.com",
       password: "secret",
     });
-    expect(mocks.push).not.toHaveBeenCalled();
-    expect(mocks.refresh).not.toHaveBeenCalled();
+    expect(mocks.router.push).not.toHaveBeenCalled();
+    expect(mocks.router.refresh).not.toHaveBeenCalled();
   });
 
   it("成功時に router.push('/') と router.refresh() を順序通り呼ぶ", async () => {
@@ -152,11 +157,11 @@ describe("LoginForm — signIn 戻り値", () => {
     await user.click(screen.getByRole("button", { name: "Sign in" }));
 
     await waitFor(() => {
-      expect(mocks.push).toHaveBeenCalledWith("/");
+      expect(mocks.router.push).toHaveBeenCalledWith("/");
     });
-    expect(mocks.refresh).toHaveBeenCalledTimes(1);
-    const pushOrder = mocks.push.mock.invocationCallOrder[0] ?? 0;
-    const refreshOrder = mocks.refresh.mock.invocationCallOrder[0] ?? 0;
+    expect(mocks.router.refresh).toHaveBeenCalledTimes(1);
+    const pushOrder = mocks.router.push.mock.invocationCallOrder[0] ?? 0;
+    const refreshOrder = mocks.router.refresh.mock.invocationCallOrder[0] ?? 0;
     expect(pushOrder).toBeLessThan(refreshOrder);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
