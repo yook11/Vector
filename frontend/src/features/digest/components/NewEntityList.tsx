@@ -1,3 +1,4 @@
+import { SectionLabel } from "@/components/feedback/SectionLabel";
 import type { WeeklyNewEntity } from "@/types";
 
 interface NewEntityListProps {
@@ -24,9 +25,7 @@ export function NewEntityList({ entities }: NewEntityListProps) {
             <span className="text-sm font-medium text-foreground truncate">
               {entity.name}
             </span>
-            <span className="text-[10px] uppercase tracking-widest text-muted-foreground">
-              {entity.type}
-            </span>
+            <SectionLabel>{entity.type}</SectionLabel>
           </div>
           <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
             ×{entity.currentCount}

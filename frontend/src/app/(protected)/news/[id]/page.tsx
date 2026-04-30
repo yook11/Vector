@@ -2,7 +2,9 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
+import { PageContainer } from "@/components/layout/PageContainer";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   getArticleById,
   getSimilarArticles,
@@ -61,10 +63,10 @@ async function RelatedArticlesAsync({
 function RelatedArticlesSkeleton() {
   return (
     <section className="space-y-3" aria-hidden="true">
-      <div className="h-6 w-24 rounded bg-muted/60 animate-pulse" />
+      <Skeleton className="h-6 w-24" />
       <div className="space-y-3">
         {[0, 1, 2].map((i) => (
-          <div key={i} className="h-24 rounded-md bg-muted/40 animate-pulse" />
+          <Skeleton key={i} className="h-24" />
         ))}
       </div>
     </section>
@@ -94,19 +96,17 @@ export default async function NewsPage({ params }: NewsPageProps) {
   const watchedIds = await watchedIdsPromise;
 
   return (
-    <main className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-3xl px-8 sm:px-12 py-6 sm:py-8 flex flex-col gap-8">
-        <Button variant="ghost" size="sm" asChild className="text-xs">
-          <Link href="/">&larr; Back to Dashboard</Link>
-        </Button>
-        <NewsDetail article={article} isWatched={watchedIds.has(article.id)} />
-        <Suspense fallback={<RelatedArticlesSkeleton />}>
-          <RelatedArticlesAsync
-            articlesPromise={similarPromise}
-            watchedIds={watchedIds}
-          />
-        </Suspense>
-      </div>
-    </main>
+    <PageContainer maxWidth="3xl">
+      <Button variant="ghost" size="sm" asChild className="text-xs">
+        <Link href="/">&larr; Back to Dashboard</Link>
+      </Button>
+      <NewsDetail article={article} isWatched={watchedIds.has(article.id)} />
+      <Suspense fallback={<RelatedArticlesSkeleton />}>
+        <RelatedArticlesAsync
+          articlesPromise={similarPromise}
+          watchedIds={watchedIds}
+        />
+      </Suspense>
+    </PageContainer>
   );
 }

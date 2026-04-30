@@ -1,4 +1,7 @@
 import type { Metadata } from "next";
+import { EmptyState } from "@/components/feedback/EmptyState";
+import { SectionLabel } from "@/components/feedback/SectionLabel";
+import { PageContainer } from "@/components/layout/PageContainer";
 import {
   getWeeklyTrends,
   HotEntityList,
@@ -16,65 +19,51 @@ export default async function WeeklyTrendsPage() {
 
   if (data.state === "empty") {
     return (
-      <main className="h-full overflow-y-auto">
-        <div className="mx-auto max-w-5xl px-8 sm:px-12 py-6 sm:py-8 flex flex-col gap-8">
-          <h1 className="text-base font-medium">Weekly Trends</h1>
-          <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
-            <p className="text-sm font-medium">
-              週次トレンドはまだ生成されていません
-            </p>
-            <p className="text-xs mt-1">
-              次回の自動生成は JST 月曜 00:05 に予定されています
-            </p>
-          </div>
-        </div>
-      </main>
+      <PageContainer>
+        <h1 className="text-base font-medium">Weekly Trends</h1>
+        <EmptyState
+          title="週次トレンドはまだ生成されていません"
+          description="次回の自動生成は JST 月曜 00:05 に予定されています"
+        />
+      </PageContainer>
     );
   }
 
   return (
-    <main className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-5xl px-8 sm:px-12 py-6 sm:py-8 flex flex-col gap-10">
-        <header className="flex flex-col gap-2">
-          <h1 className="text-base font-medium">Weekly Trends</h1>
-          <p className="text-xs text-muted-foreground">
-            {formatDate(data.weekStart)} – {formatDate(data.weekEnd)}
-            <span className="ml-2">
-              · {data.sourceAnalysisCount} 件の分析を集計
-            </span>
-          </p>
-        </header>
+    <PageContainer gap={10}>
+      <header className="flex flex-col gap-2">
+        <h1 className="text-base font-medium">Weekly Trends</h1>
+        <p className="text-xs text-muted-foreground">
+          {formatDate(data.weekStart)} – {formatDate(data.weekEnd)}
+          <span className="ml-2">
+            · {data.sourceAnalysisCount} 件の分析を集計
+          </span>
+        </p>
+      </header>
 
-        <div className="flex flex-col gap-12">
-          {data.categories.map((category) => (
-            <section key={category.categoryId} className="flex flex-col gap-5">
-              <h2 className="text-sm font-medium tracking-tight">
-                {category.categoryName}
-              </h2>
-              <div className="grid gap-8 md:grid-cols-3">
-                <div className="flex flex-col gap-3">
-                  <h3 className="text-[10px] uppercase tracking-widest text-muted-foreground">
-                    Hot Entities
-                  </h3>
-                  <HotEntityList entities={category.trendingEntities} />
-                </div>
-                <div className="flex flex-col gap-3">
-                  <h3 className="text-[10px] uppercase tracking-widest text-muted-foreground">
-                    Hot Topics
-                  </h3>
-                  <HotTopicList topics={category.trendingTopics} />
-                </div>
-                <div className="flex flex-col gap-3">
-                  <h3 className="text-[10px] uppercase tracking-widest text-muted-foreground">
-                    New Entities
-                  </h3>
-                  <NewEntityList entities={category.newEntities} />
-                </div>
+      <div className="flex flex-col gap-12">
+        {data.categories.map((category) => (
+          <section key={category.categoryId} className="flex flex-col gap-5">
+            <h2 className="text-sm font-medium tracking-tight">
+              {category.categoryName}
+            </h2>
+            <div className="grid gap-8 md:grid-cols-3">
+              <div className="flex flex-col gap-3">
+                <SectionLabel as="h3">Hot Entities</SectionLabel>
+                <HotEntityList entities={category.trendingEntities} />
               </div>
-            </section>
-          ))}
-        </div>
+              <div className="flex flex-col gap-3">
+                <SectionLabel as="h3">Hot Topics</SectionLabel>
+                <HotTopicList topics={category.trendingTopics} />
+              </div>
+              <div className="flex flex-col gap-3">
+                <SectionLabel as="h3">New Entities</SectionLabel>
+                <NewEntityList entities={category.newEntities} />
+              </div>
+            </div>
+          </section>
+        ))}
       </div>
-    </main>
+    </PageContainer>
   );
 }

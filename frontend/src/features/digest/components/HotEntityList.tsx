@@ -1,3 +1,4 @@
+import { SectionLabel } from "@/components/feedback/SectionLabel";
 import type { WeeklyEntityTrend } from "@/types";
 
 interface HotEntityListProps {
@@ -24,9 +25,7 @@ export function HotEntityList({ entities }: HotEntityListProps) {
             <span className="text-sm font-medium text-foreground truncate">
               {entity.name}
             </span>
-            <span className="text-[10px] uppercase tracking-widest text-muted-foreground">
-              {entity.type}
-            </span>
+            <SectionLabel>{entity.type}</SectionLabel>
           </div>
           <div className="shrink-0 flex items-baseline gap-2 text-xs text-muted-foreground tabular-nums">
             <span>
