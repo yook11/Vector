@@ -46,6 +46,7 @@ select = ["E", "F", "I", "UP", "S", "FAST", "TID"]
 # fetcher は呼び出し側 (Service) から AsyncClient を受け取って使う側なので、
 # 型ヒントとしての参照のみ。本ファイル群で AsyncClient を直接構築することはない。
 "app/collection/ingestion/fetchers/**" = ["TID251"]
+"app/collection/ingestion/tools/**" = ["TID251"]
 "app/collection/ingestion/registry.py" = ["TID251"]
 
 [tool.pytest.ini_options]
