@@ -17,6 +17,7 @@ export default defineConfig({
       // PR レビュー時に対応テストの存在を確認すること。
       include: [
         "src/lib/utils/sanitize-url.ts",
+        "src/lib/utils/toast-error.ts",
         "src/lib/auth/role.ts",
         "src/lib/auth/guards.ts",
         "src/lib/auth/login-redirect-url.ts",
@@ -38,13 +39,15 @@ export default defineConfig({
       ],
       exclude: ["**/*.test.*", "**/*.d.ts", "e2e/**"],
       // Phase 3 で CI required 化に合わせて threshold を導入。
-      // Phase 2 実績 (lib 98.98% / component 99.14%) から下方バッファ -10〜-19pt で
-      // 過敏な fail を避けつつ regression を CI で必ず止める。
+      // PR-Z11 で test 網拡張 (fetcher timeout/AbortSignal/408 + toast-error
+      // production マスク) に伴い実測が S 99.34 / B 96.21 / F 100 / L 100 に
+      // 到達したので、安全マージン -3〜-4pt で tighten。これにより regression
+      // 検知力を上げつつ偶発 fail を避ける。
       thresholds: {
-        statements: 90,
-        branches: 85,
-        functions: 90,
-        lines: 90,
+        statements: 95,
+        branches: 92,
+        functions: 95,
+        lines: 95,
       },
     },
   },
