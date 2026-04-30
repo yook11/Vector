@@ -15,6 +15,11 @@ jobs:
   changes:
     name: Detect changes
     runs-on: ubuntu-latest
+    # dorny/paths-filter は PR の changed files を GitHub REST API で
+    # listFiles する。デフォルトの GITHUB_TOKEN ではこの権限が無いため
+    # `pull-requests: read` を明示的に付与する。
+    permissions:
+      pull-requests: read
     outputs:
       e2e: ${{ steps.filter.outputs.e2e }}
     steps:
