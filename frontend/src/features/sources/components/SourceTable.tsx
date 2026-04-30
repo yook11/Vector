@@ -24,6 +24,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { isRedirectError } from "@/lib/utils/redirect-error";
 import { toastError } from "@/lib/utils/toast-error";
 import type { NewsSourceDetail } from "@/types";
 import { activateSource } from "../api/activate-source";
@@ -68,6 +69,10 @@ export function SourceTable({ sources }: SourceTableProps) {
           `${updated.name} ${updated.isActive ? "enabled" : "disabled"}`,
         );
       } catch (err) {
+        // 未認証は requireSessionForAction が redirect throw する経路。digest
+        // 判定で再 throw して Next.js navigation を起動させる (握り潰すと
+        // login 画面に遷移できず toast だけが出る silent fail になる)。
+        if (isRedirectError(err)) throw err;
         toastError(err, "ソースの更新に失敗しました");
       }
     });
@@ -80,6 +85,7 @@ export function SourceTable({ sources }: SourceTableProps) {
         await deleteSource(id);
         toast.success(`Deleted "${name}"`);
       } catch (err) {
+        if (isRedirectError(err)) throw err;
         toastError(err, "ソースの削除に失敗しました");
       }
     });

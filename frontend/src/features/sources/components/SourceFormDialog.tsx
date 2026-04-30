@@ -21,6 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { isRedirectError } from "@/lib/utils/redirect-error";
 import { toastError } from "@/lib/utils/toast-error";
 import { createSource } from "../api/create-source";
 import {
@@ -39,22 +40,6 @@ type FormState =
   | { status: "error"; error: unknown; fallback: string };
 
 const INITIAL_STATE: FormState = { status: "idle" };
-
-// Next.js の redirect() / notFound() が投げる特殊 error を識別する。
-// Next.js 16.2 では isRedirectError は公式 export されていないため digest
-// プロパティで判定する (Next.js 13 から digest = "NEXT_REDIRECT;<status>;<url>"
-// の構造で安定)。re-throw しないと caller の try/catch で navigation が
-// 握り潰され、admin route 緩和時に未ログインユーザの login redirect が
-// 機能しなくなる罠を構造的に塞ぐ。
-function isRedirectError(err: unknown): boolean {
-  return (
-    err !== null &&
-    typeof err === "object" &&
-    "digest" in err &&
-    typeof (err as { digest: unknown }).digest === "string" &&
-    (err as { digest: string }).digest.startsWith("NEXT_REDIRECT")
-  );
-}
 
 async function action(
   _prev: FormState,

@@ -1,5 +1,6 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { Component, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NewsSourceDetail } from "@/types";
 
@@ -272,6 +273,78 @@ describe("SourceTable — delete (AlertDialog)", () => {
     });
     // optimistic 削除は startTransition 完了で base に戻る → 行が再表示される
     expect(screen.getByText("Hacker News")).toBeInTheDocument();
+  });
+});
+
+// 本物の Next.js 環境では redirect() throw を framework renderer が受けて
+// navigation するが、jsdom test では受け手がない。ErrorBoundary を被せて
+// React の transition error 経路で受け止め、(a) toastError 不発火
+// (b) 再 throw が起きていること を positively 検証する。
+class CaptureBoundary extends Component<
+  { children: ReactNode; onCapture: (err: unknown) => void },
+  { caught: boolean }
+> {
+  state = { caught: false };
+  static getDerivedStateFromError() {
+    return { caught: true };
+  }
+  componentDidCatch(err: unknown) {
+    this.props.onCapture(err);
+  }
+  render() {
+    return this.state.caught ? null : this.props.children;
+  }
+}
+
+describe("SourceTable — redirect throw を握り潰さない", () => {
+  const makeRedirectError = () =>
+    Object.assign(new Error("NEXT_REDIRECT"), {
+      digest: "NEXT_REDIRECT;replace;/auth/login?callbackUrl=%2F;307;",
+    });
+
+  it("activate が NEXT_REDIRECT を throw すると toastError / toast.success は呼ばれず redirect error が再 throw される", async () => {
+    const redirectError = makeRedirectError();
+    mocks.activateSource.mockRejectedValue(redirectError);
+
+    const captured: unknown[] = [];
+    const user = userEvent.setup();
+    render(
+      <CaptureBoundary onCapture={(e) => captured.push(e)}>
+        <SourceTable sources={SAMPLE_SOURCES} />
+      </CaptureBoundary>,
+    );
+    await user.click(switchFor("TechCrunch"));
+
+    await waitFor(() => {
+      expect(captured).toHaveLength(1);
+    });
+    expect(captured[0]).toBe(redirectError);
+    expect(mocks.toastError).not.toHaveBeenCalled();
+    expect(mocks.toastSuccess).not.toHaveBeenCalled();
+  });
+
+  it("delete が NEXT_REDIRECT を throw すると toastError は呼ばれず redirect error が再 throw される", async () => {
+    const redirectError = makeRedirectError();
+    mocks.deleteSource.mockRejectedValue(redirectError);
+
+    const captured: unknown[] = [];
+    const user = userEvent.setup();
+    render(
+      <CaptureBoundary onCapture={(e) => captured.push(e)}>
+        <SourceTable sources={SAMPLE_SOURCES} />
+      </CaptureBoundary>,
+    );
+
+    await user.click(deleteTriggerFor("Hacker News"));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: "Delete" }));
+
+    await waitFor(() => {
+      expect(captured).toHaveLength(1);
+    });
+    expect(captured[0]).toBe(redirectError);
+    expect(mocks.toastError).not.toHaveBeenCalled();
+    expect(mocks.toastSuccess).not.toHaveBeenCalled();
   });
 });
 
