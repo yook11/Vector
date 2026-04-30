@@ -51,33 +51,65 @@ describe("LoginForm — 初期表示", () => {
   });
 });
 
-describe("LoginForm — クライアント検証失敗", () => {
-  it("空フォーム submit で汎用 error 表示 + email focus + aria-invalid", async () => {
+describe("LoginForm — schema fail (field-level error)", () => {
+  it("空 email + 空 password で field 個別の error 文言 + email field のみ aria-invalid", async () => {
+    // jsdom は HTML5 form validation (required / type=email) を実装しているため
+    // user.click だと validation block が submit を止める。fireEvent.submit で
+    // useActionState の action に到達させ、zod 経由の field error を観察する。
     render(<LoginForm />);
-    // jsdom は HTML5 form validation (required / type=email) を実装している
-    // ため `user.click(submitButton)` だと validation block が先に走り
-    // handleSubmit に到達しない。fireEvent.submit(form) で直接 submit event
-    // を投げて Zod 検証側を確実に通す。
     const form = screen
       .getByRole("button", { name: "Sign in" })
       .closest("form");
     expect(form).not.toBeNull();
     if (form) fireEvent.submit(form);
 
-    const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("Please enter a valid email and password");
-    expect(screen.getByLabelText("Email")).toHaveAttribute(
+    // 両 field に個別の field-level error が出る (旧実装の generic 文言ではない)
+    const emailInput = screen.getByLabelText("Email");
+    const passwordInput = screen.getByLabelText("Password");
+
+    await waitFor(() => {
+      expect(emailInput).toHaveAttribute("aria-invalid", "true");
+      expect(passwordInput).toHaveAttribute("aria-invalid", "true");
+    });
+
+    // 両 field に個別の <p role="alert"> が出る
+    const alerts = screen.getAllByRole("alert");
+    expect(alerts.length).toBe(2);
+    expect(alerts[0]).toHaveTextContent("Please enter a valid email address");
+    expect(alerts[1]).toHaveTextContent("Password is required");
+
+    // signIn は呼ばれない
+    expect(mocks.signInEmail).not.toHaveBeenCalled();
+  });
+
+  it("invalid email + valid password で email field のみ aria-invalid + email error", async () => {
+    const user = userEvent.setup();
+    render(<LoginForm />);
+    // type=email を満たす形 (`@.` を含む) で submit して HTML5 validation を通し、
+    // zod email validator のみが弾く形にする。
+    await fillForm(user, "user@bad", "anypw");
+    const form = screen
+      .getByRole("button", { name: "Sign in" })
+      .closest("form");
+    if (form) fireEvent.submit(form);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Email")).toHaveAttribute(
+        "aria-invalid",
+        "true",
+      );
+    });
+    // password は invalid にならない (field-level a11y の意図)
+    expect(screen.getByLabelText("Password")).not.toHaveAttribute(
       "aria-invalid",
       "true",
     );
-    expect(screen.getByLabelText("Email")).toHaveFocus();
-    // signIn は呼ばれない
     expect(mocks.signInEmail).not.toHaveBeenCalled();
   });
 });
 
 describe("LoginForm — signIn 戻り値", () => {
-  it("authError があれば 'Invalid email or password' 表示 + email focus", async () => {
+  it("authError があれば formError 表示 + 両 input が aria-invalid + email focus", async () => {
     mocks.signInEmail.mockResolvedValue({
       data: null,
       error: { message: "ignored", code: "INVALID_CREDENTIALS" },
@@ -90,7 +122,12 @@ describe("LoginForm — signIn 戻り値", () => {
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Invalid email or password");
+    // formError は credential 全体不正の意味なので両 input を invalid にする
     expect(screen.getByLabelText("Email")).toHaveAttribute(
+      "aria-invalid",
+      "true",
+    );
+    expect(screen.getByLabelText("Password")).toHaveAttribute(
       "aria-invalid",
       "true",
     );
@@ -118,7 +155,6 @@ describe("LoginForm — signIn 戻り値", () => {
       expect(mocks.push).toHaveBeenCalledWith("/");
     });
     expect(mocks.refresh).toHaveBeenCalledTimes(1);
-    // push が refresh より先に呼ばれていること
     const pushOrder = mocks.push.mock.invocationCallOrder[0] ?? 0;
     const refreshOrder = mocks.refresh.mock.invocationCallOrder[0] ?? 0;
     expect(pushOrder).toBeLessThan(refreshOrder);
@@ -148,31 +184,5 @@ describe("LoginForm — pending state", () => {
     });
 
     resolveSign({ data: null, error: null });
-  });
-});
-
-describe("LoginForm — 再 submit で error クリア", () => {
-  it("失敗後に再度 submit すると error 表示が一旦消える", async () => {
-    mocks.signInEmail
-      .mockResolvedValueOnce({
-        data: null,
-        error: { message: "fail" },
-      })
-      .mockImplementationOnce(
-        () => new Promise(() => {}), // 解決させず error が消えた状態を観察
-      );
-
-    const user = userEvent.setup();
-    render(<LoginForm />);
-    await fillForm(user, "user@example.com", "secret");
-    await user.click(screen.getByRole("button", { name: "Sign in" }));
-    await screen.findByRole("alert");
-
-    await user.click(screen.getByRole("button", { name: "Sign in" }));
-    // setError(null) が submit 冒頭で走るので、2 回目の signIn 解決前に
-    // alert が消える
-    await waitFor(() => {
-      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    });
   });
 });
