@@ -1,16 +1,12 @@
 "use client";
 
 import { useEffect } from "react";
-
-interface GlobalErrorProps {
-  error: Error & { digest?: string };
-  reset: () => void;
-}
+import type { ErrorPageProps } from "@/lib/types/error-page";
 
 // global-error.tsx は RootLayout の throw を catch するため、自前で
 // <html>/<body> を返す必要がある。下層 layout の error.tsx で吸収しきれな
 // かった catastrophic error の最終フォールバック。
-export default function GlobalError({ error, reset }: GlobalErrorProps) {
+export default function GlobalError({ error, reset }: ErrorPageProps) {
   useEffect(() => {
     console.error(error);
   }, [error]);

@@ -34,13 +34,14 @@ async function action(
   const parsed = LoginSchema.safeParse(Object.fromEntries(formData));
   if (!parsed.success) {
     const { fieldErrors } = z.flattenError(parsed.error);
-    return {
-      status: "error",
-      fieldErrors: {
-        email: fieldErrors.email?.[0],
-        password: fieldErrors.password?.[0],
-      },
-    };
+    // EOP 下で Partial<Record<...>> に undefined 明示代入はできないため、
+    // 値ありフィールドのみ条件付き spread で組む。
+    const result: LoginFieldErrors = {};
+    if (fieldErrors.email?.[0] !== undefined)
+      result.email = fieldErrors.email[0];
+    if (fieldErrors.password?.[0] !== undefined)
+      result.password = fieldErrors.password[0];
+    return { status: "error", fieldErrors: result };
   }
   const { error } = await signIn.email(parsed.data);
   if (error) {

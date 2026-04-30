@@ -1,13 +1,9 @@
 "use client";
 
 import { ErrorMessage } from "@/components/feedback/ErrorMessage";
+import type { ErrorPageProps } from "@/lib/types/error-page";
 
-interface ErrorProps {
-  error: Error & { digest?: string };
-  reset: () => void;
-}
-
-export default function ProtectedError({ error, reset }: ErrorProps) {
+export default function ProtectedError({ error, reset }: ErrorPageProps) {
   return (
     <ErrorMessage
       title="ページの読み込みに失敗しました"

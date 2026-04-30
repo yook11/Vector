@@ -59,6 +59,9 @@ export async function requestJson<T>(
   options?: RequestInit,
 ): Promise<T> {
   const res = await executeRequest(url, options);
+  // res.json() は any を返すため、caller (server-fetcher.ts) が openapi-typescript
+  // 派生型 T を渡す前提で trust する。backend OpenAPI との整合は /gen-types スキル
+  // による generated.ts 再生成 + tsc 検出で構造的に担保している。
   return res.json() as Promise<T>;
 }
 

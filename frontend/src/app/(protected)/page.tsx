@@ -12,28 +12,23 @@ import {
   searchArticles,
 } from "@/features/news";
 import { getWatchlistIds } from "@/features/watchlist";
+import type { SearchParams } from "@/lib/types/route";
 import type { ArticleQuery } from "@/types";
 
 interface DashboardPageProps {
-  searchParams: Promise<Record<string, string | string[] | undefined>>;
+  searchParams: Promise<SearchParams>;
 }
 
-async function CategorySidebarSection({
-  activeCategory,
-}: {
-  activeCategory?: string;
-}) {
+async function CategorySidebarSection(props: { activeCategory?: string }) {
   const { items } = await getCategories();
-  return <CategorySidebar categories={items} activeCategory={activeCategory} />;
+  // EOP 下では undefined 明示代入が違反になるため、props を spread して
+  // optional の不在/存在をそのまま伝搬する。
+  return <CategorySidebar categories={items} {...props} />;
 }
 
-async function MobileSidebarTrigger({
-  activeCategory,
-}: {
-  activeCategory?: string;
-}) {
+async function MobileSidebarTrigger(props: { activeCategory?: string }) {
   const { items } = await getCategories();
-  return <MobileSidebar categories={items} activeCategory={activeCategory} />;
+  return <MobileSidebar categories={items} {...props} />;
 }
 
 async function NewsGridSection({
@@ -97,13 +92,18 @@ export default async function DashboardPage({
 }: DashboardPageProps) {
   const raw = await searchParams;
   const { query: filters, q } = parseArticleQuery(raw);
+  // EOP 下で undefined を optional prop に明示代入できないため、
+  // 条件付き spread で「未指定 or 値あり」を表現する。
+  const categoryProps =
+    filters.category !== undefined ? { activeCategory: filters.category } : {};
+  const qProps = q !== undefined ? { q } : {};
 
   return (
     <div className="flex h-full gap-0">
       {/* Sidebar */}
       <aside className="hidden lg:flex w-64 shrink-0 flex-col border-r border-border overflow-y-auto">
         <Suspense fallback={<CategorySidebarSkeleton />}>
-          <CategorySidebarSection activeCategory={filters.category} />
+          <CategorySidebarSection {...categoryProps} />
         </Suspense>
       </aside>
 
@@ -113,7 +113,7 @@ export default async function DashboardPage({
           {/* Title row */}
           <div className="flex items-center gap-3">
             <Suspense fallback={null}>
-              <MobileSidebarTrigger activeCategory={filters.category} />
+              <MobileSidebarTrigger {...categoryProps} />
             </Suspense>
             <h1 className="text-base font-medium text-foreground">Dashboard</h1>
           </div>
@@ -133,7 +133,7 @@ export default async function DashboardPage({
             key={JSON.stringify({ q, filters })}
             fallback={<NewsGridSkeleton />}
           >
-            <NewsGridSection filters={filters} q={q} />
+            <NewsGridSection filters={filters} {...qProps} />
           </Suspense>
         </div>
       </main>

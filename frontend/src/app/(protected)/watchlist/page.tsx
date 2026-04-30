@@ -3,13 +3,14 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { NewsList, NewsPagination, parseArticleQuery } from "@/features/news";
 import { getWatchlist } from "@/features/watchlist";
+import type { SearchParams } from "@/lib/types/route";
 
 export const metadata: Metadata = {
   title: "Watchlist | Vector",
 };
 
 interface WatchlistPageProps {
-  searchParams: Promise<Record<string, string | string[] | undefined>>;
+  searchParams: Promise<SearchParams>;
 }
 
 async function WatchlistContent({ page }: { page: number }) {

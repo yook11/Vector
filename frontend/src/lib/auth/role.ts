@@ -14,6 +14,14 @@ export const ALLOWED_ROLES = ["user", "admin"] as const;
 
 export type UserRole = (typeof ALLOWED_ROLES)[number];
 
+// Array.includes は narrowing しない (TypeScript 既知制約
+// https://github.com/microsoft/TypeScript/issues/26255) ため、type predicate
+// で UserRole への narrowing 経路を集約する。`as readonly string[]` は string
+// argument を allowlist で検査するための標準回避策。
+function isUserRole(value: string): value is UserRole {
+  return (ALLOWED_ROLES as readonly string[]).includes(value);
+}
+
 /**
  * 任意文字列を `UserRole` に narrowing する。
  *
@@ -21,7 +29,5 @@ export type UserRole = (typeof ALLOWED_ROLES)[number];
  * `user.role` を認可判定や JWT 署名に渡す前に必ず通すこと。
  */
 export function narrowRole(value: string): UserRole {
-  return (ALLOWED_ROLES as readonly string[]).includes(value)
-    ? (value as UserRole)
-    : "user";
+  return isUserRole(value) ? value : "user";
 }
