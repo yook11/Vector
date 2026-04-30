@@ -128,6 +128,8 @@ async def _create_article_with_extraction(
     await db_session.flush()
     article = Article(
         discovered_article_id=discovered.id,
+        source_id=discovered.news_source_id,
+        source_url=discovered.original_url,
         original_title=title,
         original_content="Content.",
         published_at=datetime.now(UTC),
@@ -692,6 +694,8 @@ async def test_extraction_creates_extraction_and_entities(
     await db_session.flush()
     article = Article(
         discovered_article_id=discovered.id,
+        source_id=discovered.news_source_id,
+        source_url=discovered.original_url,
         original_title="Quantum Breakthrough",
         original_content="Full content here.",
         published_at=datetime.now(UTC),
@@ -798,6 +802,8 @@ async def test_extraction_returns_invalid_input_outcome(
     await db_session.flush()
     article = Article(
         discovered_article_id=discovered.id,
+        source_id=discovered.news_source_id,
+        source_url=discovered.original_url,
         original_title="Bad Article",
         original_content="Bad content.",
         published_at=datetime.now(UTC),

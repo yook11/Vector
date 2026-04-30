@@ -142,6 +142,8 @@ async def test_already_exists_returns_already_fetched(
     )
     article = Article(
         discovered_article_id=discovered.id,
+        source_id=discovered.news_source_id,
+        source_url=discovered.original_url,
         original_title="Already here",
         original_content="Existing content body of sufficient length.",
         published_at=datetime(2026, 1, 1, tzinfo=UTC),

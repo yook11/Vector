@@ -183,7 +183,12 @@ class ContentFetchService:
             draft = ArticleDraft.from_extracted(extraction)
 
             # 並行レース対応 INSERT
-            persisted = await article_repo.save(draft, discovered_article_id=lookup.id)
+            persisted = await article_repo.save(
+                draft,
+                discovered_article_id=lookup.id,
+                source_id=lookup.news_source_id,
+                source_url=lookup.original_url,
+            )
             if persisted is None:
                 # 並行レース敗北: 別ワーカーが先に書き込み済み → 読み戻して合流
                 existing = await article_repo.find_by_discovered_article_id(lookup.id)

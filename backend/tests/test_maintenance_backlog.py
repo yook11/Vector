@@ -34,6 +34,8 @@ async def _make_article(
 
     article = Article(
         discovered_article_id=discovered.id,
+        source_id=discovered.news_source_id,
+        source_url=discovered.original_url,
         original_title="title",
         original_content="x" * 60,
     )

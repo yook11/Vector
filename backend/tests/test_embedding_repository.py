@@ -41,6 +41,8 @@ async def _build_analysis(
     await db_session.flush()
     article = Article(
         discovered_article_id=discovered.id,
+        source_id=discovered.news_source_id,
+        source_url=discovered.original_url,
         original_title="seed",
         original_content="content body content body content body content body",
         published_at=datetime.now(UTC),

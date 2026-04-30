@@ -132,13 +132,25 @@ class ArticleRepository:
         draft: ArticleDraft,
         *,
         discovered_article_id: int,
+        source_id: int,
+        source_url: SafeUrl,
     ) -> PersistedArticleId | None:
         """``ArticleDraft`` を ``articles`` 行に INSERT する (並行レース対応)。
 
-        ``UNIQUE(discovered_article_id)`` の構造的並行制御のため
-        ``INSERT ... ON CONFLICT DO NOTHING RETURNING`` を使う。
-        別ワーカーが先に INSERT した場合は ``None`` を返し、Service 側で
-        ``find_by_discovered_article_id`` を使った読み戻しに合流させる。
+        ``ON CONFLICT DO NOTHING`` (制約ターゲット指定なし) で並行レース時の
+        全 unique 違反を吸収する。``articles`` には UNIQUE が 2 本ある:
+
+        - ``uq_articles_discovered_article_id`` — 同一 discovered からの二重抽出
+        - ``uq_articles_source_url`` — 異なる discovered が canonical URL の
+          正規化結果として同一 ``source_url`` に行き当たるケース (Phase 1+)
+
+        どちらの conflict でも race recovery の意味論は「他者が先に書き込み済み」
+        で同じため、ターゲットを限定せず両方を吸収する。``None`` を受けた
+        Service は ``find_by_discovered_article_id`` で読み戻して合流させる。
+
+        ``source_id`` / ``source_url`` は caller (Service) が ``DiscoveredLookup``
+        から渡す: 同一トランザクション内で既知の値であり追加 SELECT 不要。
+        Phase 0b で NOT NULL + UNIQUE 化されたため必須引数。
 
         commit は呼び出し側 (Service) が行う。
         """
@@ -146,13 +158,15 @@ class ArticleRepository:
             pg_insert(ArticleORM)
             .values(
                 discovered_article_id=discovered_article_id,
+                source_id=source_id,
+                source_url=source_url,
                 original_title=draft.title,
                 original_content=draft.body,
                 published_at=(
                     draft.published_at.value if draft.published_at is not None else None
                 ),
             )
-            .on_conflict_do_nothing(constraint="uq_articles_discovered_article_id")
+            .on_conflict_do_nothing()
             .returning(ArticleORM.id, ArticleORM.created_at)
         )
         row = (await self._session.execute(stmt)).first()
