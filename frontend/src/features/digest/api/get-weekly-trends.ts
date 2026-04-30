@@ -1,4 +1,4 @@
-import { cacheLife, cacheTag } from "next/cache";
+import { cacheLife } from "next/cache";
 import { publicServerFetch } from "@/lib/api/server-fetcher";
 import type { WeeklyTrendsResponse } from "@/types";
 
@@ -6,6 +6,5 @@ import type { WeeklyTrendsResponse } from "@/types";
 export async function getWeeklyTrends(): Promise<WeeklyTrendsResponse> {
   "use cache";
   cacheLife("days");
-  cacheTag("weekly-trends");
   return publicServerFetch<WeeklyTrendsResponse>("/weekly-trends");
 }

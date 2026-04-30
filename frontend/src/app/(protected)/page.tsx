@@ -19,6 +19,10 @@ interface DashboardPageProps {
   searchParams: Promise<SearchParams>;
 }
 
+// `getCategories` は `'use cache'` を持つため、CategorySidebarSection と
+// MobileSidebarTrigger の 2 箇所で await しても Next.js 16 の cache hit で
+// 実 backend hit は 1 回に収束する。Suspense 境界を別にすることで lg/mobile
+// 両方が独立に streaming される。
 async function CategorySidebarSection(props: { activeCategory?: string }) {
   const { items } = await getCategories();
   // EOP 下では undefined 明示代入が違反になるため、props を spread して

@@ -22,12 +22,21 @@ export async function generateMetadata({
 }: NewsPageProps): Promise<Metadata> {
   const { id } = await params;
   try {
+    // `getArticleById` は `'use cache'` を持つ。Page 本体でも同 id を await
+    // するが、Next.js 16 の cache hit で実 backend hit は 1 回に収束する
+    // (https://nextjs.org/docs/app/api-reference/functions/generate-metadata)。
     const article = await getArticleById(Number(id));
     return {
       title: `${article.translatedTitle} | Vector`,
     };
-  } catch {
-    return { title: "Article Not Found | Vector" };
+  } catch (err) {
+    // 404/410 は Page 本体の `notFound()` 経路に流すため metadata 側でも
+    // 専用タイトル。それ以外 (5xx 含む) は error.tsx が UI を受け持つので
+    // metadata は generic に留め、誤って 5xx を "Not Found" と誤認させない。
+    if (err instanceof ApiError && (err.status === 404 || err.status === 410)) {
+      return { title: "Article Not Found | Vector" };
+    }
+    return { title: "Vector" };
   }
 }
 
