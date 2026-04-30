@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -57,17 +57,84 @@ describe("RegisterForm — 初期表示", () => {
   });
 });
 
-describe("RegisterForm — クライアント検証失敗", () => {
-  it("password 8 文字未満で 'Please check your input and try again' + email focus", async () => {
+describe("RegisterForm — schema fail (field-level error)", () => {
+  it("password 8 文字未満で password field-level error + password focus (旧 bug regression)", async () => {
     const user = userEvent.setup();
     render(<RegisterForm />);
     await fillValidForm(user, { password: "short" });
     await user.click(screen.getByRole("button", { name: "Create account" }));
 
-    const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("Please check your input and try again");
-    expect(screen.getByLabelText("Email")).toHaveFocus();
+    // 旧コードは password 短すぎでも displayName ref に focus する bug があった。
+    // 新実装では schema fail の field 順 (email > password > displayName) で
+    // password が立つので passwordRef に focus する。
+    await waitFor(() => {
+      expect(screen.getByLabelText("Password")).toHaveFocus();
+    });
+    const passwordError = await screen.findByText(
+      "Password must be at least 8 characters",
+    );
+    expect(passwordError).toBeInTheDocument();
+    expect(screen.getByLabelText("Password")).toHaveAttribute(
+      "aria-invalid",
+      "true",
+    );
+    // email は invalid にならない (field-level a11y)
+    expect(screen.getByLabelText("Email")).not.toHaveAttribute(
+      "aria-invalid",
+      "true",
+    );
     expect(mocks.signUpEmail).not.toHaveBeenCalled();
+  });
+
+  it("displayName が `<script>` で field-level error + displayName focus", async () => {
+    const user = userEvent.setup();
+    render(<RegisterForm />);
+    await fillValidForm(user, { displayName: "<script>" });
+    await user.click(screen.getByRole("button", { name: "Create account" }));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Display Name")).toHaveFocus();
+    });
+    expect(screen.getByLabelText("Display Name")).toHaveAttribute(
+      "aria-invalid",
+      "true",
+    );
+    expect(mocks.signUpEmail).not.toHaveBeenCalled();
+  });
+
+  it("空 form submit で email field-level error + email focus", async () => {
+    render(<RegisterForm />);
+    const form = screen
+      .getByRole("button", { name: "Create account" })
+      .closest("form");
+    expect(form).not.toBeNull();
+    if (form) fireEvent.submit(form);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Email")).toHaveFocus();
+    });
+    expect(screen.getByLabelText("Email")).toHaveAttribute(
+      "aria-invalid",
+      "true",
+    );
+  });
+});
+
+describe("RegisterForm — i18n displayName", () => {
+  it("日本語 displayName ('テックニュース') が schema を通り Better Auth に渡る", async () => {
+    mocks.signUpEmail.mockResolvedValue({ data: { user: {} }, error: null });
+    const user = userEvent.setup();
+    render(<RegisterForm />);
+    await fillValidForm(user, { displayName: "テックニュース" });
+    await user.click(screen.getByRole("button", { name: "Create account" }));
+
+    await waitFor(() => {
+      expect(mocks.signUpEmail).toHaveBeenCalledWith({
+        email: "alice@example.com",
+        password: "longenough",
+        name: "テックニュース",
+      });
+    });
   });
 });
 
@@ -107,7 +174,7 @@ describe("RegisterForm — signUp 成功", () => {
   });
 });
 
-describe("RegisterForm — 既知 error code → email field focus", () => {
+describe("RegisterForm — Better Auth error code → email field", () => {
   it.each([
     [
       "USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL",
@@ -115,7 +182,7 @@ describe("RegisterForm — 既知 error code → email field focus", () => {
     ],
     ["USER_ALREADY_EXISTS", "An account with this email already exists"],
     ["INVALID_EMAIL", "Please enter a valid email address"],
-  ] as const)("code=%s → 文言と email focus", async (code, expected) => {
+  ] as const)("code=%s → email field error + email focus", async (code, expected) => {
     mocks.signUpEmail.mockResolvedValue({
       data: null,
       error: { code, status: 422 },
@@ -126,18 +193,24 @@ describe("RegisterForm — 既知 error code → email field focus", () => {
     await fillValidForm(user);
     await user.click(screen.getByRole("button", { name: "Create account" }));
 
-    const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent(expected);
-    expect(screen.getByLabelText("Email")).toHaveFocus();
+    const errorText = await screen.findByText(expected);
+    expect(errorText).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByLabelText("Email")).toHaveFocus();
+    });
+    expect(screen.getByLabelText("Email")).toHaveAttribute(
+      "aria-invalid",
+      "true",
+    );
     expect(mocks.push).not.toHaveBeenCalled();
   });
 });
 
-describe("RegisterForm — 既知 error code → displayName field focus", () => {
+describe("RegisterForm — Better Auth error code → password field (bug fix)", () => {
   it.each([
     ["PASSWORD_TOO_SHORT", "Password must be at least 8 characters"],
     ["PASSWORD_TOO_LONG", "Password is too long"],
-  ] as const)("code=%s → 文言と displayName focus (email 以外の field)", async (code, expected) => {
+  ] as const)("code=%s → password field error + password focus (旧 bug は displayName focus)", async (code, expected) => {
     mocks.signUpEmail.mockResolvedValue({
       data: null,
       error: { code, status: 422 },
@@ -148,14 +221,20 @@ describe("RegisterForm — 既知 error code → displayName field focus", () =>
     await fillValidForm(user);
     await user.click(screen.getByRole("button", { name: "Create account" }));
 
-    const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent(expected);
-    expect(screen.getByLabelText("Display Name")).toHaveFocus();
+    const errorText = await screen.findByText(expected);
+    expect(errorText).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByLabelText("Password")).toHaveFocus();
+    });
+    expect(screen.getByLabelText("Password")).toHaveAttribute(
+      "aria-invalid",
+      "true",
+    );
   });
 });
 
 describe("RegisterForm — 未知 code", () => {
-  it("status 422 + 未知 code → generic validation 文言 + displayName focus", async () => {
+  it("status 422 + 未知 code → generic validation 文言 (formError) + email focus", async () => {
     mocks.signUpEmail.mockResolvedValue({
       data: null,
       error: { code: "SOMETHING_NEW", status: 422 },
@@ -168,10 +247,12 @@ describe("RegisterForm — 未知 code", () => {
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Please check your input and try again");
-    expect(screen.getByLabelText("Display Name")).toHaveFocus();
+    await waitFor(() => {
+      expect(screen.getByLabelText("Email")).toHaveFocus();
+    });
   });
 
-  it("status 500 + code 無し → generic failure 文言 + displayName focus", async () => {
+  it("status 500 + code 無し → generic failure 文言 + email focus", async () => {
     mocks.signUpEmail.mockResolvedValue({
       data: null,
       error: { status: 500 },
@@ -186,7 +267,9 @@ describe("RegisterForm — 未知 code", () => {
     expect(alert).toHaveTextContent(
       "Registration failed. Please try again later.",
     );
-    expect(screen.getByLabelText("Display Name")).toHaveFocus();
+    await waitFor(() => {
+      expect(screen.getByLabelText("Email")).toHaveFocus();
+    });
   });
 
   it("`error.error.code` ネストでも既知 code を抽出する", async () => {
@@ -200,11 +283,13 @@ describe("RegisterForm — 未知 code", () => {
     await fillValidForm(user);
     await user.click(screen.getByRole("button", { name: "Create account" }));
 
-    const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent(
+    const errorText = await screen.findByText(
       "An account with this email already exists",
     );
-    expect(screen.getByLabelText("Email")).toHaveFocus();
+    expect(errorText).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByLabelText("Email")).toHaveFocus();
+    });
   });
 });
 

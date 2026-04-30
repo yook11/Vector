@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useRef, useState } from "react";
+import { useActionState, useEffect, useRef } from "react";
+import { z } from "zod";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -16,14 +17,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { signUp } from "@/lib/auth/auth-client";
 import { RegisterSchema } from "../schemas/auth";
+import type { SignUpError } from "./_auth-types";
 
 // Better Auth signUp.email が返す既知エラーコード → ユーザ向け固定文言。
-// allowlist 設計: 未知コードや未来の変更で `authError.message` を素のまま
-// 表示すると、内部実装語彙の漏洩や文言の不安定化が起きるため、ここに載って
-// いないものはすべて generic 文言に丸める。
-//
-// 既知コードの根拠: node_modules/@better-auth/core/dist/error/codes.mjs
-// USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL は status 422 で返る (旧コードの 409 判定は dead)
+// allowlist 設計: 未知コードは generic 文言に丸めて内部実装語彙の漏洩を防ぐ。
+// コード根拠: node_modules/@better-auth/core/dist/error/codes.mjs
 const REGISTER_ERROR_MESSAGES: Record<string, string> = {
   USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL:
     "An account with this email already exists",
@@ -36,85 +34,124 @@ const REGISTER_ERROR_MESSAGES: Record<string, string> = {
 const GENERIC_VALIDATION_MESSAGE = "Please check your input and try again";
 const GENERIC_FAILURE_MESSAGE = "Registration failed. Please try again later.";
 
-interface AuthErrorLike {
-  status?: number;
-  code?: string;
-  error?: { code?: string };
-}
+type RegisterFieldErrors = Partial<
+  Record<"email" | "password" | "displayName", string>
+>;
 
-function resolveRegisterError(authError: AuthErrorLike): {
-  message: string;
-  field: "email" | "displayName";
+type RegisterState =
+  | { status: "idle" }
+  | {
+      status: "error";
+      fieldErrors: RegisterFieldErrors;
+      formError?: string;
+      // schema fail / Better Auth fail のどちらでも focus 先 field を一意化。
+      focus: "email" | "password" | "displayName";
+    }
+  | { status: "ok" };
+
+const INITIAL_STATE: RegisterState = { status: "idle" };
+
+function resolveAuthError(authError: SignUpError): {
+  fieldErrors: RegisterFieldErrors;
+  formError?: string;
+  focus: "email" | "password" | "displayName";
 } {
   const code = authError.code ?? authError.error?.code;
-  const known = code ? REGISTER_ERROR_MESSAGES[code] : undefined;
-  if (code && known) {
-    const isEmailIssue =
+  if (code && code in REGISTER_ERROR_MESSAGES) {
+    const message = REGISTER_ERROR_MESSAGES[code];
+    if (
       code === "USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL" ||
       code === "USER_ALREADY_EXISTS" ||
-      code === "INVALID_EMAIL";
-    return { message: known, field: isEmailIssue ? "email" : "displayName" };
+      code === "INVALID_EMAIL"
+    ) {
+      return { fieldErrors: { email: message }, focus: "email" };
+    }
+    if (code === "PASSWORD_TOO_SHORT" || code === "PASSWORD_TOO_LONG") {
+      // 旧コードは PASSWORD 系も displayName ref に focus する bug があった。
+      // ここで password に振り分けることで bug を構造的に解消。
+      return { fieldErrors: { password: message }, focus: "password" };
+    }
   }
   if (authError.status === 400 || authError.status === 422) {
-    return { message: GENERIC_VALIDATION_MESSAGE, field: "displayName" };
+    return {
+      fieldErrors: {},
+      formError: GENERIC_VALIDATION_MESSAGE,
+      focus: "email",
+    };
   }
-  return { message: GENERIC_FAILURE_MESSAGE, field: "displayName" };
+  return {
+    fieldErrors: {},
+    formError: GENERIC_FAILURE_MESSAGE,
+    focus: "email",
+  };
+}
+
+async function action(
+  _prev: RegisterState,
+  formData: FormData,
+): Promise<RegisterState> {
+  const parsed = RegisterSchema.safeParse(Object.fromEntries(formData));
+  if (!parsed.success) {
+    const { fieldErrors } = z.flattenError(parsed.error);
+    const fe: RegisterFieldErrors = {
+      email: fieldErrors.email?.[0],
+      password: fieldErrors.password?.[0],
+      displayName: fieldErrors.displayName?.[0],
+    };
+    // focus 優先度: email > password > displayName (form の上から順)
+    const focus: "email" | "password" | "displayName" = fe.email
+      ? "email"
+      : fe.password
+        ? "password"
+        : "displayName";
+    return { status: "error", fieldErrors: fe, focus };
+  }
+  const { email, password, displayName } = parsed.data;
+  // Better Auth required field. displayName 省略時は email local part にフォールバック。
+  const name = displayName || email.split("@")[0] || email;
+  const { error } = await signUp.email({ email, password, name });
+  if (error) {
+    const resolved = resolveAuthError(error);
+    return { status: "error", ...resolved };
+  }
+  return { status: "ok" };
 }
 
 export function RegisterForm() {
   const router = useRouter();
-  const [error, setError] = useState<string | null>(null);
-  const [isPending, setIsPending] = useState(false);
-  const displayNameRef = useRef<HTMLInputElement>(null);
+  const [state, formAction, pending] = useActionState(action, INITIAL_STATE);
   const emailRef = useRef<HTMLInputElement>(null);
+  const passwordRef = useRef<HTMLInputElement>(null);
+  const displayNameRef = useRef<HTMLInputElement>(null);
 
-  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    setError(null);
-    setIsPending(true);
-
-    const formData = new FormData(e.currentTarget);
-    const parsed = RegisterSchema.safeParse({
-      email: formData.get("email") ?? "",
-      password: formData.get("password") ?? "",
-      displayName: formData.get("displayName") ?? "",
-    });
-
-    if (!parsed.success) {
-      setError(GENERIC_VALIDATION_MESSAGE);
-      setIsPending(false);
-      emailRef.current?.focus();
-      return;
-    }
-
-    const { email, password, displayName } = parsed.data;
-
-    // name: Better Auth required field — fallback to email local part, then to
-    // raw email (`split("@")[0]` の戻り値型は `string | undefined` だが、type=email
-    // を通った文字列で undefined にはならない; 型システム上の安全のため email を保険に)
-    const name = displayName || email.split("@")[0] || email;
-
-    const { error: authError } = await signUp.email({
-      email,
-      password,
-      name,
-    });
-
-    setIsPending(false);
-
-    if (authError) {
-      const { message, field } = resolveRegisterError(authError);
-      setError(message);
-      if (field === "email") {
-        emailRef.current?.focus();
-      } else {
-        displayNameRef.current?.focus();
-      }
-    } else {
+  useEffect(() => {
+    if (state.status === "ok") {
       router.push("/");
       router.refresh();
+    } else if (state.status === "error") {
+      const target =
+        state.focus === "email"
+          ? emailRef
+          : state.focus === "password"
+            ? passwordRef
+            : displayNameRef;
+      target.current?.focus();
     }
-  }
+  }, [state, router]);
+
+  const isError = state.status === "error";
+  const emailError = isError ? state.fieldErrors.email : undefined;
+  const passwordError = isError ? state.fieldErrors.password : undefined;
+  const displayNameError = isError ? state.fieldErrors.displayName : undefined;
+  const formError = isError ? state.formError : undefined;
+
+  const fieldDescribedBy = (
+    fieldErrorId: string | null,
+    extra: string | null = null,
+  ): string | undefined =>
+    [fieldErrorId, formError && "register-form-error", extra]
+      .filter(Boolean)
+      .join(" ") || undefined;
 
   return (
     <Card className="w-full max-w-sm">
@@ -122,23 +159,22 @@ export function RegisterForm() {
         <CardTitle className="text-2xl">Register</CardTitle>
         <CardDescription>Create your Vector account</CardDescription>
       </CardHeader>
-      <form onSubmit={handleSubmit}>
+      <form action={formAction}>
         <CardContent className="space-y-4">
-          {error && (
+          {formError && (
             <div
-              id="register-error"
+              id="register-form-error"
               role="alert"
               aria-live="polite"
               className="rounded-md bg-destructive/10 p-3 text-sm text-destructive"
             >
-              {error}
+              {formError}
             </div>
           )}
-          {/* --- XSS対策 Step 1: フロントエンド側の入力ガイド ---
-               ホワイトリストで制限している以上、何が使えるかをユーザーに伝える。
-               maxLength / pattern はブラウザのネイティブバリデーション。
-               ただしこれらはUXのためであり、セキュリティの本体はバックエンド側。
-               攻撃者はブラウザを経由せず直接APIを叩けるため。 */}
+          {/* XSS 対策 Step 1: フロントエンド側の入力ガイド。
+              maxLength は UX の即時フィードバック、検証本体は zod (regex は
+              Unicode `\p{L}\p{N}` で日本語通過、HTML5 pattern は撤去済)。
+              セキュリティ本体は backend (攻撃者は browser を経由せず叩ける)。 */}
           <div className="space-y-2">
             <Label htmlFor="displayName">Display Name</Label>
             <Input
@@ -150,16 +186,24 @@ export function RegisterForm() {
               autoComplete="nickname"
               spellCheck={false}
               maxLength={100}
-              pattern="[\w\s\-]+"
-              title="使用できる文字: 英数字、日本語、スペース、ハイフン、アンダースコア"
-              aria-describedby={
-                error ? "register-error displayname-help" : "displayname-help"
-              }
-              aria-invalid={error ? true : undefined}
+              aria-invalid={!!displayNameError || !!formError || undefined}
+              aria-describedby={fieldDescribedBy(
+                displayNameError ? "displayname-error" : null,
+                "displayname-help",
+              )}
             />
             <p id="displayname-help" className="text-xs text-muted-foreground">
               英数字・日本語・スペース・ハイフン・アンダースコアのみ（最大100文字）
             </p>
+            {displayNameError && (
+              <p
+                id="displayname-error"
+                role="alert"
+                className="text-sm text-destructive"
+              >
+                {displayNameError}
+              </p>
+            )}
           </div>
           <div className="space-y-2">
             <Label htmlFor="email">Email</Label>
@@ -172,13 +216,25 @@ export function RegisterForm() {
               autoComplete="email"
               spellCheck={false}
               required
-              aria-invalid={error ? true : undefined}
-              aria-describedby={error ? "register-error" : undefined}
+              aria-invalid={!!emailError || !!formError || undefined}
+              aria-describedby={fieldDescribedBy(
+                emailError ? "email-error" : null,
+              )}
             />
+            {emailError && (
+              <p
+                id="email-error"
+                role="alert"
+                className="text-sm text-destructive"
+              >
+                {emailError}
+              </p>
+            )}
           </div>
           <div className="space-y-2">
             <Label htmlFor="password">Password</Label>
             <Input
+              ref={passwordRef}
               id="password"
               name="password"
               type="password"
@@ -186,14 +242,25 @@ export function RegisterForm() {
               autoComplete="new-password"
               required
               minLength={8}
-              aria-invalid={error ? true : undefined}
-              aria-describedby={error ? "register-error" : undefined}
+              aria-invalid={!!passwordError || !!formError || undefined}
+              aria-describedby={fieldDescribedBy(
+                passwordError ? "password-error" : null,
+              )}
             />
+            {passwordError && (
+              <p
+                id="password-error"
+                role="alert"
+                className="text-sm text-destructive"
+              >
+                {passwordError}
+              </p>
+            )}
           </div>
         </CardContent>
         <CardFooter className="flex flex-col gap-2">
-          <Button type="submit" className="w-full" disabled={isPending}>
-            {isPending ? "Creating account…" : "Create account"}
+          <Button type="submit" className="w-full" disabled={pending}>
+            {pending ? "Creating account…" : "Create account"}
           </Button>
           <p className="text-sm text-muted-foreground">
             Already have an account?{" "}
