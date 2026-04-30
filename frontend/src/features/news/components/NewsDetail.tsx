@@ -86,7 +86,7 @@ export function NewsDetail({ article, isWatched }: NewsDetailProps) {
               className="inline-flex items-center gap-1.5 rounded-full border border-border px-5 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-accent"
             >
               Read Original Article
-              <ExternalLink aria-hidden="true" className="h-3.5 w-3.5" />
+              <ExternalLink aria-hidden="true" className="size-3.5" />
             </Link>
           )}
           <p className="text-xs text-muted-foreground">

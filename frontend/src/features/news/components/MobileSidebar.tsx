@@ -33,7 +33,7 @@ export function MobileSidebar({
     <Sheet open={open} onOpenChange={setOpen}>
       <SheetTrigger asChild>
         <Button variant="ghost" size="icon" className="lg:hidden">
-          <Menu aria-hidden="true" className="h-5 w-5" />
+          <Menu aria-hidden="true" className="size-5" />
           <span className="sr-only">サイドバーを開く</span>
         </Button>
       </SheetTrigger>

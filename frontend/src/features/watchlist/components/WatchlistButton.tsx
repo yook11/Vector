@@ -3,6 +3,7 @@
 import { Bookmark } from "lucide-react";
 import { useOptimistic, useTransition } from "react";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils/cn";
 import { toastError } from "@/lib/utils/toast-error";
 import { addToWatchlist } from "../api/add-to-watchlist";
 import { removeFromWatchlist } from "../api/remove-from-watchlist";
@@ -61,7 +62,7 @@ export function WatchlistButton({
     >
       <Bookmark
         aria-hidden="true"
-        className={`h-4 w-4 ${optimisticIsWatched ? "fill-current" : ""}`}
+        className={cn("size-4", optimisticIsWatched && "fill-current")}
       />
     </Button>
   );
