@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Suspense } from "react";
+import { EmptyState } from "@/components/feedback/EmptyState";
+import { PageContainer } from "@/components/layout/PageContainer";
+import { Skeleton } from "@/components/ui/skeleton";
 import { NewsList, NewsPagination, parseArticleQuery } from "@/features/news";
 import { getWatchlist } from "@/features/watchlist";
 import type { SearchParams } from "@/lib/types/route";
@@ -18,16 +21,18 @@ async function WatchlistContent({ page }: { page: number }) {
 
   if (data.items.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
-        <p className="text-sm font-medium">No saved articles</p>
-        <p className="text-xs mt-1">
-          Bookmark articles from the{" "}
-          <Link href="/" className="underline">
-            dashboard
-          </Link>{" "}
-          to see them here.
-        </p>
-      </div>
+      <EmptyState
+        title="No saved articles"
+        description={
+          <>
+            Bookmark articles from the{" "}
+            <Link href="/" className="underline">
+              dashboard
+            </Link>{" "}
+            to see them here.
+          </>
+        }
+      />
     );
   }
 
@@ -54,9 +59,9 @@ function WatchlistSkeleton() {
           key={i}
           className="flex flex-col gap-3 py-6 border-b border-border"
         >
-          <div className="h-4 w-20 rounded bg-muted/50 animate-pulse" />
-          <div className="h-5 w-full rounded bg-muted/60 animate-pulse" />
-          <div className="h-4 w-3/4 rounded bg-muted/40 animate-pulse" />
+          <Skeleton className="h-4 w-20" />
+          <Skeleton className="h-5 w-full" />
+          <Skeleton className="h-4 w-3/4" />
         </div>
       ))}
     </div>
@@ -71,13 +76,11 @@ export default async function WatchlistPage({
   const page = query.page ?? 1;
 
   return (
-    <main className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-5xl px-8 sm:px-12 py-6 sm:py-8 flex flex-col gap-8">
-        <h1 className="text-base font-medium">Watchlist</h1>
-        <Suspense key={page} fallback={<WatchlistSkeleton />}>
-          <WatchlistContent page={page} />
-        </Suspense>
-      </div>
-    </main>
+    <PageContainer>
+      <h1 className="text-base font-medium">Watchlist</h1>
+      <Suspense key={page} fallback={<WatchlistSkeleton />}>
+        <WatchlistContent page={page} />
+      </Suspense>
+    </PageContainer>
   );
 }

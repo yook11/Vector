@@ -1,3 +1,4 @@
+import { EmptyState } from "@/components/feedback/EmptyState";
 import { WatchlistButton } from "@/features/watchlist";
 import type { ArticleBrief } from "@/types";
 import { NewsCard } from "./NewsCard";
@@ -14,12 +15,10 @@ interface NewsListProps {
 export function NewsList({ items, watchedIds }: NewsListProps) {
   if (items.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
-        <p className="text-sm font-medium">No articles found</p>
-        <p className="text-xs mt-1">
-          Try adjusting your filters or fetch new articles.
-        </p>
-      </div>
+      <EmptyState
+        title="No articles found"
+        description="Try adjusting your filters or fetch new articles."
+      />
     );
   }
 

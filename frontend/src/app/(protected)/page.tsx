@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   CategorySidebar,
   getArticles,
@@ -60,12 +61,9 @@ async function NewsGridSection({
 function CategorySidebarSkeleton() {
   return (
     <div className="flex flex-col gap-1.5 p-6" aria-hidden="true">
-      <div className="h-4 w-24 rounded bg-muted/50 animate-pulse mb-2" />
+      <Skeleton className="h-4 w-24 mb-2" />
       {[0, 1, 2, 3, 4, 5].map((i) => (
-        <div
-          key={i}
-          className="h-9 w-full rounded-xl bg-muted/40 animate-pulse"
-        />
+        <Skeleton key={i} className="h-9 w-full rounded-xl" />
       ))}
     </div>
   );
@@ -82,9 +80,9 @@ function NewsGridSkeleton() {
           key={i}
           className="flex flex-col gap-3 py-6 border-b border-border"
         >
-          <div className="h-4 w-20 rounded bg-muted/50 animate-pulse" />
-          <div className="h-5 w-full rounded bg-muted/60 animate-pulse" />
-          <div className="h-4 w-3/4 rounded bg-muted/40 animate-pulse" />
+          <Skeleton className="h-4 w-20" />
+          <Skeleton className="h-5 w-full" />
+          <Skeleton className="h-4 w-3/4" />
         </div>
       ))}
     </div>
