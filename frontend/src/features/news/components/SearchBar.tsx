@@ -2,7 +2,7 @@
 
 import { Search, X } from "lucide-react";
 import { useSearchParams } from "next/navigation";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { useUpdateSearchParams } from "@/lib/search-params/client";
 
@@ -30,6 +30,15 @@ export function SearchBar() {
     setValue(currentQ);
   }
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // unmount 時に保留中の debounce timer を解除する。これがないと 500ms 以内の
+  // route 遷移で stale callback が `navigate()` (= updateSearchParams) を呼び、
+  // unmount 後の component が router state を mutate しようとする leak になる。
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, []);
 
   const navigate = useCallback(
     (q: string) => {
