@@ -314,16 +314,15 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
 
-      # cache miss 時のみブラウザバイナリを download。system deps (apt-get) は
-      # cache できないため毎回入れる必要があるが、binary 込みより遥かに速い。
-      - name: Install Playwright chromium (binary + deps)
+      # cache miss 時のみ binary + system deps を install。cache hit 時は
+      # ubuntu-24.04 GitHub-hosted runner に必要 apt パッケージ (libnss3 /
+      # libxkbcommon0 / libgbm1 / libasound2t64 等) が同梱されているため、
+      # browser binary の cache 復元のみで chromium が起動できる。
+      # 将来 runner image が痩せて chromium 起動失敗するようになった場合は、
+      # 削除した cache-hit 用 `npx playwright install-deps chromium` step を復元する。
+      - name: Install Playwright chromium (binary + deps, cache miss only)
         if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: npx playwright install --with-deps chromium
-        working-directory: frontend
-
-      - name: Install Playwright system deps (cache hit)
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
-        run: npx playwright install-deps chromium
         working-directory: frontend
 
       - name: Start backend (uvicorn, background)
