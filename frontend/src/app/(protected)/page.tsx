@@ -131,6 +131,9 @@ export default async function DashboardPage({
           </div>
 
           {/* News grid */}
+          {/* URL searchParams を JSON 化して Suspense key に与えることで、
+              filters / q が変化したときに fallback (skeleton) を再表示する。
+              watchlist 側 (`(protected)/watchlist/page.tsx`) と統一した戦略。 */}
           <Suspense
             key={JSON.stringify({ q, filters })}
             fallback={<NewsGridSkeleton />}

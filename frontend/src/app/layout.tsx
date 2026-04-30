@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import { Plus_Jakarta_Sans } from "next/font/google";
 import { Suspense } from "react";
 import { ClientGlobals } from "@/components/layout/ClientGlobals";
-import { Header } from "@/components/layout/Header";
 import { NonceThemeProvider } from "@/components/layout/NonceThemeProvider";
 import "./globals.css";
 
@@ -17,6 +16,10 @@ export const metadata: Metadata = {
   description: "Tech news aggregation & AI analysis dashboard",
 };
 
+// Header は `(protected)/layout.tsx` 側に配置している。auth page (login/register)
+// では Header が表示されないことが UX 要件 (PR-Z12)。Next.js は子 layout から親
+// layout の出力を抑制できないため、root layout には Header を置かず、Header を
+// 必要とする route group の layout に閉じ込める方針を採る。
 export default function RootLayout({
   children,
 }: {
@@ -29,8 +32,7 @@ export default function RootLayout({
       >
         <Suspense>
           <NonceThemeProvider>
-            <Header />
-            <div className="mt-11 h-[calc(100dvh-2.75rem)]">{children}</div>
+            {children}
             <ClientGlobals />
           </NonceThemeProvider>
         </Suspense>

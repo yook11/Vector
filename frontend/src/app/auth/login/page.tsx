@@ -6,7 +6,7 @@ export const metadata = {
 
 export default function LoginPage() {
   return (
-    <main className="flex min-h-[calc(100dvh-2.75rem)] items-center justify-center p-4">
+    <main className="flex min-h-dvh items-center justify-center p-4">
       <LoginForm />
     </main>
   );
