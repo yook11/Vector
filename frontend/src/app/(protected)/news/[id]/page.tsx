@@ -13,6 +13,7 @@ import {
 } from "@/features/news";
 import { getWatchlistIds } from "@/features/watchlist";
 import { ApiError } from "@/lib/api/error";
+import { PositiveIdParamSchema } from "@/lib/validation/id";
 import type { ArticleBrief, ArticleDetail as ArticleDetailData } from "@/types";
 
 interface NewsPageProps {
@@ -23,11 +24,17 @@ export async function generateMetadata({
   params,
 }: NewsPageProps): Promise<Metadata> {
   const { id } = await params;
+  // 本体側で notFound() に合流するため、metadata 側では title だけ返して終わる。
+  // generateMetadata 内の notFound() は metadata 解決を未確定にしうるので避ける。
+  const parsed = PositiveIdParamSchema.safeParse(id);
+  if (!parsed.success) {
+    return { title: "Article Not Found | Vector" };
+  }
   try {
     // `getArticleById` は `'use cache'` を持つ。Page 本体でも同 id を await
     // するが、Next.js 16 の cache hit で実 backend hit は 1 回に収束する
     // (https://nextjs.org/docs/app/api-reference/functions/generate-metadata)。
-    const article = await getArticleById(Number(id));
+    const article = await getArticleById(parsed.data);
     return {
       title: `${article.translatedTitle} | Vector`,
     };
@@ -75,7 +82,14 @@ function RelatedArticlesSkeleton() {
 
 export default async function NewsPage({ params }: NewsPageProps) {
   const { id } = await params;
-  const articleId = Number(id);
+  const parsed = PositiveIdParamSchema.safeParse(id);
+  if (!parsed.success) {
+    // URL malformed (`/news/abc`, `/news/-1`, `/news/1.5`, `/news/0`) は
+    // backend に届ける前に 404 で塞ぐ。defense-in-depth と無駄な backend
+    // hit 削減を兼ねる。
+    notFound();
+  }
+  const articleId = parsed.data;
 
   // Fire all fetches in parallel. similar は Suspense'd child に forward。
   // article 単独で 404 判定したいので await は分割する (Promise.all だと

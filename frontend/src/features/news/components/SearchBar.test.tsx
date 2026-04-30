@@ -168,7 +168,7 @@ describe("SearchBar — URL 外部変更との同期", () => {
 });
 
 describe("SearchBar — unmount", () => {
-  it("unmount 後に保留中 timer が fire しても updateSearchParams は呼ばれない", async () => {
+  it("unmount で保留中 timer が解除され updateSearchParams は呼ばれない", async () => {
     const { unmount } = render(<SearchBar />);
     typeValue("draft");
     expect(vi.getTimerCount()).toBeGreaterThan(0);
@@ -177,11 +177,7 @@ describe("SearchBar — unmount", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(500);
     });
-    // 現実装は cleanup を持たないが、handler の navigate 副作用は
-    // updateSearchParams 経由なので mock 観察で検証する。
-    // → unmount 後 1 回 navigate されてもよい (updateSearchParams 自体は
-    //    fn なので副作用は test 側にしか出ない)。call 上限のみ regression
-    //    防止用に固定。
-    expect(mocks.updateSearchParams.mock.calls.length).toBeLessThanOrEqual(1);
+    // useEffect cleanup で clearTimeout される → stale callback は fire しない
+    expect(mocks.updateSearchParams).not.toHaveBeenCalled();
   });
 });
