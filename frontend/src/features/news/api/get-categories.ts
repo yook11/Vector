@@ -1,4 +1,4 @@
-import { cacheLife, cacheTag } from "next/cache";
+import { cacheLife } from "next/cache";
 import { publicServerFetch } from "@/lib/api/server-fetcher";
 import type { CategoryDetailListResponse } from "@/types";
 
@@ -6,6 +6,5 @@ import type { CategoryDetailListResponse } from "@/types";
 export async function getCategories(): Promise<CategoryDetailListResponse> {
   "use cache";
   cacheLife("hours");
-  cacheTag("categories");
   return publicServerFetch<CategoryDetailListResponse>("/categories");
 }
