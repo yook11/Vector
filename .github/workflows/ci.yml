@@ -7,6 +7,52 @@ on:
     branches: [main, develop]
 
 jobs:
+  # E2E smoke を path-filter で関連変更 PR のみに走らせるため、changed file
+  # 判定を 1 ジョブに切り出す。Vector は GitHub Free / private repo で
+  # branch protection / required checks が使えないため、skip しても merge を
+  # ブロックしない。auth/E2E に無関係な PR (例: backend digest refactor、docs)
+  # では `frontend-e2e-smoke` 全体が skip され CI wallclock が縮む。
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    # dorny/paths-filter は PR の changed files を GitHub REST API で
+    # listFiles する。デフォルトの GITHUB_TOKEN ではこの権限が無いため
+    # `pull-requests: read` を明示的に付与する。
+    # 注意: `permissions:` を明示すると省略した権限は剥奪される仕様のため、
+    # `actions/checkout` が必要とする `contents: read` も併記する必要がある。
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      e2e: ${{ steps.filter.outputs.e2e }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            e2e:
+              # frontend auth コア
+              - 'frontend/src/lib/auth/**'
+              - 'frontend/src/lib/proxy/**'
+              - 'frontend/src/features/auth/**'
+              - 'frontend/src/proxy.ts'
+              # E2E spec / config
+              - 'frontend/e2e/**'
+              - 'frontend/playwright.config.ts'
+              # 依存・設定
+              - 'frontend/package.json'
+              - 'frontend/package-lock.json'
+              - 'frontend/next.config.js'
+              # backend (E2E が叩く API + auth 認可経路)
+              - 'backend/app/main.py'
+              - 'backend/app/config.py'
+              - 'backend/app/dependencies.py'
+              - 'backend/alembic/versions/**'
+              # CI / インフラ
+              - '.github/workflows/ci.yml'
+              - 'docker-compose.yml'
+
   backend-unit:
     name: Backend (unit + lint)
     runs-on: ubuntu-latest
@@ -134,11 +180,17 @@ jobs:
   frontend-e2e-smoke:
     name: Frontend (E2E smoke)
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.e2e == 'true'
     # smoke スコープは anon project (login + register、4 ケース)。
     # - login: seed migration の health check + Better Auth 経路の regression 検出
     # - register: 新規ユーザ登録 + client-side validation の regression 検出
     # watchlist / search / weekly-trends / source-admin は seed 状態に依存して
     # flaky になりうるためローカル only。Phase 4 で個別 CI 化を検討する。
+    #
+    # path-filter で auth/E2E 関連変更のみ実行する (`changes` job 参照)。
+    # 無関係な PR では skip され、CI wallclock は backend-integration の 95s
+    # 程度に律速される。
 
     services:
       postgres:
@@ -270,16 +322,15 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
 
-      # cache miss 時のみブラウザバイナリを download。system deps (apt-get) は
-      # cache できないため毎回入れる必要があるが、binary 込みより遥かに速い。
-      - name: Install Playwright chromium (binary + deps)
+      # cache miss 時のみ binary + system deps を install。cache hit 時は
+      # ubuntu-24.04 GitHub-hosted runner に必要 apt パッケージ (libnss3 /
+      # libxkbcommon0 / libgbm1 / libasound2t64 等) が同梱されているため、
+      # browser binary の cache 復元のみで chromium が起動できる。
+      # 将来 runner image が痩せて chromium 起動失敗するようになった場合は、
+      # 削除した cache-hit 用 `npx playwright install-deps chromium` step を復元する。
+      - name: Install Playwright chromium (binary + deps, cache miss only)
         if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: npx playwright install --with-deps chromium
-        working-directory: frontend
-
-      - name: Install Playwright system deps (cache hit)
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
-        run: npx playwright install-deps chromium
         working-directory: frontend
 
       - name: Start backend (uvicorn, background)
