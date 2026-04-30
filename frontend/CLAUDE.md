@@ -86,6 +86,9 @@ src/
 2. **NEVER** Next.js の Pages Router パターン（`getServerSideProps`, `getStaticProps`, `pages/` ディレクトリ）を使ってはならない → App Router を使うこと
 3. **NEVER** `any` 型を使用してはならない → 型は `src/types/index.ts` から導入
 4. **NEVER** `components/ui/` 配下を手動編集してはならない → shadcn/ui の自動生成領域
+   - ただし以下の意図的拡張は維持する (CLI 再生成時に逸脱として検出する目印):
+     - `button.tsx`: `icon-xs` / `icon-sm` / `icon-lg` の size variant 拡張 (shadcn 標準は `default` / `sm` / `lg` / `icon`)
+     - `alert-dialog.tsx`: `size?: "default" | "sm"` prop と全要素 `data-slot` 属性 (shadcn registry には未含まれる)
 5. **NEVER** `lib/api/server-fetcher.ts` を経由せずに backend を直接 fetch してはならない (Client Component から直接叩かない、mutation は Server Action 化する)
 6. **NEVER** Server Component で実現できる処理に `"use client"` を付けてはならない
 7. **NEVER** カスタムCSSファイルを作成してはならない → Tailwind ユーティリティで解決すること

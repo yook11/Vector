@@ -22,7 +22,7 @@ export function UserMenu() {
           window.location.href = "/auth/login";
         }}
       >
-        <LogOut aria-hidden="true" className="h-4 w-4 mr-1" />
+        <LogOut aria-hidden="true" className="size-4 mr-1" />
         Sign out
       </Button>
     </div>

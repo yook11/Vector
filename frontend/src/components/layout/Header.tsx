@@ -13,7 +13,7 @@ const navItems = [
 
 export function Header() {
   return (
-    <header className="fixed top-0 z-50 w-full border-0 bg-background/70 backdrop-blur-xl">
+    <header className="fixed top-0 z-50 w-full bg-background/70 backdrop-blur-xl">
       <div className="mx-auto grid h-11 grid-cols-[1fr_auto_1fr] items-center px-5 sm:px-8">
         <div className="flex items-center">
           <Link
