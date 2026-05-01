@@ -18,7 +18,7 @@ import feedparser
 
 from app.collection.ingestion.domain.fetched_article import (
     Failed,
-    Ready,
+    ReadyForArticle,
 )
 from app.collection.ingestion.fetchers.venturebeat import (
     VentureBeatFetcher,
@@ -131,7 +131,7 @@ class TestConvertEntry:
 
     def test_valid_entry_yields_ready(self) -> None:
         outcome = self.fetcher._convert_entry(_entry(), self.source, "en-US")
-        assert isinstance(outcome, Ready)
+        assert isinstance(outcome, ReadyForArticle)
         assert outcome.article.title == "Test Title"
         assert "Sed ut perspiciatis" in outcome.article.body
         assert outcome.metadata.language == "en-US"
@@ -140,7 +140,7 @@ class TestConvertEntry:
 
     def test_picks_longer_body(self) -> None:
         outcome = self.fetcher._convert_entry(_entry(), self.source, "en-US")
-        assert isinstance(outcome, Ready)
+        assert isinstance(outcome, ReadyForArticle)
         # content[0].value > summary なので content の中身が採用される
         assert "Sed ut perspiciatis" in outcome.article.body
         assert "Lorem ipsum" not in outcome.article.body
@@ -175,29 +175,29 @@ class TestConvertEntry:
 
     def test_extracts_tags(self) -> None:
         outcome = self.fetcher._convert_entry(_entry(), self.source, "en-US")
-        assert isinstance(outcome, Ready)
+        assert isinstance(outcome, ReadyForArticle)
         assert outcome.metadata.tags == ("AI", "Funding")
 
     def test_extracts_image_url(self) -> None:
         outcome = self.fetcher._convert_entry(_entry(), self.source, "en-US")
-        assert isinstance(outcome, Ready)
+        assert isinstance(outcome, ReadyForArticle)
         assert outcome.metadata.image_url is not None
         assert str(outcome.metadata.image_url) == "https://example.com/cover.jpg"
 
     def test_extracts_author(self) -> None:
         outcome = self.fetcher._convert_entry(_entry(), self.source, "en-US")
-        assert isinstance(outcome, Ready)
+        assert isinstance(outcome, ReadyForArticle)
         assert outcome.metadata.author == "Jane Doe"
 
     def test_falls_back_to_updated_parsed(self) -> None:
         e = _entry()
         e["updated_parsed"] = e.pop("published_parsed")
         outcome = self.fetcher._convert_entry(e, self.source, "en-US")
-        assert isinstance(outcome, Ready)
+        assert isinstance(outcome, ReadyForArticle)
 
     def test_published_at_is_utc(self) -> None:
         outcome = self.fetcher._convert_entry(_entry(), self.source, "en-US")
-        assert isinstance(outcome, Ready)
+        assert isinstance(outcome, ReadyForArticle)
         assert outcome.article.published_at.value.tzinfo is not None
         assert outcome.article.published_at.value.year == 2026
 
@@ -217,7 +217,7 @@ class TestFixtureParsing:
         feed = feedparser.parse(text)
         fetcher = VentureBeatFetcher()
         outcome = fetcher._convert_entry(feed.entries[0], _source(), "en-US")
-        assert isinstance(outcome, Ready)
+        assert isinstance(outcome, ReadyForArticle)
         assert outcome.article.title.startswith("AI startup raises")
         assert "$50M Series B" in outcome.article.body
         assert outcome.metadata.language == "en-US"

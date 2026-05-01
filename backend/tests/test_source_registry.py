@@ -12,7 +12,7 @@ from app.models.news_source import NewsSource
 @pytest.mark.parametrize(
     "source_name",
     [
-        "TechCrunch",
+        # TechCrunch は Phase 1b' で新 Protocol registry (strategy.py) に移行済み
         "FierceBiotech",
         "The Quantum Insider",
         "IEEE Spectrum",

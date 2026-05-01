@@ -68,12 +68,13 @@ def _build_registry() -> dict[SourceName, SourceFetcher]:
         SpaceflightNowFetcher,
     )
     from app.collection.ingestion.fetchers.rss.spacenews import SpaceNewsFetcher
-    from app.collection.ingestion.fetchers.rss.techcrunch import TechCrunchFetcher
     from app.collection.ingestion.fetchers.rss.the_register import TheRegisterFetcher
 
     return {
         # RSS ソース（ソースごとに個別フェッチャー）
-        SourceName("TechCrunch"): TechCrunchFetcher(),
+        # NOTE: TechCrunch は collection-acquisition-redesign Phase 1b' で
+        # 新 Protocol Fetcher (`fetchers/techcrunch.py`) に移行済み。Strangler
+        # 移行期間中は ``strategy.NEW_ROUTE_FETCHERS`` 経由で取り込まれる。
         SourceName("FierceBiotech"): FierceBiotechFetcher(),
         SourceName("The Quantum Insider"): QuantumInsiderFetcher(),
         SourceName("IEEE Spectrum"): IEEESpectrumFetcher(),

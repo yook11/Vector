@@ -1,7 +1,7 @@
-"""``fetch_source_metadata`` の Strangler dispatch テスト (Phase 1a')。
+"""``fetch_source_metadata`` の Strangler dispatch テスト (Phase 1a' + 1b')。
 
-新ルート対象 (VentureBeat) は ``ingest_source.kiq`` に振り替えられ、それ
-以外のソースは従来の ``SourceFetchService`` 経路に進むことを確認する。
+新ルート対象 (VentureBeat / TechCrunch) は ``ingest_source.kiq`` に振り替え
+られ、それ以外のソースは従来の ``SourceFetchService`` 経路に進むことを確認する。
 """
 
 from __future__ import annotations
@@ -46,6 +46,26 @@ async def techcrunch_source(db_session: AsyncSession) -> NewsSource:
     return source
 
 
+@pytest.fixture
+async def legacy_source(db_session: AsyncSession) -> NewsSource:
+    """新ルートに含まれないソースの代表 (FierceBiotech)。
+
+    PR-1b' で TechCrunch も新ルートに移ったため、旧 SourceFetchService 経路
+    の例として別の Pattern H ソースを使う。
+    """
+    source = NewsSource(
+        name="FierceBiotech",
+        source_type=SourceType.RSS,
+        site_url="https://www.fiercebiotech.com",
+        endpoint_url="https://www.fiercebiotech.com/rss/xml",
+        is_active=True,
+    )
+    db_session.add(source)
+    await db_session.commit()
+    await db_session.refresh(source)
+    return source
+
+
 def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> MagicMock:
     ctx = MagicMock()
     ctx.state.session_factory = session_factory
@@ -72,12 +92,33 @@ async def test_dispatches_venturebeat_to_new_route(
 
 
 @pytest.mark.asyncio
-async def test_legacy_route_for_non_new_route_source(
+async def test_dispatches_techcrunch_to_new_route(
     session_factory: async_sessionmaker[AsyncSession],
     techcrunch_source: NewsSource,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """非新ルート対象 (TechCrunch) は従来 SourceFetchService 経由で処理される。"""
+    """TC (Pattern H) も新ルート対象として ingest_source.kiq に振り替えられる。"""
+    kiq_mock = AsyncMock()
+    monkeypatch.setattr(ingest_source, "kiq", kiq_mock)
+
+    result = await fetch_source_metadata(
+        techcrunch_source.id, ctx=_ctx(session_factory)
+    )
+
+    assert result == {
+        "source_id": techcrunch_source.id,
+        "status": "dispatched_new_route",
+    }
+    kiq_mock.assert_awaited_once_with(techcrunch_source.id)
+
+
+@pytest.mark.asyncio
+async def test_legacy_route_for_non_new_route_source(
+    session_factory: async_sessionmaker[AsyncSession],
+    legacy_source: NewsSource,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """新ルート未登録 (FierceBiotech) は旧 SourceFetchService 経由で処理される。"""
     kiq_mock = AsyncMock()
     monkeypatch.setattr(ingest_source, "kiq", kiq_mock)
 
@@ -89,15 +130,13 @@ async def test_legacy_route_for_non_new_route_source(
         ingestion_service_mod.SourceFetchService, "execute", execute_mock
     )
 
-    result = await fetch_source_metadata(
-        techcrunch_source.id, ctx=_ctx(session_factory)
-    )
+    result = await fetch_source_metadata(legacy_source.id, ctx=_ctx(session_factory))
 
     # 新ルートに振り替えられていない
     assert result["status"] != "dispatched_new_route"
     kiq_mock.assert_not_awaited()
     # 旧 service が呼ばれた
-    execute_mock.assert_awaited_once_with(techcrunch_source.id)
+    execute_mock.assert_awaited_once_with(legacy_source.id)
 
 
 @pytest.mark.asyncio

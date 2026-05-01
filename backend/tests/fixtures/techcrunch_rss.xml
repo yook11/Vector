@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+     xmlns:content="http://purl.org/rss/1.0/modules/content/"
+     xmlns:dc="http://purl.org/dc/elements/1.1/"
+     xmlns:media="http://search.yahoo.com/mrss/">
+  <channel>
+    <title>TechCrunch</title>
+    <link>https://techcrunch.com</link>
+    <description>Startup and Technology News</description>
+    <language>en-US</language>
+    <item>
+      <title>OpenAI raises $50B Series E to scale AGI training infrastructure</title>
+      <link>https://techcrunch.com/2026/04/30/openai-50b-series-e/</link>
+      <pubDate>Wed, 30 Apr 2026 14:00:00 +0000</pubDate>
+      <dc:creator>Alex Wilhelm</dc:creator>
+      <category>AI</category>
+      <category>Funding</category>
+      <guid isPermaLink="false">https://techcrunch.com/?p=20260430</guid>
+      <description><![CDATA[The largest single round in startup history, led by SoftBank Vision Fund 4. Lead investor includes Mubadala and Tiger Global.]]></description>
+      <media:content url="https://techcrunch.com/wp-content/uploads/2026/04/openai-cover.jpg" medium="image"/>
+    </item>
+    <item>
+      <title>Anthropic launches Claude 5 with extended context window</title>
+      <link>https://techcrunch.com/2026/04/30/anthropic-claude-5/</link>
+      <pubDate>Wed, 30 Apr 2026 10:30:00 +0000</pubDate>
+      <dc:creator>Frederic Lardinois</dc:creator>
+      <category>AI</category>
+      <guid isPermaLink="false">https://techcrunch.com/?p=20260431</guid>
+      <description><![CDATA[Anthropic today announced Claude 5, the latest version of its flagship LLM family.]]></description>
+    </item>
+    <item>
+      <title></title>
+      <link>https://techcrunch.com/2026/04/30/empty-title/</link>
+      <pubDate>Wed, 30 Apr 2026 09:00:00 +0000</pubDate>
+      <guid isPermaLink="false">https://techcrunch.com/?p=20260432</guid>
+      <description><![CDATA[Test entry with empty title for body_too_short / title_missing branch.]]></description>
+    </item>
+  </channel>
+</rss>

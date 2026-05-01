@@ -1,18 +1,25 @@
-"""新ルート Ingestion Service — 1 段で discovered + article を永続化する。
+"""新ルート Ingestion Service — Pattern R は 1 段、Pattern H は 2 段で取り込む。
 
-collection-acquisition-redesign Phase 1。新 ``Fetcher`` Protocol が返す
-``FetchOutcome`` の Ready を受けて、``discovered_articles`` 行と
-``articles`` 行を 1 トランザクションで作る。
+collection-acquisition-redesign Phase 1 + Phase 1b'。新 ``Fetcher`` Protocol
+が返す ``FetchOutcome`` を受けて分岐:
+
+- ``ReadyForArticle`` (Pattern R Fetcher 直接 yield) → ``discovered_articles``
+  行 + ``articles`` 行を 1 トランザクションで作成
+- ``PendingHtmlFetch`` (Pattern H Fetcher yield) → ``discovered_articles`` 行
+  だけ作って ``StagedArticle`` を ``extract_html_body.kiq`` に橋渡し
+  (Article 作成は per-entry の 2 段目 task が担う)
+- ``Failed`` → 構造化ログのみ
 
 責務:
 
 1. ``NewsSource`` の読み込み (無ければ ``SourceNotFoundOutcome``)
-2. Fetcher の async iterator を回し、Ready/Failed を分岐
-3. Ready → ``DiscoveredArticleRepository.save_many`` + ``ArticleRepository.save`` で
-   永続化 (race recovery は両 Repository の既存 on_conflict_do_nothing パターン)
+2. Fetcher の async iterator を回し、3 variants を ``match`` で分岐
+3. 永続化 (両 Repository の既存 on_conflict_do_nothing パターンで race recovery)
 4. ``Article`` Entity (``from_draft``) を組み立てて ``IngestedOutcome`` に詰める
-5. ``commit`` まで Service の責務、下流 (Stage C ``extract_content.kiq``) は
-   呼び出し側 Task が行う (既存 ``fetch_content`` と対称な責務分担)
+   (Pattern R 経路のみ。Pattern H は 2 段目で Article が作られるので本 Outcome
+   には含まれない)
+5. ``commit`` まで Service の責務、下流 (Stage C ``extract_content.kiq`` /
+   Pattern H ``extract_html_body.kiq``) は呼び出し側 Task が行う
 
 旧 ``SourceFetchService`` (URL+title だけ取って fetch_content に渡す 2 段階前提)
 とは別系統で、Strangler 移行期間中は並走する。``strategy.NEW_ROUTE_FETCHERS``
@@ -38,21 +45,33 @@ from app.collection.ingestion.domain import (
 from app.collection.ingestion.domain.fetched_article import (
     Failed,
     FetchedArticle,
-    Ready,
+    PendingHtmlFetch,
+    ReadyForArticle,
 )
 from app.collection.ingestion.fetchers.protocol import Fetcher
 from app.collection.ingestion.repository import DiscoveredArticleRepository
+from app.collection.ingestion.staged import StagedArticle
 from app.models.news_source import NewsSource
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
+from app.shared.value_objects.safe_url import SafeUrl
 
 logger = structlog.get_logger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
 class IngestedOutcome:
-    """Fetcher 実行に成功し、0+ 件の Article を永続化した状態。"""
+    """Fetcher 実行に成功した状態。
+
+    - ``persisted``: Pattern R 経路で discovered + article 永続化済の Entity
+      (本 Service 内で完結)
+    - ``staged``: Pattern H 経路で discovered のみ作成し、HTML 抽出 task
+      ``extract_html_body`` への投入が必要な ``StagedArticle`` のリスト
+      (Article 作成は 2 段目 task が担う)
+    - ``failed_count`` / ``skipped_count``: 観測用カウンタ
+    """
 
     persisted: list[Article]
+    staged: list[StagedArticle]
     failed_count: int
     skipped_count: int  # discovered/article のいずれかで race 敗北かつ読み戻し不能
 
@@ -90,20 +109,38 @@ class IngestionService:
             fetcher = self._fetcher_factory()
 
             persisted: list[Article] = []
+            staged: list[StagedArticle] = []
             failed_count = 0
             skipped_count = 0
             ready_count = 0
+            pending_count = 0
 
             try:
                 async for outcome in fetcher.fetch(source):
                     match outcome:
-                        case Ready(article=fa, metadata=_m):
+                        case ReadyForArticle(article=fa, metadata=_m):
                             ready_count += 1
                             article = await self._persist_one(session, source, fa)
                             if article is not None:
                                 persisted.append(article)
                             else:
                                 skipped_count += 1
+                        case PendingHtmlFetch() as pending:
+                            pending_count += 1
+                            discovered_id = await self._upsert_discovered_url(
+                                session,
+                                source.id,
+                                pending.source_url,
+                                pending.title,
+                            )
+                            if discovered_id is None:
+                                skipped_count += 1
+                                continue
+                            staged.append(
+                                StagedArticle(
+                                    discovered_id=discovered_id, pending=pending
+                                )
+                            )
                         case Failed(reason=r):
                             failed_count += 1
                             logger.warning(
@@ -126,12 +163,15 @@ class IngestionService:
             source_id=source_id,
             source=source.name,
             ready_count=ready_count,
+            pending_count=pending_count,
             failed_count=failed_count,
             persisted_count=len(persisted),
+            staged_count=len(staged),
             skipped_count=skipped_count,
         )
         return IngestedOutcome(
             persisted=persisted,
+            staged=staged,
             failed_count=failed_count,
             skipped_count=skipped_count,
         )
@@ -187,7 +227,24 @@ class IngestionService:
         fa: FetchedArticle,
     ) -> int | None:
         """discovered_articles 行を作って id を返す (既存なら読み戻し)。"""
-        candidate = ArticleCandidate(url=fa.source_url, title=fa.title)
+        return await self._upsert_discovered_url(
+            session, news_source_id, fa.source_url, fa.title
+        )
+
+    async def _upsert_discovered_url(
+        self,
+        session: AsyncSession,
+        news_source_id: int,
+        source_url: SafeUrl,
+        title: str,
+    ) -> int | None:
+        """URL + title から discovered_articles 行を作って id を返す。
+
+        Pattern H 経路 (``PendingHtmlFetch``) では ``FetchedArticle`` がまだ
+        存在しないため (body 未確定)、URL + title だけで discovered 行を作る
+        必要がある。Pattern R 用 ``_upsert_discovered`` も内部でこれを呼ぶ。
+        """
+        candidate = ArticleCandidate(url=source_url, title=title)
         draft = DiscoveredArticleDraft.from_candidate(
             candidate, news_source_id=news_source_id
         )
@@ -195,5 +252,5 @@ class IngestionService:
         results = await repo.save_many([draft])
         if results:
             return results[0].id
-        existing = await repo.find_by_url(fa.source_url)
+        existing = await repo.find_by_url(source_url)
         return existing.id if existing else None
