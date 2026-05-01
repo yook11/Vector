@@ -1,17 +1,18 @@
-"""記事から抽出されたエンティティ。"""
+"""旧テーブル ``article_entities`` の ORM (Phase 1B α-1 で deprecated)。
+
+Phase 1B α-1 で ``article_extraction_entities`` に置換された。本 ORM はテーブルが
+DROP されるまで (l9 migration) metadata に残しておくが、``ArticleExtraction``
+からの relationship は ``ArticleExtractionEntity`` に切り替わっている。新規
+書き込み・読み出しは新 ORM 経由で行うこと。
+"""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from sqlalchemy import ForeignKey, Index
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.analysis.domain.value_objects.entity import EntityName, EntityType
 from app.models.base import Base
-
-if TYPE_CHECKING:
-    from app.models.article_extraction import ArticleExtraction
 
 
 class ArticleEntity(Base):
@@ -24,6 +25,3 @@ class ArticleEntity(Base):
     )
     name: Mapped[EntityName] = mapped_column()
     type: Mapped[EntityType] = mapped_column()
-
-    # リレーション
-    extraction: Mapped[ArticleExtraction] = relationship(back_populates="entities")
