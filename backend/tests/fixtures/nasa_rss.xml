@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+	xmlns:content="http://purl.org/rss/1.0/modules/content/"
+	xmlns:atom="http://www.w3.org/2005/Atom"
+	xmlns:sy="http://purl.org/rss/1.0/modules/syndication/">
+<channel>
+	<title>NASA</title>
+	<atom:link href="https://www.nasa.gov/feed/" rel="self" type="application/rss+xml" />
+	<link>https://www.nasa.gov/</link>
+	<description>NASA news</description>
+	<lastBuildDate>Wed, 30 Apr 2026 22:00:00 +0000</lastBuildDate>
+	<sy:updatePeriod>hourly</sy:updatePeriod>
+	<sy:updateFrequency>1</sy:updateFrequency>
+	<item>
+		<title>Webb Telescope reveals new galactic structures in deep field survey</title>
+		<link>https://www.nasa.gov/feature/goddard/2026/webb-deep-field-survey/</link>
+		<pubDate>Wed, 30 Apr 2026 17:00:00 +0000</pubDate>
+		<category><![CDATA[James Webb Space Telescope]]></category>
+		<category><![CDATA[Astrophysics]]></category>
+		<category><![CDATA[Goddard Space Flight Center]]></category>
+		<guid isPermaLink="false">https://www.nasa.gov/?p=55555</guid>
+		<description><![CDATA[A new James Webb Space Telescope deep field survey reveals previously unseen galactic structures.]]></description>
+		<content:encoded><![CDATA[<p>Earth Observatory Science Earth Observatory Earth Mission Control Station Operations</p><p>A new James Webb Space Telescope deep field survey has revealed previously unseen galactic structures embedded within early-universe nebulae, NASA announced today. The observations, taken over the past six months from JWST's L2 Lagrange point vantage, target a patch of sky previously studied by the Hubble Space Telescope.</p><p>Researchers at Goddard Space Flight Center say the new infrared imagery shows filamentary structures connecting clusters of proto-galaxies at redshifts greater than ten. The team has submitted the results for peer review, and preliminary data has been released through the Mikulski Archive at the Space Telescope Science Institute.</p><p>The deep field campaign continues through the end of NASA's fiscal year and is expected to yield additional surveys covering complementary sky patches near the celestial equator.</p><p>Discover More Topics From NASA: Goddard Space Flight Center | James Webb Space Telescope | Astrophysics</p>]]></content:encoded>
+	</item>
+	<item>
+		<title>Short post</title>
+		<link>https://www.nasa.gov/short-post/</link>
+		<pubDate>Wed, 30 Apr 2026 16:00:00 +0000</pubDate>
+		<guid isPermaLink="false">https://www.nasa.gov/?p=55556</guid>
+		<content:encoded><![CDATA[<p>tiny</p>]]></content:encoded>
+	</item>
+</channel>
+</rss>

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+	xmlns:content="http://purl.org/rss/1.0/modules/content/"
+	xmlns:wfw="http://wellformedweb.org/CommentAPI/"
+	xmlns:dc="http://purl.org/dc/elements/1.1/"
+	xmlns:atom="http://www.w3.org/2005/Atom"
+	xmlns:sy="http://purl.org/rss/1.0/modules/syndication/"
+	xmlns:slash="http://purl.org/rss/1.0/modules/slash/">
+<channel>
+	<title>Krebs on Security</title>
+	<atom:link href="https://krebsonsecurity.com/feed/" rel="self" type="application/rss+xml" />
+	<link>https://krebsonsecurity.com/</link>
+	<description>In-depth security news and investigation</description>
+	<lastBuildDate>Wed, 30 Apr 2026 22:00:00 +0000</lastBuildDate>
+	<language>en-US</language>
+	<sy:updatePeriod>hourly</sy:updatePeriod>
+	<sy:updateFrequency>1</sy:updateFrequency>
+	<item>
+		<title>Phishing campaign abuses new SaaS provider with stolen brand assets</title>
+		<link>https://krebsonsecurity.com/2026/04/phishing-saas-brand-abuse/</link>
+		<dc:creator><![CDATA[BrianKrebs]]></dc:creator>
+		<pubDate>Wed, 30 Apr 2026 17:00:00 +0000</pubDate>
+		<category><![CDATA[A Little Sunshine]]></category>
+		<category><![CDATA[Phishing]]></category>
+		<guid isPermaLink="false">https://krebsonsecurity.com/?p=12345</guid>
+		<description><![CDATA[<p>A novel phishing campaign abuses a new SaaS provider's free tier to host attacker-controlled login forms with stolen brand assets.</p>]]></description>
+		<content:encoded><![CDATA[<p>A novel phishing campaign abuses a new SaaS provider's free tier to host attacker-controlled login forms with stolen brand assets, according to an investigation by KrebsOnSecurity. The campaign was first observed in March of this year and has since expanded to target customers of multiple financial institutions across North America.</p><p>The attackers register accounts on the SaaS service using burner email addresses, then upload phishing kits styled to look identical to legitimate bank login pages. Because the SaaS provider issues subdomains under its own validated TLS certificate, victims see a padlock icon and a domain that appears unrelated to known phishing infrastructure.</p><p>Researchers have notified the SaaS provider, which has begun suspending accounts as they are reported. However, the abuse pipeline appears highly automated, and new attacker accounts are created within minutes of takedown.</p>]]></content:encoded>
+	</item>
+	<item>
+		<title>Short post</title>
+		<link>https://krebsonsecurity.com/short-post/</link>
+		<dc:creator><![CDATA[BrianKrebs]]></dc:creator>
+		<pubDate>Wed, 30 Apr 2026 16:00:00 +0000</pubDate>
+		<guid isPermaLink="false">https://krebsonsecurity.com/?p=12346</guid>
+		<description><![CDATA[<p>Too short.</p>]]></description>
+		<content:encoded><![CDATA[<p>tiny</p>]]></content:encoded>
+	</item>
+</channel>
+</rss>

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+	xmlns:content="http://purl.org/rss/1.0/modules/content/"
+	xmlns:wfw="http://wellformedweb.org/CommentAPI/"
+	xmlns:dc="http://purl.org/dc/elements/1.1/"
+	xmlns:atom="http://www.w3.org/2005/Atom"
+	xmlns:sy="http://purl.org/rss/1.0/modules/syndication/"
+	xmlns:slash="http://purl.org/rss/1.0/modules/slash/"
+	xmlns:media="http://search.yahoo.com/mrss/">
+<channel>
+	<title>The Quantum Insider</title>
+	<atom:link href="https://thequantuminsider.com/feed/" rel="self" type="application/rss+xml" />
+	<link>https://thequantuminsider.com/</link>
+	<description>Quantum computing news and analysis</description>
+	<lastBuildDate>Wed, 30 Apr 2026 22:00:00 +0000</lastBuildDate>
+	<language>en-US</language>
+	<sy:updatePeriod>hourly</sy:updatePeriod>
+	<sy:updateFrequency>1</sy:updateFrequency>
+	<item>
+		<title>Quantum hardware startup demonstrates new error correction milestone</title>
+		<link>https://thequantuminsider.com/2026/04/30/quantum-error-correction-milestone/</link>
+		<dc:creator><![CDATA[Alice Chen]]></dc:creator>
+		<pubDate>Wed, 30 Apr 2026 17:00:00 +0000</pubDate>
+		<category><![CDATA[Quantum Computing]]></category>
+		<category><![CDATA[Hardware]]></category>
+		<guid isPermaLink="false">https://thequantuminsider.com/?p=98765</guid>
+		<description><![CDATA[A quantum hardware startup announced a new milestone in surface-code error correction.]]></description>
+		<content:encoded><![CDATA[<p>A quantum hardware startup announced a new milestone in surface-code error correction this week, claiming logical qubit lifetimes exceeding one second under continuous syndrome extraction. The result, presented at a conference in Geneva, builds on prior demonstrations from competing labs.</p><p>The team used a hybrid superconducting platform with cryogenic control electronics positioned within the dilution refrigerator stack. According to the published preprint, the architecture suppresses correlated errors that have plagued similar code distance experiments at other groups.</p><p>Industry observers say the result, if reproduced, could accelerate the timeline for fault-tolerant quantum advantage in chemistry workloads. Several investors contacted by The Quantum Insider declined to comment specifically on the company's roadmap, but acknowledged increasing investor interest in error-corrected hardware.</p>]]></content:encoded>
+		<media:content url="https://thequantuminsider.com/wp-content/uploads/2026/04/quantum-cover.jpg" medium="image" />
+	</item>
+	<item>
+		<title>Short post</title>
+		<link>https://thequantuminsider.com/short-post/</link>
+		<dc:creator><![CDATA[Bob Smith]]></dc:creator>
+		<pubDate>Wed, 30 Apr 2026 16:00:00 +0000</pubDate>
+		<guid isPermaLink="false">https://thequantuminsider.com/?p=98766</guid>
+		<description><![CDATA[<p>Too short.</p>]]></description>
+		<content:encoded><![CDATA[<p>tiny</p>]]></content:encoded>
+	</item>
+</channel>
+</rss>
