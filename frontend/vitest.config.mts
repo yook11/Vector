@@ -23,6 +23,7 @@ export default defineConfig({
         "src/lib/auth/login-redirect-url.ts",
         "src/lib/api/error.ts",
         "src/lib/api/fetcher.ts",
+        "src/lib/api/typed-server-fetcher.ts",
         "src/lib/date.ts",
         "src/lib/proxy/csp.ts",
         "src/lib/proxy/callback-url.ts",

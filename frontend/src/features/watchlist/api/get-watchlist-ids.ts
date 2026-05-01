@@ -1,6 +1,5 @@
-import { serverFetch } from "@/lib/api/server-fetcher";
+import { apiCall, typedServer } from "@/lib/api/typed-server-fetcher";
 import { getCurrentSession } from "@/lib/auth/guards";
-import type { WatchlistIds } from "@/types";
 
 /**
  * 認証済 user の watched article ID 集合を取得する。
@@ -12,14 +11,20 @@ import type { WatchlistIds } from "@/types";
  *
  * cache 戦略: `next.tags: ["watchlist:me"]` で server data cache に乗せ、
  * Server Action 後の `updateTag("watchlist:me")` で immediate 無効化する。
- * per-user 分離は `serverFetch` 経由で付与される `Authorization` header
+ * per-user 分離は `typedServer` 経由で付与される `Authorization` header
  * (HS256 JWT) が Next.js data cache の cache key に含まれることで担保。
+ *
+ * PR-Y3 で旧 `serverFetch<WatchlistIds>("/me/watchlist/ids", ...)` から
+ * `typedServer.GET("/api/v1/me/watchlist/ids", ...)` に移行した exemplar。
+ * response 型 (`{ ids: number[] }`) は generated.ts の paths から自動導出。
  */
 export async function getWatchlistIds(): Promise<Set<number>> {
   const session = await getCurrentSession();
   if (!session) return new Set();
-  const res = await serverFetch<WatchlistIds>("/me/watchlist/ids", {
-    next: { tags: ["watchlist:me"] },
-  });
-  return new Set(res.ids);
+  const data = await apiCall(
+    typedServer.GET("/api/v1/me/watchlist/ids", {
+      next: { tags: ["watchlist:me"] },
+    }),
+  );
+  return new Set(data.ids);
 }
