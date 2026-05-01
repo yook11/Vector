@@ -21,7 +21,8 @@ from app.collection.ingestion.domain.fetched_article import (
     FetchedArticle,
     FetchedMetadata,
     FetchOutcome,
-    Ready,
+    PendingHtmlFetch,
+    ReadyForArticle,
 )
 from app.collection.ingestion.ingestion_service import (
     IngestedOutcome,
@@ -34,8 +35,8 @@ from app.models.news_source import NewsSource, SourceType
 from app.shared.value_objects.safe_url import SafeUrl
 
 
-def _ready(source_id: int, url: str, title: str = "Test Title") -> Ready:
-    return Ready(
+def _ready(source_id: int, url: str, title: str = "Test Title") -> ReadyForArticle:
+    return ReadyForArticle(
         article=FetchedArticle(
             title=title,
             body="x" * 100,
@@ -44,6 +45,18 @@ def _ready(source_id: int, url: str, title: str = "Test Title") -> Ready:
             source_url=SafeUrl(url),
         ),
         metadata=FetchedMetadata(language="en-US", site_name="VentureBeat"),
+    )
+
+
+def _pending(source_id: int, url: str, title: str = "TC Title") -> PendingHtmlFetch:
+    return PendingHtmlFetch(
+        title=title,
+        source_id=source_id,
+        source_url=SafeUrl(url),
+        published_at_hint=PublishedAt(
+            value=datetime(2026, 4, 30, 12, 0, 0, tzinfo=UTC)
+        ),
+        metadata=FetchedMetadata(language="en-US", site_name="TechCrunch"),
     )
 
 
@@ -150,6 +163,61 @@ async def test_duplicate_url_persists_once(
     article_rows = (await db_session.execute(select(ArticleORM))).scalars().all()
     assert len(discovered_rows) == 1
     assert len(article_rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_pending_creates_discovered_only_and_stages(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    vb_source: NewsSource,
+) -> None:
+    """PendingHtmlFetch は discovered のみ作成し staged に積む (Pattern H)。"""
+    pending = _pending(vb_source.id, "https://techcrunch.com/article-h/")
+    svc = IngestionService(session_factory, lambda: _StubFetcher([pending]))
+
+    outcome = await svc.execute(vb_source.id)
+
+    assert isinstance(outcome, IngestedOutcome)
+    assert len(outcome.persisted) == 0  # Article は 2 段目で作る
+    assert len(outcome.staged) == 1
+    assert outcome.staged[0].pending.title == "TC Title"
+    assert outcome.staged[0].discovered_id > 0
+
+    # DB: discovered 行のみ作成されている
+    discovered_rows = (
+        (await db_session.execute(select(DiscoveredArticleORM))).scalars().all()
+    )
+    article_rows = (await db_session.execute(select(ArticleORM))).scalars().all()
+    assert len(discovered_rows) == 1
+    assert len(article_rows) == 0
+
+
+@pytest.mark.asyncio
+async def test_mixed_ready_pending_and_failed(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    vb_source: NewsSource,
+) -> None:
+    """Pattern R / Pattern H / Failed が混在しても各経路が正しく分岐する。"""
+    ready = _ready(vb_source.id, "https://venturebeat.com/ok/")
+    pending = _pending(vb_source.id, "https://techcrunch.com/h/")
+    failed = Failed(reason=FailureReason(code="title_missing", retryable=False))
+    svc = IngestionService(
+        session_factory, lambda: _StubFetcher([ready, pending, failed])
+    )
+
+    outcome = await svc.execute(vb_source.id)
+
+    assert isinstance(outcome, IngestedOutcome)
+    assert len(outcome.persisted) == 1
+    assert len(outcome.staged) == 1
+    assert outcome.failed_count == 1
+    article_rows = (await db_session.execute(select(ArticleORM))).scalars().all()
+    assert len(article_rows) == 1  # Pattern R 分のみ
+    discovered_rows = (
+        (await db_session.execute(select(DiscoveredArticleORM))).scalars().all()
+    )
+    assert len(discovered_rows) == 2  # R + H
 
 
 @pytest.mark.asyncio

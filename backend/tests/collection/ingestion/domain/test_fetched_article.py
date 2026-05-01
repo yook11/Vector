@@ -13,7 +13,8 @@ from app.collection.ingestion.domain.fetched_article import (
     FailureReason,
     FetchedArticle,
     FetchedMetadata,
-    Ready,
+    PendingHtmlFetch,
+    ReadyForArticle,
 )
 from app.collection.ingestion.fetchers.protocol import Fetcher
 from app.shared.value_objects.safe_url import SafeUrl
@@ -121,8 +122,8 @@ class TestFetchOutcome:
             source_id=1,
             source_url=_safe_url(),
         )
-        outcome = Ready(article=article)
-        assert isinstance(outcome, Ready)
+        outcome = ReadyForArticle(article=article)
+        assert isinstance(outcome, ReadyForArticle)
         assert outcome.article is article
 
     def test_failed_carries_reason(self) -> None:
@@ -141,14 +142,14 @@ class TestFetchOutcome:
             source_url=_safe_url(),
         )
         outcomes = [
-            Ready(article=article),
+            ReadyForArticle(article=article),
             Failed(reason=FailureReason(code="paywalled", retryable=False)),
         ]
         ready_count = 0
         failed_codes: list[str] = []
         for outcome in outcomes:
             match outcome:
-                case Ready(article=a):
+                case ReadyForArticle(article=a):
                     ready_count += 1
                     assert a.title == "Test"
                 case Failed(reason=r):
@@ -252,7 +253,7 @@ class TestReady:
             source_url=_safe_url(),
         )
         metadata = FetchedMetadata(summary="hi", language="en")
-        ready = Ready(article=article, metadata=metadata)
+        ready = ReadyForArticle(article=article, metadata=metadata)
         assert ready.article is article
         assert ready.metadata is metadata
 
@@ -265,7 +266,7 @@ class TestReady:
             source_id=1,
             source_url=_safe_url(),
         )
-        ready = Ready(article=article)
+        ready = ReadyForArticle(article=article)
         assert isinstance(ready.metadata, FetchedMetadata)
         assert ready.metadata == FetchedMetadata()
 
@@ -277,12 +278,146 @@ class TestReady:
             source_id=1,
             source_url=_safe_url(),
         )
-        ready = Ready(
+        ready = ReadyForArticle(
             article=article,
             metadata=FetchedMetadata(tags=("ai",), site_name="Example"),
         )
         assert ready.metadata.tags == ("ai",)
         assert ready.metadata.site_name == "Example"
+
+
+class TestPendingHtmlFetch:
+    """Pattern H 1 段目の出口型 ``PendingHtmlFetch``。"""
+
+    def test_minimal_construction(self) -> None:
+        pending = PendingHtmlFetch(
+            title="Test",
+            source_id=1,
+            source_url=_safe_url(),
+        )
+        assert pending.title == "Test"
+        assert pending.source_id == 1
+        assert pending.published_at_hint is None
+        assert pending.metadata == FetchedMetadata()
+
+    def test_published_at_hint_optional(self) -> None:
+        """Pattern H 固有: published_at_hint=None が許容される (HTML 補完前)。"""
+        pending = PendingHtmlFetch(
+            title="Test",
+            source_id=1,
+            source_url=_safe_url(),
+            published_at_hint=None,
+        )
+        assert pending.published_at_hint is None
+
+    def test_metadata_carries_rss_capture(self) -> None:
+        metadata = FetchedMetadata(language="en-US", guid="g1", site_name="TC")
+        pending = PendingHtmlFetch(
+            title="Test",
+            source_id=1,
+            source_url=_safe_url(),
+            metadata=metadata,
+        )
+        assert pending.metadata == metadata
+
+    def test_rejects_empty_title(self) -> None:
+        with pytest.raises(ValueError):
+            PendingHtmlFetch(title="", source_id=1, source_url=_safe_url())
+
+    def test_rejects_non_positive_source_id(self) -> None:
+        with pytest.raises(ValueError):
+            PendingHtmlFetch(title="Test", source_id=0, source_url=_safe_url())
+
+    def test_is_frozen(self) -> None:
+        pending = PendingHtmlFetch(title="Test", source_id=1, source_url=_safe_url())
+        with pytest.raises(ValueError):
+            pending.title = "Changed"  # type: ignore[misc]
+
+
+class TestReadyForArticleTryAdvanceFrom:
+    """``ReadyForArticle.try_advance_from`` の merge 規則 (RSS 優先 / HTML 補完)。"""
+
+    def _pending(
+        self,
+        published_at_hint: PublishedAt | None,
+        metadata: FetchedMetadata | None = None,
+    ) -> PendingHtmlFetch:
+        return PendingHtmlFetch(
+            title="RSS Title",
+            source_id=1,
+            source_url=_safe_url(),
+            published_at_hint=published_at_hint,
+            metadata=metadata or FetchedMetadata(language="en-US", site_name="TC"),
+        )
+
+    def test_merge_with_rss_published_at_preferred(self) -> None:
+        """RSS と HTML 両方 published_at あるとき RSS が優先される。"""
+        rss_pub = PublishedAt(value=datetime(2026, 4, 30, 12, 0, 0, tzinfo=UTC))
+        html_pub = PublishedAt(value=datetime(2026, 5, 1, 12, 0, 0, tzinfo=UTC))
+        pending = self._pending(published_at_hint=rss_pub)
+
+        result = ReadyForArticle.try_advance_from(
+            pending, body="x" * 100, html_published_at=html_pub
+        )
+
+        assert isinstance(result, ReadyForArticle)
+        assert result.article.published_at == rss_pub  # RSS 優先
+
+    def test_merge_falls_back_to_html_when_rss_missing(self) -> None:
+        """RSS が published_at を出さないとき HTML 由来でフォールバック。"""
+        html_pub = PublishedAt(value=datetime(2026, 5, 1, 12, 0, 0, tzinfo=UTC))
+        pending = self._pending(published_at_hint=None)
+
+        result = ReadyForArticle.try_advance_from(
+            pending, body="x" * 100, html_published_at=html_pub
+        )
+
+        assert isinstance(result, ReadyForArticle)
+        assert result.article.published_at == html_pub
+
+    def test_merge_failed_when_both_missing(self) -> None:
+        """RSS と HTML 両方欠落 → Failed(published_at_missing) で降格。"""
+        pending = self._pending(published_at_hint=None)
+
+        result = ReadyForArticle.try_advance_from(
+            pending, body="x" * 100, html_published_at=None
+        )
+
+        assert isinstance(result, Failed)
+        assert result.reason.code == "published_at_missing"
+
+    def test_merge_failed_when_body_too_short(self) -> None:
+        """body invariant 違反 → Failed(other) で降格。"""
+        rss_pub = PublishedAt(value=datetime(2026, 4, 30, 12, 0, 0, tzinfo=UTC))
+        pending = self._pending(published_at_hint=rss_pub)
+
+        result = ReadyForArticle.try_advance_from(
+            pending, body="short", html_published_at=None
+        )
+
+        assert isinstance(result, Failed)
+        assert result.reason.code == "other"
+        assert result.reason.detail is not None
+        assert "invariant_violation" in result.reason.detail
+
+    def test_merge_uses_pending_title_and_metadata(self) -> None:
+        """title / metadata は pending (RSS) からそのまま採用される。"""
+        rss_pub = PublishedAt(value=datetime(2026, 4, 30, 12, 0, 0, tzinfo=UTC))
+        metadata = FetchedMetadata(
+            author="Jane",
+            tags=("AI", "Funding"),
+            language="en-US",
+            site_name="TC",
+        )
+        pending = self._pending(published_at_hint=rss_pub, metadata=metadata)
+
+        result = ReadyForArticle.try_advance_from(
+            pending, body="x" * 100, html_published_at=None
+        )
+
+        assert isinstance(result, ReadyForArticle)
+        assert result.article.title == "RSS Title"
+        assert result.metadata == metadata
 
 
 class TestFetcherProtocol:

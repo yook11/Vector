@@ -16,10 +16,12 @@ from collections.abc import Callable
 from typing import Final
 
 from app.collection.ingestion.fetchers.protocol import Fetcher
+from app.collection.ingestion.fetchers.techcrunch import TechCrunchFetcher
 from app.collection.ingestion.fetchers.venturebeat import VentureBeatFetcher
 
 NEW_ROUTE_FETCHERS: Final[dict[str, Callable[[], Fetcher]]] = {
     "VentureBeat": VentureBeatFetcher,
+    "TechCrunch": TechCrunchFetcher,
 }
 
 NEW_ROUTE_SOURCE_NAMES: Final[frozenset[str]] = frozenset(NEW_ROUTE_FETCHERS.keys())

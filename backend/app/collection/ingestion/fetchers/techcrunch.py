@@ -1,15 +1,24 @@
-"""VentureBeat 用 Fetcher — Pattern R (RSS-only) の参照実装。
+"""TechCrunch 用 Fetcher — Pattern H (RSS で URL 列挙、本文は HTML 必須) の参照実装。
 
-collection-acquisition-redesign Phase 1a'。新 ``Fetcher`` Protocol を満たし、
-``FetchedArticle`` + ``FetchedMetadata`` を 1 entry ずつ ``ReadyForArticle``
-として yield する。
+collection-acquisition-redesign Phase 1b'。新 ``Fetcher`` Protocol を満たし、
+1 entry ずつ ``PendingHtmlFetch`` (or ``Failed``) を yield する。
 
-VB の RSS feed は ``<description>`` / ``<content:encoded>`` に full body
-(~12000 chars) を含み、HTML 取得を経由せずに本文を構築できる
-(`spec collection-source-rss-research.md`)。これにより VB が時折 Vercel
-Challenge で 5xx を返す問題を構造的に回避する。
+TC の RSS feed は ``<description>`` にリード文 (~140 chars) しか含まず、
+``<content:encoded>`` も提供しない (`spec collection-source-rss-research.md`)。
+このため Fetcher は **本文を取りに行かない** — URL + title + RSS metadata
+を ``PendingHtmlFetch`` として yield し、後段の ``extract_html_body`` task
+が ``ArticleHtmlExtractor`` (trafilatura) で本文を抽出する 2 段構成。
 
-旧 ``fetchers/rss/venturebeat.py`` (BaseRssFetcher 継承の薄いスタブ) は
+リファクタの本質的目的: 旧パイプラインは RSS が出している author / tags /
+image_url / language / guid を全部捨てていた。本実装は ``FetchedMetadata``
+で capture-everything を担い、kiq message 経由で ``articles`` テーブル
+(将来の Tier 1 列) まで届ける。
+
+per-source 独立実装 (Pattern H 共通基底は作らない): 「source ごとに取れる
+ものが違う」が新 Protocol の設計動機。VB Fetcher と構造は似るが共通基底化
+すると差異の表現が逆に難しくなるため、code copy で許容する。
+
+旧 ``fetchers/rss/techcrunch.py`` (BaseRssFetcher 継承の薄いスタブ) は
 本 PR で削除し、新 Protocol に置き換える。
 """
 
@@ -31,10 +40,9 @@ from app.collection.extraction.domain.value_objects import PublishedAt
 from app.collection.ingestion.domain.fetched_article import (
     Failed,
     FailureReason,
-    FetchedArticle,
     FetchedMetadata,
     FetchOutcome,
-    ReadyForArticle,
+    PendingHtmlFetch,
 )
 from app.models.news_source import NewsSource
 from app.shared.security.safe_http import make_safe_async_client
@@ -47,49 +55,28 @@ _USER_AGENT = "Mozilla/5.0 (compatible; Vector/1.0; +https://github.com/yook11/V
 _HTTP_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _WHITESPACE_RE = re.compile(r"\s+")
-_SITE_NAME = "VentureBeat"
+_SITE_NAME = "TechCrunch"
 _DEFAULT_LANGUAGE = "en-US"
 
 
 def _strip_html(s: str) -> str:
-    """HTML タグを剥がして plain text に正規化する。
+    """HTML タグを剥がして plain text に正規化する (title clean 用)。
 
-    VB の `<description>` / `<content:encoded>` は WordPress 出力で通常
-    ``<p>`` / ``<a>`` 程度しか含まないため、tag を空白に置換 → HTML entity を
-    decode → 連続空白を 1 つに圧縮、で十分な品質が得られる。
+    TC RSS の ``<title>`` は通常タグを含まないが、稀に ``<![CDATA[...]]>``
+    に HTML entity (e.g. ``&amp;``) を含むので decode する。本文は HTML
+    取得後に trafilatura が処理するため、本関数は title 専用。
     """
     if not s:
         return ""
     return _WHITESPACE_RE.sub(" ", html.unescape(_HTML_TAG_RE.sub(" ", s))).strip()
 
 
-def _pick_body(entry: dict[str, Any]) -> str:
-    """``<content:encoded>`` と ``<description>`` の長い方を本文として採用する。
-
-    一部 WordPress VIP サイト (VB / IEEE Spectrum 等) では片方が truncate
-    される運用上の差分があり、長い方を採用するロジックで吸収する
-    (`spec collection-source-rss-research.md` の「max(content_encoded, summary)」)。
-    """
-    content_encoded = ""
-    contents = entry.get("content")
-    if isinstance(contents, list) and contents:
-        first = contents[0]
-        if isinstance(first, dict):
-            value = first.get("value")
-            if isinstance(value, str):
-                content_encoded = value
-    summary = entry.get("summary") or ""
-    if not isinstance(summary, str):
-        summary = ""
-    return content_encoded if len(content_encoded) >= len(summary) else summary
-
-
 def _parse_published_at(entry: dict[str, Any]) -> PublishedAt | None:
     """feedparser の ``*_parsed`` (struct_time) を UTC ``PublishedAt`` に変換する。
 
-    feedparser は struct_time を UTC として返す規約 (RFC 2822 の TZ オフセットを
-    解釈済みで struct_time に正規化)。``published_parsed`` を優先し、欠損なら
-    ``updated_parsed`` で代替する。
+    Pattern H 固有: 本値が None でも Failed 降格はしない (HTML 抽出が
+    ``published_at`` を出してくれれば merge 後に最終確定する)。``PendingHtmlFetch``
+    の ``published_at_hint`` に格納される。
     """
     parsed = entry.get("published_parsed") or entry.get("updated_parsed")
     if parsed is None:
@@ -102,20 +89,26 @@ def _parse_published_at(entry: dict[str, Any]) -> PublishedAt | None:
 
 
 def _extract_image_url(entry: dict[str, Any]) -> SafeUrl | None:
-    """``<media:content>`` から画像 URL を取り出す (probabilistic)。"""
-    media = entry.get("media_content")
-    if not isinstance(media, list) or not media:
-        return None
-    first = media[0]
-    if not isinstance(first, dict):
-        return None
-    url = first.get("url")
-    if not isinstance(url, str) or not url:
-        return None
-    try:
-        return SafeUrl(url)
-    except ValueError:
-        return None
+    """``<media:content>`` / ``<media:thumbnail>`` から画像 URL を取り出す。
+
+    TC は記事ごとに ``<media:content>`` を出すことが多いが、必ずではない
+    (probabilistic、PROVIDES に含めない)。
+    """
+    for key in ("media_content", "media_thumbnail"):
+        media = entry.get(key)
+        if not isinstance(media, list) or not media:
+            continue
+        first = media[0]
+        if not isinstance(first, dict):
+            continue
+        url = first.get("url")
+        if not isinstance(url, str) or not url:
+            continue
+        try:
+            return SafeUrl(url)
+        except ValueError:
+            continue
+    return None
 
 
 def _extract_tags(entry: dict[str, Any]) -> tuple[str, ...]:
@@ -131,7 +124,11 @@ def _extract_tags(entry: dict[str, Any]) -> tuple[str, ...]:
 
 
 def _extract_guid(entry: dict[str, Any]) -> str | None:
-    """``<guid>`` (feedparser では ``id`` にマップ) を取り出す。"""
+    """``<guid>`` (feedparser では ``id`` にマップ) を取り出す。
+
+    TC は WordPress 製で ``?p=<post_id>`` 形式の永続 ID を出す。RSS 仕様で
+    必須項目なので PROVIDES に含める。
+    """
     raw = entry.get("id") or entry.get("guid")
     if isinstance(raw, str) and raw:
         return raw[:2048]
@@ -144,13 +141,18 @@ def _normalize_language(raw: str | None) -> str:
     return value[:20]
 
 
-class VentureBeatFetcher:
-    """VentureBeat 用 RSS-only Fetcher。
+class TechCrunchFetcher:
+    """TechCrunch 用 Pattern H Fetcher。
 
-    PROVIDES に列挙したフィールドは全 entry で値が埋まる前提。``author`` /
-    ``tags`` / ``image_url`` は probabilistic なため metadata に詰めるが
-    PROVIDES には含めない (実 feed で空率が出たとき構造的に呼び出し側が
-    `assert "author" in fetcher.PROVIDES` で防御するため)。
+    PROVIDES に列挙したフィールドは feed-level / RSS 仕様で 100% 提供される
+    前提:
+
+    - ``language``: feed-level ``<channel><language>`` (TC は固定で en-US)
+    - ``guid``: RSS 仕様で entry 必須項目 (TC は ``?p=<id>`` 形式)
+    - ``site_name``: hardcode "TechCrunch"
+
+    ``author`` / ``tags`` / ``image_url`` は probabilistic なため metadata
+    に詰めるが PROVIDES には含めない。
     """
 
     PROVIDES: ClassVar[frozenset[str]] = frozenset({"language", "guid", "site_name"})
@@ -160,7 +162,7 @@ class VentureBeatFetcher:
         feed = await asyncio.to_thread(feedparser.parse, feed_text)
         if feed.bozo and not feed.entries:
             logger.warning(
-                "venturebeat_feed_parse_error",
+                "techcrunch_feed_parse_error",
                 source=source.name,
                 error=str(feed.bozo_exception),
             )
@@ -202,7 +204,16 @@ class VentureBeatFetcher:
         source: NewsSource,
         feed_language: str,
     ) -> FetchOutcome:
-        """1 entry を ``FetchOutcome`` に変換する純関数 (テスト容易性のため切出)。"""
+        """1 entry を ``FetchOutcome`` に変換する純関数 (テスト容易性のため切出)。
+
+        Pattern H 固有の品質ゲート (Pattern R より緩い):
+
+        - ``title`` 空 → ``Failed(title_missing)``
+        - ``link`` 不正 → ``Failed(extraction_empty)`` (URL invalid)
+        - ``published_at`` 欠落 → **Failed しない** (HTML 補完を待つ)
+        - ``body`` は本実装では検査しない (Stage 2 = ``extract_html_body`` の
+          責務)
+        """
         title = _strip_html(entry.get("title", "") or "")
         if not title:
             return Failed(
@@ -213,26 +224,6 @@ class VentureBeatFetcher:
                 )
             )
         title = title[:500]
-
-        body = _strip_html(_pick_body(entry))
-        if len(body) < 50:
-            return Failed(
-                reason=FailureReason(
-                    code="body_too_short",
-                    retryable=False,
-                    detail=f"rss_body_len={len(body)}",
-                )
-            )
-
-        published_at = _parse_published_at(entry)
-        if published_at is None:
-            return Failed(
-                reason=FailureReason(
-                    code="published_at_missing",
-                    retryable=False,
-                    detail="rss_pubdate_missing",
-                )
-            )
 
         link = entry.get("link", "") or ""
         try:
@@ -246,22 +237,7 @@ class VentureBeatFetcher:
                 )
             )
 
-        try:
-            article = FetchedArticle(
-                title=title,
-                body=body,
-                published_at=published_at,
-                source_id=source.id,
-                source_url=source_url,
-            )
-        except ValueError as e:
-            return Failed(
-                reason=FailureReason(
-                    code="other",
-                    retryable=False,
-                    detail=f"invariant_violation:{e}",
-                )
-            )
+        published_at_hint = _parse_published_at(entry)
 
         author = entry.get("author")
         if isinstance(author, str) and author:
@@ -278,4 +254,10 @@ class VentureBeatFetcher:
             site_name=_SITE_NAME,
         )
 
-        return ReadyForArticle(article=article, metadata=metadata)
+        return PendingHtmlFetch(
+            title=title,
+            source_id=source.id,
+            source_url=source_url,
+            published_at_hint=published_at_hint,
+            metadata=metadata,
+        )
