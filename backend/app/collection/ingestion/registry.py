@@ -53,38 +53,22 @@ def _build_registry() -> dict[SourceName, SourceFetcher]:
         ITmediaNewsFetcher,
     )
     from app.collection.ingestion.fetchers.rss.jpcert import JPCERTFetcher
-    from app.collection.ingestion.fetchers.rss.krebs_on_security import (
-        KrebsOnSecurityFetcher,
-    )
     from app.collection.ingestion.fetchers.rss.microsoft_research import (
         MicrosoftResearchFetcher,
     )
     from app.collection.ingestion.fetchers.rss.monoist import MONOistFetcher
-    from app.collection.ingestion.fetchers.rss.nasa import NASAFetcher
-    from app.collection.ingestion.fetchers.rss.quantum_insider import (
-        QuantumInsiderFetcher,
-    )
-    from app.collection.ingestion.fetchers.rss.spaceflight_now import (
-        SpaceflightNowFetcher,
-    )
     from app.collection.ingestion.fetchers.rss.spacenews import SpaceNewsFetcher
     from app.collection.ingestion.fetchers.rss.the_register import TheRegisterFetcher
 
     return {
         # RSS ソース（ソースごとに個別フェッチャー）
-        # NOTE: TechCrunch は collection-acquisition-redesign Phase 1b' で
-        # 新 Protocol Fetcher (`fetchers/techcrunch.py`) に移行済み。Strangler
-        # 移行期間中は ``strategy.NEW_ROUTE_FETCHERS`` 経由で取り込まれる。
+        # NOTE: TechCrunch / VentureBeat / The Quantum Insider / Krebs on
+        # Security / Spaceflight Now / NASA は collection-acquisition-redesign
+        # Phase 1a'/1b'/1c-A1 で新 Protocol Fetcher に移行済み。Strangler 移行
+        # 期間中は ``strategy.NEW_ROUTE_FETCHERS`` 経由で取り込まれる。
         SourceName("FierceBiotech"): FierceBiotechFetcher(),
-        SourceName("The Quantum Insider"): QuantumInsiderFetcher(),
         SourceName("IEEE Spectrum"): IEEESpectrumFetcher(),
-        SourceName("NASA"): NASAFetcher(),
         SourceName("Microsoft Research"): MicrosoftResearchFetcher(),
-        SourceName("Krebs on Security"): KrebsOnSecurityFetcher(),
-        # NOTE: VentureBeat は collection-acquisition-redesign Phase 1a' で
-        # 新 Protocol Fetcher (`fetchers/venturebeat.py`) に移行済み。Strangler
-        # 移行期間中は ``strategy.NEW_ROUTE_FETCHERS`` 経由で取り込まれる。
-        SourceName("Spaceflight Now"): SpaceflightNowFetcher(),
         SourceName("ITmedia AI+"): ITmediaFetcher(),
         SourceName("JPCERT/CC"): JPCERTFetcher(),
         SourceName("Engadget"): EngadgetFetcher(),

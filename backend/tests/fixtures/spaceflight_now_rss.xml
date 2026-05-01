@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+	xmlns:content="http://purl.org/rss/1.0/modules/content/"
+	xmlns:atom="http://www.w3.org/2005/Atom"
+	xmlns:sy="http://purl.org/rss/1.0/modules/syndication/">
+<channel>
+	<title>Spaceflight Now</title>
+	<atom:link href="https://spaceflightnow.com/feed/" rel="self" type="application/rss+xml" />
+	<link>https://spaceflightnow.com/</link>
+	<description>Spaceflight news, launch coverage, and analysis</description>
+	<lastBuildDate>Wed, 30 Apr 2026 22:00:00 +0000</lastBuildDate>
+	<sy:updatePeriod>hourly</sy:updatePeriod>
+	<sy:updateFrequency>1</sy:updateFrequency>
+	<item>
+		<title>Falcon 9 launches Starlink batch from Cape Canaveral</title>
+		<link>https://spaceflightnow.com/2026/04/30/falcon9-starlink-launch/</link>
+		<pubDate>Wed, 30 Apr 2026 17:00:00 +0000</pubDate>
+		<category><![CDATA[Falcon 9]]></category>
+		<guid isPermaLink="true">https://spaceflightnow.com/2026/04/30/falcon9-starlink-launch/</guid>
+		<content:encoded><![CDATA[<p>SpaceX successfully launched a Falcon 9 rocket from Cape Canaveral Space Force Station this afternoon, carrying a batch of Starlink internet satellites into low Earth orbit. Liftoff occurred on schedule at the opening of a five-minute launch window at 1:00 p.m. EDT.</p><p>The first stage booster, designated B1071, completed its eighteenth flight and successfully landed on the autonomous drone ship Just Read the Instructions stationed in the Atlantic Ocean. The Starlink satellites were deployed approximately 65 minutes after liftoff into their target insertion orbit.</p>]]></content:encoded>
+	</item>
+	<item>
+		<title>Short post</title>
+		<link>https://spaceflightnow.com/short-post/</link>
+		<pubDate>Wed, 30 Apr 2026 16:00:00 +0000</pubDate>
+		<guid isPermaLink="true">https://spaceflightnow.com/short-post/</guid>
+		<content:encoded><![CDATA[<p>tiny</p>]]></content:encoded>
+	</item>
+</channel>
+</rss>

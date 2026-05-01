@@ -15,13 +15,21 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Final
 
+from app.collection.ingestion.fetchers.krebs_on_security import KrebsOnSecurityFetcher
+from app.collection.ingestion.fetchers.nasa import NASAFetcher
 from app.collection.ingestion.fetchers.protocol import Fetcher
+from app.collection.ingestion.fetchers.quantum_insider import QuantumInsiderFetcher
+from app.collection.ingestion.fetchers.spaceflight_now import SpaceflightNowFetcher
 from app.collection.ingestion.fetchers.techcrunch import TechCrunchFetcher
 from app.collection.ingestion.fetchers.venturebeat import VentureBeatFetcher
 
 NEW_ROUTE_FETCHERS: Final[dict[str, Callable[[], Fetcher]]] = {
     "VentureBeat": VentureBeatFetcher,
     "TechCrunch": TechCrunchFetcher,
+    "The Quantum Insider": QuantumInsiderFetcher,
+    "Krebs on Security": KrebsOnSecurityFetcher,
+    "Spaceflight Now": SpaceflightNowFetcher,
+    "NASA": NASAFetcher,
 }
 
 NEW_ROUTE_SOURCE_NAMES: Final[frozenset[str]] = frozenset(NEW_ROUTE_FETCHERS.keys())
