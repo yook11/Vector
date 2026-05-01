@@ -45,30 +45,24 @@ def _build_registry() -> dict[SourceName, SourceFetcher]:
     from app.collection.ingestion.fetchers.rss.fierce_biotech import (
         FierceBiotechFetcher,
     )
-    from app.collection.ingestion.fetchers.rss.ieee_spectrum import (
-        IEEESpectrumFetcher,
-    )
     from app.collection.ingestion.fetchers.rss.itmedia import ITmediaFetcher
     from app.collection.ingestion.fetchers.rss.itmedia_news import (
         ITmediaNewsFetcher,
     )
     from app.collection.ingestion.fetchers.rss.jpcert import JPCERTFetcher
-    from app.collection.ingestion.fetchers.rss.microsoft_research import (
-        MicrosoftResearchFetcher,
-    )
     from app.collection.ingestion.fetchers.rss.monoist import MONOistFetcher
     from app.collection.ingestion.fetchers.rss.spacenews import SpaceNewsFetcher
     from app.collection.ingestion.fetchers.rss.the_register import TheRegisterFetcher
 
     return {
         # RSS ソース（ソースごとに個別フェッチャー）
-        # NOTE: TechCrunch / VentureBeat / The Quantum Insider / Krebs on
-        # Security / Spaceflight Now / NASA は collection-acquisition-redesign
-        # Phase 1a'/1b'/1c-A1 で新 Protocol Fetcher に移行済み。Strangler 移行
-        # 期間中は ``strategy.NEW_ROUTE_FETCHERS`` 経由で取り込まれる。
+        # NOTE: VentureBeat / TechCrunch / The Quantum Insider / Krebs on
+        # Security / Spaceflight Now / NASA / IEEE Spectrum / Microsoft
+        # Research は collection-acquisition-redesign Phase 1a'/1b'/1c-A1/
+        # 1c-A2 で新 Protocol Fetcher に移行済み (Pattern R 全 8 ソース完了)。
+        # Strangler 移行期間中は ``strategy.NEW_ROUTE_FETCHERS`` 経由で
+        # 取り込まれる。
         SourceName("FierceBiotech"): FierceBiotechFetcher(),
-        SourceName("IEEE Spectrum"): IEEESpectrumFetcher(),
-        SourceName("Microsoft Research"): MicrosoftResearchFetcher(),
         SourceName("ITmedia AI+"): ITmediaFetcher(),
         SourceName("JPCERT/CC"): JPCERTFetcher(),
         SourceName("Engadget"): EngadgetFetcher(),
