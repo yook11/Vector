@@ -1,9 +1,9 @@
-"""新ルート (collection-acquisition-redesign Phase 1) のソース戦略表。
+"""新 Protocol Fetcher の per-source dispatch table。
 
-Strangler 移行期間中の hardcode set + factory dict。Phase 1d 完了時点で
-18/19 ソース移行済 (RSS 全 18 ソース完全移行、Hacker News のみ旧経路に残)。
-HN を新 Protocol API Pattern で実装する PR-1e 完了時に本ファイルごと
-削除し、新 Protocol を全ソースの唯一の取得経路に収束させる。
+collection-acquisition-redesign Phase 1 完結 (PR-1e merge 後)。全 19 ソース
+(RSS 18 + API 1 = Hacker News) が ``Fetcher`` Protocol を満たす per-source
+実装に収束し、本ファイルが唯一の dispatch エントリポイントとなる
+(``ingest_source`` task で参照される)。
 
 設計判断:
 
@@ -22,6 +22,7 @@ from app.collection.ingestion.fetchers.eetimes_japan import EETimesJapanFetcher
 from app.collection.ingestion.fetchers.electrek import ElectrekFetcher
 from app.collection.ingestion.fetchers.engadget import EngadgetFetcher
 from app.collection.ingestion.fetchers.fierce_biotech import FierceBiotechFetcher
+from app.collection.ingestion.fetchers.hacker_news import HackerNewsFetcher
 from app.collection.ingestion.fetchers.ieee_spectrum import IEEESpectrumFetcher
 from app.collection.ingestion.fetchers.itmedia_ai import ITmediaAIFetcher
 from app.collection.ingestion.fetchers.itmedia_news import ITmediaNewsFetcher
@@ -40,7 +41,7 @@ from app.collection.ingestion.fetchers.techcrunch import TechCrunchFetcher
 from app.collection.ingestion.fetchers.the_register import TheRegisterFetcher
 from app.collection.ingestion.fetchers.venturebeat import VentureBeatFetcher
 
-NEW_ROUTE_FETCHERS: Final[dict[str, Callable[[], Fetcher]]] = {
+FETCHERS: Final[dict[str, Callable[[], Fetcher]]] = {
     "VentureBeat": VentureBeatFetcher,
     "TechCrunch": TechCrunchFetcher,
     "The Quantum Insider": QuantumInsiderFetcher,
@@ -60,6 +61,5 @@ NEW_ROUTE_FETCHERS: Final[dict[str, Callable[[], Fetcher]]] = {
     "Electrek": ElectrekFetcher,
     "SpaceNews": SpaceNewsFetcher,
     "The Register": TheRegisterFetcher,
+    "Hacker News": HackerNewsFetcher,
 }
-
-NEW_ROUTE_SOURCE_NAMES: Final[frozenset[str]] = frozenset(NEW_ROUTE_FETCHERS.keys())

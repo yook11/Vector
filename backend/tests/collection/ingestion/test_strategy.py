@@ -1,28 +1,25 @@
-"""``strategy.py`` の整合性テスト (collection-acquisition-redesign Phase 1a')。"""
+"""``strategy.py`` の整合性テスト (collection-acquisition-redesign Phase 1 完結)。"""
 
 from __future__ import annotations
 
+from app.collection.ingestion.fetchers.hacker_news import HackerNewsFetcher
 from app.collection.ingestion.fetchers.venturebeat import VentureBeatFetcher
-from app.collection.ingestion.strategy import (
-    NEW_ROUTE_FETCHERS,
-    NEW_ROUTE_SOURCE_NAMES,
-)
+from app.collection.ingestion.strategy import FETCHERS
 
 
 class TestStrategyConsistency:
-    def test_source_names_match_fetcher_keys(self) -> None:
-        """NEW_ROUTE_SOURCE_NAMES と NEW_ROUTE_FETCHERS のキー集合は一致する。"""
-        assert NEW_ROUTE_SOURCE_NAMES == frozenset(NEW_ROUTE_FETCHERS.keys())
-
-    def test_source_names_is_frozenset(self) -> None:
-        assert isinstance(NEW_ROUTE_SOURCE_NAMES, frozenset)
+    def test_all_sources_registered(self) -> None:
+        """Phase 1 完結: RSS 19 + API 1 (Hacker News) = 20 ソース全部登録される。"""
+        assert len(FETCHERS) == 20
 
     def test_venturebeat_registered(self) -> None:
-        assert "VentureBeat" in NEW_ROUTE_SOURCE_NAMES
-        assert NEW_ROUTE_FETCHERS["VentureBeat"] is VentureBeatFetcher
+        assert FETCHERS["VentureBeat"] is VentureBeatFetcher
+
+    def test_hacker_news_registered(self) -> None:
+        assert FETCHERS["Hacker News"] is HackerNewsFetcher
 
     def test_factory_yields_fetcher_with_provides(self) -> None:
-        for name, factory in NEW_ROUTE_FETCHERS.items():
+        for name, factory in FETCHERS.items():
             instance = factory()
             assert hasattr(instance, "fetch"), f"{name} must implement fetch"
             assert hasattr(instance, "PROVIDES"), f"{name} must declare PROVIDES"

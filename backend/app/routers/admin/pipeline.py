@@ -28,13 +28,13 @@ async def fetch_news(
     source_ids 指定時はソースごとに個別タスクを dispatch、
     未指定時は dispatch_sources で全アクティブソースを dispatch。
     """
-    from app.collection.tasks import dispatch_sources, fetch_source_metadata
+    from app.collection.tasks import dispatch_sources, ingest_source
 
     source_ids = body.source_ids if body else None
 
     if source_ids:
         for sid in source_ids:
-            await fetch_source_metadata.kiq(sid)
+            await ingest_source.kiq(sid)
         return FetchResponse(
             message="Fetch tasks submitted",
             dispatched_count=len(source_ids),
