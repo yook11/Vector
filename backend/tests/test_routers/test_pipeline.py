@@ -28,9 +28,9 @@ class TestFetchNews:
         mock_task.kiq.assert_called_once()
 
     async def test_fetch_with_source_ids(self, admin_client: AsyncClient) -> None:
-        """source_ids 指定時はソースごとに fetch_source_metadata を dispatch する。"""
+        """source_ids 指定時はソースごとに ingest_source を dispatch する。"""
         with patch(
-            "app.collection.tasks.fetch_source_metadata",
+            "app.collection.tasks.ingest_source",
         ) as mock_task:
             mock_task.kiq = AsyncMock()
             resp = await admin_client.post(
