@@ -22,7 +22,7 @@ from typing import Any, Self
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
-from app.analysis.extraction.domain.entity import Entity
+from app.analysis.extraction.domain.entity import ExtractedEntity
 from app.utils.sanitize import strip_html_tags
 
 
@@ -34,7 +34,7 @@ class ExtractionResult(BaseModel):
 
     Invariants (validators で構造的に保証):
     - ``title_ja`` / ``summary_ja``: HTML タグ除去後に非空
-    - ``entities``: ``(name.casefold(), type)`` で重複なし
+    - ``entities``: ``(surface.match_key, raw_type.root)`` で重複なし
     - frozen: 生成後は不変
     """
 
@@ -42,7 +42,7 @@ class ExtractionResult(BaseModel):
 
     title_ja: str
     summary_ja: str
-    entities: list[Entity]
+    entities: list[ExtractedEntity]
 
     @field_validator("title_ja", "summary_ja", mode="before")
     @classmethod
@@ -62,7 +62,7 @@ class ExtractionResult(BaseModel):
     @model_validator(mode="after")
     def _dedupe_entities(self) -> Self:
         seen: set[tuple[str, str]] = set()
-        unique: list[Entity] = []
+        unique: list[ExtractedEntity] = []
         for e in self.entities:
             key = e.dedup_key()
             if key in seen:
@@ -85,14 +85,15 @@ class Extraction:
     Invariants:
     - id は DB が採番した正の整数
     - translated_title / summary / ai_model は非空 (DB CHECK 制約と一致)
-    - entities は ``(name.casefold(), type)`` で重複なし (``ExtractionResult``
-      通過時点で保証済みのはずだが、DB 復元時の安全網として __post_init__ で検査)
+    - entities は ``(surface.match_key, raw_type.root)`` で重複なし
+      (``ExtractionResult`` 通過時点で保証済みのはずだが、DB 復元時の安全網
+      として __post_init__ で検査)
     """
 
     id: int
     translated_title: str
     summary: str
-    entities: tuple[Entity, ...]
+    entities: tuple[ExtractedEntity, ...]
     ai_model: str
     extracted_at: datetime
 
