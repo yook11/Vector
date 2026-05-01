@@ -29,7 +29,7 @@ from taskiq.schedule_sources import LabelScheduleSource
 from taskiq_redis import RedisAsyncResultBackend, RedisStreamBroker
 
 from app.analysis.classifier.deepseek import DeepSeekClassifier
-from app.analysis.embedder.ruri import RuriEmbedder
+from app.analysis.embedder.gemini import GeminiEmbedder
 from app.analysis.extraction.extractor.gemini import GeminiExtractor
 from app.config import settings
 
@@ -147,7 +147,7 @@ async def _wire_analysis_adapters(state: TaskiqState) -> None:
 @broker_embedding.on_event(TaskiqEvents.WORKER_STARTUP)
 async def _wire_embedding_adapters(state: TaskiqState) -> None:
     """Stage E の embedder アダプターを worker 起動時に構築する。"""
-    state.embedder = RuriEmbedder(base_url=settings.embedding_base_url)
+    state.embedder = GeminiEmbedder()
     logger.info(
         "embedding_adapters_wired",
         embedder=type(state.embedder).__name__,
