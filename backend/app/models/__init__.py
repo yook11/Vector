@@ -1,6 +1,5 @@
 from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis
-from app.models.article_entity import ArticleEntity
 from app.models.article_extraction import ArticleExtraction
 from app.models.article_extraction_entity import ArticleExtractionEntity
 from app.models.article_rejection import ArticleRejection
@@ -15,7 +14,6 @@ from app.models.weekly_trends_snapshot import WeeklyTrendsSnapshot
 __all__ = [
     "Article",
     "ArticleAnalysis",
-    "ArticleEntity",
     "ArticleExtraction",
     "ArticleExtractionEntity",
     "ArticleRejection",

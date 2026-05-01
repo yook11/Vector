@@ -18,7 +18,6 @@ from app.main import app
 from app.models import (  # noqa: F401
     Article,
     ArticleAnalysis,
-    ArticleEntity,
     ArticleExtraction,
     ArticleExtractionEntity,
     ArticleRejection,
