@@ -48,16 +48,17 @@ async def techcrunch_source(db_session: AsyncSession) -> NewsSource:
 
 @pytest.fixture
 async def legacy_source(db_session: AsyncSession) -> NewsSource:
-    """新ルートに含まれないソースの代表 (JPCERT/CC)。
+    """新ルートに含まれないソースの代表 (The Register、Pattern R+H)。
 
-    PR-1c-D で FierceBiotech も新ルートに移ったため、旧 SourceFetchService
-    経路の例として残る Pattern H ソース (JPCERT/CC) を使う。
+    PR-1c-E で JPCERT/CC も新ルートに移ったため、旧 SourceFetchService
+    経路の例として残る Pattern R+H ソース (The Register) を使う。
+    PR-1d で本 fixture ごと削除予定。
     """
     source = NewsSource(
-        name="JPCERT/CC",
+        name="The Register",
         source_type=SourceType.RSS,
-        site_url="https://www.jpcert.or.jp",
-        endpoint_url="https://www.jpcert.or.jp/rss/jpcert.rdf",
+        site_url="https://www.theregister.com",
+        endpoint_url="https://www.theregister.com/headlines.atom",
         is_active=True,
     )
     db_session.add(source)
@@ -118,7 +119,7 @@ async def test_legacy_route_for_non_new_route_source(
     legacy_source: NewsSource,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """新ルート未登録 (FierceBiotech) は旧 SourceFetchService 経由で処理される。"""
+    """新ルート未登録 (The Register) は旧 SourceFetchService 経由で処理される。"""
     kiq_mock = AsyncMock()
     monkeypatch.setattr(ingest_source, "kiq", kiq_mock)
 
