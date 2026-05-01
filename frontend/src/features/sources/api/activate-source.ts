@@ -3,6 +3,7 @@
 import { updateTag } from "next/cache";
 import { serverFetch } from "@/lib/api/server-fetcher";
 import { requireAdminForAction } from "@/lib/auth/guards";
+import { cacheTags } from "@/lib/cache/tags";
 import { PositiveIdSchema } from "@/lib/validation/id";
 import type { NewsSourceDetail } from "@/types";
 import { activateSourceCore } from "./source-cores";
@@ -12,6 +13,6 @@ export async function activateSource(id: number): Promise<NewsSourceDetail> {
   await requireAdminForAction();
   const validId = PositiveIdSchema.parse(id);
   const updated = await activateSourceCore(validId, serverFetch);
-  updateTag("sources");
+  updateTag(cacheTags.sources);
   return updated;
 }

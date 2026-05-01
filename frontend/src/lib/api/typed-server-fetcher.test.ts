@@ -26,6 +26,7 @@ vi.mock("@/lib/auth/guards", () => ({
   getCurrentSession: mocks.getSession,
 }));
 
+import { cacheTags } from "@/lib/cache/tags";
 import { ApiError } from "./error";
 import {
   apiCall,
@@ -108,7 +109,7 @@ describe("typedServer.GET — response 型導出 + path-param", () => {
 
     const data = await apiCall(
       typedServer.GET("/api/v1/me/watchlist/ids", {
-        next: { tags: ["watchlist:me"] },
+        next: { tags: [cacheTags.watchlistMe] },
       }),
     );
 

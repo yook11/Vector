@@ -1,4 +1,5 @@
 import { serverFetch } from "@/lib/api/server-fetcher";
+import { cacheTags } from "@/lib/cache/tags";
 import type { NewsSourceDetailList } from "@/types";
 
 /**
@@ -11,13 +12,13 @@ import type { NewsSourceDetailList } from "@/types";
  * `serverFetch` 経由なので `'use cache'` 内では実行不可。
  *
  * 代替として legacy fetch options (`next: { revalidate, tags }`) を採用する。
- * tag "sources" は同 feature 内 4 Server Action (create / activate /
- * deactivate / delete) の `updateTag("sources")` で immediate 無効化される
- * ため、`revalidate: 7200` は updateTag が動かなかった場合の fallback
+ * `cacheTags.sources` は同 feature 内 4 Server Action (create / activate /
+ * deactivate / delete) の `updateTag(cacheTags.sources)` で immediate 無効化
+ * されるため、`revalidate: 7200` は updateTag が動かなかった場合の fallback
  * expiration として機能する。
  */
 export async function getSources(): Promise<NewsSourceDetailList> {
   return serverFetch<NewsSourceDetailList>("/admin/sources", {
-    next: { revalidate: 7200, tags: ["sources"] },
+    next: { revalidate: 7200, tags: [cacheTags.sources] },
   });
 }
