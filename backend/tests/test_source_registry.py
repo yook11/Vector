@@ -12,15 +12,12 @@ from app.models.news_source import NewsSource
 @pytest.mark.parametrize(
     "source_name",
     [
-        # TechCrunch は Phase 1b' で新 Protocol registry (strategy.py) に移行済み
+        # NOTE: TechCrunch / VentureBeat (Phase 1a'/1b') と
+        # The Quantum Insider / Krebs on Security / Spaceflight Now / NASA
+        # (Phase 1c-A1) は新 Protocol registry (strategy.py) に移行済み
         "FierceBiotech",
-        "The Quantum Insider",
         "IEEE Spectrum",
-        "NASA",
         "Microsoft Research",
-        "Krebs on Security",
-        # VentureBeat は Phase 1a' で新 Protocol registry (strategy.py) に移行済み
-        "Spaceflight Now",
         "ITmedia AI+",
         "JPCERT/CC",
         "Engadget",
