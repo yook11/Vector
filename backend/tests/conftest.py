@@ -20,6 +20,7 @@ from app.models import (  # noqa: F401
     ArticleAnalysis,
     ArticleEntity,
     ArticleExtraction,
+    ArticleExtractionEntity,
     ArticleRejection,
     Category,
     DiscoveredArticle,
@@ -129,7 +130,7 @@ async def _ensure_test_database_once() -> None:
 
 
 @pytest.fixture(autouse=True)
-async def setup_db(request: pytest.FixtureRequest) -> AsyncGenerator[None, None]:
+async def setup_db(request: pytest.FixtureRequest) -> AsyncGenerator[None]:
     """integration テストのみ、各テスト前にテーブルを作成し終了後に破棄する。
 
     unit テスト (pytest_collection_modifyitems で自動分類) は DB を触らないため
@@ -166,17 +167,17 @@ def session_factory() -> async_sessionmaker[AsyncSession]:
 
 
 @pytest.fixture
-async def db_session() -> AsyncGenerator[AsyncSession, None]:
+async def db_session() -> AsyncGenerator[AsyncSession]:
     """テスト用 DB セッションを提供する。"""
     async with SQLModelAsyncSession(engine_test, expire_on_commit=False) as session:
         yield session
 
 
 @pytest.fixture
-async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
+async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient]:
     """DI でセッションを差し替えた httpx AsyncClient を提供する。"""
 
-    async def override_session() -> AsyncGenerator[AsyncSession, None]:
+    async def override_session() -> AsyncGenerator[AsyncSession]:
         # db_session には autobegin されたトランザクションが残ることがある
         # (seed の refresh など)。本番の get_session と同様に新しい
         # トランザクションを開始するため、ここで一度 commit しておく。
@@ -203,10 +204,10 @@ def auth_headers() -> dict[str, str]:
 @pytest.fixture
 async def authed_client(
     db_session: AsyncSession,
-) -> AsyncGenerator[AsyncClient, None]:
+) -> AsyncGenerator[AsyncClient]:
     """BFF プロキシ認証ヘッダーを付与済みの httpx AsyncClient を提供する。"""
 
-    async def override_session() -> AsyncGenerator[AsyncSession, None]:
+    async def override_session() -> AsyncGenerator[AsyncSession]:
         # db_session には autobegin されたトランザクションが残ることがある
         # (seed の refresh など)。本番の get_session と同様に新しい
         # トランザクションを開始するため、ここで一度 commit しておく。
@@ -228,10 +229,10 @@ async def authed_client(
 @pytest.fixture
 async def admin_client(
     db_session: AsyncSession,
-) -> AsyncGenerator[AsyncClient, None]:
+) -> AsyncGenerator[AsyncClient]:
     """管理者用 BFF プロキシ認証ヘッダーを付与済みの httpx AsyncClient を提供する。"""
 
-    async def override_session() -> AsyncGenerator[AsyncSession, None]:
+    async def override_session() -> AsyncGenerator[AsyncSession]:
         # db_session には autobegin されたトランザクションが残ることがある
         # (seed の refresh など)。本番の get_session と同様に新しい
         # トランザクションを開始するため、ここで一度 commit しておく。

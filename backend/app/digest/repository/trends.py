@@ -1,12 +1,18 @@
 """週次トレンド集計の Repository。
 
 責務:
-- ``ArticleAnalysis`` / ``ArticleEntity`` を JOIN して 1 カテゴリ × 1 週分の
-  hot entity / hot topic / new entity を集計し、digest BC の VO で返す。
+- ``ArticleAnalysis`` / ``ArticleExtractionEntity`` を JOIN して 1 カテゴリ × 1
+  週分の hot entity / hot topic / new entity を集計し、digest BC の VO で返す。
 - 期間境界 ``[current_start, current_end)`` (半開区間) で絞り込む。
 - entity は ``COUNT(DISTINCT extraction_id)`` で同一 extraction 内重複を排除する。
-- 名寄せは SQL 上の ``lower(name)`` で行い、display 名は ``MIN(name)`` を採用する
-  (casing は AI 抽出の文脈情報なので保持: feedback_ai_extraction_casing.md)。
+- 名寄せは SQL 上の ``lower(surface)`` / ``lower(raw_type)`` で行い、display
+  名は ``MIN(surface)`` を採用する (casing は AI 抽出の文脈情報なので DB には
+  そのまま保存される: feedback_ai_extraction_casing.md)。Phase 1B α-1 では旧
+  ``article_entities`` (lower 正規化済み ``EntityType``) から
+  ``article_extraction_entities`` (casing 保持の ``EntityRawType``) に
+  schema 切替したが、α 期は集計時に lower 化することで digest 側の
+  ``EntityType`` 不変条件 / 既存 UI 表示を維持する (β で canonical_type
+  ベース集計に切り替わる際に casing 保持が活きる)。
 
 並び順は Python 側で hotness_score 降順に sort する (DB 依存を避ける)。
 """
@@ -22,7 +28,7 @@ from sqlmodel import select
 from app.digest.config import MIN_CURRENT, MIN_PREVIOUS, NEW_BURST_THRESHOLD
 from app.digest.domain.trend import EntityTrend, NewEntity, TopicTrend
 from app.models.article_analysis import ArticleAnalysis
-from app.models.article_entity import ArticleEntity
+from app.models.article_extraction_entity import ArticleExtractionEntity
 
 
 class TrendsRepository:
@@ -227,31 +233,34 @@ class TrendsRepository:
     ):
         """1 期間分の entity 集計 subquery。
 
-        各 (lower(name), type) に対して:
-        - ``match_key``: ``lower(name)`` (JOIN キー)
-        - ``display_name``: ``MIN(name)`` (display 用の casing 保持代表)
-        - ``cnt``: ``COUNT(DISTINCT article_extraction_id)`` (同 extraction 内重複排除)
+        各 (lower(surface), lower(raw_type)) に対して:
+        - ``match_key``: ``lower(surface)`` (JOIN キー)
+        - ``type``: ``lower(raw_type)`` (digest 側 ``EntityType`` の不変条件と
+          整合させるため α 期は lower 化、β で canonical_type に切替)
+        - ``display_name``: ``MIN(surface)`` (display 用の casing 保持代表)
+        - ``cnt``: ``COUNT(DISTINCT extraction_id)`` (同 extraction 内重複排除)
         """
-        match_key = func.lower(ArticleEntity.name)
+        match_key = func.lower(ArticleExtractionEntity.surface)
+        type_key = func.lower(ArticleExtractionEntity.raw_type)
         return (
             select(
                 match_key.label("match_key"),
-                ArticleEntity.type.label("type"),
-                func.min(ArticleEntity.name).label("display_name"),
-                func.count(func.distinct(ArticleEntity.article_extraction_id)).label(
+                type_key.label("type"),
+                func.min(ArticleExtractionEntity.surface).label("display_name"),
+                func.count(func.distinct(ArticleExtractionEntity.extraction_id)).label(
                     "cnt"
                 ),
             )
             .join(
                 ArticleAnalysis,
-                ArticleAnalysis.extraction_id == ArticleEntity.article_extraction_id,
+                ArticleAnalysis.extraction_id == ArticleExtractionEntity.extraction_id,
             )
             .where(
                 ArticleAnalysis.category_id == category_id,
                 ArticleAnalysis.analyzed_at >= window_start,
                 ArticleAnalysis.analyzed_at < window_end,
             )
-            .group_by(match_key, ArticleEntity.type)
+            .group_by(match_key, type_key)
             .subquery(label)
         )
 

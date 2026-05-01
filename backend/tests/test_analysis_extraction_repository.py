@@ -1,7 +1,11 @@
-"""analysis BC の ExtractionRepository 統合テスト (Phase 3)。
+"""analysis BC の ExtractionRepository 統合テスト (Phase 1B α-1)。
 
 `exists_for_article` / `save` (`Extraction | None` 戻り値) /
 race 敗北時の orphan エンティティ非生成 / `find_by_article_id` 復元を検証する。
+
+Phase 1B α-1 で旧 ``article_entities`` から ``article_extraction_entities`` に
+clean break。テスト対象も新 ORM (``ArticleExtractionEntity``) と新 schema
+(``ExtractedEntity {surface, raw_type}``) に追従。
 """
 
 from __future__ import annotations
@@ -13,12 +17,15 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
-from app.analysis.domain.value_objects.entity import EntityName, EntityType
-from app.analysis.extraction.domain import Entity, ExtractionResult
+from app.analysis.domain.value_objects.entity import (
+    EntityRawType,
+    EntitySurface,
+)
+from app.analysis.extraction.domain import ExtractedEntity, ExtractionResult
 from app.analysis.extraction.repository import ExtractionRepository
 from app.models.article import Article
-from app.models.article_entity import ArticleEntity
 from app.models.article_extraction import ArticleExtraction
+from app.models.article_extraction_entity import ArticleExtractionEntity
 from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
 
@@ -34,7 +41,8 @@ def _result(
         title_ja=title_ja,
         summary_ja=summary_ja,
         entities=[
-            Entity(name=EntityName(name), type=EntityType(t)) for name, t in entities
+            ExtractedEntity(surface=EntitySurface(s), raw_type=EntityRawType(t))
+            for s, t in entities
         ],
     )
 
@@ -135,7 +143,7 @@ async def test_save_returns_none_on_duplicate_in_same_session(
 async def test_save_does_not_create_orphan_entities_on_race_loss(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
-    """race 敗北 (None 戻り) 時に子テーブル ArticleEntity が増えないこと。"""
+    """race 敗北 (None 戻り) 時に子テーブル ArticleExtractionEntity が増えないこと。"""
     article = await _make_article(
         db_session, sample_source, "https://example.com/orphan"
     )
@@ -148,7 +156,7 @@ async def test_save_does_not_create_orphan_entities_on_race_loss(
     await db_session.commit()
     assert first is not None
 
-    before = (await db_session.execute(select(ArticleEntity))).scalars().all()
+    before = (await db_session.execute(select(ArticleExtractionEntity))).scalars().all()
     before_count = len(list(before))
 
     second = await repo.save(
@@ -159,7 +167,7 @@ async def test_save_does_not_create_orphan_entities_on_race_loss(
     await db_session.commit()
     assert second is None
 
-    after = (await db_session.execute(select(ArticleEntity))).scalars().all()
+    after = (await db_session.execute(select(ArticleExtractionEntity))).scalars().all()
     assert len(list(after)) == before_count
 
 
@@ -182,8 +190,8 @@ async def test_save_persists_entities_when_parent_succeeds(
     rows = (
         (
             await db_session.execute(
-                select(ArticleEntity).where(
-                    ArticleEntity.article_extraction_id == saved.id,
+                select(ArticleExtractionEntity).where(
+                    ArticleExtractionEntity.extraction_id == saved.id,
                 )
             )
         )
@@ -229,7 +237,66 @@ async def test_find_by_article_id_round_trips_entity(
     assert found is not None
     assert found.id == saved.id
     assert found.translated_title == saved.translated_title
-    assert tuple(e.name.root for e in found.entities) == ("X",)
+    assert tuple(e.surface.root for e in found.entities) == ("X",)
+
+
+# ---------------------------------------------------------------------------
+# update_idempotent (re-extraction CLI 用)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_update_idempotent_replaces_entities_and_keeps_parent(
+    db_session: AsyncSession, sample_source: NewsSource
+) -> None:
+    """parent ``ArticleExtraction`` は同じ id のまま、child のみ差し替わる。
+
+    parent を DELETE しないことで ``article_analyses`` /
+    ``article_rejections`` / ``article_embeddings`` / ``watchlist_entries``
+    への CASCADE 連鎖が起きないことを構造的に保証する。
+    """
+    article = await _make_article(
+        db_session, sample_source, "https://example.com/update-idempotent"
+    )
+    repo = ExtractionRepository(db_session)
+    first = await repo.save(
+        _result(entities=[("OldOne", "company"), ("OldTwo", "person")]),
+        article_id=article.id,
+        ai_model="old-model",
+    )
+    await db_session.commit()
+    assert first is not None
+    parent_id = first.id
+
+    updated = await repo.update_idempotent(
+        _result(
+            title_ja="新タイトル",
+            summary_ja="新要約",
+            entities=[("NewSurface", "Company")],
+        ),
+        article_id=article.id,
+        ai_model="new-model",
+    )
+    await db_session.commit()
+
+    assert updated.id == parent_id  # parent UPDATE only
+    assert updated.translated_title == "新タイトル"
+    assert updated.ai_model == "new-model"
+
+    rows = (
+        (
+            await db_session.execute(
+                select(ArticleExtractionEntity).where(
+                    ArticleExtractionEntity.extraction_id == parent_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [r.surface.root for r in rows] == ["NewSurface"]
+    assert [r.raw_type.root for r in rows] == ["Company"]
+    assert [r.position for r in rows] == [0]
 
 
 # ---------------------------------------------------------------------------

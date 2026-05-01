@@ -25,7 +25,12 @@ from app.analysis.classifier.schema import (
     ValidCategory,
 )
 from app.analysis.classifier.schema_tool import CLASSIFICATION_TOOL_SCHEMA
-from app.analysis.domain.value_objects.entity import EntityName, EntityType
+from app.analysis.domain.value_objects.entity import (
+    EntityName,
+    EntityRawType,
+    EntitySurface,
+    EntityType,
+)
 from app.analysis.domain.value_objects.topic import TopicName
 from app.analysis.errors import (
     ConfigurationError,
@@ -36,7 +41,7 @@ from app.analysis.errors import (
     RateLimitError,
     UnclassifiedError,
 )
-from app.analysis.extraction.domain import Entity, ExtractionResult
+from app.analysis.extraction.domain import ExtractedEntity, ExtractionResult
 from app.analysis.extraction.domain.ready import ReadyForExtraction
 from app.analysis.extraction.extractor.base import BaseExtractor
 from app.analysis.extraction.extractor.gemini import GeminiExtractor
@@ -47,8 +52,8 @@ from app.analysis.extraction.service import (
 )
 from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis
-from app.models.article_entity import ArticleEntity
 from app.models.article_extraction import ArticleExtraction
+from app.models.article_extraction_entity import ArticleExtractionEntity
 from app.models.article_rejection import ArticleRejection
 from app.models.category import Category
 from app.models.discovered_article import DiscoveredArticle
@@ -71,7 +76,10 @@ def _make_extraction_result(
     return ExtractionResult(
         title_ja=title_ja,
         summary_ja=summary_ja,
-        entities=[Entity(name=EntityName(n), type=EntityType(t)) for n, t in entities],
+        entities=[
+            ExtractedEntity(surface=EntitySurface(s), raw_type=EntityRawType(t))
+            for s, t in entities
+        ],
     )
 
 
@@ -185,42 +193,71 @@ def test_base_classifier_rejects_subclass_without_classvar() -> None:
 # --- B. ExtractionResult domain tests ---
 
 
-def test_extraction_result_preserves_entity_name_case() -> None:
+def test_extraction_result_preserves_surface_and_raw_type_case() -> None:
+    """Phase 1B α-1: surface も raw_type も casing 保持される。"""
     resp = ExtractionResult(
         title_ja="t",
         summary_ja="s",
         entities=[
-            Entity(name=EntityName("NVIDIA"), type=EntityType("Company")),
+            ExtractedEntity(
+                surface=EntitySurface("NVIDIA"), raw_type=EntityRawType("Company")
+            ),
         ],
     )
-    assert resp.entities[0].name.root == "NVIDIA"
-    assert resp.entities[0].type.root == "company"
+    assert resp.entities[0].surface.root == "NVIDIA"
+    assert resp.entities[0].raw_type.root == "Company"
 
 
-def test_extraction_result_deduplicates_entities_case_insensitive() -> None:
+def test_extraction_result_deduplicates_entities_case_insensitive_on_surface() -> None:
+    """surface 側は match_key (lower) で dedup される (raw_type 揃えれば 1 件)。"""
     resp = ExtractionResult(
         title_ja="t",
         summary_ja="s",
         entities=[
-            Entity(name=EntityName("TSMC"), type=EntityType("company")),
-            Entity(name=EntityName("tsmc"), type=EntityType("COMPANY")),
+            ExtractedEntity(
+                surface=EntitySurface("TSMC"), raw_type=EntityRawType("company")
+            ),
+            ExtractedEntity(
+                surface=EntitySurface("tsmc"), raw_type=EntityRawType("company")
+            ),
         ],
     )
     assert len(resp.entities) == 1
-    assert resp.entities[0].name.root == "TSMC"
+    assert resp.entities[0].surface.root == "TSMC"
 
 
-def test_extraction_result_accepts_any_entity_type() -> None:
+def test_extraction_result_treats_different_raw_type_casing_as_distinct() -> None:
+    """raw_type の casing 違いは別エンティティとして残す (β canonical_type と独立)。"""
     resp = ExtractionResult(
         title_ja="t",
         summary_ja="s",
         entities=[
-            Entity(name=EntityName("MIT"), type=EntityType("company")),
-            Entity(name=EntityName("Biden"), type=EntityType("person")),
+            ExtractedEntity(
+                surface=EntitySurface("TSMC"), raw_type=EntityRawType("company")
+            ),
+            ExtractedEntity(
+                surface=EntitySurface("TSMC"), raw_type=EntityRawType("Company")
+            ),
         ],
     )
     assert len(resp.entities) == 2
-    assert resp.entities[1].type.root == "person"
+
+
+def test_extraction_result_accepts_any_raw_type() -> None:
+    resp = ExtractionResult(
+        title_ja="t",
+        summary_ja="s",
+        entities=[
+            ExtractedEntity(
+                surface=EntitySurface("MIT"), raw_type=EntityRawType("company")
+            ),
+            ExtractedEntity(
+                surface=EntitySurface("Biden"), raw_type=EntityRawType("person")
+            ),
+        ],
+    )
+    assert len(resp.entities) == 2
+    assert resp.entities[1].raw_type.root == "person"
 
 
 def test_extraction_result_sanitizes_html_in_title_and_summary() -> None:
@@ -663,17 +700,25 @@ def test_extraction_rejects_duplicated_entities() -> None:
             translated_title="t",
             summary="s",
             entities=(
-                Entity(name=EntityName("MIT"), type=EntityType("company")),
-                Entity(name=EntityName("mit"), type=EntityType("company")),
+                ExtractedEntity(
+                    surface=EntitySurface("MIT"), raw_type=EntityRawType("company")
+                ),
+                ExtractedEntity(
+                    surface=EntitySurface("mit"), raw_type=EntityRawType("company")
+                ),
             ),
             ai_model="m",
             extracted_at=datetime.now(UTC),
         )
 
 
-def test_entity_dedup_key_is_case_insensitive_on_name() -> None:
-    a = Entity(name=EntityName("NVIDIA"), type=EntityType("company"))
-    b = Entity(name=EntityName("nvidia"), type=EntityType("company"))
+def test_extracted_entity_dedup_key_is_case_insensitive_on_surface() -> None:
+    a = ExtractedEntity(
+        surface=EntitySurface("NVIDIA"), raw_type=EntityRawType("company")
+    )
+    b = ExtractedEntity(
+        surface=EntitySurface("nvidia"), raw_type=EntityRawType("company")
+    )
     assert a.dedup_key() == b.dedup_key()
 
 
@@ -743,8 +788,8 @@ async def test_extraction_creates_extraction_and_entities(
     entities = list(
         (
             await db_session.execute(
-                select(ArticleEntity).where(
-                    ArticleEntity.article_extraction_id == persisted.id,
+                select(ArticleExtractionEntity).where(
+                    ArticleExtractionEntity.extraction_id == persisted.id,
                 )
             )
         )
@@ -845,8 +890,11 @@ async def test_classification_persists_topic_and_category(
         title="Quantum Breakthrough",
         translated_title="量子ブレイクスルー",
     )
-    entity = ArticleEntity(
-        article_extraction_id=extraction.id, name="MIT", type="company"
+    entity = ArticleExtractionEntity(
+        extraction_id=extraction.id,
+        surface="MIT",
+        raw_type="company",
+        position=0,
     )
     db_session.add(entity)
     await db_session.commit()
