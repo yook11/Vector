@@ -4,9 +4,8 @@ import { afterAll, afterEach, beforeAll } from "vitest";
 import { server } from "./src/test/msw/server";
 
 // msw lifecycle: 未 handler の request は `bypass` で透過させ、既存の
-// vi.mock + 相対 path mock を使う test (PR-3 / PR-4) に影響を与えない。
-// 各 test 内で `server.use(http.<method>(url, ...))` した endpoint のみ
-// intercept される。
+// vi.mock + 相対 path mock を使う test に影響を与えない。各 test 内で
+// `server.use(http.<method>(url, ...))` した endpoint のみ intercept される。
 beforeAll(() => server.listen({ onUnhandledRequest: "bypass" }));
 afterEach(() => server.resetHandlers());
 afterAll(() => server.close());

@@ -3,7 +3,7 @@ import { EmptyState } from "@/components/feedback/EmptyState";
 import { SectionLabel } from "@/components/feedback/SectionLabel";
 import { PageContainer } from "@/components/layout/PageContainer";
 import {
-  getWeeklyTrends,
+  getWeeklyTrendsViewModel,
   HotEntityList,
   HotTopicList,
   NewEntityList,
@@ -15,7 +15,7 @@ export const metadata: Metadata = {
 };
 
 export default async function WeeklyTrendsPage() {
-  const data = await getWeeklyTrends();
+  const data = await getWeeklyTrendsViewModel();
 
   if (data.state === "empty") {
     return (
