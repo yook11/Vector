@@ -15,18 +15,15 @@ from app.models.news_source import NewsSource
         # NOTE: VentureBeat / TechCrunch (Phase 1a'/1b') と
         # The Quantum Insider / Krebs on Security / Spaceflight Now / NASA
         # (Phase 1c-A1) と IEEE Spectrum / Microsoft Research (Phase 1c-A2)
-        # は新 Protocol registry (strategy.py) に移行済み (Pattern R 完了)
+        # と ITmedia AI+ / ITmedia NEWS / MONOist / EE Times Japan / Engadget
+        # (Phase 1c-C) は新 Protocol registry (strategy.py) に移行済み
+        # (Pattern R 8 ソース + Pattern H 5 ソース完了)
         "FierceBiotech",
-        "ITmedia AI+",
         "JPCERT/CC",
-        "Engadget",
         "CleanTechnica",
         "Electrek",
         "SpaceNews",
         "The Register",
-        "MONOist",
-        "EE Times Japan",
-        "ITmedia NEWS",
         "Hacker News",
     ],
 )
