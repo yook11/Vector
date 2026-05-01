@@ -12,17 +12,11 @@ from app.models.news_source import NewsSource
 @pytest.mark.parametrize(
     "source_name",
     [
-        # NOTE: VentureBeat / TechCrunch (Phase 1a'/1b') と
-        # The Quantum Insider / Krebs on Security / Spaceflight Now / NASA
-        # (Phase 1c-A1) と IEEE Spectrum / Microsoft Research (Phase 1c-A2)
-        # と ITmedia AI+ / ITmedia NEWS / MONOist / EE Times Japan / Engadget
-        # (Phase 1c-C) と FierceBiotech (Phase 1c-D) と JPCERT/CC
-        # (Phase 1c-E) は新 Protocol registry (strategy.py) に移行済み
-        # (Pattern R 全 8 ソース + Pattern H 全 8 ソース完了)
-        "CleanTechnica",
-        "Electrek",
-        "SpaceNews",
-        "The Register",
+        # NOTE: Phase 1d 完了時点で RSS 全 18 ソース (Pattern R 8/8 +
+        # Pattern H 8/8 + Pattern R+H 4/4) は新 Protocol registry
+        # (``strategy.NEW_ROUTE_FETCHERS``) に移行済み。本 registry には
+        # API Pattern の Hacker News 1 ソースのみが残る。PR-1e (HN を
+        # 新 Protocol 化) で本テストごと削除予定。
         "Hacker News",
     ],
 )
