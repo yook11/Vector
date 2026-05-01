@@ -48,16 +48,16 @@ async def techcrunch_source(db_session: AsyncSession) -> NewsSource:
 
 @pytest.fixture
 async def legacy_source(db_session: AsyncSession) -> NewsSource:
-    """新ルートに含まれないソースの代表 (FierceBiotech)。
+    """新ルートに含まれないソースの代表 (JPCERT/CC)。
 
-    PR-1b' で TechCrunch も新ルートに移ったため、旧 SourceFetchService 経路
-    の例として別の Pattern H ソースを使う。
+    PR-1c-D で FierceBiotech も新ルートに移ったため、旧 SourceFetchService
+    経路の例として残る Pattern H ソース (JPCERT/CC) を使う。
     """
     source = NewsSource(
-        name="FierceBiotech",
+        name="JPCERT/CC",
         source_type=SourceType.RSS,
-        site_url="https://www.fiercebiotech.com",
-        endpoint_url="https://www.fiercebiotech.com/rss/xml",
+        site_url="https://www.jpcert.or.jp",
+        endpoint_url="https://www.jpcert.or.jp/rss/jpcert.rdf",
         is_active=True,
     )
     db_session.add(source)

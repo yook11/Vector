@@ -16,9 +16,8 @@ from app.models.news_source import NewsSource
         # The Quantum Insider / Krebs on Security / Spaceflight Now / NASA
         # (Phase 1c-A1) と IEEE Spectrum / Microsoft Research (Phase 1c-A2)
         # と ITmedia AI+ / ITmedia NEWS / MONOist / EE Times Japan / Engadget
-        # (Phase 1c-C) は新 Protocol registry (strategy.py) に移行済み
-        # (Pattern R 8 ソース + Pattern H 5 ソース完了)
-        "FierceBiotech",
+        # (Phase 1c-C) と FierceBiotech (Phase 1c-D) は新 Protocol registry
+        # (strategy.py) に移行済み (Pattern R 8 ソース + Pattern H 6 ソース完了)
         "JPCERT/CC",
         "CleanTechnica",
         "Electrek",

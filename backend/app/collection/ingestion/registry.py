@@ -38,9 +38,6 @@ def _build_registry() -> dict[SourceName, SourceFetcher]:
         CleanTechnicaFetcher,
     )
     from app.collection.ingestion.fetchers.rss.electrek import ElectrekFetcher
-    from app.collection.ingestion.fetchers.rss.fierce_biotech import (
-        FierceBiotechFetcher,
-    )
     from app.collection.ingestion.fetchers.rss.jpcert import JPCERTFetcher
     from app.collection.ingestion.fetchers.rss.spacenews import SpaceNewsFetcher
     from app.collection.ingestion.fetchers.rss.the_register import TheRegisterFetcher
@@ -50,11 +47,11 @@ def _build_registry() -> dict[SourceName, SourceFetcher]:
         # NOTE: VentureBeat / TechCrunch / The Quantum Insider / Krebs on
         # Security / Spaceflight Now / NASA / IEEE Spectrum / Microsoft
         # Research / ITmedia AI+ / ITmedia NEWS / MONOist / EE Times Japan /
-        # Engadget は collection-acquisition-redesign Phase 1a'/1b'/1c-A1/
-        # 1c-A2/1c-C で新 Protocol Fetcher に移行済み (Pattern R 全 8 ソース
-        # + Pattern H 5 ソース完了)。Strangler 移行期間中は
-        # ``strategy.NEW_ROUTE_FETCHERS`` 経由で取り込まれる。
-        SourceName("FierceBiotech"): FierceBiotechFetcher(),
+        # Engadget / FierceBiotech は collection-acquisition-redesign
+        # Phase 1a'/1b'/1c-A1/1c-A2/1c-C/1c-D で新 Protocol Fetcher に
+        # 移行済み (Pattern R 全 8 ソース + Pattern H 6 ソース完了)。
+        # Strangler 移行期間中は ``strategy.NEW_ROUTE_FETCHERS`` 経由で
+        # 取り込まれる。
         SourceName("JPCERT/CC"): JPCERTFetcher(),
         SourceName("CleanTechnica"): CleanTechnicaFetcher(),
         SourceName("Electrek"): ElectrekFetcher(),
