@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+	xmlns:content="http://purl.org/rss/1.0/modules/content/"
+	xmlns:wfw="http://wellformedweb.org/CommentAPI/"
+	xmlns:dc="http://purl.org/dc/elements/1.1/"
+	xmlns:atom="http://www.w3.org/2005/Atom"
+	xmlns:sy="http://purl.org/rss/1.0/modules/syndication/"
+	xmlns:slash="http://purl.org/rss/1.0/modules/slash/"
+	xmlns:media="http://search.yahoo.com/mrss/">
+<channel>
+	<title>IEEE Spectrum</title>
+	<atom:link href="https://spectrum.ieee.org/feeds/feed.rss" rel="self" type="application/rss+xml" />
+	<link>https://spectrum.ieee.org/</link>
+	<description>The latest technology news and analysis from IEEE Spectrum</description>
+	<lastBuildDate>Wed, 30 Apr 2026 22:00:00 +0000</lastBuildDate>
+	<language>en-US</language>
+	<sy:updatePeriod>hourly</sy:updatePeriod>
+	<sy:updateFrequency>1</sy:updateFrequency>
+	<item>
+		<title>New silicon photonics chip shows promise for analog AI accelerators</title>
+		<link>https://spectrum.ieee.org/silicon-photonics-analog-ai/</link>
+		<dc:creator><![CDATA[Olivia Hsu]]></dc:creator>
+		<dc:creator><![CDATA[Kalhan Koul]]></dc:creator>
+		<pubDate>Wed, 30 Apr 2026 17:00:00 +0000</pubDate>
+		<category><![CDATA[Computing]]></category>
+		<category><![CDATA[Photonics]]></category>
+		<category><![CDATA[AI]]></category>
+		<category><![CDATA[Hardware]]></category>
+		<guid isPermaLink="false">https://spectrum.ieee.org/?p=11111</guid>
+		<description><![CDATA[<p>A research collaboration between universities and industry has demonstrated a silicon photonics chip that performs analog vector-matrix multiplications at low power, showing promise for next-generation AI accelerators. The team published their results this week in a peer-reviewed journal, claiming throughput numbers competitive with commercial digital ASICs at a fraction of the energy cost.</p><p>The chip integrates microring resonators in a wavelength-multiplexed configuration, allowing parallel multiply-accumulate operations across multiple wavelengths simultaneously. The researchers say the approach scales naturally with channel count, though calibration overhead remains a concern for production deployment.</p><p>Industry observers note that several startups are already targeting similar architectures, and the academic result helps establish performance baselines. The team's preprint is available on arXiv pending the peer-reviewed publication.</p>]]></description>
+		<content:encoded><![CDATA[]]></content:encoded>
+		<media:content url="https://spectrum.ieee.org/wp-content/uploads/2026/04/photonics-cover.jpg" medium="image" type="image/jpeg" />
+	</item>
+	<item>
+		<title>Short post</title>
+		<link>https://spectrum.ieee.org/short-post/</link>
+		<dc:creator><![CDATA[John Doe]]></dc:creator>
+		<pubDate>Wed, 30 Apr 2026 16:00:00 +0000</pubDate>
+		<guid isPermaLink="false">https://spectrum.ieee.org/?p=11112</guid>
+		<description><![CDATA[<p>Too short.</p>]]></description>
+		<content:encoded><![CDATA[]]></content:encoded>
+	</item>
+</channel>
+</rss>

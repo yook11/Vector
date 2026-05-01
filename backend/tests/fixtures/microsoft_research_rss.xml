@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+	xmlns:content="http://purl.org/rss/1.0/modules/content/"
+	xmlns:wfw="http://wellformedweb.org/CommentAPI/"
+	xmlns:dc="http://purl.org/dc/elements/1.1/"
+	xmlns:atom="http://www.w3.org/2005/Atom"
+	xmlns:sy="http://purl.org/rss/1.0/modules/syndication/"
+	xmlns:slash="http://purl.org/rss/1.0/modules/slash/">
+<channel>
+	<title>Microsoft Research</title>
+	<atom:link href="https://www.microsoft.com/en-us/research/feed/" rel="self" type="application/rss+xml" />
+	<link>https://www.microsoft.com/en-us/research/</link>
+	<description>Microsoft Research blog feed</description>
+	<lastBuildDate>Wed, 30 Apr 2026 22:00:00 +0000</lastBuildDate>
+	<language>en-US</language>
+	<sy:updatePeriod>hourly</sy:updatePeriod>
+	<sy:updateFrequency>1</sy:updateFrequency>
+	<item>
+		<title>Scaling graph foundation models with pretraining on heterogeneous structures</title>
+		<link>https://www.microsoft.com/en-us/research/blog/graph-foundation-models/</link>
+		<dc:creator><![CDATA[Sidharth Sinha, Anson Bastos, Xuchao Zhang]]></dc:creator>
+		<pubDate>Wed, 30 Apr 2026 17:00:00 +0000</pubDate>
+		<category><![CDATA[Research Blog]]></category>
+		<guid isPermaLink="false">https://www.microsoft.com/en-us/research/?p=22222</guid>
+		<description><![CDATA[<p>Researchers at Microsoft Research propose a new framework for pretraining graph foundation models on heterogeneous structures.</p>]]></description>
+		<content:encoded><![CDATA[<p>Researchers at Microsoft Research propose a new framework for pretraining graph foundation models on heterogeneous structures, demonstrating significant gains across diverse downstream tasks. The framework, described in a forthcoming paper, leverages a unified token vocabulary that bridges molecular graphs, citation networks, and knowledge graphs.</p><p>The team trained on a curated corpus comprising several billion edges and evaluated transfer performance on link prediction, node classification, and graph-level regression benchmarks. Results indicate consistent improvements over single-domain baselines, with the largest gains observed on small-data downstream tasks where pretraining matters most.</p><p>The paper, currently under peer review, will be released alongside open-source code and pretrained checkpoints upon acceptance. Future work will investigate scaling laws specific to graph data and the interaction between graph topology and token vocabulary size.</p><a href="https://www.microsoft.com/en-us/research/blog/graph-foundation-models/" target="_blank" rel="noopener">Opens in a new tab</a>The post Scaling graph foundation models with pretraining on heterogeneous structures appeared first on Microsoft Research.]]></content:encoded>
+	</item>
+	<item>
+		<title>Short post</title>
+		<link>https://www.microsoft.com/en-us/research/blog/short-post/</link>
+		<dc:creator><![CDATA[Brenda Potts]]></dc:creator>
+		<pubDate>Wed, 30 Apr 2026 16:00:00 +0000</pubDate>
+		<guid isPermaLink="false">https://www.microsoft.com/en-us/research/?p=22223</guid>
+		<description><![CDATA[<p>Too short.</p>]]></description>
+		<content:encoded><![CDATA[<p>tiny</p><a href="#">Opens in a new tab</a>The post Short post appeared first on Microsoft Research.]]></content:encoded>
+	</item>
+</channel>
+</rss>
