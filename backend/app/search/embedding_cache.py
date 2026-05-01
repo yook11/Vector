@@ -1,11 +1,16 @@
 """検索クエリ embedding の非同期 Redis キャッシュ。
 
 クエリテキストの SHA256 をキーとして embedding ベクトルをキャッシュし、
-繰り返し検索時に TEI サーバーへの呼び出しをスキップする。呼び出し側は事前に
-正規化済みのテキストを渡す想定 (``ArticleListParams._normalize_q`` 参照)
+繰り返し検索時に embedding provider への呼び出しをスキップする。呼び出し側は
+事前に正規化済みのテキストを渡す想定 (``ArticleListParams._normalize_q`` 参照)
 で、軽微なバリエーションは同じキーに集約される。Fire-and-forget で安全:
 Redis 障害時は ``get`` が None を返し ``set`` は黙って no-op となり、
 呼び出し側は新規 embedding 生成にフォールバックする。
+
+ベクトルは provider ごとに別空間。同時に複数 provider のベクトルが
+キャッシュ内で共存することはあり得ない (=共存させてはバグ) ため、key には
+model 名を含めない。provider 切替時は本キャッシュを flush する運用手順で
+不変条件 (現行 provider のベクトルしか入っていない) を担保する。
 """
 
 from __future__ import annotations
@@ -19,7 +24,7 @@ from app.redis import get_redis
 
 logger = structlog.get_logger(__name__)
 
-_KEY_PREFIX = "embed:query:ruri-v3-310m"
+_KEY_PREFIX = "embed:query"
 _TTL_SECONDS = 7 * 24 * 3600  # 7 日 — 同一入力の embedding は決定的
 
 
