@@ -2,7 +2,7 @@
 
 repository / Service テスト向けの ``seed_analysis`` ファクトリを提供する。
 seed_analysis は 1 件の ``ArticleAnalysis`` を関連 ORM (DiscoveredArticle /
-Article / ArticleExtraction / ArticleEntity) とともに作成する。
+Article / ArticleExtraction / ArticleExtractionEntity) とともに作成する。
 
 URL の重複制約を避けるため fixture 内のカウンタで一意な URL を採番する
 (関数スコープ fixture なのでテストごとにリセットされる)。
@@ -19,8 +19,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis
-from app.models.article_entity import ArticleEntity
 from app.models.article_extraction import ArticleExtraction
+from app.models.article_extraction_entity import ArticleExtractionEntity
 from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
 
@@ -35,7 +35,8 @@ def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAn
         category_id: ``ArticleAnalysis.category_id`` に設定する FK。
         analyzed_at: ``analyzed_at`` を明示指定 (server_default を上書き)。
         topic: ``ArticleAnalysis.topic`` (TopicName VO)。デフォルト ``"ai agents"``。
-        entities: ``[(name, type), ...]`` の列。``ArticleEntity`` を生成する。
+        entities: ``[(surface, raw_type), ...]`` の列。``ArticleExtractionEntity``
+            を生成する。``position`` は引数の出現順 (0-based) で自動採番される。
 
     Returns:
         永続化済みの ``ArticleAnalysis``。flush のみで commit はしない
@@ -74,7 +75,14 @@ def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAn
             translated_title=f"seed-{n}",
             summary="summary body",
             ai_model="test",
-            entities=[ArticleEntity(name=name, type=type_) for name, type_ in entities],
+            entities=[
+                ArticleExtractionEntity(
+                    surface=surface,
+                    raw_type=raw_type,
+                    position=i,
+                )
+                for i, (surface, raw_type) in enumerate(entities)
+            ],
         )
         db_session.add(extraction)
         await db_session.flush()

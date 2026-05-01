@@ -12,7 +12,11 @@ from sqlalchemy import String
 from sqlalchemy.engine import Dialect
 from sqlalchemy.types import TypeDecorator
 
-from app.analysis.domain.value_objects.entity import EntityName, EntityType
+from app.analysis.domain.value_objects.entity import (
+    EntityName,
+    EntityRawType,
+    EntityType,
+)
 from app.analysis.domain.value_objects.topic import TopicName
 from app.collection.domain.value_objects.source import SourceName
 from app.domain.category import CategoryName, CategorySlug
@@ -143,6 +147,33 @@ class EntityTypeType(TypeDecorator[EntityType]):
         if value is None:
             return None
         return EntityType(value)
+
+
+class EntityRawTypeType(TypeDecorator[EntityRawType]):
+    """EntityRawType <-> VARCHAR(30).
+
+    Stage 1 観察用 type ラベル (casing 保持、lower 化しない、match_key 持たない)
+    のための adapter。``EntityType`` (lower 化する) と独立した型として扱う。
+    """
+
+    impl = String(30)
+    cache_ok = True
+
+    def process_bind_param(self, value: Any, dialect: Dialect) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, EntityRawType):
+            return value.root
+        if isinstance(value, str):
+            return EntityRawType(value).root
+        raise TypeError(f"Expected EntityRawType or str, got {type(value).__name__}")
+
+    def process_result_value(
+        self, value: Any, dialect: Dialect
+    ) -> EntityRawType | None:
+        if value is None:
+            return None
+        return EntityRawType(value)
 
 
 class SafeUrlType(TypeDecorator[SafeUrl]):

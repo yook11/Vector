@@ -247,8 +247,8 @@ class TestGetTrendingEntities:
     ) -> None:
         """同一 extraction 内に同 entity が複数出ても 1 カウント。
 
-        ArticleEntity の重複行を seed しなくとも、entity の出現は extraction 単位で
-        評価されることを確認する。
+        ArticleExtractionEntity の重複行を seed しなくとも、entity の出現は
+        extraction 単位で評価されることを確認する。
         """
         cat = sample_categories[0]
         # 5 件の独立 extraction で NVIDIA が登場

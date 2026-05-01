@@ -21,7 +21,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.article_entity import ArticleEntity
+from app.models.article_extraction_entity import ArticleExtractionEntity
 from app.models.base import Base
 
 if TYPE_CHECKING:
@@ -61,8 +61,10 @@ class ArticleExtraction(Base):
 
     # リレーション
     article: Mapped[Article] = relationship(back_populates="extraction")
-    entities: Mapped[list[ArticleEntity]] = relationship(
-        back_populates="extraction", cascade="all, delete-orphan"
+    entities: Mapped[list[ArticleExtractionEntity]] = relationship(
+        back_populates="extraction",
+        cascade="all, delete-orphan",
+        order_by="ArticleExtractionEntity.position",
     )
     analysis: Mapped[ArticleAnalysis | None] = relationship(
         back_populates="extraction", uselist=False

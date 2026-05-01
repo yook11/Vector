@@ -1,38 +1,54 @@
-"""Entity — 抽出された固有名の複合 VO。
+"""ExtractedEntity — Stage 1 観察台帳の 1 行を表す複合 VO。
 
-``EntityName`` と ``EntityType`` を束ねた値オブジェクト。``ExtractionResult``
-(AI 応答) と ``Extraction`` (記録済み Entity) の双方で部品として使われる。
+VO (``EntitySurface`` / ``EntityRawType``) 自体の実装は
+``app.analysis.domain.value_objects.entity`` に置き、本モジュールでは
+それらを束ねた複合 VO ``ExtractedEntity`` を定義する。VO を value_objects 階層に
+置く理由は、SQLAlchemy ``TypeDecorator`` (``app.models.types``) が
+``app.models.base`` 経由で読み込まれる際の循環 import を避けるため。
 
-Pydantic BaseModel で実装することで、Gemini の ``response_schema`` に
-ネストして流せる (AI 境界契約) と同時に、ドメインメソッド (dedup_key) を
-持たせられる。
+設計差分 (旧 ``Entity`` から):
+
+- ``surface`` (= ``EntitySurface``): 旧 ``name`` と同じ不変条件 (NFKC + 空白整形 +
+  casing 保持 + 200 字 + ``match_key``)。``EntitySurface`` は ``EntityName`` の
+  alias であり、新規 VO は作らない (memory:
+  ``feedback_no_share_different_problems.md`` の逆 — 同じ問題なら共用)。
+- ``raw_type`` (= ``EntityRawType``): 旧 ``type`` (``EntityType``) と異なり、
+  - 上限 30 字 (Stage 1 観察ラベルとして実態に合わせた)
+  - 小文字化 **しない** (``casing`` を保持して β の canonical_type と衝突回避)
+  - ``match_key`` を **持たない** (β の集計と直接合流させない設計の表明)
 """
 
 from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict
 
-from app.analysis.domain.value_objects.entity import EntityName, EntityType
+from app.analysis.domain.value_objects.entity import (
+    EntityRawType,
+    EntitySurface,
+)
+
+__all__ = ["EntityRawType", "EntitySurface", "ExtractedEntity"]
 
 
-class Entity(BaseModel):
-    """AI が抽出したエンティティ 1 件の複合 VO。
+class ExtractedEntity(BaseModel):
+    """Stage 1 観察台帳の 1 行 (surface + raw_type の複合 VO)。
 
     Invariants:
-    - name / type は各 VO の不変条件を満たす
+    - surface / raw_type は各 VO の不変条件を満たす
     - frozen: 生成後は不変
     """
 
     model_config = ConfigDict(frozen=True)
 
-    name: EntityName
-    type: EntityType
+    surface: EntitySurface
+    raw_type: EntityRawType
 
     def dedup_key(self) -> tuple[str, str]:
         """同一エンティティ判定キー。
 
-        ``EntityName`` は表示用に大文字小文字を保持するが、重複判定では
-        無視する ("NVIDIA" と "nvidia" は同一エンティティ)。``EntityType``
-        は VO 側で小文字正規化済み。
+        surface 側は ``match_key`` (str.lower()) で casing 違いを吸収する
+        ("NVIDIA" と "nvidia" は同一)。raw_type 側は ``root`` をそのまま使い
+        casing 違いを別エンティティとして扱う (β の canonical_type 集計と
+        独立した観察値として保持する設計)。
         """
-        return (self.name.root.casefold(), self.type.root)
+        return (self.surface.match_key, self.raw_type.root)
