@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+     xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>EE Times Japan</title>
+    <link>https://eetimes.itmedia.co.jp/</link>
+    <description>EE Times Japan の最新ニュース</description>
+    <language>ja</language>
+    <item>
+      <title>TSMC、3nm プロセスの量産開始を発表 Apple 向けに優先供給</title>
+      <link>https://eetimes.itmedia.co.jp/ee/articles/2604/30/news001.html</link>
+      <pubDate>Wed, 30 Apr 2026 14:00:00 +0900</pubDate>
+      <description>TSMC は 4 月 30 日、3nm プロセスの量産開始を発表した。Apple 向けに優先供給する方針が示された。</description>
+    </item>
+    <item>
+      <title>NVIDIA、次世代 GPU アーキテクチャ「Blackwell Ultra」を発表</title>
+      <link>https://eetimes.itmedia.co.jp/ee/articles/2604/30/news002.html</link>
+      <pubDate>Wed, 30 Apr 2026 09:30:00 +0900</pubDate>
+      <description>NVIDIA は次世代 GPU アーキテクチャ「Blackwell Ultra」を発表した。AI 推論性能が前世代比で大幅に向上する。</description>
+    </item>
+  </channel>
+</rss>

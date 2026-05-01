@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+     xmlns:content="http://purl.org/rss/1.0/modules/content/"
+     xmlns:dc="http://purl.org/dc/elements/1.1/"
+     xmlns:media="http://search.yahoo.com/mrss/">
+  <channel>
+    <title>Engadget</title>
+    <link>https://www.engadget.com</link>
+    <description>Technology News, Advice and Features</description>
+    <language>en-US</language>
+    <item>
+      <title>Apple Vision Pro 2 review: Lighter, brighter, but still pricey</title>
+      <link>https://www.engadget.com/apple-vision-pro-2-review-2026.html</link>
+      <pubDate>Wed, 30 Apr 2026 14:00:00 +0000</pubDate>
+      <dc:creator>Sam Rutherford</dc:creator>
+      <category>Reviews</category>
+      <category>Wearables</category>
+      <guid isPermaLink="false">engadget-2026-04-30-vision-pro-2</guid>
+      <description><![CDATA[Apple's second-gen mixed-reality headset is here.]]></description>
+      <content:encoded><![CDATA[Apple's second-gen mixed-reality headset is here.]]></content:encoded>
+      <media:content url="https://s.yimg.com/os/creatr-uploaded-images/vision-pro-2.jpg" medium="image"/>
+    </item>
+    <item>
+      <title>Sony's new flagship TV uses RGB micro-LED for true HDR</title>
+      <link>https://www.engadget.com/sony-rgb-microled-tv-2026.html</link>
+      <pubDate>Wed, 30 Apr 2026 10:30:00 +0000</pubDate>
+      <dc:creator>Mat Smith</dc:creator>
+      <category>TVs</category>
+      <guid isPermaLink="false">engadget-2026-04-30-sony-microled</guid>
+      <description><![CDATA[The successor to BRAVIA shows up at CES 2026.]]></description>
+    </item>
+    <item>
+      <title></title>
+      <link>https://www.engadget.com/empty-title-2026.html</link>
+      <pubDate>Wed, 30 Apr 2026 09:00:00 +0000</pubDate>
+      <guid isPermaLink="false">engadget-2026-04-30-empty</guid>
+      <description><![CDATA[Test entry with empty title for title_missing branch.]]></description>
+    </item>
+  </channel>
+</rss>

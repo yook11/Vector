@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+     xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>MONOist</title>
+    <link>https://monoist.itmedia.co.jp/</link>
+    <description>MONOist の最新ニュース</description>
+    <language>ja</language>
+    <item>
+      <title>トヨタ、全固体電池の量産ラインを 2027 年に稼働 EV の航続距離が倍増へ</title>
+      <link>https://monoist.itmedia.co.jp/mn/articles/2604/30/news001.html</link>
+      <pubDate>Wed, 30 Apr 2026 13:00:00 +0900</pubDate>
+      <description>トヨタは全固体電池の量産ラインを 2027 年に稼働させる方針を発表した。EV の航続距離が倍増する見込みだ。</description>
+    </item>
+    <item>
+      <title>三菱電機、産業用ロボットに新世代 AI 制御を搭載</title>
+      <link>https://monoist.itmedia.co.jp/mn/articles/2604/30/news002.html</link>
+      <pubDate>Wed, 30 Apr 2026 10:00:00 +0900</pubDate>
+      <description>三菱電機は産業用ロボットに新世代の AI 制御技術を搭載すると発表した。製造現場の効率化が期待される。</description>
+    </item>
+  </channel>
+</rss>
