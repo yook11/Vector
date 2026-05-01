@@ -34,28 +34,17 @@ class SourceFetcher(Protocol):
 def _build_registry() -> dict[SourceName, SourceFetcher]:
     """全ソースのフェッチャーを登録する。"""
     from app.collection.ingestion.fetchers.hacker_news import HackerNewsFetcher
-    from app.collection.ingestion.fetchers.rss.cleantechnica import (
-        CleanTechnicaFetcher,
-    )
-    from app.collection.ingestion.fetchers.rss.electrek import ElectrekFetcher
-    from app.collection.ingestion.fetchers.rss.spacenews import SpaceNewsFetcher
-    from app.collection.ingestion.fetchers.rss.the_register import TheRegisterFetcher
 
     return {
-        # RSS ソース（ソースごとに個別フェッチャー）
-        # NOTE: VentureBeat / TechCrunch / The Quantum Insider / Krebs on
-        # Security / Spaceflight Now / NASA / IEEE Spectrum / Microsoft
-        # Research / ITmedia AI+ / ITmedia NEWS / MONOist / EE Times Japan /
-        # Engadget / FierceBiotech / JPCERT/CC は
-        # collection-acquisition-redesign Phase 1a'/1b'/1c-A1/1c-A2/1c-C/
-        # 1c-D/1c-E で新 Protocol Fetcher に移行済み (Pattern R 全 8 ソース
-        # + Pattern H 全 8 ソース完了)。Strangler 移行期間中は
-        # ``strategy.NEW_ROUTE_FETCHERS`` 経由で取り込まれる。
-        SourceName("CleanTechnica"): CleanTechnicaFetcher(),
-        SourceName("Electrek"): ElectrekFetcher(),
-        SourceName("SpaceNews"): SpaceNewsFetcher(),
-        SourceName("The Register"): TheRegisterFetcher(),
-        # API ソース
+        # collection-acquisition-redesign Phase 1d 完了時点で RSS 18 ソース
+        # (VentureBeat / TechCrunch / The Quantum Insider / Krebs on Security /
+        # Spaceflight Now / NASA / IEEE Spectrum / Microsoft Research /
+        # ITmedia AI+ / ITmedia NEWS / MONOist / EE Times Japan / Engadget /
+        # FierceBiotech / JPCERT/CC / CleanTechnica / Electrek / SpaceNews /
+        # The Register) は ``strategy.NEW_ROUTE_FETCHERS`` 経由の新 Protocol
+        # Fetcher に移行済み。本 registry には API Pattern の Hacker News
+        # 1 ソースのみが残る。PR-1e (HN 新 Protocol 化) で本ファイルごと
+        # 削除し、Strangler 経路を完全撤去する予定。
         SourceName("Hacker News"): HackerNewsFetcher(),
     }
 

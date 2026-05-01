@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+	xmlns:content="http://purl.org/rss/1.0/modules/content/"
+	xmlns:wfw="http://wellformedweb.org/CommentAPI/"
+	xmlns:dc="http://purl.org/dc/elements/1.1/"
+	xmlns:atom="http://www.w3.org/2005/Atom"
+	xmlns:sy="http://purl.org/rss/1.0/modules/syndication/"
+	xmlns:slash="http://purl.org/rss/1.0/modules/slash/">
+
+<channel>
+	<title>CleanTechnica</title>
+	<atom:link href="https://cleantechnica.com/feed/" rel="self" type="application/rss+xml" />
+	<link>https://cleantechnica.com</link>
+	<description>Clean Tech News &amp; Views: EVs, Solar Energy, Batteries</description>
+	<lastBuildDate>Fri, 01 May 2026 21:11:20 +0000</lastBuildDate>
+	<language>en-US</language>
+
+	<item>
+		<title>Scope 3 Emissions: Challenging? Yes. Impossible To Reduce? No.</title>
+		<link>https://cleantechnica.com/2026/05/01/scope-3-emissions-challenging/</link>
+		<dc:creator><![CDATA[Carolyn Fortuna]]></dc:creator>
+		<pubDate>Fri, 01 May 2026 21:11:20 +0000</pubDate>
+		<category><![CDATA[Green Economy]]></category>
+		<category><![CDATA[Manufacturing]]></category>
+		<category><![CDATA[Decarbonization]]></category>
+		<guid isPermaLink="false">https://cleantechnica.com/?p=372217</guid>
+		<description><![CDATA[<p>Scope 3 emissions lead.</p>]]></description>
+	</item>
+
+	<item>
+		<title>Electric Fire Trucks Are Spreading</title>
+		<link>https://cleantechnica.com/2026/05/01/electric-fire-trucks/</link>
+		<dc:creator><![CDATA[Michael Barnard]]></dc:creator>
+		<pubDate>Fri, 01 May 2026 18:41:20 +0000</pubDate>
+		<category><![CDATA[Clean Transport]]></category>
+		<category><![CDATA[Electric Vehicles]]></category>
+		<guid isPermaLink="false">https://cleantechnica.com/?p=372367</guid>
+		<description><![CDATA[<p>Electric fire trucks lead.</p>]]></description>
+	</item>
+
+	<item>
+		<title></title>
+		<link>https://cleantechnica.com/2026/05/01/empty-title-entry/</link>
+		<dc:creator><![CDATA[Anonymous]]></dc:creator>
+		<pubDate>Fri, 01 May 2026 12:00:00 +0000</pubDate>
+		<guid isPermaLink="false">https://cleantechnica.com/?p=372999</guid>
+	</item>
+
+</channel>
+</rss>

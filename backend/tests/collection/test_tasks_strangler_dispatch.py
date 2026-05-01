@@ -48,17 +48,18 @@ async def techcrunch_source(db_session: AsyncSession) -> NewsSource:
 
 @pytest.fixture
 async def legacy_source(db_session: AsyncSession) -> NewsSource:
-    """新ルートに含まれないソースの代表 (The Register、Pattern R+H)。
+    """新ルートに含まれないソースの代表 (Hacker News、API Pattern)。
 
-    PR-1c-E で JPCERT/CC も新ルートに移ったため、旧 SourceFetchService
-    経路の例として残る Pattern R+H ソース (The Register) を使う。
-    PR-1d で本 fixture ごと削除予定。
+    PR-1d で RSS R+H 4 ソース (CleanTechnica/Electrek/SpaceNews/The Register)
+    が新ルートに移ったため、Phase 1 では Hacker News のみが旧
+    SourceFetchService 経路に残る (API Pattern のため新 Protocol 化が
+    別 PR-1e に分離されている)。PR-1e で本 fixture ごと削除予定。
     """
     source = NewsSource(
-        name="The Register",
-        source_type=SourceType.RSS,
-        site_url="https://www.theregister.com",
-        endpoint_url="https://www.theregister.com/headlines.atom",
+        name="Hacker News",
+        source_type=SourceType.API,
+        site_url="https://news.ycombinator.com",
+        endpoint_url="https://hn.algolia.com/api/v1/search_by_date",
         is_active=True,
     )
     db_session.add(source)
@@ -119,7 +120,7 @@ async def test_legacy_route_for_non_new_route_source(
     legacy_source: NewsSource,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """新ルート未登録 (The Register) は旧 SourceFetchService 経由で処理される。"""
+    """新ルート未登録 (Hacker News) は旧 SourceFetchService 経由で処理される。"""
     kiq_mock = AsyncMock()
     monkeypatch.setattr(ingest_source, "kiq", kiq_mock)
 

@@ -1,9 +1,9 @@
 """新ルート (collection-acquisition-redesign Phase 1) のソース戦略表。
 
-Strangler 移行期間中の hardcode set + factory dict。Phase 1c-E 完了時点で
-15/19 ソース移行済 (Pattern H 8/8 完全移行)。残りソース (Pattern R+H 4
-ソース) の移行が完了したら本ファイルごと削除し、新 Protocol を全ソースの
-唯一の取得経路に収束させる。
+Strangler 移行期間中の hardcode set + factory dict。Phase 1d 完了時点で
+18/19 ソース移行済 (RSS 全 18 ソース完全移行、Hacker News のみ旧経路に残)。
+HN を新 Protocol API Pattern で実装する PR-1e 完了時に本ファイルごと
+削除し、新 Protocol を全ソースの唯一の取得経路に収束させる。
 
 設計判断:
 
@@ -17,7 +17,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Final
 
+from app.collection.ingestion.fetchers.cleantechnica import CleanTechnicaFetcher
 from app.collection.ingestion.fetchers.eetimes_japan import EETimesJapanFetcher
+from app.collection.ingestion.fetchers.electrek import ElectrekFetcher
 from app.collection.ingestion.fetchers.engadget import EngadgetFetcher
 from app.collection.ingestion.fetchers.fierce_biotech import FierceBiotechFetcher
 from app.collection.ingestion.fetchers.ieee_spectrum import IEEESpectrumFetcher
@@ -33,7 +35,9 @@ from app.collection.ingestion.fetchers.nasa import NASAFetcher
 from app.collection.ingestion.fetchers.protocol import Fetcher
 from app.collection.ingestion.fetchers.quantum_insider import QuantumInsiderFetcher
 from app.collection.ingestion.fetchers.spaceflight_now import SpaceflightNowFetcher
+from app.collection.ingestion.fetchers.spacenews import SpaceNewsFetcher
 from app.collection.ingestion.fetchers.techcrunch import TechCrunchFetcher
+from app.collection.ingestion.fetchers.the_register import TheRegisterFetcher
 from app.collection.ingestion.fetchers.venturebeat import VentureBeatFetcher
 
 NEW_ROUTE_FETCHERS: Final[dict[str, Callable[[], Fetcher]]] = {
@@ -52,6 +56,10 @@ NEW_ROUTE_FETCHERS: Final[dict[str, Callable[[], Fetcher]]] = {
     "Engadget": EngadgetFetcher,
     "FierceBiotech": FierceBiotechFetcher,
     "JPCERT/CC": JPCERTFetcher,
+    "CleanTechnica": CleanTechnicaFetcher,
+    "Electrek": ElectrekFetcher,
+    "SpaceNews": SpaceNewsFetcher,
+    "The Register": TheRegisterFetcher,
 }
 
 NEW_ROUTE_SOURCE_NAMES: Final[frozenset[str]] = frozenset(NEW_ROUTE_FETCHERS.keys())

@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+	xmlns:content="http://purl.org/rss/1.0/modules/content/"
+	xmlns:wfw="http://wellformedweb.org/CommentAPI/"
+	xmlns:dc="http://purl.org/dc/elements/1.1/"
+	xmlns:atom="http://www.w3.org/2005/Atom"
+	xmlns:sy="http://purl.org/rss/1.0/modules/syndication/"
+	xmlns:slash="http://purl.org/rss/1.0/modules/slash/">
+
+<channel>
+	<title>Electrek</title>
+	<atom:link href="https://electrek.co/feed/" rel="self" type="application/rss+xml" />
+	<link>https://electrek.co</link>
+	<description>EV and Tesla News, Green Energy, Ebikes, and more</description>
+	<lastBuildDate>Fri, 01 May 2026 21:51:57 +0000</lastBuildDate>
+	<language>en-US</language>
+
+	<item>
+		<title>This solar farm lets cattle roam under moving panels</title>
+		<link>https://electrek.co/2026/05/01/solar-farm-cattle-panels/</link>
+		<dc:creator><![CDATA[Michelle Lewis]]></dc:creator>
+		<pubDate>Fri, 01 May 2026 21:51:57 +0000</pubDate>
+		<category><![CDATA[News]]></category>
+		<guid isPermaLink="false">https://electrek.co/?p=465586</guid>
+		<description><![CDATA[<p>Silicon Ranch lead.</p>]]></description>
+	</item>
+
+	<item>
+		<title>Kia EV sales gain steam</title>
+		<link>https://electrek.co/2026/05/01/kia-ev-sales/</link>
+		<dc:creator><![CDATA[Peter Johnson]]></dc:creator>
+		<pubDate>Fri, 01 May 2026 20:29:53 +0000</pubDate>
+		<category><![CDATA[News]]></category>
+		<guid isPermaLink="false">https://electrek.co/?p=465556</guid>
+		<description><![CDATA[<p>Kia lead.</p>]]></description>
+	</item>
+
+	<item>
+		<title></title>
+		<link>https://electrek.co/2026/05/01/empty-title/</link>
+		<dc:creator><![CDATA[Anonymous]]></dc:creator>
+		<pubDate>Fri, 01 May 2026 12:00:00 +0000</pubDate>
+		<guid isPermaLink="false">https://electrek.co/?p=465999</guid>
+	</item>
+
+</channel>
+</rss>
