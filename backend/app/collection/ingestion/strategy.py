@@ -1,7 +1,9 @@
 """新ルート (collection-acquisition-redesign Phase 1) のソース戦略表。
 
-Strangler 移行期間中の hardcode set + factory dict。Phase 1c-C 完了時に
-本ファイルごと削除し、新 Protocol を全ソースの唯一の取得経路に収束させる。
+Strangler 移行期間中の hardcode set + factory dict。Phase 1c-D 完了時点で
+14/19 ソース移行済。残りソース (JPCERT/CC + Pattern R+H 4 ソース)
+の移行が完了したら本ファイルごと削除し、新 Protocol を全ソースの唯一の
+取得経路に収束させる。
 
 設計判断:
 
@@ -17,6 +19,7 @@ from typing import Final
 
 from app.collection.ingestion.fetchers.eetimes_japan import EETimesJapanFetcher
 from app.collection.ingestion.fetchers.engadget import EngadgetFetcher
+from app.collection.ingestion.fetchers.fierce_biotech import FierceBiotechFetcher
 from app.collection.ingestion.fetchers.ieee_spectrum import IEEESpectrumFetcher
 from app.collection.ingestion.fetchers.itmedia_ai import ITmediaAIFetcher
 from app.collection.ingestion.fetchers.itmedia_news import ITmediaNewsFetcher
@@ -46,6 +49,7 @@ NEW_ROUTE_FETCHERS: Final[dict[str, Callable[[], Fetcher]]] = {
     "MONOist": MONOistFetcher,
     "EE Times Japan": EETimesJapanFetcher,
     "Engadget": EngadgetFetcher,
+    "FierceBiotech": FierceBiotechFetcher,
 }
 
 NEW_ROUTE_SOURCE_NAMES: Final[frozenset[str]] = frozenset(NEW_ROUTE_FETCHERS.keys())
