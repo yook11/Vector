@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+     xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>ITmedia NEWS</title>
+    <link>https://www.itmedia.co.jp/news/</link>
+    <description>ITmedia NEWS の最新ニュース</description>
+    <language>ja</language>
+    <item>
+      <title>NTT、6G 向け次世代光通信技術を発表 商用化は 2030 年を目標</title>
+      <link>https://www.itmedia.co.jp/news/articles/2604/30/news001.html</link>
+      <pubDate>Wed, 30 Apr 2026 14:30:00 +0900</pubDate>
+      <description>NTT は 4 月 30 日、6G に向けた次世代光通信技術を発表した。商用化は 2030 年を目標としている。</description>
+    </item>
+    <item>
+      <title>Apple、iOS 19 を発表 オンデバイス LLM の推論性能が向上</title>
+      <link>https://www.itmedia.co.jp/news/articles/2604/30/news002.html</link>
+      <pubDate>Wed, 30 Apr 2026 11:00:00 +0900</pubDate>
+      <description>Apple は WWDC 2026 で iOS 19 を発表した。オンデバイス LLM の推論性能が大幅に向上する。</description>
+    </item>
+  </channel>
+</rss>

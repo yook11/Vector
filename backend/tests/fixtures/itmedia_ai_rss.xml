@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+     xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>ITmedia AI+</title>
+    <link>https://www.itmedia.co.jp/aiplus/</link>
+    <description>ITmedia AI+ の最新ニュース</description>
+    <language>ja</language>
+    <item>
+      <title>[ITmedia PC USER] 「Claude」が新機能を追加 開発者向けに API 拡張も発表</title>
+      <link>https://www.itmedia.co.jp/aiplus/articles/2604/30/news001.html</link>
+      <pubDate>Wed, 30 Apr 2026 14:00:00 +0900</pubDate>
+      <description>Anthropic は 4 月 30 日、AI アシスタント「Claude」の新機能を発表した。開発者向けに API も拡張される。</description>
+    </item>
+    <item>
+      <title>[ITmedia エンタープライズ] 生成 AI のセキュリティリスクと対策の最新動向</title>
+      <link>https://www.itmedia.co.jp/aiplus/articles/2604/30/news002.html</link>
+      <pubDate>Wed, 30 Apr 2026 12:00:00 +0900</pubDate>
+      <description>企業の生成 AI 活用が進む一方で、新たなセキュリティリスクが顕在化している。本記事では最新動向と対策を解説する。</description>
+    </item>
+    <item>
+      <title></title>
+      <link>https://www.itmedia.co.jp/aiplus/articles/2604/30/news003.html</link>
+      <pubDate>Wed, 30 Apr 2026 09:00:00 +0900</pubDate>
+      <description>Test entry with empty title for title_missing branch.</description>
+    </item>
+  </channel>
+</rss>
