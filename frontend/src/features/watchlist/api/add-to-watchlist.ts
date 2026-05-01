@@ -3,6 +3,7 @@
 import { updateTag } from "next/cache";
 import { typedServer } from "@/lib/api/typed-server-fetcher";
 import { requireSessionForAction } from "@/lib/auth/guards";
+import { cacheTags } from "@/lib/cache/tags";
 import { PositiveIdSchema } from "@/lib/validation/id";
 import { addToWatchlistCore } from "./watchlist-cores";
 
@@ -16,5 +17,5 @@ export async function addToWatchlist(articleId: number): Promise<void> {
   // `updateTag` は Server Action 専用 idiom で immediate expiration、当該
   // tag を持つ data cache を同一リクエスト内で吹き飛ばし current route を
   // 再生成する (read-your-own-writes 即時確定)。
-  updateTag("watchlist:me");
+  updateTag(cacheTags.watchlistMe);
 }
