@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+     xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Fierce Biotech</title>
+    <link>https://www.fiercebiotech.com/</link>
+    <description>Biotech industry news</description>
+    <language>en</language>
+    <item>
+      <title>&lt;a href="/biotech/amgen-abandons-late-stage-asset-after-trial-flop"&gt;Amgen abandons late-stage asset after trial flop&lt;/a&gt;</title>
+      <link>https://www.fiercebiotech.com/biotech/amgen-abandons-late-stage-asset-after-trial-flop</link>
+      <pubDate>Apr 30, 2026 6:11pm</pubDate>
+      <dc:creator>&lt;a href="/person/darren-incorvaia"&gt;Darren Incorvaia&lt;/a&gt;</dc:creator>
+      <guid isPermaLink="true">https://www.fiercebiotech.com/534b86f8-9d4e-4a1f-8c20-1234567890ab</guid>
+      <description>Amgen has discontinued development of its late-stage candidate after the Phase 3 trial missed its primary endpoint.</description>
+    </item>
+    <item>
+      <title>&lt;a href="/biotech/novartis-prices-new-rare-disease-drug-at-2-1m"&gt;Novartis prices new rare disease drug at $2.1M&lt;/a&gt;</title>
+      <link>https://www.fiercebiotech.com/biotech/novartis-prices-new-rare-disease-drug-at-2-1m</link>
+      <pubDate>Apr 30, 2026 1:18pm</pubDate>
+      <dc:creator>&lt;a href="/person/gabrielle-masson"&gt;Gabrielle Masson&lt;/a&gt;</dc:creator>
+      <guid isPermaLink="true">https://www.fiercebiotech.com/abcdef01-2345-6789-abcd-ef0123456789</guid>
+      <description>Novartis announced pricing for its newly approved rare-disease therapy, sparking debate among payers.</description>
+    </item>
+    <item>
+      <title></title>
+      <link>https://www.fiercebiotech.com/biotech/empty-title-test</link>
+      <pubDate>Apr 30, 2026 9:00am</pubDate>
+      <guid isPermaLink="true">https://www.fiercebiotech.com/00000000-0000-0000-0000-000000000000</guid>
+      <description>Test entry with empty title for title_missing branch.</description>
+    </item>
+  </channel>
+</rss>
