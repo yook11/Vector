@@ -9,13 +9,13 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 
 from app.config import settings
 from app.db import engine
-from app.digest.router.weekly_trends import router as weekly_trends_router
 from app.exception_handlers import (
     duplicate_handler,
     not_found_handler,
     search_error_handler,
 )
 from app.exceptions import DuplicateError, NotFoundError
+from app.insights.snapshot.router.weekly_trends import router as weekly_trends_router
 from app.routers import (
     admin,
     articles,

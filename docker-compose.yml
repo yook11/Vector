@@ -152,7 +152,7 @@ services:
     command: >
       taskiq worker
       app.brokers:broker_digest
-      app.digest.tasks.snapshot
+      app.insights.snapshot.tasks.snapshot
       --ack-type when_executed
 
   scheduler-digest:
@@ -160,7 +160,7 @@ services:
     command: >
       taskiq scheduler
       app.brokers:scheduler_digest
-      app.digest.tasks.snapshot
+      app.insights.snapshot.tasks.snapshot
     networks:
       - internal
 
