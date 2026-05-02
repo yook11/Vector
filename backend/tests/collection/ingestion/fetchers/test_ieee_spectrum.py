@@ -11,7 +11,6 @@ from __future__ import annotations
 import time
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
 
 import feedparser
 
@@ -24,19 +23,13 @@ from app.collection.ingestion.fetchers.ieee_spectrum import (
     _extract_authors,
     _extract_body,
 )
-from app.models.news_source import NewsSource
 
 _FIXTURE = (
     Path(__file__).parent.parent.parent.parent / "fixtures" / "ieee_spectrum_rss.xml"
 )
 
 
-def _source(source_id: int = 1, name: str = "IEEE Spectrum") -> NewsSource:
-    s = MagicMock(spec=NewsSource)
-    s.id = source_id
-    s.name = name
-    s.endpoint_url = "https://spectrum.ieee.org/feeds/feed.rss"
-    return s
+_SOURCE_ID = 1
 
 
 _LOREM = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. "
@@ -100,10 +93,10 @@ class TestExtractAuthors:
 class TestConvertEntry:
     def setup_method(self) -> None:
         self.fetcher = IEEESpectrumFetcher()
-        self.source = _source()
+        self.source_id = _SOURCE_ID
 
     def test_valid_entry_yields_ready(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en-US")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en-US")
         assert isinstance(outcome, ReadyForArticle)
         assert outcome.article.title == "IEEE Title"
         assert "Lorem ipsum" in outcome.article.body
@@ -111,40 +104,42 @@ class TestConvertEntry:
         assert outcome.metadata.site_name == "IEEE Spectrum"
 
     def test_multi_author_in_authors_tuple(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en-US")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en-US")
         assert isinstance(outcome, ReadyForArticle)
         assert outcome.metadata.authors == ("Olivia Hsu", "Kalhan Koul")
 
     def test_author_field_holds_first_author(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en-US")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en-US")
         assert isinstance(outcome, ReadyForArticle)
         assert outcome.metadata.author == "Olivia Hsu"
 
     def test_no_authors_yields_none_and_empty_tuple(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(authors=[]), self.source, "en-US")
+        outcome = self.fetcher._convert_entry(
+            _entry(authors=[]), self.source_id, "en-US"
+        )
         assert isinstance(outcome, ReadyForArticle)
         assert outcome.metadata.author is None
         assert outcome.metadata.authors == ()
 
     def test_extracts_image_url(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en-US")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en-US")
         assert isinstance(outcome, ReadyForArticle)
         assert outcome.metadata.image_url is not None
         assert str(outcome.metadata.image_url) == "https://example.com/photonics.jpg"
 
     def test_extracts_tags(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en-US")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en-US")
         assert isinstance(outcome, ReadyForArticle)
         assert outcome.metadata.tags == ("Computing", "Photonics")
 
     def test_empty_title_returns_failed(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(title=""), self.source, "en-US")
+        outcome = self.fetcher._convert_entry(_entry(title=""), self.source_id, "en-US")
         assert isinstance(outcome, Failed)
         assert outcome.reason.code == "title_missing"
 
     def test_short_body_returns_failed(self) -> None:
         outcome = self.fetcher._convert_entry(
-            _entry(summary="<p>tiny</p>"), self.source, "en-US"
+            _entry(summary="<p>tiny</p>"), self.source_id, "en-US"
         )
         assert isinstance(outcome, Failed)
         assert outcome.reason.code == "body_too_short"
@@ -156,7 +151,7 @@ class TestConvertEntry:
                 summary="<p>tiny</p>",
                 content=[{"value": "<p>" + _LOREM * 10 + "</p>"}],
             ),
-            self.source,
+            self.source_id,
             "en-US",
         )
         assert isinstance(outcome, Failed)
@@ -165,13 +160,13 @@ class TestConvertEntry:
     def test_missing_published_returns_failed(self) -> None:
         e = _entry()
         del e["published_parsed"]
-        outcome = self.fetcher._convert_entry(e, self.source, "en-US")
+        outcome = self.fetcher._convert_entry(e, self.source_id, "en-US")
         assert isinstance(outcome, Failed)
         assert outcome.reason.code == "published_at_missing"
 
     def test_invalid_link_returns_failed(self) -> None:
         outcome = self.fetcher._convert_entry(
-            _entry(link="not-a-url"), self.source, "en-US"
+            _entry(link="not-a-url"), self.source_id, "en-US"
         )
         assert isinstance(outcome, Failed)
         assert outcome.reason.code == "extraction_empty"
@@ -189,7 +184,7 @@ class TestFixtureParsing:
         text = _FIXTURE.read_text(encoding="utf-8")
         feed = feedparser.parse(text)
         fetcher = IEEESpectrumFetcher()
-        outcome = fetcher._convert_entry(feed.entries[0], _source(), "en-US")
+        outcome = fetcher._convert_entry(feed.entries[0], _SOURCE_ID, "en-US")
         assert isinstance(outcome, ReadyForArticle)
         assert outcome.article.title.startswith("New silicon photonics")
         assert "silicon photonics chip" in outcome.article.body
@@ -203,6 +198,6 @@ class TestFixtureParsing:
         text = _FIXTURE.read_text(encoding="utf-8")
         feed = feedparser.parse(text)
         fetcher = IEEESpectrumFetcher()
-        outcome = fetcher._convert_entry(feed.entries[1], _source(), "en-US")
+        outcome = fetcher._convert_entry(feed.entries[1], _SOURCE_ID, "en-US")
         assert isinstance(outcome, Failed)
         assert outcome.reason.code == "body_too_short"

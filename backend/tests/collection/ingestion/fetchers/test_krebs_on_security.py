@@ -10,7 +10,6 @@ from __future__ import annotations
 import time
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
 
 import feedparser
 
@@ -22,7 +21,6 @@ from app.collection.ingestion.fetchers.krebs_on_security import (
     KrebsOnSecurityFetcher,
     _extract_body,
 )
-from app.models.news_source import NewsSource
 
 _FIXTURE = (
     Path(__file__).parent.parent.parent.parent
@@ -31,12 +29,7 @@ _FIXTURE = (
 )
 
 
-def _source(source_id: int = 1, name: str = "Krebs on Security") -> NewsSource:
-    s = MagicMock(spec=NewsSource)
-    s.id = source_id
-    s.name = name
-    s.endpoint_url = "https://krebsonsecurity.com/feed/"
-    return s
+_SOURCE_ID = 1
 
 
 _LOREM = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. "
@@ -73,44 +66,44 @@ class TestExtractBody:
 class TestConvertEntry:
     def setup_method(self) -> None:
         self.fetcher = KrebsOnSecurityFetcher()
-        self.source = _source()
+        self.source_id = _SOURCE_ID
 
     def test_image_url_is_always_none(self) -> None:
         # 構造的事実: Krebs RSS には <media:content> が無い。
         # たとえ entry に media_content が混入しても拾わない設計。
         outcome = self.fetcher._convert_entry(
             _entry(media_content=[{"url": "https://example.com/foo.jpg"}]),
-            self.source,
+            self.source_id,
             "en-US",
         )
         assert isinstance(outcome, ReadyForArticle)
         assert outcome.metadata.image_url is None
 
     def test_extracts_author(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en-US")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en-US")
         assert isinstance(outcome, ReadyForArticle)
         assert outcome.metadata.author == "BrianKrebs"
 
     def test_extracts_tags(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en-US")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en-US")
         assert isinstance(outcome, ReadyForArticle)
         assert outcome.metadata.tags == ("Phishing",)
 
     def test_empty_title_returns_failed(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(title=""), self.source, "en-US")
+        outcome = self.fetcher._convert_entry(_entry(title=""), self.source_id, "en-US")
         assert isinstance(outcome, Failed)
         assert outcome.reason.code == "title_missing"
 
     def test_short_body_returns_failed(self) -> None:
         outcome = self.fetcher._convert_entry(
-            _entry(content=[{"value": "<p>tiny</p>"}]), self.source, "en-US"
+            _entry(content=[{"value": "<p>tiny</p>"}]), self.source_id, "en-US"
         )
         assert isinstance(outcome, Failed)
         assert outcome.reason.code == "body_too_short"
 
     def test_invalid_link_returns_failed(self) -> None:
         outcome = self.fetcher._convert_entry(
-            _entry(link="not-a-url"), self.source, "en-US"
+            _entry(link="not-a-url"), self.source_id, "en-US"
         )
         assert isinstance(outcome, Failed)
         assert outcome.reason.code == "extraction_empty"
@@ -121,7 +114,7 @@ class TestFixtureParsing:
         text = _FIXTURE.read_text(encoding="utf-8")
         feed = feedparser.parse(text)
         fetcher = KrebsOnSecurityFetcher()
-        outcome = fetcher._convert_entry(feed.entries[0], _source(), "en-US")
+        outcome = fetcher._convert_entry(feed.entries[0], _SOURCE_ID, "en-US")
         assert isinstance(outcome, ReadyForArticle)
         assert outcome.article.title.startswith("Phishing campaign abuses")
         assert "phishing kits" in outcome.article.body
@@ -133,6 +126,6 @@ class TestFixtureParsing:
         text = _FIXTURE.read_text(encoding="utf-8")
         feed = feedparser.parse(text)
         fetcher = KrebsOnSecurityFetcher()
-        outcome = fetcher._convert_entry(feed.entries[1], _source(), "en-US")
+        outcome = fetcher._convert_entry(feed.entries[1], _SOURCE_ID, "en-US")
         assert isinstance(outcome, Failed)
         assert outcome.reason.code == "body_too_short"

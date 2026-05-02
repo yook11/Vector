@@ -12,18 +12,18 @@ collection-acquisition-redesign Phase 1 + Phase 1b'。新 ``Fetcher`` Protocol
 
 責務:
 
-1. ``NewsSource`` の読み込み (無ければ ``SourceNotFoundOutcome``)
-2. Fetcher の async iterator を回し、3 variants を ``match`` で分岐
-3. 永続化 (両 Repository の既存 on_conflict_do_nothing パターンで race recovery)
-4. ``Article`` Entity (``from_draft``) を組み立てて ``IngestedOutcome`` に詰める
+1. Fetcher の async iterator を回し、3 variants を ``match`` で分岐
+2. 永続化 (両 Repository の既存 on_conflict_do_nothing パターンで race recovery)
+3. ``Article`` Entity (``from_draft``) を組み立てて ``IngestedOutcome`` に詰める
    (Pattern R 経路のみ。Pattern H は 2 段目で Article が作られるので本 Outcome
    には含まれない)
-5. ``commit`` まで Service の責務、下流 (Stage C ``extract_content.kiq`` /
+4. ``commit`` まで Service の責務、下流 (Stage C ``extract_content.kiq`` /
    Pattern H ``extract_html_body.kiq``) は呼び出し側 Task が行う
 
-旧 ``SourceFetchService`` (URL+title だけ取って fetch_content に渡す 2 段階前提)
-とは別系統で、Strangler 移行期間中は並走する。``strategy.NEW_ROUTE_FETCHERS``
-に登録されたソースだけが本 Service 経由で取り込まれる。
+``NewsSource`` ORM の lookup は本 Service では行わない。``source_id`` を kiq
+envelope (``IngestSourceArg``) で受け取った Task 側で 1 度だけ DB query 済の
+前提 (Fetcher 自身は ``NAME`` / ``ENDPOINT_URL`` ClassVar で自己完結し、
+``source_id`` は永続化時の FK 値としてだけ使う)。
 """
 
 from __future__ import annotations
@@ -51,7 +51,6 @@ from app.collection.ingestion.domain.fetched_article import (
 from app.collection.ingestion.fetchers.protocol import Fetcher
 from app.collection.ingestion.repository import DiscoveredArticleRepository
 from app.collection.ingestion.staged import StagedArticle
-from app.models.news_source import NewsSource
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 from app.shared.value_objects.safe_url import SafeUrl
 
@@ -76,14 +75,6 @@ class IngestedOutcome:
     skipped_count: int  # discovered/article のいずれかで race 敗北かつ読み戻し不能
 
 
-@dataclass(frozen=True, slots=True)
-class SourceNotFoundOutcome:
-    """``source_id`` に対応する ``NewsSource`` が DB に存在しない状態。"""
-
-
-IngestionOutcome = IngestedOutcome | SourceNotFoundOutcome
-
-
 class IngestionService:
     """ソース 1 件を新 Protocol Fetcher 経由で 1 段取り込みするユースケース。
 
@@ -99,13 +90,8 @@ class IngestionService:
         self._session_factory = session_factory
         self._fetcher_factory = fetcher_factory
 
-    async def execute(self, source_id: int) -> IngestionOutcome:
+    async def execute(self, source_id: int) -> IngestedOutcome:
         async with self._session_factory() as session:
-            source = await session.get(NewsSource, source_id)
-            if source is None:
-                logger.warning("ingest_source_not_found", source_id=source_id)
-                return SourceNotFoundOutcome()
-
             fetcher = self._fetcher_factory()
 
             persisted: list[Article] = []
@@ -116,11 +102,11 @@ class IngestionService:
             pending_count = 0
 
             try:
-                async for outcome in fetcher.fetch(source):
+                async for outcome in fetcher.fetch(source_id):
                     match outcome:
                         case ReadyForArticle(article=fa, metadata=_m):
                             ready_count += 1
-                            article = await self._persist_one(session, source, fa)
+                            article = await self._persist_one(session, source_id, fa)
                             if article is not None:
                                 persisted.append(article)
                             else:
@@ -129,7 +115,7 @@ class IngestionService:
                             pending_count += 1
                             discovered_id = await self._upsert_discovered_url(
                                 session,
-                                source.id,
+                                source_id,
                                 pending.source_url,
                                 pending.title,
                             )
@@ -146,7 +132,6 @@ class IngestionService:
                             logger.warning(
                                 "ingest_source_entry_failed",
                                 source_id=source_id,
-                                source=source.name,
                                 code=r.code,
                                 retryable=r.retryable,
                                 detail=r.detail,
@@ -161,7 +146,6 @@ class IngestionService:
         logger.info(
             "ingest_source_completed",
             source_id=source_id,
-            source=source.name,
             ready_count=ready_count,
             pending_count=pending_count,
             failed_count=failed_count,
@@ -179,7 +163,7 @@ class IngestionService:
     async def _persist_one(
         self,
         session: AsyncSession,
-        source: NewsSource,
+        source_id: int,
         fa: FetchedArticle,
     ) -> Article | None:
         """1 entry を discovered + articles に永続化して Entity を返す。
@@ -193,7 +177,7 @@ class IngestionService:
         どちらの読み戻しも失敗した場合のみ ``None`` を返す
         (= skipped、メトリクスでカウント)。
         """
-        discovered_id = await self._upsert_discovered(session, source.id, fa)
+        discovered_id = await self._upsert_discovered(session, source_id, fa)
         if discovered_id is None:
             return None
 
@@ -223,18 +207,18 @@ class IngestionService:
     async def _upsert_discovered(
         self,
         session: AsyncSession,
-        news_source_id: int,
+        source_id: int,
         fa: FetchedArticle,
     ) -> int | None:
         """discovered_articles 行を作って id を返す (既存なら読み戻し)。"""
         return await self._upsert_discovered_url(
-            session, news_source_id, fa.source_url, fa.title
+            session, source_id, fa.source_url, fa.title
         )
 
     async def _upsert_discovered_url(
         self,
         session: AsyncSession,
-        news_source_id: int,
+        source_id: int,
         source_url: SafeUrl,
         title: str,
     ) -> int | None:
@@ -246,7 +230,7 @@ class IngestionService:
         """
         candidate = ArticleCandidate(url=source_url, title=title)
         draft = DiscoveredArticleDraft.from_candidate(
-            candidate, news_source_id=news_source_id
+            candidate, news_source_id=source_id
         )
         repo = DiscoveredArticleRepository(session)
         results = await repo.save_many([draft])

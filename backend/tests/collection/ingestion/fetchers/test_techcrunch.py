@@ -12,7 +12,6 @@ from __future__ import annotations
 import time
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
 
 import feedparser
 
@@ -25,19 +24,13 @@ from app.collection.ingestion.fetchers.techcrunch import (
     _normalize_language,
     _strip_html,
 )
-from app.models.news_source import NewsSource
 
 _FIXTURE = (
     Path(__file__).parent.parent.parent.parent / "fixtures" / "techcrunch_rss.xml"
 )
 
 
-def _source(source_id: int = 1, name: str = "TechCrunch") -> NewsSource:
-    s = MagicMock(spec=NewsSource)
-    s.id = source_id
-    s.name = name
-    s.endpoint_url = "https://techcrunch.com/feed/"
-    return s
+_SOURCE_ID = 1
 
 
 def _entry(**overrides: Any) -> dict[str, Any]:
@@ -102,10 +95,10 @@ class TestNormalizeLanguage:
 class TestConvertEntry:
     def setup_method(self) -> None:
         self.fetcher = TechCrunchFetcher()
-        self.source = _source()
+        self.source_id = _SOURCE_ID
 
     def test_valid_entry_yields_pending(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en-US")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en-US")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.title == "Test TC Title"
         assert outcome.source_id == 1
@@ -115,19 +108,19 @@ class TestConvertEntry:
 
     def test_does_not_construct_body(self) -> None:
         """Pattern H Fetcher は本文を作らない (body は HTML 側で抽出する責務)。"""
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en-US")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en-US")
         assert isinstance(outcome, PendingHtmlFetch)
         # PendingHtmlFetch には body field が存在しない (型レベルの保証)
         assert not hasattr(outcome, "body")
 
     def test_empty_title_returns_failed(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(title=""), self.source, "en-US")
+        outcome = self.fetcher._convert_entry(_entry(title=""), self.source_id, "en-US")
         assert isinstance(outcome, Failed)
         assert outcome.reason.code == "title_missing"
 
     def test_invalid_link_returns_failed(self) -> None:
         outcome = self.fetcher._convert_entry(
-            _entry(link="not-a-url"), self.source, "en-US"
+            _entry(link="not-a-url"), self.source_id, "en-US"
         )
         assert isinstance(outcome, Failed)
         assert outcome.reason.code == "extraction_empty"
@@ -136,45 +129,45 @@ class TestConvertEntry:
         """Pattern H 固有: pubDate 欠落でも Failed しない (HTML が補完しうる)。"""
         e = _entry()
         del e["published_parsed"]
-        outcome = self.fetcher._convert_entry(e, self.source, "en-US")
+        outcome = self.fetcher._convert_entry(e, self.source_id, "en-US")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.published_at_hint is None
 
     def test_extracts_tags(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en-US")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en-US")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.metadata.tags == ("AI", "Funding")
 
     def test_extracts_image_url(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en-US")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en-US")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.metadata.image_url is not None
         assert str(outcome.metadata.image_url) == "https://techcrunch.com/cover.jpg"
 
     def test_extracts_author(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en-US")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en-US")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.metadata.author == "Jane Doe"
 
     def test_extracts_guid(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en-US")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en-US")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.metadata.guid == "https://techcrunch.com/?p=1"
 
     def test_site_name_hardcoded(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en-US")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en-US")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.metadata.site_name == "TechCrunch"
 
     def test_falls_back_to_updated_parsed(self) -> None:
         e = _entry()
         e["updated_parsed"] = e.pop("published_parsed")
-        outcome = self.fetcher._convert_entry(e, self.source, "en-US")
+        outcome = self.fetcher._convert_entry(e, self.source_id, "en-US")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.published_at_hint is not None
 
     def test_published_at_hint_is_utc(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en-US")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en-US")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.published_at_hint is not None
         assert outcome.published_at_hint.value.tzinfo is not None
@@ -194,7 +187,7 @@ class TestFixtureParsing:
         text = _FIXTURE.read_text(encoding="utf-8")
         feed = feedparser.parse(text)
         fetcher = TechCrunchFetcher()
-        outcome = fetcher._convert_entry(feed.entries[0], _source(), "en-US")
+        outcome = fetcher._convert_entry(feed.entries[0], _SOURCE_ID, "en-US")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.title.startswith("OpenAI raises")
         assert outcome.metadata.language == "en-US"
@@ -207,6 +200,6 @@ class TestFixtureParsing:
         text = _FIXTURE.read_text(encoding="utf-8")
         feed = feedparser.parse(text)
         fetcher = TechCrunchFetcher()
-        outcome = fetcher._convert_entry(feed.entries[2], _source(), "en-US")
+        outcome = fetcher._convert_entry(feed.entries[2], _SOURCE_ID, "en-US")
         assert isinstance(outcome, Failed)
         assert outcome.reason.code == "title_missing"

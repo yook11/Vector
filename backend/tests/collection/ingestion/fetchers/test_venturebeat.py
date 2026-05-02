@@ -12,7 +12,6 @@ from __future__ import annotations
 import time
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
 
 import feedparser
 
@@ -26,19 +25,13 @@ from app.collection.ingestion.fetchers.venturebeat import (
     _pick_body,
     _strip_html,
 )
-from app.models.news_source import NewsSource
 
 _FIXTURE = (
     Path(__file__).parent.parent.parent.parent / "fixtures" / "venturebeat_rss.xml"
 )
 
 
-def _source(source_id: int = 1, name: str = "VentureBeat") -> NewsSource:
-    s = MagicMock(spec=NewsSource)
-    s.id = source_id
-    s.name = name
-    s.endpoint_url = "https://venturebeat.com/feed/"
-    return s
+_SOURCE_ID = 1
 
 
 _LOREM = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. "
@@ -127,10 +120,10 @@ class TestNormalizeLanguage:
 class TestConvertEntry:
     def setup_method(self) -> None:
         self.fetcher = VentureBeatFetcher()
-        self.source = _source()
+        self.source_id = _SOURCE_ID
 
     def test_valid_entry_yields_ready(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en-US")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en-US")
         assert isinstance(outcome, ReadyForArticle)
         assert outcome.article.title == "Test Title"
         assert "Sed ut perspiciatis" in outcome.article.body
@@ -139,21 +132,21 @@ class TestConvertEntry:
         assert outcome.metadata.guid == "https://venturebeat.com/?p=1"
 
     def test_picks_longer_body(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en-US")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en-US")
         assert isinstance(outcome, ReadyForArticle)
         # content[0].value > summary なので content の中身が採用される
         assert "Sed ut perspiciatis" in outcome.article.body
         assert "Lorem ipsum" not in outcome.article.body
 
     def test_empty_title_returns_failed(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(title=""), self.source, "en-US")
+        outcome = self.fetcher._convert_entry(_entry(title=""), self.source_id, "en-US")
         assert isinstance(outcome, Failed)
         assert outcome.reason.code == "title_missing"
 
     def test_short_body_returns_failed(self) -> None:
         outcome = self.fetcher._convert_entry(
             _entry(summary="<p>too short</p>", content=[{"value": "<p>tiny</p>"}]),
-            self.source,
+            self.source_id,
             "en-US",
         )
         assert isinstance(outcome, Failed)
@@ -162,41 +155,41 @@ class TestConvertEntry:
     def test_missing_published_returns_failed(self) -> None:
         e = _entry()
         del e["published_parsed"]
-        outcome = self.fetcher._convert_entry(e, self.source, "en-US")
+        outcome = self.fetcher._convert_entry(e, self.source_id, "en-US")
         assert isinstance(outcome, Failed)
         assert outcome.reason.code == "published_at_missing"
 
     def test_invalid_link_returns_failed(self) -> None:
         outcome = self.fetcher._convert_entry(
-            _entry(link="not-a-url"), self.source, "en-US"
+            _entry(link="not-a-url"), self.source_id, "en-US"
         )
         assert isinstance(outcome, Failed)
         assert outcome.reason.code == "extraction_empty"
 
     def test_extracts_tags(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en-US")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en-US")
         assert isinstance(outcome, ReadyForArticle)
         assert outcome.metadata.tags == ("AI", "Funding")
 
     def test_extracts_image_url(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en-US")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en-US")
         assert isinstance(outcome, ReadyForArticle)
         assert outcome.metadata.image_url is not None
         assert str(outcome.metadata.image_url) == "https://example.com/cover.jpg"
 
     def test_extracts_author(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en-US")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en-US")
         assert isinstance(outcome, ReadyForArticle)
         assert outcome.metadata.author == "Jane Doe"
 
     def test_falls_back_to_updated_parsed(self) -> None:
         e = _entry()
         e["updated_parsed"] = e.pop("published_parsed")
-        outcome = self.fetcher._convert_entry(e, self.source, "en-US")
+        outcome = self.fetcher._convert_entry(e, self.source_id, "en-US")
         assert isinstance(outcome, ReadyForArticle)
 
     def test_published_at_is_utc(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en-US")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en-US")
         assert isinstance(outcome, ReadyForArticle)
         assert outcome.article.published_at.value.tzinfo is not None
         assert outcome.article.published_at.value.year == 2026
@@ -216,7 +209,7 @@ class TestFixtureParsing:
         text = _FIXTURE.read_text(encoding="utf-8")
         feed = feedparser.parse(text)
         fetcher = VentureBeatFetcher()
-        outcome = fetcher._convert_entry(feed.entries[0], _source(), "en-US")
+        outcome = fetcher._convert_entry(feed.entries[0], _SOURCE_ID, "en-US")
         assert isinstance(outcome, ReadyForArticle)
         assert outcome.article.title.startswith("AI startup raises")
         assert "$50M Series B" in outcome.article.body
@@ -229,6 +222,6 @@ class TestFixtureParsing:
         text = _FIXTURE.read_text(encoding="utf-8")
         feed = feedparser.parse(text)
         fetcher = VentureBeatFetcher()
-        outcome = fetcher._convert_entry(feed.entries[1], _source(), "en-US")
+        outcome = fetcher._convert_entry(feed.entries[1], _SOURCE_ID, "en-US")
         assert isinstance(outcome, Failed)
         assert outcome.reason.code == "body_too_short"

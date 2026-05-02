@@ -31,17 +31,11 @@ from app.collection.ingestion.fetchers.hacker_news import (
     HN_SLIDING_WINDOW_SECONDS,
     HackerNewsFetcher,
 )
-from app.models.news_source import NewsSource
 
 _HN_MOD = "app.collection.ingestion.fetchers.hacker_news"
 
 
-def _source(source_id: int = 1, name: str = "Hacker News") -> NewsSource:
-    s = MagicMock(spec=NewsSource)
-    s.id = source_id
-    s.name = name
-    s.endpoint_url = "https://hn.algolia.com/api/v1/search_by_date"
-    return s
+_SOURCE_ID = 1
 
 
 def _hit(**overrides: Any) -> dict[str, Any]:
@@ -104,39 +98,39 @@ class TestProvides:
 class TestConvertHit:
     def setup_method(self) -> None:
         self.fetcher = HackerNewsFetcher()
-        self.source = _source()
+        self.source_id = _SOURCE_ID
 
     def test_valid_hit_yields_pending(self) -> None:
-        outcome = self.fetcher._convert_hit(_hit(), self.source)
+        outcome = self.fetcher._convert_hit(_hit(), self.source_id)
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.title.startswith("I'm helping")
 
     def test_does_not_construct_body(self) -> None:
-        outcome = self.fetcher._convert_hit(_hit(), self.source)
+        outcome = self.fetcher._convert_hit(_hit(), self.source_id)
         assert isinstance(outcome, PendingHtmlFetch)
         assert not hasattr(outcome, "body")
 
     def test_missing_url_returns_none_for_skip(self) -> None:
         # Ask HN 等のテキスト投稿: url=None は yield せずに skip する
-        outcome = self.fetcher._convert_hit(_hit(url=None), self.source)
+        outcome = self.fetcher._convert_hit(_hit(url=None), self.source_id)
         assert outcome is None
 
     def test_empty_url_returns_none_for_skip(self) -> None:
-        outcome = self.fetcher._convert_hit(_hit(url=""), self.source)
+        outcome = self.fetcher._convert_hit(_hit(url=""), self.source_id)
         assert outcome is None
 
     def test_invalid_url_returns_failed(self) -> None:
-        outcome = self.fetcher._convert_hit(_hit(url="not-a-url"), self.source)
+        outcome = self.fetcher._convert_hit(_hit(url="not-a-url"), self.source_id)
         assert isinstance(outcome, Failed)
         assert outcome.reason.code == "extraction_empty"
 
     def test_empty_title_returns_failed(self) -> None:
-        outcome = self.fetcher._convert_hit(_hit(title=""), self.source)
+        outcome = self.fetcher._convert_hit(_hit(title=""), self.source_id)
         assert isinstance(outcome, Failed)
         assert outcome.reason.code == "title_missing"
 
     def test_published_at_from_iso8601(self) -> None:
-        outcome = self.fetcher._convert_hit(_hit(), self.source)
+        outcome = self.fetcher._convert_hit(_hit(), self.source_id)
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.published_at_hint is not None
         assert (
@@ -147,38 +141,38 @@ class TestConvertHit:
         # Pattern H 緩い品質ゲート: published_at 欠落でも Failed しない
         hit = _hit()
         del hit["created_at"]
-        outcome = self.fetcher._convert_hit(hit, self.source)
+        outcome = self.fetcher._convert_hit(hit, self.source_id)
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.published_at_hint is None
 
     def test_metadata_author_from_hit(self) -> None:
-        outcome = self.fetcher._convert_hit(_hit(), self.source)
+        outcome = self.fetcher._convert_hit(_hit(), self.source_id)
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.metadata.author == "cleak"
 
     def test_metadata_tags_empty(self) -> None:
-        outcome = self.fetcher._convert_hit(_hit(), self.source)
+        outcome = self.fetcher._convert_hit(_hit(), self.source_id)
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.metadata.tags == ()
 
     def test_metadata_image_url_hardcoded_none(self) -> None:
-        outcome = self.fetcher._convert_hit(_hit(), self.source)
+        outcome = self.fetcher._convert_hit(_hit(), self.source_id)
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.metadata.image_url is None
 
     def test_metadata_guid_is_object_id(self) -> None:
-        outcome = self.fetcher._convert_hit(_hit(), self.source)
+        outcome = self.fetcher._convert_hit(_hit(), self.source_id)
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.metadata.guid == "47139675"
 
     def test_metadata_language_is_none(self) -> None:
         # PROVIDES 非含有: 外部 URL 由来で feed-level に存在しない
-        outcome = self.fetcher._convert_hit(_hit(), self.source)
+        outcome = self.fetcher._convert_hit(_hit(), self.source_id)
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.metadata.language is None
 
     def test_metadata_site_name_hardcoded(self) -> None:
-        outcome = self.fetcher._convert_hit(_hit(), self.source)
+        outcome = self.fetcher._convert_hit(_hit(), self.source_id)
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.metadata.site_name == "Hacker News"
 
@@ -203,16 +197,16 @@ _SAMPLE_RESPONSE = {
 
 @pytest.mark.asyncio
 class TestFetch:
-    async def _collect(self, fetcher: HackerNewsFetcher, source: NewsSource) -> list:
+    async def _collect(self, fetcher: HackerNewsFetcher, source_id: int) -> list:
         outcomes: list = []
-        async for outcome in fetcher.fetch(source):
+        async for outcome in fetcher.fetch(source_id):
             outcomes.append(outcome)
         return outcomes
 
     async def test_fetch_yields_pending_for_valid_hits(self) -> None:
         cm = _mock_safe_client(_mock_response(_SAMPLE_RESPONSE))
         with patch(f"{_HN_MOD}.make_safe_async_client", return_value=cm):
-            outcomes = await self._collect(HackerNewsFetcher(), _source())
+            outcomes = await self._collect(HackerNewsFetcher(), _SOURCE_ID)
 
         # url=None の Ask HN は skip、残り 2 件が PendingHtmlFetch
         assert len(outcomes) == 2
@@ -227,7 +221,7 @@ class TestFetch:
             patch(f"{_HN_MOD}.make_safe_async_client", return_value=cm),
             patch(f"{_HN_MOD}.time.time", return_value=fixed_now),
         ):
-            await self._collect(HackerNewsFetcher(), _source())
+            await self._collect(HackerNewsFetcher(), _SOURCE_ID)
 
         expected_since = fixed_now - HN_SLIDING_WINDOW_SECONDS
         numeric_filters = _request_params(cm).get("numericFilters", "")
@@ -236,7 +230,7 @@ class TestFetch:
     async def test_fetch_uses_min_points_param(self) -> None:
         cm = _mock_safe_client(_mock_response({"hits": []}))
         with patch(f"{_HN_MOD}.make_safe_async_client", return_value=cm):
-            await self._collect(HackerNewsFetcher(), _source())
+            await self._collect(HackerNewsFetcher(), _SOURCE_ID)
 
         numeric_filters = _request_params(cm).get("numericFilters", "")
         assert f"points>{HN_MIN_POINTS}" in numeric_filters
@@ -244,7 +238,7 @@ class TestFetch:
     async def test_fetch_uses_hits_per_page_and_tags(self) -> None:
         cm = _mock_safe_client(_mock_response({"hits": []}))
         with patch(f"{_HN_MOD}.make_safe_async_client", return_value=cm):
-            await self._collect(HackerNewsFetcher(), _source())
+            await self._collect(HackerNewsFetcher(), _SOURCE_ID)
 
         params = _request_params(cm)
         assert params["hitsPerPage"] == HN_HITS_PER_PAGE
@@ -260,7 +254,7 @@ class TestFetch:
             patch(f"{_HN_MOD}.make_safe_async_client", return_value=cm),
             pytest.raises(PermanentFetchError),
         ):
-            await self._collect(HackerNewsFetcher(), _source())
+            await self._collect(HackerNewsFetcher(), _SOURCE_ID)
 
     async def test_fetch_500_raises_temporary(self) -> None:
         response = _mock_response({}, status_code=500)
@@ -272,7 +266,7 @@ class TestFetch:
             patch(f"{_HN_MOD}.make_safe_async_client", return_value=cm),
             pytest.raises(TemporaryFetchError),
         ):
-            await self._collect(HackerNewsFetcher(), _source())
+            await self._collect(HackerNewsFetcher(), _SOURCE_ID)
 
     async def test_fetch_request_error_raises_temporary(self) -> None:
         error = httpx.RequestError("connection failed")
@@ -281,10 +275,10 @@ class TestFetch:
             patch(f"{_HN_MOD}.make_safe_async_client", return_value=cm),
             pytest.raises(TemporaryFetchError),
         ):
-            await self._collect(HackerNewsFetcher(), _source())
+            await self._collect(HackerNewsFetcher(), _SOURCE_ID)
 
     async def test_fetch_returns_empty_when_no_hits(self) -> None:
         cm = _mock_safe_client(_mock_response({"hits": []}))
         with patch(f"{_HN_MOD}.make_safe_async_client", return_value=cm):
-            outcomes = await self._collect(HackerNewsFetcher(), _source())
+            outcomes = await self._collect(HackerNewsFetcher(), _SOURCE_ID)
         assert outcomes == []

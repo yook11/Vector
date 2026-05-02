@@ -8,7 +8,6 @@ from __future__ import annotations
 import time
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
 
 import feedparser
 
@@ -17,17 +16,11 @@ from app.collection.ingestion.domain.fetched_article import (
     PendingHtmlFetch,
 )
 from app.collection.ingestion.fetchers.monoist import MONOistFetcher
-from app.models.news_source import NewsSource
 
 _FIXTURE = Path(__file__).parent.parent.parent.parent / "fixtures" / "monoist_rss.xml"
 
 
-def _source(source_id: int = 1, name: str = "MONOist") -> NewsSource:
-    s = MagicMock(spec=NewsSource)
-    s.id = source_id
-    s.name = name
-    s.endpoint_url = "https://rss.itmedia.co.jp/rss/2.0/monoist.xml"
-    return s
+_SOURCE_ID = 1
 
 
 def _entry(**overrides: Any) -> dict[str, Any]:
@@ -51,20 +44,20 @@ class TestProvides:
 class TestConvertEntry:
     def setup_method(self) -> None:
         self.fetcher = MONOistFetcher()
-        self.source = _source()
+        self.source_id = _SOURCE_ID
 
     def test_valid_entry_yields_pending(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "ja")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "ja")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.title.startswith("トヨタ")
 
     def test_empty_title_returns_failed(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(title=""), self.source, "ja")
+        outcome = self.fetcher._convert_entry(_entry(title=""), self.source_id, "ja")
         assert isinstance(outcome, Failed)
         assert outcome.reason.code == "title_missing"
 
     def test_metadata_minimum(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "ja")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "ja")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.metadata.author is None
         assert outcome.metadata.tags == ()
@@ -78,7 +71,7 @@ class TestFixtureParsing:
         text = _FIXTURE.read_text(encoding="utf-8")
         feed = feedparser.parse(text)
         fetcher = MONOistFetcher()
-        outcome = fetcher._convert_entry(feed.entries[0], _source(), "ja")
+        outcome = fetcher._convert_entry(feed.entries[0], _SOURCE_ID, "ja")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.title.startswith("トヨタ")
         assert outcome.metadata.site_name == "MONOist"

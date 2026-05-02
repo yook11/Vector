@@ -27,7 +27,6 @@ from app.collection.ingestion.domain.fetched_article import (
 from app.collection.ingestion.ingestion_service import (
     IngestedOutcome,
     IngestionService,
-    SourceNotFoundOutcome,
 )
 from app.models.article import Article as ArticleORM
 from app.models.discovered_article import DiscoveredArticle as DiscoveredArticleORM
@@ -66,7 +65,7 @@ class _StubFetcher:
     def __init__(self, outcomes: list[FetchOutcome]) -> None:
         self._outcomes = outcomes
 
-    async def fetch(self, source: NewsSource) -> AsyncIterator[FetchOutcome]:
+    async def fetch(self, source_id: int) -> AsyncIterator[FetchOutcome]:
         for o in self._outcomes:
             yield o
 
@@ -84,15 +83,6 @@ async def vb_source(db_session: AsyncSession) -> NewsSource:
     await db_session.commit()
     await db_session.refresh(source)
     return source
-
-
-@pytest.mark.asyncio
-async def test_source_not_found_returns_outcome(
-    session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    svc = IngestionService(session_factory, lambda: _StubFetcher([]))
-    outcome = await svc.execute(source_id=999_999)
-    assert isinstance(outcome, SourceNotFoundOutcome)
 
 
 @pytest.mark.asyncio

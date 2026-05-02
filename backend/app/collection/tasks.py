@@ -14,7 +14,6 @@ chain。Pattern H (RSS / API で本文未取得) は ``PendingHtmlFetch`` を yi
 from __future__ import annotations
 
 import time
-from typing import assert_never
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -31,7 +30,7 @@ from app.collection.errors import (
     PermanentFetchError,
     TemporaryFetchError,
 )
-from app.collection.ingestion.staged import StagedArticle
+from app.collection.ingestion.staged import IngestSourceArg, StagedArticle
 from app.models.fetch_log import FetchLog, FetchStatus
 from app.models.news_source import NewsSource
 
@@ -98,7 +97,7 @@ async def dispatch_sources(
         return {"dispatched_count": 0}
 
     for source in sources:
-        await ingest_source.kiq(source.id)
+        await ingest_source.kiq(IngestSourceArg(id=source.id, name=str(source.name)))
 
     result = {"dispatched_count": len(sources)}
     logger.info("dispatch_sources_completed", **result)
@@ -117,10 +116,15 @@ async def dispatch_sources(
     retry_on_error=True,
 )
 async def ingest_source(
-    source_id: int,
+    arg: IngestSourceArg,
     ctx: Context = TaskiqDepends(),
 ) -> dict:
     """新 Protocol Fetcher 経由でソースを取り込む。
+
+    ``arg.id`` は ``news_sources.id`` (FK 用)、``arg.name`` は ``FETCHERS``
+    dispatch dict の lookup キー。``dispatch_sources`` で 1 度だけ DB を
+    引いて envelope に詰めているため、本 task では ``NewsSource`` を再
+    lookup しない。
 
     Pattern R (本文込み RSS): Fetcher が ``ReadyForArticle`` を yield、
     Article 永続化 → ``ReadyForExtraction`` 構築 → ``extract_content.kiq``。
@@ -131,24 +135,15 @@ async def ingest_source(
     from app.analysis.extraction.domain.ready import ReadyForExtraction
     from app.analysis.extraction.repository import ExtractionRepository
     from app.analysis.tasks import extract_content
-    from app.collection.ingestion.ingestion_service import (
-        IngestedOutcome,
-        IngestionService,
-        SourceNotFoundOutcome,
-    )
+    from app.collection.ingestion.ingestion_service import IngestionService
     from app.collection.ingestion.strategy import FETCHERS
 
-    logger.info("ingest_source_started", source_id=source_id)
+    source_id = arg.id
+    logger.info("ingest_source_started", source_id=source_id, source_name=arg.name)
     session_factory = ctx.state.session_factory
     start_time = time.monotonic()
 
-    async with session_factory() as session:
-        source = await session.get(NewsSource, source_id)
-    if source is None:
-        logger.warning("ingest_source_not_found", source_id=source_id)
-        return {"source_id": source_id, "status": "not_found"}
-
-    fetcher_factory = FETCHERS[str(source.name)]
+    fetcher_factory = FETCHERS[arg.name]
     svc = IngestionService(session_factory, fetcher_factory)
 
     try:
@@ -166,60 +161,53 @@ async def ingest_source(
             logger.warning(
                 "ingest_source_max_retries",
                 source_id=source_id,
+                source_name=arg.name,
                 error=str(e),
             )
             return {"source_id": source_id, "status": "error", "reason": str(e)}
         raise
 
-    match outcome:
-        case SourceNotFoundOutcome():
-            return {"source_id": source_id, "status": "not_found"}
-        case IngestedOutcome(
-            persisted=articles,
-            staged=staged_list,
-            failed_count=fc,
-            skipped_count=sc,
-        ):
-            persisted_count = len(articles)
-            staged_count = len(staged_list)
-            await _record_fetch_log(
-                session_factory,
-                source_id,
-                FetchStatus.SUCCESS,
-                persisted_count,
-                None,
-                start_time,
+    articles = outcome.persisted
+    staged_list = outcome.staged
+    persisted_count = len(articles)
+    staged_count = len(staged_list)
+    await _record_fetch_log(
+        session_factory,
+        source_id,
+        FetchStatus.SUCCESS,
+        persisted_count,
+        None,
+        start_time,
+    )
+    # Pattern R 経路: 永続化済 Article から ReadyForExtraction を構築し kiq
+    async with session_factory() as session:
+        extraction_repo = ExtractionRepository(session)
+        pending: list = []
+        for article in articles:
+            ready = await ReadyForExtraction.try_advance_from(
+                article_id=article.id,
+                original_title=article.title,
+                original_content=article.body,
+                extraction_repo=extraction_repo,
             )
-            # Pattern R 経路: 永続化済 Article から ReadyForExtraction を構築し kiq
-            async with session_factory() as session:
-                extraction_repo = ExtractionRepository(session)
-                pending: list = []
-                for article in articles:
-                    ready = await ReadyForExtraction.try_advance_from(
-                        article_id=article.id,
-                        original_title=article.title,
-                        original_content=article.body,
-                        extraction_repo=extraction_repo,
-                    )
-                    if ready is not None:
-                        pending.append(ready)
-            for ready in pending:
-                await extract_content.kiq(ready)
-            # Pattern H 経路: discovered のみ作成済の StagedArticle を 2 段目 task へ
-            for staged in staged_list:
-                await extract_html_body.kiq(staged)
-            payload = {
-                "source_id": source_id,
-                "status": "success",
-                "persisted_count": persisted_count,
-                "staged_count": staged_count,
-                "failed_count": fc,
-                "skipped_count": sc,
-            }
-            logger.info("ingest_source_completed", **payload)
-            return payload
-        case _:
-            assert_never(outcome)
+            if ready is not None:
+                pending.append(ready)
+    for ready in pending:
+        await extract_content.kiq(ready)
+    # Pattern H 経路: discovered のみ作成済の StagedArticle を 2 段目 task へ
+    for staged in staged_list:
+        await extract_html_body.kiq(staged)
+    payload = {
+        "source_id": source_id,
+        "source_name": arg.name,
+        "status": "success",
+        "persisted_count": persisted_count,
+        "staged_count": staged_count,
+        "failed_count": outcome.failed_count,
+        "skipped_count": outcome.skipped_count,
+    }
+    logger.info("ingest_source_completed", **payload)
+    return payload
 
 
 # ---------------------------------------------------------------------------
