@@ -11,7 +11,6 @@ from __future__ import annotations
 import time
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
 
 import feedparser
 
@@ -24,19 +23,13 @@ from app.collection.ingestion.fetchers.itmedia_ai import (
     _normalize_language,
     _strip_title_prefix,
 )
-from app.models.news_source import NewsSource
 
 _FIXTURE = (
     Path(__file__).parent.parent.parent.parent / "fixtures" / "itmedia_ai_rss.xml"
 )
 
 
-def _source(source_id: int = 1, name: str = "ITmedia AI+") -> NewsSource:
-    s = MagicMock(spec=NewsSource)
-    s.id = source_id
-    s.name = name
-    s.endpoint_url = "https://rss.itmedia.co.jp/rss/2.0/aiplus.xml"
-    return s
+_SOURCE_ID = 1
 
 
 def _entry(**overrides: Any) -> dict[str, Any]:
@@ -82,28 +75,28 @@ class TestNormalizeLanguage:
 class TestConvertEntry:
     def setup_method(self) -> None:
         self.fetcher = ITmediaAIFetcher()
-        self.source = _source()
+        self.source_id = _SOURCE_ID
 
     def test_valid_entry_yields_pending(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "ja")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "ja")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.title == "Claude が新機能を追加"  # 接頭辞除去済み
         assert outcome.source_id == 1
         assert outcome.published_at_hint is not None
 
     def test_does_not_construct_body(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "ja")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "ja")
         assert isinstance(outcome, PendingHtmlFetch)
         assert not hasattr(outcome, "body")
 
     def test_empty_title_returns_failed(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(title=""), self.source, "ja")
+        outcome = self.fetcher._convert_entry(_entry(title=""), self.source_id, "ja")
         assert isinstance(outcome, Failed)
         assert outcome.reason.code == "title_missing"
 
     def test_invalid_link_returns_failed(self) -> None:
         outcome = self.fetcher._convert_entry(
-            _entry(link="not-a-url"), self.source, "ja"
+            _entry(link="not-a-url"), self.source_id, "ja"
         )
         assert isinstance(outcome, Failed)
         assert outcome.reason.code == "extraction_empty"
@@ -111,12 +104,12 @@ class TestConvertEntry:
     def test_missing_published_yields_pending_with_none(self) -> None:
         e = _entry()
         del e["published_parsed"]
-        outcome = self.fetcher._convert_entry(e, self.source, "ja")
+        outcome = self.fetcher._convert_entry(e, self.source_id, "ja")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.published_at_hint is None
 
     def test_metadata_minimum(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "ja")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "ja")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.metadata.author is None
         assert outcome.metadata.tags == ()
@@ -131,7 +124,7 @@ class TestFixtureParsing:
         text = _FIXTURE.read_text(encoding="utf-8")
         feed = feedparser.parse(text)
         fetcher = ITmediaAIFetcher()
-        outcome = fetcher._convert_entry(feed.entries[0], _source(), "ja")
+        outcome = fetcher._convert_entry(feed.entries[0], _SOURCE_ID, "ja")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.title.startswith("「Claude」が新機能を追加")
         assert "[ITmedia" not in outcome.title
@@ -142,6 +135,6 @@ class TestFixtureParsing:
         text = _FIXTURE.read_text(encoding="utf-8")
         feed = feedparser.parse(text)
         fetcher = ITmediaAIFetcher()
-        outcome = fetcher._convert_entry(feed.entries[2], _source(), "ja")
+        outcome = fetcher._convert_entry(feed.entries[2], _SOURCE_ID, "ja")
         assert isinstance(outcome, Failed)
         assert outcome.reason.code == "title_missing"

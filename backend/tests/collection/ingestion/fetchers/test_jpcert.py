@@ -15,7 +15,6 @@ from __future__ import annotations
 import time
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
 
 import feedparser
 
@@ -24,17 +23,11 @@ from app.collection.ingestion.domain.fetched_article import (
     PendingHtmlFetch,
 )
 from app.collection.ingestion.fetchers.jpcert import JPCERTFetcher
-from app.models.news_source import NewsSource
 
 _FIXTURE = Path(__file__).parent.parent.parent.parent / "fixtures" / "jpcert_rss.xml"
 
 
-def _source(source_id: int = 1, name: str = "JPCERT/CC") -> NewsSource:
-    s = MagicMock(spec=NewsSource)
-    s.id = source_id
-    s.name = name
-    s.endpoint_url = "https://www.jpcert.or.jp/rss/jpcert.rdf"
-    return s
+_SOURCE_ID = 1
 
 
 def _entry(**overrides: Any) -> dict[str, Any]:
@@ -56,15 +49,15 @@ class TestProvides:
 class TestConvertEntry:
     def setup_method(self) -> None:
         self.fetcher = JPCERTFetcher()
-        self.source = _source()
+        self.source_id = _SOURCE_ID
 
     def test_valid_entry_yields_pending(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "ja")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "ja")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.title.startswith("注意喚起:")
 
     def test_does_not_construct_body(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "ja")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "ja")
         assert isinstance(outcome, PendingHtmlFetch)
         assert not hasattr(outcome, "body")
 
@@ -75,7 +68,7 @@ class TestConvertEntry:
             "    （CVE-2026-12345、CVE-2026-12346）に関する注意喚起 (更新)"
         )
         outcome = self.fetcher._convert_entry(
-            _entry(title=multiline), self.source, "ja"
+            _entry(title=multiline), self.source_id, "ja"
         )
         assert isinstance(outcome, PendingHtmlFetch)
         # 改行 / 連続空白が単一スペースに正規化されていること
@@ -87,33 +80,33 @@ class TestConvertEntry:
     def test_does_not_strip_keishin_prefix(self) -> None:
         # ITmedia AI+ の `[ITmedia ...]` と異なり、"注意喚起:" は content
         outcome = self.fetcher._convert_entry(
-            _entry(title="注意喚起: Foo Bar"), self.source, "ja"
+            _entry(title="注意喚起: Foo Bar"), self.source_id, "ja"
         )
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.title == "注意喚起: Foo Bar"
 
     def test_empty_title_returns_failed(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(title=""), self.source, "ja")
+        outcome = self.fetcher._convert_entry(_entry(title=""), self.source_id, "ja")
         assert isinstance(outcome, Failed)
         assert outcome.reason.code == "title_missing"
 
     def test_whitespace_only_title_returns_failed(self) -> None:
         outcome = self.fetcher._convert_entry(
-            _entry(title="   \n   "), self.source, "ja"
+            _entry(title="   \n   "), self.source_id, "ja"
         )
         assert isinstance(outcome, Failed)
         assert outcome.reason.code == "title_missing"
 
     def test_invalid_link_returns_failed(self) -> None:
         outcome = self.fetcher._convert_entry(
-            _entry(link="not-a-url"), self.source, "ja"
+            _entry(link="not-a-url"), self.source_id, "ja"
         )
         assert isinstance(outcome, Failed)
         assert outcome.reason.code == "extraction_empty"
 
     def test_published_parsed_yields_utc(self) -> None:
         # struct_time (UTC として扱われる) → tz=UTC PublishedAt
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "ja")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "ja")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.published_at_hint is not None
         assert (
@@ -124,41 +117,41 @@ class TestConvertEntry:
         # Pattern H 緩い品質ゲート: pubDate 欠落でも Failed しない
         entry = _entry()
         del entry["published_parsed"]
-        outcome = self.fetcher._convert_entry(entry, self.source, "ja")
+        outcome = self.fetcher._convert_entry(entry, self.source_id, "ja")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.published_at_hint is None
 
     def test_metadata_author_is_none(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "ja")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "ja")
         assert isinstance(outcome, PendingHtmlFetch)
         # per-entry の author は未提供 (channel-level webmaster は使わない)
         assert outcome.metadata.author is None
 
     def test_metadata_tags_hardcoded_empty(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "ja")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "ja")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.metadata.tags == ()
 
     def test_metadata_image_url_hardcoded_none(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "ja")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "ja")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.metadata.image_url is None
 
     def test_extracts_guid_from_id(self) -> None:
         # rdf:about → entry.id マップ
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "ja")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "ja")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.metadata.guid == (
             "https://www.jpcert.or.jp/at/2026/at260021.html"
         )
 
     def test_language_passthrough_ja(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "ja")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "ja")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.metadata.language == "ja"
 
     def test_site_name_hardcoded(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "ja")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "ja")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.metadata.site_name == "JPCERT/CC"
 
@@ -174,7 +167,7 @@ class TestFixtureParsing:
         text = _FIXTURE.read_text(encoding="utf-8")
         feed = feedparser.parse(text)
         fetcher = JPCERTFetcher()
-        outcome = fetcher._convert_entry(feed.entries[0], _source(), "ja")
+        outcome = fetcher._convert_entry(feed.entries[0], _SOURCE_ID, "ja")
         assert isinstance(outcome, PendingHtmlFetch)
         # 多行 title が 1 行化されていること
         assert "\n" not in outcome.title
@@ -186,7 +179,7 @@ class TestFixtureParsing:
         text = _FIXTURE.read_text(encoding="utf-8")
         feed = feedparser.parse(text)
         fetcher = JPCERTFetcher()
-        outcome = fetcher._convert_entry(feed.entries[0], _source(), "ja")
+        outcome = fetcher._convert_entry(feed.entries[0], _SOURCE_ID, "ja")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.metadata.guid is not None
         assert outcome.metadata.guid.startswith("https://www.jpcert.or.jp/")
@@ -195,7 +188,7 @@ class TestFixtureParsing:
         text = _FIXTURE.read_text(encoding="utf-8")
         feed = feedparser.parse(text)
         fetcher = JPCERTFetcher()
-        outcome = fetcher._convert_entry(feed.entries[0], _source(), "ja")
+        outcome = fetcher._convert_entry(feed.entries[0], _SOURCE_ID, "ja")
         assert isinstance(outcome, PendingHtmlFetch)
         # ISO 8601 +09:00 → feedparser が UTC 換算して published_parsed を出す
         assert outcome.published_at_hint is not None
@@ -207,6 +200,6 @@ class TestFixtureParsing:
         text = _FIXTURE.read_text(encoding="utf-8")
         feed = feedparser.parse(text)
         fetcher = JPCERTFetcher()
-        outcome = fetcher._convert_entry(feed.entries[2], _source(), "ja")
+        outcome = fetcher._convert_entry(feed.entries[2], _SOURCE_ID, "ja")
         assert isinstance(outcome, Failed)
         assert outcome.reason.code == "title_missing"

@@ -14,7 +14,6 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
 from zoneinfo import ZoneInfo
 
 import feedparser
@@ -27,7 +26,6 @@ from app.collection.ingestion.fetchers.fierce_biotech import (
     FierceBiotechFetcher,
     _parse_published_at,
 )
-from app.models.news_source import NewsSource
 
 _FIXTURE = (
     Path(__file__).parent.parent.parent.parent / "fixtures" / "fierce_biotech_rss.xml"
@@ -35,12 +33,7 @@ _FIXTURE = (
 _ET = ZoneInfo("America/New_York")
 
 
-def _source(source_id: int = 1, name: str = "FierceBiotech") -> NewsSource:
-    s = MagicMock(spec=NewsSource)
-    s.id = source_id
-    s.name = name
-    s.endpoint_url = "https://www.fiercebiotech.com/rss/xml"
-    return s
+_SOURCE_ID = 1
 
 
 def _entry(**overrides: Any) -> dict[str, Any]:
@@ -117,40 +110,40 @@ class TestProvides:
 class TestConvertEntry:
     def setup_method(self) -> None:
         self.fetcher = FierceBiotechFetcher()
-        self.source = _source()
+        self.source_id = _SOURCE_ID
 
     def test_valid_entry_yields_pending(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.published_at_hint is not None
 
     def test_does_not_construct_body(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en")
         assert isinstance(outcome, PendingHtmlFetch)
         assert not hasattr(outcome, "body")
 
     def test_title_strips_html_wrapping(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en")
         assert isinstance(outcome, PendingHtmlFetch)
         assert "<a href=" not in outcome.title
         assert outcome.title == "Amgen abandons late-stage asset"
 
     def test_empty_title_returns_failed(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(title=""), self.source, "en")
+        outcome = self.fetcher._convert_entry(_entry(title=""), self.source_id, "en")
         assert isinstance(outcome, Failed)
         assert outcome.reason.code == "title_missing"
 
     def test_html_only_title_returns_failed(self) -> None:
         # HTML を strip すると空になるケース
         outcome = self.fetcher._convert_entry(
-            _entry(title="<a href='/x'></a>"), self.source, "en"
+            _entry(title="<a href='/x'></a>"), self.source_id, "en"
         )
         assert isinstance(outcome, Failed)
         assert outcome.reason.code == "title_missing"
 
     def test_invalid_link_returns_failed(self) -> None:
         outcome = self.fetcher._convert_entry(
-            _entry(link="not-a-url"), self.source, "en"
+            _entry(link="not-a-url"), self.source_id, "en"
         )
         assert isinstance(outcome, Failed)
         assert outcome.reason.code == "extraction_empty"
@@ -159,45 +152,45 @@ class TestConvertEntry:
         # Pattern H 緩い品質ゲート: pubDate 欠落でも Failed しない
         entry = _entry()
         del entry["published"]
-        outcome = self.fetcher._convert_entry(entry, self.source, "en")
+        outcome = self.fetcher._convert_entry(entry, self.source_id, "en")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.published_at_hint is None
 
     def test_author_strips_html_wrapping(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.metadata.author == "Darren Incorvaia"
 
     def test_author_missing_returns_none(self) -> None:
         entry = _entry()
         del entry["author"]
-        outcome = self.fetcher._convert_entry(entry, self.source, "en")
+        outcome = self.fetcher._convert_entry(entry, self.source_id, "en")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.metadata.author is None
 
     def test_tags_hardcoded_empty(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.metadata.tags == ()
 
     def test_image_url_hardcoded_none(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.metadata.image_url is None
 
     def test_extracts_guid_from_id(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.metadata.guid is not None
         assert outcome.metadata.guid.startswith("https://www.fiercebiotech.com/")
 
     def test_language_passthrough_en(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.metadata.language == "en"
 
     def test_site_name_hardcoded(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.metadata.site_name == "FierceBiotech"
 
@@ -207,7 +200,7 @@ class TestFixtureParsing:
         text = _FIXTURE.read_text(encoding="utf-8")
         feed = feedparser.parse(text)
         fetcher = FierceBiotechFetcher()
-        outcome = fetcher._convert_entry(feed.entries[0], _source(), "en")
+        outcome = fetcher._convert_entry(feed.entries[0], _SOURCE_ID, "en")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.title == "Amgen abandons late-stage asset after trial flop"
         assert outcome.metadata.author == "Darren Incorvaia"
@@ -221,7 +214,7 @@ class TestFixtureParsing:
         text = _FIXTURE.read_text(encoding="utf-8")
         feed = feedparser.parse(text)
         fetcher = FierceBiotechFetcher()
-        outcome = fetcher._convert_entry(feed.entries[0], _source(), "en")
+        outcome = fetcher._convert_entry(feed.entries[0], _SOURCE_ID, "en")
         assert isinstance(outcome, PendingHtmlFetch)
         # "Apr 30, 2026 6:11pm" ET DST → UTC 22:11
         assert outcome.published_at_hint is not None
@@ -233,6 +226,6 @@ class TestFixtureParsing:
         text = _FIXTURE.read_text(encoding="utf-8")
         feed = feedparser.parse(text)
         fetcher = FierceBiotechFetcher()
-        outcome = fetcher._convert_entry(feed.entries[2], _source(), "en")
+        outcome = fetcher._convert_entry(feed.entries[2], _SOURCE_ID, "en")
         assert isinstance(outcome, Failed)
         assert outcome.reason.code == "title_missing"

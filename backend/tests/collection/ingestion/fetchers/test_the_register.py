@@ -17,7 +17,6 @@ from __future__ import annotations
 import time
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
 
 import feedparser
 
@@ -29,19 +28,13 @@ from app.collection.ingestion.fetchers.the_register import (
     TheRegisterFetcher,
     _normalize_register_link,
 )
-from app.models.news_source import NewsSource
 
 _FIXTURE = (
     Path(__file__).parent.parent.parent.parent / "fixtures" / "the_register_atom.xml"
 )
 
 
-def _source(source_id: int = 1, name: str = "The Register") -> NewsSource:
-    s = MagicMock(spec=NewsSource)
-    s.id = source_id
-    s.name = name
-    s.endpoint_url = "https://www.theregister.com/headlines.atom"
-    return s
+_SOURCE_ID = 1
 
 
 def _entry(**overrides: Any) -> dict[str, Any]:
@@ -91,15 +84,15 @@ class TestProvides:
 class TestConvertEntry:
     def setup_method(self) -> None:
         self.fetcher = TheRegisterFetcher()
-        self.source = _source()
+        self.source_id = _SOURCE_ID
 
     def test_valid_entry_yields_pending(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.title.startswith("ServiceNow")
 
     def test_redirector_link_normalized_in_source_url(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en")
         assert isinstance(outcome, PendingHtmlFetch)
         url = str(outcome.source_url)
         assert "go.theregister.com" not in url
@@ -107,31 +100,31 @@ class TestConvertEntry:
 
     def test_direct_link_passthrough(self) -> None:
         entry = _entry(link="https://www.theregister.com/2026/05/01/direct/")
-        outcome = self.fetcher._convert_entry(entry, self.source, "en")
+        outcome = self.fetcher._convert_entry(entry, self.source_id, "en")
         assert isinstance(outcome, PendingHtmlFetch)
         assert str(outcome.source_url) == (
             "https://www.theregister.com/2026/05/01/direct/"
         )
 
     def test_empty_title_returns_failed(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(title=""), self.source, "en")
+        outcome = self.fetcher._convert_entry(_entry(title=""), self.source_id, "en")
         assert isinstance(outcome, Failed)
         assert outcome.reason.code == "title_missing"
 
     def test_invalid_link_returns_failed(self) -> None:
         outcome = self.fetcher._convert_entry(
-            _entry(link="not-a-url"), self.source, "en"
+            _entry(link="not-a-url"), self.source_id, "en"
         )
         assert isinstance(outcome, Failed)
         assert outcome.reason.code == "extraction_empty"
 
     def test_empty_link_returns_failed(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(link=""), self.source, "en")
+        outcome = self.fetcher._convert_entry(_entry(link=""), self.source_id, "en")
         assert isinstance(outcome, Failed)
         assert outcome.reason.code == "extraction_empty"
 
     def test_published_parsed_yields_utc(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.published_at_hint is not None
         assert (
@@ -141,40 +134,40 @@ class TestConvertEntry:
     def test_missing_pubdate_yields_pending_with_none_hint(self) -> None:
         entry = _entry()
         del entry["published_parsed"]
-        outcome = self.fetcher._convert_entry(entry, self.source, "en")
+        outcome = self.fetcher._convert_entry(entry, self.source_id, "en")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.published_at_hint is None
 
     def test_metadata_author_from_atom_author_name(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.metadata.author == "O'Ryan Johnson"
 
     def test_metadata_tags_hardcoded_empty(self) -> None:
         # The Register Atom は <category> を提供しない
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.metadata.tags == ()
 
     def test_metadata_image_url_hardcoded_none(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.metadata.image_url is None
 
     def test_extracts_guid_from_atom_id(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en")
         assert isinstance(outcome, PendingHtmlFetch)
         # tag: URI scheme は redirector ではなく直接 guid 採用
         assert outcome.metadata.guid == "tag:theregister.com,2005:story245938"
 
     def test_language_passthrough_en(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en")
         assert isinstance(outcome, PendingHtmlFetch)
         # NOT en-US (xml:lang="en" 仕様)
         assert outcome.metadata.language == "en"
 
     def test_site_name_hardcoded(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source, "en")
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en")
         assert isinstance(outcome, PendingHtmlFetch)
         assert outcome.metadata.site_name == "The Register"
 
@@ -189,7 +182,7 @@ class TestFixtureParsing:
         text = _FIXTURE.read_text(encoding="utf-8")
         feed = feedparser.parse(text)
         fetcher = TheRegisterFetcher()
-        outcome = fetcher._convert_entry(feed.entries[0], _source(), "en")
+        outcome = fetcher._convert_entry(feed.entries[0], _SOURCE_ID, "en")
         assert isinstance(outcome, PendingHtmlFetch)
         url = str(outcome.source_url)
         assert "go.theregister.com" not in url
@@ -203,7 +196,7 @@ class TestFixtureParsing:
         text = _FIXTURE.read_text(encoding="utf-8")
         feed = feedparser.parse(text)
         fetcher = TheRegisterFetcher()
-        outcome = fetcher._convert_entry(feed.entries[1], _source(), "en")
+        outcome = fetcher._convert_entry(feed.entries[1], _SOURCE_ID, "en")
         assert isinstance(outcome, PendingHtmlFetch)
         # 2 entry目は直接 URL (redirector 無し)
         assert str(outcome.source_url).startswith("https://www.theregister.com/")
@@ -212,6 +205,6 @@ class TestFixtureParsing:
         text = _FIXTURE.read_text(encoding="utf-8")
         feed = feedparser.parse(text)
         fetcher = TheRegisterFetcher()
-        outcome = fetcher._convert_entry(feed.entries[2], _source(), "en")
+        outcome = fetcher._convert_entry(feed.entries[2], _SOURCE_ID, "en")
         assert isinstance(outcome, Failed)
         assert outcome.reason.code == "title_missing"

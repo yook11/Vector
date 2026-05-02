@@ -42,7 +42,6 @@ from app.collection.ingestion.domain.fetched_article import (
     FetchOutcome,
     PendingHtmlFetch,
 )
-from app.models.news_source import NewsSource
 from app.shared.security.safe_http import make_safe_async_client
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 from app.shared.value_objects.safe_url import SafeUrl
@@ -51,14 +50,12 @@ logger = structlog.get_logger(__name__)
 
 # HN フェッチャー固有の運用値。Settings (環境変数経由) には載せない。
 # 動的に切り替える運用要件が出た時点でコンストラクタ DI に昇格させる。
-HN_API_BASE_URL = "https://hn.algolia.com/api/v1"
 HN_MIN_POINTS = 20
 HN_HITS_PER_PAGE = 100
 HN_SLIDING_WINDOW_SECONDS = 86400  # 24h
 
 _USER_AGENT = "Mozilla/5.0 (compatible; Vector/1.0; +https://github.com/yook11/Vector)"
 _HTTP_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
-_SITE_NAME = "Hacker News"
 _TITLE_MAX_LENGTH = 500
 _AUTHOR_MAX_LENGTH = 200
 
@@ -88,16 +85,18 @@ class HackerNewsFetcher:
     HN 側で提供されないため ``()`` / ``None`` を直書きする。
     """
 
+    NAME: ClassVar[str] = "Hacker News"
+    ENDPOINT_URL: ClassVar[str] = "https://hn.algolia.com/api/v1/search_by_date"
     PROVIDES: ClassVar[frozenset[str]] = frozenset({"guid", "site_name"})
 
-    async def fetch(self, source: NewsSource) -> AsyncIterator[FetchOutcome]:
-        hits = await self._fetch_recent_hits(source)
+    async def fetch(self, source_id: int) -> AsyncIterator[FetchOutcome]:
+        hits = await self._fetch_recent_hits()
         for hit in hits:
-            outcome = self._convert_hit(hit, source)
+            outcome = self._convert_hit(hit, source_id)
             if outcome is not None:
                 yield outcome
 
-    async def _fetch_recent_hits(self, source: NewsSource) -> list[dict[str, Any]]:
+    async def _fetch_recent_hits(self) -> list[dict[str, Any]]:
         """Algolia HN Search API から sliding window 内のストーリーを取得する。
 
         Raises:
@@ -118,17 +117,17 @@ class HackerNewsFetcher:
         ) as client:
             try:
                 response = await client.get(
-                    f"{HN_API_BASE_URL}/search_by_date",
+                    self.ENDPOINT_URL,
                     params=params,
                 )
                 response.raise_for_status()
             except httpx.HTTPStatusError as e:
                 status = e.response.status_code
                 if status in (403, 404, 410, 451):
-                    raise PermanentFetchError(f"HTTP {status}: {source.name}") from e
-                raise TemporaryFetchError(f"HTTP {status}: {source.name}") from e
+                    raise PermanentFetchError(f"HTTP {status}: {self.NAME}") from e
+                raise TemporaryFetchError(f"HTTP {status}: {self.NAME}") from e
             except httpx.RequestError as e:
-                raise TemporaryFetchError(f"request error: {source.name}: {e}") from e
+                raise TemporaryFetchError(f"request error: {self.NAME}: {e}") from e
             except HostBlockedError as e:
                 raise PermanentFetchError(str(e)) from e
             except HostResolutionError as e:
@@ -138,13 +137,13 @@ class HackerNewsFetcher:
 
         hits: list[dict[str, Any]] = list(data.get("hits", []))
         if not hits:
-            logger.info("hn_no_new_stories", source=source.name)
+            logger.info("hn_no_new_stories", source=self.NAME)
         return hits
 
     def _convert_hit(
         self,
         hit: dict[str, Any],
-        source: NewsSource,
+        source_id: int,
     ) -> FetchOutcome | None:
         """1 hit を ``FetchOutcome`` に変換する純関数。
 
@@ -193,12 +192,12 @@ class HackerNewsFetcher:
             image_url=None,
             language=None,
             guid=guid,
-            site_name=_SITE_NAME,
+            site_name=self.NAME,
         )
 
         return PendingHtmlFetch(
             title=title,
-            source_id=source.id,
+            source_id=source_id,
             source_url=source_url,
             published_at_hint=published_at_hint,
             metadata=metadata,

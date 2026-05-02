@@ -11,7 +11,6 @@ from __future__ import annotations
 import time
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
 
 import feedparser
 
@@ -20,17 +19,11 @@ from app.collection.ingestion.domain.fetched_article import (
     ReadyForArticle,
 )
 from app.collection.ingestion.fetchers.nasa import NASAFetcher, _extract_body
-from app.models.news_source import NewsSource
 
 _FIXTURE = Path(__file__).parent.parent.parent.parent / "fixtures" / "nasa_rss.xml"
 
 
-def _source(source_id: int = 1, name: str = "NASA") -> NewsSource:
-    s = MagicMock(spec=NewsSource)
-    s.id = source_id
-    s.name = name
-    s.endpoint_url = "https://www.nasa.gov/feed/"
-    return s
+_SOURCE_ID = 1
 
 
 _LOREM = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. "
@@ -62,11 +55,11 @@ class TestExtractBody:
 class TestConvertEntry:
     def setup_method(self) -> None:
         self.fetcher = NASAFetcher()
-        self.source = _source()
+        self.source_id = _SOURCE_ID
 
     def test_author_is_always_none(self) -> None:
         outcome = self.fetcher._convert_entry(
-            _entry(author="Should Not Appear"), self.source
+            _entry(author="Should Not Appear"), self.source_id
         )
         assert isinstance(outcome, ReadyForArticle)
         assert outcome.metadata.author is None
@@ -74,29 +67,29 @@ class TestConvertEntry:
     def test_image_url_is_always_none(self) -> None:
         outcome = self.fetcher._convert_entry(
             _entry(media_content=[{"url": "https://example.com/x.jpg"}]),
-            self.source,
+            self.source_id,
         )
         assert isinstance(outcome, ReadyForArticle)
         assert outcome.metadata.image_url is None
 
     def test_language_hardcoded_en_us(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source)
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id)
         assert isinstance(outcome, ReadyForArticle)
         assert outcome.metadata.language == "en-US"
 
     def test_extracts_tags(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source)
+        outcome = self.fetcher._convert_entry(_entry(), self.source_id)
         assert isinstance(outcome, ReadyForArticle)
         assert outcome.metadata.tags == ("Astrophysics",)
 
     def test_empty_title_returns_failed(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(title=""), self.source)
+        outcome = self.fetcher._convert_entry(_entry(title=""), self.source_id)
         assert isinstance(outcome, Failed)
         assert outcome.reason.code == "title_missing"
 
     def test_short_body_returns_failed(self) -> None:
         outcome = self.fetcher._convert_entry(
-            _entry(content=[{"value": "<p>tiny</p>"}]), self.source
+            _entry(content=[{"value": "<p>tiny</p>"}]), self.source_id
         )
         assert isinstance(outcome, Failed)
         assert outcome.reason.code == "body_too_short"
@@ -115,7 +108,7 @@ class TestFixtureParsing:
         text = _FIXTURE.read_text(encoding="utf-8")
         feed = feedparser.parse(text)
         fetcher = NASAFetcher()
-        outcome = fetcher._convert_entry(feed.entries[0], _source())
+        outcome = fetcher._convert_entry(feed.entries[0], _SOURCE_ID)
         assert isinstance(outcome, ReadyForArticle)
         assert "Earth Observatory" in outcome.article.body
         assert "Discover More Topics" in outcome.article.body
@@ -124,7 +117,7 @@ class TestFixtureParsing:
         text = _FIXTURE.read_text(encoding="utf-8")
         feed = feedparser.parse(text)
         fetcher = NASAFetcher()
-        outcome = fetcher._convert_entry(feed.entries[0], _source())
+        outcome = fetcher._convert_entry(feed.entries[0], _SOURCE_ID)
         assert isinstance(outcome, ReadyForArticle)
         assert outcome.metadata.author is None
         assert outcome.metadata.image_url is None
@@ -135,6 +128,6 @@ class TestFixtureParsing:
         text = _FIXTURE.read_text(encoding="utf-8")
         feed = feedparser.parse(text)
         fetcher = NASAFetcher()
-        outcome = fetcher._convert_entry(feed.entries[1], _source())
+        outcome = fetcher._convert_entry(feed.entries[1], _SOURCE_ID)
         assert isinstance(outcome, Failed)
         assert outcome.reason.code == "body_too_short"
