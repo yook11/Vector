@@ -78,6 +78,37 @@ class TestFetchNews:
             assert arg.id in source_ids
             assert arg.name in {"VentureBeat", "TechCrunch"}
 
+    async def test_fetch_with_source_ids_at_max_length(
+        self, admin_client: AsyncClient
+    ) -> None:
+        """source_ids がちょうど 100 件なら受理される (validation 境界の上限)。"""
+        with patch(
+            "app.collection.tasks.ingest_source",
+        ) as mock_task:
+            mock_task.kiq = AsyncMock()
+            resp = await admin_client.post(
+                "/api/v1/admin/pipeline/fetch",
+                json={"sourceIds": list(range(1, 101))},
+            )
+
+        # 該当 source_id が DB に存在しないため dispatched_count=0 だが、
+        # validation 層は通って 202 を返すこと。
+        assert resp.status_code == 202
+        assert resp.json()["dispatchedCount"] == 0
+
+    async def test_fetch_with_source_ids_exceeds_max_length(
+        self, admin_client: AsyncClient
+    ) -> None:
+        """source_ids が 101 件以上なら 422 で拒否される (C4 / AUTH-N5 防御)。"""
+        resp = await admin_client.post(
+            "/api/v1/admin/pipeline/fetch",
+            json={"sourceIds": list(range(1, 102))},
+        )
+
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert any("sourceIds" in str(d.get("loc", "")) for d in detail)
+
 
 @pytest.mark.asyncio
 class TestEmbedNews:
