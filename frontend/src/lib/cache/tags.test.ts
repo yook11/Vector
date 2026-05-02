@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type CacheTag, cacheTags } from "./tags";
+import { briefingCategoryTag, type CacheTag, cacheTags } from "./tags";
 
 describe("cacheTags", () => {
   it("registry literal を固定する (改名は invalidation 互換性に直結)", () => {
@@ -9,6 +9,7 @@ describe("cacheTags", () => {
     expect(cacheTags).toEqual({
       watchlistMe: "watchlist:me",
       sources: "sources",
+      briefingList: "briefing:list",
     });
   });
 
@@ -18,5 +19,14 @@ describe("cacheTags", () => {
     const bad: CacheTag = "typo";
     expect(t).toBe("sources");
     void bad;
+  });
+});
+
+describe("briefingCategoryTag", () => {
+  it("backend notifier と同じ命名規約 (briefing:<slug>) を組み立てる", () => {
+    // backend `FrontendRevalidateNotifier` が打つ tag と完全一致しないと
+    // on-demand revalidate 経路が silent に死ぬ。命名規約を test で固定する。
+    expect(briefingCategoryTag("ai")).toBe("briefing:ai");
+    expect(briefingCategoryTag("robotics")).toBe("briefing:robotics");
   });
 });

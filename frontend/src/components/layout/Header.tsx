@@ -6,6 +6,7 @@ import { UserMenu } from "@/features/auth";
 
 const navItems = [
   { href: "/", label: "ニュース" },
+  { href: "/briefing", label: "Briefing" },
   { href: "/weekly-trends", label: "ウィークリー" },
   { href: "/watchlist", label: "ウォッチリスト" },
   { href: "/settings", label: "マイページ" },

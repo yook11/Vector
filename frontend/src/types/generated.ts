@@ -188,6 +188,49 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/briefing": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List Briefings
+     * @description 全カテゴリの「ある中で最新」briefing を newspaper 一覧用に返す。
+     *
+     *     items は ``Category.id`` 昇順で 11 カテゴリ全部を返す。未生成カテゴリは
+     *     ``latest=None`` で表現する (frontend で 1 行 ``灰色`` 表示)。
+     */
+    get: operations["list_briefings_api_v1_briefing_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/briefing/{category_slug}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Latest Briefing
+     * @description 指定カテゴリの最新 briefing を返す (なければ state="empty")。
+     */
+    get: operations["get_latest_briefing_api_v1_briefing__category_slug__get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/admin/sources": {
     parameters: {
       query?: never;
@@ -387,6 +430,30 @@ export interface components {
       original: components["schemas"]["OriginalArticleEmbed"];
     };
     /**
+     * BriefingListItem
+     * @description 一覧 1 行: カテゴリ + 最新 briefing 参照 (未生成は None)。
+     */
+    BriefingListItem: {
+      category: components["schemas"]["_CategoryOut"];
+      latest: components["schemas"]["_BriefingListLatest"] | null;
+    };
+    /**
+     * BriefingListResponse
+     * @description ``GET /api/v1/briefing`` のレスポンス。
+     *
+     *     ``items`` は ``Category.id`` 昇順で 11 カテゴリ全部を返す。並び順は
+     *     backend で確定し、frontend での sort を不要にする。
+     */
+    BriefingListResponse: {
+      /**
+       * Currentweekstart
+       * Format: date
+       */
+      currentWeekStart: string;
+      /** Items */
+      items: components["schemas"]["BriefingListItem"][];
+    };
+    /**
      * CategoryDetail
      * @description カテゴリ詳細。
      *
@@ -440,6 +507,18 @@ export interface components {
       message: string;
       /** Dispatchedcount */
       dispatchedCount: number;
+    };
+    /**
+     * EmptyBriefing
+     * @description 指定カテゴリに briefing 未生成の状態。
+     */
+    EmptyBriefing: {
+      /**
+       * @description discriminator enum property added by openapi-typescript
+       * @enum {string}
+       */
+      state: "empty";
+      category: components["schemas"]["_CategoryOut"];
     };
     /**
      * EmptyWeeklyTrends
@@ -576,6 +655,38 @@ export interface components {
       totalPages: number;
     };
     /**
+     * ReadyBriefing
+     * @description briefing 生成済の状態。
+     */
+    ReadyBriefing: {
+      /**
+       * @description discriminator enum property added by openapi-typescript
+       * @enum {string}
+       */
+      state: "ready";
+      /**
+       * Weekstart
+       * Format: date
+       */
+      weekStart: string;
+      /**
+       * Generatedat
+       * Format: date-time
+       */
+      generatedAt: string;
+      /** Modelname */
+      modelName: string;
+      /** Inputarticlecount */
+      inputArticleCount: number;
+      category: components["schemas"]["_CategoryOut"];
+      /** Headline */
+      headline: string;
+      /** Stories */
+      stories: components["schemas"]["_StoryOut"][];
+      /** Articles */
+      articles: components["schemas"]["_ArticleSummaryOut"][];
+    };
+    /**
      * ReadyWeeklyTrends
      * @description snapshot 生成済の状態。
      */
@@ -693,6 +804,44 @@ export interface components {
       /** Ids */
       ids: number[];
     };
+    /**
+     * _ArticleSummaryOut
+     * @description ``stories[].articleIds`` から参照される記事のサマリ。
+     */
+    _ArticleSummaryOut: {
+      /** Id */
+      id: number;
+      /** Titleja */
+      titleJa: string;
+      /** Sourcename */
+      sourceName: string;
+      /** Url */
+      url: string;
+    };
+    /**
+     * _BriefingListLatest
+     * @description 一覧行に同梱する「最新 briefing 参照」。
+     *
+     *     未生成カテゴリでは ``BriefingListItem.latest = None`` で表現する。
+     *     詳細 (``ReadyBriefing``) と異なり stories 等は持たず、newspaper 風
+     *     プレビューに必要な最小フィールドのみ。
+     */
+    _BriefingListLatest: {
+      /**
+       * Weekstart
+       * Format: date
+       */
+      weekStart: string;
+      /** Headlineexcerpt */
+      headlineExcerpt: string;
+    };
+    /** _CategoryOut */
+    _CategoryOut: {
+      /** Id */
+      id: number;
+      slug: components["schemas"]["CategorySlug"];
+      name: components["schemas"]["CategoryName"];
+    };
     /** _CategoryTrendsOut */
     _CategoryTrendsOut: {
       /** Categoryid */
@@ -723,6 +872,15 @@ export interface components {
       type: components["schemas"]["EntityType"];
       /** Currentcount */
       currentCount: number;
+    };
+    /** _StoryOut */
+    _StoryOut: {
+      /** Title */
+      title: string;
+      /** Analysis */
+      analysis: string;
+      /** Articleids */
+      articleIds: number[];
     };
     /** _TopicTrendOut */
     _TopicTrendOut: {
@@ -1061,6 +1219,72 @@ export interface operations {
           "application/json":
             | components["schemas"]["ReadyWeeklyTrends"]
             | components["schemas"]["EmptyWeeklyTrends"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  list_briefings_api_v1_briefing_get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["BriefingListResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  get_latest_briefing_api_v1_briefing__category_slug__get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+      };
+      path: {
+        category_slug: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json":
+            | components["schemas"]["ReadyBriefing"]
+            | components["schemas"]["EmptyBriefing"];
         };
       };
       /** @description Validation Error */
