@@ -174,6 +174,10 @@ class DeepSeekBriefingGenerator:
                 }
             ],
             tool_choice={"type": "function", "function": {"name": _TOOL_NAME}},
+            # DeepSeek-V4 Pro は thinking モードで起動すると tool_choice と衝突
+            # して 400 になる (内部的に reasoner 系として扱われるため)。Stage 2
+            # 分類器と同じく thinking を明示無効化する。
+            extra_body={"thinking": {"type": "disabled"}},
         )
         choice = resp.choices[0]
         tool_calls = choice.message.tool_calls or []
