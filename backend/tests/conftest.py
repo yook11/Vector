@@ -27,6 +27,7 @@ from app.models import (  # noqa: F401
     NewsSource,
     SourceType,
     WatchlistEntry,
+    WeeklyBriefing,
 )
 
 TEST_DATABASE_URL = settings.database_url.rsplit("/", 1)[0] + "/vector_test"

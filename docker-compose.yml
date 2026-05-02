@@ -164,6 +164,24 @@ services:
     networks:
       - internal
 
+  # --- Weekly briefing worker + scheduler (LLM 解説専用、snapshot とは別 queue) ---
+  worker-briefing:
+    <<: *worker-base
+    command: >
+      taskiq worker
+      app.brokers:broker_briefing
+      app.insights.briefing.tasks.briefing
+      --ack-type when_executed
+
+  scheduler-briefing:
+    <<: *worker-base
+    command: >
+      taskiq scheduler
+      app.brokers:scheduler_briefing
+      app.insights.briefing.tasks.briefing
+    networks:
+      - internal
+
   # --- taskiq scheduler (metadata broker only — fetch_metadata cron) ---
   scheduler:
     <<: *worker-base
