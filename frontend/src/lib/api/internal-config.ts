@@ -31,6 +31,10 @@ const INTERNAL_JWT_SIGNING_KEY = new TextEncoder().encode(INTERNAL_API_SECRET);
 
 const INTERNAL_JWT_ALGORITHM = "HS256";
 const INTERNAL_JWT_TTL = "60s";
+// iss / aud は backend (`backend/app/dependencies.py`) と同じ literal を要求。
+// INTERNAL_API_SECRET 漏洩時に「Vector の文脈で署名された JWT」を強制する二重防御。
+const INTERNAL_JWT_ISSUER = "vector-bff";
+const INTERNAL_JWT_AUDIENCE = "vector-backend";
 
 /**
  * BFF→backend 間の認証 JWT を 1 リクエスト分だけ発行する。
@@ -46,6 +50,8 @@ export async function buildInternalAuthHeaders(
   const token = await new SignJWT({ role })
     .setProtectedHeader({ alg: INTERNAL_JWT_ALGORITHM })
     .setSubject(session.user.id)
+    .setIssuer(INTERNAL_JWT_ISSUER)
+    .setAudience(INTERNAL_JWT_AUDIENCE)
     .setIssuedAt()
     .setExpirationTime(INTERNAL_JWT_TTL)
     .sign(INTERNAL_JWT_SIGNING_KEY);
