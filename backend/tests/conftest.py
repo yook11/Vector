@@ -3,9 +3,9 @@
 import time
 from collections.abc import AsyncGenerator
 
+import jwt
 import pytest
 from httpx import ASGITransport, AsyncClient
-from jose import jwt
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -46,12 +46,18 @@ _JWT_TTL_SECONDS = 60
 
 
 def make_internal_jwt(user_id: str, role: str = "user") -> str:
-    """テスト用に BFF 模擬の HS256 JWT を発行する。"""
+    """テスト用に BFF 模擬の HS256 JWT を発行する。
+
+    iss / aud は backend (`app/dependencies.py`) と frontend
+    (`frontend/src/lib/api/internal-config.ts`) で揃える必要がある。
+    """
     now = int(time.time())
     return jwt.encode(
         {
             "sub": user_id,
             "role": role,
+            "iss": "vector-bff",
+            "aud": "vector-backend",
             "iat": now,
             "exp": now + _JWT_TTL_SECONDS,
         },
