@@ -1,8 +1,8 @@
-"""extraction リポジトリの統合テスト。
+"""extraction リポジトリ (``ArticleRepository``) の統合テスト。
 
-PR 2a: Entity / VO ベースの API (``DiscoveredArticleLookupRepository``,
-``ArticleRepository.save``, ``find_by_discovered_article_id``) と
-並行レース対応 (``ON CONFLICT DO NOTHING``) を検証する。
+Entity / VO ベースの API (``ArticleRepository.save``,
+``find_by_discovered_article_id``) と並行レース対応
+(``ON CONFLICT DO NOTHING``) を検証する。
 """
 
 from __future__ import annotations
@@ -18,14 +18,11 @@ from app.collection.extraction.domain import Article, PublishedAt
 from app.collection.extraction.domain.article import ArticleDraft
 from app.collection.extraction.repository import (
     ArticleRepository,
-    DiscoveredArticleLookupRepository,
-    DiscoveredLookup,
     PersistedArticleId,
 )
 from app.models.article import Article as ArticleORM
 from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
-from app.shared.value_objects.safe_url import SafeUrl
 
 
 async def _make_discovered(
@@ -64,67 +61,6 @@ async def _save(
         discovered_article_id=discovered.id,
         source_id=discovered.news_source_id,
         source_url=discovered.original_url,
-    )
-
-
-# ---------------------------------------------------------------------------
-# DiscoveredArticleLookupRepository.find_by_id
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_find_by_id_returns_none_for_missing_id(
-    db_session: AsyncSession,
-) -> None:
-    repo = DiscoveredArticleLookupRepository(db_session)
-    assert await repo.find_by_id(999999) is None
-
-
-@pytest.mark.asyncio
-async def test_find_by_id_returns_lookup_without_existing_article(
-    db_session: AsyncSession, sample_source: NewsSource
-) -> None:
-    discovered = await _make_discovered(
-        db_session, sample_source, "https://example.com/unextracted"
-    )
-
-    repo = DiscoveredArticleLookupRepository(db_session)
-    result = await repo.find_by_id(discovered.id)
-
-    assert isinstance(result, DiscoveredLookup)
-    assert result.id == discovered.id
-    assert result.original_url == SafeUrl("https://example.com/unextracted")
-    assert result.existing_article is None
-
-
-@pytest.mark.asyncio
-async def test_find_by_id_eager_loads_article_as_entity(
-    db_session: AsyncSession, sample_source: NewsSource
-) -> None:
-    discovered = await _make_discovered(
-        db_session, sample_source, "https://example.com/extracted"
-    )
-    article = ArticleORM(
-        discovered_article_id=discovered.id,
-        source_id=discovered.news_source_id,
-        source_url=discovered.original_url,
-        original_title="seed",
-        original_content="body body body body body body body body body body",
-        published_at=datetime(2026, 1, 1, tzinfo=UTC),
-    )
-    db_session.add(article)
-    await db_session.commit()
-    await db_session.refresh(article)
-
-    repo = DiscoveredArticleLookupRepository(db_session)
-    result = await repo.find_by_id(discovered.id)
-
-    assert result is not None
-    assert isinstance(result.existing_article, Article)
-    assert result.existing_article.id == article.id
-    assert result.existing_article.title == "seed"
-    assert result.existing_article.published_at == PublishedAt(
-        datetime(2026, 1, 1, tzinfo=UTC)
     )
 
 
