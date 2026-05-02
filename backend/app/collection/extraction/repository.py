@@ -1,10 +1,7 @@
-"""Extraction リポジトリ — DiscoveredArticle ルックアップと Article 永続化。
+"""Extraction リポジトリ — Article の永続化と読み出し。
 
 責務:
 
-- ``DiscoveredArticleLookupRepository``: 抽出対象の ``DiscoveredArticle`` を
-  ``DiscoveredLookup`` VO として返す。Article ORM はここで Entity に変換し、
-  Service へは ORM を出さない。
 - ``ArticleRepository.save``: ``ArticleDraft`` を ``articles`` 行に INSERT し、
   DB が採番した identity (``PersistedArticleId``) を返す。
   ``UNIQUE(discovered_article_id)`` の並行レースは
@@ -12,10 +9,6 @@
   既に他ワーカーが書き込み済みなら ``None`` を返す。
 - ``ArticleRepository.find_by_discovered_article_id``: 並行レース敗北時の
   読み戻し用に Article Entity を取得する。
-
-ingestion 側にも同名の ``DiscoveredArticleRepository`` (URL 重複排除責務)
-が存在する。本 BC は責務が異なるため ``DiscoveredArticleLookupRepository``
-として明示的に分離する。
 """
 
 from __future__ import annotations
@@ -25,32 +18,12 @@ from datetime import datetime
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 from sqlmodel import select
 
 from app.collection.extraction.domain import Article, PublishedAt
 from app.collection.extraction.domain.article import ArticleDraft
 from app.models.article import Article as ArticleORM
-from app.models.discovered_article import DiscoveredArticle as DiscoveredArticleORM
 from app.shared.value_objects.safe_url import SafeUrl
-
-
-@dataclass(frozen=True, slots=True)
-class DiscoveredLookup:
-    """``DiscoveredArticle`` のルックアップ結果 VO。
-
-    Service が抽出可否を判定するための最小集合: identity (``id``) +
-    抽出対象 URL (``original_url``) + 既存 Article の有無
-    (``existing_article``)。ORM を Service に出さないための DTO 兼境界 VO。
-
-    NOTE: ingestion BC が DDD 化されるまでの暫定 VO。ingestion 側の Entity
-    (DiscoveredArticle) と統合された時点で削除予定。
-    """
-
-    id: int
-    news_source_id: int
-    original_url: SafeUrl
-    existing_article: Article | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,11 +39,10 @@ class PersistedArticleId:
 
 
 def _article_from_orm(orm: ArticleORM) -> Article:
-    """``ArticleORM`` から ``Article`` Entity への共通変換。
+    """``ArticleORM`` から ``Article`` Entity への共通変換ヘルパ。
 
-    ``DiscoveredArticleLookupRepository`` と ``ArticleRepository`` の両方が
-    使うため module-level に切り出している。Entity の不変条件 (id 正・非空)
-    は ``Article.__post_init__`` が defense-in-depth として再検証する。
+    Entity の不変条件 (id 正・非空) は ``Article.__post_init__`` が
+    defense-in-depth として再検証する。
     """
     published_at = (
         PublishedAt(orm.published_at) if orm.published_at is not None else None
@@ -83,42 +55,6 @@ def _article_from_orm(orm: ArticleORM) -> Article:
         published_at=published_at,
         created_at=orm.created_at,
     )
-
-
-class DiscoveredArticleLookupRepository:
-    """抽出対象の ``DiscoveredArticle`` をルックアップする。
-
-    ingestion 側の ``DiscoveredArticleRepository`` (URL 重複排除責務) とは
-    解いている問題が異なる (こちらは抽出対象ルックアップ)。
-    """
-
-    def __init__(self, session: AsyncSession) -> None:
-        self._session = session
-
-    async def find_by_id(self, discovered_article_id: int) -> DiscoveredLookup | None:
-        """ID で ``DiscoveredArticle`` をルックアップして ``DiscoveredLookup`` を返す。
-
-        既存 Article の有無判定用に ``article`` リレーションを ``selectinload``
-        で事前取得し、1 ラウンドトリップで完結させる。
-        """
-        stmt = (
-            select(DiscoveredArticleORM)
-            .where(DiscoveredArticleORM.id == discovered_article_id)
-            .options(selectinload(DiscoveredArticleORM.article))
-        )
-        orm = (await self._session.execute(stmt)).scalar_one_or_none()
-        return self._to_lookup(orm) if orm is not None else None
-
-    @staticmethod
-    def _to_lookup(orm: DiscoveredArticleORM) -> DiscoveredLookup:
-        """ORM から VO への内部変換。"""
-        existing = _article_from_orm(orm.article) if orm.article is not None else None
-        return DiscoveredLookup(
-            id=orm.id,
-            news_source_id=orm.news_source_id,
-            original_url=orm.original_url,
-            existing_article=existing,
-        )
 
 
 class ArticleRepository:
@@ -148,9 +84,9 @@ class ArticleRepository:
         で同じため、ターゲットを限定せず両方を吸収する。``None`` を受けた
         Service は ``find_by_discovered_article_id`` で読み戻して合流させる。
 
-        ``source_id`` / ``source_url`` は caller (Service) が ``DiscoveredLookup``
-        から渡す: 同一トランザクション内で既知の値であり追加 SELECT 不要。
-        Phase 0b で NOT NULL + UNIQUE 化されたため必須引数。
+        ``source_id`` / ``source_url`` は caller が同一トランザクション内で
+        既知の値として渡す: 追加 SELECT 不要。Phase 0b で NOT NULL + UNIQUE
+        化されたため必須引数。
 
         commit は呼び出し側 (Service) が行う。
         """
