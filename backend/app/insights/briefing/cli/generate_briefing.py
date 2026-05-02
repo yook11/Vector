@@ -39,6 +39,7 @@ from sqlalchemy.ext.asyncio import (
 from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
 
 from app.config import settings
+from app.insights.briefing.application.notifier import NullBriefingNotifier
 from app.insights.briefing.application.service import WeeklyBriefingService
 from app.insights.briefing.domain.ready import ReadyForBriefing
 from app.insights.briefing.llm.deepseek import DeepSeekBriefingGenerator
@@ -140,8 +141,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             session_factory = async_sessionmaker(
                 engine, class_=SQLModelAsyncSession, expire_on_commit=False
             )
+            # CLI は手動運用 / 復旧経路のため、frontend revalidate は飛ばす
+            # (本番 cron 経路と異なり 11 連続 POST が即時走るのを避ける)。
             service = WeeklyBriefingService(
-                session_factory, DeepSeekBriefingGenerator()
+                session_factory,
+                DeepSeekBriefingGenerator(),
+                NullBriefingNotifier(),
             )
             return await run(args, service, session_factory)
         finally:

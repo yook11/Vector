@@ -66,6 +66,23 @@ export type NewsSourceDetailList =
   components["schemas"]["NewsSourceDetailList"];
 export type NewsSourceCreate = components["schemas"]["NewsSourceCreate"];
 
+// Briefing
+// `BriefingResponse` は backend で Annotated[Union, Field(discriminator)] alias
+// として定義されており、独立した component schema を持たない (response inline)。
+// `state` discriminator で frontend が narrowing できるよう、生成済の 2 状態
+// schema をここで union として再構築する。
+export type ReadyBriefing = components["schemas"]["ReadyBriefing"];
+export type EmptyBriefing = components["schemas"]["EmptyBriefing"];
+export type BriefingResponse = ReadyBriefing | EmptyBriefing;
+export type BriefingListResponse =
+  components["schemas"]["BriefingListResponse"];
+export type BriefingListItem = components["schemas"]["BriefingListItem"];
+export type BriefingListLatest = components["schemas"]["_BriefingListLatest"];
+export type BriefingStory = components["schemas"]["_StoryOut"];
+export type BriefingArticleSummary =
+  components["schemas"]["_ArticleSummaryOut"];
+export type BriefingCategory = components["schemas"]["_CategoryOut"];
+
 // Weekly trends
 // `WeeklyTrendsResponse` は backend で Annotated[Union, Field(discriminator)] alias
 // として定義されており、独立した component schema を持たない (response inline)。

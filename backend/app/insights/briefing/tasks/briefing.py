@@ -22,6 +22,8 @@ from sqlalchemy import select
 from taskiq import Context, TaskiqDepends
 
 from app.brokers import broker_briefing
+from app.config import settings
+from app.insights.briefing.application.notifier import FrontendRevalidateNotifier
 from app.insights.briefing.application.service import WeeklyBriefingService
 from app.insights.briefing.domain.ready import ReadyForBriefing
 from app.insights.briefing.domain.task_input import BriefingTaskInput
@@ -86,7 +88,13 @@ async def generate_briefing_for_category(
         )
         return
 
-    service = WeeklyBriefingService(session_factory, DeepSeekBriefingGenerator())
+    notifier = FrontendRevalidateNotifier(
+        frontend_base_url=settings.internal_frontend_base_url,
+        secret=settings.internal_api_secret.get_secret_value(),
+    )
+    service = WeeklyBriefingService(
+        session_factory, DeepSeekBriefingGenerator(), notifier
+    )
     outcome = await service.execute(ready)
     logger.info(
         "briefing_subtask_completed",
