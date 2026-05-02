@@ -269,7 +269,7 @@ class ArticleHtmlExtractor:
                     response.raise_for_status()
                 except httpx.HTTPStatusError as e:
                     status = e.response.status_code
-                    if status in (403, 404, 410, 451):
+                    if status in (401, 403, 404, 410, 451):
                         raise PermanentFetchError(f"HTTP {status}: {url_str}") from e
                     # 429 / 5xx はリトライ可能
                     raise TemporaryFetchError(f"HTTP {status}: {url_str}") from e

@@ -152,7 +152,7 @@ class VentureBeatFetcher:
     """
 
     NAME: ClassVar[str] = "VentureBeat"
-    ENDPOINT_URL: ClassVar[str] = "https://venturebeat.com/feed/"
+    ENDPOINT_URL: ClassVar[str] = "https://venturebeat.com/feed"
     PROVIDES: ClassVar[frozenset[str]] = frozenset({"language", "guid", "site_name"})
 
     async def fetch(self, source_id: int) -> AsyncIterator[FetchOutcome]:

@@ -140,6 +140,28 @@ class TestArticleHtmlExtractor:
             await extractor.fetch(SafeUrl("https://example.com/paywall"))
 
     @pytest.mark.asyncio
+    async def test_raises_permanent_on_401(self) -> None:
+        """paywall (WSJ 等) は 401 を返すため Permanent 扱いとする。"""
+        robots_resp = httpx.Response(
+            404,
+            request=httpx.Request("GET", "https://example.com/robots.txt"),
+        )
+        error_resp = httpx.Response(
+            401,
+            request=httpx.Request("GET", "https://example.com/paywall"),
+        )
+        error_resp.raise_for_status = lambda: (_ for _ in ()).throw(
+            httpx.HTTPStatusError(
+                "401", request=error_resp.request, response=error_resp
+            )
+        )
+        client = _mock_async_client([robots_resp, error_resp])
+
+        extractor = ArticleHtmlExtractor()
+        with _patch_client(client), pytest.raises(PermanentFetchError, match="401"):
+            await extractor.fetch(SafeUrl("https://example.com/paywall"))
+
+    @pytest.mark.asyncio
     async def test_raises_temporary_on_500(self) -> None:
         robots_resp = httpx.Response(
             404,
