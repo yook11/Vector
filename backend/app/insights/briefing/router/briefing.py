@@ -14,15 +14,20 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_optional_user, get_session
+from app.insights.briefing.domain.headline import extract_first_sentence
 from app.insights.briefing.repository.briefings import BriefingRepository
 from app.insights.briefing.schemas.briefing import (
+    BriefingListItem,
+    BriefingListResponse,
     BriefingResponse,
     EmptyBriefing,
     ReadyBriefing,
     _ArticleSummaryOut,
+    _BriefingListLatest,
     _CategoryOut,
     _StoryOut,
 )
+from app.insights.snapshot.domain.week import latest_completed_week_start, now_in_jst
 from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis
 from app.models.article_extraction import ArticleExtraction
@@ -84,6 +89,42 @@ async def _fetch_article_summaries(
 
 def _to_category(category: Category) -> _CategoryOut:
     return _CategoryOut(id=category.id, slug=category.slug, name=category.name)
+
+
+@router.get("", dependencies=[Depends(get_optional_user)])
+async def list_briefings(
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> BriefingListResponse:
+    """全カテゴリの「ある中で最新」briefing を newspaper 一覧用に返す。
+
+    items は ``Category.id`` 昇順で 11 カテゴリ全部を返す。未生成カテゴリは
+    ``latest=None`` で表現する (frontend で 1 行 ``灰色`` 表示)。
+    """
+    cats = (
+        (await session.execute(select(Category).order_by(Category.id))).scalars().all()
+    )
+    repo = BriefingRepository(session)
+    latest_by_cat = await repo.find_latest_for_each_category()
+
+    items: list[BriefingListItem] = []
+    for cat in cats:
+        b = latest_by_cat.get(cat.id)
+        if b is None:
+            items.append(BriefingListItem(category=_to_category(cat), latest=None))
+        else:
+            items.append(
+                BriefingListItem(
+                    category=_to_category(cat),
+                    latest=_BriefingListLatest(
+                        week_start=b.week_start_date,
+                        headline_excerpt=extract_first_sentence(b.headline),
+                    ),
+                )
+            )
+    return BriefingListResponse(
+        current_week_start=latest_completed_week_start(now_in_jst()),
+        items=items,
+    )
 
 
 @router.get(

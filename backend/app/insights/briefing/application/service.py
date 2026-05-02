@@ -24,6 +24,7 @@ from datetime import date
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.insights.briefing.application.notifier import BriefingNotifier
 from app.insights.briefing.domain.ready import ReadyForBriefing
 from app.insights.briefing.llm.deepseek import DeepSeekBriefingGenerator
 from app.insights.briefing.repository.articles import BriefingArticleRepository
@@ -56,9 +57,11 @@ class WeeklyBriefingService:
         self,
         session_factory: async_sessionmaker[AsyncSession],
         llm_generator: DeepSeekBriefingGenerator,
+        notifier: BriefingNotifier,
     ) -> None:
         self._session_factory = session_factory
         self._llm = llm_generator
+        self._notifier = notifier
 
     async def execute(self, ready: ReadyForBriefing) -> GeneratedBriefing:
         # --- read tx: articles + category 取得 ---
@@ -130,6 +133,9 @@ class WeeklyBriefingService:
             article_count=len(articles),
             forced=ready.force,
         )
+        # 永続化成功後に frontend のキャッシュ無効化を通知する。
+        # notifier 内部で warn 降格するため例外は伝播しない。
+        await self._notifier.notify(category_slug=str(category.slug))
         return GeneratedBriefing(
             persisted=True,
             week_start=ready.week_start,

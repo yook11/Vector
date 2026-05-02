@@ -125,3 +125,56 @@ class TestFindLatestByCategory:
     ) -> None:
         repo = BriefingRepository(db_session)
         assert await repo.find_latest_by_category(category_id=category.id) is None
+
+
+class TestFindLatestForEachCategory:
+    @pytest.mark.asyncio
+    async def test_returns_empty_dict_when_none(
+        self, db_session: AsyncSession, category: Category
+    ) -> None:
+        repo = BriefingRepository(db_session)
+        assert await repo.find_latest_for_each_category() == {}
+
+    @pytest.mark.asyncio
+    async def test_returns_latest_per_category_with_mixed_history(
+        self, db_session: AsyncSession, category: Category
+    ) -> None:
+        # 別カテゴリも追加して 2 行入れる (古い行 + 新しい行)
+        other = Category(slug="robotics", name="ロボティクス")
+        db_session.add(other)
+        await db_session.commit()
+        await db_session.refresh(other)
+
+        repo = BriefingRepository(db_session)
+        # ai: 古い + 新しい
+        await repo.save(_make(date(2026, 4, 13), category.id, headline="ai-old"))
+        await repo.save(_make(date(2026, 4, 20), category.id, headline="ai-latest"))
+        # robotics: 1 行のみ
+        await repo.save(_make(date(2026, 4, 13), other.id, headline="robotics-only"))
+        await db_session.commit()
+
+        result = await repo.find_latest_for_each_category()
+
+        assert set(result.keys()) == {category.id, other.id}
+        assert result[category.id].headline == "ai-latest"
+        assert result[category.id].week_start_date == date(2026, 4, 20)
+        assert result[other.id].headline == "robotics-only"
+
+    @pytest.mark.asyncio
+    async def test_skips_categories_without_briefing(
+        self, db_session: AsyncSession, category: Category
+    ) -> None:
+        """生成されていないカテゴリは dict に entry が無いこと。"""
+        other = Category(slug="bio", name="バイオ")
+        db_session.add(other)
+        await db_session.commit()
+        await db_session.refresh(other)
+
+        repo = BriefingRepository(db_session)
+        await repo.save(_make(date(2026, 4, 20), category.id))
+        await db_session.commit()
+
+        result = await repo.find_latest_for_each_category()
+
+        assert category.id in result
+        assert other.id not in result

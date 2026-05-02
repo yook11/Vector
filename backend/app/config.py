@@ -55,7 +55,12 @@ class Settings(BaseSettings):
     internal_api_secret: SecretStr
 
     # アプリ URL
+    # ``frontend_url`` は CORS の allow_origins などブラウザ起源 URL に使う。
+    # backend → frontend container を直接呼び出す経路 (例: revalidate 通知)
+    # では compose 内部 DNS や同一 VPC 内ホスト名が必要なため
+    # ``internal_frontend_base_url`` を別途用意する。
     frontend_url: str = "http://localhost:3000"
+    internal_frontend_base_url: str = "http://frontend:3000"
     backend_url: str = "http://localhost:8000"
 
     # セマンティック検索

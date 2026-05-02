@@ -93,3 +93,75 @@ class TestGetBriefing:
         assert len(body["articles"]) == 1
         assert body["articles"][0]["id"] == article_id
         assert body["articles"][0]["titleJa"] == "記事タイトル"
+
+
+class TestListBriefings:
+    @pytest.mark.asyncio
+    async def test_returns_all_categories_with_latest_field(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        ai_category: Category,
+    ) -> None:
+        """未生成カテゴリは latest=None で 11 行 (本テストでは 2 カテゴリ) 揃う。"""
+        # 別カテゴリも追加
+        other = Category(slug="robotics", name="ロボティクス")
+        db_session.add(other)
+        await db_session.commit()
+        await db_session.refresh(other)
+
+        resp = await client.get("/api/v1/briefing")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "currentWeekStart" in body
+        slugs = [item["category"]["slug"] for item in body["items"]]
+        assert "ai" in slugs and "robotics" in slugs
+        # どちらも未生成なので latest は None
+        for item in body["items"]:
+            assert item["latest"] is None
+
+    @pytest.mark.asyncio
+    async def test_includes_headline_excerpt_for_ready_item(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        ai_category: Category,
+    ) -> None:
+        briefing = WeeklyBriefing(
+            week_start_date=date(2026, 4, 20),
+            category_id=ai_category.id,
+            headline="今週のヘッドライン。続きの本文。",
+            stories=[
+                {"title": "S", "analysis": "A", "article_ids": [1]},
+            ],
+            model_name="deepseek-v4-pro",
+            input_article_count=1,
+        )
+        db_session.add(briefing)
+        await db_session.commit()
+
+        resp = await client.get("/api/v1/briefing")
+        assert resp.status_code == 200
+        body = resp.json()
+        ai_item = next(i for i in body["items"] if i["category"]["slug"] == "ai")
+        assert ai_item["latest"] is not None
+        assert ai_item["latest"]["weekStart"] == "2026-04-20"
+        assert ai_item["latest"]["headlineExcerpt"] == "今週のヘッドライン。"
+
+    @pytest.mark.asyncio
+    async def test_orders_items_by_category_id(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        ai_category: Category,
+    ) -> None:
+        # ai は最初に登録されているので id が小さい想定
+        b_cat = Category(slug="bio", name="バイオ")
+        db_session.add(b_cat)
+        await db_session.commit()
+        await db_session.refresh(b_cat)
+
+        resp = await client.get("/api/v1/briefing")
+        body = resp.json()
+        ids = [item["category"]["id"] for item in body["items"]]
+        assert ids == sorted(ids)

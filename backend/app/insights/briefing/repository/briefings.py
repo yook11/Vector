@@ -55,6 +55,24 @@ class BriefingRepository:
         )
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
+    async def find_latest_for_each_category(self) -> dict[int, WeeklyBriefing]:
+        """category_id → 最新 briefing の dict を 1 クエリで返す。
+
+        未生成カテゴリは entry なし (呼出側で ``dict.get(id)`` → ``None``)。
+        PostgreSQL ``DISTINCT ON`` を使うことで、Python loop で N 回
+        ``find_latest_by_category`` を叩くより SQL 1 回で完結する。
+        """
+        stmt = (
+            select(WeeklyBriefing)
+            .order_by(
+                WeeklyBriefing.category_id,
+                WeeklyBriefing.week_start_date.desc(),
+            )
+            .distinct(WeeklyBriefing.category_id)
+        )
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return {b.category_id: b for b in rows}
+
     async def find_by(
         self, *, week_start: date, category_id: int
     ) -> WeeklyBriefing | None:
