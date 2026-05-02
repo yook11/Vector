@@ -15,6 +15,7 @@ from app.exception_handlers import (
     search_error_handler,
 )
 from app.exceptions import DuplicateError, NotFoundError
+from app.insights.briefing.router.briefing import router as briefing_router
 from app.insights.snapshot.router.weekly_trends import router as weekly_trends_router
 from app.routers import (
     admin,
@@ -97,6 +98,7 @@ app.include_router(articles.router)
 app.include_router(categories.router)
 app.include_router(watchlist.router)
 app.include_router(weekly_trends_router)
+app.include_router(briefing_router)
 app.include_router(admin.admin_router)
 
 

@@ -6,11 +6,13 @@ broker:
   - broker_analysis:  AI 分析
   - broker_embedding: ベクトル埋め込み生成
   - broker_digest:    週次トレンド snapshot 生成 (cron 駆動)
+  - broker_briefing:  週次カテゴリ別 LLM ブリーフィング生成 (cron 駆動、別 queue)
 
 Workers: broker ごとに 1 つ（docker-compose.yml を参照）。
 Scheduler:
   - taskiq scheduler app.brokers:scheduler_metadata (back-fill 用 cron)
   - taskiq scheduler app.brokers:scheduler_digest (週次 snapshot 用 cron)
+  - taskiq scheduler app.brokers:scheduler_briefing (週次 briefing 用 cron)
 """
 
 from __future__ import annotations
@@ -79,6 +81,7 @@ broker_content = _make_broker("pipeline:content")
 broker_analysis = _make_broker("pipeline:analysis")
 broker_embedding = _make_broker("pipeline:embedding")
 broker_digest = _make_broker("digest")
+broker_briefing = _make_broker("briefing")
 
 # ---------------------------------------------------------------------------
 # Scheduler — cron 駆動を持つ broker ごとに 1 つ
@@ -91,6 +94,10 @@ scheduler_metadata = TaskiqScheduler(
 scheduler_digest = TaskiqScheduler(
     broker=broker_digest,
     sources=[LabelScheduleSource(broker_digest)],
+)
+scheduler_briefing = TaskiqScheduler(
+    broker=broker_briefing,
+    sources=[LabelScheduleSource(broker_briefing)],
 )
 
 # ---------------------------------------------------------------------------
@@ -121,6 +128,7 @@ _register_lifecycle(broker_content, "content")
 _register_lifecycle(broker_analysis, "analysis")
 _register_lifecycle(broker_embedding, "embedding")
 _register_lifecycle(broker_digest, "digest")
+_register_lifecycle(broker_briefing, "briefing")
 
 # ---------------------------------------------------------------------------
 # AI アダプター wiring — broker_analysis 専用 composition root
@@ -156,6 +164,7 @@ async def _wire_embedding_adapters(state: TaskiqState) -> None:
 
 
 # scheduler に cron を登録するため、import で副作用を起こす。
+import app.insights.briefing.tasks.briefing  # noqa: E402, F401
 import app.insights.snapshot.tasks.snapshot  # noqa: E402, F401
 import app.maintenance.tasks  # noqa: E402, F401
 
