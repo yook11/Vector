@@ -1,13 +1,13 @@
 """WeeklyTrendsSnapshot の永続化 Repository。
 
 責務:
-- 1 週分の bundle を 1 行 1 JSONB として ``weekly_trends_snapshots`` に保存する。
-- ``exists_for_week``: cheap な exists 判定 (Pattern A' の `try_advance_from`
+- 1 集計窓分の bundle を 1 行 1 JSONB として ``weekly_trends_snapshots`` に保存する。
+- ``exists_for_window_end``: cheap な exists 判定 (Pattern A' の `try_advance_from`
   precondition チェック用)。
-- ``save``: ``ON CONFLICT (week_start) DO NOTHING RETURNING`` を基本とし、
+- ``save``: ``ON CONFLICT (window_end) DO NOTHING RETURNING`` を基本とし、
   ``force=True`` のときは ``DO UPDATE`` 経路で既存行を上書きする。race 敗北
-  (force=False かつ既存あり) は ``None`` 戻りで Service が ``find_by_week`` で
-  読戻す (spec §4.6、Phase 1-3 同型)。
+  (force=False かつ既存あり) は ``None`` 戻りで Service が
+  ``find_by_window_end`` で読戻す (spec §4.6、Phase 1-3 同型)。
 
 snapshot は 1 単位保存が責務 (feedback_snapshot_responsibility.md)。
 """
@@ -30,23 +30,23 @@ class SnapshotRepository:
         self._session = session
 
     async def find_latest(self) -> WeeklyTrendsSnapshot | None:
-        """最新 (week_start DESC) の snapshot を 1 件返す (なければ None)。"""
+        """最新 (window_end DESC) の snapshot を 1 件返す (なければ None)。"""
         stmt = (
             select(WeeklyTrendsSnapshot)
-            .order_by(WeeklyTrendsSnapshot.week_start.desc())
+            .order_by(WeeklyTrendsSnapshot.window_end.desc())
             .limit(1)
         )
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
-    async def find_by_week(self, week_start: date) -> WeeklyTrendsSnapshot | None:
-        """指定 ``week_start`` の snapshot を取得する (PK lookup、race 読戻し用)。"""
-        return await self._session.get(WeeklyTrendsSnapshot, week_start)
+    async def find_by_window_end(self, window_end: date) -> WeeklyTrendsSnapshot | None:
+        """指定 ``window_end`` の snapshot を取得する (PK lookup、race 読戻し用)。"""
+        return await self._session.get(WeeklyTrendsSnapshot, window_end)
 
-    async def exists_for_week(self, week_start: date) -> bool:
-        """`try_advance_from` 用 cheap exists 判定 (week_start 単位)。"""
+    async def exists_for_window_end(self, window_end: date) -> bool:
+        """`try_advance_from` 用 cheap exists 判定 (window_end 単位)。"""
         stmt = (
-            select(WeeklyTrendsSnapshot.week_start)
-            .where(WeeklyTrendsSnapshot.week_start == week_start)
+            select(WeeklyTrendsSnapshot.window_end)
+            .where(WeeklyTrendsSnapshot.window_end == window_end)
             .limit(1)
         )
         return (await self._session.execute(stmt)).first() is not None
@@ -62,7 +62,7 @@ class SnapshotRepository:
         commit は呼び出し側 (Service) の責務。
 
         Args:
-            snapshot: 永続化する WeeklyTrendsSnapshot (week_start / bundle /
+            snapshot: 永続化する WeeklyTrendsSnapshot (window_end / bundle /
                 source_analysis_count)
             force: ``True`` のとき既存行を上書きし ``generated_at`` を現在時刻に
                 更新する (手動再生成経路)。``False`` (default) のときは新規 INSERT
@@ -71,19 +71,19 @@ class SnapshotRepository:
         Returns:
             永続化成功時: 永続化後の ``WeeklyTrendsSnapshot``
             race 敗北時 (force=False かつ既存あり): ``None`` (Service が
-            ``find_by_week`` で勝者を読み戻す — spec §4.6)。``force=True`` 経路
-            では常に Snapshot を返す。
+            ``find_by_window_end`` で勝者を読み戻す — spec §4.6)。``force=True``
+            経路では常に Snapshot を返す。
         """
         if force:
             stmt = (
                 pg_insert(WeeklyTrendsSnapshot)
                 .values(
-                    week_start=snapshot.week_start,
+                    window_end=snapshot.window_end,
                     bundle=snapshot.bundle,
                     source_analysis_count=snapshot.source_analysis_count,
                 )
                 .on_conflict_do_update(
-                    index_elements=["week_start"],
+                    index_elements=["window_end"],
                     set_={
                         "bundle": snapshot.bundle,
                         "source_analysis_count": snapshot.source_analysis_count,
@@ -91,7 +91,7 @@ class SnapshotRepository:
                     },
                 )
                 .returning(
-                    WeeklyTrendsSnapshot.week_start,
+                    WeeklyTrendsSnapshot.window_end,
                     WeeklyTrendsSnapshot.generated_at,
                 )
             )
@@ -99,13 +99,13 @@ class SnapshotRepository:
             stmt = (
                 pg_insert(WeeklyTrendsSnapshot)
                 .values(
-                    week_start=snapshot.week_start,
+                    window_end=snapshot.window_end,
                     bundle=snapshot.bundle,
                     source_analysis_count=snapshot.source_analysis_count,
                 )
-                .on_conflict_do_nothing(index_elements=["week_start"])
+                .on_conflict_do_nothing(index_elements=["window_end"])
                 .returning(
-                    WeeklyTrendsSnapshot.week_start,
+                    WeeklyTrendsSnapshot.window_end,
                     WeeklyTrendsSnapshot.generated_at,
                 )
             )
@@ -113,7 +113,7 @@ class SnapshotRepository:
         if row is None:
             return None
         return WeeklyTrendsSnapshot(
-            week_start=row.week_start,
+            window_end=row.window_end,
             bundle=snapshot.bundle,
             source_analysis_count=snapshot.source_analysis_count,
             generated_at=row.generated_at,

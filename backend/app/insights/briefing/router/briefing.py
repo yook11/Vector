@@ -27,7 +27,7 @@ from app.insights.briefing.schemas.briefing import (
     _CategoryOut,
     _StoryOut,
 )
-from app.insights.snapshot.domain.week import latest_completed_week_start, now_in_jst
+from app.insights.briefing.domain.week import latest_completed_week_start, now_in_jst
 from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis
 from app.models.article_extraction import ArticleExtraction

@@ -1,36 +1,31 @@
-"""週次 digest の week_start 算出 — JST 月曜起点の純関数。
+"""週次 snapshot の集計窓終端 (window_end) を算出する純関数。
 
-Service / Task / CLI のいずれもここから import する。Service の static method
-としてではなく独立 module に切り出すのは、Service を生成しない経路 (Task /
-CLI が Ready を構築する段階) からも使うため。
+Snapshot BC は rolling 7d daily で集計するため、半開区間
+``[window_end - 7d, window_end)`` の上限となる JST 日付を返す。
+``WEEK_TZ = "Asia/Tokyo"`` で日付境界を切る。
 
 責務分離:
-- ``latest_completed_week_start``: 純関数 (副作用なし、テスト容易)
+- ``latest_window_end``: 純関数 (副作用なし、テスト容易)
 - ``now_in_jst``: side-effect 入口 (`datetime.now`)。Task / CLI から呼ぶ薄い
   wrapper で、テストでは差し替え or 直接 datetime を渡す経路を取る
 """
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from app.insights.snapshot.config import WEEK_TZ
 
-_WEEK = timedelta(days=7)
 
+def latest_window_end(now: datetime) -> date:
+    """``now`` (JST tz-aware) における集計窓の終端 = 当日 0:00 JST の date。
 
-def latest_completed_week_start(now: datetime) -> date:
-    """``now`` (JST 想定の tz-aware datetime) における直近完了週の月曜日。
-
-    例: JST 2026-04-27 (月) 00:05 → 2026-04-20 (= 前週月曜)
-        JST 2026-04-26 (日) 23:50 → 2026-04-13 (= 完了済み週の月曜)
-        JST 2026-04-22 (水) 12:00 → 2026-04-13 (= 前週月曜)
+    rolling 7d window の半開区間 ``[window_end - 7d, window_end)`` の上限。
+    cron 発火が JST 00:05 でも 06:00 でも、その日の 0:00 までを集計対象とする
+    ため戻り値は ``now.date()`` で確定する (同日内の実行時刻で結果が変わらない)。
     """
-    today = now.date()
-    days_since_monday = today.weekday()
-    current_monday = today - timedelta(days=days_since_monday)
-    return current_monday - _WEEK
+    return now.date()
 
 
 def now_in_jst() -> datetime:

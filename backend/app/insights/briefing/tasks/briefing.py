@@ -29,7 +29,7 @@ from app.insights.briefing.domain.ready import ReadyForBriefing
 from app.insights.briefing.domain.task_input import BriefingTaskInput
 from app.insights.briefing.llm.deepseek import DeepSeekBriefingGenerator
 from app.insights.briefing.repository.briefings import BriefingRepository
-from app.insights.snapshot.domain.week import latest_completed_week_start, now_in_jst
+from app.insights.briefing.domain.week import latest_completed_week_start, now_in_jst
 from app.models.category import Category
 
 logger = structlog.get_logger(__name__)

@@ -113,13 +113,16 @@ class WeeklyCategoryTrends(BaseModel):
 
 
 class WeeklyTrendsBundle(BaseModel):
-    """1 週分の全カテゴリトレンドをまとめた snapshot 永続形。
+    """1 集計窓分の全カテゴリトレンドをまとめた snapshot 永続形。
 
     ``model_dump(mode="json")`` 出力をそのまま JSONB に保存する。
     snapshot は 1 単位保存が責務 (feedback_snapshot_responsibility.md)。
+
+    ``window_end``: rolling 7d window の上限 (半開区間
+    ``[window_end - 7d, window_end)`` の上端、JST 日付)。
     """
 
     model_config = ConfigDict(frozen=True)
 
-    week_start: date
+    window_end: date
     sections: tuple[WeeklyCategoryTrends, ...]

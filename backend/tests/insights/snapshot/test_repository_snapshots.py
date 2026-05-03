@@ -1,8 +1,8 @@
 """SnapshotRepository の永続化挙動テスト。
 
 検証する観点:
-- ``find_latest`` / ``find_by_week`` の基本挙動
-- ``exists_for_week``: 不在 / 存在の cheap 判定
+- ``find_latest`` / ``find_by_window_end`` の基本挙動
+- ``exists_for_window_end``: 不在 / 存在の cheap 判定
 - ``save(force=False)``: 新規で Snapshot 返却 / 衝突で None (副作用なし)
 - ``save(force=True)``: 新規で Snapshot 返却 / 既存で上書き ``generated_at`` 更新
 - 並行 save (asyncio.gather): 1 つは Snapshot / 1 つは None (Phase 1-3 同型)
@@ -21,17 +21,21 @@ from app.models.weekly_trends_snapshot import WeeklyTrendsSnapshot
 
 
 def _snapshot(
-    week_start: date, *, source_analysis_count: int = 10, marker: str = "v1"
+    window_end: date, *, source_analysis_count: int = 10, marker: str = "v1"
 ) -> WeeklyTrendsSnapshot:
     return WeeklyTrendsSnapshot(
-        week_start=week_start,
-        bundle={"week_start": week_start.isoformat(), "marker": marker, "sections": []},
+        window_end=window_end,
+        bundle={
+            "window_end": window_end.isoformat(),
+            "marker": marker,
+            "sections": [],
+        },
         source_analysis_count=source_analysis_count,
     )
 
 
 # ---------------------------------------------------------------------------
-# find_latest / find_by_week
+# find_latest / find_by_window_end
 # ---------------------------------------------------------------------------
 
 
@@ -42,61 +46,63 @@ class TestFindLatest:
         assert await repo.find_latest() is None
 
     @pytest.mark.asyncio
-    async def test_returns_most_recent_week(self, db_session: AsyncSession) -> None:
+    async def test_returns_most_recent_window_end(
+        self, db_session: AsyncSession
+    ) -> None:
         repo = SnapshotRepository(db_session)
-        for offset in (0, 7, 14):
-            snap = _snapshot(date(2026, 4, 13) - timedelta(days=offset))
+        for offset in (0, 1, 2):
+            snap = _snapshot(date(2026, 5, 3) - timedelta(days=offset))
             await repo.save(snap)
         await db_session.commit()
 
         latest = await repo.find_latest()
         assert latest is not None
-        assert latest.week_start == date(2026, 4, 13)
+        assert latest.window_end == date(2026, 5, 3)
 
 
-class TestFindByWeek:
+class TestFindByWindowEnd:
     @pytest.mark.asyncio
     async def test_returns_snapshot_when_present(
         self, db_session: AsyncSession
     ) -> None:
         repo = SnapshotRepository(db_session)
-        await repo.save(_snapshot(date(2026, 4, 13)))
+        await repo.save(_snapshot(date(2026, 5, 3)))
         await db_session.commit()
 
-        found = await repo.find_by_week(date(2026, 4, 13))
+        found = await repo.find_by_window_end(date(2026, 5, 3))
         assert found is not None
-        assert found.week_start == date(2026, 4, 13)
+        assert found.window_end == date(2026, 5, 3)
 
     @pytest.mark.asyncio
     async def test_returns_none_when_missing(self, db_session: AsyncSession) -> None:
         repo = SnapshotRepository(db_session)
-        assert await repo.find_by_week(date(2026, 4, 13)) is None
+        assert await repo.find_by_window_end(date(2026, 5, 3)) is None
 
 
 # ---------------------------------------------------------------------------
-# exists_for_week
+# exists_for_window_end
 # ---------------------------------------------------------------------------
 
 
-class TestExistsForWeek:
+class TestExistsForWindowEnd:
     @pytest.mark.asyncio
     async def test_returns_false_when_missing(self, db_session: AsyncSession) -> None:
         repo = SnapshotRepository(db_session)
-        assert await repo.exists_for_week(date(2026, 4, 13)) is False
+        assert await repo.exists_for_window_end(date(2026, 5, 3)) is False
 
     @pytest.mark.asyncio
     async def test_returns_true_after_save(self, db_session: AsyncSession) -> None:
         repo = SnapshotRepository(db_session)
-        await repo.save(_snapshot(date(2026, 4, 13)))
+        await repo.save(_snapshot(date(2026, 5, 3)))
         await db_session.commit()
-        assert await repo.exists_for_week(date(2026, 4, 13)) is True
+        assert await repo.exists_for_window_end(date(2026, 5, 3)) is True
 
     @pytest.mark.asyncio
-    async def test_returns_false_for_other_week(self, db_session: AsyncSession) -> None:
+    async def test_returns_false_for_other_date(self, db_session: AsyncSession) -> None:
         repo = SnapshotRepository(db_session)
-        await repo.save(_snapshot(date(2026, 4, 13)))
+        await repo.save(_snapshot(date(2026, 5, 3)))
         await db_session.commit()
-        assert await repo.exists_for_week(date(2026, 4, 20)) is False
+        assert await repo.exists_for_window_end(date(2026, 5, 2)) is False
 
 
 # ---------------------------------------------------------------------------
@@ -110,19 +116,19 @@ class TestSaveDefault:
         self, db_session: AsyncSession
     ) -> None:
         repo = SnapshotRepository(db_session)
-        saved = await repo.save(_snapshot(date(2026, 4, 13)))
+        saved = await repo.save(_snapshot(date(2026, 5, 3)))
         assert saved is not None
-        assert saved.week_start == date(2026, 4, 13)
+        assert saved.window_end == date(2026, 5, 3)
         assert saved.generated_at is not None
 
     @pytest.mark.asyncio
     async def test_returns_none_on_conflict(self, db_session: AsyncSession) -> None:
         repo = SnapshotRepository(db_session)
-        first = await repo.save(_snapshot(date(2026, 4, 13), marker="first"))
+        first = await repo.save(_snapshot(date(2026, 5, 3), marker="first"))
         await db_session.commit()
         assert first is not None
 
-        second = await repo.save(_snapshot(date(2026, 4, 13), marker="second"))
+        second = await repo.save(_snapshot(date(2026, 5, 3), marker="second"))
         assert second is None
 
     @pytest.mark.asyncio
@@ -130,16 +136,16 @@ class TestSaveDefault:
         """``save(force=False)`` 衝突時、既存行は更新されない。"""
         repo = SnapshotRepository(db_session)
         await repo.save(
-            _snapshot(date(2026, 4, 13), source_analysis_count=10, marker="first")
+            _snapshot(date(2026, 5, 3), source_analysis_count=10, marker="first")
         )
         await db_session.commit()
 
         await repo.save(
-            _snapshot(date(2026, 4, 13), source_analysis_count=99, marker="second")
+            _snapshot(date(2026, 5, 3), source_analysis_count=99, marker="second")
         )
         await db_session.commit()
 
-        existing = await repo.find_by_week(date(2026, 4, 13))
+        existing = await repo.find_by_window_end(date(2026, 5, 3))
         assert existing is not None
         assert existing.source_analysis_count == 10
         assert existing.bundle["marker"] == "first"
@@ -154,11 +160,11 @@ class TestSaveForce:
     @pytest.mark.asyncio
     async def test_inserts_when_absent(self, db_session: AsyncSession) -> None:
         repo = SnapshotRepository(db_session)
-        saved = await repo.save(_snapshot(date(2026, 4, 13)), force=True)
+        saved = await repo.save(_snapshot(date(2026, 5, 3)), force=True)
         await db_session.commit()
         assert saved is not None
 
-        existing = await repo.find_by_week(date(2026, 4, 13))
+        existing = await repo.find_by_window_end(date(2026, 5, 3))
         assert existing is not None
         assert existing.bundle["marker"] == "v1"
 
@@ -166,14 +172,14 @@ class TestSaveForce:
     async def test_overwrites_existing(self, db_session: AsyncSession) -> None:
         repo = SnapshotRepository(db_session)
         first = await repo.save(
-            _snapshot(date(2026, 4, 13), source_analysis_count=10, marker="first")
+            _snapshot(date(2026, 5, 3), source_analysis_count=10, marker="first")
         )
         await db_session.commit()
         assert first is not None
         first_generated_at = first.generated_at
 
         second = await repo.save(
-            _snapshot(date(2026, 4, 13), source_analysis_count=99, marker="second"),
+            _snapshot(date(2026, 5, 3), source_analysis_count=99, marker="second"),
             force=True,
         )
         await db_session.commit()
@@ -181,7 +187,7 @@ class TestSaveForce:
         # generated_at は force=True で func.now() による更新が入る
         assert second.generated_at >= first_generated_at
 
-        existing = await repo.find_by_week(date(2026, 4, 13))
+        existing = await repo.find_by_window_end(date(2026, 5, 3))
         assert existing is not None
         assert existing.source_analysis_count == 99
         assert existing.bundle["marker"] == "second"
@@ -199,13 +205,13 @@ class TestConcurrentSave:
         db_session: AsyncSession,
         session_factory: async_sessionmaker[AsyncSession],
     ) -> None:
-        """同一 week_start への並行 save は片方が None になる (ON CONFLICT 動作)。"""
-        target_week = date(2026, 4, 13)
+        """同一 window_end への並行 save は片方が None になる (ON CONFLICT 動作)。"""
+        target_window_end = date(2026, 5, 3)
 
         async def _save_in_new_session() -> WeeklyTrendsSnapshot | None:
             async with session_factory() as session:
                 repo = SnapshotRepository(session)
-                saved = await repo.save(_snapshot(target_week))
+                saved = await repo.save(_snapshot(target_window_end))
                 await session.commit()
                 return saved
 
@@ -219,4 +225,4 @@ class TestConcurrentSave:
         # 永続化された snapshot は 1 件のみ
         async with session_factory() as session:
             repo = SnapshotRepository(session)
-            assert await repo.exists_for_week(target_week) is True
+            assert await repo.exists_for_window_end(target_window_end) is True

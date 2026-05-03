@@ -49,19 +49,19 @@ class TestFromSnapshot:
             ),
             new_entities=(NewEntity(name="Acme", type="company", current_count=3),),
         )
-        return WeeklyTrendsBundle(week_start=date(2026, 4, 20), sections=(section,))
+        return WeeklyTrendsBundle(window_end=date(2026, 5, 3), sections=(section,))
 
     def test_camel_case_keys(self) -> None:
         bundle = self._bundle()
         resp = weekly_trends_from_snapshot(
             bundle=bundle,
-            generated_at=datetime(2026, 4, 21, 0, 5, tzinfo=UTC),
+            generated_at=datetime(2026, 5, 3, 0, 5, tzinfo=UTC),
             source_analysis_count=328,
         )
         dumped = resp.model_dump(mode="json", by_alias=True)
         assert dumped["state"] == "ready"
-        assert dumped["weekStart"] == "2026-04-20"
-        assert dumped["weekEnd"] == "2026-04-27"
+        assert dumped["windowEnd"] == "2026-05-03"
+        assert dumped["windowStart"] == "2026-04-26"
         assert dumped["generatedAt"] is not None
         assert dumped["sourceAnalysisCount"] == 328
 
@@ -86,14 +86,14 @@ class TestFromSnapshot:
         assert new_e["name"] == "Acme"
         assert new_e["currentCount"] == 3
 
-    def test_week_end_is_week_start_plus_seven_days(self) -> None:
-        bundle = WeeklyTrendsBundle(week_start=date(2026, 4, 13), sections=())
+    def test_window_start_is_window_end_minus_seven_days(self) -> None:
+        bundle = WeeklyTrendsBundle(window_end=date(2026, 4, 30), sections=())
         resp = weekly_trends_from_snapshot(
             bundle=bundle,
-            generated_at=datetime(2026, 4, 14, 0, 5, tzinfo=UTC),
+            generated_at=datetime(2026, 4, 30, 0, 5, tzinfo=UTC),
             source_analysis_count=0,
         )
         dumped = resp.model_dump(mode="json", by_alias=True)
         assert dumped["state"] == "ready"
-        assert dumped["weekStart"] == "2026-04-13"
-        assert dumped["weekEnd"] == "2026-04-20"
+        assert dumped["windowEnd"] == "2026-04-30"
+        assert dumped["windowStart"] == "2026-04-23"

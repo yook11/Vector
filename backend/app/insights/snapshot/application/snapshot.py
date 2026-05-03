@@ -15,7 +15,7 @@ Pattern A' での Stage F:
   Ready 側で吸収済み
 - ``execute(ready)`` は集計 + save に専念し、戻り値は ``Generated`` の単一
   variant
-- race 敗北 (force=False で同時 INSERT 競合) は ``find_by_week`` で勝者を読み戻し
+- race 敗北 (force=False で同時 INSERT 競合) は ``find_by_window_end`` で勝者を読み戻し
   ``Generated`` に合流する (Phase 1-3 同型)
 """
 
@@ -59,7 +59,7 @@ class Generated:
     で吸収済みのため Service.execute の戻り値からは消えている (Pattern A')。
     """
 
-    week_start: date
+    window_end: date
     source_analysis_count: int
 
 
@@ -78,21 +78,27 @@ class WeeklyTrendsSnapshotService:
         self._session_factory = session_factory
 
     async def execute(self, ready: ReadyForDigest) -> Generated:
-        """``ready`` で指定された週の snapshot を集計・永続化する。
+        """``ready`` で指定された window_end の snapshot を集計・永続化する。
 
         precondition (既存 snapshot 判定) は ``ReadyForDigest.try_advance_from``
         側で吸収済み。本メソッドは集計 + save に専念する。
 
-        race 敗北 (``force=False`` 経路で同時 INSERT 競合) は ``find_by_week`` で
-        勝者を読み戻し ``Generated`` に合流する (Phase 1-3 同型)。
+        集計窓は rolling 7d:
+        - ``current  = [window_end - 7d, window_end)``
+        - ``previous = [window_end - 14d, window_end - 7d)``
+        - ``lookback = [window_end - 7d - 4w, window_end - 7d)``
+          (現状窓の手前 4 週、new entity 初出判定用)
+
+        race 敗北 (``force=False`` 経路で同時 INSERT 競合) は
+        ``find_by_window_end`` で勝者を読み戻し ``Generated`` に合流する。
         """
         async with self._session_factory() as session:
             snapshot_repo = SnapshotRepository(session)
             trends_repo = TrendsRepository(session)
             categories = await self._fetch_categories(session)
 
-            current_start = self._jst_midnight_utc(ready.week_start)
-            current_end = current_start + _WEEK
+            current_end = self._jst_midnight_utc(ready.window_end)
+            current_start = current_end - _WEEK
             previous_start = current_start - _WEEK
             lookback_start = current_start - _WEEK * NEW_ENTITY_LOOKBACK_WEEKS
 
@@ -112,10 +118,10 @@ class WeeklyTrendsSnapshotService:
             source_count = await trends_repo.count_source_analyses(
                 current_start=current_start, current_end=current_end
             )
-            bundle = WeeklyTrendsBundle(week_start=ready.week_start, sections=sections)
+            bundle = WeeklyTrendsBundle(window_end=ready.window_end, sections=sections)
 
             snapshot = WeeklyTrendsSnapshot(
-                week_start=ready.week_start,
+                window_end=ready.window_end,
                 bundle=bundle.model_dump(mode="json"),
                 source_analysis_count=source_count,
             )
@@ -126,24 +132,24 @@ class WeeklyTrendsSnapshotService:
                 # race 敗北 (force=False で他 worker が先行 INSERT): 勝者を読み戻す
                 logger.info(
                     "digest_concurrent_write",
-                    week_start=ready.week_start.isoformat(),
+                    window_end=ready.window_end.isoformat(),
                 )
-                saved = await snapshot_repo.find_by_week(ready.week_start)
+                saved = await snapshot_repo.find_by_window_end(ready.window_end)
                 if saved is None:
                     raise RuntimeError(
                         "digest_race_winner_missing: "
-                        f"week_start={ready.week_start.isoformat()}"
+                        f"window_end={ready.window_end.isoformat()}"
                     )
 
             logger.info(
                 "snapshot_generated",
-                week_start=ready.week_start.isoformat(),
+                window_end=ready.window_end.isoformat(),
                 category_count=len(sections),
                 source_analysis_count=source_count,
                 forced=ready.force,
             )
             return Generated(
-                week_start=ready.week_start,
+                window_end=ready.window_end,
                 source_analysis_count=source_count,
             )
 
@@ -194,12 +200,12 @@ class WeeklyTrendsSnapshotService:
         return tuple(rows)
 
     @staticmethod
-    def _jst_midnight_utc(week_start: date) -> datetime:
-        """JST 月曜 00:00 を UTC-aware datetime に変換する。"""
+    def _jst_midnight_utc(target_date: date) -> datetime:
+        """JST 当日 00:00 を UTC-aware datetime に変換する。"""
         jst_midnight = datetime(
-            week_start.year,
-            week_start.month,
-            week_start.day,
+            target_date.year,
+            target_date.month,
+            target_date.day,
             tzinfo=ZoneInfo(WEEK_TZ),
         )
         return jst_midnight.astimezone(UTC)

@@ -1,7 +1,7 @@
-"""generate_weekly_snapshot タスクのテスト (Phase 4)。
+"""generate_weekly_snapshot タスクのテスト。
 
 検証する観点:
-- ``schedule`` ラベルに JST 月曜 00:05 相当の cron (= UTC 日曜 15:05) が登録される
+- ``schedule`` ラベルに JST 毎日 00:05 相当の cron (= UTC 毎日 15:05) が登録される
 - ctx.state.session_factory + Ready 構築 + Service.execute(ready) の dispatch
 - ``ReadyForDigest.try_advance_from`` が None を返したら Service を呼ばずに
   early return する
@@ -41,13 +41,13 @@ def _ctx_with_session_factory() -> MagicMock:
 
 
 class TestSchedule:
-    def test_cron_matches_jst_monday_midnight(self) -> None:
-        """UTC 日曜 15:05 = JST 月曜 00:05 の cron 文字列が登録されている。"""
+    def test_cron_matches_jst_daily_midnight(self) -> None:
+        """UTC 毎日 15:05 = JST 毎日 00:05 の cron 文字列が登録されている。"""
         from app.insights.snapshot.tasks import snapshot
 
         schedule = snapshot.generate_weekly_snapshot.labels.get("schedule")
         assert isinstance(schedule, list)
-        assert any(entry.get("cron") == "5 15 * * 0" for entry in schedule)
+        assert any(entry.get("cron") == "5 15 * * *" for entry in schedule)
 
 
 # ---------------------------------------------------------------------------
@@ -62,18 +62,20 @@ class TestRun:
         from app.insights.snapshot.tasks import snapshot
 
         ctx = _ctx_with_session_factory()
-        target_week = date(2026, 4, 20)
-        ready = ReadyForDigest(week_start=target_week, force=False)
+        target_window_end = date(2026, 5, 3)
+        ready = ReadyForDigest(window_end=target_window_end, force=False)
 
         service = MagicMock()
         service.execute = AsyncMock(
-            return_value=Generated(week_start=target_week, source_analysis_count=42)
+            return_value=Generated(
+                window_end=target_window_end, source_analysis_count=42
+            )
         )
 
         with (
             patch(
                 "app.insights.snapshot.tasks.snapshot.now_in_jst",
-                return_value=datetime(2026, 4, 27, 0, 5, tzinfo=JST),
+                return_value=datetime(2026, 5, 3, 0, 5, tzinfo=JST),
             ),
             patch.object(
                 ReadyForDigest, "try_advance_from", new=AsyncMock(return_value=ready)
@@ -100,7 +102,7 @@ class TestRun:
         with (
             patch(
                 "app.insights.snapshot.tasks.snapshot.now_in_jst",
-                return_value=datetime(2026, 4, 27, 0, 5, tzinfo=JST),
+                return_value=datetime(2026, 5, 3, 0, 5, tzinfo=JST),
             ),
             patch.object(
                 ReadyForDigest, "try_advance_from", new=AsyncMock(return_value=None)
@@ -120,7 +122,7 @@ class TestRun:
         from app.insights.snapshot.tasks import snapshot
 
         ctx = _ctx_with_session_factory()
-        ready = ReadyForDigest(week_start=date(2026, 4, 20), force=False)
+        ready = ReadyForDigest(window_end=date(2026, 5, 3), force=False)
 
         service = MagicMock()
         service.execute = AsyncMock(side_effect=RuntimeError("aggregation failed"))
@@ -128,7 +130,7 @@ class TestRun:
         with (
             patch(
                 "app.insights.snapshot.tasks.snapshot.now_in_jst",
-                return_value=datetime(2026, 4, 27, 0, 5, tzinfo=JST),
+                return_value=datetime(2026, 5, 3, 0, 5, tzinfo=JST),
             ),
             patch.object(
                 ReadyForDigest, "try_advance_from", new=AsyncMock(return_value=ready)

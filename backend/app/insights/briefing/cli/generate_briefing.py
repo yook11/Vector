@@ -44,7 +44,7 @@ from app.insights.briefing.application.service import WeeklyBriefingService
 from app.insights.briefing.domain.ready import ReadyForBriefing
 from app.insights.briefing.llm.deepseek import DeepSeekBriefingGenerator
 from app.insights.briefing.repository.briefings import BriefingRepository
-from app.insights.snapshot.domain.week import latest_completed_week_start, now_in_jst
+from app.insights.briefing.domain.week import latest_completed_week_start, now_in_jst
 from app.models.category import Category
 
 
