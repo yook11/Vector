@@ -23,6 +23,7 @@ from app.collection.ingestion.fetchers.cloudflare import CloudflareBlogFetcher
 from app.collection.ingestion.fetchers.deepmind import DeepMindFetcher
 from app.collection.ingestion.fetchers.eetimes_japan import EETimesJapanFetcher
 from app.collection.ingestion.fetchers.electrek import ElectrekFetcher
+from app.collection.ingestion.fetchers.elife import ELifeFetcher
 from app.collection.ingestion.fetchers.engadget import EngadgetFetcher
 from app.collection.ingestion.fetchers.esa.hubble import ESAHubbleFetcher
 from app.collection.ingestion.fetchers.esa.webb import ESAWebbFetcher
@@ -84,4 +85,5 @@ FETCHERS: Final[dict[str, Callable[[], Fetcher]]] = {
     "ESA/Webb": ESAWebbFetcher,
     "OpenAI": OpenAIFetcher,
     "Hugging Face": HuggingFaceBlogFetcher,
+    "eLife": ELifeFetcher,
 }
