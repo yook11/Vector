@@ -24,8 +24,25 @@ _INTERNAL_API_SECRET_MIN_LENGTH = 32
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=str(_ENV_FILE), extra="ignore")
 
-    # データベース
-    database_url: str = "postgresql+asyncpg://vector:vector@db:5432/vector"
+    # データベース (application 接続)
+    # red-team AUTH-N4: application runtime (FastAPI / worker / CLI) は
+    # ``vector_app`` で接続し、public.* に schema-scoped アクセスする。
+    database_url: str = "postgresql+asyncpg://vector_app:vector_app@db:5432/vector"
+
+    # データベース (migration role)
+    # alembic / pytest fixture / vector_test 作成など admin 系の作業では
+    # ``vector`` (table owner) で接続する。``database_url`` と分離することで、
+    # application 経路は最小権限 (vector_app) のままにできる。
+    # 未設定時は ``database_url`` にフォールバックし、後方互換を保つ。
+    migration_database_url: str | None = None
+
+    # データベース (application role passwords)
+    # 権限境界の振る舞い検証 (tests/test_db_user_isolation.py) で別 user 接続を
+    # 開くために settings 経由で取得する。CLAUDE.md の「os.environ 直参照禁止」
+    # に従う。production runtime では DATABASE_URL / AUTH_DATABASE_URL に既に
+    # 埋め込まれているため、ここでは password 単体としては読み出さない。
+    postgres_auth_password: SecretStr | None = None
+    postgres_app_password: SecretStr | None = None
 
     # AI
     # Stage 1 (extraction) と Stage 2 (classification) のアダプター選択は env では

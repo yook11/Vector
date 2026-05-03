@@ -30,7 +30,13 @@ from app.models import (  # noqa: F401
     WeeklyBriefing,
 )
 
-TEST_DATABASE_URL = settings.database_url.rsplit("/", 1)[0] + "/vector_test"
+# テスト用 DB は admin (migration role) で接続する: vector_test の create / drop、
+# auth schema 作成、SQLModel.metadata.create_all、seed user 投入は table owner
+# の権限が必要なため、application role (vector_app) では実行できない。
+# 権限境界の振る舞いは tests/test_db_user_isolation.py で別途 application role
+# 接続を作って assert する。
+_ADMIN_DB_URL = settings.migration_database_url or settings.database_url
+TEST_DATABASE_URL = _ADMIN_DB_URL.rsplit("/", 1)[0] + "/vector_test"
 engine_test = create_async_engine(TEST_DATABASE_URL, echo=False, poolclass=NullPool)
 
 # --- BFF JWT auth helpers ---
@@ -116,7 +122,7 @@ async def _ensure_test_database_once() -> None:
     global _test_db_initialized
     if _test_db_initialized:
         return
-    base_url = settings.database_url.rsplit("/", 1)[0] + "/postgres"
+    base_url = _ADMIN_DB_URL.rsplit("/", 1)[0] + "/postgres"
     engine = create_async_engine(
         base_url, isolation_level="AUTOCOMMIT", poolclass=NullPool
     )

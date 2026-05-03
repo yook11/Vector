@@ -10,7 +10,7 @@ x-worker-base: &worker-base
   env_file:
     - .env
   environment:
-    - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-vector}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-vector}
+    - DATABASE_URL=postgresql+asyncpg://vector_app:${POSTGRES_APP_PASSWORD}@db:5432/${POSTGRES_DB:-vector}
     - REDIS_URL=redis://redis:6379/0
   volumes:
     - ./backend/app:/app/app
@@ -37,7 +37,7 @@ services:
       - INTERNAL_API_URL=http://backend:8000/api/v1
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET is required; generate one with `openssl rand -hex 32` and set it in .env}
       - BETTER_AUTH_URL=http://localhost:3000
-      - AUTH_DATABASE_URL=postgresql://${POSTGRES_USER:-vector}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-vector}?search_path=auth
+      - AUTH_DATABASE_URL=postgresql://vector_auth:${POSTGRES_AUTH_PASSWORD}@db:5432/${POSTGRES_DB:-vector}?search_path=auth
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:?INTERNAL_API_SECRET is required; generate one with `openssl rand -hex 32` and set it in .env}
       # rate limit (proxy.ts) 用。backend は db 0 を使うので frontend は db 1 で論理分離。
       - REDIS_URL=redis://redis:6379/1
@@ -66,7 +66,10 @@ services:
     env_file:
       - .env
     environment:
-      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-vector}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-vector}
+      # application runtime: vector_app (public.* DML + auth.user REFERENCES)
+      - DATABASE_URL=postgresql+asyncpg://vector_app:${POSTGRES_APP_PASSWORD}@db:5432/${POSTGRES_DB:-vector}
+      # alembic migration / pytest: vector (table owner) で接続
+      - MIGRATION_DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-vector}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-vector}
       - REDIS_URL=redis://redis:6379/0
     volumes:
       - ./backend/app:/app/app
@@ -97,8 +100,15 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-vector}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required; set a strong value in .env}
       POSTGRES_DB: ${POSTGRES_DB:-vector}
+      # red-team AUTH-N4: application-level role passwords. init script で
+      # vector_auth / vector_app role を作るときに psql に渡す。
+      POSTGRES_AUTH_PASSWORD: ${POSTGRES_AUTH_PASSWORD:?POSTGRES_AUTH_PASSWORD is required for vector_auth role}
+      POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:?POSTGRES_APP_PASSWORD is required for vector_app role}
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # 初回 db 起動時に application role を作成する init script を mount。
+      # 既存 dev volume では実行されないため、PR 本文の手動手順を参照すること。
+      - ./infra/db/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vector} -d ${POSTGRES_DB:-vector}"]
       interval: 5s
