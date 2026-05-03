@@ -24,6 +24,7 @@ hotness_score:
 from __future__ import annotations
 
 from datetime import date
+from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
@@ -31,6 +32,18 @@ from app.analysis.domain.value_objects.entity import EntityName, EntityType
 from app.analysis.domain.value_objects.topic import TopicName
 from app.domain.category import CategoryName, CategorySlug
 from app.insights.snapshot.config import MIN_CURRENT, SMOOTHING
+
+# 集約サイズの構造的上限。生成側の truncate 値 (snapshot.py の `[:N]`) と
+# Field(max_length=N) の SSoT を domain 側に集約する。
+# config.py の他定数 (MIN_CURRENT 等の集計しきい値) とは性質が違うため
+# domain VO と同居させる (red-team F10 構造防御 + DEFAULT_LIMIT 配置リファクタ)。
+MAX_TRENDS_PER_CATEGORY: Final[int] = 20
+MAX_CATEGORIES_PER_BUNDLE: Final[int] = 20
+
+# count フィールドの現実的な上限。anomaly 検出と response DoS 防御を兼ねる。
+# 1 カテゴリ × 1 週で 10_000 mention を超える単一 entity/topic は実運用では
+# 起こらない (生成側 SQL の集計対象 article 数自体が桁違いに少ない)。
+_MAX_COUNT: Final[int] = 10_000
 
 
 def _hotness(current: int, previous: int) -> float:
@@ -50,8 +63,8 @@ class EntityTrend(BaseModel):
 
     name: EntityName
     type: EntityType
-    current_count: int = Field(ge=MIN_CURRENT)
-    previous_count: int = Field(ge=0)
+    current_count: int = Field(ge=MIN_CURRENT, le=_MAX_COUNT)
+    previous_count: int = Field(ge=0, le=_MAX_COUNT)
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -71,8 +84,8 @@ class TopicTrend(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     topic: TopicName
-    current_count: int = Field(ge=MIN_CURRENT)
-    previous_count: int = Field(ge=0)
+    current_count: int = Field(ge=MIN_CURRENT, le=_MAX_COUNT)
+    previous_count: int = Field(ge=0, le=_MAX_COUNT)
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -92,7 +105,7 @@ class NewEntity(BaseModel):
 
     name: EntityName
     type: EntityType
-    current_count: int = Field(ge=1)
+    current_count: int = Field(ge=1, le=_MAX_COUNT)
 
 
 class WeeklyCategoryTrends(BaseModel):
@@ -107,9 +120,11 @@ class WeeklyCategoryTrends(BaseModel):
     category_id: int
     category_slug: CategorySlug
     category_name: CategoryName
-    trending_entities: tuple[EntityTrend, ...]
-    trending_topics: tuple[TopicTrend, ...]
-    new_entities: tuple[NewEntity, ...]
+    trending_entities: tuple[EntityTrend, ...] = Field(
+        max_length=MAX_TRENDS_PER_CATEGORY
+    )
+    trending_topics: tuple[TopicTrend, ...] = Field(max_length=MAX_TRENDS_PER_CATEGORY)
+    new_entities: tuple[NewEntity, ...] = Field(max_length=MAX_TRENDS_PER_CATEGORY)
 
 
 class WeeklyTrendsBundle(BaseModel):
@@ -125,4 +140,6 @@ class WeeklyTrendsBundle(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     window_end: date
-    sections: tuple[WeeklyCategoryTrends, ...]
+    sections: tuple[WeeklyCategoryTrends, ...] = Field(
+        max_length=MAX_CATEGORIES_PER_BUNDLE
+    )

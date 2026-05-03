@@ -30,12 +30,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.insights.snapshot.config import (
-    DEFAULT_LIMIT,
     NEW_ENTITY_LOOKBACK_WEEKS,
     WEEK_TZ,
 )
 from app.insights.snapshot.domain.ready import ReadyForDigest
-from app.insights.snapshot.domain.trend import WeeklyCategoryTrends, WeeklyTrendsBundle
+from app.insights.snapshot.domain.trend import (
+    MAX_TRENDS_PER_CATEGORY,
+    WeeklyCategoryTrends,
+    WeeklyTrendsBundle,
+)
 from app.insights.snapshot.repository.snapshots import SnapshotRepository
 from app.insights.snapshot.repository.trends import TrendsRepository
 from app.models.category import Category
@@ -182,15 +185,17 @@ class WeeklyTrendsSnapshotService:
             lookback_start=lookback_start,
         )
         # new entity の集計は閾値が緩く (current_count >= 1) 1 カテゴリで 1000+ 件に
-        # 膨らむため、各リストを上位 ``DEFAULT_LIMIT`` 件で truncate して JSONB 肥大化と
-        # UI ノイズを構造的に抑える (hot 系は閾値で既に小さいが対称性のため同じ扱い)。
+        # 膨らむため、各リストを上位 ``MAX_TRENDS_PER_CATEGORY`` 件で truncate して
+        # JSONB 肥大化と UI ノイズを構造的に抑える (hot 系は閾値で既に小さいが対称性
+        # のため同じ扱い)。同定数は WeeklyCategoryTrends の Field(max_length=...)
+        # でも参照され、生成側 truncate と VO 不変条件の SSoT になっている。
         return WeeklyCategoryTrends(
             category_id=category.id,
             category_slug=category.slug,
             category_name=category.name,
-            trending_entities=entities[:DEFAULT_LIMIT],
-            trending_topics=topics[:DEFAULT_LIMIT],
-            new_entities=new_entities[:DEFAULT_LIMIT],
+            trending_entities=entities[:MAX_TRENDS_PER_CATEGORY],
+            trending_topics=topics[:MAX_TRENDS_PER_CATEGORY],
+            new_entities=new_entities[:MAX_TRENDS_PER_CATEGORY],
         )
 
     @staticmethod

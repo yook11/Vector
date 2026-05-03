@@ -6,32 +6,57 @@
 - 不明な category slug は 404 (resource として存在しないため)
 - ``stories[].articleIds`` から参照される記事詳細を ``articles`` lookup table と
   して 1 リクエストでまとめて返す (frontend で N+1 fetch しないで済む)
+
+サイズ上限 (red-team F10 構造防御):
+    各 str / list の max_length は anon GET 経路で巨大 JSONB が response として
+    流れる経路を FastAPI ``response_model`` serialize 時に reject する
+    (``ResponseValidationError`` → 500、failure_visibility 方針)。
+    domain 側の ``WeeklyBriefingContent`` と同値で持ち、二箇所で同じ振る舞いを保証する。
 """
 
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Annotated, Literal
+from typing import Annotated, Final, Literal
 
 from pydantic import Field
 
 from app.domain.category import CategoryName, CategorySlug
+from app.insights.briefing.domain.briefing import (
+    MAX_ARTICLE_IDS_PER_STORY,
+    MAX_BRIEFING_HEADLINE_LEN,
+    MAX_STORIES_PER_BRIEFING,
+    MAX_STORY_ANALYSIS_LEN,
+    MAX_STORY_TITLE_LEN,
+)
 from app.schemas.base import _CamelBase
+
+# response 固有の上限 (domain VO に対応物がない一覧系・参照記事系)。
+# stories 20 × article_ids 50 = 1000 件が理論上限だが ID 重複除去で実際は 200 程度。
+_MAX_REFERENCED_ARTICLES: Final[int] = 200
+# 記事サマリ 1 件分の表示用文字列上限。NewsSource.name / 翻訳タイトル / URL が対象。
+_MAX_ARTICLE_TITLE_LEN: Final[int] = 500
+_MAX_SOURCE_NAME_LEN: Final[int] = 200
+_MAX_URL_LEN: Final[int] = 2_000
+# 一覧の見出し抜粋。詳細 headline (500) より短い 1 文相当。
+_MAX_HEADLINE_EXCERPT_LEN: Final[int] = 200
+# カテゴリ数 (現在 11、将来余裕で 20)。
+_MAX_BRIEFING_LIST_ITEMS: Final[int] = 20
 
 
 class _StoryOut(_CamelBase):
-    title: str
-    analysis: str
-    article_ids: list[int]
+    title: str = Field(max_length=MAX_STORY_TITLE_LEN)
+    analysis: str = Field(max_length=MAX_STORY_ANALYSIS_LEN)
+    article_ids: list[int] = Field(max_length=MAX_ARTICLE_IDS_PER_STORY)
 
 
 class _ArticleSummaryOut(_CamelBase):
     """``stories[].articleIds`` から参照される記事のサマリ。"""
 
     id: int
-    title_ja: str
-    source_name: str
-    url: str
+    title_ja: str = Field(max_length=_MAX_ARTICLE_TITLE_LEN)
+    source_name: str = Field(max_length=_MAX_SOURCE_NAME_LEN)
+    url: str = Field(max_length=_MAX_URL_LEN)
 
 
 class _CategoryOut(_CamelBase):
@@ -49,9 +74,9 @@ class ReadyBriefing(_CamelBase):
     model_name: str
     input_article_count: int
     category: _CategoryOut
-    headline: str
-    stories: list[_StoryOut]
-    articles: list[_ArticleSummaryOut]
+    headline: str = Field(max_length=MAX_BRIEFING_HEADLINE_LEN)
+    stories: list[_StoryOut] = Field(max_length=MAX_STORIES_PER_BRIEFING)
+    articles: list[_ArticleSummaryOut] = Field(max_length=_MAX_REFERENCED_ARTICLES)
 
 
 class EmptyBriefing(_CamelBase):
@@ -76,7 +101,7 @@ class _BriefingListLatest(_CamelBase):
     """
 
     week_start: date
-    headline_excerpt: str
+    headline_excerpt: str = Field(max_length=_MAX_HEADLINE_EXCERPT_LEN)
 
 
 class BriefingListItem(_CamelBase):
@@ -94,4 +119,4 @@ class BriefingListResponse(_CamelBase):
     """
 
     current_week_start: date
-    items: list[BriefingListItem]
+    items: list[BriefingListItem] = Field(max_length=_MAX_BRIEFING_LIST_ITEMS)
