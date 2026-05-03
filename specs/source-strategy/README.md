@@ -33,7 +33,9 @@ Vector のニュースソース選定・段階的拡張の決定記録。
 
 | ファイル | 内容 |
 |---------|------|
-| [roadmap.md](./roadmap.md) | **改訂後の段階導入計画 (2026-04-27 改訂)** ← forward-looking な意思決定はここを一次情報源 |
+| [production-readiness-2026-05-03.md](./production-readiness-2026-05-03.md) | **本番公開前法務レビュー (2026-05-03)** ← 既存 20 ソースを再評価し RED 12/YELLOW 6/GREEN 2 を確定 + 代替 Tier 1/2 を策定。本書の「法的前提」を上書きする現状認識 |
+| [tier1-fetcher-research.md](./tier1-fetcher-research.md) | **Tier 1 全 23 ソースの fetcher 設計用リサーチ (2026-05-03)** ← Phase 3 着手前に実フィード検証ベースで endpoint / format / Pattern / override 要否を集約。元 9 PR は 14 PR に修正 |
+| [roadmap.md](./roadmap.md) | 段階導入計画 (2026-04-27)。Tier 1/2 追加の上位計画は production-readiness を参照 |
 | [phase-0-hn.md](./phase-0-hn.md) | Phase 0: Hacker News 登録漏れの解消と sliding window 設計修正 |
 | [verification-2026-04-27.md](./verification-2026-04-27.md) | Phase 1b/2 候補の生フィード再検証 (実測ベース) |
 | [phase-plan.md](./phase-plan.md) | 原計画 (2026-04-22)。履歴として保持。最新計画は roadmap.md |
