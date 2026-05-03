@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xml:base="https://www.nsf.gov/" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>NSF News</title>
+    <link>https://www.nsf.gov/</link>
+    <description>News posted on the NSF website</description>
+    <language>en</language>
+
+    <item>
+      <title>Podcast: Photonic quantum chips promise fast future</title>
+      <link>https://www.nsf.gov/news/podcast-photonic-quantum-chips-promise-fast-future</link>
+      <description>Milos Popovic, an NSF-supported associate professor, discusses a collaboration that has built a photonic quantum system into a traditional electronic chip...</description>
+      <pubDate>Mon, 27 Apr 2026 16:00:15 -0400</pubDate>
+      <dc:creator>NSF</dc:creator>
+      <guid isPermaLink="false">https://www.nsf.gov/news/podcast-photonic-quantum-chips-promise-fast-future</guid>
+    </item>
+    <item>
+      <title>NSF announces 2026 Graduate Research Fellowship Program award offers</title>
+      <link>https://www.nsf.gov/news/nsf-announces-2026-graduate-research-fellowship-program</link>
+      <description>The U.S. National Science Foundation today announced that it has made offers and will award 2,500 Graduate Research Fellowships for the 2026-2027 academic year...</description>
+      <pubDate>Mon, 13 Apr 2026 06:59:59 -0400</pubDate>
+      <dc:creator>NSF</dc:creator>
+      <guid isPermaLink="false">https://www.nsf.gov/news/nsf-announces-2026-graduate-research-fellowship-program</guid>
+    </item>
+    <item>
+      <title></title>
+      <link>https://www.nsf.gov/news/empty-title-entry</link>
+      <description>Empty title entry to exercise the title_missing path.</description>
+      <pubDate>Tue, 07 Apr 2026 11:54:00 -0400</pubDate>
+      <dc:creator>NSF</dc:creator>
+      <guid isPermaLink="false">https://www.nsf.gov/news/empty-title-entry</guid>
+    </item>
+  </channel>
+</rss>
