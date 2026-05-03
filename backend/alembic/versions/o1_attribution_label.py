@@ -10,7 +10,7 @@ PR の bulk_insert で新規 Tier 1 ソースに正しい値を埋める。
 ALTER TABLE ADD COLUMN は nullable + default なしのため Postgres では
 metadata-only の高速 DDL となる。lock_timeout は念のため明示。
 
-Revision ID: o1_news_sources_attribution_label
+Revision ID: o1_attribution_label
 Revises: n3_grant_app_db_users
 Create Date: 2026-05-04
 
@@ -22,7 +22,7 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "o1_news_sources_attribution_label"
+revision: str = "o1_attribution_label"
 down_revision: str | None = "n3_grant_app_db_users"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
