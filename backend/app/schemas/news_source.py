@@ -26,6 +26,7 @@ class NewsSourceDetail(_CamelBase):
     site_url: SafeUrl
     endpoint_url: SafeUrl
     is_active: bool
+    attribution_label: str | None = None
     created_at: datetime
     updated_at: datetime
 

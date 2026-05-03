@@ -50,6 +50,7 @@ class NewsSource(Base):
     site_url: Mapped[SafeUrl] = mapped_column()
     endpoint_url: Mapped[SafeUrl] = mapped_column(unique=True)
     is_active: Mapped[bool] = mapped_column(server_default=sa.true())
+    attribution_label: Mapped[str | None] = mapped_column(default=None)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
