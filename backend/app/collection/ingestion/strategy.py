@@ -36,6 +36,8 @@ from app.collection.ingestion.fetchers.microsoft_research import (
 )
 from app.collection.ingestion.fetchers.monoist import MONOistFetcher
 from app.collection.ingestion.fetchers.nasa import NASAFetcher
+from app.collection.ingestion.fetchers.nist import NISTFetcher
+from app.collection.ingestion.fetchers.nsf import NSFFetcher
 from app.collection.ingestion.fetchers.protocol import Fetcher
 from app.collection.ingestion.fetchers.quantum_insider import QuantumInsiderFetcher
 from app.collection.ingestion.fetchers.spaceflight_now import SpaceflightNowFetcher
@@ -68,4 +70,6 @@ FETCHERS: Final[dict[str, Callable[[], Fetcher]]] = {
     "MEXT": MEXTFetcher,
     "MIC": MICFetcher,
     "Anthropic": AnthropicFetcher,
+    "NIST": NISTFetcher,
+    "NSF": NSFFetcher,
 }

@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss xmlns:dc="http://purl.org/dc/elements/1.1/"
+     xmlns:atom="http://www.w3.org/2005/Atom"
+     xmlns:content="http://purl.org/rss/1.0/modules/content/"
+     version="2.0" xml:base="https://www.nist.gov/">
+  <channel>
+    <title>NIST News</title>
+    <link>https://www.nist.gov/news-events/news</link>
+    <description/>
+    <language>en</language>
+    <atom:link href="https://www.nist.gov/news-events/news/rss.xml" rel="self" type="application/rss+xml"/>
+
+    <item>
+      <title>NIST Weighs In on the Mystery of the Gravitational Constant</title>
+      <link>https://www.nist.gov/news-events/news/2026/04/nist-weighs-mystery-gravitational-constant</link>
+      <description>  A NIST researcher has unveiled the results of a 10-year quest to measure the constant.
+
+</description>
+      <pubDate>Thu, 16 Apr 2026 12:00:00 +0000</pubDate>
+      <dc:creator>Sarah Henderson</dc:creator>
+      <guid isPermaLink="true">https://www.nist.gov/node/1910106</guid>
+    </item>
+    <item>
+      <title>Any Color You Like: NIST Scientists Create &#8216;Any Wavelength&#8217; Lasers in Tiny Circuits for Light</title>
+      <link>https://www.nist.gov/news-events/news/2026/04/any-color-you-nist-scientists-create-any-wavelength-lasers-tiny-circuits</link>
+      <description>  NIST scientists and collaborators have pioneered a way to make integrated circuits for light.
+
+</description>
+      <pubDate>Wed, 15 Apr 2026 12:00:00 +0000</pubDate>
+      <dc:creator>Sarah Henderson</dc:creator>
+      <guid isPermaLink="true">https://www.nist.gov/node/1910396</guid>
+    </item>
+    <item>
+      <title></title>
+      <link>https://www.nist.gov/news-events/news/2026/03/empty-title-entry</link>
+      <description>This entry has an empty title to exercise the title_missing path.</description>
+      <pubDate>Mon, 30 Mar 2026 12:00:00 +0000</pubDate>
+      <dc:creator>Sarah Henderson</dc:creator>
+      <guid isPermaLink="true">https://www.nist.gov/node/1906996</guid>
+    </item>
+  </channel>
+</rss>
