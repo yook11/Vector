@@ -28,6 +28,8 @@ from app.collection.ingestion.fetchers.itmedia_ai import ITmediaAIFetcher
 from app.collection.ingestion.fetchers.itmedia_news import ITmediaNewsFetcher
 from app.collection.ingestion.fetchers.jpcert import JPCERTFetcher
 from app.collection.ingestion.fetchers.krebs_on_security import KrebsOnSecurityFetcher
+from app.collection.ingestion.fetchers.mext import MEXTFetcher
+from app.collection.ingestion.fetchers.mic import MICFetcher
 from app.collection.ingestion.fetchers.microsoft_research import (
     MicrosoftResearchFetcher,
 )
@@ -62,4 +64,6 @@ FETCHERS: Final[dict[str, Callable[[], Fetcher]]] = {
     "SpaceNews": SpaceNewsFetcher,
     "The Register": TheRegisterFetcher,
     "Hacker News": HackerNewsFetcher,
+    "MEXT": MEXTFetcher,
+    "MIC": MICFetcher,
 }

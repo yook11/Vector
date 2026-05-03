@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF xmlns="http://purl.org/rss/1.0/"
+         xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns:dc="http://purl.org/dc/elements/1.1/"
+         xmlns:dcterms="http://purl.org/dc/terms/"
+         xml:lang="ja">
+  <channel rdf:about="https://www.mext.go.jp/b_menu/news/index.rdf">
+    <title>文部科学省ホームページ 新着情報</title>
+    <link>https://www.mext.go.jp/</link>
+    <description>文部科学省の新着情報をお届けします。</description>
+    <dc:publisher>文部科学省</dc:publisher>
+    <items>
+      <rdf:Seq>
+        <rdf:li rdf:resource="https://www.mext.go.jp/b_menu/houdou/2026/05/01.htm"/>
+        <rdf:li rdf:resource="https://www.mext.go.jp/b_menu/houdou/2026/05/02.htm"/>
+        <rdf:li rdf:resource="https://www.mext.go.jp/b_menu/houdou/2026/05/03.htm"/>
+      </rdf:Seq>
+    </items>
+  </channel>
+  <item rdf:about="https://www.mext.go.jp/b_menu/houdou/2026/05/01.htm">
+    <title>令和8年度科学研究費助成事業の交付内定について(第1次)</title>
+    <link>https://www.mext.go.jp/b_menu/houdou/2026/05/01.htm</link>
+    <dc:date>2026-05-01T10:00:00+09:00</dc:date>
+  </item>
+  <item rdf:about="https://www.mext.go.jp/b_menu/houdou/2026/05/02.htm">
+    <title>第13期科学技術・学術審議会(第1回)の開催について</title>
+    <link>https://www.mext.go.jp/b_menu/houdou/2026/05/02.htm</link>
+    <description></description>
+    <dc:date>2026-05-02T14:00:00+09:00</dc:date>
+  </item>
+  <item rdf:about="https://www.mext.go.jp/b_menu/houdou/2026/05/03.htm">
+    <title></title>
+    <link>https://www.mext.go.jp/b_menu/houdou/2026/05/03.htm</link>
+    <dc:date>2026-05-03T09:00:00+09:00</dc:date>
+  </item>
+</rdf:RDF>

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="Shift_JIS"?>
+<rdf:RDF xmlns="http://purl.org/rss/1.0/"
+         xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns:dc="http://purl.org/dc/elements/1.1/"
+         xml:lang="ja">
+  <channel rdf:about="https://www.soumu.go.jp/news.rdf">
+    <title>総務省 新着情報</title>
+    <link>https://www.soumu.go.jp/</link>
+    <description>総務省の新着情報をお届けします。</description>
+    <dc:publisher>総務省</dc:publisher>
+    <items>
+      <rdf:Seq>
+        <rdf:li rdf:resource="https://www.soumu.go.jp/menu_news/s-news/01kiban02_02000301.html"/>
+        <rdf:li rdf:resource="https://www.soumu.go.jp/menu_news/s-news/01ryutsu02_02000302.html"/>
+        <rdf:li rdf:resource="https://www.soumu.go.jp/menu_news/s-news/01gyosei09_02000303.html"/>
+      </rdf:Seq>
+    </items>
+  </channel>
+  <item rdf:about="https://www.soumu.go.jp/menu_news/s-news/01kiban02_02000301.html">
+    <title>サイバーセキュリティタスクフォース(第50回)配布資料</title>
+    <link>https://www.soumu.go.jp/menu_news/s-news/01kiban02_02000301.html</link>
+    <description>サイバーセキュリティタスクフォース(第50回)配布資料</description>
+    <dc:date>2026-05-01T15:00:00+09:00</dc:date>
+  </item>
+  <item rdf:about="https://www.soumu.go.jp/menu_news/s-news/01ryutsu02_02000302.html">
+    <title>AIネットワーク社会推進会議(第15回)の開催について</title>
+    <link>https://www.soumu.go.jp/menu_news/s-news/01ryutsu02_02000302.html</link>
+    <description>AIネットワーク社会推進会議(第15回)の開催について</description>
+    <dc:date>2026-05-02T09:30:00+09:00</dc:date>
+  </item>
+  <item rdf:about="https://www.soumu.go.jp/menu_news/s-news/01gyosei09_02000303.html">
+    <title></title>
+    <link>https://www.soumu.go.jp/menu_news/s-news/01gyosei09_02000303.html</link>
+    <dc:date>2026-05-03T11:00:00+09:00</dc:date>
+  </item>
+</rdf:RDF>
