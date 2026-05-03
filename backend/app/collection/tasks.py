@@ -297,6 +297,7 @@ async def extract_html_body(
         pending,
         body=html_result.body,
         html_published_at=html_result.published_at,
+        html_title=html_result.title,
     )
     if isinstance(advanced, IngestionFailed):
         logger.info(

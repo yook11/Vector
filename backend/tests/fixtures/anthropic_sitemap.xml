@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://www.anthropic.com/news/claude-3-5-sonnet</loc>
+    <lastmod>2026-05-01T12:00:00+00:00</lastmod>
+  </url>
+  <url>
+    <loc>https://www.anthropic.com/news/introducing-claude-haiku</loc>
+    <lastmod>2026-04-28T08:30:00+00:00</lastmod>
+  </url>
+  <url>
+    <loc>https://www.anthropic.com/news/research-update</loc>
+    <lastmod>2026-04-15T15:00:00Z</lastmod>
+  </url>
+  <url>
+    <loc>https://www.anthropic.com/news/older-post</loc>
+  </url>
+  <url>
+    <loc>https://www.anthropic.com/about</loc>
+    <lastmod>2026-05-02T10:00:00+00:00</lastmod>
+  </url>
+  <url>
+    <loc>https://www.anthropic.com/pricing</loc>
+    <lastmod>2026-05-03T10:00:00+00:00</lastmod>
+  </url>
+  <url>
+    <loc>https://www.anthropic.com/news/</loc>
+    <lastmod>2026-05-04T10:00:00+00:00</lastmod>
+  </url>
+</urlset>

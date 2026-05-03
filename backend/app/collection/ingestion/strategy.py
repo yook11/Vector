@@ -17,6 +17,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Final
 
+from app.collection.ingestion.fetchers.anthropic import AnthropicFetcher
 from app.collection.ingestion.fetchers.cleantechnica import CleanTechnicaFetcher
 from app.collection.ingestion.fetchers.eetimes_japan import EETimesJapanFetcher
 from app.collection.ingestion.fetchers.electrek import ElectrekFetcher
@@ -66,4 +67,5 @@ FETCHERS: Final[dict[str, Callable[[], Fetcher]]] = {
     "Hacker News": HackerNewsFetcher,
     "MEXT": MEXTFetcher,
     "MIC": MICFetcher,
+    "Anthropic": AnthropicFetcher,
 }
