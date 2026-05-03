@@ -81,7 +81,7 @@ app.add_middleware(
     allow_origins=[settings.frontend_url],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 # 例外ハンドラ
