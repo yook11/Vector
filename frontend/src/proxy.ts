@@ -1,14 +1,52 @@
 import { getSessionCookie } from "better-auth/cookies";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
+import { checkRateLimit } from "@/lib/auth/rate-limit";
 import { sanitizeCallbackUrl } from "@/lib/proxy/callback-url";
 import {
   buildCspDirectives,
   buildCspHeader,
   generateNonce,
 } from "@/lib/proxy/csp";
+import { buildIdentifier } from "@/lib/proxy/identifier";
+
+// Next.js 16 の proxy は Node.js runtime に固定 (公式: middleware-to-proxy)。
+// `export const runtime` は禁止されており、node-redis / node:crypto は素で使える。
 
 export async function proxy(request: NextRequest) {
+  // session cookie は rate limit identifier と auth check の両方で使う。
+  // 1 回だけ取得して使い回す (getSessionCookie は cookie 名解決のため毎回コスト)。
+  const sessionToken = getSessionCookie(request);
+
+  // --- Rate limit (DoS 防御の一次関門 / red-team C8 / F17 対策) ---
+  //
+  // Better Auth 内蔵の rate limit は HTTP router (/api/auth/*) のみに効き、
+  // Vector が依拠する `auth.api.getSession({ headers })` 直呼び経路には
+  // 完全にバイパスされる。proxy 層で application-level rate limit を被せて、
+  // 認証済 cookie を保持した攻撃者による DB Pool 飽和 DoS を構造的に bound する。
+  //
+  // CSP nonce 生成や session 検証より前に走らせる。429 で即 reject すれば
+  // CPU を使う処理に攻撃者を到達させない。Redis 不通時は checkRateLimit が
+  // 内部でフェイルオープン (allowed: true) を返すため、運用障害が DoS に
+  // 直結しないようになっている。
+  const identifier = buildIdentifier(
+    sessionToken ?? null,
+    request.headers.get("x-forwarded-for"),
+    request.headers.get("x-real-ip"),
+  );
+  if (identifier) {
+    const decision = await checkRateLimit(identifier);
+    if (!decision.allowed) {
+      return new NextResponse("Too Many Requests", {
+        status: 429,
+        headers: {
+          "Retry-After": String(decision.retryAfterSeconds),
+          "Content-Type": "text/plain; charset=utf-8",
+        },
+      });
+    }
+  }
+
   // --- XSS対策: Content Security Policy (CSP) ---
   //
   // CSP はブラウザに「どのリソースの読み込みを許可するか」を指示する HTTP ヘッダー。
@@ -43,7 +81,6 @@ export async function proxy(request: NextRequest) {
   // Better Auth の `getSessionCookie` ヘルパーが BETTER_AUTH_URL から
   // useSecureCookies を判定し正しい cookie 名で取得するため、proxy 側で
   // 名前をハードコードしない。実際の検証は BFF proxy 側で行う。
-  const sessionToken = getSessionCookie(request);
   const isAuthPage = request.nextUrl.pathname.startsWith("/auth");
 
   if (!sessionToken && !isAuthPage) {

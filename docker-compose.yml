@@ -39,6 +39,8 @@ services:
       - BETTER_AUTH_URL=http://localhost:3000
       - AUTH_DATABASE_URL=postgresql://${POSTGRES_USER:-vector}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-vector}?search_path=auth
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:?INTERNAL_API_SECRET is required; generate one with `openssl rand -hex 32` and set it in .env}
+      # rate limit (proxy.ts) 用。backend は db 0 を使うので frontend は db 1 で論理分離。
+      - REDIS_URL=redis://redis:6379/1
     volumes:
       - ./frontend/src:/app/src
       - ./frontend/public:/app/public
@@ -49,6 +51,8 @@ services:
       - ./frontend/next.config.js:/app/next.config.js
     depends_on:
       backend:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     networks:
       - public
