@@ -86,10 +86,13 @@ services:
       - internal
 
   # --- Database ---
+  # red-team AUTH-C1 (db host expose 経由の admin 乗っ取り) を構造的に遮断:
+  # - networks は internal 限定 (Docker の internal: true で外部 ingress/egress 遮断)
+  # - ports は宣言なし (internal network では host port forward も無効化されるため)
+  # dev で psql を使うときは `docker compose exec db psql -U vector vector` で
+  # container 内 psql を使う。host から直接 5433 に接続する経路は完全に閉じる。
   db:
     image: pgvector/pgvector:pg16
-    ports:
-      - "${DB_PORT:-5433}:5432"
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-vector}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required; set a strong value in .env}
@@ -102,7 +105,6 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - public
       - internal
 
   # --- Redis (Task Queue Broker) ---
