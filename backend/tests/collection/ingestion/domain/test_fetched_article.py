@@ -419,6 +419,65 @@ class TestReadyForArticleTryAdvanceFrom:
         assert result.article.title == "RSS Title"
         assert result.metadata == metadata
 
+    def test_merge_ignores_html_title_when_prefer_html_title_is_false(self) -> None:
+        """RSS ソース (デフォルト) は HTML title を渡されても無視する (後方互換)。"""
+        rss_pub = PublishedAt(value=datetime(2026, 4, 30, 12, 0, 0, tzinfo=UTC))
+        pending = self._pending(published_at_hint=rss_pub)
+
+        result = ReadyForArticle.try_advance_from(
+            pending,
+            body="x" * 100,
+            html_published_at=None,
+            html_title="HTML Title from trafilatura",
+        )
+
+        assert isinstance(result, ReadyForArticle)
+        assert result.article.title == "RSS Title"
+
+    def test_merge_uses_html_title_when_prefer_html_title_is_true(self) -> None:
+        """sitemap 系ソース (prefer_html_title=True) は HTML 由来 title を採用する。"""
+        rss_pub = PublishedAt(value=datetime(2026, 4, 30, 12, 0, 0, tzinfo=UTC))
+        pending = PendingHtmlFetch(
+            title="placeholder-slug",
+            source_id=1,
+            source_url=_safe_url(),
+            published_at_hint=rss_pub,
+            metadata=FetchedMetadata(language="en", site_name="Anthropic"),
+            prefer_html_title=True,
+        )
+
+        result = ReadyForArticle.try_advance_from(
+            pending,
+            body="x" * 100,
+            html_published_at=None,
+            html_title="Introducing Claude 3.5 Sonnet",
+        )
+
+        assert isinstance(result, ReadyForArticle)
+        assert result.article.title == "Introducing Claude 3.5 Sonnet"
+
+    def test_merge_falls_back_to_pending_title_when_html_title_missing(self) -> None:
+        """prefer_html_title=True でも HTML title 欠落なら placeholder を使う。"""
+        rss_pub = PublishedAt(value=datetime(2026, 4, 30, 12, 0, 0, tzinfo=UTC))
+        pending = PendingHtmlFetch(
+            title="placeholder-slug",
+            source_id=1,
+            source_url=_safe_url(),
+            published_at_hint=rss_pub,
+            metadata=FetchedMetadata(language="en", site_name="Anthropic"),
+            prefer_html_title=True,
+        )
+
+        result = ReadyForArticle.try_advance_from(
+            pending,
+            body="x" * 100,
+            html_published_at=None,
+            html_title=None,
+        )
+
+        assert isinstance(result, ReadyForArticle)
+        assert result.article.title == "placeholder-slug"
+
 
 class TestFetcherProtocol:
     def test_protocol_declares_provides_classvar(self) -> None:

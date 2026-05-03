@@ -184,6 +184,15 @@ class PendingHtmlFetch(BaseModel):
     本型は ``StagedArticle`` (kiq message) に乗って worker 間を運ばれるため
     Pydantic ``BaseModel(frozen=True)`` 必須 (memory
     `feedback_taskiq_basemodel_required.md`)。
+
+    ``prefer_html_title`` は sitemap 系ソース (RSS が title を一切提供しない)
+    のためのオプトイン flag。``True`` のとき ``try_advance_from`` の merge は
+    HTML 抽出由来の title を採用する。デフォルト (RSS ソース全般、Anthropic
+    以外) では従来通り RSS 由来の ``title`` を採用する。
+    ``title`` 自身は ``min_length=1`` を満たす必要があるため、sitemap 系
+    Fetcher は URL slug 等のプレースホルダ文字列を入れる (HTML 抽出成功時に
+    overwrite され、失敗時は記事ごと drop されるためプレースホルダは永続化
+    されない)。
     """
 
     model_config = ConfigDict(frozen=True)
@@ -193,6 +202,7 @@ class PendingHtmlFetch(BaseModel):
     source_url: SafeUrl
     published_at_hint: PublishedAt | None = None
     metadata: FetchedMetadata = Field(default_factory=FetchedMetadata)
+    prefer_html_title: bool = False
 
 
 class ReadyForArticle(BaseModel):
@@ -225,12 +235,15 @@ class ReadyForArticle(BaseModel):
         pending: PendingHtmlFetch,
         body: str,
         html_published_at: PublishedAt | None,
+        html_title: str | None = None,
     ) -> ReadyForArticle | Failed:
         """Pattern H で HTML 抽出成功後、``PendingHtmlFetch`` + HTML 結果から昇格。
 
         Merge 規則 (RSS 優先 / HTML 補完):
 
-        - ``title``: ``pending.title`` (RSS 確定値、HTML 由来は無視)
+        - ``title``: ``pending.prefer_html_title`` が ``True`` かつ
+          ``html_title`` があれば HTML 由来を採用 (sitemap 系ソース向け)。
+          それ以外は ``pending.title`` (RSS 確定値) を採用。
         - ``body``: ``body`` (HTML 抽出結果、HTML only)
         - ``published_at``: ``pending.published_at_hint or html_published_at``
           (RSS が出していれば優先、欠落時のみ HTML フォールバック)
@@ -245,9 +258,9 @@ class ReadyForArticle(BaseModel):
           字超等、構築時に ``ValueError`` を捕捉して降格)
 
         引数を ``HtmlExtractionResult`` 型ではなく素の ``body`` /
-        ``html_published_at`` で受けるのは ``app.collection.extraction``
-        への循環 import を避けるため。呼出側 (extract_html_body task) で
-        ``ExtractedContent`` から取り出して渡す。
+        ``html_published_at`` / ``html_title`` で受けるのは
+        ``app.collection.extraction`` への循環 import を避けるため。呼出側
+        (extract_html_body task) で ``ExtractedContent`` から取り出して渡す。
         """
         final_published = pending.published_at_hint or html_published_at
         if final_published is None:
@@ -258,9 +271,12 @@ class ReadyForArticle(BaseModel):
                     detail="rss_and_html_both_missing",
                 )
             )
+        final_title = (
+            html_title if (pending.prefer_html_title and html_title) else pending.title
+        )
         try:
             article = FetchedArticle(
-                title=pending.title,
+                title=final_title,
                 body=body,
                 published_at=final_published,
                 source_id=pending.source_id,
