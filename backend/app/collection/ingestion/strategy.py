@@ -24,6 +24,8 @@ from app.collection.ingestion.fetchers.deepmind import DeepMindFetcher
 from app.collection.ingestion.fetchers.eetimes_japan import EETimesJapanFetcher
 from app.collection.ingestion.fetchers.electrek import ElectrekFetcher
 from app.collection.ingestion.fetchers.engadget import EngadgetFetcher
+from app.collection.ingestion.fetchers.esa.hubble import ESAHubbleFetcher
+from app.collection.ingestion.fetchers.esa.webb import ESAWebbFetcher
 from app.collection.ingestion.fetchers.fierce_biotech import FierceBiotechFetcher
 from app.collection.ingestion.fetchers.hacker_news import HackerNewsFetcher
 from app.collection.ingestion.fetchers.ieee_spectrum import IEEESpectrumFetcher
@@ -76,4 +78,6 @@ FETCHERS: Final[dict[str, Callable[[], Fetcher]]] = {
     "NSF": NSFFetcher,
     "The Cloudflare Blog": CloudflareBlogFetcher,
     "Google DeepMind": DeepMindFetcher,
+    "ESA/Hubble": ESAHubbleFetcher,
+    "ESA/Webb": ESAWebbFetcher,
 }

@@ -9,8 +9,8 @@ from app.collection.ingestion.strategy import FETCHERS
 
 class TestStrategyConsistency:
     def test_all_sources_registered(self) -> None:
-        """既存 20 + Phase 3 (3-h-1 + 3-d-4 + 3-a + 3-d-1) = 27 sources."""
-        assert len(FETCHERS) == 27
+        """既存 20 + Phase 3 (3-h-1 + 3-d-4 + 3-a + 3-d-1 + 3-b) = 29 sources."""
+        assert len(FETCHERS) == 29
 
     def test_venturebeat_registered(self) -> None:
         assert FETCHERS["VentureBeat"] is VentureBeatFetcher
