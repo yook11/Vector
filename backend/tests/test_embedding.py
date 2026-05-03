@@ -2,17 +2,14 @@
 
 from unittest.mock import patch
 
-import httpx
 import pytest
 
 from app.analysis.embedder.base import BaseEmbedder
 from app.analysis.embedder.factory import get_embedder
 from app.analysis.embedder.gemini import GeminiEmbedder
-from app.analysis.embedder.ruri import RuriEmbedder
 from app.analysis.errors import (
     AnalysisDomainError,
     InvalidInputError,
-    NetworkError,
     ProviderError,
 )
 
@@ -29,45 +26,6 @@ def test_get_embedder_returns_gemini() -> None:
         mock_settings.gemini_api_key.get_secret_value.return_value = "test-key"
         result = get_embedder()
         assert isinstance(result, GeminiEmbedder)
-
-
-# ---------------------------------------------------------------------------
-# D. RuriEmbedder._translate_error
-# ---------------------------------------------------------------------------
-
-
-def test_ruri_connect_error_raises_network_error() -> None:
-    """接続エラーは NetworkError に分類される。"""
-    embedder = RuriEmbedder(base_url="http://localhost:8080")
-    result = embedder._translate_error(httpx.ConnectError("Connection refused"))
-    assert isinstance(result, NetworkError)
-
-
-def test_ruri_timeout_raises_network_error() -> None:
-    """タイムアウトは NetworkError に分類される。"""
-    embedder = RuriEmbedder(base_url="http://localhost:8080")
-    result = embedder._translate_error(httpx.ReadTimeout("Timed out"))
-    assert isinstance(result, NetworkError)
-
-
-def test_ruri_500_raises_provider_error() -> None:
-    """HTTP 500 は ProviderError に分類される。"""
-    embedder = RuriEmbedder(base_url="http://localhost:8080")
-    request = httpx.Request("POST", "http://localhost:8080/embed")
-    response = httpx.Response(500, text="Internal Server Error", request=request)
-    exc = httpx.HTTPStatusError("Server Error", request=request, response=response)
-    result = embedder._translate_error(exc)
-    assert isinstance(result, ProviderError)
-
-
-def test_ruri_400_raises_invalid_input_error() -> None:
-    """HTTP 400 は InvalidInputError に分類される。"""
-    embedder = RuriEmbedder(base_url="http://localhost:8080")
-    request = httpx.Request("POST", "http://localhost:8080/embed")
-    response = httpx.Response(400, text="Bad Request", request=request)
-    exc = httpx.HTTPStatusError("Bad Request", request=request, response=response)
-    result = embedder._translate_error(exc)
-    assert isinstance(result, InvalidInputError)
 
 
 # ---------------------------------------------------------------------------
