@@ -6,7 +6,7 @@
   を反映 (`generated_at` も更新)
 - bundle 内容: 全カテゴリ 1 セクションずつ含み、hot 判定の通った VO のみ詰まる
 - source_analysis_count: window 内の analysis 件数 (全カテゴリ合算)
-- DEFAULT_LIMIT で truncate
+- MAX_TRENDS_PER_CATEGORY で truncate
 - race 敗北 (force=False で同時 INSERT 競合): find_by_window_end で読戻し →
   Generated 合流
 - winner missing (find_by_window_end でも None): RuntimeError 伝播
@@ -31,8 +31,8 @@ from app.insights.snapshot.application.snapshot import (
     Generated,
     WeeklyTrendsSnapshotService,
 )
-from app.insights.snapshot.config import DEFAULT_LIMIT
 from app.insights.snapshot.domain.ready import ReadyForDigest
+from app.insights.snapshot.domain.trend import MAX_TRENDS_PER_CATEGORY
 from app.insights.snapshot.repository.snapshots import SnapshotRepository
 from app.models.category import Category
 
@@ -167,7 +167,7 @@ class TestExecute:
         sample_categories: list[Category],
         seed_analysis: SeedAnalysis,
     ) -> None:
-        """new_entities は ``DEFAULT_LIMIT`` 件で truncate される (上位 N 件のみ残す)。
+        """new_entities は ``MAX_TRENDS_PER_CATEGORY`` 件で truncate される。
 
         new entity 集計は閾値が緩く (current_count >= 1)、現実データでは 1 カテゴリ
         1000+ 件に膨らむ。snapshot 段階で上限を切ることで JSONB 肥大化と UI 描画の
@@ -192,7 +192,7 @@ class TestExecute:
         section = next(
             s for s in snapshot.bundle["sections"] if s["category_id"] == cat.id
         )
-        assert len(section["new_entities"]) == DEFAULT_LIMIT
+        assert len(section["new_entities"]) == MAX_TRENDS_PER_CATEGORY
         names = [e["name"] for e in section["new_entities"]]
         assert "entity_00" in names
         assert "entity_24" not in names

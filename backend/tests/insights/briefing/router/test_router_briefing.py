@@ -7,9 +7,14 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from httpx import AsyncClient
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.insights.briefing.domain.briefing import (
+    MAX_STORIES_PER_BRIEFING,
+    MAX_STORY_ANALYSIS_LEN,
+)
 from app.models.article_extraction import ArticleExtraction
 from app.models.category import Category
 from app.models.weekly_briefing import WeeklyBriefing
@@ -165,3 +170,68 @@ class TestListBriefings:
         body = resp.json()
         ids = [item["category"]["id"] for item in body["items"]]
         assert ids == sorted(ids)
+
+
+class TestBriefingResponseSizeGuard:
+    """red-team F10: anon GET 経路で巨大 briefing JSONB が response として
+    流れる経路を構造的に塞ぐ。
+
+    AUTH-N4 / AUTH-C1 経由で attacker が DB に巨大 stories / analysis を
+    直書きしたシナリオ。Field(max_length=...) が router の
+    `_StoryOut.model_validate` または `ReadyBriefing(...)` 構築時に発火し、
+    response に巨大 JSONB が含まれることを構造的に防ぐ。
+    """
+
+    @pytest.mark.asyncio
+    async def test_anon_get_rejects_oversized_stories(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        ai_category: Category,
+    ) -> None:
+        """stories 数が上限超なら anon GET で ValidationError 伝播 (本番では 500)。"""
+        oversized_stories = [
+            {"title": f"t{i}", "analysis": "a", "article_ids": [1]}
+            for i in range(MAX_STORIES_PER_BRIEFING + 1)
+        ]
+        briefing = WeeklyBriefing(
+            week_start_date=date(2026, 4, 20),
+            category_id=ai_category.id,
+            headline="h",
+            stories=oversized_stories,
+            model_name="deepseek-v4-pro",
+            input_article_count=1,
+        )
+        db_session.add(briefing)
+        await db_session.commit()
+
+        with pytest.raises(ValidationError):
+            await client.get("/api/v1/briefing/ai")
+
+    @pytest.mark.asyncio
+    async def test_anon_get_rejects_oversized_analysis(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        ai_category: Category,
+    ) -> None:
+        """1 story の analysis が上限超なら anon GET で ValidationError 伝播。"""
+        briefing = WeeklyBriefing(
+            week_start_date=date(2026, 4, 20),
+            category_id=ai_category.id,
+            headline="h",
+            stories=[
+                {
+                    "title": "t",
+                    "analysis": "x" * (MAX_STORY_ANALYSIS_LEN + 1),
+                    "article_ids": [1],
+                }
+            ],
+            model_name="deepseek-v4-pro",
+            input_article_count=1,
+        )
+        db_session.add(briefing)
+        await db_session.commit()
+
+        with pytest.raises(ValidationError):
+            await client.get("/api/v1/briefing/ai")

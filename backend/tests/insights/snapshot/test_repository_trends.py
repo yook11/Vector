@@ -590,7 +590,7 @@ class TestGetNewEntities:
     ) -> None:
         """current_count 降順で返る (snapshot 上位 N 件 truncate の前提)。
 
-        snapshot 生成側で `[:DEFAULT_LIMIT]` slice するため、最も登場件数の
+        snapshot 生成側で `[:MAX_TRENDS_PER_CATEGORY]` slice するため、最も登場件数の
         多い entity が先頭に来ていないと意味のある truncate にならない。
         """
         cat = sample_categories[0]

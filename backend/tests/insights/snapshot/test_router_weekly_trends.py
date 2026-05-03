@@ -21,6 +21,8 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.insights.snapshot.domain.trend import (
+    MAX_CATEGORIES_PER_BUNDLE,
+    MAX_TRENDS_PER_CATEGORY,
     EntityTrend,
     NewEntity,
     TopicTrend,
@@ -118,6 +120,70 @@ class TestWeeklyTrendsEndpoint:
         保証する (feedback_failure_visibility)。
         """
         db_session.add(_snapshot(date(2026, 5, 3), bundle={"window_end": "not-a-date"}))
+        await db_session.commit()
+
+        with pytest.raises(ValidationError):
+            await client.get("/api/v1/weekly-trends")
+
+    async def test_anon_get_rejects_oversized_trends_in_section(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        """1 section 内の trending_entities が上限超なら anon GET で 500 (DoS 遮断)。
+
+        AUTH-N4 / AUTH-C1 経由で attacker が DB に巨大 JSONB を直書きしたシナリオ。
+        domain VO の Field(max_length=MAX_TRENDS_PER_CATEGORY) が router の
+        WeeklyTrendsBundle.model_validate(snapshot.bundle) で発火し、巨大 response
+        が anon に流れることを構造的に防ぐ (red-team F10)。
+        """
+        oversized_entities = [
+            {
+                "name": f"ent_{i:03d}",
+                "type": "company",
+                "current_count": 5,
+                "previous_count": 0,
+            }
+            for i in range(MAX_TRENDS_PER_CATEGORY + 1)
+        ]
+        bundle = {
+            "window_end": "2026-05-03",
+            "sections": [
+                {
+                    "category_id": 1,
+                    "category_slug": "ai",
+                    "category_name": "AI",
+                    "trending_entities": oversized_entities,
+                    "trending_topics": [],
+                    "new_entities": [],
+                }
+            ],
+        }
+        db_session.add(_snapshot(date(2026, 5, 3), bundle=bundle))
+        await db_session.commit()
+
+        with pytest.raises(ValidationError):
+            await client.get("/api/v1/weekly-trends")
+
+    async def test_anon_get_rejects_too_many_sections(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        """sections が上限超なら anon GET で 500 (DoS 遮断、F10 sections 軸)。"""
+        oversized_sections = [
+            {
+                "category_id": i + 1,
+                "category_slug": f"slug_{i:02d}",
+                "category_name": f"Cat {i}",
+                "trending_entities": [],
+                "trending_topics": [],
+                "new_entities": [],
+            }
+            for i in range(MAX_CATEGORIES_PER_BUNDLE + 1)
+        ]
+        bundle = {"window_end": "2026-05-03", "sections": oversized_sections}
+        db_session.add(_snapshot(date(2026, 5, 3), bundle=bundle))
         await db_session.commit()
 
         with pytest.raises(ValidationError):
