@@ -24,8 +24,8 @@ describe("getWeeklyTrendsViewModel", () => {
   it("ready state は categories 等のフィールドを保持して透過する", async () => {
     const ready = {
       state: "ready" as const,
-      weekStart: "2026-04-20",
-      weekEnd: "2026-04-26",
+      windowStart: "2026-04-26",
+      windowEnd: "2026-05-03",
       sourceAnalysisCount: 42,
       categories: [
         {

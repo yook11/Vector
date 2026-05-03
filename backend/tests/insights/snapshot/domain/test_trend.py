@@ -234,19 +234,19 @@ class TestWeeklyTrendsBundle:
         )
 
     def test_constructs_with_empty_sections(self) -> None:
-        bundle = WeeklyTrendsBundle(week_start=date(2026, 4, 20), sections=())
-        assert bundle.week_start == date(2026, 4, 20)
+        bundle = WeeklyTrendsBundle(window_end=date(2026, 5, 3), sections=())
+        assert bundle.window_end == date(2026, 5, 3)
         assert bundle.sections == ()
 
     def test_constructs_with_multiple_sections(self) -> None:
         sections = (self._section(1), self._section(2))
-        bundle = WeeklyTrendsBundle(week_start=date(2026, 4, 20), sections=sections)
+        bundle = WeeklyTrendsBundle(window_end=date(2026, 5, 3), sections=sections)
         assert len(bundle.sections) == 2
 
     def test_immutable_bundle(self) -> None:
-        bundle = WeeklyTrendsBundle(week_start=date(2026, 4, 20), sections=())
+        bundle = WeeklyTrendsBundle(window_end=date(2026, 5, 3), sections=())
         with pytest.raises(ValidationError):
-            bundle.week_start = date(2026, 4, 27)  # type: ignore[misc]
+            bundle.window_end = date(2026, 4, 27)  # type: ignore[misc]
 
     def test_model_dump_round_trip(self) -> None:
         """model_dump(mode='json') → model_validate で同値に戻る (snapshot 永続化)。"""
@@ -260,7 +260,7 @@ class TestWeeklyTrendsBundle:
             trending_topics=(),
             new_entities=(),
         )
-        original = WeeklyTrendsBundle(week_start=date(2026, 4, 20), sections=(section,))
+        original = WeeklyTrendsBundle(window_end=date(2026, 5, 3), sections=(section,))
         dumped = original.model_dump(mode="json")
         restored = WeeklyTrendsBundle.model_validate(dumped)
         assert restored == original

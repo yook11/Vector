@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_optional_user, get_session
 from app.insights.briefing.domain.headline import extract_first_sentence
+from app.insights.briefing.domain.week import latest_completed_week_start, now_in_jst
 from app.insights.briefing.repository.briefings import BriefingRepository
 from app.insights.briefing.schemas.briefing import (
     BriefingListItem,
@@ -27,7 +28,6 @@ from app.insights.briefing.schemas.briefing import (
     _CategoryOut,
     _StoryOut,
 )
-from app.insights.snapshot.domain.week import latest_completed_week_start, now_in_jst
 from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis
 from app.models.article_extraction import ArticleExtraction

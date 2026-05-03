@@ -29,7 +29,7 @@ async function WeeklyTrendsContent() {
     return (
       <EmptyState
         title="週次トレンドはまだ生成されていません"
-        description="次回の自動生成は JST 月曜 00:05 に予定されています"
+        description="次回の自動生成は JST 毎日 00:05 に予定されています"
       />
     );
   }
@@ -37,7 +37,7 @@ async function WeeklyTrendsContent() {
   return (
     <>
       <p className="text-xs text-muted-foreground">
-        {formatDate(data.weekStart)} – {formatDate(data.weekEnd)}
+        {formatDate(data.windowStart)} – {formatDate(data.windowEnd)}
         <span className="ml-2">
           · {data.sourceAnalysisCount} 件の分析を集計
         </span>

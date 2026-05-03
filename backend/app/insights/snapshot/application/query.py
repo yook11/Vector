@@ -26,6 +26,6 @@ class WeeklyTrendsQueryService:
         self._session = session
 
     async def find_latest(self) -> WeeklyTrendsSnapshot | None:
-        """最新 (week_start DESC) の snapshot を 1 件返す (なければ None)。"""
+        """最新 (window_end DESC) の snapshot を 1 件返す (なければ None)。"""
         repo = SnapshotRepository(self._session)
         return await repo.find_latest()

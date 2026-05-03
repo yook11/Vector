@@ -3,8 +3,8 @@
 検証する観点:
 - snapshot 不在時は 200 + state="empty" のみ (failure_visibility 原則:
   500 にはせず空状態を discriminated union で表現する)
-- snapshot 在ると最新週の bundle が state="ready" + camelCase で返る
-- 複数週がある場合は week_start DESC で 1 件目を返す
+- snapshot 在ると最新窓の bundle が state="ready" + camelCase で返る
+- 複数 window_end がある場合は window_end DESC で 1 件目を返す
 - 認証は任意 (BFF プロキシヘッダなしでも 200)
 - bundle JSONB が破損していて Pydantic validate に失敗したらルーターは
   捕まえずに伝播させる (生成側の不具合を fallback で隠さない:
@@ -30,7 +30,7 @@ from app.insights.snapshot.domain.trend import (
 from app.models.weekly_trends_snapshot import WeeklyTrendsSnapshot
 
 
-def _bundle_with_section(week_start: date) -> WeeklyTrendsBundle:
+def _bundle_with_section(window_end: date) -> WeeklyTrendsBundle:
     section = WeeklyCategoryTrends(
         category_id=1,
         category_slug="ai",
@@ -45,17 +45,17 @@ def _bundle_with_section(week_start: date) -> WeeklyTrendsBundle:
         ),
         new_entities=(NewEntity(name="Acme", type="company", current_count=3),),
     )
-    return WeeklyTrendsBundle(week_start=week_start, sections=(section,))
+    return WeeklyTrendsBundle(window_end=window_end, sections=(section,))
 
 
-def _snapshot(week_start: date, *, bundle: dict | None = None) -> WeeklyTrendsSnapshot:
+def _snapshot(window_end: date, *, bundle: dict | None = None) -> WeeklyTrendsSnapshot:
     serialized = (
         bundle
         if bundle is not None
-        else _bundle_with_section(week_start).model_dump(mode="json")
+        else _bundle_with_section(window_end).model_dump(mode="json")
     )
     return WeeklyTrendsSnapshot(
-        week_start=week_start,
+        window_end=window_end,
         bundle=serialized,
         source_analysis_count=42,
     )
@@ -75,16 +75,16 @@ class TestWeeklyTrendsEndpoint:
         client: AsyncClient,
         db_session: AsyncSession,
     ) -> None:
-        db_session.add(_snapshot(date(2026, 4, 13)))
-        db_session.add(_snapshot(date(2026, 4, 20)))
+        db_session.add(_snapshot(date(2026, 5, 1)))
+        db_session.add(_snapshot(date(2026, 5, 3)))
         await db_session.commit()
 
         resp = await client.get("/api/v1/weekly-trends")
         assert resp.status_code == 200
         data = resp.json()
         assert data["state"] == "ready"
-        assert data["weekStart"] == "2026-04-20"
-        assert data["weekEnd"] == "2026-04-27"
+        assert data["windowEnd"] == "2026-05-03"
+        assert data["windowStart"] == "2026-04-26"
         assert data["sourceAnalysisCount"] == 42
         assert len(data["categories"]) == 1
 
@@ -99,7 +99,7 @@ class TestWeeklyTrendsEndpoint:
         client: AsyncClient,
         db_session: AsyncSession,
     ) -> None:
-        db_session.add(_snapshot(date(2026, 4, 20)))
+        db_session.add(_snapshot(date(2026, 5, 3)))
         await db_session.commit()
 
         resp = await client.get("/api/v1/weekly-trends")
@@ -117,9 +117,7 @@ class TestWeeklyTrendsEndpoint:
         確認することで「ルーターが try/except で隠していない」ことを構造的に
         保証する (feedback_failure_visibility)。
         """
-        db_session.add(
-            _snapshot(date(2026, 4, 20), bundle={"week_start": "not-a-date"})
-        )
+        db_session.add(_snapshot(date(2026, 5, 3), bundle={"window_end": "not-a-date"}))
         await db_session.commit()
 
         with pytest.raises(ValidationError):

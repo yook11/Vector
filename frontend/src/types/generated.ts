@@ -697,15 +697,15 @@ export interface components {
        */
       state: "ready";
       /**
-       * Weekstart
+       * Windowstart
        * Format: date
        */
-      weekStart: string;
+      windowStart: string;
       /**
-       * Weekend
+       * Windowend
        * Format: date
        */
-      weekEnd: string;
+      windowEnd: string;
       /**
        * Generatedat
        * Format: date-time
