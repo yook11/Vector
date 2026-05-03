@@ -28,6 +28,7 @@ from app.collection.ingestion.fetchers.esa.hubble import ESAHubbleFetcher
 from app.collection.ingestion.fetchers.esa.webb import ESAWebbFetcher
 from app.collection.ingestion.fetchers.fierce_biotech import FierceBiotechFetcher
 from app.collection.ingestion.fetchers.hacker_news import HackerNewsFetcher
+from app.collection.ingestion.fetchers.huggingface import HuggingFaceBlogFetcher
 from app.collection.ingestion.fetchers.ieee_spectrum import IEEESpectrumFetcher
 from app.collection.ingestion.fetchers.itmedia_ai import ITmediaAIFetcher
 from app.collection.ingestion.fetchers.itmedia_news import ITmediaNewsFetcher
@@ -42,6 +43,7 @@ from app.collection.ingestion.fetchers.monoist import MONOistFetcher
 from app.collection.ingestion.fetchers.nasa import NASAFetcher
 from app.collection.ingestion.fetchers.nist import NISTFetcher
 from app.collection.ingestion.fetchers.nsf import NSFFetcher
+from app.collection.ingestion.fetchers.openai import OpenAIFetcher
 from app.collection.ingestion.fetchers.protocol import Fetcher
 from app.collection.ingestion.fetchers.quantum_insider import QuantumInsiderFetcher
 from app.collection.ingestion.fetchers.spaceflight_now import SpaceflightNowFetcher
@@ -80,4 +82,6 @@ FETCHERS: Final[dict[str, Callable[[], Fetcher]]] = {
     "Google DeepMind": DeepMindFetcher,
     "ESA/Hubble": ESAHubbleFetcher,
     "ESA/Webb": ESAWebbFetcher,
+    "OpenAI": OpenAIFetcher,
+    "Hugging Face": HuggingFaceBlogFetcher,
 }

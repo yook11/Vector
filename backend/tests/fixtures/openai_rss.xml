@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?><rss xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title><![CDATA[OpenAI News]]></title>
+        <description><![CDATA[The OpenAI blog]]></description>
+        <link>https://openai.com/news</link>
+        <generator>OpenAI</generator>
+        <lastBuildDate>Sun, 03 May 2026 23:39:06 GMT</lastBuildDate>
+        <atom:link href="https://openai.com/news/rss" rel="self" type="application/rss+xml"/>
+        <item>
+            <title><![CDATA[Introducing Advanced Account Security]]></title>
+            <description><![CDATA[Introducing Advanced Account Security: phishing-resistant login, stronger recovery, and enhanced protections to safeguard sensitive data and prevent account takeover.]]></description>
+            <link>https://openai.com/index/advanced-account-security</link>
+            <guid isPermaLink="true">https://openai.com/index/advanced-account-security</guid>
+            <category><![CDATA[Product]]></category>
+            <pubDate>Thu, 30 Apr 2026 00:00:00 GMT</pubDate>
+        </item><item>
+            <title><![CDATA[Where the goblins came from]]></title>
+            <description><![CDATA[How goblin outputs spread in AI models: timeline, root cause, and fixes behind personality-driven quirks in GPT-5 behavior.]]></description>
+            <link>https://openai.com/index/where-the-goblins-came-from</link>
+            <guid isPermaLink="true">https://openai.com/index/where-the-goblins-came-from</guid>
+            <category><![CDATA[Publication]]></category>
+            <pubDate>Wed, 29 Apr 2026 20:00:00 GMT</pubDate>
+        </item><item>
+            <title><![CDATA[Building the compute infrastructure for the Intelligence Age]]></title>
+            <description><![CDATA[OpenAI scales Stargate to build the compute infrastructure powering AGI, adding new data center capacity to meet growing AI demand.]]></description>
+            <link>https://openai.com/index/building-the-compute-infrastructure-for-the-intelligence-age</link>
+            <guid isPermaLink="true">https://openai.com/index/building-the-compute-infrastructure-for-the-intelligence-age</guid>
+            <category><![CDATA[Global Affairs]]></category>
+            <pubDate>Wed, 29 Apr 2026 15:00:00 GMT</pubDate>
+        </item></channel></rss>

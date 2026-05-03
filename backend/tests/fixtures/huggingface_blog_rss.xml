@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+ <channel>
+  <atom:link href="https://huggingface.co/blog/feed.xml" rel="self" type="application/rss+xml"/>
+  <title>Hugging Face - Blog</title>
+  <link>https://huggingface.co/blog</link>
+  <description>The Hugging Face blog</description>
+  <language>en-US</language>
+  <item>
+   <title>AI evals are becoming the new compute bottleneck</title>
+   <pubDate>Wed, 29 Apr 2026 16:45:09 GMT</pubDate>
+   <link>https://huggingface.co/blog/evaleval/eval-costs-bottleneck</link>
+   <guid isPermaLink="false">https://huggingface.co/blog/evaleval/eval-costs-bottleneck</guid>
+  </item><item>
+   <title>Granite 4.1 LLMs: How They’re Built</title>
+   <pubDate>Wed, 29 Apr 2026 15:01:48 GMT</pubDate>
+   <link>https://huggingface.co/blog/ibm-granite/granite-4-1</link>
+   <guid isPermaLink="false">https://huggingface.co/blog/ibm-granite/granite-4-1</guid>
+  </item><item>
+   <title>DeepInfra on Hugging Face Inference Providers 🔥</title>
+   <pubDate>Wed, 29 Apr 2026 00:00:00 GMT</pubDate>
+   <link>https://huggingface.co/blog/inference-providers-deepinfra</link>
+   <guid isPermaLink="true">https://huggingface.co/blog/inference-providers-deepinfra</guid>
+  </item></channel></rss>
