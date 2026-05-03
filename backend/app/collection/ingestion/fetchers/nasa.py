@@ -1,9 +1,8 @@
-"""NASA 用 Fetcher — Pattern R (RSS-only)。
+"""NASA 用 Fetcher — Pattern R (RSS-only)、複数 feed 巡回 + URL dedup。
 
-collection-acquisition-redesign Phase 1c-A1。本ソースの raw body には NASA CMS
-由来の冒頭 nav menu (``Earth Observatory Science...``) と末尾 boilerplate
-(``Discover More Topics...``) が含まれるまま永続化する。Phase 1 では Stage 2
-LLM 側で吸収する設計、Phase 2+ で per-source の strip 実装余地あり。
+collection-acquisition-redesign Phase 1c-A1 で per-source 設計を確立、Phase 3
+PR 3-i-2 で本体 ``/feed/`` に加えて 5 補強 feed を ``FEEDS`` ClassVar で巡回
+する設計へ拡張。
 
 per-source 設計:
 
@@ -12,8 +11,16 @@ per-source 設計:
 - image は **``None`` 直書き** — ``<media:content>`` なし
 - language は **hardcoded ``"en-US"``** — ``<channel>/<language>`` なし
 
-旧 ``fetchers/rss/nasa.py`` (BaseRssFetcher 継承の薄スタブ) は本 PR で削除し、
-新 Protocol に置き換える。
+複数 feed 巡回 (PR 3-i-2):
+
+- 6 feed (本体 + news-release / technology / aeronautics / station / artemis)
+  を ``FEEDS`` ClassVar で保持
+- ``fetch()`` で順次 GET → 1 feed の TemporaryFetchError は warn して次 feed
+  に進む (全停止しない)
+- in-memory ``seen_urls: set[str]`` で同 cron 周期内の重複 URL を排除
+  (本体 feed と news-release/artemis 等で URL が重複するため)
+- DB レイヤの ``articles.url`` UNIQUE + ``on_conflict_do_nothing()`` も二段
+  防御として効く (worker 間 race 用)
 """
 
 from __future__ import annotations
@@ -109,41 +116,69 @@ def _extract_guid(entry: dict[str, Any]) -> str | None:
 
 
 class NASAFetcher:
-    """NASA 用 RSS-only Fetcher。
+    """NASA 用 RSS-only Fetcher (本体 + 5 補強 feed 巡回)。
 
     本ソースは author / image_url / language を RSS で提供しないため、metadata
     で ``None`` 直書き / hardcode default を採用する。``content:encoded`` の
     nav noise は受容して下流 (Stage 2 LLM) に渡す。
+
+    ``ENDPOINT_URL`` は ``news_sources.endpoint_url`` 列との互換のため本体
+    ``/feed/`` を representative 値として残すが、実際の fetch は ``FEEDS``
+    の 6 URL を順次巡回する。
     """
 
     NAME: ClassVar[str] = "NASA"
     ENDPOINT_URL: ClassVar[str] = "https://www.nasa.gov/feed/"
+    FEEDS: ClassVar[tuple[str, ...]] = (
+        "https://www.nasa.gov/feed/",
+        "https://www.nasa.gov/news-release/feed/",
+        "https://www.nasa.gov/technology/feed/",
+        "https://www.nasa.gov/aeronautics/feed/",
+        "https://www.nasa.gov/missions/station/feed/",
+        "https://www.nasa.gov/missions/artemis/feed/",
+    )
     PROVIDES: ClassVar[frozenset[str]] = frozenset({"language", "guid", "site_name"})
 
     async def fetch(self, source_id: int) -> AsyncIterator[FetchOutcome]:
-        feed_text = await self._fetch_feed()
-        feed = await asyncio.to_thread(feedparser.parse, feed_text)
-        if feed.bozo and not feed.entries:
-            logger.warning(
-                "nasa_feed_parse_error",
-                source=self.NAME,
-                error=str(feed.bozo_exception),
-            )
-            raise PermanentFetchError(
-                f"feed parse error: {self.NAME}: {feed.bozo_exception}"
-            )
+        seen_urls: set[str] = set()
+        for feed_url in self.FEEDS:
+            try:
+                feed_text = await self._fetch_feed(feed_url)
+            except TemporaryFetchError as e:
+                # 1 feed の transient 失敗で全停止しない (他 feed は続行)
+                logger.warning(
+                    "nasa_feed_skip",
+                    source=self.NAME,
+                    feed=feed_url,
+                    error=str(e),
+                )
+                continue
+            feed = await asyncio.to_thread(feedparser.parse, feed_text)
+            if feed.bozo and not feed.entries:
+                logger.warning(
+                    "nasa_feed_parse_error",
+                    source=self.NAME,
+                    feed=feed_url,
+                    error=str(feed.bozo_exception),
+                )
+                continue
 
-        for entry in feed.entries:
-            yield self._convert_entry(entry, source_id)
+            for entry in feed.entries:
+                link = (entry.get("link") or "").strip()
+                if link and link in seen_urls:
+                    continue
+                if link:
+                    seen_urls.add(link)
+                yield self._convert_entry(entry, source_id)
 
-    async def _fetch_feed(self) -> str:
+    async def _fetch_feed(self, url: str) -> str:
         async with make_safe_async_client(
             headers={"User-Agent": _USER_AGENT},
             verify=True,
             timeout=_HTTP_TIMEOUT,
         ) as client:
             try:
-                response = await client.get(self.ENDPOINT_URL)
+                response = await client.get(url)
                 response.raise_for_status()
             except httpx.HTTPStatusError as e:
                 status = e.response.status_code

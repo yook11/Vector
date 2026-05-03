@@ -1,9 +1,14 @@
-"""``NASAFetcher`` の単体テスト (Phase 1c-A1)。
+"""``NASAFetcher`` の単体テスト (Phase 1c-A1 + Phase 3 PR 3-i-2 拡張)。
 
 per-source 設計:
 - author / image_url は構造的に **常に None**
 - language は **hardcoded "en-US"**
 - body は ``content[0].value`` 直取り (**nav noise 含むまま**)
+
+PR 3-i-2 拡張:
+- 6 feed (本体 + 5 補強) を ``FEEDS`` ClassVar で順次巡回
+- in-memory ``seen_urls: set[str]`` で同 URL の重複を排除
+- 1 feed の TemporaryFetchError は warn して次 feed 続行 (全停止しない)
 """
 
 from __future__ import annotations
@@ -11,9 +16,12 @@ from __future__ import annotations
 import time
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock
 
 import feedparser
+import pytest
 
+from app.collection.errors import TemporaryFetchError
 from app.collection.ingestion.domain.fetched_article import (
     Failed,
     ReadyForArticle,
@@ -131,3 +139,122 @@ class TestFixtureParsing:
         outcome = fetcher._convert_entry(feed.entries[1], _SOURCE_ID)
         assert isinstance(outcome, Failed)
         assert outcome.reason.code == "body_too_short"
+
+
+def _build_minimal_rss(entries: list[tuple[str, str]]) -> str:
+    """テスト用 RSS 2.0 文字列を組み立てる (title, link のタプル列から)。"""
+    body = "Lorem ipsum dolor sit amet " * 5
+    items = "\n".join(
+        f"""    <item>
+      <title>{title}</title>
+      <link>{link}</link>
+      <guid isPermaLink="false">{link}</guid>
+      <pubDate>Thu, 16 Apr 2026 12:00:00 +0000</pubDate>
+      <content:encoded><![CDATA[<p>{body}</p>]]></content:encoded>
+    </item>"""
+        for title, link in entries
+    )
+    return f"""<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>NASA</title>
+    <link>https://www.nasa.gov/</link>
+    <description>test</description>
+{items}
+  </channel>
+</rss>"""
+
+
+class TestFeedsClassVar:
+    """``FEEDS`` ClassVar に本体 + 5 補強の 6 URL が並んでいることの確認。"""
+
+    def test_feeds_count(self) -> None:
+        assert len(NASAFetcher.FEEDS) == 6
+
+    def test_feeds_includes_canonical(self) -> None:
+        assert "https://www.nasa.gov/feed/" in NASAFetcher.FEEDS
+
+    def test_feeds_includes_all_augments(self) -> None:
+        for path in (
+            "news-release/feed/",
+            "technology/feed/",
+            "aeronautics/feed/",
+            "missions/station/feed/",
+            "missions/artemis/feed/",
+        ):
+            assert any(url.endswith(path) for url in NASAFetcher.FEEDS), path
+
+    def test_endpoint_url_is_canonical_feed(self) -> None:
+        # representative 値として本体 /feed/ を残すことの確認
+        assert NASAFetcher.ENDPOINT_URL == "https://www.nasa.gov/feed/"
+
+
+class TestFetchTraversesFeedsAndDedups:
+    """``fetch()`` が FEEDS を順次巡回し、URL 重複を in-memory dedup することの確認。"""
+
+    @pytest.mark.asyncio
+    async def test_dedups_cross_feed_urls(self) -> None:
+        # feed-A と feed-B が同じ URL を持つ entry を返す → 1 回のみ yield
+        shared = "https://www.nasa.gov/article/shared"
+        unique_a = "https://www.nasa.gov/article/a"
+        unique_b = "https://www.nasa.gov/article/b"
+
+        feed_a_text = _build_minimal_rss(
+            [("Shared Article", shared), ("Unique A", unique_a)]
+        )
+        feed_b_text = _build_minimal_rss(
+            [("Shared Article", shared), ("Unique B", unique_b)]
+        )
+        # 残り 4 feed は空 RSS
+        empty = _build_minimal_rss([])
+
+        responses = [feed_a_text, feed_b_text, empty, empty, empty, empty]
+        fetcher = NASAFetcher()
+        fetcher._fetch_feed = AsyncMock(side_effect=responses)  # type: ignore[method-assign]
+
+        outcomes = [o async for o in fetcher.fetch(_SOURCE_ID)]
+        urls = [
+            str(o.article.source_url.root)
+            for o in outcomes
+            if isinstance(o, ReadyForArticle)
+        ]
+        # shared が 1 回のみ、unique_a / unique_b が 1 回ずつ = 計 3 件
+        assert urls.count(shared) == 1
+        assert unique_a in urls
+        assert unique_b in urls
+        assert len(urls) == 3
+
+    @pytest.mark.asyncio
+    async def test_continues_on_single_feed_temporary_failure(self) -> None:
+        # 1 feed が TemporaryFetchError → warn + 次 feed 続行
+        ok_text = _build_minimal_rss([("Ok", "https://www.nasa.gov/article/ok")])
+        responses: list[str | TemporaryFetchError] = [
+            TemporaryFetchError("boom"),
+            ok_text,
+            ok_text,  # dedup されるので yield されない
+            ok_text,
+            ok_text,
+            ok_text,
+        ]
+        fetcher = NASAFetcher()
+        fetcher._fetch_feed = AsyncMock(side_effect=responses)  # type: ignore[method-assign]
+
+        outcomes = [o async for o in fetcher.fetch(_SOURCE_ID)]
+        urls = [
+            str(o.article.source_url.root)
+            for o in outcomes
+            if isinstance(o, ReadyForArticle)
+        ]
+        assert urls == ["https://www.nasa.gov/article/ok"]
+
+    @pytest.mark.asyncio
+    async def test_calls_fetch_feed_for_every_feeds_entry(self) -> None:
+        # 6 feed 全てに対して _fetch_feed が呼ばれること
+        empty = _build_minimal_rss([])
+        fetcher = NASAFetcher()
+        fetcher._fetch_feed = AsyncMock(return_value=empty)  # type: ignore[method-assign]
+
+        _ = [o async for o in fetcher.fetch(_SOURCE_ID)]
+        assert fetcher._fetch_feed.call_count == 6
+        called_urls = [c.args[0] for c in fetcher._fetch_feed.call_args_list]
+        assert set(called_urls) == set(NASAFetcher.FEEDS)
