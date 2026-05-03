@@ -217,11 +217,15 @@ jobs:
           --health-retries 5
 
     env:
-      # backend
-      DATABASE_URL: postgresql+asyncpg://vector:vector@localhost:5432/vector
+      # red-team AUTH-N4: application 接続は vector_app (public.* DML) / vector_auth
+      # (auth.* DML) に分離。alembic / pytest fixture は migration role (vector) で
+      # 動かすため MIGRATION_DATABASE_URL を別経路で渡す。
+      DATABASE_URL: postgresql+asyncpg://vector_app:ci3333333333333333333333333333333333333333333333333333333333333333@localhost:5432/vector
+      MIGRATION_DATABASE_URL: postgresql+asyncpg://vector:vector@localhost:5432/vector
       REDIS_URL: redis://localhost:6379/0
-      # frontend (Better Auth + 内部 API プロキシ)
-      AUTH_DATABASE_URL: postgresql://vector:vector@localhost:5432/vector?search_path=auth
+      # frontend (Better Auth + 内部 API プロキシ)。runtime 接続は vector_auth、
+      # Better Auth CLI が DDL を流す step だけ vector に override する (下記 step 参照)。
+      AUTH_DATABASE_URL: postgresql://vector_auth:ci2222222222222222222222222222222222222222222222222222222222222222@localhost:5432/vector?search_path=auth
       BETTER_AUTH_URL: http://localhost:3000
       INTERNAL_API_URL: http://localhost:8000/api/v1
       NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
@@ -229,6 +233,8 @@ jobs:
       # 満たすために 64 桁の hex を直書きする (秘密ではない)。
       INTERNAL_API_SECRET: ci0000000000000000000000000000000000000000000000000000000000000000
       BETTER_AUTH_SECRET: ci1111111111111111111111111111111111111111111111111111111111111111
+      POSTGRES_AUTH_PASSWORD: ci2222222222222222222222222222222222222222222222222222222222222222
+      POSTGRES_APP_PASSWORD: ci3333333333333333333333333333333333333333333333333333333333333333
 
     steps:
       - uses: actions/checkout@v6
@@ -290,8 +296,34 @@ jobs:
         # 経由する。frontend/src/lib/auth/auth.cli.ts のドキュメントを参照。
         # バージョンは @latest ではなく明示 pin。直前の `actions/cache` で
         # `_npx` が restore されていれば npx の install を skip して即起動。
+        # AUTH_DATABASE_URL を vector で override: CLI は CREATE TABLE 等の DDL
+        # を実行するため table owner (vector) で接続する必要。runtime (next dev)
+        # は env 直下の vector_auth 接続を使う (red-team AUTH-N4)。
+        env:
+          AUTH_DATABASE_URL: postgresql://vector:vector@localhost:5432/vector?search_path=auth
         run: npx --yes @better-auth/cli@1.4.21 migrate --config src/lib/auth/auth.cli.ts -y
         working-directory: frontend
+
+      # red-team AUTH-N4: alembic n3_grant_app_db_users が GRANT を流す前提として
+      # vector_auth / vector_app role が存在する必要がある。本番では init script
+      # (infra/db/init/01_create_app_users.sh) が docker entrypoint init で作るが、
+      # GitHub Actions の service container は initdb.d を ignore するため、
+      # ここで psql 経由で idempotent に role を作成する。
+      - name: Create application Postgres roles (vector_auth, vector_app)
+        env:
+          PGPASSWORD: vector
+        run: |
+          psql -h localhost -U vector -d vector <<EOF
+          DO \$\$
+          BEGIN
+            IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'vector_auth') THEN
+              CREATE ROLE vector_auth WITH LOGIN PASSWORD '${{ env.POSTGRES_AUTH_PASSWORD }}';
+            END IF;
+            IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'vector_app') THEN
+              CREATE ROLE vector_app  WITH LOGIN PASSWORD '${{ env.POSTGRES_APP_PASSWORD }}';
+            END IF;
+          END \$\$;
+          EOF
 
       - name: Apply alembic migrations (includes E2E seed)
         # auth.user / auth.account を Better Auth CLI が先に生成したので、
