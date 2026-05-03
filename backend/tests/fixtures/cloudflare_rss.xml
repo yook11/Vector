@@ -1,0 +1,59 @@
+
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:media="http://search.yahoo.com/mrss/">
+    <channel>
+        <title><![CDATA[ The Cloudflare Blog ]]></title>
+        <description><![CDATA[ Get the latest news on how products at Cloudflare are built, technologies used, and join the teams helping to build a better Internet. ]]></description>
+        <link>https://blog.cloudflare.com</link>
+        <atom:link href="https://blog.cloudflare.com/" rel="self" type="application/rss+xml"/>
+        <language>en-us</language>
+        <image>
+            <url>https://blog.cloudflare.com/favicon.png</url>
+            <title>The Cloudflare Blog</title>
+            <link>https://blog.cloudflare.com</link>
+        </image>
+        <lastBuildDate>Sun, 03 May 2026 23:17:31 GMT</lastBuildDate>
+        <item>
+            <title><![CDATA[Code Orange: Fail Small is complete. The result is a stronger Cloudflare network]]></title>
+            <link>https://blog.cloudflare.com/code-orange-fail-small-complete/</link>
+            <pubDate>Fri, 01 May 2026 21:07:30 GMT</pubDate>
+            <description><![CDATA[ We have completed a massive engineering effort to make our infrastructure more resilient. Through new tools like Snapstone and the Engineering Codex, we've implemented safer configuration changes and automated best practices to prevent future incidents. ]]></description>
+            <content:encoded><![CDATA[<p>Lorem ipsum dolor sit amet consectetur adipiscing elit. Lorem ipsum dolor sit amet consectetur adipiscing elit. Lorem ipsum dolor sit amet consectetur adipiscing elit. Lorem ipsum dolor sit amet consectetur adipiscing elit. Lorem ipsum dolor sit amet consectetur adipiscing elit. Lorem ipsum dolor sit amet consectetur adipiscing elit. Lorem ipsum dolor sit amet consectetur adipiscing elit. Lorem ipsum dolor sit amet consectetur adipiscing elit. Lorem ipsum dolor sit amet consectetur adipiscing elit. Lorem ipsum dolor sit amet consectetur adipiscing elit. Lorem ipsum dolor sit amet consectetur adipiscing elit. Lorem ipsum dolor sit amet consectetur adipiscing elit. </p>]]></content:encoded>
+            <category><![CDATA[Outage]]></category>
+            <category><![CDATA[Post Mortem]]></category>
+            <category><![CDATA[Code Orange]]></category>
+            <guid isPermaLink="false">6EfXlJEx6OJ21w9NlnS59D</guid>
+            <dc:creator>Jeremy Hartman</dc:creator>
+        </item>
+<item>
+            <title><![CDATA[Introducing Dynamic Workflows: durable execution that follows the tenant]]></title>
+            <link>https://blog.cloudflare.com/dynamic-workflows/</link>
+            <pubDate>Fri, 01 May 2026 13:00:00 GMT</pubDate>
+            <description><![CDATA[ Dynamic Workflows is a library that lets you route durable execution to tenant-provided code on the fly. Built on Dynamic Workers, it enables platforms to serve millions of unique workflows at near-zero idle cost. ]]></description>
+            <content:encoded><![CDATA[<p>Lorem ipsum dolor sit amet consectetur adipiscing elit. Lorem ipsum dolor sit amet consectetur adipiscing elit. Lorem ipsum dolor sit amet consectetur adipiscing elit. Lorem ipsum dolor sit amet consectetur adipiscing elit. Lorem ipsum dolor sit amet consectetur adipiscing elit. Lorem ipsum dolor sit amet consectetur adipiscing elit. Lorem ipsum dolor sit amet consectetur adipiscing elit. Lorem ipsum dolor sit amet consectetur adipiscing elit. Lorem ipsum dolor sit amet consectetur adipiscing elit. Lorem ipsum dolor sit amet consectetur adipiscing elit. Lorem ipsum dolor sit amet consectetur adipiscing elit. Lorem ipsum dolor sit amet consectetur adipiscing elit. </p>]]></content:encoded>
+            <category><![CDATA[Workflows]]></category>
+            <category><![CDATA[Cloudflare Workers]]></category>
+            <category><![CDATA[Durable Execution]]></category>
+            <category><![CDATA[Developer Platform]]></category>
+            <category><![CDATA[Developers]]></category>
+            <guid isPermaLink="false">4JZIrwtIvEd4qwAd4JAThB</guid>
+            <dc:creator>Dan Lapid</dc:creator>
+            <dc:creator>Luís Duarte</dc:creator>
+        </item>
+<item>
+            <title><![CDATA[Post-quantum encryption for Cloudflare IPsec is generally available]]></title>
+            <link>https://blog.cloudflare.com/post-quantum-ipsec/</link>
+            <pubDate>Thu, 30 Apr 2026 14:00:00 GMT</pubDate>
+            <description><![CDATA[ Cloudflare IPsec now has generally available support for post-quantum encryption via hybrid ML-KEM. We’ve confirmed interoperability with Cisco and Fortinet. ]]></description>
+            <content:encoded><![CDATA[<p>Lorem ipsum dolor sit amet consectetur adipiscing elit. Lorem ipsum dolor sit amet consectetur adipiscing elit. Lorem ipsum dolor sit amet consectetur adipiscing elit. Lorem ipsum dolor sit amet consectetur adipiscing elit. Lorem ipsum dolor sit amet consectetur adipiscing elit. Lorem ipsum dolor sit amet consectetur adipiscing elit. Lorem ipsum dolor sit amet consectetur adipiscing elit. Lorem ipsum dolor sit amet consectetur adipiscing elit. Lorem ipsum dolor sit amet consectetur adipiscing elit. Lorem ipsum dolor sit amet consectetur adipiscing elit. Lorem ipsum dolor sit amet consectetur adipiscing elit. Lorem ipsum dolor sit amet consectetur adipiscing elit. </p>]]></content:encoded>
+            <category><![CDATA[Post-Quantum]]></category>
+            <category><![CDATA[IPsec]]></category>
+            <category><![CDATA[Cryptography]]></category>
+            <category><![CDATA[Security]]></category>
+            <category><![CDATA[Magic WAN]]></category>
+            <category><![CDATA[Networking]]></category>
+            <guid isPermaLink="false">45CJNnEddFGu89vwZzAJEl</guid>
+            <dc:creator>Sharon Goldberg</dc:creator>
+            <dc:creator>Amos Paul</dc:creator>
+        </item>
+    </channel>
+</rss>
