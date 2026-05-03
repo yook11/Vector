@@ -14,6 +14,7 @@ class NewsSourceEmbed(_CamelBase):
     """ニュースソースの基本参照情報（フィルタ・表示用）"""
 
     name: SourceName
+    attribution_label: str | None = None
 
 
 class OriginalArticleEmbed(_CamelBase):

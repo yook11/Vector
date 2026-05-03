@@ -18,7 +18,10 @@ def build_brief(analysis: ArticleAnalysis) -> ArticleBrief:
         id=analysis.id,
         translated_title=analysis.translated_title,
         summary=analysis.summary,
-        source=NewsSourceEmbed(name=a.news_source.name),
+        source=NewsSourceEmbed(
+            name=a.news_source.name,
+            attribution_label=a.news_source.attribution_label,
+        ),
         published_at=a.published_at,
         topic=str(analysis.topic),
     )
@@ -32,7 +35,10 @@ def build_detail(analysis: ArticleAnalysis) -> ArticleDetail:
         summary=analysis.summary,
         investor_take=analysis.investor_take,
         analyzed_at=analysis.analyzed_at,
-        source=NewsSourceEmbed(name=a.news_source.name),
+        source=NewsSourceEmbed(
+            name=a.news_source.name,
+            attribution_label=a.news_source.attribution_label,
+        ),
         published_at=a.published_at,
         topic=str(analysis.topic),
         original=OriginalArticleEmbed(
