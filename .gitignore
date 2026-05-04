@@ -67,6 +67,11 @@ Thumbs.db
 skills-lock.json
 
 # ===========================
+# Red-team session output
+# ===========================
+.red-team/
+
+# ===========================
 # Personal notes
 # ===========================
 *.local.md
