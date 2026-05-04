@@ -60,6 +60,7 @@ from app.collection.ingestion.fetchers.nasa import NASAFetcher
 from app.collection.ingestion.fetchers.nist import NISTFetcher
 from app.collection.ingestion.fetchers.nsf import NSFFetcher
 from app.collection.ingestion.fetchers.openai import OpenAIFetcher
+from app.collection.ingestion.fetchers.ornl import ORNLNewsFetcher
 from app.collection.ingestion.fetchers.plos_one import PLOSOneFetcher
 from app.collection.ingestion.fetchers.protocol import Fetcher
 from app.collection.ingestion.fetchers.quantum_insider import QuantumInsiderFetcher
@@ -110,4 +111,5 @@ FETCHERS: Final[dict[str, Callable[[], Fetcher]]] = {
     "Frontiers in Robotics and AI": FrontiersRoboticsAIFetcher,
     "Frontiers in Energy Research": FrontiersEnergyResearchFetcher,
     "Frontiers in Materials": FrontiersMaterialsFetcher,
+    "ORNL": ORNLNewsFetcher,
 }

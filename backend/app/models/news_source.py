@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 class SourceType(StrEnum):
     RSS = "rss"
     API = "api"
+    HTML = "html"
 
 
 class NewsSource(Base):
@@ -31,7 +32,7 @@ class NewsSource(Base):
             name="ck_news_sources_name_not_empty",
         ),
         CheckConstraint(
-            "source_type IN ('rss', 'api')",
+            "source_type IN ('rss', 'api', 'html')",
             name="ck_news_sources_source_type",
         ),
         CheckConstraint(
