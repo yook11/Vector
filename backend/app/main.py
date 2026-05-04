@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 import structlog
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.routing import APIRoute
 from sqlalchemy import text
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
@@ -120,3 +121,13 @@ async def health_check() -> dict:
         "version": "0.1.0",
         "dbConnected": db_connected,
     }
+
+
+# operation_id を route handler の関数名に揃える。
+# 指定しない場合 FastAPI 既定で `<fn>_<path>_<method>` 形になり、フロントの型生成
+# (hey-api SDK) が `searchArticlesApiV1ArticlesSearchGet` のような長大な関数名を
+# 出力する。Vector では関数名がアプリ内でユニークなので、route.name (= 関数名)
+# をそのまま operation_id とする FastAPI 標準パターンを採用する。
+for _route in app.routes:
+    if isinstance(_route, APIRoute):
+        _route.operation_id = _route.name

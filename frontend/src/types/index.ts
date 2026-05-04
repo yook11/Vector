@@ -18,16 +18,12 @@ type StripNull<T> = { [K in keyof T]: Exclude<T[K], null> };
 
 /** Query parameters for GET /articles (article listing). */
 export type ArticleQuery = StripNull<
-  NonNullable<
-    operations["list_articles_api_v1_articles_get"]["parameters"]["query"]
-  >
+  NonNullable<operations["list_articles"]["parameters"]["query"]>
 >;
 
 /** Query parameters for GET /articles/search (semantic search). */
 export type SemanticSearchQuery = StripNull<
-  NonNullable<
-    operations["search_articles_api_v1_articles_search_get"]["parameters"]["query"]
-  >
+  NonNullable<operations["search_articles"]["parameters"]["query"]>
 >;
 
 // ---------------------------------------------------------------------------

@@ -5,6 +5,15 @@
     "clientKind": "git",
     "useIgnoreFile": true
   },
+  "files": {
+    "includes": [
+      "**",
+      "!src/types/generated.ts",
+      "!src/types/*.gen.ts",
+      "!src/types/client/**",
+      "!src/types/core/**"
+    ]
+  },
   "linter": {
     "enabled": true,
     "rules": {
