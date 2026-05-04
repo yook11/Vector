@@ -3,8 +3,9 @@ import {
   type BriefingListResponseParsed,
   BriefingListResponseSchema,
 } from "@/features/briefing/schemas/briefing";
-import { apiCall, typedPublic } from "@/lib/api/typed-server-fetcher";
+import { publicClient } from "@/lib/api/hey-api-interceptors";
 import { cacheTags } from "@/lib/cache/tags";
+import { listBriefings as listBriefingsSdk } from "@/types/sdk.gen";
 
 /**
  * 全カテゴリの最新 briefing 一覧を取得 (anonymous でも閲覧可能)。
@@ -19,6 +20,9 @@ export async function listBriefings(): Promise<BriefingListResponseParsed> {
   "use cache";
   cacheLife("hours");
   cacheTag(cacheTags.briefingList);
-  const raw = await apiCall(typedPublic.GET("/api/v1/briefing", {}));
-  return BriefingListResponseSchema.parse(raw);
+  const { data } = await listBriefingsSdk({
+    client: publicClient,
+    throwOnError: true,
+  });
+  return BriefingListResponseSchema.parse(data);
 }

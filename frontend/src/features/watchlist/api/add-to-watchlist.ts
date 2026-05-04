@@ -1,17 +1,17 @@
 "use server";
 
 import { updateTag } from "next/cache";
-import { typedServer } from "@/lib/api/typed-server-fetcher";
 import { requireSessionForAction } from "@/lib/auth/guards";
 import { cacheTags } from "@/lib/cache/tags";
 import { PositiveIdSchema } from "@/lib/validation/id";
+import { addToWatchlist as addToWatchlistSdk } from "@/types/sdk.gen";
 import { addToWatchlistCore } from "./watchlist-cores";
 
 /** Add an article to the watchlist (Server Action). */
 export async function addToWatchlist(articleId: number): Promise<void> {
   await requireSessionForAction();
   const validArticleId = PositiveIdSchema.parse(articleId);
-  await addToWatchlistCore(validArticleId, typedServer);
+  await addToWatchlistCore(validArticleId, addToWatchlistSdk);
   // Pattern B: per-user watchlist Set tag のみ無効化。`articles` cache は
   // user 非依存なので mutation で動かさない (本 user 以外への影響ゼロ)。
   // `updateTag` は Server Action 専用 idiom で immediate expiration、当該

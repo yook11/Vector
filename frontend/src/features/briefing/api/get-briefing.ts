@@ -3,8 +3,9 @@ import {
   type BriefingResponseParsed,
   BriefingResponseSchema,
 } from "@/features/briefing/schemas/briefing";
-import { apiCall, typedPublic } from "@/lib/api/typed-server-fetcher";
+import { publicClient } from "@/lib/api/hey-api-interceptors";
 import { briefingCategoryTag, cacheTags } from "@/lib/cache/tags";
+import { getLatestBriefing } from "@/types/sdk.gen";
 
 /**
  * 指定カテゴリの最新 briefing 詳細を取得 (anonymous でも閲覧可能)。
@@ -21,10 +22,10 @@ export async function getBriefing(
   cacheLife("hours");
   cacheTag(briefingCategoryTag(slug));
   cacheTag(cacheTags.briefingList);
-  const raw = await apiCall(
-    typedPublic.GET("/api/v1/briefing/{category_slug}", {
-      params: { path: { category_slug: slug } },
-    }),
-  );
-  return BriefingResponseSchema.parse(raw);
+  const { data } = await getLatestBriefing({
+    client: publicClient,
+    throwOnError: true,
+    path: { category_slug: slug },
+  });
+  return BriefingResponseSchema.parse(data);
 }

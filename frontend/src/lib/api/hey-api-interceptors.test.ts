@@ -27,9 +27,10 @@ vi.mock("@/lib/auth/guards", () => ({
 
 import { client } from "@/types/client.gen";
 import { ApiError } from "./error";
-// 副作用 import で interceptor を登録する。実 production runtime では PR-H4a で
-// 各 sdk call site が同様の side-effect import を行う想定。
-import "./hey-api-interceptors";
+// 副作用 import で interceptor を登録する。実 production runtime では各 sdk call
+// site が `import "@/lib/api/hey-api-interceptors"` または publicClient の named
+// import 経由で module evaluation をトリガする。
+import { publicClient } from "./hey-api-interceptors";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -139,5 +140,29 @@ describe("hey-api error interceptor — ApiError 正規化", () => {
     expect(error).toBeInstanceOf(ApiError);
     expect((error as ApiError).status).toBe(0);
     expect((error as ApiError).detail).toBe("HTTP 0");
+  });
+});
+
+describe("publicClient — auth interceptor を持たない", () => {
+  it("request interceptor は登録されていない (anon endpoint で getCurrentSession() を踏まない)", () => {
+    expect(publicClient.interceptors.request.fns).toHaveLength(0);
+  });
+
+  it("error interceptor は登録され ApiError を throw する", async () => {
+    const fn = publicClient.interceptors.error.fns[0];
+    if (!fn)
+      throw new Error("error interceptor not registered on publicClient");
+
+    const response = new Response(null, {
+      status: 503,
+      statusText: "Unavailable",
+    });
+    await expect(
+      fn({ detail: "service down" }, response, {} as never),
+    ).rejects.toMatchObject({
+      name: "ApiError",
+      status: 503,
+      detail: "service down",
+    });
   });
 });

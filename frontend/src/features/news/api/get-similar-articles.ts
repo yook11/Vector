@@ -1,5 +1,6 @@
 import { cacheLife } from "next/cache";
-import { apiCall, typedPublic } from "@/lib/api/typed-server-fetcher";
+import { publicClient } from "@/lib/api/hey-api-interceptors";
+import { getSimilarArticles as getSimilarArticlesSdk } from "@/types/sdk.gen";
 import type { ArticleBrief } from "@/types/types.gen";
 
 /** Fetch articles semantically similar to the given article (response is user-independent). */
@@ -9,9 +10,11 @@ export async function getSimilarArticles(
 ): Promise<ArticleBrief[]> {
   "use cache";
   cacheLife("hours");
-  return apiCall(
-    typedPublic.GET("/api/v1/articles/{article_id}/similar", {
-      params: { path: { article_id: id }, query: { limit } },
-    }),
-  );
+  const { data } = await getSimilarArticlesSdk({
+    client: publicClient,
+    throwOnError: true,
+    path: { article_id: id },
+    query: { limit },
+  });
+  return data;
 }

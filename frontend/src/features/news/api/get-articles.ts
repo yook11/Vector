@@ -1,14 +1,15 @@
 import { cacheLife } from "next/cache";
-import { apiCall, typedPublic } from "@/lib/api/typed-server-fetcher";
+import { publicClient } from "@/lib/api/hey-api-interceptors";
 import type { ArticleQuery } from "@/types";
+import { listArticles } from "@/types/sdk.gen";
 import type { PaginatedArticleResponse } from "@/types/types.gen";
 
 /**
  * 記事一覧取得 (response は user 非依存)。
  *
  * Backend response は user 非依存 (ウォッチ状態は `getWatchlistIds` で別途
- * 取得し、render 時に Set lookup で merge)。`typedPublic` + `'use cache'`
- * で全 user 共有 cache に乗せる。
+ * 取得し、render 時に Set lookup で merge)。`publicClient` は auth interceptor
+ * を持たないので `"use cache"` 内で `cookies()/headers()` を踏まずに済む。
  *
  * `cacheLife("minutes")` は stale 5min / revalidate 1min / expire 1h の公式
  * プロファイル。記事 ingestion 周期 (~30 分) に対し revalidate 1 分は十分
@@ -25,7 +26,10 @@ export async function getArticles(
 ): Promise<PaginatedArticleResponse> {
   "use cache";
   cacheLife("minutes");
-  return apiCall(
-    typedPublic.GET("/api/v1/articles", { params: { query: query ?? {} } }),
-  );
+  const { data } = await listArticles({
+    client: publicClient,
+    throwOnError: true,
+    query: query ?? {},
+  });
+  return data;
 }

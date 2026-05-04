@@ -1,22 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
-import type { typedServer } from "@/lib/api/typed-server-fetcher";
+import type {
+  activateSource as activateSourceSdk,
+  createNewsSource as createNewsSourceSdk,
+  deactivateSource as deactivateSourceSdk,
+  deleteNewsSource as deleteNewsSourceSdk,
+} from "@/types/sdk.gen";
 import type { NewsSourceCreate, NewsSourceDetail } from "@/types/types.gen";
 
-// `typed-server-fetcher` は `import "server-only"` を持つため、何もせず import
-// すると test 環境で throw する。core が実際に使うのは `apiCall` / `apiVoid` で、
-// これらは純関数 (`fetcher.X(...)` 由来 promise を await して `data` を unwrap)
-// なので簡易な passthrough mock で十分。`typedServer` は core が引数 DI で
-// 受け取るので mock 側で undefined のままで構わない。
-vi.mock("@/lib/api/typed-server-fetcher", () => ({
-  typedServer: undefined,
-  apiCall: async <T>(p: Promise<{ data?: T }>) => {
-    const r = await p;
-    return r.data as T;
-  },
-  apiVoid: async (p: Promise<unknown>) => {
-    await p;
-  },
-}));
+// `hey-api-interceptors` は `import "server-only"` を持ち、import するだけで
+// publicClient を生成 + interceptor を attach する副作用がある。テスト環境では
+// auth/error 経路を実行しないので、空 mock で抑止する。core が実際に使うのは
+// 引数 DI で受け取る `fetcher` (sdk 関数) だけなので、interceptor 副作用は不要。
+vi.mock("server-only", () => ({}));
+vi.mock("@/lib/api/hey-api-interceptors", () => ({}));
 
 import {
   activateSourceCore,
@@ -36,74 +32,60 @@ const sampleDetail: NewsSourceDetail = {
   updatedAt: "2026-01-01T00:00:00Z",
 };
 
-// `typedServer` (= openapi-fetch Client) の最小 mock。core が使う PATCH / POST
-// / DELETE のみ実装。戻り値は `apiCall` / `apiVoid` が満たす shape
-// (`{ data, response }`) に揃える。
-type FetcherMock = {
-  PATCH: ReturnType<typeof vi.fn>;
-  POST: ReturnType<typeof vi.fn>;
-  DELETE: ReturnType<typeof vi.fn>;
-};
-
+// hey-api SDK 関数が返す形 (`{ data, response }`) を満たす最小 mock。
 const okResponse = <T>(data: T, status = 200) =>
   Promise.resolve({
     data,
     response: new Response(null, { status }),
   });
 
-const buildFetcher = (overrides?: Partial<FetcherMock>): FetcherMock => ({
-  PATCH: vi.fn().mockReturnValue(okResponse(sampleDetail)),
-  POST: vi.fn().mockReturnValue(okResponse(sampleDetail, 201)),
-  DELETE: vi.fn().mockReturnValue(okResponse(undefined, 204)),
-  ...overrides,
-});
-
-const asTypedServer = (fetcher: FetcherMock) =>
-  fetcher as unknown as typeof typedServer;
-
 describe("activateSourceCore", () => {
-  it("typedServer.PATCH を `/api/v1/admin/sources/{source_id}/activate` + path-param で呼ぶ", async () => {
-    const fetcher = buildFetcher();
-    const result = await activateSourceCore(42, asTypedServer(fetcher));
-
-    expect(fetcher.PATCH).toHaveBeenCalledTimes(1);
-    expect(fetcher.PATCH).toHaveBeenCalledWith(
-      "/api/v1/admin/sources/{source_id}/activate",
-      { params: { path: { source_id: 42 } } },
+  it("activateSource sdk fn を path { source_id } + throwOnError で呼ぶ", async () => {
+    const fn = vi.fn().mockResolvedValue(okResponse(sampleDetail));
+    const result = await activateSourceCore(
+      42,
+      fn as unknown as typeof activateSourceSdk,
     );
+
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(fn).toHaveBeenCalledWith({
+      throwOnError: true,
+      path: { source_id: 42 },
+    });
     expect(result).toBe(sampleDetail);
   });
 
   it("propagates fetcher rejections", async () => {
     const error = new Error("Forbidden");
-    const fetcher = buildFetcher({
-      PATCH: vi.fn().mockRejectedValue(error),
-    });
-    await expect(activateSourceCore(1, asTypedServer(fetcher))).rejects.toBe(
-      error,
-    );
+    const fn = vi.fn().mockRejectedValue(error);
+    await expect(
+      activateSourceCore(1, fn as unknown as typeof activateSourceSdk),
+    ).rejects.toBe(error);
   });
 });
 
 describe("deactivateSourceCore", () => {
-  it("typedServer.PATCH を `/api/v1/admin/sources/{source_id}/deactivate` + path-param で呼ぶ", async () => {
-    const fetcher = buildFetcher();
-    const result = await deactivateSourceCore(7, asTypedServer(fetcher));
-
-    expect(fetcher.PATCH).toHaveBeenCalledWith(
-      "/api/v1/admin/sources/{source_id}/deactivate",
-      { params: { path: { source_id: 7 } } },
+  it("deactivateSource sdk fn を path { source_id } + throwOnError で呼ぶ", async () => {
+    const fn = vi.fn().mockResolvedValue(okResponse(sampleDetail));
+    const result = await deactivateSourceCore(
+      7,
+      fn as unknown as typeof deactivateSourceSdk,
     );
+
+    expect(fn).toHaveBeenCalledWith({
+      throwOnError: true,
+      path: { source_id: 7 },
+    });
     expect(result).toBe(sampleDetail);
   });
 
   it("uses the exact id without coercion", async () => {
-    const fetcher = buildFetcher();
-    await deactivateSourceCore(0, asTypedServer(fetcher));
-    expect(fetcher.PATCH).toHaveBeenCalledWith(
-      "/api/v1/admin/sources/{source_id}/deactivate",
-      { params: { path: { source_id: 0 } } },
-    );
+    const fn = vi.fn().mockResolvedValue(okResponse(sampleDetail));
+    await deactivateSourceCore(0, fn as unknown as typeof deactivateSourceSdk);
+    expect(fn).toHaveBeenCalledWith({
+      throwOnError: true,
+      path: { source_id: 0 },
+    });
   });
 });
 
@@ -115,12 +97,16 @@ describe("createSourceCore", () => {
     endpointUrl: "https://new.example.com/feed",
   };
 
-  it("typedServer.POST を `/api/v1/admin/sources` + body で呼ぶ", async () => {
-    const fetcher = buildFetcher();
-    const result = await createSourceCore(body, asTypedServer(fetcher));
+  it("createNewsSource sdk fn を body + throwOnError で呼ぶ", async () => {
+    const fn = vi.fn().mockResolvedValue(okResponse(sampleDetail, 201));
+    const result = await createSourceCore(
+      body,
+      fn as unknown as typeof createNewsSourceSdk,
+    );
 
-    expect(fetcher.POST).toHaveBeenCalledTimes(1);
-    expect(fetcher.POST).toHaveBeenCalledWith("/api/v1/admin/sources", {
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(fn).toHaveBeenCalledWith({
+      throwOnError: true,
       body,
     });
     expect(result).toBe(sampleDetail);
@@ -128,34 +114,33 @@ describe("createSourceCore", () => {
 
   it("propagates fetcher errors", async () => {
     const error = new Error("Bad Request");
-    const fetcher = buildFetcher({
-      POST: vi.fn().mockRejectedValue(error),
-    });
-    await expect(createSourceCore(body, asTypedServer(fetcher))).rejects.toBe(
-      error,
-    );
+    const fn = vi.fn().mockRejectedValue(error);
+    await expect(
+      createSourceCore(body, fn as unknown as typeof createNewsSourceSdk),
+    ).rejects.toBe(error);
   });
 });
 
 describe("deleteSourceCore", () => {
-  it("typedServer.DELETE を `/api/v1/admin/sources/{source_id}` + path-param で呼ぶ", async () => {
-    const fetcher = buildFetcher();
-    const result = await deleteSourceCore(99, asTypedServer(fetcher));
-
-    expect(fetcher.DELETE).toHaveBeenCalledWith(
-      "/api/v1/admin/sources/{source_id}",
-      { params: { path: { source_id: 99 } } },
+  it("deleteNewsSource sdk fn を path { source_id } + throwOnError で呼ぶ", async () => {
+    const fn = vi.fn().mockResolvedValue(okResponse(undefined, 204));
+    const result = await deleteSourceCore(
+      99,
+      fn as unknown as typeof deleteNewsSourceSdk,
     );
+
+    expect(fn).toHaveBeenCalledWith({
+      throwOnError: true,
+      path: { source_id: 99 },
+    });
     expect(result).toBeUndefined();
   });
 
   it("propagates fetcher errors", async () => {
     const error = new Error("Not Found");
-    const fetcher = buildFetcher({
-      DELETE: vi.fn().mockRejectedValue(error),
-    });
-    await expect(deleteSourceCore(99, asTypedServer(fetcher))).rejects.toBe(
-      error,
-    );
+    const fn = vi.fn().mockRejectedValue(error);
+    await expect(
+      deleteSourceCore(99, fn as unknown as typeof deleteNewsSourceSdk),
+    ).rejects.toBe(error);
   });
 });

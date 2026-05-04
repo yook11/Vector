@@ -2,62 +2,65 @@
  * Server Action 内部の HTTP 構築ロジック (pure 関数群)。
  *
  * 副作用 (guard / updateTag) は wrapper 側の Server Action に残し、
- * ここでは fetcher を引数で受けて path / RequestInit を組み立てるだけにする。
- * これにより `vi.fn()` を fetcher として渡せばテスト可能 (Phase 1 の proxy 抽出
- * と同じ思想)。
+ * ここでは fetcher を引数で受けて path / body / RequestInit を組み立てるだけ
+ * にする。これにより `vi.fn()` を fetcher として渡せばテスト可能 (Phase 1 の
+ * proxy 抽出と同じ思想)。
  *
- * Strangler 移行で旧 `serverFetch` / `serverEmpty` から `typedServer`
- * (openapi-fetch ベース) に切り替え。path / method / body 型は generated.ts の
- * paths から自動導出される。watchlist-cores.ts が同じ pattern の exemplar。
+ * 各 fetcher は hey-api 生成の SDK 関数 (`activateSource` 等) と同じ signature
+ * を持つ。`{ throwOnError: true }` を付けると戻り値の `data` フィールドが
+ * `T | undefined` ではなく `T` に narrow される (#1565 解消済)。auth header
+ * 注入は side-effect import した `hey-api-interceptors` の singleton client
+ * 経由で実施される。
  */
 
-import {
-  apiCall,
-  apiVoid,
-  type typedServer,
-} from "@/lib/api/typed-server-fetcher";
+import "@/lib/api/hey-api-interceptors";
+import type {
+  activateSource as activateSourceSdk,
+  createNewsSource as createNewsSourceSdk,
+  deactivateSource as deactivateSourceSdk,
+  deleteNewsSource as deleteNewsSourceSdk,
+} from "@/types/sdk.gen";
 import type { NewsSourceCreate, NewsSourceDetail } from "@/types/types.gen";
 
 export async function activateSourceCore(
   id: number,
-  fetcher: typeof typedServer,
+  fetcher: typeof activateSourceSdk,
 ): Promise<NewsSourceDetail> {
-  return apiCall(
-    fetcher.PATCH("/api/v1/admin/sources/{source_id}/activate", {
-      params: { path: { source_id: id } },
-    }),
-  );
+  const { data } = await fetcher({
+    throwOnError: true,
+    path: { source_id: id },
+  });
+  return data;
 }
 
 export async function deactivateSourceCore(
   id: number,
-  fetcher: typeof typedServer,
+  fetcher: typeof deactivateSourceSdk,
 ): Promise<NewsSourceDetail> {
-  return apiCall(
-    fetcher.PATCH("/api/v1/admin/sources/{source_id}/deactivate", {
-      params: { path: { source_id: id } },
-    }),
-  );
+  const { data } = await fetcher({
+    throwOnError: true,
+    path: { source_id: id },
+  });
+  return data;
 }
 
 export async function createSourceCore(
   body: NewsSourceCreate,
-  fetcher: typeof typedServer,
+  fetcher: typeof createNewsSourceSdk,
 ): Promise<NewsSourceDetail> {
-  return apiCall(
-    fetcher.POST("/api/v1/admin/sources", {
-      body,
-    }),
-  );
+  const { data } = await fetcher({
+    throwOnError: true,
+    body,
+  });
+  return data;
 }
 
 export async function deleteSourceCore(
   id: number,
-  fetcher: typeof typedServer,
+  fetcher: typeof deleteNewsSourceSdk,
 ): Promise<void> {
-  await apiVoid(
-    fetcher.DELETE("/api/v1/admin/sources/{source_id}", {
-      params: { path: { source_id: id } },
-    }),
-  );
+  await fetcher({
+    throwOnError: true,
+    path: { source_id: id },
+  });
 }

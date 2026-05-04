@@ -4,31 +4,33 @@
  * 副作用 (guard / updateTag) は wrapper 側の Server Action に残す。
  * 詳細は features/sources/api/source-cores.ts のコメント参照。
  *
- * PR-Y3 で旧 `serverEmpty` から `typedServer` (openapi-fetch ベース) に移行
- * した exemplar。path / method / body の型は generated.ts の paths から自動
- * 導出される。
+ * fetcher は hey-api 生成の SDK 関数 (`addToWatchlist` / `removeFromWatchlist`)
+ * と同じ signature を持つ。auth header 注入は side-effect import した
+ * `hey-api-interceptors` の singleton client 経由で実施される。
  */
 
-import { apiVoid, type typedServer } from "@/lib/api/typed-server-fetcher";
+import "@/lib/api/hey-api-interceptors";
+import type {
+  addToWatchlist as addToWatchlistSdk,
+  removeFromWatchlist as removeFromWatchlistSdk,
+} from "@/types/sdk.gen";
 
 export async function addToWatchlistCore(
   articleId: number,
-  fetcher: typeof typedServer,
+  fetcher: typeof addToWatchlistSdk,
 ): Promise<void> {
-  await apiVoid(
-    fetcher.POST("/api/v1/me/watchlist", {
-      body: { articleId },
-    }),
-  );
+  await fetcher({
+    throwOnError: true,
+    body: { articleId },
+  });
 }
 
 export async function removeFromWatchlistCore(
   articleId: number,
-  fetcher: typeof typedServer,
+  fetcher: typeof removeFromWatchlistSdk,
 ): Promise<void> {
-  await apiVoid(
-    fetcher.DELETE("/api/v1/me/watchlist/{article_id}", {
-      params: { path: { article_id: articleId } },
-    }),
-  );
+  await fetcher({
+    throwOnError: true,
+    path: { article_id: articleId },
+  });
 }

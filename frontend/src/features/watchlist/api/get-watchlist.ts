@@ -1,5 +1,6 @@
-import { apiCall, typedServer } from "@/lib/api/typed-server-fetcher";
+import "@/lib/api/hey-api-interceptors";
 import { cacheTags } from "@/lib/cache/tags";
+import { listArticlesInWatchlist } from "@/types/sdk.gen";
 import type { PaginatedArticleResponse } from "@/types/types.gen";
 
 /**
@@ -15,10 +16,10 @@ export async function getWatchlist(
   page = 1,
   perPage = 20,
 ): Promise<PaginatedArticleResponse> {
-  return apiCall(
-    typedServer.GET("/api/v1/me/watchlist", {
-      params: { query: { page, perPage } },
-      next: { tags: [cacheTags.watchlistMe] },
-    }),
-  );
+  const { data } = await listArticlesInWatchlist({
+    throwOnError: true,
+    query: { page, perPage },
+    next: { tags: [cacheTags.watchlistMe] },
+  });
+  return data;
 }
