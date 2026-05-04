@@ -166,3 +166,16 @@ describe("publicClient — auth interceptor を持たない", () => {
     });
   });
 });
+
+describe("runtime config — baseUrl が両 client に適用される", () => {
+  // openapi-ts v0.97.1 の generated client.gen.ts は runtimeConfigPath を
+  // wrap せず baseUrl 未設定で初期化するため、明示的に setConfig /
+  // createClientConfig 経由で適用していることを test で固定する。
+  it("singleton client に INTERNAL_API_URL の origin が baseUrl として set される", () => {
+    expect(client.getConfig().baseUrl).toBe("http://test.local");
+  });
+
+  it("publicClient にも同じ baseUrl が適用される", () => {
+    expect(publicClient.getConfig().baseUrl).toBe("http://test.local");
+  });
+});
