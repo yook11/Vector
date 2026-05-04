@@ -28,6 +28,8 @@ envelope (``IngestSourceArg``) で受け取った Task 側で 1 度だけ DB que
 
 from __future__ import annotations
 
+import time
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -51,6 +53,9 @@ from app.collection.ingestion.domain.fetched_article import (
 from app.collection.ingestion.fetchers.protocol import Fetcher
 from app.collection.ingestion.repository import DiscoveredArticleRepository
 from app.collection.ingestion.staged import StagedArticle
+from app.observability.domain.event import EventType, Stage
+from app.observability.domain.payloads import SourceFetchPayload
+from app.observability.repository import PipelineEventRepository
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 from app.shared.value_objects.safe_url import SafeUrl
 
@@ -59,20 +64,21 @@ logger = structlog.get_logger(__name__)
 
 @dataclass(frozen=True, slots=True)
 class IngestedOutcome:
-    """Fetcher 実行に成功した状態。
+    """Fetcher 実行に成功した状態 (Outcome 純化原則)。
+
+    「次の段階に渡す価値があるもの」のみを持つ。観測値 (failed/skipped count)
+    は同 tx で ``pipeline_events`` に焼き付け済 (詳細は
+    ``feedback_outcome_purification``)。
 
     - ``persisted``: Pattern R 経路で discovered + article 永続化済の Entity
       (本 Service 内で完結)
     - ``staged``: Pattern H 経路で discovered のみ作成し、HTML 抽出 task
       ``extract_html_body`` への投入が必要な ``StagedArticle`` のリスト
       (Article 作成は 2 段目 task が担う)
-    - ``failed_count`` / ``skipped_count``: 観測用カウンタ
     """
 
     persisted: list[Article]
     staged: list[StagedArticle]
-    failed_count: int
-    skipped_count: int  # discovered/article のいずれかで race 敗北かつ読み戻し不能
 
 
 class IngestionService:
@@ -90,13 +96,14 @@ class IngestionService:
         self._session_factory = session_factory
         self._fetcher_factory = fetcher_factory
 
-    async def execute(self, source_id: int) -> IngestedOutcome:
+    async def execute(self, source_id: int, *, attempt: int = 1) -> IngestedOutcome:
+        t0 = time.monotonic()
         async with self._session_factory() as session:
             fetcher = self._fetcher_factory()
 
             persisted: list[Article] = []
             staged: list[StagedArticle] = []
-            failed_count = 0
+            failed_codes: Counter[str] = Counter()
             skipped_count = 0
             ready_count = 0
             pending_count = 0
@@ -128,7 +135,7 @@ class IngestionService:
                                 )
                             )
                         case Failed(reason=r):
-                            failed_count += 1
+                            failed_codes[r.code] += 1
                             logger.warning(
                                 "ingest_source_entry_failed",
                                 source_id=source_id,
@@ -141,6 +148,20 @@ class IngestionService:
             except HostResolutionError as e:
                 raise TemporaryFetchError(str(e)) from e
 
+            failed_count = sum(failed_codes.values())
+            duration_ms = int((time.monotonic() - t0) * 1000)
+            await self._record_success_event(
+                session=session,
+                source_id=source_id,
+                fetcher=fetcher,
+                persisted_count=len(persisted),
+                staged_count=len(staged),
+                failed_count=failed_count or None,
+                skipped_count=skipped_count or None,
+                failed_codes=dict(failed_codes) or None,
+                attempt=attempt,
+                duration_ms=duration_ms,
+            )
             await session.commit()
 
         logger.info(
@@ -153,11 +174,44 @@ class IngestionService:
             staged_count=len(staged),
             skipped_count=skipped_count,
         )
-        return IngestedOutcome(
-            persisted=persisted,
-            staged=staged,
+        return IngestedOutcome(persisted=persisted, staged=staged)
+
+    async def _record_success_event(
+        self,
+        *,
+        session: AsyncSession,
+        source_id: int,
+        fetcher: Fetcher,
+        persisted_count: int,
+        staged_count: int,
+        failed_count: int | None,
+        skipped_count: int | None,
+        failed_codes: dict[str, int] | None,
+        attempt: int,
+        duration_ms: int,
+    ) -> None:
+        """Stage 1 成功イベントを同 tx で ``pipeline_events`` に焼き付ける。
+
+        ``metadata_fields_observed`` / ``metadata_sample`` は PR1.5 で活性化
+        (現状 ``ReadyForArticle.metadata`` 削除前のため None で書く)。
+        """
+        repo = PipelineEventRepository(session)
+        payload = SourceFetchPayload(
+            fetcher_class=type(fetcher).__name__,
+            persisted_count=persisted_count,
+            staged_count=staged_count,
             failed_count=failed_count,
             skipped_count=skipped_count,
+            failed_codes=failed_codes,
+        )
+        await repo.append(
+            stage=Stage.SOURCE_FETCH,
+            event_type=EventType.SUCCEEDED,
+            outcome_code="fetched",  # ADR §既決事項: 成功は 1 本 (件数で分けない)
+            payload=payload,
+            source_id=source_id,
+            attempt=attempt,
+            duration_ms=duration_ms,
         )
 
     async def _persist_one(

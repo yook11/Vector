@@ -9,6 +9,7 @@ from app.models.discovered_article import DiscoveredArticle
 from app.models.extraction_noise import ExtractionNoise
 from app.models.fetch_log import FetchLog
 from app.models.news_source import NewsSource, SourceType
+from app.models.pipeline_event import PipelineEvent
 from app.models.watchlist_entry import WatchlistEntry
 from app.models.weekly_briefing import WeeklyBriefing
 from app.models.weekly_trends_snapshot import WeeklyTrendsSnapshot
@@ -24,6 +25,7 @@ __all__ = [
     "ExtractionNoise",
     "FetchLog",
     "NewsSource",
+    "PipelineEvent",
     "SourceType",
     "WatchlistEntry",
     "WeeklyBriefing",

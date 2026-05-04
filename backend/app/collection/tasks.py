@@ -33,6 +33,8 @@ from app.collection.errors import (
 from app.collection.ingestion.staged import IngestSourceArg, StagedArticle
 from app.models.fetch_log import FetchLog, FetchStatus
 from app.models.news_source import NewsSource
+from app.observability.domain.event import Stage
+from app.observability.recording import _record_failure_event
 
 logger = structlog.get_logger(__name__)
 
@@ -143,15 +145,25 @@ async def ingest_source(
     logger.info("ingest_source_started", source_id=source_id, source_name=arg.name)
     session_factory = ctx.state.session_factory
     start_time = time.monotonic()
+    attempt = int(ctx.message.labels.get("retry_count", 0)) + 1
 
     fetcher_factory = FETCHERS[arg.name]
     svc = IngestionService(session_factory, fetcher_factory)
 
     try:
-        outcome = await svc.execute(source_id)
+        outcome = await svc.execute(source_id, attempt=attempt)
     except PermanentFetchError as e:
         await _record_fetch_log(
             session_factory, source_id, FetchStatus.ERROR, 0, str(e), start_time
+        )
+        await _record_failure_event(
+            session_factory=session_factory,
+            stage=Stage.SOURCE_FETCH,
+            outcome_code="permanent_fetch_error",
+            exc=e,
+            attempt=attempt,
+            duration_ms=int((time.monotonic() - start_time) * 1000),
+            source_id=source_id,
         )
         return {"source_id": source_id, "status": "error", "reason": str(e)}
     except TemporaryFetchError as e:
@@ -165,7 +177,28 @@ async def ingest_source(
                 source_name=arg.name,
                 error=str(e),
             )
+            await _record_failure_event(
+                session_factory=session_factory,
+                stage=Stage.SOURCE_FETCH,
+                outcome_code="temporary_fetch_error_exhausted",
+                exc=e,
+                attempt=attempt,
+                duration_ms=int((time.monotonic() - start_time) * 1000),
+                source_id=source_id,
+            )
             return {"source_id": source_id, "status": "error", "reason": str(e)}
+        raise
+    except Exception as e:
+        # 想定外: audit してから re-raise (taskiq の standard retry に乗せる)
+        await _record_failure_event(
+            session_factory=session_factory,
+            stage=Stage.SOURCE_FETCH,
+            outcome_code="unexpected_error",
+            exc=e,
+            attempt=attempt,
+            duration_ms=int((time.monotonic() - start_time) * 1000),
+            source_id=source_id,
+        )
         raise
 
     articles = outcome.persisted
@@ -206,9 +239,8 @@ async def ingest_source(
         "status": "success",
         "persisted_count": persisted_count,
         "staged_count": staged_count,
-        "failed_count": outcome.failed_count,
-        "skipped_count": outcome.skipped_count,
     }
+    # failed_count / skipped_count は pipeline_events.payload で確認 (Outcome 純化)
     logger.info("ingest_source_completed", **payload)
     return payload
 

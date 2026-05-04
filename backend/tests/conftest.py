@@ -25,6 +25,7 @@ from app.models import (  # noqa: F401
     DiscoveredArticle,
     FetchLog,
     NewsSource,
+    PipelineEvent,
     SourceType,
     WatchlistEntry,
     WeeklyBriefing,

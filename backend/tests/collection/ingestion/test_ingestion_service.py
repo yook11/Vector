@@ -98,8 +98,6 @@ async def test_ready_persists_discovered_and_article(
 
     assert isinstance(outcome, IngestedOutcome)
     assert len(outcome.persisted) == 1
-    assert outcome.failed_count == 0
-    assert outcome.skipped_count == 0
     article = outcome.persisted[0]
     assert article.title == "Test Title"
     assert article.id > 0
@@ -126,8 +124,9 @@ async def test_failed_increments_counter_no_persist(
 
     outcome = await svc.execute(vb_source.id)
 
+    # Outcome 純化: failed_count は pipeline_events.payload で確認
+    # (詳細は test_ingestion_service_audit.py)
     assert isinstance(outcome, IngestedOutcome)
-    assert outcome.failed_count == 1
     assert len(outcome.persisted) == 0
     rows = (await db_session.execute(select(DiscoveredArticleORM))).scalars().all()
     assert rows == []
@@ -201,7 +200,6 @@ async def test_mixed_ready_pending_and_failed(
     assert isinstance(outcome, IngestedOutcome)
     assert len(outcome.persisted) == 1
     assert len(outcome.staged) == 1
-    assert outcome.failed_count == 1
     article_rows = (await db_session.execute(select(ArticleORM))).scalars().all()
     assert len(article_rows) == 1  # Pattern R 分のみ
     discovered_rows = (
@@ -224,6 +222,5 @@ async def test_mixed_ready_and_failed(
 
     assert isinstance(outcome, IngestedOutcome)
     assert len(outcome.persisted) == 1
-    assert outcome.failed_count == 1
     rows = (await db_session.execute(select(ArticleORM))).scalars().all()
     assert len(rows) == 1
