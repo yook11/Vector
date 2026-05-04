@@ -1,12 +1,12 @@
 import { cacheLife } from "next/cache";
-import { publicServerFetch } from "@/lib/api/server-fetcher";
+import { apiCall, typedPublic } from "@/lib/api/typed-server-fetcher";
 import type { ArticleQuery, PaginatedArticleResponse } from "@/types";
 
 /**
  * 記事一覧取得 (response は user 非依存)。
  *
  * Backend response は user 非依存 (ウォッチ状態は `getWatchlistIds` で別途
- * 取得し、render 時に Set lookup で merge)。`publicServerFetch` + `'use cache'`
+ * 取得し、render 時に Set lookup で merge)。`typedPublic` + `'use cache'`
  * で全 user 共有 cache に乗せる。
  *
  * `cacheLife("minutes")` は stale 5min / revalidate 1min / expire 1h の公式
@@ -16,21 +16,15 @@ import type { ArticleQuery, PaginatedArticleResponse } from "@/types";
  * cache key は引数 `query` のシリアライズで決まる。`ArticleQuery` の shape
  * は callsite の `parseArticleQuery` で zod 検証通過後に常に同 shape で
  * 確定するため、`Object.entries` の挿入順序による cache pollution は
- * structural に防がれている。
+ * structural に防がれている。`query ?? {}` で undefined を空 object に
+ * 正規化し、cache key 安定化を担保する。
  */
 export async function getArticles(
   query?: ArticleQuery,
 ): Promise<PaginatedArticleResponse> {
   "use cache";
   cacheLife("minutes");
-  const params = new URLSearchParams();
-  if (query) {
-    for (const [key, value] of Object.entries(query)) {
-      if (value !== undefined) params.set(key, String(value));
-    }
-  }
-  const qs = params.toString();
-  return publicServerFetch<PaginatedArticleResponse>(
-    `/articles${qs ? `?${qs}` : ""}`,
+  return apiCall(
+    typedPublic.GET("/api/v1/articles", { params: { query: query ?? {} } }),
   );
 }

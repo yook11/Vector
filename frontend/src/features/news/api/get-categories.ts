@@ -1,10 +1,10 @@
 import { cacheLife } from "next/cache";
-import { publicServerFetch } from "@/lib/api/server-fetcher";
+import { apiCall, typedPublic } from "@/lib/api/typed-server-fetcher";
 import type { CategoryDetailListResponse } from "@/types";
 
 /** Fetch all categories with recent article counts (response is user-independent). */
 export async function getCategories(): Promise<CategoryDetailListResponse> {
   "use cache";
   cacheLife("hours");
-  return publicServerFetch<CategoryDetailListResponse>("/categories");
+  return apiCall(typedPublic.GET("/api/v1/categories", {}));
 }
