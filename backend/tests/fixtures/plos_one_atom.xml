@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>PLOS One</title>
+  <link rel="alternate" href="https://journals.plos.org/plosone/" />
+  <author>
+    <name>PLOS</name>
+    <uri>https://journals.plos.org/plosone/</uri>
+    <email>customercare@plos.org</email>
+  </author>
+  <id>https://journals.plos.org/plosone/feed/atom</id>
+  <rights>All PLOS articles are Open Access.</rights>
+  <updated>2026-05-03T23:58:35Z</updated>
+  <entry>
+    <title>C-terminal S-acylation governs membrane distribution, interaction dynamics and function of plant Rho GTPases</title>
+    <link rel="alternate" href="https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0348001" />
+    <author>
+      <name>Amir Akerman</name>
+    </author>
+    <author>
+      <name>Orit Gutman</name>
+    </author>
+    <author>
+      <name>Keren E. Shapira</name>
+    </author>
+    <author>
+      <name>Shaul Yalovsky</name>
+    </author>
+    <id>10.1371/journal.pone.0348001</id>
+    <updated>2026-05-01T14:00:00Z</updated>
+    <published>2026-05-01T14:00:00Z</published>
+    <content type="html">&lt;p&gt;by Amir Akerman, Orit Gutman, Keren E. Shapira, Shaul Yalovsky&lt;/p&gt;
+
+Rho of Plants (ROPs) are plant-specific Rho GTPases that regulate diverse cellular processes including cell polarity, vesicle trafficking, cytoskeletal dynamics and gene expression. Bacterial expression and biochemical assays demonstrated that S-acylation occurs at conserved cysteine residues in the C-terminal hypervariable region. Live-cell imaging of Arabidopsis seedlings revealed that S-acylation deficient ROP variants show reduced plasma membrane localization and altered interaction dynamics with downstream effectors. These findings establish post-translational lipidation as a key regulatory mechanism for plant Rho GTPase signaling.</content>
+  </entry>
+  <entry>
+    <title>Spatial heterogeneity of microbial communities in subsurface marine sediments</title>
+    <link rel="alternate" href="https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0348002" />
+    <author>
+      <name>Jane Smith</name>
+    </author>
+    <author>
+      <name>John Doe</name>
+    </author>
+    <id>10.1371/journal.pone.0348002</id>
+    <updated>2026-05-02T10:00:00Z</updated>
+    <published>2026-05-02T10:00:00Z</published>
+    <content type="html">&lt;p&gt;by Jane Smith, John Doe&lt;/p&gt;
+
+Subsurface marine sediments host diverse microbial communities that play important roles in global biogeochemical cycles. Here we present a high-resolution analysis of microbial diversity in sediments collected from multiple depths and locations across the Pacific Ocean. Using metagenomics and stable isotope probing, we demonstrate that microbial community composition varies significantly with depth and substrate availability. Our results provide new insights into the ecological factors structuring deep biosphere microbial communities.</content>
+  </entry>
+  <entry>
+    <title>Editorial Note: Environmental justice and power plant emissions</title>
+    <link rel="alternate" href="https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0348423" />
+    <author>
+      <name>The PLOS One Editors</name>
+    </author>
+    <id>10.1371/journal.pone.0348423</id>
+    <updated>2026-05-01T14:00:00Z</updated>
+    <published>2026-05-01T14:00:00Z</published>
+    <content type="html">&lt;p&gt;by The PLOS One Editors &lt;/p&gt;</content>
+  </entry>
+</feed>
