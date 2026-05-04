@@ -19,7 +19,10 @@ import { defineConfig } from "@hey-api/openapi-ts";
  *   - @hey-api/sdk: 関数群 (sdk.gen.ts)
  *   - @hey-api/client-next: Next.js 用 fetch wrapper (client.gen.ts + core/)。
  *     runtimeConfigPath で baseUrl + customFetch + interceptor 登録を
- *     `src/lib/api/hey-api.config.ts` に集約する。
+ *     `src/lib/api/hey-api.config.ts` に集約する。**.ts 拡張子は付けない** —
+ *     付けると生成 import が `from '../lib/api/hey-api.config.ts'` になり、
+ *     TS5097 (allowImportingTsExtensions) で `tsc --noEmit` が落ちる。
+ *     `moduleResolution: "bundler"` 配下なら拡張子なしで `.ts` に解決される。
  */
 export default defineConfig({
   input: process.env.OPENAPI_INPUT ?? "http://localhost:8000/openapi.json",
@@ -33,7 +36,7 @@ export default defineConfig({
     "@hey-api/sdk",
     {
       name: "@hey-api/client-next",
-      runtimeConfigPath: "./src/lib/api/hey-api.config.ts",
+      runtimeConfigPath: "./src/lib/api/hey-api.config",
     },
   ],
 });

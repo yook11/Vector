@@ -30,15 +30,6 @@ import { createClient, createConfig } from "@/types/client";
 import { client } from "@/types/client.gen";
 import type { ClientOptions } from "@/types/types.gen";
 
-// 自動生成の `client.gen.ts` は `createClient(createConfig<...>())` だけを
-// 出力し、`runtimeConfigPath` で指定した `hey-api.config.ts` の
-// `createClientConfig` (baseUrl + customFetch を返す) を wrap してくれない。
-// その結果 baseUrl 未設定で SDK が相対 URL fetch → server-side で
-// `Failed to parse URL` → response undefined → ApiError "HTTP 0" となる。
-// 暫定として明示的に `setConfig` で runtime config を後付け注入する
-// (openapi-ts 側の wiring が直ったら本行は撤去可能)。
-client.setConfig(createClientConfig());
-
 const errorInterceptor = async (
   error: unknown,
   response: Response | undefined,
