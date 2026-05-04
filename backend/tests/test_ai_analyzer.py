@@ -656,7 +656,7 @@ def test_tool_schema_properties_match_pydantic_fields() -> None:
 
 
 def test_tool_schema_category_enum_matches_valid_category() -> None:
-    """category enum が ValidCategory の全 12 値と完全一致することを保証。"""
+    """category enum が ValidCategory の全 13 値と完全一致することを保証。"""
     assert CLASSIFICATION_TOOL_SCHEMA["properties"]["category"]["enum"] == [
         c.value for c in ValidCategory
     ]

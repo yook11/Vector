@@ -16,11 +16,12 @@ from app.analysis.domain.value_objects.topic import TopicName
 
 
 class ValidCategory(StrEnum):
-    """AI が出力可能なカテゴリ slug（12 種類）。
+    """AI が出力可能なカテゴリ slug（13 種類）。
 
-    先端技術の 11 カテゴリ + OUT_OF_SCOPE。AI は常にいずれか 1 つを選択する。
-    OUT_OF_SCOPE は「上記 11 カテゴリのいずれにも該当しない」を示す 12 番目の
-    選択肢であり、Service 層で Rejection 側に振り分ける signal となる。
+    先端技術の 11 カテゴリ + ``OTHER`` (先端テック領域外で投資判断に寄与する
+    記事 — 規制・政策動向・マクロ経済・金融政策・地政学・市場動向・コモディティ等) +
+    ``OUT_OF_SCOPE`` (投資判断に寄与しない)。AI は常にいずれか 1 つを選択する。
+    ``OUT_OF_SCOPE`` は Service 層で Rejection 側に振り分ける signal となる。
     """
 
     AI = "ai"
@@ -30,6 +31,7 @@ class ValidCategory(StrEnum):
     MATERIALS = "materials"
     MOBILITY = "mobility"
     NETWORK = "network"
+    OTHER = "other"
     ROBOTICS = "robotics"
     SECURITY = "security"
     SEMICONDUCTOR = "semiconductor"

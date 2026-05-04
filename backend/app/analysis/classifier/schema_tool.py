@@ -26,7 +26,10 @@ CLASSIFICATION_TOOL_SCHEMA: dict[str, Any] = {
         "category": {
             "type": "string",
             "enum": [c.value for c in ValidCategory],
-            "description": "Vector の 11 カテゴリのいずれか、または out_of_scope",
+            "description": (
+                "Vector の 12 カテゴリ (先端テック 11 + other) のいずれか、"
+                "または out_of_scope"
+            ),
         },
         "topic": {
             "type": "string",
