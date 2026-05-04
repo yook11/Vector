@@ -1,8 +1,9 @@
-"""4 subclass の ClassVar 構成確認 (Phase 3 PR 3-c-3)。
+"""4 Frontiers subclass の identity / 契約検証。
 
-各 subclass が NAME / ENDPOINT_URL / JOURNAL_NAME を正しく差し替えていることと、
-PROVIDES が共通 frozenset で、ENDPOINT_URL が Frontiers の正規 URL pattern に
-従うことを確認する。
+per-source の振る舞いは ``test__common.py`` で base の dummy subclass を通じて
+網羅済み。本ファイルは subclass が dispatch キー (NAME / ENDPOINT_URL) で衝突
+しないことと、共通契約 (PROVIDES / URL pattern) を正しく継承していることだけを
+保証する。
 """
 
 from __future__ import annotations
@@ -29,49 +30,24 @@ _ALL = (
 )
 
 
-class TestSubclassConfiguration:
-    def test_all_subclass_base(self) -> None:
-        for cls in _ALL:
-            assert issubclass(cls, BaseFrontiersFetcher)
+def test_all_subclass_base_fetcher() -> None:
+    for cls in _ALL:
+        assert issubclass(cls, BaseFrontiersFetcher)
 
-    def test_provides_inherited(self) -> None:
-        # PROVIDES は base から継承される共通 frozenset
-        for cls in _ALL:
-            assert cls.PROVIDES == frozenset(
-                {"language", "guid", "site_name", "author"}
-            )
 
-    def test_endpoint_pattern(self) -> None:
-        # 全 subclass が Frontiers 正規 URL pattern に従う
-        for cls in _ALL:
-            assert cls.ENDPOINT_URL.startswith("https://www.frontiersin.org/journals/")
-            assert cls.ENDPOINT_URL.endswith("/rss")
+def test_provides_inherited_consistently() -> None:
+    expected = frozenset({"language", "guid", "site_name", "author"})
+    for cls in _ALL:
+        assert cls.PROVIDES == expected
 
-    def test_unique_names(self) -> None:
-        names = {cls.NAME for cls in _ALL}
-        assert len(names) == 4
 
-    def test_unique_endpoints(self) -> None:
-        endpoints = {cls.ENDPOINT_URL for cls in _ALL}
-        assert len(endpoints) == 4
+def test_endpoints_follow_frontiers_url_pattern() -> None:
+    for cls in _ALL:
+        assert cls.ENDPOINT_URL.startswith("https://www.frontiersin.org/journals/")
+        assert cls.ENDPOINT_URL.endswith("/rss")
 
-    def test_journal_name_matches_name(self) -> None:
-        # Frontiers は NAME と JOURNAL_NAME が同値で運用 (Cornell 等と差異なし)
-        for cls in _ALL:
-            assert cls.NAME == cls.JOURNAL_NAME
 
-    def test_ai_fetcher_specifics(self) -> None:
-        assert FrontiersAIFetcher.NAME == "Frontiers in Artificial Intelligence"
-        assert "artificial-intelligence" in FrontiersAIFetcher.ENDPOINT_URL
-
-    def test_robotics_fetcher_specifics(self) -> None:
-        assert FrontiersRoboticsAIFetcher.NAME == "Frontiers in Robotics and AI"
-        assert "robotics-and-ai" in FrontiersRoboticsAIFetcher.ENDPOINT_URL
-
-    def test_energy_fetcher_specifics(self) -> None:
-        assert FrontiersEnergyResearchFetcher.NAME == "Frontiers in Energy Research"
-        assert "energy-research" in FrontiersEnergyResearchFetcher.ENDPOINT_URL
-
-    def test_materials_fetcher_specifics(self) -> None:
-        assert FrontiersMaterialsFetcher.NAME == "Frontiers in Materials"
-        assert "/journals/materials/" in FrontiersMaterialsFetcher.ENDPOINT_URL
+def test_subclasses_have_distinct_dispatch_keys() -> None:
+    """``NAME`` / ``ENDPOINT_URL`` は composition root の dispatch dict キー。"""
+    assert len({cls.NAME for cls in _ALL}) == len(_ALL)
+    assert len({cls.ENDPOINT_URL for cls in _ALL}) == len(_ALL)

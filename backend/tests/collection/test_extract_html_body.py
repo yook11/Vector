@@ -22,7 +22,6 @@ from app.collection.ingestion.domain import (
     DiscoveredArticleDraft,
 )
 from app.collection.ingestion.domain.fetched_article import (
-    FetchedMetadata,
     PendingHtmlFetch,
 )
 from app.collection.ingestion.repository import DiscoveredArticleRepository
@@ -69,9 +68,6 @@ async def staged_article(
         source_url=SafeUrl("https://techcrunch.com/article-1/"),
         published_at_hint=PublishedAt(
             value=datetime(2026, 4, 30, 12, 0, 0, tzinfo=UTC)
-        ),
-        metadata=FetchedMetadata(
-            language="en-US", site_name="TechCrunch", author="Jane Doe"
         ),
     )
     return StagedArticle(discovered_id=discovered.id, pending=pending)
@@ -227,7 +223,6 @@ async def test_html_published_at_used_when_rss_hint_missing(
         source_id=tc_source.id,
         source_url=SafeUrl("https://techcrunch.com/no-rss-pub/"),
         published_at_hint=None,  # RSS pubDate 欠落
-        metadata=FetchedMetadata(language="en-US", site_name="TechCrunch"),
     )
     staged = StagedArticle(discovered_id=discovered.id, pending=pending)
 
@@ -275,7 +270,6 @@ async def test_both_published_at_missing_drops_as_failed(
         source_id=tc_source.id,
         source_url=SafeUrl("https://techcrunch.com/both-missing/"),
         published_at_hint=None,
-        metadata=FetchedMetadata(language="en-US", site_name="TechCrunch"),
     )
     staged = StagedArticle(discovered_id=discovered.id, pending=pending)
 

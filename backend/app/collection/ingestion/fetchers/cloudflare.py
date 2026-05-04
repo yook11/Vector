@@ -35,8 +35,7 @@ from app.collection.extraction.domain.value_objects import PublishedAt
 from app.collection.ingestion.domain.fetched_article import (
     Failed,
     FailureReason,
-    FetchedArticle,
-    FetchedMetadata,
+    FetchedEntry,
     FetchOutcome,
     ReadyForArticle,
 )
@@ -242,7 +241,7 @@ class CloudflareBlogFetcher:
             )
 
         try:
-            article = FetchedArticle(
+            ready = ReadyForArticle(
                 title=title,
                 body=body,
                 published_at=published_at,
@@ -261,14 +260,17 @@ class CloudflareBlogFetcher:
         authors = _extract_authors(entry)
         primary_author = authors[0] if authors else None
 
-        metadata = FetchedMetadata(
-            author=primary_author,
-            authors=authors,
-            tags=_extract_tags(entry),
-            image_url=None,
-            language=feed_language,
-            guid=_extract_guid(entry),
-            site_name=self.NAME,
-        )
+        metadata: dict[str, Any] = {
+            "language": feed_language,
+            "site_name": self.NAME,
+        }
+        if primary_author:
+            metadata["author"] = primary_author
+        if authors:
+            metadata["authors"] = list(authors)
+        if tags := _extract_tags(entry):
+            metadata["tags"] = list(tags)
+        if guid := _extract_guid(entry):
+            metadata["guid"] = guid
 
-        return ReadyForArticle(article=article, metadata=metadata)
+        return FetchedEntry(item=ready, metadata=metadata)

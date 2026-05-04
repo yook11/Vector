@@ -34,7 +34,7 @@ from app.collection.extraction.domain.value_objects import PublishedAt
 from app.collection.ingestion.domain.fetched_article import (
     Failed,
     FailureReason,
-    FetchedMetadata,
+    FetchedEntry,
     FetchOutcome,
     PendingHtmlFetch,
 )
@@ -176,19 +176,17 @@ class ITmediaNewsFetcher:
 
         published_at_hint = _parse_published_at(entry)
 
-        metadata = FetchedMetadata(
-            author=None,
-            tags=(),
-            image_url=None,
-            language=feed_language,
-            guid=None,
-            site_name=self.NAME,
-        )
+        metadata: dict[str, Any] = {
+            "language": feed_language,
+            "site_name": self.NAME,
+        }
 
-        return PendingHtmlFetch(
-            title=title,
-            source_id=source_id,
-            source_url=source_url,
-            published_at_hint=published_at_hint,
+        return FetchedEntry(
+            item=PendingHtmlFetch(
+                title=title,
+                source_id=source_id,
+                source_url=source_url,
+                published_at_hint=published_at_hint,
+            ),
             metadata=metadata,
         )

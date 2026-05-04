@@ -42,7 +42,7 @@ from app.collection.errors import PermanentFetchError, TemporaryFetchError
 from app.collection.ingestion.domain.fetched_article import (
     Failed,
     FailureReason,
-    FetchedMetadata,
+    FetchedEntry,
     FetchOutcome,
     PendingHtmlFetch,
 )
@@ -67,8 +67,8 @@ class BaseHtmlListingFetcher:
     - ``DETAIL_LINK_XPATH``: 記事 detail への ``<a>`` を抽出する XPath
     - ``DETAIL_URL_PREFIX``: relative href を絶対 URL に解決する base
       (典型的には ``https://example.com``)
-    - ``SITE_NAME``: ``FetchedMetadata.site_name`` に詰める表示名
-    - ``LANGUAGE``: ``FetchedMetadata.language`` に詰める ISO コード
+    - ``SITE_NAME``: ``metadata["site_name"]`` に詰める表示名
+    - ``LANGUAGE``: ``metadata["language"]`` に詰める ISO コード
 
     オプショナル ClassVar (デフォルト値あり):
 
@@ -186,18 +186,19 @@ class BaseHtmlListingFetcher:
 
         slug = self._slug_from_url(loc) or self.NAME
         title = slug[:500]
-        metadata = FetchedMetadata(
-            language=self.LANGUAGE,
-            site_name=self.SITE_NAME,
-            guid=loc[:2048],
-        )
-        return PendingHtmlFetch(
-            title=title,
-            source_id=source_id,
-            source_url=source_url,
-            published_at_hint=None,
-            metadata=metadata,
-            prefer_html_title=True,
+        return FetchedEntry(
+            item=PendingHtmlFetch(
+                title=title,
+                source_id=source_id,
+                source_url=source_url,
+                published_at_hint=None,
+                prefer_html_title=True,
+            ),
+            metadata={
+                "language": self.LANGUAGE,
+                "site_name": self.SITE_NAME,
+                "guid": loc[:2048],
+            },
         )
 
     @staticmethod

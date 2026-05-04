@@ -36,7 +36,7 @@ from app.collection.extraction.domain.value_objects import PublishedAt
 from app.collection.ingestion.domain.fetched_article import (
     Failed,
     FailureReason,
-    FetchedMetadata,
+    FetchedEntry,
     FetchOutcome,
     PendingHtmlFetch,
 )
@@ -206,19 +206,23 @@ class CleanTechnicaFetcher:
         else:
             author = None
 
-        metadata = FetchedMetadata(
-            author=author,
-            tags=_extract_tags(entry),
-            image_url=None,
-            language=feed_language,
-            guid=_extract_guid(entry),
-            site_name=self.NAME,
-        )
+        metadata: dict[str, Any] = {
+            "language": feed_language,
+            "site_name": self.NAME,
+        }
+        if author:
+            metadata["author"] = author
+        if tags := _extract_tags(entry):
+            metadata["tags"] = list(tags)
+        if guid := _extract_guid(entry):
+            metadata["guid"] = guid
 
-        return PendingHtmlFetch(
-            title=title,
-            source_id=source_id,
-            source_url=source_url,
-            published_at_hint=published_at_hint,
+        return FetchedEntry(
+            item=PendingHtmlFetch(
+                title=title,
+                source_id=source_id,
+                source_url=source_url,
+                published_at_hint=published_at_hint,
+            ),
             metadata=metadata,
         )

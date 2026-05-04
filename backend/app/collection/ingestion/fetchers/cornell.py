@@ -46,7 +46,7 @@ from app.collection.extraction.domain.value_objects import PublishedAt
 from app.collection.ingestion.domain.fetched_article import (
     Failed,
     FailureReason,
-    FetchedMetadata,
+    FetchedEntry,
     FetchOutcome,
     PendingHtmlFetch,
 )
@@ -240,19 +240,21 @@ class CornellChronicleFetcher:
 
         published_at_hint = _parse_published_at(entry)
 
-        metadata = FetchedMetadata(
-            author=None,  # dc:creator は Drupal 内部 ID、人間名でないため drop
-            tags=(),
-            image_url=_extract_image_url(entry),
-            language=feed_language,
-            guid=_extract_guid(entry),
-            site_name=self.NAME,
-        )
+        metadata: dict[str, Any] = {
+            "language": feed_language,
+            "site_name": self.NAME,
+        }
+        if image_url := _extract_image_url(entry):
+            metadata["image_url"] = str(image_url)
+        if guid := _extract_guid(entry):
+            metadata["guid"] = guid
 
-        return PendingHtmlFetch(
-            title=title,
-            source_id=source_id,
-            source_url=source_url,
-            published_at_hint=published_at_hint,
+        return FetchedEntry(
+            item=PendingHtmlFetch(
+                title=title,
+                source_id=source_id,
+                source_url=source_url,
+                published_at_hint=published_at_hint,
+            ),
             metadata=metadata,
         )

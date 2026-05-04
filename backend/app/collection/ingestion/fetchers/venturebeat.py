@@ -1,8 +1,7 @@
 """VentureBeat 用 Fetcher — Pattern R (RSS-only) の参照実装。
 
 collection-acquisition-redesign Phase 1a'。新 ``Fetcher`` Protocol を満たし、
-``FetchedArticle`` + ``FetchedMetadata`` を 1 entry ずつ ``ReadyForArticle``
-として yield する。
+``ReadyForArticle`` + metadata dict を ``FetchedEntry`` envelope で yield する。
 
 VB の RSS feed は ``<description>`` / ``<content:encoded>`` に full body
 (~12000 chars) を含み、HTML 取得を経由せずに本文を構築できる
@@ -31,8 +30,7 @@ from app.collection.extraction.domain.value_objects import PublishedAt
 from app.collection.ingestion.domain.fetched_article import (
     Failed,
     FailureReason,
-    FetchedArticle,
-    FetchedMetadata,
+    FetchedEntry,
     FetchOutcome,
     ReadyForArticle,
 )
@@ -247,7 +245,7 @@ class VentureBeatFetcher:
             )
 
         try:
-            article = FetchedArticle(
+            ready = ReadyForArticle(
                 title=title,
                 body=body,
                 published_at=published_at,
@@ -269,13 +267,17 @@ class VentureBeatFetcher:
         else:
             author = None
 
-        metadata = FetchedMetadata(
-            author=author,
-            tags=_extract_tags(entry),
-            image_url=_extract_image_url(entry),
-            language=feed_language,
-            guid=_extract_guid(entry),
-            site_name=self.NAME,
-        )
+        metadata: dict[str, Any] = {
+            "language": feed_language,
+            "site_name": self.NAME,
+        }
+        if author:
+            metadata["author"] = author
+        if tags := _extract_tags(entry):
+            metadata["tags"] = list(tags)
+        if image_url := _extract_image_url(entry):
+            metadata["image_url"] = str(image_url)
+        if guid := _extract_guid(entry):
+            metadata["guid"] = guid
 
-        return ReadyForArticle(article=article, metadata=metadata)
+        return FetchedEntry(item=ready, metadata=metadata)

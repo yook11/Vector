@@ -1,37 +1,24 @@
 """新ルート Ingestion Service — Pattern R は 1 段、Pattern H は 2 段で取り込む。
 
-collection-acquisition-redesign Phase 1 + Phase 1b'。新 ``Fetcher`` Protocol
-が返す ``FetchOutcome`` を受けて分岐:
+Fetcher の ``AsyncIterator[FetchOutcome]`` を回し ``match`` で分岐する:
 
-- ``ReadyForArticle`` (Pattern R Fetcher 直接 yield) → ``discovered_articles``
-  行 + ``articles`` 行を 1 トランザクションで作成
-- ``PendingHtmlFetch`` (Pattern H Fetcher yield) → ``discovered_articles`` 行
-  だけ作って ``StagedArticle`` を ``extract_html_body.kiq`` に橋渡し
-  (Article 作成は per-entry の 2 段目 task が担う)
-- ``Failed`` → 構造化ログのみ
+- ``FetchedEntry(item=ReadyForArticle)`` → discovered + articles を 1 tx で永続化
+- ``FetchedEntry(item=PendingHtmlFetch)`` → discovered のみ作って ``StagedArticle``
+  を ``extract_html_body.kiq`` に橋渡し (Article 作成は 2 段目 task)
+- ``Failed`` → 構造化ログ + ``failed_codes`` 集計
 
-責務:
-
-1. Fetcher の async iterator を回し、3 variants を ``match`` で分岐
-2. 永続化 (両 Repository の既存 on_conflict_do_nothing パターンで race recovery)
-3. ``Article`` Entity (``from_draft``) を組み立てて ``IngestedOutcome`` に詰める
-   (Pattern R 経路のみ。Pattern H は 2 段目で Article が作られるので本 Outcome
-   には含まれない)
-4. ``commit`` まで Service の責務、下流 (Stage C ``extract_content.kiq`` /
-   Pattern H ``extract_html_body.kiq``) は呼び出し側 Task が行う
-
-``NewsSource`` ORM の lookup は本 Service では行わない。``source_id`` を kiq
-envelope (``IngestSourceArg``) で受け取った Task 側で 1 度だけ DB query 済の
-前提 (Fetcher 自身は ``NAME`` / ``ENDPOINT_URL`` ClassVar で自己完結し、
-``source_id`` は永続化時の FK 値としてだけ使う)。
+``commit`` までが Service の責務。下流 task (``extract_content.kiq`` /
+``extract_html_body.kiq``) の投入は呼び出し側が行う。``NewsSource`` ORM の
+lookup は ``IngestSourceArg`` 経由で Task が済ませている前提で本 Service では行わない。
 """
 
 from __future__ import annotations
 
 import time
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from typing import Any
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -46,7 +33,7 @@ from app.collection.ingestion.domain import (
 )
 from app.collection.ingestion.domain.fetched_article import (
     Failed,
-    FetchedArticle,
+    FetchedEntry,
     PendingHtmlFetch,
     ReadyForArticle,
 )
@@ -64,17 +51,10 @@ logger = structlog.get_logger(__name__)
 
 @dataclass(frozen=True, slots=True)
 class IngestedOutcome:
-    """Fetcher 実行に成功した状態 (Outcome 純化原則)。
+    """Outcome 純化原則: 「次の段階に渡す価値があるもの」のみ持つ。
 
-    「次の段階に渡す価値があるもの」のみを持つ。観測値 (failed/skipped count)
-    は同 tx で ``pipeline_events`` に焼き付け済 (詳細は
-    ``feedback_outcome_purification``)。
-
-    - ``persisted``: Pattern R 経路で discovered + article 永続化済の Entity
-      (本 Service 内で完結)
-    - ``staged``: Pattern H 経路で discovered のみ作成し、HTML 抽出 task
-      ``extract_html_body`` への投入が必要な ``StagedArticle`` のリスト
-      (Article 作成は 2 段目 task が担う)
+    観測値 (failed/skipped count, metadata 観測) は同 tx で ``pipeline_events``
+    に焼き付け済 (memory ``feedback_outcome_purification``)。
     """
 
     persisted: list[Article]
@@ -107,19 +87,29 @@ class IngestionService:
             skipped_count = 0
             ready_count = 0
             pending_count = 0
+            metadata_fields_observed: set[str] = set()
+            metadata_sample: dict[str, Any] | None = None
 
             try:
                 async for outcome in fetcher.fetch(source_id):
                     match outcome:
-                        case ReadyForArticle(article=fa, metadata=_m):
+                        case FetchedEntry(item=ReadyForArticle() as ready, metadata=md):
                             ready_count += 1
-                            article = await self._persist_one(session, source_id, fa)
+                            metadata_sample = self._observe_metadata(
+                                md, metadata_fields_observed, metadata_sample
+                            )
+                            article = await self._persist_one(session, source_id, ready)
                             if article is not None:
                                 persisted.append(article)
                             else:
                                 skipped_count += 1
-                        case PendingHtmlFetch() as pending:
+                        case FetchedEntry(
+                            item=PendingHtmlFetch() as pending, metadata=md
+                        ):
                             pending_count += 1
+                            metadata_sample = self._observe_metadata(
+                                md, metadata_fields_observed, metadata_sample
+                            )
                             discovered_id = await self._upsert_discovered_url(
                                 session,
                                 source_id,
@@ -159,6 +149,8 @@ class IngestionService:
                 failed_count=failed_count or None,
                 skipped_count=skipped_count or None,
                 failed_codes=dict(failed_codes) or None,
+                metadata_fields_observed=sorted(metadata_fields_observed) or None,
+                metadata_sample=metadata_sample,
                 attempt=attempt,
                 duration_ms=duration_ms,
             )
@@ -176,6 +168,26 @@ class IngestionService:
         )
         return IngestedOutcome(persisted=persisted, staged=staged)
 
+    @staticmethod
+    def _observe_metadata(
+        md: Mapping[str, Any],
+        observed: set[str],
+        sample: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        """metadata の key 集合を累積し、最初の non-empty entry を sample に保持。
+
+        None / 空文字 / 空コンテナはキーが「提供された」と見なさず除外。
+        """
+        non_empty: dict[str, Any] = {}
+        for name, val in md.items():
+            if val in (None, "", (), [], {}):
+                continue
+            observed.add(name)
+            non_empty[name] = val
+        if sample is None and non_empty:
+            return non_empty
+        return sample
+
     async def _record_success_event(
         self,
         *,
@@ -187,14 +199,12 @@ class IngestionService:
         failed_count: int | None,
         skipped_count: int | None,
         failed_codes: dict[str, int] | None,
+        metadata_fields_observed: list[str] | None,
+        metadata_sample: dict[str, Any] | None,
         attempt: int,
         duration_ms: int,
     ) -> None:
-        """Stage 1 成功イベントを同 tx で ``pipeline_events`` に焼き付ける。
-
-        ``metadata_fields_observed`` / ``metadata_sample`` は PR1.5 で活性化
-        (現状 ``ReadyForArticle.metadata`` 削除前のため None で書く)。
-        """
+        """Stage 1 成功イベントを同 tx で ``pipeline_events`` に焼き付ける。"""
         repo = PipelineEventRepository(session)
         payload = SourceFetchPayload(
             fetcher_class=type(fetcher).__name__,
@@ -203,6 +213,8 @@ class IngestionService:
             failed_count=failed_count,
             skipped_count=skipped_count,
             failed_codes=failed_codes,
+            metadata_fields_observed=metadata_fields_observed,
+            metadata_sample=metadata_sample,
         )
         await repo.append(
             stage=Stage.SOURCE_FETCH,
@@ -218,34 +230,31 @@ class IngestionService:
         self,
         session: AsyncSession,
         source_id: int,
-        fa: FetchedArticle,
+        ready: ReadyForArticle,
     ) -> Article | None:
         """1 entry を discovered + articles に永続化して Entity を返す。
 
-        Race recovery:
-
-        - discovered_articles: ``save_many`` が空を返したら ``find_by_url`` で読み戻し
-        - articles: ``save`` が ``None`` を返したら ``find_by_discovered_article_id``
-          で読み戻し
-
-        どちらの読み戻しも失敗した場合のみ ``None`` を返す
-        (= skipped、メトリクスでカウント)。
+        Race recovery: discovered の ``save_many`` 空 → ``find_by_url``、
+        article の ``save`` None → ``find_by_discovered_article_id``。
+        どちらの読み戻しも失敗で ``None`` (= skipped カウント)。
         """
-        discovered_id = await self._upsert_discovered(session, source_id, fa)
+        discovered_id = await self._upsert_discovered_url(
+            session, source_id, ready.source_url, ready.title
+        )
         if discovered_id is None:
             return None
 
         article_repo = ArticleRepository(session)
         draft = ArticleDraft(
-            title=fa.title,
-            body=fa.body,
-            published_at=fa.published_at,
+            title=ready.title,
+            body=ready.body,
+            published_at=ready.published_at,
         )
         persisted = await article_repo.save(
             draft=draft,
             discovered_article_id=discovered_id,
-            source_id=fa.source_id,
-            source_url=fa.source_url,
+            source_id=ready.source_id,
+            source_url=ready.source_url,
         )
         if persisted is not None:
             return Article.from_draft(
@@ -255,19 +264,7 @@ class IngestionService:
                 created_at=persisted.created_at,
             )
 
-        existing = await article_repo.find_by_discovered_article_id(discovered_id)
-        return existing
-
-    async def _upsert_discovered(
-        self,
-        session: AsyncSession,
-        source_id: int,
-        fa: FetchedArticle,
-    ) -> int | None:
-        """discovered_articles 行を作って id を返す (既存なら読み戻し)。"""
-        return await self._upsert_discovered_url(
-            session, source_id, fa.source_url, fa.title
-        )
+        return await article_repo.find_by_discovered_article_id(discovered_id)
 
     async def _upsert_discovered_url(
         self,
@@ -276,12 +273,6 @@ class IngestionService:
         source_url: SafeUrl,
         title: str,
     ) -> int | None:
-        """URL + title から discovered_articles 行を作って id を返す。
-
-        Pattern H 経路 (``PendingHtmlFetch``) では ``FetchedArticle`` がまだ
-        存在しないため (body 未確定)、URL + title だけで discovered 行を作る
-        必要がある。Pattern R 用 ``_upsert_discovered`` も内部でこれを呼ぶ。
-        """
         candidate = ArticleCandidate(url=source_url, title=title)
         draft = DiscoveredArticleDraft.from_candidate(
             candidate, news_source_id=source_id

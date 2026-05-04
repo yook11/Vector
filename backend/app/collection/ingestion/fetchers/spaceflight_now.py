@@ -35,8 +35,7 @@ from app.collection.extraction.domain.value_objects import PublishedAt
 from app.collection.ingestion.domain.fetched_article import (
     Failed,
     FailureReason,
-    FetchedArticle,
-    FetchedMetadata,
+    FetchedEntry,
     FetchOutcome,
     ReadyForArticle,
 )
@@ -203,7 +202,7 @@ class SpaceflightNowFetcher:
             )
 
         try:
-            article = FetchedArticle(
+            ready = ReadyForArticle(
                 title=title,
                 body=body,
                 published_at=published_at,
@@ -219,13 +218,13 @@ class SpaceflightNowFetcher:
                 )
             )
 
-        metadata = FetchedMetadata(
-            author=None,  # Spaceflight Now RSS は byline を提供しない
-            tags=_extract_tags(entry),
-            image_url=None,  # Spaceflight Now RSS は <media:content> を提供しない
-            language=_HARDCODED_LANGUAGE,  # <channel>/<language> 提供なし
-            guid=_extract_guid(entry),
-            site_name=self.NAME,
-        )
+        metadata: dict[str, Any] = {
+            "language": _HARDCODED_LANGUAGE,
+            "site_name": self.NAME,
+        }
+        if tags := _extract_tags(entry):
+            metadata["tags"] = list(tags)
+        if guid := _extract_guid(entry):
+            metadata["guid"] = guid
 
-        return ReadyForArticle(article=article, metadata=metadata)
+        return FetchedEntry(item=ready, metadata=metadata)

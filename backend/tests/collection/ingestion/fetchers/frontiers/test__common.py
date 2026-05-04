@@ -1,11 +1,7 @@
-"""``BaseFrontiersFetcher`` の helper / convert_entry 単体テスト (Phase 3 PR 3-c-3)。
+"""``BaseFrontiersFetcher`` (Pattern R) の振る舞い不変条件テスト (Phase 3 PR 3-c-3)。
 
-per-source 設計:
-- RSS 2.0 (UTF-8)、Pattern R via ``<description>`` (abstract 全文)
-- ``<author>`` 単一 (corresponding author)
-- ``<category>`` 記事種別 (Original Research 等) → tags に詰めない (空 tuple)
-- license CC BY 4.0 hardcode、DOI を link から正規表現抽出
-- PROVIDES = {language, guid, site_name, author}
+base 自体は dummy ClassVar を埋めた concrete subclass で検証する。DOI 抽出
+の正規表現は subclass 共通の重要ロジックなので個別に網羅する。
 """
 
 from __future__ import annotations
@@ -18,22 +14,27 @@ import feedparser
 
 from app.collection.ingestion.domain.fetched_article import (
     Failed,
-    ReadyForArticle,
+    FetchOutcome,
 )
 from app.collection.ingestion.fetchers.frontiers._common import (
     BaseFrontiersFetcher,
     _extract_doi,
 )
+from tests.collection.ingestion.fetchers._invariant import (
+    assert_at_least_one_passport,
+    assert_metadata_audit_safe,
+    assert_passports_persistable,
+    assert_provides_contract,
+)
 
-_FIXTURES = Path(__file__).parent.parent.parent.parent.parent / "fixtures"
-_FIXTURE_AI = _FIXTURES / "frontiers_ai_rss.xml"
-
-_SOURCE_ID = 1
+_FIXTURE_AI = (
+    Path(__file__).parent.parent.parent.parent.parent
+    / "fixtures"
+    / "frontiers_ai_rss.xml"
+)
 
 
 class _ConcreteFrontiersFetcher(BaseFrontiersFetcher):
-    """テスト専用の concrete subclass (ClassVar 必須項目を埋める)。"""
-
     NAME = "Frontiers in Test Journal"
     ENDPOINT_URL = "https://www.frontiersin.org/journals/test-journal/rss"
     JOURNAL_NAME = "Frontiers in Test Journal"
@@ -47,9 +48,7 @@ def _entry(**overrides: Any) -> dict[str, Any]:
         "summary": (
             "This is a long enough abstract describing our novel approach "
             "to neural architecture search for time series forecasting. "
-            "We propose a method that achieves state-of-the-art performance "
-            "across multiple benchmark datasets. The proposed approach is "
-            "computationally efficient and theoretically grounded."
+            "We propose a method that achieves state-of-the-art performance."
         ),
         "published_parsed": time.struct_time((2026, 5, 4, 0, 0, 0, 0, 0, 0)),
         "author": "Jane Researcher",
@@ -58,147 +57,62 @@ def _entry(**overrides: Any) -> dict[str, Any]:
     return base
 
 
-class TestExtractDOI:
-    def test_extracts_frai_doi_from_link(self) -> None:
-        link = "https://www.frontiersin.org/articles/10.3389/frai.2026.1767330"
-        assert _extract_doi(link) == "10.3389/frai.2026.1767330"
-
-    def test_extracts_frobt_doi(self) -> None:
-        link = "https://www.frontiersin.org/articles/10.3389/frobt.2026.1767798"
-        assert _extract_doi(link) == "10.3389/frobt.2026.1767798"
-
-    def test_extracts_fenrg_doi(self) -> None:
-        link = "https://www.frontiersin.org/articles/10.3389/fenrg.2026.1718662"
-        assert _extract_doi(link) == "10.3389/fenrg.2026.1718662"
-
-    def test_extracts_fmats_doi(self) -> None:
-        link = "https://www.frontiersin.org/articles/10.3389/fmats.2026.1802326"
-        assert _extract_doi(link) == "10.3389/fmats.2026.1802326"
-
-    def test_returns_none_for_non_doi_url(self) -> None:
-        assert _extract_doi("https://example.com/no-doi") is None
-
-    def test_returns_none_for_none_input(self) -> None:
-        assert _extract_doi(None) is None
+def test_doi_extractor_handles_known_journal_prefixes() -> None:
+    """4 journal の DOI URL を正規表現で抽出できる (subclass 共通の不変条件)。"""
+    for prefix in ("frai", "frobt", "fenrg", "fmats"):
+        link = f"https://www.frontiersin.org/articles/10.3389/{prefix}.2026.1767330"
+        assert _extract_doi(link) == f"10.3389/{prefix}.2026.1767330"
 
 
-class TestConvertEntry:
-    def setup_method(self) -> None:
-        self.fetcher = _ConcreteFrontiersFetcher()
-        self.source_id = _SOURCE_ID
-
-    def test_valid_entry_yields_ready(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en")
-        assert isinstance(outcome, ReadyForArticle)
-        assert outcome.article.title.startswith("A study on neural")
-        assert outcome.article.body.startswith("This is a long enough")
-
-    def test_empty_title_returns_failed(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(title=""), self.source_id, "en")
-        assert isinstance(outcome, Failed)
-        assert outcome.reason.code == "title_missing"
-
-    def test_short_body_returns_failed(self) -> None:
-        # Editorial / Correction で description が空のケース
-        outcome = self.fetcher._convert_entry(
-            _entry(summary="brief."), self.source_id, "en"
-        )
-        assert isinstance(outcome, Failed)
-        assert outcome.reason.code == "body_too_short"
-
-    def test_missing_pubdate_returns_failed(self) -> None:
-        # Pattern R は published_at 必須 (Failed で drop)
-        entry = _entry()
-        del entry["published_parsed"]
-        outcome = self.fetcher._convert_entry(entry, self.source_id, "en")
-        assert isinstance(outcome, Failed)
-        assert outcome.reason.code == "published_at_missing"
-
-    def test_invalid_link_returns_failed(self) -> None:
-        outcome = self.fetcher._convert_entry(
-            _entry(link="not-a-url"), self.source_id, "en"
-        )
-        assert isinstance(outcome, Failed)
-        assert outcome.reason.code == "extraction_empty"
-
-    def test_metadata_author_passthrough(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en")
-        assert isinstance(outcome, ReadyForArticle)
-        assert outcome.metadata.author == "Jane Researcher"
-
-    def test_metadata_author_none_when_missing(self) -> None:
-        entry = _entry()
-        del entry["author"]
-        outcome = self.fetcher._convert_entry(entry, self.source_id, "en")
-        assert isinstance(outcome, ReadyForArticle)
-        assert outcome.metadata.author is None
-
-    def test_metadata_tags_empty_ignoring_article_type(self) -> None:
-        # <category>Original Research</category> は記事種別なので tags に
-        # 詰めない (空 tuple のまま)。feedparser は category を tags にマップ
-        # するが、_convert_entry は明示的に () で上書きする。
-        entry = _entry(tags=[{"term": "Original Research"}])
-        outcome = self.fetcher._convert_entry(entry, self.source_id, "en")
-        assert isinstance(outcome, ReadyForArticle)
-        assert outcome.metadata.tags == ()
-
-    def test_metadata_extras_license_hardcode(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en")
-        assert isinstance(outcome, ReadyForArticle)
-        assert outcome.metadata.extras is not None
-        assert outcome.metadata.extras["license"] == "CC BY 4.0"
-
-    def test_metadata_extras_doi_extracted(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en")
-        assert isinstance(outcome, ReadyForArticle)
-        assert outcome.metadata.extras is not None
-        assert outcome.metadata.extras["doi"] == "10.3389/frai.2026.1234567"
-
-    def test_metadata_site_name_uses_journal_name(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en")
-        assert isinstance(outcome, ReadyForArticle)
-        assert outcome.metadata.site_name == "Frontiers in Test Journal"
-
-    def test_metadata_image_url_none(self) -> None:
-        # Frontiers RSS は画像を提供しない
-        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en")
-        assert isinstance(outcome, ReadyForArticle)
-        assert outcome.metadata.image_url is None
-
-    def test_metadata_language_passthrough(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en")
-        assert isinstance(outcome, ReadyForArticle)
-        assert outcome.metadata.language == "en"
-
-    def test_metadata_guid_extracted(self) -> None:
-        outcome = self.fetcher._convert_entry(_entry(), self.source_id, "en")
-        assert isinstance(outcome, ReadyForArticle)
-        assert (
-            outcome.metadata.guid
-            == "https://www.frontiersin.org/articles/10.3389/frai.2026.1234567"
-        )
+def test_doi_extractor_returns_none_for_unrelated_url() -> None:
+    assert _extract_doi("https://example.com/no-doi") is None
+    assert _extract_doi(None) is None
 
 
-class TestFixtureParsing:
-    def test_fixture_parses_two_entries(self) -> None:
-        feed = feedparser.parse(_FIXTURE_AI.read_bytes())
-        assert len(feed.entries) == 2
+def _outcomes_from_fixture() -> list[FetchOutcome]:
+    fetcher = _ConcreteFrontiersFetcher()
+    feed = feedparser.parse(_FIXTURE_AI.read_bytes())
+    return [fetcher._convert_entry(e, 1, "en") for e in feed.entries]
 
-    def test_fixture_first_entry_yields_ready(self) -> None:
-        feed = feedparser.parse(_FIXTURE_AI.read_bytes())
-        fetcher = _ConcreteFrontiersFetcher()
-        outcome = fetcher._convert_entry(feed.entries[0], _SOURCE_ID, "en")
-        assert isinstance(outcome, ReadyForArticle)
-        assert "HyRA-CXR" in outcome.article.title
-        assert "hybrid architecture" in outcome.article.body
-        assert outcome.metadata.author == "Wadhah Zeyad Tareq"
-        assert outcome.metadata.extras is not None
-        assert outcome.metadata.extras["doi"] == "10.3389/frai.2026.1767330"
 
-    def test_fixture_second_entry_drops_short_editorial(self) -> None:
-        feed = feedparser.parse(_FIXTURE_AI.read_bytes())
-        fetcher = _ConcreteFrontiersFetcher()
-        outcome = fetcher._convert_entry(feed.entries[1], _SOURCE_ID, "en")
-        # Editorial (description "Brief editorial." 16 chars) は body_too_short で drop
-        assert isinstance(outcome, Failed)
-        assert outcome.reason.code == "body_too_short"
+def test_fixture_yields_at_least_one_passport() -> None:
+    assert_at_least_one_passport(_outcomes_from_fixture())
+
+
+def test_passports_satisfy_persistence_invariants() -> None:
+    assert_passports_persistable(_outcomes_from_fixture())
+
+
+def test_provides_contract_holds() -> None:
+    assert_provides_contract(
+        _outcomes_from_fixture(), _ConcreteFrontiersFetcher.PROVIDES
+    )
+
+
+def test_metadata_audit_safe() -> None:
+    assert_metadata_audit_safe(_outcomes_from_fixture())
+
+
+def test_short_body_dropped_as_failed() -> None:
+    """Pattern R: description が短い editorial 等は body_too_short で drop。"""
+    fetcher = _ConcreteFrontiersFetcher()
+    outcome = fetcher._convert_entry(_entry(summary="brief."), 1, "en")
+    assert isinstance(outcome, Failed)
+    assert outcome.reason.code == "body_too_short"
+
+
+def test_missing_pubdate_dropped_as_failed() -> None:
+    """Pattern R: published_at は HTML 補完がないため必須。"""
+    fetcher = _ConcreteFrontiersFetcher()
+    entry = _entry()
+    del entry["published_parsed"]
+    outcome = fetcher._convert_entry(entry, 1, "en")
+    assert isinstance(outcome, Failed)
+    assert outcome.reason.code == "published_at_missing"
+
+
+def test_invalid_link_dropped_as_failed() -> None:
+    fetcher = _ConcreteFrontiersFetcher()
+    outcome = fetcher._convert_entry(_entry(link="not-a-url"), 1, "en")
+    assert isinstance(outcome, Failed)
+    assert outcome.reason.code == "extraction_empty"

@@ -344,15 +344,18 @@ async def extract_html_body(
         )
         return None
 
-    fa = advanced.article
     async with session_factory() as session:
         article_repo = ArticleRepository(session)
-        draft = ArticleDraft(title=fa.title, body=fa.body, published_at=fa.published_at)
+        draft = ArticleDraft(
+            title=advanced.title,
+            body=advanced.body,
+            published_at=advanced.published_at,
+        )
         persisted = await article_repo.save(
             draft=draft,
             discovered_article_id=staged.discovered_id,
-            source_id=fa.source_id,
-            source_url=fa.source_url,
+            source_id=advanced.source_id,
+            source_url=advanced.source_url,
         )
         if persisted is None:
             persisted = await article_repo.find_by_discovered_article_id(
@@ -370,8 +373,8 @@ async def extract_html_body(
         noise_repo = NoiseRepository(session)
         ready_for_extraction = await ReadyForExtraction.try_advance_from(
             article_id=persisted.id,
-            original_title=fa.title,
-            original_content=fa.body,
+            original_title=advanced.title,
+            original_content=advanced.body,
             extraction_repo=extraction_repo,
             noise_repo=noise_repo,
         )

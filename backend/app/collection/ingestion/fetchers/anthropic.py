@@ -24,7 +24,7 @@ class AnthropicFetcher(BaseSitemapFetcher):
 
     PROVIDES は基底の ``{"site_name", "language"}`` をそのまま継承。``guid``
     は loc URL でほぼ確定だが、契約として宣言するほど安定的でないため
-    PROVIDES には含めない (``FetchedMetadata.guid`` には毎回詰める)。
+    PROVIDES には含めない (``metadata["guid"]`` には毎回詰める)。
     """
 
     NAME: ClassVar[str] = "Anthropic"

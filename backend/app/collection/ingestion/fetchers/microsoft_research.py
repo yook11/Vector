@@ -36,8 +36,7 @@ from app.collection.extraction.domain.value_objects import PublishedAt
 from app.collection.ingestion.domain.fetched_article import (
     Failed,
     FailureReason,
-    FetchedArticle,
-    FetchedMetadata,
+    FetchedEntry,
     FetchOutcome,
     ReadyForArticle,
 )
@@ -234,7 +233,7 @@ class MicrosoftResearchFetcher:
             )
 
         try:
-            article = FetchedArticle(
+            ready = ReadyForArticle(
                 title=title,
                 body=body,
                 published_at=published_at,
@@ -256,14 +255,17 @@ class MicrosoftResearchFetcher:
         )
         authors = _extract_authors_from_csv(raw_author)
 
-        metadata = FetchedMetadata(
-            author=author,
-            authors=authors,
-            tags=_extract_tags(entry),
-            image_url=None,  # MR RSS は <media:content> を提供しない
-            language=feed_language,
-            guid=_extract_guid(entry),
-            site_name=self.NAME,
-        )
+        metadata: dict[str, Any] = {
+            "language": feed_language,
+            "site_name": self.NAME,
+        }
+        if author:
+            metadata["author"] = author
+        if authors:
+            metadata["authors"] = list(authors)
+        if tags := _extract_tags(entry):
+            metadata["tags"] = list(tags)
+        if guid := _extract_guid(entry):
+            metadata["guid"] = guid
 
-        return ReadyForArticle(article=article, metadata=metadata)
+        return FetchedEntry(item=ready, metadata=metadata)

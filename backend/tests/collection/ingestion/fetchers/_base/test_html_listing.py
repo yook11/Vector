@@ -1,13 +1,14 @@
-"""``BaseHtmlListingFetcher`` の単体テスト (Phase 3 PR 3-i-1)。
+"""``BaseHtmlListingFetcher`` の振る舞い不変条件テスト (Phase 3 PR 3-i-1)。
 
-per-base 設計検証:
-- XPath で href を抽出し ``urljoin`` で絶対 URL 化する
-- ``EXCLUDED_PATHS`` で listing 内 category landing 等を除外する
-- 重複 URL を ``seen`` set で dedup する
-- ``MAX_ENTRIES`` で件数を cap する
-- ``_convert_entry`` は ``prefer_html_title=True`` の ``PendingHtmlFetch``
-  を返し、title は URL slug プレースホルダ
-- 不正 URL は ``Failed(extraction_empty)`` で個別 drop (全体停止しない)
+検証する不変条件:
+
+- listing HTML から XPath で /news/ 配下の link だけが抽出される
+- ``EXCLUDED_PATHS`` の URL は yield されず下流に流れない
+- 同 URL の重複は ``fetch()`` で dedup されて 1 件に集約
+- ``MAX_ENTRIES`` で yield 件数が cap される (大量バックフィル防止)
+- 不正 URL は ``Failed`` で個別 drop され全体停止しない
+- ``_convert_entry`` は ``prefer_html_title=True`` の passport を返す
+  (title 確定は HTML 抽出 task の責務)
 """
 
 from __future__ import annotations
@@ -18,17 +19,19 @@ import pytest
 
 from app.collection.ingestion.domain.fetched_article import (
     Failed,
+    FetchedEntry,
     PendingHtmlFetch,
 )
 from app.collection.ingestion.fetchers._base.html_listing import BaseHtmlListingFetcher
-
-_SOURCE_ID = 1
+from tests.collection.ingestion.fetchers._invariant import (
+    assert_at_least_one_passport,
+    assert_metadata_audit_safe,
+    assert_passports_persistable,
+    assert_provides_contract,
+)
 
 
 class _SampleFetcher(BaseHtmlListingFetcher):
-    """テスト用 subclass。実 fetch は呼ばず、parse / convert / filter のみ
-    検証する。"""
-
     NAME: ClassVar[str] = "Sample"
     ENDPOINT_URL: ClassVar[str] = "https://example.com/news"
     LISTING_URL: ClassVar[str] = "https://example.com/news"
@@ -51,119 +54,78 @@ _FIXTURE_HTML = b"""<!DOCTYPE html>
 """
 
 
-class TestParseListing:
-    def test_xpath_extracts_only_news_links(self) -> None:
-        urls = _SampleFetcher._parse_listing(_FIXTURE_HTML)
-        # External /external link is excluded by XPath itself
-        assert all(url.startswith("https://example.com/news/") for url in urls)
-
-    def test_xpath_resolves_relative_urls(self) -> None:
-        urls = _SampleFetcher._parse_listing(_FIXTURE_HTML)
-        assert "https://example.com/news/article-one" in urls
-
-    def test_xpath_returns_duplicates_pre_dedup(self) -> None:
-        # _parse_listing 自体は dedup しない (fetch ループで dedup)
-        urls = _SampleFetcher._parse_listing(_FIXTURE_HTML)
-        assert urls.count("https://example.com/news/article-one") == 2
+def _outcomes() -> list:
+    fetcher = _SampleFetcher()
+    urls = _SampleFetcher._parse_listing(_FIXTURE_HTML)
+    seen: set[str] = set()
+    out: list = []
+    for url in urls:
+        if url in seen or not fetcher._url_matches(url):
+            continue
+        seen.add(url)
+        out.append(fetcher._convert_entry(url, 1))
+    return out
 
 
-class TestUrlMatches:
-    def test_excluded_paths_filter(self) -> None:
-        fetcher = _SampleFetcher()
-        assert fetcher._url_matches("https://example.com/news/article-one") is True
-        assert fetcher._url_matches("https://example.com/news/categories") is False
+def test_passports_satisfy_persistence_invariants() -> None:
+    assert_at_least_one_passport(_outcomes())
+    assert_passports_persistable(_outcomes())
 
 
-class TestConvertEntry:
-    def setup_method(self) -> None:
-        self.fetcher = _SampleFetcher()
-
-    def test_yields_pending_with_prefer_html_title(self) -> None:
-        outcome = self.fetcher._convert_entry(
-            "https://example.com/news/article-one", _SOURCE_ID
-        )
-        assert isinstance(outcome, PendingHtmlFetch)
-        assert outcome.prefer_html_title is True
-
-    def test_title_is_url_slug_placeholder(self) -> None:
-        outcome = self.fetcher._convert_entry(
-            "https://example.com/news/article-one", _SOURCE_ID
-        )
-        assert isinstance(outcome, PendingHtmlFetch)
-        assert outcome.title == "article-one"
-
-    def test_published_at_hint_is_none(self) -> None:
-        outcome = self.fetcher._convert_entry(
-            "https://example.com/news/article-one", _SOURCE_ID
-        )
-        assert isinstance(outcome, PendingHtmlFetch)
-        assert outcome.published_at_hint is None
-
-    def test_metadata_site_name_and_language_set(self) -> None:
-        outcome = self.fetcher._convert_entry(
-            "https://example.com/news/article-one", _SOURCE_ID
-        )
-        assert isinstance(outcome, PendingHtmlFetch)
-        assert outcome.metadata.site_name == "Sample"
-        assert outcome.metadata.language == "en"
-        assert outcome.metadata.guid == "https://example.com/news/article-one"
-
-    def test_invalid_url_returns_failed(self) -> None:
-        outcome = self.fetcher._convert_entry("not-a-url", _SOURCE_ID)
-        assert isinstance(outcome, Failed)
-        assert outcome.reason.code == "extraction_empty"
+def test_provides_contract_holds() -> None:
+    assert_provides_contract(_outcomes(), _SampleFetcher.PROVIDES)
 
 
-class TestFetchPipeline:
-    @pytest.mark.asyncio
-    async def test_fetch_dedups_excludes_and_caps(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        fetcher = _SampleFetcher()
+def test_metadata_audit_safe() -> None:
+    assert_metadata_audit_safe(_outcomes())
 
-        async def _fake_fetch_listing(self: _SampleFetcher) -> bytes:
-            return _FIXTURE_HTML
 
-        monkeypatch.setattr(
-            _SampleFetcher, "_fetch_listing", _fake_fetch_listing, raising=True
-        )
+def test_invalid_url_isolated_to_failed() -> None:
+    """1 entry の invalid URL は他 entry を巻き込まない (部分回復契約)。"""
+    outcome = _SampleFetcher()._convert_entry("not-a-url", 1)
+    assert isinstance(outcome, Failed)
+    assert outcome.reason.code == "extraction_empty"
 
-        outcomes: list[object] = []
-        async for o in fetcher.fetch(_SOURCE_ID):
-            outcomes.append(o)
 
-        # Expected: article-one + article-two (categories excluded, dup dedup'd,
-        # external link not matched by XPath)
-        assert len(outcomes) == 2
-        urls = [
-            str(o.source_url) if isinstance(o, PendingHtmlFetch) else None
-            for o in outcomes
-        ]
-        assert "https://example.com/news/article-one" in urls
-        assert "https://example.com/news/article-two" in urls
+@pytest.mark.asyncio
+async def test_fetch_dedups_and_excludes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """fetch() ループは EXCLUDED_PATHS / 重複を取り除いた passport だけ yield する。"""
+    fetcher = _SampleFetcher()
 
-    @pytest.mark.asyncio
-    async def test_fetch_respects_max_entries(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        many_links = b"".join(
-            f'<a href="/news/article-{i}">A{i}</a>'.encode() for i in range(50)
-        )
-        many_html = b"<!DOCTYPE html><html><body>" + many_links + b"</body></html>"
+    async def _fake_fetch_listing(self: _SampleFetcher) -> bytes:
+        return _FIXTURE_HTML
 
-        class _Capped(_SampleFetcher):
-            MAX_ENTRIES: ClassVar[int] = 5
+    monkeypatch.setattr(
+        _SampleFetcher, "_fetch_listing", _fake_fetch_listing, raising=True
+    )
 
-        async def _fake_fetch_listing(self: _Capped) -> bytes:
-            return many_html
+    outcomes = [o async for o in fetcher.fetch(1)]
+    assert len(outcomes) == 2
+    urls = {
+        str(o.item.source_url)
+        for o in outcomes
+        if isinstance(o, FetchedEntry) and isinstance(o.item, PendingHtmlFetch)
+    }
+    assert urls == {
+        "https://example.com/news/article-one",
+        "https://example.com/news/article-two",
+    }
 
-        monkeypatch.setattr(
-            _Capped, "_fetch_listing", _fake_fetch_listing, raising=True
-        )
 
-        fetcher = _Capped()
-        outcomes: list[object] = []
-        async for o in fetcher.fetch(_SOURCE_ID):
-            outcomes.append(o)
+@pytest.mark.asyncio
+async def test_fetch_respects_max_entries_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    """MAX_ENTRIES = 5 のとき 50 link → 5 件で打ち切り。"""
+    many_links = b"".join(
+        f'<a href="/news/article-{i}">A{i}</a>'.encode() for i in range(50)
+    )
+    many_html = b"<!DOCTYPE html><html><body>" + many_links + b"</body></html>"
 
-        assert len(outcomes) == 5
+    class _Capped(_SampleFetcher):
+        MAX_ENTRIES: ClassVar[int] = 5
+
+    async def _fake_fetch_listing(self: _Capped) -> bytes:
+        return many_html
+
+    monkeypatch.setattr(_Capped, "_fetch_listing", _fake_fetch_listing, raising=True)
+    outcomes = [o async for o in _Capped().fetch(1)]
+    assert len(outcomes) == 5

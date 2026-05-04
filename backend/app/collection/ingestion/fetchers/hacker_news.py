@@ -2,7 +2,7 @@
 
 collection-acquisition-redesign Phase 1e。HN はソース仕様が API ベース (Algolia
 HN Search API) で RSS / Atom feed を持たないが、API hit の ``url`` は外部の
-任意サイトを指すため本文は HN 側で取得できない。よって ``FetchedArticle``
+任意サイトを指すため本文は HN 側で取得できない。よって ``ReadyForArticle``
 invariant (body ≥ 50 chars) を API 単独で満たせず、``PendingHtmlFetch`` を
 yield し後段 ``extract_html_body`` task が trafilatura で本文を取得する
 **Pattern H 構造同型** で実装する (FierceBiotech / The Register と同じ流れ)。
@@ -38,7 +38,7 @@ from app.collection.extraction.domain.value_objects import PublishedAt
 from app.collection.ingestion.domain.fetched_article import (
     Failed,
     FailureReason,
-    FetchedMetadata,
+    FetchedEntry,
     FetchOutcome,
     PendingHtmlFetch,
 )
@@ -186,19 +186,20 @@ class HackerNewsFetcher:
         guid_raw = hit.get("objectID")
         guid = guid_raw if isinstance(guid_raw, str) and guid_raw else None
 
-        metadata = FetchedMetadata(
-            author=author,
-            tags=(),
-            image_url=None,
-            language=None,
-            guid=guid,
-            site_name=self.NAME,
-        )
+        metadata: dict[str, Any] = {
+            "site_name": self.NAME,
+        }
+        if author:
+            metadata["author"] = author
+        if guid:
+            metadata["guid"] = guid
 
-        return PendingHtmlFetch(
-            title=title,
-            source_id=source_id,
-            source_url=source_url,
-            published_at_hint=published_at_hint,
+        return FetchedEntry(
+            item=PendingHtmlFetch(
+                title=title,
+                source_id=source_id,
+                source_url=source_url,
+                published_at_hint=published_at_hint,
+            ),
             metadata=metadata,
         )

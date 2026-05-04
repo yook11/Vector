@@ -43,8 +43,8 @@ class Fetcher(Protocol):
     feed/API endpoint。``news_sources.endpoint_url`` は historical artifact
     として残置されるが runtime には反映されない。
 
-    ``PROVIDES`` はそのソースが ``FetchedMetadata`` の中で **必ず** 値を提供する
-    フィールド名の frozenset (Phase 1 の per-source 実装で宣言する)。テスト・
+    ``PROVIDES`` はそのソースが ``FetchedEntry.metadata`` dict に **必ず** key を
+    含めるフィールド名の frozenset (Phase 1 の per-source 実装で宣言する)。テスト・
     UI の feature gate・コンポジションルートで「このソースは image_url を必ず
     持つか」を静的に問い合わせるために使う。厳密な runtime 検証 (Fetcher が
     PROVIDES に列挙したフィールドを実際に返したか) は per-source テストで担保

@@ -34,8 +34,7 @@ from app.collection.extraction.domain.value_objects import PublishedAt
 from app.collection.ingestion.domain.fetched_article import (
     Failed,
     FailureReason,
-    FetchedArticle,
-    FetchedMetadata,
+    FetchedEntry,
     FetchOutcome,
     ReadyForArticle,
 )
@@ -283,7 +282,7 @@ class ELifeFetcher:
             )
 
         try:
-            article = FetchedArticle(
+            ready = ReadyForArticle(
                 title=title,
                 body=body,
                 published_at=published_at,
@@ -311,20 +310,22 @@ class ELifeFetcher:
                     primary_author = primary_author[:200]
 
         guid = _extract_guid(entry)
-        extras: dict[str, Any] = {"license": _LICENSE}
-        doi = _extract_doi(guid)
-        if doi:
-            extras["doi"] = doi
+        metadata: dict[str, Any] = {
+            "language": feed_language,
+            "site_name": self.NAME,
+            "license": _LICENSE,
+        }
+        if primary_author:
+            metadata["author"] = primary_author
+        if authors:
+            metadata["authors"] = list(authors)
+        if tags := _extract_tags(entry):
+            metadata["tags"] = list(tags)
+        if image_url := _extract_image_url(entry):
+            metadata["image_url"] = str(image_url)
+        if guid:
+            metadata["guid"] = guid
+        if doi := _extract_doi(guid):
+            metadata["doi"] = doi
 
-        metadata = FetchedMetadata(
-            author=primary_author,
-            authors=authors,
-            tags=_extract_tags(entry),
-            image_url=_extract_image_url(entry),
-            language=feed_language,
-            guid=guid,
-            site_name=self.NAME,
-            extras=extras,
-        )
-
-        return ReadyForArticle(article=article, metadata=metadata)
+        return FetchedEntry(item=ready, metadata=metadata)

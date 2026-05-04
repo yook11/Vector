@@ -1,106 +1,63 @@
-"""``ORNLNewsFetcher`` の単体テスト (Phase 3 PR 3-i-1)。
+"""``ORNLNewsFetcher`` (HTML listing Pattern H) の不変条件テスト。
 
-per-source 設計検証:
-- listing HTML から /news/ 配下の link を XPath 抽出
-- ``EXCLUDED_PATHS`` で 6 件の category landing を除外
-- 重複 URL は ``seen`` set で dedup
-- ``PROVIDES = {site_name, language}`` (HTML listing 経路は title/published_at
-  を Stage 2 に委ねる)
+listing HTML の記事 link 抽出は本ソース固有のため XPath 結果も検証する。
+それ以外の不変条件 (永続化可能性 / PROVIDES / audit) は共通ヘルパーに委譲。
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
-from app.collection.ingestion.domain.fetched_article import PendingHtmlFetch
+from app.collection.ingestion.domain.fetched_article import FetchOutcome
 from app.collection.ingestion.fetchers.ornl import ORNLNewsFetcher
+from tests.collection.ingestion.fetchers._invariant import (
+    assert_at_least_one_passport,
+    assert_metadata_audit_safe,
+    assert_passports_persistable,
+    assert_provides_contract,
+)
 
 _FIXTURE = Path(__file__).parent.parent.parent.parent / "fixtures" / "ornl_listing.html"
 
-_SOURCE_ID = 1
+
+def _outcomes() -> list[FetchOutcome]:
+    fetcher = ORNLNewsFetcher()
+    urls = ORNLNewsFetcher._parse_listing(_FIXTURE.read_bytes())
+    seen: set[str] = set()
+    outcomes: list[FetchOutcome] = []
+    for url in urls:
+        if url in seen or not fetcher._url_matches(url):
+            continue
+        seen.add(url)
+        outcomes.append(fetcher._convert_entry(url, 1))
+    return outcomes
 
 
-class TestProvides:
-    def test_provides_minimum_set(self) -> None:
-        assert ORNLNewsFetcher.PROVIDES == frozenset({"site_name", "language"})
-
-    def test_excluded_paths_cover_known_categories(self) -> None:
-        # 2026-05-04 実 listing で確認した 6 件
-        assert "/news/releases" in ORNLNewsFetcher.EXCLUDED_PATHS
-        assert "/news/features" in ORNLNewsFetcher.EXCLUDED_PATHS
-        assert "/news/researcher-profiles" in ORNLNewsFetcher.EXCLUDED_PATHS
-        assert "/news/story-tips" in ORNLNewsFetcher.EXCLUDED_PATHS
-        assert "/news/audio-spots" in ORNLNewsFetcher.EXCLUDED_PATHS
-        assert "/news/honors-and-awards" in ORNLNewsFetcher.EXCLUDED_PATHS
+def test_listing_xpath_extracts_only_news_links() -> None:
+    """listing HTML から ``/news/`` 配下の link のみが抽出されること。"""
+    urls = ORNLNewsFetcher._parse_listing(_FIXTURE.read_bytes())
+    assert urls
+    assert all(url.startswith("https://www.ornl.gov/news/") for url in urls)
 
 
-class TestParseListingFixture:
-    def test_xpath_extracts_news_links(self) -> None:
-        data = _FIXTURE.read_bytes()
-        urls = ORNLNewsFetcher._parse_listing(data)
-        # 6 categories + 3 articles + 1 duplicate = 10 raw matches
-        # (external link is excluded by XPath)
-        assert len(urls) == 10
-        assert all(url.startswith("https://www.ornl.gov/news/") for url in urls)
+def test_excluded_paths_drop_category_landings() -> None:
+    """category landing は yield されない (記事ページのみが下流に流れる)。"""
+    fetcher = ORNLNewsFetcher()
+    for category_path in fetcher.EXCLUDED_PATHS:
+        assert not fetcher._url_matches(f"https://www.ornl.gov{category_path}")
 
 
-class TestFetchPipelineFixture:
-    @pytest.mark.asyncio
-    async def test_fetch_excludes_categories_and_dedups(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        data = _FIXTURE.read_bytes()
+def test_fixture_yields_at_least_one_passport() -> None:
+    assert_at_least_one_passport(_outcomes())
 
-        async def _fake_fetch_listing(self: ORNLNewsFetcher) -> bytes:
-            return data
 
-        monkeypatch.setattr(
-            ORNLNewsFetcher, "_fetch_listing", _fake_fetch_listing, raising=True
-        )
+def test_passports_satisfy_persistence_invariants() -> None:
+    assert_passports_persistable(_outcomes())
 
-        fetcher = ORNLNewsFetcher()
-        outcomes: list[object] = []
-        async for o in fetcher.fetch(_SOURCE_ID):
-            outcomes.append(o)
 
-        # Expected: 3 unique articles (6 categories excluded, 1 duplicate dedup'd)
-        assert len(outcomes) == 3
-        for outcome in outcomes:
-            assert isinstance(outcome, PendingHtmlFetch)
-            assert outcome.metadata.site_name == "ORNL"
-            assert outcome.metadata.language == "en"
-            assert outcome.prefer_html_title is True
+def test_provides_contract_holds() -> None:
+    assert_provides_contract(_outcomes(), ORNLNewsFetcher.PROVIDES)
 
-    @pytest.mark.asyncio
-    async def test_fetch_yields_full_news_urls(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        data = _FIXTURE.read_bytes()
 
-        async def _fake_fetch_listing(self: ORNLNewsFetcher) -> bytes:
-            return data
-
-        monkeypatch.setattr(
-            ORNLNewsFetcher, "_fetch_listing", _fake_fetch_listing, raising=True
-        )
-
-        fetcher = ORNLNewsFetcher()
-        urls: list[str] = []
-        async for o in fetcher.fetch(_SOURCE_ID):
-            assert isinstance(o, PendingHtmlFetch)
-            urls.append(str(o.source_url))
-
-        assert (
-            "https://www.ornl.gov/news/biosensor-detects-early-fungal-outbreaks-"
-            "advances-plant-biotechnology" in urls
-        )
-        assert (
-            "https://www.ornl.gov/news/photon-framework-scales-ai-vulnerability-discovery"
-            in urls
-        )
-        assert (
-            "https://www.ornl.gov/news/imaging-innovation-advances-nuclear-materials-qualification"
-            in urls
-        )
+def test_metadata_audit_safe() -> None:
+    assert_metadata_audit_safe(_outcomes())

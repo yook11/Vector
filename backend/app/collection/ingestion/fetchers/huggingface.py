@@ -36,7 +36,7 @@ from app.collection.extraction.domain.value_objects import PublishedAt
 from app.collection.ingestion.domain.fetched_article import (
     Failed,
     FailureReason,
-    FetchedMetadata,
+    FetchedEntry,
     FetchOutcome,
     PendingHtmlFetch,
 )
@@ -204,23 +204,22 @@ class HuggingFaceBlogFetcher:
 
         published_at_hint = _parse_published_at(entry)
 
-        org = _extract_hf_org(link)
-        extras: dict[str, Any] | None = {"hf_org": org} if org else None
+        metadata: dict[str, Any] = {
+            "author": _AUTHOR_HARDCODED,
+            "language": feed_language,
+            "site_name": self.NAME,
+        }
+        if guid := _extract_guid(entry):
+            metadata["guid"] = guid
+        if org := _extract_hf_org(link):
+            metadata["hf_org"] = org
 
-        metadata = FetchedMetadata(
-            author=_AUTHOR_HARDCODED,
-            tags=(),
-            image_url=None,
-            language=feed_language,
-            guid=_extract_guid(entry),
-            site_name=self.NAME,
-            extras=extras,
-        )
-
-        return PendingHtmlFetch(
-            title=title,
-            source_id=source_id,
-            source_url=source_url,
-            published_at_hint=published_at_hint,
+        return FetchedEntry(
+            item=PendingHtmlFetch(
+                title=title,
+                source_id=source_id,
+                source_url=source_url,
+                published_at_hint=published_at_hint,
+            ),
             metadata=metadata,
         )

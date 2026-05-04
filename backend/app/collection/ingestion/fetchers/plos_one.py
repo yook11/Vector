@@ -34,8 +34,7 @@ from app.collection.extraction.domain.value_objects import PublishedAt
 from app.collection.ingestion.domain.fetched_article import (
     Failed,
     FailureReason,
-    FetchedArticle,
-    FetchedMetadata,
+    FetchedEntry,
     FetchOutcome,
     ReadyForArticle,
 )
@@ -233,7 +232,7 @@ class PLOSOneFetcher:
             )
 
         try:
-            article = FetchedArticle(
+            ready = ReadyForArticle(
                 title=title,
                 body=body,
                 published_at=published_at,
@@ -251,20 +250,20 @@ class PLOSOneFetcher:
 
         authors = _extract_authors(entry)
         primary_author = authors[0] if authors else None
-
         guid = _extract_guid(entry)
-        extras: dict[str, Any] = {"license": _LICENSE}
-        doi = _extract_doi(guid)
-        if doi:
-            extras["doi"] = doi
 
-        metadata = FetchedMetadata(
-            author=primary_author,
-            authors=authors,
-            language=feed_language,
-            guid=guid,
-            site_name=self.NAME,
-            extras=extras,
-        )
+        metadata: dict[str, Any] = {
+            "language": feed_language,
+            "site_name": self.NAME,
+            "license": _LICENSE,
+        }
+        if primary_author:
+            metadata["author"] = primary_author
+        if authors:
+            metadata["authors"] = list(authors)
+        if guid:
+            metadata["guid"] = guid
+        if doi := _extract_doi(guid):
+            metadata["doi"] = doi
 
-        return ReadyForArticle(article=article, metadata=metadata)
+        return FetchedEntry(item=ready, metadata=metadata)

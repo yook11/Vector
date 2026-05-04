@@ -35,8 +35,7 @@ from app.collection.extraction.domain.value_objects import PublishedAt
 from app.collection.ingestion.domain.fetched_article import (
     Failed,
     FailureReason,
-    FetchedArticle,
-    FetchedMetadata,
+    FetchedEntry,
     FetchOutcome,
     ReadyForArticle,
 )
@@ -143,7 +142,7 @@ class IEEESpectrumFetcher:
 
     ``content:encoded`` が空という WordPress VIP の運用差を per-source の事実
     として吸収し、summary を本文の唯一の経路とする。multi-author は
-    ``FetchedMetadata.authors`` tuple で保持する。
+    ``metadata["authors"]`` list で保持する。
     """
 
     NAME: ClassVar[str] = "IEEE Spectrum"
@@ -240,7 +239,7 @@ class IEEESpectrumFetcher:
             )
 
         try:
-            article = FetchedArticle(
+            ready = ReadyForArticle(
                 title=title,
                 body=body,
                 published_at=published_at,
@@ -259,14 +258,19 @@ class IEEESpectrumFetcher:
         authors = _extract_authors(entry)
         author = authors[0][:200] if authors else None
 
-        metadata = FetchedMetadata(
-            author=author,
-            authors=authors,
-            tags=_extract_tags(entry),
-            image_url=_extract_image_url(entry),
-            language=feed_language,
-            guid=_extract_guid(entry),
-            site_name=self.NAME,
-        )
+        metadata: dict[str, Any] = {
+            "language": feed_language,
+            "site_name": self.NAME,
+        }
+        if author:
+            metadata["author"] = author
+        if authors:
+            metadata["authors"] = list(authors)
+        if tags := _extract_tags(entry):
+            metadata["tags"] = list(tags)
+        if image_url := _extract_image_url(entry):
+            metadata["image_url"] = str(image_url)
+        if guid := _extract_guid(entry):
+            metadata["guid"] = guid
 
-        return ReadyForArticle(article=article, metadata=metadata)
+        return FetchedEntry(item=ready, metadata=metadata)

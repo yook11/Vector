@@ -49,8 +49,7 @@ from app.collection.extraction.domain.value_objects import PublishedAt
 from app.collection.ingestion.domain.fetched_article import (
     Failed,
     FailureReason,
-    FetchedArticle,
-    FetchedMetadata,
+    FetchedEntry,
     FetchOutcome,
     ReadyForArticle,
 )
@@ -250,7 +249,7 @@ class BaseFrontiersFetcher:
             )
 
         try:
-            article = FetchedArticle(
+            ready = ReadyForArticle(
                 title=title,
                 body=body,
                 published_at=published_at,
@@ -266,28 +265,17 @@ class BaseFrontiersFetcher:
                 )
             )
 
+        metadata: dict[str, Any] = {
+            "language": feed_language,
+            "site_name": self.JOURNAL_NAME,
+            "license": _LICENSE,
+        }
         author = entry.get("author")
         if isinstance(author, str) and author.strip():
-            author = author.strip()[:200]
-        else:
-            author = None
+            metadata["author"] = author.strip()[:200]
+        if guid := _extract_guid(entry):
+            metadata["guid"] = guid
+        if doi := (_extract_doi(link) or _extract_doi(metadata.get("guid"))):
+            metadata["doi"] = doi
 
-        guid = _extract_guid(entry)
-        extras: dict[str, Any] = {"license": _LICENSE}
-        doi = _extract_doi(link) or _extract_doi(guid)
-        if doi:
-            extras["doi"] = doi
-
-        # Frontiers の <category> は記事種別 (Original Research 等) で topic
-        # として意味を持たないため tags には詰めない (空 tuple のまま)
-        metadata = FetchedMetadata(
-            author=author,
-            tags=(),
-            image_url=None,
-            language=feed_language,
-            guid=guid,
-            site_name=self.JOURNAL_NAME,
-            extras=extras,
-        )
-
-        return ReadyForArticle(article=article, metadata=metadata)
+        return FetchedEntry(item=ready, metadata=metadata)

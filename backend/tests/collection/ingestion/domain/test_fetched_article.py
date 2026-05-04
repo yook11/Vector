@@ -1,503 +1,190 @@
-"""``FetchedArticle`` / ``FetchedMetadata`` / ``FetchOutcome`` の invariant テスト。"""
+"""ingestion BC 出口型の不変条件テスト。
+
+検証する不変条件:
+
+- ``ReadyForArticle`` は永続化 passport の 5 fields を strict に通すこと
+- ``PendingHtmlFetch`` は kiq message に乗せる前提 (frozen BaseModel) を満たすこと
+- ``try_advance_from`` の Pattern H promotion 規則 (RSS preferred / HTML fallback /
+  両欠落で Failed)
+- ``FetchedEntry`` envelope は item + opaque metadata を運ぶ Service-internal 型
+
+実装枚挙 (Optional フィールド数 / 個別バリデータ等) は書かない。
+"""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import ClassVar
 
 import pytest
 
 from app.collection.extraction.domain.value_objects import PublishedAt
 from app.collection.ingestion.domain.fetched_article import (
     Failed,
-    FailureReason,
-    FetchedArticle,
-    FetchedMetadata,
+    FetchedEntry,
     PendingHtmlFetch,
     ReadyForArticle,
 )
-from app.collection.ingestion.fetchers.protocol import Fetcher
 from app.shared.value_objects.safe_url import SafeUrl
 
 
-def _published_at() -> PublishedAt:
+def _pub() -> PublishedAt:
     return PublishedAt(value=datetime(2026, 4, 30, 0, 0, 0, tzinfo=UTC))
 
 
-def _safe_url(url: str = "https://example.com/article") -> SafeUrl:
-    return SafeUrl(url)
+def _url(s: str = "https://example.com/a") -> SafeUrl:
+    return SafeUrl(s)
 
 
-class TestFetchedArticle:
-    def test_accepts_minimal_valid_input(self) -> None:
-        article = FetchedArticle(
-            title="Test",
-            body="x" * 50,
-            published_at=_published_at(),
-            source_id=1,
-            source_url=_safe_url(),
-        )
-        assert article.title == "Test"
-        assert article.source_id == 1
+def _ready(**overrides: object) -> ReadyForArticle:
+    base: dict[str, object] = {
+        "title": "Test",
+        "body": "x" * 100,
+        "published_at": _pub(),
+        "source_id": 1,
+        "source_url": _url(),
+    }
+    base.update(overrides)
+    return ReadyForArticle(**base)  # type: ignore[arg-type]
 
-    def test_rejects_empty_title(self) -> None:
+
+def _pending(**overrides: object) -> PendingHtmlFetch:
+    base: dict[str, object] = {
+        "title": "Test",
+        "source_id": 1,
+        "source_url": _url(),
+    }
+    base.update(overrides)
+    return PendingHtmlFetch(**base)  # type: ignore[arg-type]
+
+
+class TestReadyForArticle:
+    """永続化 passport — 5 strict fields を通すこと、frozen であることだけ確認する。"""
+
+    def test_constructs_with_minimal_valid_input(self) -> None:
+        ready = _ready()
+        assert ready.title == "Test"
+        assert ready.source_id == 1
+
+    def test_rejects_inputs_violating_persistence_invariants(self) -> None:
         with pytest.raises(ValueError):
-            FetchedArticle(
-                title="",
-                body="x" * 50,
-                published_at=_published_at(),
-                source_id=1,
-                source_url=_safe_url(),
-            )
-
-    def test_rejects_title_over_500_chars(self) -> None:
+            _ready(title="")
         with pytest.raises(ValueError):
-            FetchedArticle(
-                title="x" * 501,
-                body="x" * 50,
-                published_at=_published_at(),
-                source_id=1,
-                source_url=_safe_url(),
-            )
-
-    def test_rejects_body_under_50_chars(self) -> None:
+            _ready(body="x" * 49)
         with pytest.raises(ValueError):
-            FetchedArticle(
-                title="Test",
-                body="x" * 49,
-                published_at=_published_at(),
-                source_id=1,
-                source_url=_safe_url(),
-            )
+            _ready(source_id=0)
 
-    def test_rejects_non_positive_source_id(self) -> None:
+    def test_is_frozen_to_protect_passport_integrity(self) -> None:
+        ready = _ready()
         with pytest.raises(ValueError):
-            FetchedArticle(
-                title="Test",
-                body="x" * 50,
-                published_at=_published_at(),
-                source_id=0,
-                source_url=_safe_url(),
-            )
-
-    def test_is_frozen(self) -> None:
-        article = FetchedArticle(
-            title="Test",
-            body="x" * 50,
-            published_at=_published_at(),
-            source_id=1,
-            source_url=_safe_url(),
-        )
-        with pytest.raises(ValueError):
-            article.title = "Changed"  # type: ignore[misc]
-
-
-class TestFailureReason:
-    def test_accepts_valid_code(self) -> None:
-        reason = FailureReason(code="http_transient", retryable=True)
-        assert reason.code == "http_transient"
-        assert reason.retryable is True
-        assert reason.detail is None
-
-    def test_accepts_detail(self) -> None:
-        reason = FailureReason(
-            code="published_at_missing",
-            retryable=False,
-            detail="rss_pubdate_missing",
-        )
-        assert reason.detail == "rss_pubdate_missing"
-
-    def test_is_frozen(self) -> None:
-        reason = FailureReason(code="http_transient", retryable=True)
-        with pytest.raises(ValueError):
-            reason.code = "http_blocked"  # type: ignore[misc]
-
-
-class TestFetchOutcome:
-    def test_ready_carries_article(self) -> None:
-        article = FetchedArticle(
-            title="Test",
-            body="x" * 50,
-            published_at=_published_at(),
-            source_id=1,
-            source_url=_safe_url(),
-        )
-        outcome = ReadyForArticle(article=article)
-        assert isinstance(outcome, ReadyForArticle)
-        assert outcome.article is article
-
-    def test_failed_carries_reason(self) -> None:
-        reason = FailureReason(code="extraction_empty", retryable=False)
-        outcome = Failed(reason=reason)
-        assert isinstance(outcome, Failed)
-        assert outcome.reason.code == "extraction_empty"
-
-    def test_match_dispatch(self) -> None:
-        """Union 型を ``match`` で分岐できる (上流 Service の典型用法)。"""
-        article = FetchedArticle(
-            title="Test",
-            body="x" * 50,
-            published_at=_published_at(),
-            source_id=1,
-            source_url=_safe_url(),
-        )
-        outcomes = [
-            ReadyForArticle(article=article),
-            Failed(reason=FailureReason(code="paywalled", retryable=False)),
-        ]
-        ready_count = 0
-        failed_codes: list[str] = []
-        for outcome in outcomes:
-            match outcome:
-                case ReadyForArticle(article=a):
-                    ready_count += 1
-                    assert a.title == "Test"
-                case Failed(reason=r):
-                    failed_codes.append(r.code)
-        assert ready_count == 1
-        assert failed_codes == ["paywalled"]
-
-
-class TestFetchedMetadata:
-    def test_default_all_none_or_empty(self) -> None:
-        metadata = FetchedMetadata()
-        assert metadata.summary is None
-        assert metadata.author is None
-        assert metadata.authors == ()
-        assert metadata.tags == ()
-        assert metadata.categories == ()
-        assert metadata.image_url is None
-        assert metadata.language is None
-        assert metadata.guid is None
-        assert metadata.updated_at is None
-        assert metadata.site_name is None
-        assert metadata.extras is None
-
-    def test_all_fields_populated(self) -> None:
-        metadata = FetchedMetadata(
-            summary="A short summary.",
-            author="Jane Doe",
-            authors=("Jane Doe", "John Smith"),
-            tags=("ai", "nlp"),
-            categories=("Technology",),
-            image_url=SafeUrl("https://example.com/cover.jpg"),
-            language="en-US",
-            guid="https://example.com/article",
-            updated_at=_published_at(),
-            site_name="Example",
-            extras={"word_count": 1234},
-        )
-        assert metadata.summary == "A short summary."
-        assert metadata.author == "Jane Doe"
-        assert metadata.authors == ("Jane Doe", "John Smith")
-        assert metadata.tags == ("ai", "nlp")
-        assert metadata.categories == ("Technology",)
-        assert str(metadata.image_url) == "https://example.com/cover.jpg"
-        assert metadata.language == "en-US"
-        assert metadata.guid == "https://example.com/article"
-        assert metadata.updated_at == _published_at()
-        assert metadata.site_name == "Example"
-        assert metadata.extras == {"word_count": 1234}
-
-    def test_summary_max_length_2000(self) -> None:
-        with pytest.raises(ValueError):
-            FetchedMetadata(summary="x" * 2001)
-
-    def test_author_max_length_200(self) -> None:
-        with pytest.raises(ValueError):
-            FetchedMetadata(author="x" * 201)
-
-    def test_language_max_length_20(self) -> None:
-        with pytest.raises(ValueError):
-            FetchedMetadata(language="x" * 21)
-
-    def test_guid_max_length_2048(self) -> None:
-        with pytest.raises(ValueError):
-            FetchedMetadata(guid="x" * 2049)
-
-    def test_site_name_max_length_100(self) -> None:
-        with pytest.raises(ValueError):
-            FetchedMetadata(site_name="x" * 101)
-
-    def test_image_url_invalid_safeurl_raises(self) -> None:
-        with pytest.raises(ValueError):
-            FetchedMetadata(image_url="not a url")  # type: ignore[arg-type]
-
-    def test_authors_tuple_immutable(self) -> None:
-        metadata = FetchedMetadata(authors=("a", "b"))
-        assert metadata.authors == ("a", "b")
-        assert isinstance(metadata.authors, tuple)
-
-    def test_extras_accepts_arbitrary_dict(self) -> None:
-        metadata = FetchedMetadata(extras={"points": 42, "comments": 10})
-        assert metadata.extras == {"points": 42, "comments": 10}
-
-    def test_updated_at_naive_datetime_rejected(self) -> None:
-        """``updated_at`` の UTC 強制は ``PublishedAt`` VO を経由して効く。"""
-        with pytest.raises(ValueError):
-            PublishedAt(value=datetime(2026, 4, 30, 0, 0, 0))
-
-    def test_is_frozen(self) -> None:
-        metadata = FetchedMetadata(summary="initial")
-        with pytest.raises(ValueError):
-            metadata.summary = "changed"  # type: ignore[misc]
-
-
-class TestReady:
-    def test_ready_with_explicit_metadata(self) -> None:
-        article = FetchedArticle(
-            title="Test",
-            body="x" * 50,
-            published_at=_published_at(),
-            source_id=1,
-            source_url=_safe_url(),
-        )
-        metadata = FetchedMetadata(summary="hi", language="en")
-        ready = ReadyForArticle(article=article, metadata=metadata)
-        assert ready.article is article
-        assert ready.metadata is metadata
-
-    def test_ready_default_metadata_empty(self) -> None:
-        """``metadata`` 省略時、空の ``FetchedMetadata`` がデフォルトで入る。"""
-        article = FetchedArticle(
-            title="Test",
-            body="x" * 50,
-            published_at=_published_at(),
-            source_id=1,
-            source_url=_safe_url(),
-        )
-        ready = ReadyForArticle(article=article)
-        assert isinstance(ready.metadata, FetchedMetadata)
-        assert ready.metadata == FetchedMetadata()
-
-    def test_ready_metadata_carries_values(self) -> None:
-        article = FetchedArticle(
-            title="Test",
-            body="x" * 50,
-            published_at=_published_at(),
-            source_id=1,
-            source_url=_safe_url(),
-        )
-        ready = ReadyForArticle(
-            article=article,
-            metadata=FetchedMetadata(tags=("ai",), site_name="Example"),
-        )
-        assert ready.metadata.tags == ("ai",)
-        assert ready.metadata.site_name == "Example"
+            ready.title = "Changed"  # type: ignore[misc]
 
 
 class TestPendingHtmlFetch:
-    """Pattern H 1 段目の出口型 ``PendingHtmlFetch``。"""
+    """Stage 2 への kiq 引数。frozen BaseModel + invariants の境界だけ確認する。"""
 
-    def test_minimal_construction(self) -> None:
-        pending = PendingHtmlFetch(
-            title="Test",
-            source_id=1,
-            source_url=_safe_url(),
-        )
+    def test_constructs_with_minimal_valid_input(self) -> None:
+        pending = _pending()
         assert pending.title == "Test"
-        assert pending.source_id == 1
         assert pending.published_at_hint is None
-        assert pending.metadata == FetchedMetadata()
+        assert pending.prefer_html_title is False
 
-    def test_published_at_hint_optional(self) -> None:
-        """Pattern H 固有: published_at_hint=None が許容される (HTML 補完前)。"""
-        pending = PendingHtmlFetch(
-            title="Test",
-            source_id=1,
-            source_url=_safe_url(),
-            published_at_hint=None,
-        )
-        assert pending.published_at_hint is None
-
-    def test_metadata_carries_rss_capture(self) -> None:
-        metadata = FetchedMetadata(language="en-US", guid="g1", site_name="TC")
-        pending = PendingHtmlFetch(
-            title="Test",
-            source_id=1,
-            source_url=_safe_url(),
-            metadata=metadata,
-        )
-        assert pending.metadata == metadata
-
-    def test_rejects_empty_title(self) -> None:
+    def test_rejects_inputs_violating_invariants(self) -> None:
         with pytest.raises(ValueError):
-            PendingHtmlFetch(title="", source_id=1, source_url=_safe_url())
-
-    def test_rejects_non_positive_source_id(self) -> None:
+            _pending(title="")
         with pytest.raises(ValueError):
-            PendingHtmlFetch(title="Test", source_id=0, source_url=_safe_url())
+            _pending(source_id=0)
 
-    def test_is_frozen(self) -> None:
-        pending = PendingHtmlFetch(title="Test", source_id=1, source_url=_safe_url())
+    def test_is_frozen_for_kiq_safety(self) -> None:
+        pending = _pending()
         with pytest.raises(ValueError):
             pending.title = "Changed"  # type: ignore[misc]
 
 
-class TestReadyForArticleTryAdvanceFrom:
-    """``ReadyForArticle.try_advance_from`` の merge 規則 (RSS 優先 / HTML 補完)。"""
+class TestTryAdvanceFromPromotion:
+    """Pattern H 1 段目 → 2 段目 promotion 規則 (Stage 2 が呼ぶ唯一の API)。"""
 
-    def _pending(
-        self,
-        published_at_hint: PublishedAt | None,
-        metadata: FetchedMetadata | None = None,
-    ) -> PendingHtmlFetch:
-        return PendingHtmlFetch(
-            title="RSS Title",
-            source_id=1,
-            source_url=_safe_url(),
-            published_at_hint=published_at_hint,
-            metadata=metadata or FetchedMetadata(language="en-US", site_name="TC"),
-        )
-
-    def test_merge_with_rss_published_at_preferred(self) -> None:
-        """RSS と HTML 両方 published_at あるとき RSS が優先される。"""
+    def test_rss_published_at_preferred_over_html(self) -> None:
         rss_pub = PublishedAt(value=datetime(2026, 4, 30, 12, 0, 0, tzinfo=UTC))
         html_pub = PublishedAt(value=datetime(2026, 5, 1, 12, 0, 0, tzinfo=UTC))
-        pending = self._pending(published_at_hint=rss_pub)
-
         result = ReadyForArticle.try_advance_from(
-            pending, body="x" * 100, html_published_at=html_pub
+            _pending(published_at_hint=rss_pub),
+            body="x" * 100,
+            html_published_at=html_pub,
         )
-
         assert isinstance(result, ReadyForArticle)
-        assert result.article.published_at == rss_pub  # RSS 優先
+        assert result.published_at == rss_pub
 
-    def test_merge_falls_back_to_html_when_rss_missing(self) -> None:
-        """RSS が published_at を出さないとき HTML 由来でフォールバック。"""
+    def test_html_published_at_used_as_fallback_when_rss_missing(self) -> None:
         html_pub = PublishedAt(value=datetime(2026, 5, 1, 12, 0, 0, tzinfo=UTC))
-        pending = self._pending(published_at_hint=None)
-
         result = ReadyForArticle.try_advance_from(
-            pending, body="x" * 100, html_published_at=html_pub
+            _pending(published_at_hint=None),
+            body="x" * 100,
+            html_published_at=html_pub,
         )
-
         assert isinstance(result, ReadyForArticle)
-        assert result.article.published_at == html_pub
+        assert result.published_at == html_pub
 
-    def test_merge_failed_when_both_missing(self) -> None:
-        """RSS と HTML 両方欠落 → Failed(published_at_missing) で降格。"""
-        pending = self._pending(published_at_hint=None)
-
+    def test_failed_when_both_published_at_missing(self) -> None:
         result = ReadyForArticle.try_advance_from(
-            pending, body="x" * 100, html_published_at=None
+            _pending(published_at_hint=None),
+            body="x" * 100,
+            html_published_at=None,
         )
-
         assert isinstance(result, Failed)
         assert result.reason.code == "published_at_missing"
 
-    def test_merge_failed_when_body_too_short(self) -> None:
-        """body invariant 違反 → Failed(other) で降格。"""
-        rss_pub = PublishedAt(value=datetime(2026, 4, 30, 12, 0, 0, tzinfo=UTC))
-        pending = self._pending(published_at_hint=rss_pub)
-
+    def test_failed_when_html_body_violates_invariants(self) -> None:
+        rss_pub = PublishedAt(value=datetime(2026, 4, 30, tzinfo=UTC))
         result = ReadyForArticle.try_advance_from(
-            pending, body="short", html_published_at=None
+            _pending(published_at_hint=rss_pub),
+            body="too short",
+            html_published_at=None,
         )
-
         assert isinstance(result, Failed)
         assert result.reason.code == "other"
-        assert result.reason.detail is not None
-        assert "invariant_violation" in result.reason.detail
 
-    def test_merge_uses_pending_title_and_metadata(self) -> None:
-        """title / metadata は pending (RSS) からそのまま採用される。"""
-        rss_pub = PublishedAt(value=datetime(2026, 4, 30, 12, 0, 0, tzinfo=UTC))
-        metadata = FetchedMetadata(
-            author="Jane",
-            tags=("AI", "Funding"),
-            language="en-US",
-            site_name="TC",
-        )
-        pending = self._pending(published_at_hint=rss_pub, metadata=metadata)
-
-        result = ReadyForArticle.try_advance_from(
-            pending, body="x" * 100, html_published_at=None
-        )
-
-        assert isinstance(result, ReadyForArticle)
-        assert result.article.title == "RSS Title"
-        assert result.metadata == metadata
-
-    def test_merge_ignores_html_title_when_prefer_html_title_is_false(self) -> None:
-        """RSS ソース (デフォルト) は HTML title を渡されても無視する (後方互換)。"""
-        rss_pub = PublishedAt(value=datetime(2026, 4, 30, 12, 0, 0, tzinfo=UTC))
-        pending = self._pending(published_at_hint=rss_pub)
-
-        result = ReadyForArticle.try_advance_from(
-            pending,
+    def test_html_title_used_only_when_prefer_html_title(self) -> None:
+        rss_pub = PublishedAt(value=datetime(2026, 4, 30, tzinfo=UTC))
+        rss_only = ReadyForArticle.try_advance_from(
+            _pending(title="RSS Title", published_at_hint=rss_pub),
             body="x" * 100,
             html_published_at=None,
-            html_title="HTML Title from trafilatura",
+            html_title="HTML Title",
         )
+        assert isinstance(rss_only, ReadyForArticle)
+        assert rss_only.title == "RSS Title"
 
-        assert isinstance(result, ReadyForArticle)
-        assert result.article.title == "RSS Title"
-
-    def test_merge_uses_html_title_when_prefer_html_title_is_true(self) -> None:
-        """sitemap 系ソース (prefer_html_title=True) は HTML 由来 title を採用する。"""
-        rss_pub = PublishedAt(value=datetime(2026, 4, 30, 12, 0, 0, tzinfo=UTC))
-        pending = PendingHtmlFetch(
-            title="placeholder-slug",
-            source_id=1,
-            source_url=_safe_url(),
-            published_at_hint=rss_pub,
-            metadata=FetchedMetadata(language="en", site_name="Anthropic"),
-            prefer_html_title=True,
-        )
-
-        result = ReadyForArticle.try_advance_from(
-            pending,
+        html_first = ReadyForArticle.try_advance_from(
+            _pending(
+                title="placeholder-slug",
+                published_at_hint=rss_pub,
+                prefer_html_title=True,
+            ),
             body="x" * 100,
             html_published_at=None,
-            html_title="Introducing Claude 3.5 Sonnet",
+            html_title="HTML Title",
         )
+        assert isinstance(html_first, ReadyForArticle)
+        assert html_first.title == "HTML Title"
 
-        assert isinstance(result, ReadyForArticle)
-        assert result.article.title == "Introducing Claude 3.5 Sonnet"
 
-    def test_merge_falls_back_to_pending_title_when_html_title_missing(self) -> None:
-        """prefer_html_title=True でも HTML title 欠落なら placeholder を使う。"""
-        rss_pub = PublishedAt(value=datetime(2026, 4, 30, 12, 0, 0, tzinfo=UTC))
-        pending = PendingHtmlFetch(
-            title="placeholder-slug",
-            source_id=1,
-            source_url=_safe_url(),
-            published_at_hint=rss_pub,
-            metadata=FetchedMetadata(language="en", site_name="Anthropic"),
-            prefer_html_title=True,
+class TestFetchedEntry:
+    """Service-internal envelope。item + opaque metadata の運搬だけ確認。"""
+
+    def test_carries_ready_for_article(self) -> None:
+        entry = FetchedEntry(item=_ready(), metadata={"language": "en"})
+        assert isinstance(entry.item, ReadyForArticle)
+        assert entry.metadata["language"] == "en"
+
+    def test_carries_pending_html_fetch(self) -> None:
+        entry = FetchedEntry(item=_pending(), metadata={"site_name": "X"})
+        assert isinstance(entry.item, PendingHtmlFetch)
+        assert entry.metadata["site_name"] == "X"
+
+    def test_metadata_is_opaque_dict(self) -> None:
+        # Fetcher ごとに異なる key を入れて良いこと (型による制約なし)
+        entry = FetchedEntry(
+            item=_ready(),
+            metadata={"language": "en", "doi": "10.1/x", "score": 42},
         )
-
-        result = ReadyForArticle.try_advance_from(
-            pending,
-            body="x" * 100,
-            html_published_at=None,
-            html_title=None,
-        )
-
-        assert isinstance(result, ReadyForArticle)
-        assert result.article.title == "placeholder-slug"
-
-
-class TestFetcherProtocol:
-    def test_protocol_declares_provides_classvar(self) -> None:
-        """``Fetcher`` が ``PROVIDES: ClassVar[frozenset[str]]`` を宣言する。"""
-        # Protocol 上の get_type_hints は ClassVar を unwrap しないため、
-        # 生 annotations 文字列で ClassVar / frozenset / str の存在を検証する。
-        raw = Fetcher.__annotations__["PROVIDES"]
-        as_str = str(raw)
-        assert "ClassVar" in as_str
-        assert "frozenset" in as_str
-        assert "str" in as_str
-
-    def test_concrete_implementation_can_declare_provides(self) -> None:
-        """構造的部分型として PROVIDES を宣言できる (Phase 1 ソース実装の最小例)。"""
-
-        class _StubFetcher:
-            PROVIDES: ClassVar[frozenset[str]] = frozenset({"summary", "language"})
-
-            def fetch(self, source):  # type: ignore[no-untyped-def]
-                raise NotImplementedError
-
-        assert "summary" in _StubFetcher.PROVIDES
-        assert _StubFetcher.PROVIDES == frozenset({"summary", "language"})
+        assert set(entry.metadata.keys()) == {"language", "doi", "score"}

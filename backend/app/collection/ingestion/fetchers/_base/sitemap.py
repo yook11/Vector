@@ -33,7 +33,7 @@ from app.collection.extraction.domain.value_objects import PublishedAt
 from app.collection.ingestion.domain.fetched_article import (
     Failed,
     FailureReason,
-    FetchedMetadata,
+    FetchedEntry,
     FetchOutcome,
     PendingHtmlFetch,
 )
@@ -56,8 +56,8 @@ class BaseSitemapFetcher:
     - ``NAME``: ``news_sources.name`` と一致する dispatch キー
     - ``ENDPOINT_URL``: sitemap.xml の URL (``/sitemap.xml``)
     - ``URL_PATH_PREFIX``: 採用対象の URL path 接頭辞 (例: ``/news/``)
-    - ``SITE_NAME``: ``FetchedMetadata.site_name`` に詰める表示名
-    - ``LANGUAGE``: ``FetchedMetadata.language`` に詰める ISO コード
+    - ``SITE_NAME``: ``metadata["site_name"]`` に詰める表示名
+    - ``LANGUAGE``: ``metadata["language"]`` に詰める ISO コード
 
     オプショナル ClassVar (デフォルト値あり):
 
@@ -181,18 +181,19 @@ class BaseSitemapFetcher:
         slug = self._slug_from_url(loc) or self.NAME
         title = slug[:500]
         published_hint = PublishedAt(value=lastmod) if lastmod is not None else None
-        metadata = FetchedMetadata(
-            language=self.LANGUAGE,
-            site_name=self.SITE_NAME,
-            guid=loc[:2048],
-        )
-        return PendingHtmlFetch(
-            title=title,
-            source_id=source_id,
-            source_url=source_url,
-            published_at_hint=published_hint,
-            metadata=metadata,
-            prefer_html_title=True,
+        return FetchedEntry(
+            item=PendingHtmlFetch(
+                title=title,
+                source_id=source_id,
+                source_url=source_url,
+                published_at_hint=published_hint,
+                prefer_html_title=True,
+            ),
+            metadata={
+                "language": self.LANGUAGE,
+                "site_name": self.SITE_NAME,
+                "guid": loc[:2048],
+            },
         )
 
     @staticmethod
