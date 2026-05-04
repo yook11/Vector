@@ -51,12 +51,30 @@ cp .env.example .env
 docker compose up --build
 
 # 3. Access
-# Frontend: http://localhost:3000
-# Database: localhost:5433 (user: vector, password: vector)
+# Frontend: http://localhost:3000 (唯一の host-exposed エントリポイント)
 ```
 
-> **Note**: バックエンドAPIは Docker 内部ネットワークのみで公開されます。
-> フロントエンド (BFF) がプロキシとして機能するため、ブラウザからは `localhost:3000` のみにアクセスします。
+> **Note**: backend / db / redis / worker / scheduler は全て Docker 内部
+> ネットワーク (`internal: true`) のみで動作し host port を持ちません。
+> フロントエンド (BFF) がプロキシとして機能するため、ブラウザからは
+> `localhost:3000` のみにアクセスします。db に直接 psql したい場合は
+> `docker compose exec db psql -U vector -d vector` を使ってください。
+
+### 既存 dev 環境のアップデート
+
+PR #321 (`fix(infra): db を internal network 限定にし host expose を完全遮断`)
+以降、`db` container は `internal: true` の network のみに接続し host port
+expose を持たない設定に変更されています。**それより前から dev 環境を持って
+いる場合**、稼働中の `vector-db-1` container は古い設定で起動されたまま
+(host port 5433 expose + public network 接続) になっているため、以下を
+1 度だけ実行して container を recreate してください:
+
+```bash
+docker compose up -d --force-recreate db
+```
+
+確認: `docker compose ps db` の `Ports` 列が空 (host expose なし) になり、
+`Networks` が `vector_internal` のみになっていれば正しく適用されています。
 
 ### 初回利用の流れ
 
