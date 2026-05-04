@@ -48,6 +48,12 @@ from app.collection.ingestion.fetchers.itmedia_ai import ITmediaAIFetcher
 from app.collection.ingestion.fetchers.itmedia_news import ITmediaNewsFetcher
 from app.collection.ingestion.fetchers.jpcert import JPCERTFetcher
 from app.collection.ingestion.fetchers.krebs_on_security import KrebsOnSecurityFetcher
+from app.collection.ingestion.fetchers.mdpi.energies import MDPIEnergiesFetcher
+from app.collection.ingestion.fetchers.mdpi.materials import MDPIMaterialsFetcher
+from app.collection.ingestion.fetchers.mdpi.nanomaterials import (
+    MDPINanomaterialsFetcher,
+)
+from app.collection.ingestion.fetchers.mdpi.sensors import MDPISensorsFetcher
 from app.collection.ingestion.fetchers.meta_ai import MetaAIFetcher
 from app.collection.ingestion.fetchers.meti import METIFetcher
 from app.collection.ingestion.fetchers.mext import MEXTFetcher
@@ -112,4 +118,8 @@ FETCHERS: Final[dict[str, Callable[[], Fetcher]]] = {
     "Frontiers in Energy Research": FrontiersEnergyResearchFetcher,
     "Frontiers in Materials": FrontiersMaterialsFetcher,
     "ORNL": ORNLNewsFetcher,
+    "MDPI Materials": MDPIMaterialsFetcher,
+    "MDPI Energies": MDPIEnergiesFetcher,
+    "MDPI Sensors": MDPISensorsFetcher,
+    "MDPI Nanomaterials": MDPINanomaterialsFetcher,
 }

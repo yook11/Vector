@@ -1,0 +1,72 @@
+{
+  "status": "ok",
+  "message-type": "work-list",
+  "message-version": "1.0.0",
+  "message": {
+    "facets": {},
+    "total-results": 3,
+    "items-per-page": 20,
+    "query": {"start-index": 0, "search-terms": null},
+    "items": [
+      {
+        "DOI": "10.3390/ma17020001",
+        "type": "journal-article",
+        "publisher": "MDPI AG",
+        "container-title": ["Materials"],
+        "ISSN": ["1996-1944"],
+        "title": [
+          "Mechanical Behavior of Additively Manufactured Ti-6Al-4V Lattice Structures Under Cyclic Loading"
+        ],
+        "abstract": "<jats:p>This study investigates the cyclic mechanical response of additively manufactured Ti-6Al-4V lattice structures fabricated by selective laser melting. Three lattice topologies (octet, gyroid, diamond) were tested at relative densities ranging from 0.15 to 0.35. Compression-compression fatigue tests at R = 0.1 revealed that gyroid structures exhibited the highest fatigue endurance, sustaining 10^6 cycles at stress amplitudes up to 65% of their static strength. Finite element simulations attributed this performance to reduced stress concentrations at strut intersections. The results provide design guidance for biomedical and aerospace applications where weight reduction and durability are co-equal objectives.</jats:p>",
+        "published": {"date-parts": [[2026, 5, 1]]},
+        "issued": {"date-parts": [[2026, 5, 1]]},
+        "license": [
+          {
+            "URL": "https://creativecommons.org/licenses/by/4.0/",
+            "start": {"date-parts": [[2026, 5, 1]]},
+            "delay-in-days": 0,
+            "content-version": "vor"
+          }
+        ],
+        "author": [
+          {"family": "Tanaka", "given": "Hiroshi", "sequence": "first"},
+          {"family": "Müller", "given": "Anna", "sequence": "additional"},
+          {"family": "Patel", "given": "Rajesh", "sequence": "additional"}
+        ],
+        "URL": "https://doi.org/10.3390/ma17020001"
+      },
+      {
+        "DOI": "10.3390/ma17020002",
+        "type": "correction",
+        "publisher": "MDPI AG",
+        "container-title": ["Materials"],
+        "ISSN": ["1996-1944"],
+        "title": ["Correction: Tanaka et al. Mechanical Behavior, Materials 2025, 18, 4521"],
+        "abstract": "<jats:p>The authors wish to correct Figure 3 in their previously published article. The corrected figure is provided herein. The authors apologize for any inconvenience caused.</jats:p>",
+        "published": {"date-parts": [[2026, 5, 2]]},
+        "license": [
+          {
+            "URL": "https://creativecommons.org/licenses/by/4.0/",
+            "content-version": "vor"
+          }
+        ],
+        "author": [{"family": "Tanaka", "given": "Hiroshi"}],
+        "URL": "https://doi.org/10.3390/ma17020002"
+      },
+      {
+        "DOI": "10.3390/ma17020003",
+        "type": "journal-article",
+        "publisher": "MDPI AG",
+        "container-title": ["Materials"],
+        "ISSN": ["1996-1944"],
+        "title": [
+          "Thermal Conductivity Enhancement in Polymer Composites: A Review of Recent Strategies"
+        ],
+        "abstract": "<jats:p>Polymer composites with enhanced thermal conductivity are critical for next-generation electronics and energy systems. This review surveys recent advances in filler engineering, interface modification, and processing techniques aimed at overcoming the intrinsically low thermal conductivity of polymer matrices. Particular attention is paid to graphene, boron nitride, and metal nanowire fillers, with thermal conductivity values now exceeding 30 W/(m K) in select systems. Open challenges include scalable manufacturing, long-term reliability under thermal cycling, and cost-effective integration with existing polymer processing workflows.</jats:p>",
+        "published": {"date-parts": [[2026, 4, 28]]},
+        "author": [],
+        "URL": "https://doi.org/10.3390/ma17020003"
+      }
+    ]
+  }
+}
