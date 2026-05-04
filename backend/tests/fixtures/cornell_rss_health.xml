@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss xmlns:dc="http://purl.org/dc/elements/1.1/" version="2.0" xml:base="https://news.cornell.edu/">
+  <channel>
+    <title><![CDATA[Health, Nutrition & Medicine]]></title>
+    <link><![CDATA[https://news.cornell.edu/]]></link>
+    <description><![CDATA[Recent news from Cornell University]]></description>
+    <language><![CDATA[en]]></language>
+    <item>
+      <title><![CDATA[Cornell Tech announces 2026 Frontiers of AI Summit]]></title>
+      <link><![CDATA[https://news.cornell.edu/stories/2026/05/cornell-tech-frontiers-ai-summit]]></link>
+      <description>Cornell Tech announces the inaugural Frontiers of AI Summit (also tagged Health for cross-discipline overlap).</description>
+      <pubDate>Fri, 02 May 2026 14:00:00 EDT</pubDate>
+      <dc:creator>gs775</dc:creator>
+      <guid isPermaLink="true"><![CDATA[https://news.cornell.edu/stories/2026/05/cornell-tech-frontiers-ai-summit]]></guid>
+    </item>
+    <item>
+      <title><![CDATA[Deadly feline coronavirus variant has been present in the U.S. for over a decade]]></title>
+      <link><![CDATA[https://news.cornell.edu/stories/2026/04/feline-coronavirus]]></link>
+      <description>A study from Cornell veterinary researchers shows a deadly feline coronavirus variant has circulated in the U.S. for over ten years.</description>
+      <pubDate>Mon, 28 Apr 2026 09:00:00 EDT</pubDate>
+      <dc:creator>lec27</dc:creator>
+      <guid isPermaLink="true"><![CDATA[https://news.cornell.edu/stories/2026/04/feline-coronavirus]]></guid>
+    </item>
+  </channel>
+</rss>

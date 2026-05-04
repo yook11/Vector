@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss xmlns:dc="http://purl.org/dc/elements/1.1/" version="2.0" xml:base="https://news.cornell.edu/">
+  <channel>
+    <title><![CDATA[Artificial Intelligence]]></title>
+    <link><![CDATA[https://news.cornell.edu/]]></link>
+    <description><![CDATA[Recent news from Cornell University]]></description>
+    <language><![CDATA[en]]></language>
+    <copyright><![CDATA[(c) Cornell 2026]]></copyright>
+    <item>
+      <title><![CDATA[Cornell Tech announces 2026 Frontiers of AI Summit]]></title>
+      <link><![CDATA[https://news.cornell.edu/stories/2026/05/cornell-tech-frontiers-ai-summit]]></link>
+      <description>Cornell Tech announces the inaugural Frontiers of AI Summit, bringing together leading researchers to discuss the next decade of artificial intelligence research.</description>
+      <pubDate>Fri, 02 May 2026 14:00:00 EDT</pubDate>
+      <dc:creator>gs775</dc:creator>
+      <guid isPermaLink="true"><![CDATA[https://news.cornell.edu/stories/2026/05/cornell-tech-frontiers-ai-summit]]></guid>
+      <thumbnail_85x85><![CDATA[https://news.cornell.edu/sites/default/files/styles/thumbnail_85x85/public/2026-05/summit.jpg]]></thumbnail_85x85>
+      <thumbnail_360x360><![CDATA[https://news.cornell.edu/sites/default/files/styles/thumbnail_360x360/public/2026-05/summit.jpg]]></thumbnail_360x360>
+      <image_featured><![CDATA[https://news.cornell.edu/sites/default/files/styles/story_thumbnail_home/public/2026-05/summit.jpg]]></image_featured>
+    </item>
+    <item>
+      <title><![CDATA[Extended reality tool lets dancers analyze movement]]></title>
+      <link><![CDATA[https://news.cornell.edu/stories/2026/04/extended-reality-tool-dancers]]></link>
+      <description>A new XR tool developed by Cornell researchers allows dancers to visualize and analyze their movement patterns in real time.</description>
+      <pubDate>Tue, 29 Apr 2026 10:30:00 EDT</pubDate>
+      <dc:creator>tjf85</dc:creator>
+      <guid isPermaLink="true"><![CDATA[https://news.cornell.edu/stories/2026/04/extended-reality-tool-dancers]]></guid>
+      <image_featured><![CDATA[https://news.cornell.edu/sites/default/files/styles/story_thumbnail_home/public/2026-04/xr.jpg]]></image_featured>
+    </item>
+    <item>
+      <title><![CDATA[Entry without pubDate]]></title>
+      <link><![CDATA[https://news.cornell.edu/stories/2026/04/no-date]]></link>
+      <description>This entry has no pubDate to test parsing fallback.</description>
+      <guid isPermaLink="true"><![CDATA[https://news.cornell.edu/stories/2026/04/no-date]]></guid>
+    </item>
+  </channel>
+</rss>

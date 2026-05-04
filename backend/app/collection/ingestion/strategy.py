@@ -20,6 +20,7 @@ from typing import Final
 from app.collection.ingestion.fetchers.anthropic import AnthropicFetcher
 from app.collection.ingestion.fetchers.cleantechnica import CleanTechnicaFetcher
 from app.collection.ingestion.fetchers.cloudflare import CloudflareBlogFetcher
+from app.collection.ingestion.fetchers.cornell import CornellChronicleFetcher
 from app.collection.ingestion.fetchers.deepmind import DeepMindFetcher
 from app.collection.ingestion.fetchers.eetimes_japan import EETimesJapanFetcher
 from app.collection.ingestion.fetchers.electrek import ElectrekFetcher
@@ -90,4 +91,5 @@ FETCHERS: Final[dict[str, Callable[[], Fetcher]]] = {
     "eLife": ELifeFetcher,
     "PLOS ONE": PLOSOneFetcher,
     "Meta AI": MetaAIFetcher,
+    "Cornell Chronicle": CornellChronicleFetcher,
 }
