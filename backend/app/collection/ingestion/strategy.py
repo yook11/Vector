@@ -29,6 +29,18 @@ from app.collection.ingestion.fetchers.engadget import EngadgetFetcher
 from app.collection.ingestion.fetchers.esa.hubble import ESAHubbleFetcher
 from app.collection.ingestion.fetchers.esa.webb import ESAWebbFetcher
 from app.collection.ingestion.fetchers.fierce_biotech import FierceBiotechFetcher
+from app.collection.ingestion.fetchers.frontiers.artificial_intelligence import (
+    FrontiersAIFetcher,
+)
+from app.collection.ingestion.fetchers.frontiers.energy_research import (
+    FrontiersEnergyResearchFetcher,
+)
+from app.collection.ingestion.fetchers.frontiers.materials import (
+    FrontiersMaterialsFetcher,
+)
+from app.collection.ingestion.fetchers.frontiers.robotics_and_ai import (
+    FrontiersRoboticsAIFetcher,
+)
 from app.collection.ingestion.fetchers.hacker_news import HackerNewsFetcher
 from app.collection.ingestion.fetchers.huggingface import HuggingFaceBlogFetcher
 from app.collection.ingestion.fetchers.ieee_spectrum import IEEESpectrumFetcher
@@ -92,4 +104,8 @@ FETCHERS: Final[dict[str, Callable[[], Fetcher]]] = {
     "PLOS ONE": PLOSOneFetcher,
     "Meta AI": MetaAIFetcher,
     "Cornell Chronicle": CornellChronicleFetcher,
+    "Frontiers in Artificial Intelligence": FrontiersAIFetcher,
+    "Frontiers in Robotics and AI": FrontiersRoboticsAIFetcher,
+    "Frontiers in Energy Research": FrontiersEnergyResearchFetcher,
+    "Frontiers in Materials": FrontiersMaterialsFetcher,
 }

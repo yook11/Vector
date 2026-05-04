@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss xmlns:dc="http://purl.org/dc/elements/1.1/" version="2.0">
+  <channel>
+    <title>Frontiers in Artificial Intelligence | New and Recent Articles</title>
+    <link>https://www.frontiersin.org/journals/artificial-intelligence</link>
+    <description>Recent articles from Frontiers in Artificial Intelligence</description>
+    <language>en</language>
+    <item>
+      <title>HyRA-CXR: a hybrid residual-attention deep network for chest X-ray classification</title>
+      <link>https://www.frontiersin.org/articles/10.3389/frai.2026.1767330</link>
+      <description>This study presents HyRA-CXR, a novel hybrid architecture combining residual connections and attention mechanisms for chest X-ray classification. The model achieves state-of-the-art performance on the NIH ChestX-ray14 dataset, outperforming existing methods by 3.2% in mean AUC. We demonstrate the effectiveness of attention-based feature extraction for medical imaging diagnosis. Extensive experiments show the model's robustness across multiple disease categories. The proposed approach contributes to the growing body of literature on AI-assisted medical diagnosis and offers a practical tool for radiologists.</description>
+      <pubDate>Mon, 04 May 2026 00:00:00 +0000</pubDate>
+      <category>Original Research</category>
+      <author>Wadhah Zeyad Tareq</author>
+      <guid>https://www.frontiersin.org/articles/10.3389/frai.2026.1767330</guid>
+    </item>
+    <item>
+      <title>Editorial: Trustworthy AI in healthcare</title>
+      <link>https://www.frontiersin.org/articles/10.3389/frai.2026.1700001</link>
+      <description>Brief editorial.</description>
+      <pubDate>Sat, 03 May 2026 00:00:00 +0000</pubDate>
+      <category>Editorial</category>
+      <author>Editor Name</author>
+      <guid>https://www.frontiersin.org/articles/10.3389/frai.2026.1700001</guid>
+    </item>
+  </channel>
+</rss>
