@@ -1,6 +1,6 @@
 import { cacheLife } from "next/cache";
 import { apiCall, typedPublic } from "@/lib/api/typed-server-fetcher";
-import type { ArticleDetail } from "@/types";
+import type { ArticleDetail } from "@/types/types.gen";
 
 /**
  * 記事詳細取得 (response は user 非依存)。

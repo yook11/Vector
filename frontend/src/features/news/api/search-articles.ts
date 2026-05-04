@@ -1,6 +1,7 @@
 import { cacheLife } from "next/cache";
 import { apiCall, typedPublic } from "@/lib/api/typed-server-fetcher";
-import type { PaginatedArticleResponse, SemanticSearchQuery } from "@/types";
+import type { SemanticSearchQuery } from "@/types";
+import type { PaginatedArticleResponse } from "@/types/types.gen";
 
 /**
  * セマンティック検索 (response は user 非依存)。

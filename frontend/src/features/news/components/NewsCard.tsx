@@ -2,7 +2,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { formatDate } from "@/lib/date";
-import type { ArticleBrief } from "@/types";
+import type { ArticleBrief } from "@/types/types.gen";
 
 export function NewsCard({
   article,

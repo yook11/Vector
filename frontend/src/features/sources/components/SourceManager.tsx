@@ -1,5 +1,5 @@
 import { Button } from "@/components/ui/button";
-import type { NewsSourceDetail } from "@/types";
+import type { NewsSourceDetail } from "@/types/types.gen";
 import { SourceFormDialog } from "./SourceFormDialog";
 import { SourceTable } from "./SourceTable";
 

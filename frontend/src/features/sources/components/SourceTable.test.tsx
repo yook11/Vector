@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Component, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { NewsSourceDetail } from "@/types";
+import type { NewsSourceDetail } from "@/types/types.gen";
 
 const mocks = vi.hoisted(() => ({
   activateSource: vi.fn(),

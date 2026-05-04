@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { typedServer } from "@/lib/api/typed-server-fetcher";
-import type { NewsSourceCreate, NewsSourceDetail } from "@/types";
+import type { NewsSourceCreate, NewsSourceDetail } from "@/types/types.gen";
 
 // `typed-server-fetcher` は `import "server-only"` を持つため、何もせず import
 // すると test 環境で throw する。core が実際に使うのは `apiCall` / `apiVoid` で、

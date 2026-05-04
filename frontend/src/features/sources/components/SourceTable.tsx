@@ -26,7 +26,7 @@ import {
 } from "@/components/ui/table";
 import { isRedirectError } from "@/lib/utils/redirect-error";
 import { toastError } from "@/lib/utils/toast-error";
-import type { NewsSourceDetail } from "@/types";
+import type { NewsSourceDetail } from "@/types/types.gen";
 import { activateSource } from "../api/activate-source";
 import { deactivateSource } from "../api/deactivate-source";
 import { deleteSource } from "../api/delete-source";

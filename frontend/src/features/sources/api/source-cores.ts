@@ -16,7 +16,7 @@ import {
   apiVoid,
   type typedServer,
 } from "@/lib/api/typed-server-fetcher";
-import type { NewsSourceCreate, NewsSourceDetail } from "@/types";
+import type { NewsSourceCreate, NewsSourceDetail } from "@/types/types.gen";
 
 export async function activateSourceCore(
   id: number,

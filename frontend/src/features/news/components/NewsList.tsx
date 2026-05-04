@@ -1,6 +1,6 @@
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { WatchlistButton } from "@/features/watchlist";
-import type { ArticleBrief } from "@/types";
+import type { ArticleBrief } from "@/types/types.gen";
 import { NewsCard } from "./NewsCard";
 
 interface NewsListProps {

@@ -1,6 +1,6 @@
 import { apiCall, typedServer } from "@/lib/api/typed-server-fetcher";
 import { cacheTags } from "@/lib/cache/tags";
-import type { PaginatedArticleResponse } from "@/types";
+import type { PaginatedArticleResponse } from "@/types/types.gen";
 
 /**
  * ユーザの watchlist 一覧を取得する。

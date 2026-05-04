@@ -6,7 +6,7 @@ import { Separator } from "@/components/ui/separator";
 import { WatchlistButton } from "@/features/watchlist";
 import { formatDate } from "@/lib/date";
 import { sanitizeUrl } from "@/lib/utils/sanitize-url";
-import type { ArticleDetail as ArticleDetailData } from "@/types";
+import type { ArticleDetail as ArticleDetailData } from "@/types/types.gen";
 
 interface NewsDetailProps {
   article: ArticleDetailData;

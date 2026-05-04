@@ -1,93 +1,90 @@
 /**
- * Type re-exports from generated OpenAPI types + manual supplementary types.
+ * Type re-exports for narrowing / alias / discriminated union 集約点。
  *
- * Schema types are derived from backend/app/schemas/ via openapi-typescript.
- * Run `npm run generate-types` to regenerate types/generated.ts.
+ * Schema types は `backend/app/schemas/` の Pydantic から `@hey-api/openapi-ts`
+ * 経由で `types.gen.ts` に自動生成される。`npm run generate-types` で再生成。
+ *
+ * 本ファイルの責務:
+ * - StripNull narrowing: backend が optional + nullable で表現するキーを frontend
+ *   側で `null` を剥がして optional のみに揃える
+ * - Pick narrowing: 大型 schema から component で必要な field のみ抽出
+ * - alias rename: Pydantic 内部 schema 名 (`StoryOut` 等) を frontend public 名へ
+ * - discriminated union 再構築: `Annotated[Union, Field(discriminator)]` alias は
+ *   openapi.json で oneOf に展開されるが Python alias 名は component schema 化
+ *   されないため frontend 側で組み直す (`BriefingResponse` / `WeeklyTrendsResponse`)
+ *
+ * 単純 re-export (ArticleBrief / ArticleDetail / NewsSourceDetail 等) は本ファイル
+ * から撤廃済 (PR-H3)。利用側は `@/types/types.gen` から直接 import する。
  */
-import type { components, operations } from "./generated";
+import type {
+  EmptyBriefing as _EmptyBriefing,
+  EmptyWeeklyTrends as _EmptyWeeklyTrends,
+  ReadyBriefing as _ReadyBriefing,
+  ReadyWeeklyTrends as _ReadyWeeklyTrends,
+  ArticleSummaryOut,
+  BriefingListLatest,
+  CategoryDetail,
+  CategoryOut,
+  CategoryTrendsOut,
+  EntityTrendOut,
+  ListArticlesData,
+  NewEntityOut,
+  SearchArticlesData,
+  StoryOut,
+  TopicTrendOut,
+} from "@/types/types.gen";
 
 // ---------------------------------------------------------------------------
-// Query parameter types — derived from `operations[...].parameters.query`.
-// 手書きで `category?: string` 等を維持すると backend スキーマとの乖離 (例:
-// `source` のような廃止/未実装キー) を frontend が抱え込む。OpenAPI を SSoT
-// にして派生させ、backend が optional + nullable で表現するキーは frontend
-// 側で `null` を剥がして optional のみに揃える。
+// StripNull narrowing
 // ---------------------------------------------------------------------------
 
 type StripNull<T> = { [K in keyof T]: Exclude<T[K], null> };
 
 /** Query parameters for GET /articles (article listing). */
-export type ArticleQuery = StripNull<
-  NonNullable<operations["list_articles"]["parameters"]["query"]>
->;
+export type ArticleQuery = StripNull<NonNullable<ListArticlesData["query"]>>;
 
 /** Query parameters for GET /articles/search (semantic search). */
 export type SemanticSearchQuery = StripNull<
-  NonNullable<operations["search_articles"]["parameters"]["query"]>
+  NonNullable<SearchArticlesData["query"]>
 >;
 
 // ---------------------------------------------------------------------------
-// Re-exports from generated types
+// Pick narrowing
 // ---------------------------------------------------------------------------
 
-// Categories
-export type CategoryBrief = Pick<
-  components["schemas"]["CategoryDetail"],
-  "slug" | "name"
->;
-export type CategoryDetailResponse = components["schemas"]["CategoryDetail"];
-export type CategoryDetailListResponse =
-  components["schemas"]["CategoryDetailList"];
-
-// Articles
-export type ArticleBrief = components["schemas"]["ArticleBrief"];
-export type ArticleDetail = components["schemas"]["ArticleDetail"];
-export type PaginatedArticleResponse =
-  components["schemas"]["PaginatedArticleResponse"];
-
-// Watchlist
-export type WatchlistIds = components["schemas"]["WatchlistIds"];
+export type CategoryBrief = Pick<CategoryDetail, "slug" | "name">;
 
 // ---------------------------------------------------------------------------
-// Direct re-exports (no narrowing needed)
+// Alias rename — Pydantic 内部 schema 名 → frontend public 名
 // ---------------------------------------------------------------------------
 
-export type FetchRequest = components["schemas"]["FetchRequest"];
-export type FetchResponse = components["schemas"]["FetchResponse"];
+export type BriefingStory = StoryOut;
+export type BriefingArticleSummary = ArticleSummaryOut;
+export type BriefingCategory = CategoryOut;
+export type { BriefingListLatest };
+export type WeeklyCategoryTrends = CategoryTrendsOut;
+export type WeeklyEntityTrend = EntityTrendOut;
+export type WeeklyTopicTrend = TopicTrendOut;
+export type WeeklyNewEntity = NewEntityOut;
 
-// News sources
-export type NewsSourceEmbed = components["schemas"]["NewsSourceEmbed"];
-export type NewsSourceDetail = components["schemas"]["NewsSourceDetail"];
-export type NewsSourceDetailList =
-  components["schemas"]["NewsSourceDetailList"];
-export type NewsSourceCreate = components["schemas"]["NewsSourceCreate"];
+// ---------------------------------------------------------------------------
+// Discriminated union 再構築
+//
+// types.gen.ts では `state?: 'ready' | 'empty'` (optional) として生成される。
+// 背景: backend Pydantic で `state: Literal["ready"] = "ready"` のように default
+// 値があると FastAPI が OpenAPI 上 `required: false` で出すため、hey-api は
+// optional として型生成する。openapi-typescript は discriminator 付きのケース
+// を required に補正していたが hey-api はしない。
+//
+// optional のままでは `if (data.state === "empty")` での narrowing が効かない
+// (`data.state` が undefined の経路が残る) ため、frontend 側で intersection
+// で required に補強し、利用側の narrowing シンタックスを変えずに済ませる。
+// ---------------------------------------------------------------------------
 
-// Briefing
-// `BriefingResponse` は backend で Annotated[Union, Field(discriminator)] alias
-// として定義されており、独立した component schema を持たない (response inline)。
-// `state` discriminator で frontend が narrowing できるよう、生成済の 2 状態
-// schema をここで union として再構築する。
-export type ReadyBriefing = components["schemas"]["ReadyBriefing"];
-export type EmptyBriefing = components["schemas"]["EmptyBriefing"];
+export type ReadyBriefing = _ReadyBriefing & { state: "ready" };
+export type EmptyBriefing = _EmptyBriefing & { state: "empty" };
 export type BriefingResponse = ReadyBriefing | EmptyBriefing;
-export type BriefingListResponse =
-  components["schemas"]["BriefingListResponse"];
-export type BriefingListItem = components["schemas"]["BriefingListItem"];
-export type BriefingListLatest = components["schemas"]["_BriefingListLatest"];
-export type BriefingStory = components["schemas"]["_StoryOut"];
-export type BriefingArticleSummary =
-  components["schemas"]["_ArticleSummaryOut"];
-export type BriefingCategory = components["schemas"]["_CategoryOut"];
 
-// Weekly trends
-// `WeeklyTrendsResponse` は backend で Annotated[Union, Field(discriminator)] alias
-// として定義されており、独立した component schema を持たない (response inline)。
-// `state` discriminator で frontend が narrowing できるよう、生成済の 2 状態
-// schema をここで union として再構築する。
-export type ReadyWeeklyTrends = components["schemas"]["ReadyWeeklyTrends"];
-export type EmptyWeeklyTrends = components["schemas"]["EmptyWeeklyTrends"];
+export type ReadyWeeklyTrends = _ReadyWeeklyTrends & { state: "ready" };
+export type EmptyWeeklyTrends = _EmptyWeeklyTrends & { state: "empty" };
 export type WeeklyTrendsResponse = ReadyWeeklyTrends | EmptyWeeklyTrends;
-export type WeeklyCategoryTrends = components["schemas"]["_CategoryTrendsOut"];
-export type WeeklyEntityTrend = components["schemas"]["_EntityTrendOut"];
-export type WeeklyTopicTrend = components["schemas"]["_TopicTrendOut"];
-export type WeeklyNewEntity = components["schemas"]["_NewEntityOut"];

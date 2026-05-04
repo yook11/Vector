@@ -1,6 +1,6 @@
 import { apiCall, typedServer } from "@/lib/api/typed-server-fetcher";
 import { cacheTags } from "@/lib/cache/tags";
-import type { NewsSourceDetailList } from "@/types";
+import type { NewsSourceDetailList } from "@/types/types.gen";
 
 /**
  * Fetch all news sources (admin only, SSR).

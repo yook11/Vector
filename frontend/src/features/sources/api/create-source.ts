@@ -4,7 +4,7 @@ import { updateTag } from "next/cache";
 import { typedServer } from "@/lib/api/typed-server-fetcher";
 import { requireAdminForAction } from "@/lib/auth/guards";
 import { cacheTags } from "@/lib/cache/tags";
-import type { NewsSourceCreate, NewsSourceDetail } from "@/types";
+import type { NewsSourceCreate, NewsSourceDetail } from "@/types/types.gen";
 import { NewSourceSchema } from "../schemas/source";
 import { createSourceCore } from "./source-cores";
 

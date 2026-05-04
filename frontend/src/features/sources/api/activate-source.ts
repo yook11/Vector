@@ -5,7 +5,7 @@ import { typedServer } from "@/lib/api/typed-server-fetcher";
 import { requireAdminForAction } from "@/lib/auth/guards";
 import { cacheTags } from "@/lib/cache/tags";
 import { PositiveIdSchema } from "@/lib/validation/id";
-import type { NewsSourceDetail } from "@/types";
+import type { NewsSourceDetail } from "@/types/types.gen";
 import { activateSourceCore } from "./source-cores";
 
 /** Activate a news source (admin-only Server Action). */

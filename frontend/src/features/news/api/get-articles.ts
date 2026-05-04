@@ -1,6 +1,7 @@
 import { cacheLife } from "next/cache";
 import { apiCall, typedPublic } from "@/lib/api/typed-server-fetcher";
-import type { ArticleQuery, PaginatedArticleResponse } from "@/types";
+import type { ArticleQuery } from "@/types";
+import type { PaginatedArticleResponse } from "@/types/types.gen";
 
 /**
  * 記事一覧取得 (response は user 非依存)。

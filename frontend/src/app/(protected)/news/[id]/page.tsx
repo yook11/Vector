@@ -14,7 +14,10 @@ import {
 import { getWatchlistIds } from "@/features/watchlist";
 import { ApiError } from "@/lib/api/error";
 import { PositiveIdParamSchema } from "@/lib/validation/id";
-import type { ArticleBrief, ArticleDetail as ArticleDetailData } from "@/types";
+import type {
+  ArticleBrief,
+  ArticleDetail as ArticleDetailData,
+} from "@/types/types.gen";
 
 interface NewsPageProps {
   params: Promise<{ id: string }>;

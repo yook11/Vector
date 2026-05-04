@@ -1,6 +1,6 @@
 import { cacheLife } from "next/cache";
 import { apiCall, typedPublic } from "@/lib/api/typed-server-fetcher";
-import type { ArticleBrief } from "@/types";
+import type { ArticleBrief } from "@/types/types.gen";
 
 /** Fetch articles semantically similar to the given article (response is user-independent). */
 export async function getSimilarArticles(

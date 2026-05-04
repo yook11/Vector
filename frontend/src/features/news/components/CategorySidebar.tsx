@@ -4,10 +4,10 @@ import Link from "next/link";
 import { Separator } from "@/components/ui/separator";
 import { useBuildSearchParamsHref } from "@/lib/search-params/client";
 import { cn } from "@/lib/utils/cn";
-import type { CategoryDetailResponse } from "@/types";
+import type { CategoryDetail } from "@/types/types.gen";
 
 interface CategorySidebarProps {
-  categories: CategoryDetailResponse[];
+  categories: CategoryDetail[];
   activeCategory?: string;
   /**
    * 各カテゴリ Link クリック時のフック。MobileSidebar から渡されて Sheet を
@@ -69,7 +69,7 @@ export function CategorySidebar({
             )}
           >
             <span className="truncate">{cat.name}</span>
-            {cat.recentCount > 0 && (
+            {(cat.recentCount ?? 0) > 0 && (
               <span className="ml-2 text-xs tabular-nums text-muted-foreground/60">
                 {cat.recentCount}
               </span>
