@@ -111,47 +111,19 @@ class TestFetchNews:
 
 
 @pytest.mark.asyncio
-class TestEmbedNews:
-    async def test_embed_dispatches_tasks(self, admin_client: AsyncClient) -> None:
-        with (
-            patch(
-                "app.routers.admin.pipeline.PipelineRepository",
-            ) as mock_repo_cls,
-            patch(
-                "app.analysis.tasks.generate_embedding",
-            ) as mock_embed,
-        ):
-            mock_repo = AsyncMock()
-            mock_repo.get_article_ids_without_embedding.return_value = [1, 2, 3]
-            mock_repo_cls.return_value = mock_repo
-            mock_embed.kiq = AsyncMock()
+class TestEmbedEndpointRemoved:
+    """C7 (red-team) で削除した /pipeline/embed が再び route として復活
+    していないことを構造的に検証する。
 
-            resp = await admin_client.post("/api/v1/admin/pipeline/embed")
+    旧 endpoint は body なしで `get_article_ids_without_embedding()` の
+    全件 (10 万件規模) を 1 リクエストで dispatch する経済 DoS だった。
+    bulk 再 embed が必要な場合は backend container 内の手動 CLI に経路を
+    移譲済み (HTTP attack surface に乗らない)。
+    """
 
-        assert resp.status_code == 202
-        data = resp.json()
-        assert data["dispatchedCount"] == 3
-        assert data["message"] == "Embedding tasks dispatched"
-        assert mock_embed.kiq.call_count == 3
-
-    async def test_embed_no_articles(self, admin_client: AsyncClient) -> None:
-        with (
-            patch(
-                "app.routers.admin.pipeline.PipelineRepository",
-            ) as mock_repo_cls,
-            patch(
-                "app.analysis.tasks.generate_embedding",
-            ) as mock_embed,
-        ):
-            mock_repo = AsyncMock()
-            mock_repo.get_article_ids_without_embedding.return_value = []
-            mock_repo_cls.return_value = mock_repo
-            mock_embed.kiq = AsyncMock()
-
-            resp = await admin_client.post("/api/v1/admin/pipeline/embed")
-
-        assert resp.status_code == 202
-        data = resp.json()
-        assert data["dispatchedCount"] == 0
-        assert data["message"] == "No articles need embedding"
-        mock_embed.kiq.assert_not_called()
+    async def test_embed_route_is_not_registered(
+        self, admin_client: AsyncClient
+    ) -> None:
+        resp = await admin_client.post("/api/v1/admin/pipeline/embed")
+        # FastAPI は未登録 path に対して 404、登録済 path で method 違いに対して 405 を返す
+        assert resp.status_code == 404

@@ -1,4 +1,4 @@
-"""パイプライン操作（fetch / embed）用のスキーマ。"""
+"""パイプライン操作（fetch）用のスキーマ。"""
 
 from typing import Annotated
 
@@ -21,10 +21,3 @@ class FetchResponse(_CamelBase):
     message: str
     dispatched_count: int | None = None
     job_id: str | None = None
-
-
-class EmbedResponse(_CamelBase):
-    """POST /api/v1/admin/pipeline/embed のレスポンス。"""
-
-    message: str
-    dispatched_count: int

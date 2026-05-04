@@ -11,7 +11,6 @@ from app.schemas.embeds import (
     OriginalArticleEmbed,
 )
 from app.schemas.pipeline import (
-    EmbedResponse,
     FetchRequest,
     FetchResponse,
 )
@@ -21,7 +20,6 @@ __all__ = [
     "ArticleDetail",
     "CategoryDetail",
     "CategoryDetailList",
-    "EmbedResponse",
     "FetchRequest",
     "FetchResponse",
     "OriginalArticleEmbed",
