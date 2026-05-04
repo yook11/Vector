@@ -1,10 +1,10 @@
 import { cacheLife } from "next/cache";
-import { publicServerFetch } from "@/lib/api/server-fetcher";
+import { apiCall, typedPublic } from "@/lib/api/typed-server-fetcher";
 import type { WeeklyTrendsResponse } from "@/types";
 
 /** Fetch the latest weekly trends snapshot (response is user-independent). */
 export async function getWeeklyTrends(): Promise<WeeklyTrendsResponse> {
   "use cache";
   cacheLife("days");
-  return publicServerFetch<WeeklyTrendsResponse>("/weekly-trends");
+  return apiCall(typedPublic.GET("/api/v1/weekly-trends", {}));
 }

@@ -3,7 +3,7 @@ import {
   type BriefingResponseParsed,
   BriefingResponseSchema,
 } from "@/features/briefing/schemas/briefing";
-import { publicServerFetch } from "@/lib/api/server-fetcher";
+import { apiCall, typedPublic } from "@/lib/api/typed-server-fetcher";
 import { briefingCategoryTag, cacheTags } from "@/lib/cache/tags";
 
 /**
@@ -21,8 +21,10 @@ export async function getBriefing(
   cacheLife("hours");
   cacheTag(briefingCategoryTag(slug));
   cacheTag(cacheTags.briefingList);
-  const raw = await publicServerFetch<unknown>(
-    `/briefing/${encodeURIComponent(slug)}`,
+  const raw = await apiCall(
+    typedPublic.GET("/api/v1/briefing/{category_slug}", {
+      params: { path: { category_slug: slug } },
+    }),
   );
   return BriefingResponseSchema.parse(raw);
 }

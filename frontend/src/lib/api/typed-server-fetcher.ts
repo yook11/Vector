@@ -1,19 +1,16 @@
 /**
- * Type-safe server fetcher (PR-Y3 foundation).
+ * Type-safe server fetcher (Vector 唯一の backend 経路)。
  *
- * 旧 `lib/api/server-fetcher.ts` の `serverFetch<T>(path)` は T と path が型で
- * 連結されていない問題があった (callers が `serverFetch<ArticleDetail>(\`/articles/...\`)`
- * のように手書きで T を assert)。本モジュールは openapi-fetch を介して
- * `src/types/generated.ts` の `paths` から response 型を自動導出する。
+ * openapi-fetch を介して `src/types/generated.ts` の `paths` から response
+ * 型を自動導出することで、path と response 型を構造的に連結する (旧
+ * `serverFetch<T>(path)` のような手書き T assert を排除)。
  *
  * Vector 固有の以下を middleware と custom fetch で保持する:
- * - per-request HS256 JWT 認証 (`buildInternalAuthHeaders` を再利用)
+ * - per-request HS256 JWT 認証 (`buildInternalAuthHeaders` を再利用、
+ *   `typedServer` のみ。`typedPublic` は header を一切付与しない)
  * - 4xx/5xx を `ApiError` に正規化して throw (FastAPI HTTPException + Pydantic
  *   ValidationError 両 shape を `normalizeErrorDetail` で吸収)
- * - 10s timeout + AbortSignal merge → `ApiError(408)` (`fetcher.ts` の logic を移植)
- *
- * Migration は段階的: 本 PR では exemplar (watchlist 系) のみ。残り 40+ caller
- * は続編 PR で feature 単位に移行し、最終的に `serverFetch` 系を削除する。
+ * - 10s timeout + AbortSignal merge → `ApiError(408)`
  */
 
 import "server-only";

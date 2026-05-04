@@ -3,7 +3,7 @@ import {
   type BriefingListResponseParsed,
   BriefingListResponseSchema,
 } from "@/features/briefing/schemas/briefing";
-import { publicServerFetch } from "@/lib/api/server-fetcher";
+import { apiCall, typedPublic } from "@/lib/api/typed-server-fetcher";
 import { cacheTags } from "@/lib/cache/tags";
 
 /**
@@ -19,6 +19,6 @@ export async function listBriefings(): Promise<BriefingListResponseParsed> {
   "use cache";
   cacheLife("hours");
   cacheTag(cacheTags.briefingList);
-  const raw = await publicServerFetch<unknown>("/briefing");
+  const raw = await apiCall(typedPublic.GET("/api/v1/briefing", {}));
   return BriefingListResponseSchema.parse(raw);
 }

@@ -31,7 +31,7 @@ import type { Session } from "@/lib/auth/session";
  * `React.cache` で wrap することで、同一 React Request scope で複数回
  * 呼ばれても backend (Postgres) への問い合わせは 1 回に集約される。
  * `requireSession` / `requireSessionForAction` / `requireAdminForAction` /
- * `serverFetch` の `getAuthHeaders` / `getWatchlistIds` 等から共通で
+ * `typedServer` の `authMiddleware` / `getWatchlistIds` 等から共通で
  * 呼ばれるため、wrap なしだと 1 リクエストで 4-5 回 DB hit していた。
  *
  * cross-request leak は構造的に発生しない (`cache` は per-Request scope)。

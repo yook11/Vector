@@ -1,4 +1,4 @@
-import { serverFetch } from "@/lib/api/server-fetcher";
+import { apiCall, typedServer } from "@/lib/api/typed-server-fetcher";
 import { cacheTags } from "@/lib/cache/tags";
 import type { PaginatedArticleResponse } from "@/types";
 
@@ -15,8 +15,10 @@ export async function getWatchlist(
   page = 1,
   perPage = 20,
 ): Promise<PaginatedArticleResponse> {
-  return serverFetch<PaginatedArticleResponse>(
-    `/me/watchlist?page=${page}&perPage=${perPage}`,
-    { next: { tags: [cacheTags.watchlistMe] } },
+  return apiCall(
+    typedServer.GET("/api/v1/me/watchlist", {
+      params: { query: { page, perPage } },
+      next: { tags: [cacheTags.watchlistMe] },
+    }),
   );
 }

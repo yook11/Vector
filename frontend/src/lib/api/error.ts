@@ -1,5 +1,5 @@
 /**
- * Shared error types and helpers for the server-side fetcher (server-fetcher.ts).
+ * Shared error types and helpers for the server-side fetcher (typed-server-fetcher.ts).
  */
 
 import type { components } from "@/types/generated";
