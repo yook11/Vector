@@ -9,10 +9,9 @@
  * baseUrl: openapi-fetch 経路と同じ origin のみ (`/api/v1` prefix は generated
  * の path key 側に含まれる)。
  *
- * customFetch: 旧 typed-server-fetcher.ts の `customFetch` を移植。timeout 10s
- * + AbortSignal merge。timeout は ApiError(408) に正規化していたが、ここは
- * Error として throw して error interceptor (PR-H2) で `ApiError(408, ...)` に
- * 包む。
+ * customFetch: timeout 10s + AbortSignal merge。timeout は Error として throw
+ * し、error interceptor (`hey-api-interceptors.ts`) で `ApiError(0, ...)` に
+ * 包まれる。
  */
 
 import "server-only";

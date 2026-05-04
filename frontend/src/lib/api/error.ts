@@ -1,5 +1,5 @@
 /**
- * Shared error types and helpers for the server-side fetcher (typed-server-fetcher.ts).
+ * Shared error types and helpers for hey-api error interceptor (hey-api-interceptors.ts).
  */
 
 import type { ValidationError } from "@/types/types.gen";

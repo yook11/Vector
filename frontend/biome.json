@@ -8,7 +8,6 @@
   "files": {
     "includes": [
       "**",
-      "!src/types/generated.ts",
       "!src/types/*.gen.ts",
       "!src/types/client/**",
       "!src/types/core/**"
@@ -20,6 +19,16 @@
       "recommended": true,
       "suspicious": {
         "noUnknownAtRules": "off"
+      },
+      "style": {
+        "noRestrictedImports": {
+          "level": "error",
+          "options": {
+            "paths": {
+              "@/types/generated": "Use '@/types/types.gen' for hey-api generated types, or '@/types' for narrowed re-exports. The legacy openapi-typescript generated.ts has been removed in PR-H4b."
+            }
+          }
+        }
       }
     }
   },
