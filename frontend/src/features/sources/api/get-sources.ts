@@ -1,4 +1,4 @@
-import { serverFetch } from "@/lib/api/server-fetcher";
+import { apiCall, typedServer } from "@/lib/api/typed-server-fetcher";
 import { cacheTags } from "@/lib/cache/tags";
 import type { NewsSourceDetailList } from "@/types";
 
@@ -9,7 +9,7 @@ import type { NewsSourceDetailList } from "@/types";
  * する (https://nextjs.org/docs/app/api-reference/directives/use-cache)。
  * ただし `'use cache'` 内では cookies()/headers() の読み取りが構造的に
  * 禁止されている (hard constraint)。本関数は admin 認証に依存する
- * `serverFetch` 経由なので `'use cache'` 内では実行不可。
+ * `typedServer` 経由なので `'use cache'` 内では実行不可。
  *
  * 代替として legacy fetch options (`next: { revalidate, tags }`) を採用する。
  * `cacheTags.sources` は同 feature 内 4 Server Action (create / activate /
@@ -18,7 +18,9 @@ import type { NewsSourceDetailList } from "@/types";
  * expiration として機能する。
  */
 export async function getSources(): Promise<NewsSourceDetailList> {
-  return serverFetch<NewsSourceDetailList>("/admin/sources", {
-    next: { revalidate: 7200, tags: [cacheTags.sources] },
-  });
+  return apiCall(
+    typedServer.GET("/api/v1/admin/sources", {
+      next: { revalidate: 7200, tags: [cacheTags.sources] },
+    }),
+  );
 }

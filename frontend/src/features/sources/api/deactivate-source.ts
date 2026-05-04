@@ -1,7 +1,7 @@
 "use server";
 
 import { updateTag } from "next/cache";
-import { serverFetch } from "@/lib/api/server-fetcher";
+import { typedServer } from "@/lib/api/typed-server-fetcher";
 import { requireAdminForAction } from "@/lib/auth/guards";
 import { cacheTags } from "@/lib/cache/tags";
 import { PositiveIdSchema } from "@/lib/validation/id";
@@ -12,7 +12,7 @@ import { deactivateSourceCore } from "./source-cores";
 export async function deactivateSource(id: number): Promise<NewsSourceDetail> {
   await requireAdminForAction();
   const validId = PositiveIdSchema.parse(id);
-  const updated = await deactivateSourceCore(validId, serverFetch);
+  const updated = await deactivateSourceCore(validId, typedServer);
   updateTag(cacheTags.sources);
   return updated;
 }

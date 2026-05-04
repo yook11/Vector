@@ -1,7 +1,7 @@
 "use server";
 
 import { updateTag } from "next/cache";
-import { serverFetch } from "@/lib/api/server-fetcher";
+import { typedServer } from "@/lib/api/typed-server-fetcher";
 import { requireAdminForAction } from "@/lib/auth/guards";
 import { cacheTags } from "@/lib/cache/tags";
 import type { NewsSourceCreate, NewsSourceDetail } from "@/types";
@@ -16,7 +16,7 @@ export async function createSource(
   // defense-in-depth: Client UI を bypass する hostile call で型が崩れた
   // payload が来うるので、SourceFormDialog と同じ zod schema で再検証する。
   const validBody = NewSourceSchema.parse(body);
-  const created = await createSourceCore(validBody, serverFetch);
+  const created = await createSourceCore(validBody, typedServer);
   updateTag(cacheTags.sources);
   return created;
 }
