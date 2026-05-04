@@ -35,6 +35,7 @@ from app.collection.ingestion.fetchers.itmedia_ai import ITmediaAIFetcher
 from app.collection.ingestion.fetchers.itmedia_news import ITmediaNewsFetcher
 from app.collection.ingestion.fetchers.jpcert import JPCERTFetcher
 from app.collection.ingestion.fetchers.krebs_on_security import KrebsOnSecurityFetcher
+from app.collection.ingestion.fetchers.meta_ai import MetaAIFetcher
 from app.collection.ingestion.fetchers.mext import MEXTFetcher
 from app.collection.ingestion.fetchers.mic import MICFetcher
 from app.collection.ingestion.fetchers.microsoft_research import (
@@ -88,4 +89,5 @@ FETCHERS: Final[dict[str, Callable[[], Fetcher]]] = {
     "Hugging Face": HuggingFaceBlogFetcher,
     "eLife": ELifeFetcher,
     "PLOS ONE": PLOSOneFetcher,
+    "Meta AI": MetaAIFetcher,
 }

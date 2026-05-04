@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+  xmlns:content="http://purl.org/rss/1.0/modules/content/"
+  xmlns:dc="http://purl.org/dc/elements/1.1/"
+  xmlns:media="http://search.yahoo.com/mrss/">
+  <channel>
+    <title>Meta Newsroom</title>
+    <link>https://about.fb.com/</link>
+    <description>Meta company news</description>
+    <language>en-US</language>
+    <lastBuildDate>Sun, 03 May 2026 23:46:23 +0000</lastBuildDate>
+    <item>
+      <title>Powering AI, Strengthening the Grid: Innovation in Space Solar</title>
+      <link>https://about.fb.com/news/2026/04/powering-ai-strengthening-grid/</link>
+      <guid isPermaLink="false">https://about.fb.com/?p=48100</guid>
+      <pubDate>Wed, 30 Apr 2026 13:00:00 +0000</pubDate>
+      <dc:creator>Facebook</dc:creator>
+      <category>Meta</category>
+      <category>Recent News</category>
+      <category>Technology and Innovation</category>
+      <category>AI</category>
+      <description><![CDATA[<p>Meta announces new initiatives to power AI infrastructure with renewable energy from space-based solar.</p>]]></description>
+      <content:encoded><![CDATA[<p>Meta is announcing a series of new initiatives to power our AI infrastructure with renewable energy from space-based solar arrays. Our research team has been working with leading aerospace partners to develop next-generation orbital solar collectors that beam clean energy back to ground stations near our data centers. This represents a major step forward in our commitment to sustainable AI compute. The first pilot installations are expected to come online in late 2027, providing baseline power for our Tulsa, Oklahoma data center campus. Beyond carbon reduction, the system offers grid resilience benefits that will help support local communities during peak demand periods. We are partnering with three regional utilities and the Department of Energy to ensure these innovations benefit the broader power grid.</p>]]></content:encoded>
+      <media:content url="https://about.fb.com/wp-content/uploads/2026/04/space-solar.jpg" medium="image"/>
+    </item>
+    <item>
+      <title>Meta Partners With AWS on Graviton Chips to Power Agentic AI</title>
+      <link>https://about.fb.com/news/2026/04/meta-aws-graviton-agentic-ai/</link>
+      <guid isPermaLink="false">https://about.fb.com/?p=48101</guid>
+      <pubDate>Wed, 30 Apr 2026 12:00:00 +0000</pubDate>
+      <dc:creator>Facebook</dc:creator>
+      <category>Meta</category>
+      <category>Technology and Innovation</category>
+      <category>AI</category>
+      <description><![CDATA[<p>Meta and AWS deepen partnership on Graviton-based infrastructure for next-gen agentic AI workloads.</p>]]></description>
+      <content:encoded><![CDATA[<p>Today we announce a multi-year partnership with Amazon Web Services to deploy Graviton4-based compute clusters dedicated to agentic AI workloads. This partnership combines Meta's Llama foundation models with AWS's energy-efficient ARM processors to deliver state-of-the-art inference performance at a fraction of the carbon cost. The first clusters will be deployed across AWS regions in North America and Europe starting Q3 2026. Early benchmarks show 40% better tokens-per-watt compared to legacy x86 GPU configurations. We expect this to enable customers to run sophisticated multi-agent reasoning systems at unprecedented scale.</p>]]></content:encoded>
+    </item>
+    <item>
+      <title>Live Chats on Threads: Because Big Moments Are Better Together</title>
+      <link>https://about.fb.com/news/2026/04/threads-live-chats/</link>
+      <guid isPermaLink="false">https://about.fb.com/?p=48102</guid>
+      <pubDate>Tue, 29 Apr 2026 12:00:00 +0000</pubDate>
+      <dc:creator>Facebook</dc:creator>
+      <category>Product News</category>
+      <category>Threads</category>
+      <description><![CDATA[<p>Threads launches Live Chats for real-time group conversations during major events.</p>]]></description>
+      <content:encoded><![CDATA[<p>Threads is launching Live Chats, a new feature that lets users join real-time group conversations during breaking news, sports games, and cultural moments. Live Chats are temporary, ephemeral spaces tied to specific events, and they automatically close when the moment passes. We've been testing this with sports communities in select markets and seeing strong engagement. Live Chats is rolling out globally over the next two weeks.</p>]]></content:encoded>
+    </item>
+  </channel>
+</rss>
