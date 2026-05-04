@@ -33,6 +33,16 @@ class ExtractionExistenceProtocol(Protocol):
     async def exists_for_article(self, article_id: int) -> bool: ...
 
 
+class NoiseExistenceProtocol(Protocol):
+    """Stage C 進行判定用 Noise Repository contract (cheap exists 判定)。
+
+    Stage 1 signal/noise フィルタの導入により、同一 article に対して
+    ``article_extractions`` または ``extraction_noises`` のどちらかが既に
+    存在する状態を Ready 型構築時に弾く必要がある。"""
+
+    async def exists_for_article(self, article_id: int) -> bool: ...
+
+
 class ReadyForExtraction(BaseModel):
     """Stage C extraction を実行可能な状態を表す precondition 型。
 
@@ -63,11 +73,14 @@ class ReadyForExtraction(BaseModel):
         original_title: str,
         original_content: str,
         extraction_repo: ExtractionExistenceProtocol,
+        noise_repo: NoiseExistenceProtocol,
     ) -> ReadyForExtraction | None:
         """Article 永続化から Stage C へ advance できるかを判定する gatekeeper。
 
         Precondition (Stage C に進める条件):
         - 同 article_id の Extraction 未生成
+        - 同 article_id の ExtractionNoise 未生成 (Stage 1 で既に noise 判定済の
+          記事を再処理しない)
         - 本文長が ``MAX_CONTENT_LENGTH`` 以内 (system hard cap)
 
         Phase 3 は BC 越境 (collection BC → analysis BC) を含み、上流 caller が
@@ -80,6 +93,8 @@ class ReadyForExtraction(BaseModel):
             進めない場合: `None` (業務正常状態、例外ではない — spec §4.5 Failure mode 1)
         """
         if await extraction_repo.exists_for_article(article_id):
+            return None
+        if await noise_repo.exists_for_article(article_id):
             return None
         if len(original_content) > cls.MAX_CONTENT_LENGTH:
             logger.warning(

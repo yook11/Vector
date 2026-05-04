@@ -163,6 +163,30 @@ class TestExtractContent:
         mock_classify.kiq.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_noise_outcome_does_not_chain(self) -> None:
+        """NoiseOutcome は chain しない (Service 側で extraction_noises に永続化済)。"""
+        from app.analysis.extraction.service import NoiseOutcome
+        from app.analysis.tasks import extract_content
+
+        mock_ctx = _make_ctx(extractor=_make_provider_fake())
+
+        with (
+            patch(
+                "app.analysis.tasks._build_limiters",
+                return_value=(None, None),
+            ),
+            patch("app.analysis.tasks.ExtractionService") as mock_svc_cls,
+            patch("app.analysis.tasks.classify_content") as mock_classify,
+        ):
+            mock_svc_cls.return_value.execute = AsyncMock(
+                return_value=NoiseOutcome(),
+            )
+            mock_classify.kiq = AsyncMock()
+            await extract_content(ready=_make_ready_extraction(), ctx=mock_ctx)
+
+        mock_classify.kiq.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_rate_limit_raises_for_retry(self) -> None:
         from app.analysis.tasks import extract_content
 

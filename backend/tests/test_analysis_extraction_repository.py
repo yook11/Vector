@@ -34,10 +34,12 @@ def _result(
     title_ja: str = "翻訳タイトル",
     summary_ja: str = "要約",
     entities: list[tuple[str, str]] | None = None,
+    relevance: str = "signal",
 ) -> ExtractionResult:
     if entities is None:
         entities = [("MIT", "company")]
     return ExtractionResult(
+        relevance=relevance,
         title_ja=title_ja,
         summary_ja=summary_ja,
         entities=[

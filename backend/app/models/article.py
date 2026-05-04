@@ -22,6 +22,7 @@ from app.shared.value_objects.safe_url import SafeUrl
 if TYPE_CHECKING:
     from app.models.article_extraction import ArticleExtraction
     from app.models.discovered_article import DiscoveredArticle
+    from app.models.extraction_noise import ExtractionNoise
     from app.models.news_source import NewsSource
 
 
@@ -66,6 +67,9 @@ class Article(Base):
         back_populates="article"
     )
     extraction: Mapped[ArticleExtraction | None] = relationship(
+        back_populates="article", uselist=False
+    )
+    extraction_noise: Mapped[ExtractionNoise | None] = relationship(
         back_populates="article", uselist=False
     )
 

@@ -133,6 +133,7 @@ async def ingest_source(
     後段 ``extract_html_body`` task で trafilatura 抽出 + 永続化に進む。
     """
     from app.analysis.extraction.domain.ready import ReadyForExtraction
+    from app.analysis.extraction.noise_repository import NoiseRepository
     from app.analysis.extraction.repository import ExtractionRepository
     from app.analysis.tasks import extract_content
     from app.collection.ingestion.ingestion_service import IngestionService
@@ -182,6 +183,7 @@ async def ingest_source(
     # Pattern R 経路: 永続化済 Article から ReadyForExtraction を構築し kiq
     async with session_factory() as session:
         extraction_repo = ExtractionRepository(session)
+        noise_repo = NoiseRepository(session)
         pending: list = []
         for article in articles:
             ready = await ReadyForExtraction.try_advance_from(
@@ -189,6 +191,7 @@ async def ingest_source(
                 original_title=article.title,
                 original_content=article.body,
                 extraction_repo=extraction_repo,
+                noise_repo=noise_repo,
             )
             if ready is not None:
                 pending.append(ready)
@@ -241,6 +244,7 @@ async def extract_html_body(
     を構築して ``extract_content.kiq`` に流す。
     """
     from app.analysis.extraction.domain.ready import ReadyForExtraction
+    from app.analysis.extraction.noise_repository import NoiseRepository
     from app.analysis.extraction.repository import ExtractionRepository
     from app.analysis.tasks import extract_content
     from app.collection.extraction.domain.article import ArticleDraft
@@ -331,11 +335,13 @@ async def extract_html_body(
             return None
 
         extraction_repo = ExtractionRepository(session)
+        noise_repo = NoiseRepository(session)
         ready_for_extraction = await ReadyForExtraction.try_advance_from(
             article_id=persisted.id,
             original_title=fa.title,
             original_content=fa.body,
             extraction_repo=extraction_repo,
+            noise_repo=noise_repo,
         )
         await session.commit()
 

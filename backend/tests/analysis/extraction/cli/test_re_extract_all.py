@@ -111,6 +111,7 @@ async def _seed_article_with_extraction(
     repo = ExtractionRepository(db_session)
     await repo.save(
         ExtractionResult(
+            relevance="signal",
             title_ja="旧",
             summary_ja="旧",
             entities=[

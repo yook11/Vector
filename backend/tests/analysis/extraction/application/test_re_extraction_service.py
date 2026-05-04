@@ -48,10 +48,12 @@ def _result(
     *,
     title_ja: str = "新タイトル",
     summary_ja: str = "新要約",
+    relevance: str = "signal",
 ) -> ExtractionResult:
     if entities is None:
         entities = [("NewSurface", "Company")]
     return ExtractionResult(
+        relevance=relevance,
         title_ja=title_ja,
         summary_ja=summary_ja,
         entities=[
@@ -108,6 +110,7 @@ async def _seed_extraction(
     repo = ExtractionRepository(db_session)
     saved = await repo.save(
         ExtractionResult(
+            relevance="signal",
             title_ja="旧タイトル",
             summary_ja="旧要約",
             entities=[

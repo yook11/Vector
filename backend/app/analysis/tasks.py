@@ -45,6 +45,7 @@ from app.analysis.extraction.extractor.base import BaseExtractor
 from app.analysis.extraction.service import (
     ExtractedOutcome,
     ExtractionService,
+    NoiseOutcome,
 )
 from app.analysis.extraction.service import (
     InvalidInputOutcome as ExtractionInvalidInputOutcome,
@@ -180,6 +181,11 @@ async def extract_content(
             )
         if ready_class is not None:
             await classify_content.kiq(ready_class)
+    elif isinstance(result, NoiseOutcome):
+        logger.info(
+            "extract_content_noise",
+            article_id=ready.article_id,
+        )
     elif isinstance(result, ExtractionInvalidInputOutcome):
         logger.info(
             "extract_content_invalid_input",

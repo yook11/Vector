@@ -49,6 +49,7 @@ from app.analysis.extraction.service import (
     ExtractedOutcome,
     ExtractionService,
     InvalidInputOutcome,
+    NoiseOutcome,
 )
 from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis
@@ -57,6 +58,7 @@ from app.models.article_extraction_entity import ArticleExtractionEntity
 from app.models.article_rejection import ArticleRejection
 from app.models.category import Category
 from app.models.discovered_article import DiscoveredArticle
+from app.models.extraction_noise import ExtractionNoise as ExtractionNoiseORM
 from app.models.news_source import NewsSource
 
 # --- Helpers ---
@@ -66,6 +68,7 @@ def _make_extraction_result(
     title_ja: str = "量子コンピューティングの新たなブレイクスルー",
     summary_ja: str = "MITが新手法を発表。量子エラー訂正の分野で大きな進展。",
     entities: list[tuple[str, str]] | None = None,
+    relevance: str = "signal",
 ) -> ExtractionResult:
     """ExtractionResult を生成するヘルパー。"""
     if entities is None:
@@ -74,6 +77,7 @@ def _make_extraction_result(
             ("Quantum LDPC", "technology"),
         ]
     return ExtractionResult(
+        relevance=relevance,
         title_ja=title_ja,
         summary_ja=summary_ja,
         entities=[
@@ -196,6 +200,7 @@ def test_base_classifier_rejects_subclass_without_classvar() -> None:
 def test_extraction_result_preserves_surface_and_raw_type_case() -> None:
     """Phase 1B α-1: surface も raw_type も casing 保持される。"""
     resp = ExtractionResult(
+        relevance="signal",
         title_ja="t",
         summary_ja="s",
         entities=[
@@ -211,6 +216,7 @@ def test_extraction_result_preserves_surface_and_raw_type_case() -> None:
 def test_extraction_result_deduplicates_entities_case_insensitive_on_surface() -> None:
     """surface 側は match_key (lower) で dedup される (raw_type 揃えれば 1 件)。"""
     resp = ExtractionResult(
+        relevance="signal",
         title_ja="t",
         summary_ja="s",
         entities=[
@@ -229,6 +235,7 @@ def test_extraction_result_deduplicates_entities_case_insensitive_on_surface() -
 def test_extraction_result_treats_different_raw_type_casing_as_distinct() -> None:
     """raw_type の casing 違いは別エンティティとして残す (β canonical_type と独立)。"""
     resp = ExtractionResult(
+        relevance="signal",
         title_ja="t",
         summary_ja="s",
         entities=[
@@ -245,6 +252,7 @@ def test_extraction_result_treats_different_raw_type_casing_as_distinct() -> Non
 
 def test_extraction_result_accepts_any_raw_type() -> None:
     resp = ExtractionResult(
+        relevance="signal",
         title_ja="t",
         summary_ja="s",
         entities=[
@@ -262,6 +270,7 @@ def test_extraction_result_accepts_any_raw_type() -> None:
 
 def test_extraction_result_sanitizes_html_in_title_and_summary() -> None:
     resp = ExtractionResult(
+        relevance="signal",
         title_ja="<b>タイトル</b>",
         summary_ja="<p>要約</p>",
         entities=[],
@@ -273,6 +282,7 @@ def test_extraction_result_sanitizes_html_in_title_and_summary() -> None:
 def test_extraction_result_rejects_empty_title() -> None:
     with pytest.raises(ValidationError):
         ExtractionResult(
+            relevance="signal",
             title_ja="",
             summary_ja="s",
             entities=[],
@@ -282,6 +292,7 @@ def test_extraction_result_rejects_empty_title() -> None:
 def test_extraction_result_rejects_title_that_becomes_empty_after_sanitize() -> None:
     with pytest.raises(ValidationError):
         ExtractionResult(
+            relevance="signal",
             title_ja="<br/>",
             summary_ja="s",
             entities=[],
@@ -831,6 +842,79 @@ async def test_extraction_race_winner_read_back(
     assert isinstance(outcome, ExtractedOutcome)
     # 勝者 (DB 上の既存行) を読み戻している
     assert outcome.extraction.id == existing.id
+
+
+async def test_extraction_routes_noise_to_extraction_noises_table(
+    db_session: AsyncSession,
+    session_factory,
+    sample_source: NewsSource,
+) -> None:
+    """relevance="noise" の結果は extraction_noises に永続化されて NoiseOutcome を返す。
+
+    article_extractions には行が入らないこと、Stage 2 へ chain しないことを
+    保証する (chain は task 層で確認、ここは Service の振り分けが正しいかを見る)。
+    """
+    discovered = DiscoveredArticle(
+        original_title="Celebrity Gossip",
+        original_url="https://example.com/noise",
+        news_source_id=sample_source.id,
+    )
+    db_session.add(discovered)
+    await db_session.flush()
+    article = Article(
+        discovered_article_id=discovered.id,
+        source_id=discovered.news_source_id,
+        source_url=discovered.original_url,
+        original_title="Celebrity Gossip",
+        original_content="Off-topic content.",
+        published_at=datetime.now(UTC),
+    )
+    db_session.add(article)
+    await db_session.commit()
+    await db_session.refresh(article)
+
+    mock_extractor = MagicMock(spec=BaseExtractor)
+    mock_extractor.MODEL = "gemini-2.5-flash-lite"
+    mock_extractor.model_name = "gemini-2.5-flash-lite"
+    mock_extractor.extract = AsyncMock(
+        return_value=_make_extraction_result(
+            relevance="noise",
+            title_ja="芸能ニュース",
+            summary_ja="芸能要約",
+            entities=[("Some Star", "person")],
+        )
+    )
+
+    article_id = article.id
+    ready = ReadyForExtraction(
+        article_id=article_id,
+        original_title=article.original_title,
+        original_content=article.original_content,
+    )
+    svc = ExtractionService(session_factory)
+    outcome = await svc.execute(ready, mock_extractor)
+
+    assert isinstance(outcome, NoiseOutcome)
+
+    db_session.expire_all()
+    # extraction_noises に 1 行入っている
+    persisted = (
+        await db_session.execute(
+            select(ExtractionNoiseORM).where(
+                ExtractionNoiseORM.article_id == article_id,
+            )
+        )
+    ).scalar_one()
+    assert persisted.title_ja == "芸能ニュース"
+    assert persisted.entities == [{"surface": "Some Star", "raw_type": "person"}]
+    # article_extractions には入っていない (排他)
+    assert (
+        await db_session.execute(
+            select(ArticleExtraction).where(
+                ArticleExtraction.article_id == article_id,
+            )
+        )
+    ).scalar_one_or_none() is None
 
 
 async def test_extraction_returns_invalid_input_outcome(

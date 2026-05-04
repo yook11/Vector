@@ -20,6 +20,10 @@ def _make_repo_mock(*, exists: bool = False) -> AsyncMock:
     return repo
 
 
+def _noise_repo_absent() -> AsyncMock:
+    return _make_repo_mock(exists=False)
+
+
 # ---------------------------------------------------------------------------
 # try_advance_from — precondition 充足 / 未充足
 # ---------------------------------------------------------------------------
@@ -28,7 +32,7 @@ def _make_repo_mock(*, exists: bool = False) -> AsyncMock:
 class TestTryAdvanceFromPreconditionMet:
     @pytest.mark.asyncio
     async def test_returns_ready_when_not_yet_extracted(self) -> None:
-        """同 article_id に extraction 未生成 + 本文サイズ妥当なら Ready を返す。"""
+        """extraction/noise 未生成 + 本文サイズ妥当なら Ready を返す。"""
         repo = _make_repo_mock(exists=False)
 
         ready = await ReadyForExtraction.try_advance_from(
@@ -36,6 +40,7 @@ class TestTryAdvanceFromPreconditionMet:
             original_title="Quantum Breakthrough",
             original_content="Article body" * 10,
             extraction_repo=repo,
+            noise_repo=_noise_repo_absent(),
         )
 
         assert ready is not None
@@ -53,6 +58,7 @@ class TestTryAdvanceFromPreconditionMet:
             original_title="t",
             original_content="content body",
             extraction_repo=repo,
+            noise_repo=_noise_repo_absent(),
         )
 
         repo.exists_for_article.assert_awaited_once_with(777)
@@ -69,6 +75,20 @@ class TestTryAdvanceFromPreconditionNotMet:
             original_title="t",
             original_content="content",
             extraction_repo=repo,
+            noise_repo=_noise_repo_absent(),
+        )
+
+        assert ready is None
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_already_recorded_as_noise(self) -> None:
+        """同 article_id に noise 既存なら None を返す (再処理しない)。"""
+        ready = await ReadyForExtraction.try_advance_from(
+            article_id=42,
+            original_title="t",
+            original_content="content",
+            extraction_repo=_make_repo_mock(exists=False),
+            noise_repo=_make_repo_mock(exists=True),
         )
 
         assert ready is None
@@ -84,6 +104,7 @@ class TestTryAdvanceFromPreconditionNotMet:
             original_title="t",
             original_content=oversized,
             extraction_repo=repo,
+            noise_repo=_noise_repo_absent(),
         )
 
         assert ready is None
@@ -99,6 +120,7 @@ class TestTryAdvanceFromPreconditionNotMet:
             original_title="t",
             original_content=boundary,
             extraction_repo=repo,
+            noise_repo=_noise_repo_absent(),
         )
 
         assert ready is not None

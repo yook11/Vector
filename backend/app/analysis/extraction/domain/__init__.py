@@ -11,11 +11,13 @@ from app.analysis.extraction.domain.entity import (
     ExtractedEntity,
 )
 from app.analysis.extraction.domain.extraction import Extraction, ExtractionResult
+from app.analysis.extraction.domain.extraction_noise import ExtractionNoise
 
 __all__ = [
     "EntityRawType",
     "EntitySurface",
     "ExtractedEntity",
     "Extraction",
+    "ExtractionNoise",
     "ExtractionResult",
 ]

@@ -114,6 +114,7 @@ async def backfill_extractions(ctx: Context = TaskiqDepends()) -> None:
         return
 
     from app.analysis.extraction.domain.ready import ReadyForExtraction
+    from app.analysis.extraction.noise_repository import NoiseRepository
     from app.analysis.extraction.repository import ExtractionRepository
     from app.analysis.tasks import extract_content
     from app.models.article import Article
@@ -124,6 +125,7 @@ async def backfill_extractions(ctx: Context = TaskiqDepends()) -> None:
         try:
             async with session_factory() as session:
                 extraction_repo = ExtractionRepository(session)
+                noise_repo = NoiseRepository(session)
                 article = await session.get(Article, article_id)
                 if article is None:
                     skipped += 1
@@ -133,6 +135,7 @@ async def backfill_extractions(ctx: Context = TaskiqDepends()) -> None:
                     original_title=article.original_title,
                     original_content=article.original_content,
                     extraction_repo=extraction_repo,
+                    noise_repo=noise_repo,
                 )
             if ready is None:
                 skipped += 1

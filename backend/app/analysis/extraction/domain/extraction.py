@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Self
+from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
@@ -32,7 +32,12 @@ class ExtractionResult(BaseModel):
     Gemini の ``response_schema`` として使用されるため、フィールド名は
     AI プロンプトの規約に合わせて ``title_ja`` / ``summary_ja`` とする。
 
+    ``relevance`` は Stage 1 signal/noise フィルタの判定結果。``"signal"``
+    なら下流 (Stage 2 classification) へ進み、``"noise"`` なら
+    ``extraction_noises`` テーブルに記録して chain しない。
+
     Invariants (validators で構造的に保証):
+    - ``relevance``: ``"signal"`` または ``"noise"``
     - ``title_ja`` / ``summary_ja``: HTML タグ除去後に非空
     - ``entities``: ``(surface.match_key, raw_type.root)`` で重複なし
     - frozen: 生成後は不変
@@ -40,6 +45,7 @@ class ExtractionResult(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
+    relevance: Literal["signal", "noise"]
     title_ja: str
     summary_ja: str
     entities: list[ExtractedEntity]
