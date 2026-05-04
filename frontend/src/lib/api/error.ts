@@ -2,9 +2,7 @@
  * Shared error types and helpers for the server-side fetcher (typed-server-fetcher.ts).
  */
 
-import type { components } from "@/types/generated";
-
-type ValidationError = components["schemas"]["ValidationError"];
+import type { ValidationError } from "@/types/types.gen";
 
 export class ApiError extends Error {
   constructor(
@@ -16,7 +14,7 @@ export class ApiError extends Error {
   }
 }
 
-// Pydantic ValidationError の runtime narrow。generated.ts の shape
+// Pydantic ValidationError の runtime narrow。types.gen.ts の shape
 // (loc: (string|number)[], msg: string, type: string) のうち、UI 表示に
 // 必須となる loc / msg のみを runtime 検証する。`in` operator narrowing で
 // `as { ... }` cast を避け、generated 型と SSoT 接続する。

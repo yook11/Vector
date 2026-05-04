@@ -6,16 +6,18 @@
  * (入力中のフィールド単位エラー) と defense-in-depth (Server Action 直叩き耐性
  * + URL scheme allowlist) を担う。最終 invariant は backend が保証する。
  *
- * `SOURCE_TYPES` は `as const satisfies readonly components["schemas"]["SourceType"][]`
- * で固定しており、backend が enum を増やすとコンパイル fail する。
+ * `SOURCE_TYPES` は `as const satisfies readonly NonNullable<SourceType>[]`
+ * で固定しており、`SourceType` は `@/types/types.gen` から取得した backend 由来の
+ * union (`'rss' | 'api' | 'html'`) を直接参照する。
  */
 
 import { z } from "zod";
-import type { components } from "@/types/generated";
+import type { SourceType as GeneratedSourceType } from "@/types/types.gen";
 
-const SOURCE_TYPES = ["rss", "api"] as const satisfies readonly NonNullable<
-  components["schemas"]["SourceType"]
->[];
+const SOURCE_TYPES = [
+  "rss",
+  "api",
+] as const satisfies readonly NonNullable<GeneratedSourceType>[];
 
 export const SourceTypeSchema = z.enum(SOURCE_TYPES);
 export type SourceType = z.infer<typeof SourceTypeSchema>;

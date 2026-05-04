@@ -24,6 +24,7 @@ export default defineConfig({
         "src/lib/auth/rate-limit.ts",
         "src/lib/api/error.ts",
         "src/lib/api/fetcher.ts",
+        "src/lib/api/hey-api-interceptors.ts",
         "src/lib/api/typed-server-fetcher.ts",
         "src/lib/cache/tags.ts",
         "src/lib/date.ts",
