@@ -9,6 +9,12 @@
  *
  * フェイルオープン: Redis 不通時は throttle を skip して通す。Redis 障害が
  * 全リクエスト 503 に直結しないようにし、一次防衛線は pg.Pool 設定に委ねる。
+ * 永続障害が無音にならないよう、warn ログは 60 秒ごとに 1 度出す
+ * (red-team C1 / F23 対策。一度きりログだと Redis ダウンを運用が見落とす)。
+ *
+ * limit は per-IP の 1 種類 (red-team C1 / F2-F4 対策で identifier を IP に統一)。
+ * 認証状態に応じた limit 緩和は本モジュールでは扱わず、後段の Better Auth
+ * 内蔵 rate-limit / backend 側に任せる。
  */
 
 import "server-only";
@@ -18,8 +24,8 @@ import type { RequestIdentifier } from "@/lib/proxy/identifier";
 
 const WINDOW_SEC = 60;
 const WINDOW_MS = WINDOW_SEC * 1000;
-const DEFAULT_AUTHED_LIMIT = 120;
-const DEFAULT_ANON_LIMIT = 60;
+const DEFAULT_LIMIT = 60;
+const ERROR_LOG_INTERVAL_MS = 60_000;
 
 export type RateLimitDecision =
   | { allowed: true }
@@ -33,25 +39,28 @@ export function parseLimit(raw: string | undefined, fallback: number): number {
 }
 
 export function calculateLimit(
-  kind: RequestIdentifier["kind"],
   env: Record<string, string | undefined> = process.env,
 ): number {
-  if (kind === "auth") {
-    return parseLimit(env.RATE_LIMIT_AUTHED_PER_MIN, DEFAULT_AUTHED_LIMIT);
-  }
-  return parseLimit(env.RATE_LIMIT_ANON_PER_MIN, DEFAULT_ANON_LIMIT);
+  return parseLimit(env.RATE_LIMIT_PER_MIN, DEFAULT_LIMIT);
 }
 
 // HMR / vitest module reset で client が複数生成されないよう globalThis にぶら下げる
 const globalForRedis = globalThis as unknown as {
   __vectorRateLimitRedis?: RedisClientType;
-  __vectorRateLimitErrorLogged?: boolean;
+  __vectorRateLimitErrorLastMs?: number;
 };
 
 function logRedisError(context: string, err: unknown): void {
-  if (globalForRedis.__vectorRateLimitErrorLogged) return;
+  // 60 秒ごとに 1 度だけ warn を出す。一度きりログにすると Redis 永続障害中に
+  // 運用が気付けず fail-open が長時間続く事故になるため、window-bounded で
+  // 継続出力する (red-team F23 対策)。
+  const now = Date.now();
+  const last = globalForRedis.__vectorRateLimitErrorLastMs;
+  if (last !== undefined && now - last < ERROR_LOG_INTERVAL_MS) {
+    return;
+  }
   console.warn(`rate-limit: ${context}, failing open`, err);
-  globalForRedis.__vectorRateLimitErrorLogged = true;
+  globalForRedis.__vectorRateLimitErrorLastMs = now;
 }
 
 function getClient(): RedisClientType | null {
@@ -99,7 +108,7 @@ export async function checkRateLimit(
     if (!c.isOpen) {
       await c.connect();
     }
-    const limit = calculateLimit(identifier.kind);
+    const limit = calculateLimit();
     const key = `rl:${identifier.kind}:${identifier.key}`;
     const result = (await c.eval(SLIDING_WINDOW_SCRIPT, {
       keys: [key],

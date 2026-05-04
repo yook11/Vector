@@ -15,6 +15,7 @@ export default defineConfig({
       // coverage 集計から silent に外れるため、PR レビュー時に対応テストの
       // 存在を確認すること。
       include: [
+        "src/proxy.ts",
         "src/lib/utils/sanitize-url.ts",
         "src/lib/utils/toast-error.ts",
         "src/lib/auth/role.ts",

@@ -32,7 +32,7 @@ import { calculateLimit, checkRateLimit, parseLimit } from "./rate-limit";
 
 const g = globalThis as unknown as {
   __vectorRateLimitRedis?: unknown;
-  __vectorRateLimitErrorLogged?: boolean;
+  __vectorRateLimitErrorLastMs?: number;
 };
 
 let warnSpy: MockInstance<typeof console.warn>;
@@ -40,7 +40,7 @@ let warnSpy: MockInstance<typeof console.warn>;
 beforeEach(() => {
   // singleton state を test 間で reset (HMR/test isolation 用に globalThis を採用しているため)
   delete g.__vectorRateLimitRedis;
-  delete g.__vectorRateLimitErrorLogged;
+  delete g.__vectorRateLimitErrorLastMs;
   mockEval.mockReset();
   mockConnect.mockReset();
   mockOn.mockReset();
@@ -53,6 +53,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllEnvs();
   warnSpy.mockRestore();
+  vi.useRealTimers();
 });
 
 describe("parseLimit", () => {
@@ -87,39 +88,27 @@ describe("parseLimit", () => {
 });
 
 describe("calculateLimit", () => {
-  it("returns 120 for auth by default", () => {
-    expect(calculateLimit("auth", {})).toBe(120);
+  it("returns the default limit (60) when no override is set", () => {
+    expect(calculateLimit({})).toBe(60);
   });
 
-  it("returns 60 for anon by default", () => {
-    expect(calculateLimit("anon", {})).toBe(60);
+  it("respects RATE_LIMIT_PER_MIN override", () => {
+    expect(calculateLimit({ RATE_LIMIT_PER_MIN: "300" })).toBe(300);
   });
 
-  it("respects RATE_LIMIT_AUTHED_PER_MIN override", () => {
-    expect(calculateLimit("auth", { RATE_LIMIT_AUTHED_PER_MIN: "300" })).toBe(
-      300,
-    );
+  it("falls back to default for invalid override", () => {
+    expect(calculateLimit({ RATE_LIMIT_PER_MIN: "not-a-number" })).toBe(60);
   });
 
-  it("respects RATE_LIMIT_ANON_PER_MIN override", () => {
-    expect(calculateLimit("anon", { RATE_LIMIT_ANON_PER_MIN: "30" })).toBe(30);
-  });
-
-  it("falls back to default for invalid auth override", () => {
-    expect(
-      calculateLimit("auth", { RATE_LIMIT_AUTHED_PER_MIN: "not-a-number" }),
-    ).toBe(120);
-  });
-
-  it("falls back to default for invalid anon override", () => {
-    expect(calculateLimit("anon", { RATE_LIMIT_ANON_PER_MIN: "0" })).toBe(60);
+  it("falls back to default for zero override", () => {
+    expect(calculateLimit({ RATE_LIMIT_PER_MIN: "0" })).toBe(60);
   });
 });
 
 describe("checkRateLimit", () => {
   it("returns allowed when REDIS_URL is unset (fail open)", async () => {
     vi.stubEnv("REDIS_URL", "");
-    const decision = await checkRateLimit({ kind: "anon", key: "1.2.3.4" });
+    const decision = await checkRateLimit({ kind: "ip", key: "1.2.3.4" });
     expect(decision).toEqual({ allowed: true });
     expect(mockConnect).not.toHaveBeenCalled();
   });
@@ -127,76 +116,87 @@ describe("checkRateLimit", () => {
   it("calls connect on first invocation when client is not open", async () => {
     mockIsOpenValue = false;
     mockEval.mockResolvedValue(1);
-    await checkRateLimit({ kind: "anon", key: "1.2.3.4" });
+    await checkRateLimit({ kind: "ip", key: "1.2.3.4" });
     expect(mockConnect).toHaveBeenCalledOnce();
   });
 
   it("returns allowed when Lua script returns 1", async () => {
     mockIsOpenValue = true;
     mockEval.mockResolvedValue(1);
-    const decision = await checkRateLimit({ kind: "auth", key: "deadbeef" });
+    const decision = await checkRateLimit({ kind: "ip", key: "1.2.3.4" });
     expect(decision).toEqual({ allowed: true });
   });
 
   it("returns denied with retryAfterSeconds=60 when Lua script returns 0", async () => {
     mockIsOpenValue = true;
     mockEval.mockResolvedValue(0);
-    const decision = await checkRateLimit({ kind: "auth", key: "deadbeef" });
+    const decision = await checkRateLimit({ kind: "ip", key: "1.2.3.4" });
     expect(decision).toEqual({ allowed: false, retryAfterSeconds: 60 });
   });
 
   it("fails open and warns when eval throws", async () => {
     mockIsOpenValue = true;
     mockEval.mockRejectedValue(new Error("redis down"));
-    const decision = await checkRateLimit({ kind: "anon", key: "1.2.3.4" });
+    const decision = await checkRateLimit({ kind: "ip", key: "1.2.3.4" });
     expect(decision).toEqual({ allowed: true });
     expect(warnSpy).toHaveBeenCalledOnce();
   });
 
-  it("logs warning only once across multiple failures (deduplicates)", async () => {
+  it("suppresses repeat warnings within 60 seconds (window-bounded log)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
     mockIsOpenValue = true;
     mockEval.mockRejectedValue(new Error("redis down"));
-    await checkRateLimit({ kind: "anon", key: "1.2.3.4" });
-    await checkRateLimit({ kind: "anon", key: "5.6.7.8" });
+    await checkRateLimit({ kind: "ip", key: "1.2.3.4" });
+    expect(warnSpy).toHaveBeenCalledOnce();
+    // 30 秒後の再失敗は抑制
+    vi.setSystemTime(new Date("2026-01-01T00:00:30Z"));
+    await checkRateLimit({ kind: "ip", key: "5.6.7.8" });
     expect(warnSpy).toHaveBeenCalledOnce();
   });
 
-  it("uses rl:auth:<key> namespace for auth identifier", async () => {
+  it("re-warns after 60 second interval (Redis 永続障害の見える化)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    mockIsOpenValue = true;
+    mockEval.mockRejectedValue(new Error("redis down"));
+    await checkRateLimit({ kind: "ip", key: "1.2.3.4" });
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    // 60 秒経過後は再ログを許可
+    vi.setSystemTime(new Date("2026-01-01T00:01:00Z"));
+    await checkRateLimit({ kind: "ip", key: "5.6.7.8" });
+    expect(warnSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses rl:ip:<key> namespace for ip identifier", async () => {
     mockIsOpenValue = true;
     mockEval.mockResolvedValue(1);
-    await checkRateLimit({ kind: "auth", key: "deadbeef1234" });
+    await checkRateLimit({ kind: "ip", key: "1.2.3.4" });
     const call = mockEval.mock.calls[0];
-    expect(call?.[1]).toMatchObject({ keys: ["rl:auth:deadbeef1234"] });
+    expect(call?.[1]).toMatchObject({ keys: ["rl:ip:1.2.3.4"] });
   });
 
-  it("uses rl:anon:<key> namespace for anon identifier", async () => {
+  it("passes default limit (60) as the third argument", async () => {
     mockIsOpenValue = true;
     mockEval.mockResolvedValue(1);
-    await checkRateLimit({ kind: "anon", key: "1.2.3.4" });
-    const call = mockEval.mock.calls[0];
-    expect(call?.[1]).toMatchObject({ keys: ["rl:anon:1.2.3.4"] });
-  });
-
-  it("passes default auth limit (120) as the third argument", async () => {
-    mockIsOpenValue = true;
-    mockEval.mockResolvedValue(1);
-    await checkRateLimit({ kind: "auth", key: "deadbeef" });
-    const args = mockEval.mock.calls[0]?.[1].arguments as string[];
-    expect(args[2]).toBe("120");
-  });
-
-  it("passes default anon limit (60) as the third argument", async () => {
-    mockIsOpenValue = true;
-    mockEval.mockResolvedValue(1);
-    await checkRateLimit({ kind: "anon", key: "1.2.3.4" });
+    await checkRateLimit({ kind: "ip", key: "1.2.3.4" });
     const args = mockEval.mock.calls[0]?.[1].arguments as string[];
     expect(args[2]).toBe("60");
+  });
+
+  it("respects RATE_LIMIT_PER_MIN env override at call time", async () => {
+    vi.stubEnv("RATE_LIMIT_PER_MIN", "200");
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+    await checkRateLimit({ kind: "ip", key: "1.2.3.4" });
+    const args = mockEval.mock.calls[0]?.[1].arguments as string[];
+    expect(args[2]).toBe("200");
   });
 
   it("registers an error handler on the redis client that warns once", async () => {
     mockIsOpenValue = true;
     mockEval.mockResolvedValue(1);
-    await checkRateLimit({ kind: "auth", key: "abc" });
+    await checkRateLimit({ kind: "ip", key: "1.2.3.4" });
     const errorRegistration = mockOn.mock.calls.find(
       (call) => call[0] === "error",
     );
@@ -209,8 +209,8 @@ describe("checkRateLimit", () => {
   it("reuses the cached client across calls (singleton)", async () => {
     mockIsOpenValue = true;
     mockEval.mockResolvedValue(1);
-    await checkRateLimit({ kind: "anon", key: "1.2.3.4" });
-    await checkRateLimit({ kind: "anon", key: "5.6.7.8" });
+    await checkRateLimit({ kind: "ip", key: "1.2.3.4" });
+    await checkRateLimit({ kind: "ip", key: "5.6.7.8" });
     // createClient は最初の 1 回だけ呼ばれる (singleton)
     expect(createClient).toHaveBeenCalledOnce();
   });

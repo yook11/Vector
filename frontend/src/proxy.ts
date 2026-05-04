@@ -14,37 +14,39 @@ import { buildIdentifier } from "@/lib/proxy/identifier";
 // `export const runtime` は禁止されており、node-redis / node:crypto は素で使える。
 
 export async function proxy(request: NextRequest) {
-  // session cookie は rate limit identifier と auth check の両方で使う。
-  // 1 回だけ取得して使い回す (getSessionCookie は cookie 名解決のため毎回コスト)。
-  const sessionToken = getSessionCookie(request);
+  const pathname = request.nextUrl.pathname;
+  const isAuthPage = pathname.startsWith("/auth");
+  const isApiRoute = pathname.startsWith("/api/");
 
-  // --- Rate limit (DoS 防御の一次関門 / red-team C8 / F17 対策) ---
+  // --- Rate limit (DoS 防御の一次関門 / red-team C1 / F17 対策) ---
   //
-  // Better Auth 内蔵の rate limit は HTTP router (/api/auth/*) のみに効き、
+  // Better Auth 内蔵の rate limit は HTTP router (/api/auth/*) にしか効かず、
   // Vector が依拠する `auth.api.getSession({ headers })` 直呼び経路には
   // 完全にバイパスされる。proxy 層で application-level rate limit を被せて、
   // 認証済 cookie を保持した攻撃者による DB Pool 飽和 DoS を構造的に bound する。
+  //
+  // identifier は IP-based に統一 (red-team C1 / F2-F4 対策)。cookie 値で
+  // bucket を分けると「任意 cookie で別 bucket」「auth bucket への 2x 昇格」
+  // 両方の bypass 経路が開くため、proxy 層では per-IP の上限のみを課す。
+  // 認証状態に応じた緩和は Better Auth 内蔵 rate-limit (PR-A3) に任せる。
   //
   // CSP nonce 生成や session 検証より前に走らせる。429 で即 reject すれば
   // CPU を使う処理に攻撃者を到達させない。Redis 不通時は checkRateLimit が
   // 内部でフェイルオープン (allowed: true) を返すため、運用障害が DoS に
   // 直結しないようになっている。
   const identifier = buildIdentifier(
-    sessionToken ?? null,
     request.headers.get("x-forwarded-for"),
     request.headers.get("x-real-ip"),
   );
-  if (identifier) {
-    const decision = await checkRateLimit(identifier);
-    if (!decision.allowed) {
-      return new NextResponse("Too Many Requests", {
-        status: 429,
-        headers: {
-          "Retry-After": String(decision.retryAfterSeconds),
-          "Content-Type": "text/plain; charset=utf-8",
-        },
-      });
-    }
+  const decision = await checkRateLimit(identifier);
+  if (!decision.allowed) {
+    return new NextResponse("Too Many Requests", {
+      status: 429,
+      headers: {
+        "Retry-After": String(decision.retryAfterSeconds),
+        "Content-Type": "text/plain; charset=utf-8",
+      },
+    });
   }
 
   // --- XSS対策: Content Security Policy (CSP) ---
@@ -81,15 +83,20 @@ export async function proxy(request: NextRequest) {
   // Better Auth の `getSessionCookie` ヘルパーが BETTER_AUTH_URL から
   // useSecureCookies を判定し正しい cookie 名で取得するため、proxy 側で
   // 名前をハードコードしない。実際の検証は BFF proxy 側で行う。
-  const isAuthPage = request.nextUrl.pathname.startsWith("/auth");
-
-  if (!sessionToken && !isAuthPage) {
+  //
+  // /api/* は redirect の対象外:
+  //   - /api/auth/* は Better Auth route handler (sign-in/sign-up は anon が
+  //     正規に叩く経路、redirect すると login flow が壊れる)
+  //   - /api/internal/* は Bearer 認証経路で、anon は 401/403 を route handler
+  //     から返すべき
+  const sessionToken = getSessionCookie(request);
+  if (!sessionToken && !isAuthPage && !isApiRoute) {
     const signInUrl = new URL("/auth/login", request.url);
     // Open redirect 対策: protocol-relative URL (`//evil.com`) や絶対 URL を
     // 埋め込ませない。`request.nextUrl.pathname` は通常 `/...` だが、
     // 将来的に LoginForm が `searchParams.get("callbackUrl")` を読んで
     // `router.push` する実装に発展した場合に備えて構造的に弾いておく。
-    const callbackUrl = sanitizeCallbackUrl(request.nextUrl.pathname);
+    const callbackUrl = sanitizeCallbackUrl(pathname);
     if (callbackUrl) {
       signInUrl.searchParams.set("callbackUrl", callbackUrl);
     }
@@ -100,7 +107,9 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  // 静的アセットと API ルートは CSP proxy の対象外。
+  // 静的アセットのみ proxy 対象外。`/api/*` は rate-limit を通すため対象に
+  // 含める (red-team C1 / F1 対策)。Better Auth route handler 等は
+  // `NextResponse.next()` で透過するので動作影響なし。
   //
   // `_next/data` を除外していない理由: `_next/data/*.json` は Pages Router
   // 専用のデータ取得エンドポイントで、App Router 採用の Vector では生成
@@ -108,5 +117,5 @@ export const config = {
   // この path を別用途に流用した際に CSP が抜ける危険があるため、現在は
   // 意図的に matcher に書かない (Next.js 公式 doc の middleware matcher
   // 例も App Router プロジェクトでは `_next/data` を除外していない)。
-  matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
 };

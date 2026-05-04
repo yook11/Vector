@@ -1,26 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  buildIdentifier,
-  extractClientIp,
-  hashSessionCookie,
-} from "./identifier";
-
-describe("hashSessionCookie", () => {
-  it("returns 16-char hex hash", () => {
-    const result = hashSessionCookie("session-token-value");
-    expect(result).toMatch(/^[0-9a-f]{16}$/);
-  });
-
-  it("is deterministic", () => {
-    const a = hashSessionCookie("token");
-    const b = hashSessionCookie("token");
-    expect(a).toBe(b);
-  });
-
-  it("differs for different inputs", () => {
-    expect(hashSessionCookie("a")).not.toBe(hashSessionCookie("b"));
-  });
-});
+import { buildIdentifier, extractClientIp } from "./identifier";
 
 describe("extractClientIp", () => {
   it("picks the first value of x-forwarded-for", () => {
@@ -57,38 +36,33 @@ describe("extractClientIp", () => {
 });
 
 describe("buildIdentifier", () => {
-  it("uses cookie hash when session cookie is present", () => {
-    const result = buildIdentifier("token-value", "203.0.113.1", null);
-    expect(result).toEqual({
-      kind: "auth",
-      key: hashSessionCookie("token-value"),
-    });
-  });
-
-  it("ignores empty cookie and falls back to IP", () => {
-    expect(buildIdentifier("   ", "203.0.113.1", null)).toEqual({
-      kind: "anon",
+  it("returns ip kind keyed by the first XFF value", () => {
+    expect(buildIdentifier("203.0.113.1, 10.0.0.1", null)).toEqual({
+      kind: "ip",
       key: "203.0.113.1",
     });
   });
 
-  it("returns anon kind with IP when no cookie", () => {
-    expect(buildIdentifier(null, "203.0.113.1", null)).toEqual({
-      kind: "anon",
-      key: "203.0.113.1",
+  it("falls back to x-real-ip when XFF is empty", () => {
+    expect(buildIdentifier(null, "198.51.100.5")).toEqual({
+      kind: "ip",
+      key: "198.51.100.5",
     });
   });
 
-  it("returns null when neither cookie nor IP is available", () => {
-    expect(buildIdentifier(null, null, null)).toBeNull();
+  it("falls back to 'unknown' bucket when no IP can be extracted", () => {
+    // identifier null fail-closed (red-team F2 対策)。XFF / X-Real-IP 両欠如の
+    // 非正規 request は "unknown" bucket に集約され throttle 対象になる。
+    expect(buildIdentifier(null, null)).toEqual({
+      kind: "ip",
+      key: "unknown",
+    });
   });
 
-  it("does not leak raw cookie value in the identifier", () => {
-    const result = buildIdentifier("super-secret-token", null, null);
-    expect(result).not.toBeNull();
-    if (result) {
-      expect(result.key).not.toContain("super-secret-token");
-      expect(result.key).toHaveLength(16);
-    }
+  it("treats whitespace-only headers as missing and falls back to 'unknown'", () => {
+    expect(buildIdentifier("   ", "   ")).toEqual({
+      kind: "ip",
+      key: "unknown",
+    });
   });
 });
