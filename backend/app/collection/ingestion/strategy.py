@@ -49,6 +49,7 @@ from app.collection.ingestion.fetchers.itmedia_news import ITmediaNewsFetcher
 from app.collection.ingestion.fetchers.jpcert import JPCERTFetcher
 from app.collection.ingestion.fetchers.krebs_on_security import KrebsOnSecurityFetcher
 from app.collection.ingestion.fetchers.meta_ai import MetaAIFetcher
+from app.collection.ingestion.fetchers.meti import METIFetcher
 from app.collection.ingestion.fetchers.mext import MEXTFetcher
 from app.collection.ingestion.fetchers.mic import MICFetcher
 from app.collection.ingestion.fetchers.microsoft_research import (
@@ -91,6 +92,7 @@ FETCHERS: Final[dict[str, Callable[[], Fetcher]]] = {
     "Hacker News": HackerNewsFetcher,
     "MEXT": MEXTFetcher,
     "MIC": MICFetcher,
+    "METI": METIFetcher,
     "Anthropic": AnthropicFetcher,
     "NIST": NISTFetcher,
     "NSF": NSFFetcher,

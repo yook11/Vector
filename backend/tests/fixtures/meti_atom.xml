@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <title>経済産業省 | 新着情報</title>
+  <link rel="alternate" type="text/html" href="https://www.meti.go.jp/rss/rss_ja.html" />
+  <subtitle>経済産業省の新着情報をお届けします。</subtitle>
+  <dc:language>ja</dc:language>
+  <entry>
+    <title>高性能AIへの対応に関して赤澤経済産業大臣が重要インフラ事業者との意見交換を実施しました</title>
+    <link rel="alternate" type="text/html" href="https://www.meti.go.jp/press/2026/05/20260501001/20260501001.html" />
+    <author>
+      <name />
+    </author>
+    <updated>2026-05-01T10:58:00Z</updated>
+    <summary>ソフトウェアの脆弱性発見について高い能力を有するAIの開発が進んでいる状況を踏まえ、本日、赤澤経済産業大臣は、電気事業連合会の森会長等との意見交換を実施しました。</summary>
+  </entry>
+  <entry>
+    <title>日越宇宙官民連携フォーラムを開催しました</title>
+    <link rel="alternate" type="text/html" href="https://www.meti.go.jp/press/2026/05/20260501004/20260501004.html" />
+    <author>
+      <name />
+    </author>
+    <updated>2026-05-01T10:41:00Z</updated>
+    <summary>3月12日から3月15日にかけて、経済産業省及びJICA、JETRO、JAXAは、日越両国の宇宙分野における協力を推進するためフォーラムを開催しました。</summary>
+  </entry>
+  <entry>
+    <title></title>
+    <link rel="alternate" type="text/html" href="https://www.meti.go.jp/press/2026/05/20260501099/20260501099.html" />
+    <author>
+      <name />
+    </author>
+    <updated>2026-05-01T01:00:00Z</updated>
+    <summary>(タイトル未設定の不正データ)</summary>
+  </entry>
+</feed>
