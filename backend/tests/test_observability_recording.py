@@ -12,8 +12,8 @@ from typing import Any
 
 import pytest
 from sqlalchemy import select
-from structlog.testing import capture_logs
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from structlog.testing import capture_logs
 
 from app.models.pipeline_event import PipelineEvent
 from app.observability.domain.event import Stage

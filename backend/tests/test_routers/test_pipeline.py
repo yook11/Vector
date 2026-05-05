@@ -125,5 +125,5 @@ class TestEmbedEndpointRemoved:
         self, admin_client: AsyncClient
     ) -> None:
         resp = await admin_client.post("/api/v1/admin/pipeline/embed")
-        # FastAPI は未登録 path に対して 404、登録済 path で method 違いに対して 405 を返す
+        # FastAPI は未登録 path に 404、method 違いに 405 を返す
         assert resp.status_code == 404
