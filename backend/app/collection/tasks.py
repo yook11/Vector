@@ -260,54 +260,39 @@ async def extract_html_body(
     staged: StagedArticle,
     ctx: Context = TaskiqDepends(),
 ) -> dict | None:
-    """Pattern H 2 段目: ``StagedArticle`` の URL から HTML を取得し本文抽出。
+    """Pattern H 2 段目: HTML 取得 + 本文抽出 + Article 永続化を Service に委譲。
 
-    エラー種別ごとの retry policy:
+    task の責務は **taskiq retry policy** + **Outcome dispatch** のみ:
 
-    - ``PermanentFetchError`` (403/404/410/451/robots/redirect/SSRF/oversize)
-      → 即 drop, retry しない (再試行で結果は変わらない)
-    - ``TemporaryFetchError`` (5xx/429/timeout/DNS) → ``raise`` で taskiq
-      retry (``max_retries=3`` 予算内)。最終試行 (``is_last_attempt``) は drop
-    - ``ExtractionEmpty`` (not_html / parse_error / quality_gate) → drop, retry なし
-    - ``ReadyForArticle.try_advance_from`` が ``Failed`` (body_too_short /
-      published_at_missing 等) → drop, retry なし
-
-    成功時は merge → ``ArticleRepository.save`` で永続化 → ``ReadyForExtraction``
-    を構築して ``extract_content.kiq`` に流す。
+    - ``ContentFetchService.execute`` を呼び、結果に応じて分岐
+    - ``TemporaryFetchError`` は raise で taskiq retry に乗せる
+      (``max_retries=3`` 予算内)。最終試行 (``is_last_attempt``) は
+      ``svc.audit_exhausted`` を呼んで drop
+    - ``ContentFetched`` 時のみ ``ReadyForExtraction`` を構築し
+      ``extract_content.kiq`` に流す
+    - ``TerminallyDropped`` / ``TransientlyDropped`` は何もしない
+      (audit は Service 内で焼き付け済)
     """
     from app.analysis.extraction.domain.ready import ReadyForExtraction
     from app.analysis.extraction.noise_repository import NoiseRepository
     from app.analysis.extraction.repository import ExtractionRepository
     from app.analysis.tasks import extract_content
-    from app.collection.extraction.domain.article import ArticleDraft
-    from app.collection.extraction.extractor import (
-        ArticleHtmlExtractor,
-        ExtractedContent,
-        ExtractionEmpty,
-    )
-    from app.collection.extraction.repository import ArticleRepository
-    from app.collection.ingestion.domain.fetched_article import (
-        Failed as IngestionFailed,
-    )
-    from app.collection.ingestion.domain.fetched_article import (
-        ReadyForArticle,
+    from app.collection.extraction.content_fetch_service import (
+        ContentFetched,
+        ContentFetchService,
+        TerminallyDropped,
+        TransientlyDropped,
     )
 
     session_factory = ctx.state.session_factory
-    extractor = ArticleHtmlExtractor()
-    pending = staged.pending
+    attempt = int(ctx.message.labels.get("retry_count", 0)) + 1
+    svc = ContentFetchService(session_factory)
 
     try:
-        html_result = await extractor.fetch(pending.source_url)
-    except PermanentFetchError as e:
-        logger.warning(
-            "extract_html_body_permanent",
-            discovered_id=staged.discovered_id,
-            error=str(e),
-        )
-        return None
-    except TemporaryFetchError:
+        outcome = await svc.execute(staged, attempt=attempt)
+    except TemporaryFetchError as e:
         if is_last_attempt(ctx):
+            await svc.audit_exhausted(staged, attempt=attempt, exc=e)
             logger.warning(
                 "extract_html_body_max_retries",
                 discovered_id=staged.discovered_id,
@@ -315,75 +300,22 @@ async def extract_html_body(
             return None
         raise
 
-    if isinstance(html_result, ExtractionEmpty):
-        logger.info(
-            "extract_html_body_extraction_empty",
-            discovered_id=staged.discovered_id,
-            reason=html_result.reason,
-        )
-        return None
-
-    # 静的型上は ExtractedContent | ExtractionEmpty なので明示で narrow
-    # (ExtractionEmpty は上の isinstance で先に return 済 → ここは ExtractedContent)
-    if not isinstance(html_result, ExtractedContent):  # pragma: no cover
-        # 防御: 型 narrowing 用の no-op (ruff S101 回避のため assert ではなく if)
-        return None
-
-    advanced = ReadyForArticle.try_advance_from(
-        pending,
-        body=html_result.body,
-        html_published_at=html_result.published_at,
-        html_title=html_result.title,
-    )
-    if isinstance(advanced, IngestionFailed):
-        logger.info(
-            "extract_html_body_quality_fail",
-            discovered_id=staged.discovered_id,
-            code=advanced.reason.code,
-            detail=advanced.reason.detail,
-        )
-        return None
-
-    async with session_factory() as session:
-        article_repo = ArticleRepository(session)
-        draft = ArticleDraft(
-            title=advanced.title,
-            body=advanced.body,
-            published_at=advanced.published_at,
-        )
-        persisted = await article_repo.save(
-            draft=draft,
-            discovered_article_id=staged.discovered_id,
-            source_id=advanced.source_id,
-            source_url=advanced.source_url,
-        )
-        if persisted is None:
-            persisted = await article_repo.find_by_discovered_article_id(
-                staged.discovered_id
-            )
-        if persisted is None:
-            logger.warning(
-                "extract_html_body_article_persist_failed",
-                discovered_id=staged.discovered_id,
-            )
-            await session.commit()
+    match outcome:
+        case ContentFetched(article=article):
+            async with session_factory() as session:
+                ready_for_extraction = await ReadyForExtraction.try_advance_from(
+                    article_id=article.id,
+                    original_title=article.title,
+                    original_content=article.body,
+                    extraction_repo=ExtractionRepository(session),
+                    noise_repo=NoiseRepository(session),
+                )
+            if ready_for_extraction is not None:
+                await extract_content.kiq(ready_for_extraction)
+            return {
+                "discovered_id": staged.discovered_id,
+                "article_id": article.id,
+                "status": "success",
+            }
+        case TerminallyDropped() | TransientlyDropped():
             return None
-
-        extraction_repo = ExtractionRepository(session)
-        noise_repo = NoiseRepository(session)
-        ready_for_extraction = await ReadyForExtraction.try_advance_from(
-            article_id=persisted.id,
-            original_title=advanced.title,
-            original_content=advanced.body,
-            extraction_repo=extraction_repo,
-            noise_repo=noise_repo,
-        )
-        await session.commit()
-
-    if ready_for_extraction is not None:
-        await extract_content.kiq(ready_for_extraction)
-    return {
-        "discovered_id": staged.discovered_id,
-        "article_id": persisted.id,
-        "status": "success",
-    }

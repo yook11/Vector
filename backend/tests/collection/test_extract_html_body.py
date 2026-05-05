@@ -1,8 +1,12 @@
-"""``extract_html_body`` task の retry policy / merge / 永続化テスト。
+"""``extract_html_body`` task の振る舞い不変条件テスト。
 
-PR-1b' (collection-acquisition-redesign Phase 1)。``ArticleHtmlExtractor`` は
-mock に差し替え、エラー種別ごとの drop / retry 動作と Article 永続化 +
-extract_content chain を確認する。
+PR2 で task は ``ContentFetchService`` への薄ラッパーになり、内部の
+HTTP 取得 / 抽出 / promotion / 永続化は Service に委譲される。本テストは
+**task 入口での end-to-end 振る舞い** (retry policy + merge / 永続化結果 +
+extract_content chain) を ``ArticleHtmlExtractor.fetch`` mock で検証する。
+
+Service 単体のテスト (Outcome variant / payload 観測) は
+``tests/collection/extraction/test_content_fetch_service.py`` を参照。
 """
 
 from __future__ import annotations
@@ -245,6 +249,36 @@ async def test_html_published_at_used_when_rss_hint_missing(
     assert articles[0].published_at is not None
     assert articles[0].published_at.day == 1  # HTML 由来
     assert articles[0].published_at.hour == 8
+
+
+@pytest.mark.asyncio
+async def test_temporary_error_on_last_attempt_writes_transient_audit(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    staged_article: StagedArticle,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """is_last_attempt=True の TemporaryFetchError は ``audit_exhausted`` 経由で
+    ``dropped_transient`` 行を焼いてから drop する (taskiq budget 使切の記録)。
+    """
+    from app.models.pipeline_event import PipelineEvent
+
+    monkeypatch.setattr(
+        "app.collection.extraction.content_fetch_service.ArticleHtmlExtractor.fetch",
+        AsyncMock(side_effect=TemporaryFetchError("HTTP 503")),
+    )
+    monkeypatch.setattr("app.collection.tasks.is_last_attempt", lambda _ctx: True)
+
+    result = await extract_html_body(staged_article, ctx=_ctx(session_factory))
+
+    assert result is None
+    event = (
+        await db_session.execute(
+            select(PipelineEvent).where(PipelineEvent.stage == "content_fetch")
+        )
+    ).scalar_one()
+    assert event.event_type == "failed"
+    assert event.outcome_code == "dropped_transient"
 
 
 @pytest.mark.asyncio

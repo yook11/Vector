@@ -58,9 +58,14 @@ class ContentFetchPayload(BasePipelineEventPayload):
     """Stage 2 — 1 記事 1 HTML 取得。"""
 
     kind: Literal["content_fetch"] = "content_fetch"
-    discovered_article_id: int | None = None  # A: article 削除耐性
+    # A: article 削除耐性 / PR2.5 の skip 判定 key
+    discovered_article_id: int | None = None
     extractor_class: str | None = None  # A
-    quality_gate_metric: dict[str, Any] | None = None  # S (quality_gate skip 時)
+    # S: drop 細分化 (permanent_fetch_error / extraction_empty_* / promotion_*)
+    reason_code: str | None = None
+    body_length: int | None = None  # A': 成功時の本文長分布観測
+    # S: promotion Failed 等の {"body_length": N} 構造化メトリック
+    quality_gate_metric: dict[str, Any] | None = None
     http_status: int | None = None
     final_url: str | None = None
     response_size: int | None = None
