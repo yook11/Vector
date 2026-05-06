@@ -15,10 +15,7 @@ dependencies = [
     "lxml>=6.1.0,<7",
     "trafilatura>=2.0,<3",
     "pydantic-settings>=2.14.0,<3",
-    "pytest>=9.0.3,<10",
-    "pytest-asyncio>=1.3.0,<2",
     "PyJWT>=2.12,<3",
-    "ruff>=0.15.12,<1",
     "sqlmodel>=0.0.38,<1",
     "structlog>=24.4,<26",
     "pgvector>=0.3.0,<1",
@@ -28,6 +25,17 @@ dependencies = [
     "redis>=7.4.0,<8",
     "openai>=2.32.0",
     "honcho>=2,<3",
+]
+
+# uv の dev group は `uv sync` (no flags) でも default で install され、
+# `uv sync --no-dev` で除外される。Dockerfile builder stage が --no-dev を
+# 使っているため、production image には dev group が物理的に到達しない
+# (red-team C6 chain 防御)。
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3,<10",
+    "pytest-asyncio>=1.3.0,<2",
+    "ruff>=0.15.12,<1",
 ]
 
 [tool.ruff]
