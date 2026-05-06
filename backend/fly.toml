@@ -21,6 +21,14 @@ primary_region = 'nrt'
   cpus = 1
   memory_mb = 1024
 
+# production では FastAPI の /docs / /redoc / /openapi.json を無効化する
+# (red-team S-EXFIL-1 / C3 amplifier 防御)。settings.env field 経由で
+# backend/app/main.py が判定する。値は publicly-derivable な「環境識別子」で
+# 秘密ではないため Fly secrets ではなく fly.toml [env] に置いて commit する
+# (deploy 設定の可視化を優先)。
+[env]
+  ENV = "production"
+
 # 本番は --reload なしで起動。Dockerfile の CMD (uvicorn のみ) と一致させる。
 # [http_service].processes = ['app'] と process 名が一致する必要がある。
 [processes]

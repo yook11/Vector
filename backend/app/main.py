@@ -41,11 +41,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     await engine.dispose()
 
 
+# production では Swagger UI / ReDoc / openapi.json を無効化して攻撃面を削減
+# (red-team S-EXFIL-1 / C3 amplifier 防御)。/api/v1/admin/* の schema を含む
+# 全 endpoint 構造の偵察経路を物理的に閉じる。development では従来通り /docs
+# 等で閲覧可能。
+_docs_enabled = settings.env == "development"
+
 app = FastAPI(
     title="Vector API",
     description="テックニュースの収集と AI 分析プラットフォーム",
     version="0.1.0",
     lifespan=lifespan,
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url="/redoc" if _docs_enabled else None,
+    openapi_url="/openapi.json" if _docs_enabled else None,
 )
 
 

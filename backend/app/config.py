@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Literal
 
 from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -23,6 +24,13 @@ _INTERNAL_API_SECRET_MIN_LENGTH = 32
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=str(_ENV_FILE), extra="ignore")
+
+    # デプロイ環境識別
+    # production では FastAPI 自動 docs (/docs, /redoc, /openapi.json) を
+    # 無効化する (red-team S-EXFIL-1 / C3 amplifier 防御)。CI / dev / test は
+    # default の "development" で動き、production deploy 時のみ fly.toml [env]
+    # で "production" を渡す。Literal で "prod" などの typo を起動時に reject。
+    env: Literal["development", "production"] = "development"
 
     # データベース (application 接続)
     # red-team AUTH-N4: application runtime (FastAPI / worker / CLI) は
