@@ -200,7 +200,7 @@ Stage 1 が観察した surface 表記の揺れを、機械処理 + 必要なら
 
 - **モデル**: DeepSeek-V4 Flash (Haiku 4.5 等の高性能モデルは不要、判断は単純なため)
 - **頻度**: 日次バッチ (02:05 JST)
-- **broker**: 既存 `broker_digest` を流用、`worker-digest` で実行
+- **broker**: 既存 `broker_digest` を流用、`worker-insights` container 内 honcho の digest process で実行 (9 service 集約)
 
 ### 動作フロー (1 日分)
 
@@ -731,7 +731,7 @@ CREATE INDEX ix_article_extraction_entities_extraction_id
 **手順** (α-1 完了済み):
 
 ```
-1. Snapshot Service 停止 (scheduler-digest / worker-digest cron task) [deploy 時]
+1. Snapshot Service 停止 (`scheduler` container の sched-digest + `worker-insights` container の digest process; 9 service 集約後は container 単位 stop で同居 process も止まる) [deploy 時]
 2. PR α-1 (本 PR) 完了:
    - 新テーブル `article_extraction_entities` 作成 (l8_aee_create migration)
    - Stage 1 prompt 刷新 + Pydantic schema (ExtractedEntity {surface, raw_type})

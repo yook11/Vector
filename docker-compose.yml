@@ -174,25 +174,19 @@ services:
     networks:
       - internal
 
-  # --- taskiq workers (one per pipeline queue) ---
-  worker-metadata:
+  # --- taskiq workers (broker は分離維持、container 単位で failure domain ごとに集約) ---
+  # 設計判断: broker 名 (broker_metadata 等) は無変更。process を honcho で 1 container に
+  # 詰めるだけ。`init: true` (tini) を全 container に入れて signal forwarding と zombie
+  # reaping を確保。process の 1 つが死ぬと honcho が sibling に SIGTERM → container exit
+  # → docker / Fly.io が再起動 (fail-fast + cloud-native restart)。
+  worker-fetch:
     <<: *worker-base
-    command: >
-      taskiq worker
-      app.brokers:broker_metadata
-      app.collection.tasks
-      --ack-type when_executed
-
-  worker-content:
-    <<: *worker-base
-    command: >
-      taskiq worker
-      app.brokers:broker_content
-      app.collection.tasks
-      --ack-type when_executed
+    init: true
+    command: honcho -f /app/procfiles/Procfile.fetch start
 
   worker-analysis:
     <<: *worker-base
+    init: true
     command: >
       taskiq worker
       app.brokers:broker_analysis
@@ -201,55 +195,23 @@ services:
 
   worker-embedding:
     <<: *worker-base
+    init: true
     command: >
       taskiq worker
       app.brokers:broker_embedding
       app.analysis.tasks
       --ack-type when_executed
 
-  # --- Weekly digest worker + scheduler (snapshot 生成専用、resource 分離) ---
-  worker-digest:
+  worker-insights:
     <<: *worker-base
-    command: >
-      taskiq worker
-      app.brokers:broker_digest
-      app.insights.snapshot.tasks.snapshot
-      --ack-type when_executed
+    init: true
+    command: honcho -f /app/procfiles/Procfile.insights start
 
-  scheduler-digest:
-    <<: *worker-base
-    command: >
-      taskiq scheduler
-      app.brokers:scheduler_digest
-      app.insights.snapshot.tasks.snapshot
-    networks:
-      - internal
-
-  # --- Weekly briefing worker + scheduler (LLM 解説専用、snapshot とは別 queue) ---
-  worker-briefing:
-    <<: *worker-base
-    command: >
-      taskiq worker
-      app.brokers:broker_briefing
-      app.insights.briefing.tasks.briefing
-      --ack-type when_executed
-
-  scheduler-briefing:
-    <<: *worker-base
-    command: >
-      taskiq scheduler
-      app.brokers:scheduler_briefing
-      app.insights.briefing.tasks.briefing
-    networks:
-      - internal
-
-  # --- taskiq scheduler (metadata broker only — fetch_metadata cron) ---
+  # --- taskiq scheduler (metadata + digest + briefing cron を 1 container に同居) ---
   scheduler:
     <<: *worker-base
-    command: >
-      taskiq scheduler
-      app.brokers:scheduler_metadata
-      app.collection.tasks
+    init: true
+    command: honcho -f /app/procfiles/Procfile.scheduler start
     networks:
       - internal
 

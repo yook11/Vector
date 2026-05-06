@@ -12,7 +12,7 @@ PR #371 (commit `c22e9d6`、main 反映済) を本番に展開する手順。Pat
 - main は PR #371 + #372 (test hardening) を含む状態
 - alembic head は `r2_articles_disc_nullable` (parent: `r1_pending_html_articles`)
 - 本番 DB の現状 head は `o16_add_mdpi` 想定 (PR2.5-A/B より前)
-- 本番 worker は `worker-content` / `worker-metadata` の 2 系統 + scheduler 1
+- 本番 worker は `worker-fetch` (metadata + content の honcho 同居) + scheduler 1
 
 ## 不変条件 (deploy 中・後で破ったら abort)
 
@@ -60,7 +60,7 @@ docker compose -f compose.prod.yml exec rabbitmq rabbitmqctl list_queues name me
 # (broker が Redis なら) docker compose exec redis redis-cli LLEN <queue_name>
 
 # 3. 全 task 消化後、worker container も停止 (混在防止)
-docker compose -f compose.prod.yml stop worker-content worker-metadata
+docker compose -f compose.prod.yml stop worker-fetch
 ```
 
 完了条件: 全 broker queue が 0、worker process が `idle` ログを最後に出して
@@ -126,7 +126,7 @@ SELECT
 ```bash
 # 全 worker と scheduler を順に起動 (依存順: backend → worker → scheduler)
 docker compose -f compose.prod.yml up -d backend
-docker compose -f compose.prod.yml up -d worker-content worker-metadata
+docker compose -f compose.prod.yml up -d worker-fetch
 docker compose -f compose.prod.yml up -d scheduler
 
 # scheduler ログで cron 登録を確認
@@ -159,11 +159,13 @@ SELECT
 
 ```bash
 # 4. worker ログに ContentFetchService の Outcome dispatch が出ていること
-docker compose -f compose.prod.yml logs --tail=200 worker-content \
+#    worker-fetch は honcho で metadata + content process を同居させているため、
+#    どちらの process のログも `worker-fetch` container にまとまって出る。
+docker compose -f compose.prod.yml logs --tail=200 worker-fetch \
   | grep -iE "ContentFetched|ConflictLost|TerminallyDropped|TransientlyDropped"
 
 # 5. sweep_expired_leases が 1 分間隔で動作していること
-docker compose -f compose.prod.yml logs --tail=200 worker-metadata \
+docker compose -f compose.prod.yml logs --tail=200 worker-fetch \
   | grep "sweep_expired_leases_completed"
 # 期待: 1 分おきに swept_count=N (新規 deploy なら 0 が続くのが正常)
 ```
@@ -237,8 +239,9 @@ docker compose -f compose.prod.yml.rollback up -d
   PR2 の baseline から大きく外れていないか)
 - `pending_html_articles.status='running'` の `leased_until` 過去化頻度
   (sweeper が回っていれば 1 分以内に open に戻る)
-- `worker-content` の OOM / restart 頻度 (新経路で body が大きい記事を
-  含むため、メモリ消費の傾向が変わる可能性)
+- `worker-fetch` の OOM / restart 頻度 (新経路で body が大きい記事を
+  含むため、メモリ消費の傾向が変わる可能性。content process が OOM すると
+  honcho が同居 metadata process も連れて container exit する設計)
 
 ## 参考
 

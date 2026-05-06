@@ -13,7 +13,7 @@
         migrate-safe verify-env verify-config
 
 # サービス分類（変更する時はここだけ触る）
-WORKERS  := worker-metadata worker-content worker-analysis worker-embedding worker-digest worker-briefing scheduler scheduler-digest scheduler-briefing
+WORKERS  := worker-fetch worker-analysis worker-embedding worker-insights scheduler
 PIPELINE := backend $(WORKERS)
 QUEUES   := pipeline:metadata pipeline:content pipeline:analysis pipeline:embedding digest briefing
 

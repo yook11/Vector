@@ -205,7 +205,7 @@ ToS / robots.txt と整合する必要がある。
 - alembic migration 1 本: `UPDATE news_sources SET is_active = false WHERE name IN (...)`
 - 対象 12 件 (§3 RED 一覧)
 - fetcher コード + `FETCHERS` dict 登録は残す (将来許諾取得時に復活可能)
-- 検証: `pytest -x` + ローカル `worker-content` 再起動
+- 検証: `pytest -x` + ローカル `worker-fetch` 再起動
 
 ### Phase 2 — `attribution_label` カラム追加
 
