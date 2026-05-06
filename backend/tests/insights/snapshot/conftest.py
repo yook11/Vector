@@ -1,8 +1,8 @@
 """digest BC テスト固有のフィクスチャ。
 
 repository / Service テスト向けの ``seed_analysis`` ファクトリを提供する。
-seed_analysis は 1 件の ``ArticleAnalysis`` を関連 ORM (ArticleUrl /
-Article / ArticleExtraction / ArticleExtractionEntity) とともに作成する。
+seed_analysis は 1 件の ``ArticleAnalysis`` を関連 ORM (Article /
+ArticleExtraction / ArticleExtractionEntity) とともに作成する。
 
 URL の重複制約を避けるため fixture 内のカウンタで一意な URL を採番する
 (関数スコープ fixture なのでテストごとにリセットされる)。
@@ -22,7 +22,6 @@ from app.models.article_analysis import ArticleAnalysis
 from app.models.article_extraction import ArticleExtraction
 from app.models.article_extraction_entity import ArticleExtractionEntity
 from app.models.news_source import NewsSource
-from tests.factories.article_url import create_article_url
 
 SeedAnalysis = Callable[..., Awaitable[ArticleAnalysis]]
 
@@ -53,12 +52,8 @@ def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAn
     ) -> ArticleAnalysis:
         n = next(seq)
         url = f"https://example.com/seed-{n}"
-        article_url = await create_article_url(
-            db_session, source=sample_source, url=url
-        )
 
         article = Article(
-            article_url_id=article_url.id,
             source_id=sample_source.id,
             source_url=url,
             original_title=f"seed-{n}",

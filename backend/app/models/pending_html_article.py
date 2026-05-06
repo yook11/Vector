@@ -1,8 +1,8 @@
 """``pending_html_articles`` テーブル — HTML 取得待ちの作業領域 (Pattern H 専用)。
 
 PR2.5-A 新設。Stage 1 で entry が ``Failed`` (RSS で本文不足等) と判定された場合、
-``article_urls`` 行と並んでこの行が作られ、Stage 2 で HTML 取得を行うキューと
-なる。lease 方式 (status=open/running/closed + ready_at + leased_until +
+この行が作られ、Stage 2 で HTML 取得を行うキューとなる。
+lease 方式 (status=open/running/closed + ready_at + leased_until +
 attempt_count) で多 worker 安全な claim と sweeper による lease 救出を行う。
 
 設計詳細は ``specs/pipeline-events-stage2-design.md`` の §データフロー §スキーマ案。
@@ -50,16 +50,12 @@ class PendingHtmlArticle(Base):
 
     lease 期限切れの ``running`` 行は別 cron の sweeper が ``open`` に戻す。
 
-    PR-E (article_urls 廃止プラン) で ``url`` 列を SSoT 化。新規 pending 行は
-    ``article_url_id=NULL`` で投入される (PR-F で物理削除予定)。``url`` UNIQUE
-    が articles と pending の cross-table dedup の物理保証を担う。
+    ``url`` の UNIQUE が articles と pending の cross-table dedup の物理保証
+    (caller は canonicalize 済み URL を渡すこと)。
     """
 
     __tablename__ = "pending_html_articles"
     __table_args__ = (
-        UniqueConstraint(
-            "article_url_id", name="uq_pending_html_articles_article_url_id"
-        ),
         UniqueConstraint("url", name="uq_pending_html_articles_url"),
         CheckConstraint(
             "url ~ '^https?://.+'",
@@ -101,12 +97,6 @@ class PendingHtmlArticle(Base):
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    # PR-E 以降は NULL 許容 (= 新規 pending は ``url`` のみで投入)。PR-F で削除予定。
-    article_url_id: Mapped[int | None] = mapped_column(
-        BigInteger,
-        ForeignKey("article_urls.id", ondelete="CASCADE"),
-        nullable=True,
-    )
     url: Mapped[SafeUrl] = mapped_column(SafeUrlType, nullable=False)
     source_id: Mapped[int] = mapped_column(
         ForeignKey("news_sources.id", ondelete="RESTRICT"),

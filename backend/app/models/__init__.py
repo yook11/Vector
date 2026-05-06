@@ -3,7 +3,6 @@ from app.models.article_analysis import ArticleAnalysis
 from app.models.article_extraction import ArticleExtraction
 from app.models.article_extraction_entity import ArticleExtractionEntity
 from app.models.article_rejection import ArticleRejection
-from app.models.article_url import ArticleUrl
 from app.models.auth_ref import auth_user_ref  # noqa: F401
 from app.models.category import Category
 from app.models.extraction_noise import ExtractionNoise
@@ -21,7 +20,6 @@ __all__ = [
     "ArticleExtraction",
     "ArticleExtractionEntity",
     "ArticleRejection",
-    "ArticleUrl",
     "Category",
     "ExtractionNoise",
     "FetchLog",

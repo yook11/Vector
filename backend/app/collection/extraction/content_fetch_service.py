@@ -17,7 +17,7 @@ PR2.5-B cutover で StagedArticle (kiq envelope) 経由から
 - race-loss (``articles.source_url UNIQUE``) を ``ConflictLost`` (audit) で吸収
 - ``pipeline_events`` への監査書込 (success/conflict_lost/dropped_terminal/
   dropped_transient/will_retry の 5 系統)。``canonical_url`` を集計 key
-  として焼き付け、``article_url_id`` は dual-fill (PR-F で撤去予定)。
+  として焼き付ける。
 
 caller (task) の責務:
 
@@ -243,7 +243,6 @@ class ContentFetchService:
                 reason_code = f"temporary_exhausted_{policy.code}"
                 payload = ContentFetchPayload(
                     canonical_url=str(pending.url),
-                    article_url_id=pending.article_url_id,
                     extractor_class=extractor_class,
                     reason_code=reason_code,
                     error_message=str(exc)[:500],
@@ -267,7 +266,6 @@ class ContentFetchService:
             reason_code = f"temporary_will_retry_{policy.code}"
             payload = ContentFetchPayload(
                 canonical_url=str(pending.url),
-                article_url_id=pending.article_url_id,
                 extractor_class=extractor_class,
                 reason_code=reason_code,
                 error_message=str(exc)[:500],
@@ -305,7 +303,6 @@ class ContentFetchService:
             await pending_repo.mark_terminal(pending.id)
             payload = ContentFetchPayload(
                 canonical_url=str(pending.url),
-                article_url_id=pending.article_url_id,
                 extractor_class=extractor_class,
                 reason_code=reason_code,
                 error_message=str(exc)[:500] if exc is not None else None,
@@ -366,7 +363,6 @@ class ContentFetchService:
                     await pending_repo.mark_terminal(pending.id)
                     payload = ContentFetchPayload(
                         canonical_url=str(pending.url),
-                        article_url_id=pending.article_url_id,
                         extractor_class=extractor_class,
                         reason_code="article_persist_anomaly",
                     )
@@ -386,7 +382,6 @@ class ContentFetchService:
                 await pending_repo.delete_one(pending.id)
                 payload = ContentFetchPayload(
                     canonical_url=str(pending.url),
-                    article_url_id=pending.article_url_id,
                     extractor_class=extractor_class,
                     reason_code="conflict_lost",
                 )
@@ -410,7 +405,6 @@ class ContentFetchService:
             )
             payload = ContentFetchPayload(
                 canonical_url=str(pending.url),
-                article_url_id=pending.article_url_id,
                 extractor_class=extractor_class,
                 body_length=body_length,
             )

@@ -41,7 +41,6 @@ from app.models.article_analysis import ArticleAnalysis
 from app.models.article_extraction import ArticleExtraction
 from app.models.category import Category
 from app.models.news_source import NewsSource
-from tests.factories.article_url import create_article_url
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -73,9 +72,7 @@ async def _build_article(
     url: str,
     title: str = "Article",
 ) -> Article:
-    article_url = await create_article_url(db_session, source=source, url=url)
     article = Article(
-        article_url_id=article_url.id,
         source_id=source.id,
         source_url=url,
         original_title=title,

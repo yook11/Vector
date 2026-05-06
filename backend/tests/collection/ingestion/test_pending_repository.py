@@ -4,9 +4,8 @@
 ``sweep_expired`` / ``mark_*`` / ``delete_one`` の振る舞いを ``CHECK`` 制約と
 合わせて検証する。
 
-PR-E (article_urls 廃止プラン) で ``create`` から ``article_url_id`` 引数が
-消え、``url`` (canonicalize 済み SafeUrl) が SSoT になった。``find_by_id``
-は JOIN を撤去して ``url`` のみ返す。
+``url`` (canonicalize 済み SafeUrl) が SSoT。``find_by_id`` は ``url`` を
+直接 SELECT して返す。
 """
 
 from __future__ import annotations
@@ -82,10 +81,10 @@ async def test_create_returns_none_on_duplicate_url(
 
 
 @pytest.mark.asyncio
-async def test_create_persists_url_with_null_article_url_id(
+async def test_create_persists_url(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
-    """PR-E: 新規 pending 行は ``url`` のみ保持し ``article_url_id`` は NULL。"""
+    """新規 pending 行は ``url`` (canonicalize 済み) のみで投入される。"""
     url = SafeUrl("https://example.com/p/url-only")
     repo = PendingHtmlArticleRepository(db_session)
     pending_id = await repo.create(
@@ -99,15 +98,12 @@ async def test_create_persists_url_with_null_article_url_id(
 
     row = (
         await db_session.execute(
-            text(
-                "SELECT url, article_url_id FROM pending_html_articles WHERE id = :id"
-            ),
+            text("SELECT url FROM pending_html_articles WHERE id = :id"),
             {"id": pending_id},
         )
     ).first()
     assert row is not None
     assert row.url == str(url)
-    assert row.article_url_id is None
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +134,6 @@ async def test_find_by_id_returns_context_with_url(
     assert ctx.status == "open"
     assert ctx.staged_attributes.title == "Find Me"
     assert ctx.url == url
-    assert ctx.article_url_id is None  # PR-E ingestion で NULL
     assert ctx.attempt_count == 0
 
 

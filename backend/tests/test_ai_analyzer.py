@@ -59,7 +59,6 @@ from app.models.article_rejection import ArticleRejection
 from app.models.category import Category
 from app.models.extraction_noise import ExtractionNoise as ExtractionNoiseORM
 from app.models.news_source import NewsSource
-from tests.factories.article_url import create_article_url
 
 # --- Helpers ---
 
@@ -131,9 +130,7 @@ async def _create_article_with_extraction(
     summary: str = "要約テスト",
 ) -> tuple[Article, ArticleExtraction]:
     """Stage 1 完了済みの記事（article + extraction）を作成するヘルパー。"""
-    article_url = await create_article_url(db_session, source=source, url=url)
     article = Article(
-        article_url_id=article_url.id,
         source_id=source.id,
         source_url=url,
         original_title=title,
@@ -736,9 +733,7 @@ async def test_extraction_creates_extraction_and_entities(
     sample_source: NewsSource,
 ) -> None:
     url = "https://example.com/quantum"
-    article_url = await create_article_url(db_session, source=sample_source, url=url)
     article = Article(
-        article_url_id=article_url.id,
         source_id=sample_source.id,
         source_url=url,
         original_title="Quantum Breakthrough",
@@ -844,9 +839,7 @@ async def test_extraction_routes_noise_to_extraction_noises_table(
     保証する (chain は task 層で確認、ここは Service の振り分けが正しいかを見る)。
     """
     url = "https://example.com/noise"
-    article_url = await create_article_url(db_session, source=sample_source, url=url)
     article = Article(
-        article_url_id=article_url.id,
         source_id=sample_source.id,
         source_url=url,
         original_title="Celebrity Gossip",
@@ -907,9 +900,7 @@ async def test_extraction_returns_invalid_input_outcome(
     sample_source: NewsSource,
 ) -> None:
     url = "https://example.com/bad"
-    article_url = await create_article_url(db_session, source=sample_source, url=url)
     article = Article(
-        article_url_id=article_url.id,
         source_id=sample_source.id,
         source_url=url,
         original_title="Bad Article",

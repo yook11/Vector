@@ -4,7 +4,6 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
-    BigInteger,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -32,7 +31,6 @@ class Article(Base):
     __tablename__ = "articles"
     __table_args__ = (
         UniqueConstraint("source_url", name="uq_articles_source_url"),
-        UniqueConstraint("article_url_id", name="uq_articles_article_url_id"),
         CheckConstraint(
             "original_title != ''",
             name="ck_articles_title_not_empty",
@@ -46,13 +44,6 @@ class Article(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    # 新経路の article_urls への外部キー。PR2.5 系の cutover で全 article 行が
-    # この経路を持つ前提だが、後続 PR で NOT NULL 昇格を切り出すため当面 nullable。
-    article_url_id: Mapped[int | None] = mapped_column(
-        BigInteger,
-        ForeignKey("article_urls.id", ondelete="RESTRICT"),
-        nullable=True,
-    )
     source_id: Mapped[int] = mapped_column(
         ForeignKey("news_sources.id", ondelete="RESTRICT"),
     )

@@ -19,7 +19,6 @@ from app.analysis.extraction.domain import ExtractedEntity, ExtractionResult
 from app.analysis.extraction.noise_repository import NoiseRepository
 from app.models.article import Article
 from app.models.news_source import NewsSource
-from tests.factories.article_url import create_article_url
 
 
 def _noise_result(
@@ -43,9 +42,7 @@ def _noise_result(
 async def _make_article(
     db_session: AsyncSession, sample_source: NewsSource, url: str
 ) -> Article:
-    article_url = await create_article_url(db_session, source=sample_source, url=url)
     article = Article(
-        article_url_id=article_url.id,
         source_id=sample_source.id,
         source_url=url,
         original_title="t",

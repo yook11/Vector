@@ -3,7 +3,7 @@
 不変条件と field schema を検証する:
 
 - ``SourceFetchPayload``: 5 種 count + ``entry_count == sum(...)`` invariant
-- ``ContentFetchPayload``: ``article_url_id`` field と extra="forbid"
+- ``ContentFetchPayload``: ``canonical_url`` field と extra="forbid"
 """
 
 from __future__ import annotations
@@ -106,22 +106,6 @@ class TestContentFetchPayloadAuditKeys:
         payload = ContentFetchPayload()
         assert payload.canonical_url is None
 
-    def test_article_url_id_field_exists(self) -> None:
-        payload = ContentFetchPayload(article_url_id=42)
-        assert payload.article_url_id == 42
-
-    def test_article_url_id_defaults_none(self) -> None:
-        payload = ContentFetchPayload()
-        assert payload.article_url_id is None
-
-    def test_dual_fill_both_keys(self) -> None:
-        """PR-E dual-fill: 両 key を同時に持てる (PR-F で article_url_id 撤去)。"""
-        payload = ContentFetchPayload(
-            canonical_url="https://example.com/a", article_url_id=42
-        )
-        assert payload.canonical_url == "https://example.com/a"
-        assert payload.article_url_id == 42
-
     def test_unknown_field_rejected(self) -> None:
         """未知 field は ``extra="forbid"`` で拒否される。"""
         with pytest.raises(ValueError, match="extra"):
@@ -148,7 +132,6 @@ class TestPayloadJsonSerialization:
     def test_content_fetch_roundtrip(self) -> None:
         original = ContentFetchPayload(
             canonical_url="https://example.com/article/round",
-            article_url_id=99,
             extractor_class="ArticleHtmlExtractor",
             body_length=12345,
         )

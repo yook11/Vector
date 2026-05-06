@@ -1,6 +1,6 @@
-"""URL 正規化道具 — ``article_urls.normalized_url`` の生成専用。
+"""URL 正規化道具 — ``articles.source_url`` / ``pending_html_articles.url`` 共通。
 
-PR2.5-A 新設計の URL 一意性 SSoT 用。spec の 5 項目を全て満たす:
+URL 一意性 SSoT 用の canonicalize。spec の 5 項目を全て満たす:
 
 1. lowercase host (大文字小文字差分による偽 dup を避ける)
 2. tracking parameters strip (utm_* / fbclid / gclid / dclid / msclkid /
@@ -22,8 +22,9 @@ from app.collection.ingestion.tools.url_normalizer import _TRACKING_PARAMS
 
 
 def canonicalize_url(raw: str) -> str:
-    """``article_urls.normalized_url`` 用の正規化を施した URL を返す。
+    """canonicalize 済み URL を返す。
 
+    ``articles.source_url`` / ``pending_html_articles.url`` 共通の正規化。
     冪等: ``canonicalize_url(canonicalize_url(x)) == canonicalize_url(x)``。
     入力が空文字や scheme 欠落でも例外は投げず、urlparse の挙動に従う
     (caller 側で SafeUrl 等の validator を経由している前提)。

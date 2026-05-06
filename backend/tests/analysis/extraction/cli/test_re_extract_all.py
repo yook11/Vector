@@ -32,7 +32,6 @@ from app.models.news_source import NewsSource
 from tests.analysis.extraction.application.test_re_extraction_service import (
     _extractor as make_extractor,  # 再利用 (BaseExtractor mock)
 )
-from tests.factories.article_url import create_article_url
 
 
 def _summary_from_stdout(captured: str) -> dict:
@@ -89,9 +88,7 @@ async def _seed_article_with_extraction(
     url: str,
     surfaces: Sequence[str] = ("X",),
 ) -> Article:
-    article_url = await create_article_url(db_session, source=sample_source, url=url)
     article = Article(
-        article_url_id=article_url.id,
         source_id=sample_source.id,
         source_url=url,
         original_title="Original",
@@ -125,9 +122,7 @@ async def _seed_article_with_extraction(
 async def _seed_article_without_extraction(
     db_session: AsyncSession, sample_source: NewsSource, *, url: str
 ) -> Article:
-    article_url = await create_article_url(db_session, source=sample_source, url=url)
     article = Article(
-        article_url_id=article_url.id,
         source_id=sample_source.id,
         source_url=url,
         original_title="Original",

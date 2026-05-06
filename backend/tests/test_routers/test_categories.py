@@ -11,7 +11,6 @@ from app.models.article_analysis import ArticleAnalysis
 from app.models.article_extraction import ArticleExtraction
 from app.models.category import Category
 from app.models.news_source import NewsSource
-from tests.factories.article_url import create_article_url
 
 
 @pytest.mark.asyncio
@@ -85,11 +84,7 @@ class TestListCategories:
     ) -> None:
         """直近 24 時間に分類された記事は recentCount に含まれる。"""
         url = "https://example.com/tf"
-        article_url = await create_article_url(
-            db_session, source=sample_source, url=url
-        )
         article = Article(
-            article_url_id=article_url.id,
             source_id=sample_source.id,
             source_url=url,
             original_title="TF Article",
@@ -131,11 +126,7 @@ class TestListCategories:
     ) -> None:
         """24 時間より前に分類された記事は recentCount に含まれない。"""
         url = "https://example.com/tf-old"
-        article_url = await create_article_url(
-            db_session, source=sample_source, url=url
-        )
         article = Article(
-            article_url_id=article_url.id,
             source_id=sample_source.id,
             source_url=url,
             original_title="TF Article Old",

@@ -146,7 +146,6 @@ async def test_pattern_h_inserts_pending_with_canonicalized_url(
     assert articles == []
     assert len(pendings) == 1
     assert str(pendings[0].url) == "https://techcrunch.com/h"
-    assert pendings[0].article_url_id is None  # PR-E 以降は NULL
     assert pendings[0].status == "open"
     assert pendings[0].attempt_count == 0
 

@@ -52,8 +52,6 @@ class PendingHtmlContext:
     に再構築済 (PublishedAt ISO ↔ datetime 変換を Repository 層で吸収する)。
 
     ``url`` は canonicalize 済み URL (``articles.source_url`` と一致する形)。
-    ``article_url_id`` は PR-D / PR-E 期間中に dual-fill する legacy key
-    (PR-E 以降の ingestion で投入される行は NULL、PR-F で列ごと削除)。
     """
 
     id: int
@@ -64,7 +62,6 @@ class PendingHtmlContext:
     leased_until: datetime | None
     attempt_count: int
     url: SafeUrl
-    article_url_id: int | None
 
 
 class PendingHtmlArticleRepository:
@@ -84,8 +81,7 @@ class PendingHtmlArticleRepository:
         """新規 pending を ``status='open'`` で INSERT し、id を返す。
 
         UNIQUE 違反 (race-loss) の場合は ``None`` を返す。``url`` の UNIQUE が
-        canonicalize 済み URL の重複を構造的に弾く。``article_url_id`` 列は
-        PR-F で削除されるまで NULL のまま残す (FK は nullable)。
+        canonicalize 済み URL の重複を構造的に弾く。
 
         caller は canonicalize 済み URL を渡すこと (URL 不整合を起こさない
         設計責務)。
@@ -116,7 +112,6 @@ class PendingHtmlArticleRepository:
         stmt = select(
             PendingHtmlArticleORM.id,
             PendingHtmlArticleORM.url,
-            PendingHtmlArticleORM.article_url_id,
             PendingHtmlArticleORM.source_id,
             PendingHtmlArticleORM.status,
             PendingHtmlArticleORM.staged_attributes,
@@ -138,7 +133,6 @@ class PendingHtmlArticleRepository:
             leased_until=row.leased_until,
             attempt_count=row.attempt_count,
             url=row.url,
-            article_url_id=row.article_url_id,
         )
 
     async def claim_batch(self, *, limit: int, lease_minutes: int) -> list[int]:
