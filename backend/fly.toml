@@ -21,10 +21,15 @@ primary_region = 'nrt'
   cpus = 1
   memory_mb = 1024
 
-# 本番は --reload なしで起動。Dockerfile の dev 用 CMD を上書き。
+# 本番は --reload なしで起動。Dockerfile の CMD (uvicorn のみ) と一致させる。
 # [http_service].processes = ['app'] と process 名が一致する必要がある。
-# 注: alembic upgrade head は意図的に [deploy].release_command に入れていない。
-# i4_seed_e2e_users migration が本番 DB に流れる事故を避けるため、E2E seed の
-# 扱い (alembic 外への退避 or env gate) を確定してから別 PR で追加する。
 [processes]
   app = "uvicorn app.main:app --host :: --port 8000"
+
+# release_command は app 起動前に毎 deploy 一度だけ実行される。i4_seed_e2e_users
+# migration を分離した PR4 (red-team C2 防御) により、E2E seed user が本番 DB に
+# 流れる経路は構造的に閉じている。alembic upgrade head は table owner role
+# (POSTGRES_USER) で接続する MIGRATION_DATABASE_URL を使う必要があるため、Fly.io
+# secrets として設定すること。
+[deploy]
+  release_command = "alembic upgrade head"

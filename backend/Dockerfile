@@ -33,5 +33,8 @@ COPY --chown=backend:backend . .
 
 USER backend
 
-# dev (docker-compose) 用デフォルト。本番 (Fly.io) は fly.toml の [processes] で上書き。
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"]
+# Migration 経路と app 起動経路を構造的に分離する (PR4 / red-team C2 防御):
+# - dev (docker-compose) は compose.yml の `command:` で migration → uvicorn を override
+# - 本番 (Fly.io) は fly.toml の [deploy].release_command で alembic upgrade head を実行
+# Dockerfile の CMD は uvicorn のみ。migration を起動経路に同居させない。
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

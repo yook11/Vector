@@ -269,8 +269,9 @@ jobs:
         working-directory: frontend
 
       # auth スキーマと Better Auth テーブル群は alembic 管理外 (ADR 002)。
-      # i4_seed_e2e_users が auth.user / auth.account に bulk_insert するので、
-      # alembic upgrade head の前に schema が存在している必要がある。
+      # PR4 で seed_e2e_users.py が auth.user / auth.account に upsert するので、
+      # `Apply alembic migrations` および `Seed E2E test users` step の前に
+      # schema と Better Auth テーブルが存在している必要がある。
       # 1. psql で `auth` スキーマだけ作る (alembic b1 が CREATE SCHEMA IF NOT
       #    EXISTS する処理と同等。idempotent)
       # 2. Better Auth CLI が auth.user / auth.account / auth.session を生成
@@ -328,15 +329,25 @@ jobs:
           END \$\$;
           EOF
 
-      - name: Apply alembic migrations (includes E2E seed)
-        # auth.user / auth.account を Better Auth CLI が先に生成したので、
-        # i4_seed_e2e_users の bulk_insert がここで成功する。
+      - name: Apply alembic migrations
         # ALEMBIC_ALLOW_DESTRUCTIVE は 4d16d9b326a0 (topics drop, article_analyses
         # wipe) の安全 guard 用。fresh DB で wipe 対象データは存在しないため
         # CI では問題なく許可できる。
         env:
           ALEMBIC_ALLOW_DESTRUCTIVE: yes-i-know
         run: uv run alembic upgrade head
+        working-directory: backend
+
+      - name: Seed E2E test users (CI only — red-team C2 防御で migration から分離)
+        # PR4 で i4_seed_e2e_users migration を削除し、E2E seed を本 script に
+        # 分離。production deploy で alembic upgrade head が走っても seed user は
+        # 作られない。auth.user / auth.account は Better Auth CLI が先に生成済。
+        env:
+          E2E_SEED_USER_EMAIL: e2e@example.com
+          E2E_SEED_USER_PASSWORD: Password123!
+          E2E_SEED_ADMIN_EMAIL: e2e-admin@example.com
+          E2E_SEED_ADMIN_PASSWORD: Password123!
+        run: uv run python scripts/seed_e2e_users.py
         working-directory: backend
 
       # Playwright のブラウザバイナリ (~150MB) は毎回 download すると 30 秒以上

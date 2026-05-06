@@ -78,10 +78,17 @@ services:
       # alembic migration / pytest: vector (table owner) で接続
       - MIGRATION_DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-vector}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-vector}
       - REDIS_URL=redis://redis:6379/0
+    # Dockerfile CMD は uvicorn のみ (PR4 / red-team C2 防御)。dev では起動時に
+    # migration を流す体験を維持するため、ここで command override で直列実行する。
+    # 本番 (Fly.io) は fly.toml [deploy].release_command で migration を別経路実行。
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     volumes:
       - ./backend/app:/app/app
       - ./backend/alembic:/app/alembic
       - ./backend/alembic.ini:/app/alembic.ini
+      - ./backend/scripts:/app/scripts
       - ./backend/tests:/app/tests
     depends_on:
       db:
