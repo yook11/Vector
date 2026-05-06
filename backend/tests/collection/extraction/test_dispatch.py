@@ -81,9 +81,10 @@ async def _make_pending(
     呼び出し側が指定する。article_url_id UNIQUE のため URL は test 内で一意に。
     """
     url_repo = ArticleUrlRepository(db_session)
+    safe_url = SafeUrl(url)
     article_url_id = await url_repo.upsert_returning(
-        normalized_url=SafeUrl(url),
-        original_url=SafeUrl(url),
+        normalized_url=safe_url,
+        original_url=safe_url,
         first_seen_source_id=source.id,
     )
     assert article_url_id is not None
@@ -93,6 +94,7 @@ async def _make_pending(
         repo = PendingHtmlArticleRepository(db_session)
         pending_id = await repo.create(
             article_url_id=article_url_id,
+            url=safe_url,
             source_id=source.id,
             staged_attributes=_attrs(),
             ready_at=ready_at or datetime.now(UTC),
@@ -111,6 +113,7 @@ async def _make_pending(
     # status='running' / 'closed' は raw SQL で直接組み立て (CHECK 制約整合)
     pending = PendingHtmlArticleORM(
         article_url_id=article_url_id,
+        url=safe_url,
         source_id=source.id,
         status=status,
         staged_attributes=_attrs().model_dump(mode="json"),

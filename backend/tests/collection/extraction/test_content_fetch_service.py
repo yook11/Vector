@@ -87,15 +87,17 @@ async def _make_pending(
         attempt_count=1)。
     """
     url_repo = ArticleUrlRepository(db_session)
+    safe_url = SafeUrl(url)
     article_url_id = await url_repo.upsert_returning(
-        normalized_url=SafeUrl(url),
-        original_url=SafeUrl(url),
+        normalized_url=safe_url,
+        original_url=safe_url,
         first_seen_source_id=source.id,
     )
     assert article_url_id is not None
     pending_repo = PendingHtmlArticleRepository(db_session)
     pending_id = await pending_repo.create(
         article_url_id=article_url_id,
+        url=safe_url,
         source_id=source.id,
         staged_attributes=attrs or _attrs(),
         ready_at=datetime.now(UTC) - timedelta(seconds=1),
@@ -140,15 +142,17 @@ async def test_returns_none_for_open_pending(
 ) -> None:
     """``status='open'`` (claim されていない) は ``None`` で静かに exit。"""
     url_repo = ArticleUrlRepository(db_session)
+    safe_url = SafeUrl("https://techcrunch.com/open/")
     article_url_id = await url_repo.upsert_returning(
-        normalized_url=SafeUrl("https://techcrunch.com/open/"),
-        original_url=SafeUrl("https://techcrunch.com/open/"),
+        normalized_url=safe_url,
+        original_url=safe_url,
         first_seen_source_id=tc_source.id,
     )
     assert article_url_id is not None
     pending_repo = PendingHtmlArticleRepository(db_session)
     pending_id = await pending_repo.create(
         article_url_id=article_url_id,
+        url=safe_url,
         source_id=tc_source.id,
         staged_attributes=_attrs(),
         ready_at=datetime.now(UTC) - timedelta(seconds=1),

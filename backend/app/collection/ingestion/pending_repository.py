@@ -51,6 +51,10 @@ class PendingHtmlContext:
     ``ContentFetchService`` が必要とする全情報を 1 SELECT で持ち回るための
     structured tuple。``staged_attributes`` は JSONB を ``StagedArticleAttributes``
     に再構築済 (PublishedAt ISO ↔ datetime 変換を Repository 層で吸収する)。
+
+    PR-D (article_urls 廃止プラン): ``url`` (pending 直接保持) と
+    ``normalized_url`` (article_urls JOIN) を dual-read する。両者は
+    canonicalize 済み値で一致するはず (PR-E で ``url`` に一本化)。
     """
 
     id: int
@@ -61,6 +65,7 @@ class PendingHtmlContext:
     ready_at: datetime | None
     leased_until: datetime | None
     attempt_count: int
+    url: SafeUrl
     normalized_url: SafeUrl
 
 
@@ -74,20 +79,26 @@ class PendingHtmlArticleRepository:
         self,
         *,
         article_url_id: int,
+        url: SafeUrl,
         source_id: int,
         staged_attributes: StagedArticleAttributes,
         ready_at: datetime,
     ) -> int | None:
         """新規 pending を ``status='open'`` で INSERT し、id を返す。
 
-        ``UNIQUE(article_url_id)`` 違反 (race-loss) の場合は ``None`` を返す。
-        ``staged_attributes`` は ``model_dump(mode="json")`` で JSONB 化する
-        (datetime → ISO 文字列、PublishedAt も同様)。
+        UNIQUE 違反 (race-loss) の場合は ``None`` を返す。``article_url_id`` /
+        ``url`` のどちらが先に衝突しても拾えるよう ``index_elements`` 指定なし
+        の ``on_conflict_do_nothing`` で吸収する (memory
+        ``feedback_on_conflict_no_target`` 参照)。
+
+        PR-D: ``url`` と ``article_url_id`` を dual-write する。caller は
+        canonicalize 済み URL を渡すこと (URL 不整合を起こさない設計責務)。
         """
         stmt = (
             pg_insert(PendingHtmlArticleORM)
             .values(
                 article_url_id=article_url_id,
+                url=url,
                 source_id=source_id,
                 status="open",
                 staged_attributes=staged_attributes.model_dump(mode="json"),
@@ -95,7 +106,7 @@ class PendingHtmlArticleRepository:
                 leased_until=None,
                 attempt_count=0,
             )
-            .on_conflict_do_nothing(index_elements=["article_url_id"])
+            .on_conflict_do_nothing()
             .returning(PendingHtmlArticleORM.id)
         )
         row = (await self._session.execute(stmt)).first()
@@ -111,6 +122,7 @@ class PendingHtmlArticleRepository:
             select(
                 PendingHtmlArticleORM.id,
                 PendingHtmlArticleORM.article_url_id,
+                PendingHtmlArticleORM.url,
                 PendingHtmlArticleORM.source_id,
                 PendingHtmlArticleORM.status,
                 PendingHtmlArticleORM.staged_attributes,
@@ -139,6 +151,7 @@ class PendingHtmlArticleRepository:
             ready_at=row.ready_at,
             leased_until=row.leased_until,
             attempt_count=row.attempt_count,
+            url=row.url,
             normalized_url=row.normalized_url,
         )
 

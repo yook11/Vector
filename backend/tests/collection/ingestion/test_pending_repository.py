@@ -3,6 +3,9 @@
 ``create`` / ``find_by_id`` / ``claim_batch`` (FOR UPDATE SKIP LOCKED) /
 ``sweep_expired`` / ``mark_*`` / ``delete_one`` の振る舞いを ``CHECK`` 制約と
 合わせて検証する。
+
+PR-D (article_urls 廃止プラン) で ``create`` の signature に ``url`` 引数が
+追加されたため、helper は ``(article_url_id, SafeUrl)`` の tuple を返す。
 """
 
 from __future__ import annotations
@@ -35,16 +38,22 @@ def _attrs(title: str = "Sample") -> StagedArticleAttributes:
 
 async def _make_article_url(
     db_session: AsyncSession, source: NewsSource, url: str
-) -> int:
+) -> tuple[int, SafeUrl]:
+    """``article_urls`` 行を作成し、``(id, SafeUrl)`` を返す。
+
+    PR-D で ``pending_html_articles.create`` が ``url=`` を要求するように
+    なったため、helper も dual-write 用に SafeUrl を返す。
+    """
     repo = ArticleUrlRepository(db_session)
+    safe = SafeUrl(url)
     url_id = await repo.upsert_returning(
-        normalized_url=SafeUrl(url),
-        original_url=SafeUrl(url),
+        normalized_url=safe,
+        original_url=safe,
         first_seen_source_id=source.id,
     )
     await db_session.commit()
     assert url_id is not None
-    return url_id
+    return url_id, safe
 
 
 # ---------------------------------------------------------------------------
@@ -56,12 +65,13 @@ async def _make_article_url(
 async def test_create_returns_pending_id(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
-    article_url_id = await _make_article_url(
+    article_url_id, pending_url = await _make_article_url(
         db_session, sample_source, "https://example.com/p/create"
     )
     repo = PendingHtmlArticleRepository(db_session)
     pending_id = await repo.create(
         article_url_id=article_url_id,
+        url=pending_url,
         source_id=sample_source.id,
         staged_attributes=_attrs(),
         ready_at=datetime.now(UTC),
@@ -75,12 +85,13 @@ async def test_create_returns_none_on_duplicate_article_url_id(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
     """``UNIQUE(article_url_id)`` 違反 (race-loss) は ``None`` で吸収される。"""
-    article_url_id = await _make_article_url(
+    article_url_id, pending_url = await _make_article_url(
         db_session, sample_source, "https://example.com/p/dup"
     )
     repo = PendingHtmlArticleRepository(db_session)
     first = await repo.create(
         article_url_id=article_url_id,
+        url=pending_url,
         source_id=sample_source.id,
         staged_attributes=_attrs(),
         ready_at=datetime.now(UTC),
@@ -90,11 +101,44 @@ async def test_create_returns_none_on_duplicate_article_url_id(
 
     second = await repo.create(
         article_url_id=article_url_id,
+        url=pending_url,
         source_id=sample_source.id,
         staged_attributes=_attrs(),
         ready_at=datetime.now(UTC),
     )
     assert second is None
+
+
+@pytest.mark.asyncio
+async def test_create_dual_writes_url_and_article_url_id(
+    db_session: AsyncSession, sample_source: NewsSource
+) -> None:
+    """PR-D 検証: ``url`` 列が ``article_url_id`` と並んで永続化される。"""
+    article_url_id, pending_url = await _make_article_url(
+        db_session, sample_source, "https://example.com/p/dual-write"
+    )
+    repo = PendingHtmlArticleRepository(db_session)
+    pending_id = await repo.create(
+        article_url_id=article_url_id,
+        url=pending_url,
+        source_id=sample_source.id,
+        staged_attributes=_attrs(),
+        ready_at=datetime.now(UTC),
+    )
+    await db_session.commit()
+    assert pending_id is not None
+
+    row = (
+        await db_session.execute(
+            text(
+                "SELECT url, article_url_id FROM pending_html_articles WHERE id = :id"
+            ),
+            {"id": pending_id},
+        )
+    ).first()
+    assert row is not None
+    assert row.url == str(pending_url)
+    assert row.article_url_id == article_url_id
 
 
 # ---------------------------------------------------------------------------
@@ -103,16 +147,17 @@ async def test_create_returns_none_on_duplicate_article_url_id(
 
 
 @pytest.mark.asyncio
-async def test_find_by_id_returns_context_with_normalized_url(
+async def test_find_by_id_returns_context_with_url_and_normalized_url(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
-    """``find_by_id`` は JOIN ``article_urls`` で ``normalized_url`` を同梱する。"""
-    article_url_id = await _make_article_url(
+    """``find_by_id`` は ``url`` (直接保持) と ``normalized_url`` (JOIN) を同梱する。"""
+    article_url_id, pending_url = await _make_article_url(
         db_session, sample_source, "https://example.com/p/find"
     )
     repo = PendingHtmlArticleRepository(db_session)
     pending_id = await repo.create(
         article_url_id=article_url_id,
+        url=pending_url,
         source_id=sample_source.id,
         staged_attributes=_attrs(title="Find Me"),
         ready_at=datetime(2026, 5, 1, tzinfo=UTC),
@@ -127,6 +172,7 @@ async def test_find_by_id_returns_context_with_normalized_url(
     assert ctx.source_id == sample_source.id
     assert ctx.status == "open"
     assert ctx.staged_attributes.title == "Find Me"
+    assert ctx.url == SafeUrl("https://example.com/p/find")
     assert ctx.normalized_url == SafeUrl("https://example.com/p/find")
     assert ctx.attempt_count == 0
 
@@ -153,21 +199,23 @@ async def test_claim_batch_picks_only_open_ready(
     now = datetime.now(UTC)
 
     # ready (claim 対象)
-    url_a = await _make_article_url(
+    url_a, url_a_safe = await _make_article_url(
         db_session, sample_source, "https://example.com/p/ready"
     )
     ready_id = await repo.create(
         article_url_id=url_a,
+        url=url_a_safe,
         source_id=sample_source.id,
         staged_attributes=_attrs(),
         ready_at=now - timedelta(minutes=1),
     )
     # 未 ready (future ready_at, 対象外)
-    url_b = await _make_article_url(
+    url_b, url_b_safe = await _make_article_url(
         db_session, sample_source, "https://example.com/p/future"
     )
     await repo.create(
         article_url_id=url_b,
+        url=url_b_safe,
         source_id=sample_source.id,
         staged_attributes=_attrs(),
         ready_at=now + timedelta(minutes=10),
@@ -184,12 +232,13 @@ async def test_claim_batch_advances_state_atomically(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
     """claim で running 化 + leased_until 設定 + attempt_count++ が一括適用される."""
-    article_url_id = await _make_article_url(
+    article_url_id, pending_url = await _make_article_url(
         db_session, sample_source, "https://example.com/p/claim-state"
     )
     repo = PendingHtmlArticleRepository(db_session)
     pending_id = await repo.create(
         article_url_id=article_url_id,
+        url=pending_url,
         source_id=sample_source.id,
         staged_attributes=_attrs(),
         ready_at=datetime.now(UTC) - timedelta(seconds=1),
@@ -217,11 +266,12 @@ async def test_claim_batch_respects_limit(
     repo = PendingHtmlArticleRepository(db_session)
     now = datetime.now(UTC)
     for i in range(5):
-        url_id = await _make_article_url(
+        url_id, url_safe = await _make_article_url(
             db_session, sample_source, f"https://example.com/p/limit-{i}"
         )
         await repo.create(
             article_url_id=url_id,
+            url=url_safe,
             source_id=sample_source.id,
             staged_attributes=_attrs(),
             ready_at=now - timedelta(seconds=1),
@@ -243,11 +293,12 @@ async def test_concurrent_claim_batch_skips_locked(
     now = datetime.now(UTC)
     created_ids: list[int] = []
     for i in range(4):
-        url_id = await _make_article_url(
+        url_id, url_safe = await _make_article_url(
             db_session, sample_source, f"https://example.com/p/race-{i}"
         )
         pid = await repo.create(
             article_url_id=url_id,
+            url=url_safe,
             source_id=sample_source.id,
             staged_attributes=_attrs(),
             ready_at=now - timedelta(seconds=1),
@@ -283,12 +334,13 @@ async def test_sweep_expired_reopens_dead_lease(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
     """死んだ lease (running + leased_until <= NOW) は ``open`` に戻される。"""
-    article_url_id = await _make_article_url(
+    article_url_id, pending_url = await _make_article_url(
         db_session, sample_source, "https://example.com/p/sweep"
     )
     repo = PendingHtmlArticleRepository(db_session)
     pending_id = await repo.create(
         article_url_id=article_url_id,
+        url=pending_url,
         source_id=sample_source.id,
         staged_attributes=_attrs(),
         ready_at=datetime.now(UTC) - timedelta(seconds=1),
@@ -320,12 +372,13 @@ async def test_sweep_expired_leaves_live_lease(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
     """生きている lease (leased_until > NOW) は触らない。"""
-    article_url_id = await _make_article_url(
+    article_url_id, pending_url = await _make_article_url(
         db_session, sample_source, "https://example.com/p/sweep-live"
     )
     repo = PendingHtmlArticleRepository(db_session)
     pending_id = await repo.create(
         article_url_id=article_url_id,
+        url=pending_url,
         source_id=sample_source.id,
         staged_attributes=_attrs(),
         ready_at=datetime.now(UTC) - timedelta(seconds=1),
@@ -347,12 +400,13 @@ async def test_sweep_expired_leaves_live_lease(
 async def test_mark_terminal_closes_pending(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
-    article_url_id = await _make_article_url(
+    article_url_id, pending_url = await _make_article_url(
         db_session, sample_source, "https://example.com/p/terminal"
     )
     repo = PendingHtmlArticleRepository(db_session)
     pending_id = await repo.create(
         article_url_id=article_url_id,
+        url=pending_url,
         source_id=sample_source.id,
         staged_attributes=_attrs(),
         ready_at=datetime.now(UTC) - timedelta(seconds=1),
@@ -375,12 +429,13 @@ async def test_mark_exhausted_closes_pending(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
     """``mark_exhausted`` は DB 上 ``mark_terminal`` と同じ状態に閉じる."""
-    article_url_id = await _make_article_url(
+    article_url_id, pending_url = await _make_article_url(
         db_session, sample_source, "https://example.com/p/exhausted"
     )
     repo = PendingHtmlArticleRepository(db_session)
     pending_id = await repo.create(
         article_url_id=article_url_id,
+        url=pending_url,
         source_id=sample_source.id,
         staged_attributes=_attrs(),
         ready_at=datetime.now(UTC) - timedelta(seconds=1),
@@ -403,12 +458,13 @@ async def test_mark_will_retry_reopens_with_future_ready_at(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
     """一時失敗で ``open`` + 未来 ``ready_at`` + ``leased_until=NULL`` に戻る。"""
-    article_url_id = await _make_article_url(
+    article_url_id, pending_url = await _make_article_url(
         db_session, sample_source, "https://example.com/p/retry"
     )
     repo = PendingHtmlArticleRepository(db_session)
     pending_id = await repo.create(
         article_url_id=article_url_id,
+        url=pending_url,
         source_id=sample_source.id,
         staged_attributes=_attrs(),
         ready_at=datetime.now(UTC) - timedelta(seconds=1),
@@ -434,12 +490,13 @@ async def test_delete_one_removes_row(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
     """成功時の片付け: ``articles`` INSERT と同 tx で pending を消す想定。"""
-    article_url_id = await _make_article_url(
+    article_url_id, pending_url = await _make_article_url(
         db_session, sample_source, "https://example.com/p/delete"
     )
     repo = PendingHtmlArticleRepository(db_session)
     pending_id = await repo.create(
         article_url_id=article_url_id,
+        url=pending_url,
         source_id=sample_source.id,
         staged_attributes=_attrs(),
         ready_at=datetime.now(UTC) - timedelta(seconds=1),

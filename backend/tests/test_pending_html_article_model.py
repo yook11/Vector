@@ -45,6 +45,7 @@ class TestPendingHtmlArticleHappyPath:
         # 通常の open 行: ready_at 必須、leased_until は NULL
         pending = PendingHtmlArticle(
             article_url_id=sample_url.id,
+            url=sample_url.normalized_url,
             source_id=sample_source.id,
             status="open",
             staged_attributes={"title": "T"},
@@ -69,6 +70,7 @@ class TestPendingHtmlArticleHappyPath:
         # claim 直後の running: leased_until が値を持ち、ready_at も値を持つ
         pending = PendingHtmlArticle(
             article_url_id=sample_url.id,
+            url=sample_url.normalized_url,
             source_id=sample_source.id,
             status="running",
             staged_attributes={},
@@ -90,6 +92,7 @@ class TestPendingHtmlArticleHappyPath:
         # closed は再試行しないので ready_at NULL でも OK
         pending = PendingHtmlArticle(
             article_url_id=sample_url.id,
+            url=sample_url.normalized_url,
             source_id=sample_source.id,
             status="closed",
             staged_attributes={},
@@ -112,6 +115,7 @@ class TestPendingHtmlArticleStateConsistency:
         # open なのに leased_until が残っている = state 不整合
         pending = PendingHtmlArticle(
             article_url_id=sample_url.id,
+            url=sample_url.normalized_url,
             source_id=sample_source.id,
             status="open",
             staged_attributes={},
@@ -132,6 +136,7 @@ class TestPendingHtmlArticleStateConsistency:
         # running なのに leased_until NULL = claim 整合性違反
         pending = PendingHtmlArticle(
             article_url_id=sample_url.id,
+            url=sample_url.normalized_url,
             source_id=sample_source.id,
             status="running",
             staged_attributes={},
@@ -152,6 +157,7 @@ class TestPendingHtmlArticleStateConsistency:
         # open なのに ready_at NULL だと picking から永久に漏れる事故
         pending = PendingHtmlArticle(
             article_url_id=sample_url.id,
+            url=sample_url.normalized_url,
             source_id=sample_source.id,
             status="open",
             staged_attributes={},
@@ -171,6 +177,7 @@ class TestPendingHtmlArticleStateConsistency:
     ) -> None:
         pending = PendingHtmlArticle(
             article_url_id=sample_url.id,
+            url=sample_url.normalized_url,
             source_id=sample_source.id,
             status="zombie",
             staged_attributes={},
@@ -193,6 +200,7 @@ class TestPendingHtmlArticleUniqueness:
         # 同一 article_url_id に対し pending 行は最大 1 つ (cross-table dedup の片肺)
         first = PendingHtmlArticle(
             article_url_id=sample_url.id,
+            url=sample_url.normalized_url,
             source_id=sample_source.id,
             status="open",
             staged_attributes={},
@@ -202,8 +210,10 @@ class TestPendingHtmlArticleUniqueness:
         db_session.add(first)
         await db_session.commit()
 
+        # url は別値にして ``UNIQUE(article_url_id)`` 違反だけを誘発する
         duplicate = PendingHtmlArticle(
             article_url_id=sample_url.id,
+            url=SafeUrl("https://example.com/pending-dup"),
             source_id=sample_source.id,
             status="open",
             staged_attributes={},
@@ -212,4 +222,81 @@ class TestPendingHtmlArticleUniqueness:
         )
         db_session.add(duplicate)
         with pytest.raises(IntegrityError):
+            await db_session.commit()
+
+    @pytest.mark.asyncio
+    async def test_url_is_unique(
+        self,
+        db_session: AsyncSession,
+        sample_source: NewsSource,
+    ) -> None:
+        """PR-D: ``url`` 列にも UNIQUE が張られている (cross-table dedup の支柱)。"""
+        url_a = ArticleUrl(
+            normalized_url=SafeUrl("https://example.com/a"),
+            original_url=SafeUrl("https://example.com/a"),
+            first_seen_source_id=sample_source.id,
+        )
+        url_b = ArticleUrl(
+            normalized_url=SafeUrl("https://example.com/b"),
+            original_url=SafeUrl("https://example.com/b"),
+            first_seen_source_id=sample_source.id,
+        )
+        db_session.add_all([url_a, url_b])
+        await db_session.commit()
+        await db_session.refresh(url_a)
+        await db_session.refresh(url_b)
+
+        first = PendingHtmlArticle(
+            article_url_id=url_a.id,
+            url=SafeUrl("https://example.com/shared"),
+            source_id=sample_source.id,
+            status="open",
+            staged_attributes={},
+            ready_at=_now(),
+            leased_until=None,
+        )
+        db_session.add(first)
+        await db_session.commit()
+
+        # article_url_id は別、url のみ衝突 → UNIQUE(url) 違反
+        duplicate = PendingHtmlArticle(
+            article_url_id=url_b.id,
+            url=SafeUrl("https://example.com/shared"),
+            source_id=sample_source.id,
+            status="open",
+            staged_attributes={},
+            ready_at=_now(),
+            leased_until=None,
+        )
+        db_session.add(duplicate)
+        with pytest.raises(IntegrityError):
+            await db_session.commit()
+
+    @pytest.mark.asyncio
+    async def test_url_check_constraint_rejects_non_http_scheme(
+        self,
+        db_session: AsyncSession,
+        sample_url: ArticleUrl,
+        sample_source: NewsSource,
+    ) -> None:
+        """``url ~ '^https?://.+'`` CHECK が非 http(s) を遮断する。
+
+        SafeUrl VO の同値ガードをすり抜けた raw INSERT を遮るための DB 側 belt。
+        """
+        from sqlalchemy import text
+
+        with pytest.raises(IntegrityError):
+            await db_session.execute(
+                text(
+                    "INSERT INTO pending_html_articles "
+                    "(article_url_id, url, source_id, status, staged_attributes, "
+                    " ready_at, leased_until, attempt_count) "
+                    "VALUES (:auid, :url, :sid, 'open', '{}'::jsonb, NOW(), NULL, 0)"
+                ),
+                {
+                    "auid": sample_url.id,
+                    "url": "ftp://example.com/x",
+                    "sid": sample_source.id,
+                },
+            )
             await db_session.commit()

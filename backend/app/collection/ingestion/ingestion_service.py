@@ -136,10 +136,11 @@ class IngestionService:
                             metadata_sample = self._observe_metadata(
                                 md, metadata_fields_observed, metadata_sample
                             )
+                            canonical_url = SafeUrl(
+                                canonicalize_url(str(pending.source_url))
+                            )
                             article_url_id = await url_repo.upsert_returning(
-                                normalized_url=SafeUrl(
-                                    canonicalize_url(str(pending.source_url))
-                                ),
+                                normalized_url=canonical_url,
                                 original_url=pending.source_url,
                                 first_seen_source_id=source_id,
                             )
@@ -148,6 +149,7 @@ class IngestionService:
                                 continue
                             pending_id = await pending_repo.create(
                                 article_url_id=article_url_id,
+                                url=canonical_url,
                                 source_id=source_id,
                                 staged_attributes=StagedArticleAttributes(
                                     title=pending.title,

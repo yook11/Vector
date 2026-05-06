@@ -29,6 +29,8 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
+from app.models.types import SafeUrlType
+from app.shared.value_objects.safe_url import SafeUrl
 
 
 class PendingHtmlArticle(Base):
@@ -51,12 +53,21 @@ class PendingHtmlArticle(Base):
     article_url_id UNIQUE で「articles と pending の cross-table dedup」が
     DB 物理的に担保される (Stage 1 の INSERT 順序で常に articles or pending
     のどちらか一方しか作られない設計)。
+
+    PR-D (article_urls 廃止プラン) で ``url`` 列を追加。``article_url_id`` と
+    並行して dual-write/dual-read される (PR-E で ``url`` に一本化、PR-F で
+    ``article_url_id`` を物理削除)。
     """
 
     __tablename__ = "pending_html_articles"
     __table_args__ = (
         UniqueConstraint(
             "article_url_id", name="uq_pending_html_articles_article_url_id"
+        ),
+        UniqueConstraint("url", name="uq_pending_html_articles_url"),
+        CheckConstraint(
+            "url ~ '^https?://.+'",
+            name="ck_pending_html_articles_url_scheme",
         ),
         CheckConstraint(
             "status IN ('open','running','closed')",
@@ -98,6 +109,7 @@ class PendingHtmlArticle(Base):
         BigInteger,
         ForeignKey("article_urls.id", ondelete="CASCADE"),
     )
+    url: Mapped[SafeUrl] = mapped_column(SafeUrlType, nullable=False)
     source_id: Mapped[int] = mapped_column(
         ForeignKey("news_sources.id", ondelete="RESTRICT"),
     )
