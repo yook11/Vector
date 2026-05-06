@@ -63,7 +63,6 @@ def _make_article(article_id: int = 1) -> Article:
     """
     return Article(
         id=article_id,
-        discovered_article_id=None,
         article_url_id=10,
         title="Test Title",
         body="x" * 100,

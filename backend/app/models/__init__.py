@@ -6,7 +6,6 @@ from app.models.article_rejection import ArticleRejection
 from app.models.article_url import ArticleUrl
 from app.models.auth_ref import auth_user_ref  # noqa: F401
 from app.models.category import Category
-from app.models.discovered_article import DiscoveredArticle
 from app.models.extraction_noise import ExtractionNoise
 from app.models.fetch_log import FetchLog
 from app.models.news_source import NewsSource, SourceType
@@ -24,7 +23,6 @@ __all__ = [
     "ArticleRejection",
     "ArticleUrl",
     "Category",
-    "DiscoveredArticle",
     "ExtractionNoise",
     "FetchLog",
     "NewsSource",

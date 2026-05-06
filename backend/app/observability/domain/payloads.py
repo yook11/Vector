@@ -85,10 +85,8 @@ class SourceFetchPayload(BasePipelineEventPayload):
 class ContentFetchPayload(BasePipelineEventPayload):
     """Stage 2 — 1 記事 1 HTML 取得。
 
-    ι.A: ``discovered_article_id`` → ``article_url_id`` rename。
-    PR2.5-B 以降の集計 key は ``article_urls.id`` (= pending → article への
-    identity bridge)。``articles.id`` は別途 ``article_id`` カラム
-    (pipeline_events) で関連付ける。
+    集計 key は ``article_urls.id`` (= pending → article への identity bridge)。
+    ``articles.id`` は別途 ``article_id`` カラム (pipeline_events) で関連付ける。
     """
 
     kind: Literal["content_fetch"] = "content_fetch"

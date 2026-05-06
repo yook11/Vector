@@ -13,7 +13,6 @@ from app.models.base import Base
 from app.shared.value_objects.safe_url import SafeUrl
 
 if TYPE_CHECKING:
-    from app.models.discovered_article import DiscoveredArticle
     from app.models.fetch_log import FetchLog
 
 
@@ -61,9 +60,6 @@ class NewsSource(Base):
     )
 
     # リレーション
-    discovered_articles: Mapped[list[DiscoveredArticle]] = relationship(
-        back_populates="news_source"
-    )
     fetch_logs: Mapped[list[FetchLog]] = relationship(back_populates="source")
 
     # ドメインメソッド

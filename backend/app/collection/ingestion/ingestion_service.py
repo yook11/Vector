@@ -1,7 +1,7 @@
 """新ルート Ingestion Service — Pattern R / Pattern H 振り分けの 1 段ユースケース。
 
-PR2.5-B cutover で ``discovered_articles`` 経路は撤去され、新 3 表構成
-(``article_urls`` / ``articles`` / ``pending_html_articles``) を直接駆動する。
+新 3 表構成 (``article_urls`` / ``articles`` / ``pending_html_articles``) を
+直接駆動する。
 
 Fetcher の ``AsyncIterator[FetchOutcome]`` を回し ``match`` で分岐する:
 

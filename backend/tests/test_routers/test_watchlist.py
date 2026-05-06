@@ -10,8 +10,8 @@ from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis
 from app.models.article_extraction import ArticleExtraction
 from app.models.category import Category
-from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
+from tests.factories.article_url import create_article_url
 
 
 async def _build_article_with_analysis(
@@ -27,17 +27,11 @@ async def _build_article_with_analysis(
     published_at: datetime,
     topic: str = "watchlist test",
 ) -> tuple[Article, ArticleAnalysis]:
-    discovered = DiscoveredArticle(
-        original_title=title,
-        original_url=url,
-        news_source_id=source.id,
-    )
-    db_session.add(discovered)
-    await db_session.flush()
+    article_url = await create_article_url(db_session, source=source, url=url)
     article = Article(
-        discovered_article_id=discovered.id,
-        source_id=discovered.news_source_id,
-        source_url=discovered.original_url,
+        article_url_id=article_url.id,
+        source_id=source.id,
+        source_url=url,
         original_title=title,
         original_content="content",
         published_at=published_at,

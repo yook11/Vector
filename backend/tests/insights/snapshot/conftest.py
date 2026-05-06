@@ -1,7 +1,7 @@
 """digest BC テスト固有のフィクスチャ。
 
 repository / Service テスト向けの ``seed_analysis`` ファクトリを提供する。
-seed_analysis は 1 件の ``ArticleAnalysis`` を関連 ORM (DiscoveredArticle /
+seed_analysis は 1 件の ``ArticleAnalysis`` を関連 ORM (ArticleUrl /
 Article / ArticleExtraction / ArticleExtractionEntity) とともに作成する。
 
 URL の重複制約を避けるため fixture 内のカウンタで一意な URL を採番する
@@ -21,8 +21,8 @@ from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis
 from app.models.article_extraction import ArticleExtraction
 from app.models.article_extraction_entity import ArticleExtractionEntity
-from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
+from tests.factories.article_url import create_article_url
 
 SeedAnalysis = Callable[..., Awaitable[ArticleAnalysis]]
 
@@ -52,18 +52,15 @@ def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAn
         entities: Sequence[tuple[str, str]] = (),
     ) -> ArticleAnalysis:
         n = next(seq)
-        discovered = DiscoveredArticle(
-            news_source_id=sample_source.id,
-            original_title=f"seed-{n}",
-            original_url=f"https://example.com/seed-{n}",
+        url = f"https://example.com/seed-{n}"
+        article_url = await create_article_url(
+            db_session, source=sample_source, url=url
         )
-        db_session.add(discovered)
-        await db_session.flush()
 
         article = Article(
-            discovered_article_id=discovered.id,
-            source_id=discovered.news_source_id,
-            source_url=discovered.original_url,
+            article_url_id=article_url.id,
+            source_id=sample_source.id,
+            source_url=url,
             original_title=f"seed-{n}",
             original_content="x" * 60,
         )

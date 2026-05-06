@@ -13,7 +13,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article as ArticleORM
-from app.models.discovered_article import DiscoveredArticle as DiscoveredArticleORM
 from app.models.news_source import NewsSource, SourceType
 from app.models.pipeline_event import PipelineEvent
 from app.observability.domain.event import EventType, Stage
@@ -22,6 +21,7 @@ from app.observability.domain.payloads import (
     SourceFetchPayload,
 )
 from app.observability.repository import PipelineEventRepository
+from tests.factories.article_url import create_article_url
 
 
 @pytest.fixture
@@ -41,19 +41,14 @@ async def source_row(db_session: AsyncSession) -> NewsSource:
 
 @pytest.fixture
 async def article_row(db_session: AsyncSession, source_row: NewsSource) -> ArticleORM:
-    discovered = DiscoveredArticleORM(
-        original_url="https://venturebeat.com/a/",
-        original_title="t",
-        news_source_id=source_row.id,
-    )
-    db_session.add(discovered)
+    url = "https://venturebeat.com/a/"
+    article_url = await create_article_url(db_session, source=source_row, url=url)
     await db_session.commit()
-    await db_session.refresh(discovered)
 
     article = ArticleORM(
-        discovered_article_id=discovered.id,
+        article_url_id=article_url.id,
         source_id=source_row.id,
-        source_url="https://venturebeat.com/a/",  # type: ignore[arg-type]
+        source_url=url,  # type: ignore[arg-type]
         original_title="t",
         original_content="c" * 100,
     )

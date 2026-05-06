@@ -3,25 +3,13 @@
 ユビキタス語彙:
 
 - ``ArticleCandidate``: fetcher 境界の正規化 VO (URL 安全性 / タイトル整形済み)。
-  新 Protocol Fetcher は ``FetchedEntry`` envelope (item=ReadyForArticle |
-  PendingHtmlFetch) を yield するため candidate は ``IngestionService`` の
-  DiscoveredArticle 永続化経路で内部利用されるのみ。
-- ``DiscoveredArticleDraft``: 永続化前のドメイン入力 VO (candidate +
-  ``news_source_id``)。
-- ``DiscoveredArticleEntity``: システムに記録された Entity (identity / 発見時刻)。
-- ``DiscoveredArticleRepository``: Draft → save_many → Entity / URL → find_by_url。
+  Protocol Fetcher は ``FetchedEntry`` envelope (item=ReadyForArticle |
+  PendingHtmlFetch) を yield し、candidate は ``IngestionService`` 内部で
+  正規化用途に利用される。
 """
 
-from app.collection.ingestion.domain import (
-    ArticleCandidate,
-    DiscoveredArticleDraft,
-    DiscoveredArticleEntity,
-)
-from app.collection.ingestion.repository import DiscoveredArticleRepository
+from app.collection.ingestion.domain import ArticleCandidate
 
 __all__ = [
     "ArticleCandidate",
-    "DiscoveredArticleDraft",
-    "DiscoveredArticleEntity",
-    "DiscoveredArticleRepository",
 ]

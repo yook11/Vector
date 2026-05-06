@@ -11,16 +11,13 @@ per-source 設計 (実 API 応答ベース):
 
 - 毎サイクル直近 ``HN_SLIDING_WINDOW_SECONDS`` 秒以内に投稿された
   ``points > HN_MIN_POINTS`` のストーリーを全件取得する sliding window 設計
-- increment 用の Redis state は持たず、dedup は ``ON CONFLICT DO NOTHING``
-  に委ねる (``DiscoveredArticleRepository.save_many`` が UNIQUE 違反を吸収)
+- increment 用の Redis state は持たず、dedup は下流の
+  ``ArticleUrlRepository.upsert_returning`` 側 ``ON CONFLICT DO NOTHING``
+  に委ねる
 - ``url=None`` の hit (Ask HN / Show HN テキスト投稿等) は yield せずに skip
 - ``language`` はリンク先が任意の外部サイトのため feed-level で確定できず
   ``None`` 直書き (PROVIDES からも外す)
 - ``DAILY_REQUEST_LIMIT`` は持たない (HN は cron 1 回/日、Algolia API 無料)
-
-旧 ``HackerNewsFetcher`` (``dict[SafeUrl, ArticleCandidate]`` を返す旧
-Protocol) は本 PR で完全書き換え。Strangler 経路 (``SourceFetchService`` /
-旧 ``registry.py``) も同 PR で撤去する。
 """
 
 from __future__ import annotations

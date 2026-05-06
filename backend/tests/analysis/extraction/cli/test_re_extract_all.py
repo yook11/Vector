@@ -28,11 +28,11 @@ from app.analysis.extraction.cli.re_extract_all import build_parser, run
 from app.analysis.extraction.domain import ExtractedEntity, ExtractionResult
 from app.analysis.extraction.repository import ExtractionRepository
 from app.models.article import Article
-from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
 from tests.analysis.extraction.application.test_re_extraction_service import (
     _extractor as make_extractor,  # 再利用 (BaseExtractor mock)
 )
+from tests.factories.article_url import create_article_url
 
 
 def _summary_from_stdout(captured: str) -> dict:
@@ -89,17 +89,11 @@ async def _seed_article_with_extraction(
     url: str,
     surfaces: Sequence[str] = ("X",),
 ) -> Article:
-    discovered = DiscoveredArticle(
-        original_title="t",
-        original_url=url,
-        news_source_id=sample_source.id,
-    )
-    db_session.add(discovered)
-    await db_session.flush()
+    article_url = await create_article_url(db_session, source=sample_source, url=url)
     article = Article(
-        discovered_article_id=discovered.id,
-        source_id=discovered.news_source_id,
-        source_url=discovered.original_url,
+        article_url_id=article_url.id,
+        source_id=sample_source.id,
+        source_url=url,
         original_title="Original",
         original_content="content body content body",
         published_at=datetime.now(UTC),
@@ -131,17 +125,11 @@ async def _seed_article_with_extraction(
 async def _seed_article_without_extraction(
     db_session: AsyncSession, sample_source: NewsSource, *, url: str
 ) -> Article:
-    discovered = DiscoveredArticle(
-        original_title="t",
-        original_url=url,
-        news_source_id=sample_source.id,
-    )
-    db_session.add(discovered)
-    await db_session.flush()
+    article_url = await create_article_url(db_session, source=sample_source, url=url)
     article = Article(
-        discovered_article_id=discovered.id,
-        source_id=discovered.news_source_id,
-        source_url=discovered.original_url,
+        article_url_id=article_url.id,
+        source_id=sample_source.id,
+        source_url=url,
         original_title="Original",
         original_content="content body content body",
         published_at=datetime.now(UTC),

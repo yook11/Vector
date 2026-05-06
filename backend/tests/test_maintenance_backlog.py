@@ -11,8 +11,8 @@ from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis
 from app.models.article_extraction import ArticleExtraction
 from app.models.category import Category
-from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
+from tests.factories.article_url import create_article_url
 
 
 async def _make_article(
@@ -23,19 +23,13 @@ async def _make_article(
     created_at: datetime,
 ) -> Article:
     """指定 created_at の Article を作成 (server_default を後追い UPDATE で上書き)。"""
-    discovered = DiscoveredArticle(
-        original_title="t",
-        original_url=url,
-        news_source_id=source.id,
-    )
-    db_session.add(discovered)
+    article_url = await create_article_url(db_session, source=source, url=url)
     await db_session.commit()
-    await db_session.refresh(discovered)
 
     article = Article(
-        discovered_article_id=discovered.id,
-        source_id=discovered.news_source_id,
-        source_url=discovered.original_url,
+        article_url_id=article_url.id,
+        source_id=source.id,
+        source_url=url,
         original_title="title",
         original_content="x" * 60,
     )

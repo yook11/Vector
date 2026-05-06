@@ -57,9 +57,9 @@ from app.models.article_extraction import ArticleExtraction
 from app.models.article_extraction_entity import ArticleExtractionEntity
 from app.models.article_rejection import ArticleRejection
 from app.models.category import Category
-from app.models.discovered_article import DiscoveredArticle
 from app.models.extraction_noise import ExtractionNoise as ExtractionNoiseORM
 from app.models.news_source import NewsSource
+from tests.factories.article_url import create_article_url
 
 # --- Helpers ---
 
@@ -131,17 +131,11 @@ async def _create_article_with_extraction(
     summary: str = "要約テスト",
 ) -> tuple[Article, ArticleExtraction]:
     """Stage 1 完了済みの記事（article + extraction）を作成するヘルパー。"""
-    discovered = DiscoveredArticle(
-        original_title=title,
-        original_url=url,
-        news_source_id=source.id,
-    )
-    db_session.add(discovered)
-    await db_session.flush()
+    article_url = await create_article_url(db_session, source=source, url=url)
     article = Article(
-        discovered_article_id=discovered.id,
-        source_id=discovered.news_source_id,
-        source_url=discovered.original_url,
+        article_url_id=article_url.id,
+        source_id=source.id,
+        source_url=url,
         original_title=title,
         original_content="Content.",
         published_at=datetime.now(UTC),
@@ -741,17 +735,12 @@ async def test_extraction_creates_extraction_and_entities(
     session_factory,
     sample_source: NewsSource,
 ) -> None:
-    discovered = DiscoveredArticle(
-        original_title="Quantum Breakthrough",
-        original_url="https://example.com/quantum",
-        news_source_id=sample_source.id,
-    )
-    db_session.add(discovered)
-    await db_session.flush()
+    url = "https://example.com/quantum"
+    article_url = await create_article_url(db_session, source=sample_source, url=url)
     article = Article(
-        discovered_article_id=discovered.id,
-        source_id=discovered.news_source_id,
-        source_url=discovered.original_url,
+        article_url_id=article_url.id,
+        source_id=sample_source.id,
+        source_url=url,
         original_title="Quantum Breakthrough",
         original_content="Full content here.",
         published_at=datetime.now(UTC),
@@ -854,17 +843,12 @@ async def test_extraction_routes_noise_to_extraction_noises_table(
     article_extractions には行が入らないこと、Stage 2 へ chain しないことを
     保証する (chain は task 層で確認、ここは Service の振り分けが正しいかを見る)。
     """
-    discovered = DiscoveredArticle(
-        original_title="Celebrity Gossip",
-        original_url="https://example.com/noise",
-        news_source_id=sample_source.id,
-    )
-    db_session.add(discovered)
-    await db_session.flush()
+    url = "https://example.com/noise"
+    article_url = await create_article_url(db_session, source=sample_source, url=url)
     article = Article(
-        discovered_article_id=discovered.id,
-        source_id=discovered.news_source_id,
-        source_url=discovered.original_url,
+        article_url_id=article_url.id,
+        source_id=sample_source.id,
+        source_url=url,
         original_title="Celebrity Gossip",
         original_content="Off-topic content.",
         published_at=datetime.now(UTC),
@@ -922,17 +906,12 @@ async def test_extraction_returns_invalid_input_outcome(
     session_factory,
     sample_source: NewsSource,
 ) -> None:
-    discovered = DiscoveredArticle(
-        original_title="Bad Article",
-        original_url="https://example.com/bad",
-        news_source_id=sample_source.id,
-    )
-    db_session.add(discovered)
-    await db_session.flush()
+    url = "https://example.com/bad"
+    article_url = await create_article_url(db_session, source=sample_source, url=url)
     article = Article(
-        discovered_article_id=discovered.id,
-        source_id=discovered.news_source_id,
-        source_url=discovered.original_url,
+        article_url_id=article_url.id,
+        source_id=sample_source.id,
+        source_url=url,
         original_title="Bad Article",
         original_content="Bad content.",
         published_at=datetime.now(UTC),

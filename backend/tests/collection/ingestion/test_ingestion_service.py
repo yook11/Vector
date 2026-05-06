@@ -1,7 +1,7 @@
-"""``IngestionService`` の振り分け責務テスト (PR2.5-B 仕様)。
+"""``IngestionService`` の振り分け責務テスト。
 
-PR2.5-B cutover で ``discovered_articles`` 経路は撤去され、新 3 表
-(``article_urls`` / ``articles`` / ``pending_html_articles``) を直接駆動する。
+新 3 表 (``article_urls`` / ``articles`` / ``pending_html_articles``) を
+直接駆動する。
 
 検証する不変条件:
 
@@ -122,7 +122,6 @@ async def test_pattern_r_inserts_article_url_and_article(
     assert len(urls) == 1
     assert len(articles) == 1
     assert articles[0].article_url_id == urls[0].id
-    assert articles[0].discovered_article_id is None
     assert pendings == []
 
 

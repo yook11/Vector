@@ -2,7 +2,6 @@
 
 ユビキタス語彙:
 
-- ``DiscoveredArticle`` (ingestion 由来 ORM): RSS で発見された未抽出の記事。
 - ``ExtractedContent`` / ``ExtractionEmpty``: AI 境界 (HTML 抽出器) の戻り値。
 - ``ArticleDraft``: AI 境界を sanitize した永続化前の正規化値 (内部用)。
 - ``Article``: 抽出済み記事 Entity (analysis 以降が ``id`` で扱う)。

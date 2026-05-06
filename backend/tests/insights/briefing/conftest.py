@@ -17,8 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis
 from app.models.article_extraction import ArticleExtraction
-from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
+from tests.factories.article_url import create_article_url
 
 SeedBriefingAnalysis = Callable[..., Awaitable[ArticleAnalysis]]
 
@@ -44,19 +44,15 @@ def seed_briefing_analysis(
         n = next(seq)
         title = translated_title or f"briefing-seed-{n}"
         body = summary or f"briefing summary {n}"
-
-        discovered = DiscoveredArticle(
-            news_source_id=sample_source.id,
-            original_title=title,
-            original_url=f"https://example.com/briefing-seed-{n}",
+        url = f"https://example.com/briefing-seed-{n}"
+        article_url = await create_article_url(
+            db_session, source=sample_source, url=url
         )
-        db_session.add(discovered)
-        await db_session.flush()
 
         article = Article(
-            discovered_article_id=discovered.id,
-            source_id=discovered.news_source_id,
-            source_url=discovered.original_url,
+            article_url_id=article_url.id,
+            source_id=sample_source.id,
+            source_url=url,
             original_title=title,
             original_content="x" * 60,
         )

@@ -9,8 +9,7 @@
 - ``pending_html_articles`` の状態遷移が DB に焼き付く
   (成功: DELETE / 永続失敗: closed / 一時失敗 (will retry): open + 未来 ready_at /
   一時失敗 (exhausted): closed)
-- ``article_url_id`` が pipeline_events.payload に焼かれる (旧
-  ``discovered_article_id`` ではない)
+- ``article_url_id`` が pipeline_events.payload に焼かれる
 - 重複配送 / 状態不整合 (status != 'running') は ``None`` で静かに exit
 - per-error retry policy で next ready_at が決まる (BLIP の 1 回目失敗 = 0.5 分後)
 """
@@ -194,7 +193,6 @@ async def test_success_returns_content_fetched_and_persists_article(
 
     assert isinstance(outcome, ContentFetched)
     assert outcome.article.article_url_id == article_url_id
-    assert outcome.article.discovered_article_id is None  # 新経路
     articles = (await db_session.execute(select(ArticleORM))).scalars().all()
     assert len(articles) == 1
 

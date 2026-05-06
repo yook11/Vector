@@ -1,8 +1,8 @@
 """collection/extraction ドメイン層のユニットテスト (DB 不要)。
 
 PublishedAt VO の TZ 不変条件、ArticleDraft の sanitize / 長さ境界 /
-from_extracted、Article Entity の identity 不変条件 / from_draft、
-Draft → Entity 変換の等価性を検証する。
+from_extracted、Article Entity の identity 不変条件 /
+from_draft_via_article_url、Draft → Entity 変換の等価性を検証する。
 """
 
 from __future__ import annotations
@@ -182,8 +182,7 @@ class TestArticleDraftFromExtracted:
 def _article(**overrides: object) -> Article:
     base: dict[str, object] = {
         "id": 1,
-        "discovered_article_id": 10,
-        "article_url_id": None,
+        "article_url_id": 10,
         "title": "Title",
         "body": _valid_body(),
         "published_at": None,
@@ -202,31 +201,13 @@ class TestArticleIdentity:
         with pytest.raises(ValueError, match="id must be positive"):
             _article(id=-1)
 
-    def test_rejects_zero_discovered_article_id(self) -> None:
-        with pytest.raises(ValueError, match="discovered_article_id must be positive"):
-            _article(discovered_article_id=0)
-
-    def test_rejects_negative_discovered_article_id(self) -> None:
-        with pytest.raises(ValueError, match="discovered_article_id must be positive"):
-            _article(discovered_article_id=-5)
-
-    def test_rejects_both_identifiers_none(self) -> None:
-        # PR2.5-B: discovered_article_id / article_url_id の両方が NULL は不変条件違反
-        with pytest.raises(
-            ValueError,
-            match="must have either discovered_article_id or article_url_id",
-        ):
-            _article(discovered_article_id=None, article_url_id=None)
-
     def test_rejects_zero_article_url_id(self) -> None:
         with pytest.raises(ValueError, match="article_url_id must be positive"):
-            _article(discovered_article_id=None, article_url_id=0)
+            _article(article_url_id=0)
 
-    def test_accepts_article_url_id_only(self) -> None:
-        # PR2.5-B 新経路で作られた Entity は discovered_article_id=None でも有効
-        article = _article(discovered_article_id=None, article_url_id=42)
-        assert article.discovered_article_id is None
-        assert article.article_url_id == 42
+    def test_rejects_negative_article_url_id(self) -> None:
+        with pytest.raises(ValueError, match="article_url_id must be positive"):
+            _article(article_url_id=-5)
 
 
 class TestArticleNonEmpty:
@@ -247,43 +228,8 @@ class TestArticleFrozen:
 
 
 # ---------------------------------------------------------------------------
-# Article.from_draft
+# Article.from_draft_via_article_url
 # ---------------------------------------------------------------------------
-
-
-class TestArticleFromDraft:
-    def test_synthesizes_identity_and_created_at(self) -> None:
-        draft = _draft()
-        created = datetime(2026, 4, 1, 12, 0, 0, tzinfo=UTC)
-        article = Article.from_draft(
-            draft, id=42, discovered_article_id=100, created_at=created
-        )
-        assert article.id == 42
-        assert article.discovered_article_id == 100
-        assert article.created_at == created
-
-    def test_preserves_draft_payload(self) -> None:
-        published = PublishedAt(datetime(2026, 3, 1, tzinfo=UTC))
-        draft = _draft(title="Hello", body=_valid_body(), published_at=published)
-        article = Article.from_draft(
-            draft,
-            id=1,
-            discovered_article_id=10,
-            created_at=datetime(2026, 4, 1, tzinfo=UTC),
-        )
-        assert article.title == "Hello"
-        assert article.body == _valid_body()
-        assert article.published_at == published
-
-    def test_legacy_path_leaves_article_url_id_none(self) -> None:
-        # 旧 from_draft は新規 article_url_id を埋めない (旧経路の互換性)
-        article = Article.from_draft(
-            _draft(),
-            id=1,
-            discovered_article_id=10,
-            created_at=datetime(2026, 4, 1, tzinfo=UTC),
-        )
-        assert article.article_url_id is None
 
 
 class TestArticleFromDraftViaArticleUrl:
@@ -295,8 +241,6 @@ class TestArticleFromDraftViaArticleUrl:
         )
         assert article.id == 42
         assert article.article_url_id == 200
-        # 新経路は discovered_article_id を NULL にする
-        assert article.discovered_article_id is None
         assert article.created_at == created
 
     def test_preserves_draft_payload(self) -> None:
@@ -316,31 +260,14 @@ class TestArticleFromDraftViaArticleUrl:
 # ---------------------------------------------------------------------------
 # Round-trip: ExtractedContent → Draft → Entity
 #
-# Repository._to_domain (ORM → Entity) と from_draft (Draft → Entity) が
-# 同じ Entity を組み立てられることを保証する基盤テスト。
-# ORM 経路の検証は PR 2a で repository テストとして追加する。
+# Repository._article_from_orm (ORM → Entity) と
+# from_draft_via_article_url (Draft → Entity) が同じ Entity を組み立てられる
+# ことを保証する基盤テスト。ORM 経路の検証は repository テストで行う。
 # ---------------------------------------------------------------------------
 
 
 class TestExtractedContentToEntityRoundTrip:
-    def test_extracted_to_draft_to_entity_preserves_payload(self) -> None:
-        published = PublishedAt(datetime(2026, 4, 1, tzinfo=UTC))
-        content = ExtractedContent(
-            title="Round Trip", body=_valid_body(), published_at=published
-        )
-        draft = ArticleDraft.from_extracted(content)
-        article = Article.from_draft(
-            draft,
-            id=7,
-            discovered_article_id=70,
-            created_at=datetime(2026, 4, 2, tzinfo=UTC),
-        )
-        assert article.title == "Round Trip"
-        assert article.body == _valid_body()
-        assert article.published_at == published
-
     def test_extracted_to_draft_via_article_url_preserves_payload(self) -> None:
-        # 新経路の round-trip も同等に成立する
         published = PublishedAt(datetime(2026, 4, 1, tzinfo=UTC))
         content = ExtractedContent(
             title="Round Trip", body=_valid_body(), published_at=published

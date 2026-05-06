@@ -31,8 +31,8 @@ from app.insights.briefing.schemas.briefing import (
 from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis
 from app.models.article_extraction import ArticleExtraction
+from app.models.article_url import ArticleUrl
 from app.models.category import Category
-from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
 from app.models.weekly_briefing import WeeklyBriefing
 
@@ -55,26 +55,23 @@ async def _fetch_article_summaries(
 ) -> list[_ArticleSummaryOut]:
     if not article_ids:
         return []
-    # PR2.5-B: 新規記事は discovered_article_id=NULL なので OUTER JOIN にし、
-    # original_url は DiscoveredArticle 由来 (旧) または Article.source_url
-    # (新、Stage 1 で正規化済) のいずれかを採用する。
+    # 公開 URL は ``ArticleUrl.original_url`` を第一候補に、未紐付けの旧 row 等で
+    # NULL のときのみ ``Article.source_url`` (Stage 1 正規化済) にフォールバック。
+    # 全 article 行が ``article_url_id`` を持つ前提だが、防御的に OUTER JOIN。
     stmt = (
         select(
             Article.id,
             Article.source_url,
             ArticleAnalysis.translated_title,
             NewsSource.name,
-            DiscoveredArticle.original_url.label("legacy_original_url"),
+            ArticleUrl.original_url.label("legacy_original_url"),
         )
         .join(ArticleExtraction, ArticleExtraction.article_id == Article.id)
         .join(
             ArticleAnalysis,
             ArticleAnalysis.extraction_id == ArticleExtraction.id,
         )
-        .outerjoin(
-            DiscoveredArticle,
-            DiscoveredArticle.id == Article.discovered_article_id,
-        )
+        .outerjoin(ArticleUrl, ArticleUrl.id == Article.article_url_id)
         .join(NewsSource, NewsSource.id == Article.source_id)
         .where(Article.id.in_(article_ids))
     )

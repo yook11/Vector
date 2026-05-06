@@ -18,9 +18,6 @@ def article_eager_options_brief() -> list:
         .contains_eager(ArticleExtraction.article)
         .options(
             defer(Article.original_content, raiseload=True),
-            # PR2.5-B: news_source は articles.source_id FK 経由の直 relationship。
-            # 旧経路 (discovered_article 経由) は新規記事で NULL になるため
-            # eager load 対象から外し、source_id 直結に統一する。
             selectinload(Article.news_source),
         ),
     ]

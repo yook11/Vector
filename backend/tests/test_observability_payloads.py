@@ -1,9 +1,9 @@
 """``app.observability.domain.payloads`` の単体テスト。
 
-PR2.5-B Block 5 (κ + ι.A) で導入された不変条件と field rename を検証する:
+不変条件と field schema を検証する:
 
 - ``SourceFetchPayload``: 5 種 count + ``entry_count == sum(...)`` invariant
-- ``ContentFetchPayload``: ``article_url_id`` field (旧 ``discovered_article_id``)
+- ``ContentFetchPayload``: ``article_url_id`` field と extra="forbid"
 """
 
 from __future__ import annotations
@@ -96,7 +96,7 @@ class TestSourceFetchPayloadCodeBreakdowns:
 
 
 class TestContentFetchPayloadArticleUrlId:
-    """ι.A: ``discovered_article_id`` → ``article_url_id`` rename。"""
+    """``ContentFetchPayload.article_url_id`` の field schema 不変条件。"""
 
     def test_article_url_id_field_exists(self) -> None:
         payload = ContentFetchPayload(article_url_id=42)
@@ -106,10 +106,10 @@ class TestContentFetchPayloadArticleUrlId:
         payload = ContentFetchPayload()
         assert payload.article_url_id is None
 
-    def test_old_field_name_rejected(self) -> None:
-        """旧名 ``discovered_article_id`` は extra="forbid" で拒否される。"""
-        with pytest.raises(ValueError, match="discovered_article_id"):
-            ContentFetchPayload(discovered_article_id=42)  # type: ignore[call-arg]
+    def test_unknown_field_rejected(self) -> None:
+        """未知 field は ``extra="forbid"`` で拒否される。"""
+        with pytest.raises(ValueError, match="extra"):
+            ContentFetchPayload(unknown_field=42)  # type: ignore[call-arg]
 
 
 class TestPayloadJsonSerialization:

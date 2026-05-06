@@ -10,8 +10,8 @@ from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis
 from app.models.article_extraction import ArticleExtraction
 from app.models.category import Category
-from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
+from tests.factories.article_url import create_article_url
 
 
 @pytest.mark.asyncio
@@ -84,17 +84,14 @@ class TestListCategories:
         sample_source: NewsSource,
     ) -> None:
         """直近 24 時間に分類された記事は recentCount に含まれる。"""
-        discovered = DiscoveredArticle(
-            original_title="TF Article",
-            original_url="https://example.com/tf",
-            news_source_id=sample_source.id,
+        url = "https://example.com/tf"
+        article_url = await create_article_url(
+            db_session, source=sample_source, url=url
         )
-        db_session.add(discovered)
-        await db_session.flush()
         article = Article(
-            discovered_article_id=discovered.id,
-            source_id=discovered.news_source_id,
-            source_url=discovered.original_url,
+            article_url_id=article_url.id,
+            source_id=sample_source.id,
+            source_url=url,
             original_title="TF Article",
             original_content="TF content.",
         )
@@ -133,17 +130,14 @@ class TestListCategories:
         sample_source: NewsSource,
     ) -> None:
         """24 時間より前に分類された記事は recentCount に含まれない。"""
-        discovered = DiscoveredArticle(
-            original_title="TF Article Old",
-            original_url="https://example.com/tf-old",
-            news_source_id=sample_source.id,
+        url = "https://example.com/tf-old"
+        article_url = await create_article_url(
+            db_session, source=sample_source, url=url
         )
-        db_session.add(discovered)
-        await db_session.flush()
         article = Article(
-            discovered_article_id=discovered.id,
-            source_id=discovered.news_source_id,
-            source_url=discovered.original_url,
+            article_url_id=article_url.id,
+            source_id=sample_source.id,
+            source_url=url,
             original_title="TF Article Old",
             original_content="TF content.",
         )

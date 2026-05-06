@@ -10,8 +10,8 @@ from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis
 from app.models.article_extraction import ArticleExtraction
 from app.models.category import Category
-from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
+from tests.factories.article_url import create_article_url
 
 
 async def _create_article(
@@ -21,18 +21,12 @@ async def _create_article(
     url: str = "https://example.com/article",
     published_at: datetime | None = None,
 ) -> Article:
-    """DiscoveredArticle + Article を作成するヘルパー。"""
-    discovered = DiscoveredArticle(
-        original_title=title,
-        original_url=url,
-        news_source_id=source.id,
-    )
-    session.add(discovered)
-    await session.flush()
+    """ArticleUrl + Article を作成するヘルパー。"""
+    article_url = await create_article_url(session, source=source, url=url)
     article = Article(
-        discovered_article_id=discovered.id,
-        source_id=discovered.news_source_id,
-        source_url=discovered.original_url,
+        article_url_id=article_url.id,
+        source_id=source.id,
+        source_url=url,
         original_title=title,
         original_content="Test content.",
         published_at=published_at or datetime.now(UTC),

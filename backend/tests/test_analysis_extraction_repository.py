@@ -26,8 +26,8 @@ from app.analysis.extraction.repository import ExtractionRepository
 from app.models.article import Article
 from app.models.article_extraction import ArticleExtraction
 from app.models.article_extraction_entity import ArticleExtractionEntity
-from app.models.discovered_article import DiscoveredArticle
 from app.models.news_source import NewsSource
+from tests.factories.article_url import create_article_url
 
 
 def _result(
@@ -52,17 +52,11 @@ def _result(
 async def _make_article(
     db_session: AsyncSession, sample_source: NewsSource, url: str
 ) -> Article:
-    discovered = DiscoveredArticle(
-        original_title="Title",
-        original_url=url,
-        news_source_id=sample_source.id,
-    )
-    db_session.add(discovered)
-    await db_session.flush()
+    article_url = await create_article_url(db_session, source=sample_source, url=url)
     article = Article(
-        discovered_article_id=discovered.id,
-        source_id=discovered.news_source_id,
-        source_url=discovered.original_url,
+        article_url_id=article_url.id,
+        source_id=sample_source.id,
+        source_url=url,
         original_title="Title",
         original_content="content body content body",
         published_at=datetime.now(UTC),
