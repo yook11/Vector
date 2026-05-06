@@ -67,6 +67,14 @@ Thumbs.db
 skills-lock.json
 
 # ===========================
+# Other AI agent tools (per-developer local state)
+# ===========================
+# OpenAI Codex CLI 設定 / Claude Code 以外の skills 配置。
+# AGENTS.md (中身はプロジェクト憲法) は commit する側、tooling 設定は除外。
+.agents/
+.codex/
+
+# ===========================
 # Red-team session output
 # ===========================
 .red-team/
