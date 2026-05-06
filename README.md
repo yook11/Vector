@@ -235,6 +235,48 @@ pip install semgrep
 semgrep --config=p/owasp-top-ten --config=p/security-audit .
 ```
 
+### Schemathesis (API 仕様適合性 fuzz)
+
+`.github/workflows/schemathesis-nightly.yml` が nightly (JST 03:37) に
+FastAPI `/openapi.json` と実装の適合性を Schemathesis (Hypothesis ベース
+property-based fuzz) で検査する。3 check (`not_a_server_error` /
+`status_code_conformance` / `response_schema_conformance`) を初回は GET only +
+25 examples で **warn-only** 実行し、findings は Actions Artifacts
+(`schemathesis-results`) に JUnit XML + VCR cassette で 14 日保存する。
+triage 完了後に blocking 化、その後 mutation method (POST/PUT/DELETE) や
+stateful 拡張を別 PR で順次着手する予定。
+
+ローカル再現:
+
+```bash
+# 1. backend を起動 (docker compose 経由 or uv run uvicorn 直接)
+docker compose up -d backend db redis
+docker compose exec backend uv run alembic upgrade head
+
+# 2. admin JWT を 1 時間有効で発行 (INTERNAL_API_SECRET は .env から)
+export INTERNAL_API_SECRET=$(grep ^INTERNAL_API_SECRET .env | cut -d= -f2)
+TOKEN=$(cd backend && uv run python -c "
+import jwt, time, uuid, os
+print(jwt.encode({
+    'sub': str(uuid.UUID('00000000-0000-0000-0000-000000000001')),
+    'role': 'admin', 'iss': 'vector-bff', 'aud': 'vector-backend',
+    'iat': int(time.time()), 'exp': int(time.time()) + 3600,
+}, os.environ['INTERNAL_API_SECRET'], algorithm='HS256'))
+")
+
+# 3. Schemathesis 実行 (backend は internal: true network のため、
+#    dev で host expose 無しの場合は docker compose exec 経由で container
+#    内から実行する)
+pip install 'schemathesis==4.17.0'
+schemathesis run http://localhost:8000/openapi.json \
+  -H "Authorization: Bearer ${TOKEN}" \
+  --include-method GET \
+  --checks not_a_server_error,status_code_conformance,response_schema_conformance \
+  -n 25 \
+  --phases examples,coverage,fuzzing \
+  --report junit,vcr --report-dir schemathesis-report
+```
+
 ### テスト・lint 実行
 
 ```bash
