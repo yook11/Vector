@@ -61,7 +61,12 @@ def upgrade() -> None:
             ).bindparams(id=cat_id, slug=slug, name=name)
         )
 
+    # seq_name は pg_get_serial_sequence の戻り値で postgres 内部の sequence 識別子。
+    # attacker controlled ではない。SQL identifier は SQLAlchemy bindparam で
+    # parameterize できない (SQL の構文制約) ため f-string が unavoidable。:val は
+    # parameterized なので injection 経路は無い。
     op.execute(
+        # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text
         sa.text(f"SELECT setval('{seq_name}', :val)").bindparams(
             val=len(NEW_CATEGORIES) + 1
         )
@@ -84,7 +89,10 @@ def downgrade() -> None:
             ).bindparams(id=cat_id, slug=slug, name=name)
         )
 
+    # 上記 upgrade 側と同様、seq_name は postgres 内部の sequence 識別子で
+    # attacker controlled ではなく f-string が unavoidable。
     op.execute(
+        # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text
         sa.text(f"SELECT setval('{seq_name}', :val)").bindparams(
             val=len(OLD_CATEGORIES) + 1
         )

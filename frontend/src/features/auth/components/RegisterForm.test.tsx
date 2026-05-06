@@ -94,6 +94,10 @@ describe("RegisterForm — schema fail (field-level error)", () => {
   it("displayName が `<script>` で field-level error + displayName focus", async () => {
     const user = userEvent.setup();
     render(<RegisterForm />);
+    // test fixture: displayName field に XSS-like input を流して validation で reject
+    // + focus 移動が走ることを assert する。React は autoescape で render するため、
+    // 実 DOM に <script> が injection されることは無い (試験対象は validation 経路のみ)。
+    // nosemgrep: javascript.lang.security.audit.unknown-value-with-script-tag.unknown-value-with-script-tag
     await fillValidForm(user, { displayName: "<script>" });
     await user.click(screen.getByRole("button", { name: "Create account" }));
 
