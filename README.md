@@ -200,6 +200,36 @@ uvx pre-commit install
 
 これにより `git commit` 時に gitleaks (secret 検出) / hadolint (Dockerfile lint) / Ruff / Biome が staged diff に対して自動実行される。CI 側でも同じ hook が再実行されるため、`--no-verify` で bypass しても PR で fail する。
 
+### CI security gate
+
+PR / push に対し以下のセキュリティスキャンが GitHub Actions 上で自動実行される
+(`.github/workflows/security-pr.yml`、warn-only で start):
+
+- **osv-scanner**: `backend/uv.lock` + `frontend/package-lock.json` を OSV.dev 脆弱性 DB と照合
+- **npm audit**: frontend の production 依存を npm Advisory DB と照合 (`--audit-level=high`)
+- **Semgrep CE**: backend / frontend のソースを `p/owasp-top-ten` + `p/security-audit` ruleset で静的解析
+
+検出結果は GitHub Actions の Artifacts (`osv-results.sarif` / `semgrep-sarif` / `npm-audit-json`) として保存される。warn-only start のため finding 検出でも CI は fail しない。後続 PR で triage 後に gate 化する。
+
+> **Note**: Vector は private repo + GitHub Free のため Code scanning (GHAS) が
+> 無効。SARIF を Security tab に upload せず Actions Artifacts に保存する設計。
+> GHAS 契約 or repo public 化で `upload-sarif: true` に戻せば Security tab で
+> 一覧確認可能になる。
+
+ローカル再現:
+
+```bash
+# OSV-Scanner (Docker 経由)
+docker run --rm -v "${PWD}:/src" -w /src ghcr.io/google/osv-scanner:v2 -r ./
+
+# npm audit
+cd frontend && npm audit --omit=dev --audit-level=high
+
+# Semgrep CE
+pip install semgrep
+semgrep --config=p/owasp-top-ten --config=p/security-audit .
+```
+
 ### テスト・lint 実行
 
 ```bash

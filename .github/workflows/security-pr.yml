@@ -1,0 +1,121 @@
+name: Security (PR gate)
+
+# Phase 1 PR 2: SCA + SAST を PR gate に追加 (dev feedback loop の早期化)。
+# - osv-scanner: backend/uv.lock + frontend/package-lock.json の OSV.dev 照合
+# - npm audit: frontend の npm Advisory DB 照合 (production deps のみ)
+# - Semgrep CE: backend/frontend ソースの SAST (p/owasp-top-ten + p/security-audit)
+#
+# 全 3 step は warn-only (`fail-on-vuln: false` / `|| true` / `--no-error`) で start。
+# 後続 PR で finding triage 後に gate 化する (Phase 0 Trivy と同じ段階的昇格パターン)。
+#
+# 既存 security-nightly.yml (Trivy fs/config) は撤去せず並存。Trivy は OS+lib、
+# osv-scanner は lib only という非対称性 + failure isolation を理由に重複維持。
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+  # NOTE: `security-events: write` は osv-scanner reusable workflow が permission として
+  # 宣言要求するため必要。Vector は private repo + GitHub Free で Code scanning (GHAS)
+  # が無効なため、実際の SARIF upload は `upload-sarif: false` で skip する設計だが、
+  # caller の permission 宣言は reusable workflow の require を満たさないと
+  # startup_failure になる。
+  security-events: write
+  actions: read           # osv-scanner reusable workflow が要求
+
+jobs:
+  # ---- osv-scanner: 公式 reusable workflow を SHA pin で呼ぶ ----
+  # reusable workflow が内部で base/head 差分 scan + osv-reporter を完結する。
+  # 内部 step も SHA pin 済で supply chain 表面が小さい。
+  #
+  # NOTE: `upload-sarif: false` にしている。Vector は private repo + GitHub Free で
+  # Code scanning (GHAS) が disabled なため、SARIF を Code Scanning に upload すると
+  # configuration error で job が fail する。reusable workflow は `osv-results.sarif`
+  # を artifact として別途 upload するので、Actions Artifacts から DL して triage 可能。
+  # GHAS 契約 or repo public 化で Code scanning が enable されたら upload-sarif: true に戻す。
+  osv-scan:
+    name: OSV-Scanner (lockfile SCA)
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@c51854704019a247608d928f370c98740469d4b5  # v2.3.5
+    with:
+      # `-r ./` で再帰探索し backend/uv.lock + frontend/package-lock.json を拾う。
+      scan-args: |-
+        -r
+        ./
+      results-file-name: osv-results.sarif
+      fail-on-vuln: false  # warn-only (後続 PR で true に昇格)
+      upload-sarif: false  # Code scanning disabled (上記 NOTE 参照)、artifact のみ
+
+  # ---- npm audit: 自前 job (third-party action 依存なし) ----
+  npm-audit:
+    name: npm audit (frontend SCA)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # `--omit=dev` で production deps のみ (dev tool advisory はノイズ多い)。
+      # `--audit-level=high` で HIGH+CRITICAL に絞る (Trivy の severity と揃える)。
+      # `|| true` で warn-only。JSON 出力は logs と artifact に残し、triage で参照。
+      - name: npm audit (production, HIGH+)
+        working-directory: frontend
+        run: |
+          npm audit --omit=dev --audit-level=high --json > npm-audit.json || true
+          echo "---- summary ----"
+          jq '{ vulnerabilities: .metadata.vulnerabilities, total: .metadata.totalDependencies }' npm-audit.json || cat npm-audit.json
+
+      - name: Upload npm audit JSON artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-audit-json
+          path: frontend/npm-audit.json
+          retention-days: 14
+
+  # ---- Semgrep CE: pip install + CLI 直接呼び出し ----
+  # 公式 `semgrep/semgrep-action` は archived。CLI 直接呼び出しが現役推奨経路。
+  # `semgrep ci` は OSS rule + ローカル scan で動作 (SEMGREP_APP_TOKEN 不要、登録不要)。
+  semgrep:
+    name: Semgrep CE (SAST)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # `semgrep ci` は base/HEAD 比較で incremental scan を行うため fetch-depth: 0 が安全。
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      # `pip install semgrep` で latest stable。bump 時は PR review で changelog 確認。
+      - name: Install Semgrep
+        run: pip install semgrep
+
+      # focused ruleset 2 つ。`p/python` `p/javascript` のような generic ruleset は
+      # signal/noise 比が悪い (Vector 探索結果より)。warn-only で `|| true`、
+      # 後続 PR で finding triage 後に gate 化する。
+      - name: Run Semgrep (warn-only)
+        run: |
+          semgrep ci \
+            --sarif --output=semgrep.sarif \
+            --config=p/owasp-top-ten \
+            --config=p/security-audit \
+            --metrics=off || true
+
+      # SARIF artifact として保存 (Code scanning disabled のため Security tab には
+      # upload しない、osv-scanner job の NOTE 参照)。triage は Actions Artifacts から DL。
+      - name: Upload Semgrep SARIF artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-sarif
+          path: semgrep.sarif
+          retention-days: 14

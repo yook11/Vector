@@ -1,0 +1,22 @@
+# Phase 1 PR 2: Semgrep CE 用 path/file 除外。.gitleaksignore と同様、init scan の
+# false positive のみ最小限追加する規約 (autoupdate 禁止、PR review 必須)。
+#
+# 形式: gitignore 互換 glob (https://semgrep.dev/docs/ignoring-files-folders-code/)
+#
+# 初回 init scan の出力を triage した結果として application code 除外は追加していない。
+# false positive が出た場合のみ、以下のような形で追加:
+#   src/components/ui/some-component.tsx       # UI render の dangerouslySetInnerHTML、xss は別経路で sanitize 済
+#   backend/app/services/some_legit_subprocess.py  # subprocess は CLI 引数 splat、shell=False で安全
+
+# ---- 自動生成 / vendor / build artifact (signal なし、scan 時間短縮目的) ----
+node_modules/
+.next/
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+htmlcov/
+coverage/
+playwright-report/
+test-results/
+backups/
