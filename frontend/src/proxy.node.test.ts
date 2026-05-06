@@ -44,7 +44,7 @@ beforeEach(() => {
   mockConnect.mockReset();
   mockOn.mockReset();
   mockIsOpenValue = false;
-  vi.stubEnv("REDIS_URL", "redis://test:6379/1");
+  vi.stubEnv("REDIS_URL_RL", "redis://test-rl:6379/0");
   vi.stubEnv("BETTER_AUTH_URL", "http://localhost:3000");
   vi.stubEnv("NODE_ENV", "test");
   warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});

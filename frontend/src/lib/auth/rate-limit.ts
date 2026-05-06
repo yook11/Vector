@@ -67,7 +67,12 @@ function getClient(): RedisClientType | null {
   if (globalForRedis.__vectorRateLimitRedis) {
     return globalForRedis.__vectorRateLimitRedis;
   }
-  const url = process.env.REDIS_URL;
+  // red-team C9 対策: 既存 REDIS_URL は backend taskiq broker と同 instance のため、
+  // rate-limit ZSET の key 増殖が backend を道連れ shutdown させる構造リスクがある。
+  // REDIS_URL_RL を優先し、空文字列 / undefined のときは REDIS_URL にフォールバック
+  // (managed Redis 単一 instance 構成への退避経路)。空文字列を「明示的に値」と
+  // 解釈する用途は想定しないため `||` で unset と等価扱いとする。
+  const url = process.env.REDIS_URL_RL || process.env.REDIS_URL;
   if (!url) return null;
   const c = createClient({ url }) as RedisClientType;
   c.on("error", (err) => {

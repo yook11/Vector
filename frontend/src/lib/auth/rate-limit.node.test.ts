@@ -46,7 +46,7 @@ beforeEach(() => {
   mockOn.mockReset();
   vi.mocked(createClient).mockClear();
   mockIsOpenValue = false;
-  vi.stubEnv("REDIS_URL", "redis://test:6379/1");
+  vi.stubEnv("REDIS_URL_RL", "redis://test-rl:6379/0");
   warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
@@ -106,7 +106,8 @@ describe("calculateLimit", () => {
 });
 
 describe("checkRateLimit", () => {
-  it("returns allowed when REDIS_URL is unset (fail open)", async () => {
+  it("returns allowed when both REDIS_URL_RL and REDIS_URL are unset (fail open)", async () => {
+    vi.stubEnv("REDIS_URL_RL", "");
     vi.stubEnv("REDIS_URL", "");
     const decision = await checkRateLimit({ kind: "ip", key: "1.2.3.4" });
     expect(decision).toEqual({ allowed: true });
@@ -213,5 +214,28 @@ describe("checkRateLimit", () => {
     await checkRateLimit({ kind: "ip", key: "5.6.7.8" });
     // createClient は最初の 1 回だけ呼ばれる (singleton)
     expect(createClient).toHaveBeenCalledOnce();
+  });
+});
+
+// red-team C9 対策: REDIS_URL_RL を優先採用し、未設定時のみ REDIS_URL に
+// フォールバックする構造的不変条件を test で担保。?? を || に書き換える等の
+// regression を防止する目的。
+describe("checkRateLimit — REDIS_URL_RL fallback (PR1 C9 対策)", () => {
+  it("falls back to REDIS_URL when REDIS_URL_RL is unset", async () => {
+    vi.stubEnv("REDIS_URL_RL", "");
+    vi.stubEnv("REDIS_URL", "redis://legacy:6379/1");
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+    await checkRateLimit({ kind: "ip", key: "1.2.3.4" });
+    expect(createClient).toHaveBeenCalledWith({ url: "redis://legacy:6379/1" });
+  });
+
+  it("prefers REDIS_URL_RL over REDIS_URL when both are set", async () => {
+    vi.stubEnv("REDIS_URL_RL", "redis://rl:6379/0");
+    vi.stubEnv("REDIS_URL", "redis://legacy:6379/1");
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+    await checkRateLimit({ kind: "ip", key: "1.2.3.4" });
+    expect(createClient).toHaveBeenCalledWith({ url: "redis://rl:6379/0" });
   });
 });

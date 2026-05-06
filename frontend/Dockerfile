@@ -28,12 +28,14 @@ ARG AUTH_DATABASE_URL=postgresql://build:build@localhost:5432/build
 ARG INTERNAL_API_URL=http://backend:8000/api/v1
 ARG INTERNAL_API_SECRET=build-time-placeholder-do-not-use-in-runtime-32bytes
 ARG REDIS_URL=redis://build-time-placeholder:6379/1
+ARG REDIS_URL_RL=redis://build-time-placeholder-rl:6379/0
 ENV BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET} \
     BETTER_AUTH_URL=${BETTER_AUTH_URL} \
     AUTH_DATABASE_URL=${AUTH_DATABASE_URL} \
     INTERNAL_API_URL=${INTERNAL_API_URL} \
     INTERNAL_API_SECRET=${INTERNAL_API_SECRET} \
-    REDIS_URL=${REDIS_URL}
+    REDIS_URL=${REDIS_URL} \
+    REDIS_URL_RL=${REDIS_URL_RL}
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .

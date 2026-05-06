@@ -39,7 +39,12 @@ services:
       - BETTER_AUTH_URL=http://localhost:3000
       - AUTH_DATABASE_URL=postgresql://vector_auth:${POSTGRES_AUTH_PASSWORD}@db:5432/${POSTGRES_DB:-vector}?search_path=auth
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:?INTERNAL_API_SECRET is required; generate one with `openssl rand -hex 32` and set it in .env}
-      # rate limit (proxy.ts) 用。backend は db 0 を使うので frontend は db 1 で論理分離。
+      # red-team C9 対策: rate limit (proxy.ts) 専用 Redis instance。本体 redis は
+      # backend taskiq broker と相乗りで、XFF 詐称 + key 増殖で本体が OOM すると
+      # broker / worker 全体が道連れ shutdown する構造リスクがあったため物理分離。
+      - REDIS_URL_RL=redis://redis-rl:6379/0
+      # fallback: REDIS_URL_RL 未設定時のみ採用 (managed Redis 単一 instance 構成
+      # への退避経路)。dev では redis-rl を優先。
       - REDIS_URL=redis://redis:6379/1
     volumes:
       - ./frontend/src:/app/src
@@ -53,6 +58,8 @@ services:
       backend:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      redis-rl:
         condition: service_healthy
     networks:
       - public
@@ -118,8 +125,17 @@ services:
       - internal
 
   # --- Redis (Task Queue Broker) ---
+  # red-team C9 対策: maxmemory + allkeys-lru で OOM を構造的に防ぐ。
+  # noeviction (default) では maxmemory 到達後に全 write reject となり、taskiq
+  # broker / worker が道連れ shutdown する。allkeys-lru は taskiq stream key も
+  # evict 対象になるが、stream backlog は MAXLEN=10_000 で頭打ちされており、
+  # 256mb の予算下で broken な evict は通常発生しない。
   redis:
     image: redis:7-alpine
+    command: >
+      redis-server
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -127,6 +143,27 @@ services:
       retries: 5
     volumes:
       - redisdata:/data
+    networks:
+      - internal
+
+  # --- Redis (Frontend Rate Limit, ephemeral) ---
+  # red-team C9 対策: proxy.ts rate-limit (rl:ip:* ZSET) 専用 instance。本体 redis
+  # と物理分離して OOM 道連れを防ぐ。volume なし = restart で 60 秒 sliding window
+  # の履歴が消えるが、運用上は許容 (1 分以内に新 bucket が作られる)。internal
+  # network 限定で host port expose なし。
+  redis-rl:
+    image: redis:7-alpine
+    command: >
+      redis-server
+      --maxmemory 64mb
+      --maxmemory-policy allkeys-lru
+      --save ""
+      --appendonly no
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
     networks:
       - internal
 
