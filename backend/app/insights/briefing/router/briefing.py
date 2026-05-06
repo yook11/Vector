@@ -31,7 +31,6 @@ from app.insights.briefing.schemas.briefing import (
 from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis
 from app.models.article_extraction import ArticleExtraction
-from app.models.article_url import ArticleUrl
 from app.models.category import Category
 from app.models.news_source import NewsSource
 from app.models.weekly_briefing import WeeklyBriefing
@@ -55,23 +54,19 @@ async def _fetch_article_summaries(
 ) -> list[_ArticleSummaryOut]:
     if not article_ids:
         return []
-    # 公開 URL は ``ArticleUrl.original_url`` を第一候補に、未紐付けの旧 row 等で
-    # NULL のときのみ ``Article.source_url`` (Stage 1 正規化済) にフォールバック。
-    # 全 article 行が ``article_url_id`` を持つ前提だが、防御的に OUTER JOIN。
+    # 公開 URL は ``Article.source_url`` (PR-E 以降は canonicalize 済み SSoT)。
     stmt = (
         select(
             Article.id,
             Article.source_url,
             ArticleAnalysis.translated_title,
             NewsSource.name,
-            ArticleUrl.original_url.label("legacy_original_url"),
         )
         .join(ArticleExtraction, ArticleExtraction.article_id == Article.id)
         .join(
             ArticleAnalysis,
             ArticleAnalysis.extraction_id == ArticleExtraction.id,
         )
-        .outerjoin(ArticleUrl, ArticleUrl.id == Article.article_url_id)
         .join(NewsSource, NewsSource.id == Article.source_id)
         .where(Article.id.in_(article_ids))
     )
@@ -81,7 +76,7 @@ async def _fetch_article_summaries(
             id=row.id,
             title_ja=row.translated_title,
             source_name=str(row.name),
-            url=str(row.legacy_original_url or row.source_url),
+            url=str(row.source_url),
         )
         for row in rows
     ]

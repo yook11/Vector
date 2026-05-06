@@ -40,7 +40,6 @@ from app.collection.extraction.dispatch import (
 from app.collection.extraction.domain.value_objects import PublishedAt
 from app.collection.ingestion.pending_repository import PendingHtmlArticleRepository
 from app.collection.ingestion.staged_attributes import StagedArticleAttributes
-from app.collection.ingestion.url_repository import ArticleUrlRepository
 from app.models.news_source import NewsSource
 from app.models.pending_html_article import PendingHtmlArticle as PendingHtmlArticleORM
 from app.shared.value_objects.safe_url import SafeUrl
@@ -78,22 +77,14 @@ async def _make_pending(
     """1 件の pending を任意状態で直接 INSERT する。
 
     CHECK 制約 (status × leased_until / status × ready_at) と整合する組合せのみ
-    呼び出し側が指定する。article_url_id UNIQUE のため URL は test 内で一意に。
+    呼び出し側が指定する。``url`` UNIQUE のため URL は test 内で一意に。
     """
-    url_repo = ArticleUrlRepository(db_session)
     safe_url = SafeUrl(url)
-    article_url_id = await url_repo.upsert_returning(
-        normalized_url=safe_url,
-        original_url=safe_url,
-        first_seen_source_id=source.id,
-    )
-    assert article_url_id is not None
 
     # status='open' は repository.create で作る (CHECK 整合・JSONB serialization 込)
     if status == "open":
         repo = PendingHtmlArticleRepository(db_session)
         pending_id = await repo.create(
-            article_url_id=article_url_id,
             url=safe_url,
             source_id=source.id,
             staged_attributes=_attrs(),
@@ -110,9 +101,8 @@ async def _make_pending(
         await db_session.commit()
         return pending_id
 
-    # status='running' / 'closed' は raw SQL で直接組み立て (CHECK 制約整合)
+    # status='running' / 'closed' は ORM 直接組み立て (CHECK 制約整合)
     pending = PendingHtmlArticleORM(
-        article_url_id=article_url_id,
         url=safe_url,
         source_id=source.id,
         status=status,

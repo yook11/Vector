@@ -50,13 +50,9 @@ class PendingHtmlArticle(Base):
 
     lease 期限切れの ``running`` 行は別 cron の sweeper が ``open`` に戻す。
 
-    article_url_id UNIQUE で「articles と pending の cross-table dedup」が
-    DB 物理的に担保される (Stage 1 の INSERT 順序で常に articles or pending
-    のどちらか一方しか作られない設計)。
-
-    PR-D (article_urls 廃止プラン) で ``url`` 列を追加。``article_url_id`` と
-    並行して dual-write/dual-read される (PR-E で ``url`` に一本化、PR-F で
-    ``article_url_id`` を物理削除)。
+    PR-E (article_urls 廃止プラン) で ``url`` 列を SSoT 化。新規 pending 行は
+    ``article_url_id=NULL`` で投入される (PR-F で物理削除予定)。``url`` UNIQUE
+    が articles と pending の cross-table dedup の物理保証を担う。
     """
 
     __tablename__ = "pending_html_articles"
@@ -105,9 +101,11 @@ class PendingHtmlArticle(Base):
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    article_url_id: Mapped[int] = mapped_column(
+    # PR-E 以降は NULL 許容 (= 新規 pending は ``url`` のみで投入)。PR-F で削除予定。
+    article_url_id: Mapped[int | None] = mapped_column(
         BigInteger,
         ForeignKey("article_urls.id", ondelete="CASCADE"),
+        nullable=True,
     )
     url: Mapped[SafeUrl] = mapped_column(SafeUrlType, nullable=False)
     source_id: Mapped[int] = mapped_column(

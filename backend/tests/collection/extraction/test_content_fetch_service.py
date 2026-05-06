@@ -1,4 +1,4 @@
-"""``ContentFetchService`` の不変条件テスト (PR2.5-B 仕様: pending_id 駆動)。
+"""``ContentFetchService`` の不変条件テスト (PR-E 仕様: ``pending.url`` SSoT)。
 
 検証する不変条件:
 
@@ -9,7 +9,7 @@
 - ``pending_html_articles`` の状態遷移が DB に焼き付く
   (成功: DELETE / 永続失敗: closed / 一時失敗 (will retry): open + 未来 ready_at /
   一時失敗 (exhausted): closed)
-- ``article_url_id`` が pipeline_events.payload に焼かれる
+- ``canonical_url`` が pipeline_events.payload に焼かれる (集計 key)
 - 重複配送 / 状態不整合 (status != 'running') は ``None`` で静かに exit
 - per-error retry policy で next ready_at が決まる (BLIP の 1 回目失敗 = 0.5 分後)
 """
@@ -42,7 +42,6 @@ from app.collection.ingestion.pending_repository import (
     PendingHtmlArticleRepository,
 )
 from app.collection.ingestion.staged_attributes import StagedArticleAttributes
-from app.collection.ingestion.url_repository import ArticleUrlRepository
 from app.models.article import Article as ArticleORM
 from app.models.news_source import NewsSource, SourceType
 from app.models.pending_html_article import PendingHtmlArticle
@@ -79,24 +78,16 @@ async def _make_pending(
     url: str,
     *,
     attrs: StagedArticleAttributes | None = None,
-) -> tuple[int, int]:
-    """``article_urls`` + ``pending_html_articles`` を 1 件ずつ作って claim 状態にする。
+) -> tuple[SafeUrl, int]:
+    """``pending_html_articles`` 行を 1 件作って claim 状態にする。
 
     Returns:
-        (article_url_id, pending_id) — pending は claim 済 (status='running',
+        (canonical_url, pending_id) — pending は claim 済 (status='running',
         attempt_count=1)。
     """
-    url_repo = ArticleUrlRepository(db_session)
     safe_url = SafeUrl(url)
-    article_url_id = await url_repo.upsert_returning(
-        normalized_url=safe_url,
-        original_url=safe_url,
-        first_seen_source_id=source.id,
-    )
-    assert article_url_id is not None
     pending_repo = PendingHtmlArticleRepository(db_session)
     pending_id = await pending_repo.create(
-        article_url_id=article_url_id,
         url=safe_url,
         source_id=source.id,
         staged_attributes=attrs or _attrs(),
@@ -108,7 +99,7 @@ async def _make_pending(
     ids = await pending_repo.claim_batch(limit=10, lease_minutes=5)
     await db_session.commit()
     assert pending_id in ids
-    return article_url_id, pending_id
+    return safe_url, pending_id
 
 
 def _patch_fetch(monkeypatch: pytest.MonkeyPatch, mock: AsyncMock) -> None:
@@ -141,17 +132,9 @@ async def test_returns_none_for_open_pending(
     tc_source: NewsSource,
 ) -> None:
     """``status='open'`` (claim されていない) は ``None`` で静かに exit。"""
-    url_repo = ArticleUrlRepository(db_session)
-    safe_url = SafeUrl("https://techcrunch.com/open/")
-    article_url_id = await url_repo.upsert_returning(
-        normalized_url=safe_url,
-        original_url=safe_url,
-        first_seen_source_id=tc_source.id,
-    )
-    assert article_url_id is not None
+    safe_url = SafeUrl("https://techcrunch.com/open")
     pending_repo = PendingHtmlArticleRepository(db_session)
     pending_id = await pending_repo.create(
-        article_url_id=article_url_id,
         url=safe_url,
         source_id=tc_source.id,
         staged_attributes=_attrs(),
@@ -178,8 +161,8 @@ async def test_success_returns_content_fetched_and_persists_article(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """ExtractedContent + 永続化成功 → ``ContentFetched`` 返却 + Article 1 件作成。"""
-    article_url_id, pending_id = await _make_pending(
-        db_session, tc_source, "https://techcrunch.com/article-1/"
+    canonical_url, pending_id = await _make_pending(
+        db_session, tc_source, "https://techcrunch.com/article-1"
     )
     _patch_fetch(
         monkeypatch,
@@ -196,9 +179,9 @@ async def test_success_returns_content_fetched_and_persists_article(
     outcome = await svc.execute(pending_id)
 
     assert isinstance(outcome, ContentFetched)
-    assert outcome.article.article_url_id == article_url_id
     articles = (await db_session.execute(select(ArticleORM))).scalars().all()
     assert len(articles) == 1
+    assert str(articles[0].source_url) == str(canonical_url)
 
 
 @pytest.mark.asyncio
@@ -210,7 +193,7 @@ async def test_success_deletes_pending_in_same_tx(
 ) -> None:
     """成功時に ``pending_html_articles`` 行は DELETE (articles INSERT と同 tx)。"""
     _, pending_id = await _make_pending(
-        db_session, tc_source, "https://techcrunch.com/article-2/"
+        db_session, tc_source, "https://techcrunch.com/article-2"
     )
     _patch_fetch(
         monkeypatch,
@@ -235,16 +218,16 @@ async def test_success_deletes_pending_in_same_tx(
 
 
 @pytest.mark.asyncio
-async def test_success_writes_audit_with_body_length_and_article_url_id(
+async def test_success_writes_audit_with_body_length_and_canonical_url(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     tc_source: NewsSource,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """成功時 ``pipeline_events`` に SUCCEEDED + body_length + article_url_id が焼かれる."""  # noqa: E501
+    """成功時 ``pipeline_events`` に SUCCEEDED + body_length + canonical_url が焼かれる."""  # noqa: E501
     body = "x" * 250
-    article_url_id, pending_id = await _make_pending(
-        db_session, tc_source, "https://techcrunch.com/article-3/"
+    canonical_url, pending_id = await _make_pending(
+        db_session, tc_source, "https://techcrunch.com/article-3"
     )
     _patch_fetch(
         monkeypatch,
@@ -269,7 +252,7 @@ async def test_success_writes_audit_with_body_length_and_article_url_id(
     assert event.outcome_code == "fetched"
     assert event.attempt == 1  # claim 後の attempt_count
     assert event.payload["body_length"] == len(body)
-    assert event.payload["article_url_id"] == article_url_id
+    assert event.payload["canonical_url"] == str(canonical_url)
     assert event.payload["extractor_class"] == "ArticleHtmlExtractor"
 
 
@@ -287,7 +270,7 @@ async def test_permanent_fetch_error_returns_terminal_and_closes_pending(
 ) -> None:
     """PermanentFetchError → ``TerminallyDropped`` + pending status='closed' + audit."""
     _, pending_id = await _make_pending(
-        db_session, tc_source, "https://techcrunch.com/dead/"
+        db_session, tc_source, "https://techcrunch.com/dead"
     )
     _patch_fetch(monkeypatch, AsyncMock(side_effect=PermanentFetchError("HTTP 404")))
 
@@ -327,7 +310,7 @@ async def test_extraction_empty_writes_reason_in_code(
 ) -> None:
     """ExtractionEmpty(reason) → ``reason_code='extraction_empty_<reason>'``。"""
     _, pending_id = await _make_pending(
-        db_session, tc_source, "https://techcrunch.com/empty/"
+        db_session, tc_source, "https://techcrunch.com/empty"
     )
     _patch_fetch(
         monkeypatch, AsyncMock(return_value=ExtractionEmpty(reason="not_html"))
@@ -361,7 +344,7 @@ async def test_promotion_failure_records_quality_gate_metric(
         prefer_html_title=False,
     )
     _, pending_id = await _make_pending(
-        db_session, tc_source, "https://techcrunch.com/short/", attrs=attrs
+        db_session, tc_source, "https://techcrunch.com/short", attrs=attrs
     )
     _patch_fetch(
         monkeypatch,
@@ -398,7 +381,7 @@ async def test_temporary_blip_first_attempt_writes_will_retry(
 ) -> None:
     """BLIP 1 回目失敗 → ``will_retry`` audit + pending re-open + 未来 ready_at。"""
     _, pending_id = await _make_pending(
-        db_session, tc_source, "https://techcrunch.com/blip/"
+        db_session, tc_source, "https://techcrunch.com/blip"
     )
     _patch_fetch(monkeypatch, AsyncMock(side_effect=ServerErrorBlip("HTTP 502")))
 
@@ -440,7 +423,7 @@ async def test_temporary_outage_exhausted_writes_dropped_transient(
 ) -> None:
     """attempt_count == max_attempts → ``mark_exhausted`` + dropped_transient audit."""
     _, pending_id = await _make_pending(
-        db_session, tc_source, "https://techcrunch.com/outage/"
+        db_session, tc_source, "https://techcrunch.com/outage"
     )
     # OUTAGE_POLICY.max_attempts = 12 を超過させる: attempt_count を 12 に強制セット
     await db_session.execute(
@@ -488,19 +471,18 @@ async def test_race_lost_returns_conflict_lost_and_deletes_pending(
 ) -> None:
     """別 worker が article を先に作った → ``ConflictLost`` + pending DELETE + audit。
 
-    pre-condition: 同 ``article_url_id`` の Article を直接 INSERT (race の "勝者")。
+    pre-condition: 同 ``source_url`` の Article を直接 INSERT (race の "勝者")。
     """
-    article_url_id, pending_id = await _make_pending(
-        db_session, tc_source, "https://techcrunch.com/race/"
+    canonical_url, pending_id = await _make_pending(
+        db_session, tc_source, "https://techcrunch.com/race"
     )
-    # winner 役の Article を先に INSERT
+    # winner 役の Article を先に INSERT (同一 canonical source_url)
     existing = ArticleORM(
-        article_url_id=article_url_id,
         original_title="Existing",
         original_content="y" * 100,
         published_at=datetime(2026, 4, 30, tzinfo=UTC),
         source_id=tc_source.id,
-        source_url=SafeUrl("https://techcrunch.com/race/"),
+        source_url=canonical_url,
     )
     db_session.add(existing)
     await db_session.commit()
@@ -530,7 +512,7 @@ async def test_race_lost_returns_conflict_lost_and_deletes_pending(
         )
     ).scalar_one_or_none()
     assert remaining is None
-    # audit に conflict_lost
+    # audit に conflict_lost (canonical_url 集計 key で関連付く)
     event = (
         await db_session.execute(
             select(PipelineEvent).where(PipelineEvent.stage == "content_fetch")
@@ -538,4 +520,4 @@ async def test_race_lost_returns_conflict_lost_and_deletes_pending(
     ).scalar_one()
     assert event.event_type == "skipped"
     assert event.outcome_code == "conflict_lost"
-    assert event.payload["article_url_id"] == article_url_id
+    assert event.payload["canonical_url"] == str(canonical_url)

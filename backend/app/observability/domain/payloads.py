@@ -85,12 +85,18 @@ class SourceFetchPayload(BasePipelineEventPayload):
 class ContentFetchPayload(BasePipelineEventPayload):
     """Stage 2 — 1 記事 1 HTML 取得。
 
-    集計 key は ``article_urls.id`` (= pending → article への identity bridge)。
-    ``articles.id`` は別途 ``article_id`` カラム (pipeline_events) で関連付ける。
+    集計 key は ``canonical_url`` (= pending.url / articles.source_url の
+    SSoT 値)。``articles.id`` は別途 ``article_id`` カラム (pipeline_events)
+    で関連付ける。
+
+    ``article_url_id`` は PR-D / PR-E の dual-fill 期間中だけ残す legacy key。
+    PR-F で ``article_urls`` テーブル自体が DROP されるのに合わせて削除する。
     """
 
     kind: Literal["content_fetch"] = "content_fetch"
-    # A: article 削除耐性 / PR2.5 の skip 判定 key
+    # A: pending → article をまたぐ canonicalize 済み URL key (PR-E 以降の SSoT)
+    canonical_url: str | None = None
+    # A: legacy key、PR-F で削除予定 (dual-fill のため当面維持)
     article_url_id: int | None = None
     extractor_class: str | None = None  # A
     # S: drop 細分化 (permanent_fetch_error / extraction_empty_* / promotion_*)

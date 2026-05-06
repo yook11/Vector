@@ -63,7 +63,6 @@ def _make_article(article_id: int = 1) -> Article:
     """
     return Article(
         id=article_id,
-        article_url_id=10,
         title="Test Title",
         body="x" * 100,
         published_at=PublishedAt(datetime(2026, 5, 1, tzinfo=UTC)),

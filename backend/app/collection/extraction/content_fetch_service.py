@@ -1,20 +1,23 @@
 """Stage 2 (content_fetch) のビジネスロジック — pending_html_articles 駆動。
 
 PR2.5-B cutover で StagedArticle (kiq envelope) 経由から
-``pending_html_articles.id`` 駆動に切り替えた版。
+``pending_html_articles.id`` 駆動に切り替えた版。PR-E で URL 経路を
+``pending.url`` (canonicalize 済み) に一本化、``articles.source_url``
+を SSoT として race-loss read-back に使用する。
 
 責務:
 
-- ``find_by_id`` で pending を SELECT (article_urls JOIN で normalized_url 同梱)
+- ``find_by_id`` で pending を SELECT (``url`` 直接保持)
 - ``status='running'`` ガードで at-least-once 重複配送を静かに弾く
 - HTTP 取得 → ``ExtractionEmpty`` / ``PermanentFetchError`` の捌き
 - ``TemporaryFetchError`` を per-error retry policy で次 ``ready_at`` 計算
   (max_attempts 超過なら ``mark_exhausted``)
 - promotion ``Failed`` の捌き
 - ``articles`` INSERT + ``pending_html_articles`` DELETE を **同 tx で一括 commit**
-- race-loss を ``ConflictLost`` (audit) で吸収
+- race-loss (``articles.source_url UNIQUE``) を ``ConflictLost`` (audit) で吸収
 - ``pipeline_events`` への監査書込 (success/conflict_lost/dropped_terminal/
-  dropped_transient/will_retry の 5 系統)
+  dropped_transient/will_retry の 5 系統)。``canonical_url`` を集計 key
+  として焼き付け、``article_url_id`` は dual-fill (PR-F で撤去予定)。
 
 caller (task) の責務:
 
@@ -77,9 +80,9 @@ class ContentFetched:
 
 @dataclass(frozen=True, slots=True)
 class ConflictLost:
-    """別 worker が ``article_url_id`` の article を先に作ったため敗退。
+    """別 worker が同 ``source_url`` で article を先に作ったため敗退。
 
-    DB 上は pending を ``closed`` に閉じ、audit ``conflict_lost`` (SKIPPED) を焼く。
+    DB 上は pending を削除して audit ``conflict_lost`` (SKIPPED) を焼く。
     caller は何もしない (winner 側が既に extract_content chain 済)。
     """
 
@@ -139,7 +142,7 @@ class ContentFetchService:
         extractor = self._extractor_factory()
         extractor_class = type(extractor).__name__
 
-        # 入口 SELECT: pending 1 行 + JOIN article_urls を 1 SQL で取る
+        # 入口 SELECT: pending 1 行を 1 SQL で取る
         pending = await self._load(pending_id)
         if pending is None:
             # 既に DELETE 済 (at-least-once 重複配送)
@@ -148,9 +151,9 @@ class ContentFetchService:
             # cron poller が claim していない (lease 衝突 / 古い message)
             return None
 
-        # HTTP 取得
+        # HTTP 取得 (canonicalize 済み URL を使う)
         try:
-            html_result = await extractor.fetch(pending.normalized_url)
+            html_result = await extractor.fetch(pending.url)
         except PermanentFetchError as exc:
             return await self._handle_terminal(
                 pending,
@@ -209,7 +212,7 @@ class ContentFetchService:
         )
 
     async def _load(self, pending_id: int) -> PendingHtmlContext | None:
-        """``pending_html_articles`` 1 行を JOIN ``article_urls`` 込みで SELECT。"""
+        """``pending_html_articles`` 1 行を SELECT。"""
         async with self._session_factory() as session:
             repo = PendingHtmlArticleRepository(session)
             return await repo.find_by_id(pending_id)
@@ -239,6 +242,7 @@ class ContentFetchService:
                 await pending_repo.mark_exhausted(pending.id)
                 reason_code = f"temporary_exhausted_{policy.code}"
                 payload = ContentFetchPayload(
+                    canonical_url=str(pending.url),
                     article_url_id=pending.article_url_id,
                     extractor_class=extractor_class,
                     reason_code=reason_code,
@@ -262,6 +266,7 @@ class ContentFetchService:
             await pending_repo.mark_will_retry(pending.id, ready_at=next_at)
             reason_code = f"temporary_will_retry_{policy.code}"
             payload = ContentFetchPayload(
+                canonical_url=str(pending.url),
                 article_url_id=pending.article_url_id,
                 extractor_class=extractor_class,
                 reason_code=reason_code,
@@ -299,6 +304,7 @@ class ContentFetchService:
 
             await pending_repo.mark_terminal(pending.id)
             payload = ContentFetchPayload(
+                canonical_url=str(pending.url),
                 article_url_id=pending.article_url_id,
                 extractor_class=extractor_class,
                 reason_code=reason_code,
@@ -330,9 +336,10 @@ class ContentFetchService:
     ) -> ContentFetched | ConflictLost | TerminallyDropped:
         """``articles`` INSERT + ``pending_html_articles`` DELETE を同 tx で commit。
 
-        race-loss (``save_via_article_url`` が ``None``) → ``find_by_article_url_id``
-        で existing を読み戻す。検出ありなら ``ConflictLost`` (audit)、検出なしは
-        構造異常として ``TerminallyDropped("article_persist_anomaly")``。
+        race-loss (``save`` が ``None``) → ``find_by_source_url(pending.url)``
+        で existing を読み戻す (``articles.source_url UNIQUE`` の決勝戦)。
+        検出ありなら ``ConflictLost`` (audit)、検出なしは構造異常として
+        ``TerminallyDropped("article_persist_anomaly")``。
         """
         async with self._session_factory() as session:
             article_repo = ArticleRepository(session)
@@ -344,23 +351,21 @@ class ContentFetchService:
                 body=advanced.body,
                 published_at=advanced.published_at,
             )
-            persisted = await article_repo.save_via_article_url(
+            persisted = await article_repo.save(
                 draft=draft,
-                article_url_id=pending.article_url_id,
                 source_id=advanced.source_id,
                 source_url=advanced.source_url,
             )
 
             if persisted is None:
-                # race-loss: 既存を読み戻し
-                existing = await article_repo.find_by_article_url_id(
-                    pending.article_url_id
-                )
+                # race-loss: 既存を読み戻し (canonicalize 済み URL で lookup)
+                existing = await article_repo.find_by_source_url(pending.url)
                 if existing is None:
                     # 構造異常 (winner が DELETE pending → INSERT article をしたが
                     # その article がもう消えている等、通常は起きない)
                     await pending_repo.mark_terminal(pending.id)
                     payload = ContentFetchPayload(
+                        canonical_url=str(pending.url),
                         article_url_id=pending.article_url_id,
                         extractor_class=extractor_class,
                         reason_code="article_persist_anomaly",
@@ -380,6 +385,7 @@ class ContentFetchService:
                 # ConflictLost: pending を削除 + audit
                 await pending_repo.delete_one(pending.id)
                 payload = ContentFetchPayload(
+                    canonical_url=str(pending.url),
                     article_url_id=pending.article_url_id,
                     extractor_class=extractor_class,
                     reason_code="conflict_lost",
@@ -399,13 +405,11 @@ class ContentFetchService:
 
             # 成功: pending DELETE + audit (同 tx)
             await pending_repo.delete_one(pending.id)
-            article = Article.from_draft_via_article_url(
-                draft,
-                id=persisted.id,
-                article_url_id=pending.article_url_id,
-                created_at=persisted.created_at,
+            article = Article.from_draft(
+                draft, id=persisted.id, created_at=persisted.created_at
             )
             payload = ContentFetchPayload(
+                canonical_url=str(pending.url),
                 article_url_id=pending.article_url_id,
                 extractor_class=extractor_class,
                 body_length=body_length,
@@ -431,14 +435,14 @@ class ContentFetchService:
 
         ``ReadyForArticle.try_advance_from`` が ``PendingHtmlFetch`` を要求する
         ため (RSS 由来 title/published_at_hint と HTML 由来の merge 規則を
-        同所に集約)、Service 入口で復元する。``source_url`` は
-        ``article_urls.normalized_url`` を使う (RSS 受信時に canonicalize 済)。
+        同所に集約)、Service 入口で復元する。``source_url`` は ``pending.url``
+        (canonicalize 済み) を使う。
         """
         attrs = pending.staged_attributes
         return PendingHtmlFetch(
             title=attrs.title,
             source_id=pending.source_id,
-            source_url=pending.normalized_url,
+            source_url=pending.url,
             published_at_hint=attrs.published_at_hint,
             prefer_html_title=attrs.prefer_html_title,
         )

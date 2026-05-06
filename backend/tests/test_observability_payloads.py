@@ -95,8 +95,16 @@ class TestSourceFetchPayloadCodeBreakdowns:
         assert payload.failed_codes == {"body_too_short": 1}
 
 
-class TestContentFetchPayloadArticleUrlId:
-    """``ContentFetchPayload.article_url_id`` の field schema 不変条件。"""
+class TestContentFetchPayloadAuditKeys:
+    """``ContentFetchPayload`` の集計 key field 不変条件 (PR-E dual-fill)。"""
+
+    def test_canonical_url_field_exists(self) -> None:
+        payload = ContentFetchPayload(canonical_url="https://example.com/a")
+        assert payload.canonical_url == "https://example.com/a"
+
+    def test_canonical_url_defaults_none(self) -> None:
+        payload = ContentFetchPayload()
+        assert payload.canonical_url is None
 
     def test_article_url_id_field_exists(self) -> None:
         payload = ContentFetchPayload(article_url_id=42)
@@ -105,6 +113,14 @@ class TestContentFetchPayloadArticleUrlId:
     def test_article_url_id_defaults_none(self) -> None:
         payload = ContentFetchPayload()
         assert payload.article_url_id is None
+
+    def test_dual_fill_both_keys(self) -> None:
+        """PR-E dual-fill: 両 key を同時に持てる (PR-F で article_url_id 撤去)。"""
+        payload = ContentFetchPayload(
+            canonical_url="https://example.com/a", article_url_id=42
+        )
+        assert payload.canonical_url == "https://example.com/a"
+        assert payload.article_url_id == 42
 
     def test_unknown_field_rejected(self) -> None:
         """未知 field は ``extra="forbid"`` で拒否される。"""
@@ -131,6 +147,7 @@ class TestPayloadJsonSerialization:
 
     def test_content_fetch_roundtrip(self) -> None:
         original = ContentFetchPayload(
+            canonical_url="https://example.com/article/round",
             article_url_id=99,
             extractor_class="ArticleHtmlExtractor",
             body_length=12345,

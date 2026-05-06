@@ -1,8 +1,8 @@
 """extraction リポジトリ (``ArticleRepository``) の統合テスト。
 
-新経路 (``article_url_id`` 軸) のみ。Entity / VO ベースの API
-(``ArticleRepository.save_via_article_url`` / ``find_by_article_url_id``)
-と並行レース対応 (``ON CONFLICT DO NOTHING``) を検証する。
+PR-E 仕様: ``source_url`` (canonicalize 済み) を SSoT とする経路を検証する。
+``save`` / ``find_by_source_url`` / ``exists_by_source_url`` と並行レース
+対応 (``ON CONFLICT DO NOTHING``) を検証する。
 """
 
 from __future__ import annotations
@@ -21,7 +21,6 @@ from app.collection.extraction.repository import (
     PersistedArticleId,
 )
 from app.models.article import Article as ArticleORM
-from app.models.article_url import ArticleUrl
 from app.models.news_source import NewsSource
 from app.shared.value_objects.safe_url import SafeUrl
 
@@ -32,39 +31,20 @@ def _draft(
     return ArticleDraft(title="Title", body=body, published_at=published_at)
 
 
-async def _make_article_url(
-    db_session: AsyncSession, source: NewsSource, url: str
-) -> ArticleUrl:
-    article_url = ArticleUrl(
-        normalized_url=SafeUrl(url),
-        original_url=SafeUrl(url),
-        first_seen_source_id=source.id,
-    )
-    db_session.add(article_url)
-    await db_session.commit()
-    await db_session.refresh(article_url)
-    return article_url
-
-
 # ---------------------------------------------------------------------------
-# save_via_article_url
+# save
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_save_via_article_url_returns_persisted_id(
+async def test_save_returns_persisted_id(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
-    article_url = await _make_article_url(
-        db_session, sample_source, "https://example.com/au/save"
-    )
-
     repo = ArticleRepository(db_session)
-    persisted = await repo.save_via_article_url(
+    persisted = await repo.save(
         _draft(published_at=PublishedAt(datetime(2026, 3, 1, tzinfo=UTC))),
-        article_url_id=article_url.id,
         source_id=sample_source.id,
-        source_url=article_url.normalized_url,
+        source_url=SafeUrl("https://example.com/article/save"),
     )
 
     assert isinstance(persisted, PersistedArticleId)
@@ -73,27 +53,20 @@ async def test_save_via_article_url_returns_persisted_id(
 
 
 @pytest.mark.asyncio
-async def test_save_via_article_url_persists_payload(
+async def test_save_persists_payload(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
     """draft の title / body / published_at が ORM 行に正しく書き込まれる。"""
-    article_url = await _make_article_url(
-        db_session, sample_source, "https://example.com/au/payload"
-    )
     body = "y" * 80
     draft = ArticleDraft(
         title="Payload Title",
         body=body,
         published_at=PublishedAt(datetime(2026, 3, 1, tzinfo=UTC)),
     )
+    canonical = SafeUrl("https://example.com/article/payload")
 
     repo = ArticleRepository(db_session)
-    persisted = await repo.save_via_article_url(
-        draft,
-        article_url_id=article_url.id,
-        source_id=sample_source.id,
-        source_url=article_url.normalized_url,
-    )
+    persisted = await repo.save(draft, source_id=sample_source.id, source_url=canonical)
     assert persisted is not None
     await db_session.commit()
 
@@ -102,23 +75,18 @@ async def test_save_via_article_url_persists_payload(
     assert orm.original_title == "Payload Title"
     assert orm.original_content == body
     assert orm.published_at == datetime(2026, 3, 1, tzinfo=UTC)
-    assert orm.article_url_id == article_url.id
+    assert str(orm.source_url) == str(canonical)
 
 
 @pytest.mark.asyncio
-async def test_save_via_article_url_accepts_none_published_at(
+async def test_save_accepts_none_published_at(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
-    article_url = await _make_article_url(
-        db_session, sample_source, "https://example.com/au/no-date"
-    )
-
     repo = ArticleRepository(db_session)
-    persisted = await repo.save_via_article_url(
+    persisted = await repo.save(
         _draft(),
-        article_url_id=article_url.id,
         source_id=sample_source.id,
-        source_url=article_url.normalized_url,
+        source_url=SafeUrl("https://example.com/article/no-date"),
     )
     assert persisted is not None
     await db_session.commit()
@@ -129,48 +97,31 @@ async def test_save_via_article_url_accepts_none_published_at(
 
 
 @pytest.mark.asyncio
-async def test_save_via_article_url_returns_none_on_duplicate(
+async def test_save_returns_none_on_duplicate_source_url(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
-    """同一 article_url_id への 2 度目の save は ``None``。"""
-    article_url = await _make_article_url(
-        db_session, sample_source, "https://example.com/au/dup"
-    )
+    """同一 ``source_url`` への 2 度目の save は ``None`` (UNIQUE 違反吸収)。"""
+    canonical = SafeUrl("https://example.com/article/dup")
     repo = ArticleRepository(db_session)
 
-    first = await repo.save_via_article_url(
-        _draft(),
-        article_url_id=article_url.id,
-        source_id=sample_source.id,
-        source_url=article_url.normalized_url,
-    )
+    first = await repo.save(_draft(), source_id=sample_source.id, source_url=canonical)
     await db_session.commit()
     assert first is not None
 
-    second = await repo.save_via_article_url(
-        _draft(),
-        article_url_id=article_url.id,
-        source_id=sample_source.id,
-        source_url=article_url.normalized_url,
-    )
+    second = await repo.save(_draft(), source_id=sample_source.id, source_url=canonical)
     assert second is None
 
 
 @pytest.mark.asyncio
-async def test_save_via_article_url_does_not_commit(
+async def test_save_does_not_commit(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
     """save は INSERT 発行のみ。commit は呼び出し側の責務。"""
-    article_url = await _make_article_url(
-        db_session, sample_source, "https://example.com/au/no-commit"
-    )
-
     repo = ArticleRepository(db_session)
-    persisted = await repo.save_via_article_url(
+    persisted = await repo.save(
         _draft(),
-        article_url_id=article_url.id,
         source_id=sample_source.id,
-        source_url=article_url.normalized_url,
+        source_url=SafeUrl("https://example.com/article/no-commit"),
     )
     assert persisted is not None
 
@@ -180,39 +131,63 @@ async def test_save_via_article_url_does_not_commit(
 
 
 # ---------------------------------------------------------------------------
-# find_by_article_url_id
+# find_by_source_url
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_find_by_article_url_id_returns_entity(
+async def test_find_by_source_url_returns_entity(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
-    article_url = await _make_article_url(
-        db_session, sample_source, "https://example.com/au/find"
-    )
+    canonical = SafeUrl("https://example.com/article/find")
     repo = ArticleRepository(db_session)
-    persisted = await repo.save_via_article_url(
-        _draft(),
-        article_url_id=article_url.id,
-        source_id=sample_source.id,
-        source_url=article_url.normalized_url,
+    persisted = await repo.save(
+        _draft(), source_id=sample_source.id, source_url=canonical
     )
     await db_session.commit()
     assert persisted is not None
 
-    result = await repo.find_by_article_url_id(article_url.id)
+    result = await repo.find_by_source_url(canonical)
     assert isinstance(result, Article)
     assert result.id == persisted.id
-    assert result.article_url_id == article_url.id
 
 
 @pytest.mark.asyncio
-async def test_find_by_article_url_id_returns_none_for_missing(
+async def test_find_by_source_url_returns_none_for_missing(
     db_session: AsyncSession,
 ) -> None:
     repo = ArticleRepository(db_session)
-    assert await repo.find_by_article_url_id(999999) is None
+    assert await repo.find_by_source_url(SafeUrl("https://example.com/never")) is None
+
+
+# ---------------------------------------------------------------------------
+# exists_by_source_url (Pattern H pre-check)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_exists_by_source_url_returns_true_when_present(
+    db_session: AsyncSession, sample_source: NewsSource
+) -> None:
+    canonical = SafeUrl("https://example.com/article/exists-true")
+    repo = ArticleRepository(db_session)
+    await repo.save(_draft(), source_id=sample_source.id, source_url=canonical)
+    await db_session.commit()
+
+    assert await repo.exists_by_source_url(canonical) is True
+
+
+@pytest.mark.asyncio
+async def test_exists_by_source_url_returns_false_when_absent(
+    db_session: AsyncSession,
+) -> None:
+    repo = ArticleRepository(db_session)
+    assert (
+        await repo.exists_by_source_url(
+            SafeUrl("https://example.com/article/exists-false")
+        )
+        is False
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -221,27 +196,22 @@ async def test_find_by_article_url_id_returns_none_for_missing(
 
 
 @pytest.mark.asyncio
-async def test_concurrent_save_via_article_url_returns_one_persisted_one_none(
+async def test_concurrent_save_returns_one_persisted_one_none(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """同一 ``article_url_id`` への並行 save は片方が ``None`` になる。
+    """同一 ``source_url`` への並行 save は片方が ``None`` になる。
 
     ``ON CONFLICT DO NOTHING`` の構造的並行制御を検証する。
     """
-    article_url = await _make_article_url(
-        db_session, sample_source, "https://example.com/au/race"
-    )
+    canonical = SafeUrl("https://example.com/article/race")
 
     async def _save_in_new_session() -> PersistedArticleId | None:
         async with session_factory() as session:
             repo = ArticleRepository(session)
-            persisted = await repo.save_via_article_url(
-                _draft(),
-                article_url_id=article_url.id,
-                source_id=sample_source.id,
-                source_url=article_url.normalized_url,
+            persisted = await repo.save(
+                _draft(), source_id=sample_source.id, source_url=canonical
             )
             await session.commit()
             return persisted

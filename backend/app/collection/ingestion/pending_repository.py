@@ -4,10 +4,10 @@ PR2.5-A の lease 方式キューに対する全 CRUD + claim/sweep 操作を集
 
 責務:
 
-- ``create``: Pattern H 振り分け entry を 1 件 INSERT。``UNIQUE(article_url_id)``
-  違反は ``None`` 戻し (cross-table dedup の race 敗北)。
-- ``find_by_id``: ``ContentFetchService`` 入口で pending を SELECT (article_urls
-  と JOIN して ``normalized_url`` も同時取得、追加 SELECT 不要にする)。
+- ``create``: Pattern H 振り分け entry を 1 件 INSERT。``UNIQUE(url)`` 違反は
+  ``None`` 戻し (同 tick race 敗北)。
+- ``find_by_id``: ``ContentFetchService`` 入口で pending を SELECT (``url`` を
+  pending 行から直接取得、JOIN 不要)。
 - ``claim_batch``: cron poller が ``status='open' AND ready_at <= NOW()`` の行を
   ``FOR UPDATE SKIP LOCKED`` で原子的に claim、``status='running'`` +
   ``leased_until=NOW()+lease_minutes`` + ``attempt_count++`` を 1 文で更新。
@@ -39,26 +39,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from app.collection.ingestion.staged_attributes import StagedArticleAttributes
-from app.models.article_url import ArticleUrl as ArticleUrlORM
 from app.models.pending_html_article import PendingHtmlArticle as PendingHtmlArticleORM
 from app.shared.value_objects.safe_url import SafeUrl
 
 
 @dataclass(frozen=True, slots=True)
 class PendingHtmlContext:
-    """``find_by_id`` の戻り値: pending 1 行 + JOIN ``article_urls`` の view。
+    """``find_by_id`` の戻り値: pending 1 行の view。
 
     ``ContentFetchService`` が必要とする全情報を 1 SELECT で持ち回るための
     structured tuple。``staged_attributes`` は JSONB を ``StagedArticleAttributes``
     に再構築済 (PublishedAt ISO ↔ datetime 変換を Repository 層で吸収する)。
 
-    PR-D (article_urls 廃止プラン): ``url`` (pending 直接保持) と
-    ``normalized_url`` (article_urls JOIN) を dual-read する。両者は
-    canonicalize 済み値で一致するはず (PR-E で ``url`` に一本化)。
+    ``url`` は canonicalize 済み URL (``articles.source_url`` と一致する形)。
+    ``article_url_id`` は PR-D / PR-E 期間中に dual-fill する legacy key
+    (PR-E 以降の ingestion で投入される行は NULL、PR-F で列ごと削除)。
     """
 
     id: int
-    article_url_id: int
     source_id: int
     status: str
     staged_attributes: StagedArticleAttributes
@@ -66,7 +64,7 @@ class PendingHtmlContext:
     leased_until: datetime | None
     attempt_count: int
     url: SafeUrl
-    normalized_url: SafeUrl
+    article_url_id: int | None
 
 
 class PendingHtmlArticleRepository:
@@ -78,7 +76,6 @@ class PendingHtmlArticleRepository:
     async def create(
         self,
         *,
-        article_url_id: int,
         url: SafeUrl,
         source_id: int,
         staged_attributes: StagedArticleAttributes,
@@ -86,18 +83,16 @@ class PendingHtmlArticleRepository:
     ) -> int | None:
         """新規 pending を ``status='open'`` で INSERT し、id を返す。
 
-        UNIQUE 違反 (race-loss) の場合は ``None`` を返す。``article_url_id`` /
-        ``url`` のどちらが先に衝突しても拾えるよう ``index_elements`` 指定なし
-        の ``on_conflict_do_nothing`` で吸収する (memory
-        ``feedback_on_conflict_no_target`` 参照)。
+        UNIQUE 違反 (race-loss) の場合は ``None`` を返す。``url`` の UNIQUE が
+        canonicalize 済み URL の重複を構造的に弾く。``article_url_id`` 列は
+        PR-F で削除されるまで NULL のまま残す (FK は nullable)。
 
-        PR-D: ``url`` と ``article_url_id`` を dual-write する。caller は
-        canonicalize 済み URL を渡すこと (URL 不整合を起こさない設計責務)。
+        caller は canonicalize 済み URL を渡すこと (URL 不整合を起こさない
+        設計責務)。
         """
         stmt = (
             pg_insert(PendingHtmlArticleORM)
             .values(
-                article_url_id=article_url_id,
                 url=url,
                 source_id=source_id,
                 status="open",
@@ -113,36 +108,27 @@ class PendingHtmlArticleRepository:
         return row.id if row is not None else None
 
     async def find_by_id(self, pending_id: int) -> PendingHtmlContext | None:
-        """``pending_id`` 1 件を ``article_urls`` と JOIN して取得する。
+        """``pending_id`` 1 件を取得する。
 
         ``ContentFetchService.execute`` の入口で 1 SELECT で必要情報を全部取る。
         見つからない場合は ``None`` (重複配送 / DELETE 済の静かな exit に使う)。
         """
-        stmt = (
-            select(
-                PendingHtmlArticleORM.id,
-                PendingHtmlArticleORM.article_url_id,
-                PendingHtmlArticleORM.url,
-                PendingHtmlArticleORM.source_id,
-                PendingHtmlArticleORM.status,
-                PendingHtmlArticleORM.staged_attributes,
-                PendingHtmlArticleORM.ready_at,
-                PendingHtmlArticleORM.leased_until,
-                PendingHtmlArticleORM.attempt_count,
-                ArticleUrlORM.normalized_url,
-            )
-            .join(
-                ArticleUrlORM,
-                ArticleUrlORM.id == PendingHtmlArticleORM.article_url_id,
-            )
-            .where(PendingHtmlArticleORM.id == pending_id)
-        )
+        stmt = select(
+            PendingHtmlArticleORM.id,
+            PendingHtmlArticleORM.url,
+            PendingHtmlArticleORM.article_url_id,
+            PendingHtmlArticleORM.source_id,
+            PendingHtmlArticleORM.status,
+            PendingHtmlArticleORM.staged_attributes,
+            PendingHtmlArticleORM.ready_at,
+            PendingHtmlArticleORM.leased_until,
+            PendingHtmlArticleORM.attempt_count,
+        ).where(PendingHtmlArticleORM.id == pending_id)
         row = (await self._session.execute(stmt)).first()
         if row is None:
             return None
         return PendingHtmlContext(
             id=row.id,
-            article_url_id=row.article_url_id,
             source_id=row.source_id,
             status=row.status,
             staged_attributes=StagedArticleAttributes.model_validate(
@@ -152,7 +138,7 @@ class PendingHtmlArticleRepository:
             leased_until=row.leased_until,
             attempt_count=row.attempt_count,
             url=row.url,
-            normalized_url=row.normalized_url,
+            article_url_id=row.article_url_id,
         )
 
     async def claim_batch(self, *, limit: int, lease_minutes: int) -> list[int]:

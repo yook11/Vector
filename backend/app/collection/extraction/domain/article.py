@@ -5,11 +5,10 @@
 - ``ArticleDraft`` — AI 境界 (``ExtractedContent``) を sanitize 済みの
   ドメイン入力に正規化した型。永続化前の状態で、identity は持たない。
   ``from_extracted`` が AI 境界 → Draft の唯一の変換口。
-- ``Article`` — システムに記録された記事 Entity。``id`` と
-  ``article_url_id`` を identity として持ち、analysis 以降の処理が
-  継続的に扱う概念。
+- ``Article`` — システムに記録された記事 Entity。``id`` を identity として
+  持ち、analysis 以降の処理が継続的に扱う概念。
 
-変換は Repository.save_via_article_url (``ArticleDraft`` → ``Article``) と
+変換は Repository.save (``ArticleDraft`` → ``Article``) と
 Repository._article_from_orm (ORM → ``Article``) が担う。
 
 定数 ``_ARTICLE_BODY_MIN_LENGTH`` / ``_ARTICLE_BODY_MAX_LENGTH`` は
@@ -44,10 +43,9 @@ class ArticleDraft(BaseModel):
 
     ``ExtractedContent`` (extractor.py) を sanitize し、Pydantic の
     Field 制約 + validator で structural invariant を保証する。
-    identity (``id`` / ``article_url_id``) はこの段階では未確定で、
-    Service が ``Repository.save_via_article_url`` 呼び出し時に
-    ``article_url_id`` を渡し、DB が採番した ``id`` / ``created_at`` と
-    合わせて Entity を組み立てる。
+    identity (``id``) はこの段階では未確定で、Service が
+    ``Repository.save`` 呼び出し時に DB が採番した ``id`` /
+    ``created_at`` と合わせて Entity を組み立てる。
 
     Invariants (validators / Field で構造的に保証):
     - ``title``: normalize 後 1..500 文字 (DB CHECK 制約 ``original_title != ''``)
@@ -105,19 +103,17 @@ class ArticleDraft(BaseModel):
 class Article:
     """システムに記録された記事 Entity。
 
-    identity (``id``) と ``article_url_id`` を持ち、analysis 以降の Stage は
-    ``id`` を入力に処理を継続する。
+    identity (``id``) を持ち、analysis 以降の Stage は ``id`` を入力に
+    処理を継続する。
 
     Invariants:
     - ``id`` は正の整数 (DB 採番)
-    - ``article_url_id`` は正の整数 (article_urls への必須リンク)
     - ``title`` / ``body`` は非空 (DB CHECK 制約・品質ゲートと一致)
     - ``published_at`` は任意 (取得不能を許容)
     - ``created_at`` は ``server_default=func.now()`` で DB が採番した時刻
     """
 
     id: int
-    article_url_id: int
     title: str
     body: str
     published_at: PublishedAt | None
@@ -126,30 +122,26 @@ class Article:
     def __post_init__(self) -> None:
         if self.id <= 0:
             raise ValueError("Article.id must be positive")
-        if self.article_url_id <= 0:
-            raise ValueError("Article.article_url_id must be positive")
         if not self.title:
             raise ValueError("Article.title must be non-empty")
         if not self.body:
             raise ValueError("Article.body must be non-empty")
 
     @classmethod
-    def from_draft_via_article_url(
+    def from_draft(
         cls,
         draft: ArticleDraft,
         *,
         id: int,
-        article_url_id: int,
         created_at: datetime,
     ) -> Self:
-        """``article_url_id`` から Entity を組み立てる。
+        """``ArticleDraft`` から永続化済み Entity を組み立てる。
 
-        Repository.save_via_article_url が成功した後、Service が呼び出して
-        Outcome に詰めるためのドメインファクトリ。
+        Repository.save が成功した後、Service が呼び出して Outcome に
+        詰めるためのドメインファクトリ。
         """
         return cls(
             id=id,
-            article_url_id=article_url_id,
             title=draft.title,
             body=draft.body,
             published_at=draft.published_at,

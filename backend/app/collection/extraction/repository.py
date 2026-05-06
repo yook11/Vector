@@ -2,13 +2,14 @@
 
 責務:
 
-- ``ArticleRepository.save_via_article_url``: ``ArticleDraft`` を
-  ``articles`` 行に INSERT し、DB が採番した identity
-  (``PersistedArticleId``) を返す。並行レースは
-  ``INSERT ... ON CONFLICT DO NOTHING RETURNING`` で構造的に解消し、
-  既に他ワーカーが書き込み済みなら ``None`` を返す。
-- ``ArticleRepository.find_by_article_url_id``: 並行レース敗北時の
+- ``ArticleRepository.save``: ``ArticleDraft`` を ``articles`` 行に
+  INSERT し、DB が採番した identity (``PersistedArticleId``) を返す。
+  並行レースは ``INSERT ... ON CONFLICT DO NOTHING RETURNING`` で
+  構造的に解消し、既に他ワーカーが書き込み済みなら ``None`` を返す。
+- ``ArticleRepository.find_by_source_url``: 並行レース敗北時の
   読み戻し用に Article Entity を取得する。
+- ``ArticleRepository.exists_by_source_url``: Pattern H ingestion の
+  pre-check に使う軽量存在確認 (feed 再露出時の HTML fetch を回避)。
 """
 
 from __future__ import annotations
@@ -28,9 +29,9 @@ from app.shared.value_objects.safe_url import SafeUrl
 
 @dataclass(frozen=True, slots=True)
 class PersistedArticleId:
-    """``ArticleRepository.save_via_article_url`` が DB から受け取った identity 値。
+    """``ArticleRepository.save`` が DB から受け取った identity 値。
 
-    Service はこの値と元の ``ArticleDraft`` を ``Article.from_draft_via_article_url``
+    Service はこの値と元の ``ArticleDraft`` を ``Article.from_draft``
     に渡して記録済み Entity を組み立てる。
     """
 
@@ -41,7 +42,7 @@ class PersistedArticleId:
 def _article_from_orm(orm: ArticleORM) -> Article:
     """``ArticleORM`` から ``Article`` Entity への共通変換ヘルパ。
 
-    Entity の不変条件 (id 正、``article_url_id`` が positive) は
+    Entity の不変条件 (id 正、title/body 非空) は
     ``Article.__post_init__`` が defense-in-depth として再検証する。
     """
     published_at = (
@@ -49,7 +50,6 @@ def _article_from_orm(orm: ArticleORM) -> Article:
     )
     return Article(
         id=orm.id,
-        article_url_id=orm.article_url_id,
         title=orm.original_title,
         body=orm.original_content,
         published_at=published_at,
@@ -63,30 +63,27 @@ class ArticleRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def save_via_article_url(
+    async def save(
         self,
         draft: ArticleDraft,
         *,
-        article_url_id: int,
         source_id: int,
         source_url: SafeUrl,
     ) -> PersistedArticleId | None:
-        """``article_url_id`` 主軸で ``articles`` 行を INSERT する。
+        """``source_url`` 主軸で ``articles`` 行を INSERT する。
 
         ``ON CONFLICT DO NOTHING`` (制約ターゲット指定なし) で並行レース時の
-        全 unique 違反を吸収する。``articles`` には複数の UNIQUE
-        (``uq_articles_article_url_id`` / ``uq_articles_source_url``) が
-        張られるため、どの conflict も「他者が先に書込済み」と等価扱い。
-        ``None`` を受けた Service は ``find_by_article_url_id`` で読み戻して
-        合流させる。
+        全 unique 違反を吸収する。``articles.source_url`` の UNIQUE で
+        canonicalize 済み URL の重複が構造的に弾かれる。``None`` を受けた
+        Service は ``find_by_source_url`` で読み戻して合流させる。
 
         ``source_id`` / ``source_url`` は同一トランザクション内で caller が
-        既知の値として渡す。commit は呼び出し側 (Service) が行う。
+        既知の値として渡す。``source_url`` は canonicalize 済み値を期待。
+        commit は呼び出し側 (Service) が行う。
         """
         stmt = (
             pg_insert(ArticleORM)
             .values(
-                article_url_id=article_url_id,
                 source_id=source_id,
                 source_url=source_url,
                 original_title=draft.title,
@@ -103,11 +100,23 @@ class ArticleRepository:
             return None
         return PersistedArticleId(id=row.id, created_at=row.created_at)
 
-    async def find_by_article_url_id(self, article_url_id: int) -> Article | None:
-        """``article_url_id`` から既存 Article を Entity として取得する。
+    async def find_by_source_url(self, source_url: SafeUrl) -> Article | None:
+        """``source_url`` から既存 Article を Entity として取得する。
 
         Stage 2 の race-loss (``ConflictLost``) 検出時の読み戻しに使う。
+        ``source_url`` は canonicalize 済み値を期待する (UNIQUE もその値で効く)。
         """
-        stmt = select(ArticleORM).where(ArticleORM.article_url_id == article_url_id)
+        stmt = select(ArticleORM).where(ArticleORM.source_url == source_url)
         orm = (await self._session.execute(stmt)).scalar_one_or_none()
         return _article_from_orm(orm) if orm is not None else None
+
+    async def exists_by_source_url(self, source_url: SafeUrl) -> bool:
+        """``source_url`` を持つ ``articles`` 行が既に存在するかを軽量確認する。
+
+        Pattern H ingestion の pre-check 用 (feed 再露出時に既知 URL の
+        pending 化を回避し、HTML fetch の反復コストを抑える)。これはロックでは
+        なく実用上の idempotency で、同 tick race は ``save`` 側の ON CONFLICT
+        が吸収する。
+        """
+        stmt = select(ArticleORM.id).where(ArticleORM.source_url == source_url).limit(1)
+        return (await self._session.execute(stmt)).scalar_one_or_none() is not None
