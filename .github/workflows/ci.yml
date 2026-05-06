@@ -286,7 +286,7 @@ jobs:
       # 永続化されない。CLI バージョンを直接 key にした専用 cache を別建てし、
       # `_npx` (展開先) と `_cacache` (tarball) を恒久キャッシュする。
       - name: Cache Better Auth CLI (npx tarball + extracted)
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.npm/_npx
@@ -352,7 +352,7 @@ jobs:
 
       - name: Cache Playwright browsers
         id: playwright-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
