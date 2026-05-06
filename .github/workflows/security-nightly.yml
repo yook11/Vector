@@ -1,0 +1,73 @@
+name: Security Nightly
+
+# Phase 0 security gate (Trivy fs + config scan)。
+# - fs scan: backend/uv.lock + frontend/package-lock.json の既知 CVE 検出
+# - config scan: Dockerfile + docker-compose.yml の IaC misconfig 検出
+# 結果は SARIF で Code scanning alerts (Security tab) に集約する。
+#
+# 初回は warn-only (exit-code: '0') で start し、Security tab で finding を
+# triage する期間を確保する。後続 PR で exit-code: '1' に昇格して gate 化する。
+# image scan / pre-commit / Semgrep / gitleaks は別 PR で順次追加 (Phase 1+)。
+
+on:
+  schedule:
+    # UTC 18:17 = JST 03:17 (午前 3 時台、CI 渋滞を避ける)
+    - cron: '17 18 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write  # github/codeql-action/upload-sarif で必須
+
+jobs:
+  trivy-fs:
+    name: Trivy fs scan (lockfiles)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # aquasecurity/trivy-action は 2026-03 に supply chain 攻撃で 76/77 tags
+      # が force-push 改ざん。tag pin (`@v0.35.0`) では再発時に取り込まれる
+      # 可能性があるため、StepSecurity / Aqua Security 公式が推奨する
+      # 安全な commit SHA を直接 pin する。実装更新時は最新 clean commit を
+      # https://github.com/aquasecurity/trivy-action/commits/master/ で再確認。
+      - name: Trivy fs scan
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # v0.35.0 = trivy v0.69.3 (2026-03-04 commit, pre-incident clean)
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-fs.sarif
+          severity: HIGH,CRITICAL
+          exit-code: '0'  # Phase 0: warn-only。後続 PR で '1' に昇格
+          ignore-unfixed: true
+
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+
+  trivy-config:
+    name: Trivy config scan (Dockerfile + compose)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Trivy config scan
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # v0.35.0 = trivy v0.69.3 (2026-03-04 commit, pre-incident clean)
+        with:
+          scan-type: config
+          scan-ref: .
+          format: sarif
+          output: trivy-config.sarif
+          severity: HIGH,CRITICAL
+          exit-code: '0'
+
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-config.sarif
+          category: trivy-config

@@ -21,8 +21,17 @@ ENV PATH="/app/.venv/bin:$PATH" \
 
 WORKDIR /app
 
-COPY --from=builder /app/.venv /app/.venv
-COPY . .
+# non-root user (uid 1001 — frontend production stage の nextjs uid と揃える)。
+# container 侵害時の権限拡大を構造的に防ぐため。port 8000 は unprivileged
+# port なので uid 1001 で listen 可能。alembic upgrade / uvicorn / taskiq worker
+# はいずれも file system write を発生させないため runtime での chown は不要。
+RUN groupadd --system --gid 1001 backend \
+ && useradd  --system --uid 1001 --gid backend backend
+
+COPY --from=builder --chown=backend:backend /app/.venv /app/.venv
+COPY --chown=backend:backend . .
+
+USER backend
 
 # dev (docker-compose) 用デフォルト。本番 (Fly.io) は fly.toml の [processes] で上書き。
 CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"]
