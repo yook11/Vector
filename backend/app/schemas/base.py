@@ -5,6 +5,9 @@ from fastapi import Query
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 
+MAX_PAGE = 10_000
+MAX_PER_PAGE = 100
+
 
 class _CamelBase(BaseModel):
     """camelCase エイリアス生成を備えた全体共通スキーマ基底。"""
@@ -25,8 +28,8 @@ class PaginationParams(BaseModel):
     警告なしに黙って落とすため。feedback_vo_boundary memory を参照。
     """
 
-    page: Annotated[int, Query(ge=1)] = 1
-    per_page: Annotated[int, Query(ge=1, le=100, alias="perPage")] = 20
+    page: Annotated[int, Query(ge=1, le=MAX_PAGE)] = 1
+    per_page: Annotated[int, Query(ge=1, le=MAX_PER_PAGE, alias="perPage")] = 20
 
     @property
     def offset(self) -> int:

@@ -44,6 +44,18 @@ describe("SearchBar — 初期値の反映", () => {
     expect(getInput()).toHaveValue("initial query");
   });
 
+  it("URL の q パラメータは表示前に trim する", () => {
+    mocks.searchParams = new URLSearchParams({ q: "  initial query  " });
+    render(<SearchBar />);
+    expect(getInput()).toHaveValue("initial query");
+  });
+
+  it("URL の q パラメータが長すぎる場合は空文字にする", () => {
+    mocks.searchParams = new URLSearchParams({ q: "a".repeat(201) });
+    render(<SearchBar />);
+    expect(getInput()).toHaveValue("");
+  });
+
   it("q が無いときは空文字", () => {
     render(<SearchBar />);
     expect(getInput()).toHaveValue("");

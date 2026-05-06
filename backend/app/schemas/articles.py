@@ -16,6 +16,8 @@ from app.domain.category import CategorySlug
 from app.schemas.base import PaginationParams, _CamelBase
 from app.schemas.embeds import NewsSourceEmbed, OriginalArticleEmbed
 
+SEARCH_QUERY_MAX_LENGTH = 200
+
 # ---------------------------------------------------------------------------
 # Enums
 # ---------------------------------------------------------------------------
@@ -67,7 +69,7 @@ class SemanticSearchParams(PaginationParams):
     フィルタが増えるにつれて分岐していく想定。
     """
 
-    q: Annotated[str, Query(min_length=1, max_length=500)]
+    q: Annotated[str, Query(min_length=1, max_length=SEARCH_QUERY_MAX_LENGTH)]
     sort_by: Annotated[SortBy, Query(alias="sortBy")] = SortBy.RELEVANCE
     category: Annotated[
         CategorySlug | None,
@@ -79,7 +81,11 @@ class SemanticSearchParams(PaginationParams):
     @classmethod
     def _normalize_q(cls, v: str) -> str:
         """キャッシュキーの些細な差異を吸収するため検索クエリを正規化する。"""
-        return " ".join(v.lower().split())
+        q = " ".join(v.lower().split())
+        if not q:
+            msg = "Search query must not be blank"
+            raise ValueError(msg)
+        return q
 
 
 class ArticleBrief(_CamelBase):

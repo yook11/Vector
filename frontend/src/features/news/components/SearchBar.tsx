@@ -10,12 +10,17 @@ const DEBOUNCE_MS = 500;
 // 入力長 cap。URL に乗せる前提なので適度な上限を置く。
 const MAX_QUERY_LENGTH = 200;
 
+function normalizeVisibleQuery(q: string | null): string {
+  const trimmed = q?.trim() ?? "";
+  return trimmed.length <= MAX_QUERY_LENGTH ? trimmed : "";
+}
+
 export function SearchBar() {
   // <Suspense> 配下の Client Component なので useSearchParams は実体を返すが、
   // 静的 prerender 経路の null を型で除くため空 URLSearchParams にフォールバック。
   const searchParams = useSearchParams() ?? new URLSearchParams();
   const updateSearchParams = useUpdateSearchParams();
-  const currentQ = searchParams.get("q") ?? "";
+  const currentQ = normalizeVisibleQuery(searchParams.get("q"));
   const [value, setValue] = useState(currentQ);
   // URL の q が外部変更 (browser back / direct navigation) で変わったとき
   // input value をそれに追従させる。useEffect での同期は React 公式が

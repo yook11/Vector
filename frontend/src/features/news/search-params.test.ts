@@ -8,6 +8,11 @@ describe("parseArticleQuery", () => {
       expect(query.category).toBe("ai");
     });
 
+    it("trims valid category slugs", () => {
+      const { query } = parseArticleQuery({ category: " ai_ml " });
+      expect(query.category).toBe("ai_ml");
+    });
+
     it("omits category when not provided", () => {
       const { query } = parseArticleQuery({});
       expect(query).not.toHaveProperty("category");
@@ -20,6 +25,11 @@ describe("parseArticleQuery", () => {
 
     it("omits empty string category (treated as not provided)", () => {
       const { query } = parseArticleQuery({ category: "" });
+      expect(query).not.toHaveProperty("category");
+    });
+
+    it("rejects category values outside the backend slug pattern", () => {
+      const { query } = parseArticleQuery({ category: "../admin" });
       expect(query).not.toHaveProperty("category");
     });
   });
@@ -71,12 +81,41 @@ describe("parseArticleQuery", () => {
       const { query } = parseArticleQuery({ page: ["1", "2"] });
       expect(query).not.toHaveProperty("page");
     });
+
+    it("rejects decimal and exponent notation", () => {
+      expect(parseArticleQuery({ page: "1.5" }).query).not.toHaveProperty(
+        "page",
+      );
+      expect(parseArticleQuery({ page: "1e2" }).query).not.toHaveProperty(
+        "page",
+      );
+    });
+
+    it("rejects values outside configured bounds", () => {
+      expect(parseArticleQuery({ page: "0" }).query).not.toHaveProperty("page");
+      expect(parseArticleQuery({ page: "10001" }).query).not.toHaveProperty(
+        "page",
+      );
+      expect(parseArticleQuery({ perPage: "101" }).query).not.toHaveProperty(
+        "perPage",
+      );
+    });
   });
 
   describe("q (search term)", () => {
     it("returns string q passthrough", () => {
       const { q } = parseArticleQuery({ q: "openai" });
       expect(q).toBe("openai");
+    });
+
+    it("trims q and rejects blank values", () => {
+      expect(parseArticleQuery({ q: "  openai  " }).q).toBe("openai");
+      expect(parseArticleQuery({ q: "   " }).q).toBeUndefined();
+    });
+
+    it("rejects oversized q values", () => {
+      const { q } = parseArticleQuery({ q: "a".repeat(201) });
+      expect(q).toBeUndefined();
     });
 
     it("returns undefined when q is array", () => {

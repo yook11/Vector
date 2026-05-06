@@ -100,6 +100,15 @@ def _patch_embed_query(return_value: list[float] = FAKE_QUERY_EMBEDDING):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("q", ["   ", "a" * 201])
+async def test_semantic_search_rejects_invalid_q(
+    client: AsyncClient, q: str
+) -> None:
+    resp = await client.get("/api/v1/articles/search", params={"q": q})
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_semantic_search_returns_articles_with_embedding(
     authed_client: AsyncClient,
     db_session: AsyncSession,

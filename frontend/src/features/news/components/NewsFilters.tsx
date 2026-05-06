@@ -10,10 +10,17 @@ import {
 } from "@/components/ui/select";
 import { useUpdateSearchParams } from "@/lib/search-params/client";
 
+const PER_PAGE_OPTIONS = new Set(["12", "20", "24", "48", "50", "100"]);
+
 export function NewsFilters() {
   // SearchBar と同じく <Suspense> 配下なので非 null。空フォールバックで型を確定。
   const searchParams = useSearchParams() ?? new URLSearchParams();
   const updateSearchParams = useUpdateSearchParams();
+  const rawSortOrder = searchParams.get("sortOrder");
+  const sortOrderValue = rawSortOrder === "asc" ? "asc" : "default";
+  const rawPerPage = searchParams.get("perPage");
+  const perPageValue =
+    rawPerPage && PER_PAGE_OPTIONS.has(rawPerPage) ? rawPerPage : "20";
 
   const updateParam = (key: string, value: string | undefined) => {
     updateSearchParams({ [key]: value, page: undefined });
@@ -22,7 +29,7 @@ export function NewsFilters() {
   return (
     <div className="flex flex-wrap items-center gap-2.5">
       <Select
-        value={searchParams.get("sortOrder") ?? ""}
+        value={sortOrderValue}
         onValueChange={(v) =>
           updateParam("sortOrder", v === "default" ? undefined : v)
         }
@@ -40,7 +47,7 @@ export function NewsFilters() {
       </Select>
 
       <Select
-        value={searchParams.get("perPage") ?? "12"}
+        value={perPageValue}
         onValueChange={(v) => updateParam("perPage", v)}
       >
         <SelectTrigger
@@ -51,8 +58,11 @@ export function NewsFilters() {
         </SelectTrigger>
         <SelectContent>
           <SelectItem value="12">12 / page</SelectItem>
+          <SelectItem value="20">20 / page</SelectItem>
           <SelectItem value="24">24 / page</SelectItem>
           <SelectItem value="48">48 / page</SelectItem>
+          <SelectItem value="50">50 / page</SelectItem>
+          <SelectItem value="100">100 / page</SelectItem>
         </SelectContent>
       </Select>
     </div>

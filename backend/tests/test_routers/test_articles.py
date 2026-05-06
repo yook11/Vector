@@ -129,6 +129,21 @@ class TestListArticles:
         assert data["perPage"] == 2
         assert data["totalPages"] == 3
 
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "page=0",
+            "page=10001",
+            "perPage=0",
+            "perPage=101",
+        ],
+    )
+    async def test_invalid_pagination_returns_422(
+        self, client: AsyncClient, query: str
+    ) -> None:
+        resp = await client.get(f"/api/v1/articles?{query}")
+        assert resp.status_code == 422
+
     async def test_sort_by_published_at_desc(
         self,
         client: AsyncClient,
