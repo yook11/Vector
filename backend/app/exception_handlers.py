@@ -10,6 +10,7 @@ from starlette import status
 
 from app.exceptions import DuplicateError, NotFoundError
 from app.search.errors import SearchError
+from app.search.quota import SearchQuotaExceededError
 
 
 async def not_found_handler(_request: Request, exc: NotFoundError) -> JSONResponse:
@@ -30,4 +31,16 @@ async def search_error_handler(_request: Request, _exc: SearchError) -> JSONResp
     return JSONResponse(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         content={"detail": "Search embedding generation failed. Please try again."},
+    )
+
+
+async def search_quota_exceeded_handler(
+    _request: Request, _exc: SearchQuotaExceededError
+) -> JSONResponse:
+    """red-team C1 対策: per-user 日次 search quota 超過を 429 にマップする。"""
+    return JSONResponse(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        content={
+            "detail": "Daily search quota exceeded. Please retry after 24 hours.",
+        },
     )

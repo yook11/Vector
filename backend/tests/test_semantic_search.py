@@ -1,7 +1,7 @@
 """セマンティック検索 (GET /api/v1/articles/search) のテスト。"""
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import AsyncClient
@@ -101,8 +101,16 @@ def _patch_embed_query(return_value: list[float] = FAKE_QUERY_EMBEDDING):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("q", ["   ", "a" * 201])
-async def test_semantic_search_rejects_invalid_q(client: AsyncClient, q: str) -> None:
-    resp = await client.get("/api/v1/articles/search", params={"q": q})
+async def test_semantic_search_rejects_invalid_q(
+    authed_client: AsyncClient, q: str
+) -> None:
+    """auth 済の前提で q バリデーションを検証する。
+
+    PR3 で endpoint が認証必須化されたため、anon + invalid q の cross-product は
+    FastAPI 依存解決順 (422 vs 401) が挙動依存となり test 不安定化を招くので
+    あえて書かない。auth 通過後の振る舞いに絞る。
+    """
+    resp = await authed_client.get("/api/v1/articles/search", params={"q": q})
     assert resp.status_code == 422
 
 
@@ -244,3 +252,119 @@ async def test_semantic_search_returns_503_on_embedding_failure(
 
     assert resp.status_code == 503
     assert "embedding" in resp.json()["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
+# E. red-team C1 対策: auth + per-user quota の統合
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_semantic_search_returns_401_when_unauthenticated(
+    client: AsyncClient,
+) -> None:
+    """anon access は 401 を返す (red-team C1 対策: anon DoS 入口の閉鎖)。"""
+    resp = await client.get("/api/v1/articles/search", params={"q": "test"})
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_semantic_search_returns_429_when_quota_exhausted(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    sample_categories: list[Category],
+) -> None:
+    """quota 枯渇時は 429 を返す (red-team C1 対策: per-user 課金キャップ)。
+
+    cache miss を強制し、fake redis の eval を 0 (枯渇) で固定して assert する。
+    embedder 呼出直前で fail-fast するので Gemini API には届かない。
+    """
+    from app.dependencies import get_redis_client
+    from app.main import app as fastapi_app
+
+    source = await _create_source(db_session)
+    await _create_article(
+        db_session,
+        source,
+        category_id=sample_categories[0].id,
+        embedding=FAKE_EMBEDDING_A,
+    )
+    await db_session.commit()
+
+    fake_redis = MagicMock()
+    fake_redis.eval = AsyncMock(return_value=0)
+    fastapi_app.dependency_overrides[get_redis_client] = lambda: fake_redis
+    try:
+        with (
+            patch(
+                "app.search.embedding_cache.get_query_embedding",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch(
+                "app.search.embedding_cache.set_query_embedding",
+                new_callable=AsyncMock,
+            ),
+        ):
+            resp = await authed_client.get(
+                "/api/v1/articles/search", params={"q": "test"}
+            )
+    finally:
+        fastapi_app.dependency_overrides.pop(get_redis_client, None)
+
+    assert resp.status_code == 429
+    assert "quota" in resp.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_admin_user_consumes_same_quota_as_regular_user(
+    admin_client: AsyncClient,
+    db_session: AsyncSession,
+    sample_categories: list[Category],
+) -> None:
+    """admin も通常 user と同じ quota を消費する (構造的抜け道の不在を担保)。
+
+    admin が課金抜け道になるリスクを排除する設計判断 (memory feedback_no_share_
+    different_problems): admin / user で quota を分けない。
+    """
+    from app.dependencies import get_redis_client
+    from app.main import app as fastapi_app
+
+    source = await _create_source(db_session)
+    await _create_article(
+        db_session,
+        source,
+        category_id=sample_categories[0].id,
+        embedding=FAKE_EMBEDDING_A,
+    )
+    await db_session.commit()
+
+    fake_redis = MagicMock()
+    fake_redis.eval = AsyncMock(return_value=1)
+    fastapi_app.dependency_overrides[get_redis_client] = lambda: fake_redis
+    try:
+        with (
+            patch(
+                "app.search.embedding_cache.get_query_embedding",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch(
+                "app.search.embedding_cache.set_query_embedding",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "app.search.service.get_embedder",
+                return_value=MagicMock(
+                    embed_query=AsyncMock(return_value=FAKE_QUERY_EMBEDDING)
+                ),
+            ),
+        ):
+            resp = await admin_client.get(
+                "/api/v1/articles/search", params={"q": "test"}
+            )
+    finally:
+        fastapi_app.dependency_overrides.pop(get_redis_client, None)
+
+    assert resp.status_code == 200
+    fake_redis.eval.assert_called_once()

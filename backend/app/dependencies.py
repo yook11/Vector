@@ -5,6 +5,7 @@ from typing import Annotated
 from uuid import UUID
 
 import jwt
+import redis.asyncio as aioredis
 from fastapi import Depends, Header, HTTPException, status
 from jwt.exceptions import InvalidTokenError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +13,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
 
 from app.config import settings
 from app.db import engine
+from app.redis import get_redis as _get_redis_singleton
 
 # BFF (Next.js) と backend (FastAPI) 間の内部 API 認証は HS256 JWT で行う。
 # BFF が Better Auth セッションから user_id / role を取り出して短期 JWT に署名し、
@@ -134,6 +136,17 @@ async def get_admin_user(
             detail="Admin access required",
         )
     return current_user
+
+
+def get_redis_client() -> aioredis.Redis:
+    """共有 Redis クライアントを返す FastAPI 依存関数。
+
+    `app.redis.get_redis()` の薄いラッパで、目的はテスト時の override 取っ手。
+    `app.dependency_overrides[get_redis_client] = lambda: fake_redis` で
+    差し替え可能にするため、router/service は ``get_redis()`` を直接呼ばずに
+    この Depends に依存する。
+    """
+    return _get_redis_singleton()
 
 
 async def get_optional_user(

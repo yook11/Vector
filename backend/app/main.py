@@ -14,6 +14,7 @@ from app.exception_handlers import (
     duplicate_handler,
     not_found_handler,
     search_error_handler,
+    search_quota_exceeded_handler,
 )
 from app.exceptions import DuplicateError, NotFoundError
 from app.insights.briefing.router.briefing import router as briefing_router
@@ -25,6 +26,7 @@ from app.routers import (
     watchlist,
 )
 from app.search.errors import SearchError
+from app.search.quota import SearchQuotaExceededError
 from app.search.router import router as search_router
 
 logger = structlog.get_logger(__name__)
@@ -90,6 +92,7 @@ app.add_exception_handler(NotFoundError, not_found_handler)
 app.add_exception_handler(DuplicateError, duplicate_handler)
 
 app.add_exception_handler(SearchError, search_error_handler)
+app.add_exception_handler(SearchQuotaExceededError, search_quota_exceeded_handler)
 
 # ルーター登録
 # NOTE: /articles/search を /articles/{article_id} より先にマッチさせるため、
