@@ -58,6 +58,11 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
 EXPOSE 3000
+# dev stage は host bind mount + .next 書込のため root 維持 (host uid との衝突回避)。
+# 本番経路の production stage (Stage 4) は USER nextjs (uid 1001) で non-root 化済で
+# 攻撃 surface は閉じている。dev container は localhost のみ expose、external from
+# untrusted は到達不可。
+# nosemgrep: dockerfile.security.missing-user.missing-user
 CMD ["npm", "run", "dev"]
 
 # =====================================================================
