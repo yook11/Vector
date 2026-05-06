@@ -246,7 +246,7 @@ class ExtractionPayload(BasePipelineEventPayload):
     """Stage 3 — 大きい入力（記事本文）が来るので head + length + hash で扱う。"""
     kind: Literal["extraction"] = "extraction"
     ai_model: str | None = None            # S
-    prompt_version: str | None = None      # A: deploy 時注入の git SHA
+    prompt_version: str | None = None      # A: prompt+model+gen_config+response_schema+system_instruction の SHA-256 prefix 8
 
     # 入力（外部由来 raw、article.original_content 経由）
     input_content_head: str | None = None   # S: 先頭 2KB（注入文字列の在処を含む）
@@ -264,7 +264,7 @@ class ClassificationPayload(BasePipelineEventPayload):
     """Stage 4 — 入力が小さい（記事サマリ）ので full 保存。"""
     kind: Literal["classification"] = "classification"
     ai_model: str | None = None            # S
-    prompt_version: str | None = None      # A
+    prompt_version: str | None = None      # A: call signature hash (Stage 3 と同方式)
 
     # 入力（4KB hard limit、full）
     input_text: str | None = None          # S: full
@@ -381,8 +381,14 @@ ALTER TABLE pipeline_events ADD CONSTRAINT ck_duration_nonnegative CHECK (durati
 
 ### prompt_version の規律
 
-- `settings.prompt_version` に **git short SHA を deploy 時注入**（`PROMPT_VERSION=$(git rev-parse --short HEAD)` を Compose の environment で渡す）
-- 値が空なら `None`（NULL）で記録、以降の遡及調査は不可能になる前提
+- **call signature hash 方式** で構造的に算出する。`prompt_template + model + gen_config + response_schema + system_instruction` の 5 要素を SHA-256 で hash し prefix 8 文字を採る
+- 5 要素は LLM 呼出条件の再現性に効く全要素であり、いずれかが変わると hash が変わる ⇔ 同じ hash なら呼出条件が完全一致
+- 各 (stage, provider) ごとに **Prompt class**（`GeminiExtractionPrompt` / `GeminiClassificationPrompt` / `DeepSeekClassificationPrompt`）が ClassVar で 5 要素を保持し、class load 時に `VERSION` ClassVar として hash を確定させる（外部代入 / decorator 不要）
+- git short SHA 注入は採らない。プロンプトを変えていない commit でも値が変わるノイズを生み、`prompt_version 別の OOS 率` 等の SQL 集計が薄まる
+- 人間が手で bump する `_PROMPT_VERSION = "v4"` 文字列も採らない。確実に乖離する（忘れる / 過剰更新）
+- `gen_config` は `MappingProxyType` で immutable にし、書換による silent audit lying を構造的に排除する
+- Pydantic の minor version bump で `model_json_schema()` 出力 dict の構造が変わる可能性は **noise として許容**（false positive で hash が変わる、頻度は低い）
+- Phase 2 として、`<untrusted_input>` ブロックに渡す入力を `UntrustedStr` / `TrustedStr` の typed boundary で強制する案を検討する（render() の typed kwargs だけでは「sanitize 忘れ」を完全には防げない）
 
 ### content_hash の位置づけ（Stage 3 のみ）
 
@@ -808,7 +814,7 @@ PR1 + PR1.5 + PR2 で payload 形を実運用検証してから PR3 以降に進
 | Service DI | `event_repo` は ctor 注入せず、Service 内で都度 `PipelineEventRepository(session)` |
 | Outcome → payload 変換 | Service 内 private `_record_event(outcome, ...)` で `match` 網羅 |
 | 横断情報 | duration=Service / attempt=Task→Service 引数 / error_class=Task / trace_id=Repository |
-| prompt_version | `settings.prompt_version` に git short SHA を deploy 時注入 |
+| prompt_version | call signature hash 方式（prompt+model+gen_config+response_schema+system_instruction の SHA-256 prefix 8）。Prompt class（per stage × provider）が ClassVar で確定。git SHA 注入は採らない |
 | AI raw I/O 捕捉 | always-on、Stage 3 は head + length + hash + raw 2KB、Stage 4 は input full + raw 2KB |
 | AI client 戻り値拡張 | PR3 で実施（raw response / 入力 snapshot を業務戻り値に含める）|
 | 例外パス D 級情報 | 「業務 raise 後に Task で書く」構造上、AI raw 等 D 級は載らない（best-effort）|

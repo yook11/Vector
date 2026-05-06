@@ -16,6 +16,7 @@ from app.observability.domain.payloads import (
     PipelineEventPayload,
     SourceFetchPayload,
 )
+from app.observability.prompt_versions import compute_call_signature
 from app.observability.recording import _record_failure_event
 from app.observability.repository import PipelineEventRepository
 
@@ -32,4 +33,5 @@ __all__ = [
     "SourceFetchPayload",
     "Stage",
     "_record_failure_event",
+    "compute_call_signature",
 ]

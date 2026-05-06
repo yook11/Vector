@@ -12,7 +12,7 @@ precondition 分岐 (冪等ヒット / article_not_found) を消すために Sta
 詳細は memory `feedback_taskiq_basemodel_required.md`。
 
 `MAX_CONTENT_LENGTH` は system 不変条件としての hard cap (リソース保護) であり、
-adapter 固有の入力整形 (例: GeminiExtractor.CONTENT_MAX_LENGTH = 20_000) とは
+adapter 固有の入力整形 (例: GeminiExtractionPrompt.CONTENT_MAX_LENGTH = 20_000) と
 責務が異なる。前者は「ここを超える本文は Stage C の対象外」を表し、後者は
 「特定モデルにこのサイズで投げる」を表す。
 """

@@ -116,7 +116,9 @@ class ExtractionPayload(BasePipelineEventPayload):
 
     kind: Literal["extraction"] = "extraction"
     ai_model: str | None = None  # S
-    prompt_version: str | None = None  # A: deploy 時注入の git SHA
+    # A: prompt+model+gen_config+response_schema+system_instruction の SHA-256 prefix 8
+    # (Prompt class が ClassVar で確定。詳細は ADR §prompt_version の規律)
+    prompt_version: str | None = None
 
     # 入力 (外部由来 raw、article.original_content 経由)
     input_content_head: str | None = None  # S: 先頭 2KB
@@ -135,7 +137,7 @@ class ClassificationPayload(BasePipelineEventPayload):
 
     kind: Literal["classification"] = "classification"
     ai_model: str | None = None  # S
-    prompt_version: str | None = None  # A
+    prompt_version: str | None = None  # A: call signature hash (Stage 3 と同方式)
 
     # 入力 (4KB hard limit、full)
     input_text: str | None = None  # S: full

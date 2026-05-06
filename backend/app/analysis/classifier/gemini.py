@@ -1,4 +1,8 @@
-"""Gemini 実装の Classifier — Stage 2。"""
+"""Gemini 実装の Classifier — Stage 4。
+
+Prompt 文面 / model / gen_config / response schema は ``GeminiClassificationPrompt``
+が SSoT。本 class は I/O 駆動 (rate limit + SDK 例外翻訳) に責務を絞る。
+"""
 
 from __future__ import annotations
 
@@ -9,7 +13,8 @@ from google.genai.types import GenerateContentConfig
 from pydantic import ValidationError
 
 from app.analysis.classifier.base import BaseClassifier
-from app.analysis.classifier.prompts import CLASSIFICATION_PROMPT, to_domain
+from app.analysis.classifier.gemini_prompt import GeminiClassificationPrompt
+from app.analysis.classifier.prompts import to_domain
 from app.analysis.classifier.schema import (
     ClassificationRawResponse,
     ClassificationResponse,
@@ -23,7 +28,6 @@ from app.analysis.errors import (
     RateLimitError,
     UnclassifiedError,
 )
-from app.analysis.prompt_safety import sanitize_for_untrusted_block
 from app.config import settings
 
 logger = structlog.get_logger(__name__)
@@ -32,7 +36,7 @@ logger = structlog.get_logger(__name__)
 class GeminiClassifier(BaseClassifier):
     """BaseClassifier の Gemini API 実装。"""
 
-    MODEL = "gemini-2.5-flash-lite"
+    MODEL = GeminiClassificationPrompt.MODEL
     RPM = 100
     RPD = 1500
 
@@ -48,23 +52,19 @@ class GeminiClassifier(BaseClassifier):
         summary_ja: str,
     ) -> ClassificationResponse:
         """Stage 1 の出力を分類する。原文は読まない。"""
-        prompt = CLASSIFICATION_PROMPT.format(
-            title_ja=sanitize_for_untrusted_block(title_ja),
-            summary_ja=sanitize_for_untrusted_block(summary_ja),
+        prompt = GeminiClassificationPrompt.render(
+            title_ja=title_ja, summary_ja=summary_ja
         )
-
         return await self._call_once(prompt)
 
     async def _call_api(self, prompt: str) -> ClassificationResponse:
         """Gemini の generate_content API を呼び出し構造化出力を受け取る。"""
         response = await self._client.aio.models.generate_content(
-            model=self.MODEL,
+            model=GeminiClassificationPrompt.MODEL,
             contents=prompt,
             config=GenerateContentConfig(
-                temperature=0.2,
-                max_output_tokens=1024,
-                response_mime_type="application/json",
-                response_schema=ClassificationRawResponse,
+                **GeminiClassificationPrompt.GEN_CONFIG,
+                response_schema=GeminiClassificationPrompt.RESPONSE_SCHEMA,
             ),
         )
         parsed = response.parsed
