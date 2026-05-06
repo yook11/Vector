@@ -3,11 +3,15 @@ name: Security Nightly
 # Phase 0 security gate (Trivy fs + config scan)。
 # - fs scan: backend/uv.lock + frontend/package-lock.json の既知 CVE 検出
 # - config scan: Dockerfile + docker-compose.yml の IaC misconfig 検出
-# 結果は SARIF で Code scanning alerts (Security tab) に集約する。
 #
-# 初回は warn-only (exit-code: '0') で start し、Security tab で finding を
-# triage する期間を確保する。後続 PR で exit-code: '1' に昇格して gate 化する。
-# image scan / pre-commit / Semgrep / gitleaks は別 PR で順次追加 (Phase 1+)。
+# Vector は private repo + GitHub Free で Code scanning (GHAS) が無効なため、
+# SARIF を Code Scanning へ upload せず Actions Artifacts に保存する設計
+# (Phase 1 PR 2 `security-pr.yml` と同パターン)。triage は Actions UI から DL。
+# GHAS 契約 or repo public 化で Code scanning が enable されたら upload-sarif
+# 経路に戻す。
+#
+# 初回は warn-only (exit-code: '0') で start し、finding を triage する期間を
+# 確保する。後続 PR で exit-code: '1' に昇格して gate 化する。
 
 on:
   schedule:
@@ -17,7 +21,6 @@ on:
 
 permissions:
   contents: read
-  security-events: write  # github/codeql-action/upload-sarif で必須
 
 jobs:
   trivy-fs:
@@ -42,12 +45,13 @@ jobs:
           exit-code: '0'  # Phase 0: warn-only。後続 PR で '1' に昇格
           ignore-unfixed: true
 
-      - name: Upload SARIF
+      - name: Upload SARIF artifact
         if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: actions/upload-artifact@v4
         with:
-          sarif_file: trivy-fs.sarif
-          category: trivy-fs
+          name: trivy-fs-sarif
+          path: trivy-fs.sarif
+          retention-days: 14
 
   trivy-config:
     name: Trivy config scan (Dockerfile + compose)
@@ -65,9 +69,10 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: '0'
 
-      - name: Upload SARIF
+      - name: Upload SARIF artifact
         if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: actions/upload-artifact@v4
         with:
-          sarif_file: trivy-config.sarif
-          category: trivy-config
+          name: trivy-config-sarif
+          path: trivy-config.sarif
+          retention-days: 14
