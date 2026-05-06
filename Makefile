@@ -13,9 +13,9 @@
         migrate-safe verify-env verify-config
 
 # サービス分類（変更する時はここだけ触る）
-WORKERS  := worker-metadata worker-content worker-analysis worker-embedding worker-digest scheduler scheduler-digest
+WORKERS  := worker-metadata worker-content worker-analysis worker-embedding worker-digest worker-briefing scheduler scheduler-digest scheduler-briefing
 PIPELINE := backend $(WORKERS)
-QUEUES   := pipeline:metadata pipeline:content pipeline:analysis pipeline:embedding digest
+QUEUES   := pipeline:metadata pipeline:content pipeline:analysis pipeline:embedding digest briefing
 
 help:  ## ターゲット一覧
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) \
