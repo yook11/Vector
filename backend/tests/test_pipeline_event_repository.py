@@ -70,8 +70,11 @@ async def test_append_inserts_row_with_payload_roundtrip(
     repo = PipelineEventRepository(db_session)
     payload = SourceFetchPayload(
         fetcher_class="VentureBeatFetcher",
-        persisted_count=3,
-        staged_count=2,
+        entry_count=6,
+        article_created_count=3,
+        completion_queued_count=2,
+        skipped_count=0,
+        failed_count=1,
         failed_codes={"http_403": 1},
     )
 
@@ -96,7 +99,9 @@ async def test_append_inserts_row_with_payload_roundtrip(
     assert row.duration_ms == 42
     assert row.payload["kind"] == "source_fetch"
     assert row.payload["fetcher_class"] == "VentureBeatFetcher"
-    assert row.payload["persisted_count"] == 3
+    assert row.payload["entry_count"] == 6
+    assert row.payload["article_created_count"] == 3
+    assert row.payload["completion_queued_count"] == 2
     assert row.payload["failed_codes"] == {"http_403": 1}
 
 

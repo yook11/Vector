@@ -55,20 +55,23 @@ async def _fetch_article_summaries(
 ) -> list[_ArticleSummaryOut]:
     if not article_ids:
         return []
+    # PR2.5-B: 新規記事は discovered_article_id=NULL なので OUTER JOIN にし、
+    # original_url は DiscoveredArticle 由来 (旧) または Article.source_url
+    # (新、Stage 1 で正規化済) のいずれかを採用する。
     stmt = (
         select(
             Article.id,
             Article.source_url,
             ArticleAnalysis.translated_title,
             NewsSource.name,
-            DiscoveredArticle.original_url,
+            DiscoveredArticle.original_url.label("legacy_original_url"),
         )
         .join(ArticleExtraction, ArticleExtraction.article_id == Article.id)
         .join(
             ArticleAnalysis,
             ArticleAnalysis.extraction_id == ArticleExtraction.id,
         )
-        .join(
+        .outerjoin(
             DiscoveredArticle,
             DiscoveredArticle.id == Article.discovered_article_id,
         )
@@ -81,7 +84,7 @@ async def _fetch_article_summaries(
             id=row.id,
             title_ja=row.translated_title,
             source_name=str(row.name),
-            url=str(row.original_url),
+            url=str(row.legacy_original_url or row.source_url),
         )
         for row in rows
     ]

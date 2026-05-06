@@ -9,6 +9,16 @@
   既に他ワーカーが書き込み済みなら ``None`` を返す。
 - ``ArticleRepository.find_by_discovered_article_id``: 並行レース敗北時の
   読み戻し用に Article Entity を取得する。
+
+PR2.5-B 移行期: 上記 2 つは旧経路 (``discovered_article_id`` 軸)、
+新経路 (``article_url_id`` 軸) は以下の 2 メソッドで提供する:
+
+- ``ArticleRepository.save_via_article_url``: ``article_url_id`` を主軸に
+  INSERT。``discovered_article_id`` は明示的に NULL を入れる。
+- ``ArticleRepository.find_by_article_url_id``: ConflictLost 検出 / 読み戻し用。
+
+旧経路は caller (旧 IngestionService / 旧 ContentFetchService) が新経路へ
+全書換完了した後 (Block 1-2 完了後) に削除予定。
 """
 
 from __future__ import annotations
@@ -41,8 +51,8 @@ class PersistedArticleId:
 def _article_from_orm(orm: ArticleORM) -> Article:
     """``ArticleORM`` から ``Article`` Entity への共通変換ヘルパ。
 
-    Entity の不変条件 (id 正・非空) は ``Article.__post_init__`` が
-    defense-in-depth として再検証する。
+    Entity の不変条件 (id 正、いずれかの境界跨ぎ識別子が positive) は
+    ``Article.__post_init__`` が defense-in-depth として再検証する。
     """
     published_at = (
         PublishedAt(orm.published_at) if orm.published_at is not None else None
@@ -50,6 +60,7 @@ def _article_from_orm(orm: ArticleORM) -> Article:
     return Article(
         id=orm.id,
         discovered_article_id=orm.discovered_article_id,
+        article_url_id=orm.article_url_id,
         title=orm.original_title,
         body=orm.original_content,
         published_at=published_at,
@@ -121,5 +132,57 @@ class ArticleRepository:
         stmt = select(ArticleORM).where(
             ArticleORM.discovered_article_id == discovered_article_id
         )
+        orm = (await self._session.execute(stmt)).scalar_one_or_none()
+        return _article_from_orm(orm) if orm is not None else None
+
+    async def save_via_article_url(
+        self,
+        draft: ArticleDraft,
+        *,
+        article_url_id: int,
+        source_id: int,
+        source_url: SafeUrl,
+    ) -> PersistedArticleId | None:
+        """新経路: ``article_url_id`` 主軸で ``articles`` 行を INSERT する。
+
+        PR2.5-B cutover 後の唯一の永続化口。``discovered_article_id`` は
+        明示的に NULL を入れ、PR2.5-C で当該カラム削除まで NULL のまま並走。
+
+        ``ON CONFLICT DO NOTHING`` (制約ターゲット指定なし) で並行レース時の
+        全 unique 違反を吸収する。``articles`` には移行期に複数の UNIQUE が
+        残る (``uq_articles_article_url_id`` / ``uq_articles_source_url``) ため、
+        どの conflict も「他者が先に書込済み」と等価扱い。``None`` を受けた
+        Service は ``find_by_article_url_id`` で読み戻して合流させる。
+
+        ``source_id`` / ``source_url`` は同一トランザクション内で caller が
+        既知の値として渡す。commit は呼び出し側 (Service) が行う。
+        """
+        stmt = (
+            pg_insert(ArticleORM)
+            .values(
+                discovered_article_id=None,
+                article_url_id=article_url_id,
+                source_id=source_id,
+                source_url=source_url,
+                original_title=draft.title,
+                original_content=draft.body,
+                published_at=(
+                    draft.published_at.value if draft.published_at is not None else None
+                ),
+            )
+            .on_conflict_do_nothing()
+            .returning(ArticleORM.id, ArticleORM.created_at)
+        )
+        row = (await self._session.execute(stmt)).first()
+        if row is None:
+            return None
+        return PersistedArticleId(id=row.id, created_at=row.created_at)
+
+    async def find_by_article_url_id(self, article_url_id: int) -> Article | None:
+        """``article_url_id`` から既存 Article を Entity として取得する。
+
+        Stage 2 の race-loss (``ConflictLost``) 検出時の読み戻しに使う。
+        """
+        stmt = select(ArticleORM).where(ArticleORM.article_url_id == article_url_id)
         orm = (await self._session.execute(stmt)).scalar_one_or_none()
         return _article_from_orm(orm) if orm is not None else None

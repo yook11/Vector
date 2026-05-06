@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class BasePipelineEventPayload(BaseModel):
@@ -32,34 +32,68 @@ class DispatchPayload(BasePipelineEventPayload):
 
 
 class SourceFetchPayload(BasePipelineEventPayload):
-    """Stage 1 — 1 ソース 1 fetch の集約サマリ。"""
+    """Stage 1 — 1 ソース 1 fetch の集約サマリ。
+
+    PR2.5-B 以降の κ: 件数 5 種を常時 populate し、
+    ``entry_count == article_created + completion_queued + skipped + failed``
+    の不変条件を ``model_validator`` で fail-fast 検証する。
+    breakdown dict (``*_codes``) は sparse のまま (None / 空 dict は省略)。
+    """
 
     kind: Literal["source_fetch"] = "source_fetch"
     fetcher_class: str | None = None  # A: type(fetcher).__name__
-    persisted_count: int | None = None  # A' (Pattern R 永続化数)
-    staged_count: int | None = None  # A' (Pattern H staged 数)
-    failed_count: int | None = None  # A' (エントリ単位 Failed 数)
-    skipped_count: int | None = None  # A' (race 敗北等)
-    failed_codes: dict[str, int] | None = None  # S: Failed.reason.code 別カウント
 
-    # 「このソースが何を提供しているか」 (PR1.5 で activate、PR1 では None)
+    # 件数集計 (常時 populate、デフォルト 0)
+    entry_count: int = 0
+    article_created_count: int = 0  # Pattern R 直接永続化数
+    completion_queued_count: int = 0  # Pattern H pending 投入数
+    skipped_count: int = 0  # known_url / race 敗北等
+    failed_count: int = 0  # エントリ単位 Failed 数
+
+    # 内訳 (sparse、None で省略)
+    completion_reason_codes: dict[str, int] | None = None  # 例 {"html_required": N}
+    skipped_codes: dict[str, int] | None = None  # 例 {"known_url": N}
+    failed_codes: dict[str, int] | None = None  # Failed.reason.code 別カウント
+
+    # 「このソースが何を提供しているか」 (PR1.5 で activate)
     metadata_fields_observed: list[str] | None = None  # A
     metadata_sample: dict[str, Any] | None = None  # A'
 
-    # 失敗時 S 級 snapshot (Task 例外パスで詰める、別 PR で error class 拡張時)
+    # 失敗時 S 級 snapshot (Task 例外パスで詰める)
     http_status: int | None = None
     final_url: str | None = None
     response_size: int | None = None
     content_type: str | None = None
     body_head: str | None = None  # 先頭 500 字
 
+    @model_validator(mode="after")
+    def _check_entry_count_invariant(self) -> SourceFetchPayload:
+        total = (
+            self.article_created_count
+            + self.completion_queued_count
+            + self.skipped_count
+            + self.failed_count
+        )
+        if self.entry_count != total:
+            raise ValueError(
+                f"entry_count={self.entry_count} != article_created+"
+                f"completion_queued+skipped+failed={total}"
+            )
+        return self
+
 
 class ContentFetchPayload(BasePipelineEventPayload):
-    """Stage 2 — 1 記事 1 HTML 取得。"""
+    """Stage 2 — 1 記事 1 HTML 取得。
+
+    ι.A: ``discovered_article_id`` → ``article_url_id`` rename。
+    PR2.5-B 以降の集計 key は ``article_urls.id`` (= pending → article への
+    identity bridge)。``articles.id`` は別途 ``article_id`` カラム
+    (pipeline_events) で関連付ける。
+    """
 
     kind: Literal["content_fetch"] = "content_fetch"
     # A: article 削除耐性 / PR2.5 の skip 判定 key
-    discovered_article_id: int | None = None
+    article_url_id: int | None = None
     extractor_class: str | None = None  # A
     # S: drop 細分化 (permanent_fetch_error / extraction_empty_* / promotion_*)
     reason_code: str | None = None

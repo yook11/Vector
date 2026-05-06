@@ -30,7 +30,7 @@ from app.collection.errors import (
     PermanentFetchError,
     TemporaryFetchError,
 )
-from app.collection.ingestion.staged import IngestSourceArg, StagedArticle
+from app.collection.ingestion.staged import IngestSourceArg
 from app.models.fetch_log import FetchLog, FetchStatus
 from app.models.news_source import NewsSource
 from app.observability.domain.event import Stage
@@ -202,14 +202,12 @@ async def ingest_source(
         raise
 
     articles = outcome.persisted
-    staged_list = outcome.staged
-    persisted_count = len(articles)
-    staged_count = len(staged_list)
+    article_created_count = len(articles)
     await _record_fetch_log(
         session_factory,
         source_id,
         FetchStatus.SUCCESS,
-        persisted_count,
+        article_created_count,
         None,
         start_time,
     )
@@ -217,7 +215,7 @@ async def ingest_source(
     async with session_factory() as session:
         extraction_repo = ExtractionRepository(session)
         noise_repo = NoiseRepository(session)
-        pending: list = []
+        ready_list: list = []
         for article in articles:
             ready = await ReadyForExtraction.try_advance_from(
                 article_id=article.id,
@@ -227,20 +225,19 @@ async def ingest_source(
                 noise_repo=noise_repo,
             )
             if ready is not None:
-                pending.append(ready)
-    for ready in pending:
+                ready_list.append(ready)
+    for ready in ready_list:
         await extract_content.kiq(ready)
-    # Pattern H 経路: discovered のみ作成済の StagedArticle を 2 段目 task へ
-    for staged in staged_list:
-        await extract_html_body.kiq(staged)
+    # Pattern H 経路: PR2.5-B cutover で `pending_html_articles` の DB 駆動に移行。
+    # `dispatch_html_fetch_jobs` cron poller が `pending_id` を `extract_html_body`
+    # に投入するため、ここでの直接 kiq は撤去 (Block 3 で cron poller 新設予定)。
     payload = {
         "source_id": source_id,
         "source_name": arg.name,
         "status": "success",
-        "persisted_count": persisted_count,
-        "staged_count": staged_count,
+        "article_created_count": article_created_count,
     }
-    # failed_count / skipped_count は pipeline_events.payload で確認 (Outcome 純化)
+    # completion_queued / skipped / failed は pipeline_events.payload で確認
     logger.info("ingest_source_completed", **payload)
     return payload
 
@@ -253,31 +250,34 @@ async def ingest_source(
 @broker_content.task(
     task_name="extract_html_body",
     timeout=60,
-    max_retries=3,
-    retry_on_error=True,
+    max_retries=0,
+    retry_on_error=False,
 )
 async def extract_html_body(
-    staged: StagedArticle,
+    pending_id: int,
     ctx: Context = TaskiqDepends(),
 ) -> dict | None:
     """Pattern H 2 段目: HTML 取得 + 本文抽出 + Article 永続化を Service に委譲。
 
-    task の責務は **taskiq retry policy** + **Outcome dispatch** のみ:
+    PR2.5-B cutover で taskiq retry を完全に殺し、cron poller
+    (``dispatch_html_fetch_jobs``) のみで再投入する設計。task の責務は
+    Outcome dispatch のみ:
 
-    - ``ContentFetchService.execute`` を呼び、結果に応じて分岐
-    - ``TemporaryFetchError`` は raise で taskiq retry に乗せる
-      (``max_retries=3`` 予算内)。最終試行 (``is_last_attempt``) は
-      ``svc.audit_exhausted`` を呼んで drop
+    - ``ContentFetchService.execute(pending_id)`` を呼び、結果に応じて分岐
     - ``ContentFetched`` 時のみ ``ReadyForExtraction`` を構築し
       ``extract_content.kiq`` に流す
-    - ``TerminallyDropped`` / ``TransientlyDropped`` は何もしない
-      (audit は Service 内で焼き付け済)
+    - ``ConflictLost`` / ``TerminallyDropped`` / ``TransientlyDropped`` /
+      ``None`` (重複配送 / lease 衝突) は何もしない (DB 状態 + audit は
+      Service 内で完結済)
+    - ``TemporaryFetchError`` は Service 内で ``TransientlyDropped`` に変換
+      されるため task では catch しない
     """
     from app.analysis.extraction.domain.ready import ReadyForExtraction
     from app.analysis.extraction.noise_repository import NoiseRepository
     from app.analysis.extraction.repository import ExtractionRepository
     from app.analysis.tasks import extract_content
     from app.collection.extraction.content_fetch_service import (
+        ConflictLost,
         ContentFetched,
         ContentFetchService,
         TerminallyDropped,
@@ -285,20 +285,8 @@ async def extract_html_body(
     )
 
     session_factory = ctx.state.session_factory
-    attempt = int(ctx.message.labels.get("retry_count", 0)) + 1
     svc = ContentFetchService(session_factory)
-
-    try:
-        outcome = await svc.execute(staged, attempt=attempt)
-    except TemporaryFetchError as e:
-        if is_last_attempt(ctx):
-            await svc.audit_exhausted(staged, attempt=attempt, exc=e)
-            logger.warning(
-                "extract_html_body_max_retries",
-                discovered_id=staged.discovered_id,
-            )
-            return None
-        raise
+    outcome = await svc.execute(pending_id)
 
     match outcome:
         case ContentFetched(article=article):
@@ -313,9 +301,9 @@ async def extract_html_body(
             if ready_for_extraction is not None:
                 await extract_content.kiq(ready_for_extraction)
             return {
-                "discovered_id": staged.discovered_id,
+                "pending_id": pending_id,
                 "article_id": article.id,
                 "status": "success",
             }
-        case TerminallyDropped() | TransientlyDropped():
+        case ConflictLost() | TerminallyDropped() | TransientlyDropped() | None:
             return None

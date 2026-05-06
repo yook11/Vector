@@ -183,6 +183,7 @@ def _article(**overrides: object) -> Article:
     base: dict[str, object] = {
         "id": 1,
         "discovered_article_id": 10,
+        "article_url_id": None,
         "title": "Title",
         "body": _valid_body(),
         "published_at": None,
@@ -208,6 +209,24 @@ class TestArticleIdentity:
     def test_rejects_negative_discovered_article_id(self) -> None:
         with pytest.raises(ValueError, match="discovered_article_id must be positive"):
             _article(discovered_article_id=-5)
+
+    def test_rejects_both_identifiers_none(self) -> None:
+        # PR2.5-B: discovered_article_id / article_url_id の両方が NULL は不変条件違反
+        with pytest.raises(
+            ValueError,
+            match="must have either discovered_article_id or article_url_id",
+        ):
+            _article(discovered_article_id=None, article_url_id=None)
+
+    def test_rejects_zero_article_url_id(self) -> None:
+        with pytest.raises(ValueError, match="article_url_id must be positive"):
+            _article(discovered_article_id=None, article_url_id=0)
+
+    def test_accepts_article_url_id_only(self) -> None:
+        # PR2.5-B 新経路で作られた Entity は discovered_article_id=None でも有効
+        article = _article(discovered_article_id=None, article_url_id=42)
+        assert article.discovered_article_id is None
+        assert article.article_url_id == 42
 
 
 class TestArticleNonEmpty:
@@ -256,6 +275,43 @@ class TestArticleFromDraft:
         assert article.body == _valid_body()
         assert article.published_at == published
 
+    def test_legacy_path_leaves_article_url_id_none(self) -> None:
+        # 旧 from_draft は新規 article_url_id を埋めない (旧経路の互換性)
+        article = Article.from_draft(
+            _draft(),
+            id=1,
+            discovered_article_id=10,
+            created_at=datetime(2026, 4, 1, tzinfo=UTC),
+        )
+        assert article.article_url_id is None
+
+
+class TestArticleFromDraftViaArticleUrl:
+    def test_synthesizes_identity_via_article_url(self) -> None:
+        draft = _draft()
+        created = datetime(2026, 4, 1, 12, 0, 0, tzinfo=UTC)
+        article = Article.from_draft_via_article_url(
+            draft, id=42, article_url_id=200, created_at=created
+        )
+        assert article.id == 42
+        assert article.article_url_id == 200
+        # 新経路は discovered_article_id を NULL にする
+        assert article.discovered_article_id is None
+        assert article.created_at == created
+
+    def test_preserves_draft_payload(self) -> None:
+        published = PublishedAt(datetime(2026, 3, 1, tzinfo=UTC))
+        draft = _draft(title="Hello", body=_valid_body(), published_at=published)
+        article = Article.from_draft_via_article_url(
+            draft,
+            id=1,
+            article_url_id=99,
+            created_at=datetime(2026, 4, 1, tzinfo=UTC),
+        )
+        assert article.title == "Hello"
+        assert article.body == _valid_body()
+        assert article.published_at == published
+
 
 # ---------------------------------------------------------------------------
 # Round-trip: ExtractedContent → Draft → Entity
@@ -277,6 +333,23 @@ class TestExtractedContentToEntityRoundTrip:
             draft,
             id=7,
             discovered_article_id=70,
+            created_at=datetime(2026, 4, 2, tzinfo=UTC),
+        )
+        assert article.title == "Round Trip"
+        assert article.body == _valid_body()
+        assert article.published_at == published
+
+    def test_extracted_to_draft_via_article_url_preserves_payload(self) -> None:
+        # 新経路の round-trip も同等に成立する
+        published = PublishedAt(datetime(2026, 4, 1, tzinfo=UTC))
+        content = ExtractedContent(
+            title="Round Trip", body=_valid_body(), published_at=published
+        )
+        draft = ArticleDraft.from_extracted(content)
+        article = Article.from_draft_via_article_url(
+            draft,
+            id=7,
+            article_url_id=70,
             created_at=datetime(2026, 4, 2, tzinfo=UTC),
         )
         assert article.title == "Round Trip"

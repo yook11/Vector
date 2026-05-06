@@ -1,13 +1,17 @@
-"""``IngestionService`` の永続化責務テスト。
+"""``IngestionService`` の振り分け責務テスト (PR2.5-B 仕様)。
+
+PR2.5-B cutover で ``discovered_articles`` 経路は撤去され、新 3 表
+(``article_urls`` / ``articles`` / ``pending_html_articles``) を直接駆動する。
 
 検証する不変条件:
 
-- Pattern R (`ReadyForArticle`) は ``discovered_articles`` + ``articles`` を 1 件ずつ
-  永続化する
-- Pattern H (`PendingHtmlFetch`) は ``discovered_articles`` のみ作成し、Stage 2
-  への引き渡し用に ``StagedArticle`` を返す
+- Pattern R (``ReadyForArticle``): ``article_urls`` upsert + ``articles`` 直 INSERT、
+  ``IngestedOutcome.persisted`` に Entity が積まれる
+- Pattern H (``PendingHtmlFetch``): ``article_urls`` upsert + ``pending_html_articles``
+  作成、Outcome は純化されているため caller には何も渡らない (cron poller が DB 駆動)
 - ``Failed`` は永続化に流れない (silent skip しない、payload で観測する)
-- 同 URL の重複 yield は DB に 1 件だけ落ちる (race recovery)
+- 同 URL の重複 yield は ``article_urls`` UNIQUE で 1 件に絞られる
+- 既知 URL (``ON CONFLICT DO NOTHING`` で id 取れない) は ``known_url`` skip
 - 混在 (R + H + Failed) でも各経路が独立して正しく分岐する
 """
 
@@ -35,8 +39,9 @@ from app.collection.ingestion.ingestion_service import (
     IngestionService,
 )
 from app.models.article import Article as ArticleORM
-from app.models.discovered_article import DiscoveredArticle as DiscoveredArticleORM
+from app.models.article_url import ArticleUrl as ArticleUrlORM
 from app.models.news_source import NewsSource, SourceType
+from app.models.pending_html_article import PendingHtmlArticle as PendingHtmlArticleORM
 from app.shared.value_objects.safe_url import SafeUrl
 
 
@@ -92,11 +97,12 @@ async def vb_source(db_session: AsyncSession) -> NewsSource:
 
 
 @pytest.mark.asyncio
-async def test_pattern_r_persists_discovered_and_article(
+async def test_pattern_r_inserts_article_url_and_article(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     vb_source: NewsSource,
 ) -> None:
+    """Pattern R は article_urls + articles を 1 件ずつ作る。"""
     svc = IngestionService(
         session_factory,
         lambda: _StubFetcher(
@@ -108,20 +114,25 @@ async def test_pattern_r_persists_discovered_and_article(
 
     assert isinstance(outcome, IngestedOutcome)
     assert len(outcome.persisted) == 1
-    discovered = (
-        (await db_session.execute(select(DiscoveredArticleORM))).scalars().all()
-    )
+    assert outcome.persisted[0].article_url_id is not None
+
+    urls = (await db_session.execute(select(ArticleUrlORM))).scalars().all()
     articles = (await db_session.execute(select(ArticleORM))).scalars().all()
-    assert len(discovered) == 1
+    pendings = (await db_session.execute(select(PendingHtmlArticleORM))).scalars().all()
+    assert len(urls) == 1
     assert len(articles) == 1
+    assert articles[0].article_url_id == urls[0].id
+    assert articles[0].discovered_article_id is None
+    assert pendings == []
 
 
 @pytest.mark.asyncio
-async def test_pattern_h_creates_discovered_and_stages_for_stage_two(
+async def test_pattern_h_inserts_article_url_and_pending(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     vb_source: NewsSource,
 ) -> None:
+    """Pattern H は article_urls + pending_html_articles を作り Outcome に積まない。"""
     svc = IngestionService(
         session_factory,
         lambda: _StubFetcher(
@@ -131,14 +142,17 @@ async def test_pattern_h_creates_discovered_and_stages_for_stage_two(
 
     outcome = await svc.execute(vb_source.id)
 
-    assert len(outcome.persisted) == 0
-    assert len(outcome.staged) == 1
-    discovered = (
-        (await db_session.execute(select(DiscoveredArticleORM))).scalars().all()
-    )
+    assert outcome.persisted == []  # Pattern H は cron poller 駆動、Outcome に乗らない
+
+    urls = (await db_session.execute(select(ArticleUrlORM))).scalars().all()
     articles = (await db_session.execute(select(ArticleORM))).scalars().all()
-    assert len(discovered) == 1
-    assert len(articles) == 0
+    pendings = (await db_session.execute(select(PendingHtmlArticleORM))).scalars().all()
+    assert len(urls) == 1
+    assert articles == []
+    assert len(pendings) == 1
+    assert pendings[0].article_url_id == urls[0].id
+    assert pendings[0].status == "open"
+    assert pendings[0].attempt_count == 0
 
 
 @pytest.mark.asyncio
@@ -147,14 +161,19 @@ async def test_failed_does_not_persist(
     db_session: AsyncSession,
     vb_source: NewsSource,
 ) -> None:
+    """Failed は永続化に流れず、payload (failed_codes) に集計されるのみ。"""
     failed = Failed(reason=FailureReason(code="body_too_short", retryable=False))
     svc = IngestionService(session_factory, lambda: _StubFetcher([failed]))
 
     outcome = await svc.execute(vb_source.id)
 
-    assert outcome.persisted == [] and outcome.staged == []
-    rows = (await db_session.execute(select(DiscoveredArticleORM))).scalars().all()
-    assert rows == []
+    assert outcome.persisted == []
+    urls = (await db_session.execute(select(ArticleUrlORM))).scalars().all()
+    articles = (await db_session.execute(select(ArticleORM))).scalars().all()
+    pendings = (await db_session.execute(select(PendingHtmlArticleORM))).scalars().all()
+    assert urls == []
+    assert articles == []
+    assert pendings == []
 
 
 @pytest.mark.asyncio
@@ -163,18 +182,39 @@ async def test_duplicate_url_yielded_twice_persists_once(
     db_session: AsyncSession,
     vb_source: NewsSource,
 ) -> None:
+    """同 URL の重複 yield は article_urls UNIQUE で 1 件に絞られ、
+    2 度目は known_url skip となる (article_url_id が None)。"""
     e1 = _ready_entry(vb_source.id, "https://venturebeat.com/dup/")
     e2 = _ready_entry(vb_source.id, "https://venturebeat.com/dup/")
     svc = IngestionService(session_factory, lambda: _StubFetcher([e1, e2]))
 
-    await svc.execute(vb_source.id)
+    outcome = await svc.execute(vb_source.id)
 
-    discovered = (
-        (await db_session.execute(select(DiscoveredArticleORM))).scalars().all()
-    )
+    assert len(outcome.persisted) == 1
+    urls = (await db_session.execute(select(ArticleUrlORM))).scalars().all()
     articles = (await db_session.execute(select(ArticleORM))).scalars().all()
-    assert len(discovered) == 1
+    assert len(urls) == 1
     assert len(articles) == 1
+
+
+@pytest.mark.asyncio
+async def test_canonicalization_dedupes_tracking_query(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    vb_source: NewsSource,
+) -> None:
+    """canonicalize_url が tracking parameter / trailing slash を吸収するため、
+    異なる原始 URL でも normalized が同じなら 2 度目は known_url skip。"""
+    e1 = _ready_entry(vb_source.id, "https://venturebeat.com/a")
+    e2 = _ready_entry(vb_source.id, "https://venturebeat.com/a/?utm_source=twitter")
+    svc = IngestionService(session_factory, lambda: _StubFetcher([e1, e2]))
+
+    outcome = await svc.execute(vb_source.id)
+
+    # 2 件目は normalized URL が同じになり ON CONFLICT DO NOTHING で id 取れず skip
+    assert len(outcome.persisted) == 1
+    urls = (await db_session.execute(select(ArticleUrlORM))).scalars().all()
+    assert len(urls) == 1
 
 
 @pytest.mark.asyncio
@@ -183,6 +223,7 @@ async def test_mixed_ready_pending_failed_route_independently(
     db_session: AsyncSession,
     vb_source: NewsSource,
 ) -> None:
+    """混在 (R + H + Failed) でも各経路が独立して正しく分岐する。"""
     svc = IngestionService(
         session_factory,
         lambda: _StubFetcher(
@@ -197,10 +238,9 @@ async def test_mixed_ready_pending_failed_route_independently(
     outcome = await svc.execute(vb_source.id)
 
     assert len(outcome.persisted) == 1
-    assert len(outcome.staged) == 1
-    discovered = (
-        (await db_session.execute(select(DiscoveredArticleORM))).scalars().all()
-    )
+    urls = (await db_session.execute(select(ArticleUrlORM))).scalars().all()
     articles = (await db_session.execute(select(ArticleORM))).scalars().all()
-    assert len(discovered) == 2  # R + H
+    pendings = (await db_session.execute(select(PendingHtmlArticleORM))).scalars().all()
+    assert len(urls) == 2  # R + H
     assert len(articles) == 1  # R only
+    assert len(pendings) == 1  # H only

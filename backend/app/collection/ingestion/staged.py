@@ -7,22 +7,21 @@ serializer が ``PydanticSerializationError`` で死ぬ。
 - ``IngestSourceArg``: ``dispatch_sources`` → ``ingest_source`` 間 envelope。
   ``id`` (FK 用) と ``name`` (FETCHERS dispatch 用) を運び、Fetcher 側で
   ``NewsSource`` ORM を再 lookup する必要を消す。
-- ``StagedArticle``: ``ingest_source`` → ``extract_html_body`` 間 envelope。
-  Pattern H 1 段目で yield された ``PendingHtmlFetch`` を
-  ``discovered_articles`` 行 ID と束ねて 2 段目 task に渡す。
+
+PR2.5-B cutover で ``StagedArticle`` 経路は撤去された。Pattern H は
+``pending_html_articles`` テーブル + cron poller (``dispatch_html_fetch_jobs``)
+の DB 駆動に切り替わり、kiq envelope は不要になっている。
 """
 
 from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict
 
-from app.collection.ingestion.domain.fetched_article import PendingHtmlFetch
-
 
 class IngestSourceArg(BaseModel):
     """``ingest_source`` task の kiq 引数 envelope。
 
-    ``id``: ``news_sources.id`` (Article / DiscoveredArticle の FK で使う)。
+    ``id``: ``news_sources.id`` (Article の FK で使う)。
     ``name``: ``news_sources.name`` (StrEnum 値)。``FETCHERS`` dispatch dict
     の lookup キー。
 
@@ -36,19 +35,3 @@ class IngestSourceArg(BaseModel):
 
     id: int
     name: str
-
-
-class StagedArticle(BaseModel):
-    """``ingest_source`` → ``extract_html_body`` 間の Pydantic envelope。
-
-    ``discovered_id``: ``ingest_source`` が作成した ``discovered_articles``
-    行の ID。2 段目 task が ``articles.discovered_article_id`` の FK として
-    使う (NOT NULL 制約を満たすため、新ルートでも discovered 行は必須)。
-
-    ``pending``: RSS から救出された情報 (URL/title/published_at_hint/metadata)。
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    discovered_id: int
-    pending: PendingHtmlFetch

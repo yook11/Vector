@@ -1,35 +1,35 @@
-"""``extract_html_body`` task の振る舞い不変条件テスト。
+"""``extract_html_body`` task の振る舞い不変条件テスト (PR2.5-B 仕様)。
 
-PR2 で task は ``ContentFetchService`` への薄ラッパーになり、内部の
-HTTP 取得 / 抽出 / promotion / 永続化は Service に委譲される。本テストは
-**task 入口での end-to-end 振る舞い** (retry policy + merge / 永続化結果 +
-extract_content chain) を ``ArticleHtmlExtractor.fetch`` mock で検証する。
+PR2.5-B cutover で task は ``ContentFetchService`` への薄ラッパーになった:
 
-Service 単体のテスト (Outcome variant / payload 観測) は
+- 入力: ``pending_id: int`` (cron poller ``dispatch_html_fetch_jobs`` から投入)
+- ``max_retries=0 + retry_on_error=False`` で taskiq retry を完全に殺す
+- 戻り値 Outcome dispatch のみ:
+  - ``ContentFetched`` → ``extract_content.kiq`` を発火 + dict 返却
+  - ``ConflictLost`` / ``TerminallyDropped`` / ``TransientlyDropped`` / ``None`` →
+    何もしない (audit / DB 状態は Service 内で完結)
+
+Service 単体の振る舞い (Outcome variant / payload 観測 / DB 状態遷移) は
 ``tests/collection/extraction/test_content_fetch_service.py`` を参照。
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
-from app.collection.errors import PermanentFetchError, TemporaryFetchError
+from app.collection.errors import PermanentFetchError, ServerErrorBlip
 from app.collection.extraction.domain.value_objects import PublishedAt
 from app.collection.extraction.extractor import ExtractedContent, ExtractionEmpty
-from app.collection.ingestion.domain import (
-    ArticleCandidate,
-    DiscoveredArticleDraft,
+from app.collection.ingestion.pending_repository import (
+    PendingHtmlArticleRepository,
 )
-from app.collection.ingestion.domain.fetched_article import (
-    PendingHtmlFetch,
-)
-from app.collection.ingestion.repository import DiscoveredArticleRepository
-from app.collection.ingestion.staged import StagedArticle
+from app.collection.ingestion.staged_attributes import StagedArticleAttributes
+from app.collection.ingestion.url_repository import ArticleUrlRepository
 from app.collection.tasks import extract_html_body
 from app.models.article import Article as ArticleORM
 from app.models.news_source import NewsSource, SourceType
@@ -51,278 +51,164 @@ async def tc_source(db_session: AsyncSession) -> NewsSource:
     return source
 
 
-@pytest.fixture
-async def staged_article(
-    db_session: AsyncSession, tc_source: NewsSource
-) -> StagedArticle:
-    """discovered 行を 1 件先に作って StagedArticle を組む。"""
-    repo = DiscoveredArticleRepository(db_session)
-    candidate = ArticleCandidate(
-        url=SafeUrl("https://techcrunch.com/article-1/"), title="TC Title"
+async def _make_pending_running(
+    db_session: AsyncSession, source: NewsSource, url: str
+) -> int:
+    """``pending_html_articles`` 1 件を作って claim 状態にする。"""
+    url_repo = ArticleUrlRepository(db_session)
+    article_url_id = await url_repo.upsert_returning(
+        normalized_url=SafeUrl(url),
+        original_url=SafeUrl(url),
+        first_seen_source_id=source.id,
     )
-    draft = DiscoveredArticleDraft.from_candidate(
-        candidate, news_source_id=tc_source.id
-    )
-    [discovered] = await repo.save_many([draft])
-    await db_session.commit()
-
-    pending = PendingHtmlFetch(
-        title="TC Title",
-        source_id=tc_source.id,
-        source_url=SafeUrl("https://techcrunch.com/article-1/"),
-        published_at_hint=PublishedAt(
-            value=datetime(2026, 4, 30, 12, 0, 0, tzinfo=UTC)
+    assert article_url_id is not None
+    pending_repo = PendingHtmlArticleRepository(db_session)
+    pending_id = await pending_repo.create(
+        article_url_id=article_url_id,
+        source_id=source.id,
+        staged_attributes=StagedArticleAttributes(
+            title="TC Title",
+            published_at_hint=PublishedAt(datetime(2026, 4, 30, tzinfo=UTC)),
+            prefer_html_title=False,
         ),
+        ready_at=datetime.now(UTC) - timedelta(seconds=1),
     )
-    return StagedArticle(discovered_id=discovered.id, pending=pending)
+    assert pending_id is not None
+    await db_session.commit()
+    await pending_repo.claim_batch(limit=10, lease_minutes=5)
+    await db_session.commit()
+    return pending_id
 
 
-def _ctx(
-    session_factory: async_sessionmaker[AsyncSession], retry_count: int = 0
-) -> MagicMock:
-    """taskiq Context の最小 mock。``retry_count`` は last_attempt 検査用。"""
+def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> MagicMock:
+    """taskiq Context の最小 mock。task は session_factory のみ参照する。"""
     ctx = MagicMock()
     ctx.state.session_factory = session_factory
-    # is_last_attempt(ctx) は内部で labels 経由で retry_count を見る。
-    # 詳細は実装次第なので「retry_count に意味のある値が入っている mock」
-    # として最低限提供する。
-    ctx.message = MagicMock()
-    ctx.message.labels = {"retry_on_error": "True", "max_retries": "3"}
-    ctx.kwargs = {}
-    ctx.task_name = "extract_html_body"
-    ctx.retry_count = retry_count
     return ctx
 
 
 @pytest.mark.asyncio
-async def test_permanent_error_drops_without_retry(
-    session_factory: async_sessionmaker[AsyncSession],
-    staged_article: StagedArticle,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """PermanentFetchError は catch して drop, retry しない。"""
-    fetch_mock = AsyncMock(side_effect=PermanentFetchError("HTTP 404"))
-    monkeypatch.setattr(
-        "app.collection.extraction.extractor.ArticleHtmlExtractor.fetch", fetch_mock
-    )
-
-    result = await extract_html_body(staged_article, ctx=_ctx(session_factory))
-
-    assert result is None
-    fetch_mock.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_temporary_error_raises_to_taskiq(
-    session_factory: async_sessionmaker[AsyncSession],
-    staged_article: StagedArticle,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """TemporaryFetchError は raise (taskiq retry 委譲)。last_attempt=False。"""
-    fetch_mock = AsyncMock(side_effect=TemporaryFetchError("HTTP 503"))
-    monkeypatch.setattr(
-        "app.collection.extraction.extractor.ArticleHtmlExtractor.fetch", fetch_mock
-    )
-    # is_last_attempt を強制 False
-    monkeypatch.setattr("app.collection.tasks.is_last_attempt", lambda _ctx: False)
-
-    with pytest.raises(TemporaryFetchError):
-        await extract_html_body(staged_article, ctx=_ctx(session_factory))
-
-
-@pytest.mark.asyncio
-async def test_temporary_error_drops_on_last_attempt(
-    session_factory: async_sessionmaker[AsyncSession],
-    staged_article: StagedArticle,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """is_last_attempt=True の TemporaryFetchError は drop (再 raise しない)。"""
-    fetch_mock = AsyncMock(side_effect=TemporaryFetchError("HTTP 503"))
-    monkeypatch.setattr(
-        "app.collection.extraction.extractor.ArticleHtmlExtractor.fetch", fetch_mock
-    )
-    monkeypatch.setattr("app.collection.tasks.is_last_attempt", lambda _ctx: True)
-
-    result = await extract_html_body(staged_article, ctx=_ctx(session_factory))
-
-    assert result is None
-
-
-@pytest.mark.asyncio
-async def test_extraction_empty_drops_without_retry(
-    session_factory: async_sessionmaker[AsyncSession],
-    staged_article: StagedArticle,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """ExtractionEmpty (parse_error 等) は drop, retry しない。"""
-    fetch_mock = AsyncMock(return_value=ExtractionEmpty(reason="parse_error"))
-    monkeypatch.setattr(
-        "app.collection.extraction.extractor.ArticleHtmlExtractor.fetch", fetch_mock
-    )
-
-    result = await extract_html_body(staged_article, ctx=_ctx(session_factory))
-
-    assert result is None
-
-
-@pytest.mark.asyncio
-async def test_success_persists_article_and_chains_extract_content(
+async def test_success_chains_extract_content(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
-    staged_article: StagedArticle,
+    tc_source: NewsSource,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """HTML 抽出成功 → Article 永続化 + extract_content.kiq 発火。"""
-    extracted = ExtractedContent(
-        title="HTML Title (ignored, RSS preferred)",
-        body="x" * 200,
-        published_at=PublishedAt(value=datetime(2026, 5, 1, 12, 0, 0, tzinfo=UTC)),
+    """成功時 ``extract_content.kiq`` が発火し dict が返る。"""
+    pending_id = await _make_pending_running(
+        db_session, tc_source, "https://techcrunch.com/ok/"
     )
-    fetch_mock = AsyncMock(return_value=extracted)
     monkeypatch.setattr(
-        "app.collection.extraction.extractor.ArticleHtmlExtractor.fetch", fetch_mock
+        "app.collection.extraction.content_fetch_service.ArticleHtmlExtractor.fetch",
+        AsyncMock(
+            return_value=ExtractedContent(
+                title="HTML Title",
+                body="x" * 200,
+                published_at=PublishedAt(datetime(2026, 5, 1, tzinfo=UTC)),
+            )
+        ),
     )
-
     extract_content_kiq = AsyncMock()
     monkeypatch.setattr("app.analysis.tasks.extract_content.kiq", extract_content_kiq)
 
-    result = await extract_html_body(staged_article, ctx=_ctx(session_factory))
+    result = await extract_html_body(pending_id, ctx=_ctx(session_factory))
 
     assert result is not None
     assert result["status"] == "success"
-    assert result["discovered_id"] == staged_article.discovered_id
-
-    # Article 行が作成されている
+    assert result["pending_id"] == pending_id
+    extract_content_kiq.assert_awaited_once()
     articles = (await db_session.execute(select(ArticleORM))).scalars().all()
     assert len(articles) == 1
-    assert articles[0].original_title == "TC Title"  # RSS title 採用
-    # 公開日時は RSS hint (2026-04-30) が HTML (2026-05-01) より優先される
-    assert articles[0].published_at is not None
-    assert articles[0].published_at.day == 30
-
-    # extract_content.kiq が発火された
-    extract_content_kiq.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_html_published_at_used_when_rss_hint_missing(
+async def test_permanent_error_returns_none_and_skips_chain(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     tc_source: NewsSource,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """RSS hint が None のとき HTML 由来 published_at が採用される。"""
-    repo = DiscoveredArticleRepository(db_session)
-    candidate = ArticleCandidate(
-        url=SafeUrl("https://techcrunch.com/no-rss-pub/"), title="No PubDate"
+    """PermanentFetchError → None 返却、``extract_content.kiq`` は呼ばれない。"""
+    pending_id = await _make_pending_running(
+        db_session, tc_source, "https://techcrunch.com/dead/"
     )
-    draft = DiscoveredArticleDraft.from_candidate(
-        candidate, news_source_id=tc_source.id
-    )
-    [discovered] = await repo.save_many([draft])
-    await db_session.commit()
-
-    pending = PendingHtmlFetch(
-        title="No PubDate",
-        source_id=tc_source.id,
-        source_url=SafeUrl("https://techcrunch.com/no-rss-pub/"),
-        published_at_hint=None,  # RSS pubDate 欠落
-    )
-    staged = StagedArticle(discovered_id=discovered.id, pending=pending)
-
-    extracted = ExtractedContent(
-        title="HTML Title",
-        body="y" * 200,
-        published_at=PublishedAt(value=datetime(2026, 5, 1, 8, 30, 0, tzinfo=UTC)),
-    )
-    monkeypatch.setattr(
-        "app.collection.extraction.extractor.ArticleHtmlExtractor.fetch",
-        AsyncMock(return_value=extracted),
-    )
-    monkeypatch.setattr("app.analysis.tasks.extract_content.kiq", AsyncMock())
-
-    result = await extract_html_body(staged, ctx=_ctx(session_factory))
-
-    assert result is not None
-    articles = (await db_session.execute(select(ArticleORM))).scalars().all()
-    assert len(articles) == 1
-    assert articles[0].published_at is not None
-    assert articles[0].published_at.day == 1  # HTML 由来
-    assert articles[0].published_at.hour == 8
-
-
-@pytest.mark.asyncio
-async def test_temporary_error_on_last_attempt_writes_transient_audit(
-    session_factory: async_sessionmaker[AsyncSession],
-    db_session: AsyncSession,
-    staged_article: StagedArticle,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """is_last_attempt=True の TemporaryFetchError は ``audit_exhausted`` 経由で
-    ``dropped_transient`` 行を焼いてから drop する (taskiq budget 使切の記録)。
-    """
-    from app.models.pipeline_event import PipelineEvent
-
     monkeypatch.setattr(
         "app.collection.extraction.content_fetch_service.ArticleHtmlExtractor.fetch",
-        AsyncMock(side_effect=TemporaryFetchError("HTTP 503")),
-    )
-    monkeypatch.setattr("app.collection.tasks.is_last_attempt", lambda _ctx: True)
-
-    result = await extract_html_body(staged_article, ctx=_ctx(session_factory))
-
-    assert result is None
-    event = (
-        await db_session.execute(
-            select(PipelineEvent).where(PipelineEvent.stage == "content_fetch")
-        )
-    ).scalar_one()
-    assert event.event_type == "failed"
-    assert event.outcome_code == "dropped_transient"
-
-
-@pytest.mark.asyncio
-async def test_both_published_at_missing_drops_as_failed(
-    session_factory: async_sessionmaker[AsyncSession],
-    db_session: AsyncSession,
-    tc_source: NewsSource,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """RSS hint と HTML 両方 published_at が None なら drop (Failed 降格)。"""
-    repo = DiscoveredArticleRepository(db_session)
-    candidate = ArticleCandidate(
-        url=SafeUrl("https://techcrunch.com/both-missing/"), title="Both Missing"
-    )
-    draft = DiscoveredArticleDraft.from_candidate(
-        candidate, news_source_id=tc_source.id
-    )
-    [discovered] = await repo.save_many([draft])
-    await db_session.commit()
-
-    pending = PendingHtmlFetch(
-        title="Both Missing",
-        source_id=tc_source.id,
-        source_url=SafeUrl("https://techcrunch.com/both-missing/"),
-        published_at_hint=None,
-    )
-    staged = StagedArticle(discovered_id=discovered.id, pending=pending)
-
-    extracted = ExtractedContent(
-        title="HTML Title",
-        body="z" * 200,
-        published_at=None,  # HTML も published_at なし
-    )
-    monkeypatch.setattr(
-        "app.collection.extraction.extractor.ArticleHtmlExtractor.fetch",
-        AsyncMock(return_value=extracted),
+        AsyncMock(side_effect=PermanentFetchError("HTTP 404")),
     )
     extract_content_kiq = AsyncMock()
     monkeypatch.setattr("app.analysis.tasks.extract_content.kiq", extract_content_kiq)
 
-    result = await extract_html_body(staged, ctx=_ctx(session_factory))
+    result = await extract_html_body(pending_id, ctx=_ctx(session_factory))
 
     assert result is None
-    # Article は永続化されない
-    articles = (await db_session.execute(select(ArticleORM))).scalars().all()
-    assert len(articles) == 0
+    extract_content_kiq.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_temporary_error_returns_none_without_raising(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    tc_source: NewsSource,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TemporaryFetchError は Service 内で吸収され、task は raise せず None を返す."""
+    pending_id = await _make_pending_running(
+        db_session, tc_source, "https://techcrunch.com/blip/"
+    )
+    monkeypatch.setattr(
+        "app.collection.extraction.content_fetch_service.ArticleHtmlExtractor.fetch",
+        AsyncMock(side_effect=ServerErrorBlip("HTTP 502")),
+    )
+    extract_content_kiq = AsyncMock()
+    monkeypatch.setattr("app.analysis.tasks.extract_content.kiq", extract_content_kiq)
+
+    result = await extract_html_body(pending_id, ctx=_ctx(session_factory))
+
+    assert result is None
+    extract_content_kiq.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_extraction_empty_returns_none_and_skips_chain(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    tc_source: NewsSource,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ExtractionEmpty → None 返却、``extract_content.kiq`` は呼ばれない。"""
+    pending_id = await _make_pending_running(
+        db_session, tc_source, "https://techcrunch.com/empty/"
+    )
+    monkeypatch.setattr(
+        "app.collection.extraction.content_fetch_service.ArticleHtmlExtractor.fetch",
+        AsyncMock(return_value=ExtractionEmpty(reason="parse_error")),
+    )
+    extract_content_kiq = AsyncMock()
+    monkeypatch.setattr("app.analysis.tasks.extract_content.kiq", extract_content_kiq)
+
+    result = await extract_html_body(pending_id, ctx=_ctx(session_factory))
+
+    assert result is None
+    extract_content_kiq.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_missing_pending_returns_none(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """重複配送 (DELETE 済 ID) は None で静かに exit。``fetch`` も呼ばれない。"""
+    fetch_mock = AsyncMock()
+    monkeypatch.setattr(
+        "app.collection.extraction.content_fetch_service.ArticleHtmlExtractor.fetch",
+        fetch_mock,
+    )
+    extract_content_kiq = AsyncMock()
+    monkeypatch.setattr("app.analysis.tasks.extract_content.kiq", extract_content_kiq)
+
+    result = await extract_html_body(999_999, ctx=_ctx(session_factory))
+
+    assert result is None
+    fetch_mock.assert_not_awaited()
     extract_content_kiq.assert_not_awaited()

@@ -8,7 +8,6 @@ from app.models.article import Article
 from app.models.article_analysis import ArticleAnalysis
 from app.models.article_extraction import ArticleExtraction
 from app.models.category import Category
-from app.models.discovered_article import DiscoveredArticle
 from app.schemas.articles import ArticleListParams, SortOrder
 
 
@@ -19,9 +18,10 @@ def article_eager_options_brief() -> list:
         .contains_eager(ArticleExtraction.article)
         .options(
             defer(Article.original_content, raiseload=True),
-            selectinload(Article.discovered_article).selectinload(
-                DiscoveredArticle.news_source
-            ),
+            # PR2.5-B: news_source は articles.source_id FK 経由の直 relationship。
+            # 旧経路 (discovered_article 経由) は新規記事で NULL になるため
+            # eager load 対象から外し、source_id 直結に統一する。
+            selectinload(Article.news_source),
         ),
     ]
 
@@ -33,9 +33,7 @@ def article_eager_options_detail() -> list:
         .contains_eager(ArticleExtraction.article)
         .options(
             defer(Article.original_content, raiseload=True),
-            selectinload(Article.discovered_article).selectinload(
-                DiscoveredArticle.news_source
-            ),
+            selectinload(Article.news_source),
         ),
     ]
 

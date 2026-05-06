@@ -104,18 +104,29 @@ class ArticleDraft(BaseModel):
 class Article:
     """システムに記録された記事 Entity。
 
-    identity (``id``) と境界跨ぎ識別子 (``discovered_article_id``) を持ち、
-    analysis 以降の Stage が ``id`` を入力に処理を継続する。
+    identity (``id``) と境界跨ぎ識別子を持ち、analysis 以降の Stage が
+    ``id`` を入力に処理を継続する。
+
+    境界跨ぎ識別子は PR2.5 移行期間中に並走する 2 系統:
+
+    - ``discovered_article_id``: 旧経路 (PR2.5-A 以前)。新規 INSERT では
+      NULL になり、旧 articles 行のみ値を保持。PR2.5-C で列削除予定。
+    - ``article_url_id``: 新経路 (PR2.5-A 以降)。PR2.5-A backfill で旧 row も
+      埋まり、新規 INSERT は必ずこれを持つ。PR2.5-C で NOT NULL 昇格予定。
 
     Invariants:
-    - ``id`` / ``discovered_article_id`` は正の整数 (DB 採番)
+    - ``id`` は正の整数 (DB 採番)
+    - 少なくとも ``discovered_article_id`` か ``article_url_id`` のいずれかは
+      正の整数 (両方 NULL は invalid; PR2.5-A backfill で全 row が
+      ``article_url_id`` を持つ)
     - ``title`` / ``body`` は非空 (DB CHECK 制約・品質ゲートと一致)
     - ``published_at`` は任意 (取得不能を許容)
     - ``created_at`` は ``server_default=func.now()`` で DB が採番した時刻
     """
 
     id: int
-    discovered_article_id: int
+    discovered_article_id: int | None
+    article_url_id: int | None
     title: str
     body: str
     published_at: PublishedAt | None
@@ -124,8 +135,14 @@ class Article:
     def __post_init__(self) -> None:
         if self.id <= 0:
             raise ValueError("Article.id must be positive")
-        if self.discovered_article_id <= 0:
+        if self.discovered_article_id is None and self.article_url_id is None:
+            raise ValueError(
+                "Article must have either discovered_article_id or article_url_id"
+            )
+        if self.discovered_article_id is not None and self.discovered_article_id <= 0:
             raise ValueError("Article.discovered_article_id must be positive")
+        if self.article_url_id is not None and self.article_url_id <= 0:
+            raise ValueError("Article.article_url_id must be positive")
         if not self.title:
             raise ValueError("Article.title must be non-empty")
         if not self.body:
@@ -140,14 +157,41 @@ class Article:
         discovered_article_id: int,
         created_at: datetime,
     ) -> Self:
-        """Draft に DB 採番 identity を合成して Entity を組み立てる。
+        """旧経路: ``discovered_article_id`` から Entity を組み立てる。
 
-        Repository.save が成功した後、Service が呼び出して Outcome に詰める
-        ためのドメインファクトリ。ビジネスロジック変換はせず identity 合成のみ。
+        PR2.5-B の cutover 完了で旧経路の caller (旧 ``IngestionService`` /
+        旧 ``ContentFetchService``) が消えるため deprecated。新経路は
+        ``from_draft_via_article_url`` を使う。
         """
         return cls(
             id=id,
             discovered_article_id=discovered_article_id,
+            article_url_id=None,
+            title=draft.title,
+            body=draft.body,
+            published_at=draft.published_at,
+            created_at=created_at,
+        )
+
+    @classmethod
+    def from_draft_via_article_url(
+        cls,
+        draft: ArticleDraft,
+        *,
+        id: int,
+        article_url_id: int,
+        created_at: datetime,
+    ) -> Self:
+        """新経路: ``article_url_id`` から Entity を組み立てる (PR2.5-B 以降)。
+
+        Repository.save_via_article_url が成功した後、Service が呼び出して
+        Outcome に詰めるためのドメインファクトリ。``discovered_article_id``
+        は新規 INSERT では NULL なので Entity 上も NULL として扱う。
+        """
+        return cls(
+            id=id,
+            discovered_article_id=None,
+            article_url_id=article_url_id,
             title=draft.title,
             body=draft.body,
             published_at=draft.published_at,

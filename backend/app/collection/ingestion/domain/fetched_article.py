@@ -48,7 +48,9 @@ class FailureReason(BaseModel):
 class PendingHtmlFetch(BaseModel):
     """Pattern H 1 段目の中間 passport (Stage 2 で ``ReadyForArticle`` に昇格)。
 
-    ``StagedArticle`` (kiq message) に乗るため BaseModel(frozen=True) 必須
+    ``pending_html_articles.staged_attributes`` (JSONB) に焼かれて永続化され、
+    Stage 2 cron poller (``dispatch_html_fetch_jobs``) で再 hydrate される。
+    BaseModel(frozen=True) は taskiq 経由ではなく不変表明のため
     (memory `feedback_taskiq_basemodel_required.md`)。``prefer_html_title`` は
     sitemap 系ソース (RSS が title を持たない) のための opt-in flag。
     """
