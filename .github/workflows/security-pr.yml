@@ -1,12 +1,13 @@
 name: Security (PR gate)
 
-# Phase 1 PR 2: SCA + SAST を PR gate に追加 (dev feedback loop の早期化)。
+# Phase 1 PR 2 で導入、Phase 1 finding gate 化 PR で blocking に昇格 (本 file)。
 # - osv-scanner: backend/uv.lock + frontend/package-lock.json の OSV.dev 照合
 # - npm audit: frontend の npm Advisory DB 照合 (production deps のみ)
 # - Semgrep CE: backend/frontend ソースの SAST (p/owasp-top-ten + p/security-audit)
 #
-# 全 3 step は warn-only (`fail-on-vuln: false` / `|| true` / `--no-error`) で start。
-# 後続 PR で finding triage 後に gate 化する (Phase 0 Trivy と同じ段階的昇格パターン)。
+# 全 3 step は **blocking** mode (`fail-on-vuln: true` / 素の exit code / `--error`)。
+# main の finding が 0 になった時点 (PR #392 / #391 / #390 merged) で warn-only から
+# 昇格した。新規 finding は CI fail として PR を block する。
 #
 # 既存 security-nightly.yml (Trivy fs/config) は撤去せず並存。Trivy は OS+lib、
 # osv-scanner は lib only という非対称性 + failure isolation を理由に重複維持。
@@ -46,7 +47,7 @@ jobs:
         -r
         ./
       results-file-name: osv-results.sarif
-      fail-on-vuln: false  # warn-only (後続 PR で true に昇格)
+      fail-on-vuln: true   # blocking (Phase 1 finding gate 化で warn-only から昇格)
       upload-sarif: false  # Code scanning disabled (上記 NOTE 参照)、artifact のみ
 
   # ---- npm audit: 自前 job (third-party action 依存なし) ----
@@ -63,13 +64,15 @@ jobs:
 
       # `--omit=dev` で production deps のみ (dev tool advisory はノイズ多い)。
       # `--audit-level=high` で HIGH+CRITICAL に絞る (Trivy の severity と揃える)。
-      # `|| true` で warn-only。JSON 出力は logs と artifact に残し、triage で参照。
+      # blocking mode: HIGH+ finding 検出で `npm audit` が exit 1 → step fail。
+      # JSON 出力は logs と artifact に残し、triage で参照する用途は維持。
       - name: npm audit (production, HIGH+)
         working-directory: frontend
         run: |
-          npm audit --omit=dev --audit-level=high --json > npm-audit.json || true
+          set -o pipefail
+          npm audit --omit=dev --audit-level=high --json | tee npm-audit.json
           echo "---- summary ----"
-          jq '{ vulnerabilities: .metadata.vulnerabilities, total: .metadata.totalDependencies }' npm-audit.json || cat npm-audit.json
+          jq '{ vulnerabilities: .metadata.vulnerabilities, total: .metadata.totalDependencies }' npm-audit.json
 
       - name: Upload npm audit JSON artifact
         if: always()
@@ -100,15 +103,16 @@ jobs:
         run: pip install semgrep
 
       # focused ruleset 2 つ。`p/python` `p/javascript` のような generic ruleset は
-      # signal/noise 比が悪い (Vector 探索結果より)。warn-only で `|| true`、
-      # 後続 PR で finding triage 後に gate 化する。
-      - name: Run Semgrep (warn-only)
+      # signal/noise 比が悪い (Vector 探索結果より)。
+      # blocking mode: `semgrep ci` は finding 検出で exit 1 がデフォルト挙動。
+      # `|| true` を削除して step fail を CI fail に伝搬させる。
+      - name: Run Semgrep (blocking)
         run: |
           semgrep ci \
             --sarif --output=semgrep.sarif \
             --config=p/owasp-top-ten \
             --config=p/security-audit \
-            --metrics=off || true
+            --metrics=off
 
       # SARIF artifact として保存 (Code scanning disabled のため Security tab には
       # upload しない、osv-scanner job の NOTE 参照)。triage は Actions Artifacts から DL。

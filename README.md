@@ -202,14 +202,19 @@ uvx pre-commit install
 
 ### CI security gate
 
-PR / push に対し以下のセキュリティスキャンが GitHub Actions 上で自動実行される
-(`.github/workflows/security-pr.yml`、warn-only で start):
+PR / push に対し以下のセキュリティスキャンが GitHub Actions 上で **blocking gate** として自動実行される
+(`.github/workflows/security-pr.yml`):
 
-- **osv-scanner**: `backend/uv.lock` + `frontend/package-lock.json` を OSV.dev 脆弱性 DB と照合
+- **osv-scanner**: `backend/uv.lock` + `frontend/package-lock.json` を OSV.dev 脆弱性 DB と照合 (`fail-on-vuln: true`)
 - **npm audit**: frontend の production 依存を npm Advisory DB と照合 (`--audit-level=high`)
 - **Semgrep CE**: backend / frontend のソースを `p/owasp-top-ten` + `p/security-audit` ruleset で静的解析
 
-検出結果は GitHub Actions の Artifacts (`osv-results.sarif` / `semgrep-sarif` / `npm-audit-json`) として保存される。warn-only start のため finding 検出でも CI は fail しない。後続 PR で triage 後に gate 化する。
+新規 finding は CI fail として PR を block する。検出結果は GitHub Actions の Artifacts
+(`osv-results.sarif` / `semgrep-sarif` / `npm-audit-json`) として triage 用に保存される。
+回避策が複雑な finding は `# nosemgrep` (rule 単位) または dep update / 例外 PR で対応する。
+
+加えて nightly に `.github/workflows/security-nightly.yml` の Trivy fs/config scan が
+HIGH+CRITICAL を `exit-code: '1'` で blocking 実行する。
 
 > **Note**: Vector は private repo + GitHub Free のため Code scanning (GHAS) が
 > 無効。SARIF を Security tab に upload せず Actions Artifacts に保存する設計。

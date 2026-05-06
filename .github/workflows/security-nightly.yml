@@ -10,8 +10,9 @@ name: Security Nightly
 # GHAS 契約 or repo public 化で Code scanning が enable されたら upload-sarif
 # 経路に戻す。
 #
-# 初回は warn-only (exit-code: '0') で start し、finding を triage する期間を
-# 確保する。後続 PR で exit-code: '1' に昇格して gate 化する。
+# Phase 0 では warn-only (exit-code: '0') で start し finding triage 期間を確保した。
+# Phase 1 finding gate 化 PR (本 PR) で exit-code: '1' に昇格して blocking 化した。
+# 新規 HIGH+/CRITICAL finding は nightly run を fail させて通知される。
 
 on:
   schedule:
@@ -42,7 +43,7 @@ jobs:
           format: sarif
           output: trivy-fs.sarif
           severity: HIGH,CRITICAL
-          exit-code: '0'  # Phase 0: warn-only。後続 PR で '1' に昇格
+          exit-code: '1'  # blocking (Phase 1 finding gate 化で warn-only から昇格)
           ignore-unfixed: true
 
       - name: Upload SARIF artifact
@@ -67,7 +68,7 @@ jobs:
           format: sarif
           output: trivy-config.sarif
           severity: HIGH,CRITICAL
-          exit-code: '0'
+          exit-code: '1'  # blocking (Phase 1 finding gate 化で warn-only から昇格)
 
       - name: Upload SARIF artifact
         if: always()
