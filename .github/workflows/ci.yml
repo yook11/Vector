@@ -49,6 +49,9 @@ jobs:
               - 'backend/app/config.py'
               - 'backend/app/dependencies.py'
               - 'backend/alembic/versions/**'
+              - 'backend/pyproject.toml'
+              - 'backend/uv.lock'
+              - 'backend/Dockerfile'
               # CI / インフラ
               - '.github/workflows/ci.yml'
               - 'docker-compose.yml'
@@ -76,22 +79,22 @@ jobs:
         uses: astral-sh/setup-uv@v8.1.0
         with:
           enable-cache: true
-          cache-dependency-glob: backend/requirements.txt
+          cache-dependency-glob: backend/uv.lock
 
       - name: Install dependencies
-        run: uv pip install --system -r requirements.txt
+        run: uv sync --frozen
         working-directory: backend
 
       - name: Ruff lint
-        run: ruff check app/
+        run: uv run ruff check app/
         working-directory: backend
 
       - name: Ruff format check
-        run: ruff format --check app/
+        run: uv run ruff format --check app/
         working-directory: backend
 
       - name: Run unit tests
-        run: python -m pytest tests/ -m unit -x -q --durations=20
+        run: uv run pytest tests/ -m unit -x -q --durations=20
         working-directory: backend
 
   backend-integration:
@@ -130,14 +133,14 @@ jobs:
         uses: astral-sh/setup-uv@v8.1.0
         with:
           enable-cache: true
-          cache-dependency-glob: backend/requirements.txt
+          cache-dependency-glob: backend/uv.lock
 
       - name: Install dependencies
-        run: uv pip install --system -r requirements.txt
+        run: uv sync --frozen
         working-directory: backend
 
       - name: Run integration tests
-        run: python -m pytest tests/ -m integration -x -q --durations=20
+        run: uv run pytest tests/ -m integration -x -q --durations=20
         working-directory: backend
 
   frontend:
@@ -248,10 +251,10 @@ jobs:
         uses: astral-sh/setup-uv@v8.1.0
         with:
           enable-cache: true
-          cache-dependency-glob: backend/requirements.txt
+          cache-dependency-glob: backend/uv.lock
 
       - name: Install backend dependencies
-        run: uv pip install --system -r requirements.txt
+        run: uv sync --frozen
         working-directory: backend
 
       # ---- frontend (build + start を background) ----
@@ -333,7 +336,7 @@ jobs:
         # CI では問題なく許可できる。
         env:
           ALEMBIC_ALLOW_DESTRUCTIVE: yes-i-know
-        run: alembic upgrade head
+        run: uv run alembic upgrade head
         working-directory: backend
 
       # Playwright のブラウザバイナリ (~150MB) は毎回 download すると 30 秒以上
@@ -367,7 +370,7 @@ jobs:
 
       - name: Start backend (uvicorn, background)
         run: |
-          nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 \
+          nohup uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 \
             > "${RUNNER_TEMP}/backend.log" 2>&1 &
           echo $! > "${RUNNER_TEMP}/backend.pid"
         working-directory: backend

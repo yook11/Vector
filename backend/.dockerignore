@@ -1,0 +1,26 @@
+# secrets — never bake into image
+.env
+.env.*
+!.env.example
+
+# python artifacts
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+.mypy_cache
+
+# vcs / docs
+.git
+.gitignore
+*.md
+CLAUDE.md
+
+# editor
+.vscode
+.idea
+
+# fly.io artifacts
+fly.toml
+.fly
