@@ -34,4 +34,3 @@
 - `backend/CLAUDE.md` — バックエンド全体のルール
 - `docs/02_DATABASE_DESIGN.md` — テーブル定義
 - `docs/04_API_SPECIFICATION.md` — 期待するレスポンス形式
-

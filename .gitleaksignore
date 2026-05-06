@@ -1,0 +1,5 @@
+# Phase 1 PR 1: gitleaks v8 の allowlist file。
+# 形式: <commit-sha>:<file-path>:<rule-id> (1 行 1 finding)。
+# 初回 `pre-commit run --all-files` で false positive が出た場合のみ追加する。
+# Vector CI 専用ダミー値 (ci.yml 内の `ci0000...` `ci1111...` 等) は entropy 低のため
+# default rule では false negative の見込みだが、実際に検出されたらここに登録する。

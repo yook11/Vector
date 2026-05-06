@@ -190,6 +190,16 @@ taskiq scheduler (cron)
 
 ## Development
 
+### 開発環境セットアップ
+
+初回 clone 後、commit 前 hook を install:
+
+```bash
+uvx pre-commit install
+```
+
+これにより `git commit` 時に gitleaks (secret 検出) / hadolint (Dockerfile lint) / Ruff / Biome が staged diff に対して自動実行される。CI 側でも同じ hook が再実行されるため、`--no-verify` で bypass しても PR で fail する。
+
 ### テスト・lint 実行
 
 ```bash

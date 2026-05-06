@@ -1,0 +1,61 @@
+# Phase 1 PR 1: dev 一次防衛 + CI 二次防衛 (CI 側は .github/workflows/pre-commit.yml で再実行)。
+# rev は手動更新規約: pre-commit autoupdate は使わず、PR review で確認した上で bump する。
+# 既存 ci.yml の Ruff / Biome step は撤去せず維持し、本 hook は repo:local で uv/npx 経由
+# binary を呼ぶ (config SSoT は backend/pyproject.toml と frontend/biome.json)。
+
+default_install_hook_types: [pre-commit]
+default_stages: [pre-commit]
+fail_fast: false
+
+repos:
+  # ---- 基本 hygiene (改行 / 末尾空白 / yaml 構文 / 巨大 file 防止) ----
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=500]
+
+  # ---- gitleaks: secret scanning (staged diff のみ、history scan は別経路) ----
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
+  # ---- hadolint: Dockerfile lint (docker run hadolint/hadolint:v2.14.0 経由) ----
+  # 公式 hook の `hadolint` (system) は PATH に hadolint binary が必要だが、pre-commit
+  # framework は Haskell binary を自動 install しない。Vector は docker compose 前提なので
+  # daemon は常時稼働、`hadolint-docker` で image pull すれば dev/CI 双方で摩擦最小。
+  - repo: https://github.com/hadolint/hadolint
+    rev: v2.14.0
+    hooks:
+      - id: hadolint-docker
+        files: '(^|/)Dockerfile$'
+
+  # ---- ruff / biome: pyproject.toml / biome.json を SSoT として local 呼び出し ----
+  # PATH に uv / npx が必要 (Vector の dev 環境前提)。
+  # 引数 (app/ / src/) は ci.yml の既存 step と完全一致させる (alembic / tests は Ruff 対象外、
+  # 自動生成 type ファイル等は Biome 対象外という既存方針を尊重)。
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: Ruff (backend lint)
+        entry: bash -c 'cd backend && uv run ruff check app/'
+        language: system
+        files: ^backend/app/.*\.py$
+        pass_filenames: false
+      - id: ruff-format
+        name: Ruff (backend format check)
+        entry: bash -c 'cd backend && uv run ruff format --check app/'
+        language: system
+        files: ^backend/app/.*\.py$
+        pass_filenames: false
+      - id: biome-check
+        name: Biome (frontend lint + format)
+        entry: bash -c 'cd frontend && npx --no-install biome check src/'
+        language: system
+        files: ^frontend/src/.*\.(ts|tsx|js|jsx|json|css)$
+        pass_filenames: false

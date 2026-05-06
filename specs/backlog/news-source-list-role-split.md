@@ -257,4 +257,3 @@ npx tsc --noEmit
 | Commit 3 後 | source query param なし | 型再生成済み、source 参照なし | クリーン |
 
 逆順 (Commit 2 を先) にすると、Commit 1 が入る前に Dashboard の `getSources().catch(() => ({ items: [], total: 0 }))` が 403 をキャッチして filter dropdown が黙って消える状態が発生する。動作上は壊れないが、ユーザー視認の UI 変化が中途半端なタイミングで起きるので避ける。
-

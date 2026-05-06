@@ -1,0 +1,6 @@
+# Phase 1 PR 1: 初回は空 ignore で start。init scan で false positive が出た場合のみ
+# `ignored:` リストに rule code を追加する (事前ハードコードしない)。
+# failure-threshold: warning で start し、Phase 1 PR 2 以降で error に昇格 (Trivy と同じ
+# 段階的 gate 化パターン)。
+failure-threshold: warning
+ignored: []

@@ -88,3 +88,9 @@ skills-lock.json
 # Build artifacts
 # ===========================
 frontend/tsconfig.tsbuildinfo
+
+# ===========================
+# Pre-commit hook envs
+# ===========================
+# 通常 ~/.cache/pre-commit に作られるが、設定によっては repo root に出る場合がある。
+.pre-commit-cache/
