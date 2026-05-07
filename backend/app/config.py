@@ -21,6 +21,21 @@ _KNOWN_WEAK_INTERNAL_SECRETS = frozenset(
 )
 _INTERNAL_API_SECRET_MIN_LENGTH = 32
 
+# DATABASE_URL に含まれていれば起動時拒否する公開済 dev default / placeholder。
+# default 値を撤去しても、`.env` に dev fallback を貼り付けたまま production に
+# 行く事故を防ぐ (red-team S-SECRET-1 防御)。public git history に焼き付いた
+# application role の password ペアと .env.example の placeholder を blocklist 化。
+# NOTE: ``vector:vector`` (migration role の dev/CI default) はここに含めない。
+# CI postgres service の dummy として広く使われており、application 経路の
+# ``database_url`` 検査としてはノイズ過多。本命は application role
+# (``vector_app``) の password 漏洩経路。
+_KNOWN_WEAK_DATABASE_URL_PATTERNS = frozenset(
+    {
+        "vector_app:vector_app",
+        "<set-strong-password",
+    }
+)
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=str(_ENV_FILE), extra="ignore")
@@ -35,7 +50,9 @@ class Settings(BaseSettings):
     # データベース (application 接続)
     # red-team AUTH-N4: application runtime (FastAPI / worker / CLI) は
     # ``vector_app`` で接続し、public.* に schema-scoped アクセスする。
-    database_url: str = "postgresql+asyncpg://vector_app:vector_app@db:5432/vector"
+    # default 値を撤去し、env 必須化 + 公開済 dev password の起動時拒否で
+    # production に dev fallback が滲む経路を構造的に塞ぐ (red-team S-SECRET-1)。
+    database_url: str
 
     # データベース (migration role)
     # alembic / pytest fixture / vector_test 作成など admin 系の作業では
@@ -84,9 +101,12 @@ class Settings(BaseSettings):
     # backend → frontend container を直接呼び出す経路 (例: revalidate 通知)
     # では compose 内部 DNS や同一 VPC 内ホスト名が必要なため
     # ``internal_frontend_base_url`` を別途用意する。
-    frontend_url: str = "http://localhost:3000"
-    internal_frontend_base_url: str = "http://frontend:3000"
-    backend_url: str = "http://localhost:8000"
+    # default 値は撤去 (red-team S-AUTH-4): production で env 入れ忘れた場合に
+    # CORS が localhost:3000 で固まる / revalidate が compose 内部 DNS を叩いて
+    # 失敗する fail-open を構造的に防ぐ。env 必須化により Pydantic が起動時に
+    # ValidationError を投げる。
+    frontend_url: str
+    internal_frontend_base_url: str
 
     # セマンティック検索
     semantic_search_max_distance: float = 0.8  # コサイン距離のしきい値
@@ -105,6 +125,23 @@ class Settings(BaseSettings):
     backfill_extractions_enabled: bool = False
     backfill_classifications_enabled: bool = False
     backfill_embeddings_enabled: bool = False
+
+    @field_validator("database_url")
+    @classmethod
+    def _validate_database_url(cls, v: str) -> str:
+        """DB 接続文字列に公開済 default / placeholder が残らないことを起動時に強制。
+
+        `.env` 設定漏れで `vector_app:vector_app` 等の弱秘密が production に滲むのを防ぐ
+        (red-team S-SECRET-1 防御)。``_validate_internal_api_secret`` と同型の構造防御。
+        """
+        for pattern in _KNOWN_WEAK_DATABASE_URL_PATTERNS:
+            if pattern in v:
+                raise ValueError(
+                    "DATABASE_URL contains a known dev placeholder/weak password "
+                    f"({pattern!r}); use a strong password generated with "
+                    "`openssl rand -hex 32` and configure via .env"
+                )
+        return v
 
     @field_validator("internal_api_secret")
     @classmethod
