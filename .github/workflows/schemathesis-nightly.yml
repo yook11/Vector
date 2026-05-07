@@ -64,9 +64,13 @@ jobs:
       # が ci.yml frontend-e2e-smoke job (lines 271-339) と同じく必要になる。
       DATABASE_URL: postgresql+asyncpg://vector:vector@localhost:5432/vector
       REDIS_URL: redis://localhost:6379/0
+      # Better Auth CLI が config load 時に require する env (frontend/src/lib/env.ts)。
+      # ci.yml frontend-e2e-smoke job と同値の non-secret CI dummy。
+      BETTER_AUTH_URL: http://localhost:3000
       # CI 専用のダミー値。本番値とは無関係で、Settings の長さ要件 (>=32) を
       # 満たすために 64 桁の hex を直書きする (秘密ではない、ci.yml と同値)。
       INTERNAL_API_SECRET: ci0000000000000000000000000000000000000000000000000000000000000000
+      BETTER_AUTH_SECRET: ci1111111111111111111111111111111111111111111111111111111111111111
       POSTGRES_AUTH_PASSWORD: ci2222222222222222222222222222222222222222222222222222222222222222
       POSTGRES_APP_PASSWORD: ci3333333333333333333333333333333333333333333333333333333333333333
       FRONTEND_URL: http://localhost:3000
