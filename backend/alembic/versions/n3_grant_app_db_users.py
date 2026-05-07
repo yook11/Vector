@@ -105,7 +105,14 @@ def upgrade() -> None:
 def downgrade() -> None:
     # GRANT/REVOKE を完全反転する。role 自体は残す (init script 経由のため
     # downgrade で削除しない方針: 手動 DROP ROLE が必要なときは別途実行)。
-    op.execute("GRANT ALL ON SCHEMA public TO vector_auth")
+    #
+    # NOTE: upgrade L102 の `REVOKE ALL ON SCHEMA public FROM vector_auth` は
+    # vector_auth に直接 grant されたものを revoke するだけで (init script は
+    # 何も grant していない)、inherited PUBLIC USAGE は残るため実質 no-op。
+    # よって downgrade で対称に「明示 GRANT は不要」 (red-team S-SUPPLY-3 / C5 防御)。
+    # 旧実装の `GRANT ALL ON SCHEMA public TO vector_auth` は CREATE 権限まで
+    # 付与する過剰 GRANT で、vector_auth が public.* に CREATE TABLE 可能となる
+    # AUTH-N4 分離破壊バグだったため撤去。
     op.execute("REVOKE REFERENCES, SELECT ON auth.user FROM vector_app")
     op.execute("REVOKE USAGE ON SCHEMA auth FROM vector_app")
     op.execute(
