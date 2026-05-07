@@ -30,13 +30,26 @@ export async function proxy(request: NextRequest) {
   // 両方の bypass 経路が開くため、proxy 層では per-IP の上限のみを課す。
   // 認証状態に応じた緩和は Better Auth 内蔵 rate-limit (PR-A3) に任せる。
   //
+  // 信頼境界 (PR10 / S-AUTH / C1 / F2-F4 構造防御):
+  //   - production runtime は Fly.io edge proxy を必ず経由するため、
+  //     `Fly-Client-IP` が真の client IP に上書き付与される (incoming 値は
+  //     edge で破棄される)。client から偽装不能な唯一の trusted source。
+  //   - production で `Fly-Client-IP` 欠如 = Fly proxy bypass の異常経路。
+  //     identifier は fail-closed で "unknown" bucket に集約される (詐称された
+  //     `x-forwarded-for` を per-IP rate limit に使わない構造保証)。
+  //   - dev / test (docker-compose / npm run dev) は `Fly-Client-IP` が無いため
+  //     `x-forwarded-for` / `x-real-ip` の従来 fallback 経路を維持する。
+  //
   // CSP nonce 生成や session 検証より前に走らせる。429 で即 reject すれば
   // CPU を使う処理に攻撃者を到達させない。Redis 不通時は checkRateLimit が
   // 内部でフェイルオープン (allowed: true) を返すため、運用障害が DoS に
-  // 直結しないようになっている。
+  // 直結しないようになっている (storage は fail-open / identifier source は
+  // production で fail-closed の対称使い分け、ADR-006 §3 / §4 参照)。
   const identifier = buildIdentifier(
+    request.headers.get("fly-client-ip"),
     request.headers.get("x-forwarded-for"),
     request.headers.get("x-real-ip"),
+    process.env.NODE_ENV === "production",
   );
   const decision = await checkRateLimit(identifier);
   if (!decision.allowed) {
