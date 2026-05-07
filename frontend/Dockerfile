@@ -88,6 +88,13 @@ COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 USER nextjs
 EXPOSE 3000
 
+# Next.js standalone build には専用 health route なし、root GET 200 で生存確認。
+# node:20-slim には curl/wget なし、node 内蔵で完結させる。
+# Trivy DS-0026 (HEALTHCHECK 不足) の解消も兼ねる。production stage のみで十分
+# (Trivy は最終 stage を評価、dev stage は外部到達なし)。
+HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 \
+  CMD node -e "require('http').get('http://localhost:3000', (r) => { if (r.statusCode !== 200) process.exit(1); }).on('error', () => process.exit(1));" || exit 1
+
 # next start ではなく node server.js (standalone build の正しい起動経路)。
 # `.github/workflows/ci.yml:356-362` のコメントで記録された hydration の罠を回避。
 CMD ["node", "server.js"]

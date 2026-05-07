@@ -45,6 +45,12 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: '1'  # blocking (Phase 1 finding gate 化で warn-only から昇格)
           ignore-unfixed: true
+          # trivy-action は format=sarif のとき TRIVY_SEVERITY を unset するため
+          # severity input が CLI まで届かない (aquasecurity/trivy-action#309)。
+          # `limit-severities-for-sarif: true` で severity input を SARIF/exit-code
+          # 判定に伝播させる。GHAS disabled の Vector では SARIF 表示の網羅性低下は
+          # 運用影響なし。
+          limit-severities-for-sarif: true
 
       - name: Upload SARIF artifact
         if: always()
@@ -69,6 +75,9 @@ jobs:
           output: trivy-config.sarif
           severity: HIGH,CRITICAL
           exit-code: '1'  # blocking (Phase 1 finding gate 化で warn-only から昇格)
+          # trivy-fs と同様、SARIF 経路の severity filter 無効化を回避
+          # (aquasecurity/trivy-action#309)。
+          limit-severities-for-sarif: true
 
       - name: Upload SARIF artifact
         if: always()

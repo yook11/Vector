@@ -37,4 +37,11 @@ USER backend
 # - dev (docker-compose) は compose.yml の `command:` で migration → uvicorn を override
 # - 本番 (Fly.io) は fly.toml の [deploy].release_command で alembic upgrade head を実行
 # Dockerfile の CMD は uvicorn のみ。migration を起動経路に同居させない。
+
+# docker-compose の healthcheck (line 96-101) と同一 pattern。Dockerfile に
+# 載せて Fly.io 等 compose を経由しない deploy 経路でも有効化。
+# Trivy DS-0026 (HEALTHCHECK 不足) の解消も兼ねる。
+HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')" || exit 1
+
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
