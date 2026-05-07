@@ -106,20 +106,28 @@ jobs:
       # signal/noise 比が悪い (Vector 探索結果より)。
       # blocking mode: `semgrep ci` は finding 検出で exit 1 がデフォルト挙動。
       # `|| true` を削除して step fail を CI fail に伝搬させる。
+      #
+      # NOTE: 出力 format に `--json` を採用し `--sarif` は使わない。Semgrep CE には
+      # `--sarif` 出力経路が `# nosemgrep` suppress を反映しない既知 bug
+      # (semgrep/semgrep#6658) があり、同一 scan で `--json` だと Findings: 0 だが
+      # `--sarif` だと Findings: 4 になる挙動を local 再現で確認済。Vector は GHAS
+      # disabled で SARIF を Security tab に upload しないため format 差異の運用影響
+      # は無い。triage は JSON artifact から `jq` で抽出する。bug が fix されたら
+      # `--sarif` 経路に戻して Code scanning 連携の余地を取り戻す。
       - name: Run Semgrep (blocking)
         run: |
           semgrep ci \
-            --sarif --output=semgrep.sarif \
+            --json --output=semgrep.json \
             --config=p/owasp-top-ten \
             --config=p/security-audit \
             --metrics=off
 
-      # SARIF artifact として保存 (Code scanning disabled のため Security tab には
-      # upload しない、osv-scanner job の NOTE 参照)。triage は Actions Artifacts から DL。
-      - name: Upload Semgrep SARIF artifact
+      # JSON artifact として保存 (上記 NOTE 参照、SARIF は bug #6658 で suppress 失敗)。
+      # triage は Actions Artifacts から DL → `jq '.results[] | {check_id, path, start}'` 等。
+      - name: Upload Semgrep JSON artifact
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
-          name: semgrep-sarif
-          path: semgrep.sarif
+          name: semgrep-json
+          path: semgrep.json
           retention-days: 14
