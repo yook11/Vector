@@ -667,18 +667,6 @@ wheels = [
 ]
 
 [[package]]
-name = "honcho"
-version = "2.0.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/65/c8/d860888358bf5c8a6e7d78d1b508b59b0e255afd5655f243b8f65166dafd/honcho-2.0.0.tar.gz", hash = "sha256:af3815c03c634bf67d50f114253ea9fef72ecff26e4fd06b29234789ac5b8b2e", size = 45618, upload-time = "2024-10-06T14:26:53.871Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/48/1c/25631fc359955569e63f5446dbb7022c320edf9846cbe892ee5113433a7e/honcho-2.0.0-py3-none-any.whl", hash = "sha256:56dcd04fc72d362a4befb9303b1a1a812cba5da283526fbc6509be122918ddf3", size = 22093, upload-time = "2024-10-06T14:26:52.181Z" },
-]
-
-[[package]]
 name = "htmldate"
 version = "1.9.4"
 source = { registry = "https://pypi.org/simple" }
@@ -1669,6 +1657,15 @@ wheels = [
 ]
 
 [[package]]
+name = "supervisor"
+version = "4.3.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/a9/b5/37e7a3706de436a8a2d75334711dad1afb4ddffab09f25e31d89e467542f/supervisor-4.3.0.tar.gz", hash = "sha256:4a2bf149adf42997e1bb44b70c43b613275ec9852c3edacca86a9166b27e945e", size = 468912, upload-time = "2025-08-23T18:25:02.418Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0e/65/5e726c372da8a5e35022a94388b12252710aad0c2351699c3d76ae8dba78/supervisor-4.3.0-py2.py3-none-any.whl", hash = "sha256:0bcb763fddafba410f35cbde226aa7f8514b9fb82eb05a0c85f6588d1c13f8db", size = 320736, upload-time = "2025-08-23T18:25:00.767Z" },
+]
+
+[[package]]
 name = "taskiq"
 version = "0.12.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1869,7 +1866,6 @@ dependencies = [
     { name = "feedparser" },
     { name = "google-genai" },
     { name = "greenlet" },
-    { name = "honcho" },
     { name = "httpx" },
     { name = "lxml" },
     { name = "openai" },
@@ -1879,6 +1875,7 @@ dependencies = [
     { name = "redis" },
     { name = "sqlmodel" },
     { name = "structlog" },
+    { name = "supervisor" },
     { name = "taskiq" },
     { name = "taskiq-redis" },
     { name = "trafilatura" },
@@ -1902,7 +1899,6 @@ requires-dist = [
     { name = "feedparser", specifier = ">=6.0,<7" },
     { name = "google-genai", specifier = ">=1.73.1,<2" },
     { name = "greenlet", specifier = ">=3.4.0" },
-    { name = "honcho", specifier = ">=2,<3" },
     { name = "httpx", specifier = ">=0.28,<1" },
     { name = "lxml", specifier = ">=6.1.0,<7" },
     { name = "openai", specifier = ">=2.32.0" },
@@ -1912,6 +1908,7 @@ requires-dist = [
     { name = "redis", specifier = ">=7.4.0,<8" },
     { name = "sqlmodel", specifier = ">=0.0.38,<1" },
     { name = "structlog", specifier = ">=24.4,<26" },
+    { name = "supervisor", specifier = ">=4.2,<5" },
     { name = "taskiq", specifier = ">=0.12.2,<1" },
     { name = "taskiq-redis", specifier = ">=1.0,<2" },
     { name = "trafilatura", specifier = ">=2.0,<3" },

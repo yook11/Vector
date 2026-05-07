@@ -200,7 +200,7 @@ Stage 1 が観察した surface 表記の揺れを、機械処理 + 必要なら
 
 - **モデル**: DeepSeek-V4 Flash (Haiku 4.5 等の高性能モデルは不要、判断は単純なため)
 - **頻度**: 日次バッチ (02:05 JST)
-- **broker**: 既存 `broker_digest` を流用、`worker-insights` container 内 honcho の digest process で実行 (9 service 集約)
+- **broker**: 既存 `broker_digest` を流用、`worker-insights` container 内 supervisord の digest process で実行 (9 service 集約)
 
 ### 動作フロー (1 日分)
 

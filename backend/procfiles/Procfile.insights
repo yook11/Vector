@@ -1,2 +1,0 @@
-digest: taskiq worker app.brokers:broker_digest app.insights.snapshot.tasks.snapshot --ack-type when_executed
-briefing: taskiq worker app.brokers:broker_briefing app.insights.briefing.tasks.briefing --ack-type when_executed

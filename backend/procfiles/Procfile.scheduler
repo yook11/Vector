@@ -1,3 +1,0 @@
-sched-meta: taskiq scheduler app.brokers:scheduler_metadata app.collection.tasks
-sched-digest: taskiq scheduler app.brokers:scheduler_digest app.insights.snapshot.tasks.snapshot
-sched-briefing: taskiq scheduler app.brokers:scheduler_briefing app.insights.briefing.tasks.briefing

@@ -12,7 +12,7 @@ PR #371 (commit `c22e9d6`、main 反映済) を本番に展開する手順。Pat
 - main は PR #371 + #372 (test hardening) を含む状態
 - alembic head は `r2_articles_disc_nullable` (parent: `r1_pending_html_articles`)
 - 本番 DB の現状 head は `o16_add_mdpi` 想定 (PR2.5-A/B より前)
-- 本番 worker は `worker-fetch` (metadata + content の honcho 同居) + scheduler 1
+- 本番 worker は `worker-fetch` (metadata + content の supervisord 同居) + scheduler 1
 
 ## 不変条件 (deploy 中・後で破ったら abort)
 
@@ -159,7 +159,7 @@ SELECT
 
 ```bash
 # 4. worker ログに ContentFetchService の Outcome dispatch が出ていること
-#    worker-fetch は honcho で metadata + content process を同居させているため、
+#    worker-fetch は supervisord で metadata + content process を同居させているため、
 #    どちらの process のログも `worker-fetch` container にまとまって出る。
 docker compose -f compose.prod.yml logs --tail=200 worker-fetch \
   | grep -iE "ContentFetched|ConflictLost|TerminallyDropped|TransientlyDropped"
@@ -240,8 +240,9 @@ docker compose -f compose.prod.yml.rollback up -d
 - `pending_html_articles.status='running'` の `leased_until` 過去化頻度
   (sweeper が回っていれば 1 分以内に open に戻る)
 - `worker-fetch` の OOM / restart 頻度 (新経路で body が大きい記事を
-  含むため、メモリ消費の傾向が変わる可能性。content process が OOM すると
-  honcho が同居 metadata process も連れて container exit する設計)
+  含むため、メモリ消費の傾向が変わる可能性。content process の OOM は
+  supervisord の Pattern B (autorestart=unexpected + startretries=3) で
+  個別 retry、3 回失敗で FATAL → container exit → docker restart loop が visible)
 
 ## 参考
 

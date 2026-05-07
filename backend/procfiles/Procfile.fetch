@@ -1,2 +1,0 @@
-metadata: taskiq worker app.brokers:broker_metadata app.collection.tasks --ack-type when_executed
-content: taskiq worker app.brokers:broker_content app.collection.tasks --ack-type when_executed

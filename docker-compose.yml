@@ -175,14 +175,15 @@ services:
       - internal
 
   # --- taskiq workers (broker は分離維持、container 単位で failure domain ごとに集約) ---
-  # 設計判断: broker 名 (broker_metadata 等) は無変更。process を honcho で 1 container に
-  # 詰めるだけ。`init: true` (tini) を全 container に入れて signal forwarding と zombie
-  # reaping を確保。process の 1 つが死ぬと honcho が sibling に SIGTERM → container exit
-  # → docker / Fly.io が再起動 (fail-fast + cloud-native restart)。
+  # 設計判断: broker 名 (broker_metadata 等) は無変更。多 process container は supervisord
+  # で管理 (Pattern B: limited self-heal)。一過性故障は autorestart=unexpected +
+  # startretries=3 で吸収、永続バグは 3 retries で FATAL → fail_fast eventlistener が
+  # supervisord shutdown → container exit → docker / Fly.io が auto-restart loop で visible 化。
+  # `init: true` (tini) は維持し PID 1 zombie reaping を担当 (supervisord は tini の child)。
   worker-fetch:
     <<: *worker-base
     init: true
-    command: honcho -f /app/procfiles/Procfile.fetch start
+    command: supervisord -n -c /app/supervisord/fetch.conf
 
   worker-analysis:
     <<: *worker-base
@@ -205,13 +206,13 @@ services:
   worker-insights:
     <<: *worker-base
     init: true
-    command: honcho -f /app/procfiles/Procfile.insights start
+    command: supervisord -n -c /app/supervisord/insights.conf
 
   # --- taskiq scheduler (metadata + digest + briefing cron を 1 container に同居) ---
   scheduler:
     <<: *worker-base
     init: true
-    command: honcho -f /app/procfiles/Procfile.scheduler start
+    command: supervisord -n -c /app/supervisord/scheduler.conf
     networks:
       - internal
 
