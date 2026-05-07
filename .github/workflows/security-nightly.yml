@@ -28,7 +28,7 @@ jobs:
     name: Trivy fs scan (lockfiles)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
       # aquasecurity/trivy-action は 2026-03 に supply chain 攻撃で 76/77 tags
       # が force-push 改ざん。tag pin (`@v0.35.0`) では再発時に取り込まれる
@@ -48,7 +48,7 @@ jobs:
 
       - name: Upload SARIF artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: trivy-fs-sarif
           path: trivy-fs.sarif
@@ -58,7 +58,7 @@ jobs:
     name: Trivy config scan (Dockerfile + compose)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
       - name: Trivy config scan
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # v0.35.0 = trivy v0.69.3 (2026-03-04 commit, pre-incident clean)
@@ -72,7 +72,7 @@ jobs:
 
       - name: Upload SARIF artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: trivy-config-sarif
           path: trivy-config.sarif
