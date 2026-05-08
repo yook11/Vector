@@ -72,5 +72,7 @@ class ArticleService:
 
     async def get_similar(self, article_id: int, limit: int) -> list[ArticleBrief]:
         """意味的に類似する記事を検索する。"""
+        if not await self.repo.exists_analyzed(article_id):
+            raise NotFoundError("News article not found")
         analyses = await self.repo.fetch_similar_to(article_id, limit)
         return [build_brief(a) for a in analyses]

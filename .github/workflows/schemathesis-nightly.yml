@@ -76,6 +76,10 @@ jobs:
       FRONTEND_URL: http://localhost:3000
       # PR8 (red-team S-AUTH-4) で default 撤去 → env 必須化された URL 系。
       INTERNAL_FRONTEND_BASE_URL: http://frontend:3000
+      # CI では stub embedder で外部 Gemini API 到達を避ける。
+      # production deploy 時は stub→gemini を起動時 reject (factory 側で guard)。
+      # 本物 API key を CI に置かないことで cost / supply chain 両面の表面を絞る。
+      EMBEDDER_PROVIDER: stub
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2

@@ -38,6 +38,24 @@ class TestGetBriefing:
         assert resp.status_code == 404
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "bad_slug",
+        [
+            "AI",  # 大文字混入
+            "ai-ml",  # ハイフン (slug は underscore 区切り)
+            "_ai",  # 先頭 underscore
+            "a" * 51,  # 長過ぎ
+            "%E2%80%A8",  # 異常 UTF-8 (Schemathesis Finding #3 の reproducer 系)
+        ],
+    )
+    async def test_returns_422_for_invalid_slug_pattern(
+        self, client: AsyncClient, bad_slug: str
+    ) -> None:
+        """Path pattern 違反は 404 (DB 検索) ではなく 422 (schema reject) で弾く。"""
+        resp = await client.get(f"/api/v1/briefing/{bad_slug}")
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
     async def test_returns_empty_when_no_briefing(
         self, client: AsyncClient, ai_category: Category
     ) -> None:

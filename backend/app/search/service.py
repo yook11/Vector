@@ -5,15 +5,19 @@ from __future__ import annotations
 from uuid import UUID
 
 import redis.asyncio as aioredis
+import structlog
 
 from app.analysis.embedder.base import BaseEmbedder
 from app.analysis.embedder.factory import get_embedder
 from app.analysis.errors import AnalysisDomainError
+from app.exceptions import InvalidQueryError
 from app.schemas.articles import PaginatedArticleResponse, SemanticSearchParams
 from app.search.errors import SearchError
 from app.search.quota import consume_search_quota
 from app.search.repository import SemanticSearchRepository
 from app.services.articles import build_brief
+
+logger = structlog.get_logger(__name__)
 
 
 async def embed_search_query(
@@ -47,7 +51,8 @@ async def embed_search_query(
 
     Raises:
         SearchQuotaExceededError: cache miss 時にユーザーが当日のクォータを使い切った。
-        SearchError: If the API call fails.
+        SearchError: provider/infra 起因の障害 (rate limit, 5xx 等) → 503。
+        InvalidQueryError: クエリ起因で embedding 生成不能 → 422。
     """
     from app.search.embedding_cache import get_query_embedding, set_query_embedding
 
@@ -62,15 +67,32 @@ async def embed_search_query(
     # quota 回避する経路を消すため、消費 = API call attempt と定義)。
     await consume_search_quota(redis, user_id, requested=1, daily_max=daily_max)
 
-    if embedder is None:
-        embedder = get_embedder()
-
     try:
+        if embedder is None:
+            embedder = get_embedder()
         vector = await embedder.embed_query(text)
     except AnalysisDomainError as e:
+        # provider/infra 起因 (RateLimitError / ProviderError / NetworkError /
+        # ConfigurationError 等) → 503 維持。retry or 運用対応が筋。
+        # ConfigurationError も含めるのは、factory が GEMINI_API_KEY 未設定時に
+        # raise する経路 (CI 含む) を漏らさず 503 に統一するため。
         raise SearchError(str(e)) from e
+    except Exception as e:
+        # 翻訳の網を抜けた非 AnalysisDomainError は「クエリ起因の SDK 例外」
+        # または「translator バグ」として扱う。Schemathesis の `not_a_server_error`
+        # は 5xx 全部 fail にするため 422 として返す。
+        # 後追い目的で trace を logger.exception で残す (生 query は焼かない)。
+        logger.exception("unexpected_embed_query_failure", q_len=len(text))
+        raise InvalidQueryError(
+            "Could not generate embedding for the search query."
+        ) from e
 
-    await set_query_embedding(text, vector)
+    try:
+        await set_query_embedding(text, vector)
+    except Exception:
+        # cache write 失敗は探索結果には影響しないので warn して握りつぶす。
+        # cache miss の次回も同経路を辿るだけなので冪等性に問題なし。
+        logger.warning("set_query_embedding_failed", q_len=len(text))
     return vector
 
 

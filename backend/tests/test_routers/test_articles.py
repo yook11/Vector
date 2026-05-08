@@ -362,6 +362,14 @@ class TestGetArticle:
         resp = await client.get("/api/v1/articles/99999")
         assert resp.status_code == 404
 
+    async def test_get_with_overflowing_id_returns_422(
+        self,
+        client: AsyncClient,
+    ) -> None:
+        """INTEGER (int4) 上限超過 ID は asyncpg overflow 前に 422 で弾く。"""
+        resp = await client.get("/api/v1/articles/3951638051660537759")
+        assert resp.status_code == 422
+
     async def test_get_with_analysis(
         self,
         client: AsyncClient,
@@ -421,12 +429,16 @@ EMBEDDING_FAR = _make_embedding(-1.0)
 
 @pytest.mark.asyncio
 class TestSimilarArticles:
-    async def test_nonexistent_article_returns_empty_list(
+    async def test_nonexistent_article_returns_404(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/v1/articles/99999/similar")
+        assert resp.status_code == 404
+
+    async def test_similar_with_overflowing_id_returns_422(
         self, client: AsyncClient
     ) -> None:
-        resp = await client.get("/api/v1/articles/99999/similar")
-        assert resp.status_code == 200
-        assert resp.json() == []
+        """INTEGER 上限超過 ID は exists_analyzed で overflow 前に 422 で弾く。"""
+        resp = await client.get("/api/v1/articles/3951638051660537759/similar")
+        assert resp.status_code == 422
 
     async def test_article_without_embedding_returns_empty_list(
         self,

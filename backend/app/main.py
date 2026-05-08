@@ -12,11 +12,12 @@ from app.config import settings
 from app.db import engine
 from app.exception_handlers import (
     duplicate_handler,
+    invalid_query_handler,
     not_found_handler,
     search_error_handler,
     search_quota_exceeded_handler,
 )
-from app.exceptions import DuplicateError, NotFoundError
+from app.exceptions import DuplicateError, InvalidQueryError, NotFoundError
 from app.insights.briefing.router.briefing import router as briefing_router
 from app.insights.snapshot.router.weekly_trends import router as weekly_trends_router
 from app.routers import (
@@ -99,6 +100,7 @@ app.add_middleware(
 # 例外ハンドラ
 app.add_exception_handler(NotFoundError, not_found_handler)
 app.add_exception_handler(DuplicateError, duplicate_handler)
+app.add_exception_handler(InvalidQueryError, invalid_query_handler)
 
 app.add_exception_handler(SearchError, search_error_handler)
 app.add_exception_handler(SearchQuotaExceededError, search_quota_exceeded_handler)

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Path, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -125,9 +125,17 @@ async def list_briefings(
 @router.get(
     "/{category_slug}",
     dependencies=[Depends(get_optional_user)],
+    responses={404: {"description": "category not found"}},
 )
 async def get_latest_briefing(
-    category_slug: str,
+    category_slug: Annotated[
+        str,
+        Path(
+            pattern=r"^[a-z0-9][a-z0-9_]{0,49}$",
+            min_length=1,
+            max_length=50,
+        ),
+    ],
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> BriefingResponse:
     """指定カテゴリの最新 briefing を返す (なければ state="empty")。"""

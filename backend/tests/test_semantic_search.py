@@ -227,7 +227,7 @@ async def test_semantic_search_returns_503_on_embedding_failure(
     db_session: AsyncSession,
     sample_categories: list[Category],
 ) -> None:
-    """embedding 生成が失敗した場合は 503 を返す。"""
+    """embedding 生成が provider/infra 起因で失敗した場合は 503 を返す。"""
     from app.search.errors import SearchError
 
     source = await _create_source(db_session)
@@ -248,6 +248,110 @@ async def test_semantic_search_returns_503_on_embedding_failure(
 
     assert resp.status_code == 503
     assert "embedding" in resp.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_semantic_search_returns_422_on_unexpected_embedder_error(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    sample_categories: list[Category],
+) -> None:
+    """embedder が AnalysisDomainError 以外の例外を漏らした場合は 422 を返す。
+
+    Schemathesis ``not_a_server_error`` は 5xx 全部を fail にするため、
+    翻訳の網を抜けた例外をユーザー入力起因として 4xx に分類する経路を担保する。
+    """
+    from app.exceptions import InvalidQueryError
+
+    source = await _create_source(db_session)
+    await _create_article(
+        db_session,
+        source,
+        category_id=sample_categories[0].id,
+        embedding=FAKE_EMBEDDING_A,
+    )
+    await db_session.commit()
+
+    with patch(
+        "app.search.service.embed_search_query",
+        new_callable=AsyncMock,
+        side_effect=InvalidQueryError(
+            "Could not generate embedding for the search query."
+        ),
+    ):
+        resp = await authed_client.get("/api/v1/articles/search", params={"q": "test"})
+
+    assert resp.status_code == 422
+    assert "embedding" in resp.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_embed_search_query_translates_unexpected_to_invalid_query() -> None:
+    """embed_search_query は非 AnalysisDomainError を InvalidQueryError へ変換する。"""
+    from uuid import uuid4
+
+    from app.exceptions import InvalidQueryError
+    from app.search.service import embed_search_query
+
+    fake_embedder = MagicMock()
+    fake_embedder.embed_query = AsyncMock(side_effect=RuntimeError("translator gap"))
+    fake_redis = MagicMock()
+    fake_redis.eval = AsyncMock(return_value=1)
+
+    with (
+        patch(
+            "app.search.embedding_cache.get_query_embedding",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "app.search.embedding_cache.set_query_embedding",
+            new_callable=AsyncMock,
+        ),
+        pytest.raises(InvalidQueryError),
+    ):
+        await embed_search_query(
+            "test query",
+            user_id=uuid4(),
+            redis=fake_redis,
+            daily_max=10,
+            embedder=fake_embedder,
+        )
+
+
+@pytest.mark.asyncio
+async def test_embed_search_query_keeps_search_error_for_domain_failure() -> None:
+    """AnalysisDomainError は引き続き SearchError へ変換される (503 経路維持)。"""
+    from uuid import uuid4
+
+    from app.analysis.errors import ProviderError
+    from app.search.errors import SearchError
+    from app.search.service import embed_search_query
+
+    fake_embedder = MagicMock()
+    fake_embedder.embed_query = AsyncMock(side_effect=ProviderError("upstream 5xx"))
+    fake_redis = MagicMock()
+    fake_redis.eval = AsyncMock(return_value=1)
+
+    with (
+        patch(
+            "app.search.embedding_cache.get_query_embedding",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "app.search.embedding_cache.set_query_embedding",
+            new_callable=AsyncMock,
+        ),
+        pytest.raises(SearchError),
+    ):
+        await embed_search_query(
+            "test query",
+            user_id=uuid4(),
+            redis=fake_redis,
+            daily_max=10,
+            embedder=fake_embedder,
+        )
 
 
 # ---------------------------------------------------------------------------

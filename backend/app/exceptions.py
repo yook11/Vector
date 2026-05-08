@@ -27,3 +27,11 @@ class ReferenceNotFoundError(Exception):
     def __init__(self, detail: str) -> None:
         self.detail = detail
         super().__init__(detail)
+
+
+class InvalidQueryError(Exception):
+    """ユーザー入力が処理不能 → 422。"""
+
+    def __init__(self, detail: str) -> None:
+        self.detail = detail
+        super().__init__(detail)
