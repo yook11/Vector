@@ -1,5 +1,41 @@
 """バックエンドテスト共通のフィクスチャ。"""
 
+# ruff: noqa: E402
+# 下記 ``os.environ.setdefault`` ブロックを app.* import より前に置く必要があるため、
+# E402 (module-level import not at top of file) はファイル全体で抑止する。
+
+# --- 起動時 dummy env 補完 (collect 段階の ImportError 回避) ---
+# config.py は本番 fail-fast を維持するため required field に default を持たない
+# (PR #405-407 / red-team S-AUTH-4 + S-SECRET-1 防御)。一方 ``settings = Settings()``
+# は module load 時に走るため、.env も env も無い sandbox / agent 環境では
+# conftest の ``from app.config import settings`` 行で ValidationError → pytest
+# が collection 段階で全テストを諦める。
+#
+# 解決策: app.* の import より前 (このブロック) で ``os.environ.setdefault`` で
+# 非機密 dummy 値を補う。CI / ローカルで既に env が設定済なら setdefault は no-op
+# となり、本物の値が勝つ。本番経路は config.py の validator がそのまま守る。
+#
+# 設計制約:
+# - INTERNAL_API_SECRET は 32 chars 以上 + ``_KNOWN_WEAK_INTERNAL_SECRETS``
+#   ("secret" / "password" / "change-me*" 等) に該当しないこと。
+# - DATABASE_URL は ``_KNOWN_WEAK_DATABASE_URL_PATTERNS`` (vector_app:vector_app /
+#   <set-strong-password) を含まないこと。
+# - DATABASE_URL の host は意図的に到達不能 (`.invalid` は RFC 2606 予約 TLD)。
+#   実 DB が要るテストは ``db_session`` 等の fixture で別経路で接続するため、
+#   ここの dummy が偶発的に手元 Postgres へ接続してデータを汚染する事故を防ぐ。
+import os
+
+os.environ.setdefault(
+    "DATABASE_URL",
+    "postgresql+asyncpg://test:test@unreachable.invalid:5432/none",
+)
+os.environ.setdefault(
+    "INTERNAL_API_SECRET",
+    "test-only-collect-bootstrap-xxxxxxxxxxxx",
+)
+os.environ.setdefault("FRONTEND_URL", "http://localhost:3000")
+os.environ.setdefault("INTERNAL_FRONTEND_BASE_URL", "http://localhost:3000")
+
 import time
 from collections.abc import AsyncGenerator
 
