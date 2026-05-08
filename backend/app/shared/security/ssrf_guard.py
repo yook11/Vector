@@ -132,10 +132,10 @@ async def ensure_host_is_public(host: str) -> tuple[PublicIpAddress, ...]:
         HostResolutionError: DNS 解決に失敗した。
 
     Note:
-        DNS rebinding (本関数の解決結果と httpx 側の解決結果がずれる
-        TOCTOU) は残存リスク。完全な防御には httpx 側で resolved IP を
-        直接渡す Transport が必要だが、コストに見合わないため当面は
-        本関数の事前チェックでベースラインを確保する。
+        本関数単独では DNS rebinding (本関数の解決結果と httpx 側の解決結果が
+        ずれる TOCTOU) を防げない。``app/shared/security/safe_http.py`` の
+        ``_PinnedDnsTransport`` がここで返した最初の IP に TCP 接続を pin し、
+        TOCTOU を構造的に閉塞する。本関数は IP allowlist の判定だけを担う。
     """
     try:
         resolved = await _resolve_host(host)
