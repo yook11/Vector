@@ -9,12 +9,14 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article as ArticleORM
 from app.models.news_source import NewsSource, SourceType
 from app.models.pipeline_event import PipelineEvent
+from app.observability.categories import Layer1Category
 from app.observability.domain.event import EventType, Stage
 from app.observability.domain.payloads import (
     EmbeddingPayload,
@@ -157,3 +159,45 @@ def test_stage_strenum_matches_check_constraint() -> None:
 def test_event_type_strenum_matches_check_constraint() -> None:
     expected = {"succeeded", "skipped", "rejected", "failed"}
     assert {e.value for e in EventType} == expected
+
+
+@pytest.mark.asyncio
+async def test_category_check_constraint(db_session: AsyncSession) -> None:
+    """category 列の CHECK 制約検証: 6 値 + NULL は OK、不正値で IntegrityError。
+
+    Layer1Category は article-bound analysis stages 専用の語彙のため、collection 系
+    stage (dispatch / source_fetch / content_fetch) では NULL のまま記録される。
+    DB CHECK は ``category IS NULL OR category IN (6 values)`` の形で NULL を許容。
+    """
+    repo = PipelineEventRepository(db_session)
+
+    # NULL (category 引数省略) は OK — collection 系 stage の通常パス
+    await repo.append(
+        stage=Stage.DISPATCH,
+        event_type=EventType.SKIPPED,
+        outcome_code="test_null_category",
+        payload=SourceFetchPayload(),
+    )
+    await db_session.commit()
+
+    # 6 値はすべて OK — article-bound analysis stages の正規パス
+    for cat in Layer1Category:
+        await repo.append(
+            stage=Stage.EXTRACTION,
+            event_type=EventType.FAILED,
+            outcome_code=f"test_{cat.value}",
+            payload=SourceFetchPayload(),
+            category=cat,
+        )
+    await db_session.commit()
+
+    # 不正値は IntegrityError (raw SQL で挿入を試みる)
+    with pytest.raises(IntegrityError):
+        await db_session.execute(
+            text(
+                "INSERT INTO pipeline_events "
+                "(stage, event_type, outcome_code, category, attempt, payload) "
+                "VALUES ('extraction', 'failed', 'test', 'invalid_value', 1, '{}')"
+            )
+        )
+    await db_session.rollback()

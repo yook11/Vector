@@ -49,6 +49,13 @@ class PipelineEvent(Base):
             name="ck_pipeline_events_event_type",
         ),
         CheckConstraint(
+            "category IS NULL OR category IN ("
+            "'success','idempotent_skip','retryable',"
+            "'non_retryable_drop_article','non_retryable_keep_article','unknown'"
+            ")",
+            name="ck_pipeline_events_category",
+        ),
+        CheckConstraint(
             "attempt >= 1",
             name="ck_pipeline_events_attempt_positive",
         ),
@@ -98,6 +105,8 @@ class PipelineEvent(Base):
     stage: Mapped[str] = mapped_column(String(40), nullable=False)
     event_type: Mapped[str] = mapped_column(String(20), nullable=False)
     outcome_code: Mapped[str] = mapped_column(String(60), nullable=False)
+    category: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    code: Mapped[str | None] = mapped_column(String(60), nullable=True)
     source_id: Mapped[int | None] = mapped_column(
         Integer,
         ForeignKey("news_sources.id", ondelete="SET NULL"),

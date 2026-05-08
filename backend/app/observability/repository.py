@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article
 from app.models.pipeline_event import PipelineEvent
+from app.observability.categories import Layer1Category
 from app.observability.domain.event import EventType, Stage
 from app.observability.domain.payloads import BasePipelineEventPayload
 
@@ -41,8 +42,16 @@ class PipelineEventRepository:
         attempt: int = 1,
         duration_ms: int | None = None,
         error_class: str | None = None,
+        category: Layer1Category | None = None,
+        code: str | None = None,
     ) -> None:
-        """1 行 INSERT。``commit()`` は呼出側で。"""
+        """1 行 INSERT。``commit()`` は呼出側で。
+
+        ``category`` / ``code`` は article-bound analysis stages (extraction /
+        classification / embedding) のみ呼出側が指定する。dispatch / source_fetch
+        / content_fetch では ``Layer1Category`` の語彙が合わないため ``None`` の
+        まま (DB 列は nullable + ``IS NULL OR`` を許容する CHECK 制約)。
+        """
         # source_id 自動補完: article_id だけ与えられた場合に逆引き
         if source_id is None and article_id is not None:
             source_id = await self._session.scalar(
@@ -53,6 +62,8 @@ class PipelineEventRepository:
             stage=stage.value,
             event_type=event_type.value,
             outcome_code=outcome_code,
+            category=category.value if category is not None else None,
+            code=code,
             source_id=source_id,
             article_id=article_id,
             attempt=attempt,

@@ -18,6 +18,7 @@ from typing import Any
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.observability.categories import Layer1Category
 from app.observability.domain.event import EventType, Stage
 from app.observability.domain.payloads import (
     BasePipelineEventPayload,
@@ -91,8 +92,13 @@ async def _record_failure_event(
     source_id: int | None = None,
     article_id: int | None = None,
     payload_extra: Mapping[str, Any] | None = None,
+    category: Layer1Category | None = None,
 ) -> None:
     """例外パス用、新 session で別 tx commit。
+
+    ``category`` は article-bound analysis stages (extraction / classification /
+    embedding) のみ呼出側が指定する。collection 系 (dispatch / source_fetch /
+    content_fetch) は ``None`` のままで良い (``Layer1Category`` の語彙が合わない)。
 
     第 1 防御に失敗した場合は ``structlog.exception`` で fallback ログを残す
     (業務エラーと監査エラーを必ず両方 key にする)。
@@ -112,6 +118,7 @@ async def _record_failure_event(
                 attempt=attempt,
                 duration_ms=duration_ms,
                 error_class=error_class_fqn,
+                category=category,
             )
             await session.commit()
     except Exception as audit_exc:
