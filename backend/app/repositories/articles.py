@@ -103,8 +103,8 @@ class ArticleRepository:
         """指定 ID の記事を物理削除する。
 
         ``ondelete=CASCADE`` により ``article_extractions`` /
-        ``extraction_noises`` を経由して ``article_analyses`` /
-        ``article_extraction_entities`` / ``article_rejections`` まで
+        ``extraction_noises`` を経由して ``in_scope_assessments`` /
+        ``article_extraction_entities`` / ``out_of_scope_assessments`` まで
         削除される。``pipeline_events.article_id`` は ``ondelete=SET NULL``
         のため監査行は残り、``source_id`` で起点ソースを追跡可能。
 

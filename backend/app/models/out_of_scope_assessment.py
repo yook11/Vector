@@ -1,10 +1,6 @@
 """Stage 4 (Assessment) で out-of-scope と判定された extraction の記録 (ORM)。
 
-article_analyses (in_scope_assessments) とは同一 extraction に対して排他
-（DB トリガーで強制）。
-
-注: ``__tablename__`` は旧名 ``article_rejections`` のまま据え置き。DB rename
-は PR3.5-d.1 の Alembic migration で行う。
+in_scope_assessments とは同一 extraction に対して排他（DB トリガーで強制）。
 """
 
 from __future__ import annotations
@@ -35,18 +31,18 @@ __all__ = ["OutOfScopeAssessment"]
 class OutOfScopeAssessment(Base):
     """Stage 4 で out-of-scope と判定された extraction の記録 (ORM)。"""
 
-    # PR3.5-d.0: 旧名 "article_rejections" のまま据え置き。PR3.5-d.1 で
-    # "out_of_scope_assessments" に rename 予定。
-    __tablename__ = "article_rejections"
+    __tablename__ = "out_of_scope_assessments"
     __table_args__ = (
-        UniqueConstraint("extraction_id", name="uq_article_rejections_extraction_id"),
+        UniqueConstraint(
+            "extraction_id", name="uq_out_of_scope_assessments_extraction_id"
+        ),
         CheckConstraint(
             "investor_take != ''",
-            name="ck_article_rejections_investor_take_not_empty",
+            name="ck_out_of_scope_assessments_investor_take_not_empty",
         ),
         CheckConstraint(
             "ai_model != ''",
-            name="ck_article_rejections_ai_model_not_empty",
+            name="ck_out_of_scope_assessments_ai_model_not_empty",
         ),
     )
 

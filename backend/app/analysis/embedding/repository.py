@@ -78,7 +78,7 @@ class EmbeddingRepository:
         analysis_id: int,
         model_name: str,
     ) -> Embedding | None:
-        """Draft を ``article_analyses`` 行に条件付き UPDATE で永続化する。
+        """Draft を ``in_scope_assessments`` 行に条件付き UPDATE で永続化する。
 
         ``WHERE id = :analysis_id AND embedding IS NULL`` で並行 save レースを
         構造的に解消する。spec §4.3.2 / §4.6 に従い RETURNING で id を受け取り、
@@ -117,7 +117,7 @@ class EmbeddingRepository:
         """ORM から記録済み Entity へ復元する。
 
         ``embedding`` / ``embedding_model`` の整合は CHECK 制約
-        ``ck_article_analyses_embedding_consistency`` で構造的に保証される
+        ``ck_in_scope_assessments_embedding_consistency`` で構造的に保証される
         が、defense-in-depth として片方 NULL 状態を ``ValueError`` で検知する。
         """
         if orm.embedding is None and orm.embedding_model is None:

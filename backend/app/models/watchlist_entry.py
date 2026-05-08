@@ -23,7 +23,7 @@ class WatchlistEntry(Base):
         primary_key=True,
     )
     article_analysis_id: Mapped[int] = mapped_column(
-        ForeignKey("article_analyses.id", ondelete="CASCADE"),
+        ForeignKey("in_scope_assessments.id", ondelete="CASCADE"),
         primary_key=True,
     )
     created_at: Mapped[datetime] = mapped_column(
@@ -31,8 +31,8 @@ class WatchlistEntry(Base):
     )
 
     # リレーション
-    # PR3.5-d.0: ORM クラス名は InScopeAssessment に rename 済。属性名 / カラム名
-    # (article_analysis_id) は API/DB 互換のため据え置き。
+    # 属性名 / カラム名 (article_analysis_id) は API/DB 互換のため据え置き
+    # (PR3.5-d.2 で API field rename と合わせて整理予定)。
     in_scope_assessment: Mapped[InScopeAssessment] = relationship(
         back_populates="watchlist_entries"
     )

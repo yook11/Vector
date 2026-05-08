@@ -30,7 +30,7 @@ class CategoryRepository:
 
         (category_id, recent_count) の行を返す.
         24 時間以内の分類がないカテゴリは結果に含まれない（呼び出し側で 0 を補完する）.
-        新しい複合インデックス ix_article_analyses_category_id_analyzed_at が
+        複合インデックス ix_in_scope_assessments_category_id_analyzed_at が
         左端 + range で効く.
         """
         cutoff = datetime.now(UTC) - SIDEBAR_RECENT_WINDOW

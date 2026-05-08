@@ -244,8 +244,8 @@ async def test_update_idempotent_replaces_entities_and_keeps_parent(
 ) -> None:
     """parent ``ArticleExtraction`` は同じ id のまま、child のみ差し替わる。
 
-    parent を DELETE しないことで ``article_analyses`` /
-    ``article_rejections`` / ``article_embeddings`` / ``watchlist_entries``
+    parent を DELETE しないことで ``in_scope_assessments`` /
+    ``out_of_scope_assessments`` / ``article_embeddings`` / ``watchlist_entries``
     への CASCADE 連鎖が起きないことを構造的に保証する。
     """
     article = await _make_article(

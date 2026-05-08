@@ -129,8 +129,9 @@ class ExtractionRepository:
         Phase 1B α-1 の re-extraction CLI 専用。再現性を持たせるため:
 
         - 親 ``ArticleExtraction`` は **UPDATE のみ** (DELETE しない)。これにより
-          ``article_analyses`` / ``article_rejections`` / ``article_embeddings``
-          / ``watchlist_entries`` への CASCADE 連鎖を構造的に回避する
+          ``in_scope_assessments`` / ``out_of_scope_assessments`` /
+          ``article_embeddings`` / ``watchlist_entries`` への CASCADE 連鎖を
+          構造的に回避する
           (parent DELETE するとユーザの watchlist が消失するため)。
         - 子 ``article_extraction_entities`` のみ DELETE → INSERT で差し替える
           (新 prompt の出力を新 schema にそのまま流し込む)。
