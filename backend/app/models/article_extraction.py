@@ -1,8 +1,9 @@
 """記事からの Stage 1 抽出結果（翻訳タイトル・要約・エンティティ）。
 
-Stage 2（分類）が Classified か OutOfScope に振れる前の、
+Stage 4 (Assessment) が InScope か OutOfScope に振れる前の、
 原文から抽出した事実ベースの成果物。
-entities を子として持ち、analysis / rejection のいずれか一方（排他）を持ちうる。
+entities を子として持ち、in_scope_assessment / out_of_scope_assessment の
+いずれか一方（排他）を持ちうる。
 """
 
 from __future__ import annotations
@@ -26,8 +27,8 @@ from app.models.base import Base
 
 if TYPE_CHECKING:
     from app.models.article import Article
-    from app.models.article_analysis import ArticleAnalysis
-    from app.models.article_rejection import ArticleRejection
+    from app.models.in_scope_assessment import InScopeAssessment
+    from app.models.out_of_scope_assessment import OutOfScopeAssessment
 
 
 class ArticleExtraction(Base):
@@ -66,9 +67,9 @@ class ArticleExtraction(Base):
         cascade="all, delete-orphan",
         order_by="ArticleExtractionEntity.position",
     )
-    analysis: Mapped[ArticleAnalysis | None] = relationship(
+    in_scope_assessment: Mapped[InScopeAssessment | None] = relationship(
         back_populates="extraction", uselist=False
     )
-    rejection: Mapped[ArticleRejection | None] = relationship(
+    out_of_scope_assessment: Mapped[OutOfScopeAssessment | None] = relationship(
         back_populates="extraction", uselist=False
     )

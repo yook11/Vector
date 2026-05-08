@@ -1,7 +1,7 @@
 """記事閲覧サービス — 一覧/詳細/類似記事。"""
 
 from app.exceptions import NotFoundError
-from app.models.article_analysis import ArticleAnalysis
+from app.models.in_scope_assessment import InScopeAssessment
 from app.repositories.articles import ArticleRepository
 from app.schemas.articles import (
     ArticleBrief,
@@ -12,7 +12,7 @@ from app.schemas.articles import (
 from app.schemas.embeds import NewsSourceEmbed, OriginalArticleEmbed
 
 
-def build_brief(analysis: ArticleAnalysis) -> ArticleBrief:
+def build_brief(analysis: InScopeAssessment) -> ArticleBrief:
     a = analysis.extraction.article
     return ArticleBrief(
         id=analysis.id,
@@ -27,7 +27,7 @@ def build_brief(analysis: ArticleAnalysis) -> ArticleBrief:
     )
 
 
-def build_detail(analysis: ArticleAnalysis) -> ArticleDetail:
+def build_detail(analysis: InScopeAssessment) -> ArticleDetail:
     a = analysis.extraction.article
     return ArticleDetail(
         id=analysis.id,

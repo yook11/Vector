@@ -12,12 +12,12 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import ValidationError
 
-from app.analysis.classification.domain.analysis import Analysis
+from app.analysis.assessment.domain.in_scope import InScopeAssessment
 from app.analysis.domain.value_objects.topic import TopicName
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 
 
-def _make_analysis(**overrides: object) -> Analysis:
+def _make_assessment(**overrides: object) -> InScopeAssessment:
     defaults: dict[str, object] = {
         "id": 100,
         "extraction_id": 42,
@@ -30,7 +30,7 @@ def _make_analysis(**overrides: object) -> Analysis:
         "analyzed_at": datetime(2026, 4, 28, tzinfo=UTC),
     }
     defaults.update(overrides)
-    return Analysis(**defaults)  # type: ignore[arg-type]
+    return InScopeAssessment(**defaults)  # type: ignore[arg-type]
 
 
 def _make_repo_mock(*, is_embedded: bool = False) -> AsyncMock:
@@ -48,7 +48,7 @@ class TestTryAdvanceFromPreconditionMet:
     @pytest.mark.asyncio
     async def test_returns_ready_when_not_yet_embedded(self) -> None:
         """同 analysis_id に embedding 未生成なら Ready を返す。"""
-        analysis = _make_analysis(id=100)
+        analysis = _make_assessment(id=100)
         repo = _make_repo_mock(is_embedded=False)
 
         ready = await ReadyForEmbedding.try_advance_from(analysis, repo)
@@ -62,7 +62,7 @@ class TestTryAdvanceFromPreconditionMet:
     @pytest.mark.asyncio
     async def test_calls_is_embedded_for_with_analysis_id(self) -> None:
         """exists 判定は analysis.id をキーに行う。"""
-        analysis = _make_analysis(id=777)
+        analysis = _make_assessment(id=777)
         repo = _make_repo_mock(is_embedded=False)
 
         await ReadyForEmbedding.try_advance_from(analysis, repo)
@@ -74,7 +74,7 @@ class TestTryAdvanceFromPreconditionNotMet:
     @pytest.mark.asyncio
     async def test_returns_none_when_already_embedded(self) -> None:
         """同 analysis_id に embedding 既存なら None を返す (業務正常)。"""
-        analysis = _make_analysis(id=100)
+        analysis = _make_assessment(id=100)
         repo = _make_repo_mock(is_embedded=True)
 
         ready = await ReadyForEmbedding.try_advance_from(analysis, repo)

@@ -1,15 +1,16 @@
-"""Rejection アグリゲート — Stage 2 で OutOfScope 判定された記録。
+"""OutOfScopeAssessment アグリゲート — Stage 4 で out-of-scope と判定された記録。
 
-2 つの型で OutOfScope の概念を表す:
+2 つの型で out-of-scope の概念を表す:
 
-- ``RejectionDraft`` — AI 境界型 ``OutOfScope`` を sanitize したドメイン入力。
-  investor_take のみを持ち、Stage 1 データは複製しない (ユーザーには見せないため)。
-- ``Rejection`` — 対象外判定の記録 Entity。identity (id) と記録時刻
-  (rejected_at) を持つ。
+- ``OutOfScopeAssessmentDraft`` — AI 境界型 ``OutOfScope`` を sanitize した
+  ドメイン入力。investor_take のみを持ち、Stage 3 データは複製しない
+  (ユーザーには見せないため)。
+- ``OutOfScopeAssessment`` — 対象範囲外判定の記録 Entity。identity (id) と
+  記録時刻 (rejected_at) を持つ。
 
-``Rejection`` は ``Analysis`` と別アグリゲートとして扱う:
-- ``Analysis`` は「ユーザーに見せる確定分析結果」
-- ``Rejection`` は「監査・トレース用の却下記録」
+``OutOfScopeAssessment`` は ``InScopeAssessment`` と別アグリゲートとして扱う:
+- ``InScopeAssessment`` は「ユーザーに見せる確定評価結果」
+- ``OutOfScopeAssessment`` は「監査・トレース用の対象外記録」
 役割と寿命管理が違うため、実装の見た目が似ていても別型に分ける。
 
 このアグリゲートは認証された admin ロールまたは内部 observability のみ
@@ -28,11 +29,11 @@ from app.analysis.classifier.schema import OutOfScope
 from app.utils.sanitize import normalize_text
 
 
-class RejectionDraft(BaseModel):
-    """Stage 2 で OutOfScope 判定された記録のドメイン入力。
+class OutOfScopeAssessmentDraft(BaseModel):
+    """Stage 4 で out-of-scope と判定された記録のドメイン入力。
 
     AI 境界型 ``OutOfScope`` を受けて sanitize した後の状態。investor_take のみを
-    持ち、Stage 1 のデータは複製しない (ユーザーには見せないため)。
+    持ち、Stage 3 のデータは複製しない (ユーザーには見せないため)。
 
     Invariants:
     - ``investor_take``: sanitize 後 1-2000 文字 (Prompt Injection DoS 対策で上限)
@@ -64,11 +65,11 @@ class RejectionDraft(BaseModel):
 
 
 @dataclass(frozen=True, slots=True)
-class Rejection:
-    """対象外判定の記録 Entity。
+class OutOfScopeAssessment:
+    """対象範囲外判定の記録 Entity。
 
     identity は実質 ``extraction_id`` (UNIQUE) — ``id`` は DB 都合の採番値。
-    将来「extraction ごとに複数 rejection 履歴」が必要になったら ``id`` が
+    将来「extraction ごとに複数 out-of-scope 履歴」が必要になったら ``id`` が
     独立した意味を持つようになる。
 
     Invariants:
@@ -88,10 +89,10 @@ class Rejection:
 
     def __post_init__(self) -> None:
         if not self.investor_take:
-            raise ValueError("Rejection.investor_take must be non-empty")
+            raise ValueError("OutOfScopeAssessment.investor_take must be non-empty")
         if not self.ai_model:
-            raise ValueError("Rejection.ai_model must be non-empty")
+            raise ValueError("OutOfScopeAssessment.ai_model must be non-empty")
         if self.id <= 0:
-            raise ValueError("Rejection.id must be positive")
+            raise ValueError("OutOfScopeAssessment.id must be positive")
         if self.extraction_id <= 0:
-            raise ValueError("Rejection.extraction_id must be positive")
+            raise ValueError("OutOfScopeAssessment.extraction_id must be positive")

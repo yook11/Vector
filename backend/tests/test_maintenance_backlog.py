@@ -8,9 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.maintenance.backlog import PipelineBacklog
 from app.models.article import Article
-from app.models.article_analysis import ArticleAnalysis
 from app.models.article_extraction import ArticleExtraction
 from app.models.category import Category
+from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource
 
 
@@ -208,7 +208,7 @@ async def test_pending_classification_excludes_articles_with_analysis(
     await db_session.commit()
     await db_session.refresh(extraction)
     db_session.add(
-        ArticleAnalysis(
+        InScopeAssessment(
             extraction_id=extraction.id,
             translated_title="tt",
             summary="ss",
@@ -257,7 +257,7 @@ async def test_pending_embedding_returns_analysis_with_null_embedding(
     db_session.add(extraction)
     await db_session.commit()
     await db_session.refresh(extraction)
-    analysis = ArticleAnalysis(
+    analysis = InScopeAssessment(
         extraction_id=extraction.id,
         translated_title="tt",
         summary="ss",
@@ -303,7 +303,7 @@ async def test_pending_embedding_excludes_already_embedded(
     db_session.add(extraction)
     await db_session.commit()
     await db_session.refresh(extraction)
-    analysis = ArticleAnalysis(
+    analysis = InScopeAssessment(
         extraction_id=extraction.id,
         translated_title="tt",
         summary="ss",

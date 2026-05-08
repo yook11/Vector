@@ -15,11 +15,11 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article
-from app.models.article_analysis import ArticleAnalysis
 from app.models.article_extraction import ArticleExtraction
+from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource
 
-SeedBriefingAnalysis = Callable[..., Awaitable[ArticleAnalysis]]
+SeedBriefingAnalysis = Callable[..., Awaitable[InScopeAssessment]]
 
 
 @pytest.fixture
@@ -28,7 +28,7 @@ def seed_briefing_analysis(
 ) -> SeedBriefingAnalysis:
     """1 件の analysis (translated_title + summary 付き) を関連 ORM ごと seed する。
 
-    Briefing repository が JOIN する Article / ArticleExtraction / ArticleAnalysis を
+    Briefing repository が JOIN する Article / ArticleExtraction / InScopeAssessment を
     最小限作る。``translated_title`` / ``summary`` を引数で上書きできる。
     """
     seq = count()
@@ -39,7 +39,7 @@ def seed_briefing_analysis(
         analyzed_at: datetime,
         translated_title: str | None = None,
         summary: str | None = None,
-    ) -> ArticleAnalysis:
+    ) -> InScopeAssessment:
         n = next(seq)
         title = translated_title or f"briefing-seed-{n}"
         body = summary or f"briefing summary {n}"
@@ -63,7 +63,7 @@ def seed_briefing_analysis(
         db_session.add(extraction)
         await db_session.flush()
 
-        analysis = ArticleAnalysis(
+        analysis = InScopeAssessment(
             extraction_id=extraction.id,
             translated_title=title,
             summary=body,

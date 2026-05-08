@@ -15,9 +15,9 @@ from app.analysis.embedding.domain.embedding import Embedding, EmbeddingDraft
 from app.analysis.embedding.domain.value_objects import EMBEDDING_DIMENSION
 from app.analysis.embedding.repository import EmbeddingRepository
 from app.models.article import Article
-from app.models.article_analysis import ArticleAnalysis
 from app.models.article_extraction import ArticleExtraction
 from app.models.category import Category
+from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource
 
 
@@ -29,7 +29,7 @@ async def _build_analysis(
     url: str,
     embedding: list[float] | None = None,
     embedding_model: str | None = None,
-) -> ArticleAnalysis:
+) -> InScopeAssessment:
     """Stage 2 完了済みの分析行を 1 件作成する。"""
     article = Article(
         source_id=source.id,
@@ -48,7 +48,7 @@ async def _build_analysis(
     )
     db_session.add(extraction)
     await db_session.flush()
-    analysis = ArticleAnalysis(
+    analysis = InScopeAssessment(
         extraction_id=extraction.id,
         translated_title="分析タイトル",
         summary="分析要約",
@@ -206,7 +206,7 @@ async def test_save_writes_embedding_and_returns_entity(
     assert saved.analysis_id == analysis_id
     assert saved.model_name == "cl-nagoya/ruri-v3-310m"
     db_session.expire_all()
-    refetched = await db_session.get(ArticleAnalysis, analysis_id)
+    refetched = await db_session.get(InScopeAssessment, analysis_id)
     assert refetched is not None
     assert refetched.embedding is not None
     assert refetched.embedding_model == "cl-nagoya/ruri-v3-310m"
@@ -238,7 +238,7 @@ async def test_save_returns_none_on_concurrent_write(
 
     assert saved is None
     db_session.expire_all()
-    refetched = await db_session.get(ArticleAnalysis, analysis_id)
+    refetched = await db_session.get(InScopeAssessment, analysis_id)
     assert refetched is not None
     # 既存の embedding を上書きしないこと
     assert refetched.embedding is not None
@@ -266,7 +266,7 @@ async def test_save_returns_none_for_unknown_analysis_id(
 
 
 def test_to_domain_returns_none_when_both_columns_null() -> None:
-    orm = ArticleAnalysis(
+    orm = InScopeAssessment(
         id=1,
         extraction_id=1,
         translated_title="t",
@@ -282,7 +282,7 @@ def test_to_domain_returns_none_when_both_columns_null() -> None:
 
 
 def test_to_domain_raises_when_embedding_present_but_model_missing() -> None:
-    orm = ArticleAnalysis(
+    orm = InScopeAssessment(
         id=1,
         extraction_id=1,
         translated_title="t",
@@ -299,7 +299,7 @@ def test_to_domain_raises_when_embedding_present_but_model_missing() -> None:
 
 
 def test_to_domain_raises_when_model_present_but_embedding_missing() -> None:
-    orm = ArticleAnalysis(
+    orm = InScopeAssessment(
         id=1,
         extraction_id=1,
         translated_title="t",

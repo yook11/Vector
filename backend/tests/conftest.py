@@ -53,13 +53,13 @@ from app.dependencies import get_session
 from app.main import app
 from app.models import (  # noqa: F401
     Article,
-    ArticleAnalysis,
     ArticleExtraction,
     ArticleExtractionEntity,
-    ArticleRejection,
     Category,
     FetchLog,
+    InScopeAssessment,
     NewsSource,
+    OutOfScopeAssessment,
     PipelineEvent,
     SourceType,
     WatchlistEntry,

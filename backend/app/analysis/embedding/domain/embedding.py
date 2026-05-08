@@ -57,11 +57,15 @@ class EmbeddingDraft(BaseModel):
 class Embedding:
     """システムに記録された埋め込み Entity。
 
-    Stage 3 の成果物。identity は ``analysis_id`` で、これは
-    ``ArticleAnalysis.id`` と同一 (現状は同一行に embedding / embedding_model
+    Stage 5 (Embedding) の成果物。identity は ``analysis_id`` で、これは
+    ``InScopeAssessment.id`` と同一 (現状は同一行に embedding / embedding_model
     カラムを持つ DB 物理事実ゆえの妥協)。別テーブル化時には独立 PK を
     導入する余地を残すが、ドメイン層ではすでに「Embedding aggregate」として
-    Analysis から分離して扱う。
+    InScopeAssessment から分離して扱う。
+
+    注 (PR3.5-d.0): field 名 ``analysis_id`` は taskiq in-flight message 互換と
+    embedding stage rename の対象外につき据え置き。embedding 側 rename は
+    別 PR で扱う。
 
     ``generated_at`` は意図的に持たない (PLAN.md §3.4)。
     現状の表示要件がなく、``Optional[datetime]`` は構造的保証を弱めるため、

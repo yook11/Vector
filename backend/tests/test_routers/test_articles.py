@@ -7,9 +7,9 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article
-from app.models.article_analysis import ArticleAnalysis
 from app.models.article_extraction import ArticleExtraction
 from app.models.category import Category
+from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource
 
 
@@ -41,7 +41,7 @@ async def _create_analysis(
     topic: str = "ai agents",
     translated_title: str = "テスト記事",
     embedding: list[float] | None = None,
-) -> ArticleAnalysis:
+) -> InScopeAssessment:
     """extraction + analysis を作成するヘルパー。"""
     extraction = ArticleExtraction(
         article_id=article.id,
@@ -51,7 +51,7 @@ async def _create_analysis(
     )
     session.add(extraction)
     await session.flush()
-    analysis = ArticleAnalysis(
+    analysis = InScopeAssessment(
         extraction_id=extraction.id,
         translated_title=translated_title,
         summary="テストの要約",

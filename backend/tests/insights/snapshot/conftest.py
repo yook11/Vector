@@ -1,7 +1,7 @@
 """digest BC テスト固有のフィクスチャ。
 
 repository / Service テスト向けの ``seed_analysis`` ファクトリを提供する。
-seed_analysis は 1 件の ``ArticleAnalysis`` を関連 ORM (Article /
+seed_analysis は 1 件の ``InScopeAssessment`` を関連 ORM (Article /
 ArticleExtraction / ArticleExtractionEntity) とともに作成する。
 
 URL の重複制約を避けるため fixture 内のカウンタで一意な URL を採番する
@@ -18,27 +18,27 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article
-from app.models.article_analysis import ArticleAnalysis
 from app.models.article_extraction import ArticleExtraction
 from app.models.article_extraction_entity import ArticleExtractionEntity
+from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource
 
-SeedAnalysis = Callable[..., Awaitable[ArticleAnalysis]]
+SeedAnalysis = Callable[..., Awaitable[InScopeAssessment]]
 
 
 @pytest.fixture
 def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAnalysis:
-    """1 件の ``ArticleAnalysis`` を関連 ORM ごと seed するファクトリ。
+    """1 件の ``InScopeAssessment`` を関連 ORM ごと seed するファクトリ。
 
     Args (キーワード引数):
-        category_id: ``ArticleAnalysis.category_id`` に設定する FK。
+        category_id: ``InScopeAssessment.category_id`` に設定する FK。
         analyzed_at: ``analyzed_at`` を明示指定 (server_default を上書き)。
-        topic: ``ArticleAnalysis.topic`` (TopicName VO)。デフォルト ``"ai agents"``。
+        topic: ``InScopeAssessment.topic`` (TopicName VO)。デフォルト ``"ai agents"``。
         entities: ``[(surface, raw_type), ...]`` の列。``ArticleExtractionEntity``
             を生成する。``position`` は引数の出現順 (0-based) で自動採番される。
 
     Returns:
-        永続化済みの ``ArticleAnalysis``。flush のみで commit はしない
+        永続化済みの ``InScopeAssessment``。flush のみで commit はしない
         (呼び出し側のトランザクション境界に従う)。
     """
     seq = count()
@@ -49,7 +49,7 @@ def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAn
         analyzed_at: datetime,
         topic: str = "ai agents",
         entities: Sequence[tuple[str, str]] = (),
-    ) -> ArticleAnalysis:
+    ) -> InScopeAssessment:
         n = next(seq)
         url = f"https://example.com/seed-{n}"
 
@@ -79,7 +79,7 @@ def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAn
         db_session.add(extraction)
         await db_session.flush()
 
-        analysis = ArticleAnalysis(
+        analysis = InScopeAssessment(
             extraction_id=extraction.id,
             translated_title=f"seed-{n}",
             summary="summary body",

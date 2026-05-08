@@ -37,9 +37,9 @@ from app.analysis.errors import (
     RateLimitError,
 )
 from app.models.article import Article
-from app.models.article_analysis import ArticleAnalysis
 from app.models.article_extraction import ArticleExtraction
 from app.models.category import Category
+from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource
 
 # ---------------------------------------------------------------------------
@@ -110,8 +110,8 @@ async def _build_analysis(
     translated_title: str = "分析タイトル",
     summary: str = "分析要約",
     embedding: list[float] | None = None,
-) -> ArticleAnalysis:
-    analysis = ArticleAnalysis(
+) -> InScopeAssessment:
+    analysis = InScopeAssessment(
         extraction_id=extraction.id,
         translated_title=translated_title,
         summary=summary,
@@ -166,7 +166,7 @@ async def test_execute_returns_embedded_outcome_and_persists(
     embedder.embed_document.assert_called_once_with("分析タイトル\n分析要約")
 
     db_session.expire_all()
-    refetched = await db_session.get(ArticleAnalysis, analysis_id)
+    refetched = await db_session.get(InScopeAssessment, analysis_id)
     assert refetched is not None
     assert refetched.embedding is not None
     assert refetched.embedding_model == "cl-nagoya/ruri-v3-310m"
@@ -244,7 +244,7 @@ async def test_execute_returns_invalid_input_outcome_when_embedder_rejects(
     assert isinstance(result, InvalidInputOutcome)
 
     db_session.expire_all()
-    refetched = await db_session.get(ArticleAnalysis, analysis_id)
+    refetched = await db_session.get(InScopeAssessment, analysis_id)
     assert refetched is not None
     assert refetched.embedding is None
     assert refetched.embedding_model is None

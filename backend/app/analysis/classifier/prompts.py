@@ -1,6 +1,6 @@
 """Classifier 共通リソース。
 
-プロバイダー独立な分類プロンプトと、フラット AI レスポンスからドメイン
+プロバイダー独立な判定プロンプトと、フラット AI レスポンスからドメイン
 tagged union への詰め替え関数を保持する。Gemini / DeepSeek の両 classifier から
 import される。
 """
@@ -8,9 +8,9 @@ import される。
 from __future__ import annotations
 
 from app.analysis.classifier.schema import (
+    AssessmentResponse,
     ClassificationRawResponse,
-    ClassificationResponse,
-    Classified,
+    InScope,
     OutOfScope,
     ValidCategory,
 )
@@ -65,16 +65,16 @@ other は先端技術領域以外で投資判断に寄与するテーマ\
 """
 
 
-def to_domain(raw: ClassificationRawResponse) -> ClassificationResponse:
+def to_domain(raw: ClassificationRawResponse) -> AssessmentResponse:
     """フラットな AI レスポンスをドメイン型 tagged union に詰め替える。
 
     category=OUT_OF_SCOPE のときは topic を捨て OutOfScope に、
-    それ以外は全フィールドを Classified に移す。この関数が唯一の分岐点であり、
+    それ以外は全フィールドを InScope に移す。この関数が唯一の分岐点であり、
     以降のコードは union の ``match`` / ``isinstance`` で型安全に扱える。
     """
     if raw.category == ValidCategory.OUT_OF_SCOPE:
         return OutOfScope(investor_take=raw.investor_take)
-    return Classified(
+    return InScope(
         category=raw.category,
         topic=raw.topic,
         investor_take=raw.investor_take,

@@ -7,9 +7,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.article import Article
-from app.models.article_analysis import ArticleAnalysis
 from app.models.article_extraction import ArticleExtraction
 from app.models.category import Category
+from app.models.in_scope_assessment import InScopeAssessment
 from app.repositories.articles import article_eager_options_brief
 from app.schemas.articles import SemanticSearchParams, SortBy, SortOrder
 
@@ -22,26 +22,26 @@ class SemanticSearchRepository:
         self,
         query: SemanticSearchParams,
         query_embedding: list[float],
-    ) -> tuple[list[ArticleAnalysis], int]:
+    ) -> tuple[list[InScopeAssessment], int]:
         """セマンティック類似度に基づき記事を検索する (フィルタ+ページング付き)。"""
         stmt = (
-            select(ArticleAnalysis)
-            .join(ArticleAnalysis.extraction)
+            select(InScopeAssessment)
+            .join(InScopeAssessment.extraction)
             .join(ArticleExtraction.article)
             .options(*article_eager_options_brief())
         )
 
         # Embedding が未生成の記事は検索対象外
-        stmt = stmt.where(ArticleAnalysis.embedding.is_not(None))
-        distance_expr: ColumnElement[float] = ArticleAnalysis.embedding.cosine_distance(
-            query_embedding
+        stmt = stmt.where(InScopeAssessment.embedding.is_not(None))
+        distance_expr: ColumnElement[float] = (
+            InScopeAssessment.embedding.cosine_distance(query_embedding)
         )
         stmt = stmt.where(distance_expr < settings.semantic_search_max_distance)
 
         # コンテンツフィルタ
         if query.category is not None:
             cat_id_sub = select(Category.id).where(Category.slug == query.category)
-            stmt = stmt.where(ArticleAnalysis.category_id.in_(cat_id_sub))
+            stmt = stmt.where(InScopeAssessment.category_id.in_(cat_id_sub))
 
         # 件数取得
         total = await self._count(stmt)
@@ -70,11 +70,11 @@ class SemanticSearchRepository:
             return stmt.order_by(
                 distance_expr.asc(),
                 Article.published_at.desc(),
-                ArticleAnalysis.id.desc(),
+                InScopeAssessment.id.desc(),
             )
         order = (
             Article.published_at.desc()
             if sort_order == SortOrder.DESC
             else Article.published_at.asc()
         )
-        return stmt.order_by(order, ArticleAnalysis.id.desc())
+        return stmt.order_by(order, InScopeAssessment.id.desc())

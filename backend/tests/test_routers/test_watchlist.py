@@ -7,9 +7,9 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article
-from app.models.article_analysis import ArticleAnalysis
 from app.models.article_extraction import ArticleExtraction
 from app.models.category import Category
+from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource
 
 
@@ -25,7 +25,7 @@ async def _build_article_with_analysis(
     investor_take: str,
     published_at: datetime,
     topic: str = "watchlist test",
-) -> tuple[Article, ArticleAnalysis]:
+) -> tuple[Article, InScopeAssessment]:
     article = Article(
         source_id=source.id,
         source_url=url,
@@ -43,7 +43,7 @@ async def _build_article_with_analysis(
     )
     db_session.add(extraction)
     await db_session.flush()
-    analysis = ArticleAnalysis(
+    analysis = InScopeAssessment(
         extraction_id=extraction.id,
         translated_title=translated_title,
         summary=summary,
@@ -64,7 +64,7 @@ async def sample_article(
     db_session: AsyncSession,
     sample_categories: list[Category],
     sample_source: NewsSource,
-) -> ArticleAnalysis:
+) -> InScopeAssessment:
     """分析付きのテスト用記事（analysis を返す）。"""
     _, analysis = await _build_article_with_analysis(
         db_session,
@@ -86,7 +86,7 @@ async def second_article(
     db_session: AsyncSession,
     sample_categories: list[Category],
     sample_source: NewsSource,
-) -> ArticleAnalysis:
+) -> InScopeAssessment:
     """分析付きの 2 件目のテスト用記事（analysis を返す）。"""
     _, analysis = await _build_article_with_analysis(
         db_session,
@@ -118,7 +118,7 @@ class TestListWatchlist:
     async def test_returns_watchlist_items(
         self,
         authed_client: AsyncClient,
-        sample_article: ArticleAnalysis,
+        sample_article: InScopeAssessment,
     ) -> None:
         await authed_client.post(
             "/api/v1/me/watchlist",
@@ -140,8 +140,8 @@ class TestListWatchlist:
     async def test_pagination(
         self,
         authed_client: AsyncClient,
-        sample_article: ArticleAnalysis,
-        second_article: ArticleAnalysis,
+        sample_article: InScopeAssessment,
+        second_article: InScopeAssessment,
     ) -> None:
         await authed_client.post(
             "/api/v1/me/watchlist",
@@ -169,7 +169,7 @@ class TestAddToWatchlist:
     async def test_add_success(
         self,
         authed_client: AsyncClient,
-        sample_article: ArticleAnalysis,
+        sample_article: InScopeAssessment,
     ) -> None:
         resp = await authed_client.post(
             "/api/v1/me/watchlist",
@@ -180,7 +180,7 @@ class TestAddToWatchlist:
     async def test_add_duplicate_409(
         self,
         authed_client: AsyncClient,
-        sample_article: ArticleAnalysis,
+        sample_article: InScopeAssessment,
     ) -> None:
         await authed_client.post(
             "/api/v1/me/watchlist",
@@ -207,7 +207,7 @@ class TestRemoveFromWatchlist:
     async def test_remove_success(
         self,
         authed_client: AsyncClient,
-        sample_article: ArticleAnalysis,
+        sample_article: InScopeAssessment,
     ) -> None:
         await authed_client.post(
             "/api/v1/me/watchlist",
@@ -238,8 +238,8 @@ class TestListWatchlistIds:
     async def test_returns_ids_newest_first(
         self,
         authed_client: AsyncClient,
-        sample_article: ArticleAnalysis,
-        second_article: ArticleAnalysis,
+        sample_article: InScopeAssessment,
+        second_article: InScopeAssessment,
     ) -> None:
         await authed_client.post(
             "/api/v1/me/watchlist",
@@ -268,7 +268,7 @@ class TestArticlesNoIsWatched:
     async def test_articles_list_does_not_include_is_watched(
         self,
         authed_client: AsyncClient,
-        sample_article: ArticleAnalysis,
+        sample_article: InScopeAssessment,
     ) -> None:
         """Pattern B: per-user フラグは記事スキーマに含まない (cache 安全のため)。"""
         await authed_client.post(
@@ -284,7 +284,7 @@ class TestArticlesNoIsWatched:
     async def test_article_detail_does_not_include_is_watched(
         self,
         authed_client: AsyncClient,
-        sample_article: ArticleAnalysis,
+        sample_article: InScopeAssessment,
     ) -> None:
         await authed_client.post(
             "/api/v1/me/watchlist",

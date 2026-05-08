@@ -1,12 +1,17 @@
-"""分析タスク (extract_content / classify_content) のテスト。
+"""分析タスク (extract_content / assess_content) のテスト。
 
 Phase 1 / 2 / 3 リファクタ後 (typed-pipeline-preconditions.md):
 - extract_content は ``ReadyForExtraction`` を受け取り、ExtractedOutcome なら
-  ``ReadyForClassification`` を構築して chain
-- classify_content は ``ReadyForClassification`` を受け取り、ClassifiedOutcome
+  ``ReadyForAssessment`` を構築して chain
+- assess_content は ``ReadyForAssessment`` を受け取り、InScopeOutcome
   なら ``ReadyForEmbedding`` を構築して chain
 - Skipped / AlreadyClassified / AlreadyEmbedded Outcome は廃止 (Ready の
   ``try_advance_from`` で代替)
+
+注 (PR3.5-d.0): Stage 4 命名統一に伴い旧 ``classify_content`` task は
+deprecated alias として残置。本 PR でも本ファイルでは新名 ``assess_content``
+を中心に検証する。alias 経由の動作は ``test_assess_content_alias.py`` で別途
+検証する。
 """
 
 from types import SimpleNamespace
@@ -14,7 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.analysis.classification.domain.ready import ReadyForClassification
+from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.errors import AIProviderRateLimitedError, RateLimitError
 from app.analysis.extraction.domain.ready import ReadyForExtraction
@@ -58,8 +63,8 @@ def _make_ready_extraction(article_id: int = 1) -> ReadyForExtraction:
     )
 
 
-def _make_ready(extraction_id: int = 2) -> ReadyForClassification:
-    return ReadyForClassification(
+def _make_ready(extraction_id: int = 2) -> ReadyForAssessment:
+    return ReadyForAssessment(
         extraction_id=extraction_id,
         translated_title="title",
         summary="summary",
@@ -80,8 +85,8 @@ def _make_ready_emb(analysis_id: int = 100) -> ReadyForEmbedding:
 
 class TestExtractContent:
     @pytest.mark.asyncio
-    async def test_chains_classify_with_ready_when_advance_succeeds(self) -> None:
-        """ExtractedOutcome → Ready 構築 → classify_content.kiq(ready) で chain。"""
+    async def test_chains_assess_with_ready_when_advance_succeeds(self) -> None:
+        """ExtractedOutcome → Ready 構築 → assess_content.kiq(ready) で chain。"""
         from app.analysis.extraction.service import ExtractedOutcome
         from app.analysis.tasks import extract_content
 
@@ -89,7 +94,7 @@ class TestExtractContent:
         mock_extraction = MagicMock()
         mock_extraction.id = 42
         mock_outcome = ExtractedOutcome(extraction=mock_extraction)
-        ready_class = _make_ready(extraction_id=42)
+        ready_assess = _make_ready(extraction_id=42)
 
         with (
             patch(
@@ -98,16 +103,16 @@ class TestExtractContent:
             ),
             patch("app.analysis.tasks.ExtractionService") as mock_svc_cls,
             patch(
-                "app.analysis.tasks.ReadyForClassification.try_advance_from",
-                new=AsyncMock(return_value=ready_class),
+                "app.analysis.tasks.ReadyForAssessment.try_advance_from",
+                new=AsyncMock(return_value=ready_assess),
             ),
-            patch("app.analysis.tasks.classify_content") as mock_classify,
+            patch("app.analysis.tasks.assess_content") as mock_assess,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(return_value=mock_outcome)
-            mock_classify.kiq = AsyncMock()
+            mock_assess.kiq = AsyncMock()
             await extract_content(ready=_make_ready_extraction(), ctx=mock_ctx)
 
-        mock_classify.kiq.assert_awaited_once_with(ready_class)
+        mock_assess.kiq.assert_awaited_once_with(ready_assess)
 
     @pytest.mark.asyncio
     async def test_does_not_chain_when_advance_returns_none(self) -> None:
@@ -125,16 +130,16 @@ class TestExtractContent:
             ),
             patch("app.analysis.tasks.ExtractionService") as mock_svc_cls,
             patch(
-                "app.analysis.tasks.ReadyForClassification.try_advance_from",
+                "app.analysis.tasks.ReadyForAssessment.try_advance_from",
                 new=AsyncMock(return_value=None),
             ),
-            patch("app.analysis.tasks.classify_content") as mock_classify,
+            patch("app.analysis.tasks.assess_content") as mock_assess,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(return_value=mock_outcome)
-            mock_classify.kiq = AsyncMock()
+            mock_assess.kiq = AsyncMock()
             await extract_content(ready=_make_ready_extraction(), ctx=mock_ctx)
 
-        mock_classify.kiq.assert_not_called()
+        mock_assess.kiq.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_noise_outcome_does_not_chain(self) -> None:
@@ -150,15 +155,15 @@ class TestExtractContent:
                 return_value=(None, None),
             ),
             patch("app.analysis.tasks.ExtractionService") as mock_svc_cls,
-            patch("app.analysis.tasks.classify_content") as mock_classify,
+            patch("app.analysis.tasks.assess_content") as mock_assess,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
                 return_value=NoiseOutcome(),
             )
-            mock_classify.kiq = AsyncMock()
+            mock_assess.kiq = AsyncMock()
             await extract_content(ready=_make_ready_extraction(), ctx=mock_ctx)
 
-        mock_classify.kiq.assert_not_called()
+        mock_assess.kiq.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_rate_limited_records_audit_and_returns(self) -> None:
@@ -192,19 +197,19 @@ class TestExtractContent:
 
 
 # ---------------------------------------------------------------------------
-# classify_content
+# assess_content (Stage 4)
 # ---------------------------------------------------------------------------
 
 
-class TestClassifyContent:
+class TestAssessContent:
     @pytest.mark.asyncio
-    async def test_classified_chains_embedding_with_ready(self) -> None:
-        """ClassifiedOutcome → ReadyForEmbedding を構築して embedding chain。"""
-        from app.analysis.classification.service import ClassifiedOutcome
-        from app.analysis.tasks import classify_content
+    async def test_in_scope_chains_embedding_with_ready(self) -> None:
+        """InScopeOutcome → ReadyForEmbedding を構築して embedding chain。"""
+        from app.analysis.assessment.service import InScopeOutcome
+        from app.analysis.tasks import assess_content
 
         mock_ctx = _make_ctx(classifier=_make_provider_fake())
-        mock_result = ClassifiedOutcome(analysis=MagicMock())
+        mock_result = InScopeOutcome(assessment=MagicMock())
         ready = _make_ready(extraction_id=2)
         ready_emb = _make_ready_emb(analysis_id=100)
 
@@ -213,7 +218,7 @@ class TestClassifyContent:
                 "app.analysis.tasks._build_limiters",
                 return_value=(None, None),
             ),
-            patch("app.analysis.tasks.ClassificationService") as mock_svc_cls,
+            patch("app.analysis.tasks.AssessmentService") as mock_svc_cls,
             patch(
                 "app.analysis.tasks.ReadyForEmbedding.try_advance_from",
                 new=AsyncMock(return_value=ready_emb),
@@ -222,18 +227,18 @@ class TestClassifyContent:
         ):
             mock_svc_cls.return_value.execute = AsyncMock(return_value=mock_result)
             mock_embed.kiq = AsyncMock()
-            await classify_content(ready=ready, ctx=mock_ctx)
+            await assess_content(ready=ready, ctx=mock_ctx)
 
         mock_embed.kiq.assert_awaited_once_with(ready_emb)
 
     @pytest.mark.asyncio
-    async def test_classified_does_not_chain_when_advance_returns_none(self) -> None:
-        """ClassifiedOutcome でも embedding precondition 未充足なら chain しない。"""
-        from app.analysis.classification.service import ClassifiedOutcome
-        from app.analysis.tasks import classify_content
+    async def test_in_scope_does_not_chain_when_advance_returns_none(self) -> None:
+        """InScopeOutcome でも embedding precondition 未充足なら chain しない。"""
+        from app.analysis.assessment.service import InScopeOutcome
+        from app.analysis.tasks import assess_content
 
         mock_ctx = _make_ctx(classifier=_make_provider_fake())
-        mock_result = ClassifiedOutcome(analysis=MagicMock())
+        mock_result = InScopeOutcome(assessment=MagicMock())
         ready = _make_ready(extraction_id=2)
 
         with (
@@ -241,7 +246,7 @@ class TestClassifyContent:
                 "app.analysis.tasks._build_limiters",
                 return_value=(None, None),
             ),
-            patch("app.analysis.tasks.ClassificationService") as mock_svc_cls,
+            patch("app.analysis.tasks.AssessmentService") as mock_svc_cls,
             patch(
                 "app.analysis.tasks.ReadyForEmbedding.try_advance_from",
                 new=AsyncMock(return_value=None),
@@ -250,18 +255,18 @@ class TestClassifyContent:
         ):
             mock_svc_cls.return_value.execute = AsyncMock(return_value=mock_result)
             mock_embed.kiq = AsyncMock()
-            await classify_content(ready=ready, ctx=mock_ctx)
+            await assess_content(ready=ready, ctx=mock_ctx)
 
         mock_embed.kiq.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_rejected_does_not_chain(self) -> None:
-        """RejectedOutcome は embedding に進まない。"""
-        from app.analysis.classification.service import RejectedOutcome
-        from app.analysis.tasks import classify_content
+    async def test_out_of_scope_does_not_chain(self) -> None:
+        """OutOfScopeOutcome は embedding に進まない。"""
+        from app.analysis.assessment.service import OutOfScopeOutcome
+        from app.analysis.tasks import assess_content
 
         mock_ctx = _make_ctx(classifier=_make_provider_fake())
-        mock_result = RejectedOutcome(rejection=MagicMock())
+        mock_result = OutOfScopeOutcome(assessment=MagicMock())
         ready = _make_ready(extraction_id=2)
 
         with (
@@ -269,18 +274,18 @@ class TestClassifyContent:
                 "app.analysis.tasks._build_limiters",
                 return_value=(None, None),
             ),
-            patch("app.analysis.tasks.ClassificationService") as mock_svc_cls,
+            patch("app.analysis.tasks.AssessmentService") as mock_svc_cls,
             patch("app.analysis.tasks.generate_embedding") as mock_embed,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(return_value=mock_result)
             mock_embed.kiq = AsyncMock()
-            await classify_content(ready=ready, ctx=mock_ctx)
+            await assess_content(ready=ready, ctx=mock_ctx)
 
         mock_embed.kiq.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_rate_limit_raises_for_retry(self) -> None:
-        from app.analysis.tasks import classify_content
+        from app.analysis.tasks import assess_content
 
         mock_ctx = _make_ctx(
             classifier=_make_provider_fake(), retry_count=0, max_retries=2
@@ -292,18 +297,18 @@ class TestClassifyContent:
                 "app.analysis.tasks._build_limiters",
                 return_value=(None, None),
             ),
-            patch("app.analysis.tasks.ClassificationService") as mock_svc_cls,
+            patch("app.analysis.tasks.AssessmentService") as mock_svc_cls,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
                 side_effect=RateLimitError("429"),
             )
             with pytest.raises(RateLimitError):
-                await classify_content(ready=ready, ctx=mock_ctx)
+                await assess_content(ready=ready, ctx=mock_ctx)
 
     @pytest.mark.asyncio
     async def test_rate_limit_last_attempt_returns(self) -> None:
-        """classify_content は最終試行で例外を送出せず return する。"""
-        from app.analysis.tasks import classify_content
+        """assess_content は最終試行で例外を送出せず return する。"""
+        from app.analysis.tasks import assess_content
 
         mock_ctx = _make_ctx(
             classifier=_make_provider_fake(), retry_count=2, max_retries=2
@@ -315,12 +320,12 @@ class TestClassifyContent:
                 "app.analysis.tasks._build_limiters",
                 return_value=(None, None),
             ),
-            patch("app.analysis.tasks.ClassificationService") as mock_svc_cls,
+            patch("app.analysis.tasks.AssessmentService") as mock_svc_cls,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
                 side_effect=RateLimitError("429"),
             )
-            await classify_content(ready=ready, ctx=mock_ctx)
+            await assess_content(ready=ready, ctx=mock_ctx)
 
 
 # ---------------------------------------------------------------------------

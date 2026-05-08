@@ -1,7 +1,12 @@
 """分析タスク — パイプラインの後段。
 
 collection.tasks.fetch_content から呼び出される。
-extract_content → classify_content → generate_embedding
+extract_content → assess_content → generate_embedding
+
+注 (PR3.5-d.0): 旧 task ``classify_content`` は in-flight broker message 互換の
+ため deprecated alias として残置。新規 enqueue (extract_content の chain 呼び出し)
+は ``assess_content`` を使う。alias 削除条件は spec
+``specs/stage4-assessment-rename.md`` §7 を参照。
 """
 
 from __future__ import annotations
@@ -11,12 +16,12 @@ from typing import TYPE_CHECKING, Literal
 import structlog
 from taskiq import Context, TaskiqDepends
 
-from app.analysis.classification.domain.ready import ReadyForClassification
-from app.analysis.classification.rejection_repository import RejectionRepository
-from app.analysis.classification.repository import AnalysisRepository
-from app.analysis.classification.service import (
-    ClassificationService,
-    ClassifiedOutcome,
+from app.analysis.assessment.domain.ready import ReadyForAssessment
+from app.analysis.assessment.out_of_scope_repository import OutOfScopeRepository
+from app.analysis.assessment.repository import InScopeRepository
+from app.analysis.assessment.service import (
+    AssessmentService,
+    InScopeOutcome,
 )
 from app.analysis.classifier.base import BaseClassifier
 from app.analysis.embedder.base import BaseEmbedder
@@ -197,15 +202,15 @@ async def extract_content(
     # Stage 4 へ chain (Pattern A': 上流 Task が下流 Ready を構築 — spec §7.1)
     if isinstance(result, ExtractedOutcome):
         async with session_factory() as session:
-            analysis_repo = AnalysisRepository(session)
-            rejection_repo = RejectionRepository(session)
-            ready_class = await ReadyForClassification.try_advance_from(
+            in_scope_repo = InScopeRepository(session)
+            out_of_scope_repo = OutOfScopeRepository(session)
+            ready_assess = await ReadyForAssessment.try_advance_from(
                 result.extraction,
-                analysis_repo=analysis_repo,
-                rejection_repo=rejection_repo,
+                in_scope_repo=in_scope_repo,
+                out_of_scope_repo=out_of_scope_repo,
             )
-        if ready_class is not None:
-            await classify_content.kiq(ready_class)
+        if ready_assess is not None:
+            await assess_content.kiq(ready_assess)
     elif isinstance(result, NoiseOutcome):
         logger.info(
             "extract_content_noise",
@@ -214,29 +219,36 @@ async def extract_content(
 
 
 # ---------------------------------------------------------------------------
-# Classification (Stage D)
+# Assessment (Stage 4)
 # ---------------------------------------------------------------------------
 
 
 @broker_analysis.task(
-    task_name="classify_content",
+    task_name="assess_content",
     timeout=180,
     max_retries=2,
     retry_on_error=True,
 )
-async def classify_content(
-    ready: ReadyForClassification,
+async def assess_content(
+    ready: ReadyForAssessment,
     ctx: Context = TaskiqDepends(),
 ) -> None:
-    """単一 extraction に対して分類 (Stage D) を実行する。
+    """単一 extraction に対して Stage 4 (Assessment) を実行する。
 
-    Pattern A': 受け取った Ready 型は precondition (extraction 存在 + 未分類 +
-    未却下) を構造保証している。本 task は再 fetch / None check を行わない。
+    Stage 4 は in-scope / out-of-scope の判定 + 該当時の category / topic /
+    investor_take 抽出を一括して行う。
+
+    Pattern A': 受け取った Ready 型は precondition (extraction 存在 +
+    未 in-scope 評価 + 未 out-of-scope 評価) を構造保証している。本 task は
+    再 fetch / None check を行わない。
     """
     session_factory = ctx.state.session_factory
     classifier: BaseClassifier = ctx.state.classifier
 
     # Rate limit acquire は呼び出し側の責任
+    # 注 (PR3.5-d.0): role 文字列 "classify" は Redis 上の rate limit カウンタの
+    # キーに含まれるため、in-flight の counter を引き継ぐべく旧 role 名を据え置く。
+    # 実 role 切替は alias 削除 PR (PR3.5-d.3) 以降に検討する。
     rpm_limiter, rpd_limiter = _build_limiters(
         "classify", classifier.MODEL, classifier.RPM, classifier.RPD
     )
@@ -247,13 +259,13 @@ async def classify_content(
             await rpm_limiter.acquire()
     except _RateLimitExceededError:
         logger.warning(
-            "classify_content_daily_quota",
+            "assess_content_daily_quota",
             extraction_id=ready.extraction_id,
         )
         return
 
     # Service 呼び出し（session は内部で管理）
-    svc = ClassificationService(session_factory)
+    svc = AssessmentService(session_factory)
     try:
         result = await svc.execute(ready, classifier)
     except (
@@ -262,7 +274,7 @@ async def classify_content(
         InsufficientBalanceError,
     ) as e:
         logger.warning(
-            "classify_content_no_retry",
+            "assess_content_no_retry",
             extraction_id=ready.extraction_id,
             reason=str(e),
         )
@@ -275,26 +287,55 @@ async def classify_content(
     ) as e:
         if is_last_attempt(ctx):
             logger.warning(
-                "classify_content_max_retries",
+                "assess_content_max_retries",
                 extraction_id=ready.extraction_id,
                 reason=str(e),
             )
             return
         raise
 
-    # Stage E へ chain (Pattern A': 上流 Task が下流 Ready を構築 — spec §7.1)。
-    # ClassifiedOutcome の analysis から ReadyForEmbedding を構築する。
+    # Stage 5 (Embedding) へ chain (Pattern A': 上流 Task が下流 Ready を構築)。
+    # InScopeOutcome の assessment から ReadyForEmbedding を構築する。
     # AlreadyClassified / Skipped Outcome は廃止 (ready 構築時点で
     # try_advance_from が None で止めるため到達しない)。
-    if isinstance(result, ClassifiedOutcome):
+    if isinstance(result, InScopeOutcome):
         async with session_factory() as session:
             embedding_repo = EmbeddingRepository(session)
             ready_emb = await ReadyForEmbedding.try_advance_from(
-                result.analysis,
+                result.assessment,
                 embedding_repo,
             )
         if ready_emb is not None:
             await generate_embedding.kiq(ready_emb)
+
+
+@broker_analysis.task(
+    task_name="classify_content",
+    timeout=180,
+    max_retries=2,
+    retry_on_error=True,
+)
+async def classify_content(
+    ready: ReadyForAssessment,
+    ctx: Context = TaskiqDepends(),
+) -> None:
+    """[DEPRECATED] Compat alias for ``assess_content``.
+
+    PR3.5-d.0 deploy 時点で broker queue に残った in-flight ``classify_content``
+    message を消化するための一時 wrapper。新規 enqueue (extract_content task) は
+    ``assess_content`` を使うので、本 alias 経由で新規 message が積まれることはない。
+
+    削除条件 (PR3.5-d.3 で実施):
+    - broker queue 内 ``classify_content`` task name が 0 件
+    - 直近 24 時間で本関数が 1 度も invoke されていない (logfire 確認)
+    - dead-letter queue に ``classify_content`` task が存在しない
+    """
+    logger.info(
+        "classify_content_alias_invoked",
+        message="this task name is deprecated, drains in-flight only",
+        extraction_id=getattr(ready, "extraction_id", None),
+    )
+    await assess_content(ready, ctx)
 
 
 # ---------------------------------------------------------------------------

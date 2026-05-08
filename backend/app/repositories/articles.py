@@ -5,16 +5,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import contains_eager, defer, selectinload
 
 from app.models.article import Article
-from app.models.article_analysis import ArticleAnalysis
 from app.models.article_extraction import ArticleExtraction
 from app.models.category import Category
+from app.models.in_scope_assessment import InScopeAssessment
 from app.schemas.articles import ArticleListParams, SortOrder
 
 
 def article_eager_options_brief() -> list:
     """一覧用. 呼び出し側で extraction → article まで join 済みであること."""
     return [
-        contains_eager(ArticleAnalysis.extraction)
+        contains_eager(InScopeAssessment.extraction)
         .contains_eager(ArticleExtraction.article)
         .options(
             defer(Article.original_content, raiseload=True),
@@ -26,7 +26,7 @@ def article_eager_options_brief() -> list:
 def article_eager_options_detail() -> list:
     """詳細用. 呼び出し側で extraction → article まで join 済みであること."""
     return [
-        contains_eager(ArticleAnalysis.extraction)
+        contains_eager(InScopeAssessment.extraction)
         .contains_eager(ArticleExtraction.article)
         .options(
             defer(Article.original_content, raiseload=True),
@@ -44,11 +44,11 @@ class ArticleRepository:
     async def fetch_articles(
         self,
         query: ArticleListParams,
-    ) -> tuple[list[ArticleAnalysis], int]:
+    ) -> tuple[list[InScopeAssessment], int]:
         """ニュース閲覧用にページング済みの記事一覧を取得する."""
         stmt = (
-            select(ArticleAnalysis)
-            .join(ArticleAnalysis.extraction)
+            select(InScopeAssessment)
+            .join(InScopeAssessment.extraction)
             .join(ArticleExtraction.article)
             .options(*article_eager_options_brief())
         )
@@ -56,7 +56,7 @@ class ArticleRepository:
         # フィルタ
         if query.category is not None:
             cat_id_sub = select(Category.id).where(Category.slug == query.category)
-            stmt = stmt.where(ArticleAnalysis.category_id.in_(cat_id_sub))
+            stmt = stmt.where(InScopeAssessment.category_id.in_(cat_id_sub))
 
         # 総件数
         count_stmt = select(func.count()).select_from(stmt.subquery())
@@ -68,7 +68,7 @@ class ArticleRepository:
             if query.sort_order == SortOrder.DESC
             else Article.published_at.asc()
         )
-        stmt = stmt.order_by(order, ArticleAnalysis.id.desc())
+        stmt = stmt.order_by(order, InScopeAssessment.id.desc())
 
         # ページング
         stmt = stmt.offset(query.offset).limit(query.limit)
@@ -76,16 +76,16 @@ class ArticleRepository:
         result = await self.session.execute(stmt)
         return list(result.unique().scalars().all()), total
 
-    async def fetch_one_analyzed(self, article_id: int) -> ArticleAnalysis | None:
+    async def fetch_one_analyzed(self, article_id: int) -> InScopeAssessment | None:
         """分析情報を eager load した単一記事を取得する.
 
         見つからないか未分析の場合は None を返す.
         """
         stmt = (
-            select(ArticleAnalysis)
-            .join(ArticleAnalysis.extraction)
+            select(InScopeAssessment)
+            .join(InScopeAssessment.extraction)
             .join(ArticleExtraction.article)
-            .where(ArticleAnalysis.id == article_id)
+            .where(InScopeAssessment.id == article_id)
             .options(*article_eager_options_detail())
         )
         result = await self.session.execute(stmt)
@@ -93,7 +93,7 @@ class ArticleRepository:
 
     async def exists_analyzed(self, article_id: int) -> bool:
         """分析済み記事が存在するかを判定する."""
-        stmt = select(exists().where(ArticleAnalysis.id == article_id))
+        stmt = select(exists().where(InScopeAssessment.id == article_id))
         result = await self.session.execute(stmt)
         return result.scalar_one()
 
@@ -120,32 +120,34 @@ class ArticleRepository:
 
     async def fetch_similar_to(
         self, article_id: int, limit: int
-    ) -> list[ArticleAnalysis]:
+    ) -> list[InScopeAssessment]:
         """指定記事に類似した記事を cosine distance 順で取得する.
 
         対象記事が存在しないか埋め込みを持たない場合は空リストを返す.
         """
         source_embedding = (
-            select(ArticleAnalysis.embedding)
+            select(InScopeAssessment.embedding)
             .where(
-                ArticleAnalysis.id == article_id,
-                ArticleAnalysis.embedding.is_not(None),
+                InScopeAssessment.id == article_id,
+                InScopeAssessment.embedding.is_not(None),
             )
             .cte("source_embedding")
         )
 
         stmt = (
-            select(ArticleAnalysis)
-            .join(ArticleAnalysis.extraction)
+            select(InScopeAssessment)
+            .join(InScopeAssessment.extraction)
             .join(ArticleExtraction.article)
             .join(source_embedding, true())
             .options(*article_eager_options_brief())
             .where(
-                ArticleAnalysis.id != article_id,
-                ArticleAnalysis.embedding.is_not(None),
+                InScopeAssessment.id != article_id,
+                InScopeAssessment.embedding.is_not(None),
             )
             .order_by(
-                ArticleAnalysis.embedding.cosine_distance(source_embedding.c.embedding)
+                InScopeAssessment.embedding.cosine_distance(
+                    source_embedding.c.embedding
+                )
             )
             .limit(limit)
         )

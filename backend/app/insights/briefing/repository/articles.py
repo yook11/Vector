@@ -1,7 +1,7 @@
-"""Briefing 入力用の analysis 済 article 取得 Repository。
+"""Briefing 入力用の in-scope 評価済 article 取得 Repository。
 
 責務:
-- 指定 (week_start, category_id) の analysis を JST 週境界で抽出
+- 指定 (week_start, category_id) の in-scope 評価を JST 週境界で抽出
 - LLM に渡す ``ArticleInput`` (id + title_ja + summary_ja) のみを返す
 
 時間境界:
@@ -21,8 +21,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.insights.briefing.domain.article import ArticleInput
 from app.insights.snapshot.config import WEEK_TZ
-from app.models.article_analysis import ArticleAnalysis
 from app.models.article_extraction import ArticleExtraction
+from app.models.in_scope_assessment import InScopeAssessment
 
 
 class BriefingArticleRepository:
@@ -45,17 +45,17 @@ class BriefingArticleRepository:
         stmt = (
             select(
                 ArticleExtraction.article_id,
-                ArticleAnalysis.translated_title,
-                ArticleAnalysis.summary,
+                InScopeAssessment.translated_title,
+                InScopeAssessment.summary,
             )
             .join(
                 ArticleExtraction,
-                ArticleAnalysis.extraction_id == ArticleExtraction.id,
+                InScopeAssessment.extraction_id == ArticleExtraction.id,
             )
             .where(
-                ArticleAnalysis.category_id == category_id,
-                ArticleAnalysis.analyzed_at >= week_start_jst,
-                ArticleAnalysis.analyzed_at < week_end_jst,
+                InScopeAssessment.category_id == category_id,
+                InScopeAssessment.analyzed_at >= week_start_jst,
+                InScopeAssessment.analyzed_at < week_end_jst,
             )
             .order_by(ArticleExtraction.article_id)
         )

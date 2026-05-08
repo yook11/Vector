@@ -7,17 +7,17 @@ from typing import ClassVar
 
 import structlog
 
-from app.analysis.classifier.schema import ClassificationResponse
+from app.analysis.classifier.schema import AssessmentResponse
 from app.analysis.errors import AnalysisDomainError
 
 logger = structlog.get_logger(__name__)
 
 
 class BaseClassifier(abc.ABC):
-    """Stage 2 — Classification のテンプレートメソッド基底。
+    """Stage 4 — Assessment のテンプレートメソッド基底。
 
-    Stage 1 の構造化出力に対して判断を下す。原文は読まない。
-    分類結果は Classified | OutOfScope の tagged union（``ClassificationResponse``）。
+    Stage 3 (Extraction) の構造化出力に対して判断を下す。原文は読まない。
+    判定結果は InScope | OutOfScope の tagged union（``AssessmentResponse``）。
 
     サブクラスは以下 3 つのフックを実装する:
     - ``classify``: プロンプト構築とレスポンス解析（公開 API）
@@ -54,24 +54,24 @@ class BaseClassifier(abc.ABC):
         self,
         title_ja: str,
         summary_ja: str,
-    ) -> ClassificationResponse:
-        """Stage 1 の出力を分類し、Classified か OutOfScope のいずれかを返す。
+    ) -> AssessmentResponse:
+        """Stage 3 (Extraction) の出力を判定し、InScope か OutOfScope のいずれかを返す。
 
         Args:
             title_ja: 日本語翻訳タイトル。
             summary_ja: 事実ベースの日本語要約。
 
         Returns:
-            ``Classified`` または ``OutOfScope``。呼び出し側は ``kind`` フィールド
-            または ``isinstance`` / ``match`` で場合分けする。
+            ``InScope`` または ``OutOfScope``。呼び出し側は ``isinstance`` / ``match``
+            で場合分けする。
 
         Raises:
-            AnalysisDomainError: 分類に失敗した場合。
+            AnalysisDomainError: 判定に失敗した場合。
         """
         ...
 
     @abc.abstractmethod
-    async def _call_api(self, prompt: str) -> ClassificationResponse:
+    async def _call_api(self, prompt: str) -> AssessmentResponse:
         """プロバイダー SDK を呼び出し、構造化レスポンスを返す。"""
         ...
 
@@ -82,7 +82,7 @@ class BaseClassifier(abc.ABC):
 
     # -- 単発呼び出し --
 
-    async def _call_once(self, prompt: str) -> ClassificationResponse:
+    async def _call_once(self, prompt: str) -> AssessmentResponse:
         """プロバイダー API を 1 回呼び出し、例外をエラー階層に変換する。"""
         try:
             logger.info("classifier_api_call", model=self.model_name)

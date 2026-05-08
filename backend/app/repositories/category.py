@@ -4,8 +4,8 @@ from sqlalchemy import Row
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import func, select
 
-from app.models.article_analysis import ArticleAnalysis
 from app.models.category import Category
+from app.models.in_scope_assessment import InScopeAssessment
 
 SIDEBAR_RECENT_WINDOW = timedelta(hours=24)
 
@@ -36,11 +36,11 @@ class CategoryRepository:
         cutoff = datetime.now(UTC) - SIDEBAR_RECENT_WINDOW
         stmt = (
             select(
-                ArticleAnalysis.category_id,
-                func.count(ArticleAnalysis.id).label("recent_count"),
+                InScopeAssessment.category_id,
+                func.count(InScopeAssessment.id).label("recent_count"),
             )
-            .where(ArticleAnalysis.analyzed_at > cutoff)
-            .group_by(ArticleAnalysis.category_id)
+            .where(InScopeAssessment.analyzed_at > cutoff)
+            .group_by(InScopeAssessment.category_id)
         )
         result = await self.session.execute(stmt)
         return list(result.all())

@@ -4,8 +4,8 @@ from sqlalchemy import delete, exists
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import func, select
 
-from app.models.article_analysis import ArticleAnalysis
 from app.models.article_extraction import ArticleExtraction
+from app.models.in_scope_assessment import InScopeAssessment
 from app.models.watchlist_entry import WatchlistEntry
 from app.repositories.articles import article_eager_options_brief
 from app.schemas.base import PaginationParams
@@ -19,18 +19,18 @@ class WatchlistRepository:
         self,
         user_id: UUID,
         pagination: PaginationParams,
-    ) -> tuple[list[ArticleAnalysis], int]:
+    ) -> tuple[list[InScopeAssessment], int]:
         """ウォッチ中の記事（分析済みのみ）をページングで取得する.
 
         (analyses, total_count) を返す.
         """
         base = (
-            select(ArticleAnalysis)
-            .join(ArticleAnalysis.extraction)
+            select(InScopeAssessment)
+            .join(InScopeAssessment.extraction)
             .join(ArticleExtraction.article)
             .join(
                 WatchlistEntry,
-                WatchlistEntry.article_analysis_id == ArticleAnalysis.id,
+                WatchlistEntry.article_analysis_id == InScopeAssessment.id,
             )
             .where(WatchlistEntry.user_id == user_id)
         )

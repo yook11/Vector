@@ -13,9 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from app.models.article import Article
-from app.models.article_analysis import ArticleAnalysis
 from app.models.article_extraction import ArticleExtraction
-from app.models.article_rejection import ArticleRejection
+from app.models.in_scope_assessment import InScopeAssessment
+from app.models.out_of_scope_assessment import OutOfScopeAssessment
 
 
 class PipelineBacklog:
@@ -62,16 +62,16 @@ class PipelineBacklog:
             select(Article.id)
             .join(ArticleExtraction, ArticleExtraction.article_id == Article.id)
             .outerjoin(
-                ArticleAnalysis,
-                ArticleAnalysis.extraction_id == ArticleExtraction.id,
+                InScopeAssessment,
+                InScopeAssessment.extraction_id == ArticleExtraction.id,
             )
             .outerjoin(
-                ArticleRejection,
-                ArticleRejection.extraction_id == ArticleExtraction.id,
+                OutOfScopeAssessment,
+                OutOfScopeAssessment.extraction_id == ArticleExtraction.id,
             )
             .where(
-                ArticleAnalysis.id.is_(None),
-                ArticleRejection.id.is_(None),
+                InScopeAssessment.id.is_(None),
+                OutOfScopeAssessment.id.is_(None),
                 Article.created_at < created_before,
                 Article.created_at >= created_after,
             )
@@ -90,14 +90,14 @@ class PipelineBacklog:
     ) -> list[int]:
         """analysis はあるが embedding が NULL な Analysis ID を返す (Stage E 残)."""
         stmt = (
-            select(ArticleAnalysis.id)
+            select(InScopeAssessment.id)
             .join(
                 ArticleExtraction,
-                ArticleExtraction.id == ArticleAnalysis.extraction_id,
+                ArticleExtraction.id == InScopeAssessment.extraction_id,
             )
             .join(Article, Article.id == ArticleExtraction.article_id)
             .where(
-                ArticleAnalysis.embedding.is_(None),
+                InScopeAssessment.embedding.is_(None),
                 Article.created_at < created_before,
                 Article.created_at >= created_after,
             )

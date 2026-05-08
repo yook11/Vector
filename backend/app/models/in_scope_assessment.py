@@ -1,3 +1,16 @@
+"""Stage 4 (Assessment) で in-scope と判定された extraction の評価結果 (ORM)。
+
+translated_title / summary は extractions から複製保持し、assessment 単独で
+「ユーザーに見せる分析結果」として自己完結する。
+
+Topic は 2026-04 の決定で表示専用属性に降格し、独立テーブルから当行の
+自由記述カラム（TopicName VO 列）に移動した。Category は第一級フィルタ軸
+として直接 FK を持つ。
+
+注: ``__tablename__`` は旧名 ``article_analyses`` のまま据え置き。DB rename
+は PR3.5-d.1 の Alembic migration で行う。
+"""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -24,20 +37,14 @@ if TYPE_CHECKING:
     from app.models.watchlist_entry import WatchlistEntry
 
 
-__all__ = ["ArticleAnalysis"]
+__all__ = ["InScopeAssessment"]
 
 
-class ArticleAnalysis(Base):
-    """Stage 2 で Classified と判定された extraction の分析結果。
+class InScopeAssessment(Base):
+    """Stage 4 で in-scope と判定された extraction の評価結果 (ORM)。"""
 
-    translated_title / summary は extractions から複製保持し、analysis 単独で
-    「ユーザーに見せる分析結果」として自己完結する。
-
-    Topic は 2026-04 の決定で表示専用属性に降格し、独立テーブルから当行の
-    自由記述カラム（TopicName VO 列）に移動した。Category は第一級フィルタ軸
-    として直接 FK を持つ。
-    """
-
+    # PR3.5-d.0: 旧名 "article_analyses" のまま据え置き。PR3.5-d.1 で
+    # "in_scope_assessments" に rename 予定。
     __tablename__ = "article_analyses"
     __table_args__ = (
         UniqueConstraint("extraction_id", name="uq_article_analyses_extraction_id"),
@@ -105,7 +112,9 @@ class ArticleAnalysis(Base):
     )
 
     # リレーション
-    extraction: Mapped[ArticleExtraction] = relationship(back_populates="analysis")
+    extraction: Mapped[ArticleExtraction] = relationship(
+        back_populates="in_scope_assessment"
+    )
     watchlist_entries: Mapped[list[WatchlistEntry]] = relationship(
-        back_populates="article_analysis"
+        back_populates="in_scope_assessment"
     )

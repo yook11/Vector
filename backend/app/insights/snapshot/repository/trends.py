@@ -1,7 +1,7 @@
 """週次トレンド集計の Repository。
 
 責務:
-- ``ArticleAnalysis`` / ``ArticleExtractionEntity`` を JOIN して 1 カテゴリ × 1
+- ``InScopeAssessment`` / ``ArticleExtractionEntity`` を JOIN して 1 カテゴリ × 1
   週分の hot entity / hot topic / new entity を集計し、digest BC の VO で返す。
 - 期間境界 ``[current_start, current_end)`` (半開区間) で絞り込む。
 - entity は ``COUNT(DISTINCT extraction_id)`` で同一 extraction 内重複を排除する。
@@ -27,8 +27,8 @@ from sqlmodel import select
 
 from app.insights.snapshot.config import MIN_CURRENT, MIN_PREVIOUS, NEW_BURST_THRESHOLD
 from app.insights.snapshot.domain.trend import EntityTrend, NewEntity, TopicTrend
-from app.models.article_analysis import ArticleAnalysis
 from app.models.article_extraction_entity import ArticleExtractionEntity
+from app.models.in_scope_assessment import InScopeAssessment
 
 
 class TrendsRepository:
@@ -109,7 +109,7 @@ class TrendsRepository:
     ) -> tuple[TopicTrend, ...]:
         """1 カテゴリ × 1 週分の hot topic を集計して返す。
 
-        topic は ``ArticleAnalysis`` の単一カラムなので 1 analysis = 1 件として
+        topic は ``InScopeAssessment`` の単一カラムなので 1 analysis = 1 件として
         ``COUNT(*)`` で数える。
         """
         current_sub = self._topic_window_subquery(
@@ -217,9 +217,9 @@ class TrendsRepository:
         self, *, current_start: datetime, current_end: datetime
     ) -> int:
         """指定 window 内の analysis 件数を全カテゴリ合算で返す (snapshot メタ情報)。"""
-        stmt = select(func.count(ArticleAnalysis.id)).where(
-            ArticleAnalysis.analyzed_at >= current_start,
-            ArticleAnalysis.analyzed_at < current_end,
+        stmt = select(func.count(InScopeAssessment.id)).where(
+            InScopeAssessment.analyzed_at >= current_start,
+            InScopeAssessment.analyzed_at < current_end,
         )
         return (await self._session.execute(stmt)).scalar_one()
 
@@ -252,13 +252,14 @@ class TrendsRepository:
                 ),
             )
             .join(
-                ArticleAnalysis,
-                ArticleAnalysis.extraction_id == ArticleExtractionEntity.extraction_id,
+                InScopeAssessment,
+                InScopeAssessment.extraction_id
+                == ArticleExtractionEntity.extraction_id,
             )
             .where(
-                ArticleAnalysis.category_id == category_id,
-                ArticleAnalysis.analyzed_at >= window_start,
-                ArticleAnalysis.analyzed_at < window_end,
+                InScopeAssessment.category_id == category_id,
+                InScopeAssessment.analyzed_at >= window_start,
+                InScopeAssessment.analyzed_at < window_end,
             )
             .group_by(match_key, type_key)
             .subquery(label)
@@ -275,14 +276,14 @@ class TrendsRepository:
         """1 期間分の topic 集計 subquery (1 analysis = 1 件)。"""
         return (
             select(
-                ArticleAnalysis.topic.label("topic"),
-                func.count(ArticleAnalysis.id).label("cnt"),
+                InScopeAssessment.topic.label("topic"),
+                func.count(InScopeAssessment.id).label("cnt"),
             )
             .where(
-                ArticleAnalysis.category_id == category_id,
-                ArticleAnalysis.analyzed_at >= window_start,
-                ArticleAnalysis.analyzed_at < window_end,
+                InScopeAssessment.category_id == category_id,
+                InScopeAssessment.analyzed_at >= window_start,
+                InScopeAssessment.analyzed_at < window_end,
             )
-            .group_by(ArticleAnalysis.topic)
+            .group_by(InScopeAssessment.topic)
             .subquery(label)
         )

@@ -16,8 +16,8 @@ from app.analysis.classifier.base import BaseClassifier
 from app.analysis.classifier.gemini_prompt import GeminiClassificationPrompt
 from app.analysis.classifier.prompts import to_domain
 from app.analysis.classifier.schema import (
+    AssessmentResponse,
     ClassificationRawResponse,
-    ClassificationResponse,
 )
 from app.analysis.errors import (
     AnalysisDomainError,
@@ -50,14 +50,14 @@ class GeminiClassifier(BaseClassifier):
         self,
         title_ja: str,
         summary_ja: str,
-    ) -> ClassificationResponse:
-        """Stage 1 の出力を分類する。原文は読まない。"""
+    ) -> AssessmentResponse:
+        """Stage 3 (Extraction) の出力を判定する。原文は読まない。"""
         prompt = GeminiClassificationPrompt.render(
             title_ja=title_ja, summary_ja=summary_ja
         )
         return await self._call_once(prompt)
 
-    async def _call_api(self, prompt: str) -> ClassificationResponse:
+    async def _call_api(self, prompt: str) -> AssessmentResponse:
         """Gemini の generate_content API を呼び出し構造化出力を受け取る。"""
         response = await self._client.aio.models.generate_content(
             model=GeminiClassificationPrompt.MODEL,

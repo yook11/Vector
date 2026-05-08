@@ -11,7 +11,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
 
 if TYPE_CHECKING:
-    from app.models.article_analysis import ArticleAnalysis
+    from app.models.in_scope_assessment import InScopeAssessment
 
 
 class WatchlistEntry(Base):
@@ -31,6 +31,8 @@ class WatchlistEntry(Base):
     )
 
     # リレーション
-    article_analysis: Mapped[ArticleAnalysis] = relationship(
+    # PR3.5-d.0: ORM クラス名は InScopeAssessment に rename 済。属性名 / カラム名
+    # (article_analysis_id) は API/DB 互換のため据え置き。
+    in_scope_assessment: Mapped[InScopeAssessment] = relationship(
         back_populates="watchlist_entries"
     )

@@ -172,10 +172,11 @@ async def backfill_extractions(ctx: Context = TaskiqDepends()) -> None:
     schedule=[{"cron": "5,20,35,50 * * * *"}],
 )
 async def backfill_classifications(ctx: Context = TaskiqDepends()) -> None:
-    """analysis / rejection が無い Article を発見して classify_content を再投入する。
+    """in-scope / out-of-scope assessment が無い Article を発見して
+    assess_content を再投入する。
 
     Pattern A' (spec §3.4 / §7.2) maintenance task として、自身が gatekeeper を
-    兼ねる: 各 article_id ごとに `ReadyForClassification.try_advance_from` を呼び、
+    兼ねる: 各 article_id ごとに `ReadyForAssessment.try_advance_from` を呼び、
     成立するもののみ `kiq(ready)` で再投入する。
     """
     if not settings.backfill_classifications_enabled:
@@ -211,11 +212,11 @@ async def backfill_classifications(ctx: Context = TaskiqDepends()) -> None:
         logger.warning("backfill_classifications_daily_budget_exhausted", found=found)
         return
 
-    from app.analysis.classification.domain.ready import ReadyForClassification
-    from app.analysis.classification.rejection_repository import RejectionRepository
-    from app.analysis.classification.repository import AnalysisRepository
+    from app.analysis.assessment.domain.ready import ReadyForAssessment
+    from app.analysis.assessment.out_of_scope_repository import OutOfScopeRepository
+    from app.analysis.assessment.repository import InScopeRepository
     from app.analysis.extraction.repository import ExtractionRepository
-    from app.analysis.tasks import classify_content
+    from app.analysis.tasks import assess_content
 
     requeued = 0
     skipped = 0
@@ -223,21 +224,21 @@ async def backfill_classifications(ctx: Context = TaskiqDepends()) -> None:
         try:
             async with session_factory() as session:
                 extraction_repo = ExtractionRepository(session)
-                analysis_repo = AnalysisRepository(session)
-                rejection_repo = RejectionRepository(session)
+                in_scope_repo = InScopeRepository(session)
+                out_of_scope_repo = OutOfScopeRepository(session)
                 extraction = await extraction_repo.find_by_article_id(article_id)
                 if extraction is None:
                     skipped += 1
                     continue
-                ready = await ReadyForClassification.try_advance_from(
+                ready = await ReadyForAssessment.try_advance_from(
                     extraction,
-                    analysis_repo=analysis_repo,
-                    rejection_repo=rejection_repo,
+                    in_scope_repo=in_scope_repo,
+                    out_of_scope_repo=out_of_scope_repo,
                 )
             if ready is None:
                 skipped += 1
                 continue
-            await classify_content.kiq(ready)
+            await assess_content.kiq(ready)
             requeued += 1
         except Exception as e:  # noqa: BLE001
             logger.warning(
@@ -306,24 +307,24 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
         logger.warning("backfill_embeddings_daily_budget_exhausted", found=found)
         return
 
-    from app.analysis.classification.repository import AnalysisRepository
+    from app.analysis.assessment.repository import InScopeRepository
     from app.analysis.embedding.domain.ready import ReadyForEmbedding
     from app.analysis.embedding.repository import EmbeddingRepository
     from app.analysis.tasks import generate_embedding
 
     requeued = 0
     skipped = 0
-    for analysis_id in ids[:granted]:
+    for assessment_id in ids[:granted]:
         try:
             async with session_factory() as session:
-                analysis_repo = AnalysisRepository(session)
+                in_scope_repo = InScopeRepository(session)
                 embedding_repo = EmbeddingRepository(session)
-                analysis = await analysis_repo.find_by_id(analysis_id)
-                if analysis is None:
+                assessment = await in_scope_repo.find_by_id(assessment_id)
+                if assessment is None:
                     skipped += 1
                     continue
                 ready = await ReadyForEmbedding.try_advance_from(
-                    analysis,
+                    assessment,
                     embedding_repo,
                 )
             if ready is None:
@@ -334,7 +335,7 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
         except Exception as e:  # noqa: BLE001
             logger.warning(
                 "backfill_embeddings_kiq_failed",
-                analysis_id=analysis_id,
+                assessment_id=assessment_id,
                 error=str(e),
             )
             continue

@@ -1,6 +1,10 @@
-"""Stage 2 で対象外（OutOfScope）と判定された extraction の記録。
+"""Stage 4 (Assessment) で out-of-scope と判定された extraction の記録 (ORM)。
 
-article_analyses とは同一 extraction に対して排他（DB トリガーで強制）。
+article_analyses (in_scope_assessments) とは同一 extraction に対して排他
+（DB トリガーで強制）。
+
+注: ``__tablename__`` は旧名 ``article_rejections`` のまま据え置き。DB rename
+は PR3.5-d.1 の Alembic migration で行う。
 """
 
 from __future__ import annotations
@@ -25,7 +29,14 @@ if TYPE_CHECKING:
     from app.models.article_extraction import ArticleExtraction
 
 
-class ArticleRejection(Base):
+__all__ = ["OutOfScopeAssessment"]
+
+
+class OutOfScopeAssessment(Base):
+    """Stage 4 で out-of-scope と判定された extraction の記録 (ORM)。"""
+
+    # PR3.5-d.0: 旧名 "article_rejections" のまま据え置き。PR3.5-d.1 で
+    # "out_of_scope_assessments" に rename 予定。
     __tablename__ = "article_rejections"
     __table_args__ = (
         UniqueConstraint("extraction_id", name="uq_article_rejections_extraction_id"),
@@ -50,4 +61,6 @@ class ArticleRejection(Base):
     )
 
     # リレーション
-    extraction: Mapped[ArticleExtraction] = relationship(back_populates="rejection")
+    extraction: Mapped[ArticleExtraction] = relationship(
+        back_populates="out_of_scope_assessment"
+    )

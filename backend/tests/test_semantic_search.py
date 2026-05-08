@@ -8,9 +8,9 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article
-from app.models.article_analysis import ArticleAnalysis
 from app.models.article_extraction import ArticleExtraction
 from app.models.category import Category
+from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource, SourceType
 
 # ---------------------------------------------------------------------------
@@ -63,8 +63,8 @@ async def _create_article(
     db_session.add(extraction)
     await db_session.flush()
 
-    # ArticleAnalysis は INNER JOIN のため常に作成し、embedding があれば付与する
-    analysis = ArticleAnalysis(
+    # InScopeAssessment は INNER JOIN のため常に作成し、embedding があれば付与する
+    analysis = InScopeAssessment(
         extraction_id=extraction.id,
         translated_title=f"Translated: {title}",
         summary="Test summary",

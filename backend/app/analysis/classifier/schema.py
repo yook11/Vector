@@ -1,9 +1,9 @@
-"""Stage 2 分類 AI レスポンスの Pydantic スキーマ。
+"""Stage 4 (Assessment) 判定 AI レスポンスの Pydantic スキーマ。
 
 AI 境界は常にフラットな ``ClassificationRawResponse`` で受ける（category は
-OUT_OF_SCOPE 含む 12 種類から 1 つ選択）。classifier 実装内で ``Classified`` か
+OUT_OF_SCOPE 含む 13 種類から 1 つ選択）。classifier 実装内で ``InScope`` か
 ``OutOfScope`` のドメイン型に詰め替え、呼び出し側は ``match`` / ``isinstance``
-で型ディスパッチする。これにより「分類できたか否か」が型そのもので保証される。
+で型ディスパッチする。これにより「対象範囲内か否か」が型そのもので保証される。
 """
 
 from __future__ import annotations
@@ -54,8 +54,11 @@ class ClassificationRawResponse(BaseModel):
     investor_take: str = Field(min_length=1)
 
 
-class Classified(BaseModel):
-    """分類に成功したケース（Stage 2 で既存 11 カテゴリのいずれかに分類）。"""
+class InScope(BaseModel):
+    """対象範囲内 (in-scope) と判定されたケース。
+
+    Stage 4 で 12 カテゴリ + other のいずれかに分類される。
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -65,13 +68,14 @@ class Classified(BaseModel):
 
 
 class OutOfScope(BaseModel):
-    """先端テック領域外、または既存 11 カテゴリに分類不能なケース。"""
+    """対象範囲外 (out-of-scope) — 投資判断に寄与しないと判定されたケース。"""
 
     model_config = ConfigDict(frozen=True)
 
     investor_take: str = Field(min_length=1)
 
 
-ClassificationResponse = Classified | OutOfScope
-"""Stage 2 分類の結果型。Service はこの union を受け取り、``match`` / ``isinstance``
-で型ディスパッチする。型そのものが「分類できた／できなかった」を表現する。"""
+AssessmentResponse = InScope | OutOfScope
+"""Stage 4 (Assessment) の結果型。Service はこの union を受け取り、
+``match`` / ``isinstance`` で型ディスパッチする。型そのものが
+「対象範囲内/対象範囲外」を表現する。"""

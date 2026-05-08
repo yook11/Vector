@@ -41,7 +41,7 @@ from app.analysis.classifier.base import BaseClassifier
 from app.analysis.classifier.deepseek import DeepSeekClassifier
 from app.analysis.classifier.gemini import GeminiClassifier
 from app.analysis.classifier.schema import (
-    Classified,
+    InScope,
     OutOfScope,
     ValidCategory,
 )
@@ -109,7 +109,7 @@ async def _call_classifier(classifier: BaseClassifier, sample: Sample) -> CallRe
             error_message=None,
             is_validation_error=False,
         )
-    assert isinstance(result, Classified)  # noqa: S101 — tagged union exhaustiveness
+    assert isinstance(result, InScope)  # noqa: S101 — tagged union exhaustiveness
     return CallResult(
         category_value=result.category.value,
         topic=str(result.topic),
