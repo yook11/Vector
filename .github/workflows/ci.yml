@@ -2,9 +2,27 @@ name: CI
 
 on:
   push:
-    branches: [main, develop]
+    # develop 廃止 + feature branch への push 重複解消 (PR では pull_request trigger
+    # のみ走り、main への merge 時のみ push trigger が走る)。
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'specs/**'
+      - '.claude/**'
   pull_request:
-    branches: [main, develop]
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'specs/**'
+      - '.claude/**'
+
+# 同一 branch / PR の古い run を新しい push で cancel する。force push / 連打時の
+# 計算資源消費を抑制。schemathesis-nightly は schedule 専用で別の concurrency 設定。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   # E2E smoke を path-filter で関連変更 PR のみに走らせるため、changed file
@@ -456,3 +474,30 @@ jobs:
             ${{ runner.temp }}/backend.log
             ${{ runner.temp }}/frontend.log
           retention-days: 7
+
+  # ---- pre-commit (gitleaks + hadolint のみ、ruff/biome は backend-unit/frontend job に重複) ----
+  # 旧 .github/workflows/pre-commit.yml を統合した job。dev で `--no-verify` bypass された
+  # 場合の二次防衛として、CI で gitleaks (secret scan) + hadolint (Dockerfile lint) を再実行する。
+  # ruff/biome は ci.yml 内の backend-unit / frontend job で既に走っているため、ここでは除外。
+  pre-commit:
+    name: Pre-commit (gitleaks + hadolint)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          # gitleaks の history scan 拡張に備えて全 history を取得 (現状は staged/PR diff のみ)。
+          fetch-depth: 0
+
+      - name: Cache pre-commit hook envs
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
+
+      - name: Run pre-commit (gitleaks + hadolint only)
+        run: |
+          pip install pre-commit
+          pre-commit run gitleaks --all-files --show-diff-on-failure
+          pre-commit run hadolint-docker --all-files --show-diff-on-failure

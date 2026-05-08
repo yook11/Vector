@@ -14,9 +14,26 @@ name: Security (PR gate)
 
 on:
   pull_request:
-    branches: [main, develop]
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'specs/**'
+      - '.claude/**'
   push:
-    branches: [main, develop]
+    # develop 廃止 + feature branch への push 重複解消 (PR では pull_request trigger
+    # のみ走り、main への merge 時のみ push trigger が走る)。
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'specs/**'
+      - '.claude/**'
+
+# 同一 branch / PR の古い run を新しい push で cancel する。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
