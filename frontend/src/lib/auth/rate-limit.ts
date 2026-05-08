@@ -8,13 +8,19 @@
  * 構造的に bound する。
  *
  * フェイルオープン: Redis 不通時は throttle を skip して通す。Redis 障害が
- * 全リクエスト 503 に直結しないようにし、一次防衛線は pg.Pool 設定に委ねる。
- * 永続障害が無音にならないよう、warn ログは 60 秒ごとに 1 度出す
+ * 全リクエスト 503 に直結しないようにし、一次防衛線は pg.Pool 設定に委ねる
+ * (ADR-006 §3)。永続障害が無音にならないよう、warn ログは 60 秒ごとに 1 度出す
  * (red-team C1 / F23 対策。一度きりログだと Redis ダウンを運用が見落とす)。
  *
  * limit は per-IP の 1 種類 (red-team C1 / F2-F4 対策で identifier を IP に統一)。
  * 認証状態に応じた limit 緩和は本モジュールでは扱わず、後段の Better Auth
  * 内蔵 rate-limit / backend 側に任せる。
+ *
+ * Redis client (getRateLimitRedisClient) は auth.ts の Better Auth
+ * `rateLimit.customStorage` と共有する。frontend 内で同一 REDIS_URL_RL
+ * instance を 1 client で扱うことで、Better Auth 経路 (baRateLimit:* key) と
+ * proxy.ts 経路 (rl:ip:* key) が論理分離されたまま接続コストを節約する
+ * (red-team chain ι 解消の基盤)。
  */
 
 import "server-only";
@@ -63,7 +69,15 @@ function logRedisError(context: string, err: unknown): void {
   globalForRedis.__vectorRateLimitErrorLastMs = now;
 }
 
-function getClient(): RedisClientType | null {
+/**
+ * frontend 内の rate-limit 用 Redis client (singleton)。
+ *
+ * 本モジュールの `checkRateLimit` (proxy.ts sliding window log) と
+ * `auth.ts` の Better Auth `rateLimit.customStorage` で共有する。
+ * 戻り値 `null` は REDIS_URL_RL / REDIS_URL いずれも未設定の状況で、
+ * 呼び出し側は fail-open (allow) の判定に使う (ADR-006 §3)。
+ */
+export function getRateLimitRedisClient(): RedisClientType | null {
   if (globalForRedis.__vectorRateLimitRedis) {
     return globalForRedis.__vectorRateLimitRedis;
   }
@@ -105,7 +119,7 @@ return 1
 export async function checkRateLimit(
   identifier: RequestIdentifier,
 ): Promise<RateLimitDecision> {
-  const c = getClient();
+  const c = getRateLimitRedisClient();
   if (!c) {
     return { allowed: true };
   }
