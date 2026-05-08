@@ -1,6 +1,6 @@
 name: Schemathesis Nightly
 
-# Phase 2 #1 (Phase 0 鏡像): FastAPI /openapi.json と実装の適合性 fuzz (warn-only init scan)。
+# Phase 2 #1 (Phase 0 鏡像): FastAPI /openapi.json と実装の適合性 fuzz (blocking 化済)。
 # - 5xx leak / undeclared status / response schema mismatch を property-based fuzz で検出
 # - 初回は GET only + minimal checks (not_a_server_error / status_code_conformance /
 #   response_schema_conformance) で signal 切り分け
@@ -237,8 +237,7 @@ jobs:
       #   stateful 化は別 PR)
       # - --report junit,vcr + --report-dir: output ディレクトリに集約して
       #   artifact 1 つで上げる
-      - name: Run Schemathesis (warn-only)
-        continue-on-error: true
+      - name: Run Schemathesis (blocking)
         run: |
           schemathesis run http://localhost:8000/openapi.json \
             -H "Authorization: Bearer ${SCHEMATHESIS_TOKEN}" \
