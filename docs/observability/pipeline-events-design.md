@@ -302,9 +302,11 @@ PipelineEventPayload = Annotated[
 | content_fetch | succeeded | `fetched` / `already_fetched` | Service 同 tx |
 | content_fetch | skipped | `discovered_not_found` / `permanent_fetch_error` / `not_html` / `parse_error` / `quality_gate` | Service 同 tx |
 | content_fetch | failed | `temporary_fetch_error_exhausted` / `unexpected_error` | Task except 節 |
-| extraction | succeeded | `extracted` / `already_extracted` | Service 同 tx |
-| extraction | skipped | `not_found` / `empty_content` | Service 同 tx |
-| extraction | failed | `ai_error_exhausted` / `unexpected_error` | Task except 節 |
+| extraction | succeeded | `extracted` / `extracted_as_noise` | Service 同 tx |
+| extraction | skipped | `skipped_invalid_input` | Service 同 tx |
+| extraction | failed (内容起因 Permanent → DELETE) | `ai_error_blocked_by_policy` / `ai_error_input_too_large` | Service `mark_article_unprocessable` 同 tx |
+| extraction | failed (環境起因 Permanent、記事保持) | `ai_error_config` / `ai_error_insufficient_balance` | Task except 節 |
+| extraction | failed (Transient、cron 救済) | `ai_error_provider` / `ai_error_rate_limited` / `ai_error_daily_quota_exhausted` / `ai_error_network` / `unclassified_error` / `unexpected_error` | Task except 節 |
 | classification | succeeded | `classified` / `already_classified` | Service 同 tx |
 | classification | rejected | `out_of_scope` / `already_rejected` | Service 同 tx |
 | classification | skipped | `extraction_pending` / `not_found` | Service 同 tx |
@@ -824,6 +826,10 @@ PR1 + PR1.5 + PR2 で payload 形を実運用検証してから PR3 以降に進
 | Stage 1 metadata 観測 | C 案: `metadata_fields_observed`（取れたフィールド名 list）+ `metadata_sample`（最初の 1 件 dump）|
 | `FetchedEntry` envelope | Fetcher が yield する 1 entry の運搬箱（`item: FetchedItem` + `metadata: FetchedMetadata`）。業務責務と監査責務を entry レベルで分離しつつ対応関係を保つ |
 | Stage 1 outcome_code | `fetched`（成功時）+ `permanent_fetch_error` / `temporary_fetch_error_exhausted` / `unexpected_error`（失敗時）の 4 種のみ |
+| Stage 3 outcome_code (PR3-a-1) | 13 個に拡張: 成功 2 (`extracted` / `extracted_as_noise`)、skip 1 (`skipped_invalid_input`)、内容起因 Permanent (DELETE 対象) 2 (`ai_error_blocked_by_policy` / `ai_error_input_too_large`)、環境起因 Permanent (記事保持) 2 (`ai_error_config` / `ai_error_insufficient_balance`)、Transient (cron 救済) 6 (`ai_error_provider` / `ai_error_rate_limited` / `ai_error_daily_quota_exhausted` / `ai_error_network` / `unclassified_error` / `unexpected_error`)。詳細は `specs/pipeline-events-stage3-design.md`。 |
+| Stage 3 reason_code を payload に追加しない (PR3-a-1) | 二層設計 (top-level `outcome_code` + payload free-form `error_chain` / `error_message`) で十分。`reason_code` を別 field として導入すると分類が outcome_code と二重化し、責務境界が崩れる。 |
+| Stage 3 DELETE 規律 (PR3-a-1) | 内容起因 Permanent failure (`ai_error_blocked_by_policy` / `ai_error_input_too_large`) のみ、`ExtractionService.mark_article_unprocessable()` が 1 tx 内で **audit INSERT 先 → DELETE 後** で実行する。`pipeline_events.article_id` は `ondelete=SET NULL`、`source_id` は INSERT 時に auto-resolve 済のため article DELETE 後も起点 source 追跡可能。環境起因 Permanent (config / 残高) と Transient は記事を残す (人間対応 / cron 救済)。 |
+| Stage 3 inline retry 範囲 (PR3-a-1) | `NetworkError` / `ProviderError` のみ `max_retries=1` で taskiq retry。それ以外 (rate limit / daily quota / config / insufficient balance / unclassified / unexpected) は即 audit 焼付けて return → 救済 cron (PR3-a-2) 委譲。 |
 
 ---
 

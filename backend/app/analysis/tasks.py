@@ -40,8 +40,13 @@ from app.analysis.errors import (
 from app.analysis.errors import (
     RateLimitError as AnalysisRateLimitError,
 )
+from app.analysis.extraction.audit import base_extraction_payload_fields
 from app.analysis.extraction.domain.ready import ReadyForExtraction
 from app.analysis.extraction.extractor.base import BaseExtractor
+from app.analysis.extraction.extractor.errors import (
+    ExtractionInputTooLargeError,
+    ExtractionPolicyBlockedError,
+)
 from app.analysis.extraction.service import (
     ExtractedOutcome,
     ExtractionService,
@@ -54,8 +59,12 @@ from app.analysis.rate_limiter import (
     RateLimitExceededError as _RateLimitExceededError,
 )
 from app.brokers import broker_analysis, broker_embedding, is_last_attempt
+from app.observability.domain.event import Stage
+from app.observability.recording import _record_failure_event
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
     from app.analysis.rate_limiter import RateLimiter
 
 logger = structlog.get_logger(__name__)
@@ -114,7 +123,7 @@ def _build_limiters(
 @broker_analysis.task(
     task_name="extract_content",
     timeout=180,
-    max_retries=2,
+    max_retries=1,
     retry_on_error=True,
 )
 async def extract_content(
@@ -126,6 +135,17 @@ async def extract_content(
     Pattern A': 受け取った Ready 型は precondition (article 存在 + extraction 未生成
     + 本文サイズ ≤ hard cap) を構造保証している。本 task は再 fetch / None check を
     行わない。
+
+    例外 dispatch (PR3-a-1):
+    - 内容起因 Permanent (DELETE 対象): ExtractionPolicyBlockedError /
+      ExtractionInputTooLargeError → ``svc.mark_article_unprocessable``
+    - 環境起因 Permanent (記事保持、人間対応): ConfigurationError /
+      InsufficientBalanceError → audit のみ
+    - Transient (cron 救済 PR3-a-2 委譲): DailyQuotaExhaustedError /
+      AnalysisRateLimitError / NetworkError / ProviderError /
+      UnclassifiedError / 想定外例外 → audit のみ
+    - inline retry: NetworkError / ProviderError のみ ``max_retries=1`` で
+      raise (他は即 audit 焼付して return)。
     """
     session_factory = ctx.state.session_factory
     extractor: BaseExtractor = ctx.state.extractor
@@ -145,29 +165,101 @@ async def extract_content(
 
     # Service 呼び出し（session は内部で管理）
     svc = ExtractionService(session_factory)
+    attempt = int(ctx.message.labels.get("retry_count", 0)) + 1
     try:
         result = await svc.execute(ready, extractor)
-    except (ConfigurationError, DailyQuotaExhaustedError) as e:
-        logger.warning(
-            "extract_content_no_retry",
-            article_id=ready.article_id,
-            reason=str(e),
+    except ExtractionPolicyBlockedError as exc:
+        await svc.mark_article_unprocessable(
+            ready.article_id,
+            ready.original_content,
+            outcome_code="ai_error_blocked_by_policy",
+            exc=exc,
         )
         return
-    except (
-        AnalysisRateLimitError,
-        ProviderError,
-        NetworkError,
-        UnclassifiedError,
-    ) as e:
+    except ExtractionInputTooLargeError as exc:
+        await svc.mark_article_unprocessable(
+            ready.article_id,
+            ready.original_content,
+            outcome_code="ai_error_input_too_large",
+            exc=exc,
+        )
+        return
+    except ConfigurationError as exc:
+        await _audit_extraction_failure(
+            session_factory=session_factory,
+            ready=ready,
+            outcome_code="ai_error_config",
+            exc=exc,
+            attempt=attempt,
+        )
+        return
+    except InsufficientBalanceError as exc:
+        await _audit_extraction_failure(
+            session_factory=session_factory,
+            ready=ready,
+            outcome_code="ai_error_insufficient_balance",
+            exc=exc,
+            attempt=attempt,
+        )
+        return
+    except DailyQuotaExhaustedError as exc:
+        await _audit_extraction_failure(
+            session_factory=session_factory,
+            ready=ready,
+            outcome_code="ai_error_daily_quota_exhausted",
+            exc=exc,
+            attempt=attempt,
+        )
+        return
+    except AnalysisRateLimitError as exc:
+        await _audit_extraction_failure(
+            session_factory=session_factory,
+            ready=ready,
+            outcome_code="ai_error_rate_limited",
+            exc=exc,
+            attempt=attempt,
+        )
+        return
+    except NetworkError as exc:
         if is_last_attempt(ctx):
-            logger.warning(
-                "extract_content_max_retries",
-                article_id=ready.article_id,
-                reason=str(e),
+            await _audit_extraction_failure(
+                session_factory=session_factory,
+                ready=ready,
+                outcome_code="ai_error_network",
+                exc=exc,
+                attempt=attempt,
             )
             return
-        raise
+        raise  # taskiq retry
+    except ProviderError as exc:
+        if is_last_attempt(ctx):
+            await _audit_extraction_failure(
+                session_factory=session_factory,
+                ready=ready,
+                outcome_code="ai_error_provider",
+                exc=exc,
+                attempt=attempt,
+            )
+            return
+        raise  # taskiq retry
+    except UnclassifiedError as exc:
+        await _audit_extraction_failure(
+            session_factory=session_factory,
+            ready=ready,
+            outcome_code="unclassified_error",
+            exc=exc,
+            attempt=attempt,
+        )
+        return
+    except Exception as exc:
+        await _audit_extraction_failure(
+            session_factory=session_factory,
+            ready=ready,
+            outcome_code="unexpected_error",
+            exc=exc,
+            attempt=attempt,
+        )
+        return
 
     # Stage D へ chain (Pattern A': 上流 Task が下流 Ready を構築 — spec §7.1)
     if isinstance(result, ExtractedOutcome):
@@ -191,6 +283,37 @@ async def extract_content(
             "extract_content_invalid_input",
             article_id=ready.article_id,
         )
+
+
+async def _audit_extraction_failure(
+    *,
+    session_factory: async_sessionmaker[AsyncSession],
+    ready: ReadyForExtraction,
+    outcome_code: str,
+    exc: BaseException,
+    attempt: int,
+) -> None:
+    """tasks.py 由来の business failure を ``pipeline_events`` に焼付ける。
+
+    Service の同 tx audit と異なり、新 session で別 tx commit (業務処理が
+    raise した時点で Service session は rollback 済 / 開いていないため)。
+    Stage 3 用に ``base_extraction_payload_fields`` を payload_extra に積む
+    (source_name は省略 — 別 session 開く redundancy を避け、source_id 自動
+    補完 + audit GIN index で検索可能なため)。
+    """
+    payload_extra = base_extraction_payload_fields(
+        original_content=ready.original_content,
+    )
+    await _record_failure_event(
+        session_factory=session_factory,
+        stage=Stage.EXTRACTION,
+        outcome_code=outcome_code,
+        exc=exc,
+        attempt=attempt,
+        duration_ms=None,
+        article_id=ready.article_id,
+        payload_extra=payload_extra,
+    )
 
 
 # ---------------------------------------------------------------------------

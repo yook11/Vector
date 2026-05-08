@@ -8,7 +8,11 @@ from typing import ClassVar
 import structlog
 
 from app.analysis.errors import AnalysisDomainError
-from app.analysis.extraction.domain import ExtractionResult
+from app.analysis.extraction.extractor.envelope import ExtractionCall
+from app.analysis.extraction.extractor.errors import (
+    ExtractionInputTooLargeError,
+    ExtractionPolicyBlockedError,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -53,7 +57,7 @@ class BaseExtractor(abc.ABC):
         self,
         title: str,
         content: str,
-    ) -> ExtractionResult:
+    ) -> ExtractionCall:
         """記事から事実を抽出し、構造化データを返す。
 
         Article の存在が content の品質を保証する（50 文字以上）。
@@ -63,33 +67,45 @@ class BaseExtractor(abc.ABC):
             content: 記事本文全文（Article.original_content）。
 
         Returns:
-            翻訳タイトル・事実ベース要約・エンティティリストを含む ExtractionResult。
+            ``result`` (ExtractionResult) に加え ``raw_response`` と
+            ``prompt_version`` を含む envelope。
 
         Raises:
-            AnalysisDomainError: 抽出に失敗した場合。
+            AnalysisDomainError: 抽出に失敗した場合 (infrastructure 起因)。
+            ExtractionPolicyBlockedError: 内容がプロバイダーポリシーに抵触。
+            ExtractionInputTooLargeError: 入力が context window 超過。
         """
         ...
 
     @abc.abstractmethod
-    async def _call_api(self, prompt: str) -> ExtractionResult:
-        """プロバイダー SDK を呼び出し、構造化レスポンスを返す。"""
+    async def _call_api(self, prompt: str) -> ExtractionCall:
+        """プロバイダー SDK を呼び出し、構造化レスポンスを envelope で返す。"""
         ...
 
     @abc.abstractmethod
-    def _translate_error(self, exc: Exception) -> AnalysisDomainError:
-        """SDK 例外をエラー階層に分類する。"""
+    def _translate_error(self, exc: Exception) -> Exception:
+        """SDK 例外を Vector の例外階層に分類する。
+
+        戻り値は ``AnalysisDomainError`` のサブクラス、または PR3-a-1 で
+        新設した ``ExtractionInputTooLargeError`` のいずれか (呼出側で
+        ``raise translated from exc`` される)。
+        """
         ...
 
     # -- 単発呼び出し --
 
-    async def _call_once(self, prompt: str) -> ExtractionResult:
+    async def _call_once(self, prompt: str) -> ExtractionCall:
         """プロバイダー API を 1 回呼び出し、例外をエラー階層に変換する。"""
         try:
             logger.info("extractor_api_call", model=self.model_name)
-            result = await self._call_api(prompt)
+            envelope = await self._call_api(prompt)
             logger.info("extractor_api_success", model=self.model_name)
-            return result
-        except AnalysisDomainError:
+            return envelope
+        except (
+            AnalysisDomainError,
+            ExtractionPolicyBlockedError,
+            ExtractionInputTooLargeError,
+        ):
             raise
         except Exception as exc:
             raise self._translate_error(exc) from exc

@@ -44,6 +44,7 @@ from app.analysis.errors import (
 from app.analysis.extraction.domain import ExtractedEntity, ExtractionResult
 from app.analysis.extraction.domain.ready import ReadyForExtraction
 from app.analysis.extraction.extractor.base import BaseExtractor
+from app.analysis.extraction.extractor.envelope import ExtractionCall
 from app.analysis.extraction.extractor.gemini import GeminiExtractor
 from app.analysis.extraction.service import (
     ExtractedOutcome,
@@ -83,6 +84,25 @@ def _make_extraction_result(
             ExtractedEntity(surface=EntitySurface(s), raw_type=EntityRawType(t))
             for s, t in entities
         ],
+    )
+
+
+def _make_extraction_call(
+    title_ja: str = "量子コンピューティングの新たなブレイクスルー",
+    summary_ja: str = "MITが新手法を発表。量子エラー訂正の分野で大きな進展。",
+    entities: list[tuple[str, str]] | None = None,
+    relevance: str = "signal",
+) -> ExtractionCall:
+    """``BaseExtractor.extract()`` の戻り値 envelope を生成するヘルパー。"""
+    return ExtractionCall(
+        result=_make_extraction_result(
+            title_ja=title_ja,
+            summary_ja=summary_ja,
+            entities=entities,
+            relevance=relevance,
+        ),
+        raw_response='{"mock":"raw"}',
+        prompt_version="testver1",
     )
 
 
@@ -748,7 +768,7 @@ async def test_extraction_creates_extraction_and_entities(
     mock_extractor.MODEL = "gemini-2.5-flash-lite"
     mock_extractor.model_name = "gemini-2.5-flash-lite"
     mock_extractor.extract = AsyncMock(
-        return_value=_make_extraction_result(
+        return_value=_make_extraction_call(
             title_ja="量子ブレイクスルー",
             summary_ja="要約テスト",
             entities=[("MIT", "company"), ("CRISPR", "technology")],
@@ -809,7 +829,7 @@ async def test_extraction_race_winner_read_back(
     mock_extractor.MODEL = "gemini-2.5-flash-lite"
     mock_extractor.model_name = "gemini-2.5-flash-lite"
     mock_extractor.extract = AsyncMock(
-        return_value=_make_extraction_result(
+        return_value=_make_extraction_call(
             title_ja="重複側",
             summary_ja="重複側要約",
         )
@@ -854,7 +874,7 @@ async def test_extraction_routes_noise_to_extraction_noises_table(
     mock_extractor.MODEL = "gemini-2.5-flash-lite"
     mock_extractor.model_name = "gemini-2.5-flash-lite"
     mock_extractor.extract = AsyncMock(
-        return_value=_make_extraction_result(
+        return_value=_make_extraction_call(
             relevance="noise",
             title_ja="芸能ニュース",
             summary_ja="芸能要約",

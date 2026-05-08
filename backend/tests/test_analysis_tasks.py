@@ -187,11 +187,12 @@ class TestExtractContent:
         mock_classify.kiq.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_rate_limit_raises_for_retry(self) -> None:
+    async def test_rate_limit_records_audit_and_returns(self) -> None:
+        """PR3-a-1: RateLimitError は inline retry 対象外、即 audit 焼付して return。"""
         from app.analysis.tasks import extract_content
 
         mock_ctx = _make_ctx(
-            extractor=_make_provider_fake(), retry_count=0, max_retries=2
+            extractor=_make_provider_fake(), retry_count=0, max_retries=1
         )
 
         with (
@@ -200,33 +201,18 @@ class TestExtractContent:
                 return_value=(None, None),
             ),
             patch("app.analysis.tasks.ExtractionService") as mock_svc_cls,
-        ):
-            mock_svc_cls.return_value.execute = AsyncMock(
-                side_effect=RateLimitError("429"),
-            )
-            with pytest.raises(RateLimitError):
-                await extract_content(ready=_make_ready_extraction(), ctx=mock_ctx)
-
-    @pytest.mark.asyncio
-    async def test_rate_limit_last_attempt_returns(self) -> None:
-        """最終試行では例外を送出せず return する。"""
-        from app.analysis.tasks import extract_content
-
-        mock_ctx = _make_ctx(
-            extractor=_make_provider_fake(), retry_count=2, max_retries=2
-        )
-
-        with (
             patch(
-                "app.analysis.tasks._build_limiters",
-                return_value=(None, None),
-            ),
-            patch("app.analysis.tasks.ExtractionService") as mock_svc_cls,
+                "app.analysis.tasks._audit_extraction_failure",
+                new=AsyncMock(),
+            ) as mock_audit,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
                 side_effect=RateLimitError("429"),
             )
             await extract_content(ready=_make_ready_extraction(), ctx=mock_ctx)
+        mock_audit.assert_awaited_once()
+        kwargs = mock_audit.await_args.kwargs
+        assert kwargs["outcome_code"] == "ai_error_rate_limited"
 
 
 # ---------------------------------------------------------------------------

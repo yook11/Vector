@@ -1,6 +1,6 @@
-"""記事向けの読み取り専用クエリ（一覧/詳細/類似）."""
+"""記事向けの読み取り専用クエリ（一覧/詳細/類似）+ DELETE."""
 
-from sqlalchemy import exists, func, select, true
+from sqlalchemy import delete, exists, func, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import contains_eager, defer, selectinload
 
@@ -96,6 +96,27 @@ class ArticleRepository:
         stmt = select(exists().where(ArticleAnalysis.id == article_id))
         result = await self.session.execute(stmt)
         return result.scalar_one()
+
+    # -- public: DELETE -------------------------------------------------
+
+    async def delete_by_id(self, article_id: int) -> int:
+        """指定 ID の記事を物理削除する。
+
+        ``ondelete=CASCADE`` により ``article_extractions`` /
+        ``extraction_noises`` を経由して ``article_analyses`` /
+        ``article_extraction_entities`` / ``article_rejections`` まで
+        削除される。``pipeline_events.article_id`` は ``ondelete=SET NULL``
+        のため監査行は残り、``source_id`` で起点ソースを追跡可能。
+
+        commit は呼出側責務 (audit INSERT と同 tx でまとめる用途を想定)。
+
+        Returns:
+            削除された行数 (0 または 1)。
+        """
+        result = await self.session.execute(
+            delete(Article).where(Article.id == article_id)
+        )
+        return result.rowcount or 0
 
     async def fetch_similar_to(
         self, article_id: int, limit: int
