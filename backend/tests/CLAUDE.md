@@ -32,5 +32,5 @@
 ## 参照ドキュメント
 
 - `backend/CLAUDE.md` — バックエンド全体のルール
-- `docs/02_DATABASE_DESIGN.md` — テーブル定義
-- `docs/04_API_SPECIFICATION.md` — 期待するレスポンス形式
+- `backend/app/models/` + `backend/alembic/versions/` — テーブル定義 (SQLModel + Alembic migration が SSoT)
+- `backend/app/schemas/` — 期待するレスポンス形式 (Pydantic v2 が API SSoT、FastAPI が `/openapi.json` を自動生成)

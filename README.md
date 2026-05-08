@@ -14,11 +14,13 @@ AIで翻訳・要約・インパクト分析を行う投資ダッシュボード
 
 ### 主要機能
 
-- テックニュースの自動収集（RSS / Hacker News API / Alpha Vantage）
-- AI翻訳・要約・インパクト分析（Gemini API）
-- セマンティック検索・類似記事推薦（pgvector）
+- テックニュースの自動収集（**44+ source fetchers** — RSS / Atom / HTML listing / Sitemap、Hacker News API 含む）
+- AI翻訳・要約・インパクト分析（**Gemini + DeepSeek + OpenAI** の multi-provider）
+- セマンティック検索・類似記事推薦（pgvector）+ 認証ユーザー単位の 1 日 quota
 - 重複記事の自動検出・グループ化
 - ウォッチリスト（記事ブックマーク）
+- **週次トレンドダイジェスト** (`weekly_trends_snapshots`) と **週次 LLM ブリーフィング**
+- **Pipeline Events 監査基盤** — 全ステージの成功/失敗/AI raw response を SQL で再構成可能
 - キーワード・ニュースソース管理（管理者向け）
 - カテゴリ別のニュースフィルタリング
 
@@ -27,25 +29,33 @@ AIで翻訳・要約・インパクト分析を行う投資ダッシュボード
 | Layer | Technology | Notes |
 |-------|-----------|-------|
 | Frontend | Next.js 16 (App Router) + TypeScript | Tailwind CSS + shadcn/ui + Biome |
-| Backend | FastAPI + Python 3.13 + SQLAlchemy 2.0 | 非同期処理、Pydantic v2 |
+| Backend | FastAPI + **Python 3.13** + SQLModel (SQLAlchemy 2.0 async) | Pydantic v2、非同期処理 |
 | Auth | Better Auth (BFF Proxy) | Cookie ベースセッション + 内部 API ヘッダー認証 |
-| Database | PostgreSQL 16 + pgvector | Alembic マイグレーション管理 |
-| AI | Gemini API (gemini-2.5-flash-lite) | 翻訳・要約・インパクト分析・Embedding |
-| Task Queue | taskiq + Redis | 定期実行・非同期タスク処理 |
-| CI/CD | GitHub Actions | lint + test + type check |
-| Infrastructure | Docker Compose | 6 サービス構成 |
+| Database | PostgreSQL 16 + pgvector | Alembic マイグレーション、**二重ロール** (vector_app / vector_auth) |
+| AI | **Gemini + DeepSeek + OpenAI** (multi-provider) | Pure DI で `backend/app/brokers.py` に hardcode |
+| Embedding | `gemini-embedding-001` (768-dim halfvec) | pgvector + per-user quota |
+| Task Queue | taskiq + Redis (**6 broker 分離**) | metadata / content / analysis / embedding / digest / briefing |
+| CI/CD | GitHub Actions | lint + test + type check + 4 系統 security gate |
+| Infrastructure | Docker Compose (dev) | **10 services**、internal network 中心 |
+| Deployment | Fly.io (`your-vector-backend-app`, nrt region) | 本番設定は [backend/fly.toml](backend/fly.toml) |
 
 ## Prerequisites
 
 - Docker & Docker Compose
-- Gemini API Key ([Google AI Studio](https://aistudio.google.com/) で取得)
+- **Gemini API Key** ([Google AI Studio](https://aistudio.google.com/) で取得) — Stage 1 と Embedding に使用
+- **DeepSeek API Key** (DeepSeek 公式) — Stage 2 (classifier) に使用
+- **OpenAI API Key** (任意) — fallback / 比較用
 
 ## Getting Started
 
 ```bash
 # 1. Clone & setup
 cp .env.example .env
-# .env の GEMINI_API_KEY を設定
+# .env に以下を設定:
+#   - GEMINI_API_KEY / DEEPSEEK_API_KEY / OPENAI_API_KEY
+#   - POSTGRES_PASSWORD / POSTGRES_AUTH_PASSWORD / POSTGRES_APP_PASSWORD (それぞれ openssl rand -hex 32)
+#   - BETTER_AUTH_SECRET / INTERNAL_API_SECRET (それぞれ openssl rand -hex 32)
+#   ※ secrets が未設定または弱い値だと backend / frontend は起動拒否
 
 # 2. Start all services
 docker compose up --build
@@ -54,27 +64,11 @@ docker compose up --build
 # Frontend: http://localhost:3000 (唯一の host-exposed エントリポイント)
 ```
 
-> **Note**: backend / db / redis / worker / scheduler は全て Docker 内部
+> **Note**: backend / db / redis / redis-rl / 4 worker / scheduler は全て Docker 内部
 > ネットワーク (`internal: true`) のみで動作し host port を持ちません。
 > フロントエンド (BFF) がプロキシとして機能するため、ブラウザからは
 > `localhost:3000` のみにアクセスします。db に直接 psql したい場合は
 > `docker compose exec db psql -U vector -d vector` を使ってください。
-
-### 既存 dev 環境のアップデート
-
-PR #321 (`fix(infra): db を internal network 限定にし host expose を完全遮断`)
-以降、`db` container は `internal: true` の network のみに接続し host port
-expose を持たない設定に変更されています。**それより前から dev 環境を持って
-いる場合**、稼働中の `vector-db-1` container は古い設定で起動されたまま
-(host port 5433 expose + public network 接続) になっているため、以下を
-1 度だけ実行して container を recreate してください:
-
-```bash
-docker compose up -d --force-recreate db
-```
-
-確認: `docker compose ps db` の `Ports` 列が空 (host expose なし) になり、
-`Networks` が `vector_internal` のみになっていれば正しく適用されています。
 
 ### 初回利用の流れ
 
@@ -93,29 +87,44 @@ Browser
         ├── Better Auth (Cookie-based session, auth schema in PG)
         ├── Server Components → INTERNAL_API_URL (Docker internal)
         ├── BFF Proxy (/api/proxy/*) → Backend (header auth)
+        ├── Rate limit (proxy.ts) → redis-rl (separate Redis instance)
         │
         └─► FastAPI Backend (Docker internal only)
               ├── Header Auth (X-User-ID / X-Internal-Secret)
-              ├── News Fetcher (RSS Feeds, Hacker News API, Alpha Vantage)
-              ├── AI Analyzer (Gemini API — 翻訳・要約・インパクト分析)
-              ├── Embedding (Gemini Embedding API — pgvector)
-              ├── Dedup (cosine distance — 重複記事グループ化)
-              └── PostgreSQL 16 + pgvector
+              ├── collection/   — News Fetcher (44+ sources: RSS/Atom/HTML/Sitemap)
+              ├── analysis/     — AI 分析 (Gemini extractor / DeepSeek classifier / Gemini embedder)
+              ├── insights/     — snapshot (weekly_trends) / briefing (weekly LLM brief)
+              ├── digest/       — 週次トレンドダイジェスト pipeline
+              ├── search/       — semantic search + per-user 1 日 quota
+              ├── observability/— pipeline_events 監査 (Discriminated Union payload)
+              ├── maintenance/  — back-fill backlog / budget / policy
+              └── PostgreSQL 16 + pgvector (二重ロール: vector_app / vector_auth)
 
-Redis ◄── taskiq worker (非同期タスク実行)
-       ◄── taskiq scheduler (cron トリガー)
+Redis (taskiq broker) ◄── worker-fetch / worker-analysis / worker-embedding / worker-insights
+                       ◄── scheduler (metadata / digest / briefing cron)
+
+Redis (rate-limit, ephemeral) ◄── proxy.ts sliding window log
 ```
 
-### Docker Compose サービス一覧
+### Docker Compose サービス一覧 (10 services)
 
 | Service | Description |
 |---------|------------|
 | `frontend` | Next.js 16 BFF — 唯一の public エントリーポイント |
-| `backend` | FastAPI — 内部ネットワークのみ |
-| `db` | PostgreSQL 16 + pgvector |
-| `redis` | タスクキューブローカー |
-| `worker` | taskiq ワーカー（ニュースパイプライン実行） |
-| `scheduler` | taskiq スケジューラー（cron トリガー） |
+| `backend` | FastAPI — internal network 限定 |
+| `db` | PostgreSQL 16 + pgvector (`internal: true`、host port 非公開) |
+| `redis` | taskiq broker (本体)、`maxmemory 256mb` + `allkeys-lru` |
+| `redis-rl` | frontend rate-limit 専用 (本体 redis と OOM 道連れを防ぐ物理分離) |
+| `worker-fetch` | metadata + content fetch worker (supervisord Pattern B) |
+| `worker-analysis` | AI 分類 / 分析 worker |
+| `worker-embedding` | Embedding 生成 worker |
+| `worker-insights` | snapshot + briefing worker (supervisord Pattern B) |
+| `scheduler` | metadata / digest / briefing cron scheduler (supervisord Pattern B) |
+
+> **supervisord Pattern B**: `autorestart=unexpected` + `startretries=3` + FATAL listener。
+> 一過性故障は吸収しつつ、永続バグは 3 retries で FATAL → fail_fast eventlistener が
+> supervisord shutdown → container exit → docker / Fly.io が auto-restart loop で
+> visible 化する設計。
 
 ## Domain Concepts
 
@@ -126,67 +135,130 @@ Redis ◄── taskiq worker (非同期タスク実行)
 | キーワード | 記事のタギングに使用される検索キーワード | `Keyword` |
 | カテゴリ | キーワードと記事を分類する統合カテゴリ | `Category` |
 | ニュースソース | ニュースの収集元メディア・サイト | `NewsSource` |
-| フェッチログ | ニュース取得の実行履歴 | `FetchLog` |
 | ウォッチリスト | ユーザーの記事ブックマーク | `WatchlistEntry` |
+| 週次トレンドスナップショット | 週次ダイジェスト用の集約結果 | `WeeklyTrendsSnapshot` |
+| 週次ブリーフィング | 週次 LLM 生成サマリー (カテゴリ別) | `WeeklyBriefing` |
+| パイプラインイベント | 全 stage 監査ログ (Discriminated Union payload) | `PipelineEvent` |
+| 検索クォータ | 認証ユーザー単位の 1 日 embedding 生成上限 | `SearchQuotaCounter` |
 
 ### ニュース処理パイプライン
 
 ```
 taskiq scheduler (cron)
   ↓
-1. アクティブキーワード読み込み
+[Stage A] dispatch         — アクティブソース読込 → broker_metadata に投函
   ↓
-2. RSS / API フェッチ → NewsArticle 保存
+[Stage B] source_fetch     — RSS/Atom/HTML listing/Sitemap からメタデータ取得
   ↓
-3. 全文取得 (trafilatura)
+[Stage C] content_fetch    — 全文取得 (trafilatura)
   ↓
-4. AI分析 (Gemini API → ArticleAnalysis)
+[Stage D] extraction       — Gemini extractor (タイトル正規化 / 構造抽出)
   ↓
-5. Embedding生成 (Gemini Embedding API → pgvector)
+[Stage E] classification   — DeepSeek classifier (signal/noise + Category + Topic)
   ↓
-6. 重複検出・グループ化 (cosine distance)
+[Stage F] embedding        — Gemini Embedding (gemini-embedding-001, 768-dim halfvec)
+
+並行: back-fill 3 系統 (extractions / classifications / embeddings、kill switch あり)
+並行: digest cron (週次 snapshot)、briefing cron (週次 LLM ブリーフィング)
+
+各 stage は pipeline_events に監査記録 (Discriminated Union payload)。
+業務処理と監査書込はアトミック (成功/skip パスは同 tx 内、失敗は別 tx で永続化)。
+詳細は docs/observability/pipeline-events-design.md。
 ```
 
 ## Environment Variables
 
-`.env.example` を参照。主要な変数:
+`.env.example` を参照。主要な変数 (全 26 種):
 
-### Database
+### Deployment
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DATABASE_URL` | `postgresql+asyncpg://vector:vector@db:5432/vector` | Backend DB接続 |
-| `AUTH_DATABASE_URL` | `postgresql://vector:vector@db:5432/vector?search_path=auth` | Better Auth 用 (auth スキーマ) |
+| `ENV` | `development` | `production` で `/docs` `/redoc` `/openapi.json` を無効化 |
+
+### Database (二重ロール)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `POSTGRES_USER` | `vector` | Table owner / migration runner |
+| `POSTGRES_PASSWORD` | — | `vector` ロールのパスワード (必須、強い乱数) |
+| `POSTGRES_DB` | `vector` | DB 名 |
+| `POSTGRES_AUTH_PASSWORD` | — | `vector_auth` ロール (frontend Better Auth 専用) |
+| `POSTGRES_APP_PASSWORD` | — | `vector_app` ロール (backend / worker / scheduler 専用) |
 
 ### AI
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GEMINI_API_KEY` | — | Google AI API Key (必須) |
-| `AI_PROVIDER` | `gemini` | AI プロバイダー |
+| `GEMINI_API_KEY` | — | Stage 1 (extraction) + Embedding 用 (必須) |
+| `DEEPSEEK_API_KEY` | — | Stage 2 (classification) 用 (必須) |
+| `OPENAI_API_KEY` | — | fallback / 比較用 (任意) |
 
-### Auth
+> Provider 切替は `backend/app/brokers.py` に hardcode する Pure DI 設計。
+> env による provider switch は持たない。
+
+### News Fetcher
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `BETTER_AUTH_SECRET` | dev default | Better Auth セッション暗号化キー |
-| `BETTER_AUTH_URL` | `http://localhost:3000` | Better Auth コールバックURL |
-| `INTERNAL_API_SECRET` | dev default | BFF→Backend 内部通信の認証シークレット |
+| `FETCH_INTERVAL_HOURS` | `12` | スケジューラー実行間隔 |
+| `MAX_ARTICLES_PER_FETCH` | `50` | 1 回のフェッチ上限 |
+| `MAX_ANALYSIS_PER_RUN` | `10` | 1 回の分析対象上限 |
+| `CONTENT_MAX_LENGTH` | `8000` | 全文抽出の最大文字数 |
+
+### Auth (Better Auth + BFF Proxy)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `BETTER_AUTH_SECRET` | — | **未設定なら起動拒否**。`openssl rand -hex 32` で生成 |
+| `BETTER_AUTH_URL` | `http://localhost:3000` | コールバック URL |
+| `INTERNAL_API_SECRET` | — | **未設定または 32 文字未満なら起動拒否**。BFF→Backend 認証 |
+
+> dev fallback は撤去済み (PR #405 / #406 / #407)。weak default や placeholder は
+> backend の Settings 検証で起動失敗する。
 
 ### Task Queue
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `REDIS_URL` | `redis://localhost:6379/0` | Redis 接続先 |
-| `FETCH_INTERVAL_HOURS` | `12` | スケジューラー実行間隔 |
-| `MAX_ARTICLES_PER_FETCH` | `50` | 1回のフェッチ上限 |
+| `REDIS_URL` | `redis://redis:6379/0` | taskiq broker (本体) |
+| `REDIS_URL_RL` | `redis://redis-rl:6379/0` | frontend rate-limit 専用 (未設定なら REDIS_URL に fallback) |
+| `REDIS_PORT` | `6379` | host から起動するときの参考値 |
+| `RATE_LIMIT_PER_MIN` | `60` | proxy.ts per-IP sliding window 上限 |
+
+### Search Quota
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SEMANTIC_SEARCH_DAILY_QUOTA_PER_USER` | `100` | 認証ユーザー 1 人の 1 日 embedding 生成上限 (cache miss のみ消費) |
+
+### Backfill kill switches
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `BACKFILL_EXTRACTIONS_ENABLED` | `true` | extraction back-fill の有効化 |
+| `BACKFILL_CLASSIFICATIONS_ENABLED` | `true` | classification back-fill の有効化 |
+| `BACKFILL_EMBEDDINGS_ENABLED` | `true` | embedding back-fill の有効化 |
 
 ### App URLs
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `FRONTEND_URL` | `http://localhost:3000` | CORS許可オリジン |
-| `INTERNAL_API_URL` | `http://backend:8000/api/v1` | SSR からの Backend 接続先 (Docker内部) |
+| `FRONTEND_URL` | `http://localhost:3000` | CORS 許可オリジン |
+| `INTERNAL_API_URL` | `http://backend:8000/api/v1` | SSR からの Backend 接続先 (Docker 内部) |
+| `INTERNAL_FRONTEND_BASE_URL` | `http://frontend:3000` | backend → frontend internal (revalidate 通知など) |
+| `NEXT_PUBLIC_API_URL` | `http://localhost:8000/api/v1` | Frontend public API base |
+
+### E2E Test Seed (CI 専用、本番設定禁止)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `E2E_SEED_USER_EMAIL` | `e2e@example.com` | seed_e2e_users.py が読む |
+| `E2E_SEED_USER_PASSWORD` | `Password123!` | 同上 |
+| `E2E_SEED_ADMIN_EMAIL` | `e2e-admin@example.com` | 同上 |
+| `E2E_SEED_ADMIN_PASSWORD` | `Password123!` | 同上 |
+
+> seed script は `ENV=production` で fail-fast。env 自体を本番に置かないのが第一の防護壁。
 
 ## Development
 
@@ -203,7 +275,7 @@ uvx pre-commit install
 ### CI security gate
 
 PR / push に対し以下のセキュリティスキャンが GitHub Actions 上で **blocking gate** として自動実行される
-(`.github/workflows/security-pr.yml`):
+([.github/workflows/security-pr.yml](.github/workflows/security-pr.yml)):
 
 - **osv-scanner**: `backend/uv.lock` + `frontend/package-lock.json` を OSV.dev 脆弱性 DB と照合 (`fail-on-vuln: true`)
 - **npm audit**: frontend の production 依存を npm Advisory DB と照合 (`--audit-level=high`)
@@ -213,7 +285,7 @@ PR / push に対し以下のセキュリティスキャンが GitHub Actions 上
 (`osv-results.sarif` / `semgrep-sarif` / `npm-audit-json`) として triage 用に保存される。
 回避策が複雑な finding は `# nosemgrep` (rule 単位) または dep update / 例外 PR で対応する。
 
-加えて nightly に `.github/workflows/security-nightly.yml` の Trivy fs/config scan が
+加えて nightly に [.github/workflows/security-nightly.yml](.github/workflows/security-nightly.yml) の Trivy fs/config scan が
 HIGH+CRITICAL を `exit-code: '1'` で blocking 実行する。
 
 > **Note**: Vector は private repo + GitHub Free のため Code scanning (GHAS) が
@@ -237,7 +309,7 @@ semgrep --config=p/owasp-top-ten --config=p/security-audit .
 
 ### Schemathesis (API 仕様適合性 fuzz)
 
-`.github/workflows/schemathesis-nightly.yml` が nightly (JST 03:37) に
+[.github/workflows/schemathesis-nightly.yml](.github/workflows/schemathesis-nightly.yml) が nightly (JST 03:37) に
 FastAPI `/openapi.json` と実装の適合性を Schemathesis (Hypothesis ベース
 property-based fuzz) で検査する。3 check (`not_a_server_error` /
 `status_code_conformance` / `response_schema_conformance`) を初回は GET only +
@@ -245,37 +317,6 @@ property-based fuzz) で検査する。3 check (`not_a_server_error` /
 (`schemathesis-results`) に JUnit XML + VCR cassette で 14 日保存する。
 triage 完了後に blocking 化、その後 mutation method (POST/PUT/DELETE) や
 stateful 拡張を別 PR で順次着手する予定。
-
-ローカル再現:
-
-```bash
-# 1. backend を起動 (docker compose 経由 or uv run uvicorn 直接)
-docker compose up -d backend db redis
-docker compose exec backend uv run alembic upgrade head
-
-# 2. admin JWT を 1 時間有効で発行 (INTERNAL_API_SECRET は .env から)
-export INTERNAL_API_SECRET=$(grep ^INTERNAL_API_SECRET .env | cut -d= -f2)
-TOKEN=$(cd backend && uv run python -c "
-import jwt, time, uuid, os
-print(jwt.encode({
-    'sub': str(uuid.UUID('00000000-0000-0000-0000-000000000001')),
-    'role': 'admin', 'iss': 'vector-bff', 'aud': 'vector-backend',
-    'iat': int(time.time()), 'exp': int(time.time()) + 3600,
-}, os.environ['INTERNAL_API_SECRET'], algorithm='HS256'))
-")
-
-# 3. Schemathesis 実行 (backend は internal: true network のため、
-#    dev で host expose 無しの場合は docker compose exec 経由で container
-#    内から実行する)
-pip install 'schemathesis==4.17.0'
-schemathesis run http://localhost:8000/openapi.json \
-  -H "Authorization: Bearer ${TOKEN}" \
-  --include-method GET \
-  --checks not_a_server_error,status_code_conformance,response_schema_conformance \
-  -n 25 \
-  --phases examples,coverage,fuzzing \
-  --report junit,vcr --report-dir schemathesis-report
-```
 
 ### テスト・lint 実行
 
@@ -288,9 +329,10 @@ docker compose exec backend python -m pytest tests/ -x -q
 # Frontend
 docker compose exec frontend npx biome check src/
 docker compose exec frontend npx tsc --noEmit
+docker compose exec frontend npm test
 ```
 
-### DB操作
+### DB 操作
 
 ```bash
 # マイグレーション実行
@@ -299,7 +341,7 @@ docker compose exec backend alembic upgrade head
 # ロールバック
 docker compose exec backend alembic downgrade -1
 
-# DB接続
+# DB 接続
 docker compose exec db psql -U vector -d vector
 ```
 
@@ -322,8 +364,14 @@ cd frontend && npm run generate-types
 - [`docs/adr/001_taskiq_over_arq.md`](docs/adr/001_taskiq_over_arq.md) — タスクキュー選定（taskiq 採用理由）
 - [`docs/adr/002_auth_schema_separation.md`](docs/adr/002_auth_schema_separation.md) — PostgreSQL スキーマ分離（auth / public）
 - [`docs/adr/003_bff_proxy_pattern.md`](docs/adr/003_bff_proxy_pattern.md) — BFF プロキシパターンによる認証
+- [`docs/adr/004_unit_of_work_service_convention.md`](docs/adr/004_unit_of_work_service_convention.md) — Unit of Work / Service 規約
+- [`docs/adr/005_rsc_test_strategy.md`](docs/adr/005_rsc_test_strategy.md) — RSC ユニットテスト戦略 (Vitest projects 分離 + page-models)
+- [`docs/adr/006_better_auth_rate_limit_strategy.md`](docs/adr/006_better_auth_rate_limit_strategy.md) — Better Auth + proxy.ts 二段 rate limit
+- [`docs/adr/sqlmodel-to-declarative-migration.md`](docs/adr/sqlmodel-to-declarative-migration.md) — SQLModel → SQLAlchemy declarative 移行プラン
+- [`docs/adr/value_objects_sqlalchemy_migration.md`](docs/adr/value_objects_sqlalchemy_migration.md) — Value Objects の SQLAlchemy 移行プラン
 
 ### その他
 
+- [`docs/observability/pipeline-events-design.md`](docs/observability/pipeline-events-design.md) — pipeline_events 監査基盤 ADR
 - [`docs/prompt_design.md`](docs/prompt_design.md) — AI 分析プロンプト設計ガイドライン
-- [`domain.md`](domain.md) — ドメインモデルの棚卸し
+- [`specs/domain.md`](specs/domain.md) — ドメインモデルの棚卸し

@@ -7,8 +7,8 @@
 - Frontend: Next.js 16 (App Router, TypeScript, Tailwind CSS, shadcn/ui, Biome)
 - Backend: FastAPI (Python 3.13+, SQLModel, Pydantic v2)
 - Database: PostgreSQL 16 (Alembic マイグレーション)
-- AI: Gemini API (抽象化済み、差し替え可能)
-- インフラ: Docker Compose
+- AI: Gemini + DeepSeek + OpenAI (multi-provider、Pure DI で `backend/app/brokers.py` に hardcode、env 切替なし)
+- インフラ: Docker Compose (dev) + Fly.io (production, nrt region)
 
 ## パッケージ管理
 - Backend: uv add でパッケージ追加（pip install は使わない）
@@ -41,7 +41,7 @@
 - **SSoT は FastAPI の Pydantic schemas** — 型生成は `/gen-types` スキルを使用
 
 ### ブランチ戦略
-- `main` → プロダクション / `develop` → 開発統合 / `feature/*` → 機能開発
+- `main` → プロダクション / `feature/*`・`fix/*`・`docs/*` → 作業ブランチ (PR 経由で `main` に直接 merge)
 
 ### 環境変数
 - `.env` に集約、コードでは `backend/app/config.py` 経由のみでアクセス

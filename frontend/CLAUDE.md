@@ -50,7 +50,8 @@ src/
 ├── features/             # backend ドメインに揃えた機能境界
 │   ├── news/             # 記事閲覧 (collection)
 │   ├── watchlist/        # ウォッチ (analysis)
-│   ├── digest/           # 週次トレンド (digest)
+│   ├── digest/           # 週次トレンド (insights/snapshot)
+│   ├── briefing/         # 週次 LLM ブリーフィング (insights/briefing)
 │   ├── sources/          # ソース管理 (admin)
 │   └── auth/             # 認証 UI
 │       ├── components/
@@ -127,7 +128,8 @@ npm test
 ### Phase 別スコープ
 - **Phase 1**: 純関数 (security-critical な判定ロジック中心) — merged
 - **Phase 2**: Server Action core 抽出 + 5 component の RTL — merged
-- **Phase 3 (現状)**: E2E (Playwright) + msw 局所投入 + CI required + coverage threshold
+- **Phase 3**: E2E (Playwright) + msw 局所投入 + CI required + coverage threshold + RSC ユニットテスト戦略 (ADR-005、Vitest projects 分離 + page-models 抽出) — merged
+- **Phase 4 (検討)**: smoke E2E の CI 昇格 (flaky 検証期間後に再判断)
 
 ### Mock 戦略
 - `vi.mock("../api/<name>")` で **相対 path** で Server Action を mock (own feature 内のみ)
