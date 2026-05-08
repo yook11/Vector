@@ -1,4 +1,4 @@
-"""``ExtractionService.mark_article_unprocessable`` の integration test (PR3-a-1)。
+"""``ExtractionService.mark_article_unprocessable`` の integration test (PR3.5-c)。
 
 検証する性質:
 - 1 tx 内で audit INSERT → article DELETE が両方完了する
@@ -8,10 +8,10 @@
   ただし新規 INSERT 時点では ``article_id`` が埋まっている (DELETE 前)
 - ``source_id`` が auto-resolve される (article DELETE 後でも source 追跡可能)
 - ``source_name`` が payload に保存される (FK 切断耐性)
-- ``ExtractionPolicyBlockedError`` の ``raw_response`` が
-  ``ai_raw_response`` に焼かれる (best-effort)
-- ``ExtractionInputTooLargeError`` では ``ai_raw_response`` なし
-- 失敗 outcome_code が CHECK 制約値内 (failed)
+- 新型例外 (``AIProviderOutputBlockedError`` /
+  ``AIProviderInputRejectedError``) で呼び出すと
+  ``category='non_retryable_drop_article'`` / ``code=type(exc).CODE`` /
+  ``outcome_code=code`` (Phase A 同値) が記録される
 """
 
 from __future__ import annotations
@@ -22,9 +22,9 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.analysis.extraction.extractor.errors import (
-    ExtractionInputTooLargeError,
-    ExtractionPolicyBlockedError,
+from app.analysis.errors import (
+    AIProviderInputRejectedError,
+    AIProviderOutputBlockedError,
 )
 from app.analysis.extraction.extractor.gemini_prompt import GeminiExtractionPrompt
 from app.analysis.extraction.service import ExtractionService
@@ -54,11 +54,12 @@ async def _make_article(
 
 
 @pytest.mark.asyncio
-async def test_blocked_by_policy_writes_audit_then_deletes_article(
+async def test_output_blocked_writes_audit_then_deletes_article(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
+    """AIProviderOutputBlockedError 経路で category/code が正しく記録される。"""
     article = await _make_article(db_session, sample_source)
     article_id = article.id
     # rollback 後の expired-attr lazy reload を避けるため事前に値を取り出す
@@ -66,15 +67,11 @@ async def test_blocked_by_policy_writes_audit_then_deletes_article(
     expected_source_name = str(sample_source.name)
     svc = ExtractionService(session_factory)
 
-    exc = ExtractionPolicyBlockedError(
-        finish_reason="SAFETY",
-        raw_response='{"draft":"sensitive"}',
-        prompt_version=GeminiExtractionPrompt.VERSION,
-    )
+    exc = AIProviderOutputBlockedError("blocked by policy: SAFETY")
     await svc.mark_article_unprocessable(
         article_id,
         article.original_content,
-        outcome_code="ai_error_blocked_by_policy",
+        code=type(exc).CODE,
         exc=exc,
     )
 
@@ -95,7 +92,9 @@ async def test_blocked_by_policy_writes_audit_then_deletes_article(
     assert len(events) == 1
     ev = events[0]
     assert ev.event_type == "failed"
-    assert ev.outcome_code == "ai_error_blocked_by_policy"
+    assert ev.outcome_code == "ai_error_output_blocked"
+    assert ev.category == "non_retryable_drop_article"
+    assert ev.code == "ai_error_output_blocked"
     # SET NULL: article_id は NULL に
     assert ev.article_id is None
     # source_id は auto-resolve で埋まっている (DELETE 前に INSERT したため)
@@ -105,24 +104,24 @@ async def test_blocked_by_policy_writes_audit_then_deletes_article(
     assert payload["ai_model"] == GeminiExtractionPrompt.MODEL
     assert payload["error_message"] is not None
     assert payload["error_chain"] is not None
-    assert payload["ai_raw_response"] == '{"draft":"sensitive"}'
 
 
 @pytest.mark.asyncio
-async def test_input_too_large_writes_audit_then_deletes_article(
+async def test_input_rejected_writes_audit_then_deletes_article(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
+    """AIProviderInputRejectedError 経路 (context length 超過 etc) も同様に記録。"""
     article = await _make_article(db_session, sample_source)
     article_id = article.id
     svc = ExtractionService(session_factory)
 
-    exc = ExtractionInputTooLargeError(prompt_version=GeminiExtractionPrompt.VERSION)
+    exc = AIProviderInputRejectedError("input exceeds context length")
     await svc.mark_article_unprocessable(
         article_id,
         article.original_content,
-        outcome_code="ai_error_input_too_large",
+        code=type(exc).CODE,
         exc=exc,
     )
 
@@ -139,7 +138,7 @@ async def test_input_too_large_writes_audit_then_deletes_article(
     )
     assert len(events) == 1
     ev = events[0]
-    assert ev.outcome_code == "ai_error_input_too_large"
     assert ev.event_type == "failed"
-    # context length 例外は raw_response 持たないので ai_raw_response key なし or None
-    assert ev.payload.get("ai_raw_response") is None
+    assert ev.outcome_code == "ai_error_input_rejected"
+    assert ev.category == "non_retryable_drop_article"
+    assert ev.code == "ai_error_input_rejected"

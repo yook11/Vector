@@ -1,11 +1,12 @@
-"""``extract_content`` task の例外 dispatch routing テスト (PR3-a-1)。
+"""``extract_content`` task の Layer 1 marker dispatch routing テスト (PR3.5-c)。
 
-Service の execute を mock して、tasks.py が **どの例外** を **どの outcome_code**
-に振り分け、**audit のみ / DELETE / inline retry** のいずれを取るかを検証する。
+Service の execute を mock して、tasks.py が **どの Layer 1 marker** を受けて
+**どこ** (mark_article_unprocessable / record_extraction_failure / inline retry /
+catch-all) に振り分けるかを検証する。
 
-実 DB / 実 Service / 実 _record_failure_event は呼ばない:
+実 DB / 実 Service / 実 audit_repository は呼ばない:
 - ``ExtractionService`` を patch
-- ``_audit_extraction_failure`` を patch (内部で _record_failure_event を呼ぶ)
+- ``record_extraction_failure`` を patch (Stage 3 failure 経路の application helper)
 - ``mark_article_unprocessable`` を patch
 """
 
@@ -17,20 +18,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.analysis.errors import (
-    ConfigurationError,
-    DailyQuotaExhaustedError,
-    InsufficientBalanceError,
-    NetworkError,
-    ProviderError,
-    UnclassifiedError,
+    AIProviderConfigurationError,
+    AIProviderInputRejectedError,
+    AIProviderInsufficientBalanceError,
+    AIProviderNetworkError,
+    AIProviderOutputBlockedError,
+    AIProviderQuotaExhaustedError,
+    AIProviderRateLimitedError,
+    AIProviderRequestInvalidError,
+    AIProviderServiceUnavailableError,
+    ExtractionResponseInvalidError,
 )
-from app.analysis.errors import RateLimitError as AnalysisRateLimitError
 from app.analysis.extraction.domain.ready import ReadyForExtraction
-from app.analysis.extraction.extractor.errors import (
-    ExtractionInputTooLargeError,
-    ExtractionPolicyBlockedError,
-)
-from app.analysis.extraction.extractor.gemini_prompt import GeminiExtractionPrompt
 
 
 def _make_provider_fake() -> MagicMock:
@@ -59,20 +58,26 @@ def _ready() -> ReadyForExtraction:
 
 
 # ---------------------------------------------------------------------------
-# DELETE 経路 (内容起因 Permanent)
+# NonRetryableDropArticle 経路 — mark_article_unprocessable で audit + DELETE
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    ("exc_cls", "expected_code"),
+    [
+        (AIProviderInputRejectedError, "ai_error_input_rejected"),
+        (AIProviderOutputBlockedError, "ai_error_output_blocked"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_policy_blocked_calls_mark_unprocessable() -> None:
+async def test_drop_article_calls_mark_unprocessable_with_correct_code(
+    exc_cls: type[Exception], expected_code: str
+) -> None:
+    """Drop 系 2 種は mark_article_unprocessable に dispatch される。"""
     from app.analysis.tasks import extract_content
 
     ctx = _make_ctx()
-    exc = ExtractionPolicyBlockedError(
-        finish_reason="SAFETY",
-        raw_response="x",
-        prompt_version=GeminiExtractionPrompt.VERSION,
-    )
+    exc = exc_cls("boom")
 
     with (
         patch("app.analysis.tasks._build_limiters", return_value=(None, None)),
@@ -86,49 +91,28 @@ async def test_policy_blocked_calls_mark_unprocessable() -> None:
         kwargs = svc_instance.mark_article_unprocessable.await_args.kwargs
         args = svc_instance.mark_article_unprocessable.await_args.args
         assert args[0] == 42  # article_id
-        assert kwargs["outcome_code"] == "ai_error_blocked_by_policy"
+        assert kwargs["code"] == expected_code
         assert kwargs["exc"] is exc
 
 
-@pytest.mark.asyncio
-async def test_input_too_large_calls_mark_unprocessable() -> None:
-    from app.analysis.tasks import extract_content
-
-    ctx = _make_ctx()
-    exc = ExtractionInputTooLargeError(prompt_version=GeminiExtractionPrompt.VERSION)
-
-    with (
-        patch("app.analysis.tasks._build_limiters", return_value=(None, None)),
-        patch("app.analysis.tasks.ExtractionService") as mock_svc_cls,
-    ):
-        svc_instance = mock_svc_cls.return_value
-        svc_instance.execute = AsyncMock(side_effect=exc)
-        svc_instance.mark_article_unprocessable = AsyncMock()
-        await extract_content(ready=_ready(), ctx=ctx)
-        svc_instance.mark_article_unprocessable.assert_awaited_once()
-        kwargs = svc_instance.mark_article_unprocessable.await_args.kwargs
-        assert kwargs["outcome_code"] == "ai_error_input_too_large"
-
-
 # ---------------------------------------------------------------------------
-# 環境起因 Permanent (記事保持、人間対応)
+# NonRetryableKeepArticle 経路 — _audit_extraction_failure (記事保持)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
-    ("exc_cls", "expected_code"),
+    "exc_cls",
     [
-        (ConfigurationError, "ai_error_config"),
-        (InsufficientBalanceError, "ai_error_insufficient_balance"),
-        (DailyQuotaExhaustedError, "ai_error_daily_quota_exhausted"),
-        (AnalysisRateLimitError, "ai_error_rate_limited"),
-        (UnclassifiedError, "unclassified_error"),
+        AIProviderConfigurationError,
+        AIProviderRequestInvalidError,
+        AIProviderInsufficientBalanceError,
     ],
 )
 @pytest.mark.asyncio
-async def test_non_retry_failures_audit_with_correct_outcome_code(
-    exc_cls: type[Exception], expected_code: str
+async def test_keep_article_calls_audit_extraction_failure(
+    exc_cls: type[Exception],
 ) -> None:
+    """NonRetryableKeepArticle 系 (Layer 2-A の 3 種) は audit のみで記事保持。"""
     from app.analysis.tasks import extract_content
 
     ctx = _make_ctx()
@@ -136,23 +120,38 @@ async def test_non_retry_failures_audit_with_correct_outcome_code(
         patch("app.analysis.tasks._build_limiters", return_value=(None, None)),
         patch("app.analysis.tasks.ExtractionService") as mock_svc_cls,
         patch(
-            "app.analysis.tasks._audit_extraction_failure",
+            "app.analysis.tasks.record_extraction_failure",
             new=AsyncMock(),
         ) as mock_audit,
     ):
-        mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc_cls("boom"))
+        svc_instance = mock_svc_cls.return_value
+        svc_instance.execute = AsyncMock(side_effect=exc_cls("boom"))
+        svc_instance.mark_article_unprocessable = AsyncMock()
         await extract_content(ready=_ready(), ctx=ctx)
     mock_audit.assert_awaited_once()
-    assert mock_audit.await_args.kwargs["outcome_code"] == expected_code
+    assert mock_audit.await_args.kwargs["exc"].__class__ is exc_cls
+    # mark_article_unprocessable は呼ばれない
+    svc_instance.mark_article_unprocessable.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
-# inline retry 対象 (NetworkError / ProviderError)
+# RetryableError + INLINE_RETRY=True — taskiq retry が走る
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    "exc_cls",
+    [
+        AIProviderNetworkError,
+        AIProviderServiceUnavailableError,
+        ExtractionResponseInvalidError,
+    ],
+)
 @pytest.mark.asyncio
-async def test_network_error_raises_when_not_last_attempt() -> None:
+async def test_retryable_inline_true_raises_when_not_last_attempt(
+    exc_cls: type[Exception],
+) -> None:
+    """INLINE_RETRY=True の RetryableError は not is_last_attempt なら raise する。"""
     from app.analysis.tasks import extract_content
 
     ctx = _make_ctx(retry_count=0, max_retries=1)  # retry 余地あり
@@ -161,15 +160,14 @@ async def test_network_error_raises_when_not_last_attempt() -> None:
         patch("app.analysis.tasks._build_limiters", return_value=(None, None)),
         patch("app.analysis.tasks.ExtractionService") as mock_svc_cls,
     ):
-        mock_svc_cls.return_value.execute = AsyncMock(
-            side_effect=NetworkError("connection reset")
-        )
-        with pytest.raises(NetworkError):
+        mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc_cls("boom"))
+        with pytest.raises(exc_cls):
             await extract_content(ready=_ready(), ctx=ctx)
 
 
 @pytest.mark.asyncio
-async def test_network_error_audits_on_last_attempt() -> None:
+async def test_retryable_inline_true_audits_on_last_attempt() -> None:
+    """INLINE_RETRY=True でも is_last_attempt なら audit + return (cron 救済委譲)。"""
     from app.analysis.tasks import extract_content
 
     ctx = _make_ctx(retry_count=1, max_retries=1)  # 最終試行
@@ -178,54 +176,59 @@ async def test_network_error_audits_on_last_attempt() -> None:
         patch("app.analysis.tasks._build_limiters", return_value=(None, None)),
         patch("app.analysis.tasks.ExtractionService") as mock_svc_cls,
         patch(
-            "app.analysis.tasks._audit_extraction_failure",
+            "app.analysis.tasks.record_extraction_failure",
             new=AsyncMock(),
         ) as mock_audit,
     ):
         mock_svc_cls.return_value.execute = AsyncMock(
-            side_effect=NetworkError("connection reset")
+            side_effect=AIProviderNetworkError("connection reset")
         )
         await extract_content(ready=_ready(), ctx=ctx)
     mock_audit.assert_awaited_once()
-    assert mock_audit.await_args.kwargs["outcome_code"] == "ai_error_network"
 
 
+# ---------------------------------------------------------------------------
+# RetryableError + INLINE_RETRY=False — 即 audit + return (retry しない)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "exc_cls",
+    [
+        AIProviderRateLimitedError,
+        AIProviderQuotaExhaustedError,
+    ],
+)
 @pytest.mark.asyncio
-async def test_provider_error_raises_on_retry_audits_on_last_attempt() -> None:
+async def test_retryable_inline_false_audits_immediately(
+    exc_cls: type[Exception],
+) -> None:
+    """INLINE_RETRY=False の RetryableError は retry せず即 audit + return。"""
     from app.analysis.tasks import extract_content
 
-    # not last attempt → raise
-    ctx = _make_ctx(retry_count=0, max_retries=1)
-    with (
-        patch("app.analysis.tasks._build_limiters", return_value=(None, None)),
-        patch("app.analysis.tasks.ExtractionService") as mock_svc_cls,
-    ):
-        mock_svc_cls.return_value.execute = AsyncMock(side_effect=ProviderError("5xx"))
-        with pytest.raises(ProviderError):
-            await extract_content(ready=_ready(), ctx=ctx)
+    ctx = _make_ctx(retry_count=0, max_retries=1)  # retry 余地ありでも raise しない
 
-    # last attempt → audit
-    ctx = _make_ctx(retry_count=1, max_retries=1)
     with (
         patch("app.analysis.tasks._build_limiters", return_value=(None, None)),
         patch("app.analysis.tasks.ExtractionService") as mock_svc_cls,
         patch(
-            "app.analysis.tasks._audit_extraction_failure",
+            "app.analysis.tasks.record_extraction_failure",
             new=AsyncMock(),
         ) as mock_audit,
     ):
-        mock_svc_cls.return_value.execute = AsyncMock(side_effect=ProviderError("5xx"))
+        mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc_cls("boom"))
         await extract_content(ready=_ready(), ctx=ctx)
-    assert mock_audit.await_args.kwargs["outcome_code"] == "ai_error_provider"
+    mock_audit.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
-# 想定外例外
+# catch-all — 想定外例外は audit + return (UNKNOWN ラベル)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_unexpected_exception_audits_with_unexpected_error_code() -> None:
+async def test_unexpected_exception_falls_through_to_catch_all() -> None:
+    """Layer 1 marker いずれにも該当しない exc は catch-all で audit + return。"""
     from app.analysis.tasks import extract_content
 
     ctx = _make_ctx()
@@ -233,7 +236,7 @@ async def test_unexpected_exception_audits_with_unexpected_error_code() -> None:
         patch("app.analysis.tasks._build_limiters", return_value=(None, None)),
         patch("app.analysis.tasks.ExtractionService") as mock_svc_cls,
         patch(
-            "app.analysis.tasks._audit_extraction_failure",
+            "app.analysis.tasks.record_extraction_failure",
             new=AsyncMock(),
         ) as mock_audit,
     ):
@@ -241,4 +244,5 @@ async def test_unexpected_exception_audits_with_unexpected_error_code() -> None:
             side_effect=ValueError("surprise"),
         )
         await extract_content(ready=_ready(), ctx=ctx)
-    assert mock_audit.await_args.kwargs["outcome_code"] == "unexpected_error"
+    mock_audit.assert_awaited_once()
+    assert isinstance(mock_audit.await_args.kwargs["exc"], ValueError)

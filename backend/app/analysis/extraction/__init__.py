@@ -1,4 +1,4 @@
-"""Extraction — Stage C 事実抽出パッケージ。"""
+"""Extraction — Stage 3 事実抽出パッケージ。"""
 
 from app.analysis.extraction.domain import (
     EntityRawType,
@@ -14,7 +14,7 @@ from app.analysis.extraction.service import (
     ExtractedOutcome,
     ExtractionOutcome,
     ExtractionService,
-    InvalidInputOutcome,
+    NoiseOutcome,
 )
 
 __all__ = [
@@ -28,6 +28,6 @@ __all__ = [
     "ExtractionRepository",
     "ExtractionResult",
     "ExtractionService",
-    "InvalidInputOutcome",
+    "NoiseOutcome",
     "ReadyForExtraction",
 ]

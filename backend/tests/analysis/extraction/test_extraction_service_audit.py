@@ -1,12 +1,13 @@
-"""``ExtractionService`` の 3 Outcome 経路で audit が焼付けられる integration test
-(PR3-a-1)。
+"""``ExtractionService`` の Outcome 経路で audit が焼付けられる integration test
+(PR3.5-c)。
 
 検証する性質:
-- ``ExtractedOutcome`` (signal) → ``outcome_code='extracted'`` (SUCCEEDED)
+- ``ExtractedOutcome`` (signal) → ``outcome_code='extracted'`` (SUCCEEDED) +
+  ``category='success'`` + ``code='extracted'``
 - ``NoiseOutcome`` (relevance=noise) → ``outcome_code='extracted_as_noise'``
-  (SUCCEEDED)
-- ``InvalidInputOutcome`` (InvalidInputError catch) →
-  ``outcome_code='skipped_invalid_input'`` (SKIPPED)
+  (SUCCEEDED) + ``category='success'`` + ``code='extracted_as_noise'``
+- ``ExtractionResponseInvalidError`` (Layer 2-B) は Service が catch せず
+  そのまま raise される (audit は task 層が焼く責務)
 - 各 audit row に ``ai_model`` / ``prompt_version`` / ``input_content_*`` /
   ``source_name`` が payload に焼かれている
 - 成功系では ``ai_raw_response`` / ``entity_count`` も焼かれる
@@ -23,7 +24,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.domain.value_objects.entity import EntityRawType, EntitySurface
-from app.analysis.errors import InvalidInputError
+from app.analysis.errors import ExtractionResponseInvalidError
 from app.analysis.extraction.domain import ExtractedEntity, ExtractionResult
 from app.analysis.extraction.domain.ready import ReadyForExtraction
 from app.analysis.extraction.extractor.base import BaseExtractor
@@ -32,7 +33,6 @@ from app.analysis.extraction.extractor.gemini_prompt import GeminiExtractionProm
 from app.analysis.extraction.service import (
     ExtractedOutcome,
     ExtractionService,
-    InvalidInputOutcome,
     NoiseOutcome,
 )
 from app.models.article import Article
@@ -115,11 +115,12 @@ async def _fetch_extraction_events(
 
 
 @pytest.mark.asyncio
-async def test_signal_outcome_writes_extracted_audit(
+async def test_signal_outcome_writes_extracted_audit_with_category_and_code(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
+    """signal Outcome 経路で category=success / code=extracted が焼かれる。"""
     article = await _make_article(db_session, sample_source)
     ready = await _ready(article)
     svc = ExtractionService(session_factory)
@@ -132,6 +133,8 @@ async def test_signal_outcome_writes_extracted_audit(
     ev = events[0]
     assert ev.event_type == "succeeded"
     assert ev.outcome_code == "extracted"
+    assert ev.category == "success"
+    assert ev.code == "extracted"
     assert ev.source_id == sample_source.id
     payload = ev.payload
     assert payload["ai_model"] == GeminiExtractionPrompt.MODEL
@@ -143,11 +146,12 @@ async def test_signal_outcome_writes_extracted_audit(
 
 
 @pytest.mark.asyncio
-async def test_noise_outcome_writes_extracted_as_noise_audit(
+async def test_noise_outcome_writes_extracted_as_noise_audit_with_category_and_code(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
+    """noise Outcome 経路で category=success / code=extracted_as_noise が焼かれる。"""
     article = await _make_article(db_session, sample_source)
     ready = await _ready(article)
     svc = ExtractionService(session_factory)
@@ -160,33 +164,27 @@ async def test_noise_outcome_writes_extracted_as_noise_audit(
     ev = events[0]
     assert ev.event_type == "succeeded"
     assert ev.outcome_code == "extracted_as_noise"
+    assert ev.category == "success"
+    assert ev.code == "extracted_as_noise"
 
 
 @pytest.mark.asyncio
-async def test_invalid_input_outcome_writes_skipped_audit(
+async def test_response_invalid_error_passes_through_without_service_audit(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
+    """Layer 2-B 例外は Service が catch せずそのまま raise する (Task 層責務)。"""
     article = await _make_article(db_session, sample_source)
     ready = await _ready(article)
     svc = ExtractionService(session_factory)
 
-    outcome = await svc.execute(
-        ready, _extractor(side_effect=InvalidInputError("malformed input"))
-    )
+    with pytest.raises(ExtractionResponseInvalidError):
+        await svc.execute(
+            ready,
+            _extractor(side_effect=ExtractionResponseInvalidError("schema violation")),
+        )
 
-    assert isinstance(outcome, InvalidInputOutcome)
+    # Service は audit を焼かない (失敗経路は task 層 record_extraction_failure 責務)
     events = await _fetch_extraction_events(db_session, article.id)
-    assert len(events) == 1
-    ev = events[0]
-    assert ev.event_type == "skipped"
-    assert ev.outcome_code == "skipped_invalid_input"
-    assert ev.error_class is not None
-    assert "InvalidInputError" in ev.error_class
-    payload = ev.payload
-    assert payload["error_message"] is not None
-    assert payload["error_chain"] is not None
-    # 失敗系でも 6 共通 field は populate される
-    assert payload["ai_model"] == GeminiExtractionPrompt.MODEL
-    assert payload["input_content_length"] == len(article.original_content)
+    assert len(events) == 0

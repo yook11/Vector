@@ -13,6 +13,7 @@ ADR: `docs/observability/pipeline-events-design.md`
 - 2026-05-08 再改訂 (format 違反は工程エラー扱い: Layer 2-A から ResponseInvalid を削除し各 Stage の Layer 2-B に分散、UnknownCategorySlug を Retryable 化、`NonRetryableDropArticle` は provider 明示拒否 2 種に厳密化、retry 上限到達分は cron TTL 救済モデルへ)
 - 2026-05-08 三改訂 (`unknown` は型階層から外し、DB `category` 値 + catch-all ラベルとしてのみ存在させる。Layer 1 dispatch marker は 5 種 (Exception 3 + Outcome 2)、DB CHECK 値は 6 値 (5 + `unknown`))
 - 2026-05-08 四改訂 (Outcome は成功のみ、失敗は typed exception で raise。`InvalidInputError` / `InvalidInputOutcome` 廃止し `AIProviderInputRejectedError` (DROP) と `ExtractionResponseInvalidError` (RETRYABLE) に分離。Service が翻訳責務、Task が Layer 1 dispatch 責務。payload 標準 field set を確定)
+- 2026-05-08 五改訂 (PR3.5-c で Stage 3 を新型例外に切替 + 監査永続化を Repository に集約: extractor 例外翻訳を Layer 2-A 9 種化、Service の `InvalidInputOutcome` 廃止し `ExtractionResponseInvalidError` raise、`extract_content` task を 4 except 集約、Stage 3 成功 Outcome に `SuccessOutcome` 継承 + `CODE` pin。**監査 row の shape SSoT を `ExtractionAuditRepository` に集約** し、Service / Task は semantic method (`append_extracted` / `append_noise` / `append_drop_article` / `append_failure`) を呼ぶだけ。`category` / `code` の exc → 値マッピングは audit_repository 内に閉じ込め、`recording.py` の `CATEGORY_ENABLED_STAGES` 自動導出ロジックは導入見送り (Stage 4/5 は PR3.5-d で各々の audit_repository を持つ展開計画に変更))
 
 ---
 
@@ -700,12 +701,41 @@ async def execute(...) -> ExtractionOutcome:
 
 | PR | scope | 階層変更 | schema 変更 |
 |---|---|---|---|
-| **PR3-a-1** (現行) | 既存階層のまま 10 except 節で audit 焼付 | なし | なし |
-| **PR3.5** | Layer 1 基底クラス新設 + Layer 2 各型に `CODE` ClassVar pin + `category` / `code` / `error_class` column 追加 (nullable) | 追加のみ、behavior 不変 | 列追加 |
-| **PR3.6** | Task 層 except を 3 + catch-all に集約 + `_audit_failure` を `type(exc).CODE` 経由に切替 + Stage 4/5 にも展開 | except 集約 | なし |
+| **PR3-a-1** | Stage 3 監査統合 + DELETE 機構 (旧階層のまま 10 except 節で audit 焼付) | なし | なし |
+| **PR3.5-a** | Layer 1 marker / Layer 2-A 9 種 / Layer 2-B Stage 3 を新設 (型のみ、誰も raise しない) | 追加のみ、behavior 不変 | なし |
+| **PR3.5-b** | `pipeline_events` に `category` / `code` 列追加 (nullable + CHECK)、Repository signature 拡張 | 追加のみ、behavior 不変 | 列追加 |
+| **PR3.5-c** (本 PR) | Stage 3 (extraction) を新型例外に切替 + 監査永続化を Repository に集約: extractor `_translate_error` Layer 2-A 化、Service の `InvalidInputOutcome` 廃止、Task の 4 except 集約、`ExtractionAuditRepository` 新設 (監査 row の shape SSoT) + Service / Task は semantic method 呼出のみ、`Layer1Category` / `code` 導出は audit_repository 内に閉じ込め、成功 Outcome に CODE pin + 成功 audit にも category/code 焼付 | Stage 3 のみ raise/catch 切替 | なし (列・制約は PR3.5-b で完了済) |
+| **PR3.5-d** | Stage 4/5 (classification/embedding) を同手順で切替: `ClassificationAuditRepository` / `EmbeddingAuditRepository` を Stage 3 と同形に新設、`errors/__init__.py` の旧 8 type 削除 | Stage 4/5 raise/catch 切替 + legacy 削除 | なし |
+| **PR3.6** | (PR3.5-c/d で実体は実施済、本枠は廃止候補) | — | — |
 | **PR3.7** | `category` / `code` を NOT NULL 化、`outcome_code` を `code` の generated column 化 | なし | NOT NULL + generated |
-| **PR-Future** | `unknown_category_slug` 等 stage 固有ドメインエラーを `ProviderError` 流用から正式型に移送 | Layer 2-B 新設 | なし |
+| **PR-Future** | backfill_* Stage に Layer1Category を当てるかは個別検討 | TBD | TBD |
 | **PR3.8** (任意) | `outcome_code` DROP、`event_type` の去就を決める | なし | DROP |
+
+### Stage 4/5 への展開 — PR3.5-d 以降
+
+PR3.5-c で Stage 3 縦串を切替えた。Stage 4 (classification) / Stage 5
+(embedding) は **同じパターン** を別 PR で繰り返す:
+
+1. `errors/classification.py` / `errors/embedding.py` を新設し Layer 2-B 例外を定義
+   (`ClassificationResponseInvalidError` / `UnknownCategorySlugError` /
+   `EmbeddingResponseInvalidError`)
+2. classifier / embedder の `_translate_error` を Layer 2-A 9 種に切替 +
+   `_call_once` に raw re-raise guard を継承的に実装 (Stage 3 と同型)
+3. Classification / Embedding の Outcome 型に `SuccessOutcome` 継承 + `CODE` pin
+   (Stage 3 と同型)
+4. **`ClassificationAuditRepository` / `EmbeddingAuditRepository` を Stage 3 と
+   同形に新設** (`append_<success>` / `append_drop_article` / `append_failure`)
+5. ClassificationService / EmbeddingService の `InvalidInputOutcome` 廃止、
+   audit_repository 経由の呼出に書換 (`PipelineEventRepository` 直叩きを廃止)
+6. classify_content / generate_embedding を 4 except 集約、
+   `record_classification_failure` / `record_embedding_failure` を新設して
+   Task 層から呼ぶ (Stage 3 と同型)
+7. (PR3.5-d 末尾で) `errors/__init__.py` の旧 8 type を削除
+
+`backfill_*` (Stage backfill_extract / backfill_classify / backfill_embed) は
+Layer1Category の dispatch 対象外。article は既存・対象は再分類のみのため、
+`non_retryable_drop_article` 等の語彙が当てはまるか別 PR で個別検討する
+(本 spec の PR3.5 計画範囲外)。
 
 ---
 

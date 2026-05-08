@@ -13,27 +13,26 @@ from google.genai.types import GenerateContentConfig, GenerateContentResponse
 from pydantic import ValidationError
 
 from app.analysis.errors import (
-    ConfigurationError,
-    InvalidInputError,
-    NetworkError,
-    ProviderError,
-    RateLimitError,
-    UnclassifiedError,
+    AIProviderConfigurationError,
+    AIProviderInputRejectedError,
+    AIProviderNetworkError,
+    AIProviderOutputBlockedError,
+    AIProviderRateLimitedError,
+    AIProviderRequestInvalidError,
+    AIProviderServiceUnavailableError,
+    ExtractionResponseInvalidError,
 )
 from app.analysis.extraction.domain import ExtractionResult
 from app.analysis.extraction.extractor.base import BaseExtractor
 from app.analysis.extraction.extractor.envelope import ExtractionCall
-from app.analysis.extraction.extractor.errors import (
-    ExtractionInputTooLargeError,
-    ExtractionPolicyBlockedError,
-)
 from app.analysis.extraction.extractor.gemini_prompt import GeminiExtractionPrompt
 from app.config import settings
 
 logger = structlog.get_logger(__name__)
 
 # Gemini が応答を返さなかった理由のうち、**入力内容そのもの** がプロバイダー
-# ポリシーに抵触したケース。再試行 / 別モデルでも通らないため記事 DELETE 対象。
+# ポリシーに抵触したケース。再試行 / 別モデルでも通らないため記事 DELETE 対象
+# (AIProviderOutputBlockedError, NonRetryableDropArticle)。
 _POLICY_BLOCKED_FINISH_REASONS: frozenset[str] = frozenset(
     {"SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII"}
 )
@@ -83,7 +82,7 @@ class GeminiExtractor(BaseExtractor):
     def __init__(self) -> None:
         api_key = settings.gemini_api_key.get_secret_value()
         if not api_key:
-            raise ConfigurationError("GEMINI_API_KEY is not configured")
+            raise AIProviderConfigurationError("GEMINI_API_KEY is not configured")
         self._client = genai.Client(api_key=api_key)
 
     async def extract(
@@ -106,20 +105,19 @@ class GeminiExtractor(BaseExtractor):
             ),
         )
 
-        # finish_reason が policy block 系なら parsed が出る前に raise
+        # finish_reason が policy block 系なら Layer 2-A の OutputBlocked を raise
+        # (NonRetryableDropArticle、記事 DELETE 対象)
         finish_reason = _detect_finish_reason(response)
         if finish_reason in _POLICY_BLOCKED_FINISH_REASONS:
-            raise ExtractionPolicyBlockedError(
-                finish_reason=finish_reason,
-                raw_response=_extract_raw_text(response),
-                prompt_version=GeminiExtractionPrompt.VERSION,
-            )
+            raise AIProviderOutputBlockedError(f"blocked by policy: {finish_reason}")
 
         parsed = response.parsed
         if not isinstance(parsed, ExtractionResult):
-            raise ProviderError(
-                f"Gemini did not return ExtractionResult (got {type(parsed).__name__}, "
-                f"finish_reason={finish_reason})"
+            # provider は応答したが Stage 3 schema として消化不可 (Layer 2-B、
+            # RetryableError、INLINE_RETRY=True で 1 回 retry 救済)
+            raise ExtractionResponseInvalidError(
+                f"Gemini did not return ExtractionResult "
+                f"(got {type(parsed).__name__}, finish_reason={finish_reason})"
             )
         return ExtractionCall(
             result=parsed,
@@ -128,16 +126,24 @@ class GeminiExtractor(BaseExtractor):
         )
 
     def _translate_error(self, exc: Exception) -> Exception:
-        """Gemini SDK の例外を原因の所在で分類する。"""
+        """Gemini SDK 例外を Layer 2 例外階層に分類する。
+
+        翻訳できないケースは ``exc`` をそのまま return する (``_call_once`` が
+        bare re-raise → Task 層 catch-all で UNKNOWN ラベル)。
+        """
         if isinstance(exc, ValidationError):
-            return ProviderError(f"Invalid extraction result schema: {exc}")
+            # Pydantic ValidationError は Layer 2-B (Stage 3 工程エラー)
+            # provider は応答を返したが Stage 3 が要求する schema を満たさなかった
+            return ExtractionResponseInvalidError(
+                f"Invalid extraction result schema: {exc}"
+            )
 
         if isinstance(exc, APIError):
             status = exc.status or ""
             message = exc.message or ""
 
             if "reported as leaked" in message:
-                return ConfigurationError(f"API key leaked: {message}")
+                return AIProviderConfigurationError(f"API key leaked: {message}")
 
             if status in (
                 "UNAUTHENTICATED",
@@ -145,30 +151,38 @@ class GeminiExtractor(BaseExtractor):
                 "FAILED_PRECONDITION",
                 "NOT_FOUND",
             ):
-                return ConfigurationError(f"{status}: {message}")
+                return AIProviderConfigurationError(f"{status}: {message}")
 
             if status in ("INVALID_ARGUMENT", "DEADLINE_EXCEEDED"):
-                # context length 超過は内容起因 Permanent (DELETE 対象)。
+                # context length 超過は内容起因 Permanent (DROP_ARTICLE 対象)。
                 # message 末尾に詳細 JSON が embed されるため大小文字無視で
                 # substring 判定する。
                 lowered = message.lower()
                 if any(pat in lowered for pat in _CONTEXT_LENGTH_PATTERNS):
-                    return ExtractionInputTooLargeError(
-                        prompt_version=GeminiExtractionPrompt.VERSION,
+                    return AIProviderInputRejectedError(
+                        f"input exceeds context length: {message}"
                     )
-                return InvalidInputError(f"{status}: {message}")
+                # その他の INVALID_ARGUMENT は Stage 3 として消化不可な request
+                # bug。RequestInvalid (NonRetryableKeepArticle、運用者がコード/SDK を
+                # 直す)
+                return AIProviderRequestInvalidError(f"{status}: {message}")
 
             if status == "RESOURCE_EXHAUSTED":
-                return RateLimitError(f"{status}: {message}")
+                # RPM / RPD を message で判定し分けるのは fragile。Gemini の
+                # RESOURCE_EXHAUSTED は Rate Limited として扱う (RPD は taskiq
+                # RateLimiter の事前チェックで防いでいる、ここに来るのは provider
+                # 側の rate)
+                return AIProviderRateLimitedError(f"{status}: {message}")
 
             if isinstance(exc, ServerError):
-                return ProviderError(f"{status}: {message}")
+                return AIProviderServiceUnavailableError(f"{status}: {message}")
 
-            return UnclassifiedError(
-                f"Unhandled APIError {exc.code} {status}: {message}"
-            )
+            # 既知の APIError status いずれにも該当しない → 翻訳不可
+            # (catch-all で UNKNOWN ラベル)
+            return exc
 
         if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
-            return NetworkError(f"{type(exc).__name__}: {exc}")
+            return AIProviderNetworkError(f"{type(exc).__name__}: {exc}")
 
-        return UnclassifiedError(f"{type(exc).__name__}: {exc}")
+        # 想定外の SDK 例外は raw のまま return し、catch-all (UNKNOWN) で受けさせる
+        return exc

@@ -1,9 +1,15 @@
-"""``GeminiExtractor._translate_error`` の context length 分離テスト (PR3-a-1)。
+"""``GeminiExtractor._translate_error`` の Layer 2 翻訳テスト (PR3.5-c)。
 
 検証する性質:
 - INVALID_ARGUMENT の message に context length 系パターンが含まれる場合
-  ``ExtractionInputTooLargeError`` (DELETE 対象) に変換される
-- それ以外の INVALID_ARGUMENT は既存 ``InvalidInputError`` を維持
+  ``AIProviderInputRejectedError`` (Layer 2-A、NonRetryableDropArticle) に翻訳
+- それ以外の INVALID_ARGUMENT は ``AIProviderRequestInvalidError``
+  (NonRetryableKeepArticle) に翻訳
+- UNAUTHENTICATED 等は ``AIProviderConfigurationError`` (NonRetryableKeepArticle)
+- RESOURCE_EXHAUSTED は ``AIProviderRateLimitedError`` (RetryableError)
+- TimeoutError は ``AIProviderNetworkError`` (RetryableError)
+- ValidationError は ``ExtractionResponseInvalidError`` (Layer 2-B、RetryableError)
+- 翻訳できない exc は **そのまま return** される (``is exc``)
 - 大文字小文字差を問わない (``EXCEEDS CONTEXT LENGTH`` でも検出)
 """
 
@@ -13,15 +19,14 @@ import pytest
 from google.genai.errors import APIError
 
 from app.analysis.errors import (
-    ConfigurationError,
-    InvalidInputError,
-    NetworkError,
-    RateLimitError,
-    UnclassifiedError,
+    AIProviderConfigurationError,
+    AIProviderInputRejectedError,
+    AIProviderNetworkError,
+    AIProviderRateLimitedError,
+    AIProviderRequestInvalidError,
+    ExtractionResponseInvalidError,
 )
-from app.analysis.extraction.extractor.errors import ExtractionInputTooLargeError
 from app.analysis.extraction.extractor.gemini import GeminiExtractor
-from app.analysis.extraction.extractor.gemini_prompt import GeminiExtractionPrompt
 
 
 def _api_error(status: str, message: str, code: int = 400) -> APIError:
@@ -45,47 +50,81 @@ def _extractor() -> GeminiExtractor:
         "Input EXCEEDS CONTEXT LENGTH",  # 大小文字混在
     ],
 )
-def test_invalid_argument_with_context_length_pattern_maps_to_input_too_large(
+def test_invalid_argument_with_context_length_pattern_maps_to_input_rejected(
     message: str,
 ) -> None:
+    """context length 超過は内容起因 Permanent (DROP_ARTICLE 対象)。"""
     exc = _api_error("INVALID_ARGUMENT", message)
     translated = _extractor()._translate_error(exc)
-    assert isinstance(translated, ExtractionInputTooLargeError)
-    assert translated.prompt_version == GeminiExtractionPrompt.VERSION
+    assert isinstance(translated, AIProviderInputRejectedError)
+    assert translated.CODE == "ai_error_input_rejected"
 
 
-def test_invalid_argument_without_context_pattern_stays_invalid_input() -> None:
+def test_invalid_argument_without_context_pattern_maps_to_request_invalid() -> None:
+    """非 context-length の INVALID_ARGUMENT は request bug 扱い (KEEP_ARTICLE)。"""
     exc = _api_error("INVALID_ARGUMENT", "malformed request body")
     translated = _extractor()._translate_error(exc)
-    assert isinstance(translated, InvalidInputError)
-    assert not isinstance(translated, ExtractionInputTooLargeError)
+    assert isinstance(translated, AIProviderRequestInvalidError)
+    assert translated.CODE == "ai_error_request_invalid"
 
 
-def test_deadline_exceeded_with_context_pattern_also_maps_to_input_too_large() -> None:
+def test_deadline_exceeded_with_context_pattern_also_maps_to_input_rejected() -> None:
     """``DEADLINE_EXCEEDED`` も同分岐内のため context length 検出は同じ。"""
     exc = _api_error("DEADLINE_EXCEEDED", "Input exceeds context length", code=504)
     translated = _extractor()._translate_error(exc)
-    assert isinstance(translated, ExtractionInputTooLargeError)
+    assert isinstance(translated, AIProviderInputRejectedError)
 
 
 def test_unauthenticated_status_maps_to_configuration_error() -> None:
     exc = _api_error("UNAUTHENTICATED", "API key invalid", code=401)
     translated = _extractor()._translate_error(exc)
-    assert isinstance(translated, ConfigurationError)
+    assert isinstance(translated, AIProviderConfigurationError)
+    assert translated.CODE == "ai_error_configuration"
 
 
-def test_resource_exhausted_maps_to_rate_limit() -> None:
+def test_leaked_api_key_maps_to_configuration_error() -> None:
+    exc = _api_error("INVALID_ARGUMENT", "API key reported as leaked")
+    translated = _extractor()._translate_error(exc)
+    assert isinstance(translated, AIProviderConfigurationError)
+
+
+def test_resource_exhausted_maps_to_rate_limited() -> None:
     exc = _api_error("RESOURCE_EXHAUSTED", "Too many requests", code=429)
     translated = _extractor()._translate_error(exc)
-    assert isinstance(translated, RateLimitError)
+    assert isinstance(translated, AIProviderRateLimitedError)
+    assert translated.CODE == "ai_error_rate_limited"
 
 
-def test_timeout_error_maps_to_network() -> None:
+def test_timeout_error_maps_to_network_error() -> None:
     translated = _extractor()._translate_error(TimeoutError("read timeout"))
-    assert isinstance(translated, NetworkError)
+    assert isinstance(translated, AIProviderNetworkError)
+    assert translated.CODE == "ai_error_network"
 
 
-def test_unknown_status_maps_to_unclassified() -> None:
+def test_validation_error_maps_to_response_invalid() -> None:
+    """Pydantic ValidationError は Layer 2-B (Stage 3 工程エラー) に翻訳される。"""
+    from pydantic import BaseModel, ValidationError
+
+    class Sample(BaseModel):
+        x: int
+
+    try:
+        Sample(x="not-an-int")  # type: ignore[arg-type]
+    except ValidationError as ve:
+        translated = _extractor()._translate_error(ve)
+        assert isinstance(translated, ExtractionResponseInvalidError)
+        assert translated.CODE == "extraction_response_invalid"
+
+
+def test_unknown_status_returns_raw_exc() -> None:
+    """既知 APIError status いずれにも該当しない exc は翻訳されず is exc を返す。"""
     exc = _api_error("WEIRD_NEW_STATUS", "Surprise!")
     translated = _extractor()._translate_error(exc)
-    assert isinstance(translated, UnclassifiedError)
+    assert translated is exc  # _call_once が bare re-raise する経路
+
+
+def test_unknown_runtime_exception_returns_raw_exc() -> None:
+    """SDK 外の想定外例外も翻訳せず is exc を返す。"""
+    exc = RuntimeError("totally unexpected")
+    translated = _extractor()._translate_error(exc)
+    assert translated is exc

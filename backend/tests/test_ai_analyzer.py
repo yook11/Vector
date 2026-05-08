@@ -33,6 +33,8 @@ from app.analysis.domain.value_objects.entity import (
 )
 from app.analysis.domain.value_objects.topic import TopicName
 from app.analysis.errors import (
+    AIProviderNetworkError,
+    AIProviderServiceUnavailableError,
     ConfigurationError,
     InsufficientBalanceError,
     InvalidInputError,
@@ -49,7 +51,6 @@ from app.analysis.extraction.extractor.gemini import GeminiExtractor
 from app.analysis.extraction.service import (
     ExtractedOutcome,
     ExtractionService,
-    InvalidInputOutcome,
     NoiseOutcome,
 )
 from app.models.article import Article
@@ -427,15 +428,19 @@ async def test_extractor_call_once_translates_sdk_error() -> None:
     extractor = _create_extractor()
     extractor._call_api = AsyncMock(side_effect=ConnectionError("timeout"))
 
-    with pytest.raises(NetworkError):
+    # PR3.5-c で Stage 3 extractor は Layer 2-A (AIProviderNetworkError) を raise
+    with pytest.raises(AIProviderNetworkError):
         await extractor._call_once("test prompt")
 
 
 async def test_extractor_call_once_passes_through_domain_error() -> None:
     extractor = _create_extractor()
-    extractor._call_api = AsyncMock(side_effect=ProviderError("empty response"))
+    # AIProviderError サブクラスは _call_api 内で raise 済として透過する
+    extractor._call_api = AsyncMock(
+        side_effect=AIProviderServiceUnavailableError("empty response")
+    )
 
-    with pytest.raises(ProviderError, match="empty response"):
+    with pytest.raises(AIProviderServiceUnavailableError, match="empty response"):
         await extractor._call_once("test prompt")
 
 
@@ -912,39 +917,6 @@ async def test_extraction_routes_noise_to_extraction_noises_table(
             )
         )
     ).scalar_one_or_none() is None
-
-
-async def test_extraction_returns_invalid_input_outcome(
-    db_session: AsyncSession,
-    session_factory,
-    sample_source: NewsSource,
-) -> None:
-    url = "https://example.com/bad"
-    article = Article(
-        source_id=sample_source.id,
-        source_url=url,
-        original_title="Bad Article",
-        original_content="Bad content.",
-        published_at=datetime.now(UTC),
-    )
-    db_session.add(article)
-    await db_session.commit()
-    await db_session.refresh(article)
-
-    mock_extractor = MagicMock(spec=BaseExtractor)
-    mock_extractor.extract = AsyncMock(
-        side_effect=InvalidInputError("too long"),
-    )
-
-    ready = ReadyForExtraction(
-        article_id=article.id,
-        original_title=article.original_title,
-        original_content=article.original_content,
-    )
-    svc = ExtractionService(session_factory)
-    outcome = await svc.execute(ready, mock_extractor)
-
-    assert isinstance(outcome, InvalidInputOutcome)
 
 
 # --- G. ClassificationService orchestration tests ---

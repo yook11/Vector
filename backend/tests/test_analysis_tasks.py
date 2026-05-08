@@ -16,7 +16,7 @@ import pytest
 
 from app.analysis.classification.domain.ready import ReadyForClassification
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
-from app.analysis.errors import RateLimitError
+from app.analysis.errors import AIProviderRateLimitedError, RateLimitError
 from app.analysis.extraction.domain.ready import ReadyForExtraction
 
 
@@ -137,32 +137,6 @@ class TestExtractContent:
         mock_classify.kiq.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_invalid_input_does_not_chain(self) -> None:
-        """InvalidInputOutcome は chain しない。"""
-        from app.analysis.extraction.service import (
-            InvalidInputOutcome as ExtractionInvalidInputOutcome,
-        )
-        from app.analysis.tasks import extract_content
-
-        mock_ctx = _make_ctx(extractor=_make_provider_fake())
-
-        with (
-            patch(
-                "app.analysis.tasks._build_limiters",
-                return_value=(None, None),
-            ),
-            patch("app.analysis.tasks.ExtractionService") as mock_svc_cls,
-            patch("app.analysis.tasks.classify_content") as mock_classify,
-        ):
-            mock_svc_cls.return_value.execute = AsyncMock(
-                return_value=ExtractionInvalidInputOutcome(),
-            )
-            mock_classify.kiq = AsyncMock()
-            await extract_content(ready=_make_ready_extraction(), ctx=mock_ctx)
-
-        mock_classify.kiq.assert_not_called()
-
-    @pytest.mark.asyncio
     async def test_noise_outcome_does_not_chain(self) -> None:
         """NoiseOutcome は chain しない (Service 側で extraction_noises に永続化済)。"""
         from app.analysis.extraction.service import NoiseOutcome
@@ -187,8 +161,8 @@ class TestExtractContent:
         mock_classify.kiq.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_rate_limit_records_audit_and_returns(self) -> None:
-        """PR3-a-1: RateLimitError は inline retry 対象外、即 audit 焼付して return。"""
+    async def test_rate_limited_records_audit_and_returns(self) -> None:
+        """RateLimited は INLINE_RETRY=False、即 audit + return (PR3.5-c)。"""
         from app.analysis.tasks import extract_content
 
         mock_ctx = _make_ctx(
@@ -202,17 +176,19 @@ class TestExtractContent:
             ),
             patch("app.analysis.tasks.ExtractionService") as mock_svc_cls,
             patch(
-                "app.analysis.tasks._audit_extraction_failure",
+                "app.analysis.tasks.record_extraction_failure",
                 new=AsyncMock(),
             ) as mock_audit,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
-                side_effect=RateLimitError("429"),
+                side_effect=AIProviderRateLimitedError("429"),
             )
             await extract_content(ready=_make_ready_extraction(), ctx=mock_ctx)
         mock_audit.assert_awaited_once()
-        kwargs = mock_audit.await_args.kwargs
-        assert kwargs["outcome_code"] == "ai_error_rate_limited"
+        # outcome_code 引数は廃止 (recording.py で内部導出)。exc が渡るのみ。
+        assert isinstance(
+            mock_audit.await_args.kwargs["exc"], AIProviderRateLimitedError
+        )
 
 
 # ---------------------------------------------------------------------------

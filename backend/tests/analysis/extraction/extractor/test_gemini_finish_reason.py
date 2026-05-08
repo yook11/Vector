@@ -1,13 +1,14 @@
-"""``GeminiExtractor._call_api`` の finish_reason 検査テスト (PR3-a-1)。
+"""``GeminiExtractor._call_api`` の finish_reason 検査テスト (PR3.5-c)。
 
 検証する性質:
 - finish_reason が SAFETY/RECITATION/BLOCKLIST/PROHIBITED_CONTENT/SPII の
-  いずれかなら ``ExtractionPolicyBlockedError`` を raise する
-- ``raw_response`` (もし text があれば) と ``prompt_version`` を例外に運ぶ
+  いずれかなら ``AIProviderOutputBlockedError`` (Layer 2-A、
+  NonRetryableDropArticle) を raise する
 - ``finish_reason=STOP`` (通常終了) で ``parsed`` が ExtractionResult なら
   ``ExtractionCall`` を返す
 - ``finish_reason=MAX_TOKENS`` のように policy block 系 **以外** で
-  ``parsed`` が ExtractionResult でない場合は ``ProviderError``
+  ``parsed`` が ExtractionResult でない場合は ``ExtractionResponseInvalidError``
+  (Layer 2-B、RetryableError)
 """
 
 from __future__ import annotations
@@ -24,10 +25,12 @@ from google.genai.types import (
 )
 
 from app.analysis.domain.value_objects.entity import EntityRawType, EntitySurface
-from app.analysis.errors import ProviderError
+from app.analysis.errors import (
+    AIProviderOutputBlockedError,
+    ExtractionResponseInvalidError,
+)
 from app.analysis.extraction.domain import ExtractedEntity, ExtractionResult
 from app.analysis.extraction.extractor.envelope import ExtractionCall
-from app.analysis.extraction.extractor.errors import ExtractionPolicyBlockedError
 from app.analysis.extraction.extractor.gemini import GeminiExtractor
 from app.analysis.extraction.extractor.gemini_prompt import GeminiExtractionPrompt
 
@@ -83,25 +86,26 @@ def _make_extractor(
     ],
 )
 @pytest.mark.asyncio
-async def test_policy_block_finish_reason_raises_blocked_error(
+async def test_policy_block_finish_reason_raises_output_blocked(
     blocked_reason: FinishReason,
 ) -> None:
+    """policy block 系 finish_reason は Layer 2-A の OutputBlocked を raise する。"""
     response = _make_response(finish_reason=blocked_reason, text="some draft")
     extractor = _make_extractor(response)
-    with pytest.raises(ExtractionPolicyBlockedError) as ei:
+    with pytest.raises(AIProviderOutputBlockedError) as ei:
         await extractor._call_api("prompt")
-    assert ei.value.finish_reason == blocked_reason.name
-    assert ei.value.raw_response == "some draft"
-    assert ei.value.prompt_version == GeminiExtractionPrompt.VERSION
+    assert blocked_reason.name in str(ei.value)
+    assert ei.value.CODE == "ai_error_output_blocked"
 
 
 @pytest.mark.asyncio
-async def test_policy_block_with_no_text_keeps_raw_response_none() -> None:
+async def test_policy_block_with_no_text_still_raises_output_blocked() -> None:
+    """raw_response 空でも OutputBlocked は raise (message に finish_reason 含む)。"""
     response = _make_response(finish_reason=FinishReason.SAFETY, text="")
     extractor = _make_extractor(response)
-    with pytest.raises(ExtractionPolicyBlockedError) as ei:
+    with pytest.raises(AIProviderOutputBlockedError) as ei:
         await extractor._call_api("prompt")
-    assert ei.value.raw_response is None
+    assert "SAFETY" in str(ei.value)
 
 
 @pytest.mark.asyncio
@@ -119,8 +123,10 @@ async def test_stop_with_parsed_result_returns_envelope() -> None:
 
 
 @pytest.mark.asyncio
-async def test_max_tokens_without_parsed_raises_provider_error() -> None:
+async def test_max_tokens_without_parsed_raises_response_invalid() -> None:
+    """policy block 系以外で parsed が ExtractionResult でない場合は Layer 2-B。"""
     response = _make_response(finish_reason=FinishReason.MAX_TOKENS, text="truncated")
     extractor = _make_extractor(response)
-    with pytest.raises(ProviderError):
+    with pytest.raises(ExtractionResponseInvalidError) as ei:
         await extractor._call_api("prompt")
+    assert ei.value.CODE == "extraction_response_invalid"

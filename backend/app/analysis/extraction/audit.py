@@ -1,13 +1,15 @@
-"""Stage 3 (extraction) 監査 payload の組立 helper。
+"""Stage 3 (extraction) 監査 payload の内部 helper。
 
-成功 / skip / 失敗 / DELETE の各経路で共有される「6 共通 field」のうち
-content 由来 5 field を計算する。``source_name`` は呼出側で resolve した値を
-そのまま受け取る (DB session を持たない経路 / 持つ経路で resolve 戦略が
-異なるため helper は I/O しない)。
+``ExtractionAuditRepository`` 内部から呼ばれる private helper。直接の
+公開 API ではない (audit_repository の semantic method 経由でのみ使用)。
+
+成功 / 失敗 / DELETE の各経路で共有される「6 共通 field」のうち content 由来
+5 field を計算する。``source_name`` は呼出側 (audit_repository) で resolve した
+値をそのまま受け取る (helper は I/O しない、session に依存しない)。
 
 PR3-a-1 では Gemini 専用のため ``GeminiExtractionPrompt`` の ClassVar を直接
 参照する。複数 provider をサポートするタイミングで provider-agnostic な
-プロンプトメタを引数化する想定 (PR3.5 / PR-Future)。
+プロンプトメタを引数化する想定 (PR-Future)。
 
 content 段階 (`docs/observability/pipeline-events-design.md` §11):
     1. raw — Article.original_content (DB 値)

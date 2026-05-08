@@ -7,25 +7,21 @@ from typing import ClassVar
 
 import structlog
 
-from app.analysis.errors import AnalysisDomainError
+from app.analysis.errors import AIProviderError, ExtractionDomainError
 from app.analysis.extraction.extractor.envelope import ExtractionCall
-from app.analysis.extraction.extractor.errors import (
-    ExtractionInputTooLargeError,
-    ExtractionPolicyBlockedError,
-)
 
 logger = structlog.get_logger(__name__)
 
 
 class BaseExtractor(abc.ABC):
-    """Stage 1 — Content Extraction のテンプレートメソッド基底。
+    """Stage 3 — Content Extraction のテンプレートメソッド基底。
 
     原文を読み、情報を取り出す。判断はしない。
 
     サブクラスは以下 3 つのフックを実装する:
-    - ``extract``: プロンプト構築とレスポンス解析（公開 API）
+    - ``extract``: プロンプト構築とレスポンス解析(公開 API)
     - ``_call_api``: SDK の生呼び出し
-    - ``_translate_error``: SDK 例外をエラー階層に分類する
+    - ``_translate_error``: SDK 例外を Layer 2 例外階層に分類する
 
     また以下の ClassVar を宣言する必要がある:
     - ``MODEL``: モデル識別子
@@ -60,20 +56,22 @@ class BaseExtractor(abc.ABC):
     ) -> ExtractionCall:
         """記事から事実を抽出し、構造化データを返す。
 
-        Article の存在が content の品質を保証する（50 文字以上）。
+        Article の存在が content の品質を保証する(50 文字以上)。
 
         Args:
-            title: 英語記事タイトル（Article.original_title）。
-            content: 記事本文全文（Article.original_content）。
+            title: 英語記事タイトル(Article.original_title)。
+            content: 記事本文全文(Article.original_content)。
 
         Returns:
             ``result`` (ExtractionResult) に加え ``raw_response`` と
             ``prompt_version`` を含む envelope。
 
         Raises:
-            AnalysisDomainError: 抽出に失敗した場合 (infrastructure 起因)。
-            ExtractionPolicyBlockedError: 内容がプロバイダーポリシーに抵触。
-            ExtractionInputTooLargeError: 入力が context window 超過。
+            AIProviderError: provider 呼び出し由来の失敗 (Layer 2-A)。
+                Layer 1 marker (NonRetryableDropArticle / NonRetryableKeepArticle /
+                RetryableError) を多重継承しており Task 層で dispatch される。
+            ExtractionDomainError: Stage 3 工程由来の失敗 (Layer 2-B)。
+                ``ExtractionResponseInvalidError`` 等。
         """
         ...
 
@@ -84,28 +82,35 @@ class BaseExtractor(abc.ABC):
 
     @abc.abstractmethod
     def _translate_error(self, exc: Exception) -> Exception:
-        """SDK 例外を Vector の例外階層に分類する。
+        """SDK 例外を Layer 2-A (``AIProviderError``) または Layer 2-B
+        (``ExtractionDomainError``) に分類する。
 
-        戻り値は ``AnalysisDomainError`` のサブクラス、または PR3-a-1 で
-        新設した ``ExtractionInputTooLargeError`` のいずれか (呼出側で
-        ``raise translated from exc`` される)。
+        SDK 例外がいずれの分類にも当てはまらない場合は **生 Exception を
+        そのまま return** する (``return exc``)。``_call_once`` 側が
+        ``is exc`` をチェックして bare re-raise する (Task 層 catch-all
+        UNKNOWN ラベルに流す)。
         """
         ...
 
     # -- 単発呼び出し --
 
     async def _call_once(self, prompt: str) -> ExtractionCall:
-        """プロバイダー API を 1 回呼び出し、例外をエラー階層に変換する。"""
+        """プロバイダー API を 1 回呼び出し、例外を Layer 2 階層に変換する。
+
+        ``_translate_error`` が翻訳不可で生 ``exc`` を返した場合は ``raise
+        translated from exc`` を避け、bare re-raise する (``__cause__`` の
+        自己参照を避けて stacktrace の正常性を保つ)。
+        """
         try:
             logger.info("extractor_api_call", model=self.model_name)
             envelope = await self._call_api(prompt)
             logger.info("extractor_api_success", model=self.model_name)
             return envelope
-        except (
-            AnalysisDomainError,
-            ExtractionPolicyBlockedError,
-            ExtractionInputTooLargeError,
-        ):
+        except (AIProviderError, ExtractionDomainError):
+            # 既に Layer 2 に翻訳済 (_call_api 内で raise された)
             raise
         except Exception as exc:
-            raise self._translate_error(exc) from exc
+            translated = self._translate_error(exc)
+            if translated is exc:
+                raise  # bare re-raise — 自己 chain を避け、Task 層 UNKNOWN へ
+            raise translated from exc

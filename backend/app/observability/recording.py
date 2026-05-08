@@ -8,6 +8,12 @@
 - 第 1 防御: DB INSERT (本ヘルパー)
 - 第 2 防御: 失敗時 ``structlog`` で構造化ログ (業務エラー + 監査エラーを両方)
 - 第 3 防御: ``articles`` の "穴" 症状検知 (運用 SQL、本実装範囲外)
+
+PR3.5-b 規律: ``category`` / ``code`` は **呼出側が明示渡し** する。本ヘルパーは
+``exc`` からの自動導出を行わない (Stage 3 は ``ExtractionAuditRepository`` 経由
+で audit を焼くため本経路は通らない、collection 系 / backfill 系は Layer1Category
+の語彙が合わないため明示渡しもしない、PR3.5-d で Stage 4/5 が独自 audit_repository
+を持つ予定)。
 """
 
 from __future__ import annotations
@@ -93,12 +99,14 @@ async def _record_failure_event(
     article_id: int | None = None,
     payload_extra: Mapping[str, Any] | None = None,
     category: Layer1Category | None = None,
+    code: str | None = None,
 ) -> None:
     """例外パス用、新 session で別 tx commit。
 
-    ``category`` は article-bound analysis stages (extraction / classification /
-    embedding) のみ呼出側が指定する。collection 系 (dispatch / source_fetch /
-    content_fetch) は ``None`` のままで良い (``Layer1Category`` の語彙が合わない)。
+    ``category`` / ``code`` は呼出側が明示渡しする (PR3.5-b 規律)。collection 系
+    / backfill 系は ``Layer1Category`` の語彙が合わないため ``None`` のまま記録
+    される。Stage 3 は ``ExtractionAuditRepository.append_failure`` 経由で焼く
+    ため本ヘルパーを通らない。
 
     第 1 防御に失敗した場合は ``structlog.exception`` で fallback ログを残す
     (業務エラーと監査エラーを必ず両方 key にする)。
@@ -119,6 +127,7 @@ async def _record_failure_event(
                 duration_ms=duration_ms,
                 error_class=error_class_fqn,
                 category=category,
+                code=code,
             )
             await session.commit()
     except Exception as audit_exc:
@@ -126,6 +135,8 @@ async def _record_failure_event(
             "pipeline_event_record_failure_dropped",
             stage=stage.value,
             outcome_code=outcome_code,
+            category=category.value if category else None,
+            code=code,
             attempt=attempt,
             source_id=source_id,
             article_id=article_id,
