@@ -46,11 +46,12 @@ _ZWSP = "​"
 _ATX_HEADER = re.compile(r"^(#{1,6})[ \t　]+", flags=re.MULTILINE)
 
 # 全角括弧 section header: ``【X】`` を ``【X​】`` (閉じ括弧前に ZWSP) に変換し
-# LLM の section header 解釈経路を崩す。中身の長さは Vector の prompt template
-# で実際に使われる header (`ルール` `出力` `重要性の判断軸`) が全て 10 文字
-# 以下であることに合わせ 1-20 文字に制限。本文中の長い ``【...】`` (引用元
-# 注釈等) は巻き込まない (red-team C3 / F7)。
-_FULLWIDTH_BRACKET_HEADER = re.compile(r"【([^】\n]{1,20})】")
+# LLM の section header 解釈経路を崩す。中身の長さに上限を設けず、``【` ``】``
+# で囲まれた区間を全て対象にする (red-team chain β: 旧 ``{1,20}`` 制限下で
+# 21+ 文字の偽 ``【ルール: ...】`` が素通りする bypass が確認されたため)。
+# 本文中の引用元注釈等の長い ``【...】`` も ZWSP 入りになるが、ZWSP は人間に
+# 見えず LLM の内容理解にも影響しない (red-team C3 / F7)。
+_FULLWIDTH_BRACKET_HEADER = re.compile(r"【([^】\n]+)】")
 
 
 def sanitize_for_untrusted_block(text: str) -> str:
