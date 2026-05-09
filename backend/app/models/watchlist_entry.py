@@ -31,8 +31,9 @@ class WatchlistEntry(Base):
     )
 
     # リレーション
-    # 属性名 / カラム名 (article_analysis_id) は API/DB 互換のため据え置き
-    # (PR3.5-d.2 で API field rename と合わせて整理予定)。
+    # 属性名 / カラム名 (article_analysis_id) は据え置きで確定。
+    # ユーザ視点で「ウォッチした分析記事」を表す概念名として保持する判断
+    # (PR3.5-d.2 調査記録、specs/stage4-assessment-rename.md 参照)。
     in_scope_assessment: Mapped[InScopeAssessment] = relationship(
         back_populates="watchlist_entries"
     )
