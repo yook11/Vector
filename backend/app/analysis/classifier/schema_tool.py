@@ -1,12 +1,17 @@
-"""DeepSeek strict mode 用の AI 境界 JSON Schema 定数。
+"""Stage 4 classifier 用 AI 境界 schema 定数 (provider 別)。
 
-DeepSeek の Function Calling + ``strict: true`` (beta endpoint) は ``$ref``/``$defs``
-経由の制約を enforce しないため、Pydantic の ``model_json_schema()`` 出力をそのまま
-渡せない (specs/stage2-deepseek-migration.md の PoC 結果参照)。
+provider ごとに SDK の schema 受理形式が違うため、別 SSoT として並存させる:
 
-このモジュールは AI に渡す inline flat な strict 互換 JSON Schema を手書き定数として
-保持する。受信後の検証は ``ClassificationRawResponse.model_validate_json()`` で
-行うため、subset 外制約 (``minLength``/``maxLength`` 等) はここに書かない。
+- ``CLASSIFICATION_TOOL_SCHEMA`` (DeepSeek): Function Calling + ``strict: true``
+  (beta endpoint) 用。lowercase 標準 JSON Schema 形式で ``additionalProperties:
+  false`` + ``pattern`` を入れる。``$ref``/``$defs`` は AI が enforce しないので
+  inline flat (specs/stage2-deepseek-migration.md PoC 参照)。
+- ``CLASSIFICATION_GEMINI_SCHEMA`` (Gemini): ``response_schema`` 引数用。
+  OpenAPI 3.0 subset (``type: "OBJECT"`` / ``"STRING"`` の uppercase) で SDK
+  Schema 形式に寄せる。``additionalProperties`` は Gemini SDK Schema 形式で
+  未サポート、``pattern`` は enforce 弱いため省略する。受信後の制約検証は
+  ``parse_assessment`` 内 ``TopicName`` VO で完全実施するため AI 境界での
+  pattern / additionalProperties 強制は冗長。
 
 整合性ドリフト (enum 追加忘れ等) は ``test_classification_tool_schema.py`` で
 構造的に検出する。
@@ -45,4 +50,38 @@ CLASSIFICATION_TOOL_SCHEMA: dict[str, Any] = {
             "description": "日本語の投資家向け論評（短文、空文字不可）",
         },
     },
+}
+
+
+CLASSIFICATION_GEMINI_SCHEMA: dict[str, Any] = {
+    "type": "OBJECT",
+    "required": ["category", "topic", "investor_take"],
+    "properties": {
+        "category": {
+            "type": "STRING",
+            "enum": [c.value for c in ValidCategory],
+            "description": (
+                "Vector の 12 カテゴリ (先端テック 11 + other) のいずれか、"
+                "または out_of_scope"
+            ),
+        },
+        "topic": {
+            "type": "STRING",
+            "description": (
+                "正規化済み英語小文字 1-3 語のラベル。例: 'ai agents'、"
+                "'quantum computing'、'6g'。日本語不可、大文字不可、"
+                "ハイフン/アンダースコア不可、冠詞 (a/an/the/in/of) 不可"
+            ),
+            # NOTE: ``pattern`` は Gemini SDK Schema 形式で enforce が弱いため
+            # 付けない。受信後 TopicName VO の正規化制約で reject
+            # (parse_assessment 経由)。
+        },
+        "investor_take": {
+            "type": "STRING",
+            "description": "日本語の投資家向け論評（短文、空文字不可）",
+        },
+    },
+    # NOTE: ``additionalProperties`` は Gemini SDK Schema 形式 (OpenAPI 3.0 subset)
+    # で未サポート。AI が余分 key を返しても parse_assessment は 3 key のみ
+    # 取り出すため、AI 境界での strict enforcement は冗長。
 }

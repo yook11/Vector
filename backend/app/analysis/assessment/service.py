@@ -98,10 +98,15 @@ class AssessmentService:
         Raises:
             ``AnalysisDomainError`` のサブクラス (Task 層 retry に委ねる)。
         """
-        response = await classifier.classify(
+        # PR3: classifier 戻り値が AssessmentCall envelope 化。本 PR では
+        # call.result のみ使い、call.raw_response / .raw_category / .raw_topic /
+        # .prompt_version は audit 焼付用 (PR5 で AssessmentAuditRepository に渡す
+        # 予定) として envelope に保持されるが、本 Service では未使用。
+        call = await classifier.classify(
             title_ja=ready.translated_title,
             summary_ja=ready.summary,
         )
+        response = call.result
 
         async with self._session_factory() as session:
             match response:

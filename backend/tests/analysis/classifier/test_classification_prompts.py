@@ -93,11 +93,21 @@ def test_template_is_shared_classification_prompt() -> None:
     assert DeepSeekClassificationPrompt.TEMPLATE is CLASSIFICATION_PROMPT
 
 
-def test_gemini_response_schema_is_pydantic_class() -> None:
-    """Gemini は Pydantic class を ``response_schema`` に渡す。"""
-    from app.analysis.classifier.schema import ClassificationRawResponse
+def test_gemini_response_schema_is_dict_gemini_schema() -> None:
+    """Gemini は dict (Gemini SDK Schema 形式 uppercase) を ``response_schema`` に渡す。
 
-    assert GeminiClassificationPrompt.RESPONSE_SCHEMA is ClassificationRawResponse
+    PR3 で Pydantic class (``ClassificationRawResponse``) → dict
+    (``CLASSIFICATION_GEMINI_SCHEMA``) に切り替え。``type: "OBJECT"`` /
+    ``"STRING"`` の uppercase で OpenAPI 3.0 subset 形式に寄せる。
+    """
+    from app.analysis.classifier.schema_tool import CLASSIFICATION_GEMINI_SCHEMA
+
+    # MappingProxyType に包んでいるので equality (==) で比較
+    assert (
+        dict(GeminiClassificationPrompt.RESPONSE_SCHEMA) == CLASSIFICATION_GEMINI_SCHEMA
+    )
+    # Gemini 専用 schema は uppercase (OpenAPI 3.0 subset / SDK Schema 形式)
+    assert CLASSIFICATION_GEMINI_SCHEMA["type"] == "OBJECT"
 
 
 def test_deepseek_response_schema_is_dict_tool_schema() -> None:
@@ -107,6 +117,30 @@ def test_deepseek_response_schema_is_dict_tool_schema() -> None:
     # MappingProxyType に包んでいるので equality (==) で比較
     assert (
         dict(DeepSeekClassificationPrompt.RESPONSE_SCHEMA) == CLASSIFICATION_TOOL_SCHEMA
+    )
+    # DeepSeek strict mode は lowercase 標準 JSON Schema 形式
+    assert CLASSIFICATION_TOOL_SCHEMA["type"] == "object"
+
+
+def test_gemini_and_deepseek_schemas_are_distinct_ssots() -> None:
+    """Gemini と DeepSeek で provider 差異を別 SSoT として保持する。"""
+    from app.analysis.classifier.schema_tool import (
+        CLASSIFICATION_GEMINI_SCHEMA,
+        CLASSIFICATION_TOOL_SCHEMA,
+    )
+
+    # 形式が違う (uppercase OpenAPI subset vs lowercase JSON Schema)
+    assert CLASSIFICATION_GEMINI_SCHEMA["type"] != CLASSIFICATION_TOOL_SCHEMA["type"]
+    # DeepSeek 用は strict mode 用に additionalProperties + pattern を持つ、
+    # Gemini 用は SDK 制約で持たない
+    assert "additionalProperties" in CLASSIFICATION_TOOL_SCHEMA
+    assert "additionalProperties" not in CLASSIFICATION_GEMINI_SCHEMA
+    assert "pattern" in CLASSIFICATION_TOOL_SCHEMA["properties"]["topic"]
+    assert "pattern" not in CLASSIFICATION_GEMINI_SCHEMA["properties"]["topic"]
+    # ただし enum (= ValidCategory 12 値) は両者で一致
+    assert (
+        CLASSIFICATION_GEMINI_SCHEMA["properties"]["category"]["enum"]
+        == CLASSIFICATION_TOOL_SCHEMA["properties"]["category"]["enum"]
     )
 
 
@@ -119,77 +153,10 @@ def test_classifier_classes_use_prompt_model() -> None:
     assert DeepSeekClassifier.MODEL == DeepSeekClassificationPrompt.MODEL
 
 
-# ---------------------------------------------------------------------------
-# to_domain regression — PR2 で ``InScope.category`` の型を ``ValidCategory`` →
-# ``InScopeCategory`` に変更したことに伴い、``to_domain`` の明示変換が 13 値で
-# 動くことを固定する。``to_domain`` 自体は PR3 で削除予定だが、PR2 merge 後
-# PR3 着手前までの間 production 経路で生きているため regression 必須。
-# ---------------------------------------------------------------------------
-
-
-class TestToDomainCategoryConversion:
-    """to_domain の ValidCategory → InScopeCategory 明示変換が全 12 値で動く。"""
-
-    @pytest.mark.parametrize(
-        "valid_slug,expected_in_scope_slug",
-        [
-            ("ai", "ai"),
-            ("bio", "bio"),
-            ("computing", "computing"),
-            ("energy", "energy"),
-            ("materials", "materials"),
-            ("mobility", "mobility"),
-            ("network", "network"),
-            ("other", "other"),
-            ("robotics", "robotics"),
-            ("security", "security"),
-            ("semiconductor", "semiconductor"),
-            ("space", "space"),
-        ],
-    )
-    def test_in_scope_category_converts_correctly(
-        self,
-        valid_slug: str,
-        expected_in_scope_slug: str,
-    ) -> None:
-        from app.analysis.classifier.prompts import to_domain
-        from app.analysis.classifier.schema import (
-            ClassificationRawResponse,
-            InScope,
-            InScopeCategory,
-            ValidCategory,
-        )
-        from app.analysis.domain.value_objects.topic import TopicName
-
-        raw = ClassificationRawResponse(
-            category=ValidCategory(valid_slug),
-            topic=TopicName(root="ai"),
-            investor_take="x",
-        )
-        result = to_domain(raw)
-        assert isinstance(result, InScope)
-        # 型強制: InScopeCategory のインスタンスに変換されている
-        assert isinstance(result.category, InScopeCategory)
-        assert result.category.value == expected_in_scope_slug
-
-
-class TestToDomainOutOfScopeBranch:
-    """to_domain の OUT_OF_SCOPE 振り分けが PR2 後も維持されている。"""
-
-    def test_out_of_scope_returns_out_of_scope_instance(self) -> None:
-        from app.analysis.classifier.prompts import to_domain
-        from app.analysis.classifier.schema import (
-            ClassificationRawResponse,
-            OutOfScope,
-            ValidCategory,
-        )
-        from app.analysis.domain.value_objects.topic import TopicName
-
-        raw = ClassificationRawResponse(
-            category=ValidCategory.OUT_OF_SCOPE,
-            topic=TopicName(root="ignored"),
-            investor_take="not relevant",
-        )
-        result = to_domain(raw)
-        assert isinstance(result, OutOfScope)
-        assert result.investor_take == "not relevant"
+# NOTE: PR3 で ``to_domain`` 関数 (PR2 で `InScopeCategory(raw.category.value)`
+# 明示変換を入れていた経路) を削除した。AI 境界 ACL は ``parse_assessment``
+# (tests/analysis/classifier/test_parse_assessment.py で網羅) に集約されたため、
+# `to_domain` 用の regression test 群 (TestToDomainCategoryConversion /
+# TestToDomainOutOfScopeBranch) は本ファイルから削除。詰め替えの 12 in-scope 値
+# の網羅は test_parse_assessment.py::TestParseAssessmentInScope::
+# test_each_in_scope_slug_dispatches_to_in_scope で維持されている。

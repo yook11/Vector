@@ -11,9 +11,8 @@ classifier 内部 (``parse.py::parse_assessment``) が ``category`` 値を見て
 - ``InScope`` (in-scope 確定後、``category: InScopeCategory`` で OUT_OF_SCOPE を型排除)
 - ``OutOfScope`` (out-of-scope 確定後)
 
-``ClassificationRawResponse`` (中間 flat 型) は historical な互換性のため PR2 では
-保持するが、PR3 で classifier ``_call_api`` の組み替えと同時に削除予定
-(spec ``§Classifier 公開型``)。
+PR3 で ``ClassificationRawResponse`` (中間 flat 型) を削除した — AI 境界の dict →
+ドメイン型詰め替えは ``parse_assessment(payload: dict)`` 1 箇所に集約された。
 """
 
 from __future__ import annotations
@@ -74,23 +73,6 @@ class InScopeCategory(StrEnum):
     SEMICONDUCTOR = "semiconductor"
     SPACE = "space"
     # NO OUT_OF_SCOPE — 型レベルで排除
-
-
-class ClassificationRawResponse(BaseModel):
-    """(PR3 で削除予定) Gemini SDK の ``response_schema`` 中間型。
-
-    本クラスは PR3 (classifier ``_call_api`` 改修) で ``parse_assessment`` 経由の
-    dict ベース schema 渡しに置き換えられて削除される予定。PR2 では historical
-    な caller (``gemini.py`` / ``deepseek.py`` / ``prompts.py::to_domain`` /
-    ``gemini_prompt.py``) の互換性のために保持している。新規コードは本型を使わず
-    ``parse_assessment(payload: dict)`` を経由すること。
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    category: ValidCategory
-    topic: TopicName
-    investor_take: str = Field(min_length=1)
 
 
 class InScope(BaseModel):

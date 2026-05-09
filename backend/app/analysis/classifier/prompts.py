@@ -1,20 +1,14 @@
 """Classifier 共通リソース。
 
-プロバイダー独立な判定プロンプトと、フラット AI レスポンスからドメイン
-tagged union への詰め替え関数を保持する。Gemini / DeepSeek の両 classifier から
-import される。
+プロバイダー独立な判定プロンプト (``CLASSIFICATION_PROMPT``) を保持する。
+Gemini / DeepSeek の両 classifier から import される。
+
+PR3 で ``to_domain`` 関数 (``ClassificationRawResponse`` → ``AssessmentResult``
+詰め替え) を削除した。詰め替えは ``parse.py::parse_assessment`` (PR2 で導入) に
+集約されている。
 """
 
 from __future__ import annotations
-
-from app.analysis.classifier.schema import (
-    AssessmentResult,
-    ClassificationRawResponse,
-    InScope,
-    InScopeCategory,
-    OutOfScope,
-    ValidCategory,
-)
 
 CLASSIFICATION_PROMPT = """\
 あなたは先端技術分野のテックニュース分類の専門家です。
@@ -64,27 +58,3 @@ other は先端技術領域以外で投資判断に寄与するテーマ\
 # Step 4 — investor_take
 投資家視点で記事のどこに注目し、なぜ重要だと感じたかを日本語で記述する。
 """
-
-
-def to_domain(raw: ClassificationRawResponse) -> AssessmentResult:
-    """フラットな AI レスポンスをドメイン型 tagged union に詰め替える。
-
-    category=OUT_OF_SCOPE のときは topic を捨て OutOfScope に、
-    それ以外は ``ValidCategory`` を ``InScopeCategory`` に明示変換した上で
-    InScope に移す。この関数が唯一の分岐点であり、以降のコードは union の
-    ``match`` / ``isinstance`` で型安全に扱える。
-
-    Note:
-        本関数は PR3 (classifier ``_call_api`` の ``parse_assessment`` 経由化)
-        で削除予定。PR2 では ``InScope.category`` の型変更 (``ValidCategory``
-        → ``InScopeCategory``) に追従するため ``InScopeCategory(raw.category.value)``
-        の明示変換を入れている (Pydantic v2 の StrEnum 値ベース coercion 依存を
-        避けるため)。
-    """
-    if raw.category == ValidCategory.OUT_OF_SCOPE:
-        return OutOfScope(investor_take=raw.investor_take)
-    return InScope(
-        category=InScopeCategory(raw.category.value),
-        topic=raw.topic,
-        investor_take=raw.investor_take,
-    )
