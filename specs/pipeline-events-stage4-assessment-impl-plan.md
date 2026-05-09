@@ -12,16 +12,17 @@
 
 ```
                         ┌──────────────────────────────┐
-                        │ PR1 (a)(b)                    │
-                        │ provider KIND + Stage 4       │
-                        │ errors / mapping / wrapper    │
+                        │ PR1 (a)                       │
+                        │ Stage 4 ACL foundation        │
+                        │ (tuple-based mapping + markers)│
                         └──┬─────────────────┬──────────┘
                            │                  │
                            ↓                  ↓
         ┌──────────────────────┐    ┌────────────────────────┐
-        │ PR2 (c)              │    │ PR4 (h)                 │
+        │ PR2 (b)(c)           │    │ PR4 (h)                 │
         │ Classifier 公開型整理 │    │ Alembic migration       │
         │ + envelope + parse   │    │ Stage rename + category │
+        │ + Layer 2-B markers  │    │                          │
         └──────┬───────────────┘    └────────┬───────────────┘
                │                              │
                ↓                              ↓
@@ -44,8 +45,8 @@
 
 | PR | 内容 | 規模目安 | 依存 |
 |---|---|---|---|
-| PR1 | provider に KIND 追加 + Stage 4 errors / mapping / wrapper | 中 (~350 行) | なし |
-| PR2 | Classifier 公開型整理 + envelope + parse | 中 (~250 行) | なし (PR1 と並行可、merge 順序自由) |
+| PR1 | Stage 4 ACL foundation (tuple-based markers + provider mapping) | 小 (~290 行) | なし |
+| PR2 | Classifier 公開型整理 + envelope + parse + Layer 2-B markers | 中 (~280 行) | なし (PR1 と並行可、merge 順序自由) |
 | PR3 | Classifier 実装改修 (`_translate_error` / `_call_once`) | 中 (~400 行) | PR1 + PR2 |
 | PR4 | Alembic migration (Stage rename + category 追加) | 小 (~150 行) | なし (PR1〜3 と並行可) |
 | PR5 | `AssessmentPayload` + `AssessmentAuditRepository` | 中 (~350 行) | PR1 + PR4 |
@@ -55,8 +56,8 @@
 
 | 時点 | 本番挙動 |
 |---|---|
-| PR1 merge 後 | 新規ファイル増えるだけ、import されない → 挙動不変 |
-| PR2 merge 後 | `AssessmentResponse` → `AssessmentResult` rename と内部詰め替え集約。Service の caller は型名変更のみ、挙動不変 |
+| PR1 merge 後 | 新規ファイル (`assessment/errors.py` / `assessment/provider_mapping.py`) 増えるだけ、import されない → 挙動不変 |
+| PR2 merge 後 | `AssessmentResponse` → `AssessmentResult` rename と内部詰め替え集約 + Layer 2-B markers (`AssessmentResponseInvalidError` / `AssessmentCategoryMissingError`) を `assessment/errors.py` に追加。Service の caller は型名変更のみ、挙動不変 |
 | PR3 merge 後 | classifier の戻り値が envelope (`AssessmentCall`)、Service が envelope を unpack する経路に。**provider 例外は素通し** (まだ ACL なし)、既存挙動と同じ。失敗時は旧経路で audit 焼付 |
 | PR4 merge 後 | DB CHECK 制約に `ASSESSMENT` / `non_retryable_keep_extraction` 追加。既存 row は `Stage.CLASSIFICATION` のまま稼働、新規書き込みも旧値で動作 |
 | PR5 merge 後 | `AssessmentPayload` / `AssessmentAuditRepository` ファイルが import 可能になる。まだ書き込み経路に繋がっていない |
@@ -64,64 +65,79 @@
 
 ---
 
-## PR1 — provider KIND 追加 + Stage 4 errors / mapping / wrapper
+## PR1 — Stage 4 ACL foundation (tuple-based mapping + markers)
 
-**目的**: KIND-based ACL の foundation を作る。新規ファイルのみ、既存挙動への影響ゼロ。
+**目的**: tuple-based ACL の foundation を Stage 4 側に閉じて敷く。新規ファイルのみ、既存挙動への影響ゼロ。**provider 側 (`app/analysis/errors/`) は一切 touch しない**。
 
 ### スコープ
 
 含む:
-- `app/analysis/errors/provider.py` 改修 — `AIProviderFailureKind` enum 追加、9 種すべてに `KIND` ClassVar を pin (foundation marker 継承は据え置き)
-- `app/analysis/assessment/errors.py` 新規 — `AssessmentError` / `AssessmentRetryableError` / `AssessmentTerminalSkipError` (Layer 1 marker) + `AssessmentResponseInvalidError` / `AssessmentCategoryMissingError` (Layer 2-B) + `AssessmentProviderRetryableError` / `AssessmentProviderTerminalSkipError` (provider wrapper)
-- `app/analysis/assessment/provider_mapping.py` 新規 — `ASSESSMENT_RETRYABLE_KINDS` / `ASSESSMENT_TERMINAL_SKIP_KINDS` / `_INLINE_RETRY_BY_KIND` / `map_provider_to_assessment` 関数
+- `app/analysis/assessment/errors.py` 新規 — `AssessmentError` / `AssessmentRecoverableError` / `AssessmentTerminalSkipError` (Layer 1 marker、`code: str` + `provider_error: AIProviderError | None = None` の 2 instance attr)
+- `app/analysis/assessment/provider_mapping.py` 新規 — `ASSESSMENT_RECOVERABLE_PROVIDER_ERRORS` / `ASSESSMENT_TERMINAL_SKIP_PROVIDER_ERRORS` の 2 tuple + `map_provider_to_assessment(exc)` 関数 (`isinstance(exc, <tuple>)` で dispatch)
 
 含まない (次 PR 送り):
+- provider 側変更 (`AIProviderFailureKind` 等は本方針では永久に不要)
+- Layer 2-B markers (`AssessmentResponseInvalidError` / `AssessmentCategoryMissingError`) — `parse_assessment` 実装と同時の方が自然なので **PR2 送り**
 - `BaseClassifier._translate_error` の改修 (PR3)
-- Service / Task / AuditRepository の改修
+- Service / Task / AuditRepository の改修 (PR5/PR6)
 
 ### 作業内訳
 
-1. `provider.py`:
-   - `AIProviderFailureKind(StrEnum)` 追加 (9 値: configuration / request_invalid / insufficient_balance / rate_limited / quota_exhausted / service_unavailable / network / input_rejected / output_blocked)
-   - `AIProviderError` 基底に `KIND: ClassVar[AIProviderFailureKind]` 抽象宣言
-   - 9 具象クラスに `KIND = AIProviderFailureKind.<対応値>` を pin
-2. `errors.py` 新規:
-   - 上記すべてのクラスを spec §例外階層 / §Layer 1 marker に従って実装
-   - `code` / `inline_retry` は instance 属性 (`__init__` 経由で受ける)
-3. `provider_mapping.py` 新規:
-   - `frozenset` で 2 つの KIND セット
-   - `dict[AIProviderFailureKind, bool]` で `_INLINE_RETRY_BY_KIND`
-   - `map_provider_to_assessment(exc)` 関数
+1. `app/analysis/assessment/errors.py` 新規:
+   - `AssessmentError(Exception)` — Stage 4 全例外の共通基底
+   - `AssessmentRecoverableError(AssessmentError)` — `code: str` + `provider_error: AIProviderError | None = None` の 2 instance attr、constructor は `(message="", *, code, provider_error=None)`
+   - `AssessmentTerminalSkipError(AssessmentError)` — 同 signature
+   - foundation marker (`RetryableError` 等) は **継承しない**
+2. `app/analysis/assessment/provider_mapping.py` 新規:
+   - `ASSESSMENT_RECOVERABLE_PROVIDER_ERRORS: tuple[type[AIProviderError], ...]` — Network / ServiceUnavailable / RateLimited / QuotaExhausted の 4 種
+   - `ASSESSMENT_TERMINAL_SKIP_PROVIDER_ERRORS: tuple[type[AIProviderError], ...]` — Configuration / RequestInvalid / InsufficientBalance / InputRejected / OutputBlocked の 5 種
+   - `map_provider_to_assessment(exc)` — `isinstance(exc, <tuple>)` で dispatch、未登録は `TypeError`
+3. spec 同梱更新 (本 PR で同時 merge):
+   - `specs/pipeline-events-stage4-assessment.md` を tuple 方式に書き換え
+   - 本 plan の §PR1 (= 本セクション) と全体像のスコープ表を更新
 
 ### テスト戦略
 
-- `tests/analysis/errors/test_provider_kind.py` — 9 種 + KIND の対応、`AIProviderFailureKind` 全値 enum 化
-- `tests/analysis/assessment/test_errors.py` — Stage 4 marker の階層、`code` / `inline_retry` instance 属性、`AssessmentResponseInvalidError` / `AssessmentCategoryMissingError` の固定値
+- `tests/analysis/assessment/test_errors.py`:
+  - `AssessmentRecoverableError("msg", code="x", provider_error=AIProviderRateLimitedError("..."))` が `code` / `provider_error` instance attr に値を保持
+  - `AssessmentTerminalSkipError` 同上
+  - `provider_error` の **default が None** (PR2 の Layer 2-B で使う前提)
+  - `code` がキーワード必須 (`AssessmentRecoverableError("msg")` は TypeError)
+  - `issubclass(AssessmentRecoverableError, AssessmentError)` / `AssessmentTerminalSkipError, AssessmentError`
+  - foundation marker 非継承: `not issubclass(AssessmentRecoverableError, RetryableError)`
 - `tests/analysis/assessment/test_provider_mapping.py`:
-  - 9 種すべての `AIProviderError` が `map_provider_to_assessment` で適切な Stage 4 marker に詰め替えられる
-  - 詰め替え後の `code` が元 `AIProviderError.CODE` と一致
-  - Retryable 系の `inline_retry` 値 (rate_limited=False / network=True 等)
-  - 全 KIND がいずれかのセットに含まれる (網羅性)
-  - 未知 KIND で `ValueError` raise
+  - tuple 内容の固定値テスト (parametrize で 9 種 provider error class の所属確認)
+  - 網羅性 (`set(recoverable) | set(terminal_skip) == 9 種 concrete `AIProviderError` 集合`)
+  - 排他性 (`set(...) & set(...) == set()`)
+  - `map_provider_to_assessment` の dispatch (parametrize で 9 種 instance を投入)
+  - 詰め替え後の `assessment_exc.provider_error is original` (identity 保持)
+  - 詰め替え後の `assessment_exc.code == original.CODE`
+  - 未登録 `AIProviderError` subclass で `TypeError`
 
 ### 不変条件
 
+- **`backend/app/analysis/errors/` を一切 touch しない** (`git diff main -- backend/app/analysis/errors/` が空)
 - Stage 3 の `extract_content` 経路は一切 touch しない
-- `AIProviderError` 既存階層と foundation marker 継承は維持 (Stage 3 互換)
-- 新規 import を誰もしない (既存 caller の挙動は変わらない)
+- `AIProvider*Error.CODE` 文字列を変えない (既存 `pipeline_events.code` 列の値継続性)
+- 新規 import 経路ゼロ (classifier / service / task / repository を本 PR で touch しない → 既存挙動は完全に不変)
 
 ### review 観点
 
-- KIND 値の名前と enum 文字列が spec table と一致しているか
-- 9 種の KIND と marker セットの和が `AIProviderFailureKind` 全値と一致 (網羅性)
-- `_INLINE_RETRY_BY_KIND` は Retryable 系 4 種だけ持つ (TerminalSkip 系は不要)
-- `AssessmentResponseInvalidError(message)` が `code="assessment_response_invalid"` / `inline_retry=True` を pin
+- `git diff main -- backend/app/analysis/errors/` が空 (provider 側 touch ゼロ)
+- 9 種 concrete `AIProviderError` subclass がすべて 2 tuple のいずれかに登録 (網羅性) かつ重複なし (排他性)
+- 9 種の振り分けが spec § Stage 4 marker 表と完全一致 (Network/ServiceUnavailable/RateLimited/QuotaExhausted = Recoverable、Configuration/RequestInvalid/InsufficientBalance/InputRejected/OutputBlocked = TerminalSkip)
+- mapper 経由で詰め替えた marker の `provider_error is original_exc` (identity 保持) かつ `code == original_exc.CODE`
+- 未登録 `AIProviderError` subclass で `TypeError`
+- Stage 4 marker の foundation 非継承 (`not issubclass(AssessmentRecoverableError, RetryableError)`)
+- `provider_error` の default が `None` (PR2 で Layer 2-B が provider_error なしで raise できる準備)
+- 新規 import 経路ゼロ (classifier / service / task / repository が本 PR で touch されていない)
+- spec 整合: 履歴に第 6 版追記、`AIProviderFailureKind` / `AssessmentRetryableError` / `inline_retry` の残骸が修正コードに無い (履歴・変更理由文脈の意図的な参照のみ許容)
 
 ---
 
-## PR2 — Classifier 公開型整理 + envelope + parse
+## PR2 — Classifier 公開型整理 + envelope + parse + Layer 2-B markers
 
-**目的**: AI 境界の型整理。`ClassificationRawResponse` 廃止、`AssessmentResult` rename、`InScopeCategory` 新設、parse 関数を `AssessmentCall` 構築まで集約。
+**目的**: AI 境界の型整理。`ClassificationRawResponse` 廃止、`AssessmentResult` rename、`InScopeCategory` 新設、parse 関数を `AssessmentCall` 構築まで集約。あわせて `parse_assessment` が raise する Layer 2-B markers (`AssessmentResponseInvalidError` / `AssessmentCategoryMissingError`) を `assessment/errors.py` に追加 (PR1 で導入した Stage 4 marker 構造を継承)。
 
 ### スコープ
 
@@ -133,6 +149,7 @@
   - `AssessmentResponse` → `AssessmentResult` rename (type alias)
 - `app/analysis/classifier/envelope.py` 新規 — `AssessmentCall` dataclass
 - `app/analysis/classifier/parse.py` 新規 — `parse_assessment(payload: dict) -> AssessmentResult`
+- `app/analysis/assessment/errors.py` 追記 — `AssessmentResponseInvalidError(AssessmentRecoverableError)` / `AssessmentCategoryMissingError(AssessmentTerminalSkipError)` (Layer 2-B、`provider_error=None` で marker を直接継承、内部で `super().__init__(message, code="assessment_*")` を呼ぶ)
 - 既存 caller の追従 (rename 反映、`InScopeCategory` 受け取り)
   - `app/analysis/assessment/service.py` (`InScope.category` 参照箇所)
   - `app/analysis/assessment/in_scope_repository.py` (DB 書き込み時の slug 取得)
