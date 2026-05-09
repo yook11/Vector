@@ -8,9 +8,10 @@ import される。
 from __future__ import annotations
 
 from app.analysis.classifier.schema import (
-    AssessmentResponse,
+    AssessmentResult,
     ClassificationRawResponse,
     InScope,
+    InScopeCategory,
     OutOfScope,
     ValidCategory,
 )
@@ -65,17 +66,25 @@ other は先端技術領域以外で投資判断に寄与するテーマ\
 """
 
 
-def to_domain(raw: ClassificationRawResponse) -> AssessmentResponse:
+def to_domain(raw: ClassificationRawResponse) -> AssessmentResult:
     """フラットな AI レスポンスをドメイン型 tagged union に詰め替える。
 
     category=OUT_OF_SCOPE のときは topic を捨て OutOfScope に、
-    それ以外は全フィールドを InScope に移す。この関数が唯一の分岐点であり、
-    以降のコードは union の ``match`` / ``isinstance`` で型安全に扱える。
+    それ以外は ``ValidCategory`` を ``InScopeCategory`` に明示変換した上で
+    InScope に移す。この関数が唯一の分岐点であり、以降のコードは union の
+    ``match`` / ``isinstance`` で型安全に扱える。
+
+    Note:
+        本関数は PR3 (classifier ``_call_api`` の ``parse_assessment`` 経由化)
+        で削除予定。PR2 では ``InScope.category`` の型変更 (``ValidCategory``
+        → ``InScopeCategory``) に追従するため ``InScopeCategory(raw.category.value)``
+        の明示変換を入れている (Pydantic v2 の StrEnum 値ベース coercion 依存を
+        避けるため)。
     """
     if raw.category == ValidCategory.OUT_OF_SCOPE:
         return OutOfScope(investor_take=raw.investor_take)
     return InScope(
-        category=raw.category,
+        category=InScopeCategory(raw.category.value),
         topic=raw.topic,
         investor_take=raw.investor_take,
     )

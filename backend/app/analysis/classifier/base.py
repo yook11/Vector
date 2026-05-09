@@ -7,7 +7,7 @@ from typing import ClassVar
 
 import structlog
 
-from app.analysis.classifier.schema import AssessmentResponse
+from app.analysis.classifier.schema import AssessmentResult
 from app.analysis.errors import AnalysisDomainError
 
 logger = structlog.get_logger(__name__)
@@ -17,7 +17,7 @@ class BaseClassifier(abc.ABC):
     """Stage 4 — Assessment のテンプレートメソッド基底。
 
     Stage 3 (Extraction) の構造化出力に対して判断を下す。原文は読まない。
-    判定結果は InScope | OutOfScope の tagged union（``AssessmentResponse``）。
+    判定結果は InScope | OutOfScope の tagged union（``AssessmentResult``）。
 
     サブクラスは以下 3 つのフックを実装する:
     - ``classify``: プロンプト構築とレスポンス解析（公開 API）
@@ -54,7 +54,7 @@ class BaseClassifier(abc.ABC):
         self,
         title_ja: str,
         summary_ja: str,
-    ) -> AssessmentResponse:
+    ) -> AssessmentResult:
         """Stage 3 (Extraction) の出力を判定し、InScope か OutOfScope のいずれかを返す。
 
         Args:
@@ -71,7 +71,7 @@ class BaseClassifier(abc.ABC):
         ...
 
     @abc.abstractmethod
-    async def _call_api(self, prompt: str) -> AssessmentResponse:
+    async def _call_api(self, prompt: str) -> AssessmentResult:
         """プロバイダー SDK を呼び出し、構造化レスポンスを返す。"""
         ...
 
@@ -82,7 +82,7 @@ class BaseClassifier(abc.ABC):
 
     # -- 単発呼び出し --
 
-    async def _call_once(self, prompt: str) -> AssessmentResponse:
+    async def _call_once(self, prompt: str) -> AssessmentResult:
         """プロバイダー API を 1 回呼び出し、例外をエラー階層に変換する。"""
         try:
             logger.info("classifier_api_call", model=self.model_name)

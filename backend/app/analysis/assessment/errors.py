@@ -84,3 +84,47 @@ class AssessmentTerminalSkipError(AssessmentError):
         super().__init__(message)
         self.code = code
         self.provider_error = provider_error
+
+
+# ---------------------------------------------------------------------------
+# Layer 2-B (Stage 4 工程由来、PR2 で追加)
+# ---------------------------------------------------------------------------
+
+
+class AssessmentResponseInvalidError(AssessmentRecoverableError):
+    """AI 応答が Stage 4 schema に合致しない (Layer 2-B、Stage 4 工程由来)。
+
+    具体的には classifier 内部の ``parse_assessment`` で:
+    - 必須 key (``category`` / ``topic`` / ``investor_take``) 欠落
+    - 値が ``str`` 型でない (``isinstance`` 検証で reject)
+    - ``category`` が ``ValidCategory`` enum 外の値
+    - Pydantic ``ValidationError`` (``min_length`` 違反 / ``TopicName`` 制約違反)
+
+    AI モデルの揺らぎ (構造化出力でも稀に schema を外す) で発生、cron 救済で
+    現実的に回復する見込み。``provider_error=None`` で marker を継承
+    (provider 例外起源ではないため)。
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(
+            message,
+            code="assessment_response_invalid",
+            provider_error=None,
+        )
+
+
+class AssessmentCategoryMissingError(AssessmentTerminalSkipError):
+    """AI が category catalog に存在しない slug を返した (Layer 2-B)。
+
+    catalog 側の追加または prompt 側の category 列挙不一致が原因。retry しても
+    AI は同じ slug を返し続けるので terminal-skip。catalog を拡張すれば解消。
+    Service.execute の ``category_id is None`` 経路で raise される (PR6 で wire-in、
+    PR2 ではまだ raise されない dead code)。
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(
+            message,
+            code="assessment_category_missing",
+            provider_error=None,
+        )

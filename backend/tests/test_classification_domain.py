@@ -23,13 +23,13 @@ from app.analysis.assessment.domain.out_of_scope import (
     OutOfScopeAssessment,
     OutOfScopeAssessmentDraft,
 )
-from app.analysis.classifier.schema import InScope, OutOfScope, ValidCategory
+from app.analysis.classifier.schema import InScope, InScopeCategory, OutOfScope
 from app.analysis.domain.value_objects.topic import TopicName
 
 
 def _make_in_scope(**overrides: object) -> InScope:
     defaults: dict[str, object] = {
-        "category": ValidCategory.AI,
+        "category": InScopeCategory.AI,
         "topic": TopicName(root="ai agents"),
         "investor_take": "Significant advancement in agent autonomy.",
     }

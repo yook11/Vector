@@ -18,9 +18,10 @@ from app.analysis.classifier.base import BaseClassifier
 from app.analysis.classifier.deepseek import DeepSeekClassifier
 from app.analysis.classifier.gemini import GeminiClassifier
 from app.analysis.classifier.schema import (
-    AssessmentResponse,
+    AssessmentResult,
     ClassificationRawResponse,
     InScope,
+    InScopeCategory,
     OutOfScope,
     ValidCategory,
 )
@@ -108,7 +109,7 @@ def _make_extraction_call(
 
 
 def _make_in_scope(
-    category: ValidCategory = ValidCategory.COMPUTING,
+    category: InScopeCategory = InScopeCategory.COMPUTING,
     topic: str = "quantum computing",
     investor_take: str = "技術的に重要な進展",
 ) -> InScope:
@@ -374,17 +375,17 @@ def test_topic_name_rejects_stopword_preposition() -> None:
 
 def test_classified_valid() -> None:
     resp = InScope(
-        category=ValidCategory.COMPUTING,
+        category=InScopeCategory.COMPUTING,
         topic=TopicName("quantum computing"),
         investor_take="理由",
     )
-    assert resp.category == ValidCategory.COMPUTING
+    assert resp.category == InScopeCategory.COMPUTING
     assert resp.topic.root == "quantum computing"
 
 
 def test_classified_normalizes_topic() -> None:
     resp = InScope(
-        category=ValidCategory.COMPUTING,
+        category=InScopeCategory.COMPUTING,
         topic=TopicName("Quantum Computing"),
         investor_take="理由",
     )
@@ -465,7 +466,7 @@ async def test_extractor_sanitizes_untrusted_input_boundary() -> None:
 
 async def test_classifier_call_once_succeeds() -> None:
     classifier = _create_classifier()
-    expected: AssessmentResponse = _make_in_scope()
+    expected: AssessmentResult = _make_in_scope()
     classifier._call_api = AsyncMock(return_value=expected)
 
     result = await classifier._call_once("test prompt")
@@ -500,7 +501,7 @@ async def test_classifier_sanitizes_untrusted_input_boundary() -> None:
 
 async def test_deepseek_call_once_succeeds() -> None:
     classifier = _create_deepseek_classifier()
-    expected: AssessmentResponse = _make_in_scope()
+    expected: AssessmentResult = _make_in_scope()
     classifier._call_api = AsyncMock(return_value=expected)
 
     result = await classifier._call_once("test prompt")
@@ -956,7 +957,7 @@ async def test_classification_persists_topic_and_category(
     mock_classifier.model_name = "gemini-2.5-flash-lite"
     mock_classifier.classify = AsyncMock(
         return_value=_make_in_scope(
-            category=ValidCategory.COMPUTING,
+            category=InScopeCategory.COMPUTING,
             topic="quantum computing",
             investor_take="理由テスト",
         )

@@ -117,3 +117,79 @@ def test_classifier_classes_use_prompt_model() -> None:
 
     assert GeminiClassifier.MODEL == GeminiClassificationPrompt.MODEL
     assert DeepSeekClassifier.MODEL == DeepSeekClassificationPrompt.MODEL
+
+
+# ---------------------------------------------------------------------------
+# to_domain regression — PR2 で ``InScope.category`` の型を ``ValidCategory`` →
+# ``InScopeCategory`` に変更したことに伴い、``to_domain`` の明示変換が 13 値で
+# 動くことを固定する。``to_domain`` 自体は PR3 で削除予定だが、PR2 merge 後
+# PR3 着手前までの間 production 経路で生きているため regression 必須。
+# ---------------------------------------------------------------------------
+
+
+class TestToDomainCategoryConversion:
+    """to_domain の ValidCategory → InScopeCategory 明示変換が全 12 値で動く。"""
+
+    @pytest.mark.parametrize(
+        "valid_slug,expected_in_scope_slug",
+        [
+            ("ai", "ai"),
+            ("bio", "bio"),
+            ("computing", "computing"),
+            ("energy", "energy"),
+            ("materials", "materials"),
+            ("mobility", "mobility"),
+            ("network", "network"),
+            ("other", "other"),
+            ("robotics", "robotics"),
+            ("security", "security"),
+            ("semiconductor", "semiconductor"),
+            ("space", "space"),
+        ],
+    )
+    def test_in_scope_category_converts_correctly(
+        self,
+        valid_slug: str,
+        expected_in_scope_slug: str,
+    ) -> None:
+        from app.analysis.classifier.prompts import to_domain
+        from app.analysis.classifier.schema import (
+            ClassificationRawResponse,
+            InScope,
+            InScopeCategory,
+            ValidCategory,
+        )
+        from app.analysis.domain.value_objects.topic import TopicName
+
+        raw = ClassificationRawResponse(
+            category=ValidCategory(valid_slug),
+            topic=TopicName(root="ai"),
+            investor_take="x",
+        )
+        result = to_domain(raw)
+        assert isinstance(result, InScope)
+        # 型強制: InScopeCategory のインスタンスに変換されている
+        assert isinstance(result.category, InScopeCategory)
+        assert result.category.value == expected_in_scope_slug
+
+
+class TestToDomainOutOfScopeBranch:
+    """to_domain の OUT_OF_SCOPE 振り分けが PR2 後も維持されている。"""
+
+    def test_out_of_scope_returns_out_of_scope_instance(self) -> None:
+        from app.analysis.classifier.prompts import to_domain
+        from app.analysis.classifier.schema import (
+            ClassificationRawResponse,
+            OutOfScope,
+            ValidCategory,
+        )
+        from app.analysis.domain.value_objects.topic import TopicName
+
+        raw = ClassificationRawResponse(
+            category=ValidCategory.OUT_OF_SCOPE,
+            topic=TopicName(root="ignored"),
+            investor_take="not relevant",
+        )
+        result = to_domain(raw)
+        assert isinstance(result, OutOfScope)
+        assert result.investor_take == "not relevant"

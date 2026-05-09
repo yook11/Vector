@@ -1,12 +1,14 @@
-"""Stage 4 (Assessment) Layer 1 marker の振る舞いテスト。"""
+"""Stage 4 (Assessment) Layer 1 / Layer 2-B marker の振る舞いテスト。"""
 
 from __future__ import annotations
 
 import pytest
 
 from app.analysis.assessment.errors import (
+    AssessmentCategoryMissingError,
     AssessmentError,
     AssessmentRecoverableError,
+    AssessmentResponseInvalidError,
     AssessmentTerminalSkipError,
 )
 from app.analysis.errors.provider import (
@@ -115,3 +117,67 @@ class TestStage4MarkerHierarchy:
 
     def test_assessment_error_is_exception(self) -> None:
         assert issubclass(AssessmentError, Exception)
+
+
+# ---------------------------------------------------------------------------
+# Layer 2-B markers (PR2 で追加、Stage 4 工程由来 / provider_error=None 固定)
+# ---------------------------------------------------------------------------
+
+
+class TestAssessmentResponseInvalidError:
+    """Layer 2-B marker: ``AssessmentResponseInvalidError`` (Recoverable 系)。"""
+
+    def test_is_recoverable_subclass(self) -> None:
+        assert issubclass(AssessmentResponseInvalidError, AssessmentRecoverableError)
+
+    def test_is_assessment_error_subclass(self) -> None:
+        assert issubclass(AssessmentResponseInvalidError, AssessmentError)
+
+    def test_holds_fixed_code(self) -> None:
+        exc = AssessmentResponseInvalidError("schema mismatch")
+        assert exc.code == "assessment_response_invalid"
+
+    def test_provider_error_is_none(self) -> None:
+        # Stage 4 工程由来なので provider 例外起源ではない
+        exc = AssessmentResponseInvalidError("schema mismatch")
+        assert exc.provider_error is None
+
+    def test_message_propagates(self) -> None:
+        exc = AssessmentResponseInvalidError("schema mismatch")
+        assert str(exc) == "schema mismatch"
+
+
+class TestAssessmentCategoryMissingError:
+    """Layer 2-B marker: ``AssessmentCategoryMissingError`` (TerminalSkip 系)。"""
+
+    def test_is_terminal_skip_subclass(self) -> None:
+        assert issubclass(AssessmentCategoryMissingError, AssessmentTerminalSkipError)
+
+    def test_is_assessment_error_subclass(self) -> None:
+        assert issubclass(AssessmentCategoryMissingError, AssessmentError)
+
+    def test_holds_fixed_code(self) -> None:
+        exc = AssessmentCategoryMissingError("unknown slug")
+        assert exc.code == "assessment_category_missing"
+
+    def test_provider_error_is_none(self) -> None:
+        exc = AssessmentCategoryMissingError("unknown slug")
+        assert exc.provider_error is None
+
+    def test_message_propagates(self) -> None:
+        exc = AssessmentCategoryMissingError("unknown slug")
+        assert str(exc) == "unknown slug"
+
+
+class TestLayer2BMarkersDisjoint:
+    """Layer 2-B 2 marker は互いに独立 (Recoverable と TerminalSkip の階層分離)。"""
+
+    def test_response_invalid_not_terminal_skip(self) -> None:
+        assert not issubclass(
+            AssessmentResponseInvalidError, AssessmentTerminalSkipError
+        )
+
+    def test_category_missing_not_recoverable(self) -> None:
+        assert not issubclass(
+            AssessmentCategoryMissingError, AssessmentRecoverableError
+        )
