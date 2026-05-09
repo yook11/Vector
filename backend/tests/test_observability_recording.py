@@ -88,6 +88,40 @@ def test_build_failure_payload_for_each_stage_variant() -> None:
         assert isinstance(payload, expected_cls)
 
 
+def test_build_failure_payload_redacts_secrets_in_error_message() -> None:
+    """red-team chain γ-2: secret prefix が永続化前に伏字化される。"""
+    exc = RuntimeError(
+        "Authorization: Bearer "
+        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.SflKxwRJSMeKKF2QT4abc failed"
+    )
+    payload = build_failure_payload(Stage.EXTRACTION, exc)
+
+    assert payload.error_message is not None
+    assert "SflKxwRJSMeKKF2QT4abc" not in payload.error_message
+    assert "eyJhbGciOiJIUzI1NiJ9" not in payload.error_message
+    assert "***" in payload.error_message
+
+
+def test_build_failure_payload_preserves_normal_message() -> None:
+    """secret なしの普通 exception は元 message が変わらない (可読性保持)。"""
+    exc = RuntimeError("Connection refused on host db.internal port 5432")
+    payload = build_failure_payload(Stage.EXTRACTION, exc)
+    assert payload.error_message == "Connection refused on host db.internal port 5432"
+
+
+def test_build_failure_payload_truncation_after_redact() -> None:
+    """redact pass で長さが変わっても [:_ERR_MSG_LIMIT] 切詰めが正しく動作する。"""
+    secret = "AIzaSyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q"
+    long_filler = "x" * 5000
+    exc = RuntimeError(f"prefix {secret} {long_filler}")
+    payload = build_failure_payload(Stage.EXTRACTION, exc)
+
+    assert payload.error_message is not None
+    assert len(payload.error_message) <= 2000
+    assert "AIza***" in payload.error_message
+    assert secret not in payload.error_message
+
+
 @pytest.mark.asyncio
 async def test_record_failure_event_inserts_row(
     session_factory: async_sessionmaker[AsyncSession],

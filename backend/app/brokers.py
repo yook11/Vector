@@ -168,6 +168,7 @@ import app.collection.extraction.dispatch  # noqa: E402, F401
 import app.insights.briefing.tasks.briefing  # noqa: E402, F401
 import app.insights.snapshot.tasks.snapshot  # noqa: E402, F401
 import app.maintenance.tasks  # noqa: E402, F401
+import app.observability.retention  # noqa: E402, F401
 
 # ---------------------------------------------------------------------------
 # ヘルパー（タスクモジュール間で共有）

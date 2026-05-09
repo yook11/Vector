@@ -34,6 +34,7 @@ from app.observability.categories import (
 )
 from app.observability.domain.event import EventType, Stage
 from app.observability.domain.payloads import ExtractionPayload
+from app.observability.redact import redact_secrets
 from app.observability.repository import PipelineEventRepository
 
 _AI_RAW_RESPONSE_LIMIT = 2048
@@ -120,7 +121,9 @@ class ExtractionAuditRepository:
                 original_content=original_content,
                 source_name=source_name,
             ),
-            error_message=str(exc)[:_ERROR_MESSAGE_LIMIT] or None,
+            # red-team chain γ-2: SDK exception message に key prefix /
+            # Authorization header が混入する経路を redact してから永続化する。
+            error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
             error_chain=[_fqn(exc)],
         )
         await self._events.append(
@@ -157,7 +160,9 @@ class ExtractionAuditRepository:
                 original_content=ready.original_content,
                 source_name=source_name,
             ),
-            error_message=str(exc)[:_ERROR_MESSAGE_LIMIT] or None,
+            # red-team chain γ-2: SDK exception message に key prefix /
+            # Authorization header が混入する経路を redact してから永続化する。
+            error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
             error_chain=[_fqn(exc)],
         )
         category = self._category_of(exc)

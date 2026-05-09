@@ -35,6 +35,7 @@ from app.observability.domain.payloads import (
     ExtractionPayload,
     SourceFetchPayload,
 )
+from app.observability.redact import redact_secrets
 from app.observability.repository import PipelineEventRepository
 
 logger = structlog.get_logger(__name__)
@@ -80,7 +81,9 @@ def build_failure_payload(
     cls = _PAYLOAD_BY_STAGE[stage]
     base: dict[str, Any] = {
         "error_chain": _extract_error_chain(exc),
-        "error_message": str(exc)[:_ERR_MSG_LIMIT] or None,
+        # red-team chain γ-2: SDK exception message に key prefix /
+        # Authorization header が混入する経路を redact してから永続化する。
+        "error_message": redact_secrets(str(exc))[:_ERR_MSG_LIMIT] or None,
     }
     if extra:
         base.update(extra)
@@ -141,7 +144,7 @@ async def _record_failure_event(
             source_id=source_id,
             article_id=article_id,
             business_error_class=error_class_fqn,
-            business_error_message=str(exc)[:500],
+            business_error_message=redact_secrets(str(exc))[:500],
             audit_error_class=(
                 f"{type(audit_exc).__module__}.{type(audit_exc).__qualname__}"
             ),

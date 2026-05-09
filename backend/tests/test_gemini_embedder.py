@@ -171,6 +171,21 @@ def test_translate_leaked_key_to_configuration_error() -> None:
     assert isinstance(result, ConfigurationError)
 
 
+def test_translate_leaked_key_message_is_fixed_string_not_sdk_echo() -> None:
+    """red-team chain γ-1: SDK の生 message は捨て固定文言のみを保持する。"""
+    embedder = _make_embedder()
+    sdk_message = (
+        "API key AIzaSyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q has been reported as leaked"
+    )
+    result = embedder._translate_error(_api_error(400, "INVALID_ARGUMENT", sdk_message))
+
+    assert isinstance(result, ConfigurationError)
+    assert (
+        str(result) == "Gemini API key has been reported as leaked; rotate immediately"
+    )
+    assert "AIza" not in str(result)
+
+
 def test_translate_invalid_argument_to_invalid_input_error() -> None:
     embedder = _make_embedder()
     result = embedder._translate_error(_api_error(400, "INVALID_ARGUMENT"))

@@ -38,7 +38,9 @@ class WatchlistService:
             raise NotFoundError("News article not found")
 
         if await self.repo.is_watched(user_id, article_id):
-            raise DuplicateError("Article already in watchlist")
+            # red-team chain θ-1: DuplicateError detail を `<Entity> already exists`
+            # 形式に統一して exception_handlers の allowlist regex を clean に保つ。
+            raise DuplicateError("Watchlist entry already exists")
 
         await self.repo.watch(user_id, article_id)
 

@@ -88,6 +88,25 @@ def test_leaked_api_key_maps_to_configuration_error() -> None:
     assert isinstance(translated, AIProviderConfigurationError)
 
 
+def test_leaked_api_key_message_is_fixed_string_not_sdk_echo() -> None:
+    """red-team chain γ-1: SDK の生 message は捨て、固定文言のみを保持する。"""
+    sdk_message = (
+        "API key AIzaSyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q has been "
+        "reported as leaked at https://github.com/foo/bar/blob/abc/secrets.py"
+    )
+    exc = _api_error("INVALID_ARGUMENT", sdk_message)
+    translated = _extractor()._translate_error(exc)
+
+    translated_str = str(translated)
+    assert (
+        translated_str
+        == "Gemini API key has been reported as leaked; rotate immediately"
+    )
+    # SDK message に含まれる secret prefix / repo path が漏れていないこと
+    assert "AIza" not in translated_str
+    assert "github.com" not in translated_str
+
+
 def test_resource_exhausted_maps_to_rate_limited() -> None:
     exc = _api_error("RESOURCE_EXHAUSTED", "Too many requests", code=429)
     translated = _extractor()._translate_error(exc)

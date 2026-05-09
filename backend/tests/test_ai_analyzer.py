@@ -496,6 +496,30 @@ async def test_classifier_sanitizes_untrusted_input_boundary() -> None:
     assert prompt.count("[/untrusted_input]") == 2
 
 
+# --- E2. GeminiClassifier _translate_error tests ---
+
+
+def test_gemini_classifier_translate_leaked_api_key_is_fixed_string() -> None:
+    """red-team chain γ-1: SDK 生 message の key prefix を捨て固定文言化する。"""
+    from google.genai.errors import APIError
+
+    classifier = _create_classifier()
+    sdk_message = (
+        "API key AIzaSyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q has been reported as leaked"
+    )
+    exc = APIError(
+        400,
+        {"error": {"code": 400, "status": "INVALID_ARGUMENT", "message": sdk_message}},
+    )
+    result = classifier._translate_error(exc)
+
+    assert isinstance(result, ConfigurationError)
+    assert (
+        str(result) == "Gemini API key has been reported as leaked; rotate immediately"
+    )
+    assert "AIza" not in str(result)
+
+
 # --- F. DeepSeekClassifier tests ---
 
 

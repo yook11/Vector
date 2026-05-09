@@ -143,7 +143,12 @@ class GeminiExtractor(BaseExtractor):
             message = exc.message or ""
 
             if "reported as leaked" in message:
-                return AIProviderConfigurationError(f"API key leaked: {message}")
+                # SDK の生 message には key prefix / Authorization header が
+                # 含まれる経路があるため固定文言に丸める (red-team chain γ-1)。
+                # 詳細 debug は error_chain (SDK class FQN) で代替。
+                return AIProviderConfigurationError(
+                    "Gemini API key has been reported as leaked; rotate immediately"
+                )
 
             if status in (
                 "UNAUTHENTICATED",

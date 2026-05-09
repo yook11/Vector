@@ -191,6 +191,8 @@ class TestAddToWatchlist:
             json={"articleId": sample_article.id},
         )
         assert resp.status_code == 409
+        # red-team chain θ-1: detail は allowlist 通過 form で固定。
+        assert resp.json() == {"detail": "Watchlist entry already exists"}
 
     async def test_add_nonexistent_article_404(
         self, authed_client: AsyncClient

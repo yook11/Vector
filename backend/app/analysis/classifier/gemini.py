@@ -85,7 +85,11 @@ class GeminiClassifier(BaseClassifier):
             message = exc.message or ""
 
             if "reported as leaked" in message:
-                return ConfigurationError(f"API key leaked: {message}")
+                # red-team chain γ-1: SDK message に key prefix が混入する経路
+                # を遮断するため固定文言化する。詳細は error_chain で追える。
+                return ConfigurationError(
+                    "Gemini API key has been reported as leaked; rotate immediately"
+                )
 
             if status in (
                 "UNAUTHENTICATED",

@@ -132,6 +132,12 @@ class Settings(BaseSettings):
     backfill_classifications_enabled: bool = False
     backfill_embeddings_enabled: bool = False
 
+    # pipeline_events retention (red-team chain γ-4)
+    # 90 日経過した監査行を毎時 :25 に purge する。kill switch + batch 上限で
+    # 過負荷を抑える。MAX_BATCHES は source 増加時の逃げ道として動的拡張可能。
+    pipeline_events_retention_enabled: bool = True
+    pipeline_events_retention_max_batches: int = 5
+
     @field_validator("database_url")
     @classmethod
     def _validate_database_url(cls, v: str) -> str:
