@@ -2,11 +2,6 @@
 
 collection.tasks.fetch_content から呼び出される。
 extract_content → assess_content → generate_embedding
-
-注 (PR3.5-d.0): 旧 task ``classify_content`` は in-flight broker message 互換の
-ため deprecated alias として残置。新規 enqueue (extract_content の chain 呼び出し)
-は ``assess_content`` を使う。alias 削除条件は spec
-``specs/stage4-assessment-rename.md`` §7 を参照。
 """
 
 from __future__ import annotations
@@ -307,35 +302,6 @@ async def assess_content(
             )
         if ready_emb is not None:
             await generate_embedding.kiq(ready_emb)
-
-
-@broker_analysis.task(
-    task_name="classify_content",
-    timeout=180,
-    max_retries=2,
-    retry_on_error=True,
-)
-async def classify_content(
-    ready: ReadyForAssessment,
-    ctx: Context = TaskiqDepends(),
-) -> None:
-    """[DEPRECATED] Compat alias for ``assess_content``.
-
-    PR3.5-d.0 deploy 時点で broker queue に残った in-flight ``classify_content``
-    message を消化するための一時 wrapper。新規 enqueue (extract_content task) は
-    ``assess_content`` を使うので、本 alias 経由で新規 message が積まれることはない。
-
-    削除条件 (PR3.5-d.3 で実施):
-    - broker queue 内 ``classify_content`` task name が 0 件
-    - 直近 24 時間で本関数が 1 度も invoke されていない (logfire 確認)
-    - dead-letter queue に ``classify_content`` task が存在しない
-    """
-    logger.info(
-        "classify_content_alias_invoked",
-        message="this task name is deprecated, drains in-flight only",
-        extraction_id=getattr(ready, "extraction_id", None),
-    )
-    await assess_content(ready, ctx)
 
 
 # ---------------------------------------------------------------------------

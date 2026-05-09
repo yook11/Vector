@@ -7,11 +7,6 @@ Phase 1 / 2 / 3 リファクタ後 (typed-pipeline-preconditions.md):
   なら ``ReadyForEmbedding`` を構築して chain
 - Skipped / AlreadyClassified / AlreadyEmbedded Outcome は廃止 (Ready の
   ``try_advance_from`` で代替)
-
-注 (PR3.5-d.0): Stage 4 命名統一に伴い旧 ``classify_content`` task は
-deprecated alias として残置。本 PR でも本ファイルでは新名 ``assess_content``
-を中心に検証する。alias 経由の動作は ``test_assess_content_alias.py`` で別途
-検証する。
 """
 
 from types import SimpleNamespace
