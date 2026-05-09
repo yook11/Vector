@@ -11,11 +11,19 @@
 # conftest の ``from app.config import settings`` 行で ValidationError → pytest
 # が collection 段階で全テストを諦める。
 #
-# 解決策: app.* の import より前 (このブロック) で ``os.environ.setdefault`` で
-# 非機密 dummy 値を補う。CI / ローカルで既に env が設定済なら setdefault は no-op
-# となり、本物の値が勝つ。本番経路は config.py の validator がそのまま守る。
+# 解決策: ``.env`` がプロジェクトルートに無い場合のみ、app.* の import より前
+# (このブロック) で ``os.environ.setdefault`` で非機密 dummy 値を補う。
+#
+# 重要: 無条件に ``setdefault`` すると、``.env`` がある環境でも先に dummy が
+# os.environ に焼き付き、pydantic-settings の優先順位 (env vars > .env) で
+# ``.env`` の値が無視される。``.env`` 不在検知で gate しない限り、
+# ``DATABASE_URL=postgresql+asyncpg://...@unreachable.invalid`` が実 DB 接続
+# を奪い、integration テストが ``socket.gaierror`` で全件 ERROR になる。
 #
 # 設計制約:
+# - ``.env`` の探索パスは ``app/config.py`` の ``_ENV_FILE`` と完全一致させる
+#   (``Path(__file__).resolve().parent.parent.parent / ".env"``)。worktree でも
+#   symlink などで ``.env`` を見えるようにすれば実 settings が走る。
 # - INTERNAL_API_SECRET は 32 chars 以上 + ``_KNOWN_WEAK_INTERNAL_SECRETS``
 #   ("secret" / "password" / "change-me*" 等) に該当しないこと。
 # - DATABASE_URL は ``_KNOWN_WEAK_DATABASE_URL_PATTERNS`` (vector_app:vector_app /
@@ -24,17 +32,21 @@
 #   実 DB が要るテストは ``db_session`` 等の fixture で別経路で接続するため、
 #   ここの dummy が偶発的に手元 Postgres へ接続してデータを汚染する事故を防ぐ。
 import os
+from pathlib import Path
 
-os.environ.setdefault(
-    "DATABASE_URL",
-    "postgresql+asyncpg://test:test@unreachable.invalid:5432/none",
-)
-os.environ.setdefault(
-    "INTERNAL_API_SECRET",
-    "test-only-collect-bootstrap-xxxxxxxxxxxx",
-)
-os.environ.setdefault("FRONTEND_URL", "http://localhost:3000")
-os.environ.setdefault("INTERNAL_FRONTEND_BASE_URL", "http://localhost:3000")
+_REPO_ROOT_ENV = Path(__file__).resolve().parent.parent.parent / ".env"
+
+if not _REPO_ROOT_ENV.exists():
+    os.environ.setdefault(
+        "DATABASE_URL",
+        "postgresql+asyncpg://test:test@unreachable.invalid:5432/none",
+    )
+    os.environ.setdefault(
+        "INTERNAL_API_SECRET",
+        "test-only-collect-bootstrap-xxxxxxxxxxxx",
+    )
+    os.environ.setdefault("FRONTEND_URL", "http://localhost:3000")
+    os.environ.setdefault("INTERNAL_FRONTEND_BASE_URL", "http://localhost:3000")
 
 import time
 from collections.abc import AsyncGenerator
@@ -124,6 +136,11 @@ _INTEGRATION_FIXTURES = frozenset(
         "sample_source",
         "sample_hn_source",
         "sample_av_source",
+        # test_db_user_isolation.py が直接 asyncpg.connect する権限境界テスト
+        # 用 fixture。実 Postgres + vector_auth / vector_app role を要求する
+        # ため必ず integration 側に分類する。
+        "auth_conn",
+        "app_conn",
     }
 )
 

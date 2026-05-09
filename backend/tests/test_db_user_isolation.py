@@ -38,6 +38,25 @@ def _connection_kwargs(user: str, password: str) -> dict[str, object]:
     }
 
 
+async def _require_alembic_applied_schema(conn: asyncpg.Connection) -> None:
+    """alembic migration が適用済の schema (public.watchlist_entries +
+    auth schema GRANT) が無いと、本ファイルのテストは role 権限ではなく
+    UndefinedTableError で fail する。``make test-integration`` の流れは
+    conftest の ``metadata.create_all()`` に依存し alembic を流さないため、
+    その環境ではこのチェックが skip を発火する。本来の実行経路 (docker
+    compose backend container 内 + alembic upgrade head) では proceed する。
+    """
+    # pg_tables は誰でも (vector_auth で public 権限が無くても) read できる
+    # catalog view なので、role permission に依存せず table の有無を判定できる。
+    # (to_regclass(...) IS NOT NULL は SELECT 権限不足時も NULL を返すため不可。)
+    exists = await conn.fetchval(
+        "SELECT EXISTS (SELECT 1 FROM pg_tables "
+        "WHERE schemaname = 'public' AND tablename = 'watchlist_entries')"
+    )
+    if not exists:
+        pytest.skip("alembic-applied schema required (public.watchlist_entries)")
+
+
 @pytest.fixture
 async def auth_conn():
     """vector_auth role での asyncpg 接続を提供する (本番 vector db)。"""
@@ -49,6 +68,7 @@ async def auth_conn():
         )
     )
     try:
+        await _require_alembic_applied_schema(conn)
         yield conn
     finally:
         await conn.close()
@@ -65,6 +85,7 @@ async def app_conn():
         )
     )
     try:
+        await _require_alembic_applied_schema(conn)
         yield conn
     finally:
         await conn.close()

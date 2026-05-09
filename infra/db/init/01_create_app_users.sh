@@ -20,20 +20,22 @@ if [ -z "$POSTGRES_APP_PASSWORD" ]; then
   exit 1
 fi
 
+# psql の :'variable' 置換は dollar-quoted block (DO $$ ... $$) の内側では
+# 効かない (psql が $$ 以下を opaque な string literal として扱うため)。
+# よって \gexec で「SQL を生成 → 実行」の 2 段階パターンを使い、:'variable'
+# を通常 SQL 中に置く。idempotency は WHERE NOT EXISTS で確保。format(%L)
+# で SQL リテラルとして安全にエスケープする。
 psql -v ON_ERROR_STOP=1 \
      -v auth_password="$POSTGRES_AUTH_PASSWORD" \
      -v app_password="$POSTGRES_APP_PASSWORD" \
      --username "$POSTGRES_USER" \
      --dbname "$POSTGRES_DB" <<-'EOSQL'
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'vector_auth') THEN
-    EXECUTE format('CREATE ROLE vector_auth WITH LOGIN PASSWORD %L', :'auth_password');
-  END IF;
-  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'vector_app') THEN
-    EXECUTE format('CREATE ROLE vector_app WITH LOGIN PASSWORD %L', :'app_password');
-  END IF;
-END $$;
+SELECT format('CREATE ROLE vector_auth WITH LOGIN PASSWORD %L', :'auth_password')
+WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vector_auth')
+\gexec
+SELECT format('CREATE ROLE vector_app WITH LOGIN PASSWORD %L', :'app_password')
+WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vector_app')
+\gexec
 EOSQL
 
 echo "Created Postgres app roles (vector_auth, vector_app) — GRANT applied via alembic migration."
