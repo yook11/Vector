@@ -241,7 +241,6 @@ jobs:
         run: |
           schemathesis run http://localhost:8000/openapi.json \
             -H "Authorization: Bearer ${SCHEMATHESIS_TOKEN}" \
-            --include-method GET \
             --checks not_a_server_error,status_code_conformance,response_schema_conformance \
             -n 25 \
             --phases examples,coverage,fuzzing \
