@@ -17,6 +17,9 @@ export async function proxy(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
   const isAuthPage = pathname.startsWith("/auth");
   const isApiRoute = pathname.startsWith("/api/");
+  // /design-lab/* は本番認証導線の外で UI モックを比較するための領域。
+  // 本番 build には含まれない前提のため、auth gate の対象外。
+  const isDesignLab = pathname.startsWith("/design-lab");
 
   // --- Rate limit (DoS 防御の一次関門 / red-team C1 / F17 対策) ---
   //
@@ -103,7 +106,7 @@ export async function proxy(request: NextRequest) {
   //   - /api/internal/* は Bearer 認証経路で、anon は 401/403 を route handler
   //     から返すべき
   const sessionToken = getSessionCookie(request);
-  if (!sessionToken && !isAuthPage && !isApiRoute) {
+  if (!sessionToken && !isAuthPage && !isApiRoute && !isDesignLab) {
     const signInUrl = new URL("/auth/login", request.url);
     // Open redirect 対策: protocol-relative URL (`//evil.com`) や絶対 URL を
     // 埋め込ませない。`request.nextUrl.pathname` は通常 `/...` だが、
