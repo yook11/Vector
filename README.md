@@ -332,6 +332,21 @@ docker compose exec frontend npx tsc --noEmit
 docker compose exec frontend npm test
 ```
 
+#### DB を要するテスト (integration)
+
+`-m integration` のテストは host から専用 `db-test` (`127.0.0.1:5433`, `-p vector-test`) を立てて回す。Makefile が `DATABASE_URL` / `MIGRATION_DATABASE_URL` / role password を OS env で注入するため **`.env` は不要**。worktree 直下からも `.env` symlink なしで動く。
+
+```bash
+# 全 integration テスト
+make test-integration
+
+# 個別ファイル / マーカー絞り込み
+make test-integration PYTEST_ARGS='tests/path/to_test.py -q'
+make test-integration PYTEST_ARGS='-k "search and quota"'
+```
+
+`uv run pytest` を直接叩くと `.env` 不在時に conftest が dummy DB (`unreachable.invalid`) にフォールバックするため、DB 接続が要るテストは必ず `make test-integration` 経由で回すこと。終了時は `trap` で `down -v --remove-orphans` するため tmpfs ごと毎回 fresh。
+
 ### DB 操作
 
 ```bash
@@ -353,6 +368,23 @@ Backend の Pydantic schemas が SSoT (Single Source of Truth)。変更後は型
 # Backend 起動中に実行
 cd frontend && npm run generate-types
 ```
+
+### Worktree 運用
+
+`.env` は `.gitignore` 対象のため `git worktree add` には追従しない。`docker compose up` や `docker compose exec backend ...` を worktree 側から叩く場合に必要なので、専用ヘルパで main worktree の `.env` を symlink する。
+
+```bash
+# 新規 worktree 作成 (git worktree add の引数をそのまま渡す)
+scripts/worktree-add.sh ../Vector-foo feature/foo
+
+# 既存 worktree のうち .env が欠落しているものを一括補修
+scripts/worktree-fix-env.sh --dry-run   # まず差分確認
+scripts/worktree-fix-env.sh             # 実行
+```
+
+- 既存の `.env` (通常ファイル / symlink どちらも) は **絶対に上書きしない** — `WARN` / `SKIP` で報告するだけ
+- symlink 元は既定で main worktree の `.env`。`VECTOR_ENV_SOURCE=/path/to/.env` で上書き可能
+- DB を要するテスト (`-m integration`) は `.env` 不要なので `make test-integration` 経由が第一選択（上記「DB を要するテスト」参照）
 
 ## Documentation
 
