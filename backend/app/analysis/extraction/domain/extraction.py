@@ -23,7 +23,7 @@ from typing import Any, Literal, Self
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from app.analysis.extraction.domain.entity import ExtractedEntity
-from app.utils.sanitize import strip_html_tags
+from app.utils.sanitize import normalize_text
 
 
 class ExtractionResult(BaseModel):
@@ -38,9 +38,13 @@ class ExtractionResult(BaseModel):
 
     Invariants (validators で構造的に保証):
     - ``relevance``: ``"signal"`` または ``"noise"``
-    - ``title_ja`` / ``summary_ja``: HTML タグ除去後に非空
+    - ``title_ja`` / ``summary_ja``: HTML タグ除去 + NFKC + 制御文字除去後に非空
     - ``entities``: ``(surface.match_key, raw_type.root)`` で重複なし
     - frozen: 生成後は不変
+
+    BC 境界として下流 (Stage 4 Assessment) に「HTML 抜き、NFKC 済、制御文字無し、
+    非空」を保証する責務を持つ。下流ステージで再 sanitize しない設計の前提
+    (feedback_bc_boundary_guarantees_downstream)。
     """
 
     model_config = ConfigDict(frozen=True)
@@ -53,9 +57,9 @@ class ExtractionResult(BaseModel):
     @field_validator("title_ja", "summary_ja", mode="before")
     @classmethod
     def _sanitize(cls, v: Any) -> Any:
-        """HTML タグを除去し、残った空白でもトリムする。"""
+        """HTML タグ除去 + NFKC + 制御文字除去 + 前後空白トリム。"""
         if isinstance(v, str):
-            return strip_html_tags(v) or ""
+            return normalize_text(v) or ""
         return v
 
     @field_validator("title_ja", "summary_ja")

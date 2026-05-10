@@ -1,8 +1,6 @@
 """Stage 4 (Assessment) ドメインの公開 API。
 
-Entity (``InScopeAssessment`` / ``OutOfScopeAssessment``) のみを再エクスポートする。
-``InScopeAssessmentDraft`` / ``OutOfScopeAssessmentDraft`` は Service / Repository
-内限定の過渡型で、外部からは fully-qualified import で参照する。
+Entity (``InScopeAssessment`` / ``OutOfScopeAssessment``) を再エクスポートする。
 """
 
 from __future__ import annotations

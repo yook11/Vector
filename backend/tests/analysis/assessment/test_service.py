@@ -338,7 +338,8 @@ async def test_unknown_category_raises_category_missing(
     ``AssessmentCategoryMissingError`` raise (旧 ``ProviderError`` 置換)。
 
     ``sample_categories`` fixture を使わない (catalog 未登録状態を作る) ため、
-    in_scope_repo.get_category_id_by_slug が必ず None を返す。
+    Repository.save 内部の ``_get_category_id_by_slug`` が必ず None を返し、
+    Repository が ``AssessmentCategoryMissingError`` を raise する。
     """
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)

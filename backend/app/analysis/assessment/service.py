@@ -28,16 +28,9 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.assessment.audit_repository import AssessmentAuditRepository
-from app.analysis.assessment.domain.in_scope import (
-    InScopeAssessment,
-    InScopeAssessmentDraft,
-)
-from app.analysis.assessment.domain.out_of_scope import (
-    OutOfScopeAssessment,
-    OutOfScopeAssessmentDraft,
-)
+from app.analysis.assessment.domain.in_scope import InScopeAssessment
+from app.analysis.assessment.domain.out_of_scope import OutOfScopeAssessment
 from app.analysis.assessment.domain.ready import ReadyForAssessment
-from app.analysis.assessment.errors import AssessmentCategoryMissingError
 from app.analysis.assessment.out_of_scope_repository import OutOfScopeRepository
 from app.analysis.assessment.provider_mapping import map_provider_to_assessment
 from app.analysis.assessment.repository import InScopeRepository
@@ -153,30 +146,19 @@ class AssessmentService:
         envelope: AssessmentCall,
         model_name: str,
     ) -> InScopeOutcome:
-        """InScope を Draft に詰め替えて永続化し、Outcome を返す。"""
+        """InScope を Repository に直接渡して永続化し、Outcome を返す。
+
+        category slug → id 解決と未登録 slug の ``AssessmentCategoryMissingError``
+        raise は Repository.save が内部化する。Service は判定 → 保存 → audit →
+        race recovery → Outcome の流れだけを orchestrate する。
+        """
         in_scope_repo = InScopeRepository(session)
 
-        draft = InScopeAssessmentDraft.from_in_scope(
+        saved = await in_scope_repo.save(
             in_scope,
+            extraction_id=ready.extraction_id,
             translated_title=ready.translated_title,
             summary=ready.summary,
-        )
-        category_id = await in_scope_repo.get_category_id_by_slug(
-            in_scope.category.value
-        )
-        if category_id is None:
-            # Layer 2-B 業務 invariant 違反: AI が catalog 未登録の slug を返した。
-            # AssessmentTerminalSkipError 継承 → Task 層は audit
-            # (code="assessment_category_missing") を焼いて即 return
-            # (article / extraction は保持、catalog 拡張で復旧)。
-            raise AssessmentCategoryMissingError(
-                f"AI returned unknown category slug: {in_scope.category.value!r}"
-            )
-
-        saved = await in_scope_repo.save(
-            draft,
-            extraction_id=ready.extraction_id,
-            category_id=category_id,
             ai_model=model_name,
         )
 
@@ -215,7 +197,7 @@ class AssessmentService:
             assessment_id=saved.id,
             extraction_id=ready.extraction_id,
             category=in_scope.category.value,
-            topic=draft.topic_name.root,
+            topic=saved.topic.root,
         )
         return InScopeOutcome(assessment=saved)
 
@@ -228,12 +210,12 @@ class AssessmentService:
         envelope: AssessmentCall,
         model_name: str,
     ) -> OutOfScopeOutcome:
-        """OutOfScope を Draft に詰め替えて永続化し、Outcome を返す。"""
+        """OutOfScope を Repository に直接渡して永続化し、Outcome を返す
+        (in-scope と対称)。"""
         out_of_scope_repo = OutOfScopeRepository(session)
 
-        draft = OutOfScopeAssessmentDraft.from_out_of_scope(out_of_scope)
         saved = await out_of_scope_repo.save(
-            draft,
+            out_of_scope,
             extraction_id=ready.extraction_id,
             ai_model=model_name,
         )

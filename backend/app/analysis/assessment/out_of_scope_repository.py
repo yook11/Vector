@@ -3,7 +3,8 @@
 責務は ``InScopeRepository`` と対称 (spec §4.3.4):
 - ``exists_for_extraction``: `try_advance_from` precondition 用 cheap 判定
 - ``find_by_extraction_id``: race 敗北時の勝者読み戻し
-- ``save``: `INSERT ... ON CONFLICT (extraction_id) DO NOTHING RETURNING ...`
+- ``save``: AI 境界型 ``OutOfScope`` を受けて
+  `INSERT ... ON CONFLICT (extraction_id) DO NOTHING RETURNING ...`
 
 注 (PR3.5-d.0): Domain Entity ``OutOfScopeAssessment`` と ORM クラス
 ``OutOfScopeAssessment`` が同名のため、本ファイル内では ORM 側を
@@ -16,10 +17,8 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from app.analysis.assessment.domain.out_of_scope import (
-    OutOfScopeAssessment,
-    OutOfScopeAssessmentDraft,
-)
+from app.analysis.assessment.domain.out_of_scope import OutOfScopeAssessment
+from app.analysis.classifier.schema import OutOfScope
 from app.models.out_of_scope_assessment import (
     OutOfScopeAssessment as OutOfScopeAssessmentORM,
 )
@@ -52,13 +51,13 @@ class OutOfScopeRepository:
 
     async def save(
         self,
-        draft: OutOfScopeAssessmentDraft,
+        out_of_scope: OutOfScope,
         *,
         extraction_id: int,
         ai_model: str,
     ) -> OutOfScopeAssessment | None:
-        """Draft を ``INSERT ... ON CONFLICT (extraction_id) DO NOTHING RETURNING ...``
-        で永続化する。
+        """AI 境界型を受けて ``INSERT ... ON CONFLICT (extraction_id) DO NOTHING
+        RETURNING ...`` で永続化する。
 
         Returns:
             成功時: 永続化された ``OutOfScopeAssessment`` Entity
@@ -68,7 +67,7 @@ class OutOfScopeRepository:
             pg_insert(OutOfScopeAssessmentORM)
             .values(
                 extraction_id=extraction_id,
-                investor_take=draft.investor_take,
+                investor_take=out_of_scope.investor_take,
                 ai_model=ai_model,
             )
             .on_conflict_do_nothing(index_elements=["extraction_id"])
@@ -80,7 +79,7 @@ class OutOfScopeRepository:
         return OutOfScopeAssessment(
             id=row.id,
             extraction_id=extraction_id,
-            investor_take=draft.investor_take,
+            investor_take=out_of_scope.investor_take,
             ai_model=ai_model,
             rejected_at=row.rejected_at,
         )

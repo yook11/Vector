@@ -4,12 +4,13 @@
 - ``exists_for_extraction``: cheap な exists 判定 (Pattern A' の `try_advance_from`
   precondition チェック用)
 - ``find_by_extraction_id``: ORM 行をドメイン Entity (``InScopeAssessment``) として
-  復元する
-- ``save``: ``InScopeAssessmentDraft`` を
-  ``INSERT ... ON CONFLICT (extraction_id) DO NOTHING RETURNING ...`` で永続化
-  する。race 敗北時 (期待した UNIQUE 違反) は ``None`` を返し、Service が
-  ``find_by_extraction_id`` で勝者を読み戻す (spec §4.6)
-- ``get_category_id_by_slug``: AI が返した category slug から FK 用 id を解決する
+  復元する (Service の race 敗北時読戻し経路で使用)
+- ``find_by_id``: PK 検索 (Stage 5 経路 backfill_embeddings から使用)
+- ``save``: AI 境界型 ``InScope`` + Stage 3 由来の translated_title / summary を
+  受けて ``INSERT ... ON CONFLICT (extraction_id) DO NOTHING RETURNING ...`` で
+  永続化する。category slug → id 解決を内部に閉じ、未登録 slug は
+  ``AssessmentCategoryMissingError`` で fail-fast。race 敗北時は ``None`` を返し、
+  Service が ``find_by_extraction_id`` で勝者を読み戻す (audit actor SSoT 維持)。
 
 注 (PR3.5-d.0): Domain Entity ``InScopeAssessment`` と ORM クラス ``InScopeAssessment``
 が同名のため、本ファイル内では ORM 側を ``InScopeAssessmentORM`` alias で import
@@ -23,10 +24,9 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from app.analysis.assessment.domain.in_scope import (
-    InScopeAssessment,
-    InScopeAssessmentDraft,
-)
+from app.analysis.assessment.domain.in_scope import InScopeAssessment
+from app.analysis.assessment.errors import AssessmentCategoryMissingError
+from app.analysis.classifier.schema import InScope
 from app.models.category import Category
 from app.models.in_scope_assessment import InScopeAssessment as InScopeAssessmentORM
 
@@ -66,36 +66,48 @@ class InScopeRepository:
 
     async def save(
         self,
-        draft: InScopeAssessmentDraft,
+        in_scope: InScope,
         *,
         extraction_id: int,
-        category_id: int,
+        translated_title: str,
+        summary: str,
         ai_model: str,
     ) -> InScopeAssessment | None:
-        """Draft を ``INSERT ... ON CONFLICT (extraction_id) DO NOTHING RETURNING ...``
-        で永続化する。
+        """AI 境界型 + Stage 3 由来のスナップショットを受けて永続化する。
 
+        category slug → id 解決を内部化し、未登録 slug は
+        ``AssessmentCategoryMissingError`` で fail-fast (Layer 2-B 業務 invariant)。
         commit は呼び出し側 (Service) が行う。``analyzed_at`` は server_default で
         DB が確定させ RETURNING で受け取る。
 
         Returns:
             成功時: 永続化された ``InScopeAssessment`` Entity (id / analyzed_at は
-            DB 値、その他は draft / 引数値)
+            DB 値、その他は引数値)
             race 敗北時 (期待した extraction_id への UNIQUE 違反): ``None``
-            (Service が `find_by_extraction_id` で勝者を読み戻す — spec §4.6)
+            (Service が `find_by_extraction_id` で勝者を読み戻す — spec §4.6、
+            audit actor SSoT を保つ)
+
+        Raises:
+            ``AssessmentCategoryMissingError``: AI が catalog 未登録の slug を返した
 
         spec §4.3.1 に従い `index_elements=["extraction_id"]` で index を明示し、
         他の制約違反 (FK / CHECK / NOT NULL) は例外として上に上げる。
         """
+        category_id = await self._get_category_id_by_slug(in_scope.category.value)
+        if category_id is None:
+            raise AssessmentCategoryMissingError(
+                f"AI returned unknown category slug: {in_scope.category.value!r}"
+            )
+
         stmt = (
             pg_insert(InScopeAssessmentORM)
             .values(
                 extraction_id=extraction_id,
-                translated_title=draft.translated_title,
-                summary=draft.summary,
-                topic=draft.topic_name,
+                translated_title=translated_title,
+                summary=summary,
+                topic=in_scope.topic,
                 category_id=category_id,
-                investor_take=draft.investor_take,
+                investor_take=in_scope.investor_take,
                 ai_model=ai_model,
             )
             .on_conflict_do_nothing(index_elements=["extraction_id"])
@@ -107,17 +119,17 @@ class InScopeRepository:
         return InScopeAssessment(
             id=row.id,
             extraction_id=extraction_id,
-            translated_title=draft.translated_title,
-            summary=draft.summary,
-            topic=draft.topic_name,
+            translated_title=translated_title,
+            summary=summary,
+            topic=in_scope.topic,
             category_id=category_id,
-            investor_take=draft.investor_take,
+            investor_take=in_scope.investor_take,
             ai_model=ai_model,
             analyzed_at=row.analyzed_at,
         )
 
-    async def get_category_id_by_slug(self, slug: str) -> int | None:
-        """カテゴリ slug から ID を取得する。"""
+    async def _get_category_id_by_slug(self, slug: str) -> int | None:
+        """カテゴリ slug から ID を取得する (Repository 内部使用)。"""
         stmt = select(Category.id).where(Category.slug == slug)
         return (await self._session.execute(stmt)).scalar_one_or_none()
 

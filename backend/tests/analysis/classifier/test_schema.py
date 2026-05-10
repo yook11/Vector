@@ -97,3 +97,77 @@ class TestAssessmentResultAlias:
         out_of_scope = OutOfScope(investor_take="y")
         for value in (in_scope, out_of_scope):
             assert isinstance(value, (InScope, OutOfScope))
+
+
+class TestInScopeInvestorTakeSanitize:
+    """InScope.investor_take の sanitize + bounds 保護網 (AI 境界 BC 責務)。"""
+
+    def test_strips_html_tags(self) -> None:
+        m = InScope(
+            category=InScopeCategory.AI,
+            topic=TopicName(root="ai"),
+            investor_take="<b>note</b>",
+        )
+        assert m.investor_take == "note"
+
+    def test_strips_control_characters(self) -> None:
+        m = InScope(
+            category=InScopeCategory.AI,
+            topic=TopicName(root="ai"),
+            investor_take="note\x00with\x07control",
+        )
+        assert "\x00" not in m.investor_take
+        assert "\x07" not in m.investor_take
+
+    def test_nfkc_normalizes_fullwidth(self) -> None:
+        m = InScope(
+            category=InScopeCategory.AI,
+            topic=TopicName(root="ai"),
+            investor_take="ABC123",  # fullwidth
+        )
+        assert m.investor_take == "ABC123"
+
+    def test_rejects_empty_after_sanitization(self) -> None:
+        with pytest.raises(ValidationError):
+            InScope(
+                category=InScopeCategory.AI,
+                topic=TopicName(root="ai"),
+                investor_take="<i></i>",
+            )
+
+    def test_rejects_over_max_length(self) -> None:
+        with pytest.raises(ValidationError):
+            InScope(
+                category=InScopeCategory.AI,
+                topic=TopicName(root="ai"),
+                investor_take="a" * 2001,
+            )
+
+    def test_accepts_max_length_boundary(self) -> None:
+        m = InScope(
+            category=InScopeCategory.AI,
+            topic=TopicName(root="ai"),
+            investor_take="a" * 2000,
+        )
+        assert len(m.investor_take) == 2000
+
+
+class TestOutOfScopeInvestorTakeSanitize:
+    """OutOfScope.investor_take の sanitize + bounds 保護網 (InScope と対称)。"""
+
+    def test_strips_html_and_control_chars(self) -> None:
+        m = OutOfScope(investor_take="<b>off-topic</b>\x00 article")
+        assert "<" not in m.investor_take
+        assert "\x00" not in m.investor_take
+
+    def test_rejects_empty_after_sanitization(self) -> None:
+        with pytest.raises(ValidationError):
+            OutOfScope(investor_take="<i></i>")
+
+    def test_rejects_over_max_length(self) -> None:
+        with pytest.raises(ValidationError):
+            OutOfScope(investor_take="a" * 2001)
+
+    def test_accepts_max_length_boundary(self) -> None:
+        m = OutOfScope(investor_take="a" * 2000)
+        assert len(m.investor_take) == 2000

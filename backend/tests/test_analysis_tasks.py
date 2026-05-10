@@ -301,9 +301,7 @@ class TestAssessContent:
                 return_value=(None, None),
             ),
             patch("app.analysis.tasks.AssessmentService") as mock_svc_cls,
-            patch(
-                "app.analysis.tasks.record_assessment_failure", new=AsyncMock()
-            ),
+            patch("app.analysis.tasks.record_assessment_failure", new=AsyncMock()),
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
                 side_effect=RateLimitError("429"),
@@ -327,9 +325,7 @@ class TestAssessContent:
                 return_value=(None, None),
             ),
             patch("app.analysis.tasks.AssessmentService") as mock_svc_cls,
-            patch(
-                "app.analysis.tasks.record_assessment_failure", new=AsyncMock()
-            ),
+            patch("app.analysis.tasks.record_assessment_failure", new=AsyncMock()),
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
                 side_effect=RateLimitError("429"),
