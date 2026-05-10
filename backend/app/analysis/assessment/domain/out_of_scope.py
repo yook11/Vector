@@ -8,6 +8,10 @@
 - ``OutOfScopeAssessment`` は「監査・トレース用の対象外記録」
 役割と寿命管理が違うため、実装の見た目が似ていても別型に分ける。
 
+Stage 3 由来の ``translated_title`` / ``summary`` snapshot は in-scope と対称に
+保持する。判定が成功した結果という同じ次元として扱い、Service の永続化処理に
+「保存データを変える」主観判断 (= "out-of-scope は価値がない") を持ち込まない。
+
 このアグリゲートは認証された admin ロールまたは内部 observability のみ
 公開を許容する。REST API 経由で一般ユーザーに返してはならない。
 
@@ -30,9 +34,13 @@ class OutOfScopeAssessment:
     将来「extraction ごとに複数 out-of-scope 履歴」が必要になったら ``id`` が
     独立した意味を持つようになる。
 
+    ``translated_title`` / ``summary`` は Stage 4 確定時点の Extraction からの
+    スナップショット — Extraction が後に再実行されても Assessment 側は更新されない
+    (in-scope と対称、out-of-scope 記録も自己完結した監査物として扱う)。
+
     Invariants:
     - id / extraction_id は正の整数
-    - investor_take / ai_model は非空
+    - translated_title / summary / investor_take / ai_model は非空
     - rejected_at は記録時刻
 
     ``__post_init__`` の検査は DB CHECK + FK NOT NULL と一致する
@@ -41,11 +49,17 @@ class OutOfScopeAssessment:
 
     id: int
     extraction_id: int
+    translated_title: str
+    summary: str
     investor_take: str
     ai_model: str
     rejected_at: datetime
 
     def __post_init__(self) -> None:
+        if not self.translated_title:
+            raise ValueError("OutOfScopeAssessment.translated_title must be non-empty")
+        if not self.summary:
+            raise ValueError("OutOfScopeAssessment.summary must be non-empty")
         if not self.investor_take:
             raise ValueError("OutOfScopeAssessment.investor_take must be non-empty")
         if not self.ai_model:

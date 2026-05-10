@@ -211,12 +211,14 @@ class AssessmentService:
         model_name: str,
     ) -> OutOfScopeOutcome:
         """OutOfScope を Repository に直接渡して永続化し、Outcome を返す
-        (in-scope と対称)。"""
+        (in-scope 経路と対称、Stage 3 由来 snapshot も同様に保持する)。"""
         out_of_scope_repo = OutOfScopeRepository(session)
 
         saved = await out_of_scope_repo.save(
             out_of_scope,
             extraction_id=ready.extraction_id,
+            translated_title=ready.translated_title,
+            summary=ready.summary,
             ai_model=model_name,
         )
 

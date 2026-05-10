@@ -229,6 +229,9 @@ async def test_out_of_scope_success_records_audit(
     assert payload.get("category_slug") is None
     assert payload.get("topic") is None
     assert payload.get("investor_take") is None
+    # in-scope 経路と対称に Stage 3 由来 snapshot が Entity に保持されている
+    assert result.assessment.translated_title == extraction.translated_title
+    assert result.assessment.summary == extraction.summary
 
 
 # ---------------------------------------------------------------------------
@@ -441,6 +444,8 @@ async def test_out_of_scope_race_lost_does_not_record_audit(
     # 勝者を先に焼く
     winner = OutOfScopeAssessmentORM(
         extraction_id=extraction.id,
+        translated_title="title",
+        summary="summary text",
         investor_take="not relevant",
         ai_model=_AI_MODEL,
     )

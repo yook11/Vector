@@ -76,6 +76,8 @@ def _make_out_of_scope_assessment(**overrides: object) -> OutOfScopeAssessment:
     defaults: dict[str, object] = {
         "id": 1,
         "extraction_id": 2,
+        "translated_title": "title",
+        "summary": "summary",
         "investor_take": "out of scope",
         "ai_model": "gemini-2.5-pro",
         "rejected_at": datetime(2026, 1, 1, tzinfo=UTC),
@@ -89,7 +91,10 @@ class TestOutOfScopeAssessmentPostInit:
         assessment = _make_out_of_scope_assessment()
         assert assessment.id == 1
 
-    @pytest.mark.parametrize("field", ["investor_take", "ai_model"])
+    @pytest.mark.parametrize(
+        "field",
+        ["translated_title", "summary", "investor_take", "ai_model"],
+    )
     def test_rejects_empty_string_fields(self, field: str) -> None:
         with pytest.raises(ValueError):
             _make_out_of_scope_assessment(**{field: ""})

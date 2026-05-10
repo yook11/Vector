@@ -37,6 +37,14 @@ class OutOfScopeAssessment(Base):
             "extraction_id", name="uq_out_of_scope_assessments_extraction_id"
         ),
         CheckConstraint(
+            "translated_title != ''",
+            name="ck_out_of_scope_assessments_translated_title_not_empty",
+        ),
+        CheckConstraint(
+            "summary != ''",
+            name="ck_out_of_scope_assessments_summary_not_empty",
+        ),
+        CheckConstraint(
             "investor_take != ''",
             name="ck_out_of_scope_assessments_investor_take_not_empty",
         ),
@@ -50,10 +58,8 @@ class OutOfScopeAssessment(Base):
     extraction_id: Mapped[int] = mapped_column(
         ForeignKey("article_extractions.id", ondelete="CASCADE"),
     )
-    # PR1 (migration-only) では nullable=True で追加。PR2 で Entity / Repository
-    # 拡張と一緒に NOT NULL 化 + CHECK 制約 (空文字禁止) を締める。
-    translated_title: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    summary: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    translated_title: Mapped[str] = mapped_column(String(500))
+    summary: Mapped[str] = mapped_column(Text())
     investor_take: Mapped[str] = mapped_column(Text())
     ai_model: Mapped[str] = mapped_column(String(100))
     rejected_at: Mapped[datetime] = mapped_column(

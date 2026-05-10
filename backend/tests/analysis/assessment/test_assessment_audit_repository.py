@@ -177,6 +177,8 @@ async def _persist_out_of_scope(
 ) -> OutOfScopeAssessment:
     orm = OutOfScopeAssessmentORM(
         extraction_id=extraction.id,
+        translated_title=extraction.translated_title,
+        summary=extraction.summary,
         investor_take="not relevant",
         ai_model=_AI_MODEL,
     )
@@ -186,6 +188,8 @@ async def _persist_out_of_scope(
     return OutOfScopeAssessment(
         id=orm.id,
         extraction_id=orm.extraction_id,
+        translated_title=orm.translated_title,
+        summary=orm.summary,
         investor_take=orm.investor_take,
         ai_model=orm.ai_model,
         rejected_at=orm.rejected_at,

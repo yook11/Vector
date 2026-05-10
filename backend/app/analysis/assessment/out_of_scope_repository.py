@@ -54,19 +54,29 @@ class OutOfScopeRepository:
         out_of_scope: OutOfScope,
         *,
         extraction_id: int,
+        translated_title: str,
+        summary: str,
         ai_model: str,
     ) -> OutOfScopeAssessment | None:
-        """AI 境界型を受けて ``INSERT ... ON CONFLICT (extraction_id) DO NOTHING
-        RETURNING ...`` で永続化する。
+        """AI 境界型 + Stage 3 由来のスナップショットを受けて
+        ``INSERT ... ON CONFLICT (extraction_id) DO NOTHING RETURNING ...`` で
+        永続化する。
+
+        ``translated_title`` / ``summary`` は in-scope 経路と対称な point-in-time
+        snapshot で、AI 境界型 ``OutOfScope`` には含まれないため引数経由で受け取る
+        (``InScopeRepository.save`` と signature 完全対称)。
 
         Returns:
-            成功時: 永続化された ``OutOfScopeAssessment`` Entity
+            成功時: 永続化された ``OutOfScopeAssessment`` Entity (id /
+            rejected_at は DB 値、その他は引数値)
             race 敗北時 (期待した extraction_id への UNIQUE 違反): ``None``
         """
         stmt = (
             pg_insert(OutOfScopeAssessmentORM)
             .values(
                 extraction_id=extraction_id,
+                translated_title=translated_title,
+                summary=summary,
                 investor_take=out_of_scope.investor_take,
                 ai_model=ai_model,
             )
@@ -79,6 +89,8 @@ class OutOfScopeRepository:
         return OutOfScopeAssessment(
             id=row.id,
             extraction_id=extraction_id,
+            translated_title=translated_title,
+            summary=summary,
             investor_take=out_of_scope.investor_take,
             ai_model=ai_model,
             rejected_at=row.rejected_at,
@@ -90,6 +102,8 @@ class OutOfScopeRepository:
         return OutOfScopeAssessment(
             id=orm.id,
             extraction_id=orm.extraction_id,
+            translated_title=orm.translated_title,
+            summary=orm.summary,
             investor_take=orm.investor_take,
             ai_model=orm.ai_model,
             rejected_at=orm.rejected_at,
