@@ -12,7 +12,7 @@ describe("BriefingListResponseSchema", () => {
           category: CATEGORY,
           latest: {
             weekStart: "2026-04-20",
-            headlineExcerpt: "今週のハイライト。",
+            headline: "今週の AI ハイライト",
           },
         },
         {
@@ -23,8 +23,8 @@ describe("BriefingListResponseSchema", () => {
     });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.items[0]?.latest?.headlineExcerpt).toBe(
-        "今週のハイライト。",
+      expect(result.data.items[0]?.latest?.headline).toBe(
+        "今週の AI ハイライト",
       );
       expect(result.data.items[1]?.latest).toBeNull();
     }
@@ -56,17 +56,18 @@ describe("BriefingResponseSchema", () => {
       modelName: "deepseek-v4-pro",
       inputArticleCount: 132,
       category: CATEGORY,
-      headline: "今週の AI ハイライト。",
-      stories: [
-        { title: "ストーリー1", analysis: "分析本文", articleIds: [1, 2] },
-      ],
+      headline: "今週の AI ハイライト",
+      overview: "今週は LLM 推論コスト削減と...",
+      stories: [{ takeaway: "記事から読み取った内容", articleIds: [1, 2] }],
       articles: [
         { id: 1, titleJa: "記事1", sourceName: "TechCrunch", url: "https://x" },
       ],
     });
     expect(result.success).toBe(true);
     if (result.success && result.data.state === "ready") {
+      expect(result.data.overview).toBe("今週は LLM 推論コスト削減と...");
       expect(result.data.stories.length).toBe(1);
+      expect(result.data.stories[0]?.takeaway).toBe("記事から読み取った内容");
       expect(result.data.articles[0]?.titleJa).toBe("記事1");
     }
   });
@@ -88,7 +89,7 @@ describe("BriefingResponseSchema", () => {
     expect(result.success).toBe(false);
   });
 
-  it("rejects ready missing required fields (e.g. headline)", () => {
+  it("rejects ready missing required fields (e.g. overview)", () => {
     const result = BriefingResponseSchema.safeParse({
       state: "ready",
       weekStart: "2026-04-20",
@@ -96,6 +97,7 @@ describe("BriefingResponseSchema", () => {
       modelName: "deepseek-v4-pro",
       inputArticleCount: 0,
       category: CATEGORY,
+      headline: "h",
       stories: [],
       articles: [],
     });

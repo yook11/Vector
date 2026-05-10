@@ -31,7 +31,7 @@ export function BriefingRow({
             )}
           </div>
           <p className="text-sm text-foreground line-clamp-2 group-hover:text-foreground/90">
-            {latest.headlineExcerpt}
+            {latest.headline}
           </p>
         </div>
         <span

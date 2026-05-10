@@ -102,6 +102,7 @@ class WeeklyBriefingService:
                 week_start_date=ready.week_start,
                 category_id=ready.category_id,
                 headline=content.headline,
+                overview=content.overview,
                 stories=[s.model_dump() for s in content.stories],
                 model_name=self._llm.MODEL,
                 input_article_count=len(articles),

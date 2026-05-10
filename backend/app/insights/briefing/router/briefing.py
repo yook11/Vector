@@ -14,7 +14,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_optional_user, get_session
-from app.insights.briefing.domain.headline import extract_first_sentence
 from app.insights.briefing.domain.week import latest_completed_week_start, now_in_jst
 from app.insights.briefing.repository.briefings import BriefingRepository
 from app.insights.briefing.schemas.briefing import (
@@ -112,7 +111,7 @@ async def list_briefings(
                     category=_to_category(cat),
                     latest=_BriefingListLatest(
                         week_start=b.week_start_date,
-                        headline_excerpt=extract_first_sentence(b.headline),
+                        headline=b.headline,
                     ),
                 )
             )
@@ -160,6 +159,7 @@ async def get_latest_briefing(
         input_article_count=briefing.input_article_count,
         category=_to_category(category),
         headline=briefing.headline,
+        overview=briefing.overview,
         stories=stories,
         articles=articles,
     )

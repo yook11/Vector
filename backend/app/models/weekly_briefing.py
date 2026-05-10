@@ -60,6 +60,7 @@ class WeeklyBriefing(Base):
         ForeignKey("categories.id"),
     )
     headline: Mapped[str] = mapped_column(Text())
+    overview: Mapped[str] = mapped_column(Text())
     stories: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
     model_name: Mapped[str] = mapped_column(Text())
     input_article_count: Mapped[int] = mapped_column(Integer)

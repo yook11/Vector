@@ -399,6 +399,10 @@ export type ReadyBriefing = {
      */
     headline: string;
     /**
+     * Overview
+     */
+    overview: string;
+    /**
      * Stories
      */
     stories: Array<StoryOut>;
@@ -587,8 +591,8 @@ export type ArticleSummaryOut = {
  * 一覧行に同梱する「最新 briefing 参照」。
  *
  * 未生成カテゴリでは ``BriefingListItem.latest = None`` で表現する。
- * 詳細 (``ReadyBriefing``) と異なり stories 等は持たず、newspaper 風
- * プレビューに必要な最小フィールドのみ。
+ * 詳細 (``ReadyBriefing``) と異なり overview / stories 等は持たず、
+ * 一覧で表示する短い見出しのみ。
  */
 export type BriefingListLatest = {
     /**
@@ -596,9 +600,9 @@ export type BriefingListLatest = {
      */
     weekStart: string;
     /**
-     * Headlineexcerpt
+     * Headline
      */
-    headlineExcerpt: string;
+    headline: string;
 };
 
 /**
@@ -674,13 +678,9 @@ export type NewEntityOut = {
  */
 export type StoryOut = {
     /**
-     * Title
+     * Takeaway
      */
-    title: string;
-    /**
-     * Analysis
-     */
-    analysis: string;
+    takeaway: string;
     /**
      * Articleids
      */
@@ -708,6 +708,12 @@ export type TopicTrendOut = {
 
 export type SearchArticlesData = {
     body?: never;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+    };
     path?: never;
     query: {
         /**
@@ -812,6 +818,10 @@ export type GetSimilarArticlesData = {
 
 export type GetSimilarArticlesErrors = {
     /**
+     * News article not found
+     */
+    404: unknown;
+    /**
      * Validation Error
      */
     422: HttpValidationError;
@@ -843,6 +853,10 @@ export type GetArticleData = {
 };
 
 export type GetArticleErrors = {
+    /**
+     * News article not found
+     */
+    404: unknown;
     /**
      * Validation Error
      */
@@ -977,6 +991,10 @@ export type AddToWatchlistData = {
 
 export type AddToWatchlistErrors = {
     /**
+     * News article not found
+     */
+    404: unknown;
+    /**
      * Validation Error
      */
     422: HttpValidationError;
@@ -1010,6 +1028,10 @@ export type RemoveFromWatchlistData = {
 };
 
 export type RemoveFromWatchlistErrors = {
+    /**
+     * Watchlist item not found
+     */
+    404: unknown;
     /**
      * Validation Error
      */
@@ -1115,6 +1137,10 @@ export type GetLatestBriefingData = {
 
 export type GetLatestBriefingErrors = {
     /**
+     * category not found
+     */
+    404: unknown;
+    /**
      * Validation Error
      */
     422: HttpValidationError;
@@ -1219,6 +1245,10 @@ export type DeleteNewsSourceData = {
 
 export type DeleteNewsSourceErrors = {
     /**
+     * News source not found
+     */
+    404: unknown;
+    /**
      * Validation Error
      */
     422: HttpValidationError;
@@ -1255,6 +1285,10 @@ export type ActivateSourceData = {
 
 export type ActivateSourceErrors = {
     /**
+     * News source not found
+     */
+    404: unknown;
+    /**
      * Validation Error
      */
     422: HttpValidationError;
@@ -1290,6 +1324,10 @@ export type DeactivateSourceData = {
 };
 
 export type DeactivateSourceErrors = {
+    /**
+     * News source not found
+     */
+    404: unknown;
     /**
      * Validation Error
      */

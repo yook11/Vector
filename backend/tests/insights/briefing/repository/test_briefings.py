@@ -12,12 +12,19 @@ from app.models.category import Category
 from app.models.weekly_briefing import WeeklyBriefing
 
 
-def _make(week: date, category_id: int, *, headline: str = "h1") -> WeeklyBriefing:
+def _make(
+    week: date,
+    category_id: int,
+    *,
+    headline: str = "h1",
+    overview: str = "overview narrative",
+) -> WeeklyBriefing:
     return WeeklyBriefing(
         week_start_date=week,
         category_id=category_id,
         headline=headline,
-        stories=[{"title": "s", "analysis": "a", "article_ids": [1]}],
+        overview=overview,
+        stories=[{"takeaway": "t", "article_ids": [1]}],
         model_name="test-model",
         input_article_count=1,
     )
@@ -69,15 +76,19 @@ class TestSave:
         self, db_session: AsyncSession, category: Category
     ) -> None:
         repo = BriefingRepository(db_session)
-        await repo.save(_make(date(2026, 4, 20), category.id, headline="v1"))
+        await repo.save(
+            _make(date(2026, 4, 20), category.id, headline="v1", overview="o1")
+        )
         await db_session.commit()
 
         forced = await repo.save(
-            _make(date(2026, 4, 20), category.id, headline="v2"), force=True
+            _make(date(2026, 4, 20), category.id, headline="v2", overview="o2"),
+            force=True,
         )
         await db_session.commit()
         assert forced is not None
         assert forced.headline == "v2"
+        assert forced.overview == "o2"
 
 
 class TestExists:

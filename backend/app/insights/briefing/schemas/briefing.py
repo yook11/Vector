@@ -25,9 +25,9 @@ from app.domain.category import CategoryName, CategorySlug
 from app.insights.briefing.domain.briefing import (
     MAX_ARTICLE_IDS_PER_STORY,
     MAX_BRIEFING_HEADLINE_LEN,
+    MAX_BRIEFING_OVERVIEW_LEN,
     MAX_STORIES_PER_BRIEFING,
-    MAX_STORY_ANALYSIS_LEN,
-    MAX_STORY_TITLE_LEN,
+    MAX_STORY_TAKEAWAY_LEN,
 )
 from app.schemas.base import _CamelBase
 
@@ -38,15 +38,12 @@ _MAX_REFERENCED_ARTICLES: Final[int] = 200
 _MAX_ARTICLE_TITLE_LEN: Final[int] = 500
 _MAX_SOURCE_NAME_LEN: Final[int] = 200
 _MAX_URL_LEN: Final[int] = 2_000
-# 一覧の見出し抜粋。詳細 headline (500) より短い 1 文相当。
-_MAX_HEADLINE_EXCERPT_LEN: Final[int] = 200
 # カテゴリ数 (現在 11、将来余裕で 20)。
 _MAX_BRIEFING_LIST_ITEMS: Final[int] = 20
 
 
 class _StoryOut(_CamelBase):
-    title: str = Field(max_length=MAX_STORY_TITLE_LEN)
-    analysis: str = Field(max_length=MAX_STORY_ANALYSIS_LEN)
+    takeaway: str = Field(max_length=MAX_STORY_TAKEAWAY_LEN)
     article_ids: list[int] = Field(max_length=MAX_ARTICLE_IDS_PER_STORY)
 
 
@@ -75,6 +72,7 @@ class ReadyBriefing(_CamelBase):
     input_article_count: int
     category: _CategoryOut
     headline: str = Field(max_length=MAX_BRIEFING_HEADLINE_LEN)
+    overview: str = Field(max_length=MAX_BRIEFING_OVERVIEW_LEN)
     stories: list[_StoryOut] = Field(max_length=MAX_STORIES_PER_BRIEFING)
     articles: list[_ArticleSummaryOut] = Field(max_length=_MAX_REFERENCED_ARTICLES)
 
@@ -96,12 +94,12 @@ class _BriefingListLatest(_CamelBase):
     """一覧行に同梱する「最新 briefing 参照」。
 
     未生成カテゴリでは ``BriefingListItem.latest = None`` で表現する。
-    詳細 (``ReadyBriefing``) と異なり stories 等は持たず、newspaper 風
-    プレビューに必要な最小フィールドのみ。
+    詳細 (``ReadyBriefing``) と異なり overview / stories 等は持たず、
+    一覧で表示する短い見出しのみ。
     """
 
     week_start: date
-    headline_excerpt: str = Field(max_length=_MAX_HEADLINE_EXCERPT_LEN)
+    headline: str = Field(max_length=MAX_BRIEFING_HEADLINE_LEN)
 
 
 class BriefingListItem(_CamelBase):

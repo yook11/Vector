@@ -19,7 +19,7 @@ const CategorySchema = z.object({
 
 const BriefingListLatestSchema = z.object({
   weekStart: z.iso.date(),
-  headlineExcerpt: z.string(),
+  headline: z.string(),
 });
 
 const BriefingListItemSchema = z.object({
@@ -40,8 +40,7 @@ const BriefingArticleSummarySchema = z.object({
 });
 
 const BriefingStorySchema = z.object({
-  title: z.string(),
-  analysis: z.string(),
+  takeaway: z.string(),
   articleIds: z.array(z.number()),
 });
 
@@ -53,6 +52,7 @@ const ReadyBriefingSchema = z.object({
   inputArticleCount: z.number(),
   category: CategorySchema,
   headline: z.string(),
+  overview: z.string(),
   stories: z.array(BriefingStorySchema),
   articles: z.array(BriefingArticleSummarySchema),
 });

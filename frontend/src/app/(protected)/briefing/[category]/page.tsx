@@ -76,15 +76,26 @@ async function BriefingDetailContent({ slug }: { slug: string }) {
         </h1>
       </header>
 
-      <div className="flex flex-col gap-10">
-        {vm.stories.map((story) => (
-          <StoryBlock
-            key={`${story.title}:${story.articleIds.join(",")}`}
-            story={story}
-            articlesById={articlesById}
-          />
-        ))}
-      </div>
+      <article className="text-sm leading-loose text-foreground/90 whitespace-pre-line">
+        {vm.overview}
+      </article>
+
+      {vm.stories.length > 0 && (
+        <section className="flex flex-col gap-6 border-t border-border/60 pt-6">
+          <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            参考にした記事
+          </h2>
+          <div className="flex flex-col gap-8">
+            {vm.stories.map((story) => (
+              <StoryBlock
+                key={story.articleIds.join(",")}
+                story={story}
+                articlesById={articlesById}
+              />
+            ))}
+          </div>
+        </section>
+      )}
 
       <BriefingDisclaimer />
     </>
@@ -107,10 +118,17 @@ function BriefingDetailSkeleton() {
     <div className="flex flex-col gap-8" aria-hidden="true">
       <Skeleton className="h-3 w-24" />
       <Skeleton className="h-7 w-3/4" />
-      {[0, 1, 2].map((i) => (
+      <div className="flex flex-col gap-2">
+        <Skeleton className="h-4 w-full" />
+        <Skeleton className="h-4 w-full" />
+        <Skeleton className="h-4 w-5/6" />
+        <Skeleton className="h-4 w-full" />
+        <Skeleton className="h-4 w-3/4" />
+      </div>
+      {[0, 1].map((i) => (
         <div key={i} className="flex flex-col gap-3">
-          <Skeleton className="h-5 w-1/2" />
-          <Skeleton className="h-20 w-full" />
+          <Skeleton className="h-5 w-3/4" />
+          <Skeleton className="h-16 w-full" />
         </div>
       ))}
     </div>

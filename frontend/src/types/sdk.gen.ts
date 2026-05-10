@@ -21,7 +21,11 @@ export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends 
 /**
  * Search Articles
  *
- * 指定クエリテキストとのセマンティック類似度で記事を検索する。
+ * セマンティック類似度で記事を検索する (red-team C1 対策: auth + per-user quota)。
+ *
+ * 認証済みユーザーごとに 1 日 ``semantic_search_daily_quota_per_user`` 回まで
+ * embedding を生成する (Redis atomic counter)。cache hit はクォータを消費しない。
+ * anon access は 401、quota 超過は 429。
  *
  * レスポンスは user 非依存。per-user の watchlist 状態は
  * GET /api/v1/me/watchlist/ids で別取得し frontend で merge する。

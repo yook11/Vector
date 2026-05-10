@@ -19,7 +19,7 @@ from pydantic import SecretStr, ValidationError
 from app.insights.briefing.domain.article import ArticleInput
 from app.insights.briefing.domain.briefing import (
     MAX_STORIES_PER_BRIEFING,
-    MAX_STORY_ANALYSIS_LEN,
+    MAX_STORY_TAKEAWAY_LEN,
 )
 
 
@@ -43,8 +43,9 @@ async def test_disables_thinking_for_pro_model() -> None:
         return_value=_fake_completion_with_tool_call(
             {
                 "headline": "h",
+                "overview": "o",
                 "stories": [
-                    {"title": "t", "analysis": "a", "article_ids": [1]},
+                    {"takeaway": "t", "article_ids": [1]},
                 ],
             }
         )
@@ -63,7 +64,7 @@ async def test_disables_thinking_for_pro_model() -> None:
         from app.insights.briefing.llm.deepseek import DeepSeekBriefingGenerator
 
         gen = DeepSeekBriefingGenerator()
-        await gen.generate(
+        result = await gen.generate(
             category_name="AI",
             week_start=date(2026, 4, 20),
             articles=[ArticleInput(id=1, title_ja="t", summary_ja="s")],
@@ -76,6 +77,20 @@ async def test_disables_thinking_for_pro_model() -> None:
     assert kwargs["tools"][0]["function"]["strict"] is True
     # 回帰防止: thinking モード明示無効化が抜けると Pro で 400 になる
     assert kwargs["extra_body"] == {"thinking": {"type": "disabled"}}
+    # overview が parse されている (新 schema)
+    assert result.overview == "o"
+    assert result.stories[0].takeaway == "t"
+
+
+def test_tool_schema_required_fields_are_overview_centric() -> None:
+    """tool schema 側でも overview/takeaway が要求されていることを保証する。"""
+    from app.insights.briefing.llm.deepseek import BRIEFING_TOOL_SCHEMA
+
+    assert BRIEFING_TOOL_SCHEMA["required"] == ["headline", "overview", "stories"]
+    story_schema = BRIEFING_TOOL_SCHEMA["properties"]["stories"]["items"]
+    assert story_schema["required"] == ["takeaway", "article_ids"]
+    assert "title" not in story_schema["properties"]
+    assert "analysis" not in story_schema["properties"]
 
 
 async def _generate_with_mocked_response(arguments: dict) -> None:
@@ -111,8 +126,9 @@ async def test_generator_rejects_oversized_stories_from_llm() -> None:
     """
     oversized = {
         "headline": "h",
+        "overview": "o",
         "stories": [
-            {"title": f"t{i}", "analysis": "a", "article_ids": [1]}
+            {"takeaway": f"t{i}", "article_ids": [1]}
             for i in range(MAX_STORIES_PER_BRIEFING + 1)
         ],
     }
@@ -121,14 +137,14 @@ async def test_generator_rejects_oversized_stories_from_llm() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generator_rejects_oversized_analysis_from_llm() -> None:
-    """LLM が上限超の analysis を返したら ValidationError raise (F10 二次防衛)。"""
+async def test_generator_rejects_oversized_takeaway_from_llm() -> None:
+    """LLM が上限超の takeaway を返したら ValidationError raise (F10 二次防衛)。"""
     oversized = {
         "headline": "h",
+        "overview": "o",
         "stories": [
             {
-                "title": "t",
-                "analysis": "x" * (MAX_STORY_ANALYSIS_LEN + 1),
+                "takeaway": "x" * (MAX_STORY_TAKEAWAY_LEN + 1),
                 "article_ids": [1],
             }
         ],

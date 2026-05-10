@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.insights.briefing.domain.briefing import (
     MAX_STORIES_PER_BRIEFING,
-    MAX_STORY_ANALYSIS_LEN,
+    MAX_STORY_TAKEAWAY_LEN,
 )
 from app.models.article_extraction import ArticleExtraction
 from app.models.category import Category
@@ -90,10 +90,10 @@ class TestGetBriefing:
             week_start_date=date(2026, 4, 20),
             category_id=ai_category.id,
             headline="今週のヘッドライン",
+            overview="今週の流れの本文",
             stories=[
                 {
-                    "title": "ストーリーA",
-                    "analysis": "分析本文",
+                    "takeaway": "記事から読み取った内容",
                     "article_ids": [article_id],
                 }
             ],
@@ -109,10 +109,14 @@ class TestGetBriefing:
         assert body["state"] == "ready"
         assert body["category"]["slug"] == "ai"
         assert body["headline"] == "今週のヘッドライン"
+        assert body["overview"] == "今週の流れの本文"
         assert body["modelName"] == "deepseek-v4-pro"
         assert body["inputArticleCount"] == 1
         assert len(body["stories"]) == 1
+        assert body["stories"][0]["takeaway"] == "記事から読み取った内容"
         assert body["stories"][0]["articleIds"] == [article_id]
+        assert "title" not in body["stories"][0]
+        assert "analysis" not in body["stories"][0]
         assert len(body["articles"]) == 1
         assert body["articles"][0]["id"] == article_id
         assert body["articles"][0]["titleJa"] == "記事タイトル"
@@ -144,7 +148,7 @@ class TestListBriefings:
             assert item["latest"] is None
 
     @pytest.mark.asyncio
-    async def test_includes_headline_excerpt_for_ready_item(
+    async def test_includes_headline_for_ready_item(
         self,
         client: AsyncClient,
         db_session: AsyncSession,
@@ -153,9 +157,10 @@ class TestListBriefings:
         briefing = WeeklyBriefing(
             week_start_date=date(2026, 4, 20),
             category_id=ai_category.id,
-            headline="今週のヘッドライン。続きの本文。",
+            headline="今週のヘッドライン",
+            overview="今週の流れの本文",
             stories=[
-                {"title": "S", "analysis": "A", "article_ids": [1]},
+                {"takeaway": "T", "article_ids": [1]},
             ],
             model_name="deepseek-v4-pro",
             input_article_count=1,
@@ -169,7 +174,8 @@ class TestListBriefings:
         ai_item = next(i for i in body["items"] if i["category"]["slug"] == "ai")
         assert ai_item["latest"] is not None
         assert ai_item["latest"]["weekStart"] == "2026-04-20"
-        assert ai_item["latest"]["headlineExcerpt"] == "今週のヘッドライン。"
+        # 一覧は短い headline をそのまま返す (旧 headlineExcerpt 抜粋ロジックは廃止)
+        assert ai_item["latest"]["headline"] == "今週のヘッドライン"
 
     @pytest.mark.asyncio
     async def test_orders_items_by_category_id(
@@ -194,7 +200,7 @@ class TestBriefingResponseSizeGuard:
     """red-team F10: anon GET 経路で巨大 briefing JSONB が response として
     流れる経路を構造的に塞ぐ。
 
-    AUTH-N4 / AUTH-C1 経由で attacker が DB に巨大 stories / analysis を
+    AUTH-N4 / AUTH-C1 経由で attacker が DB に巨大 stories / takeaway を
     直書きしたシナリオ。Field(max_length=...) が router の
     `_StoryOut.model_validate` または `ReadyBriefing(...)` 構築時に発火し、
     response に巨大 JSONB が含まれることを構造的に防ぐ。
@@ -209,13 +215,14 @@ class TestBriefingResponseSizeGuard:
     ) -> None:
         """stories 数が上限超なら anon GET で ValidationError 伝播 (本番では 500)。"""
         oversized_stories = [
-            {"title": f"t{i}", "analysis": "a", "article_ids": [1]}
+            {"takeaway": f"t{i}", "article_ids": [1]}
             for i in range(MAX_STORIES_PER_BRIEFING + 1)
         ]
         briefing = WeeklyBriefing(
             week_start_date=date(2026, 4, 20),
             category_id=ai_category.id,
             headline="h",
+            overview="o",
             stories=oversized_stories,
             model_name="deepseek-v4-pro",
             input_article_count=1,
@@ -227,21 +234,21 @@ class TestBriefingResponseSizeGuard:
             await client.get("/api/v1/briefing/ai")
 
     @pytest.mark.asyncio
-    async def test_anon_get_rejects_oversized_analysis(
+    async def test_anon_get_rejects_oversized_takeaway(
         self,
         client: AsyncClient,
         db_session: AsyncSession,
         ai_category: Category,
     ) -> None:
-        """1 story の analysis が上限超なら anon GET で ValidationError 伝播。"""
+        """1 story の takeaway が上限超なら anon GET で ValidationError 伝播。"""
         briefing = WeeklyBriefing(
             week_start_date=date(2026, 4, 20),
             category_id=ai_category.id,
             headline="h",
+            overview="o",
             stories=[
                 {
-                    "title": "t",
-                    "analysis": "x" * (MAX_STORY_ANALYSIS_LEN + 1),
+                    "takeaway": "x" * (MAX_STORY_TAKEAWAY_LEN + 1),
                     "article_ids": [1],
                 }
             ],

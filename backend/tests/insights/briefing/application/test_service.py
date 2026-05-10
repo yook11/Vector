@@ -30,15 +30,16 @@ def _factory_for(db_session) -> async_sessionmaker:
     )
 
 
-def _llm_mock(headline: str = "今週のハイライト") -> MagicMock:
+def _llm_mock(
+    headline: str = "今週のハイライト", overview: str = "今週の流れ"
+) -> MagicMock:
     llm = MagicMock()
     llm.MODEL = "deepseek-v4-pro"
     llm.generate = AsyncMock(
         return_value=WeeklyBriefingContent(
             headline=headline,
-            stories=[
-                BriefingStory(title="ストーリー1", analysis="分析本文", article_ids=[1])
-            ],
+            overview=overview,
+            stories=[BriefingStory(takeaway="記事から読み取った内容", article_ids=[1])],
         )
     )
     return llm
@@ -86,7 +87,7 @@ class TestExecute:
         )
         await db_session.commit()
 
-        llm = _llm_mock(headline="OK")
+        llm = _llm_mock(headline="OK", overview="OVERVIEW")
         service = WeeklyBriefingService(
             _factory_for(db_session), llm, NullBriefingNotifier()
         )
@@ -107,6 +108,7 @@ class TestExecute:
         )
         assert saved is not None
         assert saved.headline == "OK"
+        assert saved.overview == "OVERVIEW"
         assert saved.input_article_count == 1
         assert saved.model_name == "deepseek-v4-pro"
 

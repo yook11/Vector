@@ -21,7 +21,7 @@ describe("getBriefingListViewModel", () => {
       items: [
         {
           category: { id: 1, slug: "ai", name: "AI" },
-          latest: { weekStart: "2026-04-20", headlineExcerpt: "AI 動向。" },
+          latest: { weekStart: "2026-04-20", headline: "AI 動向" },
         },
         {
           category: { id: 2, slug: "robotics", name: "ロボティクス" },

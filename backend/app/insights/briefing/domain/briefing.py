@@ -22,22 +22,25 @@ from typing import Final, Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validator
 
-# LLM 出力の現実的な上限 (実サンプル "132 記事 → 6 stories" を基準に余裕を確保)。
-# response schema (schemas/briefing.py) と同値で持ち、二箇所で同じ振る舞いを保証する。
-MAX_STORY_TITLE_LEN: Final[int] = 200
-MAX_STORY_ANALYSIS_LEN: Final[int] = 4_000
+# LLM 出力の現実的な上限。response schema (schemas/briefing.py) と同値で
+# 持ち、二箇所で同じ振る舞いを保証する。
+# overview 主体構成 (γ-overview restructure) では:
+# - headline は短い見出し (一覧表示と詳細 header に同じものを使う)
+# - overview が週全体の流れ narrative を担う
+# - stories[].takeaway は記事グループ単位の短い読み取りに留める
+MAX_BRIEFING_HEADLINE_LEN: Final[int] = 200
+MAX_BRIEFING_OVERVIEW_LEN: Final[int] = 8_000
+MAX_STORY_TAKEAWAY_LEN: Final[int] = 600
 MAX_ARTICLE_IDS_PER_STORY: Final[int] = 50
-MAX_BRIEFING_HEADLINE_LEN: Final[int] = 500
 MAX_STORIES_PER_BRIEFING: Final[int] = 20
 
 
 class BriefingStory(BaseModel):
-    """1 ストーリー = ある業界トレンドの題目 + 分析 + 根拠記事 ids。"""
+    """1 ストーリー = 記事グループに対する読み取り (takeaway) + 根拠記事 ids。"""
 
     model_config = ConfigDict(frozen=True)
 
-    title: str = Field(min_length=1, max_length=MAX_STORY_TITLE_LEN)
-    analysis: str = Field(min_length=1, max_length=MAX_STORY_ANALYSIS_LEN)
+    takeaway: str = Field(min_length=1, max_length=MAX_STORY_TAKEAWAY_LEN)
     article_ids: list[int] = Field(min_length=1, max_length=MAX_ARTICLE_IDS_PER_STORY)
 
 
@@ -47,6 +50,7 @@ class WeeklyBriefingContent(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     headline: str = Field(min_length=1, max_length=MAX_BRIEFING_HEADLINE_LEN)
+    overview: str = Field(min_length=1, max_length=MAX_BRIEFING_OVERVIEW_LEN)
     stories: list[BriefingStory] = Field(
         min_length=1, max_length=MAX_STORIES_PER_BRIEFING
     )

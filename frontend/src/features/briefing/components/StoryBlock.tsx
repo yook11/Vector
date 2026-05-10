@@ -12,10 +12,9 @@ export function StoryBlock({ story, articlesById }: StoryBlockProps) {
     .filter((a): a is BriefingArticleSummary => a !== undefined);
 
   return (
-    <section className="flex flex-col gap-4">
-      <h2 className="text-base font-medium tracking-tight">{story.title}</h2>
-      <p className="text-sm leading-relaxed text-foreground/80 whitespace-pre-line">
-        {story.analysis}
+    <section className="flex flex-col gap-3">
+      <p className="text-sm font-medium leading-relaxed text-foreground whitespace-pre-line">
+        {story.takeaway}
       </p>
       {articles.length > 0 && (
         <div className="grid gap-2 sm:grid-cols-2">

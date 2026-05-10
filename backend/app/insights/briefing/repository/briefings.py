@@ -105,6 +105,7 @@ class BriefingRepository:
             "week_start_date": briefing.week_start_date,
             "category_id": briefing.category_id,
             "headline": briefing.headline,
+            "overview": briefing.overview,
             "stories": briefing.stories,
             "model_name": briefing.model_name,
             "input_article_count": briefing.input_article_count,
@@ -117,6 +118,7 @@ class BriefingRepository:
                     constraint="uq_weekly_briefing",
                     set_={
                         "headline": briefing.headline,
+                        "overview": briefing.overview,
                         "stories": briefing.stories,
                         "model_name": briefing.model_name,
                         "input_article_count": briefing.input_article_count,
