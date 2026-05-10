@@ -15,6 +15,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.analysis.assessment.domain.ready import ReadyForAssessment
+from app.analysis.assessment.errors import (
+    AssessmentCategoryMissingError,
+    AssessmentRecoverableError,
+    AssessmentResponseInvalidError,
+    AssessmentTerminalSkipError,
+)
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.errors import AIProviderRateLimitedError, RateLimitError
 from app.analysis.extraction.domain.ready import ReadyForExtraction
@@ -280,6 +286,8 @@ class TestAssessContent:
 
     @pytest.mark.asyncio
     async def test_rate_limit_raises_for_retry(self) -> None:
+        """PR6: legacy RateLimitError は 3 marker いずれにも該当しないので
+        catch-all 句に dispatch される。retry 余地ありで raise。"""
         from app.analysis.tasks import assess_content
 
         mock_ctx = _make_ctx(
@@ -293,6 +301,9 @@ class TestAssessContent:
                 return_value=(None, None),
             ),
             patch("app.analysis.tasks.AssessmentService") as mock_svc_cls,
+            patch(
+                "app.analysis.tasks.record_assessment_failure", new=AsyncMock()
+            ),
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
                 side_effect=RateLimitError("429"),
@@ -302,7 +313,7 @@ class TestAssessContent:
 
     @pytest.mark.asyncio
     async def test_rate_limit_last_attempt_returns(self) -> None:
-        """assess_content は最終試行で例外を送出せず return する。"""
+        """assess_content は最終試行で例外を送出せず return する (catch-all 句)。"""
         from app.analysis.tasks import assess_content
 
         mock_ctx = _make_ctx(
@@ -316,11 +327,182 @@ class TestAssessContent:
                 return_value=(None, None),
             ),
             patch("app.analysis.tasks.AssessmentService") as mock_svc_cls,
+            patch(
+                "app.analysis.tasks.record_assessment_failure", new=AsyncMock()
+            ),
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
                 side_effect=RateLimitError("429"),
             )
             await assess_content(ready=ready, ctx=mock_ctx)
+
+
+# ---------------------------------------------------------------------------
+# assess_content: PR6 — 3 marker dispatch (TerminalSkip / Recoverable / Exception)
+# ---------------------------------------------------------------------------
+
+
+class TestAssessContentMarkerDispatch:
+    """PR6: ``assess_content`` の except 句が 3 marker dispatch に置換された
+    (TerminalSkip → Recoverable → Exception)。各 except で
+    ``record_assessment_failure`` を呼び出す。"""
+
+    @pytest.mark.asyncio
+    async def test_terminal_skip_records_failure_and_returns(self) -> None:
+        """``AssessmentTerminalSkipError`` → audit + return (taskiq retry なし)。"""
+        from app.analysis.tasks import assess_content
+
+        ctx = _make_ctx(classifier=_make_provider_fake(), retry_count=0, max_retries=2)
+        ready = _make_ready()
+        exc = AssessmentTerminalSkipError("bad config", code="ai_error_configuration")
+
+        with (
+            patch("app.analysis.tasks._build_limiters", return_value=(None, None)),
+            patch("app.analysis.tasks.AssessmentService") as mock_svc_cls,
+            patch(
+                "app.analysis.tasks.record_assessment_failure", new=AsyncMock()
+            ) as mock_audit,
+        ):
+            mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
+            await assess_content(ready=ready, ctx=ctx)
+
+        mock_audit.assert_awaited_once()
+        assert mock_audit.await_args.kwargs["exc"] is exc
+
+    @pytest.mark.asyncio
+    async def test_category_missing_dispatches_to_terminal_skip(self) -> None:
+        """``AssessmentCategoryMissingError`` (Layer 2-B、TerminalSkip 継承) は
+        TerminalSkip 句に dispatch される (Recoverable 句に誤って落ちない)。"""
+        from app.analysis.tasks import assess_content
+
+        ctx = _make_ctx(classifier=_make_provider_fake(), retry_count=0, max_retries=2)
+        ready = _make_ready()
+        exc = AssessmentCategoryMissingError("unknown slug 'foo'")
+
+        with (
+            patch("app.analysis.tasks._build_limiters", return_value=(None, None)),
+            patch("app.analysis.tasks.AssessmentService") as mock_svc_cls,
+            patch(
+                "app.analysis.tasks.record_assessment_failure", new=AsyncMock()
+            ) as mock_audit,
+        ):
+            mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
+            # TerminalSkip 句は raise しない → return 成立
+            await assess_content(ready=ready, ctx=ctx)
+        mock_audit.assert_awaited_once()
+        assert isinstance(
+            mock_audit.await_args.kwargs["exc"], AssessmentTerminalSkipError
+        )
+
+    @pytest.mark.asyncio
+    async def test_recoverable_records_failure_and_raises_when_not_last(self) -> None:
+        """``AssessmentRecoverableError`` + retry 余地あり → audit + raise。"""
+        from app.analysis.tasks import assess_content
+
+        ctx = _make_ctx(classifier=_make_provider_fake(), retry_count=0, max_retries=2)
+        ready = _make_ready()
+        exc = AssessmentRecoverableError("network", code="ai_error_network")
+
+        with (
+            patch("app.analysis.tasks._build_limiters", return_value=(None, None)),
+            patch("app.analysis.tasks.AssessmentService") as mock_svc_cls,
+            patch(
+                "app.analysis.tasks.record_assessment_failure", new=AsyncMock()
+            ) as mock_audit,
+        ):
+            mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
+            with pytest.raises(AssessmentRecoverableError):
+                await assess_content(ready=ready, ctx=ctx)
+        mock_audit.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_recoverable_records_failure_and_returns_when_last(self) -> None:
+        """``AssessmentRecoverableError`` + 最終 attempt → audit + return。"""
+        from app.analysis.tasks import assess_content
+
+        ctx = _make_ctx(classifier=_make_provider_fake(), retry_count=2, max_retries=2)
+        ready = _make_ready()
+        exc = AssessmentRecoverableError("network", code="ai_error_network")
+
+        with (
+            patch("app.analysis.tasks._build_limiters", return_value=(None, None)),
+            patch("app.analysis.tasks.AssessmentService") as mock_svc_cls,
+            patch(
+                "app.analysis.tasks.record_assessment_failure", new=AsyncMock()
+            ) as mock_audit,
+        ):
+            mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
+            await assess_content(ready=ready, ctx=ctx)
+        mock_audit.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_response_invalid_dispatches_to_recoverable(self) -> None:
+        """``AssessmentResponseInvalidError`` (Layer 2-B、Recoverable 継承) は
+        Recoverable 句に dispatch される (catch-all に落ちない)。"""
+        from app.analysis.tasks import assess_content
+
+        ctx = _make_ctx(classifier=_make_provider_fake(), retry_count=0, max_retries=2)
+        ready = _make_ready()
+        exc = AssessmentResponseInvalidError("schema violation")
+
+        with (
+            patch("app.analysis.tasks._build_limiters", return_value=(None, None)),
+            patch("app.analysis.tasks.AssessmentService") as mock_svc_cls,
+            patch(
+                "app.analysis.tasks.record_assessment_failure", new=AsyncMock()
+            ) as mock_audit,
+        ):
+            mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
+            with pytest.raises(AssessmentResponseInvalidError):
+                await assess_content(ready=ready, ctx=ctx)
+        mock_audit.assert_awaited_once()
+        assert isinstance(
+            mock_audit.await_args.kwargs["exc"], AssessmentRecoverableError
+        )
+
+    @pytest.mark.asyncio
+    async def test_unexpected_exception_records_and_returns_when_last(self) -> None:
+        """任意 ``Exception`` + 最終 attempt → catch-all で audit + return。"""
+        from app.analysis.tasks import assess_content
+
+        ctx = _make_ctx(classifier=_make_provider_fake(), retry_count=2, max_retries=2)
+        ready = _make_ready()
+
+        with (
+            patch("app.analysis.tasks._build_limiters", return_value=(None, None)),
+            patch("app.analysis.tasks.AssessmentService") as mock_svc_cls,
+            patch(
+                "app.analysis.tasks.record_assessment_failure", new=AsyncMock()
+            ) as mock_audit,
+        ):
+            mock_svc_cls.return_value.execute = AsyncMock(
+                side_effect=ValueError("surprise")
+            )
+            await assess_content(ready=ready, ctx=ctx)
+        mock_audit.assert_awaited_once()
+        assert isinstance(mock_audit.await_args.kwargs["exc"], ValueError)
+
+    @pytest.mark.asyncio
+    async def test_unexpected_exception_records_and_raises_when_not_last(self) -> None:
+        """任意 ``Exception`` + retry 余地あり → catch-all で audit + raise。"""
+        from app.analysis.tasks import assess_content
+
+        ctx = _make_ctx(classifier=_make_provider_fake(), retry_count=0, max_retries=2)
+        ready = _make_ready()
+
+        with (
+            patch("app.analysis.tasks._build_limiters", return_value=(None, None)),
+            patch("app.analysis.tasks.AssessmentService") as mock_svc_cls,
+            patch(
+                "app.analysis.tasks.record_assessment_failure", new=AsyncMock()
+            ) as mock_audit,
+        ):
+            mock_svc_cls.return_value.execute = AsyncMock(
+                side_effect=ValueError("surprise")
+            )
+            with pytest.raises(ValueError, match="surprise"):
+                await assess_content(ready=ready, ctx=ctx)
+        mock_audit.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------

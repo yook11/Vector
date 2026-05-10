@@ -1,0 +1,459 @@
+"""``AssessmentService`` の PR6 改修 test (audit wire-in + ACL boundary)。
+
+PR6 で Service が以下を行うようになったことを固定する:
+
+- ``classifier.classify`` の ``AIProviderError`` を ``map_provider_to_assessment``
+  で Stage 4 marker (``AssessmentRecoverableError`` / ``AssessmentTerminalSkipError``)
+  に詰め替え、``__cause__`` に元 ``AIProvider*Error`` を紐付ける (ACL boundary)。
+- ``_handle_in_scope`` で category 解決失敗 (``category_id is None``) のとき
+  ``AssessmentCategoryMissingError`` (Layer 2-B、TerminalSkip 継承) を raise する
+  (旧 ``ProviderError`` raise を置換)。
+- 業務 INSERT (in-scope / out-of-scope) と同 session 同 tx で
+  ``AssessmentAuditRepository.append_*`` を呼び、成功 audit を 1 行焼く。
+- race lost (``save()`` が None) の場合は audit を焼かず reads-back のみ
+  (actor SSoT、勝者 task の audit と二重記録しない)。
+
+PR5 で merge 済の repository / payload / provider_mapping は本 PR では touch しない
+(test では結果として焼かれた pipeline_events 行を assert するに留める)。
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from app.analysis.assessment.domain.ready import ReadyForAssessment
+from app.analysis.assessment.errors import (
+    AssessmentCategoryMissingError,
+    AssessmentRecoverableError,
+    AssessmentTerminalSkipError,
+)
+from app.analysis.assessment.service import (
+    AssessmentService,
+    InScopeOutcome,
+    OutOfScopeOutcome,
+)
+from app.analysis.classifier.base import BaseClassifier
+from app.analysis.classifier.envelope import AssessmentCall
+from app.analysis.classifier.schema import (
+    InScope,
+    InScopeCategory,
+    OutOfScope,
+)
+from app.analysis.domain.value_objects.topic import TopicName
+from app.analysis.errors.provider import (
+    AIProviderConfigurationError,
+    AIProviderNetworkError,
+)
+from app.models.article import Article
+from app.models.article_extraction import ArticleExtraction
+from app.models.category import Category
+from app.models.in_scope_assessment import InScopeAssessment as InScopeAssessmentORM
+from app.models.news_source import NewsSource
+from app.models.out_of_scope_assessment import (
+    OutOfScopeAssessment as OutOfScopeAssessmentORM,
+)
+from app.models.pipeline_event import PipelineEvent
+
+_AI_MODEL = "gemini-2.5-flash-lite"
+
+
+# ---------------------------------------------------------------------------
+# Helpers (test_assessment_audit_repository.py と同じ pattern)
+# ---------------------------------------------------------------------------
+
+
+async def _make_article(
+    db_session: AsyncSession,
+    sample_source: NewsSource,
+    *,
+    url: str = "https://e.com/a",
+) -> Article:
+    article = Article(
+        source_id=sample_source.id,
+        source_url=url,  # type: ignore[arg-type]
+        original_title="Original",
+        original_content="c" * 100,
+        published_at=datetime.now(UTC),
+    )
+    db_session.add(article)
+    await db_session.commit()
+    await db_session.refresh(article)
+    return article
+
+
+async def _make_extraction(
+    db_session: AsyncSession, article: Article
+) -> ArticleExtraction:
+    extraction = ArticleExtraction(
+        article_id=article.id,
+        translated_title="title",
+        summary="summary text",
+        ai_model=_AI_MODEL,
+    )
+    db_session.add(extraction)
+    await db_session.commit()
+    await db_session.refresh(extraction)
+    return extraction
+
+
+def _ready(extraction: ArticleExtraction) -> ReadyForAssessment:
+    return ReadyForAssessment(
+        extraction_id=extraction.id,
+        translated_title=extraction.translated_title,
+        summary=extraction.summary,
+    )
+
+
+def _in_scope_call(category: InScopeCategory = InScopeCategory.AI) -> AssessmentCall:
+    return AssessmentCall(
+        result=InScope(
+            category=category,
+            topic=TopicName("llm benchmark"),
+            investor_take="bullish",
+        ),
+        raw_response='{"category":"ai"}',
+        raw_category=category.value,
+        raw_topic="LLM benchmark",
+        prompt_version="testver1",
+    )
+
+
+def _out_of_scope_call() -> AssessmentCall:
+    return AssessmentCall(
+        result=OutOfScope(investor_take="not relevant"),
+        raw_response='{"category":"out_of_scope"}',
+        raw_category="out_of_scope",
+        raw_topic="celebrity gossip",
+        prompt_version="testver1",
+    )
+
+
+def _make_classifier(
+    *, return_envelope: AssessmentCall | None = None, side_effect: object = None
+) -> BaseClassifier:
+    mock = MagicMock(spec=BaseClassifier)
+    type(mock).model_name = _AI_MODEL
+    if side_effect is not None:
+        mock.classify = AsyncMock(side_effect=side_effect)
+    else:
+        mock.classify = AsyncMock(return_value=return_envelope or _in_scope_call())
+    return mock
+
+
+async def _fetch_assessment_events(
+    db_session: AsyncSession, article_id: int
+) -> list[PipelineEvent]:
+    stmt = (
+        select(PipelineEvent)
+        .where(
+            PipelineEvent.article_id == article_id,
+            PipelineEvent.stage == "assessment",
+        )
+        .order_by(PipelineEvent.id)
+    )
+    return list((await db_session.execute(stmt)).scalars().all())
+
+
+# ---------------------------------------------------------------------------
+# 成功経路: 業務 INSERT と同 tx で audit 1 行
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_in_scope_success_records_audit(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+    sample_categories: list[Category],
+) -> None:
+    """``_handle_in_scope`` 成功で ``code=assessed_in_scope`` の audit 1 行。"""
+    article = await _make_article(db_session, sample_source)
+    extraction = await _make_extraction(db_session, article)
+    # InScopeCategory.AI が catalog に存在する slug "ai" になることを前提
+    classifier = _make_classifier(
+        return_envelope=_in_scope_call(category=InScopeCategory.AI)
+    )
+
+    svc = AssessmentService(session_factory)
+    result = await svc.execute(_ready(extraction), classifier)
+    assert isinstance(result, InScopeOutcome)
+
+    events = await _fetch_assessment_events(db_session, article.id)
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.event_type == "succeeded"
+    assert ev.outcome_code == "assessed_in_scope"
+    assert ev.category == "success"
+    assert ev.code == "assessed_in_scope"
+    payload = ev.payload
+    assert payload["extraction_id"] == extraction.id
+    assert payload["assessment_id"] == result.assessment.id
+    assert payload["topic"] == "llm benchmark"
+    assert payload["investor_take"] == "bullish"
+    assert payload["ai_model"] == _AI_MODEL
+    assert payload["category_slug"] == "ai"
+
+
+@pytest.mark.asyncio
+async def test_out_of_scope_success_records_audit(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """``_handle_out_of_scope`` 成功で ``code=assessed_out_of_scope`` の audit 1 行。"""
+    article = await _make_article(db_session, sample_source)
+    extraction = await _make_extraction(db_session, article)
+    classifier = _make_classifier(return_envelope=_out_of_scope_call())
+
+    svc = AssessmentService(session_factory)
+    result = await svc.execute(_ready(extraction), classifier)
+    assert isinstance(result, OutOfScopeOutcome)
+
+    events = await _fetch_assessment_events(db_session, article.id)
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.event_type == "succeeded"
+    assert ev.outcome_code == "assessed_out_of_scope"
+    assert ev.category == "success"
+    assert ev.code == "assessed_out_of_scope"
+    payload = ev.payload
+    assert payload["extraction_id"] == extraction.id
+    assert payload["assessment_id"] == result.assessment.id
+    # in-scope 系 field は全て None (spec 状態識別表)
+    assert payload.get("category_id") is None
+    assert payload.get("category_slug") is None
+    assert payload.get("topic") is None
+    assert payload.get("investor_take") is None
+
+
+# ---------------------------------------------------------------------------
+# race lost: audit を焼かない (actor SSoT)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_race_lost_does_not_record_audit(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+    sample_categories: list[Category],
+) -> None:
+    """``InScopeRepository.save`` が None (race lost) のとき audit 行は 0。
+
+    勝者 task が自身の audit を焼くため、敗者は二重記録しない。
+    """
+    article = await _make_article(db_session, sample_source)
+    extraction = await _make_extraction(db_session, article)
+    # 勝者 row を先に焼いておく (本 test は敗者経路)
+    winner = InScopeAssessmentORM(
+        extraction_id=extraction.id,
+        translated_title="title",
+        summary="summary text",
+        topic="llm benchmark",
+        category_id=sample_categories[0].id,
+        investor_take="bullish",
+        ai_model=_AI_MODEL,
+    )
+    db_session.add(winner)
+    await db_session.commit()
+
+    classifier = _make_classifier(
+        return_envelope=_in_scope_call(category=InScopeCategory.AI)
+    )
+
+    svc = AssessmentService(session_factory)
+    # save() が None を返す (UPSERT race lost) → reads-back する
+    with patch(
+        "app.analysis.assessment.repository.InScopeRepository.save",
+        new=AsyncMock(return_value=None),
+    ):
+        result = await svc.execute(_ready(extraction), classifier)
+
+    assert isinstance(result, InScopeOutcome)
+    # race lost 経路では audit 行はゼロ (actor SSoT を assert)
+    events = await _fetch_assessment_events(db_session, article.id)
+    assert len(events) == 0
+
+
+# ---------------------------------------------------------------------------
+# ACL boundary: AIProviderError → Stage 4 marker wrap
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_provider_network_error_is_wrapped_to_recoverable_marker(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """``AIProviderNetworkError`` → ``AssessmentRecoverableError`` で wrap。
+
+    ``__cause__`` に元 ``AIProvider*Error`` が紐付くこと (PR5 の
+    ``_extract_error_chain`` が 2 段以上を error_chain 列に記録できる前提)。
+    """
+    provider_exc = AIProviderNetworkError("connection reset")
+    classifier = _make_classifier(side_effect=provider_exc)
+
+    ready = ReadyForAssessment(extraction_id=1, translated_title="t", summary="s")
+    svc = AssessmentService(session_factory)
+
+    with pytest.raises(AssessmentRecoverableError) as excinfo:
+        await svc.execute(ready, classifier)
+    assert excinfo.value.__cause__ is provider_exc
+    assert excinfo.value.provider_error is provider_exc
+
+
+@pytest.mark.asyncio
+async def test_provider_configuration_error_is_wrapped_to_terminal_skip_marker(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """``AIProviderConfigurationError`` → ``AssessmentTerminalSkipError``。"""
+    provider_exc = AIProviderConfigurationError("bad api key")
+    classifier = _make_classifier(side_effect=provider_exc)
+
+    ready = ReadyForAssessment(extraction_id=1, translated_title="t", summary="s")
+    svc = AssessmentService(session_factory)
+
+    with pytest.raises(AssessmentTerminalSkipError) as excinfo:
+        await svc.execute(ready, classifier)
+    assert excinfo.value.__cause__ is provider_exc
+    assert excinfo.value.provider_error is provider_exc
+
+
+# ---------------------------------------------------------------------------
+# Layer 2-B: AI が未知の slug を返したら AssessmentCategoryMissingError
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_unknown_category_raises_category_missing(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """``in_scope.category.value`` が catalog 未登録 →
+    ``AssessmentCategoryMissingError`` raise (旧 ``ProviderError`` 置換)。
+
+    ``sample_categories`` fixture を使わない (catalog 未登録状態を作る) ため、
+    in_scope_repo.get_category_id_by_slug が必ず None を返す。
+    """
+    article = await _make_article(db_session, sample_source)
+    extraction = await _make_extraction(db_session, article)
+    classifier = _make_classifier(
+        return_envelope=_in_scope_call(category=InScopeCategory.AI)
+    )
+
+    svc = AssessmentService(session_factory)
+    with pytest.raises(AssessmentCategoryMissingError) as excinfo:
+        await svc.execute(_ready(extraction), classifier)
+    assert excinfo.value.code == "assessment_category_missing"
+
+
+@pytest.mark.asyncio
+async def test_unknown_category_does_not_record_audit_in_service(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """``AssessmentCategoryMissingError`` 経路では Service が audit を焼かない
+    (失敗 audit は Task 層 ``record_assessment_failure`` 責務)。
+    """
+    article = await _make_article(db_session, sample_source)
+    extraction = await _make_extraction(db_session, article)
+    classifier = _make_classifier(
+        return_envelope=_in_scope_call(category=InScopeCategory.AI)
+    )
+
+    svc = AssessmentService(session_factory)
+    with pytest.raises(AssessmentCategoryMissingError):
+        await svc.execute(_ready(extraction), classifier)
+
+    events = await _fetch_assessment_events(db_session, article.id)
+    assert len(events) == 0
+
+
+# ---------------------------------------------------------------------------
+# 同 tx 性: 業務 INSERT が rollback されると audit も焼かれない
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_audit_rolled_back_when_commit_fails(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+    sample_categories: list[Category],
+) -> None:
+    """``session.commit`` が raise すると業務 INSERT も audit も両方残らない
+    (同 session 同 tx の原子性)。
+    """
+    article = await _make_article(db_session, sample_source)
+    extraction = await _make_extraction(db_session, article)
+    classifier = _make_classifier(
+        return_envelope=_in_scope_call(category=InScopeCategory.AI)
+    )
+
+    svc = AssessmentService(session_factory)
+    # AsyncSession.commit() を patch して、append_in_scope の後に raise
+    boom = RuntimeError("commit failed")
+    with patch(
+        "sqlalchemy.ext.asyncio.AsyncSession.commit",
+        new=AsyncMock(side_effect=boom),
+    ):
+        with pytest.raises(RuntimeError, match="commit failed"):
+            await svc.execute(_ready(extraction), classifier)
+
+    # audit も業務 in_scope_assessments も両方ゼロ (同 tx で rollback)
+    events = await _fetch_assessment_events(db_session, article.id)
+    assert len(events) == 0
+    rows = (
+        (
+            await db_session.execute(
+                select(InScopeAssessmentORM).where(
+                    InScopeAssessmentORM.extraction_id == extraction.id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 0
+
+
+# ---------------------------------------------------------------------------
+# Race lost on out-of-scope path
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_out_of_scope_race_lost_does_not_record_audit(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """out-of-scope 経路の race lost でも audit は焼かれない。"""
+    article = await _make_article(db_session, sample_source)
+    extraction = await _make_extraction(db_session, article)
+    # 勝者を先に焼く
+    winner = OutOfScopeAssessmentORM(
+        extraction_id=extraction.id,
+        investor_take="not relevant",
+        ai_model=_AI_MODEL,
+    )
+    db_session.add(winner)
+    await db_session.commit()
+
+    classifier = _make_classifier(return_envelope=_out_of_scope_call())
+    svc = AssessmentService(session_factory)
+    with patch(
+        "app.analysis.assessment.out_of_scope_repository.OutOfScopeRepository.save",
+        new=AsyncMock(return_value=None),
+    ):
+        result = await svc.execute(_ready(extraction), classifier)
+
+    assert isinstance(result, OutOfScopeOutcome)
+    events = await _fetch_assessment_events(db_session, article.id)
+    assert len(events) == 0

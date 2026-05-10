@@ -12,6 +12,11 @@ import structlog
 from taskiq import Context, TaskiqDepends
 
 from app.analysis.assessment.domain.ready import ReadyForAssessment
+from app.analysis.assessment.errors import (
+    AssessmentRecoverableError,
+    AssessmentTerminalSkipError,
+)
+from app.analysis.assessment.failure_recording import record_assessment_failure
 from app.analysis.assessment.out_of_scope_repository import OutOfScopeRepository
 from app.analysis.assessment.repository import InScopeRepository
 from app.analysis.assessment.service import (
@@ -32,7 +37,6 @@ from app.analysis.embedding.service import (
 from app.analysis.errors import (
     ConfigurationError,
     DailyQuotaExhaustedError,
-    InsufficientBalanceError,
     NetworkError,
     ProviderError,
     UnclassifiedError,
@@ -261,30 +265,44 @@ async def assess_content(
 
     # Service 呼び出し（session は内部で管理）
     svc = AssessmentService(session_factory)
+    attempt = int(ctx.message.labels.get("retry_count", 0)) + 1
     try:
         result = await svc.execute(ready, classifier)
-    except (
-        ConfigurationError,
-        DailyQuotaExhaustedError,
-        InsufficientBalanceError,
-    ) as e:
+    except AssessmentTerminalSkipError as exc:
+        # Layer 1 marker (Layer 2-B AssessmentCategoryMissingError も継承で拾う):
+        # 永続的失敗 → audit 焼いて即 return (taskiq retry なし、extraction 保持)。
+        await record_assessment_failure(
+            session_factory, ready=ready, exc=exc, attempt=attempt
+        )
         logger.warning(
-            "assess_content_no_retry",
+            "assess_content_terminal_skip",
             extraction_id=ready.extraction_id,
-            reason=str(e),
+            code=getattr(exc, "code", None),
         )
         return
-    except (
-        AnalysisRateLimitError,
-        ProviderError,
-        NetworkError,
-        UnclassifiedError,
-    ) as e:
+    except AssessmentRecoverableError as exc:
+        # Layer 1 marker (Layer 2-B AssessmentResponseInvalidError も継承で拾う):
+        # 一時的失敗 → audit 焼いて is_last_attempt でトリアージ。
+        await record_assessment_failure(
+            session_factory, ready=ready, exc=exc, attempt=attempt
+        )
         if is_last_attempt(ctx):
             logger.warning(
-                "assess_content_max_retries",
+                "assess_content_recoverable_exhausted",
                 extraction_id=ready.extraction_id,
-                reason=str(e),
+                code=getattr(exc, "code", None),
+            )
+            return
+        raise  # taskiq 再試行
+    except Exception as exc:
+        # catch-all (想定外): audit 焼いて exhausted なら return、否則 raise。
+        await record_assessment_failure(
+            session_factory, ready=ready, exc=exc, attempt=attempt
+        )
+        if is_last_attempt(ctx):
+            logger.exception(
+                "assess_content_unexpected_exhausted",
+                extraction_id=ready.extraction_id,
             )
             return
         raise
