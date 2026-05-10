@@ -18,6 +18,7 @@ from structlog.testing import capture_logs
 from app.models.pipeline_event import PipelineEvent
 from app.observability.domain.event import Stage
 from app.observability.domain.payloads import (
+    ClassificationPayload,
     ContentFetchPayload,
     EmbeddingPayload,
     ExtractionPayload,
@@ -81,6 +82,9 @@ def test_build_failure_payload_for_each_stage_variant() -> None:
     cases: list[tuple[Stage, type]] = [
         (Stage.SOURCE_FETCH, SourceFetchPayload),
         (Stage.CONTENT_FETCH, ContentFetchPayload),
+        # PR4: 旧 Stage.CLASSIFICATION → Stage.ASSESSMENT。value は据置で
+        # ClassificationPayload (PR5 で AssessmentPayload に置換予定)。
+        (Stage.ASSESSMENT, ClassificationPayload),
         (Stage.EMBEDDING, EmbeddingPayload),
     ]
     for stage, expected_cls in cases:

@@ -17,10 +17,14 @@ from typing import ClassVar
 
 
 class Layer1Category(StrEnum):
-    """``pipeline_events.category`` の取りうる値 (6 種、SSoT)。
+    """``pipeline_events.category`` の取りうる値 (7 種、SSoT)。
 
     型階層には ``UNKNOWN`` は登場しない — catch-all (``except Exception``) で任意の
     Exception に付与する DB ラベルとしてのみ存在する。
+
+    PR4: ``NON_RETRYABLE_KEEP_EXTRACTION`` を追加。assessment が回復不能でも
+    extraction 結果は保存維持する用途 (``AssessmentTerminalSkipError`` の dispatch
+    先、PR5 で ``AssessmentAuditRepository._category_of`` から参照される)。
     """
 
     SUCCESS = "success"
@@ -28,6 +32,7 @@ class Layer1Category(StrEnum):
     RETRYABLE = "retryable"
     NON_RETRYABLE_DROP_ARTICLE = "non_retryable_drop_article"
     NON_RETRYABLE_KEEP_ARTICLE = "non_retryable_keep_article"
+    NON_RETRYABLE_KEEP_EXTRACTION = "non_retryable_keep_extraction"
     UNKNOWN = "unknown"
 
 

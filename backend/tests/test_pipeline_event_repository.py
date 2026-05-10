@@ -141,19 +141,38 @@ def test_stage_strenum_matches_check_constraint() -> None:
     """Stage StrEnum 値 set が ORM/migration の CHECK 制約値と一致。
 
     値追加時は両方の更新を要求する自然な fail-fast。
+
+    PR4: 'classification' を 'assessment' に rename。
     """
     expected = {
         "dispatch",
         "source_fetch",
         "content_fetch",
         "extraction",
-        "classification",
+        "assessment",
         "embedding",
         "backfill_extract",
         "backfill_classify",
         "backfill_embed",
     }
     assert {s.value for s in Stage} == expected
+
+
+def test_layer1_category_strenum_matches_check_constraint() -> None:
+    """Layer1Category StrEnum 値 set が ORM/migration の CHECK 制約値と一致。
+
+    PR4: 'non_retryable_keep_extraction' を追加 (7 値)。
+    """
+    expected = {
+        "success",
+        "idempotent_skip",
+        "retryable",
+        "non_retryable_drop_article",
+        "non_retryable_keep_article",
+        "non_retryable_keep_extraction",
+        "unknown",
+    }
+    assert {c.value for c in Layer1Category} == expected
 
 
 def test_event_type_strenum_matches_check_constraint() -> None:
@@ -163,11 +182,13 @@ def test_event_type_strenum_matches_check_constraint() -> None:
 
 @pytest.mark.asyncio
 async def test_category_check_constraint(db_session: AsyncSession) -> None:
-    """category 列の CHECK 制約検証: 6 値 + NULL は OK、不正値で IntegrityError。
+    """category 列の CHECK 制約検証: 7 値 + NULL は OK、不正値で IntegrityError。
 
     Layer1Category は article-bound analysis stages 専用の語彙のため、collection 系
     stage (dispatch / source_fetch / content_fetch) では NULL のまま記録される。
-    DB CHECK は ``category IS NULL OR category IN (6 values)`` の形で NULL を許容。
+    DB CHECK は ``category IS NULL OR category IN (7 values)`` の形で NULL を許容。
+
+    PR4: 'non_retryable_keep_extraction' を追加。
     """
     repo = PipelineEventRepository(db_session)
 

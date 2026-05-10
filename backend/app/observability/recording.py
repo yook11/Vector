@@ -48,7 +48,9 @@ _PAYLOAD_BY_STAGE: dict[Stage, type[BasePipelineEventPayload]] = {
     Stage.SOURCE_FETCH: SourceFetchPayload,
     Stage.CONTENT_FETCH: ContentFetchPayload,
     Stage.EXTRACTION: ExtractionPayload,
-    Stage.CLASSIFICATION: ClassificationPayload,
+    # PR4: 旧 Stage.CLASSIFICATION key を Stage.ASSESSMENT に rename。
+    # value (ClassificationPayload) は据置で PR5 で AssessmentPayload に置換予定。
+    Stage.ASSESSMENT: ClassificationPayload,
     Stage.EMBEDDING: EmbeddingPayload,
     # backfill_* は PR4 で対応 (専用 Payload variant が必要かを判断後に追加)
 }

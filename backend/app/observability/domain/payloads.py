@@ -128,9 +128,20 @@ class ExtractionPayload(BasePipelineEventPayload):
 
 
 class ClassificationPayload(BasePipelineEventPayload):
-    """Stage 4 — 入力が小さい (記事サマリ) ので full 保存。"""
+    """Stage 4 — 入力が小さい (記事サマリ) ので full 保存。
 
-    kind: Literal["classification"] = "classification"
+    NOTE (PR4): ``kind`` discriminator 値を ``"classification"`` →
+    ``"assessment"`` に rename。class 名は据置で PR5 で ``AssessmentPayload``
+    追加 / 置換予定。discriminator 値だけ先に schema 化することで PR4 deploy 後に
+    新 row が CHECK 制約 (``stage='assessment'`` + ``payload.kind='assessment'``)
+    と一致する状態を作る。
+
+    一時的に「class 名と discriminator 値がズレる」状態になるため、
+    ``tests/observability/domain/test_payloads.py`` で pin test を維持し、PR5
+    で本 class を ``AssessmentPayload`` に置換する際に同 test を一緒に削除する。
+    """
+
+    kind: Literal["assessment"] = "assessment"
     ai_model: str | None = None  # S
     prompt_version: str | None = None  # A: call signature hash (Stage 3 と同方式)
 

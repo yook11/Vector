@@ -37,9 +37,12 @@ class PipelineEvent(Base):
     __tablename__ = "pipeline_events"
     __table_args__ = (
         CheckConstraint(
+            # PR4: 旧 'classification' を 'assessment' に rename。
+            # migration u1_assessment_stage_rename と完全に揃える (metadata.create_all
+            # 経由のテスト DB が古い CHECK を持たないように)。
             "stage IN ("
             "'dispatch','source_fetch','content_fetch',"
-            "'extraction','classification','embedding',"
+            "'extraction','assessment','embedding',"
             "'backfill_extract','backfill_classify','backfill_embed'"
             ")",
             name="ck_pipeline_events_stage",
@@ -49,9 +52,13 @@ class PipelineEvent(Base):
             name="ck_pipeline_events_event_type",
         ),
         CheckConstraint(
+            # PR4: 'non_retryable_keep_extraction' を追加。assessment が回復不能でも
+            # extraction 結果は保存維持する用途 (AssessmentTerminalSkipError dispatch)。
             "category IS NULL OR category IN ("
             "'success','idempotent_skip','retryable',"
-            "'non_retryable_drop_article','non_retryable_keep_article','unknown'"
+            "'non_retryable_drop_article','non_retryable_keep_article',"
+            "'non_retryable_keep_extraction',"
+            "'unknown'"
             ")",
             name="ck_pipeline_events_category",
         ),
