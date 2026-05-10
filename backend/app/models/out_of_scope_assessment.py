@@ -50,6 +50,10 @@ class OutOfScopeAssessment(Base):
     extraction_id: Mapped[int] = mapped_column(
         ForeignKey("article_extractions.id", ondelete="CASCADE"),
     )
+    # PR1 (migration-only) では nullable=True で追加。PR2 で Entity / Repository
+    # 拡張と一緒に NOT NULL 化 + CHECK 制約 (空文字禁止) を締める。
+    translated_title: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    summary: Mapped[str | None] = mapped_column(Text(), nullable=True)
     investor_take: Mapped[str] = mapped_column(Text())
     ai_model: Mapped[str] = mapped_column(String(100))
     rejected_at: Mapped[datetime] = mapped_column(
