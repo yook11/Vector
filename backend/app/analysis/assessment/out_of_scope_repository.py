@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from app.analysis.assessment.domain.out_of_scope import OutOfScopeAssessment
+from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.classifier.schema import OutOfScope
 from app.models.out_of_scope_assessment import (
     OutOfScopeAssessment as OutOfScopeAssessmentORM,
@@ -53,18 +54,17 @@ class OutOfScopeRepository:
         self,
         out_of_scope: OutOfScope,
         *,
-        extraction_id: int,
-        translated_title: str,
-        summary: str,
+        ready: ReadyForAssessment,
         ai_model: str,
     ) -> OutOfScopeAssessment | None:
-        """AI 境界型 + Stage 3 由来のスナップショットを受けて
+        """AI 境界型 + ``ReadyForAssessment`` (Stage 3 由来 snapshot) を受けて
         ``INSERT ... ON CONFLICT (extraction_id) DO NOTHING RETURNING ...`` で
         永続化する。
 
-        ``translated_title`` / ``summary`` は in-scope 経路と対称な point-in-time
-        snapshot で、AI 境界型 ``OutOfScope`` には含まれないため引数経由で受け取る
-        (``InScopeRepository.save`` と signature 完全対称)。
+        ``extraction_id`` / ``translated_title`` / ``summary`` は ``ready`` から取り出す
+        (``InScopeRepository.save`` と signature 完全対称)。``translated_title`` /
+        ``summary`` は in-scope 経路と対称な point-in-time snapshot で、AI 境界型
+        ``OutOfScope`` には含まれないため ``ready`` 経由で受け取る。
 
         Returns:
             成功時: 永続化された ``OutOfScopeAssessment`` Entity (id /
@@ -74,9 +74,9 @@ class OutOfScopeRepository:
         stmt = (
             pg_insert(OutOfScopeAssessmentORM)
             .values(
-                extraction_id=extraction_id,
-                translated_title=translated_title,
-                summary=summary,
+                extraction_id=ready.extraction_id,
+                translated_title=ready.translated_title,
+                summary=ready.summary,
                 investor_take=out_of_scope.investor_take,
                 ai_model=ai_model,
             )
@@ -88,9 +88,9 @@ class OutOfScopeRepository:
             return None
         return OutOfScopeAssessment(
             id=row.id,
-            extraction_id=extraction_id,
-            translated_title=translated_title,
-            summary=summary,
+            extraction_id=ready.extraction_id,
+            translated_title=ready.translated_title,
+            summary=ready.summary,
             investor_take=out_of_scope.investor_take,
             ai_model=ai_model,
             rejected_at=row.rejected_at,

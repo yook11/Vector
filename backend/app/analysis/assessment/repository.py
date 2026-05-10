@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from app.analysis.assessment.domain.in_scope import InScopeAssessment
+from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.errors import AssessmentCategoryMissingError
 from app.analysis.classifier.schema import InScope
 from app.models.category import Category
@@ -68,12 +69,15 @@ class InScopeRepository:
         self,
         in_scope: InScope,
         *,
-        extraction_id: int,
-        translated_title: str,
-        summary: str,
+        ready: ReadyForAssessment,
         ai_model: str,
     ) -> InScopeAssessment | None:
-        """AI 境界型 + Stage 3 由来のスナップショットを受けて永続化する。
+        """AI 境界型 + ``ReadyForAssessment`` (Stage 3 由来 snapshot) を受けて
+        永続化する。
+
+        ``extraction_id`` / ``translated_title`` / ``summary`` は ``ready`` から取り出す
+        (Service 側の詰め替えを廃して ``AssessmentAuditRepository.append_*`` と
+        signature を対称化)。
 
         category slug → id 解決を内部化し、未登録 slug は
         ``AssessmentCategoryMissingError`` で fail-fast (Layer 2-B 業務 invariant)。
@@ -102,9 +106,9 @@ class InScopeRepository:
         stmt = (
             pg_insert(InScopeAssessmentORM)
             .values(
-                extraction_id=extraction_id,
-                translated_title=translated_title,
-                summary=summary,
+                extraction_id=ready.extraction_id,
+                translated_title=ready.translated_title,
+                summary=ready.summary,
                 topic=in_scope.topic,
                 category_id=category_id,
                 investor_take=in_scope.investor_take,
@@ -118,9 +122,9 @@ class InScopeRepository:
             return None
         return InScopeAssessment(
             id=row.id,
-            extraction_id=extraction_id,
-            translated_title=translated_title,
-            summary=summary,
+            extraction_id=ready.extraction_id,
+            translated_title=ready.translated_title,
+            summary=ready.summary,
             topic=in_scope.topic,
             category_id=category_id,
             investor_take=in_scope.investor_take,

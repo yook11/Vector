@@ -134,9 +134,7 @@ class AssessmentService:
 
         saved = await in_scope_repo.save(
             in_scope,
-            extraction_id=ready.extraction_id,
-            translated_title=ready.translated_title,
-            summary=ready.summary,
+            ready=ready,
             ai_model=model_name,
         )
 
@@ -194,9 +192,7 @@ class AssessmentService:
 
         saved = await out_of_scope_repo.save(
             out_of_scope,
-            extraction_id=ready.extraction_id,
-            translated_title=ready.translated_title,
-            summary=ready.summary,
+            ready=ready,
             ai_model=model_name,
         )
 

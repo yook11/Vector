@@ -19,6 +19,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.out_of_scope_repository import OutOfScopeRepository
 from app.analysis.classifier.schema import OutOfScope
 from app.models.article import Article
@@ -67,9 +68,11 @@ async def test_save_persists_snapshot_fields(
 
     saved = await repo.save(
         OutOfScope(investor_take="not relevant"),
-        extraction_id=extraction.id,
-        translated_title=extraction.translated_title,
-        summary=extraction.summary,
+        ready=ReadyForAssessment(
+            extraction_id=extraction.id,
+            translated_title=extraction.translated_title,
+            summary=extraction.summary,
+        ),
         ai_model=_AI_MODEL,
     )
     await db_session.commit()
@@ -110,9 +113,11 @@ async def test_save_returns_none_on_race_lost(
     repo = OutOfScopeRepository(db_session)
     saved = await repo.save(
         OutOfScope(investor_take="loser take"),
-        extraction_id=extraction.id,
-        translated_title="敗者タイトル",
-        summary="敗者要約",
+        ready=ReadyForAssessment(
+            extraction_id=extraction.id,
+            translated_title="敗者タイトル",
+            summary="敗者要約",
+        ),
         ai_model=_AI_MODEL,
     )
     await db_session.commit()
