@@ -3,8 +3,9 @@
 Phase 1 / 2 / 3 リファクタ後 (typed-pipeline-preconditions.md):
 - extract_content は ``ReadyForExtraction`` を受け取り、ExtractedOutcome なら
   ``ReadyForAssessment`` を構築して chain
-- assess_content は ``ReadyForAssessment`` を受け取り、InScopeOutcome
-  なら ``ReadyForEmbedding`` を構築して chain
+- assess_content は ``ReadyForAssessment`` を受け取り、``InScopeAssessment``
+  Entity が返れば ``ReadyForEmbedding`` を構築して chain (``OutOfScopeAssessment``
+  はパイプライン終了)
 - Skipped / AlreadyClassified / AlreadyEmbedded Outcome は廃止 (Ready の
   ``try_advance_from`` で代替)
 """
@@ -205,12 +206,12 @@ class TestExtractContent:
 class TestAssessContent:
     @pytest.mark.asyncio
     async def test_in_scope_chains_embedding_with_ready(self) -> None:
-        """InScopeOutcome → ReadyForEmbedding を構築して embedding chain。"""
-        from app.analysis.assessment.service import InScopeOutcome
+        """InScopeAssessment → ReadyForEmbedding を構築して embedding chain。"""
+        from app.analysis.assessment.domain.in_scope import InScopeAssessment
         from app.analysis.tasks import assess_content
 
         mock_ctx = _make_ctx(classifier=_make_provider_fake())
-        mock_result = InScopeOutcome(assessment=MagicMock())
+        mock_result = MagicMock(spec=InScopeAssessment)
         ready = _make_ready(extraction_id=2)
         ready_emb = _make_ready_emb(analysis_id=100)
 
@@ -234,12 +235,12 @@ class TestAssessContent:
 
     @pytest.mark.asyncio
     async def test_in_scope_does_not_chain_when_advance_returns_none(self) -> None:
-        """InScopeOutcome でも embedding precondition 未充足なら chain しない。"""
-        from app.analysis.assessment.service import InScopeOutcome
+        """InScopeAssessment でも embedding precondition 未充足なら chain しない。"""
+        from app.analysis.assessment.domain.in_scope import InScopeAssessment
         from app.analysis.tasks import assess_content
 
         mock_ctx = _make_ctx(classifier=_make_provider_fake())
-        mock_result = InScopeOutcome(assessment=MagicMock())
+        mock_result = MagicMock(spec=InScopeAssessment)
         ready = _make_ready(extraction_id=2)
 
         with (
@@ -262,12 +263,12 @@ class TestAssessContent:
 
     @pytest.mark.asyncio
     async def test_out_of_scope_does_not_chain(self) -> None:
-        """OutOfScopeOutcome は embedding に進まない。"""
-        from app.analysis.assessment.service import OutOfScopeOutcome
+        """OutOfScopeAssessment は embedding に進まない。"""
+        from app.analysis.assessment.domain.out_of_scope import OutOfScopeAssessment
         from app.analysis.tasks import assess_content
 
         mock_ctx = _make_ctx(classifier=_make_provider_fake())
-        mock_result = OutOfScopeOutcome(assessment=MagicMock())
+        mock_result = MagicMock(spec=OutOfScopeAssessment)
         ready = _make_ready(extraction_id=2)
 
         with (

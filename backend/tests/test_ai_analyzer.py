@@ -25,12 +25,14 @@ from pydantic import SecretStr, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from app.analysis.assessment.domain.ready import ReadyForAssessment
-from app.analysis.assessment.service import (
-    AssessmentService,
-    InScopeOutcome,
-    OutOfScopeOutcome,
+from app.analysis.assessment.domain.in_scope import (
+    InScopeAssessment as InScopeAssessmentEntity,
 )
+from app.analysis.assessment.domain.out_of_scope import (
+    OutOfScopeAssessment as OutOfScopeAssessmentEntity,
+)
+from app.analysis.assessment.domain.ready import ReadyForAssessment
+from app.analysis.assessment.service import AssessmentService
 from app.analysis.classifier.base import BaseClassifier
 from app.analysis.classifier.envelope import AssessmentCall
 from app.analysis.classifier.schema import (
@@ -764,7 +766,7 @@ async def test_classification_persists_topic_and_category(
     )
     svc = AssessmentService(session_factory)
     result = await svc.execute(ready, mock_classifier)
-    assert isinstance(result, InScopeOutcome)
+    assert isinstance(result, InScopeAssessmentEntity)
 
     db_session.expire_all()
     analysis = (
@@ -813,7 +815,7 @@ async def test_classification_persists_rejection_when_out_of_scope(
     )
     svc = AssessmentService(session_factory)
     result = await svc.execute(ready, mock_classifier)
-    assert isinstance(result, OutOfScopeOutcome)
+    assert isinstance(result, OutOfScopeAssessmentEntity)
 
     db_session.expire_all()
     rejection = (

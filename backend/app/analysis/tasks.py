@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Literal
 import structlog
 from taskiq import Context, TaskiqDepends
 
+from app.analysis.assessment.domain.in_scope import InScopeAssessment
 from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.errors import (
     AssessmentRecoverableError,
@@ -19,10 +20,7 @@ from app.analysis.assessment.errors import (
 from app.analysis.assessment.failure_recording import record_assessment_failure
 from app.analysis.assessment.out_of_scope_repository import OutOfScopeRepository
 from app.analysis.assessment.repository import InScopeRepository
-from app.analysis.assessment.service import (
-    AssessmentService,
-    InScopeOutcome,
-)
+from app.analysis.assessment.service import AssessmentService
 from app.analysis.classifier.base import BaseClassifier
 from app.analysis.embedder.base import BaseEmbedder
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
@@ -308,14 +306,13 @@ async def assess_content(
         raise
 
     # Stage 5 (Embedding) へ chain (Pattern A': 上流 Task が下流 Ready を構築)。
-    # InScopeOutcome の assessment から ReadyForEmbedding を構築する。
-    # AlreadyClassified / Skipped Outcome は廃止 (ready 構築時点で
-    # try_advance_from が None で止めるため到達しない)。
-    if isinstance(result, InScopeOutcome):
+    # InScopeAssessment Entity から ReadyForEmbedding を構築する。
+    # OutOfScopeAssessment は chain しない (パイプライン終了)。
+    if isinstance(result, InScopeAssessment):
         async with session_factory() as session:
             embedding_repo = EmbeddingRepository(session)
             ready_emb = await ReadyForEmbedding.try_advance_from(
-                result.assessment,
+                result,
                 embedding_repo,
             )
         if ready_emb is not None:

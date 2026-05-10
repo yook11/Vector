@@ -26,17 +26,15 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.analysis.assessment.domain.in_scope import InScopeAssessment
+from app.analysis.assessment.domain.out_of_scope import OutOfScopeAssessment
 from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.errors import (
     AssessmentCategoryMissingError,
     AssessmentRecoverableError,
     AssessmentTerminalSkipError,
 )
-from app.analysis.assessment.service import (
-    AssessmentService,
-    InScopeOutcome,
-    OutOfScopeOutcome,
-)
+from app.analysis.assessment.service import AssessmentService
 from app.analysis.classifier.base import BaseClassifier
 from app.analysis.classifier.envelope import AssessmentCall
 from app.analysis.classifier.schema import (
@@ -181,7 +179,7 @@ async def test_in_scope_success_records_audit(
 
     svc = AssessmentService(session_factory)
     result = await svc.execute(_ready(extraction), classifier)
-    assert isinstance(result, InScopeOutcome)
+    assert isinstance(result, InScopeAssessment)
 
     events = await _fetch_assessment_events(db_session, article.id)
     assert len(events) == 1
@@ -192,7 +190,7 @@ async def test_in_scope_success_records_audit(
     assert ev.code == "assessed_in_scope"
     payload = ev.payload
     assert payload["extraction_id"] == extraction.id
-    assert payload["assessment_id"] == result.assessment.id
+    assert payload["assessment_id"] == result.id
     assert payload["topic"] == "llm benchmark"
     assert payload["investor_take"] == "bullish"
     assert payload["ai_model"] == _AI_MODEL
@@ -212,7 +210,7 @@ async def test_out_of_scope_success_records_audit(
 
     svc = AssessmentService(session_factory)
     result = await svc.execute(_ready(extraction), classifier)
-    assert isinstance(result, OutOfScopeOutcome)
+    assert isinstance(result, OutOfScopeAssessment)
 
     events = await _fetch_assessment_events(db_session, article.id)
     assert len(events) == 1
@@ -223,15 +221,15 @@ async def test_out_of_scope_success_records_audit(
     assert ev.code == "assessed_out_of_scope"
     payload = ev.payload
     assert payload["extraction_id"] == extraction.id
-    assert payload["assessment_id"] == result.assessment.id
+    assert payload["assessment_id"] == result.id
     # in-scope 系 field は全て None (spec 状態識別表)
     assert payload.get("category_id") is None
     assert payload.get("category_slug") is None
     assert payload.get("topic") is None
     assert payload.get("investor_take") is None
     # in-scope 経路と対称に Stage 3 由来 snapshot が Entity に保持されている
-    assert result.assessment.translated_title == extraction.translated_title
-    assert result.assessment.summary == extraction.summary
+    assert result.translated_title == extraction.translated_title
+    assert result.summary == extraction.summary
 
 
 # ---------------------------------------------------------------------------
@@ -277,7 +275,7 @@ async def test_race_lost_does_not_record_audit(
     ):
         result = await svc.execute(_ready(extraction), classifier)
 
-    assert isinstance(result, InScopeOutcome)
+    assert isinstance(result, InScopeAssessment)
     # race lost 経路では audit 行はゼロ (actor SSoT を assert)
     events = await _fetch_assessment_events(db_session, article.id)
     assert len(events) == 0
@@ -460,6 +458,6 @@ async def test_out_of_scope_race_lost_does_not_record_audit(
     ):
         result = await svc.execute(_ready(extraction), classifier)
 
-    assert isinstance(result, OutOfScopeOutcome)
+    assert isinstance(result, OutOfScopeAssessment)
     events = await _fetch_assessment_events(db_session, article.id)
     assert len(events) == 0
