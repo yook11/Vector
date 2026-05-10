@@ -1,7 +1,7 @@
 from app.observability.domain.event import EventType, Stage
 from app.observability.domain.payloads import (
+    AssessmentPayload,
     BasePipelineEventPayload,
-    ClassificationPayload,
     ContentFetchPayload,
     DispatchPayload,
     EmbeddingPayload,
@@ -11,8 +11,8 @@ from app.observability.domain.payloads import (
 )
 
 __all__ = [
+    "AssessmentPayload",
     "BasePipelineEventPayload",
-    "ClassificationPayload",
     "ContentFetchPayload",
     "DispatchPayload",
     "EmbeddingPayload",

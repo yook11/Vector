@@ -7,8 +7,8 @@
 
 from app.observability.domain.event import EventType, Stage
 from app.observability.domain.payloads import (
+    AssessmentPayload,
     BasePipelineEventPayload,
-    ClassificationPayload,
     ContentFetchPayload,
     DispatchPayload,
     EmbeddingPayload,
@@ -21,8 +21,8 @@ from app.observability.recording import _record_failure_event
 from app.observability.repository import PipelineEventRepository
 
 __all__ = [
+    "AssessmentPayload",
     "BasePipelineEventPayload",
-    "ClassificationPayload",
     "ContentFetchPayload",
     "DispatchPayload",
     "EmbeddingPayload",

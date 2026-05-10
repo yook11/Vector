@@ -127,32 +127,52 @@ class ExtractionPayload(BasePipelineEventPayload):
     entity_count: int | None = None  # A'
 
 
-class ClassificationPayload(BasePipelineEventPayload):
-    """Stage 4 — 入力が小さい (記事サマリ) ので full 保存。
+class AssessmentPayload(BasePipelineEventPayload):
+    """Stage 4 (assessment) — 入力が小さい (記事サマリ) ので full 保存。
 
-    NOTE (PR4): ``kind`` discriminator 値を ``"classification"`` →
-    ``"assessment"`` に rename。class 名は据置で PR5 で ``AssessmentPayload``
-    追加 / 置換予定。discriminator 値だけ先に schema 化することで PR4 deploy 後に
-    新 row が CHECK 制約 (``stage='assessment'`` + ``payload.kind='assessment'``)
-    と一致する状態を作る。
+    PR5: ``ClassificationPayload`` を本クラスに置換 (class 名と discriminator
+    値の一致を回復)。spec ``specs/pipeline-events-stage4-assessment.md``
+    §AssessmentPayload SSoT に準拠 (14 field)。caller (PR6 で Service / Task)
+    はまだいない dead code。
 
-    一時的に「class 名と discriminator 値がズレる」状態になるため、
-    ``tests/observability/domain/test_payloads.py`` で pin test を維持し、PR5
-    で本 class を ``AssessmentPayload`` に置換する際に同 test を一緒に削除する。
+    state representation を持たない (top-level column の ``article_id`` /
+    ``outcome_code`` / ``category`` / ``code`` / ``event_type`` / ``attempt``
+    と二重化禁止)。state は top-level 4 軸 (event_type / outcome_code /
+    category / code) で完全識別可能で、payload は詳細情報のみ。
+
+    状態識別 (spec line 957-967):
+
+    - in-scope 成功: ``assessment_id`` / ``category_id`` / ``category_slug`` /
+      ``topic`` / ``investor_take`` が非 None
+    - out-of-scope 成功: ``assessment_id`` のみ非 None
+      (in-scope 系 4 field はすべて None)
+    - 失敗: Base の ``error_message`` / ``error_chain`` (+ 該当時 ``ai_raw_response``)
     """
 
     kind: Literal["assessment"] = "assessment"
-    ai_model: str | None = None  # S
-    prompt_version: str | None = None  # A: call signature hash (Stage 3 と同方式)
 
-    # 入力 (4KB hard limit、full)
-    input_text: str | None = None  # S: full
-    input_text_length: int | None = None  # A'
+    # Stage 4 固有 identifier (top-level column が無いため payload で保持)
+    extraction_id: int | None = None
 
-    # 出力
-    ai_raw_response: str | None = None  # S: 2KB
-    raw_category: str | None = None  # S
-    raw_topic: str | None = None  # S
+    # A 級: メタデータ
+    ai_model: str | None = None  # 使用 classifier の model 名
+    prompt_version: str | None = None  # prompt+model+config の SHA-256 prefix 8
+
+    # A' / S 級: AI 入出力 (Stage 4 = input full 4KB + raw 2KB)
+    input_text: str | None = None  # 入力 summary 全文 (4KB 上限)
+    input_text_length: int | None = None  # truncate 検知用
+    ai_raw_response: str | None = None  # AI raw JSON response (2KB 上限)
+
+    # A 級: AI 応答の生メタデータ (validation 前、failure forensics 用)
+    raw_category: str | None = None  # AI が返した未検証 category slug
+    raw_topic: str | None = None  # AI が返した topic 文字列
+
+    # A 級: 成功時の永続化結果ミラー (failure 時は None)
+    assessment_id: int | None = None
+    category_id: int | None = None
+    category_slug: str | None = None  # category catalog 確認後の slug
+    topic: str | None = None  # 永続化された TopicName (str 化)
+    investor_take: str | None = None  # in-scope 成功のときのみ非 None
 
 
 class EmbeddingPayload(BasePipelineEventPayload):
@@ -172,7 +192,7 @@ PipelineEventPayload = Annotated[
     | SourceFetchPayload
     | ContentFetchPayload
     | ExtractionPayload
-    | ClassificationPayload
+    | AssessmentPayload
     | EmbeddingPayload,
     Field(discriminator="kind"),
 ]
