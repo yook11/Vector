@@ -116,7 +116,7 @@ async def backfill_extractions(ctx: Context = TaskiqDepends()) -> None:
     from app.analysis.extraction.domain.ready import ReadyForExtraction
     from app.analysis.extraction.noise_repository import NoiseRepository
     from app.analysis.extraction.repository import ExtractionRepository
-    from app.analysis.tasks import extract_content
+    from app.analysis.extraction.tasks import extract_content
     from app.models.article import Article
 
     requeued = 0
@@ -215,8 +215,8 @@ async def backfill_classifications(ctx: Context = TaskiqDepends()) -> None:
     from app.analysis.assessment.domain.ready import ReadyForAssessment
     from app.analysis.assessment.out_of_scope_repository import OutOfScopeRepository
     from app.analysis.assessment.repository import InScopeRepository
+    from app.analysis.assessment.tasks import assess_content
     from app.analysis.extraction.repository import ExtractionRepository
-    from app.analysis.tasks import assess_content
 
     requeued = 0
     skipped = 0
@@ -310,7 +310,7 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
     from app.analysis.assessment.repository import InScopeRepository
     from app.analysis.embedding.domain.ready import ReadyForEmbedding
     from app.analysis.embedding.repository import EmbeddingRepository
-    from app.analysis.tasks import generate_embedding
+    from app.analysis.embedding.tasks import generate_embedding
 
     requeued = 0
     skipped = 0

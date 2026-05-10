@@ -137,7 +137,7 @@ async def ingest_source(
     from app.analysis.extraction.domain.ready import ReadyForExtraction
     from app.analysis.extraction.noise_repository import NoiseRepository
     from app.analysis.extraction.repository import ExtractionRepository
-    from app.analysis.tasks import extract_content
+    from app.analysis.extraction.tasks import extract_content
     from app.collection.ingestion.ingestion_service import IngestionService
     from app.collection.ingestion.strategy import FETCHERS
 
@@ -275,7 +275,7 @@ async def extract_html_body(
     from app.analysis.extraction.domain.ready import ReadyForExtraction
     from app.analysis.extraction.noise_repository import NoiseRepository
     from app.analysis.extraction.repository import ExtractionRepository
-    from app.analysis.tasks import extract_content
+    from app.analysis.extraction.tasks import extract_content
     from app.collection.extraction.content_fetch_service import (
         ConflictLost,
         ContentFetched,

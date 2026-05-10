@@ -191,7 +191,8 @@ services:
     command: >
       taskiq worker
       app.brokers:broker_analysis
-      app.analysis.tasks
+      app.analysis.extraction.tasks
+      app.analysis.assessment.tasks
       --ack-type when_executed
 
   worker-embedding:
@@ -200,7 +201,7 @@ services:
     command: >
       taskiq worker
       app.brokers:broker_embedding
-      app.analysis.tasks
+      app.analysis.embedding.tasks
       --ack-type when_executed
 
   worker-insights:

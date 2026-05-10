@@ -26,8 +26,8 @@ from sqlmodel import select
 from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.out_of_scope_repository import OutOfScopeRepository
 from app.analysis.assessment.repository import InScopeRepository
+from app.analysis.assessment.tasks import assess_content
 from app.analysis.extraction.repository import ExtractionRepository
-from app.analysis.tasks import assess_content
 from app.brokers import broker_analysis
 from app.db import engine
 from app.models.article_extraction import ArticleExtraction

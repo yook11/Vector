@@ -65,7 +65,7 @@ async def test_extractions_empty_resets_circuit_and_does_not_dispatch() -> None:
             new=AsyncMock(return_value=0),
         ) as circuit,
         patch("app.maintenance.tasks.consume_daily_budget", new=AsyncMock()) as budget,
-        patch("app.analysis.tasks.extract_content") as extract_task,
+        patch("app.analysis.extraction.tasks.extract_content") as extract_task,
     ):
         await tasks.backfill_extractions(ctx=ctx)
 
@@ -101,7 +101,7 @@ async def test_extractions_circuit_open_short_circuits() -> None:
             new=AsyncMock(return_value=tasks.CIRCUIT_THRESHOLD),
         ),
         patch("app.maintenance.tasks.consume_daily_budget", new=AsyncMock()) as budget,
-        patch("app.analysis.tasks.extract_content") as extract_task,
+        patch("app.analysis.extraction.tasks.extract_content") as extract_task,
     ):
         await tasks.backfill_extractions(ctx=ctx)
 
@@ -139,7 +139,7 @@ async def test_extractions_budget_exhausted_skips_dispatch() -> None:
             "app.maintenance.tasks.consume_daily_budget",
             new=AsyncMock(return_value=0),
         ),
-        patch("app.analysis.tasks.extract_content") as extract_task,
+        patch("app.analysis.extraction.tasks.extract_content") as extract_task,
     ):
         await tasks.backfill_extractions(ctx=ctx)
 
@@ -191,7 +191,7 @@ async def test_extractions_continues_when_one_kiq_fails() -> None:
             "app.analysis.extraction.domain.ready.ReadyForExtraction.try_advance_from",
             new=AsyncMock(return_value=ready),
         ),
-        patch("app.analysis.tasks.extract_content", extract_task),
+        patch("app.analysis.extraction.tasks.extract_content", extract_task),
     ):
         await tasks.backfill_extractions(ctx=ctx)
 
@@ -233,7 +233,7 @@ async def test_extractions_skips_when_article_missing() -> None:
             "app.maintenance.tasks.consume_daily_budget",
             new=AsyncMock(return_value=1),
         ),
-        patch("app.analysis.tasks.extract_content", extract_task),
+        patch("app.analysis.extraction.tasks.extract_content", extract_task),
     ):
         await tasks.backfill_extractions(ctx=ctx)
 
@@ -275,7 +275,7 @@ async def test_extractions_skips_when_advance_returns_none() -> None:
             "app.analysis.extraction.domain.ready.ReadyForExtraction.try_advance_from",
             new=AsyncMock(return_value=None),
         ),
-        patch("app.analysis.tasks.extract_content", extract_task),
+        patch("app.analysis.extraction.tasks.extract_content", extract_task),
     ):
         await tasks.backfill_extractions(ctx=ctx)
 

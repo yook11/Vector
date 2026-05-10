@@ -44,7 +44,7 @@ _SERVICE_EXECUTE = (
 _READY_TRY_ADVANCE = (
     "app.analysis.extraction.domain.ready.ReadyForExtraction.try_advance_from"
 )
-_EXTRACT_CONTENT_KIQ = "app.analysis.tasks.extract_content.kiq"
+_EXTRACT_CONTENT_KIQ = "app.analysis.extraction.tasks.extract_content.kiq"
 
 
 def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> MagicMock:

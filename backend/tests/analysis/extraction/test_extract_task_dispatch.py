@@ -74,14 +74,16 @@ async def test_drop_article_calls_mark_unprocessable_with_correct_code(
     exc_cls: type[Exception], expected_code: str
 ) -> None:
     """Drop 系 2 種は mark_article_unprocessable に dispatch される。"""
-    from app.analysis.tasks import extract_content
+    from app.analysis.extraction.tasks import extract_content
 
     ctx = _make_ctx()
     exc = exc_cls("boom")
 
     with (
-        patch("app.analysis.tasks._build_limiters", return_value=(None, None)),
-        patch("app.analysis.tasks.ExtractionService") as mock_svc_cls,
+        patch(
+            "app.analysis.extraction.tasks._build_limiters", return_value=(None, None)
+        ),
+        patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
     ):
         svc_instance = mock_svc_cls.return_value
         svc_instance.execute = AsyncMock(side_effect=exc)
@@ -113,14 +115,16 @@ async def test_keep_article_calls_audit_extraction_failure(
     exc_cls: type[Exception],
 ) -> None:
     """NonRetryableKeepArticle 系 (Layer 2-A の 3 種) は audit のみで記事保持。"""
-    from app.analysis.tasks import extract_content
+    from app.analysis.extraction.tasks import extract_content
 
     ctx = _make_ctx()
     with (
-        patch("app.analysis.tasks._build_limiters", return_value=(None, None)),
-        patch("app.analysis.tasks.ExtractionService") as mock_svc_cls,
         patch(
-            "app.analysis.tasks.record_extraction_failure",
+            "app.analysis.extraction.tasks._build_limiters", return_value=(None, None)
+        ),
+        patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
+        patch(
+            "app.analysis.extraction.tasks.record_extraction_failure",
             new=AsyncMock(),
         ) as mock_audit,
     ):
@@ -152,13 +156,15 @@ async def test_retryable_inline_true_raises_when_not_last_attempt(
     exc_cls: type[Exception],
 ) -> None:
     """INLINE_RETRY=True の RetryableError は not is_last_attempt なら raise する。"""
-    from app.analysis.tasks import extract_content
+    from app.analysis.extraction.tasks import extract_content
 
     ctx = _make_ctx(retry_count=0, max_retries=1)  # retry 余地あり
 
     with (
-        patch("app.analysis.tasks._build_limiters", return_value=(None, None)),
-        patch("app.analysis.tasks.ExtractionService") as mock_svc_cls,
+        patch(
+            "app.analysis.extraction.tasks._build_limiters", return_value=(None, None)
+        ),
+        patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
     ):
         mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc_cls("boom"))
         with pytest.raises(exc_cls):
@@ -168,15 +174,17 @@ async def test_retryable_inline_true_raises_when_not_last_attempt(
 @pytest.mark.asyncio
 async def test_retryable_inline_true_audits_on_last_attempt() -> None:
     """INLINE_RETRY=True でも is_last_attempt なら audit + return (cron 救済委譲)。"""
-    from app.analysis.tasks import extract_content
+    from app.analysis.extraction.tasks import extract_content
 
     ctx = _make_ctx(retry_count=1, max_retries=1)  # 最終試行
 
     with (
-        patch("app.analysis.tasks._build_limiters", return_value=(None, None)),
-        patch("app.analysis.tasks.ExtractionService") as mock_svc_cls,
         patch(
-            "app.analysis.tasks.record_extraction_failure",
+            "app.analysis.extraction.tasks._build_limiters", return_value=(None, None)
+        ),
+        patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
+        patch(
+            "app.analysis.extraction.tasks.record_extraction_failure",
             new=AsyncMock(),
         ) as mock_audit,
     ):
@@ -204,15 +212,17 @@ async def test_retryable_inline_false_audits_immediately(
     exc_cls: type[Exception],
 ) -> None:
     """INLINE_RETRY=False の RetryableError は retry せず即 audit + return。"""
-    from app.analysis.tasks import extract_content
+    from app.analysis.extraction.tasks import extract_content
 
     ctx = _make_ctx(retry_count=0, max_retries=1)  # retry 余地ありでも raise しない
 
     with (
-        patch("app.analysis.tasks._build_limiters", return_value=(None, None)),
-        patch("app.analysis.tasks.ExtractionService") as mock_svc_cls,
         patch(
-            "app.analysis.tasks.record_extraction_failure",
+            "app.analysis.extraction.tasks._build_limiters", return_value=(None, None)
+        ),
+        patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
+        patch(
+            "app.analysis.extraction.tasks.record_extraction_failure",
             new=AsyncMock(),
         ) as mock_audit,
     ):
@@ -229,14 +239,16 @@ async def test_retryable_inline_false_audits_immediately(
 @pytest.mark.asyncio
 async def test_unexpected_exception_falls_through_to_catch_all() -> None:
     """Layer 1 marker いずれにも該当しない exc は catch-all で audit + return。"""
-    from app.analysis.tasks import extract_content
+    from app.analysis.extraction.tasks import extract_content
 
     ctx = _make_ctx()
     with (
-        patch("app.analysis.tasks._build_limiters", return_value=(None, None)),
-        patch("app.analysis.tasks.ExtractionService") as mock_svc_cls,
         patch(
-            "app.analysis.tasks.record_extraction_failure",
+            "app.analysis.extraction.tasks._build_limiters", return_value=(None, None)
+        ),
+        patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
+        patch(
+            "app.analysis.extraction.tasks.record_extraction_failure",
             new=AsyncMock(),
         ) as mock_audit,
     ):
