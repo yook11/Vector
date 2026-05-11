@@ -111,24 +111,21 @@ class AssessmentService:
             match call:
                 case AssessmentCall(result=InScope()):
                     # `call` は ``AssessmentCall[InScope]`` に narrow される
-                    saved = await AssessmentRepository(session).save_in_scope(
+                    assessment_id = await AssessmentRepository(session).save_in_scope(
                         call, ready=ready
                     )
                     # race lost — audit / commit は不要 (勝者 task が audit を焼く、
                     # 二重記録回避)。reconcile cron に救済を委譲。
-                    if saved is None:
+                    if assessment_id is None:
                         logger.info(
                             "assessment_in_scope_concurrent_write",
                             extraction_id=extraction_id,
                         )
                         return None
-                    assessment_id, category_id = saved
                     # winner — 業務 INSERT + audit を同一 tx で commit
                     await AssessmentAuditRepository(session).append_in_scope(
                         ready=ready,
                         call=call,
-                        assessment_id=assessment_id,
-                        category_id=category_id,
                     )
                     await session.commit()
                     logger.info(
@@ -154,7 +151,6 @@ class AssessmentService:
                     await AssessmentAuditRepository(session).append_out_of_scope(
                         ready=ready,
                         call=call,
-                        assessment_id=assessment_id,
                     )
                     await session.commit()
                     logger.info(

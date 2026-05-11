@@ -81,20 +81,19 @@ class AssessmentAuditRepository:
         *,
         ready: ReadyForAssessment,
         call: AssessmentCall[InScope],
-        assessment_id: int,
-        category_id: int,
     ) -> None:
         """in-scope 成功 audit を 1 行記録する。
 
-        Service が業務 INSERT と同 tx で呼ぶ。``AssessmentRepository.save_in_scope``
-        が返す ``(assessment_id, category_id)`` と Stage 4 で起きた全事実を抱える
-        ``call`` envelope を受け、Domain Entity を介さない
+        Service が業務 INSERT と同 tx で呼ぶ。Stage 4 で起きた全事実を抱える
+        ``call`` envelope のみを受け、Domain Entity を介さない
         (`feedback_bc_boundary_guarantees_downstream`)。
 
+        audit は witness — 事後に採番された ``assessment_id`` / FK 解決後の
+        ``category_id`` は事実ではなく操作的副産物なので payload に持たない
+        (`specs/backlog/audit-payload-fact-purification.md`)。``extraction_id``
+        (自然キー) と ``category_slug`` (検証後 slug) で 1-hop join 可能。
+
         Args:
-            assessment_id: ``save_in_scope`` が返した新規 row の id
-            category_id: ``save_in_scope`` が内部解決した FK 値 (slug 経由の
-                catalog lookup 結果)
             call: ``AssessmentCall[InScope]`` envelope。``call.result``
                 (= ``InScope``) から ``category.value`` (catalog 確認後 slug) /
                 ``topic`` / ``investor_take`` を、``call.model_name`` /
@@ -115,8 +114,6 @@ class AssessmentAuditRepository:
             ai_raw_response=_limited_str(call.raw_response, _AI_RAW_RESPONSE_LIMIT),
             raw_category=call.raw_category,
             raw_topic=call.raw_topic,
-            assessment_id=assessment_id,
-            category_id=category_id,
             category_slug=in_scope.category.value,
             topic=str(in_scope.topic),
             investor_take=in_scope.investor_take,
@@ -136,18 +133,20 @@ class AssessmentAuditRepository:
         *,
         ready: ReadyForAssessment,
         call: AssessmentCall[OutOfScope],
-        assessment_id: int,
     ) -> None:
         """out-of-scope 成功 audit を 1 行記録する。
 
         PR #447 対称化以後、``out_of_scope_assessments`` テーブルも
         ``translated_title`` / ``summary`` / ``investor_take`` を保持する。
         audit payload もそれに追従し ``investor_take`` を焼く (本体 DB と
-        audit の情報量を一致させる)。``category_id`` / ``category_slug`` /
-        ``topic`` は in-scope 固有のため out-of-scope では None。
+        audit の情報量を一致させる)。``category_slug`` / ``topic`` は in-scope
+        固有のため out-of-scope では None。
+
+        audit は witness — 事後に採番された ``assessment_id`` は事実ではない
+        (`specs/backlog/audit-payload-fact-purification.md`)。``extraction_id``
+        (自然キー) で 1-hop join 可能。
 
         Args:
-            assessment_id: ``save_out_of_scope`` が返した新規 row の id
             call: ``AssessmentCall[OutOfScope]`` envelope。``call.result``
                 (= ``OutOfScope``) から ``investor_take`` を、``call.model_name``
                 / ``call.prompt_version`` / ``call.raw_*`` を audit 用に直接読む。
@@ -165,9 +164,8 @@ class AssessmentAuditRepository:
             ai_raw_response=_limited_str(call.raw_response, _AI_RAW_RESPONSE_LIMIT),
             raw_category=call.raw_category,
             raw_topic=call.raw_topic,
-            assessment_id=assessment_id,
             investor_take=out_of_scope.investor_take,
-            # category_id / category_slug / topic は in-scope 固有のため None
+            # category_slug / topic は in-scope 固有のため None
         )
         await self._events.append(
             stage=Stage.ASSESSMENT,

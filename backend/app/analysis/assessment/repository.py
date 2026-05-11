@@ -3,12 +3,14 @@
 責務:
 - ``exists_in_scope`` / ``exists_out_of_scope``: ``ReadyForAssessment.try_advance_from``
   の precondition 判定用 cheap exists (extraction_id 単位)
-- ``save_in_scope``: AI 境界型 ``InScope`` を内包する ``AssessmentCall[InScope]``
-  を受け、``INSERT ... ON CONFLICT (extraction_id) DO NOTHING RETURNING ...``
-  で永続化する。category slug → id 解決を内部に閉じ、未登録 slug は
-  ``AssessmentCategoryMissingError`` で fail-fast。
-- ``save_out_of_scope``: ``AssessmentCall[OutOfScope]`` を受けて同様に永続化する。
-  race 敗北時は ``None`` を返し、Service が短絡する (再収集は reconcile cron が担う)。
+- ``save_in_scope`` / ``save_out_of_scope``: AI 境界型 ``InScope`` / ``OutOfScope``
+  を内包する ``AssessmentCall`` を受け、
+  ``INSERT ... ON CONFLICT (extraction_id) DO NOTHING RETURNING id`` で
+  永続化する。両 method とも DB 採番 ``id`` (``int | None``) を返し、race 敗北時
+  (UNIQUE 違反) は ``None``。in-scope は category slug → id 解決を内部に閉じ、
+  未登録 slug は ``AssessmentCategoryMissingError`` で fail-fast。
+  Service は ``id`` のみで race 検出 + Stage 5 chain を行う (再収集は
+  reconcile cron が担う)。
 
 設計方針:
 - in-scope / out-of-scope は **同じ Stage 4 永続化責務** のため、1 class に同居させて
@@ -71,7 +73,7 @@ class AssessmentRepository:
         call: AssessmentCall[InScope],
         *,
         ready: ReadyForAssessment,
-    ) -> tuple[int, int] | None:
+    ) -> int | None:
         """``AssessmentCall[InScope]`` を受けて in-scope assessment を永続化する。
 
         ``call.result`` / ``call.model_name`` から永続化に必要な値を直接取り出し、
@@ -82,11 +84,12 @@ class AssessmentRepository:
 
         category slug → id 解決を内部化し、未登録 slug は
         ``AssessmentCategoryMissingError`` で fail-fast (Layer 2-B 業務 invariant)。
-        commit は呼び出し側 (Service) が行う。
+        解決後の ``category_id`` は ``in_scope_assessments.category_id`` カラムに
+        INSERT するための内部使用のみで、戻り値としては外に出さない (`save_out_of_scope`
+        と完全対称)。commit は呼び出し側 (Service) が行う。
 
         Returns:
-            成功時: ``(id, category_id)`` tuple (id は DB 採番、category_id は
-            内部解決した FK 値) — audit 焼付と Stage 5 chain に必要な最小情報
+            成功時: DB が採番した ``id``
             race 敗北時 (期待した extraction_id への UNIQUE 違反): ``None``
             (敗者は audit を焼かず短絡する — 勝者 task が自身の audit を焼く、
             audit actor SSoT 維持)
@@ -118,7 +121,7 @@ class AssessmentRepository:
         row = (await self._session.execute(stmt)).first()
         if row is None:
             return None
-        return row.id, category_id
+        return row.id
 
     async def save_out_of_scope(
         self,

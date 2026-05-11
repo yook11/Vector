@@ -194,7 +194,6 @@ async def test_in_scope_success_records_audit(
     assert ev.code == "assessed_in_scope"
     payload = ev.payload
     assert payload["extraction_id"] == extraction.id
-    assert payload["assessment_id"] == result
     assert payload["topic"] == "llm benchmark"
     assert payload["investor_take"] == "bullish"
     assert payload["ai_model"] == _AI_MODEL
@@ -226,11 +225,9 @@ async def test_out_of_scope_success_records_audit(
     assert ev.code == "assessed_out_of_scope"
     payload = ev.payload
     assert payload["extraction_id"] == extraction.id
-    assert payload["assessment_id"] is not None
     # PR #447 対称化追従: investor_take は本体 DB と一致 (非 None)
     assert payload.get("investor_take") == "not relevant"
-    # in-scope 固有 field のみ None (category_id / category_slug / topic)
-    assert payload.get("category_id") is None
+    # in-scope 固有 field のみ None (category_slug / topic)
     assert payload.get("category_slug") is None
     assert payload.get("topic") is None
     # 本体 DB (out_of_scope_assessments) に Stage 3 由来 snapshot が永続化されている

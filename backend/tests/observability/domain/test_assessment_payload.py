@@ -75,7 +75,7 @@ def test_frozen_immutable() -> None:
 def test_state_fields_optional_default_none() -> None:
     """``kind`` 以外の全 field が default ``None`` (state 未指定構築可)。"""
     payload = AssessmentPayload()
-    # 14 field (kind 除く) すべて None
+    # 12 field (kind 除く) すべて None
     assert payload.source_name is None
     assert payload.error_message is None
     assert payload.error_chain is None
@@ -87,8 +87,6 @@ def test_state_fields_optional_default_none() -> None:
     assert payload.ai_raw_response is None
     assert payload.raw_category is None
     assert payload.raw_topic is None
-    assert payload.assessment_id is None
-    assert payload.category_id is None
     assert payload.category_slug is None
     assert payload.topic is None
     assert payload.investor_take is None
@@ -106,14 +104,11 @@ def test_full_in_scope_payload_construction() -> None:
         ai_raw_response='{"category":"ai"}',
         raw_category="ai",
         raw_topic="LLM benchmark",
-        assessment_id=100,
-        category_id=1,
         category_slug="ai",
         topic="LLM benchmark",
         investor_take="bullish for inference vendors",
     )
     assert payload.extraction_id == 42
-    assert payload.assessment_id == 100
     assert payload.category_slug == "ai"
     assert payload.investor_take == "bullish for inference vendors"
 
@@ -139,8 +134,6 @@ def test_serialization_roundtrip() -> None:
         source_name="VentureBeat",
         extraction_id=42,
         ai_model="gemini-2.5-pro",
-        assessment_id=100,
-        category_id=1,
         category_slug="ai",
         topic="LLM benchmark",
         investor_take="bullish",

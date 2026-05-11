@@ -590,8 +590,10 @@ class AssessmentCall:
 | `ai_raw_response` | `call.raw_response` |
 | `raw_category` | `call.raw_category` |
 | `raw_topic` | `call.raw_topic` |
-| `category_id` / `category_slug` / `topic` / `investor_take` | `call.result` (`InScope` の場合のみ) |
-| `assessment_id` | save 後の Entity id (Service が `in_scope_repo.save()` 経由で取得) |
+| `category_slug` / `topic` / `investor_take` | `call.result` (`InScope` の場合のみ) |
+| `investor_take` (OutOfScope) | `call.result.investor_take` (`OutOfScope` の場合) |
+
+`assessment_id` / `category_id` は payload に持たない (audit は witness、事後採番の PK や FK 解決結果は事実ではない — `specs/backlog/audit-payload-fact-purification.md`)。
 
 ---
 
@@ -937,12 +939,14 @@ class AssessmentPayload(BasePipelineEventPayload):
     raw_category: str | None = None          # AI が返した未検証 category slug
     raw_topic: str | None = None             # AI が返した topic 文字列
 
-    # ─── A 級: 成功時の永続化結果ミラー (failure 時は None) ─────
-    assessment_id: int | None = None
-    category_id: int | None = None
+    # ─── A 級: 成功時の AI 応答 (検証通過後の値、failure 時は None) ─────
+    # audit は witness — 事後採番された assessment_id や FK 解決後の category_id は
+    # 事実ではないため payload に持たない (詳細は
+    # specs/backlog/audit-payload-fact-purification.md)。
+    # 1-hop join は extraction_id (自然キー) / category_slug 経由で可能。
     category_slug: str | None = None         # category catalog 確認後の slug
     topic: str | None = None                 # 永続化された TopicName
-    investor_take: str | None = None         # in-scope のときのみ
+    investor_take: str | None = None         # in-scope / out-of-scope の AI コメント
 ```
 
 ### Base からの継承 field
@@ -958,8 +962,8 @@ class AssessmentPayload(BasePipelineEventPayload):
 
 | 状態 | event_type | outcome_code | category | code | payload で non-None になる主 field |
 |---|---|---|---|---|---|
-| in-scope 成功 | `succeeded` | `assessed_in_scope` | `success` | `assessed_in_scope` | `assessment_id` / `category_id` / `category_slug` / `topic` / `investor_take` |
-| out-of-scope 成功 | `succeeded` | `assessed_out_of_scope` | `success` | `assessed_out_of_scope` | `assessment_id` / `investor_take` (PR #447 対称化追従。`category_id` / `category_slug` / `topic` は in-scope 固有のため None) |
+| in-scope 成功 | `succeeded` | `assessed_in_scope` | `success` | `assessed_in_scope` | `category_slug` / `topic` / `investor_take` |
+| out-of-scope 成功 | `succeeded` | `assessed_out_of_scope` | `success` | `assessed_out_of_scope` | `investor_take` (PR #447 対称化追従。`category_slug` / `topic` は in-scope 固有のため None) |
 | 失敗 (Layer 2-A) | `failed` | `ai_error_*` | `retryable` / `non_retryable_keep_extraction` | `ai_error_*` | `error_message` / `error_chain` (Base) + `ai_raw_response` (該当時) |
 | 失敗 (Layer 2-B) | `failed` | `assessment_*` | `retryable` / `non_retryable_keep_extraction` | `assessment_*` | 同上 |
 | 失敗 (catch-all) | `failed` | `unexpected_error` | `unknown` | `unexpected_error` | 同上 |
@@ -972,7 +976,7 @@ class AssessmentPayload(BasePipelineEventPayload):
 |---|---|---|
 | `kind` | `"extraction"` | `"assessment"` |
 | 識別子 | (top-level の `article_id` のみで十分) | `extraction_id` を payload に保持 (top-level 無し) |
-| 結果ミラー field | `entity_count` | `assessment_id` / `category_id` / `category_slug` / `topic` / `investor_take` |
+| 成功時の AI 応答 field | `entity_count` (統計、事実) | `category_slug` / `topic` / `investor_take` (検証通過後の AI 出力) |
 | 入力捕捉 | `input_content_length` / `input_content_head` (2KB) / `input_content_hash` | `input_text` (4KB full) / `input_text_length` (ADR §AI raw I/O 捕捉ポリシーの Stage 別差分) |
 
 ---
@@ -987,8 +991,8 @@ tx 境界は呼出側が握る (本 class は `commit` を呼ばない)。
 
 | method | 用途 | category | code | 呼ばれる場所 |
 |---|---|---|---|---|
-| `append_in_scope(*, ready, envelope, assessment, in_scope, ai_model)` | in-scope 成功 | `success` | Repository 内 hardcode (`"assessed_in_scope"`) | Service `_handle_in_scope` 内、業務 INSERT と同 tx |
-| `append_out_of_scope(*, ready, envelope, assessment, ai_model)` | out-of-scope 成功 | `success` | Repository 内 hardcode (`"assessed_out_of_scope"`) | Service `_handle_out_of_scope` 内、同 tx |
+| `append_in_scope(*, ready, call)` | in-scope 成功 | `success` | Repository 内 hardcode (`"assessed_in_scope"`) | Service in-scope arm、業務 INSERT と同 tx |
+| `append_out_of_scope(*, ready, call)` | out-of-scope 成功 | `success` | Repository 内 hardcode (`"assessed_out_of_scope"`) | Service out-of-scope arm、同 tx |
 | `append_failure(*, ready, exc, attempt)` | Retryable / NonRetryableKeep / catch-all | exc から自動導出 | exc から自動導出 | Task 層 `record_assessment_failure` 経由、別 session 別 tx |
 
 → Stage 3 の 4 method (extracted/noise/drop_article/failure) と比較して **Drop method なし** が唯一の構造差分。
@@ -1005,35 +1009,31 @@ class AssessmentAuditRepository:
         self,
         *,
         ready: ReadyForAssessment,
-        envelope: AssessmentCall,    # assessor `_call_once` 戻り値
-        assessment: InScopeAssessment,
-        in_scope: InScope,           # AI 境界型 — category.value を slug に焼く
-        ai_model: str,
+        call: AssessmentCall[InScope],   # AI 境界事実を抱える envelope
     ) -> None:
-        source_name = await self._resolve_source_name(ready.article_id)
+        in_scope = call.result
+        article_id = await self._article_id_for(ready.extraction_id)
+        source_name = await self._resolve_source_name(ready.extraction_id)
         payload = AssessmentPayload(
-            kind="assessment",
             source_name=source_name,
             extraction_id=ready.extraction_id,
-            ai_model=ai_model,
-            prompt_version=envelope.prompt_version,
-            input_text=ready.summary[:_INPUT_TEXT_LIMIT],
+            ai_model=call.model_name,
+            prompt_version=call.prompt_version,
+            input_text=ready.summary[:_INPUT_TEXT_LIMIT] or None,
             input_text_length=len(ready.summary),
-            ai_raw_response=envelope.raw_response[:_AI_RAW_RESPONSE_LIMIT],
-            raw_category=envelope.raw_category,
-            raw_topic=envelope.raw_topic,
-            assessment_id=assessment.id,
-            category_id=assessment.category_id,
+            ai_raw_response=_limited_str(call.raw_response, _AI_RAW_RESPONSE_LIMIT),
+            raw_category=call.raw_category,
+            raw_topic=call.raw_topic,
             category_slug=in_scope.category.value,  # catalog 確認後 slug
-            topic=str(assessment.topic),
-            investor_take=assessment.investor_take,
+            topic=str(in_scope.topic),
+            investor_take=in_scope.investor_take,
         )
         await self._events.append(
             stage=Stage.ASSESSMENT,
             event_type=EventType.SUCCEEDED,
             outcome_code=_IN_SCOPE_OUTCOME_CODE,  # Repository 内 hardcode
             payload=payload,
-            article_id=ready.article_id,
+            article_id=article_id,
             category=Layer1Category.SUCCESS,
             code=_IN_SCOPE_OUTCOME_CODE,
         )
@@ -1042,16 +1042,15 @@ class AssessmentAuditRepository:
         self,
         *,
         ready: ReadyForAssessment,
-        envelope: AssessmentCall,
-        assessment: OutOfScopeAssessment,
-        ai_model: str,
+        call: AssessmentCall[OutOfScope],
     ) -> None:
-        # in-scope と同型、ただし category_id / category_slug / topic は None。
+        # in-scope と同型、ただし category_slug / topic は None。
         # PR #447 対称化追従で investor_take は本体 DB と一致させて非 None で焼く。
+        # audit は witness — assessment_id (事後採番 PK) は payload に持たない。
+        out_of_scope = call.result
         payload = AssessmentPayload(
             ...,
-            assessment_id=assessment.id,
-            investor_take=assessment.investor_take,
+            investor_take=out_of_scope.investor_take,
         )
         await self._events.append(
             ...,

@@ -140,18 +140,21 @@ class AssessmentPayload(BasePipelineEventPayload):
     と二重化禁止)。state は top-level 4 軸 (event_type / outcome_code /
     category / code) で完全識別可能で、payload は詳細情報のみ。
 
-    状態識別 (spec line 957-967):
+    audit は witness — AI 境界で起きた事実を証言する。事後に採番された PK や
+    その時点で偶然 FK が指していた id は事実ではなく操作的副産物なので保持しない
+    (詳細は ``specs/backlog/audit-payload-fact-purification.md``)。
 
-    - in-scope 成功: ``assessment_id`` / ``category_id`` / ``category_slug`` /
-      ``topic`` / ``investor_take`` が非 None
-    - out-of-scope 成功: ``assessment_id`` のみ非 None
-      (in-scope 系 4 field はすべて None)
+    状態識別:
+
+    - in-scope 成功: ``category_slug`` / ``topic`` / ``investor_take`` が非 None
+    - out-of-scope 成功: ``investor_take`` のみ非 None
+      (in-scope 系 ``category_slug`` / ``topic`` は None)
     - 失敗: Base の ``error_message`` / ``error_chain`` (+ 該当時 ``ai_raw_response``)
     """
 
     kind: Literal["assessment"] = "assessment"
 
-    # Stage 4 固有 identifier (top-level column が無いため payload で保持)
+    # Stage 4 固有 identifier (top-level column が無いため payload で保持、自然キー)
     extraction_id: int | None = None
 
     # A 級: メタデータ
@@ -167,12 +170,10 @@ class AssessmentPayload(BasePipelineEventPayload):
     raw_category: str | None = None  # AI が返した未検証 category slug
     raw_topic: str | None = None  # AI が返した topic 文字列
 
-    # A 級: 成功時の永続化結果ミラー (failure 時は None)
-    assessment_id: int | None = None
-    category_id: int | None = None
+    # A 級: 成功時の AI 応答 (検証通過後の値、失敗時は None)
     category_slug: str | None = None  # category catalog 確認後の slug
     topic: str | None = None  # 永続化された TopicName (str 化)
-    investor_take: str | None = None  # in-scope 成功のときのみ非 None
+    investor_take: str | None = None  # in-scope / out-of-scope の AI コメント
 
 
 class EmbeddingPayload(BasePipelineEventPayload):

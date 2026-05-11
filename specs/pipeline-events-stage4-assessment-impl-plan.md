@@ -380,7 +380,7 @@
 
 ### review 観点
 
-- payload の field が spec 表と完全一致 (raw_category / raw_topic / category_id / category_slug / topic / investor_take / assessment_id / prompt_version / ai_model / ai_raw_response / input_text / input_text_length / extraction_id)
+- payload の field が spec 表と完全一致 (raw_category / raw_topic / category_slug / topic / investor_take / prompt_version / ai_model / ai_raw_response / input_text / input_text_length / extraction_id)
 - payload に **state representation を持たない** (top-level column と二重化禁止、article_id を持たない)
 - `_category_of` で `AssessmentTerminalSkipError` を `NON_RETRYABLE_KEEP_EXTRACTION` にマップ (spec の意図的な命名差)
 - `_code_of` が instance 属性 (`getattr(exc, "code", None)`) を見る (ClassVar `CODE` ではなく)

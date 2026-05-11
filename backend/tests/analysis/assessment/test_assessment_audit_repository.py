@@ -4,14 +4,14 @@ audit row の shape SSoT が repository に集約されたことを検証する:
 
 - ``append_in_scope`` で
   ``category=success`` + ``code="assessed_in_scope"`` + payload に
-  ``category_id`` / ``category_slug`` / ``topic`` / ``investor_take`` 詰まる
+  ``category_slug`` / ``topic`` / ``investor_take`` 詰まる
   (``category_slug`` は ``in_scope.category.value`` から Repository 内で導出、
   ``raw_category`` envelope 由来とは独立)
 - ``append_out_of_scope`` で
   ``category=success`` + ``code="assessed_out_of_scope"`` + payload に
-  ``assessment_id`` / ``investor_take`` が非 None
-  (PR #447 対称化追従、in-scope 固有 field の ``category_id`` /
-  ``category_slug`` / ``topic`` のみ None)
+  ``investor_take`` が非 None
+  (PR #447 対称化追従、in-scope 固有 field の ``category_slug`` /
+  ``topic`` のみ None)
 - ``append_failure`` で **exc 型による 3 dispatch + Layer 2-B + catch-all** が動作:
   - ``AssessmentRecoverableError`` → ``category=retryable``
   - ``AssessmentTerminalSkipError`` → ``category=non_retryable_keep_extraction``
@@ -158,8 +158,8 @@ async def _persist_in_scope(
 ) -> InScopeAssessmentORM:
     """テスト用に in_scope_assessments 行を 1 件焼いて ORM を返す。
 
-    audit テストは ``assessment_id`` / ``category_id`` だけ取り出して
-    ``append_in_scope`` に渡すため、Domain Entity を再構成しない。
+    audit は witness で ID ミラーを持たないが、article_id 経由の 1-hop join
+    で audit row を引くための業務 row を焼くために使う。
     """
     orm = InScopeAssessmentORM(
         extraction_id=extraction.id,
@@ -223,14 +223,12 @@ async def test_append_in_scope_records_success_with_code(
     """category=success / code=assessed_in_scope と payload の主要 field を確認。"""
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
-    in_scope = await _persist_in_scope(db_session, extraction, sample_categories[0])
+    await _persist_in_scope(db_session, extraction, sample_categories[0])
 
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_in_scope(
             ready=_ready(extraction),
             call=_in_scope_call(),
-            assessment_id=in_scope.id,
-            category_id=in_scope.category_id,
         )
         await session.commit()
 
@@ -240,8 +238,6 @@ async def test_append_in_scope_records_success_with_code(
     assert ev.category == "success"
     assert ev.code == "assessed_in_scope"
     assert ev.payload["extraction_id"] == extraction.id
-    assert ev.payload["assessment_id"] == in_scope.id
-    assert ev.payload["category_id"] == sample_categories[0].id
     assert ev.payload["topic"] == "llm benchmark"
     assert ev.payload["investor_take"] == "bullish"
     assert ev.payload["ai_model"] == _AI_MODEL
@@ -261,7 +257,7 @@ async def test_append_in_scope_derives_category_slug_from_in_scope(
     """
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
-    in_scope_orm = await _persist_in_scope(db_session, extraction, sample_categories[0])
+    await _persist_in_scope(db_session, extraction, sample_categories[0])
     in_scope_response = _make_in_scope(category=InScopeCategory.AI)
     # call.raw_category と category_slug を区別するため envelope 側だけ異常値
     call = _in_scope_call(
@@ -273,8 +269,6 @@ async def test_append_in_scope_derives_category_slug_from_in_scope(
         await AssessmentAuditRepository(session).append_in_scope(
             ready=_ready(extraction),
             call=call,
-            assessment_id=in_scope_orm.id,
-            category_id=in_scope_orm.category_id,
         )
         await session.commit()
 
@@ -293,14 +287,12 @@ async def test_append_in_scope_resolves_article_id_from_extraction(
     """pipeline_events.article_id が extraction → article 逆引きで解決される。"""
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
-    in_scope = await _persist_in_scope(db_session, extraction, sample_categories[0])
+    await _persist_in_scope(db_session, extraction, sample_categories[0])
 
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_in_scope(
             ready=_ready(extraction),
             call=_in_scope_call(),
-            assessment_id=in_scope.id,
-            category_id=in_scope.category_id,
         )
         await session.commit()
 
@@ -318,14 +310,12 @@ async def test_append_in_scope_resolves_source_name(
     """payload.source_name が extraction → article → news_source の 2-hop で解決。"""
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
-    in_scope = await _persist_in_scope(db_session, extraction, sample_categories[0])
+    await _persist_in_scope(db_session, extraction, sample_categories[0])
 
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_in_scope(
             ready=_ready(extraction),
             call=_in_scope_call(),
-            assessment_id=in_scope.id,
-            category_id=in_scope.category_id,
         )
         await session.commit()
 
@@ -343,14 +333,12 @@ async def test_append_in_scope_does_not_commit(
     """repository は session.commit() を呼ばない (caller tx 境界保持)。"""
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
-    in_scope = await _persist_in_scope(db_session, extraction, sample_categories[0])
+    await _persist_in_scope(db_session, extraction, sample_categories[0])
 
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_in_scope(
             ready=_ready(extraction),
             call=_in_scope_call(),
-            assessment_id=in_scope.id,
-            category_id=in_scope.category_id,
         )
         # 意図的に commit しない (rollback で消える)
 
@@ -376,7 +364,7 @@ async def test_append_in_scope_truncates_raw_response(
     """envelope.raw_response が 2KB 超なら _AI_RAW_RESPONSE_LIMIT で切詰。"""
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
-    in_scope = await _persist_in_scope(db_session, extraction, sample_categories[0])
+    await _persist_in_scope(db_session, extraction, sample_categories[0])
     huge_raw = "x" * 5000
     call = _in_scope_call(raw_response=huge_raw)
 
@@ -384,8 +372,6 @@ async def test_append_in_scope_truncates_raw_response(
         await AssessmentAuditRepository(session).append_in_scope(
             ready=_ready(extraction),
             call=call,
-            assessment_id=in_scope.id,
-            category_id=in_scope.category_id,
         )
         await session.commit()
 
@@ -408,13 +394,12 @@ async def test_append_out_of_scope_records_success_with_code(
     """category=success / code=assessed_out_of_scope。"""
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
-    out_of_scope = await _persist_out_of_scope(db_session, extraction)
+    await _persist_out_of_scope(db_session, extraction)
 
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_out_of_scope(
             ready=_ready(extraction),
             call=_out_of_scope_call(),
-            assessment_id=out_of_scope.id,
         )
         await session.commit()
 
@@ -434,8 +419,8 @@ async def test_append_out_of_scope_records_investor_take(
     """PR #447 対称化追従: out-of-scope payload は ``investor_take`` を持つ。
 
     本体 DB (``out_of_scope_assessments.investor_take``) と audit payload の
-    情報量を一致させる。in-scope 固有 field (``category_id`` /
-    ``category_slug`` / ``topic``) のみ None。
+    情報量を一致させる。in-scope 固有 field (``category_slug`` / ``topic``) のみ
+    None。
     """
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
@@ -445,15 +430,12 @@ async def test_append_out_of_scope_records_investor_take(
         await AssessmentAuditRepository(session).append_out_of_scope(
             ready=_ready(extraction),
             call=_out_of_scope_call(),
-            assessment_id=out_of_scope.id,
         )
         await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
-    assert ev.payload["assessment_id"] == out_of_scope.id
     assert ev.payload["investor_take"] == out_of_scope.investor_take  # 非 None
     # in-scope 固有 field のみ None
-    assert ev.payload["category_id"] is None
     assert ev.payload["category_slug"] is None
     assert ev.payload["topic"] is None
 

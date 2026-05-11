@@ -118,8 +118,7 @@ class AssessmentCategoryMissingError(AssessmentTerminalSkipError):
 
     catalog 側の追加または prompt 側の category 列挙不一致が原因。retry しても
     AI は同じ slug を返し続けるので terminal-skip。catalog を拡張すれば解消。
-    Service.execute の ``category_id is None`` 経路で raise される (PR6 で wire-in、
-    PR2 ではまだ raise されない dead code)。
+    ``AssessmentRepository.save_in_scope`` の slug → id 解決失敗で raise される。
     """
 
     def __init__(self, message: str) -> None:
