@@ -127,6 +127,28 @@ class TestAssessContent:
         mock_embed.kiq.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_race_lost_none_result_does_not_chain(self) -> None:
+        """``execute`` が None (race lost) を返すと embedding chain しない。"""
+        from app.analysis.assessment.tasks import assess_content
+
+        mock_ctx = _make_ctx(assessor=_make_provider_fake())
+        ready = _make_ready(extraction_id=2)
+
+        with (
+            patch(
+                "app.analysis.assessment.tasks._build_limiters",
+                return_value=(None, None),
+            ),
+            patch("app.analysis.assessment.tasks.AssessmentService") as mock_svc_cls,
+            patch("app.analysis.assessment.tasks.generate_embedding") as mock_embed,
+        ):
+            mock_svc_cls.return_value.execute = AsyncMock(return_value=None)
+            mock_embed.kiq = AsyncMock()
+            await assess_content(ready=ready, ctx=mock_ctx)
+
+        mock_embed.kiq.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_out_of_scope_does_not_chain(self) -> None:
         """OutOfScopeAssessment は embedding に進まない。"""
         from app.analysis.assessment.domain.out_of_scope import OutOfScopeAssessment

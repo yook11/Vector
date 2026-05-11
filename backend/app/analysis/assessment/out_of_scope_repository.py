@@ -2,7 +2,8 @@
 
 責務は ``InScopeRepository`` と対称 (spec §4.3.4):
 - ``exists_for_extraction``: `try_advance_from` precondition 用 cheap 判定
-- ``find_by_extraction_id``: race 敗北時の勝者読み戻し
+- ``find_by_extraction_id``: extraction_id 経由で既存 Entity を取得 (reconcile
+  cron / 検査経路で使用)
 - ``save``: AI 境界型 ``OutOfScope`` を受けて
   `INSERT ... ON CONFLICT (extraction_id) DO NOTHING RETURNING ...`
 
@@ -43,7 +44,7 @@ class OutOfScopeRepository:
     async def find_by_extraction_id(
         self, extraction_id: int
     ) -> OutOfScopeAssessment | None:
-        """既存 out-of-scope 評価を Entity として取得する (race 敗北時の読み戻し)。"""
+        """extraction_id 経由で既存 out-of-scope 評価を取得する (reconcile cron 用)。"""
         stmt = select(OutOfScopeAssessmentORM).where(
             OutOfScopeAssessmentORM.extraction_id == extraction_id,
         )

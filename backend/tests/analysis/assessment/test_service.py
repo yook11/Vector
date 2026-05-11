@@ -10,8 +10,8 @@ PR6 で Service が以下を行うようになったことを固定する:
   (旧 ``ProviderError`` raise を置換)。
 - 業務 INSERT (in-scope / out-of-scope) と同 session 同 tx で
   ``AssessmentAuditRepository.append_*`` を呼び、成功 audit を 1 行焼く。
-- race lost (``save()`` が None) の場合は audit を焼かず reads-back のみ
-  (actor SSoT、勝者 task の audit と二重記録しない)。
+- race lost (``save()`` が None) の場合は audit を焼かず ``None`` を返す
+  (actor SSoT、勝者 task の audit と二重記録しない、再収集は reconcile cron 経路)。
 
 PR5 で merge 済の repository / payload / provider_mapping は本 PR では touch しない
 (test では結果として焼かれた pipeline_events 行を assert するに留める)。
@@ -246,7 +246,8 @@ async def test_race_lost_does_not_record_audit(
 ) -> None:
     """``InScopeRepository.save`` が None (race lost) のとき audit 行は 0。
 
-    勝者 task が自身の audit を焼くため、敗者は二重記録しない。
+    敗者は ``None`` を返し audit も焼かない (勝者 task の audit と二重記録しない、
+    救済は reconcile cron に委譲)。
     """
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
@@ -268,14 +269,14 @@ async def test_race_lost_does_not_record_audit(
     )
 
     svc = AssessmentService(session_factory)
-    # save() が None を返す (UPSERT race lost) → reads-back する
+    # 敗者経路では save() が None → Service も None を返して短絡する
     with patch(
         "app.analysis.assessment.repository.InScopeRepository.save",
         new=AsyncMock(return_value=None),
     ):
         result = await svc.execute(_ready(extraction), assessor)
 
-    assert isinstance(result, InScopeAssessment)
+    assert result is None
     # race lost 経路では audit 行はゼロ (actor SSoT を assert)
     events = await _fetch_assessment_events(db_session, article.id)
     assert len(events) == 0
@@ -458,6 +459,6 @@ async def test_out_of_scope_race_lost_does_not_record_audit(
     ):
         result = await svc.execute(_ready(extraction), assessor)
 
-    assert isinstance(result, OutOfScopeAssessment)
+    assert result is None
     events = await _fetch_assessment_events(db_session, article.id)
     assert len(events) == 0

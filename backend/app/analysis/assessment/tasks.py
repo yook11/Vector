@@ -112,6 +112,11 @@ async def assess_content(
             return
         raise
 
+    # 楽観ロック敗北: 勝者 task が Stage 5 を起動する。勝者が crash 等で chain
+    # 起動に失敗した case の救済は reconcile cron 経路 (本 task の責務外)。
+    if result is None:
+        return
+
     # Stage 5 (Embedding) へ chain (Pattern A': 上流 Task が下流 Ready を構築)。
     # InScopeAssessment Entity から ReadyForEmbedding を構築する。
     # OutOfScopeAssessment は chain しない (パイプライン終了)。

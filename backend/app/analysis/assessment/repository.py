@@ -3,14 +3,14 @@
 責務:
 - ``exists_for_extraction``: cheap な exists 判定 (Pattern A' の `try_advance_from`
   precondition チェック用)
-- ``find_by_extraction_id``: ORM 行をドメイン Entity (``InScopeAssessment``) として
-  復元する (Service の race 敗北時読戻し経路で使用)
+- ``find_by_extraction_id``: extraction_id 経由で既存 Entity を取得 (reconcile
+  cron / 検査経路で使用)
 - ``find_by_id``: PK 検索 (Stage 5 経路 backfill_embeddings から使用)
 - ``save``: AI 境界型 ``InScope`` + Stage 3 由来の translated_title / summary を
   受けて ``INSERT ... ON CONFLICT (extraction_id) DO NOTHING RETURNING ...`` で
   永続化する。category slug → id 解決を内部に閉じ、未登録 slug は
   ``AssessmentCategoryMissingError`` で fail-fast。race 敗北時は ``None`` を返し、
-  Service が ``find_by_extraction_id`` で勝者を読み戻す (audit actor SSoT 維持)。
+  Service は短絡する (再収集は reconcile cron が担う)。
 
 注 (PR3.5-d.0): Domain Entity ``InScopeAssessment`` と ORM クラス ``InScopeAssessment``
 が同名のため、本ファイル内では ORM 側を ``InScopeAssessmentORM`` alias で import
@@ -50,7 +50,7 @@ class InScopeRepository:
     async def find_by_extraction_id(
         self, extraction_id: int
     ) -> InScopeAssessment | None:
-        """race 敗北時の読戻し用に extraction に紐づく評価結果を取得する。"""
+        """extraction_id 経由で既存の評価結果を取得する (reconcile cron 用)。"""
         stmt = select(InScopeAssessmentORM).where(
             InScopeAssessmentORM.extraction_id == extraction_id,
         )
@@ -88,8 +88,8 @@ class InScopeRepository:
             成功時: 永続化された ``InScopeAssessment`` Entity (id / analyzed_at は
             DB 値、その他は引数値)
             race 敗北時 (期待した extraction_id への UNIQUE 違反): ``None``
-            (Service が `find_by_extraction_id` で勝者を読み戻す — spec §4.6、
-            audit actor SSoT を保つ)
+            (敗者は audit を焼かず短絡する — 勝者 task が自身の audit を焼く、
+            audit actor SSoT 維持)
 
         Raises:
             ``AssessmentCategoryMissingError``: AI が catalog 未登録の slug を返した

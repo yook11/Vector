@@ -1,7 +1,7 @@
 """AssessmentService — Stage 4 のユースケース組み立てと永続化境界 (Pattern A')。
 
 ドメイン層 (Entity / Ready) と AI 層 (``InScope`` / ``OutOfScope``) を結び、
-判定実行 → 永続化 (楽観的ロック) → race 敗北時は読み戻し → Entity 返却の順序を担う。
+判定実行 → 永続化 (楽観的ロック) → 勝者は audit + commit / 敗者は短絡の順序を担う。
 
 precondition (extraction 存在 + 未 in-scope 評価 + 未 out-of-scope 評価) は呼び出し側で
 `ReadyForAssessment.try_advance_from` が gatekeeper として保証済 (spec §3.1)。
@@ -9,19 +9,21 @@ precondition (extraction 存在 + 未 in-scope 評価 + 未 out-of-scope 評価)
 
 `match response: case InScope() / case OutOfScope()` の tagged-union dispatch は
 AI レスポンス境界 parse の正当な分岐として維持 (spec §1.3)。各 case で選ぶのは
-「永続化先 Repository」「audit 焼き callable」「勝者読み戻し callable」「log code」
-だけで、共通の post-save orchestration (audit + commit + race recovery + ログ) は
-``_finalize`` が 1 本で担う。
+「永続化先 Repository」「audit 焼き callable」「log code」だけで、共通の post-save
+orchestration (audit + commit + ログ) は ``_finalize`` が 1 本で担う。
 
 楽観的ロック敗北 (broker 重複配信 / 並行 worker) は Repository.save が ``None`` を
-返す。``_finalize`` は早期 return で勝者を `find_by_extraction_id` 経由で読み戻し
-Entity を返す (spec §4.6)。``AIProviderError`` は ACL boundary
-(``map_provider_to_assessment``) で Stage 4 marker (``AssessmentRecoverableError`` /
-``AssessmentTerminalSkipError``) に詰め替え、Task 層は Stage 4 marker のみで
-3 marker dispatch を行う (PR6 wire-in)。
+返す。``_finalize`` は ``None`` を返して短絡し、敗者は audit を焼かず commit も
+呼ばない (actor SSoT — 勝者 task が自身の audit を焼く、二重記録回避)。Task 層
+は ``None`` を観測したら Stage 5 chain を起動しない。勝者 task が crash 等で
+chain に失敗した case の救済は本 Service の責務外で、別経路の reconcile cron が
+担う。``AIProviderError`` は ACL boundary (``map_provider_to_assessment``) で
+Stage 4 marker (``AssessmentRecoverableError`` / ``AssessmentTerminalSkipError``)
+に詰め替え、Task 層は Stage 4 marker のみで 3 marker dispatch を行う。
 
-戻り値は ``InScopeAssessment | OutOfScopeAssessment`` の Entity union。Task 層は
-``isinstance(result, InScopeAssessment)`` で Stage 5 chain を判定する。
+戻り値は ``InScopeAssessment | OutOfScopeAssessment | None``。``None`` は race
+敗北 (勝者が存在し、本 task は短絡すべき) を意味する。Task 層は ``None`` 早期
+return → ``isinstance(result, InScopeAssessment)`` で Stage 5 chain を判定する。
 """
 
 from __future__ import annotations
@@ -68,12 +70,16 @@ class AssessmentService:
         self,
         ready: ReadyForAssessment,
         assessor: BaseAssessor,
-    ) -> InScopeAssessment | OutOfScopeAssessment:
-        """Ready 型を受け取り判定 → 永続化 → Entity を返す。
+    ) -> InScopeAssessment | OutOfScopeAssessment | None:
+        """Ready 型を受け取り判定 → 永続化 → Entity を返す (敗者は ``None``)。
 
         precondition は型で保証済 (Ready を受けた時点で extraction 存在 +
         未 in-scope 評価 + 未 out-of-scope 評価)。AI 呼び出し中は session を保持しない
         (slow IO 中の DB 接続専有を避ける)。
+
+        楽観ロック敗北時は ``None`` を返す。Task 層は ``None`` を観測したら下流
+        chain を起動しない。勝者が crash 等で chain に失敗した case の救済は
+        reconcile cron 経路に委ねる (本 Service の責務外)。
 
         Raises:
             ``AnalysisDomainError`` のサブクラス (Task 層 retry に委ねる)。
@@ -122,9 +128,6 @@ class AssessmentService:
                         session,
                         saved=in_scope_saved,
                         audit=in_scope_audit,
-                        find_winner=lambda: in_scope_repo.find_by_extraction_id(
-                            extraction_id
-                        ),
                         extraction_id=extraction_id,
                         log_code="in_scope",
                     )
@@ -150,9 +153,6 @@ class AssessmentService:
                         session,
                         saved=out_of_scope_saved,
                         audit=out_of_scope_audit,
-                        find_winner=lambda: out_of_scope_repo.find_by_extraction_id(
-                            extraction_id
-                        ),
                         extraction_id=extraction_id,
                         log_code="out_of_scope",
                     )
@@ -166,32 +166,24 @@ class AssessmentService:
         *,
         saved: E | None,
         audit: Callable[[E], Awaitable[None]],
-        find_winner: Callable[[], Awaitable[E | None]],
         extraction_id: int,
         log_code: str,
-    ) -> E:
+    ) -> E | None:
         """save 結果を確定 Entity に解決し、winner なら audit と業務を同一 tx で
         commit。
 
-        race lost (saved=None) は別経路として早期 return し、勝者を読み戻して返す。
-        race lost path は audit を焼かず (actor SSoT — 勝者 task が自身の audit を焼く、
-        二重記録回避)、commit も呼ばない (このセッションは ON CONFLICT DO NOTHING で
-        0 行 + SELECT のみ、書き込みがない)。
+        race lost (saved=None) は ``None`` を返して短絡する。敗者は audit を焼かず
+        (actor SSoT — 勝者 task が自身の audit を焼く、二重記録回避)、commit も
+        呼ばない (このセッションは ON CONFLICT DO NOTHING で 0 行のみ、書き込みなし)。
+        勝者の chain 起動失敗 case の救済は reconcile cron 経路に委ねる。
         """
-        # race lost — 勝者を読み戻して返す (audit / commit は不要)
+        # race lost — None 短絡 (audit / commit は不要、reconcile cron に委譲)
         if saved is None:
             logger.info(
                 f"assessment_{log_code}_concurrent_write",
                 extraction_id=extraction_id,
             )
-            winner = await find_winner()
-            if winner is None:
-                # ON CONFLICT で race 敗北なのに行が無い = Pattern A' 違反 / DB 異常
-                raise RuntimeError(
-                    f"assessment_{log_code}_race_winner_missing: "
-                    f"extraction_id={extraction_id}"
-                )
-            return winner
+            return None
 
         # winner — 業務 INSERT + audit を同一 tx で commit
         await audit(saved)
