@@ -33,6 +33,12 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.analysis.assessment.ai.envelope import AssessmentCall
+from app.analysis.assessment.ai.schema import (
+    InScope,
+    InScopeCategory,
+    OutOfScope,
+)
 from app.analysis.assessment.audit_repository import AssessmentAuditRepository
 from app.analysis.assessment.domain.in_scope import InScopeAssessment
 from app.analysis.assessment.domain.out_of_scope import OutOfScopeAssessment
@@ -42,12 +48,6 @@ from app.analysis.assessment.errors import (
     AssessmentRecoverableError,
     AssessmentResponseInvalidError,
     AssessmentTerminalSkipError,
-)
-from app.analysis.classifier.envelope import AssessmentCall
-from app.analysis.classifier.schema import (
-    InScope,
-    InScopeCategory,
-    OutOfScope,
 )
 from app.analysis.domain.value_objects.topic import TopicName
 from app.models.article import Article

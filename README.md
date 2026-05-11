@@ -43,7 +43,7 @@ AIで翻訳・要約・インパクト分析を行う投資ダッシュボード
 
 - Docker & Docker Compose
 - **Gemini API Key** ([Google AI Studio](https://aistudio.google.com/) で取得) — Stage 1 と Embedding に使用
-- **DeepSeek API Key** (DeepSeek 公式) — Stage 2 (classifier) に使用
+- **DeepSeek API Key** (DeepSeek 公式) — Stage 4 (assessor) に使用
 - **OpenAI API Key** (任意) — fallback / 比較用
 
 ## Getting Started
@@ -92,7 +92,7 @@ Browser
         └─► FastAPI Backend (Docker internal only)
               ├── Header Auth (X-User-ID / X-Internal-Secret)
               ├── collection/   — News Fetcher (44+ sources: RSS/Atom/HTML/Sitemap)
-              ├── analysis/     — AI 分析 (Gemini extractor / DeepSeek classifier / Gemini embedder)
+              ├── analysis/     — AI 分析 (Gemini extractor / DeepSeek assessor / Gemini embedder)
               ├── insights/     — snapshot (weekly_trends) / briefing (weekly LLM brief)
               ├── digest/       — 週次トレンドダイジェスト pipeline
               ├── search/       — semantic search + per-user 1 日 quota
@@ -154,7 +154,7 @@ taskiq scheduler (cron)
   ↓
 [Stage D] extraction       — Gemini extractor (タイトル正規化 / 構造抽出)
   ↓
-[Stage E] classification   — DeepSeek classifier (signal/noise + Category + Topic)
+[Stage E] assessment       — DeepSeek assessor (signal/noise + Category + Topic)
   ↓
 [Stage F] embedding        — Gemini Embedding (gemini-embedding-001, 768-dim halfvec)
 

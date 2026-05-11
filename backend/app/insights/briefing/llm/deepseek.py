@@ -1,7 +1,7 @@
 """DeepSeek-V4 Pro による週次 briefing 生成 LLM クライアント。
 
 OpenAI SDK の AsyncOpenAI を ``base_url=https://api.deepseek.com/beta`` で
-再利用する (Stage 2 ``app/analysis/classifier/deepseek.py`` と同パターン)。
+再利用する (Stage 4 ``app/analysis/assessment/ai/deepseek.py`` と同パターン)。
 Function Calling + ``strict: true`` + inline flat schema で構造化出力を強制。
 
 ハルシネーション検証:

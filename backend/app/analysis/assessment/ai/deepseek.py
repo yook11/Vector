@@ -1,11 +1,11 @@
-"""DeepSeek 実装の Classifier — Stage 4。
+"""DeepSeek 実装の Assessor — Stage 4。
 
 OpenAI SDK を ``base_url=https://api.deepseek.com/beta`` で再利用し、
 Function Calling + ``strict: true`` + inline flat schema で構造化出力を強制する。
 PoC で ``$ref``/``$defs`` 経由の制約は AI が enforce しないことを確認済
 (specs/stage2-deepseek-migration.md)。
 
-Prompt 文面 / model / gen_config / tool schema は ``DeepSeekClassificationPrompt``
+Prompt 文面 / model / gen_config / tool schema は ``DeepSeekAssessmentPrompt``
 が SSoT。本 class は I/O 駆動 (SDK 例外翻訳) に責務を絞る。
 
 PR3 で:
@@ -41,11 +41,11 @@ from openai import (
 )
 from openai import RateLimitError as OpenAIRateLimitError
 
+from app.analysis.assessment.ai.base import BaseAssessor
+from app.analysis.assessment.ai.deepseek_prompt import DeepSeekAssessmentPrompt
+from app.analysis.assessment.ai.envelope import AssessmentCall
+from app.analysis.assessment.ai.parse import parse_assessment
 from app.analysis.assessment.errors import AssessmentResponseInvalidError
-from app.analysis.classifier.base import BaseClassifier
-from app.analysis.classifier.deepseek_prompt import DeepSeekClassificationPrompt
-from app.analysis.classifier.envelope import AssessmentCall
-from app.analysis.classifier.parse import parse_assessment
 from app.analysis.errors.provider import (
     AIProviderConfigurationError,
     AIProviderInsufficientBalanceError,
@@ -62,10 +62,10 @@ logger = structlog.get_logger(__name__)
 _BASE_URL: Final = "https://api.deepseek.com/beta"
 
 
-class DeepSeekClassifier(BaseClassifier):
-    """BaseClassifier の DeepSeek-V4-Flash 実装。"""
+class DeepSeekAssessor(BaseAssessor):
+    """BaseAssessor の DeepSeek-V4-Flash 実装。"""
 
-    MODEL = DeepSeekClassificationPrompt.MODEL
+    MODEL = DeepSeekAssessmentPrompt.MODEL
     # 公式の固定 RPM/RPD 公開なし。429 は OpenAI SDK の retry に任せ、
     # Logfire 実測後に値を入れる方針 (別 PR)。
     RPM: int | None = None
@@ -77,13 +77,13 @@ class DeepSeekClassifier(BaseClassifier):
             raise AIProviderConfigurationError("DEEPSEEK_API_KEY is not configured")
         self._client = AsyncOpenAI(api_key=api_key, base_url=_BASE_URL)
 
-    async def classify(
+    async def assess(
         self,
         title_ja: str,
         summary_ja: str,
     ) -> AssessmentCall:
         """Stage 3 (Extraction) の出力を判定する。原文は読まない。"""
-        prompt = DeepSeekClassificationPrompt.render(
+        prompt = DeepSeekAssessmentPrompt.render(
             title_ja=title_ja, summary_ja=summary_ja
         )
         return await self._call_once(prompt)
@@ -95,9 +95,9 @@ class DeepSeekClassifier(BaseClassifier):
         ``parse_assessment`` でドメイン型 (``InScope`` / ``OutOfScope``) に
         詰め替え、raw 情報と共に ``AssessmentCall`` envelope に格納する。
         """
-        tool_name = DeepSeekClassificationPrompt.TOOL_NAME
+        tool_name = DeepSeekAssessmentPrompt.TOOL_NAME
         resp = await self._client.chat.completions.create(
-            model=DeepSeekClassificationPrompt.MODEL,
+            model=DeepSeekAssessmentPrompt.MODEL,
             messages=[{"role": "user", "content": prompt}],
             tools=[
                 {
@@ -109,13 +109,11 @@ class DeepSeekClassifier(BaseClassifier):
                             "記事を Vector の 11 カテゴリのいずれか、"
                             "または out_of_scope に分類する"
                         ),
-                        "parameters": dict(
-                            DeepSeekClassificationPrompt.RESPONSE_SCHEMA
-                        ),
+                        "parameters": dict(DeepSeekAssessmentPrompt.RESPONSE_SCHEMA),
                     },
                 }
             ],
-            **DeepSeekClassificationPrompt.GEN_CONFIG,
+            **DeepSeekAssessmentPrompt.GEN_CONFIG,
         )
 
         choice = resp.choices[0]
@@ -156,7 +154,7 @@ class DeepSeekClassifier(BaseClassifier):
             raw_response=raw_arguments,
             raw_category=raw_category,
             raw_topic=raw_topic,
-            prompt_version=DeepSeekClassificationPrompt.VERSION,
+            prompt_version=DeepSeekAssessmentPrompt.VERSION,
         )
 
     def _translate_error(self, exc: Exception) -> Exception:

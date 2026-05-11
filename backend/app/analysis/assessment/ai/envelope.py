@@ -1,10 +1,10 @@
-"""Stage 4 classifier 戻り値 envelope。
+"""Stage 4 assessor 戻り値 envelope。
 
 Service 層で audit 焼付するために必要な情報 — AI の raw 応答 text、詰め替え前の
-``raw_category`` / ``raw_topic``、``prompt_version`` — を classifier 戻り値から
+``raw_category`` / ``raw_topic``、``prompt_version`` — を assessor 戻り値から
 運び上げる。Stage 3 ``ExtractionCall`` と同パターン。
 
-PR2 では dead code として merge し、PR3 で classifier ``_call_api`` の
+PR2 では dead code として merge し、PR3 で assessor ``_call_api`` の
 ``parse_assessment`` 経由化と同時に wire-in する。
 
 設計詳細: ``specs/pipeline-events-stage4-assessment.md`` §AssessmentCall envelope
@@ -14,12 +14,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.analysis.classifier.schema import AssessmentResult
+from app.analysis.assessment.ai.schema import AssessmentResult
 
 
 @dataclass(frozen=True, slots=True)
 class AssessmentCall:
-    """classifier の 1 回の API call の結果。
+    """assessor の 1 回の API call の結果。
 
     Service が audit 焼付できるよう、ドメイン詰め替え後の ``result`` に加えて
     raw 応答情報を運ぶ。とりわけ ``OutOfScope`` 経路では ``result`` に

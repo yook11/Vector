@@ -1,6 +1,6 @@
 """Layer 2-A: AI provider 呼び出し由来のエラー 9 種。
 
-extractor / classifier / embedder の client (Gemini / DeepSeek) が provider 例外を
+extractor / assessor / embedder の client (Gemini / DeepSeek) が provider 例外を
 ここに翻訳する。Layer 1 marker (``RetryableError`` / ``NonRetryableDropArticle`` /
 ``NonRetryableKeepArticle``) と多重継承して dispatch 軸を表現する。
 

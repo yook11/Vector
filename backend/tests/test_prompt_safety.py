@@ -176,7 +176,7 @@ class TestFullwidthBracketHeaderNeutralization:
 
 
 class TestCallerCompatibility:
-    """全 caller (gemini.py / classifier/gemini.py / classifier/deepseek.py /
+    """全 caller (gemini.py / assessment/ai/gemini.py / assessment/ai/deepseek.py /
     briefing/llm/deepseek.py の 8 箇所) で挙動破綻しないこと。
     """
 

@@ -6,8 +6,8 @@ import dataclasses
 
 import pytest
 
-from app.analysis.classifier.envelope import AssessmentCall
-from app.analysis.classifier.schema import (
+from app.analysis.assessment.ai.envelope import AssessmentCall
+from app.analysis.assessment.ai.schema import (
     InScope,
     InScopeCategory,
     OutOfScope,

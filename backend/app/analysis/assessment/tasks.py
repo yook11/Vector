@@ -10,6 +10,7 @@ import structlog
 from taskiq import Context, TaskiqDepends
 
 from app.analysis._limiter_factory import _build_limiters
+from app.analysis.assessment.ai.base import BaseAssessor
 from app.analysis.assessment.domain.in_scope import InScopeAssessment
 from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.errors import (
@@ -18,7 +19,6 @@ from app.analysis.assessment.errors import (
 )
 from app.analysis.assessment.failure_recording import record_assessment_failure
 from app.analysis.assessment.service import AssessmentService
-from app.analysis.classifier.base import BaseClassifier
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.repository import EmbeddingRepository
 from app.analysis.embedding.tasks import generate_embedding
@@ -50,14 +50,14 @@ async def assess_content(
     再 fetch / None check を行わない。
     """
     session_factory = ctx.state.session_factory
-    classifier: BaseClassifier = ctx.state.classifier
+    assessor: BaseAssessor = ctx.state.assessor
 
     # Rate limit acquire は呼び出し側の責任
-    # 注 (PR3.5-d.0): role 文字列 "classify" は Redis 上の rate limit カウンタの
-    # キーに含まれるため、in-flight の counter を引き継ぐべく旧 role 名を据え置く。
-    # 実 role 切替は alias 削除 PR (PR3.5-d.3) 以降に検討する。
+    # 注: role 文字列 "classify" は Redis 上の rate limit カウンタのキーに含まれる
+    # ため、in-flight の counter を引き継ぐべく旧 role 名を据え置く。
+    # 実 role 切替は PR-3 (永続境界 rename) で扱う。
     rpm_limiter, rpd_limiter = _build_limiters(
-        "classify", classifier.MODEL, classifier.RPM, classifier.RPD
+        "classify", assessor.MODEL, assessor.RPM, assessor.RPD
     )
     try:
         if rpd_limiter is not None:
@@ -75,7 +75,7 @@ async def assess_content(
     svc = AssessmentService(session_factory)
     attempt = int(ctx.message.labels.get("retry_count", 0)) + 1
     try:
-        result = await svc.execute(ready, classifier)
+        result = await svc.execute(ready, assessor)
     except AssessmentTerminalSkipError as exc:
         # Layer 1 marker (Layer 2-B AssessmentCategoryMissingError も継承で拾う):
         # 永続的失敗 → audit 焼いて即 return (taskiq retry なし、extraction 保持)。

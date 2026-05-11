@@ -16,13 +16,13 @@ from __future__ import annotations
 
 import pytest
 
-from app.analysis.assessment.errors import AssessmentResponseInvalidError
-from app.analysis.classifier.parse import parse_assessment
-from app.analysis.classifier.schema import (
+from app.analysis.assessment.ai.parse import parse_assessment
+from app.analysis.assessment.ai.schema import (
     InScope,
     InScopeCategory,
     OutOfScope,
 )
+from app.analysis.assessment.errors import AssessmentResponseInvalidError
 
 
 class TestParseAssessmentInScope:

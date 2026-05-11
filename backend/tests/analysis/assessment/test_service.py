@@ -2,7 +2,7 @@
 
 PR6 で Service が以下を行うようになったことを固定する:
 
-- ``classifier.classify`` の ``AIProviderError`` を ``map_provider_to_assessment``
+- ``assessor.assess`` の ``AIProviderError`` を ``map_provider_to_assessment``
   で Stage 4 marker (``AssessmentRecoverableError`` / ``AssessmentTerminalSkipError``)
   に詰め替え、``__cause__`` に元 ``AIProvider*Error`` を紐付ける (ACL boundary)。
 - ``_handle_in_scope`` で category 解決失敗 (``category_id is None``) のとき
@@ -26,6 +26,13 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.analysis.assessment.ai.base import BaseAssessor
+from app.analysis.assessment.ai.envelope import AssessmentCall
+from app.analysis.assessment.ai.schema import (
+    InScope,
+    InScopeCategory,
+    OutOfScope,
+)
 from app.analysis.assessment.domain.in_scope import InScopeAssessment
 from app.analysis.assessment.domain.out_of_scope import OutOfScopeAssessment
 from app.analysis.assessment.domain.ready import ReadyForAssessment
@@ -35,13 +42,6 @@ from app.analysis.assessment.errors import (
     AssessmentTerminalSkipError,
 )
 from app.analysis.assessment.service import AssessmentService
-from app.analysis.classifier.base import BaseClassifier
-from app.analysis.classifier.envelope import AssessmentCall
-from app.analysis.classifier.schema import (
-    InScope,
-    InScopeCategory,
-    OutOfScope,
-)
 from app.analysis.domain.value_objects.topic import TopicName
 from app.analysis.errors.provider import (
     AIProviderConfigurationError,
@@ -131,15 +131,15 @@ def _out_of_scope_call() -> AssessmentCall:
     )
 
 
-def _make_classifier(
+def _make_assessor(
     *, return_envelope: AssessmentCall | None = None, side_effect: object = None
-) -> BaseClassifier:
-    mock = MagicMock(spec=BaseClassifier)
+) -> BaseAssessor:
+    mock = MagicMock(spec=BaseAssessor)
     type(mock).model_name = _AI_MODEL
     if side_effect is not None:
-        mock.classify = AsyncMock(side_effect=side_effect)
+        mock.assess = AsyncMock(side_effect=side_effect)
     else:
-        mock.classify = AsyncMock(return_value=return_envelope or _in_scope_call())
+        mock.assess = AsyncMock(return_value=return_envelope or _in_scope_call())
     return mock
 
 
@@ -173,12 +173,12 @@ async def test_in_scope_success_records_audit(
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
     # InScopeCategory.AI が catalog に存在する slug "ai" になることを前提
-    classifier = _make_classifier(
+    assessor = _make_assessor(
         return_envelope=_in_scope_call(category=InScopeCategory.AI)
     )
 
     svc = AssessmentService(session_factory)
-    result = await svc.execute(_ready(extraction), classifier)
+    result = await svc.execute(_ready(extraction), assessor)
     assert isinstance(result, InScopeAssessment)
 
     events = await _fetch_assessment_events(db_session, article.id)
@@ -206,10 +206,10 @@ async def test_out_of_scope_success_records_audit(
     """``_handle_out_of_scope`` 成功で ``code=assessed_out_of_scope`` の audit 1 行。"""
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
-    classifier = _make_classifier(return_envelope=_out_of_scope_call())
+    assessor = _make_assessor(return_envelope=_out_of_scope_call())
 
     svc = AssessmentService(session_factory)
-    result = await svc.execute(_ready(extraction), classifier)
+    result = await svc.execute(_ready(extraction), assessor)
     assert isinstance(result, OutOfScopeAssessment)
 
     events = await _fetch_assessment_events(db_session, article.id)
@@ -263,7 +263,7 @@ async def test_race_lost_does_not_record_audit(
     db_session.add(winner)
     await db_session.commit()
 
-    classifier = _make_classifier(
+    assessor = _make_assessor(
         return_envelope=_in_scope_call(category=InScopeCategory.AI)
     )
 
@@ -273,7 +273,7 @@ async def test_race_lost_does_not_record_audit(
         "app.analysis.assessment.repository.InScopeRepository.save",
         new=AsyncMock(return_value=None),
     ):
-        result = await svc.execute(_ready(extraction), classifier)
+        result = await svc.execute(_ready(extraction), assessor)
 
     assert isinstance(result, InScopeAssessment)
     # race lost 経路では audit 行はゼロ (actor SSoT を assert)
@@ -296,13 +296,13 @@ async def test_provider_network_error_is_wrapped_to_recoverable_marker(
     ``_extract_error_chain`` が 2 段以上を error_chain 列に記録できる前提)。
     """
     provider_exc = AIProviderNetworkError("connection reset")
-    classifier = _make_classifier(side_effect=provider_exc)
+    assessor = _make_assessor(side_effect=provider_exc)
 
     ready = ReadyForAssessment(extraction_id=1, translated_title="t", summary="s")
     svc = AssessmentService(session_factory)
 
     with pytest.raises(AssessmentRecoverableError) as excinfo:
-        await svc.execute(ready, classifier)
+        await svc.execute(ready, assessor)
     assert excinfo.value.__cause__ is provider_exc
     assert excinfo.value.provider_error is provider_exc
 
@@ -313,13 +313,13 @@ async def test_provider_configuration_error_is_wrapped_to_terminal_skip_marker(
 ) -> None:
     """``AIProviderConfigurationError`` → ``AssessmentTerminalSkipError``。"""
     provider_exc = AIProviderConfigurationError("bad api key")
-    classifier = _make_classifier(side_effect=provider_exc)
+    assessor = _make_assessor(side_effect=provider_exc)
 
     ready = ReadyForAssessment(extraction_id=1, translated_title="t", summary="s")
     svc = AssessmentService(session_factory)
 
     with pytest.raises(AssessmentTerminalSkipError) as excinfo:
-        await svc.execute(ready, classifier)
+        await svc.execute(ready, assessor)
     assert excinfo.value.__cause__ is provider_exc
     assert excinfo.value.provider_error is provider_exc
 
@@ -344,13 +344,13 @@ async def test_unknown_category_raises_category_missing(
     """
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
-    classifier = _make_classifier(
+    assessor = _make_assessor(
         return_envelope=_in_scope_call(category=InScopeCategory.AI)
     )
 
     svc = AssessmentService(session_factory)
     with pytest.raises(AssessmentCategoryMissingError) as excinfo:
-        await svc.execute(_ready(extraction), classifier)
+        await svc.execute(_ready(extraction), assessor)
     assert excinfo.value.code == "assessment_category_missing"
 
 
@@ -365,13 +365,13 @@ async def test_unknown_category_does_not_record_audit_in_service(
     """
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
-    classifier = _make_classifier(
+    assessor = _make_assessor(
         return_envelope=_in_scope_call(category=InScopeCategory.AI)
     )
 
     svc = AssessmentService(session_factory)
     with pytest.raises(AssessmentCategoryMissingError):
-        await svc.execute(_ready(extraction), classifier)
+        await svc.execute(_ready(extraction), assessor)
 
     events = await _fetch_assessment_events(db_session, article.id)
     assert len(events) == 0
@@ -394,7 +394,7 @@ async def test_audit_rolled_back_when_commit_fails(
     """
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
-    classifier = _make_classifier(
+    assessor = _make_assessor(
         return_envelope=_in_scope_call(category=InScopeCategory.AI)
     )
 
@@ -406,7 +406,7 @@ async def test_audit_rolled_back_when_commit_fails(
         new=AsyncMock(side_effect=boom),
     ):
         with pytest.raises(RuntimeError, match="commit failed"):
-            await svc.execute(_ready(extraction), classifier)
+            await svc.execute(_ready(extraction), assessor)
 
     # audit も業務 in_scope_assessments も両方ゼロ (同 tx で rollback)
     events = await _fetch_assessment_events(db_session, article.id)
@@ -450,13 +450,13 @@ async def test_out_of_scope_race_lost_does_not_record_audit(
     db_session.add(winner)
     await db_session.commit()
 
-    classifier = _make_classifier(return_envelope=_out_of_scope_call())
+    assessor = _make_assessor(return_envelope=_out_of_scope_call())
     svc = AssessmentService(session_factory)
     with patch(
         "app.analysis.assessment.out_of_scope_repository.OutOfScopeRepository.save",
         new=AsyncMock(return_value=None),
     ):
-        result = await svc.execute(_ready(extraction), classifier)
+        result = await svc.execute(_ready(extraction), assessor)
 
     assert isinstance(result, OutOfScopeAssessment)
     events = await _fetch_assessment_events(db_session, article.id)

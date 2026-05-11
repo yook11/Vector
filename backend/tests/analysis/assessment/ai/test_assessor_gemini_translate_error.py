@@ -1,4 +1,4 @@
-"""``GeminiClassifier._translate_error`` の SDK 翻訳テーブルテスト。
+"""``GeminiAssessor._translate_error`` の SDK 翻訳テーブルテスト。
 
 PR3 で legacy ``AnalysisDomainError`` 系 → ``AIProvider*Error`` 系への翻訳に
 書き直した。spec §Gemini SDK 翻訳テーブルの全 row を parametrize で網羅し、
@@ -16,7 +16,7 @@ import pytest
 from google.genai import errors as genai_errors
 from pydantic import SecretStr
 
-from app.analysis.classifier.gemini import GeminiClassifier
+from app.analysis.assessment.ai.gemini import GeminiAssessor
 from app.analysis.errors.provider import (
     AIProviderConfigurationError,
     AIProviderInputRejectedError,
@@ -86,15 +86,15 @@ def _make_server_error(
 def test_client_error_translation(
     code: int, status: str, message: str, expected: type
 ) -> None:
-    classifier = GeminiClassifier()
+    assessor = GeminiAssessor()
     exc = _make_client_error(code=code, status=status, message=message)
-    translated = classifier._translate_error(exc)
+    translated = assessor._translate_error(exc)
     assert isinstance(translated, expected)
 
 
 def test_failed_precondition_via_status_only_translates_to_configuration() -> None:
     """``code`` ではなく ``status`` のみで判定される FAILED_PRECONDITION 経路。"""
-    classifier = GeminiClassifier()
+    assessor = GeminiAssessor()
     exc = _make_client_error(
         code=400,
         status="FAILED_PRECONDITION",
@@ -103,7 +103,7 @@ def test_failed_precondition_via_status_only_translates_to_configuration() -> No
     # code=400 が先に評価されると INVALID_ARGUMENT 経路に入って message 分岐するが、
     # FAILED_PRECONDITION は本来 PreconditionError 系。ここでは INVALID_ARGUMENT
     # status を持つので bad request として翻訳される (実装の policy 通り)。
-    translated = classifier._translate_error(exc)
+    translated = assessor._translate_error(exc)
     # message が "API key" / "permission" / "blocked" / "safety" を含まない →
     # AIProviderRequestInvalidError に落ちる
     assert isinstance(translated, AIProviderRequestInvalidError)
@@ -115,9 +115,9 @@ def test_failed_precondition_via_status_only_translates_to_configuration() -> No
 
 
 def test_server_error_translation() -> None:
-    classifier = GeminiClassifier()
+    assessor = GeminiAssessor()
     exc = _make_server_error()
-    translated = classifier._translate_error(exc)
+    translated = assessor._translate_error(exc)
     assert isinstance(translated, AIProviderServiceUnavailableError)
 
 
@@ -137,8 +137,8 @@ def test_server_error_translation() -> None:
     ],
 )
 def test_network_error_translation(exc: Exception) -> None:
-    classifier = GeminiClassifier()
-    translated = classifier._translate_error(exc)
+    assessor = GeminiAssessor()
+    translated = assessor._translate_error(exc)
     assert isinstance(translated, AIProviderNetworkError)
 
 
@@ -155,13 +155,13 @@ def test_leaked_api_key_message_is_fixed_string() -> None:
     を返す。これを ``str(exc)`` でログ / audit に流すと key prefix が漏れる
     ため、固定文言に丸める。
     """
-    classifier = GeminiClassifier()
+    assessor = GeminiAssessor()
     sdk_message = (
         "API key AIzaSyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q has been reported as leaked"
     )
     exc = _make_client_error(code=400, status="INVALID_ARGUMENT", message=sdk_message)
 
-    translated = classifier._translate_error(exc)
+    translated = assessor._translate_error(exc)
 
     assert isinstance(translated, AIProviderConfigurationError)
     assert (
@@ -177,9 +177,9 @@ def test_leaked_api_key_message_is_fixed_string() -> None:
 
 
 def test_unmappable_returns_exc_unchanged() -> None:
-    classifier = GeminiClassifier()
+    assessor = GeminiAssessor()
     original = RuntimeError("totally unknown")
-    translated = classifier._translate_error(original)
+    translated = assessor._translate_error(original)
     # _translate_error は exc をそのまま返す → caller (_call_once) が `if
     # translated is exc: raise` で素通し
     assert translated is original

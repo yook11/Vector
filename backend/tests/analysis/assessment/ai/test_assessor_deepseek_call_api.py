@@ -1,4 +1,4 @@
-"""``DeepSeekClassifier._call_api`` の integration テスト。
+"""``DeepSeekAssessor._call_api`` の integration テスト。
 
 PR3 で次の流れに rewrite された:
 - SDK レスポンスの ``tool_call.arguments`` を ``json.loads`` で dict 化
@@ -21,11 +21,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pydantic import SecretStr
 
+from app.analysis.assessment.ai.deepseek import DeepSeekAssessor
+from app.analysis.assessment.ai.deepseek_prompt import DeepSeekAssessmentPrompt
+from app.analysis.assessment.ai.envelope import AssessmentCall
+from app.analysis.assessment.ai.schema import InScope, InScopeCategory, OutOfScope
 from app.analysis.assessment.errors import AssessmentResponseInvalidError
-from app.analysis.classifier.deepseek import DeepSeekClassifier
-from app.analysis.classifier.deepseek_prompt import DeepSeekClassificationPrompt
-from app.analysis.classifier.envelope import AssessmentCall
-from app.analysis.classifier.schema import InScope, InScopeCategory, OutOfScope
 from app.config import settings
 
 
@@ -37,7 +37,7 @@ def _set_deepseek_key(monkeypatch: pytest.MonkeyPatch) -> None:
 def _stub_response(
     *,
     arguments: str | None,
-    tool_name: str = DeepSeekClassificationPrompt.TOOL_NAME,
+    tool_name: str = DeepSeekAssessmentPrompt.TOOL_NAME,
     finish_reason: str = "tool_calls",
     no_tool_calls: bool = False,
 ) -> MagicMock:
@@ -59,12 +59,10 @@ def _stub_response(
     return response
 
 
-def _patch_classifier_call(
-    classifier: DeepSeekClassifier, response: MagicMock
-) -> AsyncMock:
+def _patch_assessor_call(assessor: DeepSeekAssessor, response: MagicMock) -> AsyncMock:
     mock_call = AsyncMock(return_value=response)
-    classifier._client = MagicMock()
-    classifier._client.chat.completions.create = mock_call
+    assessor._client = MagicMock()
+    assessor._client.chat.completions.create = mock_call
     return mock_call
 
 
@@ -76,7 +74,7 @@ def _patch_classifier_call(
 class TestDeepSeekCallApiSuccess:
     @pytest.mark.asyncio
     async def test_in_scope_round_trip(self) -> None:
-        classifier = DeepSeekClassifier()
+        assessor = DeepSeekAssessor()
         args = json.dumps(
             {
                 "category": "ai",
@@ -84,9 +82,9 @@ class TestDeepSeekCallApiSuccess:
                 "investor_take": "Significant traction.",
             }
         )
-        _patch_classifier_call(classifier, _stub_response(arguments=args))
+        _patch_assessor_call(assessor, _stub_response(arguments=args))
 
-        call = await classifier._call_api("prompt")
+        call = await assessor._call_api("prompt")
 
         assert isinstance(call, AssessmentCall)
         assert isinstance(call.result, InScope)
@@ -95,11 +93,11 @@ class TestDeepSeekCallApiSuccess:
         assert call.raw_response == args
         assert call.raw_category == "ai"
         assert call.raw_topic == "ai agents"
-        assert call.prompt_version == DeepSeekClassificationPrompt.VERSION
+        assert call.prompt_version == DeepSeekAssessmentPrompt.VERSION
 
     @pytest.mark.asyncio
     async def test_out_of_scope_round_trip(self) -> None:
-        classifier = DeepSeekClassifier()
+        assessor = DeepSeekAssessor()
         args = json.dumps(
             {
                 "category": "out_of_scope",
@@ -107,9 +105,9 @@ class TestDeepSeekCallApiSuccess:
                 "investor_take": "Not relevant.",
             }
         )
-        _patch_classifier_call(classifier, _stub_response(arguments=args))
+        _patch_assessor_call(assessor, _stub_response(arguments=args))
 
-        call = await classifier._call_api("prompt")
+        call = await assessor._call_api("prompt")
 
         assert isinstance(call.result, OutOfScope)
         assert call.raw_category == "out_of_scope"
@@ -131,28 +129,28 @@ class TestDeepSeekToolCallStructure:
 
     @pytest.mark.asyncio
     async def test_no_tool_call_raises_response_invalid(self) -> None:
-        classifier = DeepSeekClassifier()
-        _patch_classifier_call(
-            classifier,
+        assessor = DeepSeekAssessor()
+        _patch_assessor_call(
+            assessor,
             _stub_response(arguments=None, no_tool_calls=True, finish_reason="stop"),
         )
 
         with pytest.raises(AssessmentResponseInvalidError) as exc_info:
-            await classifier._call_api("prompt")
+            await assessor._call_api("prompt")
 
         assert "did not return" in str(exc_info.value)
         assert "stop" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_wrong_tool_name_raises_response_invalid(self) -> None:
-        classifier = DeepSeekClassifier()
-        _patch_classifier_call(
-            classifier,
+        assessor = DeepSeekAssessor()
+        _patch_assessor_call(
+            assessor,
             _stub_response(arguments="{}", tool_name="some_other_tool"),
         )
 
         with pytest.raises(AssessmentResponseInvalidError) as exc_info:
-            await classifier._call_api("prompt")
+            await assessor._call_api("prompt")
 
         assert "did not return" in str(exc_info.value)
 
@@ -165,39 +163,39 @@ class TestDeepSeekToolCallStructure:
 class TestDeepSeekInvalidArguments:
     @pytest.mark.asyncio
     async def test_invalid_arguments_json_raises_response_invalid(self) -> None:
-        classifier = DeepSeekClassifier()
-        _patch_classifier_call(classifier, _stub_response(arguments="not json at all"))
+        assessor = DeepSeekAssessor()
+        _patch_assessor_call(assessor, _stub_response(arguments="not json at all"))
 
         with pytest.raises(AssessmentResponseInvalidError) as exc_info:
-            await classifier._call_api("prompt")
+            await assessor._call_api("prompt")
 
         assert "not valid JSON" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_non_object_arguments_raises_response_invalid(self) -> None:
-        classifier = DeepSeekClassifier()
-        _patch_classifier_call(classifier, _stub_response(arguments="[1, 2, 3]"))
+        assessor = DeepSeekAssessor()
+        _patch_assessor_call(assessor, _stub_response(arguments="[1, 2, 3]"))
 
         with pytest.raises(AssessmentResponseInvalidError) as exc_info:
-            await classifier._call_api("prompt")
+            await assessor._call_api("prompt")
 
         assert "not a JSON object" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_missing_key_arguments_raises_response_invalid(self) -> None:
         """parse_assessment の key 欠落で AssessmentResponseInvalidError raise。"""
-        classifier = DeepSeekClassifier()
+        assessor = DeepSeekAssessor()
         args = json.dumps({"category": "ai"})  # topic / investor_take 欠落
-        _patch_classifier_call(classifier, _stub_response(arguments=args))
+        _patch_assessor_call(assessor, _stub_response(arguments=args))
 
         with pytest.raises(AssessmentResponseInvalidError):
-            await classifier._call_api("prompt")
+            await assessor._call_api("prompt")
 
     @pytest.mark.asyncio
     async def test_empty_arguments_raises_response_invalid(self) -> None:
         """arguments が空文字 → JSON parse 失敗 → invalid。"""
-        classifier = DeepSeekClassifier()
-        _patch_classifier_call(classifier, _stub_response(arguments=""))
+        assessor = DeepSeekAssessor()
+        _patch_assessor_call(assessor, _stub_response(arguments=""))
 
         with pytest.raises(AssessmentResponseInvalidError):
-            await classifier._call_api("prompt")
+            await assessor._call_api("prompt")

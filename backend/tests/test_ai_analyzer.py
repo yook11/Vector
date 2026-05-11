@@ -1,16 +1,17 @@
-"""AI Extractor / Classifier / Service のテスト。
+"""AI Extractor / Assessor / Service のテスト。
 
-PR3 で classifier 系テストの大部分は専用 file に移送された:
-- ``BaseClassifier._call_once`` の bare re-raise guard →
-  ``tests/analysis/classifier/test_base_call_once.py``
-- ``GeminiClassifier._translate_error`` の SDK 翻訳テーブル
+PR3 で assessor 系テストの大部分は専用 file に移送された:
+- ``BaseAssessor._call_once`` の bare re-raise guard →
+  ``tests/analysis/assessment/ai/test_base_call_once.py``
+- ``GeminiAssessor._translate_error`` の SDK 翻訳テーブル
   (leaked-key sanitization 含む) →
-  ``tests/analysis/classifier/test_gemini_translate_error.py``
-- ``DeepSeekClassifier._translate_error`` →
-  ``tests/analysis/classifier/test_deepseek_translate_error.py``
-- ``_call_api`` integration → ``test_{gemini,deepseek}_call_api.py``
-- ``CLASSIFICATION_TOOL_SCHEMA`` 整合性 →
-  ``tests/analysis/classifier/test_classification_prompts.py``
+  ``tests/analysis/assessment/ai/test_assessor_gemini_translate_error.py``
+- ``DeepSeekAssessor._translate_error`` →
+  ``tests/analysis/assessment/ai/test_assessor_deepseek_translate_error.py``
+- ``_call_api`` integration →
+  ``test_assessor_{gemini,deepseek}_call_api.py``
+- ``ASSESSMENT_TOOL_SCHEMA`` 整合性 →
+  ``tests/analysis/assessment/ai/test_assessment_prompts.py``
 
 本 file には Stage 4 schema の domain tests と Service 経由の DB 統合 test、および
 Stage 3 (Extraction) の test を残す。Stage 4 mock 戻り値は PR3 で envelope 化された
@@ -25,6 +26,14 @@ from pydantic import SecretStr, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
+from app.analysis.assessment.ai.base import BaseAssessor
+from app.analysis.assessment.ai.envelope import AssessmentCall
+from app.analysis.assessment.ai.schema import (
+    AssessmentResult,
+    InScope,
+    InScopeCategory,
+    OutOfScope,
+)
 from app.analysis.assessment.domain.in_scope import (
     InScopeAssessment as InScopeAssessmentEntity,
 )
@@ -33,14 +42,6 @@ from app.analysis.assessment.domain.out_of_scope import (
 )
 from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.service import AssessmentService
-from app.analysis.classifier.base import BaseClassifier
-from app.analysis.classifier.envelope import AssessmentCall
-from app.analysis.classifier.schema import (
-    AssessmentResult,
-    InScope,
-    InScopeCategory,
-    OutOfScope,
-)
 from app.analysis.domain.value_objects.entity import (
     EntityName,
     EntityRawType,
@@ -130,9 +131,9 @@ def _make_in_scope(
 
 
 def _make_assessment_call(result: AssessmentResult) -> AssessmentCall:
-    """``classifier.classify()`` の戻り値 envelope を生成するヘルパー (PR3)。
+    """``assessor.assess()`` の戻り値 envelope を生成するヘルパー (PR3)。
 
-    Service テスト等で mock_classifier.classify の return_value に渡す。
+    Service テスト等で mock_assessor.assess の return_value に渡す。
     raw 情報は audit 焼付用 (PR5 で活用) なので、ここでは妥当な test
     fixture 値を入れる。
     """
@@ -210,15 +211,15 @@ def test_base_extractor_rejects_subclass_without_classvar() -> None:
             def _translate_error(self, exc): ...
 
 
-def test_base_classifier_rejects_subclass_without_classvar() -> None:
+def test_base_assessor_rejects_subclass_without_classvar() -> None:
     with pytest.raises(TypeError, match="must define ClassVar"):
 
-        class BadClassifier(BaseClassifier):
+        class BadAssessor(BaseAssessor):
             MODEL = "test"
             RPM = 10
             # RPD は未定義
 
-            async def classify(
+            async def assess(
                 self, title_ja, summary_ja, entities, existing_topics_by_category=None
             ): ...
 
@@ -481,17 +482,20 @@ async def test_extractor_sanitizes_untrusted_input_boundary() -> None:
     assert prompt.count("[/untrusted_input]") == 2
 
 
-# NOTE: PR3 で classifier 系の単体テストは専用 file に移送された:
-# - BaseClassifier._call_once → tests/analysis/classifier/test_base_call_once.py
-# - GeminiClassifier._translate_error (leaked-key sanitization 含む) →
-#   tests/analysis/classifier/test_gemini_translate_error.py
-# - DeepSeekClassifier._translate_error →
-#   tests/analysis/classifier/test_deepseek_translate_error.py
-# - GeminiClassifier._call_api → tests/analysis/classifier/test_gemini_call_api.py
-# - DeepSeekClassifier._call_api → tests/analysis/classifier/test_deepseek_call_api.py
-# - CLASSIFICATION_TOOL_SCHEMA / GEMINI_SCHEMA 整合性 →
-#   tests/analysis/classifier/test_classification_prompts.py
-# - parse_assessment 単体 → tests/analysis/classifier/test_parse_assessment.py
+# NOTE: PR3 で assessor 系の単体テストは専用 file に移送された:
+# - BaseAssessor._call_once → tests/analysis/assessment/ai/test_base_call_once.py
+# - GeminiAssessor._translate_error (leaked-key sanitization 含む) →
+#   tests/analysis/assessment/ai/test_assessor_gemini_translate_error.py
+# - DeepSeekAssessor._translate_error →
+#   tests/analysis/assessment/ai/test_assessor_deepseek_translate_error.py
+# - GeminiAssessor._call_api →
+#   tests/analysis/assessment/ai/test_assessor_gemini_call_api.py
+# - DeepSeekAssessor._call_api →
+#   tests/analysis/assessment/ai/test_assessor_deepseek_call_api.py
+# - ASSESSMENT_TOOL_SCHEMA / GEMINI_SCHEMA 整合性 →
+#   tests/analysis/assessment/ai/test_assessment_prompts.py
+# - parse_assessment 単体 →
+#   tests/analysis/assessment/ai/test_parse_assessment.py
 
 
 # --- E2. Extraction domain invariants (DB 不要) ---
@@ -744,11 +748,11 @@ async def test_classification_persists_topic_and_category(
     )
     assert expected_category_id is not None
 
-    mock_classifier = MagicMock(spec=BaseClassifier)
-    mock_classifier.MODEL = "gemini-2.5-flash-lite"
-    mock_classifier.model_name = "gemini-2.5-flash-lite"
-    # PR3: classifier 戻り値を AssessmentCall envelope に追従
-    mock_classifier.classify = AsyncMock(
+    mock_assessor = MagicMock(spec=BaseAssessor)
+    mock_assessor.MODEL = "gemini-2.5-flash-lite"
+    mock_assessor.model_name = "gemini-2.5-flash-lite"
+    # PR3: assessor 戻り値を AssessmentCall envelope に追従
+    mock_assessor.assess = AsyncMock(
         return_value=_make_assessment_call(
             _make_in_scope(
                 category=InScopeCategory.COMPUTING,
@@ -765,7 +769,7 @@ async def test_classification_persists_topic_and_category(
         summary=extraction.summary,
     )
     svc = AssessmentService(session_factory)
-    result = await svc.execute(ready, mock_classifier)
+    result = await svc.execute(ready, mock_assessor)
     assert isinstance(result, InScopeAssessmentEntity)
 
     db_session.expire_all()
@@ -796,11 +800,11 @@ async def test_classification_persists_rejection_when_out_of_scope(
     )
     await db_session.commit()
 
-    mock_classifier = MagicMock(spec=BaseClassifier)
-    mock_classifier.MODEL = "gemini-2.5-flash-lite"
-    mock_classifier.model_name = "gemini-2.5-flash-lite"
-    # PR3: classifier 戻り値を AssessmentCall envelope に追従
-    mock_classifier.classify = AsyncMock(
+    mock_assessor = MagicMock(spec=BaseAssessor)
+    mock_assessor.MODEL = "gemini-2.5-flash-lite"
+    mock_assessor.model_name = "gemini-2.5-flash-lite"
+    # PR3: assessor 戻り値を AssessmentCall envelope に追従
+    mock_assessor.assess = AsyncMock(
         return_value=_make_assessment_call(
             OutOfScope(investor_take="先端技術の話題ではない")
         )
@@ -814,7 +818,7 @@ async def test_classification_persists_rejection_when_out_of_scope(
         summary=extraction.summary,
     )
     svc = AssessmentService(session_factory)
-    result = await svc.execute(ready, mock_classifier)
+    result = await svc.execute(ready, mock_assessor)
     assert isinstance(result, OutOfScopeAssessmentEntity)
 
     db_session.expire_all()
@@ -837,7 +841,7 @@ async def test_classification_persists_rejection_when_out_of_scope(
 
 
 # Pattern A' (typed-pipeline-preconditions.md) リファクタにより、
-# 「既に classify 済み」「既に rejected 済み」の precondition 判定は
+# 「既に assess 済み」「既に rejected 済み」の precondition 判定は
 # `ReadyForAssessment.try_advance_from` に移動した。Service.execute は
 # precondition 分岐を持たず、対応するテストは
 # `tests/test_ready_for_classification.py` に存在する。

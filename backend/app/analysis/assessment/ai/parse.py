@@ -4,11 +4,11 @@ Gemini / DeepSeek の SDK text response を ``json.loads`` した dict を受け
 ドメイン型 (``InScope`` | ``OutOfScope``) に詰め替える。本関数が AI 出力の
 ドメイン境界を 1 箇所に集約する (``category == OUT_OF_SCOPE`` 分岐含む)。
 
-provider 非依存 — Gemini / DeepSeek の両 classifier から共通で呼ばれる前提で
-provider 固有の SDK 例外翻訳は各 classifier 実装側 (``gemini.py`` / ``deepseek.py``)
+provider 非依存 — Gemini / DeepSeek の両 assessor から共通で呼ばれる前提で
+provider 固有の SDK 例外翻訳は各 assessor 実装側 (``gemini.py`` / ``deepseek.py``)
 に分離する。
 
-設計詳細: ``specs/pipeline-events-stage4-assessment.md`` §Classifier 公開型
+設計詳細: ``specs/pipeline-events-stage4-assessment.md`` §Assessor 公開型
 """
 
 from __future__ import annotations
@@ -17,14 +17,14 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from app.analysis.assessment.errors import AssessmentResponseInvalidError
-from app.analysis.classifier.schema import (
+from app.analysis.assessment.ai.schema import (
     AssessmentResult,
     InScope,
     InScopeCategory,
     OutOfScope,
     ValidCategory,
 )
+from app.analysis.assessment.errors import AssessmentResponseInvalidError
 from app.analysis.domain.value_objects.topic import TopicName
 
 

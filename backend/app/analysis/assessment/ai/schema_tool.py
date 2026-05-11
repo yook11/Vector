@@ -1,29 +1,28 @@
-"""Stage 4 classifier 用 AI 境界 schema 定数 (provider 別)。
+"""Stage 4 assessor 用 AI 境界 schema 定数 (provider 別)。
 
 provider ごとに SDK の schema 受理形式が違うため、別 SSoT として並存させる:
 
-- ``CLASSIFICATION_TOOL_SCHEMA`` (DeepSeek): Function Calling + ``strict: true``
+- ``ASSESSMENT_TOOL_SCHEMA`` (DeepSeek): Function Calling + ``strict: true``
   (beta endpoint) 用。lowercase 標準 JSON Schema 形式で ``additionalProperties:
   false`` + ``pattern`` を入れる。``$ref``/``$defs`` は AI が enforce しないので
   inline flat (specs/stage2-deepseek-migration.md PoC 参照)。
-- ``CLASSIFICATION_GEMINI_SCHEMA`` (Gemini): ``response_schema`` 引数用。
+- ``ASSESSMENT_GEMINI_SCHEMA`` (Gemini): ``response_schema`` 引数用。
   OpenAPI 3.0 subset (``type: "OBJECT"`` / ``"STRING"`` の uppercase) で SDK
   Schema 形式に寄せる。``additionalProperties`` は Gemini SDK Schema 形式で
   未サポート、``pattern`` は enforce 弱いため省略する。受信後の制約検証は
   ``parse_assessment`` 内 ``TopicName`` VO で完全実施するため AI 境界での
   pattern / additionalProperties 強制は冗長。
 
-整合性ドリフト (enum 追加忘れ等) は ``test_classification_tool_schema.py`` で
-構造的に検出する。
+整合性ドリフト (enum 追加忘れ等) は ``test_schema.py`` で構造的に検出する。
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from app.analysis.classifier.schema import ValidCategory
+from app.analysis.assessment.ai.schema import ValidCategory
 
-CLASSIFICATION_TOOL_SCHEMA: dict[str, Any] = {
+ASSESSMENT_TOOL_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
     "required": ["category", "topic", "investor_take"],
@@ -53,7 +52,7 @@ CLASSIFICATION_TOOL_SCHEMA: dict[str, Any] = {
 }
 
 
-CLASSIFICATION_GEMINI_SCHEMA: dict[str, Any] = {
+ASSESSMENT_GEMINI_SCHEMA: dict[str, Any] = {
     "type": "OBJECT",
     "required": ["category", "topic", "investor_take"],
     "properties": {

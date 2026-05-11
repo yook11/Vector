@@ -1,4 +1,4 @@
-"""``BaseClassifier._call_once`` の bare re-raise guard パターンのテスト。
+"""``BaseAssessor._call_once`` の bare re-raise guard パターンのテスト。
 
 PR3 で導入した:
 - ``(AIProviderError, AssessmentError)`` の素通し (二重翻訳防止)
@@ -15,14 +15,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from app.analysis.assessment.ai.base import BaseAssessor
+from app.analysis.assessment.ai.envelope import AssessmentCall
+from app.analysis.assessment.ai.schema import OutOfScope
 from app.analysis.assessment.errors import (
     AssessmentRecoverableError,
     AssessmentResponseInvalidError,
     AssessmentTerminalSkipError,
 )
-from app.analysis.classifier.base import BaseClassifier
-from app.analysis.classifier.envelope import AssessmentCall
-from app.analysis.classifier.schema import OutOfScope
 from app.analysis.errors.provider import (
     AIProviderConfigurationError,
     AIProviderNetworkError,
@@ -30,8 +30,8 @@ from app.analysis.errors.provider import (
 )
 
 
-class _StubClassifier(BaseClassifier):
-    """テスト用の最小 BaseClassifier 派生 (abstract method を mock で差し替える)。"""
+class _StubAssessor(BaseAssessor):
+    """テスト用の最小 BaseAssessor 派生 (abstract method を mock で差し替える)。"""
 
     MODEL = "test-model"
     RPM = None
@@ -41,7 +41,7 @@ class _StubClassifier(BaseClassifier):
         # client 不要 (mock で _call_api を差し替えるため)
         pass
 
-    async def classify(  # pragma: no cover - 直接テストしない
+    async def assess(  # pragma: no cover - 直接テストしない
         self, title_ja: str, summary_ja: str
     ) -> AssessmentCall:
         return await self._call_once("p")
@@ -77,7 +77,7 @@ class TestCallOnceSuccess:
 
     @pytest.mark.asyncio
     async def test_returns_assessment_call(self) -> None:
-        cls = _StubClassifier()
+        cls = _StubAssessor()
         cls._call_api = AsyncMock(return_value=_make_call())  # type: ignore[method-assign]
         result = await cls._call_once("prompt")
         assert isinstance(result, AssessmentCall)
@@ -94,7 +94,7 @@ class TestCallOncePassthrough:
     @pytest.mark.asyncio
     async def test_ai_provider_rate_limited_passes_through_unchanged(self) -> None:
         original = AIProviderRateLimitedError("rate limited")
-        cls = _StubClassifier()
+        cls = _StubAssessor()
         cls._call_api = AsyncMock(side_effect=original)  # type: ignore[method-assign]
         cls._translate_error = MagicMock(  # type: ignore[method-assign]
             side_effect=AssertionError("must not be called")
@@ -109,7 +109,7 @@ class TestCallOncePassthrough:
     @pytest.mark.asyncio
     async def test_ai_provider_configuration_passes_through_unchanged(self) -> None:
         original = AIProviderConfigurationError("bad api key")
-        cls = _StubClassifier()
+        cls = _StubAssessor()
         cls._call_api = AsyncMock(side_effect=original)  # type: ignore[method-assign]
         cls._translate_error = MagicMock(  # type: ignore[method-assign]
             side_effect=AssertionError("must not be called")
@@ -123,7 +123,7 @@ class TestCallOncePassthrough:
     @pytest.mark.asyncio
     async def test_assessment_response_invalid_passes_through_unchanged(self) -> None:
         original = AssessmentResponseInvalidError("schema mismatch")
-        cls = _StubClassifier()
+        cls = _StubAssessor()
         cls._call_api = AsyncMock(side_effect=original)  # type: ignore[method-assign]
         cls._translate_error = MagicMock(  # type: ignore[method-assign]
             side_effect=AssertionError("must not be called")
@@ -137,7 +137,7 @@ class TestCallOncePassthrough:
     @pytest.mark.asyncio
     async def test_assessment_recoverable_base_passes_through(self) -> None:
         original = AssessmentRecoverableError("x", code="z")
-        cls = _StubClassifier()
+        cls = _StubAssessor()
         cls._call_api = AsyncMock(side_effect=original)  # type: ignore[method-assign]
         cls._translate_error = MagicMock(  # type: ignore[method-assign]
             side_effect=AssertionError("must not be called")
@@ -150,7 +150,7 @@ class TestCallOncePassthrough:
     @pytest.mark.asyncio
     async def test_assessment_terminal_skip_base_passes_through(self) -> None:
         original = AssessmentTerminalSkipError("x", code="z")
-        cls = _StubClassifier()
+        cls = _StubAssessor()
         cls._call_api = AsyncMock(side_effect=original)  # type: ignore[method-assign]
         cls._translate_error = MagicMock(  # type: ignore[method-assign]
             side_effect=AssertionError("must not be called")
@@ -173,7 +173,7 @@ class TestCallOnceTranslate:
     async def test_translatable_exception_wrapped_with_from(self) -> None:
         original = ConnectionError("network down")
         translated = AIProviderNetworkError("translated")
-        cls = _StubClassifier()
+        cls = _StubAssessor()
         cls._call_api = AsyncMock(side_effect=original)  # type: ignore[method-assign]
         cls._translate_error = MagicMock(return_value=translated)  # type: ignore[method-assign]
 
@@ -188,7 +188,7 @@ class TestCallOnceTranslate:
     async def test_unmappable_exception_bare_reraise(self) -> None:
         # _translate_error が exc をそのまま return → from なしで素通し
         original = RuntimeError("unmappable")
-        cls = _StubClassifier()
+        cls = _StubAssessor()
         cls._call_api = AsyncMock(side_effect=original)  # type: ignore[method-assign]
         cls._translate_error = MagicMock(return_value=original)  # type: ignore[method-assign]
 

@@ -1,13 +1,13 @@
-"""Stage 4 (classification) DeepSeek Prompt — bounded constants + render。
+"""Stage 4 (assessment) DeepSeek Prompt — bounded constants + render。
 
 DeepSeek-V4-Flash bound の Prompt class。``TEMPLATE`` は provider 共通の
-``CLASSIFICATION_PROMPT`` を ClassVar で alias する (Gemini 版と同 instance を share)。
+``ASSESSMENT_PROMPT`` を ClassVar で alias する (Gemini 版と同 instance を share)。
 
 Gemini との差分:
 - ``RESPONSE_SCHEMA`` は **dict (tool schema)** で、Pydantic class ではない。
   DeepSeek の Function Calling + strict mode は ``$ref``/``$defs`` を enforce
   しないため、inline flat な JSON Schema を渡す必要がある
-  (`schema_tool.CLASSIFICATION_TOOL_SCHEMA`)。
+  (`schema_tool.ASSESSMENT_TOOL_SCHEMA`)。
 - ``MAX_SUMMARY_CHARS = 8000`` で input cost guard (Gemini にはない)。
 
 ADR `docs/observability/pipeline-events-design.md` §prompt_version の規律 に従い、
@@ -20,19 +20,19 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any, ClassVar
 
-from app.analysis.classifier.prompts import CLASSIFICATION_PROMPT
-from app.analysis.classifier.schema_tool import CLASSIFICATION_TOOL_SCHEMA
+from app.analysis.assessment.ai.prompts import ASSESSMENT_PROMPT
+from app.analysis.assessment.ai.schema_tool import ASSESSMENT_TOOL_SCHEMA
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 from app.observability.prompt_versions import compute_call_signature
 
 
-class DeepSeekClassificationPrompt:
-    """Stage 4 classification prompt (DeepSeek-V4-Flash 専用)。"""
+class DeepSeekAssessmentPrompt:
+    """Stage 4 assessment prompt (DeepSeek-V4-Flash 専用)。"""
 
     # Function Calling の関数名 (tool_choice + tools.function.name で参照)
-    TOOL_NAME: ClassVar[str] = "classify_article"
+    TOOL_NAME: ClassVar[str] = "assess_article"
 
-    TEMPLATE: ClassVar[str] = CLASSIFICATION_PROMPT
+    TEMPLATE: ClassVar[str] = ASSESSMENT_PROMPT
     MODEL: ClassVar[str] = "deepseek-v4-flash"
     GEN_CONFIG: ClassVar[Mapping[str, Any]] = MappingProxyType(
         {
@@ -47,7 +47,7 @@ class DeepSeekClassificationPrompt:
     )
     # SDK は dict をそのまま受ける (Pydantic 経由ではない)
     RESPONSE_SCHEMA: ClassVar[Mapping[str, Any]] = MappingProxyType(
-        CLASSIFICATION_TOOL_SCHEMA
+        ASSESSMENT_TOOL_SCHEMA
     )
     SYSTEM_INSTRUCTION: ClassVar[str | None] = None
 

@@ -4,11 +4,11 @@ Entity (``InScopeAssessment`` / ``OutOfScopeAssessment``) の ``__post_init__``
 不変条件を検証する。
 
 AI 境界型 (``InScope`` / ``OutOfScope``) の sanitize / 長さ上限は
-``tests/analysis/classifier/test_schema.py`` が保護網を持つ。
+``tests/analysis/assessment/ai/test_schema.py`` が保護網を持つ。
 
-注 (PR3.5-d.0): ファイル名 ``test_classification_domain.py`` は本 PR で
-rename しない (別 cleanup PR で ``test_assessment_domain.py`` に rename
-予定)。内容は assessment 命名に追従済。
+注: ファイル名 ``test_classification_domain.py`` は本 PR で rename しない
+(別 cleanup PR で ``test_assessment_domain.py`` に rename 予定)。内容は
+assessment 命名に追従済。
 """
 
 from __future__ import annotations

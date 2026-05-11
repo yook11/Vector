@@ -155,7 +155,7 @@ class AssessmentPayload(BasePipelineEventPayload):
     extraction_id: int | None = None
 
     # A 級: メタデータ
-    ai_model: str | None = None  # 使用 classifier の model 名
+    ai_model: str | None = None  # 使用 assessor の model 名
     prompt_version: str | None = None  # prompt+model+config の SHA-256 prefix 8
 
     # A' / S 級: AI 入出力 (Stage 4 = input full 4KB + raw 2KB)

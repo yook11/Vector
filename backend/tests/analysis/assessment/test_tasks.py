@@ -22,7 +22,7 @@ from app.analysis.errors import RateLimitError
 
 
 def _make_provider_fake() -> MagicMock:
-    """classifier 用のスタブ。MODEL/RPM/RPD を持つ。"""
+    """assessor 用のスタブ。MODEL/RPM/RPD を持つ。"""
     fake = MagicMock()
     fake.MODEL = "test-model"
     fake.RPM = 50
@@ -32,15 +32,15 @@ def _make_provider_fake() -> MagicMock:
 
 def _make_ctx(
     *,
-    classifier: MagicMock | None = None,
+    assessor: MagicMock | None = None,
     retry_count: int = 0,
     max_retries: int = 0,
 ) -> MagicMock:
     """taskiq Context モック。"""
     ctx = MagicMock()
     ctx.state = SimpleNamespace(session_factory=MagicMock())
-    if classifier is not None:
-        ctx.state.classifier = classifier
+    if assessor is not None:
+        ctx.state.assessor = assessor
     ctx.message.labels = {
         "retry_count": retry_count,
         "max_retries": max_retries,
@@ -75,7 +75,7 @@ class TestAssessContent:
         from app.analysis.assessment.domain.in_scope import InScopeAssessment
         from app.analysis.assessment.tasks import assess_content
 
-        mock_ctx = _make_ctx(classifier=_make_provider_fake())
+        mock_ctx = _make_ctx(assessor=_make_provider_fake())
         mock_result = MagicMock(spec=InScopeAssessment)
         ready = _make_ready(extraction_id=2)
         ready_emb = _make_ready_emb(analysis_id=100)
@@ -104,7 +104,7 @@ class TestAssessContent:
         from app.analysis.assessment.domain.in_scope import InScopeAssessment
         from app.analysis.assessment.tasks import assess_content
 
-        mock_ctx = _make_ctx(classifier=_make_provider_fake())
+        mock_ctx = _make_ctx(assessor=_make_provider_fake())
         mock_result = MagicMock(spec=InScopeAssessment)
         ready = _make_ready(extraction_id=2)
 
@@ -132,7 +132,7 @@ class TestAssessContent:
         from app.analysis.assessment.domain.out_of_scope import OutOfScopeAssessment
         from app.analysis.assessment.tasks import assess_content
 
-        mock_ctx = _make_ctx(classifier=_make_provider_fake())
+        mock_ctx = _make_ctx(assessor=_make_provider_fake())
         mock_result = MagicMock(spec=OutOfScopeAssessment)
         ready = _make_ready(extraction_id=2)
 
@@ -157,7 +157,7 @@ class TestAssessContent:
         from app.analysis.assessment.tasks import assess_content
 
         mock_ctx = _make_ctx(
-            classifier=_make_provider_fake(), retry_count=0, max_retries=2
+            assessor=_make_provider_fake(), retry_count=0, max_retries=2
         )
         ready = _make_ready()
 
@@ -184,7 +184,7 @@ class TestAssessContent:
         from app.analysis.assessment.tasks import assess_content
 
         mock_ctx = _make_ctx(
-            classifier=_make_provider_fake(), retry_count=2, max_retries=2
+            assessor=_make_provider_fake(), retry_count=2, max_retries=2
         )
         ready = _make_ready()
 
@@ -220,7 +220,7 @@ class TestAssessContentMarkerDispatch:
         """``AssessmentTerminalSkipError`` → audit + return (taskiq retry なし)。"""
         from app.analysis.assessment.tasks import assess_content
 
-        ctx = _make_ctx(classifier=_make_provider_fake(), retry_count=0, max_retries=2)
+        ctx = _make_ctx(assessor=_make_provider_fake(), retry_count=0, max_retries=2)
         ready = _make_ready()
         exc = AssessmentTerminalSkipError("bad config", code="ai_error_configuration")
 
@@ -247,7 +247,7 @@ class TestAssessContentMarkerDispatch:
         TerminalSkip 句に dispatch される (Recoverable 句に誤って落ちない)。"""
         from app.analysis.assessment.tasks import assess_content
 
-        ctx = _make_ctx(classifier=_make_provider_fake(), retry_count=0, max_retries=2)
+        ctx = _make_ctx(assessor=_make_provider_fake(), retry_count=0, max_retries=2)
         ready = _make_ready()
         exc = AssessmentCategoryMissingError("unknown slug 'foo'")
 
@@ -275,7 +275,7 @@ class TestAssessContentMarkerDispatch:
         """``AssessmentRecoverableError`` + retry 余地あり → audit + raise。"""
         from app.analysis.assessment.tasks import assess_content
 
-        ctx = _make_ctx(classifier=_make_provider_fake(), retry_count=0, max_retries=2)
+        ctx = _make_ctx(assessor=_make_provider_fake(), retry_count=0, max_retries=2)
         ready = _make_ready()
         exc = AssessmentRecoverableError("network", code="ai_error_network")
 
@@ -300,7 +300,7 @@ class TestAssessContentMarkerDispatch:
         """``AssessmentRecoverableError`` + 最終 attempt → audit + return。"""
         from app.analysis.assessment.tasks import assess_content
 
-        ctx = _make_ctx(classifier=_make_provider_fake(), retry_count=2, max_retries=2)
+        ctx = _make_ctx(assessor=_make_provider_fake(), retry_count=2, max_retries=2)
         ready = _make_ready()
         exc = AssessmentRecoverableError("network", code="ai_error_network")
 
@@ -325,7 +325,7 @@ class TestAssessContentMarkerDispatch:
         Recoverable 句に dispatch される (catch-all に落ちない)。"""
         from app.analysis.assessment.tasks import assess_content
 
-        ctx = _make_ctx(classifier=_make_provider_fake(), retry_count=0, max_retries=2)
+        ctx = _make_ctx(assessor=_make_provider_fake(), retry_count=0, max_retries=2)
         ready = _make_ready()
         exc = AssessmentResponseInvalidError("schema violation")
 
@@ -353,7 +353,7 @@ class TestAssessContentMarkerDispatch:
         """任意 ``Exception`` + 最終 attempt → catch-all で audit + return。"""
         from app.analysis.assessment.tasks import assess_content
 
-        ctx = _make_ctx(classifier=_make_provider_fake(), retry_count=2, max_retries=2)
+        ctx = _make_ctx(assessor=_make_provider_fake(), retry_count=2, max_retries=2)
         ready = _make_ready()
 
         with (
@@ -379,7 +379,7 @@ class TestAssessContentMarkerDispatch:
         """任意 ``Exception`` + retry 余地あり → catch-all で audit + raise。"""
         from app.analysis.assessment.tasks import assess_content
 
-        ctx = _make_ctx(classifier=_make_provider_fake(), retry_count=0, max_retries=2)
+        ctx = _make_ctx(assessor=_make_provider_fake(), retry_count=0, max_retries=2)
         ready = _make_ready()
 
         with (

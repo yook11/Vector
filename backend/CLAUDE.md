@@ -9,7 +9,7 @@ FastAPI + Python 3.13 + SQLModel (SQLAlchemy 2.0 async) による非同期APIサ
 ## モジュール構成 (bounded context)
 
 - `app/collection/` — ニュース収集 (ingestion / extraction / fetcher 群)
-- `app/analysis/` — 記事単位の AI 分析 (classifier / embedder / extractor)
+- `app/analysis/` — 記事単位の AI 分析 (assessor / embedder / extractor)
 - `app/insights/` — 集約 AI: snapshot (weekly_trends) / briefing (weekly_briefing)
 - `app/digest/` — 週次トレンドダイジェスト pipeline
 - `app/observability/` — `pipeline_events` 監査基盤 (Discriminated Union payload)

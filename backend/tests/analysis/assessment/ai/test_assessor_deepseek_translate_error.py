@@ -1,4 +1,4 @@
-"""``DeepSeekClassifier._translate_error`` の SDK 翻訳テーブルテスト。
+"""``DeepSeekAssessor._translate_error`` の SDK 翻訳テーブルテスト。
 
 PR3 で legacy ``AnalysisDomainError`` 系 → ``AIProvider*Error`` 系への翻訳に
 書き直した。spec §DeepSeek SDK 翻訳テーブル全行を parametrize で網羅し、
@@ -26,7 +26,7 @@ from openai import (
 from openai import RateLimitError as OpenAIRateLimitError
 from pydantic import SecretStr
 
-from app.analysis.classifier.deepseek import DeepSeekClassifier
+from app.analysis.assessment.ai.deepseek import DeepSeekAssessor
 from app.analysis.errors.provider import (
     AIProviderConfigurationError,
     AIProviderInsufficientBalanceError,
@@ -63,16 +63,16 @@ def _make_status_error(status_code: int, msg: str = "x") -> APIStatusError:
 
 
 def test_api_connection_error_translates_to_network() -> None:
-    classifier = DeepSeekClassifier()
+    assessor = DeepSeekAssessor()
     exc = APIConnectionError(request=_make_request())
-    translated = classifier._translate_error(exc)
+    translated = assessor._translate_error(exc)
     assert isinstance(translated, AIProviderNetworkError)
 
 
 def test_api_timeout_error_translates_to_network() -> None:
-    classifier = DeepSeekClassifier()
+    assessor = DeepSeekAssessor()
     exc = APITimeoutError(request=_make_request())
-    translated = classifier._translate_error(exc)
+    translated = assessor._translate_error(exc)
     assert isinstance(translated, AIProviderNetworkError)
 
 
@@ -85,8 +85,8 @@ def test_api_timeout_error_translates_to_network() -> None:
     ],
 )
 def test_builtin_network_errors_translate_to_network(exc: Exception) -> None:
-    classifier = DeepSeekClassifier()
-    translated = classifier._translate_error(exc)
+    assessor = DeepSeekAssessor()
+    translated = assessor._translate_error(exc)
     assert isinstance(translated, AIProviderNetworkError)
 
 
@@ -106,9 +106,9 @@ def test_builtin_network_errors_translate_to_network(exc: Exception) -> None:
     ],
 )
 def test_configuration_errors_translation(exc_factory) -> None:
-    classifier = DeepSeekClassifier()
+    assessor = DeepSeekAssessor()
     exc = exc_factory()
-    translated = classifier._translate_error(exc)
+    translated = assessor._translate_error(exc)
     assert isinstance(translated, AIProviderConfigurationError)
 
 
@@ -118,9 +118,9 @@ def test_configuration_errors_translation(exc_factory) -> None:
 
 
 def test_status_402_translates_to_insufficient_balance() -> None:
-    classifier = DeepSeekClassifier()
+    assessor = DeepSeekAssessor()
     exc = _make_status_error(402, "Insufficient Balance")
-    translated = classifier._translate_error(exc)
+    translated = assessor._translate_error(exc)
     assert isinstance(translated, AIProviderInsufficientBalanceError)
 
 
@@ -130,9 +130,9 @@ def test_status_402_translates_to_insufficient_balance() -> None:
 
 
 def test_rate_limit_error_translates_to_rate_limited() -> None:
-    classifier = DeepSeekClassifier()
+    assessor = DeepSeekAssessor()
     exc = OpenAIRateLimitError("rate limit", response=_make_response(429), body=None)
-    translated = classifier._translate_error(exc)
+    translated = assessor._translate_error(exc)
     assert isinstance(translated, AIProviderRateLimitedError)
 
 
@@ -151,9 +151,9 @@ def test_rate_limit_error_translates_to_rate_limited() -> None:
     ],
 )
 def test_request_invalid_errors_translation(exc_factory) -> None:
-    classifier = DeepSeekClassifier()
+    assessor = DeepSeekAssessor()
     exc = exc_factory()
-    translated = classifier._translate_error(exc)
+    translated = assessor._translate_error(exc)
     assert isinstance(translated, AIProviderRequestInvalidError)
 
 
@@ -163,18 +163,18 @@ def test_request_invalid_errors_translation(exc_factory) -> None:
 
 
 def test_internal_server_error_translates_to_service_unavailable() -> None:
-    classifier = DeepSeekClassifier()
+    assessor = DeepSeekAssessor()
     exc = InternalServerError("server error", response=_make_response(500), body=None)
-    translated = classifier._translate_error(exc)
+    translated = assessor._translate_error(exc)
     assert isinstance(translated, AIProviderServiceUnavailableError)
 
 
 @pytest.mark.parametrize("status_code", [502, 503, 504])
 def test_5xx_status_error_translates_to_service_unavailable(status_code: int) -> None:
     """``InternalServerError`` 以外の 500 系 ``APIStatusError`` 経路。"""
-    classifier = DeepSeekClassifier()
+    assessor = DeepSeekAssessor()
     exc = _make_status_error(status_code, f"upstream {status_code}")
-    translated = classifier._translate_error(exc)
+    translated = assessor._translate_error(exc)
     assert isinstance(translated, AIProviderServiceUnavailableError)
 
 
@@ -184,15 +184,15 @@ def test_5xx_status_error_translates_to_service_unavailable(status_code: int) ->
 
 
 def test_unmappable_returns_exc_unchanged() -> None:
-    classifier = DeepSeekClassifier()
+    assessor = DeepSeekAssessor()
     original = RuntimeError("totally unknown")
-    translated = classifier._translate_error(original)
+    translated = assessor._translate_error(original)
     assert translated is original
 
 
 def test_unmappable_status_code_returns_exc_unchanged() -> None:
     """4xx ですが上記 dispatch にハマらないコード (e.g. 418) は素通し。"""
-    classifier = DeepSeekClassifier()
+    assessor = DeepSeekAssessor()
     exc = _make_status_error(418, "I'm a teapot")
-    translated = classifier._translate_error(exc)
+    translated = assessor._translate_error(exc)
     assert translated is exc

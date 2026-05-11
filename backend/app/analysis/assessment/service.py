@@ -28,6 +28,9 @@ from typing import assert_never
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.analysis.assessment.ai.base import BaseAssessor
+from app.analysis.assessment.ai.envelope import AssessmentCall
+from app.analysis.assessment.ai.schema import InScope, OutOfScope
 from app.analysis.assessment.audit_repository import AssessmentAuditRepository
 from app.analysis.assessment.domain.in_scope import InScopeAssessment
 from app.analysis.assessment.domain.out_of_scope import OutOfScopeAssessment
@@ -35,9 +38,6 @@ from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.out_of_scope_repository import OutOfScopeRepository
 from app.analysis.assessment.provider_mapping import map_provider_to_assessment
 from app.analysis.assessment.repository import InScopeRepository
-from app.analysis.classifier.base import BaseClassifier
-from app.analysis.classifier.envelope import AssessmentCall
-from app.analysis.classifier.schema import InScope, OutOfScope
 from app.analysis.errors.provider import AIProviderError
 
 logger = structlog.get_logger(__name__)
@@ -64,7 +64,7 @@ class AssessmentService:
     async def execute(
         self,
         ready: ReadyForAssessment,
-        classifier: BaseClassifier,
+        assessor: BaseAssessor,
     ) -> InScopeAssessment | OutOfScopeAssessment:
         """Ready 型を受け取り判定 → 永続化 → Entity を返す。
 
@@ -80,7 +80,7 @@ class AssessmentService:
         # prompt_version は audit 焼付 (PR6 で append_in_scope/out_of_scope に
         # envelope そのまま渡す) で参照する。
         try:
-            call = await classifier.classify(
+            call = await assessor.assess(
                 title_ja=ready.translated_title,
                 summary_ja=ready.summary,
             )
@@ -102,7 +102,7 @@ class AssessmentService:
                         ready=ready,
                         in_scope=response,
                         envelope=call,
-                        model_name=classifier.model_name,
+                        model_name=assessor.model_name,
                     )
                 case OutOfScope():
                     return await self._handle_out_of_scope(
@@ -110,7 +110,7 @@ class AssessmentService:
                         ready=ready,
                         out_of_scope=response,
                         envelope=call,
-                        model_name=classifier.model_name,
+                        model_name=assessor.model_name,
                     )
                 case _:
                     assert_never(response)

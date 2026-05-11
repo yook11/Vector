@@ -17,9 +17,9 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
+from app.analysis.assessment.ai.schema import OutOfScope
 from app.analysis.assessment.domain.out_of_scope import OutOfScopeAssessment
 from app.analysis.assessment.domain.ready import ReadyForAssessment
-from app.analysis.classifier.schema import OutOfScope
 from app.models.out_of_scope_assessment import (
     OutOfScopeAssessment as OutOfScopeAssessmentORM,
 )

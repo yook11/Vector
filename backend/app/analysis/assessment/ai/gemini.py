@@ -1,6 +1,6 @@
-"""Gemini 実装の Classifier — Stage 4。
+"""Gemini 実装の Assessor — Stage 4。
 
-Prompt 文面 / model / gen_config / response schema は ``GeminiClassificationPrompt``
+Prompt 文面 / model / gen_config / response schema は ``GeminiAssessmentPrompt``
 が SSoT。本 class は I/O 駆動 (rate limit + SDK 例外翻訳) に責務を絞る。
 
 PR3 で:
@@ -23,11 +23,11 @@ from google import genai
 from google.genai import errors as genai_errors
 from google.genai.types import GenerateContentConfig
 
+from app.analysis.assessment.ai.base import BaseAssessor
+from app.analysis.assessment.ai.envelope import AssessmentCall
+from app.analysis.assessment.ai.gemini_prompt import GeminiAssessmentPrompt
+from app.analysis.assessment.ai.parse import parse_assessment
 from app.analysis.assessment.errors import AssessmentResponseInvalidError
-from app.analysis.classifier.base import BaseClassifier
-from app.analysis.classifier.envelope import AssessmentCall
-from app.analysis.classifier.gemini_prompt import GeminiClassificationPrompt
-from app.analysis.classifier.parse import parse_assessment
 from app.analysis.errors.provider import (
     AIProviderConfigurationError,
     AIProviderInputRejectedError,
@@ -48,10 +48,10 @@ logger = structlog.get_logger(__name__)
 _BLOCKED_FINISH_REASONS = frozenset({"SAFETY", "RECITATION"})
 
 
-class GeminiClassifier(BaseClassifier):
-    """BaseClassifier の Gemini API 実装。"""
+class GeminiAssessor(BaseAssessor):
+    """BaseAssessor の Gemini API 実装。"""
 
-    MODEL = GeminiClassificationPrompt.MODEL
+    MODEL = GeminiAssessmentPrompt.MODEL
     RPM = 100
     RPD = 1500
 
@@ -61,15 +61,13 @@ class GeminiClassifier(BaseClassifier):
             raise AIProviderConfigurationError("GEMINI_API_KEY is not configured")
         self._client = genai.Client(api_key=api_key)
 
-    async def classify(
+    async def assess(
         self,
         title_ja: str,
         summary_ja: str,
     ) -> AssessmentCall:
         """Stage 3 (Extraction) の出力を判定する。原文は読まない。"""
-        prompt = GeminiClassificationPrompt.render(
-            title_ja=title_ja, summary_ja=summary_ja
-        )
+        prompt = GeminiAssessmentPrompt.render(title_ja=title_ja, summary_ja=summary_ja)
         return await self._call_once(prompt)
 
     async def _call_api(self, prompt: str) -> AssessmentCall:
@@ -80,11 +78,11 @@ class GeminiClassifier(BaseClassifier):
         ``AssessmentCall`` envelope に格納する。
         """
         response = await self._client.aio.models.generate_content(
-            model=GeminiClassificationPrompt.MODEL,
+            model=GeminiAssessmentPrompt.MODEL,
             contents=prompt,
             config=GenerateContentConfig(
-                **GeminiClassificationPrompt.GEN_CONFIG,
-                response_schema=dict(GeminiClassificationPrompt.RESPONSE_SCHEMA),
+                **GeminiAssessmentPrompt.GEN_CONFIG,
+                response_schema=dict(GeminiAssessmentPrompt.RESPONSE_SCHEMA),
             ),
         )
 
@@ -122,7 +120,7 @@ class GeminiClassifier(BaseClassifier):
             raw_response=text,
             raw_category=raw_category,
             raw_topic=raw_topic,
-            prompt_version=GeminiClassificationPrompt.VERSION,
+            prompt_version=GeminiAssessmentPrompt.VERSION,
         )
 
     @staticmethod

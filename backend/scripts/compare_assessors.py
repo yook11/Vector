@@ -1,20 +1,20 @@
-"""Stage 2 classifier shadow run: Gemini と DeepSeek の比較レポートを生成する。
+"""Stage 4 assessor shadow run: Gemini と DeepSeek の比較レポートを生成する。
 
-PR-A merge 後、本番切替 (PR-C) 前に本番影響なしで両 classifier を並列呼び出しし、
+PR-A merge 後、本番切替 (PR-C) 前に本番影響なしで両 assessor を並列呼び出しし、
 spec の判定基準を計測する:
 
 - カテゴリ一致率: Gemini 比 ±5% 以内
 - Pydantic 検証失敗率: < 1%
 - per-call レイテンシ: Gemini 比 1.5× 以内
 
-Sample は ``article_extractions`` の最新 N 件 (default 100)。両 classifier を
+Sample は ``article_extractions`` の最新 N 件 (default 100)。両 assessor を
 直接 import して並列呼び出しするため、production の adapter wiring
 (brokers.py の composition root) には影響しない。本スクリプトは PR-B の検証
 専用で、判定完了後 (cutover 完了時) に削除する想定。
 
 Usage:
-    docker compose exec backend python scripts/compare_classifiers.py
-    docker compose exec backend python scripts/compare_classifiers.py --limit 25
+    docker compose exec backend python scripts/compare_assessors.py
+    docker compose exec backend python scripts/compare_assessors.py --limit 25
 
 Output:
     discussions/<YYYY-MM-DD>-stage2-shadow-result.md
@@ -37,10 +37,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.analysis.classifier.base import BaseClassifier
-from app.analysis.classifier.deepseek import DeepSeekClassifier
-from app.analysis.classifier.gemini import GeminiClassifier
-from app.analysis.classifier.schema import (
+from app.analysis.assessment.ai.base import BaseAssessor
+from app.analysis.assessment.ai.deepseek import DeepSeekAssessor
+from app.analysis.assessment.ai.gemini import GeminiAssessor
+from app.analysis.assessment.ai.schema import (
     InScope,
     OutOfScope,
     ValidCategory,
@@ -61,7 +61,7 @@ class Sample:
 
 @dataclass(frozen=True)
 class CallResult:
-    """1 件分の classifier 呼び出し結果。"""
+    """1 件分の assessor 呼び出し結果。"""
 
     category_value: str | None
     topic: str | None
@@ -79,11 +79,11 @@ class SampleResult:
     deepseek: CallResult
 
 
-async def _call_classifier(classifier: BaseClassifier, sample: Sample) -> CallResult:
-    """1 件を classifier に通し、レイテンシと結果/エラーを記録する。"""
+async def _call_assessor(assessor: BaseAssessor, sample: Sample) -> CallResult:
+    """1 件を assessor に通し、レイテンシと結果/エラーを記録する。"""
     start = time.perf_counter()
     try:
-        result = await classifier.classify(
+        result = await assessor.assess(
             title_ja=sample.title_ja, summary_ja=sample.summary_ja
         )
     except AnalysisDomainError as exc:
@@ -123,12 +123,12 @@ async def _call_classifier(classifier: BaseClassifier, sample: Sample) -> CallRe
 
 async def _process_sample(
     sample: Sample,
-    gemini: GeminiClassifier,
-    deepseek: DeepSeekClassifier,
+    gemini: GeminiAssessor,
+    deepseek: DeepSeekAssessor,
 ) -> SampleResult:
     g_res, d_res = await asyncio.gather(
-        _call_classifier(gemini, sample),
-        _call_classifier(deepseek, sample),
+        _call_assessor(gemini, sample),
+        _call_assessor(deepseek, sample),
     )
     return SampleResult(sample=sample, gemini=g_res, deepseek=d_res)
 
@@ -222,7 +222,7 @@ def _render_markdown(
 ) -> str:
     today = datetime.now(UTC).strftime("%Y-%m-%d")
     lines: list[str] = [
-        f"# Stage 2 classifier shadow run — {today}",
+        f"# Stage 4 assessor shadow run — {today}",
         "",
         f"- Gemini: `{gemini_model}`",
         f"- DeepSeek: `{deepseek_model}`",
@@ -330,8 +330,8 @@ async def _run(limit: int, output_path: Path) -> int:
 
     print(f"Loaded {len(samples)} samples")
 
-    gemini = GeminiClassifier()
-    deepseek = DeepSeekClassifier()
+    gemini = GeminiAssessor()
+    deepseek = DeepSeekAssessor()
 
     results: list[SampleResult] = []
     for i, sample in enumerate(samples, 1):

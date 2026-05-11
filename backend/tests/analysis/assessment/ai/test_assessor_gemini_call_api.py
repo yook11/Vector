@@ -1,4 +1,4 @@
-"""``GeminiClassifier._call_api`` の integration テスト。
+"""``GeminiAssessor._call_api`` の integration テスト。
 
 PR3 で次の流れに rewrite された:
 - SDK レスポンス text を ``json.loads`` で dict 化
@@ -10,7 +10,7 @@ PR3 で次の流れに rewrite された:
 - finish_reason == SAFETY / RECITATION で ``AIProviderOutputBlockedError`` raise
 - text が JSON 不正 → ``AssessmentResponseInvalidError`` raise
 - text が JSON object でない (list 等) → ``AssessmentResponseInvalidError`` raise
-- response_schema が dict (``CLASSIFICATION_GEMINI_SCHEMA``) で渡される
+- response_schema が dict (``ASSESSMENT_GEMINI_SCHEMA``) で渡される
 """
 
 from __future__ import annotations
@@ -21,11 +21,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pydantic import SecretStr
 
+from app.analysis.assessment.ai.envelope import AssessmentCall
+from app.analysis.assessment.ai.gemini import GeminiAssessor
+from app.analysis.assessment.ai.gemini_prompt import GeminiAssessmentPrompt
+from app.analysis.assessment.ai.schema import InScope, InScopeCategory, OutOfScope
 from app.analysis.assessment.errors import AssessmentResponseInvalidError
-from app.analysis.classifier.envelope import AssessmentCall
-from app.analysis.classifier.gemini import GeminiClassifier
-from app.analysis.classifier.gemini_prompt import GeminiClassificationPrompt
-from app.analysis.classifier.schema import InScope, InScopeCategory, OutOfScope
 from app.analysis.errors.provider import AIProviderOutputBlockedError
 from app.config import settings
 
@@ -51,13 +51,11 @@ def _stub_response(text: str, *, finish_reason_name: str | None = None) -> Magic
     return response
 
 
-def _patch_classifier_call(
-    classifier: GeminiClassifier, response: MagicMock
-) -> AsyncMock:
-    """classifier._client.aio.models.generate_content を mock に差し替える。"""
+def _patch_assessor_call(assessor: GeminiAssessor, response: MagicMock) -> AsyncMock:
+    """assessor._client.aio.models.generate_content を mock に差し替える。"""
     mock_call = AsyncMock(return_value=response)
-    classifier._client = MagicMock()
-    classifier._client.aio.models.generate_content = mock_call
+    assessor._client = MagicMock()
+    assessor._client.aio.models.generate_content = mock_call
     return mock_call
 
 
@@ -69,7 +67,7 @@ def _patch_classifier_call(
 class TestGeminiCallApiSuccess:
     @pytest.mark.asyncio
     async def test_in_scope_round_trip(self) -> None:
-        classifier = GeminiClassifier()
+        assessor = GeminiAssessor()
         text = json.dumps(
             {
                 "category": "ai",
@@ -77,9 +75,9 @@ class TestGeminiCallApiSuccess:
                 "investor_take": "Significant traction.",
             }
         )
-        _patch_classifier_call(classifier, _stub_response(text))
+        _patch_assessor_call(assessor, _stub_response(text))
 
-        call = await classifier._call_api("prompt")
+        call = await assessor._call_api("prompt")
 
         assert isinstance(call, AssessmentCall)
         assert isinstance(call.result, InScope)
@@ -89,11 +87,11 @@ class TestGeminiCallApiSuccess:
         assert call.raw_response == text
         assert call.raw_category == "ai"
         assert call.raw_topic == "ai agents"
-        assert call.prompt_version == GeminiClassificationPrompt.VERSION
+        assert call.prompt_version == GeminiAssessmentPrompt.VERSION
 
     @pytest.mark.asyncio
     async def test_out_of_scope_round_trip(self) -> None:
-        classifier = GeminiClassifier()
+        assessor = GeminiAssessor()
         text = json.dumps(
             {
                 "category": "out_of_scope",
@@ -101,9 +99,9 @@ class TestGeminiCallApiSuccess:
                 "investor_take": "Not relevant.",
             }
         )
-        _patch_classifier_call(classifier, _stub_response(text))
+        _patch_assessor_call(assessor, _stub_response(text))
 
-        call = await classifier._call_api("prompt")
+        call = await assessor._call_api("prompt")
 
         assert isinstance(call.result, OutOfScope)
         assert call.result.investor_take == "Not relevant."
@@ -112,11 +110,11 @@ class TestGeminiCallApiSuccess:
 
     @pytest.mark.asyncio
     async def test_uses_dict_response_schema(self) -> None:
-        classifier = GeminiClassifier()
+        assessor = GeminiAssessor()
         text = json.dumps({"category": "ai", "topic": "ai", "investor_take": "x"})
-        mock_call = _patch_classifier_call(classifier, _stub_response(text))
+        mock_call = _patch_assessor_call(assessor, _stub_response(text))
 
-        await classifier._call_api("prompt")
+        await assessor._call_api("prompt")
 
         # generate_content が呼ばれた config 引数の response_schema が dict であること
         kwargs = mock_call.await_args.kwargs
@@ -134,39 +132,37 @@ class TestGeminiCallApiSuccess:
 class TestGeminiFinishReasonBlocked:
     @pytest.mark.asyncio
     async def test_finish_reason_safety_raises_blocked(self) -> None:
-        classifier = GeminiClassifier()
+        assessor = GeminiAssessor()
         text = json.dumps({"category": "ai", "topic": "ai", "investor_take": "x"})
-        _patch_classifier_call(
-            classifier, _stub_response(text, finish_reason_name="SAFETY")
+        _patch_assessor_call(
+            assessor, _stub_response(text, finish_reason_name="SAFETY")
         )
 
         with pytest.raises(AIProviderOutputBlockedError) as exc_info:
-            await classifier._call_api("prompt")
+            await assessor._call_api("prompt")
 
         assert "SAFETY" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_finish_reason_recitation_raises_blocked(self) -> None:
-        classifier = GeminiClassifier()
-        _patch_classifier_call(
-            classifier, _stub_response("{}", finish_reason_name="RECITATION")
+        assessor = GeminiAssessor()
+        _patch_assessor_call(
+            assessor, _stub_response("{}", finish_reason_name="RECITATION")
         )
 
         with pytest.raises(AIProviderOutputBlockedError) as exc_info:
-            await classifier._call_api("prompt")
+            await assessor._call_api("prompt")
 
         assert "RECITATION" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_finish_reason_stop_does_not_raise(self) -> None:
         """正常終了の finish_reason (STOP 等) では raise せず parse に進む。"""
-        classifier = GeminiClassifier()
+        assessor = GeminiAssessor()
         text = json.dumps({"category": "ai", "topic": "ai", "investor_take": "x"})
-        _patch_classifier_call(
-            classifier, _stub_response(text, finish_reason_name="STOP")
-        )
+        _patch_assessor_call(assessor, _stub_response(text, finish_reason_name="STOP"))
 
-        call = await classifier._call_api("prompt")
+        call = await assessor._call_api("prompt")
         assert isinstance(call.result, InScope)
 
 
@@ -178,40 +174,40 @@ class TestGeminiFinishReasonBlocked:
 class TestGeminiInvalidPayload:
     @pytest.mark.asyncio
     async def test_invalid_json_raises_response_invalid(self) -> None:
-        classifier = GeminiClassifier()
-        _patch_classifier_call(classifier, _stub_response("not json at all"))
+        assessor = GeminiAssessor()
+        _patch_assessor_call(assessor, _stub_response("not json at all"))
 
         with pytest.raises(AssessmentResponseInvalidError) as exc_info:
-            await classifier._call_api("prompt")
+            await assessor._call_api("prompt")
 
         assert "not valid JSON" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_non_object_payload_raises_response_invalid(self) -> None:
-        classifier = GeminiClassifier()
+        assessor = GeminiAssessor()
         # JSON array (list) は object ではないので reject
-        _patch_classifier_call(classifier, _stub_response("[1, 2, 3]"))
+        _patch_assessor_call(assessor, _stub_response("[1, 2, 3]"))
 
         with pytest.raises(AssessmentResponseInvalidError) as exc_info:
-            await classifier._call_api("prompt")
+            await assessor._call_api("prompt")
 
         assert "not a JSON object" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_missing_key_payload_raises_response_invalid(self) -> None:
         """parse_assessment の key 欠落で AssessmentResponseInvalidError raise。"""
-        classifier = GeminiClassifier()
+        assessor = GeminiAssessor()
         text = json.dumps({"category": "ai"})  # topic / investor_take 欠落
-        _patch_classifier_call(classifier, _stub_response(text))
+        _patch_assessor_call(assessor, _stub_response(text))
 
         with pytest.raises(AssessmentResponseInvalidError):
-            await classifier._call_api("prompt")
+            await assessor._call_api("prompt")
 
     @pytest.mark.asyncio
     async def test_empty_text_raises_response_invalid(self) -> None:
         """response.text が None / 空 → JSON parse 失敗 → invalid。"""
-        classifier = GeminiClassifier()
-        _patch_classifier_call(classifier, _stub_response(""))
+        assessor = GeminiAssessor()
+        _patch_assessor_call(assessor, _stub_response(""))
 
         with pytest.raises(AssessmentResponseInvalidError):
-            await classifier._call_api("prompt")
+            await assessor._call_api("prompt")

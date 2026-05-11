@@ -30,7 +30,7 @@ from taskiq import (
 from taskiq.schedule_sources import LabelScheduleSource
 from taskiq_redis import RedisAsyncResultBackend, RedisStreamBroker
 
-from app.analysis.classifier.deepseek import DeepSeekClassifier
+from app.analysis.assessment.ai.deepseek import DeepSeekAssessor
 from app.analysis.embedder.gemini import GeminiEmbedder
 from app.analysis.extraction.extractor.gemini import GeminiExtractor
 from app.config import settings
@@ -142,13 +142,13 @@ _register_lifecycle(broker_briefing, "briefing")
 async def _wire_analysis_adapters(state: TaskiqState) -> None:
     """Stage 1 / Stage 2 の AI アダプターを worker 起動時に構築する。"""
     state.extractor = GeminiExtractor()
-    state.classifier = DeepSeekClassifier()
+    state.assessor = DeepSeekAssessor()
     logger.info(
         "analysis_adapters_wired",
         extractor=type(state.extractor).__name__,
         extractor_model=state.extractor.MODEL,
-        classifier=type(state.classifier).__name__,
-        classifier_model=state.classifier.MODEL,
+        assessor=type(state.assessor).__name__,
+        assessor_model=state.assessor.MODEL,
     )
 
 

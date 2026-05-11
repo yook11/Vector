@@ -1,4 +1,4 @@
-"""API を単発呼び出しする抽象 Classifier 基底クラス。"""
+"""API を単発呼び出しする抽象 Assessor 基底クラス。"""
 
 from __future__ import annotations
 
@@ -7,14 +7,14 @@ from typing import ClassVar
 
 import structlog
 
+from app.analysis.assessment.ai.envelope import AssessmentCall
 from app.analysis.assessment.errors import AssessmentError
-from app.analysis.classifier.envelope import AssessmentCall
 from app.analysis.errors.provider import AIProviderError
 
 logger = structlog.get_logger(__name__)
 
 
-class BaseClassifier(abc.ABC):
+class BaseAssessor(abc.ABC):
     """Stage 4 — Assessment のテンプレートメソッド基底。
 
     Stage 3 (Extraction) の構造化出力に対して判断を下す。原文は読まない。
@@ -27,7 +27,7 @@ class BaseClassifier(abc.ABC):
     段階で停止する (二重翻訳防止のため ``_call_once`` で素通し guard 済)。
 
     サブクラスは以下 3 つのフックを実装する:
-    - ``classify``: プロンプト構築とレスポンス解析（公開 API）
+    - ``assess``: プロンプト構築とレスポンス解析（公開 API）
     - ``_call_api``: SDK の生呼び出し → ``parse_assessment`` → ``AssessmentCall`` 構築
     - ``_translate_error``: SDK 例外を ``AIProvider*Error`` に翻訳する
       (マップ未知は ``return exc`` で caller の bare re-raise に委譲する規約)
@@ -58,7 +58,7 @@ class BaseClassifier(abc.ABC):
     # -- 抽象フック --
 
     @abc.abstractmethod
-    async def classify(
+    async def assess(
         self,
         title_ja: str,
         summary_ja: str,
@@ -116,9 +116,9 @@ class BaseClassifier(abc.ABC):
         - 翻訳された場合のみ ``raise translated from exc`` で原因連鎖
         """
         try:
-            logger.info("classifier_api_call", model=self.model_name)
+            logger.info("assessor_api_call", model=self.model_name)
             result = await self._call_api(prompt)
-            logger.info("classifier_api_success", model=self.model_name)
+            logger.info("assessor_api_success", model=self.model_name)
             return result
         except (AIProviderError, AssessmentError):
             # 既に階層内 (parse_assessment が raise した

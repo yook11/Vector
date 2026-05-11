@@ -19,9 +19,9 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.analysis.assessment.ai.schema import OutOfScope
 from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.out_of_scope_repository import OutOfScopeRepository
-from app.analysis.classifier.schema import OutOfScope
 from app.models.article import Article
 from app.models.article_extraction import ArticleExtraction
 from app.models.news_source import NewsSource

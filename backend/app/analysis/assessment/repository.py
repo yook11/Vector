@@ -24,10 +24,10 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
+from app.analysis.assessment.ai.schema import InScope
 from app.analysis.assessment.domain.in_scope import InScopeAssessment
 from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.errors import AssessmentCategoryMissingError
-from app.analysis.classifier.schema import InScope
 from app.models.category import Category
 from app.models.in_scope_assessment import InScopeAssessment as InScopeAssessmentORM
 

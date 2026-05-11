@@ -2,7 +2,7 @@
 
 AI 境界では引き続きフラット形式 (``{category, topic, investor_take}``) を AI に
 要求する (構造化出力で discriminated union を要求すると AI 精度が落ちるため)。
-classifier 内部 (``parse.py::parse_assessment``) が ``category`` 値を見て
+assessor 内部 (``parse.py::parse_assessment``) が ``category`` 値を見て
 ``InScope`` / ``OutOfScope`` のドメイン型に振り分け、呼び出し側は
 ``match`` / ``isinstance`` で型ディスパッチする。
 
@@ -29,7 +29,7 @@ from app.utils.sanitize import normalize_text
 class ValidCategory(StrEnum):
     """AI が出力可能なカテゴリ slug 全集合 (13 種、``OUT_OF_SCOPE`` 含む)。
 
-    AI への schema 提示および classifier 内部の parse 検証で使用。判定後は
+    AI への schema 提示および assessor 内部の parse 検証で使用。判定後は
     ``InScopeCategory`` に詰め替えるため、ドメイン側 (``InScope``) からは見えない。
     先端技術の 11 カテゴリ + ``OTHER`` (先端テック領域外で投資判断に寄与する記事) +
     ``OUT_OF_SCOPE`` (投資判断に寄与しない)。
