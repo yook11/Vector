@@ -94,7 +94,7 @@ class AssessmentTerminalSkipError(AssessmentError):
 class AssessmentResponseInvalidError(AssessmentRecoverableError):
     """AI 応答が Stage 4 schema に合致しない (Layer 2-B、Stage 4 工程由来)。
 
-    具体的には classifier 内部の ``parse_assessment`` で:
+    具体的には assessor 内部の ``parse_assessment`` で:
     - 必須 key (``category`` / ``topic`` / ``investor_take``) 欠落
     - 値が ``str`` 型でない (``isinstance`` 検証で reject)
     - ``category`` が ``ValidCategory`` enum 外の値

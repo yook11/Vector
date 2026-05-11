@@ -69,7 +69,7 @@ def map_provider_to_assessment(exc: AIProviderError) -> AssessmentError:
     (新規 provider error 種別の登録漏れを deploy 前に検知する fail-fast)。
 
     Args:
-        exc: classifier 層が raise した ``AIProviderError`` instance。
+        exc: assessor 層が raise した ``AIProviderError`` instance。
 
     Returns:
         Stage 4 marker (``AssessmentRecoverableError`` /

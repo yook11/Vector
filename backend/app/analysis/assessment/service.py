@@ -53,7 +53,7 @@ class AssessmentService:
 
     Stage 4: Stage 3 で永続化された ``Extraction`` の `translated_title` /
     `summary` (Ready 経由で渡される) に対して判定を実行する。原文は読まない。
-    Classifier の返却型により ``InScope`` / ``OutOfScope`` を型で受け取り、
+    Assessor の返却型により ``InScope`` / ``OutOfScope`` を型で受け取り、
     それぞれ ``InScopeAssessment`` / ``OutOfScopeAssessment`` ドメイン Entity に
     詰め替えて永続化する。
     """
@@ -75,7 +75,7 @@ class AssessmentService:
         Raises:
             ``AnalysisDomainError`` のサブクラス (Task 層 retry に委ねる)。
         """
-        # PR3: classifier 戻り値が AssessmentCall envelope 化。call.result が
+        # PR3: assessor 戻り値が AssessmentCall envelope 化。call.result が
         # tagged-union dispatch 軸。raw_response / raw_category / raw_topic /
         # prompt_version は audit 焼付 (PR6 で append_in_scope/out_of_scope に
         # envelope そのまま渡す) で参照する。

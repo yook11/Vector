@@ -12,7 +12,7 @@ InScopeAssessment 未生成 + OutOfScopeAssessment 未生成) を構造保証し
 BaseModel(frozen=True) は Issue #558 で公式サポート。詳細は
 memory `feedback_taskiq_basemodel_required.md`。
 
-注 (PR3.5-d.0): field 名 / 型 / 順序は ``ReadyForClassification`` と完全一致で
+注 (PR3.5-d.0): field 名 / 型 / 順序は旧 ``ReadyForClassification`` と完全一致で
 維持する (taskiq の in-flight message 互換のため)。
 """
 
@@ -40,7 +40,7 @@ class OutOfScopeExistenceProtocol(Protocol):
 class ReadyForAssessment(BaseModel):
     """Stage 4 (Assessment) を実行可能な状態を表す precondition 型。
 
-    フィールドは operation に必要な値だけ (extraction_id + classifier に渡す本文)。
+    フィールドは operation に必要な値だけ (extraction_id + assessor に渡す本文)。
     Aggregate Entity (Extraction) 全体は持たない (spec §1.1)。
 
     Invariants:

@@ -90,7 +90,7 @@ class AssessmentAuditRepository:
         PR6 で Service ``_handle_in_scope`` が業務 INSERT と同 tx で呼ぶ。
 
         Args:
-            ai_model: ``classifier.model_name`` (BaseClassifier の ClassVar
+            ai_model: ``assessor.model_name`` (BaseAssessor の ClassVar
                 ``MODEL`` accessor) を caller が渡す。``AssessmentCall``
                 envelope には ``model_name`` field が無い設計のため。
             category_slug: ``in_scope.category.value`` (parse 後の slug) を
