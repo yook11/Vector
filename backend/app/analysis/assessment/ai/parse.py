@@ -17,7 +17,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from app.analysis.assessment.ai.schema import (
+from app.analysis.assessment.domain.result import (
     AssessmentResult,
     InScope,
     InScopeCategory,

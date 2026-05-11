@@ -25,8 +25,8 @@ from __future__ import annotations
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis.assessment.ai.envelope import AssessmentCall
-from app.analysis.assessment.ai.schema import InScope, OutOfScope
 from app.analysis.assessment.domain.ready import ReadyForAssessment
+from app.analysis.assessment.domain.result import InScope, OutOfScope
 from app.analysis.assessment.errors import (
     AssessmentRecoverableError,
     AssessmentTerminalSkipError,

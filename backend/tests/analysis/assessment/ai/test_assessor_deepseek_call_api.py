@@ -24,7 +24,7 @@ from pydantic import SecretStr
 from app.analysis.assessment.ai.deepseek import DeepSeekAssessor
 from app.analysis.assessment.ai.deepseek_prompt import DeepSeekAssessmentPrompt
 from app.analysis.assessment.ai.envelope import AssessmentCall
-from app.analysis.assessment.ai.schema import InScope, InScopeCategory, OutOfScope
+from app.analysis.assessment.domain.result import InScope, InScopeCategory, OutOfScope
 from app.analysis.assessment.errors import AssessmentResponseInvalidError
 from app.config import settings
 

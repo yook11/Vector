@@ -28,13 +28,13 @@ from sqlmodel import select
 
 from app.analysis.assessment.ai.base import BaseAssessor
 from app.analysis.assessment.ai.envelope import AssessmentCall
-from app.analysis.assessment.ai.schema import (
+from app.analysis.assessment.domain.ready import ReadyForAssessment
+from app.analysis.assessment.domain.result import (
     AssessmentResult,
     InScope,
     InScopeCategory,
     OutOfScope,
 )
-from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.service import AssessmentService
 from app.analysis.domain.value_objects.entity import (
     EntityName,

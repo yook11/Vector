@@ -27,12 +27,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis.assessment.ai.envelope import AssessmentCall
-from app.analysis.assessment.ai.schema import (
+from app.analysis.assessment.domain.ready import ReadyForAssessment
+from app.analysis.assessment.domain.result import (
     InScope,
     InScopeCategory,
     OutOfScope,
 )
-from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.errors import AssessmentCategoryMissingError
 from app.analysis.assessment.repository import AssessmentRepository
 from app.analysis.domain.value_objects.topic import TopicName

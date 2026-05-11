@@ -17,7 +17,7 @@ import pytest
 
 from app.analysis.assessment.ai.base import BaseAssessor
 from app.analysis.assessment.ai.envelope import AssessmentCall
-from app.analysis.assessment.ai.schema import InScope, OutOfScope
+from app.analysis.assessment.domain.result import InScope, OutOfScope
 from app.analysis.assessment.errors import (
     AssessmentRecoverableError,
     AssessmentResponseInvalidError,

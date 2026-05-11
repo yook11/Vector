@@ -8,7 +8,7 @@ from typing import ClassVar
 import structlog
 
 from app.analysis.assessment.ai.envelope import AssessmentCall
-from app.analysis.assessment.ai.schema import InScope, OutOfScope
+from app.analysis.assessment.domain.result import InScope, OutOfScope
 from app.analysis.assessment.errors import AssessmentError
 from app.analysis.errors.provider import AIProviderError
 

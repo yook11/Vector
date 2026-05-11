@@ -1,7 +1,9 @@
-"""Stage 4 assessor schema — InScopeCategory / InScope の型強制テスト。
+"""Stage 4 ドメイン結果型 — ``InScopeCategory`` / ``InScope`` / ``OutOfScope`` /
+``ValidCategory`` の型強制テスト。
 
-PR2 で追加された ``InScopeCategory`` enum (12 値、``OUT_OF_SCOPE`` 排除) と
-``InScope.category`` の型変更が「対象範囲内」を型レベルで保証することを検証。
+``InScopeCategory`` enum (12 値、``OUT_OF_SCOPE`` 排除) と ``InScope.category``
+の型が「対象範囲内」を型レベルで保証することを検証する。AI 境界での sanitize +
+bounds 保護 (BC 境界原則) も併せて固定する。
 """
 
 from __future__ import annotations
@@ -9,7 +11,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from app.analysis.assessment.ai.schema import (
+from app.analysis.assessment.domain.result import (
     InScope,
     InScopeCategory,
     OutOfScope,

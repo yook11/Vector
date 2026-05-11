@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.analysis.assessment.ai.schema import AssessmentResult
+from app.analysis.assessment.domain.result import AssessmentResult
 
 
 @dataclass(frozen=True, slots=True)

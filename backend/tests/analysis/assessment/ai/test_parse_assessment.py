@@ -17,7 +17,7 @@ from __future__ import annotations
 import pytest
 
 from app.analysis.assessment.ai.parse import parse_assessment
-from app.analysis.assessment.ai.schema import (
+from app.analysis.assessment.domain.result import (
     InScope,
     InScopeCategory,
     OutOfScope,

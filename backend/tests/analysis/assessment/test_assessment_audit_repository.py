@@ -36,13 +36,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.assessment.ai.envelope import AssessmentCall
-from app.analysis.assessment.ai.schema import (
+from app.analysis.assessment.audit_repository import AssessmentAuditRepository
+from app.analysis.assessment.domain.ready import ReadyForAssessment
+from app.analysis.assessment.domain.result import (
     InScope,
     InScopeCategory,
     OutOfScope,
 )
-from app.analysis.assessment.audit_repository import AssessmentAuditRepository
-from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.errors import (
     AssessmentCategoryMissingError,
     AssessmentRecoverableError,

@@ -45,7 +45,7 @@ from app.analysis.assessment.ai.base import BaseAssessor
 from app.analysis.assessment.ai.deepseek_prompt import DeepSeekAssessmentPrompt
 from app.analysis.assessment.ai.envelope import AssessmentCall
 from app.analysis.assessment.ai.parse import parse_assessment
-from app.analysis.assessment.ai.schema import InScope, OutOfScope
+from app.analysis.assessment.domain.result import InScope, OutOfScope
 from app.analysis.assessment.errors import AssessmentResponseInvalidError
 from app.analysis.errors.provider import (
     AIProviderConfigurationError,

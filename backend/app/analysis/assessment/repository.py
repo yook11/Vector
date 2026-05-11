@@ -29,8 +29,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from app.analysis.assessment.ai.envelope import AssessmentCall
-from app.analysis.assessment.ai.schema import InScope, OutOfScope
 from app.analysis.assessment.domain.ready import ReadyForAssessment
+from app.analysis.assessment.domain.result import InScope, OutOfScope
 from app.analysis.assessment.errors import AssessmentCategoryMissingError
 from app.models.article import Article
 from app.models.article_extraction import ArticleExtraction

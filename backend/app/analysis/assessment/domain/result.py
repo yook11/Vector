@@ -1,18 +1,26 @@
-"""Stage 4 (Assessment) 判定 AI レスポンスの Pydantic スキーマ。
+"""Stage 4 (Assessment) のドメイン結果型。
 
-AI 境界では引き続きフラット形式 (``{category, topic, investor_take}``) を AI に
-要求する (構造化出力で discriminated union を要求すると AI 精度が落ちるため)。
-assessor 内部 (``parse.py::parse_assessment``) が ``category`` 値を見て
-``InScope`` / ``OutOfScope`` のドメイン型に振り分け、呼び出し側は
-``match`` / ``isinstance`` で型ディスパッチする。
+Stage 4 が産出する業務結果 (「対象範囲内 / 対象範囲外」+ taxonomy) を
+表す型群。AI が producer であるかどうかに依存しない — AI は domain が
+要求する taxonomy に従って返すだけで、これらの型自体は domain 都合で
+定義される。
 
-公開型は **「結果型 1 つ + 構成型 2 つ」** に整理:
-- ``AssessmentResult = InScope | OutOfScope`` — 判定結果 union
-- ``InScope`` (in-scope 確定後、``category: InScopeCategory`` で OUT_OF_SCOPE を型排除)
-- ``OutOfScope`` (out-of-scope 確定後)
+公開型は **「結果型 1 つ + 構成型 3 つ」**:
 
-PR3 で ``ClassificationRawResponse`` (中間 flat 型) を削除した — AI 境界の dict →
-ドメイン型詰め替えは ``parse_assessment(payload: dict)`` 1 箇所に集約された。
+- ``AssessmentResult = InScope | OutOfScope`` — Stage 4 判定結果 union。
+  Service / Repository は ``match`` / ``isinstance`` で型ディスパッチする
+- ``InScope`` — 対象範囲内確定後 (``category: InScopeCategory`` で
+  OUT_OF_SCOPE を型レベル排除)
+- ``OutOfScope`` — 対象範囲外確定後
+- ``InScopeCategory`` — in-scope 確定後の category slug 集合 (12 値、
+  ``OUT_OF_SCOPE`` 排除)
+- ``ValidCategory`` — AI 境界に提示する全 slug 集合 (13 値、
+  ``OUT_OF_SCOPE`` を含む domain taxonomy のフラット表現)
+
+AI 境界では引き続きフラット形式 (``{category, topic, investor_take}``)
+を AI に要求する (構造化出力で discriminated union を要求すると AI 精度が
+落ちるため)。assessor 内部 (``ai/parse.py::parse_assessment``) が
+``category`` 値を見て ``InScope`` / ``OutOfScope`` に振り分ける。
 """
 
 from __future__ import annotations
@@ -27,12 +35,15 @@ from app.utils.sanitize import normalize_text
 
 
 class ValidCategory(StrEnum):
-    """AI が出力可能なカテゴリ slug 全集合 (13 種、``OUT_OF_SCOPE`` 含む)。
+    """Stage 4 の domain taxonomy 全集合 (13 種、``OUT_OF_SCOPE`` 含む)。
 
-    AI への schema 提示および assessor 内部の parse 検証で使用。判定後は
-    ``InScopeCategory`` に詰め替えるため、ドメイン側 (``InScope``) からは見えない。
-    先端技術の 11 カテゴリ + ``OTHER`` (先端テック領域外で投資判断に寄与する記事) +
-    ``OUT_OF_SCOPE`` (投資判断に寄与しない)。
+    AI 境界 schema 提示および assessor 内部の parse 検証で使用するが、これは
+    AI の都合ではなく domain が要求する taxonomy のフラット表現であり、AI は
+    この集合に従って返す責務を負う。判定後は ``InScopeCategory`` に詰め替える
+    ため、``InScope`` からは ``OUT_OF_SCOPE`` は型レベルで見えない。
+
+    先端技術の 11 カテゴリ + ``OTHER`` (先端テック領域外で投資判断に寄与する
+    記事) + ``OUT_OF_SCOPE`` (投資判断に寄与しない)。
     """
 
     AI = "ai"
@@ -135,6 +146,4 @@ AssessmentResult = InScope | OutOfScope
 """Stage 4 (Assessment) の判定結果。Service はこの union を受け取り
 ``match`` / ``isinstance`` で型ディスパッチする。型そのものが
 「対象範囲内/対象範囲外」を表現する。
-
-旧 ``AssessmentResponse`` から rename (PR2)。
 """

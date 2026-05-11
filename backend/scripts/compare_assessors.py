@@ -40,7 +40,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.analysis.assessment.ai.base import BaseAssessor
 from app.analysis.assessment.ai.deepseek import DeepSeekAssessor
 from app.analysis.assessment.ai.gemini import GeminiAssessor
-from app.analysis.assessment.ai.schema import (
+from app.analysis.assessment.domain.result import (
     InScope,
     OutOfScope,
     ValidCategory,
