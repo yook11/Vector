@@ -33,8 +33,6 @@ from app.analysis.assessment.ai.schema import (
     InScopeCategory,
     OutOfScope,
 )
-from app.analysis.assessment.domain.in_scope import InScopeAssessment
-from app.analysis.assessment.domain.out_of_scope import OutOfScopeAssessment
 from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.errors import (
     AssessmentCategoryMissingError,
@@ -179,7 +177,8 @@ async def test_in_scope_success_records_audit(
 
     svc = AssessmentService(session_factory)
     result = await svc.execute(_ready(extraction), assessor)
-    assert isinstance(result, InScopeAssessment)
+    # in-scope 成功時 Service は assessment id (int) を返す
+    assert isinstance(result, int) and result > 0
 
     events = await _fetch_assessment_events(db_session, article.id)
     assert len(events) == 1
@@ -190,7 +189,7 @@ async def test_in_scope_success_records_audit(
     assert ev.code == "assessed_in_scope"
     payload = ev.payload
     assert payload["extraction_id"] == extraction.id
-    assert payload["assessment_id"] == result.id
+    assert payload["assessment_id"] == result
     assert payload["topic"] == "llm benchmark"
     assert payload["investor_take"] == "bullish"
     assert payload["ai_model"] == _AI_MODEL
@@ -210,7 +209,8 @@ async def test_out_of_scope_success_records_audit(
 
     svc = AssessmentService(session_factory)
     result = await svc.execute(_ready(extraction), assessor)
-    assert isinstance(result, OutOfScopeAssessment)
+    # out-of-scope は Stage 5 chain しないため Service は None を返す
+    assert result is None
 
     events = await _fetch_assessment_events(db_session, article.id)
     assert len(events) == 1
@@ -221,16 +221,23 @@ async def test_out_of_scope_success_records_audit(
     assert ev.code == "assessed_out_of_scope"
     payload = ev.payload
     assert payload["extraction_id"] == extraction.id
-    assert payload["assessment_id"] == result.id
+    assert payload["assessment_id"] is not None
     # PR #447 対称化追従: investor_take は本体 DB と一致 (非 None)
-    assert payload.get("investor_take") == result.investor_take
+    assert payload.get("investor_take") == "not relevant"
     # in-scope 固有 field のみ None (category_id / category_slug / topic)
     assert payload.get("category_id") is None
     assert payload.get("category_slug") is None
     assert payload.get("topic") is None
-    # in-scope 経路と対称に Stage 3 由来 snapshot が Entity に保持されている
-    assert result.translated_title == extraction.translated_title
-    assert result.summary == extraction.summary
+    # 本体 DB (out_of_scope_assessments) に Stage 3 由来 snapshot が永続化されている
+    persisted = (
+        await db_session.execute(
+            select(OutOfScopeAssessmentORM).where(
+                OutOfScopeAssessmentORM.extraction_id == extraction.id
+            )
+        )
+    ).scalar_one()
+    assert persisted.translated_title == extraction.translated_title
+    assert persisted.summary == extraction.summary
 
 
 # ---------------------------------------------------------------------------

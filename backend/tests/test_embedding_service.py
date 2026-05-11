@@ -127,10 +127,8 @@ async def _build_analysis(
     return analysis
 
 
-def _make_ready(
-    analysis_id: int, *, text: str = "分析タイトル\n分析要約"
-) -> ReadyForEmbedding:
-    return ReadyForEmbedding(analysis_id=analysis_id, text_for_embedding=text)
+def _make_ready(analysis_id: int) -> ReadyForEmbedding:
+    return ReadyForEmbedding(analysis_id=analysis_id)
 
 
 # ---------------------------------------------------------------------------
@@ -163,6 +161,7 @@ async def test_execute_returns_embedded_outcome_and_persists(
     assert isinstance(result.embedding, Embedding)
     assert result.embedding.analysis_id == analysis_id
     assert result.embedding.model_name == "cl-nagoya/ruri-v3-310m"
+    # Service が DB から (translated_title, summary) を fetch して結合する
     embedder.embed_document.assert_called_once_with("分析タイトル\n分析要約")
 
     db_session.expire_all()
@@ -248,6 +247,29 @@ async def test_execute_returns_invalid_input_outcome_when_embedder_rejects(
     assert refetched is not None
     assert refetched.embedding is None
     assert refetched.embedding_model is None
+
+
+# ---------------------------------------------------------------------------
+# Pattern A' 違反: analysis 行不在 → fail-fast RuntimeError
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_raises_when_analysis_row_missing(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """``in_scope_assessments`` に該当行が無いと RuntimeError で fail-fast。
+
+    Ready が ID + precondition のみを passport として運ぶ設計
+    (`feedback_bc_boundary_guarantees_downstream`) では、行不在は Pattern A'
+    違反として可視化される (`feedback_failure_visibility`)。
+    """
+    embedder = _mock_embedder()
+    svc = EmbeddingService(session_factory)
+    ready = _make_ready(analysis_id=999_999_999)
+
+    with pytest.raises(RuntimeError, match="embedding_assessment_missing"):
+        await svc.execute(ready, embedder)
 
 
 # ---------------------------------------------------------------------------

@@ -49,10 +49,7 @@ def _make_ctx(
 
 
 def _make_ready(analysis_id: int = 1) -> ReadyForEmbedding:
-    return ReadyForEmbedding(
-        analysis_id=analysis_id,
-        text_for_embedding="title\nsummary",
-    )
+    return ReadyForEmbedding(analysis_id=analysis_id)
 
 
 def _make_embedding(analysis_id: int = 1) -> Embedding:

@@ -2,13 +2,14 @@
 
 PR2 で ``save`` signature が ``InScopeRepository.save`` と対称化され、
 Stage 3 由来 snapshot (``translated_title`` / ``summary``) を引数経由で受け取る
-ようになったことを ResponsibilityBoundary レベルで保護する。
+ようになった。2026-05-11 改修で戻り値が ``int | None`` に縮退 (audit / Stage 5
+chain には id だけあれば十分、`feedback_bc_boundary_guarantees_downstream`)。
 
 業務観点の不変条件のみを assert する (memory
 ``feedback_test_invariants_over_change_tracking``):
-- 成功時の戻り値 Entity と DB row が引数 snapshot を保持していること
-- 既存 row 存在時 (race lost) には ``save`` が ``None`` を返し、
-  ``find_by_extraction_id`` で勝者を読み戻せること
+- 成功時、戻り値の id が DB 上の主キーと一致し、snapshot が DB row に保持される
+- 既存 row 存在時 (race lost) には ``save`` が ``None`` を返し、勝者の row が
+  そのまま残る
 """
 
 from __future__ import annotations
@@ -62,11 +63,11 @@ async def test_save_persists_snapshot_fields(
     db_session: AsyncSession,
     sample_source: NewsSource,
 ) -> None:
-    """``save`` 成功時、引数 snapshot が Entity 戻り値と DB row の両方に反映される。"""
+    """``save`` 成功時、引数 snapshot が DB row に反映され戻り値は新規 id。"""
     extraction = await _make_extraction(db_session, sample_source)
     repo = OutOfScopeRepository(db_session)
 
-    saved = await repo.save(
+    saved_id = await repo.save(
         OutOfScope(investor_take="not relevant"),
         ready=ReadyForAssessment(
             extraction_id=extraction.id,
@@ -77,9 +78,7 @@ async def test_save_persists_snapshot_fields(
     )
     await db_session.commit()
 
-    assert saved is not None
-    assert saved.translated_title == extraction.translated_title
-    assert saved.summary == extraction.summary
+    assert isinstance(saved_id, int) and saved_id > 0
 
     row = (
         await db_session.execute(
@@ -88,8 +87,10 @@ async def test_save_persists_snapshot_fields(
             )
         )
     ).scalar_one()
+    assert row.id == saved_id
     assert row.translated_title == extraction.translated_title
     assert row.summary == extraction.summary
+    assert row.investor_take == "not relevant"
 
 
 @pytest.mark.asyncio
@@ -97,7 +98,7 @@ async def test_save_returns_none_on_race_lost(
     db_session: AsyncSession,
     sample_source: NewsSource,
 ) -> None:
-    """既存 row 存在時 ``save`` は ``None`` を返し、勝者を read-back できる。"""
+    """既存 row 存在時 ``save`` は ``None`` を返し、勝者 row はそのまま残る。"""
     extraction = await _make_extraction(db_session, sample_source)
     # 勝者を先に焼く
     winner = OutOfScopeAssessmentORM(
@@ -111,7 +112,7 @@ async def test_save_returns_none_on_race_lost(
     await db_session.commit()
 
     repo = OutOfScopeRepository(db_session)
-    saved = await repo.save(
+    saved_id = await repo.save(
         OutOfScope(investor_take="loser take"),
         ready=ReadyForAssessment(
             extraction_id=extraction.id,
@@ -122,9 +123,15 @@ async def test_save_returns_none_on_race_lost(
     )
     await db_session.commit()
 
-    assert saved is None
-    found = await repo.find_by_extraction_id(extraction.id)
-    assert found is not None
-    assert found.translated_title == "勝者タイトル"
-    assert found.summary == "勝者要約"
-    assert found.investor_take == "winner take"
+    assert saved_id is None
+    # 勝者 row は影響を受けない
+    row = (
+        await db_session.execute(
+            select(OutOfScopeAssessmentORM).where(
+                OutOfScopeAssessmentORM.extraction_id == extraction.id
+            )
+        )
+    ).scalar_one()
+    assert row.translated_title == "勝者タイトル"
+    assert row.summary == "勝者要約"
+    assert row.investor_take == "winner take"

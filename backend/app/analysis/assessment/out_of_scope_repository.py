@@ -1,15 +1,14 @@
-"""OutOfScopeRepository — Stage 4 out-of-scope 評価結果の永続化と読み出し。
+"""OutOfScopeRepository — Stage 4 out-of-scope 評価結果の永続化。
 
 責務は ``InScopeRepository`` と対称 (spec §4.3.4):
 - ``exists_for_extraction``: `try_advance_from` precondition 用 cheap 判定
-- ``find_by_extraction_id``: extraction_id 経由で既存 Entity を取得 (reconcile
-  cron / 検査経路で使用)
 - ``save``: AI 境界型 ``OutOfScope`` を受けて
   `INSERT ... ON CONFLICT (extraction_id) DO NOTHING RETURNING ...`
 
-注 (PR3.5-d.0): Domain Entity ``OutOfScopeAssessment`` と ORM クラス
-``OutOfScopeAssessment`` が同名のため、本ファイル内では ORM 側を
-``OutOfScopeAssessmentORM`` alias で import して衝突回避する。
+設計方針 (2026-05-11 更新): Stage 4 で永続化が確定したら以降は DB を SSoT として
+信用するため、Domain Entity 経由の値運搬は廃止。``save`` の戻り値は audit 焼付に
+必要な最小情報 (新規 row id) のみに絞る
+(`feedback_bc_boundary_guarantees_downstream`)。
 """
 
 from __future__ import annotations
@@ -19,11 +18,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from app.analysis.assessment.ai.schema import OutOfScope
-from app.analysis.assessment.domain.out_of_scope import OutOfScopeAssessment
 from app.analysis.assessment.domain.ready import ReadyForAssessment
-from app.models.out_of_scope_assessment import (
-    OutOfScopeAssessment as OutOfScopeAssessmentORM,
-)
+from app.models.out_of_scope_assessment import OutOfScopeAssessment
 
 
 class OutOfScopeRepository:
@@ -35,21 +31,11 @@ class OutOfScopeRepository:
     async def exists_for_extraction(self, extraction_id: int) -> bool:
         """`try_advance_from` 用 cheap exists 判定 (extraction_id 単位)。"""
         stmt = (
-            select(OutOfScopeAssessmentORM.id)
-            .where(OutOfScopeAssessmentORM.extraction_id == extraction_id)
+            select(OutOfScopeAssessment.id)
+            .where(OutOfScopeAssessment.extraction_id == extraction_id)
             .limit(1)
         )
         return (await self._session.execute(stmt)).first() is not None
-
-    async def find_by_extraction_id(
-        self, extraction_id: int
-    ) -> OutOfScopeAssessment | None:
-        """extraction_id 経由で既存 out-of-scope 評価を取得する (reconcile cron 用)。"""
-        stmt = select(OutOfScopeAssessmentORM).where(
-            OutOfScopeAssessmentORM.extraction_id == extraction_id,
-        )
-        orm = (await self._session.execute(stmt)).scalar_one_or_none()
-        return self._to_domain(orm) if orm is not None else None
 
     async def save(
         self,
@@ -57,7 +43,7 @@ class OutOfScopeRepository:
         *,
         ready: ReadyForAssessment,
         ai_model: str,
-    ) -> OutOfScopeAssessment | None:
+    ) -> int | None:
         """AI 境界型 + ``ReadyForAssessment`` (Stage 3 由来 snapshot) を受けて
         ``INSERT ... ON CONFLICT (extraction_id) DO NOTHING RETURNING ...`` で
         永続化する。
@@ -68,12 +54,11 @@ class OutOfScopeRepository:
         ``OutOfScope`` には含まれないため ``ready`` 経由で受け取る。
 
         Returns:
-            成功時: 永続化された ``OutOfScopeAssessment`` Entity (id /
-            rejected_at は DB 値、その他は引数値)
+            成功時: DB が採番した ``id``
             race 敗北時 (期待した extraction_id への UNIQUE 違反): ``None``
         """
         stmt = (
-            pg_insert(OutOfScopeAssessmentORM)
+            pg_insert(OutOfScopeAssessment)
             .values(
                 extraction_id=ready.extraction_id,
                 translated_title=ready.translated_title,
@@ -82,30 +67,9 @@ class OutOfScopeRepository:
                 ai_model=ai_model,
             )
             .on_conflict_do_nothing(index_elements=["extraction_id"])
-            .returning(OutOfScopeAssessmentORM.id, OutOfScopeAssessmentORM.rejected_at)
+            .returning(OutOfScopeAssessment.id)
         )
         row = (await self._session.execute(stmt)).first()
         if row is None:
             return None
-        return OutOfScopeAssessment(
-            id=row.id,
-            extraction_id=ready.extraction_id,
-            translated_title=ready.translated_title,
-            summary=ready.summary,
-            investor_take=out_of_scope.investor_take,
-            ai_model=ai_model,
-            rejected_at=row.rejected_at,
-        )
-
-    @staticmethod
-    def _to_domain(orm: OutOfScopeAssessmentORM) -> OutOfScopeAssessment:
-        """ORM から記録済み Entity へ復元する。"""
-        return OutOfScopeAssessment(
-            id=orm.id,
-            extraction_id=orm.extraction_id,
-            translated_title=orm.translated_title,
-            summary=orm.summary,
-            investor_take=orm.investor_take,
-            ai_model=orm.ai_model,
-            rejected_at=orm.rejected_at,
-        )
+        return row.id

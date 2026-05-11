@@ -59,6 +59,30 @@ class EmbeddingRepository:
         )
         return (await self._session.execute(stmt)).first() is not None
 
+    async def fetch_text_for_embedding(self, analysis_id: int) -> str | None:
+        """``analysis_id`` 行の embedder 入力テキスト (translated_title + summary)
+        を結合して返す。
+
+        Pattern A' では Ready が ID のみを passport として運び、値は DB を SSoT
+        として Stage 5 Service が都度読む。``in_scope_assessments.translated_title``
+        / ``summary`` は Stage 4 INSERT 後に不変な snapshot
+        (`feedback_bc_boundary_guarantees_downstream`) のため、再 read で同じ値が
+        得られる。
+
+        Returns:
+            行が存在し translated_title / summary が確定済の場合: 結合済テキスト
+            行が存在しない場合: ``None`` (Pattern A' 違反 signal、Service が
+            fail-fast で `RuntimeError` に昇格させる)
+        """
+        stmt = select(
+            InScopeAssessment.translated_title,
+            InScopeAssessment.summary,
+        ).where(InScopeAssessment.id == analysis_id)
+        row = (await self._session.execute(stmt)).first()
+        if row is None:
+            return None
+        return f"{row[0]}\n{row[1]}"
+
     async def find_by_analysis_id(self, analysis_id: int) -> Embedding | None:
         """analysis に紐づく埋め込みを Entity として取得する (race 敗北時の読戻し用)。
 

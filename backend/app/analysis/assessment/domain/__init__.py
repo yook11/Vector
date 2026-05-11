@@ -1,11 +1,13 @@
 """Stage 4 (Assessment) ドメインの公開 API。
 
-Entity (``InScopeAssessment`` / ``OutOfScopeAssessment``) を再エクスポートする。
+Pattern A' の precondition 型 ``ReadyForAssessment`` のみを再エクスポートする。
+in-scope / out-of-scope の永続化済 Entity は AI 境界 ``InScope`` / ``OutOfScope``
+で永続化可能性を保証 → 以降は DB を SSoT として下流が信用する設計に統一したため
+廃止 (`feedback_bc_boundary_guarantees_downstream`)。
 """
 
 from __future__ import annotations
 
-from app.analysis.assessment.domain.in_scope import InScopeAssessment
-from app.analysis.assessment.domain.out_of_scope import OutOfScopeAssessment
+from app.analysis.assessment.domain.ready import ReadyForAssessment
 
-__all__ = ["InScopeAssessment", "OutOfScopeAssessment"]
+__all__ = ["ReadyForAssessment"]

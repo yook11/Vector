@@ -11,7 +11,6 @@ from taskiq import Context, TaskiqDepends
 
 from app.analysis._limiter_factory import _build_limiters
 from app.analysis.assessment.ai.base import BaseAssessor
-from app.analysis.assessment.domain.in_scope import InScopeAssessment
 from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.errors import (
     AssessmentRecoverableError,
@@ -112,20 +111,20 @@ async def assess_content(
             return
         raise
 
-    # 楽観ロック敗北: 勝者 task が Stage 5 を起動する。勝者が crash 等で chain
-    # 起動に失敗した case の救済は reconcile cron 経路 (本 task の責務外)。
+    # ``result`` は in-scope 成功時のみ assessment id、out-of-scope と race 敗北
+    # は ``None``。out-of-scope はパイプライン終了で chain しない。race 敗北は
+    # 勝者 task が自身で Stage 5 を起動する (勝者 crash 時は reconcile cron 経路、
+    # 本 task の責務外)。
     if result is None:
         return
 
     # Stage 5 (Embedding) へ chain (Pattern A': 上流 Task が下流 Ready を構築)。
-    # InScopeAssessment Entity から ReadyForEmbedding を構築する。
-    # OutOfScopeAssessment は chain しない (パイプライン終了)。
-    if isinstance(result, InScopeAssessment):
-        async with session_factory() as session:
-            embedding_repo = EmbeddingRepository(session)
-            ready_emb = await ReadyForEmbedding.try_advance_from(
-                result,
-                embedding_repo,
-            )
-        if ready_emb is not None:
-            await generate_embedding.kiq(ready_emb)
+    # ID のみ運び、Stage 5 Service が DB から都度値を読む。
+    async with session_factory() as session:
+        embedding_repo = EmbeddingRepository(session)
+        ready_emb = await ReadyForEmbedding.try_advance_from(
+            analysis_id=result,
+            embedding_repo=embedding_repo,
+        )
+    if ready_emb is not None:
+        await generate_embedding.kiq(ready_emb)

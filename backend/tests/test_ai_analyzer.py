@@ -34,12 +34,6 @@ from app.analysis.assessment.ai.schema import (
     InScopeCategory,
     OutOfScope,
 )
-from app.analysis.assessment.domain.in_scope import (
-    InScopeAssessment as InScopeAssessmentEntity,
-)
-from app.analysis.assessment.domain.out_of_scope import (
-    OutOfScopeAssessment as OutOfScopeAssessmentEntity,
-)
 from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.service import AssessmentService
 from app.analysis.domain.value_objects.entity import (
@@ -770,7 +764,8 @@ async def test_assessment_persists_topic_and_category(
     )
     svc = AssessmentService(session_factory)
     result = await svc.execute(ready, mock_assessor)
-    assert isinstance(result, InScopeAssessmentEntity)
+    # in-scope 成功時 Service は assessment id (int) を返す
+    assert isinstance(result, int) and result > 0
 
     db_session.expire_all()
     analysis = (
@@ -780,6 +775,7 @@ async def test_assessment_persists_topic_and_category(
             )
         )
     ).scalar_one()
+    assert analysis.id == result
     assert str(analysis.topic) == "quantum computing"
     assert analysis.category_id == expected_category_id
     assert analysis.investor_take == "理由テスト"
@@ -819,7 +815,8 @@ async def test_assessment_persists_rejection_when_out_of_scope(
     )
     svc = AssessmentService(session_factory)
     result = await svc.execute(ready, mock_assessor)
-    assert isinstance(result, OutOfScopeAssessmentEntity)
+    # out-of-scope は Stage 5 chain しないため Service は None を返す
+    assert result is None
 
     db_session.expire_all()
     rejection = (

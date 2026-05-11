@@ -24,9 +24,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis.assessment.ai.envelope import AssessmentCall
-from app.analysis.assessment.ai.schema import InScope
-from app.analysis.assessment.domain.in_scope import InScopeAssessment
-from app.analysis.assessment.domain.out_of_scope import OutOfScopeAssessment
+from app.analysis.assessment.ai.schema import InScope, OutOfScope
 from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.errors import (
     AssessmentRecoverableError,
@@ -83,22 +81,27 @@ class AssessmentAuditRepository:
         *,
         ready: ReadyForAssessment,
         envelope: AssessmentCall,
-        assessment: InScopeAssessment,
         in_scope: InScope,
+        assessment_id: int,
+        category_id: int,
         ai_model: str,
     ) -> None:
         """in-scope 成功 audit を 1 行記録する。
 
-        Service ``_handle_in_scope`` が業務 INSERT と同 tx で呼ぶ。
+        Service が業務 INSERT と同 tx で呼ぶ。``Repository.save`` が返す
+        ``(assessment_id, category_id)`` と AI 境界型 ``in_scope`` を直接受け、
+        Domain Entity を介さない (`feedback_bc_boundary_guarantees_downstream`)。
 
         Args:
+            assessment_id: ``InScopeRepository.save`` が返した新規 row の id
+            category_id: ``InScopeRepository.save`` が内部解決した FK 値
+                (slug 経由の catalog lookup 結果)
             ai_model: ``assessor.model_name`` (BaseAssessor の ClassVar
                 ``MODEL`` accessor) を caller が渡す。``AssessmentCall``
                 envelope には ``model_name`` field が無い設計のため。
-            in_scope: AI 境界型。``category.value`` (catalog 確認後 slug) を
-                ``category_slug`` に詰めるため本 Repository 内で参照する。
-                ``raw_category`` (envelope 由来、validation 前生値) と
-                意味分離する。
+            in_scope: AI 境界型。``category.value`` (catalog 確認後 slug) /
+                ``topic`` / ``investor_take`` を直接読む。``raw_category``
+                (envelope 由来、validation 前生値) とは意味分離する。
         """
         article_id = await self._article_id_for(ready.extraction_id)
         source_name = await self._resolve_source_name(ready.extraction_id)
@@ -112,11 +115,11 @@ class AssessmentAuditRepository:
             ai_raw_response=_limited_str(envelope.raw_response, _AI_RAW_RESPONSE_LIMIT),
             raw_category=envelope.raw_category,
             raw_topic=envelope.raw_topic,
-            assessment_id=assessment.id,
-            category_id=assessment.category_id,
+            assessment_id=assessment_id,
+            category_id=category_id,
             category_slug=in_scope.category.value,
-            topic=str(assessment.topic),
-            investor_take=assessment.investor_take,
+            topic=str(in_scope.topic),
+            investor_take=in_scope.investor_take,
         )
         await self._events.append(
             stage=Stage.ASSESSMENT,
@@ -133,7 +136,8 @@ class AssessmentAuditRepository:
         *,
         ready: ReadyForAssessment,
         envelope: AssessmentCall,
-        assessment: OutOfScopeAssessment,
+        out_of_scope: OutOfScope,
+        assessment_id: int,
         ai_model: str,
     ) -> None:
         """out-of-scope 成功 audit を 1 行記録する。
@@ -143,6 +147,10 @@ class AssessmentAuditRepository:
         audit payload もそれに追従し ``investor_take`` を焼く (本体 DB と
         audit の情報量を一致させる)。``category_id`` / ``category_slug`` /
         ``topic`` は in-scope 固有のため out-of-scope では None。
+
+        Args:
+            assessment_id: ``OutOfScopeRepository.save`` が返した新規 row の id
+            out_of_scope: AI 境界型。``investor_take`` を直接読む。
         """
         article_id = await self._article_id_for(ready.extraction_id)
         source_name = await self._resolve_source_name(ready.extraction_id)
@@ -156,8 +164,8 @@ class AssessmentAuditRepository:
             ai_raw_response=_limited_str(envelope.raw_response, _AI_RAW_RESPONSE_LIMIT),
             raw_category=envelope.raw_category,
             raw_topic=envelope.raw_topic,
-            assessment_id=assessment.id,
-            investor_take=assessment.investor_take,
+            assessment_id=assessment_id,
+            investor_take=out_of_scope.investor_take,
             # category_id / category_slug / topic は in-scope 固有のため None
         )
         await self._events.append(

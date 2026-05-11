@@ -42,8 +42,6 @@ from app.analysis.assessment.ai.schema import (
     OutOfScope,
 )
 from app.analysis.assessment.audit_repository import AssessmentAuditRepository
-from app.analysis.assessment.domain.in_scope import InScopeAssessment
-from app.analysis.assessment.domain.out_of_scope import OutOfScopeAssessment
 from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.errors import (
     AssessmentCategoryMissingError,
@@ -155,7 +153,12 @@ async def _persist_in_scope(
     db_session: AsyncSession,
     extraction: ArticleExtraction,
     category: Category,
-) -> InScopeAssessment:
+) -> InScopeAssessmentORM:
+    """テスト用に in_scope_assessments 行を 1 件焼いて ORM を返す。
+
+    audit テストは ``assessment_id`` / ``category_id`` だけ取り出して
+    ``append_in_scope`` に渡すため、Domain Entity を再構成しない。
+    """
     orm = InScopeAssessmentORM(
         extraction_id=extraction.id,
         translated_title="title",
@@ -168,25 +171,14 @@ async def _persist_in_scope(
     db_session.add(orm)
     await db_session.commit()
     await db_session.refresh(orm)
-    # ORM の TopicName custom type が VO ↔ str を双方向変換するため
-    # ``orm.topic`` は既に ``TopicName`` instance。再 wrap しない。
-    return InScopeAssessment(
-        id=orm.id,
-        extraction_id=orm.extraction_id,
-        translated_title=orm.translated_title,
-        summary=orm.summary,
-        topic=orm.topic,
-        category_id=orm.category_id,
-        investor_take=orm.investor_take,
-        ai_model=orm.ai_model,
-        analyzed_at=orm.analyzed_at,
-    )
+    return orm
 
 
 async def _persist_out_of_scope(
     db_session: AsyncSession,
     extraction: ArticleExtraction,
-) -> OutOfScopeAssessment:
+) -> OutOfScopeAssessmentORM:
+    """テスト用に out_of_scope_assessments 行を 1 件焼いて ORM を返す。"""
     orm = OutOfScopeAssessmentORM(
         extraction_id=extraction.id,
         translated_title=extraction.translated_title,
@@ -197,15 +189,7 @@ async def _persist_out_of_scope(
     db_session.add(orm)
     await db_session.commit()
     await db_session.refresh(orm)
-    return OutOfScopeAssessment(
-        id=orm.id,
-        extraction_id=orm.extraction_id,
-        translated_title=orm.translated_title,
-        summary=orm.summary,
-        investor_take=orm.investor_take,
-        ai_model=orm.ai_model,
-        rejected_at=orm.rejected_at,
-    )
+    return orm
 
 
 async def _fetch_one(db_session: AsyncSession, article_id: int) -> PipelineEvent:
@@ -243,8 +227,9 @@ async def test_append_in_scope_records_success_with_code(
         await AssessmentAuditRepository(session).append_in_scope(
             ready=_ready(extraction),
             envelope=_in_scope_envelope(),
-            assessment=in_scope,
             in_scope=_make_in_scope(),
+            assessment_id=in_scope.id,
+            category_id=in_scope.category_id,
             ai_model=_AI_MODEL,
         )
         await session.commit()
@@ -288,8 +273,9 @@ async def test_append_in_scope_derives_category_slug_from_in_scope(
         await AssessmentAuditRepository(session).append_in_scope(
             ready=_ready(extraction),
             envelope=envelope,
-            assessment=in_scope_orm,
             in_scope=in_scope_response,
+            assessment_id=in_scope_orm.id,
+            category_id=in_scope_orm.category_id,
             ai_model=_AI_MODEL,
         )
         await session.commit()
@@ -315,8 +301,9 @@ async def test_append_in_scope_resolves_article_id_from_extraction(
         await AssessmentAuditRepository(session).append_in_scope(
             ready=_ready(extraction),
             envelope=_in_scope_envelope(),
-            assessment=in_scope,
             in_scope=_make_in_scope(),
+            assessment_id=in_scope.id,
+            category_id=in_scope.category_id,
             ai_model=_AI_MODEL,
         )
         await session.commit()
@@ -341,8 +328,9 @@ async def test_append_in_scope_resolves_source_name(
         await AssessmentAuditRepository(session).append_in_scope(
             ready=_ready(extraction),
             envelope=_in_scope_envelope(),
-            assessment=in_scope,
             in_scope=_make_in_scope(),
+            assessment_id=in_scope.id,
+            category_id=in_scope.category_id,
             ai_model=_AI_MODEL,
         )
         await session.commit()
@@ -367,8 +355,9 @@ async def test_append_in_scope_does_not_commit(
         await AssessmentAuditRepository(session).append_in_scope(
             ready=_ready(extraction),
             envelope=_in_scope_envelope(),
-            assessment=in_scope,
             in_scope=_make_in_scope(),
+            assessment_id=in_scope.id,
+            category_id=in_scope.category_id,
             ai_model=_AI_MODEL,
         )
         # 意図的に commit しない (rollback で消える)
@@ -403,8 +392,9 @@ async def test_append_in_scope_truncates_raw_response(
         await AssessmentAuditRepository(session).append_in_scope(
             ready=_ready(extraction),
             envelope=envelope,
-            assessment=in_scope,
             in_scope=_make_in_scope(),
+            assessment_id=in_scope.id,
+            category_id=in_scope.category_id,
             ai_model=_AI_MODEL,
         )
         await session.commit()
@@ -431,10 +421,12 @@ async def test_append_out_of_scope_records_success_with_code(
     out_of_scope = await _persist_out_of_scope(db_session, extraction)
 
     async with session_factory() as session:
+        out_of_scope_response = OutOfScope(investor_take="not relevant")
         await AssessmentAuditRepository(session).append_out_of_scope(
             ready=_ready(extraction),
             envelope=_out_of_scope_envelope(),
-            assessment=out_of_scope,
+            out_of_scope=out_of_scope_response,
+            assessment_id=out_of_scope.id,
             ai_model=_AI_MODEL,
         )
         await session.commit()
@@ -463,10 +455,12 @@ async def test_append_out_of_scope_records_investor_take(
     out_of_scope = await _persist_out_of_scope(db_session, extraction)
 
     async with session_factory() as session:
+        out_of_scope_response = OutOfScope(investor_take="not relevant")
         await AssessmentAuditRepository(session).append_out_of_scope(
             ready=_ready(extraction),
             envelope=_out_of_scope_envelope(),
-            assessment=out_of_scope,
+            out_of_scope=out_of_scope_response,
+            assessment_id=out_of_scope.id,
             ai_model=_AI_MODEL,
         )
         await session.commit()

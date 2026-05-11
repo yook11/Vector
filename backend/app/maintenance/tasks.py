@@ -305,7 +305,6 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
         logger.warning("backfill_embeddings_daily_budget_exhausted", found=found)
         return
 
-    from app.analysis.assessment.repository import InScopeRepository
     from app.analysis.embedding.domain.ready import ReadyForEmbedding
     from app.analysis.embedding.repository import EmbeddingRepository
     from app.analysis.embedding.tasks import generate_embedding
@@ -315,15 +314,10 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
     for assessment_id in ids[:granted]:
         try:
             async with session_factory() as session:
-                in_scope_repo = InScopeRepository(session)
                 embedding_repo = EmbeddingRepository(session)
-                assessment = await in_scope_repo.find_by_id(assessment_id)
-                if assessment is None:
-                    skipped += 1
-                    continue
                 ready = await ReadyForEmbedding.try_advance_from(
-                    assessment,
-                    embedding_repo,
+                    analysis_id=assessment_id,
+                    embedding_repo=embedding_repo,
                 )
             if ready is None:
                 skipped += 1

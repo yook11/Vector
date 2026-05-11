@@ -1,7 +1,7 @@
 """``assess_content`` task のテスト (chain 経路 + 3 marker dispatch)。
 
-- InScopeAssessment → ReadyForEmbedding 構築 → generate_embedding.kiq による chain
-- OutOfScopeAssessment / Ready None 時に chain しないこと
+- in-scope 成功 (int 返却) → ReadyForEmbedding 構築 → embedding chain
+- out-of-scope / race lost (``None`` 返却) は chain しないこと
 - 3 marker dispatch: TerminalSkip / Recoverable / catch-all Exception
 """
 
@@ -57,10 +57,7 @@ def _make_ready(extraction_id: int = 2) -> ReadyForAssessment:
 
 
 def _make_ready_emb(analysis_id: int = 100) -> ReadyForEmbedding:
-    return ReadyForEmbedding(
-        analysis_id=analysis_id,
-        text_for_embedding="title\nsummary",
-    )
+    return ReadyForEmbedding(analysis_id=analysis_id)
 
 
 # ---------------------------------------------------------------------------
@@ -71,12 +68,10 @@ def _make_ready_emb(analysis_id: int = 100) -> ReadyForEmbedding:
 class TestAssessContent:
     @pytest.mark.asyncio
     async def test_in_scope_chains_embedding_with_ready(self) -> None:
-        """InScopeAssessment → ReadyForEmbedding を構築して embedding chain。"""
-        from app.analysis.assessment.domain.in_scope import InScopeAssessment
+        """in-scope 成功 (assessment_id 返却) → ReadyForEmbedding を構築して chain。"""
         from app.analysis.assessment.tasks import assess_content
 
         mock_ctx = _make_ctx(assessor=_make_provider_fake())
-        mock_result = MagicMock(spec=InScopeAssessment)
         ready = _make_ready(extraction_id=2)
         ready_emb = _make_ready_emb(analysis_id=100)
 
@@ -92,7 +87,8 @@ class TestAssessContent:
             ),
             patch("app.analysis.assessment.tasks.generate_embedding") as mock_embed,
         ):
-            mock_svc_cls.return_value.execute = AsyncMock(return_value=mock_result)
+            # Service は in-scope 成功時 assessment id を返す
+            mock_svc_cls.return_value.execute = AsyncMock(return_value=100)
             mock_embed.kiq = AsyncMock()
             await assess_content(ready=ready, ctx=mock_ctx)
 
@@ -100,12 +96,10 @@ class TestAssessContent:
 
     @pytest.mark.asyncio
     async def test_in_scope_does_not_chain_when_advance_returns_none(self) -> None:
-        """InScopeAssessment でも embedding precondition 未充足なら chain しない。"""
-        from app.analysis.assessment.domain.in_scope import InScopeAssessment
+        """in-scope 成功でも embedding precondition 未充足なら chain しない。"""
         from app.analysis.assessment.tasks import assess_content
 
         mock_ctx = _make_ctx(assessor=_make_provider_fake())
-        mock_result = MagicMock(spec=InScopeAssessment)
         ready = _make_ready(extraction_id=2)
 
         with (
@@ -120,15 +114,19 @@ class TestAssessContent:
             ),
             patch("app.analysis.assessment.tasks.generate_embedding") as mock_embed,
         ):
-            mock_svc_cls.return_value.execute = AsyncMock(return_value=mock_result)
+            mock_svc_cls.return_value.execute = AsyncMock(return_value=100)
             mock_embed.kiq = AsyncMock()
             await assess_content(ready=ready, ctx=mock_ctx)
 
         mock_embed.kiq.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_race_lost_none_result_does_not_chain(self) -> None:
-        """``execute`` が None (race lost) を返すと embedding chain しない。"""
+    async def test_none_result_does_not_chain(self) -> None:
+        """``execute`` が None (out-of-scope / race lost) → embedding chain しない。
+
+        in-scope 経路だけが Stage 5 chain の対象。out-of-scope はパイプライン終了で、
+        race lost は勝者 task が自身で chain を起動する責務。
+        """
         from app.analysis.assessment.tasks import assess_content
 
         mock_ctx = _make_ctx(assessor=_make_provider_fake())
@@ -143,30 +141,6 @@ class TestAssessContent:
             patch("app.analysis.assessment.tasks.generate_embedding") as mock_embed,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(return_value=None)
-            mock_embed.kiq = AsyncMock()
-            await assess_content(ready=ready, ctx=mock_ctx)
-
-        mock_embed.kiq.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_out_of_scope_does_not_chain(self) -> None:
-        """OutOfScopeAssessment は embedding に進まない。"""
-        from app.analysis.assessment.domain.out_of_scope import OutOfScopeAssessment
-        from app.analysis.assessment.tasks import assess_content
-
-        mock_ctx = _make_ctx(assessor=_make_provider_fake())
-        mock_result = MagicMock(spec=OutOfScopeAssessment)
-        ready = _make_ready(extraction_id=2)
-
-        with (
-            patch(
-                "app.analysis.assessment.tasks._build_limiters",
-                return_value=(None, None),
-            ),
-            patch("app.analysis.assessment.tasks.AssessmentService") as mock_svc_cls,
-            patch("app.analysis.assessment.tasks.generate_embedding") as mock_embed,
-        ):
-            mock_svc_cls.return_value.execute = AsyncMock(return_value=mock_result)
             mock_embed.kiq = AsyncMock()
             await assess_content(ready=ready, ctx=mock_ctx)
 

@@ -77,16 +77,29 @@ class EmbeddingService:
     ) -> EmbeddingOutcome:
         """Ready 型を入力に埋め込みベクトルを生成し永続化する。
 
-        Pattern A': 受け取った Ready は precondition (analysis 存在 + embedding
-        未生成 + text 非空) を構造保証している。本 Service は再 fetch / None
-        check / 既存 embedding チェックを行わない。
+        Pattern A': 受け取った Ready は precondition (embedding 未生成) を構造
+        保証している。embedder 入力テキストは ``in_scope_assessments`` 行から
+        都度 fetch する (Stage 4 INSERT 後の不変 snapshot を DB SSoT として再 read、
+        `feedback_bc_boundary_guarantees_downstream`)。AI 呼び出しと永続化で
+        session を分けて slow IO 中の DB 接続専有を避ける既存原則を維持する。
 
         Raises:
+            ``RuntimeError``: Pattern A' 違反 (analysis 行が消失) を fail-fast で
+            可視化する (`feedback_failure_visibility`)。
             ``RateLimitError`` / ``ProviderError`` / ``NetworkError`` /
             ``ConfigurationError`` (Task 層 retry / 停止判断に委ねる)。
         """
+        async with self._session_factory() as session:
+            text = await EmbeddingRepository(session).fetch_text_for_embedding(
+                ready.analysis_id
+            )
+        if text is None:
+            raise RuntimeError(
+                f"embedding_assessment_missing: analysis_id={ready.analysis_id}"
+            )
+
         try:
-            vector = await embedder.embed_document(ready.text_for_embedding)
+            vector = await embedder.embed_document(text)
         except InvalidInputError:
             logger.info(
                 "embedding_input_rejected",
