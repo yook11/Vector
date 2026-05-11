@@ -65,7 +65,7 @@ Service の戻り値は「次の段階に渡す価値あるもの」のみ。失
 
 provider が raise する `AIProviderError` を Stage 4 の Service 層が catch し、Stage 4 側に持つ **2 つの tuple** (`ASSESSMENT_RECOVERABLE_PROVIDER_ERRORS` / `ASSESSMENT_TERMINAL_SKIP_PROVIDER_ERRORS`) で `isinstance(exc, <tuple>)` 判定し、`AssessmentRecoverableError` / `AssessmentTerminalSkipError` のどちらかに詰め替えて re-raise する。Anti-Corruption Layer (ACL) パターン、OpenAI evals の `OPENAI_TIMEOUT_EXCEPTIONS` 流。
 
-→ task 層は **Stage 4 marker 2 種 だけ** で dispatch (`isinstance` chain や per-error 分岐は書かない)。新規 provider 例外を追加するときは `provider_mapping.py` の該当 tuple に **1 行追加**するだけで済む (コード分岐の追加は不要)。tuple は N×M cost を完全には消さないが、追加コストを「分岐の追加」→「タプル要素の追加」に圧縮する現実解。
+→ task 層は **Stage 4 marker 2 種 だけ** で dispatch (`isinstance` chain や per-error 分岐は書かない)。新規 provider 例外を追加するときは `errors.py` の Layer 2-A section の該当 tuple に **1 行追加**するだけで済む (コード分岐の追加は不要)。tuple は N×M cost を完全には消さないが、追加コストを「分岐の追加」→「タプル要素の追加」に圧縮する現実解。
 
 ### 原則 6: Stage 4 で raise されうる全例外は **2 marker のいずれかを継承 / 経由**
 
@@ -199,7 +199,7 @@ Stage 4 で raise される全例外は **Layer 1 marker (`AssessmentRecoverable
 Stage 4 boundary で `AIProviderError` を catch して Stage 4 marker に **直接詰め替える** (provider wrapper class は作らない)。
 
 ```python
-# app/analysis/assessment/provider_mapping.py (新規、Stage 4 ACL の SSoT)
+# app/analysis/assessment/errors.py (Layer 2-A ACL section、Stage 4 ACL の SSoT)
 
 from __future__ import annotations
 
@@ -1427,8 +1427,7 @@ def upgrade() -> None:
 
 | パス | 内容 |
 |---|---|
-| `app/analysis/assessment/errors.py` | `AssessmentError` / `AssessmentRecoverableError` / `AssessmentTerminalSkipError` (Layer 1 marker、`code` + `provider_error: AIProviderError \| None` の 2 instance attr) + Layer 2-B 固有 (`AssessmentResponseInvalidError` / `AssessmentCategoryMissingError`、`provider_error=None` で marker を直接継承) |
-| `app/analysis/assessment/provider_mapping.py` | `ASSESSMENT_RECOVERABLE_PROVIDER_ERRORS` / `ASSESSMENT_TERMINAL_SKIP_PROVIDER_ERRORS` の 2 tuple + `map_provider_to_assessment` (tuple-based ACL の SSoT、`isinstance(exc, <tuple>)` で dispatch) |
+| `app/analysis/assessment/errors.py` | Stage 4 ドメインエラー定義の SSoT。Layer 1 marker (`AssessmentError` / `AssessmentRecoverableError` / `AssessmentTerminalSkipError`、`code` + `provider_error: AIProviderError \| None` の 2 instance attr) + Layer 2-B 固有 (`AssessmentResponseInvalidError` / `AssessmentCategoryMissingError`、`provider_error=None` で marker を直接継承) + Layer 2-A ACL (`ASSESSMENT_RECOVERABLE_PROVIDER_ERRORS` / `ASSESSMENT_TERMINAL_SKIP_PROVIDER_ERRORS` の 2 tuple + `map_provider_to_assessment`、`isinstance(exc, <tuple>)` で dispatch) を 1 ファイルに集約 |
 | `app/analysis/assessment/audit_repository.py` | `AssessmentAuditRepository` (`append_in_scope` / `append_out_of_scope` / `append_failure`) |
 | `app/analysis/assessment/failure_recording.py` | `record_assessment_failure` (Task 層 helper) |
 | `app/analysis/classifier/envelope.py` | `AssessmentCall` envelope dataclass |

@@ -5,12 +5,10 @@ from __future__ import annotations
 import pytest
 
 from app.analysis.assessment.errors import (
-    AssessmentRecoverableError,
-    AssessmentTerminalSkipError,
-)
-from app.analysis.assessment.provider_mapping import (
     ASSESSMENT_RECOVERABLE_PROVIDER_ERRORS,
     ASSESSMENT_TERMINAL_SKIP_PROVIDER_ERRORS,
+    AssessmentRecoverableError,
+    AssessmentTerminalSkipError,
     map_provider_to_assessment,
 )
 from app.analysis.errors.provider import (

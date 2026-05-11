@@ -13,8 +13,8 @@ PR6 で Service が以下を行うようになったことを固定する:
 - race lost (``save()`` が None) の場合は audit を焼かず ``None`` を返す
   (actor SSoT、勝者 task の audit と二重記録しない、再収集は reconcile cron 経路)。
 
-PR5 で merge 済の repository / payload / provider_mapping は本 PR では touch しない
-(test では結果として焼かれた pipeline_events 行を assert するに留める)。
+PR5 で merge 済の repository / payload / errors (Layer 2-A ACL) は本 PR では
+touch しない (test では結果として焼かれた pipeline_events 行を assert するに留める)。
 """
 
 from __future__ import annotations

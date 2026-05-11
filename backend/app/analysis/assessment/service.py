@@ -45,7 +45,7 @@ from app.analysis.assessment.ai.envelope import AssessmentCall
 from app.analysis.assessment.audit_repository import AssessmentAuditRepository
 from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.domain.result import InScope, OutOfScope
-from app.analysis.assessment.provider_mapping import map_provider_to_assessment
+from app.analysis.assessment.errors import map_provider_to_assessment
 from app.analysis.assessment.repository import AssessmentRepository
 from app.analysis.errors.provider import AIProviderError
 

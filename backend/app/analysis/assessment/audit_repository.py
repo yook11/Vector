@@ -260,7 +260,7 @@ class AssessmentAuditRepository:
         保持する設計
         (PR1 で導入、``backend/app/analysis/assessment/errors.py``)。
 
-        provider 由来は ACL mapper (``provider_mapping.py``) が
+        provider 由来は ACL mapper (``errors.py`` Layer 2-A section) が
         ``AIProviderError.CODE`` を引き継いで instance attr に詰めるため、
         本 method は instance 経路のみで全パターン (Layer 2-A: provider mapped /
         Layer 2-B: ``AssessmentResponseInvalidError`` ctor 内 hardcode

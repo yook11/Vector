@@ -56,7 +56,7 @@
 
 | 時点 | 本番挙動 |
 |---|---|
-| PR1 merge 後 | 新規ファイル (`assessment/errors.py` / `assessment/provider_mapping.py`) 増えるだけ、import されない → 挙動不変 |
+| PR1 merge 後 | 新規ファイル (`assessment/errors.py`、Layer 1 marker + Layer 2-A ACL を集約) 増えるだけ、import されない → 挙動不変 |
 | PR2 merge 後 | `AssessmentResponse` → `AssessmentResult` rename と内部詰め替え集約 + Layer 2-B markers (`AssessmentResponseInvalidError` / `AssessmentCategoryMissingError`) を `assessment/errors.py` に追加。Service の caller は型名変更のみ、挙動不変 |
 | PR3 merge 後 | classifier の戻り値が envelope (`AssessmentCall`)、Service が envelope を unpack する経路に。**provider 例外は素通し** (まだ ACL なし)、既存挙動と同じ。失敗時は旧経路で audit 焼付 |
 | PR4 merge 後 | DB CHECK 制約に `ASSESSMENT` / `non_retryable_keep_extraction` 追加。既存 row は `Stage.CLASSIFICATION` のまま稼働、新規書き込みも旧値で動作 |
@@ -73,7 +73,7 @@
 
 含む:
 - `app/analysis/assessment/errors.py` 新規 — `AssessmentError` / `AssessmentRecoverableError` / `AssessmentTerminalSkipError` (Layer 1 marker、`code: str` + `provider_error: AIProviderError | None = None` の 2 instance attr)
-- `app/analysis/assessment/provider_mapping.py` 新規 — `ASSESSMENT_RECOVERABLE_PROVIDER_ERRORS` / `ASSESSMENT_TERMINAL_SKIP_PROVIDER_ERRORS` の 2 tuple + `map_provider_to_assessment(exc)` 関数 (`isinstance(exc, <tuple>)` で dispatch)
+- `app/analysis/assessment/errors.py` に Layer 2-A ACL section 追加 — `ASSESSMENT_RECOVERABLE_PROVIDER_ERRORS` / `ASSESSMENT_TERMINAL_SKIP_PROVIDER_ERRORS` の 2 tuple + `map_provider_to_assessment(exc)` 関数 (`isinstance(exc, <tuple>)` で dispatch)
 
 含まない (次 PR 送り):
 - provider 側変更 (`AIProviderFailureKind` 等は本方針では永久に不要)
@@ -88,7 +88,7 @@
    - `AssessmentRecoverableError(AssessmentError)` — `code: str` + `provider_error: AIProviderError | None = None` の 2 instance attr、constructor は `(message="", *, code, provider_error=None)`
    - `AssessmentTerminalSkipError(AssessmentError)` — 同 signature
    - foundation marker (`RetryableError` 等) は **継承しない**
-2. `app/analysis/assessment/provider_mapping.py` 新規:
+2. `app/analysis/assessment/errors.py` 内 Layer 2-A ACL section:
    - `ASSESSMENT_RECOVERABLE_PROVIDER_ERRORS: tuple[type[AIProviderError], ...]` — Network / ServiceUnavailable / RateLimited / QuotaExhausted の 4 種
    - `ASSESSMENT_TERMINAL_SKIP_PROVIDER_ERRORS: tuple[type[AIProviderError], ...]` — Configuration / RequestInvalid / InsufficientBalance / InputRejected / OutputBlocked の 5 種
    - `map_provider_to_assessment(exc)` — `isinstance(exc, <tuple>)` で dispatch、未登録は `TypeError`
