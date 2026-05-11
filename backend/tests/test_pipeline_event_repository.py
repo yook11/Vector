@@ -141,8 +141,6 @@ def test_stage_strenum_matches_check_constraint() -> None:
     """Stage StrEnum 値 set が ORM/migration の CHECK 制約値と一致。
 
     値追加時は両方の更新を要求する自然な fail-fast。
-
-    PR4: 'classification' を 'assessment' に rename。
     """
     expected = {
         "dispatch",
@@ -152,7 +150,7 @@ def test_stage_strenum_matches_check_constraint() -> None:
         "assessment",
         "embedding",
         "backfill_extract",
-        "backfill_classify",
+        "backfill_assess",
         "backfill_embed",
     }
     assert {s.value for s in Stage} == expected

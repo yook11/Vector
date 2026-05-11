@@ -37,13 +37,12 @@ class PipelineEvent(Base):
     __tablename__ = "pipeline_events"
     __table_args__ = (
         CheckConstraint(
-            # PR4: 旧 'classification' を 'assessment' に rename。
-            # migration u1_assessment_stage_rename と完全に揃える (metadata.create_all
+            # migration y1_backfill_stage_rename と完全に揃える (metadata.create_all
             # 経由のテスト DB が古い CHECK を持たないように)。
             "stage IN ("
             "'dispatch','source_fetch','content_fetch',"
             "'extraction','assessment','embedding',"
-            "'backfill_extract','backfill_classify','backfill_embed'"
+            "'backfill_extract','backfill_assess','backfill_embed'"
             ")",
             name="ck_pipeline_events_stage",
         ),

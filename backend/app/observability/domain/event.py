@@ -16,14 +16,10 @@ class Stage(StrEnum):
     SOURCE_FETCH = "source_fetch"
     CONTENT_FETCH = "content_fetch"
     EXTRACTION = "extraction"
-    # PR4: 旧 CLASSIFICATION = "classification" を rename。enum メンバー名を完全削除
-    # することで import 時に AttributeError で fail-fast し、移行漏れを検出する。
     ASSESSMENT = "assessment"
     EMBEDDING = "embedding"
-    # NOTE: BACKFILL_CLASSIFY = "backfill_classify" は backfill 用の独立 stage 値で
-    # PR4 では touch しない (旧 Stage.CLASSIFICATION とは別物)。
     BACKFILL_EXTRACT = "backfill_extract"
-    BACKFILL_CLASSIFY = "backfill_classify"
+    BACKFILL_ASSESS = "backfill_assess"
     BACKFILL_EMBED = "backfill_embed"
 
 
