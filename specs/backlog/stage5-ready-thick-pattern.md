@@ -1,6 +1,7 @@
 # Stage 5 Embedding — 厚い Ready + 下流 Stage 自身が処理開始時に構築 (案 3)
 
-Status: Stage 5 で 2026-05-12 完了。Stage 4 (Assessment) への横展開は別 PR で扱う。
+Status: Stage 5 で 2026-05-12 完了。Stage 4 (Assessment) への横展開も 2026-05-12 完了
+(`specs/backlog/stage4-ready-thick-pattern.md` 参照)。
 
 ## 問題提起
 
@@ -140,19 +141,22 @@ Ready 型を作らず、Service が直接 ID を受け取って入口で `exists
 | Service の RuntimeError fail-fast | 「行不在」で発火 | race 後の「勝者読み戻し失敗」のみ |
 | backfill_embeddings | `try_advance_from` + kiq(ready) | kiq(trigger) のみ |
 
-## Stage 4 への横展開予告 (別 PR)
+## Stage 4 への横展開 (2026-05-12 完了)
 
-`ReadyForAssessment` も以下を満たさない:
-- `extraction_id` のみ持ち、`article_id` / `source_name` を持たない非対称
-- 上記不足を `AssessmentAuditRepository` が DB 逆引きで補完している
+`ReadyForAssessment` も同じ弱点 (薄い 3 fields / 上流 Task 構築 / AuditRepository
+2-hop 逆引き) を持っていたため、Stage 4 でも案 3 を適用した。詳細は
+`specs/backlog/stage4-ready-thick-pattern.md`。
 
-案 3 で揃えるには:
-1. `ReadyForAssessment` を真に厚い Ready に拡張 (`article_id` / `source_name` 等
-   audit に必要な値を全て保持)
-2. AuditRepository の DB 逆引きを撤去
-3. 上流 (`extract_content` task) から Stage 4 への kiq message を `AssessmentTrigger`
-   (extraction_id のみ) に変更
-4. Stage 4 task が `ReadyForAssessment.try_advance_from` を処理開始時に呼ぶ
+主な成果:
+- `ReadyForAssessment` を 5 fields (`extraction_id` / `translated_title` /
+  `summary` / `article_id` / `source_name`) に拡張
+- `AssessmentRepository.try_load_for_assessment` (1-query atomic) を新設、
+  旧 `exists_in_scope` / `exists_out_of_scope` 2 method を削除
+- `AssessmentAuditRepository` の `_article_id_for` / `_resolve_source_name`
+  2-hop 逆引きを撤去 (Ready から直接読む)
+- `AssessmentTrigger(extraction_id)` を kiq message として導入
+- `extract_content` (Stage 3 → 4 chain) を Trigger 経由に
+- `backfill_assessments` を `extraction_ids_pending_assessment` + Trigger に縮退
 
 ## 関連 memory
 
@@ -165,6 +169,5 @@ Ready 型を作らず、Service が直接 ID を受け取って入口で `exists
 
 ## 次のステップ
 
-1. Stage 4 (Assessment) の `ReadyForAssessment` を案 3 で拡張する詳細プラン作成
-2. spec `specs/typed-pipeline-preconditions.md` を案 3 で再ドラフト
-3. 横展開順序を案 3 で再定義 (Stage 3 以前への適用判断)
+1. spec `specs/typed-pipeline-preconditions.md` を案 3 で再ドラフト
+2. Stage 3 以前への適用判断 (Stage 3 Extraction も同 pattern の余地あり)

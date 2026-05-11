@@ -10,8 +10,7 @@ import structlog
 from taskiq import Context, TaskiqDepends
 
 from app.analysis._limiter_factory import _build_limiters
-from app.analysis.assessment.domain.ready import ReadyForAssessment
-from app.analysis.assessment.repository import AssessmentRepository
+from app.analysis.assessment.domain.ready import AssessmentTrigger
 from app.analysis.assessment.tasks import assess_content
 from app.analysis.extraction.domain.ready import ReadyForExtraction
 from app.analysis.extraction.extractor.base import BaseExtractor
@@ -114,16 +113,11 @@ async def extract_content(
         )
         return
 
-    # Stage 4 へ chain (Pattern A': 上流 Task が下流 Ready を構築 — spec §7.1)
+    # Stage 4 を ID で起動 (案 3: 下流 Stage 自身が処理開始時に Ready を構築)。
     if isinstance(result, ExtractedOutcome):
-        async with session_factory() as session:
-            assessment_repo = AssessmentRepository(session)
-            ready_assess = await ReadyForAssessment.try_advance_from(
-                result.extraction,
-                repo=assessment_repo,
-            )
-        if ready_assess is not None:
-            await assess_content.kiq(ready_assess)
+        await assess_content.kiq(
+            AssessmentTrigger(extraction_id=result.extraction.id),
+        )
     elif isinstance(result, NoiseOutcome):
         logger.info(
             "extract_content_noise",

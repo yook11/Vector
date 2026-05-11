@@ -1,9 +1,16 @@
 """Stage 4 (Assessment) taskiq タスク。
 
-extract_content から chain され、in-scope と判定された場合は
-``EmbeddingTrigger`` (analysis_id のみ運ぶ軽量 ID キャリア) を kiq に流して
-``generate_embedding`` (Stage 5) を起動する。Ready の構築は下流 Stage 5 task
-自身が処理開始時に行う (案 3 = 厚い Ready + 下流 Stage 自身が処理開始時に構築)。
+Stage 3 (extract_content) から ``AssessmentTrigger`` (extraction_id のみ運ぶ
+軽量 ID キャリア) で chain される。本 task が処理開始時に
+``ReadyForAssessment.try_advance_from`` を呼んで最新の DB 状態から厚い Ready を
+構築する (案 3 = 厚い Ready + 下流 Stage 自身が処理開始時に構築)。
+
+precondition 未充足 (extraction 不在 / 既 in-scope / 既 out-of-scope) の場合は
+rate limit acquire を試みず即 return する (Ready 構築が gatekeeper)。
+
+in-scope 判定で永続化に成功した場合は ``EmbeddingTrigger`` (analysis_id のみ)
+を kiq に流して Stage 5 (``generate_embedding``) を起動する。Stage 5 Ready の
+構築は下流 Stage 5 task 自身が処理開始時に行う。
 """
 
 from __future__ import annotations
@@ -13,12 +20,16 @@ from taskiq import Context, TaskiqDepends
 
 from app.analysis._limiter_factory import _build_limiters
 from app.analysis.assessment.ai.base import BaseAssessor
-from app.analysis.assessment.domain.ready import ReadyForAssessment
+from app.analysis.assessment.domain.ready import (
+    AssessmentTrigger,
+    ReadyForAssessment,
+)
 from app.analysis.assessment.errors import (
     AssessmentRecoverableError,
     AssessmentTerminalSkipError,
 )
 from app.analysis.assessment.failure_recording import record_assessment_failure
+from app.analysis.assessment.repository import AssessmentRepository
 from app.analysis.assessment.service import AssessmentService
 from app.analysis.embedding.domain.ready import EmbeddingTrigger
 from app.analysis.embedding.tasks import generate_embedding
@@ -37,7 +48,7 @@ logger = structlog.get_logger(__name__)
     retry_on_error=True,
 )
 async def assess_content(
-    ready: ReadyForAssessment,
+    trigger: AssessmentTrigger,
     ctx: Context = TaskiqDepends(),
 ) -> None:
     """単一 extraction に対して Stage 4 (Assessment) を実行する。
@@ -45,14 +56,34 @@ async def assess_content(
     Stage 4 は in-scope / out-of-scope の判定 + 該当時の category / topic /
     investor_take 抽出を一括して行う。
 
-    Pattern A': 受け取った Ready 型は precondition (extraction 存在 +
-    未 in-scope 評価 + 未 out-of-scope 評価) を構造保証している。本 task は
-    再 fetch / None check を行わない。
+    案 3 適用: 受け取った ``AssessmentTrigger`` は ``extraction_id`` のみ運ぶ
+    軽量 message。本 task が処理開始時に
+    ``ReadyForAssessment.try_advance_from`` を呼んで最新の DB 状態から厚い
+    Ready を構築する。Ready 構築が成功 = precondition (extraction 存在 +
+    未 in-scope 評価 + 未 out-of-scope 評価) が satisfy された状態。
+
+    順序: Ready 構築 → rate limit acquire → Service.execute。precondition 未充足
+    で AI quota を消費しないよう、Ready 構築を rate limit より前に置く
+    (Stage 5 と対称、`feedback_failure_visibility` + 案 3 順序)。
     """
     session_factory = ctx.state.session_factory
     assessor: BaseAssessor = ctx.state.assessor
 
-    # Rate limit acquire は呼び出し側の責任
+    # 処理開始時に Ready を構築 (precondition + audit 参照値の全揃え)
+    async with session_factory() as session:
+        ready = await ReadyForAssessment.try_advance_from(
+            extraction_id=trigger.extraction_id,
+            repo=AssessmentRepository(session),
+        )
+    if ready is None:
+        logger.info(
+            "assess_content_skipped",
+            extraction_id=trigger.extraction_id,
+            reason="precondition_not_met",
+        )
+        return
+
+    # AI を呼ぶ見込みが立ってから rate limit acquire
     rpm_limiter, rpd_limiter = _build_limiters(
         "assess", assessor.MODEL, assessor.RPM, assessor.RPD
     )

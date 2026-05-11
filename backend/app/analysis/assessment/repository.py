@@ -1,8 +1,11 @@
 """AssessmentRepository — Stage 4 判定結果 (in-scope / out-of-scope) の永続化。
 
 責務:
-- ``exists_in_scope`` / ``exists_out_of_scope``: ``ReadyForAssessment.try_advance_from``
-  の precondition 判定用 cheap exists (extraction_id 単位)
+
+- ``try_load_for_assessment``: 「行存在 + 両 assessment 未生成 + audit 用参照値
+  fetch」を 1 query で atomic に判定し、満たす場合のみ ``ReadyForAssessment`` を
+  直接構築して返す (案 3 = 厚い Ready)。Domain 層
+  ``ReadyForAssessment.try_advance_from`` は本 method への thin delegate。
 - ``save_in_scope`` / ``save_out_of_scope``: AI 境界型 ``InScope`` / ``OutOfScope``
   を内包する ``AssessmentCall`` を受け、
   ``INSERT ... ON CONFLICT (extraction_id) DO NOTHING RETURNING id`` で
@@ -12,17 +15,11 @@
   Service は ``id`` のみで race 検出 + Stage 5 chain を行う (再収集は
   reconcile cron が担う)。
 
-設計方針:
-- in-scope / out-of-scope は **同じ Stage 4 永続化責務** のため、1 class に同居させて
-  Service の dispatch (``match call: case AssessmentCall(result=InScope()):``) から
-  対応 method を呼び分ける。ファイル分離は責務分離ではなく単に branch 表現の場所だった
-  ため、AssessmentAuditRepository (1 class で in/out 両方を持つ) と signature を
-  対称化する。
-- ``call.model_name`` / ``call.result`` から永続化に必要な値を取り出すので、caller は
-  ``ai_model`` を別引数で渡さない。AI 境界 ``InScope`` で永続化可能性を保証 → 以降は
-  DB を信用、Stage 間は ID で繋ぐ (Pattern A')。Stage 5 が必要とする値は DB を
-  SSoT として都度 read するため、Domain Entity を介した値運搬は廃止
-  (`feedback_bc_boundary_guarantees_downstream`)。
+設計方針 (2026-05-12 確定、案 3): 旧 Pattern A' 時代に分かれていた cheap exists
+判定 (in/out scope 2 query) と audit 用参照値 fetch (2-hop 逆引き) を 1 query
+(``try_load_for_assessment``) に統合。Ready は **処理に必要な値の全揃え** を
+構造保証する厚い型として運ばれ、Repository は Ready 構築に必要な情報を
+1 回の DB 往復で完結させる責務を持つ。
 """
 
 from __future__ import annotations
@@ -35,36 +32,72 @@ from app.analysis.assessment.ai.envelope import AssessmentCall
 from app.analysis.assessment.ai.schema import InScope, OutOfScope
 from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.errors import AssessmentCategoryMissingError
+from app.models.article import Article
+from app.models.article_extraction import ArticleExtraction
 from app.models.category import Category
 from app.models.in_scope_assessment import InScopeAssessment
+from app.models.news_source import NewsSource
 from app.models.out_of_scope_assessment import OutOfScopeAssessment
 
 
 class AssessmentRepository:
-    """Stage 4 判定結果 (in-scope / out-of-scope) の永続化 + cheap exists 判定。"""
+    """Stage 4 判定結果 (in-scope / out-of-scope) の永続化 + Ready 構築判定。"""
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    # --- exists 判定 (try_advance_from precondition 用) -----------------------
+    # --- Ready 構築 (try_advance_from precondition + audit 参照値) -------------
 
-    async def exists_in_scope(self, extraction_id: int) -> bool:
-        """``try_advance_from`` 用 cheap exists 判定 (in-scope assessments)。"""
+    async def try_load_for_assessment(
+        self, extraction_id: int
+    ) -> ReadyForAssessment | None:
+        """`ReadyForAssessment.try_advance_from` 用 atomic ロード。
+
+        1 query で「extraction 行存在 + 両 assessment 未生成」を判定し、
+        満たす場合のみ assessor 入力 (``translated_title`` / ``summary``) と
+        audit 参照値 (``article_id`` / ``source_name``) を取得して厚い Ready を
+        構築して返す。
+
+        Returns:
+            進める場合: precondition を満たし、audit 参照値も含む
+                ``ReadyForAssessment``
+            進めない場合: ``None`` (extraction 不在 / 既 in-scope / 既 out-of-scope)
+        """
         stmt = (
-            select(InScopeAssessment.id)
-            .where(InScopeAssessment.extraction_id == extraction_id)
+            select(
+                ArticleExtraction.translated_title,
+                ArticleExtraction.summary,
+                ArticleExtraction.article_id,
+                NewsSource.name,
+            )
+            .join(Article, Article.id == ArticleExtraction.article_id)
+            .outerjoin(NewsSource, NewsSource.id == Article.source_id)
+            .outerjoin(
+                InScopeAssessment,
+                InScopeAssessment.extraction_id == ArticleExtraction.id,
+            )
+            .outerjoin(
+                OutOfScopeAssessment,
+                OutOfScopeAssessment.extraction_id == ArticleExtraction.id,
+            )
+            .where(
+                ArticleExtraction.id == extraction_id,
+                InScopeAssessment.id.is_(None),
+                OutOfScopeAssessment.id.is_(None),
+            )
             .limit(1)
         )
-        return (await self._session.execute(stmt)).first() is not None
-
-    async def exists_out_of_scope(self, extraction_id: int) -> bool:
-        """``try_advance_from`` 用 cheap exists 判定 (out-of-scope assessments)。"""
-        stmt = (
-            select(OutOfScopeAssessment.id)
-            .where(OutOfScopeAssessment.extraction_id == extraction_id)
-            .limit(1)
+        row = (await self._session.execute(stmt)).first()
+        if row is None:
+            return None
+        translated_title, summary, article_id, source_name = row
+        return ReadyForAssessment(
+            extraction_id=extraction_id,
+            translated_title=translated_title,
+            summary=summary,
+            article_id=article_id,
+            source_name=str(source_name) if source_name is not None else None,
         )
-        return (await self._session.execute(stmt)).first() is not None
 
     # --- save 経路 ------------------------------------------------------------
 

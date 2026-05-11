@@ -50,17 +50,24 @@ class PipelineBacklog:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
-    async def article_ids_pending_assessment(
+    async def extraction_ids_pending_assessment(
         self,
         *,
         created_before: datetime,
         created_after: datetime,
         limit: int,
     ) -> list[int]:
-        """extraction はあるが analysis / rejection が無い ID を返す (Stage 2b 残)."""
+        """extraction はあるが analysis / rejection が無い Extraction ID を返す
+        (Stage 2b 残)。
+
+        article 基準の age window を維持しつつ、返却列を ``Article.id`` から
+        ``ArticleExtraction.id`` に変えた版 (案 3: backfill_assessments が
+        ``AssessmentTrigger(extraction_id=...)`` を kiq するため、Article 起点
+        の 2-hop fetch は不要)。
+        """
         stmt = (
-            select(Article.id)
-            .join(ArticleExtraction, ArticleExtraction.article_id == Article.id)
+            select(ArticleExtraction.id)
+            .join(Article, Article.id == ArticleExtraction.article_id)
             .outerjoin(
                 InScopeAssessment,
                 InScopeAssessment.extraction_id == ArticleExtraction.id,

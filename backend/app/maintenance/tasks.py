@@ -172,12 +172,14 @@ async def backfill_extractions(ctx: Context = TaskiqDepends()) -> None:
     schedule=[{"cron": "5,20,35,50 * * * *"}],
 )
 async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
-    """in-scope / out-of-scope assessment が無い Article を発見して
+    """in-scope / out-of-scope assessment が無い Extraction を発見して
     assess_content を再投入する。
 
-    Pattern A' (spec §3.4 / §7.2) maintenance task として、自身が gatekeeper を
-    兼ねる: 各 article_id ごとに `ReadyForAssessment.try_advance_from` を呼び、
-    成立するもののみ `kiq(ready)` で再投入する。
+    案 3 (厚い Ready + 下流 Stage 自身が処理開始時に構築): maintenance は
+    「投入数を見る」役割に縮退し、precondition 検証 + Ready 構築は下流 Stage 4
+    task に委ねる。各 extraction_id を ``AssessmentTrigger`` に詰めて kiq に
+    流すだけ。stale trigger (既 assess 済など) は Stage 4 task の
+    ``assess_content_skipped`` ログで観測する。
     """
     if not settings.backfill_assessments_enabled:
         logger.info("backfill_assessments_disabled")
@@ -188,7 +190,7 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
 
     async with session_factory() as session:
         backlog = PipelineBacklog(session)
-        ids = await backlog.article_ids_pending_assessment(
+        ids = await backlog.extraction_ids_pending_assessment(
             created_before=before,
             created_after=after,
             limit=ASSESSMENTS_LIMIT,
@@ -210,35 +212,23 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
         logger.warning("backfill_assessments_daily_budget_exhausted", found=found)
         return
 
-    from app.analysis.assessment.domain.ready import ReadyForAssessment
-    from app.analysis.assessment.repository import AssessmentRepository
+    from app.analysis.assessment.domain.ready import AssessmentTrigger
     from app.analysis.assessment.tasks import assess_content
-    from app.analysis.extraction.repository import ExtractionRepository
 
+    # 案 3: maintenance も上流相当 → ID のみ enqueue。precondition 検証は
+    # Stage 4 Task 自身が処理開始時に行う。stale trigger は Stage 4 の
+    # ``assess_content_skipped`` ログで観測する。
     requeued = 0
-    skipped = 0
-    for article_id in ids[:granted]:
+    for extraction_id in ids[:granted]:
         try:
-            async with session_factory() as session:
-                extraction_repo = ExtractionRepository(session)
-                assessment_repo = AssessmentRepository(session)
-                extraction = await extraction_repo.find_by_article_id(article_id)
-                if extraction is None:
-                    skipped += 1
-                    continue
-                ready = await ReadyForAssessment.try_advance_from(
-                    extraction,
-                    repo=assessment_repo,
-                )
-            if ready is None:
-                skipped += 1
-                continue
-            await assess_content.kiq(ready)
+            await assess_content.kiq(
+                AssessmentTrigger(extraction_id=extraction_id),
+            )
             requeued += 1
         except Exception as e:  # noqa: BLE001
             logger.warning(
                 "backfill_assessments_kiq_failed",
-                article_id=article_id,
+                extraction_id=extraction_id,
                 error=str(e),
             )
             continue
@@ -248,7 +238,6 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
         found=found,
         granted=granted,
         requeued=requeued,
-        skipped=skipped,
     )
 
 

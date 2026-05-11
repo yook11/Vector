@@ -85,6 +85,12 @@ skills-lock.json
 *.local.md
 
 # ===========================
+# Specs (議論用、ローカル保持)
+# ===========================
+# 新規 specs は ignore。既に tracked のファイルは追跡継続 (untrack したい場合は git rm --cached が必要)。
+specs/
+
+# ===========================
 # Build artifacts
 # ===========================
 frontend/tsconfig.tsbuildinfo

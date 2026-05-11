@@ -148,7 +148,7 @@ async def test_pending_extraction_excludes_articles_with_extraction(
 
 
 # ---------------------------------------------------------------------------
-# article_ids_pending_assessment
+# extraction_ids_pending_assessment (案 3 で返却列を ArticleExtraction.id に変更)
 # ---------------------------------------------------------------------------
 
 
@@ -157,7 +157,7 @@ async def test_pending_assessment_returns_extractions_without_analysis_or_reject
     db_session: AsyncSession,
     sample_source: NewsSource,
 ) -> None:
-    """extraction はあるが analysis / rejection が無い Article が返る。"""
+    """extraction はあるが analysis / rejection が無い Extraction ID が返る。"""
     now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
     article = await _make_article(
         db_session,
@@ -165,27 +165,27 @@ async def test_pending_assessment_returns_extractions_without_analysis_or_reject
         url="https://e.com/cls",
         created_at=now - timedelta(hours=1),
     )
-    db_session.add(
-        ArticleExtraction(
-            article_id=article.id,
-            translated_title="tt",
-            summary="ss",
-            ai_model="m",
-        )
+    extraction = ArticleExtraction(
+        article_id=article.id,
+        translated_title="tt",
+        summary="ss",
+        ai_model="m",
     )
+    db_session.add(extraction)
     await db_session.commit()
+    await db_session.refresh(extraction)
 
     backlog = PipelineBacklog(db_session)
-    ids = await backlog.article_ids_pending_assessment(
+    ids = await backlog.extraction_ids_pending_assessment(
         created_before=now - timedelta(minutes=30),
         created_after=now - timedelta(days=7),
         limit=10,
     )
-    assert article.id in ids
+    assert extraction.id in ids
 
 
 @pytest.mark.asyncio
-async def test_pending_assessment_excludes_articles_with_analysis(
+async def test_pending_assessment_excludes_extractions_with_analysis(
     db_session: AsyncSession,
     sample_source: NewsSource,
     sample_categories: list[Category],
@@ -221,12 +221,12 @@ async def test_pending_assessment_excludes_articles_with_analysis(
     await db_session.commit()
 
     backlog = PipelineBacklog(db_session)
-    ids = await backlog.article_ids_pending_assessment(
+    ids = await backlog.extraction_ids_pending_assessment(
         created_before=now - timedelta(minutes=30),
         created_after=now - timedelta(days=7),
         limit=10,
     )
-    assert article.id not in ids
+    assert extraction.id not in ids
 
 
 # ---------------------------------------------------------------------------

@@ -3,8 +3,9 @@
 Layer 1 marker dispatch ルーティングは ``test_extract_task_dispatch.py`` 側で
 網羅する。本ファイルは:
 
-- ExtractedOutcome → Ready 構築 → assess_content.kiq による chain
-- NoiseOutcome / Ready None 時に chain しないこと
+- ExtractedOutcome → AssessmentTrigger による Stage 4 chain (案 3: 下流 Stage が
+  Ready を自身で構築するため、上流は ID のみ kiq で運ぶ)
+- NoiseOutcome 時に chain しないこと
 - legacy ``AIProviderRateLimitedError`` の audit 経路 (catch-all 経由)
 """
 
@@ -13,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.analysis.assessment.domain.ready import ReadyForAssessment
+from app.analysis.assessment.domain.ready import AssessmentTrigger
 from app.analysis.errors import AIProviderRateLimitedError
 from app.analysis.extraction.domain.ready import ReadyForExtraction
 
@@ -53,14 +54,6 @@ def _make_ready_extraction(article_id: int = 1) -> ReadyForExtraction:
     )
 
 
-def _make_ready_assess(extraction_id: int = 2) -> ReadyForAssessment:
-    return ReadyForAssessment(
-        extraction_id=extraction_id,
-        translated_title="title",
-        summary="summary",
-    )
-
-
 # ---------------------------------------------------------------------------
 # extract_content
 # ---------------------------------------------------------------------------
@@ -68,8 +61,13 @@ def _make_ready_assess(extraction_id: int = 2) -> ReadyForAssessment:
 
 class TestExtractContent:
     @pytest.mark.asyncio
-    async def test_chains_assess_with_ready_when_advance_succeeds(self) -> None:
-        """ExtractedOutcome → Ready 構築 → assess_content.kiq(ready) で chain。"""
+    async def test_chains_assess_with_trigger_on_extracted_outcome(self) -> None:
+        """ExtractedOutcome → assess_content.kiq(AssessmentTrigger) で chain。
+
+        案 3: 上流 Stage 3 task は Stage 4 Ready を構築せず、ID だけ運ぶ
+        AssessmentTrigger を kiq に enqueue する。Ready 構築は下流 Stage 4
+        task が処理開始時に行う。
+        """
         from app.analysis.extraction.service import ExtractedOutcome
         from app.analysis.extraction.tasks import extract_content
 
@@ -77,7 +75,6 @@ class TestExtractContent:
         mock_extraction = MagicMock()
         mock_extraction.id = 42
         mock_outcome = ExtractedOutcome(extraction=mock_extraction)
-        ready_assess = _make_ready_assess(extraction_id=42)
 
         with (
             patch(
@@ -85,44 +82,15 @@ class TestExtractContent:
                 return_value=(None, None),
             ),
             patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
-            patch(
-                "app.analysis.extraction.tasks.ReadyForAssessment.try_advance_from",
-                new=AsyncMock(return_value=ready_assess),
-            ),
             patch("app.analysis.extraction.tasks.assess_content") as mock_assess,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(return_value=mock_outcome)
             mock_assess.kiq = AsyncMock()
             await extract_content(ready=_make_ready_extraction(), ctx=mock_ctx)
 
-        mock_assess.kiq.assert_awaited_once_with(ready_assess)
-
-    @pytest.mark.asyncio
-    async def test_does_not_chain_when_advance_returns_none(self) -> None:
-        """precondition 未充足 (try_advance_from が None) なら chain しない。"""
-        from app.analysis.extraction.service import ExtractedOutcome
-        from app.analysis.extraction.tasks import extract_content
-
-        mock_ctx = _make_ctx(extractor=_make_provider_fake())
-        mock_outcome = ExtractedOutcome(extraction=MagicMock())
-
-        with (
-            patch(
-                "app.analysis.extraction.tasks._build_limiters",
-                return_value=(None, None),
-            ),
-            patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
-            patch(
-                "app.analysis.extraction.tasks.ReadyForAssessment.try_advance_from",
-                new=AsyncMock(return_value=None),
-            ),
-            patch("app.analysis.extraction.tasks.assess_content") as mock_assess,
-        ):
-            mock_svc_cls.return_value.execute = AsyncMock(return_value=mock_outcome)
-            mock_assess.kiq = AsyncMock()
-            await extract_content(ready=_make_ready_extraction(), ctx=mock_ctx)
-
-        mock_assess.kiq.assert_not_called()
+        mock_assess.kiq.assert_awaited_once_with(
+            AssessmentTrigger(extraction_id=42),
+        )
 
     @pytest.mark.asyncio
     async def test_noise_outcome_does_not_chain(self) -> None:

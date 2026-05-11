@@ -106,12 +106,17 @@ async def _make_extraction(
 
 
 def _ready(
-    extraction: ArticleExtraction, *, summary: str | None = None
+    extraction: ArticleExtraction,
+    *,
+    summary: str | None = None,
+    source_name: str | None = "Test Source",
 ) -> ReadyForAssessment:
     return ReadyForAssessment(
         extraction_id=extraction.id,
         translated_title=extraction.translated_title,
         summary=summary if summary is not None else extraction.summary,
+        article_id=extraction.article_id,
+        source_name=source_name,
     )
 
 
@@ -278,13 +283,13 @@ async def test_append_in_scope_derives_category_slug_from_in_scope(
 
 
 @pytest.mark.asyncio
-async def test_append_in_scope_resolves_article_id_from_extraction(
+async def test_append_in_scope_uses_article_id_from_ready(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
     sample_categories: list[Category],
 ) -> None:
-    """pipeline_events.article_id が extraction → article 逆引きで解決される。"""
+    """pipeline_events.article_id が Ready 由来 (案 3: Ready 構築時に取得済)。"""
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
     await _persist_in_scope(db_session, extraction, sample_categories[0])
@@ -297,24 +302,24 @@ async def test_append_in_scope_resolves_article_id_from_extraction(
         await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
-    assert ev.article_id == article.id  # extraction → article で解決
+    assert ev.article_id == article.id  # ready.article_id を直接利用
 
 
 @pytest.mark.asyncio
-async def test_append_in_scope_resolves_source_name(
+async def test_append_in_scope_uses_source_name_from_ready(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
     sample_categories: list[Category],
 ) -> None:
-    """payload.source_name が extraction → article → news_source の 2-hop で解決。"""
+    """payload.source_name が Ready 由来 (案 3: 2-hop 逆引き撤去)。"""
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
     await _persist_in_scope(db_session, extraction, sample_categories[0])
 
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_in_scope(
-            ready=_ready(extraction),
+            ready=_ready(extraction, source_name=str(sample_source.name)),
             call=_in_scope_call(),
         )
         await session.commit()

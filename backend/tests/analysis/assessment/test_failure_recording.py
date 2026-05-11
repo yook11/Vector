@@ -58,11 +58,15 @@ async def _make_extraction(
     return extraction
 
 
-def _ready(extraction: ArticleExtraction) -> ReadyForAssessment:
+def _ready(
+    extraction: ArticleExtraction, *, source_name: str | None = None
+) -> ReadyForAssessment:
     return ReadyForAssessment(
         extraction_id=extraction.id,
         translated_title=extraction.translated_title,
         summary=extraction.summary,
+        article_id=extraction.article_id,
+        source_name=source_name,
     )
 
 
@@ -183,6 +187,8 @@ async def test_audit_insert_failure_logs_and_swallows() -> None:
         extraction_id=42,
         translated_title="t",
         summary="s",
+        article_id=7,
+        source_name=None,
     )
     business_exc = AssessmentRecoverableError("net timeout", code="ai_error_network")
 

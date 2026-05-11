@@ -1,50 +1,50 @@
 """ReadyForAssessment (Stage 4 precondition 型) のドメインユニットテスト。
 
 `try_advance_from` の precondition 充足 / 未充足 を Repository protocol mock で
-検証する (DB 不要)。BaseModel(frozen=True) の不変性も確認。
+検証する (DB 不要)。BaseModel(frozen=True) の不変性、新規 ``AssessmentTrigger``
+の構造 + 旧 ``ReadyForAssessment`` message 受信互換も確認する。
 
-注 (PR3.5-d.0): ファイル名 ``test_ready_for_classification.py`` は本 PR で
-rename しない (別 cleanup PR で ``test_ready_for_assessment.py`` に rename
-予定)。内容は assessment 命名に追従済。
+注: ファイル名 ``test_ready_for_classification.py`` は別 cleanup PR で
+``test_ready_for_assessment.py`` に rename 予定。内容は assessment 命名に
+追従済。
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import ValidationError
 
-from app.analysis.assessment.domain.ready import ReadyForAssessment
-from app.analysis.extraction.domain.extraction import Extraction
+from app.analysis.assessment.domain.ready import (
+    AssessmentTrigger,
+    ReadyForAssessment,
+)
 
 
-def _make_extraction(**overrides: object) -> Extraction:
+def _make_ready(**overrides: object) -> ReadyForAssessment:
+    """Test fixtures 用の Ready 構築 helper (5 fields 既定値)。"""
     defaults: dict[str, object] = {
-        "id": 42,
+        "extraction_id": 42,
         "translated_title": "量子コンピューティングの新たなブレイクスルー",
         "summary": "MIT が新手法を発表。量子エラー訂正の分野で大きな進展。",
-        "entities": (),
-        "ai_model": "gemini-2.5-flash-lite",
-        "extracted_at": datetime(2026, 4, 28, tzinfo=UTC),
+        "article_id": 7,
+        "source_name": "MIT News",
     }
     defaults.update(overrides)
-    return Extraction(**defaults)  # type: ignore[arg-type]
+    return ReadyForAssessment(**defaults)  # type: ignore[arg-type]
 
 
 def _make_repo_mock(
     *,
-    in_scope_exists: bool = False,
-    out_of_scope_exists: bool = False,
+    return_ready: ReadyForAssessment | None = None,
 ) -> AsyncMock:
-    """``AssessmentExistenceProtocol`` を満たす 1 個の Repository mock。
+    """``AssessmentPreconditionProtocol`` を満たす Repository mock。
 
-    1 class に統合された ``AssessmentRepository`` に対応 (旧 2 個分割は廃止)。
+    案 3: try_load_for_assessment が 1 query で Ready (または None) を返す。
     """
     repo = AsyncMock()
-    repo.exists_in_scope = AsyncMock(return_value=in_scope_exists)
-    repo.exists_out_of_scope = AsyncMock(return_value=out_of_scope_exists)
+    repo.try_load_for_assessment = AsyncMock(return_value=return_ready)
     return repo
 
 
@@ -55,56 +55,36 @@ def _make_repo_mock(
 
 class TestTryAdvanceFromPreconditionMet:
     @pytest.mark.asyncio
-    async def test_returns_ready_when_neither_in_scope_nor_out_of_scope_exists(
-        self,
-    ) -> None:
-        """InScope / OutOfScope 評価ともに未生成なら Ready を返す。"""
-        extraction = _make_extraction(id=42)
-        repo = _make_repo_mock()
+    async def test_returns_ready_from_repo(self) -> None:
+        """Repository が Ready を返したら同 instance を返す (thin delegate)。"""
+        expected = _make_ready(extraction_id=42)
+        repo = _make_repo_mock(return_ready=expected)
 
-        ready = await ReadyForAssessment.try_advance_from(extraction, repo=repo)
+        ready = await ReadyForAssessment.try_advance_from(extraction_id=42, repo=repo)
 
-        assert ready is not None
-        assert ready.extraction_id == 42
-        assert ready.translated_title == extraction.translated_title
-        assert ready.summary == extraction.summary
+        assert ready is expected
 
     @pytest.mark.asyncio
-    async def test_calls_exists_with_extraction_id(self) -> None:
-        """exists 判定は extraction.id をキーに行う。"""
-        extraction = _make_extraction(id=99)
-        repo = _make_repo_mock()
+    async def test_calls_repo_with_extraction_id(self) -> None:
+        """Repository には extraction_id がそのまま渡される。"""
+        expected = _make_ready(extraction_id=99)
+        repo = _make_repo_mock(return_ready=expected)
 
-        await ReadyForAssessment.try_advance_from(extraction, repo=repo)
+        await ReadyForAssessment.try_advance_from(extraction_id=99, repo=repo)
 
-        repo.exists_in_scope.assert_awaited_once_with(99)
-        repo.exists_out_of_scope.assert_awaited_once_with(99)
+        repo.try_load_for_assessment.assert_awaited_once_with(99)
 
 
 class TestTryAdvanceFromPreconditionNotMet:
     @pytest.mark.asyncio
-    async def test_returns_none_when_in_scope_already_exists(self) -> None:
-        """同 extraction_id に InScopeAssessment が既存なら None を返す (業務正常)。"""
-        extraction = _make_extraction(id=42)
-        repo = _make_repo_mock(in_scope_exists=True)
+    async def test_returns_none_when_repo_returns_none(self) -> None:
+        """Repository が None を返したら None を返す (業務正常状態)。"""
+        repo = _make_repo_mock(return_ready=None)
 
-        ready = await ReadyForAssessment.try_advance_from(extraction, repo=repo)
-
-        assert ready is None
-        # exists_out_of_scope は short-circuit で呼ばれない
-        repo.exists_out_of_scope.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_returns_none_when_out_of_scope_already_exists(self) -> None:
-        """同 extraction_id に OutOfScopeAssessment 既存なら None を返す (業務正常)。"""
-        extraction = _make_extraction(id=42)
-        repo = _make_repo_mock(out_of_scope_exists=True)
-
-        ready = await ReadyForAssessment.try_advance_from(extraction, repo=repo)
+        ready = await ReadyForAssessment.try_advance_from(extraction_id=42, repo=repo)
 
         assert ready is None
-        repo.exists_in_scope.assert_awaited_once()
-        repo.exists_out_of_scope.assert_awaited_once()
+        repo.try_load_for_assessment.assert_awaited_once_with(42)
 
 
 # ---------------------------------------------------------------------------
@@ -115,11 +95,7 @@ class TestTryAdvanceFromPreconditionNotMet:
 class TestReadyForAssessmentImmutability:
     def test_is_frozen(self) -> None:
         """frozen=True のため field 書き換えは ValidationError。"""
-        ready = ReadyForAssessment(
-            extraction_id=2,
-            translated_title="title",
-            summary="summary",
-        )
+        ready = _make_ready()
         with pytest.raises(ValidationError):
             ready.extraction_id = 999  # type: ignore[misc]
 
@@ -130,17 +106,69 @@ class TestReadyForAssessmentImmutability:
                 extraction_id="not-an-int",  # type: ignore[arg-type]
                 translated_title="t",
                 summary="s",
+                article_id=1,
+                source_name=None,
             )
 
-    def test_field_shape_matches_legacy_classification(self) -> None:
-        """taskiq in-flight 互換: ReadyForAssessment の field 構造は
-        旧 ReadyForClassification と完全一致する。
+    def test_rejects_non_positive_extraction_id(self) -> None:
+        """extraction_id は gt=0 (Field constraint)。"""
+        with pytest.raises(ValidationError):
+            ReadyForAssessment(
+                extraction_id=0,
+                translated_title="t",
+                summary="s",
+                article_id=1,
+                source_name=None,
+            )
 
-        本 invariant が崩れると broker queue に残った旧 message の
-        deserialize で field 不整合が発生する (本 PR の最重要 invariant)。
+    def test_rejects_non_positive_article_id(self) -> None:
+        """article_id は gt=0 (Field constraint)。"""
+        with pytest.raises(ValidationError):
+            ReadyForAssessment(
+                extraction_id=1,
+                translated_title="t",
+                summary="s",
+                article_id=0,
+                source_name=None,
+            )
+
+    def test_accepts_none_source_name(self) -> None:
+        """source_name は NewsSource 不在 / FK 切断時に None を許容する。"""
+        ready = ReadyForAssessment(
+            extraction_id=1,
+            translated_title="t",
+            summary="s",
+            article_id=1,
+            source_name=None,
+        )
+        assert ready.source_name is None
+
+
+# ---------------------------------------------------------------------------
+# AssessmentTrigger — kiq message 用 ID キャリア
+# ---------------------------------------------------------------------------
+
+
+class TestAssessmentTrigger:
+    def test_is_frozen(self) -> None:
+        trigger = AssessmentTrigger(extraction_id=42)
+        with pytest.raises(ValidationError):
+            trigger.extraction_id = 999  # type: ignore[misc]
+
+    def test_rejects_non_positive_extraction_id(self) -> None:
+        with pytest.raises(ValidationError):
+            AssessmentTrigger(extraction_id=0)
+
+    def test_accepts_legacy_ready_message_shape(self) -> None:
+        """旧 ReadyForAssessment(extraction_id, translated_title, summary)
+        message を AssessmentTrigger が deserialize できる (rolling deploy
+        互換)。Pydantic 既定 extra='ignore' で legacy field は無視される。
         """
-        assert set(ReadyForAssessment.model_fields) == {
-            "extraction_id",
-            "translated_title",
-            "summary",
-        }
+        trigger = AssessmentTrigger.model_validate(
+            {
+                "extraction_id": 1,
+                "translated_title": "t",
+                "summary": "s",
+            }
+        )
+        assert trigger.extraction_id == 1

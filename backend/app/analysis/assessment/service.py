@@ -1,12 +1,14 @@
-"""AssessmentService — Stage 4 のユースケース組み立てと永続化境界 (Pattern A')。
+"""AssessmentService — Stage 4 のユースケース組み立てと永続化境界 (案 3 適用)。
 
 ドメイン (Ready) と AI 層 (``AssessmentCall[InScope]`` / ``AssessmentCall[OutOfScope]``)
 を結び、判定実行 → 永続化 (楽観的ロック) → 勝者は audit + commit / 敗者は短絡の
 順序を担う。
 
-precondition (extraction 存在 + 未 in-scope 評価 + 未 out-of-scope 評価) は
-呼び出し側で `ReadyForAssessment.try_advance_from` が gatekeeper として保証済
-(spec §3.1)。本 Service は precondition 分岐を持たない。
+precondition (extraction 存在 + 未 in-scope 評価 + 未 out-of-scope 評価) +
+audit に必要な参照値 (``article_id`` / ``source_name``) は呼び出し側
+(Stage 4 Task) で `ReadyForAssessment.try_advance_from` が gatekeeper として
+構造保証済 (案 3 = 厚い Ready + 下流 Stage 自身が処理開始時に構築)。
+本 Service は precondition 分岐 / 逆引きを持たない。
 
 ``match call: case AssessmentCall(result=InScope() | OutOfScope()):`` の dispatch
 は Generic envelope に対する型 narrowing をそのまま使う。各 case で永続化先

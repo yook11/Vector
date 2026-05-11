@@ -102,6 +102,8 @@ def _ready(extraction: ArticleExtraction) -> ReadyForAssessment:
         extraction_id=extraction.id,
         translated_title=extraction.translated_title,
         summary=extraction.summary,
+        article_id=extraction.article_id,
+        source_name="Test Source",
     )
 
 
@@ -309,7 +311,13 @@ async def test_provider_network_error_is_wrapped_to_recoverable_marker(
     provider_exc = AIProviderNetworkError("connection reset")
     assessor = _make_assessor(side_effect=provider_exc)
 
-    ready = ReadyForAssessment(extraction_id=1, translated_title="t", summary="s")
+    ready = ReadyForAssessment(
+        extraction_id=1,
+        translated_title="t",
+        summary="s",
+        article_id=1,
+        source_name=None,
+    )
     svc = AssessmentService(session_factory)
 
     with pytest.raises(AssessmentRecoverableError) as excinfo:
@@ -326,7 +334,13 @@ async def test_provider_configuration_error_is_wrapped_to_terminal_skip_marker(
     provider_exc = AIProviderConfigurationError("bad api key")
     assessor = _make_assessor(side_effect=provider_exc)
 
-    ready = ReadyForAssessment(extraction_id=1, translated_title="t", summary="s")
+    ready = ReadyForAssessment(
+        extraction_id=1,
+        translated_title="t",
+        summary="s",
+        article_id=1,
+        source_name=None,
+    )
     svc = AssessmentService(session_factory)
 
     with pytest.raises(AssessmentTerminalSkipError) as excinfo:
