@@ -719,17 +719,17 @@ async def test_extraction_routes_noise_to_extraction_noises_table(
 # --- G. AssessmentService orchestration tests ---
 
 
-async def test_classification_persists_topic_and_category(
+async def test_assessment_persists_topic_and_category(
     db_session: AsyncSession,
     session_factory,
     sample_categories: list[Category],
     sample_source: NewsSource,
 ) -> None:
-    """Stage 2 が topic と category_id を含む analysis を生成する。"""
+    """Stage 4 が topic と category_id を含む analysis を生成する。"""
     article, extraction = await _create_article_with_extraction(
         db_session,
         sample_source,
-        url="https://example.com/classify-test",
+        url="https://example.com/assess-test",
         title="Quantum Breakthrough",
         translated_title="量子ブレイクスルー",
     )
@@ -785,7 +785,7 @@ async def test_classification_persists_topic_and_category(
     assert analysis.investor_take == "理由テスト"
 
 
-async def test_classification_persists_rejection_when_out_of_scope(
+async def test_assessment_persists_rejection_when_out_of_scope(
     db_session: AsyncSession,
     session_factory,
     sample_source: NewsSource,

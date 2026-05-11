@@ -148,12 +148,12 @@ async def test_pending_extraction_excludes_articles_with_extraction(
 
 
 # ---------------------------------------------------------------------------
-# article_ids_pending_classification
+# article_ids_pending_assessment
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_pending_classification_returns_extractions_without_analysis_or_rejection(
+async def test_pending_assessment_returns_extractions_without_analysis_or_rejection(
     db_session: AsyncSession,
     sample_source: NewsSource,
 ) -> None:
@@ -176,7 +176,7 @@ async def test_pending_classification_returns_extractions_without_analysis_or_re
     await db_session.commit()
 
     backlog = PipelineBacklog(db_session)
-    ids = await backlog.article_ids_pending_classification(
+    ids = await backlog.article_ids_pending_assessment(
         created_before=now - timedelta(minutes=30),
         created_after=now - timedelta(days=7),
         limit=10,
@@ -185,12 +185,12 @@ async def test_pending_classification_returns_extractions_without_analysis_or_re
 
 
 @pytest.mark.asyncio
-async def test_pending_classification_excludes_articles_with_analysis(
+async def test_pending_assessment_excludes_articles_with_analysis(
     db_session: AsyncSession,
     sample_source: NewsSource,
     sample_categories: list[Category],
 ) -> None:
-    """analysis 子があれば classification は不要なので返らない。"""
+    """analysis 子があれば assessment は不要なので返らない。"""
     now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
     article = await _make_article(
         db_session,
@@ -221,7 +221,7 @@ async def test_pending_classification_excludes_articles_with_analysis(
     await db_session.commit()
 
     backlog = PipelineBacklog(db_session)
-    ids = await backlog.article_ids_pending_classification(
+    ids = await backlog.article_ids_pending_assessment(
         created_before=now - timedelta(minutes=30),
         created_after=now - timedelta(days=7),
         limit=10,

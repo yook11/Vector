@@ -49,12 +49,12 @@ async def test_eval_arguments_include_role_date_key_and_ttl() -> None:
     """eval に渡る (key, requested, daily_max, ttl) が仕様どおり。"""
     redis = MagicMock()
     redis.eval = AsyncMock(return_value=5)
-    await consume_daily_budget(redis, "classify", 5, 600)
+    await consume_daily_budget(redis, "assess", 5, 600)
 
     call_args = redis.eval.call_args.args
     # eval(script, numkeys, key, requested, daily_max, ttl)
     assert call_args[1] == 1
-    assert call_args[2].startswith("backfill:budget:classify:")
+    assert call_args[2].startswith("backfill:budget:assess:")
     assert int(call_args[3]) == 5
     assert int(call_args[4]) == 600
     assert int(call_args[5]) == 26 * 60 * 60

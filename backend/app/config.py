@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     postgres_app_password: SecretStr | None = None
 
     # AI
-    # Stage 1 (extraction) と Stage 2 (classification) のアダプター選択は env では
+    # Stage 3 (extraction) と Stage 4 (assessment) のアダプター選択は env では
     # なく brokers.py の composition root (_wire_analysis_adapters) で hardcode する。
     # 切替はコード変更 + worker restart で行うため、ここに provider 名は持たない。
     gemini_api_key: SecretStr = SecretStr("")
@@ -129,7 +129,7 @@ class Settings(BaseSettings):
     # back-fill (パイプライン保守)
     # 既定 false。段階的有効化は PLAN §8-6 (Step 1 → 2 → 3) を参照。
     backfill_extractions_enabled: bool = False
-    backfill_classifications_enabled: bool = False
+    backfill_assessments_enabled: bool = False
     backfill_embeddings_enabled: bool = False
 
     # pipeline_events retention (red-team chain γ-4)

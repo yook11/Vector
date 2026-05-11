@@ -1,6 +1,6 @@
 """Embedding — Stage E 埋め込みベクトル生成パッケージ。
 
-extraction / classification と同型の Draft + Entity 2 層ドメインモデルを採用し、
+extraction / assessment と同型の Draft + Entity 2 層ドメインモデルを採用し、
 Service は Outcome tagged union で並ぶ実行結果型を返す。Pattern A'
 (typed-pipeline-preconditions.md §1.1) では precondition は ``ReadyForEmbedding``
 が構造保証するため Outcome は ``EmbeddedOutcome | InvalidInputOutcome`` の 2

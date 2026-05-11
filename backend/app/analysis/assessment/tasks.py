@@ -53,11 +53,8 @@ async def assess_content(
     assessor: BaseAssessor = ctx.state.assessor
 
     # Rate limit acquire は呼び出し側の責任
-    # 注: role 文字列 "classify" は Redis 上の rate limit カウンタのキーに含まれる
-    # ため、in-flight の counter を引き継ぐべく旧 role 名を据え置く。
-    # 実 role 切替は PR-3 (永続境界 rename) で扱う。
     rpm_limiter, rpd_limiter = _build_limiters(
-        "classify", assessor.MODEL, assessor.RPM, assessor.RPD
+        "assess", assessor.MODEL, assessor.RPM, assessor.RPD
     )
     try:
         if rpd_limiter is not None:

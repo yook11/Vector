@@ -1,4 +1,4 @@
-"""back-fill cron タスク 3 本 (extractions / classifications / embeddings)。
+"""back-fill cron タスク 3 本 (extractions / assessments / embeddings)。
 
 各タスクは broker_metadata 上で cron 駆動し、塩漬け化した記事 ID を発見して
 対応するメインフロー task を ``kiq`` で再投入する。kill switch (Settings)
@@ -30,8 +30,8 @@ logger = structlog.get_logger(__name__)
 EXTRACTIONS_LIMIT = 50
 EXTRACTIONS_DAILY_MAX = 600
 
-CLASSIFICATIONS_LIMIT = 50
-CLASSIFICATIONS_DAILY_MAX = 600
+ASSESSMENTS_LIMIT = 50
+ASSESSMENTS_DAILY_MAX = 600
 
 EMBEDDINGS_LIMIT = 50
 EMBEDDINGS_DAILY_MAX = 1500
@@ -160,18 +160,18 @@ async def backfill_extractions(ctx: Context = TaskiqDepends()) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Stage 2b: classification の塩漬け救済
+# Stage 2b: assessment の塩漬け救済
 # ---------------------------------------------------------------------------
 
 
 @broker_metadata.task(
-    task_name="backfill_classifications",
+    task_name="backfill_assessments",
     timeout=120,
     max_retries=0,
     retry_on_error=False,
     schedule=[{"cron": "5,20,35,50 * * * *"}],
 )
-async def backfill_classifications(ctx: Context = TaskiqDepends()) -> None:
+async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
     """in-scope / out-of-scope assessment が無い Article を発見して
     assess_content を再投入する。
 
@@ -179,8 +179,8 @@ async def backfill_classifications(ctx: Context = TaskiqDepends()) -> None:
     兼ねる: 各 article_id ごとに `ReadyForAssessment.try_advance_from` を呼び、
     成立するもののみ `kiq(ready)` で再投入する。
     """
-    if not settings.backfill_classifications_enabled:
-        logger.info("backfill_classifications_disabled")
+    if not settings.backfill_assessments_enabled:
+        logger.info("backfill_assessments_disabled")
         return
 
     session_factory = ctx.state.session_factory
@@ -188,28 +188,26 @@ async def backfill_classifications(ctx: Context = TaskiqDepends()) -> None:
 
     async with session_factory() as session:
         backlog = PipelineBacklog(session)
-        ids = await backlog.article_ids_pending_classification(
+        ids = await backlog.article_ids_pending_assessment(
             created_before=before,
             created_after=after,
-            limit=CLASSIFICATIONS_LIMIT,
+            limit=ASSESSMENTS_LIMIT,
         )
 
     found = len(ids)
-    streak = await _update_circuit_breaker("classify", found)
+    streak = await _update_circuit_breaker("assess", found)
     if streak >= CIRCUIT_THRESHOLD:
-        logger.warning(
-            "backfill_classifications_circuit_open", streak=streak, found=found
-        )
+        logger.warning("backfill_assessments_circuit_open", streak=streak, found=found)
         return
     if found == 0:
-        logger.info("backfill_classifications_empty")
+        logger.info("backfill_assessments_empty")
         return
 
     granted = await consume_daily_budget(
-        get_redis(), "classify", found, CLASSIFICATIONS_DAILY_MAX
+        get_redis(), "assess", found, ASSESSMENTS_DAILY_MAX
     )
     if granted == 0:
-        logger.warning("backfill_classifications_daily_budget_exhausted", found=found)
+        logger.warning("backfill_assessments_daily_budget_exhausted", found=found)
         return
 
     from app.analysis.assessment.domain.ready import ReadyForAssessment
@@ -242,14 +240,14 @@ async def backfill_classifications(ctx: Context = TaskiqDepends()) -> None:
             requeued += 1
         except Exception as e:  # noqa: BLE001
             logger.warning(
-                "backfill_classifications_kiq_failed",
+                "backfill_assessments_kiq_failed",
                 article_id=article_id,
                 error=str(e),
             )
             continue
 
     logger.info(
-        "backfill_classifications_completed",
+        "backfill_assessments_completed",
         found=found,
         granted=granted,
         requeued=requeued,

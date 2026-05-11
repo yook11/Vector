@@ -50,7 +50,7 @@ class PipelineBacklog:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
-    async def article_ids_pending_classification(
+    async def article_ids_pending_assessment(
         self,
         *,
         created_before: datetime,

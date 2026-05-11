@@ -45,7 +45,7 @@ logger = structlog.get_logger(__name__)
 class ExtractedOutcome(SuccessOutcome):
     """Stage 3 成功 (signal、新規 INSERT or race 敗北からの読戻し)。
 
-    下流 Stage 4 (classification) に chain する。
+    下流 Stage 4 (assessment) に chain する。
     """
 
     CODE: ClassVar[str] = "extracted"

@@ -283,20 +283,20 @@ async def test_extractions_skips_when_advance_returns_none() -> None:
 
 
 # ---------------------------------------------------------------------------
-# classifications / embeddings の disabled パスも同様に early-return することの確認
+# assessments / embeddings の disabled パスも同様に early-return することの確認
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_classifications_disabled_returns_early() -> None:
+async def test_assessments_disabled_returns_early() -> None:
     from app.maintenance import tasks
 
     ctx = _ctx_with_session_factory()
     with (
-        patch.object(tasks.settings, "backfill_classifications_enabled", False),
+        patch.object(tasks.settings, "backfill_assessments_enabled", False),
         patch("app.maintenance.tasks.PipelineBacklog") as backlog_cls,
     ):
-        await tasks.backfill_classifications(ctx=ctx)
+        await tasks.backfill_assessments(ctx=ctx)
     backlog_cls.assert_not_called()
 
 

@@ -8,7 +8,7 @@
   「妥当な分析結果」が保証されるので、下流で isvalid 的な分岐が消える。
 
 - ``Extraction`` — システムに記録された分析結果 Entity。identity (id) と
-  記録時刻 (extracted_at) を持ち、classification 以降の処理が継続的に
+  記録時刻 (extracted_at) を持ち、assessment 以降の処理が継続的に
   扱う概念。
 
 変換は Repository.save が直接 ``Extraction`` を返す (Pattern A' Phase 3)。
@@ -33,7 +33,7 @@ class ExtractionResult(BaseModel):
     AI プロンプトの規約に合わせて ``title_ja`` / ``summary_ja`` とする。
 
     ``relevance`` は Stage 1 signal/noise フィルタの判定結果。``"signal"``
-    なら下流 (Stage 2 classification) へ進み、``"noise"`` なら
+    なら下流 (Stage 4 assessment) へ進み、``"noise"`` なら
     ``extraction_noises`` テーブルに記録して chain しない。
 
     Invariants (validators で構造的に保証):

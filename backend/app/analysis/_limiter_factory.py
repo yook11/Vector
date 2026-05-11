@@ -2,7 +2,7 @@
 
 3 stage (extraction / assessment / embedding) の task から共通に呼ばれる
 ドメイン helper。Redis 接続と低レベル ``RateLimiter`` を組み合わせて、
-役割 (extract / classify / embed) × モデル名でキー名前空間を分割する。
+役割 (extract / assess / embed) × モデル名でキー名前空間を分割する。
 
 低レベル primitive は ``app.analysis.rate_limiter.RateLimiter`` 側に閉じている。
 """
@@ -16,12 +16,12 @@ from app.redis import get_redis
 
 
 def _build_limiters(
-    role: Literal["extract", "classify", "embed"],
+    role: Literal["extract", "assess", "embed"],
     model: str,
     rpm: int | None,
     rpd: int | None,
 ) -> tuple[RateLimiter | None, RateLimiter | None]:
-    """役割 (extract/classify/embed) ごとに独立した RPM/RPD リミッターを構築する。
+    """役割 (extract/assess/embed) ごとに独立した RPM/RPD リミッターを構築する。
 
     role を Redis キーに含めることで、同一モデルを複数役割で使う場合でも
     レート制御カウンターが共有されない。
