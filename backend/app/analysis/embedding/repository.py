@@ -2,22 +2,24 @@
 
 責務:
 
-- ``is_embedded_for``: cheap な exists 判定 (Pattern A' の `try_advance_from`
-  precondition チェック用)
+- ``try_load_for_embedding``: 「行存在 + 未 embedded + text 取得」を 1 query で
+  atomic に判定し、満たす場合のみ ``ReadyForEmbedding`` を直接構築して返す
+  (案 3 = 厚い Ready)。Domain 層 ``ReadyForEmbedding.try_advance_from`` は
+  本 method への thin delegate。
 - ``save``: ``EmbeddingDraft`` を ``InScopeAssessment`` 行に
   `UPDATE ... WHERE id=:id AND embedding IS NULL RETURNING ...` で書き込む。
   race 敗北時 (rowcount=0) は ``None`` を返し、Service が ``find_by_analysis_id``
-  で勝者を読み戻す (spec §4.6)
+  で勝者を読み戻す
 - ``find_by_analysis_id``: ORM 行をドメイン Entity (``Embedding``) として復元する。
   ``embedding IS NULL`` のとき ``None`` を返す (ドメイン層で唯一 NULL 判定が
   許される場所)。
 - ``_to_domain``: ORM → Entity の内部変換。CHECK 制約と並行する
   defense-in-depth として、片方 NULL の異常状態を ``ValueError`` で即死させる。
 
-注 (PR3.5-d.0): ORM クラスは Stage 4 rename で ``InScopeAssessment`` に
-変わったが、本 Repository の field 名 ``analysis_id`` / public method 名
-(``is_embedded_for`` / ``find_by_analysis_id``) は taskiq in-flight 互換と
-embedding stage rename の対象外につき据え置き。
+設計方針 (2026-05-12 確定、案 3): 旧 Pattern A' (ID-only Ready) 時代に分かれていた
+cheap exists 判定と embedder 入力 text fetch を 1 query (``try_load_for_embedding``)
+に統合。Ready は **処理に必要な値の全揃え** を構造保証する厚い型として運ばれ、
+Repository は Ready 構築に必要な情報を 1 回の DB 往復で完結させる責務を持つ。
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from app.analysis.embedding.domain.embedding import Embedding, EmbeddingDraft
+from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.domain.value_objects import EmbeddingVector
 from app.models.in_scope_assessment import InScopeAssessment
 
@@ -42,46 +45,39 @@ class EmbeddingRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def is_embedded_for(self, analysis_id: int) -> bool:
-        """`try_advance_from` 用 cheap exists 判定 (analysis_id 単位)。
+    async def try_load_for_embedding(
+        self, analysis_id: int
+    ) -> ReadyForEmbedding | None:
+        """`ReadyForEmbedding.try_advance_from` 用 atomic ロード。
 
-        ``embedding IS NOT NULL`` の行が存在すれば True。analysis_id 自体の
-        存在確認は呼び出し側 (Pattern A' では上流 Service が InScopeAssessment
-        Entity を保持済み) が前提。
+        1 query で「行存在 + 未 embedded」を判定し、満たす場合のみ
+        ``translated_title`` + ``summary`` を結合して厚い Ready を構築して返す。
+        行が存在しない / 既 embedded の場合は ``None`` (業務正常)。
+
+        Returns:
+            進める場合: precondition (analysis 存在 + 未 embedded) を満たし、
+            text を含む ``ReadyForEmbedding``
+            進めない場合: ``None``
         """
         stmt = (
-            select(InScopeAssessment.id)
+            select(
+                InScopeAssessment.translated_title,
+                InScopeAssessment.summary,
+            )
             .where(
                 InScopeAssessment.id == analysis_id,
-                InScopeAssessment.embedding.is_not(None),
+                InScopeAssessment.embedding.is_(None),
             )
             .limit(1)
         )
-        return (await self._session.execute(stmt)).first() is not None
-
-    async def fetch_text_for_embedding(self, analysis_id: int) -> str | None:
-        """``analysis_id`` 行の embedder 入力テキスト (translated_title + summary)
-        を結合して返す。
-
-        Pattern A' では Ready が ID のみを passport として運び、値は DB を SSoT
-        として Stage 5 Service が都度読む。``in_scope_assessments.translated_title``
-        / ``summary`` は Stage 4 INSERT 後に不変な snapshot
-        (`feedback_bc_boundary_guarantees_downstream`) のため、再 read で同じ値が
-        得られる。
-
-        Returns:
-            行が存在し translated_title / summary が確定済の場合: 結合済テキスト
-            行が存在しない場合: ``None`` (Pattern A' 違反 signal、Service が
-            fail-fast で `RuntimeError` に昇格させる)
-        """
-        stmt = select(
-            InScopeAssessment.translated_title,
-            InScopeAssessment.summary,
-        ).where(InScopeAssessment.id == analysis_id)
         row = (await self._session.execute(stmt)).first()
         if row is None:
             return None
-        return f"{row[0]}\n{row[1]}"
+        translated_title, summary = row
+        return ReadyForEmbedding(
+            analysis_id=analysis_id,
+            text_for_embedding=f"{translated_title}\n{summary}",
+        )
 
     async def find_by_analysis_id(self, analysis_id: int) -> Embedding | None:
         """analysis に紐づく埋め込みを Entity として取得する (race 敗北時の読戻し用)。
@@ -105,15 +101,15 @@ class EmbeddingRepository:
         """Draft を ``in_scope_assessments`` 行に条件付き UPDATE で永続化する。
 
         ``WHERE id = :analysis_id AND embedding IS NULL`` で並行 save レースを
-        構造的に解消する。spec §4.3.2 / §4.6 に従い RETURNING で id を受け取り、
-        成功時は draft / 引数値と組み合わせて Entity を直接構築する。
+        構造的に解消する。RETURNING で id を受け取り、成功時は draft / 引数値と
+        組み合わせて Entity を直接構築する。
 
         commit は呼び出し側 (Service) が行う。
 
         Returns:
             成功時: 永続化された ``Embedding`` Entity
             race 敗北時 (rowcount=0): ``None`` (Service が `find_by_analysis_id`
-            で勝者を読み戻す — spec §4.6)
+            で勝者を読み戻す)
         """
         stmt = (
             update(InScopeAssessment)

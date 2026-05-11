@@ -27,7 +27,8 @@ Stage 4 marker (``AssessmentRecoverableError`` / ``AssessmentTerminalSkipError``
 
 戻り値は ``int | None`` (in-scope 成功時のみ assessment id、out-of-scope と
 race 敗北は ``None``)。Task 層は ``None`` 早期 return で Stage 5 chain を抑止し、
-非 ``None`` の場合は受け取った id で ``ReadyForEmbedding`` を構築して chain する。
+非 ``None`` の場合は受け取った id で ``EmbeddingTrigger`` を構築して chain する
+(Ready 構築は下流 Stage 5 task が処理開始時に行う、案 3)。
 """
 
 from __future__ import annotations
@@ -83,7 +84,7 @@ class AssessmentService:
 
         Returns:
             in-scope 成功時: 永続化された ``in_scope_assessments`` 行の id
-                (Task 層が ``ReadyForEmbedding`` を構築するキー)
+                (Task 層が ``EmbeddingTrigger`` に詰めて kiq に流すキー)
             out-of-scope 成功時: ``None`` (Stage 5 chain なし)
             楽観ロック敗北時: ``None`` (Task 層は下流 chain を起動しない、
                 勝者が crash 等で chain に失敗した case の救済は reconcile cron

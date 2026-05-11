@@ -1,6 +1,22 @@
-"""Stage E (Embedding) taskiq タスク。
+"""Stage 5 (Embedding) taskiq タスク。
 
-パイプライン終端 — assess_content から chain される。
+パイプライン終端 — assess_content (Stage 4) から ``EmbeddingTrigger`` 経由で
+chain される。
+
+設計方針 (2026-05-12 確定、案 3): Stage 5 Task 自身が処理開始時に DB から
+``ReadyForEmbedding`` を構築する。上流から受領するのは ``EmbeddingTrigger``
+(analysis_id のみ) であり、precondition 検証 + embedder 入力 text の取得は
+本 Task 内で ``Ready.try_advance_from`` を呼んで完結させる。
+
+処理順序ポリシー:
+1. DB から Ready 構築 (precondition 検証)
+2. Ready が None なら早期 skip (stale trigger / 既 embedded を log 記録)
+3. AI を呼ぶ見込みが立った後で rate limit acquire
+4. Service.execute で AI 呼び出し + 永続化
+
+rate limit を Ready 構築より前に取得すると、precondition 未充足の stale trigger
+でも AI quota / Redis rate limit を消費してしまう。案 3 では「DB から処理可能性
+を確認してから quota を消費する」順序が正解。
 """
 
 from __future__ import annotations
@@ -10,7 +26,8 @@ from taskiq import Context, TaskiqDepends
 
 from app.analysis._limiter_factory import _build_limiters
 from app.analysis.embedder.base import BaseEmbedder
-from app.analysis.embedding.domain.ready import ReadyForEmbedding
+from app.analysis.embedding.domain.ready import EmbeddingTrigger, ReadyForEmbedding
+from app.analysis.embedding.repository import EmbeddingRepository
 from app.analysis.embedding.service import (
     EmbeddedOutcome,
     EmbeddingService,
@@ -43,19 +60,34 @@ logger = structlog.get_logger(__name__)
     retry_on_error=True,
 )
 async def generate_embedding(
-    ready: ReadyForEmbedding,
+    trigger: EmbeddingTrigger,
     ctx: Context = TaskiqDepends(),
 ) -> None:
-    """単一 analysis に対してベクトル埋め込みを生成する (Stage E)。
+    """単一 analysis に対してベクトル埋め込みを生成する (Stage 5)。
 
-    Pattern A': 受け取った Ready 型は precondition (analysis 存在 + embedding
-    未生成 + text 非空) を構造保証している。本 task は再 fetch / None check を
-    行わない。
+    案 3: 上流から受領する ``EmbeddingTrigger`` は analysis_id のみ運び
+    precondition を保証しない。本 Task が処理開始時に Ready を構築し、
+    precondition 充足を確認してから rate limit acquire + Service 呼び出しに進む。
     """
     session_factory = ctx.state.session_factory
     embedder: BaseEmbedder = ctx.state.embedder
 
-    # Rate limit acquire は呼び出し側の責任
+    # Stage 5 自身が DB から処理可能性を検証 (案 3: 処理開始時に Ready 構築)
+    async with session_factory() as session:
+        ready = await ReadyForEmbedding.try_advance_from(
+            analysis_id=trigger.analysis_id,
+            embedding_repo=EmbeddingRepository(session),
+        )
+    if ready is None:
+        logger.info(
+            "generate_embedding_skipped",
+            analysis_id=trigger.analysis_id,
+            reason="precondition_not_met",
+        )
+        return
+
+    # AI を呼ぶ見込みが立ってから rate limit acquire (stale trigger で quota を
+    # 消費しない設計)
     rpm_limiter, rpd_limiter = _build_limiters(
         "embed", embedder.MODEL, embedder.RPM, embedder.RPD
     )

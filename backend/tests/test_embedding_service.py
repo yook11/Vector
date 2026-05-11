@@ -1,10 +1,11 @@
 """EmbeddingService (app.analysis.embedding.service) の DB 統合テスト。
 
-Pattern A' (typed-pipeline-preconditions.md §1.1) に従い Outcome は
+案 3 (厚い Ready + 下流 Stage 自身が処理開始時に構築) に従い Outcome は
 ``EmbeddedOutcome | InvalidInputOutcome`` の 2 variants に縮退している。
-precondition 分岐 (extraction_not_found / analysis_pending / analysis_rejected /
-既存 embedding) は ``ReadyForEmbedding.try_advance_from`` 側責務に移管したため
-本ファイルでは扱わない (test_ready_for_embedding.py 参照)。
+precondition 分岐 + embedder 入力 text 取得は ``ReadyForEmbedding`` 構造保証に
+移管したため本ファイルでは扱わない (test_ready_for_embedding.py 参照)。Service は
+``ready.text_for_embedding`` を直接 embedder に渡し、自身で DB fetch / None
+チェックを行わない。
 
 検証する経路:
 - 正常系 (新規生成 → 永続化 → EmbeddedOutcome)
@@ -127,8 +128,12 @@ async def _build_analysis(
     return analysis
 
 
-def _make_ready(analysis_id: int) -> ReadyForEmbedding:
-    return ReadyForEmbedding(analysis_id=analysis_id)
+def _make_ready(
+    analysis_id: int,
+    *,
+    text: str = "分析タイトル\n分析要約",
+) -> ReadyForEmbedding:
+    return ReadyForEmbedding(analysis_id=analysis_id, text_for_embedding=text)
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +166,7 @@ async def test_execute_returns_embedded_outcome_and_persists(
     assert isinstance(result.embedding, Embedding)
     assert result.embedding.analysis_id == analysis_id
     assert result.embedding.model_name == "cl-nagoya/ruri-v3-310m"
-    # Service が DB から (translated_title, summary) を fetch して結合する
+    # 厚い Ready 経由で text を直接渡す
     embedder.embed_document.assert_called_once_with("分析タイトル\n分析要約")
 
     db_session.expire_all()
@@ -201,8 +206,8 @@ async def test_execute_reads_back_winner_when_save_loses_race(
 
     embedder = _mock_embedder()
     svc = EmbeddingService(session_factory)
-    # Ready 構築自体は precondition (is_embedded_for) 済みの前提だが、本テストでは
-    # race 状況をシミュレートするため Ready を直接構築して execute に渡す。
+    # Ready 構築時に未 embedded だった前提で、構築直後に他ワーカーが先に書き込んだ
+    # race 状況を再現するため Ready を直接構築して execute に渡す。
     ready = _make_ready(analysis_id)
     result = await svc.execute(ready, embedder)
 
@@ -247,29 +252,6 @@ async def test_execute_returns_invalid_input_outcome_when_embedder_rejects(
     assert refetched is not None
     assert refetched.embedding is None
     assert refetched.embedding_model is None
-
-
-# ---------------------------------------------------------------------------
-# Pattern A' 違反: analysis 行不在 → fail-fast RuntimeError
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_execute_raises_when_analysis_row_missing(
-    session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    """``in_scope_assessments`` に該当行が無いと RuntimeError で fail-fast。
-
-    Ready が ID + precondition のみを passport として運ぶ設計
-    (`feedback_bc_boundary_guarantees_downstream`) では、行不在は Pattern A'
-    違反として可視化される (`feedback_failure_visibility`)。
-    """
-    embedder = _mock_embedder()
-    svc = EmbeddingService(session_factory)
-    ready = _make_ready(analysis_id=999_999_999)
-
-    with pytest.raises(RuntimeError, match="embedding_assessment_missing"):
-        await svc.execute(ready, embedder)
 
 
 # ---------------------------------------------------------------------------

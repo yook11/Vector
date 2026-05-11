@@ -1,7 +1,9 @@
 """Stage 4 (Assessment) taskiq タスク。
 
 extract_content から chain され、in-scope と判定された場合は
-generate_embedding (Stage E) へ chain する。
+``EmbeddingTrigger`` (analysis_id のみ運ぶ軽量 ID キャリア) を kiq に流して
+``generate_embedding`` (Stage 5) を起動する。Ready の構築は下流 Stage 5 task
+自身が処理開始時に行う (案 3 = 厚い Ready + 下流 Stage 自身が処理開始時に構築)。
 """
 
 from __future__ import annotations
@@ -18,8 +20,7 @@ from app.analysis.assessment.errors import (
 )
 from app.analysis.assessment.failure_recording import record_assessment_failure
 from app.analysis.assessment.service import AssessmentService
-from app.analysis.embedding.domain.ready import ReadyForEmbedding
-from app.analysis.embedding.repository import EmbeddingRepository
+from app.analysis.embedding.domain.ready import EmbeddingTrigger
 from app.analysis.embedding.tasks import generate_embedding
 from app.analysis.rate_limiter import (
     RateLimitExceededError as _RateLimitExceededError,
@@ -118,13 +119,6 @@ async def assess_content(
     if result is None:
         return
 
-    # Stage 5 (Embedding) へ chain (Pattern A': 上流 Task が下流 Ready を構築)。
-    # ID のみ運び、Stage 5 Service が DB から都度値を読む。
-    async with session_factory() as session:
-        embedding_repo = EmbeddingRepository(session)
-        ready_emb = await ReadyForEmbedding.try_advance_from(
-            analysis_id=result,
-            embedding_repo=embedding_repo,
-        )
-    if ready_emb is not None:
-        await generate_embedding.kiq(ready_emb)
+    # Stage 5 (Embedding) を ID で起動 (案 3: 下流 Stage 自身が処理開始時に
+    # Ready を構築する)。Trigger に analysis_id だけ詰めて kiq へ enqueue する。
+    await generate_embedding.kiq(EmbeddingTrigger(analysis_id=result))

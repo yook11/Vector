@@ -1,6 +1,6 @@
 """``assess_content`` task のテスト (chain 経路 + 3 marker dispatch)。
 
-- in-scope 成功 (int 返却) → ReadyForEmbedding 構築 → embedding chain
+- in-scope 成功 (int 返却) → EmbeddingTrigger で embedding chain (ID のみ運ぶ)
 - out-of-scope / race lost (``None`` 返却) は chain しないこと
 - 3 marker dispatch: TerminalSkip / Recoverable / catch-all Exception
 """
@@ -17,7 +17,7 @@ from app.analysis.assessment.errors import (
     AssessmentResponseInvalidError,
     AssessmentTerminalSkipError,
 )
-from app.analysis.embedding.domain.ready import ReadyForEmbedding
+from app.analysis.embedding.domain.ready import EmbeddingTrigger
 from app.analysis.errors import RateLimitError
 
 
@@ -56,10 +56,6 @@ def _make_ready(extraction_id: int = 2) -> ReadyForAssessment:
     )
 
 
-def _make_ready_emb(analysis_id: int = 100) -> ReadyForEmbedding:
-    return ReadyForEmbedding(analysis_id=analysis_id)
-
-
 # ---------------------------------------------------------------------------
 # assess_content (Stage 4)
 # ---------------------------------------------------------------------------
@@ -67,13 +63,16 @@ def _make_ready_emb(analysis_id: int = 100) -> ReadyForEmbedding:
 
 class TestAssessContent:
     @pytest.mark.asyncio
-    async def test_in_scope_chains_embedding_with_ready(self) -> None:
-        """in-scope 成功 (assessment_id 返却) → ReadyForEmbedding を構築して chain。"""
+    async def test_in_scope_chains_embedding_with_trigger(self) -> None:
+        """in-scope 成功 (assessment_id 返却) → EmbeddingTrigger で chain。
+
+        案 3: 上流 Stage 4 task は Ready を構築せず、ID だけ運ぶ EmbeddingTrigger
+        を kiq に enqueue する。Ready 構築は下流 Stage 5 task が処理開始時に行う。
+        """
         from app.analysis.assessment.tasks import assess_content
 
         mock_ctx = _make_ctx(assessor=_make_provider_fake())
         ready = _make_ready(extraction_id=2)
-        ready_emb = _make_ready_emb(analysis_id=100)
 
         with (
             patch(
@@ -81,10 +80,6 @@ class TestAssessContent:
                 return_value=(None, None),
             ),
             patch("app.analysis.assessment.tasks.AssessmentService") as mock_svc_cls,
-            patch(
-                "app.analysis.assessment.tasks.ReadyForEmbedding.try_advance_from",
-                new=AsyncMock(return_value=ready_emb),
-            ),
             patch("app.analysis.assessment.tasks.generate_embedding") as mock_embed,
         ):
             # Service は in-scope 成功時 assessment id を返す
@@ -92,33 +87,7 @@ class TestAssessContent:
             mock_embed.kiq = AsyncMock()
             await assess_content(ready=ready, ctx=mock_ctx)
 
-        mock_embed.kiq.assert_awaited_once_with(ready_emb)
-
-    @pytest.mark.asyncio
-    async def test_in_scope_does_not_chain_when_advance_returns_none(self) -> None:
-        """in-scope 成功でも embedding precondition 未充足なら chain しない。"""
-        from app.analysis.assessment.tasks import assess_content
-
-        mock_ctx = _make_ctx(assessor=_make_provider_fake())
-        ready = _make_ready(extraction_id=2)
-
-        with (
-            patch(
-                "app.analysis.assessment.tasks._build_limiters",
-                return_value=(None, None),
-            ),
-            patch("app.analysis.assessment.tasks.AssessmentService") as mock_svc_cls,
-            patch(
-                "app.analysis.assessment.tasks.ReadyForEmbedding.try_advance_from",
-                new=AsyncMock(return_value=None),
-            ),
-            patch("app.analysis.assessment.tasks.generate_embedding") as mock_embed,
-        ):
-            mock_svc_cls.return_value.execute = AsyncMock(return_value=100)
-            mock_embed.kiq = AsyncMock()
-            await assess_content(ready=ready, ctx=mock_ctx)
-
-        mock_embed.kiq.assert_not_called()
+        mock_embed.kiq.assert_awaited_once_with(EmbeddingTrigger(analysis_id=100))
 
     @pytest.mark.asyncio
     async def test_none_result_does_not_chain(self) -> None:

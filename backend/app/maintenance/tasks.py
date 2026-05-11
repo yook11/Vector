@@ -265,11 +265,13 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
     schedule=[{"cron": "*/10 * * * *"}],
 )
 async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
-    """embedding NULL の analysis を発見し generate_embedding を再投入する。
+    """embedding NULL の analysis を発見し ``generate_embedding`` を再投入する。
 
-    Pattern A' (spec §3.4 / §7.2) maintenance task として、自身が gatekeeper を
-    兼ねる: 各 analysis_id ごとに `ReadyForEmbedding.try_advance_from` を呼び、
-    成立するもののみ `kiq(ready)` で再投入する。
+    案 3 (厚い Ready + 下流 Stage 自身が処理開始時に構築): maintenance は
+    「投入数を見る」役割に縮退し、precondition 検証 + Ready 構築は下流 Stage 5
+    task に委ねる。各 analysis_id を ``EmbeddingTrigger`` に詰めて kiq に流すだけ。
+    stale trigger (既 embedded など) は Stage 5 task の
+    ``generate_embedding_skipped`` ログで観測する。
     """
     if not settings.backfill_embeddings_enabled:
         logger.info("backfill_embeddings_disabled")
@@ -302,24 +304,18 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
         logger.warning("backfill_embeddings_daily_budget_exhausted", found=found)
         return
 
-    from app.analysis.embedding.domain.ready import ReadyForEmbedding
-    from app.analysis.embedding.repository import EmbeddingRepository
+    from app.analysis.embedding.domain.ready import EmbeddingTrigger
     from app.analysis.embedding.tasks import generate_embedding
 
+    # 案 3: maintenance も上流相当 → ID のみ enqueue。precondition 検証は
+    # Stage 5 Task 自身が処理開始時に行う。stale trigger は Stage 5 の
+    # ``generate_embedding_skipped`` ログで観測する。
     requeued = 0
-    skipped = 0
     for assessment_id in ids[:granted]:
         try:
-            async with session_factory() as session:
-                embedding_repo = EmbeddingRepository(session)
-                ready = await ReadyForEmbedding.try_advance_from(
-                    analysis_id=assessment_id,
-                    embedding_repo=embedding_repo,
-                )
-            if ready is None:
-                skipped += 1
-                continue
-            await generate_embedding.kiq(ready)
+            await generate_embedding.kiq(
+                EmbeddingTrigger(analysis_id=assessment_id),
+            )
             requeued += 1
         except Exception as e:  # noqa: BLE001
             logger.warning(
@@ -334,5 +330,4 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
         found=found,
         granted=granted,
         requeued=requeued,
-        skipped=skipped,
     )
