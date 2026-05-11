@@ -88,6 +88,7 @@ class TestGeminiCallApiSuccess:
         assert call.raw_category == "ai"
         assert call.raw_topic == "ai agents"
         assert call.prompt_version == GeminiAssessmentPrompt.VERSION
+        assert call.model_name == GeminiAssessmentPrompt.MODEL
 
     @pytest.mark.asyncio
     async def test_out_of_scope_round_trip(self) -> None:
@@ -107,6 +108,7 @@ class TestGeminiCallApiSuccess:
         assert call.result.investor_take == "Not relevant."
         assert call.raw_category == "out_of_scope"
         assert call.raw_topic == "ignored"  # OutOfScope 経路でも raw_topic 保持
+        assert call.model_name == GeminiAssessmentPrompt.MODEL
 
     @pytest.mark.asyncio
     async def test_uses_dict_response_schema(self) -> None:

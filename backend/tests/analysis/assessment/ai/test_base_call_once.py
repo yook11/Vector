@@ -17,7 +17,7 @@ import pytest
 
 from app.analysis.assessment.ai.base import BaseAssessor
 from app.analysis.assessment.ai.envelope import AssessmentCall
-from app.analysis.assessment.ai.schema import OutOfScope
+from app.analysis.assessment.ai.schema import InScope, OutOfScope
 from app.analysis.assessment.errors import (
     AssessmentRecoverableError,
     AssessmentResponseInvalidError,
@@ -43,12 +43,12 @@ class _StubAssessor(BaseAssessor):
 
     async def assess(  # pragma: no cover - 直接テストしない
         self, title_ja: str, summary_ja: str
-    ) -> AssessmentCall:
+    ) -> AssessmentCall[InScope] | AssessmentCall[OutOfScope]:
         return await self._call_once("p")
 
     async def _call_api(  # pragma: no cover - mock で override
         self, prompt: str
-    ) -> AssessmentCall:
+    ) -> AssessmentCall[InScope] | AssessmentCall[OutOfScope]:
         raise NotImplementedError
 
     def _translate_error(  # pragma: no cover - mock で override
@@ -57,13 +57,14 @@ class _StubAssessor(BaseAssessor):
         return exc
 
 
-def _make_call() -> AssessmentCall:
+def _make_call() -> AssessmentCall[OutOfScope]:
     return AssessmentCall(
         result=OutOfScope(investor_take="x"),
         raw_response='{"category": "out_of_scope", "topic": "x", "investor_take": "x"}',
         raw_category="out_of_scope",
         raw_topic="x",
         prompt_version="abc12345",
+        model_name="test-model",
     )
 
 

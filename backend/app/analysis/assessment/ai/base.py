@@ -8,6 +8,7 @@ from typing import ClassVar
 import structlog
 
 from app.analysis.assessment.ai.envelope import AssessmentCall
+from app.analysis.assessment.ai.schema import InScope, OutOfScope
 from app.analysis.assessment.errors import AssessmentError
 from app.analysis.errors.provider import AIProviderError
 
@@ -62,7 +63,7 @@ class BaseAssessor(abc.ABC):
         self,
         title_ja: str,
         summary_ja: str,
-    ) -> AssessmentCall:
+    ) -> AssessmentCall[InScope] | AssessmentCall[OutOfScope]:
         """Stage 3 (Extraction) の出力を判定し ``AssessmentCall`` envelope を返す。
 
         Args:
@@ -83,11 +84,14 @@ class BaseAssessor(abc.ABC):
         ...
 
     @abc.abstractmethod
-    async def _call_api(self, prompt: str) -> AssessmentCall:
+    async def _call_api(
+        self, prompt: str
+    ) -> AssessmentCall[InScope] | AssessmentCall[OutOfScope]:
         """プロバイダー SDK を呼び出し、``AssessmentCall`` を返す。
 
-        実装は SDK 応答を ``parse_assessment`` で詰め替え、raw 情報を含めて
-        ``AssessmentCall`` を構築する。
+        実装は SDK 応答を ``parse_assessment`` で詰め替え、``match`` で
+        ``InScope`` / ``OutOfScope`` に narrow した上で ``AssessmentCall`` を
+        構築する (戻り型は narrow された container の union)。
         """
         ...
 
@@ -105,7 +109,9 @@ class BaseAssessor(abc.ABC):
 
     # -- 単発呼び出し --
 
-    async def _call_once(self, prompt: str) -> AssessmentCall:
+    async def _call_once(
+        self, prompt: str
+    ) -> AssessmentCall[InScope] | AssessmentCall[OutOfScope]:
         """1 回の API call。SDK 例外を ``AIProvider*Error`` 階層に翻訳して raise。
 
         Pattern:

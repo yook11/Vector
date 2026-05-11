@@ -33,18 +33,19 @@ def _make_extraction(**overrides: object) -> Extraction:
     return Extraction(**defaults)  # type: ignore[arg-type]
 
 
-def _make_repo_mocks(
+def _make_repo_mock(
     *,
     in_scope_exists: bool = False,
     out_of_scope_exists: bool = False,
-) -> tuple[AsyncMock, AsyncMock]:
-    in_scope_repo = AsyncMock()
-    in_scope_repo.exists_for_extraction = AsyncMock(return_value=in_scope_exists)
-    out_of_scope_repo = AsyncMock()
-    out_of_scope_repo.exists_for_extraction = AsyncMock(
-        return_value=out_of_scope_exists
-    )
-    return in_scope_repo, out_of_scope_repo
+) -> AsyncMock:
+    """``AssessmentExistenceProtocol`` を満たす 1 個の Repository mock。
+
+    1 class に統合された ``AssessmentRepository`` に対応 (旧 2 個分割は廃止)。
+    """
+    repo = AsyncMock()
+    repo.exists_in_scope = AsyncMock(return_value=in_scope_exists)
+    repo.exists_out_of_scope = AsyncMock(return_value=out_of_scope_exists)
+    return repo
 
 
 # ---------------------------------------------------------------------------
@@ -59,13 +60,9 @@ class TestTryAdvanceFromPreconditionMet:
     ) -> None:
         """InScope / OutOfScope 評価ともに未生成なら Ready を返す。"""
         extraction = _make_extraction(id=42)
-        in_scope_repo, out_of_scope_repo = _make_repo_mocks()
+        repo = _make_repo_mock()
 
-        ready = await ReadyForAssessment.try_advance_from(
-            extraction,
-            in_scope_repo=in_scope_repo,
-            out_of_scope_repo=out_of_scope_repo,
-        )
+        ready = await ReadyForAssessment.try_advance_from(extraction, repo=repo)
 
         assert ready is not None
         assert ready.extraction_id == 42
@@ -73,19 +70,15 @@ class TestTryAdvanceFromPreconditionMet:
         assert ready.summary == extraction.summary
 
     @pytest.mark.asyncio
-    async def test_calls_exists_for_extraction_with_extraction_id(self) -> None:
+    async def test_calls_exists_with_extraction_id(self) -> None:
         """exists 判定は extraction.id をキーに行う。"""
         extraction = _make_extraction(id=99)
-        in_scope_repo, out_of_scope_repo = _make_repo_mocks()
+        repo = _make_repo_mock()
 
-        await ReadyForAssessment.try_advance_from(
-            extraction,
-            in_scope_repo=in_scope_repo,
-            out_of_scope_repo=out_of_scope_repo,
-        )
+        await ReadyForAssessment.try_advance_from(extraction, repo=repo)
 
-        in_scope_repo.exists_for_extraction.assert_awaited_once_with(99)
-        out_of_scope_repo.exists_for_extraction.assert_awaited_once_with(99)
+        repo.exists_in_scope.assert_awaited_once_with(99)
+        repo.exists_out_of_scope.assert_awaited_once_with(99)
 
 
 class TestTryAdvanceFromPreconditionNotMet:
@@ -93,33 +86,25 @@ class TestTryAdvanceFromPreconditionNotMet:
     async def test_returns_none_when_in_scope_already_exists(self) -> None:
         """同 extraction_id に InScopeAssessment が既存なら None を返す (業務正常)。"""
         extraction = _make_extraction(id=42)
-        in_scope_repo, out_of_scope_repo = _make_repo_mocks(in_scope_exists=True)
+        repo = _make_repo_mock(in_scope_exists=True)
 
-        ready = await ReadyForAssessment.try_advance_from(
-            extraction,
-            in_scope_repo=in_scope_repo,
-            out_of_scope_repo=out_of_scope_repo,
-        )
+        ready = await ReadyForAssessment.try_advance_from(extraction, repo=repo)
 
         assert ready is None
-        # out_of_scope_repo は short-circuit で呼ばれない
-        out_of_scope_repo.exists_for_extraction.assert_not_called()
+        # exists_out_of_scope は short-circuit で呼ばれない
+        repo.exists_out_of_scope.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_returns_none_when_out_of_scope_already_exists(self) -> None:
         """同 extraction_id に OutOfScopeAssessment 既存なら None を返す (業務正常)。"""
         extraction = _make_extraction(id=42)
-        in_scope_repo, out_of_scope_repo = _make_repo_mocks(out_of_scope_exists=True)
+        repo = _make_repo_mock(out_of_scope_exists=True)
 
-        ready = await ReadyForAssessment.try_advance_from(
-            extraction,
-            in_scope_repo=in_scope_repo,
-            out_of_scope_repo=out_of_scope_repo,
-        )
+        ready = await ReadyForAssessment.try_advance_from(extraction, repo=repo)
 
         assert ready is None
-        in_scope_repo.exists_for_extraction.assert_awaited_once()
-        out_of_scope_repo.exists_for_extraction.assert_awaited_once()
+        repo.exists_in_scope.assert_awaited_once()
+        repo.exists_out_of_scope.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------

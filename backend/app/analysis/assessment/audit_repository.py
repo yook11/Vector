@@ -80,41 +80,41 @@ class AssessmentAuditRepository:
         self,
         *,
         ready: ReadyForAssessment,
-        envelope: AssessmentCall,
-        in_scope: InScope,
+        call: AssessmentCall[InScope],
         assessment_id: int,
         category_id: int,
-        ai_model: str,
     ) -> None:
         """in-scope 成功 audit を 1 行記録する。
 
-        Service が業務 INSERT と同 tx で呼ぶ。``Repository.save`` が返す
-        ``(assessment_id, category_id)`` と AI 境界型 ``in_scope`` を直接受け、
-        Domain Entity を介さない (`feedback_bc_boundary_guarantees_downstream`)。
+        Service が業務 INSERT と同 tx で呼ぶ。``AssessmentRepository.save_in_scope``
+        が返す ``(assessment_id, category_id)`` と Stage 4 で起きた全事実を抱える
+        ``call`` envelope を受け、Domain Entity を介さない
+        (`feedback_bc_boundary_guarantees_downstream`)。
 
         Args:
-            assessment_id: ``InScopeRepository.save`` が返した新規 row の id
-            category_id: ``InScopeRepository.save`` が内部解決した FK 値
-                (slug 経由の catalog lookup 結果)
-            ai_model: ``assessor.model_name`` (BaseAssessor の ClassVar
-                ``MODEL`` accessor) を caller が渡す。``AssessmentCall``
-                envelope には ``model_name`` field が無い設計のため。
-            in_scope: AI 境界型。``category.value`` (catalog 確認後 slug) /
-                ``topic`` / ``investor_take`` を直接読む。``raw_category``
-                (envelope 由来、validation 前生値) とは意味分離する。
+            assessment_id: ``save_in_scope`` が返した新規 row の id
+            category_id: ``save_in_scope`` が内部解決した FK 値 (slug 経由の
+                catalog lookup 結果)
+            call: ``AssessmentCall[InScope]`` envelope。``call.result``
+                (= ``InScope``) から ``category.value`` (catalog 確認後 slug) /
+                ``topic`` / ``investor_take`` を、``call.model_name`` /
+                ``call.prompt_version`` / ``call.raw_*`` を audit 用に直接読む。
+                ``raw_category`` (envelope 由来、validation 前生値) と
+                ``category_slug`` (``result.category.value`` 由来) は意味分離する。
         """
+        in_scope = call.result
         article_id = await self._article_id_for(ready.extraction_id)
         source_name = await self._resolve_source_name(ready.extraction_id)
         payload = AssessmentPayload(
             source_name=source_name,
             extraction_id=ready.extraction_id,
-            ai_model=ai_model,
-            prompt_version=envelope.prompt_version,
+            ai_model=call.model_name,
+            prompt_version=call.prompt_version,
             input_text=ready.summary[:_INPUT_TEXT_LIMIT] or None,
             input_text_length=len(ready.summary),
-            ai_raw_response=_limited_str(envelope.raw_response, _AI_RAW_RESPONSE_LIMIT),
-            raw_category=envelope.raw_category,
-            raw_topic=envelope.raw_topic,
+            ai_raw_response=_limited_str(call.raw_response, _AI_RAW_RESPONSE_LIMIT),
+            raw_category=call.raw_category,
+            raw_topic=call.raw_topic,
             assessment_id=assessment_id,
             category_id=category_id,
             category_slug=in_scope.category.value,
@@ -135,10 +135,8 @@ class AssessmentAuditRepository:
         self,
         *,
         ready: ReadyForAssessment,
-        envelope: AssessmentCall,
-        out_of_scope: OutOfScope,
+        call: AssessmentCall[OutOfScope],
         assessment_id: int,
-        ai_model: str,
     ) -> None:
         """out-of-scope 成功 audit を 1 行記録する。
 
@@ -149,21 +147,24 @@ class AssessmentAuditRepository:
         ``topic`` は in-scope 固有のため out-of-scope では None。
 
         Args:
-            assessment_id: ``OutOfScopeRepository.save`` が返した新規 row の id
-            out_of_scope: AI 境界型。``investor_take`` を直接読む。
+            assessment_id: ``save_out_of_scope`` が返した新規 row の id
+            call: ``AssessmentCall[OutOfScope]`` envelope。``call.result``
+                (= ``OutOfScope``) から ``investor_take`` を、``call.model_name``
+                / ``call.prompt_version`` / ``call.raw_*`` を audit 用に直接読む。
         """
+        out_of_scope = call.result
         article_id = await self._article_id_for(ready.extraction_id)
         source_name = await self._resolve_source_name(ready.extraction_id)
         payload = AssessmentPayload(
             source_name=source_name,
             extraction_id=ready.extraction_id,
-            ai_model=ai_model,
-            prompt_version=envelope.prompt_version,
+            ai_model=call.model_name,
+            prompt_version=call.prompt_version,
             input_text=ready.summary[:_INPUT_TEXT_LIMIT] or None,
             input_text_length=len(ready.summary),
-            ai_raw_response=_limited_str(envelope.raw_response, _AI_RAW_RESPONSE_LIMIT),
-            raw_category=envelope.raw_category,
-            raw_topic=envelope.raw_topic,
+            ai_raw_response=_limited_str(call.raw_response, _AI_RAW_RESPONSE_LIMIT),
+            raw_category=call.raw_category,
+            raw_topic=call.raw_topic,
             assessment_id=assessment_id,
             investor_take=out_of_scope.investor_take,
             # category_id / category_slug / topic は in-scope 固有のため None

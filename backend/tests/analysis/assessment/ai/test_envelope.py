@@ -1,4 +1,4 @@
-"""Stage 4 ``AssessmentCall`` envelope の構造テスト (frozen / slots / 5 field)。"""
+"""Stage 4 ``AssessmentCall`` envelope の構造テスト (frozen / slots / 6 field)。"""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ def _make_in_scope() -> InScope:
 
 
 class TestAssessmentCallConstruction:
-    """5 field をすべて受け取って構築される。"""
+    """6 field をすべて受け取って構築される。"""
 
     def test_construction_with_in_scope_result(self) -> None:
         result = _make_in_scope()
@@ -34,12 +34,14 @@ class TestAssessmentCallConstruction:
             raw_category="ai",
             raw_topic="ai agents",
             prompt_version="abc12345",
+            model_name="test-model",
         )
         assert call.result is result
         assert call.raw_response.startswith('{"category"')
         assert call.raw_category == "ai"
         assert call.raw_topic == "ai agents"
         assert call.prompt_version == "abc12345"
+        assert call.model_name == "test-model"
 
     def test_construction_with_out_of_scope_result(self) -> None:
         result = OutOfScope(investor_take="x")
@@ -49,6 +51,7 @@ class TestAssessmentCallConstruction:
             raw_category="out_of_scope",
             raw_topic="ignored",
             prompt_version="abc12345",
+            model_name="test-model",
         )
         assert isinstance(call.result, OutOfScope)
 
@@ -63,6 +66,7 @@ class TestAssessmentCallImmutability:
             raw_category="c",
             raw_topic="t",
             prompt_version="v",
+            model_name="m",
         )
         with pytest.raises(dataclasses.FrozenInstanceError):
             call.raw_response = "mutated"  # type: ignore[misc]
@@ -74,6 +78,7 @@ class TestAssessmentCallImmutability:
             raw_category="c",
             raw_topic="t",
             prompt_version="v",
+            model_name="m",
         )
         # slots=True により instance __dict__ が無く、未定義 attr の追加も拒否
         assert not hasattr(call, "__dict__")

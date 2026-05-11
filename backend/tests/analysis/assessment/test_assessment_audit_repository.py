@@ -124,28 +124,30 @@ def _make_in_scope(category: InScopeCategory = InScopeCategory.AI) -> InScope:
     )
 
 
-def _in_scope_envelope(
+def _in_scope_call(
     *,
     raw_response: str = '{"category":"ai"}',
     raw_category: str = "ai",
     in_scope: InScope | None = None,
-) -> AssessmentCall:
+) -> AssessmentCall[InScope]:
     return AssessmentCall(
         result=in_scope if in_scope is not None else _make_in_scope(),
         raw_response=raw_response,
         raw_category=raw_category,
         raw_topic="LLM Benchmark",
         prompt_version="abcd1234",
+        model_name=_AI_MODEL,
     )
 
 
-def _out_of_scope_envelope() -> AssessmentCall:
+def _out_of_scope_call() -> AssessmentCall[OutOfScope]:
     return AssessmentCall(
         result=OutOfScope(investor_take="not relevant"),
         raw_response='{"category":"out_of_scope"}',
         raw_category="out_of_scope",
         raw_topic="celebrity gossip",
         prompt_version="abcd1234",
+        model_name=_AI_MODEL,
     )
 
 
@@ -226,11 +228,9 @@ async def test_append_in_scope_records_success_with_code(
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_in_scope(
             ready=_ready(extraction),
-            envelope=_in_scope_envelope(),
-            in_scope=_make_in_scope(),
+            call=_in_scope_call(),
             assessment_id=in_scope.id,
             category_id=in_scope.category_id,
-            ai_model=_AI_MODEL,
         )
         await session.commit()
 
@@ -263,8 +263,8 @@ async def test_append_in_scope_derives_category_slug_from_in_scope(
     extraction = await _make_extraction(db_session, article)
     in_scope_orm = await _persist_in_scope(db_session, extraction, sample_categories[0])
     in_scope_response = _make_in_scope(category=InScopeCategory.AI)
-    # envelope.raw_category と category_slug を区別するため envelope 側だけ異常値
-    envelope = _in_scope_envelope(
+    # call.raw_category と category_slug を区別するため envelope 側だけ異常値
+    call = _in_scope_call(
         in_scope=in_scope_response,
         raw_category="ai_raw_from_envelope",
     )
@@ -272,16 +272,14 @@ async def test_append_in_scope_derives_category_slug_from_in_scope(
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_in_scope(
             ready=_ready(extraction),
-            envelope=envelope,
-            in_scope=in_scope_response,
+            call=call,
             assessment_id=in_scope_orm.id,
             category_id=in_scope_orm.category_id,
-            ai_model=_AI_MODEL,
         )
         await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
-    assert ev.payload["raw_category"] == "ai_raw_from_envelope"  # envelope 由来
+    assert ev.payload["raw_category"] == "ai_raw_from_envelope"  # call 由来
     assert ev.payload["category_slug"] == "ai"  # in_scope.category.value 由来
 
 
@@ -300,11 +298,9 @@ async def test_append_in_scope_resolves_article_id_from_extraction(
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_in_scope(
             ready=_ready(extraction),
-            envelope=_in_scope_envelope(),
-            in_scope=_make_in_scope(),
+            call=_in_scope_call(),
             assessment_id=in_scope.id,
             category_id=in_scope.category_id,
-            ai_model=_AI_MODEL,
         )
         await session.commit()
 
@@ -327,11 +323,9 @@ async def test_append_in_scope_resolves_source_name(
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_in_scope(
             ready=_ready(extraction),
-            envelope=_in_scope_envelope(),
-            in_scope=_make_in_scope(),
+            call=_in_scope_call(),
             assessment_id=in_scope.id,
             category_id=in_scope.category_id,
-            ai_model=_AI_MODEL,
         )
         await session.commit()
 
@@ -354,11 +348,9 @@ async def test_append_in_scope_does_not_commit(
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_in_scope(
             ready=_ready(extraction),
-            envelope=_in_scope_envelope(),
-            in_scope=_make_in_scope(),
+            call=_in_scope_call(),
             assessment_id=in_scope.id,
             category_id=in_scope.category_id,
-            ai_model=_AI_MODEL,
         )
         # 意図的に commit しない (rollback で消える)
 
@@ -386,16 +378,14 @@ async def test_append_in_scope_truncates_raw_response(
     extraction = await _make_extraction(db_session, article)
     in_scope = await _persist_in_scope(db_session, extraction, sample_categories[0])
     huge_raw = "x" * 5000
-    envelope = _in_scope_envelope(raw_response=huge_raw)
+    call = _in_scope_call(raw_response=huge_raw)
 
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_in_scope(
             ready=_ready(extraction),
-            envelope=envelope,
-            in_scope=_make_in_scope(),
+            call=call,
             assessment_id=in_scope.id,
             category_id=in_scope.category_id,
-            ai_model=_AI_MODEL,
         )
         await session.commit()
 
@@ -421,13 +411,10 @@ async def test_append_out_of_scope_records_success_with_code(
     out_of_scope = await _persist_out_of_scope(db_session, extraction)
 
     async with session_factory() as session:
-        out_of_scope_response = OutOfScope(investor_take="not relevant")
         await AssessmentAuditRepository(session).append_out_of_scope(
             ready=_ready(extraction),
-            envelope=_out_of_scope_envelope(),
-            out_of_scope=out_of_scope_response,
+            call=_out_of_scope_call(),
             assessment_id=out_of_scope.id,
-            ai_model=_AI_MODEL,
         )
         await session.commit()
 
@@ -455,13 +442,10 @@ async def test_append_out_of_scope_records_investor_take(
     out_of_scope = await _persist_out_of_scope(db_session, extraction)
 
     async with session_factory() as session:
-        out_of_scope_response = OutOfScope(investor_take="not relevant")
         await AssessmentAuditRepository(session).append_out_of_scope(
             ready=_ready(extraction),
-            envelope=_out_of_scope_envelope(),
-            out_of_scope=out_of_scope_response,
+            call=_out_of_scope_call(),
             assessment_id=out_of_scope.id,
-            ai_model=_AI_MODEL,
         )
         await session.commit()
 

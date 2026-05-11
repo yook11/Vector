@@ -11,8 +11,7 @@ from taskiq import Context, TaskiqDepends
 
 from app.analysis._limiter_factory import _build_limiters
 from app.analysis.assessment.domain.ready import ReadyForAssessment
-from app.analysis.assessment.out_of_scope_repository import OutOfScopeRepository
-from app.analysis.assessment.repository import InScopeRepository
+from app.analysis.assessment.repository import AssessmentRepository
 from app.analysis.assessment.tasks import assess_content
 from app.analysis.extraction.domain.ready import ReadyForExtraction
 from app.analysis.extraction.extractor.base import BaseExtractor
@@ -118,12 +117,10 @@ async def extract_content(
     # Stage 4 へ chain (Pattern A': 上流 Task が下流 Ready を構築 — spec §7.1)
     if isinstance(result, ExtractedOutcome):
         async with session_factory() as session:
-            in_scope_repo = InScopeRepository(session)
-            out_of_scope_repo = OutOfScopeRepository(session)
+            assessment_repo = AssessmentRepository(session)
             ready_assess = await ReadyForAssessment.try_advance_from(
                 result.extraction,
-                in_scope_repo=in_scope_repo,
-                out_of_scope_repo=out_of_scope_repo,
+                repo=assessment_repo,
             )
         if ready_assess is not None:
             await assess_content.kiq(ready_assess)

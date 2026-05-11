@@ -27,6 +27,7 @@ from app.analysis.assessment.ai.base import BaseAssessor
 from app.analysis.assessment.ai.envelope import AssessmentCall
 from app.analysis.assessment.ai.gemini_prompt import GeminiAssessmentPrompt
 from app.analysis.assessment.ai.parse import parse_assessment
+from app.analysis.assessment.ai.schema import InScope, OutOfScope
 from app.analysis.assessment.errors import AssessmentResponseInvalidError
 from app.analysis.errors.provider import (
     AIProviderConfigurationError,
@@ -65,12 +66,14 @@ class GeminiAssessor(BaseAssessor):
         self,
         title_ja: str,
         summary_ja: str,
-    ) -> AssessmentCall:
+    ) -> AssessmentCall[InScope] | AssessmentCall[OutOfScope]:
         """Stage 3 (Extraction) の出力を判定する。原文は読まない。"""
         prompt = GeminiAssessmentPrompt.render(title_ja=title_ja, summary_ja=summary_ja)
         return await self._call_once(prompt)
 
-    async def _call_api(self, prompt: str) -> AssessmentCall:
+    async def _call_api(
+        self, prompt: str
+    ) -> AssessmentCall[InScope] | AssessmentCall[OutOfScope]:
         """Gemini の generate_content API を呼び出し ``AssessmentCall`` を返す。
 
         SDK レスポンスは text を ``json.loads`` → ``parse_assessment`` で
@@ -115,13 +118,27 @@ class GeminiAssessor(BaseAssessor):
         result = parse_assessment(payload)
         raw_category = payload["category"]
         raw_topic = payload["topic"]
-        return AssessmentCall(
-            result=result,
-            raw_response=text,
-            raw_category=raw_category,
-            raw_topic=raw_topic,
-            prompt_version=GeminiAssessmentPrompt.VERSION,
-        )
+        # match で result を narrow して container 単位の Generic 型を確定する
+        # (``AssessmentCall[InScope]`` / ``AssessmentCall[OutOfScope]``)。
+        match result:
+            case InScope():
+                return AssessmentCall(
+                    result=result,
+                    raw_response=text,
+                    raw_category=raw_category,
+                    raw_topic=raw_topic,
+                    prompt_version=GeminiAssessmentPrompt.VERSION,
+                    model_name=self.MODEL,
+                )
+            case OutOfScope():
+                return AssessmentCall(
+                    result=result,
+                    raw_response=text,
+                    raw_category=raw_category,
+                    raw_topic=raw_topic,
+                    prompt_version=GeminiAssessmentPrompt.VERSION,
+                    model_name=self.MODEL,
+                )
 
     @staticmethod
     def _extract_finish_reason_name(response: object) -> str | None:

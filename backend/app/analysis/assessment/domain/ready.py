@@ -25,16 +25,16 @@ from pydantic import BaseModel, ConfigDict
 from app.analysis.extraction.domain.extraction import Extraction
 
 
-class InScopeExistenceProtocol(Protocol):
-    """Stage 4 進行判定用 InScope Repository contract (cheap exists 判定)。"""
+class AssessmentExistenceProtocol(Protocol):
+    """Stage 4 進行判定 Repository contract (cheap exists; in-scope / out-of-scope)。
 
-    async def exists_for_extraction(self, extraction_id: int) -> bool: ...
+    1 つの ``AssessmentRepository`` に in/out 両方の exists メソッドを同居させた
+    ことを反映した structural type。
+    """
 
+    async def exists_in_scope(self, extraction_id: int) -> bool: ...
 
-class OutOfScopeExistenceProtocol(Protocol):
-    """Stage 4 進行判定用 OutOfScope Repository contract (cheap exists 判定)。"""
-
-    async def exists_for_extraction(self, extraction_id: int) -> bool: ...
+    async def exists_out_of_scope(self, extraction_id: int) -> bool: ...
 
 
 class ReadyForAssessment(BaseModel):
@@ -60,8 +60,7 @@ class ReadyForAssessment(BaseModel):
         cls,
         extraction: Extraction,
         *,
-        in_scope_repo: InScopeExistenceProtocol,
-        out_of_scope_repo: OutOfScopeExistenceProtocol,
+        repo: AssessmentExistenceProtocol,
     ) -> ReadyForAssessment | None:
         """Extraction 完了から Stage 4 へ advance できるかを判定する gatekeeper。
 
@@ -75,12 +74,12 @@ class ReadyForAssessment(BaseModel):
 
         Args:
             extraction: 上流 Stage 3 で永続化された Extraction Entity
-            in_scope_repo: cheap exists 判定可能な InScope Repository
-            out_of_scope_repo: cheap exists 判定可能な OutOfScope Repository
+            repo: in-scope / out-of-scope 両方の cheap exists 判定を持つ Repository
+                (``AssessmentRepository`` 想定)
         """
-        if await in_scope_repo.exists_for_extraction(extraction.id):
+        if await repo.exists_in_scope(extraction.id):
             return None
-        if await out_of_scope_repo.exists_for_extraction(extraction.id):
+        if await repo.exists_out_of_scope(extraction.id):
             return None
         return cls(
             extraction_id=extraction.id,

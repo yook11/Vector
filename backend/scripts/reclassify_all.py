@@ -24,8 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
 from app.analysis.assessment.domain.ready import ReadyForAssessment
-from app.analysis.assessment.out_of_scope_repository import OutOfScopeRepository
-from app.analysis.assessment.repository import InScopeRepository
+from app.analysis.assessment.repository import AssessmentRepository
 from app.analysis.assessment.tasks import assess_content
 from app.analysis.extraction.repository import ExtractionRepository
 from app.brokers import broker_analysis
@@ -51,16 +50,14 @@ async def main() -> None:
         for article_id, _extraction_id in rows:
             async with session_factory() as session:
                 extraction_repo = ExtractionRepository(session)
-                in_scope_repo = InScopeRepository(session)
-                out_of_scope_repo = OutOfScopeRepository(session)
+                assessment_repo = AssessmentRepository(session)
                 extraction = await extraction_repo.find_by_article_id(article_id)
                 if extraction is None:
                     skipped += 1
                     continue
                 ready = await ReadyForAssessment.try_advance_from(
                     extraction,
-                    in_scope_repo=in_scope_repo,
-                    out_of_scope_repo=out_of_scope_repo,
+                    repo=assessment_repo,
                 )
             if ready is None:
                 skipped += 1

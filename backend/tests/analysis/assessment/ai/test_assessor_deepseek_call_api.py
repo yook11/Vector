@@ -94,6 +94,7 @@ class TestDeepSeekCallApiSuccess:
         assert call.raw_category == "ai"
         assert call.raw_topic == "ai agents"
         assert call.prompt_version == DeepSeekAssessmentPrompt.VERSION
+        assert call.model_name == DeepSeekAssessmentPrompt.MODEL
 
     @pytest.mark.asyncio
     async def test_out_of_scope_round_trip(self) -> None:
@@ -112,6 +113,7 @@ class TestDeepSeekCallApiSuccess:
         assert isinstance(call.result, OutOfScope)
         assert call.raw_category == "out_of_scope"
         assert call.raw_topic == "ignored"
+        assert call.model_name == DeepSeekAssessmentPrompt.MODEL
 
 
 # ---------------------------------------------------------------------------

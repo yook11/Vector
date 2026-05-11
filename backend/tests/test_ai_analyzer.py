@@ -124,7 +124,9 @@ def _make_in_scope(
     )
 
 
-def _make_assessment_call(result: AssessmentResult) -> AssessmentCall:
+def _make_assessment_call(
+    result: AssessmentResult, *, model_name: str = "gemini-2.5-flash-lite"
+) -> AssessmentCall[InScope] | AssessmentCall[OutOfScope]:
     """``assessor.assess()`` の戻り値 envelope を生成するヘルパー (PR3)。
 
     Service テスト等で mock_assessor.assess の return_value に渡す。
@@ -147,6 +149,7 @@ def _make_assessment_call(result: AssessmentResult) -> AssessmentCall:
         raw_category=raw_category,
         raw_topic=raw_topic,
         prompt_version="testver1",
+        model_name=model_name,
     )
 
 

@@ -1,18 +1,26 @@
-"""InScopeRepository — Stage 4 in-scope 評価結果の永続化。
+"""AssessmentRepository — Stage 4 判定結果 (in-scope / out-of-scope) の永続化。
 
 責務:
-- ``exists_for_extraction``: cheap な exists 判定 (Pattern A' の `try_advance_from`
-  precondition チェック用)
-- ``save``: AI 境界型 ``InScope`` + Stage 3 由来の translated_title / summary を
-  受けて ``INSERT ... ON CONFLICT (extraction_id) DO NOTHING RETURNING ...`` で
-  永続化する。category slug → id 解決を内部に閉じ、未登録 slug は
-  ``AssessmentCategoryMissingError`` で fail-fast。race 敗北時は ``None`` を返し、
-  Service は短絡する (再収集は reconcile cron が担う)。
+- ``exists_in_scope`` / ``exists_out_of_scope``: ``ReadyForAssessment.try_advance_from``
+  の precondition 判定用 cheap exists (extraction_id 単位)
+- ``save_in_scope``: AI 境界型 ``InScope`` を内包する ``AssessmentCall[InScope]``
+  を受け、``INSERT ... ON CONFLICT (extraction_id) DO NOTHING RETURNING ...``
+  で永続化する。category slug → id 解決を内部に閉じ、未登録 slug は
+  ``AssessmentCategoryMissingError`` で fail-fast。
+- ``save_out_of_scope``: ``AssessmentCall[OutOfScope]`` を受けて同様に永続化する。
+  race 敗北時は ``None`` を返し、Service が短絡する (再収集は reconcile cron が担う)。
 
-設計方針 (2026-05-11 更新): AI 境界 ``InScope`` で永続化可能性を保証 → 以降は
-DB を信用、Stage 間は ID で繋ぐ (Pattern A')。Stage 5 が必要とする値は DB を
-SSoT として都度 read するため、Domain Entity を介した値運搬は廃止
-(`feedback_bc_boundary_guarantees_downstream`)。
+設計方針:
+- in-scope / out-of-scope は **同じ Stage 4 永続化責務** のため、1 class に同居させて
+  Service の dispatch (``match call: case AssessmentCall(result=InScope()):``) から
+  対応 method を呼び分ける。ファイル分離は責務分離ではなく単に branch 表現の場所だった
+  ため、AssessmentAuditRepository (1 class で in/out 両方を持つ) と signature を
+  対称化する。
+- ``call.model_name`` / ``call.result`` から永続化に必要な値を取り出すので、caller は
+  ``ai_model`` を別引数で渡さない。AI 境界 ``InScope`` で永続化可能性を保証 → 以降は
+  DB を信用、Stage 間は ID で繋ぐ (Pattern A')。Stage 5 が必要とする値は DB を
+  SSoT として都度 read するため、Domain Entity を介した値運搬は廃止
+  (`feedback_bc_boundary_guarantees_downstream`)。
 """
 
 from __future__ import annotations
@@ -21,21 +29,25 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from app.analysis.assessment.ai.schema import InScope
+from app.analysis.assessment.ai.envelope import AssessmentCall
+from app.analysis.assessment.ai.schema import InScope, OutOfScope
 from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.errors import AssessmentCategoryMissingError
 from app.models.category import Category
 from app.models.in_scope_assessment import InScopeAssessment
+from app.models.out_of_scope_assessment import OutOfScopeAssessment
 
 
-class InScopeRepository:
-    """Stage 4 in-scope 評価結果の永続化に必要な DB 操作をカプセル化する。"""
+class AssessmentRepository:
+    """Stage 4 判定結果 (in-scope / out-of-scope) の永続化 + cheap exists 判定。"""
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def exists_for_extraction(self, extraction_id: int) -> bool:
-        """`try_advance_from` 用 cheap exists 判定 (extraction_id 単位)。"""
+    # --- exists 判定 (try_advance_from precondition 用) -----------------------
+
+    async def exists_in_scope(self, extraction_id: int) -> bool:
+        """``try_advance_from`` 用 cheap exists 判定 (in-scope assessments)。"""
         stmt = (
             select(InScopeAssessment.id)
             .where(InScopeAssessment.extraction_id == extraction_id)
@@ -43,19 +55,30 @@ class InScopeRepository:
         )
         return (await self._session.execute(stmt)).first() is not None
 
-    async def save(
+    async def exists_out_of_scope(self, extraction_id: int) -> bool:
+        """``try_advance_from`` 用 cheap exists 判定 (out-of-scope assessments)。"""
+        stmt = (
+            select(OutOfScopeAssessment.id)
+            .where(OutOfScopeAssessment.extraction_id == extraction_id)
+            .limit(1)
+        )
+        return (await self._session.execute(stmt)).first() is not None
+
+    # --- save 経路 ------------------------------------------------------------
+
+    async def save_in_scope(
         self,
-        in_scope: InScope,
+        call: AssessmentCall[InScope],
         *,
         ready: ReadyForAssessment,
-        ai_model: str,
     ) -> tuple[int, int] | None:
-        """AI 境界型 + ``ReadyForAssessment`` (Stage 3 由来 snapshot) を受けて
-        永続化する。
+        """``AssessmentCall[InScope]`` を受けて in-scope assessment を永続化する。
 
-        ``extraction_id`` / ``translated_title`` / ``summary`` は ``ready`` から取り出す
-        (Service 側の詰め替えを廃して ``AssessmentAuditRepository.append_*`` と
-        signature を対称化)。
+        ``call.result`` / ``call.model_name`` から永続化に必要な値を直接取り出し、
+        caller は ``ai_model`` を別引数で渡さない (Stage 4 で起きた事実は envelope
+        が抱え切る、`feedback_bc_boundary_guarantees_downstream`)。
+        ``extraction_id`` / ``translated_title`` / ``summary`` は ``ready`` から
+        取り出す (Stage 3 由来 snapshot)。
 
         category slug → id 解決を内部化し、未登録 slug は
         ``AssessmentCategoryMissingError`` で fail-fast (Layer 2-B 業務 invariant)。
@@ -70,10 +93,8 @@ class InScopeRepository:
 
         Raises:
             ``AssessmentCategoryMissingError``: AI が catalog 未登録の slug を返した
-
-        spec §4.3.1 に従い `index_elements=["extraction_id"]` で index を明示し、
-        他の制約違反 (FK / CHECK / NOT NULL) は例外として上に上げる。
         """
+        in_scope = call.result
         category_id = await self._get_category_id_by_slug(in_scope.category.value)
         if category_id is None:
             raise AssessmentCategoryMissingError(
@@ -89,7 +110,7 @@ class InScopeRepository:
                 topic=in_scope.topic,
                 category_id=category_id,
                 investor_take=in_scope.investor_take,
-                ai_model=ai_model,
+                ai_model=call.model_name,
             )
             .on_conflict_do_nothing(index_elements=["extraction_id"])
             .returning(InScopeAssessment.id)
@@ -98,6 +119,41 @@ class InScopeRepository:
         if row is None:
             return None
         return row.id, category_id
+
+    async def save_out_of_scope(
+        self,
+        call: AssessmentCall[OutOfScope],
+        *,
+        ready: ReadyForAssessment,
+    ) -> int | None:
+        """``AssessmentCall[OutOfScope]`` を受けて out-of-scope を永続化する。
+
+        in-scope 経路と対称: ``call.result.investor_take`` / ``call.model_name`` を
+        envelope から直接取り出し、Stage 3 由来 snapshot
+        (``translated_title`` / ``summary``) は ``ready`` から取り出す。
+        ``out_of_scope_assessments`` には category / topic は無いので外す。
+
+        Returns:
+            成功時: DB が採番した ``id``
+            race 敗北時 (期待した extraction_id への UNIQUE 違反): ``None``
+        """
+        out_of_scope = call.result
+        stmt = (
+            pg_insert(OutOfScopeAssessment)
+            .values(
+                extraction_id=ready.extraction_id,
+                translated_title=ready.translated_title,
+                summary=ready.summary,
+                investor_take=out_of_scope.investor_take,
+                ai_model=call.model_name,
+            )
+            .on_conflict_do_nothing(index_elements=["extraction_id"])
+            .returning(OutOfScopeAssessment.id)
+        )
+        row = (await self._session.execute(stmt)).first()
+        if row is None:
+            return None
+        return row.id
 
     async def _get_category_id_by_slug(self, slug: str) -> int | None:
         """カテゴリ slug から ID を取得する (Repository 内部使用)。"""

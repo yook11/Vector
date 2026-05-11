@@ -1,11 +1,15 @@
 """Stage 4 assessor 戻り値 envelope。
 
-Service 層で audit 焼付するために必要な情報 — AI の raw 応答 text、詰め替え前の
-``raw_category`` / ``raw_topic``、``prompt_version`` — を assessor 戻り値から
-運び上げる。Stage 3 ``ExtractionCall`` と同パターン。
+Stage 4 で 1 回の API call 中に確定する全事実 — 詰め替え済み ``result`` /
+AI の raw 応答 text / 詰め替え前の ``raw_category`` / ``raw_topic`` /
+``prompt_version`` / ``model_name`` — を 1 つの値に集約する。
+下流 (Repository / AuditRepository) はこの envelope だけ受け取れば、
+業務 INSERT も audit 焼付も完結する (caller が ``ai_model`` 等を別経路で
+引き回す必要がない)。
 
-PR2 では dead code として merge し、PR3 で assessor ``_call_api`` の
-``parse_assessment`` 経由化と同時に wire-in する。
+PEP 695 Generic で ``AssessmentCall[InScope]`` / ``AssessmentCall[OutOfScope]``
+として narrow し、``match call: case AssessmentCall(result=InScope())`` 経由で
+container 単位の型 narrowing を効かせる。
 
 設計詳細: ``specs/pipeline-events-stage4-assessment.md`` §AssessmentCall envelope
 """
@@ -18,13 +22,13 @@ from app.analysis.assessment.ai.schema import AssessmentResult
 
 
 @dataclass(frozen=True, slots=True)
-class AssessmentCall:
+class AssessmentCall[T: AssessmentResult]:
     """assessor の 1 回の API call の結果。
 
-    Service が audit 焼付できるよう、ドメイン詰め替え後の ``result`` に加えて
-    raw 応答情報を運ぶ。とりわけ ``OutOfScope`` 経路では ``result`` に
-    ``raw_category`` / ``raw_topic`` 情報が落ちるため、「何が ``out_of_scope``
-    判定だったのか」を audit に焼くには envelope 経由の運搬が必須。
+    ``T`` は ``InScope`` / ``OutOfScope`` のいずれかに narrow される。Service 層は
+    ``match call: case AssessmentCall(result=InScope()):`` で container ごと型を
+    絞り、対応する Repository method (``save_in_scope`` / ``save_out_of_scope``)
+    に envelope を 1 つ渡すだけで業務 INSERT + audit 焼付を完結させる。
 
     Attributes:
         result: ドメイン詰め替え済みの判定結果 (``InScope`` | ``OutOfScope``)。
@@ -35,10 +39,14 @@ class AssessmentCall:
         raw_topic: AI が出力した topic 文字列 (詰め替え前、``OutOfScope`` 経路でも
             保持)。``parse_assessment`` の strict 化により ``str`` 型は保証される。
         prompt_version: 呼び出し元 Prompt class の VERSION (8 文字 hash)。
+        model_name: ``BaseAssessor.MODEL`` ClassVar の値。Repository / Audit が
+            ``call.model_name`` で参照する (caller が ``ai_model`` を別引数で
+            引き回さない、`feedback_bc_boundary_guarantees_downstream`)。
     """
 
-    result: AssessmentResult
+    result: T
     raw_response: str
     raw_category: str
     raw_topic: str
     prompt_version: str
+    model_name: str

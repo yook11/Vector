@@ -105,7 +105,9 @@ def _ready(extraction: ArticleExtraction) -> ReadyForAssessment:
     )
 
 
-def _in_scope_call(category: InScopeCategory = InScopeCategory.AI) -> AssessmentCall:
+def _in_scope_call(
+    category: InScopeCategory = InScopeCategory.AI,
+) -> AssessmentCall[InScope]:
     return AssessmentCall(
         result=InScope(
             category=category,
@@ -116,24 +118,27 @@ def _in_scope_call(category: InScopeCategory = InScopeCategory.AI) -> Assessment
         raw_category=category.value,
         raw_topic="LLM benchmark",
         prompt_version="testver1",
+        model_name=_AI_MODEL,
     )
 
 
-def _out_of_scope_call() -> AssessmentCall:
+def _out_of_scope_call() -> AssessmentCall[OutOfScope]:
     return AssessmentCall(
         result=OutOfScope(investor_take="not relevant"),
         raw_response='{"category":"out_of_scope"}',
         raw_category="out_of_scope",
         raw_topic="celebrity gossip",
         prompt_version="testver1",
+        model_name=_AI_MODEL,
     )
 
 
 def _make_assessor(
-    *, return_envelope: AssessmentCall | None = None, side_effect: object = None
+    *,
+    return_envelope: AssessmentCall[InScope] | AssessmentCall[OutOfScope] | None = None,
+    side_effect: object = None,
 ) -> BaseAssessor:
     mock = MagicMock(spec=BaseAssessor)
-    type(mock).model_name = _AI_MODEL
     if side_effect is not None:
         mock.assess = AsyncMock(side_effect=side_effect)
     else:
@@ -277,9 +282,9 @@ async def test_race_lost_does_not_record_audit(
     )
 
     svc = AssessmentService(session_factory)
-    # 敗者経路では save() が None → Service も None を返して短絡する
+    # 敗者経路では save_in_scope() が None → Service も None を返して短絡する
     with patch(
-        "app.analysis.assessment.repository.InScopeRepository.save",
+        "app.analysis.assessment.repository.AssessmentRepository.save_in_scope",
         new=AsyncMock(return_value=None),
     ):
         result = await svc.execute(_ready(extraction), assessor)
@@ -462,7 +467,7 @@ async def test_out_of_scope_race_lost_does_not_record_audit(
     assessor = _make_assessor(return_envelope=_out_of_scope_call())
     svc = AssessmentService(session_factory)
     with patch(
-        "app.analysis.assessment.out_of_scope_repository.OutOfScopeRepository.save",
+        "app.analysis.assessment.repository.AssessmentRepository.save_out_of_scope",
         new=AsyncMock(return_value=None),
     ):
         result = await svc.execute(_ready(extraction), assessor)
