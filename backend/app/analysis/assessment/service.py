@@ -8,13 +8,13 @@ precondition (extraction 存在 + 未 in-scope 評価 + 未 out-of-scope 評価)
 本 Service は precondition 分岐を持たない。
 
 `match response: case InScope() / case OutOfScope()` の tagged-union dispatch は
-AI レスポンス境界 parse の正当な分岐として維持 (spec §1.3)。各 case で選ぶのは
-「永続化先 Repository」「audit 焼き callable」「log code」だけで、共通の post-save
-orchestration (audit + commit + ログ) は ``_finalize`` が 1 本で担う。
+AI レスポンス境界 parse の正当な分岐として維持 (spec §1.3)。各 case で
+永続化先 Repository / audit 焼き先を切り替え、post-save の順序
+(audit → commit → log) は両 arm で同一に保つ。
 
 楽観的ロック敗北 (broker 重複配信 / 並行 worker) は Repository.save が ``None`` を
-返す。``_finalize`` は ``None`` を返して短絡し、敗者は audit を焼かず commit も
-呼ばない (actor SSoT — 勝者 task が自身の audit を焼く、二重記録回避)。Task 層
+返す。敗者経路は ``None`` を返して短絡し、audit を焼かず commit も呼ばない
+(actor SSoT — 勝者 task が自身の audit を焼く、二重記録回避)。Task 層
 は ``None`` を観測したら Stage 5 chain を起動しない。勝者 task が crash 等で
 chain に失敗した case の救済は本 Service の責務外で、別経路の reconcile cron が
 担う。``AIProviderError`` は ACL boundary (``map_provider_to_assessment``) で
@@ -28,7 +28,6 @@ return → ``isinstance(result, InScopeAssessment)`` で Stage 5 chain を判定
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
 from typing import assert_never
 
 import structlog
@@ -107,89 +106,63 @@ class AssessmentService:
         async with self._session_factory() as session:
             match response:
                 case InScope():
-                    in_scope_repo = InScopeRepository(session)
-                    in_scope_saved = await in_scope_repo.save(
+                    in_scope_saved = await InScopeRepository(session).save(
                         response,
                         ready=ready,
                         ai_model=assessor.model_name,
                     )
-
-                    async def in_scope_audit(s: InScopeAssessment) -> None:
-                        await AssessmentAuditRepository(session).append_in_scope(
-                            ready=ready,
-                            envelope=call,
-                            assessment=s,
-                            ai_model=assessor.model_name,
-                            category_slug=response.category.value,
-                            code="assessed_in_scope",
+                    # race lost — audit / commit は不要 (勝者 task が audit を焼く、
+                    # 二重記録回避)。reconcile cron に救済を委譲。
+                    if in_scope_saved is None:
+                        logger.info(
+                            "assessment_in_scope_concurrent_write",
+                            extraction_id=extraction_id,
                         )
-
-                    return await self._finalize(
-                        session,
-                        saved=in_scope_saved,
-                        audit=in_scope_audit,
-                        extraction_id=extraction_id,
-                        log_code="in_scope",
+                        return None
+                    # winner — 業務 INSERT + audit を同一 tx で commit
+                    await AssessmentAuditRepository(session).append_in_scope(
+                        ready=ready,
+                        envelope=call,
+                        assessment=in_scope_saved,
+                        ai_model=assessor.model_name,
+                        category_slug=response.category.value,
+                        code="assessed_in_scope",
                     )
+                    await session.commit()
+                    logger.info(
+                        "assessment_in_scope_completed",
+                        extraction_id=extraction_id,
+                    )
+                    return in_scope_saved
 
                 case OutOfScope():
-                    out_of_scope_repo = OutOfScopeRepository(session)
-                    out_of_scope_saved = await out_of_scope_repo.save(
+                    out_of_scope_saved = await OutOfScopeRepository(session).save(
                         response,
                         ready=ready,
                         ai_model=assessor.model_name,
                     )
-
-                    async def out_of_scope_audit(s: OutOfScopeAssessment) -> None:
-                        await AssessmentAuditRepository(session).append_out_of_scope(
-                            ready=ready,
-                            envelope=call,
-                            assessment=s,
-                            ai_model=assessor.model_name,
-                            code="assessed_out_of_scope",
+                    # race lost — audit / commit は不要 (勝者 task が audit を焼く、
+                    # 二重記録回避)。reconcile cron に救済を委譲。
+                    if out_of_scope_saved is None:
+                        logger.info(
+                            "assessment_out_of_scope_concurrent_write",
+                            extraction_id=extraction_id,
                         )
-
-                    return await self._finalize(
-                        session,
-                        saved=out_of_scope_saved,
-                        audit=out_of_scope_audit,
-                        extraction_id=extraction_id,
-                        log_code="out_of_scope",
+                        return None
+                    # winner — 業務 INSERT + audit を同一 tx で commit
+                    await AssessmentAuditRepository(session).append_out_of_scope(
+                        ready=ready,
+                        envelope=call,
+                        assessment=out_of_scope_saved,
+                        ai_model=assessor.model_name,
+                        code="assessed_out_of_scope",
                     )
+                    await session.commit()
+                    logger.info(
+                        "assessment_out_of_scope_completed",
+                        extraction_id=extraction_id,
+                    )
+                    return out_of_scope_saved
 
                 case _:
                     assert_never(response)
-
-    async def _finalize[E: (InScopeAssessment, OutOfScopeAssessment)](
-        self,
-        session: AsyncSession,
-        *,
-        saved: E | None,
-        audit: Callable[[E], Awaitable[None]],
-        extraction_id: int,
-        log_code: str,
-    ) -> E | None:
-        """save 結果を確定 Entity に解決し、winner なら audit と業務を同一 tx で
-        commit。
-
-        race lost (saved=None) は ``None`` を返して短絡する。敗者は audit を焼かず
-        (actor SSoT — 勝者 task が自身の audit を焼く、二重記録回避)、commit も
-        呼ばない (このセッションは ON CONFLICT DO NOTHING で 0 行のみ、書き込みなし)。
-        勝者の chain 起動失敗 case の救済は reconcile cron 経路に委ねる。
-        """
-        # race lost — None 短絡 (audit / commit は不要、reconcile cron に委譲)
-        if saved is None:
-            logger.info(
-                f"assessment_{log_code}_concurrent_write",
-                extraction_id=extraction_id,
-            )
-            return None
-
-        # winner — 業務 INSERT + audit を同一 tx で commit
-        await audit(saved)
-        await session.commit()
-        logger.info(
-            f"assessment_{log_code}_completed",
-            extraction_id=extraction_id,
-        )
-        return saved
