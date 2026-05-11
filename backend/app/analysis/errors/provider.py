@@ -27,7 +27,13 @@ class AIProviderError(Exception):
 
     具体型は本クラスと Layer 1 marker の **多重継承** で定義する。MRO 規約: 左に
     origin (本クラス)、右に dispatch marker。
+
+    具体 subclass は ``CODE: ClassVar[str]`` を必ず override する (本クラスは
+    抽象 marker、直接 instantiate しない)。型注釈のみ宣言することで Layer 2-A
+    全 subclass が ``CODE`` を持つ不変条件を型システム上で表明する。
     """
+
+    CODE: ClassVar[str]
 
 
 # ---------------------------------------------------------------------------
