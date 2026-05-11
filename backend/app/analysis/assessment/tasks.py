@@ -16,10 +16,12 @@ in-scope 判定で永続化に成功した場合は ``EmbeddingTrigger`` (analys
 from __future__ import annotations
 
 import structlog
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from taskiq import Context, TaskiqDepends
 
 from app.analysis._limiter_factory import _build_limiters
 from app.analysis.assessment.ai.base import BaseAssessor
+from app.analysis.assessment.audit_repository import AssessmentAuditRepository
 from app.analysis.assessment.domain.ready import (
     AssessmentTrigger,
     ReadyForAssessment,
@@ -28,7 +30,6 @@ from app.analysis.assessment.errors import (
     AssessmentRecoverableError,
     AssessmentTerminalSkipError,
 )
-from app.analysis.assessment.failure_recording import record_assessment_failure
 from app.analysis.assessment.repository import AssessmentRepository
 from app.analysis.assessment.service import AssessmentService
 from app.analysis.embedding.domain.ready import EmbeddingTrigger
@@ -37,8 +38,50 @@ from app.analysis.rate_limiter import (
     RateLimitExceededError as _RateLimitExceededError,
 )
 from app.brokers import broker_analysis, is_last_attempt
+from app.observability.redact import redact_secrets
 
 logger = structlog.get_logger(__name__)
+
+
+async def _record_failure(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    ready: ReadyForAssessment,
+    exc: BaseException,
+    attempt: int,
+) -> None:
+    """Stage 4 失敗 1 件を記録する (caller 観点: business tx と独立に焼ける)。
+
+    実装は別 session / 別 tx を ``session_factory`` で開き
+    ``AssessmentAuditRepository.append_failure`` を 1 行 append + commit する。
+    Repository は class API のみで tx 境界を握らないため、別 session 開閉と
+    commit は本 helper (Task 層) の責務。
+
+    audit 書込みは best-effort: DB 落ち / migration 漏れ / schema 不整合などで
+    INSERT または commit が失敗しても、業務 task を殺さないよう例外を呑んで
+    ``assessment_failure_audit_dropped`` 構造ログにフォールバックする
+    (運用シグナル、監査の audit ではない)。SDK exception message に key prefix
+    / Authorization header が混入しうるため、DB payload と同 pattern で
+    ログ経路にも ``redact_secrets`` を通す (red-team chain γ-2 対称化)。
+    """
+    try:
+        async with session_factory() as session:
+            await AssessmentAuditRepository(session).append_failure(
+                ready=ready, exc=exc, attempt=attempt
+            )
+            await session.commit()
+    except Exception as audit_exc:
+        logger.exception(
+            "assessment_failure_audit_dropped",
+            extraction_id=ready.extraction_id,
+            attempt=attempt,
+            business_error_class=f"{type(exc).__module__}.{type(exc).__qualname__}",
+            business_error_message=redact_secrets(str(exc))[:500],
+            audit_error_class=(
+                f"{type(audit_exc).__module__}.{type(audit_exc).__qualname__}"
+            ),
+            audit_error_message=redact_secrets(str(audit_exc))[:500],
+        )
 
 
 @broker_analysis.task(
@@ -107,9 +150,7 @@ async def assess_content(
     except AssessmentTerminalSkipError as exc:
         # Layer 1 marker (Layer 2-B AssessmentCategoryMissingError も継承で拾う):
         # 永続的失敗 → audit 焼いて即 return (taskiq retry なし、extraction 保持)。
-        await record_assessment_failure(
-            session_factory, ready=ready, exc=exc, attempt=attempt
-        )
+        await _record_failure(session_factory, ready=ready, exc=exc, attempt=attempt)
         logger.warning(
             "assess_content_terminal_skip",
             extraction_id=ready.extraction_id,
@@ -119,9 +160,7 @@ async def assess_content(
     except AssessmentRecoverableError as exc:
         # Layer 1 marker (Layer 2-B AssessmentResponseInvalidError も継承で拾う):
         # 一時的失敗 → audit 焼いて is_last_attempt でトリアージ。
-        await record_assessment_failure(
-            session_factory, ready=ready, exc=exc, attempt=attempt
-        )
+        await _record_failure(session_factory, ready=ready, exc=exc, attempt=attempt)
         if is_last_attempt(ctx):
             logger.warning(
                 "assess_content_recoverable_exhausted",
@@ -132,9 +171,7 @@ async def assess_content(
         raise  # taskiq 再試行
     except Exception as exc:
         # catch-all (想定外): audit 焼いて exhausted なら return、否則 raise。
-        await record_assessment_failure(
-            session_factory, ready=ready, exc=exc, attempt=attempt
-        )
+        await _record_failure(session_factory, ready=ready, exc=exc, attempt=attempt)
         if is_last_attempt(ctx):
             logger.exception(
                 "assess_content_unexpected_exhausted",
