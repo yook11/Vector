@@ -959,7 +959,7 @@ class AssessmentPayload(BasePipelineEventPayload):
 | 状態 | event_type | outcome_code | category | code | payload で non-None になる主 field |
 |---|---|---|---|---|---|
 | in-scope 成功 | `succeeded` | `assessed_in_scope` | `success` | `assessed_in_scope` | `assessment_id` / `category_id` / `category_slug` / `topic` / `investor_take` |
-| out-of-scope 成功 | `succeeded` | `assessed_out_of_scope` | `success` | `assessed_out_of_scope` | `assessment_id` のみ (out-of-scope は in-scope 系 field を持たない) |
+| out-of-scope 成功 | `succeeded` | `assessed_out_of_scope` | `success` | `assessed_out_of_scope` | `assessment_id` / `investor_take` (PR #447 対称化追従。`category_id` / `category_slug` / `topic` は in-scope 固有のため None) |
 | 失敗 (Layer 2-A) | `failed` | `ai_error_*` | `retryable` / `non_retryable_keep_extraction` | `ai_error_*` | `error_message` / `error_chain` (Base) + `ai_raw_response` (該当時) |
 | 失敗 (Layer 2-B) | `failed` | `assessment_*` | `retryable` / `non_retryable_keep_extraction` | `assessment_*` | 同上 |
 | 失敗 (catch-all) | `failed` | `unexpected_error` | `unknown` | `unexpected_error` | 同上 |
@@ -987,8 +987,8 @@ tx 境界は呼出側が握る (本 class は `commit` を呼ばない)。
 
 | method | 用途 | category | code | 呼ばれる場所 |
 |---|---|---|---|---|
-| `append_in_scope(*, ready, envelope, assessment, code)` | in-scope 成功 | `success` | caller 渡し (`"assessed_in_scope"`) | Service `_handle_in_scope` 内、業務 INSERT と同 tx |
-| `append_out_of_scope(*, ready, envelope, assessment, code)` | out-of-scope 成功 | `success` | caller 渡し (`"assessed_out_of_scope"`) | Service `_handle_out_of_scope` 内、同 tx |
+| `append_in_scope(*, ready, envelope, assessment, in_scope, ai_model)` | in-scope 成功 | `success` | Repository 内 hardcode (`"assessed_in_scope"`) | Service `_handle_in_scope` 内、業務 INSERT と同 tx |
+| `append_out_of_scope(*, ready, envelope, assessment, ai_model)` | out-of-scope 成功 | `success` | Repository 内 hardcode (`"assessed_out_of_scope"`) | Service `_handle_out_of_scope` 内、同 tx |
 | `append_failure(*, ready, exc, attempt)` | Retryable / NonRetryableKeep / catch-all | exc から自動導出 | exc から自動導出 | Task 層 `record_assessment_failure` 経由、別 session 別 tx |
 
 → Stage 3 の 4 method (extracted/noise/drop_article/failure) と比較して **Drop method なし** が唯一の構造差分。
@@ -1005,16 +1005,17 @@ class AssessmentAuditRepository:
         self,
         *,
         ready: ReadyForAssessment,
-        envelope: AssessmentCall,    # classifier `_call_once` 戻り値
+        envelope: AssessmentCall,    # assessor `_call_once` 戻り値
         assessment: InScopeAssessment,
-        code: str,
+        in_scope: InScope,           # AI 境界型 — category.value を slug に焼く
+        ai_model: str,
     ) -> None:
         source_name = await self._resolve_source_name(ready.article_id)
         payload = AssessmentPayload(
             kind="assessment",
             source_name=source_name,
             extraction_id=ready.extraction_id,
-            ai_model=envelope.model_name,
+            ai_model=ai_model,
             prompt_version=envelope.prompt_version,
             input_text=ready.summary[:_INPUT_TEXT_LIMIT],
             input_text_length=len(ready.summary),
@@ -1023,18 +1024,18 @@ class AssessmentAuditRepository:
             raw_topic=envelope.raw_topic,
             assessment_id=assessment.id,
             category_id=assessment.category_id,
-            category_slug=envelope.raw_category,
+            category_slug=in_scope.category.value,  # catalog 確認後 slug
             topic=str(assessment.topic),
             investor_take=assessment.investor_take,
         )
         await self._events.append(
             stage=Stage.ASSESSMENT,
             event_type=EventType.SUCCEEDED,
-            outcome_code=code,
+            outcome_code=_IN_SCOPE_OUTCOME_CODE,  # Repository 内 hardcode
             payload=payload,
             article_id=ready.article_id,
             category=Layer1Category.SUCCESS,
-            code=code,
+            code=_IN_SCOPE_OUTCOME_CODE,
         )
 
     async def append_out_of_scope(
@@ -1043,10 +1044,20 @@ class AssessmentAuditRepository:
         ready: ReadyForAssessment,
         envelope: AssessmentCall,
         assessment: OutOfScopeAssessment,
-        code: str,
+        ai_model: str,
     ) -> None:
-        # in-scope と同型、ただし category_id / topic / investor_take は None
-        ...
+        # in-scope と同型、ただし category_id / category_slug / topic は None。
+        # PR #447 対称化追従で investor_take は本体 DB と一致させて非 None で焼く。
+        payload = AssessmentPayload(
+            ...,
+            assessment_id=assessment.id,
+            investor_take=assessment.investor_take,
+        )
+        await self._events.append(
+            ...,
+            outcome_code=_OUT_OF_SCOPE_OUTCOME_CODE,  # Repository 内 hardcode
+            code=_OUT_OF_SCOPE_OUTCOME_CODE,
+        )
 
     async def append_failure(
         self,
@@ -1216,7 +1227,8 @@ class AssessmentService:
             ready=ready,
             envelope=envelope,
             assessment=saved,
-            code="assessed_in_scope",
+            in_scope=in_scope,           # AI 境界型を直接渡す
+            ai_model=model_name,
         )
         await session.commit()
 

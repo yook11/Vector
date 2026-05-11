@@ -222,11 +222,12 @@ async def test_out_of_scope_success_records_audit(
     payload = ev.payload
     assert payload["extraction_id"] == extraction.id
     assert payload["assessment_id"] == result.id
-    # in-scope 系 field は全て None (spec 状態識別表)
+    # PR #447 対称化追従: investor_take は本体 DB と一致 (非 None)
+    assert payload.get("investor_take") == result.investor_take
+    # in-scope 固有 field のみ None (category_id / category_slug / topic)
     assert payload.get("category_id") is None
     assert payload.get("category_slug") is None
     assert payload.get("topic") is None
-    assert payload.get("investor_take") is None
     # in-scope 経路と対称に Stage 3 由来 snapshot が Entity に保持されている
     assert result.translated_title == extraction.translated_title
     assert result.summary == extraction.summary

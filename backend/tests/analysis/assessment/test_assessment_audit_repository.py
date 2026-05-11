@@ -1,13 +1,17 @@
-"""``AssessmentAuditRepository`` の semantic method 単独テスト (PR5)。
+"""``AssessmentAuditRepository`` の semantic method 単独テスト。
 
 audit row の shape SSoT が repository に集約されたことを検証する:
 
 - ``append_in_scope`` で
   ``category=success`` + ``code="assessed_in_scope"`` + payload に
   ``category_id`` / ``category_slug`` / ``topic`` / ``investor_take`` 詰まる
+  (``category_slug`` は ``in_scope.category.value`` から Repository 内で導出、
+  ``raw_category`` envelope 由来とは独立)
 - ``append_out_of_scope`` で
   ``category=success`` + ``code="assessed_out_of_scope"`` + payload に
-  ``assessment_id`` のみ非 None (in-scope 系 4 field は全て None)
+  ``assessment_id`` / ``investor_take`` が非 None
+  (PR #447 対称化追従、in-scope 固有 field の ``category_id`` /
+  ``category_slug`` / ``topic`` のみ None)
 - ``append_failure`` で **exc 型による 3 dispatch + Layer 2-B + catch-all** が動作:
   - ``AssessmentRecoverableError`` → ``category=retryable``
   - ``AssessmentTerminalSkipError`` → ``category=non_retryable_keep_extraction``
@@ -16,11 +20,9 @@ audit row の shape SSoT が repository に集約されたことを検証する:
   - ``AssessmentCategoryMissingError`` (Layer 2-B) →
     ``non_retryable_keep_extraction`` / ``code="assessment_category_missing"``
   - 想定外 ``RuntimeError`` → ``category=unknown`` / ``code="unexpected_error"``
-- ``error_chain`` が ``__cause__`` 経由で 2 段以上を記録 (PR6 で
-  ``raise X from exc`` 想定)
+- ``error_chain`` が ``__cause__`` 経由で 2 段以上を記録
 - ``error_message`` が ``redact_secrets()`` 経由
 - ``ai_raw_response`` が成功・失敗両経路で ``[:_AI_RAW_RESPONSE_LIMIT]`` 切詰
-- ``category_slug`` (caller 渡し) と ``raw_category`` (envelope 由来) が独立
 - repository は ``commit`` を呼ばない (caller の tx 境界保持)
 """
 
@@ -115,15 +117,25 @@ def _ready(
     )
 
 
-def _in_scope_envelope(*, raw_response: str = '{"category":"ai"}') -> AssessmentCall:
+def _make_in_scope(category: InScopeCategory = InScopeCategory.AI) -> InScope:
+    """``append_in_scope`` に渡す AI 境界型を組み立てる。"""
+    return InScope(
+        category=category,
+        topic=TopicName("llm benchmark"),
+        investor_take="bullish",
+    )
+
+
+def _in_scope_envelope(
+    *,
+    raw_response: str = '{"category":"ai"}',
+    raw_category: str = "ai",
+    in_scope: InScope | None = None,
+) -> AssessmentCall:
     return AssessmentCall(
-        result=InScope(
-            category=InScopeCategory.AI,
-            topic=TopicName("llm benchmark"),
-            investor_take="bullish",
-        ),
+        result=in_scope if in_scope is not None else _make_in_scope(),
         raw_response=raw_response,
-        raw_category="ai",
+        raw_category=raw_category,
         raw_topic="LLM Benchmark",
         prompt_version="abcd1234",
     )
@@ -232,9 +244,8 @@ async def test_append_in_scope_records_success_with_code(
             ready=_ready(extraction),
             envelope=_in_scope_envelope(),
             assessment=in_scope,
+            in_scope=_make_in_scope(),
             ai_model=_AI_MODEL,
-            category_slug="ai",
-            code="assessed_in_scope",
         )
         await session.commit()
 
@@ -252,44 +263,40 @@ async def test_append_in_scope_records_success_with_code(
 
 
 @pytest.mark.asyncio
-async def test_append_in_scope_records_category_slug_from_caller(
+async def test_append_in_scope_derives_category_slug_from_in_scope(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
     sample_categories: list[Category],
 ) -> None:
-    """category_slug は caller 渡しで envelope.raw_category と独立して格納される。
+    """``category_slug`` は ``in_scope.category.value`` から Repository 内で導出。
 
-    raw_category=AI 生値 (validation 前) / category_slug=catalog 確認後 slug の
-    意味分離を test で固定する。
+    ``raw_category`` (envelope 由来、validation 前生値) と意味分離されて
+    格納されることを固定する (caller は固定文字列を渡さない)。
     """
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
-    in_scope = await _persist_in_scope(db_session, extraction, sample_categories[0])
-    # envelope.raw_category と異なる値を caller 渡し
-    envelope = _in_scope_envelope()
-    envelope_with_diff_raw = AssessmentCall(
-        result=envelope.result,
-        raw_response=envelope.raw_response,
+    in_scope_orm = await _persist_in_scope(db_session, extraction, sample_categories[0])
+    in_scope_response = _make_in_scope(category=InScopeCategory.AI)
+    # envelope.raw_category と category_slug を区別するため envelope 側だけ異常値
+    envelope = _in_scope_envelope(
+        in_scope=in_scope_response,
         raw_category="ai_raw_from_envelope",
-        raw_topic=envelope.raw_topic,
-        prompt_version=envelope.prompt_version,
     )
 
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_in_scope(
             ready=_ready(extraction),
-            envelope=envelope_with_diff_raw,
-            assessment=in_scope,
+            envelope=envelope,
+            assessment=in_scope_orm,
+            in_scope=in_scope_response,
             ai_model=_AI_MODEL,
-            category_slug="ai_catalog_confirmed",  # caller が渡す
-            code="assessed_in_scope",
         )
         await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
     assert ev.payload["raw_category"] == "ai_raw_from_envelope"  # envelope 由来
-    assert ev.payload["category_slug"] == "ai_catalog_confirmed"  # caller 渡し
+    assert ev.payload["category_slug"] == "ai"  # in_scope.category.value 由来
 
 
 @pytest.mark.asyncio
@@ -309,9 +316,8 @@ async def test_append_in_scope_resolves_article_id_from_extraction(
             ready=_ready(extraction),
             envelope=_in_scope_envelope(),
             assessment=in_scope,
+            in_scope=_make_in_scope(),
             ai_model=_AI_MODEL,
-            category_slug="ai",
-            code="assessed_in_scope",
         )
         await session.commit()
 
@@ -336,9 +342,8 @@ async def test_append_in_scope_resolves_source_name(
             ready=_ready(extraction),
             envelope=_in_scope_envelope(),
             assessment=in_scope,
+            in_scope=_make_in_scope(),
             ai_model=_AI_MODEL,
-            category_slug="ai",
-            code="assessed_in_scope",
         )
         await session.commit()
 
@@ -363,9 +368,8 @@ async def test_append_in_scope_does_not_commit(
             ready=_ready(extraction),
             envelope=_in_scope_envelope(),
             assessment=in_scope,
+            in_scope=_make_in_scope(),
             ai_model=_AI_MODEL,
-            category_slug="ai",
-            code="assessed_in_scope",
         )
         # 意図的に commit しない (rollback で消える)
 
@@ -393,26 +397,15 @@ async def test_append_in_scope_truncates_raw_response(
     extraction = await _make_extraction(db_session, article)
     in_scope = await _persist_in_scope(db_session, extraction, sample_categories[0])
     huge_raw = "x" * 5000
-    envelope = AssessmentCall(
-        result=InScope(
-            category=InScopeCategory.AI,
-            topic=TopicName("llm benchmark"),
-            investor_take="bullish",
-        ),
-        raw_response=huge_raw,
-        raw_category="ai",
-        raw_topic="LLM Benchmark",
-        prompt_version="abcd1234",
-    )
+    envelope = _in_scope_envelope(raw_response=huge_raw)
 
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_in_scope(
             ready=_ready(extraction),
             envelope=envelope,
             assessment=in_scope,
+            in_scope=_make_in_scope(),
             ai_model=_AI_MODEL,
-            category_slug="ai",
-            code="assessed_in_scope",
         )
         await session.commit()
 
@@ -443,7 +436,6 @@ async def test_append_out_of_scope_records_success_with_code(
             envelope=_out_of_scope_envelope(),
             assessment=out_of_scope,
             ai_model=_AI_MODEL,
-            code="assessed_out_of_scope",
         )
         await session.commit()
 
@@ -455,15 +447,16 @@ async def test_append_out_of_scope_records_success_with_code(
 
 
 @pytest.mark.asyncio
-async def test_append_out_of_scope_payload_has_only_assessment_id(
+async def test_append_out_of_scope_records_investor_take(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """spec 状態識別表 line 962: out-of-scope は assessment_id のみ非 None。
+    """PR #447 対称化追従: out-of-scope payload は ``investor_take`` を持つ。
 
-    in-scope 系 4 field (category_id / category_slug / topic / investor_take)
-    は全て None。
+    本体 DB (``out_of_scope_assessments.investor_take``) と audit payload の
+    情報量を一致させる。in-scope 固有 field (``category_id`` /
+    ``category_slug`` / ``topic``) のみ None。
     """
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
@@ -475,16 +468,16 @@ async def test_append_out_of_scope_payload_has_only_assessment_id(
             envelope=_out_of_scope_envelope(),
             assessment=out_of_scope,
             ai_model=_AI_MODEL,
-            code="assessed_out_of_scope",
         )
         await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
-    assert ev.payload["assessment_id"] == out_of_scope.id  # 非 None
+    assert ev.payload["assessment_id"] == out_of_scope.id
+    assert ev.payload["investor_take"] == out_of_scope.investor_take  # 非 None
+    # in-scope 固有 field のみ None
     assert ev.payload["category_id"] is None
     assert ev.payload["category_slug"] is None
     assert ev.payload["topic"] is None
-    assert ev.payload["investor_take"] is None
 
 
 # ---------------------------------------------------------------------------

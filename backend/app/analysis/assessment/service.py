@@ -124,9 +124,8 @@ class AssessmentService:
                         ready=ready,
                         envelope=call,
                         assessment=in_scope_saved,
+                        in_scope=response,
                         ai_model=assessor.model_name,
-                        category_slug=response.category.value,
-                        code="assessed_in_scope",
                     )
                     await session.commit()
                     logger.info(
@@ -155,7 +154,6 @@ class AssessmentService:
                         envelope=call,
                         assessment=out_of_scope_saved,
                         ai_model=assessor.model_name,
-                        code="assessed_out_of_scope",
                     )
                     await session.commit()
                     logger.info(
