@@ -31,7 +31,6 @@ async def _build_analysis(
     *,
     url: str,
     embedding: list[float] | None = None,
-    embedding_model: str | None = None,
 ) -> InScopeAssessment:
     """Stage 2 完了済みの分析行を 1 件作成する。"""
     article = Article(
@@ -60,7 +59,6 @@ async def _build_analysis(
         topic="embedding test",
         category_id=category_id,
         embedding=embedding,
-        embedding_model=embedding_model,
     )
     db_session.add(analysis)
     await db_session.commit()
@@ -117,7 +115,6 @@ async def test_try_load_returns_none_when_already_embedded(
         sample_categories[0].id,
         url="https://example.com/load-existing",
         embedding=_zero_vector(),
-        embedding_model="cl-nagoya/ruri-v3-310m",
     )
     repo = EmbeddingRepository(db_session)
     assert await repo.try_load_for_embedding(analysis.id) is None
@@ -154,7 +151,6 @@ async def test_save_writes_embedding_and_returns_true(
     saved = await repo.save(
         _vector(0.3),
         analysis_id=analysis_id,
-        model_name="cl-nagoya/ruri-v3-310m",
     )
     await db_session.commit()
 
@@ -163,7 +159,6 @@ async def test_save_writes_embedding_and_returns_true(
     refetched = await db_session.get(InScopeAssessment, analysis_id)
     assert refetched is not None
     assert refetched.embedding is not None
-    assert refetched.embedding_model == "cl-nagoya/ruri-v3-310m"
 
 
 @pytest.mark.asyncio
@@ -179,7 +174,6 @@ async def test_save_returns_false_on_concurrent_write(
         sample_categories[0].id,
         url="https://example.com/already-saved",
         embedding=_zero_vector(),
-        embedding_model="cl-nagoya/ruri-v3-310m",
     )
     analysis_id = analysis.id
 
@@ -187,7 +181,6 @@ async def test_save_returns_false_on_concurrent_write(
     saved = await repo.save(
         _vector(0.7),
         analysis_id=analysis_id,
-        model_name="cl-nagoya/ruri-v3-310m",
     )
 
     assert saved is False
@@ -209,6 +202,5 @@ async def test_save_returns_false_for_unknown_analysis_id(
     saved = await repo.save(
         _vector(),
         analysis_id=999_999,
-        model_name="cl-nagoya/ruri-v3-310m",
     )
     assert saved is False

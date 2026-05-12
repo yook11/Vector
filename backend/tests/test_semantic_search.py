@@ -71,7 +71,6 @@ async def _create_article(
         investor_take="Test investor_take",
         ai_model="gemini-2.0-flash",
         embedding=embedding,
-        embedding_model="text-embedding-004" if embedding else None,
         topic=topic,
         category_id=category_id,
     )

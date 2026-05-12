@@ -87,12 +87,15 @@ class EmbeddingRepository:
         vector: EmbeddingVector,
         *,
         analysis_id: int,
-        model_name: str,
     ) -> bool:
         """``EmbeddingVector`` を ``in_scope_assessments`` 行に UPDATE で永続化する。
 
         ``WHERE id = :analysis_id AND embedding IS NULL`` の楽観ロックで並行
         save を構造的に解消する。
+
+        embedding カラムのみを更新する。モデル名は ``pipeline_events.payload``
+        (audit) を SSoT として記録するため、業務行には焼かない
+        (feedback_outcome_purification)。
 
         commit は呼び出し側 (Service) が行う。
 
@@ -107,10 +110,7 @@ class EmbeddingRepository:
                 InScopeAssessment.id == analysis_id,
                 InScopeAssessment.embedding.is_(None),
             )
-            .values(
-                embedding=vector.to_list(),
-                embedding_model=model_name,
-            )
+            .values(embedding=vector.to_list())
             .returning(InScopeAssessment.id)
         )
         row = (await self._session.execute(stmt)).first()

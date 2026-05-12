@@ -265,7 +265,7 @@ async def test_pending_embedding_returns_analysis_with_null_embedding(
         ai_model="m",
         topic="ai chip",
         category_id=sample_categories[0].id,
-        # embedding / embedding_model はあえて未指定 → NULL
+        # embedding はあえて未指定 → NULL
     )
     db_session.add(analysis)
     await db_session.commit()
@@ -312,7 +312,6 @@ async def test_pending_embedding_excludes_already_embedded(
         topic="ai chip",
         category_id=sample_categories[0].id,
         embedding=[0.1] * 768,
-        embedding_model="ruri-v3-310m",
     )
     db_session.add(analysis)
     await db_session.commit()

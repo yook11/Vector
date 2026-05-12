@@ -142,7 +142,6 @@ async def _build_analysis(
         topic="embedding service",
         category_id=category_id,
         embedding=embedding,
-        embedding_model=("cl-nagoya/ruri-v3-310m" if embedding is not None else None),
     )
     db_session.add(analysis)
     await db_session.flush()
@@ -210,7 +209,6 @@ async def test_execute_persists_embedding_on_success(
     refetched = await db_session.get(InScopeAssessment, analysis_id)
     assert refetched is not None
     assert refetched.embedding is not None
-    assert refetched.embedding_model == "cl-nagoya/ruri-v3-310m"
 
     # 成功 audit が 1 行焼かれていること
     ev = await _fetch_audit(db_session, article_id)

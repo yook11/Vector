@@ -83,7 +83,6 @@ class EmbeddingService:
             saved = await EmbeddingRepository(session).save(
                 vector,
                 analysis_id=ready.analysis_id,
-                model_name=embedder.MODEL,
             )
             if not saved:
                 # 楽観ロックにより並行 update で先に書き込まれていた → 業務正常パス。

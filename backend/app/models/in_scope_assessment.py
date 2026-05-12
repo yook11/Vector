@@ -68,13 +68,6 @@ class InScopeAssessment(Base):
             r"topic ~ '^[a-z0-9]+( [a-z0-9]+){0,2}$'",
             name="ck_in_scope_assessments_topic_format",
         ),
-        # embedding と embedding_model は片方だけ NULL の状態を許さない。
-        # ドメインの「未生成 ⇔ 生成済み」2 状態モデルを DB で構造的に強制する。
-        CheckConstraint(
-            "(embedding IS NULL AND embedding_model IS NULL) "
-            "OR (embedding IS NOT NULL AND embedding_model IS NOT NULL)",
-            name="ck_in_scope_assessments_embedding_consistency",
-        ),
         # サイドバーの直近 24 時間集計クエリ向けの複合インデックス。
         # 単独 ix_in_scope_assessments_category_id は作らない（複合の左端でカバー）。
         Index(
@@ -96,7 +89,6 @@ class InScopeAssessment(Base):
         DateTime(timezone=True), server_default=func.now()
     )
     embedding: Mapped[list[float] | None] = mapped_column(HALFVEC(768))
-    embedding_model: Mapped[str | None] = mapped_column(String(100))
     # 表示専用の自由記述ラベル。TopicNameType により VO ↔ str を双方向強制。
     topic: Mapped[TopicName] = mapped_column()
     # 第一級フィルタ軸。リレーションは YAGNI で持たない（必要時に
