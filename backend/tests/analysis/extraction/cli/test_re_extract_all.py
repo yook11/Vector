@@ -101,7 +101,7 @@ async def _seed_article_with_extraction(
     await db_session.refresh(article)
 
     repo = ExtractionRepository(db_session)
-    await repo.save(
+    await repo.save_signal(
         ExtractionCall(
             result=Signal(
                 title_ja="旧",

@@ -28,19 +28,17 @@ logger = structlog.get_logger(__name__)
 
 
 class ExtractionExistenceProtocol(Protocol):
-    """Stage C 進行判定用 Extraction Repository contract (cheap exists 判定)。"""
-
-    async def exists_for_article(self, article_id: int) -> bool: ...
-
-
-class NoiseExistenceProtocol(Protocol):
-    """Stage C 進行判定用 Noise Repository contract (cheap exists 判定)。
+    """Stage C 進行判定用 ExtractionRepository contract (cheap exists 判定)。
 
     Stage 1 signal/noise フィルタの導入により、同一 article に対して
     ``article_extractions`` または ``extraction_noises`` のどちらかが既に
-    存在する状態を Ready 型構築時に弾く必要がある。"""
+    存在する状態を Ready 型構築時に弾く必要がある。Stage 3 永続化層は
+    ``ExtractionRepository`` 1 クラスに集約されているため、本 Protocol は
+    signal / noise 両 exists 判定をまとめて提供する。"""
 
-    async def exists_for_article(self, article_id: int) -> bool: ...
+    async def signal_exists_for_article(self, article_id: int) -> bool: ...
+
+    async def noise_exists_for_article(self, article_id: int) -> bool: ...
 
 
 class ReadyForExtraction(BaseModel):
@@ -73,7 +71,6 @@ class ReadyForExtraction(BaseModel):
         original_title: str,
         original_content: str,
         extraction_repo: ExtractionExistenceProtocol,
-        noise_repo: NoiseExistenceProtocol,
     ) -> ReadyForExtraction | None:
         """Article 永続化から Stage C へ advance できるかを判定する gatekeeper。
 
@@ -88,13 +85,16 @@ class ReadyForExtraction(BaseModel):
         signature は型に依存しない data 値の kwargs を採用する。Phase 1/2 では
         単一 BC 内のため source Entity 1 引数で良かった。
 
+        signal / noise 両 exists 判定は ``ExtractionRepository`` 1 つで賄える
+        (Stage 4 ``AssessmentRepository`` と同型)。
+
         Returns:
             進める場合: `ReadyForExtraction`
             進めない場合: `None` (業務正常状態、例外ではない — spec §4.5 Failure mode 1)
         """
-        if await extraction_repo.exists_for_article(article_id):
+        if await extraction_repo.signal_exists_for_article(article_id):
             return None
-        if await noise_repo.exists_for_article(article_id):
+        if await extraction_repo.noise_exists_for_article(article_id):
             return None
         if len(original_content) > cls.MAX_CONTENT_LENGTH:
             logger.warning(

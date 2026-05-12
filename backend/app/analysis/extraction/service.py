@@ -33,7 +33,6 @@ from app.analysis.extraction.ai.envelope import ExtractionCall
 from app.analysis.extraction.audit_repository import ExtractionAuditRepository
 from app.analysis.extraction.domain import Extraction, Noise, Signal
 from app.analysis.extraction.domain.ready import ReadyForExtraction
-from app.analysis.extraction.noise_repository import NoiseRepository
 from app.analysis.extraction.repository import ExtractionRepository
 from app.observability.categories import SuccessOutcome
 from app.repositories.articles import ArticleRepository
@@ -119,7 +118,7 @@ class ExtractionService:
     ) -> ExtractedOutcome:
         async with self._session_factory() as session:
             repo = ExtractionRepository(session)
-            saved = await repo.save(envelope, article_id=ready.article_id)
+            saved = await repo.save_signal(envelope, article_id=ready.article_id)
 
             if saved is None:
                 # race 敗北 — 勝者を読み戻して合流 (audit は勝者側で焼かれる)
@@ -129,9 +128,9 @@ class ExtractionService:
                 )
                 await session.commit()
                 async with self._session_factory() as read_session:
-                    saved = await ExtractionRepository(read_session).find_by_article_id(
-                        ready.article_id
-                    )
+                    saved = await ExtractionRepository(
+                        read_session
+                    ).find_signal_by_article_id(ready.article_id)
                 if saved is None:
                     raise RuntimeError(
                         f"extraction_race_winner_missing: article_id={ready.article_id}"
@@ -160,8 +159,8 @@ class ExtractionService:
         envelope: ExtractionCall[Noise],
     ) -> NoiseOutcome:
         async with self._session_factory() as session:
-            noise_repo = NoiseRepository(session)
-            saved = await noise_repo.save(envelope, article_id=ready.article_id)
+            repo = ExtractionRepository(session)
+            saved = await repo.save_noise(envelope, article_id=ready.article_id)
 
             if saved is None:
                 # UNIQUE 違反による race 敗北 — 勝者を読み戻して合流する
@@ -171,9 +170,9 @@ class ExtractionService:
                 )
                 await session.commit()
                 async with self._session_factory() as read_session:
-                    saved = await NoiseRepository(read_session).find_by_article_id(
-                        ready.article_id
-                    )
+                    saved = await ExtractionRepository(
+                        read_session
+                    ).find_noise_by_article_id(ready.article_id)
                 if saved is None:
                     raise RuntimeError(
                         f"extraction_noise_race_winner_missing: "

@@ -30,9 +30,9 @@ class ExtractionCall[T: ExtractionResult]:
 
     ``T`` は ``Signal`` / ``Noise`` のいずれかに narrow される。Service 層は
     ``match call: case ExtractionCall(result=Signal()):`` で container ごと型を
-    絞り、対応する Repository method (``save`` on ``ExtractionRepository`` /
-    ``NoiseRepository``) に envelope を 1 つ渡すだけで業務 INSERT + audit 焼付を
-    完結させる。
+    絞り、対応する Repository method (``ExtractionRepository.save_signal`` /
+    ``ExtractionRepository.save_noise``) に envelope を 1 つ渡すだけで業務
+    INSERT + audit 焼付を完結させる。
 
     Attributes:
         result: ドメイン詰め替え済みの抽出結果 (``Signal`` | ``Noise``)。

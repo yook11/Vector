@@ -135,7 +135,7 @@ async def _seed_extraction(
 ) -> ArticleExtraction:
     """Article + 既存 ArticleExtraction (子付き) を作る。"""
     repo = ExtractionRepository(db_session)
-    saved = await repo.save(
+    saved = await repo.save_signal(
         _signal_call(
             entities=entities,
             title_ja="旧タイトル",
@@ -403,7 +403,7 @@ async def test_skips_when_re_extraction_returns_noise_and_keeps_signal_extractio
 ) -> None:
     """再抽出で Noise が返った場合は既存 ArticleExtraction を上書きしない。
 
-    ``update_idempotent`` の signature が ``ExtractionCall[Signal]`` のみ
+    ``update_signal_idempotent`` の signature が ``ExtractionCall[Signal]`` のみ
     受け付ける型 narrow を取っているため、Service 側 match で Noise は
     skipped に分類する。データ破壊防止の構造的保証 (signal table への
     noise 上書きを型レベルで排除、``feedback_structural_guarantee``)。

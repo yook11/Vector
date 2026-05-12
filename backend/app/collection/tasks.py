@@ -135,7 +135,6 @@ async def ingest_source(
     後段 ``extract_html_body`` task で trafilatura 抽出 + 永続化に進む。
     """
     from app.analysis.extraction.domain.ready import ReadyForExtraction
-    from app.analysis.extraction.noise_repository import NoiseRepository
     from app.analysis.extraction.repository import ExtractionRepository
     from app.analysis.extraction.tasks import extract_content
     from app.collection.ingestion.ingestion_service import IngestionService
@@ -214,7 +213,6 @@ async def ingest_source(
     # Pattern R 経路: 永続化済 Article から ReadyForExtraction を構築し kiq
     async with session_factory() as session:
         extraction_repo = ExtractionRepository(session)
-        noise_repo = NoiseRepository(session)
         ready_list: list = []
         for article in articles:
             ready = await ReadyForExtraction.try_advance_from(
@@ -222,7 +220,6 @@ async def ingest_source(
                 original_title=article.title,
                 original_content=article.body,
                 extraction_repo=extraction_repo,
-                noise_repo=noise_repo,
             )
             if ready is not None:
                 ready_list.append(ready)
@@ -273,7 +270,6 @@ async def extract_html_body(
       されるため task では catch しない
     """
     from app.analysis.extraction.domain.ready import ReadyForExtraction
-    from app.analysis.extraction.noise_repository import NoiseRepository
     from app.analysis.extraction.repository import ExtractionRepository
     from app.analysis.extraction.tasks import extract_content
     from app.collection.extraction.content_fetch_service import (
@@ -296,7 +292,6 @@ async def extract_html_body(
                     original_title=article.title,
                     original_content=article.body,
                     extraction_repo=ExtractionRepository(session),
-                    noise_repo=NoiseRepository(session),
                 )
             if ready_for_extraction is not None:
                 await extract_content.kiq(ready_for_extraction)
