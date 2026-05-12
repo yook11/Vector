@@ -9,6 +9,9 @@ catch-all) に振り分けるかを検証する。
 - ``_record_failure`` を patch (Stage 3 failure 経路の Task 層 private helper、
   PR2 で ``failure_recording.py`` から移管)
 - ``mark_article_unprocessable`` を patch
+
+PR3 案 3 化: task signature は ``trigger: ExtractionTrigger``。冒頭の Ready 自構築
+は ``ReadyForExtraction.try_advance_from`` を patch して固定 Ready を返させる。
 """
 
 from __future__ import annotations
@@ -30,7 +33,7 @@ from app.analysis.errors import (
     AIProviderServiceUnavailableError,
     ExtractionResponseInvalidError,
 )
-from app.analysis.extraction.domain.ready import ReadyForExtraction
+from app.analysis.extraction.domain.ready import ExtractionTrigger, ReadyForExtraction
 
 
 def _make_provider_fake() -> MagicMock:
@@ -53,9 +56,23 @@ def _make_ctx(retry_count: int = 0, max_retries: int = 1) -> MagicMock:
     return ctx
 
 
-def _ready() -> ReadyForExtraction:
+def _trigger() -> ExtractionTrigger:
+    return ExtractionTrigger(article_id=42)
+
+
+def _fixed_ready() -> ReadyForExtraction:
+    """task 冒頭の Ready 自構築が返す固定 Ready (Repository を mock するため)。"""
     return ReadyForExtraction(
         article_id=42, original_title="t", original_content="content body"
+    )
+
+
+def _patch_try_advance_from(ready: ReadyForExtraction | None = None) -> object:
+    """``ReadyForExtraction.try_advance_from`` を固定値返却に patch するヘルパ。"""
+    return patch.object(
+        ReadyForExtraction,
+        "try_advance_from",
+        new=AsyncMock(return_value=ready if ready is not None else _fixed_ready()),
     )
 
 
@@ -82,6 +99,7 @@ async def test_drop_article_calls_mark_unprocessable_with_correct_code(
     exc = exc_cls("boom")
 
     with (
+        _patch_try_advance_from(),
         patch(
             "app.analysis.extraction.tasks._build_limiters", return_value=(None, None)
         ),
@@ -90,7 +108,7 @@ async def test_drop_article_calls_mark_unprocessable_with_correct_code(
         svc_instance = mock_svc_cls.return_value
         svc_instance.execute = AsyncMock(side_effect=exc)
         svc_instance.mark_article_unprocessable = AsyncMock()
-        await extract_content(ready=_ready(), ctx=ctx)
+        await extract_content(trigger=_trigger(), ctx=ctx)
         svc_instance.mark_article_unprocessable.assert_awaited_once()
         kwargs = svc_instance.mark_article_unprocessable.await_args.kwargs
         args = svc_instance.mark_article_unprocessable.await_args.args
@@ -123,6 +141,7 @@ async def test_keep_article_calls_audit_extraction_failure(
 
     ctx = _make_ctx()
     with (
+        _patch_try_advance_from(),
         patch(
             "app.analysis.extraction.tasks._build_limiters", return_value=(None, None)
         ),
@@ -135,7 +154,7 @@ async def test_keep_article_calls_audit_extraction_failure(
         svc_instance = mock_svc_cls.return_value
         svc_instance.execute = AsyncMock(side_effect=exc_cls("boom"))
         svc_instance.mark_article_unprocessable = AsyncMock()
-        await extract_content(ready=_ready(), ctx=ctx)
+        await extract_content(trigger=_trigger(), ctx=ctx)
     mock_audit.assert_awaited_once()
     assert mock_audit.await_args.kwargs["exc"].__class__ is exc_cls
     # PR2: extractor を Task 層から渡している (failure_recording.py 統合)
@@ -167,6 +186,7 @@ async def test_retryable_inline_true_raises_when_not_last_attempt(
     ctx = _make_ctx(retry_count=0, max_retries=1)  # retry 余地あり
 
     with (
+        _patch_try_advance_from(),
         patch(
             "app.analysis.extraction.tasks._build_limiters", return_value=(None, None)
         ),
@@ -174,7 +194,7 @@ async def test_retryable_inline_true_raises_when_not_last_attempt(
     ):
         mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc_cls("boom"))
         with pytest.raises(exc_cls):
-            await extract_content(ready=_ready(), ctx=ctx)
+            await extract_content(trigger=_trigger(), ctx=ctx)
 
 
 @pytest.mark.asyncio
@@ -185,6 +205,7 @@ async def test_retryable_inline_true_audits_on_last_attempt() -> None:
     ctx = _make_ctx(retry_count=1, max_retries=1)  # 最終試行
 
     with (
+        _patch_try_advance_from(),
         patch(
             "app.analysis.extraction.tasks._build_limiters", return_value=(None, None)
         ),
@@ -197,7 +218,7 @@ async def test_retryable_inline_true_audits_on_last_attempt() -> None:
         mock_svc_cls.return_value.execute = AsyncMock(
             side_effect=AIProviderNetworkError("connection reset")
         )
-        await extract_content(ready=_ready(), ctx=ctx)
+        await extract_content(trigger=_trigger(), ctx=ctx)
     mock_audit.assert_awaited_once()
 
 
@@ -223,6 +244,7 @@ async def test_retryable_inline_false_audits_immediately(
     ctx = _make_ctx(retry_count=0, max_retries=1)  # retry 余地ありでも raise しない
 
     with (
+        _patch_try_advance_from(),
         patch(
             "app.analysis.extraction.tasks._build_limiters", return_value=(None, None)
         ),
@@ -233,7 +255,7 @@ async def test_retryable_inline_false_audits_immediately(
         ) as mock_audit,
     ):
         mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc_cls("boom"))
-        await extract_content(ready=_ready(), ctx=ctx)
+        await extract_content(trigger=_trigger(), ctx=ctx)
     mock_audit.assert_awaited_once()
 
 
@@ -249,6 +271,7 @@ async def test_unexpected_exception_falls_through_to_catch_all() -> None:
 
     ctx = _make_ctx()
     with (
+        _patch_try_advance_from(),
         patch(
             "app.analysis.extraction.tasks._build_limiters", return_value=(None, None)
         ),
@@ -261,6 +284,6 @@ async def test_unexpected_exception_falls_through_to_catch_all() -> None:
         mock_svc_cls.return_value.execute = AsyncMock(
             side_effect=ValueError("surprise"),
         )
-        await extract_content(ready=_ready(), ctx=ctx)
+        await extract_content(trigger=_trigger(), ctx=ctx)
     mock_audit.assert_awaited_once()
     assert isinstance(mock_audit.await_args.kwargs["exc"], ValueError)

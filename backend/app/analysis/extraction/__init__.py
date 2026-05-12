@@ -15,7 +15,10 @@ from app.analysis.extraction.domain import (
     Noise,
     Signal,
 )
-from app.analysis.extraction.domain.ready import ReadyForExtraction
+from app.analysis.extraction.domain.ready import (
+    ExtractionTrigger,
+    ReadyForExtraction,
+)
 from app.analysis.extraction.repository import ExtractionRepository
 from app.analysis.extraction.service import ExtractionService
 
@@ -26,6 +29,7 @@ __all__ = [
     "ExtractionRepository",
     "ExtractionResult",
     "ExtractionService",
+    "ExtractionTrigger",
     "Noise",
     "ReadyForExtraction",
     "Signal",

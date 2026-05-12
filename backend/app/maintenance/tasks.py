@@ -78,9 +78,10 @@ async def _update_circuit_breaker(role: str, found: int) -> int:
 async def backfill_extractions(ctx: Context = TaskiqDepends()) -> None:
     """extraction 子が NULL の Article を発見し extract_content を再投入する。
 
-    Pattern A' (spec §3.4 / §7.2) maintenance task として、自身が gatekeeper を
-    兼ねる: 各 article_id ごとに `ReadyForExtraction.try_advance_from` を呼び、
-    成立するもののみ `kiq(ready)` で再投入する。
+    案 3 適用: 本 task は ID-only な ``ExtractionTrigger`` を kiq に詰めて
+    enqueue するだけ。precondition 判定 (Article 存在 + signal/noise 未生成 +
+    本文サイズ ≤ hard cap) と Ready 構築は下流 Stage 3 task が処理開始時に
+    行う (`extract_content_skipped reason=precondition_not_met` log で観測可能)。
     """
     if not settings.backfill_extractions_enabled:
         logger.info("backfill_extractions_disabled")
@@ -113,31 +114,13 @@ async def backfill_extractions(ctx: Context = TaskiqDepends()) -> None:
         logger.warning("backfill_extractions_daily_budget_exhausted", found=found)
         return
 
-    from app.analysis.extraction.domain.ready import ReadyForExtraction
-    from app.analysis.extraction.repository import ExtractionRepository
+    from app.analysis.extraction.domain.ready import ExtractionTrigger
     from app.analysis.extraction.tasks import extract_content
-    from app.models.article import Article
 
     requeued = 0
-    skipped = 0
     for article_id in ids[:granted]:
         try:
-            async with session_factory() as session:
-                extraction_repo = ExtractionRepository(session)
-                article = await session.get(Article, article_id)
-                if article is None:
-                    skipped += 1
-                    continue
-                ready = await ReadyForExtraction.try_advance_from(
-                    article_id=article.id,
-                    original_title=article.original_title,
-                    original_content=article.original_content,
-                    extraction_repo=extraction_repo,
-                )
-            if ready is None:
-                skipped += 1
-                continue
-            await extract_content.kiq(ready)
+            await extract_content.kiq(ExtractionTrigger(article_id=article_id))
             requeued += 1
         except Exception as e:  # noqa: BLE001
             logger.warning(
@@ -147,12 +130,13 @@ async def backfill_extractions(ctx: Context = TaskiqDepends()) -> None:
             )
             continue
 
+    # precondition_not_met (article 既消滅 / 既処理 / 本文 oversized) は
+    # 下流 Stage 3 task の ``extract_content_skipped`` log で観測する
     logger.info(
         "backfill_extractions_completed",
         found=found,
         granted=granted,
         requeued=requeued,
-        skipped=skipped,
     )
 
 

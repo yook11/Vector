@@ -1,4 +1,4 @@
-"""Extraction リポジトリ — Stage 3 (signal / noise 両経路) の永続化。
+"""Extraction リポジトリ — Stage 3 (signal / noise 両経路) の永続化 + Ready 構築。
 
 Stage 4 ``AssessmentRepository`` (``save_in_scope`` / ``save_out_of_scope`` で
 ``int | None`` を返す勝者 SSoT パターン) と完全対称に揃え、Stage 3 永続化層を
@@ -6,10 +6,18 @@ Stage 4 ``AssessmentRepository`` (``save_in_scope`` / ``save_out_of_scope`` で
 ``ExtractionRepository(session)`` 1 つだけ instantiate すれば
 signal / noise 両 path を扱える。
 
+責務 (Ready 構築):
+
+- ``try_load_for_extraction``: 「Article 行存在 + signal/noise 未生成 + 本文サイズ
+  ≤ hard cap」を 1 query で atomic に判定し、満たす場合のみ
+  ``ReadyForExtraction`` を直接構築して返す (案 3 = 厚い Ready)。Domain 層
+  ``ReadyForExtraction.try_advance_from`` は本 method への thin delegate。
+  Stage 4 ``try_load_for_assessment`` と同型。
+
 責務 (signal 経路):
 
-- ``signal_exists_for_article``: cheap な exists 判定 (Pattern A' の
-  ``try_advance_from`` precondition チェック用)
+- ``signal_exists_for_article``: cheap な exists 判定 (旧経路 / 別用途で残置、
+  Ready 構築経路では ``try_load_for_extraction`` 内に集約済)
 - ``save_signal``: ``ExtractionCall[Signal]`` envelope を
   ``INSERT ... ON CONFLICT (article_id) DO NOTHING RETURNING id`` で永続化する。
   race 敗北時 (rowcount=0) は ``None`` を返し、Service が audit / 後続 chain を
@@ -22,8 +30,8 @@ signal / noise 両 path を扱える。
 
 責務 (noise 経路):
 
-- ``noise_exists_for_article``: cheap な exists 判定 (``try_advance_from``
-  precondition チェック用)
+- ``noise_exists_for_article``: cheap な exists 判定 (旧経路 / 別用途で残置、
+  Ready 構築経路では ``try_load_for_extraction`` 内に集約済)
 - ``save_noise``: ``ExtractionCall[Noise]`` envelope を ``INSERT ... ON
   CONFLICT DO NOTHING RETURNING id`` で永続化する。entities は JSONB
   カラムにそのまま詰め込み、子テーブル分離は不要。``ON CONFLICT`` の
@@ -34,6 +42,7 @@ signal / noise 両 path を扱える。
 
 from __future__ import annotations
 
+import structlog
 from sqlalchemy import delete, func, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,9 +50,13 @@ from sqlmodel import select
 
 from app.analysis.extraction.ai.envelope import ExtractionCall
 from app.analysis.extraction.domain import Noise, Signal
+from app.analysis.extraction.domain.ready import ReadyForExtraction
+from app.models.article import Article
 from app.models.article_extraction import ArticleExtraction
 from app.models.article_extraction_entity import ArticleExtractionEntity
 from app.models.extraction_noise import ExtractionNoise as ExtractionNoiseORM
+
+logger = structlog.get_logger(__name__)
 
 
 class ExtractionRepository:
@@ -51,6 +64,56 @@ class ExtractionRepository:
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+
+    # ------------------------------------------------------------------
+    # Ready 構築 (try_advance_from precondition + extractor 入力値)
+    # ------------------------------------------------------------------
+
+    async def try_load_for_extraction(
+        self, article_id: int
+    ) -> ReadyForExtraction | None:
+        """`ReadyForExtraction.try_advance_from` 用 atomic ロード (案 3)。
+
+        1 query で「Article 行存在 + signal/noise 未生成」を判定し、満たす場合
+        のみ extractor 入力 (title / content) を取得して厚い Ready を構築して返す。
+        本文サイズ > ``MAX_CONTENT_LENGTH`` の場合は AI 呼び出し前に枝刈りする
+        ため skip log を残して ``None`` を返す (Stage 4 ``try_load_for_assessment``
+        と同型の atomic 1 query パターン)。
+
+        Returns:
+            進める場合: precondition を満たし、extractor 入力値を含む
+                ``ReadyForExtraction``
+            進めない場合: ``None`` (Article 不在 / signal 既存 / noise 既存 /
+                本文 oversized)
+        """
+        stmt = (
+            select(Article.original_title, Article.original_content)
+            .outerjoin(ArticleExtraction, ArticleExtraction.article_id == Article.id)
+            .outerjoin(ExtractionNoiseORM, ExtractionNoiseORM.article_id == Article.id)
+            .where(
+                Article.id == article_id,
+                ArticleExtraction.id.is_(None),
+                ExtractionNoiseORM.id.is_(None),
+            )
+            .limit(1)
+        )
+        row = (await self._session.execute(stmt)).first()
+        if row is None:
+            return None
+        title, content = row
+        if len(content) > ReadyForExtraction.MAX_CONTENT_LENGTH:
+            logger.warning(
+                "extraction_skipped_oversized_article",
+                article_id=article_id,
+                content_length=len(content),
+                max_length=ReadyForExtraction.MAX_CONTENT_LENGTH,
+            )
+            return None
+        return ReadyForExtraction(
+            article_id=article_id,
+            original_title=title,
+            original_content=content,
+        )
 
     # ------------------------------------------------------------------
     # signal path

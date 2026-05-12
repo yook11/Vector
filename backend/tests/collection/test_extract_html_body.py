@@ -1,4 +1,4 @@
-"""``extract_html_body`` task の振る舞い不変条件テスト (PR2.5-B 仕様)。
+"""``extract_html_body`` task の振る舞い不変条件テスト (PR2.5-B 仕様 + PR3 案 3)。
 
 task は ``ContentFetchService`` への薄ラッパー。本テストの責務は **Outcome
 dispatch のみ** で、以下は対象外 (それぞれ別ファイル):
@@ -6,18 +6,15 @@ dispatch のみ** で、以下は対象外 (それぞれ別ファイル):
 - Service 内部 (HTTP 取得 / DB 永続化 / pipeline_events / Outcome 構築):
   ``tests/collection/extraction/test_content_fetch_service.py``
 - ReadyForExtraction gatekeeper (extraction/noise 既存判定 / 本文長 cap):
-  ``tests/analysis/extraction/domain/test_ready.py``
+  下流 Stage 3 task と ``ExtractionRepository.try_load_for_extraction`` の
+  責務 (PR3 案 3 化)。本 task は ID-only ``ExtractionTrigger`` を kiq に渡すのみ
 
 検証する task 不変条件:
 
-- ``ContentFetched(article)`` + Ready 構築成功 → ``extract_content.kiq`` 発火
-  + success dict 返却
-- ``ContentFetched(article)`` + Ready=None (gatekeeper 拒否) → kiq 不発、
-  だが Article 永続化は完了しているので success dict は返す
+- ``ContentFetched(article)`` → ``extract_content.kiq`` を
+  ``ExtractionTrigger(article_id=article.id)`` で発火 + success dict 返却
 - ``ConflictLost`` / ``TerminallyDropped`` / ``TransientlyDropped`` /
   ``None`` (重複配送) → ``None`` 返却、chain 発火せず
-
-Service mock により pending_html_articles の DB 仕込みは不要。
 """
 
 from __future__ import annotations
@@ -28,6 +25,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.analysis.extraction.domain.ready import ExtractionTrigger
 from app.collection.extraction.content_fetch_service import (
     ConflictLost,
     ContentFetched,
@@ -40,9 +38,6 @@ from app.collection.tasks import extract_html_body
 
 _SERVICE_EXECUTE = (
     "app.collection.extraction.content_fetch_service.ContentFetchService.execute"
-)
-_READY_TRY_ADVANCE = (
-    "app.analysis.extraction.domain.ready.ReadyForExtraction.try_advance_from"
 )
 _EXTRACT_CONTENT_KIQ = "app.analysis.extraction.tasks.extract_content.kiq"
 
@@ -57,9 +52,8 @@ def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> MagicMock:
 def _make_article(article_id: int = 1) -> Article:
     """test 入力用の Article Entity (DB 永続化はしない)。
 
-    ``ReadyForExtraction.try_advance_from`` は article_extractions /
-    extraction_noises を SELECT するだけで articles 自体の存在は問わないため、
-    domain Entity を直接組み立てれば十分 (db_session は使わない)。
+    案 3: kiq には ``ExtractionTrigger(article_id)`` だけ流すため、
+    article.title / article.body は使わない。article.id のみ参照される。
     """
     return Article(
         id=article_id,
@@ -71,11 +65,11 @@ def _make_article(article_id: int = 1) -> Article:
 
 
 @pytest.mark.asyncio
-async def test_chains_extract_content_when_ready_is_built(
+async def test_chains_extract_content_with_trigger_when_content_fetched(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """ContentFetched + Ready 構築成功 → ``extract_content.kiq`` 発火 + success dict."""
+    """ContentFetched → ``extract_content.kiq`` を Trigger 引数で発火 + success dict."""
     article = _make_article()
     monkeypatch.setattr(
         _SERVICE_EXECUTE,
@@ -91,36 +85,9 @@ async def test_chains_extract_content_when_ready_is_built(
         "article_id": article.id,
         "status": "success",
     }
-    extract_content_kiq.assert_awaited_once()
-    (ready_arg,) = extract_content_kiq.await_args.args
-    assert ready_arg.article_id == article.id
-    assert ready_arg.original_title == article.title
-    assert ready_arg.original_content == article.body
-
-
-@pytest.mark.asyncio
-async def test_skips_chain_when_ready_returns_none(
-    session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """ContentFetched + Ready=None (gatekeeper 拒否) → kiq 不発、success dict 返却."""
-    article = _make_article()
-    monkeypatch.setattr(
-        _SERVICE_EXECUTE,
-        AsyncMock(return_value=ContentFetched(article=article)),
+    extract_content_kiq.assert_awaited_once_with(
+        ExtractionTrigger(article_id=article.id)
     )
-    monkeypatch.setattr(_READY_TRY_ADVANCE, AsyncMock(return_value=None))
-    extract_content_kiq = AsyncMock()
-    monkeypatch.setattr(_EXTRACT_CONTENT_KIQ, extract_content_kiq)
-
-    result = await extract_html_body(pending_id=123, ctx=_ctx(session_factory))
-
-    assert result == {
-        "pending_id": 123,
-        "article_id": article.id,
-        "status": "success",
-    }
-    extract_content_kiq.assert_not_awaited()
 
 
 @pytest.mark.parametrize(

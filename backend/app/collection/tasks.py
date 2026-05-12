@@ -129,13 +129,13 @@ async def ingest_source(
     lookup しない。
 
     Pattern R (本文込み RSS): Fetcher が ``ReadyForArticle`` を yield、
-    Article 永続化 → ``ReadyForExtraction`` 構築 → ``extract_content.kiq``。
+    Article 永続化 → ``ExtractionTrigger(article_id)`` で ``extract_content.kiq``
+    に enqueue (案 3: Stage 3 task 側で Ready 自構築)。
 
     Pattern H (本文 HTML 必須): Fetcher が ``PendingHtmlFetch`` を yield、
     後段 ``extract_html_body`` task で trafilatura 抽出 + 永続化に進む。
     """
-    from app.analysis.extraction.domain.ready import ReadyForExtraction
-    from app.analysis.extraction.repository import ExtractionRepository
+    from app.analysis.extraction.domain.ready import ExtractionTrigger
     from app.analysis.extraction.tasks import extract_content
     from app.collection.ingestion.ingestion_service import IngestionService
     from app.collection.ingestion.strategy import FETCHERS
@@ -210,21 +210,10 @@ async def ingest_source(
         None,
         start_time,
     )
-    # Pattern R 経路: 永続化済 Article から ReadyForExtraction を構築し kiq
-    async with session_factory() as session:
-        extraction_repo = ExtractionRepository(session)
-        ready_list: list = []
-        for article in articles:
-            ready = await ReadyForExtraction.try_advance_from(
-                article_id=article.id,
-                original_title=article.title,
-                original_content=article.body,
-                extraction_repo=extraction_repo,
-            )
-            if ready is not None:
-                ready_list.append(ready)
-    for ready in ready_list:
-        await extract_content.kiq(ready)
+    # Pattern R 経路: 永続化済 Article の article_id を ID-only Trigger に詰めて
+    # kiq (案 3: precondition 判定 + Ready 構築は下流 Stage 3 task が処理開始時)
+    for article in articles:
+        await extract_content.kiq(ExtractionTrigger(article_id=article.id))
     # Pattern H 経路: PR2.5-B cutover で `pending_html_articles` の DB 駆動に移行。
     # `dispatch_html_fetch_jobs` cron poller が `pending_id` を `extract_html_body`
     # に投入するため、ここでの直接 kiq は撤去 (Block 3 で cron poller 新設予定)。
@@ -261,16 +250,16 @@ async def extract_html_body(
     Outcome dispatch のみ:
 
     - ``ContentFetchService.execute(pending_id)`` を呼び、結果に応じて分岐
-    - ``ContentFetched`` 時のみ ``ReadyForExtraction`` を構築し
-      ``extract_content.kiq`` に流す
+    - ``ContentFetched`` 時のみ ``ExtractionTrigger(article_id)`` を
+      ``extract_content.kiq`` に流す (案 3: 下流 Stage 3 task が処理開始時に
+      Ready 自構築)
     - ``ConflictLost`` / ``TerminallyDropped`` / ``TransientlyDropped`` /
       ``None`` (重複配送 / lease 衝突) は何もしない (DB 状態 + audit は
       Service 内で完結済)
     - ``TemporaryFetchError`` は Service 内で ``TransientlyDropped`` に変換
       されるため task では catch しない
     """
-    from app.analysis.extraction.domain.ready import ReadyForExtraction
-    from app.analysis.extraction.repository import ExtractionRepository
+    from app.analysis.extraction.domain.ready import ExtractionTrigger
     from app.analysis.extraction.tasks import extract_content
     from app.collection.extraction.content_fetch_service import (
         ConflictLost,
@@ -286,15 +275,7 @@ async def extract_html_body(
 
     match outcome:
         case ContentFetched(article=article):
-            async with session_factory() as session:
-                ready_for_extraction = await ReadyForExtraction.try_advance_from(
-                    article_id=article.id,
-                    original_title=article.title,
-                    original_content=article.body,
-                    extraction_repo=ExtractionRepository(session),
-                )
-            if ready_for_extraction is not None:
-                await extract_content.kiq(ready_for_extraction)
+            await extract_content.kiq(ExtractionTrigger(article_id=article.id))
             return {
                 "pending_id": pending_id,
                 "article_id": article.id,

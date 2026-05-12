@@ -1,10 +1,11 @@
-"""``extract_content`` task のテスト (chain 経路 + rate limit 経路)。
+"""``extract_content`` task のテスト (chain 経路 + rate limit 経路 + skip 経路)。
 
-PR1-c で Outcome を廃止し ``ExtractionService.execute`` の戻り値を
-``int | None`` に統一したため、本 file は:
+PR3 案 3 化: task signature は ``trigger: ExtractionTrigger``。冒頭で
+``ReadyForExtraction.try_advance_from`` を呼んで Ready 自構築する。
 
 - signal 勝者 (``execute`` が ``int`` を返す) → ``assess_content.kiq`` で chain
 - noise 勝者 / race 敗北 (``execute`` が ``None`` を返す) → chain しない
+- precondition_not_met (``try_advance_from`` が ``None`` を返す) → skip log + return
 - legacy ``AIProviderRateLimitedError`` の audit 経路 (catch-all 経由)
 
 Layer 1 marker dispatch ルーティングは ``test_extract_task_dispatch.py`` 側で
@@ -18,7 +19,7 @@ import pytest
 
 from app.analysis.assessment.domain.ready import AssessmentTrigger
 from app.analysis.errors import AIProviderRateLimitedError
-from app.analysis.extraction.domain.ready import ReadyForExtraction
+from app.analysis.extraction.domain.ready import ExtractionTrigger, ReadyForExtraction
 
 
 def _make_provider_fake() -> MagicMock:
@@ -49,11 +50,25 @@ def _make_ctx(
     return ctx
 
 
-def _make_ready_extraction(article_id: int = 1) -> ReadyForExtraction:
+def _trigger(article_id: int = 1) -> ExtractionTrigger:
+    return ExtractionTrigger(article_id=article_id)
+
+
+def _fixed_ready(article_id: int = 1) -> ReadyForExtraction:
+    """task 冒頭の Ready 自構築が返す固定 Ready。"""
     return ReadyForExtraction(
         article_id=article_id,
         original_title="Title",
         original_content="content",
+    )
+
+
+def _patch_try_advance_from(ready: ReadyForExtraction | None) -> object:
+    """``ReadyForExtraction.try_advance_from`` を固定値返却に patch するヘルパ。"""
+    return patch.object(
+        ReadyForExtraction,
+        "try_advance_from",
+        new=AsyncMock(return_value=ready),
     )
 
 
@@ -78,6 +93,7 @@ class TestExtractContent:
         mock_ctx = _make_ctx(extractor=_make_provider_fake())
 
         with (
+            _patch_try_advance_from(_fixed_ready()),
             patch(
                 "app.analysis.extraction.tasks._build_limiters",
                 return_value=(None, None),
@@ -87,7 +103,7 @@ class TestExtractContent:
         ):
             mock_svc_cls.return_value.execute = AsyncMock(return_value=42)
             mock_assess.kiq = AsyncMock()
-            await extract_content(ready=_make_ready_extraction(), ctx=mock_ctx)
+            await extract_content(trigger=_trigger(), ctx=mock_ctx)
 
         mock_assess.kiq.assert_awaited_once_with(
             AssessmentTrigger(extraction_id=42),
@@ -101,6 +117,7 @@ class TestExtractContent:
         mock_ctx = _make_ctx(extractor=_make_provider_fake())
 
         with (
+            _patch_try_advance_from(_fixed_ready()),
             patch(
                 "app.analysis.extraction.tasks._build_limiters",
                 return_value=(None, None),
@@ -110,8 +127,37 @@ class TestExtractContent:
         ):
             mock_svc_cls.return_value.execute = AsyncMock(return_value=None)
             mock_assess.kiq = AsyncMock()
-            await extract_content(ready=_make_ready_extraction(), ctx=mock_ctx)
+            await extract_content(trigger=_trigger(), ctx=mock_ctx)
 
+        mock_assess.kiq.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_precondition_not_met_skips_and_does_not_call_service(self) -> None:
+        """try_advance_from が None を返したら skip log + return、Service は呼ばない。
+
+        案 3: precondition (article 既消滅 / 既処理 / 本文 oversized) の
+        判定は Stage 3 task 冒頭で Ready 自構築時に行われ、未充足なら
+        AI quota / Service を消費せず短絡する。
+        """
+        from app.analysis.extraction.tasks import extract_content
+
+        mock_ctx = _make_ctx(extractor=_make_provider_fake())
+
+        with (
+            _patch_try_advance_from(None),
+            patch(
+                "app.analysis.extraction.tasks._build_limiters",
+                return_value=(None, None),
+            ) as mock_limiters,
+            patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
+            patch("app.analysis.extraction.tasks.assess_content") as mock_assess,
+        ):
+            mock_assess.kiq = AsyncMock()
+            await extract_content(trigger=_trigger(), ctx=mock_ctx)
+
+        # Service / rate limit / chain firing いずれも触らない
+        mock_svc_cls.assert_not_called()
+        mock_limiters.assert_not_called()
         mock_assess.kiq.assert_not_called()
 
     @pytest.mark.asyncio
@@ -124,6 +170,7 @@ class TestExtractContent:
         )
 
         with (
+            _patch_try_advance_from(_fixed_ready()),
             patch(
                 "app.analysis.extraction.tasks._build_limiters",
                 return_value=(None, None),
@@ -137,7 +184,7 @@ class TestExtractContent:
             mock_svc_cls.return_value.execute = AsyncMock(
                 side_effect=AIProviderRateLimitedError("429"),
             )
-            await extract_content(ready=_make_ready_extraction(), ctx=mock_ctx)
+            await extract_content(trigger=_trigger(), ctx=mock_ctx)
         mock_audit.assert_awaited_once()
         # outcome_code 引数は廃止 (recording.py で内部導出)。exc が渡るのみ。
         assert isinstance(

@@ -454,3 +454,91 @@ async def test_save_noise_returns_none_on_unique_race_loss(
     )
     await db_session.commit()
     assert second is None  # race 敗北は None で表現される
+
+
+# ===========================================================================
+# try_load_for_extraction (PR3 案 3: atomic loader)
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_try_load_returns_ready_when_precondition_met(
+    db_session: AsyncSession, sample_source: NewsSource
+) -> None:
+    """signal/noise 未生成 + 本文サイズ妥当なら厚い Ready を返す。"""
+    article = await _make_article(
+        db_session, sample_source, "https://example.com/load-ok"
+    )
+    repo = ExtractionRepository(db_session)
+
+    ready = await repo.try_load_for_extraction(article.id)
+
+    assert ready is not None
+    assert ready.article_id == article.id
+    assert ready.original_title == article.original_title
+    assert ready.original_content == article.original_content
+
+
+@pytest.mark.asyncio
+async def test_try_load_returns_none_when_article_missing(
+    db_session: AsyncSession, sample_source: NewsSource
+) -> None:
+    """Article 不在 (既消滅 / 未永続化) なら None を返す。"""
+    repo = ExtractionRepository(db_session)
+    assert await repo.try_load_for_extraction(article_id=999_999_999) is None
+
+
+@pytest.mark.asyncio
+async def test_try_load_returns_none_when_signal_exists(
+    db_session: AsyncSession, sample_source: NewsSource
+) -> None:
+    """既に signal extraction が永続化済なら None を返す (再処理しない)。"""
+    article = await _make_article(
+        db_session, sample_source, "https://example.com/load-signal"
+    )
+    repo = ExtractionRepository(db_session)
+    await repo.save_signal(_signal_call(), article_id=article.id)
+    await db_session.commit()
+
+    assert await repo.try_load_for_extraction(article.id) is None
+
+
+@pytest.mark.asyncio
+async def test_try_load_returns_none_when_noise_exists(
+    db_session: AsyncSession, sample_source: NewsSource
+) -> None:
+    """既に noise 判定済なら None (Stage 1 noise 記事を再処理しない)。"""
+    article = await _make_article(
+        db_session, sample_source, "https://example.com/load-noise"
+    )
+    repo = ExtractionRepository(db_session)
+    await repo.save_noise(_noise_call(), article_id=article.id)
+    await db_session.commit()
+
+    assert await repo.try_load_for_extraction(article.id) is None
+
+
+@pytest.mark.asyncio
+async def test_try_load_returns_none_for_oversized_content(
+    db_session: AsyncSession, sample_source: NewsSource
+) -> None:
+    """本文サイズ > MAX_CONTENT_LENGTH なら skip log + None を返す。
+
+    AI 呼び出し前の枝刈り (Stage 4/5 と同じレイヤで実施)。
+    """
+    from app.analysis.extraction.domain.ready import ReadyForExtraction
+
+    oversized = "x" * (ReadyForExtraction.MAX_CONTENT_LENGTH + 1)
+    article = Article(
+        source_id=sample_source.id,
+        source_url="https://example.com/oversized",
+        original_title="Title",
+        original_content=oversized,
+        published_at=datetime.now(UTC),
+    )
+    db_session.add(article)
+    await db_session.commit()
+    await db_session.refresh(article)
+
+    repo = ExtractionRepository(db_session)
+    assert await repo.try_load_for_extraction(article.id) is None
