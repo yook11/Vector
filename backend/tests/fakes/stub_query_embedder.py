@@ -1,15 +1,15 @@
-"""決定的な dummy ベクトルを返す Search BC 専用 Stub Query Embedder。
+"""決定的な dummy ベクトルを返す Search BC 専用 Stub Query Embedder (テスト用)。
 
 CI / Schemathesis 等、外部 API (Gemini) への到達を避けたい環境で使う。
 本番経路の Pure DI composition root (``app/search/router.py`` の
-``get_embedder_for_search``) は ``GeminiQueryEmbedder`` を hardcode する。
-テスト時のみ FastAPI の
+``get_embedder_for_search``) は ``GeminiQueryEmbedder`` を hardcode しており、
+本クラスを import しない。テスト時のみ FastAPI の
 ``app.dependency_overrides[get_embedder_for_search] = lambda: StubQueryEmbedder()``
 で差し替える前提。
 
-Stage 5 の ``StubEmbedder`` と実装が似ているが、解いている問題 (Search query
-一時計算 vs Stage 5 document 永続化) が違うため共用しない (memory
-`feedback_no_share_different_problems`)。
+Stage 5 の ``StubEmbedder`` (``tests/fakes/stub_embedder.py``) と実装が似ているが、
+解いている問題 (Search query 一時計算 vs Stage 5 document 永続化) が違うため
+共用しない (memory `feedback_no_share_different_problems`)。
 """
 
 from __future__ import annotations

@@ -68,7 +68,8 @@ async def embed_search_query(
         redis: 共有 Redis クライアント。
         daily_max: ユーザー 1 人 1 日あたりの上限。
         embedder: 呼び出し側で composition root から injection 済の Embedder。
-            本番経路では ``GeminiQueryEmbedder``、CI 等では ``StubQueryEmbedder``。
+            本番経路では ``GeminiQueryEmbedder``。CI / Schemathesis 等は
+            ``dependency_overrides`` でテスト用 stub に差し替える。
 
     Returns:
         A list of floats representing the query embedding.

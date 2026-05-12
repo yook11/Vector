@@ -77,8 +77,8 @@ from app.models import (  # noqa: F401
     WatchlistEntry,
     WeeklyBriefing,
 )
-from app.search.embedding.stub import StubQueryEmbedder
 from app.search.router import get_embedder_for_search
+from tests.fakes.stub_query_embedder import StubQueryEmbedder
 
 # テスト用 DB は admin (migration role) で接続する: vector_test の create / drop、
 # auth schema 作成、SQLModel.metadata.create_all、seed user 投入は table owner

@@ -1,9 +1,9 @@
-"""決定的な dummy ベクトルを返す Stub Embedder (Stage 5 document 専用)。
+"""決定的な dummy ベクトルを返す Stub Embedder (Stage 5 document 専用、テスト用)。
 
 CI / Schemathesis 等、外部 API (Gemini) への到達を避けたい環境で使う。
 本番経路の Pure DI composition root (``app/brokers.py``) は ``GeminiEmbedder`` を
-hardcode する。Search BC は独立 hierarchy (``app/search/embedding/``) を持ち、
-query 用の stub は ``app/search/embedding/stub.py::StubQueryEmbedder`` に独立する
+hardcode しており、本クラスを import しない。Search BC 用 stub は
+``tests/fakes/stub_query_embedder.py::StubQueryEmbedder`` に独立する
 (BC 分離の徹底、memory `feedback_no_share_different_problems`)。
 
 セキュリティ / 設計上の不変条件:
@@ -14,7 +14,7 @@ query 用の stub は ``app/search/embedding/stub.py::StubQueryEmbedder`` に独
 - L2 norm = 1.0 に正規化 (cosine distance 比較で挙動再現)
 - production 経路には絶対に流入させない。production 用 composition root は
   本クラスを import せず ``GeminiEmbedder`` を hardcode するため、stub 混入は
-  型レベルで構造的に不可能。
+  パッケージ境界 (``tests/`` は production が import しない) で構造的に不可能。
 """
 
 from __future__ import annotations

@@ -27,8 +27,8 @@ def get_embedder_for_search() -> QueryEmbedder:
 
     本番経路では ``GeminiQueryEmbedder`` を hardcode する (env による provider
     切替なし)。CI / Schemathesis 等で外部 API を避けたい場合は
-    ``app.dependency_overrides[get_embedder_for_search] = lambda: StubQueryEmbedder()``
-    で差し替える。
+    ``app.dependency_overrides[get_embedder_for_search]`` でテスト用 stub
+    (例: ``tests/fakes/stub_query_embedder.py``) を差し替える。
     """
     return GeminiQueryEmbedder()
 

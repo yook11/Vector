@@ -2,7 +2,7 @@
 
 Stage 5 BC 分離後、``StubEmbedder`` は ``ReadyForEmbedding`` を受ける document
 専用 hierarchy となった。Search BC 用の stub は
-``app/search/embedding/stub.py::StubQueryEmbedder`` に独立する。
+``tests/fakes/stub_query_embedder.py::StubQueryEmbedder`` に独立する。
 """
 
 from __future__ import annotations
@@ -11,9 +11,9 @@ import math
 
 import pytest
 
-from app.analysis.embedding.ai.stub import StubEmbedder
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.domain.value_objects import EmbeddingVector
+from tests.fakes.stub_embedder import StubEmbedder
 
 
 def _ready(text: str) -> ReadyForEmbedding:

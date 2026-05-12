@@ -10,7 +10,7 @@ import math
 
 import pytest
 
-from app.search.embedding.stub import StubQueryEmbedder
+from tests.fakes.stub_query_embedder import StubQueryEmbedder
 
 
 @pytest.mark.asyncio
