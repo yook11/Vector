@@ -1,4 +1,10 @@
-"""API を単発呼び出しする抽象 Embedder 基底クラス。"""
+"""Stage 5 (document 永続化) 専用の抽象 Embedder 基底クラス。
+
+Search BC (query 一時) は独立 hierarchy (``app/search/embedding/``) を持つため、
+本 class は document 埋め込みに専念する。``embed_query`` / ``embed_documents``
+(batch) は本 hierarchy から取り除き、内部 hook も ``str`` 単発に絞ることで公開
+API と一貫させる。
+"""
 
 from __future__ import annotations
 
@@ -8,6 +14,7 @@ from typing import ClassVar
 import structlog
 from pydantic import ValidationError
 
+from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.domain.value_objects import EmbeddingVector
 from app.analysis.embedding.errors import (
     EmbeddingError,
@@ -19,7 +26,7 @@ logger = structlog.get_logger(__name__)
 
 
 class BaseEmbedder(abc.ABC):
-    """テキスト embedder のテンプレートメソッド基底。
+    """document 埋め込み専用の embedder テンプレートメソッド基底。
 
     サブクラスは以下 2 つのフックを実装する:
     - ``_call_api``: SDK の生呼び出し（エラー処理なし）
@@ -37,13 +44,16 @@ class BaseEmbedder(abc.ABC):
       を満たさない場合 → ``EmbeddingResponseInvalidError`` (Layer 2-B) として
       本 class 内で詰め替えて raise (下流での再検証を不要にする)
 
+    入力は ``ReadyForEmbedding`` を受ける。Ready 型は処理に必要な値の全揃え
+    (text + audit 用 ID) を構造保証するため、本 class は値 fetch / None チェックを
+    自分で行わず、Ready から直接取り出す (feedback_structural_guarantee)。
+
     また以下の ClassVar を宣言する必要がある:
-    - ``MODEL``: モデル識別子（例: ``"cl-nagoya/ruri-v3-310m"``）
+    - ``MODEL``: モデル識別子（例: ``"gemini-embedding-001"``）
     - ``DIMENSION``: 出力ベクトルの次元数（例: ``768``）
     - ``RPM``: 1 分あたりリクエスト上限。無制限なら ``None``
     - ``RPD``: 1 日あたりリクエスト上限。無制限なら ``None``
     - ``DOCUMENT_PREFIX``: 文書埋め込み時のプレフィックス（空なら付与しない）
-    - ``QUERY_PREFIX``: 検索クエリ埋め込み時のプレフィックス
 
     レート制限とリトライは Task 層の責務。
     """
@@ -53,7 +63,6 @@ class BaseEmbedder(abc.ABC):
     RPM: ClassVar[int | None]
     RPD: ClassVar[int | None]
     DOCUMENT_PREFIX: ClassVar[str] = ""
-    QUERY_PREFIX: ClassVar[str] = ""
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
@@ -75,28 +84,16 @@ class BaseEmbedder(abc.ABC):
 
     # -- 公開 API（具象） -------------------------------------------------
 
-    async def embed_document(self, text: str) -> EmbeddingVector:
-        """単一のドキュメントテキストを埋め込み、永続化可能な VO で返す。
+    async def embed_document(self, ready: ReadyForEmbedding) -> EmbeddingVector:
+        """Ready 型を入力に単一ドキュメントを埋め込み、永続化可能な VO で返す。
 
         VO 構造制約 (768 dim + 有限性 + サニティ範囲) を満たすことを型レベルで
         保証する。違反は ``EmbeddingResponseInvalidError`` (Layer 2-B) に詰め替え。
         """
+        text = ready.text_for_embedding
         prefixed = f"{self.DOCUMENT_PREFIX}{text}" if self.DOCUMENT_PREFIX else text
-        vectors = await self._embed_once(prefixed)
-        return self._to_vector(vectors[0])
-
-    async def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        """複数のドキュメントテキストを 1 回の API 呼び出しで埋め込む。"""
-        if self.DOCUMENT_PREFIX:
-            texts = [f"{self.DOCUMENT_PREFIX}{t}" for t in texts]
-        return await self._embed_once(texts)
-
-    async def embed_query(self, text: str) -> list[float]:
-        """検索クエリを埋め込む (search BC は Redis cache に list で保存するため
-        VO 化しない)。"""
-        prefixed = f"{self.QUERY_PREFIX}{text}" if self.QUERY_PREFIX else text
-        vectors = await self._embed_once(prefixed)
-        return vectors[0]
+        raw = await self._embed_once(prefixed)
+        return self._to_vector(raw)
 
     @staticmethod
     def _to_vector(raw: list[float]) -> EmbeddingVector:
@@ -115,7 +112,7 @@ class BaseEmbedder(abc.ABC):
 
     # -- 単発呼び出し ----------------------------------------------------
 
-    async def _embed_once(self, contents: str | list[str]) -> list[list[float]]:
+    async def _embed_once(self, text: str) -> list[float]:
         """1 回の API call。SDK 例外を ``AIProvider*Error`` 階層に翻訳して raise。
 
         Pattern (Stage 4 BaseAssessor._call_once と同形):
@@ -126,18 +123,10 @@ class BaseEmbedder(abc.ABC):
         - 翻訳された場合のみ ``raise translated from exc`` で原因連鎖
         """
         try:
-            logger.info(
-                "embed_api_call",
-                model=self.model_name,
-                batch_size=len(contents) if isinstance(contents, list) else 1,
-            )
-            vectors = await self._call_api(contents)
-            logger.info(
-                "embed_api_success",
-                model=self.model_name,
-                count=len(vectors),
-            )
-            return vectors
+            logger.info("embed_api_call", model=self.model_name)
+            vector = await self._call_api(text)
+            logger.info("embed_api_success", model=self.model_name)
+            return vector
         except (AIProviderError, EmbeddingError):
             # 既に階層内 — 二重翻訳防止 (Stage 4 BaseAssessor と同形)
             raise
@@ -151,10 +140,9 @@ class BaseEmbedder(abc.ABC):
     # -- 抽象フック（サブクラスが実装） ------------------------------
 
     @abc.abstractmethod
-    async def _call_api(self, contents: str | list[str]) -> list[list[float]]:
-        """プロバイダー SDK を呼び出し、ベクトルのリストを返す。
+    async def _call_api(self, text: str) -> list[float]:
+        """プロバイダー SDK を呼び出し、単一ベクトルを返す。
 
-        単一テキストの場合でも ``list[list[float]]`` を返すこと。
         例外は捕捉せず ``_embed_once`` に伝播させること。
         """
         ...

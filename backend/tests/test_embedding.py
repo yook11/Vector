@@ -1,9 +1,12 @@
 """BaseEmbedder の ``_embed_once`` / ``_translate_error`` /
 ``embed_document`` (VO 詰め替え境界) 振る舞いテスト。
 
-Stage 5 が Stage 4 と同型の Layer 2-A (``AIProvider*Error``) を介した
-SDK 例外翻訳に切り替わったため、テストは新階層 (``AIProvider*Error``)
-ベースで書く。Stage 5 marker のうち Layer 2-A 由来 (``AIProviderError`` →
+Stage 5 BC 分離後、``BaseEmbedder`` は ``ReadyForEmbedding`` を受ける document
+専用 hierarchy となった (``embed_query`` / ``embed_documents`` は Search BC 側の
+``app/search/embedding/`` に独立)。本テストは新 interface (``embed_document(ready)``
++ ``_call_api(text: str) -> list[float]``) を前提に書く。
+
+Stage 5 marker (``Embedding*Error``) のうち Layer 2-A 由来 (``AIProviderError`` →
 Layer 1 marker) の詰め替えは Service 層 ACL の責務で、本テストは扱わない。
 ただし Layer 2-B (``EmbeddingResponseInvalidError``) は embedder 境界内で
 詰め替える契約のため、本テストで検証する。
@@ -14,6 +17,7 @@ import math
 import pytest
 
 from app.analysis.embedding.ai.base import BaseEmbedder
+from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.domain.value_objects import (
     EMBEDDING_DIMENSION,
     EmbeddingVector,
@@ -29,6 +33,11 @@ from app.analysis.errors.provider import (
 def _v(value: float = 0.1) -> list[float]:
     """テスト用の有効な 768 次元ベクトルを生成する。"""
     return [value] * EMBEDDING_DIMENSION
+
+
+def _ready(text: str = "hello") -> ReadyForEmbedding:
+    """テスト用 ReadyForEmbedding を生成する。"""
+    return ReadyForEmbedding(analysis_id=1, text_for_embedding=text, article_id=1)
 
 
 # ---------------------------------------------------------------------------
@@ -54,19 +63,19 @@ class StubEmbedder(BaseEmbedder):
     RPD = None
 
     def __init__(
-        self, *, side_effects: list[list[list[float]] | Exception] | None = None
+        self, *, side_effects: list[list[float] | Exception] | None = None
     ) -> None:
         self._side_effects = list(side_effects or [])
-        self._calls: list[tuple[str | list[str]]] = []
+        self._calls: list[str] = []
 
-    async def _call_api(self, contents: str | list[str]) -> list[list[float]]:
-        self._calls.append((contents,))
+    async def _call_api(self, text: str) -> list[float]:
+        self._calls.append(text)
         if self._side_effects:
             effect = self._side_effects.pop(0)
             if isinstance(effect, Exception):
                 raise effect
             return effect
-        return [_v()]
+        return _v()
 
     def _translate_error(self, exc: Exception) -> Exception:
         if isinstance(exc, _InvalidInputSDKError):
@@ -79,8 +88,8 @@ class StubEmbedder(BaseEmbedder):
 async def test_embed_document_returns_validated_embedding_vector() -> None:
     """``embed_document`` は永続化可能性を保証する ``EmbeddingVector`` を返す。"""
     raw = _v(0.5)
-    embedder = StubEmbedder(side_effects=[[raw]])
-    result = await embedder.embed_document("hello")
+    embedder = StubEmbedder(side_effects=[raw])
+    result = await embedder.embed_document(_ready())
     assert isinstance(result, EmbeddingVector)
     assert result.to_list() == raw
 
@@ -92,9 +101,9 @@ async def test_embed_document_wraps_vo_violation_in_layer_2b_marker() -> None:
     """
     invalid = _v(0.1)
     invalid[0] = math.nan
-    embedder = StubEmbedder(side_effects=[[invalid]])
+    embedder = StubEmbedder(side_effects=[invalid])
     with pytest.raises(EmbeddingResponseInvalidError) as exc_info:
-        await embedder.embed_document("hello")
+        await embedder.embed_document(_ready())
     assert exc_info.value.code == "embedding_response_invalid"
     assert exc_info.value.provider_error is None
     # __cause__ に Pydantic ValidationError が紐付く (audit chain forensics)
@@ -104,20 +113,9 @@ async def test_embed_document_wraps_vo_violation_in_layer_2b_marker() -> None:
 @pytest.mark.asyncio
 async def test_embed_document_wraps_wrong_dimension_in_layer_2b_marker() -> None:
     """768 次元 ≠ の戻り値も Layer 2-B に詰め替えられる。"""
-    embedder = StubEmbedder(side_effects=[[[0.1] * (EMBEDDING_DIMENSION - 1)]])
+    embedder = StubEmbedder(side_effects=[[0.1] * (EMBEDDING_DIMENSION - 1)])
     with pytest.raises(EmbeddingResponseInvalidError):
-        await embedder.embed_document("hello")
-
-
-@pytest.mark.asyncio
-async def test_embed_documents_returns_raw_lists() -> None:
-    """``embed_documents`` (batch) は raw ``list[float]`` のまま返す
-    (VO 詰め替えは ``embed_document`` のみの責務)。
-    """
-    vectors = [_v(0.3), _v(0.7)]
-    embedder = StubEmbedder(side_effects=[vectors])
-    result = await embedder.embed_documents(["a", "b"])
-    assert result == vectors
+        await embedder.embed_document(_ready())
 
 
 @pytest.mark.asyncio
@@ -125,7 +123,7 @@ async def test_embed_once_translates_sdk_error() -> None:
     """SDK 例外は _translate_error で AIProvider*Error にマップされる。"""
     embedder = StubEmbedder(side_effects=[_InvalidInputSDKError("bad input")])
     with pytest.raises(AIProviderInputRejectedError, match="bad input"):
-        await embedder.embed_document("text")
+        await embedder.embed_document(_ready())
     assert len(embedder._calls) == 1
 
 
@@ -135,7 +133,7 @@ async def test_embed_once_passes_through_unmapped_exception() -> None:
     sentinel = RuntimeError("unmapped failure mode")
     embedder = StubEmbedder(side_effects=[sentinel])
     with pytest.raises(RuntimeError) as exc_info:
-        await embedder.embed_document("text")
+        await embedder.embed_document(_ready())
     # bare re-raise なので __cause__ は付かない (translated is exc 経路)
     assert exc_info.value is sentinel
     assert exc_info.value.__cause__ is None
@@ -147,19 +145,16 @@ async def test_embed_once_does_not_double_translate_ai_provider_error() -> None:
     pre_translated = AIProviderRequestInvalidError("already translated")
     embedder = StubEmbedder(side_effects=[pre_translated])
     with pytest.raises(AIProviderRequestInvalidError) as exc_info:
-        await embedder.embed_document("text")
+        await embedder.embed_document(_ready())
     assert exc_info.value is pre_translated
 
 
 @pytest.mark.asyncio
-async def test_prefix_applied() -> None:
+async def test_no_prefix_passes_text_verbatim() -> None:
     """プレフィックスなしの StubEmbedder はテキストをそのまま渡す。"""
     embedder = StubEmbedder()
-    await embedder.embed_document("doc")
-    await embedder.embed_query("query")
-
-    assert embedder._calls[0] == ("doc",)
-    assert embedder._calls[1] == ("query",)
+    await embedder.embed_document(_ready("doc"))
+    assert embedder._calls == ["doc"]
 
 
 class PrefixedStubEmbedder(StubEmbedder):
@@ -170,20 +165,14 @@ class PrefixedStubEmbedder(StubEmbedder):
     RPM = None
     RPD = None
     DOCUMENT_PREFIX = "P: "
-    QUERY_PREFIX = "Q: "
 
 
 @pytest.mark.asyncio
-async def test_prefix_prepended_to_text() -> None:
-    """プレフィックスが定義されている場合、テキスト先頭に付与される。"""
+async def test_document_prefix_prepended_to_text() -> None:
+    """``DOCUMENT_PREFIX`` が定義されている場合、テキスト先頭に付与される。"""
     embedder = PrefixedStubEmbedder()
-    await embedder.embed_document("doc")
-    await embedder.embed_query("query")
-    await embedder.embed_documents(["a", "b"])
-
-    assert embedder._calls[0] == ("P: doc",)
-    assert embedder._calls[1] == ("Q: query",)
-    assert embedder._calls[2] == (["P: a", "P: b"],)
+    await embedder.embed_document(_ready("doc"))
+    assert embedder._calls == ["P: doc"]
 
 
 # ---------------------------------------------------------------------------
@@ -201,8 +190,8 @@ def test_base_embedder_rejects_subclass_without_classvar() -> None:
             RPM = None
             # RPD は意図的に未定義
 
-            async def _call_api(self, contents: str | list[str]) -> list[list[float]]:
-                return [[0.0]]
+            async def _call_api(self, text: str) -> list[float]:
+                return [0.0]
 
             def _translate_error(self, exc: Exception) -> Exception:
                 return AIProviderError(str(exc))

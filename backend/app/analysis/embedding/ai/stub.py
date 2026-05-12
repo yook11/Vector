@@ -1,11 +1,10 @@
-"""決定的な dummy ベクトルを返す Stub Embedder。
+"""決定的な dummy ベクトルを返す Stub Embedder (Stage 5 document 専用)。
 
 CI / Schemathesis 等、外部 API (Gemini) への到達を避けたい環境で使う。
-本番経路の Pure DI composition root (``app/brokers.py`` / ``app/search/router.py``
-の ``get_embedder_for_search``) は ``GeminiEmbedder`` を hardcode する。
-テスト時のみ FastAPI の
-``app.dependency_overrides[get_embedder_for_search] = lambda: StubEmbedder()``
-で差し替える前提。
+本番経路の Pure DI composition root (``app/brokers.py``) は ``GeminiEmbedder`` を
+hardcode する。Search BC は独立 hierarchy (``app/search/embedding/``) を持ち、
+query 用の stub は ``app/search/embedding/stub.py::StubQueryEmbedder`` に独立する
+(BC 分離の徹底、memory `feedback_no_share_different_problems`)。
 
 セキュリティ / 設計上の不変条件:
 - 入力テキストの SHA256 を seed に決定的なベクトルを生成する
@@ -36,12 +35,9 @@ class StubEmbedder(BaseEmbedder):
     RPM: ClassVar[int | None] = None
     RPD: ClassVar[int | None] = None
     DOCUMENT_PREFIX: ClassVar[str] = ""
-    QUERY_PREFIX: ClassVar[str] = ""
 
-    async def _call_api(self, contents: str | list[str]) -> list[list[float]]:
-        if isinstance(contents, str):
-            return [self._vector_from(contents)]
-        return [self._vector_from(t) for t in contents]
+    async def _call_api(self, text: str) -> list[float]:
+        return self._vector_from(text)
 
     def _translate_error(self, exc: Exception) -> Exception:
         # 例外を起こさないことが Stub の責務。万一発生しても caller の

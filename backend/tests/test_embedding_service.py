@@ -204,7 +204,7 @@ async def test_execute_persists_embedding_on_success(
     result = await svc.execute(ready, embedder)
 
     assert result is None
-    embedder.embed_document.assert_called_once_with("分析タイトル\n分析要約")
+    embedder.embed_document.assert_called_once_with(ready)
 
     db_session.expire_all()
     refetched = await db_session.get(InScopeAssessment, analysis_id)

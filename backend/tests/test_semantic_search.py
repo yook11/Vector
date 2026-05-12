@@ -285,73 +285,128 @@ async def test_semantic_search_returns_422_on_unexpected_embedder_error(
     assert "embedding" in resp.json()["detail"].lower()
 
 
-@pytest.mark.asyncio
-async def test_embed_search_query_translates_unexpected_to_invalid_query() -> None:
-    """embed_search_query は非 AnalysisDomainError を InvalidQueryError へ変換する。"""
+async def _invoke_embed_search_query(fake_embedder: MagicMock) -> None:
+    """``embed_search_query`` を fake redis + cache miss で呼ぶ shared helper。"""
     from uuid import uuid4
 
-    from app.exceptions import InvalidQueryError
     from app.search.service import embed_search_query
+
+    fake_redis = MagicMock()
+    fake_redis.eval = AsyncMock(return_value=1)
+
+    with (
+        patch(
+            "app.search.embedding_cache.get_query_embedding",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "app.search.embedding_cache.set_query_embedding",
+            new_callable=AsyncMock,
+        ),
+    ):
+        await embed_search_query(
+            "test query",
+            user_id=uuid4(),
+            redis=fake_redis,
+            daily_max=10,
+            embedder=fake_embedder,
+        )
+
+
+@pytest.mark.asyncio
+async def test_embed_search_query_translates_unexpected_to_invalid_query() -> None:
+    """翻訳網を抜けた非 ``AIProviderError`` (e.g. RuntimeError) は
+    ``InvalidQueryError`` (422) へ振る (Schemathesis 5xx fail を避ける + translator
+    バグの追跡)。"""
+    from app.exceptions import InvalidQueryError
 
     fake_embedder = MagicMock()
     fake_embedder.embed_query = AsyncMock(side_effect=RuntimeError("translator gap"))
-    fake_redis = MagicMock()
-    fake_redis.eval = AsyncMock(return_value=1)
 
-    with (
-        patch(
-            "app.search.embedding_cache.get_query_embedding",
-            new_callable=AsyncMock,
-            return_value=None,
-        ),
-        patch(
-            "app.search.embedding_cache.set_query_embedding",
-            new_callable=AsyncMock,
-        ),
-        pytest.raises(InvalidQueryError),
-    ):
-        await embed_search_query(
-            "test query",
-            user_id=uuid4(),
-            redis=fake_redis,
-            daily_max=10,
-            embedder=fake_embedder,
-        )
+    with pytest.raises(InvalidQueryError):
+        await _invoke_embed_search_query(fake_embedder)
 
 
 @pytest.mark.asyncio
-async def test_embed_search_query_keeps_search_error_for_domain_failure() -> None:
-    """AnalysisDomainError は引き続き SearchError へ変換される (503 経路維持)。"""
-    from uuid import uuid4
-
-    from app.analysis.errors import ProviderError
+async def test_embed_search_query_routes_service_unavailable_to_search_error() -> None:
+    """``AIProviderServiceUnavailableError`` (provider 5xx) → ``SearchError`` (503)。"""
+    from app.analysis.errors.provider import AIProviderServiceUnavailableError
     from app.search.errors import SearchError
-    from app.search.service import embed_search_query
 
     fake_embedder = MagicMock()
-    fake_embedder.embed_query = AsyncMock(side_effect=ProviderError("upstream 5xx"))
-    fake_redis = MagicMock()
-    fake_redis.eval = AsyncMock(return_value=1)
+    fake_embedder.embed_query = AsyncMock(
+        side_effect=AIProviderServiceUnavailableError("upstream 5xx")
+    )
 
-    with (
-        patch(
-            "app.search.embedding_cache.get_query_embedding",
-            new_callable=AsyncMock,
-            return_value=None,
-        ),
-        patch(
-            "app.search.embedding_cache.set_query_embedding",
-            new_callable=AsyncMock,
-        ),
-        pytest.raises(SearchError),
-    ):
-        await embed_search_query(
-            "test query",
-            user_id=uuid4(),
-            redis=fake_redis,
-            daily_max=10,
-            embedder=fake_embedder,
-        )
+    with pytest.raises(SearchError):
+        await _invoke_embed_search_query(fake_embedder)
+
+
+@pytest.mark.asyncio
+async def test_embed_search_query_routes_configuration_to_search_error() -> None:
+    """``AIProviderConfigurationError`` (auth / key 不正) は ``SearchError`` (503)。"""
+    from app.analysis.errors.provider import AIProviderConfigurationError
+    from app.search.errors import SearchError
+
+    fake_embedder = MagicMock()
+    fake_embedder.embed_query = AsyncMock(
+        side_effect=AIProviderConfigurationError("API key missing")
+    )
+
+    with pytest.raises(SearchError):
+        await _invoke_embed_search_query(fake_embedder)
+
+
+@pytest.mark.asyncio
+async def test_embed_search_query_routes_request_invalid_to_search_error() -> None:
+    """``AIProviderRequestInvalidError`` (provider response shape 違反) は 503。
+
+    user query の内容では直らない provider 側の障害なので infra 系に振る。
+    """
+    from app.analysis.errors.provider import AIProviderRequestInvalidError
+    from app.search.errors import SearchError
+
+    fake_embedder = MagicMock()
+    fake_embedder.embed_query = AsyncMock(
+        side_effect=AIProviderRequestInvalidError("no embeddings")
+    )
+
+    with pytest.raises(SearchError):
+        await _invoke_embed_search_query(fake_embedder)
+
+
+@pytest.mark.asyncio
+async def test_embed_search_query_routes_rate_limited_to_search_error() -> None:
+    """``AIProviderRateLimitedError`` (429) は ``SearchError`` (503)。"""
+    from app.analysis.errors.provider import AIProviderRateLimitedError
+    from app.search.errors import SearchError
+
+    fake_embedder = MagicMock()
+    fake_embedder.embed_query = AsyncMock(
+        side_effect=AIProviderRateLimitedError("rate limited")
+    )
+
+    with pytest.raises(SearchError):
+        await _invoke_embed_search_query(fake_embedder)
+
+
+@pytest.mark.asyncio
+async def test_embed_search_query_routes_input_rejected_to_invalid_query() -> None:
+    """``AIProviderInputRejectedError`` (safety filter blocked) は user query → 422。
+
+    503 の infra 系には振らず、user に「クエリの内容を変えて再試行を」と促す。
+    """
+    from app.analysis.errors.provider import AIProviderInputRejectedError
+    from app.exceptions import InvalidQueryError
+
+    fake_embedder = MagicMock()
+    fake_embedder.embed_query = AsyncMock(
+        side_effect=AIProviderInputRejectedError("safety blocked")
+    )
+
+    with pytest.raises(InvalidQueryError):
+        await _invoke_embed_search_query(fake_embedder)
 
 
 # ---------------------------------------------------------------------------

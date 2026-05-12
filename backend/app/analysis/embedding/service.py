@@ -3,8 +3,8 @@
 案 3 (厚い Ready + 下流 Stage 自身が処理開始時に構築) に従い、precondition
 チェック (analysis 存在 + 既存 embedding 不在) と embedder 入力 text の取得は
 ``ReadyForEmbedding`` が構造保証する。本 Service は execute 内で
-DB fetch / None チェックを行わず、``ready.text_for_embedding`` を直接 embedder に
-渡す。
+DB fetch / None チェックを行わず、``ready`` を直接 embedder に渡す
+(embedder 自身が ``ready.text_for_embedding`` を取り出す)。
 
 Stage 5 は pipeline 終端ゆえ Outcome / Entity の伝搬価値が無いため、execute は
 副作用 (永続化) のみを行い ``None`` を返す (Stage 4 Assessment 同型)。楽観ロック
@@ -70,7 +70,7 @@ class EmbeddingService:
             Stage 5 marker に詰め替えてから raise される。
         """
         try:
-            vector = await embedder.embed_document(ready.text_for_embedding)
+            vector = await embedder.embed_document(ready)
         except AIProviderError as exc:
             # ACL boundary: provider error を Stage 5 Layer 1 marker に wrap。
             # ``from exc`` で __cause__ に元 AIProvider*Error を紐付け、

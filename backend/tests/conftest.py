@@ -60,7 +60,6 @@ from sqlalchemy.pool import NullPool
 from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
 
-from app.analysis.embedding.ai.stub import StubEmbedder
 from app.config import settings
 from app.dependencies import get_session
 from app.main import app
@@ -78,6 +77,7 @@ from app.models import (  # noqa: F401
     WatchlistEntry,
     WeeklyBriefing,
 )
+from app.search.embedding.stub import StubQueryEmbedder
 from app.search.router import get_embedder_for_search
 
 # テスト用 DB は admin (migration role) で接続する: vector_test の create / drop、
@@ -254,7 +254,7 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient]:
             yield db_session
 
     app.dependency_overrides[get_session] = override_session
-    app.dependency_overrides[get_embedder_for_search] = lambda: StubEmbedder()
+    app.dependency_overrides[get_embedder_for_search] = lambda: StubQueryEmbedder()
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test",
@@ -285,7 +285,7 @@ async def authed_client(
             yield db_session
 
     app.dependency_overrides[get_session] = override_session
-    app.dependency_overrides[get_embedder_for_search] = lambda: StubEmbedder()
+    app.dependency_overrides[get_embedder_for_search] = lambda: StubQueryEmbedder()
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test",
@@ -311,7 +311,7 @@ async def admin_client(
             yield db_session
 
     app.dependency_overrides[get_session] = override_session
-    app.dependency_overrides[get_embedder_for_search] = lambda: StubEmbedder()
+    app.dependency_overrides[get_embedder_for_search] = lambda: StubQueryEmbedder()
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test",

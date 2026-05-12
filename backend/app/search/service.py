@@ -7,10 +7,19 @@ from uuid import UUID
 import redis.asyncio as aioredis
 import structlog
 
-from app.analysis.embedding.ai.base import BaseEmbedder
-from app.analysis.errors import AnalysisDomainError
+from app.analysis.errors.provider import (
+    AIProviderConfigurationError,
+    AIProviderError,
+    AIProviderInputRejectedError,
+    AIProviderNetworkError,
+    AIProviderQuotaExhaustedError,
+    AIProviderRateLimitedError,
+    AIProviderRequestInvalidError,
+    AIProviderServiceUnavailableError,
+)
 from app.exceptions import InvalidQueryError
 from app.schemas.articles import PaginatedArticleResponse, SemanticSearchParams
+from app.search.embedding.base import QueryEmbedder
 from app.search.errors import SearchError
 from app.search.quota import consume_search_quota
 from app.search.repository import SemanticSearchRepository
@@ -19,13 +28,28 @@ from app.services.articles import build_brief
 logger = structlog.get_logger(__name__)
 
 
+# provider/infra 起因 (user の query 変更で直らない) は 503 に振る。
+# ``AIProviderRequestInvalidError`` も含めるのは、Gemini 応答の shape 違反 (embeddings
+# 空 / values None) が provider 側の障害であり user query の問題ではないため。
+# ``AIProviderInputRejectedError`` (safety filter blocked) は user query 起因のため
+# 422 経路に振る (下の except 節)。
+_SEARCH_INFRA_PROVIDER_ERRORS: tuple[type[AIProviderError], ...] = (
+    AIProviderConfigurationError,
+    AIProviderNetworkError,
+    AIProviderServiceUnavailableError,
+    AIProviderRateLimitedError,
+    AIProviderQuotaExhaustedError,
+    AIProviderRequestInvalidError,
+)
+
+
 async def embed_search_query(
     text: str,
     *,
     user_id: UUID,
     redis: aioredis.Redis,
     daily_max: int,
-    embedder: BaseEmbedder,
+    embedder: QueryEmbedder,
 ) -> list[float]:
     """RETRIEVAL_QUERY タスクタイプで検索クエリを embedding 化する。
 
@@ -44,15 +68,17 @@ async def embed_search_query(
         redis: 共有 Redis クライアント。
         daily_max: ユーザー 1 人 1 日あたりの上限。
         embedder: 呼び出し側で composition root から injection 済の Embedder。
-            本番経路では ``GeminiEmbedder``、CI 等では ``StubEmbedder``。
+            本番経路では ``GeminiQueryEmbedder``、CI 等では ``StubQueryEmbedder``。
 
     Returns:
         A list of floats representing the query embedding.
 
     Raises:
         SearchQuotaExceededError: cache miss 時にユーザーが当日のクォータを使い切った。
-        SearchError: provider/infra 起因の障害 (rate limit, 5xx 等) → 503。
-        InvalidQueryError: クエリ起因で embedding 生成不能 → 422。
+        SearchError: provider/infra 起因 (configuration / network / 5xx / rate
+            limit / quota / request invalid shape) → 503。
+        InvalidQueryError: user query 起因 (safety filter blocked) または翻訳網
+            漏れの未知 SDK 例外 → 422。
     """
     from app.search.embedding_cache import get_query_embedding, set_query_embedding
 
@@ -69,17 +95,21 @@ async def embed_search_query(
 
     try:
         vector = await embedder.embed_query(text)
-    except AnalysisDomainError as e:
-        # provider/infra 起因 (RateLimitError / ProviderError / NetworkError /
-        # ConfigurationError 等) → 503 維持。retry or 運用対応が筋。
-        # ConfigurationError も含めるのは、embed_query 呼出時に GEMINI_API_KEY
-        # 不正等で上がる経路 (CI 含む) を漏らさず 503 に統一するため。
+    except _SEARCH_INFRA_PROVIDER_ERRORS as e:
+        # provider/infra 起因 (RateLimit / 5xx / network / configuration / quota /
+        # provider response shape 違反) → 503 維持。retry or 運用対応が筋。
         raise SearchError(str(e)) from e
+    except AIProviderInputRejectedError as e:
+        # safety filter blocked 等 — user の query 内容が原因 → 422。
+        # 生 query は焼かず長さのみ log (PII / 機微情報の意図せぬ漏出を避ける)。
+        logger.info("embed_query_input_rejected", q_len=len(text))
+        raise InvalidQueryError(
+            "Could not generate embedding for the search query."
+        ) from e
     except Exception as e:
-        # 翻訳の網を抜けた非 AnalysisDomainError は「クエリ起因の SDK 例外」
-        # または「translator バグ」として扱う。Schemathesis の `not_a_server_error`
-        # は 5xx 全部 fail にするため 422 として返す。
-        # 後追い目的で trace を logger.exception で残す (生 query は焼かない)。
+        # 翻訳の網を抜けた未知 SDK 例外または translator バグ → 422 維持。
+        # Schemathesis の `not_a_server_error` は 5xx 全部 fail にするため
+        # 422 として返す。trace は logger.exception で残す (生 query は焼かない)。
         logger.exception("unexpected_embed_query_failure", q_len=len(text))
         raise InvalidQueryError(
             "Could not generate embedding for the search query."
@@ -105,7 +135,7 @@ class SemanticSearchService:
         user_id: UUID,
         redis: aioredis.Redis,
         daily_max: int,
-        embedder: BaseEmbedder,
+        embedder: QueryEmbedder,
     ) -> PaginatedArticleResponse:
         """ユーザーのクエリテキストとのセマンティック類似度で記事を検索する。"""
         query_embedding = await embed_search_query(
