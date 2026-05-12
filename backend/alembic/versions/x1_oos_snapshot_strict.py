@@ -6,11 +6,15 @@ Stage 4 Assessment 永続化の対称化 PR2: PR1 (``w1_oos_snapshot_columns``) 
 側 (``ck_in_scope_assessments_translated_title_not_empty`` /
 ``ck_in_scope_assessments_summary_not_empty``) と対称に張る。
 
-PR1 で全行 backfill 済 + 本 PR2 で Service/Repository が新規 INSERT 時に snapshot
-を渡すよう変更されたため、NOT NULL 化は安全。デプロイ手順は memory
-``feedback_worker_restart_after_orm_change`` に従い alembic upgrade 後に backend
-/ worker container を必ず restart すること (旧 image が新列を渡さず INSERT して
-IntegrityError で死ぬ窓を最小化する)。
+PR1 merge 後 / PR2 デプロイ前の窓で Repository.save_out_of_scope が新列を渡さない
+状態で INSERT した行が NULL を抱えたまま残るケースがあり (memory:
+``feedback_worker_restart_after_orm_change`` の典型例)、本 migration はそれ単体で
+冪等に締められるよう upgrade() 冒頭に 2 段の safety-net を持つ:
+
+1. ``article_extractions`` から再 backfill (extraction 側は NOT NULL なので、
+   FK 経由で snapshot 値を復元できる)
+2. それでも NULL が残る孤立行は削除 (CASCADE FK + extraction 側 NOT NULL 前提
+   で通常は 0 行。最後の保険)
 
 Revision ID: x1_oos_snapshot_strict
 Revises: w1_oos_snapshot_columns
@@ -31,6 +35,33 @@ depends_on: str | list[str] | None = None
 
 
 def upgrade() -> None:
+    # Safety net 1: PR1 merge 後 / PR2 デプロイ前の窓で snapshot 列が埋まらずに
+    # INSERT された行を再 backfill する。extraction 側は NOT NULL なので、FK で
+    # 結合できる行は必ず値を取り戻せる。
+    op.execute(
+        sa.text(
+            """
+            UPDATE out_of_scope_assessments osa
+            SET
+                translated_title = ae.translated_title,
+                summary = ae.summary
+            FROM article_extractions ae
+            WHERE osa.extraction_id = ae.id
+              AND (osa.translated_title IS NULL OR osa.summary IS NULL);
+            """
+        )
+    )
+    # Safety net 2: extraction が CASCADE で消える前の race 等で取り残された
+    # 孤立行は削除する。CASCADE FK + extraction.translated_title NOT NULL のため
+    # 通常は 0 行だが、本番でのデータ起因停止を防ぐ最後の保険。
+    op.execute(
+        sa.text(
+            """
+            DELETE FROM out_of_scope_assessments
+            WHERE translated_title IS NULL OR summary IS NULL;
+            """
+        )
+    )
     op.alter_column(
         "out_of_scope_assessments",
         "translated_title",
