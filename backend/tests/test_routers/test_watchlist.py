@@ -48,7 +48,6 @@ async def _build_article_with_analysis(
         translated_title=translated_title,
         summary=summary,
         investor_take=investor_take,
-        ai_model="gemini-2.0-flash",
         topic=topic,
         category_id=category_id,
     )

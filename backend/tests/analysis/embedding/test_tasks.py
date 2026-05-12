@@ -353,7 +353,6 @@ async def _make_analysis(
         translated_title="title",
         summary="summary",
         investor_take="take",
-        ai_model="gemini-2.5-flash-lite",
         topic="topic",
         category_id=sample_categories[0].id,
     )

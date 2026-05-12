@@ -872,7 +872,6 @@ async def test_news_endpoint_includes_analysis(
         translated_title="テスト記事",
         summary="テスト要約",
         investor_take="テスト理由",
-        ai_model="gemini-2.5-flash-lite",
         topic="integration test",
         category_id=sample_categories[0].id,
     )

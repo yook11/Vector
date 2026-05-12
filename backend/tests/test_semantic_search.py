@@ -69,7 +69,6 @@ async def _create_article(
         translated_title=f"Translated: {title}",
         summary="Test summary",
         investor_take="Test investor_take",
-        ai_model="gemini-2.0-flash",
         embedding=embedding,
         topic=topic,
         category_id=category_id,

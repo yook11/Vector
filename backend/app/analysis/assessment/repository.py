@@ -109,11 +109,13 @@ class AssessmentRepository:
     ) -> int | None:
         """``AssessmentCall[InScope]`` を受けて in-scope assessment を永続化する。
 
-        ``call.result`` / ``call.model_name`` から永続化に必要な値を直接取り出し、
-        caller は ``ai_model`` を別引数で渡さない (Stage 4 で起きた事実は envelope
-        が抱え切る、`feedback_bc_boundary_guarantees_downstream`)。
+        ``call.result`` から永続化に必要な値を直接取り出す
+        (Stage 4 で起きた事実は envelope が抱え切る、
+        `feedback_bc_boundary_guarantees_downstream`)。
         ``extraction_id`` / ``translated_title`` / ``summary`` は ``ready`` から
-        取り出す (Stage 3 由来 snapshot)。
+        取り出す (Stage 3 由来 snapshot)。``call.model_name`` は監査 SSoT
+        (``pipeline_events.payload.ai_model``) に焼くのみで業務行には INSERT
+        しない (`feedback_outcome_purification`)。
 
         category slug → id 解決を内部化し、未登録 slug は
         ``AssessmentCategoryMissingError`` で fail-fast (Layer 2-B 業務 invariant)。
@@ -146,7 +148,6 @@ class AssessmentRepository:
                 topic=in_scope.topic,
                 category_id=category_id,
                 investor_take=in_scope.investor_take,
-                ai_model=call.model_name,
             )
             .on_conflict_do_nothing(index_elements=["extraction_id"])
             .returning(InScopeAssessment.id)
@@ -164,9 +165,10 @@ class AssessmentRepository:
     ) -> int | None:
         """``AssessmentCall[OutOfScope]`` を受けて out-of-scope を永続化する。
 
-        in-scope 経路と対称: ``call.result.investor_take`` / ``call.model_name`` を
-        envelope から直接取り出し、Stage 3 由来 snapshot
-        (``translated_title`` / ``summary``) は ``ready`` から取り出す。
+        in-scope 経路と対称: ``call.result.investor_take`` を envelope から直接
+        取り出し、Stage 3 由来 snapshot (``translated_title`` / ``summary``) は
+        ``ready`` から取り出す。``call.model_name`` は監査 SSoT
+        (``pipeline_events.payload.ai_model``) に焼くのみで業務行には INSERT しない。
         ``out_of_scope_assessments`` には category / topic は無いので外す。
 
         Returns:
@@ -181,7 +183,6 @@ class AssessmentRepository:
                 translated_title=ready.translated_title,
                 summary=ready.summary,
                 investor_take=out_of_scope.investor_take,
-                ai_model=call.model_name,
             )
             .on_conflict_do_nothing(index_elements=["extraction_id"])
             .returning(OutOfScopeAssessment.id)

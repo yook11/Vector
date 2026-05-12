@@ -105,7 +105,6 @@ class TestListCategories:
             translated_title="TF記事",
             summary="要約",
             investor_take="理由",
-            ai_model="test",
             topic="tensorflow",
             category_id=sample_categories[0].id,
         )
@@ -147,7 +146,6 @@ class TestListCategories:
             translated_title="TF記事",
             summary="要約",
             investor_take="理由",
-            ai_model="test",
             topic="tensorflow",
             category_id=sample_categories[0].id,
             analyzed_at=datetime.now(UTC) - timedelta(hours=25),

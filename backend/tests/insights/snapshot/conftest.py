@@ -84,7 +84,6 @@ def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAn
             translated_title=f"seed-{n}",
             summary="summary body",
             investor_take="investor take body",
-            ai_model="test",
             topic=topic,
             category_id=category_id,
             analyzed_at=analyzed_at,

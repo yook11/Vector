@@ -271,7 +271,6 @@ async def test_race_lost_does_not_record_audit(
         topic="llm benchmark",
         category_id=sample_categories[0].id,
         investor_take="bullish",
-        ai_model=_AI_MODEL,
     )
     db_session.add(winner)
     await db_session.commit()
@@ -470,7 +469,6 @@ async def test_out_of_scope_race_lost_does_not_record_audit(
         translated_title="title",
         summary="summary text",
         investor_take="not relevant",
-        ai_model=_AI_MODEL,
     )
     db_session.add(winner)
     await db_session.commit()

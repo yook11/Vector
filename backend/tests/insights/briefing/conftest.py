@@ -68,7 +68,6 @@ def seed_briefing_analysis(
             translated_title=title,
             summary=body,
             investor_take="investor take",
-            ai_model="test",
             topic="ai agents",
             category_id=category_id,
             analyzed_at=analyzed_at,

@@ -150,7 +150,6 @@ async def test_save_out_of_scope_persists_snapshot_fields(
     assert row.translated_title == extraction.translated_title
     assert row.summary == extraction.summary
     assert row.investor_take == "not relevant"
-    assert row.ai_model == _AI_MODEL
 
 
 @pytest.mark.asyncio
@@ -166,7 +165,6 @@ async def test_save_out_of_scope_returns_none_on_race_lost(
         translated_title="勝者タイトル",
         summary="勝者要約",
         investor_take="winner take",
-        ai_model=_AI_MODEL,
     )
     db_session.add(winner)
     await db_session.commit()
@@ -233,7 +231,6 @@ async def test_save_in_scope_persists_snapshot_fields(
     assert row.translated_title == extraction.translated_title
     assert row.summary == extraction.summary
     assert row.investor_take == "bullish"
-    assert row.ai_model == _AI_MODEL
 
 
 @pytest.mark.asyncio
@@ -252,7 +249,6 @@ async def test_save_in_scope_returns_none_on_race_lost(
         topic="llm benchmark",
         category_id=ai_cat.id,
         investor_take="winner take",
-        ai_model=_AI_MODEL,
     )
     db_session.add(winner)
     await db_session.commit()
@@ -327,7 +323,6 @@ async def test_try_load_returns_none_when_in_scope_exists(
             topic="llm benchmark",
             category_id=ai_cat.id,
             investor_take="x",
-            ai_model=_AI_MODEL,
         )
     )
     await db_session.commit()
@@ -349,7 +344,6 @@ async def test_try_load_returns_none_when_out_of_scope_exists(
             translated_title="t",
             summary="s",
             investor_take="x",
-            ai_model=_AI_MODEL,
         )
     )
     await db_session.commit()

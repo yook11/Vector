@@ -48,10 +48,6 @@ class OutOfScopeAssessment(Base):
             "investor_take != ''",
             name="ck_out_of_scope_assessments_investor_take_not_empty",
         ),
-        CheckConstraint(
-            "ai_model != ''",
-            name="ck_out_of_scope_assessments_ai_model_not_empty",
-        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -61,7 +57,6 @@ class OutOfScopeAssessment(Base):
     translated_title: Mapped[str] = mapped_column(String(500))
     summary: Mapped[str] = mapped_column(Text())
     investor_take: Mapped[str] = mapped_column(Text())
-    ai_model: Mapped[str] = mapped_column(String(100))
     rejected_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

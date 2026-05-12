@@ -138,7 +138,6 @@ async def _build_analysis(
         translated_title=translated_title,
         summary=summary,
         investor_take="投資家視点",
-        ai_model="gemini-2.5-flash-lite",
         topic="embedding service",
         category_id=category_id,
         embedding=embedding,

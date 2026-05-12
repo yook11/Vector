@@ -173,7 +173,6 @@ async def _persist_in_scope(
         topic="llm benchmark",
         category_id=category.id,
         investor_take="bullish",
-        ai_model=_AI_MODEL,
     )
     db_session.add(orm)
     await db_session.commit()
@@ -191,7 +190,6 @@ async def _persist_out_of_scope(
         translated_title=extraction.translated_title,
         summary=extraction.summary,
         investor_take="not relevant",
-        ai_model=_AI_MODEL,
     )
     db_session.add(orm)
     await db_session.commit()
