@@ -52,10 +52,6 @@ class ExtractionNoise(Base):
             name="ck_extraction_noises_summary_ja_not_empty",
         ),
         CheckConstraint(
-            "ai_model <> ''",
-            name="ck_extraction_noises_ai_model_not_empty",
-        ),
-        CheckConstraint(
             "jsonb_typeof(entities) = 'array'",
             name="ck_extraction_noises_entities_is_array",
         ),
@@ -73,7 +69,6 @@ class ExtractionNoise(Base):
         default=list,
         server_default=text("'[]'::jsonb"),
     )
-    ai_model: Mapped[str] = mapped_column(String(100))
     rejected_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

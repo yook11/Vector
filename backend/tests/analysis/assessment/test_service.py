@@ -89,7 +89,6 @@ async def _make_extraction(
         article_id=article.id,
         translated_title="title",
         summary="summary text",
-        ai_model=_AI_MODEL,
     )
     db_session.add(extraction)
     await db_session.commit()

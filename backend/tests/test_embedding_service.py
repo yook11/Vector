@@ -117,7 +117,6 @@ async def _build_extraction(
         article_id=article.id,
         translated_title=translated_title,
         summary=summary,
-        ai_model="gemini-2.5-flash-lite",
     )
     db_session.add(extraction)
     await db_session.flush()

@@ -26,7 +26,7 @@ class ExtractionNoise:
 
     Invariants:
     - id は DB が採番した正の整数
-    - title_ja / summary_ja / ai_model は非空 (DB CHECK 制約と一致)
+    - title_ja / summary_ja は非空 (DB CHECK 制約と一致)
     - entities は ``(surface.match_key, raw_type.root)`` で重複なし
       (``ExtractionResult`` 通過時点で保証済みだが、DB 復元時の安全網)
     """
@@ -36,7 +36,6 @@ class ExtractionNoise:
     title_ja: str
     summary_ja: str
     entities: tuple[ExtractedEntity, ...]
-    ai_model: str
     rejected_at: datetime
 
     def __post_init__(self) -> None:
@@ -44,8 +43,6 @@ class ExtractionNoise:
             raise ValueError("ExtractionNoise.title_ja must be non-empty")
         if not self.summary_ja:
             raise ValueError("ExtractionNoise.summary_ja must be non-empty")
-        if not self.ai_model:
-            raise ValueError("ExtractionNoise.ai_model must be non-empty")
         seen: set[tuple[str, str]] = set()
         for e in self.entities:
             key = e.dedup_key()

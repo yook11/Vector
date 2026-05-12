@@ -113,7 +113,6 @@ async def _seed_article_with_extraction(
             ],
         ),
         article_id=article.id,
-        ai_model="old",
     )
     await db_session.commit()
     return article

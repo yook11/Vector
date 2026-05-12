@@ -99,21 +99,19 @@ class ExtractionService:
         )
 
         if envelope.result.relevance == "noise":
-            return await self._persist_noise(ready, envelope, extractor.model_name)
-        return await self._persist_signal(ready, envelope, extractor.model_name)
+            return await self._persist_noise(ready, envelope)
+        return await self._persist_signal(ready, envelope)
 
     async def _persist_signal(
         self,
         ready: ReadyForExtraction,
         envelope: ExtractionCall,
-        ai_model: str,
     ) -> ExtractedOutcome:
         async with self._session_factory() as session:
             repo = ExtractionRepository(session)
             saved = await repo.save(
                 envelope.result,
                 article_id=ready.article_id,
-                ai_model=ai_model,
             )
 
             if saved is None:
@@ -153,14 +151,12 @@ class ExtractionService:
         self,
         ready: ReadyForExtraction,
         envelope: ExtractionCall,
-        ai_model: str,
     ) -> NoiseOutcome:
         async with self._session_factory() as session:
             noise_repo = NoiseRepository(session)
             saved = await noise_repo.save(
                 envelope.result,
                 article_id=ready.article_id,
-                ai_model=ai_model,
             )
 
             if saved is None:

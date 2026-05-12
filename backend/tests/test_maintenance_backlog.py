@@ -133,7 +133,6 @@ async def test_pending_extraction_excludes_articles_with_extraction(
             article_id=article.id,
             translated_title="tt",
             summary="ss",
-            ai_model="m",
         )
     )
     await db_session.commit()
@@ -169,7 +168,6 @@ async def test_pending_assessment_returns_extractions_without_analysis_or_reject
         article_id=article.id,
         translated_title="tt",
         summary="ss",
-        ai_model="m",
     )
     db_session.add(extraction)
     await db_session.commit()
@@ -202,7 +200,6 @@ async def test_pending_assessment_excludes_extractions_with_analysis(
         article_id=article.id,
         translated_title="tt",
         summary="ss",
-        ai_model="m",
     )
     db_session.add(extraction)
     await db_session.commit()
@@ -251,7 +248,6 @@ async def test_pending_embedding_returns_analysis_with_null_embedding(
         article_id=article.id,
         translated_title="tt",
         summary="ss",
-        ai_model="m",
     )
     db_session.add(extraction)
     await db_session.commit()
@@ -296,7 +292,6 @@ async def test_pending_embedding_excludes_already_embedded(
         article_id=article.id,
         translated_title="tt",
         summary="ss",
-        ai_model="m",
     )
     db_session.add(extraction)
     await db_session.commit()

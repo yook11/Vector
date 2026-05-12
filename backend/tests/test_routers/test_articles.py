@@ -47,7 +47,6 @@ async def _create_analysis(
         article_id=article.id,
         translated_title=translated_title,
         summary="テストの要約",
-        ai_model="gemini-2.0-flash",
     )
     session.add(extraction)
     await session.flush()

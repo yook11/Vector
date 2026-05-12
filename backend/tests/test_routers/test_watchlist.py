@@ -39,7 +39,6 @@ async def _build_article_with_analysis(
         article_id=article.id,
         translated_title=translated_title,
         summary=summary,
-        ai_model="gemini-2.0-flash",
     )
     db_session.add(extraction)
     await db_session.flush()

@@ -43,10 +43,6 @@ class ArticleExtraction(Base):
             "summary != ''",
             name="ck_article_extractions_summary_not_empty",
         ),
-        CheckConstraint(
-            "ai_model != ''",
-            name="ck_article_extractions_ai_model_not_empty",
-        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -55,7 +51,6 @@ class ArticleExtraction(Base):
     )
     translated_title: Mapped[str] = mapped_column(String(500))
     summary: Mapped[str] = mapped_column(Text())
-    ai_model: Mapped[str] = mapped_column(String(100))
     extracted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

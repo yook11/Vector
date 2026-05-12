@@ -166,9 +166,7 @@ class ReExtractionService:
         started = perf_counter()
         async with self._session_factory() as session:
             repo = ExtractionRepository(session)
-            updated = await repo.update_idempotent(
-                result, article_id=article_id, ai_model=extractor.model_name
-            )
+            updated = await repo.update_idempotent(result, article_id=article_id)
             if dry_run:
                 await session.rollback()
             else:

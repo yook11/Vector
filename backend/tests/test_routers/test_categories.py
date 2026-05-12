@@ -96,7 +96,6 @@ class TestListCategories:
             article_id=article.id,
             translated_title="TF記事",
             summary="要約",
-            ai_model="test",
         )
         db_session.add(extraction)
         await db_session.flush()
@@ -137,7 +136,6 @@ class TestListCategories:
             article_id=article.id,
             translated_title="TF記事",
             summary="要約",
-            ai_model="test",
         )
         db_session.add(extraction)
         await db_session.flush()

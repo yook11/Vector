@@ -94,7 +94,7 @@ class Extraction:
 
     Invariants:
     - id は DB が採番した正の整数
-    - translated_title / summary / ai_model は非空 (DB CHECK 制約と一致)
+    - translated_title / summary は非空 (DB CHECK 制約と一致)
     - entities は ``(surface.match_key, raw_type.root)`` で重複なし
       (``ExtractionResult`` 通過時点で保証済みのはずだが、DB 復元時の安全網
       として __post_init__ で検査)
@@ -104,7 +104,6 @@ class Extraction:
     translated_title: str
     summary: str
     entities: tuple[ExtractedEntity, ...]
-    ai_model: str
     extracted_at: datetime
 
     def __post_init__(self) -> None:
@@ -112,8 +111,6 @@ class Extraction:
             raise ValueError("Extraction.translated_title must be non-empty")
         if not self.summary:
             raise ValueError("Extraction.summary must be non-empty")
-        if not self.ai_model:
-            raise ValueError("Extraction.ai_model must be non-empty")
         seen: set[tuple[str, str]] = set()
         for e in self.entities:
             key = e.dedup_key()

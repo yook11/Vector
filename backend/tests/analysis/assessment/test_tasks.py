@@ -461,7 +461,6 @@ async def _make_extraction(
         article_id=article.id,
         translated_title="title",
         summary="summary",
-        ai_model="gemini-2.5-pro",
     )
     db_session.add(extraction)
     await db_session.commit()

@@ -58,7 +58,6 @@ def seed_briefing_analysis(
             article_id=article.id,
             translated_title=title,
             summary=body,
-            ai_model="test",
         )
         db_session.add(extraction)
         await db_session.flush()

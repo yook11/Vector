@@ -343,7 +343,6 @@ async def _make_analysis(
         article_id=article.id,
         translated_title="title",
         summary="summary",
-        ai_model="gemini-2.5-flash-lite",
     )
     db_session.add(extraction)
     await db_session.commit()

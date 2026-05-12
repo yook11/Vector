@@ -86,7 +86,7 @@ async def test_exists_for_article_returns_true_after_save(
         db_session, sample_source, "https://example.com/exists"
     )
     repo = ExtractionRepository(db_session)
-    saved = await repo.save(_result(), article_id=article.id, ai_model="m")
+    saved = await repo.save(_result(), article_id=article.id)
     await db_session.commit()
     assert saved is not None
     assert await repo.exists_for_article(article.id) is True
@@ -106,14 +106,12 @@ async def test_save_returns_extraction_with_persisted_id(
     saved = await repo.save(
         _result(title_ja="保存後", summary_ja="要約"),
         article_id=article.id,
-        ai_model="test-model",
     )
     await db_session.commit()
 
     assert saved is not None
     assert saved.id > 0
     assert saved.translated_title == "保存後"
-    assert saved.ai_model == "test-model"
     assert saved.extracted_at.tzinfo is not None
 
 
@@ -124,11 +122,11 @@ async def test_save_returns_none_on_duplicate_in_same_session(
     """同一 article_id への 2 度目の save は None を返す (race 敗北の代理)。"""
     article = await _make_article(db_session, sample_source, "https://example.com/dup")
     repo = ExtractionRepository(db_session)
-    first = await repo.save(_result(), article_id=article.id, ai_model="m")
+    first = await repo.save(_result(), article_id=article.id)
     await db_session.commit()
     assert first is not None
 
-    second = await repo.save(_result(), article_id=article.id, ai_model="m")
+    second = await repo.save(_result(), article_id=article.id)
     assert second is None
 
 
@@ -144,7 +142,6 @@ async def test_save_does_not_create_orphan_entities_on_race_loss(
     first = await repo.save(
         _result(entities=[("First", "company")]),
         article_id=article.id,
-        ai_model="m",
     )
     await db_session.commit()
     assert first is not None
@@ -155,7 +152,6 @@ async def test_save_does_not_create_orphan_entities_on_race_loss(
     second = await repo.save(
         _result(entities=[("Second", "company"), ("Third", "company")]),
         article_id=article.id,
-        ai_model="m",
     )
     await db_session.commit()
     assert second is None
@@ -175,7 +171,6 @@ async def test_save_persists_entities_when_parent_succeeds(
     saved = await repo.save(
         _result(entities=[("MIT", "company"), ("CRISPR", "technology")]),
         article_id=article.id,
-        ai_model="m",
     )
     await db_session.commit()
 
@@ -218,7 +213,6 @@ async def test_find_by_article_id_round_trips_entity(
     saved = await repo.save(
         _result(entities=[("X", "company")]),
         article_id=article.id,
-        ai_model="m",
     )
     await db_session.commit()
     assert saved is not None
@@ -255,7 +249,6 @@ async def test_update_idempotent_replaces_entities_and_keeps_parent(
     first = await repo.save(
         _result(entities=[("OldOne", "company"), ("OldTwo", "person")]),
         article_id=article.id,
-        ai_model="old-model",
     )
     await db_session.commit()
     assert first is not None
@@ -268,13 +261,11 @@ async def test_update_idempotent_replaces_entities_and_keeps_parent(
             entities=[("NewSurface", "Company")],
         ),
         article_id=article.id,
-        ai_model="new-model",
     )
     await db_session.commit()
 
     assert updated.id == parent_id  # parent UPDATE only
     assert updated.translated_title == "新タイトル"
-    assert updated.ai_model == "new-model"
 
     rows = (
         (
@@ -309,7 +300,7 @@ async def test_concurrent_save_returns_one_persisted_one_none(
     async def _save_in_new_session():
         async with session_factory() as session:
             repo = ExtractionRepository(session)
-            saved = await repo.save(_result(), article_id=article.id, ai_model="m")
+            saved = await repo.save(_result(), article_id=article.id)
             await session.commit()
             return saved
 

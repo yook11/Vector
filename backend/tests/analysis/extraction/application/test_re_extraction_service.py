@@ -110,7 +110,6 @@ async def _seed_extraction(
             ],
         ),
         article_id=article.id,
-        ai_model="old-model",
     )
     await db_session.commit()
     assert saved is not None
@@ -208,7 +207,6 @@ async def test_success_replaces_entities_and_keeps_parent_id(
         ).scalar_one()
         assert parent_after.id == parent_id_before
         assert parent_after.translated_title == "新タイトル"
-        assert parent_after.ai_model == "test-model-x"
 
         rows = (
             (
@@ -255,8 +253,7 @@ async def test_dry_run_calls_extractor_but_rolls_back(
                 )
             )
         ).scalar_one()
-        # 旧 ai_model のまま (UPDATE が roll back された)
-        assert parent.ai_model == "old-model"
+        # UPDATE が roll back されたので旧タイトルのまま
         assert parent.translated_title == "旧タイトル"
 
         rows = (

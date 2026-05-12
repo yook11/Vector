@@ -66,7 +66,6 @@ def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAn
             article_id=article.id,
             translated_title=f"seed-{n}",
             summary="summary body",
-            ai_model="test",
             entities=[
                 ArticleExtractionEntity(
                     surface=surface,

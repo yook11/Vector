@@ -46,7 +46,6 @@ async def _build_analysis(
         article_id=article.id,
         translated_title="抽出タイトル",
         summary="抽出要約",
-        ai_model="gemini-2.5-flash-lite",
     )
     db_session.add(extraction)
     await db_session.flush()

@@ -62,7 +62,6 @@ class NoiseRepository:
         result: ExtractionResult,
         *,
         article_id: int,
-        ai_model: str,
     ) -> ExtractionNoise | None:
         """noise 記録を ``INSERT ... ON CONFLICT DO NOTHING RETURNING ...`` で
         永続化する。
@@ -75,6 +74,9 @@ class NoiseRepository:
         (``article_extractions`` 側に既に行がある) のケースも同経路で吸収する
         — トリガー fire は ``IntegrityError`` を raise するが、``DO NOTHING`` の
         スコープには入らない。後者は呼び出し側で再 try (taskiq retry) させる。
+
+        使用 model 名は audit (`pipeline_events.payload.ai_model`) に焼くのみで
+        業務行には INSERT しない (audit SSoT、feedback_outcome_purification)。
 
         Returns:
             成功時: 永続化された ``ExtractionNoise`` Entity
@@ -92,7 +94,6 @@ class NoiseRepository:
                 title_ja=result.title_ja,
                 summary_ja=result.summary_ja,
                 entities=entities_jsonb,
-                ai_model=ai_model,
             )
             .on_conflict_do_nothing()
             .returning(ExtractionNoiseORM.id, ExtractionNoiseORM.rejected_at)
@@ -107,7 +108,6 @@ class NoiseRepository:
             title_ja=result.title_ja,
             summary_ja=result.summary_ja,
             entities=tuple(result.entities),
-            ai_model=ai_model,
             rejected_at=row.rejected_at,
         )
 
@@ -126,6 +126,5 @@ class NoiseRepository:
                 )
                 for d in orm.entities
             ),
-            ai_model=orm.ai_model,
             rejected_at=orm.rejected_at,
         )

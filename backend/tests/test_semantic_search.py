@@ -58,7 +58,6 @@ async def _create_article(
         article_id=article.id,
         translated_title=f"Translated: {title}",
         summary="Test summary",
-        ai_model="gemini-2.0-flash",
     )
     db_session.add(extraction)
     await db_session.flush()

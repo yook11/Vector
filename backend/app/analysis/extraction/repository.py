@@ -60,7 +60,6 @@ class ExtractionRepository:
         result: ExtractionResult,
         *,
         article_id: int,
-        ai_model: str,
     ) -> Extraction | None:
         """AI 分析結果を `INSERT ... ON CONFLICT (article_id) DO NOTHING
         RETURNING ...` で永続化する。
@@ -70,6 +69,9 @@ class ExtractionRepository:
 
         子テーブル ``article_extraction_entities`` の INSERT は親 INSERT 成功時
         のみ実施し、race 敗北で orphan エンティティを作らない。
+
+        使用 model 名は audit (`pipeline_events.payload.ai_model`) に焼くのみで
+        業務行には INSERT しない (audit SSoT、feedback_outcome_purification)。
 
         Returns:
             成功時: 永続化された ``Extraction`` Entity (id / extracted_at は DB 値、
@@ -83,7 +85,6 @@ class ExtractionRepository:
                 article_id=article_id,
                 translated_title=result.title_ja,
                 summary=result.summary_ja,
-                ai_model=ai_model,
             )
             .on_conflict_do_nothing(index_elements=["article_id"])
             .returning(ArticleExtraction.id, ArticleExtraction.extracted_at)
@@ -113,7 +114,6 @@ class ExtractionRepository:
             translated_title=result.title_ja,
             summary=result.summary_ja,
             entities=tuple(result.entities),
-            ai_model=ai_model,
             extracted_at=row.extracted_at,
         )
 
@@ -122,7 +122,6 @@ class ExtractionRepository:
         result: ExtractionResult,
         *,
         article_id: int,
-        ai_model: str,
     ) -> Extraction:
         """既存の Extraction を新しい ``ExtractionResult`` で上書きする (CLI 用)。
 
@@ -147,7 +146,6 @@ class ExtractionRepository:
             .values(
                 translated_title=result.title_ja,
                 summary=result.summary_ja,
-                ai_model=ai_model,
                 extracted_at=func.now(),
             )
             .returning(ArticleExtraction.id, ArticleExtraction.extracted_at)
@@ -179,7 +177,6 @@ class ExtractionRepository:
             translated_title=result.title_ja,
             summary=result.summary_ja,
             entities=tuple(result.entities),
-            ai_model=ai_model,
             extracted_at=row.extracted_at,
         )
 
@@ -194,6 +191,5 @@ class ExtractionRepository:
                 ExtractedEntity(surface=e.surface, raw_type=e.raw_type)
                 for e in orm.entities
             ),
-            ai_model=orm.ai_model,
             extracted_at=orm.extracted_at,
         )

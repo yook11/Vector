@@ -183,7 +183,6 @@ async def _create_article_with_extraction(
         article_id=article.id,
         translated_title=translated_title,
         summary=summary,
-        ai_model="gemini-2.5-flash-lite",
     )
     db_session.add(extraction)
     await db_session.flush()
@@ -507,7 +506,6 @@ def test_extraction_rejects_empty_translated_title() -> None:
             translated_title="",
             summary="s",
             entities=(),
-            ai_model="m",
             extracted_at=datetime.now(UTC),
         )
 
@@ -528,7 +526,6 @@ def test_extraction_rejects_duplicated_entities() -> None:
                     surface=EntitySurface("mit"), raw_type=EntityRawType("company")
                 ),
             ),
-            ai_model="m",
             extracted_at=datetime.now(UTC),
         )
 

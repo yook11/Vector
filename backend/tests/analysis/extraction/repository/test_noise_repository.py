@@ -75,7 +75,7 @@ async def test_exists_for_article_returns_true_after_save(
 ) -> None:
     article = await _make_article(db_session, sample_source, "https://example.com/n1")
     repo = NoiseRepository(db_session)
-    saved = await repo.save(_noise_result(), article_id=article.id, ai_model="m")
+    saved = await repo.save(_noise_result(), article_id=article.id)
     await db_session.commit()
     assert saved is not None
     assert await repo.exists_for_article(article.id) is True
@@ -98,7 +98,6 @@ async def test_save_persists_entities_as_jsonb_in_order(
             entities=[("First", "company"), ("Second", "person"), ("Third", "tech")]
         ),
         article_id=article.id,
-        ai_model="gemini-test",
     )
     await db_session.commit()
 
@@ -118,7 +117,6 @@ async def test_save_persists_entities_as_jsonb_in_order(
         "tech",
     )
     assert fetched.title_ja == "ノイズタイトル"
-    assert fetched.ai_model == "gemini-test"
 
 
 @pytest.mark.asyncio
@@ -131,7 +129,6 @@ async def test_save_accepts_empty_entities(
     saved = await repo.save(
         _noise_result(entities=[]),
         article_id=article.id,
-        ai_model="m",
     )
     await db_session.commit()
 
@@ -151,14 +148,13 @@ async def test_save_returns_none_on_unique_race_loss(
     article = await _make_article(db_session, sample_source, "https://example.com/n4")
     repo = NoiseRepository(db_session)
 
-    first = await repo.save(_noise_result(), article_id=article.id, ai_model="m")
+    first = await repo.save(_noise_result(), article_id=article.id)
     await db_session.commit()
     assert first is not None
 
     second = await repo.save(
         _noise_result(title_ja="別タイトル"),
         article_id=article.id,
-        ai_model="m",
     )
     await db_session.commit()
     assert second is None  # race 敗北は None で表現される
