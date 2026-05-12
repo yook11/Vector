@@ -2,7 +2,7 @@
 
 spec `specs/typed-pipeline-preconditions.md` (案 3 で再ドラフト予定) の embedding
 BC 実装。Stage 5 operation の前提条件 (Embedding 未生成) を構造保証し、かつ
-embedder 入力 text を保持する厚い Ready として運ぶ。
+embedder 入力 text + audit に必要な参照値も含めて運ぶ厚い Ready。
 
 設計方針 (2026-05-12 確定、案 3): Ready 型は **処理に必要な値の全揃え** を構造保証する
 厚い型であり、**下流 Stage 自身 (Stage 5 Task) が処理開始時に DB から内容を fetch
@@ -51,15 +51,16 @@ class EmbeddingPreconditionProtocol(Protocol):
 class ReadyForEmbedding(BaseModel):
     """Stage 5 embedding を実行可能な状態を表す precondition 型 (厚い Ready)。
 
-    フィールドは operation を特定する ID と、embedder 入力 text の全揃え。
-    Ready が存在する = 処理開始時点で DB から text を取得済 + 行存在 + 未 embedded
-    が verify された状態 (時間ずれゼロ)。Service は ``ready.text_for_embedding`` を
-    直接 embedder に渡せばよく、自身で DB fetch / None チェックを行わない。
+    フィールドは operation を特定する ID と、embedder 入力 text + audit 用参照値
+    の全揃え。Ready が存在する = 処理開始時点で DB から text を取得済 + 行存在 +
+    未 embedded が verify された状態 (時間ずれゼロ)。Service / AuditRepository は
+    ``ready`` から直接値を取り、自身で DB fetch / 逆引きを行わない。
 
     Invariants:
     - ``analysis_id``: 正の整数 (DB の InScopeAssessment.id を指す)
     - ``text_for_embedding``: 結合済の embedder 入力 (translated_title + "\\n" +
       summary)。Repository が結合して返す
+    - ``article_id``: 正の整数 (audit の ``pipeline_events.article_id`` 列に詰める)
     - frozen: 生成後は不変
     """
 
@@ -67,6 +68,7 @@ class ReadyForEmbedding(BaseModel):
 
     analysis_id: int = Field(gt=0)
     text_for_embedding: str = Field(min_length=1)
+    article_id: int = Field(gt=0)
 
     @classmethod
     async def try_advance_from(
@@ -87,7 +89,7 @@ class ReadyForEmbedding(BaseModel):
         構築を完結させる。
 
         Returns:
-            進める場合: `ReadyForEmbedding` (text 含む厚い型)
+            進める場合: `ReadyForEmbedding` (text + article_id 含む厚い型)
             進めない場合: `None` (業務正常状態、例外ではない)
 
         Args:

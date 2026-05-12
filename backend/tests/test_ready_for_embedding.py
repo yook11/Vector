@@ -40,6 +40,7 @@ class TestTryAdvanceFromPreconditionMet:
         loaded = ReadyForEmbedding(
             analysis_id=100,
             text_for_embedding="分析タイトル\n分析要約",
+            article_id=42,
         )
         repo = _make_repo_mock(ready=loaded)
 
@@ -57,6 +58,7 @@ class TestTryAdvanceFromPreconditionMet:
             ready=ReadyForEmbedding(
                 analysis_id=777,
                 text_for_embedding="t\ns",
+                article_id=42,
             )
         )
 
@@ -87,18 +89,27 @@ class TestReadyForEmbeddingFieldConstraints:
     def test_rejects_non_positive_analysis_id(self) -> None:
         """analysis_id <= 0 は Field(gt=0) が拒否する。"""
         with pytest.raises(ValidationError):
-            ReadyForEmbedding(analysis_id=0, text_for_embedding="t")
+            ReadyForEmbedding(analysis_id=0, text_for_embedding="t", article_id=1)
         with pytest.raises(ValidationError):
-            ReadyForEmbedding(analysis_id=-1, text_for_embedding="t")
+            ReadyForEmbedding(analysis_id=-1, text_for_embedding="t", article_id=1)
 
     def test_rejects_empty_text(self) -> None:
         """text_for_embedding 空文字は Field(min_length=1) が拒否する。"""
         with pytest.raises(ValidationError):
-            ReadyForEmbedding(analysis_id=1, text_for_embedding="")
+            ReadyForEmbedding(analysis_id=1, text_for_embedding="", article_id=1)
+
+    def test_rejects_non_positive_article_id(self) -> None:
+        """article_id <= 0 は Field(gt=0) が拒否する。"""
+        with pytest.raises(ValidationError):
+            ReadyForEmbedding(analysis_id=1, text_for_embedding="t", article_id=0)
+        with pytest.raises(ValidationError):
+            ReadyForEmbedding(analysis_id=1, text_for_embedding="t", article_id=-1)
 
     def test_is_frozen(self) -> None:
         """frozen=True のため field 書き換えは ValidationError。"""
-        ready = ReadyForEmbedding(analysis_id=1, text_for_embedding="t\ns")
+        ready = ReadyForEmbedding(
+            analysis_id=1, text_for_embedding="t\ns", article_id=1
+        )
         with pytest.raises(ValidationError):
             ready.analysis_id = 999  # type: ignore[misc]
         with pytest.raises(ValidationError):

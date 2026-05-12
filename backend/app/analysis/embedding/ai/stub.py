@@ -44,8 +44,9 @@ class StubEmbedder(BaseEmbedder):
         return [self._vector_from(t) for t in contents]
 
     def _translate_error(self, exc: Exception) -> Exception:
-        # 例外を起こさないことが Stub の責務。万一発生しても呼び出し側の
-        # ``_embed_once`` の網が AnalysisDomainError 階層に丸めるので no-op。
+        # 例外を起こさないことが Stub の責務。万一発生しても caller の
+        # ``_embed_once`` が bare re-raise guard (``translated is exc`` 経路)
+        # で素通しするため、ここは no-op で exc をそのまま返す。
         return exc
 
     def _vector_from(self, text: str) -> list[float]:

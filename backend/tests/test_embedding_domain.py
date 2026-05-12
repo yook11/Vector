@@ -1,8 +1,11 @@
 """embedding ドメイン層のユニットテスト (DB 不要)。
 
-EmbeddingVector の次元・有限性・サニティ範囲、EmbeddingDraft.from_inference を
-検証する。Embedding Entity は 2026-05-12 に廃止済み (Stage 5 は pipeline 終端で
-Outcome / Entity の伝搬価値が無く、Repository.save は bool を返す)。
+``EmbeddingVector`` VO の次元・有限性・サニティ範囲・frozen を検証する。
+``EmbeddingDraft`` は ``EmbeddingVector`` を 1 field でラップしただけの冗長な
+中間型として廃止済み (2026-05-12)。AI 境界の ``list[float]`` は Service が
+``EmbeddingVector(root=tuple(...))`` で直接構造検証する。
+Embedding Entity も 2026-05-12 に廃止済み (Stage 5 は pipeline 終端で Outcome /
+Entity の伝搬価値が無く、Repository.save は bool を返す)。
 """
 
 from __future__ import annotations
@@ -12,7 +15,6 @@ import math
 import pytest
 from pydantic import ValidationError
 
-from app.analysis.embedding.domain.embedding import EmbeddingDraft
 from app.analysis.embedding.domain.value_objects import (
     EMBEDDING_DIMENSION,
     EmbeddingVector,
@@ -114,31 +116,3 @@ class TestEmbeddingVectorFrozen:
         vec = EmbeddingVector(root=_vec())
         with pytest.raises(ValidationError):
             vec.root = _vec(0.2)  # type: ignore[misc]
-
-
-# ---------------------------------------------------------------------------
-# EmbeddingDraft.from_inference
-# ---------------------------------------------------------------------------
-
-
-class TestEmbeddingDraftFromInference:
-    def test_converts_list_to_vector_vo(self) -> None:
-        raw = [0.1] * EMBEDDING_DIMENSION
-        draft = EmbeddingDraft.from_inference(vector=raw)
-        assert isinstance(draft.vector, EmbeddingVector)
-        assert draft.vector.to_list() == raw
-
-    def test_rejects_wrong_dimension(self) -> None:
-        with pytest.raises(ValidationError):
-            EmbeddingDraft.from_inference(vector=[0.1] * (EMBEDDING_DIMENSION - 1))
-
-    def test_rejects_nan(self) -> None:
-        raw = [0.1] * EMBEDDING_DIMENSION
-        raw[0] = math.nan
-        with pytest.raises(ValidationError):
-            EmbeddingDraft.from_inference(vector=raw)
-
-    def test_frozen_vector_assignment_rejected(self) -> None:
-        draft = EmbeddingDraft.from_inference(vector=[0.1] * EMBEDDING_DIMENSION)
-        with pytest.raises(ValidationError):
-            draft.vector = EmbeddingVector(root=_vec(0.2))  # type: ignore[misc]

@@ -11,9 +11,11 @@ from datetime import UTC, datetime
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.analysis.embedding.domain.embedding import EmbeddingDraft
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
-from app.analysis.embedding.domain.value_objects import EMBEDDING_DIMENSION
+from app.analysis.embedding.domain.value_objects import (
+    EMBEDDING_DIMENSION,
+    EmbeddingVector,
+)
 from app.analysis.embedding.repository import EmbeddingRepository
 from app.models.article import Article
 from app.models.article_extraction import ArticleExtraction
@@ -70,8 +72,8 @@ def _zero_vector() -> list[float]:
     return [0.0] * EMBEDDING_DIMENSION
 
 
-def _draft(value: float = 0.1) -> EmbeddingDraft:
-    return EmbeddingDraft.from_inference(vector=[value] * EMBEDDING_DIMENSION)
+def _vector(value: float = 0.1) -> EmbeddingVector:
+    return EmbeddingVector(root=tuple([value] * EMBEDDING_DIMENSION))
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +100,8 @@ async def test_try_load_returns_ready_when_embedding_null(
     assert isinstance(ready, ReadyForEmbedding)
     assert ready.analysis_id == analysis.id
     assert ready.text_for_embedding == "分析タイトル\n分析要約"
+    # article_id は ArticleExtraction 1-hop JOIN で取得
+    assert ready.article_id > 0
 
 
 @pytest.mark.asyncio
@@ -148,7 +152,7 @@ async def test_save_writes_embedding_and_returns_true(
 
     repo = EmbeddingRepository(db_session)
     saved = await repo.save(
-        _draft(0.3),
+        _vector(0.3),
         analysis_id=analysis_id,
         model_name="cl-nagoya/ruri-v3-310m",
     )
@@ -181,7 +185,7 @@ async def test_save_returns_false_on_concurrent_write(
 
     repo = EmbeddingRepository(db_session)
     saved = await repo.save(
-        _draft(0.7),
+        _vector(0.7),
         analysis_id=analysis_id,
         model_name="cl-nagoya/ruri-v3-310m",
     )
@@ -203,7 +207,7 @@ async def test_save_returns_false_for_unknown_analysis_id(
 ) -> None:
     repo = EmbeddingRepository(db_session)
     saved = await repo.save(
-        _draft(),
+        _vector(),
         analysis_id=999_999,
         model_name="cl-nagoya/ruri-v3-310m",
     )

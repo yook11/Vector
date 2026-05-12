@@ -2,21 +2,28 @@
 
 API 呼び出しは google-genai client をモックする。エラーマッピングは
 ``_translate_error`` を直接呼び出して構造的に検証する。
+
+Stage 5 のエラー taxonomy 整備に追従して Stage 4 ``GeminiAssessor`` と完全同形の
+``AIProvider*Error`` 階層 (Layer 2-A、Stage 中立) への翻訳を検証する。
+Stage 5 marker (``Embedding*Error``) への詰め替えは Service 層 ACL の責務であり、
+本テストの守備範囲外。
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from google.genai.errors import APIError, ServerError
+from google.genai import errors as genai_errors
 
 from app.analysis.embedding.ai.gemini import GeminiEmbedder
-from app.analysis.errors import (
-    ConfigurationError,
-    InvalidInputError,
-    NetworkError,
-    ProviderError,
-    RateLimitError,
-    UnclassifiedError,
+from app.analysis.embedding.domain.value_objects import EmbeddingVector
+from app.analysis.errors.provider import (
+    AIProviderConfigurationError,
+    AIProviderInputRejectedError,
+    AIProviderNetworkError,
+    AIProviderQuotaExhaustedError,
+    AIProviderRateLimitedError,
+    AIProviderRequestInvalidError,
+    AIProviderServiceUnavailableError,
 )
 
 
@@ -44,10 +51,10 @@ def _make_embed_response(vectors: list[list[float]]) -> MagicMock:
 
 
 def test_init_raises_configuration_error_when_api_key_missing() -> None:
-    """API key が空文字なら ConfigurationError で初期化失敗。"""
+    """API key が空文字なら ``AIProviderConfigurationError`` で初期化失敗。"""
     with patch("app.analysis.embedding.ai.gemini.settings") as mock_settings:
         mock_settings.gemini_api_key.get_secret_value.return_value = ""
-        with pytest.raises(ConfigurationError, match="GEMINI_API_KEY"):
+        with pytest.raises(AIProviderConfigurationError, match="GEMINI_API_KEY"):
             GeminiEmbedder()
 
 
@@ -74,7 +81,8 @@ async def test_embed_document_uses_retrieval_document_task_type() -> None:
 
     result = await embedder.embed_document("hello")
 
-    assert result == [0.1] * 768
+    assert isinstance(result, EmbeddingVector)
+    assert result.to_list() == [0.1] * 768
     assert mock_call.call_count == 1
     config = mock_call.call_args.kwargs["config"]
     assert config.task_type == "RETRIEVAL_DOCUMENT"
@@ -112,55 +120,66 @@ async def test_embed_documents_batches_with_retrieval_document() -> None:
 
 
 # ---------------------------------------------------------------------------
-# C. レスポンス検証
+# C. レスポンス検証 (response shape 違反は AIProviderRequestInvalidError)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_embed_document_raises_provider_error_when_embeddings_empty() -> None:
+async def test_embed_document_raises_request_invalid_when_embeddings_empty() -> None:
     embedder = _make_embedder()
     response = MagicMock()
     response.embeddings = []
     embedder._client.aio.models.embed_content = AsyncMock(return_value=response)
 
-    with pytest.raises(ProviderError, match="no embeddings"):
+    with pytest.raises(AIProviderRequestInvalidError, match="no embeddings"):
         await embedder.embed_document("text")
 
 
 @pytest.mark.asyncio
-async def test_embed_document_raises_provider_error_when_values_missing() -> None:
+async def test_embed_document_raises_request_invalid_when_values_missing() -> None:
     embedder = _make_embedder()
     response = MagicMock()
     response.embeddings = [MagicMock(values=None)]
     embedder._client.aio.models.embed_content = AsyncMock(return_value=response)
 
-    with pytest.raises(ProviderError, match="without values"):
+    with pytest.raises(AIProviderRequestInvalidError, match="without values"):
         await embedder.embed_document("text")
 
 
 # ---------------------------------------------------------------------------
-# D. _translate_error の分類
+# D. _translate_error の分類 (Stage 4 と 1:1 同形)
 # ---------------------------------------------------------------------------
 
 
-def _api_error(code: int, status: str, message: str = "msg") -> APIError:
-    return APIError(code, {"status": status, "message": message})
+def _api_error(
+    code: int, status: str, message: str = "msg"
+) -> genai_errors.ClientError:
+    """``ClientError(code, response_json)`` を簡易構築する helper。
+
+    Stage 4 ``test_assessor_gemini_translate_error.py`` と同形 — nested
+    ``error`` キーに status / message を入れて SDK 互換とする。
+    """
+    response_json = {"error": {"status": status, "message": message}}
+    return genai_errors.ClientError(code, response_json)
 
 
-def _server_error(code: int, status: str, message: str = "msg") -> ServerError:
-    return ServerError(code, {"status": status, "message": message})
+def _server_error(
+    code: int = 500, status: str = "INTERNAL", message: str = "msg"
+) -> genai_errors.ServerError:
+    response_json = {"error": {"status": status, "message": message}}
+    return genai_errors.ServerError(code, response_json)
 
 
 def test_translate_unauthenticated_to_configuration_error() -> None:
     embedder = _make_embedder()
     result = embedder._translate_error(_api_error(401, "UNAUTHENTICATED"))
-    assert isinstance(result, ConfigurationError)
+    assert isinstance(result, AIProviderConfigurationError)
 
 
 def test_translate_permission_denied_to_configuration_error() -> None:
     embedder = _make_embedder()
     result = embedder._translate_error(_api_error(403, "PERMISSION_DENIED"))
-    assert isinstance(result, ConfigurationError)
+    assert isinstance(result, AIProviderConfigurationError)
 
 
 def test_translate_leaked_key_to_configuration_error() -> None:
@@ -168,7 +187,7 @@ def test_translate_leaked_key_to_configuration_error() -> None:
     result = embedder._translate_error(
         _api_error(400, "INVALID_ARGUMENT", "API key reported as leaked")
     )
-    assert isinstance(result, ConfigurationError)
+    assert isinstance(result, AIProviderConfigurationError)
 
 
 def test_translate_leaked_key_message_is_fixed_string_not_sdk_echo() -> None:
@@ -179,53 +198,79 @@ def test_translate_leaked_key_message_is_fixed_string_not_sdk_echo() -> None:
     )
     result = embedder._translate_error(_api_error(400, "INVALID_ARGUMENT", sdk_message))
 
-    assert isinstance(result, ConfigurationError)
+    assert isinstance(result, AIProviderConfigurationError)
     assert (
         str(result) == "Gemini API key has been reported as leaked; rotate immediately"
     )
     assert "AIza" not in str(result)
 
 
-def test_translate_invalid_argument_to_invalid_input_error() -> None:
+def test_translate_invalid_argument_to_request_invalid_error() -> None:
     embedder = _make_embedder()
     result = embedder._translate_error(_api_error(400, "INVALID_ARGUMENT"))
-    assert isinstance(result, InvalidInputError)
+    assert isinstance(result, AIProviderRequestInvalidError)
 
 
-def test_translate_resource_exhausted_to_rate_limit_error() -> None:
+def test_translate_invalid_argument_safety_blocked_to_input_rejected() -> None:
+    """``INVALID_ARGUMENT`` + message に "blocked"/"safety" → InputRejected。"""
+    embedder = _make_embedder()
+    result = embedder._translate_error(
+        _api_error(400, "INVALID_ARGUMENT", "blocked by safety filter")
+    )
+    assert isinstance(result, AIProviderInputRejectedError)
+
+
+def test_translate_resource_exhausted_to_rate_limited_error() -> None:
     embedder = _make_embedder()
     result = embedder._translate_error(_api_error(429, "RESOURCE_EXHAUSTED"))
-    assert isinstance(result, RateLimitError)
+    assert isinstance(result, AIProviderRateLimitedError)
 
 
-def test_translate_server_error_to_provider_error() -> None:
+def test_translate_resource_exhausted_with_quota_to_quota_exhausted() -> None:
+    """message に "quota"/"daily" 含む 429 は QuotaExhausted へ。"""
+    embedder = _make_embedder()
+    result = embedder._translate_error(
+        _api_error(429, "RESOURCE_EXHAUSTED", "daily quota exceeded")
+    )
+    assert isinstance(result, AIProviderQuotaExhaustedError)
+
+
+def test_translate_server_error_to_service_unavailable() -> None:
     embedder = _make_embedder()
     result = embedder._translate_error(_server_error(500, "INTERNAL"))
-    assert isinstance(result, ProviderError)
+    assert isinstance(result, AIProviderServiceUnavailableError)
 
 
-def test_translate_unhandled_api_status_to_unclassified() -> None:
+def test_translate_unhandled_client_error_status_returns_exc_for_bare_reraise() -> None:
+    """マップ未知の ClientError (code / status 共に翻訳テーブル外) は
+    ``exc`` をそのまま return する (bare re-raise 規約)。
+    """
     embedder = _make_embedder()
-    result = embedder._translate_error(_api_error(418, "TEAPOT"))
-    assert isinstance(result, UnclassifiedError)
+    # code=418 / status=TEAPOT は翻訳テーブルに登録されていない経路
+    api_err = _api_error(418, "TEAPOT")
+    result = embedder._translate_error(api_err)
+    # bare re-raise 規約: マップ未知は exc identity を保ったまま return
+    assert result is api_err
 
 
 def test_translate_timeout_to_network_error() -> None:
     embedder = _make_embedder()
     result = embedder._translate_error(TimeoutError("deadline"))
-    assert isinstance(result, NetworkError)
+    assert isinstance(result, AIProviderNetworkError)
 
 
 def test_translate_connection_error_to_network_error() -> None:
     embedder = _make_embedder()
     result = embedder._translate_error(ConnectionError("refused"))
-    assert isinstance(result, NetworkError)
+    assert isinstance(result, AIProviderNetworkError)
 
 
-def test_translate_unknown_to_unclassified() -> None:
+def test_translate_unknown_returns_exc_for_bare_reraise() -> None:
+    """RuntimeError 等の未知例外は exc をそのまま return (bare re-raise 規約)。"""
     embedder = _make_embedder()
-    result = embedder._translate_error(RuntimeError("unexpected"))
-    assert isinstance(result, UnclassifiedError)
+    runtime_err = RuntimeError("unexpected")
+    result = embedder._translate_error(runtime_err)
+    assert result is runtime_err
 
 
 # ---------------------------------------------------------------------------
@@ -234,11 +279,11 @@ def test_translate_unknown_to_unclassified() -> None:
 
 
 @pytest.mark.asyncio
-async def test_embed_document_translates_rate_limit_error() -> None:
+async def test_embed_document_translates_rate_limited_error() -> None:
     embedder = _make_embedder()
     embedder._client.aio.models.embed_content = AsyncMock(
         side_effect=_api_error(429, "RESOURCE_EXHAUSTED")
     )
 
-    with pytest.raises(RateLimitError):
+    with pytest.raises(AIProviderRateLimitedError):
         await embedder.embed_document("text")

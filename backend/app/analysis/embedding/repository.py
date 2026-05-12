@@ -6,7 +6,7 @@
   atomic に判定し、満たす場合のみ ``ReadyForEmbedding`` を直接構築して返す
   (案 3 = 厚い Ready)。Domain 層 ``ReadyForEmbedding.try_advance_from`` は
   本 method への thin delegate。
-- ``save``: ``EmbeddingDraft`` を ``InScopeAssessment`` 行に
+- ``save``: ``EmbeddingVector`` VO を ``InScopeAssessment`` 行に
   `UPDATE ... WHERE id=:id AND embedding IS NULL RETURNING id` で書き込む。
   楽観ロックで rowcount=1 なら保存成功 (``True``)、rowcount=0 なら並行 update で
   先に書かれていたため自分は保存しなかった (``False``)。読戻しは行わない
@@ -24,8 +24,9 @@ from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from app.analysis.embedding.domain.embedding import EmbeddingDraft
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
+from app.analysis.embedding.domain.value_objects import EmbeddingVector
+from app.models.article_extraction import ArticleExtraction
 from app.models.in_scope_assessment import InScopeAssessment
 
 
@@ -45,19 +46,25 @@ class EmbeddingRepository:
     ) -> ReadyForEmbedding | None:
         """`ReadyForEmbedding.try_advance_from` 用 atomic ロード。
 
-        1 query で「行存在 + 未 embedded」を判定し、満たす場合のみ
-        ``translated_title`` + ``summary`` を結合して厚い Ready を構築して返す。
+        1 query で「行存在 + 未 embedded」を判定し、満たす場合のみ embedder
+        入力 (``translated_title`` + ``summary``) と audit 用 ``article_id``
+        (``ArticleExtraction`` 1-hop JOIN) を取得して厚い Ready を構築して返す。
         行が存在しない / 既 embedded の場合は ``None`` (業務正常)。
 
         Returns:
             進める場合: precondition (analysis 存在 + 未 embedded) を満たし、
-            text を含む ``ReadyForEmbedding``
+            text + article_id を含む ``ReadyForEmbedding``
             進めない場合: ``None``
         """
         stmt = (
             select(
                 InScopeAssessment.translated_title,
                 InScopeAssessment.summary,
+                ArticleExtraction.article_id,
+            )
+            .join(
+                ArticleExtraction,
+                ArticleExtraction.id == InScopeAssessment.extraction_id,
             )
             .where(
                 InScopeAssessment.id == analysis_id,
@@ -68,20 +75,21 @@ class EmbeddingRepository:
         row = (await self._session.execute(stmt)).first()
         if row is None:
             return None
-        translated_title, summary = row
+        translated_title, summary, article_id = row
         return ReadyForEmbedding(
             analysis_id=analysis_id,
             text_for_embedding=f"{translated_title}\n{summary}",
+            article_id=article_id,
         )
 
     async def save(
         self,
-        draft: EmbeddingDraft,
+        vector: EmbeddingVector,
         *,
         analysis_id: int,
         model_name: str,
     ) -> bool:
-        """Draft を ``in_scope_assessments`` 行に条件付き UPDATE で永続化する。
+        """``EmbeddingVector`` を ``in_scope_assessments`` 行に UPDATE で永続化する。
 
         ``WHERE id = :analysis_id AND embedding IS NULL`` の楽観ロックで並行
         save を構造的に解消する。
@@ -100,7 +108,7 @@ class EmbeddingRepository:
                 InScopeAssessment.embedding.is_(None),
             )
             .values(
-                embedding=draft.vector.to_list(),
+                embedding=vector.to_list(),
                 embedding_model=model_name,
             )
             .returning(InScopeAssessment.id)
