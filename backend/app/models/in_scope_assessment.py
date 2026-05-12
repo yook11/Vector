@@ -69,8 +69,7 @@ class InScopeAssessment(Base):
             name="ck_in_scope_assessments_topic_format",
         ),
         # embedding と embedding_model は片方だけ NULL の状態を許さない。
-        # ドメインの「未生成 ⇔ 生成済み」2 状態モデルを DB で構造的に強制する
-        # (defense-in-depth として Repository._to_domain でも検知)。
+        # ドメインの「未生成 ⇔ 生成済み」2 状態モデルを DB で構造的に強制する。
         CheckConstraint(
             "(embedding IS NULL AND embedding_model IS NULL) "
             "OR (embedding IS NOT NULL AND embedding_model IS NOT NULL)",

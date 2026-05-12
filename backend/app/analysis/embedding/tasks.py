@@ -28,13 +28,7 @@ from app.analysis._limiter_factory import _build_limiters
 from app.analysis.embedding.ai.base import BaseEmbedder
 from app.analysis.embedding.domain.ready import EmbeddingTrigger, ReadyForEmbedding
 from app.analysis.embedding.repository import EmbeddingRepository
-from app.analysis.embedding.service import (
-    EmbeddedOutcome,
-    EmbeddingService,
-)
-from app.analysis.embedding.service import (
-    InvalidInputOutcome as EmbeddingInvalidInputOutcome,
-)
+from app.analysis.embedding.service import EmbeddingService
 from app.analysis.errors import (
     ConfigurationError,
     DailyQuotaExhaustedError,
@@ -103,10 +97,10 @@ async def generate_embedding(
         )
         return
 
-    # Service 呼び出し（session は内部で管理）
+    # Service 呼び出し（session は内部で管理、戻り値なし — log は Service 内で完結）
     svc = EmbeddingService(session_factory)
     try:
-        result = await svc.execute(ready, embedder)
+        await svc.execute(ready, embedder)
     except (ConfigurationError, DailyQuotaExhaustedError) as e:
         logger.warning(
             "generate_embedding_no_retry",
@@ -128,16 +122,3 @@ async def generate_embedding(
             )
             return
         raise
-
-    # Outcome に応じた task 層サマリーログ (Service 内のドメインログとは別軸)
-    if isinstance(result, EmbeddedOutcome):
-        logger.info(
-            "generate_embedding_completed",
-            analysis_id=result.embedding.analysis_id,
-            model=result.embedding.model_name,
-        )
-    elif isinstance(result, EmbeddingInvalidInputOutcome):
-        logger.info(
-            "generate_embedding_invalid_input",
-            analysis_id=ready.analysis_id,
-        )

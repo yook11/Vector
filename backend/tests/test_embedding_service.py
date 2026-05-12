@@ -1,16 +1,14 @@
 """EmbeddingService (app.analysis.embedding.service) の DB 統合テスト。
 
-案 3 (厚い Ready + 下流 Stage 自身が処理開始時に構築) に従い Outcome は
-``EmbeddedOutcome | InvalidInputOutcome`` の 2 variants に縮退している。
-precondition 分岐 + embedder 入力 text 取得は ``ReadyForEmbedding`` 構造保証に
-移管したため本ファイルでは扱わない (test_ready_for_embedding.py 参照)。Service は
-``ready.text_for_embedding`` を直接 embedder に渡し、自身で DB fetch / None
-チェックを行わない。
+Stage 5 は pipeline 終端のため execute は副作用のみ (永続化) を行い ``None`` を
+返す。Outcome / Entity 復元 / 読み戻しは廃止済み (2026-05-12)。precondition 分岐
++ embedder 入力 text 取得は ``ReadyForEmbedding`` 構造保証に移管したため本
+ファイルでは扱わない (test_ready_for_embedding.py 参照)。
 
 検証する経路:
-- 正常系 (新規生成 → 永続化 → EmbeddedOutcome)
-- 並行 race 敗北 → 読戻し → EmbeddedOutcome 合流
-- InvalidInput (embedder が InvalidInputError) → InvalidInputOutcome
+- 正常系 (新規生成 → 永続化 → None)
+- 並行 update で先に書かれていた → log + None で短絡 (DB は先行値のまま)
+- InvalidInput (embedder が InvalidInputError) → log + None で短絡、DB 未変更
 - エラー伝搬: RateLimit / Provider / Network は Task 層に伝搬
 """
 
@@ -23,14 +21,9 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.embedding.ai.base import BaseEmbedder
-from app.analysis.embedding.domain.embedding import Embedding
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.domain.value_objects import EMBEDDING_DIMENSION
-from app.analysis.embedding.service import (
-    EmbeddedOutcome,
-    EmbeddingService,
-    InvalidInputOutcome,
-)
+from app.analysis.embedding.service import EmbeddingService
 from app.analysis.errors import (
     InvalidInputError,
     NetworkError,
@@ -137,18 +130,18 @@ def _make_ready(
 
 
 # ---------------------------------------------------------------------------
-# Happy path: EmbeddedOutcome
+# Happy path: 永続化されて None が返る
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_execute_returns_embedded_outcome_and_persists(
+async def test_execute_persists_embedding_on_success(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
     sample_categories: list[Category],
 ) -> None:
-    """正常系: 埋め込み生成 → 永続化 → EmbeddedOutcome 返却。"""
+    """正常系: 埋め込み生成 → 永続化 → None 返却。"""
     article = await _build_article(
         db_session, sample_source, url="https://example.com/embed-ok"
     )
@@ -162,10 +155,7 @@ async def test_execute_returns_embedded_outcome_and_persists(
     ready = _make_ready(analysis_id)
     result = await svc.execute(ready, embedder)
 
-    assert isinstance(result, EmbeddedOutcome)
-    assert isinstance(result.embedding, Embedding)
-    assert result.embedding.analysis_id == analysis_id
-    assert result.embedding.model_name == "cl-nagoya/ruri-v3-310m"
+    assert result is None
     # 厚い Ready 経由で text を直接渡す
     embedder.embed_document.assert_called_once_with("分析タイトル\n分析要約")
 
@@ -177,43 +167,49 @@ async def test_execute_returns_embedded_outcome_and_persists(
 
 
 # ---------------------------------------------------------------------------
-# Race 敗北: 既に埋め込まれた行に対する save → None → 読戻し → EmbeddedOutcome 合流
+# 並行 update で先に書かれていた: save が False → log + None で短絡
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_execute_reads_back_winner_when_save_loses_race(
+async def test_execute_shortcircuits_when_already_persisted(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
     sample_categories: list[Category],
 ) -> None:
-    """Ready 構築後に他ワーカーが先に書き込んだ場合、save は None を返し
-    Service が ``find_by_analysis_id`` で勝者を読戻して EmbeddedOutcome に合流する。
+    """Ready 構築後に他ワーカーが先に書き込んだ場合、save は False を返し
+    Service が log + None で短絡する。DB は先行値のまま上書きされない。
     """
+    preexisting_vector = [0.4] * EMBEDDING_DIMENSION
     article = await _build_article(
-        db_session, sample_source, url="https://example.com/race"
+        db_session, sample_source, url="https://example.com/concurrent"
     )
     extraction = await _build_extraction(db_session, article)
     analysis = await _build_analysis(
         db_session,
         extraction,
         sample_categories[0].id,
-        embedding=[0.4] * EMBEDDING_DIMENSION,
+        embedding=preexisting_vector,
     )
     await db_session.commit()
     analysis_id = analysis.id
 
-    embedder = _mock_embedder()
+    embedder = _mock_embedder(vector=[0.9] * EMBEDDING_DIMENSION)
     svc = EmbeddingService(session_factory)
-    # Ready 構築時に未 embedded だった前提で、構築直後に他ワーカーが先に書き込んだ
-    # race 状況を再現するため Ready を直接構築して execute に渡す。
+    # Ready 構築時には未 embedded だったが、その直後に他ワーカーが先に書き込んだ
+    # 並行状況を再現するため Ready を直接構築して execute に渡す。
     ready = _make_ready(analysis_id)
     result = await svc.execute(ready, embedder)
 
-    assert isinstance(result, EmbeddedOutcome)
-    # 勝者 (先に書き込まれた値) を読戻している
-    assert result.embedding.model_name == "cl-nagoya/ruri-v3-310m"
+    assert result is None
+    # 先行する write の値のまま、後続の save で上書きされていない
+    db_session.expire_all()
+    refetched = await db_session.get(InScopeAssessment, analysis_id)
+    assert refetched is not None
+    raw = refetched.embedding
+    values = raw.to_list() if hasattr(raw, "to_list") else list(raw)
+    assert values[0] == pytest.approx(0.4, abs=1e-3)
 
 
 # ---------------------------------------------------------------------------
@@ -222,13 +218,13 @@ async def test_execute_reads_back_winner_when_save_loses_race(
 
 
 @pytest.mark.asyncio
-async def test_execute_returns_invalid_input_outcome_when_embedder_rejects(
+async def test_execute_returns_none_when_embedder_rejects(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
     sample_categories: list[Category],
 ) -> None:
-    """embedder が InvalidInputError → InvalidInputOutcome。
+    """embedder が InvalidInputError → log + None で短絡。
 
     DB は変更されないこと (save が呼ばれない) も検証する。
     """
@@ -245,7 +241,7 @@ async def test_execute_returns_invalid_input_outcome_when_embedder_rejects(
     ready = _make_ready(analysis_id)
     result = await svc.execute(ready, embedder)
 
-    assert isinstance(result, InvalidInputOutcome)
+    assert result is None
 
     db_session.expire_all()
     refetched = await db_session.get(InScopeAssessment, analysis_id)

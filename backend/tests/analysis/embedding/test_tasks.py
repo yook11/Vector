@@ -4,6 +4,8 @@
 ``EmbeddingTrigger`` (analysis_id のみ) を受領し、task 自身が
 ``ReadyForEmbedding.try_advance_from`` で Ready を構築する。embedder は
 ``ctx.state.embedder`` 経由で Pure DI される。
+
+Service.execute は副作用のみで戻り値 ``None`` 一本化 (2026-05-12 確定)。
 """
 
 from types import SimpleNamespace
@@ -11,15 +13,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.analysis.embedding.domain.embedding import Embedding
 from app.analysis.embedding.domain.ready import (
     EmbeddingTrigger,
     ReadyForEmbedding,
-)
-from app.analysis.embedding.domain.value_objects import EmbeddingVector
-from app.analysis.embedding.service import (
-    EmbeddedOutcome,
-    InvalidInputOutcome,
 )
 from app.analysis.errors import RateLimitError
 
@@ -62,14 +58,6 @@ def _make_ready(analysis_id: int = 1) -> ReadyForEmbedding:
     )
 
 
-def _make_embedding(analysis_id: int = 1) -> Embedding:
-    return Embedding(
-        analysis_id=analysis_id,
-        vector=EmbeddingVector(root=tuple([0.1] * 768)),
-        model_name="cl-nagoya/ruri-v3-310m",
-    )
-
-
 def _patch_ready_construction(ready: ReadyForEmbedding | None):
     """task 内 ``ReadyForEmbedding.try_advance_from`` を mock する patch。"""
     return patch(
@@ -85,12 +73,11 @@ def _patch_ready_construction(ready: ReadyForEmbedding | None):
 
 class TestGenerateEmbedding:
     @pytest.mark.asyncio
-    async def test_embedded_outcome_succeeds(self) -> None:
-        """EmbeddedOutcome を Service が返したら task は完了する。"""
+    async def test_task_completes_on_service_success(self) -> None:
+        """Service.execute が None を返したら task は完了する。"""
         from app.analysis.embedding.tasks import generate_embedding
 
         mock_ctx = _make_ctx(embedder=_make_embedder_fake())
-        outcome = EmbeddedOutcome(embedding=_make_embedding())
         trigger = _make_trigger(analysis_id=1)
         ready = _make_ready(analysis_id=1)
 
@@ -102,7 +89,7 @@ class TestGenerateEmbedding:
             ),
             patch("app.analysis.embedding.tasks.EmbeddingService") as mock_svc_cls,
         ):
-            mock_svc_cls.return_value.execute = AsyncMock(return_value=outcome)
+            mock_svc_cls.return_value.execute = AsyncMock(return_value=None)
             await generate_embedding(trigger=trigger, ctx=mock_ctx)
 
         mock_svc_cls.return_value.execute.assert_called_once()
@@ -111,12 +98,11 @@ class TestGenerateEmbedding:
         assert call_args[0][0] is ready
 
     @pytest.mark.asyncio
-    async def test_invalid_input_outcome_succeeds(self) -> None:
-        """InvalidInputOutcome を Service が返したら task は静かに完了する。"""
+    async def test_task_completes_when_service_shortcircuits(self) -> None:
+        """Service が短絡 (None) しても task は静かに完了。"""
         from app.analysis.embedding.tasks import generate_embedding
 
         mock_ctx = _make_ctx(embedder=_make_embedder_fake())
-        outcome = InvalidInputOutcome()
         trigger = _make_trigger()
 
         with (
@@ -127,7 +113,7 @@ class TestGenerateEmbedding:
             ),
             patch("app.analysis.embedding.tasks.EmbeddingService") as mock_svc_cls,
         ):
-            mock_svc_cls.return_value.execute = AsyncMock(return_value=outcome)
+            mock_svc_cls.return_value.execute = AsyncMock(return_value=None)
             await generate_embedding(trigger=trigger, ctx=mock_ctx)
 
         mock_svc_cls.return_value.execute.assert_called_once()

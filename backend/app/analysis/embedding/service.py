@@ -4,11 +4,16 @@
 チェック (analysis 存在 + 既存 embedding 不在) と embedder 入力 text の取得は
 ``ReadyForEmbedding`` が構造保証する。本 Service は execute 内で
 DB fetch / None チェックを行わず、``ready.text_for_embedding`` を直接 embedder に
-渡す。Outcome は ``EmbeddedOutcome | InvalidInputOutcome`` の 2 variants に縮退する。
+渡す。
+
+Stage 5 は pipeline 終端ゆえ Outcome / Entity の伝搬価値が無いため、execute は
+副作用 (永続化) のみを行い ``None`` を返す (Stage 4 Assessment 同型)。楽観ロック
+採用上不可避な「並行 update で先に書き込まれていたため自分の save が空振り
+する」状況は業務正常パスとして log + 短絡で抜ける (読戻しは行わない)。
 
 エラー処理方針 (feedback_error_handling_by_capability):
-- ``InvalidInputError``: ユーザー入力起因の構造問題。Service で握って
-  ``InvalidInputOutcome`` に縮退する (該当記事のみ skip)。
+- ``InvalidInputError``: ユーザー入力起因の構造問題。Service で握って log +
+  ``None`` 短絡 (該当記事のみ skip)。
 - ``RateLimitError`` / ``ProviderError`` / ``NetworkError`` /
   ``ConfigurationError``: Service で握らず Task 層 (再試行 / バックオフ /
   停止判断) に伝搬させる。
@@ -19,48 +24,16 @@ AI 呼び出しは session 外で行う (slow IO 中の DB 接続専有を排除
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.embedding.ai.base import BaseEmbedder
-from app.analysis.embedding.domain.embedding import Embedding, EmbeddingDraft
+from app.analysis.embedding.domain.embedding import EmbeddingDraft
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.repository import EmbeddingRepository
 from app.analysis.errors import InvalidInputError
 
 logger = structlog.get_logger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# EmbeddingOutcome — Service 戻り値の tagged union (案 3 で 2 variants に縮退)
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class EmbeddedOutcome:
-    """新規に埋め込みが生成・永続化された (race 敗北 → 読戻し合流も含む)。"""
-
-    embedding: Embedding
-
-
-@dataclass(frozen=True, slots=True)
-class InvalidInputOutcome:
-    """embedder が入力を構造的に拒否した (該当記事のみ skip)。
-
-    AlreadyEmbedded / SkippedOutcome は厚い Ready で precondition 型に責務移管
-    したため廃止。残るのは embedder 自身が判断する入力品質問題のみ。
-    """
-
-
-EmbeddingOutcome = EmbeddedOutcome | InvalidInputOutcome
-"""Stage 5 の実行結果型。"""
-
-
-# ---------------------------------------------------------------------------
-# Service
-# ---------------------------------------------------------------------------
 
 
 class EmbeddingService:
@@ -73,9 +46,7 @@ class EmbeddingService:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
 
-    async def execute(
-        self, ready: ReadyForEmbedding, embedder: BaseEmbedder
-    ) -> EmbeddingOutcome:
+    async def execute(self, ready: ReadyForEmbedding, embedder: BaseEmbedder) -> None:
         """Ready 型を入力に埋め込みベクトルを生成し永続化する。
 
         案 3: 受け取った Ready は precondition (analysis 存在 + embedding 未生成)
@@ -84,9 +55,6 @@ class EmbeddingService:
         渡す。
 
         Raises:
-            ``RuntimeError``: race 敗北後の勝者読み戻しで行が消失している場合の
-            fail-fast (Ready 構築時に存在を確認した analysis が処理中に消える
-            異常状態、`feedback_failure_visibility`)。
             ``RateLimitError`` / ``ProviderError`` / ``NetworkError`` /
             ``ConfigurationError`` (Task 層 retry / 停止判断に委ねる)。
         """
@@ -97,7 +65,7 @@ class EmbeddingService:
                 "embedding_input_rejected",
                 analysis_id=ready.analysis_id,
             )
-            return InvalidInputOutcome()
+            return
 
         draft = EmbeddingDraft.from_inference(vector=vector)
         async with self._session_factory() as session:
@@ -108,26 +76,17 @@ class EmbeddingService:
                 model_name=embedder.MODEL,
             )
             await session.commit()
-            if saved is None:
-                # 並行 save レース敗北: 他ワーカーが先に書いた行を読み戻す
-                logger.info(
-                    "embedding_concurrent_write",
-                    analysis_id=ready.analysis_id,
-                )
-                saved = await embedding_repo.find_by_analysis_id(
-                    ready.analysis_id,
-                )
-                if saved is None:
-                    # Ready 構築時に存在を確認した analysis が処理中に消失
-                    # = DB 整合性異常で即死
-                    raise RuntimeError(
-                        "embedding_race_winner_missing: "
-                        f"analysis_id={ready.analysis_id}"
-                    )
+
+        if not saved:
+            # 楽観ロックにより並行 update で先に書き込まれていた → 業務正常パス
+            logger.info(
+                "embedding_concurrent_write",
+                analysis_id=ready.analysis_id,
+            )
+            return
 
         logger.info(
             "embedding_completed",
             analysis_id=ready.analysis_id,
             model=embedder.MODEL,
         )
-        return EmbeddedOutcome(embedding=saved)

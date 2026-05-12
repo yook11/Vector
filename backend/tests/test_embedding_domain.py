@@ -1,8 +1,8 @@
 """embedding ドメイン層のユニットテスト (DB 不要)。
 
-EmbeddingVector の次元・有限性・サニティ範囲、EmbeddingDraft.from_inference、
-Embedding の __post_init__ 不変条件を検証する。Phase 2 で Embedding.from_draft
-は廃止 (Repository.save が直接 Entity を返すため)。
+EmbeddingVector の次元・有限性・サニティ範囲、EmbeddingDraft.from_inference を
+検証する。Embedding Entity は 2026-05-12 に廃止済み (Stage 5 は pipeline 終端で
+Outcome / Entity の伝搬価値が無く、Repository.save は bool を返す)。
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import math
 import pytest
 from pydantic import ValidationError
 
-from app.analysis.embedding.domain.embedding import Embedding, EmbeddingDraft
+from app.analysis.embedding.domain.embedding import EmbeddingDraft
 from app.analysis.embedding.domain.value_objects import (
     EMBEDDING_DIMENSION,
     EmbeddingVector,
@@ -142,49 +142,3 @@ class TestEmbeddingDraftFromInference:
         draft = EmbeddingDraft.from_inference(vector=[0.1] * EMBEDDING_DIMENSION)
         with pytest.raises(ValidationError):
             draft.vector = EmbeddingVector(root=_vec(0.2))  # type: ignore[misc]
-
-
-# ---------------------------------------------------------------------------
-# Embedding.__post_init__ — invariants (Phase 2 で from_draft 廃止、直接構築)
-# ---------------------------------------------------------------------------
-
-
-def _make_vector() -> EmbeddingVector:
-    return EmbeddingVector(root=_vec(0.1))
-
-
-class TestEmbeddingInvariants:
-    def test_constructs_with_valid_fields(self) -> None:
-        embedding = Embedding(
-            analysis_id=42,
-            vector=_make_vector(),
-            model_name="cl-nagoya/ruri-v3-310m",
-        )
-        assert embedding.analysis_id == 42
-        assert embedding.model_name == "cl-nagoya/ruri-v3-310m"
-
-    def test_rejects_zero_analysis_id(self) -> None:
-        with pytest.raises(ValueError, match="analysis_id must be positive"):
-            Embedding(analysis_id=0, vector=_make_vector(), model_name="m")
-
-    def test_rejects_negative_analysis_id(self) -> None:
-        with pytest.raises(ValueError, match="analysis_id must be positive"):
-            Embedding(analysis_id=-1, vector=_make_vector(), model_name="m")
-
-    def test_rejects_empty_model_name(self) -> None:
-        with pytest.raises(ValueError, match="model_name must be non-empty"):
-            Embedding(analysis_id=1, vector=_make_vector(), model_name="")
-
-    def test_rejects_model_name_over_100_chars(self) -> None:
-        with pytest.raises(ValueError, match="at most 100 chars"):
-            Embedding(analysis_id=1, vector=_make_vector(), model_name="x" * 101)
-
-    def test_accepts_model_name_at_100_chars(self) -> None:
-        Embedding(analysis_id=1, vector=_make_vector(), model_name="x" * 100)
-
-
-class TestEmbeddingFrozen:
-    def test_frozen_dataclass_assignment_rejected(self) -> None:
-        embedding = Embedding(analysis_id=1, vector=_make_vector(), model_name="m")
-        with pytest.raises(AttributeError):
-            embedding.analysis_id = 2  # type: ignore[misc]
