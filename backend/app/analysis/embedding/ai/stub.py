@@ -1,7 +1,11 @@
 """決定的な dummy ベクトルを返す Stub Embedder。
 
 CI / Schemathesis 等、外部 API (Gemini) への到達を避けたい環境で使う。
-``settings.embedder_provider == "stub"`` のとき factory が選択する。
+本番経路の Pure DI composition root (``app/brokers.py`` / ``app/search/router.py``
+の ``get_embedder_for_search``) は ``GeminiEmbedder`` を hardcode する。
+テスト時のみ FastAPI の
+``app.dependency_overrides[get_embedder_for_search] = lambda: StubEmbedder()``
+で差し替える前提。
 
 セキュリティ / 設計上の不変条件:
 - 入力テキストの SHA256 を seed に決定的なベクトルを生成する
@@ -9,8 +13,9 @@ CI / Schemathesis 等、外部 API (Gemini) への到達を避けたい環境で
 - 出力次元は ``GeminiEmbedder.DIMENSION`` と同じ ``768``
   (DB 側 ``HALFVEC(768)`` を壊さない)
 - L2 norm = 1.0 に正規化 (cosine distance 比較で挙動再現)
-- production 経路には絶対に流入させない。``settings.env == "production"``
-  かつ ``embedder_provider == "stub"`` で factory が ValueError を上げて起動を止める。
+- production 経路には絶対に流入させない。production 用 composition root は
+  本クラスを import せず ``GeminiEmbedder`` を hardcode するため、stub 混入は
+  型レベルで構造的に不可能。
 """
 
 from __future__ import annotations
@@ -20,7 +25,7 @@ import math
 import struct
 from typing import ClassVar
 
-from app.analysis.embedder.base import BaseEmbedder
+from app.analysis.embedding.ai.base import BaseEmbedder
 
 
 class StubEmbedder(BaseEmbedder):

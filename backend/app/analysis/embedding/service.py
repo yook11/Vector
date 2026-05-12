@@ -24,7 +24,7 @@ from dataclasses import dataclass
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.analysis.embedder.base import BaseEmbedder
+from app.analysis.embedding.ai.base import BaseEmbedder
 from app.analysis.embedding.domain.embedding import Embedding, EmbeddingDraft
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.repository import EmbeddingRepository

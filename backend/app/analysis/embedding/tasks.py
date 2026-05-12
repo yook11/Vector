@@ -25,7 +25,7 @@ import structlog
 from taskiq import Context, TaskiqDepends
 
 from app.analysis._limiter_factory import _build_limiters
-from app.analysis.embedder.base import BaseEmbedder
+from app.analysis.embedding.ai.base import BaseEmbedder
 from app.analysis.embedding.domain.ready import EmbeddingTrigger, ReadyForEmbedding
 from app.analysis.embedding.repository import EmbeddingRepository
 from app.analysis.embedding.service import (

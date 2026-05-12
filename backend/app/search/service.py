@@ -7,8 +7,7 @@ from uuid import UUID
 import redis.asyncio as aioredis
 import structlog
 
-from app.analysis.embedder.base import BaseEmbedder
-from app.analysis.embedder.factory import get_embedder
+from app.analysis.embedding.ai.base import BaseEmbedder
 from app.analysis.errors import AnalysisDomainError
 from app.exceptions import InvalidQueryError
 from app.schemas.articles import PaginatedArticleResponse, SemanticSearchParams
@@ -26,7 +25,7 @@ async def embed_search_query(
     user_id: UUID,
     redis: aioredis.Redis,
     daily_max: int,
-    embedder: BaseEmbedder | None = None,
+    embedder: BaseEmbedder,
 ) -> list[float]:
     """RETRIEVAL_QUERY タスクタイプで検索クエリを embedding 化する。
 
@@ -44,7 +43,8 @@ async def embed_search_query(
         user_id: BFF JWT の sub。クォータ消費の主体。
         redis: 共有 Redis クライアント。
         daily_max: ユーザー 1 人 1 日あたりの上限。
-        embedder: Embedder instance; defaults to get_embedder().
+        embedder: 呼び出し側で composition root から injection 済の Embedder。
+            本番経路では ``GeminiEmbedder``、CI 等では ``StubEmbedder``。
 
     Returns:
         A list of floats representing the query embedding.
@@ -68,14 +68,12 @@ async def embed_search_query(
     await consume_search_quota(redis, user_id, requested=1, daily_max=daily_max)
 
     try:
-        if embedder is None:
-            embedder = get_embedder()
         vector = await embedder.embed_query(text)
     except AnalysisDomainError as e:
         # provider/infra 起因 (RateLimitError / ProviderError / NetworkError /
         # ConfigurationError 等) → 503 維持。retry or 運用対応が筋。
-        # ConfigurationError も含めるのは、factory が GEMINI_API_KEY 未設定時に
-        # raise する経路 (CI 含む) を漏らさず 503 に統一するため。
+        # ConfigurationError も含めるのは、embed_query 呼出時に GEMINI_API_KEY
+        # 不正等で上がる経路 (CI 含む) を漏らさず 503 に統一するため。
         raise SearchError(str(e)) from e
     except Exception as e:
         # 翻訳の網を抜けた非 AnalysisDomainError は「クエリ起因の SDK 例外」
@@ -107,6 +105,7 @@ class SemanticSearchService:
         user_id: UUID,
         redis: aioredis.Redis,
         daily_max: int,
+        embedder: BaseEmbedder,
     ) -> PaginatedArticleResponse:
         """ユーザーのクエリテキストとのセマンティック類似度で記事を検索する。"""
         query_embedding = await embed_search_query(
@@ -114,6 +113,7 @@ class SemanticSearchService:
             user_id=user_id,
             redis=redis,
             daily_max=daily_max,
+            embedder=embedder,
         )
         analyses, total = await self.search_repo.search_articles(query, query_embedding)
 

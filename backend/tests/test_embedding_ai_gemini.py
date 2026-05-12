@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from google.genai.errors import APIError, ServerError
 
-from app.analysis.embedder.gemini import GeminiEmbedder
+from app.analysis.embedding.ai.gemini import GeminiEmbedder
 from app.analysis.errors import (
     ConfigurationError,
     InvalidInputError,
@@ -23,8 +23,8 @@ from app.analysis.errors import (
 def _make_embedder() -> GeminiEmbedder:
     """genai.Client を mock した GeminiEmbedder を返す。"""
     with (
-        patch("app.analysis.embedder.gemini.genai.Client"),
-        patch("app.analysis.embedder.gemini.settings") as mock_settings,
+        patch("app.analysis.embedding.ai.gemini.genai.Client"),
+        patch("app.analysis.embedding.ai.gemini.settings") as mock_settings,
     ):
         mock_settings.gemini_api_key.get_secret_value.return_value = "test-key"
         return GeminiEmbedder()
@@ -45,7 +45,7 @@ def _make_embed_response(vectors: list[list[float]]) -> MagicMock:
 
 def test_init_raises_configuration_error_when_api_key_missing() -> None:
     """API key が空文字なら ConfigurationError で初期化失敗。"""
-    with patch("app.analysis.embedder.gemini.settings") as mock_settings:
+    with patch("app.analysis.embedding.ai.gemini.settings") as mock_settings:
         mock_settings.gemini_api_key.get_secret_value.return_value = ""
         with pytest.raises(ConfigurationError, match="GEMINI_API_KEY"):
             GeminiEmbedder()

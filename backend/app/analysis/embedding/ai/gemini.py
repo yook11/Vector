@@ -18,7 +18,7 @@ from google import genai
 from google.genai.errors import APIError, ServerError
 from google.genai.types import EmbedContentConfig
 
-from app.analysis.embedder.base import BaseEmbedder
+from app.analysis.embedding.ai.base import BaseEmbedder
 from app.analysis.errors import (
     AnalysisDomainError,
     ConfigurationError,

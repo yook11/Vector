@@ -31,7 +31,7 @@ from taskiq.schedule_sources import LabelScheduleSource
 from taskiq_redis import RedisAsyncResultBackend, RedisStreamBroker
 
 from app.analysis.assessment.ai.deepseek import DeepSeekAssessor
-from app.analysis.embedder.gemini import GeminiEmbedder
+from app.analysis.embedding.ai.gemini import GeminiEmbedder
 from app.analysis.extraction.extractor.gemini import GeminiExtractor
 from app.config import settings
 

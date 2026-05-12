@@ -77,12 +77,6 @@ class Settings(BaseSettings):
     openai_api_key: SecretStr = SecretStr("")
     deepseek_api_key: SecretStr = SecretStr("")
 
-    # search embedder の provider 切替。
-    # - "gemini": 本番経路 (GeminiEmbedder, gemini-embedding-001)
-    # - "stub":   CI / Schemathesis 等で外部 API 到達を避ける用 (StubEmbedder)
-    # production では "gemini" 固定 (factory 側で起動時 reject)。
-    embedder_provider: Literal["gemini", "stub"] = "gemini"
-
     # ニュース取得
     check_interval_minutes: int = 30
     max_articles_per_fetch: int = 50

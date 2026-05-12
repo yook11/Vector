@@ -6,6 +6,8 @@ import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.analysis.embedding.ai.base import BaseEmbedder
+from app.analysis.embedding.ai.gemini import GeminiEmbedder
 from app.config import settings
 from app.dependencies import (
     CurrentUser,
@@ -20,6 +22,17 @@ from app.search.service import SemanticSearchService
 router = APIRouter(prefix="/api/v1/articles", tags=["semantic-search"])
 
 
+def get_embedder_for_search() -> BaseEmbedder:
+    """検索クエリ embedding 用の Pure DI composition root。
+
+    本番経路では ``GeminiEmbedder`` を hardcode する (env による provider 切替なし)。
+    CI / Schemathesis 等で外部 API を避けたい場合は
+    ``app.dependency_overrides[get_embedder_for_search] = lambda: StubEmbedder()``
+    で差し替える。
+    """
+    return GeminiEmbedder()
+
+
 def get_semantic_search_service(
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> SemanticSearchService:
@@ -32,6 +45,7 @@ async def search_articles(
     user: Annotated[CurrentUser, Depends(get_current_user)],
     redis: Annotated[aioredis.Redis, Depends(get_redis_client)],
     service: Annotated[SemanticSearchService, Depends(get_semantic_search_service)],
+    embedder: Annotated[BaseEmbedder, Depends(get_embedder_for_search)],
 ) -> PaginatedArticleResponse:
     """セマンティック類似度で記事を検索する (red-team C1 対策: auth + per-user quota)。
 
@@ -47,4 +61,5 @@ async def search_articles(
         user_id=user.id,
         redis=redis,
         daily_max=settings.semantic_search_daily_quota_per_user,
+        embedder=embedder,
     )

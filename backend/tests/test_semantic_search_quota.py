@@ -24,6 +24,8 @@ async def test_embed_search_query_does_not_consume_quota_on_cache_hit() -> None:
     redis = MagicMock()
     redis.eval = AsyncMock()
     fake_vector = [0.1] * 768
+    unused_embedder = MagicMock()
+    unused_embedder.embed_query = AsyncMock()
     with patch(
         "app.search.embedding_cache.get_query_embedding",
         new_callable=AsyncMock,
@@ -34,9 +36,11 @@ async def test_embed_search_query_does_not_consume_quota_on_cache_hit() -> None:
             user_id=uuid.uuid4(),
             redis=redis,
             daily_max=100,
+            embedder=unused_embedder,
         )
     assert result == fake_vector
     redis.eval.assert_not_called()
+    unused_embedder.embed_query.assert_not_called()
 
 
 @pytest.mark.asyncio

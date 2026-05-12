@@ -22,7 +22,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.analysis.embedder.base import BaseEmbedder
+from app.analysis.embedding.ai.base import BaseEmbedder
 from app.analysis.embedding.domain.embedding import Embedding
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.domain.value_objects import EMBEDDING_DIMENSION

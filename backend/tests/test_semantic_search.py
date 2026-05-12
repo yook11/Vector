@@ -429,6 +429,7 @@ async def test_admin_user_consumes_same_quota_as_regular_user(
     """
     from app.dependencies import get_redis_client
     from app.main import app as fastapi_app
+    from app.search.router import get_embedder_for_search
 
     source = await _create_source(db_session)
     await _create_article(
@@ -441,7 +442,9 @@ async def test_admin_user_consumes_same_quota_as_regular_user(
 
     fake_redis = MagicMock()
     fake_redis.eval = AsyncMock(return_value=1)
+    fake_embedder = MagicMock(embed_query=AsyncMock(return_value=FAKE_QUERY_EMBEDDING))
     fastapi_app.dependency_overrides[get_redis_client] = lambda: fake_redis
+    fastapi_app.dependency_overrides[get_embedder_for_search] = lambda: fake_embedder
     try:
         with (
             patch(
@@ -453,18 +456,13 @@ async def test_admin_user_consumes_same_quota_as_regular_user(
                 "app.search.embedding_cache.set_query_embedding",
                 new_callable=AsyncMock,
             ),
-            patch(
-                "app.search.service.get_embedder",
-                return_value=MagicMock(
-                    embed_query=AsyncMock(return_value=FAKE_QUERY_EMBEDDING)
-                ),
-            ),
         ):
             resp = await admin_client.get(
                 "/api/v1/articles/search", params={"q": "test"}
             )
     finally:
         fastapi_app.dependency_overrides.pop(get_redis_client, None)
+        fastapi_app.dependency_overrides.pop(get_embedder_for_search, None)
 
     assert resp.status_code == 200
     fake_redis.eval.assert_called_once()

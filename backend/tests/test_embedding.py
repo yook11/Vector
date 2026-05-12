@@ -1,32 +1,13 @@
 """Embedding サービスと類似記事 API エンドポイントのテスト。"""
 
-from unittest.mock import patch
-
 import pytest
 
-from app.analysis.embedder.base import BaseEmbedder
-from app.analysis.embedder.factory import get_embedder
-from app.analysis.embedder.gemini import GeminiEmbedder
+from app.analysis.embedding.ai.base import BaseEmbedder
 from app.analysis.errors import (
     AnalysisDomainError,
     InvalidInputError,
     ProviderError,
 )
-
-# ---------------------------------------------------------------------------
-# A. Factory and configuration
-# ---------------------------------------------------------------------------
-
-
-def test_get_embedder_returns_gemini() -> None:
-    with (
-        patch("app.analysis.embedder.gemini.genai.Client"),
-        patch("app.analysis.embedder.gemini.settings") as mock_settings,
-    ):
-        mock_settings.gemini_api_key.get_secret_value.return_value = "test-key"
-        result = get_embedder()
-        assert isinstance(result, GeminiEmbedder)
-
 
 # ---------------------------------------------------------------------------
 # E. BaseEmbedder._embed_once (StubEmbedder)
