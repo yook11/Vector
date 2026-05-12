@@ -25,7 +25,9 @@ from app.analysis.errors import (
 from app.analysis.extraction.ai.base import BaseExtractor
 from app.analysis.extraction.ai.envelope import ExtractionCall
 from app.analysis.extraction.ai.gemini_prompt import GeminiExtractionPrompt
-from app.analysis.extraction.domain import ExtractionResult
+from app.analysis.extraction.ai.parse import parse_extraction
+from app.analysis.extraction.ai.schema import GeminiExtractionResponse
+from app.analysis.extraction.domain import Noise, Signal
 from app.config import settings
 
 logger = structlog.get_logger(__name__)
@@ -89,12 +91,14 @@ class GeminiExtractor(BaseExtractor):
         self,
         title: str,
         content: str,
-    ) -> ExtractionCall:
+    ) -> ExtractionCall[Signal] | ExtractionCall[Noise]:
         """プロンプトを構築し API を呼び出して envelope を返す。"""
         prompt = GeminiExtractionPrompt.render(title=title, content=content)
         return await self._call_once(prompt)
 
-    async def _call_api(self, prompt: str) -> ExtractionCall:
+    async def _call_api(
+        self, prompt: str
+    ) -> ExtractionCall[Signal] | ExtractionCall[Noise]:
         """Gemini の generate_content API を呼び出し envelope を組み立てる。"""
         response = await self._client.aio.models.generate_content(
             model=GeminiExtractionPrompt.MODEL,
@@ -112,17 +116,20 @@ class GeminiExtractor(BaseExtractor):
             raise AIProviderOutputBlockedError(f"blocked by policy: {finish_reason}")
 
         parsed = response.parsed
-        if not isinstance(parsed, ExtractionResult):
+        if not isinstance(parsed, GeminiExtractionResponse):
             # provider は応答したが Stage 3 schema として消化不可 (Layer 2-B、
             # RetryableError、INLINE_RETRY=True で 1 回 retry 救済)
             raise ExtractionResponseInvalidError(
-                f"Gemini did not return ExtractionResult "
+                f"Gemini did not return GeminiExtractionResponse "
                 f"(got {type(parsed).__name__}, finish_reason={finish_reason})"
             )
+        result = parse_extraction(parsed)
         return ExtractionCall(
-            result=parsed,
+            result=result,
             raw_response=_extract_raw_text(response),
+            raw_relevance=parsed.relevance,
             prompt_version=GeminiExtractionPrompt.VERSION,
+            model_name=GeminiExtractionPrompt.MODEL,
         )
 
     def _translate_error(self, exc: Exception) -> Exception:

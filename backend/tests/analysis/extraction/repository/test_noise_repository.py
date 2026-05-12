@@ -15,27 +15,34 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis.domain.value_objects.entity import EntityRawType, EntitySurface
-from app.analysis.extraction.domain import ExtractedEntity, ExtractionResult
+from app.analysis.extraction.ai.envelope import ExtractionCall
+from app.analysis.extraction.domain import ExtractedEntity, Noise
 from app.analysis.extraction.noise_repository import NoiseRepository
 from app.models.article import Article
 from app.models.news_source import NewsSource
 
 
-def _noise_result(
+def _noise_call(
     title_ja: str = "ノイズタイトル",
     summary_ja: str = "ノイズ要約",
     entities: list[tuple[str, str]] | None = None,
-) -> ExtractionResult:
+) -> ExtractionCall[Noise]:
+    """``ExtractionCall[Noise]`` を生成するヘルパー。"""
     if entities is None:
         entities = [("Celebrity X", "person"), ("Local Event", "event")]
-    return ExtractionResult(
-        relevance="noise",
-        title_ja=title_ja,
-        summary_ja=summary_ja,
-        entities=[
-            ExtractedEntity(surface=EntitySurface(s), raw_type=EntityRawType(t))
-            for s, t in entities
-        ],
+    return ExtractionCall(
+        result=Noise(
+            title_ja=title_ja,
+            summary_ja=summary_ja,
+            entities=[
+                ExtractedEntity(surface=EntitySurface(s), raw_type=EntityRawType(t))
+                for s, t in entities
+            ],
+        ),
+        raw_response='{"relevance":"noise"}',
+        raw_relevance="noise",
+        prompt_version="testver1",
+        model_name="test-model",
     )
 
 
@@ -75,7 +82,7 @@ async def test_exists_for_article_returns_true_after_save(
 ) -> None:
     article = await _make_article(db_session, sample_source, "https://example.com/n1")
     repo = NoiseRepository(db_session)
-    saved = await repo.save(_noise_result(), article_id=article.id)
+    saved = await repo.save(_noise_call(), article_id=article.id)
     await db_session.commit()
     assert saved is not None
     assert await repo.exists_for_article(article.id) is True
@@ -94,7 +101,7 @@ async def test_save_persists_entities_as_jsonb_in_order(
     article = await _make_article(db_session, sample_source, "https://example.com/n2")
     repo = NoiseRepository(db_session)
     saved = await repo.save(
-        _noise_result(
+        _noise_call(
             entities=[("First", "company"), ("Second", "person"), ("Third", "tech")]
         ),
         article_id=article.id,
@@ -127,7 +134,7 @@ async def test_save_accepts_empty_entities(
     article = await _make_article(db_session, sample_source, "https://example.com/n3")
     repo = NoiseRepository(db_session)
     saved = await repo.save(
-        _noise_result(entities=[]),
+        _noise_call(entities=[]),
         article_id=article.id,
     )
     await db_session.commit()
@@ -148,12 +155,12 @@ async def test_save_returns_none_on_unique_race_loss(
     article = await _make_article(db_session, sample_source, "https://example.com/n4")
     repo = NoiseRepository(db_session)
 
-    first = await repo.save(_noise_result(), article_id=article.id)
+    first = await repo.save(_noise_call(), article_id=article.id)
     await db_session.commit()
     assert first is not None
 
     second = await repo.save(
-        _noise_result(title_ja="別タイトル"),
+        _noise_call(title_ja="別タイトル"),
         article_id=article.id,
     )
     await db_session.commit()

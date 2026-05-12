@@ -28,7 +28,7 @@ from app.analysis.errors import ExtractionResponseInvalidError
 from app.analysis.extraction.ai.base import BaseExtractor
 from app.analysis.extraction.ai.envelope import ExtractionCall
 from app.analysis.extraction.ai.gemini_prompt import GeminiExtractionPrompt
-from app.analysis.extraction.domain import ExtractedEntity, ExtractionResult
+from app.analysis.extraction.domain import ExtractedEntity, Noise, Signal
 from app.analysis.extraction.domain.ready import ReadyForExtraction
 from app.analysis.extraction.service import (
     ExtractedOutcome,
@@ -40,39 +40,59 @@ from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
 
 
-def _result(relevance: str = "signal", entities: int = 1) -> ExtractionResult:
-    return ExtractionResult(
-        relevance=relevance,
-        title_ja="日本語タイトル",
-        summary_ja="日本語要約",
-        entities=[
-            ExtractedEntity(
-                surface=EntitySurface(f"E{i}"), raw_type=EntityRawType("Company")
-            )
-            for i in range(entities)
-        ],
+def _signal_envelope(
+    entities: int = 2, *, raw: str = '{"relevance":"signal"}'
+) -> ExtractionCall[Signal]:
+    return ExtractionCall(
+        result=Signal(
+            title_ja="日本語タイトル",
+            summary_ja="日本語要約",
+            entities=[
+                ExtractedEntity(
+                    surface=EntitySurface(f"E{i}"), raw_type=EntityRawType("Company")
+                )
+                for i in range(entities)
+            ],
+        ),
+        raw_response=raw,
+        raw_relevance="signal",
+        prompt_version=GeminiExtractionPrompt.VERSION,
+        model_name=GeminiExtractionPrompt.MODEL,
     )
 
 
-def _envelope(
-    relevance: str = "signal", *, raw: str = '{"relevance":"signal"}'
-) -> ExtractionCall:
+def _noise_envelope(
+    entities: int = 2, *, raw: str = '{"relevance":"noise"}'
+) -> ExtractionCall[Noise]:
     return ExtractionCall(
-        result=_result(relevance=relevance, entities=2),
+        result=Noise(
+            title_ja="日本語タイトル",
+            summary_ja="日本語要約",
+            entities=[
+                ExtractedEntity(
+                    surface=EntitySurface(f"E{i}"), raw_type=EntityRawType("Company")
+                )
+                for i in range(entities)
+            ],
+        ),
         raw_response=raw,
+        raw_relevance="noise",
         prompt_version=GeminiExtractionPrompt.VERSION,
+        model_name=GeminiExtractionPrompt.MODEL,
     )
 
 
 def _extractor(
-    *, return_envelope: ExtractionCall | None = None, side_effect=None
+    *,
+    return_envelope: ExtractionCall[Signal] | ExtractionCall[Noise] | None = None,
+    side_effect=None,
 ) -> BaseExtractor:
     mock = MagicMock(spec=BaseExtractor)
     type(mock).model_name = GeminiExtractionPrompt.MODEL
     if side_effect is not None:
         mock.extract = AsyncMock(side_effect=side_effect)
     else:
-        mock.extract = AsyncMock(return_value=return_envelope or _envelope())
+        mock.extract = AsyncMock(return_value=return_envelope or _signal_envelope())
     return mock
 
 
@@ -125,7 +145,7 @@ async def test_signal_outcome_writes_extracted_audit_with_category_and_code(
     ready = await _ready(article)
     svc = ExtractionService(session_factory)
 
-    outcome = await svc.execute(ready, _extractor(return_envelope=_envelope("signal")))
+    outcome = await svc.execute(ready, _extractor(return_envelope=_signal_envelope()))
 
     assert isinstance(outcome, ExtractedOutcome)
     events = await _fetch_extraction_events(db_session, article.id)
@@ -143,6 +163,8 @@ async def test_signal_outcome_writes_extracted_audit_with_category_and_code(
     assert payload["entity_count"] == 2
     assert payload["ai_raw_response"]
     assert payload["input_content_length"] == len(article.original_content)
+    # PR1-a: raw_relevance は envelope.raw_relevance から焼かれる (Stage 4 対称)
+    assert payload["raw_relevance"] == "signal"
 
 
 @pytest.mark.asyncio
@@ -156,7 +178,7 @@ async def test_noise_outcome_writes_extracted_as_noise_audit_with_category_and_c
     ready = await _ready(article)
     svc = ExtractionService(session_factory)
 
-    outcome = await svc.execute(ready, _extractor(return_envelope=_envelope("noise")))
+    outcome = await svc.execute(ready, _extractor(return_envelope=_noise_envelope()))
 
     assert isinstance(outcome, NoiseOutcome)
     events = await _fetch_extraction_events(db_session, article.id)

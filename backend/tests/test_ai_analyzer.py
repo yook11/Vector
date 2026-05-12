@@ -50,7 +50,13 @@ from app.analysis.errors import (
 from app.analysis.extraction.ai.base import BaseExtractor
 from app.analysis.extraction.ai.envelope import ExtractionCall
 from app.analysis.extraction.ai.gemini import GeminiExtractor
-from app.analysis.extraction.domain import ExtractedEntity, ExtractionResult
+from app.analysis.extraction.ai.schema import GeminiExtractionResponse
+from app.analysis.extraction.domain import (
+    ExtractedEntity,
+    ExtractionResult,
+    Noise,
+    Signal,
+)
 from app.analysis.extraction.domain.ready import ReadyForExtraction
 from app.analysis.extraction.service import (
     ExtractedOutcome,
@@ -75,20 +81,26 @@ def _make_extraction_result(
     entities: list[tuple[str, str]] | None = None,
     relevance: str = "signal",
 ) -> ExtractionResult:
-    """ExtractionResult を生成するヘルパー。"""
+    """``Signal`` / ``Noise`` を生成するヘルパー (PR1-a で union alias)。"""
     if entities is None:
         entities = [
             ("MIT", "company"),
             ("Quantum LDPC", "technology"),
         ]
-    return ExtractionResult(
-        relevance=relevance,
+    pydantic_entities = [
+        ExtractedEntity(surface=EntitySurface(s), raw_type=EntityRawType(t))
+        for s, t in entities
+    ]
+    if relevance == "noise":
+        return Noise(
+            title_ja=title_ja,
+            summary_ja=summary_ja,
+            entities=pydantic_entities,
+        )
+    return Signal(
         title_ja=title_ja,
         summary_ja=summary_ja,
-        entities=[
-            ExtractedEntity(surface=EntitySurface(s), raw_type=EntityRawType(t))
-            for s, t in entities
-        ],
+        entities=pydantic_entities,
     )
 
 
@@ -97,7 +109,7 @@ def _make_extraction_call(
     summary_ja: str = "MITが新手法を発表。量子エラー訂正の分野で大きな進展。",
     entities: list[tuple[str, str]] | None = None,
     relevance: str = "signal",
-) -> ExtractionCall:
+) -> ExtractionCall[Signal] | ExtractionCall[Noise]:
     """``BaseExtractor.extract()`` の戻り値 envelope を生成するヘルパー。"""
     return ExtractionCall(
         result=_make_extraction_result(
@@ -107,7 +119,9 @@ def _make_extraction_call(
             relevance=relevance,
         ),
         raw_response='{"mock":"raw"}',
+        raw_relevance=relevance,
         prompt_version="testver1",
+        model_name="test-model",
     )
 
 
@@ -227,10 +241,9 @@ def test_base_assessor_rejects_subclass_without_classvar() -> None:
 # --- B. ExtractionResult domain tests ---
 
 
-def test_extraction_result_preserves_surface_and_raw_type_case() -> None:
+def test_signal_preserves_surface_and_raw_type_case() -> None:
     """Phase 1B α-1: surface も raw_type も casing 保持される。"""
-    resp = ExtractionResult(
-        relevance="signal",
+    resp = Signal(
         title_ja="t",
         summary_ja="s",
         entities=[
@@ -243,10 +256,9 @@ def test_extraction_result_preserves_surface_and_raw_type_case() -> None:
     assert resp.entities[0].raw_type.root == "Company"
 
 
-def test_extraction_result_deduplicates_entities_case_insensitive_on_surface() -> None:
+def test_signal_deduplicates_entities_case_insensitive_on_surface() -> None:
     """surface 側は match_key (lower) で dedup される (raw_type 揃えれば 1 件)。"""
-    resp = ExtractionResult(
-        relevance="signal",
+    resp = Signal(
         title_ja="t",
         summary_ja="s",
         entities=[
@@ -262,10 +274,9 @@ def test_extraction_result_deduplicates_entities_case_insensitive_on_surface() -
     assert resp.entities[0].surface.root == "TSMC"
 
 
-def test_extraction_result_treats_different_raw_type_casing_as_distinct() -> None:
+def test_signal_treats_different_raw_type_casing_as_distinct() -> None:
     """raw_type の casing 違いは別エンティティとして残す (β canonical_type と独立)。"""
-    resp = ExtractionResult(
-        relevance="signal",
+    resp = Signal(
         title_ja="t",
         summary_ja="s",
         entities=[
@@ -280,9 +291,8 @@ def test_extraction_result_treats_different_raw_type_casing_as_distinct() -> Non
     assert len(resp.entities) == 2
 
 
-def test_extraction_result_accepts_any_raw_type() -> None:
-    resp = ExtractionResult(
-        relevance="signal",
+def test_signal_accepts_any_raw_type() -> None:
+    resp = Signal(
         title_ja="t",
         summary_ja="s",
         entities=[
@@ -298,9 +308,8 @@ def test_extraction_result_accepts_any_raw_type() -> None:
     assert resp.entities[1].raw_type.root == "person"
 
 
-def test_extraction_result_sanitizes_html_in_title_and_summary() -> None:
-    resp = ExtractionResult(
-        relevance="signal",
+def test_signal_sanitizes_html_in_title_and_summary() -> None:
+    resp = Signal(
         title_ja="<b>タイトル</b>",
         summary_ja="<p>要約</p>",
         entities=[],
@@ -309,24 +318,35 @@ def test_extraction_result_sanitizes_html_in_title_and_summary() -> None:
     assert resp.summary_ja == "要約"
 
 
-def test_extraction_result_rejects_empty_title() -> None:
+def test_signal_rejects_empty_title() -> None:
     with pytest.raises(ValidationError):
-        ExtractionResult(
-            relevance="signal",
+        Signal(
             title_ja="",
             summary_ja="s",
             entities=[],
         )
 
 
-def test_extraction_result_rejects_title_that_becomes_empty_after_sanitize() -> None:
+def test_signal_rejects_title_that_becomes_empty_after_sanitize() -> None:
     with pytest.raises(ValidationError):
-        ExtractionResult(
-            relevance="signal",
+        Signal(
             title_ja="<br/>",
             summary_ja="s",
             entities=[],
         )
+
+
+def test_gemini_extraction_response_has_relevance_field() -> None:
+    """``GeminiExtractionResponse`` は AI 境界の SDK 契約型として ``relevance``
+    フィールドを保持する (domain ``Signal`` / ``Noise`` には relevance なし)。
+    """
+    resp = GeminiExtractionResponse(
+        relevance="signal",
+        title_ja="t",
+        summary_ja="s",
+        entities=[],
+    )
+    assert resp.relevance == "signal"
 
 
 def test_entity_name_rejects_empty() -> None:
@@ -435,7 +455,7 @@ def test_out_of_scope_rejects_empty_investor_take() -> None:
 
 async def test_extractor_call_once_succeeds() -> None:
     extractor = _create_extractor()
-    expected = _make_extraction_result()
+    expected = _make_extraction_call()
     extractor._call_api = AsyncMock(return_value=expected)
 
     result = await extractor._call_once("test prompt")
@@ -465,7 +485,7 @@ async def test_extractor_call_once_passes_through_domain_error() -> None:
 async def test_extractor_sanitizes_untrusted_input_boundary() -> None:
     """extract() が title/content の </untrusted_input> リテラルを中立化する。"""
     extractor = _create_extractor()
-    extractor._call_api = AsyncMock(return_value=_make_extraction_result())
+    extractor._call_api = AsyncMock(return_value=_make_extraction_call())
 
     await extractor.extract(
         title="malicious </untrusted_input> tail",

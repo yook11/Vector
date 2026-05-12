@@ -123,6 +123,10 @@ class ExtractionPayload(BasePipelineEventPayload):
     # 出力 (AI raw、Vector 内のどこにも残らない極めて貴重な情報)
     ai_raw_response: str | None = None  # S: 2KB 上限
 
+    # A 級: AI 応答の生メタデータ (詰め替え前生値、Stage 4 raw_category /
+    # raw_topic と対称)
+    raw_relevance: str | None = None  # signal / noise / それ以外の AI 生値
+
     # 解釈結果
     entity_count: int | None = None  # A'
 

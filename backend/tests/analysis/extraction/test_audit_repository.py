@@ -33,7 +33,7 @@ from app.analysis.errors import (
 from app.analysis.extraction.ai.envelope import ExtractionCall
 from app.analysis.extraction.ai.gemini_prompt import GeminiExtractionPrompt
 from app.analysis.extraction.audit_repository import ExtractionAuditRepository
-from app.analysis.extraction.domain import ExtractedEntity, ExtractionResult
+from app.analysis.extraction.domain import ExtractedEntity, Noise, Signal
 from app.analysis.extraction.domain.ready import ReadyForExtraction
 from app.analysis.extraction.service import ExtractedOutcome, NoiseOutcome
 from app.models.article import Article
@@ -41,25 +41,41 @@ from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
 
 
-def _result(relevance: str = "signal", entities: int = 1) -> ExtractionResult:
-    return ExtractionResult(
-        relevance=relevance,
-        title_ja="日本語タイトル",
-        summary_ja="日本語要約",
-        entities=[
-            ExtractedEntity(
-                surface=EntitySurface(f"E{i}"), raw_type=EntityRawType("Company")
-            )
-            for i in range(entities)
-        ],
+def _signal_envelope(entities: int = 2) -> ExtractionCall[Signal]:
+    return ExtractionCall(
+        result=Signal(
+            title_ja="日本語タイトル",
+            summary_ja="日本語要約",
+            entities=[
+                ExtractedEntity(
+                    surface=EntitySurface(f"E{i}"), raw_type=EntityRawType("Company")
+                )
+                for i in range(entities)
+            ],
+        ),
+        raw_response='{"relevance":"signal"}',
+        raw_relevance="signal",
+        prompt_version=GeminiExtractionPrompt.VERSION,
+        model_name=GeminiExtractionPrompt.MODEL,
     )
 
 
-def _envelope(relevance: str = "signal") -> ExtractionCall:
+def _noise_envelope(entities: int = 2) -> ExtractionCall[Noise]:
     return ExtractionCall(
-        result=_result(relevance=relevance, entities=2),
-        raw_response='{"relevance":"signal"}',
+        result=Noise(
+            title_ja="日本語タイトル",
+            summary_ja="日本語要約",
+            entities=[
+                ExtractedEntity(
+                    surface=EntitySurface(f"E{i}"), raw_type=EntityRawType("Company")
+                )
+                for i in range(entities)
+            ],
+        ),
+        raw_response='{"relevance":"noise"}',
+        raw_relevance="noise",
         prompt_version=GeminiExtractionPrompt.VERSION,
+        model_name=GeminiExtractionPrompt.MODEL,
     )
 
 
@@ -117,7 +133,7 @@ async def test_append_extracted_records_success_with_code(
     async with session_factory() as session:
         await ExtractionAuditRepository(session).append_extracted(
             ready=_ready(article),
-            envelope=_envelope("signal"),
+            envelope=_signal_envelope(),
             code=ExtractedOutcome.CODE,
         )
         await session.commit()
@@ -130,6 +146,10 @@ async def test_append_extracted_records_success_with_code(
     assert ev.payload["entity_count"] == 2
     assert ev.payload["ai_raw_response"]
     assert ev.payload["source_name"] == str(sample_source.name)
+    # PR1-a: ai_model / prompt_version / raw_relevance は envelope 経由で焼かれる
+    assert ev.payload["ai_model"] == GeminiExtractionPrompt.MODEL
+    assert ev.payload["prompt_version"] == GeminiExtractionPrompt.VERSION
+    assert ev.payload["raw_relevance"] == "signal"
 
 
 @pytest.mark.asyncio
@@ -143,7 +163,7 @@ async def test_append_noise_records_extracted_as_noise(
     async with session_factory() as session:
         await ExtractionAuditRepository(session).append_noise(
             ready=_ready(article),
-            envelope=_envelope("noise"),
+            envelope=_noise_envelope(),
             code=NoiseOutcome.CODE,
         )
         await session.commit()
@@ -152,6 +172,8 @@ async def test_append_noise_records_extracted_as_noise(
     assert ev.outcome_code == "extracted_as_noise"
     assert ev.category == "success"
     assert ev.code == "extracted_as_noise"
+    # PR1-a: raw_relevance は envelope.raw_relevance ("noise") から焼かれる
+    assert ev.payload["raw_relevance"] == "noise"
 
 
 # ---------------------------------------------------------------------------
@@ -270,7 +292,7 @@ async def test_repository_does_not_commit(
     async with session_factory() as session:
         await ExtractionAuditRepository(session).append_extracted(
             ready=_ready(article),
-            envelope=_envelope("signal"),
+            envelope=_signal_envelope(),
             code=ExtractedOutcome.CODE,
         )
         # 意図的に commit しない (rollback で消える)

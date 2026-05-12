@@ -32,7 +32,8 @@ from app.analysis.errors import (
 from app.analysis.extraction.ai.envelope import ExtractionCall
 from app.analysis.extraction.ai.gemini import GeminiExtractor
 from app.analysis.extraction.ai.gemini_prompt import GeminiExtractionPrompt
-from app.analysis.extraction.domain import ExtractedEntity, ExtractionResult
+from app.analysis.extraction.ai.schema import GeminiExtractionResponse
+from app.analysis.extraction.domain import ExtractedEntity, Signal
 
 
 def _make_response(
@@ -52,8 +53,8 @@ def _make_response(
     return response
 
 
-def _ok_extraction_result() -> ExtractionResult:
-    return ExtractionResult(
+def _ok_gemini_response() -> GeminiExtractionResponse:
+    return GeminiExtractionResponse(
         relevance="signal",
         title_ja="t",
         summary_ja="s",
@@ -109,22 +110,30 @@ async def test_policy_block_with_no_text_still_raises_output_blocked() -> None:
 
 
 @pytest.mark.asyncio
-async def test_stop_with_parsed_result_returns_envelope() -> None:
-    parsed = _ok_extraction_result()
+async def test_stop_with_parsed_result_returns_envelope_with_signal() -> None:
+    """parsed が GeminiExtractionResponse(signal) なら ExtractionCall[Signal]
+    を返す。"""
+    parsed = _ok_gemini_response()
     response = _make_response(
         finish_reason=FinishReason.STOP, text='{"x":1}', parsed=parsed
     )
     extractor = _make_extractor(response)
     envelope = await extractor._call_api("prompt")
     assert isinstance(envelope, ExtractionCall)
-    assert envelope.result is parsed
+    # PR1-a: parse_extraction で Signal に詰め替えられる
+    # (parsed と同一 instance ではない)
+    assert isinstance(envelope.result, Signal)
+    assert envelope.result.title_ja == "t"
     assert envelope.raw_response == '{"x":1}'
+    assert envelope.raw_relevance == "signal"
     assert envelope.prompt_version == GeminiExtractionPrompt.VERSION
+    assert envelope.model_name == GeminiExtractionPrompt.MODEL
 
 
 @pytest.mark.asyncio
 async def test_max_tokens_without_parsed_raises_response_invalid() -> None:
-    """policy block 系以外で parsed が ExtractionResult でない場合は Layer 2-B。"""
+    """policy block 系以外で parsed が GeminiExtractionResponse でない場合は
+    Layer 2-B。"""
     response = _make_response(finish_reason=FinishReason.MAX_TOKENS, text="truncated")
     extractor = _make_extractor(response)
     with pytest.raises(ExtractionResponseInvalidError) as ei:

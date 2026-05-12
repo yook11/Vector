@@ -1,8 +1,10 @@
-"""``base_extraction_payload_fields`` の振る舞いテスト (PR3-a-1)。
+"""``base_extraction_payload_fields`` の振る舞いテスト (PR1-a で helper 縮退)。
 
 確認する性質:
-- 6 共通 field を返す (source_name / ai_model / prompt_version /
-  input_content_length / input_content_head / input_content_hash)
+- 4 共通 field を返す (source_name / input_content_length / input_content_head /
+  input_content_hash)。PR1-a 以降は ``ai_model`` / ``prompt_version`` は本 helper
+  の責務外 (成功経路は envelope 経由、失敗経路は caller が Gemini ClassVar
+  から直接埋める)。
 - ``input_content_length`` は **段階 1 (raw)** の長さ
 - ``input_content_head`` / ``input_content_hash`` は **段階 3 (sanitized)**
 - ``CONTENT_MAX_LENGTH`` を超えても length は raw のまま、hash は truncated 後
@@ -19,25 +21,27 @@ from app.analysis.extraction.audit import base_extraction_payload_fields
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 
 
-def test_returns_6_fields_in_canonical_keys() -> None:
+def test_returns_4_fields_in_canonical_keys() -> None:
+    """PR1-a 以降: helper は 4 field のみ返す (ai_model / prompt_version は除外)。"""
     fields = base_extraction_payload_fields(
         original_content="hello world",
         source_name="Test Source",
     )
     assert set(fields.keys()) == {
         "source_name",
-        "ai_model",
-        "prompt_version",
         "input_content_length",
         "input_content_head",
         "input_content_hash",
     }
 
 
-def test_ai_model_and_prompt_version_come_from_prompt_class() -> None:
+def test_helper_does_not_include_ai_model_or_prompt_version() -> None:
+    """PR1-a 以降: helper の戻り値からは ai_model / prompt_version が外れた
+    (成功経路は envelope 経由、失敗経路は caller が Gemini ClassVar から直接埋める)。
+    """
     fields = base_extraction_payload_fields(original_content="x")
-    assert fields["ai_model"] == GeminiExtractionPrompt.MODEL
-    assert fields["prompt_version"] == GeminiExtractionPrompt.VERSION
+    assert "ai_model" not in fields
+    assert "prompt_version" not in fields
 
 
 def test_input_content_length_is_raw_length() -> None:

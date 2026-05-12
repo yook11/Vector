@@ -20,12 +20,13 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.domain.value_objects.entity import EntityRawType, EntitySurface
+from app.analysis.extraction.ai.envelope import ExtractionCall
 from app.analysis.extraction.application import (
     ReExtractionService,
     ReExtractionSummary,
 )
 from app.analysis.extraction.cli.re_extract_all import build_parser, run
-from app.analysis.extraction.domain import ExtractedEntity, ExtractionResult
+from app.analysis.extraction.domain import ExtractedEntity, Signal
 from app.analysis.extraction.repository import ExtractionRepository
 from app.models.article import Article
 from app.models.news_source import NewsSource
@@ -101,16 +102,21 @@ async def _seed_article_with_extraction(
 
     repo = ExtractionRepository(db_session)
     await repo.save(
-        ExtractionResult(
-            relevance="signal",
-            title_ja="旧",
-            summary_ja="旧",
-            entities=[
-                ExtractedEntity(
-                    surface=EntitySurface(s), raw_type=EntityRawType("company")
-                )
-                for s in surfaces
-            ],
+        ExtractionCall(
+            result=Signal(
+                title_ja="旧",
+                summary_ja="旧",
+                entities=[
+                    ExtractedEntity(
+                        surface=EntitySurface(s), raw_type=EntityRawType("company")
+                    )
+                    for s in surfaces
+                ],
+            ),
+            raw_response='{"relevance":"signal"}',
+            raw_relevance="signal",
+            prompt_version="testver1",
+            model_name="test-model",
         ),
         article_id=article.id,
     )

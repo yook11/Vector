@@ -18,7 +18,7 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any, ClassVar
 
-from app.analysis.extraction.domain import ExtractionResult
+from app.analysis.extraction.ai.schema import GeminiExtractionResponse
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 from app.observability.prompt_versions import compute_call_signature
 
@@ -79,7 +79,7 @@ class GeminiExtractionPrompt:
             "response_mime_type": "application/json",
         }
     )
-    RESPONSE_SCHEMA: ClassVar[type[ExtractionResult]] = ExtractionResult
+    RESPONSE_SCHEMA: ClassVar[type[GeminiExtractionResponse]] = GeminiExtractionResponse
     SYSTEM_INSTRUCTION: ClassVar[str | None] = None
 
     # Gemini 固有の入力整形 (本文を切り詰めて投入)。system 不変条件としての hard cap

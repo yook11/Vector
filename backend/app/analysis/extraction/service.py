@@ -23,7 +23,7 @@ spec §原則 4)。Task 層が Layer 1 marker (``NonRetryableDropArticle`` /
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import ClassVar, assert_never
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -31,7 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.analysis.extraction.ai.base import BaseExtractor
 from app.analysis.extraction.ai.envelope import ExtractionCall
 from app.analysis.extraction.audit_repository import ExtractionAuditRepository
-from app.analysis.extraction.domain import Extraction
+from app.analysis.extraction.domain import Extraction, Noise, Signal
 from app.analysis.extraction.domain.ready import ReadyForExtraction
 from app.analysis.extraction.noise_repository import NoiseRepository
 from app.analysis.extraction.repository import ExtractionRepository
@@ -84,6 +84,10 @@ class ExtractionService:
         Extraction 未生成 + 本文サイズ ≤ hard cap)。本メソッド内で再 fetch
         / None check は行わない。
 
+        ``match envelope: case ExtractionCall(result=Signal()): | case
+        ExtractionCall(result=Noise()):`` の dispatch は Generic envelope に
+        対する型 narrowing をそのまま使う (Stage 4 AssessmentService と対称)。
+
         失敗は全て Layer 2 例外として **そのまま raise** する (Service は catch
         しない)。Task 層が Layer 1 marker で dispatch する責務 (spec §原則 4)。
 
@@ -98,21 +102,24 @@ class ExtractionService:
             content=ready.original_content,
         )
 
-        if envelope.result.relevance == "noise":
-            return await self._persist_noise(ready, envelope)
-        return await self._persist_signal(ready, envelope)
+        match envelope:
+            case ExtractionCall(result=Signal()):
+                # ``envelope`` は ``ExtractionCall[Signal]`` に narrow される
+                return await self._persist_signal(ready, envelope)
+            case ExtractionCall(result=Noise()):
+                # ``envelope`` は ``ExtractionCall[Noise]`` に narrow される
+                return await self._persist_noise(ready, envelope)
+            case _:
+                assert_never(envelope)
 
     async def _persist_signal(
         self,
         ready: ReadyForExtraction,
-        envelope: ExtractionCall,
+        envelope: ExtractionCall[Signal],
     ) -> ExtractedOutcome:
         async with self._session_factory() as session:
             repo = ExtractionRepository(session)
-            saved = await repo.save(
-                envelope.result,
-                article_id=ready.article_id,
-            )
+            saved = await repo.save(envelope, article_id=ready.article_id)
 
             if saved is None:
                 # race 敗北 — 勝者を読み戻して合流 (audit は勝者側で焼かれる)
@@ -150,14 +157,11 @@ class ExtractionService:
     async def _persist_noise(
         self,
         ready: ReadyForExtraction,
-        envelope: ExtractionCall,
+        envelope: ExtractionCall[Noise],
     ) -> NoiseOutcome:
         async with self._session_factory() as session:
             noise_repo = NoiseRepository(session)
-            saved = await noise_repo.save(
-                envelope.result,
-                article_id=ready.article_id,
-            )
+            saved = await noise_repo.save(envelope, article_id=ready.article_id)
 
             if saved is None:
                 # UNIQUE 違反による race 敗北 — 勝者を読み戻して合流する

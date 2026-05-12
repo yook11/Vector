@@ -9,6 +9,7 @@ import structlog
 
 from app.analysis.errors import AIProviderError, ExtractionDomainError
 from app.analysis.extraction.ai.envelope import ExtractionCall
+from app.analysis.extraction.domain import Noise, Signal
 
 logger = structlog.get_logger(__name__)
 
@@ -53,7 +54,7 @@ class BaseExtractor(abc.ABC):
         self,
         title: str,
         content: str,
-    ) -> ExtractionCall:
+    ) -> ExtractionCall[Signal] | ExtractionCall[Noise]:
         """記事から事実を抽出し、構造化データを返す。
 
         Article の存在が content の品質を保証する(50 文字以上)。
@@ -63,8 +64,9 @@ class BaseExtractor(abc.ABC):
             content: 記事本文全文(Article.original_content)。
 
         Returns:
-            ``result`` (ExtractionResult) に加え ``raw_response`` と
-            ``prompt_version`` を含む envelope。
+            ``result`` (``Signal`` | ``Noise``) に加え ``raw_response`` /
+            ``raw_relevance`` / ``prompt_version`` / ``model_name`` を含む
+            Generic envelope。
 
         Raises:
             AIProviderError: provider 呼び出し由来の失敗 (Layer 2-A)。
@@ -76,7 +78,9 @@ class BaseExtractor(abc.ABC):
         ...
 
     @abc.abstractmethod
-    async def _call_api(self, prompt: str) -> ExtractionCall:
+    async def _call_api(
+        self, prompt: str
+    ) -> ExtractionCall[Signal] | ExtractionCall[Noise]:
         """プロバイダー SDK を呼び出し、構造化レスポンスを envelope で返す。"""
         ...
 
@@ -94,7 +98,9 @@ class BaseExtractor(abc.ABC):
 
     # -- 単発呼び出し --
 
-    async def _call_once(self, prompt: str) -> ExtractionCall:
+    async def _call_once(
+        self, prompt: str
+    ) -> ExtractionCall[Signal] | ExtractionCall[Noise]:
         """プロバイダー API を 1 回呼び出し、例外を Layer 2 階層に変換する。
 
         ``_translate_error`` が翻訳不可で生 ``exc`` を返した場合は ``raise

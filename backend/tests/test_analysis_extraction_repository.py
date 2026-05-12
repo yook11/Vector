@@ -21,7 +21,8 @@ from app.analysis.domain.value_objects.entity import (
     EntityRawType,
     EntitySurface,
 )
-from app.analysis.extraction.domain import ExtractedEntity, ExtractionResult
+from app.analysis.extraction.ai.envelope import ExtractionCall
+from app.analysis.extraction.domain import ExtractedEntity, Signal
 from app.analysis.extraction.repository import ExtractionRepository
 from app.models.article import Article
 from app.models.article_extraction import ArticleExtraction
@@ -29,22 +30,27 @@ from app.models.article_extraction_entity import ArticleExtractionEntity
 from app.models.news_source import NewsSource
 
 
-def _result(
+def _signal_call(
     title_ja: str = "翻訳タイトル",
     summary_ja: str = "要約",
     entities: list[tuple[str, str]] | None = None,
-    relevance: str = "signal",
-) -> ExtractionResult:
+) -> ExtractionCall[Signal]:
+    """``ExtractionCall[Signal]`` を生成するヘルパー。"""
     if entities is None:
         entities = [("MIT", "company")]
-    return ExtractionResult(
-        relevance=relevance,
-        title_ja=title_ja,
-        summary_ja=summary_ja,
-        entities=[
-            ExtractedEntity(surface=EntitySurface(s), raw_type=EntityRawType(t))
-            for s, t in entities
-        ],
+    return ExtractionCall(
+        result=Signal(
+            title_ja=title_ja,
+            summary_ja=summary_ja,
+            entities=[
+                ExtractedEntity(surface=EntitySurface(s), raw_type=EntityRawType(t))
+                for s, t in entities
+            ],
+        ),
+        raw_response='{"relevance":"signal"}',
+        raw_relevance="signal",
+        prompt_version="testver1",
+        model_name="test-model",
     )
 
 
@@ -86,7 +92,7 @@ async def test_exists_for_article_returns_true_after_save(
         db_session, sample_source, "https://example.com/exists"
     )
     repo = ExtractionRepository(db_session)
-    saved = await repo.save(_result(), article_id=article.id)
+    saved = await repo.save(_signal_call(), article_id=article.id)
     await db_session.commit()
     assert saved is not None
     assert await repo.exists_for_article(article.id) is True
@@ -104,7 +110,7 @@ async def test_save_returns_extraction_with_persisted_id(
     article = await _make_article(db_session, sample_source, "https://example.com/save")
     repo = ExtractionRepository(db_session)
     saved = await repo.save(
-        _result(title_ja="保存後", summary_ja="要約"),
+        _signal_call(title_ja="保存後", summary_ja="要約"),
         article_id=article.id,
     )
     await db_session.commit()
@@ -122,11 +128,11 @@ async def test_save_returns_none_on_duplicate_in_same_session(
     """同一 article_id への 2 度目の save は None を返す (race 敗北の代理)。"""
     article = await _make_article(db_session, sample_source, "https://example.com/dup")
     repo = ExtractionRepository(db_session)
-    first = await repo.save(_result(), article_id=article.id)
+    first = await repo.save(_signal_call(), article_id=article.id)
     await db_session.commit()
     assert first is not None
 
-    second = await repo.save(_result(), article_id=article.id)
+    second = await repo.save(_signal_call(), article_id=article.id)
     assert second is None
 
 
@@ -140,7 +146,7 @@ async def test_save_does_not_create_orphan_entities_on_race_loss(
     )
     repo = ExtractionRepository(db_session)
     first = await repo.save(
-        _result(entities=[("First", "company")]),
+        _signal_call(entities=[("First", "company")]),
         article_id=article.id,
     )
     await db_session.commit()
@@ -150,7 +156,7 @@ async def test_save_does_not_create_orphan_entities_on_race_loss(
     before_count = len(list(before))
 
     second = await repo.save(
-        _result(entities=[("Second", "company"), ("Third", "company")]),
+        _signal_call(entities=[("Second", "company"), ("Third", "company")]),
         article_id=article.id,
     )
     await db_session.commit()
@@ -169,7 +175,7 @@ async def test_save_persists_entities_when_parent_succeeds(
     )
     repo = ExtractionRepository(db_session)
     saved = await repo.save(
-        _result(entities=[("MIT", "company"), ("CRISPR", "technology")]),
+        _signal_call(entities=[("MIT", "company"), ("CRISPR", "technology")]),
         article_id=article.id,
     )
     await db_session.commit()
@@ -211,7 +217,7 @@ async def test_find_by_article_id_round_trips_entity(
     article = await _make_article(db_session, sample_source, "https://example.com/find")
     repo = ExtractionRepository(db_session)
     saved = await repo.save(
-        _result(entities=[("X", "company")]),
+        _signal_call(entities=[("X", "company")]),
         article_id=article.id,
     )
     await db_session.commit()
@@ -247,7 +253,7 @@ async def test_update_idempotent_replaces_entities_and_keeps_parent(
     )
     repo = ExtractionRepository(db_session)
     first = await repo.save(
-        _result(entities=[("OldOne", "company"), ("OldTwo", "person")]),
+        _signal_call(entities=[("OldOne", "company"), ("OldTwo", "person")]),
         article_id=article.id,
     )
     await db_session.commit()
@@ -255,7 +261,7 @@ async def test_update_idempotent_replaces_entities_and_keeps_parent(
     parent_id = first.id
 
     updated = await repo.update_idempotent(
-        _result(
+        _signal_call(
             title_ja="新タイトル",
             summary_ja="新要約",
             entities=[("NewSurface", "Company")],
@@ -300,7 +306,7 @@ async def test_concurrent_save_returns_one_persisted_one_none(
     async def _save_in_new_session():
         async with session_factory() as session:
             repo = ExtractionRepository(session)
-            saved = await repo.save(_result(), article_id=article.id)
+            saved = await repo.save(_signal_call(), article_id=article.id)
             await session.commit()
             return saved
 

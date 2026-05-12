@@ -11,6 +11,8 @@
 - ``ProviderError`` 1 回 → ``ProviderError`` 1 回 → 成功 → ``success_ids``
   (2 回まで retry すれば成功するパターン)
 - 親 ``ArticleExtraction.id`` は保持される (CASCADE 連鎖防止の構造保証)
+- 再抽出で Noise が返った場合は ``skipped_ids`` に分類され、既存
+  ``ArticleExtraction`` は上書きされない (データ破壊防止の構造保証)
 
 extractor は ``unittest.mock`` で差し替え (実 Gemini を呼ばない)。
 """
@@ -27,13 +29,15 @@ from sqlmodel import select
 from app.analysis.domain.value_objects.entity import EntityRawType, EntitySurface
 from app.analysis.errors import InvalidInputError, ProviderError
 from app.analysis.extraction.ai.base import BaseExtractor
+from app.analysis.extraction.ai.envelope import ExtractionCall
 from app.analysis.extraction.application import (
     ReExtractionService,
     ReExtractionSummary,
 )
 from app.analysis.extraction.domain import (
     ExtractedEntity,
-    ExtractionResult,
+    Noise,
+    Signal,
 )
 from app.analysis.extraction.repository import ExtractionRepository
 from app.models.article import Article
@@ -42,28 +46,60 @@ from app.models.article_extraction_entity import ArticleExtractionEntity
 from app.models.news_source import NewsSource
 
 
-def _result(
+def _signal_call(
     entities: list[tuple[str, str]] | None = None,
     *,
     title_ja: str = "新タイトル",
     summary_ja: str = "新要約",
-    relevance: str = "signal",
-) -> ExtractionResult:
+) -> ExtractionCall[Signal]:
+    """``ExtractionCall[Signal]`` を生成するヘルパー。"""
     if entities is None:
         entities = [("NewSurface", "Company")]
-    return ExtractionResult(
-        relevance=relevance,
-        title_ja=title_ja,
-        summary_ja=summary_ja,
-        entities=[
-            ExtractedEntity(surface=EntitySurface(s), raw_type=EntityRawType(t))
-            for s, t in entities
-        ],
+    return ExtractionCall(
+        result=Signal(
+            title_ja=title_ja,
+            summary_ja=summary_ja,
+            entities=[
+                ExtractedEntity(surface=EntitySurface(s), raw_type=EntityRawType(t))
+                for s, t in entities
+            ],
+        ),
+        raw_response='{"relevance":"signal"}',
+        raw_relevance="signal",
+        prompt_version="testver1",
+        model_name="test-model-x",
+    )
+
+
+def _noise_call(
+    entities: list[tuple[str, str]] | None = None,
+    *,
+    title_ja: str = "ノイズタイトル",
+    summary_ja: str = "ノイズ要約",
+) -> ExtractionCall[Noise]:
+    """``ExtractionCall[Noise]`` を生成するヘルパー (再抽出で Noise 経路を作る用)。"""
+    if entities is None:
+        entities = [("NoiseSurface", "Person")]
+    return ExtractionCall(
+        result=Noise(
+            title_ja=title_ja,
+            summary_ja=summary_ja,
+            entities=[
+                ExtractedEntity(surface=EntitySurface(s), raw_type=EntityRawType(t))
+                for s, t in entities
+            ],
+        ),
+        raw_response='{"relevance":"noise"}',
+        raw_relevance="noise",
+        prompt_version="testver1",
+        model_name="test-model-x",
     )
 
 
 def _extractor(
-    *, return_value: ExtractionResult | None = None, side_effect=None
+    *,
+    return_value: ExtractionCall[Signal] | ExtractionCall[Noise] | None = None,
+    side_effect=None,
 ) -> BaseExtractor:
     """``BaseExtractor`` の最小モック (model_name + extract のみ)。"""
     mock = MagicMock(spec=BaseExtractor)
@@ -71,7 +107,7 @@ def _extractor(
     if side_effect is not None:
         mock.extract = AsyncMock(side_effect=side_effect)
     else:
-        mock.extract = AsyncMock(return_value=return_value or _result())
+        mock.extract = AsyncMock(return_value=return_value or _signal_call())
     return mock
 
 
@@ -100,14 +136,10 @@ async def _seed_extraction(
     """Article + 既存 ArticleExtraction (子付き) を作る。"""
     repo = ExtractionRepository(db_session)
     saved = await repo.save(
-        ExtractionResult(
-            relevance="signal",
+        _signal_call(
+            entities=entities,
             title_ja="旧タイトル",
             summary_ja="旧要約",
-            entities=[
-                ExtractedEntity(surface=EntitySurface(s), raw_type=EntityRawType(t))
-                for s, t in entities
-            ],
         ),
         article_id=article.id,
     )
@@ -190,7 +222,9 @@ async def test_success_replaces_entities_and_keeps_parent_id(
     )
     parent_id_before = parent.id
 
-    extractor = _extractor(return_value=_result(entities=[("NewSurface", "Company")]))
+    extractor = _extractor(
+        return_value=_signal_call(entities=[("NewSurface", "Company")])
+    )
     service = ReExtractionService(session_factory)
     summary = await service.execute((article.id,), extractor, dry_run=False)
 
@@ -236,7 +270,7 @@ async def test_dry_run_calls_extractor_but_rolls_back(
     )
 
     extractor = _extractor(
-        return_value=_result(entities=[("ShouldNotPersist", "Tech")])
+        return_value=_signal_call(entities=[("ShouldNotPersist", "Tech")])
     )
     service = ReExtractionService(session_factory)
     summary = await service.execute((article.id,), extractor, dry_run=True)
@@ -288,7 +322,7 @@ async def test_retries_then_succeeds(
     )
     await _seed_extraction(db_session, article=article, entities=[("Old", "company")])
 
-    extractor = _extractor(side_effect=[ProviderError("transient"), _result()])
+    extractor = _extractor(side_effect=[ProviderError("transient"), _signal_call()])
     service = ReExtractionService(session_factory, max_retries=3)
     summary = await service.execute((article.id,), extractor, dry_run=False)
 
@@ -332,11 +366,13 @@ async def test_summary_aggregates_per_article_independently(
 
     call_log: list[int] = []
 
-    async def _extract_side_effect(*, title: str, content: str) -> ExtractionResult:
+    async def _extract_side_effect(
+        *, title: str, content: str
+    ) -> ExtractionCall[Signal] | ExtractionCall[Noise]:
         call_log.append(len(call_log))
         # 順序: a_ok → a_fail (a_skip は extract まで来ない)
         if len(call_log) == 1:
-            return _result()
+            return _signal_call()
         raise ProviderError("dead")
 
     extractor = MagicMock(spec=BaseExtractor)
@@ -352,3 +388,66 @@ async def test_summary_aggregates_per_article_independently(
     assert summary.success_ids == (a_ok.id,)
     assert summary.skipped_ids == (a_skip.id,)
     assert summary.failed_ids == (a_fail.id,)
+
+
+# ---------------------------------------------------------------------------
+# Noise skip 経路 (PR1-a 構造保証: ExtractionCall[Signal] のみ update 経路)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_skips_when_re_extraction_returns_noise_and_keeps_signal_extraction(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """再抽出で Noise が返った場合は既存 ArticleExtraction を上書きしない。
+
+    ``update_idempotent`` の signature が ``ExtractionCall[Signal]`` のみ
+    受け付ける型 narrow を取っているため、Service 側 match で Noise は
+    skipped に分類する。データ破壊防止の構造的保証 (signal table への
+    noise 上書きを型レベルで排除、``feedback_structural_guarantee``)。
+    """
+    article = await _make_article(
+        db_session, sample_source, "https://example.com/noise-skip"
+    )
+    parent = await _seed_extraction(
+        db_session, article=article, entities=[("OldSignal", "company")]
+    )
+    parent_id_before = parent.id
+
+    extractor = _extractor(
+        return_value=_noise_call(entities=[("NoiseSurface", "Person")])
+    )
+    service = ReExtractionService(session_factory)
+    summary = await service.execute((article.id,), extractor, dry_run=False)
+
+    assert summary.skipped_ids == (article.id,)
+    assert summary.success_ids == ()
+    assert summary.failed_ids == ()
+
+    # 既存 ArticleExtraction が上書きされていない
+    async with session_factory() as fresh:
+        parent_after = (
+            await fresh.execute(
+                select(ArticleExtraction).where(
+                    ArticleExtraction.article_id == article.id
+                )
+            )
+        ).scalar_one()
+        assert parent_after.id == parent_id_before
+        assert parent_after.translated_title == "旧タイトル"
+
+        rows = (
+            (
+                await fresh.execute(
+                    select(ArticleExtractionEntity).where(
+                        ArticleExtractionEntity.extraction_id == parent_id_before
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    # 旧 entity ("OldSignal") のまま、Noise の "NoiseSurface" は永続化されていない
+    assert [r.surface.root for r in rows] == ["OldSignal"]

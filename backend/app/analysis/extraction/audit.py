@@ -3,13 +3,10 @@
 ``ExtractionAuditRepository`` 内部から呼ばれる private helper。直接の
 公開 API ではない (audit_repository の semantic method 経由でのみ使用)。
 
-成功 / 失敗 / DELETE の各経路で共有される「6 共通 field」のうち content 由来
-5 field を計算する。``source_name`` は呼出側 (audit_repository) で resolve した
-値をそのまま受け取る (helper は I/O しない、session に依存しない)。
-
-PR3-a-1 では Gemini 専用のため ``GeminiExtractionPrompt`` の ClassVar を直接
-参照する。複数 provider をサポートするタイミングで provider-agnostic な
-プロンプトメタを引数化する想定 (PR-Future)。
+成功 / 失敗 / DELETE の各経路で共有される「content + source_name の 4 field」を
+計算する。``ai_model`` / ``prompt_version`` は本 helper が埋めない —
+成功経路は envelope (``call.model_name`` / ``call.prompt_version``) から、
+失敗経路 (PR2 で envelope 化予定) は caller が Gemini ClassVar から直接埋める。
 
 content 段階 (`docs/observability/pipeline-events-design.md` §11):
     1. raw — Article.original_content (DB 値)
@@ -43,7 +40,13 @@ def base_extraction_payload_fields(
     original_content: str,
     source_name: str | None = None,
 ) -> dict[str, Any]:
-    """Service / tasks.py で共有する extraction audit payload の 6 基底 field。
+    """Service / tasks.py で共有する extraction audit payload の 4 基底 field。
+
+    PR1-a 以降、``ai_model`` / ``prompt_version`` は成功経路では envelope
+    (``call.model_name`` / ``call.prompt_version``) から直接埋める方針に
+    変わったため、本 helper の戻り値からは外れた。失敗経路 (``append_failure``
+    / ``append_drop_article``) は envelope が無い (AI 呼び出し前 or 中の失敗) ため、
+    caller 側で Gemini ClassVar から個別に埋める (PR2 で envelope 化予定)。
 
     Args:
         original_content: ``Article.original_content`` (raw 段階 1)。
@@ -52,15 +55,13 @@ def base_extraction_payload_fields(
 
     Returns:
         ``BasePipelineEventPayload`` / ``ExtractionPayload`` に直接展開可能な
-        6 key を含む dict (``source_name``, ``ai_model``, ``prompt_version``,
-        ``input_content_length``, ``input_content_head``, ``input_content_hash``)。
+        4 key を含む dict (``source_name``, ``input_content_length``,
+        ``input_content_head``, ``input_content_hash``)。
     """
     truncated = original_content[: GeminiExtractionPrompt.CONTENT_MAX_LENGTH]
     sanitized = sanitize_for_untrusted_block(truncated)
     return {
         "source_name": source_name,
-        "ai_model": GeminiExtractionPrompt.MODEL,
-        "prompt_version": GeminiExtractionPrompt.VERSION,
         "input_content_length": len(original_content),
         "input_content_head": sanitized[:_HEAD_LIMIT],
         "input_content_hash": hashlib.sha256(sanitized.encode("utf-8")).hexdigest()[

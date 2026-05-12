@@ -1,16 +1,20 @@
-"""Extraction リポジトリ — Stage C の永続化と読み出し。
+"""Extraction リポジトリ — Stage 3 (signal 経路) の永続化と読み出し。
 
 責務:
 
 - ``exists_for_article``: cheap な exists 判定 (Pattern A' の `try_advance_from`
   precondition チェック用)
-- ``save``: 受け取った ``ExtractionResult`` を `INSERT ... ON CONFLICT (article_id)
-  DO NOTHING RETURNING ...` で永続化する。race 敗北時 (rowcount=0) は ``None``
-  を返し、Service が ``find_by_article_id`` で勝者を読み戻す (spec §4.6)。
-  子テーブル (``article_extraction_entities``) の INSERT は親 INSERT 成功時の
-  みで race 敗北による orphan を作らない。
+- ``save``: 受け取った ``ExtractionCall[Signal]`` envelope を
+  ``INSERT ... ON CONFLICT (article_id) DO NOTHING RETURNING ...`` で永続化する。
+  race 敗北時 (rowcount=0) は ``None`` を返し、Service が
+  ``find_by_article_id`` で勝者を読み戻す (spec §4.6)。子テーブル
+  (``article_extraction_entities``) の INSERT は親 INSERT 成功時のみで race
+  敗北による orphan を作らない。
 - ``find_by_article_id``: ORM 行をドメイン Entity (``Extraction``) として復元する
   (永続化の双対 / race 敗北時の読戻し用)。
+- ``update_idempotent``: re-extraction CLI 専用 — ``ExtractionCall[Signal]`` のみ
+  受け付け、Noise を update 経路に流す可能性を型レベルで排除する
+  (``feedback_structural_guarantee``)。
 """
 
 from __future__ import annotations
@@ -21,17 +25,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlmodel import select
 
+from app.analysis.extraction.ai.envelope import ExtractionCall
 from app.analysis.extraction.domain import (
     ExtractedEntity,
     Extraction,
-    ExtractionResult,
+    Signal,
 )
 from app.models.article_extraction import ArticleExtraction
 from app.models.article_extraction_entity import ArticleExtractionEntity
 
 
 class ExtractionRepository:
-    """事実抽出（Stage C）に必要な DB 操作をカプセル化する。"""
+    """事実抽出（Stage 3、signal 経路）に必要な DB 操作をカプセル化する。"""
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
@@ -57,34 +62,37 @@ class ExtractionRepository:
 
     async def save(
         self,
-        result: ExtractionResult,
+        call: ExtractionCall[Signal],
         *,
         article_id: int,
     ) -> Extraction | None:
-        """AI 分析結果を `INSERT ... ON CONFLICT (article_id) DO NOTHING
-        RETURNING ...` で永続化する。
+        """``ExtractionCall[Signal]`` を受け、AI 分析結果を
+        ``INSERT ... ON CONFLICT (article_id) DO NOTHING RETURNING ...`` で
+        永続化する。
+
+        ``call.result`` (= ``Signal``) から永続化に必要な値を直接取り出す
+        (Stage 3 で起きた事実は envelope が抱え切る、
+        ``feedback_bc_boundary_guarantees_downstream``)。
+        ``call.model_name`` は監査 SSoT (``pipeline_events.payload.ai_model``)
+        に焼くのみで業務行には INSERT しない (``feedback_outcome_purification``)。
 
         commit は呼び出し側 (Service) が行う。``extracted_at`` は server_default で
-        DB が確定させ RETURNING で受け取る。
-
-        子テーブル ``article_extraction_entities`` の INSERT は親 INSERT 成功時
-        のみ実施し、race 敗北で orphan エンティティを作らない。
-
-        使用 model 名は audit (`pipeline_events.payload.ai_model`) に焼くのみで
-        業務行には INSERT しない (audit SSoT、feedback_outcome_purification)。
+        DB が確定させ RETURNING で受け取る。子テーブル
+        ``article_extraction_entities`` の INSERT は親 INSERT 成功時のみ実施し、
+        race 敗北で orphan エンティティを作らない。
 
         Returns:
-            成功時: 永続化された ``Extraction`` Entity (id / extracted_at は DB 値、
-            その他は result / 引数値)
+            成功時: 永続化された ``Extraction`` Entity (id / extracted_at は DB 値)
             race 敗北時 (期待した article_id への UNIQUE 違反): ``None``
             (Service が `find_by_article_id` で勝者を読み戻す — spec §4.6)
         """
+        signal = call.result
         stmt = (
             pg_insert(ArticleExtraction)
             .values(
                 article_id=article_id,
-                translated_title=result.title_ja,
-                summary=result.summary_ja,
+                translated_title=signal.title_ja,
+                summary=signal.summary_ja,
             )
             .on_conflict_do_nothing(index_elements=["article_id"])
             .returning(ArticleExtraction.id, ArticleExtraction.extracted_at)
@@ -95,7 +103,7 @@ class ExtractionRepository:
 
         # 親 INSERT 成功時のみ子エンティティを INSERT する。``position`` は AI 出力
         # 順を保存し、後段で人間レビュー時に prompt 出力順を再現できるようにする。
-        if result.entities:
+        if signal.entities:
             self._session.add_all(
                 [
                     ArticleExtractionEntity(
@@ -104,26 +112,30 @@ class ExtractionRepository:
                         raw_type=e.raw_type,
                         position=i,
                     )
-                    for i, e in enumerate(result.entities)
+                    for i, e in enumerate(signal.entities)
                 ]
             )
             await self._session.flush()
 
         return Extraction(
             id=row.id,
-            translated_title=result.title_ja,
-            summary=result.summary_ja,
-            entities=tuple(result.entities),
+            translated_title=signal.title_ja,
+            summary=signal.summary_ja,
+            entities=tuple(signal.entities),
             extracted_at=row.extracted_at,
         )
 
     async def update_idempotent(
         self,
-        result: ExtractionResult,
+        call: ExtractionCall[Signal],
         *,
         article_id: int,
     ) -> Extraction:
-        """既存の Extraction を新しい ``ExtractionResult`` で上書きする (CLI 用)。
+        """既存の Extraction を新しい ``ExtractionCall[Signal]`` で上書きする (CLI 用)。
+
+        ``ExtractionCall[Signal]`` のみ受け付ける型 narrow により、Noise を
+        signal table に上書きする経路を構造的に排除する
+        (``feedback_structural_guarantee``)。
 
         Phase 1B α-1 の re-extraction CLI 専用。再現性を持たせるため:
 
@@ -140,12 +152,13 @@ class ExtractionRepository:
         対象 article_id に対する extraction が存在しない前提 (CLI 側で事前に
         ``exists_for_article`` で絞り込む)。存在しない場合は ``NoResultFound``。
         """
+        signal = call.result
         update_stmt = (
             update(ArticleExtraction)
             .where(ArticleExtraction.article_id == article_id)
             .values(
-                translated_title=result.title_ja,
-                summary=result.summary_ja,
+                translated_title=signal.title_ja,
+                summary=signal.summary_ja,
                 extracted_at=func.now(),
             )
             .returning(ArticleExtraction.id, ArticleExtraction.extracted_at)
@@ -158,7 +171,7 @@ class ExtractionRepository:
             )
         )
 
-        if result.entities:
+        if signal.entities:
             self._session.add_all(
                 [
                     ArticleExtractionEntity(
@@ -167,16 +180,16 @@ class ExtractionRepository:
                         raw_type=e.raw_type,
                         position=i,
                     )
-                    for i, e in enumerate(result.entities)
+                    for i, e in enumerate(signal.entities)
                 ]
             )
         await self._session.flush()
 
         return Extraction(
             id=row.id,
-            translated_title=result.title_ja,
-            summary=result.summary_ja,
-            entities=tuple(result.entities),
+            translated_title=signal.title_ja,
+            summary=signal.summary_ja,
+            entities=tuple(signal.entities),
             extracted_at=row.extracted_at,
         )
 

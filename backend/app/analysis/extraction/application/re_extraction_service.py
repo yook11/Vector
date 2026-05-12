@@ -38,6 +38,8 @@ from sqlmodel import select
 
 from app.analysis.errors import AnalysisDomainError, InvalidInputError
 from app.analysis.extraction.ai.base import BaseExtractor
+from app.analysis.extraction.ai.envelope import ExtractionCall
+from app.analysis.extraction.domain import Noise, Signal
 from app.analysis.extraction.repository import ExtractionRepository
 from app.models.article import Article
 from app.models.article_extraction import ArticleExtraction
@@ -147,7 +149,7 @@ class ReExtractionService:
 
         # extractor 呼び出しは session 外 (slow IO 中の DB 接続専有を避ける)
         try:
-            result = await self._extract_with_retry(
+            envelope = await self._extract_with_retry(
                 extractor, title=title, content=content, article_id=article_id
             )
         except InvalidInputError:
@@ -163,25 +165,46 @@ class ReExtractionService:
             )
             return "failed"
 
-        started = perf_counter()
-        async with self._session_factory() as session:
-            repo = ExtractionRepository(session)
-            updated = await repo.update_idempotent(result, article_id=article_id)
-            if dry_run:
-                await session.rollback()
-            else:
-                await session.commit()
+        # ``ExtractionCall[Signal]`` のみ ``update_idempotent`` に渡せる型 narrow。
+        # Noise が返った場合は既存 ArticleExtraction を上書きしない (データ破壊
+        # 防止の構造的保証、``feedback_structural_guarantee``)。
+        match envelope:
+            case ExtractionCall(result=Signal()):
+                started = perf_counter()
+                async with self._session_factory() as session:
+                    repo = ExtractionRepository(session)
+                    updated = await repo.update_idempotent(
+                        envelope, article_id=article_id
+                    )
+                    if dry_run:
+                        await session.rollback()
+                    else:
+                        await session.commit()
 
-        elapsed_ms = int((perf_counter() - started) * 1000)
-        logger.info(
-            "re_extract_progress",
-            article_id=article_id,
-            extraction_id=updated.id,
-            entity_count=len(updated.entities),
-            elapsed_ms=elapsed_ms,
-            dry_run=dry_run,
-        )
-        return "success"
+                elapsed_ms = int((perf_counter() - started) * 1000)
+                logger.info(
+                    "re_extract_progress",
+                    article_id=article_id,
+                    extraction_id=updated.id,
+                    entity_count=len(updated.entities),
+                    elapsed_ms=elapsed_ms,
+                    dry_run=dry_run,
+                )
+                return "success"
+            case ExtractionCall(result=Noise()):
+                # 既存の signal 抽出に対し再抽出で Noise が返った場合は触らない。
+                # ``ArticleExtraction`` の上書きは型レベルで禁止 (``update_idempotent``
+                # は ``ExtractionCall[Signal]`` のみ受け付ける)。
+                logger.warning(
+                    "re_extract_skipped_noise",
+                    article_id=article_id,
+                )
+                return "skipped"
+            case _:
+                # 到達不能 (extractor は Signal | Noise の union を返す契約)
+                raise RuntimeError(
+                    f"re_extract_unreachable_envelope_variant: article_id={article_id}"
+                )
 
     async def _extract_with_retry(
         self,
@@ -190,7 +213,7 @@ class ReExtractionService:
         title: str,
         content: str,
         article_id: int,
-    ):
+    ) -> ExtractionCall[Signal] | ExtractionCall[Noise]:
         """exponential backoff で extractor を最大 ``max_retries`` 回呼び出す。
 
         ``InvalidInputError`` は回復しない種類のエラーなので即座に伝播。

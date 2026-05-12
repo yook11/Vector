@@ -13,6 +13,8 @@ from app.analysis.extraction.domain import (
     ExtractedEntity,
     Extraction,
     ExtractionResult,
+    Noise,
+    Signal,
 )
 from app.analysis.extraction.domain.ready import ReadyForExtraction
 from app.analysis.extraction.repository import ExtractionRepository
@@ -33,6 +35,8 @@ __all__ = [
     "ExtractionRepository",
     "ExtractionResult",
     "ExtractionService",
+    "Noise",
     "NoiseOutcome",
     "ReadyForExtraction",
+    "Signal",
 ]

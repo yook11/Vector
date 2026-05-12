@@ -1,9 +1,11 @@
-"""``ExtractionCall`` envelope の振る舞いテスト (PR3-a-1)。
+"""``ExtractionCall`` envelope の振る舞いテスト (PR1-a Generic 化対応)。
 
 確認する性質:
-- 3 field (result / raw_response / prompt_version) を持つ
+- 5 field (result / raw_response / raw_relevance / prompt_version / model_name)
+  を持つ
 - ``frozen=True`` で生成後の代入を拒否
 - ``slots=True`` で ``__dict__`` を持たない
+- ``Signal`` / ``Noise`` のいずれも ``result`` に詰められる (Generic narrow 経由)
 """
 
 from __future__ import annotations
@@ -14,12 +16,11 @@ import pytest
 
 from app.analysis.domain.value_objects.entity import EntityRawType, EntitySurface
 from app.analysis.extraction.ai.envelope import ExtractionCall
-from app.analysis.extraction.domain import ExtractedEntity, ExtractionResult
+from app.analysis.extraction.domain import ExtractedEntity, Noise, Signal
 
 
-def _result() -> ExtractionResult:
-    return ExtractionResult(
-        relevance="signal",
+def _signal() -> Signal:
+    return Signal(
         title_ja="t",
         summary_ja="s",
         entities=[
@@ -30,23 +31,63 @@ def _result() -> ExtractionResult:
     )
 
 
-def test_fields_are_result_raw_response_prompt_version() -> None:
-    fields = {f.name for f in dataclasses.fields(ExtractionCall)}
-    assert fields == {"result", "raw_response", "prompt_version"}
-
-
-def test_construct_and_read_fields() -> None:
-    call = ExtractionCall(
-        result=_result(), raw_response='{"x": 1}', prompt_version="abcdef01"
+def _noise() -> Noise:
+    return Noise(
+        title_ja="t",
+        summary_ja="s",
+        entities=[
+            ExtractedEntity(
+                surface=EntitySurface("X"), raw_type=EntityRawType("Person")
+            )
+        ],
     )
-    assert call.result.relevance == "signal"
+
+
+def test_fields_include_model_name_and_raw_relevance() -> None:
+    fields = {f.name for f in dataclasses.fields(ExtractionCall)}
+    assert fields == {
+        "result",
+        "raw_response",
+        "raw_relevance",
+        "prompt_version",
+        "model_name",
+    }
+
+
+def test_construct_and_read_signal_envelope_fields() -> None:
+    call: ExtractionCall[Signal] = ExtractionCall(
+        result=_signal(),
+        raw_response='{"x": 1}',
+        raw_relevance="signal",
+        prompt_version="abcdef01",
+        model_name="gemini-2.5-flash-lite",
+    )
+    assert isinstance(call.result, Signal)
     assert call.raw_response == '{"x": 1}'
+    assert call.raw_relevance == "signal"
     assert call.prompt_version == "abcdef01"
+    assert call.model_name == "gemini-2.5-flash-lite"
+
+
+def test_construct_and_read_noise_envelope_fields() -> None:
+    call: ExtractionCall[Noise] = ExtractionCall(
+        result=_noise(),
+        raw_response='{"x": 2}',
+        raw_relevance="noise",
+        prompt_version="abcdef01",
+        model_name="gemini-2.5-flash-lite",
+    )
+    assert isinstance(call.result, Noise)
+    assert call.raw_relevance == "noise"
 
 
 def test_frozen_disallows_mutation() -> None:
     call = ExtractionCall(
-        result=_result(), raw_response="raw", prompt_version="abcdef01"
+        result=_signal(),
+        raw_response="raw",
+        raw_relevance="signal",
+        prompt_version="abcdef01",
+        model_name="gemini-2.5-flash-lite",
     )
     with pytest.raises(dataclasses.FrozenInstanceError):
         call.raw_response = "mutated"  # type: ignore[misc]
@@ -55,7 +96,17 @@ def test_frozen_disallows_mutation() -> None:
 def test_slots_excludes_dict() -> None:
     """``slots=True`` で ``__dict__`` を持たない (構造的に余計な属性を持てない)。"""
     call = ExtractionCall(
-        result=_result(), raw_response="raw", prompt_version="abcdef01"
+        result=_signal(),
+        raw_response="raw",
+        raw_relevance="signal",
+        prompt_version="abcdef01",
+        model_name="gemini-2.5-flash-lite",
     )
     assert not hasattr(call, "__dict__")
-    assert ExtractionCall.__slots__ == ("result", "raw_response", "prompt_version")
+    assert ExtractionCall.__slots__ == (
+        "result",
+        "raw_response",
+        "raw_relevance",
+        "prompt_version",
+        "model_name",
+    )

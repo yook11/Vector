@@ -63,11 +63,23 @@ def test_gen_config_is_immutable() -> None:
         GeminiExtractionPrompt.GEN_CONFIG["temperature"] = 0.5  # type: ignore[index]
 
 
-def test_response_schema_is_pydantic_extraction_result() -> None:
-    """Gemini 経路は Pydantic class を ``response_schema`` に渡す前提。"""
-    from app.analysis.extraction.domain import ExtractionResult
+def test_response_schema_is_pydantic_gemini_extraction_response() -> None:
+    """Gemini 経路は ``GeminiExtractionResponse`` Pydantic class を
+    ``response_schema`` に渡す前提 (PR1-a で ``ExtractionResult`` から分離、
+    ドメイン union alias と SDK 契約型を意味分離した)。"""
+    from app.analysis.extraction.ai.schema import GeminiExtractionResponse
 
-    assert GeminiExtractionPrompt.RESPONSE_SCHEMA is ExtractionResult
+    assert GeminiExtractionPrompt.RESPONSE_SCHEMA is GeminiExtractionResponse
+
+
+def test_version_continuity_with_pre_pr1a_hash() -> None:
+    """PR1-a 着手前の VERSION (22dc98ab) と bit-identical であること。
+
+    ``GeminiExtractionResponse`` への class 分離で JSON schema の ``title`` が
+    変わると VERSION が変わり audit 連続性が失われる。``model_config`` で
+    ``title="ExtractionResult"`` を明示して固定している。
+    """
+    assert GeminiExtractionPrompt.VERSION == "22dc98ab"
 
 
 def test_model_matches_extractor_class() -> None:
