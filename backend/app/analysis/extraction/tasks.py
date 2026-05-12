@@ -12,8 +12,8 @@ from taskiq import Context, TaskiqDepends
 from app.analysis._limiter_factory import _build_limiters
 from app.analysis.assessment.domain.ready import AssessmentTrigger
 from app.analysis.assessment.tasks import assess_content
+from app.analysis.extraction.ai.base import BaseExtractor
 from app.analysis.extraction.domain.ready import ReadyForExtraction
-from app.analysis.extraction.extractor.base import BaseExtractor
 from app.analysis.extraction.failure_recording import record_extraction_failure
 from app.analysis.extraction.service import (
     ExtractedOutcome,

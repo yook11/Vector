@@ -29,10 +29,10 @@ from app.analysis.errors import (
     AIProviderOutputBlockedError,
     ExtractionResponseInvalidError,
 )
+from app.analysis.extraction.ai.envelope import ExtractionCall
+from app.analysis.extraction.ai.gemini import GeminiExtractor
+from app.analysis.extraction.ai.gemini_prompt import GeminiExtractionPrompt
 from app.analysis.extraction.domain import ExtractedEntity, ExtractionResult
-from app.analysis.extraction.extractor.envelope import ExtractionCall
-from app.analysis.extraction.extractor.gemini import GeminiExtractor
-from app.analysis.extraction.extractor.gemini_prompt import GeminiExtractionPrompt
 
 
 def _make_response(

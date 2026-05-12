@@ -31,7 +31,7 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
-from app.analysis.extraction.extractor.gemini_prompt import GeminiExtractionPrompt
+from app.analysis.extraction.ai.gemini_prompt import GeminiExtractionPrompt
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 
 _HEAD_LIMIT = 2048

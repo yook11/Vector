@@ -32,7 +32,7 @@ from taskiq_redis import RedisAsyncResultBackend, RedisStreamBroker
 
 from app.analysis.assessment.ai.deepseek import DeepSeekAssessor
 from app.analysis.embedding.ai.gemini import GeminiEmbedder
-from app.analysis.extraction.extractor.gemini import GeminiExtractor
+from app.analysis.extraction.ai.gemini import GeminiExtractor
 from app.config import settings
 
 logger = structlog.get_logger(__name__)

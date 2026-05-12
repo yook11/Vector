@@ -28,11 +28,11 @@ from typing import ClassVar
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.analysis.extraction.ai.base import BaseExtractor
+from app.analysis.extraction.ai.envelope import ExtractionCall
 from app.analysis.extraction.audit_repository import ExtractionAuditRepository
 from app.analysis.extraction.domain import Extraction
 from app.analysis.extraction.domain.ready import ReadyForExtraction
-from app.analysis.extraction.extractor.base import BaseExtractor
-from app.analysis.extraction.extractor.envelope import ExtractionCall
 from app.analysis.extraction.noise_repository import NoiseRepository
 from app.analysis.extraction.repository import ExtractionRepository
 from app.observability.categories import SuccessOutcome

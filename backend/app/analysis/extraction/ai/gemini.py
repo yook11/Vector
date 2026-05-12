@@ -22,10 +22,10 @@ from app.analysis.errors import (
     AIProviderServiceUnavailableError,
     ExtractionResponseInvalidError,
 )
+from app.analysis.extraction.ai.base import BaseExtractor
+from app.analysis.extraction.ai.envelope import ExtractionCall
+from app.analysis.extraction.ai.gemini_prompt import GeminiExtractionPrompt
 from app.analysis.extraction.domain import ExtractionResult
-from app.analysis.extraction.extractor.base import BaseExtractor
-from app.analysis.extraction.extractor.envelope import ExtractionCall
-from app.analysis.extraction.extractor.gemini_prompt import GeminiExtractionPrompt
 from app.config import settings
 
 logger = structlog.get_logger(__name__)

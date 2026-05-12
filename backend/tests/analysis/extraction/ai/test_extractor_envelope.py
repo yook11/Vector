@@ -13,8 +13,8 @@ import dataclasses
 import pytest
 
 from app.analysis.domain.value_objects.entity import EntityRawType, EntitySurface
+from app.analysis.extraction.ai.envelope import ExtractionCall
 from app.analysis.extraction.domain import ExtractedEntity, ExtractionResult
-from app.analysis.extraction.extractor.envelope import ExtractionCall
 
 
 def _result() -> ExtractionResult:

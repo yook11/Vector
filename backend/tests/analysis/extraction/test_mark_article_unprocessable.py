@@ -26,7 +26,7 @@ from app.analysis.errors import (
     AIProviderInputRejectedError,
     AIProviderOutputBlockedError,
 )
-from app.analysis.extraction.extractor.gemini_prompt import GeminiExtractionPrompt
+from app.analysis.extraction.ai.gemini_prompt import GeminiExtractionPrompt
 from app.analysis.extraction.service import ExtractionService
 from app.models.article import Article
 from app.models.news_source import NewsSource

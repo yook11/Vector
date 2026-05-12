@@ -21,9 +21,9 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.analysis.extraction.ai.envelope import ExtractionCall
 from app.analysis.extraction.audit import base_extraction_payload_fields
 from app.analysis.extraction.domain.ready import ReadyForExtraction
-from app.analysis.extraction.extractor.envelope import ExtractionCall
 from app.models.article import Article
 from app.models.news_source import NewsSource
 from app.observability.categories import (

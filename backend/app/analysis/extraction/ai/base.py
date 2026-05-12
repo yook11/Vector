@@ -8,7 +8,7 @@ from typing import ClassVar
 import structlog
 
 from app.analysis.errors import AIProviderError, ExtractionDomainError
-from app.analysis.extraction.extractor.envelope import ExtractionCall
+from app.analysis.extraction.ai.envelope import ExtractionCall
 
 logger = structlog.get_logger(__name__)
 

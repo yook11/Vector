@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import hashlib
 
+from app.analysis.extraction.ai.gemini_prompt import GeminiExtractionPrompt
 from app.analysis.extraction.audit import base_extraction_payload_fields
-from app.analysis.extraction.extractor.gemini_prompt import GeminiExtractionPrompt
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 
 

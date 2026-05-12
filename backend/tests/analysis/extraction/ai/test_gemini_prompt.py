@@ -15,7 +15,7 @@ import re
 
 import pytest
 
-from app.analysis.extraction.extractor.gemini_prompt import GeminiExtractionPrompt
+from app.analysis.extraction.ai.gemini_prompt import GeminiExtractionPrompt
 
 _HEX8 = re.compile(r"^[0-9a-f]{8}$")
 
@@ -72,6 +72,6 @@ def test_response_schema_is_pydantic_extraction_result() -> None:
 
 def test_model_matches_extractor_class() -> None:
     """``GeminiExtractor.MODEL`` は Prompt 側を一元参照する。"""
-    from app.analysis.extraction.extractor.gemini import GeminiExtractor
+    from app.analysis.extraction.ai.gemini import GeminiExtractor
 
     assert GeminiExtractor.MODEL == GeminiExtractionPrompt.MODEL

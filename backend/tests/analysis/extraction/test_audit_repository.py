@@ -30,11 +30,11 @@ from app.analysis.errors import (
     AIProviderOutputBlockedError,
     ExtractionResponseInvalidError,
 )
+from app.analysis.extraction.ai.envelope import ExtractionCall
+from app.analysis.extraction.ai.gemini_prompt import GeminiExtractionPrompt
 from app.analysis.extraction.audit_repository import ExtractionAuditRepository
 from app.analysis.extraction.domain import ExtractedEntity, ExtractionResult
 from app.analysis.extraction.domain.ready import ReadyForExtraction
-from app.analysis.extraction.extractor.envelope import ExtractionCall
-from app.analysis.extraction.extractor.gemini_prompt import GeminiExtractionPrompt
 from app.analysis.extraction.service import ExtractedOutcome, NoiseOutcome
 from app.models.article import Article
 from app.models.news_source import NewsSource

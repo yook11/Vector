@@ -37,7 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
 from app.analysis.errors import AnalysisDomainError, InvalidInputError
-from app.analysis.extraction.extractor.base import BaseExtractor
+from app.analysis.extraction.ai.base import BaseExtractor
 from app.analysis.extraction.repository import ExtractionRepository
 from app.models.article import Article
 from app.models.article_extraction import ArticleExtraction

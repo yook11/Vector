@@ -26,7 +26,7 @@ from app.analysis.errors import (
     AIProviderRequestInvalidError,
     ExtractionResponseInvalidError,
 )
-from app.analysis.extraction.extractor.gemini import GeminiExtractor
+from app.analysis.extraction.ai.gemini import GeminiExtractor
 
 
 def _api_error(status: str, message: str, code: int = 400) -> APIError:

@@ -26,6 +26,7 @@ from sqlmodel import select
 
 from app.analysis.domain.value_objects.entity import EntityRawType, EntitySurface
 from app.analysis.errors import InvalidInputError, ProviderError
+from app.analysis.extraction.ai.base import BaseExtractor
 from app.analysis.extraction.application import (
     ReExtractionService,
     ReExtractionSummary,
@@ -34,7 +35,6 @@ from app.analysis.extraction.domain import (
     ExtractedEntity,
     ExtractionResult,
 )
-from app.analysis.extraction.extractor.base import BaseExtractor
 from app.analysis.extraction.repository import ExtractionRepository
 from app.models.article import Article
 from app.models.article_extraction import ArticleExtraction
