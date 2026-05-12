@@ -1,10 +1,10 @@
 """ReadyForExtraction — Stage C 実行可能状態の precondition 型 (Pattern A')。
 
 spec `specs/typed-pipeline-preconditions.md` §1.1 / §3.2 / §6.1 / §7 で確定した設計
-の extraction BC 実装。Stage C operation の前提条件 (Article 存在 + Extraction
-未生成 + 本文サイズが system hard cap 以内) を構造保証し、ExtractionService の
-precondition 分岐 (冪等ヒット / article_not_found) を消すために Stage 間 passport
-として受け渡される。
+の extraction BC 実装。Stage C operation の前提条件 (Article 存在 +
+``article_extractions`` / ``extraction_noises`` 行が未生成 + 本文サイズが
+system hard cap 以内) を構造保証し、ExtractionService の precondition 分岐
+(冪等ヒット / article_not_found) を消すために Stage 間 passport として受け渡される。
 
 `@dataclass(frozen=True, slots=True)` ではなく `BaseModel(frozen=True)` を使う
 理由: taskiq の formatter が Pydantic ベースのため、kiq 引数で素の dataclass を
@@ -75,9 +75,9 @@ class ReadyForExtraction(BaseModel):
         """Article 永続化から Stage C へ advance できるかを判定する gatekeeper。
 
         Precondition (Stage C に進める条件):
-        - 同 article_id の Extraction 未生成
-        - 同 article_id の ExtractionNoise 未生成 (Stage 1 で既に noise 判定済の
-          記事を再処理しない)
+        - 同 article_id の ``article_extractions`` 行が未生成
+        - 同 article_id の ``extraction_noises`` 行が未生成 (Stage 1 で既に
+          noise 判定済の記事を再処理しない)
         - 本文長が ``MAX_CONTENT_LENGTH`` 以内 (system hard cap)
 
         Phase 3 は BC 越境 (collection BC → analysis BC) を含み、上流 caller が

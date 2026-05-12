@@ -35,7 +35,6 @@ from app.analysis.extraction.ai.gemini_prompt import GeminiExtractionPrompt
 from app.analysis.extraction.audit_repository import ExtractionAuditRepository
 from app.analysis.extraction.domain import ExtractedEntity, Noise, Signal
 from app.analysis.extraction.domain.ready import ReadyForExtraction
-from app.analysis.extraction.service import ExtractedOutcome, NoiseOutcome
 from app.models.article import Article
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
@@ -134,7 +133,7 @@ async def test_append_extracted_records_success_with_code(
         await ExtractionAuditRepository(session).append_extracted(
             ready=_ready(article),
             envelope=_signal_envelope(),
-            code=ExtractedOutcome.CODE,
+            code="extracted",
         )
         await session.commit()
 
@@ -164,7 +163,7 @@ async def test_append_noise_records_extracted_as_noise(
         await ExtractionAuditRepository(session).append_noise(
             ready=_ready(article),
             envelope=_noise_envelope(),
-            code=NoiseOutcome.CODE,
+            code="extracted_as_noise",
         )
         await session.commit()
 
@@ -293,7 +292,7 @@ async def test_repository_does_not_commit(
         await ExtractionAuditRepository(session).append_extracted(
             ready=_ready(article),
             envelope=_signal_envelope(),
-            code=ExtractedOutcome.CODE,
+            code="extracted",
         )
         # 意図的に commit しない (rollback で消える)
 

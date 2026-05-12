@@ -1,12 +1,14 @@
 """``extract_content`` task のテスト (chain 経路 + rate limit 経路)。
 
-Layer 1 marker dispatch ルーティングは ``test_extract_task_dispatch.py`` 側で
-網羅する。本ファイルは:
+PR1-c で Outcome を廃止し ``ExtractionService.execute`` の戻り値を
+``int | None`` に統一したため、本 file は:
 
-- ExtractedOutcome → AssessmentTrigger による Stage 4 chain (案 3: 下流 Stage が
-  Ready を自身で構築するため、上流は ID のみ kiq で運ぶ)
-- NoiseOutcome 時に chain しないこと
+- signal 勝者 (``execute`` が ``int`` を返す) → ``assess_content.kiq`` で chain
+- noise 勝者 / race 敗北 (``execute`` が ``None`` を返す) → chain しない
 - legacy ``AIProviderRateLimitedError`` の audit 経路 (catch-all 経由)
+
+Layer 1 marker dispatch ルーティングは ``test_extract_task_dispatch.py`` 側で
+網羅する。
 """
 
 from types import SimpleNamespace
@@ -61,20 +63,18 @@ def _make_ready_extraction(article_id: int = 1) -> ReadyForExtraction:
 
 class TestExtractContent:
     @pytest.mark.asyncio
-    async def test_chains_assess_with_trigger_on_extracted_outcome(self) -> None:
-        """ExtractedOutcome → assess_content.kiq(AssessmentTrigger) で chain。
+    async def test_chains_assess_with_trigger_when_service_returns_extraction_id(
+        self,
+    ) -> None:
+        """signal 勝者 (Service が int を返す) → ``assess_content.kiq`` で chain。
 
         案 3: 上流 Stage 3 task は Stage 4 Ready を構築せず、ID だけ運ぶ
         AssessmentTrigger を kiq に enqueue する。Ready 構築は下流 Stage 4
         task が処理開始時に行う。
         """
-        from app.analysis.extraction.service import ExtractedOutcome
         from app.analysis.extraction.tasks import extract_content
 
         mock_ctx = _make_ctx(extractor=_make_provider_fake())
-        mock_extraction = MagicMock()
-        mock_extraction.id = 42
-        mock_outcome = ExtractedOutcome(extraction=mock_extraction)
 
         with (
             patch(
@@ -84,7 +84,7 @@ class TestExtractContent:
             patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
             patch("app.analysis.extraction.tasks.assess_content") as mock_assess,
         ):
-            mock_svc_cls.return_value.execute = AsyncMock(return_value=mock_outcome)
+            mock_svc_cls.return_value.execute = AsyncMock(return_value=42)
             mock_assess.kiq = AsyncMock()
             await extract_content(ready=_make_ready_extraction(), ctx=mock_ctx)
 
@@ -93,9 +93,8 @@ class TestExtractContent:
         )
 
     @pytest.mark.asyncio
-    async def test_noise_outcome_does_not_chain(self) -> None:
-        """NoiseOutcome は chain しない (Service 側で extraction_noises に永続化済)。"""
-        from app.analysis.extraction.service import NoiseOutcome
+    async def test_noise_or_race_loss_does_not_chain(self) -> None:
+        """Service が None を返したら chain しない (noise 勝者 / race 敗北を吸収)。"""
         from app.analysis.extraction.tasks import extract_content
 
         mock_ctx = _make_ctx(extractor=_make_provider_fake())
@@ -108,9 +107,7 @@ class TestExtractContent:
             patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
             patch("app.analysis.extraction.tasks.assess_content") as mock_assess,
         ):
-            mock_svc_cls.return_value.execute = AsyncMock(
-                return_value=NoiseOutcome(),
-            )
+            mock_svc_cls.return_value.execute = AsyncMock(return_value=None)
             mock_assess.kiq = AsyncMock()
             await extract_content(ready=_make_ready_extraction(), ctx=mock_ctx)
 

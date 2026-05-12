@@ -1,11 +1,15 @@
-"""``ExtractionService`` の Outcome 経路で audit が焼付けられる integration test
-(PR3.5-c)。
+"""``ExtractionService`` の成功経路で audit が焼付けられる integration test。
+
+PR1-c で Outcome を廃止し戻り値を ``int | None`` 一本化したため、本 file は
+Outcome 型 assertion を「signal 勝者 → ``int``、noise 勝者 → ``None``」に
+書き換えている。
 
 検証する性質:
-- ``ExtractedOutcome`` (signal) → ``outcome_code='extracted'`` (SUCCEEDED) +
-  ``category='success'`` + ``code='extracted'``
-- ``NoiseOutcome`` (relevance=noise) → ``outcome_code='extracted_as_noise'``
-  (SUCCEEDED) + ``category='success'`` + ``code='extracted_as_noise'``
+- signal 勝者 → ``outcome_code='extracted'`` (SUCCEEDED) + ``category='success'`` +
+  ``code='extracted'``、Service は ``extraction_id`` (``int``) を返す
+- noise 勝者 → ``outcome_code='extracted_as_noise'`` (SUCCEEDED) +
+  ``category='success'`` + ``code='extracted_as_noise'``、Service は ``None`` を返す
+  (Stage 4 chain しない、Task 層は ``if result is None: return`` で短絡)
 - ``ExtractionResponseInvalidError`` (Layer 2-B) は Service が catch せず
   そのまま raise される (audit は task 層が焼く責務)
 - 各 audit row に ``ai_model`` / ``prompt_version`` / ``input_content_*`` /
@@ -30,11 +34,7 @@ from app.analysis.extraction.ai.envelope import ExtractionCall
 from app.analysis.extraction.ai.gemini_prompt import GeminiExtractionPrompt
 from app.analysis.extraction.domain import ExtractedEntity, Noise, Signal
 from app.analysis.extraction.domain.ready import ReadyForExtraction
-from app.analysis.extraction.service import (
-    ExtractedOutcome,
-    ExtractionService,
-    NoiseOutcome,
-)
+from app.analysis.extraction.service import ExtractionService
 from app.models.article import Article
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
@@ -145,9 +145,11 @@ async def test_signal_outcome_writes_extracted_audit_with_category_and_code(
     ready = await _ready(article)
     svc = ExtractionService(session_factory)
 
-    outcome = await svc.execute(ready, _extractor(return_envelope=_signal_envelope()))
+    result = await svc.execute(ready, _extractor(return_envelope=_signal_envelope()))
 
-    assert isinstance(outcome, ExtractedOutcome)
+    # signal 勝者 → Service は新規 article_extractions.id を返す
+    assert isinstance(result, int)
+    assert result > 0
     events = await _fetch_extraction_events(db_session, article.id)
     assert len(events) == 1
     ev = events[0]
@@ -178,9 +180,10 @@ async def test_noise_outcome_writes_extracted_as_noise_audit_with_category_and_c
     ready = await _ready(article)
     svc = ExtractionService(session_factory)
 
-    outcome = await svc.execute(ready, _extractor(return_envelope=_noise_envelope()))
+    result = await svc.execute(ready, _extractor(return_envelope=_noise_envelope()))
 
-    assert isinstance(outcome, NoiseOutcome)
+    # noise 勝者 → Service は None (Stage 4 chain しない、Task 層 short return 対象)
+    assert result is None
     events = await _fetch_extraction_events(db_session, article.id)
     assert len(events) == 1
     ev = events[0]

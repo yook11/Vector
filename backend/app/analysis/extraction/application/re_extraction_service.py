@@ -174,7 +174,7 @@ class ReExtractionService:
                 started = perf_counter()
                 async with self._session_factory() as session:
                     repo = ExtractionRepository(session)
-                    updated = await repo.update_signal_idempotent(
+                    extraction_id = await repo.update_signal_idempotent(
                         envelope, article_id=article_id
                     )
                     if dry_run:
@@ -186,8 +186,8 @@ class ReExtractionService:
                 logger.info(
                     "re_extract_progress",
                     article_id=article_id,
-                    extraction_id=updated.id,
-                    entity_count=len(updated.entities),
+                    extraction_id=extraction_id,
+                    entity_count=len(envelope.result.entities),
                     elapsed_ms=elapsed_ms,
                     dry_run=dry_run,
                 )

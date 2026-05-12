@@ -1,27 +1,25 @@
-"""Extraction BC のドメイン概念。
+"""Extraction BC のドメイン結果型 (AI 出力 DTO)。
 
-3 つの型で Stage 3 の概念を表す:
+2 つの型で Stage 3 の AI 出力を表す:
 
 - ``Signal`` / ``Noise`` — AI が記事を分析した結果として産出する domain 結果型。
   ``ExtractionResult = Signal | Noise`` の union alias を経由して Service /
   Repository が ``match`` で型ディスパッチする (Stage 4 ``InScope`` /
   ``OutOfScope`` と対称)。
 
-- ``Extraction`` — システムに記録された分析結果 Entity。identity (id) と
-  記録時刻 (extracted_at) を持ち、assessment 以降の処理が継続的に
-  扱う概念。
-
 AI 境界では引き続きフラット形式 (``{relevance, title_ja, summary_ja, entities}``)
 を AI に要求する (構造化出力で discriminated union を要求すると AI 精度が
 落ちる + Gemini SDK structured response の制約)。Gemini SDK 契約型は
 ``ai/schema.py::GeminiExtractionResponse`` として分離し、``ai/parse.py::
 parse_extraction`` が ``relevance`` 値を見て ``Signal`` / ``Noise`` に振り分ける。
+
+永続化結果 (``article_extractions`` / ``extraction_noises`` の 1 行) は
+Repository が ``int`` id として返し、Domain Entity 化はしない (Stage 4 / Stage 5
+と対称な勝者 SSoT パターン、``feedback_outcome_purification``)。
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime
 from typing import Any, Self
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
@@ -130,40 +128,3 @@ ExtractionResult = Signal | Noise
 ``AssessmentResult = InScope | OutOfScope`` と対称)。AI 境界の Gemini SDK
 契約型は ``ai/schema.py::GeminiExtractionResponse`` を参照。
 """
-
-
-@dataclass(frozen=True, slots=True)
-class Extraction:
-    """システムに記録された分析結果 Entity。
-
-    identity (id) と記録時刻 (extracted_at) を持ち、FK で参照されうる。
-    フィールドはすべて必須 — 永続化前の状態は型レベルで表現しない
-    (その概念は ``Signal`` / ``Noise`` が担当する)。
-
-    Invariants:
-    - id は DB が採番した正の整数
-    - translated_title / summary は非空 (DB CHECK 制約と一致)
-    - entities は ``(surface.match_key, raw_type.root)`` で重複なし
-      (``Signal`` 通過時点で保証済みのはずだが、DB 復元時の安全網
-      として __post_init__ で検査)
-    """
-
-    id: int
-    translated_title: str
-    summary: str
-    entities: tuple[ExtractedEntity, ...]
-    extracted_at: datetime
-
-    def __post_init__(self) -> None:
-        if not self.translated_title:
-            raise ValueError("Extraction.translated_title must be non-empty")
-        if not self.summary:
-            raise ValueError("Extraction.summary must be non-empty")
-        seen: set[tuple[str, str]] = set()
-        for e in self.entities:
-            key = e.dedup_key()
-            if key in seen:
-                raise ValueError(
-                    f"Extraction.entities must be deduplicated, duplicated: {key!r}"
-                )
-            seen.add(key)

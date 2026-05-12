@@ -11,32 +11,22 @@ from app.analysis.extraction.domain import (
     EntityRawType,
     EntitySurface,
     ExtractedEntity,
-    Extraction,
     ExtractionResult,
     Noise,
     Signal,
 )
 from app.analysis.extraction.domain.ready import ReadyForExtraction
 from app.analysis.extraction.repository import ExtractionRepository
-from app.analysis.extraction.service import (
-    ExtractedOutcome,
-    ExtractionOutcome,
-    ExtractionService,
-    NoiseOutcome,
-)
+from app.analysis.extraction.service import ExtractionService
 
 __all__ = [
     "EntityRawType",
     "EntitySurface",
     "ExtractedEntity",
-    "ExtractedOutcome",
-    "Extraction",
-    "ExtractionOutcome",
     "ExtractionRepository",
     "ExtractionResult",
     "ExtractionService",
     "Noise",
-    "NoiseOutcome",
     "ReadyForExtraction",
     "Signal",
 ]

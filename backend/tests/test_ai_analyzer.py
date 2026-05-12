@@ -58,11 +58,7 @@ from app.analysis.extraction.domain import (
     Signal,
 )
 from app.analysis.extraction.domain.ready import ReadyForExtraction
-from app.analysis.extraction.service import (
-    ExtractedOutcome,
-    ExtractionService,
-    NoiseOutcome,
-)
+from app.analysis.extraction.service import ExtractionService
 from app.models.article import Article
 from app.models.article_extraction import ArticleExtraction
 from app.models.article_extraction_entity import ArticleExtractionEntity
@@ -71,6 +67,7 @@ from app.models.extraction_noise import ExtractionNoise as ExtractionNoiseORM
 from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource
 from app.models.out_of_scope_assessment import OutOfScopeAssessment
+from app.models.pipeline_event import PipelineEvent
 
 # --- Helpers ---
 
@@ -515,39 +512,9 @@ async def test_extractor_sanitizes_untrusted_input_boundary() -> None:
 
 
 # --- E2. Extraction domain invariants (DB 不要) ---
-
-
-def test_extraction_rejects_empty_translated_title() -> None:
-    from app.analysis.extraction.domain import Extraction
-
-    with pytest.raises(ValueError, match="translated_title"):
-        Extraction(
-            id=1,
-            translated_title="",
-            summary="s",
-            entities=(),
-            extracted_at=datetime.now(UTC),
-        )
-
-
-def test_extraction_rejects_duplicated_entities() -> None:
-    from app.analysis.extraction.domain import Extraction
-
-    with pytest.raises(ValueError, match="deduplicated"):
-        Extraction(
-            id=1,
-            translated_title="t",
-            summary="s",
-            entities=(
-                ExtractedEntity(
-                    surface=EntitySurface("MIT"), raw_type=EntityRawType("company")
-                ),
-                ExtractedEntity(
-                    surface=EntitySurface("mit"), raw_type=EntityRawType("company")
-                ),
-            ),
-            extracted_at=datetime.now(UTC),
-        )
+# PR1-c: Domain Entity ``Extraction`` を廃止したため、不変条件テストは
+# ``Signal`` / ``Noise`` (AI 境界 DTO) と DB CHECK 制約に集約された。
+# 残るのは ``ExtractedEntity`` の dedup-key 仕様の確認のみ。
 
 
 def test_extracted_entity_dedup_key_is_case_insensitive_on_surface() -> None:
@@ -598,13 +565,11 @@ async def test_extraction_creates_extraction_and_entities(
         original_content=article.original_content,
     )
     svc = ExtractionService(session_factory)
-    outcome = await svc.execute(ready, mock_extractor)
+    result = await svc.execute(ready, mock_extractor)
 
-    assert isinstance(outcome, ExtractedOutcome)
-    extraction = outcome.extraction
-    assert extraction.id > 0
-    assert extraction.translated_title == "量子ブレイクスルー"
-    assert len(extraction.entities) == 2
+    # signal 勝者: Service は新規 article_extractions.id (int) を返す
+    assert isinstance(result, int)
+    assert result > 0
 
     db_session.expire_all()
     persisted = (
@@ -614,6 +579,7 @@ async def test_extraction_creates_extraction_and_entities(
             )
         )
     ).scalar_one()
+    assert persisted.id == result
     assert persisted.translated_title == "量子ブレイクスルー"
 
     entities = list(
@@ -630,12 +596,16 @@ async def test_extraction_creates_extraction_and_entities(
     assert len(entities) == 2
 
 
-async def test_extraction_race_winner_read_back(
+async def test_extraction_race_loser_returns_none_and_skips_audit(
     db_session: AsyncSession,
     session_factory,
     sample_source: NewsSource,
 ) -> None:
-    """事前に extraction が存在する場合 (race 敗北の代理) でも勝者を読み戻して合流。"""
+    """race 敗北 (既存 extraction あり) は ``None`` を返し audit / chain を焼かない。
+
+    PR1-c で読戻し経路 (``find_signal_by_article_id``) を撤去し、勝者 SSoT に
+    統一した。敗者 task は何もしない (Stage 4 / Stage 5 と完全対称)。
+    """
     article, existing = await _create_article_with_extraction(
         db_session, sample_source, url="https://example.com/race", title="Race"
     )
@@ -651,17 +621,43 @@ async def test_extraction_race_winner_read_back(
         )
     )
 
+    article_id = article.id
+    existing_id = existing.id
     ready = ReadyForExtraction(
-        article_id=article.id,
+        article_id=article_id,
         original_title=article.original_title,
         original_content=article.original_content,
     )
     svc = ExtractionService(session_factory)
-    outcome = await svc.execute(ready, mock_extractor)
+    result = await svc.execute(ready, mock_extractor)
 
-    assert isinstance(outcome, ExtractedOutcome)
-    # 勝者 (DB 上の既存行) を読み戻している
-    assert outcome.extraction.id == existing.id
+    # race 敗北は None で表現される (Stage 4 chain しない)
+    assert result is None
+
+    db_session.expire_all()
+    # 既存 row は上書きされていない (UPDATE ではなく ON CONFLICT DO NOTHING)
+    persisted = (
+        await db_session.execute(
+            select(ArticleExtraction).where(ArticleExtraction.article_id == article_id)
+        )
+    ).scalar_one()
+    assert persisted.id == existing_id
+    assert persisted.translated_title != "重複側"
+
+    # 敗者 Service は audit を焼かない (勝者 task が焼く責務)
+    audit_rows = (
+        (
+            await db_session.execute(
+                select(PipelineEvent).where(
+                    PipelineEvent.article_id == article_id,
+                    PipelineEvent.stage == "extraction",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(list(audit_rows)) == 0
 
 
 async def test_extraction_routes_noise_to_extraction_noises_table(
@@ -669,10 +665,11 @@ async def test_extraction_routes_noise_to_extraction_noises_table(
     session_factory,
     sample_source: NewsSource,
 ) -> None:
-    """relevance="noise" の結果は extraction_noises に永続化されて NoiseOutcome を返す。
+    """relevance="noise" の結果は extraction_noises に永続化される (Service は None)。
 
-    article_extractions には行が入らないこと、Stage 2 へ chain しないことを
+    article_extractions には行が入らないこと、Stage 4 へ chain しないことを
     保証する (chain は task 層で確認、ここは Service の振り分けが正しいかを見る)。
+    PR1-c で戻り値を ``int | None`` 一本化し、noise 勝者は ``None`` で表現される。
     """
     url = "https://example.com/noise"
     article = Article(
@@ -705,9 +702,10 @@ async def test_extraction_routes_noise_to_extraction_noises_table(
         original_content=article.original_content,
     )
     svc = ExtractionService(session_factory)
-    outcome = await svc.execute(ready, mock_extractor)
+    result = await svc.execute(ready, mock_extractor)
 
-    assert isinstance(outcome, NoiseOutcome)
+    # noise 勝者: Stage 4 chain しないため Service は None を返す
+    assert result is None
 
     db_session.expire_all()
     # extraction_noises に 1 行入っている

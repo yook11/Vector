@@ -8,9 +8,9 @@ semantic method を呼ぶだけで、``ExtractionPayload`` の組み立て・
 tx 境界は呼出側が握る (本 class は ``await session.commit()`` を呼ばない)。
 
 設計:
-- ``append_extracted`` / ``append_noise`` は成功 audit (caller が
-  ``ExtractedOutcome.CODE`` / ``NoiseOutcome.CODE`` を ``code`` で渡す)。
-  ``ai_model`` / ``prompt_version`` / ``raw_relevance`` は envelope
+- ``append_extracted`` / ``append_noise`` は成功 audit (caller である Service が
+  ``"extracted"`` / ``"extracted_as_noise"`` の outcome code 文字列を ``code`` で
+  渡す)。``ai_model`` / ``prompt_version`` / ``raw_relevance`` は envelope
   (``call.model_name`` / ``call.prompt_version`` / ``call.raw_relevance``) から
   直接埋める (Stage 4 ``append_in_scope`` / ``append_out_of_scope`` と対称)
 - ``append_drop_article`` は ``mark_article_unprocessable`` 内で article DELETE
@@ -73,9 +73,9 @@ class ExtractionAuditRepository:
     ) -> None:
         """signal 経路の成功 audit を 1 行記録する。
 
-        ``code`` は ``ExtractedOutcome.CODE`` 等 caller が outcome 種別から
-        渡す (例: ``"extracted"``)。``envelope`` は ``ExtractionCall[Signal]``
-        に narrow され、Service が ``match`` で振り分けた後にのみ呼ばれる。
+        ``code`` は caller である Service が outcome 種別から渡す
+        (例: ``"extracted"``)。``envelope`` は ``ExtractionCall[Signal]`` に
+        narrow され、Service が ``match`` で振り分けた後にのみ呼ばれる。
         """
         source_name = await self._resolve_source_name(ready.article_id)
         payload = self._success_payload(ready, envelope, source_name)

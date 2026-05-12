@@ -1,7 +1,10 @@
 """pipeline_events の Layer 1 dispatch marker (error taxonomy)。
 
-Task 層が catch する 5 種の dispatch marker (Exception 3 + Outcome 基底 2) と
-DB ``category`` カラムが取りうる 6 値 (5 + catch-all ``unknown``) を定義する。
+Task 層が catch する 3 種の Exception dispatch marker と DB ``category``
+カラムが取りうる 7 値 (success / idempotent_skip + 失敗 4 種 + catch-all
+``unknown``) を定義する。成功 Outcome 基底 (``SuccessOutcome`` /
+``IdempotentSkipOutcome``) は Stage 4 Assessment / Stage 5 Embedding / Stage 3
+Extraction の戻り値が全て ``int | None`` ベースに統一されたため廃止済。
 
 Layer 2 (origin 軸) の具体型は ``app.analysis.errors`` / ``app.collection.errors``
 配下に配置し、本ファイルの marker と多重継承して dispatch 軸を表現する。
@@ -11,7 +14,6 @@ Layer 2 (origin 軸) の具体型は ``app.analysis.errors`` / ``app.collection.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from enum import StrEnum
 from typing import ClassVar
 
@@ -71,31 +73,3 @@ class NonRetryableKeepArticle(Exception):
     Task 層は Article を mark せず audit 後 return する (cron TTL 削除に渡さない、
     運用が根本原因を直したあと再 dispatch で救済される)。
     """
-
-
-# ---------------------------------------------------------------------------
-# 成功 Outcome 基底 — Service が return、Task は分岐後 chain
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class SuccessOutcome:
-    """Stage が期待された成功状態に到達した Outcome 基底。
-
-    下流へ chain するかどうかは具体 Outcome が表す
-    (例: ``ExtractedOutcome`` は chain、``NoiseOutcome`` は別テーブル永続化済で
-    chain しない)。具体型は本クラスを継承し ``CODE: ClassVar[str]`` を pin する。
-    """
-
-    CODE: ClassVar[str]
-
-
-@dataclass(frozen=True, slots=True)
-class IdempotentSkipOutcome:
-    """Stage が「既に処理済みで何もしなかった」べき等スキップを表す Outcome 基底。
-
-    具体型 (例: ``AlreadyExtractedOutcome``) は本クラスを継承し
-    ``CODE: ClassVar[str]`` を pin する。
-    """
-
-    CODE: ClassVar[str]

@@ -15,11 +15,7 @@ from app.analysis.assessment.tasks import assess_content
 from app.analysis.extraction.ai.base import BaseExtractor
 from app.analysis.extraction.domain.ready import ReadyForExtraction
 from app.analysis.extraction.failure_recording import record_extraction_failure
-from app.analysis.extraction.service import (
-    ExtractedOutcome,
-    ExtractionService,
-    NoiseOutcome,
-)
+from app.analysis.extraction.service import ExtractionService
 from app.analysis.rate_limiter import (
     RateLimitExceededError as _RateLimitExceededError,
 )
@@ -114,12 +110,8 @@ async def extract_content(
         return
 
     # Stage 4 を ID で起動 (案 3: 下流 Stage 自身が処理開始時に Ready を構築)。
-    if isinstance(result, ExtractedOutcome):
-        await assess_content.kiq(
-            AssessmentTrigger(extraction_id=result.extraction.id),
-        )
-    elif isinstance(result, NoiseOutcome):
-        logger.info(
-            "extract_content_noise",
-            article_id=ready.article_id,
-        )
+    # Service.execute は signal 勝者のみ extraction_id を返し、noise 勝者 / race
+    # 敗北は None。Stage 4 ``assessment/tasks.py`` の chain firing と同型。
+    if result is None:
+        return
+    await assess_content.kiq(AssessmentTrigger(extraction_id=result))

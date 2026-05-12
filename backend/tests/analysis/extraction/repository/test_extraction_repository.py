@@ -1,23 +1,22 @@
 """ExtractionRepository (signal / noise 両 path) の統合テスト。
 
 PR1-b で Stage 3 永続化層を 1 クラスに集約 (旧 ``NoiseRepository`` を吸収)。
-本ファイルは 2 つの旧テスト (``tests/test_analysis_extraction_repository.py`` /
-``tests/analysis/extraction/repository/test_noise_repository.py``) を merge し、
-signal セクション + noise セクションで構成する。
+PR1-c で戻り値を ``int | None`` に縮小し ``find_*_by_article_id`` 経路を撤去
+(race 敗北は audit / chain を焼かない短絡で表現、Stage 4 と完全対称)。
 
 検証する振る舞い:
 
 signal path:
 - ``signal_exists_for_article`` の cheap 判定が article_id 単位で正しい
-- ``save_signal`` の戻り値 (``Extraction | None``)、race 敗北時の orphan 子非生成
-- ``find_signal_by_article_id`` の復元
+- ``save_signal`` の戻り値 (``int | None``、新規 id / race 敗北 None)
+- race 敗北時に orphan ``article_extraction_entities`` 行を作らない
 - ``update_signal_idempotent`` で parent UPDATE のみ / child は差し替え
+  (戻り値は parent ``int`` で id は不変)
 
 noise path:
 - ``noise_exists_for_article`` の cheap 判定が article_id 単位で正しい
 - ``save_noise`` で entities が JSONB として position 順で永続化される
-- ``find_noise_by_article_id`` が JSONB を ``ExtractedEntity`` tuple に
-  round-trip 復元する
+- ``save_noise`` の戻り値 (``int | None``、新規 id / race 敗北 None)
 - ``save_noise`` の race 敗北 (UNIQUE 違反) 時は ``None`` を返す
 """
 
@@ -40,6 +39,7 @@ from app.analysis.extraction.repository import ExtractionRepository
 from app.models.article import Article
 from app.models.article_extraction import ArticleExtraction
 from app.models.article_extraction_entity import ArticleExtractionEntity
+from app.models.extraction_noise import ExtractionNoise as ExtractionNoiseORM
 from app.models.news_source import NewsSource
 
 # ---------------------------------------------------------------------------
@@ -137,33 +137,39 @@ async def test_signal_exists_for_article_returns_true_after_save(
         db_session, sample_source, "https://example.com/exists"
     )
     repo = ExtractionRepository(db_session)
-    saved = await repo.save_signal(_signal_call(), article_id=article.id)
+    extraction_id = await repo.save_signal(_signal_call(), article_id=article.id)
     await db_session.commit()
-    assert saved is not None
+    assert extraction_id is not None
     assert await repo.signal_exists_for_article(article.id) is True
 
 
 # ---------------------------------------------------------------------------
-# save_signal → Extraction | None
+# save_signal → int | None
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_save_signal_returns_extraction_with_persisted_id(
+async def test_save_signal_returns_persisted_id(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
     article = await _make_article(db_session, sample_source, "https://example.com/save")
     repo = ExtractionRepository(db_session)
-    saved = await repo.save_signal(
+    extraction_id = await repo.save_signal(
         _signal_call(title_ja="保存後", summary_ja="要約"),
         article_id=article.id,
     )
     await db_session.commit()
 
-    assert saved is not None
-    assert saved.id > 0
-    assert saved.translated_title == "保存後"
-    assert saved.extracted_at.tzinfo is not None
+    assert extraction_id is not None
+    assert extraction_id > 0
+    # 永続化された行が新規 id と一致する
+    persisted = (
+        await db_session.execute(
+            select(ArticleExtraction).where(ArticleExtraction.id == extraction_id)
+        )
+    ).scalar_one()
+    assert persisted.translated_title == "保存後"
+    assert persisted.extracted_at.tzinfo is not None
 
 
 @pytest.mark.asyncio
@@ -219,18 +225,18 @@ async def test_save_signal_persists_entities_when_parent_succeeds(
         db_session, sample_source, "https://example.com/entities"
     )
     repo = ExtractionRepository(db_session)
-    saved = await repo.save_signal(
+    extraction_id = await repo.save_signal(
         _signal_call(entities=[("MIT", "company"), ("CRISPR", "technology")]),
         article_id=article.id,
     )
     await db_session.commit()
 
-    assert saved is not None
+    assert extraction_id is not None
     rows = (
         (
             await db_session.execute(
                 select(ArticleExtractionEntity).where(
-                    ArticleExtractionEntity.extraction_id == saved.id,
+                    ArticleExtractionEntity.extraction_id == extraction_id,
                 )
             )
         )
@@ -238,44 +244,6 @@ async def test_save_signal_persists_entities_when_parent_succeeds(
         .all()
     )
     assert len(list(rows)) == 2
-
-
-# ---------------------------------------------------------------------------
-# find_signal_by_article_id
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_find_signal_by_article_id_returns_none_for_missing(
-    db_session: AsyncSession,
-) -> None:
-    repo = ExtractionRepository(db_session)
-    assert await repo.find_signal_by_article_id(999_999) is None
-
-
-@pytest.mark.asyncio
-async def test_find_signal_by_article_id_round_trips_entity(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-    sample_source: NewsSource,
-) -> None:
-    article = await _make_article(db_session, sample_source, "https://example.com/find")
-    repo = ExtractionRepository(db_session)
-    saved = await repo.save_signal(
-        _signal_call(entities=[("X", "company")]),
-        article_id=article.id,
-    )
-    await db_session.commit()
-    assert saved is not None
-
-    # 別セッションで find して round-trip を検証する (selectinload 経由)
-    async with session_factory() as fresh:
-        fresh_repo = ExtractionRepository(fresh)
-        found = await fresh_repo.find_signal_by_article_id(article.id)
-    assert found is not None
-    assert found.id == saved.id
-    assert found.translated_title == saved.translated_title
-    assert tuple(e.surface.root for e in found.entities) == ("X",)
 
 
 # ---------------------------------------------------------------------------
@@ -303,9 +271,9 @@ async def test_update_signal_idempotent_replaces_entities_and_keeps_parent(
     )
     await db_session.commit()
     assert first is not None
-    parent_id = first.id
+    parent_id = first
 
-    updated = await repo.update_signal_idempotent(
+    updated_id = await repo.update_signal_idempotent(
         _signal_call(
             title_ja="新タイトル",
             summary_ja="新要約",
@@ -315,8 +283,13 @@ async def test_update_signal_idempotent_replaces_entities_and_keeps_parent(
     )
     await db_session.commit()
 
-    assert updated.id == parent_id  # parent UPDATE only
-    assert updated.translated_title == "新タイトル"
+    assert updated_id == parent_id  # parent UPDATE only — id 不変
+    parent_after = (
+        await db_session.execute(
+            select(ArticleExtraction).where(ArticleExtraction.id == updated_id)
+        )
+    ).scalar_one()
+    assert parent_after.translated_title == "新タイトル"
 
     rows = (
         (
@@ -348,7 +321,7 @@ async def test_concurrent_save_signal_returns_one_persisted_one_none(
     """同一 article_id への並行 save_signal は片方が None になる (ON CONFLICT 動作)。"""
     article = await _make_article(db_session, sample_source, "https://example.com/race")
 
-    async def _save_in_new_session():
+    async def _save_in_new_session() -> int | None:
         async with session_factory() as session:
             repo = ExtractionRepository(session)
             saved = await repo.save_signal(_signal_call(), article_id=article.id)
@@ -402,14 +375,14 @@ async def test_noise_exists_for_article_returns_true_after_save(
 ) -> None:
     article = await _make_article(db_session, sample_source, "https://example.com/n1")
     repo = ExtractionRepository(db_session)
-    saved = await repo.save_noise(_noise_call(), article_id=article.id)
+    noise_id = await repo.save_noise(_noise_call(), article_id=article.id)
     await db_session.commit()
-    assert saved is not None
+    assert noise_id is not None
     assert await repo.noise_exists_for_article(article.id) is True
 
 
 # ---------------------------------------------------------------------------
-# save_noise / round-trip
+# save_noise → int | None
 # ---------------------------------------------------------------------------
 
 
@@ -417,10 +390,10 @@ async def test_noise_exists_for_article_returns_true_after_save(
 async def test_save_noise_persists_entities_as_jsonb_in_order(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
-    """JSONB の配列順序が AI 出力順を保持し、find で round-trip できる。"""
+    """JSONB の配列順序が AI 出力順を保持する。"""
     article = await _make_article(db_session, sample_source, "https://example.com/n2")
     repo = ExtractionRepository(db_session)
-    saved = await repo.save_noise(
+    noise_id = await repo.save_noise(
         _noise_call(
             entities=[("First", "company"), ("Second", "person"), ("Third", "tech")]
         ),
@@ -428,22 +401,17 @@ async def test_save_noise_persists_entities_as_jsonb_in_order(
     )
     await db_session.commit()
 
-    assert saved is not None
-    assert tuple(e.surface.root for e in saved.entities) == ("First", "Second", "Third")
-
-    fetched = await repo.find_noise_by_article_id(article.id)
-    assert fetched is not None
-    assert tuple(e.surface.root for e in fetched.entities) == (
-        "First",
-        "Second",
-        "Third",
-    )
-    assert tuple(e.raw_type.root for e in fetched.entities) == (
-        "company",
-        "person",
-        "tech",
-    )
-    assert fetched.title_ja == "ノイズタイトル"
+    assert noise_id is not None
+    persisted = (
+        await db_session.execute(
+            select(ExtractionNoiseORM).where(ExtractionNoiseORM.id == noise_id)
+        )
+    ).scalar_one()
+    surfaces = tuple(e["surface"] for e in persisted.entities)
+    raw_types = tuple(e["raw_type"] for e in persisted.entities)
+    assert surfaces == ("First", "Second", "Third")
+    assert raw_types == ("company", "person", "tech")
+    assert persisted.title_ja == "ノイズタイトル"
 
 
 @pytest.mark.asyncio
@@ -453,18 +421,19 @@ async def test_save_noise_accepts_empty_entities(
     """entities が空でも noise 記録は永続化できる (空配列 JSONB)。"""
     article = await _make_article(db_session, sample_source, "https://example.com/n3")
     repo = ExtractionRepository(db_session)
-    saved = await repo.save_noise(
+    noise_id = await repo.save_noise(
         _noise_call(entities=[]),
         article_id=article.id,
     )
     await db_session.commit()
 
-    assert saved is not None
-    assert saved.entities == ()
-
-    fetched = await repo.find_noise_by_article_id(article.id)
-    assert fetched is not None
-    assert fetched.entities == ()
+    assert noise_id is not None
+    persisted = (
+        await db_session.execute(
+            select(ExtractionNoiseORM).where(ExtractionNoiseORM.id == noise_id)
+        )
+    ).scalar_one()
+    assert persisted.entities == []
 
 
 @pytest.mark.asyncio
@@ -485,17 +454,3 @@ async def test_save_noise_returns_none_on_unique_race_loss(
     )
     await db_session.commit()
     assert second is None  # race 敗北は None で表現される
-
-
-# ---------------------------------------------------------------------------
-# find_noise_by_article_id
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_find_noise_by_article_id_returns_none_when_absent(
-    db_session: AsyncSession, sample_source: NewsSource
-) -> None:
-    article = await _make_article(db_session, sample_source, "https://example.com/n5")
-    repo = ExtractionRepository(db_session)
-    assert await repo.find_noise_by_article_id(article.id) is None

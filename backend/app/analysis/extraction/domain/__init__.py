@@ -1,9 +1,12 @@
 """extraction BC のドメイン層。
 
-AI 分析の結果 (``Signal`` / ``Noise``、union alias ``ExtractionResult``) と、
-システムに記録された分析結果 Entity (``Extraction``) を表現する。境界契約と
-ドメイン不変条件を一本化し、振る舞い (sanitize・重複排除・identity) を
-型に閉じ込める。
+AI 分析の結果 (``Signal`` / ``Noise``、union alias ``ExtractionResult``) を
+表現する。AI 境界での sanitize / 重複排除を ``Signal`` / ``Noise`` の
+validator に閉じ込め、下流 Stage に「HTML 抜き、NFKC 済、非空」を保証する。
+
+永続化結果 (``article_extractions`` / ``extraction_noises`` の 1 行) は
+``ExtractionRepository`` が ``int`` id として返し、Domain Entity 化はしない
+(Stage 4 Assessment / Stage 5 Embedding と対称な勝者 SSoT パターン)。
 """
 
 from app.analysis.extraction.domain.entity import (
@@ -12,19 +15,15 @@ from app.analysis.extraction.domain.entity import (
     ExtractedEntity,
 )
 from app.analysis.extraction.domain.extraction import (
-    Extraction,
     ExtractionResult,
     Noise,
     Signal,
 )
-from app.analysis.extraction.domain.extraction_noise import ExtractionNoise
 
 __all__ = [
     "EntityRawType",
     "EntitySurface",
     "ExtractedEntity",
-    "Extraction",
-    "ExtractionNoise",
     "ExtractionResult",
     "Noise",
     "Signal",
