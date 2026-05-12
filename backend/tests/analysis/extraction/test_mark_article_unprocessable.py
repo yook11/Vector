@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy import select
@@ -26,11 +27,20 @@ from app.analysis.errors import (
     AIProviderInputRejectedError,
     AIProviderOutputBlockedError,
 )
+from app.analysis.extraction.ai.base import BaseExtractor
 from app.analysis.extraction.ai.gemini_prompt import GeminiExtractionPrompt
 from app.analysis.extraction.service import ExtractionService
 from app.models.article import Article
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
+
+
+def _extractor_mock() -> MagicMock:
+    """PR2: mark_article_unprocessable に渡す ``BaseExtractor`` mock。"""
+    mock = MagicMock(spec=BaseExtractor)
+    type(mock).MODEL = GeminiExtractionPrompt.MODEL
+    type(mock).PROMPT_VERSION = GeminiExtractionPrompt.VERSION
+    return mock
 
 
 async def _make_article(
@@ -73,6 +83,7 @@ async def test_output_blocked_writes_audit_then_deletes_article(
         article.original_content,
         code=type(exc).CODE,
         exc=exc,
+        extractor=_extractor_mock(),
     )
 
     # commit が走った別 tx の DB 状態を確認するため fresh session で検証
@@ -123,6 +134,7 @@ async def test_input_rejected_writes_audit_then_deletes_article(
         article.original_content,
         code=type(exc).CODE,
         exc=exc,
+        extractor=_extractor_mock(),
     )
 
     await db_session.rollback()

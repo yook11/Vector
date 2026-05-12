@@ -26,11 +26,14 @@ class BaseExtractor(abc.ABC):
 
     また以下の ClassVar を宣言する必要がある:
     - ``MODEL``: モデル識別子
+    - ``PROMPT_VERSION``: プロンプト version 識別子 (失敗 audit の
+      ``prompt_version`` を埋めるために必須、成功時は envelope が SSoT)
     - ``RPM``: 1 分あたりリクエスト上限。無制限なら ``None``
     - ``RPD``: 1 日あたりリクエスト上限。無制限なら ``None``
     """
 
     MODEL: ClassVar[str]
+    PROMPT_VERSION: ClassVar[str]
     RPM: ClassVar[int | None]
     RPD: ClassVar[int | None]
 
@@ -38,7 +41,7 @@ class BaseExtractor(abc.ABC):
         super().__init_subclass__(**kwargs)
         if getattr(cls, "__abstractmethods__", None):
             return
-        for attr in ("MODEL", "RPM", "RPD"):
+        for attr in ("MODEL", "PROMPT_VERSION", "RPM", "RPD"):
             if attr not in cls.__dict__:
                 raise TypeError(f"{cls.__name__} must define ClassVar '{attr}'")
 

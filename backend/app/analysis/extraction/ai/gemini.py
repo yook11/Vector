@@ -78,6 +78,7 @@ class GeminiExtractor(BaseExtractor):
     """BaseExtractor の Gemini API 実装。"""
 
     MODEL = GeminiExtractionPrompt.MODEL
+    PROMPT_VERSION = GeminiExtractionPrompt.VERSION
     RPM = 100
     RPD = 1500
 

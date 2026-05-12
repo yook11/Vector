@@ -1,12 +1,13 @@
 """``extract_content`` task の Layer 1 marker dispatch routing テスト (PR3.5-c)。
 
 Service の execute を mock して、tasks.py が **どの Layer 1 marker** を受けて
-**どこ** (mark_article_unprocessable / record_extraction_failure / inline retry /
+**どこ** (mark_article_unprocessable / _record_failure / inline retry /
 catch-all) に振り分けるかを検証する。
 
 実 DB / 実 Service / 実 audit_repository は呼ばない:
 - ``ExtractionService`` を patch
-- ``record_extraction_failure`` を patch (Stage 3 failure 経路の application helper)
+- ``_record_failure`` を patch (Stage 3 failure 経路の Task 層 private helper、
+  PR2 で ``failure_recording.py`` から移管)
 - ``mark_article_unprocessable`` を patch
 """
 
@@ -35,6 +36,7 @@ from app.analysis.extraction.domain.ready import ReadyForExtraction
 def _make_provider_fake() -> MagicMock:
     fake = MagicMock()
     fake.MODEL = "test-model"
+    fake.PROMPT_VERSION = "test-prompt-v1"
     fake.RPM = 50
     fake.RPD = 1500
     return fake
@@ -95,6 +97,8 @@ async def test_drop_article_calls_mark_unprocessable_with_correct_code(
         assert args[0] == 42  # article_id
         assert kwargs["code"] == expected_code
         assert kwargs["exc"] is exc
+        # PR2: extractor を Task 層から渡している (Service には extractor を保持しない)
+        assert kwargs["extractor"] is ctx.state.extractor
 
 
 # ---------------------------------------------------------------------------
@@ -124,7 +128,7 @@ async def test_keep_article_calls_audit_extraction_failure(
         ),
         patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
         patch(
-            "app.analysis.extraction.tasks.record_extraction_failure",
+            "app.analysis.extraction.tasks._record_failure",
             new=AsyncMock(),
         ) as mock_audit,
     ):
@@ -134,6 +138,8 @@ async def test_keep_article_calls_audit_extraction_failure(
         await extract_content(ready=_ready(), ctx=ctx)
     mock_audit.assert_awaited_once()
     assert mock_audit.await_args.kwargs["exc"].__class__ is exc_cls
+    # PR2: extractor を Task 層から渡している (failure_recording.py 統合)
+    assert mock_audit.await_args.kwargs["extractor"] is ctx.state.extractor
     # mark_article_unprocessable は呼ばれない
     svc_instance.mark_article_unprocessable.assert_not_awaited()
 
@@ -184,7 +190,7 @@ async def test_retryable_inline_true_audits_on_last_attempt() -> None:
         ),
         patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
         patch(
-            "app.analysis.extraction.tasks.record_extraction_failure",
+            "app.analysis.extraction.tasks._record_failure",
             new=AsyncMock(),
         ) as mock_audit,
     ):
@@ -222,7 +228,7 @@ async def test_retryable_inline_false_audits_immediately(
         ),
         patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
         patch(
-            "app.analysis.extraction.tasks.record_extraction_failure",
+            "app.analysis.extraction.tasks._record_failure",
             new=AsyncMock(),
         ) as mock_audit,
     ):
@@ -248,7 +254,7 @@ async def test_unexpected_exception_falls_through_to_catch_all() -> None:
         ),
         patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
         patch(
-            "app.analysis.extraction.tasks.record_extraction_failure",
+            "app.analysis.extraction.tasks._record_failure",
             new=AsyncMock(),
         ) as mock_audit,
     ):

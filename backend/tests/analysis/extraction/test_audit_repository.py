@@ -17,6 +17,7 @@ audit row の shape SSoT が repository に集約されたことを検証する:
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy import select
@@ -30,6 +31,7 @@ from app.analysis.errors import (
     AIProviderOutputBlockedError,
     ExtractionResponseInvalidError,
 )
+from app.analysis.extraction.ai.base import BaseExtractor
 from app.analysis.extraction.ai.envelope import ExtractionCall
 from app.analysis.extraction.ai.gemini_prompt import GeminiExtractionPrompt
 from app.analysis.extraction.audit_repository import ExtractionAuditRepository
@@ -38,6 +40,24 @@ from app.analysis.extraction.domain.ready import ReadyForExtraction
 from app.models.article import Article
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
+
+
+def _extractor_mock(
+    *,
+    model: str = "test-extract-model",
+    prompt_version: str = "test-extract-prompt-v1",
+) -> MagicMock:
+    """失敗 audit テスト用の ``BaseExtractor`` mock。
+
+    PR2 で ``append_drop_article`` / ``append_failure`` が ``extractor: BaseExtractor``
+    を受けるようになったため、MODEL / PROMPT_VERSION ClassVar を持つ mock を返す。
+    Gemini ClassVar からの hardcode 依存を切ったことを表明するため値は test-* で
+    Gemini と衝突しない名前にする。
+    """
+    mock = MagicMock(spec=BaseExtractor)
+    type(mock).MODEL = model
+    type(mock).PROMPT_VERSION = prompt_version
+    return mock
 
 
 def _signal_envelope(entities: int = 2) -> ExtractionCall[Signal]:
@@ -190,6 +210,7 @@ async def test_append_drop_article_records_failure_with_drop_category(
     article = await _make_article(db_session, sample_source)
     article_id = article.id
     exc = AIProviderOutputBlockedError("blocked by SAFETY")
+    extractor = _extractor_mock()
 
     async with session_factory() as session:
         await ExtractionAuditRepository(session).append_drop_article(
@@ -197,6 +218,7 @@ async def test_append_drop_article_records_failure_with_drop_category(
             original_content=article.original_content,
             code=type(exc).CODE,
             exc=exc,
+            extractor=extractor,
         )
         await session.commit()
 
@@ -210,6 +232,10 @@ async def test_append_drop_article_records_failure_with_drop_category(
     assert ev.payload["error_message"] is not None
     assert ev.payload["error_chain"]
     assert ev.payload["error_chain"][0].endswith(".AIProviderOutputBlockedError")
+    # PR2: 失敗 audit の ai_model / prompt_version は extractor 経由
+    # (Gemini ClassVar hardcode を消した)
+    assert ev.payload["ai_model"] == "test-extract-model"
+    assert ev.payload["prompt_version"] == "test-extract-prompt-v1"
 
 
 # ---------------------------------------------------------------------------
@@ -255,12 +281,14 @@ async def test_append_failure_dispatches_category_and_code_from_exc(
     """append_failure は exc 型から category/code を自動導出する。"""
     article = await _make_article(db_session, sample_source)
     exc = exc_factory()  # type: ignore[operator]
+    extractor = _extractor_mock()
 
     async with session_factory() as session:
         await ExtractionAuditRepository(session).append_failure(
             ready=_ready(article),
             exc=exc,
             attempt=2,
+            extractor=extractor,
         )
         await session.commit()
 
@@ -272,6 +300,10 @@ async def test_append_failure_dispatches_category_and_code_from_exc(
     assert ev.attempt == 2
     assert ev.error_class is not None
     assert ev.error_class.endswith(f".{type(exc).__name__}")
+    # PR2: 失敗 audit の ai_model / prompt_version は extractor 経由
+    # (Gemini ClassVar hardcode を消した)
+    assert ev.payload["ai_model"] == "test-extract-model"
+    assert ev.payload["prompt_version"] == "test-extract-prompt-v1"
 
 
 # ---------------------------------------------------------------------------

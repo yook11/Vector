@@ -89,6 +89,9 @@ def _extractor(
 ) -> BaseExtractor:
     mock = MagicMock(spec=BaseExtractor)
     type(mock).model_name = GeminiExtractionPrompt.MODEL
+    # PR2: 失敗 audit が extractor.MODEL / extractor.PROMPT_VERSION を読む
+    type(mock).MODEL = GeminiExtractionPrompt.MODEL
+    type(mock).PROMPT_VERSION = GeminiExtractionPrompt.VERSION
     if side_effect is not None:
         mock.extract = AsyncMock(side_effect=side_effect)
     else:
@@ -210,6 +213,6 @@ async def test_response_invalid_error_passes_through_without_service_audit(
             _extractor(side_effect=ExtractionResponseInvalidError("schema violation")),
         )
 
-    # Service は audit を焼かない (失敗経路は task 層 record_extraction_failure 責務)
+    # Service は audit を焼かない (失敗経路は task 層 _record_failure 責務、PR2)
     events = await _fetch_extraction_events(db_session, article.id)
     assert len(events) == 0

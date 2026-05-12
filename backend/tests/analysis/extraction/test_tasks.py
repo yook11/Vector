@@ -22,9 +22,10 @@ from app.analysis.extraction.domain.ready import ReadyForExtraction
 
 
 def _make_provider_fake() -> MagicMock:
-    """extractor 用のスタブ。MODEL/RPM/RPD を持つ。"""
+    """extractor 用のスタブ。MODEL/PROMPT_VERSION/RPM/RPD を持つ。"""
     fake = MagicMock()
     fake.MODEL = "test-model"
+    fake.PROMPT_VERSION = "test-prompt-v1"
     fake.RPM = 50
     fake.RPD = 1500
     return fake
@@ -129,7 +130,7 @@ class TestExtractContent:
             ),
             patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
             patch(
-                "app.analysis.extraction.tasks.record_extraction_failure",
+                "app.analysis.extraction.tasks._record_failure",
                 new=AsyncMock(),
             ) as mock_audit,
         ):

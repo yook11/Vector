@@ -7,14 +7,15 @@ assess_content (Stage 4) へ chain する。
 from __future__ import annotations
 
 import structlog
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from taskiq import Context, TaskiqDepends
 
 from app.analysis._limiter_factory import _build_limiters
 from app.analysis.assessment.domain.ready import AssessmentTrigger
 from app.analysis.assessment.tasks import assess_content
 from app.analysis.extraction.ai.base import BaseExtractor
+from app.analysis.extraction.audit_repository import ExtractionAuditRepository
 from app.analysis.extraction.domain.ready import ReadyForExtraction
-from app.analysis.extraction.failure_recording import record_extraction_failure
 from app.analysis.extraction.service import ExtractionService
 from app.analysis.rate_limiter import (
     RateLimitExceededError as _RateLimitExceededError,
@@ -25,8 +26,55 @@ from app.observability.categories import (
     NonRetryableKeepArticle,
     RetryableError,
 )
+from app.observability.redact import redact_secrets
 
 logger = structlog.get_logger(__name__)
+
+
+async def _record_failure(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    ready: ReadyForExtraction,
+    exc: BaseException,
+    attempt: int,
+    extractor: BaseExtractor,
+) -> None:
+    """Stage 3 失敗 1 件を記録する (caller 観点: business tx と独立に焼ける)。
+
+    実装は別 session / 別 tx を ``session_factory`` で開き
+    ``ExtractionAuditRepository.append_failure`` を 1 行 append + commit する。
+    Repository は class API のみで tx 境界を握らないため、別 session 開閉と
+    commit は本 helper (Task 層) の責務。
+
+    audit 書込みは best-effort: DB 落ち / migration 漏れ / schema 不整合などで
+    INSERT または commit が失敗しても、業務 task を殺さないよう例外を呑んで
+    ``extraction_failure_audit_dropped`` 構造ログにフォールバックする
+    (運用シグナル、監査の audit ではない)。SDK exception message に key prefix
+    / Authorization header が混入しうるため、DB payload と同 pattern で
+    ログ経路にも ``redact_secrets`` を通す (red-team chain γ-2 対称化、
+    Stage 4 / Stage 5 _record_failure と同型)。
+    """
+    try:
+        async with session_factory() as session:
+            await ExtractionAuditRepository(session).append_failure(
+                ready=ready,
+                exc=exc,
+                attempt=attempt,
+                extractor=extractor,
+            )
+            await session.commit()
+    except Exception as audit_exc:
+        logger.exception(
+            "extraction_failure_audit_dropped",
+            article_id=ready.article_id,
+            attempt=attempt,
+            business_error_class=f"{type(exc).__module__}.{type(exc).__qualname__}",
+            business_error_message=redact_secrets(str(exc))[:500],
+            audit_error_class=(
+                f"{type(audit_exc).__module__}.{type(audit_exc).__qualname__}"
+            ),
+            audit_error_message=redact_secrets(str(audit_exc))[:500],
+        )
 
 
 @broker_analysis.task(
@@ -80,32 +128,36 @@ async def extract_content(
             ready.original_content,
             code=getattr(type(exc), "CODE", "ai_error_unknown_drop"),
             exc=exc,
+            extractor=extractor,
         )
         return
     except NonRetryableKeepArticle as exc:
-        await record_extraction_failure(
+        await _record_failure(
             session_factory,
             ready=ready,
             exc=exc,
             attempt=attempt,
+            extractor=extractor,
         )
         return
     except RetryableError as exc:
         if type(exc).INLINE_RETRY and not is_last_attempt(ctx):
             raise  # taskiq 即時 retry
-        await record_extraction_failure(
+        await _record_failure(
             session_factory,
             ready=ready,
             exc=exc,
             attempt=attempt,
+            extractor=extractor,
         )
         return
     except Exception as exc:
-        await record_extraction_failure(
+        await _record_failure(
             session_factory,
             ready=ready,
             exc=exc,
             attempt=attempt,
+            extractor=extractor,
         )
         return
 

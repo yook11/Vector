@@ -191,6 +191,7 @@ class ExtractionService:
         *,
         code: str,
         exc: BaseException,
+        extractor: BaseExtractor,
     ) -> None:
         """内容起因 Permanent failure を 1 tx で焼付け + 記事 DELETE する。
 
@@ -206,6 +207,8 @@ class ExtractionService:
             code: ``type(exc).CODE`` (Layer 2 SSoT)。``outcome_code`` カラムにも
                 同値を入れる (Phase A 規律、spec §PR 段取り)。
             exc: 例外インスタンス (audit の error_message / error_chain 用)。
+            extractor: 失敗 audit の ``ai_model`` / ``prompt_version`` を埋める
+                ためのソース (Service には保持しない、Task 層から DI される)。
         """
         async with self._session_factory() as session:
             # 1) audit INSERT (source_id 自動補完が article_id 健在時に確定)
@@ -215,6 +218,7 @@ class ExtractionService:
                 original_content=original_content,
                 code=code,
                 exc=exc,
+                extractor=extractor,
             )
 
             # 2) article DELETE (CASCADE で関連 row、SET NULL で audit.article_id)
