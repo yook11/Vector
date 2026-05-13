@@ -56,13 +56,17 @@ def test_rejects_legacy_classification_kind() -> None:
         adapter.validate_python({"kind": "classification"})
 
 
-def test_extra_forbid() -> None:
-    """``BasePipelineEventPayload`` の ``extra="forbid"`` 継承で未知 field を reject。
+def test_extra_ignore_drops_unknown_field() -> None:
+    """``extra="ignore"`` 継承で未知 field を silent drop。
 
-    schema 漂流 (caller が誤った key を渡しても黙って通す状態) を構造的に防ぐ。
+    rolling deploy 中に新 publisher が焼いた未知 field 付き JSONB を旧 worker が
+    ``model_validate`` で読み戻しても ValidationError で死なないことを保証する。
     """
-    with pytest.raises(ValidationError):
-        AssessmentPayload(unknown_field="x")  # type: ignore[call-arg]
+    restored = AssessmentPayload.model_validate(
+        {"kind": "assessment", "future_field": "x"}
+    )
+    assert restored.kind == "assessment"
+    assert not hasattr(restored, "future_field")
 
 
 def test_frozen_immutable() -> None:

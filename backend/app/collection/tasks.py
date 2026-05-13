@@ -150,7 +150,7 @@ async def ingest_source(
     svc = IngestionService(session_factory, fetcher_factory)
 
     try:
-        outcome = await svc.execute(source_id, attempt=attempt)
+        persisted_ids = await svc.execute(source_id, attempt=attempt)
     except PermanentFetchError as e:
         await _record_fetch_log(
             session_factory, source_id, FetchStatus.ERROR, 0, str(e), start_time
@@ -200,8 +200,7 @@ async def ingest_source(
         )
         raise
 
-    articles = outcome.persisted
-    article_created_count = len(articles)
+    article_created_count = len(persisted_ids)
     await _record_fetch_log(
         session_factory,
         source_id,
@@ -210,10 +209,10 @@ async def ingest_source(
         None,
         start_time,
     )
-    # Pattern R 経路: 永続化済 Article の article_id を ID-only Trigger に詰めて
-    # kiq (案 3: precondition 判定 + Ready 構築は下流 Stage 3 task が処理開始時)
-    for article in articles:
-        await extract_content.kiq(ExtractionTrigger(article_id=article.id))
+    # Pattern R 経路: 永続化済 article_id を ID-only Trigger に詰めて kiq
+    # (案 3: precondition 判定 + Ready 構築は下流 Stage 3 task が処理開始時)
+    for article_id in persisted_ids:
+        await extract_content.kiq(ExtractionTrigger(article_id=article_id))
     # Pattern H 経路: PR2.5-B cutover で `pending_html_articles` の DB 駆動に移行。
     # `dispatch_html_fetch_jobs` cron poller が `pending_id` を `extract_html_body`
     # に投入するため、ここでの直接 kiq は撤去 (Block 3 で cron poller 新設予定)。

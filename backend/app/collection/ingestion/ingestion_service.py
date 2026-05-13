@@ -8,13 +8,14 @@ Fetcher の ``AsyncIterator[FetchOutcome]`` を回し ``match`` で分岐する:
   直 INSERT (Pattern R)。``source_url`` は ``CanonicalArticleUrl`` 型で
   canonicalize 済が構造保証されているため Service 側で後付け正規化は不要。
   ``ON CONFLICT DO NOTHING`` で同 tick race / 既知 URL を吸収
-  (``None`` → ``known_url`` skip)。caller (``ingest_source`` task) が
+  (``None`` → ``known_url`` skip)。caller (``ingest_source`` task) は
+  返却された ``article_id`` を ``ExtractionTrigger`` に詰めて
   ``extract_content.kiq`` に chain する。
 - ``FetchedEntry(item=IncompleteArticle)`` → ``article_repo.exists_by_source_url``
   pre-check で feed 再露出を弾き、``pending_html_articles.url`` で投入
   (Pattern H)。``url`` は ``CanonicalArticleUrl`` 型で canonical 保証済。
   下流は cron poller (``dispatch_html_fetch_jobs``) が DB 駆動で拾うため、
-  Service / Task は pending_id を caller に渡さない (``IngestedOutcome`` 純化)。
+  Service / Task は pending_id を caller に渡さない (Outcome 純化原則)。
 - ``Failed`` → 構造化ログ + ``failed_codes`` 集計、永続化に流れない。
 
 ``commit`` までが Service の責務。``NewsSource`` ORM の lookup は
@@ -26,7 +27,6 @@ from __future__ import annotations
 import time
 from collections import Counter
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -34,7 +34,6 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
-from app.collection.extraction.domain import Article
 from app.collection.extraction.domain.article import ArticleDraft
 from app.collection.extraction.repository import ArticleRepository
 from app.collection.ingestion.domain.fetched_article import (
@@ -54,24 +53,6 @@ from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 logger = structlog.get_logger(__name__)
 
 
-@dataclass(frozen=True, slots=True)
-class IngestedOutcome:
-    """Outcome 純化原則: 「次の段階に渡す価値があるもの」のみ持つ。
-
-    Pattern R で永続化された ``Article`` のみを caller (``ingest_source``
-    task) に返す。caller は ``ReadyForExtraction`` を構築して
-    ``extract_content.kiq`` に流す。
-
-    Pattern H 経路で投入された ``pending_html_articles`` 行は cron poller
-    (``dispatch_html_fetch_jobs``) が DB 駆動で拾うため、Outcome として
-    持ち回らない。観測値 (failed/skipped/completion_queued count, metadata
-    観測) は同 tx で ``pipeline_events`` に焼き付け済
-    (memory ``feedback_outcome_purification``)。
-    """
-
-    persisted: list[Article]
-
-
 class IngestionService:
     """ソース 1 件を新 Protocol Fetcher 経由で取り込み、新 3 表に振り分ける。
 
@@ -87,14 +68,14 @@ class IngestionService:
         self._session_factory = session_factory
         self._fetcher_factory = fetcher_factory
 
-    async def execute(self, source_id: int, *, attempt: int = 1) -> IngestedOutcome:
+    async def execute(self, source_id: int, *, attempt: int = 1) -> list[int]:
         t0 = time.monotonic()
         async with self._session_factory() as session:
             fetcher = self._fetcher_factory()
             article_repo = ArticleRepository(session)
             pending_repo = PendingHtmlArticleRepository(session)
 
-            persisted: list[Article] = []
+            persisted_ids: list[int] = []
             article_created = 0
             completion_queued = 0
             skipped_codes: Counter[str] = Counter()
@@ -109,16 +90,16 @@ class IngestionService:
                             metadata_sample = self._observe_metadata(
                                 md, metadata_fields_observed, metadata_sample
                             )
-                            article = await self._persist_ready(
+                            article_id = await self._persist_ready(
                                 article_repo, ready=ready
                             )
-                            if article is None:
+                            if article_id is None:
                                 # ``articles.source_url UNIQUE`` ON CONFLICT 衝突
                                 # = 既知 URL (再露出 / 同 tick の他経路勝者)
                                 skipped_codes["known_url"] += 1
                                 continue
                             article_created += 1
-                            persisted.append(article)
+                            persisted_ids.append(article_id)
                         case FetchedEntry(
                             item=IncompleteArticle() as pending, metadata=md
                         ):
@@ -198,7 +179,7 @@ class IngestionService:
             skipped_count=skipped_count,
             failed_count=failed_count,
         )
-        return IngestedOutcome(persisted=persisted)
+        return persisted_ids
 
     @staticmethod
     def _observe_metadata(
@@ -272,8 +253,8 @@ class IngestionService:
         article_repo: ArticleRepository,
         *,
         ready: ReadyForArticle,
-    ) -> Article | None:
-        """Pattern R 1 entry を ``articles`` に直 INSERT して Entity を返す。
+    ) -> int | None:
+        """Pattern R 1 entry を ``articles`` に直 INSERT して ``article_id`` を返す。
 
         ``source_url`` は ``CanonicalArticleUrl`` 型で canonicalize 済が構造保証
         されているため、Service 側で後付け正規化は行わない
@@ -281,7 +262,7 @@ class IngestionService:
 
         Race recovery: ``save`` が ``None`` を返した場合は他 worker / 別 yield
         が同 URL で先に書き込み済。既に articles に存在するため Pattern R の
-        文脈では skip 扱い、Entity を返す必要はない。
+        文脈では skip 扱い、id を返す必要はない。
         """
         draft = ArticleDraft(
             title=ready.title,
@@ -293,8 +274,4 @@ class IngestionService:
             source_id=ready.source_id,
             source_url=ready.source_url,
         )
-        if persisted is None:
-            return None
-        return Article.from_draft(
-            draft, id=persisted.id, created_at=persisted.created_at
-        )
+        return persisted.id if persisted is not None else None

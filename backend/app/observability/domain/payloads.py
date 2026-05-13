@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 class BasePipelineEventPayload(BaseModel):
     """共通基底 — A 級保険 + S 級失敗詳細を共通化。"""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     kind: str
     source_name: str | None = None  # A: FK 切断耐性

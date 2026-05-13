@@ -5,8 +5,8 @@ PR-E 以降は新 2 表 (``articles`` / ``pending_html_articles``) を直接駆�
 検証する不変条件:
 
 - Pattern R (``ReadyForArticle``): ``articles.source_url`` (型 ``CanonicalArticleUrl``
-  で canonicalize 済が構造保証) に直 INSERT、``IngestedOutcome.persisted`` に
-  Entity が積まれる
+  で canonicalize 済が構造保証) に直 INSERT、``execute()`` 戻り値の
+  ``list[int]`` に永続化された article_id が積まれる
 - Pattern H (``IncompleteArticle``): ``article_repo.exists_by_source_url``
   pre-check を通過したら ``pending_html_articles.url`` で INSERT。Outcome は
   純化されているため caller には何も渡らない (cron poller が DB 駆動)
@@ -37,10 +37,7 @@ from app.collection.ingestion.domain.fetched_article import (
     IncompleteArticle,
     ReadyForArticle,
 )
-from app.collection.ingestion.ingestion_service import (
-    IngestedOutcome,
-    IngestionService,
-)
+from app.collection.ingestion.ingestion_service import IngestionService
 from app.models.article import Article as ArticleORM
 from app.models.news_source import NewsSource, SourceType
 from app.models.pending_html_article import PendingHtmlArticle as PendingHtmlArticleORM
@@ -112,10 +109,10 @@ async def test_pattern_r_inserts_canonicalized_article(
         ),
     )
 
-    outcome = await svc.execute(vb_source.id)
+    article_ids = await svc.execute(vb_source.id)
 
-    assert isinstance(outcome, IngestedOutcome)
-    assert len(outcome.persisted) == 1
+    assert len(article_ids) == 1
+    assert isinstance(article_ids[0], int)
 
     articles = (await db_session.execute(select(ArticleORM))).scalars().all()
     pendings = (await db_session.execute(select(PendingHtmlArticleORM))).scalars().all()
@@ -139,9 +136,9 @@ async def test_pattern_h_inserts_pending_with_canonicalized_url(
         ),
     )
 
-    outcome = await svc.execute(vb_source.id)
+    article_ids = await svc.execute(vb_source.id)
 
-    assert outcome.persisted == []  # Pattern H は cron poller 駆動
+    assert article_ids == []  # Pattern H は cron poller 駆動
 
     articles = (await db_session.execute(select(ArticleORM))).scalars().all()
     pendings = (await db_session.execute(select(PendingHtmlArticleORM))).scalars().all()
@@ -179,9 +176,9 @@ async def test_pattern_h_skips_when_article_already_exists(
             [_pending_entry(vb_source.id, "https://techcrunch.com/known")]
         ),
     )
-    outcome = await svc.execute(vb_source.id)
+    article_ids = await svc.execute(vb_source.id)
 
-    assert outcome.persisted == []
+    assert article_ids == []
     pendings = (await db_session.execute(select(PendingHtmlArticleORM))).scalars().all()
     assert pendings == []  # pre-check で弾かれて pending を作っていない
 
@@ -196,9 +193,9 @@ async def test_failed_does_not_persist(
     failed = Failed(reason=FailureReason(code="body_too_short", retryable=False))
     svc = IngestionService(session_factory, lambda: _StubFetcher([failed]))
 
-    outcome = await svc.execute(vb_source.id)
+    article_ids = await svc.execute(vb_source.id)
 
-    assert outcome.persisted == []
+    assert article_ids == []
     articles = (await db_session.execute(select(ArticleORM))).scalars().all()
     pendings = (await db_session.execute(select(PendingHtmlArticleORM))).scalars().all()
     assert articles == []
@@ -219,9 +216,9 @@ async def test_duplicate_url_yielded_twice_persists_once(
     e2 = _ready_entry(vb_source.id, "https://venturebeat.com/dup/")
     svc = IngestionService(session_factory, lambda: _StubFetcher([e1, e2]))
 
-    outcome = await svc.execute(vb_source.id)
+    article_ids = await svc.execute(vb_source.id)
 
-    assert len(outcome.persisted) == 1
+    assert len(article_ids) == 1
     articles = (await db_session.execute(select(ArticleORM))).scalars().all()
     assert len(articles) == 1
 
@@ -241,9 +238,9 @@ async def test_canonicalization_dedupes_tracking_query(
     e2 = _ready_entry(vb_source.id, "https://venturebeat.com/a/?utm_source=twitter")
     svc = IngestionService(session_factory, lambda: _StubFetcher([e1, e2]))
 
-    outcome = await svc.execute(vb_source.id)
+    article_ids = await svc.execute(vb_source.id)
 
-    assert len(outcome.persisted) == 1
+    assert len(article_ids) == 1
     articles = (await db_session.execute(select(ArticleORM))).scalars().all()
     assert len(articles) == 1
 
@@ -266,9 +263,9 @@ async def test_mixed_ready_pending_failed_route_independently(
         ),
     )
 
-    outcome = await svc.execute(vb_source.id)
+    article_ids = await svc.execute(vb_source.id)
 
-    assert len(outcome.persisted) == 1
+    assert len(article_ids) == 1
     articles = (await db_session.execute(select(ArticleORM))).scalars().all()
     pendings = (await db_session.execute(select(PendingHtmlArticleORM))).scalars().all()
     assert len(articles) == 1  # R only

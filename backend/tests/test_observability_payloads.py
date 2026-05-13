@@ -3,7 +3,9 @@
 不変条件と field schema を検証する:
 
 - ``SourceFetchPayload``: 5 種 count + ``entry_count == sum(...)`` invariant
-- ``ContentFetchPayload``: ``canonical_url`` field と extra="forbid"
+- ``ContentFetchPayload``: ``canonical_url`` field
+- ``BasePipelineEventPayload``: ``extra="ignore"`` で未知 field を drop
+  (rolling deploy 中に新 publisher → 旧 worker の読戻しを爆発させない)
 """
 
 from __future__ import annotations
@@ -106,10 +108,22 @@ class TestContentFetchPayloadAuditKeys:
         payload = ContentFetchPayload()
         assert payload.canonical_url is None
 
-    def test_unknown_field_rejected(self) -> None:
-        """未知 field は ``extra="forbid"`` で拒否される。"""
-        with pytest.raises(ValueError, match="extra"):
-            ContentFetchPayload(unknown_field=42)  # type: ignore[call-arg]
+    def test_unknown_field_dropped_silently(self) -> None:
+        """未知 field は ``extra="ignore"`` で silent drop される。
+
+        rolling deploy 中に新 publisher が焼いた未知 field 付き JSONB を旧
+        worker が ``model_validate`` で読み戻しても ValidationError で死なない
+        ことを保証する (kiq message envelope の ``extra="ignore"`` 既定との対称性)。
+        """
+        restored = ContentFetchPayload.model_validate(
+            {
+                "kind": "content_fetch",
+                "canonical_url": "https://example.com/a",
+                "future_field": "x",
+            }
+        )
+        assert restored.canonical_url == "https://example.com/a"
+        assert not hasattr(restored, "future_field")
 
 
 class TestPayloadJsonSerialization:
