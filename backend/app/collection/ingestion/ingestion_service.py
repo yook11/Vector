@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
 from app.collection.extraction.domain.article import ArticleDraft
 from app.collection.extraction.repository import ArticleRepository
+from app.collection.fetchers.protocol import Fetcher
 from app.collection.ingestion.article_seen_repository import ArticleSeenRepository
 from app.collection.ingestion.domain.fetched_article import (
     Failed,
@@ -43,7 +44,6 @@ from app.collection.ingestion.domain.fetched_article import (
     IncompleteArticle,
     ReadyForArticle,
 )
-from app.collection.ingestion.fetchers.protocol import Fetcher
 from app.collection.ingestion.pending_repository import PendingHtmlArticleRepository
 from app.collection.ingestion.staged_attributes import StagedArticleAttributes
 from app.observability.domain.event import EventType, Stage
