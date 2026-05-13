@@ -12,9 +12,9 @@ in-scope 判定で永続化に成功した場合は ``EmbeddingTrigger`` (analys
 を kiq に流して Stage 5 (``generate_embedding``) を起動する。Stage 5 Ready の
 構築は下流 Stage 5 task 自身が処理開始時に行う。
 
-失敗 audit 方針 (PR4 2026-05-13): except 節は branch 固有 log と
-``failure_exc`` / ``reraise`` flag 設定に専念し、共通の audit 書込み + log
-fallback は task 末尾で 1 回だけ inline で実行する (Stage 3 / Stage 5 と同型)。
+失敗 dispatch / audit は ``AssessmentFailureHandler`` (``failure_handling.py``)
+に委譲する。Task 層は marker の意味を持たず、Handler の戻り値 (``reraise: bool``)
+だけを解釈して taskiq の raise / return semantics に変換する (Stage 3 と同型)。
 """
 
 from __future__ import annotations
@@ -24,15 +24,11 @@ from taskiq import Context, TaskiqDepends
 
 from app.analysis._limiter_factory import _build_limiters
 from app.analysis.assessment.ai.base import BaseAssessor
-from app.analysis.assessment.audit_repository import AssessmentAuditRepository
 from app.analysis.assessment.domain.ready import (
     AssessmentTrigger,
     ReadyForAssessment,
 )
-from app.analysis.assessment.errors import (
-    AssessmentRecoverableError,
-    AssessmentTerminalSkipError,
-)
+from app.analysis.assessment.failure_handling import AssessmentFailureHandler
 from app.analysis.assessment.repository import AssessmentRepository
 from app.analysis.assessment.service import AssessmentService
 from app.analysis.embedding.domain.ready import EmbeddingTrigger
@@ -41,7 +37,6 @@ from app.analysis.rate_limiter import (
     RateLimitExceededError as _RateLimitExceededError,
 )
 from app.brokers import broker_analysis, is_last_attempt
-from app.observability.redact import redact_secrets
 
 logger = structlog.get_logger(__name__)
 
@@ -104,88 +99,28 @@ async def assess_content(
         )
         return
 
-    # Service 呼び出し（session は内部で管理）
     svc = AssessmentService(session_factory)
+    handler = AssessmentFailureHandler(session_factory)
     attempt = int(ctx.message.labels.get("retry_count", 0)) + 1
 
-    failure_exc: BaseException
-    reraise: bool
     try:
         result = await svc.execute(ready, assessor)
-    except AssessmentTerminalSkipError as exc:
-        # Layer 1 marker (Layer 2-B AssessmentCategoryMissingError も継承で拾う):
-        # 永続的失敗 → audit 焼いて即 return (taskiq retry なし、extraction 保持)。
-        logger.warning(
-            "assess_content_terminal_skip",
-            extraction_id=ready.extraction_id,
-            code=getattr(exc, "code", None),
-        )
-        failure_exc = exc
-        reraise = False
-    except AssessmentRecoverableError as exc:
-        # Layer 1 marker (Layer 2-B AssessmentResponseInvalidError も継承で拾う):
-        # 一時的失敗 → audit 焼いて is_last_attempt でトリアージ。
-        failure_exc = exc
-        if is_last_attempt(ctx):
-            logger.warning(
-                "assess_content_recoverable_exhausted",
-                extraction_id=ready.extraction_id,
-                code=getattr(exc, "code", None),
-            )
-            reraise = False
-        else:
-            reraise = True  # taskiq 再試行
     except Exception as exc:
-        # catch-all (想定外): audit 焼いて exhausted なら return、否則 raise。
-        failure_exc = exc
-        if is_last_attempt(ctx):
-            logger.exception(
-                "assess_content_unexpected_exhausted",
-                extraction_id=ready.extraction_id,
-            )
-            reraise = False
-        else:
-            reraise = True
-    else:
-        # ``result`` は in-scope 成功時のみ assessment id、out-of-scope と race 敗北
-        # は ``None``。out-of-scope はパイプライン終了で chain しない。race 敗北は
-        # 勝者 task が自身で Stage 5 を起動する (勝者 crash 時は reconcile cron 経路、
-        # 本 task の責務外)。
-        if result is not None:
-            # Stage 5 (Embedding) を ID で起動 (案 3: 下流 Stage 自身が処理開始時に
-            # Ready を構築する)。Trigger に analysis_id だけ詰めて kiq へ enqueue する。
-            await generate_embedding.kiq(EmbeddingTrigger(analysis_id=result))
+        reraise = await handler.handle(
+            ready=ready,
+            exc=exc,
+            attempt=attempt,
+            last_attempt=is_last_attempt(ctx),
+        )
+        if reraise:
+            raise
         return
 
-    # 共通 audit (best-effort, log fallback) — 失敗経路でのみ到達。
-    # Repository は class API のみで tx 境界を握らないため、別 session 開閉 +
-    # commit は Task 層 (本 inline ブロック) の責務。
-    # audit 書込みは best-effort: DB 落ち / migration 漏れ / schema 不整合などで
-    # INSERT または commit が失敗しても、業務 task を殺さないよう例外を呑んで
-    # ``assessment_failure_audit_dropped`` 構造ログにフォールバックする
-    # (運用シグナル、監査の audit ではない)。SDK exception message に key prefix
-    # / Authorization header が混入しうるため、DB payload と同 pattern で
-    # ログ経路にも ``redact_secrets`` を通す (red-team chain γ-2 対称化)。
-    try:
-        async with session_factory() as session:
-            await AssessmentAuditRepository(session).append_failure(
-                ready=ready, exc=failure_exc, attempt=attempt
-            )
-            await session.commit()
-    except Exception as audit_exc:
-        logger.exception(
-            "assessment_failure_audit_dropped",
-            extraction_id=ready.extraction_id,
-            attempt=attempt,
-            business_error_class=(
-                f"{type(failure_exc).__module__}.{type(failure_exc).__qualname__}"
-            ),
-            business_error_message=redact_secrets(str(failure_exc))[:500],
-            audit_error_class=(
-                f"{type(audit_exc).__module__}.{type(audit_exc).__qualname__}"
-            ),
-            audit_error_message=redact_secrets(str(audit_exc))[:500],
-        )
-
-    if reraise:
-        raise failure_exc
+    # ``result`` は in-scope 成功時のみ assessment id、out-of-scope と race 敗北
+    # は ``None``。out-of-scope はパイプライン終了で chain しない。race 敗北は
+    # 勝者 task が自身で Stage 5 を起動する (勝者 crash 時は reconcile cron 経路、
+    # 本 task の責務外)。
+    if result is not None:
+        # Stage 5 (Embedding) を ID で起動 (案 3: 下流 Stage 自身が処理開始時に
+        # Ready を構築する)。Trigger に analysis_id だけ詰めて kiq へ enqueue する。
+        await generate_embedding.kiq(EmbeddingTrigger(analysis_id=result))

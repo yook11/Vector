@@ -1,4 +1,4 @@
-"""``assess_content`` task のテスト (chain 経路 + 3 marker dispatch)。
+"""``assess_content`` task のテスト (chain 経路 + rate limit 経路 + skip 経路)。
 
 案 3 (厚い Ready + 下流 Stage 自身が処理開始時に構築): assess_content は
 ``AssessmentTrigger`` (extraction_id のみ) を受領し、task 自身が
@@ -7,26 +7,23 @@
 - precondition 未充足 → svc.execute を呼ばずに return (rate limit も acquire しない)
 - in-scope 成功 (int 返却) → EmbeddingTrigger で embedding chain (ID のみ運ぶ)
 - out-of-scope / race lost (``None`` 返却) は chain しないこと
-- 3 marker dispatch: TerminalSkip / Recoverable / catch-all Exception
-- audit 失敗時の log fallback (PR4: 末尾 inline audit 経由)
+- rate limit (``AIProviderRateLimitedError``) 経路で Handler に委譲され、
+  ``reraise`` 戻り値で raise/return が決まること
+
+Layer 1 marker dispatch ルーティングは ``test_assess_task_dispatch.py`` 側で
+網羅する。Handler 内部の audit 経路は ``test_failure_handler.py`` で integration
+として検証する。
 """
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from structlog.testing import capture_logs
 
 from app.analysis.ai_provider_errors import AIProviderRateLimitedError
 from app.analysis.assessment.domain.ready import (
     AssessmentTrigger,
     ReadyForAssessment,
-)
-from app.analysis.assessment.errors import (
-    AssessmentCategoryMissingError,
-    AssessmentRecoverableError,
-    AssessmentResponseInvalidError,
-    AssessmentTerminalSkipError,
 )
 from app.analysis.embedding.domain.ready import EmbeddingTrigger
 
@@ -77,18 +74,6 @@ def _patch_ready_construction(ready: ReadyForAssessment | None):
     return patch(
         "app.analysis.assessment.tasks.ReadyForAssessment.try_advance_from",
         new=AsyncMock(return_value=ready),
-    )
-
-
-def _patch_audit_repository() -> object:
-    """task 末尾 inline audit の ``AssessmentAuditRepository`` を mock する patch。
-
-    PR4: ``_record_failure`` helper 廃止に伴い、Repository class を patch して
-    ``return_value.append_failure`` の呼び出しを assert する形に切替。
-    """
-    return patch(
-        "app.analysis.assessment.tasks.AssessmentAuditRepository",
-        autospec=False,
     )
 
 
@@ -184,14 +169,11 @@ class TestAssessContent:
 
     @pytest.mark.asyncio
     async def test_rate_limit_raises_for_retry(self) -> None:
-        """``AIProviderRateLimitedError`` は Stage 4 ACL を経由せず Service が直接 raise
-        した場合、Assessment.* marker (TerminalSkip / Recoverable) のいずれにも該当
-        しないので catch-all (Exception) 句に dispatch される。retry 余地ありで raise。
+        """Handler が ``reraise=True`` を返したら task は元の exc を raise する。
 
-        (補足: ``AIProviderRateLimitedError`` は foundation ``RetryableError`` marker を
-        継承するが、``assess_content`` の except は ``AssessmentRecoverableError`` で
-        catch する。本 test は Service が ACL 通過せず直接 raise した想定 mock なので
-        catch-all 句に落ちる)
+        ``AIProviderRateLimitedError`` は Stage 4 marker のいずれにも該当しない
+        ので catch-all 経路で Handler に委譲される。retry 余地ありで Handler
+        が True を返した想定で task が raise することを確認する。
         """
         from app.analysis.assessment.tasks import assess_content
 
@@ -207,18 +189,20 @@ class TestAssessContent:
                 return_value=(None, None),
             ),
             patch("app.analysis.assessment.tasks.AssessmentService") as mock_svc_cls,
-            _patch_audit_repository() as mock_audit_cls,
+            patch(
+                "app.analysis.assessment.tasks.AssessmentFailureHandler"
+            ) as mock_handler_cls,
         ):
-            mock_audit_cls.return_value.append_failure = AsyncMock()
             mock_svc_cls.return_value.execute = AsyncMock(
                 side_effect=AIProviderRateLimitedError("429"),
             )
+            mock_handler_cls.return_value.handle = AsyncMock(return_value=True)
             with pytest.raises(AIProviderRateLimitedError):
                 await assess_content(trigger=trigger, ctx=mock_ctx)
 
     @pytest.mark.asyncio
     async def test_rate_limit_last_attempt_returns(self) -> None:
-        """assess_content は最終試行で例外を送出せず return する (catch-all 句)。"""
+        """Handler が ``reraise=False`` を返したら task は return する。"""
         from app.analysis.assessment.tasks import assess_content
 
         mock_ctx = _make_ctx(
@@ -233,253 +217,12 @@ class TestAssessContent:
                 return_value=(None, None),
             ),
             patch("app.analysis.assessment.tasks.AssessmentService") as mock_svc_cls,
-            _patch_audit_repository() as mock_audit_cls,
+            patch(
+                "app.analysis.assessment.tasks.AssessmentFailureHandler"
+            ) as mock_handler_cls,
         ):
-            mock_audit_cls.return_value.append_failure = AsyncMock()
             mock_svc_cls.return_value.execute = AsyncMock(
                 side_effect=AIProviderRateLimitedError("429"),
             )
+            mock_handler_cls.return_value.handle = AsyncMock(return_value=False)
             await assess_content(trigger=trigger, ctx=mock_ctx)
-
-    @pytest.mark.asyncio
-    async def test_audit_failure_falls_back_to_log(self) -> None:
-        """audit Repository が raise しても task は落ちず log fallback する。
-
-        PR4 で ``_record_failure`` helper を廃止し task 末尾の inline audit に
-        統一したため、helper 単体テストの代わりに「audit DB が落ちても業務
-        task は完走し ``assessment_failure_audit_dropped`` 構造ログが出る」
-        振る舞いを task 経由で検証する。同時に business / audit exception の
-        message に混入した secret prefix が log field から除去されることも
-        確認する (red-team chain γ-2 対称化)。
-        """
-        from app.analysis.assessment.tasks import assess_content
-
-        ctx = _make_ctx(assessor=_make_provider_fake(), retry_count=0, max_retries=2)
-        trigger = _make_trigger()
-        business_exc = AssessmentTerminalSkipError(
-            "config Authorization: Bearer sk-live-BUSINESSSECRETabc",
-            code="ai_error_configuration",
-        )
-
-        with (
-            _patch_ready_construction(_make_ready()),
-            patch(
-                "app.analysis.assessment.tasks._build_limiters",
-                return_value=(None, None),
-            ),
-            patch("app.analysis.assessment.tasks.AssessmentService") as mock_svc_cls,
-            _patch_audit_repository() as mock_audit_cls,
-            capture_logs() as cap,
-        ):
-            mock_svc_cls.return_value.execute = AsyncMock(side_effect=business_exc)
-            mock_audit_cls.return_value.append_failure = AsyncMock(
-                side_effect=RuntimeError(
-                    "audit db down Authorization: Bearer sk-live-AUDITSECRETxyz"
-                )
-            )
-            # task は落ちずに完走する
-            await assess_content(trigger=trigger, ctx=ctx)
-
-        drops = [e for e in cap if e.get("event") == "assessment_failure_audit_dropped"]
-        assert drops, "fallback ログが emit されていない"
-        drop = drops[-1]
-        assert drop["extraction_id"] == 2
-        assert drop["attempt"] == 1
-        assert drop["business_error_class"].endswith(".AssessmentTerminalSkipError")
-        assert drop["audit_error_class"].endswith(".RuntimeError")
-        # red-team chain γ-2: business / audit 両方の secret が redact される
-        assert "sk-live-BUSINESSSECRETabc" not in drop["business_error_message"]
-        assert "sk-live-AUDITSECRETxyz" not in drop["audit_error_message"]
-
-
-# ---------------------------------------------------------------------------
-# assess_content: 3 marker dispatch (TerminalSkip / Recoverable / Exception)
-# ---------------------------------------------------------------------------
-
-
-class TestAssessContentMarkerDispatch:
-    """``assess_content`` の except 句は 3 marker dispatch
-    (TerminalSkip → Recoverable → Exception)。各 except で
-    failure_exc / reraise flag を設定、task 末尾の inline audit で 1 行記録する。"""
-
-    @pytest.mark.asyncio
-    async def test_terminal_skip_records_failure_and_returns(self) -> None:
-        """``AssessmentTerminalSkipError`` → audit + return (taskiq retry なし)。"""
-        from app.analysis.assessment.tasks import assess_content
-
-        ctx = _make_ctx(assessor=_make_provider_fake(), retry_count=0, max_retries=2)
-        trigger = _make_trigger()
-        exc = AssessmentTerminalSkipError("bad config", code="ai_error_configuration")
-
-        with (
-            _patch_ready_construction(_make_ready()),
-            patch(
-                "app.analysis.assessment.tasks._build_limiters",
-                return_value=(None, None),
-            ),
-            patch("app.analysis.assessment.tasks.AssessmentService") as mock_svc_cls,
-            _patch_audit_repository() as mock_audit_cls,
-        ):
-            mock_audit_cls.return_value.append_failure = AsyncMock()
-            mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
-            await assess_content(trigger=trigger, ctx=ctx)
-
-        append_failure = mock_audit_cls.return_value.append_failure
-        append_failure.assert_awaited_once()
-        assert append_failure.await_args.kwargs["exc"] is exc
-
-    @pytest.mark.asyncio
-    async def test_category_missing_dispatches_to_terminal_skip(self) -> None:
-        """``AssessmentCategoryMissingError`` (Layer 2-B、TerminalSkip 継承) は
-        TerminalSkip 句に dispatch される (Recoverable 句に誤って落ちない)。"""
-        from app.analysis.assessment.tasks import assess_content
-
-        ctx = _make_ctx(assessor=_make_provider_fake(), retry_count=0, max_retries=2)
-        trigger = _make_trigger()
-        exc = AssessmentCategoryMissingError("unknown slug 'foo'")
-
-        with (
-            _patch_ready_construction(_make_ready()),
-            patch(
-                "app.analysis.assessment.tasks._build_limiters",
-                return_value=(None, None),
-            ),
-            patch("app.analysis.assessment.tasks.AssessmentService") as mock_svc_cls,
-            _patch_audit_repository() as mock_audit_cls,
-        ):
-            mock_audit_cls.return_value.append_failure = AsyncMock()
-            mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
-            # TerminalSkip 句は raise しない → return 成立
-            await assess_content(trigger=trigger, ctx=ctx)
-        append_failure = mock_audit_cls.return_value.append_failure
-        append_failure.assert_awaited_once()
-        assert isinstance(
-            append_failure.await_args.kwargs["exc"], AssessmentTerminalSkipError
-        )
-
-    @pytest.mark.asyncio
-    async def test_recoverable_records_failure_and_raises_when_not_last(self) -> None:
-        """``AssessmentRecoverableError`` + retry 余地あり → audit + raise。"""
-        from app.analysis.assessment.tasks import assess_content
-
-        ctx = _make_ctx(assessor=_make_provider_fake(), retry_count=0, max_retries=2)
-        trigger = _make_trigger()
-        exc = AssessmentRecoverableError("network", code="ai_error_network")
-
-        with (
-            _patch_ready_construction(_make_ready()),
-            patch(
-                "app.analysis.assessment.tasks._build_limiters",
-                return_value=(None, None),
-            ),
-            patch("app.analysis.assessment.tasks.AssessmentService") as mock_svc_cls,
-            _patch_audit_repository() as mock_audit_cls,
-        ):
-            mock_audit_cls.return_value.append_failure = AsyncMock()
-            mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
-            with pytest.raises(AssessmentRecoverableError):
-                await assess_content(trigger=trigger, ctx=ctx)
-        mock_audit_cls.return_value.append_failure.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_recoverable_records_failure_and_returns_when_last(self) -> None:
-        """``AssessmentRecoverableError`` + 最終 attempt → audit + return。"""
-        from app.analysis.assessment.tasks import assess_content
-
-        ctx = _make_ctx(assessor=_make_provider_fake(), retry_count=2, max_retries=2)
-        trigger = _make_trigger()
-        exc = AssessmentRecoverableError("network", code="ai_error_network")
-
-        with (
-            _patch_ready_construction(_make_ready()),
-            patch(
-                "app.analysis.assessment.tasks._build_limiters",
-                return_value=(None, None),
-            ),
-            patch("app.analysis.assessment.tasks.AssessmentService") as mock_svc_cls,
-            _patch_audit_repository() as mock_audit_cls,
-        ):
-            mock_audit_cls.return_value.append_failure = AsyncMock()
-            mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
-            await assess_content(trigger=trigger, ctx=ctx)
-        mock_audit_cls.return_value.append_failure.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_response_invalid_dispatches_to_recoverable(self) -> None:
-        """``AssessmentResponseInvalidError`` (Layer 2-B、Recoverable 継承) は
-        Recoverable 句に dispatch される (catch-all に落ちない)。"""
-        from app.analysis.assessment.tasks import assess_content
-
-        ctx = _make_ctx(assessor=_make_provider_fake(), retry_count=0, max_retries=2)
-        trigger = _make_trigger()
-        exc = AssessmentResponseInvalidError("schema violation")
-
-        with (
-            _patch_ready_construction(_make_ready()),
-            patch(
-                "app.analysis.assessment.tasks._build_limiters",
-                return_value=(None, None),
-            ),
-            patch("app.analysis.assessment.tasks.AssessmentService") as mock_svc_cls,
-            _patch_audit_repository() as mock_audit_cls,
-        ):
-            mock_audit_cls.return_value.append_failure = AsyncMock()
-            mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
-            with pytest.raises(AssessmentResponseInvalidError):
-                await assess_content(trigger=trigger, ctx=ctx)
-        append_failure = mock_audit_cls.return_value.append_failure
-        append_failure.assert_awaited_once()
-        assert isinstance(
-            append_failure.await_args.kwargs["exc"], AssessmentRecoverableError
-        )
-
-    @pytest.mark.asyncio
-    async def test_unexpected_exception_records_and_returns_when_last(self) -> None:
-        """任意 ``Exception`` + 最終 attempt → catch-all で audit + return。"""
-        from app.analysis.assessment.tasks import assess_content
-
-        ctx = _make_ctx(assessor=_make_provider_fake(), retry_count=2, max_retries=2)
-        trigger = _make_trigger()
-
-        with (
-            _patch_ready_construction(_make_ready()),
-            patch(
-                "app.analysis.assessment.tasks._build_limiters",
-                return_value=(None, None),
-            ),
-            patch("app.analysis.assessment.tasks.AssessmentService") as mock_svc_cls,
-            _patch_audit_repository() as mock_audit_cls,
-        ):
-            mock_audit_cls.return_value.append_failure = AsyncMock()
-            mock_svc_cls.return_value.execute = AsyncMock(
-                side_effect=ValueError("surprise")
-            )
-            await assess_content(trigger=trigger, ctx=ctx)
-        append_failure = mock_audit_cls.return_value.append_failure
-        append_failure.assert_awaited_once()
-        assert isinstance(append_failure.await_args.kwargs["exc"], ValueError)
-
-    @pytest.mark.asyncio
-    async def test_unexpected_exception_records_and_raises_when_not_last(self) -> None:
-        """任意 ``Exception`` + retry 余地あり → catch-all で audit + raise。"""
-        from app.analysis.assessment.tasks import assess_content
-
-        ctx = _make_ctx(assessor=_make_provider_fake(), retry_count=0, max_retries=2)
-        trigger = _make_trigger()
-
-        with (
-            _patch_ready_construction(_make_ready()),
-            patch(
-                "app.analysis.assessment.tasks._build_limiters",
-                return_value=(None, None),
-            ),
-            patch("app.analysis.assessment.tasks.AssessmentService") as mock_svc_cls,
-            _patch_audit_repository() as mock_audit_cls,
-        ):
-            mock_audit_cls.return_value.append_failure = AsyncMock()
-            mock_svc_cls.return_value.execute = AsyncMock(
-                side_effect=ValueError("surprise")
-            )
-            with pytest.raises(ValueError, match="surprise"):
-                await assess_content(trigger=trigger, ctx=ctx)
-        mock_audit_cls.return_value.append_failure.assert_awaited_once()
