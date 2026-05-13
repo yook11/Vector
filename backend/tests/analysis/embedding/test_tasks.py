@@ -12,16 +12,13 @@ dispatch 軸:
 - ``EmbeddingTerminalSkipError`` → audit + return (taskiq retry なし)
 - ``EmbeddingRecoverableError`` → audit + is_last_attempt で raise / return
 - catch-all ``Exception`` → audit + is_last_attempt で raise / return
+- audit 失敗時の log fallback (PR4: 末尾 inline audit 経由)
 """
 
-from datetime import UTC, datetime
 from types import SimpleNamespace
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
 from app.analysis.embedding.domain.ready import (
@@ -33,13 +30,6 @@ from app.analysis.embedding.errors import (
     EmbeddingResponseInvalidError,
     EmbeddingTerminalSkipError,
 )
-from app.analysis.embedding.tasks import _record_failure
-from app.models.article import Article
-from app.models.article_extraction import ArticleExtraction
-from app.models.category import Category
-from app.models.in_scope_assessment import InScopeAssessment
-from app.models.news_source import NewsSource
-from app.models.pipeline_event import PipelineEvent
 
 
 def _make_embedder_fake() -> MagicMock:
@@ -86,6 +76,18 @@ def _patch_ready_construction(ready: ReadyForEmbedding | None):
     return patch(
         "app.analysis.embedding.tasks.ReadyForEmbedding.try_advance_from",
         new=AsyncMock(return_value=ready),
+    )
+
+
+def _patch_audit_repository() -> object:
+    """task 末尾 inline audit の ``EmbeddingAuditRepository`` を mock する patch。
+
+    PR4: ``_record_failure`` helper 廃止に伴い、Repository class を patch して
+    ``return_value.append_failure`` の呼び出しを assert する形に切替。
+    """
+    return patch(
+        "app.analysis.embedding.tasks.EmbeddingAuditRepository",
+        autospec=False,
     )
 
 
@@ -144,6 +146,56 @@ class TestGenerateEmbedding:
         mock_limiters.assert_not_called()
         mock_svc_cls.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_audit_failure_falls_back_to_log(self) -> None:
+        """audit Repository が raise しても task は落ちず log fallback する。
+
+        PR4 で ``_record_failure`` helper を廃止し task 末尾の inline audit に
+        統一したため、helper 単体テストの代わりに「audit DB が落ちても業務
+        task は完走し ``embedding_failure_audit_dropped`` 構造ログが出る」
+        振る舞いを task 経由で検証する。同時に business / audit exception の
+        message に混入した secret prefix が log field から除去されることも
+        確認する (red-team chain γ-2 対称化)。
+        """
+        from app.analysis.embedding.tasks import generate_embedding
+
+        ctx = _make_ctx(embedder=_make_embedder_fake(), retry_count=0, max_retries=2)
+        trigger = _make_trigger()
+        business_exc = EmbeddingTerminalSkipError(
+            "config Authorization: Bearer sk-live-BUSINESSSECRETabc",
+            code="ai_error_configuration",
+        )
+
+        with (
+            _patch_ready_construction(_make_ready()),
+            patch(
+                "app.analysis.embedding.tasks._build_limiters",
+                return_value=(None, None),
+            ),
+            patch("app.analysis.embedding.tasks.EmbeddingService") as mock_svc_cls,
+            _patch_audit_repository() as mock_audit_cls,
+            capture_logs() as cap,
+        ):
+            mock_svc_cls.return_value.execute = AsyncMock(side_effect=business_exc)
+            mock_audit_cls.return_value.append_failure = AsyncMock(
+                side_effect=RuntimeError(
+                    "audit db down Authorization: Bearer sk-live-AUDITSECRETxyz"
+                )
+            )
+            # task は落ちずに完走する
+            await generate_embedding(trigger=trigger, ctx=ctx)
+
+        drops = [e for e in cap if e.get("event") == "embedding_failure_audit_dropped"]
+        assert drops, "fallback ログが emit されていない"
+        drop = drops[-1]
+        assert drop["analysis_id"] == 1
+        assert drop["attempt"] == 1
+        assert drop["business_error_class"].endswith(".EmbeddingTerminalSkipError")
+        assert drop["audit_error_class"].endswith(".RuntimeError")
+        # red-team chain γ-2: business / audit 両方の secret が redact される
+        assert "sk-live-BUSINESSSECRETabc" not in drop["business_error_message"]
+        assert "sk-live-AUDITSECRETxyz" not in drop["audit_error_message"]
+
 
 # ---------------------------------------------------------------------------
 # generate_embedding: 2 marker dispatch + catch-all
@@ -152,8 +204,9 @@ class TestGenerateEmbedding:
 
 class TestGenerateEmbeddingMarkerDispatch:
     """``generate_embedding`` の except 句は 2 marker dispatch
-    (TerminalSkip → Recoverable → Exception)。各 except で
-    ``_record_failure`` を呼び出す (Stage 4 と同型)。"""
+    (TerminalSkip → Recoverable → Exception)。各 except で failure_exc /
+    reraise flag を設定、task 末尾の inline audit で 1 行記録する
+    (Stage 4 と同型)。"""
 
     @pytest.mark.asyncio
     async def test_terminal_skip_records_failure_and_returns(self) -> None:
@@ -171,16 +224,15 @@ class TestGenerateEmbeddingMarkerDispatch:
                 return_value=(None, None),
             ),
             patch("app.analysis.embedding.tasks.EmbeddingService") as mock_svc_cls,
-            patch(
-                "app.analysis.embedding.tasks._record_failure",
-                new=AsyncMock(),
-            ) as mock_audit,
+            _patch_audit_repository() as mock_audit_cls,
         ):
+            mock_audit_cls.return_value.append_failure = AsyncMock()
             mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
             await generate_embedding(trigger=trigger, ctx=ctx)
 
-        mock_audit.assert_awaited_once()
-        assert mock_audit.await_args.kwargs["exc"] is exc
+        append_failure = mock_audit_cls.return_value.append_failure
+        append_failure.assert_awaited_once()
+        assert append_failure.await_args.kwargs["exc"] is exc
 
     @pytest.mark.asyncio
     async def test_recoverable_records_failure_and_raises_when_not_last(self) -> None:
@@ -198,15 +250,13 @@ class TestGenerateEmbeddingMarkerDispatch:
                 return_value=(None, None),
             ),
             patch("app.analysis.embedding.tasks.EmbeddingService") as mock_svc_cls,
-            patch(
-                "app.analysis.embedding.tasks._record_failure",
-                new=AsyncMock(),
-            ) as mock_audit,
+            _patch_audit_repository() as mock_audit_cls,
         ):
+            mock_audit_cls.return_value.append_failure = AsyncMock()
             mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
             with pytest.raises(EmbeddingRecoverableError):
                 await generate_embedding(trigger=trigger, ctx=ctx)
-        mock_audit.assert_awaited_once()
+        mock_audit_cls.return_value.append_failure.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_recoverable_records_failure_and_returns_when_last(self) -> None:
@@ -224,14 +274,12 @@ class TestGenerateEmbeddingMarkerDispatch:
                 return_value=(None, None),
             ),
             patch("app.analysis.embedding.tasks.EmbeddingService") as mock_svc_cls,
-            patch(
-                "app.analysis.embedding.tasks._record_failure",
-                new=AsyncMock(),
-            ) as mock_audit,
+            _patch_audit_repository() as mock_audit_cls,
         ):
+            mock_audit_cls.return_value.append_failure = AsyncMock()
             mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
             await generate_embedding(trigger=trigger, ctx=ctx)
-        mock_audit.assert_awaited_once()
+        mock_audit_cls.return_value.append_failure.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_response_invalid_dispatches_to_recoverable(self) -> None:
@@ -250,17 +298,16 @@ class TestGenerateEmbeddingMarkerDispatch:
                 return_value=(None, None),
             ),
             patch("app.analysis.embedding.tasks.EmbeddingService") as mock_svc_cls,
-            patch(
-                "app.analysis.embedding.tasks._record_failure",
-                new=AsyncMock(),
-            ) as mock_audit,
+            _patch_audit_repository() as mock_audit_cls,
         ):
+            mock_audit_cls.return_value.append_failure = AsyncMock()
             mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
             with pytest.raises(EmbeddingResponseInvalidError):
                 await generate_embedding(trigger=trigger, ctx=ctx)
-        mock_audit.assert_awaited_once()
+        append_failure = mock_audit_cls.return_value.append_failure
+        append_failure.assert_awaited_once()
         assert isinstance(
-            mock_audit.await_args.kwargs["exc"], EmbeddingRecoverableError
+            append_failure.await_args.kwargs["exc"], EmbeddingRecoverableError
         )
 
     @pytest.mark.asyncio
@@ -278,17 +325,16 @@ class TestGenerateEmbeddingMarkerDispatch:
                 return_value=(None, None),
             ),
             patch("app.analysis.embedding.tasks.EmbeddingService") as mock_svc_cls,
-            patch(
-                "app.analysis.embedding.tasks._record_failure",
-                new=AsyncMock(),
-            ) as mock_audit,
+            _patch_audit_repository() as mock_audit_cls,
         ):
+            mock_audit_cls.return_value.append_failure = AsyncMock()
             mock_svc_cls.return_value.execute = AsyncMock(
                 side_effect=ValueError("surprise")
             )
             await generate_embedding(trigger=trigger, ctx=ctx)
-        mock_audit.assert_awaited_once()
-        assert isinstance(mock_audit.await_args.kwargs["exc"], ValueError)
+        append_failure = mock_audit_cls.return_value.append_failure
+        append_failure.assert_awaited_once()
+        assert isinstance(append_failure.await_args.kwargs["exc"], ValueError)
 
     @pytest.mark.asyncio
     async def test_unexpected_exception_records_and_raises_when_not_last(self) -> None:
@@ -305,181 +351,12 @@ class TestGenerateEmbeddingMarkerDispatch:
                 return_value=(None, None),
             ),
             patch("app.analysis.embedding.tasks.EmbeddingService") as mock_svc_cls,
-            patch(
-                "app.analysis.embedding.tasks._record_failure",
-                new=AsyncMock(),
-            ) as mock_audit,
+            _patch_audit_repository() as mock_audit_cls,
         ):
+            mock_audit_cls.return_value.append_failure = AsyncMock()
             mock_svc_cls.return_value.execute = AsyncMock(
                 side_effect=ValueError("surprise")
             )
             with pytest.raises(ValueError, match="surprise"):
                 await generate_embedding(trigger=trigger, ctx=ctx)
-        mock_audit.assert_awaited_once()
-
-
-# ---------------------------------------------------------------------------
-# _record_failure 直接呼出: 別 session で audit / 失敗時 log fallback / redact
-# ---------------------------------------------------------------------------
-
-
-async def _make_analysis(
-    db_session: AsyncSession,
-    sample_source: NewsSource,
-    sample_categories: list[Category],
-) -> tuple[InScopeAssessment, int]:
-    """Stage 4 完了済みの analysis を 1 件作成し (analysis, article_id) を返す。"""
-    article = Article(
-        source_id=sample_source.id,
-        source_url="https://e.com/a",  # type: ignore[arg-type]
-        original_title="t",
-        original_content="c" * 100,
-        published_at=datetime.now(UTC),
-    )
-    db_session.add(article)
-    await db_session.commit()
-    await db_session.refresh(article)
-    extraction = ArticleExtraction(
-        article_id=article.id,
-        translated_title="title",
-        summary="summary",
-    )
-    db_session.add(extraction)
-    await db_session.commit()
-    await db_session.refresh(extraction)
-    analysis = InScopeAssessment(
-        extraction_id=extraction.id,
-        translated_title="title",
-        summary="summary",
-        investor_take="take",
-        topic="topic",
-        category_id=sample_categories[0].id,
-    )
-    db_session.add(analysis)
-    await db_session.commit()
-    await db_session.refresh(analysis)
-    return analysis, article.id
-
-
-def _ready_for(analysis: InScopeAssessment, article_id: int) -> ReadyForEmbedding:
-    return ReadyForEmbedding(
-        analysis_id=analysis.id,
-        text_for_embedding="title\nsummary",
-        article_id=article_id,
-    )
-
-
-class TestRecordFailureHelper:
-    """``_record_failure`` private helper の直接テスト (Stage 4 と同形)。
-
-    Task 層 dispatch 経由ではなく helper 単体の挙動を検証する:
-    - 正常系: 別 session で 1 行 INSERT (業務 tx と独立)
-    - 異常系: session_factory が常に raise → ``embedding_failure_audit_dropped``
-      log fallback + business exception を再 raise しない
-    - 異常系 redact: business / audit exception の message に混入した
-      Authorization Bearer prefix がログ field から除去される (γ-2 対称化)
-    """
-
-    @pytest.mark.asyncio
-    async def test_records_failure_in_separate_session(
-        self,
-        db_session: AsyncSession,
-        session_factory: async_sessionmaker[AsyncSession],
-        sample_source: NewsSource,
-        sample_categories: list[Category],
-    ) -> None:
-        """別 session で audit が 1 行 INSERT される (業務 tx と独立)。"""
-        analysis, article_id = await _make_analysis(
-            db_session, sample_source, sample_categories
-        )
-        exc = EmbeddingRecoverableError("transient", code="ai_error_network")
-
-        await _record_failure(
-            session_factory,
-            ready=_ready_for(analysis, article_id),
-            exc=exc,
-            attempt=2,
-        )
-
-        rows = (await db_session.execute(select(PipelineEvent))).scalars().all()
-        assert len(rows) == 1
-        row = rows[0]
-        assert row.event_type == "failed"
-        assert row.attempt == 2
-        assert row.article_id == article_id
-        assert row.stage == "embedding"
-
-    @pytest.mark.asyncio
-    async def test_audit_insert_failure_logs_and_swallows(self) -> None:
-        """``session_factory`` が常に raise する場合、log fallback で観測可能。
-
-        business exception を再 raise しないことも同時に検証する
-        (業務 task を audit 失敗で殺さない、best-effort 運用シグナル)。
-        """
-
-        class _BoomFactory:
-            def __call__(self) -> Any:
-                raise RuntimeError("db down")
-
-        ready = ReadyForEmbedding(
-            analysis_id=42,
-            text_for_embedding="t\ns",
-            article_id=7,
-        )
-        business_exc = EmbeddingRecoverableError("net timeout", code="ai_error_network")
-
-        with capture_logs() as cap:
-            await _record_failure(
-                _BoomFactory(),  # type: ignore[arg-type]
-                ready=ready,
-                exc=business_exc,
-                attempt=3,
-            )
-
-        drops = [e for e in cap if e.get("event") == "embedding_failure_audit_dropped"]
-        assert drops, "fallback ログが emit されていない"
-        drop = drops[-1]
-        assert drop["analysis_id"] == 42
-        assert drop["attempt"] == 3
-        assert drop["business_error_class"].endswith(".EmbeddingRecoverableError")
-        assert drop["business_error_message"] == "net timeout"
-        assert drop["audit_error_class"].endswith(".RuntimeError")
-
-    @pytest.mark.asyncio
-    async def test_audit_insert_failure_log_redacts_secrets(self) -> None:
-        """log fallback の error_message field に secret prefix を漏らさない。
-
-        red-team chain γ-2 対称化: DB payload (``audit_repository.py``) と同様に
-        log 経路にも ``redact_secrets`` を通して Authorization Bearer / API key
-        prefix がログから消えていることを確認する。
-        """
-
-        class _BoomFactory:
-            def __call__(self) -> Any:
-                # audit_exc 側にも secret を混ぜて両方の redact を検証する
-                raise RuntimeError("boom Authorization: Bearer sk-live-AUDITSECRETxyz")
-
-        ready = ReadyForEmbedding(
-            analysis_id=99,
-            text_for_embedding="t\ns",
-            article_id=11,
-        )
-        # business_exc の message にも secret prefix を仕込む
-        business_exc = EmbeddingRecoverableError(
-            "upstream failed Authorization: Bearer sk-live-BUSINESSSECRETabc",
-            code="ai_error_network",
-        )
-
-        with capture_logs() as cap:
-            await _record_failure(
-                _BoomFactory(),  # type: ignore[arg-type]
-                ready=ready,
-                exc=business_exc,
-                attempt=1,
-            )
-
-        drops = [e for e in cap if e.get("event") == "embedding_failure_audit_dropped"]
-        assert drops, "fallback ログが emit されていない"
-        drop = drops[-1]
-        assert "sk-live-BUSINESSSECRETabc" not in drop["business_error_message"]
-        assert "sk-live-AUDITSECRETxyz" not in drop["audit_error_message"]
+        mock_audit_cls.return_value.append_failure.assert_awaited_once()

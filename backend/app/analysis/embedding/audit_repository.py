@@ -94,7 +94,8 @@ class EmbeddingAuditRepository:
         ``category`` / ``code`` は ``exc`` から自動導出 (Layer 1 marker
         ``isinstance`` 分岐 + instance 属性 ``exc.code`` 抽出)。Service と独立に
         Task 層 dispatch 経路から **別 session 別 tx** として呼ばれる
-        (caller は ``tasks.py::_record_failure`` private helper)。
+        (caller は ``tasks.py`` の task 関数末尾で別 session を開閉 + commit;
+        PR4 で helper 廃止、task 末尾に inline)。
         commit は caller 側で行う (本 method は単一行 append のみ)。
 
         ``error_chain`` は ``recording.py::_extract_error_chain`` を再利用して

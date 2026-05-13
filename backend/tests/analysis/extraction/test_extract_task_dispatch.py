@@ -1,13 +1,14 @@
 """``extract_content`` task の Layer 1 marker dispatch routing テスト (PR3.5-c)。
 
 Service の execute を mock して、tasks.py が **どの Layer 1 marker** を受けて
-**どこ** (mark_article_unprocessable / _record_failure / inline retry /
+**どこ** (mark_article_unprocessable / 末尾 inline audit / inline retry /
 catch-all) に振り分けるかを検証する。
 
 実 DB / 実 Service / 実 audit_repository は呼ばない:
 - ``ExtractionService`` を patch
-- ``_record_failure`` を patch (Stage 3 failure 経路の Task 層 private helper、
-  PR2 で ``failure_recording.py`` から移管)
+- ``ExtractionAuditRepository`` を patch (PR4: task 末尾の inline audit。
+  ``_record_failure`` helper は廃止、Task 層 inline ブロックが Repository を直
+  呼びする)
 - ``mark_article_unprocessable`` を patch
 
 PR3 案 3 化: task signature は ``trigger: ExtractionTrigger``。冒頭の Ready 自構築
@@ -147,18 +148,19 @@ async def test_keep_article_calls_audit_extraction_failure(
         ),
         patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
         patch(
-            "app.analysis.extraction.tasks._record_failure",
-            new=AsyncMock(),
-        ) as mock_audit,
+            "app.analysis.extraction.tasks.ExtractionAuditRepository"
+        ) as mock_audit_cls,
     ):
         svc_instance = mock_svc_cls.return_value
         svc_instance.execute = AsyncMock(side_effect=exc_cls("boom"))
         svc_instance.mark_article_unprocessable = AsyncMock()
+        mock_audit_cls.return_value.append_failure = AsyncMock()
         await extract_content(trigger=_trigger(), ctx=ctx)
-    mock_audit.assert_awaited_once()
-    assert mock_audit.await_args.kwargs["exc"].__class__ is exc_cls
+    append_failure = mock_audit_cls.return_value.append_failure
+    append_failure.assert_awaited_once()
+    assert append_failure.await_args.kwargs["exc"].__class__ is exc_cls
     # PR2: extractor を Task 層から渡している (failure_recording.py 統合)
-    assert mock_audit.await_args.kwargs["extractor"] is ctx.state.extractor
+    assert append_failure.await_args.kwargs["extractor"] is ctx.state.extractor
     # mark_article_unprocessable は呼ばれない
     svc_instance.mark_article_unprocessable.assert_not_awaited()
 
@@ -180,7 +182,11 @@ async def test_keep_article_calls_audit_extraction_failure(
 async def test_retryable_inline_true_raises_when_not_last_attempt(
     exc_cls: type[Exception],
 ) -> None:
-    """INLINE_RETRY=True の RetryableError は not is_last_attempt なら raise する。"""
+    """INLINE_RETRY=True の RetryableError は not is_last_attempt なら raise する。
+
+    PR4: Stage 3/4/5 統一に伴い、reraise=True でも raise 前に共通 audit を 1 行
+    焼く挙動に変更 (現状の Stage 3 「inline retry なら audit skip」は撤回)。
+    """
     from app.analysis.extraction.tasks import extract_content
 
     ctx = _make_ctx(retry_count=0, max_retries=1)  # retry 余地あり
@@ -191,10 +197,16 @@ async def test_retryable_inline_true_raises_when_not_last_attempt(
             "app.analysis.extraction.tasks._build_limiters", return_value=(None, None)
         ),
         patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
+        patch(
+            "app.analysis.extraction.tasks.ExtractionAuditRepository"
+        ) as mock_audit_cls,
     ):
+        mock_audit_cls.return_value.append_failure = AsyncMock()
         mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc_cls("boom"))
         with pytest.raises(exc_cls):
             await extract_content(trigger=_trigger(), ctx=ctx)
+    # raise 前に audit が 1 行焼かれる (Stage 4/5 と統一)
+    mock_audit_cls.return_value.append_failure.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -211,15 +223,15 @@ async def test_retryable_inline_true_audits_on_last_attempt() -> None:
         ),
         patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
         patch(
-            "app.analysis.extraction.tasks._record_failure",
-            new=AsyncMock(),
-        ) as mock_audit,
+            "app.analysis.extraction.tasks.ExtractionAuditRepository"
+        ) as mock_audit_cls,
     ):
         mock_svc_cls.return_value.execute = AsyncMock(
             side_effect=AIProviderNetworkError("connection reset")
         )
+        mock_audit_cls.return_value.append_failure = AsyncMock()
         await extract_content(trigger=_trigger(), ctx=ctx)
-    mock_audit.assert_awaited_once()
+    mock_audit_cls.return_value.append_failure.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
@@ -250,13 +262,13 @@ async def test_retryable_inline_false_audits_immediately(
         ),
         patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
         patch(
-            "app.analysis.extraction.tasks._record_failure",
-            new=AsyncMock(),
-        ) as mock_audit,
+            "app.analysis.extraction.tasks.ExtractionAuditRepository"
+        ) as mock_audit_cls,
     ):
         mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc_cls("boom"))
+        mock_audit_cls.return_value.append_failure = AsyncMock()
         await extract_content(trigger=_trigger(), ctx=ctx)
-    mock_audit.assert_awaited_once()
+    mock_audit_cls.return_value.append_failure.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
@@ -277,13 +289,14 @@ async def test_unexpected_exception_falls_through_to_catch_all() -> None:
         ),
         patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
         patch(
-            "app.analysis.extraction.tasks._record_failure",
-            new=AsyncMock(),
-        ) as mock_audit,
+            "app.analysis.extraction.tasks.ExtractionAuditRepository"
+        ) as mock_audit_cls,
     ):
         mock_svc_cls.return_value.execute = AsyncMock(
             side_effect=ValueError("surprise"),
         )
+        mock_audit_cls.return_value.append_failure = AsyncMock()
         await extract_content(trigger=_trigger(), ctx=ctx)
-    mock_audit.assert_awaited_once()
-    assert isinstance(mock_audit.await_args.kwargs["exc"], ValueError)
+    append_failure = mock_audit_cls.return_value.append_failure
+    append_failure.assert_awaited_once()
+    assert isinstance(append_failure.await_args.kwargs["exc"], ValueError)

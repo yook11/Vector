@@ -174,8 +174,8 @@ class ExtractionAuditRepository:
 
         ``category`` / ``code`` は ``exc`` から自動導出 (Layer 1 marker
         isinstance 分岐 + ``type(exc).CODE`` ClassVar 抽出)。Service と独立に
-        Task 層から呼ばれるため別 session (caller が tasks.py 内
-        ``_record_failure`` helper で開閉する)。
+        Task 層から呼ばれるため別 session (caller が ``tasks.py`` の task 関数
+        末尾で開閉 + commit する; PR4 で helper 廃止、task 末尾に inline)。
 
         失敗経路は envelope を持たない (AI 呼び出し前 or 中の失敗) ため
         ``ai_model`` / ``prompt_version`` は ``extractor`` ClassVar から

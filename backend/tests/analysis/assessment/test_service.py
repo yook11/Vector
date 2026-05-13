@@ -384,7 +384,7 @@ async def test_unknown_category_does_not_record_audit_in_service(
     sample_source: NewsSource,
 ) -> None:
     """``AssessmentCategoryMissingError`` 経路では Service が audit を焼かない
-    (失敗 audit は Task 層 ``_record_failure`` helper 経由で別 session に焼く責務)。
+    (失敗 audit は Task 層末尾の inline audit ブロックが別 session で焼く責務)。
     """
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)

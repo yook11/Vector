@@ -16,9 +16,13 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from structlog.testing import capture_logs
 
 from app.analysis.assessment.domain.ready import AssessmentTrigger
-from app.analysis.errors import AIProviderRateLimitedError
+from app.analysis.errors import (
+    AIProviderConfigurationError,
+    AIProviderRateLimitedError,
+)
 from app.analysis.extraction.domain.ready import ExtractionTrigger, ReadyForExtraction
 
 
@@ -177,16 +181,69 @@ class TestExtractContent:
             ),
             patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
             patch(
-                "app.analysis.extraction.tasks._record_failure",
-                new=AsyncMock(),
-            ) as mock_audit,
+                "app.analysis.extraction.tasks.ExtractionAuditRepository"
+            ) as mock_audit_cls,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
                 side_effect=AIProviderRateLimitedError("429"),
             )
+            mock_audit_cls.return_value.append_failure = AsyncMock()
             await extract_content(trigger=_trigger(), ctx=mock_ctx)
-        mock_audit.assert_awaited_once()
+        mock_audit_cls.return_value.append_failure.assert_awaited_once()
         # outcome_code 引数は廃止 (recording.py で内部導出)。exc が渡るのみ。
         assert isinstance(
-            mock_audit.await_args.kwargs["exc"], AIProviderRateLimitedError
+            mock_audit_cls.return_value.append_failure.await_args.kwargs["exc"],
+            AIProviderRateLimitedError,
         )
+
+    @pytest.mark.asyncio
+    async def test_audit_failure_falls_back_to_log(self) -> None:
+        """audit Repository が raise しても task は落ちず log fallback する。
+
+        PR4 で ``_record_failure`` helper を廃止し task 末尾の inline audit に
+        統一したため、helper 単体テストの代わりに「audit DB が落ちても業務
+        task は完走し ``extraction_failure_audit_dropped`` 構造ログが出る」
+        振る舞いを task 経由で検証する。同時に business / audit exception の
+        message に混入した secret prefix が log field から除去されることも
+        確認する (red-team chain γ-2 対称化)。
+        """
+        from app.analysis.extraction.tasks import extract_content
+
+        mock_ctx = _make_ctx(
+            extractor=_make_provider_fake(), retry_count=0, max_retries=1
+        )
+        business_exc = AIProviderConfigurationError(
+            "api key missing Authorization: Bearer sk-live-BUSINESSSECRETabc"
+        )
+
+        with (
+            _patch_try_advance_from(_fixed_ready()),
+            patch(
+                "app.analysis.extraction.tasks._build_limiters",
+                return_value=(None, None),
+            ),
+            patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
+            patch(
+                "app.analysis.extraction.tasks.ExtractionAuditRepository"
+            ) as mock_audit_cls,
+            capture_logs() as cap,
+        ):
+            mock_svc_cls.return_value.execute = AsyncMock(side_effect=business_exc)
+            mock_audit_cls.return_value.append_failure = AsyncMock(
+                side_effect=RuntimeError(
+                    "audit db down Authorization: Bearer sk-live-AUDITSECRETxyz"
+                )
+            )
+            # task は落ちずに完走する
+            await extract_content(trigger=_trigger(), ctx=mock_ctx)
+
+        drops = [e for e in cap if e.get("event") == "extraction_failure_audit_dropped"]
+        assert drops, "fallback ログが emit されていない"
+        drop = drops[-1]
+        assert drop["article_id"] == 1
+        assert drop["attempt"] == 1
+        assert drop["business_error_class"].endswith(".AIProviderConfigurationError")
+        assert drop["audit_error_class"].endswith(".RuntimeError")
+        # red-team chain γ-2: business / audit 両方の secret が redact される
+        assert "sk-live-BUSINESSSECRETabc" not in drop["business_error_message"]
+        assert "sk-live-AUDITSECRETxyz" not in drop["audit_error_message"]

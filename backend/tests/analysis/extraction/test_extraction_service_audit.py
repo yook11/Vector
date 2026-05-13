@@ -213,6 +213,6 @@ async def test_response_invalid_error_passes_through_without_service_audit(
             _extractor(side_effect=ExtractionResponseInvalidError("schema violation")),
         )
 
-    # Service は audit を焼かない (失敗経路は task 層 _record_failure 責務、PR2)
+    # Service は audit を焼かない (失敗経路は task 層末尾の inline audit 責務、PR4)
     events = await _fetch_extraction_events(db_session, article.id)
     assert len(events) == 0
