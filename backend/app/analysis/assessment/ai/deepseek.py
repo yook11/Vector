@@ -5,8 +5,10 @@ Function Calling + ``strict: true`` + inline flat schema で構造化出力を�
 PoC で ``$ref``/``$defs`` 経由の制約は AI が enforce しないことを確認済
 (specs/stage2-deepseek-migration.md)。
 
-Prompt 文面 / model / gen_config / tool schema は ``DeepSeekAssessmentPrompt``
-が SSoT。本 class は I/O 駆動 (SDK 例外翻訳) に責務を絞る。
+Prompt 文面は ``DeepSeekAssessmentPrompt`` が SSoT、call config (model /
+gen_config / response_schema / tool_name / base_url / version / rate_policy) は
+``DEEPSEEK_ASSESSMENT_SPEC`` (``spec.py``) が SSoT。本 class は I/O 駆動
+(SDK 例外翻訳) に責務を絞る。
 
 PR3 で:
 - 戻り値を ``AssessmentResult`` 直接 → ``AssessmentCall`` envelope に切り替え
@@ -53,31 +55,42 @@ from app.analysis.assessment.ai.base import BaseAssessor
 from app.analysis.assessment.ai.deepseek_prompt import DeepSeekAssessmentPrompt
 from app.analysis.assessment.ai.envelope import AssessmentCall
 from app.analysis.assessment.ai.parse import parse_assessment
+from app.analysis.assessment.ai.spec import (
+    DEEPSEEK_ASSESSMENT_SPEC,
+    DeepSeekAssessmentSpec,
+)
 from app.analysis.assessment.domain.result import InScope, OutOfScope
 from app.analysis.assessment.errors import AssessmentResponseInvalidError
+from app.analysis.rate_policy import RatePolicy
 from app.config import settings
 
 logger = structlog.get_logger(__name__)
-
-# DeepSeek beta endpoint (client constructor 用、Prompt 概念ではない)
-_BASE_URL: Final = "https://api.deepseek.com/beta"
 
 
 class DeepSeekAssessor(BaseAssessor):
     """BaseAssessor の DeepSeek-V4-Flash 実装。"""
 
-    PROVIDER = "deepseek"
-    MODEL = DeepSeekAssessmentPrompt.MODEL
-    # 公式の固定 RPM/RPD 公開なし。429 は OpenAI SDK の retry に任せ、
-    # Logfire 実測後に値を入れる方針 (別 PR)。
-    RPM: int | None = None
-    RPD: int | None = None
+    SPEC: Final[DeepSeekAssessmentSpec] = DEEPSEEK_ASSESSMENT_SPEC
 
     def __init__(self) -> None:
         api_key = settings.deepseek_api_key.get_secret_value()
         if not api_key:
             raise AIProviderConfigurationError("DEEPSEEK_API_KEY is not configured")
-        self._client = AsyncOpenAI(api_key=api_key, base_url=_BASE_URL)
+        self._client = AsyncOpenAI(api_key=api_key, base_url=self.SPEC.base_url)
+
+    # -- BaseAssessor property 契約 --
+
+    @property
+    def model_name(self) -> str:
+        return self.SPEC.model
+
+    @property
+    def prompt_version(self) -> str:
+        return self.SPEC.version
+
+    @property
+    def rate_policy(self) -> RatePolicy:
+        return self.SPEC.rate_policy
 
     async def assess(
         self,
@@ -99,9 +112,9 @@ class DeepSeekAssessor(BaseAssessor):
         ``parse_assessment`` でドメイン型 (``InScope`` / ``OutOfScope``) に
         詰め替え、raw 情報と共に ``AssessmentCall`` envelope に格納する。
         """
-        tool_name = DeepSeekAssessmentPrompt.TOOL_NAME
+        tool_name = self.SPEC.tool_name
         resp = await self._client.chat.completions.create(
-            model=DeepSeekAssessmentPrompt.MODEL,
+            model=self.SPEC.model,
             messages=[{"role": "user", "content": prompt}],
             tools=[
                 {
@@ -113,11 +126,11 @@ class DeepSeekAssessor(BaseAssessor):
                             "記事を Vector の 11 カテゴリのいずれか、"
                             "または out_of_scope に分類する"
                         ),
-                        "parameters": dict(DeepSeekAssessmentPrompt.RESPONSE_SCHEMA),
+                        "parameters": dict(self.SPEC.response_schema),
                     },
                 }
             ],
-            **DeepSeekAssessmentPrompt.GEN_CONFIG,
+            **self.SPEC.gen_config,
         )
 
         choice = resp.choices[0]
@@ -162,8 +175,8 @@ class DeepSeekAssessor(BaseAssessor):
                     raw_response=raw_arguments,
                     raw_category=raw_category,
                     raw_topic=raw_topic,
-                    prompt_version=DeepSeekAssessmentPrompt.VERSION,
-                    model_name=self.MODEL,
+                    prompt_version=self.SPEC.version,
+                    model_name=self.SPEC.model,
                 )
             case OutOfScope():
                 return AssessmentCall(
@@ -171,8 +184,8 @@ class DeepSeekAssessor(BaseAssessor):
                     raw_response=raw_arguments,
                     raw_category=raw_category,
                     raw_topic=raw_topic,
-                    prompt_version=DeepSeekAssessmentPrompt.VERSION,
-                    model_name=self.MODEL,
+                    prompt_version=self.SPEC.version,
+                    model_name=self.SPEC.model,
                 )
 
     def _translate_error(self, exc: Exception) -> Exception:

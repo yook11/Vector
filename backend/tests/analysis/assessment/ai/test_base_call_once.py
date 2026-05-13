@@ -28,14 +28,23 @@ from app.analysis.assessment.errors import (
     AssessmentResponseInvalidError,
     AssessmentTerminalSkipError,
 )
+from app.analysis.rate_policy import RatePolicy
 
 
 class _StubAssessor(BaseAssessor):
     """テスト用の最小 BaseAssessor 派生 (abstract method を mock で差し替える)。"""
 
-    MODEL = "test-model"
-    RPM = None
-    RPD = None
+    @property
+    def model_name(self) -> str:
+        return "test-model"
+
+    @property
+    def prompt_version(self) -> str:
+        return "abc12345"
+
+    @property
+    def rate_policy(self) -> RatePolicy:
+        return RatePolicy(provider="test", model="test-model", rpm=None, rpd=None)
 
     def __init__(self) -> None:
         # client 不要 (mock で _call_api を差し替えるため)

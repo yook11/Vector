@@ -150,7 +150,7 @@ async def _wire_analysis_adapters(state: TaskiqState) -> None:
         extractor=type(state.extractor).__name__,
         extractor_model=state.extractor.model_name,
         assessor=type(state.assessor).__name__,
-        assessor_model=state.assessor.MODEL,
+        assessor_model=state.assessor.model_name,
     )
 
 

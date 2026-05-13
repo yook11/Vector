@@ -39,8 +39,8 @@ class AssessmentCall[T: AssessmentResult]:
         raw_topic: AI が出力した topic 文字列 (詰め替え前、``OutOfScope`` 経路でも
             保持)。``parse_assessment`` の strict 化により ``str`` 型は保証される。
         prompt_version: 呼び出し元 Prompt class の VERSION (8 文字 hash)。
-        model_name: ``BaseAssessor.MODEL`` ClassVar の値。Repository / Audit が
-            ``call.model_name`` で参照する (caller が ``ai_model`` を別引数で
+        model_name: ``BaseAssessor.model_name`` property の値。Repository / Audit
+            が ``call.model_name`` で参照する (caller が ``ai_model`` を別引数で
             引き回さない、`feedback_bc_boundary_guarantees_downstream`)。
     """
 

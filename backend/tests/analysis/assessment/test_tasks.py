@@ -9,6 +9,7 @@
 - out-of-scope / race lost (``None`` 返却) は chain しないこと
 - rate limit (``AIProviderRateLimitedError``) 経路で Handler に委譲され、
   ``reraise`` 戻り値で raise/return が決まること
+- gate.acquire=False (quota skip) → svc.execute も Handler も呼ばずに return
 
 Layer 1 marker dispatch ルーティングは ``test_assess_task_dispatch.py`` 側で
 網羅する。Handler 内部の audit 経路は ``test_failure_handler.py`` で integration
@@ -19,6 +20,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from structlog.testing import capture_logs
 
 from app.analysis.ai_provider_errors import AIProviderRateLimitedError
 from app.analysis.assessment.domain.ready import (
@@ -26,15 +28,18 @@ from app.analysis.assessment.domain.ready import (
     ReadyForAssessment,
 )
 from app.analysis.embedding.domain.ready import EmbeddingTrigger
+from app.analysis.rate_policy import RatePolicy
 
 
 def _make_provider_fake() -> MagicMock:
-    """assessor 用のスタブ。PROVIDER/MODEL/RPM/RPD を持つ。"""
+    """assessor 用のスタブ。property 契約 (model_name / prompt_version /
+    rate_policy) を持つ。"""
     fake = MagicMock()
-    fake.PROVIDER = "gemini"
-    fake.MODEL = "test-model"
-    fake.RPM = 50
-    fake.RPD = 1500
+    fake.model_name = "test-model"
+    fake.prompt_version = "abc12345"
+    fake.rate_policy = RatePolicy(
+        provider="gemini", model="test-model", rpm=50, rpd=1500
+    )
     return fake
 
 
@@ -43,10 +48,17 @@ def _make_ctx(
     assessor: MagicMock | None = None,
     retry_count: int = 0,
     max_retries: int = 0,
+    gate_acquire: bool = True,
 ) -> MagicMock:
-    """taskiq Context モック。"""
+    """taskiq Context モック。``provider_rate_limit_gate.acquire`` は
+    ``gate_acquire`` で True / False を選ぶ。"""
     ctx = MagicMock()
-    ctx.state = SimpleNamespace(session_factory=MagicMock())
+    gate = MagicMock()
+    gate.acquire = AsyncMock(return_value=gate_acquire)
+    ctx.state = SimpleNamespace(
+        session_factory=MagicMock(),
+        provider_rate_limit_gate=gate,
+    )
     if assessor is not None:
         ctx.state.assessor = assessor
     ctx.message.labels = {
@@ -97,15 +109,12 @@ class TestAssessContent:
 
         with (
             _patch_ready_construction(None),
-            patch(
-                "app.analysis.assessment.tasks._build_limiters",
-            ) as mock_limiters,
             patch("app.analysis.assessment.tasks.AssessmentService") as mock_svc_cls,
         ):
             await assess_content(trigger=trigger, ctx=ctx)
 
         # rate limit acquire は試みず、Service も呼ばない
-        mock_limiters.assert_not_called()
+        ctx.state.provider_rate_limit_gate.acquire.assert_not_called()
         mock_svc_cls.assert_not_called()
 
     @pytest.mark.asyncio
@@ -124,10 +133,6 @@ class TestAssessContent:
 
         with (
             _patch_ready_construction(ready),
-            patch(
-                "app.analysis.assessment.tasks._build_limiters",
-                return_value=(None, None),
-            ),
             patch("app.analysis.assessment.tasks.AssessmentService") as mock_svc_cls,
             patch("app.analysis.assessment.tasks.generate_embedding") as mock_embed,
         ):
@@ -155,10 +160,6 @@ class TestAssessContent:
 
         with (
             _patch_ready_construction(_make_ready(extraction_id=2)),
-            patch(
-                "app.analysis.assessment.tasks._build_limiters",
-                return_value=(None, None),
-            ),
             patch("app.analysis.assessment.tasks.AssessmentService") as mock_svc_cls,
             patch("app.analysis.assessment.tasks.generate_embedding") as mock_embed,
         ):
@@ -167,6 +168,28 @@ class TestAssessContent:
             await assess_content(trigger=trigger, ctx=mock_ctx)
 
         mock_embed.kiq.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_quota_skip_returns_without_invoking_service(self) -> None:
+        """gate.acquire=False の場合 quota log + return、Service は呼ばない。"""
+        from app.analysis.assessment.tasks import assess_content
+
+        mock_ctx = _make_ctx(assessor=_make_provider_fake(), gate_acquire=False)
+        trigger = _make_trigger()
+
+        with (
+            _patch_ready_construction(_make_ready()),
+            patch("app.analysis.assessment.tasks.AssessmentService") as mock_svc_cls,
+            patch("app.analysis.assessment.tasks.generate_embedding") as mock_embed,
+            capture_logs() as cap,
+        ):
+            mock_embed.kiq = AsyncMock()
+            await assess_content(trigger=trigger, ctx=mock_ctx)
+
+        mock_svc_cls.assert_not_called()
+        mock_embed.kiq.assert_not_called()
+        warnings = [e for e in cap if e.get("event") == "assess_content_daily_quota"]
+        assert warnings, "quota skip 時の warning log が emit されていない"
 
     @pytest.mark.asyncio
     async def test_rate_limit_raises_for_retry(self) -> None:
@@ -185,10 +208,6 @@ class TestAssessContent:
 
         with (
             _patch_ready_construction(_make_ready()),
-            patch(
-                "app.analysis.assessment.tasks._build_limiters",
-                return_value=(None, None),
-            ),
             patch("app.analysis.assessment.tasks.AssessmentService") as mock_svc_cls,
             patch(
                 "app.analysis.assessment.tasks.AssessmentFailureHandler"
@@ -213,10 +232,6 @@ class TestAssessContent:
 
         with (
             _patch_ready_construction(_make_ready()),
-            patch(
-                "app.analysis.assessment.tasks._build_limiters",
-                return_value=(None, None),
-            ),
             patch("app.analysis.assessment.tasks.AssessmentService") as mock_svc_cls,
             patch(
                 "app.analysis.assessment.tasks.AssessmentFailureHandler"

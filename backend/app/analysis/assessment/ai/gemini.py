@@ -1,7 +1,9 @@
 """Gemini 実装の Assessor — Stage 4。
 
-Prompt 文面 / model / gen_config / response schema は ``GeminiAssessmentPrompt``
-が SSoT。本 class は I/O 駆動 (rate limit + SDK 例外翻訳) に責務を絞る。
+Prompt 文面は ``GeminiAssessmentPrompt`` が SSoT、call config (model /
+gen_config / response_schema / version / rate_policy) は
+``GEMINI_ASSESSMENT_SPEC`` (``spec.py``) が SSoT。本 class は I/O 駆動
+(rate limit + SDK 例外翻訳) に責務を絞る。
 
 PR3 で:
 - 戻り値を ``AssessmentResult`` 直接 → ``AssessmentCall`` envelope に切り替え
@@ -16,6 +18,7 @@ PR3 で:
 from __future__ import annotations
 
 import json
+from typing import Final
 
 import structlog
 from google import genai
@@ -29,9 +32,14 @@ from app.analysis.assessment.ai.base import BaseAssessor
 from app.analysis.assessment.ai.envelope import AssessmentCall
 from app.analysis.assessment.ai.gemini_prompt import GeminiAssessmentPrompt
 from app.analysis.assessment.ai.parse import parse_assessment
+from app.analysis.assessment.ai.spec import (
+    GEMINI_ASSESSMENT_SPEC,
+    AssessmentCallSpec,
+)
 from app.analysis.assessment.domain.result import InScope, OutOfScope
 from app.analysis.assessment.errors import AssessmentResponseInvalidError
 from app.analysis.gemini_error_translator import translate_gemini_error
+from app.analysis.rate_policy import RatePolicy
 from app.config import settings
 
 logger = structlog.get_logger(__name__)
@@ -45,16 +53,27 @@ _BLOCKED_FINISH_REASONS = frozenset({"SAFETY", "RECITATION"})
 class GeminiAssessor(BaseAssessor):
     """BaseAssessor の Gemini API 実装。"""
 
-    PROVIDER = "gemini"
-    MODEL = GeminiAssessmentPrompt.MODEL
-    RPM = 100
-    RPD = 1500
+    SPEC: Final[AssessmentCallSpec] = GEMINI_ASSESSMENT_SPEC
 
     def __init__(self) -> None:
         api_key = settings.gemini_api_key.get_secret_value()
         if not api_key:
             raise AIProviderConfigurationError("GEMINI_API_KEY is not configured")
         self._client = genai.Client(api_key=api_key)
+
+    # -- BaseAssessor property 契約 --
+
+    @property
+    def model_name(self) -> str:
+        return self.SPEC.model
+
+    @property
+    def prompt_version(self) -> str:
+        return self.SPEC.version
+
+    @property
+    def rate_policy(self) -> RatePolicy:
+        return self.SPEC.rate_policy
 
     async def assess(
         self,
@@ -75,11 +94,11 @@ class GeminiAssessor(BaseAssessor):
         ``AssessmentCall`` envelope に格納する。
         """
         response = await self._client.aio.models.generate_content(
-            model=GeminiAssessmentPrompt.MODEL,
+            model=self.SPEC.model,
             contents=prompt,
             config=GenerateContentConfig(
-                **GeminiAssessmentPrompt.GEN_CONFIG,
-                response_schema=dict(GeminiAssessmentPrompt.RESPONSE_SCHEMA),
+                **self.SPEC.gen_config,
+                response_schema=dict(self.SPEC.response_schema),
             ),
         )
 
@@ -121,8 +140,8 @@ class GeminiAssessor(BaseAssessor):
                     raw_response=text,
                     raw_category=raw_category,
                     raw_topic=raw_topic,
-                    prompt_version=GeminiAssessmentPrompt.VERSION,
-                    model_name=self.MODEL,
+                    prompt_version=self.SPEC.version,
+                    model_name=self.SPEC.model,
                 )
             case OutOfScope():
                 return AssessmentCall(
@@ -130,8 +149,8 @@ class GeminiAssessor(BaseAssessor):
                     raw_response=text,
                     raw_category=raw_category,
                     raw_topic=raw_topic,
-                    prompt_version=GeminiAssessmentPrompt.VERSION,
-                    model_name=self.MODEL,
+                    prompt_version=self.SPEC.version,
+                    model_name=self.SPEC.model,
                 )
 
     @staticmethod

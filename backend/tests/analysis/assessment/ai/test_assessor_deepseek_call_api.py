@@ -22,8 +22,8 @@ import pytest
 from pydantic import SecretStr
 
 from app.analysis.assessment.ai.deepseek import DeepSeekAssessor
-from app.analysis.assessment.ai.deepseek_prompt import DeepSeekAssessmentPrompt
 from app.analysis.assessment.ai.envelope import AssessmentCall
+from app.analysis.assessment.ai.spec import DEEPSEEK_ASSESSMENT_SPEC
 from app.analysis.assessment.domain.result import InScope, InScopeCategory, OutOfScope
 from app.analysis.assessment.errors import AssessmentResponseInvalidError
 from app.config import settings
@@ -37,7 +37,7 @@ def _set_deepseek_key(monkeypatch: pytest.MonkeyPatch) -> None:
 def _stub_response(
     *,
     arguments: str | None,
-    tool_name: str = DeepSeekAssessmentPrompt.TOOL_NAME,
+    tool_name: str = DEEPSEEK_ASSESSMENT_SPEC.tool_name,
     finish_reason: str = "tool_calls",
     no_tool_calls: bool = False,
 ) -> MagicMock:
@@ -94,8 +94,8 @@ class TestDeepSeekCallApiSuccess:
         assert call.raw_response == args
         assert call.raw_category == "ai"
         assert call.raw_topic == "ai agents"
-        assert call.prompt_version == DeepSeekAssessmentPrompt.VERSION
-        assert call.model_name == DeepSeekAssessmentPrompt.MODEL
+        assert call.prompt_version == DEEPSEEK_ASSESSMENT_SPEC.version
+        assert call.model_name == DEEPSEEK_ASSESSMENT_SPEC.model
 
     @pytest.mark.asyncio
     async def test_out_of_scope_round_trip(self) -> None:
@@ -115,7 +115,7 @@ class TestDeepSeekCallApiSuccess:
         assert isinstance(call.result, OutOfScope)
         assert call.raw_category == "out_of_scope"
         assert call.raw_topic == "ignored"
-        assert call.model_name == DeepSeekAssessmentPrompt.MODEL
+        assert call.model_name == DEEPSEEK_ASSESSMENT_SPEC.model
 
 
 # ---------------------------------------------------------------------------

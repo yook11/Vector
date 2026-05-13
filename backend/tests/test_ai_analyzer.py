@@ -219,21 +219,22 @@ def test_base_extractor_rejects_subclass_without_abstract_properties() -> None:
         BadExtractor()  # type: ignore[abstract]
 
 
-def test_base_assessor_rejects_subclass_without_classvar() -> None:
-    with pytest.raises(TypeError, match="must define ClassVar"):
+def test_base_assessor_rejects_subclass_without_property_contract() -> None:
+    """abstract property (model_name / prompt_version / rate_policy) を実装しない
+    sub class は instantiate 時に ``TypeError: Can't instantiate abstract class``
+    で reject される。"""
 
-        class BadAssessor(BaseAssessor):
-            MODEL = "test"
-            RPM = 10
-            # RPD は未定義
+    class BadAssessor(BaseAssessor):
+        # model_name / prompt_version / rate_policy property を実装しない
 
-            async def assess(
-                self, title_ja, summary_ja, entities, existing_topics_by_category=None
-            ): ...
+        async def assess(self, title_ja, summary_ja): ...
 
-            async def _call_api(self, prompt): ...
+        async def _call_api(self, prompt): ...
 
-            def _translate_error(self, exc): ...
+        def _translate_error(self, exc): ...
+
+    with pytest.raises(TypeError, match="abstract"):
+        BadAssessor()  # type: ignore[abstract]
 
 
 # --- B. ExtractionResult domain tests ---
@@ -759,7 +760,6 @@ async def test_assessment_persists_topic_and_category(
     assert expected_category_id is not None
 
     mock_assessor = MagicMock(spec=BaseAssessor)
-    mock_assessor.MODEL = "gemini-2.5-flash-lite"
     mock_assessor.model_name = "gemini-2.5-flash-lite"
     # PR3: assessor 戻り値を AssessmentCall envelope に追従
     mock_assessor.assess = AsyncMock(
@@ -815,7 +815,6 @@ async def test_assessment_persists_rejection_when_out_of_scope(
     await db_session.commit()
 
     mock_assessor = MagicMock(spec=BaseAssessor)
-    mock_assessor.MODEL = "gemini-2.5-flash-lite"
     mock_assessor.model_name = "gemini-2.5-flash-lite"
     # PR3: assessor 戻り値を AssessmentCall envelope に追従
     mock_assessor.assess = AsyncMock(

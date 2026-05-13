@@ -22,7 +22,6 @@ from __future__ import annotations
 import structlog
 from taskiq import Context, TaskiqDepends
 
-from app.analysis._limiter_factory import _build_limiters
 from app.analysis.assessment.ai.base import BaseAssessor
 from app.analysis.assessment.domain.ready import (
     AssessmentTrigger,
@@ -33,10 +32,6 @@ from app.analysis.assessment.repository import AssessmentRepository
 from app.analysis.assessment.service import AssessmentService
 from app.analysis.embedding.domain.ready import EmbeddingTrigger
 from app.analysis.embedding.tasks import generate_embedding
-from app.analysis.rate_limiter import (
-    RateLimitExceededError as _RateLimitExceededError,
-)
-from app.analysis.rate_policy import RatePolicy
 from app.brokers import broker_analysis, is_last_attempt
 
 logger = structlog.get_logger(__name__)
@@ -84,14 +79,8 @@ async def assess_content(
         )
         return
 
-    # AI を呼ぶ見込みが立ってから rate limit acquire
-    rpm_limiter, rpd_limiter = _build_limiters(RatePolicy.from_component(assessor))
-    try:
-        if rpd_limiter is not None:
-            await rpd_limiter.acquire()
-        if rpm_limiter is not None:
-            await rpm_limiter.acquire()
-    except _RateLimitExceededError:
+    # AI を呼ぶ見込みが立ってから rate limit acquire (Stage 3 / Stage 5 と対称)
+    if not await ctx.state.provider_rate_limit_gate.acquire(assessor.rate_policy):
         logger.warning(
             "assess_content_daily_quota",
             extraction_id=ready.extraction_id,

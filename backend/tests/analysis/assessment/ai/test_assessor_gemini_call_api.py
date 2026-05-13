@@ -24,7 +24,7 @@ from pydantic import SecretStr
 from app.analysis.ai_provider_errors import AIProviderOutputBlockedError
 from app.analysis.assessment.ai.envelope import AssessmentCall
 from app.analysis.assessment.ai.gemini import GeminiAssessor
-from app.analysis.assessment.ai.gemini_prompt import GeminiAssessmentPrompt
+from app.analysis.assessment.ai.spec import GEMINI_ASSESSMENT_SPEC
 from app.analysis.assessment.domain.result import InScope, InScopeCategory, OutOfScope
 from app.analysis.assessment.errors import AssessmentResponseInvalidError
 from app.config import settings
@@ -88,8 +88,8 @@ class TestGeminiCallApiSuccess:
         assert call.raw_response == text
         assert call.raw_category == "ai"
         assert call.raw_topic == "ai agents"
-        assert call.prompt_version == GeminiAssessmentPrompt.VERSION
-        assert call.model_name == GeminiAssessmentPrompt.MODEL
+        assert call.prompt_version == GEMINI_ASSESSMENT_SPEC.version
+        assert call.model_name == GEMINI_ASSESSMENT_SPEC.model
 
     @pytest.mark.asyncio
     async def test_out_of_scope_round_trip(self) -> None:
@@ -110,7 +110,7 @@ class TestGeminiCallApiSuccess:
         assert call.result.investor_take == "Not relevant."
         assert call.raw_category == "out_of_scope"
         assert call.raw_topic == "ignored"  # OutOfScope 経路でも raw_topic 保持
-        assert call.model_name == GeminiAssessmentPrompt.MODEL
+        assert call.model_name == GEMINI_ASSESSMENT_SPEC.model
 
     @pytest.mark.asyncio
     async def test_uses_dict_response_schema(self) -> None:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import abc
-from typing import ClassVar
 
 import structlog
 
@@ -11,6 +10,7 @@ from app.analysis.ai_provider_errors import AIProviderError
 from app.analysis.assessment.ai.envelope import AssessmentCall
 from app.analysis.assessment.domain.result import InScope, OutOfScope
 from app.analysis.assessment.errors import AssessmentError
+from app.analysis.rate_policy import RatePolicy
 
 logger = structlog.get_logger(__name__)
 
@@ -33,28 +33,34 @@ class BaseAssessor(abc.ABC):
     - ``_translate_error``: SDK 例外を ``AIProvider*Error`` に翻訳する
       (マップ未知は ``return exc`` で caller の bare re-raise に委譲する規約)
 
-    また以下の ClassVar を宣言する必要がある:
-    - ``MODEL``: モデル識別子
-    - ``RPM``: 1 分あたりリクエスト上限。無制限なら ``None``
-    - ``RPD``: 1 日あたりリクエスト上限。無制限なら ``None``
+    また以下 3 つの abstract property を備える必要がある (構造保証は abc の
+    abstract method 検査で得る、ClassVar 強制は持たない):
+
+    - ``model_name``: モデル識別子
+    - ``prompt_version``: プロンプト version 識別子 (失敗 audit の
+      ``prompt_version`` を埋めるために必須、成功時は envelope が SSoT)
+    - ``rate_policy``: provider/model/rpm/rpd を保持する VO
     """
 
-    MODEL: ClassVar[str]
-    RPM: ClassVar[int | None]
-    RPD: ClassVar[int | None]
-
-    def __init_subclass__(cls, **kwargs: object) -> None:
-        super().__init_subclass__(**kwargs)
-        if getattr(cls, "__abstractmethods__", None):
-            return
-        for attr in ("MODEL", "RPM", "RPD"):
-            if attr not in cls.__dict__:
-                raise TypeError(f"{cls.__name__} must define ClassVar '{attr}'")
+    # -- 抽象 property (call spec exposure) --
 
     @property
+    @abc.abstractmethod
     def model_name(self) -> str:
         """モデル識別子。"""
-        return self.MODEL
+        ...
+
+    @property
+    @abc.abstractmethod
+    def prompt_version(self) -> str:
+        """プロンプト version 識別子 (8 文字 hash)。"""
+        ...
+
+    @property
+    @abc.abstractmethod
+    def rate_policy(self) -> RatePolicy:
+        """provider × model × RPM × RPD の rate limit policy。"""
+        ...
 
     # -- 抽象フック --
 
