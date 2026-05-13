@@ -11,12 +11,12 @@ Fetcher の ``AsyncIterator[FetchOutcome]`` を回し ``match`` で分岐する:
   (``None`` → ``known_url`` skip)。caller (``ingest_source`` task) は
   返却された ``article_id`` を ``ExtractionTrigger`` に詰めて
   ``extract_content.kiq`` に chain する。
-- ``FetchedEntry(item=IncompleteArticle)`` → ``seen_repo.exists_by_source_url``
+- ``FetchedEntry(item=IncompleteArticle)`` → ``article_repo.exists_by_source_url``
   pre-check で feed 再露出を弾き、``pending_html_articles.url`` で投入
   (Pattern H)。``url`` は ``CanonicalArticleUrl`` 型で canonical 保証済。
   下流は cron poller (``dispatch_html_fetch_jobs``) が DB 駆動で拾うため、
   Service / Task は pending_id を caller に渡さない (Outcome 純化原則)。
-- ``Failed`` → 構造化ログ + ``failed_codes`` 集計、永続化に流れない。
+- ``SourceFetchFailed`` → 構造化ログ + ``failed_codes`` 集計、永続化に流れない。
 
 ``commit`` までが Service の責務。``NewsSource`` ORM の lookup は
 ``IngestSourceArg`` (=task envelope) で済んでいるため本 Service では行わない。
@@ -33,19 +33,18 @@ from typing import Any
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.collection.article.domain.article import ArticleDraft, ReadyForArticle
+from app.collection.article.repository import ArticleRepository
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
-from app.collection.extraction.domain.article import ArticleDraft
-from app.collection.extraction.repository import ArticleRepository
+from app.collection.fetchers.outcome import FetchedEntry, SourceFetchFailed
 from app.collection.fetchers.protocol import Fetcher
-from app.collection.ingestion.article_seen_repository import ArticleSeenRepository
-from app.collection.ingestion.domain.fetched_article import (
-    Failed,
-    FetchedEntry,
+from app.collection.incomplete_article.domain.incomplete_article import (
     IncompleteArticle,
-    ReadyForArticle,
 )
-from app.collection.ingestion.pending_repository import PendingHtmlArticleRepository
-from app.collection.ingestion.staged_attributes import StagedArticleAttributes
+from app.collection.incomplete_article.domain.staged_attributes import (
+    StagedArticleAttributes,
+)
+from app.collection.incomplete_article.repository import PendingHtmlArticleRepository
 from app.observability.domain.event import EventType, Stage
 from app.observability.domain.payloads import SourceFetchPayload
 from app.observability.repository import PipelineEventRepository
@@ -74,7 +73,6 @@ class IngestionService:
         async with self._session_factory() as session:
             fetcher = self._fetcher_factory()
             article_repo = ArticleRepository(session)
-            seen_repo = ArticleSeenRepository(session)
             pending_repo = PendingHtmlArticleRepository(session)
 
             persisted_ids: list[int] = []
@@ -110,7 +108,9 @@ class IngestionService:
                             )
                             # pre-check: feed 再露出時に既知 URL の HTML fetch を
                             # 反復しないための実用的 idempotency (ロックではない)
-                            if await seen_repo.exists_by_source_url(pending.source_url):
+                            if await article_repo.exists_by_source_url(
+                                pending.source_url
+                            ):
                                 skipped_codes["known_url"] += 1
                                 continue
                             pending_id = await pending_repo.create(
@@ -129,7 +129,7 @@ class IngestionService:
                                 skipped_codes["existing_pending"] += 1
                                 continue
                             completion_queued += 1
-                        case Failed(reason=r):
+                        case SourceFetchFailed(reason=r):
                             failed_codes[r.code] += 1
                             logger.warning(
                                 "ingest_source_entry_failed",

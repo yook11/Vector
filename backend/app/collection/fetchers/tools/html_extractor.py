@@ -2,9 +2,9 @@
 
 collection-acquisition-redesign Phase 0c。旧 extractor は
 ``ExtractedContent | ExtractionEmpty`` の sum 型を返していたが、本道具は
-**例外で失敗を表現** する: 上流 Fetcher が ``FetchOutcome.Failed`` を構築する
+**例外で失敗を表現** する: 上流 Fetcher が ``FetchOutcome.SourceFetchFailed`` を構築する
 際の分類軸 (``FailureCode``) と直接対応させるため、抽出失敗 / 品質ゲート未達
-の概念を Failed 側に統一する。
+の概念を SourceFetchFailed 側に統一する。
 
 旧 ``ArticleHtmlExtractor`` (``app/collection/extraction/extractor.py``) は
 Phase 2a まで温存し物理削除しない。本モジュールは意図的なロジックコピーで
@@ -27,8 +27,8 @@ import httpx
 import structlog
 import trafilatura
 
+from app.collection.article.domain.value_objects import PublishedAt
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
-from app.collection.extraction.domain.value_objects import PublishedAt
 from app.shared.security.safe_http import make_safe_async_client
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 from app.shared.value_objects.safe_url import SafeUrl

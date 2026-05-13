@@ -47,6 +47,7 @@ from app.collection.fetchers.nasa import NASAFetcher
 from app.collection.fetchers.nist import NISTFetcher
 from app.collection.fetchers.nsf import NSFFetcher
 from app.collection.fetchers.openai import OpenAIFetcher
+from app.collection.fetchers.outcome import FetchOutcome
 from app.collection.fetchers.plos_one import PLOSOneFetcher
 from app.collection.fetchers.protocol import Fetcher
 from app.collection.fetchers.quantum_insider import QuantumInsiderFetcher
@@ -55,7 +56,6 @@ from app.collection.fetchers.spacenews import SpaceNewsFetcher
 from app.collection.fetchers.techcrunch import TechCrunchFetcher
 from app.collection.fetchers.the_register import TheRegisterFetcher
 from app.collection.fetchers.venturebeat import VentureBeatFetcher
-from app.collection.ingestion.domain.fetched_article import FetchOutcome
 from tests.collection.fetchers._invariant import (
     assert_at_least_one_passport,
     assert_metadata_audit_safe,

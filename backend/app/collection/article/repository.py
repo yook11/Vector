@@ -1,4 +1,4 @@
-"""Extraction リポジトリ — Article の永続化と読み出し。
+"""``article`` aggregate の永続化と読み出し。
 
 責務:
 
@@ -8,6 +8,11 @@
   構造的に解消し、既に他ワーカーが書き込み済みなら ``None`` を返す。
 - ``ArticleRepository.find_by_source_url``: 並行レース敗北時の
   読み戻し用に Article Entity を取得する。
+- ``ArticleRepository.exists_by_source_url``: Pattern H ingestion の
+  pre-check 用 (feed 再露出時に既知 URL の pending 化を回避し、HTML
+  fetch の反復コストを抑える)。これはロックではなく実用上の
+  idempotency で、同 tick race は ``save`` 側の
+  ``ON CONFLICT DO NOTHING`` が吸収する。
 """
 
 from __future__ import annotations
@@ -19,8 +24,8 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from app.collection.extraction.domain import Article, PublishedAt
-from app.collection.extraction.domain.article import ArticleDraft
+from app.collection.article.domain.article import Article, ArticleDraft
+from app.collection.article.domain.value_objects import PublishedAt
 from app.models.article import Article as ArticleORM
 from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 
@@ -112,3 +117,14 @@ class ArticleRepository:
         stmt = select(ArticleORM).where(ArticleORM.source_url == source_url)
         orm = (await self._session.execute(stmt)).scalar_one_or_none()
         return _article_from_orm(orm) if orm is not None else None
+
+    async def exists_by_source_url(self, source_url: CanonicalArticleUrl) -> bool:
+        """``source_url`` を持つ ``articles`` 行が既に存在するかを軽量確認する。
+
+        Pattern H ingestion の pre-check 用 (feed 再露出時に既知 URL の
+        pending 化を回避し、HTML fetch の反復コストを抑える)。これはロックでは
+        なく実用上の idempotency で、同 tick race は ``save`` 側の
+        ``ON CONFLICT DO NOTHING`` が吸収する。
+        """
+        stmt = select(ArticleORM.id).where(ArticleORM.source_url == source_url).limit(1)
+        return (await self._session.execute(stmt)).scalar_one_or_none() is not None

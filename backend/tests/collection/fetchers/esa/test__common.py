@@ -13,10 +13,12 @@ from app.collection.fetchers.esa._common import (
     BaseDjangoplicityFetcher,
     _normalize_language,
 )
-from app.collection.ingestion.domain.fetched_article import (
-    Failed,
+from app.collection.fetchers.outcome import (
     FetchedEntry,
     FetchOutcome,
+    SourceFetchFailed,
+)
+from app.collection.incomplete_article.domain.incomplete_article import (
     IncompleteArticle,
 )
 from tests.collection.fetchers._invariant import (
@@ -81,14 +83,14 @@ def test_metadata_audit_safe() -> None:
 def test_empty_title_returns_failed_not_corrupt_passport() -> None:
     fetcher = _DummyFetcher()
     outcome = fetcher._convert_entry(_entry(title=""), 1, "en")
-    assert isinstance(outcome, Failed)
+    assert isinstance(outcome, SourceFetchFailed)
     assert outcome.reason.code == "title_missing"
 
 
 def test_invalid_link_returns_failed() -> None:
     fetcher = _DummyFetcher()
     outcome = fetcher._convert_entry(_entry(link="not-a-url"), 1, "en")
-    assert isinstance(outcome, Failed)
+    assert isinstance(outcome, SourceFetchFailed)
     assert outcome.reason.code == "extraction_empty"
 
 

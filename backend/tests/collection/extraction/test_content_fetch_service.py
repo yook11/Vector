@@ -24,18 +24,20 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
+from app.collection.article.domain.value_objects import PublishedAt
 from app.collection.errors import (
     PermanentFetchError,
     ServerErrorBlip,
     ServerErrorOutage,
 )
 from app.collection.extraction.content_fetch_service import ContentFetchService
-from app.collection.extraction.domain.value_objects import PublishedAt
 from app.collection.extraction.extractor import ExtractedContent, ExtractionEmpty
-from app.collection.ingestion.pending_repository import (
+from app.collection.incomplete_article.domain.staged_attributes import (
+    StagedArticleAttributes,
+)
+from app.collection.incomplete_article.repository import (
     PendingHtmlArticleRepository,
 )
-from app.collection.ingestion.staged_attributes import StagedArticleAttributes
 from app.models.article import Article as ArticleORM
 from app.models.news_source import NewsSource, SourceType
 from app.models.pending_html_article import PendingHtmlArticle
@@ -329,7 +331,7 @@ async def test_promotion_failure_records_quality_gate_metric(
     tc_source: NewsSource,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """body はあるが published_at が両方 None → promotion ``Failed`` を quality_gate_metric に焼く."""  # noqa: E501
+    """body はあるが published_at が両方 None → promotion ``ArticleCompletionFailed`` を quality_gate_metric に焼く."""  # noqa: E501
     # published_at_hint=None で staged_attributes を作る
     attrs = StagedArticleAttributes(
         title="Short Title",

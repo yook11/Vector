@@ -3,25 +3,22 @@
 ユビキタス語彙:
 
 - ``ExtractedContent`` / ``ExtractionEmpty``: AI 境界 (HTML 抽出器) の戻り値。
-- ``ArticleDraft``: AI 境界を sanitize した永続化前の正規化値 (内部用)。
-- ``Article``: 抽出済み記事 Entity (analysis 以降が ``id`` で扱う)。
+
+PR 3 で aggregate 軸再配置を実施: ``ArticleDraft`` / ``Article`` / ``PublishedAt``
+/ ``ArticleRepository`` は ``app.collection.article`` 配下に移管済。本パッケージは
+extractor の API のみ公開する。
 """
 
-from app.collection.extraction.domain import Article, PublishedAt
 from app.collection.extraction.extractor import (
     ArticleHtmlExtractor,
     ExtractedContent,
     ExtractionEmpty,
     ExtractionEmptyReason,
 )
-from app.collection.extraction.repository import ArticleRepository
 
 __all__ = [
-    "Article",
     "ArticleHtmlExtractor",
-    "ArticleRepository",
     "ExtractedContent",
     "ExtractionEmpty",
     "ExtractionEmptyReason",
-    "PublishedAt",
 ]

@@ -32,14 +32,16 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.collection.article.domain.value_objects import PublishedAt
 from app.collection.extraction import dispatch as dispatch_module
 from app.collection.extraction.dispatch import (
     dispatch_html_fetch_jobs,
     sweep_expired_leases,
 )
-from app.collection.extraction.domain.value_objects import PublishedAt
-from app.collection.ingestion.pending_repository import PendingHtmlArticleRepository
-from app.collection.ingestion.staged_attributes import StagedArticleAttributes
+from app.collection.incomplete_article.domain.staged_attributes import (
+    StagedArticleAttributes,
+)
+from app.collection.incomplete_article.repository import PendingHtmlArticleRepository
 from app.models.news_source import NewsSource
 from app.models.pending_html_article import PendingHtmlArticle as PendingHtmlArticleORM
 from app.shared.value_objects.safe_url import SafeUrl

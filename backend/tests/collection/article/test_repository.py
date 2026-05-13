@@ -1,9 +1,11 @@
-"""extraction リポジトリ (``ArticleRepository``) の統合テスト。
+"""``ArticleRepository`` (article aggregate) の統合テスト。
 
-PR-E 仕様: ``source_url`` (canonicalize 済み) を SSoT とする経路を検証する。
-``save`` / ``find_by_source_url`` と並行レース対応 (``ON CONFLICT DO NOTHING``)
-を検証する。``exists_by_source_url`` は ingestion BC に移管済
-(``tests/collection/ingestion/test_article_seen_repository.py``)。
+``source_url`` (canonicalize 済み) を SSoT とする経路を検証する。
+``save`` / ``find_by_source_url`` / ``exists_by_source_url`` と並行レース対応
+(``ON CONFLICT DO NOTHING``) を検証する。
+
+PR 3 で ``ArticleSeenRepository`` を本 Repository に統合した
+(``exists_by_source_url`` method)。
 """
 
 from __future__ import annotations
@@ -15,9 +17,9 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
-from app.collection.extraction.domain import Article, PublishedAt
-from app.collection.extraction.domain.article import ArticleDraft
-from app.collection.extraction.repository import (
+from app.collection.article.domain.article import Article, ArticleDraft
+from app.collection.article.domain.value_objects import PublishedAt
+from app.collection.article.repository import (
     ArticleRepository,
     PersistedArticleId,
 )
@@ -159,6 +161,35 @@ async def test_find_by_source_url_returns_none_for_missing(
 ) -> None:
     repo = ArticleRepository(db_session)
     assert await repo.find_by_source_url(SafeUrl("https://example.com/never")) is None
+
+
+# ---------------------------------------------------------------------------
+# exists_by_source_url (PR 3 で ArticleSeenRepository から統合)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_exists_by_source_url_returns_true_when_present(
+    db_session: AsyncSession, sample_source: NewsSource
+) -> None:
+    canonical = SafeUrl("https://example.com/article/seen-true")
+    repo = ArticleRepository(db_session)
+    await repo.save(_draft(), source_id=sample_source.id, source_url=canonical)
+    await db_session.commit()
+
+    assert await repo.exists_by_source_url(canonical) is True
+
+
+@pytest.mark.asyncio
+async def test_exists_by_source_url_returns_false_when_absent(
+    db_session: AsyncSession,
+) -> None:
+    assert (
+        await ArticleRepository(db_session).exists_by_source_url(
+            SafeUrl("https://example.com/article/seen-false")
+        )
+        is False
+    )
 
 
 # ---------------------------------------------------------------------------

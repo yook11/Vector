@@ -26,10 +26,12 @@ from app.collection.fetchers.hacker_news import (
     HN_SLIDING_WINDOW_SECONDS,
     HackerNewsFetcher,
 )
-from app.collection.ingestion.domain.fetched_article import (
-    Failed,
+from app.collection.fetchers.outcome import (
     FetchedEntry,
     FetchOutcome,
+    SourceFetchFailed,
+)
+from app.collection.incomplete_article.domain.incomplete_article import (
     IncompleteArticle,
 )
 from tests.collection.fetchers._invariant import (
@@ -118,7 +120,7 @@ def test_metadata_audit_safe() -> None:
 
 
 def test_url_missing_hit_skipped_silently() -> None:
-    """Ask HN 系 (url 欠落) は yield 自体せず skip — Failed としても流さない。"""
+    """Ask HN 系 (url 欠落) は yield 自体せず skip。``SourceFetchFailed`` も流さない。"""  # noqa: E501
     fetcher = HackerNewsFetcher()
     assert fetcher._convert_hit(_hit(url=None), 1) is None
     assert fetcher._convert_hit(_hit(url=""), 1) is None
@@ -127,14 +129,14 @@ def test_url_missing_hit_skipped_silently() -> None:
 def test_invalid_url_returns_failed_not_corrupt_passport() -> None:
     fetcher = HackerNewsFetcher()
     outcome = fetcher._convert_hit(_hit(url="not-a-url"), 1)
-    assert isinstance(outcome, Failed)
+    assert isinstance(outcome, SourceFetchFailed)
     assert outcome.reason.code == "extraction_empty"
 
 
 def test_empty_title_returns_failed() -> None:
     fetcher = HackerNewsFetcher()
     outcome = fetcher._convert_hit(_hit(title=""), 1)
-    assert isinstance(outcome, Failed)
+    assert isinstance(outcome, SourceFetchFailed)
     assert outcome.reason.code == "title_missing"
 
 

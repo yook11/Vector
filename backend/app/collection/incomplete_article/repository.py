@@ -38,8 +38,12 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from app.collection.ingestion.domain.fetched_article import IncompleteArticle
-from app.collection.ingestion.staged_attributes import StagedArticleAttributes
+from app.collection.incomplete_article.domain.incomplete_article import (
+    IncompleteArticle,
+)
+from app.collection.incomplete_article.domain.staged_attributes import (
+    StagedArticleAttributes,
+)
 from app.models.pending_html_article import PendingHtmlArticle as PendingHtmlArticleORM
 from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 

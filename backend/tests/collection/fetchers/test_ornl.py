@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.collection.fetchers.ornl import ORNLNewsFetcher
-from app.collection.ingestion.domain.fetched_article import FetchOutcome
+from app.collection.fetchers.outcome import FetchOutcome
 from tests.collection.fetchers._invariant import (
     assert_at_least_one_passport,
     assert_metadata_audit_safe,

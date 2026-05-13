@@ -30,13 +30,15 @@ from typing import Any, ClassVar
 import httpx
 import structlog
 
+from app.collection.article.domain.value_objects import PublishedAt
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
-from app.collection.extraction.domain.value_objects import PublishedAt
-from app.collection.ingestion.domain.fetched_article import (
-    Failed,
-    FailureReason,
+from app.collection.fetchers.outcome import (
     FetchedEntry,
     FetchOutcome,
+    SourceFetchFailed,
+    SourceFetchFailureReason,
+)
+from app.collection.incomplete_article.domain.incomplete_article import (
     IncompleteArticle,
 )
 from app.shared.security.safe_http import make_safe_async_client
@@ -145,7 +147,7 @@ class HackerNewsFetcher:
         """1 hit を ``FetchOutcome`` に変換する純関数。
 
         ``url`` 欠落 (Ask HN / テキスト投稿等) は ``None`` を返して skip する
-        (``Failed`` ではない: HN 側で外部 URL を持たない投稿は採取対象外)。
+        (``SourceFetchFailed`` ではない: HN 側で外部 URL を持たない投稿は採取対象外)。
         """
         raw_url = hit.get("url")
         if not isinstance(raw_url, str) or not raw_url:
@@ -153,8 +155,8 @@ class HackerNewsFetcher:
 
         title = (hit.get("title") or "")[:_TITLE_MAX_LENGTH]
         if not title:
-            return Failed(
-                reason=FailureReason(
+            return SourceFetchFailed(
+                reason=SourceFetchFailureReason(
                     code="title_missing",
                     retryable=False,
                     detail="hn_title_missing",
@@ -164,8 +166,8 @@ class HackerNewsFetcher:
         try:
             source_url = SafeUrl(raw_url)
         except ValueError:
-            return Failed(
-                reason=FailureReason(
+            return SourceFetchFailed(
+                reason=SourceFetchFailureReason(
                     code="extraction_empty",
                     retryable=False,
                     detail=f"invalid_link:{raw_url[:100]}",

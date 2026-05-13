@@ -6,7 +6,7 @@
 - ``EXCLUDED_PATHS`` の URL は yield されず下流に流れない
 - 同 URL の重複は ``fetch()`` で dedup されて 1 件に集約
 - ``MAX_ENTRIES`` で yield 件数が cap される (大量バックフィル防止)
-- 不正 URL は ``Failed`` で個別 drop され全体停止しない
+- 不正 URL は ``SourceFetchFailed`` で個別 drop され全体停止しない
 - ``_convert_entry`` は ``prefer_html_title=True`` の passport を返す
   (title 確定は HTML 抽出 task の責務)
 """
@@ -18,9 +18,8 @@ from typing import ClassVar
 import pytest
 
 from app.collection.fetchers._base.html_listing import BaseHtmlListingFetcher
-from app.collection.ingestion.domain.fetched_article import (
-    Failed,
-    FetchedEntry,
+from app.collection.fetchers.outcome import FetchedEntry, SourceFetchFailed
+from app.collection.incomplete_article.domain.incomplete_article import (
     IncompleteArticle,
 )
 from tests.collection.fetchers._invariant import (
@@ -83,7 +82,7 @@ def test_metadata_audit_safe() -> None:
 def test_invalid_url_isolated_to_failed() -> None:
     """1 entry の invalid URL は他 entry を巻き込まない (部分回復契約)。"""
     outcome = _SampleFetcher()._convert_entry("not-a-url", 1)
-    assert isinstance(outcome, Failed)
+    assert isinstance(outcome, SourceFetchFailed)
     assert outcome.reason.code == "extraction_empty"
 
 

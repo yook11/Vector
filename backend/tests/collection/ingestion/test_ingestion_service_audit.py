@@ -4,7 +4,7 @@
 
 - 成功 path で ``pipeline_events`` に 1 行が書き込まれる (Service / Task の
   ``attempt`` がそのまま行に載る)
-- ``Failed`` の集計 (``failed_codes``) が payload に焼き付く
+- ``SourceFetchFailed`` の集計 (``failed_codes``) が payload に焼き付く
 - Pattern H 投入時に ``completion_reason_codes`` / ``completion_queued_count`` が
   焼き付く
 - 既知 URL skip 時に ``skipped_codes`` (= ``known_url``) が焼き付く
@@ -25,14 +25,16 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.collection.extraction.domain.value_objects import PublishedAt
-from app.collection.ingestion.domain.fetched_article import (
-    Failed,
-    FailureReason,
+from app.collection.article.domain.article import ReadyForArticle
+from app.collection.article.domain.value_objects import PublishedAt
+from app.collection.fetchers.outcome import (
     FetchedEntry,
     FetchOutcome,
+    SourceFetchFailed,
+    SourceFetchFailureReason,
+)
+from app.collection.incomplete_article.domain.incomplete_article import (
     IncompleteArticle,
-    ReadyForArticle,
 )
 from app.collection.ingestion.ingestion_service import IngestionService
 from app.models.news_source import NewsSource, SourceType
@@ -182,14 +184,26 @@ async def test_failed_codes_aggregated_in_payload(
     db_session: AsyncSession,
     vb_source: NewsSource,
 ) -> None:
-    """Failed.reason.code 別カウントが payload に焼かれ、後で監視できる。"""
+    """SourceFetchFailed.reason.code 別カウントが payload に焼かれ、後で監視できる。"""
     svc = IngestionService(
         session_factory,
         lambda: _StubFetcher(
             [
-                Failed(reason=FailureReason(code="body_too_short", retryable=False)),
-                Failed(reason=FailureReason(code="title_missing", retryable=False)),
-                Failed(reason=FailureReason(code="body_too_short", retryable=False)),
+                SourceFetchFailed(
+                    reason=SourceFetchFailureReason(
+                        code="body_too_short", retryable=False
+                    )
+                ),
+                SourceFetchFailed(
+                    reason=SourceFetchFailureReason(
+                        code="title_missing", retryable=False
+                    )
+                ),
+                SourceFetchFailed(
+                    reason=SourceFetchFailureReason(
+                        code="body_too_short", retryable=False
+                    )
+                ),
             ]
         ),
     )
@@ -210,8 +224,8 @@ async def test_mixed_entry_invariant_holds(
     db_session: AsyncSession,
     vb_source: NewsSource,
 ) -> None:
-    """混在 (R + H + dup_skip + Failed) でも entry_count = sum(...) 不変条件が
-    成立し、各分岐の count が独立して正しく集計される。"""
+    """混在 (R + H + dup_skip + ``SourceFetchFailed``) でも entry_count = sum(...)
+    不変条件が成立し、各分岐の count が独立して正しく集計される。"""
     svc = IngestionService(
         session_factory,
         lambda: _StubFetcher(
@@ -219,7 +233,11 @@ async def test_mixed_entry_invariant_holds(
                 _ready_entry(vb_source.id, "https://venturebeat.com/ok/"),
                 _pending_entry(vb_source.id, "https://techcrunch.com/h/"),
                 _ready_entry(vb_source.id, "https://venturebeat.com/ok/"),  # dup
-                Failed(reason=FailureReason(code="title_missing", retryable=False)),
+                SourceFetchFailed(
+                    reason=SourceFetchFailureReason(
+                        code="title_missing", retryable=False
+                    )
+                ),
             ]
         ),
     )

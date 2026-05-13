@@ -12,7 +12,7 @@ PR2.5-B cutover で StagedArticle (kiq envelope) 経由から
 - HTTP 取得 → ``ExtractionEmpty`` / ``PermanentFetchError`` の捌き
 - ``TemporaryFetchError`` を per-error retry policy で次 ``ready_at`` 計算
   (max_attempts 超過なら ``mark_exhausted``)
-- promotion ``Failed`` の捌き
+- promotion ``ArticleCompletionFailed`` の捌き
 - ``articles`` INSERT + ``pending_html_articles`` DELETE を **同 tx で一括 commit**
 - race-loss (``articles.source_url UNIQUE``) を ``conflict_lost`` audit で吸収
 - ``pipeline_events`` への監査書込 (success/conflict_lost/dropped_terminal/
@@ -43,22 +43,17 @@ from datetime import UTC, datetime, timedelta
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.collection.article.domain.article import ArticleDraft, ReadyForArticle
+from app.collection.article.repository import ArticleRepository
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
-from app.collection.extraction.domain.article import ArticleDraft
 from app.collection.extraction.extractor import (
     ArticleHtmlExtractor,
     ExtractedContent,
     ExtractionEmpty,
 )
-from app.collection.extraction.repository import ArticleRepository
 from app.collection.extraction.retry_policy import compute_next_delay_minutes
-from app.collection.ingestion.domain.fetched_article import (
-    Failed as IngestionFailed,
-)
-from app.collection.ingestion.domain.fetched_article import (
-    ReadyForArticle,
-)
-from app.collection.ingestion.pending_repository import (
+from app.collection.incomplete_article.domain.completion import ArticleCompletionFailed
+from app.collection.incomplete_article.repository import (
     PendingHtmlArticleRepository,
     PendingHtmlContext,
 )
@@ -142,13 +137,12 @@ class ContentFetchService:
         assert isinstance(html_result, ExtractedContent)  # noqa: S101
 
         # promotion (IncompleteArticle + HTML → ReadyForArticle)
-        advanced = ReadyForArticle.try_advance_from(
-            pending.incomplete_article,
+        advanced = pending.incomplete_article.complete_with_html(
             body=html_result.body,
             html_published_at=html_result.published_at,
             html_title=html_result.title,
         )
-        if isinstance(advanced, IngestionFailed):
+        if isinstance(advanced, ArticleCompletionFailed):
             return await self._handle_terminal(
                 pending,
                 duration_ms=_elapsed_ms(t0),

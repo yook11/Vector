@@ -36,13 +36,15 @@ import feedparser
 import httpx
 import structlog
 
+from app.collection.article.domain.value_objects import PublishedAt
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
-from app.collection.extraction.domain.value_objects import PublishedAt
-from app.collection.ingestion.domain.fetched_article import (
-    Failed,
-    FailureReason,
+from app.collection.fetchers.outcome import (
     FetchedEntry,
     FetchOutcome,
+    SourceFetchFailed,
+    SourceFetchFailureReason,
+)
+from app.collection.incomplete_article.domain.incomplete_article import (
     IncompleteArticle,
 )
 from app.shared.security.safe_http import make_safe_async_client
@@ -71,7 +73,7 @@ def _parse_published_at(entry: dict[str, Any]) -> PublishedAt | None:
     Atom 1.0 では ``<updated>`` が必須・``<published>`` が任意のため、
     ``updated_parsed`` を優先する。``published_parsed`` も fallback として
     確認する (一部 entry が ``<published>`` を併記するケースに備える)。
-    Pattern H 固有: 本値が None でも Failed 降格はしない (HTML 抽出時に
+    Pattern H 固有: 本値が None でも SourceFetchFailed 降格はしない (HTML 抽出時に
     補完される)。
     """
     parsed = entry.get("updated_parsed") or entry.get("published_parsed")
@@ -166,15 +168,15 @@ class METIFetcher:
 
         Pattern H 固有の品質ゲート:
 
-        - ``title`` 空 → ``Failed(title_missing)``
-        - ``link`` 不正 → ``Failed(extraction_empty)``
-        - ``published_at`` 欠落 → **Failed しない** (HTML 補完を待つ)
+        - ``title`` 空 → ``SourceFetchFailed(title_missing)``
+        - ``link`` 不正 → ``SourceFetchFailed(extraction_empty)``
+        - ``published_at`` 欠落 → **SourceFetchFailed しない** (HTML 補完を待つ)
         - ``body`` は本実装では検査しない (Stage 2 の責務)
         """
         title = _strip_html(entry.get("title", "") or "")
         if not title:
-            return Failed(
-                reason=FailureReason(
+            return SourceFetchFailed(
+                reason=SourceFetchFailureReason(
                     code="title_missing",
                     retryable=False,
                     detail="rss_title_missing",
@@ -186,8 +188,8 @@ class METIFetcher:
         try:
             source_url = SafeUrl(link)
         except ValueError:
-            return Failed(
-                reason=FailureReason(
+            return SourceFetchFailed(
+                reason=SourceFetchFailureReason(
                     code="extraction_empty",
                     retryable=False,
                     detail=f"invalid_link:{link[:100]}",

@@ -39,11 +39,13 @@ import structlog
 from lxml import etree, html
 
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
-from app.collection.ingestion.domain.fetched_article import (
-    Failed,
-    FailureReason,
+from app.collection.fetchers.outcome import (
     FetchedEntry,
     FetchOutcome,
+    SourceFetchFailed,
+    SourceFetchFailureReason,
+)
+from app.collection.incomplete_article.domain.incomplete_article import (
     IncompleteArticle,
 )
 from app.shared.security.safe_http import make_safe_async_client
@@ -176,8 +178,8 @@ class BaseHtmlListingFetcher:
         try:
             source_url = SafeUrl(loc)
         except ValueError:
-            return Failed(
-                reason=FailureReason(
+            return SourceFetchFailed(
+                reason=SourceFetchFailureReason(
                     code="extraction_empty",
                     retryable=False,
                     detail=f"invalid_url:{loc[:100]}",

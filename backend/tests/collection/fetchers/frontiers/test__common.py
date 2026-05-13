@@ -16,10 +16,7 @@ from app.collection.fetchers.frontiers._common import (
     BaseFrontiersFetcher,
     _extract_doi,
 )
-from app.collection.ingestion.domain.fetched_article import (
-    Failed,
-    FetchOutcome,
-)
+from app.collection.fetchers.outcome import FetchOutcome, SourceFetchFailed
 from tests.collection.fetchers._invariant import (
     assert_at_least_one_passport,
     assert_metadata_audit_safe,
@@ -28,9 +25,7 @@ from tests.collection.fetchers._invariant import (
 )
 
 _FIXTURE_AI = (
-    Path(__file__).parent.parent.parent.parent
-    / "fixtures"
-    / "frontiers_ai_rss.xml"
+    Path(__file__).parent.parent.parent.parent / "fixtures" / "frontiers_ai_rss.xml"
 )
 
 
@@ -97,7 +92,7 @@ def test_short_body_dropped_as_failed() -> None:
     """Pattern R: description が短い editorial 等は body_too_short で drop。"""
     fetcher = _ConcreteFrontiersFetcher()
     outcome = fetcher._convert_entry(_entry(summary="brief."), 1, "en")
-    assert isinstance(outcome, Failed)
+    assert isinstance(outcome, SourceFetchFailed)
     assert outcome.reason.code == "body_too_short"
 
 
@@ -107,12 +102,12 @@ def test_missing_pubdate_dropped_as_failed() -> None:
     entry = _entry()
     del entry["published_parsed"]
     outcome = fetcher._convert_entry(entry, 1, "en")
-    assert isinstance(outcome, Failed)
+    assert isinstance(outcome, SourceFetchFailed)
     assert outcome.reason.code == "published_at_missing"
 
 
 def test_invalid_link_dropped_as_failed() -> None:
     fetcher = _ConcreteFrontiersFetcher()
     outcome = fetcher._convert_entry(_entry(link="not-a-url"), 1, "en")
-    assert isinstance(outcome, Failed)
+    assert isinstance(outcome, SourceFetchFailed)
     assert outcome.reason.code == "extraction_empty"

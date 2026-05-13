@@ -12,14 +12,14 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from app.collection.extraction.domain.article import (
+from app.collection.article.domain.article import (
     _ARTICLE_BODY_MAX_LENGTH,
     _ARTICLE_BODY_MIN_LENGTH,
     _ARTICLE_TITLE_MAX_LENGTH,
     Article,
     ArticleDraft,
 )
-from app.collection.extraction.domain.value_objects import PublishedAt
+from app.collection.article.domain.value_objects import PublishedAt
 from app.collection.extraction.extractor import ExtractedContent
 
 

@@ -35,13 +35,15 @@ import feedparser
 import httpx
 import structlog
 
+from app.collection.article.domain.value_objects import PublishedAt
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
-from app.collection.extraction.domain.value_objects import PublishedAt
-from app.collection.ingestion.domain.fetched_article import (
-    Failed,
-    FailureReason,
+from app.collection.fetchers.outcome import (
     FetchedEntry,
     FetchOutcome,
+    SourceFetchFailed,
+    SourceFetchFailureReason,
+)
+from app.collection.incomplete_article.domain.incomplete_article import (
     IncompleteArticle,
 )
 from app.shared.security.safe_http import make_safe_async_client
@@ -166,8 +168,8 @@ class BaseDjangoplicityFetcher:
     ) -> FetchOutcome:
         title = _strip_html(entry.get("title", "") or "")
         if not title:
-            return Failed(
-                reason=FailureReason(
+            return SourceFetchFailed(
+                reason=SourceFetchFailureReason(
                     code="title_missing",
                     retryable=False,
                     detail="rss_title_missing",
@@ -179,8 +181,8 @@ class BaseDjangoplicityFetcher:
         try:
             source_url = SafeUrl(link)
         except ValueError:
-            return Failed(
-                reason=FailureReason(
+            return SourceFetchFailed(
+                reason=SourceFetchFailureReason(
                     code="extraction_empty",
                     retryable=False,
                     detail=f"invalid_link:{link[:100]}",

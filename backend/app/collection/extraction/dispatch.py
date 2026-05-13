@@ -19,7 +19,7 @@ import structlog
 from taskiq import Context, TaskiqDepends
 
 from app.brokers import broker_metadata
-from app.collection.ingestion.pending_repository import PendingHtmlArticleRepository
+from app.collection.incomplete_article.repository import PendingHtmlArticleRepository
 
 logger = structlog.get_logger(__name__)
 

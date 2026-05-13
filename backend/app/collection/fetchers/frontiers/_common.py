@@ -44,14 +44,14 @@ import feedparser
 import httpx
 import structlog
 
+from app.collection.article.domain.article import ReadyForArticle
+from app.collection.article.domain.value_objects import PublishedAt
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
-from app.collection.extraction.domain.value_objects import PublishedAt
-from app.collection.ingestion.domain.fetched_article import (
-    Failed,
-    FailureReason,
+from app.collection.fetchers.outcome import (
     FetchedEntry,
     FetchOutcome,
-    ReadyForArticle,
+    SourceFetchFailed,
+    SourceFetchFailureReason,
 )
 from app.shared.security.safe_http import make_safe_async_client
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
@@ -145,7 +145,7 @@ class BaseFrontiersFetcher:
     corresponding author で必ず提供される (RSS 仕様)。
 
     body / published_at / source_url が品質ゲートを通らない entry は
-    ``Failed`` で drop する。Frontiers は editorial/correction 系で
+    ``SourceFetchFailed`` で drop する。Frontiers は editorial/correction 系で
     description が空のことがあるため、``body_too_short`` での drop は正常動作。
     """
 
@@ -207,8 +207,8 @@ class BaseFrontiersFetcher:
     ) -> FetchOutcome:
         title = _strip_html(entry.get("title", "") or "")
         if not title:
-            return Failed(
-                reason=FailureReason(
+            return SourceFetchFailed(
+                reason=SourceFetchFailureReason(
                     code="title_missing",
                     retryable=False,
                     detail="rss_title_missing",
@@ -218,8 +218,8 @@ class BaseFrontiersFetcher:
 
         body = _strip_html(_pick_body(entry))
         if len(body) < 50:
-            return Failed(
-                reason=FailureReason(
+            return SourceFetchFailed(
+                reason=SourceFetchFailureReason(
                     code="body_too_short",
                     retryable=False,
                     detail=f"rss_body_len={len(body)}",
@@ -228,8 +228,8 @@ class BaseFrontiersFetcher:
 
         published_at = _parse_published_at(entry)
         if published_at is None:
-            return Failed(
-                reason=FailureReason(
+            return SourceFetchFailed(
+                reason=SourceFetchFailureReason(
                     code="published_at_missing",
                     retryable=False,
                     detail="rss_pubdate_missing",
@@ -240,8 +240,8 @@ class BaseFrontiersFetcher:
         try:
             source_url = SafeUrl(link)
         except ValueError:
-            return Failed(
-                reason=FailureReason(
+            return SourceFetchFailed(
+                reason=SourceFetchFailureReason(
                     code="extraction_empty",
                     retryable=False,
                     detail=f"invalid_link:{link[:100]}",
@@ -257,8 +257,8 @@ class BaseFrontiersFetcher:
                 source_url=source_url,
             )
         except ValueError as e:
-            return Failed(
-                reason=FailureReason(
+            return SourceFetchFailed(
+                reason=SourceFetchFailureReason(
                     code="other",
                     retryable=False,
                     detail=f"invariant_violation:{e}",

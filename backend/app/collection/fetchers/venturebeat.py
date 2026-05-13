@@ -25,14 +25,14 @@ import feedparser
 import httpx
 import structlog
 
+from app.collection.article.domain.article import ReadyForArticle
+from app.collection.article.domain.value_objects import PublishedAt
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
-from app.collection.extraction.domain.value_objects import PublishedAt
-from app.collection.ingestion.domain.fetched_article import (
-    Failed,
-    FailureReason,
+from app.collection.fetchers.outcome import (
     FetchedEntry,
     FetchOutcome,
-    ReadyForArticle,
+    SourceFetchFailed,
+    SourceFetchFailureReason,
 )
 from app.shared.security.safe_http import make_safe_async_client
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
@@ -203,8 +203,8 @@ class VentureBeatFetcher:
         """1 entry を ``FetchOutcome`` に変換する純関数 (テスト容易性のため切出)。"""
         title = _strip_html(entry.get("title", "") or "")
         if not title:
-            return Failed(
-                reason=FailureReason(
+            return SourceFetchFailed(
+                reason=SourceFetchFailureReason(
                     code="title_missing",
                     retryable=False,
                     detail="rss_title_missing",
@@ -214,8 +214,8 @@ class VentureBeatFetcher:
 
         body = _strip_html(_pick_body(entry))
         if len(body) < 50:
-            return Failed(
-                reason=FailureReason(
+            return SourceFetchFailed(
+                reason=SourceFetchFailureReason(
                     code="body_too_short",
                     retryable=False,
                     detail=f"rss_body_len={len(body)}",
@@ -224,8 +224,8 @@ class VentureBeatFetcher:
 
         published_at = _parse_published_at(entry)
         if published_at is None:
-            return Failed(
-                reason=FailureReason(
+            return SourceFetchFailed(
+                reason=SourceFetchFailureReason(
                     code="published_at_missing",
                     retryable=False,
                     detail="rss_pubdate_missing",
@@ -236,8 +236,8 @@ class VentureBeatFetcher:
         try:
             source_url = SafeUrl(link)
         except ValueError:
-            return Failed(
-                reason=FailureReason(
+            return SourceFetchFailed(
+                reason=SourceFetchFailureReason(
                     code="extraction_empty",
                     retryable=False,
                     detail=f"invalid_link:{link[:100]}",
@@ -253,8 +253,8 @@ class VentureBeatFetcher:
                 source_url=source_url,
             )
         except ValueError as e:
-            return Failed(
-                reason=FailureReason(
+            return SourceFetchFailed(
+                reason=SourceFetchFailureReason(
                     code="other",
                     retryable=False,
                     detail=f"invariant_violation:{e}",

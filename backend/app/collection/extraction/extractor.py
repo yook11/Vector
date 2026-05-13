@@ -24,6 +24,10 @@ import httpx
 import structlog
 import trafilatura
 
+from app.collection.article.domain.article import (
+    _ARTICLE_BODY_MIN_LENGTH as _BODY_MIN_LENGTH,
+)
+from app.collection.article.domain.value_objects import PublishedAt
 from app.collection.errors import (
     PermanentFetchError,
     ReadTimeout,
@@ -32,10 +36,6 @@ from app.collection.errors import (
     ServerErrorRetryAfter,
     TemporaryFetchError,
 )
-from app.collection.extraction.domain.article import (
-    _ARTICLE_BODY_MIN_LENGTH as _BODY_MIN_LENGTH,
-)
-from app.collection.extraction.domain.value_objects import PublishedAt
 from app.shared.security.safe_http import make_safe_async_client
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 from app.shared.value_objects.safe_url import SafeUrl

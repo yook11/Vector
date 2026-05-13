@@ -12,12 +12,11 @@ import json
 from collections.abc import Iterable
 from datetime import UTC, datetime
 
-from app.collection.extraction.domain.value_objects import PublishedAt
-from app.collection.ingestion.domain.fetched_article import (
-    FetchedEntry,
-    FetchOutcome,
+from app.collection.article.domain.article import ReadyForArticle
+from app.collection.article.domain.value_objects import PublishedAt
+from app.collection.fetchers.outcome import FetchedEntry, FetchOutcome
+from app.collection.incomplete_article.domain.incomplete_article import (
     IncompleteArticle,
-    ReadyForArticle,
 )
 
 _DEFAULT_HTML_PUBLISHED_AT = PublishedAt(value=datetime(2026, 5, 1, tzinfo=UTC))
@@ -28,7 +27,7 @@ def passports(outcomes: Iterable[FetchOutcome]) -> list[FetchedEntry]:
 
 
 def assert_at_least_one_passport(outcomes: Iterable[FetchOutcome]) -> None:
-    """全 entry が Failed なら下流に何も渡らない = ソース壊滅。fixture で検知する。"""
+    """全 entry が ``SourceFetchFailed`` = ソース壊滅。fixture で検知する。"""
     assert passports(outcomes), (
         "fetcher produced no FetchedEntry from fixture; pipeline cannot proceed"
     )
@@ -43,7 +42,7 @@ def assert_passports_persistable(
     """全 passport が永続化不変条件を満たすこと。
 
     Pattern R: ``ReadyForArticle`` の Pydantic 構築が成功している = 5 fields 通過済。
-    Pattern H: ``IncompleteArticle`` + HTML 抽出値で ``try_advance_from`` が
+    Pattern H: ``IncompleteArticle`` + HTML 抽出値で ``complete_with_html`` が
     ``ReadyForArticle`` を返せること (= Stage 2 を通せば永続化できる中間状態)。
 
     ``html_published_at`` 省略時は default を入れる (Pattern H が published_at を
@@ -54,8 +53,7 @@ def assert_passports_persistable(
         if isinstance(entry.item, ReadyForArticle):
             continue
         assert isinstance(entry.item, IncompleteArticle)
-        promoted = ReadyForArticle.try_advance_from(
-            entry.item,
+        promoted = entry.item.complete_with_html(
             body=html_body,
             html_published_at=pub,
         )

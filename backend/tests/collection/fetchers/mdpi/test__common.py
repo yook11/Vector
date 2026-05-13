@@ -3,7 +3,8 @@
 検証する不変条件:
 
 - Crossref item を ``_convert_record`` した結果が永続化 passport の不変条件を満たす
-- ``type != "journal-article"`` / ``license`` 欠落 / 必須フィールド欠落は ``Failed``
+- ``type != "journal-article"`` / ``license`` 欠落 / 必須フィールド欠落は
+  ``SourceFetchFailed``
 - HTTP error は ``PermanentFetchError`` / ``TemporaryFetchError`` に分類される
 - API request の必須パラメタ (per-ISSN filter / from-pub-date / polite pool UA)
   を必ず付ける
@@ -21,6 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from app.collection.article.domain.article import ReadyForArticle
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
 from app.collection.fetchers.mdpi._common import (
     BaseMDPICrossrefFetcher,
@@ -31,11 +33,10 @@ from app.collection.fetchers.mdpi._common import (
     _validate_license,
 )
 from app.collection.fetchers.mdpi.materials import MDPIMaterialsFetcher
-from app.collection.ingestion.domain.fetched_article import (
-    Failed,
+from app.collection.fetchers.outcome import (
     FetchedEntry,
     FetchOutcome,
-    ReadyForArticle,
+    SourceFetchFailed,
 )
 from tests.collection.fetchers._invariant import (
     assert_at_least_one_passport,
@@ -46,9 +47,7 @@ from tests.collection.fetchers._invariant import (
 
 _MDPI_MOD = "app.collection.fetchers.mdpi._common"
 _FIXTURE_PATH = (
-    Path(__file__).parent.parent.parent.parent
-    / "fixtures"
-    / "mdpi_crossref.json"
+    Path(__file__).parent.parent.parent.parent / "fixtures" / "mdpi_crossref.json"
 )
 
 
@@ -171,7 +170,7 @@ class TestExtractDoi:
 
 
 # ---------------------------------------------------------------------------
-# _convert_record の Failed 分岐
+# _convert_record の SourceFetchFailed 分岐
 # ---------------------------------------------------------------------------
 
 
@@ -183,35 +182,35 @@ class TestConvertRecordFailureBranches:
         item = self._base_valid_item()
         item["type"] = "correction"
         outcome = MDPIMaterialsFetcher()._convert_record(item, 1)
-        assert isinstance(outcome, Failed)
+        assert isinstance(outcome, SourceFetchFailed)
         assert outcome.reason.detail == "non_research_type"
 
     def test_non_cc_by_license_dropped(self) -> None:
         item = self._base_valid_item()
         item["license"] = [{"URL": "https://creativecommons.org/licenses/by-nc/4.0/"}]
         outcome = MDPIMaterialsFetcher()._convert_record(item, 1)
-        assert isinstance(outcome, Failed)
+        assert isinstance(outcome, SourceFetchFailed)
         assert outcome.reason.detail == "non_cc_by"
 
     def test_missing_license_dropped(self) -> None:
         item = self._base_valid_item()
         del item["license"]
         outcome = MDPIMaterialsFetcher()._convert_record(item, 1)
-        assert isinstance(outcome, Failed)
+        assert isinstance(outcome, SourceFetchFailed)
         assert outcome.reason.detail == "non_cc_by"
 
     def test_missing_title_returns_failed(self) -> None:
         item = self._base_valid_item()
         item["title"] = []
         outcome = MDPIMaterialsFetcher()._convert_record(item, 1)
-        assert isinstance(outcome, Failed)
+        assert isinstance(outcome, SourceFetchFailed)
         assert outcome.reason.code == "title_missing"
 
     def test_short_abstract_returns_body_too_short(self) -> None:
         item = self._base_valid_item()
         item["abstract"] = "<jats:p>too short</jats:p>"
         outcome = MDPIMaterialsFetcher()._convert_record(item, 1)
-        assert isinstance(outcome, Failed)
+        assert isinstance(outcome, SourceFetchFailed)
         assert outcome.reason.code == "body_too_short"
 
     def test_missing_date_parts_returns_published_at_missing(self) -> None:
@@ -219,14 +218,14 @@ class TestConvertRecordFailureBranches:
         for key in ("published", "issued", "published-online", "published-print"):
             item.pop(key, None)
         outcome = MDPIMaterialsFetcher()._convert_record(item, 1)
-        assert isinstance(outcome, Failed)
+        assert isinstance(outcome, SourceFetchFailed)
         assert outcome.reason.code == "published_at_missing"
 
     def test_missing_doi_returns_extraction_empty(self) -> None:
         item = self._base_valid_item()
         del item["DOI"]
         outcome = MDPIMaterialsFetcher()._convert_record(item, 1)
-        assert isinstance(outcome, Failed)
+        assert isinstance(outcome, SourceFetchFailed)
         assert outcome.reason.code == "extraction_empty"
         assert outcome.reason.detail == "doi_missing"
 

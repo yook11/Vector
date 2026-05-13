@@ -1,7 +1,7 @@
 """TechCrunch 用 Fetcher — Pattern H (RSS で URL 列挙、本文は HTML 必須) の参照実装。
 
 collection-acquisition-redesign Phase 1b'。新 ``Fetcher`` Protocol を満たし、
-1 entry ずつ ``IncompleteArticle`` (or ``Failed``) を yield する。
+1 entry ずつ ``IncompleteArticle`` (or ``SourceFetchFailed``) を yield する。
 
 TC の RSS feed は ``<description>`` にリード文 (~140 chars) しか含まず、
 ``<content:encoded>`` も提供しない (`spec collection-source-rss-research.md`)。
@@ -34,13 +34,15 @@ import feedparser
 import httpx
 import structlog
 
+from app.collection.article.domain.value_objects import PublishedAt
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
-from app.collection.extraction.domain.value_objects import PublishedAt
-from app.collection.ingestion.domain.fetched_article import (
-    Failed,
-    FailureReason,
+from app.collection.fetchers.outcome import (
     FetchedEntry,
     FetchOutcome,
+    SourceFetchFailed,
+    SourceFetchFailureReason,
+)
+from app.collection.incomplete_article.domain.incomplete_article import (
     IncompleteArticle,
 )
 from app.shared.security.safe_http import make_safe_async_client
@@ -71,7 +73,7 @@ def _strip_html(s: str) -> str:
 def _parse_published_at(entry: dict[str, Any]) -> PublishedAt | None:
     """feedparser の ``*_parsed`` (struct_time) を UTC ``PublishedAt`` に変換する。
 
-    Pattern H 固有: 本値が None でも Failed 降格はしない (HTML 抽出が
+    Pattern H 固有: 本値が None でも SourceFetchFailed 降格はしない (HTML 抽出が
     ``published_at`` を出してくれれば merge 後に最終確定する)。``IncompleteArticle``
     の ``published_at_hint`` に格納される。
     """
@@ -207,16 +209,16 @@ class TechCrunchFetcher:
 
         Pattern H 固有の品質ゲート (Pattern R より緩い):
 
-        - ``title`` 空 → ``Failed(title_missing)``
-        - ``link`` 不正 → ``Failed(extraction_empty)`` (URL invalid)
-        - ``published_at`` 欠落 → **Failed しない** (HTML 補完を待つ)
+        - ``title`` 空 → ``SourceFetchFailed(title_missing)``
+        - ``link`` 不正 → ``SourceFetchFailed(extraction_empty)`` (URL invalid)
+        - ``published_at`` 欠落 → **SourceFetchFailed しない** (HTML 補完を待つ)
         - ``body`` は本実装では検査しない (Stage 2 = ``extract_html_body`` の
           責務)
         """
         title = _strip_html(entry.get("title", "") or "")
         if not title:
-            return Failed(
-                reason=FailureReason(
+            return SourceFetchFailed(
+                reason=SourceFetchFailureReason(
                     code="title_missing",
                     retryable=False,
                     detail="rss_title_missing",
@@ -228,8 +230,8 @@ class TechCrunchFetcher:
         try:
             source_url = SafeUrl(link)
         except ValueError:
-            return Failed(
-                reason=FailureReason(
+            return SourceFetchFailed(
+                reason=SourceFetchFailureReason(
                     code="extraction_empty",
                     retryable=False,
                     detail=f"invalid_link:{link[:100]}",

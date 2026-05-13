@@ -1,18 +1,23 @@
 """Article アグリゲート — Stage 0 で抽出された記事本文。
 
-2 つの型で collection/extraction の概念を表す:
+3 つの型で collection BC の article 概念を表す:
 
 - ``ArticleDraft`` — AI 境界 (``ExtractedContent``) を sanitize 済みの
   ドメイン入力に正規化した型。永続化前の状態で、identity は持たない。
   ``from_extracted`` が AI 境界 → Draft の唯一の変換口。
+- ``ReadyForArticle`` — Fetcher 出口の次工程進行保証型 (passport)。
+  Pattern R Fetcher 直接 / Pattern H Stage 2 (``IncompleteArticle.complete_with_html``)
+  で構築。``ArticleDraft`` と違い ``source_id`` / ``source_url`` を持つ
+  (ingestion / completion 軸で必要な原産情報を保持)。
 - ``Article`` — システムに記録された記事 Entity。``id`` を identity として
   持ち、analysis 以降の処理が継続的に扱う概念。
 
 変換は Repository.save (``ArticleDraft`` → ``Article``) と
 Repository._article_from_orm (ORM → ``Article``) が担う。
 
-定数 ``_ARTICLE_BODY_MIN_LENGTH`` / ``_ARTICLE_BODY_MAX_LENGTH`` は
-本ファイルが SSoT。``extractor.py`` は import して品質ゲートで参照する。
+定数 ``_ARTICLE_BODY_MIN_LENGTH`` / ``_ARTICLE_BODY_MAX_LENGTH`` /
+``_ARTICLE_TITLE_MAX_LENGTH`` は本ファイルが SSoT。``extractor.py`` /
+``incomplete_article.py`` は import して品質ゲートで参照する。
 """
 
 from __future__ import annotations
@@ -23,7 +28,8 @@ from typing import TYPE_CHECKING, Any, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.collection.extraction.domain.value_objects import PublishedAt
+from app.collection.article.domain.value_objects import PublishedAt
+from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 from app.utils.sanitize import normalize_text
 
 if TYPE_CHECKING:
@@ -97,6 +103,32 @@ class ArticleDraft(BaseModel):
             body=content.body,
             published_at=content.published_at,
         )
+
+
+class ReadyForArticle(BaseModel):
+    """次工程進行保証型 (passport)。
+
+    Pattern R Fetcher が直接構築する / Pattern H で
+    ``IncompleteArticle.complete_with_html`` が補完成功時に返す。
+    各 Fetcher は何が取れようがこれを満たして次工程に渡し、補足情報は
+    ``FetchedEntry.metadata`` で別軸に運ぶ。
+
+    Invariants (``ArticleDraft`` と同等の長さ境界):
+    - ``title``: 1..500 文字
+    - ``body``: 50..1_048_576 文字
+    - ``published_at``: 必須 (``ArticleDraft`` と違い ingestion 境界では取得済を要求)
+    - ``source_id`` / ``source_url``: 原産情報 (UNIQUE 衝突判定 / 監査に必須)
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    title: str = Field(min_length=1, max_length=_ARTICLE_TITLE_MAX_LENGTH)
+    body: str = Field(
+        min_length=_ARTICLE_BODY_MIN_LENGTH, max_length=_ARTICLE_BODY_MAX_LENGTH
+    )
+    published_at: PublishedAt
+    source_id: int = Field(gt=0)
+    source_url: CanonicalArticleUrl
 
 
 @dataclass(frozen=True, slots=True)

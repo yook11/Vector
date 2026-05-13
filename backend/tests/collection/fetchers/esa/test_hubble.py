@@ -12,7 +12,7 @@ from pathlib import Path
 import feedparser
 
 from app.collection.fetchers.esa.hubble import ESAHubbleFetcher
-from app.collection.ingestion.domain.fetched_article import FetchOutcome
+from app.collection.fetchers.outcome import FetchOutcome
 from tests.collection.fetchers._invariant import (
     assert_at_least_one_passport,
     assert_metadata_audit_safe,
@@ -21,9 +21,7 @@ from tests.collection.fetchers._invariant import (
 )
 
 _FIXTURE = (
-    Path(__file__).parent.parent.parent.parent
-    / "fixtures"
-    / "esa_hubble_rss.xml"
+    Path(__file__).parent.parent.parent.parent / "fixtures" / "esa_hubble_rss.xml"
 )
 
 

@@ -6,7 +6,7 @@ Pattern H 1 段目 (``IngestionService``) で RSS 由来の補完情報を
 - ``title``: RSS 由来の title。``prefer_html_title=True`` のときのみ
   HTML 由来 title に置換される (sitemap 系ソース対応)。
 - ``published_at_hint``: RSS 由来の発行日。HTML から取れる published_at より
-  常に優先される (caller 側 merge 規則は ``ReadyForArticle.try_advance_from``)。
+  常に優先される (caller 側 merge 規則は ``IncompleteArticle.complete_with_html``)。
 - ``prefer_html_title``: sitemap 系のように RSS が title を持たない / HTML 側が
   正本のソースで使う opt-in 旗。
 
@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.collection.extraction.domain.value_objects import PublishedAt
+from app.collection.article.domain.value_objects import PublishedAt
 
 _TITLE_MIN_LENGTH = 1
 _TITLE_MAX_LENGTH = 500

@@ -39,14 +39,14 @@ from typing import Any, ClassVar
 import httpx
 import structlog
 
+from app.collection.article.domain.article import ReadyForArticle
+from app.collection.article.domain.value_objects import PublishedAt
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
-from app.collection.extraction.domain.value_objects import PublishedAt
-from app.collection.ingestion.domain.fetched_article import (
-    Failed,
-    FailureReason,
+from app.collection.fetchers.outcome import (
     FetchedEntry,
     FetchOutcome,
-    ReadyForArticle,
+    SourceFetchFailed,
+    SourceFetchFailureReason,
 )
 from app.shared.security.safe_http import make_safe_async_client
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
@@ -243,8 +243,8 @@ class BaseMDPICrossrefFetcher:
     ) -> FetchOutcome:
         """1 Crossref record を ``FetchOutcome`` に変換する純関数。"""
         if item.get("type") != "journal-article":
-            return Failed(
-                reason=FailureReason(
+            return SourceFetchFailed(
+                reason=SourceFetchFailureReason(
                     code="other",
                     retryable=False,
                     detail="non_research_type",
@@ -252,8 +252,8 @@ class BaseMDPICrossrefFetcher:
             )
 
         if not _validate_license(item):
-            return Failed(
-                reason=FailureReason(
+            return SourceFetchFailed(
+                reason=SourceFetchFailureReason(
                     code="other",
                     retryable=False,
                     detail="non_cc_by",
@@ -262,8 +262,8 @@ class BaseMDPICrossrefFetcher:
 
         title = _extract_title(item)
         if not title:
-            return Failed(
-                reason=FailureReason(
+            return SourceFetchFailed(
+                reason=SourceFetchFailureReason(
                     code="title_missing",
                     retryable=False,
                     detail="crossref_title_missing",
@@ -273,8 +273,8 @@ class BaseMDPICrossrefFetcher:
 
         body = _strip_jats(item.get("abstract") or "")
         if len(body) < 50:
-            return Failed(
-                reason=FailureReason(
+            return SourceFetchFailed(
+                reason=SourceFetchFailureReason(
                     code="body_too_short",
                     retryable=False,
                     detail=f"crossref_abstract_len={len(body)}",
@@ -283,8 +283,8 @@ class BaseMDPICrossrefFetcher:
 
         published_at = _parse_date_parts(item)
         if published_at is None:
-            return Failed(
-                reason=FailureReason(
+            return SourceFetchFailed(
+                reason=SourceFetchFailureReason(
                     code="published_at_missing",
                     retryable=False,
                     detail="crossref_date_parts_missing",
@@ -293,8 +293,8 @@ class BaseMDPICrossrefFetcher:
 
         doi = _extract_doi(item)
         if doi is None:
-            return Failed(
-                reason=FailureReason(
+            return SourceFetchFailed(
+                reason=SourceFetchFailureReason(
                     code="extraction_empty",
                     retryable=False,
                     detail="doi_missing",
@@ -304,8 +304,8 @@ class BaseMDPICrossrefFetcher:
         try:
             source_url = SafeUrl(f"https://doi.org/{doi}")
         except ValueError:
-            return Failed(
-                reason=FailureReason(
+            return SourceFetchFailed(
+                reason=SourceFetchFailureReason(
                     code="extraction_empty",
                     retryable=False,
                     detail=f"invalid_doi_url:{doi[:100]}",
@@ -321,8 +321,8 @@ class BaseMDPICrossrefFetcher:
                 source_url=source_url,
             )
         except ValueError as e:
-            return Failed(
-                reason=FailureReason(
+            return SourceFetchFailed(
+                reason=SourceFetchFailureReason(
                     code="other",
                     retryable=False,
                     detail=f"invariant_violation:{e}",

@@ -11,7 +11,7 @@ from pathlib import Path
 
 from app.collection.fetchers._base.sitemap import BaseSitemapFetcher
 from app.collection.fetchers.anthropic import AnthropicFetcher
-from app.collection.ingestion.domain.fetched_article import FetchOutcome
+from app.collection.fetchers.outcome import FetchOutcome
 from tests.collection.fetchers._invariant import (
     assert_at_least_one_passport,
     assert_metadata_audit_safe,
@@ -19,9 +19,7 @@ from tests.collection.fetchers._invariant import (
     assert_provides_contract,
 )
 
-_FIXTURE = (
-    Path(__file__).parent.parent.parent / "fixtures" / "anthropic_sitemap.xml"
-)
+_FIXTURE = Path(__file__).parent.parent.parent / "fixtures" / "anthropic_sitemap.xml"
 
 
 def _outcomes() -> list[FetchOutcome]:

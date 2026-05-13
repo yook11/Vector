@@ -1,11 +1,11 @@
-"""ingestion BC 出口型の不変条件テスト。
+"""``IncompleteArticle`` aggregate の不変条件テスト。
 
 検証する不変条件:
 
 - ``ReadyForArticle`` は永続化 passport の 5 fields を strict に通すこと
 - ``IncompleteArticle`` は kiq message に乗せる前提 (frozen BaseModel) を満たすこと
-- ``try_advance_from`` の Pattern H promotion 規則 (RSS preferred / HTML fallback /
-  両欠落で Failed)
+- ``IncompleteArticle.complete_with_html`` の Pattern H promotion 規則
+  (RSS preferred / HTML fallback / 両欠落で ``ArticleCompletionFailed``)
 - ``FetchedEntry`` envelope は item + opaque metadata を運ぶ Service-internal 型
 
 実装枚挙 (Optional フィールド数 / 個別バリデータ等) は書かない。
@@ -17,12 +17,12 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.collection.extraction.domain.value_objects import PublishedAt
-from app.collection.ingestion.domain.fetched_article import (
-    Failed,
-    FetchedEntry,
+from app.collection.article.domain.article import ReadyForArticle
+from app.collection.article.domain.value_objects import PublishedAt
+from app.collection.fetchers.outcome import FetchedEntry
+from app.collection.incomplete_article.domain.completion import ArticleCompletionFailed
+from app.collection.incomplete_article.domain.incomplete_article import (
     IncompleteArticle,
-    ReadyForArticle,
 )
 from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 
@@ -100,14 +100,13 @@ class TestIncompleteArticle:
             pending.title = "Changed"  # type: ignore[misc]
 
 
-class TestTryAdvanceFromPromotion:
+class TestCompleteWithHtmlPromotion:
     """Pattern H 1 段目 → 2 段目 promotion 規則 (Stage 2 が呼ぶ唯一の API)。"""
 
     def test_rss_published_at_preferred_over_html(self) -> None:
         rss_pub = PublishedAt(value=datetime(2026, 4, 30, 12, 0, 0, tzinfo=UTC))
         html_pub = PublishedAt(value=datetime(2026, 5, 1, 12, 0, 0, tzinfo=UTC))
-        result = ReadyForArticle.try_advance_from(
-            _pending(published_at_hint=rss_pub),
+        result = _pending(published_at_hint=rss_pub).complete_with_html(
             body="x" * 100,
             html_published_at=html_pub,
         )
@@ -116,8 +115,7 @@ class TestTryAdvanceFromPromotion:
 
     def test_html_published_at_used_as_fallback_when_rss_missing(self) -> None:
         html_pub = PublishedAt(value=datetime(2026, 5, 1, 12, 0, 0, tzinfo=UTC))
-        result = ReadyForArticle.try_advance_from(
-            _pending(published_at_hint=None),
+        result = _pending(published_at_hint=None).complete_with_html(
             body="x" * 100,
             html_published_at=html_pub,
         )
@@ -125,28 +123,27 @@ class TestTryAdvanceFromPromotion:
         assert result.published_at == html_pub
 
     def test_failed_when_both_published_at_missing(self) -> None:
-        result = ReadyForArticle.try_advance_from(
-            _pending(published_at_hint=None),
+        result = _pending(published_at_hint=None).complete_with_html(
             body="x" * 100,
             html_published_at=None,
         )
-        assert isinstance(result, Failed)
+        assert isinstance(result, ArticleCompletionFailed)
         assert result.reason.code == "published_at_missing"
 
     def test_failed_when_html_body_violates_invariants(self) -> None:
         rss_pub = PublishedAt(value=datetime(2026, 4, 30, tzinfo=UTC))
-        result = ReadyForArticle.try_advance_from(
-            _pending(published_at_hint=rss_pub),
+        result = _pending(published_at_hint=rss_pub).complete_with_html(
             body="too short",
             html_published_at=None,
         )
-        assert isinstance(result, Failed)
+        assert isinstance(result, ArticleCompletionFailed)
         assert result.reason.code == "other"
 
     def test_html_title_used_only_when_prefer_html_title(self) -> None:
         rss_pub = PublishedAt(value=datetime(2026, 4, 30, tzinfo=UTC))
-        rss_only = ReadyForArticle.try_advance_from(
-            _pending(title="RSS Title", published_at_hint=rss_pub),
+        rss_only = _pending(
+            title="RSS Title", published_at_hint=rss_pub
+        ).complete_with_html(
             body="x" * 100,
             html_published_at=None,
             html_title="HTML Title",
@@ -154,12 +151,11 @@ class TestTryAdvanceFromPromotion:
         assert isinstance(rss_only, ReadyForArticle)
         assert rss_only.title == "RSS Title"
 
-        html_first = ReadyForArticle.try_advance_from(
-            _pending(
-                title="placeholder-slug",
-                published_at_hint=rss_pub,
-                prefer_html_title=True,
-            ),
+        html_first = _pending(
+            title="placeholder-slug",
+            published_at_hint=rss_pub,
+            prefer_html_title=True,
+        ).complete_with_html(
             body="x" * 100,
             html_published_at=None,
             html_title="HTML Title",

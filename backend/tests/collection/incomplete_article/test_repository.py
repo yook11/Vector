@@ -17,12 +17,14 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.collection.extraction.domain.value_objects import PublishedAt
-from app.collection.ingestion.pending_repository import (
+from app.collection.article.domain.value_objects import PublishedAt
+from app.collection.incomplete_article.domain.staged_attributes import (
+    StagedArticleAttributes,
+)
+from app.collection.incomplete_article.repository import (
     PendingHtmlArticleRepository,
     PendingHtmlContext,
 )
-from app.collection.ingestion.staged_attributes import StagedArticleAttributes
 from app.models.news_source import NewsSource
 from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 
