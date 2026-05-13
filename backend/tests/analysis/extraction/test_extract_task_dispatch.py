@@ -1,18 +1,16 @@
-"""``extract_content`` task の Layer 1 marker dispatch routing テスト (PR3.5-c)。
+"""``extract_content`` task の失敗 dispatch routing テスト。
 
-Service の execute を mock して、tasks.py が **どの Layer 1 marker** を受けて
-**どこ** (mark_article_unprocessable / 末尾 inline audit / inline retry /
-catch-all) に振り分けるかを検証する。
+Service の execute を mock して、tasks.py が **どんな exc** を受けたときに
+``ExtractionFailureHandler.handle`` に正しく委譲し、戻り値の ``reraise`` を
+正しく taskiq の raise/return semantics に変換するかを検証する。
 
-実 DB / 実 Service / 実 audit_repository は呼ばない:
-- ``ExtractionService`` を patch
-- ``ExtractionAuditRepository`` を patch (PR4: task 末尾の inline audit。
-  ``_record_failure`` helper は廃止、Task 層 inline ブロックが Repository を直
-  呼びする)
-- ``mark_article_unprocessable`` を patch
+実 DB / 実 Service / 実 Handler は呼ばない:
+- ``ExtractionService.execute`` を patch (side_effect で exc を投げる)
+- ``ExtractionFailureHandler`` を patch (handle の引数を assert、戻り値を制御)
 
-PR3 案 3 化: task signature は ``trigger: ExtractionTrigger``。冒頭の Ready 自構築
-は ``ReadyForExtraction.try_advance_from`` を patch して固定 Ready を返させる。
+marker ごとの後処理 (audit / DELETE / inline retry decision) の内部実装は
+``ExtractionFailureHandler`` 側の責務で、本ファイルでは検証しない
+(Handler の単体テストは ``test_failure_handler.py`` 参照)。
 """
 
 from __future__ import annotations
@@ -78,22 +76,20 @@ def _patch_try_advance_from(ready: ReadyForExtraction | None = None) -> object:
 
 
 # ---------------------------------------------------------------------------
-# NonRetryableDropArticle 経路 — mark_article_unprocessable で audit + DELETE
+# Drop 系 — Handler が False を返し、task は return (raise しない)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
-    ("exc_cls", "expected_code"),
+    "exc_cls",
     [
-        (AIProviderInputRejectedError, "ai_error_input_rejected"),
-        (AIProviderOutputBlockedError, "ai_error_output_blocked"),
+        AIProviderInputRejectedError,
+        AIProviderOutputBlockedError,
     ],
 )
 @pytest.mark.asyncio
-async def test_drop_article_calls_mark_unprocessable_with_correct_code(
-    exc_cls: type[Exception], expected_code: str
-) -> None:
-    """Drop 系 2 種は mark_article_unprocessable に dispatch される。"""
+async def test_drop_article_delegates_to_handler(exc_cls: type[Exception]) -> None:
+    """Drop 系例外は handler.handle に委譲され、reraise=False で return する。"""
     from app.analysis.extraction.tasks import extract_content
 
     ctx = _make_ctx()
@@ -105,23 +101,25 @@ async def test_drop_article_calls_mark_unprocessable_with_correct_code(
             "app.analysis.extraction.tasks._build_limiters", return_value=(None, None)
         ),
         patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
+        patch(
+            "app.analysis.extraction.tasks.ExtractionFailureHandler"
+        ) as mock_handler_cls,
     ):
-        svc_instance = mock_svc_cls.return_value
-        svc_instance.execute = AsyncMock(side_effect=exc)
-        svc_instance.mark_article_unprocessable = AsyncMock()
+        mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
+        mock_handler_cls.return_value.handle = AsyncMock(return_value=False)
         await extract_content(trigger=_trigger(), ctx=ctx)
-        svc_instance.mark_article_unprocessable.assert_awaited_once()
-        kwargs = svc_instance.mark_article_unprocessable.await_args.kwargs
-        args = svc_instance.mark_article_unprocessable.await_args.args
-        assert args[0] == 42  # article_id
-        assert kwargs["code"] == expected_code
-        assert kwargs["exc"] is exc
-        # PR2: extractor を Task 層から渡している (Service には extractor を保持しない)
-        assert kwargs["extractor"] is ctx.state.extractor
+
+    handler_handle = mock_handler_cls.return_value.handle
+    handler_handle.assert_awaited_once()
+    kwargs = handler_handle.await_args.kwargs
+    assert kwargs["exc"] is exc
+    assert kwargs["extractor"] is ctx.state.extractor
+    assert kwargs["attempt"] == 1
+    assert kwargs["last_attempt"] is False
 
 
 # ---------------------------------------------------------------------------
-# NonRetryableKeepArticle 経路 — _audit_extraction_failure (記事保持)
+# Keep 系 — Handler が False を返し、task は return
 # ---------------------------------------------------------------------------
 
 
@@ -134,10 +132,8 @@ async def test_drop_article_calls_mark_unprocessable_with_correct_code(
     ],
 )
 @pytest.mark.asyncio
-async def test_keep_article_calls_audit_extraction_failure(
-    exc_cls: type[Exception],
-) -> None:
-    """NonRetryableKeepArticle 系 (Layer 2-A の 3 種) は audit のみで記事保持。"""
+async def test_keep_article_delegates_to_handler(exc_cls: type[Exception]) -> None:
+    """Keep 系例外は handler に委譲され、reraise=False で return する。"""
     from app.analysis.extraction.tasks import extract_content
 
     ctx = _make_ctx()
@@ -148,25 +144,20 @@ async def test_keep_article_calls_audit_extraction_failure(
         ),
         patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
         patch(
-            "app.analysis.extraction.tasks.ExtractionAuditRepository"
-        ) as mock_audit_cls,
+            "app.analysis.extraction.tasks.ExtractionFailureHandler"
+        ) as mock_handler_cls,
     ):
-        svc_instance = mock_svc_cls.return_value
-        svc_instance.execute = AsyncMock(side_effect=exc_cls("boom"))
-        svc_instance.mark_article_unprocessable = AsyncMock()
-        mock_audit_cls.return_value.append_failure = AsyncMock()
+        mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc_cls("boom"))
+        mock_handler_cls.return_value.handle = AsyncMock(return_value=False)
         await extract_content(trigger=_trigger(), ctx=ctx)
-    append_failure = mock_audit_cls.return_value.append_failure
-    append_failure.assert_awaited_once()
-    assert append_failure.await_args.kwargs["exc"].__class__ is exc_cls
-    # PR2: extractor を Task 層から渡している (failure_recording.py 統合)
-    assert append_failure.await_args.kwargs["extractor"] is ctx.state.extractor
-    # mark_article_unprocessable は呼ばれない
-    svc_instance.mark_article_unprocessable.assert_not_awaited()
+
+    handler_handle = mock_handler_cls.return_value.handle
+    handler_handle.assert_awaited_once()
+    assert handler_handle.await_args.kwargs["exc"].__class__ is exc_cls
 
 
 # ---------------------------------------------------------------------------
-# RetryableError + INLINE_RETRY=True — taskiq retry が走る
+# RetryableError 経路 — Handler の reraise 戻り値で raise/return が決まる
 # ---------------------------------------------------------------------------
 
 
@@ -179,14 +170,8 @@ async def test_keep_article_calls_audit_extraction_failure(
     ],
 )
 @pytest.mark.asyncio
-async def test_retryable_inline_true_raises_when_not_last_attempt(
-    exc_cls: type[Exception],
-) -> None:
-    """INLINE_RETRY=True の RetryableError は not is_last_attempt なら raise する。
-
-    PR4: Stage 3/4/5 統一に伴い、reraise=True でも raise 前に共通 audit を 1 行
-    焼く挙動に変更 (現状の Stage 3 「inline retry なら audit skip」は撤回)。
-    """
+async def test_retryable_reraise_true_raises(exc_cls: type[Exception]) -> None:
+    """Handler が ``reraise=True`` を返したら task は元の exc を raise する。"""
     from app.analysis.extraction.tasks import extract_content
 
     ctx = _make_ctx(retry_count=0, max_retries=1)  # retry 余地あり
@@ -198,20 +183,20 @@ async def test_retryable_inline_true_raises_when_not_last_attempt(
         ),
         patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
         patch(
-            "app.analysis.extraction.tasks.ExtractionAuditRepository"
-        ) as mock_audit_cls,
+            "app.analysis.extraction.tasks.ExtractionFailureHandler"
+        ) as mock_handler_cls,
     ):
-        mock_audit_cls.return_value.append_failure = AsyncMock()
         mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc_cls("boom"))
+        mock_handler_cls.return_value.handle = AsyncMock(return_value=True)
         with pytest.raises(exc_cls):
             await extract_content(trigger=_trigger(), ctx=ctx)
-    # raise 前に audit が 1 行焼かれる (Stage 4/5 と統一)
-    mock_audit_cls.return_value.append_failure.assert_awaited_once()
+
+    mock_handler_cls.return_value.handle.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_retryable_inline_true_audits_on_last_attempt() -> None:
-    """INLINE_RETRY=True でも is_last_attempt なら audit + return (cron 救済委譲)。"""
+async def test_retryable_reraise_false_returns() -> None:
+    """Handler が ``reraise=False`` を返したら task は return する (raise しない)。"""
     from app.analysis.extraction.tasks import extract_content
 
     ctx = _make_ctx(retry_count=1, max_retries=1)  # 最終試行
@@ -223,20 +208,19 @@ async def test_retryable_inline_true_audits_on_last_attempt() -> None:
         ),
         patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
         patch(
-            "app.analysis.extraction.tasks.ExtractionAuditRepository"
-        ) as mock_audit_cls,
+            "app.analysis.extraction.tasks.ExtractionFailureHandler"
+        ) as mock_handler_cls,
     ):
         mock_svc_cls.return_value.execute = AsyncMock(
             side_effect=AIProviderNetworkError("connection reset")
         )
-        mock_audit_cls.return_value.append_failure = AsyncMock()
+        mock_handler_cls.return_value.handle = AsyncMock(return_value=False)
         await extract_content(trigger=_trigger(), ctx=ctx)
-    mock_audit_cls.return_value.append_failure.assert_awaited_once()
 
-
-# ---------------------------------------------------------------------------
-# RetryableError + INLINE_RETRY=False — 即 audit + return (retry しない)
-# ---------------------------------------------------------------------------
+    handler_handle = mock_handler_cls.return_value.handle
+    handler_handle.assert_awaited_once()
+    # last_attempt が Handler に正しく渡る
+    assert handler_handle.await_args.kwargs["last_attempt"] is True
 
 
 @pytest.mark.parametrize(
@@ -247,13 +231,17 @@ async def test_retryable_inline_true_audits_on_last_attempt() -> None:
     ],
 )
 @pytest.mark.asyncio
-async def test_retryable_inline_false_audits_immediately(
+async def test_retryable_inline_false_delegates_to_handler(
     exc_cls: type[Exception],
 ) -> None:
-    """INLINE_RETRY=False の RetryableError は retry せず即 audit + return。"""
+    """INLINE_RETRY=False 系の RetryableError も Handler に委譲される。
+
+    INLINE_RETRY の解釈は Handler 内部の責務なので、本 task テストでは
+    Handler が呼ばれたことのみ確認する。
+    """
     from app.analysis.extraction.tasks import extract_content
 
-    ctx = _make_ctx(retry_count=0, max_retries=1)  # retry 余地ありでも raise しない
+    ctx = _make_ctx(retry_count=0, max_retries=1)
 
     with (
         _patch_try_advance_from(),
@@ -262,23 +250,24 @@ async def test_retryable_inline_false_audits_immediately(
         ),
         patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
         patch(
-            "app.analysis.extraction.tasks.ExtractionAuditRepository"
-        ) as mock_audit_cls,
+            "app.analysis.extraction.tasks.ExtractionFailureHandler"
+        ) as mock_handler_cls,
     ):
         mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc_cls("boom"))
-        mock_audit_cls.return_value.append_failure = AsyncMock()
+        mock_handler_cls.return_value.handle = AsyncMock(return_value=False)
         await extract_content(trigger=_trigger(), ctx=ctx)
-    mock_audit_cls.return_value.append_failure.assert_awaited_once()
+
+    mock_handler_cls.return_value.handle.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
-# catch-all — 想定外例外は audit + return (UNKNOWN ラベル)
+# catch-all — Layer 1 marker いずれにも該当しない例外も Handler に委譲
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_unexpected_exception_falls_through_to_catch_all() -> None:
-    """Layer 1 marker いずれにも該当しない exc は catch-all で audit + return。"""
+async def test_unexpected_exception_delegates_to_handler() -> None:
+    """marker いずれにも該当しない exc も except Exception で Handler に渡る。"""
     from app.analysis.extraction.tasks import extract_content
 
     ctx = _make_ctx()
@@ -289,14 +278,15 @@ async def test_unexpected_exception_falls_through_to_catch_all() -> None:
         ),
         patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
         patch(
-            "app.analysis.extraction.tasks.ExtractionAuditRepository"
-        ) as mock_audit_cls,
+            "app.analysis.extraction.tasks.ExtractionFailureHandler"
+        ) as mock_handler_cls,
     ):
         mock_svc_cls.return_value.execute = AsyncMock(
             side_effect=ValueError("surprise"),
         )
-        mock_audit_cls.return_value.append_failure = AsyncMock()
+        mock_handler_cls.return_value.handle = AsyncMock(return_value=False)
         await extract_content(trigger=_trigger(), ctx=ctx)
-    append_failure = mock_audit_cls.return_value.append_failure
-    append_failure.assert_awaited_once()
-    assert isinstance(append_failure.await_args.kwargs["exc"], ValueError)
+
+    handler_handle = mock_handler_cls.return_value.handle
+    handler_handle.assert_awaited_once()
+    assert isinstance(handler_handle.await_args.kwargs["exc"], ValueError)

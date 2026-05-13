@@ -181,7 +181,7 @@ class TestExtractContent:
             ),
             patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
             patch(
-                "app.analysis.extraction.tasks.ExtractionAuditRepository"
+                "app.analysis.extraction.failure_handling.ExtractionAuditRepository"
             ) as mock_audit_cls,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
@@ -224,7 +224,7 @@ class TestExtractContent:
             ),
             patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
             patch(
-                "app.analysis.extraction.tasks.ExtractionAuditRepository"
+                "app.analysis.extraction.failure_handling.ExtractionAuditRepository"
             ) as mock_audit_cls,
             capture_logs() as cap,
         ):

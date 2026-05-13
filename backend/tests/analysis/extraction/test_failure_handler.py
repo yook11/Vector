@@ -1,6 +1,6 @@
-"""``ExtractionService.mark_article_unprocessable`` の integration test (PR3.5-c)。
+"""``ExtractionFailureHandler`` の integration test。
 
-検証する性質:
+検証する性質 (Drop 経路):
 - 1 tx 内で audit INSERT → article DELETE が両方完了する
 - 順序: audit が先 (source_id 自動補完が article 健在時に確定)
 - DELETE 後、``articles`` から該当 row が消える
@@ -8,10 +8,11 @@
   ただし新規 INSERT 時点では ``article_id`` が埋まっている (DELETE 前)
 - ``source_id`` が auto-resolve される (article DELETE 後でも source 追跡可能)
 - ``source_name`` が payload に保存される (FK 切断耐性)
-- 新型例外 (``AIProviderOutputBlockedError`` /
-  ``AIProviderInputRejectedError``) で呼び出すと
+- ``NonRetryableDropArticle`` 派生例外
+  (``AIProviderOutputBlockedError`` / ``AIProviderInputRejectedError``) で
   ``category='non_retryable_drop_article'`` / ``code=type(exc).CODE`` /
   ``outcome_code=code`` (Phase A 同値) が記録される
+- 戻り値 ``False`` (Drop 経路は taskiq retry させない)
 """
 
 from __future__ import annotations
@@ -29,14 +30,15 @@ from app.analysis.ai_provider_errors import (
 )
 from app.analysis.extraction.ai.base import BaseExtractor
 from app.analysis.extraction.ai.gemini_prompt import GeminiExtractionPrompt
-from app.analysis.extraction.service import ExtractionService
+from app.analysis.extraction.domain.ready import ReadyForExtraction
+from app.analysis.extraction.failure_handling import ExtractionFailureHandler
 from app.models.article import Article
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
 
 
 def _extractor_mock() -> MagicMock:
-    """PR2: mark_article_unprocessable に渡す ``BaseExtractor`` mock。"""
+    """Handler に渡す ``BaseExtractor`` mock (MODEL / PROMPT_VERSION のみ)。"""
     mock = MagicMock(spec=BaseExtractor)
     type(mock).MODEL = GeminiExtractionPrompt.MODEL
     type(mock).PROMPT_VERSION = GeminiExtractionPrompt.VERSION
@@ -63,6 +65,14 @@ async def _make_article(
     return article
 
 
+def _ready_from(article: Article) -> ReadyForExtraction:
+    return ReadyForExtraction(
+        article_id=article.id,
+        original_title=article.original_title,
+        original_content=article.original_content,
+    )
+
+
 @pytest.mark.asyncio
 async def test_output_blocked_writes_audit_then_deletes_article(
     db_session: AsyncSession,
@@ -75,16 +85,19 @@ async def test_output_blocked_writes_audit_then_deletes_article(
     # rollback 後の expired-attr lazy reload を避けるため事前に値を取り出す
     expected_source_id = sample_source.id
     expected_source_name = str(sample_source.name)
-    svc = ExtractionService(session_factory)
+    ready = _ready_from(article)
+    handler = ExtractionFailureHandler(session_factory)
 
     exc = AIProviderOutputBlockedError("blocked by policy: SAFETY")
-    await svc.mark_article_unprocessable(
-        article_id,
-        article.original_content,
-        code=type(exc).CODE,
+    reraise = await handler.handle(
+        ready=ready,
         exc=exc,
         extractor=_extractor_mock(),
+        attempt=1,
+        last_attempt=False,
     )
+
+    assert reraise is False
 
     # commit が走った別 tx の DB 状態を確認するため fresh session で検証
     await db_session.rollback()
@@ -126,17 +139,19 @@ async def test_input_rejected_writes_audit_then_deletes_article(
     """AIProviderInputRejectedError 経路 (context length 超過 etc) も同様に記録。"""
     article = await _make_article(db_session, sample_source)
     article_id = article.id
-    svc = ExtractionService(session_factory)
+    ready = _ready_from(article)
+    handler = ExtractionFailureHandler(session_factory)
 
     exc = AIProviderInputRejectedError("input exceeds context length")
-    await svc.mark_article_unprocessable(
-        article_id,
-        article.original_content,
-        code=type(exc).CODE,
+    reraise = await handler.handle(
+        ready=ready,
         exc=exc,
         extractor=_extractor_mock(),
+        attempt=1,
+        last_attempt=False,
     )
 
+    assert reraise is False
     await db_session.rollback()
     assert (await db_session.get(Article, article_id)) is None
     events = list(
