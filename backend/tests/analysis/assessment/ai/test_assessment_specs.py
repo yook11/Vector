@@ -53,7 +53,7 @@ def test_gemini_version_locked() -> None:
     のいずれかが変わったらこの値も変わる。意図的変更でない場合は配置換え以外の
     差分が混入したサイン。
     """
-    assert GEMINI_ASSESSMENT_SPEC.version == "e1a5fdb8"
+    assert GEMINI_ASSESSMENT_SPEC.version == "590499b0"
 
 
 def test_gemini_response_schema_equals_gemini_schema() -> None:
@@ -106,7 +106,7 @@ def test_deepseek_model_is_v4_flash() -> None:
 
 def test_deepseek_version_locked() -> None:
     """配置換えで version 値が変わらない golden 固定。"""
-    assert DEEPSEEK_ASSESSMENT_SPEC.version == "cdde3632"
+    assert DEEPSEEK_ASSESSMENT_SPEC.version == "9c5bf022"
 
 
 def test_deepseek_response_schema_equals_tool_schema() -> None:

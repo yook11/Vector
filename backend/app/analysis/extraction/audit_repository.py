@@ -223,8 +223,7 @@ class ExtractionAuditRepository:
         / ``prompt_version`` / ``raw_relevance`` は envelope から直接読み、Gemini
         ClassVar への静的依存を持たない
         (``feedback_bc_boundary_guarantees_downstream``)。``ai_raw_response`` は
-        ``raw_response[:LIMIT]`` で切り詰める。``entity_count`` は
-        ``envelope.result.entities`` の長さ。
+        ``raw_response[:LIMIT]`` で切り詰める。
         """
         return ExtractionPayload(
             **base_extraction_payload_fields(
@@ -235,7 +234,6 @@ class ExtractionAuditRepository:
             prompt_version=envelope.prompt_version,
             ai_raw_response=envelope.raw_response[:_AI_RAW_RESPONSE_LIMIT] or None,
             raw_relevance=envelope.raw_relevance,
-            entity_count=len(envelope.result.entities),
         )
 
     async def _resolve_source_name(self, article_id: int) -> str | None:

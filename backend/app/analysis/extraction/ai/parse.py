@@ -29,10 +29,8 @@ def parse_extraction(response: GeminiExtractionResponse) -> Signal | Noise:
         return Noise(
             title_ja=response.title_ja,
             summary_ja=response.summary_ja,
-            entities=list(response.entities),
         )
     return Signal(
         title_ja=response.title_ja,
         summary_ja=response.summary_ja,
-        entities=list(response.entities),
     )

@@ -21,9 +21,7 @@ signal / noise 両 path を扱える。
 - ``save_signal``: ``ExtractionCall[Signal]`` envelope を
   ``INSERT ... ON CONFLICT (article_id) DO NOTHING RETURNING id`` で永続化する。
   race 敗北時 (rowcount=0) は ``None`` を返し、Service が audit / 後続 chain を
-  焼かず短絡する (勝者 SSoT、Stage 4 AssessmentRepository と同型)。子テーブル
-  (``article_extraction_entities``) の INSERT は親 INSERT 成功時のみで race
-  敗北による orphan を作らない。
+  焼かず短絡する (勝者 SSoT、Stage 4 AssessmentRepository と同型)。
 - ``update_signal_idempotent``: re-extraction CLI 専用 —
   ``ExtractionCall[Signal]`` のみ受け付け、Noise を update 経路に流す可能性を
   型レベルで排除する (``feedback_structural_guarantee``)。
@@ -33,8 +31,7 @@ signal / noise 両 path を扱える。
 - ``noise_exists_for_article``: cheap な exists 判定 (旧経路 / 別用途で残置、
   Ready 構築経路では ``try_load_for_extraction`` 内に集約済)
 - ``save_noise``: ``ExtractionCall[Noise]`` envelope を ``INSERT ... ON
-  CONFLICT DO NOTHING RETURNING id`` で永続化する。entities は JSONB
-  カラムにそのまま詰め込み、子テーブル分離は不要。``ON CONFLICT`` の
+  CONFLICT DO NOTHING RETURNING id`` で永続化する。``ON CONFLICT`` の
   target は指定しない (UNIQUE 違反だけでなく ``article_extractions`` 側の
   排他トリガーが fire したケースも吸収するため。
   ``feedback_on_conflict_no_target.md``)。
@@ -43,7 +40,7 @@ signal / noise 両 path を扱える。
 from __future__ import annotations
 
 import structlog
-from sqlalchemy import delete, func, update
+from sqlalchemy import func, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
@@ -53,7 +50,6 @@ from app.analysis.extraction.domain import Noise, Signal
 from app.analysis.extraction.domain.ready import ReadyForExtraction
 from app.models.article import Article
 from app.models.article_extraction import ArticleExtraction
-from app.models.article_extraction_entity import ArticleExtractionEntity
 from app.models.extraction_noise import ExtractionNoise as ExtractionNoiseORM
 
 logger = structlog.get_logger(__name__)
@@ -145,9 +141,7 @@ class ExtractionRepository:
         に焼くのみで業務行には INSERT しない (``feedback_outcome_purification``)。
 
         commit は呼び出し側 (Service) が行う。``extracted_at`` は server_default で
-        DB が確定させる (本メソッドでは読み戻さない、id のみ返す)。子テーブル
-        ``article_extraction_entities`` の INSERT は親 INSERT 成功時のみ実施し、
-        race 敗北で orphan エンティティを作らない。
+        DB が確定させる (本メソッドでは読み戻さない、id のみ返す)。
 
         Returns:
             成功時: 永続化された ``article_extractions.id`` (``int``)
@@ -165,27 +159,7 @@ class ExtractionRepository:
             .on_conflict_do_nothing(index_elements=["article_id"])
             .returning(ArticleExtraction.id)
         )
-        extraction_id = (await self._session.execute(stmt)).scalar()
-        if extraction_id is None:
-            return None
-
-        # 親 INSERT 成功時のみ子エンティティを INSERT する。``position`` は AI 出力
-        # 順を保存し、後段で人間レビュー時に prompt 出力順を再現できるようにする。
-        if signal.entities:
-            self._session.add_all(
-                [
-                    ArticleExtractionEntity(
-                        extraction_id=extraction_id,
-                        surface=e.surface,
-                        raw_type=e.raw_type,
-                        position=i,
-                    )
-                    for i, e in enumerate(signal.entities)
-                ]
-            )
-            await self._session.flush()
-
-        return extraction_id
+        return (await self._session.execute(stmt)).scalar()
 
     async def update_signal_idempotent(
         self,
@@ -206,8 +180,6 @@ class ExtractionRepository:
           ``article_embeddings`` / ``watchlist_entries`` への CASCADE 連鎖を
           構造的に回避する
           (parent DELETE するとユーザの watchlist が消失するため)。
-        - 子 ``article_extraction_entities`` のみ DELETE → INSERT で差し替える
-          (新 prompt の出力を新 schema にそのまま流し込む)。
         - ``extracted_at`` は ``func.now()`` で再採番する (再抽出した時刻として
           扱い、後段の運用で「いつ抽出された」を取り違えない)。
 
@@ -230,25 +202,6 @@ class ExtractionRepository:
             .returning(ArticleExtraction.id)
         )
         extraction_id = (await self._session.execute(update_stmt)).scalar_one()
-
-        await self._session.execute(
-            delete(ArticleExtractionEntity).where(
-                ArticleExtractionEntity.extraction_id == extraction_id
-            )
-        )
-
-        if signal.entities:
-            self._session.add_all(
-                [
-                    ArticleExtractionEntity(
-                        extraction_id=extraction_id,
-                        surface=e.surface,
-                        raw_type=e.raw_type,
-                        position=i,
-                    )
-                    for i, e in enumerate(signal.entities)
-                ]
-            )
         await self._session.flush()
 
         return extraction_id
@@ -296,17 +249,12 @@ class ExtractionRepository:
             (Service は audit / 後続 chain を焼かず短絡する、勝者 SSoT 同型)
         """
         noise = call.result
-        entities_jsonb = [
-            {"surface": e.surface.root, "raw_type": e.raw_type.root}
-            for e in noise.entities
-        ]
         stmt = (
             pg_insert(ExtractionNoiseORM)
             .values(
                 article_id=article_id,
                 title_ja=noise.title_ja,
                 summary_ja=noise.summary_ja,
-                entities=entities_jsonb,
             )
             .on_conflict_do_nothing()
             .returning(ExtractionNoiseORM.id)

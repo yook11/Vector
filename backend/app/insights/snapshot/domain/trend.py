@@ -28,7 +28,8 @@ from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
-from app.analysis.domain.value_objects.entity import EntityName, EntityType
+from app.analysis.assessment.domain.result import MentionType
+from app.analysis.domain.value_objects.entity import EntityName
 from app.analysis.domain.value_objects.topic import TopicName
 from app.domain.category import CategoryName, CategorySlug
 from app.insights.snapshot.config import MIN_CURRENT, SMOOTHING
@@ -62,7 +63,7 @@ class EntityTrend(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     name: EntityName
-    type: EntityType
+    type: MentionType
     current_count: int = Field(ge=MIN_CURRENT, le=_MAX_COUNT)
     previous_count: int = Field(ge=0, le=_MAX_COUNT)
 
@@ -104,7 +105,7 @@ class NewEntity(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     name: EntityName
-    type: EntityType
+    type: MentionType
     current_count: int = Field(ge=1, le=_MAX_COUNT)
 
 

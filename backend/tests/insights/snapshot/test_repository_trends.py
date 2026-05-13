@@ -9,8 +9,9 @@
 境界として:
 - 期間境界 (current_start ちょうど含む / current_end ちょうど除外)
 - カテゴリ filter
-- DISTINCT extraction_id (同一 extraction 内の重複 entity を 1 カウントに)
-- previous=0 / NOT EXISTS (新規エンティティ)
+- DISTINCT assessment.id (同一 assessment 内の重複 mention を 1 カウントに)
+- previous=0 / NOT EXISTS (新規 mention)
+- ``events IS NULL`` 行を集計対象外にする (PR 1 デプロイ前の旧行)
 """
 
 from __future__ import annotations
@@ -62,13 +63,13 @@ class TestGetTrendingEntities:
             await seed_analysis(
                 category_id=cat.id,
                 analyzed_at=_jst(2026, 4, 14, hour=9 + i),
-                entities=[("NVIDIA", "company")],
+                mentions=[("NVIDIA", "company")],
             )
         for i in range(2):
             await seed_analysis(
                 category_id=cat.id,
                 analyzed_at=_jst(2026, 4, 7, hour=9 + i),
-                entities=[("NVIDIA", "company")],
+                mentions=[("NVIDIA", "company")],
             )
 
         repo = TrendsRepository(db_session)
@@ -98,7 +99,7 @@ class TestGetTrendingEntities:
             await seed_analysis(
                 category_id=cat.id,
                 analyzed_at=_jst(2026, 4, 14, hour=i),
-                entities=[("DeepSeek", "company")],
+                mentions=[("DeepSeek", "company")],
             )
 
         repo = TrendsRepository(db_session)
@@ -125,13 +126,13 @@ class TestGetTrendingEntities:
             await seed_analysis(
                 category_id=cat.id,
                 analyzed_at=_jst(2026, 4, 14, hour=i),
-                entities=[("NVIDIA", "company")],
+                mentions=[("NVIDIA", "company")],
             )
         for i in range(3):
             await seed_analysis(
                 category_id=cat.id,
                 analyzed_at=_jst(2026, 4, 7, hour=i),
-                entities=[("NVIDIA", "company")],
+                mentions=[("NVIDIA", "company")],
             )
 
         repo = TrendsRepository(db_session)
@@ -156,12 +157,12 @@ class TestGetTrendingEntities:
             await seed_analysis(
                 category_id=cat.id,
                 analyzed_at=_jst(2026, 4, 14, hour=i),
-                entities=[("Edge", "concept")],
+                mentions=[("Edge", "technology")],
             )
         await seed_analysis(
             category_id=cat.id,
             analyzed_at=_jst(2026, 4, 7, hour=9),
-            entities=[("Edge", "concept")],
+            mentions=[("Edge", "technology")],
         )
 
         repo = TrendsRepository(db_session)
@@ -187,7 +188,7 @@ class TestGetTrendingEntities:
             await seed_analysis(
                 category_id=other.id,
                 analyzed_at=_jst(2026, 4, 14, hour=i),
-                entities=[("NVIDIA", "company")],
+                mentions=[("NVIDIA", "company")],
             )
 
         repo = TrendsRepository(db_session)
@@ -212,20 +213,20 @@ class TestGetTrendingEntities:
         await seed_analysis(
             category_id=cat.id,
             analyzed_at=WEEK_START,
-            entities=[("Edge", "company")],
+            mentions=[("Edge", "company")],
         )
         # current_end ちょうど (含まれない)
         await seed_analysis(
             category_id=cat.id,
             analyzed_at=WEEK_END,
-            entities=[("Edge", "company")],
+            mentions=[("Edge", "company")],
         )
         # current 内 (含まれる) を 9 件追加して合計 10 件にする
         for i in range(9):
             await seed_analysis(
                 category_id=cat.id,
                 analyzed_at=_jst(2026, 4, 14, hour=i),
-                entities=[("Edge", "company")],
+                mentions=[("Edge", "company")],
             )
 
         repo = TrendsRepository(db_session)
@@ -245,10 +246,10 @@ class TestGetTrendingEntities:
         sample_categories: list[Category],
         seed_analysis: SeedAnalysis,
     ) -> None:
-        """同一 extraction 内に同 entity が複数出ても 1 カウント。
+        """同一 assessment 内に同 mention が複数出ても 1 カウント。
 
-        ArticleExtractionEntity の重複行を seed しなくとも、entity の出現は
-        extraction 単位で評価されることを確認する。
+        events JSONB 内で同じ (surface, type) を持つ mention が複数登場しても、
+        ``COUNT(DISTINCT a.id)`` により記事単位で 1 件と数えられる。
         """
         cat = sample_categories[0]
         # 5 件の独立 extraction で NVIDIA が登場
@@ -256,13 +257,13 @@ class TestGetTrendingEntities:
             await seed_analysis(
                 category_id=cat.id,
                 analyzed_at=_jst(2026, 4, 14, hour=i),
-                entities=[("NVIDIA", "company"), ("NVIDIA", "company")],  # 重複
+                mentions=[("NVIDIA", "company"), ("NVIDIA", "company")],  # 重複
             )
         for i in range(2):
             await seed_analysis(
                 category_id=cat.id,
                 analyzed_at=_jst(2026, 4, 7, hour=i),
-                entities=[("NVIDIA", "company")],
+                mentions=[("NVIDIA", "company")],
             )
 
         repo = TrendsRepository(db_session)
@@ -293,19 +294,19 @@ class TestGetTrendingEntities:
             await seed_analysis(
                 category_id=cat.id,
                 analyzed_at=_jst(2026, 4, 14, hour=i),
-                entities=[("NVIDIA", "company")],
+                mentions=[("NVIDIA", "company")],
             )
         for i in range(2):
             await seed_analysis(
                 category_id=cat.id,
                 analyzed_at=_jst(2026, 4, 14, hour=10 + i),
-                entities=[("Nvidia", "company")],
+                mentions=[("Nvidia", "company")],
             )
         for i in range(2):
             await seed_analysis(
                 category_id=cat.id,
                 analyzed_at=_jst(2026, 4, 7, hour=i),
-                entities=[("nvidia", "company")],
+                mentions=[("nvidia", "company")],
             )
 
         repo = TrendsRepository(db_session)
@@ -329,6 +330,56 @@ class TestGetTrendingEntities:
         sample_categories: list[Category],
     ) -> None:
         cat = sample_categories[0]
+        repo = TrendsRepository(db_session)
+        results = await repo.get_trending_entities(
+            category_id=cat.id,
+            current_start=WEEK_START,
+            current_end=WEEK_END,
+            previous_start=PREV_START,
+        )
+        assert results == ()
+
+    @pytest.mark.asyncio
+    async def test_excludes_rows_with_null_events(
+        self,
+        db_session: AsyncSession,
+        sample_categories: list[Category],
+        seed_analysis: SeedAnalysis,
+    ) -> None:
+        """``events IS NULL`` 行 (PR 1 デプロイ前の旧行) は集計対象外。"""
+        cat = sample_categories[0]
+        for i in range(10):
+            await seed_analysis(
+                category_id=cat.id,
+                analyzed_at=_jst(2026, 4, 14, hour=i),
+                events_null=True,
+            )
+
+        repo = TrendsRepository(db_session)
+        results = await repo.get_trending_entities(
+            category_id=cat.id,
+            current_start=WEEK_START,
+            current_end=WEEK_END,
+            previous_start=PREV_START,
+        )
+        assert results == ()
+
+    @pytest.mark.asyncio
+    async def test_handles_empty_events_array(
+        self,
+        db_session: AsyncSession,
+        sample_categories: list[Category],
+        seed_analysis: SeedAnalysis,
+    ) -> None:
+        """``events = []`` 行は LATERAL で自然に 0 件、エラーにならない。"""
+        cat = sample_categories[0]
+        for i in range(10):
+            await seed_analysis(
+                category_id=cat.id,
+                analyzed_at=_jst(2026, 4, 14, hour=i),
+                mentions=(),
+            )
+
         repo = TrendsRepository(db_session)
         results = await repo.get_trending_entities(
             category_id=cat.id,
@@ -471,7 +522,7 @@ class TestGetNewEntities:
         await seed_analysis(
             category_id=cat.id,
             analyzed_at=_jst(2026, 4, 14, hour=9),
-            entities=[("DeepSeek-R1", "product")],
+            mentions=[("DeepSeek-R1", "product")],
         )
 
         repo = TrendsRepository(db_session)
@@ -499,13 +550,13 @@ class TestGetNewEntities:
         await seed_analysis(
             category_id=cat.id,
             analyzed_at=_jst(2026, 4, 14, hour=9),
-            entities=[("NVIDIA", "company")],
+            mentions=[("NVIDIA", "company")],
         )
         # lookback 内 (= current の 2 週前)
         await seed_analysis(
             category_id=cat.id,
             analyzed_at=_jst(2026, 3, 30, hour=9),
-            entities=[("NVIDIA", "company")],
+            mentions=[("NVIDIA", "company")],
         )
 
         repo = TrendsRepository(db_session)
@@ -529,13 +580,13 @@ class TestGetNewEntities:
         await seed_analysis(
             category_id=cat.id,
             analyzed_at=_jst(2026, 4, 14, hour=9),
-            entities=[("OldStartup", "company")],
+            mentions=[("OldStartup", "company")],
         )
         # lookback_start (= current_start - 4 週) より前 = 5 週前
         await seed_analysis(
             category_id=cat.id,
             analyzed_at=WEEK_START - WEEK * 5,
-            entities=[("OldStartup", "company")],
+            mentions=[("OldStartup", "company")],
         )
 
         repo = TrendsRepository(db_session)
@@ -564,12 +615,12 @@ class TestGetNewEntities:
         await seed_analysis(
             category_id=target.id,
             analyzed_at=_jst(2026, 4, 14, hour=9),
-            entities=[("CrossCat", "company")],
+            mentions=[("CrossCat", "company")],
         )
         await seed_analysis(
             category_id=other.id,
             analyzed_at=_jst(2026, 3, 30, hour=9),
-            entities=[("CrossCat", "company")],
+            mentions=[("CrossCat", "company")],
         )
 
         repo = TrendsRepository(db_session)
@@ -599,18 +650,18 @@ class TestGetNewEntities:
             await seed_analysis(
                 category_id=cat.id,
                 analyzed_at=_jst(2026, 4, 14, hour=hour),
-                entities=[("Loud", "company")],
+                mentions=[("Loud", "company")],
             )
         await seed_analysis(
             category_id=cat.id,
             analyzed_at=_jst(2026, 4, 15, hour=9),
-            entities=[("Quiet", "company")],
+            mentions=[("Quiet", "company")],
         )
         for hour in range(2):
             await seed_analysis(
                 category_id=cat.id,
                 analyzed_at=_jst(2026, 4, 16, hour=hour),
-                entities=[("Mid", "company")],
+                mentions=[("Mid", "company")],
             )
 
         repo = TrendsRepository(db_session)

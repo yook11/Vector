@@ -16,7 +16,8 @@ from datetime import date
 import pytest
 from pydantic import ValidationError
 
-from app.analysis.domain.value_objects.entity import EntityName, EntityType
+from app.analysis.assessment.domain.result import MentionType
+from app.analysis.domain.value_objects.entity import EntityName
 from app.analysis.domain.value_objects.topic import TopicName
 from app.domain.category import CategoryName, CategorySlug
 from app.insights.snapshot.config import (
@@ -35,8 +36,8 @@ from app.insights.snapshot.domain.trend import (
 
 def _entity(
     name: str = "NVIDIA", type_: str = "company"
-) -> tuple[EntityName, EntityType]:
-    return EntityName(name), EntityType(type_)
+) -> tuple[EntityName, MentionType]:
+    return EntityName(name), MentionType(type_)
 
 
 class TestEntityTrend:

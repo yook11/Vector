@@ -14,7 +14,7 @@ Outcome 型 assertion を「signal 勝者 → ``int``、noise 勝者 → ``None`
   そのまま raise される (audit は task 層が焼く責務)
 - 各 audit row に ``ai_model`` / ``prompt_version`` / ``input_content_*`` /
   ``source_name`` が payload に焼かれている
-- 成功系では ``ai_raw_response`` / ``entity_count`` も焼かれる
+- 成功系では ``ai_raw_response`` も焼かれる
 - ``article_id`` / ``source_id`` (auto-resolve) が両方埋まる
 """
 
@@ -27,11 +27,10 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.analysis.domain.value_objects.entity import EntityRawType, EntitySurface
 from app.analysis.extraction.ai.base import BaseExtractor
 from app.analysis.extraction.ai.envelope import ExtractionCall
 from app.analysis.extraction.ai.gemini_spec import GEMINI_EXTRACTION_SPEC
-from app.analysis.extraction.domain import ExtractedEntity, Noise, Signal
+from app.analysis.extraction.domain import Noise, Signal
 from app.analysis.extraction.domain.ready import ReadyForExtraction
 from app.analysis.extraction.errors import ExtractionResponseInvalidError
 from app.analysis.extraction.service import ExtractionService
@@ -40,20 +39,9 @@ from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
 
 
-def _signal_envelope(
-    entities: int = 2, *, raw: str = '{"relevance":"signal"}'
-) -> ExtractionCall[Signal]:
+def _signal_envelope(*, raw: str = '{"relevance":"signal"}') -> ExtractionCall[Signal]:
     return ExtractionCall(
-        result=Signal(
-            title_ja="日本語タイトル",
-            summary_ja="日本語要約",
-            entities=[
-                ExtractedEntity(
-                    surface=EntitySurface(f"E{i}"), raw_type=EntityRawType("Company")
-                )
-                for i in range(entities)
-            ],
-        ),
+        result=Signal(title_ja="日本語タイトル", summary_ja="日本語要約"),
         raw_response=raw,
         raw_relevance="signal",
         prompt_version=GEMINI_EXTRACTION_SPEC.version,
@@ -61,20 +49,9 @@ def _signal_envelope(
     )
 
 
-def _noise_envelope(
-    entities: int = 2, *, raw: str = '{"relevance":"noise"}'
-) -> ExtractionCall[Noise]:
+def _noise_envelope(*, raw: str = '{"relevance":"noise"}') -> ExtractionCall[Noise]:
     return ExtractionCall(
-        result=Noise(
-            title_ja="日本語タイトル",
-            summary_ja="日本語要約",
-            entities=[
-                ExtractedEntity(
-                    surface=EntitySurface(f"E{i}"), raw_type=EntityRawType("Company")
-                )
-                for i in range(entities)
-            ],
-        ),
+        result=Noise(title_ja="日本語タイトル", summary_ja="日本語要約"),
         raw_response=raw,
         raw_relevance="noise",
         prompt_version=GEMINI_EXTRACTION_SPEC.version,
@@ -164,7 +141,6 @@ async def test_signal_outcome_writes_extracted_audit_with_category_and_code(
     assert payload["ai_model"] == GEMINI_EXTRACTION_SPEC.model
     assert payload["prompt_version"] == GEMINI_EXTRACTION_SPEC.version
     assert payload["source_name"] == str(sample_source.name)
-    assert payload["entity_count"] == 2
     assert payload["ai_raw_response"]
     assert payload["input_content_length"] == len(article.original_content)
     # PR1-a: raw_relevance は envelope.raw_relevance から焼かれる (Stage 4 対称)

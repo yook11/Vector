@@ -34,43 +34,27 @@ from app.analysis.ai_provider_errors import (
     AIProviderInputRejectedError,
     AIProviderNetworkError,
 )
-from app.analysis.domain.value_objects.entity import EntityRawType, EntitySurface
 from app.analysis.extraction.ai.base import BaseExtractor
 from app.analysis.extraction.ai.envelope import ExtractionCall
 from app.analysis.extraction.application import (
     ReExtractionService,
     ReExtractionSummary,
 )
-from app.analysis.extraction.domain import (
-    ExtractedEntity,
-    Noise,
-    Signal,
-)
+from app.analysis.extraction.domain import Noise, Signal
 from app.analysis.extraction.repository import ExtractionRepository
 from app.models.article import Article
 from app.models.article_extraction import ArticleExtraction
-from app.models.article_extraction_entity import ArticleExtractionEntity
 from app.models.news_source import NewsSource
 
 
 def _signal_call(
-    entities: list[tuple[str, str]] | None = None,
     *,
     title_ja: str = "新タイトル",
     summary_ja: str = "新要約",
 ) -> ExtractionCall[Signal]:
     """``ExtractionCall[Signal]`` を生成するヘルパー。"""
-    if entities is None:
-        entities = [("NewSurface", "Company")]
     return ExtractionCall(
-        result=Signal(
-            title_ja=title_ja,
-            summary_ja=summary_ja,
-            entities=[
-                ExtractedEntity(surface=EntitySurface(s), raw_type=EntityRawType(t))
-                for s, t in entities
-            ],
-        ),
+        result=Signal(title_ja=title_ja, summary_ja=summary_ja),
         raw_response='{"relevance":"signal"}',
         raw_relevance="signal",
         prompt_version="testver1",
@@ -79,23 +63,13 @@ def _signal_call(
 
 
 def _noise_call(
-    entities: list[tuple[str, str]] | None = None,
     *,
     title_ja: str = "ノイズタイトル",
     summary_ja: str = "ノイズ要約",
 ) -> ExtractionCall[Noise]:
     """``ExtractionCall[Noise]`` を生成するヘルパー (再抽出で Noise 経路を作る用)。"""
-    if entities is None:
-        entities = [("NoiseSurface", "Person")]
     return ExtractionCall(
-        result=Noise(
-            title_ja=title_ja,
-            summary_ja=summary_ja,
-            entities=[
-                ExtractedEntity(surface=EntitySurface(s), raw_type=EntityRawType(t))
-                for s, t in entities
-            ],
-        ),
+        result=Noise(title_ja=title_ja, summary_ja=summary_ja),
         raw_response='{"relevance":"noise"}',
         raw_relevance="noise",
         prompt_version="testver1",
@@ -138,16 +112,11 @@ async def _seed_extraction(
     db_session: AsyncSession,
     *,
     article: Article,
-    entities: list[tuple[str, str]],
 ) -> ArticleExtraction:
-    """Article + 既存 ArticleExtraction (子付き) を作る。"""
+    """Article + 既存 ArticleExtraction を作る。"""
     repo = ExtractionRepository(db_session)
     saved = await repo.save_signal(
-        _signal_call(
-            entities=entities,
-            title_ja="旧タイトル",
-            summary_ja="旧要約",
-        ),
+        _signal_call(title_ja="旧タイトル", summary_ja="旧要約"),
         article_id=article.id,
     )
     await db_session.commit()
@@ -199,7 +168,7 @@ async def test_invalid_input_is_skipped_not_failed(
     article = await _make_article(
         db_session, sample_source, "https://example.com/invalid"
     )
-    await _seed_extraction(db_session, article=article, entities=[("Old", "company")])
+    await _seed_extraction(db_session, article=article)
 
     extractor = _extractor(side_effect=AIProviderInputRejectedError("too short"))
     service = ReExtractionService(session_factory)
@@ -215,23 +184,19 @@ async def test_invalid_input_is_skipped_not_failed(
 
 
 @pytest.mark.asyncio
-async def test_success_replaces_entities_and_keeps_parent_id(
+async def test_success_updates_parent_in_place_keeps_id(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """re-extraction 成功時: parent id は変わらず、子 entity が差し替わる。"""
+    """re-extraction 成功時: parent id は変わらず translated_title だけ差し替わる。"""
     article = await _make_article(
         db_session, sample_source, "https://example.com/success"
     )
-    parent = await _seed_extraction(
-        db_session, article=article, entities=[("OldOne", "company")]
-    )
+    parent = await _seed_extraction(db_session, article=article)
     parent_id_before = parent.id
 
-    extractor = _extractor(
-        return_value=_signal_call(entities=[("NewSurface", "Company")])
-    )
+    extractor = _extractor(return_value=_signal_call())
     service = ReExtractionService(session_factory)
     summary = await service.execute((article.id,), extractor, dry_run=False)
 
@@ -249,20 +214,6 @@ async def test_success_replaces_entities_and_keeps_parent_id(
         assert parent_after.id == parent_id_before
         assert parent_after.translated_title == "新タイトル"
 
-        rows = (
-            (
-                await fresh.execute(
-                    select(ArticleExtractionEntity).where(
-                        ArticleExtractionEntity.extraction_id == parent_id_before
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-    assert [r.surface.root for r in rows] == ["NewSurface"]
-    assert [r.raw_type.root for r in rows] == ["Company"]
-
 
 @pytest.mark.asyncio
 async def test_dry_run_calls_extractor_but_rolls_back(
@@ -272,13 +223,9 @@ async def test_dry_run_calls_extractor_but_rolls_back(
 ) -> None:
     """dry_run=True: extractor は呼ばれるが DB は変更されない。"""
     article = await _make_article(db_session, sample_source, "https://example.com/dry")
-    await _seed_extraction(
-        db_session, article=article, entities=[("OldOne", "company")]
-    )
+    await _seed_extraction(db_session, article=article)
 
-    extractor = _extractor(
-        return_value=_signal_call(entities=[("ShouldNotPersist", "Tech")])
-    )
+    extractor = _extractor(return_value=_signal_call())
     service = ReExtractionService(session_factory)
     summary = await service.execute((article.id,), extractor, dry_run=True)
 
@@ -297,20 +244,6 @@ async def test_dry_run_calls_extractor_but_rolls_back(
         # UPDATE が roll back されたので旧タイトルのまま
         assert parent.translated_title == "旧タイトル"
 
-        rows = (
-            (
-                await fresh.execute(
-                    select(ArticleExtractionEntity).where(
-                        ArticleExtractionEntity.extraction_id == parent.id
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-    # 旧 entity ("OldOne") のまま、新 ("ShouldNotPersist") は永続化されていない
-    assert [r.surface.root for r in rows] == ["OldOne"]
-
 
 # ---------------------------------------------------------------------------
 # retry / failed
@@ -327,7 +260,7 @@ async def test_retries_then_succeeds(
     article = await _make_article(
         db_session, sample_source, "https://example.com/retry"
     )
-    await _seed_extraction(db_session, article=article, entities=[("Old", "company")])
+    await _seed_extraction(db_session, article=article)
 
     extractor = _extractor(
         side_effect=[AIProviderNetworkError("transient"), _signal_call()]
@@ -349,7 +282,7 @@ async def test_failed_after_max_retries(
     article = await _make_article(
         db_session, sample_source, "https://example.com/failed"
     )
-    await _seed_extraction(db_session, article=article, entities=[("Old", "company")])
+    await _seed_extraction(db_session, article=article)
 
     extractor = _extractor(side_effect=AIProviderNetworkError("dead"))
     service = ReExtractionService(session_factory, max_retries=2)
@@ -375,7 +308,7 @@ async def test_configuration_error_fails_immediately_without_retry(
     article = await _make_article(
         db_session, sample_source, "https://example.com/config-fail"
     )
-    await _seed_extraction(db_session, article=article, entities=[("Old", "company")])
+    await _seed_extraction(db_session, article=article)
 
     extractor = _extractor(side_effect=AIProviderConfigurationError("api key invalid"))
     service = ReExtractionService(session_factory, max_retries=3)
@@ -395,10 +328,10 @@ async def test_summary_aggregates_per_article_independently(
 ) -> None:
     """1 件 success / 1 件 skip (no extraction) / 1 件 failed が独立に集約される。"""
     a_ok = await _make_article(db_session, sample_source, "https://example.com/ok")
-    await _seed_extraction(db_session, article=a_ok, entities=[("X", "company")])
+    await _seed_extraction(db_session, article=a_ok)
     a_skip = await _make_article(db_session, sample_source, "https://example.com/skip")
     a_fail = await _make_article(db_session, sample_source, "https://example.com/fail")
-    await _seed_extraction(db_session, article=a_fail, entities=[("Y", "company")])
+    await _seed_extraction(db_session, article=a_fail)
 
     call_log: list[int] = []
 
@@ -447,14 +380,10 @@ async def test_skips_when_re_extraction_returns_noise_and_keeps_signal_extractio
     article = await _make_article(
         db_session, sample_source, "https://example.com/noise-skip"
     )
-    parent = await _seed_extraction(
-        db_session, article=article, entities=[("OldSignal", "company")]
-    )
+    parent = await _seed_extraction(db_session, article=article)
     parent_id_before = parent.id
 
-    extractor = _extractor(
-        return_value=_noise_call(entities=[("NoiseSurface", "Person")])
-    )
+    extractor = _extractor(return_value=_noise_call())
     service = ReExtractionService(session_factory)
     summary = await service.execute((article.id,), extractor, dry_run=False)
 
@@ -473,17 +402,3 @@ async def test_skips_when_re_extraction_returns_noise_and_keeps_signal_extractio
         ).scalar_one()
         assert parent_after.id == parent_id_before
         assert parent_after.translated_title == "旧タイトル"
-
-        rows = (
-            (
-                await fresh.execute(
-                    select(ArticleExtractionEntity).where(
-                        ArticleExtractionEntity.extraction_id == parent_id_before
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-    # 旧 entity ("OldSignal") のまま、Noise の "NoiseSurface" は永続化されていない
-    assert [r.surface.root for r in rows] == ["OldSignal"]

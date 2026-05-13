@@ -1,7 +1,7 @@
 """Gemini SDK structured response 契約型 — Stage 3。
 
 ``response_schema=GeminiExtractionResponse`` で Gemini に flat schema
-(``{relevance, title_ja, summary_ja, entities}``) を要求する SDK 契約型。
+(``{relevance, title_ja, summary_ja}``) を要求する SDK 契約型。
 
 ドメイン層は ``Signal`` / ``Noise`` union (``ExtractionResult``) を使うが、
 構造化出力で discriminated union を AI に要求すると精度が落ちる + Gemini SDK
@@ -22,11 +22,10 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal, Self
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.analysis.extraction.domain.entity import ExtractedEntity
 from app.utils.sanitize import normalize_text
 
 
@@ -43,7 +42,6 @@ class GeminiExtractionResponse(BaseModel):
     Invariants (validators で構造的に保証):
     - ``relevance``: ``"signal"`` または ``"noise"``
     - ``title_ja`` / ``summary_ja``: HTML タグ除去 + NFKC + 制御文字除去後に非空
-    - ``entities``: ``(surface.match_key, raw_type.root)`` で重複なし
     - frozen: 生成後は不変
 
     BC 境界として下流 (Stage 4 Assessment) に「HTML 抜き、NFKC 済、制御文字無し、
@@ -78,13 +76,6 @@ class GeminiExtractionResponse(BaseModel):
             "facts that are not present in the article."
         )
     )
-    entities: list[ExtractedEntity] = Field(
-        description=(
-            "Distinct named entities that define the article subject and can be "
-            "tracked across articles (company, person, product, service, "
-            "technology, or institution). Empty list when none apply."
-        )
-    )
 
     @field_validator("title_ja", "summary_ja", mode="before")
     @classmethod
@@ -100,17 +91,3 @@ class GeminiExtractionResponse(BaseModel):
         if not v:
             raise ValueError("must be non-empty after sanitization")
         return v
-
-    @model_validator(mode="after")
-    def _dedupe_entities(self) -> Self:
-        seen: set[tuple[str, str]] = set()
-        unique: list[ExtractedEntity] = []
-        for e in self.entities:
-            key = e.dedup_key()
-            if key in seen:
-                continue
-            seen.add(key)
-            unique.append(e)
-        # frozen=True のため object.__setattr__ で直接書き換える
-        object.__setattr__(self, "entities", unique)
-        return self

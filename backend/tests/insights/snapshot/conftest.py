@@ -2,7 +2,12 @@
 
 repository / Service テスト向けの ``seed_analysis`` ファクトリを提供する。
 seed_analysis は 1 件の ``InScopeAssessment`` を関連 ORM (Article /
-ArticleExtraction / ArticleExtractionEntity) とともに作成する。
+ArticleExtraction) とともに作成し、``InScopeAssessment.events`` JSONB に
+mention 列を焼き付ける。
+
+PR 2 で集計軸を ``article_extraction_entities`` から
+``in_scope_assessments.events`` JSONB の mention に切替したため、本 fixture も
+mention 軸に書き直されている。
 
 URL の重複制約を避けるため fixture 内のカウンタで一意な URL を採番する
 (関数スコープ fixture なのでテストごとにリセットされる)。
@@ -19,7 +24,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article
 from app.models.article_extraction import ArticleExtraction
-from app.models.article_extraction_entity import ArticleExtractionEntity
 from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource
 
@@ -34,8 +38,12 @@ def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAn
         category_id: ``InScopeAssessment.category_id`` に設定する FK。
         analyzed_at: ``analyzed_at`` を明示指定 (server_default を上書き)。
         topic: ``InScopeAssessment.topic`` (TopicName VO)。デフォルト ``"ai agents"``。
-        entities: ``[(surface, raw_type), ...]`` の列。``ArticleExtractionEntity``
-            を生成する。``position`` は引数の出現順 (0-based) で自動採番される。
+        mentions: ``[(surface, type), ...]`` の列。``events`` JSONB に
+            1 つの event としてまとめて焼き付ける (同一 assessment 内で同じ
+            mention が複数 event に現れても COUNT(DISTINCT a.id) で 1 件と
+            数えられる集計仕様を踏襲)。
+        events_null: ``True`` のとき ``events`` を NULL のまま残す
+            (PR 1 デプロイ前の旧行を再現する用途)。
 
     Returns:
         永続化済みの ``InScopeAssessment``。flush のみで commit はしない
@@ -48,7 +56,8 @@ def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAn
         category_id: int,
         analyzed_at: datetime,
         topic: str = "ai agents",
-        entities: Sequence[tuple[str, str]] = (),
+        mentions: Sequence[tuple[str, str]] = (),
+        events_null: bool = False,
     ) -> InScopeAssessment:
         n = next(seq)
         url = f"https://example.com/seed-{n}"
@@ -66,17 +75,24 @@ def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAn
             article_id=article.id,
             translated_title=f"seed-{n}",
             summary="summary body",
-            entities=[
-                ArticleExtractionEntity(
-                    surface=surface,
-                    raw_type=raw_type,
-                    position=i,
-                )
-                for i, (surface, raw_type) in enumerate(entities)
-            ],
         )
         db_session.add(extraction)
         await db_session.flush()
+
+        if events_null:
+            events: list[dict[str, object]] | None = None
+        elif mentions:
+            events = [
+                {
+                    "description": f"seed event {n}",
+                    "mentions": [
+                        {"surface": surface, "type": type_}
+                        for surface, type_ in mentions
+                    ],
+                }
+            ]
+        else:
+            events = []
 
         analysis = InScopeAssessment(
             extraction_id=extraction.id,
@@ -86,6 +102,7 @@ def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAn
             topic=topic,
             category_id=category_id,
             analyzed_at=analyzed_at,
+            events=events,
         )
         db_session.add(analysis)
         await db_session.flush()

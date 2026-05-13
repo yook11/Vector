@@ -1,33 +1,39 @@
 """週次トレンド集計の Repository。
 
 責務:
-- ``InScopeAssessment`` / ``ArticleExtractionEntity`` を JOIN して 1 カテゴリ × 1
-  週分の hot entity / hot topic / new entity を集計し、digest BC の VO で返す。
+- ``InScopeAssessment.events`` JSONB の ``events[].mentions[]`` を 2 段
+  ``jsonb_array_elements`` LATERAL で平坦化し、1 カテゴリ × 1 週分の hot mention /
+  hot topic / new mention を集計し、digest BC の VO で返す。
 - 期間境界 ``[current_start, current_end)`` (半開区間) で絞り込む。
-- entity は ``COUNT(DISTINCT extraction_id)`` で同一 extraction 内重複を排除する。
-- 名寄せは SQL 上の ``lower(surface)`` / ``lower(raw_type)`` で行い、display
-  名は ``MIN(surface)`` を採用する (casing は AI 抽出の文脈情報なので DB には
-  そのまま保存される: feedback_ai_extraction_casing.md)。Phase 1B α-1 では旧
-  ``article_entities`` (lower 正規化済み ``EntityType``) から
-  ``article_extraction_entities`` (casing 保持の ``EntityRawType``) に
-  schema 切替したが、α 期は集計時に lower 化することで digest 側の
-  ``EntityType`` 不変条件 / 既存 UI 表示を維持する (β で canonical_type
-  ベース集計に切り替わる際に casing 保持が活きる)。
+- mention は ``COUNT(DISTINCT in_scope_assessments.id)`` で「同 assessment 内で
+  同 mention が複数 event に登場しても 1 件」と数える (記事単位の出現を数える)。
+- 名寄せは SQL 上の ``lower(m->>'surface')`` で行い、display 名は
+  ``MIN(m->>'surface')`` を採用する (casing は AI 抽出の文脈情報なので
+  DB にはそのまま保存される: feedback_ai_extraction_casing.md)。
+- ``type`` は Stage 4 AI 境界の ``MentionType`` (6 値 lower) を直接採用する
+  (BC 境界が下流に正規化済値を保証する: feedback_bc_boundary_guarantees_downstream)。
 
 並び順は Python 側で hotness_score 降順に sort する (DB 依存を避ける)。
+
+bindparam 衝突対策:
+``_entity_window_subquery`` は ``get_trending_entities`` で current_sub と
+previous_sub の 2 回呼ばれ、同じ outer query に組み込まれる。素朴な
+``.bindparams(window_start=...)`` (kwarg 形式) は param 名が衝突して後者で
+上書きされるため、``sa.bindparam(..., unique=True)`` を使って SQLAlchemy が
+自動で suffix を付ける形にしている。
 """
 
 from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import and_, func, or_
+import sqlalchemy as sa
+from sqlalchemy import and_, func, or_, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from app.insights.snapshot.config import MIN_CURRENT, MIN_PREVIOUS, NEW_BURST_THRESHOLD
 from app.insights.snapshot.domain.trend import EntityTrend, NewEntity, TopicTrend
-from app.models.article_extraction_entity import ArticleExtractionEntity
 from app.models.in_scope_assessment import InScopeAssessment
 
 
@@ -45,7 +51,7 @@ class TrendsRepository:
         current_end: datetime,
         previous_start: datetime,
     ) -> tuple[EntityTrend, ...]:
-        """1 カテゴリ × 1 週分の hot entity を集計して返す。
+        """1 カテゴリ × 1 週分の hot mention を集計して返す。
 
         hot 判定: ``current >= MIN_CURRENT AND
         (previous >= MIN_PREVIOUS OR current >= NEW_BURST_THRESHOLD)``
@@ -163,10 +169,10 @@ class TrendsRepository:
         current_end: datetime,
         lookback_start: datetime,
     ) -> tuple[NewEntity, ...]:
-        """過去 lookback 期間に出現履歴のない初出 entity を返す。
+        """過去 lookback 期間に出現履歴のない初出 mention を返す。
 
         現週で 1 件以上出現していて、かつ ``[lookback_start, current_start)`` 区間に
-        同 (lower(name), type) の出現が無い entity が new。lookback の参照は
+        同 (lower(surface), type) の出現が無い mention が new。lookback の参照は
         category 単位 (他カテゴリの出現は new 判定に影響しない)。
         """
         current_sub = self._entity_window_subquery(
@@ -231,37 +237,58 @@ class TrendsRepository:
         window_end: datetime,
         label: str,
     ):
-        """1 期間分の entity 集計 subquery。
+        """1 期間分の mention 集計 subquery (events JSONB 2 段 LATERAL 平坦化)。
 
-        各 (lower(surface), lower(raw_type)) に対して:
-        - ``match_key``: ``lower(surface)`` (JOIN キー)
-        - ``type``: ``lower(raw_type)`` (digest 側 ``EntityType`` の不変条件と
-          整合させるため α 期は lower 化、β で canonical_type に切替)
-        - ``display_name``: ``MIN(surface)`` (display 用の casing 保持代表)
-        - ``cnt``: ``COUNT(DISTINCT extraction_id)`` (同 extraction 内重複排除)
+        各 (lower(surface), type) に対して:
+        - ``match_key``: ``lower(m->>'surface')`` (JOIN キー、casing 揺れ吸収)
+        - ``type``: ``m->>'type'`` (Stage 4 AI 境界の MentionType 6 値 lower を直接採用)
+        - ``display_name``: ``MIN(m->>'surface')`` (display 用の casing 保持代表)
+        - ``cnt``: ``COUNT(DISTINCT a.id)`` (同 assessment 内重複排除)
+
+        ``jsonb_typeof(...) = 'array'`` の CASE で SQL NULL / JSON null / 非配列値を
+        すべて空配列にフォールバックさせる。LATERAL は WHERE より先に評価されるため
+        ``WHERE events IS NOT NULL`` では遮断できず、また SQLAlchemy ``JSONB`` の
+        既定 (``none_as_null=False``) では Python ``None`` が JSON null として
+        書かれることがあり、``jsonb_array_elements`` がスカラーで落ちる。
+        ``events = []`` (空配列) は LATERAL が自然に 0 行返すため集計に影響しない。
+
+        bindparam は ``unique=True`` で current / previous 両 subquery を outer query
+        に入れた時に param 名が衝突しないようにする (SQLAlchemy が自動 suffix する)。
         """
-        match_key = func.lower(ArticleExtractionEntity.surface)
-        type_key = func.lower(ArticleExtractionEntity.raw_type)
         return (
-            select(
-                match_key.label("match_key"),
-                type_key.label("type"),
-                func.min(ArticleExtractionEntity.surface).label("display_name"),
-                func.count(func.distinct(ArticleExtractionEntity.extraction_id)).label(
-                    "cnt"
-                ),
+            text(
+                """
+                SELECT
+                  lower(m->>'surface') AS match_key,
+                  m->>'type' AS type,
+                  MIN(m->>'surface') AS display_name,
+                  COUNT(DISTINCT a.id) AS cnt
+                FROM in_scope_assessments a
+                CROSS JOIN LATERAL jsonb_array_elements(
+                  CASE WHEN jsonb_typeof(a.events) = 'array'
+                       THEN a.events ELSE '[]'::jsonb END
+                ) AS e
+                CROSS JOIN LATERAL jsonb_array_elements(
+                  CASE WHEN jsonb_typeof(e->'mentions') = 'array'
+                       THEN e->'mentions' ELSE '[]'::jsonb END
+                ) AS m
+                WHERE a.category_id = :category_id
+                  AND a.analyzed_at >= :window_start
+                  AND a.analyzed_at < :window_end
+                GROUP BY lower(m->>'surface'), m->>'type'
+                """
             )
-            .join(
-                InScopeAssessment,
-                InScopeAssessment.extraction_id
-                == ArticleExtractionEntity.extraction_id,
+            .bindparams(
+                sa.bindparam("category_id", category_id, unique=True),
+                sa.bindparam("window_start", window_start, unique=True),
+                sa.bindparam("window_end", window_end, unique=True),
             )
-            .where(
-                InScopeAssessment.category_id == category_id,
-                InScopeAssessment.analyzed_at >= window_start,
-                InScopeAssessment.analyzed_at < window_end,
+            .columns(
+                match_key=sa.String,
+                type=sa.String,
+                display_name=sa.String,
+                cnt=sa.BigInteger,
             )
-            .group_by(match_key, type_key)
             .subquery(label)
         )
 

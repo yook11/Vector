@@ -40,28 +40,17 @@ from app.analysis.assessment.domain.result import (
     OutOfScope,
 )
 from app.analysis.assessment.service import AssessmentService
-from app.analysis.domain.value_objects.entity import (
-    EntityName,
-    EntityRawType,
-    EntitySurface,
-    EntityType,
-)
+from app.analysis.domain.value_objects.entity import EntityName
 from app.analysis.domain.value_objects.topic import TopicName
 from app.analysis.extraction.ai.base import BaseExtractor
 from app.analysis.extraction.ai.envelope import ExtractionCall
 from app.analysis.extraction.ai.gemini import GeminiExtractor
 from app.analysis.extraction.ai.schema import GeminiExtractionResponse
-from app.analysis.extraction.domain import (
-    ExtractedEntity,
-    ExtractionResult,
-    Noise,
-    Signal,
-)
+from app.analysis.extraction.domain import ExtractionResult, Noise, Signal
 from app.analysis.extraction.domain.ready import ReadyForExtraction
 from app.analysis.extraction.service import ExtractionService
 from app.models.article import Article
 from app.models.article_extraction import ArticleExtraction
-from app.models.article_extraction_entity import ArticleExtractionEntity
 from app.models.category import Category
 from app.models.extraction_noise import ExtractionNoise as ExtractionNoiseORM
 from app.models.in_scope_assessment import InScopeAssessment
@@ -75,36 +64,17 @@ from app.models.pipeline_event import PipelineEvent
 def _make_extraction_result(
     title_ja: str = "量子コンピューティングの新たなブレイクスルー",
     summary_ja: str = "MITが新手法を発表。量子エラー訂正の分野で大きな進展。",
-    entities: list[tuple[str, str]] | None = None,
     relevance: str = "signal",
 ) -> ExtractionResult:
-    """``Signal`` / ``Noise`` を生成するヘルパー (PR1-a で union alias)。"""
-    if entities is None:
-        entities = [
-            ("MIT", "company"),
-            ("Quantum LDPC", "technology"),
-        ]
-    pydantic_entities = [
-        ExtractedEntity(surface=EntitySurface(s), raw_type=EntityRawType(t))
-        for s, t in entities
-    ]
+    """``Signal`` / ``Noise`` を生成するヘルパー。"""
     if relevance == "noise":
-        return Noise(
-            title_ja=title_ja,
-            summary_ja=summary_ja,
-            entities=pydantic_entities,
-        )
-    return Signal(
-        title_ja=title_ja,
-        summary_ja=summary_ja,
-        entities=pydantic_entities,
-    )
+        return Noise(title_ja=title_ja, summary_ja=summary_ja)
+    return Signal(title_ja=title_ja, summary_ja=summary_ja)
 
 
 def _make_extraction_call(
     title_ja: str = "量子コンピューティングの新たなブレイクスルー",
     summary_ja: str = "MITが新手法を発表。量子エラー訂正の分野で大きな進展。",
-    entities: list[tuple[str, str]] | None = None,
     relevance: str = "signal",
 ) -> ExtractionCall[Signal] | ExtractionCall[Noise]:
     """``BaseExtractor.extract()`` の戻り値 envelope を生成するヘルパー。"""
@@ -112,7 +82,6 @@ def _make_extraction_call(
         result=_make_extraction_result(
             title_ja=title_ja,
             summary_ja=summary_ja,
-            entities=entities,
             relevance=relevance,
         ),
         raw_response='{"mock":"raw"}',
@@ -240,122 +209,33 @@ def test_base_assessor_rejects_subclass_without_property_contract() -> None:
 # --- B. ExtractionResult domain tests ---
 
 
-def test_signal_preserves_surface_and_raw_type_case() -> None:
-    """Phase 1B α-1: surface も raw_type も casing 保持される。"""
-    resp = Signal(
-        title_ja="t",
-        summary_ja="s",
-        entities=[
-            ExtractedEntity(
-                surface=EntitySurface("NVIDIA"), raw_type=EntityRawType("Company")
-            ),
-        ],
-    )
-    assert resp.entities[0].surface.root == "NVIDIA"
-    assert resp.entities[0].raw_type.root == "Company"
-
-
-def test_signal_deduplicates_entities_case_insensitive_on_surface() -> None:
-    """surface 側は match_key (lower) で dedup される (raw_type 揃えれば 1 件)。"""
-    resp = Signal(
-        title_ja="t",
-        summary_ja="s",
-        entities=[
-            ExtractedEntity(
-                surface=EntitySurface("TSMC"), raw_type=EntityRawType("company")
-            ),
-            ExtractedEntity(
-                surface=EntitySurface("tsmc"), raw_type=EntityRawType("company")
-            ),
-        ],
-    )
-    assert len(resp.entities) == 1
-    assert resp.entities[0].surface.root == "TSMC"
-
-
-def test_signal_treats_different_raw_type_casing_as_distinct() -> None:
-    """raw_type の casing 違いは別エンティティとして残す (β canonical_type と独立)。"""
-    resp = Signal(
-        title_ja="t",
-        summary_ja="s",
-        entities=[
-            ExtractedEntity(
-                surface=EntitySurface("TSMC"), raw_type=EntityRawType("company")
-            ),
-            ExtractedEntity(
-                surface=EntitySurface("TSMC"), raw_type=EntityRawType("Company")
-            ),
-        ],
-    )
-    assert len(resp.entities) == 2
-
-
-def test_signal_accepts_any_raw_type() -> None:
-    resp = Signal(
-        title_ja="t",
-        summary_ja="s",
-        entities=[
-            ExtractedEntity(
-                surface=EntitySurface("MIT"), raw_type=EntityRawType("company")
-            ),
-            ExtractedEntity(
-                surface=EntitySurface("Biden"), raw_type=EntityRawType("person")
-            ),
-        ],
-    )
-    assert len(resp.entities) == 2
-    assert resp.entities[1].raw_type.root == "person"
-
-
 def test_signal_sanitizes_html_in_title_and_summary() -> None:
-    resp = Signal(
-        title_ja="<b>タイトル</b>",
-        summary_ja="<p>要約</p>",
-        entities=[],
-    )
+    resp = Signal(title_ja="<b>タイトル</b>", summary_ja="<p>要約</p>")
     assert resp.title_ja == "タイトル"
     assert resp.summary_ja == "要約"
 
 
 def test_signal_rejects_empty_title() -> None:
     with pytest.raises(ValidationError):
-        Signal(
-            title_ja="",
-            summary_ja="s",
-            entities=[],
-        )
+        Signal(title_ja="", summary_ja="s")
 
 
 def test_signal_rejects_title_that_becomes_empty_after_sanitize() -> None:
     with pytest.raises(ValidationError):
-        Signal(
-            title_ja="<br/>",
-            summary_ja="s",
-            entities=[],
-        )
+        Signal(title_ja="<br/>", summary_ja="s")
 
 
 def test_gemini_extraction_response_has_relevance_field() -> None:
     """``GeminiExtractionResponse`` は AI 境界の SDK 契約型として ``relevance``
     フィールドを保持する (domain ``Signal`` / ``Noise`` には relevance なし)。
     """
-    resp = GeminiExtractionResponse(
-        relevance="signal",
-        title_ja="t",
-        summary_ja="s",
-        entities=[],
-    )
+    resp = GeminiExtractionResponse(relevance="signal", title_ja="t", summary_ja="s")
     assert resp.relevance == "signal"
 
 
 def test_entity_name_rejects_empty() -> None:
     with pytest.raises(ValidationError):
         EntityName("  ")
-
-
-def test_entity_type_normalizes_lowercase() -> None:
-    etype = EntityType("COMPANY")
-    assert etype.root == "company"
 
 
 # --- B3. TopicName VO tests ---
@@ -513,26 +393,10 @@ async def test_extractor_sanitizes_untrusted_input_boundary() -> None:
 #   tests/analysis/assessment/ai/test_parse_assessment.py
 
 
-# --- E2. Extraction domain invariants (DB 不要) ---
-# PR1-c: Domain Entity ``Extraction`` を廃止したため、不変条件テストは
-# ``Signal`` / ``Noise`` (AI 境界 DTO) と DB CHECK 制約に集約された。
-# 残るのは ``ExtractedEntity`` の dedup-key 仕様の確認のみ。
-
-
-def test_extracted_entity_dedup_key_is_case_insensitive_on_surface() -> None:
-    a = ExtractedEntity(
-        surface=EntitySurface("NVIDIA"), raw_type=EntityRawType("company")
-    )
-    b = ExtractedEntity(
-        surface=EntitySurface("nvidia"), raw_type=EntityRawType("company")
-    )
-    assert a.dedup_key() == b.dedup_key()
-
-
 # --- F. ExtractionService orchestration tests ---
 
 
-async def test_extraction_creates_extraction_and_entities(
+async def test_extraction_creates_extraction(
     db_session: AsyncSession,
     session_factory,
     sample_source: NewsSource,
@@ -555,7 +419,6 @@ async def test_extraction_creates_extraction_and_entities(
         return_value=_make_extraction_call(
             title_ja="量子ブレイクスルー",
             summary_ja="要約テスト",
-            entities=[("MIT", "company"), ("CRISPR", "technology")],
         )
     )
 
@@ -582,19 +445,6 @@ async def test_extraction_creates_extraction_and_entities(
     ).scalar_one()
     assert persisted.id == result
     assert persisted.translated_title == "量子ブレイクスルー"
-
-    entities = list(
-        (
-            await db_session.execute(
-                select(ArticleExtractionEntity).where(
-                    ArticleExtractionEntity.extraction_id == persisted.id,
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-    assert len(entities) == 2
 
 
 async def test_extraction_race_loser_returns_none_and_skips_audit(
@@ -669,7 +519,6 @@ async def test_extraction_routes_noise_to_extraction_noises_table(
 
     article_extractions には行が入らないこと、Stage 4 へ chain しないことを
     保証する (chain は task 層で確認、ここは Service の振り分けが正しいかを見る)。
-    PR1-c で戻り値を ``int | None`` 一本化し、noise 勝者は ``None`` で表現される。
     """
     url = "https://example.com/noise"
     article = Article(
@@ -690,7 +539,6 @@ async def test_extraction_routes_noise_to_extraction_noises_table(
             relevance="noise",
             title_ja="芸能ニュース",
             summary_ja="芸能要約",
-            entities=[("Some Star", "person")],
         )
     )
 
@@ -716,7 +564,6 @@ async def test_extraction_routes_noise_to_extraction_noises_table(
         )
     ).scalar_one()
     assert persisted.title_ja == "芸能ニュース"
-    assert persisted.entities == [{"surface": "Some Star", "raw_type": "person"}]
     # article_extractions には入っていない (排他)
     assert (
         await db_session.execute(
@@ -744,13 +591,6 @@ async def test_assessment_persists_topic_and_category(
         title="Quantum Breakthrough",
         translated_title="量子ブレイクスルー",
     )
-    entity = ArticleExtractionEntity(
-        extraction_id=extraction.id,
-        surface="MIT",
-        raw_type="company",
-        position=0,
-    )
-    db_session.add(entity)
     await db_session.commit()
 
     expected_category_id = next(
@@ -896,4 +736,3 @@ async def test_news_endpoint_includes_analysis(
     assert response.status_code == 200
     data = response.json()
     assert data["translatedTitle"] == "テスト記事"
-    assert data["original"]["title"] == "Test Article"

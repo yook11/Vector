@@ -31,10 +31,11 @@ def test_model_is_flash_lite_25() -> None:
 def test_version_locked() -> None:
     """配置換えで version 値が変わらない golden 固定。
 
-    PR2 以降の hash ``"9ff9f0cf"`` を継承する。意図的な prompt / schema 変更時
-    のみこの値を更新し、commit メッセージで audit 連続性 cutover を明示する。
+    event-extraction PR 2 で entities フィールドと prompt の対応行を削除した
+    意図的 cutover により ``"094404f1"`` に更新。意図的な prompt / schema
+    変更時のみこの値を更新し、commit メッセージで audit 連続性 cutover を明示する。
     """
-    assert GEMINI_EXTRACTION_SPEC.version == "9ff9f0cf"
+    assert GEMINI_EXTRACTION_SPEC.version == "094404f1"
 
 
 def test_response_schema_is_gemini_extraction_response() -> None:

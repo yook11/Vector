@@ -71,7 +71,7 @@ class TestExecute:
                 category_id=cat.id,
                 analyzed_at=_jst(2026, 4, 14, hour=i),
                 topic="ai agents",
-                entities=[("NVIDIA", "company")],
+                mentions=[("NVIDIA", "company")],
             )
         await db_session.commit()
 
@@ -103,7 +103,7 @@ class TestExecute:
                 category_id=cat.id,
                 analyzed_at=_jst(2026, 4, 14, hour=i),
                 topic="ai agents",
-                entities=[("NVIDIA", "company")],
+                mentions=[("NVIDIA", "company")],
             )
         await db_session.commit()
 
@@ -116,7 +116,7 @@ class TestExecute:
                 category_id=cat.id,
                 analyzed_at=_jst(2026, 4, 15, hour=i),
                 topic="ai agents",
-                entities=[("NVIDIA", "company")],
+                mentions=[("NVIDIA", "company")],
             )
         await db_session.commit()
 
@@ -144,7 +144,7 @@ class TestExecute:
             await seed_analysis(
                 category_id=sample_categories[0].id,
                 analyzed_at=_jst(2026, 4, 14, hour=i),
-                entities=[("NVIDIA", "company")],
+                mentions=[("NVIDIA", "company")],
             )
         await db_session.commit()
 
@@ -179,7 +179,7 @@ class TestExecute:
                 await seed_analysis(
                     category_id=cat.id,
                     analyzed_at=_jst(2026, 4, 14 + (hour // 24), hour=hour % 24),
-                    entities=[(f"entity_{i:02d}", "company")],
+                    mentions=[(f"entity_{i:02d}", "company")],
                 )
         await db_session.commit()
 

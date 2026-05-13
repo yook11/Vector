@@ -14,33 +14,16 @@ import dataclasses
 
 import pytest
 
-from app.analysis.domain.value_objects.entity import EntityRawType, EntitySurface
 from app.analysis.extraction.ai.envelope import ExtractionCall
-from app.analysis.extraction.domain import ExtractedEntity, Noise, Signal
+from app.analysis.extraction.domain import Noise, Signal
 
 
 def _signal() -> Signal:
-    return Signal(
-        title_ja="t",
-        summary_ja="s",
-        entities=[
-            ExtractedEntity(
-                surface=EntitySurface("X"), raw_type=EntityRawType("Company")
-            )
-        ],
-    )
+    return Signal(title_ja="t", summary_ja="s")
 
 
 def _noise() -> Noise:
-    return Noise(
-        title_ja="t",
-        summary_ja="s",
-        entities=[
-            ExtractedEntity(
-                surface=EntitySurface("X"), raw_type=EntityRawType("Person")
-            )
-        ],
-    )
+    return Noise(title_ja="t", summary_ja="s")
 
 
 def test_fields_include_model_name_and_raw_relevance() -> None:

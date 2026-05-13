@@ -127,9 +127,6 @@ class ExtractionPayload(BasePipelineEventPayload):
     # raw_topic と対称)
     raw_relevance: str | None = None  # signal / noise / それ以外の AI 生値
 
-    # 解釈結果
-    entity_count: int | None = None  # A'
-
 
 class AssessmentPayload(BasePipelineEventPayload):
     """Stage 4 (assessment) — 入力が小さい (記事サマリ) ので full 保存。

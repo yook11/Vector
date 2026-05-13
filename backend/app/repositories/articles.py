@@ -104,8 +104,8 @@ class ArticleRepository:
 
         ``ondelete=CASCADE`` により ``article_extractions`` /
         ``extraction_noises`` を経由して ``in_scope_assessments`` /
-        ``article_extraction_entities`` / ``out_of_scope_assessments`` まで
-        削除される。``pipeline_events.article_id`` は ``ondelete=SET NULL``
+        ``out_of_scope_assessments`` まで削除される。
+        ``pipeline_events.article_id`` は ``ondelete=SET NULL``
         のため監査行は残り、``source_id`` で起点ソースを追跡可能。
 
         commit は呼出側責務 (audit INSERT と同 tx でまとめる用途を想定)。

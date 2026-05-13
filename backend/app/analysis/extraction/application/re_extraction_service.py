@@ -76,8 +76,7 @@ class ReExtractionService:
     """既存 Article に対する Stage 1 再抽出ユースケースの orchestrator。
 
     1 article ごとに 1 transaction を張り、`update_signal_idempotent` で
-    parent ``ArticleExtraction`` を UPDATE のみで差し替える (子テーブル
-    ``article_extraction_entities`` は DELETE → INSERT)。
+    parent ``ArticleExtraction`` を UPDATE のみで差し替える。
     """
 
     def __init__(
@@ -204,7 +203,6 @@ class ReExtractionService:
                     "re_extract_progress",
                     article_id=article_id,
                     extraction_id=extraction_id,
-                    entity_count=len(envelope.result.entities),
                     elapsed_ms=elapsed_ms,
                     dry_run=dry_run,
                 )

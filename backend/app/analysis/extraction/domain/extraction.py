@@ -7,7 +7,7 @@
   Repository が ``match`` で型ディスパッチする (Stage 4 ``InScope`` /
   ``OutOfScope`` と対称)。
 
-AI 境界では引き続きフラット形式 (``{relevance, title_ja, summary_ja, entities}``)
+AI 境界では引き続きフラット形式 (``{relevance, title_ja, summary_ja}``)
 を AI に要求する (構造化出力で discriminated union を要求すると AI 精度が
 落ちる + Gemini SDK structured response の制約)。Gemini SDK 契約型は
 ``ai/schema.py::GeminiExtractionResponse`` として分離し、``ai/parse.py::
@@ -20,11 +20,10 @@ Repository が ``int`` id として返し、Domain Entity 化はしない (Stage
 
 from __future__ import annotations
 
-from typing import Any, Self
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 
-from app.analysis.extraction.domain.entity import ExtractedEntity
 from app.utils.sanitize import normalize_text
 
 
@@ -33,7 +32,6 @@ class Signal(BaseModel):
 
     Invariants (validators で構造的に保証):
     - ``title_ja`` / ``summary_ja``: HTML タグ除去 + NFKC + 制御文字除去後に非空
-    - ``entities``: ``(surface.match_key, raw_type.root)`` で重複なし
     - frozen: 生成後は不変
 
     BC 境界として下流 (Stage 4 Assessment) に「HTML 抜き、NFKC 済、制御文字無し、
@@ -45,7 +43,6 @@ class Signal(BaseModel):
 
     title_ja: str
     summary_ja: str
-    entities: list[ExtractedEntity]
 
     @field_validator("title_ja", "summary_ja", mode="before")
     @classmethod
@@ -61,20 +58,6 @@ class Signal(BaseModel):
         if not v:
             raise ValueError("must be non-empty after sanitization")
         return v
-
-    @model_validator(mode="after")
-    def _dedupe_entities(self) -> Self:
-        seen: set[tuple[str, str]] = set()
-        unique: list[ExtractedEntity] = []
-        for e in self.entities:
-            key = e.dedup_key()
-            if key in seen:
-                continue
-            seen.add(key)
-            unique.append(e)
-        # frozen=True のため object.__setattr__ で直接書き換える
-        object.__setattr__(self, "entities", unique)
-        return self
 
 
 class Noise(BaseModel):
@@ -92,7 +75,6 @@ class Noise(BaseModel):
 
     title_ja: str
     summary_ja: str
-    entities: list[ExtractedEntity]
 
     @field_validator("title_ja", "summary_ja", mode="before")
     @classmethod
@@ -107,19 +89,6 @@ class Noise(BaseModel):
         if not v:
             raise ValueError("must be non-empty after sanitization")
         return v
-
-    @model_validator(mode="after")
-    def _dedupe_entities(self) -> Self:
-        seen: set[tuple[str, str]] = set()
-        unique: list[ExtractedEntity] = []
-        for e in self.entities:
-            key = e.dedup_key()
-            if key in seen:
-                continue
-            seen.add(key)
-            unique.append(e)
-        object.__setattr__(self, "entities", unique)
-        return self
 
 
 ExtractionResult = Signal | Noise

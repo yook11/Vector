@@ -25,12 +25,11 @@ from google.genai.types import (
 )
 
 from app.analysis.ai_provider_errors import AIProviderOutputBlockedError
-from app.analysis.domain.value_objects.entity import EntityRawType, EntitySurface
 from app.analysis.extraction.ai.envelope import ExtractionCall
 from app.analysis.extraction.ai.gemini import GeminiExtractor
 from app.analysis.extraction.ai.gemini_spec import GEMINI_EXTRACTION_SPEC
 from app.analysis.extraction.ai.schema import GeminiExtractionResponse
-from app.analysis.extraction.domain import ExtractedEntity, Signal
+from app.analysis.extraction.domain import Signal
 from app.analysis.extraction.errors import ExtractionResponseInvalidError
 
 
@@ -56,11 +55,6 @@ def _ok_gemini_response() -> GeminiExtractionResponse:
         relevance="signal",
         title_ja="t",
         summary_ja="s",
-        entities=[
-            ExtractedEntity(
-                surface=EntitySurface("X"), raw_type=EntityRawType("Company")
-            )
-        ],
     )
 
 

@@ -39,7 +39,6 @@ class GeminiExtractionPrompt:
 - 記事に書かれていない情報を補完しない (あなたの知識・推測による追加を禁止)。
 - noise は、投資判断にも世界情勢の理解にも明らかに寄与しない記事のみ。
 - signal/noise の判断に迷ったら signal を選ぶ。
-- 該当する entities が無ければ空配列でよい。
 """
 
     # Gemini 固有の入力整形 (本文を切り詰めて投入)。system 不変条件としての hard cap

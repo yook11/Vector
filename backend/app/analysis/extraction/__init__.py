@@ -8,9 +8,6 @@ re-export しない) を維持する。
 """
 
 from app.analysis.extraction.domain import (
-    EntityRawType,
-    EntitySurface,
-    ExtractedEntity,
     ExtractionResult,
     Noise,
     Signal,
@@ -23,9 +20,6 @@ from app.analysis.extraction.repository import ExtractionRepository
 from app.analysis.extraction.service import ExtractionService
 
 __all__ = [
-    "EntityRawType",
-    "EntitySurface",
-    "ExtractedEntity",
     "ExtractionRepository",
     "ExtractionResult",
     "ExtractionService",

@@ -29,12 +29,11 @@ from app.analysis.ai_provider_errors import (
     AIProviderNetworkError,
     AIProviderOutputBlockedError,
 )
-from app.analysis.domain.value_objects.entity import EntityRawType, EntitySurface
 from app.analysis.extraction.ai.base import BaseExtractor
 from app.analysis.extraction.ai.envelope import ExtractionCall
 from app.analysis.extraction.ai.gemini_spec import GEMINI_EXTRACTION_SPEC
 from app.analysis.extraction.audit_repository import ExtractionAuditRepository
-from app.analysis.extraction.domain import ExtractedEntity, Noise, Signal
+from app.analysis.extraction.domain import Noise, Signal
 from app.analysis.extraction.domain.ready import ReadyForExtraction
 from app.analysis.extraction.errors import ExtractionResponseInvalidError
 from app.models.article import Article
@@ -59,18 +58,9 @@ def _extractor_mock(
     return mock
 
 
-def _signal_envelope(entities: int = 2) -> ExtractionCall[Signal]:
+def _signal_envelope() -> ExtractionCall[Signal]:
     return ExtractionCall(
-        result=Signal(
-            title_ja="日本語タイトル",
-            summary_ja="日本語要約",
-            entities=[
-                ExtractedEntity(
-                    surface=EntitySurface(f"E{i}"), raw_type=EntityRawType("Company")
-                )
-                for i in range(entities)
-            ],
-        ),
+        result=Signal(title_ja="日本語タイトル", summary_ja="日本語要約"),
         raw_response='{"relevance":"signal"}',
         raw_relevance="signal",
         prompt_version=GEMINI_EXTRACTION_SPEC.version,
@@ -78,18 +68,9 @@ def _signal_envelope(entities: int = 2) -> ExtractionCall[Signal]:
     )
 
 
-def _noise_envelope(entities: int = 2) -> ExtractionCall[Noise]:
+def _noise_envelope() -> ExtractionCall[Noise]:
     return ExtractionCall(
-        result=Noise(
-            title_ja="日本語タイトル",
-            summary_ja="日本語要約",
-            entities=[
-                ExtractedEntity(
-                    surface=EntitySurface(f"E{i}"), raw_type=EntityRawType("Company")
-                )
-                for i in range(entities)
-            ],
-        ),
+        result=Noise(title_ja="日本語タイトル", summary_ja="日本語要約"),
         raw_response='{"relevance":"noise"}',
         raw_relevance="noise",
         prompt_version=GEMINI_EXTRACTION_SPEC.version,
@@ -161,7 +142,6 @@ async def test_append_extracted_records_success_with_code(
     assert ev.outcome_code == "extracted"
     assert ev.category == "success"
     assert ev.code == "extracted"
-    assert ev.payload["entity_count"] == 2
     assert ev.payload["ai_raw_response"]
     assert ev.payload["source_name"] == str(sample_source.name)
     # PR1-a: ai_model / prompt_version / raw_relevance は envelope 経由で焼かれる

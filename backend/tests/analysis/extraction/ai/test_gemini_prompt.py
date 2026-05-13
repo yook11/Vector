@@ -52,5 +52,13 @@ def test_prompt_template_does_not_enumerate_response_fields() -> None:
     assert "1. relevance" not in template
     assert "2. title_ja" not in template
     assert "3. summary_ja" not in template
-    assert "4. entities" not in template
-    assert "以下の 4 項目を抽出" not in template
+    assert "以下の 3 項目を抽出" not in template
+
+
+def test_prompt_template_does_not_mention_entities() -> None:
+    """PR 2 で entities 抽出は廃止されたため、prompt 本文に entities への
+    指示・言及が残らないことを構造的に弾く。"""
+    template = GeminiExtractionPrompt.TEMPLATE
+    assert "entities" not in template
+    assert "エンティティ" not in template
+    assert "entity" not in template

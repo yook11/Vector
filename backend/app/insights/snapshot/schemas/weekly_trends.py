@@ -19,7 +19,8 @@ from typing import Annotated, Literal
 
 from pydantic import Field
 
-from app.analysis.domain.value_objects.entity import EntityName, EntityType
+from app.analysis.assessment.domain.result import MentionType
+from app.analysis.domain.value_objects.entity import EntityName
 from app.analysis.domain.value_objects.topic import TopicName
 from app.domain.category import CategoryName, CategorySlug
 from app.insights.snapshot.domain.trend import (
@@ -34,7 +35,7 @@ from app.schemas.base import _CamelBase
 
 class _EntityTrendOut(_CamelBase):
     name: EntityName
-    type: EntityType
+    type: MentionType
     current_count: int
     previous_count: int
     hotness_score: float
@@ -49,7 +50,7 @@ class _TopicTrendOut(_CamelBase):
 
 class _NewEntityOut(_CamelBase):
     name: EntityName
-    type: EntityType
+    type: MentionType
     current_count: int
 
 

@@ -85,7 +85,6 @@ class ExtractionService:
                         "extraction_completed",
                         article_id=ready.article_id,
                         extraction_id=extraction_id,
-                        entity_count=len(envelope.result.entities),
                     )
                     return extraction_id
 
@@ -110,7 +109,6 @@ class ExtractionService:
                         "extract_persisted_noise",
                         article_id=ready.article_id,
                         noise_id=noise_id,
-                        entity_count=len(envelope.result.entities),
                     )
                     # noise 勝者でも Stage 4 chain しないため None を返す
                     return None

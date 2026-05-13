@@ -13,20 +13,18 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
 from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.analysis.domain.value_objects.entity import EntityRawType, EntitySurface
 from app.analysis.extraction.ai.envelope import ExtractionCall
 from app.analysis.extraction.application import (
     ReExtractionService,
     ReExtractionSummary,
 )
 from app.analysis.extraction.cli.re_extract_all import build_parser, run
-from app.analysis.extraction.domain import ExtractedEntity, Signal
+from app.analysis.extraction.domain import Signal
 from app.analysis.extraction.repository import ExtractionRepository
 from app.models.article import Article
 from app.models.news_source import NewsSource
@@ -87,7 +85,6 @@ async def _seed_article_with_extraction(
     sample_source: NewsSource,
     *,
     url: str,
-    surfaces: Sequence[str] = ("X",),
 ) -> Article:
     article = Article(
         source_id=sample_source.id,
@@ -103,16 +100,7 @@ async def _seed_article_with_extraction(
     repo = ExtractionRepository(db_session)
     await repo.save_signal(
         ExtractionCall(
-            result=Signal(
-                title_ja="旧",
-                summary_ja="旧",
-                entities=[
-                    ExtractedEntity(
-                        surface=EntitySurface(s), raw_type=EntityRawType("company")
-                    )
-                    for s in surfaces
-                ],
-            ),
+            result=Signal(title_ja="旧", summary_ja="旧"),
             raw_response='{"relevance":"signal"}',
             raw_relevance="signal",
             prompt_version="testver1",
