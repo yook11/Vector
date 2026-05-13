@@ -17,21 +17,13 @@ from __future__ import annotations
 
 import json
 
-import httpx
 import structlog
 from google import genai
-from google.genai import errors as genai_errors
 from google.genai.types import GenerateContentConfig
 
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
-    AIProviderInputRejectedError,
-    AIProviderNetworkError,
     AIProviderOutputBlockedError,
-    AIProviderQuotaExhaustedError,
-    AIProviderRateLimitedError,
-    AIProviderRequestInvalidError,
-    AIProviderServiceUnavailableError,
 )
 from app.analysis.assessment.ai.base import BaseAssessor
 from app.analysis.assessment.ai.envelope import AssessmentCall
@@ -39,6 +31,7 @@ from app.analysis.assessment.ai.gemini_prompt import GeminiAssessmentPrompt
 from app.analysis.assessment.ai.parse import parse_assessment
 from app.analysis.assessment.domain.result import InScope, OutOfScope
 from app.analysis.assessment.errors import AssessmentResponseInvalidError
+from app.analysis.gemini_error_translator import translate_gemini_error
 from app.config import settings
 
 logger = structlog.get_logger(__name__)
@@ -158,55 +151,5 @@ class GeminiAssessor(BaseAssessor):
         return getattr(finish_reason, "name", None) or str(finish_reason)
 
     def _translate_error(self, exc: Exception) -> Exception:
-        """Gemini SDK / httpx 例外を ``AIProvider*Error`` 階層に翻訳する。
-
-        spec §Gemini SDK 翻訳テーブルに 1:1 対応。マップできなければ ``exc`` を
-        そのまま return (caller である ``_call_once`` が bare re-raise する規約)。
-
-        google-genai 1.x の ``ClientError`` は ``code`` (int HTTP status) と
-        ``status`` (gRPC status 文字列、e.g. "INVALID_ARGUMENT") の両方を
-        attribute として持つので、両経路を見て robust に判定する。
-        """
-        # network 系 (httpx は SDK の transport)
-        if isinstance(exc, (httpx.TimeoutException, httpx.ConnectError)):
-            return AIProviderNetworkError(f"{type(exc).__name__}: {exc}")
-        if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
-            return AIProviderNetworkError(f"{type(exc).__name__}: {exc}")
-
-        # genai SDK の例外階層 (HTTP status + gRPC status の両方を見る)
-        if isinstance(exc, genai_errors.ClientError):
-            code = getattr(exc, "code", None)
-            status = getattr(exc, "status", None) or ""
-            raw_message = str(getattr(exc, "message", "")) or str(exc)
-            message = raw_message.lower()
-
-            # red-team chain γ-1: SDK 生 message に key prefix /
-            # Authorization header が含まれる経路があるため固定文言に丸める。
-            # 詳細 debug は error_chain (SDK class FQN) で代替。
-            if "reported as leaked" in message:
-                return AIProviderConfigurationError(
-                    "Gemini API key has been reported as leaked; rotate immediately"
-                )
-
-            if code == 400 or status == "INVALID_ARGUMENT":
-                if "api key" in message or "permission" in message:
-                    return AIProviderConfigurationError(str(exc))
-                if "blocked" in message or "safety" in message:
-                    return AIProviderInputRejectedError(str(exc))
-                return AIProviderRequestInvalidError(str(exc))
-            if code in (401, 403, 404) or status in (
-                "UNAUTHENTICATED",
-                "PERMISSION_DENIED",
-                "NOT_FOUND",
-                "FAILED_PRECONDITION",
-            ):
-                return AIProviderConfigurationError(str(exc))
-            if code == 429 or status == "RESOURCE_EXHAUSTED":
-                if "quota" in message or "daily" in message:
-                    return AIProviderQuotaExhaustedError(str(exc))
-                return AIProviderRateLimitedError(str(exc))
-
-        if isinstance(exc, genai_errors.ServerError):
-            return AIProviderServiceUnavailableError(str(exc))
-
-        return exc  # bare re-raise (UNKNOWN)
+        """SDK 例外を ``AIProvider*Error`` へ翻訳する (共通 translator に委譲)。"""
+        return translate_gemini_error(exc)

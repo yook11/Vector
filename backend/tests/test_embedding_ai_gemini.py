@@ -20,12 +20,9 @@ from google.genai import errors as genai_errors
 
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
-    AIProviderInputRejectedError,
     AIProviderNetworkError,
-    AIProviderQuotaExhaustedError,
     AIProviderRateLimitedError,
     AIProviderRequestInvalidError,
-    AIProviderServiceUnavailableError,
 )
 from app.analysis.embedding.ai.gemini import GeminiEmbedder
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
@@ -127,126 +124,34 @@ async def test_embed_document_raises_request_invalid_when_values_missing() -> No
 
 
 # ---------------------------------------------------------------------------
-# D. _translate_error の分類 (Stage 4 と 1:1 同形)
+# D. _translate_error は共通 translator に delegate (smoke のみ)
+#
+# 分類の網羅は tests/analysis/test_gemini_error_translator.py に集約。
+# ここでは delegation が経路として効いていることを最小ケースで確認する。
 # ---------------------------------------------------------------------------
 
 
 def _api_error(
     code: int, status: str, message: str = "msg"
 ) -> genai_errors.ClientError:
-    """``ClientError(code, response_json)`` を簡易構築する helper。
-
-    Stage 4 ``test_assessor_gemini_translate_error.py`` と同形 — nested
-    ``error`` キーに status / message を入れて SDK 互換とする。
-    """
+    """``ClientError(code, response_json)`` を簡易構築する helper。"""
     response_json = {"error": {"status": status, "message": message}}
     return genai_errors.ClientError(code, response_json)
 
 
-def _server_error(
-    code: int = 500, status: str = "INTERNAL", message: str = "msg"
-) -> genai_errors.ServerError:
-    response_json = {"error": {"status": status, "message": message}}
-    return genai_errors.ServerError(code, response_json)
-
-
-def test_translate_unauthenticated_to_configuration_error() -> None:
+def test_delegates_unauthenticated_to_configuration_error() -> None:
     embedder = _make_embedder()
     result = embedder._translate_error(_api_error(401, "UNAUTHENTICATED"))
     assert isinstance(result, AIProviderConfigurationError)
 
 
-def test_translate_permission_denied_to_configuration_error() -> None:
-    embedder = _make_embedder()
-    result = embedder._translate_error(_api_error(403, "PERMISSION_DENIED"))
-    assert isinstance(result, AIProviderConfigurationError)
-
-
-def test_translate_leaked_key_to_configuration_error() -> None:
-    embedder = _make_embedder()
-    result = embedder._translate_error(
-        _api_error(400, "INVALID_ARGUMENT", "API key reported as leaked")
-    )
-    assert isinstance(result, AIProviderConfigurationError)
-
-
-def test_translate_leaked_key_message_is_fixed_string_not_sdk_echo() -> None:
-    """red-team chain γ-1: SDK の生 message は捨て固定文言のみを保持する。"""
-    embedder = _make_embedder()
-    sdk_message = (
-        "API key AIzaSyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q has been reported as leaked"
-    )
-    result = embedder._translate_error(_api_error(400, "INVALID_ARGUMENT", sdk_message))
-
-    assert isinstance(result, AIProviderConfigurationError)
-    assert (
-        str(result) == "Gemini API key has been reported as leaked; rotate immediately"
-    )
-    assert "AIza" not in str(result)
-
-
-def test_translate_invalid_argument_to_request_invalid_error() -> None:
-    embedder = _make_embedder()
-    result = embedder._translate_error(_api_error(400, "INVALID_ARGUMENT"))
-    assert isinstance(result, AIProviderRequestInvalidError)
-
-
-def test_translate_invalid_argument_safety_blocked_to_input_rejected() -> None:
-    """``INVALID_ARGUMENT`` + message に "blocked"/"safety" → InputRejected。"""
-    embedder = _make_embedder()
-    result = embedder._translate_error(
-        _api_error(400, "INVALID_ARGUMENT", "blocked by safety filter")
-    )
-    assert isinstance(result, AIProviderInputRejectedError)
-
-
-def test_translate_resource_exhausted_to_rate_limited_error() -> None:
-    embedder = _make_embedder()
-    result = embedder._translate_error(_api_error(429, "RESOURCE_EXHAUSTED"))
-    assert isinstance(result, AIProviderRateLimitedError)
-
-
-def test_translate_resource_exhausted_with_quota_to_quota_exhausted() -> None:
-    """message に "quota"/"daily" 含む 429 は QuotaExhausted へ。"""
-    embedder = _make_embedder()
-    result = embedder._translate_error(
-        _api_error(429, "RESOURCE_EXHAUSTED", "daily quota exceeded")
-    )
-    assert isinstance(result, AIProviderQuotaExhaustedError)
-
-
-def test_translate_server_error_to_service_unavailable() -> None:
-    embedder = _make_embedder()
-    result = embedder._translate_error(_server_error(500, "INTERNAL"))
-    assert isinstance(result, AIProviderServiceUnavailableError)
-
-
-def test_translate_unhandled_client_error_status_returns_exc_for_bare_reraise() -> None:
-    """マップ未知の ClientError (code / status 共に翻訳テーブル外) は
-    ``exc`` をそのまま return する (bare re-raise 規約)。
-    """
-    embedder = _make_embedder()
-    # code=418 / status=TEAPOT は翻訳テーブルに登録されていない経路
-    api_err = _api_error(418, "TEAPOT")
-    result = embedder._translate_error(api_err)
-    # bare re-raise 規約: マップ未知は exc identity を保ったまま return
-    assert result is api_err
-
-
-def test_translate_timeout_to_network_error() -> None:
+def test_delegates_timeout_to_network_error() -> None:
     embedder = _make_embedder()
     result = embedder._translate_error(TimeoutError("deadline"))
     assert isinstance(result, AIProviderNetworkError)
 
 
-def test_translate_connection_error_to_network_error() -> None:
-    embedder = _make_embedder()
-    result = embedder._translate_error(ConnectionError("refused"))
-    assert isinstance(result, AIProviderNetworkError)
-
-
-def test_translate_unknown_returns_exc_for_bare_reraise() -> None:
-    """RuntimeError 等の未知例外は exc をそのまま return (bare re-raise 規約)。"""
+def test_delegates_unknown_returns_exc_for_bare_reraise() -> None:
     embedder = _make_embedder()
     runtime_err = RuntimeError("unexpected")
     result = embedder._translate_error(runtime_err)

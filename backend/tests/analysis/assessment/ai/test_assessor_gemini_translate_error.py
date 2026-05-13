@@ -1,12 +1,8 @@
-"""``GeminiAssessor._translate_error`` の SDK 翻訳テーブルテスト。
+"""``GeminiAssessor._translate_error`` の smoke テスト。
 
-SDK 例外を ``AIProvider*Error`` 階層に翻訳する。spec §Gemini SDK 翻訳テーブルの
-全 row を parametrize で網羅し、catch-all は ``return exc`` (bare re-raise guard)
-する。
-
-google-genai 1.x の ``ClientError(code, response_json)`` は ``code`` (int HTTP
-status) と ``status`` (gRPC status 文字列) の両方を attribute として持つので、
-両経路を網羅する。
+Stage 4 の ``_translate_error`` は PR3 で共通 translator への 1 行 delegation に
+縮退した。分類の網羅は ``tests/analysis/test_gemini_error_translator.py`` に集約。
+本ファイルは delegation が経路として繋がっていることを確認するだけ。
 """
 
 from __future__ import annotations
@@ -17,12 +13,8 @@ from google.genai import errors as genai_errors
 from pydantic import SecretStr
 
 from app.analysis.ai_provider_errors import (
-    AIProviderConfigurationError,
-    AIProviderInputRejectedError,
     AIProviderNetworkError,
-    AIProviderQuotaExhaustedError,
     AIProviderRateLimitedError,
-    AIProviderRequestInvalidError,
     AIProviderServiceUnavailableError,
 )
 from app.analysis.assessment.ai.gemini import GeminiAssessor
@@ -35,151 +27,30 @@ def _set_gemini_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "gemini_api_key", SecretStr("test-key"))
 
 
-def _make_client_error(
-    *, code: int, status: str, message: str
-) -> genai_errors.ClientError:
-    """``ClientError(code, response_json)`` を簡易構築する helper。"""
-    response_json = {"error": {"status": status, "message": message}}
-    return genai_errors.ClientError(code, response_json)
-
-
-def _make_server_error(
-    *, code: int = 500, message: str = "internal"
-) -> genai_errors.ServerError:
-    response_json = {"error": {"status": "INTERNAL", "message": message}}
-    return genai_errors.ServerError(code, response_json)
-
-
-# ---------------------------------------------------------------------------
-# ClientError 翻訳テーブル (HTTP code + gRPC status の両経路)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "code,status,message,expected",
-    [
-        # 400 INVALID_ARGUMENT 系: message で 3 way 分岐
-        (400, "INVALID_ARGUMENT", "API key not valid", AIProviderConfigurationError),
-        (400, "INVALID_ARGUMENT", "permission denied", AIProviderConfigurationError),
-        (
-            400,
-            "INVALID_ARGUMENT",
-            "request blocked by safety filter",
-            AIProviderInputRejectedError,
-        ),
-        (400, "INVALID_ARGUMENT", "blocked content", AIProviderInputRejectedError),
-        (400, "INVALID_ARGUMENT", "bad request body", AIProviderRequestInvalidError),
-        # 401/403/404/FAILED_PRECONDITION 系
-        (401, "UNAUTHENTICATED", "missing credentials", AIProviderConfigurationError),
-        (403, "PERMISSION_DENIED", "forbidden", AIProviderConfigurationError),
-        (404, "NOT_FOUND", "model not found", AIProviderConfigurationError),
-        # 429 RESOURCE_EXHAUSTED: message で quota / rate-limit 分岐
-        (
-            429,
-            "RESOURCE_EXHAUSTED",
-            "daily quota exceeded",
-            AIProviderQuotaExhaustedError,
-        ),
-        (429, "RESOURCE_EXHAUSTED", "rate limit reached", AIProviderRateLimitedError),
-    ],
-)
-def test_client_error_translation(
-    code: int, status: str, message: str, expected: type
-) -> None:
+def test_delegates_network_error() -> None:
     assessor = GeminiAssessor()
-    exc = _make_client_error(code=code, status=status, message=message)
-    translated = assessor._translate_error(exc)
-    assert isinstance(translated, expected)
-
-
-def test_failed_precondition_via_status_only_translates_to_configuration() -> None:
-    """``code`` ではなく ``status`` のみで判定される FAILED_PRECONDITION 経路。"""
-    assessor = GeminiAssessor()
-    exc = _make_client_error(
-        code=400,
-        status="FAILED_PRECONDITION",
-        message="model not enabled in this region",
-    )
-    # code=400 が先に評価されると INVALID_ARGUMENT 経路に入って message 分岐するが、
-    # FAILED_PRECONDITION は本来 PreconditionError 系。ここでは INVALID_ARGUMENT
-    # status を持つので bad request として翻訳される (実装の policy 通り)。
-    translated = assessor._translate_error(exc)
-    # message が "API key" / "permission" / "blocked" / "safety" を含まない →
-    # AIProviderRequestInvalidError に落ちる
-    assert isinstance(translated, AIProviderRequestInvalidError)
-
-
-# ---------------------------------------------------------------------------
-# ServerError → AIProviderServiceUnavailableError
-# ---------------------------------------------------------------------------
-
-
-def test_server_error_translation() -> None:
-    assessor = GeminiAssessor()
-    exc = _make_server_error()
-    translated = assessor._translate_error(exc)
-    assert isinstance(translated, AIProviderServiceUnavailableError)
-
-
-# ---------------------------------------------------------------------------
-# Network 系: httpx + builtin
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "exc",
-    [
-        httpx.TimeoutException("timed out"),
-        httpx.ConnectError("connection refused"),
-        TimeoutError("io timeout"),
-        ConnectionError("conn reset"),
-        OSError("dns failure"),
-    ],
-)
-def test_network_error_translation(exc: Exception) -> None:
-    assessor = GeminiAssessor()
-    translated = assessor._translate_error(exc)
+    translated = assessor._translate_error(httpx.TimeoutException("timed out"))
     assert isinstance(translated, AIProviderNetworkError)
 
 
-# ---------------------------------------------------------------------------
-# Security: red-team chain γ-1 — leaked key prefix を含む SDK message は固定文言化
-# ---------------------------------------------------------------------------
-
-
-def test_leaked_api_key_message_is_fixed_string() -> None:
-    """SDK message に API key の prefix が含まれていても sanitize された固定文言を返す。
-
-    red-team chain γ-1: Gemini API は key が漏洩した際 ``"API key
-    AIzaSyXXXXXX has been reported as leaked"`` のように key を含む message
-    を返す。これを ``str(exc)`` でログ / audit に流すと key prefix が漏れる
-    ため、固定文言に丸める。
-    """
+def test_delegates_rate_limited_error() -> None:
     assessor = GeminiAssessor()
-    sdk_message = (
-        "API key AIzaSyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q has been reported as leaked"
-    )
-    exc = _make_client_error(code=400, status="INVALID_ARGUMENT", message=sdk_message)
-
+    response_json = {"error": {"status": "RESOURCE_EXHAUSTED", "message": "burst"}}
+    exc = genai_errors.ClientError(429, response_json)
     translated = assessor._translate_error(exc)
-
-    assert isinstance(translated, AIProviderConfigurationError)
-    assert (
-        str(translated)
-        == "Gemini API key has been reported as leaked; rotate immediately"
-    )
-    assert "AIza" not in str(translated)
+    assert isinstance(translated, AIProviderRateLimitedError)
 
 
-# ---------------------------------------------------------------------------
-# Catch-all: マップ未知は exc をそのまま return (bare re-raise guard 規約)
-# ---------------------------------------------------------------------------
+def test_delegates_server_error_to_service_unavailable() -> None:
+    assessor = GeminiAssessor()
+    response_json = {"error": {"status": "INTERNAL", "message": "boom"}}
+    exc = genai_errors.ServerError(500, response_json)
+    translated = assessor._translate_error(exc)
+    assert isinstance(translated, AIProviderServiceUnavailableError)
 
 
 def test_unmappable_returns_exc_unchanged() -> None:
     assessor = GeminiAssessor()
     original = RuntimeError("totally unknown")
     translated = assessor._translate_error(original)
-    # _translate_error は exc をそのまま返す → caller (_call_once) が `if
-    # translated is exc: raise` で素通し
     assert translated is original

@@ -8,18 +8,13 @@ from __future__ import annotations
 
 import structlog
 from google import genai
-from google.genai.errors import APIError, ServerError
 from google.genai.types import GenerateContentConfig, GenerateContentResponse
 from pydantic import ValidationError
 
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderInputRejectedError,
-    AIProviderNetworkError,
     AIProviderOutputBlockedError,
-    AIProviderRateLimitedError,
-    AIProviderRequestInvalidError,
-    AIProviderServiceUnavailableError,
 )
 from app.analysis.extraction.ai.base import BaseExtractor
 from app.analysis.extraction.ai.envelope import ExtractionCall
@@ -28,6 +23,10 @@ from app.analysis.extraction.ai.parse import parse_extraction
 from app.analysis.extraction.ai.schema import GeminiExtractionResponse
 from app.analysis.extraction.domain import Noise, Signal
 from app.analysis.extraction.errors import ExtractionResponseInvalidError
+from app.analysis.gemini_error_translator import (
+    is_context_length_error,
+    translate_gemini_error,
+)
 from app.config import settings
 
 logger = structlog.get_logger(__name__)
@@ -37,18 +36,6 @@ logger = structlog.get_logger(__name__)
 # (AIProviderOutputBlockedError, NonRetryableDropArticle)。
 _POLICY_BLOCKED_FINISH_REASONS: frozenset[str] = frozenset(
     {"SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII"}
-)
-
-# context length 超過の判定で APIError.message に含まれうるパターン。
-# Gemini の正確な phrasing は時期によって揺れるので大小文字無視で substring match。
-_CONTEXT_LENGTH_PATTERNS: tuple[str, ...] = (
-    "exceeds context length",
-    "context_length_exceeded",
-    "exceeds the maximum number of tokens",
-    "exceeds the maximum input token",
-    "exceeds the model's context length",
-    "exceeds the model's maximum context length",
-    "input is too long",
 )
 
 
@@ -135,68 +122,22 @@ class GeminiExtractor(BaseExtractor):
         )
 
     def _translate_error(self, exc: Exception) -> Exception:
-        """Gemini SDK 例外を Layer 2 例外階層に分類する。
+        """SDK / Pydantic 例外を Layer 2 例外階層に翻訳する。
 
-        翻訳できないケースは ``exc`` をそのまま return する (``_call_once`` が
-        bare re-raise → Task 層 catch-all で UNKNOWN ラベル)。
+        Stage 3 specific:
+
+        - ``ValidationError``: schema validation 失敗 (Layer 2-B、retryable)。
+        - 入力長超過 (``INVALID_ARGUMENT`` + context-length message):
+          ``AIProviderInputRejectedError`` として、Stage 4/5 と違うバリエーション
+          (=「入力が長すぎる」semantics) を保持する。
+
+        その他の SDK 例外分類は ``translate_gemini_error`` に委譲する。
         """
         if isinstance(exc, ValidationError):
-            # Pydantic ValidationError は Layer 2-B (Stage 3 工程エラー)
-            # provider は応答を返したが Stage 3 が要求する schema を満たさなかった
             return ExtractionResponseInvalidError(
                 f"Invalid extraction result schema: {exc}"
             )
-
-        if isinstance(exc, APIError):
-            status = exc.status or ""
-            message = exc.message or ""
-
-            if "reported as leaked" in message:
-                # SDK の生 message には key prefix / Authorization header が
-                # 含まれる経路があるため固定文言に丸める (red-team chain γ-1)。
-                # 詳細 debug は error_chain (SDK class FQN) で代替。
-                return AIProviderConfigurationError(
-                    "Gemini API key has been reported as leaked; rotate immediately"
-                )
-
-            if status in (
-                "UNAUTHENTICATED",
-                "PERMISSION_DENIED",
-                "FAILED_PRECONDITION",
-                "NOT_FOUND",
-            ):
-                return AIProviderConfigurationError(f"{status}: {message}")
-
-            if status in ("INVALID_ARGUMENT", "DEADLINE_EXCEEDED"):
-                # context length 超過は内容起因 Permanent (DROP_ARTICLE 対象)。
-                # message 末尾に詳細 JSON が embed されるため大小文字無視で
-                # substring 判定する。
-                lowered = message.lower()
-                if any(pat in lowered for pat in _CONTEXT_LENGTH_PATTERNS):
-                    return AIProviderInputRejectedError(
-                        f"input exceeds context length: {message}"
-                    )
-                # その他の INVALID_ARGUMENT は Stage 3 として消化不可な request
-                # bug。RequestInvalid (NonRetryableKeepArticle、運用者がコード/SDK を
-                # 直す)
-                return AIProviderRequestInvalidError(f"{status}: {message}")
-
-            if status == "RESOURCE_EXHAUSTED":
-                # RPM / RPD を message で判定し分けるのは fragile。Gemini の
-                # RESOURCE_EXHAUSTED は Rate Limited として扱う (RPD は taskiq
-                # RateLimiter の事前チェックで防いでいる、ここに来るのは provider
-                # 側の rate)
-                return AIProviderRateLimitedError(f"{status}: {message}")
-
-            if isinstance(exc, ServerError):
-                return AIProviderServiceUnavailableError(f"{status}: {message}")
-
-            # 既知の APIError status いずれにも該当しない → 翻訳不可
-            # (catch-all で UNKNOWN ラベル)
-            return exc
-
-        if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
-            return AIProviderNetworkError(f"{type(exc).__name__}: {exc}")
-
-        # 想定外の SDK 例外は raw のまま return し、catch-all (UNKNOWN) で受けさせる
-        return exc
+        if is_context_length_error(exc):
+            msg = getattr(exc, "message", None) or str(exc)
+            return AIProviderInputRejectedError(f"input exceeds context length: {msg}")
+        return translate_gemini_error(exc)
