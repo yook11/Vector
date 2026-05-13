@@ -13,7 +13,7 @@ from app.collection.ingestion.domain.fetched_article import (
     Failed,
     FetchedEntry,
     FetchOutcome,
-    PendingHtmlFetch,
+    IncompleteArticle,
 )
 from app.collection.ingestion.fetchers.esa._common import (
     BaseDjangoplicityFetcher,
@@ -99,5 +99,5 @@ def test_missing_pubdate_does_not_block_pattern_h() -> None:
     del entry["published_parsed"]
     outcome = fetcher._convert_entry(entry, 1, "en")
     assert isinstance(outcome, FetchedEntry)
-    assert isinstance(outcome.item, PendingHtmlFetch)
+    assert isinstance(outcome.item, IncompleteArticle)
     assert outcome.item.published_at_hint is None

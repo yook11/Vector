@@ -24,7 +24,7 @@ from app.collection.ingestion.domain.fetched_article import (
     Failed,
     FetchedEntry,
     FetchOutcome,
-    PendingHtmlFetch,
+    IncompleteArticle,
 )
 from app.collection.ingestion.fetchers.hacker_news import (
     HN_HITS_PER_PAGE,
@@ -144,11 +144,11 @@ async def test_fetch_yields_passports_for_valid_hits() -> None:
     with patch(f"{_HN_MOD}.make_safe_async_client", return_value=cm):
         outcomes = await _collect(HackerNewsFetcher().fetch(1))
     assert_at_least_one_passport(outcomes)
-    # url 欠落 1 件は skip され、残り 2 件が PendingHtmlFetch
+    # url 欠落 1 件は skip され、残り 2 件が IncompleteArticle
     pendings = [
         o
         for o in outcomes
-        if isinstance(o, FetchedEntry) and isinstance(o.item, PendingHtmlFetch)
+        if isinstance(o, FetchedEntry) and isinstance(o.item, IncompleteArticle)
     ]
     assert len(pendings) == 2
 

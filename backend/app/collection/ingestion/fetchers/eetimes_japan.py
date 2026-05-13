@@ -2,7 +2,7 @@
 
 collection-acquisition-redesign Phase 1c-C。RSS の ``<description>`` は
 ~150 chars のリード文のみ (本文欠落) のため、Fetcher は本文を取りに行かず
-``PendingHtmlFetch`` を yield する。
+``IncompleteArticle`` を yield する。
 
 per-source 設計:
 
@@ -35,7 +35,7 @@ from app.collection.ingestion.domain.fetched_article import (
     FailureReason,
     FetchedEntry,
     FetchOutcome,
-    PendingHtmlFetch,
+    IncompleteArticle,
 )
 from app.shared.security.safe_http import make_safe_async_client
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
@@ -181,7 +181,7 @@ class EETimesJapanFetcher:
         }
 
         return FetchedEntry(
-            item=PendingHtmlFetch(
+            item=IncompleteArticle(
                 title=title,
                 source_id=source_id,
                 source_url=source_url,

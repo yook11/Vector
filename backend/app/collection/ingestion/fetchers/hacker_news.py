@@ -3,7 +3,7 @@
 collection-acquisition-redesign Phase 1e。HN はソース仕様が API ベース (Algolia
 HN Search API) で RSS / Atom feed を持たないが、API hit の ``url`` は外部の
 任意サイトを指すため本文は HN 側で取得できない。よって ``ReadyForArticle``
-invariant (body ≥ 50 chars) を API 単独で満たせず、``PendingHtmlFetch`` を
+invariant (body ≥ 50 chars) を API 単独で満たせず、``IncompleteArticle`` を
 yield し後段 ``extract_html_body`` task が trafilatura で本文を取得する
 **Pattern H 構造同型** で実装する (FierceBiotech / The Register と同じ流れ)。
 
@@ -37,7 +37,7 @@ from app.collection.ingestion.domain.fetched_article import (
     FailureReason,
     FetchedEntry,
     FetchOutcome,
-    PendingHtmlFetch,
+    IncompleteArticle,
 )
 from app.shared.security.safe_http import make_safe_async_client
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
@@ -192,7 +192,7 @@ class HackerNewsFetcher:
             metadata["guid"] = guid
 
         return FetchedEntry(
-            item=PendingHtmlFetch(
+            item=IncompleteArticle(
                 title=title,
                 source_id=source_id,
                 source_url=source_url,

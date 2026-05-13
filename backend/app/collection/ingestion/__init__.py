@@ -4,7 +4,7 @@
 
 - ``ArticleCandidate``: fetcher 境界の正規化 VO (URL 安全性 / タイトル整形済み)。
   Protocol Fetcher は ``FetchedEntry`` envelope (item=ReadyForArticle |
-  PendingHtmlFetch) を yield し、candidate は ``IngestionService`` 内部で
+  IncompleteArticle) を yield し、candidate は ``IngestionService`` 内部で
   正規化用途に利用される。
 """
 

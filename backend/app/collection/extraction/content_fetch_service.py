@@ -57,7 +57,6 @@ from app.collection.ingestion.domain.fetched_article import (
     Failed as IngestionFailed,
 )
 from app.collection.ingestion.domain.fetched_article import (
-    PendingHtmlFetch,
     ReadyForArticle,
 )
 from app.collection.ingestion.pending_repository import (
@@ -147,13 +146,15 @@ class ContentFetchService:
         if pending is None:
             # 既に DELETE 済 (at-least-once 重複配送)
             return None
-        if pending.status != "running":
+        if pending.row_meta.status != "running":
             # cron poller が claim していない (lease 衝突 / 古い message)
             return None
 
         # HTTP 取得 (extractor の SSRF 境界は SafeUrl を受ける)
         try:
-            html_result = await extractor.fetch(pending.url.as_safe_url())
+            html_result = await extractor.fetch(
+                pending.incomplete_article.source_url.as_safe_url()
+            )
         except PermanentFetchError as exc:
             return await self._handle_terminal(
                 pending,
@@ -182,10 +183,9 @@ class ContentFetchService:
         # 静的型 narrow
         assert isinstance(html_result, ExtractedContent)  # noqa: S101
 
-        # promotion (PendingHtmlFetch + HTML → ReadyForArticle)
-        pending_for_advance = self._reconstruct_pending_html_fetch(pending)
+        # promotion (IncompleteArticle + HTML → ReadyForArticle)
         advanced = ReadyForArticle.try_advance_from(
-            pending_for_advance,
+            pending.incomplete_article,
             body=html_result.body,
             html_published_at=html_result.published_at,
             html_title=html_result.title,
@@ -232,17 +232,19 @@ class ContentFetchService:
         未満なら ``mark_will_retry(ready_at=next_at)`` (status='open' + 未来の
         ready_at) + ``will_retry`` (FAILED) audit。
         """
-        policy, delay_minutes = compute_next_delay_minutes(exc, pending.attempt_count)
+        row_meta = pending.row_meta
+        canonical_url = pending.incomplete_article.source_url
+        policy, delay_minutes = compute_next_delay_minutes(exc, row_meta.attempt_count)
         async with self._session_factory() as session:
             pending_repo = PendingHtmlArticleRepository(session)
             event_repo = PipelineEventRepository(session)
             error_class_fqn = _fqn(exc)
 
-            if pending.attempt_count >= policy.max_attempts:
-                await pending_repo.mark_exhausted(pending.id)
+            if row_meta.attempt_count >= policy.max_attempts:
+                await pending_repo.mark_exhausted(row_meta.id)
                 reason_code = f"temporary_exhausted_{policy.code}"
                 payload = ContentFetchPayload(
-                    canonical_url=str(pending.url),
+                    canonical_url=str(canonical_url),
                     extractor_class=extractor_class,
                     reason_code=reason_code,
                     error_message=str(exc)[:500],
@@ -253,8 +255,8 @@ class ContentFetchService:
                     event_type=EventType.FAILED,
                     outcome_code="dropped_transient",
                     payload=payload,
-                    source_id=pending.source_id,
-                    attempt=pending.attempt_count,
+                    source_id=row_meta.source_id,
+                    attempt=row_meta.attempt_count,
                     duration_ms=duration_ms,
                     error_class=error_class_fqn,
                 )
@@ -262,10 +264,10 @@ class ContentFetchService:
                 return TransientlyDropped(reason_code=reason_code)
 
             next_at = datetime.now(UTC) + timedelta(minutes=delay_minutes)
-            await pending_repo.mark_will_retry(pending.id, ready_at=next_at)
+            await pending_repo.mark_will_retry(row_meta.id, ready_at=next_at)
             reason_code = f"temporary_will_retry_{policy.code}"
             payload = ContentFetchPayload(
-                canonical_url=str(pending.url),
+                canonical_url=str(canonical_url),
                 extractor_class=extractor_class,
                 reason_code=reason_code,
                 error_message=str(exc)[:500],
@@ -276,8 +278,8 @@ class ContentFetchService:
                 event_type=EventType.FAILED,
                 outcome_code="will_retry",
                 payload=payload,
-                source_id=pending.source_id,
-                attempt=pending.attempt_count,
+                source_id=row_meta.source_id,
+                attempt=row_meta.attempt_count,
                 duration_ms=duration_ms,
                 error_class=error_class_fqn,
             )
@@ -295,14 +297,16 @@ class ContentFetchService:
         quality_gate_metric: dict | None = None,
     ) -> TerminallyDropped:
         """永続失敗を ``closed`` に閉じて ``dropped_terminal`` (SKIPPED) を焼く。"""
+        row_meta = pending.row_meta
+        canonical_url = pending.incomplete_article.source_url
         async with self._session_factory() as session:
             pending_repo = PendingHtmlArticleRepository(session)
             event_repo = PipelineEventRepository(session)
             error_class_fqn = _fqn(exc) if exc is not None else None
 
-            await pending_repo.mark_terminal(pending.id)
+            await pending_repo.mark_terminal(row_meta.id)
             payload = ContentFetchPayload(
-                canonical_url=str(pending.url),
+                canonical_url=str(canonical_url),
                 extractor_class=extractor_class,
                 reason_code=reason_code,
                 error_message=str(exc)[:500] if exc is not None else None,
@@ -314,8 +318,8 @@ class ContentFetchService:
                 event_type=EventType.SKIPPED,
                 outcome_code="dropped_terminal",
                 payload=payload,
-                source_id=pending.source_id,
-                attempt=pending.attempt_count,
+                source_id=row_meta.source_id,
+                attempt=row_meta.attempt_count,
                 duration_ms=duration_ms,
                 error_class=error_class_fqn,
             )
@@ -333,11 +337,13 @@ class ContentFetchService:
     ) -> ContentFetched | ConflictLost | TerminallyDropped:
         """``articles`` INSERT + ``pending_html_articles`` DELETE を同 tx で commit。
 
-        race-loss (``save`` が ``None``) → ``find_by_source_url(pending.url)``
+        race-loss (``save`` が ``None``) → ``find_by_source_url(canonical_url)``
         で existing を読み戻す (``articles.source_url UNIQUE`` の決勝戦)。
         検出ありなら ``ConflictLost`` (audit)、検出なしは構造異常として
         ``TerminallyDropped("article_persist_anomaly")``。
         """
+        row_meta = pending.row_meta
+        canonical_url = pending.incomplete_article.source_url
         async with self._session_factory() as session:
             article_repo = ArticleRepository(session)
             pending_repo = PendingHtmlArticleRepository(session)
@@ -356,13 +362,13 @@ class ContentFetchService:
 
             if persisted is None:
                 # race-loss: 既存を読み戻し (canonicalize 済み URL で lookup)
-                existing = await article_repo.find_by_source_url(pending.url)
+                existing = await article_repo.find_by_source_url(canonical_url)
                 if existing is None:
                     # 構造異常 (winner が DELETE pending → INSERT article をしたが
                     # その article がもう消えている等、通常は起きない)
-                    await pending_repo.mark_terminal(pending.id)
+                    await pending_repo.mark_terminal(row_meta.id)
                     payload = ContentFetchPayload(
-                        canonical_url=str(pending.url),
+                        canonical_url=str(canonical_url),
                         extractor_class=extractor_class,
                         reason_code="article_persist_anomaly",
                     )
@@ -371,17 +377,17 @@ class ContentFetchService:
                         event_type=EventType.SKIPPED,
                         outcome_code="dropped_terminal",
                         payload=payload,
-                        source_id=pending.source_id,
-                        attempt=pending.attempt_count,
+                        source_id=row_meta.source_id,
+                        attempt=row_meta.attempt_count,
                         duration_ms=duration_ms,
                     )
                     await session.commit()
                     return TerminallyDropped(reason_code="article_persist_anomaly")
 
                 # ConflictLost: pending を削除 + audit
-                await pending_repo.delete_one(pending.id)
+                await pending_repo.delete_one(row_meta.id)
                 payload = ContentFetchPayload(
-                    canonical_url=str(pending.url),
+                    canonical_url=str(canonical_url),
                     extractor_class=extractor_class,
                     reason_code="conflict_lost",
                 )
@@ -390,21 +396,21 @@ class ContentFetchService:
                     event_type=EventType.SKIPPED,
                     outcome_code="conflict_lost",
                     payload=payload,
-                    source_id=pending.source_id,
+                    source_id=row_meta.source_id,
                     article_id=existing.id,
-                    attempt=pending.attempt_count,
+                    attempt=row_meta.attempt_count,
                     duration_ms=duration_ms,
                 )
                 await session.commit()
                 return ConflictLost()
 
             # 成功: pending DELETE + audit (同 tx)
-            await pending_repo.delete_one(pending.id)
+            await pending_repo.delete_one(row_meta.id)
             article = Article.from_draft(
                 draft, id=persisted.id, created_at=persisted.created_at
             )
             payload = ContentFetchPayload(
-                canonical_url=str(pending.url),
+                canonical_url=str(canonical_url),
                 extractor_class=extractor_class,
                 body_length=body_length,
             )
@@ -413,33 +419,13 @@ class ContentFetchService:
                 event_type=EventType.SUCCEEDED,
                 outcome_code="fetched",
                 payload=payload,
-                source_id=pending.source_id,
+                source_id=row_meta.source_id,
                 article_id=article.id,
-                attempt=pending.attempt_count,
+                attempt=row_meta.attempt_count,
                 duration_ms=duration_ms,
             )
             await session.commit()
             return ContentFetched(article=article)
-
-    @staticmethod
-    def _reconstruct_pending_html_fetch(
-        pending: PendingHtmlContext,
-    ) -> PendingHtmlFetch:
-        """``pending.staged_attributes`` から ``PendingHtmlFetch`` を再構築する。
-
-        ``ReadyForArticle.try_advance_from`` が ``PendingHtmlFetch`` を要求する
-        ため (RSS 由来 title/published_at_hint と HTML 由来の merge 規則を
-        同所に集約)、Service 入口で復元する。``source_url`` は ``pending.url``
-        (canonicalize 済み) を使う。
-        """
-        attrs = pending.staged_attributes
-        return PendingHtmlFetch(
-            title=attrs.title,
-            source_id=pending.source_id,
-            source_url=pending.url,
-            published_at_hint=attrs.published_at_hint,
-            prefer_html_title=attrs.prefer_html_title,
-        )
 
 
 def _elapsed_ms(t0: float) -> int:

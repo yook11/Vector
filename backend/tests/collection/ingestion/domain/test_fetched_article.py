@@ -3,7 +3,7 @@
 検証する不変条件:
 
 - ``ReadyForArticle`` は永続化 passport の 5 fields を strict に通すこと
-- ``PendingHtmlFetch`` は kiq message に乗せる前提 (frozen BaseModel) を満たすこと
+- ``IncompleteArticle`` は kiq message に乗せる前提 (frozen BaseModel) を満たすこと
 - ``try_advance_from`` の Pattern H promotion 規則 (RSS preferred / HTML fallback /
   両欠落で Failed)
 - ``FetchedEntry`` envelope は item + opaque metadata を運ぶ Service-internal 型
@@ -21,7 +21,7 @@ from app.collection.extraction.domain.value_objects import PublishedAt
 from app.collection.ingestion.domain.fetched_article import (
     Failed,
     FetchedEntry,
-    PendingHtmlFetch,
+    IncompleteArticle,
     ReadyForArticle,
 )
 from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
@@ -47,14 +47,14 @@ def _ready(**overrides: object) -> ReadyForArticle:
     return ReadyForArticle(**base)  # type: ignore[arg-type]
 
 
-def _pending(**overrides: object) -> PendingHtmlFetch:
+def _pending(**overrides: object) -> IncompleteArticle:
     base: dict[str, object] = {
         "title": "Test",
         "source_id": 1,
         "source_url": _url(),
     }
     base.update(overrides)
-    return PendingHtmlFetch(**base)  # type: ignore[arg-type]
+    return IncompleteArticle(**base)  # type: ignore[arg-type]
 
 
 class TestReadyForArticle:
@@ -79,7 +79,7 @@ class TestReadyForArticle:
             ready.title = "Changed"  # type: ignore[misc]
 
 
-class TestPendingHtmlFetch:
+class TestIncompleteArticle:
     """Stage 2 への kiq 引数。frozen BaseModel + invariants の境界だけ確認する。"""
 
     def test_constructs_with_minimal_valid_input(self) -> None:
@@ -178,7 +178,7 @@ class TestFetchedEntry:
 
     def test_carries_pending_html_fetch(self) -> None:
         entry = FetchedEntry(item=_pending(), metadata={"site_name": "X"})
-        assert isinstance(entry.item, PendingHtmlFetch)
+        assert isinstance(entry.item, IncompleteArticle)
         assert entry.metadata["site_name"] == "X"
 
     def test_metadata_is_opaque_dict(self) -> None:

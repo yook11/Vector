@@ -10,7 +10,7 @@ Fetcher の ``AsyncIterator[FetchOutcome]`` を回し ``match`` で分岐する:
   ``ON CONFLICT DO NOTHING`` で同 tick race / 既知 URL を吸収
   (``None`` → ``known_url`` skip)。caller (``ingest_source`` task) が
   ``extract_content.kiq`` に chain する。
-- ``FetchedEntry(item=PendingHtmlFetch)`` → ``article_repo.exists_by_source_url``
+- ``FetchedEntry(item=IncompleteArticle)`` → ``article_repo.exists_by_source_url``
   pre-check で feed 再露出を弾き、``pending_html_articles.url`` で投入
   (Pattern H)。``url`` は ``CanonicalArticleUrl`` 型で canonical 保証済。
   下流は cron poller (``dispatch_html_fetch_jobs``) が DB 駆動で拾うため、
@@ -40,7 +40,7 @@ from app.collection.extraction.repository import ArticleRepository
 from app.collection.ingestion.domain.fetched_article import (
     Failed,
     FetchedEntry,
-    PendingHtmlFetch,
+    IncompleteArticle,
     ReadyForArticle,
 )
 from app.collection.ingestion.fetchers.protocol import Fetcher
@@ -120,7 +120,7 @@ class IngestionService:
                             article_created += 1
                             persisted.append(article)
                         case FetchedEntry(
-                            item=PendingHtmlFetch() as pending, metadata=md
+                            item=IncompleteArticle() as pending, metadata=md
                         ):
                             metadata_sample = self._observe_metadata(
                                 md, metadata_fields_observed, metadata_sample

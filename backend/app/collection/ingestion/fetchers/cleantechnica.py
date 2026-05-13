@@ -2,7 +2,7 @@
 
 collection-acquisition-redesign Phase 1d。CleanTechnica の RSS は
 ``<description>`` にリード文 + 画像のみで full body を出さないため、
-Fetcher は本文を取りに行かず ``PendingHtmlFetch`` を yield する
+Fetcher は本文を取りに行かず ``IncompleteArticle`` を yield する
 (`spec collection-source-rss-research.md` の Pattern R+H 分類)。
 
 per-source 設計 (実 RSS 観察ベース):
@@ -38,7 +38,7 @@ from app.collection.ingestion.domain.fetched_article import (
     FailureReason,
     FetchedEntry,
     FetchOutcome,
-    PendingHtmlFetch,
+    IncompleteArticle,
 )
 from app.shared.security.safe_http import make_safe_async_client
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
@@ -218,7 +218,7 @@ class CleanTechnicaFetcher:
             metadata["guid"] = guid
 
         return FetchedEntry(
-            item=PendingHtmlFetch(
+            item=IncompleteArticle(
                 title=title,
                 source_id=source_id,
                 source_url=source_url,

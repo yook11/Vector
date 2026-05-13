@@ -7,7 +7,7 @@
 ``app.collection.ingestion.strategy.FETCHERS`` に登録された新 Protocol
 Fetcher 経由で取り込まれる。Pattern R (RSS で本文込み) は
 ``ReadyForArticle`` を直接 yield → Article 永続化 + ``extract_content`` に
-chain。Pattern H (RSS / API で本文未取得) は ``PendingHtmlFetch`` を yield
+chain。Pattern H (RSS / API で本文未取得) は ``IncompleteArticle`` を yield
 → ``extract_html_body`` task が HTML 取得 + trafilatura 抽出 + 永続化に進む。
 """
 
@@ -132,7 +132,7 @@ async def ingest_source(
     Article 永続化 → ``ExtractionTrigger(article_id)`` で ``extract_content.kiq``
     に enqueue (案 3: Stage 3 task 側で Ready 自構築)。
 
-    Pattern H (本文 HTML 必須): Fetcher が ``PendingHtmlFetch`` を yield、
+    Pattern H (本文 HTML 必須): Fetcher が ``IncompleteArticle`` を yield、
     後段 ``extract_html_body`` task で trafilatura 抽出 + 永続化に進む。
     """
     from app.analysis.extraction.domain.ready import ExtractionTrigger

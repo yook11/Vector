@@ -20,7 +20,7 @@ import pytest
 from app.collection.ingestion.domain.fetched_article import (
     Failed,
     FetchedEntry,
-    PendingHtmlFetch,
+    IncompleteArticle,
 )
 from app.collection.ingestion.fetchers._base.html_listing import BaseHtmlListingFetcher
 from tests.collection.ingestion.fetchers._invariant import (
@@ -104,7 +104,7 @@ async def test_fetch_dedups_and_excludes(monkeypatch: pytest.MonkeyPatch) -> Non
     urls = {
         str(o.item.source_url)
         for o in outcomes
-        if isinstance(o, FetchedEntry) and isinstance(o.item, PendingHtmlFetch)
+        if isinstance(o, FetchedEntry) and isinstance(o.item, IncompleteArticle)
     }
     assert urls == {
         "https://example.com/news/article-one",

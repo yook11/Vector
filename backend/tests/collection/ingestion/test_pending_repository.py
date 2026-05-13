@@ -129,12 +129,12 @@ async def test_find_by_id_returns_context_with_url(
 
     ctx = await repo.find_by_id(pending_id)
     assert isinstance(ctx, PendingHtmlContext)
-    assert ctx.id == pending_id
-    assert ctx.source_id == sample_source.id
-    assert ctx.status == "open"
-    assert ctx.staged_attributes.title == "Find Me"
-    assert ctx.url == url
-    assert ctx.attempt_count == 0
+    assert ctx.row_meta.id == pending_id
+    assert ctx.row_meta.source_id == sample_source.id
+    assert ctx.row_meta.status == "open"
+    assert ctx.incomplete_article.title == "Find Me"
+    assert ctx.incomplete_article.source_url == url
+    assert ctx.row_meta.attempt_count == 0
 
 
 @pytest.mark.asyncio
@@ -197,11 +197,11 @@ async def test_claim_batch_advances_state_atomically(
 
     ctx = await repo.find_by_id(pending_id)
     assert ctx is not None
-    assert ctx.status == "running"
-    assert ctx.leased_until is not None
-    delta = ctx.leased_until - datetime.now(UTC)
+    assert ctx.row_meta.status == "running"
+    assert ctx.row_meta.leased_until is not None
+    delta = ctx.row_meta.leased_until - datetime.now(UTC)
     assert timedelta(minutes=4) <= delta <= timedelta(minutes=6)
-    assert ctx.attempt_count == 1
+    assert ctx.row_meta.attempt_count == 1
 
 
 @pytest.mark.asyncio
@@ -294,8 +294,8 @@ async def test_sweep_expired_reopens_dead_lease(
 
     ctx = await repo.find_by_id(pending_id)
     assert ctx is not None
-    assert ctx.status == "open"
-    assert ctx.leased_until is None
+    assert ctx.row_meta.status == "open"
+    assert ctx.row_meta.leased_until is None
 
 
 @pytest.mark.asyncio
@@ -343,8 +343,8 @@ async def test_mark_terminal_closes_pending(
 
     ctx = await repo.find_by_id(pending_id)
     assert ctx is not None
-    assert ctx.status == "closed"
-    assert ctx.leased_until is None
+    assert ctx.row_meta.status == "closed"
+    assert ctx.row_meta.leased_until is None
 
 
 @pytest.mark.asyncio
@@ -368,8 +368,8 @@ async def test_mark_exhausted_closes_pending(
 
     ctx = await repo.find_by_id(pending_id)
     assert ctx is not None
-    assert ctx.status == "closed"
-    assert ctx.leased_until is None
+    assert ctx.row_meta.status == "closed"
+    assert ctx.row_meta.leased_until is None
 
 
 @pytest.mark.asyncio
@@ -394,10 +394,10 @@ async def test_mark_will_retry_reopens_with_future_ready_at(
 
     ctx = await repo.find_by_id(pending_id)
     assert ctx is not None
-    assert ctx.status == "open"
-    assert ctx.leased_until is None
-    assert ctx.ready_at is not None
-    assert abs((ctx.ready_at - next_at).total_seconds()) < 1
+    assert ctx.row_meta.status == "open"
+    assert ctx.row_meta.leased_until is None
+    assert ctx.row_meta.ready_at is not None
+    assert abs((ctx.row_meta.ready_at - next_at).total_seconds()) < 1
 
 
 @pytest.mark.asyncio

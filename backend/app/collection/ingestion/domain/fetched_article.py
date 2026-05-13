@@ -45,8 +45,9 @@ class FailureReason(BaseModel):
     detail: str | None = None
 
 
-class PendingHtmlFetch(BaseModel):
-    """Pattern H 1 段目の中間 passport (Stage 2 で ``ReadyForArticle`` に昇格)。
+class IncompleteArticle(BaseModel):
+    """Pattern H で生成され、Stage 2 で本文取得後に ``ReadyForArticle`` へ昇格する
+    不完全な記事 (本文不足) の中間 Domain 表現。
 
     ``pending_html_articles.staged_attributes`` (JSONB) に焼かれて永続化され、
     Stage 2 cron poller (``dispatch_html_fetch_jobs``) で再 hydrate される。
@@ -82,7 +83,7 @@ class ReadyForArticle(BaseModel):
     @classmethod
     def try_advance_from(
         cls,
-        pending: PendingHtmlFetch,
+        pending: IncompleteArticle,
         body: str,
         html_published_at: PublishedAt | None,
         html_title: str | None = None,
@@ -135,7 +136,7 @@ class FetchedEntry:
     ``isoformat()`` 化)。``pipeline_events.payload`` (JSONB) に直接焼かれる。
     """
 
-    item: ReadyForArticle | PendingHtmlFetch
+    item: ReadyForArticle | IncompleteArticle
     metadata: Mapping[str, Any]
 
 

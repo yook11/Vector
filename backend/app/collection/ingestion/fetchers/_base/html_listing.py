@@ -20,7 +20,7 @@ Stage B (HTML 本文抽出) は既存 ``extract_html_body`` task が担う。
   HTML 由来採用に opt-in)。本基底では URL slug をプレースホルダとして詰める
   (HTML 抽出失敗時はその記事ごと drop されるためプレースホルダは永続化されない)。
 - crawl-delay は本基底の ``fetch()`` 内で sleep しない。yield した
-  ``PendingHtmlFetch`` は taskiq 経由で別 worker が分散処理するため
+  ``IncompleteArticle`` は taskiq 経由で別 worker が分散処理するため
   in-process sleep は queue rate と無関係。host-level rate limiter は
   ``extract_html_body`` task 側の将来 PR で対応する (TODO)。
 
@@ -44,7 +44,7 @@ from app.collection.ingestion.domain.fetched_article import (
     FailureReason,
     FetchedEntry,
     FetchOutcome,
-    PendingHtmlFetch,
+    IncompleteArticle,
 )
 from app.shared.security.safe_http import make_safe_async_client
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
@@ -166,7 +166,7 @@ class BaseHtmlListingFetcher:
         return path not in self.EXCLUDED_PATHS
 
     def _convert_entry(self, loc: str, source_id: int) -> FetchOutcome:
-        """1 listing entry を ``PendingHtmlFetch`` に変換する純関数。
+        """1 listing entry を ``IncompleteArticle`` に変換する純関数。
 
         title は URL slug をプレースホルダとして詰め、``prefer_html_title=True``
         で HTML 抽出 task が trafilatura 由来の title で overwrite する経路を
@@ -187,7 +187,7 @@ class BaseHtmlListingFetcher:
         slug = self._slug_from_url(loc) or self.NAME
         title = slug[:500]
         return FetchedEntry(
-            item=PendingHtmlFetch(
+            item=IncompleteArticle(
                 title=title,
                 source_id=source_id,
                 source_url=source_url,

@@ -3,7 +3,7 @@
 collection-acquisition-redesign Phase 1d。SpaceNews の RSS は
 ``<description>`` にリード文 + 画像 + truncate signature
 ("appeared first on") のみで full body を出さないため、Fetcher は本文を
-取りに行かず ``PendingHtmlFetch`` を yield する
+取りに行かず ``IncompleteArticle`` を yield する
 (`spec collection-source-rss-research.md` の Pattern R+H 分類)。
 
 per-source 設計 (実 RSS 観察ベース):
@@ -38,7 +38,7 @@ from app.collection.ingestion.domain.fetched_article import (
     FailureReason,
     FetchedEntry,
     FetchOutcome,
-    PendingHtmlFetch,
+    IncompleteArticle,
 )
 from app.shared.security.safe_http import make_safe_async_client
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
@@ -189,7 +189,7 @@ class SpaceNewsFetcher:
             metadata["guid"] = guid
 
         return FetchedEntry(
-            item=PendingHtmlFetch(
+            item=IncompleteArticle(
                 title=title,
                 source_id=source_id,
                 source_url=source_url,

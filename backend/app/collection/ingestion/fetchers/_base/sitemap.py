@@ -2,10 +2,10 @@
 
 RSS / Atom / RDF を一切提供しないソース (Anthropic news が初導入) を取り
 込むため、``sitemap.xml`` の ``<urlset>`` から URL を列挙し各 URL を
-``PendingHtmlFetch`` として yield する。後段の ``extract_html_body`` task
+``IncompleteArticle`` として yield する。後段の ``extract_html_body`` task
 が trafilatura で本文 + title を抽出して merge → ``ReadyForArticle`` 構築。
 
-sitemap.xml は title を一切含まないため、本基底は ``PendingHtmlFetch.title``
+sitemap.xml は title を一切含まないため、本基底は ``IncompleteArticle.title``
 に **URL slug をプレースホルダ** として詰め、``prefer_html_title=True`` で
 HTML 抽出由来の title を採用するよう merge 規則に opt-in する。HTML 抽出が
 失敗した場合は記事ごと drop されるためプレースホルダは永続化されない。
@@ -35,7 +35,7 @@ from app.collection.ingestion.domain.fetched_article import (
     FailureReason,
     FetchedEntry,
     FetchOutcome,
-    PendingHtmlFetch,
+    IncompleteArticle,
 )
 from app.shared.security.safe_http import make_safe_async_client
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
@@ -160,7 +160,7 @@ class BaseSitemapFetcher:
         lastmod: datetime | None,
         source_id: int,
     ) -> FetchOutcome:
-        """1 sitemap entry を ``PendingHtmlFetch`` に変換する純関数。
+        """1 sitemap entry を ``IncompleteArticle`` に変換する純関数。
 
         title は URL slug をプレースホルダとして詰め、``prefer_html_title=True``
         で HTML 抽出 task が trafilatura 由来の title で overwrite する経路を
@@ -182,7 +182,7 @@ class BaseSitemapFetcher:
         title = slug[:500]
         published_hint = PublishedAt(value=lastmod) if lastmod is not None else None
         return FetchedEntry(
-            item=PendingHtmlFetch(
+            item=IncompleteArticle(
                 title=title,
                 source_id=source_id,
                 source_url=source_url,

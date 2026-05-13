@@ -31,7 +31,7 @@ from app.collection.ingestion.domain.fetched_article import (
     FailureReason,
     FetchedEntry,
     FetchOutcome,
-    PendingHtmlFetch,
+    IncompleteArticle,
     ReadyForArticle,
 )
 from app.collection.ingestion.ingestion_service import IngestionService
@@ -59,7 +59,7 @@ def _ready_entry(
 
 def _pending_entry(source_id: int, url: str) -> FetchedEntry:
     return FetchedEntry(
-        item=PendingHtmlFetch(
+        item=IncompleteArticle(
             title="TC",
             source_id=source_id,
             source_url=CanonicalArticleUrl(url),

@@ -1,12 +1,12 @@
 """TechCrunch 用 Fetcher — Pattern H (RSS で URL 列挙、本文は HTML 必須) の参照実装。
 
 collection-acquisition-redesign Phase 1b'。新 ``Fetcher`` Protocol を満たし、
-1 entry ずつ ``PendingHtmlFetch`` (or ``Failed``) を yield する。
+1 entry ずつ ``IncompleteArticle`` (or ``Failed``) を yield する。
 
 TC の RSS feed は ``<description>`` にリード文 (~140 chars) しか含まず、
 ``<content:encoded>`` も提供しない (`spec collection-source-rss-research.md`)。
 このため Fetcher は **本文を取りに行かない** — URL + title + RSS metadata
-を ``PendingHtmlFetch`` として yield し、後段の ``extract_html_body`` task
+を ``IncompleteArticle`` として yield し、後段の ``extract_html_body`` task
 が ``ArticleHtmlExtractor`` (trafilatura) で本文を抽出する 2 段構成。
 
 リファクタの本質的目的: 旧パイプラインは RSS が出している author / tags /
@@ -41,7 +41,7 @@ from app.collection.ingestion.domain.fetched_article import (
     FailureReason,
     FetchedEntry,
     FetchOutcome,
-    PendingHtmlFetch,
+    IncompleteArticle,
 )
 from app.shared.security.safe_http import make_safe_async_client
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
@@ -72,7 +72,7 @@ def _parse_published_at(entry: dict[str, Any]) -> PublishedAt | None:
     """feedparser の ``*_parsed`` (struct_time) を UTC ``PublishedAt`` に変換する。
 
     Pattern H 固有: 本値が None でも Failed 降格はしない (HTML 抽出が
-    ``published_at`` を出してくれれば merge 後に最終確定する)。``PendingHtmlFetch``
+    ``published_at`` を出してくれれば merge 後に最終確定する)。``IncompleteArticle``
     の ``published_at_hint`` に格納される。
     """
     parsed = entry.get("published_parsed") or entry.get("updated_parsed")
@@ -258,7 +258,7 @@ class TechCrunchFetcher:
             metadata["guid"] = guid
 
         return FetchedEntry(
-            item=PendingHtmlFetch(
+            item=IncompleteArticle(
                 title=title,
                 source_id=source_id,
                 source_url=source_url,

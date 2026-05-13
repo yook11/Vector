@@ -38,31 +38,39 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
+from app.collection.ingestion.domain.fetched_article import IncompleteArticle
 from app.collection.ingestion.staged_attributes import StagedArticleAttributes
 from app.models.pending_html_article import PendingHtmlArticle as PendingHtmlArticleORM
 from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 
 
 @dataclass(frozen=True, slots=True)
-class PendingHtmlContext:
-    """``find_by_id`` の戻り値: pending 1 行の view。
+class PendingHtmlRowMeta:
+    """``pending_html_articles`` 行の lease / status / FK メタ情報。
 
-    ``ContentFetchService`` が必要とする全情報を 1 SELECT で持ち回るための
-    structured tuple。``staged_attributes`` は JSONB を ``StagedArticleAttributes``
-    に再構築済 (PublishedAt ISO ↔ datetime 変換を Repository 層で吸収する)。
-
-    ``url`` は ``CanonicalArticleUrl`` で canonical 性を構造保証する
-    (``articles.source_url`` と一致する形)。
+    Domain (``IncompleteArticle``) と独立した「行の運用状態」を表す。cron poller
+    の claim / sweep、``ContentFetchService`` の状態遷移はこの行メタを介する。
     """
 
     id: int
     source_id: int
     status: str
-    staged_attributes: StagedArticleAttributes
     ready_at: datetime | None
     leased_until: datetime | None
     attempt_count: int
-    url: CanonicalArticleUrl
+
+
+@dataclass(frozen=True, slots=True)
+class PendingHtmlContext:
+    """``find_by_id`` の戻り値: pending 1 行の合成 view。
+
+    Domain (``IncompleteArticle``) と行メタ (``PendingHtmlRowMeta``) を明示的に
+    分離する。``ContentFetchService`` は ``ctx.incomplete_article`` で Domain
+    操作、``ctx.row_meta`` で lease / status 判定を行う (責務が型レベルで分離)。
+    """
+
+    incomplete_article: IncompleteArticle
+    row_meta: PendingHtmlRowMeta
 
 
 class PendingHtmlArticleRepository:
@@ -123,19 +131,26 @@ class PendingHtmlArticleRepository:
         row = (await self._session.execute(stmt)).first()
         if row is None:
             return None
+        staged = StagedArticleAttributes.model_validate(row.staged_attributes)
+        # ORM 列は SafeUrl 表現で読み出されるが、DB 上の値は INSERT 時の
+        # canonical 値 (`create` で構造保証済) なので冪等に再構築できる。
+        canonical_url = CanonicalArticleUrl(row.url.root)
         return PendingHtmlContext(
-            id=row.id,
-            source_id=row.source_id,
-            status=row.status,
-            staged_attributes=StagedArticleAttributes.model_validate(
-                row.staged_attributes
+            incomplete_article=IncompleteArticle(
+                title=staged.title,
+                source_id=row.source_id,
+                source_url=canonical_url,
+                published_at_hint=staged.published_at_hint,
+                prefer_html_title=staged.prefer_html_title,
             ),
-            ready_at=row.ready_at,
-            leased_until=row.leased_until,
-            attempt_count=row.attempt_count,
-            # ORM 列は SafeUrl 表現で読み出されるが、DB 上の値は INSERT 時の
-            # canonical 値 (`create` で構造保証済) なので冪等に再構築できる。
-            url=CanonicalArticleUrl(row.url.root),
+            row_meta=PendingHtmlRowMeta(
+                id=row.id,
+                source_id=row.source_id,
+                status=row.status,
+                ready_at=row.ready_at,
+                leased_until=row.leased_until,
+                attempt_count=row.attempt_count,
+            ),
         )
 
     async def claim_batch(self, *, limit: int, lease_minutes: int) -> list[int]:
