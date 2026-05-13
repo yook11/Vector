@@ -1,8 +1,8 @@
 """``DeepSeekAssessor._translate_error`` の SDK 翻訳テーブルテスト。
 
-PR3 で legacy ``AnalysisDomainError`` 系 → ``AIProvider*Error`` 系への翻訳に
-書き直した。spec §DeepSeek SDK 翻訳テーブル全行を parametrize で網羅し、
-catch-all は ``return exc`` (bare re-raise guard) する。
+SDK 例外を ``AIProvider*Error`` 階層に翻訳する。spec §DeepSeek SDK 翻訳テーブル
+全行を parametrize で網羅し、catch-all は ``return exc`` (bare re-raise guard)
+する。
 
 OpenAI SDK 2.32+ の status 系例外は ``response=httpx.Response(..., request=...)``
 が必須 (``request`` 同梱必要)。helper を経由して構築する。

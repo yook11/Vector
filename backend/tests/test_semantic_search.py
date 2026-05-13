@@ -253,7 +253,7 @@ async def test_semantic_search_returns_422_on_unexpected_embedder_error(
     db_session: AsyncSession,
     sample_categories: list[Category],
 ) -> None:
-    """embedder が AnalysisDomainError 以外の例外を漏らした場合は 422 を返す。
+    """embedder が ``AIProviderError`` 以外の例外を漏らした場合は 422 を返す。
 
     Schemathesis ``not_a_server_error`` は 5xx 全部を fail にするため、
     翻訳の網を抜けた例外をユーザー入力起因として 4xx に分類する経路を担保する。

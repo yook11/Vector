@@ -1,8 +1,8 @@
 """``GeminiAssessor._translate_error`` の SDK 翻訳テーブルテスト。
 
-PR3 で legacy ``AnalysisDomainError`` 系 → ``AIProvider*Error`` 系への翻訳に
-書き直した。spec §Gemini SDK 翻訳テーブルの全 row を parametrize で網羅し、
-catch-all は ``return exc`` (bare re-raise guard) する。
+SDK 例外を ``AIProvider*Error`` 階層に翻訳する。spec §Gemini SDK 翻訳テーブルの
+全 row を parametrize で網羅し、catch-all は ``return exc`` (bare re-raise guard)
+する。
 
 google-genai 1.x の ``ClientError(code, response_json)`` は ``code`` (int HTTP
 status) と ``status`` (gRPC status 文字列) の両方を attribute として持つので、

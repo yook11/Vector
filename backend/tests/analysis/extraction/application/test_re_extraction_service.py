@@ -6,10 +6,13 @@
 - ArticleExtraction 不在 (Article のみ) → ``skipped_ids``
 - 正常: 既存 extraction が UPDATE され、子 entity が差し替わる → ``success_ids``
 - dry_run=True: extractor は呼ばれるが DB は変更されない (rollback)
-- ``InvalidInputError`` → ``skipped_ids`` (failed には入らない)
-- ``ProviderError`` を retry 上限まで → ``failed_ids``
-- ``ProviderError`` 1 回 → ``ProviderError`` 1 回 → 成功 → ``success_ids``
-  (2 回まで retry すれば成功するパターン)
+- ``NonRetryableDropArticle`` (``AIProviderInputRejectedError``) → ``skipped_ids``
+  (failed には入らない、通常 pipeline でも記事 DELETE 対象のカテゴリ)
+- ``NonRetryableKeepArticle`` (``AIProviderConfigurationError``) → ``failed_ids``
+  (1 回試行で即 failed、retry を消費しない)
+- ``RetryableError`` (``AIProviderNetworkError``) を retry 上限まで → ``failed_ids``
+- ``AIProviderNetworkError`` 1 回 → 成功 → ``success_ids``
+  (retry すれば成功するパターン)
 - 親 ``ArticleExtraction.id`` は保持される (CASCADE 連鎖防止の構造保証)
 - 再抽出で Noise が返った場合は ``skipped_ids`` に分類され、既存
   ``ArticleExtraction`` は上書きされない (データ破壊防止の構造保証)
@@ -26,8 +29,12 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
+from app.analysis.ai_provider_errors import (
+    AIProviderConfigurationError,
+    AIProviderInputRejectedError,
+    AIProviderNetworkError,
+)
 from app.analysis.domain.value_objects.entity import EntityRawType, EntitySurface
-from app.analysis.errors import InvalidInputError, ProviderError
 from app.analysis.extraction.ai.base import BaseExtractor
 from app.analysis.extraction.ai.envelope import ExtractionCall
 from app.analysis.extraction.application import (
@@ -194,7 +201,7 @@ async def test_invalid_input_is_skipped_not_failed(
     )
     await _seed_extraction(db_session, article=article, entities=[("Old", "company")])
 
-    extractor = _extractor(side_effect=InvalidInputError("too short"))
+    extractor = _extractor(side_effect=AIProviderInputRejectedError("too short"))
     service = ReExtractionService(session_factory)
     summary = await service.execute((article.id,), extractor, dry_run=False)
 
@@ -316,13 +323,15 @@ async def test_retries_then_succeeds(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """ProviderError 1 回 → 成功で success_ids に入る。"""
+    """AIProviderNetworkError 1 回 → 成功で success_ids に入る。"""
     article = await _make_article(
         db_session, sample_source, "https://example.com/retry"
     )
     await _seed_extraction(db_session, article=article, entities=[("Old", "company")])
 
-    extractor = _extractor(side_effect=[ProviderError("transient"), _signal_call()])
+    extractor = _extractor(
+        side_effect=[AIProviderNetworkError("transient"), _signal_call()]
+    )
     service = ReExtractionService(session_factory, max_retries=3)
     summary = await service.execute((article.id,), extractor, dry_run=False)
 
@@ -336,19 +345,46 @@ async def test_failed_after_max_retries(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """ProviderError が max_retries 回連続で failed_ids に入る。"""
+    """AIProviderNetworkError が max_retries 回連続で failed_ids に入る。"""
     article = await _make_article(
         db_session, sample_source, "https://example.com/failed"
     )
     await _seed_extraction(db_session, article=article, entities=[("Old", "company")])
 
-    extractor = _extractor(side_effect=ProviderError("dead"))
+    extractor = _extractor(side_effect=AIProviderNetworkError("dead"))
     service = ReExtractionService(session_factory, max_retries=2)
     summary = await service.execute((article.id,), extractor, dry_run=False)
 
     assert summary.failed_ids == (article.id,)
     assert summary.success_ids == ()
     assert extractor.extract.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_configuration_error_fails_immediately_without_retry(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """``NonRetryableKeepArticle`` (``AIProviderConfigurationError``) は
+    1 回試行で即 failed。
+
+    retry しても解消しない種類のエラーなので ``max_retries`` を消費しない。
+    本番 task chain と同じ dispatch 軸 (marker base) に揃えた結果の挙動。
+    """
+    article = await _make_article(
+        db_session, sample_source, "https://example.com/config-fail"
+    )
+    await _seed_extraction(db_session, article=article, entities=[("Old", "company")])
+
+    extractor = _extractor(side_effect=AIProviderConfigurationError("api key invalid"))
+    service = ReExtractionService(session_factory, max_retries=3)
+    summary = await service.execute((article.id,), extractor, dry_run=False)
+
+    assert summary.failed_ids == (article.id,)
+    assert summary.success_ids == ()
+    assert summary.skipped_ids == ()
+    assert extractor.extract.await_count == 1  # retry されていない
 
 
 @pytest.mark.asyncio
@@ -373,7 +409,7 @@ async def test_summary_aggregates_per_article_independently(
         # 順序: a_ok → a_fail (a_skip は extract まで来ない)
         if len(call_log) == 1:
             return _signal_call()
-        raise ProviderError("dead")
+        raise AIProviderNetworkError("dead")
 
     extractor = MagicMock(spec=BaseExtractor)
     type(extractor).model_name = "test-model-x"

@@ -6,8 +6,7 @@ PR6 で Service が以下を行うようになったことを固定する:
   で Stage 4 marker (``AssessmentRecoverableError`` / ``AssessmentTerminalSkipError``)
   に詰め替え、``__cause__`` に元 ``AIProvider*Error`` を紐付ける (ACL boundary)。
 - ``_handle_in_scope`` で category 解決失敗 (``category_id is None``) のとき
-  ``AssessmentCategoryMissingError`` (Layer 2-B、TerminalSkip 継承) を raise する
-  (旧 ``ProviderError`` raise を置換)。
+  ``AssessmentCategoryMissingError`` (Layer 2-B、TerminalSkip 継承) を raise する。
 - 業務 INSERT (in-scope / out-of-scope) と同 session 同 tx で
   ``AssessmentAuditRepository.append_*`` を呼び、成功 audit を 1 行焼く。
 - race lost (``save()`` が None) の場合は audit を焼かず ``None`` を返す
@@ -359,7 +358,7 @@ async def test_unknown_category_raises_category_missing(
     sample_source: NewsSource,
 ) -> None:
     """``in_scope.category.value`` が catalog 未登録 →
-    ``AssessmentCategoryMissingError`` raise (旧 ``ProviderError`` 置換)。
+    ``AssessmentCategoryMissingError`` raise。
 
     ``sample_categories`` fixture を使わない (catalog 未登録状態を作る) ため、
     Repository.save 内部の ``_get_category_id_by_slug`` が必ず None を返し、

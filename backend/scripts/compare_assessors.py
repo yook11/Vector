@@ -37,6 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.analysis.ai_provider_errors import AIProviderError
 from app.analysis.assessment.ai.base import BaseAssessor
 from app.analysis.assessment.ai.deepseek import DeepSeekAssessor
 from app.analysis.assessment.ai.gemini import GeminiAssessor
@@ -45,7 +46,7 @@ from app.analysis.assessment.domain.result import (
     OutOfScope,
     ValidCategory,
 )
-from app.analysis.errors import AnalysisDomainError, ProviderError
+from app.analysis.assessment.errors import AssessmentResponseInvalidError
 from app.db import engine
 from app.models.article_extraction import ArticleExtraction
 
@@ -86,7 +87,7 @@ async def _call_assessor(assessor: BaseAssessor, sample: Sample) -> CallResult:
         result = await assessor.assess(
             title_ja=sample.title_ja, summary_ja=sample.summary_ja
         )
-    except AnalysisDomainError as exc:
+    except (AIProviderError, AssessmentResponseInvalidError) as exc:
         elapsed = time.perf_counter() - start
         return CallResult(
             category_value=None,
@@ -95,7 +96,7 @@ async def _call_assessor(assessor: BaseAssessor, sample: Sample) -> CallResult:
             latency_seconds=elapsed,
             error_class=type(exc).__name__,
             error_message=str(exc),
-            is_validation_error=isinstance(exc, ProviderError),
+            is_validation_error=isinstance(exc, AssessmentResponseInvalidError),
         )
     elapsed = time.perf_counter() - start
 

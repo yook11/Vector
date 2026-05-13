@@ -93,7 +93,8 @@ class AssessmentService:
                 経路に委ねる)
 
         Raises:
-            ``AnalysisDomainError`` のサブクラス (Task 層 retry に委ねる)。
+            ``AssessmentRecoverableError`` / ``AssessmentTerminalSkipError``
+            (Task 層 retry に委ねる)。
         """
         try:
             call = await assessor.assess(

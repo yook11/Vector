@@ -36,12 +36,16 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
-from app.analysis.errors import AnalysisDomainError, InvalidInputError
 from app.analysis.extraction.ai.base import BaseExtractor
 from app.analysis.extraction.ai.envelope import ExtractionCall
 from app.analysis.extraction.domain import Noise, Signal
 from app.analysis.extraction.repository import ExtractionRepository
 from app.models.article import Article
+from app.observability.categories import (
+    NonRetryableDropArticle,
+    NonRetryableKeepArticle,
+    RetryableError,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -55,8 +59,10 @@ class ReExtractionSummary:
 
     - ``success_ids``: 再抽出 + 永続化 (dry_run=True なら rollback 直前の commit
       候補) に成功
-    - ``failed_ids``: ``max_retries`` 回 retry しても AnalysisDomainError が再現した
-    - ``skipped_ids``: Article 不在 / 既存 ArticleExtraction 不在 / InvalidInputError
+    - ``failed_ids``: ``NonRetryableKeepArticle`` (Configuration / Balance 等)
+      で即失敗、または ``RetryableError`` が ``max_retries`` 回再現した
+    - ``skipped_ids``: Article 不在 / 既存 ArticleExtraction 不在 /
+      ``NonRetryableDropArticle`` (input rejected / output blocked)
     - ``dry_run``: ``True`` の場合は永続化していない (rollback 済み)
     """
 
@@ -153,14 +159,25 @@ class ReExtractionService:
             envelope = await self._extract_with_retry(
                 extractor, title=title, content=content, article_id=article_id
             )
-        except InvalidInputError:
-            # 本文が AI から見て短すぎる / 解析不能。通常 pipeline でも skip
-            # 扱いされるカテゴリのため failed には入れない。
-            logger.warning("re_extract_invalid_input", article_id=article_id)
+        except NonRetryableDropArticle:
+            # AI から見て扱えない記事 (input rejected / output blocked)。
+            # 通常 pipeline でも記事 DELETE 対象のカテゴリなので skipped 扱い。
+            logger.warning("re_extract_drop_article", article_id=article_id)
             return "skipped"
-        except AnalysisDomainError as exc:
+        except NonRetryableKeepArticle as exc:
+            # Configuration / RequestInvalid / Balance 等。retry しても解消しない
+            # ため max_retries を消費せず即 failed (本番 task は KEEP_ARTICLE で
+            # raise する)。
             logger.error(
-                "re_extract_failed",
+                "re_extract_failed_permanent",
+                article_id=article_id,
+                error=type(exc).__name__,
+            )
+            return "failed"
+        except RetryableError as exc:
+            # max_retries 回 retry しても再現した recoverable エラー。
+            logger.error(
+                "re_extract_failed_after_retry",
                 article_id=article_id,
                 error=type(exc).__name__,
             )
@@ -218,16 +235,16 @@ class ReExtractionService:
     ) -> ExtractionCall[Signal] | ExtractionCall[Noise]:
         """exponential backoff で extractor を最大 ``max_retries`` 回呼び出す。
 
-        ``InvalidInputError`` は回復しない種類のエラーなので即座に伝播。
-        他の ``AnalysisDomainError`` (rate-limit / transient API failure) のみ retry。
+        ``NonRetryableDropArticle`` / ``NonRetryableKeepArticle`` は即時伝播
+        (retry 無意味)。``RetryableError`` marker のみ backoff retry する。
         """
-        last_exc: AnalysisDomainError | None = None
+        last_exc: RetryableError | None = None
         for attempt in range(1, self._max_retries + 1):
             try:
                 return await extractor.extract(title=title, content=content)
-            except InvalidInputError:
+            except (NonRetryableDropArticle, NonRetryableKeepArticle):
                 raise
-            except AnalysisDomainError as exc:
+            except RetryableError as exc:
                 last_exc = exc
                 logger.warning(
                     "re_extract_retry",

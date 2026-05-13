@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from structlog.testing import capture_logs
 
+from app.analysis.ai_provider_errors import AIProviderRateLimitedError
 from app.analysis.assessment.domain.ready import (
     AssessmentTrigger,
     ReadyForAssessment,
@@ -28,7 +29,6 @@ from app.analysis.assessment.errors import (
     AssessmentTerminalSkipError,
 )
 from app.analysis.embedding.domain.ready import EmbeddingTrigger
-from app.analysis.errors import RateLimitError
 
 
 def _make_provider_fake() -> MagicMock:
@@ -184,8 +184,15 @@ class TestAssessContent:
 
     @pytest.mark.asyncio
     async def test_rate_limit_raises_for_retry(self) -> None:
-        """legacy RateLimitError は 3 marker いずれにも該当しないので
-        catch-all 句に dispatch される。retry 余地ありで raise。"""
+        """``AIProviderRateLimitedError`` は Stage 4 ACL を経由せず Service が直接 raise
+        した場合、Assessment.* marker (TerminalSkip / Recoverable) のいずれにも該当
+        しないので catch-all (Exception) 句に dispatch される。retry 余地ありで raise。
+
+        (補足: ``AIProviderRateLimitedError`` は foundation ``RetryableError`` marker を
+        継承するが、``assess_content`` の except は ``AssessmentRecoverableError`` で
+        catch する。本 test は Service が ACL 通過せず直接 raise した想定 mock なので
+        catch-all 句に落ちる)
+        """
         from app.analysis.assessment.tasks import assess_content
 
         mock_ctx = _make_ctx(
@@ -204,9 +211,9 @@ class TestAssessContent:
         ):
             mock_audit_cls.return_value.append_failure = AsyncMock()
             mock_svc_cls.return_value.execute = AsyncMock(
-                side_effect=RateLimitError("429"),
+                side_effect=AIProviderRateLimitedError("429"),
             )
-            with pytest.raises(RateLimitError):
+            with pytest.raises(AIProviderRateLimitedError):
                 await assess_content(trigger=trigger, ctx=mock_ctx)
 
     @pytest.mark.asyncio
@@ -230,7 +237,7 @@ class TestAssessContent:
         ):
             mock_audit_cls.return_value.append_failure = AsyncMock()
             mock_svc_cls.return_value.execute = AsyncMock(
-                side_effect=RateLimitError("429"),
+                side_effect=AIProviderRateLimitedError("429"),
             )
             await assess_content(trigger=trigger, ctx=mock_ctx)
 
