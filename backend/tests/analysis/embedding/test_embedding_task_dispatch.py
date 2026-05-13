@@ -1,0 +1,232 @@
+"""``generate_embedding`` task の失敗 dispatch routing テスト。
+
+Service の execute を mock して、tasks.py が **どんな exc** を受けたときに
+``EmbeddingFailureHandler.handle`` に正しく委譲し、戻り値の ``reraise`` を
+正しく taskiq の raise/return semantics に変換するかを検証する。
+
+実 DB / 実 Service / 実 Handler は呼ばない:
+- ``EmbeddingService.execute`` を patch (side_effect で exc を投げる)
+- ``EmbeddingFailureHandler`` を patch (handle の引数を assert、戻り値を制御)
+
+marker ごとの後処理 (audit / inline retry decision / 分類ログ) の内部実装は
+``EmbeddingFailureHandler`` 側の責務で、本ファイルでは検証しない
+(Handler の単体テストは ``test_failure_handler.py`` 参照)。
+"""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from app.analysis.embedding.domain.ready import (
+    EmbeddingTrigger,
+    ReadyForEmbedding,
+)
+from app.analysis.embedding.errors import (
+    EmbeddingRecoverableError,
+    EmbeddingResponseInvalidError,
+    EmbeddingTerminalSkipError,
+)
+
+
+def _make_embedder_fake() -> MagicMock:
+    fake = MagicMock()
+    fake.PROVIDER = "gemini"
+    fake.MODEL = "cl-nagoya/ruri-v3-310m"
+    fake.RPM = None
+    fake.RPD = None
+    return fake
+
+
+def _make_ctx(retry_count: int = 0, max_retries: int = 2) -> MagicMock:
+    ctx = MagicMock()
+    ctx.state = SimpleNamespace(session_factory=MagicMock())
+    ctx.state.embedder = _make_embedder_fake()
+    ctx.message.labels = {
+        "retry_count": retry_count,
+        "max_retries": max_retries,
+    }
+    return ctx
+
+
+def _trigger() -> EmbeddingTrigger:
+    return EmbeddingTrigger(analysis_id=1)
+
+
+def _fixed_ready() -> ReadyForEmbedding:
+    return ReadyForEmbedding(
+        analysis_id=1,
+        text_for_embedding="分析タイトル\n分析要約",
+        article_id=7,
+    )
+
+
+def _patch_ready_construction(ready: ReadyForEmbedding | None = None) -> object:
+    """``ReadyForEmbedding.try_advance_from`` を固定値返却に patch するヘルパ。"""
+    return patch(
+        "app.analysis.embedding.tasks.ReadyForEmbedding.try_advance_from",
+        new=AsyncMock(return_value=ready if ready is not None else _fixed_ready()),
+    )
+
+
+# ---------------------------------------------------------------------------
+# TerminalSkip 系 — Handler が False を返し、task は return (raise しない)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_terminal_skip_delegates_to_handler() -> None:
+    """``EmbeddingTerminalSkipError`` は handler.handle に委譲され、
+    reraise=False で return する。"""
+    from app.analysis.embedding.tasks import generate_embedding
+
+    ctx = _make_ctx()
+    exc = EmbeddingTerminalSkipError("bad config", code="ai_error_configuration")
+
+    with (
+        _patch_ready_construction(),
+        patch(
+            "app.analysis.embedding.tasks._build_limiters", return_value=(None, None)
+        ),
+        patch("app.analysis.embedding.tasks.EmbeddingService") as mock_svc_cls,
+        patch(
+            "app.analysis.embedding.tasks.EmbeddingFailureHandler"
+        ) as mock_handler_cls,
+    ):
+        mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
+        mock_handler_cls.return_value.handle = AsyncMock(return_value=False)
+        await generate_embedding(trigger=_trigger(), ctx=ctx)
+
+    handler_handle = mock_handler_cls.return_value.handle
+    handler_handle.assert_awaited_once()
+    kwargs = handler_handle.await_args.kwargs
+    assert kwargs["exc"] is exc
+    assert kwargs["attempt"] == 1
+    assert kwargs["last_attempt"] is False
+
+
+# ---------------------------------------------------------------------------
+# Recoverable 系 — Handler の reraise 戻り値で raise/return が決まる
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_recoverable_reraise_true_raises() -> None:
+    """Handler が ``reraise=True`` を返したら task は元の exc を raise する。"""
+    from app.analysis.embedding.tasks import generate_embedding
+
+    ctx = _make_ctx(retry_count=0, max_retries=2)  # retry 余地あり
+    exc = EmbeddingRecoverableError("network", code="ai_error_network")
+
+    with (
+        _patch_ready_construction(),
+        patch(
+            "app.analysis.embedding.tasks._build_limiters", return_value=(None, None)
+        ),
+        patch("app.analysis.embedding.tasks.EmbeddingService") as mock_svc_cls,
+        patch(
+            "app.analysis.embedding.tasks.EmbeddingFailureHandler"
+        ) as mock_handler_cls,
+    ):
+        mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
+        mock_handler_cls.return_value.handle = AsyncMock(return_value=True)
+        with pytest.raises(EmbeddingRecoverableError):
+            await generate_embedding(trigger=_trigger(), ctx=ctx)
+
+    mock_handler_cls.return_value.handle.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_recoverable_reraise_false_returns() -> None:
+    """Handler が ``reraise=False`` を返したら task は return する (raise しない)。
+
+    最終 attempt のとき Handler は False を返す想定 (Stage 5 仕様)。本 test は
+    その経路で task が最後まで完走し、``last_attempt=True`` が Handler に渡る
+    ことを確認する。
+    """
+    from app.analysis.embedding.tasks import generate_embedding
+
+    ctx = _make_ctx(retry_count=2, max_retries=2)  # 最終試行
+    exc = EmbeddingRecoverableError("network", code="ai_error_network")
+
+    with (
+        _patch_ready_construction(),
+        patch(
+            "app.analysis.embedding.tasks._build_limiters", return_value=(None, None)
+        ),
+        patch("app.analysis.embedding.tasks.EmbeddingService") as mock_svc_cls,
+        patch(
+            "app.analysis.embedding.tasks.EmbeddingFailureHandler"
+        ) as mock_handler_cls,
+    ):
+        mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
+        mock_handler_cls.return_value.handle = AsyncMock(return_value=False)
+        await generate_embedding(trigger=_trigger(), ctx=ctx)
+
+    handler_handle = mock_handler_cls.return_value.handle
+    handler_handle.assert_awaited_once()
+    assert handler_handle.await_args.kwargs["last_attempt"] is True
+
+
+@pytest.mark.asyncio
+async def test_response_invalid_dispatches_to_handler() -> None:
+    """``EmbeddingResponseInvalidError`` (Layer 2-B、Recoverable 継承) も
+    Handler 経由で扱われる (kwargs["exc"] は EmbeddingRecoverableError instance)。"""
+    from app.analysis.embedding.tasks import generate_embedding
+
+    ctx = _make_ctx()
+    exc = EmbeddingResponseInvalidError("dimension mismatch")
+
+    with (
+        _patch_ready_construction(),
+        patch(
+            "app.analysis.embedding.tasks._build_limiters", return_value=(None, None)
+        ),
+        patch("app.analysis.embedding.tasks.EmbeddingService") as mock_svc_cls,
+        patch(
+            "app.analysis.embedding.tasks.EmbeddingFailureHandler"
+        ) as mock_handler_cls,
+    ):
+        mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
+        mock_handler_cls.return_value.handle = AsyncMock(return_value=False)
+        await generate_embedding(trigger=_trigger(), ctx=ctx)
+
+    handler_handle = mock_handler_cls.return_value.handle
+    handler_handle.assert_awaited_once()
+    assert isinstance(
+        handler_handle.await_args.kwargs["exc"], EmbeddingRecoverableError
+    )
+
+
+# ---------------------------------------------------------------------------
+# catch-all — Layer 1 marker いずれにも該当しない例外も Handler に委譲
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_unexpected_exception_delegates_to_handler() -> None:
+    """marker いずれにも該当しない exc も except Exception で Handler に渡る。"""
+    from app.analysis.embedding.tasks import generate_embedding
+
+    ctx = _make_ctx()
+    with (
+        _patch_ready_construction(),
+        patch(
+            "app.analysis.embedding.tasks._build_limiters", return_value=(None, None)
+        ),
+        patch("app.analysis.embedding.tasks.EmbeddingService") as mock_svc_cls,
+        patch(
+            "app.analysis.embedding.tasks.EmbeddingFailureHandler"
+        ) as mock_handler_cls,
+    ):
+        mock_svc_cls.return_value.execute = AsyncMock(
+            side_effect=ValueError("surprise"),
+        )
+        mock_handler_cls.return_value.handle = AsyncMock(return_value=False)
+        await generate_embedding(trigger=_trigger(), ctx=ctx)
+
+    handler_handle = mock_handler_cls.return_value.handle
+    handler_handle.assert_awaited_once()
+    assert isinstance(handler_handle.await_args.kwargs["exc"], ValueError)
