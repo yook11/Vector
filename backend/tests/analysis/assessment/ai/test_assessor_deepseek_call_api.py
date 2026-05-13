@@ -80,6 +80,7 @@ class TestDeepSeekCallApiSuccess:
                 "category": "ai",
                 "topic": "ai agents",
                 "investor_take": "Significant traction.",
+                "events": [],
             }
         )
         _patch_assessor_call(assessor, _stub_response(arguments=args))
@@ -104,6 +105,7 @@ class TestDeepSeekCallApiSuccess:
                 "category": "out_of_scope",
                 "topic": "ignored",
                 "investor_take": "Not relevant.",
+                "events": [],
             }
         )
         _patch_assessor_call(assessor, _stub_response(arguments=args))

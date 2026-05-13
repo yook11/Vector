@@ -29,8 +29,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.analysis.assessment.ai.envelope import AssessmentCall
 from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.domain.result import (
+    Event,
     InScope,
     InScopeCategory,
+    Mention,
+    MentionType,
     OutOfScope,
 )
 from app.analysis.assessment.errors import AssessmentCategoryMissingError
@@ -87,13 +90,16 @@ def _ready(
 
 
 def _in_scope_call(
-    *, category: InScopeCategory = InScopeCategory.AI
+    *,
+    category: InScopeCategory = InScopeCategory.AI,
+    events: list[Event] | None = None,
 ) -> AssessmentCall[InScope]:
     return AssessmentCall(
         result=InScope(
             category=category,
             topic=TopicName("llm benchmark"),
             investor_take="bullish",
+            events=events or [],
         ),
         raw_response='{"category":"ai"}',
         raw_category=category.value,
@@ -104,10 +110,12 @@ def _in_scope_call(
 
 
 def _out_of_scope_call(
-    *, investor_take: str = "not relevant"
+    *,
+    investor_take: str = "not relevant",
+    events: list[Event] | None = None,
 ) -> AssessmentCall[OutOfScope]:
     return AssessmentCall(
-        result=OutOfScope(investor_take=investor_take),
+        result=OutOfScope(investor_take=investor_take, events=events or []),
         raw_response='{"category":"out_of_scope"}',
         raw_category="out_of_scope",
         raw_topic="celebrity gossip",
@@ -260,6 +268,131 @@ async def test_save_in_scope_returns_none_on_race_lost(
     await db_session.commit()
 
     assert saved is None
+
+
+@pytest.mark.asyncio
+async def test_save_in_scope_persists_events_jsonb(
+    db_session: AsyncSession,
+    sample_source: NewsSource,
+    sample_categories: list[Category],
+) -> None:
+    """``save_in_scope`` で events が JSONB として保存される (dict のリスト)。"""
+    extraction = await _make_extraction(db_session, sample_source)
+    repo = AssessmentRepository(db_session)
+
+    events = [
+        Event(
+            description="Anthropic launched Claude 5.",
+            mentions=[
+                Mention(surface="Anthropic", type=MentionType.COMPANY),
+                Mention(surface="Claude 5", type=MentionType.PRODUCT),
+            ],
+        )
+    ]
+    await repo.save_in_scope(
+        _in_scope_call(events=events),
+        ready=_ready(extraction),
+    )
+    await db_session.commit()
+
+    row = (
+        await db_session.execute(
+            select(InScopeAssessmentORM).where(
+                InScopeAssessmentORM.extraction_id == extraction.id
+            )
+        )
+    ).scalar_one()
+    assert row.events == [
+        {
+            "description": "Anthropic launched Claude 5.",
+            "mentions": [
+                {"surface": "Anthropic", "type": "company"},
+                {"surface": "Claude 5", "type": "product"},
+            ],
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_save_in_scope_persists_empty_events_as_empty_list(
+    db_session: AsyncSession,
+    sample_source: NewsSource,
+    sample_categories: list[Category],
+) -> None:
+    """events=[] は ``[]`` として保存される (NULL ではなく)。NULL は旧行のみ。"""
+    extraction = await _make_extraction(db_session, sample_source)
+    repo = AssessmentRepository(db_session)
+
+    await repo.save_in_scope(_in_scope_call(events=[]), ready=_ready(extraction))
+    await db_session.commit()
+
+    row = (
+        await db_session.execute(
+            select(InScopeAssessmentORM).where(
+                InScopeAssessmentORM.extraction_id == extraction.id
+            )
+        )
+    ).scalar_one()
+    assert row.events == []
+
+
+@pytest.mark.asyncio
+async def test_save_out_of_scope_persists_events_jsonb(
+    db_session: AsyncSession,
+    sample_source: NewsSource,
+) -> None:
+    """``save_out_of_scope`` でも events が JSONB として保存される (対称化)。"""
+    extraction = await _make_extraction(db_session, sample_source)
+    repo = AssessmentRepository(db_session)
+
+    events = [
+        Event(
+            description="Off-topic event description.",
+            mentions=[Mention(surface="Someone", type=MentionType.PERSON)],
+        )
+    ]
+    await repo.save_out_of_scope(
+        _out_of_scope_call(events=events),
+        ready=_ready(extraction),
+    )
+    await db_session.commit()
+
+    row = (
+        await db_session.execute(
+            select(OutOfScopeAssessmentORM).where(
+                OutOfScopeAssessmentORM.extraction_id == extraction.id
+            )
+        )
+    ).scalar_one()
+    assert row.events == [
+        {
+            "description": "Off-topic event description.",
+            "mentions": [{"surface": "Someone", "type": "person"}],
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_save_out_of_scope_persists_empty_events_as_empty_list(
+    db_session: AsyncSession,
+    sample_source: NewsSource,
+) -> None:
+    extraction = await _make_extraction(db_session, sample_source)
+    repo = AssessmentRepository(db_session)
+
+    await repo.save_out_of_scope(
+        _out_of_scope_call(events=[]), ready=_ready(extraction)
+    )
+    await db_session.commit()
+
+    row = (
+        await db_session.execute(
+            select(OutOfScopeAssessmentORM).where(
+                OutOfScopeAssessmentORM.extraction_id == extraction.id
+            )
+        )
+    ).scalar_one()
+    assert row.events == []
 
 
 @pytest.mark.asyncio

@@ -148,6 +148,7 @@ class AssessmentRepository:
                 topic=in_scope.topic,
                 category_id=category_id,
                 investor_take=in_scope.investor_take,
+                events=[e.model_dump() for e in in_scope.events],
             )
             .on_conflict_do_nothing(index_elements=["extraction_id"])
             .returning(InScopeAssessment.id)
@@ -183,6 +184,7 @@ class AssessmentRepository:
                 translated_title=ready.translated_title,
                 summary=ready.summary,
                 investor_take=out_of_scope.investor_take,
+                events=[e.model_dump() for e in out_of_scope.events],
             )
             .on_conflict_do_nothing(index_elements=["extraction_id"])
             .returning(OutOfScopeAssessment.id)

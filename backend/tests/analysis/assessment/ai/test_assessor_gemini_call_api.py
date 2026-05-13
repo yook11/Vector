@@ -73,6 +73,7 @@ class TestGeminiCallApiSuccess:
                 "category": "ai",
                 "topic": "ai agents",
                 "investor_take": "Significant traction.",
+                "events": [],
             }
         )
         _patch_assessor_call(assessor, _stub_response(text))
@@ -98,6 +99,7 @@ class TestGeminiCallApiSuccess:
                 "category": "out_of_scope",
                 "topic": "ignored",
                 "investor_take": "Not relevant.",
+                "events": [],
             }
         )
         _patch_assessor_call(assessor, _stub_response(text))
@@ -113,7 +115,9 @@ class TestGeminiCallApiSuccess:
     @pytest.mark.asyncio
     async def test_uses_dict_response_schema(self) -> None:
         assessor = GeminiAssessor()
-        text = json.dumps({"category": "ai", "topic": "ai", "investor_take": "x"})
+        text = json.dumps(
+            {"category": "ai", "topic": "ai", "investor_take": "x", "events": []}
+        )
         mock_call = _patch_assessor_call(assessor, _stub_response(text))
 
         await assessor._call_api("prompt")
@@ -135,7 +139,9 @@ class TestGeminiFinishReasonBlocked:
     @pytest.mark.asyncio
     async def test_finish_reason_safety_raises_blocked(self) -> None:
         assessor = GeminiAssessor()
-        text = json.dumps({"category": "ai", "topic": "ai", "investor_take": "x"})
+        text = json.dumps(
+            {"category": "ai", "topic": "ai", "investor_take": "x", "events": []}
+        )
         _patch_assessor_call(
             assessor, _stub_response(text, finish_reason_name="SAFETY")
         )
@@ -161,7 +167,9 @@ class TestGeminiFinishReasonBlocked:
     async def test_finish_reason_stop_does_not_raise(self) -> None:
         """正常終了の finish_reason (STOP 等) では raise せず parse に進む。"""
         assessor = GeminiAssessor()
-        text = json.dumps({"category": "ai", "topic": "ai", "investor_take": "x"})
+        text = json.dumps(
+            {"category": "ai", "topic": "ai", "investor_take": "x", "events": []}
+        )
         _patch_assessor_call(assessor, _stub_response(text, finish_reason_name="STOP"))
 
         call = await assessor._call_api("prompt")
