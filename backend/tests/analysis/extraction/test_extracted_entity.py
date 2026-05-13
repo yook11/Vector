@@ -178,3 +178,13 @@ class TestExtractedEntityDedupKey:
             raw_type=EntityRawType("Company"),
         )
         assert e_upper.dedup_key() == e_lower.dedup_key()
+
+
+class TestExtractedEntityFieldDescriptions:
+    """nested response_schema として Gemini に伝わる SSoT (PR2)。"""
+
+    def test_surface_has_description(self) -> None:
+        assert ExtractedEntity.model_fields["surface"].description
+
+    def test_raw_type_has_description(self) -> None:
+        assert ExtractedEntity.model_fields["raw_type"].description

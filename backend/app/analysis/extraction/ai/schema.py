@@ -9,19 +9,22 @@
 ``ai/parse.py::parse_extraction`` が ``relevance`` 値を見て domain 型に振り分ける。
 
 設計詳細:
-- VERSION hash の連続性のため、フィールド順 / Pydantic config / validator /
-  docstring を旧 ``ExtractionResult`` (Pydantic class、本 PR で union alias に転換)
-  と bit-identical に保つ。``GeminiExtractionResponse.model_json_schema()`` が
-  ``compute_call_signature`` の入力。schema が変わると ``VERSION`` が変わり
-  audit 連続性が失われるため、bit-identical 検証は
-  ``tests/analysis/extraction/test_prompt_version.py`` で固定する。
+- PR2 以降は ``Field(description=...)`` を schema 側の field semantics SSoT として
+  保持する (Gemini API は ``response_schema`` の description を生成プロンプトの
+  一部として扱う)。``model_json_schema()`` は ``compute_call_signature`` の入力なので
+  description 追加は ``VERSION`` を rotate させるが、これは「prompt + schema が
+  実際に変わった」事実を表す **意図的な監査 cutover** として受け入れる。
+- ``title="ExtractionResult"`` (ConfigDict) はクラス名差分による silent hash 変動を
+  防ぐ別軸の固定で、Field description 追加と直交する。golden hash 固定は
+  ``tests/analysis/extraction/ai/test_gemini_prompt.py`` の
+  ``test_version_locked_post_pr2`` 参照。
 """
 
 from __future__ import annotations
 
 from typing import Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.analysis.extraction.domain.entity import ExtractedEntity
 from app.utils.sanitize import normalize_text
@@ -55,10 +58,33 @@ class GeminiExtractionResponse(BaseModel):
     # (``tests/analysis/extraction/ai/test_gemini_prompt.py``)。
     model_config = ConfigDict(frozen=True, title="ExtractionResult")
 
-    relevance: Literal["signal", "noise"]
-    title_ja: str
-    summary_ja: str
-    entities: list[ExtractedEntity]
+    relevance: Literal["signal", "noise"] = Field(
+        description=(
+            'Either "signal" or "noise". Choose "noise" ONLY when the article '
+            "clearly does not help investment judgment or understanding world "
+            'affairs. When uncertain, choose "signal".'
+        )
+    )
+    title_ja: str = Field(
+        description=(
+            "Natural Japanese article title. Translate accurately from English, "
+            "or clean up Japanese text without over-paraphrasing."
+        )
+    )
+    summary_ja: str = Field(
+        description=(
+            "Fact-based Japanese summary covering important actors, actions, "
+            "numbers, and technical novelty written in the article. Do not add "
+            "facts that are not present in the article."
+        )
+    )
+    entities: list[ExtractedEntity] = Field(
+        description=(
+            "Distinct named entities that define the article subject and can be "
+            "tracked across articles (company, person, product, service, "
+            "technology, or institution). Empty list when none apply."
+        )
+    )
 
     @field_validator("title_ja", "summary_ja", mode="before")
     @classmethod

@@ -20,7 +20,7 @@ VO (``EntitySurface`` / ``EntityRawType``) 自体の実装は
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.analysis.domain.value_objects.entity import (
     EntityRawType,
@@ -40,8 +40,19 @@ class ExtractedEntity(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    surface: EntitySurface
-    raw_type: EntityRawType
+    surface: EntitySurface = Field(
+        description=(
+            "Exact surface form of the entity as written in the article "
+            "(preserve original casing)."
+        )
+    )
+    raw_type: EntityRawType = Field(
+        description=(
+            "Short lowercase English label for the entity type, such as "
+            '"company", "person", "product", "service", "technology", '
+            'or "institution".'
+        )
+    )
 
     def dedup_key(self) -> tuple[str, str]:
         """同一エンティティ判定キー。

@@ -72,14 +72,41 @@ def test_response_schema_is_pydantic_gemini_extraction_response() -> None:
     assert GeminiExtractionPrompt.RESPONSE_SCHEMA is GeminiExtractionResponse
 
 
-def test_version_continuity_with_pre_pr1a_hash() -> None:
-    """PR1-a 着手前の VERSION (22dc98ab) と bit-identical であること。
+def test_version_locked_post_pr2() -> None:
+    """PR2 で schema 側 ``Field(description=...)`` を導入し、prompt 本文の
+    field 列挙を撤去したため、pre-PR2 hash (``22dc98ab``) からは **意図的に**
+    rotate している。
 
-    ``GeminiExtractionResponse`` への class 分離で JSON schema の ``title`` が
-    変わると VERSION が変わり audit 連続性が失われる。``model_config`` で
-    ``title="ExtractionResult"`` を明示して固定している。
+    今後の silent 変動 (description 文言の typo 修正、prompt 改行差分等) を
+    検知するための golden 固定。故意の prompt / schema 変更時はこの値を更新し、
+    commit メッセージで audit 連続性 cutover を明示すること。
     """
-    assert GeminiExtractionPrompt.VERSION == "22dc98ab"
+    assert GeminiExtractionPrompt.VERSION == "9ff9f0cf"
+
+
+def test_prompt_template_does_not_enumerate_response_fields() -> None:
+    """schema 側に移った field 列挙が prompt 本文に二重で残っていないこと。
+
+    重複が再発すると schema との sync 漏れが起きるため構造的に弾く。
+    """
+    template = GeminiExtractionPrompt.TEMPLATE
+    assert "1. relevance" not in template
+    assert "2. title_ja" not in template
+    assert "3. summary_ja" not in template
+    assert "4. entities" not in template
+    assert "以下の 4 項目を抽出" not in template
+
+
+def test_response_schema_top_level_fields_have_descriptions() -> None:
+    """``GeminiExtractionResponse`` の 4 top-level field が description を持つ
+    (Gemini に field semantics を伝える SSoT が schema 側にあること)。
+    """
+    schema = GeminiExtractionPrompt.RESPONSE_SCHEMA.model_json_schema()
+    props = schema["properties"]
+    for name in ("relevance", "title_ja", "summary_ja", "entities"):
+        assert props[name].get("description"), (
+            f"{name} should have a description in response_schema"
+        )
 
 
 def test_model_matches_extractor_class() -> None:
