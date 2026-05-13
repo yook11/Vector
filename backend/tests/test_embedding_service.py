@@ -74,9 +74,8 @@ def _mock_embedder(
     valid VO を返す ``vector`` か、boundary が raise する例外を直接 mock する。
     """
     embedder = MagicMock(spec=BaseEmbedder)
-    embedder.MODEL = "cl-nagoya/ruri-v3-310m"
-    embedder.DIMENSION = EMBEDDING_DIMENSION
     embedder.model_name = "cl-nagoya/ruri-v3-310m"
+    embedder.dimension = EMBEDDING_DIMENSION
     if raises is not None:
         embedder.embed_document = AsyncMock(side_effect=raises)
     else:

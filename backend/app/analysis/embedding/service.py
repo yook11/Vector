@@ -103,5 +103,5 @@ class EmbeddingService:
         logger.info(
             "embedding_completed",
             analysis_id=ready.analysis_id,
-            model=embedder.MODEL,
+            model=embedder.model_name,
         )

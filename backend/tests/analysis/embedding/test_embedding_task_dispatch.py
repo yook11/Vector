@@ -29,20 +29,35 @@ from app.analysis.embedding.errors import (
     EmbeddingResponseInvalidError,
     EmbeddingTerminalSkipError,
 )
+from app.analysis.rate_policy import RatePolicy
 
 
 def _make_embedder_fake() -> MagicMock:
     fake = MagicMock()
-    fake.PROVIDER = "gemini"
-    fake.MODEL = "cl-nagoya/ruri-v3-310m"
-    fake.RPM = None
-    fake.RPD = None
+    fake.model_name = "gemini-embedding-001"
+    fake.dimension = 768
+    fake.rate_policy = RatePolicy(
+        provider="gemini",
+        model="gemini-embedding-001",
+        rpm=None,
+        rpd=None,
+    )
+    fake.document_prefix = ""
     return fake
+
+
+def _make_gate_fake() -> MagicMock:
+    gate = MagicMock()
+    gate.acquire = AsyncMock(return_value=True)
+    return gate
 
 
 def _make_ctx(retry_count: int = 0, max_retries: int = 2) -> MagicMock:
     ctx = MagicMock()
-    ctx.state = SimpleNamespace(session_factory=MagicMock())
+    ctx.state = SimpleNamespace(
+        session_factory=MagicMock(),
+        provider_rate_limit_gate=_make_gate_fake(),
+    )
     ctx.state.embedder = _make_embedder_fake()
     ctx.message.labels = {
         "retry_count": retry_count,
@@ -87,9 +102,6 @@ async def test_terminal_skip_delegates_to_handler() -> None:
 
     with (
         _patch_ready_construction(),
-        patch(
-            "app.analysis.embedding.tasks._build_limiters", return_value=(None, None)
-        ),
         patch("app.analysis.embedding.tasks.EmbeddingService") as mock_svc_cls,
         patch(
             "app.analysis.embedding.tasks.EmbeddingFailureHandler"
@@ -122,9 +134,6 @@ async def test_recoverable_reraise_true_raises() -> None:
 
     with (
         _patch_ready_construction(),
-        patch(
-            "app.analysis.embedding.tasks._build_limiters", return_value=(None, None)
-        ),
         patch("app.analysis.embedding.tasks.EmbeddingService") as mock_svc_cls,
         patch(
             "app.analysis.embedding.tasks.EmbeddingFailureHandler"
@@ -153,9 +162,6 @@ async def test_recoverable_reraise_false_returns() -> None:
 
     with (
         _patch_ready_construction(),
-        patch(
-            "app.analysis.embedding.tasks._build_limiters", return_value=(None, None)
-        ),
         patch("app.analysis.embedding.tasks.EmbeddingService") as mock_svc_cls,
         patch(
             "app.analysis.embedding.tasks.EmbeddingFailureHandler"
@@ -181,9 +187,6 @@ async def test_response_invalid_dispatches_to_handler() -> None:
 
     with (
         _patch_ready_construction(),
-        patch(
-            "app.analysis.embedding.tasks._build_limiters", return_value=(None, None)
-        ),
         patch("app.analysis.embedding.tasks.EmbeddingService") as mock_svc_cls,
         patch(
             "app.analysis.embedding.tasks.EmbeddingFailureHandler"
@@ -213,9 +216,6 @@ async def test_unexpected_exception_delegates_to_handler() -> None:
     ctx = _make_ctx()
     with (
         _patch_ready_construction(),
-        patch(
-            "app.analysis.embedding.tasks._build_limiters", return_value=(None, None)
-        ),
         patch("app.analysis.embedding.tasks.EmbeddingService") as mock_svc_cls,
         patch(
             "app.analysis.embedding.tasks.EmbeddingFailureHandler"

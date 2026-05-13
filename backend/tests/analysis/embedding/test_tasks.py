@@ -7,8 +7,10 @@
 
 Service.execute は副作用のみで戻り値 ``None`` 一本化 (2026-05-12 確定)。
 
-- precondition 未充足 → svc.execute を呼ばずに return (rate limit も acquire しない)
+- precondition 未充足 → svc.execute を呼ばずに return
+  (rate limit gate も acquire しない)
 - 成功 → task 完了 (Stage 5 は終端、chain firing なし)
+- quota 超過 (gate.acquire が False) → svc.execute を呼ばずに return
 
 Layer 1 marker dispatch ルーティングは ``test_embedding_task_dispatch.py`` 側で
 網羅する。Handler 内部の audit 経路は ``test_failure_handler.py`` で integration
@@ -24,27 +26,44 @@ from app.analysis.embedding.domain.ready import (
     EmbeddingTrigger,
     ReadyForEmbedding,
 )
+from app.analysis.rate_policy import RatePolicy
 
 
 def _make_embedder_fake() -> MagicMock:
-    """ctx.state.embedder 用のスタブ。PROVIDER/MODEL/RPM/RPD を持つ。"""
+    """ctx.state.embedder 用のスタブ。property 契約を満たす。"""
     fake = MagicMock()
-    fake.PROVIDER = "gemini"
-    fake.MODEL = "cl-nagoya/ruri-v3-310m"
-    fake.RPM = None
-    fake.RPD = None
+    fake.model_name = "gemini-embedding-001"
+    fake.dimension = 768
+    fake.rate_policy = RatePolicy(
+        provider="gemini",
+        model="gemini-embedding-001",
+        rpm=None,
+        rpd=None,
+    )
+    fake.document_prefix = ""
     return fake
+
+
+def _make_gate_fake(*, acquired: bool = True) -> MagicMock:
+    """ctx.state.provider_rate_limit_gate 用のスタブ。"""
+    gate = MagicMock()
+    gate.acquire = AsyncMock(return_value=acquired)
+    return gate
 
 
 def _make_ctx(
     *,
     embedder: MagicMock | None = None,
+    gate: MagicMock | None = None,
     retry_count: int = 0,
     max_retries: int = 0,
 ) -> MagicMock:
-    """taskiq Context モック (state.embedder Pure DI)。"""
+    """taskiq Context モック (state.embedder / provider_rate_limit_gate Pure DI)。"""
     ctx = MagicMock()
-    ctx.state = SimpleNamespace(session_factory=MagicMock())
+    ctx.state = SimpleNamespace(
+        session_factory=MagicMock(),
+        provider_rate_limit_gate=gate if gate is not None else _make_gate_fake(),
+    )
     if embedder is not None:
         ctx.state.embedder = embedder
     ctx.message.labels = {
@@ -91,10 +110,6 @@ class TestGenerateEmbedding:
 
         with (
             _patch_ready_construction(ready),
-            patch(
-                "app.analysis.embedding.tasks._build_limiters",
-                return_value=(None, None),
-            ),
             patch("app.analysis.embedding.tasks.EmbeddingService") as mock_svc_cls,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(return_value=None)
@@ -104,6 +119,10 @@ class TestGenerateEmbedding:
         # 構築された Ready が Service に渡されていること
         call_args = mock_svc_cls.return_value.execute.call_args
         assert call_args[0][0] is ready
+        # gate.acquire は embedder.rate_policy で呼ばれる
+        mock_ctx.state.provider_rate_limit_gate.acquire.assert_awaited_once_with(
+            mock_ctx.state.embedder.rate_policy
+        )
 
     @pytest.mark.asyncio
     async def test_skips_when_precondition_not_met(self) -> None:
@@ -113,18 +132,35 @@ class TestGenerateEmbedding:
         """
         from app.analysis.embedding.tasks import generate_embedding
 
-        mock_ctx = _make_ctx(embedder=_make_embedder_fake())
+        gate = _make_gate_fake()
+        mock_ctx = _make_ctx(embedder=_make_embedder_fake(), gate=gate)
         trigger = _make_trigger(analysis_id=42)
 
         with (
             _patch_ready_construction(None),
-            patch(
-                "app.analysis.embedding.tasks._build_limiters",
-            ) as mock_limiters,
             patch("app.analysis.embedding.tasks.EmbeddingService") as mock_svc_cls,
         ):
             await generate_embedding(trigger=trigger, ctx=mock_ctx)
 
         # rate limit acquire は試みず、Service も呼ばない
-        mock_limiters.assert_not_called()
+        gate.acquire.assert_not_called()
+        mock_svc_cls.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_skips_when_gate_denies_quota(self) -> None:
+        """gate.acquire が False を返したら svc.execute を呼ばずに return。"""
+        from app.analysis.embedding.tasks import generate_embedding
+
+        gate = _make_gate_fake(acquired=False)
+        mock_ctx = _make_ctx(embedder=_make_embedder_fake(), gate=gate)
+        trigger = _make_trigger(analysis_id=1)
+        ready = _make_ready(analysis_id=1)
+
+        with (
+            _patch_ready_construction(ready),
+            patch("app.analysis.embedding.tasks.EmbeddingService") as mock_svc_cls,
+        ):
+            await generate_embedding(trigger=trigger, ctx=mock_ctx)
+
+        gate.acquire.assert_awaited_once()
         mock_svc_cls.assert_not_called()

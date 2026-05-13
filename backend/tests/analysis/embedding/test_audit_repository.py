@@ -44,10 +44,10 @@ from app.models.pipeline_event import PipelineEvent
 def _embedder_fake(
     *, model: str = "cl-nagoya/ruri-v3-310m", dimension: int = 768
 ) -> MagicMock:
-    """audit に焼く MODEL / DIMENSION を持つ embedder スタブ。"""
+    """audit に焼く model_name / dimension property を持つ embedder スタブ。"""
     fake = MagicMock(spec=BaseEmbedder)
-    fake.MODEL = model
-    fake.DIMENSION = dimension
+    fake.model_name = model
+    fake.dimension = dimension
     return fake
 
 

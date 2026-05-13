@@ -29,16 +29,11 @@ from __future__ import annotations
 import structlog
 from taskiq import Context, TaskiqDepends
 
-from app.analysis._limiter_factory import _build_limiters
 from app.analysis.embedding.ai.base import BaseEmbedder
 from app.analysis.embedding.domain.ready import EmbeddingTrigger, ReadyForEmbedding
 from app.analysis.embedding.failure_handling import EmbeddingFailureHandler
 from app.analysis.embedding.repository import EmbeddingRepository
 from app.analysis.embedding.service import EmbeddingService
-from app.analysis.rate_limiter import (
-    RateLimitExceededError as _RateLimitExceededError,
-)
-from app.analysis.rate_policy import RatePolicy
 from app.brokers import broker_embedding, is_last_attempt
 
 logger = structlog.get_logger(__name__)
@@ -79,13 +74,8 @@ async def generate_embedding(
 
     # AI を呼ぶ見込みが立ってから rate limit acquire (stale trigger で quota を
     # 消費しない設計)
-    rpm_limiter, rpd_limiter = _build_limiters(RatePolicy.from_component(embedder))
-    try:
-        if rpd_limiter is not None:
-            await rpd_limiter.acquire()
-        if rpm_limiter is not None:
-            await rpm_limiter.acquire()
-    except _RateLimitExceededError:
+    gate = ctx.state.provider_rate_limit_gate
+    if not await gate.acquire(embedder.rate_policy):
         logger.warning(
             "generate_embedding_daily_quota",
             analysis_id=ready.analysis_id,

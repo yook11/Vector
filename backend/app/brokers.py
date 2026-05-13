@@ -156,12 +156,13 @@ async def _wire_analysis_adapters(state: TaskiqState) -> None:
 
 @broker_embedding.on_event(TaskiqEvents.WORKER_STARTUP)
 async def _wire_embedding_adapters(state: TaskiqState) -> None:
-    """Stage E の embedder アダプターを worker 起動時に構築する。"""
+    """Stage 5 の embedder アダプターを worker 起動時に構築する。"""
     state.embedder = GeminiEmbedder()
+    state.provider_rate_limit_gate = ProviderRateLimitGate()
     logger.info(
         "embedding_adapters_wired",
         embedder=type(state.embedder).__name__,
-        embedder_model=state.embedder.MODEL,
+        embedder_model=state.embedder.model_name,
     )
 
 

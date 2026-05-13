@@ -62,13 +62,13 @@ class EmbeddingAuditRepository:
     ) -> None:
         """embedding 成功 audit を 1 行記録する。
 
-        Service が業務 UPDATE と同 tx で呼ぶ。``embedder`` から ``MODEL`` /
-        ``DIMENSION`` を直接読み、``ready`` から ``article_id`` を取り出す
+        Service が業務 UPDATE と同 tx で呼ぶ。``embedder`` から ``model_name`` /
+        ``dimension`` を property 経由で読み、``ready`` から ``article_id`` を取り出す
         (案 3 = 厚い Ready、DB 逆引き不要)。
         """
         payload = EmbeddingPayload(
-            embedding_model=embedder.MODEL,
-            vector_dimension=embedder.DIMENSION,
+            embedding_model=embedder.model_name,
+            vector_dimension=embedder.dimension,
         )
         await self._events.append(
             stage=Stage.EMBEDDING,

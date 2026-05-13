@@ -25,6 +25,7 @@ from app.analysis.ai_provider_errors import (
     AIProviderRequestInvalidError,
 )
 from app.analysis.embedding.ai.gemini import GeminiEmbedder
+from app.analysis.embedding.ai.spec import GEMINI_EMBEDDING_SPEC
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.domain.value_objects import EmbeddingVector
 
@@ -64,13 +65,23 @@ def test_init_raises_configuration_error_when_api_key_missing() -> None:
             GeminiEmbedder()
 
 
-def test_classvars_are_set() -> None:
-    """ClassVar の MODEL / DIMENSION が公開仕様どおり。"""
-    assert GeminiEmbedder.MODEL == "gemini-embedding-001"
-    assert GeminiEmbedder.DIMENSION == 768
-    assert GeminiEmbedder.RPM is None
-    assert GeminiEmbedder.RPD is None
-    assert GeminiEmbedder.DOCUMENT_PREFIX == ""
+def test_spec_is_gemini_embedding_spec_singleton() -> None:
+    """``GeminiEmbedder.SPEC`` は ``GEMINI_EMBEDDING_SPEC`` を参照する。
+
+    spec の値そのものの golden は ``test_embedding_specs.py`` に集約する
+    (二重定義回避)。本テストでは class attr が singleton を握っていることのみ
+    pin する。
+    """
+    assert GeminiEmbedder.SPEC is GEMINI_EMBEDDING_SPEC
+
+
+def test_property_contracts_return_spec_values() -> None:
+    """instance の property が ``SPEC`` の値を返す (BaseEmbedder 契約の充足)。"""
+    embedder = _make_embedder()
+    assert embedder.model_name == GEMINI_EMBEDDING_SPEC.model
+    assert embedder.dimension == GEMINI_EMBEDDING_SPEC.dimension
+    assert embedder.rate_policy == GEMINI_EMBEDDING_SPEC.rate_policy
+    assert embedder.document_prefix == GEMINI_EMBEDDING_SPEC.document_prefix
 
 
 # ---------------------------------------------------------------------------
@@ -90,9 +101,9 @@ async def test_embed_document_uses_retrieval_document_task_type() -> None:
     assert result.to_list() == [0.1] * 768
     assert mock_call.call_count == 1
     config = mock_call.call_args.kwargs["config"]
-    assert config.task_type == "RETRIEVAL_DOCUMENT"
-    assert config.output_dimensionality == 768
-    assert mock_call.call_args.kwargs["model"] == "gemini-embedding-001"
+    assert config.task_type == GEMINI_EMBEDDING_SPEC.task_type
+    assert config.output_dimensionality == GEMINI_EMBEDDING_SPEC.output_dimensionality
+    assert mock_call.call_args.kwargs["model"] == GEMINI_EMBEDDING_SPEC.model
     assert mock_call.call_args.kwargs["contents"] == "hello"
 
 

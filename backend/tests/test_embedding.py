@@ -17,7 +17,6 @@ import math
 import pytest
 
 from app.analysis.ai_provider_errors import (
-    AIProviderError,
     AIProviderInputRejectedError,
     AIProviderRequestInvalidError,
 )
@@ -28,6 +27,9 @@ from app.analysis.embedding.domain.value_objects import (
     EmbeddingVector,
 )
 from app.analysis.embedding.errors import EmbeddingResponseInvalidError
+from app.analysis.rate_policy import RatePolicy
+
+_STUB_RATE_POLICY = RatePolicy(provider="stub", model="stub-model", rpm=None, rpd=None)
 
 
 def _v(value: float = 0.1) -> list[float]:
@@ -57,10 +59,17 @@ class StubEmbedder(BaseEmbedder):
     (マップ未知は ``return exc`` で bare re-raise に委譲)。
     """
 
-    MODEL = "stub-model"
-    DIMENSION = EMBEDDING_DIMENSION
-    RPM = None
-    RPD = None
+    @property
+    def model_name(self) -> str:
+        return "stub-model"
+
+    @property
+    def dimension(self) -> int:
+        return EMBEDDING_DIMENSION
+
+    @property
+    def rate_policy(self) -> RatePolicy:
+        return _STUB_RATE_POLICY
 
     def __init__(
         self, *, side_effects: list[list[float] | Exception] | None = None
@@ -158,40 +167,37 @@ async def test_no_prefix_passes_text_verbatim() -> None:
 
 
 class PrefixedStubEmbedder(StubEmbedder):
-    """プレフィックス付きの StubEmbedder。"""
+    """プレフィックス付きの StubEmbedder (``document_prefix`` を override)。"""
 
-    MODEL = "stub-model"
-    DIMENSION = EMBEDDING_DIMENSION
-    RPM = None
-    RPD = None
-    DOCUMENT_PREFIX = "P: "
+    @property
+    def document_prefix(self) -> str:
+        return "P: "
 
 
 @pytest.mark.asyncio
 async def test_document_prefix_prepended_to_text() -> None:
-    """``DOCUMENT_PREFIX`` が定義されている場合、テキスト先頭に付与される。"""
+    """``document_prefix`` を override した場合、テキスト先頭に付与される。"""
     embedder = PrefixedStubEmbedder()
     await embedder.embed_document(_ready("doc"))
     assert embedder._calls == ["P: doc"]
 
 
 # ---------------------------------------------------------------------------
-# ClassVar enforcement
+# abstract property enforcement
 # ---------------------------------------------------------------------------
 
 
-def test_base_embedder_rejects_subclass_without_classvar() -> None:
-    """必須 ClassVar を欠く具象サブクラスは TypeError を送出する。"""
-    with pytest.raises(TypeError, match="must define ClassVar 'RPD'"):
+def test_base_embedder_rejects_subclass_without_required_properties() -> None:
+    """必須 abstract property を欠く具象サブクラスは instance 化で TypeError。"""
 
-        class BadEmbedder(BaseEmbedder):
-            MODEL = "bad"
-            DIMENSION = 3
-            RPM = None
-            # RPD は意図的に未定義
+    class BadEmbedder(BaseEmbedder):
+        # model_name / dimension / rate_policy を意図的に未実装
 
-            async def _call_api(self, text: str) -> list[float]:
-                return [0.0]
+        async def _call_api(self, text: str) -> list[float]:
+            return [0.0]
 
-            def _translate_error(self, exc: Exception) -> Exception:
-                return AIProviderError(str(exc))
+        def _translate_error(self, exc: Exception) -> Exception:
+            return exc
+
+    with pytest.raises(TypeError, match="abstract"):
+        BadEmbedder()  # type: ignore[abstract]
