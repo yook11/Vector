@@ -151,9 +151,9 @@ class ContentFetchService:
             # cron poller が claim していない (lease 衝突 / 古い message)
             return None
 
-        # HTTP 取得 (canonicalize 済み URL を使う)
+        # HTTP 取得 (extractor の SSRF 境界は SafeUrl を受ける)
         try:
-            html_result = await extractor.fetch(pending.url)
+            html_result = await extractor.fetch(pending.url.as_safe_url())
         except PermanentFetchError as exc:
             return await self._handle_terminal(
                 pending,

@@ -24,7 +24,7 @@ from sqlmodel import select
 from app.collection.extraction.domain import Article, PublishedAt
 from app.collection.extraction.domain.article import ArticleDraft
 from app.models.article import Article as ArticleORM
-from app.shared.value_objects.safe_url import SafeUrl
+from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,18 +68,20 @@ class ArticleRepository:
         draft: ArticleDraft,
         *,
         source_id: int,
-        source_url: SafeUrl,
+        source_url: CanonicalArticleUrl,
     ) -> PersistedArticleId | None:
         """``source_url`` 主軸で ``articles`` 行を INSERT する。
 
         ``ON CONFLICT DO NOTHING`` (制約ターゲット指定なし) で並行レース時の
         全 unique 違反を吸収する。``articles.source_url`` の UNIQUE で
-        canonicalize 済み URL の重複が構造的に弾かれる。``None`` を受けた
-        Service は ``find_by_source_url`` で読み戻して合流させる。
+        canonical URL の重複が構造的に弾かれる。``None`` を受けた Service は
+        ``find_by_source_url`` で読み戻して合流させる。
 
-        ``source_id`` / ``source_url`` は同一トランザクション内で caller が
-        既知の値として渡す。``source_url`` は canonicalize 済み値を期待。
-        commit は呼び出し側 (Service) が行う。
+        ``source_url`` の canonical 性は型 ``CanonicalArticleUrl`` で構造保証
+        されているため Service / Repository での後付け正規化は不要。
+        ORM 列は ``SafeUrl`` 表現だが ``SafeUrlType.process_bind_param`` が
+        ``CanonicalArticleUrl`` を透過 bind する。commit は呼び出し側 (Service)
+        が行う。
         """
         stmt = (
             pg_insert(ArticleORM)
@@ -100,17 +102,20 @@ class ArticleRepository:
             return None
         return PersistedArticleId(id=row.id, created_at=row.created_at)
 
-    async def find_by_source_url(self, source_url: SafeUrl) -> Article | None:
+    async def find_by_source_url(
+        self, source_url: CanonicalArticleUrl
+    ) -> Article | None:
         """``source_url`` から既存 Article を Entity として取得する。
 
         Stage 2 の race-loss (``ConflictLost``) 検出時の読み戻しに使う。
-        ``source_url`` は canonicalize 済み値を期待する (UNIQUE もその値で効く)。
+        ``CanonicalArticleUrl`` 型で canonical 性は構造保証されているため、
+        UNIQUE 値とそのまま比較できる。
         """
         stmt = select(ArticleORM).where(ArticleORM.source_url == source_url)
         orm = (await self._session.execute(stmt)).scalar_one_or_none()
         return _article_from_orm(orm) if orm is not None else None
 
-    async def exists_by_source_url(self, source_url: SafeUrl) -> bool:
+    async def exists_by_source_url(self, source_url: CanonicalArticleUrl) -> bool:
         """``source_url`` を持つ ``articles`` 行が既に存在するかを軽量確認する。
 
         Pattern H ingestion の pre-check 用 (feed 再露出時に既知 URL の

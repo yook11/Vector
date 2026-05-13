@@ -4,8 +4,8 @@
 ``sweep_expired`` / ``mark_*`` / ``delete_one`` の振る舞いを ``CHECK`` 制約と
 合わせて検証する。
 
-``url`` (canonicalize 済み SafeUrl) が SSoT。``find_by_id`` は ``url`` を
-直接 SELECT して返す。
+``url`` (``CanonicalArticleUrl`` 型で canonical 性を構造保証) が SSoT。
+``find_by_id`` は ``url`` を直接 SELECT して返す。
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from app.collection.ingestion.pending_repository import (
 )
 from app.collection.ingestion.staged_attributes import StagedArticleAttributes
 from app.models.news_source import NewsSource
-from app.shared.value_objects.safe_url import SafeUrl
+from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 
 
 def _attrs(title: str = "Sample") -> StagedArticleAttributes:
@@ -46,7 +46,7 @@ async def test_create_returns_pending_id(
 ) -> None:
     repo = PendingHtmlArticleRepository(db_session)
     pending_id = await repo.create(
-        url=SafeUrl("https://example.com/p/create"),
+        url=CanonicalArticleUrl("https://example.com/p/create"),
         source_id=sample_source.id,
         staged_attributes=_attrs(),
         ready_at=datetime.now(UTC),
@@ -60,7 +60,7 @@ async def test_create_returns_none_on_duplicate_url(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
     """``UNIQUE(url)`` 違反 (同 tick race) は ``None`` で吸収される。"""
-    url = SafeUrl("https://example.com/p/dup")
+    url = CanonicalArticleUrl("https://example.com/p/dup")
     repo = PendingHtmlArticleRepository(db_session)
     first = await repo.create(
         url=url,
@@ -85,7 +85,7 @@ async def test_create_persists_url(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
     """新規 pending 行は ``url`` (canonicalize 済み) のみで投入される。"""
-    url = SafeUrl("https://example.com/p/url-only")
+    url = CanonicalArticleUrl("https://example.com/p/url-only")
     repo = PendingHtmlArticleRepository(db_session)
     pending_id = await repo.create(
         url=url,
@@ -116,7 +116,7 @@ async def test_find_by_id_returns_context_with_url(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
     """``find_by_id`` は ``url`` を直接保持する row 値で返す (JOIN 撤去後)。"""
-    url = SafeUrl("https://example.com/p/find")
+    url = CanonicalArticleUrl("https://example.com/p/find")
     repo = PendingHtmlArticleRepository(db_session)
     pending_id = await repo.create(
         url=url,
@@ -159,13 +159,13 @@ async def test_claim_batch_picks_only_open_ready(
     now = datetime.now(UTC)
 
     ready_id = await repo.create(
-        url=SafeUrl("https://example.com/p/ready"),
+        url=CanonicalArticleUrl("https://example.com/p/ready"),
         source_id=sample_source.id,
         staged_attributes=_attrs(),
         ready_at=now - timedelta(minutes=1),
     )
     await repo.create(
-        url=SafeUrl("https://example.com/p/future"),
+        url=CanonicalArticleUrl("https://example.com/p/future"),
         source_id=sample_source.id,
         staged_attributes=_attrs(),
         ready_at=now + timedelta(minutes=10),
@@ -184,7 +184,7 @@ async def test_claim_batch_advances_state_atomically(
     """claim で running 化 + leased_until 設定 + attempt_count++ が一括適用される."""
     repo = PendingHtmlArticleRepository(db_session)
     pending_id = await repo.create(
-        url=SafeUrl("https://example.com/p/claim-state"),
+        url=CanonicalArticleUrl("https://example.com/p/claim-state"),
         source_id=sample_source.id,
         staged_attributes=_attrs(),
         ready_at=datetime.now(UTC) - timedelta(seconds=1),
@@ -212,7 +212,7 @@ async def test_claim_batch_respects_limit(
     now = datetime.now(UTC)
     for i in range(5):
         await repo.create(
-            url=SafeUrl(f"https://example.com/p/limit-{i}"),
+            url=CanonicalArticleUrl(f"https://example.com/p/limit-{i}"),
             source_id=sample_source.id,
             staged_attributes=_attrs(),
             ready_at=now - timedelta(seconds=1),
@@ -235,7 +235,7 @@ async def test_concurrent_claim_batch_skips_locked(
     created_ids: list[int] = []
     for i in range(4):
         pid = await repo.create(
-            url=SafeUrl(f"https://example.com/p/race-{i}"),
+            url=CanonicalArticleUrl(f"https://example.com/p/race-{i}"),
             source_id=sample_source.id,
             staged_attributes=_attrs(),
             ready_at=now - timedelta(seconds=1),
@@ -272,7 +272,7 @@ async def test_sweep_expired_reopens_dead_lease(
     """死んだ lease (running + leased_until <= NOW) は ``open`` に戻される。"""
     repo = PendingHtmlArticleRepository(db_session)
     pending_id = await repo.create(
-        url=SafeUrl("https://example.com/p/sweep"),
+        url=CanonicalArticleUrl("https://example.com/p/sweep"),
         source_id=sample_source.id,
         staged_attributes=_attrs(),
         ready_at=datetime.now(UTC) - timedelta(seconds=1),
@@ -305,7 +305,7 @@ async def test_sweep_expired_leaves_live_lease(
     """生きている lease (leased_until > NOW) は触らない。"""
     repo = PendingHtmlArticleRepository(db_session)
     pending_id = await repo.create(
-        url=SafeUrl("https://example.com/p/sweep-live"),
+        url=CanonicalArticleUrl("https://example.com/p/sweep-live"),
         source_id=sample_source.id,
         staged_attributes=_attrs(),
         ready_at=datetime.now(UTC) - timedelta(seconds=1),
@@ -329,7 +329,7 @@ async def test_mark_terminal_closes_pending(
 ) -> None:
     repo = PendingHtmlArticleRepository(db_session)
     pending_id = await repo.create(
-        url=SafeUrl("https://example.com/p/terminal"),
+        url=CanonicalArticleUrl("https://example.com/p/terminal"),
         source_id=sample_source.id,
         staged_attributes=_attrs(),
         ready_at=datetime.now(UTC) - timedelta(seconds=1),
@@ -354,7 +354,7 @@ async def test_mark_exhausted_closes_pending(
     """``mark_exhausted`` は DB 上 ``mark_terminal`` と同じ状態に閉じる."""
     repo = PendingHtmlArticleRepository(db_session)
     pending_id = await repo.create(
-        url=SafeUrl("https://example.com/p/exhausted"),
+        url=CanonicalArticleUrl("https://example.com/p/exhausted"),
         source_id=sample_source.id,
         staged_attributes=_attrs(),
         ready_at=datetime.now(UTC) - timedelta(seconds=1),
@@ -379,7 +379,7 @@ async def test_mark_will_retry_reopens_with_future_ready_at(
     """一時失敗で ``open`` + 未来 ``ready_at`` + ``leased_until=NULL`` に戻る。"""
     repo = PendingHtmlArticleRepository(db_session)
     pending_id = await repo.create(
-        url=SafeUrl("https://example.com/p/retry"),
+        url=CanonicalArticleUrl("https://example.com/p/retry"),
         source_id=sample_source.id,
         staged_attributes=_attrs(),
         ready_at=datetime.now(UTC) - timedelta(seconds=1),
@@ -407,7 +407,7 @@ async def test_delete_one_removes_row(
     """成功時の片付け: ``articles`` INSERT と同 tx で pending を消す想定。"""
     repo = PendingHtmlArticleRepository(db_session)
     pending_id = await repo.create(
-        url=SafeUrl("https://example.com/p/delete"),
+        url=CanonicalArticleUrl("https://example.com/p/delete"),
         source_id=sample_source.id,
         staged_attributes=_attrs(),
         ready_at=datetime.now(UTC) - timedelta(seconds=1),

@@ -24,15 +24,15 @@ from app.collection.ingestion.domain.fetched_article import (
     PendingHtmlFetch,
     ReadyForArticle,
 )
-from app.shared.value_objects.safe_url import SafeUrl
+from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 
 
 def _pub() -> PublishedAt:
     return PublishedAt(value=datetime(2026, 4, 30, 0, 0, 0, tzinfo=UTC))
 
 
-def _url(s: str = "https://example.com/a") -> SafeUrl:
-    return SafeUrl(s)
+def _url(s: str = "https://example.com/a") -> CanonicalArticleUrl:
+    return CanonicalArticleUrl(s)
 
 
 def _ready(**overrides: object) -> ReadyForArticle:

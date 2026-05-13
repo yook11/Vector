@@ -37,7 +37,7 @@ from app.collection.ingestion.domain.fetched_article import (
 from app.collection.ingestion.ingestion_service import IngestionService
 from app.models.news_source import NewsSource, SourceType
 from app.models.pipeline_event import PipelineEvent
-from app.shared.value_objects.safe_url import SafeUrl
+from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 
 
 def _ready_entry(
@@ -51,7 +51,7 @@ def _ready_entry(
             body="x" * 100,
             published_at=PublishedAt(value=datetime(2026, 4, 30, tzinfo=UTC)),
             source_id=source_id,
-            source_url=SafeUrl(url),
+            source_url=CanonicalArticleUrl(url),
         ),
         metadata=metadata if metadata is not None else {"language": "en-US"},
     )
@@ -62,7 +62,7 @@ def _pending_entry(source_id: int, url: str) -> FetchedEntry:
         item=PendingHtmlFetch(
             title="TC",
             source_id=source_id,
-            source_url=SafeUrl(url),
+            source_url=CanonicalArticleUrl(url),
             published_at_hint=PublishedAt(value=datetime(2026, 4, 30, tzinfo=UTC)),
         ),
         metadata={"language": "en-US"},

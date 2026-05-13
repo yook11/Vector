@@ -4,15 +4,17 @@
 
 Fetcher の ``AsyncIterator[FetchOutcome]`` を回し ``match`` で分岐する:
 
-- ``FetchedEntry(item=ReadyForArticle)`` → ``articles.source_url`` (canonicalize
-  済み) を主軸に直 INSERT (Pattern R)。``ON CONFLICT DO NOTHING`` で同 tick
-  race / 既知 URL を吸収 (``None`` → ``known_url`` skip)。caller
-  (``ingest_source`` task) が ``extract_content.kiq`` に chain する。
+- ``FetchedEntry(item=ReadyForArticle)`` → ``articles.source_url`` を主軸に
+  直 INSERT (Pattern R)。``source_url`` は ``CanonicalArticleUrl`` 型で
+  canonicalize 済が構造保証されているため Service 側で後付け正規化は不要。
+  ``ON CONFLICT DO NOTHING`` で同 tick race / 既知 URL を吸収
+  (``None`` → ``known_url`` skip)。caller (``ingest_source`` task) が
+  ``extract_content.kiq`` に chain する。
 - ``FetchedEntry(item=PendingHtmlFetch)`` → ``article_repo.exists_by_source_url``
-  pre-check で feed 再露出を弾き、``pending_html_articles.url`` (canonicalize
-  済み) で投入 (Pattern H)。下流は cron poller (``dispatch_html_fetch_jobs``)
-  が DB 駆動で拾うため、Service / Task は pending_id を caller に渡さない
-  (``IngestedOutcome`` 純化)。
+  pre-check で feed 再露出を弾き、``pending_html_articles.url`` で投入
+  (Pattern H)。``url`` は ``CanonicalArticleUrl`` 型で canonical 保証済。
+  下流は cron poller (``dispatch_html_fetch_jobs``) が DB 駆動で拾うため、
+  Service / Task は pending_id を caller に渡さない (``IngestedOutcome`` 純化)。
 - ``Failed`` → 構造化ログ + ``failed_codes`` 集計、永続化に流れない。
 
 ``commit`` までが Service の責務。``NewsSource`` ORM の lookup は
@@ -44,12 +46,10 @@ from app.collection.ingestion.domain.fetched_article import (
 from app.collection.ingestion.fetchers.protocol import Fetcher
 from app.collection.ingestion.pending_repository import PendingHtmlArticleRepository
 from app.collection.ingestion.staged_attributes import StagedArticleAttributes
-from app.collection.url_canonicalize import canonicalize_url
 from app.observability.domain.event import EventType, Stage
 from app.observability.domain.payloads import SourceFetchPayload
 from app.observability.repository import PipelineEventRepository
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
-from app.shared.value_objects.safe_url import SafeUrl
 
 logger = structlog.get_logger(__name__)
 
@@ -125,16 +125,15 @@ class IngestionService:
                             metadata_sample = self._observe_metadata(
                                 md, metadata_fields_observed, metadata_sample
                             )
-                            canonical_url = SafeUrl(
-                                canonicalize_url(str(pending.source_url))
-                            )
                             # pre-check: feed 再露出時に既知 URL の HTML fetch を
                             # 反復しないための実用的 idempotency (ロックではない)
-                            if await article_repo.exists_by_source_url(canonical_url):
+                            if await article_repo.exists_by_source_url(
+                                pending.source_url
+                            ):
                                 skipped_codes["known_url"] += 1
                                 continue
                             pending_id = await pending_repo.create(
-                                url=canonical_url,
+                                url=pending.source_url,
                                 source_id=source_id,
                                 staged_attributes=StagedArticleAttributes(
                                     title=pending.title,
@@ -276,9 +275,9 @@ class IngestionService:
     ) -> Article | None:
         """Pattern R 1 entry を ``articles`` に直 INSERT して Entity を返す。
 
-        ``source_url`` を canonicalize してから ``save`` に渡す
-        (``articles.source_url UNIQUE`` は canonicalize 済み値で効くため、
-        非正規化値で投入すると同一記事が別行になってしまう)。
+        ``source_url`` は ``CanonicalArticleUrl`` 型で canonicalize 済が構造保証
+        されているため、Service 側で後付け正規化は行わない
+        (``articles.source_url UNIQUE`` は canonical 値で効く)。
 
         Race recovery: ``save`` が ``None`` を返した場合は他 worker / 別 yield
         が同 URL で先に書き込み済。既に articles に存在するため Pattern R の
@@ -289,11 +288,10 @@ class IngestionService:
             body=ready.body,
             published_at=ready.published_at,
         )
-        canonical_url = SafeUrl(canonicalize_url(str(ready.source_url)))
         persisted = await article_repo.save(
             draft=draft,
             source_id=ready.source_id,
-            source_url=canonical_url,
+            source_url=ready.source_url,
         )
         if persisted is None:
             return None

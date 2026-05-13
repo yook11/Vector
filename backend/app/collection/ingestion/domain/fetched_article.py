@@ -15,7 +15,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.collection.extraction.domain.value_objects import PublishedAt
-from app.shared.value_objects.safe_url import SafeUrl
+from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 
 _TITLE_MIN_LENGTH = 1
 _TITLE_MAX_LENGTH = 500
@@ -59,7 +59,7 @@ class PendingHtmlFetch(BaseModel):
 
     title: str = Field(min_length=_TITLE_MIN_LENGTH, max_length=_TITLE_MAX_LENGTH)
     source_id: int = Field(gt=0)
-    source_url: SafeUrl
+    source_url: CanonicalArticleUrl
     published_at_hint: PublishedAt | None = None
     prefer_html_title: bool = False
 
@@ -77,7 +77,7 @@ class ReadyForArticle(BaseModel):
     body: str = Field(min_length=_BODY_MIN_LENGTH, max_length=_BODY_MAX_LENGTH)
     published_at: PublishedAt
     source_id: int = Field(gt=0)
-    source_url: SafeUrl
+    source_url: CanonicalArticleUrl
 
     @classmethod
     def try_advance_from(

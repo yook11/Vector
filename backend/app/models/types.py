@@ -20,6 +20,7 @@ from app.analysis.domain.value_objects.entity import (
 from app.analysis.domain.value_objects.topic import TopicName
 from app.collection.domain.value_objects.source import SourceName
 from app.domain.category import CategoryName, CategorySlug
+from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 from app.shared.value_objects.safe_url import SafeUrl
 
 
@@ -177,7 +178,13 @@ class EntityRawTypeType(TypeDecorator[EntityRawType]):
 
 
 class SafeUrlType(TypeDecorator[SafeUrl]):
-    """SafeUrl <-> VARCHAR(2048)."""
+    """SafeUrl <-> VARCHAR(2048).
+
+    ``CanonicalArticleUrl`` も同じ列に書き込めるように bind 側で受容する。
+    canonical 値は SafeUrl の不変条件を満たすため、DB 側の物理表現は変わらず、
+    Repository signature を ``CanonicalArticleUrl`` に上げても ORM 列の型は
+    SafeUrl のままで透過処理できる (記事 identity の SSoT を型に寄せる目的)。
+    """
 
     impl = String(2048)
     cache_ok = True
@@ -185,11 +192,15 @@ class SafeUrlType(TypeDecorator[SafeUrl]):
     def process_bind_param(self, value: Any, dialect: Dialect) -> str | None:
         if value is None:
             return None
+        if isinstance(value, CanonicalArticleUrl):
+            return value.root
         if isinstance(value, SafeUrl):
             return value.root
         if isinstance(value, str):
             return SafeUrl(value).root
-        raise TypeError(f"Expected SafeUrl or str, got {type(value).__name__}")
+        raise TypeError(
+            f"Expected SafeUrl, CanonicalArticleUrl or str, got {type(value).__name__}"
+        )
 
     def process_result_value(self, value: Any, dialect: Dialect) -> SafeUrl | None:
         if value is None:

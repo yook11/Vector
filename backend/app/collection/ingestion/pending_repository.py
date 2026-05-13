@@ -40,7 +40,7 @@ from sqlmodel import select
 
 from app.collection.ingestion.staged_attributes import StagedArticleAttributes
 from app.models.pending_html_article import PendingHtmlArticle as PendingHtmlArticleORM
-from app.shared.value_objects.safe_url import SafeUrl
+from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,7 +51,8 @@ class PendingHtmlContext:
     structured tuple。``staged_attributes`` は JSONB を ``StagedArticleAttributes``
     に再構築済 (PublishedAt ISO ↔ datetime 変換を Repository 層で吸収する)。
 
-    ``url`` は canonicalize 済み URL (``articles.source_url`` と一致する形)。
+    ``url`` は ``CanonicalArticleUrl`` で canonical 性を構造保証する
+    (``articles.source_url`` と一致する形)。
     """
 
     id: int
@@ -61,7 +62,7 @@ class PendingHtmlContext:
     ready_at: datetime | None
     leased_until: datetime | None
     attempt_count: int
-    url: SafeUrl
+    url: CanonicalArticleUrl
 
 
 class PendingHtmlArticleRepository:
@@ -73,18 +74,18 @@ class PendingHtmlArticleRepository:
     async def create(
         self,
         *,
-        url: SafeUrl,
+        url: CanonicalArticleUrl,
         source_id: int,
         staged_attributes: StagedArticleAttributes,
         ready_at: datetime,
     ) -> int | None:
         """新規 pending を ``status='open'`` で INSERT し、id を返す。
 
-        UNIQUE 違反 (race-loss) の場合は ``None`` を返す。``url`` の UNIQUE が
-        canonicalize 済み URL の重複を構造的に弾く。
-
-        caller は canonicalize 済み URL を渡すこと (URL 不整合を起こさない
-        設計責務)。
+        UNIQUE 違反 (race-loss) の場合は ``None`` を返す。``url`` の UNIQUE は
+        canonical 値で効き、``CanonicalArticleUrl`` 型で canonical 性は構造保証
+        されているため caller / Repository での後付け正規化は不要。ORM 列は
+        ``SafeUrl`` 表現だが ``SafeUrlType.process_bind_param`` が
+        ``CanonicalArticleUrl`` を透過 bind する。
         """
         stmt = (
             pg_insert(PendingHtmlArticleORM)
@@ -132,7 +133,9 @@ class PendingHtmlArticleRepository:
             ready_at=row.ready_at,
             leased_until=row.leased_until,
             attempt_count=row.attempt_count,
-            url=row.url,
+            # ORM 列は SafeUrl 表現で読み出されるが、DB 上の値は INSERT 時の
+            # canonical 値 (`create` で構造保証済) なので冪等に再構築できる。
+            url=CanonicalArticleUrl(row.url.root),
         )
 
     async def claim_batch(self, *, limit: int, lease_minutes: int) -> list[int]:
