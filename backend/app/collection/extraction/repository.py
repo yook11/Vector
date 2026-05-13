@@ -107,7 +107,7 @@ class ArticleRepository:
     ) -> Article | None:
         """``source_url`` から既存 Article を Entity として取得する。
 
-        Stage 2 の race-loss (``ConflictLost``) 検出時の読み戻しに使う。
+        Stage 2 の race-loss (``conflict_lost`` audit) 検出時の読み戻しに使う。
         ``CanonicalArticleUrl`` 型で canonical 性は構造保証されているため、
         UNIQUE 値とそのまま比較できる。
         """

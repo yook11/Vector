@@ -2,10 +2,10 @@
 
 検証する不変条件:
 
-- 4 variant の ``Outcome`` (``ContentFetched`` / ``ConflictLost`` /
-  ``TerminallyDropped`` / ``TransientlyDropped``) が正しく返り、それぞれ
-  ``pipeline_events`` の ``outcome_code`` (``fetched`` / ``conflict_lost`` /
-  ``dropped_terminal`` / ``dropped_transient`` / ``will_retry``) と整合する
+- ``execute()`` が成功時 ``int`` (article_id) を返し、失敗・skip・race-loss
+  時はすべて ``None`` を返す。失敗詳細は ``pipeline_events`` の
+  ``outcome_code`` (``fetched`` / ``conflict_lost`` / ``dropped_terminal`` /
+  ``dropped_transient`` / ``will_retry``) と ``payload.reason_code`` で観測
 - ``pending_html_articles`` の状態遷移が DB に焼き付く
   (成功: DELETE / 永続失敗: closed / 一時失敗 (will retry): open + 未来 ready_at /
   一時失敗 (exhausted): closed)
@@ -29,13 +29,7 @@ from app.collection.errors import (
     ServerErrorBlip,
     ServerErrorOutage,
 )
-from app.collection.extraction.content_fetch_service import (
-    ConflictLost,
-    ContentFetched,
-    ContentFetchService,
-    TerminallyDropped,
-    TransientlyDropped,
-)
+from app.collection.extraction.content_fetch_service import ContentFetchService
 from app.collection.extraction.domain.value_objects import PublishedAt
 from app.collection.extraction.extractor import ExtractedContent, ExtractionEmpty
 from app.collection.ingestion.pending_repository import (
@@ -154,13 +148,13 @@ async def test_returns_none_for_open_pending(
 
 
 @pytest.mark.asyncio
-async def test_success_returns_content_fetched_and_persists_article(
+async def test_success_returns_article_id_and_persists_article(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     tc_source: NewsSource,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """ExtractedContent + 永続化成功 → ``ContentFetched`` 返却 + Article 1 件作成。"""
+    """ExtractedContent + 永続化成功 → ``int`` (article_id) 返却 + Article 1 件作成。"""
     canonical_url, pending_id = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/article-1"
     )
@@ -176,11 +170,12 @@ async def test_success_returns_content_fetched_and_persists_article(
     )
 
     svc = ContentFetchService(session_factory)
-    outcome = await svc.execute(pending_id)
+    article_id = await svc.execute(pending_id)
 
-    assert isinstance(outcome, ContentFetched)
+    assert isinstance(article_id, int)
     articles = (await db_session.execute(select(ArticleORM))).scalars().all()
     assert len(articles) == 1
+    assert articles[0].id == article_id
     assert str(articles[0].source_url) == str(canonical_url)
 
 
@@ -257,18 +252,18 @@ async def test_success_writes_audit_with_body_length_and_canonical_url(
 
 
 # ---------------------------------------------------------------------------
-# Permanent / ExtractionEmpty / promotion failure (TerminallyDropped 系)
+# Permanent / ExtractionEmpty / promotion failure (dropped_terminal 系)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_permanent_fetch_error_returns_terminal_and_closes_pending(
+async def test_permanent_fetch_error_returns_none_and_closes_pending(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     tc_source: NewsSource,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """PermanentFetchError → ``TerminallyDropped`` + pending status='closed' + audit."""
+    """PermanentFetchError → ``None`` + pending status='closed' + audit reason_code."""
     _, pending_id = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/dead"
     )
@@ -277,8 +272,7 @@ async def test_permanent_fetch_error_returns_terminal_and_closes_pending(
     svc = ContentFetchService(session_factory)
     outcome = await svc.execute(pending_id)
 
-    assert isinstance(outcome, TerminallyDropped)
-    assert outcome.reason_code == "permanent_fetch_error"
+    assert outcome is None
     # Article は作られない
     articles = (await db_session.execute(select(ArticleORM))).scalars().all()
     assert articles == []
@@ -319,8 +313,7 @@ async def test_extraction_empty_writes_reason_in_code(
     svc = ContentFetchService(session_factory)
     outcome = await svc.execute(pending_id)
 
-    assert isinstance(outcome, TerminallyDropped)
-    assert outcome.reason_code == "extraction_empty_not_html"
+    assert outcome is None
     event = (
         await db_session.execute(
             select(PipelineEvent).where(PipelineEvent.stage == "content_fetch")
@@ -356,8 +349,7 @@ async def test_promotion_failure_records_quality_gate_metric(
     svc = ContentFetchService(session_factory)
     outcome = await svc.execute(pending_id)
 
-    assert isinstance(outcome, TerminallyDropped)
-    assert outcome.reason_code.startswith("promotion_")
+    assert outcome is None
     event = (
         await db_session.execute(
             select(PipelineEvent).where(PipelineEvent.stage == "content_fetch")
@@ -368,7 +360,7 @@ async def test_promotion_failure_records_quality_gate_metric(
 
 
 # ---------------------------------------------------------------------------
-# TemporaryFetchError → TransientlyDropped (will_retry / exhausted)
+# TemporaryFetchError → will_retry / dropped_transient (exhausted)
 # ---------------------------------------------------------------------------
 
 
@@ -388,8 +380,7 @@ async def test_temporary_blip_first_attempt_writes_will_retry(
     svc = ContentFetchService(session_factory)
     outcome = await svc.execute(pending_id)
 
-    assert isinstance(outcome, TransientlyDropped)
-    assert outcome.reason_code == "temporary_will_retry_blip"
+    assert outcome is None
 
     pending = (
         await db_session.execute(
@@ -436,8 +427,7 @@ async def test_temporary_outage_exhausted_writes_dropped_transient(
     svc = ContentFetchService(session_factory)
     outcome = await svc.execute(pending_id)
 
-    assert isinstance(outcome, TransientlyDropped)
-    assert outcome.reason_code == "temporary_exhausted_outage"
+    assert outcome is None
 
     pending = (
         await db_session.execute(
@@ -458,21 +448,21 @@ async def test_temporary_outage_exhausted_writes_dropped_transient(
 
 
 # ---------------------------------------------------------------------------
-# ConflictLost
+# race-loss (conflict_lost)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_race_lost_returns_conflict_lost_and_deletes_pending(
+async def test_race_lost_returns_none_and_deletes_pending(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     tc_source: NewsSource,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """別 worker が article を先に作った → ``ConflictLost`` + pending DELETE + audit。
+    """別 worker が article を先に作った → ``None`` + pending DELETE + conflict_lost audit。
 
     pre-condition: 同 ``source_url`` の Article を直接 INSERT (race の "勝者")。
-    """
+    """  # noqa: E501
     canonical_url, pending_id = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/race"
     )
@@ -501,7 +491,7 @@ async def test_race_lost_returns_conflict_lost_and_deletes_pending(
     svc = ContentFetchService(session_factory)
     outcome = await svc.execute(pending_id)
 
-    assert isinstance(outcome, ConflictLost)
+    assert outcome is None
     # articles は 1 件のまま (敗者は INSERT しない)
     articles = (await db_session.execute(select(ArticleORM))).scalars().all()
     assert len(articles) == 1

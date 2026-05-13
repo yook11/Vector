@@ -246,39 +246,31 @@ async def extract_html_body(
 
     PR2.5-B cutover で taskiq retry を完全に殺し、cron poller
     (``dispatch_html_fetch_jobs``) のみで再投入する設計。task の責務は
-    Outcome dispatch のみ:
+    戻り値 dispatch のみ:
 
     - ``ContentFetchService.execute(pending_id)`` を呼び、結果に応じて分岐
-    - ``ContentFetched`` 時のみ ``ExtractionTrigger(article_id)`` を
+    - ``int`` (article_id) が返れば ``ExtractionTrigger(article_id)`` を
       ``extract_content.kiq`` に流す (案 3: 下流 Stage 3 task が処理開始時に
       Ready 自構築)
-    - ``ConflictLost`` / ``TerminallyDropped`` / ``TransientlyDropped`` /
-      ``None`` (重複配送 / lease 衝突) は何もしない (DB 状態 + audit は
-      Service 内で完結済)
-    - ``TemporaryFetchError`` は Service 内で ``TransientlyDropped`` に変換
-      されるため task では catch しない
+    - ``None`` (重複配送 / lease 衝突 / 永続失敗 / 一時失敗 / race-loss) は何
+      もしない (DB 状態 + audit は Service 内で完結済、失敗詳細は
+      ``pipeline_events.payload.reason_code`` で観測)
+    - ``TemporaryFetchError`` は Service 内で DB 状態更新 + audit に変換される
+      ため task では catch しない
     """
     from app.analysis.extraction.domain.ready import ExtractionTrigger
     from app.analysis.extraction.tasks import extract_content
-    from app.collection.extraction.content_fetch_service import (
-        ConflictLost,
-        ContentFetched,
-        ContentFetchService,
-        TerminallyDropped,
-        TransientlyDropped,
-    )
+    from app.collection.extraction.content_fetch_service import ContentFetchService
 
     session_factory = ctx.state.session_factory
     svc = ContentFetchService(session_factory)
-    outcome = await svc.execute(pending_id)
+    article_id = await svc.execute(pending_id)
 
-    match outcome:
-        case ContentFetched(article=article):
-            await extract_content.kiq(ExtractionTrigger(article_id=article.id))
-            return {
-                "pending_id": pending_id,
-                "article_id": article.id,
-                "status": "success",
-            }
-        case ConflictLost() | TerminallyDropped() | TransientlyDropped() | None:
-            return None
+    if article_id is None:
+        return None
+    await extract_content.kiq(ExtractionTrigger(article_id=article_id))
+    return {
+        "pending_id": pending_id,
+        "article_id": article_id,
+        "status": "success",
+    }

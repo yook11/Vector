@@ -1,9 +1,9 @@
 """``extract_html_body`` task の振る舞い不変条件テスト (PR2.5-B 仕様 + PR3 案 3)。
 
-task は ``ContentFetchService`` への薄ラッパー。本テストの責務は **Outcome
+task は ``ContentFetchService`` への薄ラッパー。本テストの責務は **戻り値
 dispatch のみ** で、以下は対象外 (それぞれ別ファイル):
 
-- Service 内部 (HTTP 取得 / DB 永続化 / pipeline_events / Outcome 構築):
+- Service 内部 (HTTP 取得 / DB 永続化 / pipeline_events / 各失敗 reason_code):
   ``tests/collection/extraction/test_content_fetch_service.py``
 - ReadyForExtraction gatekeeper (extraction/noise 既存判定 / 本文長 cap):
   下流 Stage 3 task と ``ExtractionRepository.try_load_for_extraction`` の
@@ -11,29 +11,20 @@ dispatch のみ** で、以下は対象外 (それぞれ別ファイル):
 
 検証する task 不変条件:
 
-- ``ContentFetched(article)`` → ``extract_content.kiq`` を
-  ``ExtractionTrigger(article_id=article.id)`` で発火 + success dict 返却
-- ``ConflictLost`` / ``TerminallyDropped`` / ``TransientlyDropped`` /
-  ``None`` (重複配送) → ``None`` 返却、chain 発火せず
+- ``int`` (article_id) → ``extract_content.kiq`` を
+  ``ExtractionTrigger(article_id)`` で発火 + success dict 返却
+- ``None`` (重複配送 / lease 衝突 / 永続失敗 / 一時失敗 / race-loss) → ``None``
+  返却、chain 発火せず
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.extraction.domain.ready import ExtractionTrigger
-from app.collection.extraction.content_fetch_service import (
-    ConflictLost,
-    ContentFetched,
-    TerminallyDropped,
-    TransientlyDropped,
-)
-from app.collection.extraction.domain import Article
-from app.collection.extraction.domain.value_objects import PublishedAt
 from app.collection.tasks import extract_html_body
 
 _SERVICE_EXECUTE = (
@@ -49,65 +40,33 @@ def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> MagicMock:
     return ctx
 
 
-def _make_article(article_id: int = 1) -> Article:
-    """test 入力用の Article Entity (DB 永続化はしない)。
-
-    案 3: kiq には ``ExtractionTrigger(article_id)`` だけ流すため、
-    article.title / article.body は使わない。article.id のみ参照される。
-    """
-    return Article(
-        id=article_id,
-        title="Test Title",
-        body="x" * 100,
-        published_at=PublishedAt(datetime(2026, 5, 1, tzinfo=UTC)),
-        created_at=datetime(2026, 5, 6, tzinfo=UTC),
-    )
-
-
 @pytest.mark.asyncio
-async def test_chains_extract_content_with_trigger_when_content_fetched(
+async def test_chains_extract_content_with_trigger_when_article_id_returned(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """ContentFetched → ``extract_content.kiq`` を Trigger 引数で発火 + success dict."""
-    article = _make_article()
-    monkeypatch.setattr(
-        _SERVICE_EXECUTE,
-        AsyncMock(return_value=ContentFetched(article=article)),
-    )
+    """``int`` (article_id) → ``extract_content.kiq`` を Trigger で発火 + success dict."""  # noqa: E501
+    monkeypatch.setattr(_SERVICE_EXECUTE, AsyncMock(return_value=123))
     extract_content_kiq = AsyncMock()
     monkeypatch.setattr(_EXTRACT_CONTENT_KIQ, extract_content_kiq)
 
-    result = await extract_html_body(pending_id=123, ctx=_ctx(session_factory))
+    result = await extract_html_body(pending_id=42, ctx=_ctx(session_factory))
 
     assert result == {
-        "pending_id": 123,
-        "article_id": article.id,
+        "pending_id": 42,
+        "article_id": 123,
         "status": "success",
     }
-    extract_content_kiq.assert_awaited_once_with(
-        ExtractionTrigger(article_id=article.id)
-    )
+    extract_content_kiq.assert_awaited_once_with(ExtractionTrigger(article_id=123))
 
 
-@pytest.mark.parametrize(
-    "outcome",
-    [
-        ConflictLost(),
-        TerminallyDropped(reason_code="permanent_fetch_error"),
-        TransientlyDropped(reason_code="temporary_will_retry_server_error"),
-        None,
-    ],
-    ids=["conflict_lost", "terminally_dropped", "transiently_dropped", "service_none"],
-)
 @pytest.mark.asyncio
-async def test_returns_none_for_non_success_outcomes(
-    outcome: ConflictLost | TerminallyDropped | TransientlyDropped | None,
+async def test_returns_none_when_service_returns_none(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """成功以外の Outcome (4 variant) → None 返却、chain は発火しない."""
-    monkeypatch.setattr(_SERVICE_EXECUTE, AsyncMock(return_value=outcome))
+    """Service が ``None`` を返したら task も ``None`` 返却、chain は発火しない。"""
+    monkeypatch.setattr(_SERVICE_EXECUTE, AsyncMock(return_value=None))
     extract_content_kiq = AsyncMock()
     monkeypatch.setattr(_EXTRACT_CONTENT_KIQ, extract_content_kiq)
 

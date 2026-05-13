@@ -14,21 +14,22 @@ PR2.5-B cutover で StagedArticle (kiq envelope) 経由から
   (max_attempts 超過なら ``mark_exhausted``)
 - promotion ``Failed`` の捌き
 - ``articles`` INSERT + ``pending_html_articles`` DELETE を **同 tx で一括 commit**
-- race-loss (``articles.source_url UNIQUE``) を ``ConflictLost`` (audit) で吸収
+- race-loss (``articles.source_url UNIQUE``) を ``conflict_lost`` audit で吸収
 - ``pipeline_events`` への監査書込 (success/conflict_lost/dropped_terminal/
   dropped_transient/will_retry の 5 系統)。``canonical_url`` を集計 key
   として焼き付ける。
 
 caller (task) の責務:
 
-- 戻り値 ``ContentFetchOutcome | None`` の dispatch (chain は ``ContentFetched``
+- 戻り値 ``int | None`` の dispatch (chain は ``int`` (article_id) が返った
   時のみ ``extract_content.kiq``)
-- ``None`` (重複配送 / 状態不整合) は no-op で exit
+- ``None`` (重複配送 / 状態不整合 / 永続失敗 / 一時失敗 / race-loss) は no-op
+  で exit。失敗詳細は ``pipeline_events.payload.reason_code`` で観測する。
 
 設計上の決定:
 
-- ``TemporaryFetchError`` は Service 内で全て catch して
-  ``TransientlyDropped`` に変換する (taskiq retry は使わず DB 駆動)
+- ``TemporaryFetchError`` は Service 内で全て catch して DB 状態更新 + audit
+  に変換する (taskiq retry は使わず DB 駆動)
 - ``attempt`` は ``pending.attempt_count`` を SSoT として使用 (caller から
   受け取らない、ι.2)
 """
@@ -37,14 +38,12 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
-from app.collection.extraction.domain import Article
 from app.collection.extraction.domain.article import ArticleDraft
 from app.collection.extraction.extractor import (
     ArticleHtmlExtractor,
@@ -70,50 +69,6 @@ from app.observability.repository import PipelineEventRepository
 logger = structlog.get_logger(__name__)
 
 
-@dataclass(frozen=True, slots=True)
-class ContentFetched:
-    """成功 — 永続化済 ``Article`` Entity。caller が ``extract_content.kiq`` に流す。"""
-
-    article: Article
-
-
-@dataclass(frozen=True, slots=True)
-class ConflictLost:
-    """別 worker が同 ``source_url`` で article を先に作ったため敗退。
-
-    DB 上は pending を削除して audit ``conflict_lost`` (SKIPPED) を焼く。
-    caller は何もしない (winner 側が既に extract_content chain 済)。
-    """
-
-
-@dataclass(frozen=True, slots=True)
-class TerminallyDropped:
-    """二度試しても無意味な失敗 (URL dead / content unusable / promotion 失敗)。
-
-    ``reason_code`` は ``payload.reason_code`` に焼かれる SQL 集計 key。
-    ``permanent_fetch_error`` / ``extraction_empty_<reason>`` /
-    ``promotion_<failure_code>`` / ``article_persist_anomaly`` のいずれか。
-    """
-
-    reason_code: str
-
-
-@dataclass(frozen=True, slots=True)
-class TransientlyDropped:
-    """一時失敗 — caller は retry 不要 (DB 上で next ``ready_at`` まで backoff 済)。
-
-    ``reason_code`` は ``temporary_will_retry_<policy.code>`` (まだ余力あり) または
-    ``temporary_exhausted_<policy.code>`` (max_attempts 超過で closed) の 2 系統。
-    """
-
-    reason_code: str
-
-
-ContentFetchOutcome = (
-    ContentFetched | ConflictLost | TerminallyDropped | TransientlyDropped
-)
-
-
 class ContentFetchService:
     """Pattern H 2 段目 — pending 1 件を HTML 取得 + 永続化する。
 
@@ -130,12 +85,15 @@ class ContentFetchService:
         self._session_factory = session_factory
         self._extractor_factory = extractor_factory
 
-    async def execute(self, pending_id: int) -> ContentFetchOutcome | None:
+    async def execute(self, pending_id: int) -> int | None:
         """pending 1 件を HTML 取得 → promotion → 永続化 → 監査までの一連を担う。
 
         Returns:
-            ``None`` — 重複配送 / lease 衝突 / 状態不整合 (静かに exit)。
-            それ以外は 4 variant の Outcome を返す。
+            ``int`` — 永続化済 ``article_id``。caller は ``extract_content.kiq``
+            に chain する。
+            ``None`` — 重複配送 / lease 衝突 / 状態不整合 / 永続失敗 / 一時失敗 /
+            race-loss (静かに exit)。失敗詳細は
+            ``pipeline_events.payload.reason_code`` で観測する。
         """
         t0 = time.monotonic()
         extractor = self._extractor_factory()
@@ -202,7 +160,7 @@ class ContentFetchService:
                 },
             )
 
-        # 永続化 + audit (race-loss は ConflictLost に変換)
+        # 永続化 + audit (race-loss は conflict_lost audit + None に変換)
         return await self._persist_and_audit(
             pending=pending,
             advanced=advanced,
@@ -224,7 +182,7 @@ class ContentFetchService:
         duration_ms: int,
         extractor_class: str,
         exc: TemporaryFetchError,
-    ) -> TransientlyDropped:
+    ) -> None:
         """一時失敗を per-error policy で捌く。
 
         ``pending.attempt_count >= policy.max_attempts`` なら ``mark_exhausted``
@@ -261,7 +219,7 @@ class ContentFetchService:
                     error_class=error_class_fqn,
                 )
                 await session.commit()
-                return TransientlyDropped(reason_code=reason_code)
+                return None
 
             next_at = datetime.now(UTC) + timedelta(minutes=delay_minutes)
             await pending_repo.mark_will_retry(row_meta.id, ready_at=next_at)
@@ -284,7 +242,7 @@ class ContentFetchService:
                 error_class=error_class_fqn,
             )
             await session.commit()
-            return TransientlyDropped(reason_code=reason_code)
+            return None
 
     async def _handle_terminal(
         self,
@@ -295,7 +253,7 @@ class ContentFetchService:
         reason_code: str,
         exc: BaseException | None = None,
         quality_gate_metric: dict | None = None,
-    ) -> TerminallyDropped:
+    ) -> None:
         """永続失敗を ``closed`` に閉じて ``dropped_terminal`` (SKIPPED) を焼く。"""
         row_meta = pending.row_meta
         canonical_url = pending.incomplete_article.source_url
@@ -324,7 +282,7 @@ class ContentFetchService:
                 error_class=error_class_fqn,
             )
             await session.commit()
-            return TerminallyDropped(reason_code=reason_code)
+            return None
 
     async def _persist_and_audit(
         self,
@@ -334,13 +292,14 @@ class ContentFetchService:
         duration_ms: int,
         extractor_class: str,
         body_length: int,
-    ) -> ContentFetched | ConflictLost | TerminallyDropped:
+    ) -> int | None:
         """``articles`` INSERT + ``pending_html_articles`` DELETE を同 tx で commit。
 
         race-loss (``save`` が ``None``) → ``find_by_source_url(canonical_url)``
         で existing を読み戻す (``articles.source_url UNIQUE`` の決勝戦)。
-        検出ありなら ``ConflictLost`` (audit)、検出なしは構造異常として
-        ``TerminallyDropped("article_persist_anomaly")``。
+        検出ありなら ``conflict_lost`` audit + ``None``、検出なしは構造異常として
+        ``article_persist_anomaly`` audit + ``None``。
+        成功は永続化済 ``article_id`` を返す。
         """
         row_meta = pending.row_meta
         canonical_url = pending.incomplete_article.source_url
@@ -382,9 +341,9 @@ class ContentFetchService:
                         duration_ms=duration_ms,
                     )
                     await session.commit()
-                    return TerminallyDropped(reason_code="article_persist_anomaly")
+                    return None
 
-                # ConflictLost: pending を削除 + audit
+                # race-loss: pending を削除 + conflict_lost audit + None
                 await pending_repo.delete_one(row_meta.id)
                 payload = ContentFetchPayload(
                     canonical_url=str(canonical_url),
@@ -402,13 +361,10 @@ class ContentFetchService:
                     duration_ms=duration_ms,
                 )
                 await session.commit()
-                return ConflictLost()
+                return None
 
             # 成功: pending DELETE + audit (同 tx)
             await pending_repo.delete_one(row_meta.id)
-            article = Article.from_draft(
-                draft, id=persisted.id, created_at=persisted.created_at
-            )
             payload = ContentFetchPayload(
                 canonical_url=str(canonical_url),
                 extractor_class=extractor_class,
@@ -420,12 +376,12 @@ class ContentFetchService:
                 outcome_code="fetched",
                 payload=payload,
                 source_id=row_meta.source_id,
-                article_id=article.id,
+                article_id=persisted.id,
                 attempt=row_meta.attempt_count,
                 duration_ms=duration_ms,
             )
             await session.commit()
-            return ContentFetched(article=article)
+            return persisted.id
 
 
 def _elapsed_ms(t0: float) -> int:
