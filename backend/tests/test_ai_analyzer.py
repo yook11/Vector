@@ -200,22 +200,23 @@ async def _create_article_with_extraction(
     return article, extraction
 
 
-# --- A2. ClassVar enforcement tests ---
+# --- A2. abstract method enforcement tests ---
 
 
-def test_base_extractor_rejects_subclass_without_classvar() -> None:
-    with pytest.raises(TypeError, match="must define ClassVar"):
+def test_base_extractor_rejects_subclass_without_abstract_properties() -> None:
+    """PR4: BaseExtractor は property 契約 (model_name / prompt_version /
+    rate_policy) の abstract method 検査で構造保証する。``__init_subclass__``
+    runtime check は廃止し、abc が instance 化時に TypeError を出す。"""
 
-        class BadExtractor(BaseExtractor):
-            MODEL = "test"
-            RPM = 10
-            # RPD は未定義
+    class BadExtractor(BaseExtractor):
+        async def extract(self, title, content): ...
 
-            async def extract(self, title, content): ...
+        async def _call_api(self, prompt): ...
 
-            async def _call_api(self, prompt): ...
+        def _translate_error(self, exc): ...
 
-            def _translate_error(self, exc): ...
+    with pytest.raises(TypeError, match="abstract"):
+        BadExtractor()  # type: ignore[abstract]
 
 
 def test_base_assessor_rejects_subclass_without_classvar() -> None:
@@ -548,7 +549,6 @@ async def test_extraction_creates_extraction_and_entities(
     await db_session.refresh(article)
 
     mock_extractor = MagicMock(spec=BaseExtractor)
-    mock_extractor.MODEL = "gemini-2.5-flash-lite"
     mock_extractor.model_name = "gemini-2.5-flash-lite"
     mock_extractor.extract = AsyncMock(
         return_value=_make_extraction_call(
@@ -612,7 +612,6 @@ async def test_extraction_race_loser_returns_none_and_skips_audit(
     await db_session.commit()
 
     mock_extractor = MagicMock(spec=BaseExtractor)
-    mock_extractor.MODEL = "gemini-2.5-flash-lite"
     mock_extractor.model_name = "gemini-2.5-flash-lite"
     mock_extractor.extract = AsyncMock(
         return_value=_make_extraction_call(
@@ -684,7 +683,6 @@ async def test_extraction_routes_noise_to_extraction_noises_table(
     await db_session.refresh(article)
 
     mock_extractor = MagicMock(spec=BaseExtractor)
-    mock_extractor.MODEL = "gemini-2.5-flash-lite"
     mock_extractor.model_name = "gemini-2.5-flash-lite"
     mock_extractor.extract = AsyncMock(
         return_value=_make_extraction_call(

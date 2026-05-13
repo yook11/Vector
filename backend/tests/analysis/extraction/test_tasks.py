@@ -2,10 +2,14 @@
 
 PR3 案 3 化: task signature は ``trigger: ExtractionTrigger``。冒頭で
 ``ReadyForExtraction.try_advance_from`` を呼んで Ready 自構築する。
+PR4 で rate limit 配線は ``ProviderRateLimitGate.acquire`` に置き換わったため、
+本ファイルでは ``ctx.state.provider_rate_limit_gate.acquire`` を AsyncMock で
+True / False に振って routing を検証する。
 
 - signal 勝者 (``execute`` が ``int`` を返す) → ``assess_content.kiq`` で chain
 - noise 勝者 / race 敗北 (``execute`` が ``None`` を返す) → chain しない
 - precondition_not_met (``try_advance_from`` が ``None`` を返す) → skip log + return
+- gate.acquire=False → quota log + return (Service 未呼出)
 - legacy ``AIProviderRateLimitedError`` の audit 経路 (catch-all 経由)
 
 Layer 1 marker dispatch ルーティングは ``test_extract_task_dispatch.py`` 側で
@@ -24,16 +28,18 @@ from app.analysis.ai_provider_errors import (
 )
 from app.analysis.assessment.domain.ready import AssessmentTrigger
 from app.analysis.extraction.domain.ready import ExtractionTrigger, ReadyForExtraction
+from app.analysis.rate_policy import RatePolicy
 
 
 def _make_provider_fake() -> MagicMock:
-    """extractor 用のスタブ。PROVIDER/MODEL/PROMPT_VERSION/RPM/RPD を持つ。"""
+    """extractor 用のスタブ。property 契約 (model_name / prompt_version /
+    rate_policy) を持つ。"""
     fake = MagicMock()
-    fake.PROVIDER = "gemini"
-    fake.MODEL = "test-model"
-    fake.PROMPT_VERSION = "test-prompt-v1"
-    fake.RPM = 50
-    fake.RPD = 1500
+    fake.model_name = "test-model"
+    fake.prompt_version = "test-prompt-v1"
+    fake.rate_policy = RatePolicy(
+        provider="gemini", model="test-model", rpm=50, rpd=1500
+    )
     return fake
 
 
@@ -42,10 +48,17 @@ def _make_ctx(
     extractor: MagicMock | None = None,
     retry_count: int = 0,
     max_retries: int = 0,
+    gate_acquire: bool = True,
 ) -> MagicMock:
-    """taskiq Context モック。"""
+    """taskiq Context モック。``provider_rate_limit_gate.acquire`` は
+    ``gate_acquire`` で True / False を選ぶ。"""
     ctx = MagicMock()
-    ctx.state = SimpleNamespace(session_factory=MagicMock())
+    gate = MagicMock()
+    gate.acquire = AsyncMock(return_value=gate_acquire)
+    ctx.state = SimpleNamespace(
+        session_factory=MagicMock(),
+        provider_rate_limit_gate=gate,
+    )
     if extractor is not None:
         ctx.state.extractor = extractor
     ctx.message.labels = {
@@ -99,10 +112,6 @@ class TestExtractContent:
 
         with (
             _patch_try_advance_from(_fixed_ready()),
-            patch(
-                "app.analysis.extraction.tasks._build_limiters",
-                return_value=(None, None),
-            ),
             patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
             patch("app.analysis.extraction.tasks.assess_content") as mock_assess,
         ):
@@ -123,10 +132,6 @@ class TestExtractContent:
 
         with (
             _patch_try_advance_from(_fixed_ready()),
-            patch(
-                "app.analysis.extraction.tasks._build_limiters",
-                return_value=(None, None),
-            ),
             patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
             patch("app.analysis.extraction.tasks.assess_content") as mock_assess,
         ):
@@ -150,20 +155,37 @@ class TestExtractContent:
 
         with (
             _patch_try_advance_from(None),
-            patch(
-                "app.analysis.extraction.tasks._build_limiters",
-                return_value=(None, None),
-            ) as mock_limiters,
             patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
             patch("app.analysis.extraction.tasks.assess_content") as mock_assess,
         ):
             mock_assess.kiq = AsyncMock()
             await extract_content(trigger=_trigger(), ctx=mock_ctx)
 
-        # Service / rate limit / chain firing いずれも触らない
+        # Service / rate limit gate / chain firing いずれも触らない
         mock_svc_cls.assert_not_called()
-        mock_limiters.assert_not_called()
+        mock_ctx.state.provider_rate_limit_gate.acquire.assert_not_called()
         mock_assess.kiq.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_quota_skip_returns_without_invoking_service(self) -> None:
+        """gate.acquire=False の場合 quota log + return、Service は呼ばない。"""
+        from app.analysis.extraction.tasks import extract_content
+
+        mock_ctx = _make_ctx(extractor=_make_provider_fake(), gate_acquire=False)
+
+        with (
+            _patch_try_advance_from(_fixed_ready()),
+            patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
+            patch("app.analysis.extraction.tasks.assess_content") as mock_assess,
+            capture_logs() as cap,
+        ):
+            mock_assess.kiq = AsyncMock()
+            await extract_content(trigger=_trigger(), ctx=mock_ctx)
+
+        mock_svc_cls.assert_not_called()
+        mock_assess.kiq.assert_not_called()
+        warnings = [e for e in cap if e.get("event") == "extract_content_daily_quota"]
+        assert warnings, "quota skip 時の warning log が emit されていない"
 
     @pytest.mark.asyncio
     async def test_rate_limited_records_audit_and_returns(self) -> None:
@@ -176,10 +198,6 @@ class TestExtractContent:
 
         with (
             _patch_try_advance_from(_fixed_ready()),
-            patch(
-                "app.analysis.extraction.tasks._build_limiters",
-                return_value=(None, None),
-            ),
             patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
             patch(
                 "app.analysis.extraction.failure_handling.ExtractionAuditRepository"
@@ -219,10 +237,6 @@ class TestExtractContent:
 
         with (
             _patch_try_advance_from(_fixed_ready()),
-            patch(
-                "app.analysis.extraction.tasks._build_limiters",
-                return_value=(None, None),
-            ),
             patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
             patch(
                 "app.analysis.extraction.failure_handling.ExtractionAuditRepository"

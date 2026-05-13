@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.analysis.domain.value_objects.entity import EntityRawType, EntitySurface
 from app.analysis.extraction.ai.base import BaseExtractor
 from app.analysis.extraction.ai.envelope import ExtractionCall
-from app.analysis.extraction.ai.gemini_prompt import GeminiExtractionPrompt
+from app.analysis.extraction.ai.gemini_spec import GEMINI_EXTRACTION_SPEC
 from app.analysis.extraction.domain import ExtractedEntity, Noise, Signal
 from app.analysis.extraction.domain.ready import ReadyForExtraction
 from app.analysis.extraction.errors import ExtractionResponseInvalidError
@@ -56,8 +56,8 @@ def _signal_envelope(
         ),
         raw_response=raw,
         raw_relevance="signal",
-        prompt_version=GeminiExtractionPrompt.VERSION,
-        model_name=GeminiExtractionPrompt.MODEL,
+        prompt_version=GEMINI_EXTRACTION_SPEC.version,
+        model_name=GEMINI_EXTRACTION_SPEC.model,
     )
 
 
@@ -77,8 +77,8 @@ def _noise_envelope(
         ),
         raw_response=raw,
         raw_relevance="noise",
-        prompt_version=GeminiExtractionPrompt.VERSION,
-        model_name=GeminiExtractionPrompt.MODEL,
+        prompt_version=GEMINI_EXTRACTION_SPEC.version,
+        model_name=GEMINI_EXTRACTION_SPEC.model,
     )
 
 
@@ -88,10 +88,9 @@ def _extractor(
     side_effect=None,
 ) -> BaseExtractor:
     mock = MagicMock(spec=BaseExtractor)
-    type(mock).model_name = GeminiExtractionPrompt.MODEL
-    # PR2: 失敗 audit が extractor.MODEL / extractor.PROMPT_VERSION を読む
-    type(mock).MODEL = GeminiExtractionPrompt.MODEL
-    type(mock).PROMPT_VERSION = GeminiExtractionPrompt.VERSION
+    # PR4: BaseExtractor の構造保証は property 契約 (model_name / prompt_version)
+    type(mock).model_name = GEMINI_EXTRACTION_SPEC.model
+    type(mock).prompt_version = GEMINI_EXTRACTION_SPEC.version
     if side_effect is not None:
         mock.extract = AsyncMock(side_effect=side_effect)
     else:
@@ -162,8 +161,8 @@ async def test_signal_outcome_writes_extracted_audit_with_category_and_code(
     assert ev.code == "extracted"
     assert ev.source_id == sample_source.id
     payload = ev.payload
-    assert payload["ai_model"] == GeminiExtractionPrompt.MODEL
-    assert payload["prompt_version"] == GeminiExtractionPrompt.VERSION
+    assert payload["ai_model"] == GEMINI_EXTRACTION_SPEC.model
+    assert payload["prompt_version"] == GEMINI_EXTRACTION_SPEC.version
     assert payload["source_name"] == str(sample_source.name)
     assert payload["entity_count"] == 2
     assert payload["ai_raw_response"]

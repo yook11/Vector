@@ -29,7 +29,7 @@ from app.analysis.ai_provider_errors import (
     AIProviderOutputBlockedError,
 )
 from app.analysis.extraction.ai.base import BaseExtractor
-from app.analysis.extraction.ai.gemini_prompt import GeminiExtractionPrompt
+from app.analysis.extraction.ai.gemini_spec import GEMINI_EXTRACTION_SPEC
 from app.analysis.extraction.domain.ready import ReadyForExtraction
 from app.analysis.extraction.failure_handling import ExtractionFailureHandler
 from app.models.article import Article
@@ -38,10 +38,10 @@ from app.models.pipeline_event import PipelineEvent
 
 
 def _extractor_mock() -> MagicMock:
-    """Handler に渡す ``BaseExtractor`` mock (MODEL / PROMPT_VERSION のみ)。"""
+    """Handler に渡す ``BaseExtractor`` mock (model_name / prompt_version のみ)。"""
     mock = MagicMock(spec=BaseExtractor)
-    type(mock).MODEL = GeminiExtractionPrompt.MODEL
-    type(mock).PROMPT_VERSION = GeminiExtractionPrompt.VERSION
+    type(mock).model_name = GEMINI_EXTRACTION_SPEC.model
+    type(mock).prompt_version = GEMINI_EXTRACTION_SPEC.version
     return mock
 
 
@@ -125,7 +125,7 @@ async def test_output_blocked_writes_audit_then_deletes_article(
     assert ev.source_id == expected_source_id
     payload = ev.payload
     assert payload["source_name"] == expected_source_name
-    assert payload["ai_model"] == GeminiExtractionPrompt.MODEL
+    assert payload["ai_model"] == GEMINI_EXTRACTION_SPEC.model
     assert payload["error_message"] is not None
     assert payload["error_chain"] is not None
 

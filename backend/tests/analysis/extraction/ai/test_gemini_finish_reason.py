@@ -28,7 +28,7 @@ from app.analysis.ai_provider_errors import AIProviderOutputBlockedError
 from app.analysis.domain.value_objects.entity import EntityRawType, EntitySurface
 from app.analysis.extraction.ai.envelope import ExtractionCall
 from app.analysis.extraction.ai.gemini import GeminiExtractor
-from app.analysis.extraction.ai.gemini_prompt import GeminiExtractionPrompt
+from app.analysis.extraction.ai.gemini_spec import GEMINI_EXTRACTION_SPEC
 from app.analysis.extraction.ai.schema import GeminiExtractionResponse
 from app.analysis.extraction.domain import ExtractedEntity, Signal
 from app.analysis.extraction.errors import ExtractionResponseInvalidError
@@ -124,8 +124,8 @@ async def test_stop_with_parsed_result_returns_envelope_with_signal() -> None:
     assert envelope.result.title_ja == "t"
     assert envelope.raw_response == '{"x":1}'
     assert envelope.raw_relevance == "signal"
-    assert envelope.prompt_version == GeminiExtractionPrompt.VERSION
-    assert envelope.model_name == GeminiExtractionPrompt.MODEL
+    assert envelope.prompt_version == GEMINI_EXTRACTION_SPEC.version
+    assert envelope.model_name == GEMINI_EXTRACTION_SPEC.model
 
 
 @pytest.mark.asyncio

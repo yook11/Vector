@@ -41,9 +41,9 @@ class ExtractionCall[T: ExtractionResult]:
             ``raw_category`` / ``raw_topic`` と対称。enum 化しない: raw は監査用、
             enum 化すると「妥当な値しか入らない」誤解を生む)。
         prompt_version: 呼び出し元 Prompt class の VERSION (8 文字 hash)。
-        model_name: ``BaseExtractor.MODEL`` ClassVar の値。Repository / Audit が
-            ``call.model_name`` で参照する (caller が ``ai_model`` を別引数で
-            引き回さない、``feedback_bc_boundary_guarantees_downstream``)。
+        model_name: ``BaseExtractor.model_name`` property の値。Repository /
+            Audit が ``call.model_name`` で参照する (caller が ``ai_model`` を
+            別引数で引き回さない、``feedback_bc_boundary_guarantees_downstream``)。
     """
 
     result: T

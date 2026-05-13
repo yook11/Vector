@@ -32,7 +32,7 @@ from app.analysis.ai_provider_errors import (
 from app.analysis.domain.value_objects.entity import EntityRawType, EntitySurface
 from app.analysis.extraction.ai.base import BaseExtractor
 from app.analysis.extraction.ai.envelope import ExtractionCall
-from app.analysis.extraction.ai.gemini_prompt import GeminiExtractionPrompt
+from app.analysis.extraction.ai.gemini_spec import GEMINI_EXTRACTION_SPEC
 from app.analysis.extraction.audit_repository import ExtractionAuditRepository
 from app.analysis.extraction.domain import ExtractedEntity, Noise, Signal
 from app.analysis.extraction.domain.ready import ReadyForExtraction
@@ -49,14 +49,13 @@ def _extractor_mock(
 ) -> MagicMock:
     """失敗 audit テスト用の ``BaseExtractor`` mock。
 
-    PR2 で ``append_drop_article`` / ``append_failure`` が ``extractor: BaseExtractor``
-    を受けるようになったため、MODEL / PROMPT_VERSION ClassVar を持つ mock を返す。
-    Gemini ClassVar からの hardcode 依存を切ったことを表明するため値は test-* で
-    Gemini と衝突しない名前にする。
+    PR4 で ``BaseExtractor`` の構造保証は property 契約 (model_name /
+    prompt_version / rate_policy) に置き換わったため、property 属性として
+    値を bind する。値は test-* で Gemini と衝突しない名前にする。
     """
     mock = MagicMock(spec=BaseExtractor)
-    type(mock).MODEL = model
-    type(mock).PROMPT_VERSION = prompt_version
+    type(mock).model_name = model
+    type(mock).prompt_version = prompt_version
     return mock
 
 
@@ -74,8 +73,8 @@ def _signal_envelope(entities: int = 2) -> ExtractionCall[Signal]:
         ),
         raw_response='{"relevance":"signal"}',
         raw_relevance="signal",
-        prompt_version=GeminiExtractionPrompt.VERSION,
-        model_name=GeminiExtractionPrompt.MODEL,
+        prompt_version=GEMINI_EXTRACTION_SPEC.version,
+        model_name=GEMINI_EXTRACTION_SPEC.model,
     )
 
 
@@ -93,8 +92,8 @@ def _noise_envelope(entities: int = 2) -> ExtractionCall[Noise]:
         ),
         raw_response='{"relevance":"noise"}',
         raw_relevance="noise",
-        prompt_version=GeminiExtractionPrompt.VERSION,
-        model_name=GeminiExtractionPrompt.MODEL,
+        prompt_version=GEMINI_EXTRACTION_SPEC.version,
+        model_name=GEMINI_EXTRACTION_SPEC.model,
     )
 
 
@@ -166,8 +165,8 @@ async def test_append_extracted_records_success_with_code(
     assert ev.payload["ai_raw_response"]
     assert ev.payload["source_name"] == str(sample_source.name)
     # PR1-a: ai_model / prompt_version / raw_relevance は envelope 経由で焼かれる
-    assert ev.payload["ai_model"] == GeminiExtractionPrompt.MODEL
-    assert ev.payload["prompt_version"] == GeminiExtractionPrompt.VERSION
+    assert ev.payload["ai_model"] == GEMINI_EXTRACTION_SPEC.model
+    assert ev.payload["prompt_version"] == GEMINI_EXTRACTION_SPEC.version
     assert ev.payload["raw_relevance"] == "signal"
 
 

@@ -12,7 +12,6 @@ from __future__ import annotations
 import structlog
 from taskiq import Context, TaskiqDepends
 
-from app.analysis._limiter_factory import _build_limiters
 from app.analysis.assessment.domain.ready import AssessmentTrigger
 from app.analysis.assessment.tasks import assess_content
 from app.analysis.extraction.ai.base import BaseExtractor
@@ -23,10 +22,6 @@ from app.analysis.extraction.domain.ready import (
 from app.analysis.extraction.failure_handling import ExtractionFailureHandler
 from app.analysis.extraction.repository import ExtractionRepository
 from app.analysis.extraction.service import ExtractionService
-from app.analysis.rate_limiter import (
-    RateLimitExceededError as _RateLimitExceededError,
-)
-from app.analysis.rate_policy import RatePolicy
 from app.brokers import broker_analysis, is_last_attempt
 
 logger = structlog.get_logger(__name__)
@@ -70,13 +65,7 @@ async def extract_content(
         return
 
     # AI を呼ぶ見込みが立ってから rate limit acquire (Stage 4 / Stage 5 と対称)
-    rpm_limiter, rpd_limiter = _build_limiters(RatePolicy.from_component(extractor))
-    try:
-        if rpd_limiter is not None:
-            await rpd_limiter.acquire()
-        if rpm_limiter is not None:
-            await rpm_limiter.acquire()
-    except _RateLimitExceededError:
+    if not await ctx.state.provider_rate_limit_gate.acquire(extractor.rate_policy):
         logger.warning("extract_content_daily_quota", article_id=ready.article_id)
         return
 

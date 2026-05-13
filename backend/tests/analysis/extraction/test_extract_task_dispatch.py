@@ -11,6 +11,9 @@ Service の execute を mock して、tasks.py が **どんな exc** を受け�
 marker ごとの後処理 (audit / DELETE / inline retry decision) の内部実装は
 ``ExtractionFailureHandler`` 側の責務で、本ファイルでは検証しない
 (Handler の単体テストは ``test_failure_handler.py`` 参照)。
+
+PR4 で rate limit 配線は ``ProviderRateLimitGate.acquire`` に置き換わったため、
+ctx.state に gate mock (acquire=AsyncMock(return_value=True)) を bind する。
 """
 
 from __future__ import annotations
@@ -33,21 +36,27 @@ from app.analysis.ai_provider_errors import (
 )
 from app.analysis.extraction.domain.ready import ExtractionTrigger, ReadyForExtraction
 from app.analysis.extraction.errors import ExtractionResponseInvalidError
+from app.analysis.rate_policy import RatePolicy
 
 
 def _make_provider_fake() -> MagicMock:
     fake = MagicMock()
-    fake.PROVIDER = "gemini"
-    fake.MODEL = "test-model"
-    fake.PROMPT_VERSION = "test-prompt-v1"
-    fake.RPM = 50
-    fake.RPD = 1500
+    fake.model_name = "test-model"
+    fake.prompt_version = "test-prompt-v1"
+    fake.rate_policy = RatePolicy(
+        provider="gemini", model="test-model", rpm=50, rpd=1500
+    )
     return fake
 
 
 def _make_ctx(retry_count: int = 0, max_retries: int = 1) -> MagicMock:
     ctx = MagicMock()
-    ctx.state = SimpleNamespace(session_factory=MagicMock())
+    gate = MagicMock()
+    gate.acquire = AsyncMock(return_value=True)
+    ctx.state = SimpleNamespace(
+        session_factory=MagicMock(),
+        provider_rate_limit_gate=gate,
+    )
     ctx.state.extractor = _make_provider_fake()
     ctx.message.labels = {
         "retry_count": retry_count,
@@ -98,9 +107,6 @@ async def test_drop_article_delegates_to_handler(exc_cls: type[Exception]) -> No
 
     with (
         _patch_try_advance_from(),
-        patch(
-            "app.analysis.extraction.tasks._build_limiters", return_value=(None, None)
-        ),
         patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
         patch(
             "app.analysis.extraction.tasks.ExtractionFailureHandler"
@@ -140,9 +146,6 @@ async def test_keep_article_delegates_to_handler(exc_cls: type[Exception]) -> No
     ctx = _make_ctx()
     with (
         _patch_try_advance_from(),
-        patch(
-            "app.analysis.extraction.tasks._build_limiters", return_value=(None, None)
-        ),
         patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
         patch(
             "app.analysis.extraction.tasks.ExtractionFailureHandler"
@@ -179,9 +182,6 @@ async def test_retryable_reraise_true_raises(exc_cls: type[Exception]) -> None:
 
     with (
         _patch_try_advance_from(),
-        patch(
-            "app.analysis.extraction.tasks._build_limiters", return_value=(None, None)
-        ),
         patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
         patch(
             "app.analysis.extraction.tasks.ExtractionFailureHandler"
@@ -204,9 +204,6 @@ async def test_retryable_reraise_false_returns() -> None:
 
     with (
         _patch_try_advance_from(),
-        patch(
-            "app.analysis.extraction.tasks._build_limiters", return_value=(None, None)
-        ),
         patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
         patch(
             "app.analysis.extraction.tasks.ExtractionFailureHandler"
@@ -246,9 +243,6 @@ async def test_retryable_inline_false_delegates_to_handler(
 
     with (
         _patch_try_advance_from(),
-        patch(
-            "app.analysis.extraction.tasks._build_limiters", return_value=(None, None)
-        ),
         patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
         patch(
             "app.analysis.extraction.tasks.ExtractionFailureHandler"
@@ -274,9 +268,6 @@ async def test_unexpected_exception_delegates_to_handler() -> None:
     ctx = _make_ctx()
     with (
         _patch_try_advance_from(),
-        patch(
-            "app.analysis.extraction.tasks._build_limiters", return_value=(None, None)
-        ),
         patch("app.analysis.extraction.tasks.ExtractionService") as mock_svc_cls,
         patch(
             "app.analysis.extraction.tasks.ExtractionFailureHandler"

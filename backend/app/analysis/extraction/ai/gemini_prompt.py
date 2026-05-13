@@ -1,34 +1,24 @@
-"""Stage 3 (extraction) Gemini Prompt — bounded constants + render。
+"""Stage 3 (extraction) Gemini Prompt — template + render に責務を絞った class。
 
-ADR `docs/observability/pipeline-events-design.md` §prompt_version の規律 を実装する
-provider-bound Prompt class。class load 時に ``VERSION`` ClassVar が確定する
-(call signature hash 8 文字)。
-
-5 ClassVar (TEMPLATE / MODEL / GEN_CONFIG / RESPONSE_SCHEMA / SYSTEM_INSTRUCTION) が
-``compute_call_signature`` の入力。``GEN_CONFIG`` は ``MappingProxyType`` で immutable —
-書換による silent audit lying を構造的に排除する。
+Prompt 文面 (``TEMPLATE``) と入力 sanitize / truncate (``render``) のみを担う。
+API call config (model / gen_config / response_schema / system_instruction /
+version) は ``gemini_spec.GeminiExtractionSpec`` 側に SSoT を移した。
 
 ``render`` の typed kwargs ``(*, title: str, content: str)`` は新フィールド追加時に
-sanitize 忘れを型エラーで強制可視化する (`<untrusted_input>` co-location)。
+sanitize 忘れを型エラーで強制可視化する (``<untrusted_input>`` co-location)。
+``TEMPLATE`` は ``gemini_spec`` 側で ``compute_call_signature`` の入力として import
+されるため、public class attr として参照可能性を保つ。
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from types import MappingProxyType
-from typing import Any, ClassVar
+from typing import ClassVar
 
-from app.analysis.extraction.ai.schema import GeminiExtractionResponse
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
-from app.observability.prompt_versions import compute_call_signature
 
 
 class GeminiExtractionPrompt:
-    """Stage 3 extraction prompt (Gemini 専用)。
-
-    ``VERSION`` は class load 時に 1 回計算され ClassVar として固定される。
-    runtime での再計算は無く、外部代入や ``@cache`` も使わない。
-    """
+    """Stage 3 extraction prompt (Gemini 専用) — template + render のみ。"""
 
     TEMPLATE: ClassVar[str] = """\
 あなたはテックニュース記事から重要な情報を抽出するアシスタントです。\
@@ -52,28 +42,9 @@ class GeminiExtractionPrompt:
 - 該当する entities が無ければ空配列でよい。
 """
 
-    MODEL: ClassVar[str] = "gemini-2.5-flash-lite"
-    GEN_CONFIG: ClassVar[Mapping[str, Any]] = MappingProxyType(
-        {
-            "temperature": 0.2,
-            "max_output_tokens": 2048,
-            "response_mime_type": "application/json",
-        }
-    )
-    RESPONSE_SCHEMA: ClassVar[type[GeminiExtractionResponse]] = GeminiExtractionResponse
-    SYSTEM_INSTRUCTION: ClassVar[str | None] = None
-
     # Gemini 固有の入力整形 (本文を切り詰めて投入)。system 不変条件としての hard cap
     # (200_000 char) は ReadyForExtraction.MAX_CONTENT_LENGTH 側で別途保証される。
     CONTENT_MAX_LENGTH: ClassVar[int] = 20_000
-
-    VERSION: ClassVar[str] = compute_call_signature(
-        prompt_template=TEMPLATE,
-        model=MODEL,
-        gen_config=GEN_CONFIG,
-        response_schema=RESPONSE_SCHEMA.model_json_schema(),
-        system_instruction=SYSTEM_INSTRUCTION,
-    )
 
     @classmethod
     def render(cls, *, title: str, content: str) -> str:

@@ -6,7 +6,8 @@
 成功 / 失敗 / DELETE の各経路で共有される「content + source_name の 4 field」を
 計算する。``ai_model`` / ``prompt_version`` は本 helper が埋めない —
 成功経路は envelope (``call.model_name`` / ``call.prompt_version``) から、
-失敗経路 (PR2 で envelope 化予定) は caller が Gemini ClassVar から直接埋める。
+失敗経路は caller が ``extractor.model_name`` / ``extractor.prompt_version``
+property から直接埋める。
 
 content 段階 (`docs/observability/pipeline-events-design.md` §11):
     1. raw — Article.original_content (DB 値)
@@ -46,7 +47,8 @@ def base_extraction_payload_fields(
     (``call.model_name`` / ``call.prompt_version``) から直接埋める方針に
     変わったため、本 helper の戻り値からは外れた。失敗経路 (``append_failure``
     / ``append_drop_article``) は envelope が無い (AI 呼び出し前 or 中の失敗) ため、
-    caller 側で Gemini ClassVar から個別に埋める (PR2 で envelope 化予定)。
+    caller 側で ``extractor.model_name`` / ``extractor.prompt_version`` property
+    から個別に埋める。
 
     Args:
         original_content: ``Article.original_content`` (raw 段階 1)。

@@ -1,10 +1,13 @@
 """Gemini 実装の Content Extractor — Stage 3。
 
-Prompt 文面 / model / gen_config / response schema は ``GeminiExtractionPrompt``
+Prompt 文面は ``GeminiExtractionPrompt``、API call spec (model / gen_config /
+response_schema / version / rate policy) は ``GeminiExtractionSpec`` singleton
 が SSoT。本 class は I/O 駆動 (rate limit + SDK 例外翻訳) に責務を絞る。
 """
 
 from __future__ import annotations
+
+from typing import Final
 
 import structlog
 from google import genai
@@ -19,6 +22,10 @@ from app.analysis.ai_provider_errors import (
 from app.analysis.extraction.ai.base import BaseExtractor
 from app.analysis.extraction.ai.envelope import ExtractionCall
 from app.analysis.extraction.ai.gemini_prompt import GeminiExtractionPrompt
+from app.analysis.extraction.ai.gemini_spec import (
+    GEMINI_EXTRACTION_SPEC,
+    GeminiExtractionSpec,
+)
 from app.analysis.extraction.ai.parse import parse_extraction
 from app.analysis.extraction.ai.schema import GeminiExtractionResponse
 from app.analysis.extraction.domain import Noise, Signal
@@ -27,6 +34,7 @@ from app.analysis.gemini_error_translator import (
     is_context_length_error,
     translate_gemini_error,
 )
+from app.analysis.rate_policy import RatePolicy
 from app.config import settings
 
 logger = structlog.get_logger(__name__)
@@ -64,17 +72,27 @@ def _detect_finish_reason(response: GenerateContentResponse) -> str | None:
 class GeminiExtractor(BaseExtractor):
     """BaseExtractor の Gemini API 実装。"""
 
-    PROVIDER = "gemini"
-    MODEL = GeminiExtractionPrompt.MODEL
-    PROMPT_VERSION = GeminiExtractionPrompt.VERSION
-    RPM = 100
-    RPD = 1500
+    SPEC: Final[GeminiExtractionSpec] = GEMINI_EXTRACTION_SPEC
 
     def __init__(self) -> None:
         api_key = settings.gemini_api_key.get_secret_value()
         if not api_key:
             raise AIProviderConfigurationError("GEMINI_API_KEY is not configured")
         self._client = genai.Client(api_key=api_key)
+
+    # -- BaseExtractor property 契約 --
+
+    @property
+    def model_name(self) -> str:
+        return self.SPEC.model
+
+    @property
+    def prompt_version(self) -> str:
+        return self.SPEC.version
+
+    @property
+    def rate_policy(self) -> RatePolicy:
+        return self.SPEC.rate_policy
 
     async def extract(
         self,
@@ -90,11 +108,11 @@ class GeminiExtractor(BaseExtractor):
     ) -> ExtractionCall[Signal] | ExtractionCall[Noise]:
         """Gemini の generate_content API を呼び出し envelope を組み立てる。"""
         response = await self._client.aio.models.generate_content(
-            model=GeminiExtractionPrompt.MODEL,
+            model=self.SPEC.model,
             contents=prompt,
             config=GenerateContentConfig(
-                **GeminiExtractionPrompt.GEN_CONFIG,
-                response_schema=GeminiExtractionPrompt.RESPONSE_SCHEMA,
+                **self.SPEC.gen_config,
+                response_schema=self.SPEC.response_schema,
             ),
         )
 
@@ -113,12 +131,25 @@ class GeminiExtractor(BaseExtractor):
                 f"(got {type(parsed).__name__}, finish_reason={finish_reason})"
             )
         result = parse_extraction(parsed)
-        return ExtractionCall(
+        # ``ExtractionCall[T]`` の T は invariant のため Signal | Noise を直接
+        # 渡すと ``ExtractionCall[Signal | Noise]`` に推論される。戻り値型は
+        # ``ExtractionCall[Signal] | ExtractionCall[Noise]`` なので isinstance で
+        # narrow してから明示的に型パラメータを指定する。
+        raw_response = _extract_raw_text(response)
+        if isinstance(result, Signal):
+            return ExtractionCall[Signal](
+                result=result,
+                raw_response=raw_response,
+                raw_relevance=parsed.relevance,
+                prompt_version=self.SPEC.version,
+                model_name=self.SPEC.model,
+            )
+        return ExtractionCall[Noise](
             result=result,
-            raw_response=_extract_raw_text(response),
+            raw_response=raw_response,
             raw_relevance=parsed.relevance,
-            prompt_version=GeminiExtractionPrompt.VERSION,
-            model_name=GeminiExtractionPrompt.MODEL,
+            prompt_version=self.SPEC.version,
+            model_name=self.SPEC.model,
         )
 
     def _translate_error(self, exc: Exception) -> Exception:

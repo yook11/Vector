@@ -33,6 +33,7 @@ from taskiq_redis import RedisAsyncResultBackend, RedisStreamBroker
 from app.analysis.assessment.ai.deepseek import DeepSeekAssessor
 from app.analysis.embedding.ai.gemini import GeminiEmbedder
 from app.analysis.extraction.ai.gemini import GeminiExtractor
+from app.analysis.provider_rate_limit_gate import ProviderRateLimitGate
 from app.config import settings
 
 logger = structlog.get_logger(__name__)
@@ -143,10 +144,11 @@ async def _wire_analysis_adapters(state: TaskiqState) -> None:
     """Stage 1 / Stage 2 の AI アダプターを worker 起動時に構築する。"""
     state.extractor = GeminiExtractor()
     state.assessor = DeepSeekAssessor()
+    state.provider_rate_limit_gate = ProviderRateLimitGate()
     logger.info(
         "analysis_adapters_wired",
         extractor=type(state.extractor).__name__,
-        extractor_model=state.extractor.MODEL,
+        extractor_model=state.extractor.model_name,
         assessor=type(state.assessor).__name__,
         assessor_model=state.assessor.MODEL,
     )

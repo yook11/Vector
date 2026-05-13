@@ -1,23 +1,14 @@
-"""``GeminiExtractionPrompt`` の振る舞いテスト。
+"""``GeminiExtractionPrompt`` の振る舞いテスト (render 専用)。
 
-検証する不変条件 (PR3-prep / ADR §prompt_version の規律 直接対応):
-
-- ``render`` が ``sanitize_for_untrusted_block`` を呼んでいる
-  (sanitize の仕様再現テストではなく「呼ばれている」ことの確認)
-- ``render`` が ``CONTENT_MAX_LENGTH`` で content を切り詰める
-- ``VERSION`` が 8 文字 hex
-- ``GEN_CONFIG`` が ``MappingProxyType`` で immutable (書換は TypeError)
+PR4 で Prompt と Spec を分離した結果、本ファイルは ``render`` の sanitize /
+truncate / 境界マーカ neutralize に責務を絞る。call config 系 ClassVar
+(MODEL / GEN_CONFIG / RESPONSE_SCHEMA / SYSTEM_INSTRUCTION / VERSION) の
+振る舞いは ``test_gemini_spec.py`` に集約された。
 """
 
 from __future__ import annotations
 
-import re
-
-import pytest
-
 from app.analysis.extraction.ai.gemini_prompt import GeminiExtractionPrompt
-
-_HEX8 = re.compile(r"^[0-9a-f]{8}$")
 
 
 def test_render_neutralizes_boundary_close_tag_in_content() -> None:
@@ -52,38 +43,6 @@ def test_render_truncates_content_to_max_length() -> None:
     assert rendered.count(marker) == GeminiExtractionPrompt.CONTENT_MAX_LENGTH
 
 
-def test_version_is_8_char_hex() -> None:
-    """``VERSION`` は SHA-256 prefix 8 文字 (16 進数)。"""
-    assert _HEX8.fullmatch(GeminiExtractionPrompt.VERSION) is not None
-
-
-def test_gen_config_is_immutable() -> None:
-    """``GEN_CONFIG`` は ``MappingProxyType`` で書換は TypeError。"""
-    with pytest.raises(TypeError):
-        GeminiExtractionPrompt.GEN_CONFIG["temperature"] = 0.5  # type: ignore[index]
-
-
-def test_response_schema_is_pydantic_gemini_extraction_response() -> None:
-    """Gemini 経路は ``GeminiExtractionResponse`` Pydantic class を
-    ``response_schema`` に渡す前提 (PR1-a で ``ExtractionResult`` から分離、
-    ドメイン union alias と SDK 契約型を意味分離した)。"""
-    from app.analysis.extraction.ai.schema import GeminiExtractionResponse
-
-    assert GeminiExtractionPrompt.RESPONSE_SCHEMA is GeminiExtractionResponse
-
-
-def test_version_locked_post_pr2() -> None:
-    """PR2 で schema 側 ``Field(description=...)`` を導入し、prompt 本文の
-    field 列挙を撤去したため、pre-PR2 hash (``22dc98ab``) からは **意図的に**
-    rotate している。
-
-    今後の silent 変動 (description 文言の typo 修正、prompt 改行差分等) を
-    検知するための golden 固定。故意の prompt / schema 変更時はこの値を更新し、
-    commit メッセージで audit 連続性 cutover を明示すること。
-    """
-    assert GeminiExtractionPrompt.VERSION == "9ff9f0cf"
-
-
 def test_prompt_template_does_not_enumerate_response_fields() -> None:
     """schema 側に移った field 列挙が prompt 本文に二重で残っていないこと。
 
@@ -95,22 +54,3 @@ def test_prompt_template_does_not_enumerate_response_fields() -> None:
     assert "3. summary_ja" not in template
     assert "4. entities" not in template
     assert "以下の 4 項目を抽出" not in template
-
-
-def test_response_schema_top_level_fields_have_descriptions() -> None:
-    """``GeminiExtractionResponse`` の 4 top-level field が description を持つ
-    (Gemini に field semantics を伝える SSoT が schema 側にあること)。
-    """
-    schema = GeminiExtractionPrompt.RESPONSE_SCHEMA.model_json_schema()
-    props = schema["properties"]
-    for name in ("relevance", "title_ja", "summary_ja", "entities"):
-        assert props[name].get("description"), (
-            f"{name} should have a description in response_schema"
-        )
-
-
-def test_model_matches_extractor_class() -> None:
-    """``GeminiExtractor.MODEL`` は Prompt 側を一元参照する。"""
-    from app.analysis.extraction.ai.gemini import GeminiExtractor
-
-    assert GeminiExtractor.MODEL == GeminiExtractionPrompt.MODEL
