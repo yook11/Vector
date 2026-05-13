@@ -1,8 +1,9 @@
 """extraction リポジトリ (``ArticleRepository``) の統合テスト。
 
 PR-E 仕様: ``source_url`` (canonicalize 済み) を SSoT とする経路を検証する。
-``save`` / ``find_by_source_url`` / ``exists_by_source_url`` と並行レース
-対応 (``ON CONFLICT DO NOTHING``) を検証する。
+``save`` / ``find_by_source_url`` と並行レース対応 (``ON CONFLICT DO NOTHING``)
+を検証する。``exists_by_source_url`` は ingestion BC に移管済
+(``tests/collection/ingestion/test_article_seen_repository.py``)。
 """
 
 from __future__ import annotations
@@ -158,36 +159,6 @@ async def test_find_by_source_url_returns_none_for_missing(
 ) -> None:
     repo = ArticleRepository(db_session)
     assert await repo.find_by_source_url(SafeUrl("https://example.com/never")) is None
-
-
-# ---------------------------------------------------------------------------
-# exists_by_source_url (Pattern H pre-check)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_exists_by_source_url_returns_true_when_present(
-    db_session: AsyncSession, sample_source: NewsSource
-) -> None:
-    canonical = SafeUrl("https://example.com/article/exists-true")
-    repo = ArticleRepository(db_session)
-    await repo.save(_draft(), source_id=sample_source.id, source_url=canonical)
-    await db_session.commit()
-
-    assert await repo.exists_by_source_url(canonical) is True
-
-
-@pytest.mark.asyncio
-async def test_exists_by_source_url_returns_false_when_absent(
-    db_session: AsyncSession,
-) -> None:
-    repo = ArticleRepository(db_session)
-    assert (
-        await repo.exists_by_source_url(
-            SafeUrl("https://example.com/article/exists-false")
-        )
-        is False
-    )
 
 
 # ---------------------------------------------------------------------------

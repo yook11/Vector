@@ -11,7 +11,7 @@ Fetcher の ``AsyncIterator[FetchOutcome]`` を回し ``match`` で分岐する:
   (``None`` → ``known_url`` skip)。caller (``ingest_source`` task) は
   返却された ``article_id`` を ``ExtractionTrigger`` に詰めて
   ``extract_content.kiq`` に chain する。
-- ``FetchedEntry(item=IncompleteArticle)`` → ``article_repo.exists_by_source_url``
+- ``FetchedEntry(item=IncompleteArticle)`` → ``seen_repo.exists_by_source_url``
   pre-check で feed 再露出を弾き、``pending_html_articles.url`` で投入
   (Pattern H)。``url`` は ``CanonicalArticleUrl`` 型で canonical 保証済。
   下流は cron poller (``dispatch_html_fetch_jobs``) が DB 駆動で拾うため、
@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
 from app.collection.extraction.domain.article import ArticleDraft
 from app.collection.extraction.repository import ArticleRepository
+from app.collection.ingestion.article_seen_repository import ArticleSeenRepository
 from app.collection.ingestion.domain.fetched_article import (
     Failed,
     FetchedEntry,
@@ -73,6 +74,7 @@ class IngestionService:
         async with self._session_factory() as session:
             fetcher = self._fetcher_factory()
             article_repo = ArticleRepository(session)
+            seen_repo = ArticleSeenRepository(session)
             pending_repo = PendingHtmlArticleRepository(session)
 
             persisted_ids: list[int] = []
@@ -108,9 +110,7 @@ class IngestionService:
                             )
                             # pre-check: feed 再露出時に既知 URL の HTML fetch を
                             # 反復しないための実用的 idempotency (ロックではない)
-                            if await article_repo.exists_by_source_url(
-                                pending.source_url
-                            ):
+                            if await seen_repo.exists_by_source_url(pending.source_url):
                                 skipped_codes["known_url"] += 1
                                 continue
                             pending_id = await pending_repo.create(

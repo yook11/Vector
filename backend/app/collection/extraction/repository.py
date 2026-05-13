@@ -8,8 +8,6 @@
   構造的に解消し、既に他ワーカーが書き込み済みなら ``None`` を返す。
 - ``ArticleRepository.find_by_source_url``: 並行レース敗北時の
   読み戻し用に Article Entity を取得する。
-- ``ArticleRepository.exists_by_source_url``: Pattern H ingestion の
-  pre-check に使う軽量存在確認 (feed 再露出時の HTML fetch を回避)。
 """
 
 from __future__ import annotations
@@ -114,14 +112,3 @@ class ArticleRepository:
         stmt = select(ArticleORM).where(ArticleORM.source_url == source_url)
         orm = (await self._session.execute(stmt)).scalar_one_or_none()
         return _article_from_orm(orm) if orm is not None else None
-
-    async def exists_by_source_url(self, source_url: CanonicalArticleUrl) -> bool:
-        """``source_url`` を持つ ``articles`` 行が既に存在するかを軽量確認する。
-
-        Pattern H ingestion の pre-check 用 (feed 再露出時に既知 URL の
-        pending 化を回避し、HTML fetch の反復コストを抑える)。これはロックでは
-        なく実用上の idempotency で、同 tick race は ``save`` 側の ON CONFLICT
-        が吸収する。
-        """
-        stmt = select(ArticleORM.id).where(ArticleORM.source_url == source_url).limit(1)
-        return (await self._session.execute(stmt)).scalar_one_or_none() is not None
