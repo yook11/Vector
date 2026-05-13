@@ -11,7 +11,6 @@ from sqlmodel import SQLModel
 
 from app.analysis.domain.value_objects.entity import EntityName
 from app.analysis.domain.value_objects.topic import TopicName
-from app.collection.domain.value_objects.source import SourceName
 from app.domain.category import CategoryName, CategorySlug
 from app.models.types import (
     CategoryNameType,
@@ -22,6 +21,7 @@ from app.models.types import (
     TopicNameType,
 )
 from app.shared.value_objects.safe_url import SafeUrl
+from app.shared.value_objects.source_name import SourceName
 
 
 class Base(DeclarativeBase):

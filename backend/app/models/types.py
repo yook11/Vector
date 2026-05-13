@@ -14,10 +14,10 @@ from sqlalchemy.types import TypeDecorator
 
 from app.analysis.domain.value_objects.entity import EntityName
 from app.analysis.domain.value_objects.topic import TopicName
-from app.collection.domain.value_objects.source import SourceName
 from app.domain.category import CategoryName, CategorySlug
 from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 from app.shared.value_objects.safe_url import SafeUrl
+from app.shared.value_objects.source_name import SourceName
 
 
 class CategorySlugType(TypeDecorator[CategorySlug]):
