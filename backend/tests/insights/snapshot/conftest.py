@@ -37,7 +37,6 @@ def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAn
     Args (キーワード引数):
         category_id: ``InScopeAssessment.category_id`` に設定する FK。
         analyzed_at: ``analyzed_at`` を明示指定 (server_default を上書き)。
-        topic: ``InScopeAssessment.topic`` (TopicName VO)。デフォルト ``"ai agents"``。
         mentions: ``[(surface, type), ...]`` の列。``events`` JSONB に
             1 つの event としてまとめて焼き付ける (同一 assessment 内で同じ
             mention が複数 event に現れても COUNT(DISTINCT a.id) で 1 件と
@@ -55,7 +54,6 @@ def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAn
         *,
         category_id: int,
         analyzed_at: datetime,
-        topic: str = "ai agents",
         mentions: Sequence[tuple[str, str]] = (),
         events_null: bool = False,
     ) -> InScopeAssessment:
@@ -99,7 +97,6 @@ def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAn
             translated_title=f"seed-{n}",
             summary="summary body",
             investor_take="investor take body",
-            topic=topic,
             category_id=category_id,
             analyzed_at=analyzed_at,
             events=events,

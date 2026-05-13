@@ -72,8 +72,6 @@ class TestListCategories:
         assert "id" not in item
         assert "slug" in item
         assert "name" in item
-        # Topic 降格後 (2026-04) は CategoryDetail.topics は廃止された。
-        assert "topics" not in item
 
     async def test_recent_count_includes_recent_analysis(
         self,
@@ -104,7 +102,6 @@ class TestListCategories:
             translated_title="TF記事",
             summary="要約",
             investor_take="理由",
-            topic="tensorflow",
             category_id=sample_categories[0].id,
         )
         db_session.add(analysis)
@@ -144,7 +141,6 @@ class TestListCategories:
             translated_title="TF記事",
             summary="要約",
             investor_take="理由",
-            topic="tensorflow",
             category_id=sample_categories[0].id,
             analyzed_at=datetime.now(UTC) - timedelta(hours=25),
         )

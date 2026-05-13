@@ -117,10 +117,10 @@ class AssessmentResponseInvalidError(AssessmentRecoverableError):
     """AI 応答が Stage 4 schema に合致しない (Layer 2-B、Stage 4 工程由来)。
 
     具体的には assessor 内部の ``parse_assessment`` で:
-    - 必須 key (``category`` / ``topic`` / ``investor_take``) 欠落
+    - 必須 key (``category`` / ``investor_take`` / ``events``) 欠落
     - 値が ``str`` 型でない (``isinstance`` 検証で reject)
     - ``category`` が ``ValidCategory`` enum 外の値
-    - Pydantic ``ValidationError`` (``min_length`` 違反 / ``TopicName`` 制約違反)
+    - Pydantic ``ValidationError`` (``min_length`` 違反等)
 
     AI モデルの揺らぎ (構造化出力でも稀に schema を外す) で発生、cron 救済で
     現実的に回復する見込み。``provider_error=None`` で marker を継承

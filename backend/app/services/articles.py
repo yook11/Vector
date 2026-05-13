@@ -23,7 +23,6 @@ def build_brief(analysis: InScopeAssessment) -> ArticleBrief:
             attribution_label=a.news_source.attribution_label,
         ),
         published_at=a.published_at,
-        topic=str(analysis.topic),
     )
 
 
@@ -40,7 +39,6 @@ def build_detail(analysis: InScopeAssessment) -> ArticleDetail:
             attribution_label=a.news_source.attribution_label,
         ),
         published_at=a.published_at,
-        topic=str(analysis.topic),
         original=OriginalArticleEmbed(
             title=a.original_title,
             url=a.original_url,

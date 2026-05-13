@@ -26,7 +26,6 @@ from app.analysis.assessment.domain.result import (
     ValidCategory,
 )
 from app.analysis.assessment.errors import AssessmentResponseInvalidError
-from app.analysis.domain.value_objects.topic import TopicName
 
 
 def parse_assessment(payload: dict[str, Any]) -> AssessmentResult:
@@ -37,8 +36,8 @@ def parse_assessment(payload: dict[str, Any]) -> AssessmentResult:
 
     Args:
         payload: AI SDK text response を ``json.loads`` した dict。
-            必須 key: ``category`` / ``topic`` / ``investor_take`` / ``events``。
-            ``OutOfScope`` 経路でも 4 key すべて存在 + 型一致である必要がある
+            必須 key: ``category`` / ``investor_take`` / ``events``。
+            ``OutOfScope`` 経路でも 3 key すべて存在 + 型一致である必要がある
             (AI には常に flat schema を要求しているため、key 欠落は AI 側の
             schema 違反 = 境界で可視化すべき故障)。
 
@@ -46,26 +45,21 @@ def parse_assessment(payload: dict[str, Any]) -> AssessmentResult:
         AssessmentResponseInvalidError: schema 違反 (key 欠落 / 型不一致 /
             ``ValidCategory`` enum 外値 / Pydantic ``ValidationError``)。
 
-    Strict 化方針 (PR2 で確定 + PR1 event-extraction で events 必須追加):
-        AI 応答 dict の 3 文字列値 (``category`` / ``topic`` / ``investor_take``)
-        を ``isinstance(..., str)`` で、``events`` を ``isinstance(..., list)`` で
+    Strict 化方針:
+        AI 応答 dict の 2 文字列値 (``category`` / ``investor_take``) を
+        ``isinstance(..., str)`` で、``events`` を ``isinstance(..., list)`` で
         先頭検証する。``str(...)`` 暗黙 coerce は使わない (silent 通過を許さない)。
         ``events`` は InScope / OutOfScope どちらの経路でも domain に保持する
-        (out-of-scope 記事の events も検証用途で残す、両 path 対称)。``topic`` は
-        ``OutOfScope`` 経路では VO 正規化を適用せず raw str として通す
-        (``OutOfScope`` には ``topic`` フィールド自体が無く domain には残らない)。
+        (out-of-scope 記事の events も検証用途で残す、両 path 対称)。
     """
     try:
         category_raw = payload["category"]
-        topic_raw = payload["topic"]
         investor_take_raw = payload["investor_take"]
         events_raw = payload["events"]
         if not isinstance(category_raw, str):
             raise ValueError(
                 f"'category' must be str, got {type(category_raw).__name__}"
             )
-        if not isinstance(topic_raw, str):
-            raise ValueError(f"'topic' must be str, got {type(topic_raw).__name__}")
         if not isinstance(investor_take_raw, str):
             raise ValueError(
                 f"'investor_take' must be str, got {type(investor_take_raw).__name__}"
@@ -82,7 +76,6 @@ def parse_assessment(payload: dict[str, Any]) -> AssessmentResult:
             )
         return InScope(
             category=InScopeCategory(category.value),
-            topic=TopicName(topic_raw),  # VO 正規化は InScope のみに適用
             investor_take=investor_take_raw,
             events=events,
         )

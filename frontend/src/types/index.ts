@@ -31,7 +31,6 @@ import type {
   NewEntityOut,
   SearchArticlesData,
   StoryOut,
-  TopicTrendOut,
 } from "@/types/types.gen";
 
 // ---------------------------------------------------------------------------
@@ -64,7 +63,6 @@ export type BriefingCategory = CategoryOut;
 export type { BriefingListLatest };
 export type WeeklyCategoryTrends = CategoryTrendsOut;
 export type WeeklyEntityTrend = EntityTrendOut;
-export type WeeklyTopicTrend = TopicTrendOut;
 export type WeeklyNewEntity = NewEntityOut;
 
 // ---------------------------------------------------------------------------

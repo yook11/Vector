@@ -69,9 +69,8 @@ class _StubAssessor(BaseAssessor):
 def _make_call() -> AssessmentCall[OutOfScope]:
     return AssessmentCall(
         result=OutOfScope(investor_take="x"),
-        raw_response='{"category": "out_of_scope", "topic": "x", "investor_take": "x"}',
+        raw_response='{"category": "out_of_scope", "investor_take": "x"}',
         raw_category="out_of_scope",
-        raw_topic="x",
         prompt_version="abc12345",
         model_name="test-model",
     )

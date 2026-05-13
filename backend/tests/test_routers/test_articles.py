@@ -38,7 +38,6 @@ async def _create_analysis(
     session: AsyncSession,
     article: Article,
     category_id: int,
-    topic: str = "ai agents",
     translated_title: str = "テスト記事",
     embedding: list[float] | None = None,
 ) -> InScopeAssessment:
@@ -56,7 +55,6 @@ async def _create_analysis(
         summary="テストの要約",
         investor_take="Test investor_take",
         embedding=embedding,
-        topic=topic,
         category_id=category_id,
     )
     session.add(analysis)
@@ -276,27 +274,6 @@ class TestListArticles:
         detail = resp.json()["detail"]
         assert "CategorySlug" not in detail[0]["msg"]
 
-    async def test_brief_response_includes_topic_phrase(
-        self,
-        client: AsyncClient,
-        db_session: AsyncSession,
-        sample_source: NewsSource,
-        sample_categories: list[Category],
-    ) -> None:
-        """ArticleBrief のレスポンスに topic が英語フレーズ string として含まれる。"""
-        article = await _create_article(db_session, sample_source)
-        await _create_analysis(
-            db_session,
-            article,
-            category_id=sample_categories[1].id,
-            topic="quantum computing",
-        )
-
-        resp = await client.get("/api/v1/articles")
-        data = resp.json()
-        item = data["items"][0]
-        assert item["topic"] == "quantum computing"
-
     async def test_filter_by_category(
         self,
         client: AsyncClient,
@@ -312,7 +289,6 @@ class TestListArticles:
             db_session,
             target,
             category_id=sample_categories[0].id,
-            topic="deep learning",
             translated_title="AI 記事",
         )
         other = await _create_article(
@@ -322,7 +298,6 @@ class TestListArticles:
             db_session,
             other,
             category_id=sample_categories[1].id,
-            topic="quantum computing",
             translated_title="量子記事",
         )
 
@@ -385,26 +360,6 @@ class TestGetArticle:
         assert data["investorTake"] == "Test investor_take"
         assert data["original"]["title"] == "Test Article"
         assert data["original"]["url"] == "https://example.com/article"
-
-    async def test_get_with_topic(
-        self,
-        client: AsyncClient,
-        db_session: AsyncSession,
-        sample_categories: list[Category],
-        sample_source: NewsSource,
-    ) -> None:
-        """記事詳細レスポンスに topic フレーズが含まれる。"""
-        article = await _create_article(db_session, sample_source)
-        analysis = await _create_analysis(
-            db_session,
-            article,
-            category_id=sample_categories[1].id,
-            topic="quantum computing",
-        )
-
-        resp = await client.get(f"/api/v1/articles/{analysis.id}")
-        data = resp.json()
-        assert data["topic"] == "quantum computing"
 
 
 # 次元はモデルの Vector(768) と一致させる必要がある

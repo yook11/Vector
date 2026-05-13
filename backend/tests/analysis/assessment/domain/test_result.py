@@ -20,7 +20,6 @@ from app.analysis.assessment.domain.result import (
     OutOfScope,
     ValidCategory,
 )
-from app.analysis.domain.value_objects.topic import TopicName
 
 
 class TestInScopeCategoryValueSet:
@@ -75,7 +74,6 @@ class TestInScopeRejectsOutOfScope:
             InScope.model_validate(
                 {
                     "category": "out_of_scope",
-                    "topic": "ai agents",
                     "investor_take": "x",
                 }
             )
@@ -83,7 +81,6 @@ class TestInScopeRejectsOutOfScope:
     def test_construction_with_in_scope_category_succeeds(self) -> None:
         in_scope = InScope(
             category=InScopeCategory.AI,
-            topic=TopicName(root="ai"),
             investor_take="x",
         )
         assert in_scope.category is InScopeCategory.AI
@@ -96,7 +93,6 @@ class TestAssessmentResultAlias:
         # AssessmentResult は type alias、isinstance 経由で確認
         in_scope = InScope(
             category=InScopeCategory.AI,
-            topic=TopicName(root="ai"),
             investor_take="x",
         )
         out_of_scope = OutOfScope(investor_take="y")
@@ -110,7 +106,6 @@ class TestInScopeInvestorTakeSanitize:
     def test_strips_html_tags(self) -> None:
         m = InScope(
             category=InScopeCategory.AI,
-            topic=TopicName(root="ai"),
             investor_take="<b>note</b>",
         )
         assert m.investor_take == "note"
@@ -118,7 +113,6 @@ class TestInScopeInvestorTakeSanitize:
     def test_strips_control_characters(self) -> None:
         m = InScope(
             category=InScopeCategory.AI,
-            topic=TopicName(root="ai"),
             investor_take="note\x00with\x07control",
         )
         assert "\x00" not in m.investor_take
@@ -127,7 +121,6 @@ class TestInScopeInvestorTakeSanitize:
     def test_nfkc_normalizes_fullwidth(self) -> None:
         m = InScope(
             category=InScopeCategory.AI,
-            topic=TopicName(root="ai"),
             investor_take="ABC123",  # fullwidth
         )
         assert m.investor_take == "ABC123"
@@ -136,7 +129,6 @@ class TestInScopeInvestorTakeSanitize:
         with pytest.raises(ValidationError):
             InScope(
                 category=InScopeCategory.AI,
-                topic=TopicName(root="ai"),
                 investor_take="<i></i>",
             )
 
@@ -144,14 +136,12 @@ class TestInScopeInvestorTakeSanitize:
         with pytest.raises(ValidationError):
             InScope(
                 category=InScopeCategory.AI,
-                topic=TopicName(root="ai"),
                 investor_take="a" * 2001,
             )
 
     def test_accepts_max_length_boundary(self) -> None:
         m = InScope(
             category=InScopeCategory.AI,
-            topic=TopicName(root="ai"),
             investor_take="a" * 2000,
         )
         assert len(m.investor_take) == 2000
@@ -281,13 +271,12 @@ class TestEventSanitize:
 
 
 class TestInScopeEvents:
-    """InScope.events の追加フィールド (PR 1 並列運用中は空配列許容)。"""
+    """InScope.events の追加フィールド (AI が events を返さない場合は空配列許容)。"""
 
     def test_events_defaults_to_empty_list(self) -> None:
-        # PR 1 並列運用中は既存 fixture / AI が events を返さないケースを許容
+        # AI が events を返さないケースを許容
         in_scope = InScope(
             category=InScopeCategory.AI,
-            topic=TopicName(root="ai"),
             investor_take="x",
         )
         assert in_scope.events == []
@@ -295,7 +284,6 @@ class TestInScopeEvents:
     def test_accepts_events_list(self) -> None:
         in_scope = InScope(
             category=InScopeCategory.AI,
-            topic=TopicName(root="ai"),
             investor_take="x",
             events=[
                 Event(
@@ -312,7 +300,6 @@ class TestInScopeEvents:
         with pytest.raises(ValidationError):
             InScope(
                 category=InScopeCategory.AI,
-                topic=TopicName(root="ai"),
                 investor_take="x",
                 events=too_many,
             )

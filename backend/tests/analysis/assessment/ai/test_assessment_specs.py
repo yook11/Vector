@@ -6,10 +6,9 @@ Prompt と Spec を分離した結果として ``provider`` / ``model`` / ``vers
 + DeepSeek 固有 ``tool_name`` / ``base_url`` が module singleton として SSoT に
 置かれていることを検証する。
 
-``version`` は ``compute_call_signature`` で算出される 8 文字 hash。
-本 PR (配置換え) では入力 5 要素が変わらないため golden Gemini ``"e1a5fdb8"`` /
-DeepSeek ``"cdde3632"`` を維持する。意図的な prompt / schema 変更時のみこの値を
-更新し、commit メッセージで audit 連続性 cutover を明示する。
+``version`` は ``compute_call_signature`` で算出される 8 文字 hash。意図的な
+prompt / schema 変更時のみこの値を更新し、commit メッセージで audit 連続性
+cutover を明示する。
 """
 
 from __future__ import annotations
@@ -53,7 +52,7 @@ def test_gemini_version_locked() -> None:
     のいずれかが変わったらこの値も変わる。意図的変更でない場合は配置換え以外の
     差分が混入したサイン。
     """
-    assert GEMINI_ASSESSMENT_SPEC.version == "590499b0"
+    assert GEMINI_ASSESSMENT_SPEC.version == "2ccfb2bd"
 
 
 def test_gemini_response_schema_equals_gemini_schema() -> None:
@@ -106,7 +105,7 @@ def test_deepseek_model_is_v4_flash() -> None:
 
 def test_deepseek_version_locked() -> None:
     """配置換えで version 値が変わらない golden 固定。"""
-    assert DEEPSEEK_ASSESSMENT_SPEC.version == "9c5bf022"
+    assert DEEPSEEK_ASSESSMENT_SPEC.version == "f8add15c"
 
 
 def test_deepseek_response_schema_equals_tool_schema() -> None:
@@ -184,3 +183,11 @@ def test_specs_versions_are_hex8() -> None:
     """8 文字 hex の format を将来 rotation 時の guard として固定する。"""
     assert _HEX8.fullmatch(GEMINI_ASSESSMENT_SPEC.version) is not None
     assert _HEX8.fullmatch(DEEPSEEK_ASSESSMENT_SPEC.version) is not None
+
+
+def test_response_schemas_have_no_topic_property() -> None:
+    """topic は event-extraction 移行で完全削除済。Stage 4 schema に存在しない。"""
+    gemini = dict(GEMINI_ASSESSMENT_SPEC.response_schema).get("properties", {})
+    deepseek = dict(DEEPSEEK_ASSESSMENT_SPEC.response_schema).get("properties", {})
+    assert "topic" not in gemini
+    assert "topic" not in deepseek

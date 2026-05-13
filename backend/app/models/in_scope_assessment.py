@@ -1,10 +1,7 @@
 """Stage 4 (Assessment) で in-scope と判定された extraction の評価結果 (ORM)。
 
 translated_title / summary は extractions から複製保持し、assessment 単独で
-「ユーザーに見せる分析結果」として自己完結する。
-
-Topic は 2026-04 の決定で表示専用属性に降格し、独立テーブルから当行の
-自由記述カラム（TopicName VO 列）に移動した。Category は第一級フィルタ軸
+「ユーザーに見せる分析結果」として自己完結する。Category は第一級フィルタ軸
 として直接 FK を持つ。
 """
 
@@ -27,7 +24,6 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.analysis.domain.value_objects.topic import TopicName
 from app.models.base import Base
 
 if TYPE_CHECKING:
@@ -56,15 +52,6 @@ class InScopeAssessment(Base):
             "investor_take != ''",
             name="ck_in_scope_assessments_investor_take_not_empty",
         ),
-        CheckConstraint(
-            "topic <> ''",
-            name="ck_in_scope_assessments_topic_not_empty",
-        ),
-        # TopicName VO の正規表現と揃える DB 側多層防御。
-        CheckConstraint(
-            r"topic ~ '^[a-z0-9]+( [a-z0-9]+){0,2}$'",
-            name="ck_in_scope_assessments_topic_format",
-        ),
         # サイドバーの直近 24 時間集計クエリ向けの複合インデックス。
         # 単独 ix_in_scope_assessments_category_id は作らない（複合の左端でカバー）。
         Index(
@@ -85,16 +72,13 @@ class InScopeAssessment(Base):
         DateTime(timezone=True), server_default=func.now()
     )
     embedding: Mapped[list[float] | None] = mapped_column(HALFVEC(768))
-    # 表示専用の自由記述ラベル。TopicNameType により VO ↔ str を双方向強制。
-    topic: Mapped[TopicName] = mapped_column()
     # 第一級フィルタ軸。リレーションは YAGNI で持たない（必要時に
     # selectinload を強制する形で別途追加する）。
     category_id: Mapped[int] = mapped_column(
         ForeignKey("categories.id", ondelete="RESTRICT"),
     )
-    # event-extraction PR 1 並列出力。NULL = PR 1 デプロイ前の旧行、
-    # [] = AI が events を返さなかった新行、values = AI 抽出済み新行。
-    # CHECK / index は PR 3 で集計要件が固まってから追加検討する。
+    # 記事内で起きた event と登場固有名のペア配列。NULL = 旧行、[] = AI が
+    # events を返さなかった行、values = AI 抽出済み行。
     events: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
 
     # リレーション

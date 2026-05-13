@@ -32,7 +32,6 @@ describe("getWeeklyTrendsViewModel", () => {
           categoryId: 1,
           categoryName: "AI",
           trendingEntities: [],
-          trendingTopics: [],
           newEntities: [],
         },
       ],

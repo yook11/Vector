@@ -78,7 +78,6 @@ class TestDeepSeekCallApiSuccess:
         args = json.dumps(
             {
                 "category": "ai",
-                "topic": "ai agents",
                 "investor_take": "Significant traction.",
                 "events": [],
             }
@@ -90,10 +89,8 @@ class TestDeepSeekCallApiSuccess:
         assert isinstance(call, AssessmentCall)
         assert isinstance(call.result, InScope)
         assert call.result.category == InScopeCategory.AI
-        assert call.result.topic.root == "ai agents"
         assert call.raw_response == args
         assert call.raw_category == "ai"
-        assert call.raw_topic == "ai agents"
         assert call.prompt_version == DEEPSEEK_ASSESSMENT_SPEC.version
         assert call.model_name == DEEPSEEK_ASSESSMENT_SPEC.model
 
@@ -103,7 +100,6 @@ class TestDeepSeekCallApiSuccess:
         args = json.dumps(
             {
                 "category": "out_of_scope",
-                "topic": "ignored",
                 "investor_take": "Not relevant.",
                 "events": [],
             }
@@ -114,7 +110,6 @@ class TestDeepSeekCallApiSuccess:
 
         assert isinstance(call.result, OutOfScope)
         assert call.raw_category == "out_of_scope"
-        assert call.raw_topic == "ignored"
         assert call.model_name == DEEPSEEK_ASSESSMENT_SPEC.model
 
 
@@ -189,7 +184,7 @@ class TestDeepSeekInvalidArguments:
     async def test_missing_key_arguments_raises_response_invalid(self) -> None:
         """parse_assessment の key 欠落で AssessmentResponseInvalidError raise。"""
         assessor = DeepSeekAssessor()
-        args = json.dumps({"category": "ai"})  # topic / investor_take 欠落
+        args = json.dumps({"category": "ai"})  # investor_take 欠落
         _patch_assessor_call(assessor, _stub_response(arguments=args))
 
         with pytest.raises(AssessmentResponseInvalidError):

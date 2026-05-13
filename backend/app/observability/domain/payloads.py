@@ -123,8 +123,7 @@ class ExtractionPayload(BasePipelineEventPayload):
     # 出力 (AI raw、Vector 内のどこにも残らない極めて貴重な情報)
     ai_raw_response: str | None = None  # S: 2KB 上限
 
-    # A 級: AI 応答の生メタデータ (詰め替え前生値、Stage 4 raw_category /
-    # raw_topic と対称)
+    # A 級: AI 応答の生メタデータ (詰め替え前生値、Stage 4 raw_category と対称)
     raw_relevance: str | None = None  # signal / noise / それ以外の AI 生値
 
 
@@ -147,9 +146,9 @@ class AssessmentPayload(BasePipelineEventPayload):
 
     状態識別:
 
-    - in-scope 成功: ``category_slug`` / ``topic`` / ``investor_take`` が非 None
+    - in-scope 成功: ``category_slug`` / ``investor_take`` が非 None
     - out-of-scope 成功: ``investor_take`` のみ非 None
-      (in-scope 系 ``category_slug`` / ``topic`` は None)
+      (in-scope 系 ``category_slug`` は None)
     - 失敗: Base の ``error_message`` / ``error_chain`` (+ 該当時 ``ai_raw_response``)
     """
 
@@ -169,11 +168,9 @@ class AssessmentPayload(BasePipelineEventPayload):
 
     # A 級: AI 応答の生メタデータ (validation 前、failure forensics 用)
     raw_category: str | None = None  # AI が返した未検証 category slug
-    raw_topic: str | None = None  # AI が返した topic 文字列
 
     # A 級: 成功時の AI 応答 (検証通過後の値、失敗時は None)
     category_slug: str | None = None  # category catalog 確認後の slug
-    topic: str | None = None  # 永続化された TopicName (str 化)
     investor_take: str | None = None  # in-scope / out-of-scope の AI コメント
 
 

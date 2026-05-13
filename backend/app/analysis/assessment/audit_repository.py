@@ -95,8 +95,8 @@ class AssessmentAuditRepository:
         Args:
             call: ``AssessmentCall[InScope]`` envelope。``call.result``
                 (= ``InScope``) から ``category.value`` (catalog 確認後 slug) /
-                ``topic`` / ``investor_take`` を、``call.model_name`` /
-                ``call.prompt_version`` / ``call.raw_*`` を audit 用に直接読む。
+                ``investor_take`` を、``call.model_name`` / ``call.prompt_version``
+                / ``call.raw_*`` を audit 用に直接読む。
                 ``raw_category`` (envelope 由来、validation 前生値) と
                 ``category_slug`` (``result.category.value`` 由来) は意味分離する。
         """
@@ -110,9 +110,7 @@ class AssessmentAuditRepository:
             input_text_length=len(ready.summary),
             ai_raw_response=_limited_str(call.raw_response, _AI_RAW_RESPONSE_LIMIT),
             raw_category=call.raw_category,
-            raw_topic=call.raw_topic,
             category_slug=in_scope.category.value,
-            topic=str(in_scope.topic),
             investor_take=in_scope.investor_take,
         )
         await self._events.append(
@@ -136,8 +134,8 @@ class AssessmentAuditRepository:
         PR #447 対称化以後、``out_of_scope_assessments`` テーブルも
         ``translated_title`` / ``summary`` / ``investor_take`` を保持する。
         audit payload もそれに追従し ``investor_take`` を焼く (本体 DB と
-        audit の情報量を一致させる)。``category_slug`` / ``topic`` は in-scope
-        固有のため out-of-scope では None。
+        audit の情報量を一致させる)。``category_slug`` は in-scope 固有のため
+        out-of-scope では None。
 
         audit は witness — 事後に採番された ``assessment_id`` は事実ではない
         (`specs/backlog/audit-payload-fact-purification.md`)。``extraction_id``
@@ -158,9 +156,8 @@ class AssessmentAuditRepository:
             input_text_length=len(ready.summary),
             ai_raw_response=_limited_str(call.raw_response, _AI_RAW_RESPONSE_LIMIT),
             raw_category=call.raw_category,
-            raw_topic=call.raw_topic,
             investor_take=out_of_scope.investor_take,
-            # category_slug / topic は in-scope 固有のため None
+            # category_slug は in-scope 固有のため None
         )
         await self._events.append(
             stage=Stage.ASSESSMENT,

@@ -43,7 +43,6 @@ from app.analysis.assessment.errors import (
     AssessmentTerminalSkipError,
 )
 from app.analysis.assessment.service import AssessmentService
-from app.analysis.domain.value_objects.topic import TopicName
 from app.models.article import Article
 from app.models.article_extraction import ArticleExtraction
 from app.models.category import Category
@@ -111,12 +110,10 @@ def _in_scope_call(
     return AssessmentCall(
         result=InScope(
             category=category,
-            topic=TopicName("llm benchmark"),
             investor_take="bullish",
         ),
         raw_response='{"category":"ai"}',
         raw_category=category.value,
-        raw_topic="LLM benchmark",
         prompt_version="testver1",
         model_name=_AI_MODEL,
     )
@@ -127,7 +124,6 @@ def _out_of_scope_call() -> AssessmentCall[OutOfScope]:
         result=OutOfScope(investor_take="not relevant"),
         raw_response='{"category":"out_of_scope"}',
         raw_category="out_of_scope",
-        raw_topic="celebrity gossip",
         prompt_version="testver1",
         model_name=_AI_MODEL,
     )
@@ -194,7 +190,6 @@ async def test_in_scope_success_records_audit(
     assert ev.code == "assessed_in_scope"
     payload = ev.payload
     assert payload["extraction_id"] == extraction.id
-    assert payload["topic"] == "llm benchmark"
     assert payload["investor_take"] == "bullish"
     assert payload["ai_model"] == _AI_MODEL
     assert payload["category_slug"] == "ai"
@@ -227,9 +222,8 @@ async def test_out_of_scope_success_records_audit(
     assert payload["extraction_id"] == extraction.id
     # PR #447 対称化追従: investor_take は本体 DB と一致 (非 None)
     assert payload.get("investor_take") == "not relevant"
-    # in-scope 固有 field のみ None (category_slug / topic)
+    # in-scope 固有 field のみ None (category_slug)
     assert payload.get("category_slug") is None
-    assert payload.get("topic") is None
     # 本体 DB (out_of_scope_assessments) に Stage 3 由来 snapshot が永続化されている
     persisted = (
         await db_session.execute(
@@ -266,7 +260,6 @@ async def test_race_lost_does_not_record_audit(
         extraction_id=extraction.id,
         translated_title="title",
         summary="summary text",
-        topic="llm benchmark",
         category_id=sample_categories[0].id,
         investor_take="bullish",
     )

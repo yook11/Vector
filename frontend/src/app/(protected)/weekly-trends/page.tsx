@@ -8,7 +8,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   getWeeklyTrendsViewModel,
   HotEntityList,
-  HotTopicList,
   NewEntityList,
 } from "@/features/digest";
 import { formatDate } from "@/lib/date";
@@ -49,14 +48,10 @@ async function WeeklyTrendsContent() {
             <h2 className="text-sm font-medium tracking-tight">
               {category.categoryName}
             </h2>
-            <div className="grid gap-8 md:grid-cols-3">
+            <div className="grid gap-8 md:grid-cols-2">
               <div className="flex flex-col gap-3">
                 <SectionLabel as="h3">Hot Entities</SectionLabel>
                 <HotEntityList entities={category.trendingEntities} />
-              </div>
-              <div className="flex flex-col gap-3">
-                <SectionLabel as="h3">Hot Topics</SectionLabel>
-                <HotTopicList topics={category.trendingTopics} />
               </div>
               <div className="flex flex-col gap-3">
                 <SectionLabel as="h3">New Entities</SectionLabel>
@@ -76,8 +71,8 @@ function WeeklyTrendsSkeleton() {
       {[0, 1, 2].map((i) => (
         <section key={i} className="flex flex-col gap-5">
           <Skeleton className="h-5 w-32" />
-          <div className="grid gap-8 md:grid-cols-3">
-            {[0, 1, 2].map((j) => (
+          <div className="grid gap-8 md:grid-cols-2">
+            {[0, 1].map((j) => (
               <div key={j} className="flex flex-col gap-3">
                 <Skeleton className="h-3 w-20" />
                 {[0, 1, 2, 3].map((k) => (

@@ -1,6 +1,5 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { Badge } from "@/components/ui/badge";
 import { formatDate } from "@/lib/date";
 import type { ArticleBrief } from "@/types/types.gen";
 
@@ -13,19 +12,11 @@ export function NewsCard({
 }) {
   return (
     <article className="flex h-full flex-col">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-2">
-          {article.topic && (
-            <Badge
-              variant="outline"
-              className="text-xs tracking-widest uppercase px-2 py-0.5 truncate max-w-[14rem] text-muted-foreground"
-            >
-              {article.topic}
-            </Badge>
-          )}
+      {actionSlot && (
+        <div className="flex items-start justify-end">
+          <div className="-mt-1 -mr-1 shrink-0">{actionSlot}</div>
         </div>
-        {actionSlot && <div className="-mt-1 -mr-1 shrink-0">{actionSlot}</div>}
-      </div>
+      )}
 
       <Link href={`/news/${article.id}`} className="group mt-5 block">
         <h3 className="text-lg font-medium text-foreground line-clamp-3 group-hover:text-primary transition-colors">

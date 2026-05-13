@@ -3,7 +3,7 @@
 責務:
 - ``InScopeAssessment.events`` JSONB の ``events[].mentions[]`` を 2 段
   ``jsonb_array_elements`` LATERAL で平坦化し、1 カテゴリ × 1 週分の hot mention /
-  hot topic / new mention を集計し、digest BC の VO で返す。
+  new mention を集計し、digest BC の VO で返す。
 - 期間境界 ``[current_start, current_end)`` (半開区間) で絞り込む。
 - mention は ``COUNT(DISTINCT in_scope_assessments.id)`` で「同 assessment 内で
   同 mention が複数 event に登場しても 1 件」と数える (記事単位の出現を数える)。
@@ -33,7 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from app.insights.snapshot.config import MIN_CURRENT, MIN_PREVIOUS, NEW_BURST_THRESHOLD
-from app.insights.snapshot.domain.trend import EntityTrend, NewEntity, TopicTrend
+from app.insights.snapshot.domain.trend import EntityTrend, NewEntity
 from app.models.in_scope_assessment import InScopeAssessment
 
 
@@ -98,62 +98,6 @@ class TrendsRepository:
             EntityTrend(
                 name=row.display_name,
                 type=row.type,
-                current_count=row.current_count,
-                previous_count=row.previous_count,
-            )
-            for row in rows
-        )
-        return tuple(sorted(trends, key=lambda t: t.hotness_score, reverse=True))
-
-    async def get_trending_topics(
-        self,
-        *,
-        category_id: int,
-        current_start: datetime,
-        current_end: datetime,
-        previous_start: datetime,
-    ) -> tuple[TopicTrend, ...]:
-        """1 カテゴリ × 1 週分の hot topic を集計して返す。
-
-        topic は ``InScopeAssessment`` の単一カラムなので 1 analysis = 1 件として
-        ``COUNT(*)`` で数える。
-        """
-        current_sub = self._topic_window_subquery(
-            category_id=category_id,
-            window_start=current_start,
-            window_end=current_end,
-            label="current_topic",
-        )
-        previous_sub = self._topic_window_subquery(
-            category_id=category_id,
-            window_start=previous_start,
-            window_end=current_start,
-            label="previous_topic",
-        )
-        previous_count = func.coalesce(previous_sub.c.cnt, 0)
-        stmt = (
-            select(
-                current_sub.c.topic,
-                current_sub.c.cnt.label("current_count"),
-                previous_count.label("previous_count"),
-            )
-            .select_from(current_sub)
-            .outerjoin(
-                previous_sub,
-                previous_sub.c.topic == current_sub.c.topic,
-            )
-            .where(
-                current_sub.c.cnt >= MIN_CURRENT,
-                or_(
-                    previous_count >= MIN_PREVIOUS,
-                    current_sub.c.cnt >= NEW_BURST_THRESHOLD,
-                ),
-            )
-        )
-        rows = (await self._session.execute(stmt)).all()
-        trends = tuple(
-            TopicTrend(
-                topic=row.topic,
                 current_count=row.current_count,
                 previous_count=row.previous_count,
             )
@@ -289,28 +233,5 @@ class TrendsRepository:
                 display_name=sa.String,
                 cnt=sa.BigInteger,
             )
-            .subquery(label)
-        )
-
-    @staticmethod
-    def _topic_window_subquery(
-        *,
-        category_id: int,
-        window_start: datetime,
-        window_end: datetime,
-        label: str,
-    ):
-        """1 期間分の topic 集計 subquery (1 analysis = 1 件)。"""
-        return (
-            select(
-                InScopeAssessment.topic.label("topic"),
-                func.count(InScopeAssessment.id).label("cnt"),
-            )
-            .where(
-                InScopeAssessment.category_id == category_id,
-                InScopeAssessment.analyzed_at >= window_start,
-                InScopeAssessment.analyzed_at < window_end,
-            )
-            .group_by(InScopeAssessment.topic)
             .subquery(label)
         )

@@ -71,7 +71,6 @@ class TestGeminiCallApiSuccess:
         text = json.dumps(
             {
                 "category": "ai",
-                "topic": "ai agents",
                 "investor_take": "Significant traction.",
                 "events": [],
             }
@@ -83,11 +82,9 @@ class TestGeminiCallApiSuccess:
         assert isinstance(call, AssessmentCall)
         assert isinstance(call.result, InScope)
         assert call.result.category == InScopeCategory.AI
-        assert call.result.topic.root == "ai agents"
         assert call.result.investor_take == "Significant traction."
         assert call.raw_response == text
         assert call.raw_category == "ai"
-        assert call.raw_topic == "ai agents"
         assert call.prompt_version == GEMINI_ASSESSMENT_SPEC.version
         assert call.model_name == GEMINI_ASSESSMENT_SPEC.model
 
@@ -97,7 +94,6 @@ class TestGeminiCallApiSuccess:
         text = json.dumps(
             {
                 "category": "out_of_scope",
-                "topic": "ignored",
                 "investor_take": "Not relevant.",
                 "events": [],
             }
@@ -109,15 +105,12 @@ class TestGeminiCallApiSuccess:
         assert isinstance(call.result, OutOfScope)
         assert call.result.investor_take == "Not relevant."
         assert call.raw_category == "out_of_scope"
-        assert call.raw_topic == "ignored"  # OutOfScope 経路でも raw_topic 保持
         assert call.model_name == GEMINI_ASSESSMENT_SPEC.model
 
     @pytest.mark.asyncio
     async def test_uses_dict_response_schema(self) -> None:
         assessor = GeminiAssessor()
-        text = json.dumps(
-            {"category": "ai", "topic": "ai", "investor_take": "x", "events": []}
-        )
+        text = json.dumps({"category": "ai", "investor_take": "x", "events": []})
         mock_call = _patch_assessor_call(assessor, _stub_response(text))
 
         await assessor._call_api("prompt")
@@ -139,9 +132,7 @@ class TestGeminiFinishReasonBlocked:
     @pytest.mark.asyncio
     async def test_finish_reason_safety_raises_blocked(self) -> None:
         assessor = GeminiAssessor()
-        text = json.dumps(
-            {"category": "ai", "topic": "ai", "investor_take": "x", "events": []}
-        )
+        text = json.dumps({"category": "ai", "investor_take": "x", "events": []})
         _patch_assessor_call(
             assessor, _stub_response(text, finish_reason_name="SAFETY")
         )
@@ -167,9 +158,7 @@ class TestGeminiFinishReasonBlocked:
     async def test_finish_reason_stop_does_not_raise(self) -> None:
         """正常終了の finish_reason (STOP 等) では raise せず parse に進む。"""
         assessor = GeminiAssessor()
-        text = json.dumps(
-            {"category": "ai", "topic": "ai", "investor_take": "x", "events": []}
-        )
+        text = json.dumps({"category": "ai", "investor_take": "x", "events": []})
         _patch_assessor_call(assessor, _stub_response(text, finish_reason_name="STOP"))
 
         call = await assessor._call_api("prompt")
@@ -207,7 +196,7 @@ class TestGeminiInvalidPayload:
     async def test_missing_key_payload_raises_response_invalid(self) -> None:
         """parse_assessment の key 欠落で AssessmentResponseInvalidError raise。"""
         assessor = GeminiAssessor()
-        text = json.dumps({"category": "ai"})  # topic / investor_take 欠落
+        text = json.dumps({"category": "ai"})  # investor_take 欠落
         _patch_assessor_call(assessor, _stub_response(text))
 
         with pytest.raises(AssessmentResponseInvalidError):

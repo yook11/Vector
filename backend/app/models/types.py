@@ -13,7 +13,6 @@ from sqlalchemy.engine import Dialect
 from sqlalchemy.types import TypeDecorator
 
 from app.analysis.domain.value_objects.entity import EntityName
-from app.analysis.domain.value_objects.topic import TopicName
 from app.domain.category import CategoryName, CategorySlug
 from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 from app.shared.value_objects.safe_url import SafeUrl
@@ -60,27 +59,6 @@ class CategoryNameType(TypeDecorator[CategoryName]):
         if value is None:
             return None
         return CategoryName(value)
-
-
-class TopicNameType(TypeDecorator[TopicName]):
-    """TopicName <-> VARCHAR(100)."""
-
-    impl = String(100)
-    cache_ok = True
-
-    def process_bind_param(self, value: Any, dialect: Dialect) -> str | None:
-        if value is None:
-            return None
-        if isinstance(value, TopicName):
-            return value.root
-        if isinstance(value, str):
-            return TopicName(value).root
-        raise TypeError(f"Expected TopicName or str, got {type(value).__name__}")
-
-    def process_result_value(self, value: Any, dialect: Dialect) -> TopicName | None:
-        if value is None:
-            return None
-        return TopicName(value)
 
 
 class SourceNameType(TypeDecorator[SourceName]):

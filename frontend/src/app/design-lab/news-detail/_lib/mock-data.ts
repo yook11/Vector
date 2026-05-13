@@ -1,5 +1,4 @@
 export const MOCK_ARTICLE = {
-  topic: "Database Extensions",
   translatedTitle: "Honker、SQLiteにPostgres風の通知/リスニング機能を追加",
   originalTitle: "Honker: Postgres-Style Notify/Listen for SQLite",
   sourceName: "Hacker News",

@@ -9,9 +9,6 @@ export type ClientOptions = {
  *
  * GET /api/v1/articles — 一覧カード用
  *
- * topic は表示専用属性として降格された 3 語以内英語フレーズ。DB NOT NULL +
- * CHECK で非空を保証するため Optional ではない。
- *
  * per-user の watchlist 状態はこのスキーマには含めない。frontend は
  * GET /api/v1/me/watchlist/ids を別途取得し render 時に Set lookup で
  * merge する (Pattern B)。これにより /articles レスポンスは user 非依存
@@ -35,10 +32,6 @@ export type ArticleBrief = {
      * Publishedat
      */
     publishedAt?: string | null;
-    /**
-     * Topic
-     */
-    topic: string;
 };
 
 /**
@@ -72,10 +65,6 @@ export type ArticleDetail = {
      * Publishedat
      */
     publishedAt?: string | null;
-    /**
-     * Topic
-     */
-    topic: string;
     original: OriginalArticleEmbed;
 };
 
@@ -204,18 +193,6 @@ export type EmptyWeeklyTrends = {
 export type EntityName = string;
 
 /**
- * EntityType
- *
- * エンティティ種別ラベル。
- *
- * Invariants:
- * - トリム後 1-50 文字
- * - 小文字に正規化
- * - 生成後は不変
- */
-export type EntityType = string;
-
-/**
  * FetchRequest
  *
  * POST /api/v1/admin/pipeline/fetch のリクエストボディ。
@@ -256,6 +233,17 @@ export type HttpValidationError = {
      */
     detail?: Array<ValidationError>;
 };
+
+/**
+ * MentionType
+ *
+ * event に登場する固有名の役割 6 軸。
+ *
+ * タグ単独で役割が読める命名を優先。company / academic / government の
+ * 3 軸分割は「投資判断視点で役割が違うものを混ぜると集計信号が薄まる」
+ * という設計判断 (spec §Mention type の 6 軸構成 参照)。
+ */
+export type MentionType = 'company' | 'government' | 'academic' | 'product' | 'technology' | 'person';
 
 /**
  * NewsSourceCreate
@@ -488,25 +476,6 @@ export type SourceName = string;
 export type SourceType = 'rss' | 'api' | 'html';
 
 /**
- * TopicName
- *
- * AI 生成の分類ラベル名。正規化済みの英語小文字。
- *
- * 入力は自動で正規化される（小文字化、ハイフン／アンダースコアを空白に、
- * 連続空白を単一空白に）。VO 自身が「正規化済み」を保証する状態型。
- *
- * Invariants:
- * - 英数字トークンを単一空白で連結した形式
- * - 先頭・末尾は英数字
- * - 2-100 文字
- * - 小文字のみ
- * - 最大 3 語
- * - 冠詞・前置詞を含まない
- * - 生成後は不変
- */
-export type TopicName = string;
-
-/**
  * ValidationError
  */
 export type ValidationError = {
@@ -632,10 +601,6 @@ export type CategoryTrendsOut = {
      */
     trendingEntities: Array<EntityTrendOut>;
     /**
-     * Trendingtopics
-     */
-    trendingTopics: Array<TopicTrendOut>;
-    /**
      * Newentities
      */
     newEntities: Array<NewEntityOut>;
@@ -646,7 +611,7 @@ export type CategoryTrendsOut = {
  */
 export type EntityTrendOut = {
     name: EntityName;
-    type: EntityType;
+    type: MentionType;
     /**
      * Currentcount
      */
@@ -666,7 +631,7 @@ export type EntityTrendOut = {
  */
 export type NewEntityOut = {
     name: EntityName;
-    type: EntityType;
+    type: MentionType;
     /**
      * Currentcount
      */
@@ -685,25 +650,6 @@ export type StoryOut = {
      * Articleids
      */
     articleIds: Array<number>;
-};
-
-/**
- * _TopicTrendOut
- */
-export type TopicTrendOut = {
-    topic: TopicName;
-    /**
-     * Currentcount
-     */
-    currentCount: number;
-    /**
-     * Previouscount
-     */
-    previousCount: number;
-    /**
-     * Hotnessscore
-     */
-    hotnessScore: number;
 };
 
 export type SearchArticlesData = {

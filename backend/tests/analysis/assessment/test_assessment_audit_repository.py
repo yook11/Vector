@@ -4,14 +4,13 @@ audit row の shape SSoT が repository に集約されたことを検証する:
 
 - ``append_in_scope`` で
   ``category=success`` + ``code="assessed_in_scope"`` + payload に
-  ``category_slug`` / ``topic`` / ``investor_take`` 詰まる
+  ``category_slug`` / ``investor_take`` 詰まる
   (``category_slug`` は ``in_scope.category.value`` から Repository 内で導出、
   ``raw_category`` envelope 由来とは独立)
 - ``append_out_of_scope`` で
   ``category=success`` + ``code="assessed_out_of_scope"`` + payload に
   ``investor_take`` が非 None
-  (PR #447 対称化追従、in-scope 固有 field の ``category_slug`` /
-  ``topic`` のみ None)
+  (PR #447 対称化追従、in-scope 固有 field の ``category_slug`` のみ None)
 - ``append_failure`` で **exc 型による 3 dispatch + Layer 2-B + catch-all** が動作:
   - ``AssessmentRecoverableError`` → ``category=retryable``
   - ``AssessmentTerminalSkipError`` → ``category=non_retryable_keep_extraction``
@@ -49,7 +48,6 @@ from app.analysis.assessment.errors import (
     AssessmentResponseInvalidError,
     AssessmentTerminalSkipError,
 )
-from app.analysis.domain.value_objects.topic import TopicName
 from app.models.article import Article
 from app.models.article_extraction import ArticleExtraction
 from app.models.category import Category
@@ -123,7 +121,6 @@ def _make_in_scope(category: InScopeCategory = InScopeCategory.AI) -> InScope:
     """``append_in_scope`` に渡す AI 境界型を組み立てる。"""
     return InScope(
         category=category,
-        topic=TopicName("llm benchmark"),
         investor_take="bullish",
     )
 
@@ -138,7 +135,6 @@ def _in_scope_call(
         result=in_scope if in_scope is not None else _make_in_scope(),
         raw_response=raw_response,
         raw_category=raw_category,
-        raw_topic="LLM Benchmark",
         prompt_version="abcd1234",
         model_name=_AI_MODEL,
     )
@@ -149,7 +145,6 @@ def _out_of_scope_call() -> AssessmentCall[OutOfScope]:
         result=OutOfScope(investor_take="not relevant"),
         raw_response='{"category":"out_of_scope"}',
         raw_category="out_of_scope",
-        raw_topic="celebrity gossip",
         prompt_version="abcd1234",
         model_name=_AI_MODEL,
     )
@@ -169,7 +164,6 @@ async def _persist_in_scope(
         extraction_id=extraction.id,
         translated_title="title",
         summary="summary text",
-        topic="llm benchmark",
         category_id=category.id,
         investor_take="bullish",
     )
@@ -240,7 +234,6 @@ async def test_append_in_scope_records_success_with_code(
     assert ev.category == "success"
     assert ev.code == "assessed_in_scope"
     assert ev.payload["extraction_id"] == extraction.id
-    assert ev.payload["topic"] == "llm benchmark"
     assert ev.payload["investor_take"] == "bullish"
     assert ev.payload["ai_model"] == _AI_MODEL
 
@@ -421,8 +414,7 @@ async def test_append_out_of_scope_records_investor_take(
     """PR #447 対称化追従: out-of-scope payload は ``investor_take`` を持つ。
 
     本体 DB (``out_of_scope_assessments.investor_take``) と audit payload の
-    情報量を一致させる。in-scope 固有 field (``category_slug`` / ``topic``) のみ
-    None。
+    情報量を一致させる。in-scope 固有 field (``category_slug``) のみ None。
     """
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
@@ -439,7 +431,6 @@ async def test_append_out_of_scope_records_investor_take(
     assert ev.payload["investor_take"] == out_of_scope.investor_take  # 非 None
     # in-scope 固有 field のみ None
     assert ev.payload["category_slug"] is None
-    assert ev.payload["topic"] is None
 
 
 # ---------------------------------------------------------------------------

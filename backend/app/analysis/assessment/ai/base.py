@@ -79,7 +79,7 @@ class BaseAssessor(abc.ABC):
         Returns:
             ``AssessmentCall`` envelope。``result`` で ``InScope`` / ``OutOfScope``
             の tagged union を保持し、``raw_response`` / ``raw_category`` /
-            ``raw_topic`` / ``prompt_version`` を audit 焼付用に運ぶ。
+            ``prompt_version`` を audit 焼付用に運ぶ。
 
         Raises:
             AIProviderError: SDK 例外を ``_translate_error`` で翻訳した結果。

@@ -21,12 +21,10 @@ from pydantic import Field
 
 from app.analysis.assessment.domain.result import MentionType
 from app.analysis.domain.value_objects.entity import EntityName
-from app.analysis.domain.value_objects.topic import TopicName
 from app.domain.category import CategoryName, CategorySlug
 from app.insights.snapshot.domain.trend import (
     EntityTrend,
     NewEntity,
-    TopicTrend,
     WeeklyCategoryTrends,
     WeeklyTrendsBundle,
 )
@@ -36,13 +34,6 @@ from app.schemas.base import _CamelBase
 class _EntityTrendOut(_CamelBase):
     name: EntityName
     type: MentionType
-    current_count: int
-    previous_count: int
-    hotness_score: float
-
-
-class _TopicTrendOut(_CamelBase):
-    topic: TopicName
     current_count: int
     previous_count: int
     hotness_score: float
@@ -59,7 +50,6 @@ class _CategoryTrendsOut(_CamelBase):
     category_slug: CategorySlug
     category_name: CategoryName
     trending_entities: list[_EntityTrendOut]
-    trending_topics: list[_TopicTrendOut]
     new_entities: list[_NewEntityOut]
 
 
@@ -111,7 +101,6 @@ def _to_category(section: WeeklyCategoryTrends) -> _CategoryTrendsOut:
         category_slug=section.category_slug,
         category_name=section.category_name,
         trending_entities=[_to_entity(e) for e in section.trending_entities],
-        trending_topics=[_to_topic(t) for t in section.trending_topics],
         new_entities=[_to_new_entity(n) for n in section.new_entities],
     )
 
@@ -123,15 +112,6 @@ def _to_entity(e: EntityTrend) -> _EntityTrendOut:
         current_count=e.current_count,
         previous_count=e.previous_count,
         hotness_score=e.hotness_score,
-    )
-
-
-def _to_topic(t: TopicTrend) -> _TopicTrendOut:
-    return _TopicTrendOut(
-        topic=t.topic,
-        current_count=t.current_count,
-        previous_count=t.previous_count,
-        hotness_score=t.hotness_score,
     )
 
 

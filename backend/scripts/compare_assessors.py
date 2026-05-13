@@ -65,7 +65,6 @@ class CallResult:
     """1 件分の assessor 呼び出し結果。"""
 
     category_value: str | None
-    topic: str | None
     investor_take: str | None
     latency_seconds: float
     error_class: str | None
@@ -91,7 +90,6 @@ async def _call_assessor(assessor: BaseAssessor, sample: Sample) -> CallResult:
         elapsed = time.perf_counter() - start
         return CallResult(
             category_value=None,
-            topic=None,
             investor_take=None,
             latency_seconds=elapsed,
             error_class=type(exc).__name__,
@@ -103,7 +101,6 @@ async def _call_assessor(assessor: BaseAssessor, sample: Sample) -> CallResult:
     if isinstance(result, OutOfScope):
         return CallResult(
             category_value=ValidCategory.OUT_OF_SCOPE.value,
-            topic=None,
             investor_take=result.investor_take,
             latency_seconds=elapsed,
             error_class=None,
@@ -113,7 +110,6 @@ async def _call_assessor(assessor: BaseAssessor, sample: Sample) -> CallResult:
     assert isinstance(result, InScope)  # noqa: S101 — tagged union exhaustiveness
     return CallResult(
         category_value=result.category.value,
-        topic=str(result.topic),
         investor_take=result.investor_take,
         latency_seconds=elapsed,
         error_class=None,

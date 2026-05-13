@@ -1,14 +1,10 @@
 """Stage 4 ACL — ``parse_assessment`` の dispatch / strict 検証 テスト。
 
-PR2 で追加された ``parse_assessment`` 関数 + PR1 event-extraction で ``events``
-key 必須化:
-
 - ``category == out_of_scope`` で ``OutOfScope`` に振り分け、それ以外は ``InScope``
-- 3 文字列値 (``category`` / ``topic`` / ``investor_take``) すべて
+- 2 文字列値 (``category`` / ``investor_take``) すべて
   ``isinstance(..., str)`` で先頭検証 (``str(...)`` 暗黙 coerce なし)
 - ``events`` は ``list`` 型強制 + 要素は ``Event.model_validate``
-- ``OutOfScope`` でも 4 key (``events`` 含む) 欠落 / 型不一致は reject、
-  ただし ``topic=""`` や VO 正規化違反 (4 語等) は通す
+- ``OutOfScope`` でも 3 key (``events`` 含む) 欠落 / 型不一致は reject
 - ``OutOfScope`` 経路でも events は domain に保持される (検証用途で残す対称化)
 - schema 違反は ``AssessmentResponseInvalidError`` (Layer 2-B Recoverable marker)
   に詰め替えて raise
@@ -37,14 +33,12 @@ _MISSING: Any = object()
 def _payload(
     *,
     category: Any = "ai",
-    topic: Any = "ai",
     investor_take: Any = "x",
     events: Any = _MISSING,
 ) -> dict[str, Any]:
-    """4 key 完備の payload helper (``events`` 未指定時のみ空配列を入れる)。"""
+    """3 key 完備の payload helper (``events`` 未指定時のみ空配列を入れる)。"""
     return {
         "category": category,
-        "topic": topic,
         "investor_take": investor_take,
         "events": [] if events is _MISSING else events,
     }
@@ -57,13 +51,11 @@ class TestParseAssessmentInScope:
         result = parse_assessment(
             _payload(
                 category="ai",
-                topic="ai agents",
                 investor_take="Significant.",
             )
         )
         assert isinstance(result, InScope)
         assert result.category == InScopeCategory.AI
-        assert result.topic.root == "ai agents"
         assert result.investor_take == "Significant."
 
     @pytest.mark.parametrize(
@@ -96,59 +88,27 @@ class TestParseAssessmentOutOfScope:
         result = parse_assessment(
             _payload(
                 category="out_of_scope",
-                topic="ignored",
                 investor_take="Not relevant.",
             )
         )
         assert isinstance(result, OutOfScope)
         assert result.investor_take == "Not relevant."
 
-    def test_out_of_scope_accepts_arbitrary_topic_string(self) -> None:
-        # OutOfScope では topic 値の VO 正規化は適用しない。raw str なら受理
-        # (4 語 / stopword 含み等もそのまま通す、parse 結果には残らない)。
-        result = parse_assessment(
-            _payload(
-                category="out_of_scope",
-                topic="anything goes here even 4 word topic",
-            )
-        )
-        assert isinstance(result, OutOfScope)
-
-    def test_out_of_scope_accepts_empty_string_topic(self) -> None:
-        # OutOfScope では topic="" も raw str として通す (TopicName 制約なし)。
-        result = parse_assessment(_payload(category="out_of_scope", topic=""))
-        assert isinstance(result, OutOfScope)
-
 
 class TestParseAssessmentMissingKeys:
-    """key 欠落: 4 key (category/topic/investor_take/events) いずれの欠落も Invalid。"""
+    """key 欠落: 3 key (category/investor_take/events) いずれの欠落も Invalid。"""
 
     def test_missing_category_key_raises_invalid(self) -> None:
         with pytest.raises(AssessmentResponseInvalidError):
-            parse_assessment({"topic": "ai", "investor_take": "x", "events": []})
-
-    def test_missing_topic_key_raises_invalid_in_scope(self) -> None:
-        with pytest.raises(AssessmentResponseInvalidError):
-            parse_assessment({"category": "ai", "investor_take": "x", "events": []})
-
-    def test_missing_topic_key_raises_invalid_out_of_scope(self) -> None:
-        # strict 化方針: OutOfScope でも topic key は必須
-        with pytest.raises(AssessmentResponseInvalidError):
-            parse_assessment(
-                {
-                    "category": "out_of_scope",
-                    "investor_take": "x",
-                    "events": [],
-                }
-            )
+            parse_assessment({"investor_take": "x", "events": []})
 
     def test_missing_investor_take_raises_invalid(self) -> None:
         with pytest.raises(AssessmentResponseInvalidError):
-            parse_assessment({"category": "ai", "topic": "ai", "events": []})
+            parse_assessment({"category": "ai", "events": []})
 
     def test_missing_events_key_raises_invalid_in_scope(self) -> None:
         with pytest.raises(AssessmentResponseInvalidError):
-            parse_assessment({"category": "ai", "topic": "ai", "investor_take": "x"})
+            parse_assessment({"category": "ai", "investor_take": "x"})
 
     def test_missing_events_key_raises_invalid_out_of_scope(self) -> None:
         # strict 化方針: OutOfScope でも events key は必須
@@ -156,7 +116,6 @@ class TestParseAssessmentMissingKeys:
             parse_assessment(
                 {
                     "category": "out_of_scope",
-                    "topic": "x",
                     "investor_take": "x",
                 }
             )
@@ -169,19 +128,6 @@ class TestParseAssessmentNonStrTypes:
     def test_non_str_category_raises_invalid(self, non_str_value: object) -> None:
         with pytest.raises(AssessmentResponseInvalidError):
             parse_assessment(_payload(category=non_str_value))
-
-    @pytest.mark.parametrize("non_str_value", [123, 1.5, None, [], {}, True])
-    def test_non_str_topic_raises_invalid_in_scope(self, non_str_value: object) -> None:
-        with pytest.raises(AssessmentResponseInvalidError):
-            parse_assessment(_payload(category="ai", topic=non_str_value))
-
-    @pytest.mark.parametrize("non_str_value", [123, 1.5, None, [], {}, True])
-    def test_non_str_topic_raises_invalid_out_of_scope(
-        self, non_str_value: object
-    ) -> None:
-        # strict 化方針: OutOfScope でも topic は str 型強制
-        with pytest.raises(AssessmentResponseInvalidError):
-            parse_assessment(_payload(category="out_of_scope", topic=non_str_value))
 
     @pytest.mark.parametrize("non_str_value", [123, 1.5, None, [], {}, True])
     def test_non_str_investor_take_raises_invalid(self, non_str_value: object) -> None:
@@ -208,21 +154,11 @@ class TestParseAssessmentEventsType:
 
 
 class TestParseAssessmentValidationErrors:
-    """値レベルの validation 違反: enum 外値 / TopicName 制約 / min_length。"""
+    """値レベルの validation 違反: enum 外値 / min_length。"""
 
     def test_invalid_category_value_raises_invalid(self) -> None:
         with pytest.raises(AssessmentResponseInvalidError):
             parse_assessment(_payload(category="made_up_value"))
-
-    def test_in_scope_4_word_topic_raises_invalid(self) -> None:
-        # TopicName が 4 語拒否
-        with pytest.raises(AssessmentResponseInvalidError):
-            parse_assessment(_payload(category="ai", topic="one two three four"))
-
-    def test_in_scope_empty_topic_raises_invalid(self) -> None:
-        # InScope では TopicName VO の min_length=2 制約が効く
-        with pytest.raises(AssessmentResponseInvalidError):
-            parse_assessment(_payload(category="ai", topic=""))
 
     def test_empty_investor_take_raises_invalid(self) -> None:
         # InScope.investor_take は min_length=1

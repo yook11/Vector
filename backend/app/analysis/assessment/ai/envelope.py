@@ -1,8 +1,8 @@
 """Stage 4 assessor 戻り値 envelope。
 
 Stage 4 で 1 回の API call 中に確定する全事実 — 詰め替え済み ``result`` /
-AI の raw 応答 text / 詰め替え前の ``raw_category`` / ``raw_topic`` /
-``prompt_version`` / ``model_name`` — を 1 つの値に集約する。
+AI の raw 応答 text / 詰め替え前の ``raw_category`` / ``prompt_version`` /
+``model_name`` — を 1 つの値に集約する。
 下流 (Repository / AuditRepository) はこの envelope だけ受け取れば、
 業務 INSERT も audit 焼付も完結する (caller が ``ai_model`` 等を別経路で
 引き回す必要がない)。
@@ -36,8 +36,6 @@ class AssessmentCall[T: AssessmentResult]:
         raw_category: AI が出力した category slug 値 (詰め替え前、``out_of_scope``
             含む)。enum 化しない (raw は監査用、enum 化すると「妥当な値しか入らない」
             誤解を生む)。
-        raw_topic: AI が出力した topic 文字列 (詰め替え前、``OutOfScope`` 経路でも
-            保持)。``parse_assessment`` の strict 化により ``str`` 型は保証される。
         prompt_version: 呼び出し元 Prompt class の VERSION (8 文字 hash)。
         model_name: ``BaseAssessor.model_name`` property の値。Repository / Audit
             が ``call.model_name`` で参照する (caller が ``ai_model`` を別引数で
@@ -47,6 +45,5 @@ class AssessmentCall[T: AssessmentResult]:
     result: T
     raw_response: str
     raw_category: str
-    raw_topic: str
     prompt_version: str
     model_name: str

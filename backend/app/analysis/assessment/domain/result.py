@@ -17,7 +17,7 @@ Stage 4 が産出する業務結果 (「対象範囲内 / 対象範囲外」+ ta
 - ``ValidCategory`` — AI 境界に提示する全 slug 集合 (13 値、
   ``OUT_OF_SCOPE`` を含む domain taxonomy のフラット表現)
 
-AI 境界では引き続きフラット形式 (``{category, topic, investor_take}``)
+AI 境界では引き続きフラット形式 (``{category, investor_take, events}``)
 を AI に要求する (構造化出力で discriminated union を要求すると AI 精度が
 落ちるため)。assessor 内部 (``ai/parse.py::parse_assessment``) が
 ``category`` 値を見て ``InScope`` / ``OutOfScope`` に振り分ける。
@@ -30,7 +30,6 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.analysis.domain.value_objects.topic import TopicName
 from app.utils.sanitize import normalize_text
 
 
@@ -172,17 +171,13 @@ class InScope(BaseModel):
     feedback_bc_boundary_guarantees_downstream)。下流 (Repository / Entity) は
     再 sanitize しない。
 
-    ``topic`` は event-extraction 移行期 (PR 1〜4) の並列出力フィールドで、
-    Stage 4 リファクタ完了時に削除予定 (spec §段階移行を参照)。``events`` は
-    記事内で起きた事象と登場固有名のペア配列で、PR 1 並列運用中は
-    ``default_factory=list`` で空配列許容 (既存 fixture と AI が events を
-    返さない場合の互換性確保)。
+    ``events`` は記事内で起きた事象と登場固有名のペア配列で、``default_factory=list``
+    で空配列許容 (AI が events を返さない場合の互換性確保)。
     """
 
     model_config = ConfigDict(frozen=True)
 
     category: InScopeCategory
-    topic: TopicName
     investor_take: str = Field(min_length=1, max_length=2000)
     events: list[Event] = Field(default_factory=list, max_length=10)
 

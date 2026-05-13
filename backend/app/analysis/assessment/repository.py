@@ -145,7 +145,6 @@ class AssessmentRepository:
                 extraction_id=ready.extraction_id,
                 translated_title=ready.translated_title,
                 summary=ready.summary,
-                topic=in_scope.topic,
                 category_id=category_id,
                 investor_take=in_scope.investor_take,
                 events=[e.model_dump() for e in in_scope.events],
@@ -170,7 +169,7 @@ class AssessmentRepository:
         取り出し、Stage 3 由来 snapshot (``translated_title`` / ``summary``) は
         ``ready`` から取り出す。``call.model_name`` は監査 SSoT
         (``pipeline_events.payload.ai_model``) に焼くのみで業務行には INSERT しない。
-        ``out_of_scope_assessments`` には category / topic は無いので外す。
+        ``out_of_scope_assessments`` には category は無いので外す。
 
         Returns:
             成功時: DB が採番した ``id``

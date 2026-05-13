@@ -1,6 +1,5 @@
 import { Compass, ExternalLink, FileText } from "lucide-react";
 import Link from "next/link";
-import { Badge } from "@/components/ui/badge";
 import { WatchlistButton } from "@/features/watchlist";
 import { formatDate } from "@/lib/date";
 import { sanitizeUrl } from "@/lib/utils/sanitize-url";
@@ -29,16 +28,7 @@ export function NewsDetail({ article, isWatched }: NewsDetailProps) {
 
   return (
     <article className="relative mx-auto max-w-2xl px-4 py-12 sm:py-16">
-      {/* Top row: topic badge + watchlist (左右に分ける) */}
-      <div className="mb-10 flex items-start justify-between gap-3">
-        {article.topic && (
-          <Badge
-            variant="secondary"
-            className="bg-muted text-muted-foreground border-transparent text-xs uppercase tracking-widest px-2.5 py-0.5"
-          >
-            {article.topic}
-          </Badge>
-        )}
+      <div className="mb-10 flex items-start justify-end">
         <WatchlistButton articleId={article.id} isWatched={isWatched} />
       </div>
 

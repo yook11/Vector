@@ -79,7 +79,7 @@ def test_frozen_immutable() -> None:
 def test_state_fields_optional_default_none() -> None:
     """``kind`` 以外の全 field が default ``None`` (state 未指定構築可)。"""
     payload = AssessmentPayload()
-    # 12 field (kind 除く) すべて None
+    # 10 field (kind 除く) すべて None
     assert payload.source_name is None
     assert payload.error_message is None
     assert payload.error_chain is None
@@ -90,9 +90,7 @@ def test_state_fields_optional_default_none() -> None:
     assert payload.input_text_length is None
     assert payload.ai_raw_response is None
     assert payload.raw_category is None
-    assert payload.raw_topic is None
     assert payload.category_slug is None
-    assert payload.topic is None
     assert payload.investor_take is None
 
 
@@ -107,9 +105,7 @@ def test_full_in_scope_payload_construction() -> None:
         input_text_length=12,
         ai_raw_response='{"category":"ai"}',
         raw_category="ai",
-        raw_topic="LLM benchmark",
         category_slug="ai",
-        topic="LLM benchmark",
         investor_take="bullish for inference vendors",
     )
     assert payload.extraction_id == 42
@@ -139,7 +135,6 @@ def test_serialization_roundtrip() -> None:
         extraction_id=42,
         ai_model="gemini-2.5-pro",
         category_slug="ai",
-        topic="LLM benchmark",
         investor_take="bullish",
     )
     dumped = original.model_dump(mode="json", exclude_none=False)

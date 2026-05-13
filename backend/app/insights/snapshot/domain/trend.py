@@ -1,8 +1,7 @@
 """週次トレンドの値オブジェクトと集約ルート。
 
 公開モデル:
-- ``EntityTrend`` / ``TopicTrend``: hot 判定済み 1 件分の集計結果
-  (件数 + 派生 hotness_score)
+- ``EntityTrend``: hot 判定済み 1 件分の集計結果 (件数 + 派生 hotness_score)
 - ``NewEntity``: 過去 lookback 週に出現履歴のない初出エンティティ
 - ``WeeklyCategoryTrends`` (集約ルート): 1 カテゴリ × 1 週分のトレンド束
 - ``WeeklyTrendsBundle`` (snapshot 永続形): 1 週分の全カテゴリ集約
@@ -30,7 +29,6 @@ from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from app.analysis.assessment.domain.result import MentionType
 from app.analysis.domain.value_objects.entity import EntityName
-from app.analysis.domain.value_objects.topic import TopicName
 from app.domain.category import CategoryName, CategorySlug
 from app.insights.snapshot.config import MIN_CURRENT, SMOOTHING
 
@@ -73,27 +71,6 @@ class EntityTrend(BaseModel):
         return _hotness(self.current_count, self.previous_count)
 
 
-class TopicTrend(BaseModel):
-    """hot 判定済みトピック 1 件分の週次集計結果。
-
-    Invariants (Pydantic Field 制約):
-    - ``current_count >= MIN_CURRENT``
-    - ``previous_count >= 0``
-    - frozen
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    topic: TopicName
-    current_count: int = Field(ge=MIN_CURRENT, le=_MAX_COUNT)
-    previous_count: int = Field(ge=0, le=_MAX_COUNT)
-
-    @computed_field  # type: ignore[prop-decorator]
-    @property
-    def hotness_score(self) -> float:
-        return _hotness(self.current_count, self.previous_count)
-
-
 class NewEntity(BaseModel):
     """過去 ``NEW_ENTITY_LOOKBACK_WEEKS`` 週に出現履歴のない初出エンティティ。
 
@@ -124,7 +101,6 @@ class WeeklyCategoryTrends(BaseModel):
     trending_entities: tuple[EntityTrend, ...] = Field(
         max_length=MAX_TRENDS_PER_CATEGORY
     )
-    trending_topics: tuple[TopicTrend, ...] = Field(max_length=MAX_TRENDS_PER_CATEGORY)
     new_entities: tuple[NewEntity, ...] = Field(max_length=MAX_TRENDS_PER_CATEGORY)
 
 

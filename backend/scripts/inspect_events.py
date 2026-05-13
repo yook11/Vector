@@ -42,7 +42,7 @@ async def _print_in_scope(session: AsyncSession, limit: int) -> None:
     for row in rows:
         print(f"--- id={row.id} extraction_id={row.extraction_id} ---")
         print(f"title: {row.translated_title}")
-        print(f"category_id={row.category_id} topic={row.topic!r}")
+        print(f"category_id={row.category_id}")
         print(f"investor_take: {row.investor_take[:120]}")
         events = row.events or []
         print(f"events ({len(events)}):")

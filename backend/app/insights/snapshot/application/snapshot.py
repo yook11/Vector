@@ -172,12 +172,6 @@ class WeeklyTrendsSnapshotService:
             current_end=current_end,
             previous_start=previous_start,
         )
-        topics = await trends_repo.get_trending_topics(
-            category_id=category.id,
-            current_start=current_start,
-            current_end=current_end,
-            previous_start=previous_start,
-        )
         new_entities = await trends_repo.get_new_entities(
             category_id=category.id,
             current_start=current_start,
@@ -194,7 +188,6 @@ class WeeklyTrendsSnapshotService:
             category_slug=category.slug,
             category_name=category.name,
             trending_entities=entities[:MAX_TRENDS_PER_CATEGORY],
-            trending_topics=topics[:MAX_TRENDS_PER_CATEGORY],
             new_entities=new_entities[:MAX_TRENDS_PER_CATEGORY],
         )
 

@@ -25,7 +25,6 @@ from app.insights.snapshot.domain.trend import (
     MAX_TRENDS_PER_CATEGORY,
     EntityTrend,
     NewEntity,
-    TopicTrend,
     WeeklyCategoryTrends,
     WeeklyTrendsBundle,
 )
@@ -41,9 +40,6 @@ def _bundle_with_section(window_end: date) -> WeeklyTrendsBundle:
             EntityTrend(
                 name="NVIDIA", type="company", current_count=30, previous_count=5
             ),
-        ),
-        trending_topics=(
-            TopicTrend(topic="ai agents", current_count=12, previous_count=1),
         ),
         new_entities=(NewEntity(name="Acme", type="company", current_count=3),),
     )
@@ -93,7 +89,6 @@ class TestWeeklyTrendsEndpoint:
         section = data["categories"][0]
         assert section["categorySlug"] == "ai"
         assert section["trendingEntities"][0]["name"] == "NVIDIA"
-        assert section["trendingTopics"][0]["topic"] == "ai agents"
         assert section["newEntities"][0]["name"] == "Acme"
 
     async def test_no_auth_required(
@@ -154,7 +149,6 @@ class TestWeeklyTrendsEndpoint:
                     "category_slug": "ai",
                     "category_name": "AI",
                     "trending_entities": oversized_entities,
-                    "trending_topics": [],
                     "new_entities": [],
                 }
             ],
@@ -177,7 +171,6 @@ class TestWeeklyTrendsEndpoint:
                 "category_slug": f"slug_{i:02d}",
                 "category_name": f"Cat {i}",
                 "trending_entities": [],
-                "trending_topics": [],
                 "new_entities": [],
             }
             for i in range(MAX_CATEGORIES_PER_BUNDLE + 1)

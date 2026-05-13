@@ -54,7 +54,6 @@ async def _build_analysis(
         translated_title="分析タイトル",
         summary="分析要約",
         investor_take="投資家視点",
-        topic="embedding test",
         category_id=category_id,
         embedding=embedding,
     )

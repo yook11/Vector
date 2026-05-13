@@ -91,9 +91,6 @@ class SemanticSearchParams(PaginationParams):
 class ArticleBrief(_CamelBase):
     """GET /api/v1/articles — 一覧カード用
 
-    topic は表示専用属性として降格された 3 語以内英語フレーズ。DB NOT NULL +
-    CHECK で非空を保証するため Optional ではない。
-
     per-user の watchlist 状態はこのスキーマには含めない。frontend は
     GET /api/v1/me/watchlist/ids を別途取得し render 時に Set lookup で
     merge する (Pattern B)。これにより /articles レスポンスは user 非依存
@@ -105,7 +102,6 @@ class ArticleBrief(_CamelBase):
     summary: str
     source: NewsSourceEmbed
     published_at: datetime | None = None
-    topic: str
 
 
 class ArticleDetail(_CamelBase):
@@ -118,7 +114,6 @@ class ArticleDetail(_CamelBase):
     analyzed_at: datetime
     source: NewsSourceEmbed
     published_at: datetime | None = None
-    topic: str
     original: OriginalArticleEmbed
 
 

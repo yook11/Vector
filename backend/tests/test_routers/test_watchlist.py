@@ -24,7 +24,6 @@ async def _build_article_with_analysis(
     summary: str,
     investor_take: str,
     published_at: datetime,
-    topic: str = "watchlist test",
 ) -> tuple[Article, InScopeAssessment]:
     article = Article(
         source_id=source.id,
@@ -47,7 +46,6 @@ async def _build_article_with_analysis(
         translated_title=translated_title,
         summary=summary,
         investor_take=investor_take,
-        topic=topic,
         category_id=category_id,
     )
     db_session.add(analysis)
@@ -74,7 +72,6 @@ async def sample_article(
         summary="テストの要約",
         investor_take="Test investor_take",
         published_at=datetime(2026, 1, 1, tzinfo=UTC),
-        topic="watchlist test",
     )
     return analysis
 
@@ -96,7 +93,6 @@ async def second_article(
         summary="2番目の要約",
         investor_take="Second investor_take",
         published_at=datetime(2026, 1, 2, tzinfo=UTC),
-        topic="second test",
     )
     return analysis
 

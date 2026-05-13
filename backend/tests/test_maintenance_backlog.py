@@ -210,7 +210,6 @@ async def test_pending_assessment_excludes_extractions_with_analysis(
             translated_title="tt",
             summary="ss",
             investor_take="it",
-            topic="ai chip",
             category_id=sample_categories[0].id,
         )
     )
@@ -257,7 +256,6 @@ async def test_pending_embedding_returns_analysis_with_null_embedding(
         translated_title="tt",
         summary="ss",
         investor_take="it",
-        topic="ai chip",
         category_id=sample_categories[0].id,
         # embedding はあえて未指定 → NULL
     )
@@ -301,7 +299,6 @@ async def test_pending_embedding_excludes_already_embedded(
         translated_title="tt",
         summary="ss",
         investor_take="it",
-        topic="ai chip",
         category_id=sample_categories[0].id,
         embedding=[0.1] * 768,
     )

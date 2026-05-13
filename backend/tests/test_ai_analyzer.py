@@ -41,7 +41,6 @@ from app.analysis.assessment.domain.result import (
 )
 from app.analysis.assessment.service import AssessmentService
 from app.analysis.domain.value_objects.entity import EntityName
-from app.analysis.domain.value_objects.topic import TopicName
 from app.analysis.extraction.ai.base import BaseExtractor
 from app.analysis.extraction.ai.envelope import ExtractionCall
 from app.analysis.extraction.ai.gemini import GeminiExtractor
@@ -93,13 +92,11 @@ def _make_extraction_call(
 
 def _make_in_scope(
     category: InScopeCategory = InScopeCategory.COMPUTING,
-    topic: str = "quantum computing",
     investor_take: str = "技術的に重要な進展",
 ) -> InScope:
     """InScope を生成するヘルパー。"""
     return InScope(
         category=category,
-        topic=TopicName(topic),
         investor_take=investor_take,
     )
 
@@ -107,27 +104,22 @@ def _make_in_scope(
 def _make_assessment_call(
     result: AssessmentResult, *, model_name: str = "gemini-2.5-flash-lite"
 ) -> AssessmentCall[InScope] | AssessmentCall[OutOfScope]:
-    """``assessor.assess()`` の戻り値 envelope を生成するヘルパー (PR3)。
+    """``assessor.assess()`` の戻り値 envelope を生成するヘルパー。
 
     Service テスト等で mock_assessor.assess の return_value に渡す。
-    raw 情報は audit 焼付用 (PR5 で活用) なので、ここでは妥当な test
-    fixture 値を入れる。
+    raw 情報は audit 焼付用なので、ここでは妥当な test fixture 値を入れる。
     """
     if isinstance(result, InScope):
         raw_category = result.category.value
-        raw_topic = result.topic.root
     else:
         raw_category = "out_of_scope"
-        raw_topic = ""
     return AssessmentCall(
         result=result,
         raw_response=(
             f'{{"category": "{raw_category}", '
-            f'"topic": "{raw_topic}", '
             f'"investor_take": "{result.investor_take}"}}'
         ),
         raw_category=raw_category,
-        raw_topic=raw_topic,
         prompt_version="testver1",
         model_name=model_name,
     )
@@ -238,74 +230,15 @@ def test_entity_name_rejects_empty() -> None:
         EntityName("  ")
 
 
-# --- B3. TopicName VO tests ---
-
-
-def test_topic_name_normalizes_hyphen_to_space() -> None:
-    assert TopicName("ai-agents").root == "ai agents"
-    assert TopicName("AI-Agents").root == "ai agents"
-    assert TopicName("post-quantum cryptography").root == "post quantum cryptography"
-
-
-def test_topic_name_normalizes_underscore_to_space() -> None:
-    assert TopicName("generative_ai").root == "generative ai"
-
-
-def test_topic_name_collapses_consecutive_separators() -> None:
-    assert TopicName("ai  --  agents").root == "ai agents"
-    assert TopicName("ai---agents").root == "ai agents"
-
-
-def test_topic_name_accepts_single_word() -> None:
-    assert TopicName("llm").root == "llm"
-    assert TopicName("6g").root == "6g"
-
-
-def test_topic_name_accepts_three_words_exactly() -> None:
-    assert TopicName("small modular reactor").root == "small modular reactor"
-    assert TopicName("post-quantum cryptography").root == "post quantum cryptography"
-
-
-def test_topic_name_rejects_four_or_more_words() -> None:
-    with pytest.raises(ValidationError, match="at most 3 words"):
-        TopicName("ai driven business process automation")
-
-
-def test_topic_name_rejects_four_words_from_hyphen_expansion() -> None:
-    with pytest.raises(ValidationError, match="at most 3 words"):
-        TopicName("ai-driven-business-process-automation")
-
-
-def test_topic_name_rejects_stopword_article() -> None:
-    with pytest.raises(ValidationError, match="stopwords"):
-        TopicName("the llm")
-
-
-def test_topic_name_rejects_stopword_preposition() -> None:
-    with pytest.raises(ValidationError, match="stopwords"):
-        TopicName("ai in finance")
-
-
 # --- C. Classification schema tests ---
 
 
 def test_classified_valid() -> None:
     resp = InScope(
         category=InScopeCategory.COMPUTING,
-        topic=TopicName("quantum computing"),
         investor_take="理由",
     )
     assert resp.category == InScopeCategory.COMPUTING
-    assert resp.topic.root == "quantum computing"
-
-
-def test_classified_normalizes_topic() -> None:
-    resp = InScope(
-        category=InScopeCategory.COMPUTING,
-        topic=TopicName("Quantum Computing"),
-        investor_take="理由",
-    )
-    assert resp.topic.root == "quantum computing"
 
 
 def test_classified_rejects_invalid_category() -> None:
@@ -313,7 +246,6 @@ def test_classified_rejects_invalid_category() -> None:
         InScope.model_validate(
             {
                 "category": "invalid_category",
-                "topic": "foo bar",
                 "investor_take": "r",
             }
         )
@@ -577,13 +509,13 @@ async def test_extraction_routes_noise_to_extraction_noises_table(
 # --- G. AssessmentService orchestration tests ---
 
 
-async def test_assessment_persists_topic_and_category(
+async def test_assessment_persists_category(
     db_session: AsyncSession,
     session_factory,
     sample_categories: list[Category],
     sample_source: NewsSource,
 ) -> None:
-    """Stage 4 が topic と category_id を含む analysis を生成する。"""
+    """Stage 4 が category_id を含む analysis を生成する。"""
     article, extraction = await _create_article_with_extraction(
         db_session,
         sample_source,
@@ -601,12 +533,10 @@ async def test_assessment_persists_topic_and_category(
 
     mock_assessor = MagicMock(spec=BaseAssessor)
     mock_assessor.model_name = "gemini-2.5-flash-lite"
-    # PR3: assessor 戻り値を AssessmentCall envelope に追従
     mock_assessor.assess = AsyncMock(
         return_value=_make_assessment_call(
             _make_in_scope(
                 category=InScopeCategory.COMPUTING,
-                topic="quantum computing",
                 investor_take="理由テスト",
             )
         )
@@ -634,7 +564,6 @@ async def test_assessment_persists_topic_and_category(
         )
     ).scalar_one()
     assert analysis.id == result
-    assert str(analysis.topic) == "quantum computing"
     assert analysis.category_id == expected_category_id
     assert analysis.investor_take == "理由テスト"
 
@@ -724,7 +653,6 @@ async def test_news_endpoint_includes_analysis(
         translated_title="テスト記事",
         summary="テスト要約",
         investor_take="テスト理由",
-        topic="integration test",
         category_id=sample_categories[0].id,
     )
     db_session.add(analysis)

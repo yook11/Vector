@@ -1,7 +1,6 @@
 import { ExternalLink } from "lucide-react";
 import Link from "next/link";
 import { SectionLabel } from "@/components/feedback/SectionLabel";
-import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { formatDate } from "@/lib/date";
 import { MOCK_ARTICLE } from "../_lib/mock-data";
@@ -17,15 +16,6 @@ export function NewsDetailBaseline() {
     <div className="relative mx-auto flex max-w-4xl flex-col items-center px-4 py-8 text-center sm:py-12">
       <div className="absolute right-4 top-8 sm:top-12">
         <MockWatchlistButton />
-      </div>
-
-      <div className="mb-8 flex items-center justify-center gap-2">
-        <Badge
-          variant="secondary"
-          className="text-xs tracking-widest uppercase px-2.5 py-0.5 truncate max-w-[14rem] bg-muted text-muted-foreground hover:bg-muted/80 border-transparent"
-        >
-          {a.topic}
-        </Badge>
       </div>
 
       <div className="mb-6 max-w-3xl space-y-4">

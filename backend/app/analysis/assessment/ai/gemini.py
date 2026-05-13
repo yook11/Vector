@@ -124,13 +124,12 @@ class GeminiAssessor(BaseAssessor):
                 f"Gemini response is not a JSON object: {type(payload).__name__}"
             )
 
-        # parse_assessment を先に通すことで PR2 strict 規約 (3 key 存在 + str 型強制)
-        # を担保。通過後の payload["category"] / payload["topic"] は str 確定なので
-        # str() 暗黙 coerce を入れない (silent な None / int の文字列化を許さない)。
+        # parse_assessment を先に通すことで strict 規約 (3 key 存在 + str 型強制)
+        # を担保。通過後の payload["category"] は str 確定なので str() 暗黙 coerce
+        # を入れない (silent な None / int の文字列化を許さない)。
         # 失敗時は AssessmentResponseInvalidError が伝播し envelope 構築は飛ぶ。
         result = parse_assessment(payload)
         raw_category = payload["category"]
-        raw_topic = payload["topic"]
         # match で result を narrow して container 単位の Generic 型を確定する
         # (``AssessmentCall[InScope]`` / ``AssessmentCall[OutOfScope]``)。
         match result:
@@ -139,7 +138,6 @@ class GeminiAssessor(BaseAssessor):
                     result=result,
                     raw_response=text,
                     raw_category=raw_category,
-                    raw_topic=raw_topic,
                     prompt_version=self.SPEC.version,
                     model_name=self.SPEC.model,
                 )
@@ -148,7 +146,6 @@ class GeminiAssessor(BaseAssessor):
                     result=result,
                     raw_response=text,
                     raw_category=raw_category,
-                    raw_topic=raw_topic,
                     prompt_version=self.SPEC.version,
                     model_name=self.SPEC.model,
                 )

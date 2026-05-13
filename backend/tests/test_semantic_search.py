@@ -39,7 +39,6 @@ async def _create_article(
     source: NewsSource,
     *,
     category_id: int,
-    topic: str = "search test",
     title: str = "Test Article",
     url: str = "https://example.com/1",
     embedding: list[float] | None = None,
@@ -69,7 +68,6 @@ async def _create_article(
         summary="Test summary",
         investor_take="Test investor_take",
         embedding=embedding,
-        topic=topic,
         category_id=category_id,
     )
     db_session.add(analysis)

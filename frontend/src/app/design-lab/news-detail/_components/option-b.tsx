@@ -1,6 +1,5 @@
 import { Compass, ExternalLink, FileText } from "lucide-react";
 import Link from "next/link";
-import { Badge } from "@/components/ui/badge";
 import { formatDate } from "@/lib/date";
 import { MOCK_ARTICLE } from "../_lib/mock-data";
 import { MockWatchlistButton } from "./mock-watchlist-button";
@@ -19,13 +18,7 @@ export function NewsDetailOptionB() {
 
   return (
     <article className="relative mx-auto max-w-2xl px-4 py-12 sm:py-16">
-      <div className="mb-10 flex items-start justify-between gap-3">
-        <Badge
-          variant="secondary"
-          className="bg-muted text-muted-foreground border-transparent text-xs uppercase tracking-widest px-2.5 py-0.5"
-        >
-          {a.topic}
-        </Badge>
+      <div className="mb-10 flex items-start justify-end">
         <MockWatchlistButton />
       </div>
 

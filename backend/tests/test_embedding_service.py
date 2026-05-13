@@ -136,7 +136,6 @@ async def _build_analysis(
         translated_title=translated_title,
         summary=summary,
         investor_take="投資家視点",
-        topic="embedding service",
         category_id=category_id,
         embedding=embedding,
     )

@@ -1,4 +1,4 @@
-"""Stage 4 ``AssessmentCall`` envelope の構造テスト (frozen / slots / 6 field)。"""
+"""Stage 4 ``AssessmentCall`` envelope の構造テスト (frozen / slots / 5 field)。"""
 
 from __future__ import annotations
 
@@ -12,19 +12,17 @@ from app.analysis.assessment.domain.result import (
     InScopeCategory,
     OutOfScope,
 )
-from app.analysis.domain.value_objects.topic import TopicName
 
 
 def _make_in_scope() -> InScope:
     return InScope(
         category=InScopeCategory.AI,
-        topic=TopicName(root="ai"),
         investor_take="x",
     )
 
 
 class TestAssessmentCallConstruction:
-    """6 field をすべて受け取って構築される。"""
+    """5 field をすべて受け取って構築される。"""
 
     def test_construction_with_in_scope_result(self) -> None:
         result = _make_in_scope()
@@ -32,14 +30,12 @@ class TestAssessmentCallConstruction:
             result=result,
             raw_response='{"category": "ai", ...}',
             raw_category="ai",
-            raw_topic="ai agents",
             prompt_version="abc12345",
             model_name="test-model",
         )
         assert call.result is result
         assert call.raw_response.startswith('{"category"')
         assert call.raw_category == "ai"
-        assert call.raw_topic == "ai agents"
         assert call.prompt_version == "abc12345"
         assert call.model_name == "test-model"
 
@@ -49,7 +45,6 @@ class TestAssessmentCallConstruction:
             result=result,
             raw_response='{"category": "out_of_scope", ...}',
             raw_category="out_of_scope",
-            raw_topic="ignored",
             prompt_version="abc12345",
             model_name="test-model",
         )
@@ -64,7 +59,6 @@ class TestAssessmentCallImmutability:
             result=OutOfScope(investor_take="x"),
             raw_response="r",
             raw_category="c",
-            raw_topic="t",
             prompt_version="v",
             model_name="m",
         )
@@ -76,7 +70,6 @@ class TestAssessmentCallImmutability:
             result=OutOfScope(investor_take="x"),
             raw_response="r",
             raw_category="c",
-            raw_topic="t",
             prompt_version="v",
             model_name="m",
         )

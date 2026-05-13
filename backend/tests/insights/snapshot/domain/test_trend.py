@@ -1,4 +1,4 @@
-"""digest 集約 (EntityTrend / TopicTrend / NewEntity / WeeklyCategoryTrends /
+"""digest 集約 (EntityTrend / NewEntity / WeeklyCategoryTrends /
 WeeklyTrendsBundle) の不変条件と派生フィールドのテスト。
 
 責務:
@@ -18,7 +18,6 @@ from pydantic import ValidationError
 
 from app.analysis.assessment.domain.result import MentionType
 from app.analysis.domain.value_objects.entity import EntityName
-from app.analysis.domain.value_objects.topic import TopicName
 from app.domain.category import CategoryName, CategorySlug
 from app.insights.snapshot.config import (
     MIN_CURRENT,
@@ -28,7 +27,6 @@ from app.insights.snapshot.config import (
 from app.insights.snapshot.domain.trend import (
     EntityTrend,
     NewEntity,
-    TopicTrend,
     WeeklyCategoryTrends,
     WeeklyTrendsBundle,
 )
@@ -106,47 +104,6 @@ class TestEntityTrend:
         assert trend.hotness_score == pytest.approx((10 - 1) / SMOOTHING)
 
 
-class TestTopicTrend:
-    def test_constructs_with_valid_counts(self) -> None:
-        trend = TopicTrend(
-            topic=TopicName("ai agents"), current_count=8, previous_count=2
-        )
-        assert trend.topic.root == "ai agents"
-        assert trend.current_count == 8
-        assert trend.previous_count == 2
-
-    def test_rejects_current_below_min(self) -> None:
-        with pytest.raises(ValidationError):
-            TopicTrend(
-                topic=TopicName("ai agents"),
-                current_count=MIN_CURRENT - 1,
-                previous_count=0,
-            )
-
-    def test_rejects_negative_previous(self) -> None:
-        with pytest.raises(ValidationError):
-            TopicTrend(
-                topic=TopicName("ai agents"),
-                current_count=10,
-                previous_count=-1,
-            )
-
-    def test_immutable(self) -> None:
-        trend = TopicTrend(
-            topic=TopicName("ai agents"), current_count=8, previous_count=2
-        )
-        with pytest.raises(ValidationError):
-            trend.previous_count = 99  # type: ignore[misc]
-
-    def test_hotness_score_smoothing(self) -> None:
-        trend = TopicTrend(
-            topic=TopicName("quantum computing"),
-            current_count=12,
-            previous_count=0,
-        )
-        assert trend.hotness_score == pytest.approx(12 / SMOOTHING)
-
-
 class TestNewEntity:
     def test_constructs_with_count_at_least_one(self) -> None:
         name, type_ = _entity("DeepSeek-R1", "product")
@@ -179,7 +136,6 @@ class TestWeeklyCategoryTrends:
         self,
         *,
         entities: tuple[EntityTrend, ...] = (),
-        topics: tuple[TopicTrend, ...] = (),
         new_entities: tuple[NewEntity, ...] = (),
     ) -> WeeklyCategoryTrends:
         return WeeklyCategoryTrends(
@@ -187,7 +143,6 @@ class TestWeeklyCategoryTrends:
             category_slug=CategorySlug("ai_ml"),
             category_name=CategoryName("AI・ML"),
             trending_entities=entities,
-            trending_topics=topics,
             new_entities=new_entities,
         )
 
@@ -197,17 +152,14 @@ class TestWeeklyCategoryTrends:
         assert section.category_slug.root == "ai_ml"
         assert section.category_name.root == "AI・ML"
         assert section.trending_entities == ()
-        assert section.trending_topics == ()
         assert section.new_entities == ()
 
     def test_constructs_with_populated_lists(self) -> None:
         name, type_ = _entity()
         et = EntityTrend(name=name, type=type_, current_count=10, previous_count=3)
-        tt = TopicTrend(topic=TopicName("ai agents"), current_count=8, previous_count=2)
         ne = NewEntity(name=name, type=type_, current_count=4)
-        section = self._make(entities=(et,), topics=(tt,), new_entities=(ne,))
+        section = self._make(entities=(et,), new_entities=(ne,))
         assert section.trending_entities == (et,)
-        assert section.trending_topics == (tt,)
         assert section.new_entities == (ne,)
 
     def test_immutable_aggregate(self) -> None:
@@ -219,7 +171,6 @@ class TestWeeklyCategoryTrends:
         """リストは tuple で永続化される (collections の immutability を構造で保証)。"""
         section = self._make()
         assert isinstance(section.trending_entities, tuple)
-        assert isinstance(section.trending_topics, tuple)
         assert isinstance(section.new_entities, tuple)
 
 
@@ -230,7 +181,6 @@ class TestWeeklyTrendsBundle:
             category_slug=CategorySlug("ai_ml"),
             category_name=CategoryName("AI・ML"),
             trending_entities=(),
-            trending_topics=(),
             new_entities=(),
         )
 
@@ -258,13 +208,46 @@ class TestWeeklyTrendsBundle:
             category_slug=CategorySlug("ai_ml"),
             category_name=CategoryName("AI・ML"),
             trending_entities=(et,),
-            trending_topics=(),
             new_entities=(),
         )
         original = WeeklyTrendsBundle(window_end=date(2026, 5, 3), sections=(section,))
         dumped = original.model_dump(mode="json")
         restored = WeeklyTrendsBundle.model_validate(dumped)
         assert restored == original
+
+    def test_legacy_snapshot_with_trending_topics_ignored(self) -> None:
+        """``trending_topics`` を含む過去 snapshot は ``extra="ignore"`` で吸収される。
+
+        PR 3 で ``TopicTrend`` を VO から削除した後も、weekly_trend_snapshots に
+        過去 PR 2 以前の bundle が ``trending_topics: [...]`` を含んで残っている
+        ケースがある。Pydantic v2 のデフォルト ``extra="ignore"`` で旧フィールドを
+        黙殺できることを invariant test で固定する (feedback_failure_visibility は
+        新フィールド導入時の話で、ここはむしろ過去 snapshot の前方互換性が責務)。
+        """
+        legacy_payload = {
+            "window_end": "2026-05-03",
+            "sections": [
+                {
+                    "category_id": 1,
+                    "category_slug": "ai_ml",
+                    "category_name": "AI・ML",
+                    "trending_entities": [],
+                    "trending_topics": [
+                        {
+                            "topic": "legacy topic",
+                            "current_count": 8,
+                            "previous_count": 2,
+                            "hotness_score": 3.0,
+                        }
+                    ],
+                    "new_entities": [],
+                }
+            ],
+        }
+        bundle = WeeklyTrendsBundle.model_validate(legacy_payload)
+        assert bundle.window_end == date(2026, 5, 3)
+        section = bundle.sections[0]
+        assert not hasattr(section, "trending_topics")
 
 
 class TestConfigConstants:

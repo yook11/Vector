@@ -38,7 +38,6 @@ from app.analysis.assessment.domain.result import (
 )
 from app.analysis.assessment.errors import AssessmentCategoryMissingError
 from app.analysis.assessment.repository import AssessmentRepository
-from app.analysis.domain.value_objects.topic import TopicName
 from app.models.article import Article
 from app.models.article_extraction import ArticleExtraction
 from app.models.category import Category
@@ -97,13 +96,11 @@ def _in_scope_call(
     return AssessmentCall(
         result=InScope(
             category=category,
-            topic=TopicName("llm benchmark"),
             investor_take="bullish",
             events=events or [],
         ),
         raw_response='{"category":"ai"}',
         raw_category=category.value,
-        raw_topic="llm benchmark",
         prompt_version="testver1",
         model_name=_AI_MODEL,
     )
@@ -118,7 +115,6 @@ def _out_of_scope_call(
         result=OutOfScope(investor_take=investor_take, events=events or []),
         raw_response='{"category":"out_of_scope"}',
         raw_category="out_of_scope",
-        raw_topic="celebrity gossip",
         prompt_version="testver1",
         model_name=_AI_MODEL,
     )
@@ -253,7 +249,6 @@ async def test_save_in_scope_returns_none_on_race_lost(
         extraction_id=extraction.id,
         translated_title="勝者タイトル",
         summary="勝者要約",
-        topic="llm benchmark",
         category_id=ai_cat.id,
         investor_take="winner take",
     )
@@ -452,7 +447,6 @@ async def test_try_load_returns_none_when_in_scope_exists(
             extraction_id=extraction.id,
             translated_title="t",
             summary="s",
-            topic="llm benchmark",
             category_id=ai_cat.id,
             investor_take="x",
         )

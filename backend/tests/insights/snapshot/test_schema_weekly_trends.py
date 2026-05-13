@@ -12,7 +12,6 @@ from datetime import UTC, date, datetime
 from app.insights.snapshot.domain.trend import (
     EntityTrend,
     NewEntity,
-    TopicTrend,
     WeeklyCategoryTrends,
     WeeklyTrendsBundle,
 )
@@ -44,9 +43,6 @@ class TestFromSnapshot:
                     previous_count=5,
                 ),
             ),
-            trending_topics=(
-                TopicTrend(topic="ai agents", current_count=12, previous_count=1),
-            ),
             new_entities=(NewEntity(name="Acme", type="company", current_count=3),),
         )
         return WeeklyTrendsBundle(window_end=date(2026, 5, 3), sections=(section,))
@@ -76,11 +72,6 @@ class TestFromSnapshot:
         assert entity["currentCount"] == 30
         assert entity["previousCount"] == 5
         assert entity["hotnessScore"] == 5.0  # (30-5)/max(5,2)
-
-        topic = section["trendingTopics"][0]
-        assert topic["topic"] == "ai agents"
-        assert topic["currentCount"] == 12
-        assert topic["hotnessScore"] == 5.5  # (12-1)/max(1,2)
 
         new_e = section["newEntities"][0]
         assert new_e["name"] == "Acme"
