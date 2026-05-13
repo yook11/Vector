@@ -38,6 +38,7 @@ logger = structlog.get_logger(__name__)
 class GeminiEmbedder(BaseEmbedder):
     """BaseEmbedder の gemini-embedding-001 実装 (Stage 5 document 専用)。"""
 
+    PROVIDER = "gemini"
     MODEL = "gemini-embedding-001"
     DIMENSION = 768
     # Gemini API のレート制限値は tier に依存する。確定値が取れないため None で運用し、

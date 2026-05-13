@@ -47,6 +47,7 @@ from app.analysis.embedding.service import EmbeddingService
 from app.analysis.rate_limiter import (
     RateLimitExceededError as _RateLimitExceededError,
 )
+from app.analysis.rate_policy import RatePolicy
 from app.brokers import broker_embedding, is_last_attempt
 from app.observability.redact import redact_secrets
 
@@ -88,9 +89,7 @@ async def generate_embedding(
 
     # AI を呼ぶ見込みが立ってから rate limit acquire (stale trigger で quota を
     # 消費しない設計)
-    rpm_limiter, rpd_limiter = _build_limiters(
-        "embed", embedder.MODEL, embedder.RPM, embedder.RPD
-    )
+    rpm_limiter, rpd_limiter = _build_limiters(RatePolicy.from_component(embedder))
     try:
         if rpd_limiter is not None:
             await rpd_limiter.acquire()

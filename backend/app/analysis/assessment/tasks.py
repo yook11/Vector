@@ -36,6 +36,7 @@ from app.analysis.embedding.tasks import generate_embedding
 from app.analysis.rate_limiter import (
     RateLimitExceededError as _RateLimitExceededError,
 )
+from app.analysis.rate_policy import RatePolicy
 from app.brokers import broker_analysis, is_last_attempt
 
 logger = structlog.get_logger(__name__)
@@ -84,9 +85,7 @@ async def assess_content(
         return
 
     # AI を呼ぶ見込みが立ってから rate limit acquire
-    rpm_limiter, rpd_limiter = _build_limiters(
-        "assess", assessor.MODEL, assessor.RPM, assessor.RPD
-    )
+    rpm_limiter, rpd_limiter = _build_limiters(RatePolicy.from_component(assessor))
     try:
         if rpd_limiter is not None:
             await rpd_limiter.acquire()

@@ -26,6 +26,7 @@ from app.analysis.extraction.service import ExtractionService
 from app.analysis.rate_limiter import (
     RateLimitExceededError as _RateLimitExceededError,
 )
+from app.analysis.rate_policy import RatePolicy
 from app.brokers import broker_analysis, is_last_attempt
 
 logger = structlog.get_logger(__name__)
@@ -69,9 +70,7 @@ async def extract_content(
         return
 
     # AI を呼ぶ見込みが立ってから rate limit acquire (Stage 4 / Stage 5 と対称)
-    rpm_limiter, rpd_limiter = _build_limiters(
-        "extract", extractor.MODEL, extractor.RPM, extractor.RPD
-    )
+    rpm_limiter, rpd_limiter = _build_limiters(RatePolicy.from_component(extractor))
     try:
         if rpd_limiter is not None:
             await rpd_limiter.acquire()

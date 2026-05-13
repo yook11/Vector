@@ -34,6 +34,7 @@ from app.analysis.assessment.errors import (
 
 def _make_provider_fake() -> MagicMock:
     fake = MagicMock()
+    fake.PROVIDER = "gemini"
     fake.MODEL = "test-model"
     fake.RPM = 50
     fake.RPD = 1500

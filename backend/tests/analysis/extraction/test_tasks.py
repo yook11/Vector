@@ -27,8 +27,9 @@ from app.analysis.extraction.domain.ready import ExtractionTrigger, ReadyForExtr
 
 
 def _make_provider_fake() -> MagicMock:
-    """extractor 用のスタブ。MODEL/PROMPT_VERSION/RPM/RPD を持つ。"""
+    """extractor 用のスタブ。PROVIDER/MODEL/PROMPT_VERSION/RPM/RPD を持つ。"""
     fake = MagicMock()
+    fake.PROVIDER = "gemini"
     fake.MODEL = "test-model"
     fake.PROMPT_VERSION = "test-prompt-v1"
     fake.RPM = 50

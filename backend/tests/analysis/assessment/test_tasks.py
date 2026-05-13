@@ -29,8 +29,9 @@ from app.analysis.embedding.domain.ready import EmbeddingTrigger
 
 
 def _make_provider_fake() -> MagicMock:
-    """assessor 用のスタブ。MODEL/RPM/RPD を持つ。"""
+    """assessor 用のスタブ。PROVIDER/MODEL/RPM/RPD を持つ。"""
     fake = MagicMock()
+    fake.PROVIDER = "gemini"
     fake.MODEL = "test-model"
     fake.RPM = 50
     fake.RPD = 1500

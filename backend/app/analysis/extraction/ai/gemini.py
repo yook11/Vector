@@ -77,6 +77,7 @@ def _detect_finish_reason(response: GenerateContentResponse) -> str | None:
 class GeminiExtractor(BaseExtractor):
     """BaseExtractor の Gemini API 実装。"""
 
+    PROVIDER = "gemini"
     MODEL = GeminiExtractionPrompt.MODEL
     PROMPT_VERSION = GeminiExtractionPrompt.VERSION
     RPM = 100

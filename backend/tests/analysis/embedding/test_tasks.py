@@ -33,8 +33,9 @@ from app.analysis.embedding.errors import (
 
 
 def _make_embedder_fake() -> MagicMock:
-    """ctx.state.embedder 用のスタブ。MODEL/RPM/RPD を持つ。"""
+    """ctx.state.embedder 用のスタブ。PROVIDER/MODEL/RPM/RPD を持つ。"""
     fake = MagicMock()
+    fake.PROVIDER = "gemini"
     fake.MODEL = "cl-nagoya/ruri-v3-310m"
     fake.RPM = None
     fake.RPD = None

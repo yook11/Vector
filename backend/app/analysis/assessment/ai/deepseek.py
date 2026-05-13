@@ -66,6 +66,7 @@ _BASE_URL: Final = "https://api.deepseek.com/beta"
 class DeepSeekAssessor(BaseAssessor):
     """BaseAssessor の DeepSeek-V4-Flash 実装。"""
 
+    PROVIDER = "deepseek"
     MODEL = DeepSeekAssessmentPrompt.MODEL
     # 公式の固定 RPM/RPD 公開なし。429 は OpenAI SDK の retry に任せ、
     # Logfire 実測後に値を入れる方針 (別 PR)。

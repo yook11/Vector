@@ -37,6 +37,7 @@ from app.analysis.extraction.errors import ExtractionResponseInvalidError
 
 def _make_provider_fake() -> MagicMock:
     fake = MagicMock()
+    fake.PROVIDER = "gemini"
     fake.MODEL = "test-model"
     fake.PROMPT_VERSION = "test-prompt-v1"
     fake.RPM = 50

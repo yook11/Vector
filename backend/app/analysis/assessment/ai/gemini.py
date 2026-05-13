@@ -52,6 +52,7 @@ _BLOCKED_FINISH_REASONS = frozenset({"SAFETY", "RECITATION"})
 class GeminiAssessor(BaseAssessor):
     """BaseAssessor の Gemini API 実装。"""
 
+    PROVIDER = "gemini"
     MODEL = GeminiAssessmentPrompt.MODEL
     RPM = 100
     RPD = 1500
