@@ -28,12 +28,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.domain.value_objects.entity import EntityRawType, EntitySurface
-from app.analysis.errors import ExtractionResponseInvalidError
 from app.analysis.extraction.ai.base import BaseExtractor
 from app.analysis.extraction.ai.envelope import ExtractionCall
 from app.analysis.extraction.ai.gemini_prompt import GeminiExtractionPrompt
 from app.analysis.extraction.domain import ExtractedEntity, Noise, Signal
 from app.analysis.extraction.domain.ready import ReadyForExtraction
+from app.analysis.extraction.errors import ExtractionResponseInvalidError
 from app.analysis.extraction.service import ExtractionService
 from app.models.article import Article
 from app.models.news_source import NewsSource

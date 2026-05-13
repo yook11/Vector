@@ -18,15 +18,15 @@ from __future__ import annotations
 import pytest
 from google.genai.errors import APIError
 
-from app.analysis.errors import (
+from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderInputRejectedError,
     AIProviderNetworkError,
     AIProviderRateLimitedError,
     AIProviderRequestInvalidError,
-    ExtractionResponseInvalidError,
 )
 from app.analysis.extraction.ai.gemini import GeminiExtractor
+from app.analysis.extraction.errors import ExtractionResponseInvalidError
 
 
 def _api_error(status: str, message: str, code: int = 400) -> APIError:

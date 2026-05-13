@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import pytest
 
+from app.analysis.ai_provider_errors import (
+    AIProviderConfigurationError,
+    AIProviderRateLimitedError,
+)
 from app.analysis.assessment.errors import (
     AssessmentCategoryMissingError,
     AssessmentError,
     AssessmentRecoverableError,
     AssessmentResponseInvalidError,
     AssessmentTerminalSkipError,
-)
-from app.analysis.errors.provider import (
-    AIProviderConfigurationError,
-    AIProviderRateLimitedError,
 )
 from app.observability.categories import (
     NonRetryableDropArticle,

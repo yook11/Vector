@@ -1,5 +1,9 @@
 """Layer 2-A: AI provider 呼び出し由来のエラー 9 種。
 
+``app/analysis/`` 直下に置き、各 Stage の ``errors.py`` (Stage 4/5) および
+``extraction/errors.py`` (Stage 3) から import される横断 module。Stage 横断で
+共有される provider 由来の例外語彙を 1 ファイルに集約する。
+
 extractor / assessor / embedder の client (Gemini / DeepSeek) が provider 例外を
 ここに翻訳する。Layer 1 marker (``RetryableError`` / ``NonRetryableDropArticle`` /
 ``NonRetryableKeepArticle``) と多重継承して dispatch 軸を表現する。

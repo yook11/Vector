@@ -21,12 +21,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pydantic import SecretStr
 
+from app.analysis.ai_provider_errors import AIProviderOutputBlockedError
 from app.analysis.assessment.ai.envelope import AssessmentCall
 from app.analysis.assessment.ai.gemini import GeminiAssessor
 from app.analysis.assessment.ai.gemini_prompt import GeminiAssessmentPrompt
 from app.analysis.assessment.domain.result import InScope, InScopeCategory, OutOfScope
 from app.analysis.assessment.errors import AssessmentResponseInvalidError
-from app.analysis.errors.provider import AIProviderOutputBlockedError
 from app.config import settings
 
 

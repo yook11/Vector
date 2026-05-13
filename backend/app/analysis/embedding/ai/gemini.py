@@ -20,8 +20,7 @@ from google import genai
 from google.genai import errors as genai_errors
 from google.genai.types import EmbedContentConfig
 
-from app.analysis.embedding.ai.base import BaseEmbedder
-from app.analysis.errors.provider import (
+from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderInputRejectedError,
     AIProviderNetworkError,
@@ -30,6 +29,7 @@ from app.analysis.errors.provider import (
     AIProviderRequestInvalidError,
     AIProviderServiceUnavailableError,
 )
+from app.analysis.embedding.ai.base import BaseEmbedder
 from app.config import settings
 
 logger = structlog.get_logger(__name__)

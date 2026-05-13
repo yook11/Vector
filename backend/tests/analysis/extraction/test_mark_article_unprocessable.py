@@ -23,7 +23,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.analysis.errors import (
+from app.analysis.ai_provider_errors import (
     AIProviderInputRejectedError,
     AIProviderOutputBlockedError,
 )

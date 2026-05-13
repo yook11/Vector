@@ -25,7 +25,7 @@ Stage 5 で raise されうる例外と、外部 BC (``AIProviderError``) を St
 
 from __future__ import annotations
 
-from app.analysis.errors.provider import (
+from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderError,
     AIProviderInputRejectedError,

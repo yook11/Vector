@@ -14,13 +14,13 @@ from typing import ClassVar
 import structlog
 from pydantic import ValidationError
 
+from app.analysis.ai_provider_errors import AIProviderError
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.domain.value_objects import EmbeddingVector
 from app.analysis.embedding.errors import (
     EmbeddingError,
     EmbeddingResponseInvalidError,
 )
-from app.analysis.errors.provider import AIProviderError
 
 logger = structlog.get_logger(__name__)
 

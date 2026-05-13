@@ -18,11 +18,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from structlog.testing import capture_logs
 
-from app.analysis.assessment.domain.ready import AssessmentTrigger
-from app.analysis.errors import (
+from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderRateLimitedError,
 )
+from app.analysis.assessment.domain.ready import AssessmentTrigger
 from app.analysis.extraction.domain.ready import ExtractionTrigger, ReadyForExtraction
 
 

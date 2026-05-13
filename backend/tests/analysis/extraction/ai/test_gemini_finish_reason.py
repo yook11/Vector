@@ -24,16 +24,14 @@ from google.genai.types import (
     Part,
 )
 
+from app.analysis.ai_provider_errors import AIProviderOutputBlockedError
 from app.analysis.domain.value_objects.entity import EntityRawType, EntitySurface
-from app.analysis.errors import (
-    AIProviderOutputBlockedError,
-    ExtractionResponseInvalidError,
-)
 from app.analysis.extraction.ai.envelope import ExtractionCall
 from app.analysis.extraction.ai.gemini import GeminiExtractor
 from app.analysis.extraction.ai.gemini_prompt import GeminiExtractionPrompt
 from app.analysis.extraction.ai.schema import GeminiExtractionResponse
 from app.analysis.extraction.domain import ExtractedEntity, Signal
+from app.analysis.extraction.errors import ExtractionResponseInvalidError
 
 
 def _make_response(

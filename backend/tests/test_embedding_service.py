@@ -31,6 +31,12 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.analysis.ai_provider_errors import (
+    AIProviderInputRejectedError,
+    AIProviderNetworkError,
+    AIProviderRateLimitedError,
+    AIProviderServiceUnavailableError,
+)
 from app.analysis.embedding.ai.base import BaseEmbedder
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.domain.value_objects import (
@@ -43,12 +49,6 @@ from app.analysis.embedding.errors import (
     EmbeddingTerminalSkipError,
 )
 from app.analysis.embedding.service import EmbeddingService
-from app.analysis.errors.provider import (
-    AIProviderInputRejectedError,
-    AIProviderNetworkError,
-    AIProviderRateLimitedError,
-    AIProviderServiceUnavailableError,
-)
 from app.models.article import Article
 from app.models.article_extraction import ArticleExtraction
 from app.models.category import Category

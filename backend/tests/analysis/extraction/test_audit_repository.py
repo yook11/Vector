@@ -23,20 +23,20 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.analysis.domain.value_objects.entity import EntityRawType, EntitySurface
-from app.analysis.errors import (
+from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderInputRejectedError,
     AIProviderNetworkError,
     AIProviderOutputBlockedError,
-    ExtractionResponseInvalidError,
 )
+from app.analysis.domain.value_objects.entity import EntityRawType, EntitySurface
 from app.analysis.extraction.ai.base import BaseExtractor
 from app.analysis.extraction.ai.envelope import ExtractionCall
 from app.analysis.extraction.ai.gemini_prompt import GeminiExtractionPrompt
 from app.analysis.extraction.audit_repository import ExtractionAuditRepository
 from app.analysis.extraction.domain import ExtractedEntity, Noise, Signal
 from app.analysis.extraction.domain.ready import ReadyForExtraction
+from app.analysis.extraction.errors import ExtractionResponseInvalidError
 from app.models.article import Article
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent

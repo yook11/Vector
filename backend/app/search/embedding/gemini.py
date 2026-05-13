@@ -16,7 +16,7 @@ from google import genai
 from google.genai import errors as genai_errors
 from google.genai.types import EmbedContentConfig
 
-from app.analysis.errors.provider import (
+from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderInputRejectedError,
     AIProviderNetworkError,

@@ -15,6 +15,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from app.analysis.ai_provider_errors import (
+    AIProviderConfigurationError,
+    AIProviderNetworkError,
+    AIProviderRateLimitedError,
+)
 from app.analysis.assessment.ai.base import BaseAssessor
 from app.analysis.assessment.ai.envelope import AssessmentCall
 from app.analysis.assessment.domain.result import InScope, OutOfScope
@@ -22,11 +27,6 @@ from app.analysis.assessment.errors import (
     AssessmentRecoverableError,
     AssessmentResponseInvalidError,
     AssessmentTerminalSkipError,
-)
-from app.analysis.errors.provider import (
-    AIProviderConfigurationError,
-    AIProviderNetworkError,
-    AIProviderRateLimitedError,
 )
 
 

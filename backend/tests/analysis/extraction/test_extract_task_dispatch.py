@@ -22,7 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.analysis.errors import (
+from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderInputRejectedError,
     AIProviderInsufficientBalanceError,
@@ -32,9 +32,9 @@ from app.analysis.errors import (
     AIProviderRateLimitedError,
     AIProviderRequestInvalidError,
     AIProviderServiceUnavailableError,
-    ExtractionResponseInvalidError,
 )
 from app.analysis.extraction.domain.ready import ExtractionTrigger, ReadyForExtraction
+from app.analysis.extraction.errors import ExtractionResponseInvalidError
 
 
 def _make_provider_fake() -> MagicMock:

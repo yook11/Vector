@@ -16,8 +16,7 @@ import pytest
 from google.genai import errors as genai_errors
 from pydantic import SecretStr
 
-from app.analysis.assessment.ai.gemini import GeminiAssessor
-from app.analysis.errors.provider import (
+from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderInputRejectedError,
     AIProviderNetworkError,
@@ -26,6 +25,7 @@ from app.analysis.errors.provider import (
     AIProviderRequestInvalidError,
     AIProviderServiceUnavailableError,
 )
+from app.analysis.assessment.ai.gemini import GeminiAssessor
 from app.config import settings
 
 

@@ -4,14 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.analysis.embedding.errors import (
-    EMBEDDING_RECOVERABLE_PROVIDER_ERRORS,
-    EMBEDDING_TERMINAL_SKIP_PROVIDER_ERRORS,
-    EmbeddingRecoverableError,
-    EmbeddingTerminalSkipError,
-    to_embedding_error,
-)
-from app.analysis.errors.provider import (
+from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderError,
     AIProviderInputRejectedError,
@@ -22,6 +15,13 @@ from app.analysis.errors.provider import (
     AIProviderRateLimitedError,
     AIProviderRequestInvalidError,
     AIProviderServiceUnavailableError,
+)
+from app.analysis.embedding.errors import (
+    EMBEDDING_RECOVERABLE_PROVIDER_ERRORS,
+    EMBEDDING_TERMINAL_SKIP_PROVIDER_ERRORS,
+    EmbeddingRecoverableError,
+    EmbeddingTerminalSkipError,
+    to_embedding_error,
 )
 
 # 期待 9 種の白リスト。Stage 4 test_provider_mapping.py と同形。

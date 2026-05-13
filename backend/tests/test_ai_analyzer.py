@@ -26,6 +26,10 @@ from pydantic import SecretStr, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
+from app.analysis.ai_provider_errors import (
+    AIProviderNetworkError,
+    AIProviderServiceUnavailableError,
+)
 from app.analysis.assessment.ai.base import BaseAssessor
 from app.analysis.assessment.ai.envelope import AssessmentCall
 from app.analysis.assessment.domain.ready import ReadyForAssessment
@@ -43,10 +47,6 @@ from app.analysis.domain.value_objects.entity import (
     EntityType,
 )
 from app.analysis.domain.value_objects.topic import TopicName
-from app.analysis.errors import (
-    AIProviderNetworkError,
-    AIProviderServiceUnavailableError,
-)
 from app.analysis.extraction.ai.base import BaseExtractor
 from app.analysis.extraction.ai.envelope import ExtractionCall
 from app.analysis.extraction.ai.gemini import GeminiExtractor

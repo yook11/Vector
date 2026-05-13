@@ -17,7 +17,7 @@ from typing import ClassVar
 
 import structlog
 
-from app.analysis.errors.provider import AIProviderError
+from app.analysis.ai_provider_errors import AIProviderError
 
 logger = structlog.get_logger(__name__)
 

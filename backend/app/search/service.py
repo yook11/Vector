@@ -7,7 +7,7 @@ from uuid import UUID
 import redis.asyncio as aioredis
 import structlog
 
-from app.analysis.errors.provider import (
+from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderError,
     AIProviderInputRejectedError,

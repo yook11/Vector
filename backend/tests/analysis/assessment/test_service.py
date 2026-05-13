@@ -26,6 +26,10 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.analysis.ai_provider_errors import (
+    AIProviderConfigurationError,
+    AIProviderNetworkError,
+)
 from app.analysis.assessment.ai.base import BaseAssessor
 from app.analysis.assessment.ai.envelope import AssessmentCall
 from app.analysis.assessment.domain.ready import ReadyForAssessment
@@ -41,10 +45,6 @@ from app.analysis.assessment.errors import (
 )
 from app.analysis.assessment.service import AssessmentService
 from app.analysis.domain.value_objects.topic import TopicName
-from app.analysis.errors.provider import (
-    AIProviderConfigurationError,
-    AIProviderNetworkError,
-)
 from app.models.article import Article
 from app.models.article_extraction import ArticleExtraction
 from app.models.category import Category

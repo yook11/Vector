@@ -7,9 +7,10 @@ from typing import ClassVar
 
 import structlog
 
-from app.analysis.errors import AIProviderError, ExtractionDomainError
+from app.analysis.ai_provider_errors import AIProviderError
 from app.analysis.extraction.ai.envelope import ExtractionCall
 from app.analysis.extraction.domain import Noise, Signal
+from app.analysis.extraction.errors import ExtractionDomainError
 
 logger = structlog.get_logger(__name__)
 

@@ -4,14 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.analysis.assessment.errors import (
-    ASSESSMENT_RECOVERABLE_PROVIDER_ERRORS,
-    ASSESSMENT_TERMINAL_SKIP_PROVIDER_ERRORS,
-    AssessmentRecoverableError,
-    AssessmentTerminalSkipError,
-    map_provider_to_assessment,
-)
-from app.analysis.errors.provider import (
+from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderError,
     AIProviderInputRejectedError,
@@ -22,6 +15,13 @@ from app.analysis.errors.provider import (
     AIProviderRateLimitedError,
     AIProviderRequestInvalidError,
     AIProviderServiceUnavailableError,
+)
+from app.analysis.assessment.errors import (
+    ASSESSMENT_RECOVERABLE_PROVIDER_ERRORS,
+    ASSESSMENT_TERMINAL_SKIP_PROVIDER_ERRORS,
+    AssessmentRecoverableError,
+    AssessmentTerminalSkipError,
+    map_provider_to_assessment,
 )
 
 # 期待 9 種の白リスト。本ファイルで直接 expected セットを書くことで、

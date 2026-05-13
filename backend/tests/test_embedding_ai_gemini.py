@@ -18,10 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from google.genai import errors as genai_errors
 
-from app.analysis.embedding.ai.gemini import GeminiEmbedder
-from app.analysis.embedding.domain.ready import ReadyForEmbedding
-from app.analysis.embedding.domain.value_objects import EmbeddingVector
-from app.analysis.errors.provider import (
+from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderInputRejectedError,
     AIProviderNetworkError,
@@ -30,6 +27,9 @@ from app.analysis.errors.provider import (
     AIProviderRequestInvalidError,
     AIProviderServiceUnavailableError,
 )
+from app.analysis.embedding.ai.gemini import GeminiEmbedder
+from app.analysis.embedding.domain.ready import ReadyForEmbedding
+from app.analysis.embedding.domain.value_objects import EmbeddingVector
 
 
 def _make_embedder() -> GeminiEmbedder:

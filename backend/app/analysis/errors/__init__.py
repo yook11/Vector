@@ -1,41 +1,15 @@
-"""Analysis 系 error 階層の集約 export (旧 ``app/analysis/errors.py`` の後継)。
+"""Legacy Analysis ドメインエラー 8 種の一時保持 (PR3.5-d で削除予定)。
 
-PR3.5-a で ``errors.py`` を package に転換し、Layer 2-A (provider) / Layer 2-B
-(extraction 等) を別ファイルに分離した。本 module は旧 ``errors.py`` 互換のため
-全 type を re-export する。
-
-旧 8 type (``AnalysisDomainError`` 階層) は PR3.5-c で raise/catch 側が新型に切替、
-PR3.5-d で本ファイルから定義削除予定。本 PR (PR3.5-a) では動作変化なし — 新型は
-追加するだけで誰も raise しない。
+Stage 3 Layer 2-B エラーは ``app/analysis/extraction/errors.py`` (Stage 4/5 と
+対称な位置) に、AI provider 由来エラー 9 種は ``app/analysis/ai_provider_errors.py``
+(``analysis/`` 直下) に分離済。本 file は ``AnalysisDomainError`` 階層を raise/catch
+する旧コード (``re_extraction_service.py`` 等) が残っている間の一時的な保持場所で
+あり、PR3.5-d で legacy raise/catch を新型に切替えた上で本 file ごと削除する。
 
 詳細: ``specs/pipeline-events-error-taxonomy.md``
 """
 
 from __future__ import annotations
-
-# Layer 2-B Stage 3: Extraction 固有 (新規、PR3.5-c で raise 開始)
-from app.analysis.errors.extraction import (
-    ExtractionDomainError,
-    ExtractionResponseInvalidError,
-)
-
-# Layer 2-A: AI provider 由来 (新規、PR3.5-c で raise 開始)
-from app.analysis.errors.provider import (
-    AIProviderConfigurationError,
-    AIProviderError,
-    AIProviderInputRejectedError,
-    AIProviderInsufficientBalanceError,
-    AIProviderNetworkError,
-    AIProviderOutputBlockedError,
-    AIProviderQuotaExhaustedError,
-    AIProviderRateLimitedError,
-    AIProviderRequestInvalidError,
-    AIProviderServiceUnavailableError,
-)
-
-# ---------------------------------------------------------------------------
-# Legacy types (旧 errors.py の内容を移植、PR3.5-c/d で段階削除予定)
-# ---------------------------------------------------------------------------
 
 
 class AnalysisDomainError(Exception):
@@ -80,7 +54,6 @@ class UnclassifiedError(AnalysisDomainError):
 
 
 __all__ = [
-    # Legacy (旧 errors.py)
     "AnalysisDomainError",
     "InvalidInputError",
     "ConfigurationError",
@@ -90,18 +63,4 @@ __all__ = [
     "DailyQuotaExhaustedError",
     "InsufficientBalanceError",
     "UnclassifiedError",
-    # Layer 2-A
-    "AIProviderError",
-    "AIProviderConfigurationError",
-    "AIProviderRequestInvalidError",
-    "AIProviderInsufficientBalanceError",
-    "AIProviderRateLimitedError",
-    "AIProviderQuotaExhaustedError",
-    "AIProviderServiceUnavailableError",
-    "AIProviderNetworkError",
-    "AIProviderInputRejectedError",
-    "AIProviderOutputBlockedError",
-    # Layer 2-B Stage 3
-    "ExtractionDomainError",
-    "ExtractionResponseInvalidError",
 ]

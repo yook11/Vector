@@ -12,7 +12,7 @@ from google.genai.errors import APIError, ServerError
 from google.genai.types import GenerateContentConfig, GenerateContentResponse
 from pydantic import ValidationError
 
-from app.analysis.errors import (
+from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderInputRejectedError,
     AIProviderNetworkError,
@@ -20,7 +20,6 @@ from app.analysis.errors import (
     AIProviderRateLimitedError,
     AIProviderRequestInvalidError,
     AIProviderServiceUnavailableError,
-    ExtractionResponseInvalidError,
 )
 from app.analysis.extraction.ai.base import BaseExtractor
 from app.analysis.extraction.ai.envelope import ExtractionCall
@@ -28,6 +27,7 @@ from app.analysis.extraction.ai.gemini_prompt import GeminiExtractionPrompt
 from app.analysis.extraction.ai.parse import parse_extraction
 from app.analysis.extraction.ai.schema import GeminiExtractionResponse
 from app.analysis.extraction.domain import Noise, Signal
+from app.analysis.extraction.errors import ExtractionResponseInvalidError
 from app.config import settings
 
 logger = structlog.get_logger(__name__)

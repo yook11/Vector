@@ -328,7 +328,7 @@ async def test_embed_search_query_translates_unexpected_to_invalid_query() -> No
 @pytest.mark.asyncio
 async def test_embed_search_query_routes_service_unavailable_to_search_error() -> None:
     """``AIProviderServiceUnavailableError`` (provider 5xx) → ``SearchError`` (503)。"""
-    from app.analysis.errors.provider import AIProviderServiceUnavailableError
+    from app.analysis.ai_provider_errors import AIProviderServiceUnavailableError
     from app.search.errors import SearchError
 
     fake_embedder = MagicMock()
@@ -343,7 +343,7 @@ async def test_embed_search_query_routes_service_unavailable_to_search_error() -
 @pytest.mark.asyncio
 async def test_embed_search_query_routes_configuration_to_search_error() -> None:
     """``AIProviderConfigurationError`` (auth / key 不正) は ``SearchError`` (503)。"""
-    from app.analysis.errors.provider import AIProviderConfigurationError
+    from app.analysis.ai_provider_errors import AIProviderConfigurationError
     from app.search.errors import SearchError
 
     fake_embedder = MagicMock()
@@ -361,7 +361,7 @@ async def test_embed_search_query_routes_request_invalid_to_search_error() -> No
 
     user query の内容では直らない provider 側の障害なので infra 系に振る。
     """
-    from app.analysis.errors.provider import AIProviderRequestInvalidError
+    from app.analysis.ai_provider_errors import AIProviderRequestInvalidError
     from app.search.errors import SearchError
 
     fake_embedder = MagicMock()
@@ -376,7 +376,7 @@ async def test_embed_search_query_routes_request_invalid_to_search_error() -> No
 @pytest.mark.asyncio
 async def test_embed_search_query_routes_rate_limited_to_search_error() -> None:
     """``AIProviderRateLimitedError`` (429) は ``SearchError`` (503)。"""
-    from app.analysis.errors.provider import AIProviderRateLimitedError
+    from app.analysis.ai_provider_errors import AIProviderRateLimitedError
     from app.search.errors import SearchError
 
     fake_embedder = MagicMock()
@@ -394,7 +394,7 @@ async def test_embed_search_query_routes_input_rejected_to_invalid_query() -> No
 
     503 の infra 系には振らず、user に「クエリの内容を変えて再試行を」と促す。
     """
-    from app.analysis.errors.provider import AIProviderInputRejectedError
+    from app.analysis.ai_provider_errors import AIProviderInputRejectedError
     from app.exceptions import InvalidQueryError
 
     fake_embedder = MagicMock()

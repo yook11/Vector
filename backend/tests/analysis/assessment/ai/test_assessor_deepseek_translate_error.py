@@ -26,8 +26,7 @@ from openai import (
 from openai import RateLimitError as OpenAIRateLimitError
 from pydantic import SecretStr
 
-from app.analysis.assessment.ai.deepseek import DeepSeekAssessor
-from app.analysis.errors.provider import (
+from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderInsufficientBalanceError,
     AIProviderNetworkError,
@@ -35,6 +34,7 @@ from app.analysis.errors.provider import (
     AIProviderRequestInvalidError,
     AIProviderServiceUnavailableError,
 )
+from app.analysis.assessment.ai.deepseek import DeepSeekAssessor
 from app.config import settings
 
 

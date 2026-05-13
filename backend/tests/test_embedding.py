@@ -16,6 +16,11 @@ import math
 
 import pytest
 
+from app.analysis.ai_provider_errors import (
+    AIProviderError,
+    AIProviderInputRejectedError,
+    AIProviderRequestInvalidError,
+)
 from app.analysis.embedding.ai.base import BaseEmbedder
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.domain.value_objects import (
@@ -23,11 +28,6 @@ from app.analysis.embedding.domain.value_objects import (
     EmbeddingVector,
 )
 from app.analysis.embedding.errors import EmbeddingResponseInvalidError
-from app.analysis.errors.provider import (
-    AIProviderError,
-    AIProviderInputRejectedError,
-    AIProviderRequestInvalidError,
-)
 
 
 def _v(value: float = 0.1) -> list[float]:

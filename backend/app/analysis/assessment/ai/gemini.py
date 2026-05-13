@@ -23,13 +23,7 @@ from google import genai
 from google.genai import errors as genai_errors
 from google.genai.types import GenerateContentConfig
 
-from app.analysis.assessment.ai.base import BaseAssessor
-from app.analysis.assessment.ai.envelope import AssessmentCall
-from app.analysis.assessment.ai.gemini_prompt import GeminiAssessmentPrompt
-from app.analysis.assessment.ai.parse import parse_assessment
-from app.analysis.assessment.domain.result import InScope, OutOfScope
-from app.analysis.assessment.errors import AssessmentResponseInvalidError
-from app.analysis.errors.provider import (
+from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderInputRejectedError,
     AIProviderNetworkError,
@@ -39,6 +33,12 @@ from app.analysis.errors.provider import (
     AIProviderRequestInvalidError,
     AIProviderServiceUnavailableError,
 )
+from app.analysis.assessment.ai.base import BaseAssessor
+from app.analysis.assessment.ai.envelope import AssessmentCall
+from app.analysis.assessment.ai.gemini_prompt import GeminiAssessmentPrompt
+from app.analysis.assessment.ai.parse import parse_assessment
+from app.analysis.assessment.domain.result import InScope, OutOfScope
+from app.analysis.assessment.errors import AssessmentResponseInvalidError
 from app.config import settings
 
 logger = structlog.get_logger(__name__)

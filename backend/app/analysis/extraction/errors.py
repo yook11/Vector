@@ -1,4 +1,10 @@
-"""Layer 2-B Stage 3: Extraction 工程固有のエラー。
+"""Stage 3 (Extraction) ドメインエラー — Layer 2-B のみ保持。
+
+Stage 4 (assessment) / Stage 5 (embedding) と対称に Stage package 配下に置く。
+ただし Stage 3 は Layer 1 marker (Stage 固有 Recoverable/TerminalSkip) を独自に
+持たず、foundation marker (``NonRetryableDropArticle`` 等) を直接多重継承する
+方針なので、本ファイルは **Layer 2-B のみ** を集約する (Layer 1 / Layer 2-A
+ACL は持たない)。
 
 ``ExtractionService`` が raise する。AI が応答の返却に成功しても、Stage 3 が要求
 する形式 (Pydantic schema / 業務 invariant) で使えなかった場合 (parse 不能 / schema

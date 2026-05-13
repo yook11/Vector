@@ -21,7 +21,7 @@ section に対応する:
 
 from __future__ import annotations
 
-from app.analysis.errors.provider import (
+from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderError,
     AIProviderInputRejectedError,
