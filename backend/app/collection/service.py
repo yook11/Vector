@@ -45,9 +45,6 @@ from app.collection.fetchers.protocol import Fetcher
 from app.collection.incomplete_article.domain.incomplete_article import (
     IncompleteArticle,
 )
-from app.collection.incomplete_article.domain.staged_attributes import (
-    StagedArticleAttributes,
-)
 from app.collection.incomplete_article.repository import PendingHtmlArticleRepository
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 
@@ -90,22 +87,14 @@ class ArticleAcquisitionService:
                                 continue
                             persisted_ids.append(article_id)
                         case FetchedEntry(item=IncompleteArticle() as pending):
-                            # pre-check: feed 再露出時に既知 URL の HTML fetch を
-                            # 反復しないための実用的 idempotency (ロックではない)
+                            # pre-check: 既知 URL の HTML fetch 反復を避けるための
+                            # コスト節約 (UNIQUE(url) と ON CONFLICT は save 側で
+                            # 構造的に担保)
                             if await article_repo.exists_by_source_url(
                                 pending.source_url
                             ):
                                 continue
-                            await pending_repo.create(
-                                url=pending.source_url,
-                                source_id=source_id,
-                                staged_attributes=StagedArticleAttributes(
-                                    title=pending.title,
-                                    published_at_hint=pending.published_at_hint,
-                                    prefer_html_title=pending.prefer_html_title,
-                                ),
-                                ready_at=datetime.now(UTC),
-                            )
+                            await pending_repo.save(pending, ready_at=datetime.now(UTC))
                         case SourceFetchFailed(reason=r):
                             logger.warning(
                                 "ingest_source_entry_failed",

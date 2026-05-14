@@ -37,8 +37,8 @@ from app.collection.errors import (
     ServerErrorBlip,
     ServerErrorOutage,
 )
-from app.collection.incomplete_article.domain.staged_attributes import (
-    StagedArticleAttributes,
+from app.collection.incomplete_article.domain.incomplete_article import (
+    IncompleteArticle,
 )
 from app.collection.incomplete_article.repository import (
     PendingHtmlArticleRepository,
@@ -46,7 +46,7 @@ from app.collection.incomplete_article.repository import (
 from app.models.article import Article as ArticleORM
 from app.models.news_source import NewsSource, SourceType
 from app.models.pending_html_article import PendingHtmlArticle
-from app.shared.value_objects.safe_url import SafeUrl
+from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 
 
 @pytest.fixture
@@ -64,11 +64,22 @@ async def tc_source(db_session: AsyncSession) -> NewsSource:
     return source
 
 
-def _attrs(title: str = "TC Title") -> StagedArticleAttributes:
-    return StagedArticleAttributes(
+def _incomplete(
+    source: NewsSource,
+    url: str,
+    *,
+    title: str = "TC Title",
+    published_at_hint: PublishedAt | None = PublishedAt(
+        datetime(2026, 4, 30, 12, 0, 0, tzinfo=UTC)
+    ),
+    prefer_html_title: bool = False,
+) -> IncompleteArticle:
+    return IncompleteArticle(
         title=title,
-        published_at_hint=PublishedAt(datetime(2026, 4, 30, 12, 0, 0, tzinfo=UTC)),
-        prefer_html_title=False,
+        source_id=source.id,
+        source_url=CanonicalArticleUrl(url),
+        published_at_hint=published_at_hint,
+        prefer_html_title=prefer_html_title,
     )
 
 
@@ -77,20 +88,18 @@ async def _make_pending(
     source: NewsSource,
     url: str,
     *,
-    attrs: StagedArticleAttributes | None = None,
-) -> tuple[SafeUrl, int]:
+    incomplete: IncompleteArticle | None = None,
+) -> tuple[CanonicalArticleUrl, int]:
     """``pending_html_articles`` 行を 1 件作って claim 状態にする。
 
     Returns:
         (canonical_url, pending_id) — pending は claim 済 (status='running',
         attempt_count=1)。
     """
-    safe_url = SafeUrl(url)
+    canonical_url = CanonicalArticleUrl(url)
     pending_repo = PendingHtmlArticleRepository(db_session)
-    pending_id = await pending_repo.create(
-        url=safe_url,
-        source_id=source.id,
-        staged_attributes=attrs or _attrs(),
+    pending_id = await pending_repo.save(
+        incomplete or _incomplete(source, url),
         ready_at=datetime.now(UTC) - timedelta(seconds=1),
     )
     assert pending_id is not None
@@ -99,7 +108,7 @@ async def _make_pending(
     ids = await pending_repo.claim_batch(limit=10, lease_minutes=5)
     await db_session.commit()
     assert pending_id in ids
-    return safe_url, pending_id
+    return canonical_url, pending_id
 
 
 def _patch_fetch(monkeypatch: pytest.MonkeyPatch, mock: AsyncMock) -> None:
@@ -132,12 +141,9 @@ async def test_returns_none_for_open_pending(
     tc_source: NewsSource,
 ) -> None:
     """``status='open'`` (claim されていない) は ``None`` で静かに exit。"""
-    safe_url = SafeUrl("https://techcrunch.com/open")
     pending_repo = PendingHtmlArticleRepository(db_session)
-    pending_id = await pending_repo.create(
-        url=safe_url,
-        source_id=tc_source.id,
-        staged_attributes=_attrs(),
+    pending_id = await pending_repo.save(
+        _incomplete(tc_source, "https://techcrunch.com/open"),
         ready_at=datetime.now(UTC) - timedelta(seconds=1),
     )
     await db_session.commit()
@@ -234,11 +240,14 @@ async def test_success_persists_extracted_body_and_published_at(
     html_published_at = datetime(2026, 5, 1, 9, 30, 0, tzinfo=UTC)
     # RSS hint=None で HTML published_at を fallback 経路で流入させ、
     # prefer_html_title=True で HTML title を採用させる
+    url = "https://techcrunch.com/article-3"
     _, pending_id = await _make_pending(
         db_session,
         tc_source,
-        "https://techcrunch.com/article-3",
-        attrs=StagedArticleAttributes(
+        url,
+        incomplete=_incomplete(
+            tc_source,
+            url,
             title="Feed Title",
             published_at_hint=None,
             prefer_html_title=True,
@@ -338,13 +347,18 @@ async def test_promotion_failure_closes_pending(
 
     body はあるが published_at が両方 None で promotion failure を発生させる。
     """
-    attrs = StagedArticleAttributes(
-        title="Short Title",
-        published_at_hint=None,
-        prefer_html_title=False,
-    )
+    url = "https://techcrunch.com/short"
     _, pending_id = await _make_pending(
-        db_session, tc_source, "https://techcrunch.com/short", attrs=attrs
+        db_session,
+        tc_source,
+        url,
+        incomplete=_incomplete(
+            tc_source,
+            url,
+            title="Short Title",
+            published_at_hint=None,
+            prefer_html_title=False,
+        ),
     )
     _patch_fetch(
         monkeypatch,

@@ -4,8 +4,10 @@ PR2.5-A の lease 方式キューに対する全 CRUD + claim/sweep 操作を集
 
 責務:
 
-- ``create``: Pattern H 振り分け entry を 1 件 INSERT。``UNIQUE(url)`` 違反は
-  ``None`` 戻し (同 tick race 敗北)。
+- ``save``: Pattern H 振り分けで ``IncompleteArticle`` を 1 件 INSERT。
+  ``UNIQUE(url)`` 違反は ``None`` 戻し (同 tick race 敗北)。``IncompleteArticle``
+  を直接受け、Repo 側で永続化フォーマット (``StagedArticleAttributes`` JSONB) に
+  詰める (姉妹 ``ArticleRepository.save_ready`` との対称)。
 - ``find_by_id``: ``ArticleCompletionService`` 入口で pending を SELECT (``url`` を
   pending 行から直接取得、JOIN 不要)。
 - ``claim_batch``: cron poller が ``status='open' AND ready_at <= NOW()`` の行を
@@ -83,29 +85,34 @@ class PendingHtmlArticleRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def create(
+    async def save(
         self,
+        incomplete: IncompleteArticle,
         *,
-        url: CanonicalArticleUrl,
-        source_id: int,
-        staged_attributes: StagedArticleAttributes,
         ready_at: datetime,
     ) -> int | None:
-        """新規 pending を ``status='open'`` で INSERT し、id を返す。
+        """``IncompleteArticle`` を ``pending_html_articles`` に
+        ``status='open'`` で INSERT し、id を返す。
 
-        UNIQUE 違反 (race-loss) の場合は ``None`` を返す。``url`` の UNIQUE は
-        canonical 値で効き、``CanonicalArticleUrl`` 型で canonical 性は構造保証
-        されているため caller / Repository での後付け正規化は不要。ORM 列は
-        ``SafeUrl`` 表現だが ``SafeUrlType.process_bind_param`` が
-        ``CanonicalArticleUrl`` を透過 bind する。
+        Aggregate (``IncompleteArticle``) を Repo が直接受け、永続化フォーマット
+        (``StagedArticleAttributes`` JSONB) への詰替えを Repo 内で完結させる。
+        UNIQUE(url) 違反 (race-loss) の場合は ``None`` を返す。``source_url`` の
+        canonical 性は ``CanonicalArticleUrl`` 型で構造保証されているため
+        Repository での後付け正規化は不要。ORM 列は ``SafeUrl`` 表現だが
+        ``SafeUrlType.process_bind_param`` が ``CanonicalArticleUrl`` を透過
+        bind する。commit は呼び出し側 (Service) が行う。
         """
         stmt = (
             pg_insert(PendingHtmlArticleORM)
             .values(
-                url=url,
-                source_id=source_id,
+                url=incomplete.source_url,
+                source_id=incomplete.source_id,
                 status="open",
-                staged_attributes=staged_attributes.model_dump(mode="json"),
+                staged_attributes=StagedArticleAttributes(
+                    title=incomplete.title,
+                    published_at_hint=incomplete.published_at_hint,
+                    prefer_html_title=incomplete.prefer_html_title,
+                ).model_dump(mode="json"),
                 ready_at=ready_at,
                 leased_until=None,
                 attempt_count=0,

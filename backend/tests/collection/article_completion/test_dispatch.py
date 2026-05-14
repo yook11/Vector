@@ -38,12 +38,16 @@ from app.collection.article_completion.dispatch import (
     dispatch_html_fetch_jobs,
     sweep_expired_leases,
 )
+from app.collection.incomplete_article.domain.incomplete_article import (
+    IncompleteArticle,
+)
 from app.collection.incomplete_article.domain.staged_attributes import (
     StagedArticleAttributes,
 )
 from app.collection.incomplete_article.repository import PendingHtmlArticleRepository
 from app.models.news_source import NewsSource
 from app.models.pending_html_article import PendingHtmlArticle as PendingHtmlArticleORM
+from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 from app.shared.value_objects.safe_url import SafeUrl
 
 # ---------------------------------------------------------------------------
@@ -83,13 +87,17 @@ async def _make_pending(
     """
     safe_url = SafeUrl(url)
 
-    # status='open' は repository.create で作る (CHECK 整合・JSONB serialization 込)
+    # status='open' は repository.save で作る (CHECK 整合・JSONB serialization 込)
     if status == "open":
         repo = PendingHtmlArticleRepository(db_session)
-        pending_id = await repo.create(
-            url=safe_url,
-            source_id=source.id,
-            staged_attributes=_attrs(),
+        pending_id = await repo.save(
+            IncompleteArticle(
+                title="Pending Title",
+                source_id=source.id,
+                source_url=CanonicalArticleUrl(url),
+                published_at_hint=PublishedAt(datetime(2026, 5, 1, tzinfo=UTC)),
+                prefer_html_title=False,
+            ),
             ready_at=ready_at or datetime.now(UTC),
         )
         assert pending_id is not None
