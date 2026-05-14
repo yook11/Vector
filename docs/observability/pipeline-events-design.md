@@ -297,7 +297,6 @@ PipelineEventPayload = Annotated[
 |---|---|---|---|
 | dispatch | succeeded | `dispatched` | Service 同 tx |
 | dispatch | skipped | `no_active_sources` | Service 同 tx |
-| source_fetch | succeeded | `fetched` | Service 同 tx |
 | source_fetch | failed | `permanent_fetch_error` / `temporary_fetch_error_exhausted` / `unexpected_error` | Task except 節 |
 | content_fetch | succeeded | `fetched` / `already_fetched` | Service 同 tx |
 | content_fetch | skipped | `discovered_not_found` / `permanent_fetch_error` / `not_html` / `parse_error` / `quality_gate` | Service 同 tx |
@@ -316,6 +315,8 @@ PipelineEventPayload = Annotated[
 | embedding | failed | `ai_error_exhausted` / `unexpected_error` | Task except 節 |
 | backfill_* | succeeded | `requeued` | Service 同 tx |
 | backfill_* | skipped | `disabled` / `empty` / `circuit_open` / `daily_budget_exhausted` | Service 同 tx |
+
+> **注**: `source_fetch.succeeded` audit は撤去済 (中途半端な構造を再設計するため)。失敗系 (`permanent_fetch_error` / `temporary_fetch_error_exhausted` / `unexpected_error`) のみ Task 層から書込中。再導入時は集計単位と分類コードを整理して入れ直す。
 
 ### Index 戦略
 

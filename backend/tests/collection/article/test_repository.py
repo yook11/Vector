@@ -17,7 +17,11 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
-from app.collection.article.domain.article import Article, ArticleDraft
+from app.collection.article.domain.article import (
+    Article,
+    ArticleDraft,
+    ReadyForArticle,
+)
 from app.collection.article.domain.value_objects import PublishedAt
 from app.collection.article.repository import (
     ArticleRepository,
@@ -25,6 +29,7 @@ from app.collection.article.repository import (
 )
 from app.models.article import Article as ArticleORM
 from app.models.news_source import NewsSource
+from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 from app.shared.value_objects.safe_url import SafeUrl
 
 
@@ -32,6 +37,62 @@ def _draft(
     body: str = "x" * 60, published_at: PublishedAt | None = None
 ) -> ArticleDraft:
     return ArticleDraft(title="Title", body=body, published_at=published_at)
+
+
+def _ready(
+    source_id: int,
+    url: str,
+    body: str = "x" * 60,
+) -> ReadyForArticle:
+    return ReadyForArticle(
+        title="Ready Title",
+        body=body,
+        published_at=PublishedAt(datetime(2026, 3, 1, tzinfo=UTC)),
+        source_id=source_id,
+        source_url=CanonicalArticleUrl(url),
+    )
+
+
+# ---------------------------------------------------------------------------
+# save_ready
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_save_ready_persists_ready_article(
+    db_session: AsyncSession, sample_source: NewsSource
+) -> None:
+    """``ReadyForArticle`` を直 INSERT し、新規採番された ``article_id`` を返す。"""
+    repo = ArticleRepository(db_session)
+    ready = _ready(sample_source.id, "https://example.com/article/save-ready")
+
+    article_id = await repo.save_ready(ready)
+    assert isinstance(article_id, int)
+    assert article_id > 0
+    await db_session.commit()
+
+    orm = await db_session.get(ArticleORM, article_id)
+    assert orm is not None
+    assert orm.original_title == "Ready Title"
+    assert orm.original_content == "x" * 60
+    assert orm.published_at == datetime(2026, 3, 1, tzinfo=UTC)
+    assert str(orm.source_url) == "https://example.com/article/save-ready"
+
+
+@pytest.mark.asyncio
+async def test_save_ready_returns_none_on_duplicate_source_url(
+    db_session: AsyncSession, sample_source: NewsSource
+) -> None:
+    """同一 ``source_url`` への 2 度目の save_ready は ``None`` (ON CONFLICT 吸収)。"""
+    repo = ArticleRepository(db_session)
+    url = "https://example.com/article/save-ready-dup"
+
+    first = await repo.save_ready(_ready(sample_source.id, url))
+    await db_session.commit()
+    assert first is not None
+
+    second = await repo.save_ready(_ready(sample_source.id, url))
+    assert second is None
 
 
 # ---------------------------------------------------------------------------

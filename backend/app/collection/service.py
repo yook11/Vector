@@ -10,37 +10,34 @@ BC の業務目的。本 Service はその中核ユースケースで、source 1
 
 Fetcher の ``AsyncIterator[FetchOutcome]`` を回し ``match`` で分岐する:
 
-- ``FetchedEntry(item=ReadyForArticle)`` → 即時獲得経路。``articles.source_url``
-  を主軸に直 INSERT。``source_url`` は ``CanonicalArticleUrl`` 型で canonicalize
-  済が構造保証されているため Service 側で後付け正規化は不要。
-  ``ON CONFLICT DO NOTHING`` で同 tick race / 既知 URL を吸収
-  (``None`` → ``known_url`` skip)。caller (``ingest_source`` task) は
-  返却された ``article_id`` を ``ExtractionTrigger`` に詰めて
+- ``FetchedEntry(item=ReadyForArticle)`` → 即時獲得経路。
+  ``article_repo.save_ready(ready)`` に passport 型を直接渡し、
+  ``articles.source_url UNIQUE`` の ``ON CONFLICT DO NOTHING`` で同 tick race /
+  既知 URL を吸収する (``None`` 戻りは静かに skip)。caller (``ingest_source`` task)
+  は返却された ``article_id`` を ``ExtractionTrigger`` に詰めて
   ``extract_content.kiq`` に chain する。
 - ``FetchedEntry(item=IncompleteArticle)`` → 補完待ち獲得経路。
   ``article_repo.exists_by_source_url`` pre-check で feed 再露出を弾き、
-  ``pending_html_articles.url`` で投入。``url`` は ``CanonicalArticleUrl`` 型で
-  canonical 保証済。下流は cron poller (``dispatch_html_fetch_jobs``) が
-  DB 駆動で拾うため、Service / Task は pending_id を caller に渡さない
-  (Outcome 純化原則)。
-- ``SourceFetchFailed`` → 構造化ログ + ``failed_codes`` 集計、永続化に流れない。
+  ``pending_html_articles.url`` で投入。下流は cron poller
+  (``dispatch_html_fetch_jobs``) が DB 駆動で拾うため、Service / Task は
+  pending_id を caller に渡さない (Outcome 純化原則)。
+- ``SourceFetchFailed`` → 構造化ログのみ、永続化に流れない。
 
 ``commit`` までが Service の責務。``NewsSource`` ORM の lookup は
 ``IngestSourceArg`` (=task envelope) で済んでいるため本 Service では行わない。
+成功側の監査焼付 (``pipeline_events.payload`` への件数 / breakdown 集計) は
+中途半端な構造として撤去済。後続で proper な audit subsystem を再導入する予定。
 """
 
 from __future__ import annotations
 
-import time
-from collections import Counter
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.collection.article.domain.article import ArticleDraft, ReadyForArticle
+from app.collection.article.domain.article import ReadyForArticle
 from app.collection.article.repository import ArticleRepository
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
 from app.collection.fetchers.outcome import FetchedEntry, SourceFetchFailed
@@ -52,9 +49,6 @@ from app.collection.incomplete_article.domain.staged_attributes import (
     StagedArticleAttributes,
 )
 from app.collection.incomplete_article.repository import PendingHtmlArticleRepository
-from app.observability.domain.event import EventType, Stage
-from app.observability.domain.payloads import SourceFetchPayload
-from app.observability.repository import PipelineEventRepository
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 
 logger = structlog.get_logger(__name__)
@@ -79,52 +73,30 @@ class ArticleAcquisitionService:
         self._session_factory = session_factory
         self._fetcher_factory = fetcher_factory
 
-    async def execute(self, source_id: int, *, attempt: int = 1) -> list[int]:
-        t0 = time.monotonic()
+    async def execute(self, source_id: int) -> list[int]:
         async with self._session_factory() as session:
             fetcher = self._fetcher_factory()
             article_repo = ArticleRepository(session)
             pending_repo = PendingHtmlArticleRepository(session)
 
             persisted_ids: list[int] = []
-            article_created = 0
-            completion_queued = 0
-            skipped_codes: Counter[str] = Counter()
-            failed_codes: Counter[str] = Counter()
-            metadata_fields_observed: set[str] = set()
-            metadata_sample: dict[str, Any] | None = None
 
             try:
                 async for outcome in fetcher.fetch(source_id):
                     match outcome:
-                        case FetchedEntry(item=ReadyForArticle() as ready, metadata=md):
-                            metadata_sample = self._observe_metadata(
-                                md, metadata_fields_observed, metadata_sample
-                            )
-                            article_id = await self._persist_ready(
-                                article_repo, ready=ready
-                            )
+                        case FetchedEntry(item=ReadyForArticle() as ready):
+                            article_id = await article_repo.save_ready(ready)
                             if article_id is None:
-                                # ``articles.source_url UNIQUE`` ON CONFLICT 衝突
-                                # = 既知 URL (再露出 / 同 tick の他経路勝者)
-                                skipped_codes["known_url"] += 1
                                 continue
-                            article_created += 1
                             persisted_ids.append(article_id)
-                        case FetchedEntry(
-                            item=IncompleteArticle() as pending, metadata=md
-                        ):
-                            metadata_sample = self._observe_metadata(
-                                md, metadata_fields_observed, metadata_sample
-                            )
+                        case FetchedEntry(item=IncompleteArticle() as pending):
                             # pre-check: feed 再露出時に既知 URL の HTML fetch を
                             # 反復しないための実用的 idempotency (ロックではない)
                             if await article_repo.exists_by_source_url(
                                 pending.source_url
                             ):
-                                skipped_codes["known_url"] += 1
                                 continue
-                            pending_id = await pending_repo.create(
+                            await pending_repo.create(
                                 url=pending.source_url,
                                 source_id=source_id,
                                 staged_attributes=StagedArticleAttributes(
@@ -134,14 +106,7 @@ class ArticleAcquisitionService:
                                 ),
                                 ready_at=datetime.now(UTC),
                             )
-                            if pending_id is None:
-                                # ``pending_html_articles.url UNIQUE`` 衝突
-                                # = 別 worker が同 URL を既に pending 化済
-                                skipped_codes["existing_pending"] += 1
-                                continue
-                            completion_queued += 1
                         case SourceFetchFailed(reason=r):
-                            failed_codes[r.code] += 1
                             logger.warning(
                                 "ingest_source_entry_failed",
                                 source_id=source_id,
@@ -154,135 +119,11 @@ class ArticleAcquisitionService:
             except HostResolutionError as e:
                 raise TemporaryFetchError(str(e)) from e
 
-            skipped_count = sum(skipped_codes.values())
-            failed_count = sum(failed_codes.values())
-            entry_count = (
-                article_created + completion_queued + skipped_count + failed_count
-            )
-            duration_ms = int((time.monotonic() - t0) * 1000)
-            await self._record_success_event(
-                session=session,
-                source_id=source_id,
-                fetcher=fetcher,
-                entry_count=entry_count,
-                article_created_count=article_created,
-                completion_queued_count=completion_queued,
-                skipped_count=skipped_count,
-                failed_count=failed_count,
-                completion_reason_codes=(
-                    {"html_required": completion_queued} if completion_queued else None
-                ),
-                skipped_codes=dict(skipped_codes) or None,
-                failed_codes=dict(failed_codes) or None,
-                metadata_fields_observed=sorted(metadata_fields_observed) or None,
-                metadata_sample=metadata_sample,
-                attempt=attempt,
-                duration_ms=duration_ms,
-            )
             await session.commit()
 
         logger.info(
             "ingest_source_completed",
             source_id=source_id,
-            entry_count=entry_count,
-            article_created_count=article_created,
-            completion_queued_count=completion_queued,
-            skipped_count=skipped_count,
-            failed_count=failed_count,
+            persisted_count=len(persisted_ids),
         )
         return persisted_ids
-
-    @staticmethod
-    def _observe_metadata(
-        md: Mapping[str, Any],
-        observed: set[str],
-        sample: dict[str, Any] | None,
-    ) -> dict[str, Any] | None:
-        """metadata の key 集合を累積し、最初の non-empty entry を sample に保持。
-
-        None / 空文字 / 空コンテナはキーが「提供された」と見なさず除外。
-        """
-        non_empty: dict[str, Any] = {}
-        for name, val in md.items():
-            if val in (None, "", (), [], {}):
-                continue
-            observed.add(name)
-            non_empty[name] = val
-        if sample is None and non_empty:
-            return non_empty
-        return sample
-
-    async def _record_success_event(
-        self,
-        *,
-        session: AsyncSession,
-        source_id: int,
-        fetcher: Fetcher,
-        entry_count: int,
-        article_created_count: int,
-        completion_queued_count: int,
-        skipped_count: int,
-        failed_count: int,
-        completion_reason_codes: dict[str, int] | None,
-        skipped_codes: dict[str, int] | None,
-        failed_codes: dict[str, int] | None,
-        metadata_fields_observed: list[str] | None,
-        metadata_sample: dict[str, Any] | None,
-        attempt: int,
-        duration_ms: int,
-    ) -> None:
-        """Stage 1 成功イベントを同 tx で ``pipeline_events`` に焼き付ける。
-
-        κ: 5 種 count を常時 populate (entry_count == sum(...) invariant)。
-        """
-        repo = PipelineEventRepository(session)
-        payload = SourceFetchPayload(
-            fetcher_class=type(fetcher).__name__,
-            entry_count=entry_count,
-            article_created_count=article_created_count,
-            completion_queued_count=completion_queued_count,
-            skipped_count=skipped_count,
-            failed_count=failed_count,
-            completion_reason_codes=completion_reason_codes,
-            skipped_codes=skipped_codes,
-            failed_codes=failed_codes,
-            metadata_fields_observed=metadata_fields_observed,
-            metadata_sample=metadata_sample,
-        )
-        await repo.append(
-            stage=Stage.SOURCE_FETCH,
-            event_type=EventType.SUCCEEDED,
-            outcome_code="fetched",  # ADR §既決事項: 成功は 1 本 (件数で分けない)
-            payload=payload,
-            source_id=source_id,
-            attempt=attempt,
-            duration_ms=duration_ms,
-        )
-
-    async def _persist_ready(
-        self,
-        article_repo: ArticleRepository,
-        *,
-        ready: ReadyForArticle,
-    ) -> int | None:
-        """ready エントリ 1 件を ``articles`` に直 INSERT して ``article_id`` を返す。
-
-        ``source_url`` は ``CanonicalArticleUrl`` 型で canonicalize 済が構造保証
-        されているため、Service 側で後付け正規化は行わない
-        (``articles.source_url UNIQUE`` は canonical 値で効く)。
-
-        Race recovery: ``save`` が ``None`` を返した場合は他 worker / 別 yield
-        が同 URL で先に書き込み済。既に articles に存在するため即時獲得経路
-        では skip 扱い、id を返す必要はない。
-        """
-        draft = ArticleDraft(
-            title=ready.title,
-            body=ready.body,
-            published_at=ready.published_at,
-        )
-        persisted = await article_repo.save(
-            draft=draft,
-            source_id=ready.source_id,
-            source_url=ready.source_url,
-        )
-        return persisted.id if persisted is not None else None

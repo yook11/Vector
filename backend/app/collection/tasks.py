@@ -150,7 +150,7 @@ async def ingest_source(
     svc = ArticleAcquisitionService(session_factory, fetcher_factory)
 
     try:
-        persisted_ids = await svc.execute(source_id, attempt=attempt)
+        persisted_ids = await svc.execute(source_id)
     except PermanentFetchError as e:
         await _record_fetch_log(
             session_factory, source_id, FetchStatus.ERROR, 0, str(e), start_time
@@ -222,7 +222,6 @@ async def ingest_source(
         "status": "success",
         "article_created_count": article_created_count,
     }
-    # completion_queued / skipped / failed は pipeline_events.payload で確認
     logger.info("ingest_source_completed", **payload)
     return payload
 

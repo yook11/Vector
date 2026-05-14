@@ -3,15 +3,17 @@
 ADR §データモデル §Payload の宣言と一致。Stage ごとに別 variant、
 ``kind`` フィールドで discriminator を取る。
 
-PR1 では ``SourceFetchPayload`` のみ実書込される。他 Stage の variant は
-schema として用意するが書込は PR2-PR4 で順次活性化される。
+現状 ``SourceFetchPayload`` は failure path (Task 例外パス) のみ書込されている。
+成功側 audit (件数 / breakdown 集計) は中途半端な構造として撤去済で、後続で
+proper な audit subsystem を再導入する際に集計単位を整理して入れ直す予定。
+他 Stage の variant は schema として用意するが書込は順次活性化される。
 """
 
 from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class BasePipelineEventPayload(BaseModel):
@@ -32,32 +34,18 @@ class DispatchPayload(BasePipelineEventPayload):
 
 
 class SourceFetchPayload(BasePipelineEventPayload):
-    """Stage 1 — 1 ソース 1 fetch の集約サマリ。
+    """Stage 1 — failure path 専用の S 級 snapshot payload。
 
-    PR2.5-B 以降の κ: 件数 5 種を常時 populate し、
-    ``entry_count == article_created + completion_queued + skipped + failed``
-    の不変条件を ``model_validator`` で fail-fast 検証する。
-    breakdown dict (``*_codes``) は sparse のまま (None / 空 dict は省略)。
+    成功側 audit (件数 / breakdown 集計) は中途半端な構造として撤去済。
+    現状は Task 例外パスで ``build_failure_payload`` 経由でのみ書き込まれ、
+    ``error_chain`` / ``error_message`` (Base) と本クラス固有の HTTP snapshot
+    系 (``http_status`` / ``final_url`` / ``response_size`` / ``content_type``
+    / ``body_head``) が詰まる。後続で proper な audit subsystem を再導入する際
+    に集計単位を整理して入れ直す予定。
     """
 
     kind: Literal["source_fetch"] = "source_fetch"
     fetcher_class: str | None = None  # A: type(fetcher).__name__
-
-    # 件数集計 (常時 populate、デフォルト 0)
-    entry_count: int = 0
-    article_created_count: int = 0  # Pattern R 直接永続化数
-    completion_queued_count: int = 0  # Pattern H pending 投入数
-    skipped_count: int = 0  # known_url / race 敗北等
-    failed_count: int = 0  # エントリ単位 Failed 数
-
-    # 内訳 (sparse、None で省略)
-    completion_reason_codes: dict[str, int] | None = None  # 例 {"html_required": N}
-    skipped_codes: dict[str, int] | None = None  # 例 {"known_url": N}
-    failed_codes: dict[str, int] | None = None  # Failed.reason.code 別カウント
-
-    # 「このソースが何を提供しているか」 (PR1.5 で activate)
-    metadata_fields_observed: list[str] | None = None  # A
-    metadata_sample: dict[str, Any] | None = None  # A'
 
     # 失敗時 S 級 snapshot (Task 例外パスで詰める)
     http_status: int | None = None
@@ -65,21 +53,6 @@ class SourceFetchPayload(BasePipelineEventPayload):
     response_size: int | None = None
     content_type: str | None = None
     body_head: str | None = None  # 先頭 500 字
-
-    @model_validator(mode="after")
-    def _check_entry_count_invariant(self) -> SourceFetchPayload:
-        total = (
-            self.article_created_count
-            + self.completion_queued_count
-            + self.skipped_count
-            + self.failed_count
-        )
-        if self.entry_count != total:
-            raise ValueError(
-                f"entry_count={self.entry_count} != article_created+"
-                f"completion_queued+skipped+failed={total}"
-            )
-        return self
 
 
 class ContentFetchPayload(BasePipelineEventPayload):

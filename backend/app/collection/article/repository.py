@@ -2,8 +2,14 @@
 
 責務:
 
+- ``ArticleRepository.save_ready``: ``ReadyForArticle`` (passport 型) を
+  受け取って ``articles`` 行に直 INSERT し、新規採番された ``id`` を返す。
+  即時獲得経路 (Pattern R) で ``ArticleAcquisitionService`` から呼ばれる。
+  ``ON CONFLICT DO NOTHING`` で並行レース / 既知 URL を吸収し、新規行が
+  作れなかった場合は ``None`` を返す。
 - ``ArticleRepository.save``: ``ArticleDraft`` を ``articles`` 行に
   INSERT し、DB が採番した identity (``PersistedArticleId``) を返す。
+  補完待ち獲得経路 (Pattern H) で ``ArticleCompletionService`` が使う。
   並行レースは ``INSERT ... ON CONFLICT DO NOTHING RETURNING`` で
   構造的に解消し、既に他ワーカーが書き込み済みなら ``None`` を返す。
 - ``ArticleRepository.find_by_source_url``: 並行レース敗北時の
@@ -24,7 +30,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from app.collection.article.domain.article import Article, ArticleDraft
+from app.collection.article.domain.article import Article, ArticleDraft, ReadyForArticle
 from app.collection.article.domain.value_objects import PublishedAt
 from app.models.article import Article as ArticleORM
 from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
@@ -65,6 +71,32 @@ class ArticleRepository:
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+
+    async def save_ready(self, ready: ReadyForArticle) -> int | None:
+        """``ReadyForArticle`` を ``articles`` に直 INSERT する。
+
+        ``ON CONFLICT DO NOTHING`` で並行レース / 既知 URL を吸収し、
+        新規行が作れなかった場合は ``None`` を返す。``source_url`` は
+        ``CanonicalArticleUrl`` で canonical 性が構造保証されており、
+        Repository 側での再正規化は不要 (``articles.source_url UNIQUE``
+        は canonical 値で効く)。``SafeUrlType.process_bind_param`` が
+        ``CanonicalArticleUrl`` を透過 bind する。commit は呼び出し側
+        (Service) が行う。
+        """
+        stmt = (
+            pg_insert(ArticleORM)
+            .values(
+                source_id=ready.source_id,
+                source_url=ready.source_url,
+                original_title=ready.title,
+                original_content=ready.body,
+                published_at=ready.published_at.value,
+            )
+            .on_conflict_do_nothing()
+            .returning(ArticleORM.id)
+        )
+        row = (await self._session.execute(stmt)).first()
+        return row.id if row is not None else None
 
     async def save(
         self,

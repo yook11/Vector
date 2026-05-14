@@ -59,21 +59,28 @@ async def article_row(db_session: AsyncSession, source_row: NewsSource) -> Artic
 async def test_append_inserts_row_with_payload_roundtrip(
     db_session: AsyncSession, source_row: NewsSource
 ) -> None:
+    """``SourceFetchPayload`` (failure-style snapshot) の DB roundtrip。
+
+    成功側 audit 撤去後、``SourceFetchPayload`` は failure path 専用に
+    なったので Task 例外パスでの書込形態 (``event_type=FAILED`` +
+    ``outcome_code=permanent_fetch_error`` + HTTP snapshot) で検証する。
+    """
     repo = PipelineEventRepository(db_session)
     payload = SourceFetchPayload(
         fetcher_class="VentureBeatFetcher",
-        entry_count=6,
-        article_created_count=3,
-        completion_queued_count=2,
-        skipped_count=0,
-        failed_count=1,
-        failed_codes={"http_403": 1},
+        http_status=403,
+        final_url="https://venturebeat.com/feed/",
+        response_size=1024,
+        content_type="text/html",
+        body_head="Forbidden",
+        error_message="upstream returned 403",
+        error_chain=["httpx.HTTPStatusError"],
     )
 
     await repo.append(
         stage=Stage.SOURCE_FETCH,
-        event_type=EventType.SUCCEEDED,
-        outcome_code="fetched",
+        event_type=EventType.FAILED,
+        outcome_code="permanent_fetch_error",
         payload=payload,
         source_id=source_row.id,
         attempt=1,
@@ -85,16 +92,16 @@ async def test_append_inserts_row_with_payload_roundtrip(
     assert len(rows) == 1
     row = rows[0]
     assert row.stage == "source_fetch"
-    assert row.event_type == "succeeded"
-    assert row.outcome_code == "fetched"
+    assert row.event_type == "failed"
+    assert row.outcome_code == "permanent_fetch_error"
     assert row.source_id == source_row.id
     assert row.duration_ms == 42
     assert row.payload["kind"] == "source_fetch"
     assert row.payload["fetcher_class"] == "VentureBeatFetcher"
-    assert row.payload["entry_count"] == 6
-    assert row.payload["article_created_count"] == 3
-    assert row.payload["completion_queued_count"] == 2
-    assert row.payload["failed_codes"] == {"http_403": 1}
+    assert row.payload["http_status"] == 403
+    assert row.payload["final_url"] == "https://venturebeat.com/feed/"
+    assert row.payload["error_message"] == "upstream returned 403"
+    assert row.payload["error_chain"] == ["httpx.HTTPStatusError"]
 
 
 @pytest.mark.asyncio
