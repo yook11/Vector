@@ -48,6 +48,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 # 等で閲覧可能。
 _docs_enabled = settings.env == "development"
 
+# responses: FastAPI が UTF-8 不正 body 等の malformed request に対して内部生成する
+# HTTPException(400, "There was an error parsing the body") を OpenAPI に default
+# 宣言する。proxy / middleware 由来の 400 も any endpoint で発生しうるため app level
+# に置く (Schemathesis status_code_conformance finding 対応 / PR-C1a')。
 app = FastAPI(
     title="Vector API",
     description="テックニュースの収集と AI 分析プラットフォーム",
@@ -56,6 +60,7 @@ app = FastAPI(
     docs_url="/docs" if _docs_enabled else None,
     redoc_url="/redoc" if _docs_enabled else None,
     openapi_url="/openapi.json" if _docs_enabled else None,
+    responses={400: {"description": "Bad request"}},
 )
 
 

@@ -67,3 +67,32 @@ def test_docs_endpoints_disabled_in_production(
         assert client.get("/docs").status_code == 404
         assert client.get("/redoc").status_code == 404
         assert client.get("/openapi.json").status_code == 404
+
+
+# OpenAPI operation の HTTP method 集合
+# (path-level の `parameters` / `summary` 等を除外するため)
+_HTTP_METHODS = {"get", "put", "post", "delete", "options", "head", "patch", "trace"}
+
+
+@pytest.mark.unit
+def test_openapi_declares_400_for_all_operations(
+    reload_app_with_env: Callable[[str], FastAPI],
+) -> None:
+    """全 operation の OpenAPI spec に default 400 response が宣言されることを確認する。
+
+    FastAPI が UTF-8 不正 body 等に対して内部生成する HTTPException(400) を、
+    app level の responses 引数で default 宣言している
+    (Schemathesis status_code_conformance finding 対応 / PR-C1a')。
+    endpoint が増えても自動カバーされる構造を維持するための回帰ガード。
+    """
+    app = reload_app_with_env("development")
+    spec = app.openapi()
+
+    missing = [
+        f"{method.upper()} {path}"
+        for path, path_item in spec["paths"].items()
+        for method, operation in path_item.items()
+        if method in _HTTP_METHODS and "400" not in operation["responses"]
+    ]
+
+    assert missing == []
