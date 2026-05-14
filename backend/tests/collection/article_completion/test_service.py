@@ -1,15 +1,17 @@
 """``ArticleCompletionService`` の不変条件テスト (PR-E 仕様: ``pending.url`` SSoT)。
 
-検証する不変条件:
+検証する不変条件 (DB 状態 = ``articles`` / ``pending_html_articles`` の遷移で
+振る舞いを assert する。``pipeline_events`` 監査基盤は撤去済で、戻り値 + DB 状態 +
+構造化ログが観測点):
 
 - ``execute()`` が成功時 ``int`` (article_id) を返し、失敗・skip・race-loss
-  時はすべて ``None`` を返す。失敗詳細は ``pipeline_events`` の
-  ``outcome_code`` (``fetched`` / ``conflict_lost`` / ``dropped_terminal`` /
-  ``dropped_transient`` / ``will_retry``) と ``payload.reason_code`` で観測
+  時はすべて ``None`` を返す
 - ``pending_html_articles`` の状態遷移が DB に焼き付く
   (成功: DELETE / 永続失敗: closed / 一時失敗 (will retry): open + 未来 ready_at /
   一時失敗 (exhausted): closed)
-- ``canonical_url`` が pipeline_events.payload に焼かれる (集計 key)
+- 成功時に HTML から抽出した ``body`` / ``title`` / ``published_at`` がそのまま
+  ``articles`` 行に保存される
+- race-loss 時に既存 article は残り、敗者側の pending は DELETE される
 - 重複配送 / 状態不整合 (status != 'running') は ``None`` で静かに exit
 - per-error retry policy で next ready_at が決まる (BLIP の 1 回目失敗 = 0.5 分後)
 """
@@ -44,7 +46,6 @@ from app.collection.incomplete_article.repository import (
 from app.models.article import Article as ArticleORM
 from app.models.news_source import NewsSource, SourceType
 from app.models.pending_html_article import PendingHtmlArticle
-from app.models.pipeline_event import PipelineEvent
 from app.shared.value_objects.safe_url import SafeUrl
 
 
@@ -218,16 +219,30 @@ async def test_success_deletes_pending_in_same_tx(
 
 
 @pytest.mark.asyncio
-async def test_success_writes_audit_with_body_length_and_canonical_url(
+async def test_success_persists_extracted_body_and_published_at(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     tc_source: NewsSource,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """成功時 ``pipeline_events`` に SUCCEEDED + body_length + canonical_url が焼かれる."""  # noqa: E501
+    """成功時 HTML から抽出した body/title/published_at が articles 行に保存される。
+
+    ``complete_with_html`` が HTML メタデータを ``ReadyForArticle`` に取り込み、
+    ``save_ready`` がそれを passport 型のまま articles 行に流す不変条件。
+    """
     body = "x" * 250
-    canonical_url, pending_id = await _make_pending(
-        db_session, tc_source, "https://techcrunch.com/article-3"
+    html_published_at = datetime(2026, 5, 1, 9, 30, 0, tzinfo=UTC)
+    # RSS hint=None で HTML published_at を fallback 経路で流入させ、
+    # prefer_html_title=True で HTML title を採用させる
+    _, pending_id = await _make_pending(
+        db_session,
+        tc_source,
+        "https://techcrunch.com/article-3",
+        attrs=StagedArticleAttributes(
+            title="Feed Title",
+            published_at_hint=None,
+            prefer_html_title=True,
+        ),
     )
     _patch_fetch(
         monkeypatch,
@@ -235,29 +250,25 @@ async def test_success_writes_audit_with_body_length_and_canonical_url(
             return_value=ExtractedContent(
                 title="HTML Title",
                 body=body,
-                published_at=PublishedAt(value=datetime(2026, 5, 1, tzinfo=UTC)),
+                published_at=PublishedAt(value=html_published_at),
             )
         ),
     )
 
     svc = ArticleCompletionService(session_factory)
-    await svc.execute(pending_id)
+    article_id = await svc.execute(pending_id)
 
-    event = (
-        await db_session.execute(
-            select(PipelineEvent).where(PipelineEvent.stage == "content_fetch")
-        )
+    assert isinstance(article_id, int)
+    article = (
+        await db_session.execute(select(ArticleORM).where(ArticleORM.id == article_id))
     ).scalar_one()
-    assert event.event_type == "succeeded"
-    assert event.outcome_code == "fetched"
-    assert event.attempt == 1  # claim 後の attempt_count
-    assert event.payload["body_length"] == len(body)
-    assert event.payload["canonical_url"] == str(canonical_url)
-    assert event.payload["extractor_class"] == "ArticleHtmlExtractor"
+    assert article.original_content == body
+    assert article.original_title == "HTML Title"
+    assert article.published_at == html_published_at
 
 
 # ---------------------------------------------------------------------------
-# Permanent / ExtractionEmpty / promotion failure (dropped_terminal 系)
+# Permanent / ExtractionEmpty / promotion failure (terminal 系)
 # ---------------------------------------------------------------------------
 
 
@@ -268,7 +279,7 @@ async def test_permanent_fetch_error_returns_none_and_closes_pending(
     tc_source: NewsSource,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """PermanentFetchError → ``None`` + pending status='closed' + audit reason_code."""
+    """PermanentFetchError → ``None`` + pending status='closed' + Article 未作成。"""
     _, pending_id = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/dead"
     )
@@ -278,10 +289,8 @@ async def test_permanent_fetch_error_returns_none_and_closes_pending(
     outcome = await svc.execute(pending_id)
 
     assert outcome is None
-    # Article は作られない
     articles = (await db_session.execute(select(ArticleORM))).scalars().all()
     assert articles == []
-    # pending は closed
     pending = (
         await db_session.execute(
             select(PendingHtmlArticle).where(PendingHtmlArticle.id == pending_id)
@@ -289,25 +298,16 @@ async def test_permanent_fetch_error_returns_none_and_closes_pending(
     ).scalar_one()
     assert pending.status == "closed"
     assert pending.leased_until is None
-    # audit 記録あり
-    event = (
-        await db_session.execute(
-            select(PipelineEvent).where(PipelineEvent.stage == "content_fetch")
-        )
-    ).scalar_one()
-    assert event.event_type == "skipped"
-    assert event.outcome_code == "dropped_terminal"
-    assert event.payload["reason_code"] == "permanent_fetch_error"
 
 
 @pytest.mark.asyncio
-async def test_extraction_empty_writes_reason_in_code(
+async def test_extraction_empty_closes_pending(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     tc_source: NewsSource,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """ExtractionEmpty(reason) → ``reason_code='extraction_empty_<reason>'``。"""
+    """ExtractionEmpty → ``None`` + pending status='closed'。"""
     _, pending_id = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/empty"
     )
@@ -319,23 +319,25 @@ async def test_extraction_empty_writes_reason_in_code(
     outcome = await svc.execute(pending_id)
 
     assert outcome is None
-    event = (
+    pending = (
         await db_session.execute(
-            select(PipelineEvent).where(PipelineEvent.stage == "content_fetch")
+            select(PendingHtmlArticle).where(PendingHtmlArticle.id == pending_id)
         )
     ).scalar_one()
-    assert event.payload["reason_code"] == "extraction_empty_not_html"
+    assert pending.status == "closed"
 
 
 @pytest.mark.asyncio
-async def test_promotion_failure_records_quality_gate_metric(
+async def test_promotion_failure_closes_pending(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     tc_source: NewsSource,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """body はあるが published_at が両方 None → promotion ``ArticleCompletionFailed`` を quality_gate_metric に焼く."""  # noqa: E501
-    # published_at_hint=None で staged_attributes を作る
+    """promotion ``ArticleCompletionFailed`` → ``None`` + pending status='closed'。
+
+    body はあるが published_at が両方 None で promotion failure を発生させる。
+    """
     attrs = StagedArticleAttributes(
         title="Short Title",
         published_at_hint=None,
@@ -355,17 +357,18 @@ async def test_promotion_failure_records_quality_gate_metric(
     outcome = await svc.execute(pending_id)
 
     assert outcome is None
-    event = (
+    articles = (await db_session.execute(select(ArticleORM))).scalars().all()
+    assert articles == []
+    pending = (
         await db_session.execute(
-            select(PipelineEvent).where(PipelineEvent.stage == "content_fetch")
+            select(PendingHtmlArticle).where(PendingHtmlArticle.id == pending_id)
         )
     ).scalar_one()
-    assert event.payload["reason_code"].startswith("promotion_")
-    assert event.payload["quality_gate_metric"]["body_length"] == 200
+    assert pending.status == "closed"
 
 
 # ---------------------------------------------------------------------------
-# TemporaryFetchError → will_retry / dropped_transient (exhausted)
+# TemporaryFetchError → will_retry / exhausted
 # ---------------------------------------------------------------------------
 
 
@@ -376,7 +379,7 @@ async def test_temporary_blip_first_attempt_writes_will_retry(
     tc_source: NewsSource,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """BLIP 1 回目失敗 → ``will_retry`` audit + pending re-open + 未来 ready_at。"""
+    """BLIP 1 回目失敗 → ``None`` + pending re-open + 未来 ready_at (0.5 分後)。"""
     _, pending_id = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/blip"
     )
@@ -399,25 +402,15 @@ async def test_temporary_blip_first_attempt_writes_will_retry(
     delta = pending.ready_at - datetime.now(UTC)
     assert timedelta(seconds=20) < delta < timedelta(seconds=40)
 
-    event = (
-        await db_session.execute(
-            select(PipelineEvent).where(PipelineEvent.stage == "content_fetch")
-        )
-    ).scalar_one()
-    assert event.event_type == "failed"
-    assert event.outcome_code == "will_retry"
-    assert event.payload["reason_code"] == "temporary_will_retry_blip"
-    assert event.error_class is not None
-
 
 @pytest.mark.asyncio
-async def test_temporary_outage_exhausted_writes_dropped_transient(
+async def test_temporary_outage_exhausted_closes_pending(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     tc_source: NewsSource,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """attempt_count == max_attempts → ``mark_exhausted`` + dropped_transient audit."""
+    """attempt_count == max_attempts → ``None`` + pending status='closed'。"""
     _, pending_id = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/outage"
     )
@@ -442,18 +435,9 @@ async def test_temporary_outage_exhausted_writes_dropped_transient(
     assert pending.status == "closed"
     assert pending.leased_until is None
 
-    event = (
-        await db_session.execute(
-            select(PipelineEvent).where(PipelineEvent.stage == "content_fetch")
-        )
-    ).scalar_one()
-    assert event.event_type == "failed"
-    assert event.outcome_code == "dropped_transient"
-    assert event.payload["reason_code"] == "temporary_exhausted_outage"
-
 
 # ---------------------------------------------------------------------------
-# race-loss (conflict_lost)
+# race-loss
 # ---------------------------------------------------------------------------
 
 
@@ -464,7 +448,7 @@ async def test_race_lost_returns_none_and_deletes_pending(
     tc_source: NewsSource,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """別 worker が article を先に作った → ``None`` + pending DELETE + conflict_lost audit。
+    """別 worker が article を先に作った → ``None`` + pending DELETE + 既存 article 残置.
 
     pre-condition: 同 ``source_url`` の Article を直接 INSERT (race の "勝者")。
     """  # noqa: E501
@@ -507,12 +491,3 @@ async def test_race_lost_returns_none_and_deletes_pending(
         )
     ).scalar_one_or_none()
     assert remaining is None
-    # audit に conflict_lost (canonical_url 集計 key で関連付く)
-    event = (
-        await db_session.execute(
-            select(PipelineEvent).where(PipelineEvent.stage == "content_fetch")
-        )
-    ).scalar_one()
-    assert event.event_type == "skipped"
-    assert event.outcome_code == "conflict_lost"
-    assert event.payload["canonical_url"] == str(canonical_url)
