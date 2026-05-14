@@ -1,9 +1,14 @@
-"""``ingest_source`` task の例外パス監査テスト (PR1)。
+"""``ingest_source`` task の例外パス監査テスト。
 
-3 種の except (Permanent / Temporary 最終 / Unexpected) で
-``_record_failure_event`` が ``pipeline_events`` に failed 行を書くこと、
-attempt が ``retry_count + 1`` で渡ること、Temporary 中間試行では audit
-されないことを確認する。
+Stage 1 設計 (cron 一本化、taskiq inline retry なし) における Service 例外の
+ハンドリングを検証する:
+
+- ``SourceFetchError`` (Stage 1 共通基底) → audit + return、taskiq retry なし
+- ``PermanentFetchError`` / ``TemporaryFetchError`` (Stage 2 専用 subclass) も
+  ``SourceFetchError`` の subclass なので Stage 1 task で catch される
+- 想定外 ``Exception`` → audit + re-raise (worker log で可視化)
+
+Stage 1 では ``max_retries=0 / retry_on_error=False`` のため、attempt は常に 1。
 """
 
 from __future__ import annotations
@@ -18,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.collection import tasks as collection_tasks
 from app.collection.errors import (
     PermanentFetchError,
+    SourceFetchError,
     TemporaryFetchError,
 )
 from app.collection.staged import IngestSourceArg
@@ -40,20 +46,13 @@ async def vb_source(db_session: AsyncSession) -> NewsSource:
     return source
 
 
-def _ctx(
-    session_factory: async_sessionmaker[AsyncSession],
-    *,
-    retry_count: int,
-    max_retries: int = 2,
-) -> SimpleNamespace:
+def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> SimpleNamespace:
     """taskiq Context の最低限な mock。
 
-    ``is_last_attempt(ctx)`` と ``ctx.state.session_factory`` 経由で参照される。
+    Stage 1 は retry concept を持たないため labels は空で十分。
     """
     state = SimpleNamespace(session_factory=session_factory)
-    message = SimpleNamespace(
-        labels={"retry_count": retry_count, "max_retries": max_retries}
-    )
+    message = SimpleNamespace(labels={})
     return SimpleNamespace(state=state, message=message)
 
 
@@ -62,7 +61,7 @@ class _RaisingService:
 
     def __init__(self, *_: Any, **__: Any) -> None: ...
 
-    async def execute(self, source_id: int, *, attempt: int = 1) -> Any:
+    async def execute(self, source_id: int) -> Any:
         raise self.exc  # type: ignore[attr-defined]
 
 
@@ -79,76 +78,15 @@ def _patch_service_to_raise(monkeypatch: pytest.MonkeyPatch, exc: Exception) -> 
 
 
 @pytest.mark.asyncio
-async def test_permanent_fetch_error_records_audit(
+async def test_source_fetch_error_records_audit(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     vb_source: NewsSource,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _patch_service_to_raise(monkeypatch, PermanentFetchError("403 forbidden"))
-    ctx = _ctx(session_factory, retry_count=0)
-
-    result = await collection_tasks.ingest_source(
-        IngestSourceArg(id=vb_source.id, name=str(vb_source.name)),
-        ctx=ctx,  # type: ignore[arg-type]
-    )
-
-    assert result["status"] == "error"
-    rows = (
-        (
-            await db_session.execute(
-                select(PipelineEvent).where(PipelineEvent.event_type == "failed")
-            )
-        )
-        .scalars()
-        .all()
-    )
-    assert len(rows) == 1
-    row = rows[0]
-    assert row.outcome_code == "permanent_fetch_error"
-    assert row.source_id == vb_source.id
-    assert row.attempt == 1  # retry_count(0) + 1
-    assert row.error_class.endswith(".PermanentFetchError")  # type: ignore[union-attr]
-
-
-@pytest.mark.asyncio
-async def test_temporary_fetch_error_intermediate_does_not_record(
-    session_factory: async_sessionmaker[AsyncSession],
-    db_session: AsyncSession,
-    vb_source: NewsSource,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """中間試行は audit せず、taskiq retry に乗せる (raise)。"""
-    _patch_service_to_raise(monkeypatch, TemporaryFetchError("503"))
-    ctx = _ctx(session_factory, retry_count=0, max_retries=2)  # 最終ではない
-
-    with pytest.raises(TemporaryFetchError):
-        await collection_tasks.ingest_source(
-            IngestSourceArg(id=vb_source.id, name=str(vb_source.name)),
-            ctx=ctx,  # type: ignore[arg-type]
-        )
-
-    rows = (
-        (
-            await db_session.execute(
-                select(PipelineEvent).where(PipelineEvent.event_type == "failed")
-            )
-        )
-        .scalars()
-        .all()
-    )
-    assert rows == []
-
-
-@pytest.mark.asyncio
-async def test_temporary_fetch_error_last_attempt_records(
-    session_factory: async_sessionmaker[AsyncSession],
-    db_session: AsyncSession,
-    vb_source: NewsSource,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _patch_service_to_raise(monkeypatch, TemporaryFetchError("503"))
-    ctx = _ctx(session_factory, retry_count=2, max_retries=2)  # 最終試行
+    """Stage 1 共通基底の ``SourceFetchError`` で audit + return される。"""
+    _patch_service_to_raise(monkeypatch, SourceFetchError("ssrf blocked"))
+    ctx = _ctx(session_factory)
 
     result = await collection_tasks.ingest_source(
         IngestSourceArg(id=vb_source.id, name=str(vb_source.name)),
@@ -165,8 +103,54 @@ async def test_temporary_fetch_error_last_attempt_records(
         .scalars()
         .one()
     )
-    assert row.outcome_code == "temporary_fetch_error_exhausted"
-    assert row.attempt == 3  # retry_count(2) + 1
+    assert row.outcome_code == "source_fetch_error"
+    assert row.source_id == vb_source.id
+    assert row.attempt == 1
+    assert row.error_class.endswith(".SourceFetchError")  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exc",
+    [
+        PermanentFetchError("403 forbidden"),
+        TemporaryFetchError("503"),
+    ],
+    ids=["permanent", "temporary"],
+)
+async def test_stage2_subclasses_caught_as_source_fetch_error(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    vb_source: NewsSource,
+    monkeypatch: pytest.MonkeyPatch,
+    exc: Exception,
+) -> None:
+    """Stage 2 専用語彙 (``PermanentFetchError`` / ``TemporaryFetchError``) も
+    ``SourceFetchError`` subclass なので Stage 1 task で catch される。
+
+    Fetcher 実装は依然これらを raise するため、Stage 1 で subclass 軸を区別せず
+    catch できる構造を保証する。
+    """
+    _patch_service_to_raise(monkeypatch, exc)
+    ctx = _ctx(session_factory)
+
+    result = await collection_tasks.ingest_source(
+        IngestSourceArg(id=vb_source.id, name=str(vb_source.name)),
+        ctx=ctx,  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "error"
+    row = (
+        (
+            await db_session.execute(
+                select(PipelineEvent).where(PipelineEvent.event_type == "failed")
+            )
+        )
+        .scalars()
+        .one()
+    )
+    assert row.outcome_code == "source_fetch_error"
+    assert row.attempt == 1
 
 
 @pytest.mark.asyncio
@@ -176,8 +160,9 @@ async def test_unexpected_error_records_then_reraises(
     vb_source: NewsSource,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """``SourceFetchError`` 外の Exception は audit + re-raise (worker log 可視化)。"""
     _patch_service_to_raise(monkeypatch, RuntimeError("boom"))
-    ctx = _ctx(session_factory, retry_count=0)
+    ctx = _ctx(session_factory)
 
     with pytest.raises(RuntimeError, match="boom"):
         await collection_tasks.ingest_source(
@@ -195,4 +180,5 @@ async def test_unexpected_error_records_then_reraises(
         .one()
     )
     assert row.outcome_code == "unexpected_error"
+    assert row.attempt == 1
     assert row.error_class.endswith(".RuntimeError")  # type: ignore[union-attr]

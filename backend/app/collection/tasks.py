@@ -24,12 +24,8 @@ from app.brokers import (
     _FETCH_CRON,
     broker_content,
     broker_metadata,
-    is_last_attempt,
 )
-from app.collection.errors import (
-    PermanentFetchError,
-    TemporaryFetchError,
-)
+from app.collection.errors import SourceFetchError
 from app.collection.staged import IngestSourceArg
 from app.models.fetch_log import FetchLog, FetchStatus
 from app.models.news_source import NewsSource
@@ -114,8 +110,8 @@ async def dispatch_sources(
 @broker_content.task(
     task_name="ingest_source",
     timeout=300,
-    max_retries=2,
-    retry_on_error=True,
+    max_retries=0,
+    retry_on_error=False,
 )
 async def ingest_source(
     arg: IngestSourceArg,
@@ -134,6 +130,13 @@ async def ingest_source(
 
     補完待ち獲得経路 (本文 HTML 必須): Fetcher が ``IncompleteArticle`` を yield、
     後段 ``extract_html_body`` task で trafilatura 抽出 + 永続化に進む。
+
+    失敗ハンドリング: taskiq inline retry を持たず (``max_retries=0``)、
+    ``SourceFetchError`` (ソース全体失敗) はその tick で監査して return する。
+    次の cron tick (``dispatch_sources``) で再 dispatch されるため、Stage 2 の
+    DB 駆動 retry のような state は Stage 1 では持たない。``Permanent`` /
+    ``Temporary`` の細分化は Stage 2 専用語彙で、Stage 1 task 層は
+    ``SourceFetchError`` 1 本で catch する。
     """
     from app.analysis.extraction.domain.ready import ExtractionTrigger
     from app.analysis.extraction.tasks import extract_content
@@ -144,57 +147,35 @@ async def ingest_source(
     logger.info("ingest_source_started", source_id=source_id, source_name=arg.name)
     session_factory = ctx.state.session_factory
     start_time = time.monotonic()
-    attempt = int(ctx.message.labels.get("retry_count", 0)) + 1
 
     fetcher_factory = FETCHERS[arg.name]
     svc = ArticleAcquisitionService(session_factory, fetcher_factory)
 
     try:
         persisted_ids = await svc.execute(source_id)
-    except PermanentFetchError as e:
+    except SourceFetchError as e:
         await _record_fetch_log(
             session_factory, source_id, FetchStatus.ERROR, 0, str(e), start_time
         )
         await _record_failure_event(
             session_factory=session_factory,
             stage=Stage.SOURCE_FETCH,
-            outcome_code="permanent_fetch_error",
+            outcome_code="source_fetch_error",
             exc=e,
-            attempt=attempt,
+            attempt=1,
             duration_ms=int((time.monotonic() - start_time) * 1000),
             source_id=source_id,
         )
         return {"source_id": source_id, "status": "error", "reason": str(e)}
-    except TemporaryFetchError as e:
-        await _record_fetch_log(
-            session_factory, source_id, FetchStatus.ERROR, 0, str(e), start_time
-        )
-        if is_last_attempt(ctx):
-            logger.warning(
-                "ingest_source_max_retries",
-                source_id=source_id,
-                source_name=arg.name,
-                error=str(e),
-            )
-            await _record_failure_event(
-                session_factory=session_factory,
-                stage=Stage.SOURCE_FETCH,
-                outcome_code="temporary_fetch_error_exhausted",
-                exc=e,
-                attempt=attempt,
-                duration_ms=int((time.monotonic() - start_time) * 1000),
-                source_id=source_id,
-            )
-            return {"source_id": source_id, "status": "error", "reason": str(e)}
-        raise
     except Exception as e:
-        # 想定外: audit してから re-raise (taskiq の standard retry に乗せる)
+        # 想定外: audit してから re-raise (worker log で可視化、taskiq retry は
+        # 載らない: max_retries=0 / retry_on_error=False)
         await _record_failure_event(
             session_factory=session_factory,
             stage=Stage.SOURCE_FETCH,
             outcome_code="unexpected_error",
             exc=e,
-            attempt=attempt,
+            attempt=1,
             duration_ms=int((time.monotonic() - start_time) * 1000),
             source_id=source_id,
         )

@@ -39,7 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.collection.article.domain.article import ReadyForArticle
 from app.collection.article.repository import ArticleRepository
-from app.collection.errors import PermanentFetchError, TemporaryFetchError
+from app.collection.errors import SourceFetchError
 from app.collection.fetchers.outcome import FetchedEntry, SourceFetchFailed
 from app.collection.fetchers.protocol import Fetcher
 from app.collection.incomplete_article.domain.incomplete_article import (
@@ -58,8 +58,9 @@ class ArticleAcquisitionService:
     ``pending_html_articles`` に保管する (後段 ``ArticleCompletionService`` が
     完成させる)。
 
-    ``PermanentFetchError`` / ``TemporaryFetchError`` は呼び出し側 (Task) に
-    伝播する (retry 判断は Task 層の責務)。
+    ソース全体の取得失敗は ``SourceFetchError`` で呼び出し側 (Task) に伝播する。
+    Stage 1 task は taskiq inline retry を持たず、監査して return → 次の cron tick
+    で再 dispatch で救済する設計。
     """
 
     def __init__(
@@ -103,10 +104,11 @@ class ArticleAcquisitionService:
                                 retryable=r.retryable,
                                 detail=r.detail,
                             )
-            except HostBlockedError as e:
-                raise PermanentFetchError(str(e)) from e
-            except HostResolutionError as e:
-                raise TemporaryFetchError(str(e)) from e
+            except (HostBlockedError, HostResolutionError) as e:
+                # Stage 1 では SSRF deny (Permanent 相当) と DNS 失敗 (Temporary
+                # 相当) を区別する業務的意味はない (cron 一本化で taskiq inline
+                # retry を持たないため、どちらも次 tick で再 dispatch される)。
+                raise SourceFetchError(str(e)) from e
 
             await session.commit()
 

@@ -20,6 +20,7 @@ flat モジュール:
 - ``tasks.py`` — 5 つの taskiq task (``dispatch_sources`` / ``ingest_source`` /
   ``extract_html_body``。``dispatch_html_fetch_jobs`` / ``sweep_expired_leases``
   は ``article_completion/dispatch.py`` 側で定義)
-- ``errors.py`` — ``PermanentFetchError`` / ``TemporaryFetchError``
+- ``errors.py`` — ``SourceFetchError`` (Stage 1 共通基底) + Stage 2 専用 subclass
+  (``PermanentFetchError`` / ``TemporaryFetchError`` + 4 細分化系)
 - ``url_canonicalize.py`` — URL 正規化純関数
 """
