@@ -11,20 +11,7 @@ per-source 設計 (実 Atom 観察ベース):
 - ``<link rel="alternate" href>`` は **redirector URL**
   (``https://go.theregister.com/feed/<host>/<path>``)、
   ``_normalize_register_link`` で実 URL に展開してから ``SafeUrl`` 構築する
-- ``<id>`` は ``tag:theregister.com,2005:story...`` URI 形式 (NOT redirector)
-  → 標準 ``_extract_guid`` でそのまま guid 採用
-- ``<author><name>`` を author に採用 (feedparser は ``entry.author`` に
-  ``<name>`` のみ抽出、``<email>`` / ``<uri>`` は捨てる)
-- ``<category>`` は **未提供** のため tags=() 直書き
-- ``<media:>`` namespace 未宣言 → image_url=None 直書き
-- ``<title type="html">`` 属性付きだが実観察ではプレーン、defensive で
-  ``_strip_html`` を適用
 - language は feed-level ``xml:lang="en"`` (NOT en-US)
-
-旧 ``fetchers/rss/the_register.py`` (BaseRssFetcher 継承 + ``convert_entry``
-override) は本 PR で削除し、新 Protocol に置き換える。リダイレクタ正規化
-ロジックは新 Fetcher に移植 (memory `project_the_register_fetcher_decision.md`
-の split case C)。
 """
 
 from __future__ import annotations
@@ -42,12 +29,6 @@ import structlog
 
 from app.collection.article.domain.value_objects import PublishedAt
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
-from app.collection.fetchers.outcome import (
-    FetchedEntry,
-    FetchOutcome,
-    SourceFetchFailed,
-    SourceFetchFailureReason,
-)
 from app.collection.incomplete_article.domain.incomplete_article import (
     IncompleteArticle,
 )
@@ -61,13 +42,12 @@ _USER_AGENT = "Mozilla/5.0 (compatible; Vector/1.0; +https://github.com/yook11/V
 _HTTP_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _WHITESPACE_RE = re.compile(r"\s+")
-_DEFAULT_LANGUAGE = "en"
 
 _REDIRECTOR_PREFIX = "https://go.theregister.com/feed/"
 
 
 def _strip_html(s: str) -> str:
-    """HTML タグを剥がして plain text に正規化する (title / author 用)。"""
+    """HTML タグを剥がして plain text に正規化する (title 用)。"""
     if not s:
         return ""
     return _WHITESPACE_RE.sub(" ", html.unescape(_HTML_TAG_RE.sub(" ", s))).strip()
@@ -77,8 +57,8 @@ def _parse_published_at(entry: dict[str, Any]) -> PublishedAt | None:
     """feedparser の ``*_parsed`` (struct_time) を UTC ``PublishedAt`` に変換する。
 
     Atom の ``<published>`` ISO 8601 (例: ``2026-05-01T21:39:10.00Z``) は
-    feedparser が標準解釈する。Pattern H 固有: 本値が None でも SourceFetchFailed 降格
-    はしない (HTML 補完を待つ)。
+    feedparser が標準解釈する。Pattern H 固有: 本値が None でも drop しない
+    (HTML 補完を待つ)。
     """
     parsed = entry.get("published_parsed") or entry.get("updated_parsed")
     if parsed is None:
@@ -88,23 +68,6 @@ def _parse_published_at(entry: dict[str, Any]) -> PublishedAt | None:
     except (TypeError, ValueError):
         return None
     return PublishedAt(value=dt)
-
-
-def _extract_guid(entry: dict[str, Any]) -> str | None:
-    """``<id>`` (feedparser では ``id`` にマップ) を取り出す。
-
-    The Register は Atom ``<id>tag:theregister.com,2005:story...</id>`` を
-    提供する (URN tag scheme、redirector ではない実観察)。
-    """
-    raw = entry.get("id") or entry.get("guid")
-    if isinstance(raw, str) and raw:
-        return raw[:2048]
-    return None
-
-
-def _normalize_language(raw: str | None) -> str:
-    value = (raw or _DEFAULT_LANGUAGE).replace("_", "-")
-    return value[:20]
 
 
 def _normalize_register_link(raw: str) -> str:
@@ -122,25 +85,12 @@ def _normalize_register_link(raw: str) -> str:
 
 
 class TheRegisterFetcher:
-    """The Register 用 Pattern H Fetcher (Pattern R+H = HTML 必須、Atom feed)。
-
-    PROVIDES に列挙したフィールドは feed-level / Atom 仕様で 100% 提供される
-    前提:
-
-    - ``language``: feed-level ``xml:lang="en"``
-    - ``guid``: ``<id>tag:theregister.com,2005:story...</id>`` (URN tag scheme)
-    - ``site_name``: hardcode "The Register"
-
-    ``author`` (``<author><name>``) は probabilistic のため metadata に詰める
-    が PROVIDES には含めない。``tags`` / ``image_url`` は実 Atom で **未提供**
-    のため ``()`` / ``None`` を直書きする。
-    """
+    """The Register 用 Pattern H Fetcher (Pattern R+H = HTML 必須、Atom feed)。"""
 
     NAME: ClassVar[str] = "The Register"
     ENDPOINT_URL: ClassVar[str] = "https://www.theregister.com/headlines.atom"
-    PROVIDES: ClassVar[frozenset[str]] = frozenset({"language", "guid", "site_name"})
 
-    async def fetch(self, source_id: int) -> AsyncIterator[FetchOutcome]:
+    async def fetch(self, source_id: int) -> AsyncIterator[IncompleteArticle]:
         feed_text = await self._fetch_feed()
         feed = await asyncio.to_thread(feedparser.parse, feed_text)
         if feed.bozo and not feed.entries:
@@ -153,10 +103,10 @@ class TheRegisterFetcher:
                 f"feed parse error: {self.NAME}: {feed.bozo_exception}"
             )
 
-        feed_language = _normalize_language(feed.feed.get("language"))
-
         for entry in feed.entries:
-            yield self._convert_entry(entry, source_id, feed_language)
+            item = self._convert_entry(entry, source_id)
+            if item is not None:
+                yield item
 
     async def _fetch_feed(self) -> str:
         async with make_safe_async_client(
@@ -184,60 +134,26 @@ class TheRegisterFetcher:
         self,
         entry: dict[str, Any],
         source_id: int,
-        feed_language: str,
-    ) -> FetchOutcome:
-        """1 entry を ``FetchOutcome`` に変換する純関数。
-
-        固有挙動: ``link`` を ``_normalize_register_link`` で実 URL に展開
-        してから ``SafeUrl`` 構築する。
-        """
+    ) -> IncompleteArticle | None:
         title = _strip_html(entry.get("title", "") or "")
         if not title:
-            return SourceFetchFailed(
-                reason=SourceFetchFailureReason(
-                    code="title_missing",
-                    retryable=False,
-                    detail="rss_title_missing",
-                )
-            )
+            return None
         title = title[:500]
 
         raw_link = entry.get("link", "") or ""
-        link = _normalize_register_link(raw_link)
+        if not raw_link:
+            return None
+        normalized_link = _normalize_register_link(raw_link)
         try:
-            source_url = SafeUrl(link)
+            source_url = SafeUrl(normalized_link)
         except ValueError:
-            return SourceFetchFailed(
-                reason=SourceFetchFailureReason(
-                    code="extraction_empty",
-                    retryable=False,
-                    detail=f"invalid_link:{link[:100]}",
-                )
-            )
+            return None
 
         published_at_hint = _parse_published_at(entry)
 
-        raw_author = entry.get("author")
-        if isinstance(raw_author, str) and raw_author:
-            author = _strip_html(raw_author)[:200] or None
-        else:
-            author = None
-
-        metadata: dict[str, Any] = {
-            "language": feed_language,
-            "site_name": self.NAME,
-        }
-        if author:
-            metadata["author"] = author
-        if guid := _extract_guid(entry):
-            metadata["guid"] = guid
-
-        return FetchedEntry(
-            item=IncompleteArticle(
-                title=title,
-                source_id=source_id,
-                source_url=source_url,
-                published_at_hint=published_at_hint,
-            ),
-            metadata=metadata,
+        return IncompleteArticle(
+            title=title,
+            source_id=source_id,
+            source_url=source_url,
+            published_at_hint=published_at_hint,
         )

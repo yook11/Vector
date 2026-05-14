@@ -26,19 +26,13 @@ from app.collection.fetchers.hacker_news import (
     HN_SLIDING_WINDOW_SECONDS,
     HackerNewsFetcher,
 )
-from app.collection.fetchers.outcome import (
-    FetchedEntry,
-    FetchOutcome,
-    SourceFetchFailed,
-)
 from app.collection.incomplete_article.domain.incomplete_article import (
     IncompleteArticle,
 )
 from tests.collection.fetchers._invariant import (
+    Passport,
     assert_at_least_one_passport,
-    assert_metadata_audit_safe,
     assert_passports_persistable,
-    assert_provides_contract,
 )
 
 _HN_MOD = "app.collection.fetchers.hacker_news"
@@ -94,64 +88,48 @@ def _mock_safe_client(response_or_exception: Any) -> MagicMock:
     return cm
 
 
-async def _collect(it: AsyncIterator[FetchOutcome]) -> list[FetchOutcome]:
+async def _collect(it: AsyncIterator[Passport]) -> list[Passport]:
     return [o async for o in it]
 
 
-def _direct_outcomes() -> list[FetchOutcome]:
+def _direct_passports() -> list[Passport]:
     fetcher = HackerNewsFetcher()
     return [
-        outcome
+        item
         for hit in _SAMPLE_HITS
-        if (outcome := fetcher._convert_hit(hit, 1)) is not None
+        if (item := fetcher._convert_hit(hit, 1)) is not None
     ]
 
 
 def test_passports_satisfy_persistence_invariants() -> None:
-    assert_passports_persistable(_direct_outcomes())
-
-
-def test_provides_contract_holds() -> None:
-    assert_provides_contract(_direct_outcomes(), HackerNewsFetcher.PROVIDES)
-
-
-def test_metadata_audit_safe() -> None:
-    assert_metadata_audit_safe(_direct_outcomes())
+    assert_passports_persistable(_direct_passports())
 
 
 def test_url_missing_hit_skipped_silently() -> None:
-    """Ask HN 系 (url 欠落) は yield 自体せず skip。``SourceFetchFailed`` も流さない。"""  # noqa: E501
+    """Ask HN 系 (url 欠落) は yield 自体せず skip。"""
     fetcher = HackerNewsFetcher()
     assert fetcher._convert_hit(_hit(url=None), 1) is None
     assert fetcher._convert_hit(_hit(url=""), 1) is None
 
 
-def test_invalid_url_returns_failed_not_corrupt_passport() -> None:
+def test_invalid_url_dropped() -> None:
     fetcher = HackerNewsFetcher()
-    outcome = fetcher._convert_hit(_hit(url="not-a-url"), 1)
-    assert isinstance(outcome, SourceFetchFailed)
-    assert outcome.reason.code == "extraction_empty"
+    assert fetcher._convert_hit(_hit(url="not-a-url"), 1) is None
 
 
-def test_empty_title_returns_failed() -> None:
+def test_empty_title_dropped() -> None:
     fetcher = HackerNewsFetcher()
-    outcome = fetcher._convert_hit(_hit(title=""), 1)
-    assert isinstance(outcome, SourceFetchFailed)
-    assert outcome.reason.code == "title_missing"
+    assert fetcher._convert_hit(_hit(title=""), 1) is None
 
 
 @pytest.mark.asyncio
 async def test_fetch_yields_passports_for_valid_hits() -> None:
     cm = _mock_safe_client(_mock_response({"hits": _SAMPLE_HITS}))
     with patch(f"{_HN_MOD}.make_safe_async_client", return_value=cm):
-        outcomes = await _collect(HackerNewsFetcher().fetch(1))
-    assert_at_least_one_passport(outcomes)
+        items = await _collect(HackerNewsFetcher().fetch(1))
+    assert_at_least_one_passport(items)
     # url 欠落 1 件は skip され、残り 2 件が IncompleteArticle
-    pendings = [
-        o
-        for o in outcomes
-        if isinstance(o, FetchedEntry) and isinstance(o.item, IncompleteArticle)
-    ]
+    pendings = [o for o in items if isinstance(o, IncompleteArticle)]
     assert len(pendings) == 2
 
 

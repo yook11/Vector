@@ -30,12 +30,6 @@ from lxml import etree
 
 from app.collection.article.domain.value_objects import PublishedAt
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
-from app.collection.fetchers.outcome import (
-    FetchedEntry,
-    FetchOutcome,
-    SourceFetchFailed,
-    SourceFetchFailureReason,
-)
 from app.collection.incomplete_article.domain.incomplete_article import (
     IncompleteArticle,
 )
@@ -58,30 +52,23 @@ class BaseSitemapFetcher:
     - ``NAME``: ``news_sources.name`` と一致する dispatch キー
     - ``ENDPOINT_URL``: sitemap.xml の URL (``/sitemap.xml``)
     - ``URL_PATH_PREFIX``: 採用対象の URL path 接頭辞 (例: ``/news/``)
-    - ``SITE_NAME``: ``metadata["site_name"]`` に詰める表示名
-    - ``LANGUAGE``: ``metadata["language"]`` に詰める ISO コード
 
     オプショナル ClassVar (デフォルト値あり):
 
     - ``MAX_ENTRIES``: 1 cron 周期で yield する最大件数。lastmod 降順で上位
       を採用する。delta fetch 相当 (大量バックフィルを防止)
-    - ``PROVIDES``: 既定 ``frozenset({"site_name", "language"})``。subclass
-      で追加保証があれば override する
 
-    本基底は ``Fetcher`` Protocol (``NAME`` / ``ENDPOINT_URL`` / ``PROVIDES``
-    + ``async def fetch``) を満たすため、subclass がそのまま ``FETCHERS``
+    本基底は ``Fetcher`` Protocol (``NAME`` / ``ENDPOINT_URL`` +
+    ``async def fetch``) を満たすため、subclass がそのまま ``FETCHERS``
     dispatch dict に登録できる。
     """
 
     NAME: ClassVar[str]
     ENDPOINT_URL: ClassVar[str]
     URL_PATH_PREFIX: ClassVar[str]
-    SITE_NAME: ClassVar[str]
-    LANGUAGE: ClassVar[str] = "en"
     MAX_ENTRIES: ClassVar[int] = 30
-    PROVIDES: ClassVar[frozenset[str]] = frozenset({"site_name", "language"})
 
-    async def fetch(self, source_id: int) -> AsyncIterator[FetchOutcome]:
+    async def fetch(self, source_id: int) -> AsyncIterator[IncompleteArticle]:
         sitemap_bytes = await self._fetch_sitemap()
         try:
             entries = await asyncio.to_thread(self._parse_sitemap, sitemap_bytes)
@@ -94,7 +81,9 @@ class BaseSitemapFetcher:
         filtered.sort(key=lambda e: e[1] or _epoch, reverse=True)
 
         for loc, lastmod in filtered[: self.MAX_ENTRIES]:
-            yield self._convert_entry(loc, lastmod, source_id)
+            item = self._convert_entry(loc, lastmod, source_id)
+            if item is not None:
+                yield item
 
     async def _fetch_sitemap(self) -> bytes:
         async with make_safe_async_client(
@@ -161,7 +150,7 @@ class BaseSitemapFetcher:
         loc: str,
         lastmod: datetime | None,
         source_id: int,
-    ) -> FetchOutcome:
+    ) -> IncompleteArticle | None:
         """1 sitemap entry を ``IncompleteArticle`` に変換する純関数。
 
         title は URL slug をプレースホルダとして詰め、``prefer_html_title=True``
@@ -172,30 +161,17 @@ class BaseSitemapFetcher:
         try:
             source_url = SafeUrl(loc)
         except ValueError:
-            return SourceFetchFailed(
-                reason=SourceFetchFailureReason(
-                    code="extraction_empty",
-                    retryable=False,
-                    detail=f"invalid_url:{loc[:100]}",
-                )
-            )
+            return None
 
         slug = self._slug_from_url(loc) or self.NAME
         title = slug[:500]
         published_hint = PublishedAt(value=lastmod) if lastmod is not None else None
-        return FetchedEntry(
-            item=IncompleteArticle(
-                title=title,
-                source_id=source_id,
-                source_url=source_url,
-                published_at_hint=published_hint,
-                prefer_html_title=True,
-            ),
-            metadata={
-                "language": self.LANGUAGE,
-                "site_name": self.SITE_NAME,
-                "guid": loc[:2048],
-            },
+        return IncompleteArticle(
+            title=title,
+            source_id=source_id,
+            source_url=source_url,
+            published_at_hint=published_hint,
+            prefer_html_title=True,
         )
 
     @staticmethod

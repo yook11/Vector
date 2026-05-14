@@ -6,7 +6,6 @@
 - ``IncompleteArticle`` は kiq message に乗せる前提 (frozen BaseModel) を満たすこと
 - ``IncompleteArticle.complete_with_html`` の Pattern H promotion 規則
   (RSS preferred / HTML fallback / 両欠落で ``ArticleCompletionFailed``)
-- ``FetchedEntry`` envelope は item + opaque metadata を運ぶ Service-internal 型
 
 実装枚挙 (Optional フィールド数 / 個別バリデータ等) は書かない。
 """
@@ -19,7 +18,6 @@ import pytest
 
 from app.collection.article.domain.article import ReadyForArticle
 from app.collection.article.domain.value_objects import PublishedAt
-from app.collection.fetchers.outcome import FetchedEntry
 from app.collection.incomplete_article.domain.completion import ArticleCompletionFailed
 from app.collection.incomplete_article.domain.incomplete_article import (
     IncompleteArticle,
@@ -162,25 +160,3 @@ class TestCompleteWithHtmlPromotion:
         )
         assert isinstance(html_first, ReadyForArticle)
         assert html_first.title == "HTML Title"
-
-
-class TestFetchedEntry:
-    """Service-internal envelope。item + opaque metadata の運搬だけ確認。"""
-
-    def test_carries_ready_for_article(self) -> None:
-        entry = FetchedEntry(item=_ready(), metadata={"language": "en"})
-        assert isinstance(entry.item, ReadyForArticle)
-        assert entry.metadata["language"] == "en"
-
-    def test_carries_pending_html_fetch(self) -> None:
-        entry = FetchedEntry(item=_pending(), metadata={"site_name": "X"})
-        assert isinstance(entry.item, IncompleteArticle)
-        assert entry.metadata["site_name"] == "X"
-
-    def test_metadata_is_opaque_dict(self) -> None:
-        # Fetcher ごとに異なる key を入れて良いこと (型による制約なし)
-        entry = FetchedEntry(
-            item=_ready(),
-            metadata={"language": "en", "doi": "10.1/x", "score": 42},
-        )
-        assert set(entry.metadata.keys()) == {"language", "doi", "score"}

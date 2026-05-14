@@ -110,8 +110,8 @@ class ReadyForArticle(BaseModel):
 
     Pattern R Fetcher が直接構築する / Pattern H で
     ``IncompleteArticle.complete_with_html`` が補完成功時に返す。
-    各 Fetcher は何が取れようがこれを満たして次工程に渡し、補足情報は
-    ``FetchedEntry.metadata`` で別軸に運ぶ。
+    各 Fetcher は何が取れようがこれを満たして次工程に渡す
+    (per-entry の補足情報は Outcome 純化により持ち越さない)。
 
     Invariants (``ArticleDraft`` と同等の長さ境界):
     - ``title``: 1..500 文字

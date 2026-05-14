@@ -25,9 +25,11 @@ class TestStrategyConsistency:
     def test_hacker_news_registered(self) -> None:
         assert FETCHERS["Hacker News"] is HackerNewsFetcher
 
-    def test_factory_yields_fetcher_with_provides(self) -> None:
+    def test_factory_yields_fetcher_with_identity(self) -> None:
         for name, factory in FETCHERS.items():
             instance = factory()
             assert hasattr(instance, "fetch"), f"{name} must implement fetch"
-            assert hasattr(instance, "PROVIDES"), f"{name} must declare PROVIDES"
-            assert isinstance(instance.PROVIDES, frozenset)
+            assert hasattr(instance, "NAME"), f"{name} must declare NAME"
+            assert hasattr(instance, "ENDPOINT_URL"), (
+                f"{name} must declare ENDPOINT_URL"
+            )

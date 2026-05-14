@@ -37,5 +37,4 @@ def test_classvar_consistency(
     assert klass.ISSN == issn
     assert klass.JOURNAL_NAME == journal
     assert klass.LANGUAGE == "en"
-    assert klass.PROVIDES == BaseMDPICrossrefFetcher.PROVIDES
     assert klass.ENDPOINT_URL == BaseMDPICrossrefFetcher.ENDPOINT_URL

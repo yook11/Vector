@@ -2,9 +2,8 @@
 
 collection-acquisition-redesign Phase 0c。旧 extractor は
 ``ExtractedContent | ExtractionEmpty`` の sum 型を返していたが、本道具は
-**例外で失敗を表現** する: 上流 Fetcher が ``FetchOutcome.SourceFetchFailed`` を構築する
-際の分類軸 (``FailureCode``) と直接対応させるため、抽出失敗 / 品質ゲート未達
-の概念を SourceFetchFailed 側に統一する。
+**例外で失敗を表現** する: 抽出失敗 / 品質ゲート未達は呼び出し側で
+例外を catch して構造的に分類する。
 
 旧 ``ArticleHtmlExtractor`` (``app/collection/article_completion/extractor.py``) は
 Phase 2a まで温存し物理削除しない。本モジュールは意図的なロジックコピーで

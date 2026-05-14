@@ -39,12 +39,6 @@ import structlog
 from lxml import etree, html
 
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
-from app.collection.fetchers.outcome import (
-    FetchedEntry,
-    FetchOutcome,
-    SourceFetchFailed,
-    SourceFetchFailureReason,
-)
 from app.collection.incomplete_article.domain.incomplete_article import (
     IncompleteArticle,
 )
@@ -69,19 +63,15 @@ class BaseHtmlListingFetcher:
     - ``DETAIL_LINK_XPATH``: 記事 detail への ``<a>`` を抽出する XPath
     - ``DETAIL_URL_PREFIX``: relative href を絶対 URL に解決する base
       (典型的には ``https://example.com``)
-    - ``SITE_NAME``: ``metadata["site_name"]`` に詰める表示名
-    - ``LANGUAGE``: ``metadata["language"]`` に詰める ISO コード
 
     オプショナル ClassVar (デフォルト値あり):
 
     - ``EXCLUDED_PATHS``: listing 内の category landing 等、記事ではない
       URL path を除外するための frozenset。XPath で除外を頑張らずに済む。
     - ``MAX_ENTRIES``: 1 cron 周期で yield する最大件数 (大量バックフィル防止)
-    - ``PROVIDES``: 既定 ``frozenset({"site_name", "language"})``。subclass
-      で追加保証があれば override する
 
-    本基底は ``Fetcher`` Protocol (``NAME`` / ``ENDPOINT_URL`` / ``PROVIDES``
-    + ``async def fetch``) を満たすため、subclass がそのまま ``FETCHERS``
+    本基底は ``Fetcher`` Protocol (``NAME`` / ``ENDPOINT_URL`` +
+    ``async def fetch``) を満たすため、subclass がそのまま ``FETCHERS``
     dispatch dict に登録できる。
     """
 
@@ -90,13 +80,10 @@ class BaseHtmlListingFetcher:
     LISTING_URL: ClassVar[str]
     DETAIL_LINK_XPATH: ClassVar[str]
     DETAIL_URL_PREFIX: ClassVar[str]
-    SITE_NAME: ClassVar[str]
-    LANGUAGE: ClassVar[str] = "en"
     EXCLUDED_PATHS: ClassVar[frozenset[str]] = frozenset()
     MAX_ENTRIES: ClassVar[int] = 30
-    PROVIDES: ClassVar[frozenset[str]] = frozenset({"site_name", "language"})
 
-    async def fetch(self, source_id: int) -> AsyncIterator[FetchOutcome]:
+    async def fetch(self, source_id: int) -> AsyncIterator[IncompleteArticle]:
         listing_bytes = await self._fetch_listing()
         try:
             urls = await asyncio.to_thread(self._parse_listing, listing_bytes)
@@ -114,7 +101,10 @@ class BaseHtmlListingFetcher:
             seen.add(url)
             if not self._url_matches(url):
                 continue
-            yield self._convert_entry(url, source_id)
+            item = self._convert_entry(url, source_id)
+            if item is None:
+                continue
+            yield item
             emitted += 1
             if emitted >= self.MAX_ENTRIES:
                 break
@@ -167,7 +157,7 @@ class BaseHtmlListingFetcher:
         path = urlparse(url).path
         return path not in self.EXCLUDED_PATHS
 
-    def _convert_entry(self, loc: str, source_id: int) -> FetchOutcome:
+    def _convert_entry(self, loc: str, source_id: int) -> IncompleteArticle | None:
         """1 listing entry を ``IncompleteArticle`` に変換する純関数。
 
         title は URL slug をプレースホルダとして詰め、``prefer_html_title=True``
@@ -178,29 +168,16 @@ class BaseHtmlListingFetcher:
         try:
             source_url = SafeUrl(loc)
         except ValueError:
-            return SourceFetchFailed(
-                reason=SourceFetchFailureReason(
-                    code="extraction_empty",
-                    retryable=False,
-                    detail=f"invalid_url:{loc[:100]}",
-                )
-            )
+            return None
 
         slug = self._slug_from_url(loc) or self.NAME
         title = slug[:500]
-        return FetchedEntry(
-            item=IncompleteArticle(
-                title=title,
-                source_id=source_id,
-                source_url=source_url,
-                published_at_hint=None,
-                prefer_html_title=True,
-            ),
-            metadata={
-                "language": self.LANGUAGE,
-                "site_name": self.SITE_NAME,
-                "guid": loc[:2048],
-            },
+        return IncompleteArticle(
+            title=title,
+            source_id=source_id,
+            source_url=source_url,
+            published_at_hint=None,
+            prefer_html_title=True,
         )
 
     @staticmethod

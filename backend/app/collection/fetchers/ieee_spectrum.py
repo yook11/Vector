@@ -2,19 +2,11 @@
 
 collection-acquisition-redesign Phase 1c-A2。WordPress VIP の運用差で
 ``<content:encoded>`` が空、本文は ``<description>`` (= ``entry.summary``、
-1700-15900 chars) に full body が入る。multi-author を ``authors`` tuple で
-保持する唯一のソース。
+1700-15900 chars) に full body が入る。
 
 per-source 設計:
 
 - body は ``entry.summary`` を**直取り** (``content[0]`` は読まない、空のため)
-- author は ``entry.authors[0].name`` (先頭、後方互換)
-- authors は ``tuple(a["name"] for a in entry.authors)`` (true multi-author)
-- image は ``entry.media_content[0].url`` (``<media:content>`` あり)
-- language は ``feed.feed.language`` (``<channel>/<language>`` 提供あり)
-
-旧 ``fetchers/rss/ieee_spectrum.py`` (BaseRssFetcher 継承の薄スタブ) は
-本 PR で削除し、新 Protocol に置き換える。
 """
 
 from __future__ import annotations
@@ -33,12 +25,6 @@ import structlog
 from app.collection.article.domain.article import ReadyForArticle
 from app.collection.article.domain.value_objects import PublishedAt
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
-from app.collection.fetchers.outcome import (
-    FetchedEntry,
-    FetchOutcome,
-    SourceFetchFailed,
-    SourceFetchFailureReason,
-)
 from app.shared.security.safe_http import make_safe_async_client
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 from app.shared.value_objects.safe_url import SafeUrl
@@ -49,7 +35,6 @@ _USER_AGENT = "Mozilla/5.0 (compatible; Vector/1.0; +https://github.com/yook11/V
 _HTTP_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _WHITESPACE_RE = re.compile(r"\s+")
-_DEFAULT_LANGUAGE = "en-US"
 
 
 def _strip_html(s: str) -> str:
@@ -60,26 +45,11 @@ def _strip_html(s: str) -> str:
 
 
 def _extract_body(entry: dict[str, Any]) -> str:
-    """``<description>`` (= ``entry.summary``) 直取り。
-
-    IEEE は WordPress VIP の運用差で ``<content:encoded>`` が空であるため、
-    summary 側に full body が入る。``content[0]`` を読まないことを per-source
-    の事実として明示する。
-    """
-    summary = entry.get("summary")
-    return summary if isinstance(summary, str) else ""
-
-
-def _extract_authors(entry: dict[str, Any]) -> tuple[str, ...]:
-    """``entry.authors[*].name`` を tuple 化。IEEE は true multi-author。"""
-    authors = entry.get("authors")
-    if not isinstance(authors, list):
-        return ()
-    return tuple(
-        a["name"]
-        for a in authors
-        if isinstance(a, dict) and isinstance(a.get("name"), str) and a["name"]
-    )
+    """``<description>`` (= ``entry.summary``) を直取り。IEEE は content[0] が空。"""
+    raw = entry.get("summary")
+    if isinstance(raw, str):
+        return raw
+    return ""
 
 
 def _parse_published_at(entry: dict[str, Any]) -> PublishedAt | None:
@@ -94,62 +64,13 @@ def _parse_published_at(entry: dict[str, Any]) -> PublishedAt | None:
     return PublishedAt(value=dt)
 
 
-def _extract_image_url(entry: dict[str, Any]) -> SafeUrl | None:
-    """``<media:content>`` から画像 URL を取り出す。IEEE は提供あり。"""
-    media = entry.get("media_content")
-    if not isinstance(media, list) or not media:
-        return None
-    first = media[0]
-    if not isinstance(first, dict):
-        return None
-    url = first.get("url")
-    if not isinstance(url, str) or not url:
-        return None
-    try:
-        return SafeUrl(url)
-    except ValueError:
-        return None
-
-
-def _extract_tags(entry: dict[str, Any]) -> tuple[str, ...]:
-    """feedparser の ``tags`` (= ``<category>``) を tuple 化する。"""
-    tags = entry.get("tags")
-    if not isinstance(tags, list):
-        return ()
-    return tuple(
-        t["term"]
-        for t in tags
-        if isinstance(t, dict) and isinstance(t.get("term"), str) and t["term"]
-    )
-
-
-def _extract_guid(entry: dict[str, Any]) -> str | None:
-    """``<guid>`` (feedparser では ``id`` にマップ) を取り出す。"""
-    raw = entry.get("id") or entry.get("guid")
-    if isinstance(raw, str) and raw:
-        return raw[:2048]
-    return None
-
-
-def _normalize_language(raw: str | None) -> str:
-    """``en_US`` / ``en-us`` / ``en-US`` の表記揺れを ``en-US`` 系に統一。"""
-    value = (raw or _DEFAULT_LANGUAGE).replace("_", "-")
-    return value[:20]
-
-
 class IEEESpectrumFetcher:
-    """IEEE Spectrum 用 RSS-only Fetcher。
-
-    ``content:encoded`` が空という WordPress VIP の運用差を per-source の事実
-    として吸収し、summary を本文の唯一の経路とする。multi-author は
-    ``metadata["authors"]`` list で保持する。
-    """
+    """IEEE Spectrum 用 RSS-only Fetcher。"""
 
     NAME: ClassVar[str] = "IEEE Spectrum"
     ENDPOINT_URL: ClassVar[str] = "https://spectrum.ieee.org/feeds/feed.rss"
-    PROVIDES: ClassVar[frozenset[str]] = frozenset({"language", "guid", "site_name"})
 
-    async def fetch(self, source_id: int) -> AsyncIterator[FetchOutcome]:
+    async def fetch(self, source_id: int) -> AsyncIterator[ReadyForArticle]:
         feed_text = await self._fetch_feed()
         feed = await asyncio.to_thread(feedparser.parse, feed_text)
         if feed.bozo and not feed.entries:
@@ -162,10 +83,10 @@ class IEEESpectrumFetcher:
                 f"feed parse error: {self.NAME}: {feed.bozo_exception}"
             )
 
-        feed_language = _normalize_language(feed.feed.get("language"))
-
         for entry in feed.entries:
-            yield self._convert_entry(entry, source_id, feed_language)
+            item = self._convert_entry(entry, source_id)
+            if item is not None:
+                yield item
 
     async def _fetch_feed(self) -> str:
         async with make_safe_async_client(
@@ -193,84 +114,33 @@ class IEEESpectrumFetcher:
         self,
         entry: dict[str, Any],
         source_id: int,
-        feed_language: str,
-    ) -> FetchOutcome:
+    ) -> ReadyForArticle | None:
         title = _strip_html(entry.get("title", "") or "")
         if not title:
-            return SourceFetchFailed(
-                reason=SourceFetchFailureReason(
-                    code="title_missing",
-                    retryable=False,
-                    detail="rss_title_missing",
-                )
-            )
+            return None
         title = title[:500]
 
         body = _strip_html(_extract_body(entry))
         if len(body) < 50:
-            return SourceFetchFailed(
-                reason=SourceFetchFailureReason(
-                    code="body_too_short",
-                    retryable=False,
-                    detail=f"rss_body_len={len(body)}",
-                )
-            )
+            return None
 
         published_at = _parse_published_at(entry)
         if published_at is None:
-            return SourceFetchFailed(
-                reason=SourceFetchFailureReason(
-                    code="published_at_missing",
-                    retryable=False,
-                    detail="rss_pubdate_missing",
-                )
-            )
+            return None
 
         link = entry.get("link", "") or ""
         try:
             source_url = SafeUrl(link)
         except ValueError:
-            return SourceFetchFailed(
-                reason=SourceFetchFailureReason(
-                    code="extraction_empty",
-                    retryable=False,
-                    detail=f"invalid_link:{link[:100]}",
-                )
-            )
+            return None
 
         try:
-            ready = ReadyForArticle(
+            return ReadyForArticle(
                 title=title,
                 body=body,
                 published_at=published_at,
                 source_id=source_id,
                 source_url=source_url,
             )
-        except ValueError as e:
-            return SourceFetchFailed(
-                reason=SourceFetchFailureReason(
-                    code="other",
-                    retryable=False,
-                    detail=f"invariant_violation:{e}",
-                )
-            )
-
-        authors = _extract_authors(entry)
-        author = authors[0][:200] if authors else None
-
-        metadata: dict[str, Any] = {
-            "language": feed_language,
-            "site_name": self.NAME,
-        }
-        if author:
-            metadata["author"] = author
-        if authors:
-            metadata["authors"] = list(authors)
-        if tags := _extract_tags(entry):
-            metadata["tags"] = list(tags)
-        if image_url := _extract_image_url(entry):
-            metadata["image_url"] = str(image_url)
-        if guid := _extract_guid(entry):
-            metadata["guid"] = guid
-
-        return FetchedEntry(item=ready, metadata=metadata)
+        except ValueError:
+            return None

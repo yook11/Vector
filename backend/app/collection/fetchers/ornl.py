@@ -33,8 +33,6 @@ class ORNLNewsFetcher(BaseHtmlListingFetcher):
     LISTING_URL: ClassVar[str] = "https://www.ornl.gov/news"
     DETAIL_LINK_XPATH: ClassVar[str] = '//a[starts-with(@href, "/news/")]'
     DETAIL_URL_PREFIX: ClassVar[str] = "https://www.ornl.gov"
-    SITE_NAME: ClassVar[str] = "ORNL"
-    LANGUAGE: ClassVar[str] = "en"
     # ``/news`` 配下の category landing ページ 6 件を除外。
     # 2026-05-04 時点の実 listing で確認 (releases / features /
     # researcher-profiles / story-tips / audio-spots / honors-and-awards)。

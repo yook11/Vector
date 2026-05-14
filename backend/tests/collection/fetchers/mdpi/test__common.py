@@ -3,8 +3,7 @@
 検証する不変条件:
 
 - Crossref item を ``_convert_record`` した結果が永続化 passport の不変条件を満たす
-- ``type != "journal-article"`` / ``license`` 欠落 / 必須フィールド欠落は
-  ``SourceFetchFailed``
+- ``type != "journal-article"`` / ``license`` 欠落 / 必須フィールド欠落は drop
 - HTTP error は ``PermanentFetchError`` / ``TemporaryFetchError`` に分類される
 - API request の必須パラメタ (per-ISSN filter / from-pub-date / polite pool UA)
   を必ず付ける
@@ -26,23 +25,16 @@ from app.collection.article.domain.article import ReadyForArticle
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
 from app.collection.fetchers.mdpi._common import (
     BaseMDPICrossrefFetcher,
-    _extract_authors,
     _extract_doi,
     _parse_date_parts,
     _strip_jats,
     _validate_license,
 )
 from app.collection.fetchers.mdpi.materials import MDPIMaterialsFetcher
-from app.collection.fetchers.outcome import (
-    FetchedEntry,
-    FetchOutcome,
-    SourceFetchFailed,
-)
 from tests.collection.fetchers._invariant import (
+    Passport,
     assert_at_least_one_passport,
-    assert_metadata_audit_safe,
     assert_passports_persistable,
-    assert_provides_contract,
 )
 
 _MDPI_MOD = "app.collection.fetchers.mdpi._common"
@@ -59,9 +51,14 @@ def _items() -> list[dict[str, Any]]:
     return list(_load_fixture()["message"]["items"])
 
 
-def _direct_outcomes() -> list[FetchOutcome]:
+def _direct_passports() -> list[Passport]:
     fetcher = MDPIMaterialsFetcher()
-    return [fetcher._convert_record(item, 1) for item in _items()]
+    out: list[Passport] = []
+    for item in _items():
+        converted = fetcher._convert_record(item, 1)
+        if converted is not None:
+            out.append(converted)
+    return out
 
 
 def _mock_response(data: dict[str, Any], status_code: int = 200) -> httpx.Response:
@@ -85,7 +82,7 @@ def _mock_safe_client(response_or_exception: Any) -> MagicMock:
     return cm
 
 
-async def _collect(it: AsyncIterator[FetchOutcome]) -> list[FetchOutcome]:
+async def _collect(it: AsyncIterator[Passport]) -> list[Passport]:
     return [o async for o in it]
 
 
@@ -149,18 +146,6 @@ class TestValidateLicense:
         assert not _validate_license({})
 
 
-class TestExtractAuthors:
-    def test_family_and_given_combined(self) -> None:
-        authors = _extract_authors({"author": [{"family": "Smith", "given": "John"}]})
-        assert authors == ["Smith John"]
-
-    def test_family_only_when_given_missing(self) -> None:
-        assert _extract_authors({"author": [{"family": "Mononym"}]}) == ["Mononym"]
-
-    def test_empty_when_author_key_missing(self) -> None:
-        assert _extract_authors({}) == []
-
-
 class TestExtractDoi:
     def test_extracts_doi_string(self) -> None:
         assert _extract_doi({"DOI": "10.3390/ma17020001"}) == "10.3390/ma17020001"
@@ -170,7 +155,7 @@ class TestExtractDoi:
 
 
 # ---------------------------------------------------------------------------
-# _convert_record の SourceFetchFailed 分岐
+# _convert_record の drop 分岐
 # ---------------------------------------------------------------------------
 
 
@@ -181,84 +166,58 @@ class TestConvertRecordFailureBranches:
     def test_non_journal_article_type_dropped(self) -> None:
         item = self._base_valid_item()
         item["type"] = "correction"
-        outcome = MDPIMaterialsFetcher()._convert_record(item, 1)
-        assert isinstance(outcome, SourceFetchFailed)
-        assert outcome.reason.detail == "non_research_type"
+        assert MDPIMaterialsFetcher()._convert_record(item, 1) is None
 
     def test_non_cc_by_license_dropped(self) -> None:
         item = self._base_valid_item()
         item["license"] = [{"URL": "https://creativecommons.org/licenses/by-nc/4.0/"}]
-        outcome = MDPIMaterialsFetcher()._convert_record(item, 1)
-        assert isinstance(outcome, SourceFetchFailed)
-        assert outcome.reason.detail == "non_cc_by"
+        assert MDPIMaterialsFetcher()._convert_record(item, 1) is None
 
     def test_missing_license_dropped(self) -> None:
         item = self._base_valid_item()
         del item["license"]
-        outcome = MDPIMaterialsFetcher()._convert_record(item, 1)
-        assert isinstance(outcome, SourceFetchFailed)
-        assert outcome.reason.detail == "non_cc_by"
+        assert MDPIMaterialsFetcher()._convert_record(item, 1) is None
 
-    def test_missing_title_returns_failed(self) -> None:
+    def test_missing_title_dropped(self) -> None:
         item = self._base_valid_item()
         item["title"] = []
-        outcome = MDPIMaterialsFetcher()._convert_record(item, 1)
-        assert isinstance(outcome, SourceFetchFailed)
-        assert outcome.reason.code == "title_missing"
+        assert MDPIMaterialsFetcher()._convert_record(item, 1) is None
 
-    def test_short_abstract_returns_body_too_short(self) -> None:
+    def test_short_abstract_dropped(self) -> None:
         item = self._base_valid_item()
         item["abstract"] = "<jats:p>too short</jats:p>"
-        outcome = MDPIMaterialsFetcher()._convert_record(item, 1)
-        assert isinstance(outcome, SourceFetchFailed)
-        assert outcome.reason.code == "body_too_short"
+        assert MDPIMaterialsFetcher()._convert_record(item, 1) is None
 
-    def test_missing_date_parts_returns_published_at_missing(self) -> None:
+    def test_missing_date_parts_dropped(self) -> None:
         item = self._base_valid_item()
         for key in ("published", "issued", "published-online", "published-print"):
             item.pop(key, None)
-        outcome = MDPIMaterialsFetcher()._convert_record(item, 1)
-        assert isinstance(outcome, SourceFetchFailed)
-        assert outcome.reason.code == "published_at_missing"
+        assert MDPIMaterialsFetcher()._convert_record(item, 1) is None
 
-    def test_missing_doi_returns_extraction_empty(self) -> None:
+    def test_missing_doi_dropped(self) -> None:
         item = self._base_valid_item()
         del item["DOI"]
-        outcome = MDPIMaterialsFetcher()._convert_record(item, 1)
-        assert isinstance(outcome, SourceFetchFailed)
-        assert outcome.reason.code == "extraction_empty"
-        assert outcome.reason.detail == "doi_missing"
+        assert MDPIMaterialsFetcher()._convert_record(item, 1) is None
 
 
 # ---------------------------------------------------------------------------
-# 不変条件 (passport / PROVIDES / audit-safe)
+# 不変条件 (passport / source_url)
 # ---------------------------------------------------------------------------
 
 
 class TestPersistenceInvariants:
     def test_at_least_one_passport_yielded(self) -> None:
-        assert_at_least_one_passport(_direct_outcomes())
+        assert_at_least_one_passport(_direct_passports())
 
     def test_passports_satisfy_persistence_invariants(self) -> None:
-        assert_passports_persistable(_direct_outcomes())
-
-    def test_provides_contract_holds(self) -> None:
-        assert_provides_contract(_direct_outcomes(), MDPIMaterialsFetcher.PROVIDES)
-
-    def test_metadata_audit_safe(self) -> None:
-        assert_metadata_audit_safe(_direct_outcomes())
+        assert_passports_persistable(_direct_passports())
 
     def test_doi_url_used_as_source_url(self) -> None:
-        outcomes = _direct_outcomes()
-        passports = [
-            o
-            for o in outcomes
-            if isinstance(o, FetchedEntry) and isinstance(o.item, ReadyForArticle)
-        ]
+        passports = _direct_passports()
         assert passports
-        for entry in passports:
-            assert isinstance(entry.item, ReadyForArticle)
-            assert str(entry.item.source_url).startswith("https://doi.org/10.3390/")
+        for item in passports:
+            assert isinstance(item, ReadyForArticle)
+            assert str(item.source_url).startswith("https://doi.org/10.3390/")
 
 
 # ---------------------------------------------------------------------------
@@ -270,13 +229,9 @@ class TestPersistenceInvariants:
 async def test_fetch_yields_passports_for_valid_items() -> None:
     cm = _mock_safe_client(_mock_response(_load_fixture()))
     with patch(f"{_MDPI_MOD}.make_safe_async_client", return_value=cm):
-        outcomes = await _collect(MDPIMaterialsFetcher().fetch(1))
-    assert_at_least_one_passport(outcomes)
-    passports = [
-        o
-        for o in outcomes
-        if isinstance(o, FetchedEntry) and isinstance(o.item, ReadyForArticle)
-    ]
+        items = await _collect(MDPIMaterialsFetcher().fetch(1))
+    assert_at_least_one_passport(items)
+    passports = [o for o in items if isinstance(o, ReadyForArticle)]
     # fixture 3 records: valid / correction (drop) / no-license (drop) → 1 passport
     assert len(passports) == 1
 

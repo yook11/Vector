@@ -20,15 +20,8 @@ from app.collection.fetchers._base.sitemap import BaseSitemapFetcher
 
 
 class AnthropicFetcher(BaseSitemapFetcher):
-    """Anthropic news の sitemap-only Fetcher。
-
-    PROVIDES は基底の ``{"site_name", "language"}`` をそのまま継承。``guid``
-    は loc URL でほぼ確定だが、契約として宣言するほど安定的でないため
-    PROVIDES には含めない (``metadata["guid"]`` には毎回詰める)。
-    """
+    """Anthropic news の sitemap-only Fetcher。"""
 
     NAME: ClassVar[str] = "Anthropic"
     ENDPOINT_URL: ClassVar[str] = "https://www.anthropic.com/sitemap.xml"
     URL_PATH_PREFIX: ClassVar[str] = "/news/"
-    SITE_NAME: ClassVar[str] = "Anthropic"
-    LANGUAGE: ClassVar[str] = "en"

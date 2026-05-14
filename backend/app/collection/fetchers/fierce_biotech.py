@@ -9,16 +9,9 @@ per-source 設計 (実 RSS 観察ベース):
 - ``<pubDate>`` が **RFC822 非準拠** ("Apr 30, 2026 6:11pm") のため
   ``feedparser.published_parsed`` が落ちるケースを strptime fallback で救済。
   時刻部 TZ 情報なしのため ET (DST 自動切替) と仮定して UTC 換算する。
-- ``<title>`` / ``<dc:creator>`` が HTML 要素 (``<a href="...">``) で wrap
-  されているため、両方に ``_strip_html`` を defensive 適用する。
-- ``<category>`` / ``<media:>`` namespace が **未提供** のため
-  ``tags=()`` / ``image_url=None`` を直書き。
-- ``<guid isPermaLink="true">`` (UUID URL 形式) が提供されるため PROVIDES
-  に ``guid`` を含める。
+- ``<title>`` が HTML 要素 (``<a href="...">``) で wrap されているため
+  ``_strip_html`` を defensive 適用する。
 - language は ``feed.feed.language`` (= "en", NOT "en-US")。
-
-旧 ``fetchers/rss/fierce_biotech.py`` (BaseRssFetcher 継承の薄スタブ) は本
-PR で削除し、新 Protocol に置き換える。
 """
 
 from __future__ import annotations
@@ -37,12 +30,6 @@ import structlog
 
 from app.collection.article.domain.value_objects import PublishedAt
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
-from app.collection.fetchers.outcome import (
-    FetchedEntry,
-    FetchOutcome,
-    SourceFetchFailed,
-    SourceFetchFailureReason,
-)
 from app.collection.incomplete_article.domain.incomplete_article import (
     IncompleteArticle,
 )
@@ -56,7 +43,6 @@ _USER_AGENT = "Mozilla/5.0 (compatible; Vector/1.0; +https://github.com/yook11/V
 _HTTP_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _WHITESPACE_RE = re.compile(r"\s+")
-_DEFAULT_LANGUAGE = "en"
 
 _FB_PUBDATE_FORMAT = "%b %d, %Y %I:%M%p"
 """FierceBiotech 固有の pubDate format ("Apr 30, 2026 6:11pm")。
@@ -77,11 +63,11 @@ Stage 3 での ranking や digest week 算出に微影響あり)。
 
 
 def _strip_html(s: str) -> str:
-    """HTML タグを剥がして plain text に正規化する (title / author 用)。
+    """HTML タグを剥がして plain text に正規化する (title 用)。
 
-    FB RSS の ``<title>`` と ``<dc:creator>`` は ``<a href="...">...</a>``
-    で wrap されているため、両方に適用する。本文は HTML 取得後に
-    trafilatura が処理するため、本関数は title / author 専用。
+    FB RSS の ``<title>`` は ``<a href="...">...</a>`` で wrap されているため
+    適用する。本文は HTML 取得後に trafilatura が処理するため、本関数は title
+    専用。
     """
     if not s:
         return ""
@@ -98,7 +84,7 @@ def _parse_published_at(entry: dict[str, Any]) -> PublishedAt | None:
     2. ``entry.published`` / ``entry.updated`` (生文字列) を
        ``%b %d, %Y %I:%M%p`` で解釈し、ET TZ を付与してから UTC 変換
 
-    Pattern H 固有: 本値が None でも SourceFetchFailed 降格はしない (HTML 抽出が
+    Pattern H 固有: 本値が None でも drop しない (HTML 抽出が
     ``published_at`` を出してくれれば complete_with_html で merge 後に最終確定)。
     """
     parsed = entry.get("published_parsed") or entry.get("updated_parsed")
@@ -118,44 +104,13 @@ def _parse_published_at(entry: dict[str, Any]) -> PublishedAt | None:
     return PublishedAt(value=dt.replace(tzinfo=_FB_TZ).astimezone(UTC))
 
 
-def _extract_guid(entry: dict[str, Any]) -> str | None:
-    """``<guid>`` (feedparser では ``id`` にマップ) を取り出す。
-
-    FB は ``<guid isPermaLink="true">`` で UUID URL 形式
-    ("https://www.fiercebiotech.com/<uuid>") を提供する (実観察)。
-    """
-    raw = entry.get("id") or entry.get("guid")
-    if isinstance(raw, str) and raw:
-        return raw[:2048]
-    return None
-
-
-def _normalize_language(raw: str | None) -> str:
-    """``en_US`` / ``en-us`` / ``en-US`` の表記揺れを統一。FB は "en" passthrough。"""
-    value = (raw or _DEFAULT_LANGUAGE).replace("_", "-")
-    return value[:20]
-
-
 class FierceBiotechFetcher:
-    """FierceBiotech 用 Pattern H Fetcher。
-
-    PROVIDES に列挙したフィールドは feed-level / RSS 仕様で 100% 提供される
-    前提:
-
-    - ``language``: feed-level ``<channel><language>`` ("en")
-    - ``guid``: ``<guid isPermaLink="true">`` (UUID URL)
-    - ``site_name``: hardcode "FierceBiotech"
-
-    ``author`` は probabilistic (HTML wrap で形式変動の余地あり) なため
-    metadata に詰めるが PROVIDES には含めない。``tags`` / ``image_url`` は
-    実 RSS で **未提供** のため ``()`` / ``None`` を直書きする。
-    """
+    """FierceBiotech 用 Pattern H Fetcher。"""
 
     NAME: ClassVar[str] = "FierceBiotech"
     ENDPOINT_URL: ClassVar[str] = "https://www.fiercebiotech.com/rss/xml"
-    PROVIDES: ClassVar[frozenset[str]] = frozenset({"language", "guid", "site_name"})
 
-    async def fetch(self, source_id: int) -> AsyncIterator[FetchOutcome]:
+    async def fetch(self, source_id: int) -> AsyncIterator[IncompleteArticle]:
         feed_text = await self._fetch_feed()
         feed = await asyncio.to_thread(feedparser.parse, feed_text)
         if feed.bozo and not feed.entries:
@@ -168,10 +123,10 @@ class FierceBiotechFetcher:
                 f"feed parse error: {self.NAME}: {feed.bozo_exception}"
             )
 
-        feed_language = _normalize_language(feed.feed.get("language"))
-
         for entry in feed.entries:
-            yield self._convert_entry(entry, source_id, feed_language)
+            item = self._convert_entry(entry, source_id)
+            if item is not None:
+                yield item
 
     async def _fetch_feed(self) -> str:
         async with make_safe_async_client(
@@ -199,63 +154,23 @@ class FierceBiotechFetcher:
         self,
         entry: dict[str, Any],
         source_id: int,
-        feed_language: str,
-    ) -> FetchOutcome:
-        """1 entry を ``FetchOutcome`` に変換する純関数。
-
-        Pattern H 固有の品質ゲート:
-
-        - ``title`` 空 → ``SourceFetchFailed(title_missing)``
-        - ``link`` 不正 → ``SourceFetchFailed(extraction_empty)``
-        - ``published_at`` 欠落 → **SourceFetchFailed しない** (HTML 補完を待つ)
-        - ``body`` は本実装では検査しない (Stage 2 の責務)
-        """
+    ) -> IncompleteArticle | None:
         title = _strip_html(entry.get("title", "") or "")
         if not title:
-            return SourceFetchFailed(
-                reason=SourceFetchFailureReason(
-                    code="title_missing",
-                    retryable=False,
-                    detail="rss_title_missing",
-                )
-            )
+            return None
         title = title[:500]
 
         link = entry.get("link", "") or ""
         try:
             source_url = SafeUrl(link)
         except ValueError:
-            return SourceFetchFailed(
-                reason=SourceFetchFailureReason(
-                    code="extraction_empty",
-                    retryable=False,
-                    detail=f"invalid_link:{link[:100]}",
-                )
-            )
+            return None
 
         published_at_hint = _parse_published_at(entry)
 
-        raw_author = entry.get("author")
-        if isinstance(raw_author, str) and raw_author:
-            author = _strip_html(raw_author)[:200] or None
-        else:
-            author = None
-
-        metadata: dict[str, Any] = {
-            "language": feed_language,
-            "site_name": self.NAME,
-        }
-        if author:
-            metadata["author"] = author
-        if guid := _extract_guid(entry):
-            metadata["guid"] = guid
-
-        return FetchedEntry(
-            item=IncompleteArticle(
-                title=title,
-                source_id=source_id,
-                source_url=source_url,
-                published_at_hint=published_at_hint,
-            ),
-            metadata=metadata,
+        return IncompleteArticle(
+            title=title,
+            source_id=source_id,
+            source_url=source_url,
+            published_at_hint=published_at_hint,
         )

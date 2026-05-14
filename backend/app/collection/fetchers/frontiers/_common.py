@@ -17,18 +17,9 @@ per-source 設計:
 
 - **Pattern R** via ``<description>``: abstract 全文 (Pattern R variant、
   eLife と同パターン)
-- ``<author>``: 単一 (corresponding author 名)、``metadata.author`` に直入れ
-- ``<category>``: 記事種別 (Original Research / Review 等) で topic として
-  意味を持たない → ``metadata.tags`` に詰めず空 tuple
-- license: 全 journal CC BY 4.0 (Frontiers open access policy) を hardcode、
-  ``metadata.extras["license"]`` に詰める
-- DOI: link から ``10.3389/<prefix>.<year>.<id>`` を正規表現で抽出して
-  ``metadata.extras["doi"]`` に詰める (将来昇格候補)
+- license: 全 journal CC BY 4.0 (Frontiers open access policy)
 - attribution: news_sources 行の ``attribution_label``
   (``"Frontiers in {Journal} · CC BY 4.0"``)
-
-PROVIDES = ``{"language", "guid", "site_name", "author"}`` 共通。author は
-Frontiers の RSS 仕様で必ず提供される (corresponding author hardrequired)。
 """
 
 from __future__ import annotations
@@ -47,12 +38,6 @@ import structlog
 from app.collection.article.domain.article import ReadyForArticle
 from app.collection.article.domain.value_objects import PublishedAt
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
-from app.collection.fetchers.outcome import (
-    FetchedEntry,
-    FetchOutcome,
-    SourceFetchFailed,
-    SourceFetchFailureReason,
-)
 from app.shared.security.safe_http import make_safe_async_client
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 from app.shared.value_objects.safe_url import SafeUrl
@@ -64,10 +49,6 @@ _HTTP_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _WHITESPACE_RE = re.compile(r"\s+")
 _DEFAULT_LANGUAGE = "en"
-_LICENSE = "CC BY 4.0"
-# DOI URL から DOI 文字列を抽出 (link は
-# https://www.frontiersin.org/articles/10.3389/frai.2026.1767330)
-_DOI_RE = re.compile(r"10\.3389/[a-z]+\.\d{4}\.\d+")
 
 
 def _strip_html(s: str) -> str:
@@ -109,28 +90,6 @@ def _parse_published_at(entry: dict[str, Any]) -> PublishedAt | None:
     return PublishedAt(value=dt)
 
 
-def _extract_guid(entry: dict[str, Any]) -> str | None:
-    """``<guid>`` (= link と同値の絶対 URL) を取り出す。"""
-    raw = entry.get("id") or entry.get("guid")
-    if isinstance(raw, str) and raw:
-        return raw[:2048]
-    return None
-
-
-def _extract_doi(link_or_guid: str | None) -> str | None:
-    """link / guid から ``10.3389/<prefix>.<year>.<id>`` を抽出する。"""
-    if not link_or_guid:
-        return None
-    m = _DOI_RE.search(link_or_guid)
-    return m.group(0) if m else None
-
-
-def _normalize_language(raw: str | None, default: str) -> str:
-    """``en`` / ``en-US`` の表記揺れを統一。``raw`` 欠落時は subclass default。"""
-    value = (raw or default).replace("_", "-")
-    return value[:20]
-
-
 class BaseFrontiersFetcher:
     """Frontiers Media journal RSS の Pattern R 共通基底。
 
@@ -139,25 +98,19 @@ class BaseFrontiersFetcher:
     - ``NAME``: ``news_sources.name`` 一致
       (``"Frontiers in Artificial Intelligence"`` 等)
     - ``ENDPOINT_URL``: feed URL (``https://www.frontiersin.org/journals/<slug>/rss``)
-    - ``JOURNAL_NAME``: human readable journal 名 (``metadata.site_name`` 値)
+    - ``JOURNAL_NAME``: human readable journal 名 (内部の構造化ログに利用)
 
-    PROVIDES = ``{"language", "guid", "site_name", "author"}``。author は
-    corresponding author で必ず提供される (RSS 仕様)。
-
-    body / published_at / source_url が品質ゲートを通らない entry は
-    ``SourceFetchFailed`` で drop する。Frontiers は editorial/correction 系で
-    description が空のことがあるため、``body_too_short`` での drop は正常動作。
+    body / published_at / source_url が品質ゲートを通らない entry は yield
+    しない (Outcome 純化原則)。Frontiers は editorial/correction 系で description
+    が空のことがあるため、品質ゲート未達での drop は正常動作。
     """
 
     NAME: ClassVar[str]
     ENDPOINT_URL: ClassVar[str]
     JOURNAL_NAME: ClassVar[str]
     LANGUAGE: ClassVar[str] = _DEFAULT_LANGUAGE
-    PROVIDES: ClassVar[frozenset[str]] = frozenset(
-        {"language", "guid", "site_name", "author"}
-    )
 
-    async def fetch(self, source_id: int) -> AsyncIterator[FetchOutcome]:
+    async def fetch(self, source_id: int) -> AsyncIterator[ReadyForArticle]:
         feed_bytes = await self._fetch_feed()
         feed = await asyncio.to_thread(feedparser.parse, feed_bytes)
         if feed.bozo and not feed.entries:
@@ -170,12 +123,10 @@ class BaseFrontiersFetcher:
                 f"feed parse error: {self.NAME}: {feed.bozo_exception}"
             )
 
-        feed_language = _normalize_language(
-            feed.feed.get("language"), default=self.LANGUAGE
-        )
-
         for entry in feed.entries:
-            yield self._convert_entry(entry, source_id, feed_language)
+            item = self._convert_entry(entry, source_id)
+            if item is not None:
+                yield item
 
     async def _fetch_feed(self) -> bytes:
         async with make_safe_async_client(
@@ -203,79 +154,33 @@ class BaseFrontiersFetcher:
         self,
         entry: dict[str, Any],
         source_id: int,
-        feed_language: str,
-    ) -> FetchOutcome:
+    ) -> ReadyForArticle | None:
         title = _strip_html(entry.get("title", "") or "")
         if not title:
-            return SourceFetchFailed(
-                reason=SourceFetchFailureReason(
-                    code="title_missing",
-                    retryable=False,
-                    detail="rss_title_missing",
-                )
-            )
+            return None
         title = title[:500]
 
         body = _strip_html(_pick_body(entry))
         if len(body) < 50:
-            return SourceFetchFailed(
-                reason=SourceFetchFailureReason(
-                    code="body_too_short",
-                    retryable=False,
-                    detail=f"rss_body_len={len(body)}",
-                )
-            )
+            return None
 
         published_at = _parse_published_at(entry)
         if published_at is None:
-            return SourceFetchFailed(
-                reason=SourceFetchFailureReason(
-                    code="published_at_missing",
-                    retryable=False,
-                    detail="rss_pubdate_missing",
-                )
-            )
+            return None
 
         link = entry.get("link", "") or ""
         try:
             source_url = SafeUrl(link)
         except ValueError:
-            return SourceFetchFailed(
-                reason=SourceFetchFailureReason(
-                    code="extraction_empty",
-                    retryable=False,
-                    detail=f"invalid_link:{link[:100]}",
-                )
-            )
+            return None
 
         try:
-            ready = ReadyForArticle(
+            return ReadyForArticle(
                 title=title,
                 body=body,
                 published_at=published_at,
                 source_id=source_id,
                 source_url=source_url,
             )
-        except ValueError as e:
-            return SourceFetchFailed(
-                reason=SourceFetchFailureReason(
-                    code="other",
-                    retryable=False,
-                    detail=f"invariant_violation:{e}",
-                )
-            )
-
-        metadata: dict[str, Any] = {
-            "language": feed_language,
-            "site_name": self.JOURNAL_NAME,
-            "license": _LICENSE,
-        }
-        author = entry.get("author")
-        if isinstance(author, str) and author.strip():
-            metadata["author"] = author.strip()[:200]
-        if guid := _extract_guid(entry):
-            metadata["guid"] = guid
-        if doi := (_extract_doi(link) or _extract_doi(metadata.get("guid"))):
-            metadata["doi"] = doi
-
-        return FetchedEntry(item=ready, metadata=metadata)
+        except ValueError:
+            return None

@@ -4,37 +4,38 @@
 ビジネスロジックの不変条件が守られるか」だけを検証する。具体的な author
 名や tags の中身など、ソース次第で変動する値の枚挙は書かない
 (memory `feedback_test_invariants_over_change_tracking.md`)。
+
+Outcome 純化原則 (PR-2 以降): Fetcher が yield するのは
+``ReadyForArticle | IncompleteArticle`` の passport のみ。品質ゲート未達 entry
+は yield しないため、観測点は「yield された passport」だけになる。
 """
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterable
 from datetime import UTC, datetime
 
 from app.collection.article.domain.article import ReadyForArticle
 from app.collection.article.domain.value_objects import PublishedAt
-from app.collection.fetchers.outcome import FetchedEntry, FetchOutcome
 from app.collection.incomplete_article.domain.incomplete_article import (
     IncompleteArticle,
 )
 
 _DEFAULT_HTML_PUBLISHED_AT = PublishedAt(value=datetime(2026, 5, 1, tzinfo=UTC))
 
-
-def passports(outcomes: Iterable[FetchOutcome]) -> list[FetchedEntry]:
-    return [o for o in outcomes if isinstance(o, FetchedEntry)]
+Passport = ReadyForArticle | IncompleteArticle
 
 
-def assert_at_least_one_passport(outcomes: Iterable[FetchOutcome]) -> None:
-    """全 entry が ``SourceFetchFailed`` = ソース壊滅。fixture で検知する。"""
-    assert passports(outcomes), (
-        "fetcher produced no FetchedEntry from fixture; pipeline cannot proceed"
+def assert_at_least_one_passport(items: Iterable[Passport]) -> None:
+    """全 entry が drop = ソース壊滅。fixture で検知する。"""
+    materialized = list(items)
+    assert materialized, (
+        "fetcher produced no passport from fixture; pipeline cannot proceed"
     )
 
 
 def assert_passports_persistable(
-    outcomes: Iterable[FetchOutcome],
+    items: Iterable[Passport],
     *,
     html_body: str = "x" * 200,
     html_published_at: PublishedAt | None = None,
@@ -49,38 +50,14 @@ def assert_passports_persistable(
     HTML 側から確定させる前提を表現するため)。
     """
     pub = html_published_at or _DEFAULT_HTML_PUBLISHED_AT
-    for entry in passports(outcomes):
-        if isinstance(entry.item, ReadyForArticle):
+    for item in items:
+        if isinstance(item, ReadyForArticle):
             continue
-        assert isinstance(entry.item, IncompleteArticle)
-        promoted = entry.item.complete_with_html(
+        assert isinstance(item, IncompleteArticle)
+        promoted = item.complete_with_html(
             body=html_body,
             html_published_at=pub,
         )
         assert isinstance(promoted, ReadyForArticle), (
             f"IncompleteArticle could not be promoted to ReadyForArticle: {promoted}"
         )
-
-
-def assert_provides_contract(
-    outcomes: Iterable[FetchOutcome],
-    provides: frozenset[str],
-) -> None:
-    """``Fetcher.PROVIDES`` に列挙された key は全 entry の metadata に必ず入る。"""
-    for entry in passports(outcomes):
-        missing = provides - entry.metadata.keys()
-        assert not missing, (
-            f"PROVIDES contract violation: {missing} missing from "
-            f"metadata={dict(entry.metadata)}"
-        )
-
-
-def assert_metadata_audit_safe(outcomes: Iterable[FetchOutcome]) -> None:
-    """metadata は ``pipeline_events.payload`` (JSONB) に焼ける primitive のみ。"""
-    for entry in passports(outcomes):
-        try:
-            json.dumps(dict(entry.metadata))
-        except TypeError as e:
-            raise AssertionError(
-                f"metadata is not JSON-serializable: {dict(entry.metadata)}"
-            ) from e

@@ -6,7 +6,7 @@
 - ``EXCLUDED_PATHS`` の URL は yield されず下流に流れない
 - 同 URL の重複は ``fetch()`` で dedup されて 1 件に集約
 - ``MAX_ENTRIES`` で yield 件数が cap される (大量バックフィル防止)
-- 不正 URL は ``SourceFetchFailed`` で個別 drop され全体停止しない
+- 不正 URL は drop され全体停止しない (部分回復契約)
 - ``_convert_entry`` は ``prefer_html_title=True`` の passport を返す
   (title 確定は HTML 抽出 task の責務)
 """
@@ -18,15 +18,13 @@ from typing import ClassVar
 import pytest
 
 from app.collection.fetchers._base.html_listing import BaseHtmlListingFetcher
-from app.collection.fetchers.outcome import FetchedEntry, SourceFetchFailed
 from app.collection.incomplete_article.domain.incomplete_article import (
     IncompleteArticle,
 )
 from tests.collection.fetchers._invariant import (
+    Passport,
     assert_at_least_one_passport,
-    assert_metadata_audit_safe,
     assert_passports_persistable,
-    assert_provides_contract,
 )
 
 
@@ -36,8 +34,6 @@ class _SampleFetcher(BaseHtmlListingFetcher):
     LISTING_URL: ClassVar[str] = "https://example.com/news"
     DETAIL_LINK_XPATH: ClassVar[str] = '//a[starts-with(@href, "/news/")]'
     DETAIL_URL_PREFIX: ClassVar[str] = "https://example.com"
-    SITE_NAME: ClassVar[str] = "Sample"
-    LANGUAGE: ClassVar[str] = "en"
     EXCLUDED_PATHS: ClassVar[frozenset[str]] = frozenset({"/news/categories"})
     MAX_ENTRIES: ClassVar[int] = 10
 
@@ -53,37 +49,29 @@ _FIXTURE_HTML = b"""<!DOCTYPE html>
 """
 
 
-def _outcomes() -> list:
+def _passports() -> list[Passport]:
     fetcher = _SampleFetcher()
     urls = _SampleFetcher._parse_listing(_FIXTURE_HTML)
     seen: set[str] = set()
-    out: list = []
+    out: list[Passport] = []
     for url in urls:
         if url in seen or not fetcher._url_matches(url):
             continue
         seen.add(url)
-        out.append(fetcher._convert_entry(url, 1))
+        converted = fetcher._convert_entry(url, 1)
+        if converted is not None:
+            out.append(converted)
     return out
 
 
 def test_passports_satisfy_persistence_invariants() -> None:
-    assert_at_least_one_passport(_outcomes())
-    assert_passports_persistable(_outcomes())
+    assert_at_least_one_passport(_passports())
+    assert_passports_persistable(_passports())
 
 
-def test_provides_contract_holds() -> None:
-    assert_provides_contract(_outcomes(), _SampleFetcher.PROVIDES)
-
-
-def test_metadata_audit_safe() -> None:
-    assert_metadata_audit_safe(_outcomes())
-
-
-def test_invalid_url_isolated_to_failed() -> None:
+def test_invalid_url_dropped_individually() -> None:
     """1 entry の invalid URL は他 entry を巻き込まない (部分回復契約)。"""
-    outcome = _SampleFetcher()._convert_entry("not-a-url", 1)
-    assert isinstance(outcome, SourceFetchFailed)
-    assert outcome.reason.code == "extraction_empty"
+    assert _SampleFetcher()._convert_entry("not-a-url", 1) is None
 
 
 @pytest.mark.asyncio
@@ -98,13 +86,9 @@ async def test_fetch_dedups_and_excludes(monkeypatch: pytest.MonkeyPatch) -> Non
         _SampleFetcher, "_fetch_listing", _fake_fetch_listing, raising=True
     )
 
-    outcomes = [o async for o in fetcher.fetch(1)]
-    assert len(outcomes) == 2
-    urls = {
-        str(o.item.source_url)
-        for o in outcomes
-        if isinstance(o, FetchedEntry) and isinstance(o.item, IncompleteArticle)
-    }
+    items = [o async for o in fetcher.fetch(1)]
+    assert len(items) == 2
+    urls = {str(o.source_url) for o in items if isinstance(o, IncompleteArticle)}
     assert urls == {
         "https://example.com/news/article-one",
         "https://example.com/news/article-two",
@@ -126,5 +110,5 @@ async def test_fetch_respects_max_entries_cap(monkeypatch: pytest.MonkeyPatch) -
         return many_html
 
     monkeypatch.setattr(_Capped, "_fetch_listing", _fake_fetch_listing, raising=True)
-    outcomes = [o async for o in _Capped().fetch(1)]
-    assert len(outcomes) == 5
+    items = [o async for o in _Capped().fetch(1)]
+    assert len(items) == 5

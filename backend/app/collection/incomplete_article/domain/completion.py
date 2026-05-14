@@ -1,13 +1,8 @@
 """``IncompleteArticle.complete_with_html`` の失敗型。
 
 Pattern H の HTML 補完で merge / invariant 違反が起きた場合の戻り値。
-``fetchers/outcome.py`` の ``SourceFetchFailed`` (取得失敗) とは責務軸が違うため
-**完全に独立した型** として定義する (aggregate → fetchers 逆依存の禁止)。
-
-文字列値 (``published_at_missing`` / ``other``) は audit key の前方互換を保つため
-``SourceFetchFailureCode`` の対応 code と完全同一に揃える (型は分離、値は共有)。
-これにより ``pipeline_events.payload.reason_code`` が ``f"promotion_{...code}"``
-形式で記録された過去の audit データと grafana / discover の集計 key が割れない。
+``pipeline_events.payload.reason_code`` には ``f"promotion_{...code}"`` 形式で
+焼かれる。
 """
 
 from __future__ import annotations
