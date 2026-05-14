@@ -20,7 +20,7 @@ from app.collection.errors import (
     PermanentFetchError,
     TemporaryFetchError,
 )
-from app.collection.ingestion.staged import IngestSourceArg
+from app.collection.staged import IngestSourceArg
 from app.models.news_source import NewsSource, SourceType
 from app.models.pipeline_event import PipelineEvent
 
@@ -73,7 +73,7 @@ def _patch_service_to_raise(monkeypatch: pytest.MonkeyPatch, exc: Exception) -> 
         {"exc": exc},
     )
     monkeypatch.setattr(
-        "app.collection.ingestion.ingestion_service.IngestionService",
+        "app.collection.service.IngestionService",
         cls,
     )
 

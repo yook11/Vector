@@ -1,4 +1,4 @@
-"""``ContentFetchService`` の不変条件テスト (PR-E 仕様: ``pending.url`` SSoT)。
+"""``ArticleCompletionService`` の不変条件テスト (PR-E 仕様: ``pending.url`` SSoT)。
 
 検証する不変条件:
 
@@ -25,13 +25,16 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
 from app.collection.article.domain.value_objects import PublishedAt
+from app.collection.article_completion.extractor import (
+    ExtractedContent,
+    ExtractionEmpty,
+)
+from app.collection.article_completion.service import ArticleCompletionService
 from app.collection.errors import (
     PermanentFetchError,
     ServerErrorBlip,
     ServerErrorOutage,
 )
-from app.collection.extraction.content_fetch_service import ContentFetchService
-from app.collection.extraction.extractor import ExtractedContent, ExtractionEmpty
 from app.collection.incomplete_article.domain.staged_attributes import (
     StagedArticleAttributes,
 )
@@ -101,7 +104,7 @@ async def _make_pending(
 def _patch_fetch(monkeypatch: pytest.MonkeyPatch, mock: AsyncMock) -> None:
     """``ArticleHtmlExtractor.fetch`` を Service の import path 経由で差し替える。"""
     monkeypatch.setattr(
-        "app.collection.extraction.content_fetch_service.ArticleHtmlExtractor.fetch",
+        "app.collection.article_completion.service.ArticleHtmlExtractor.fetch",
         mock,
     )
 
@@ -116,7 +119,7 @@ async def test_returns_none_for_missing_pending(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     """重複配送 (DELETE 済 / 不在 ID) は ``None`` で静かに exit。"""
-    svc = ContentFetchService(session_factory)
+    svc = ArticleCompletionService(session_factory)
     outcome = await svc.execute(999_999)
     assert outcome is None
 
@@ -139,7 +142,7 @@ async def test_returns_none_for_open_pending(
     await db_session.commit()
     assert pending_id is not None  # status='open' (claim されていない)
 
-    svc = ContentFetchService(session_factory)
+    svc = ArticleCompletionService(session_factory)
     outcome = await svc.execute(pending_id)
     assert outcome is None
 
@@ -171,7 +174,7 @@ async def test_success_returns_article_id_and_persists_article(
         ),
     )
 
-    svc = ContentFetchService(session_factory)
+    svc = ArticleCompletionService(session_factory)
     article_id = await svc.execute(pending_id)
 
     assert isinstance(article_id, int)
@@ -203,7 +206,7 @@ async def test_success_deletes_pending_in_same_tx(
         ),
     )
 
-    svc = ContentFetchService(session_factory)
+    svc = ArticleCompletionService(session_factory)
     await svc.execute(pending_id)
 
     remaining = (
@@ -237,7 +240,7 @@ async def test_success_writes_audit_with_body_length_and_canonical_url(
         ),
     )
 
-    svc = ContentFetchService(session_factory)
+    svc = ArticleCompletionService(session_factory)
     await svc.execute(pending_id)
 
     event = (
@@ -271,7 +274,7 @@ async def test_permanent_fetch_error_returns_none_and_closes_pending(
     )
     _patch_fetch(monkeypatch, AsyncMock(side_effect=PermanentFetchError("HTTP 404")))
 
-    svc = ContentFetchService(session_factory)
+    svc = ArticleCompletionService(session_factory)
     outcome = await svc.execute(pending_id)
 
     assert outcome is None
@@ -312,7 +315,7 @@ async def test_extraction_empty_writes_reason_in_code(
         monkeypatch, AsyncMock(return_value=ExtractionEmpty(reason="not_html"))
     )
 
-    svc = ContentFetchService(session_factory)
+    svc = ArticleCompletionService(session_factory)
     outcome = await svc.execute(pending_id)
 
     assert outcome is None
@@ -348,7 +351,7 @@ async def test_promotion_failure_records_quality_gate_metric(
         ),
     )
 
-    svc = ContentFetchService(session_factory)
+    svc = ArticleCompletionService(session_factory)
     outcome = await svc.execute(pending_id)
 
     assert outcome is None
@@ -379,7 +382,7 @@ async def test_temporary_blip_first_attempt_writes_will_retry(
     )
     _patch_fetch(monkeypatch, AsyncMock(side_effect=ServerErrorBlip("HTTP 502")))
 
-    svc = ContentFetchService(session_factory)
+    svc = ArticleCompletionService(session_factory)
     outcome = await svc.execute(pending_id)
 
     assert outcome is None
@@ -426,7 +429,7 @@ async def test_temporary_outage_exhausted_writes_dropped_transient(
     await db_session.commit()
     _patch_fetch(monkeypatch, AsyncMock(side_effect=ServerErrorOutage("HTTP 503")))
 
-    svc = ContentFetchService(session_factory)
+    svc = ArticleCompletionService(session_factory)
     outcome = await svc.execute(pending_id)
 
     assert outcome is None
@@ -490,7 +493,7 @@ async def test_race_lost_returns_none_and_deletes_pending(
         ),
     )
 
-    svc = ContentFetchService(session_factory)
+    svc = ArticleCompletionService(session_factory)
     outcome = await svc.execute(pending_id)
 
     assert outcome is None

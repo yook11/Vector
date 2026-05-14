@@ -33,7 +33,7 @@ from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 from app.utils.sanitize import normalize_text
 
 if TYPE_CHECKING:
-    from app.collection.extraction.extractor import ExtractedContent
+    from app.collection.article_completion.extractor import ExtractedContent
 
 
 # Article 本文の長さ境界 (SSoT)。

@@ -1,7 +1,7 @@
 """``pending_html_articles.staged_attributes`` JSONB の structured 型。
 
 Pattern H 1 段目 (``IngestionService``) で RSS 由来の補完情報を
-2 段目 (``ContentFetchService``) に DB 経由で渡すための frozen な値型。
+2 段目 (``ArticleCompletionService``) に DB 経由で渡すための frozen な値型。
 
 - ``title``: RSS 由来の title。``prefer_html_title=True`` のときのみ
   HTML 由来 title に置換される (sitemap 系ソース対応)。

@@ -20,7 +20,7 @@ from app.collection.article.domain.article import (
     ArticleDraft,
 )
 from app.collection.article.domain.value_objects import PublishedAt
-from app.collection.extraction.extractor import ExtractedContent
+from app.collection.article_completion.extractor import ExtractedContent
 
 
 def _valid_body(length: int = _ARTICLE_BODY_MIN_LENGTH) -> str:

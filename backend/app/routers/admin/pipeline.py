@@ -26,7 +26,7 @@ async def fetch_news(
     source_ids 指定時はソースごとに個別タスクを dispatch、
     未指定時は dispatch_sources で全アクティブソースを dispatch。
     """
-    from app.collection.ingestion.staged import IngestSourceArg
+    from app.collection.staged import IngestSourceArg
     from app.collection.tasks import dispatch_sources, ingest_source
 
     source_ids = body.source_ids if body else None

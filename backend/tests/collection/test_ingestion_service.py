@@ -39,7 +39,7 @@ from app.collection.fetchers.outcome import (
 from app.collection.incomplete_article.domain.incomplete_article import (
     IncompleteArticle,
 )
-from app.collection.ingestion.ingestion_service import IngestionService
+from app.collection.service import IngestionService
 from app.models.article import Article as ArticleORM
 from app.models.news_source import NewsSource, SourceType
 from app.models.pending_html_article import PendingHtmlArticle as PendingHtmlArticleORM

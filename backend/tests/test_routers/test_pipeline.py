@@ -6,7 +6,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.collection.ingestion.staged import IngestSourceArg
+from app.collection.staged import IngestSourceArg
 from app.models.news_source import NewsSource, SourceType
 
 

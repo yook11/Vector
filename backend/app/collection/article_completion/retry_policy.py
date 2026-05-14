@@ -1,6 +1,6 @@
 """エラー種別ごとの retry policy 純関数モジュール。
 
-PR2.5-B 設計の核: ``ContentFetchService`` が ``TemporaryFetchError`` 系の
+PR2.5-B 設計の核: ``ArticleCompletionService`` が ``TemporaryFetchError`` 系の
 exception を受けたとき、policy 計算 (次回 ``ready_at`` の遅延と
 最大試行回数) は本モジュールの純関数だけで完結し、Service 本体は
 DB 状態更新と audit 焼付に専念する。

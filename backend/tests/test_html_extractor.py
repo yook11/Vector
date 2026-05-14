@@ -8,13 +8,13 @@ import httpx
 import pytest
 
 from app.collection.article.domain.value_objects import PublishedAt
-from app.collection.errors import PermanentFetchError, TemporaryFetchError
-from app.collection.extraction.extractor import (
+from app.collection.article_completion.extractor import (
     ArticleHtmlExtractor,
     ExtractedContent,
     ExtractionEmpty,
     _decode_html_response,
 )
+from app.collection.errors import PermanentFetchError, TemporaryFetchError
 from app.shared.value_objects.safe_url import SafeUrl
 
 
@@ -82,7 +82,7 @@ def _mock_async_client(responses: list[httpx.Response | Exception]) -> AsyncMock
 def _patch_client(client: AsyncMock):
     """``make_safe_async_client`` を patch して fetch() がモックを使うようにする。"""
     return patch(
-        "app.collection.extraction.extractor.make_safe_async_client",
+        "app.collection.article_completion.extractor.make_safe_async_client",
         return_value=_as_async_cm(client),
     )
 

@@ -1,4 +1,4 @@
-"""``app.collection.extraction.retry_policy`` の純関数テスト。
+"""``app.collection.article_completion.retry_policy`` の純関数テスト。
 
 policy table の値そのものはスナップショット (spec line 232-238) を反映した
 だけなので、ここで再検証するのは無価値。代わりに **policy 選択ロジック**
@@ -14,14 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.collection.errors import (
-    ReadTimeout,
-    ServerErrorBlip,
-    ServerErrorOutage,
-    ServerErrorRetryAfter,
-    TemporaryFetchError,
-)
-from app.collection.extraction.retry_policy import (
+from app.collection.article_completion.retry_policy import (
     BLIP_POLICY,
     MAX_DELAY_MINUTES,
     OUTAGE_POLICY,
@@ -31,6 +24,13 @@ from app.collection.extraction.retry_policy import (
     RetryPolicy,
     compute_next_delay_minutes,
     retry_policy_for,
+)
+from app.collection.errors import (
+    ReadTimeout,
+    ServerErrorBlip,
+    ServerErrorOutage,
+    ServerErrorRetryAfter,
+    TemporaryFetchError,
 )
 
 

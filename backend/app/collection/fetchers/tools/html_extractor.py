@@ -6,7 +6,7 @@ collection-acquisition-redesign Phase 0c。旧 extractor は
 際の分類軸 (``FailureCode``) と直接対応させるため、抽出失敗 / 品質ゲート未達
 の概念を SourceFetchFailed 側に統一する。
 
-旧 ``ArticleHtmlExtractor`` (``app/collection/extraction/extractor.py``) は
+旧 ``ArticleHtmlExtractor`` (``app/collection/article_completion/extractor.py``) は
 Phase 2a まで温存し物理削除しない。本モジュールは意図的なロジックコピーで
 あり、運用窓中の二重管理コストは Phase 2a 完了まで受け入れる
 (`spec collection-acquisition-redesign-plan.md §PR-0c`).

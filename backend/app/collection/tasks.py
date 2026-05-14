@@ -30,7 +30,7 @@ from app.collection.errors import (
     PermanentFetchError,
     TemporaryFetchError,
 )
-from app.collection.ingestion.staged import IngestSourceArg
+from app.collection.staged import IngestSourceArg
 from app.models.fetch_log import FetchLog, FetchStatus
 from app.models.news_source import NewsSource
 from app.observability.domain.event import Stage
@@ -138,7 +138,7 @@ async def ingest_source(
     from app.analysis.extraction.domain.ready import ExtractionTrigger
     from app.analysis.extraction.tasks import extract_content
     from app.collection.fetchers.strategy import FETCHERS
-    from app.collection.ingestion.ingestion_service import IngestionService
+    from app.collection.service import IngestionService
 
     source_id = arg.id
     logger.info("ingest_source_started", source_id=source_id, source_name=arg.name)
@@ -248,7 +248,7 @@ async def extract_html_body(
     (``dispatch_html_fetch_jobs``) のみで再投入する設計。task の責務は
     戻り値 dispatch のみ:
 
-    - ``ContentFetchService.execute(pending_id)`` を呼び、結果に応じて分岐
+    - ``ArticleCompletionService.execute(pending_id)`` を呼び、結果に応じて分岐
     - ``int`` (article_id) が返れば ``ExtractionTrigger(article_id)`` を
       ``extract_content.kiq`` に流す (案 3: 下流 Stage 3 task が処理開始時に
       Ready 自構築)
@@ -260,10 +260,10 @@ async def extract_html_body(
     """
     from app.analysis.extraction.domain.ready import ExtractionTrigger
     from app.analysis.extraction.tasks import extract_content
-    from app.collection.extraction.content_fetch_service import ContentFetchService
+    from app.collection.article_completion.service import ArticleCompletionService
 
     session_factory = ctx.state.session_factory
-    svc = ContentFetchService(session_factory)
+    svc = ArticleCompletionService(session_factory)
     article_id = await svc.execute(pending_id)
 
     if article_id is None:

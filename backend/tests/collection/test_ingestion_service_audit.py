@@ -36,7 +36,7 @@ from app.collection.fetchers.outcome import (
 from app.collection.incomplete_article.domain.incomplete_article import (
     IncompleteArticle,
 )
-from app.collection.ingestion.ingestion_service import IngestionService
+from app.collection.service import IngestionService
 from app.models.news_source import NewsSource, SourceType
 from app.models.pipeline_event import PipelineEvent
 from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl

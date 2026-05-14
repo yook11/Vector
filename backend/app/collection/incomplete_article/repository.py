@@ -6,7 +6,7 @@ PR2.5-A の lease 方式キューに対する全 CRUD + claim/sweep 操作を集
 
 - ``create``: Pattern H 振り分け entry を 1 件 INSERT。``UNIQUE(url)`` 違反は
   ``None`` 戻し (同 tick race 敗北)。
-- ``find_by_id``: ``ContentFetchService`` 入口で pending を SELECT (``url`` を
+- ``find_by_id``: ``ArticleCompletionService`` 入口で pending を SELECT (``url`` を
   pending 行から直接取得、JOIN 不要)。
 - ``claim_batch``: cron poller が ``status='open' AND ready_at <= NOW()`` の行を
   ``FOR UPDATE SKIP LOCKED`` で原子的に claim、``status='running'`` +
@@ -53,7 +53,7 @@ class PendingHtmlRowMeta:
     """``pending_html_articles`` 行の lease / status / FK メタ情報。
 
     Domain (``IncompleteArticle``) と独立した「行の運用状態」を表す。cron poller
-    の claim / sweep、``ContentFetchService`` の状態遷移はこの行メタを介する。
+    の claim / sweep、``ArticleCompletionService`` の状態遷移はこの行メタを介する。
     """
 
     id: int
@@ -69,7 +69,7 @@ class PendingHtmlContext:
     """``find_by_id`` の戻り値: pending 1 行の合成 view。
 
     Domain (``IncompleteArticle``) と行メタ (``PendingHtmlRowMeta``) を明示的に
-    分離する。``ContentFetchService`` は ``ctx.incomplete_article`` で Domain
+    分離する。``ArticleCompletionService`` は ``ctx.incomplete_article`` で Domain
     操作、``ctx.row_meta`` で lease / status 判定を行う (責務が型レベルで分離)。
     """
 
@@ -119,7 +119,7 @@ class PendingHtmlArticleRepository:
     async def find_by_id(self, pending_id: int) -> PendingHtmlContext | None:
         """``pending_id`` 1 件を取得する。
 
-        ``ContentFetchService.execute`` の入口で 1 SELECT で必要情報を全部取る。
+        ``ArticleCompletionService.execute`` の入口で 1 SELECT で必要情報を全部取る。
         見つからない場合は ``None`` (重複配送 / DELETE 済の静かな exit に使う)。
         """
         stmt = select(

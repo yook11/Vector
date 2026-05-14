@@ -33,8 +33,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.collection.article.domain.value_objects import PublishedAt
-from app.collection.extraction import dispatch as dispatch_module
-from app.collection.extraction.dispatch import (
+from app.collection.article_completion import dispatch as dispatch_module
+from app.collection.article_completion.dispatch import (
     dispatch_html_fetch_jobs,
     sweep_expired_leases,
 )

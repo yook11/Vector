@@ -1,10 +1,10 @@
 """``extract_html_body`` task の振る舞い不変条件テスト (PR2.5-B 仕様 + PR3 案 3)。
 
-task は ``ContentFetchService`` への薄ラッパー。本テストの責務は **戻り値
+task は ``ArticleCompletionService`` への薄ラッパー。本テストの責務は **戻り値
 dispatch のみ** で、以下は対象外 (それぞれ別ファイル):
 
 - Service 内部 (HTTP 取得 / DB 永続化 / pipeline_events / 各失敗 reason_code):
-  ``tests/collection/extraction/test_content_fetch_service.py``
+  ``tests/collection/article_completion/test_service.py``
 - ReadyForExtraction gatekeeper (extraction/noise 既存判定 / 本文長 cap):
   下流 Stage 3 task と ``ExtractionRepository.try_load_for_extraction`` の
   責務 (PR3 案 3 化)。本 task は ID-only ``ExtractionTrigger`` を kiq に渡すのみ
@@ -28,7 +28,7 @@ from app.analysis.extraction.domain.ready import ExtractionTrigger
 from app.collection.tasks import extract_html_body
 
 _SERVICE_EXECUTE = (
-    "app.collection.extraction.content_fetch_service.ContentFetchService.execute"
+    "app.collection.article_completion.service.ArticleCompletionService.execute"
 )
 _EXTRACT_CONTENT_KIQ = "app.analysis.extraction.tasks.extract_content.kiq"
 

@@ -1,9 +1,12 @@
-"""Stage 2 (content_fetch) のビジネスロジック — pending_html_articles 駆動。
+"""``ArticleCompletionService`` — Pattern H (IncompleteArticle → ReadyForArticle)
+への補完責務全体を担う。``pending_html_articles`` 駆動。
 
-PR2.5-B cutover で StagedArticle (kiq envelope) 経由から
+PR 4 で ``ContentFetchService`` から rename。「HTTP fetch する」技術名ではなく
+「未完成記事を完成形に補完する」責務全体 (HTTP 取得 + 抽出 + promotion + 永続化 +
+監査書込) を表す。PR2.5-B cutover で StagedArticle (kiq envelope) 経由から
 ``pending_html_articles.id`` 駆動に切り替えた版。PR-E で URL 経路を
-``pending.url`` (canonicalize 済み) に一本化、``articles.source_url``
-を SSoT として race-loss read-back に使用する。
+``pending.url`` (canonicalize 済み) に一本化、``articles.source_url`` を SSoT
+として race-loss read-back に使用する。
 
 責務:
 
@@ -45,13 +48,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.collection.article.domain.article import ArticleDraft, ReadyForArticle
 from app.collection.article.repository import ArticleRepository
-from app.collection.errors import PermanentFetchError, TemporaryFetchError
-from app.collection.extraction.extractor import (
+from app.collection.article_completion.extractor import (
     ArticleHtmlExtractor,
     ExtractedContent,
     ExtractionEmpty,
 )
-from app.collection.extraction.retry_policy import compute_next_delay_minutes
+from app.collection.article_completion.retry_policy import compute_next_delay_minutes
+from app.collection.errors import PermanentFetchError, TemporaryFetchError
 from app.collection.incomplete_article.domain.completion import ArticleCompletionFailed
 from app.collection.incomplete_article.repository import (
     PendingHtmlArticleRepository,
@@ -64,7 +67,7 @@ from app.observability.repository import PipelineEventRepository
 logger = structlog.get_logger(__name__)
 
 
-class ContentFetchService:
+class ArticleCompletionService:
     """Pattern H 2 段目 — pending 1 件を HTML 取得 + 永続化する。
 
     ``execute(pending_id)`` が単一エントリポイント。``TemporaryFetchError``
