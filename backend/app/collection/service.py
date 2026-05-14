@@ -1,21 +1,28 @@
-"""新ルート Ingestion Service — Pattern R / Pattern H 振り分けの 1 段ユースケース。
+"""Article Acquisition Service — 1 source 分のニュースから品質を担保した記事を獲得する。
+
+外部ニュースを取得して品質を担保した ``articles`` に到達させることが ``collection``
+BC の業務目的。本 Service はその中核ユースケースで、source 1 件分の取り込みを担う。
+即時獲得 (本文込みで品質を満たす) 経路と補完待ち獲得 (本文 HTML 取得を経て獲得確定
+する) 経路の 2 系統を ``match`` で振り分けて永続化する。完成は後段
+``ArticleCompletionService`` が担う。
 
 新 2 表構成 (``articles`` / ``pending_html_articles``) を直接駆動する。
 
 Fetcher の ``AsyncIterator[FetchOutcome]`` を回し ``match`` で分岐する:
 
-- ``FetchedEntry(item=ReadyForArticle)`` → ``articles.source_url`` を主軸に
-  直 INSERT (Pattern R)。``source_url`` は ``CanonicalArticleUrl`` 型で
-  canonicalize 済が構造保証されているため Service 側で後付け正規化は不要。
+- ``FetchedEntry(item=ReadyForArticle)`` → 即時獲得経路。``articles.source_url``
+  を主軸に直 INSERT。``source_url`` は ``CanonicalArticleUrl`` 型で canonicalize
+  済が構造保証されているため Service 側で後付け正規化は不要。
   ``ON CONFLICT DO NOTHING`` で同 tick race / 既知 URL を吸収
   (``None`` → ``known_url`` skip)。caller (``ingest_source`` task) は
   返却された ``article_id`` を ``ExtractionTrigger`` に詰めて
   ``extract_content.kiq`` に chain する。
-- ``FetchedEntry(item=IncompleteArticle)`` → ``article_repo.exists_by_source_url``
-  pre-check で feed 再露出を弾き、``pending_html_articles.url`` で投入
-  (Pattern H)。``url`` は ``CanonicalArticleUrl`` 型で canonical 保証済。
-  下流は cron poller (``dispatch_html_fetch_jobs``) が DB 駆動で拾うため、
-  Service / Task は pending_id を caller に渡さない (Outcome 純化原則)。
+- ``FetchedEntry(item=IncompleteArticle)`` → 補完待ち獲得経路。
+  ``article_repo.exists_by_source_url`` pre-check で feed 再露出を弾き、
+  ``pending_html_articles.url`` で投入。``url`` は ``CanonicalArticleUrl`` 型で
+  canonical 保証済。下流は cron poller (``dispatch_html_fetch_jobs``) が
+  DB 駆動で拾うため、Service / Task は pending_id を caller に渡さない
+  (Outcome 純化原則)。
 - ``SourceFetchFailed`` → 構造化ログ + ``failed_codes`` 集計、永続化に流れない。
 
 ``commit`` までが Service の責務。``NewsSource`` ORM の lookup は
@@ -53,8 +60,12 @@ from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 logger = structlog.get_logger(__name__)
 
 
-class IngestionService:
-    """ソース 1 件を新 Protocol Fetcher 経由で取り込み、新 3 表に振り分ける。
+class ArticleAcquisitionService:
+    """1 source 分のニュースを取り込み、品質を担保した記事を獲得する。
+
+    即時獲得可能なものは ``articles`` に直接保存、本文補完を経て獲得するものは
+    ``pending_html_articles`` に保管する (後段 ``ArticleCompletionService`` が
+    完成させる)。
 
     ``PermanentFetchError`` / ``TemporaryFetchError`` は呼び出し側 (Task) に
     伝播する (retry 判断は Task 層の責務)。
@@ -254,15 +265,15 @@ class IngestionService:
         *,
         ready: ReadyForArticle,
     ) -> int | None:
-        """Pattern R 1 entry を ``articles`` に直 INSERT して ``article_id`` を返す。
+        """ready エントリ 1 件を ``articles`` に直 INSERT して ``article_id`` を返す。
 
         ``source_url`` は ``CanonicalArticleUrl`` 型で canonicalize 済が構造保証
         されているため、Service 側で後付け正規化は行わない
         (``articles.source_url UNIQUE`` は canonical 値で効く)。
 
         Race recovery: ``save`` が ``None`` を返した場合は他 worker / 別 yield
-        が同 URL で先に書き込み済。既に articles に存在するため Pattern R の
-        文脈では skip 扱い、id を返す必要はない。
+        が同 URL で先に書き込み済。既に articles に存在するため即時獲得経路
+        では skip 扱い、id を返す必要はない。
         """
         draft = ArticleDraft(
             title=ready.title,

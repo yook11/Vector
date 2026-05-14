@@ -58,7 +58,7 @@ def _ctx(
 
 
 class _RaisingService:
-    """指定された例外を raise する IngestionService スタンド。"""
+    """指定された例外を raise する ArticleAcquisitionService スタンド。"""
 
     def __init__(self, *_: Any, **__: Any) -> None: ...
 
@@ -73,7 +73,7 @@ def _patch_service_to_raise(monkeypatch: pytest.MonkeyPatch, exc: Exception) -> 
         {"exc": exc},
     )
     monkeypatch.setattr(
-        "app.collection.service.IngestionService",
+        "app.collection.service.ArticleAcquisitionService",
         cls,
     )
 

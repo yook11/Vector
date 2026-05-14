@@ -128,17 +128,17 @@ async def ingest_source(
     引いて envelope に詰めているため、本 task では ``NewsSource`` を再
     lookup しない。
 
-    Pattern R (本文込み RSS): Fetcher が ``ReadyForArticle`` を yield、
+    即時獲得経路 (本文込み RSS): Fetcher が ``ReadyForArticle`` を yield、
     Article 永続化 → ``ExtractionTrigger(article_id)`` で ``extract_content.kiq``
     に enqueue (案 3: Stage 3 task 側で Ready 自構築)。
 
-    Pattern H (本文 HTML 必須): Fetcher が ``IncompleteArticle`` を yield、
+    補完待ち獲得経路 (本文 HTML 必須): Fetcher が ``IncompleteArticle`` を yield、
     後段 ``extract_html_body`` task で trafilatura 抽出 + 永続化に進む。
     """
     from app.analysis.extraction.domain.ready import ExtractionTrigger
     from app.analysis.extraction.tasks import extract_content
     from app.collection.fetchers.strategy import FETCHERS
-    from app.collection.service import IngestionService
+    from app.collection.service import ArticleAcquisitionService
 
     source_id = arg.id
     logger.info("ingest_source_started", source_id=source_id, source_name=arg.name)
@@ -147,7 +147,7 @@ async def ingest_source(
     attempt = int(ctx.message.labels.get("retry_count", 0)) + 1
 
     fetcher_factory = FETCHERS[arg.name]
-    svc = IngestionService(session_factory, fetcher_factory)
+    svc = ArticleAcquisitionService(session_factory, fetcher_factory)
 
     try:
         persisted_ids = await svc.execute(source_id, attempt=attempt)

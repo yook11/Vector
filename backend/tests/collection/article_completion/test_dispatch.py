@@ -17,7 +17,7 @@
   - 二重起動 idempotent (1 度戻したものは 2 度目で 0 件)
 
 テスト方針 (持続可能性):
-- pending を直接 INSERT し、Fetcher / NewsSource / IngestionService 経由しない
+- pending を直接 INSERT し、Fetcher / NewsSource / ArticleAcquisitionService 経由しない
 - ソースが増えても破綻しない (横軸独立)
 - ``extract_html_body.kiq`` は AsyncMock で「呼ばれた回数 + 引数」のみ確認
 - 内部実装 (private method / log message / 中間 dict) は assert しない

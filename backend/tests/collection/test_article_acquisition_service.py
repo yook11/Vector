@@ -1,21 +1,21 @@
-"""``IngestionService`` の振り分け責務テスト。
+"""``ArticleAcquisitionService`` の振り分け責務テスト。
 
 PR-E 以降は新 2 表 (``articles`` / ``pending_html_articles``) を直接駆動する。
 
 検証する不変条件:
 
-- Pattern R (``ReadyForArticle``): ``articles.source_url`` (型 ``CanonicalArticleUrl``
-  で canonicalize 済が構造保証) に直 INSERT、``execute()`` 戻り値の
-  ``list[int]`` に永続化された article_id が積まれる
-- Pattern H (``IncompleteArticle``): ``seen_repo.exists_by_source_url``
+- 即時獲得経路 (``ReadyForArticle``): ``articles.source_url``
+  (型 ``CanonicalArticleUrl`` で canonicalize 済が構造保証) に直 INSERT、
+  ``execute()`` 戻り値の ``list[int]`` に永続化された article_id が積まれる
+- 補完待ち獲得経路 (``IncompleteArticle``): ``seen_repo.exists_by_source_url``
   pre-check を通過したら ``pending_html_articles.url`` で INSERT。Outcome は
   純化されているため caller には何も渡らない (cron poller が DB 駆動)
 - ``SourceFetchFailed`` は永続化に流れない (silent skip しない、payload で観測する)
 - 同 URL の重複 yield は ``articles.source_url UNIQUE`` で 1 件に絞られる
 - ``CanonicalArticleUrl`` 型構築時点で tracking parameter / trailing slash が
   吸収される (Service 側で後付け正規化を行わない)
-- 既知 URL (= articles 既存) を Pattern H で受けたら pre-check で skip
-- 混在 (R + H + SourceFetchFailed) でも各経路が独立して正しく分岐する
+- 既知 URL (= articles 既存) を補完待ち経路で受けたら pre-check で skip
+- 混在 (即時 + 補完待ち + ``SourceFetchFailed``) でも各経路が独立して正しく分岐する
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ from app.collection.fetchers.outcome import (
 from app.collection.incomplete_article.domain.incomplete_article import (
     IncompleteArticle,
 )
-from app.collection.service import IngestionService
+from app.collection.service import ArticleAcquisitionService
 from app.models.article import Article as ArticleORM
 from app.models.news_source import NewsSource, SourceType
 from app.models.pending_html_article import PendingHtmlArticle as PendingHtmlArticleORM
@@ -103,8 +103,8 @@ async def test_pattern_r_inserts_canonicalized_article(
     db_session: AsyncSession,
     vb_source: NewsSource,
 ) -> None:
-    """Pattern R は articles を 1 件作り、source_url が canonicalize 済み値で入る。"""
-    svc = IngestionService(
+    """即時獲得経路は articles を 1 件作り、source_url が canonicalize 済み値で入る。"""
+    svc = ArticleAcquisitionService(
         session_factory,
         lambda: _StubFetcher(
             [_ready_entry(vb_source.id, "https://venturebeat.com/a/")]
@@ -130,8 +130,8 @@ async def test_pattern_h_inserts_pending_with_canonicalized_url(
     db_session: AsyncSession,
     vb_source: NewsSource,
 ) -> None:
-    """Pattern H は pending_html_articles を作り、url は canonicalize 済み値。"""
-    svc = IngestionService(
+    """補完待ち獲得経路は pending_html_articles を作り、url は canonicalize 済み値。"""
+    svc = ArticleAcquisitionService(
         session_factory,
         lambda: _StubFetcher(
             [_pending_entry(vb_source.id, "https://techcrunch.com/h/")]
@@ -140,7 +140,7 @@ async def test_pattern_h_inserts_pending_with_canonicalized_url(
 
     article_ids = await svc.execute(vb_source.id)
 
-    assert article_ids == []  # Pattern H は cron poller 駆動
+    assert article_ids == []  # 補完待ち経路は cron poller 駆動
 
     articles = (await db_session.execute(select(ArticleORM))).scalars().all()
     pendings = (await db_session.execute(select(PendingHtmlArticleORM))).scalars().all()
@@ -157,7 +157,7 @@ async def test_pattern_h_skips_when_article_already_exists(
     db_session: AsyncSession,
     vb_source: NewsSource,
 ) -> None:
-    """Pattern H pre-check: 既に articles に同 URL がある場合は pending を作らず skip。
+    """補完待ち経路 pre-check: articles に同 URL がある場合は pending を作らず skip。
 
     feed 再露出時の HTML fetch 反復を抑える実用的 idempotency の検証。
     """
@@ -172,7 +172,7 @@ async def test_pattern_h_skips_when_article_already_exists(
     db_session.add(existing)
     await db_session.commit()
 
-    svc = IngestionService(
+    svc = ArticleAcquisitionService(
         session_factory,
         lambda: _StubFetcher(
             [_pending_entry(vb_source.id, "https://techcrunch.com/known")]
@@ -195,7 +195,7 @@ async def test_failed_does_not_persist(
     failed = SourceFetchFailed(
         reason=SourceFetchFailureReason(code="body_too_short", retryable=False)
     )
-    svc = IngestionService(session_factory, lambda: _StubFetcher([failed]))
+    svc = ArticleAcquisitionService(session_factory, lambda: _StubFetcher([failed]))
 
     article_ids = await svc.execute(vb_source.id)
 
@@ -218,7 +218,7 @@ async def test_duplicate_url_yielded_twice_persists_once(
     """
     e1 = _ready_entry(vb_source.id, "https://venturebeat.com/dup/")
     e2 = _ready_entry(vb_source.id, "https://venturebeat.com/dup/")
-    svc = IngestionService(session_factory, lambda: _StubFetcher([e1, e2]))
+    svc = ArticleAcquisitionService(session_factory, lambda: _StubFetcher([e1, e2]))
 
     article_ids = await svc.execute(vb_source.id)
 
@@ -240,7 +240,7 @@ async def test_canonicalization_dedupes_tracking_query(
     """
     e1 = _ready_entry(vb_source.id, "https://venturebeat.com/a")
     e2 = _ready_entry(vb_source.id, "https://venturebeat.com/a/?utm_source=twitter")
-    svc = IngestionService(session_factory, lambda: _StubFetcher([e1, e2]))
+    svc = ArticleAcquisitionService(session_factory, lambda: _StubFetcher([e1, e2]))
 
     article_ids = await svc.execute(vb_source.id)
 
@@ -256,7 +256,7 @@ async def test_mixed_ready_pending_failed_route_independently(
     vb_source: NewsSource,
 ) -> None:
     """混在 (R + H + SourceFetchFailed) でも各経路が独立して正しく分岐する。"""
-    svc = IngestionService(
+    svc = ArticleAcquisitionService(
         session_factory,
         lambda: _StubFetcher(
             [

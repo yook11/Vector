@@ -1,12 +1,12 @@
-"""``IngestionService`` の同 tx 監査書込テスト (PR2.5-B 仕様)。
+"""``ArticleAcquisitionService`` の同 tx 監査書込テスト (PR2.5-B 仕様)。
 
 検証する不変条件:
 
 - 成功 path で ``pipeline_events`` に 1 行が書き込まれる (Service / Task の
   ``attempt`` がそのまま行に載る)
 - ``SourceFetchFailed`` の集計 (``failed_codes``) が payload に焼き付く
-- Pattern H 投入時に ``completion_reason_codes`` / ``completion_queued_count`` が
-  焼き付く
+- 補完待ち獲得経路 (``IncompleteArticle``) 投入時に ``completion_reason_codes`` /
+  ``completion_queued_count`` が焼き付く
 - 既知 URL skip 時に ``skipped_codes`` (= ``known_url``) が焼き付く
 - ``entry_count == article_created + completion_queued + skipped + failed``
   invariant がすべての分岐で成立する (model_validator が違反時 ValueError)
@@ -36,7 +36,7 @@ from app.collection.fetchers.outcome import (
 from app.collection.incomplete_article.domain.incomplete_article import (
     IncompleteArticle,
 )
-from app.collection.service import IngestionService
+from app.collection.service import ArticleAcquisitionService
 from app.models.news_source import NewsSource, SourceType
 from app.models.pipeline_event import PipelineEvent
 from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
@@ -103,7 +103,7 @@ async def test_success_writes_one_pipeline_event(
     db_session: AsyncSession,
     vb_source: NewsSource,
 ) -> None:
-    svc = IngestionService(
+    svc = ArticleAcquisitionService(
         session_factory,
         lambda: _StubFetcher(
             [_ready_entry(vb_source.id, "https://venturebeat.com/a/")]
@@ -131,8 +131,8 @@ async def test_pattern_h_records_completion_queued(
     db_session: AsyncSession,
     vb_source: NewsSource,
 ) -> None:
-    """Pattern H 投入時、completion_queued_count + reason_codes が焼かれる。"""
-    svc = IngestionService(
+    """補完待ち獲得経路投入時、completion_queued_count + reason_codes が焼かれる。"""
+    svc = ArticleAcquisitionService(
         session_factory,
         lambda: _StubFetcher(
             [
@@ -158,7 +158,7 @@ async def test_known_url_skip_records_skipped_codes(
     vb_source: NewsSource,
 ) -> None:
     """重複 URL は 2 度目以降が known_url skip として skipped_codes に集計される。"""
-    svc = IngestionService(
+    svc = ArticleAcquisitionService(
         session_factory,
         lambda: _StubFetcher(
             [
@@ -185,7 +185,7 @@ async def test_failed_codes_aggregated_in_payload(
     vb_source: NewsSource,
 ) -> None:
     """SourceFetchFailed.reason.code 別カウントが payload に焼かれ、後で監視できる。"""
-    svc = IngestionService(
+    svc = ArticleAcquisitionService(
         session_factory,
         lambda: _StubFetcher(
             [
@@ -226,7 +226,7 @@ async def test_mixed_entry_invariant_holds(
 ) -> None:
     """混在 (R + H + dup_skip + ``SourceFetchFailed``) でも entry_count = sum(...)
     不変条件が成立し、各分岐の count が独立して正しく集計される。"""
-    svc = IngestionService(
+    svc = ArticleAcquisitionService(
         session_factory,
         lambda: _StubFetcher(
             [
@@ -259,7 +259,7 @@ async def test_metadata_observation_records_keys_and_first_sample(
     vb_source: NewsSource,
 ) -> None:
     """全 entry の metadata key 累積 + 最初の non-empty dump が焼かれる。"""
-    svc = IngestionService(
+    svc = ArticleAcquisitionService(
         session_factory,
         lambda: _StubFetcher(
             [
@@ -294,7 +294,7 @@ async def test_metadata_observation_is_none_when_all_empty(
     vb_source: NewsSource,
 ) -> None:
     """metadata が全 entry で空なら observation も None で焼く (一貫した欠落表現)。"""
-    svc = IngestionService(
+    svc = ArticleAcquisitionService(
         session_factory,
         lambda: _StubFetcher(
             [_ready_entry(vb_source.id, "https://venturebeat.com/a/", metadata={})]

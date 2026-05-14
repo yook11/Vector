@@ -773,7 +773,7 @@ PR6: Alembic で fetch_logs テーブルを drop
 | PR | 内容 | 規模 |
 |---|---|---|
 | **PR1** | 監査基盤導入: `pipeline_events` 表 Alembic + ORM + `app/observability/` (domain / repository / recording) + ADR + Stage 1 (`source_fetch`) 統合。`SourceFetchPayload` の `metadata_*` フィールドは用意するが NULL のまま | 中 |
-| **PR1.5** | 型階層整理: `ReadyForArticle` を「永続化保証型」として 1 本化（`FetchedArticle` 廃止統合 / `metadata` 削除）、`FetchedEntry` envelope 新設、19 Fetcher の戻り型修正、`IngestionService` で metadata 観測 → `metadata_fields_observed` / `metadata_sample` に値が入り始める | 中 |
+| **PR1.5** | 型階層整理: `ReadyForArticle` を「永続化保証型」として 1 本化（`FetchedArticle` 廃止統合 / `metadata` 削除）、`FetchedEntry` envelope 新設、19 Fetcher の戻り型修正、`ArticleAcquisitionService` で metadata 観測 → `metadata_fields_observed` / `metadata_sample` に値が入り始める | 中 |
 | **PR2** | Stage 2 (`content_fetch`) 統合 | 中 |
 | **PR3** | Stage 3〜5 (extraction / classification / embedding) — Stage 3 を Outcome 化する PR を含む。**AI client / extractor の戻り値拡張**（raw response / 入力 snapshot を業務戻り値に含める）もここで導入 | 大 or 分割 |
 | **PR4** | dispatch + backfill 統合 | 小 |

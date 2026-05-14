@@ -27,7 +27,7 @@ class IngestSourceArg(BaseModel):
 
     ``dispatch_sources`` で 1 度だけ ``NewsSource`` を query して
     ``IngestSourceArg(id=..., name=...)`` を組み立て、kiq message に乗せる。
-    これにより ``ingest_source`` task / ``IngestionService`` が DB を再
+    これにより ``ingest_source`` task / ``ArticleAcquisitionService`` が DB を再
     lookup する必要が消え、Fetcher が ``NewsSource`` ORM を一切知らずに済む。
     """
 

@@ -1,4 +1,4 @@
-"""Collection ドメイン — ニュース記事の取得 + Pattern H 補完を担う。
+"""Collection ドメイン — 外部ニュースから品質を担保した記事を獲得する BC。
 
 サブパッケージ:
 
@@ -7,14 +7,15 @@
 - ``incomplete_article/`` — ``IncompleteArticle`` aggregate
   (``IncompleteArticle.complete_with_html()`` + ``ArticleCompletionFailed`` +
   ``PendingHtmlArticleRepository``)
-- ``article_completion/`` — Pattern H 補完責務 (``ArticleCompletionService`` +
+- ``article_completion/`` — 補完待ち獲得記事の完成責務 (``ArticleCompletionService`` +
   ``ArticleHtmlExtractor`` + ``dispatch_html_fetch_jobs`` / ``sweep_expired_leases``
   + retry policy)
 - ``fetchers/`` — 外部ソース固有の Fetcher 実装群 (Protocol)
 
 flat モジュール:
 
-- ``service.py`` — ``IngestionService`` (Pattern R / Pattern H 振り分け entry point)
+- ``service.py`` — ``ArticleAcquisitionService`` (即時獲得 / 補完待ち獲得の
+  振り分け entry point)
 - ``staged.py`` — ``IngestSourceArg`` (taskiq envelope)
 - ``tasks.py`` — 5 つの taskiq task (``dispatch_sources`` / ``ingest_source`` /
   ``extract_html_body``。``dispatch_html_fetch_jobs`` / ``sweep_expired_leases``

@@ -1,6 +1,6 @@
 """``pending_html_articles.staged_attributes`` JSONB の structured 型。
 
-Pattern H 1 段目 (``IngestionService``) で RSS 由来の補完情報を
+補完待ち獲得経路の 1 段目 (``ArticleAcquisitionService``) で RSS 由来の補完情報を
 2 段目 (``ArticleCompletionService``) に DB 経由で渡すための frozen な値型。
 
 - ``title``: RSS 由来の title。``prefer_html_title=True`` のときのみ
@@ -26,7 +26,7 @@ _TITLE_MAX_LENGTH = 500
 
 
 class StagedArticleAttributes(BaseModel):
-    """Pattern H 補完待ち情報の DB 保存用 frozen Model。"""
+    """補完待ち獲得情報の DB 保存用 frozen Model。"""
 
     model_config = ConfigDict(frozen=True)
 
