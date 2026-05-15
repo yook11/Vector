@@ -12,6 +12,7 @@ from collections.abc import AsyncIterator
 from typing import ClassVar
 
 from app.collection.article.domain.article import ReadyForArticle
+from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.passport_builder import try_build_passport
 from app.collection.fetchers.tools.rss_parser import RssEntry, RssParser
 from app.collection.incomplete_article.domain.incomplete_article import (
@@ -51,3 +52,30 @@ class MICFetcher:
             published_hint=entry.published,
             source_id=source_id,
         )
+
+
+class MICAdapter:
+    """MIC 用 SourceAdapter (Pattern H、body 不信用、Shift_JIS feed)。
+
+    ``parse_mode="bytes"`` で feedparser に encoding sniff を任せる。
+    """
+
+    NAME = "MIC"
+    ENDPOINT_URL = "https://www.soumu.go.jp/news.rdf"
+
+    def __init__(self, parser: RssParser | None = None) -> None:
+        self._parser = parser or RssParser()
+
+    async def collect(self) -> AsyncIterator[FetchedArticle]:
+        entries = await self._parser.fetch(
+            endpoint_url=self.ENDPOINT_URL,
+            source_name=self.NAME,
+            parse_mode="bytes",
+        )
+        for entry in entries:
+            yield FetchedArticle(
+                title=entry.title,
+                url=entry.link,
+                body=None,
+                published_at=entry.published,
+            )

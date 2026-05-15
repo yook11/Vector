@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator
 from typing import ClassVar
 
 from app.collection.article.domain.article import ReadyForArticle
+from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.passport_builder import try_build_passport
 from app.collection.fetchers.tools.rss_parser import RssEntry, RssParser
 from app.collection.incomplete_article.domain.incomplete_article import (
@@ -50,3 +51,27 @@ class JPCERTFetcher:
             published_hint=entry.published,
             source_id=source_id,
         )
+
+
+class JPCERTAdapter:
+    """JPCERT/CC 用 SourceAdapter (Pattern H、body 不信用)。"""
+
+    NAME = "JPCERT/CC"
+    ENDPOINT_URL = "https://www.jpcert.or.jp/rss/jpcert.rdf"
+
+    def __init__(self, parser: RssParser | None = None) -> None:
+        self._parser = parser or RssParser()
+
+    async def collect(self) -> AsyncIterator[FetchedArticle]:
+        entries = await self._parser.fetch(
+            endpoint_url=self.ENDPOINT_URL,
+            source_name=self.NAME,
+            parse_mode="text",
+        )
+        for entry in entries:
+            yield FetchedArticle(
+                title=entry.title,
+                url=entry.link,
+                body=None,
+                published_at=entry.published,
+            )
