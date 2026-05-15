@@ -17,6 +17,7 @@ from collections.abc import AsyncIterator
 from typing import ClassVar
 
 from app.collection.article.domain.value_objects import PublishedAt
+from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.rss_parser import RssEntry, RssParser
 from app.collection.incomplete_article.domain.incomplete_article import (
     IncompleteArticle,
@@ -85,3 +86,35 @@ class TheRegisterFetcher:
             source_url=source_url,
             published_at_hint=published_at_hint,
         )
+
+
+class TheRegisterAdapter:
+    """The Register 用 SourceAdapter (Pattern H、Atom feed)。
+
+    ``<link href>`` は redirector 経由 (``go.theregister.com/feed/...``) のため
+    ``_normalize_register_link`` で実 URL に展開してから渡す (builder では
+    復元できない per-source 変換)。title / URL の構造ゲートは
+    ``passport_builder`` に委譲する。
+    """
+
+    NAME = "The Register"
+    ENDPOINT_URL = "https://www.theregister.com/headlines.atom"
+
+    def __init__(self, parser: RssParser | None = None) -> None:
+        self._parser = parser or RssParser()
+
+    async def collect(self) -> AsyncIterator[FetchedArticle]:
+        entries = await self._parser.fetch(
+            endpoint_url=self.ENDPOINT_URL,
+            source_name=self.NAME,
+            parse_mode="text",
+        )
+        for entry in entries:
+            if not entry.link:
+                continue
+            yield FetchedArticle(
+                title=entry.title,
+                url=_normalize_register_link(entry.link),
+                body=None,
+                published_at=entry.published,
+            )

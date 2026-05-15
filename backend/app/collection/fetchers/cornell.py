@@ -28,6 +28,7 @@ import structlog
 
 from app.collection.article.domain.value_objects import PublishedAt
 from app.collection.errors import TemporaryFetchError
+from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.rss_parser import RssEntry, RssParser
 from app.collection.incomplete_article.domain.incomplete_article import (
     IncompleteArticle,
@@ -115,3 +116,64 @@ class CornellChronicleFetcher:
             source_url=source_url,
             published_at_hint=published_at_hint,
         )
+
+
+class CornellChronicleAdapter:
+    """Cornell Chronicle 用 SourceAdapter (Pattern H、6 feed 巡回 + URL dedup)。
+
+    1 feed の ``TemporaryFetchError`` は ``cornell_feed_skip`` warning を残して
+    次 feed に進む (旧 ``CornellChronicleFetcher`` と同挙動)。
+    ``PermanentFetchError`` は catch せず source 全体失敗として伝播する。
+    1 記事が複数 category に tag されるため feed 間 URL 重複を
+    in-memory ``seen_urls`` で排除する。
+    """
+
+    NAME = "Cornell Chronicle"
+    ENDPOINT_URL = "https://news.cornell.edu/taxonomy/term/24043/feed"
+    FEEDS: ClassVar[tuple[str, ...]] = (
+        # Artificial Intelligence
+        "https://news.cornell.edu/taxonomy/term/24043/feed",
+        # Computing & Information Sciences
+        "https://news.cornell.edu/taxonomy/term/14256/feed",
+        # Life Sciences & Veterinary Medicine
+        "https://news.cornell.edu/taxonomy/term/15056/feed",
+        # Energy, Environment & Sustainability
+        "https://news.cornell.edu/taxonomy/term/15621/feed",
+        # Physical Sciences & Engineering
+        "https://news.cornell.edu/taxonomy/term/14252/feed",
+        # Health, Nutrition & Medicine
+        "https://news.cornell.edu/taxonomy/term/14248/feed",
+    )
+
+    def __init__(self, parser: RssParser | None = None) -> None:
+        self._parser = parser or RssParser()
+
+    async def collect(self) -> AsyncIterator[FetchedArticle]:
+        seen_urls: set[str] = set()
+        for feed_url in self.FEEDS:
+            try:
+                entries = await self._parser.fetch(
+                    endpoint_url=feed_url,
+                    source_name=self.NAME,
+                    parse_mode="bytes",
+                )
+            except TemporaryFetchError as e:
+                # 1 feed の transient 失敗で全停止しない (他 feed は続行)
+                logger.warning(
+                    "cornell_feed_skip",
+                    source=self.NAME,
+                    feed=feed_url,
+                    error=str(e),
+                )
+                continue
+            # PermanentFetchError は catch しない (source 全体失敗として伝播)
+            for entry in entries:
+                if not entry.link or entry.link in seen_urls:
+                    continue
+                seen_urls.add(entry.link)
+                yield FetchedArticle(
+                    title=entry.title,
+                    url=entry.link,
+                    body=None,
+                    published_at=entry.published,
+                )

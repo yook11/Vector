@@ -18,6 +18,7 @@ from collections.abc import AsyncIterator
 from typing import ClassVar
 
 from app.collection.article.domain.value_objects import PublishedAt
+from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.rss_parser import RssEntry, RssParser
 from app.collection.incomplete_article.domain.incomplete_article import (
     IncompleteArticle,
@@ -77,3 +78,37 @@ class BaseDjangoplicityFetcher:
             source_url=source_url,
             published_at_hint=published_at_hint,
         )
+
+
+class BaseDjangoplicityAdapter:
+    """ESA Djangoplicity News module の Pattern H SourceAdapter 共通基底。
+
+    subclass は ``NAME`` / ``ENDPOINT_URL`` の 2 ClassVar を必須で差し替える
+    (MDPI base+subclass と同形)。判定順は旧
+    ``BaseDjangoplicityFetcher._convert_entry`` を踏襲: title 空のみ structural
+    gate (URL canonical は ``passport_builder`` に委譲)。本文は HTML 詳細ページ
+    に委譲する Pattern H のため ``body=None`` で渡す。
+    """
+
+    NAME: ClassVar[str]
+    ENDPOINT_URL: ClassVar[str]
+
+    def __init__(self, parser: RssParser | None = None) -> None:
+        self._parser = parser or RssParser()
+
+    async def collect(self) -> AsyncIterator[FetchedArticle]:
+        entries = await self._parser.fetch(
+            endpoint_url=self.ENDPOINT_URL,
+            source_name=self.NAME,
+            parse_mode="bytes",
+        )
+        for entry in entries:
+            title = entry.title[:500]
+            if not title:
+                continue
+            yield FetchedArticle(
+                title=title,
+                url=entry.link,
+                body=None,
+                published_at=entry.published,
+            )

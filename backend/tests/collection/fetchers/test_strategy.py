@@ -1,10 +1,14 @@
-"""``strategy.py`` の整合性テスト (collection-acquisition-redesign Phase 1 完結)。"""
+"""``strategy.py`` の整合性テスト (fetcher big-bang リファクタ P6 cutover 後)。
+
+P6 で 45 entry すべてが ``lambda: ArticleFetcher(XxxAdapter())`` 形に切替わった。
+factory が ``ArticleFetcher`` を返し、その ``NAME`` が dispatch key と一致する
+ことを構造的に固定する (cutover 漏れ = 旧 Fetcher 直参照を検出する防壁)。
+"""
 
 from __future__ import annotations
 
-from app.collection.fetchers.hacker_news import HackerNewsFetcher
+from app.collection.fetchers.article_fetcher import ArticleFetcher
 from app.collection.fetchers.strategy import FETCHERS
-from app.collection.fetchers.venturebeat import VentureBeatFetcher
 
 
 class TestStrategyConsistency:
@@ -19,17 +23,18 @@ class TestStrategyConsistency:
         """
         assert len(FETCHERS) == 45
 
-    def test_venturebeat_registered(self) -> None:
-        assert FETCHERS["VentureBeat"] is VentureBeatFetcher
+    def test_every_factory_is_adapter_driven_with_matching_identity(self) -> None:
+        """全 entry が ``ArticleFetcher`` を返し ``NAME`` が key と一致する。
 
-    def test_hacker_news_registered(self) -> None:
-        assert FETCHERS["Hacker News"] is HackerNewsFetcher
-
-    def test_factory_yields_fetcher_with_identity(self) -> None:
+        P6 cutover の完了条件: factory が旧 Fetcher class 直参照のままだと
+        ``ArticleFetcher`` instance にならず、ここで cutover 漏れを検出する。
+        """
         for name, factory in FETCHERS.items():
             instance = factory()
-            assert hasattr(instance, "fetch"), f"{name} must implement fetch"
-            assert hasattr(instance, "NAME"), f"{name} must declare NAME"
-            assert hasattr(instance, "ENDPOINT_URL"), (
-                f"{name} must declare ENDPOINT_URL"
+            assert isinstance(instance, ArticleFetcher), (
+                f"{name} must be Adapter-driven (ArticleFetcher)"
             )
+            assert instance.NAME == name, (
+                f"{name} key must equal Adapter.NAME (got {instance.NAME!r})"
+            )
+            assert instance.ENDPOINT_URL, f"{name} must declare ENDPOINT_URL"

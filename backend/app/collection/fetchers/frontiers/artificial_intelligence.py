@@ -8,10 +8,21 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from app.collection.fetchers.frontiers._common import BaseFrontiersFetcher
+from app.collection.fetchers.frontiers._common import (
+    BaseFrontiersFetcher,
+    BaseFrontiersJournalAdapter,
+)
 
 
 class FrontiersAIFetcher(BaseFrontiersFetcher):
+    NAME: ClassVar[str] = "Frontiers in Artificial Intelligence"
+    ENDPOINT_URL: ClassVar[str] = (
+        "https://www.frontiersin.org/journals/artificial-intelligence/rss"
+    )
+    JOURNAL_NAME: ClassVar[str] = "Frontiers in Artificial Intelligence"
+
+
+class FrontiersAIAdapter(BaseFrontiersJournalAdapter):
     NAME: ClassVar[str] = "Frontiers in Artificial Intelligence"
     ENDPOINT_URL: ClassVar[str] = (
         "https://www.frontiersin.org/journals/artificial-intelligence/rss"

@@ -11,7 +11,10 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from app.collection.fetchers.esa._common import BaseDjangoplicityFetcher
+from app.collection.fetchers.esa._common import (
+    BaseDjangoplicityAdapter,
+    BaseDjangoplicityFetcher,
+)
 
 
 class ESAHubbleFetcher(BaseDjangoplicityFetcher):
@@ -19,3 +22,8 @@ class ESAHubbleFetcher(BaseDjangoplicityFetcher):
     ENDPOINT_URL: ClassVar[str] = "https://esahubble.org/news/feed/"
     SITE_NAME: ClassVar[str] = "ESA/Hubble"
     AUTHOR: ClassVar[str] = "ESA/Hubble"
+
+
+class ESAHubbleAdapter(BaseDjangoplicityAdapter):
+    NAME: ClassVar[str] = "ESA/Hubble"
+    ENDPOINT_URL: ClassVar[str] = "https://esahubble.org/news/feed/"

@@ -27,6 +27,7 @@ import structlog
 from app.collection.article.domain.article import ReadyForArticle
 from app.collection.article.domain.value_objects import PublishedAt
 from app.collection.errors import TemporaryFetchError
+from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.rss_parser import RssEntry, RssParser
 from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 
@@ -124,3 +125,58 @@ class NASAFetcher:
             )
         except ValueError:
             return None
+
+
+class NASAAdapter:
+    """NASA 用 SourceAdapter (Pattern R、6 feed 巡回 + URL dedup)。
+
+    1 feed の ``TemporaryFetchError`` は ``nasa_feed_skip`` warning を残して
+    次 feed に進む (旧 ``NASAFetcher`` と同挙動、運用可観測性維持)。
+    ``PermanentFetchError`` は catch せず source 全体失敗として伝播する。
+    cron 周期内の重複 URL は in-memory ``seen_urls`` で排除する。
+    """
+
+    NAME = "NASA"
+    ENDPOINT_URL = "https://www.nasa.gov/feed/"
+    FEEDS: ClassVar[tuple[str, ...]] = (
+        "https://www.nasa.gov/feed/",
+        "https://www.nasa.gov/news-release/feed/",
+        "https://www.nasa.gov/technology/feed/",
+        "https://www.nasa.gov/aeronautics/feed/",
+        "https://www.nasa.gov/missions/station/feed/",
+        "https://www.nasa.gov/missions/artemis/feed/",
+    )
+
+    def __init__(self, parser: RssParser | None = None) -> None:
+        self._parser = parser or RssParser()
+
+    async def collect(self) -> AsyncIterator[FetchedArticle]:
+        seen_urls: set[str] = set()
+        for feed_url in self.FEEDS:
+            try:
+                entries = await self._parser.fetch(
+                    endpoint_url=feed_url,
+                    source_name=self.NAME,
+                    parse_mode="text",
+                )
+            except TemporaryFetchError as e:
+                # 1 feed の transient 失敗で全停止しない (他 feed は続行)
+                logger.warning(
+                    "nasa_feed_skip",
+                    source=self.NAME,
+                    feed=feed_url,
+                    error=str(e),
+                )
+                continue
+            # PermanentFetchError は catch しない (source 全体失敗として伝播)
+            for entry in entries:
+                if entry.link and entry.link in seen_urls:
+                    continue
+                if entry.link:
+                    seen_urls.add(entry.link)
+                yield FetchedArticle(
+                    title=entry.title,
+                    url=entry.link,
+                    body=_strip_html(entry.content_encoded or "") or None,
+                    published_at=entry.published,
+                )

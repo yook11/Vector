@@ -31,6 +31,7 @@ from typing import ClassVar
 
 from app.collection.article.domain.article import ReadyForArticle
 from app.collection.article.domain.value_objects import PublishedAt
+from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.rss_parser import RssEntry, RssParser
 from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 
@@ -122,3 +123,45 @@ class BaseFrontiersFetcher:
             )
         except ValueError:
             return None
+
+
+class BaseFrontiersJournalAdapter:
+    """Frontiers Media journal RSS の Pattern R SourceAdapter 共通基底。
+
+    subclass は ``NAME`` / ``ENDPOINT_URL`` / ``JOURNAL_NAME`` の 3 ClassVar を
+    必須で差し替える (MDPI base+subclass と同形)。判定順は旧
+    ``BaseFrontiersFetcher._convert_entry`` を完全踏襲: title 空 → body<50 →
+    published None。``body < 50`` drop は editorial/correction の空 description
+    を落とす business critical drop のため Adapter 内で実施する (builder の
+    Incomplete 救済に流さない)。
+    """
+
+    NAME: ClassVar[str]
+    ENDPOINT_URL: ClassVar[str]
+    JOURNAL_NAME: ClassVar[str]
+    LANGUAGE: ClassVar[str] = _DEFAULT_LANGUAGE
+
+    def __init__(self, parser: RssParser | None = None) -> None:
+        self._parser = parser or RssParser()
+
+    async def collect(self) -> AsyncIterator[FetchedArticle]:
+        entries = await self._parser.fetch(
+            endpoint_url=self.ENDPOINT_URL,
+            source_name=self.NAME,
+            parse_mode="bytes",
+        )
+        for entry in entries:
+            title = entry.title[:500]
+            if not title:
+                continue
+            body = _strip_html(_pick_body(entry))
+            if len(body) < 50:
+                continue  # business critical drop (editorial/correction)
+            if entry.published is None:
+                continue
+            yield FetchedArticle(
+                title=title,
+                url=entry.link,
+                body=body,
+                published_at=entry.published,
+            )

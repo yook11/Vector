@@ -13,6 +13,7 @@ from collections.abc import AsyncIterator
 from typing import ClassVar
 
 from app.collection.article.domain.article import ReadyForArticle
+from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.passport_builder import try_build_passport
 from app.collection.fetchers.tools.rss_parser import RssEntry, RssParser
 from app.collection.incomplete_article.domain.incomplete_article import (
@@ -68,3 +69,27 @@ class PLOSOneFetcher:
             published_hint=entry.published,
             source_id=source_id,
         )
+
+
+class PLOSOneAdapter:
+    """PLOS ONE 用 SourceAdapter (Atom 1.0、Pattern R、body 信用)。"""
+
+    NAME = "PLOS ONE"
+    ENDPOINT_URL = "https://journals.plos.org/plosone/feed/atom"
+
+    def __init__(self, parser: RssParser | None = None) -> None:
+        self._parser = parser or RssParser()
+
+    async def collect(self) -> AsyncIterator[FetchedArticle]:
+        entries = await self._parser.fetch(
+            endpoint_url=self.ENDPOINT_URL,
+            source_name=self.NAME,
+            parse_mode="bytes",
+        )
+        for entry in entries:
+            yield FetchedArticle(
+                title=entry.title,
+                url=entry.link,
+                body=_strip_html(_pick_body(entry)) or None,
+                published_at=entry.published,
+            )

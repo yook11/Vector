@@ -19,6 +19,7 @@ from typing import ClassVar
 
 from app.collection.article.domain.article import ReadyForArticle
 from app.collection.article.domain.value_objects import PublishedAt
+from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.rss_parser import RssEntry, RssParser
 from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 
@@ -101,3 +102,33 @@ class MicrosoftResearchFetcher:
             )
         except ValueError:
             return None
+
+
+class MicrosoftResearchAdapter:
+    """Microsoft Research 用 SourceAdapter (Pattern R、body 信用)。
+
+    body は ``_strip_html`` → ``_strip_footer`` の順で WordPress 固定 footer を
+    除去してから渡す (builder では復元できない per-source 変換)。title /
+    body 長 / published / URL の構造ゲートは ``passport_builder`` に委譲する。
+    """
+
+    NAME = "Microsoft Research"
+    ENDPOINT_URL = "https://www.microsoft.com/en-us/research/feed/"
+
+    def __init__(self, parser: RssParser | None = None) -> None:
+        self._parser = parser or RssParser()
+
+    async def collect(self) -> AsyncIterator[FetchedArticle]:
+        entries = await self._parser.fetch(
+            endpoint_url=self.ENDPOINT_URL,
+            source_name=self.NAME,
+            parse_mode="text",
+        )
+        for entry in entries:
+            body = _strip_footer(_strip_html(entry.content_encoded or ""))
+            yield FetchedArticle(
+                title=entry.title,
+                url=entry.link,
+                body=body or None,
+                published_at=entry.published,
+            )

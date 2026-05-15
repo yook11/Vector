@@ -8,10 +8,19 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from app.collection.fetchers.frontiers._common import BaseFrontiersFetcher
+from app.collection.fetchers.frontiers._common import (
+    BaseFrontiersFetcher,
+    BaseFrontiersJournalAdapter,
+)
 
 
 class FrontiersMaterialsFetcher(BaseFrontiersFetcher):
+    NAME: ClassVar[str] = "Frontiers in Materials"
+    ENDPOINT_URL: ClassVar[str] = "https://www.frontiersin.org/journals/materials/rss"
+    JOURNAL_NAME: ClassVar[str] = "Frontiers in Materials"
+
+
+class FrontiersMaterialsAdapter(BaseFrontiersJournalAdapter):
     NAME: ClassVar[str] = "Frontiers in Materials"
     ENDPOINT_URL: ClassVar[str] = "https://www.frontiersin.org/journals/materials/rss"
     JOURNAL_NAME: ClassVar[str] = "Frontiers in Materials"

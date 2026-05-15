@@ -26,23 +26,52 @@ import pytest
 from app.collection.article.domain.article import ReadyForArticle
 from app.collection.fetchers.article_fetcher import ArticleFetcher
 from app.collection.fetchers.cleantechnica import CleanTechnicaAdapter
+from app.collection.fetchers.cloudflare import CloudflareBlogAdapter
+from app.collection.fetchers.cornell import CornellChronicleAdapter
 from app.collection.fetchers.deepmind import DeepMindAdapter
 from app.collection.fetchers.eetimes_japan import EETimesJapanAdapter
 from app.collection.fetchers.electrek import ElectrekAdapter
+from app.collection.fetchers.elife import ELifeAdapter
 from app.collection.fetchers.engadget import EngadgetAdapter
+from app.collection.fetchers.esa.hubble import ESAHubbleAdapter
+from app.collection.fetchers.esa.webb import ESAWebbAdapter
+from app.collection.fetchers.fierce_biotech import FierceBiotechAdapter
+from app.collection.fetchers.frontiers.artificial_intelligence import (
+    FrontiersAIAdapter,
+)
+from app.collection.fetchers.frontiers.energy_research import (
+    FrontiersEnergyResearchAdapter,
+)
+from app.collection.fetchers.frontiers.materials import (
+    FrontiersMaterialsAdapter,
+)
+from app.collection.fetchers.frontiers.robotics_and_ai import (
+    FrontiersRoboticsAIAdapter,
+)
 from app.collection.fetchers.huggingface import HuggingFaceBlogAdapter
+from app.collection.fetchers.ieee_spectrum import IEEESpectrumAdapter
 from app.collection.fetchers.itmedia_ai import ITmediaAIAdapter
 from app.collection.fetchers.itmedia_news import ITmediaNewsAdapter
 from app.collection.fetchers.jpcert import JPCERTAdapter
+from app.collection.fetchers.krebs_on_security import KrebsOnSecurityAdapter
+from app.collection.fetchers.meta_ai import MetaAIAdapter
 from app.collection.fetchers.meti import METIAdapter
 from app.collection.fetchers.mext import MEXTAdapter
 from app.collection.fetchers.mic import MICAdapter
+from app.collection.fetchers.microsoft_research import (
+    MicrosoftResearchAdapter,
+)
 from app.collection.fetchers.monoist import MONOistAdapter
+from app.collection.fetchers.nasa import NASAAdapter
 from app.collection.fetchers.nist import NISTAdapter
 from app.collection.fetchers.nsf import NSFAdapter
 from app.collection.fetchers.openai import OpenAIAdapter
+from app.collection.fetchers.plos_one import PLOSOneAdapter
+from app.collection.fetchers.quantum_insider import QuantumInsiderAdapter
+from app.collection.fetchers.spaceflight_now import SpaceflightNowAdapter
 from app.collection.fetchers.spacenews import SpaceNewsAdapter
 from app.collection.fetchers.techcrunch import TechCrunchAdapter
+from app.collection.fetchers.the_register import TheRegisterAdapter
 from app.collection.fetchers.tools.fetched_article import SourceAdapter
 from app.collection.fetchers.tools.rss_parser import RssEntry, normalize_entry
 from app.collection.fetchers.venturebeat import VentureBeatAdapter
@@ -144,6 +173,97 @@ _CASES: list[tuple[AdapterFactory, str, set[type], set[type]]] = [
     (NSFAdapter, "nsf_rss.xml", _H_BODY_DISTRUSTED, {IncompleteArticle}),
     (OpenAIAdapter, "openai_rss.xml", _H_BODY_DISTRUSTED, {IncompleteArticle}),
     (SpaceNewsAdapter, "spacenews_rss.xml", _H_BODY_DISTRUSTED, {IncompleteArticle}),
+    # P6 Pattern R 群 — body 信用、Ready 主経路 (teaser 混入時のみ Incomplete)
+    (
+        CloudflareBlogAdapter,
+        "cloudflare_rss.xml",
+        _R_BODY_TRUSTED,
+        {ReadyForArticle},
+    ),
+    (ELifeAdapter, "elife_rss.xml", _R_BODY_TRUSTED, {ReadyForArticle}),
+    (
+        IEEESpectrumAdapter,
+        "ieee_spectrum_rss.xml",
+        _R_BODY_TRUSTED,
+        {ReadyForArticle},
+    ),
+    (PLOSOneAdapter, "plos_one_atom.xml", _R_BODY_TRUSTED, {ReadyForArticle}),
+    (
+        QuantumInsiderAdapter,
+        "quantum_insider_rss.xml",
+        _R_BODY_TRUSTED,
+        {ReadyForArticle},
+    ),
+    (
+        KrebsOnSecurityAdapter,
+        "krebs_on_security_rss.xml",
+        _R_BODY_TRUSTED,
+        {ReadyForArticle},
+    ),
+    (
+        SpaceflightNowAdapter,
+        "spaceflight_now_rss.xml",
+        _R_BODY_TRUSTED,
+        {ReadyForArticle},
+    ),
+    (NASAAdapter, "nasa_rss.xml", _R_BODY_TRUSTED, {ReadyForArticle}),
+    (MetaAIAdapter, "meta_ai_rss.xml", _R_BODY_TRUSTED, {ReadyForArticle}),
+    (
+        MicrosoftResearchAdapter,
+        "microsoft_research_rss.xml",
+        _R_BODY_TRUSTED,
+        {ReadyForArticle},
+    ),
+    (
+        FrontiersAIAdapter,
+        "frontiers_ai_rss.xml",
+        _R_BODY_TRUSTED,
+        {ReadyForArticle},
+    ),
+    (
+        FrontiersRoboticsAIAdapter,
+        "frontiers_ai_rss.xml",
+        _R_BODY_TRUSTED,
+        {ReadyForArticle},
+    ),
+    (
+        FrontiersEnergyResearchAdapter,
+        "frontiers_ai_rss.xml",
+        _R_BODY_TRUSTED,
+        {ReadyForArticle},
+    ),
+    (
+        FrontiersMaterialsAdapter,
+        "frontiers_ai_rss.xml",
+        _R_BODY_TRUSTED,
+        {ReadyForArticle},
+    ),
+    # P6 Pattern H 群 — body 不信用、Incomplete 経路に固定
+    (
+        CornellChronicleAdapter,
+        "cornell_rss.xml",
+        _H_BODY_DISTRUSTED,
+        {IncompleteArticle},
+    ),
+    (
+        TheRegisterAdapter,
+        "the_register_atom.xml",
+        _H_BODY_DISTRUSTED,
+        {IncompleteArticle},
+    ),
+    (
+        FierceBiotechAdapter,
+        "fierce_biotech_rss.xml",
+        _H_BODY_DISTRUSTED,
+        {IncompleteArticle},
+    ),
+    (
+        ESAHubbleAdapter,
+        "esa_hubble_rss.xml",
+        _H_BODY_DISTRUSTED,
+        {IncompleteArticle},
+    ),
+    (ESAWebbAdapter, "esa_webb_rss.xml", _H_BODY_DISTRUSTED, {IncompleteArticle}),
 ]
 
 

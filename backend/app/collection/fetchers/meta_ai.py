@@ -21,6 +21,7 @@ from typing import ClassVar, Final
 
 from app.collection.article.domain.article import ReadyForArticle
 from app.collection.article.domain.value_objects import PublishedAt
+from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.rss_parser import RssEntry, RssParser
 from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 
@@ -112,3 +113,34 @@ class MetaAIFetcher:
             )
         except ValueError:
             return None
+
+
+class MetaAIAdapter:
+    """about.fb.com Newsroom から AI tagged entry のみ抽出する SourceAdapter。
+
+    AI tag フィルタ (~60% drop) は business critical drop のため Adapter 内で
+    旧 ``MetaAIFetcher._convert_entry`` と同位置 (最初) に適用する。title /
+    body / published / URL の構造ゲートは ``passport_builder`` に委譲する。
+    """
+
+    NAME = "Meta AI"
+    ENDPOINT_URL = "https://about.fb.com/news/feed/"
+
+    def __init__(self, parser: RssParser | None = None) -> None:
+        self._parser = parser or RssParser()
+
+    async def collect(self) -> AsyncIterator[FetchedArticle]:
+        entries = await self._parser.fetch(
+            endpoint_url=self.ENDPOINT_URL,
+            source_name=self.NAME,
+            parse_mode="bytes",
+        )
+        for entry in entries:
+            if not _is_ai_tagged(entry.tags):
+                continue  # business critical drop (Newsroom 全社混在で約 60%)
+            yield FetchedArticle(
+                title=entry.title,
+                url=entry.link,
+                body=_strip_html(_pick_body(entry)) or None,
+                published_at=entry.published,
+            )

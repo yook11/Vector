@@ -17,6 +17,7 @@ from typing import ClassVar
 from zoneinfo import ZoneInfo
 
 from app.collection.article.domain.value_objects import PublishedAt
+from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.rss_parser import RssEntry, RssParser
 from app.collection.incomplete_article.domain.incomplete_article import (
     IncompleteArticle,
@@ -101,3 +102,38 @@ class FierceBiotechFetcher:
             source_url=source_url,
             published_at_hint=published_at_hint,
         )
+
+
+class FierceBiotechAdapter:
+    """FierceBiotech 用 SourceAdapter (Pattern H)。
+
+    ``<pubDate>`` が RFC822 非準拠 ("Apr 30, 2026 6:11pm") で
+    ``feedparser.published_parsed`` が落ちる場合のみ ``_parse_fb_published_at``
+    で strptime fallback (ET→UTC) を適用する (builder では復元できない
+    per-source 変換)。Pattern H のため ``published`` が ``None`` でも drop
+    しない (HTML 抽出後に merge 確定)。
+    """
+
+    NAME = "FierceBiotech"
+    ENDPOINT_URL = "https://www.fiercebiotech.com/rss/xml"
+
+    def __init__(self, parser: RssParser | None = None) -> None:
+        self._parser = parser or RssParser()
+
+    async def collect(self) -> AsyncIterator[FetchedArticle]:
+        entries = await self._parser.fetch(
+            endpoint_url=self.ENDPOINT_URL,
+            source_name=self.NAME,
+            parse_mode="text",
+        )
+        for entry in entries:
+            published = entry.published
+            if published is None:
+                fb = _parse_fb_published_at(entry.raw_published or entry.raw_updated)
+                published = fb.value if fb is not None else None
+            yield FetchedArticle(
+                title=entry.title,
+                url=entry.link,
+                body=None,
+                published_at=published,
+            )

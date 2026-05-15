@@ -10,7 +10,10 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from app.collection.fetchers.esa._common import BaseDjangoplicityFetcher
+from app.collection.fetchers.esa._common import (
+    BaseDjangoplicityAdapter,
+    BaseDjangoplicityFetcher,
+)
 
 
 class ESAWebbFetcher(BaseDjangoplicityFetcher):
@@ -18,3 +21,8 @@ class ESAWebbFetcher(BaseDjangoplicityFetcher):
     ENDPOINT_URL: ClassVar[str] = "https://esawebb.org/news/feed/"
     SITE_NAME: ClassVar[str] = "ESA/Webb"
     AUTHOR: ClassVar[str] = "ESA/Webb"
+
+
+class ESAWebbAdapter(BaseDjangoplicityAdapter):
+    NAME: ClassVar[str] = "ESA/Webb"
+    ENDPOINT_URL: ClassVar[str] = "https://esawebb.org/news/feed/"
