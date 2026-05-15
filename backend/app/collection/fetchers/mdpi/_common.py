@@ -38,6 +38,8 @@ import structlog
 from app.collection.article.domain.article import ReadyForArticle
 from app.collection.article.domain.value_objects import PublishedAt
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
+from app.collection.fetchers.tools.crossref_client import CrossrefApiClient
+from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.shared.security.safe_http import make_safe_async_client
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
@@ -242,3 +244,64 @@ class BaseMDPICrossrefFetcher:
             )
         except ValueError:
             return None
+
+
+class BaseMDPICrossrefAdapter:
+    """MDPI 4 journal の Crossref API 経路 ``SourceAdapter`` 共通基底 (Pattern R)。
+
+    HTTP 取得 + per-ISSN filter + sort/order 構築は ``CrossrefApiClient`` に
+    委譲する。Adapter は item ごとの type/license/title/abstract/date/DOI
+    判定だけを担う (旧 ``BaseMDPICrossrefFetcher._convert_record`` の判定順を
+    完全踏襲)。
+
+    subclass は ``NAME`` / ``ISSN`` / ``JOURNAL_NAME`` の 3 ClassVar を必須で
+    差し替える (P3c の Djangoplicity / Frontiers と同じ thin subclass 形)。
+    """
+
+    NAME: ClassVar[str]
+    ISSN: ClassVar[str]
+    JOURNAL_NAME: ClassVar[str]
+    LANGUAGE: ClassVar[str] = "en"
+    ENDPOINT_URL: ClassVar[str] = "https://api.crossref.org/works"
+    LOOKBACK_DAYS: ClassVar[int] = 7
+    ROWS_PER_REQUEST: ClassVar[int] = 20
+
+    def __init__(self, client: CrossrefApiClient | None = None) -> None:
+        self._client = client or CrossrefApiClient()
+
+    async def collect(self) -> AsyncIterator[FetchedArticle]:
+        from_pub_date = (
+            (datetime.now(UTC) - timedelta(days=self.LOOKBACK_DAYS)).date().isoformat()
+        )
+        items = await self._client.works(
+            source_name=self.NAME,
+            issn=self.ISSN,
+            from_pub_date=from_pub_date,
+            rows=self.ROWS_PER_REQUEST,
+        )
+        # 判定順は旧 _convert_record (本ファイル冒頭) と完全一致:
+        # type → license → title → body → date → DOI.
+        for item in items:
+            if item.get("type") != "journal-article":
+                continue  # business: corrections/editorials drop
+            if not _validate_license(item):
+                continue  # business: CC BY 4.0 のみ
+            title = _extract_title(item)
+            if not title:
+                continue
+            title = title[:_TITLE_MAX_LENGTH]
+            body = _strip_jats(item.get("abstract") or "")
+            if len(body) < 50:
+                continue  # business: 短い abstract は信用しない
+            published = _parse_date_parts(item)
+            if published is None:
+                continue
+            doi = _extract_doi(item)
+            if doi is None:
+                continue
+            yield FetchedArticle(
+                title=title,
+                url=f"https://doi.org/{doi}",
+                body=body,
+                published_at=published.value,
+            )

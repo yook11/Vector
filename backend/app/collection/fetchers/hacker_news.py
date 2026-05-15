@@ -30,6 +30,8 @@ import structlog
 
 from app.collection.article.domain.value_objects import PublishedAt
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
+from app.collection.fetchers.tools.algolia_hn_client import HackerNewsApiClient
+from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.incomplete_article.domain.incomplete_article import (
     IncompleteArticle,
 )
@@ -149,3 +151,43 @@ class HackerNewsFetcher:
             source_url=source_url,
             published_at_hint=published_at_hint,
         )
+
+
+class HackerNewsAdapter:
+    """Hacker News 用 ``SourceAdapter`` (Algolia Search API, Pattern H)。
+
+    旧 ``HackerNewsFetcher`` と同じ Algolia HN Search API 経路を踏襲しつつ、
+    HTTP 取得 + numericFilters 構築は ``HackerNewsApiClient`` に委譲する。
+    business critical drop (``url=None`` skip / 空 title skip) は本 Adapter
+    内で旧 Fetcher と同位置・同順序で実施する (``hacker_news.py:131-137``
+    に対応)。``points>20`` の閾値は Algolia の server-side numericFilters で
+    既に drop 済のため Adapter では行わない (旧仕様維持)。
+    """
+
+    NAME: ClassVar[str] = "Hacker News"
+    ENDPOINT_URL: ClassVar[str] = "https://hn.algolia.com/api/v1/search_by_date"
+
+    def __init__(self, client: HackerNewsApiClient | None = None) -> None:
+        self._client = client or HackerNewsApiClient()
+
+    async def collect(self) -> AsyncIterator[FetchedArticle]:
+        hits = await self._client.search_recent_stories(
+            source_name=self.NAME,
+            min_points=HN_MIN_POINTS,
+            window_seconds=HN_SLIDING_WINDOW_SECONDS,
+            hits_per_page=HN_HITS_PER_PAGE,
+        )
+        for hit in hits:
+            raw_url = hit.get("url")
+            if not isinstance(raw_url, str) or not raw_url:
+                continue  # Ask HN / text-only post: external URL を持たない
+            title = (hit.get("title") or "")[:_TITLE_MAX_LENGTH]
+            if not title:
+                continue  # business: title 欠落 skip (旧 hacker_news.py:135-137)
+            published = _parse_created_at(hit.get("created_at"))
+            yield FetchedArticle(
+                title=title,
+                url=raw_url,
+                body=None,
+                published_at=published.value if published is not None else None,
+            )

@@ -1,0 +1,76 @@
+{
+  "hits": [
+    {
+      "objectID": "47139675",
+      "title": "I'm helping my dog vibe code games",
+      "url": "https://www.calebleak.com/posts/dog-game/",
+      "author": "cleak",
+      "points": 1082,
+      "num_comments": 365,
+      "story_text": null,
+      "created_at": "2026-02-24T17:15:17Z",
+      "created_at_i": 1771953317,
+      "_tags": ["story", "author_cleak", "story_47139675"]
+    },
+    {
+      "objectID": "47140000",
+      "title": "Ask HN: how do you stay focused after lunch?",
+      "url": null,
+      "author": "deepwork",
+      "points": 87,
+      "num_comments": 42,
+      "story_text": "Honest question about post-lunch productivity habits.",
+      "created_at": "2026-02-24T18:22:00Z",
+      "created_at_i": 1771957320,
+      "_tags": ["story", "ask_hn", "author_deepwork", "story_47140000"]
+    },
+    {
+      "objectID": "47140001",
+      "title": "Show HN: a debugger that explains stack traces with embeddings",
+      "url": "https://stackpeek.dev/launch",
+      "author": "embedder",
+      "points": 254,
+      "num_comments": 78,
+      "story_text": null,
+      "created_at": "2026-02-24T19:10:00Z",
+      "created_at_i": 1771960200,
+      "_tags": ["story", "show_hn", "author_embedder", "story_47140001"]
+    },
+    {
+      "objectID": "47140002",
+      "title": "New Rust release v2.0",
+      "url": "https://blog.rust-lang.org/2026/02/24/rust-2.html",
+      "author": "rustdev",
+      "points": 631,
+      "num_comments": 192,
+      "story_text": null,
+      "created_at": "2026-02-24T20:00:00Z",
+      "created_at_i": 1771963200,
+      "_tags": ["story", "author_rustdev", "story_47140002"]
+    },
+    {
+      "objectID": "47140003",
+      "title": "The forgotten history of CRDTs",
+      "url": "https://distributed-systems.dev/crdt-history",
+      "author": "lamport_fan",
+      "points": 412,
+      "num_comments": 88,
+      "story_text": null,
+      "created_at": "2026-02-24T21:30:00Z",
+      "created_at_i": 1771968600,
+      "_tags": ["story", "author_lamport_fan", "story_47140003"]
+    },
+    {
+      "objectID": "47140004",
+      "title": "Ask HN: anyone else tired of CSS-in-JS?",
+      "url": null,
+      "author": "css_skeptic",
+      "points": 56,
+      "num_comments": 34,
+      "story_text": "Genuine question after migrating yet another project off styled-components.",
+      "created_at": "2026-02-24T22:00:00Z",
+      "created_at_i": 1771970400,
+      "_tags": ["story", "ask_hn", "author_css_skeptic", "story_47140004"]
+    }
+  ]
+}
