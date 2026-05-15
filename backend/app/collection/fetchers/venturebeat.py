@@ -21,6 +21,7 @@ from collections.abc import AsyncIterator
 from typing import ClassVar
 
 from app.collection.article.domain.article import ReadyForArticle
+from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.passport_builder import try_build_passport
 from app.collection.fetchers.tools.rss_parser import RssEntry, RssParser
 from app.collection.incomplete_article.domain.incomplete_article import (
@@ -85,4 +86,41 @@ class VentureBeatFetcher:
             body_candidate=_strip_html(_pick_body(entry)) or None,
             published_hint=entry.published,
             source_id=source_id,
+        )
+
+
+class VentureBeatAdapter:
+    """VentureBeat 用 SourceAdapter (新経路、Adapter 駆動)。
+
+    旧 ``VentureBeatFetcher`` と並存させ、移行期間中は両方が同じ module helper
+    (``_pick_body`` / ``_strip_html``) を共有する。P6 で ``strategy.py`` を
+    ``ArticleFetcher(VentureBeatAdapter())`` 形に切替後、P7 cleanup で旧 Fetcher
+    を削除する予定。
+    """
+
+    NAME = "VentureBeat"
+    ENDPOINT_URL = "https://venturebeat.com/feed"
+
+    def __init__(self, parser: RssParser | None = None) -> None:
+        self._parser = parser or RssParser()
+
+    async def collect(self) -> AsyncIterator[FetchedArticle]:
+        entries = await self._parser.fetch(
+            endpoint_url=self.ENDPOINT_URL,
+            source_name=self.NAME,
+            parse_mode="text",
+        )
+        for entry in entries:
+            yield self._to_fetched(entry)
+
+    def _to_fetched(self, entry: RssEntry) -> FetchedArticle:
+        """1 ``RssEntry`` を ``FetchedArticle`` に翻訳する。Ready / Incomplete
+        の分岐は ``passport_builder`` 側に委ね、Adapter は body 候補を組み立てる
+        ことだけに専念する。"""
+        body_candidate = _strip_html(_pick_body(entry)) or None
+        return FetchedArticle(
+            title=entry.title,
+            url=entry.link,
+            body=body_candidate,
+            published_at=entry.published,
         )

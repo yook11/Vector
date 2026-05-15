@@ -22,6 +22,7 @@ from collections.abc import AsyncIterator
 from typing import ClassVar
 
 from app.collection.article.domain.article import ReadyForArticle
+from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.passport_builder import try_build_passport
 from app.collection.fetchers.tools.rss_parser import RssEntry, RssParser
 from app.collection.incomplete_article.domain.incomplete_article import (
@@ -65,3 +66,33 @@ class TechCrunchFetcher:
             published_hint=entry.published,
             source_id=source_id,
         )
+
+
+class TechCrunchAdapter:
+    """TechCrunch 用 SourceAdapter (新経路、Adapter 駆動)。
+
+    旧 ``TechCrunchFetcher`` と並存させ、Adapter 経路では ``body=None`` を
+    ``FetchedArticle`` に焼き込む形で ``passport_builder`` 側の Incomplete 経路に
+    固定する。将来 TC が ``<content:encoded>`` を提供するようになったら、
+    ``_to_fetched`` 内で body 候補を組み立てる差分だけで Ready 経路に昇格できる。
+    """
+
+    NAME = "TechCrunch"
+    ENDPOINT_URL = "https://techcrunch.com/feed/"
+
+    def __init__(self, parser: RssParser | None = None) -> None:
+        self._parser = parser or RssParser()
+
+    async def collect(self) -> AsyncIterator[FetchedArticle]:
+        entries = await self._parser.fetch(
+            endpoint_url=self.ENDPOINT_URL,
+            source_name=self.NAME,
+            parse_mode="text",
+        )
+        for entry in entries:
+            yield FetchedArticle(
+                title=entry.title,
+                url=entry.link,
+                body=None,
+                published_at=entry.published,
+            )
