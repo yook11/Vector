@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final
 
-from app.analysis.rate_policy import RatePolicy
+from app.analysis.rate_limit import RatePolicy
 
 
 @dataclass(frozen=True, slots=True)

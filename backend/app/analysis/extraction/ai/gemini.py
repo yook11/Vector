@@ -34,7 +34,7 @@ from app.analysis.gemini_error_translator import (
     is_context_length_error,
     translate_gemini_error,
 )
-from app.analysis.rate_policy import RatePolicy
+from app.analysis.rate_limit import RatePolicy
 from app.config import settings
 
 logger = structlog.get_logger(__name__)

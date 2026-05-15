@@ -28,7 +28,7 @@ from app.analysis.assessment.domain.ready import (
     ReadyForAssessment,
 )
 from app.analysis.embedding.domain.ready import EmbeddingTrigger
-from app.analysis.rate_policy import RatePolicy
+from app.analysis.rate_limit import RatePolicy
 
 
 def _make_provider_fake() -> MagicMock:

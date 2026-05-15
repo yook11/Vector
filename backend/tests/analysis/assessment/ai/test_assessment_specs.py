@@ -27,7 +27,7 @@ from app.analysis.assessment.ai.spec import (
     DEEPSEEK_ASSESSMENT_SPEC,
     GEMINI_ASSESSMENT_SPEC,
 )
-from app.analysis.rate_policy import RatePolicy
+from app.analysis.rate_limit import RatePolicy
 
 _HEX8 = re.compile(r"^[0-9a-f]{8}$")
 

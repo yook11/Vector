@@ -33,7 +33,7 @@ from taskiq_redis import RedisAsyncResultBackend, RedisStreamBroker
 from app.analysis.assessment.ai.deepseek import DeepSeekAssessor
 from app.analysis.embedding.ai.gemini import GeminiEmbedder
 from app.analysis.extraction.ai.gemini import GeminiExtractor
-from app.analysis.provider_rate_limit_gate import ProviderRateLimitGate
+from app.analysis.rate_limit import ProviderRateLimitGate
 from app.config import settings
 
 logger = structlog.get_logger(__name__)

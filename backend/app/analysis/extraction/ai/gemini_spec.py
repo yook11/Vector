@@ -21,7 +21,7 @@ from pydantic import BaseModel
 
 from app.analysis.extraction.ai.gemini_prompt import GeminiExtractionPrompt
 from app.analysis.extraction.ai.schema import GeminiExtractionResponse
-from app.analysis.rate_policy import RatePolicy
+from app.analysis.rate_limit import RatePolicy
 from app.observability.prompt_versions import compute_call_signature
 
 _MODEL: Final[str] = "gemini-2.5-flash-lite"

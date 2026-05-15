@@ -26,7 +26,7 @@ from app.analysis.embedding.domain.ready import (
     EmbeddingTrigger,
     ReadyForEmbedding,
 )
-from app.analysis.rate_policy import RatePolicy
+from app.analysis.rate_limit import RatePolicy
 
 
 def _make_embedder_fake() -> MagicMock:

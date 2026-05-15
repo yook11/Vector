@@ -32,7 +32,7 @@ from app.analysis.assessment.errors import (
     AssessmentResponseInvalidError,
     AssessmentTerminalSkipError,
 )
-from app.analysis.rate_policy import RatePolicy
+from app.analysis.rate_limit import RatePolicy
 
 
 def _make_provider_fake() -> MagicMock:

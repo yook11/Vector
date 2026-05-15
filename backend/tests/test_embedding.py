@@ -27,7 +27,7 @@ from app.analysis.embedding.domain.value_objects import (
     EmbeddingVector,
 )
 from app.analysis.embedding.errors import EmbeddingResponseInvalidError
-from app.analysis.rate_policy import RatePolicy
+from app.analysis.rate_limit import RatePolicy
 
 _STUB_RATE_POLICY = RatePolicy(provider="stub", model="stub-model", rpm=None, rpd=None)
 

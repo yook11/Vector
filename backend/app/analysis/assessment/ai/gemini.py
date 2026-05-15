@@ -39,7 +39,7 @@ from app.analysis.assessment.ai.spec import (
 from app.analysis.assessment.domain.result import InScope, OutOfScope
 from app.analysis.assessment.errors import AssessmentResponseInvalidError
 from app.analysis.gemini_error_translator import translate_gemini_error
-from app.analysis.rate_policy import RatePolicy
+from app.analysis.rate_limit import RatePolicy
 from app.config import settings
 
 logger = structlog.get_logger(__name__)

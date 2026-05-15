@@ -17,7 +17,7 @@ import pytest
 
 from app.analysis.extraction.ai.gemini_spec import GEMINI_EXTRACTION_SPEC
 from app.analysis.extraction.ai.schema import GeminiExtractionResponse
-from app.analysis.rate_policy import RatePolicy
+from app.analysis.rate_limit import RatePolicy
 
 
 def test_provider_is_gemini() -> None:

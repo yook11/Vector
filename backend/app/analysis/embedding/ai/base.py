@@ -25,7 +25,7 @@ from app.analysis.embedding.errors import (
     EmbeddingError,
     EmbeddingResponseInvalidError,
 )
-from app.analysis.rate_policy import RatePolicy
+from app.analysis.rate_limit import RatePolicy
 
 logger = structlog.get_logger(__name__)
 

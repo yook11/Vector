@@ -18,7 +18,7 @@ from dataclasses import FrozenInstanceError
 import pytest
 
 from app.analysis.embedding.ai.spec import GEMINI_EMBEDDING_SPEC
-from app.analysis.rate_policy import RatePolicy
+from app.analysis.rate_limit import RatePolicy
 
 # ---------------------------------------------------------------------------
 # Gemini

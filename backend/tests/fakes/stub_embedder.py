@@ -25,7 +25,7 @@ import struct
 from typing import Final
 
 from app.analysis.embedding.ai.base import BaseEmbedder
-from app.analysis.rate_policy import RatePolicy
+from app.analysis.rate_limit import RatePolicy
 
 _STUB_PROVIDER: Final[str] = "stub"
 _STUB_MODEL: Final[str] = "stub-embedder"

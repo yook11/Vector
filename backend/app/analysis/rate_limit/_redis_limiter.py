@@ -13,6 +13,10 @@ ZSET のメンバ数が *max_requests* に達している場合、``block=True``
 
 メンバには UUID を用いて一意性を保証し、スコアには Redis サーバー時刻を用いる。
 Lua スクリプトによって check-and-add はアトミックに保たれる。
+
+本 module は ``rate_limit`` サブパッケージの実装詳細 (leading underscore で
+明示)。外部 caller は ``app.analysis.rate_limit`` package 経由で
+``ProviderRateLimitGate`` を使うこと。
 """
 
 from __future__ import annotations

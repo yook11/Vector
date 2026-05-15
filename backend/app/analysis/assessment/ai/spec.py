@@ -23,7 +23,7 @@ from app.analysis.assessment.ai.schema_tool import (
     ASSESSMENT_GEMINI_SCHEMA,
     ASSESSMENT_TOOL_SCHEMA,
 )
-from app.analysis.rate_policy import RatePolicy
+from app.analysis.rate_limit import RatePolicy
 from app.observability.prompt_versions import compute_call_signature
 
 

@@ -36,7 +36,7 @@ from app.analysis.ai_provider_errors import (
 )
 from app.analysis.extraction.domain.ready import ExtractionTrigger, ReadyForExtraction
 from app.analysis.extraction.errors import ExtractionResponseInvalidError
-from app.analysis.rate_policy import RatePolicy
+from app.analysis.rate_limit import RatePolicy
 
 
 def _make_provider_fake() -> MagicMock:

@@ -33,7 +33,7 @@ from app.analysis.embedding.ai.spec import (
     EmbeddingCallSpec,
 )
 from app.analysis.gemini_error_translator import translate_gemini_error
-from app.analysis.rate_policy import RatePolicy
+from app.analysis.rate_limit import RatePolicy
 from app.config import settings
 
 logger = structlog.get_logger(__name__)

@@ -10,7 +10,7 @@ from app.analysis.ai_provider_errors import AIProviderError
 from app.analysis.extraction.ai.envelope import ExtractionCall
 from app.analysis.extraction.domain import Noise, Signal
 from app.analysis.extraction.errors import ExtractionDomainError
-from app.analysis.rate_policy import RatePolicy
+from app.analysis.rate_limit import RatePolicy
 
 logger = structlog.get_logger(__name__)
 
