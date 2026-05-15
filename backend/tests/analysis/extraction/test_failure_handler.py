@@ -8,10 +8,10 @@
   ただし新規 INSERT 時点では ``article_id`` が埋まっている (DELETE 前)
 - ``source_id`` が auto-resolve される (article DELETE 後でも source 追跡可能)
 - ``source_name`` が payload に保存される (FK 切断耐性)
-- ``NonRetryableDropArticle`` 派生例外
-  (``AIProviderOutputBlockedError`` / ``AIProviderInputRejectedError``) で
-  ``category='non_retryable_drop_article'`` / ``code=type(exc).CODE`` /
-  ``outcome_code=code`` (Phase A 同値) が記録される
+- ``ExtractionTerminalDropError`` (ACL ``map_provider_to_extraction`` で
+  ``AIProviderOutputBlockedError`` / ``AIProviderInputRejectedError`` から
+  詰め替えられる) で ``category='non_retryable_drop_article'`` /
+  ``code=exc.CODE`` / ``outcome_code=code`` (Phase A 同値) が記録される
 - 戻り値 ``False`` (Drop 経路は taskiq retry させない)
 """
 
@@ -31,6 +31,7 @@ from app.analysis.ai_provider_errors import (
 from app.analysis.extraction.ai.base import BaseExtractor
 from app.analysis.extraction.ai.gemini_spec import GEMINI_EXTRACTION_SPEC
 from app.analysis.extraction.domain.ready import ReadyForExtraction
+from app.analysis.extraction.errors import map_provider_to_extraction
 from app.analysis.extraction.failure_handling import ExtractionFailureHandler
 from app.models.article import Article
 from app.models.news_source import NewsSource
@@ -88,7 +89,11 @@ async def test_output_blocked_writes_audit_then_deletes_article(
     ready = _ready_from(article)
     handler = ExtractionFailureHandler(session_factory)
 
-    exc = AIProviderOutputBlockedError("blocked by policy: SAFETY")
+    raw_exc = AIProviderOutputBlockedError("blocked by policy: SAFETY")
+    try:
+        raise map_provider_to_extraction(raw_exc) from raw_exc
+    except Exception as wrapped:  # noqa: BLE001
+        exc = wrapped
     reraise = await handler.handle(
         ready=ready,
         exc=exc,
@@ -142,7 +147,11 @@ async def test_input_rejected_writes_audit_then_deletes_article(
     ready = _ready_from(article)
     handler = ExtractionFailureHandler(session_factory)
 
-    exc = AIProviderInputRejectedError("input exceeds context length")
+    raw_exc = AIProviderInputRejectedError("input exceeds context length")
+    try:
+        raise map_provider_to_extraction(raw_exc) from raw_exc
+    except Exception as wrapped:  # noqa: BLE001
+        exc = wrapped
     reraise = await handler.handle(
         ready=ready,
         exc=exc,

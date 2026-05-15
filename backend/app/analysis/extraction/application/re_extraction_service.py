@@ -36,16 +36,18 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
+from app.analysis.ai_provider_errors import AIProviderError
 from app.analysis.extraction.ai.base import BaseExtractor
 from app.analysis.extraction.ai.envelope import ExtractionCall
 from app.analysis.extraction.domain import Noise, Signal
+from app.analysis.extraction.errors import (
+    ExtractionRecoverableError,
+    ExtractionTerminalDropError,
+    ExtractionTerminalKeepError,
+    map_provider_to_extraction,
+)
 from app.analysis.extraction.repository import ExtractionRepository
 from app.models.article import Article
-from app.observability.categories import (
-    NonRetryableDropArticle,
-    NonRetryableKeepArticle,
-    RetryableError,
-)
 
 logger = structlog.get_logger(__name__)
 
@@ -59,10 +61,10 @@ class ReExtractionSummary:
 
     - ``success_ids``: 再抽出 + 永続化 (dry_run=True なら rollback 直前の commit
       候補) に成功
-    - ``failed_ids``: ``NonRetryableKeepArticle`` (Configuration / Balance 等)
-      で即失敗、または ``RetryableError`` が ``max_retries`` 回再現した
+    - ``failed_ids``: ``ExtractionTerminalKeepError`` (Configuration / Balance 等)
+      で即失敗、または ``ExtractionRecoverableError`` が ``max_retries`` 回再現
     - ``skipped_ids``: Article 不在 / 既存 ArticleExtraction 不在 /
-      ``NonRetryableDropArticle`` (input rejected / output blocked)
+      ``ExtractionTerminalDropError`` (input rejected / output blocked)
     - ``dry_run``: ``True`` の場合は永続化していない (rollback 済み)
     """
 
@@ -158,22 +160,22 @@ class ReExtractionService:
             envelope = await self._extract_with_retry(
                 extractor, title=title, content=content, article_id=article_id
             )
-        except NonRetryableDropArticle:
+        except ExtractionTerminalDropError:
             # AI から見て扱えない記事 (input rejected / output blocked)。
             # 通常 pipeline でも記事 DELETE 対象のカテゴリなので skipped 扱い。
             logger.warning("re_extract_drop_article", article_id=article_id)
             return "skipped"
-        except NonRetryableKeepArticle as exc:
+        except ExtractionTerminalKeepError as exc:
             # Configuration / RequestInvalid / Balance 等。retry しても解消しない
-            # ため max_retries を消費せず即 failed (本番 task は KEEP_ARTICLE で
-            # raise する)。
+            # ため max_retries を消費せず即 failed (本番 task は keep article で
+            # audit + return する)。
             logger.error(
                 "re_extract_failed_permanent",
                 article_id=article_id,
                 error=type(exc).__name__,
             )
             return "failed"
-        except RetryableError as exc:
+        except ExtractionRecoverableError as exc:
             # max_retries 回 retry しても再現した recoverable エラー。
             logger.error(
                 "re_extract_failed_after_retry",
@@ -223,6 +225,25 @@ class ReExtractionService:
                     f"re_extract_unreachable_envelope_variant: article_id={article_id}"
                 )
 
+    async def _extract_once_mapped(
+        self,
+        extractor: BaseExtractor,
+        *,
+        title: str,
+        content: str,
+    ) -> ExtractionCall[Signal] | ExtractionCall[Noise]:
+        """extractor を 1 回呼び、provider error を Stage 3 marker に詰め替える。
+
+        retry loop が同じ try 内で ACL 詰め替えと Stage marker catch を両方
+        書くと、詰め替えた marker は後続 except に流れない (try 内で再 raise
+        した例外は同レベルの sibling except では捕まらない) ため、boundary を
+        本 helper に分離する。
+        """
+        try:
+            return await extractor.extract(title=title, content=content)
+        except AIProviderError as exc:
+            raise map_provider_to_extraction(exc) from exc
+
     async def _extract_with_retry(
         self,
         extractor: BaseExtractor,
@@ -233,16 +254,20 @@ class ReExtractionService:
     ) -> ExtractionCall[Signal] | ExtractionCall[Noise]:
         """exponential backoff で extractor を最大 ``max_retries`` 回呼び出す。
 
-        ``NonRetryableDropArticle`` / ``NonRetryableKeepArticle`` は即時伝播
-        (retry 無意味)。``RetryableError`` marker のみ backoff retry する。
+        ``ExtractionTerminalDropError`` / ``ExtractionTerminalKeepError`` は
+        即時伝播 (retry 無意味)。``ExtractionRecoverableError`` のみ backoff
+        retry する。provider error の詰め替えは ``_extract_once_mapped`` 内で
+        完結しているため、本 loop は Stage 3 marker のみ catch する。
         """
-        last_exc: RetryableError | None = None
+        last_exc: ExtractionRecoverableError | None = None
         for attempt in range(1, self._max_retries + 1):
             try:
-                return await extractor.extract(title=title, content=content)
-            except (NonRetryableDropArticle, NonRetryableKeepArticle):
+                return await self._extract_once_mapped(
+                    extractor, title=title, content=content
+                )
+            except (ExtractionTerminalDropError, ExtractionTerminalKeepError):
                 raise
-            except RetryableError as exc:
+            except ExtractionRecoverableError as exc:
                 last_exc = exc
                 logger.warning(
                     "re_extract_retry",

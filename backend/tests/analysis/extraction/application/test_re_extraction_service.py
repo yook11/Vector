@@ -6,11 +6,14 @@
 - ArticleExtraction 不在 (Article のみ) → ``skipped_ids``
 - 正常: 既存 extraction が UPDATE され、子 entity が差し替わる → ``success_ids``
 - dry_run=True: extractor は呼ばれるが DB は変更されない (rollback)
-- ``NonRetryableDropArticle`` (``AIProviderInputRejectedError``) → ``skipped_ids``
+- ``ExtractionTerminalDropError`` (ACL 詰め替え後の
+  ``AIProviderInputRejectedError``) → ``skipped_ids``
   (failed には入らない、通常 pipeline でも記事 DELETE 対象のカテゴリ)
-- ``NonRetryableKeepArticle`` (``AIProviderConfigurationError``) → ``failed_ids``
+- ``ExtractionTerminalKeepError`` (ACL 詰め替え後の
+  ``AIProviderConfigurationError``) → ``failed_ids``
   (1 回試行で即 failed、retry を消費しない)
-- ``RetryableError`` (``AIProviderNetworkError``) を retry 上限まで → ``failed_ids``
+- ``ExtractionRecoverableError`` (ACL 詰め替え後の ``AIProviderNetworkError``)
+  を retry 上限まで → ``failed_ids``
 - ``AIProviderNetworkError`` 1 回 → 成功 → ``success_ids``
   (retry すれば成功するパターン)
 - 親 ``ArticleExtraction.id`` は保持される (CASCADE 連鎖防止の構造保証)
@@ -299,11 +302,11 @@ async def test_configuration_error_fails_immediately_without_retry(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """``NonRetryableKeepArticle`` (``AIProviderConfigurationError``) は
-    1 回試行で即 failed。
+    """``ExtractionTerminalKeepError`` (ACL 詰め替え後の
+    ``AIProviderConfigurationError``) は 1 回試行で即 failed。
 
     retry しても解消しない種類のエラーなので ``max_retries`` を消費しない。
-    本番 task chain と同じ dispatch 軸 (marker base) に揃えた結果の挙動。
+    本番 task chain と同じ dispatch 軸 (Stage 3 marker) に揃えた結果の挙動。
     """
     article = await _make_article(
         db_session, sample_source, "https://example.com/config-fail"

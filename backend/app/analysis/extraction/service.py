@@ -19,11 +19,13 @@ from typing import assert_never
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.analysis.ai_provider_errors import AIProviderError
 from app.analysis.extraction.ai.base import BaseExtractor
 from app.analysis.extraction.ai.envelope import ExtractionCall
 from app.analysis.extraction.audit_repository import ExtractionAuditRepository
 from app.analysis.extraction.domain import Noise, Signal
 from app.analysis.extraction.domain.ready import ReadyForExtraction
+from app.analysis.extraction.errors import map_provider_to_extraction
 from app.analysis.extraction.repository import ExtractionRepository
 
 logger = structlog.get_logger(__name__)
@@ -49,18 +51,28 @@ class ExtractionService:
     ) -> int | None:
         """1 記事に対して事実抽出を実行する。
 
-        precondition は ``ReadyForExtraction`` で構造保証済。失敗は Layer 2
-        例外でそのまま raise する (Task 層が Layer 1 marker で dispatch)。
+        precondition は ``ReadyForExtraction`` で構造保証済。失敗は Stage 3
+        Layer 1 marker (``ExtractionRecoverableError`` /
+        ``ExtractionTerminalKeepError`` / ``ExtractionTerminalDropError``) と
+        ``ExtractionResponseInvalidError`` で raise する (Task 層が dispatch)。
+        provider 由来例外は本 boundary で ``map_provider_to_extraction`` により
+        Stage 3 marker に詰め替える (Anti-Corruption Layer)。
 
         Returns:
             signal 勝者の ``article_extractions.id``、noise 勝者と race 敗北は
             ``None`` (Task 層は ``None`` で Stage 4 chain を抑止)。
         """
-        # AI 呼び出しは session 外 (例外はそのまま伝搬、catch しない)
-        envelope = await extractor.extract(
-            title=ready.original_title,
-            content=ready.original_content,
-        )
+        # AI 呼び出しは session 外。provider error は Stage 3 marker に詰め替えて
+        # からそのまま伝搬する (ACL boundary)。Stage 3 specific (Layer 2-B) は
+        # extractor 内で既に Stage 3 marker subclass として raise されるため
+        # 詰め替え不要。
+        try:
+            envelope = await extractor.extract(
+                title=ready.original_title,
+                content=ready.original_content,
+            )
+        except AIProviderError as exc:
+            raise map_provider_to_extraction(exc) from exc
 
         async with self._session_factory() as session:
             match envelope:

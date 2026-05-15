@@ -1,9 +1,9 @@
 """Stage 3 の error handling policy を実行する application service。
 
-Layer 1 marker (``NonRetryableDropArticle`` / ``NonRetryableKeepArticle`` /
-``RetryableError`` / catch-all) を audit / DELETE / inline retry decision に
-対応づける**唯一の場所**。Task 層は taskiq retry のために reraise decision
-(``bool``) だけを解釈する。
+Stage 3 Layer 1 marker (``ExtractionTerminalDropError`` /
+``ExtractionTerminalKeepError`` / ``ExtractionRecoverableError`` / catch-all)
+を audit / DELETE / taskiq retry decision に対応づける**唯一の場所**。Task 層
+は taskiq retry のために reraise decision (``bool``) だけを解釈する。
 
 Stage 3 固有要件 (失敗時に記事削除する Drop 経路) を持つため、Stage 4 / Stage 5
 とは Handler を共有しない。Stage 4/5 の同型 Handler を導入する場合は別 PR。
@@ -17,10 +17,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.analysis.extraction.ai.base import BaseExtractor
 from app.analysis.extraction.audit_repository import ExtractionAuditRepository
 from app.analysis.extraction.domain.ready import ReadyForExtraction
-from app.observability.categories import (
-    NonRetryableDropArticle,
-    NonRetryableKeepArticle,
-    RetryableError,
+from app.analysis.extraction.errors import (
+    ExtractionRecoverableError,
+    ExtractionTerminalDropError,
+    ExtractionTerminalKeepError,
 )
 from app.observability.redact import redact_secrets
 from app.repositories.articles import ArticleRepository
@@ -34,8 +34,9 @@ class ExtractionFailureHandler:
     """Stage 3 の失敗分類に応じた後処理を実行する application service。
 
     Drop 経路は audit + article DELETE の 1 tx を、それ以外は best-effort
-    failure audit (DB 落ち時は log fallback) を実行する。INLINE_RETRY 判定は
-    本 class が握り、結果を ``bool`` (taskiq に raise すべきかどうか) で返す。
+    failure audit (DB 落ち時は log fallback) を実行する。recoverable failure は
+    taskiq retry に乗せる (``max_retries`` 上限後は cron 救済)、それ以外は即
+    return する。結果を ``bool`` (taskiq に raise すべきかどうか) で返す。
     """
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
@@ -56,15 +57,15 @@ class ExtractionFailureHandler:
             taskiq に raise すべきなら ``True``、return すべきなら ``False``。
         """
         match exc:
-            case NonRetryableDropArticle():
+            case ExtractionTerminalDropError():
                 await self._drop_article(ready, exc, extractor)
                 return False
-            case NonRetryableKeepArticle():
+            case ExtractionTerminalKeepError():
                 await self._audit_failure(ready, exc, extractor, attempt)
                 return False
-            case RetryableError():
+            case ExtractionRecoverableError():
                 await self._audit_failure(ready, exc, extractor, attempt)
-                return type(exc).INLINE_RETRY and not last_attempt
+                return not last_attempt
             case _:
                 await self._audit_failure(ready, exc, extractor, attempt)
                 return False
@@ -81,7 +82,7 @@ class ExtractionFailureHandler:
         Article 存在中にしか動かないため。FK は ``ondelete=SET NULL`` 済で
         DELETE 後も audit 行は残る。
         """
-        code = getattr(type(exc), "CODE", _DROP_FALLBACK_CODE)
+        code = getattr(exc, "code", None) or _DROP_FALLBACK_CODE
         async with self._session_factory() as session:
             await ExtractionAuditRepository(session).append_drop_article(
                 article_id=ready.article_id,

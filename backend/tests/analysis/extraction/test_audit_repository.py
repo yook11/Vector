@@ -5,11 +5,12 @@ audit row の shape SSoT が repository に集約されたことを検証する:
 - ``append_extracted`` / ``append_noise`` で
   ``category=success`` + ``code`` (caller 渡し) / ``outcome_code=code`` が記録
 - ``append_drop_article`` で
-  ``category=non_retryable_drop_article`` + ``code=type(exc).CODE``
-- ``append_failure`` で **exc 型による 4 dispatch** が動作:
-  - ``NonRetryableDropArticle`` → ``category=non_retryable_drop_article``
-  - ``NonRetryableKeepArticle`` → ``category=non_retryable_keep_article``
-  - ``RetryableError`` → ``category=retryable``
+  ``category=non_retryable_drop_article`` + ``code=exc.code`` (Stage 3 marker
+  の instance attr。ACL が provider ``CODE`` を引き継ぐ)
+- ``append_failure`` で **Stage 3 marker 型による dispatch** が動作:
+  - ``ExtractionTerminalDropError`` → ``category=non_retryable_drop_article``
+  - ``ExtractionTerminalKeepError`` → ``category=non_retryable_keep_article``
+  - ``ExtractionRecoverableError`` → ``category=retryable``
   - 想定外 ``RuntimeError`` → ``category=unknown`` / ``code=unexpected_error``
 - repository は ``commit`` を呼ばない (caller の tx 境界保持)
 """
@@ -35,7 +36,10 @@ from app.analysis.extraction.ai.gemini_spec import GEMINI_EXTRACTION_SPEC
 from app.analysis.extraction.audit_repository import ExtractionAuditRepository
 from app.analysis.extraction.domain import Noise, Signal
 from app.analysis.extraction.domain.ready import ReadyForExtraction
-from app.analysis.extraction.errors import ExtractionResponseInvalidError
+from app.analysis.extraction.errors import (
+    ExtractionResponseInvalidError,
+    map_provider_to_extraction,
+)
 from app.models.article import Article
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
@@ -185,17 +189,25 @@ async def test_append_drop_article_records_failure_with_drop_category(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """drop 経路で category=non_retryable_drop_article / code=type(exc).CODE が記録。"""
+    """drop 経路で category=non_retryable_drop_article / code=exc.code が記録。
+
+    本番の failure_handling は AIProviderError を ACL で Stage 3 marker に
+    詰め替えてから本 method を呼ぶため、テストも同じ流れを再現する。
+    """
     article = await _make_article(db_session, sample_source)
     article_id = article.id
-    exc = AIProviderOutputBlockedError("blocked by SAFETY")
+    raw_exc = AIProviderOutputBlockedError("blocked by SAFETY")
+    try:
+        raise map_provider_to_extraction(raw_exc) from raw_exc
+    except Exception as wrapped:  # noqa: BLE001
+        exc = wrapped
     extractor = _extractor_mock()
 
     async with session_factory() as session:
         await ExtractionAuditRepository(session).append_drop_article(
             article_id=article_id,
             original_content=article.original_content,
-            code=type(exc).CODE,
+            code=exc.code,
             exc=exc,
             extractor=extractor,
         )
@@ -207,10 +219,14 @@ async def test_append_drop_article_records_failure_with_drop_category(
     assert ev.category == "non_retryable_drop_article"
     assert ev.code == "ai_error_output_blocked"
     assert ev.error_class is not None
-    assert ev.error_class.endswith(".AIProviderOutputBlockedError")
+    assert ev.error_class.endswith(".ExtractionTerminalDropError")
     assert ev.payload["error_message"] is not None
     assert ev.payload["error_chain"]
-    assert ev.payload["error_chain"][0].endswith(".AIProviderOutputBlockedError")
+    # __cause__ chain に元 provider error も保持される
+    assert ev.payload["error_chain"][0].endswith(".ExtractionTerminalDropError")
+    assert any(
+        s.endswith(".AIProviderOutputBlockedError") for s in ev.payload["error_chain"]
+    )
     # PR2: 失敗 audit の ai_model / prompt_version は extractor 経由
     # (Gemini ClassVar hardcode を消した)
     assert ev.payload["ai_model"] == "test-extract-model"
@@ -222,22 +238,30 @@ async def test_append_drop_article_records_failure_with_drop_category(
 # ---------------------------------------------------------------------------
 
 
+def _wrap(raw: BaseException) -> BaseException:
+    """ACL で詰め替え + ``__cause__`` を保持する helper。"""
+    try:
+        raise map_provider_to_extraction(raw) from raw  # type: ignore[arg-type]
+    except BaseException as wrapped:  # noqa: BLE001
+        return wrapped
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("exc_factory", "expected_category", "expected_code"),
     [
         (
-            lambda: AIProviderInputRejectedError("ctx too long"),
+            lambda: _wrap(AIProviderInputRejectedError("ctx too long")),
             "non_retryable_drop_article",
             "ai_error_input_rejected",
         ),
         (
-            lambda: AIProviderConfigurationError("api key missing"),
+            lambda: _wrap(AIProviderConfigurationError("api key missing")),
             "non_retryable_keep_article",
             "ai_error_configuration",
         ),
         (
-            lambda: AIProviderNetworkError("conn reset"),
+            lambda: _wrap(AIProviderNetworkError("conn reset")),
             "retryable",
             "ai_error_network",
         ),

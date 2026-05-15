@@ -41,7 +41,8 @@ logger = structlog.get_logger(__name__)
 
 # Gemini が応答を返さなかった理由のうち、**入力内容そのもの** がプロバイダー
 # ポリシーに抵触したケース。再試行 / 別モデルでも通らないため記事 DELETE 対象
-# (AIProviderOutputBlockedError, NonRetryableDropArticle)。
+# (AIProviderOutputBlockedError → Stage 3 boundary で ExtractionTerminalDropError
+# に詰め替えられる)。
 _POLICY_BLOCKED_FINISH_REASONS: frozenset[str] = frozenset(
     {"SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII"}
 )
@@ -117,7 +118,8 @@ class GeminiExtractor(BaseExtractor):
         )
 
         # finish_reason が policy block 系なら Layer 2-A の OutputBlocked を raise
-        # (NonRetryableDropArticle、記事 DELETE 対象)
+        # (Stage 3 boundary で ExtractionTerminalDropError に詰め替えられ、記事
+        # DELETE 対象になる)
         finish_reason = _detect_finish_reason(response)
         if finish_reason in _POLICY_BLOCKED_FINISH_REASONS:
             raise AIProviderOutputBlockedError(f"blocked by policy: {finish_reason}")
@@ -125,7 +127,7 @@ class GeminiExtractor(BaseExtractor):
         parsed = response.parsed
         if not isinstance(parsed, GeminiExtractionResponse):
             # provider は応答したが Stage 3 schema として消化不可 (Layer 2-B、
-            # RetryableError、INLINE_RETRY=True で 1 回 retry 救済)
+            # ExtractionRecoverableError 派生、taskiq retry → cron 救済)
             raise ExtractionResponseInvalidError(
                 f"Gemini did not return GeminiExtractionResponse "
                 f"(got {type(parsed).__name__}, finish_reason={finish_reason})"

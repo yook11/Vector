@@ -14,11 +14,6 @@ from app.analysis.embedding.errors import (
     EmbeddingResponseInvalidError,
     EmbeddingTerminalSkipError,
 )
-from app.observability.categories import (
-    NonRetryableDropArticle,
-    NonRetryableKeepArticle,
-    RetryableError,
-)
 
 
 class TestEmbeddingRecoverableError:
@@ -89,25 +84,13 @@ class TestEmbeddingTerminalSkipError:
 
 
 class TestStage5MarkerHierarchy:
-    """Stage 5 marker の型階層 / foundation 非継承の検証。"""
+    """Stage 5 marker の型階層検証 (foundation marker は production から撤去済)。"""
 
     def test_recoverable_subclasses_embedding_error(self) -> None:
         assert issubclass(EmbeddingRecoverableError, EmbeddingError)
 
     def test_terminal_skip_subclasses_embedding_error(self) -> None:
         assert issubclass(EmbeddingTerminalSkipError, EmbeddingError)
-
-    def test_recoverable_does_not_inherit_foundation_markers(self) -> None:
-        # 原則 2: Stage 共通 marker は作らない。foundation marker (RetryableError 等)
-        # は Stage 3 のものなので、Stage 5 markers は継承しない (Stage 4 と同思想)。
-        assert not issubclass(EmbeddingRecoverableError, RetryableError)
-        assert not issubclass(EmbeddingRecoverableError, NonRetryableKeepArticle)
-        assert not issubclass(EmbeddingRecoverableError, NonRetryableDropArticle)
-
-    def test_terminal_skip_does_not_inherit_foundation_markers(self) -> None:
-        assert not issubclass(EmbeddingTerminalSkipError, RetryableError)
-        assert not issubclass(EmbeddingTerminalSkipError, NonRetryableKeepArticle)
-        assert not issubclass(EmbeddingTerminalSkipError, NonRetryableDropArticle)
 
     def test_two_markers_are_disjoint(self) -> None:
         # 2 marker の階層は独立 (片方が他方の subclass にならない)。

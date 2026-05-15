@@ -5,9 +5,8 @@ Stage 5 で raise されうる例外と、外部 BC (``AIProviderError``) を St
 ``assessment/errors.py`` を雛形にした構造で、section 構成も対称:
 
 - **Layer 1 marker**: Stage 5 task 層の **唯一の dispatch 軸**。Stage 5 で raise
-  されうる全例外がこの 2 種のどちらかを継承する。foundation marker
-  (``RetryableError`` / ``NonRetryableKeepArticle`` 等) は **継承しない**
-  (原則 2: Stage 共通 marker は作らない、Stage 4 と同思想)。
+  されうる全例外がこの 2 種のどちらかを継承する。Stage 共通 marker は **持たない**
+  (原則 2: Stage 共通 marker は作らない、Stage 3 / Stage 4 と同思想)。
 - **Layer 2-B (Stage 5 工程由来)**: embedder 内部の応答 schema 不整合
   (``EmbeddingVector`` VO の次元 ≠ 768 / NaN / 非有限 / 範囲外) など、provider
   例外でない Stage 5 specific failure。Layer 1 marker を直接継承し、

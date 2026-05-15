@@ -5,9 +5,8 @@ Stage 4 で raise されうる例外と、外部 BC (``AIProviderError``) を St
 section に対応する:
 
 - **Layer 1 marker**: Stage 4 task 層の **唯一の dispatch 軸**。Stage 4 で raise
-  されうる全例外がこの 2 種のどちらかを継承する。foundation marker
-  (``RetryableError`` / ``NonRetryableKeepArticle`` 等) は **継承しない**
-  (原則 2: Stage 共通 marker は作らない)。
+  されうる全例外がこの 2 種のどちらかを継承する。Stage 共通 marker は **持たない**
+  (原則 2: Stage 共通 marker は作らない、Stage 3 / Stage 5 と同思想)。
 - **Layer 2-B (Stage 4 工程由来)**: assessor 内部の schema 不整合 / catalog 不一致
   など、provider 例外でない Stage 4 specific failure。Layer 1 marker を直接継承し、
   ``provider_error=None`` で marker を再利用する。

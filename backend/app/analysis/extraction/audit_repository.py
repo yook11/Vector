@@ -35,16 +35,17 @@ from app.analysis.extraction.ai.envelope import ExtractionCall
 from app.analysis.extraction.audit import base_extraction_payload_fields
 from app.analysis.extraction.domain import Noise, Signal
 from app.analysis.extraction.domain.ready import ReadyForExtraction
+from app.analysis.extraction.errors import (
+    ExtractionRecoverableError,
+    ExtractionTerminalDropError,
+    ExtractionTerminalKeepError,
+)
 from app.models.article import Article
 from app.models.news_source import NewsSource
-from app.observability.categories import (
-    Layer1Category,
-    NonRetryableDropArticle,
-    NonRetryableKeepArticle,
-    RetryableError,
-)
+from app.observability.categories import Layer1Category
 from app.observability.domain.event import EventType, Stage
 from app.observability.domain.payloads import ExtractionPayload
+from app.observability.recording import _extract_error_chain
 from app.observability.redact import redact_secrets
 from app.observability.repository import PipelineEventRepository
 
@@ -129,12 +130,16 @@ class ExtractionAuditRepository:
         """``mark_article_unprocessable`` 内で article DELETE 直前に焼く audit。
 
         Service が同一 tx で DELETE と組み合わせる (本 class は commit しない)。
-        ``code`` は ``type(exc).CODE`` (Layer 2 SSoT)、``category`` は固定で
+        ``code`` は Stage 3 marker の ``code`` instance attr (Layer 2 SSoT、ACL が
+        provider ``CODE`` を引き継ぐ)、``category`` は固定で
         ``NON_RETRYABLE_DROP_ARTICLE``。
 
         失敗経路は envelope を持たない (AI 呼び出し前 or 中の失敗) ため
         ``ai_model`` / ``prompt_version`` は ``extractor`` の property
         (``model_name`` / ``prompt_version``) から埋める。
+
+        ``error_chain`` は ``_extract_error_chain`` で ``__cause__`` を辿り、ACL の
+        ``raise from exc`` で保持された元 ``AIProviderError`` まで記録する。
         """
         source_name = await self._resolve_source_name(article_id)
         payload = ExtractionPayload(
@@ -147,7 +152,7 @@ class ExtractionAuditRepository:
             # red-team chain γ-2: SDK exception message に key prefix /
             # Authorization header が混入する経路を redact してから永続化する。
             error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
-            error_chain=[_fqn(exc)],
+            error_chain=_extract_error_chain(exc),
         )
         await self._events.append(
             stage=Stage.EXTRACTION,
@@ -170,17 +175,20 @@ class ExtractionAuditRepository:
         attempt: int,
         extractor: BaseExtractor,
     ) -> None:
-        """NonRetryableKeepArticle / RetryableError / catch-all 経路の failure
-        audit を 1 行記録する。
+        """ExtractionTerminalKeepError / ExtractionRecoverableError / catch-all
+        経路の failure audit を 1 行記録する。
 
-        ``category`` / ``code`` は ``exc`` から自動導出 (Layer 1 marker
-        isinstance 分岐 + ``type(exc).CODE`` ClassVar 抽出)。Service と独立に
+        ``category`` / ``code`` は ``exc`` から自動導出 (Stage 3 marker
+        isinstance 分岐 + ``exc.code`` instance attr 抽出)。Service と独立に
         Task 層から呼ばれるため別 session (caller が ``tasks.py`` の task 関数
         末尾で開閉 + commit する; PR4 で helper 廃止、task 末尾に inline)。
 
         失敗経路は envelope を持たない (AI 呼び出し前 or 中の失敗) ため
         ``ai_model`` / ``prompt_version`` は ``extractor`` の property
         (``model_name`` / ``prompt_version``) から埋める。
+
+        ``error_chain`` は ``_extract_error_chain`` で ``__cause__`` を辿り、ACL の
+        ``raise from exc`` で保持された元 ``AIProviderError`` まで記録する。
         """
         source_name = await self._resolve_source_name(ready.article_id)
         payload = ExtractionPayload(
@@ -193,7 +201,7 @@ class ExtractionAuditRepository:
             # red-team chain γ-2: SDK exception message に key prefix /
             # Authorization header が混入する経路を redact してから永続化する。
             error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
-            error_chain=[_fqn(exc)],
+            error_chain=_extract_error_chain(exc),
         )
         category = self._category_of(exc)
         code = self._code_of(exc)
@@ -250,19 +258,23 @@ class ExtractionAuditRepository:
 
     @staticmethod
     def _category_of(exc: BaseException) -> Layer1Category:
-        """Layer 1 marker から DB ``category`` 値を導出する (spec §原則 3)。"""
-        if isinstance(exc, NonRetryableDropArticle):
+        """Stage 3 marker から DB ``category`` 値を導出する (spec §原則 3)。"""
+        if isinstance(exc, ExtractionTerminalDropError):
             return Layer1Category.NON_RETRYABLE_DROP_ARTICLE
-        if isinstance(exc, NonRetryableKeepArticle):
+        if isinstance(exc, ExtractionTerminalKeepError):
             return Layer1Category.NON_RETRYABLE_KEEP_ARTICLE
-        if isinstance(exc, RetryableError):
+        if isinstance(exc, ExtractionRecoverableError):
             return Layer1Category.RETRYABLE
         return Layer1Category.UNKNOWN
 
     @staticmethod
     def _code_of(exc: BaseException) -> str:
-        """Layer 2 ``CODE`` ClassVar を抽出する。未定義なら catch-all label。"""
-        code = getattr(type(exc), "CODE", None)
+        """Stage 3 marker の ``code`` instance attr を抽出する。
+
+        ACL が provider ``CODE`` を引き継ぐ + Stage 3 specific は ``code=...`` を
+        pin している。未定義なら catch-all label。
+        """
+        code = getattr(exc, "code", None)
         return code if isinstance(code, str) and code else "unexpected_error"
 
 

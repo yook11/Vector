@@ -189,12 +189,24 @@ class TestExtractContent:
 
     @pytest.mark.asyncio
     async def test_rate_limited_records_audit_and_returns(self) -> None:
-        """RateLimited は INLINE_RETRY=False、即 audit + return (PR3.5-c)。"""
+        """RateLimited は ExtractionRecoverableError に詰め替えられる経路。
+
+        本番経路 (Service.execute) で ACL ``map_provider_to_extraction`` により
+        Stage 3 marker に詰め替えられる。本テストは Service を mock しているため、
+        production と同じ詰め替え済 marker を side_effect として渡して
+        handler の挙動 (last_attempt → audit + return) を再現する。
+        """
+        from app.analysis.extraction.errors import map_provider_to_extraction
         from app.analysis.extraction.tasks import extract_content
 
         mock_ctx = _make_ctx(
-            extractor=_make_provider_fake(), retry_count=0, max_retries=1
+            extractor=_make_provider_fake(), retry_count=1, max_retries=1
         )
+        raw_exc = AIProviderRateLimitedError("429")
+        try:
+            raise map_provider_to_extraction(raw_exc) from raw_exc
+        except Exception as wrapped:  # noqa: BLE001
+            wrapped_exc = wrapped
 
         with (
             _patch_try_advance_from(_fixed_ready()),
@@ -203,17 +215,14 @@ class TestExtractContent:
                 "app.analysis.extraction.failure_handling.ExtractionAuditRepository"
             ) as mock_audit_cls,
         ):
-            mock_svc_cls.return_value.execute = AsyncMock(
-                side_effect=AIProviderRateLimitedError("429"),
-            )
+            mock_svc_cls.return_value.execute = AsyncMock(side_effect=wrapped_exc)
             mock_audit_cls.return_value.append_failure = AsyncMock()
             await extract_content(trigger=_trigger(), ctx=mock_ctx)
         mock_audit_cls.return_value.append_failure.assert_awaited_once()
-        # outcome_code 引数は廃止 (recording.py で内部導出)。exc が渡るのみ。
-        assert isinstance(
-            mock_audit_cls.return_value.append_failure.await_args.kwargs["exc"],
-            AIProviderRateLimitedError,
-        )
+        # 詰め替え済 Stage 3 marker が audit に渡る (元 provider は __cause__)。
+        audit_exc = mock_audit_cls.return_value.append_failure.await_args.kwargs["exc"]
+        assert audit_exc is wrapped_exc
+        assert isinstance(audit_exc.__cause__, AIProviderRateLimitedError)
 
     @pytest.mark.asyncio
     async def test_audit_failure_falls_back_to_log(self) -> None:

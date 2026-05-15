@@ -2,13 +2,13 @@
 
 検証する性質:
 - finish_reason が SAFETY/RECITATION/BLOCKLIST/PROHIBITED_CONTENT/SPII の
-  いずれかなら ``AIProviderOutputBlockedError`` (Layer 2-A、
-  NonRetryableDropArticle) を raise する
+  いずれかなら ``AIProviderOutputBlockedError`` (Layer 2-A) を raise する
+  (Stage 3 boundary で ``ExtractionTerminalDropError`` に詰め替えられる)
 - ``finish_reason=STOP`` (通常終了) で ``parsed`` が ExtractionResult なら
   ``ExtractionCall`` を返す
 - ``finish_reason=MAX_TOKENS`` のように policy block 系 **以外** で
   ``parsed`` が ExtractionResult でない場合は ``ExtractionResponseInvalidError``
-  (Layer 2-B、RetryableError)
+  (Layer 2-B、``ExtractionRecoverableError`` 派生)
 """
 
 from __future__ import annotations
@@ -130,4 +130,4 @@ async def test_max_tokens_without_parsed_raises_response_invalid() -> None:
     extractor = _make_extractor(response)
     with pytest.raises(ExtractionResponseInvalidError) as ei:
         await extractor._call_api("prompt")
-    assert ei.value.CODE == "extraction_response_invalid"
+    assert ei.value.code == "extraction_response_invalid"

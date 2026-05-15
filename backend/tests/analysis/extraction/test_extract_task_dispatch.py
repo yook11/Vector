@@ -161,7 +161,7 @@ async def test_keep_article_delegates_to_handler(exc_cls: type[Exception]) -> No
 
 
 # ---------------------------------------------------------------------------
-# RetryableError 経路 — Handler の reraise 戻り値で raise/return が決まる
+# Recoverable 経路 — Handler の reraise 戻り値で raise/return が決まる
 # ---------------------------------------------------------------------------
 
 
@@ -229,13 +229,13 @@ async def test_retryable_reraise_false_returns() -> None:
     ],
 )
 @pytest.mark.asyncio
-async def test_retryable_inline_false_delegates_to_handler(
+async def test_rate_limit_class_delegates_to_handler(
     exc_cls: type[Exception],
 ) -> None:
-    """INLINE_RETRY=False 系の RetryableError も Handler に委譲される。
+    """rate limit / quota 系 (Recoverable に詰め替えられる) も Handler に委譲。
 
-    INLINE_RETRY の解釈は Handler 内部の責務なので、本 task テストでは
-    Handler が呼ばれたことのみ確認する。
+    retry decision (taskiq retry に乗せるか) は Handler 内部の責務なので、本
+    task テストでは Handler が呼ばれたことのみ確認する。
     """
     from app.analysis.extraction.tasks import extract_content
 
@@ -256,13 +256,13 @@ async def test_retryable_inline_false_delegates_to_handler(
 
 
 # ---------------------------------------------------------------------------
-# catch-all — Layer 1 marker いずれにも該当しない例外も Handler に委譲
+# catch-all — Stage 3 marker いずれにも該当しない例外も Handler に委譲
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_unexpected_exception_delegates_to_handler() -> None:
-    """marker いずれにも該当しない exc も except Exception で Handler に渡る。"""
+    """Stage 3 marker 外の exc も except Exception で Handler に届く。"""
     from app.analysis.extraction.tasks import extract_content
 
     ctx = _make_ctx()

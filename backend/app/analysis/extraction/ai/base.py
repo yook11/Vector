@@ -9,7 +9,7 @@ import structlog
 from app.analysis.ai_provider_errors import AIProviderError
 from app.analysis.extraction.ai.envelope import ExtractionCall
 from app.analysis.extraction.domain import Noise, Signal
-from app.analysis.extraction.errors import ExtractionDomainError
+from app.analysis.extraction.errors import ExtractionError
 from app.analysis.rate_limit import RatePolicy
 
 logger = structlog.get_logger(__name__)
@@ -76,11 +76,14 @@ class BaseExtractor(abc.ABC):
             Generic envelope。
 
         Raises:
-            AIProviderError: provider 呼び出し由来の失敗 (Layer 2-A)。
-                Layer 1 marker (NonRetryableDropArticle / NonRetryableKeepArticle /
-                RetryableError) を多重継承しており Task 層で dispatch される。
-            ExtractionDomainError: Stage 3 工程由来の失敗 (Layer 2-B)。
-                ``ExtractionResponseInvalidError`` 等。
+            AIProviderError: provider 呼び出し由来の失敗 (Layer 2-A)。Stage 3
+                boundary (``ExtractionService.execute`` /
+                ``ReExtractionService._extract_once_mapped``) の ACL
+                ``map_provider_to_extraction`` で Stage 3 marker に詰め替えられ、
+                Task 層で dispatch される。
+            ExtractionError: Stage 3 工程由来の失敗 (Layer 2-B)。
+                ``ExtractionResponseInvalidError`` 等は extractor 内部で raise
+                され、既に Stage 3 Layer 1 marker subclass として伝搬する。
         """
         ...
 
@@ -94,7 +97,7 @@ class BaseExtractor(abc.ABC):
     @abc.abstractmethod
     def _translate_error(self, exc: Exception) -> Exception:
         """SDK 例外を Layer 2-A (``AIProviderError``) または Layer 2-B
-        (``ExtractionDomainError``) に分類する。
+        (``ExtractionError``) に分類する。
 
         SDK 例外がいずれの分類にも当てはまらない場合は **生 Exception を
         そのまま return** する (``return exc``)。``_call_once`` 側が
@@ -119,7 +122,7 @@ class BaseExtractor(abc.ABC):
             envelope = await self._call_api(prompt)
             logger.info("extractor_api_success", model=self.model_name)
             return envelope
-        except (AIProviderError, ExtractionDomainError):
+        except (AIProviderError, ExtractionError):
             # 既に Layer 2 に翻訳済 (_call_api 内で raise された)
             raise
         except Exception as exc:

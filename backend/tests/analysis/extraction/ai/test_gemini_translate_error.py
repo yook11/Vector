@@ -79,7 +79,7 @@ def test_validation_error_maps_to_response_invalid() -> None:
     except ValidationError as ve:
         translated = _extractor()._translate_error(ve)
         assert isinstance(translated, ExtractionResponseInvalidError)
-        assert translated.CODE == "extraction_response_invalid"
+        assert translated.code == "extraction_response_invalid"
 
 
 # ---------------------------------------------------------------------------
