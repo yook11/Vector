@@ -19,9 +19,27 @@ class ExternalFetchError(Exception):
     本クラスは origin error の識別 marker。Stage 1 / Stage 2 の retry 判断や
     terminal 判断はここでは持たず、各 Stage 側の mapper / marker で解釈する。
     具体 subclass は ``CODE`` を必ず override する。
+
+    ``__str__`` は constructor で明示 message が渡されればそれを返し、空文字なら
+    ``_default_message()`` を返す。多くの subclass が ``message: str = ""`` 既定を
+    持つため、wrap 経路 (``SourceFetchError(str(exc), code=exc.CODE)``) の監査 /
+    ログが空文字にならないことを構造的に保証する (additive 非破壊: 明示 message を
+    渡す既存 raise の挙動は不変)。
     """
 
     CODE: ClassVar[str]
+
+    def __str__(self) -> str:
+        explicit = super().__str__()
+        return explicit if explicit else self._default_message()
+
+    def _default_message(self) -> str:
+        """constructor message が空のときの合成既定 message。
+
+        base は ``CODE`` のみ。``status_code`` / ``reason`` 等の origin metadata を
+        持つ subclass は本 method を override してそれらを含める。
+        """
+        return self.CODE
 
 
 AccessDeniedReason = Literal["unauthorized", "forbidden"]
@@ -57,6 +75,9 @@ class FetchAccessDeniedError(ExternalFetchError):
         self.status_code = status_code
         self.reason = reason
 
+    def _default_message(self) -> str:
+        return f"{self.CODE}: HTTP {self.status_code} ({self.reason})"
+
 
 class FetchLegalBlockError(ExternalFetchError):
     """法的理由または公共政策上の理由により取得できなかった。
@@ -69,6 +90,9 @@ class FetchLegalBlockError(ExternalFetchError):
     def __init__(self, message: str = "", *, status_code: int = 451) -> None:
         super().__init__(message)
         self.status_code = status_code
+
+    def _default_message(self) -> str:
+        return f"{self.CODE}: HTTP {self.status_code}"
 
 
 class FetchResourceNotFoundError(ExternalFetchError):
@@ -91,6 +115,9 @@ class FetchResourceNotFoundError(ExternalFetchError):
         self.status_code = status_code
         self.reason = reason
 
+    def _default_message(self) -> str:
+        return f"{self.CODE}: HTTP {self.status_code} ({self.reason})"
+
 
 class FetchRateLimitedError(ExternalFetchError):
     """外部サーバから rate limit を通知された。
@@ -111,6 +138,14 @@ class FetchRateLimitedError(ExternalFetchError):
         super().__init__(message)
         self.status_code = status_code
         self.retry_after_seconds = retry_after_seconds
+
+    def _default_message(self) -> str:
+        if self.retry_after_seconds is not None:
+            return (
+                f"{self.CODE}: HTTP {self.status_code} "
+                f"retry_after={self.retry_after_seconds}s"
+            )
+        return f"{self.CODE}: HTTP {self.status_code}"
 
 
 class FetchOriginServerError(ExternalFetchError):
@@ -136,6 +171,12 @@ class FetchOriginServerError(ExternalFetchError):
         self.reason = reason
         self.retry_after_seconds = retry_after_seconds
 
+    def _default_message(self) -> str:
+        base = f"{self.CODE}: HTTP {self.status_code} ({self.reason})"
+        if self.retry_after_seconds is not None:
+            return f"{base} retry_after={self.retry_after_seconds}s"
+        return base
+
 
 class FetchGatewayError(ExternalFetchError):
     """gateway / proxy 経路で外部取得に失敗した。
@@ -150,6 +191,9 @@ class FetchGatewayError(ExternalFetchError):
         super().__init__(message)
         self.status_code = status_code
 
+    def _default_message(self) -> str:
+        return f"{self.CODE}: HTTP {self.status_code}"
+
 
 class FetchRequestTimeoutError(ExternalFetchError):
     """HTTP status として request timeout が返された。
@@ -163,6 +207,9 @@ class FetchRequestTimeoutError(ExternalFetchError):
     def __init__(self, message: str = "", *, status_code: int = 408) -> None:
         super().__init__(message)
         self.status_code = status_code
+
+    def _default_message(self) -> str:
+        return f"{self.CODE}: HTTP {self.status_code}"
 
 
 class FetchRetryableStatusError(ExternalFetchError):
@@ -184,6 +231,9 @@ class FetchRetryableStatusError(ExternalFetchError):
         super().__init__(message)
         self.status_code = status_code
         self.reason = reason
+
+    def _default_message(self) -> str:
+        return f"{self.CODE}: HTTP {self.status_code} ({self.reason})"
 
 
 class FetchUnexpectedStatusError(ExternalFetchError):
@@ -284,6 +334,11 @@ class FetchRedirectLoopError(ExternalFetchError):
         super().__init__(message)
         self.redirect_count = redirect_count
 
+    def _default_message(self) -> str:
+        if self.redirect_count is not None:
+            return f"{self.CODE}: redirect_count={self.redirect_count}"
+        return self.CODE
+
 
 # ---------------------------------------------------------------------------
 # Payload / content 起因
@@ -306,6 +361,11 @@ class FetchResponseTooLargeError(ExternalFetchError):
         self.actual_bytes = actual_bytes
         self.limit_bytes = limit_bytes
 
+    def _default_message(self) -> str:
+        if self.actual_bytes is not None and self.limit_bytes is not None:
+            return f"{self.CODE}: actual={self.actual_bytes}B limit={self.limit_bytes}B"
+        return self.CODE
+
 
 class FetchContentTypeMismatchError(ExternalFetchError):
     """取得できた content type が期待する形式ではなかった。
@@ -325,6 +385,12 @@ class FetchContentTypeMismatchError(ExternalFetchError):
         super().__init__(message)
         self.expected_content_type = expected_content_type
         self.detected_content_type = detected_content_type
+
+    def _default_message(self) -> str:
+        return (
+            f"{self.CODE}: expected={self.expected_content_type} "
+            f"detected={self.detected_content_type}"
+        )
 
 
 class FetchParseError(ExternalFetchError):
