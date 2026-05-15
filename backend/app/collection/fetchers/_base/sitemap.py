@@ -35,7 +35,7 @@ from app.collection.incomplete_article.domain.incomplete_article import (
 )
 from app.shared.security.safe_http import make_safe_async_client
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
-from app.shared.value_objects.safe_url import SafeUrl
+from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 
 logger = structlog.get_logger(__name__)
 
@@ -159,7 +159,7 @@ class BaseSitemapFetcher:
         ``published_at`` を出さないケースの最後の砦にする。
         """
         try:
-            source_url = SafeUrl(loc)
+            source_url = CanonicalArticleUrl(loc)
         except ValueError:
             return None
 

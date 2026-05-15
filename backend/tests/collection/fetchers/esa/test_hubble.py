@@ -11,6 +11,7 @@ from pathlib import Path
 import feedparser
 
 from app.collection.fetchers.esa.hubble import ESAHubbleFetcher
+from app.collection.fetchers.tools.rss_parser import normalize_entry
 from tests.collection.fetchers._invariant import (
     Passport,
     assert_at_least_one_passport,
@@ -27,7 +28,7 @@ def _passports() -> list[Passport]:
     feed = feedparser.parse(_FIXTURE.read_bytes())
     items: list[Passport] = []
     for e in feed.entries:
-        converted = fetcher._convert_entry(e, 1)
+        converted = fetcher._convert_entry(normalize_entry(e), 1)
         if converted is not None:
             items.append(converted)
     return items

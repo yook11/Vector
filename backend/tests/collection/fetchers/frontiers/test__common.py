@@ -1,4 +1,4 @@
-"""``BaseFrontiersFetcher`` (Pattern R) の振る舞い不変条件テスト (Phase 3 PR 3-c-3)。
+"""``BaseFrontiersFetcher`` (Pattern R) の振る舞い不変条件テスト。
 
 base 自体は dummy ClassVar を埋めた concrete subclass で検証する。
 """
@@ -12,6 +12,7 @@ from typing import Any
 import feedparser
 
 from app.collection.fetchers.frontiers._common import BaseFrontiersFetcher
+from app.collection.fetchers.tools.rss_parser import RssEntry, normalize_entry
 from tests.collection.fetchers._invariant import (
     Passport,
     assert_at_least_one_passport,
@@ -29,7 +30,7 @@ class _ConcreteFrontiersFetcher(BaseFrontiersFetcher):
     JOURNAL_NAME = "Frontiers in Test Journal"
 
 
-def _entry(**overrides: Any) -> dict[str, Any]:
+def _entry(**overrides: Any) -> RssEntry:
     base: dict[str, Any] = {
         "title": "A study on neural architecture search for time series",
         "link": "https://www.frontiersin.org/articles/10.3389/frai.2026.1234567",
@@ -43,7 +44,7 @@ def _entry(**overrides: Any) -> dict[str, Any]:
         "author": "Jane Researcher",
     }
     base.update(overrides)
-    return base
+    return normalize_entry(base)
 
 
 def _passports_from_fixture() -> list[Passport]:
@@ -51,7 +52,7 @@ def _passports_from_fixture() -> list[Passport]:
     feed = feedparser.parse(_FIXTURE_AI.read_bytes())
     items: list[Passport] = []
     for e in feed.entries:
-        converted = fetcher._convert_entry(e, 1)
+        converted = fetcher._convert_entry(normalize_entry(e), 1)
         if converted is not None:
             items.append(converted)
     return items
@@ -74,9 +75,18 @@ def test_short_body_dropped() -> None:
 def test_missing_pubdate_dropped() -> None:
     """Pattern R: published_at は HTML 補完がないため必須。"""
     fetcher = _ConcreteFrontiersFetcher()
-    entry = _entry()
-    del entry["published_parsed"]
-    assert fetcher._convert_entry(entry, 1) is None
+    entry_dict: dict[str, Any] = {
+        "title": "A study on neural architecture search for time series",
+        "link": "https://www.frontiersin.org/articles/10.3389/frai.2026.1234567",
+        "id": "https://www.frontiersin.org/articles/10.3389/frai.2026.1234567",
+        "summary": (
+            "This is a long enough abstract describing our novel approach "
+            "to neural architecture search for time series forecasting. "
+            "We propose a method that achieves state-of-the-art performance."
+        ),
+        "author": "Jane Researcher",
+    }
+    assert fetcher._convert_entry(normalize_entry(entry_dict), 1) is None
 
 
 def test_invalid_link_dropped() -> None:

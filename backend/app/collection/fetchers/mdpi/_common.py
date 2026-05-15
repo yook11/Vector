@@ -40,7 +40,7 @@ from app.collection.article.domain.value_objects import PublishedAt
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
 from app.shared.security.safe_http import make_safe_async_client
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
-from app.shared.value_objects.safe_url import SafeUrl
+from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 
 logger = structlog.get_logger(__name__)
 
@@ -228,7 +228,7 @@ class BaseMDPICrossrefFetcher:
             return None
 
         try:
-            source_url = SafeUrl(f"https://doi.org/{doi}")
+            source_url = CanonicalArticleUrl(f"https://doi.org/{doi}")
         except ValueError:
             return None
 

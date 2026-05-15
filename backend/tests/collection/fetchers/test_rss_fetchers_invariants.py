@@ -51,6 +51,7 @@ from app.collection.fetchers.spaceflight_now import SpaceflightNowFetcher
 from app.collection.fetchers.spacenews import SpaceNewsFetcher
 from app.collection.fetchers.techcrunch import TechCrunchFetcher
 from app.collection.fetchers.the_register import TheRegisterFetcher
+from app.collection.fetchers.tools.rss_parser import normalize_entry
 from app.collection.fetchers.venturebeat import VentureBeatFetcher
 from app.collection.incomplete_article.domain.incomplete_article import (
     IncompleteArticle,
@@ -106,8 +107,8 @@ def passports(request: pytest.FixtureRequest) -> list[Passport]:
     feed = feedparser.parse((_FIXTURES_DIR / fixture_name).read_bytes())
     fetcher = cls()
     items: list[Passport] = []
-    for entry in feed.entries:
-        converted = fetcher._convert_entry(entry, 1)
+    for raw in feed.entries:
+        converted = fetcher._convert_entry(normalize_entry(raw), 1)
         if converted is not None:
             assert isinstance(converted, ReadyForArticle | IncompleteArticle)
             items.append(converted)

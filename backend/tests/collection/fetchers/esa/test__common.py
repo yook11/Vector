@@ -1,4 +1,4 @@
-"""``BaseDjangoplicityFetcher`` の振る舞い不変条件テスト (Phase 3 PR 3-b)。
+"""``BaseDjangoplicityFetcher`` の振る舞い不変条件テスト。
 
 base 自体はインスタンス化しないため、最小 ClassVar を持った dummy subclass
 で振る舞いを検証する。
@@ -10,6 +10,7 @@ import time
 from typing import Any, ClassVar
 
 from app.collection.fetchers.esa._common import BaseDjangoplicityFetcher
+from app.collection.fetchers.tools.rss_parser import RssEntry, normalize_entry
 from app.collection.incomplete_article.domain.incomplete_article import (
     IncompleteArticle,
 )
@@ -25,7 +26,7 @@ class _DummyFetcher(BaseDjangoplicityFetcher):
     ENDPOINT_URL: ClassVar[str] = "https://dummy.example.com/feed/"
 
 
-def _entry(**overrides: Any) -> dict[str, Any]:
+def _entry(**overrides: Any) -> RssEntry:
     base: dict[str, Any] = {
         "title": "Photo Release: Dummy Title",
         "link": "https://dummy.example.com/news/abc/",
@@ -33,7 +34,7 @@ def _entry(**overrides: Any) -> dict[str, Any]:
         "published_parsed": time.struct_time((2026, 4, 20, 16, 0, 0, 0, 0, 0)),
     }
     base.update(overrides)
-    return base
+    return normalize_entry(base)
 
 
 def _passports() -> list[Passport]:
@@ -63,8 +64,11 @@ def test_invalid_link_dropped() -> None:
 def test_missing_pubdate_does_not_block_pattern_h() -> None:
     """Pattern H: published_at は HTML 抽出に委ねる (hint=None でも passport)。"""
     fetcher = _DummyFetcher()
-    entry = _entry()
-    del entry["published_parsed"]
-    converted = fetcher._convert_entry(entry, 1)
+    entry_dict: dict[str, Any] = {
+        "title": "Photo Release: Dummy Title",
+        "link": "https://dummy.example.com/news/abc/",
+        "id": "https://dummy.example.com/news/abc/",
+    }
+    converted = fetcher._convert_entry(normalize_entry(entry_dict), 1)
     assert isinstance(converted, IncompleteArticle)
     assert converted.published_at_hint is None

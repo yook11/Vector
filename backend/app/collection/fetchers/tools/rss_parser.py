@@ -1,46 +1,75 @@
-"""RSS フィード取得・解析の道具 — 旧 ``BaseRssFetcher`` のロジックをコピー新設。
+"""RSS / Atom / RDF feed の取得 + 正規化に専念する L2 共通道具。
 
-collection-acquisition-redesign Phase 0c。条件付き GET (ETag / Last-Modified)
-+ feedparser パースの責務だけを担い、エントリ変換 (旧 ``convert_entry``) は
-各 Fetcher 側に委ねる。
+per-source Fetcher (L3) は ``RssEntry`` だけを受け取り、source 固有の翻訳
+ルール (body picker / footer 除去 / URL 補正 / tag filter 等) に専念する。
+HTTP 取得・SSRF guard・feedparser 呼び出し・error 翻訳・title plain text
+正規化はすべて本モジュールが構造的に担う。
 
-旧 ``BaseRssFetcher`` (``app/collection/ingestion/fetchers/rss/base.py``) は
-Phase 2a まで温存し物理削除しない (atomic 切替時に同時に消す)。本モジュールは
-意図的なロジックコピーであり、運用窓中の二重管理コストは Phase 2a 完了まで
-受け入れる (`spec collection-acquisition-redesign-plan.md §PR-0c`).
+設計:
+
+- ``RssParser`` は無状態 (HTTP cache を持たない)。``fetch(...)`` 1 発で
+  HTTP GET → feedparser → ``list[RssEntry]`` まで完結する。
+- ``make_safe_async_client`` は ``fetch`` 内部で ``async with`` するため、
+  外部注入を許さない (SSRF guard 抜けの構造的閉塞、memory:
+  ``feedback_structural_guarantee``)。
+- ``parse_mode`` を ``"text"`` / ``"bytes"`` で切り替える。Shift_JIS など
+  XML 宣言で encoding を持つ feed は ``bytes`` を選び、feedparser に sniff
+  を委ねる。
+- ``RssEntry.title`` は plain text 化済 (HTML tag 除去 + entity decode +
+  空白圧縮)。``[:500]`` の DB 制約由来 trim は per-source 責務。
+- body 系 (``summary`` / ``content_encoded``) は raw HTML のまま返す。body
+  picker / footer 除去等は per-source 固有の HTML 操作のため。
+- ``raw_published`` / ``raw_updated`` は元 ``<pubDate>`` / ``<updated>`` 文字列。
+  FierceBiotech のような非 RFC822 strptime fallback に使う。
+- ``tags`` は ``<category>`` 抽出済 tuple。Meta AI の AI tag filter 用。
+
+Error 翻訳:
+
+- HTTP 403 / 404 / 410 / 451 → ``PermanentFetchError``
+- HTTP その他 4xx / 5xx → ``TemporaryFetchError``
+- ``httpx.RequestError`` → ``TemporaryFetchError``
+- ``HostBlockedError`` → ``PermanentFetchError``
+- ``HostResolutionError`` → ``TemporaryFetchError``
+- bozo + entries 空 → ``PermanentFetchError``
 """
 
 from __future__ import annotations
 
 import asyncio
+import html
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from time import struct_time
+from typing import Any, Literal
 
 import feedparser
 import httpx
 import structlog
 
 from app.collection.errors import PermanentFetchError, TemporaryFetchError
-from app.collection.fetchers.http_cache import (
-    get_http_cache,
-    set_http_cache,
-)
-from app.models.news_source import NewsSource
-
-HTTP_TIMEOUT = 30.0
+from app.shared.security.safe_http import make_safe_async_client
+from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 
 logger = structlog.get_logger(__name__)
+
+ParseMode = Literal["text", "bytes"]
+
+_DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (compatible; Vector/1.0; +https://github.com/yook11/Vector)"
+)
+_DEFAULT_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
+
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+_WHITESPACE_RE = re.compile(r"\s+")
 
 
 @dataclass(frozen=True, slots=True)
 class RssEntry:
-    """正規化された RSS エントリ。
+    """正規化された RSS / Atom / RDF entry。
 
-    feedparser の dict 表現を per-source Fetcher が触らずに済むよう、必要な
-    フィールドだけを取り出した surface を提供する。``content_encoded`` は
-    VentureBeat のように RSS 本文 (``<content:encoded>``) を直接利用する
-    ソース向けに拾い上げる。
+    title は plain text 化済。body 系は raw HTML を保持する (per-source の
+    body picker / footer 除去等が L3 で必要なため)。
     """
 
     link: str
@@ -49,113 +78,180 @@ class RssEntry:
     published: datetime | None
     summary: str | None
     content_encoded: str | None
+    tags: tuple[str, ...]
+    raw_published: str | None
+    raw_updated: str | None
+
+
+def _strip_html_to_plain(s: str) -> str:
+    """HTML tag 除去 + entity decode + 空白圧縮。title 正規化用。"""
+    if not s:
+        return ""
+    return _WHITESPACE_RE.sub(" ", html.unescape(_HTML_TAG_RE.sub(" ", s))).strip()
 
 
 def _to_utc(parsed: struct_time | None) -> datetime | None:
-    """feedparser の ``*_parsed`` (struct_time, GMT) を UTC datetime に変換する。"""
+    """feedparser の ``*_parsed`` (GMT struct_time) を UTC datetime に変換。"""
     if parsed is None:
         return None
-    return datetime(*parsed[:6], tzinfo=UTC)
-
-
-def _extract_published(entry: dict) -> datetime | None:
-    """``published_parsed`` を優先、無ければ ``updated_parsed`` にフォールバック。"""
-    parsed = entry.get("published_parsed") or entry.get("updated_parsed")
-    return _to_utc(parsed)
-
-
-def _extract_content_encoded(entry: dict) -> str | None:
-    """``<content:encoded>`` を取り出す。
-
-    feedparser は ``entry.content`` (list of dict) にマップする。
-    """
-    content = entry.get("content")
-    if not content:
+    try:
+        return datetime(*parsed[:6], tzinfo=UTC)
+    except (TypeError, ValueError):
         return None
-    # content は dict の list (各 dict は value/type/language を持つ)
+
+
+def _extract_content_encoded(entry: dict[str, Any]) -> str | None:
+    """``<content:encoded>`` (Atom ``<content>``) の最初の ``value`` を返す。"""
+    content = entry.get("content")
+    if not isinstance(content, list) or not content:
+        return None
     for item in content:
-        value = item.get("value") if isinstance(item, dict) else None
-        if value:
+        if not isinstance(item, dict):
+            continue
+        value = item.get("value")
+        if isinstance(value, str) and value:
             return value
     return None
 
 
-def _normalize_entry(entry: dict) -> RssEntry:
-    raw_link = entry.get("link") or ""
+def _extract_tags(entry: dict[str, Any]) -> tuple[str, ...]:
+    """``<category>`` (feedparser ``tags``) の ``term`` を tuple で返す。
+
+    feedparser は ``entry.tags`` を ``[{term, scheme, label}, ...]`` 形式に
+    マップする。``term`` が文字列のものだけを採用する。
+    """
+    tags = entry.get("tags")
+    if not isinstance(tags, list):
+        return ()
+    result: list[str] = []
+    for tag in tags:
+        if not isinstance(tag, dict):
+            continue
+        term = tag.get("term")
+        if isinstance(term, str) and term:
+            result.append(term)
+    return tuple(result)
+
+
+def normalize_entry(entry: dict[str, Any]) -> RssEntry:
+    """feedparser dict を ``RssEntry`` に正規化する。
+
+    本番経路 (``RssParser.fetch``) とテスト経路 (``test_rss_fetchers_invariants``)
+    で同一ロジックを共有するため public export している。
+    """
+    raw_link = entry.get("link", "") or ""
+    raw_title = entry.get("title", "") or ""
+    plain_title = _strip_html_to_plain(raw_title)
+
     raw_guid = entry.get("id") or entry.get("guid")
+    guid: str | None
+    if isinstance(raw_guid, str) and raw_guid:
+        guid = raw_guid[:2048]
+    else:
+        guid = None
+
+    published = _to_utc(entry.get("published_parsed") or entry.get("updated_parsed"))
+
+    summary_value = entry.get("summary")
+    summary = (
+        summary_value if isinstance(summary_value, str) and summary_value else None
+    )
+
+    raw_published_value = entry.get("published")
+    raw_published = (
+        raw_published_value
+        if isinstance(raw_published_value, str) and raw_published_value
+        else None
+    )
+    raw_updated_value = entry.get("updated")
+    raw_updated = (
+        raw_updated_value
+        if isinstance(raw_updated_value, str) and raw_updated_value
+        else None
+    )
+
     return RssEntry(
         link=raw_link,
-        title=entry.get("title", ""),
-        guid=raw_guid[:2048] if raw_guid else None,
-        published=_extract_published(entry),
-        summary=entry.get("summary") or None,
+        title=plain_title,
+        guid=guid,
+        published=published,
+        summary=summary,
         content_encoded=_extract_content_encoded(entry),
+        tags=_extract_tags(entry),
+        raw_published=raw_published,
+        raw_updated=raw_updated,
     )
 
 
 class RssParser:
-    """RSS フィードの取得 + パースに専念する道具。
+    """L2 共通道具: HTTP + feedparser parse + 正規化に専念する。
 
-    1 ソース 1 フィードの前提で ``fetch_and_parse(source)`` を呼ぶと、条件付き
-    GET → feedparser → ``RssEntry`` list の変換まで一気通貫で行う。HTTP cache
-    (Redis) の読み書きは ``http_cache.py`` ヘルパに委譲する (旧 BaseRssFetcher
-    と同じ Redis キーを共有するため、Phase 2a の atomic 切替前後で cache が
-    引き継がれる)。
-
-    Raises:
-        PermanentFetchError: 403 / 404 / 410 / 451、フィードのパース失敗。
-        TemporaryFetchError: 429 / 5xx / タイムアウト / ネットワークエラー。
+    ``NewsSource`` を知らない。``endpoint_url`` / ``source_name`` を引数で受け、
+    SSRF guard 入り client を自前で組み立てる (外部注入不可 = 構造保証)。
+    無状態のため Fetcher が 1 個保持しておけば十分。
     """
 
-    def __init__(self, http_client: httpx.AsyncClient) -> None:
-        self._http_client = http_client
+    async def fetch(
+        self,
+        *,
+        endpoint_url: str,
+        source_name: str,
+        parse_mode: ParseMode = "text",
+        user_agent: str = _DEFAULT_USER_AGENT,
+        timeout: httpx.Timeout = _DEFAULT_TIMEOUT,
+    ) -> list[RssEntry]:
+        """HTTP GET → feedparser → ``list[RssEntry]`` まで完結する。
 
-    async def fetch_and_parse(self, source: NewsSource) -> list[RssEntry]:
-        """ソースの RSS を取得・パースして ``RssEntry`` のリストを返す。
-
-        ``304 Not Modified`` のときは空リスト (新着なし)。フィード自体は到達
-        できたがエントリが 1 件もない場合 (例: bozo + entries 空) は
-        ``PermanentFetchError`` を raise する (旧 ``BaseRssFetcher`` と同じ判定)。
+        Raises:
+            PermanentFetchError: 403 / 404 / 410 / 451 / SSRF block / bozo +
+                entries 空。
+            TemporaryFetchError: 他 HTTP error / RequestError / DNS 解決失敗。
         """
-        cached_etag, cached_last_modified = await get_http_cache(source.id)
-
-        headers: dict[str, str] = {}
-        if cached_etag:
-            headers["If-None-Match"] = cached_etag
-        if cached_last_modified:
-            headers["If-Modified-Since"] = cached_last_modified
-
-        try:
-            response = await self._http_client.get(
-                str(source.endpoint_url), headers=headers, timeout=HTTP_TIMEOUT
-            )
-            if response.status_code == 304:
-                logger.info("feed_not_modified", source=source.name)
-                return []
-            response.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            status = e.response.status_code
-            logger.error("feed_http_error", source=source.name, status=status)
-            if status in (403, 404, 410, 451):
-                raise PermanentFetchError(f"HTTP {status}: {source.name}") from e
-            raise TemporaryFetchError(f"HTTP {status}: {source.name}") from e
-        except httpx.RequestError as e:
-            logger.error("feed_request_error", source=source.name, error=str(e))
-            raise TemporaryFetchError(f"request error: {source.name}: {e}") from e
-
-        etag = response.headers.get("ETag")
-        last_modified = response.headers.get("Last-Modified")
-        await set_http_cache(source.id, etag, last_modified)
-
-        feed = await asyncio.to_thread(feedparser.parse, response.text)
+        raw = await self._fetch_raw(
+            endpoint_url=endpoint_url,
+            source_name=source_name,
+            parse_mode=parse_mode,
+            user_agent=user_agent,
+            timeout=timeout,
+        )
+        feed = await asyncio.to_thread(feedparser.parse, raw)
         if feed.bozo and not feed.entries:
             logger.warning(
-                "feed_parse_error",
-                source=source.name,
+                "rss_feed_parse_error",
+                source=source_name,
                 error=str(feed.bozo_exception),
             )
             raise PermanentFetchError(
-                f"feed parse error: {source.name}: {feed.bozo_exception}"
+                f"feed parse error: {source_name}: {feed.bozo_exception}"
             )
+        return [normalize_entry(entry) for entry in feed.entries]
 
-        return [_normalize_entry(entry) for entry in feed.entries]
+    async def _fetch_raw(
+        self,
+        *,
+        endpoint_url: str,
+        source_name: str,
+        parse_mode: ParseMode,
+        user_agent: str,
+        timeout: httpx.Timeout,
+    ) -> str | bytes:
+        async with make_safe_async_client(
+            headers={"User-Agent": user_agent},
+            verify=True,
+            timeout=timeout,
+        ) as client:
+            try:
+                response = await client.get(endpoint_url)
+                response.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                status = e.response.status_code
+                if status in (403, 404, 410, 451):
+                    raise PermanentFetchError(f"HTTP {status}: {source_name}") from e
+                raise TemporaryFetchError(f"HTTP {status}: {source_name}") from e
+            except httpx.RequestError as e:
+                raise TemporaryFetchError(f"request error: {source_name}: {e}") from e
+            except HostBlockedError as e:
+                raise PermanentFetchError(str(e)) from e
+            except HostResolutionError as e:
+                raise TemporaryFetchError(str(e)) from e
+            return response.content if parse_mode == "bytes" else response.text
