@@ -9,12 +9,10 @@ from __future__ import annotations
 from sqlalchemy.orm import DeclarativeBase
 from sqlmodel import SQLModel
 
-from app.analysis.domain.value_objects.entity import EntityName
 from app.domain.category import CategoryName, CategorySlug
 from app.models.types import (
     CategoryNameType,
     CategorySlugType,
-    EntityNameType,
     SafeUrlType,
     SourceNameType,
 )
@@ -32,5 +30,4 @@ class Base(DeclarativeBase):
         CategoryName: CategoryNameType,
         SafeUrl: SafeUrlType,
         SourceName: SourceNameType,
-        EntityName: EntityNameType,
     }

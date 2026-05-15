@@ -28,9 +28,9 @@ from typing import Final
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from app.analysis.assessment.domain.result import MentionType
-from app.analysis.domain.value_objects.entity import EntityName
 from app.domain.category import CategoryName, CategorySlug
 from app.insights.snapshot.config import MIN_CURRENT, SMOOTHING
+from app.insights.snapshot.domain.mention_name import MentionName
 
 # 集約サイズの構造的上限。生成側の truncate 値 (snapshot.py の `[:N]`) と
 # Field(max_length=N) の SSoT を domain 側に集約する。
@@ -60,7 +60,7 @@ class EntityTrend(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    name: EntityName
+    name: MentionName
     type: MentionType
     current_count: int = Field(ge=MIN_CURRENT, le=_MAX_COUNT)
     previous_count: int = Field(ge=0, le=_MAX_COUNT)
@@ -81,7 +81,7 @@ class NewEntity(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    name: EntityName
+    name: MentionName
     type: MentionType
     current_count: int = Field(ge=1, le=_MAX_COUNT)
 

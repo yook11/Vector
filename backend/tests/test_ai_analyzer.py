@@ -40,7 +40,6 @@ from app.analysis.assessment.domain.result import (
     OutOfScope,
 )
 from app.analysis.assessment.service import AssessmentService
-from app.analysis.domain.value_objects.entity import EntityName
 from app.analysis.extraction.ai.base import BaseExtractor
 from app.analysis.extraction.ai.envelope import ExtractionCall
 from app.analysis.extraction.ai.gemini import GeminiExtractor
@@ -223,11 +222,6 @@ def test_gemini_extraction_response_has_relevance_field() -> None:
     """
     resp = GeminiExtractionResponse(relevance="signal", title_ja="t", summary_ja="s")
     assert resp.relevance == "signal"
-
-
-def test_entity_name_rejects_empty() -> None:
-    with pytest.raises(ValidationError):
-        EntityName("  ")
 
 
 # --- C. Classification schema tests ---

@@ -1,8 +1,9 @@
-"""エンティティ表示名の値オブジェクト。
+"""mention 表示名の値オブジェクト。
 
-EntityName: 記事中に登場する固有名。表示用に NFKC + 空白整形した文字列を保持し、
-            重複検出・JOIN 用に match_key (lower 化) を併せて提供する。
-            casing は保持する（"NVIDIA" を表示用にそのまま維持）。
+MentionName: 記事中に登場する固有名 (Stage 4 ``Mention.surface`` を週次集計時に
+             表示用にラップした VO)。NFKC + 空白整形した文字列を保持し、
+             重複検出・JOIN 用に match_key (lower 化) を併せて提供する。
+             casing は保持する ("NVIDIA" を表示用にそのまま維持)。
 """
 
 from __future__ import annotations
@@ -19,8 +20,8 @@ _NAME_MAX_LENGTH = 200
 _WHITESPACE_RUN = re.compile(r"\s+")
 
 
-class EntityName(RootModel[str]):
-    """エンティティの固有名。
+class MentionName(RootModel[str]):
+    """mention の固有名 (週次集計の表示ラベル)。
 
     Invariants:
     - NFKC 正規化 + 前後空白除去 + 連続空白を単一半角空白に統合
@@ -43,11 +44,11 @@ class EntityName(RootModel[str]):
         normalized = unicodedata.normalize("NFKC", v)
         normalized = _WHITESPACE_RUN.sub(" ", normalized).strip()
         if not normalized:
-            msg = "EntityName must not be empty"
+            msg = "MentionName must not be empty"
             raise ValueError(msg)
         if len(normalized) > _NAME_MAX_LENGTH:
             msg = (
-                f"EntityName must be at most {_NAME_MAX_LENGTH} chars, "
+                f"MentionName must be at most {_NAME_MAX_LENGTH} chars, "
                 f"got {len(normalized)}"
             )
             raise ValueError(msg)
@@ -63,4 +64,4 @@ class EntityName(RootModel[str]):
         return self.root
 
     def __repr__(self) -> str:
-        return f"EntityName({self.root!r})"
+        return f"MentionName({self.root!r})"

@@ -17,13 +17,13 @@ import pytest
 from pydantic import ValidationError
 
 from app.analysis.assessment.domain.result import MentionType
-from app.analysis.domain.value_objects.entity import EntityName
 from app.domain.category import CategoryName, CategorySlug
 from app.insights.snapshot.config import (
     MIN_CURRENT,
     NEW_ENTITY_LOOKBACK_WEEKS,
     SMOOTHING,
 )
+from app.insights.snapshot.domain.mention_name import MentionName
 from app.insights.snapshot.domain.trend import (
     EntityTrend,
     NewEntity,
@@ -34,8 +34,8 @@ from app.insights.snapshot.domain.trend import (
 
 def _entity(
     name: str = "NVIDIA", type_: str = "company"
-) -> tuple[EntityName, MentionType]:
-    return EntityName(name), MentionType(type_)
+) -> tuple[MentionName, MentionType]:
+    return MentionName(name), MentionType(type_)
 
 
 class TestEntityTrend:

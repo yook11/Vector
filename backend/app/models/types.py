@@ -12,7 +12,6 @@ from sqlalchemy import String
 from sqlalchemy.engine import Dialect
 from sqlalchemy.types import TypeDecorator
 
-from app.analysis.domain.value_objects.entity import EntityName
 from app.domain.category import CategoryName, CategorySlug
 from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 from app.shared.value_objects.safe_url import SafeUrl
@@ -80,27 +79,6 @@ class SourceNameType(TypeDecorator[SourceName]):
         if value is None:
             return None
         return SourceName(value)
-
-
-class EntityNameType(TypeDecorator[EntityName]):
-    """EntityName <-> VARCHAR(200)."""
-
-    impl = String(200)
-    cache_ok = True
-
-    def process_bind_param(self, value: Any, dialect: Dialect) -> str | None:
-        if value is None:
-            return None
-        if isinstance(value, EntityName):
-            return value.root
-        if isinstance(value, str):
-            return EntityName(value).root
-        raise TypeError(f"Expected EntityName or str, got {type(value).__name__}")
-
-    def process_result_value(self, value: Any, dialect: Dialect) -> EntityName | None:
-        if value is None:
-            return None
-        return EntityName(value)
 
 
 class SafeUrlType(TypeDecorator[SafeUrl]):

@@ -20,8 +20,8 @@ from typing import Annotated, Literal
 from pydantic import Field
 
 from app.analysis.assessment.domain.result import MentionType
-from app.analysis.domain.value_objects.entity import EntityName
 from app.domain.category import CategoryName, CategorySlug
+from app.insights.snapshot.domain.mention_name import MentionName
 from app.insights.snapshot.domain.trend import (
     EntityTrend,
     NewEntity,
@@ -32,7 +32,7 @@ from app.schemas.base import _CamelBase
 
 
 class _EntityTrendOut(_CamelBase):
-    name: EntityName
+    name: MentionName
     type: MentionType
     current_count: int
     previous_count: int
@@ -40,7 +40,7 @@ class _EntityTrendOut(_CamelBase):
 
 
 class _NewEntityOut(_CamelBase):
-    name: EntityName
+    name: MentionName
     type: MentionType
     current_count: int
 
