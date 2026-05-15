@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+	xmlns:content="http://purl.org/rss/1.0/modules/content/"
+	xmlns:dc="http://purl.org/dc/elements/1.1/"
+	xmlns:atom="http://www.w3.org/2005/Atom">
+<channel>
+	<title>VentureBeat</title>
+	<atom:link href="https://venturebeat.com/feed/" rel="self" type="application/rss+xml" />
+	<link>https://venturebeat.com/</link>
+	<description>Transformative tech coverage that matters</description>
+	<lastBuildDate>Wed, 30 Apr 2026 22:00:00 +0000</lastBuildDate>
+	<language>en-US</language>
+	<item>
+		<title>Teaser-only entry one</title>
+		<link>https://venturebeat.com/teaser-one/</link>
+		<dc:creator><![CDATA[Author A]]></dc:creator>
+		<pubDate>Wed, 30 Apr 2026 17:00:00 +0000</pubDate>
+		<guid isPermaLink="false">https://venturebeat.com/?p=2000001</guid>
+		<description><![CDATA[<p>Short lead.</p>]]></description>
+		<content:encoded><![CDATA[<p>Short lead.</p>]]></content:encoded>
+	</item>
+	<item>
+		<title>Teaser-only entry two</title>
+		<link>https://venturebeat.com/teaser-two/</link>
+		<dc:creator><![CDATA[Author B]]></dc:creator>
+		<pubDate>Wed, 30 Apr 2026 16:00:00 +0000</pubDate>
+		<guid isPermaLink="false">https://venturebeat.com/?p=2000002</guid>
+		<description><![CDATA[<p>Another short lead.</p>]]></description>
+		<content:encoded><![CDATA[<p>Another short lead.</p>]]></content:encoded>
+	</item>
+</channel>
+</rss>

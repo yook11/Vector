@@ -8,6 +8,14 @@
 Outcome 純化原則 (PR-2 以降): Fetcher が yield するのは
 ``ReadyForArticle | IncompleteArticle`` の passport のみ。品質ゲート未達 entry
 は yield しないため、観測点は「yield された passport」だけになる。
+
+passport builder への切替 (本 PR) 以降は同じ Fetcher でも entry ごとに
+Ready / Incomplete を選びうるため、type 集合の検証を 2 段階で行う:
+
+- ``assert_passport_types_allowed`` — 全 passport が ``allowed`` 集合に属する
+  (= 想定外の型が混ざっていないこと)
+- ``assert_passport_types_include`` — ``must_include`` の各型を最低 1 件含む
+  (= 主経路 / 副経路が壊れていないこと)
 """
 
 from __future__ import annotations
@@ -42,9 +50,9 @@ def assert_passports_persistable(
 ) -> None:
     """全 passport が永続化不変条件を満たすこと。
 
-    Pattern R: ``ReadyForArticle`` の Pydantic 構築が成功している = 5 fields 通過済。
-    Pattern H: ``IncompleteArticle`` + HTML 抽出値で ``complete_with_html`` が
-    ``ReadyForArticle`` を返せること (= Stage 2 を通せば永続化できる中間状態)。
+    ReadyForArticle: Pydantic 構築が成功している = 5 fields 通過済。
+    IncompleteArticle: HTML 抽出値で ``complete_with_html`` が ReadyForArticle
+    を返せる (= Stage 2 を通せば永続化できる中間状態)。
 
     ``html_published_at`` 省略時は default を入れる (Pattern H が published_at を
     HTML 側から確定させる前提を表現するため)。
@@ -61,3 +69,41 @@ def assert_passports_persistable(
         assert isinstance(promoted, ReadyForArticle), (
             f"IncompleteArticle could not be promoted to ReadyForArticle: {promoted}"
         )
+
+
+def assert_passport_types_allowed(
+    items: Iterable[Passport],
+    *,
+    allowed: set[type],
+) -> None:
+    """全 passport の型が ``allowed`` 集合に属することを保証する。
+
+    例: Pattern H 固定ソース (``body_candidate=None``) に対し
+    ``allowed={IncompleteArticle}`` を渡せば、Ready が混入していないことを固定。
+    """
+    materialized = list(items)
+    actual_types = {type(item) for item in materialized}
+    unexpected = actual_types - allowed
+    assert not unexpected, (
+        f"passport types {unexpected} not in allowed set {allowed}; "
+        f"materialized={[type(i).__name__ for i in materialized]}"
+    )
+
+
+def assert_passport_types_include(
+    items: Iterable[Passport],
+    *,
+    must_include: set[type],
+) -> None:
+    """``must_include`` の各型を最低 1 件含むことを保証する。
+
+    fallback で型が混じる可能性は ``allowed`` 側で許容しつつ、主経路の型が
+    最低 1 件 yield されることを固定する用途。
+    """
+    materialized = list(items)
+    actual_types = {type(item) for item in materialized}
+    missing = must_include - actual_types
+    assert not missing, (
+        f"passport types {missing} were expected but not produced; "
+        f"materialized={[type(i).__name__ for i in materialized]}"
+    )

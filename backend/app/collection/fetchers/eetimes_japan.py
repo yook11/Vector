@@ -1,7 +1,7 @@
-"""EE Times Japan 用 Fetcher — Pattern H (本文は HTML 必須)。
+"""EE Times Japan 用 Fetcher (本文は HTML 必須)。
 
-per-source 設計: RSS は ~150 chars のリード文のみで本文欠落。後段 HTML
-抽出 (trafilatura) に委ねる。
+per-source 設計: RSS は ~150 chars のリード文のみで本文欠落。RSS body を
+信用せず後段 HTML 抽出 (trafilatura) に委ねる。
 """
 
 from __future__ import annotations
@@ -9,12 +9,12 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import ClassVar
 
-from app.collection.article.domain.value_objects import PublishedAt
+from app.collection.article.domain.article import ReadyForArticle
+from app.collection.fetchers.tools.passport_builder import try_build_passport
 from app.collection.fetchers.tools.rss_parser import RssEntry, RssParser
 from app.collection.incomplete_article.domain.incomplete_article import (
     IncompleteArticle,
 )
-from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 
 
 class EETimesJapanFetcher:
@@ -24,7 +24,9 @@ class EETimesJapanFetcher:
     def __init__(self, parser: RssParser | None = None) -> None:
         self._parser = parser or RssParser()
 
-    async def fetch(self, source_id: int) -> AsyncIterator[IncompleteArticle]:
+    async def fetch(
+        self, source_id: int
+    ) -> AsyncIterator[ReadyForArticle | IncompleteArticle]:
         entries = await self._parser.fetch(
             endpoint_url=self.ENDPOINT_URL,
             source_name=self.NAME,
@@ -39,20 +41,11 @@ class EETimesJapanFetcher:
         self,
         entry: RssEntry,
         source_id: int,
-    ) -> IncompleteArticle | None:
-        title = entry.title[:500]
-        if not title:
-            return None
-        try:
-            source_url = CanonicalArticleUrl(entry.link)
-        except ValueError:
-            return None
-        published_at_hint = (
-            PublishedAt(value=entry.published) if entry.published else None
-        )
-        return IncompleteArticle(
-            title=title,
+    ) -> ReadyForArticle | IncompleteArticle | None:
+        return try_build_passport(
+            title=entry.title,
+            link=entry.link,
+            body_candidate=None,
+            published_hint=entry.published,
             source_id=source_id,
-            source_url=source_url,
-            published_at_hint=published_at_hint,
         )
