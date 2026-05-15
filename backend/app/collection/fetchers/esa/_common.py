@@ -17,67 +17,8 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import ClassVar
 
-from app.collection.article.domain.value_objects import PublishedAt
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
-from app.collection.fetchers.tools.rss_parser import RssEntry, RssParser
-from app.collection.incomplete_article.domain.incomplete_article import (
-    IncompleteArticle,
-)
-from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
-
-
-class BaseDjangoplicityFetcher:
-    """ESA Djangoplicity News module の Pattern H 共通基底。
-
-    subclass は次の 2 つの ClassVar を必須で差し替える:
-
-    - ``NAME``: ``news_sources.name`` 一致 ("ESA/Hubble" / "ESA/Webb")
-    - ``ENDPOINT_URL``: feed URL ("https://esahubble.org/news/feed/" 等)
-
-    title / source_url の品質ゲート未達は yield しない (Outcome 純化原則)。
-    """
-
-    NAME: ClassVar[str]
-    ENDPOINT_URL: ClassVar[str]
-
-    def __init__(self, parser: RssParser | None = None) -> None:
-        self._parser = parser or RssParser()
-
-    async def fetch(self, source_id: int) -> AsyncIterator[IncompleteArticle]:
-        entries = await self._parser.fetch(
-            endpoint_url=self.ENDPOINT_URL,
-            source_name=self.NAME,
-            parse_mode="bytes",
-        )
-        for entry in entries:
-            item = self._convert_entry(entry, source_id)
-            if item is not None:
-                yield item
-
-    def _convert_entry(
-        self,
-        entry: RssEntry,
-        source_id: int,
-    ) -> IncompleteArticle | None:
-        title = entry.title[:500]
-        if not title:
-            return None
-
-        try:
-            source_url = CanonicalArticleUrl(entry.link)
-        except ValueError:
-            return None
-
-        published_at_hint = (
-            PublishedAt(value=entry.published) if entry.published else None
-        )
-
-        return IncompleteArticle(
-            title=title,
-            source_id=source_id,
-            source_url=source_url,
-            published_at_hint=published_at_hint,
-        )
+from app.collection.fetchers.tools.rss_parser import RssParser
 
 
 class BaseDjangoplicityAdapter:

@@ -26,96 +26,11 @@ from typing import ClassVar
 
 import structlog
 
-from app.collection.article.domain.value_objects import PublishedAt
 from app.collection.errors import TemporaryFetchError
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
-from app.collection.fetchers.tools.rss_parser import RssEntry, RssParser
-from app.collection.incomplete_article.domain.incomplete_article import (
-    IncompleteArticle,
-)
-from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
+from app.collection.fetchers.tools.rss_parser import RssParser
 
 logger = structlog.get_logger(__name__)
-
-
-class CornellChronicleFetcher:
-    """Cornell Chronicle 用 FEEDS 巡回 Pattern H Fetcher。
-
-    ``ENDPOINT_URL`` は ``news_sources.endpoint_url`` 列との互換のため代表値
-    (AI feed) を残すが、実 fetch は ``FEEDS`` の 6 URL を順次巡回する。
-    """
-
-    NAME: ClassVar[str] = "Cornell Chronicle"
-    ENDPOINT_URL: ClassVar[str] = "https://news.cornell.edu/taxonomy/term/24043/feed"
-    FEEDS: ClassVar[tuple[str, ...]] = (
-        # Artificial Intelligence
-        "https://news.cornell.edu/taxonomy/term/24043/feed",
-        # Computing & Information Sciences
-        "https://news.cornell.edu/taxonomy/term/14256/feed",
-        # Life Sciences & Veterinary Medicine
-        "https://news.cornell.edu/taxonomy/term/15056/feed",
-        # Energy, Environment & Sustainability
-        "https://news.cornell.edu/taxonomy/term/15621/feed",
-        # Physical Sciences & Engineering
-        "https://news.cornell.edu/taxonomy/term/14252/feed",
-        # Health, Nutrition & Medicine
-        "https://news.cornell.edu/taxonomy/term/14248/feed",
-    )
-
-    def __init__(self, parser: RssParser | None = None) -> None:
-        self._parser = parser or RssParser()
-
-    async def fetch(self, source_id: int) -> AsyncIterator[IncompleteArticle]:
-        seen_urls: set[str] = set()
-        for feed_url in self.FEEDS:
-            try:
-                entries = await self._parser.fetch(
-                    endpoint_url=feed_url,
-                    source_name=self.NAME,
-                    parse_mode="bytes",
-                )
-            except TemporaryFetchError as e:
-                # 1 feed の transient 失敗で全停止しない (他 feed は続行)
-                logger.warning(
-                    "cornell_feed_skip",
-                    source=self.NAME,
-                    feed=feed_url,
-                    error=str(e),
-                )
-                continue
-            # PermanentFetchError は catch しない (source 全体失敗として伝播)
-            for entry in entries:
-                if not entry.link or entry.link in seen_urls:
-                    continue
-                seen_urls.add(entry.link)
-                item = self._convert_entry(entry, source_id)
-                if item is not None:
-                    yield item
-
-    def _convert_entry(
-        self,
-        entry: RssEntry,
-        source_id: int,
-    ) -> IncompleteArticle | None:
-        title = entry.title[:500]
-        if not title:
-            return None
-
-        try:
-            source_url = CanonicalArticleUrl(entry.link)
-        except ValueError:
-            return None
-
-        published_at_hint = (
-            PublishedAt(value=entry.published) if entry.published else None
-        )
-
-        return IncompleteArticle(
-            title=title,
-            source_id=source_id,
-            source_url=source_url,
-            published_at_hint=published_at_hint,
-        )
 
 
 class CornellChronicleAdapter:

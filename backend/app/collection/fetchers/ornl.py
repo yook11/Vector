@@ -32,7 +32,6 @@ from urllib.parse import urljoin, urlparse
 from lxml import etree, html
 
 from app.collection.errors import PermanentFetchError
-from app.collection.fetchers._base.html_listing import BaseHtmlListingFetcher
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.raw_http_client import RawHttpClient
 
@@ -62,26 +61,6 @@ def _parse_listing(
 def _slug_from_url(url: str) -> str:
     path = urlparse(url).path.rstrip("/")
     return path.rsplit("/", 1)[-1]
-
-
-class ORNLNewsFetcher(BaseHtmlListingFetcher):
-    """ORNL news listing fetcher (旧経路、P6/P7 で削除予定)。"""
-
-    NAME: ClassVar[str] = "ORNL"
-    ENDPOINT_URL: ClassVar[str] = "https://www.ornl.gov/news"
-    LISTING_URL: ClassVar[str] = "https://www.ornl.gov/news"
-    DETAIL_LINK_XPATH: ClassVar[str] = '//a[starts-with(@href, "/news/")]'
-    DETAIL_URL_PREFIX: ClassVar[str] = "https://www.ornl.gov"
-    EXCLUDED_PATHS: ClassVar[frozenset[str]] = frozenset(
-        {
-            "/news/releases",
-            "/news/features",
-            "/news/researcher-profiles",
-            "/news/story-tips",
-            "/news/audio-spots",
-            "/news/honors-and-awards",
-        }
-    )
 
 
 class ORNLAdapter:

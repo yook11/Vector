@@ -15,13 +15,9 @@ from __future__ import annotations
 import html
 import re
 from collections.abc import AsyncIterator
-from typing import ClassVar
 
-from app.collection.article.domain.article import ReadyForArticle
-from app.collection.article.domain.value_objects import PublishedAt
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
-from app.collection.fetchers.tools.rss_parser import RssEntry, RssParser
-from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
+from app.collection.fetchers.tools.rss_parser import RssParser
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -44,64 +40,6 @@ def _strip_html(s: str) -> str:
 def _strip_footer(body: str) -> str:
     """末尾の固定 boilerplate を per-source regex で除去する。"""
     return _FOOTER_RE.sub("", body)
-
-
-class MicrosoftResearchFetcher:
-    """Microsoft Research 用 RSS-only Fetcher。
-
-    footer は per-source 定数 ``_FOOTER_RE`` で除去する (regex match しなければ
-    no-op、boilerplate がそのまま残るのは Stage 2 LLM 吸収範囲、logfire で検知)。
-    """
-
-    NAME: ClassVar[str] = "Microsoft Research"
-    ENDPOINT_URL: ClassVar[str] = "https://www.microsoft.com/en-us/research/feed/"
-
-    def __init__(self, parser: RssParser | None = None) -> None:
-        self._parser = parser or RssParser()
-
-    async def fetch(self, source_id: int) -> AsyncIterator[ReadyForArticle]:
-        entries = await self._parser.fetch(
-            endpoint_url=self.ENDPOINT_URL,
-            source_name=self.NAME,
-            parse_mode="text",
-        )
-        for entry in entries:
-            item = self._convert_entry(entry, source_id)
-            if item is not None:
-                yield item
-
-    def _convert_entry(
-        self,
-        entry: RssEntry,
-        source_id: int,
-    ) -> ReadyForArticle | None:
-        title = entry.title[:500]
-        if not title:
-            return None
-
-        # body: HTML strip → footer strip の順 (footer は plain text 末尾)
-        body = _strip_footer(_strip_html(entry.content_encoded or ""))
-        if len(body) < 50:
-            return None
-
-        if entry.published is None:
-            return None
-
-        try:
-            source_url = CanonicalArticleUrl(entry.link)
-        except ValueError:
-            return None
-
-        try:
-            return ReadyForArticle(
-                title=title,
-                body=body,
-                published_at=PublishedAt(value=entry.published),
-                source_id=source_id,
-                source_url=source_url,
-            )
-        except ValueError:
-            return None
 
 
 class MicrosoftResearchAdapter:

@@ -2,7 +2,7 @@
 
 Frontiers in Artificial Intelligence / Robotics and AI / Energy Research /
 Materials の 4 journal は同型 (Frontiers Media 標準 RSS) のため
-``BaseFrontiersFetcher`` (`_common.py`) を共有し、subclass で ClassVar
+``BaseFrontiersJournalAdapter`` (`_common.py`) を共有し、subclass で ClassVar
 (``NAME`` / ``ENDPOINT_URL`` / ``JOURNAL_NAME``) のみ差し替える。
 
 将来 journal を追加する場合も同 base 上で ClassVar 差し替え + alembic 1 行

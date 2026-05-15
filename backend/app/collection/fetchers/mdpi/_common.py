@@ -35,14 +35,9 @@ from typing import Any, ClassVar
 import httpx
 import structlog
 
-from app.collection.article.domain.article import ReadyForArticle
 from app.collection.article.domain.value_objects import PublishedAt
-from app.collection.errors import PermanentFetchError, TemporaryFetchError
 from app.collection.fetchers.tools.crossref_client import CrossrefApiClient
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
-from app.shared.security.safe_http import make_safe_async_client
-from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
-from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 
 logger = structlog.get_logger(__name__)
 
@@ -126,124 +121,6 @@ def _extract_title(item: dict[str, Any]) -> str:
     if isinstance(raw, str):
         return _strip_jats(raw)
     return ""
-
-
-class BaseMDPICrossrefFetcher:
-    """MDPI の Crossref API 経路 Pattern R 共通基底。
-
-    subclass は次の 3 つの ClassVar を必須で差し替える:
-
-    - ``NAME``: ``news_sources.name`` 一致 (``"MDPI Materials"`` 等)
-    - ``ISSN``: per-journal ISSN (``"1996-1944"`` 等)
-    - ``JOURNAL_NAME``: human readable 名 (``"Materials"`` 等、内部の構造化ログ用)
-
-    type / license / title / body / published_at / DOI の品質ゲート未達は
-    yield しない (Outcome 純化原則)。
-    """
-
-    NAME: ClassVar[str]
-    ISSN: ClassVar[str]
-    JOURNAL_NAME: ClassVar[str]
-    LANGUAGE: ClassVar[str] = "en"
-    ENDPOINT_URL: ClassVar[str] = "https://api.crossref.org/works"
-    LOOKBACK_DAYS: ClassVar[int] = 7
-    ROWS_PER_REQUEST: ClassVar[int] = 20
-
-    async def fetch(self, source_id: int) -> AsyncIterator[ReadyForArticle]:
-        items = await self._fetch_recent_works()
-        for item in items:
-            converted = self._convert_record(item, source_id)
-            if converted is not None:
-                yield converted
-
-    async def _fetch_recent_works(self) -> list[dict[str, Any]]:
-        """Crossref API から ``LOOKBACK_DAYS`` 内の per-ISSN works を取得する。
-
-        Raises:
-            PermanentFetchError: 403 / 404 / 410 / 451 / SSRF host 拒否。
-            TemporaryFetchError: 429 / 5xx / タイムアウト / DNS 一時失敗。
-        """
-        since = (
-            (datetime.now(UTC) - timedelta(days=self.LOOKBACK_DAYS)).date().isoformat()
-        )
-        params: dict[str, str | int] = {
-            "filter": f"issn:{self.ISSN},from-pub-date:{since}",
-            "rows": self.ROWS_PER_REQUEST,
-            "sort": "published",
-            "order": "desc",
-        }
-
-        async with make_safe_async_client(
-            headers={"User-Agent": _USER_AGENT, "Accept": "application/json"},
-            verify=True,
-            timeout=_HTTP_TIMEOUT,
-        ) as client:
-            try:
-                response = await client.get(self.ENDPOINT_URL, params=params)
-                response.raise_for_status()
-            except httpx.HTTPStatusError as e:
-                status = e.response.status_code
-                if status in (403, 404, 410, 451):
-                    raise PermanentFetchError(f"HTTP {status}: {self.NAME}") from e
-                raise TemporaryFetchError(f"HTTP {status}: {self.NAME}") from e
-            except httpx.RequestError as e:
-                raise TemporaryFetchError(f"request error: {self.NAME}: {e}") from e
-            except HostBlockedError as e:
-                raise PermanentFetchError(str(e)) from e
-            except HostResolutionError as e:
-                raise TemporaryFetchError(str(e)) from e
-
-            data = response.json()
-
-        items: list[dict[str, Any]] = list(data.get("message", {}).get("items", []))
-        if not items:
-            logger.info("mdpi_crossref_no_new_items", source=self.NAME)
-        return items
-
-    def _convert_record(
-        self,
-        item: dict[str, Any],
-        source_id: int,
-    ) -> ReadyForArticle | None:
-        """1 Crossref record を ``ReadyForArticle`` に変換する純関数。"""
-        if item.get("type") != "journal-article":
-            return None
-
-        if not _validate_license(item):
-            return None
-
-        title = _extract_title(item)
-        if not title:
-            return None
-        title = title[:_TITLE_MAX_LENGTH]
-
-        body = _strip_jats(item.get("abstract") or "")
-        if len(body) < 50:
-            return None
-
-        published_at = _parse_date_parts(item)
-        if published_at is None:
-            return None
-
-        doi = _extract_doi(item)
-        if doi is None:
-            return None
-
-        try:
-            source_url = CanonicalArticleUrl(f"https://doi.org/{doi}")
-        except ValueError:
-            return None
-
-        try:
-            return ReadyForArticle(
-                title=title,
-                body=body,
-                published_at=published_at,
-                source_id=source_id,
-                source_url=source_url,
-            )
-        except ValueError:
-            return None
 
 
 class BaseMDPICrossrefAdapter:

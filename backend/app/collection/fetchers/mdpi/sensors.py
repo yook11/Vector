@@ -6,14 +6,7 @@ from typing import ClassVar
 
 from app.collection.fetchers.mdpi._common import (
     BaseMDPICrossrefAdapter,
-    BaseMDPICrossrefFetcher,
 )
-
-
-class MDPISensorsFetcher(BaseMDPICrossrefFetcher):
-    NAME: ClassVar[str] = "MDPI Sensors"
-    ISSN: ClassVar[str] = "1424-8220"
-    JOURNAL_NAME: ClassVar[str] = "Sensors"
 
 
 class MDPISensorsAdapter(BaseMDPICrossrefAdapter):

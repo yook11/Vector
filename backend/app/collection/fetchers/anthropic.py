@@ -31,7 +31,6 @@ from urllib.parse import urlparse
 from lxml import etree
 
 from app.collection.errors import PermanentFetchError
-from app.collection.fetchers._base.sitemap import BaseSitemapFetcher
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.raw_http_client import RawHttpClient
 
@@ -72,14 +71,6 @@ def _parse_sitemap(data: bytes) -> list[tuple[str, datetime | None]]:
 def _slug_from_url(url: str) -> str:
     path = urlparse(url).path.rstrip("/")
     return path.rsplit("/", 1)[-1]
-
-
-class AnthropicFetcher(BaseSitemapFetcher):
-    """Anthropic news の sitemap-only Fetcher (旧経路、P6/P7 で削除予定)。"""
-
-    NAME: ClassVar[str] = "Anthropic"
-    ENDPOINT_URL: ClassVar[str] = "https://www.anthropic.com/sitemap.xml"
-    URL_PATH_PREFIX: ClassVar[str] = "/news/"
 
 
 class AnthropicAdapter:

@@ -17,13 +17,10 @@ from __future__ import annotations
 import html
 import re
 from collections.abc import AsyncIterator
-from typing import ClassVar, Final
+from typing import Final
 
-from app.collection.article.domain.article import ReadyForArticle
-from app.collection.article.domain.value_objects import PublishedAt
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.rss_parser import RssEntry, RssParser
-from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -51,68 +48,6 @@ def _pick_body(entry: RssEntry) -> str:
 def _is_ai_tagged(tags: tuple[str, ...]) -> bool:
     """``tags`` に AI 判定 tag が含まれているか。"""
     return bool(_AI_TAGS.intersection(tags))
-
-
-class MetaAIFetcher:
-    """about.fb.com Newsroom から AI tagged entry のみを抽出する Pattern R Fetcher。
-
-    AI フィルタ業務ロジックがクリティカル: Newsroom は全社混在で約 60% が
-    非 AI 記事。spec の AI tag フィルタを構造的に絞り込み、off-topic 取り込み
-    (=ニュース文脈ノイズ) を抑止する。
-    """
-
-    NAME: ClassVar[str] = "Meta AI"
-    ENDPOINT_URL: ClassVar[str] = "https://about.fb.com/news/feed/"
-
-    def __init__(self, parser: RssParser | None = None) -> None:
-        self._parser = parser or RssParser()
-
-    async def fetch(self, source_id: int) -> AsyncIterator[ReadyForArticle]:
-        entries = await self._parser.fetch(
-            endpoint_url=self.ENDPOINT_URL,
-            source_name=self.NAME,
-            parse_mode="bytes",
-        )
-        for entry in entries:
-            item = self._convert_entry(entry, source_id)
-            if item is not None:
-                yield item
-
-    def _convert_entry(
-        self,
-        entry: RssEntry,
-        source_id: int,
-    ) -> ReadyForArticle | None:
-        # AI tag フィルタを最初に適用 (他フィールドの parse コストを節約)
-        if not _is_ai_tagged(entry.tags):
-            return None
-
-        title = entry.title[:500]
-        if not title:
-            return None
-
-        body = _strip_html(_pick_body(entry))
-        if len(body) < 50:
-            return None
-
-        if entry.published is None:
-            return None
-
-        try:
-            source_url = CanonicalArticleUrl(entry.link)
-        except ValueError:
-            return None
-
-        try:
-            return ReadyForArticle(
-                title=title,
-                body=body,
-                published_at=PublishedAt(value=entry.published),
-                source_id=source_id,
-                source_url=source_url,
-            )
-        except ValueError:
-            return None
 
 
 class MetaAIAdapter:

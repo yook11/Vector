@@ -14,15 +14,9 @@ per-source 設計 (実 Atom 観察ベース):
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from typing import ClassVar
 
-from app.collection.article.domain.value_objects import PublishedAt
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
-from app.collection.fetchers.tools.rss_parser import RssEntry, RssParser
-from app.collection.incomplete_article.domain.incomplete_article import (
-    IncompleteArticle,
-)
-from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
+from app.collection.fetchers.tools.rss_parser import RssParser
 
 _REDIRECTOR_PREFIX = "https://go.theregister.com/feed/"
 
@@ -37,55 +31,6 @@ def _normalize_register_link(raw: str) -> str:
     if raw.startswith(_REDIRECTOR_PREFIX):
         return "https://" + raw[len(_REDIRECTOR_PREFIX) :]
     return raw
-
-
-class TheRegisterFetcher:
-    """The Register 用 Pattern H Fetcher (Pattern R+H = HTML 必須、Atom feed)。"""
-
-    NAME: ClassVar[str] = "The Register"
-    ENDPOINT_URL: ClassVar[str] = "https://www.theregister.com/headlines.atom"
-
-    def __init__(self, parser: RssParser | None = None) -> None:
-        self._parser = parser or RssParser()
-
-    async def fetch(self, source_id: int) -> AsyncIterator[IncompleteArticle]:
-        entries = await self._parser.fetch(
-            endpoint_url=self.ENDPOINT_URL,
-            source_name=self.NAME,
-            parse_mode="text",
-        )
-        for entry in entries:
-            item = self._convert_entry(entry, source_id)
-            if item is not None:
-                yield item
-
-    def _convert_entry(
-        self,
-        entry: RssEntry,
-        source_id: int,
-    ) -> IncompleteArticle | None:
-        title = entry.title[:500]
-        if not title:
-            return None
-
-        if not entry.link:
-            return None
-        normalized_link = _normalize_register_link(entry.link)
-        try:
-            source_url = CanonicalArticleUrl(normalized_link)
-        except ValueError:
-            return None
-
-        published_at_hint = (
-            PublishedAt(value=entry.published) if entry.published else None
-        )
-
-        return IncompleteArticle(
-            title=title,
-            source_id=source_id,
-            source_url=source_url,
-            published_at_hint=published_at_hint,
-        )
 
 
 class TheRegisterAdapter:

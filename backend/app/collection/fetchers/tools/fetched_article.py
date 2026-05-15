@@ -31,7 +31,7 @@ class FetchedArticle:
 
     Adapter が外部 source から取り出した raw データを共通言語に揃えた中間型。
     本データから passport (``ReadyForArticle`` | ``IncompleteArticle``) を
-    組むのは ``try_build_passport_from_fetched`` の責務。
+    組むのは ``passport_builder`` の責務。
     """
 
     title: str

@@ -6,14 +6,7 @@ from typing import ClassVar
 
 from app.collection.fetchers.mdpi._common import (
     BaseMDPICrossrefAdapter,
-    BaseMDPICrossrefFetcher,
 )
-
-
-class MDPINanomaterialsFetcher(BaseMDPICrossrefFetcher):
-    NAME: ClassVar[str] = "MDPI Nanomaterials"
-    ISSN: ClassVar[str] = "2079-4991"
-    JOURNAL_NAME: ClassVar[str] = "Nanomaterials"
 
 
 class MDPINanomaterialsAdapter(BaseMDPICrossrefAdapter):

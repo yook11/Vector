@@ -29,11 +29,8 @@ import re
 from collections.abc import AsyncIterator
 from typing import ClassVar
 
-from app.collection.article.domain.article import ReadyForArticle
-from app.collection.article.domain.value_objects import PublishedAt
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.rss_parser import RssEntry, RssParser
-from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -56,73 +53,6 @@ def _pick_body(entry: RssEntry) -> str:
     content_encoded = entry.content_encoded or ""
     summary = entry.summary or ""
     return content_encoded if len(content_encoded) >= len(summary) else summary
-
-
-class BaseFrontiersFetcher:
-    """Frontiers Media journal RSS の Pattern R 共通基底。
-
-    subclass は次の 3 つの ClassVar を必須で差し替える:
-
-    - ``NAME``: ``news_sources.name`` 一致
-      (``"Frontiers in Artificial Intelligence"`` 等)
-    - ``ENDPOINT_URL``: feed URL (``https://www.frontiersin.org/journals/<slug>/rss``)
-    - ``JOURNAL_NAME``: human readable journal 名 (内部の構造化ログに利用)
-
-    body / published_at / source_url が品質ゲートを通らない entry は yield
-    しない (Outcome 純化原則)。Frontiers は editorial/correction 系で description
-    が空のことがあるため、品質ゲート未達での drop は正常動作。
-    """
-
-    NAME: ClassVar[str]
-    ENDPOINT_URL: ClassVar[str]
-    JOURNAL_NAME: ClassVar[str]
-    LANGUAGE: ClassVar[str] = _DEFAULT_LANGUAGE
-
-    def __init__(self, parser: RssParser | None = None) -> None:
-        self._parser = parser or RssParser()
-
-    async def fetch(self, source_id: int) -> AsyncIterator[ReadyForArticle]:
-        entries = await self._parser.fetch(
-            endpoint_url=self.ENDPOINT_URL,
-            source_name=self.NAME,
-            parse_mode="bytes",
-        )
-        for entry in entries:
-            item = self._convert_entry(entry, source_id)
-            if item is not None:
-                yield item
-
-    def _convert_entry(
-        self,
-        entry: RssEntry,
-        source_id: int,
-    ) -> ReadyForArticle | None:
-        title = entry.title[:500]
-        if not title:
-            return None
-
-        body = _strip_html(_pick_body(entry))
-        if len(body) < 50:
-            return None
-
-        if entry.published is None:
-            return None
-
-        try:
-            source_url = CanonicalArticleUrl(entry.link)
-        except ValueError:
-            return None
-
-        try:
-            return ReadyForArticle(
-                title=title,
-                body=body,
-                published_at=PublishedAt(value=entry.published),
-                source_id=source_id,
-                source_url=source_url,
-            )
-        except ValueError:
-            return None
 
 
 class BaseFrontiersJournalAdapter:

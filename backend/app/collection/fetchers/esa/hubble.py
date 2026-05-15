@@ -13,15 +13,7 @@ from typing import ClassVar
 
 from app.collection.fetchers.esa._common import (
     BaseDjangoplicityAdapter,
-    BaseDjangoplicityFetcher,
 )
-
-
-class ESAHubbleFetcher(BaseDjangoplicityFetcher):
-    NAME: ClassVar[str] = "ESA/Hubble"
-    ENDPOINT_URL: ClassVar[str] = "https://esahubble.org/news/feed/"
-    SITE_NAME: ClassVar[str] = "ESA/Hubble"
-    AUTHOR: ClassVar[str] = "ESA/Hubble"
 
 
 class ESAHubbleAdapter(BaseDjangoplicityAdapter):

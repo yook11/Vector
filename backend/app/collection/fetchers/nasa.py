@@ -24,12 +24,9 @@ from typing import ClassVar
 
 import structlog
 
-from app.collection.article.domain.article import ReadyForArticle
-from app.collection.article.domain.value_objects import PublishedAt
 from app.collection.errors import TemporaryFetchError
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
-from app.collection.fetchers.tools.rss_parser import RssEntry, RssParser
-from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
+from app.collection.fetchers.tools.rss_parser import RssParser
 
 logger = structlog.get_logger(__name__)
 
@@ -42,89 +39,6 @@ def _strip_html(s: str) -> str:
     if not s:
         return ""
     return _WHITESPACE_RE.sub(" ", html.unescape(_HTML_TAG_RE.sub(" ", s))).strip()
-
-
-class NASAFetcher:
-    """NASA 用 RSS-only Fetcher (本体 + 5 補強 feed 巡回)。
-
-    ``ENDPOINT_URL`` は ``news_sources.endpoint_url`` 列との互換のため本体
-    ``/feed/`` を representative 値として残すが、実際の fetch は ``FEEDS``
-    の 6 URL を順次巡回する。
-    """
-
-    NAME: ClassVar[str] = "NASA"
-    ENDPOINT_URL: ClassVar[str] = "https://www.nasa.gov/feed/"
-    FEEDS: ClassVar[tuple[str, ...]] = (
-        "https://www.nasa.gov/feed/",
-        "https://www.nasa.gov/news-release/feed/",
-        "https://www.nasa.gov/technology/feed/",
-        "https://www.nasa.gov/aeronautics/feed/",
-        "https://www.nasa.gov/missions/station/feed/",
-        "https://www.nasa.gov/missions/artemis/feed/",
-    )
-
-    def __init__(self, parser: RssParser | None = None) -> None:
-        self._parser = parser or RssParser()
-
-    async def fetch(self, source_id: int) -> AsyncIterator[ReadyForArticle]:
-        seen_urls: set[str] = set()
-        for feed_url in self.FEEDS:
-            try:
-                entries = await self._parser.fetch(
-                    endpoint_url=feed_url,
-                    source_name=self.NAME,
-                    parse_mode="text",
-                )
-            except TemporaryFetchError as e:
-                # 1 feed の transient 失敗で全停止しない (他 feed は続行)
-                logger.warning(
-                    "nasa_feed_skip",
-                    source=self.NAME,
-                    feed=feed_url,
-                    error=str(e),
-                )
-                continue
-            # PermanentFetchError は catch しない (source 全体失敗として伝播)
-            for entry in entries:
-                if entry.link and entry.link in seen_urls:
-                    continue
-                if entry.link:
-                    seen_urls.add(entry.link)
-                item = self._convert_entry(entry, source_id)
-                if item is not None:
-                    yield item
-
-    def _convert_entry(
-        self,
-        entry: RssEntry,
-        source_id: int,
-    ) -> ReadyForArticle | None:
-        title = entry.title[:500]
-        if not title:
-            return None
-
-        body = _strip_html(entry.content_encoded or "")
-        if len(body) < 50:
-            return None
-
-        if entry.published is None:
-            return None
-
-        try:
-            source_url = CanonicalArticleUrl(entry.link)
-        except ValueError:
-            return None
-
-        try:
-            return ReadyForArticle(
-                title=title,
-                body=body,
-                published_at=PublishedAt(value=entry.published),
-                source_id=source_id,
-                source_url=source_url,
-            )
-        except ValueError:
-            return None
 
 
 class NASAAdapter:

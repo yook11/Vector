@@ -136,8 +136,9 @@ def _extract_tags(entry: dict[str, Any]) -> tuple[str, ...]:
 def normalize_entry(entry: dict[str, Any]) -> RssEntry:
     """feedparser dict を ``RssEntry`` に正規化する。
 
-    本番経路 (``RssParser.fetch``) とテスト経路 (``test_rss_fetchers_invariants``)
-    で同一ロジックを共有するため public export している。
+    本番経路 (``RssParser.fetch``) と per-source adapter test
+    (``test_rss_adapters_invariants`` / 各 ``*_adapter`` test) が同一ロジックを
+    共有するため public export している。
     """
     raw_link = entry.get("link", "") or ""
     raw_title = entry.get("title", "") or ""

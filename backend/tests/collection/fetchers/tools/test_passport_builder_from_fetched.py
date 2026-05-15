@@ -1,9 +1,8 @@
-"""``try_build_passport_from_fetched`` のユニットテスト (DB 非依存)。
+"""``try_build_passport`` のユニットテスト (DB 非依存)。
 
-新 API (``FetchedArticle`` 入力版) の分岐契約を検証する。本テストは旧 API
-``try_build_passport`` の ``test_passport_builder.py`` と並存し、両 API が
-共通の private helper ``_build_passport`` を経由する間は同じ分岐挙動を持つ
-ことを担保する。
+``FetchedArticle`` 入力を passport (Ready / Incomplete / drop) に変換する
+分岐契約を検証する。title / URL / body / published / ``prefer_html_title``
+の各境界を網羅し、private helper ``_build_passport`` の判定順を固定する。
 
 ``prefer_html_title`` 関連の挙動 (Ready 経路ブロック / Incomplete 伝播) は
 本ファイル固有のケース (case 13 / 14)。
@@ -22,7 +21,7 @@ from app.collection.article.domain.article import (
 )
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.passport_builder import (
-    try_build_passport_from_fetched,
+    try_build_passport,
 )
 from app.collection.incomplete_article.domain.incomplete_article import (
     IncompleteArticle,
@@ -44,7 +43,7 @@ _BASE_FETCHED: dict = {
 
 def _call(**overrides):
     args = {**_BASE_FETCHED, **overrides}
-    return try_build_passport_from_fetched(FetchedArticle(**args), source_id=1)
+    return try_build_passport(FetchedArticle(**args), source_id=1)
 
 
 def test_returns_ready_when_body_and_published_present() -> None:
