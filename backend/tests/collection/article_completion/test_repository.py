@@ -15,10 +15,8 @@ from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
-from app.collection.article_completion.repository import (
-    ArticleCompletionRepository,
-    ClaimedPendingHtmlArticle,
-)
+from app.collection.article_completion.ready import ReadyForArticleCompletion
+from app.collection.article_completion.repository import ArticleCompletionRepository
 from app.collection.domain.incomplete_article import IncompleteArticle
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.persistence.staged_attributes import StagedArticleAttributes
@@ -110,7 +108,7 @@ async def _claim_one(
     pending_id: int,
     *,
     now: datetime | None = None,
-) -> ClaimedPendingHtmlArticle:
+) -> ReadyForArticleCompletion:
     claim_now = now or datetime.now(UTC)
     repository = ArticleCompletionRepository(db_session)
     ids = await repository.claim_ready_batch(
@@ -120,18 +118,18 @@ async def _claim_one(
     )
     await db_session.commit()
     assert pending_id in ids
-    pending = await repository.find_claimed_for_completion(pending_id)
-    assert pending is not None
-    return pending
+    ready = await repository.try_load_for_completion(pending_id)
+    assert ready is not None
+    return ready
 
 
 # ---------------------------------------------------------------------------
-# find_claimed_for_completion
+# try_load_for_completion
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_find_claimed_for_completion_returns_claimed_target(
+async def test_try_load_for_completion_returns_claimed_target(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
     """``status='running'`` の行だけが completion target として物体化される。"""
@@ -155,11 +153,11 @@ async def test_find_claimed_for_completion_returns_claimed_target(
 
 
 @pytest.mark.asyncio
-async def test_find_claimed_for_completion_returns_none_for_missing_or_open(
+async def test_try_load_for_completion_returns_none_for_missing_or_open(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
     repository = ArticleCompletionRepository(db_session)
-    assert await repository.find_claimed_for_completion(999999) is None
+    assert await repository.try_load_for_completion(999999) is None
 
     pending_id = await _enqueue(
         db_session,
@@ -169,7 +167,7 @@ async def test_find_claimed_for_completion_returns_none_for_missing_or_open(
     )
     await db_session.commit()
 
-    assert await repository.find_claimed_for_completion(pending_id) is None
+    assert await repository.try_load_for_completion(pending_id) is None
 
 
 # ---------------------------------------------------------------------------

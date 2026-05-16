@@ -27,10 +27,8 @@ from app.collection.article_completion.disposition import (
     Retryable,
     Terminal,
 )
-from app.collection.article_completion.repository import (
-    ArticleCompletionRepository,
-    ClaimedPendingHtmlArticle,
-)
+from app.collection.article_completion.ready import ReadyForArticleCompletion
+from app.collection.article_completion.repository import ArticleCompletionRepository
 from app.collection.article_completion.retry_policy import effective_delay_minutes
 
 logger = structlog.get_logger(__name__)
@@ -49,7 +47,7 @@ class ArticleCompletionFailureHandler:
 
     async def handle(
         self,
-        pending: ClaimedPendingHtmlArticle,
+        ready: ReadyForArticleCompletion,
         disposition: CompletionDisposition,
         *,
         exc: BaseException | None = None,
@@ -63,17 +61,17 @@ class ArticleCompletionFailureHandler:
         match disposition:
             case Terminal() as terminal:
                 await self._handle_terminal(
-                    pending,
+                    ready,
                     reason_code=terminal.reason_code,
                     detail=terminal.detail,
                     exc=exc,
                 )
             case Retryable() as retryable:
-                await self._handle_temporary(pending, disposition=retryable, exc=exc)
+                await self._handle_temporary(ready, disposition=retryable, exc=exc)
 
     async def _handle_temporary(
         self,
-        pending: ClaimedPendingHtmlArticle,
+        ready: ReadyForArticleCompletion,
         *,
         disposition: Retryable,
         exc: BaseException | None = None,
@@ -84,82 +82,82 @@ class ArticleCompletionFailureHandler:
         policy.max_attempts`` なら ``closed``、未満なら ``open`` + 未来の
         ``ready_at`` に戻す。policy 別のコード分岐は持たない。
         """
-        canonical_url = pending.incomplete_article.source_url
+        canonical_url = ready.incomplete_article.source_url
         policy = disposition.policy
         delay_minutes = effective_delay_minutes(
             policy,
             retry_after_seconds=disposition.retry_after_seconds,
-            attempt_count=pending.attempt_count,
+            attempt_count=ready.attempt_count,
         )
-        exhausted = pending.attempt_count >= policy.max_attempts
+        exhausted = ready.attempt_count >= policy.max_attempts
         now = datetime.now(UTC)
         async with self._session_factory() as session:
             repository = ArticleCompletionRepository(session)
             if exhausted:
-                updated = await repository.close_claimed(pending, now=now)
+                updated = await repository.close_claimed(ready, now=now)
             else:
                 next_at = now + timedelta(minutes=delay_minutes)
                 updated = await repository.schedule_retry(
-                    pending, ready_at=next_at, now=now
+                    ready, ready_at=next_at, now=now
                 )
             await session.commit()
 
         if not updated:
             logger.info(
                 "article_completion_stale_attempt_ignored",
-                pending_id=pending.pending_id,
-                source_id=pending.source_id,
+                pending_id=ready.pending_id,
+                source_id=ready.source_id,
                 canonical_url=str(canonical_url),
-                attempt_count=pending.attempt_count,
+                attempt_count=ready.attempt_count,
                 reason_code=disposition.reason_code,
             )
             return None
 
         logger.warning(
             "article_completion_temporary",
-            pending_id=pending.pending_id,
-            source_id=pending.source_id,
+            pending_id=ready.pending_id,
+            source_id=ready.source_id,
             canonical_url=str(canonical_url),
             reason_code=disposition.reason_code,
             policy_code=policy.code,
             exhausted=exhausted,
-            attempt_count=pending.attempt_count,
+            attempt_count=ready.attempt_count,
             error_class=type(exc).__name__ if exc is not None else None,
         )
         return None
 
     async def _handle_terminal(
         self,
-        pending: ClaimedPendingHtmlArticle,
+        ready: ReadyForArticleCompletion,
         *,
         reason_code: str,
         exc: BaseException | None = None,
         detail: str | None = None,
     ) -> None:
         """終端失敗を ``closed`` に閉じる。"""
-        canonical_url = pending.incomplete_article.source_url
+        canonical_url = ready.incomplete_article.source_url
         now = datetime.now(UTC)
         async with self._session_factory() as session:
             updated = await ArticleCompletionRepository(session).close_claimed(
-                pending, now=now
+                ready, now=now
             )
             await session.commit()
 
         if not updated:
             logger.info(
                 "article_completion_stale_attempt_ignored",
-                pending_id=pending.pending_id,
-                source_id=pending.source_id,
+                pending_id=ready.pending_id,
+                source_id=ready.source_id,
                 canonical_url=str(canonical_url),
-                attempt_count=pending.attempt_count,
+                attempt_count=ready.attempt_count,
                 reason_code=reason_code,
             )
             return None
 
         logger.warning(
             "article_completion_terminal",
-            pending_id=pending.pending_id,
-            source_id=pending.source_id,
+            pending_id=ready.pending_id,
+            source_id=ready.source_id,
             canonical_url=str(canonical_url),
             reason_code=reason_code,
             error_class=type(exc).__name__ if exc is not None else None,

@@ -18,27 +18,13 @@ from sqlalchemy import delete, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
+from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.incomplete_article import IncompleteArticle
 from app.collection.persistence.article_store import ArticleStore
 from app.collection.persistence.staged_attributes import StagedArticleAttributes
 from app.models.pending_html_article import PendingHtmlArticle as PendingHtmlArticleORM
 from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
-
-
-@dataclass(frozen=True, slots=True)
-class ClaimedPendingHtmlArticle:
-    """Stage 2 が処理してよい pending 行。
-
-    この型が作られるのは ``status='running'`` の行だけ。``status`` /
-    ``ready_at`` / ``leased_until`` は処理資格判定後の service には不要なので
-    渡さない。``attempt_count`` は retry 予算判定と stale worker guard の SSoT。
-    """
-
-    pending_id: int
-    source_id: int
-    attempt_count: int
-    incomplete_article: IncompleteArticle
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,13 +46,14 @@ class ArticleCompletionRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def find_claimed_for_completion(
+    async def try_load_for_completion(
         self, pending_id: int
-    ) -> ClaimedPendingHtmlArticle | None:
-        """処理資格を満たす pending をロードする。
+    ) -> ReadyForArticleCompletion | None:
+        """``ReadyForArticleCompletion.try_advance_from`` 用ロード。
 
-        ``status='running'`` の行だけを返す。未 claim / sweep 済 / close 済 /
-        delete 済の id はすべて ``None`` として扱い、service は no-op で抜ける。
+        ``status='running'`` の行だけを ``ReadyForArticleCompletion`` として
+        物体化する。未 claim / sweep 済 / close 済 / delete 済の id はすべて
+        ``None`` として扱い、Task は no-op で抜ける。
         """
         stmt = (
             select(
@@ -90,7 +77,7 @@ class ArticleCompletionRepository:
         # ORM 列は SafeUrl 表現で読み出されるが、DB 上の値は INSERT 時の
         # canonical 値なので冪等に再構築できる。
         canonical_url = CanonicalArticleUrl(row.url.root)
-        return ClaimedPendingHtmlArticle(
+        return ReadyForArticleCompletion(
             pending_id=row.id,
             source_id=row.source_id,
             attempt_count=row.attempt_count,
@@ -171,7 +158,7 @@ class ArticleCompletionRepository:
 
     async def close_claimed(
         self,
-        pending: ClaimedPendingHtmlArticle,
+        ready: ReadyForArticleCompletion,
         *,
         now: datetime,
     ) -> bool:
@@ -179,9 +166,9 @@ class ArticleCompletionRepository:
         stmt = (
             update(PendingHtmlArticleORM)
             .where(
-                PendingHtmlArticleORM.id == pending.pending_id,
+                PendingHtmlArticleORM.id == ready.pending_id,
                 PendingHtmlArticleORM.status == "running",
-                PendingHtmlArticleORM.attempt_count == pending.attempt_count,
+                PendingHtmlArticleORM.attempt_count == ready.attempt_count,
             )
             .values(status="closed", leased_until=None, updated_at=now)
             .returning(PendingHtmlArticleORM.id)
@@ -190,7 +177,7 @@ class ArticleCompletionRepository:
 
     async def schedule_retry(
         self,
-        pending: ClaimedPendingHtmlArticle,
+        ready: ReadyForArticleCompletion,
         *,
         ready_at: datetime,
         now: datetime,
@@ -199,9 +186,9 @@ class ArticleCompletionRepository:
         stmt = (
             update(PendingHtmlArticleORM)
             .where(
-                PendingHtmlArticleORM.id == pending.pending_id,
+                PendingHtmlArticleORM.id == ready.pending_id,
                 PendingHtmlArticleORM.status == "running",
-                PendingHtmlArticleORM.attempt_count == pending.attempt_count,
+                PendingHtmlArticleORM.attempt_count == ready.attempt_count,
             )
             .values(
                 status="open",
@@ -215,7 +202,7 @@ class ArticleCompletionRepository:
 
     async def persist_completed(
         self,
-        pending: ClaimedPendingHtmlArticle,
+        ready: ReadyForArticleCompletion,
         advanced: AnalyzableArticle,
     ) -> CompletionPersistResult:
         """補完成功を永続化する。
@@ -224,20 +211,20 @@ class ArticleCompletionRepository:
         pending を DELETE する。DELETE できた場合だけ ``articles`` に INSERT し、
         ``source_url`` conflict は ``article_id=None`` として返す。
         """
-        deleted = await self._delete_claimed(pending)
+        deleted = await self._delete_claimed(ready)
         if not deleted:
             return CompletionPersistResult(article_id=None, pending_deleted=False)
 
         article_id = await ArticleStore(self._session).save(advanced)
         return CompletionPersistResult(article_id=article_id, pending_deleted=True)
 
-    async def _delete_claimed(self, pending: ClaimedPendingHtmlArticle) -> bool:
+    async def _delete_claimed(self, ready: ReadyForArticleCompletion) -> bool:
         stmt = (
             delete(PendingHtmlArticleORM)
             .where(
-                PendingHtmlArticleORM.id == pending.pending_id,
+                PendingHtmlArticleORM.id == ready.pending_id,
                 PendingHtmlArticleORM.status == "running",
-                PendingHtmlArticleORM.attempt_count == pending.attempt_count,
+                PendingHtmlArticleORM.attempt_count == ready.attempt_count,
             )
             .returning(PendingHtmlArticleORM.id)
         )

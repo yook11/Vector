@@ -211,26 +211,44 @@ async def extract_html_body(
     """Pattern H 2 段目: HTML 取得 + 本文抽出 + Article 永続化を Service に委譲。
 
     PR2.5-B cutover で taskiq retry を完全に殺し、cron poller
-    (``dispatch_html_fetch_jobs``) のみで再投入する設計。task の責務は
-    戻り値 dispatch のみ:
+    (``dispatch_html_fetch_jobs``) のみで再投入する設計。案 3 cutover で Stage
+    3/4 と同型化: task が処理開始時に ``ReadyForArticleCompletion.try_advance_from``
+    で厚い Ready を自構築し (precondition ``status='running'`` 未充足なら skip
+    log + ``None``)、Service は Ready だけ受け取る。task の責務:
 
-    - ``ArticleCompletionService.execute(pending_id)`` を呼び、結果に応じて分岐
+    - ``ReadyForArticleCompletion.try_advance_from(pending_id)`` で Ready 構築。
+      ``None`` (重複配送 / lease 衝突 / sweep 済 / close 済) は skip log + ``None``
+    - ``ArticleCompletionService.execute(ready)`` を呼び、結果に応じて分岐
     - ``int`` (article_id) が返れば ``ExtractionTrigger(article_id)`` を
-      ``extract_content.kiq`` に流す (案 3: 下流 Stage 3 task が処理開始時に
-      Ready 自構築)
-    - ``None`` (重複配送 / lease 衝突 / 永続失敗 / 一時失敗 / race-loss) は何
-      もしない (DB 状態 + audit は Service 内で完結済、失敗詳細は
-      ``pipeline_events.payload.reason_code`` で観測)
+      ``extract_content.kiq`` に流す (下流 Stage 3 task が処理開始時に Ready 自構築)
+    - ``None`` (永続失敗 / 一時失敗 / race-loss) は何もしない (DB 状態 + audit は
+      Service / failure handler 内で完結済、失敗詳細は構造化ログで観測)
     - ``TemporaryFetchError`` は Service 内で DB 状態更新 + audit に変換される
       ため task では catch しない
     """
     from app.analysis.extraction.domain.ready import ExtractionTrigger
     from app.analysis.extraction.tasks import extract_content
+    from app.collection.article_completion.ready import ReadyForArticleCompletion
+    from app.collection.article_completion.repository import (
+        ArticleCompletionRepository,
+    )
     from app.collection.article_completion.service import ArticleCompletionService
 
     session_factory = ctx.state.session_factory
-    svc = ArticleCompletionService(session_factory)
-    article_id = await svc.execute(pending_id)
+    async with session_factory() as session:
+        ready = await ReadyForArticleCompletion.try_advance_from(
+            pending_id=pending_id,
+            repo=ArticleCompletionRepository(session),
+        )
+    if ready is None:
+        logger.info(
+            "extract_html_body_skipped",
+            pending_id=pending_id,
+            reason="precondition_not_met",
+        )
+        return None
+
+    article_id = await ArticleCompletionService(session_factory).execute(ready)
 
     if article_id is None:
         return None

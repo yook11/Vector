@@ -12,7 +12,6 @@
 - 成功時に HTML から抽出した ``body`` / ``title`` / ``published_at`` がそのまま
   ``articles`` 行に保存される
 - race-loss 時に既存 article は残り、敗者側の pending は DELETE される
-- 重複配送 / 状態不整合 (status != 'running') は ``None`` で静かに exit
 - disposition (Terminal/Retryable) で pending 状態が決まる (Retryable の BLIP
   系 1 回目失敗 = 0.5 分後 / Terminal = closed / RETRY_AFTER = server 指示秒)
 """
@@ -31,6 +30,7 @@ from app.collection.article_completion.extractor import (
     ExtractedContent,
     ExtractionEmpty,
 )
+from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.article_completion.repository import ArticleCompletionRepository
 from app.collection.article_completion.service import ArticleCompletionService
 from app.collection.domain.incomplete_article import (
@@ -83,18 +83,31 @@ def _incomplete(
     )
 
 
+async def _load_ready(
+    db_session: AsyncSession, pending_id: int
+) -> ReadyForArticleCompletion:
+    """Task 層と同じく ``try_advance_from`` で厚い Ready を構築する。"""
+    ready = await ReadyForArticleCompletion.try_advance_from(
+        pending_id=pending_id,
+        repo=ArticleCompletionRepository(db_session),
+    )
+    assert ready is not None
+    return ready
+
+
 async def _make_pending(
     db_session: AsyncSession,
     source: NewsSource,
     url: str,
     *,
     incomplete: IncompleteArticle | None = None,
-) -> tuple[CanonicalArticleUrl, int]:
-    """``pending_html_articles`` 行を 1 件作って claim 状態にする。
+) -> tuple[CanonicalArticleUrl, int, ReadyForArticleCompletion]:
+    """``pending_html_articles`` 行を 1 件作って claim 状態にし Ready を構築する。
 
     Returns:
-        (canonical_url, pending_id) — pending は claim 済 (status='running',
-        attempt_count=1)。
+        (canonical_url, pending_id, ready) — pending は claim 済
+        (status='running', attempt_count=1)。``ready`` は Task 層が
+        ``try_advance_from`` で構築するのと同じ厚い Ready。
     """
     canonical_url = CanonicalArticleUrl(url)
     pending_id = await PendingHtmlEnqueue(db_session).enqueue(
@@ -112,7 +125,8 @@ async def _make_pending(
     )
     await db_session.commit()
     assert pending_id in ids
-    return canonical_url, pending_id
+    ready = await _load_ready(db_session, pending_id)
+    return canonical_url, pending_id, ready
 
 
 def _patch_fetch(monkeypatch: pytest.MonkeyPatch, mock: AsyncMock) -> None:
@@ -124,41 +138,11 @@ def _patch_fetch(monkeypatch: pytest.MonkeyPatch, mock: AsyncMock) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 入口ガード
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_returns_none_for_missing_pending(
-    session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    """重複配送 (DELETE 済 / 不在 ID) は ``None`` で静かに exit。"""
-    svc = ArticleCompletionService(session_factory)
-    outcome = await svc.execute(999_999)
-    assert outcome is None
-
-
-@pytest.mark.asyncio
-async def test_returns_none_for_open_pending(
-    session_factory: async_sessionmaker[AsyncSession],
-    db_session: AsyncSession,
-    tc_source: NewsSource,
-) -> None:
-    """``status='open'`` (claim されていない) は ``None`` で静かに exit。"""
-    pending_id = await PendingHtmlEnqueue(db_session).enqueue(
-        _incomplete(tc_source, "https://techcrunch.com/open"),
-        ready_at=datetime.now(UTC) - timedelta(seconds=1),
-    )
-    await db_session.commit()
-    assert pending_id is not None  # status='open' (claim されていない)
-
-    svc = ArticleCompletionService(session_factory)
-    outcome = await svc.execute(pending_id)
-    assert outcome is None
-
-
-# ---------------------------------------------------------------------------
 # 成功 path
+#
+# precondition 未充足 (missing / open / sweep 済) で ``None`` を返す経路は Ready
+# 構築段の責務になったため、repository (``test_repository.py``) と task
+# (``test_extract_html_body.py``) に移管した。service は厚い Ready だけ受け取る。
 # ---------------------------------------------------------------------------
 
 
@@ -170,7 +154,7 @@ async def test_success_returns_article_id_and_persists_article(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """ExtractedContent + 永続化成功 → ``int`` (article_id) 返却 + Article 1 件作成。"""
-    canonical_url, pending_id = await _make_pending(
+    canonical_url, _, ready = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/article-1"
     )
     _patch_fetch(
@@ -185,7 +169,7 @@ async def test_success_returns_article_id_and_persists_article(
     )
 
     svc = ArticleCompletionService(session_factory)
-    article_id = await svc.execute(pending_id)
+    article_id = await svc.execute(ready)
 
     assert isinstance(article_id, int)
     articles = (await db_session.execute(select(ArticleORM))).scalars().all()
@@ -202,7 +186,7 @@ async def test_success_deletes_pending_in_same_tx(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """成功時に ``pending_html_articles`` 行は DELETE (articles INSERT と同 tx)。"""
-    _, pending_id = await _make_pending(
+    _, pending_id, ready = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/article-2"
     )
     _patch_fetch(
@@ -217,7 +201,7 @@ async def test_success_deletes_pending_in_same_tx(
     )
 
     svc = ArticleCompletionService(session_factory)
-    await svc.execute(pending_id)
+    await svc.execute(ready)
 
     remaining = (
         await db_session.execute(
@@ -244,7 +228,7 @@ async def test_success_persists_extracted_body_and_published_at(
     # RSS hint=None で HTML published_at を fallback 経路で流入させ、
     # prefer_html_title=True で HTML title を採用させる
     url = "https://techcrunch.com/article-3"
-    _, pending_id = await _make_pending(
+    _, _, ready = await _make_pending(
         db_session,
         tc_source,
         url,
@@ -268,7 +252,7 @@ async def test_success_persists_extracted_body_and_published_at(
     )
 
     svc = ArticleCompletionService(session_factory)
-    article_id = await svc.execute(pending_id)
+    article_id = await svc.execute(ready)
 
     assert isinstance(article_id, int)
     article = (
@@ -296,7 +280,7 @@ async def test_terminal_fetch_error_returns_none_and_closes_pending(
     404 (``FetchResourceNotFoundError``) は disposition で ``Terminal`` に分類され、
     pending は再試行されず ``closed`` に閉じ、Article は作成されない。
     """
-    _, pending_id = await _make_pending(
+    _, pending_id, ready = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/dead"
     )
     _patch_fetch(
@@ -307,7 +291,7 @@ async def test_terminal_fetch_error_returns_none_and_closes_pending(
     )
 
     svc = ArticleCompletionService(session_factory)
-    outcome = await svc.execute(pending_id)
+    outcome = await svc.execute(ready)
 
     assert outcome is None
     articles = (await db_session.execute(select(ArticleORM))).scalars().all()
@@ -329,7 +313,7 @@ async def test_extraction_empty_closes_pending(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """ExtractionEmpty → ``None`` + pending status='closed'。"""
-    _, pending_id = await _make_pending(
+    _, pending_id, ready = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/empty"
     )
     _patch_fetch(
@@ -337,7 +321,7 @@ async def test_extraction_empty_closes_pending(
     )
 
     svc = ArticleCompletionService(session_factory)
-    outcome = await svc.execute(pending_id)
+    outcome = await svc.execute(ready)
 
     assert outcome is None
     pending = (
@@ -360,7 +344,7 @@ async def test_promotion_failure_closes_pending(
     body はあるが published_at が両方 None で promotion failure を発生させる。
     """
     url = "https://techcrunch.com/short"
-    _, pending_id = await _make_pending(
+    _, pending_id, ready = await _make_pending(
         db_session,
         tc_source,
         url,
@@ -380,7 +364,7 @@ async def test_promotion_failure_closes_pending(
     )
 
     svc = ArticleCompletionService(session_factory)
-    outcome = await svc.execute(pending_id)
+    outcome = await svc.execute(ready)
 
     assert outcome is None
     articles = (await db_session.execute(select(ArticleORM))).scalars().all()
@@ -410,13 +394,13 @@ async def test_temporary_blip_first_attempt_writes_will_retry(
     502 (``FetchGatewayError``) は disposition で BLIP policy の ``Retryable``。
     schedule[0] = 0.5 分なので next ready_at は約 30 秒後。
     """
-    _, pending_id = await _make_pending(
+    _, pending_id, ready = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/blip"
     )
     _patch_fetch(monkeypatch, AsyncMock(side_effect=FetchGatewayError(status_code=502)))
 
     svc = ArticleCompletionService(session_factory)
-    outcome = await svc.execute(pending_id)
+    outcome = await svc.execute(ready)
 
     assert outcome is None
 
@@ -445,7 +429,7 @@ async def test_temporary_outage_exhausted_closes_pending(
     503 (Retry-After なし) は disposition で OUTAGE policy の ``Retryable``。
     OUTAGE_POLICY.max_attempts = 12 に到達済なので exhausted で ``closed``。
     """
-    _, pending_id = await _make_pending(
+    _, pending_id, _ = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/outage"
     )
     # OUTAGE_POLICY.max_attempts = 12 を超過させる: attempt_count を 12 に強制セット
@@ -455,6 +439,9 @@ async def test_temporary_outage_exhausted_closes_pending(
         .values(attempt_count=12)
     )
     await db_session.commit()
+    # attempt_count 更新後の状態で Ready を再構築 (exhausted 判定の SSoT)
+    ready = await _load_ready(db_session, pending_id)
+    assert ready.attempt_count == 12
     _patch_fetch(
         monkeypatch,
         AsyncMock(
@@ -467,7 +454,7 @@ async def test_temporary_outage_exhausted_closes_pending(
     )
 
     svc = ArticleCompletionService(session_factory)
-    outcome = await svc.execute(pending_id)
+    outcome = await svc.execute(ready)
 
     assert outcome is None
 
@@ -493,7 +480,7 @@ async def test_temporary_retry_after_uses_server_delay(
     disposition で RETRY_AFTER policy + override 秒の ``Retryable``。
     ``effective_delay_minutes`` が 120 秒 → 2 分に換算して next ready_at にする。
     """
-    _, pending_id = await _make_pending(
+    _, pending_id, ready = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/retry-after"
     )
     _patch_fetch(
@@ -508,7 +495,7 @@ async def test_temporary_retry_after_uses_server_delay(
     )
 
     svc = ArticleCompletionService(session_factory)
-    outcome = await svc.execute(pending_id)
+    outcome = await svc.execute(ready)
 
     assert outcome is None
 
@@ -541,7 +528,7 @@ async def test_race_lost_returns_none_and_deletes_pending(
 
     pre-condition: 同 ``source_url`` の Article を直接 INSERT (race の "勝者")。
     """  # noqa: E501
-    canonical_url, pending_id = await _make_pending(
+    canonical_url, pending_id, ready = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/race"
     )
     # winner 役の Article を先に INSERT (同一 canonical source_url)
@@ -567,7 +554,7 @@ async def test_race_lost_returns_none_and_deletes_pending(
     )
 
     svc = ArticleCompletionService(session_factory)
-    outcome = await svc.execute(pending_id)
+    outcome = await svc.execute(ready)
 
     assert outcome is None
     # articles は 1 件のまま (敗者は INSERT しない)
