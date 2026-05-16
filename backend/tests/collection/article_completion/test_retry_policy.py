@@ -1,13 +1,13 @@
 """``app.collection.article_completion.retry_policy`` の純関数テスト。
 
 policy table の値そのものはスナップショット (spec line 232-238) を反映した
-だけなので、ここで再検証するのは無価値。代わりに **policy 選択ロジック**
-と **次回 delay 計算の振る舞い** に絞る:
+だけなので、ここで再検証するのは無価値。代わりに **policy データの振る舞い**
+に絞る (exception → policy の写像は disposition.py の関心に移管済、
+``test_article_completion_disposition.py`` が網羅する):
 
-- exception 階層と policy の対応 (5 分岐)
 - ``next_delay_minutes`` の境界 (attempt_count 範囲外、schedule 長を超える)
-- ``Retry-After`` の上書きが ``compute_next_delay_minutes`` で適用される
-- ``MAX_DELAY_MINUTES`` cap が override にも policy schedule にも適用される
+- ``effective_delay_minutes`` の retry_after 優先 / 分換算 / ``MAX_DELAY_MINUTES`` cap
+- policy ごとの ``max_attempts`` (Service の exhausted 判定契約)
 """
 
 from __future__ import annotations
@@ -19,51 +19,10 @@ from app.collection.article_completion.retry_policy import (
     MAX_DELAY_MINUTES,
     OUTAGE_POLICY,
     RETRY_AFTER_POLICY,
-    TIMEOUT_POLICY,
     UNKNOWN_POLICY,
     RetryPolicy,
-    compute_next_delay_minutes,
-    retry_policy_for,
+    effective_delay_minutes,
 )
-from app.collection.errors import (
-    ReadTimeout,
-    ServerErrorBlip,
-    ServerErrorOutage,
-    ServerErrorRetryAfter,
-    TemporaryFetchError,
-)
-
-
-class TestRetryPolicyForExceptionHierarchy:
-    """exception → policy の写像が一意かつ正しいことを保証。"""
-
-    def test_blip_for_blip_class(self) -> None:
-        policy, override = retry_policy_for(ServerErrorBlip("502: x"))
-        assert policy is BLIP_POLICY
-        assert override is None
-
-    def test_outage_for_outage_class(self) -> None:
-        policy, override = retry_policy_for(ServerErrorOutage("503: x"))
-        assert policy is OUTAGE_POLICY
-        assert override is None
-
-    def test_timeout_for_read_timeout(self) -> None:
-        policy, override = retry_policy_for(ReadTimeout("timeout: x"))
-        assert policy is TIMEOUT_POLICY
-        assert override is None
-
-    def test_retry_after_returns_seconds_override(self) -> None:
-        # 重要: server 指示秒数を override で返す (caller 優先)
-        exc = ServerErrorRetryAfter("503 ra: x", retry_after_seconds=120.0)
-        policy, override = retry_policy_for(exc)
-        assert policy is RETRY_AFTER_POLICY
-        assert override == 120.0
-
-    def test_unknown_for_bare_temporary(self) -> None:
-        # 素の TemporaryFetchError (未分類) は保守的な outage 寄りで吸収
-        policy, override = retry_policy_for(TemporaryFetchError("x"))
-        assert policy is UNKNOWN_POLICY
-        assert override is None
 
 
 class TestNextDelayMinutesBoundaries:
@@ -95,44 +54,45 @@ class TestNextDelayMinutesBoundaries:
             empty.next_delay_minutes(1)
 
 
-class TestComputeNextDelayMinutesIntegration:
-    """``compute_next_delay_minutes`` は cap と override を統合する責務。"""
+class TestEffectiveDelayMinutes:
+    """policy データ駆動の遅延算出 (disposition 経路の正準 API)。
 
-    def test_blip_uses_schedule_no_cap_needed(self) -> None:
-        # BLIP の schedule 値は全て 60 以下、cap は不発
-        policy, delay = compute_next_delay_minutes(
-            ServerErrorBlip("x"), attempt_count=1
+    exception 型に依存せず policy 値だけで完結する。cap / override の責務を
+    retry_after 経路 / schedule 経路の両軸で固定する。
+    """
+
+    def test_uses_policy_schedule_when_no_retry_after(self) -> None:
+        # retry_after なし → policy.next_delay_minutes(attempt_count)
+        delay = effective_delay_minutes(
+            BLIP_POLICY, retry_after_seconds=None, attempt_count=1
         )
-        assert policy is BLIP_POLICY
-        assert delay == 0.5  # schedule[0]
+        assert delay == BLIP_POLICY.delay_minutes_schedule[0]
 
     def test_retry_after_seconds_converted_to_minutes(self) -> None:
-        # 120 秒 → 2 分。cap (60 分) は不発
-        exc = ServerErrorRetryAfter("x", retry_after_seconds=120.0)
-        policy, delay = compute_next_delay_minutes(exc, attempt_count=1)
-        assert policy is RETRY_AFTER_POLICY
+        # 120 秒 → 2 分。policy schedule より優先される。
+        delay = effective_delay_minutes(
+            OUTAGE_POLICY, retry_after_seconds=120.0, attempt_count=1
+        )
         assert delay == 2.0
 
     def test_retry_after_capped_at_max_delay(self) -> None:
-        # server が 1 時間以上を指示しても 60 分で頭打ち
-        exc = ServerErrorRetryAfter("x", retry_after_seconds=7200.0)  # 2 時間
-        _, delay = compute_next_delay_minutes(exc, attempt_count=1)
-        assert delay == MAX_DELAY_MINUTES  # 60 分
-
-    def test_outage_schedule_includes_max_delay(self) -> None:
-        # OUTAGE schedule の途中で 60 分が出る、cap と一致
-        _, delay = compute_next_delay_minutes(ServerErrorOutage("x"), attempt_count=4)
-        assert delay == 60.0  # schedule[3]
-        # それ以上で攻めて attempt_count=99 でも 60 で頭打ち
-        _, delay_99 = compute_next_delay_minutes(
-            ServerErrorOutage("x"), attempt_count=99
+        # server が 2 時間を指示しても 60 分で頭打ち。
+        delay = effective_delay_minutes(
+            RETRY_AFTER_POLICY, retry_after_seconds=7200.0, attempt_count=1
         )
-        assert delay_99 == 60.0
+        assert delay == MAX_DELAY_MINUTES
 
-    def test_retry_after_zero_seconds_yields_zero_delay(self) -> None:
-        # server が「すぐ retry」を指示した場合、0 分。cap も無効化されない
-        exc = ServerErrorRetryAfter("x", retry_after_seconds=0.0)
-        _, delay = compute_next_delay_minutes(exc, attempt_count=1)
+    def test_policy_schedule_capped_at_max_delay(self) -> None:
+        # schedule 値が MAX 超なら cap が schedule 側にも効く (min clamp 対象)。
+        hot = RetryPolicy(code="hot", max_attempts=3, delay_minutes_schedule=(120.0,))
+        delay = effective_delay_minutes(hot, retry_after_seconds=None, attempt_count=1)
+        assert delay == MAX_DELAY_MINUTES
+
+    def test_retry_after_zero_yields_zero_delay(self) -> None:
+        # server の即時 retry 指示は 0 分 (cap で潰さない)。
+        delay = effective_delay_minutes(
+            RETRY_AFTER_POLICY, retry_after_seconds=0.0, attempt_count=1
+        )
         assert delay == 0.0
 
 

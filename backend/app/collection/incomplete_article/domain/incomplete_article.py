@@ -58,14 +58,13 @@ class IncompleteArticle(BaseModel):
         - ``body``: HTML から取得した本文をそのまま使う (RSS には存在しない)。
 
         ``ReadyForArticle`` の Field invariant (length / 形式) 違反は
-        ``code="other"`` で wrap して返す。
+        ``code="ready_invariant_failed"`` で wrap して返す。
         """
         final_published = self.published_at_hint or html_published_at
         if final_published is None:
             return ArticleCompletionFailed(
                 reason=ArticleCompletionFailureReason(
                     code="published_at_missing",
-                    retryable=False,
                     detail="rss_and_html_both_missing",
                 )
             )
@@ -83,8 +82,7 @@ class IncompleteArticle(BaseModel):
         except ValueError as e:
             return ArticleCompletionFailed(
                 reason=ArticleCompletionFailureReason(
-                    code="other",
-                    retryable=False,
+                    code="ready_invariant_failed",
                     detail=f"invariant_violation:{e}",
                 )
             )

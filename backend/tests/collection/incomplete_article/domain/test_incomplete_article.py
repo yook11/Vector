@@ -135,7 +135,7 @@ class TestCompleteWithHtmlPromotion:
             html_published_at=None,
         )
         assert isinstance(result, ArticleCompletionFailed)
-        assert result.reason.code == "other"
+        assert result.reason.code == "ready_invariant_failed"
 
     def test_html_title_used_only_when_prefer_html_title(self) -> None:
         rss_pub = PublishedAt(value=datetime(2026, 4, 30, tzinfo=UTC))

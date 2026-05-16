@@ -1,9 +1,10 @@
-"""エラー種別ごとの retry policy 純関数モジュール。
+"""エラー種別ごとの retry policy 純データ + 遅延算出モジュール。
 
-PR2.5-B 設計の核: ``ArticleCompletionService`` が ``TemporaryFetchError`` 系の
-exception を受けたとき、policy 計算 (次回 ``ready_at`` の遅延と
-最大試行回数) は本モジュールの純関数だけで完結し、Service 本体は
-DB 状態更新と audit 焼付に専念する。
+Stage 2 disposition 設計の核: ``classify_external_fetch_error`` が origin
+failure を ``Retryable`` に分類するとき、再投入の仕方を表す ``RetryPolicy``
+を **データ** として載せる。``ArticleCompletionService`` は policy ごとに
+コード分岐せず ``effective_delay_minutes`` で次回 ``ready_at`` の遅延を、
+``policy.max_attempts`` で exhausted 判定だけを行う。
 
 policy table の根拠は ``specs/pipeline-events-stage2-design.md`` line 226-244:
 
@@ -13,7 +14,7 @@ policy table の根拠は ``specs/pipeline-events-stage2-design.md`` line 226-24
 | HTTP 503 (no Retry-After) | 5 → 15 → 30 → 60 × 9 | 12 | outage-class |
 | HTTP 503 with Retry-After | header 値、後続 cap 60 分 | 12 | server-instructed |
 | Read timeout | 2 → 5 × 7 | 8 | timeout (blip 寄り) |
-| 未分類 TemporaryFetchError | 5 → 15 → 30 → 60 × 3 | 6 | unknown (outage 寄り保守的) |
+| 未分類 origin failure | 5 → 15 → 30 → 60 × 3 | 6 | unknown (outage 寄り保守的) |
 
 policy 値は spec の table を実装したスナップショット。運用観察後の
 調整は **PR2.5-D** で行う (本 PR では table の値を変えない)。
@@ -22,14 +23,6 @@ policy 値は spec の table を実装したスナップショット。運用観
 from __future__ import annotations
 
 from dataclasses import dataclass
-
-from app.collection.errors import (
-    ReadTimeout,
-    ServerErrorBlip,
-    ServerErrorOutage,
-    ServerErrorRetryAfter,
-    TemporaryFetchError,
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,40 +99,21 @@ UNKNOWN_POLICY = RetryPolicy(
 MAX_DELAY_MINUTES = 60.0
 
 
-def retry_policy_for(
-    exc: TemporaryFetchError,
-) -> tuple[RetryPolicy, float | None]:
-    """exception 階層から policy を一意に決定する純関数。
+def effective_delay_minutes(
+    policy: RetryPolicy,
+    *,
+    retry_after_seconds: float | None,
+    attempt_count: int,
+) -> float:
+    """policy データだけで次回 retry までの遅延 (分) を算出する純関数。
 
-    Returns:
-        (policy, override_seconds):
-          - ``override_seconds`` が ``None`` でなければ ``Retry-After`` の
-            指示秒数。caller は policy.next_delay_minutes より優先して使う
-            (後続 cap は ``MAX_DELAY_MINUTES`` を caller 側で適用)。
+    ``retry_after_seconds`` (server 指示) があれば分換算で優先、なければ
+    ``policy.next_delay_minutes(attempt_count)``。どちらも ``MAX_DELAY_MINUTES``
+    で cap する。exception 型に一切依存せず disposition が運ぶ ``RetryPolicy``
+    と override 秒だけで完結する、Stage 2 disposition 経路の正準 API。
     """
-    if isinstance(exc, ServerErrorRetryAfter):
-        return RETRY_AFTER_POLICY, exc.retry_after_seconds
-    if isinstance(exc, ServerErrorBlip):
-        return BLIP_POLICY, None
-    if isinstance(exc, ServerErrorOutage):
-        return OUTAGE_POLICY, None
-    if isinstance(exc, ReadTimeout):
-        return TIMEOUT_POLICY, None
-    # 素の TemporaryFetchError (未分類)
-    return UNKNOWN_POLICY, None
-
-
-def compute_next_delay_minutes(
-    exc: TemporaryFetchError, attempt_count: int
-) -> tuple[RetryPolicy, float]:
-    """policy の選択 + delay 計算 + cap 適用までを一括する便利関数。
-
-    ``Retry-After`` の上書きと ``MAX_DELAY_MINUTES`` cap 適用が
-    Service 本体の散らかり要因になるので、両方を本関数で吸収する。
-    """
-    policy, override_seconds = retry_policy_for(exc)
-    if override_seconds is not None:
-        delay_minutes = override_seconds / 60.0
+    if retry_after_seconds is not None:
+        delay = retry_after_seconds / 60.0
     else:
-        delay_minutes = policy.next_delay_minutes(attempt_count)
-    return policy, min(delay_minutes, MAX_DELAY_MINUTES)
+        delay = policy.next_delay_minutes(attempt_count)
+    return min(delay, MAX_DELAY_MINUTES)

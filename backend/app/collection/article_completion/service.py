@@ -12,10 +12,10 @@ PR 4 で ``ContentFetchService`` から rename。「HTTP fetch する」技術�
 
 - ``find_by_id`` で pending を SELECT (``url`` 直接保持)
 - ``status='running'`` ガードで at-least-once 重複配送を静かに弾く
-- HTTP 取得 → ``ExtractionEmpty`` / ``PermanentFetchError`` の捌き
-- ``TemporaryFetchError`` を per-error retry policy で次 ``ready_at`` 計算
-  (max_attempts 超過なら ``mark_exhausted``)
-- promotion ``ArticleCompletionFailed`` の捌き
+- 全失敗を ``CompletionDisposition`` (``Terminal`` | ``Retryable``) に分類して
+  1 経路で捌く (origin fetch / ``ExtractionEmpty`` / promotion / persist 異常)
+- ``Retryable`` は policy データ駆動で次 ``ready_at`` 計算
+  (``attempt_count`` が ``policy.max_attempts`` 超過なら ``mark_exhausted``)
 - ``articles`` INSERT + ``pending_html_articles`` DELETE を **同 tx で一括 commit**
 - race-loss (``articles.source_url UNIQUE``) を ``find_by_source_url`` 読み戻しで
   吸収 (pending を DELETE、敗者側の article は INSERT しない)
@@ -29,8 +29,10 @@ caller (task) の責務:
 
 設計上の決定:
 
-- ``TemporaryFetchError`` は Service 内で全て catch して DB 状態更新に変換する
-  (taskiq retry は使わず DB 駆動)
+- origin failure は ``ExternalFetchError`` で catch し ``disposition`` mapper で
+  ``Retryable`` / ``Terminal`` に分類、retry は DB 駆動 (taskiq retry は使わない)
+- retry policy は ``Retryable`` が運ぶ **データ**。Service は policy ごとに
+  コード分岐せず ``exhausted`` 判定だけで処理経路を 1 本化する
 - ``attempt`` は ``pending.attempt_count`` を SSoT として使用 (caller から
   受け取らない、ι.2)
 - 成功側 / 失敗側の監査焼付 (``pipeline_events``) は中途半端な構造として撤去済。
@@ -47,13 +49,22 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.collection.article.domain.article import ReadyForArticle
 from app.collection.article.repository import ArticleRepository
+from app.collection.article_completion.disposition import (
+    CompletionDisposition,
+    Retryable,
+    Terminal,
+    classify_completion_failed,
+    classify_external_fetch_error,
+    classify_extraction_empty,
+    classify_persist_anomaly,
+)
 from app.collection.article_completion.extractor import (
     ArticleHtmlExtractor,
     ExtractedContent,
     ExtractionEmpty,
 )
-from app.collection.article_completion.retry_policy import compute_next_delay_minutes
-from app.collection.errors import PermanentFetchError, TemporaryFetchError
+from app.collection.article_completion.retry_policy import effective_delay_minutes
+from app.collection.external_fetch_errors import ExternalFetchError
 from app.collection.incomplete_article.domain.completion import ArticleCompletionFailed
 from app.collection.incomplete_article.repository import (
     PendingHtmlArticleRepository,
@@ -66,9 +77,9 @@ logger = structlog.get_logger(__name__)
 class ArticleCompletionService:
     """Pattern H 2 段目 — pending 1 件を HTML 取得 + 永続化する。
 
-    ``execute(pending_id)`` が単一エントリポイント。``TemporaryFetchError``
-    は内部で catch して per-error policy で DB 状態を更新するため、caller
-    に raise しない (taskiq retry に依存しない設計)。
+    ``execute(pending_id)`` が単一エントリポイント。origin failure は
+    ``ExternalFetchError`` で catch し disposition に分類、retry は DB 駆動で
+    caller に raise しない (taskiq retry に依存しない設計)。
     """
 
     def __init__(
@@ -100,16 +111,14 @@ class ArticleCompletionService:
             html_result = await extractor.fetch(
                 pending.incomplete_article.source_url.as_safe_url()
             )
-        except PermanentFetchError as exc:
-            return await self._handle_terminal(
-                pending, reason="permanent_fetch_error", exc=exc
+        except ExternalFetchError as exc:
+            return await self._dispatch_disposition(
+                pending, classify_external_fetch_error(exc), exc=exc
             )
-        except TemporaryFetchError as exc:
-            return await self._handle_temporary(pending, exc=exc)
 
         if isinstance(html_result, ExtractionEmpty):
-            return await self._handle_terminal(
-                pending, reason=f"extraction_empty_{html_result.reason}"
+            return await self._dispatch_disposition(
+                pending, classify_extraction_empty(html_result)
             )
 
         assert isinstance(html_result, ExtractedContent)  # noqa: S101
@@ -120,10 +129,8 @@ class ArticleCompletionService:
             html_title=html_result.title,
         )
         if isinstance(advanced, ArticleCompletionFailed):
-            return await self._handle_terminal(
-                pending,
-                reason=f"promotion_{advanced.reason.code}",
-                detail=advanced.reason.detail,
+            return await self._dispatch_disposition(
+                pending, classify_completion_failed(advanced)
             )
 
         return await self._persist(pending, advanced)
@@ -134,21 +141,54 @@ class ArticleCompletionService:
             repo = PendingHtmlArticleRepository(session)
             return await repo.find_by_id(pending_id)
 
+    async def _dispatch_disposition(
+        self,
+        pending: PendingHtmlContext,
+        disposition: CompletionDisposition,
+        *,
+        exc: BaseException | None = None,
+    ) -> None:
+        """全失敗を disposition trichotomy の 1 経路に集約する。
+
+        ``Terminal`` → pending を ``closed``。``Retryable`` → policy データ駆動で
+        次 ``ready_at`` を計算 (exhausted なら ``closed``)。policy ごとの
+        コード分岐は持たず ``exhausted`` 判定だけで経路を 1 本化する。
+        """
+        match disposition:
+            case Terminal() as terminal:
+                return await self._handle_terminal(
+                    pending,
+                    reason_code=terminal.reason_code,
+                    detail=terminal.detail,
+                    exc=exc,
+                )
+            case Retryable() as retryable:
+                return await self._handle_temporary(
+                    pending, disposition=retryable, exc=exc
+                )
+
     async def _handle_temporary(
         self,
         pending: PendingHtmlContext,
         *,
-        exc: TemporaryFetchError,
+        disposition: Retryable,
+        exc: BaseException | None = None,
     ) -> None:
-        """一時失敗を per-error policy で捌く。
+        """``Retryable`` を policy データ駆動で捌く。
 
-        ``pending.attempt_count >= policy.max_attempts`` なら ``mark_exhausted``
-        (status='closed')、未満なら ``mark_will_retry(ready_at=next_at)``
-        (status='open' + 未来の ready_at)。
+        ``effective_delay_minutes`` で次回遅延を算出し、``attempt_count >=
+        policy.max_attempts`` なら ``mark_exhausted`` (status='closed')、
+        未満なら ``mark_will_retry(ready_at=next_at)`` (status='open' +
+        未来の ready_at)。policy 別のコード分岐は持たない。
         """
         row_meta = pending.row_meta
         canonical_url = pending.incomplete_article.source_url
-        policy, delay_minutes = compute_next_delay_minutes(exc, row_meta.attempt_count)
+        policy = disposition.policy
+        delay_minutes = effective_delay_minutes(
+            policy,
+            retry_after_seconds=disposition.retry_after_seconds,
+            attempt_count=row_meta.attempt_count,
+        )
         exhausted = row_meta.attempt_count >= policy.max_attempts
         async with self._session_factory() as session:
             pending_repo = PendingHtmlArticleRepository(session)
@@ -164,10 +204,11 @@ class ArticleCompletionService:
             pending_id=row_meta.id,
             source_id=row_meta.source_id,
             canonical_url=str(canonical_url),
+            reason_code=disposition.reason_code,
             policy_code=policy.code,
             exhausted=exhausted,
             attempt_count=row_meta.attempt_count,
-            error_class=type(exc).__name__,
+            error_class=type(exc).__name__ if exc is not None else None,
         )
         return None
 
@@ -175,7 +216,7 @@ class ArticleCompletionService:
         self,
         pending: PendingHtmlContext,
         *,
-        reason: str,
+        reason_code: str,
         exc: BaseException | None = None,
         detail: str | None = None,
     ) -> None:
@@ -192,7 +233,7 @@ class ArticleCompletionService:
             pending_id=row_meta.id,
             source_id=row_meta.source_id,
             canonical_url=str(canonical_url),
-            reason=reason,
+            reason_code=reason_code,
             error_class=type(exc).__name__ if exc is not None else None,
             detail=detail,
         )
@@ -221,15 +262,12 @@ class ArticleCompletionService:
             if article_id is None:
                 existing = await article_repo.find_by_source_url(canonical_url)
                 if existing is None:
-                    await pending_repo.mark_terminal(row_meta.id)
-                    await session.commit()
-                    logger.warning(
-                        "article_completion_persist_anomaly",
-                        pending_id=row_meta.id,
-                        source_id=row_meta.source_id,
-                        canonical_url=str(canonical_url),
+                    # save_ready None かつ existing 読めず = 構造異常。
+                    # terminal close の log 経路を _handle_terminal に 1 本化する。
+                    return await self._handle_terminal(
+                        pending,
+                        reason_code=classify_persist_anomaly().reason_code,
                     )
-                    return None
 
                 await pending_repo.delete_one(row_meta.id)
                 await session.commit()

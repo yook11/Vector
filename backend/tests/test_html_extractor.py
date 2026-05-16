@@ -14,7 +14,16 @@ from app.collection.article_completion.extractor import (
     ExtractionEmpty,
     _decode_html_response,
 )
-from app.collection.errors import PermanentFetchError, TemporaryFetchError
+from app.collection.external_fetch_errors import (
+    FetchAccessDeniedError,
+    FetchNetworkError,
+    FetchOriginServerError,
+    FetchRedirectBlockedError,
+    FetchResponseTooLargeError,
+    FetchRobotsDisallowedError,
+    FetchSsrfBlockedError,
+    FetchTimeoutError,
+)
 from app.shared.value_objects.safe_url import SafeUrl
 
 
@@ -119,7 +128,7 @@ class TestArticleHtmlExtractor:
         assert result.title
 
     @pytest.mark.asyncio
-    async def test_raises_permanent_on_403(self) -> None:
+    async def test_raises_access_denied_on_403(self) -> None:
         robots_resp = httpx.Response(
             404,
             request=httpx.Request("GET", "https://example.com/robots.txt"),
@@ -136,12 +145,12 @@ class TestArticleHtmlExtractor:
         client = _mock_async_client([robots_resp, error_resp])
 
         extractor = ArticleHtmlExtractor()
-        with _patch_client(client), pytest.raises(PermanentFetchError, match="403"):
+        with _patch_client(client), pytest.raises(FetchAccessDeniedError, match="403"):
             await extractor.fetch(SafeUrl("https://example.com/paywall"))
 
     @pytest.mark.asyncio
-    async def test_raises_permanent_on_401(self) -> None:
-        """paywall (WSJ 等) は 401 を返すため Permanent 扱いとする。"""
+    async def test_raises_access_denied_on_401(self) -> None:
+        """paywall (WSJ 等) は 401 を返すため access-denied origin error にする。"""
         robots_resp = httpx.Response(
             404,
             request=httpx.Request("GET", "https://example.com/robots.txt"),
@@ -158,11 +167,11 @@ class TestArticleHtmlExtractor:
         client = _mock_async_client([robots_resp, error_resp])
 
         extractor = ArticleHtmlExtractor()
-        with _patch_client(client), pytest.raises(PermanentFetchError, match="401"):
+        with _patch_client(client), pytest.raises(FetchAccessDeniedError, match="401"):
             await extractor.fetch(SafeUrl("https://example.com/paywall"))
 
     @pytest.mark.asyncio
-    async def test_raises_temporary_on_500(self) -> None:
+    async def test_raises_origin_server_error_on_500(self) -> None:
         robots_resp = httpx.Response(
             404,
             request=httpx.Request("GET", "https://example.com/robots.txt"),
@@ -179,11 +188,11 @@ class TestArticleHtmlExtractor:
         client = _mock_async_client([robots_resp, error_resp])
 
         extractor = ArticleHtmlExtractor()
-        with _patch_client(client), pytest.raises(TemporaryFetchError, match="500"):
+        with _patch_client(client), pytest.raises(FetchOriginServerError, match="500"):
             await extractor.fetch(SafeUrl("https://example.com/error"))
 
     @pytest.mark.asyncio
-    async def test_raises_temporary_on_request_error(self) -> None:
+    async def test_raises_timeout_on_connect_timeout(self) -> None:
         robots_resp = httpx.Response(
             404,
             request=httpx.Request("GET", "https://example.com/robots.txt"),
@@ -193,7 +202,7 @@ class TestArticleHtmlExtractor:
         extractor = ArticleHtmlExtractor()
         with (
             _patch_client(client),
-            pytest.raises(TemporaryFetchError, match="timed out"),
+            pytest.raises(FetchTimeoutError, match="timed out"),
         ):
             await extractor.fetch(SafeUrl("https://example.com/slow"))
 
@@ -242,7 +251,7 @@ class TestArticleHtmlExtractor:
         assert result.reason in ("quality_gate", "parse_error")
 
     @pytest.mark.asyncio
-    async def test_raises_permanent_on_robots_blocked(self) -> None:
+    async def test_raises_robots_disallowed_on_robots_blocked(self) -> None:
         robots_content = "User-agent: *\nDisallow: /private/"
         robots_resp = httpx.Response(
             200,
@@ -252,44 +261,47 @@ class TestArticleHtmlExtractor:
         client = _mock_async_client([robots_resp])
 
         extractor = ArticleHtmlExtractor()
-        with _patch_client(client), pytest.raises(PermanentFetchError, match="robots"):
+        with (
+            _patch_client(client),
+            pytest.raises(FetchRobotsDisallowedError, match="robots"),
+        ):
             await extractor.fetch(SafeUrl("https://example.com/private/article"))
 
     @pytest.mark.asyncio
-    async def test_raises_permanent_when_host_resolves_to_private_ip(self) -> None:
-        """ホスト名の DNS 解決結果が private IP なら fetch せず PermanentFetchError。"""
+    async def test_raises_ssrf_blocked_when_host_resolves_to_private_ip(self) -> None:
+        """ホスト名の DNS 解決結果が private IP なら fetch せず SSRF block。"""
         extractor = ArticleHtmlExtractor()
         with patch(
             "app.shared.security.ssrf_guard._resolve_host",
             new=AsyncMock(return_value=["172.18.0.5"]),
         ):
-            with pytest.raises(PermanentFetchError, match="non-public address"):
+            with pytest.raises(FetchSsrfBlockedError, match="non-public address"):
                 await extractor.fetch(SafeUrl("https://internal-trick.example.com/"))
 
     @pytest.mark.asyncio
-    async def test_raises_permanent_when_host_resolves_to_link_local(self) -> None:
+    async def test_raises_ssrf_blocked_when_host_resolves_to_link_local(self) -> None:
         """A レコードがクラウドメタデータ (169.254.169.254) を指しているケース。"""
         extractor = ArticleHtmlExtractor()
         with patch(
             "app.shared.security.ssrf_guard._resolve_host",
             new=AsyncMock(return_value=["169.254.169.254"]),
         ):
-            with pytest.raises(PermanentFetchError, match="169.254.169.254"):
+            with pytest.raises(FetchSsrfBlockedError, match="169.254.169.254"):
                 await extractor.fetch(SafeUrl("https://metadata-attack.example.com/"))
 
     @pytest.mark.asyncio
-    async def test_raises_temporary_on_dns_failure(self) -> None:
-        """DNS 解決失敗は一時的失敗としてリトライ可能な分類にする。"""
+    async def test_raises_network_error_on_dns_failure(self) -> None:
+        """DNS 解決失敗は network origin error (disposition で retryable)。"""
         extractor = ArticleHtmlExtractor()
         with patch(
             "app.shared.security.ssrf_guard._resolve_host",
             new=AsyncMock(side_effect=socket.gaierror("nope")),
         ):
-            with pytest.raises(TemporaryFetchError, match="DNS resolution failed"):
+            with pytest.raises(FetchNetworkError, match="DNS resolution failed"):
                 await extractor.fetch(SafeUrl("https://nonexistent.invalid/"))
 
     @pytest.mark.asyncio
-    async def test_raises_permanent_on_3xx_redirect(self) -> None:
+    async def test_raises_redirect_blocked_on_3xx_redirect(self) -> None:
         """3xx は follow せず明示的に拒否する (リダイレクト経由の SSRF 回避)。"""
         robots_resp = httpx.Response(
             404,
@@ -305,12 +317,14 @@ class TestArticleHtmlExtractor:
         extractor = ArticleHtmlExtractor()
         with (
             _patch_client(client),
-            pytest.raises(PermanentFetchError, match="redirect not followed"),
+            pytest.raises(FetchRedirectBlockedError, match="redirect not followed"),
         ):
             await extractor.fetch(SafeUrl("https://example.com/article"))
 
     @pytest.mark.asyncio
-    async def test_raises_permanent_on_oversized_content_length_header(self) -> None:
+    async def test_raises_response_too_large_on_oversized_content_length_header(
+        self,
+    ) -> None:
         """Content-Length が上限超過なら本文を読まずに拒否する。"""
         robots_resp = httpx.Response(
             404,
@@ -330,12 +344,12 @@ class TestArticleHtmlExtractor:
         extractor = ArticleHtmlExtractor()
         with (
             _patch_client(client),
-            pytest.raises(PermanentFetchError, match="response too large"),
+            pytest.raises(FetchResponseTooLargeError, match="response too large"),
         ):
             await extractor.fetch(SafeUrl("https://example.com/huge"))
 
     @pytest.mark.asyncio
-    async def test_raises_permanent_on_oversized_actual_body(self) -> None:
+    async def test_raises_response_too_large_on_oversized_actual_body(self) -> None:
         """Content-Length が無くても、実バイト数が上限超過なら拒否する。"""
         robots_resp = httpx.Response(
             404,
@@ -353,7 +367,7 @@ class TestArticleHtmlExtractor:
         extractor = ArticleHtmlExtractor()
         with (
             _patch_client(client),
-            pytest.raises(PermanentFetchError, match="response too large"),
+            pytest.raises(FetchResponseTooLargeError, match="response too large"),
         ):
             await extractor.fetch(SafeUrl("https://example.com/huge2"))
 

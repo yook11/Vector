@@ -13,7 +13,8 @@
   ``articles`` 行に保存される
 - race-loss 時に既存 article は残り、敗者側の pending は DELETE される
 - 重複配送 / 状態不整合 (status != 'running') は ``None`` で静かに exit
-- per-error retry policy で next ready_at が決まる (BLIP の 1 回目失敗 = 0.5 分後)
+- disposition (Terminal/Retryable) で pending 状態が決まる (Retryable の BLIP
+  系 1 回目失敗 = 0.5 分後 / Terminal = closed / RETRY_AFTER = server 指示秒)
 """
 
 from __future__ import annotations
@@ -32,10 +33,10 @@ from app.collection.article_completion.extractor import (
     ExtractionEmpty,
 )
 from app.collection.article_completion.service import ArticleCompletionService
-from app.collection.errors import (
-    PermanentFetchError,
-    ServerErrorBlip,
-    ServerErrorOutage,
+from app.collection.external_fetch_errors import (
+    FetchGatewayError,
+    FetchOriginServerError,
+    FetchResourceNotFoundError,
 )
 from app.collection.incomplete_article.domain.incomplete_article import (
     IncompleteArticle,
@@ -277,22 +278,31 @@ async def test_success_persists_extracted_body_and_published_at(
 
 
 # ---------------------------------------------------------------------------
-# Permanent / ExtractionEmpty / promotion failure (terminal 系)
+# Terminal disposition (ExternalFetchError terminal / ExtractionEmpty / promotion)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_permanent_fetch_error_returns_none_and_closes_pending(
+async def test_terminal_fetch_error_returns_none_and_closes_pending(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     tc_source: NewsSource,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """PermanentFetchError → ``None`` + pending status='closed' + Article 未作成。"""
+    """terminal な ``ExternalFetchError`` → ``None`` + pending closed。
+
+    404 (``FetchResourceNotFoundError``) は disposition で ``Terminal`` に分類され、
+    pending は再試行されず ``closed`` に閉じ、Article は作成されない。
+    """
     _, pending_id = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/dead"
     )
-    _patch_fetch(monkeypatch, AsyncMock(side_effect=PermanentFetchError("HTTP 404")))
+    _patch_fetch(
+        monkeypatch,
+        AsyncMock(
+            side_effect=FetchResourceNotFoundError(status_code=404, reason="not_found")
+        ),
+    )
 
     svc = ArticleCompletionService(session_factory)
     outcome = await svc.execute(pending_id)
@@ -382,7 +392,7 @@ async def test_promotion_failure_closes_pending(
 
 
 # ---------------------------------------------------------------------------
-# TemporaryFetchError → will_retry / exhausted
+# Retryable disposition → will_retry / exhausted
 # ---------------------------------------------------------------------------
 
 
@@ -393,11 +403,15 @@ async def test_temporary_blip_first_attempt_writes_will_retry(
     tc_source: NewsSource,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """BLIP 1 回目失敗 → ``None`` + pending re-open + 未来 ready_at (0.5 分後)。"""
+    """BLIP 1 回目失敗 → ``None`` + pending re-open + 未来 ready_at (0.5 分後)。
+
+    502 (``FetchGatewayError``) は disposition で BLIP policy の ``Retryable``。
+    schedule[0] = 0.5 分なので next ready_at は約 30 秒後。
+    """
     _, pending_id = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/blip"
     )
-    _patch_fetch(monkeypatch, AsyncMock(side_effect=ServerErrorBlip("HTTP 502")))
+    _patch_fetch(monkeypatch, AsyncMock(side_effect=FetchGatewayError(status_code=502)))
 
     svc = ArticleCompletionService(session_factory)
     outcome = await svc.execute(pending_id)
@@ -424,7 +438,11 @@ async def test_temporary_outage_exhausted_closes_pending(
     tc_source: NewsSource,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """attempt_count == max_attempts → ``None`` + pending status='closed'。"""
+    """attempt_count == max_attempts → ``None`` + pending status='closed'。
+
+    503 (Retry-After なし) は disposition で OUTAGE policy の ``Retryable``。
+    OUTAGE_POLICY.max_attempts = 12 に到達済なので exhausted で ``closed``。
+    """
     _, pending_id = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/outage"
     )
@@ -434,7 +452,16 @@ async def test_temporary_outage_exhausted_closes_pending(
         {"id": pending_id},
     )
     await db_session.commit()
-    _patch_fetch(monkeypatch, AsyncMock(side_effect=ServerErrorOutage("HTTP 503")))
+    _patch_fetch(
+        monkeypatch,
+        AsyncMock(
+            side_effect=FetchOriginServerError(
+                status_code=503,
+                reason="service_unavailable",
+                retry_after_seconds=None,
+            )
+        ),
+    )
 
     svc = ArticleCompletionService(session_factory)
     outcome = await svc.execute(pending_id)
@@ -448,6 +475,100 @@ async def test_temporary_outage_exhausted_closes_pending(
     ).scalar_one()
     assert pending.status == "closed"
     assert pending.leased_until is None
+
+
+@pytest.mark.asyncio
+async def test_temporary_retry_after_uses_server_delay(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    tc_source: NewsSource,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """503 + Retry-After → ``None`` + pending re-open + server 指示秒の ready_at。
+
+    ``FetchOriginServerError(service_unavailable, retry_after_seconds=120)`` は
+    disposition で RETRY_AFTER policy + override 秒の ``Retryable``。
+    ``effective_delay_minutes`` が 120 秒 → 2 分に換算して next ready_at にする。
+    """
+    _, pending_id = await _make_pending(
+        db_session, tc_source, "https://techcrunch.com/retry-after"
+    )
+    _patch_fetch(
+        monkeypatch,
+        AsyncMock(
+            side_effect=FetchOriginServerError(
+                status_code=503,
+                reason="service_unavailable",
+                retry_after_seconds=120.0,
+            )
+        ),
+    )
+
+    svc = ArticleCompletionService(session_factory)
+    outcome = await svc.execute(pending_id)
+
+    assert outcome is None
+
+    pending = (
+        await db_session.execute(
+            select(PendingHtmlArticle).where(PendingHtmlArticle.id == pending_id)
+        )
+    ).scalar_one()
+    assert pending.status == "open"
+    assert pending.leased_until is None
+    # server 指示 120 秒 = 2 分後
+    assert pending.ready_at is not None
+    delta = pending.ready_at - datetime.now(UTC)
+    assert timedelta(seconds=100) < delta < timedelta(seconds=140)
+
+
+# ---------------------------------------------------------------------------
+# persist anomaly / race-loss (永続化層 → terminal close / delete)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_persist_anomaly_closes_pending(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    tc_source: NewsSource,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """save_ready None かつ既存 article も読めない構造異常 → pending closed。
+
+    ``classify_persist_anomaly`` 経由で terminal close の log 経路
+    (``_handle_terminal``) に funnel される。``save_ready`` /
+    ``find_by_source_url`` を mock で None に固定して構造異常を再現する。
+    """
+    _, pending_id = await _make_pending(
+        db_session, tc_source, "https://techcrunch.com/anomaly"
+    )
+    _patch_fetch(
+        monkeypatch,
+        AsyncMock(
+            return_value=ExtractedContent(
+                title="HTML Title",
+                body="x" * 200,
+                published_at=PublishedAt(value=datetime(2026, 5, 1, tzinfo=UTC)),
+            )
+        ),
+    )
+    repo_path = "app.collection.article_completion.service.ArticleRepository"
+    monkeypatch.setattr(f"{repo_path}.save_ready", AsyncMock(return_value=None))
+    monkeypatch.setattr(f"{repo_path}.find_by_source_url", AsyncMock(return_value=None))
+
+    svc = ArticleCompletionService(session_factory)
+    outcome = await svc.execute(pending_id)
+
+    assert outcome is None
+    articles = (await db_session.execute(select(ArticleORM))).scalars().all()
+    assert articles == []
+    pending = (
+        await db_session.execute(
+            select(PendingHtmlArticle).where(PendingHtmlArticle.id == pending_id)
+        )
+    ).scalar_one()
+    assert pending.status == "closed"
 
 
 # ---------------------------------------------------------------------------

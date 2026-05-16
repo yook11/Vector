@@ -7,7 +7,9 @@
 - ``ArticleHtmlExtractor`` / ``ExtractedContent`` / ``ExtractionEmpty``:
   AI 境界 (HTML 抽出器) の戻り値。
 - ``dispatch_html_fetch_jobs`` / ``sweep_expired_leases``: 補完 task の cron 駆動。
-- ``compute_next_delay_minutes``: ``TemporaryFetchError`` 系の retry policy 純関数。
+- ``classify_external_fetch_error`` / ``Terminal`` / ``Retryable``: Stage 2 の
+  失敗分類 (``CompletionDisposition``) mapper。retry policy は ``Retryable``
+  が運ぶデータ (``effective_delay_minutes`` で遅延算出)。
 
 PR 4 で ``extraction/`` から rename: 「HTTP fetch する技術名」ではなく
 「Pattern H の completion 責務」として命名軸を揃えた。
