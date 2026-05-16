@@ -9,8 +9,8 @@
 
 handler は分類済 ``CompletionDisposition`` を受け、自前 session で状態遷移 +
 log を完結させる (service の主線とは別ファイル / 別責務)。handler は DB を
-再読込せず ``pending.row_meta.attempt_count`` を exhausted 判定に使うため、
-exhausted ケースは attempt_count を先に UPDATE してから context を構築する。
+再読込せず ``pending.attempt_count`` を exhausted 判定に使うため、
+exhausted ケースは attempt_count を先に UPDATE してから target を構築する。
 handler は別 session で commit するので、検証前に ``db_session`` を rollback
 して fresh transaction で読む (cross-session read)。
 """
@@ -20,7 +20,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
@@ -28,9 +28,9 @@ from app.collection.article_completion.disposition import Retryable, Terminal
 from app.collection.article_completion.failure_handling import (
     ArticleCompletionFailureHandler,
 )
-from app.collection.article_completion.pending_queue import (
-    PendingHtmlContext,
-    PendingHtmlQueue,
+from app.collection.article_completion.repository import (
+    ArticleCompletionRepository,
+    ClaimedPendingHtmlArticle,
 )
 from app.collection.article_completion.retry_policy import (
     BLIP_POLICY,
@@ -71,15 +71,15 @@ def _incomplete(source: NewsSource, url: str) -> IncompleteArticle:
     )
 
 
-async def _make_context(
+async def _make_target(
     db_session: AsyncSession,
     source: NewsSource,
     url: str,
-) -> PendingHtmlContext:
-    """``pending_html_articles`` 行を 1 件作って claim 済 context を返す。
+) -> ClaimedPendingHtmlArticle:
+    """``pending_html_articles`` 行を 1 件作って claim 済 target を返す。
 
-    claim 後 ``status='running'`` / ``attempt_count=1``。返す context は
-    handler 入力用の合成 view (``find_by_id`` 経由)。
+    claim 後 ``status='running'`` / ``attempt_count=1``。返す target は
+    handler 入力用の処理資格済み DTO。
     """
     pending_id = await PendingHtmlEnqueue(db_session).enqueue(
         _incomplete(source, url),
@@ -87,11 +87,16 @@ async def _make_context(
     )
     assert pending_id is not None
     await db_session.commit()
-    pending_queue = PendingHtmlQueue(db_session)
-    ids = await pending_queue.claim_batch(limit=10, lease_minutes=5)
+    now = datetime.now(UTC)
+    repository = ArticleCompletionRepository(db_session)
+    ids = await repository.claim_ready_batch(
+        limit=10,
+        now=now,
+        leased_until=now + timedelta(minutes=5),
+    )
     await db_session.commit()
     assert pending_id in ids
-    ctx = await pending_queue.find_by_id(pending_id)
+    ctx = await repository.find_claimed_for_completion(pending_id)
     assert ctx is not None
     return ctx
 
@@ -115,12 +120,12 @@ async def test_terminal_closes_pending(
     tc_source: NewsSource,
 ) -> None:
     """``Terminal`` → pending status='closed' / leased_until=None。"""
-    ctx = await _make_context(db_session, tc_source, "https://techcrunch.com/term")
+    ctx = await _make_target(db_session, tc_source, "https://techcrunch.com/term")
     handler = ArticleCompletionFailureHandler(session_factory)
 
     await handler.handle(ctx, Terminal(reason_code="test_terminal"))
 
-    pending = await _reload_pending(db_session, ctx.row_meta.id)
+    pending = await _reload_pending(db_session, ctx.pending_id)
     assert pending.status == "closed"
     assert pending.leased_until is None
 
@@ -134,14 +139,14 @@ async def test_retryable_non_exhausted_reopens_with_future_ready_at(
     """``Retryable`` (BLIP, attempt=1 < max) → open + 未来 ready_at (約 30 秒後)。
 
     BLIP_POLICY.schedule[0] = 0.5 分 = 30 秒。claim 直後 attempt_count=1 <
-    max_attempts(8) なので exhausted ではなく mark_will_retry。
+    max_attempts(8) なので exhausted ではなく retry scheduling。
     """
-    ctx = await _make_context(db_session, tc_source, "https://techcrunch.com/blip")
+    ctx = await _make_target(db_session, tc_source, "https://techcrunch.com/blip")
     handler = ArticleCompletionFailureHandler(session_factory)
 
     await handler.handle(ctx, Retryable(reason_code="blip", policy=BLIP_POLICY))
 
-    pending = await _reload_pending(db_session, ctx.row_meta.id)
+    pending = await _reload_pending(db_session, ctx.pending_id)
     assert pending.status == "open"
     assert pending.leased_until is None
     assert pending.ready_at is not None
@@ -157,26 +162,29 @@ async def test_retryable_exhausted_closes_pending(
 ) -> None:
     """attempt_count >= policy.max_attempts → ``closed``。
 
-    handler は DB 再読込せず ``pending.row_meta.attempt_count`` を見るため、
+    handler は DB 再読込せず ``pending.attempt_count`` を見るため、
     attempt_count を max まで UPDATE → commit → その後 context を構築して
     exhausted 判定に反映させる (context 作成後の UPDATE は反映されない)。
     """
-    ctx = await _make_context(db_session, tc_source, "https://techcrunch.com/exhaust")
+    ctx = await _make_target(db_session, tc_source, "https://techcrunch.com/exhaust")
     await db_session.execute(
-        text("UPDATE pending_html_articles SET attempt_count = :n WHERE id = :id"),
-        {"n": BLIP_POLICY.max_attempts, "id": ctx.row_meta.id},
+        update(PendingHtmlArticle)
+        .where(PendingHtmlArticle.id == ctx.pending_id)
+        .values(attempt_count=BLIP_POLICY.max_attempts)
     )
     await db_session.commit()
-    exhausted_ctx = await PendingHtmlQueue(db_session).find_by_id(ctx.row_meta.id)
+    exhausted_ctx = await ArticleCompletionRepository(
+        db_session
+    ).find_claimed_for_completion(ctx.pending_id)
     assert exhausted_ctx is not None
-    assert exhausted_ctx.row_meta.attempt_count == BLIP_POLICY.max_attempts
+    assert exhausted_ctx.attempt_count == BLIP_POLICY.max_attempts
     handler = ArticleCompletionFailureHandler(session_factory)
 
     await handler.handle(
         exhausted_ctx, Retryable(reason_code="blip", policy=BLIP_POLICY)
     )
 
-    pending = await _reload_pending(db_session, ctx.row_meta.id)
+    pending = await _reload_pending(db_session, ctx.pending_id)
     assert pending.status == "closed"
     assert pending.leased_until is None
 
@@ -191,7 +199,7 @@ async def test_retryable_uses_server_retry_after_seconds(
 
     server 指示 (RETRY_AFTER policy + override 秒) は policy schedule より優先。
     """
-    ctx = await _make_context(db_session, tc_source, "https://techcrunch.com/ra")
+    ctx = await _make_target(db_session, tc_source, "https://techcrunch.com/ra")
     handler = ArticleCompletionFailureHandler(session_factory)
 
     await handler.handle(
@@ -203,7 +211,7 @@ async def test_retryable_uses_server_retry_after_seconds(
         ),
     )
 
-    pending = await _reload_pending(db_session, ctx.row_meta.id)
+    pending = await _reload_pending(db_session, ctx.pending_id)
     assert pending.status == "open"
     assert pending.ready_at is not None
     delta = pending.ready_at - datetime.now(UTC)

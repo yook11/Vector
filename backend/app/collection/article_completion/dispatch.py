@@ -15,11 +15,13 @@ PR2.5-B cutover で taskiq の retry 機構は完全に殺し、再投入は **D
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import structlog
 from taskiq import Context, TaskiqDepends
 
 from app.brokers import broker_metadata
-from app.collection.article_completion.pending_queue import PendingHtmlQueue
+from app.collection.article_completion.repository import ArticleCompletionRepository
 
 logger = structlog.get_logger(__name__)
 
@@ -42,10 +44,12 @@ async def dispatch_html_fetch_jobs(ctx: Context = TaskiqDepends()) -> dict:
     from app.collection.tasks import extract_html_body
 
     session_factory = ctx.state.session_factory
+    now = datetime.now(UTC)
     async with session_factory() as session:
-        pending_ids = await PendingHtmlQueue(session).claim_batch(
+        pending_ids = await ArticleCompletionRepository(session).claim_ready_batch(
             limit=_DISPATCH_BATCH_LIMIT,
-            lease_minutes=_LEASE_MINUTES,
+            now=now,
+            leased_until=now + timedelta(minutes=_LEASE_MINUTES),
         )
         await session.commit()
 
@@ -67,8 +71,11 @@ async def dispatch_html_fetch_jobs(ctx: Context = TaskiqDepends()) -> dict:
 async def sweep_expired_leases(ctx: Context = TaskiqDepends()) -> dict:
     """``status='running' AND leased_until <= NOW`` を ``open`` に戻す。"""
     session_factory = ctx.state.session_factory
+    now = datetime.now(UTC)
     async with session_factory() as session:
-        swept_count = await PendingHtmlQueue(session).sweep_expired()
+        swept_count = await ArticleCompletionRepository(session).sweep_expired_leases(
+            now=now
+        )
         await session.commit()
 
     result = {"swept_count": swept_count}

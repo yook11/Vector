@@ -3,7 +3,7 @@
 Stage 1 (source_fetch) の ``pending_html_articles`` 投入 (``status='open'``
 INSERT) の振る舞いを ``UNIQUE(url)`` と合わせて検証する。``url``
 (``CanonicalArticleUrl`` 型で canonical 性を構造保証) が SSoT。Stage 2 の
-claim/sweep/状態遷移は ``test_pending_queue.py`` 側で検証する。
+claim/sweep/状態遷移は ``article_completion/test_repository.py`` 側で検証する。
 """
 
 from __future__ import annotations

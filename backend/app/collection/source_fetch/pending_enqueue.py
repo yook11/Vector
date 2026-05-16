@@ -2,7 +2,7 @@
 
 補完待ち獲得経路の 1 段目 (``ArticleAcquisitionService``) が、本文 HTML 取得を
 要する記事を ``pending_html_articles`` に ``status='open'`` で 1 件積む。Stage 2
-側の claim / sweep / 状態遷移は ``article_completion/pending_queue.py`` が担い、
+側の claim / sweep / 状態遷移は ``article_completion/repository.py`` が担い、
 本 writer とは相互 import しない (1 テーブルを 2 工程から操作するが、依存方向は
 分離する)。共有する永続化フォーマット ``StagedArticleAttributes`` は中立な
 ``persistence/`` から取り込む。

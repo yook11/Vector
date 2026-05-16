@@ -23,7 +23,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
@@ -31,7 +31,7 @@ from app.collection.article_completion.extractor import (
     ExtractedContent,
     ExtractionEmpty,
 )
-from app.collection.article_completion.pending_queue import PendingHtmlQueue
+from app.collection.article_completion.repository import ArticleCompletionRepository
 from app.collection.article_completion.service import ArticleCompletionService
 from app.collection.domain.incomplete_article import (
     IncompleteArticle,
@@ -104,7 +104,12 @@ async def _make_pending(
     assert pending_id is not None
     await db_session.commit()
     # claim して running 状態に遷移 (cron poller の代わり)
-    ids = await PendingHtmlQueue(db_session).claim_batch(limit=10, lease_minutes=5)
+    now = datetime.now(UTC)
+    ids = await ArticleCompletionRepository(db_session).claim_ready_batch(
+        limit=10,
+        now=now,
+        leased_until=now + timedelta(minutes=5),
+    )
     await db_session.commit()
     assert pending_id in ids
     return canonical_url, pending_id
@@ -445,8 +450,9 @@ async def test_temporary_outage_exhausted_closes_pending(
     )
     # OUTAGE_POLICY.max_attempts = 12 を超過させる: attempt_count を 12 に強制セット
     await db_session.execute(
-        text("UPDATE pending_html_articles SET attempt_count = 12 WHERE id = :id"),
-        {"id": pending_id},
+        update(PendingHtmlArticle)
+        .where(PendingHtmlArticle.id == pending_id)
+        .values(attempt_count=12)
     )
     await db_session.commit()
     _patch_fetch(

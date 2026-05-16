@@ -29,7 +29,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.collection.article_completion import dispatch as dispatch_module
@@ -100,11 +100,10 @@ async def _make_pending(
         )
         assert pending_id is not None
         if attempt_count != 0:
-            from sqlalchemy import text
-
             await db_session.execute(
-                text("UPDATE pending_html_articles SET attempt_count=:n WHERE id=:id"),
-                {"n": attempt_count, "id": pending_id},
+                update(PendingHtmlArticleORM)
+                .where(PendingHtmlArticleORM.id == pending_id)
+                .values(attempt_count=attempt_count)
             )
         await db_session.commit()
         return pending_id

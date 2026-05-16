@@ -20,7 +20,7 @@ Fetcher の ``AsyncIterator[AnalyzableArticle | IncompleteArticle]`` を回し
 - ``IncompleteArticle`` → 補完待ち獲得経路。
   ``article_store.exists_by_source_url`` pre-check で feed 再露出を弾き、
   ``pending_html_articles.url`` で投入 (Stage 1 投入は ``PendingHtmlEnqueue``、
-  Stage 2 の claim/sweep は ``article_completion/pending_queue.py``)。下流は
+  Stage 2 の claim/sweep は ``article_completion/repository.py``)。下流は
   cron poller (``dispatch_html_fetch_jobs``) が DB 駆動で拾うため、Service /
   Task は pending_id を caller に渡さない (Outcome 純化原則)。
 

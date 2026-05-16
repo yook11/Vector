@@ -13,7 +13,8 @@
   (即時獲得 / 補完待ち獲得の振り分け entry point) + ``PendingHtmlEnqueue``
   (pending 投入) + 失敗ハンドリング (marker / handler / audit)
 - ``article_completion/`` — Stage 2 (補完) 工程: ``ArticleCompletionService`` +
-  ``ArticleHtmlExtractor`` + ``PendingHtmlQueue`` (claim / sweep / 状態遷移) +
+  ``ArticleHtmlExtractor`` + ``ArticleCompletionRepository`` (claim / sweep /
+  状態遷移) +
   ``dispatch_html_fetch_jobs`` / ``sweep_expired_leases`` + retry policy
 - ``fetchers/`` — 外部ソース固有の Fetcher 実装群 (Protocol)
 

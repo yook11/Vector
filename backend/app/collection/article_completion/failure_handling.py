@@ -27,9 +27,9 @@ from app.collection.article_completion.disposition import (
     Retryable,
     Terminal,
 )
-from app.collection.article_completion.pending_queue import (
-    PendingHtmlContext,
-    PendingHtmlQueue,
+from app.collection.article_completion.repository import (
+    ArticleCompletionRepository,
+    ClaimedPendingHtmlArticle,
 )
 from app.collection.article_completion.retry_policy import effective_delay_minutes
 
@@ -49,7 +49,7 @@ class ArticleCompletionFailureHandler:
 
     async def handle(
         self,
-        pending: PendingHtmlContext,
+        pending: ClaimedPendingHtmlArticle,
         disposition: CompletionDisposition,
         *,
         exc: BaseException | None = None,
@@ -73,7 +73,7 @@ class ArticleCompletionFailureHandler:
 
     async def _handle_temporary(
         self,
-        pending: PendingHtmlContext,
+        pending: ClaimedPendingHtmlArticle,
         *,
         disposition: Retryable,
         exc: BaseException | None = None,
@@ -81,61 +81,85 @@ class ArticleCompletionFailureHandler:
         """``Retryable`` を policy データ駆動で捌く。
 
         ``effective_delay_minutes`` で次回遅延を算出し、``attempt_count >=
-        policy.max_attempts`` なら ``mark_exhausted`` (status='closed')、
-        未満なら ``mark_will_retry(ready_at=next_at)`` (status='open' +
-        未来の ready_at)。policy 別のコード分岐は持たない。
+        policy.max_attempts`` なら ``closed``、未満なら ``open`` + 未来の
+        ``ready_at`` に戻す。policy 別のコード分岐は持たない。
         """
-        row_meta = pending.row_meta
         canonical_url = pending.incomplete_article.source_url
         policy = disposition.policy
         delay_minutes = effective_delay_minutes(
             policy,
             retry_after_seconds=disposition.retry_after_seconds,
-            attempt_count=row_meta.attempt_count,
+            attempt_count=pending.attempt_count,
         )
-        exhausted = row_meta.attempt_count >= policy.max_attempts
+        exhausted = pending.attempt_count >= policy.max_attempts
+        now = datetime.now(UTC)
         async with self._session_factory() as session:
-            pending_queue = PendingHtmlQueue(session)
+            repository = ArticleCompletionRepository(session)
             if exhausted:
-                await pending_queue.mark_exhausted(row_meta.id)
+                updated = await repository.close_claimed(pending, now=now)
             else:
-                next_at = datetime.now(UTC) + timedelta(minutes=delay_minutes)
-                await pending_queue.mark_will_retry(row_meta.id, ready_at=next_at)
+                next_at = now + timedelta(minutes=delay_minutes)
+                updated = await repository.schedule_retry(
+                    pending, ready_at=next_at, now=now
+                )
             await session.commit()
+
+        if not updated:
+            logger.info(
+                "article_completion_stale_attempt_ignored",
+                pending_id=pending.pending_id,
+                source_id=pending.source_id,
+                canonical_url=str(canonical_url),
+                attempt_count=pending.attempt_count,
+                reason_code=disposition.reason_code,
+            )
+            return None
 
         logger.warning(
             "article_completion_temporary",
-            pending_id=row_meta.id,
-            source_id=row_meta.source_id,
+            pending_id=pending.pending_id,
+            source_id=pending.source_id,
             canonical_url=str(canonical_url),
             reason_code=disposition.reason_code,
             policy_code=policy.code,
             exhausted=exhausted,
-            attempt_count=row_meta.attempt_count,
+            attempt_count=pending.attempt_count,
             error_class=type(exc).__name__ if exc is not None else None,
         )
         return None
 
     async def _handle_terminal(
         self,
-        pending: PendingHtmlContext,
+        pending: ClaimedPendingHtmlArticle,
         *,
         reason_code: str,
         exc: BaseException | None = None,
         detail: str | None = None,
     ) -> None:
         """終端失敗を ``closed`` に閉じる。"""
-        row_meta = pending.row_meta
         canonical_url = pending.incomplete_article.source_url
+        now = datetime.now(UTC)
         async with self._session_factory() as session:
-            pending_queue = PendingHtmlQueue(session)
-            await pending_queue.mark_terminal(row_meta.id)
+            updated = await ArticleCompletionRepository(session).close_claimed(
+                pending, now=now
+            )
             await session.commit()
+
+        if not updated:
+            logger.info(
+                "article_completion_stale_attempt_ignored",
+                pending_id=pending.pending_id,
+                source_id=pending.source_id,
+                canonical_url=str(canonical_url),
+                attempt_count=pending.attempt_count,
+                reason_code=reason_code,
+            )
+            return None
 
         logger.warning(
             "article_completion_terminal",
-            pending_id=row_meta.id,
-            source_id=row_meta.source_id,
+            pending_id=pending.pending_id,
+            source_id=pending.source_id,
             canonical_url=str(canonical_url),
             reason_code=reason_code,
             error_class=type(exc).__name__ if exc is not None else None,
