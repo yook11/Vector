@@ -7,48 +7,38 @@ Health 等カテゴリ別 RSS を提供する。本体 ``/news/feed`` は site-w
 
 per-source 設計:
 
-- feed が **RSS 2.0** (UTF-8、Drupal 生成器)
-- description は短い概要のみ → Pattern H (本文は HTML 取得に委譲)
+- feed が **RSS 2.0** (UTF-8、Drupal 生成器) → ``PARSE_MODE = "bytes"``
+- description は短い概要のみ → Pattern H (本文は HTML 取得に委譲)。
+  ``_build_body`` を override しない (基底既定 ``None``)
 
-複数 feed 巡回:
+複数 feed 巡回 (``BaseMultiFeedRssAdapter`` に集約):
 
 - 6 taxonomy term feed を ``FEEDS`` ClassVar で保持 (NASA fetcher と同設計)
-- 1 feed の recoverable な ``ExternalFetchError`` (``RECOVERABLE_FETCH_ERRORS``)
-  は warn して次 feed に進む (全停止しない)。非 recoverable な
-  ``ExternalFetchError`` は source 全体失敗として伝播する (catch しない)
-- in-memory ``seen_urls: set[str]`` で同 cron 周期内の重複 URL を排除
-  (1 記事が複数 category に tag されるため、feed 間で URL 重複が発生する)
+- 1 feed の ``ExternalFetchError`` は **種類問わず** ``source_feed_fetch_failed``
+  warning に記録して次 feed へ進む。全 feed 失敗時のみ最初の error を
+  source 全体失敗として伝播する (詳細は ``BaseMultiFeedRssAdapter``)
+- 1 記事が複数 category に tag されるため feed 間で URL 重複が発生する。
+  feed 横断 ``seen_urls`` dedup も基底が担う
 """
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from typing import ClassVar
 
-import structlog
-
-from app.collection.fetchers.tools.fetched_article import FetchedArticle
-from app.collection.fetchers.tools.http_error_translation import (
-    RECOVERABLE_FETCH_ERRORS,
-)
-from app.collection.fetchers.tools.rss_parser import RssParser
-
-logger = structlog.get_logger(__name__)
+from app.collection.fetchers.tools.multi_feed_rss import BaseMultiFeedRssAdapter
+from app.collection.fetchers.tools.rss_parser import ParseMode
 
 
-class CornellChronicleAdapter:
+class CornellChronicleAdapter(BaseMultiFeedRssAdapter):
     """Cornell Chronicle 用 SourceAdapter (Pattern H、6 feed 巡回 + URL dedup)。
 
-    1 feed の recoverable な ``ExternalFetchError`` は ``cornell_feed_skip``
-    warning を残して次 feed に進む (旧 ``CornellChronicleFetcher`` と同挙動)。
-    非 recoverable な ``ExternalFetchError`` は catch せず source 全体失敗として
-    伝播する。
-    1 記事が複数 category に tag されるため feed 間 URL 重複を
-    in-memory ``seen_urls`` で排除する。
+    純 thin subclass (``BaseDjangoplicityAdapter`` / ``MDPIEnergiesAdapter``
+    と同形)。per-feed 失敗隔離・feed 横断 dedup・全 feed 失敗時 surface は
+    ``BaseMultiFeedRssAdapter`` が一括で担う。
     """
 
-    NAME = "Cornell Chronicle"
-    ENDPOINT_URL = "https://news.cornell.edu/taxonomy/term/24043/feed"
+    NAME: ClassVar[str] = "Cornell Chronicle"
+    ENDPOINT_URL: ClassVar[str] = "https://news.cornell.edu/taxonomy/term/24043/feed"
     FEEDS: ClassVar[tuple[str, ...]] = (
         # Artificial Intelligence
         "https://news.cornell.edu/taxonomy/term/24043/feed",
@@ -63,36 +53,4 @@ class CornellChronicleAdapter:
         # Health, Nutrition & Medicine
         "https://news.cornell.edu/taxonomy/term/14248/feed",
     )
-
-    def __init__(self, parser: RssParser | None = None) -> None:
-        self._parser = parser or RssParser()
-
-    async def collect(self) -> AsyncIterator[FetchedArticle]:
-        seen_urls: set[str] = set()
-        for feed_url in self.FEEDS:
-            try:
-                entries = await self._parser.fetch(
-                    endpoint_url=feed_url,
-                    source_name=self.NAME,
-                    parse_mode="bytes",
-                )
-            except RECOVERABLE_FETCH_ERRORS as e:
-                # 1 feed の recoverable 失敗で全停止しない (他 feed は続行)
-                logger.warning(
-                    "cornell_feed_skip",
-                    source=self.NAME,
-                    feed=feed_url,
-                    error=str(e),
-                )
-                continue
-            # 非 recoverable は catch しない (source 全体失敗として伝播)
-            for entry in entries:
-                if not entry.link or entry.link in seen_urls:
-                    continue
-                seen_urls.add(entry.link)
-                yield FetchedArticle(
-                    title=entry.title,
-                    url=entry.link,
-                    body=None,
-                    published_at=entry.published,
-                )
+    PARSE_MODE: ClassVar[ParseMode] = "bytes"
