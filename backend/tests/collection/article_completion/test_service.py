@@ -523,56 +523,7 @@ async def test_temporary_retry_after_uses_server_delay(
 
 
 # ---------------------------------------------------------------------------
-# persist anomaly / race-loss (永続化層 → terminal close / delete)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_persist_anomaly_closes_pending(
-    session_factory: async_sessionmaker[AsyncSession],
-    db_session: AsyncSession,
-    tc_source: NewsSource,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """save_ready None かつ既存 article も読めない構造異常 → pending closed。
-
-    ``classify_persist_anomaly`` 経由で terminal close の log 経路
-    (``_handle_terminal``) に funnel される。``save_ready`` /
-    ``find_by_source_url`` を mock で None に固定して構造異常を再現する。
-    """
-    _, pending_id = await _make_pending(
-        db_session, tc_source, "https://techcrunch.com/anomaly"
-    )
-    _patch_fetch(
-        monkeypatch,
-        AsyncMock(
-            return_value=ExtractedContent(
-                title="HTML Title",
-                body="x" * 200,
-                published_at=PublishedAt(value=datetime(2026, 5, 1, tzinfo=UTC)),
-            )
-        ),
-    )
-    repo_path = "app.collection.article_completion.service.ArticleRepository"
-    monkeypatch.setattr(f"{repo_path}.save_ready", AsyncMock(return_value=None))
-    monkeypatch.setattr(f"{repo_path}.find_by_source_url", AsyncMock(return_value=None))
-
-    svc = ArticleCompletionService(session_factory)
-    outcome = await svc.execute(pending_id)
-
-    assert outcome is None
-    articles = (await db_session.execute(select(ArticleORM))).scalars().all()
-    assert articles == []
-    pending = (
-        await db_session.execute(
-            select(PendingHtmlArticle).where(PendingHtmlArticle.id == pending_id)
-        )
-    ).scalar_one()
-    assert pending.status == "closed"
-
-
-# ---------------------------------------------------------------------------
-# race-loss
+# race-loss (永続化層 → pending delete、敗者 article は INSERT しない)
 # ---------------------------------------------------------------------------
 
 

@@ -245,9 +245,8 @@ class TestArticleFromDraft:
 # ---------------------------------------------------------------------------
 # Round-trip: ExtractedContent → Draft → Entity
 #
-# Repository._article_from_orm (ORM → Entity) と from_draft (Draft → Entity)
-# が同じ Entity を組み立てられることを保証する基盤テスト。ORM 経路の検証は
-# repository テストで行う。
+# from_extracted (AI 境界 → Draft) と from_draft (Draft → Entity) が
+# payload を保ったまま同じ Entity を組み立てられることを保証する基盤テスト。
 # ---------------------------------------------------------------------------
 
 

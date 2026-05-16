@@ -15,13 +15,11 @@ import pytest
 from app.collection.article_completion.disposition import (
     _RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY,
     _TERMINAL_FETCH_ERROR_TYPES,
-    PERSIST_ANOMALY_REASON_CODE,
     Retryable,
     Terminal,
     classify_completion_failed,
     classify_external_fetch_error,
     classify_extraction_empty,
-    classify_persist_anomaly,
 )
 from app.collection.article_completion.extractor import ExtractionEmpty
 from app.collection.article_completion.retry_policy import (
@@ -234,15 +232,3 @@ class TestClassifyCompletionFailed:
             reason_code="completion_ready_invariant_failed",
             detail="invariant_violation:boom",
         )
-
-
-class TestClassifyPersistAnomaly:
-    """persist anomaly は固定 reason_code の terminal。"""
-
-    def test_returns_fixed_reason_code_terminal(self) -> None:
-        assert classify_persist_anomaly() == Terminal(
-            reason_code=PERSIST_ANOMALY_REASON_CODE
-        )
-
-    def test_reason_code_constant_value(self) -> None:
-        assert PERSIST_ANOMALY_REASON_CODE == "article_completion_persist_anomaly"

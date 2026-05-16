@@ -189,15 +189,3 @@ def classify_completion_failed(failed: ArticleCompletionFailed) -> Terminal:
         reason_code=f"completion_{failed.reason.code}",
         detail=failed.reason.detail,
     )
-
-
-# ---------------------------------------------------------------------------
-# Persist anomaly の分類 (永続化層の構造異常 — terminal に焼く)
-# ---------------------------------------------------------------------------
-
-PERSIST_ANOMALY_REASON_CODE = "article_completion_persist_anomaly"
-
-
-def classify_persist_anomaly() -> Terminal:
-    """``save_ready`` が ``None`` かつ既存 article も読めない構造異常。"""
-    return Terminal(reason_code=PERSIST_ANOMALY_REASON_CODE)

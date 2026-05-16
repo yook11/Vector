@@ -1,7 +1,7 @@
 """``ArticleRepository`` (article aggregate) の統合テスト。
 
 ``source_url`` (canonicalize 済み) を SSoT とする経路を検証する。
-``save`` / ``find_by_source_url`` / ``exists_by_source_url`` と並行レース対応
+``save`` / ``exists_by_source_url`` と並行レース対応
 (``ON CONFLICT DO NOTHING``) を検証する。
 
 PR 3 で ``ArticleSeenRepository`` を本 Repository に統合した
@@ -18,7 +18,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
 from app.collection.article.domain.article import (
-    Article,
     ArticleDraft,
     ReadyForArticle,
 )
@@ -192,36 +191,6 @@ async def test_save_does_not_commit(
     await db_session.rollback()
     rows = (await db_session.execute(select(ArticleORM))).scalars().all()
     assert rows == []
-
-
-# ---------------------------------------------------------------------------
-# find_by_source_url
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_find_by_source_url_returns_entity(
-    db_session: AsyncSession, sample_source: NewsSource
-) -> None:
-    canonical = SafeUrl("https://example.com/article/find")
-    repo = ArticleRepository(db_session)
-    persisted = await repo.save(
-        _draft(), source_id=sample_source.id, source_url=canonical
-    )
-    await db_session.commit()
-    assert persisted is not None
-
-    result = await repo.find_by_source_url(canonical)
-    assert isinstance(result, Article)
-    assert result.id == persisted.id
-
-
-@pytest.mark.asyncio
-async def test_find_by_source_url_returns_none_for_missing(
-    db_session: AsyncSession,
-) -> None:
-    repo = ArticleRepository(db_session)
-    assert await repo.find_by_source_url(SafeUrl("https://example.com/never")) is None
 
 
 # ---------------------------------------------------------------------------

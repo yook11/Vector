@@ -12,8 +12,7 @@
 - ``Article`` — システムに記録された記事 Entity。``id`` を identity として
   持ち、analysis 以降の処理が継続的に扱う概念。
 
-変換は Repository.save (``ArticleDraft`` → ``Article``) と
-Repository._article_from_orm (ORM → ``Article``) が担う。
+変換は ``Article.from_draft`` (``ArticleDraft`` → ``Article``) が担う。
 
 定数 ``_ARTICLE_BODY_MIN_LENGTH`` / ``_ARTICLE_BODY_MAX_LENGTH`` /
 ``_ARTICLE_TITLE_MAX_LENGTH`` は本ファイルが SSoT。``extractor.py`` /
