@@ -21,7 +21,12 @@ silent fallback しないことは ``test_article_completion_disposition.py`` �
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import assert_never
 
+from app.collection.article_completion.completer import (
+    CompletionFailure,
+    FetchFailed,
+)
 from app.collection.article_completion.extractor import ExtractionEmpty
 from app.collection.article_completion.retry_policy import (
     BLIP_POLICY,
@@ -189,3 +194,28 @@ def classify_completion_failed(failed: ArticleCompletionFailed) -> Terminal:
         reason_code=f"completion_{failed.reason.code}",
         detail=failed.reason.detail,
     )
+
+
+# ---------------------------------------------------------------------------
+# 閉じ union のディスパッチ (CompletionFailure -> CompletionDisposition)
+# ---------------------------------------------------------------------------
+
+
+def classify_completion_failure(
+    failure: CompletionFailure,
+) -> CompletionDisposition:
+    """``ArticleHtmlCompleter`` が返す閉じ failure union を 1 点で分類する。
+
+    既存の 3 classifier (fetch / extraction-empty / promotion) に fan-out する
+    だけで分類ロジックは増やさない。union は閉じているので ``assert_never`` で
+    網羅性を構造保証する (新メンバ追加時に型検査 + 網羅テストで落ちる)。
+    """
+    match failure:
+        case FetchFailed(error=error):
+            return classify_external_fetch_error(error)
+        case ExtractionEmpty() as empty:
+            return classify_extraction_empty(empty)
+        case ArticleCompletionFailed() as failed:
+            return classify_completion_failed(failed)
+        case _ as unreachable:
+            assert_never(unreachable)

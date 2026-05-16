@@ -13,8 +13,10 @@ log + ``None`` で短絡する。
 
 - ``ReadyForArticleCompletion`` を受け取る (precondition ``status='running'``
   は Ready 型で構造保証済、service は ID も queue 状態も知らない)
-- ``_resolve_ready`` で HTML 取得 + ``ExtractionEmpty`` 判定 + promotion を
-  実行し ``AnalyzableArticle`` を解決する (成功主線)
+- ``ArticleHtmlCompleter.complete`` (純粋境界 ``completer.py``) に
+  ``IncompleteArticle`` を渡し ``AnalyzableArticle | CompletionFailure`` を
+  値で受け取る。HTML 取得 + ``ExtractionEmpty`` 判定 + promotion は境界の責務で
+  service は ``isinstance`` 1 回で成功主線を分岐する
 - repository で ``articles`` INSERT + ``pending_html_articles`` DELETE を
   **同 tx で一括 commit**。他 Stage (Extraction/Assessment/Embedding) と同形で
   race-loss (``save`` が ``None``) は読み戻さず log + ``None`` で短絡、
@@ -37,8 +39,9 @@ caller (task) の責務:
 
 設計上の決定:
 
-- origin failure は ``ExternalFetchError`` で catch し ``disposition`` mapper で
-  ``Retryable`` / ``Terminal`` に分類、retry は DB 駆動 (taskiq retry は使わない)
+- origin fetch 例外は ``ArticleHtmlCompleter`` が境界で ``FetchFailed`` 値に畳む。
+  service は失敗 3 形を ``classify_completion_failure`` で ``Retryable`` /
+  ``Terminal`` に分類、retry は DB 駆動 (taskiq retry は使わない)
 - retry policy は ``Retryable`` が運ぶ **データ**。handler 側で policy ごとに
   コード分岐せず ``exhausted`` 判定だけで処理経路を 1 本化する
 - ``attempt`` は ``ready.attempt_count`` を SSoT として使用 (caller から
@@ -54,24 +57,20 @@ from collections.abc import Callable
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.collection.article_completion.completer import (
+    ArticleHtmlCompleter,
+    FetchFailed,
+)
 from app.collection.article_completion.disposition import (
-    classify_completion_failed,
-    classify_external_fetch_error,
-    classify_extraction_empty,
+    classify_completion_failure,
 )
-from app.collection.article_completion.extractor import (
-    ArticleHtmlExtractor,
-    ExtractedContent,
-    ExtractionEmpty,
-)
+from app.collection.article_completion.extractor import ArticleHtmlExtractor
 from app.collection.article_completion.failure_handling import (
     ArticleCompletionFailureHandler,
 )
 from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.article_completion.repository import ArticleCompletionRepository
 from app.collection.domain.analyzable_article import AnalyzableArticle
-from app.collection.domain.completion import ArticleCompletionFailed
-from app.collection.external_fetch_errors import ExternalFetchError
 
 logger = structlog.get_logger(__name__)
 
@@ -79,10 +78,11 @@ logger = structlog.get_logger(__name__)
 class ArticleCompletionService:
     """Pattern H 2 段目 — Ready 1 件を HTML 取得 + 永続化する。
 
-    ``execute(ready)`` が単一エントリポイント。origin failure は
-    ``ExternalFetchError`` で catch し disposition に分類、retry は DB 駆動で
-    caller に raise しない (taskiq retry に依存しない設計)。失敗後処理は
-    ``ArticleCompletionFailureHandler`` に委譲し、service は成功主線のみを持つ。
+    ``execute(ready)`` が単一エントリポイント。完成は ``ArticleHtmlCompleter``
+    (純粋境界) に委譲し ``AnalyzableArticle | CompletionFailure`` を値で受け取る。
+    失敗は ``classify_completion_failure`` で分類して
+    ``ArticleCompletionFailureHandler`` に委譲 (retry は DB 駆動、caller に
+    raise しない)。service は成功主線のみを持つ。
     """
 
     def __init__(
@@ -91,7 +91,7 @@ class ArticleCompletionService:
         extractor_factory: Callable[[], ArticleHtmlExtractor] = ArticleHtmlExtractor,
     ) -> None:
         self._session_factory = session_factory
-        self._extractor_factory = extractor_factory
+        self._completer = ArticleHtmlCompleter(extractor_factory)
         self._failure_handler = ArticleCompletionFailureHandler(session_factory)
 
     async def execute(self, ready: ReadyForArticleCompletion) -> int | None:
@@ -107,9 +107,15 @@ class ArticleCompletionService:
             ``None`` — lease 衝突 / 状態不整合 / 永続失敗 / 一時失敗 /
             race-loss (静かに exit)。失敗詳細は構造化ログで観測する。
         """
-        advanced = await self._resolve_ready(ready)
-        if advanced is None:
+        outcome = await self._completer.complete(ready.incomplete_article)
+        if not isinstance(outcome, AnalyzableArticle):
+            await self._failure_handler.handle(
+                ready,
+                classify_completion_failure(outcome),
+                exc=outcome.error if isinstance(outcome, FetchFailed) else None,
+            )
             return None
+        advanced = outcome
 
         canonical_url = ready.incomplete_article.source_url
         async with self._session_factory() as session:
@@ -145,46 +151,3 @@ class ArticleCompletionService:
             canonical_url=str(canonical_url),
         )
         return result.article_id
-
-    async def _resolve_ready(
-        self, ready: ReadyForArticleCompletion
-    ) -> AnalyzableArticle | None:
-        """HTML 取得 → 抽出判定 → promotion で ``AnalyzableArticle`` を解決する。
-
-        fetch origin failure / ``ExtractionEmpty`` / promotion 失敗はすべて
-        ``CompletionDisposition`` に分類して ``ArticleCompletionFailureHandler``
-        に委譲し ``None`` を返す (失敗後処理は handler の責務)。成功時のみ
-        昇格済 ``AnalyzableArticle`` を返す。
-        """
-        extractor = self._extractor_factory()
-
-        try:
-            html_result = await extractor.fetch(
-                ready.incomplete_article.source_url.as_safe_url()
-            )
-        except ExternalFetchError as exc:
-            await self._failure_handler.handle(
-                ready, classify_external_fetch_error(exc), exc=exc
-            )
-            return None
-
-        if isinstance(html_result, ExtractionEmpty):
-            await self._failure_handler.handle(
-                ready, classify_extraction_empty(html_result)
-            )
-            return None
-
-        assert isinstance(html_result, ExtractedContent)  # noqa: S101
-
-        advanced = ready.incomplete_article.complete_with_html(
-            body=html_result.body,
-            html_published_at=html_result.published_at,
-            html_title=html_result.title,
-        )
-        if isinstance(advanced, ArticleCompletionFailed):
-            await self._failure_handler.handle(
-                ready, classify_completion_failed(advanced)
-            )
-            return None
-
-        return advanced
