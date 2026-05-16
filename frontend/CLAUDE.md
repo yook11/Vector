@@ -61,7 +61,6 @@ src/
 │   ├── ui/               # shadcn/ui (不可侵)
 │   ├── layout/           # Header / Sidebar / MobileNav 等
 │   └── feedback/         # NotFoundMessage 等の横断 feedback
-├── hooks/                # 横断 hooks (必要時のみ)
 ├── lib/
 │   ├── api/              # hey-api-interceptors / hey-api.config / error / internal-config
 │   ├── auth/             # auth / auth-client / session
