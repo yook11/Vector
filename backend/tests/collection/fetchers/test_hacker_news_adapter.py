@@ -5,7 +5,7 @@
 - fixture hits から ``ArticleFetcher`` 経由で永続化 passport が yield される
 - ``url=None`` の Ask HN 系 hit は yield 自体されない (passport が増えない)
 - 空 title の hit は yield されない
-- ``CrossrefApiClient`` の例外 (Permanent / Temporary) は Adapter を素通しする
+- ``HackerNewsApiClient`` の ``ExternalFetchError`` は Adapter を素通しする
 - ``search_recent_stories`` に renamed kwargs (sliding window / min_points /
   hits_per_page) が必ず渡る (旧仕様: 24h window / points>20 / 100 hits)
 """
@@ -19,7 +19,10 @@ from typing import Any
 
 import pytest
 
-from app.collection.errors import PermanentFetchError, TemporaryFetchError
+from app.collection.external_fetch_errors import (
+    FetchAccessDeniedError,
+    FetchOriginServerError,
+)
 from app.collection.fetchers.article_fetcher import ArticleFetcher
 from app.collection.fetchers.hacker_news import (
     HN_HITS_PER_PAGE,
@@ -159,18 +162,22 @@ async def test_client_kwargs_carry_quality_filters() -> None:
 
 
 @pytest.mark.asyncio
-async def test_permanent_error_propagates_through_adapter() -> None:
+async def test_non_recoverable_error_propagates_through_adapter() -> None:
     adapter = HackerNewsAdapter(
-        client=_RaisingHNClient(PermanentFetchError("HTTP 403: Hacker News"))
+        client=_RaisingHNClient(
+            FetchAccessDeniedError(status_code=403, reason="forbidden")
+        )
     )
-    with pytest.raises(PermanentFetchError):
+    with pytest.raises(FetchAccessDeniedError):
         await _collect(ArticleFetcher(adapter).fetch(source_id=1))
 
 
 @pytest.mark.asyncio
-async def test_temporary_error_propagates_through_adapter() -> None:
+async def test_recoverable_error_propagates_through_adapter() -> None:
     adapter = HackerNewsAdapter(
-        client=_RaisingHNClient(TemporaryFetchError("HTTP 500: Hacker News"))
+        client=_RaisingHNClient(
+            FetchOriginServerError(status_code=500, reason="internal_error")
+        )
     )
-    with pytest.raises(TemporaryFetchError):
+    with pytest.raises(FetchOriginServerError):
         await _collect(ArticleFetcher(adapter).fetch(source_id=1))

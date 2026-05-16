@@ -4,9 +4,9 @@
 
 - 1 記事が複数 taxonomy feed に出現しても yield URL はユニーク
   (in-memory ``seen_urls`` dedup の移植証明)
-- 1 feed が ``TemporaryFetchError`` を raise しても他 feed は継続し、
-  ``cornell_feed_skip`` warning が構造化ログに残る
-- ``PermanentFetchError`` は catch せず伝播する
+- 1 feed が recoverable な ``ExternalFetchError`` を raise しても他 feed は
+  継続し、``cornell_feed_skip`` warning が構造化ログに残る
+- 非 recoverable な ``ExternalFetchError`` は catch せず伝播する
 - Pattern H のため ``body`` は ``None``
 """
 
@@ -17,7 +17,10 @@ from datetime import UTC, datetime
 import pytest
 from structlog.testing import capture_logs
 
-from app.collection.errors import PermanentFetchError, TemporaryFetchError
+from app.collection.external_fetch_errors import (
+    FetchOriginServerError,
+    FetchResourceNotFoundError,
+)
 from app.collection.fetchers.cornell import CornellChronicleAdapter
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.rss_parser import RssEntry
@@ -67,7 +70,7 @@ class _SkipOneFeedParser:
         **_: object,
     ) -> list[RssEntry]:
         if endpoint_url == self._skip_url:
-            raise TemporaryFetchError(f"HTTP 503: {source_name}")
+            raise FetchOriginServerError(status_code=503, reason="service_unavailable")
         return [_entry(f"{endpoint_url}#article")]
 
 
@@ -80,7 +83,7 @@ class _PermanentParser:
         parse_mode: str = "text",
         **_: object,
     ) -> list[RssEntry]:
-        raise PermanentFetchError(f"HTTP 404: {source_name}")
+        raise FetchResourceNotFoundError(status_code=404, reason="not_found")
 
 
 async def _collect(adapter: CornellChronicleAdapter) -> list[FetchedArticle]:
@@ -105,7 +108,7 @@ async def test_body_is_none_pattern_h() -> None:
     assert all(item.body is None for item in items)
 
 
-async def test_temporary_feed_error_skips_feed_with_warning() -> None:
+async def test_recoverable_feed_error_skips_feed_with_warning() -> None:
     skip_url = CornellChronicleAdapter.FEEDS[1]
     adapter = CornellChronicleAdapter(parser=_SkipOneFeedParser(skip_url))  # type: ignore[arg-type]
 
@@ -122,8 +125,8 @@ async def test_temporary_feed_error_skips_feed_with_warning() -> None:
     assert skips[0]["log_level"] == "warning"
 
 
-async def test_permanent_feed_error_propagates() -> None:
+async def test_non_recoverable_feed_error_propagates() -> None:
     adapter = CornellChronicleAdapter(parser=_PermanentParser())  # type: ignore[arg-type]
 
-    with pytest.raises(PermanentFetchError):
+    with pytest.raises(FetchResourceNotFoundError):
         await _collect(adapter)

@@ -31,7 +31,7 @@ from urllib.parse import urljoin, urlparse
 
 from lxml import etree, html
 
-from app.collection.errors import PermanentFetchError
+from app.collection.external_fetch_errors import FetchParseError
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.raw_http_client import RawHttpClient
 
@@ -110,9 +110,7 @@ class ORNLAdapter:
                 detail_url_prefix=self.DETAIL_URL_PREFIX,
             )
         except etree.LxmlError as e:
-            raise PermanentFetchError(
-                f"html listing parse error: {self.NAME}: {e}"
-            ) from e
+            raise FetchParseError(f"html listing parse error: {self.NAME}: {e}") from e
 
         seen: set[str] = set()
         emitted = 0

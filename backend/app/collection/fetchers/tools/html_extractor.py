@@ -27,7 +27,14 @@ import structlog
 import trafilatura
 
 from app.collection.article.domain.value_objects import PublishedAt
-from app.collection.errors import PermanentFetchError, TemporaryFetchError
+from app.collection.external_fetch_errors import (
+    FetchRedirectBlockedError,
+    FetchResponseTooLargeError,
+    FetchRobotsDisallowedError,
+)
+from app.collection.fetchers.tools.http_error_translation import (
+    translate_fetch_exception,
+)
 from app.shared.security.safe_http import make_safe_async_client
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 from app.shared.value_objects.safe_url import SafeUrl
@@ -202,8 +209,11 @@ class HtmlContentExtractor:
     呼び出し側 (Fetcher) は ``fetch_and_extract(url) -> ExtractedContent`` の
     契約のみに依存する。失敗は例外で表現:
 
-    - ``PermanentFetchError``: robots.txt 拒否 / 403 / 404 / 410 / 451 / 過大レスポンス
-    - ``TemporaryFetchError``: 5xx / 429 / タイムアウト / ネットワーク / DNS 一時失敗
+    - ``FetchRobotsDisallowedError``: robots.txt の明示 Disallow
+    - ``FetchRedirectBlockedError``: 3xx redirect 非追従 policy
+    - ``FetchResponseTooLargeError``: レスポンスサイズ超過
+    - その他 HTTP status / transport / SSRF 例外は ``translate_fetch_exception``
+      経由で origin ``ExternalFetchError`` に写像される
     - ``ExtractionEmptyError``: Content-Type 不一致 / parse 失敗 / 品質ゲート未達
 
     robots キャッシュと httpx クライアントのライフサイクルは内部で完結する。
@@ -220,7 +230,7 @@ class HtmlContentExtractor:
         ) as client:
             try:
                 if not await self._robots_cache.check(client, url_str):
-                    raise PermanentFetchError(f"robots.txt blocked: {url_str}")
+                    raise FetchRobotsDisallowedError(f"robots.txt blocked: {url_str}")
 
                 try:
                     response = await client.get(url_str, timeout=HTTP_TIMEOUT)
@@ -231,32 +241,29 @@ class HtmlContentExtractor:
                             status=response.status_code,
                             location=response.headers.get("location", "")[:200],
                         )
-                        raise PermanentFetchError(
+                        raise FetchRedirectBlockedError(
                             f"redirect not followed: HTTP "
                             f"{response.status_code}: {url_str}"
                         )
                     response.raise_for_status()
-                except httpx.HTTPStatusError as e:
-                    status = e.response.status_code
-                    if status in (403, 404, 410, 451):
-                        raise PermanentFetchError(f"HTTP {status}: {url_str}") from e
-                    raise TemporaryFetchError(f"HTTP {status}: {url_str}") from e
-                except httpx.RequestError as e:
-                    raise TemporaryFetchError(f"request error: {url_str}: {e}") from e
+                except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                    raise translate_fetch_exception(e, source_name=url_str) from e
 
                 content_length_header = response.headers.get("content-length")
                 if content_length_header is not None:
                     try:
-                        if int(content_length_header) > _MAX_RESPONSE_BYTES:
-                            raise PermanentFetchError(
-                                f"response too large (content-length="
-                                f"{content_length_header}): {url_str}"
-                            )
+                        declared_bytes = int(content_length_header)
                     except ValueError:
-                        pass
+                        declared_bytes = -1
+                    if declared_bytes > _MAX_RESPONSE_BYTES:
+                        raise FetchResponseTooLargeError(
+                            actual_bytes=declared_bytes,
+                            limit_bytes=_MAX_RESPONSE_BYTES,
+                        )
                 if len(response.content) > _MAX_RESPONSE_BYTES:
-                    raise PermanentFetchError(
-                        f"response too large ({len(response.content)} bytes): {url_str}"
+                    raise FetchResponseTooLargeError(
+                        actual_bytes=len(response.content),
+                        limit_bytes=_MAX_RESPONSE_BYTES,
                     )
 
                 content_type = response.headers.get("content-type", "")
@@ -276,7 +283,5 @@ class HtmlContentExtractor:
                 except Exception as e:
                     logger.warning("content_parse_error", url=url_str, error=str(e))
                     raise ExtractionEmptyError("parse_error") from e
-            except HostBlockedError as e:
-                raise PermanentFetchError(str(e)) from e
-            except HostResolutionError as e:
-                raise TemporaryFetchError(str(e)) from e
+            except (HostBlockedError, HostResolutionError) as e:
+                raise translate_fetch_exception(e, source_name=url_str) from e

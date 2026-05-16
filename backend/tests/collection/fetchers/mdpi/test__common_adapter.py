@@ -6,7 +6,7 @@
 - ``type != "journal-article"`` / non-CC-BY-4 license / 必須フィールド欠落の
   各 drop branch が yield 自体されない (passport にならない)
 - 全 passport が ``ReadyForArticle`` で ``source_url = https://doi.org/<DOI>``
-- ``CrossrefApiClient`` の例外 (Permanent / Temporary) は Adapter を素通しする
+- ``CrossrefApiClient`` の ``ExternalFetchError`` は Adapter を素通しする
 - ``works()`` には ``issn`` / ``from_pub_date`` / ``rows`` が必ず渡る
 """
 
@@ -21,7 +21,10 @@ from typing import Any
 import pytest
 
 from app.collection.article.domain.article import ReadyForArticle
-from app.collection.errors import PermanentFetchError, TemporaryFetchError
+from app.collection.external_fetch_errors import (
+    FetchAccessDeniedError,
+    FetchOriginServerError,
+)
 from app.collection.fetchers.article_fetcher import ArticleFetcher
 from app.collection.fetchers.mdpi._common import BaseMDPICrossrefAdapter
 from app.collection.fetchers.mdpi.materials import MDPIMaterialsAdapter
@@ -195,18 +198,22 @@ async def test_client_kwargs_carry_issn_lookback_rows() -> None:
 
 
 @pytest.mark.asyncio
-async def test_permanent_error_propagates_through_adapter() -> None:
+async def test_non_recoverable_error_propagates_through_adapter() -> None:
     adapter = MDPIMaterialsAdapter(
-        client=_RaisingCrossrefClient(PermanentFetchError("HTTP 403: MDPI Materials"))
+        client=_RaisingCrossrefClient(
+            FetchAccessDeniedError(status_code=403, reason="forbidden")
+        )
     )
-    with pytest.raises(PermanentFetchError):
+    with pytest.raises(FetchAccessDeniedError):
         await _collect(ArticleFetcher(adapter).fetch(source_id=1))
 
 
 @pytest.mark.asyncio
-async def test_temporary_error_propagates_through_adapter() -> None:
+async def test_recoverable_error_propagates_through_adapter() -> None:
     adapter = MDPIMaterialsAdapter(
-        client=_RaisingCrossrefClient(TemporaryFetchError("HTTP 500: MDPI Materials"))
+        client=_RaisingCrossrefClient(
+            FetchOriginServerError(status_code=500, reason="internal_error")
+        )
     )
-    with pytest.raises(TemporaryFetchError):
+    with pytest.raises(FetchOriginServerError):
         await _collect(ArticleFetcher(adapter).fetch(source_id=1))

@@ -42,13 +42,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.collection.article.domain.article import ReadyForArticle
 from app.collection.article.repository import ArticleRepository
-from app.collection.errors import SourceFetchError
+from app.collection.external_fetch_errors import ExternalFetchError
 from app.collection.fetchers.protocol import Fetcher
 from app.collection.incomplete_article.domain.incomplete_article import (
     IncompleteArticle,
 )
 from app.collection.incomplete_article.repository import PendingHtmlArticleRepository
-from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
+from app.collection.source_fetch.errors import SourceFetchError
 
 logger = structlog.get_logger(__name__)
 
@@ -98,11 +98,11 @@ class ArticleAcquisitionService:
                             ):
                                 continue
                             await pending_repo.save(pending, ready_at=datetime.now(UTC))
-            except (HostBlockedError, HostResolutionError) as e:
-                # Stage 1 では SSRF deny (Permanent 相当) と DNS 失敗 (Temporary
-                # 相当) を区別する業務的意味はない (cron 一本化で taskiq inline
-                # retry を持たないため、どちらも次 tick で再 dispatch される)。
-                raise SourceFetchError(str(e)) from e
+            except ExternalFetchError as exc:
+                # tool 層で origin error に翻訳済。Layer 1 marker に CODE ごと
+                # 載せ替えて伝播する (cron 一本化のため Stage 1 は救済戦略の差を
+                # 持たず、CODE は監査解像度のためだけに保持する)。
+                raise SourceFetchError(str(exc), code=exc.CODE) from exc
 
             await session.commit()
 

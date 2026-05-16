@@ -25,12 +25,10 @@ HTTP 取得・SSRF guard・feedparser 呼び出し・error 翻訳・title plain 
 
 Error 翻訳:
 
-- HTTP 403 / 404 / 410 / 451 → ``PermanentFetchError``
-- HTTP その他 4xx / 5xx → ``TemporaryFetchError``
-- ``httpx.RequestError`` → ``TemporaryFetchError``
-- ``HostBlockedError`` → ``PermanentFetchError``
-- ``HostResolutionError`` → ``TemporaryFetchError``
-- bozo + entries 空 → ``PermanentFetchError``
+- HTTP status / transport / SSRF guard 例外は ``translate_fetch_exception``
+  経由で origin ``ExternalFetchError`` に写像する (status → error の SSoT は
+  ``http_error_translation`` に集約)。
+- bozo + entries 空 → ``FetchParseError``。
 """
 
 from __future__ import annotations
@@ -47,7 +45,10 @@ import feedparser
 import httpx
 import structlog
 
-from app.collection.errors import PermanentFetchError, TemporaryFetchError
+from app.collection.external_fetch_errors import FetchParseError
+from app.collection.fetchers.tools.http_error_translation import (
+    translate_fetch_exception,
+)
 from app.shared.security.safe_http import make_safe_async_client
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 
@@ -204,9 +205,9 @@ class RssParser:
         """HTTP GET → feedparser → ``list[RssEntry]`` まで完結する。
 
         Raises:
-            PermanentFetchError: 403 / 404 / 410 / 451 / SSRF block / bozo +
-                entries 空。
-            TemporaryFetchError: 他 HTTP error / RequestError / DNS 解決失敗。
+            FetchParseError: bozo かつ entries 空 (feed 構造破損)。
+            ExternalFetchError: HTTP status / transport / SSRF 例外を
+                ``translate_fetch_exception`` で写像した origin error。
         """
         raw = await self._fetch_raw(
             endpoint_url=endpoint_url,
@@ -222,7 +223,7 @@ class RssParser:
                 source=source_name,
                 error=str(feed.bozo_exception),
             )
-            raise PermanentFetchError(
+            raise FetchParseError(
                 f"feed parse error: {source_name}: {feed.bozo_exception}"
             )
         return [normalize_entry(entry) for entry in feed.entries]
@@ -244,15 +245,11 @@ class RssParser:
             try:
                 response = await client.get(endpoint_url)
                 response.raise_for_status()
-            except httpx.HTTPStatusError as e:
-                status = e.response.status_code
-                if status in (403, 404, 410, 451):
-                    raise PermanentFetchError(f"HTTP {status}: {source_name}") from e
-                raise TemporaryFetchError(f"HTTP {status}: {source_name}") from e
-            except httpx.RequestError as e:
-                raise TemporaryFetchError(f"request error: {source_name}: {e}") from e
-            except HostBlockedError as e:
-                raise PermanentFetchError(str(e)) from e
-            except HostResolutionError as e:
-                raise TemporaryFetchError(str(e)) from e
+            except (
+                httpx.HTTPStatusError,
+                httpx.RequestError,
+                HostBlockedError,
+                HostResolutionError,
+            ) as e:
+                raise translate_fetch_exception(e, source_name=source_name) from e
             return response.content if parse_mode == "bytes" else response.text

@@ -30,7 +30,7 @@ from urllib.parse import urlparse
 
 from lxml import etree
 
-from app.collection.errors import PermanentFetchError
+from app.collection.external_fetch_errors import FetchParseError
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.raw_http_client import RawHttpClient
 
@@ -101,7 +101,7 @@ class AnthropicAdapter:
         try:
             entries = await asyncio.to_thread(_parse_sitemap, sitemap_bytes)
         except etree.XMLSyntaxError as e:
-            raise PermanentFetchError(f"sitemap parse error: {self.NAME}: {e}") from e
+            raise FetchParseError(f"sitemap parse error: {self.NAME}: {e}") from e
 
         filtered = [
             (loc, lastmod)

@@ -6,7 +6,7 @@
 - ``URL_PATH_PREFIX="/news/"`` 以外の URL は yield されない
 - ``MAX_ENTRIES=30`` で切り出される
 - 各 passport は ``prefer_html_title=True`` 経由で ``IncompleteArticle`` 型
-- ``RawHttpClient`` の例外 (Permanent / Temporary) は Adapter を素通しする
+- ``RawHttpClient`` の ``ExternalFetchError`` は Adapter を素通しする
 - sitemap parser は XXE / 外部 entity を解決しない (defensive parsing 契約)
 """
 
@@ -17,7 +17,10 @@ from pathlib import Path
 
 import pytest
 
-from app.collection.errors import PermanentFetchError, TemporaryFetchError
+from app.collection.external_fetch_errors import (
+    FetchOriginServerError,
+    FetchResourceNotFoundError,
+)
 from app.collection.fetchers.anthropic import AnthropicAdapter, _parse_sitemap
 from app.collection.fetchers.article_fetcher import ArticleFetcher
 from app.collection.fetchers.tools.raw_http_client import RawHttpClient
@@ -101,20 +104,24 @@ async def test_all_passports_are_incomplete_for_html_title() -> None:
 
 
 @pytest.mark.asyncio
-async def test_permanent_error_propagates_through_adapter() -> None:
+async def test_non_recoverable_error_propagates_through_adapter() -> None:
     adapter = AnthropicAdapter(
-        client=_RaisingRawHttpClient(PermanentFetchError("HTTP 404: Anthropic"))
+        client=_RaisingRawHttpClient(
+            FetchResourceNotFoundError(status_code=404, reason="not_found")
+        )
     )
-    with pytest.raises(PermanentFetchError):
+    with pytest.raises(FetchResourceNotFoundError):
         await _collect(ArticleFetcher(adapter).fetch(source_id=1))
 
 
 @pytest.mark.asyncio
-async def test_temporary_error_propagates_through_adapter() -> None:
+async def test_recoverable_error_propagates_through_adapter() -> None:
     adapter = AnthropicAdapter(
-        client=_RaisingRawHttpClient(TemporaryFetchError("HTTP 500: Anthropic"))
+        client=_RaisingRawHttpClient(
+            FetchOriginServerError(status_code=500, reason="internal_error")
+        )
     )
-    with pytest.raises(TemporaryFetchError):
+    with pytest.raises(FetchOriginServerError):
         await _collect(ArticleFetcher(adapter).fetch(source_id=1))
 
 

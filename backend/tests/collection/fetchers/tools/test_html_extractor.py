@@ -7,7 +7,13 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from app.collection.errors import PermanentFetchError, TemporaryFetchError
+from app.collection.external_fetch_errors import (
+    FetchAccessDeniedError,
+    FetchOriginServerError,
+    FetchRedirectBlockedError,
+    FetchRobotsDisallowedError,
+    FetchTimeoutError,
+)
 from app.collection.fetchers.tools.html_extractor import (
     ExtractedContent,
     ExtractionEmptyError,
@@ -100,7 +106,7 @@ class TestHtmlContentExtractor:
         assert len(result.body) > 50
         assert result.title
 
-    async def test_raises_permanent_on_403(self) -> None:
+    async def test_raises_access_denied_on_403(self) -> None:
         robots_resp = httpx.Response(
             404, request=httpx.Request("GET", "https://example.com/robots.txt")
         )
@@ -110,11 +116,11 @@ class TestHtmlContentExtractor:
         extractor = HtmlContentExtractor()
         with (
             _patch_client(client),
-            pytest.raises(PermanentFetchError, match="403"),
+            pytest.raises(FetchAccessDeniedError, match="403"),
         ):
             await extractor.fetch_and_extract(SafeUrl("https://example.com/paywall"))
 
-    async def test_raises_temporary_on_500(self) -> None:
+    async def test_raises_origin_server_error_on_500(self) -> None:
         robots_resp = httpx.Response(
             404, request=httpx.Request("GET", "https://example.com/robots.txt")
         )
@@ -124,11 +130,11 @@ class TestHtmlContentExtractor:
         extractor = HtmlContentExtractor()
         with (
             _patch_client(client),
-            pytest.raises(TemporaryFetchError, match="500"),
+            pytest.raises(FetchOriginServerError, match="500"),
         ):
             await extractor.fetch_and_extract(SafeUrl("https://example.com/error"))
 
-    async def test_raises_temporary_on_request_error(self) -> None:
+    async def test_raises_timeout_on_connect_timeout(self) -> None:
         robots_resp = httpx.Response(
             404, request=httpx.Request("GET", "https://example.com/robots.txt")
         )
@@ -137,7 +143,7 @@ class TestHtmlContentExtractor:
         extractor = HtmlContentExtractor()
         with (
             _patch_client(client),
-            pytest.raises(TemporaryFetchError, match="timed out"),
+            pytest.raises(FetchTimeoutError, match="timed out"),
         ):
             await extractor.fetch_and_extract(SafeUrl("https://example.com/slow"))
 
@@ -180,7 +186,7 @@ class TestHtmlContentExtractor:
                 await extractor.fetch_and_extract(SafeUrl("https://example.com/short"))
         assert exc.value.kind in ("quality_gate", "parse_error")
 
-    async def test_raises_permanent_on_robots_blocked(self) -> None:
+    async def test_raises_robots_disallowed_on_robots_blocked(self) -> None:
         robots_resp = httpx.Response(
             200,
             text="User-agent: *\nDisallow: /private/",
@@ -191,13 +197,13 @@ class TestHtmlContentExtractor:
         extractor = HtmlContentExtractor()
         with (
             _patch_client(client),
-            pytest.raises(PermanentFetchError, match="robots"),
+            pytest.raises(FetchRobotsDisallowedError, match="robots"),
         ):
             await extractor.fetch_and_extract(
                 SafeUrl("https://example.com/private/article")
             )
 
-    async def test_raises_permanent_on_3xx_redirect(self) -> None:
+    async def test_raises_redirect_blocked_on_3xx_redirect(self) -> None:
         robots_resp = httpx.Response(
             404, request=httpx.Request("GET", "https://example.com/robots.txt")
         )
@@ -211,6 +217,6 @@ class TestHtmlContentExtractor:
         extractor = HtmlContentExtractor()
         with (
             _patch_client(client),
-            pytest.raises(PermanentFetchError, match="redirect"),
+            pytest.raises(FetchRedirectBlockedError, match="redirect"),
         ):
             await extractor.fetch_and_extract(SafeUrl("https://example.com/article"))

@@ -25,12 +25,10 @@ from app.brokers import (
     broker_content,
     broker_metadata,
 )
-from app.collection.errors import SourceFetchError
+from app.collection.source_fetch.failure_handling import SourceFetchFailureHandler
 from app.collection.staged import IngestSourceArg
 from app.models.fetch_log import FetchLog, FetchStatus
 from app.models.news_source import NewsSource
-from app.observability.domain.event import Stage
-from app.observability.recording import _record_failure_event
 
 logger = structlog.get_logger(__name__)
 
@@ -131,12 +129,11 @@ async def ingest_source(
     補完待ち獲得経路 (本文 HTML 必須): Fetcher が ``IncompleteArticle`` を yield、
     後段 ``extract_html_body`` task で trafilatura 抽出 + 永続化に進む。
 
-    失敗ハンドリング: taskiq inline retry を持たず (``max_retries=0``)、
-    ``SourceFetchError`` (ソース全体失敗) はその tick で監査して return する。
-    次の cron tick (``dispatch_sources``) で再 dispatch されるため、Stage 2 の
-    DB 駆動 retry のような state は Stage 1 では持たない。``Permanent`` /
-    ``Temporary`` の細分化は Stage 2 専用語彙で、Stage 1 task 層は
-    ``SourceFetchError`` 1 本で catch する。
+    失敗ハンドリング: taskiq inline retry を持たず (``max_retries=0``)、捕捉した
+    例外は ``SourceFetchFailureHandler`` に委譲する。``SourceFetchError`` (ソース
+    全体失敗) は origin CODE つきで監査して return、想定外例外は監査の上 re-raise
+    (worker log で可視化)。次の cron tick (``dispatch_sources``) で再 dispatch
+    されるため、Stage 1 は Stage 2 のような DB 駆動 retry state を持たない。
     """
     from app.analysis.extraction.domain.ready import ExtractionTrigger
     from app.analysis.extraction.tasks import extract_content
@@ -151,35 +148,24 @@ async def ingest_source(
     fetcher_factory = FETCHERS[arg.name]
     svc = ArticleAcquisitionService(session_factory, fetcher_factory)
 
+    handler = SourceFetchFailureHandler(session_factory)
     try:
         persisted_ids = await svc.execute(source_id)
-    except SourceFetchError as e:
+    except Exception as exc:
+        # FetchLog (実行結果記録) は Task 層の別責務として従来どおり書く。
+        # marker 分類 → audit / reraise 判断は handler に一本化する。
         await _record_fetch_log(
-            session_factory, source_id, FetchStatus.ERROR, 0, str(e), start_time
+            session_factory, source_id, FetchStatus.ERROR, 0, str(exc), start_time
         )
-        await _record_failure_event(
-            session_factory=session_factory,
-            stage=Stage.SOURCE_FETCH,
-            outcome_code="source_fetch_error",
-            exc=e,
-            attempt=1,
-            duration_ms=int((time.monotonic() - start_time) * 1000),
+        reraise = await handler.handle(
             source_id=source_id,
-        )
-        return {"source_id": source_id, "status": "error", "reason": str(e)}
-    except Exception as e:
-        # 想定外: audit してから re-raise (worker log で可視化、taskiq retry は
-        # 載らない: max_retries=0 / retry_on_error=False)
-        await _record_failure_event(
-            session_factory=session_factory,
-            stage=Stage.SOURCE_FETCH,
-            outcome_code="unexpected_error",
-            exc=e,
+            source_name=arg.name,
+            exc=exc,
             attempt=1,
-            duration_ms=int((time.monotonic() - start_time) * 1000),
-            source_id=source_id,
         )
-        raise
+        if reraise:
+            raise
+        return {"source_id": source_id, "status": "error", "reason": str(exc)}
 
     article_created_count = len(persisted_ids)
     await _record_fetch_log(

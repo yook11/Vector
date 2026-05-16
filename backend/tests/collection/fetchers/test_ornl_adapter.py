@@ -8,7 +8,7 @@
 - ``MAX_ENTRIES=30`` で切り出される
 - 全 passport は ``IncompleteArticle`` (``prefer_html_title=True``)
 - ``published_at_hint=None`` (listing には lastmod 情報がない前提)
-- ``RawHttpClient`` の例外 (Permanent / Temporary) は Adapter を素通しする
+- ``RawHttpClient`` の ``ExternalFetchError`` は Adapter を素通しする
 """
 
 from __future__ import annotations
@@ -18,7 +18,10 @@ from pathlib import Path
 
 import pytest
 
-from app.collection.errors import PermanentFetchError, TemporaryFetchError
+from app.collection.external_fetch_errors import (
+    FetchOriginServerError,
+    FetchResourceNotFoundError,
+)
 from app.collection.fetchers.article_fetcher import ArticleFetcher
 from app.collection.fetchers.ornl import ORNLAdapter, _parse_listing
 from app.collection.fetchers.tools.raw_http_client import RawHttpClient
@@ -107,20 +110,24 @@ async def test_all_passports_are_incomplete() -> None:
 
 
 @pytest.mark.asyncio
-async def test_permanent_error_propagates_through_adapter() -> None:
+async def test_non_recoverable_error_propagates_through_adapter() -> None:
     adapter = ORNLAdapter(
-        client=_RaisingRawHttpClient(PermanentFetchError("HTTP 404: ORNL"))
+        client=_RaisingRawHttpClient(
+            FetchResourceNotFoundError(status_code=404, reason="not_found")
+        )
     )
-    with pytest.raises(PermanentFetchError):
+    with pytest.raises(FetchResourceNotFoundError):
         await _collect(ArticleFetcher(adapter).fetch(source_id=1))
 
 
 @pytest.mark.asyncio
-async def test_temporary_error_propagates_through_adapter() -> None:
+async def test_recoverable_error_propagates_through_adapter() -> None:
     adapter = ORNLAdapter(
-        client=_RaisingRawHttpClient(TemporaryFetchError("HTTP 500: ORNL"))
+        client=_RaisingRawHttpClient(
+            FetchOriginServerError(status_code=500, reason="internal_error")
+        )
     )
-    with pytest.raises(TemporaryFetchError):
+    with pytest.raises(FetchOriginServerError):
         await _collect(ArticleFetcher(adapter).fetch(source_id=1))
 
 

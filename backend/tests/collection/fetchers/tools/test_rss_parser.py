@@ -15,7 +15,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from app.collection.errors import PermanentFetchError, TemporaryFetchError
+from app.collection.external_fetch_errors import (
+    FetchAccessDeniedError,
+    FetchLegalBlockError,
+    FetchNetworkError,
+    FetchOriginServerError,
+    FetchParseError,
+    FetchRateLimitedError,
+    FetchResourceNotFoundError,
+    FetchSsrfBlockedError,
+)
 from app.collection.fetchers.tools.rss_parser import (
     RssParser,
     normalize_entry,
@@ -235,58 +244,58 @@ class TestRssParserFetch:
 
         mock_parse.assert_called_once_with(payload)
 
-    async def test_permanent_error_on_403(self) -> None:
+    async def test_403_raises_access_denied(self) -> None:
         response = _mock_response(status_code=403)
         with _patch_safe_client(response):
-            with pytest.raises(PermanentFetchError):
+            with pytest.raises(FetchAccessDeniedError):
                 await RssParser().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
 
-    async def test_permanent_error_on_404(self) -> None:
+    async def test_404_raises_resource_not_found(self) -> None:
         response = _mock_response(status_code=404)
         with _patch_safe_client(response):
-            with pytest.raises(PermanentFetchError):
+            with pytest.raises(FetchResourceNotFoundError):
                 await RssParser().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
 
-    async def test_permanent_error_on_410(self) -> None:
+    async def test_410_raises_resource_not_found(self) -> None:
         response = _mock_response(status_code=410)
         with _patch_safe_client(response):
-            with pytest.raises(PermanentFetchError):
+            with pytest.raises(FetchResourceNotFoundError):
                 await RssParser().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
 
-    async def test_permanent_error_on_451(self) -> None:
+    async def test_451_raises_legal_block(self) -> None:
         response = _mock_response(status_code=451)
         with _patch_safe_client(response):
-            with pytest.raises(PermanentFetchError):
+            with pytest.raises(FetchLegalBlockError):
                 await RssParser().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
 
-    async def test_temporary_error_on_500(self) -> None:
+    async def test_500_raises_origin_server_error(self) -> None:
         response = _mock_response(status_code=500)
         with _patch_safe_client(response):
-            with pytest.raises(TemporaryFetchError):
+            with pytest.raises(FetchOriginServerError):
                 await RssParser().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
 
-    async def test_temporary_error_on_429(self) -> None:
+    async def test_429_raises_rate_limited(self) -> None:
         response = _mock_response(status_code=429)
         with _patch_safe_client(response):
-            with pytest.raises(TemporaryFetchError):
+            with pytest.raises(FetchRateLimitedError):
                 await RssParser().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
 
-    async def test_temporary_error_on_request_error(self) -> None:
+    async def test_request_error_raises_network(self) -> None:
         with _patch_safe_client(httpx.ConnectError("connection refused")):
-            with pytest.raises(TemporaryFetchError):
+            with pytest.raises(FetchNetworkError):
                 await RssParser().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
 
-    async def test_permanent_error_on_host_blocked(self) -> None:
+    async def test_host_blocked_raises_ssrf_blocked(self) -> None:
         with _patch_safe_client(HostBlockedError("private IP literal")):
-            with pytest.raises(PermanentFetchError):
+            with pytest.raises(FetchSsrfBlockedError):
                 await RssParser().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
 
-    async def test_temporary_error_on_host_resolution(self) -> None:
+    async def test_host_resolution_raises_network(self) -> None:
         with _patch_safe_client(HostResolutionError("dns failure")):
-            with pytest.raises(TemporaryFetchError):
+            with pytest.raises(FetchNetworkError):
                 await RssParser().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
 
-    async def test_permanent_error_on_bozo_with_no_entries(self) -> None:
+    async def test_bozo_with_no_entries_raises_parse_error(self) -> None:
         feed = _make_feed(entries=[], bozo=True)
         response = _mock_response(text="<not-valid>")
 
@@ -294,7 +303,7 @@ class TestRssParserFetch:
             _patch_safe_client(response),
             patch(f"{_MOD}.feedparser.parse", return_value=feed),
         ):
-            with pytest.raises(PermanentFetchError):
+            with pytest.raises(FetchParseError):
                 await RssParser().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
 
     async def test_bozo_with_entries_does_not_raise(self) -> None:

@@ -13,8 +13,9 @@ per-source 設計:
 複数 feed 巡回:
 
 - 6 taxonomy term feed を ``FEEDS`` ClassVar で保持 (NASA fetcher と同設計)
-- 1 feed の ``TemporaryFetchError`` は warn して次 feed に進む (全停止しない)。
-  ``PermanentFetchError`` は source 全体失敗として伝播する (catch しない)
+- 1 feed の recoverable な ``ExternalFetchError`` (``RECOVERABLE_FETCH_ERRORS``)
+  は warn して次 feed に進む (全停止しない)。非 recoverable な
+  ``ExternalFetchError`` は source 全体失敗として伝播する (catch しない)
 - in-memory ``seen_urls: set[str]`` で同 cron 周期内の重複 URL を排除
   (1 記事が複数 category に tag されるため、feed 間で URL 重複が発生する)
 """
@@ -26,8 +27,10 @@ from typing import ClassVar
 
 import structlog
 
-from app.collection.errors import TemporaryFetchError
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
+from app.collection.fetchers.tools.http_error_translation import (
+    RECOVERABLE_FETCH_ERRORS,
+)
 from app.collection.fetchers.tools.rss_parser import RssParser
 
 logger = structlog.get_logger(__name__)
@@ -36,9 +39,10 @@ logger = structlog.get_logger(__name__)
 class CornellChronicleAdapter:
     """Cornell Chronicle 用 SourceAdapter (Pattern H、6 feed 巡回 + URL dedup)。
 
-    1 feed の ``TemporaryFetchError`` は ``cornell_feed_skip`` warning を残して
-    次 feed に進む (旧 ``CornellChronicleFetcher`` と同挙動)。
-    ``PermanentFetchError`` は catch せず source 全体失敗として伝播する。
+    1 feed の recoverable な ``ExternalFetchError`` は ``cornell_feed_skip``
+    warning を残して次 feed に進む (旧 ``CornellChronicleFetcher`` と同挙動)。
+    非 recoverable な ``ExternalFetchError`` は catch せず source 全体失敗として
+    伝播する。
     1 記事が複数 category に tag されるため feed 間 URL 重複を
     in-memory ``seen_urls`` で排除する。
     """
@@ -72,8 +76,8 @@ class CornellChronicleAdapter:
                     source_name=self.NAME,
                     parse_mode="bytes",
                 )
-            except TemporaryFetchError as e:
-                # 1 feed の transient 失敗で全停止しない (他 feed は続行)
+            except RECOVERABLE_FETCH_ERRORS as e:
+                # 1 feed の recoverable 失敗で全停止しない (他 feed は続行)
                 logger.warning(
                     "cornell_feed_skip",
                     source=self.NAME,
@@ -81,7 +85,7 @@ class CornellChronicleAdapter:
                     error=str(e),
                 )
                 continue
-            # PermanentFetchError は catch しない (source 全体失敗として伝播)
+            # 非 recoverable は catch しない (source 全体失敗として伝播)
             for entry in entries:
                 if not entry.link or entry.link in seen_urls:
                     continue

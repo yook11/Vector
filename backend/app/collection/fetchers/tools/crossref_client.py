@@ -23,7 +23,9 @@ from typing import Any, ClassVar
 import httpx
 import structlog
 
-from app.collection.errors import PermanentFetchError, TemporaryFetchError
+from app.collection.fetchers.tools.http_error_translation import (
+    translate_fetch_exception,
+)
 from app.shared.security.safe_http import make_safe_async_client
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 
@@ -64,8 +66,8 @@ class CrossrefApiClient:
         (旧 ``mdpi/_common.py:167`` と同値)。
 
         Raises:
-            PermanentFetchError: 403 / 404 / 410 / 451 / SSRF host 拒否。
-            TemporaryFetchError: 429 / 5xx / タイムアウト / DNS 一時失敗。
+            ExternalFetchError: HTTP status / transport / SSRF 例外を
+                ``translate_fetch_exception`` で写像した origin error。
         """
         params: dict[str, str | int] = {
             "filter": f"issn:{issn},from-pub-date:{from_pub_date}",
@@ -82,17 +84,13 @@ class CrossrefApiClient:
             try:
                 response = await client.get(self._endpoint_url, params=params)
                 response.raise_for_status()
-            except httpx.HTTPStatusError as e:
-                status = e.response.status_code
-                if status in (403, 404, 410, 451):
-                    raise PermanentFetchError(f"HTTP {status}: {source_name}") from e
-                raise TemporaryFetchError(f"HTTP {status}: {source_name}") from e
-            except httpx.RequestError as e:
-                raise TemporaryFetchError(f"request error: {source_name}: {e}") from e
-            except HostBlockedError as e:
-                raise PermanentFetchError(str(e)) from e
-            except HostResolutionError as e:
-                raise TemporaryFetchError(str(e)) from e
+            except (
+                httpx.HTTPStatusError,
+                httpx.RequestError,
+                HostBlockedError,
+                HostResolutionError,
+            ) as e:
+                raise translate_fetch_exception(e, source_name=source_name) from e
 
             data = response.json()
 

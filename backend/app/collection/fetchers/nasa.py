@@ -9,9 +9,10 @@ per-source 設計:
 
 - 6 feed (本体 + news-release / technology / aeronautics / station / artemis)
   を ``FEEDS`` ClassVar で保持
-- ``fetch()`` で順次 GET → 1 feed の ``TemporaryFetchError`` は warn して次
-  feed に進む (全停止しない)。``PermanentFetchError`` は source 全体失敗として
-  伝播する (catch しない)
+- ``fetch()`` で順次 GET → 1 feed の recoverable な ``ExternalFetchError``
+  (``RECOVERABLE_FETCH_ERRORS``) は warn して次 feed に進む (全停止しない)。
+  非 recoverable な ``ExternalFetchError`` は source 全体失敗として伝播する
+  (catch しない)
 - in-memory ``seen_urls: set[str]`` で同 cron 周期内の重複 URL を排除
 """
 
@@ -24,8 +25,10 @@ from typing import ClassVar
 
 import structlog
 
-from app.collection.errors import TemporaryFetchError
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
+from app.collection.fetchers.tools.http_error_translation import (
+    RECOVERABLE_FETCH_ERRORS,
+)
 from app.collection.fetchers.tools.rss_parser import RssParser
 
 logger = structlog.get_logger(__name__)
@@ -44,9 +47,10 @@ def _strip_html(s: str) -> str:
 class NASAAdapter:
     """NASA 用 SourceAdapter (Pattern R、6 feed 巡回 + URL dedup)。
 
-    1 feed の ``TemporaryFetchError`` は ``nasa_feed_skip`` warning を残して
-    次 feed に進む (旧 ``NASAFetcher`` と同挙動、運用可観測性維持)。
-    ``PermanentFetchError`` は catch せず source 全体失敗として伝播する。
+    1 feed の recoverable な ``ExternalFetchError`` は ``nasa_feed_skip``
+    warning を残して次 feed に進む (旧 ``NASAFetcher`` と同挙動、運用可観測性
+    維持)。非 recoverable な ``ExternalFetchError`` は catch せず source 全体
+    失敗として伝播する。
     cron 周期内の重複 URL は in-memory ``seen_urls`` で排除する。
     """
 
@@ -73,8 +77,8 @@ class NASAAdapter:
                     source_name=self.NAME,
                     parse_mode="text",
                 )
-            except TemporaryFetchError as e:
-                # 1 feed の transient 失敗で全停止しない (他 feed は続行)
+            except RECOVERABLE_FETCH_ERRORS as e:
+                # 1 feed の recoverable 失敗で全停止しない (他 feed は続行)
                 logger.warning(
                     "nasa_feed_skip",
                     source=self.NAME,
@@ -82,7 +86,7 @@ class NASAAdapter:
                     error=str(e),
                 )
                 continue
-            # PermanentFetchError は catch しない (source 全体失敗として伝播)
+            # 非 recoverable は catch しない (source 全体失敗として伝播)
             for entry in entries:
                 if entry.link and entry.link in seen_urls:
                     continue
