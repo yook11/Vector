@@ -23,7 +23,10 @@ from pathlib import Path
 import feedparser
 import pytest
 
-from app.collection.article.domain.article import ReadyForArticle
+from app.collection.domain.analyzable_article import AnalyzableArticle
+from app.collection.domain.incomplete_article import (
+    IncompleteArticle,
+)
 from app.collection.fetchers.article_fetcher import ArticleFetcher
 from app.collection.fetchers.cleantechnica import CleanTechnicaAdapter
 from app.collection.fetchers.cloudflare import CloudflareBlogAdapter
@@ -75,9 +78,6 @@ from app.collection.fetchers.the_register import TheRegisterAdapter
 from app.collection.fetchers.tools.fetched_article import SourceAdapter
 from app.collection.fetchers.tools.rss_parser import RssEntry, normalize_entry
 from app.collection.fetchers.venturebeat import VentureBeatAdapter
-from app.collection.incomplete_article.domain.incomplete_article import (
-    IncompleteArticle,
-)
 from tests.collection.fetchers._invariant import (
     Passport,
     assert_at_least_one_passport,
@@ -119,7 +119,7 @@ class _FixtureRssParser:
 
 
 # 旧 invariant test と同じ Ready/Incomplete 集合表記。
-_R_BODY_TRUSTED = {ReadyForArticle, IncompleteArticle}
+_R_BODY_TRUSTED = {AnalyzableArticle, IncompleteArticle}
 _H_BODY_DISTRUSTED = {IncompleteArticle}
 
 # (adapter_class, fixture_filename, allowed_types, must_include_types)
@@ -127,7 +127,7 @@ _H_BODY_DISTRUSTED = {IncompleteArticle}
 # ``adapter_class(parser=_FixtureRssParser(fixture))`` を組む。
 _CASES: list[tuple[AdapterFactory, str, set[type], set[type]]] = [
     # P2 で導入済 (代表 2 本)
-    (VentureBeatAdapter, "venturebeat_rss.xml", _R_BODY_TRUSTED, {ReadyForArticle}),
+    (VentureBeatAdapter, "venturebeat_rss.xml", _R_BODY_TRUSTED, {AnalyzableArticle}),
     (
         VentureBeatAdapter,
         "venturebeat_teaser_rss.xml",
@@ -178,65 +178,65 @@ _CASES: list[tuple[AdapterFactory, str, set[type], set[type]]] = [
         CloudflareBlogAdapter,
         "cloudflare_rss.xml",
         _R_BODY_TRUSTED,
-        {ReadyForArticle},
+        {AnalyzableArticle},
     ),
-    (ELifeAdapter, "elife_rss.xml", _R_BODY_TRUSTED, {ReadyForArticle}),
+    (ELifeAdapter, "elife_rss.xml", _R_BODY_TRUSTED, {AnalyzableArticle}),
     (
         IEEESpectrumAdapter,
         "ieee_spectrum_rss.xml",
         _R_BODY_TRUSTED,
-        {ReadyForArticle},
+        {AnalyzableArticle},
     ),
-    (PLOSOneAdapter, "plos_one_atom.xml", _R_BODY_TRUSTED, {ReadyForArticle}),
+    (PLOSOneAdapter, "plos_one_atom.xml", _R_BODY_TRUSTED, {AnalyzableArticle}),
     (
         QuantumInsiderAdapter,
         "quantum_insider_rss.xml",
         _R_BODY_TRUSTED,
-        {ReadyForArticle},
+        {AnalyzableArticle},
     ),
     (
         KrebsOnSecurityAdapter,
         "krebs_on_security_rss.xml",
         _R_BODY_TRUSTED,
-        {ReadyForArticle},
+        {AnalyzableArticle},
     ),
     (
         SpaceflightNowAdapter,
         "spaceflight_now_rss.xml",
         _R_BODY_TRUSTED,
-        {ReadyForArticle},
+        {AnalyzableArticle},
     ),
-    (NASAAdapter, "nasa_rss.xml", _R_BODY_TRUSTED, {ReadyForArticle}),
-    (MetaAIAdapter, "meta_ai_rss.xml", _R_BODY_TRUSTED, {ReadyForArticle}),
+    (NASAAdapter, "nasa_rss.xml", _R_BODY_TRUSTED, {AnalyzableArticle}),
+    (MetaAIAdapter, "meta_ai_rss.xml", _R_BODY_TRUSTED, {AnalyzableArticle}),
     (
         MicrosoftResearchAdapter,
         "microsoft_research_rss.xml",
         _R_BODY_TRUSTED,
-        {ReadyForArticle},
+        {AnalyzableArticle},
     ),
     (
         FrontiersAIAdapter,
         "frontiers_ai_rss.xml",
         _R_BODY_TRUSTED,
-        {ReadyForArticle},
+        {AnalyzableArticle},
     ),
     (
         FrontiersRoboticsAIAdapter,
         "frontiers_ai_rss.xml",
         _R_BODY_TRUSTED,
-        {ReadyForArticle},
+        {AnalyzableArticle},
     ),
     (
         FrontiersEnergyResearchAdapter,
         "frontiers_ai_rss.xml",
         _R_BODY_TRUSTED,
-        {ReadyForArticle},
+        {AnalyzableArticle},
     ),
     (
         FrontiersMaterialsAdapter,
         "frontiers_ai_rss.xml",
         _R_BODY_TRUSTED,
-        {ReadyForArticle},
+        {AnalyzableArticle},
     ),
     # P6 Pattern H 群 — body 不信用、Incomplete 経路に固定
     (

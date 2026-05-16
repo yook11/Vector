@@ -18,13 +18,13 @@ from pathlib import Path
 
 import feedparser
 
+from app.collection.domain.incomplete_article import (
+    IncompleteArticle,
+)
 from app.collection.fetchers.article_fetcher import ArticleFetcher
 from app.collection.fetchers.techcrunch import TechCrunchAdapter
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.rss_parser import RssEntry, normalize_entry
-from app.collection.incomplete_article.domain.incomplete_article import (
-    IncompleteArticle,
-)
 
 _FIXTURES_DIR = Path(__file__).parent.parent.parent / "fixtures"
 

@@ -27,23 +27,22 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
-from app.collection.article.domain.value_objects import PublishedAt
 from app.collection.article_completion.extractor import (
     ExtractedContent,
     ExtractionEmpty,
 )
+from app.collection.article_completion.pending_queue import PendingHtmlQueue
 from app.collection.article_completion.service import ArticleCompletionService
+from app.collection.domain.incomplete_article import (
+    IncompleteArticle,
+)
+from app.collection.domain.value_objects import PublishedAt
 from app.collection.external_fetch_errors import (
     FetchGatewayError,
     FetchOriginServerError,
     FetchResourceNotFoundError,
 )
-from app.collection.incomplete_article.domain.incomplete_article import (
-    IncompleteArticle,
-)
-from app.collection.incomplete_article.repository import (
-    PendingHtmlArticleRepository,
-)
+from app.collection.source_fetch.pending_enqueue import PendingHtmlEnqueue
 from app.models.article import Article as ArticleORM
 from app.models.news_source import NewsSource, SourceType
 from app.models.pending_html_article import PendingHtmlArticle
@@ -98,15 +97,14 @@ async def _make_pending(
         attempt_count=1)。
     """
     canonical_url = CanonicalArticleUrl(url)
-    pending_repo = PendingHtmlArticleRepository(db_session)
-    pending_id = await pending_repo.save(
+    pending_id = await PendingHtmlEnqueue(db_session).enqueue(
         incomplete or _incomplete(source, url),
         ready_at=datetime.now(UTC) - timedelta(seconds=1),
     )
     assert pending_id is not None
     await db_session.commit()
     # claim して running 状態に遷移 (cron poller の代わり)
-    ids = await pending_repo.claim_batch(limit=10, lease_minutes=5)
+    ids = await PendingHtmlQueue(db_session).claim_batch(limit=10, lease_minutes=5)
     await db_session.commit()
     assert pending_id in ids
     return canonical_url, pending_id
@@ -142,8 +140,7 @@ async def test_returns_none_for_open_pending(
     tc_source: NewsSource,
 ) -> None:
     """``status='open'`` (claim されていない) は ``None`` で静かに exit。"""
-    pending_repo = PendingHtmlArticleRepository(db_session)
-    pending_id = await pending_repo.save(
+    pending_id = await PendingHtmlEnqueue(db_session).enqueue(
         _incomplete(tc_source, "https://techcrunch.com/open"),
         ready_at=datetime.now(UTC) - timedelta(seconds=1),
     )
@@ -234,8 +231,8 @@ async def test_success_persists_extracted_body_and_published_at(
 ) -> None:
     """成功時 HTML から抽出した body/title/published_at が articles 行に保存される。
 
-    ``complete_with_html`` が HTML メタデータを ``ReadyForArticle`` に取り込み、
-    ``save_ready`` がそれを passport 型のまま articles 行に流す不変条件。
+    ``complete_with_html`` が HTML メタデータを ``AnalyzableArticle`` に取り込み、
+    ``ArticleStore.save`` がそれを passport 型のまま articles 行に流す不変条件。
     """
     body = "x" * 250
     html_published_at = datetime(2026, 5, 1, 9, 30, 0, tzinfo=UTC)

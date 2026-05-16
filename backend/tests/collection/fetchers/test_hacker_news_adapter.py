@@ -19,6 +19,9 @@ from typing import Any
 
 import pytest
 
+from app.collection.domain.incomplete_article import (
+    IncompleteArticle,
+)
 from app.collection.external_fetch_errors import (
     FetchAccessDeniedError,
     FetchOriginServerError,
@@ -31,9 +34,6 @@ from app.collection.fetchers.hacker_news import (
     HackerNewsAdapter,
 )
 from app.collection.fetchers.tools.algolia_hn_client import HackerNewsApiClient
-from app.collection.incomplete_article.domain.incomplete_article import (
-    IncompleteArticle,
-)
 from tests.collection.fetchers._invariant import (
     Passport,
     assert_at_least_one_passport,

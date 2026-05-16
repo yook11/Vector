@@ -14,21 +14,19 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.collection.article.domain.article import (
-    _ARTICLE_TITLE_MAX_LENGTH,
-    ReadyForArticle,
-)
-from app.collection.article.domain.value_objects import PublishedAt
-from app.collection.incomplete_article.domain.completion import (
+from app.collection.domain.analyzable_article import AnalyzableArticle
+from app.collection.domain.article_limits import ARTICLE_TITLE_MAX_LENGTH
+from app.collection.domain.completion import (
     ArticleCompletionFailed,
     ArticleCompletionFailureReason,
 )
+from app.collection.domain.value_objects import PublishedAt
 from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 
 
 class IncompleteArticle(BaseModel):
-    """Pattern H で生成され、Stage 2 で本文取得後に ``ReadyForArticle`` へ昇格する
-    不完全な記事 (本文不足) の中間 Domain 表現。
+    """Pattern H で生成され、Stage 2 で本文取得後に ``AnalyzableArticle`` へ
+    昇格する不完全な記事 (本文不足) の中間 Domain 表現。
 
     ``prefer_html_title`` は sitemap 系ソース (RSS が title を持たない) のための
     opt-in flag。``True`` のとき HTML から抽出された title を優先する。
@@ -36,7 +34,7 @@ class IncompleteArticle(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    title: str = Field(min_length=1, max_length=_ARTICLE_TITLE_MAX_LENGTH)
+    title: str = Field(min_length=1, max_length=ARTICLE_TITLE_MAX_LENGTH)
     source_id: int = Field(gt=0)
     source_url: CanonicalArticleUrl
     published_at_hint: PublishedAt | None = None
@@ -47,8 +45,8 @@ class IncompleteArticle(BaseModel):
         body: str,
         html_published_at: PublishedAt | None,
         html_title: str | None = None,
-    ) -> ReadyForArticle | ArticleCompletionFailed:
-        """HTML 補完を取り込み ``ReadyForArticle`` (passport) に昇格する。
+    ) -> AnalyzableArticle | ArticleCompletionFailed:
+        """HTML 補完を取り込み ``AnalyzableArticle`` (passport) に昇格する。
 
         Merge 規則:
 
@@ -57,7 +55,7 @@ class IncompleteArticle(BaseModel):
           ``ArticleCompletionFailed(code="published_at_missing")``。
         - ``body``: HTML から取得した本文をそのまま使う (RSS には存在しない)。
 
-        ``ReadyForArticle`` の Field invariant (length / 形式) 違反は
+        ``AnalyzableArticle`` の Field invariant (length / 形式) 違反は
         ``code="ready_invariant_failed"`` で wrap して返す。
         """
         final_published = self.published_at_hint or html_published_at
@@ -72,7 +70,7 @@ class IncompleteArticle(BaseModel):
             html_title if (self.prefer_html_title and html_title) else self.title
         )
         try:
-            return ReadyForArticle(
+            return AnalyzableArticle(
                 title=final_title,
                 body=body,
                 published_at=final_published,

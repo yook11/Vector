@@ -2,7 +2,7 @@
 
 検証する不変条件:
 
-- ``ReadyForArticle`` は永続化 passport の 5 fields を strict に通すこと
+- ``AnalyzableArticle`` は永続化 passport の 5 fields を strict に通すこと
 - ``IncompleteArticle`` は kiq message に乗せる前提 (frozen BaseModel) を満たすこと
 - ``IncompleteArticle.complete_with_html`` の Pattern H promotion 規則
   (RSS preferred / HTML fallback / 両欠落で ``ArticleCompletionFailed``)
@@ -16,12 +16,12 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.collection.article.domain.article import ReadyForArticle
-from app.collection.article.domain.value_objects import PublishedAt
-from app.collection.incomplete_article.domain.completion import ArticleCompletionFailed
-from app.collection.incomplete_article.domain.incomplete_article import (
+from app.collection.domain.analyzable_article import AnalyzableArticle
+from app.collection.domain.completion import ArticleCompletionFailed
+from app.collection.domain.incomplete_article import (
     IncompleteArticle,
 )
+from app.collection.domain.value_objects import PublishedAt
 from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 
 
@@ -33,7 +33,7 @@ def _url(s: str = "https://example.com/a") -> CanonicalArticleUrl:
     return CanonicalArticleUrl(s)
 
 
-def _ready(**overrides: object) -> ReadyForArticle:
+def _ready(**overrides: object) -> AnalyzableArticle:
     base: dict[str, object] = {
         "title": "Test",
         "body": "x" * 100,
@@ -42,7 +42,7 @@ def _ready(**overrides: object) -> ReadyForArticle:
         "source_url": _url(),
     }
     base.update(overrides)
-    return ReadyForArticle(**base)  # type: ignore[arg-type]
+    return AnalyzableArticle(**base)  # type: ignore[arg-type]
 
 
 def _pending(**overrides: object) -> IncompleteArticle:
@@ -55,7 +55,7 @@ def _pending(**overrides: object) -> IncompleteArticle:
     return IncompleteArticle(**base)  # type: ignore[arg-type]
 
 
-class TestReadyForArticle:
+class TestAnalyzableArticle:
     """永続化 passport — 5 strict fields を通すこと、frozen であることだけ確認する。"""
 
     def test_constructs_with_minimal_valid_input(self) -> None:
@@ -108,7 +108,7 @@ class TestCompleteWithHtmlPromotion:
             body="x" * 100,
             html_published_at=html_pub,
         )
-        assert isinstance(result, ReadyForArticle)
+        assert isinstance(result, AnalyzableArticle)
         assert result.published_at == rss_pub
 
     def test_html_published_at_used_as_fallback_when_rss_missing(self) -> None:
@@ -117,7 +117,7 @@ class TestCompleteWithHtmlPromotion:
             body="x" * 100,
             html_published_at=html_pub,
         )
-        assert isinstance(result, ReadyForArticle)
+        assert isinstance(result, AnalyzableArticle)
         assert result.published_at == html_pub
 
     def test_failed_when_both_published_at_missing(self) -> None:
@@ -146,7 +146,7 @@ class TestCompleteWithHtmlPromotion:
             html_published_at=None,
             html_title="HTML Title",
         )
-        assert isinstance(rss_only, ReadyForArticle)
+        assert isinstance(rss_only, AnalyzableArticle)
         assert rss_only.title == "RSS Title"
 
         html_first = _pending(
@@ -158,5 +158,5 @@ class TestCompleteWithHtmlPromotion:
             html_published_at=None,
             html_title="HTML Title",
         )
-        assert isinstance(html_first, ReadyForArticle)
+        assert isinstance(html_first, AnalyzableArticle)
         assert html_first.title == "HTML Title"

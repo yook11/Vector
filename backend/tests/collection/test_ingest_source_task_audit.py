@@ -71,7 +71,7 @@ def _patch_service_to_raise(monkeypatch: pytest.MonkeyPatch, exc: Exception) -> 
         {"exc": exc},
     )
     monkeypatch.setattr(
-        "app.collection.service.ArticleAcquisitionService",
+        "app.collection.source_fetch.service.ArticleAcquisitionService",
         cls,
     )
 

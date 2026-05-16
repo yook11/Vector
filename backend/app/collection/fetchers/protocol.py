@@ -6,13 +6,13 @@ collection-acquisition-redesign Phase 0c。各ソース毎の Fetcher は
 isinstance チェックは不要、かつ ABC 化に伴う MRO 制約も回避する。
 
 各 Fetcher は 1 ソース分の取得結果を
-``AsyncIterator[ReadyForArticle | IncompleteArticle]`` で逐次 yield する設計:
+``AsyncIterator[AnalyzableArticle | IncompleteArticle]`` で逐次 yield する設計:
 
 - Outcome 純化原則: yield されるのは「次工程に渡す価値のある passport」のみ
 - 品質ゲート未達 entry は yield しない (per-entry 失敗は捨てる、観測再導入は
   将来の audit subsystem に委ねる)
 - 上流 Service は ``async for item in fetcher.fetch(source_id)`` で受け、
-  ``match item`` で ``ReadyForArticle`` / ``IncompleteArticle`` を分岐するだけ
+  ``match item`` で ``AnalyzableArticle`` / ``IncompleteArticle`` を分岐するだけ
 - メモリ効率も良い (RSS feed の全 entry を一括 list 化しない)
 
 Fetcher のアイデンティティは ``NAME`` / ``ENDPOINT_URL`` に内在化されている
@@ -29,20 +29,18 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Protocol
 
-from app.collection.article.domain.article import ReadyForArticle
-from app.collection.incomplete_article.domain.incomplete_article import (
-    IncompleteArticle,
-)
+from app.collection.domain.analyzable_article import AnalyzableArticle
+from app.collection.domain.incomplete_article import IncompleteArticle
 
 
 class Fetcher(Protocol):
     """1 ソース分の取得を担う Fetcher の構造的契約。
 
     実装は ``async def fetch(self, source_id: int) ->
-    AsyncIterator[ReadyForArticle | IncompleteArticle]`` のシグネチャを満たせば
+    AsyncIterator[AnalyzableArticle | IncompleteArticle]`` のシグネチャを満たせば
     よく、継承関係は持たない (Protocol による structural subtyping)。RSS / HTML /
     API / クローラなどソース毎の取得方式は実装側に閉じ、上流は出口の
-    ``ReadyForArticle | IncompleteArticle`` 型のみに依存する。``source_id`` は
+    ``AnalyzableArticle | IncompleteArticle`` 型のみに依存する。``source_id`` は
     永続化時の FK 値としてだけ使われ、URL/サイト名は実装側 ClassVar に hardcode
     される。
 
@@ -60,4 +58,4 @@ class Fetcher(Protocol):
 
     def fetch(
         self, source_id: int
-    ) -> AsyncIterator[ReadyForArticle | IncompleteArticle]: ...
+    ) -> AsyncIterator[AnalyzableArticle | IncompleteArticle]: ...

@@ -24,22 +24,23 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
-from app.collection.article.domain.value_objects import PublishedAt
 from app.collection.article_completion.disposition import Retryable, Terminal
 from app.collection.article_completion.failure_handling import (
     ArticleCompletionFailureHandler,
+)
+from app.collection.article_completion.pending_queue import (
+    PendingHtmlContext,
+    PendingHtmlQueue,
 )
 from app.collection.article_completion.retry_policy import (
     BLIP_POLICY,
     RETRY_AFTER_POLICY,
 )
-from app.collection.incomplete_article.domain.incomplete_article import (
+from app.collection.domain.incomplete_article import (
     IncompleteArticle,
 )
-from app.collection.incomplete_article.repository import (
-    PendingHtmlArticleRepository,
-    PendingHtmlContext,
-)
+from app.collection.domain.value_objects import PublishedAt
+from app.collection.source_fetch.pending_enqueue import PendingHtmlEnqueue
 from app.models.news_source import NewsSource, SourceType
 from app.models.pending_html_article import PendingHtmlArticle
 from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
@@ -80,17 +81,17 @@ async def _make_context(
     claim 後 ``status='running'`` / ``attempt_count=1``。返す context は
     handler 入力用の合成 view (``find_by_id`` 経由)。
     """
-    pending_repo = PendingHtmlArticleRepository(db_session)
-    pending_id = await pending_repo.save(
+    pending_id = await PendingHtmlEnqueue(db_session).enqueue(
         _incomplete(source, url),
         ready_at=datetime.now(UTC) - timedelta(seconds=1),
     )
     assert pending_id is not None
     await db_session.commit()
-    ids = await pending_repo.claim_batch(limit=10, lease_minutes=5)
+    pending_queue = PendingHtmlQueue(db_session)
+    ids = await pending_queue.claim_batch(limit=10, lease_minutes=5)
     await db_session.commit()
     assert pending_id in ids
-    ctx = await pending_repo.find_by_id(pending_id)
+    ctx = await pending_queue.find_by_id(pending_id)
     assert ctx is not None
     return ctx
 
@@ -166,9 +167,7 @@ async def test_retryable_exhausted_closes_pending(
         {"n": BLIP_POLICY.max_attempts, "id": ctx.row_meta.id},
     )
     await db_session.commit()
-    exhausted_ctx = await PendingHtmlArticleRepository(db_session).find_by_id(
-        ctx.row_meta.id
-    )
+    exhausted_ctx = await PendingHtmlQueue(db_session).find_by_id(ctx.row_meta.id)
     assert exhausted_ctx is not None
     assert exhausted_ctx.row_meta.attempt_count == BLIP_POLICY.max_attempts
     handler = ArticleCompletionFailureHandler(session_factory)

@@ -27,11 +27,11 @@ from app.collection.article_completion.disposition import (
     Retryable,
     Terminal,
 )
-from app.collection.article_completion.retry_policy import effective_delay_minutes
-from app.collection.incomplete_article.repository import (
-    PendingHtmlArticleRepository,
+from app.collection.article_completion.pending_queue import (
     PendingHtmlContext,
+    PendingHtmlQueue,
 )
+from app.collection.article_completion.retry_policy import effective_delay_minutes
 
 logger = structlog.get_logger(__name__)
 
@@ -95,12 +95,12 @@ class ArticleCompletionFailureHandler:
         )
         exhausted = row_meta.attempt_count >= policy.max_attempts
         async with self._session_factory() as session:
-            pending_repo = PendingHtmlArticleRepository(session)
+            pending_queue = PendingHtmlQueue(session)
             if exhausted:
-                await pending_repo.mark_exhausted(row_meta.id)
+                await pending_queue.mark_exhausted(row_meta.id)
             else:
                 next_at = datetime.now(UTC) + timedelta(minutes=delay_minutes)
-                await pending_repo.mark_will_retry(row_meta.id, ready_at=next_at)
+                await pending_queue.mark_will_retry(row_meta.id, ready_at=next_at)
             await session.commit()
 
         logger.warning(
@@ -128,8 +128,8 @@ class ArticleCompletionFailureHandler:
         row_meta = pending.row_meta
         canonical_url = pending.incomplete_article.source_url
         async with self._session_factory() as session:
-            pending_repo = PendingHtmlArticleRepository(session)
-            await pending_repo.mark_terminal(row_meta.id)
+            pending_queue = PendingHtmlQueue(session)
+            await pending_queue.mark_terminal(row_meta.id)
             await session.commit()
 
         logger.warning(

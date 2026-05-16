@@ -1,4 +1,4 @@
-"""collection/extraction BC の値オブジェクト。
+"""collection BC の値オブジェクト。
 
 - :class:`PublishedAt` — tzinfo=UTC を invariant として保持する公開日時 VO。
 

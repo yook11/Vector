@@ -2,7 +2,7 @@
 
 collection-acquisition-redesign Phase 1e。HN はソース仕様が API ベース (Algolia
 HN Search API) で RSS / Atom feed を持たないが、API hit の ``url`` は外部の
-任意サイトを指すため本文は HN 側で取得できない。よって ``ReadyForArticle``
+任意サイトを指すため本文は HN 側で取得できない。よって ``AnalyzableArticle``
 invariant (body ≥ 50 chars) を API 単独で満たせず、``IncompleteArticle`` を
 yield し後段 ``extract_html_body`` task が trafilatura で本文を取得する
 **Pattern H 構造同型** で実装する (FierceBiotech / The Register と同じ流れ)。
@@ -27,7 +27,7 @@ from typing import ClassVar
 import httpx
 import structlog
 
-from app.collection.article.domain.value_objects import PublishedAt
+from app.collection.domain.value_objects import PublishedAt
 from app.collection.fetchers.tools.algolia_hn_client import HackerNewsApiClient
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
 

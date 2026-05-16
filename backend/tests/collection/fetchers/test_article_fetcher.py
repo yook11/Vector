@@ -11,20 +11,16 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 
-from app.collection.article.domain.article import (
-    _ARTICLE_BODY_MIN_LENGTH,
-    ReadyForArticle,
-)
+from app.collection.domain.analyzable_article import AnalyzableArticle
+from app.collection.domain.article_limits import ARTICLE_BODY_MIN_LENGTH
+from app.collection.domain.incomplete_article import IncompleteArticle
 from app.collection.fetchers.article_fetcher import ArticleFetcher
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
-from app.collection.incomplete_article.domain.incomplete_article import (
-    IncompleteArticle,
-)
 
 _PUBLISHED = datetime(2026, 5, 1, 12, 0, tzinfo=UTC)
 _VALID_URL = "https://example.com/articles/hello-world"
 _VALID_TITLE = "Hello World"
-_VALID_BODY = "x" * _ARTICLE_BODY_MIN_LENGTH
+_VALID_BODY = "x" * ARTICLE_BODY_MIN_LENGTH
 
 
 class _FakeAdapter:
@@ -59,7 +55,7 @@ async def test_yields_ready_when_adapter_emits_valid_article() -> None:
     results = await _collect_fetch(fetcher, source_id=1)
 
     assert len(results) == 1
-    assert isinstance(results[0], ReadyForArticle)
+    assert isinstance(results[0], AnalyzableArticle)
 
 
 async def test_skips_when_adapter_emits_drop_candidate() -> None:

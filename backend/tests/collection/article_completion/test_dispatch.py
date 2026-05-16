@@ -32,19 +32,17 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.collection.article.domain.value_objects import PublishedAt
 from app.collection.article_completion import dispatch as dispatch_module
 from app.collection.article_completion.dispatch import (
     dispatch_html_fetch_jobs,
     sweep_expired_leases,
 )
-from app.collection.incomplete_article.domain.incomplete_article import (
+from app.collection.domain.incomplete_article import (
     IncompleteArticle,
 )
-from app.collection.incomplete_article.domain.staged_attributes import (
-    StagedArticleAttributes,
-)
-from app.collection.incomplete_article.repository import PendingHtmlArticleRepository
+from app.collection.domain.value_objects import PublishedAt
+from app.collection.persistence.staged_attributes import StagedArticleAttributes
+from app.collection.source_fetch.pending_enqueue import PendingHtmlEnqueue
 from app.models.news_source import NewsSource
 from app.models.pending_html_article import PendingHtmlArticle as PendingHtmlArticleORM
 from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
@@ -87,10 +85,10 @@ async def _make_pending(
     """
     safe_url = SafeUrl(url)
 
-    # status='open' は repository.save で作る (CHECK 整合・JSONB serialization 込)
+    # status='open' は enqueue で作る (CHECK 整合・JSONB serialization 込)
     if status == "open":
-        repo = PendingHtmlArticleRepository(db_session)
-        pending_id = await repo.save(
+        enqueue = PendingHtmlEnqueue(db_session)
+        pending_id = await enqueue.enqueue(
             IncompleteArticle(
                 title="Pending Title",
                 source_id=source.id,

@@ -35,7 +35,7 @@ from typing import Any, ClassVar
 import httpx
 import structlog
 
-from app.collection.article.domain.value_objects import PublishedAt
+from app.collection.domain.value_objects import PublishedAt
 from app.collection.fetchers.tools.crossref_client import CrossrefApiClient
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
 

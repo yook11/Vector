@@ -17,6 +17,9 @@ from pathlib import Path
 
 import pytest
 
+from app.collection.domain.incomplete_article import (
+    IncompleteArticle,
+)
 from app.collection.external_fetch_errors import (
     FetchOriginServerError,
     FetchResourceNotFoundError,
@@ -24,9 +27,6 @@ from app.collection.external_fetch_errors import (
 from app.collection.fetchers.anthropic import AnthropicAdapter, _parse_sitemap
 from app.collection.fetchers.article_fetcher import ArticleFetcher
 from app.collection.fetchers.tools.raw_http_client import RawHttpClient
-from app.collection.incomplete_article.domain.incomplete_article import (
-    IncompleteArticle,
-)
 from tests.collection.fetchers._invariant import (
     Passport,
     assert_at_least_one_passport,

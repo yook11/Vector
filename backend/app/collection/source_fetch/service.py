@@ -8,20 +8,21 @@ BC の業務目的。本 Service はその中核ユースケースで、source 1
 
 新 2 表構成 (``articles`` / ``pending_html_articles``) を直接駆動する。
 
-Fetcher の ``AsyncIterator[ReadyForArticle | IncompleteArticle]`` を回し
+Fetcher の ``AsyncIterator[AnalyzableArticle | IncompleteArticle]`` を回し
 ``match`` で分岐する:
 
-- ``ReadyForArticle`` → 即時獲得経路。
-  ``article_repo.save_ready(ready)`` に passport 型を直接渡し、
+- ``AnalyzableArticle`` → 即時獲得経路。
+  ``article_store.save(ready)`` に passport 型を直接渡し、
   ``articles.source_url UNIQUE`` の ``ON CONFLICT DO NOTHING`` で同 tick race /
   既知 URL を吸収する (``None`` 戻りは静かに skip)。caller (``ingest_source`` task)
   は返却された ``article_id`` を ``ExtractionTrigger`` に詰めて
   ``extract_content.kiq`` に chain する。
 - ``IncompleteArticle`` → 補完待ち獲得経路。
-  ``article_repo.exists_by_source_url`` pre-check で feed 再露出を弾き、
-  ``pending_html_articles.url`` で投入。下流は cron poller
-  (``dispatch_html_fetch_jobs``) が DB 駆動で拾うため、Service / Task は
-  pending_id を caller に渡さない (Outcome 純化原則)。
+  ``article_store.exists_by_source_url`` pre-check で feed 再露出を弾き、
+  ``pending_html_articles.url`` で投入 (Stage 1 投入は ``PendingHtmlEnqueue``、
+  Stage 2 の claim/sweep は ``article_completion/pending_queue.py``)。下流は
+  cron poller (``dispatch_html_fetch_jobs``) が DB 駆動で拾うため、Service /
+  Task は pending_id を caller に渡さない (Outcome 純化原則)。
 
 per-entry の品質ゲート未達は Fetcher 側で yield しない (Outcome 純化原則)。
 Service は「渡される passport は次工程に進めるべきもの」という前提だけを持つ。
@@ -40,15 +41,13 @@ from datetime import UTC, datetime
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.collection.article.domain.article import ReadyForArticle
-from app.collection.article.repository import ArticleRepository
+from app.collection.domain.analyzable_article import AnalyzableArticle
+from app.collection.domain.incomplete_article import IncompleteArticle
 from app.collection.external_fetch_errors import ExternalFetchError
 from app.collection.fetchers.protocol import Fetcher
-from app.collection.incomplete_article.domain.incomplete_article import (
-    IncompleteArticle,
-)
-from app.collection.incomplete_article.repository import PendingHtmlArticleRepository
+from app.collection.persistence.article_store import ArticleStore
 from app.collection.source_fetch.errors import SourceFetchError
+from app.collection.source_fetch.pending_enqueue import PendingHtmlEnqueue
 
 logger = structlog.get_logger(__name__)
 
@@ -76,28 +75,30 @@ class ArticleAcquisitionService:
     async def execute(self, source_id: int) -> list[int]:
         async with self._session_factory() as session:
             fetcher = self._fetcher_factory()
-            article_repo = ArticleRepository(session)
-            pending_repo = PendingHtmlArticleRepository(session)
+            article_store = ArticleStore(session)
+            pending_enqueue = PendingHtmlEnqueue(session)
 
             persisted_ids: list[int] = []
 
             try:
                 async for item in fetcher.fetch(source_id):
                     match item:
-                        case ReadyForArticle() as ready:
-                            article_id = await article_repo.save_ready(ready)
+                        case AnalyzableArticle() as ready:
+                            article_id = await article_store.save(ready)
                             if article_id is None:
                                 continue
                             persisted_ids.append(article_id)
                         case IncompleteArticle() as pending:
                             # pre-check: 既知 URL の HTML fetch 反復を避けるための
-                            # コスト節約 (UNIQUE(url) と ON CONFLICT は save 側で
+                            # コスト節約 (UNIQUE(url) と ON CONFLICT は enqueue 側で
                             # 構造的に担保)
-                            if await article_repo.exists_by_source_url(
+                            if await article_store.exists_by_source_url(
                                 pending.source_url
                             ):
                                 continue
-                            await pending_repo.save(pending, ready_at=datetime.now(UTC))
+                            await pending_enqueue.enqueue(
+                                pending, ready_at=datetime.now(UTC)
+                            )
             except ExternalFetchError as exc:
                 # tool 層で origin error に翻訳済。Layer 1 marker に CODE ごと
                 # 載せ替えて伝播する (cron 一本化のため Stage 1 は救済戦略の差を

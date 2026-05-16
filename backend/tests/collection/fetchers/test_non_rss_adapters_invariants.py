@@ -26,7 +26,10 @@ from typing import Any
 
 import pytest
 
-from app.collection.article.domain.article import ReadyForArticle
+from app.collection.domain.analyzable_article import AnalyzableArticle
+from app.collection.domain.incomplete_article import (
+    IncompleteArticle,
+)
 from app.collection.fetchers.anthropic import AnthropicAdapter
 from app.collection.fetchers.article_fetcher import ArticleFetcher
 from app.collection.fetchers.hacker_news import HackerNewsAdapter
@@ -39,9 +42,6 @@ from app.collection.fetchers.tools.algolia_hn_client import HackerNewsApiClient
 from app.collection.fetchers.tools.crossref_client import CrossrefApiClient
 from app.collection.fetchers.tools.fetched_article import SourceAdapter
 from app.collection.fetchers.tools.raw_http_client import RawHttpClient
-from app.collection.incomplete_article.domain.incomplete_article import (
-    IncompleteArticle,
-)
 from tests.collection.fetchers._invariant import (
     Passport,
     assert_at_least_one_passport,
@@ -53,7 +53,7 @@ from tests.collection.fetchers._invariant import (
 _FIXTURES_DIR = Path(__file__).parent.parent.parent / "fixtures"
 
 # 型集合表記は test_rss_adapters_invariants.py と同じ。
-_R_BODY_TRUSTED = {ReadyForArticle, IncompleteArticle}
+_R_BODY_TRUSTED = {AnalyzableArticle, IncompleteArticle}
 _H_BODY_DISTRUSTED = {IncompleteArticle}
 
 
@@ -152,25 +152,25 @@ _CASES: list[tuple[AdapterBuilder, set[type], set[type], str]] = [
     (
         _build_mdpi_energies,
         _R_BODY_TRUSTED,
-        {ReadyForArticle},
+        {AnalyzableArticle},
         "MDPIEnergiesAdapter",
     ),
     (
         _build_mdpi_materials,
         _R_BODY_TRUSTED,
-        {ReadyForArticle},
+        {AnalyzableArticle},
         "MDPIMaterialsAdapter",
     ),
     (
         _build_mdpi_nanomaterials,
         _R_BODY_TRUSTED,
-        {ReadyForArticle},
+        {AnalyzableArticle},
         "MDPINanomaterialsAdapter",
     ),
     (
         _build_mdpi_sensors,
         _R_BODY_TRUSTED,
-        {ReadyForArticle},
+        {AnalyzableArticle},
         "MDPISensorsAdapter",
     ),
 ]

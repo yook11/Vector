@@ -19,7 +19,7 @@ import structlog
 from taskiq import Context, TaskiqDepends
 
 from app.brokers import broker_metadata
-from app.collection.incomplete_article.repository import PendingHtmlArticleRepository
+from app.collection.article_completion.pending_queue import PendingHtmlQueue
 
 logger = structlog.get_logger(__name__)
 
@@ -43,7 +43,7 @@ async def dispatch_html_fetch_jobs(ctx: Context = TaskiqDepends()) -> dict:
 
     session_factory = ctx.state.session_factory
     async with session_factory() as session:
-        pending_ids = await PendingHtmlArticleRepository(session).claim_batch(
+        pending_ids = await PendingHtmlQueue(session).claim_batch(
             limit=_DISPATCH_BATCH_LIMIT,
             lease_minutes=_LEASE_MINUTES,
         )
@@ -68,7 +68,7 @@ async def sweep_expired_leases(ctx: Context = TaskiqDepends()) -> dict:
     """``status='running' AND leased_until <= NOW`` を ``open`` に戻す。"""
     session_factory = ctx.state.session_factory
     async with session_factory() as session:
-        swept_count = await PendingHtmlArticleRepository(session).sweep_expired()
+        swept_count = await PendingHtmlQueue(session).sweep_expired()
         await session.commit()
 
     result = {"swept_count": swept_count}

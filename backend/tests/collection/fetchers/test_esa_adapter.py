@@ -14,14 +14,14 @@ from pathlib import Path
 import feedparser
 import pytest
 
+from app.collection.domain.incomplete_article import (
+    IncompleteArticle,
+)
 from app.collection.fetchers.article_fetcher import ArticleFetcher
 from app.collection.fetchers.esa.hubble import ESAHubbleAdapter
 from app.collection.fetchers.esa.webb import ESAWebbAdapter
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.rss_parser import RssEntry, normalize_entry
-from app.collection.incomplete_article.domain.incomplete_article import (
-    IncompleteArticle,
-)
 
 _FIXTURES_DIR = Path(__file__).parent.parent.parent / "fixtures"
 

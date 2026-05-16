@@ -10,7 +10,7 @@
 - body 候補が ``_pick_body`` + ``_strip_html`` 経由で組まれる (full fixture)
 - teaser RSS では body が 50 chars 未満になり、Adapter は ``str`` を yield する
   (Ready / Incomplete の分岐は ``passport_builder`` 側の責務)
-- ``ArticleFetcher`` 経由で full fixture → ``ReadyForArticle`` を最低 1 件
+- ``ArticleFetcher`` 経由で full fixture → ``AnalyzableArticle`` を最低 1 件
 - ``ArticleFetcher`` 経由で teaser fixture → 全 entry が ``IncompleteArticle``
   (body 短い entry の Ready→Incomplete fallback 経路を構造的に固定)
 - ``NAME`` / ``ENDPOINT_URL`` が class attr として読める
@@ -22,17 +22,13 @@ from pathlib import Path
 
 import feedparser
 
-from app.collection.article.domain.article import (
-    _ARTICLE_BODY_MIN_LENGTH,
-    ReadyForArticle,
-)
+from app.collection.domain.analyzable_article import AnalyzableArticle
+from app.collection.domain.article_limits import ARTICLE_BODY_MIN_LENGTH
+from app.collection.domain.incomplete_article import IncompleteArticle
 from app.collection.fetchers.article_fetcher import ArticleFetcher
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.rss_parser import RssEntry, normalize_entry
 from app.collection.fetchers.venturebeat import VentureBeatAdapter
-from app.collection.incomplete_article.domain.incomplete_article import (
-    IncompleteArticle,
-)
 
 _FIXTURES_DIR = Path(__file__).parent.parent.parent / "fixtures"
 
@@ -70,7 +66,7 @@ async def test_collect_yields_fetched_articles_with_body_from_full_rss() -> None
     assert all(isinstance(item, FetchedArticle) for item in items)
     # full fixture の少なくとも 1 件は Ready 構築可能な body 長を持つ
     assert any(
-        item.body is not None and len(item.body) >= _ARTICLE_BODY_MIN_LENGTH
+        item.body is not None and len(item.body) >= ARTICLE_BODY_MIN_LENGTH
         for item in items
     )
 
@@ -84,19 +80,19 @@ async def test_collect_yields_short_body_from_teaser_rss() -> None:
 
     assert items
     assert all(
-        item.body is None or len(item.body) < _ARTICLE_BODY_MIN_LENGTH for item in items
+        item.body is None or len(item.body) < ARTICLE_BODY_MIN_LENGTH for item in items
     )
 
 
 async def test_article_fetcher_yields_ready_for_full_rss() -> None:
     """``ArticleFetcher(VentureBeatAdapter())`` 経路で full fixture が
-    最低 1 件の ``ReadyForArticle`` を yield することを確認する (主経路)。"""
+    最低 1 件の ``AnalyzableArticle`` を yield することを確認する (主経路)。"""
     adapter = VentureBeatAdapter(parser=_FakeRssParser("venturebeat_rss.xml"))  # type: ignore[arg-type]
     fetcher = ArticleFetcher(adapter)
 
     passports = [item async for item in fetcher.fetch(source_id=1)]
 
-    assert any(isinstance(p, ReadyForArticle) for p in passports)
+    assert any(isinstance(p, AnalyzableArticle) for p in passports)
 
 
 async def test_article_fetcher_falls_back_to_incomplete_for_teaser_rss() -> None:

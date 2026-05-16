@@ -2,7 +2,7 @@
 
 source 固有の取得 logic は ``SourceAdapter.collect()`` に閉じ、
 ``ArticleFetcher`` は Adapter が yield する ``FetchedArticle`` を
-``try_build_passport`` で ``ReadyForArticle`` /
+``try_build_passport`` で ``AnalyzableArticle`` /
 ``IncompleteArticle`` に変換するだけの薄い層。
 
 ``Fetcher`` Protocol (``protocol.py``) は ``NAME: str`` / ``ENDPOINT_URL: str``
@@ -14,13 +14,11 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
-from app.collection.article.domain.article import ReadyForArticle
+from app.collection.domain.analyzable_article import AnalyzableArticle
+from app.collection.domain.incomplete_article import IncompleteArticle
 from app.collection.fetchers.tools.fetched_article import SourceAdapter
 from app.collection.fetchers.tools.passport_builder import (
     try_build_passport,
-)
-from app.collection.incomplete_article.domain.incomplete_article import (
-    IncompleteArticle,
 )
 
 
@@ -39,7 +37,7 @@ class ArticleFetcher:
 
     async def fetch(
         self, source_id: int
-    ) -> AsyncIterator[ReadyForArticle | IncompleteArticle]:
+    ) -> AsyncIterator[AnalyzableArticle | IncompleteArticle]:
         async for fetched in self._adapter.collect():
             passport = try_build_passport(fetched, source_id=source_id)
             if passport is not None:

@@ -2,6 +2,8 @@
 
 補完待ち獲得経路の 1 段目 (``ArticleAcquisitionService``) で RSS 由来の補完情報を
 2 段目 (``ArticleCompletionService``) に DB 経由で渡すための frozen な値型。
+工程をまたぐ共有契約 (stage1 が書き stage2 が読む) のため、どちらの工程フォルダ
+にも寄せず中立な ``persistence/`` に置く。
 
 - ``title``: RSS 由来の title。``prefer_html_title=True`` のときのみ
   HTML 由来 title に置換される (sitemap 系ソース対応)。
@@ -9,6 +11,9 @@
   常に優先される (caller 側 merge 規則は ``IncompleteArticle.complete_with_html``)。
 - ``prefer_html_title``: sitemap 系のように RSS が title を持たない / HTML 側が
   正本のソースで使う opt-in 旗。
+
+title の長さ境界は ``domain/article_limits.py`` の SSoT を参照する
+(独自リテラルを持たず drift を構造的に排除)。
 
 DB 保存形式は ``model_dump(mode="json")`` で datetime → ISO 文字列化。読出は
 ``model_validate(jsonb_dict)`` で復元する。``pending_html_articles.staged_attributes``
@@ -19,10 +24,11 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.collection.article.domain.value_objects import PublishedAt
-
-_TITLE_MIN_LENGTH = 1
-_TITLE_MAX_LENGTH = 500
+from app.collection.domain.article_limits import (
+    ARTICLE_TITLE_MAX_LENGTH,
+    ARTICLE_TITLE_MIN_LENGTH,
+)
+from app.collection.domain.value_objects import PublishedAt
 
 
 class StagedArticleAttributes(BaseModel):
@@ -30,6 +36,8 @@ class StagedArticleAttributes(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    title: str = Field(min_length=_TITLE_MIN_LENGTH, max_length=_TITLE_MAX_LENGTH)
+    title: str = Field(
+        min_length=ARTICLE_TITLE_MIN_LENGTH, max_length=ARTICLE_TITLE_MAX_LENGTH
+    )
     published_at_hint: PublishedAt | None = None
     prefer_html_title: bool = False

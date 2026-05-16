@@ -26,7 +26,7 @@ import httpx
 import structlog
 import trafilatura
 
-from app.collection.article.domain.value_objects import PublishedAt
+from app.collection.domain.value_objects import PublishedAt
 from app.collection.external_fetch_errors import (
     FetchRedirectBlockedError,
     FetchResponseTooLargeError,

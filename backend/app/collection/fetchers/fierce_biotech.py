@@ -15,7 +15,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
-from app.collection.article.domain.value_objects import PublishedAt
+from app.collection.domain.value_objects import PublishedAt
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.rss_parser import RssParser
 

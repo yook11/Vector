@@ -206,9 +206,7 @@ async def test_all_feeds_fail_propagates_the_first_error_code() -> None:
         with pytest.raises(FetchOriginServerError):
             await _collect(adapter)
 
-    skips = [
-        log for log in logs if log.get("event") == "source_feed_fetch_failed"
-    ]
+    skips = [log for log in logs if log.get("event") == "source_feed_fetch_failed"]
     assert len(skips) == len(NASAAdapter.FEEDS)
 
 

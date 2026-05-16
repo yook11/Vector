@@ -7,13 +7,13 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from app.collection.article.domain.value_objects import PublishedAt
 from app.collection.article_completion.extractor import (
     ArticleHtmlExtractor,
     ExtractedContent,
     ExtractionEmpty,
     _decode_html_response,
 )
+from app.collection.domain.value_objects import PublishedAt
 from app.collection.external_fetch_errors import (
     FetchAccessDeniedError,
     FetchNetworkError,

@@ -5,7 +5,7 @@
 - fixture items から ``ArticleFetcher`` 経由で永続化 passport が yield される
 - ``type != "journal-article"`` / non-CC-BY-4 license / 必須フィールド欠落の
   各 drop branch が yield 自体されない (passport にならない)
-- 全 passport が ``ReadyForArticle`` で ``source_url = https://doi.org/<DOI>``
+- 全 passport が ``AnalyzableArticle`` で ``source_url = https://doi.org/<DOI>``
 - ``CrossrefApiClient`` の ``ExternalFetchError`` は Adapter を素通しする
 - ``works()`` には ``issn`` / ``from_pub_date`` / ``rows`` が必ず渡る
 """
@@ -20,7 +20,7 @@ from typing import Any
 
 import pytest
 
-from app.collection.article.domain.article import ReadyForArticle
+from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.external_fetch_errors import (
     FetchAccessDeniedError,
     FetchOriginServerError,
@@ -112,7 +112,7 @@ async def test_adapter_persistence_invariants() -> None:
 async def test_only_one_valid_item_yields_passport() -> None:
     """fixture 3 records: valid / correction (drop) / no-license (drop) → 1 件のみ。"""
     items = await _collect(ArticleFetcher(_build(_items())).fetch(source_id=1))
-    passports = [o for o in items if isinstance(o, ReadyForArticle)]
+    passports = [o for o in items if isinstance(o, AnalyzableArticle)]
     assert len(passports) == 1
 
 
@@ -121,7 +121,7 @@ async def test_doi_url_used_as_source_url() -> None:
     items = await _collect(ArticleFetcher(_build(_items())).fetch(source_id=1))
     assert items
     for item in items:
-        assert isinstance(item, ReadyForArticle)
+        assert isinstance(item, AnalyzableArticle)
         assert str(item.source_url).startswith("https://doi.org/10.3390/")
 
 

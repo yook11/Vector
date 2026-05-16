@@ -6,7 +6,7 @@
 全 19 ソース (RSS 18 + API 1 = Hacker News) が
 ``app.collection.fetchers.strategy.FETCHERS`` に登録された新 Protocol
 Fetcher 経由で取り込まれる。Pattern R (RSS で本文込み) は
-``ReadyForArticle`` を直接 yield → Article 永続化 + ``extract_content`` に
+``AnalyzableArticle`` を直接 yield → Article 永続化 + ``extract_content`` に
 chain。Pattern H (RSS / API で本文未取得) は ``IncompleteArticle`` を yield
 → ``extract_html_body`` task が HTML 取得 + trafilatura 抽出 + 永続化に進む。
 """
@@ -122,7 +122,7 @@ async def ingest_source(
     引いて envelope に詰めているため、本 task では ``NewsSource`` を再
     lookup しない。
 
-    即時獲得経路 (本文込み RSS): Fetcher が ``ReadyForArticle`` を yield、
+    即時獲得経路 (本文込み RSS): Fetcher が ``AnalyzableArticle`` を yield、
     Article 永続化 → ``ExtractionTrigger(article_id)`` で ``extract_content.kiq``
     に enqueue (案 3: Stage 3 task 側で Ready 自構築)。
 
@@ -138,7 +138,7 @@ async def ingest_source(
     from app.analysis.extraction.domain.ready import ExtractionTrigger
     from app.analysis.extraction.tasks import extract_content
     from app.collection.fetchers.strategy import FETCHERS
-    from app.collection.service import ArticleAcquisitionService
+    from app.collection.source_fetch.service import ArticleAcquisitionService
 
     source_id = arg.id
     logger.info("ingest_source_started", source_id=source_id, source_name=arg.name)

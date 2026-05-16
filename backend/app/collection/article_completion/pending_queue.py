@@ -1,13 +1,13 @@
-"""``pending_html_articles`` (HTML 取得待ちキュー) 向け Repository。
+"""Stage 2 (article_completion) の ``pending_html_articles`` lease キュー操作。
 
-PR2.5-A の lease 方式キューに対する全 CRUD + claim/sweep 操作を集約する。
+PR2.5-A の lease 方式キューに対する Stage 2 側操作 (claim / sweep / 状態遷移 /
+読出 / 削除) を集約する。Stage 1 側の投入 (``status='open'`` INSERT) は
+``source_fetch/pending_enqueue.py`` が担い、本キューとは相互 import しない
+(1 テーブルを 2 工程から操作するが依存方向は分離)。共有する永続化フォーマット
+``StagedArticleAttributes`` は中立な ``persistence/`` から取り込む。
 
 責務:
 
-- ``save``: Pattern H 振り分けで ``IncompleteArticle`` を 1 件 INSERT。
-  ``UNIQUE(url)`` 違反は ``None`` 戻し (同 tick race 敗北)。``IncompleteArticle``
-  を直接受け、Repo 側で永続化フォーマット (``StagedArticleAttributes`` JSONB) に
-  詰める (姉妹 ``ArticleRepository.save_ready`` との対称)。
 - ``find_by_id``: ``ArticleCompletionService`` 入口で pending を SELECT (``url`` を
   pending 行から直接取得、JOIN 不要)。
 - ``claim_batch``: cron poller が ``status='open' AND ready_at <= NOW()`` の行を
@@ -26,7 +26,7 @@ PR2.5-A の lease 方式キューに対する全 CRUD + claim/sweep 操作を集
 - ``mark_terminal`` と ``mark_exhausted`` は DB 上は同じ effect (status='closed')
   だが、Service 側で audit ``outcome_code`` を区別したいので別 method として
   維持する (DRY 共有しない)。
-- commit は全て呼び出し側 (Service / cron task) が行う。Repository は SQL 発行
+- commit は全て呼び出し側 (Service / cron task) が行う。本キューは SQL 発行
   までで止まる。
 """
 
@@ -36,16 +36,11 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from sqlalchemy import text
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from app.collection.incomplete_article.domain.incomplete_article import (
-    IncompleteArticle,
-)
-from app.collection.incomplete_article.domain.staged_attributes import (
-    StagedArticleAttributes,
-)
+from app.collection.domain.incomplete_article import IncompleteArticle
+from app.collection.persistence.staged_attributes import StagedArticleAttributes
 from app.models.pending_html_article import PendingHtmlArticle as PendingHtmlArticleORM
 from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 
@@ -79,49 +74,11 @@ class PendingHtmlContext:
     row_meta: PendingHtmlRowMeta
 
 
-class PendingHtmlArticleRepository:
-    """``pending_html_articles`` への CRUD + claim/sweep 操作。"""
+class PendingHtmlQueue:
+    """``pending_html_articles`` への Stage 2 claim/sweep/状態遷移操作。"""
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
-
-    async def save(
-        self,
-        incomplete: IncompleteArticle,
-        *,
-        ready_at: datetime,
-    ) -> int | None:
-        """``IncompleteArticle`` を ``pending_html_articles`` に
-        ``status='open'`` で INSERT し、id を返す。
-
-        Aggregate (``IncompleteArticle``) を Repo が直接受け、永続化フォーマット
-        (``StagedArticleAttributes`` JSONB) への詰替えを Repo 内で完結させる。
-        UNIQUE(url) 違反 (race-loss) の場合は ``None`` を返す。``source_url`` の
-        canonical 性は ``CanonicalArticleUrl`` 型で構造保証されているため
-        Repository での後付け正規化は不要。ORM 列は ``SafeUrl`` 表現だが
-        ``SafeUrlType.process_bind_param`` が ``CanonicalArticleUrl`` を透過
-        bind する。commit は呼び出し側 (Service) が行う。
-        """
-        stmt = (
-            pg_insert(PendingHtmlArticleORM)
-            .values(
-                url=incomplete.source_url,
-                source_id=incomplete.source_id,
-                status="open",
-                staged_attributes=StagedArticleAttributes(
-                    title=incomplete.title,
-                    published_at_hint=incomplete.published_at_hint,
-                    prefer_html_title=incomplete.prefer_html_title,
-                ).model_dump(mode="json"),
-                ready_at=ready_at,
-                leased_until=None,
-                attempt_count=0,
-            )
-            .on_conflict_do_nothing()
-            .returning(PendingHtmlArticleORM.id)
-        )
-        row = (await self._session.execute(stmt)).first()
-        return row.id if row is not None else None
 
     async def find_by_id(self, pending_id: int) -> PendingHtmlContext | None:
         """``pending_id`` 1 件を取得する。

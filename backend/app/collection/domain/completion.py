@@ -15,7 +15,7 @@ ArticleCompletionFailureCode = Literal["published_at_missing", "ready_invariant_
 """HTML 補完で起きる失敗種別。
 
 - ``published_at_missing``: RSS hint / HTML フォールバックの両方で公開日時を取れず。
-- ``ready_invariant_failed``: ``ReadyForArticle`` invariant 違反
+- ``ready_invariant_failed``: ``AnalyzableArticle`` invariant 違反
   (length / 形式) 等の派生失敗。
 """
 

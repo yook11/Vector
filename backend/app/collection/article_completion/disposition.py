@@ -31,6 +31,7 @@ from app.collection.article_completion.retry_policy import (
     UNKNOWN_POLICY,
     RetryPolicy,
 )
+from app.collection.domain.completion import ArticleCompletionFailed
 from app.collection.external_fetch_errors import (
     ExternalFetchError,
     FetchAccessDeniedError,
@@ -53,7 +54,6 @@ from app.collection.external_fetch_errors import (
     FetchTimeoutError,
     FetchUnexpectedStatusError,
 )
-from app.collection.incomplete_article.domain.completion import ArticleCompletionFailed
 
 
 @dataclass(frozen=True, slots=True)

@@ -27,6 +27,10 @@ from app.collection.article_completion.retry_policy import (
     RETRY_AFTER_POLICY,
     RetryPolicy,
 )
+from app.collection.domain.completion import (
+    ArticleCompletionFailed,
+    ArticleCompletionFailureReason,
+)
 from app.collection.external_fetch_errors import (
     ExternalFetchError,
     FetchAccessDeniedError,
@@ -48,10 +52,6 @@ from app.collection.external_fetch_errors import (
     FetchSsrfBlockedError,
     FetchTimeoutError,
     FetchUnexpectedStatusError,
-)
-from app.collection.incomplete_article.domain.completion import (
-    ArticleCompletionFailed,
-    ArticleCompletionFailureReason,
 )
 
 # 各 concrete subclass を最小 kwargs で構築する表。新 subclass を追加して

@@ -24,10 +24,10 @@ import httpx
 import structlog
 import trafilatura
 
-from app.collection.article.domain.article import (
-    _ARTICLE_BODY_MIN_LENGTH as _BODY_MIN_LENGTH,
+from app.collection.domain.article_limits import (
+    ARTICLE_BODY_MIN_LENGTH as _BODY_MIN_LENGTH,
 )
-from app.collection.article.domain.value_objects import PublishedAt
+from app.collection.domain.value_objects import PublishedAt
 from app.collection.external_fetch_errors import (
     FetchRedirectBlockedError,
     FetchResponseTooLargeError,

@@ -1,7 +1,7 @@
 """SourceAdapter が yield する中間型 + Adapter Protocol。
 
 per-source の raw 取得結果を共通言語に翻訳する責務 (External boundary →
-Internal validation の境界層) を表現する。Adapter 自身は ``ReadyForArticle``
+Internal validation の境界層) を表現する。Adapter 自身は ``AnalyzableArticle``
 / ``IncompleteArticle`` を構築しない: 品質ゲート判定は ``passport_builder``
 に委ねる。
 
@@ -30,7 +30,7 @@ class FetchedArticle:
     """1 entry / 1 record 分の取得材料。
 
     Adapter が外部 source から取り出した raw データを共通言語に揃えた中間型。
-    本データから passport (``ReadyForArticle`` | ``IncompleteArticle``) を
+    本データから passport (``AnalyzableArticle`` | ``IncompleteArticle``) を
     組むのは ``passport_builder`` の責務。
     """
 

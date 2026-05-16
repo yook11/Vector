@@ -6,7 +6,7 @@
 (memory `feedback_test_invariants_over_change_tracking.md`)。
 
 Outcome 純化原則 (PR-2 以降): Fetcher が yield するのは
-``ReadyForArticle | IncompleteArticle`` の passport のみ。品質ゲート未達 entry
+``AnalyzableArticle | IncompleteArticle`` の passport のみ。品質ゲート未達 entry
 は yield しないため、観測点は「yield された passport」だけになる。
 
 passport builder への切替 (本 PR) 以降は同じ Fetcher でも entry ごとに
@@ -23,15 +23,15 @@ from __future__ import annotations
 from collections.abc import Iterable
 from datetime import UTC, datetime
 
-from app.collection.article.domain.article import ReadyForArticle
-from app.collection.article.domain.value_objects import PublishedAt
-from app.collection.incomplete_article.domain.incomplete_article import (
+from app.collection.domain.analyzable_article import AnalyzableArticle
+from app.collection.domain.incomplete_article import (
     IncompleteArticle,
 )
+from app.collection.domain.value_objects import PublishedAt
 
 _DEFAULT_HTML_PUBLISHED_AT = PublishedAt(value=datetime(2026, 5, 1, tzinfo=UTC))
 
-Passport = ReadyForArticle | IncompleteArticle
+Passport = AnalyzableArticle | IncompleteArticle
 
 
 def assert_at_least_one_passport(items: Iterable[Passport]) -> None:
@@ -50,8 +50,8 @@ def assert_passports_persistable(
 ) -> None:
     """全 passport が永続化不変条件を満たすこと。
 
-    ReadyForArticle: Pydantic 構築が成功している = 5 fields 通過済。
-    IncompleteArticle: HTML 抽出値で ``complete_with_html`` が ReadyForArticle
+    AnalyzableArticle: Pydantic 構築が成功している = 5 fields 通過済。
+    IncompleteArticle: HTML 抽出値で ``complete_with_html`` が AnalyzableArticle
     を返せる (= Stage 2 を通せば永続化できる中間状態)。
 
     ``html_published_at`` 省略時は default を入れる (Pattern H が published_at を
@@ -59,15 +59,15 @@ def assert_passports_persistable(
     """
     pub = html_published_at or _DEFAULT_HTML_PUBLISHED_AT
     for item in items:
-        if isinstance(item, ReadyForArticle):
+        if isinstance(item, AnalyzableArticle):
             continue
         assert isinstance(item, IncompleteArticle)
         promoted = item.complete_with_html(
             body=html_body,
             html_published_at=pub,
         )
-        assert isinstance(promoted, ReadyForArticle), (
-            f"IncompleteArticle could not be promoted to ReadyForArticle: {promoted}"
+        assert isinstance(promoted, AnalyzableArticle), (
+            f"IncompleteArticle could not be promoted to AnalyzableArticle: {promoted}"
         )
 
 
