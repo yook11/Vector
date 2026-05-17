@@ -2,31 +2,6 @@
 
 ``ArticleCompletionService`` が「資格判定 → 完成 → 分類 → 後始末 → 永続化」を
 1 メソッドに混ぜていた問題を解くため、**完成させる**責務だけをここに切り出す。
-
-本境界の契約:
-
-- 出力は ``AnalyzableArticle | CompletionFailure`` の**閉じた値 union**で型保証。
-  成功 / 名前付き失敗のどちらかしか返らない。
-- **副作用なし** — DB / log / ``failure_handler`` を一切呼ばない。
-- fetch の ``ExternalFetchError`` (例外) は境界で ``FetchFailed`` (値) に畳む。
-  これで失敗 3 種 (fetch 例外 / ``ExtractionEmpty`` / ``ArticleCompletionFailed``)
-  が単一の閉じ union に揃い、caller は ``isinstance`` 1 回 + 委譲で読める。
-
-merge は同一モジュール内の純粋 free function ``complete_with_html`` が担う
-(profile 駆動)。HTML 抽出結果が ``ExtractionEmpty`` でも値のまま渡し、
-``body=html_required`` のとき ``complete_with_html`` 内で ``ExtractionEmpty`` を
-値返しする (旧 completer の短絡と等価。spec §7 等価表は同関数 docstring)。
-profile は Ready 経由で受け取る。
-
-``complete`` (効果境界: extractor 取得 + ``ExternalFetchError`` → ``FetchFailed``
-畳み込み) と ``complete_with_html`` (純粋な promotion 決定) を別ファイルに分けず
-同居させるのは、後者の唯一の呼び出し元が前者であり、隔離して保護すべき第三者
-クライアントが存在しない (= 情報隠蔽の対象がない) ため。純粋/不純の分離は
-**関数境界**で表現し、ファイル境界は**責務 (= 完成させる)** で引く。
-
-失敗を ``CompletionDisposition`` に分類するのは ``disposition.py``、状態遷移 + log
-は ``failure_handling.py`` の責務。本境界はそのどちらも知らない (責務をファイルで
-分離)。
 """
 
 from __future__ import annotations
@@ -109,32 +84,7 @@ def complete_with_html(
     source_id: int,
     source_url: CanonicalArticleUrl,
 ) -> AnalyzableArticle | ArticleCompletionFailed | ExtractionEmpty:
-    """観測事実 + profile + HTML 抽出結果を merge し ``AnalyzableArticle`` 昇格。
-
-    profile 駆動の補完昇格 — ``ObservedArticle`` を ``AnalyzableArticle`` へ。
-    記事は補完ポリシーを持てない (policy は per-source) ため、未完成 → 完成の
-    遷移を instance method ではなく純粋 free function に切り出し
-    ``SourceCompletionProfile`` 駆動で merge する。Pattern H 側で
-    ``AnalyzableArticle`` を作る唯一の経路 = smart constructor
-    (parse, don't validate。Pattern R は ``passport_builder`` が別経路で構築)。
-
-    挙動は現 2 ポリシー組合せ (default / anthropic·ornl) と **完全等価**
-    (spec §7 回帰不変。下表):
-
-    | field | 旧 (default) | 旧 (anthropic/ornl) | 新 policy |
-    |---|---|---|---|
-    | title | 常に観測 | ``html or 観測`` | observed_preferred / html_preferred ⇒ 同一 |
-    | body | 常に HTML | 常に HTML | html_required ⇒ 同一 |
-    | published_at | ``hint or html`` | 同左 | observed_preferred ⇒ 同一 |
-
-    副作用なし。失敗 code/detail は ``domain/completion.py`` を文字列まで流用
-    (``disposition.py`` / テストがキーにする)。``ExtractionEmpty`` は値のまま
-    返し下流の分類を一切変えない (旧 completer 短絡と等価)。
-
-    ``source_id`` / ``source_url`` は identity であり ``ObservedArticle`` は
-    持たない (pending 行の関心) ため呼び出し側 (``ReadyForArticleCompletion``)
-    が渡す。
-    """
+    """観測事実 + profile + HTML 抽出結果を merge し ``AnalyzableArticle`` 昇格。"""
     pol = profile.policies
 
     # body=html_required で抽出空 → 旧 completer 短絡と等価
@@ -182,12 +132,7 @@ def complete_with_html(
 
 
 class ArticleHtmlCompleter:
-    """``ObservedArticle`` を HTML 取得 + profile 駆動 merge で完成させる純粋境界。
-
-    ``complete`` が単一エントリポイント。副作用を持たず、出力型を閉じた union で
-    保証することだけが責務。``extractor_factory`` は test seam (default は
-    live extractor)。
-    """
+    """HTMLから抽出をして AnalyzableArticle を完成させる責任を持つ。"""
 
     def __init__(
         self,
@@ -198,13 +143,7 @@ class ArticleHtmlCompleter:
     async def complete(
         self, ready: ReadyForArticleCompletion
     ) -> AnalyzableArticle | CompletionFailure:
-        """HTML 取得 → profile 駆動 merge で ``AnalyzableArticle`` を解決する。
 
-        fetch origin failure は ``FetchFailed`` に畳む。``ExtractionEmpty`` /
-        promotion 失敗 (``ArticleCompletionFailed``) は ``complete_with_html``
-        が値で返す。成功時のみ昇格済 ``AnalyzableArticle`` を返す。例外は外に
-        出さない (境界で値に畳む)。
-        """
         extractor = self._extractor_factory()
 
         try:
