@@ -30,11 +30,6 @@ from urllib.parse import urlparse
 
 from lxml import etree
 
-from app.collection.domain.observed_article import ObservedOrigin
-from app.collection.domain.source_completion_profile import (
-    HTML_TITLE_PROFILE,
-    SourceCompletionProfile,
-)
 from app.collection.external_fetch_errors import FetchParseError
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.raw_http_client import RawHttpClient
@@ -93,24 +88,30 @@ class AnthropicAdapter:
     - lastmod 降順 sort 後に ``MAX_ENTRIES=30`` で切り出し (大量バックフィル防止)
     """
 
-    NAME: ClassVar[str] = "Anthropic"
-    ENDPOINT_URL: ClassVar[str] = "https://www.anthropic.com/sitemap.xml"
-    observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.sitemap
-    completion_profile: ClassVar[SourceCompletionProfile] = HTML_TITLE_PROFILE
     URL_PATH_PREFIX: ClassVar[str] = "/news/"
     MAX_ENTRIES: ClassVar[int] = 30
 
-    def __init__(self, client: RawHttpClient | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        endpoint_url: str,
+        source_name: str,
+        client: RawHttpClient | None = None,
+    ) -> None:
+        self._endpoint_url = endpoint_url
+        self._source_name = source_name
         self._client = client or RawHttpClient(accept="application/xml")
 
     async def collect(self) -> AsyncIterator[FetchedArticle]:
         sitemap_bytes = await self._client.fetch(
-            url=self.ENDPOINT_URL, source_name=self.NAME
+            url=self._endpoint_url, source_name=self._source_name
         )
         try:
             entries = await asyncio.to_thread(_parse_sitemap, sitemap_bytes)
         except etree.XMLSyntaxError as e:
-            raise FetchParseError(f"sitemap parse error: {self.NAME}: {e}") from e
+            raise FetchParseError(
+                f"sitemap parse error: {self._source_name}: {e}"
+            ) from e
 
         filtered = [
             (loc, lastmod)
@@ -121,7 +122,7 @@ class AnthropicAdapter:
         filtered.sort(key=lambda e: e[1] or _epoch, reverse=True)
 
         for loc, lastmod in filtered[: self.MAX_ENTRIES]:
-            slug = _slug_from_url(loc) or self.NAME
+            slug = _slug_from_url(loc) or self._source_name
             yield FetchedArticle(
                 title=slug,
                 url=loc,

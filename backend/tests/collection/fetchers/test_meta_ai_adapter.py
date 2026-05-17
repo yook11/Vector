@@ -1,12 +1,12 @@
-"""``MetaAIAdapter`` の per-source 単体テスト (HTTP 非依存)。
+"""``MetaAIAdapter`` machinery の per-source 単体テスト (P2)。
 
-固定する固有不変条件:
+P2 で identity ClassVar を廃し ``endpoint_url`` / ``source_name`` を
+``__init__`` 注入で受ける。固定する固有不変条件:
 
 - Newsroom feed は全社混在で非 AI category の entry を含む。Adapter は
   ``_is_ai_tagged`` フィルタを最初に適用し、AI tagged entry のみ yield する
   (business critical drop の移植証明)
 - fixture に AI / 非 AI が両方含まれ、yield 件数 == AI tagged 件数
-- ``NAME`` / ``ENDPOINT_URL`` が class attr として読める
 """
 
 from __future__ import annotations
@@ -45,6 +45,14 @@ def _raw_entries() -> list[RssEntry]:
     return [normalize_entry(raw) for raw in feed.entries]
 
 
+def _adapter() -> MetaAIAdapter:
+    return MetaAIAdapter(
+        endpoint_url="https://about.fb.com/news/feed/",
+        source_name="Meta AI",
+        parser=_FakeRssParser(_FIXTURE),  # type: ignore[arg-type]
+    )
+
+
 async def _collect(adapter: MetaAIAdapter) -> list[FetchedArticle]:
     return [item async for item in adapter.collect()]
 
@@ -57,12 +65,6 @@ async def test_only_ai_tagged_entries_are_yielded() -> None:
     assert ai, "fixture must contain at least one AI-tagged entry"
     assert non_ai, "fixture must contain at least one non-AI entry to drop"
 
-    adapter = MetaAIAdapter(parser=_FakeRssParser(_FIXTURE))  # type: ignore[arg-type]
-    items = await _collect(adapter)
+    items = await _collect(_adapter())
 
     assert len(items) == len(ai)
-
-
-def test_exposes_name_and_endpoint_url() -> None:
-    assert MetaAIAdapter.NAME == "Meta AI"
-    assert MetaAIAdapter.ENDPOINT_URL == "https://about.fb.com/news/feed/"

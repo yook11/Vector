@@ -1,4 +1,8 @@
-"""``BaseMDPICrossrefAdapter`` (Crossref API, Pattern R) の不変条件テスト。
+"""``MDPICrossrefAdapter`` (Crossref API, Pattern R) の不変条件テスト (P2)。
+
+P2 で MDPI 4 journal は継承具象を廃し、``MDPICrossrefAdapter`` 汎用 machinery
+に per-source config (``source_name`` / ``issn``) を注入する形になった。
+本テストは Materials config を代表に machinery の判定契約を pin する。
 
 検証する不変条件:
 
@@ -6,8 +10,8 @@
 - ``type != "journal-article"`` / non-CC-BY-4 license / 必須フィールド欠落の
   各 drop branch が yield 自体されない (passport にならない)
 - 全 passport が ``AnalyzableArticle`` で ``source_url = https://doi.org/<DOI>``
-- ``CrossrefApiClient`` の ``ExternalFetchError`` は Adapter を素通しする
-- ``works()`` には ``issn`` / ``from_pub_date`` / ``rows`` が必ず渡る
+- ``CrossrefApiClient`` の ``ExternalFetchError`` は machinery を素通しする
+- ``works()`` には注入 ``issn`` / ``from_pub_date`` / ``rows`` (既定 20) が渡る
 """
 
 from __future__ import annotations
@@ -21,14 +25,17 @@ from typing import Any
 import pytest
 
 from app.collection.domain.analyzable_article import AnalyzableArticle
+from app.collection.domain.observed_article import ObservedOrigin
+from app.collection.domain.source_completion_profile import DEFAULT_PROFILE
 from app.collection.external_fetch_errors import (
     FetchAccessDeniedError,
     FetchOriginServerError,
 )
 from app.collection.fetchers.article_fetcher import ArticleFetcher
-from app.collection.fetchers.mdpi._common import BaseMDPICrossrefAdapter
-from app.collection.fetchers.mdpi.materials import MDPIMaterialsAdapter
+from app.collection.fetchers.mdpi._common import MDPICrossrefAdapter
 from app.collection.fetchers.tools.crossref_client import CrossrefApiClient
+from app.collection.sources.article_source import ArticleSource
+from app.shared.value_objects.source_name import SourceName
 from tests.collection.fetchers._invariant import (
     Passport,
     assert_at_least_one_passport,
@@ -38,6 +45,8 @@ from tests.collection.fetchers._invariant import (
 _FIXTURE = (
     Path(__file__).parent.parent.parent.parent / "fixtures" / "mdpi_crossref.json"
 )
+_MATERIALS_ISSN = "1996-1944"
+_DEFAULT_ROWS_PER_REQUEST = 20
 
 
 def _items() -> list[dict[str, Any]]:
@@ -92,33 +101,47 @@ async def _collect(it: AsyncIterator[Passport]) -> list[Passport]:
     return [o async for o in it]
 
 
-def _build(items: list[dict[str, Any]]) -> MDPIMaterialsAdapter:
-    return MDPIMaterialsAdapter(client=_FakeCrossrefClient(items))
+def _fetcher(client: CrossrefApiClient) -> ArticleFetcher:
+    """Materials config の ``MDPICrossrefAdapter`` を ``ArticleSource`` でラップ。"""
+    source = ArticleSource(
+        name=SourceName("MDPI Materials"),
+        endpoint_url="https://api.crossref.org/works",
+        observed_origin=ObservedOrigin.feed,
+        completion_profile=DEFAULT_PROFILE,
+        adapter_factory=lambda: MDPICrossrefAdapter(
+            source_name="MDPI Materials", issn=_MATERIALS_ISSN, client=client
+        ),
+    )
+    return ArticleFetcher(source)
+
+
+def _build(items: list[dict[str, Any]]) -> ArticleFetcher:
+    return _fetcher(_FakeCrossrefClient(items))
 
 
 @pytest.mark.asyncio
 async def test_adapter_yields_passports_from_fixture() -> None:
-    items = await _collect(ArticleFetcher(_build(_items())).fetch(source_id=1))
+    items = await _collect(_build(_items()).fetch(source_id=1))
     assert_at_least_one_passport(items)
 
 
 @pytest.mark.asyncio
 async def test_adapter_persistence_invariants() -> None:
-    items = await _collect(ArticleFetcher(_build(_items())).fetch(source_id=1))
+    items = await _collect(_build(_items()).fetch(source_id=1))
     assert_passports_persistable(items)
 
 
 @pytest.mark.asyncio
 async def test_only_one_valid_item_yields_passport() -> None:
     """fixture 3 records: valid / correction (drop) / no-license (drop) → 1 件のみ。"""
-    items = await _collect(ArticleFetcher(_build(_items())).fetch(source_id=1))
+    items = await _collect(_build(_items()).fetch(source_id=1))
     passports = [o for o in items if isinstance(o, AnalyzableArticle)]
     assert len(passports) == 1
 
 
 @pytest.mark.asyncio
 async def test_doi_url_used_as_source_url() -> None:
-    items = await _collect(ArticleFetcher(_build(_items())).fetch(source_id=1))
+    items = await _collect(_build(_items()).fetch(source_id=1))
     assert items
     for item in items:
         assert isinstance(item, AnalyzableArticle)
@@ -129,7 +152,7 @@ async def test_doi_url_used_as_source_url() -> None:
 async def test_non_journal_article_type_dropped() -> None:
     item = _valid_item()
     item["type"] = "correction"
-    items = await _collect(ArticleFetcher(_build([item])).fetch(source_id=1))
+    items = await _collect(_build([item]).fetch(source_id=1))
     assert items == []
 
 
@@ -137,7 +160,7 @@ async def test_non_journal_article_type_dropped() -> None:
 async def test_non_cc_by_license_dropped() -> None:
     item = _valid_item()
     item["license"] = [{"URL": "https://creativecommons.org/licenses/by-nc/4.0/"}]
-    items = await _collect(ArticleFetcher(_build([item])).fetch(source_id=1))
+    items = await _collect(_build([item]).fetch(source_id=1))
     assert items == []
 
 
@@ -145,7 +168,7 @@ async def test_non_cc_by_license_dropped() -> None:
 async def test_missing_license_dropped() -> None:
     item = _valid_item()
     del item["license"]
-    items = await _collect(ArticleFetcher(_build([item])).fetch(source_id=1))
+    items = await _collect(_build([item]).fetch(source_id=1))
     assert items == []
 
 
@@ -153,7 +176,7 @@ async def test_missing_license_dropped() -> None:
 async def test_missing_title_dropped() -> None:
     item = _valid_item()
     item["title"] = []
-    items = await _collect(ArticleFetcher(_build([item])).fetch(source_id=1))
+    items = await _collect(_build([item]).fetch(source_id=1))
     assert items == []
 
 
@@ -161,7 +184,7 @@ async def test_missing_title_dropped() -> None:
 async def test_short_abstract_dropped() -> None:
     item = _valid_item()
     item["abstract"] = "<jats:p>too short</jats:p>"
-    items = await _collect(ArticleFetcher(_build([item])).fetch(source_id=1))
+    items = await _collect(_build([item]).fetch(source_id=1))
     assert items == []
 
 
@@ -170,7 +193,7 @@ async def test_missing_date_parts_dropped() -> None:
     item = _valid_item()
     for key in ("published", "issued", "published-online", "published-print"):
         item.pop(key, None)
-    items = await _collect(ArticleFetcher(_build([item])).fetch(source_id=1))
+    items = await _collect(_build([item]).fetch(source_id=1))
     assert items == []
 
 
@@ -178,20 +201,19 @@ async def test_missing_date_parts_dropped() -> None:
 async def test_missing_doi_dropped() -> None:
     item = _valid_item()
     del item["DOI"]
-    items = await _collect(ArticleFetcher(_build([item])).fetch(source_id=1))
+    items = await _collect(_build([item]).fetch(source_id=1))
     assert items == []
 
 
 @pytest.mark.asyncio
 async def test_client_kwargs_carry_issn_lookback_rows() -> None:
     fake = _FakeCrossrefClient([])
-    adapter = MDPIMaterialsAdapter(client=fake)
-    await _collect(ArticleFetcher(adapter).fetch(source_id=1))
+    await _collect(_fetcher(fake).fetch(source_id=1))
     assert len(fake.calls) == 1
     call = fake.calls[0]
-    assert call["source_name"] == MDPIMaterialsAdapter.NAME
-    assert call["issn"] == MDPIMaterialsAdapter.ISSN
-    assert call["rows"] == BaseMDPICrossrefAdapter.ROWS_PER_REQUEST
+    assert call["source_name"] == "MDPI Materials"
+    assert call["issn"] == _MATERIALS_ISSN
+    assert call["rows"] == _DEFAULT_ROWS_PER_REQUEST
     # from_pub_date は date.isoformat() 由来の "YYYY-MM-DD" 文字列
     assert isinstance(call["from_pub_date"], str)
     assert len(call["from_pub_date"]) == 10
@@ -199,21 +221,21 @@ async def test_client_kwargs_carry_issn_lookback_rows() -> None:
 
 @pytest.mark.asyncio
 async def test_non_recoverable_error_propagates_through_adapter() -> None:
-    adapter = MDPIMaterialsAdapter(
-        client=_RaisingCrossrefClient(
+    fetcher = _fetcher(
+        _RaisingCrossrefClient(
             FetchAccessDeniedError(status_code=403, reason="forbidden")
         )
     )
     with pytest.raises(FetchAccessDeniedError):
-        await _collect(ArticleFetcher(adapter).fetch(source_id=1))
+        await _collect(fetcher.fetch(source_id=1))
 
 
 @pytest.mark.asyncio
 async def test_recoverable_error_propagates_through_adapter() -> None:
-    adapter = MDPIMaterialsAdapter(
-        client=_RaisingCrossrefClient(
+    fetcher = _fetcher(
+        _RaisingCrossrefClient(
             FetchOriginServerError(status_code=500, reason="internal_error")
         )
     )
     with pytest.raises(FetchOriginServerError):
-        await _collect(ArticleFetcher(adapter).fetch(source_id=1))
+        await _collect(fetcher.fetch(source_id=1))

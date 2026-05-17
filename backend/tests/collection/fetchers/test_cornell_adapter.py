@@ -1,8 +1,9 @@
-"""``CornellChronicleAdapter`` の per-source 単体テスト (HTTP 非依存)。
+"""Cornell Chronicle 取得経路 (``MultiFeedRssAdapter`` + Cornell config)。
 
-``BaseMultiFeedRssAdapter`` の fan-out 不変条件を Cornell 実 subclass 経由で
-pin する (純 thin subclass = ``_build_body`` default / ``PARSE_MODE="bytes"``
-経路を同時に証明)。
+P2 で Cornell は継承具象を廃し、``MultiFeedRssAdapter`` machinery に Cornell
+固有 config (``CORNELL_FEEDS`` / ``parse_mode="bytes"`` / body_builder 注入
+なし = Pattern H) を渡す形になった。純 thin config (body_builder 既定 =
+body なし) 経路を pin する。
 
 固定する不変条件:
 
@@ -11,8 +12,8 @@ pin する (純 thin subclass = ``_build_body`` default / ``PARSE_MODE="bytes"``
   raise しても他 feed は継続し ``source_feed_fetch_failed`` warning が残る
 - INV-3 全 feed 失敗時のみ最初の error が伝播する
 - INV-5 0-entry 成功: 全 feed が ``[]`` を返し失敗 0 → 正常終了
-- INV-6 Pattern H: yield 全 item の ``body`` は ``None``
-- INV-7 subclass ClassVar 期待値 (``PARSE_MODE == "bytes"``)
+- INV-6 Pattern H: yield 全 item の ``body`` は ``None`` (body_builder 既定)
+- INV-7 Cornell config: ``CORNELL_FEEDS`` は 6 taxonomy feed
 """
 
 from __future__ import annotations
@@ -26,8 +27,9 @@ from app.collection.external_fetch_errors import (
     FetchOriginServerError,
     FetchResourceNotFoundError,
 )
-from app.collection.fetchers.cornell import CornellChronicleAdapter
+from app.collection.fetchers.cornell import CORNELL_FEEDS
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
+from app.collection.fetchers.tools.multi_feed_rss import MultiFeedRssAdapter
 from app.collection.fetchers.tools.rss_parser import RssEntry
 
 _NOW = datetime(2026, 5, 1, 12, 0, tzinfo=UTC)
@@ -107,12 +109,21 @@ class _EmptyParser:
         return []
 
 
-async def _collect(adapter: CornellChronicleAdapter) -> list[FetchedArticle]:
+def _cornell(parser: object) -> MultiFeedRssAdapter:
+    return MultiFeedRssAdapter(
+        source_name="Cornell Chronicle",
+        feeds=CORNELL_FEEDS,
+        parse_mode="bytes",
+        parser=parser,  # type: ignore[arg-type]
+    )
+
+
+async def _collect(adapter: MultiFeedRssAdapter) -> list[FetchedArticle]:
     return [item async for item in adapter.collect()]
 
 
 async def test_duplicate_urls_across_feeds_are_deduped() -> None:
-    adapter = CornellChronicleAdapter(parser=_DuplicatingParser())  # type: ignore[arg-type]
+    adapter = _cornell(_DuplicatingParser())
 
     items = await _collect(adapter)
 
@@ -121,7 +132,7 @@ async def test_duplicate_urls_across_feeds_are_deduped() -> None:
 
 
 async def test_body_is_none_pattern_h() -> None:
-    adapter = CornellChronicleAdapter(parser=_DuplicatingParser())  # type: ignore[arg-type]
+    adapter = _cornell(_DuplicatingParser())
 
     items = await _collect(adapter)
 
@@ -130,14 +141,14 @@ async def test_body_is_none_pattern_h() -> None:
 
 
 async def test_feed_error_skips_feed_with_warning() -> None:
-    skip_url = CornellChronicleAdapter.FEEDS[1]
+    skip_url = CORNELL_FEEDS[1]
     exc = FetchOriginServerError(status_code=503, reason="service_unavailable")
-    adapter = CornellChronicleAdapter(parser=_SkipOneFeedParser(skip_url, exc))  # type: ignore[arg-type]
+    adapter = _cornell(_SkipOneFeedParser(skip_url, exc))
 
     with capture_logs() as logs:
         items = await _collect(adapter)
 
-    assert len(items) == len(CornellChronicleAdapter.FEEDS) - 1
+    assert len(items) == len(CORNELL_FEEDS) - 1
     skips = [
         log
         for log in logs
@@ -150,14 +161,14 @@ async def test_feed_error_skips_feed_with_warning() -> None:
 
 
 async def test_non_recoverable_single_feed_does_not_propagate() -> None:
-    skip_url = CornellChronicleAdapter.FEEDS[1]
+    skip_url = CORNELL_FEEDS[1]
     exc = FetchResourceNotFoundError(status_code=404, reason="not_found")
-    adapter = CornellChronicleAdapter(parser=_SkipOneFeedParser(skip_url, exc))  # type: ignore[arg-type]
+    adapter = _cornell(_SkipOneFeedParser(skip_url, exc))
 
     with capture_logs() as logs:
         items = await _collect(adapter)
 
-    assert len(items) == len(CornellChronicleAdapter.FEEDS) - 1
+    assert len(items) == len(CORNELL_FEEDS) - 1
     skips = [
         log
         for log in logs
@@ -170,25 +181,20 @@ async def test_non_recoverable_single_feed_does_not_propagate() -> None:
 
 async def test_all_feeds_fail_propagates_first_error() -> None:
     exc = FetchResourceNotFoundError(status_code=404, reason="not_found")
-    adapter = CornellChronicleAdapter(parser=_AllFailParser(exc))  # type: ignore[arg-type]
+    adapter = _cornell(_AllFailParser(exc))
 
     with pytest.raises(FetchResourceNotFoundError):
         await _collect(adapter)
 
 
 async def test_all_feeds_zero_entries_does_not_propagate() -> None:
-    adapter = CornellChronicleAdapter(parser=_EmptyParser())  # type: ignore[arg-type]
+    adapter = _cornell(_EmptyParser())
 
     items = await _collect(adapter)
 
     assert items == []
 
 
-def test_subclass_classvars() -> None:
-    assert CornellChronicleAdapter.NAME == "Cornell Chronicle"
-    assert (
-        CornellChronicleAdapter.ENDPOINT_URL
-        == "https://news.cornell.edu/taxonomy/term/24043/feed"
-    )
-    assert len(CornellChronicleAdapter.FEEDS) == 6
-    assert CornellChronicleAdapter.PARSE_MODE == "bytes"
+def test_cornell_config_invariants() -> None:
+    assert len(CORNELL_FEEDS) == 6
+    assert CORNELL_FEEDS[0] == "https://news.cornell.edu/taxonomy/term/24043/feed"

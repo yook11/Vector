@@ -1,10 +1,12 @@
-"""ESA Adapter 群 (base + 2 thin subclass) の単体テスト (HTTP 非依存)。
+"""ESA Djangoplicity 取得経路 (``DjangoplicityAdapter`` machinery) の単体テスト。
 
-固定する固有不変条件:
+P2 で ESA/Hubble・ESA/Webb は継承具象を廃し、``DjangoplicityAdapter``
+machinery に per-source config (``source_name`` / ``endpoint_url``) を注入する
+形になった。固定する固有不変条件:
 
 - Djangoplicity RSS は Pattern H のため ``collect()`` は ``body=None`` を
   yield し、``ArticleFetcher`` 経由で全 entry が ``ObservedArticle`` になる
-- Hubble / Webb subclass の ``NAME`` / ``ENDPOINT_URL`` ClassVar が期待値と一致
+  (identity = name/endpoint の固定は test_source_adapter_profiles に集約)
 """
 
 from __future__ import annotations
@@ -14,12 +16,14 @@ from pathlib import Path
 import feedparser
 import pytest
 
-from app.collection.domain.observed_article import ObservedArticle
+from app.collection.domain.observed_article import ObservedArticle, ObservedOrigin
+from app.collection.domain.source_completion_profile import DEFAULT_PROFILE
 from app.collection.fetchers.article_fetcher import ArticleFetcher
-from app.collection.fetchers.esa.hubble import ESAHubbleAdapter
-from app.collection.fetchers.esa.webb import ESAWebbAdapter
+from app.collection.fetchers.esa._common import DjangoplicityAdapter
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.rss_parser import RssEntry, normalize_entry
+from app.collection.sources.article_source import ArticleSource
+from app.shared.value_objects.source_name import SourceName
 
 _FIXTURES_DIR = Path(__file__).parent.parent.parent / "fixtures"
 
@@ -41,48 +45,53 @@ class _FakeRssParser:
         return [normalize_entry(raw) for raw in feed.entries]
 
 
+def _adapter(
+    *, source_name: str, endpoint_url: str, fixture: str
+) -> DjangoplicityAdapter:
+    return DjangoplicityAdapter(
+        source_name=source_name,
+        endpoint_url=endpoint_url,
+        parser=_FakeRssParser(fixture),  # type: ignore[arg-type]
+    )
+
+
+def _source(adapter: DjangoplicityAdapter, *, name: str) -> ArticleSource:
+    return ArticleSource(
+        name=SourceName(name),
+        endpoint_url="https://example.test/feed",
+        observed_origin=ObservedOrigin.feed,
+        completion_profile=DEFAULT_PROFILE,
+        adapter_factory=lambda: adapter,
+    )
+
+
 @pytest.mark.parametrize(
-    ("adapter_cls", "fixture", "name", "endpoint_url"),
+    ("source_name", "fixture", "endpoint_url"),
     [
-        (
-            ESAHubbleAdapter,
-            "esa_hubble_rss.xml",
-            "ESA/Hubble",
-            "https://esahubble.org/news/feed/",
-        ),
-        (
-            ESAWebbAdapter,
-            "esa_webb_rss.xml",
-            "ESA/Webb",
-            "https://esawebb.org/news/feed/",
-        ),
+        ("ESA/Hubble", "esa_hubble_rss.xml", "https://esahubble.org/news/feed/"),
+        ("ESA/Webb", "esa_webb_rss.xml", "https://esawebb.org/news/feed/"),
     ],
 )
 async def test_pattern_h_yields_incomplete_only(
-    adapter_cls: type,
+    source_name: str,
     fixture: str,
-    name: str,
     endpoint_url: str,
 ) -> None:
-    adapter = adapter_cls(parser=_FakeRssParser(fixture))
-
+    adapter = _adapter(
+        source_name=source_name, endpoint_url=endpoint_url, fixture=fixture
+    )
     collected: list[FetchedArticle] = [item async for item in adapter.collect()]
     assert collected
     assert all(item.body is None for item in collected)
 
-    fetcher = ArticleFetcher(adapter_cls(parser=_FakeRssParser(fixture)))
+    fetcher = ArticleFetcher(
+        _source(
+            _adapter(
+                source_name=source_name, endpoint_url=endpoint_url, fixture=fixture
+            ),
+            name=source_name,
+        )
+    )
     passports = [p async for p in fetcher.fetch(source_id=1)]
     assert passports
     assert all(isinstance(p, ObservedArticle) for p in passports)
-
-
-@pytest.mark.parametrize(
-    ("adapter_cls", "name", "endpoint_url"),
-    [
-        (ESAHubbleAdapter, "ESA/Hubble", "https://esahubble.org/news/feed/"),
-        (ESAWebbAdapter, "ESA/Webb", "https://esawebb.org/news/feed/"),
-    ],
-)
-def test_subclass_classvars(adapter_cls: type, name: str, endpoint_url: str) -> None:
-    assert adapter_cls.NAME == name
-    assert adapter_cls.ENDPOINT_URL == endpoint_url

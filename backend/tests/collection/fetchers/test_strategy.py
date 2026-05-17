@@ -1,41 +1,51 @@
-"""``strategy.py`` の整合性テスト (fetcher big-bang リファクタ P6 cutover 後)。
+"""``strategy.py`` の整合性テスト (P2 Source 集約化 cutover 後)。
 
-P6 で 45 entry すべてが ``lambda: ArticleFetcher(XxxAdapter())`` 形に切替わった。
-factory が ``ArticleFetcher`` を返し、その ``NAME`` が dispatch key と一致する
-ことを構造的に固定する (cutover 漏れ = 旧 Fetcher 直参照を検出する防壁)。
+P2 で ``SOURCES`` は ``SourceName → ArticleSource`` インスタンスのレジストリに、
+``FETCHERS`` は ``str(name) → (() -> ArticleFetcher)`` 導出辞書になった。
+本テストは実装の変更追跡ではなく**業務不変条件**を構造的に固定する:
+
+1. 45 ソース全てが ``ArticleSource`` インスタンスで登録される
+2. ``FETCHERS`` キー集合は ``str(SOURCES.key)`` と完全一致 (2 辞書 desync 排除)
+3. 各 ``FETCHERS`` factory は ``ArticleFetcher`` を返し ``NAME`` が key と一致
+4. **無 instantiation 契約**: ``SOURCES`` 走査 + ``completion_profile`` /
+   ``observed_origin`` フィールド読みで ``make_adapter()`` が呼ばれない
+   (= machinery を構築しない。Stage 2 resolver が副作用無しで profile を
+   引ける spec §4.6 ガードレールを設計で担保)
 """
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 from app.collection.fetchers.article_fetcher import ArticleFetcher
 from app.collection.fetchers.strategy import FETCHERS, SOURCES
+from app.collection.sources.article_source import ArticleSource
+from app.shared.value_objects.source_name import SourceName
 
 
 class TestStrategyConsistency:
     def test_all_sources_registered(self) -> None:
-        """登録 fetcher 数 = 既存 20 + Phase 3 各 wave の合計 45。
-
-        Phase 3 内訳: 3h1, 3d4, 3a, 3d1, 3b, 3d2, 3c2, 3c1, 3d3, 3e,
-        3c3, 3h2, 3i1, 3c4。3-e で Cornell Chronicle 1 件、3-c-3 で
-        Frontiers 4 journal を 1 PR で追加 (multi-class composition)、
-        3-h-2 で METI 1 件、3-i-1 で ORNL 1 件 (BaseHtmlListingFetcher
-        初導入)、3-c-4 で MDPI 4 journal を Crossref API 経路で追加。
-        """
+        """登録ソース数 = 既存 20 + Phase 3 各 wave の合計 45。"""
+        assert len(SOURCES) == 45
         assert len(FETCHERS) == 45
 
-    def test_every_factory_is_adapter_driven_with_matching_identity(self) -> None:
-        """全 entry が ``ArticleFetcher`` を返し ``NAME`` が key と一致する。
+    def test_every_value_is_article_source_aggregate(self) -> None:
+        """``SOURCES`` の各値は ``ArticleSource`` 集約で、キーは ``name``。"""
+        for key, source in SOURCES.items():
+            assert isinstance(source, ArticleSource), f"{key} must be ArticleSource"
+            assert isinstance(key, SourceName)
+            assert source.name == key, f"{key} key must equal source.name"
+            assert source.endpoint_url, f"{key} must declare endpoint_url"
 
-        P6 cutover の完了条件: factory が旧 Fetcher class 直参照のままだと
-        ``ArticleFetcher`` instance にならず、ここで cutover 漏れを検出する。
-        """
+    def test_every_factory_is_adapter_driven_with_matching_identity(self) -> None:
+        """全 entry が ``ArticleFetcher`` を返し ``NAME`` が key と一致する。"""
         for name, factory in FETCHERS.items():
             instance = factory()
             assert isinstance(instance, ArticleFetcher), (
-                f"{name} must be Adapter-driven (ArticleFetcher)"
+                f"{name} must be Source-driven (ArticleFetcher)"
             )
             assert instance.NAME == name, (
-                f"{name} key must equal Adapter.NAME (got {instance.NAME!r})"
+                f"{name} key must equal ArticleFetcher.NAME (got {instance.NAME!r})"
             )
             assert instance.ENDPOINT_URL, f"{name} must declare ENDPOINT_URL"
 
@@ -43,29 +53,36 @@ class TestStrategyConsistency:
 class TestSourcesRegistryIsSingleSourceOfTruth:
     """``FETCHERS`` は ``SOURCES`` から導出される (2 辞書の desync を構造排除)。"""
 
-    def test_sources_and_fetchers_share_identical_keyset(self) -> None:
-        """``FETCHERS`` のキー集合は ``SOURCES`` と完全一致する。
+    def test_fetchers_keyset_is_str_of_sources_keyset(self) -> None:
+        """``FETCHERS`` キー集合は ``str(SOURCES.key)`` と完全一致する。
 
-        2 辞書を手で並走させると新ソース追加時に desync する。導出構造を
-        破る変更 (片方だけ手で書く回帰) をここで検出する。
+        ``tasks.py`` の ``FETCHERS[arg.name]`` (str キー) 消費を無改修に保つ。
         """
-        assert set(FETCHERS) == set(SOURCES)
+        assert set(FETCHERS) == {str(name) for name in SOURCES}
 
-    def test_registry_maps_name_to_adapter_class_without_instantiation(
-        self,
-    ) -> None:
-        """``SOURCES`` は ``NAME → Adapter class`` の純レジストリ。
 
-        Stage 2 resolver が **無 instantiation** で per-source 知識を引ける
-        ことが要件。各値が「``NAME`` がキーと一致し ``collect`` を持つ
-        クラス」であることを、構築せずに固定する。
+class TestNoInstantiationContract:
+    """profile 解決経路で取得 machinery が構築されないこと (spec §4.6)。"""
+
+    def test_reading_profile_fields_never_calls_make_adapter(self) -> None:
+        """``SOURCES`` 走査 + profile/origin 読みで ``make_adapter`` 非呼出。
+
+        ``adapter_factory`` を spy に差し替えた複製集約で全件走査し、
+        ``completion_profile`` / ``observed_origin`` を読んでも factory が
+        一度も呼ばれないことを構造的に固定する (class-ref ではなく設計で
+        無 instantiation を担保)。
         """
-        assert len(SOURCES) == 45
-        for name, adapter_cls in SOURCES.items():
-            assert isinstance(adapter_cls, type), f"{name} must map to a class"
-            assert adapter_cls.NAME == name, (
-                f"{name} key must equal {adapter_cls.__name__}.NAME"
+        factory_spy = MagicMock()
+        for original in SOURCES.values():
+            probe = ArticleSource(
+                name=original.name,
+                endpoint_url=original.endpoint_url,
+                observed_origin=original.observed_origin,
+                completion_profile=original.completion_profile,
+                adapter_factory=factory_spy,
             )
-            assert hasattr(adapter_cls, "collect"), (
-                f"{adapter_cls.__name__} must satisfy SourceAdapter.collect"
-            )
+            # Stage 2 resolver 相当の読み取り (フィールド直読み)
+            _ = probe.completion_profile
+            _ = probe.observed_origin
+
+        factory_spy.assert_not_called()

@@ -1,4 +1,4 @@
-"""Frontiers Media RSS Fetcher の共通基底。
+"""Frontiers Media RSS の取得 machinery (P2)。
 
 Frontiers Media は Open Access の学術出版社で、全 journal が同形式の RSS
 ``https://www.frontiersin.org/journals/{slug}/rss`` を提供する。各 entry の
@@ -20,6 +20,13 @@ per-source 設計:
 - license: 全 journal CC BY 4.0 (Frontiers open access policy)
 - attribution: news_sources 行の ``attribution_label``
   (``"Frontiers in {Journal} · CC BY 4.0"``)
+
+P1 までは継承基底で subclass が ``NAME`` / ``ENDPOINT_URL`` /
+``JOURNAL_NAME`` ClassVar を差し替える形だった。P2 で per-source 知識は
+``ArticleSource`` 集約へ移し、本クラスは Source 定義
+(``source_name`` / ``endpoint_url``) を ``__init__`` で受け取る汎用 machinery
+になった。``JOURNAL_NAME`` は取得 logic に一切寄与しない attribution メタ
+だったため、journal 識別は ``ArticleSource.name`` に一本化した。
 """
 
 from __future__ import annotations
@@ -27,19 +34,12 @@ from __future__ import annotations
 import html
 import re
 from collections.abc import AsyncIterator
-from typing import ClassVar
 
-from app.collection.domain.observed_article import ObservedOrigin
-from app.collection.domain.source_completion_profile import (
-    DEFAULT_PROFILE,
-    SourceCompletionProfile,
-)
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.rss_parser import RssEntry, RssParser
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _WHITESPACE_RE = re.compile(r"\s+")
-_DEFAULT_LANGUAGE = "en"
 
 
 def _strip_html(s: str) -> str:
@@ -60,31 +60,31 @@ def _pick_body(entry: RssEntry) -> str:
     return content_encoded if len(content_encoded) >= len(summary) else summary
 
 
-class BaseFrontiersJournalAdapter:
-    """Frontiers Media journal RSS の Pattern R SourceAdapter 共通基底。
+class FrontiersJournalAdapter:
+    """Frontiers Media journal RSS の Pattern R 取得 machinery (P2)。
 
-    subclass は ``NAME`` / ``ENDPOINT_URL`` / ``JOURNAL_NAME`` の 3 ClassVar を
-    必須で差し替える (MDPI base+subclass と同形)。判定順は旧
-    ``BaseFrontiersFetcher._convert_entry`` を完全踏襲: title 空 → body<50 →
-    published None。``body < 50`` drop は editorial/correction の空 description
-    を落とす business critical drop のため Adapter 内で実施する (builder の
-    Incomplete 救済に流さない)。
+    判定順は旧 ``BaseFrontiersFetcher._convert_entry`` を完全踏襲: title 空 →
+    body<50 → published None。``body < 50`` drop は editorial/correction の空
+    description を落とす business critical drop のため machinery 内で実施する
+    (builder の Incomplete 救済に流さない)。``source_name`` / ``endpoint_url``
+    は ``ArticleSource.adapter_factory`` から受け取る。
     """
 
-    NAME: ClassVar[str]
-    ENDPOINT_URL: ClassVar[str]
-    observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.feed
-    completion_profile: ClassVar[SourceCompletionProfile] = DEFAULT_PROFILE
-    JOURNAL_NAME: ClassVar[str]
-    LANGUAGE: ClassVar[str] = _DEFAULT_LANGUAGE
-
-    def __init__(self, parser: RssParser | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        source_name: str,
+        endpoint_url: str,
+        parser: RssParser | None = None,
+    ) -> None:
+        self._source_name = source_name
+        self._endpoint_url = endpoint_url
         self._parser = parser or RssParser()
 
     async def collect(self) -> AsyncIterator[FetchedArticle]:
         entries = await self._parser.fetch(
-            endpoint_url=self.ENDPOINT_URL,
-            source_name=self.NAME,
+            endpoint_url=self._endpoint_url,
+            source_name=self._source_name,
             parse_mode="bytes",
         )
         for entry in entries:

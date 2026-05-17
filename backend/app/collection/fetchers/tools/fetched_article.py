@@ -1,4 +1,4 @@
-"""SourceAdapter が yield する中間型 + Adapter Protocol。
+"""SourceAdapter が yield する中間型 + 取得 machinery Protocol。
 
 per-source の raw 取得結果を共通言語に翻訳する責務 (External boundary →
 Internal validation の境界層) を表現する。Adapter 自身は ``AnalyzableArticle``
@@ -13,10 +13,11 @@ Internal validation の境界層) を表現する。Adapter 自身は ``Analyzab
 - ``body`` / ``published_at`` は ``Optional``。``None`` は「不在」の意味付きで、
   Stage 2 HTML 補完に委ねるシグナル。
 
-「現 title は仮タイトルか」(sitemap / HTML listing 系で必須だった旧 HTML
-優先 flag) は本中間型から除去済。仮タイトル性は per-source 知識のため
-``SourceAdapter.completion_profile`` (title=``html_preferred``) が表現し、
-``passport_builder`` が profile から Ready gate を決める (spec §3.3)。
+``SourceAdapter`` は「どう取るか」だけの取得 machinery 契約 (P2)。ソースの
+identity (``name`` / ``endpoint_url``) と補完方針 (``observed_origin`` /
+``completion_profile``) は machinery の関心ではなく ``ArticleSource`` 集約
+(``sources/article_source.py``) が所有する。Adapter は ``ArticleSource`` の
+``adapter_factory`` から構築され、``collect()`` だけを公開する。
 """
 
 from __future__ import annotations
@@ -25,9 +26,6 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
-
-from app.collection.domain.observed_article import ObservedOrigin
-from app.collection.domain.source_completion_profile import SourceCompletionProfile
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,26 +44,17 @@ class FetchedArticle:
 
 
 class SourceAdapter(Protocol):
-    """外部 source ごとの「raw 取得 + 共通言語化」責務。
+    """外部 source ごとの「raw 取得 + 共通言語化」machinery 契約。
 
     filter / dedup / source 固有の取得 logic は Adapter 内部で完結させ、
     外には "次工程に渡せる" ``FetchedArticle`` だけを yield する
-    (Outcome 純化原則)。
+    (Outcome 純化原則)。``isinstance`` チェックは行わない (composition root
+    での静的配線が前提) ため ``@runtime_checkable`` は付けない。
 
-    ``NAME`` / ``ENDPOINT_URL`` は ``Fetcher`` Protocol との互換のため宣言する
-    が、実装は ``ClassVar[str]`` でも instance attr でも満たせるよう ``str`` で
-    緩く受ける。``isinstance`` チェックは行わない (composition root での静的
-    配線が前提) ため ``@runtime_checkable`` は付けない。
-
-    ``observed_origin`` / ``completion_profile`` は per-source 知識
-    (取得出自 / 補完方針)。共有基底 4 個が default
-    (``feed`` / ``DEFAULT_PROFILE``) を持ち、特例 source のみ override する
-    (spec §4.1)。``NAME`` 同様 ``ClassVar`` でも instance attr でも満たせる。
+    本 Protocol は「どう取るか」のみを表す (P2)。per-source の identity /
+    補完方針は ``ArticleSource`` 集約が所有し、Adapter は ``adapter_factory``
+    から必要な config を ``__init__`` で受け取って構築される。よって
+    ``NAME`` / ``observed_origin`` / ``completion_profile`` は本契約に含めない。
     """
-
-    NAME: str
-    ENDPOINT_URL: str
-    observed_origin: ObservedOrigin
-    completion_profile: SourceCompletionProfile
 
     def collect(self) -> AsyncIterator[FetchedArticle]: ...

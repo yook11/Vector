@@ -1,12 +1,12 @@
-"""``TheRegisterAdapter`` の per-source 単体テスト (HTTP 非依存)。
+"""``TheRegisterAdapter`` machinery の per-source 単体テスト (P2)。
 
-固定する固有不変条件:
+P2 で identity ClassVar を廃し ``endpoint_url`` / ``source_name`` を
+``__init__`` 注入で受ける。固定する固有不変条件:
 
 - ``<link href>`` が redirector (``go.theregister.com/feed/...``) の entry が
   fixture に含まれるが、yield される ``FetchedArticle.url`` は実 host へ展開され
   ``go.theregister.com/feed/`` を一切含まない (redirector 正規化の移植証明)
 - Pattern H のため ``body`` は ``None``
-- ``NAME`` / ``ENDPOINT_URL`` が class attr として読める
 """
 
 from __future__ import annotations
@@ -40,14 +40,20 @@ class _FakeRssParser:
         return [normalize_entry(raw) for raw in feed.entries]
 
 
+def _adapter() -> TheRegisterAdapter:
+    return TheRegisterAdapter(
+        endpoint_url="https://www.theregister.com/headlines.atom",
+        source_name="The Register",
+        parser=_FakeRssParser(_FIXTURE),  # type: ignore[arg-type]
+    )
+
+
 async def _collect(adapter: TheRegisterAdapter) -> list[FetchedArticle]:
     return [item async for item in adapter.collect()]
 
 
 async def test_redirector_links_are_expanded_to_real_host() -> None:
-    adapter = TheRegisterAdapter(parser=_FakeRssParser(_FIXTURE))  # type: ignore[arg-type]
-
-    items = await _collect(adapter)
+    items = await _collect(_adapter())
 
     assert items
     for item in items:
@@ -56,16 +62,7 @@ async def test_redirector_links_are_expanded_to_real_host() -> None:
 
 
 async def test_body_is_none_pattern_h() -> None:
-    adapter = TheRegisterAdapter(parser=_FakeRssParser(_FIXTURE))  # type: ignore[arg-type]
-
-    items = await _collect(adapter)
+    items = await _collect(_adapter())
 
     assert items
     assert all(item.body is None for item in items)
-
-
-def test_exposes_name_and_endpoint_url() -> None:
-    assert TheRegisterAdapter.NAME == "The Register"
-    assert (
-        TheRegisterAdapter.ENDPOINT_URL == "https://www.theregister.com/headlines.atom"
-    )

@@ -1,4 +1,4 @@
-"""MDPI 4 journal の Crossref API 経路 Fetcher 共通基底 (Phase 3 PR 3-c-4)。
+"""MDPI 4 journal の Crossref API 経路 取得 machinery (P2)。
 
 MDPI は ``https://www.mdpi.com/<ISSN>/feed`` の RSS を提供するが、Cloudflare WAF
 で 4 ISSN 全 403 となり常時 block される (2026-05-04 PoC 確認済)。OAI-PMH
@@ -20,9 +20,18 @@ per-source 設計:
 - **source_url**: ``https://doi.org/<DOI>`` (canonical resolver、publisher 別
   landing でなく DOI URL)
 - **polite pool**: User-Agent に ``mailto:`` 必須 (Crossref polite pool 降格防止)
-- **date filter**: ``from-pub-date`` で rolling ``LOOKBACK_DAYS`` 日窓、cron 周期
+- **date filter**: ``from-pub-date`` で rolling ``lookback_days`` 日窓、cron 周期
   と整合させて初回投入時 backfill を防ぐ
-- ``rows=ROWS_PER_REQUEST`` / ``sort=published`` / ``order=desc`` で新着優先
+- ``rows`` / ``sort=published`` / ``order=desc`` で新着優先
+
+P1 までは継承基底で subclass が ``NAME`` / ``ISSN`` / ``JOURNAL_NAME``
+ClassVar を差し替える形だった。P2 で per-source
+知識は ``ArticleSource`` 集約へ移し、本クラスは Source 定義 (``source_name`` /
+``issn`` / ``lookback_days`` / ``rows_per_request``) を ``__init__`` で受け取る
+汎用 machinery になった。``ISSN`` は取得 logic に必須 (Crossref filter) のため
+config として注入する。``JOURNAL_NAME`` / ``LANGUAGE`` は取得 logic に一切
+寄与しない attribution メタだったため journal 識別は ``ArticleSource.name``
+に一本化した。
 """
 
 from __future__ import annotations
@@ -30,16 +39,11 @@ from __future__ import annotations
 import re
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
-from typing import Any, ClassVar
+from typing import Any
 
 import httpx
 import structlog
 
-from app.collection.domain.observed_article import ObservedOrigin
-from app.collection.domain.source_completion_profile import (
-    DEFAULT_PROFILE,
-    SourceCompletionProfile,
-)
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.fetchers.tools.crossref_client import CrossrefApiClient
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
@@ -128,40 +132,41 @@ def _extract_title(item: dict[str, Any]) -> str:
     return ""
 
 
-class BaseMDPICrossrefAdapter:
-    """MDPI 4 journal の Crossref API 経路 ``SourceAdapter`` 共通基底 (Pattern R)。
+class MDPICrossrefAdapter:
+    """MDPI journal の Crossref API 経路 取得 machinery (Pattern R, P2)。
 
     HTTP 取得 + per-ISSN filter + sort/order 構築は ``CrossrefApiClient`` に
-    委譲する。Adapter は item ごとの type/license/title/abstract/date/DOI
+    委譲する。machinery は item ごとの type/license/title/abstract/date/DOI
     判定だけを担う (旧 ``BaseMDPICrossrefFetcher._convert_record`` の判定順を
-    完全踏襲)。
-
-    subclass は ``NAME`` / ``ISSN`` / ``JOURNAL_NAME`` の 3 ClassVar を必須で
-    差し替える (P3c の Djangoplicity / Frontiers と同じ thin subclass 形)。
+    完全踏襲)。``source_name`` / ``issn`` / ``lookback_days`` /
+    ``rows_per_request`` は ``ArticleSource.adapter_factory`` から受け取る
+    (``lookback_days=7`` / ``rows_per_request=20`` 既定は旧 ClassVar 同値)。
     """
 
-    NAME: ClassVar[str]
-    ISSN: ClassVar[str]
-    JOURNAL_NAME: ClassVar[str]
-    LANGUAGE: ClassVar[str] = "en"
-    ENDPOINT_URL: ClassVar[str] = "https://api.crossref.org/works"
-    observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.feed
-    completion_profile: ClassVar[SourceCompletionProfile] = DEFAULT_PROFILE
-    LOOKBACK_DAYS: ClassVar[int] = 7
-    ROWS_PER_REQUEST: ClassVar[int] = 20
-
-    def __init__(self, client: CrossrefApiClient | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        source_name: str,
+        issn: str,
+        lookback_days: int = 7,
+        rows_per_request: int = 20,
+        client: CrossrefApiClient | None = None,
+    ) -> None:
+        self._source_name = source_name
+        self._issn = issn
+        self._lookback_days = lookback_days
+        self._rows_per_request = rows_per_request
         self._client = client or CrossrefApiClient()
 
     async def collect(self) -> AsyncIterator[FetchedArticle]:
         from_pub_date = (
-            (datetime.now(UTC) - timedelta(days=self.LOOKBACK_DAYS)).date().isoformat()
+            (datetime.now(UTC) - timedelta(days=self._lookback_days)).date().isoformat()
         )
         items = await self._client.works(
-            source_name=self.NAME,
-            issn=self.ISSN,
+            source_name=self._source_name,
+            issn=self._issn,
             from_pub_date=from_pub_date,
-            rows=self.ROWS_PER_REQUEST,
+            rows=self._rows_per_request,
         )
         # 判定順は旧 _convert_record (本ファイル冒頭) と完全一致:
         # type → license → title → body → date → DOI.

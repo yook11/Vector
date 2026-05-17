@@ -11,8 +11,6 @@ import html
 import re
 from collections.abc import AsyncIterator
 
-from app.collection.domain.observed_article import ObservedOrigin
-from app.collection.domain.source_completion_profile import DEFAULT_PROFILE
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.rss_parser import RssEntry, RssParser
 
@@ -36,18 +34,21 @@ def _pick_body(entry: RssEntry) -> str:
 class PLOSOneAdapter:
     """PLOS ONE 用 SourceAdapter (Atom 1.0、Pattern R、body 信用)。"""
 
-    NAME = "PLOS ONE"
-    ENDPOINT_URL = "https://journals.plos.org/plosone/feed/atom"
-    observed_origin = ObservedOrigin.feed
-    completion_profile = DEFAULT_PROFILE
-
-    def __init__(self, parser: RssParser | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        endpoint_url: str,
+        source_name: str,
+        parser: RssParser | None = None,
+    ) -> None:
+        self._endpoint_url = endpoint_url
+        self._source_name = source_name
         self._parser = parser or RssParser()
 
     async def collect(self) -> AsyncIterator[FetchedArticle]:
         entries = await self._parser.fetch(
-            endpoint_url=self.ENDPOINT_URL,
-            source_name=self.NAME,
+            endpoint_url=self._endpoint_url,
+            source_name=self._source_name,
             parse_mode="bytes",
         )
         for entry in entries:

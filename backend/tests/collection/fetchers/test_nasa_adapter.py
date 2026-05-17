@@ -1,7 +1,9 @@
-"""``NASAAdapter`` の per-source 単体テスト (HTTP 非依存)。
+"""NASA 取得経路 (``MultiFeedRssAdapter`` + NASA config) の不変条件テスト。
 
-``BaseMultiFeedRssAdapter`` の fan-out 不変条件を NASA 実 subclass 経由で
-pin する (Pattern R = ``_build_body`` override 経路を同時に証明)。
+P2 で NASA は継承具象を廃し、``MultiFeedRssAdapter`` machinery に NASA 固有
+config (``NASA_FEEDS`` / ``nasa_build_body`` = Pattern R) を注入する形になった。
+``MultiFeedRssAdapter`` の fan-out 不変条件を NASA config 経由で pin する
+(Pattern R = body_builder 注入経路を同時に証明)。
 
 固定する不変条件:
 
@@ -15,7 +17,8 @@ pin する (Pattern R = ``_build_body`` override 経路を同時に証明)。
 - INV-4 first-error 同一性: 異なる code で全 feed 失敗 → 伝播例外は feed
   順最初のもの、全失敗が ``source_feed_fetch_failed`` ログに残る
 - INV-5 0-entry 成功: 全 feed が ``[]`` を返し失敗 0 → 正常終了
-- INV-7 subclass ClassVar 期待値
+- INV-6 NASA config: ``NASA_FEEDS`` は 6 feed、``nasa_build_body`` は
+  ``content_encoded`` を plain text 化 (Pattern R)
 """
 
 from __future__ import annotations
@@ -29,8 +32,9 @@ from app.collection.external_fetch_errors import (
     FetchOriginServerError,
     FetchResourceNotFoundError,
 )
-from app.collection.fetchers.nasa import NASAAdapter
+from app.collection.fetchers.nasa import NASA_FEEDS, nasa_build_body
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
+from app.collection.fetchers.tools.multi_feed_rss import MultiFeedRssAdapter
 from app.collection.fetchers.tools.rss_parser import RssEntry
 
 _NOW = datetime(2026, 5, 1, 12, 0, tzinfo=UTC)
@@ -137,12 +141,22 @@ class _EmptyParser:
         return []
 
 
-async def _collect(adapter: NASAAdapter) -> list[FetchedArticle]:
+def _nasa(parser: object) -> MultiFeedRssAdapter:
+    return MultiFeedRssAdapter(
+        source_name="NASA",
+        feeds=NASA_FEEDS,
+        parse_mode="text",
+        body_builder=nasa_build_body,
+        parser=parser,  # type: ignore[arg-type]
+    )
+
+
+async def _collect(adapter: MultiFeedRssAdapter) -> list[FetchedArticle]:
     return [item async for item in adapter.collect()]
 
 
 async def test_duplicate_urls_across_feeds_are_deduped() -> None:
-    adapter = NASAAdapter(parser=_DuplicatingParser())  # type: ignore[arg-type]
+    adapter = _nasa(_DuplicatingParser())
 
     items = await _collect(adapter)
 
@@ -151,15 +165,15 @@ async def test_duplicate_urls_across_feeds_are_deduped() -> None:
 
 
 async def test_feed_error_skips_feed_with_warning() -> None:
-    skip_url = NASAAdapter.FEEDS[1]
+    skip_url = NASA_FEEDS[1]
     exc = FetchOriginServerError(status_code=503, reason="service_unavailable")
-    adapter = NASAAdapter(parser=_SkipOneFeedParser(skip_url, exc))  # type: ignore[arg-type]
+    adapter = _nasa(_SkipOneFeedParser(skip_url, exc))
 
     with capture_logs() as logs:
         items = await _collect(adapter)
 
     # 6 feed のうち 1 つ skip → 残り 5 feed が 1 entry ずつ
-    assert len(items) == len(NASAAdapter.FEEDS) - 1
+    assert len(items) == len(NASA_FEEDS) - 1
     skips = [
         log
         for log in logs
@@ -172,15 +186,15 @@ async def test_feed_error_skips_feed_with_warning() -> None:
 
 
 async def test_non_recoverable_single_feed_does_not_propagate() -> None:
-    skip_url = NASAAdapter.FEEDS[1]
+    skip_url = NASA_FEEDS[1]
     exc = FetchResourceNotFoundError(status_code=404, reason="not_found")
-    adapter = NASAAdapter(parser=_SkipOneFeedParser(skip_url, exc))  # type: ignore[arg-type]
+    adapter = _nasa(_SkipOneFeedParser(skip_url, exc))
 
     with capture_logs() as logs:
         items = await _collect(adapter)
 
     # 非 recoverable (404) でも単一 feed 失敗なら source は落ちない
-    assert len(items) == len(NASAAdapter.FEEDS) - 1
+    assert len(items) == len(NASA_FEEDS) - 1
     skips = [
         log
         for log in logs
@@ -193,33 +207,37 @@ async def test_non_recoverable_single_feed_does_not_propagate() -> None:
 
 async def test_all_feeds_fail_propagates_first_error() -> None:
     exc = FetchResourceNotFoundError(status_code=404, reason="not_found")
-    adapter = NASAAdapter(parser=_AllFailParser(exc))  # type: ignore[arg-type]
+    adapter = _nasa(_AllFailParser(exc))
 
     with pytest.raises(FetchResourceNotFoundError):
         await _collect(adapter)
 
 
 async def test_all_feeds_fail_propagates_the_first_error_code() -> None:
-    adapter = NASAAdapter(parser=_MixedAllFailParser(NASAAdapter.FEEDS[0]))  # type: ignore[arg-type]
+    adapter = _nasa(_MixedAllFailParser(NASA_FEEDS[0]))
 
     with capture_logs() as logs:
         with pytest.raises(FetchOriginServerError):
             await _collect(adapter)
 
     skips = [log for log in logs if log.get("event") == "source_feed_fetch_failed"]
-    assert len(skips) == len(NASAAdapter.FEEDS)
+    assert len(skips) == len(NASA_FEEDS)
 
 
 async def test_all_feeds_zero_entries_does_not_propagate() -> None:
-    adapter = NASAAdapter(parser=_EmptyParser())  # type: ignore[arg-type]
+    adapter = _nasa(_EmptyParser())
 
     items = await _collect(adapter)
 
     assert items == []
 
 
-def test_subclass_classvars() -> None:
-    assert NASAAdapter.NAME == "NASA"
-    assert NASAAdapter.ENDPOINT_URL == "https://www.nasa.gov/feed/"
-    assert len(NASAAdapter.FEEDS) == 6
-    assert NASAAdapter.PARSE_MODE == "text"
+def test_nasa_config_invariants() -> None:
+    assert len(NASA_FEEDS) == 6
+    assert NASA_FEEDS[0] == "https://www.nasa.gov/feed/"
+    # Pattern R: content_encoded を plain text 化して本文採用
+    entry = _entry("https://www.nasa.gov/x")
+    body = nasa_build_body(entry)
+    assert body is not None
+    assert "<p>" not in body
+    assert "body" in body

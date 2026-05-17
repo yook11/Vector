@@ -68,7 +68,8 @@ class RegistryCompletionProfileResolver:
             if source_name is not None
             else await self.resolve_name(source_id=source_id)
         )
-        # ``SOURCES`` は ``NAME(str) → Adapter class``。``.completion_profile``
-        # は ClassVar のため instantiation せず class から直接読む。
-        adapter = SOURCES.get(str(name))
-        return adapter.completion_profile if adapter is not None else DEFAULT_PROFILE
+        # ``SOURCES`` は ``SourceName → ArticleSource``。``.completion_profile``
+        # は集約のフィールド直読み (``make_adapter()`` 非呼出 = machinery を
+        # 構築しない無 instantiation 契約)。
+        source = SOURCES.get(SourceName(str(name)))
+        return source.completion_profile if source is not None else DEFAULT_PROFILE

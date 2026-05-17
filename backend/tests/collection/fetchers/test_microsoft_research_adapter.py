@@ -1,11 +1,11 @@
-"""``MicrosoftResearchAdapter`` の per-source 単体テスト (HTTP 非依存)。
+"""``MicrosoftResearchAdapter`` machinery の per-source 単体テスト (P2)。
 
-固定する固有不変条件:
+P2 で identity ClassVar を廃し ``endpoint_url`` / ``source_name`` を
+``__init__`` 注入で受ける。固定する固有不変条件:
 
 - fixture の ``<content:encoded>`` に WordPress 固定 footer
   ("... appeared first on Microsoft Research.") が付くが、yield される
   ``FetchedArticle.body`` には footer が残らない (footer regex strip の移植証明)
-- ``NAME`` / ``ENDPOINT_URL`` が class attr として読める
 """
 
 from __future__ import annotations
@@ -40,6 +40,14 @@ class _FakeRssParser:
         return [normalize_entry(raw) for raw in feed.entries]
 
 
+def _adapter() -> MicrosoftResearchAdapter:
+    return MicrosoftResearchAdapter(
+        endpoint_url="https://www.microsoft.com/en-us/research/feed/",
+        source_name="Microsoft Research",
+        parser=_FakeRssParser(_FIXTURE),  # type: ignore[arg-type]
+    )
+
+
 async def _collect(adapter: MicrosoftResearchAdapter) -> list[FetchedArticle]:
     return [item async for item in adapter.collect()]
 
@@ -51,19 +59,9 @@ async def test_fixture_actually_contains_footer() -> None:
 
 
 async def test_footer_is_stripped_from_body() -> None:
-    adapter = MicrosoftResearchAdapter(parser=_FakeRssParser(_FIXTURE))  # type: ignore[arg-type]
-
-    items = await _collect(adapter)
+    items = await _collect(_adapter())
 
     assert items
     for item in items:
         assert item.body is not None
         assert _FOOTER_MARKER not in item.body
-
-
-def test_exposes_name_and_endpoint_url() -> None:
-    assert MicrosoftResearchAdapter.NAME == "Microsoft Research"
-    assert (
-        MicrosoftResearchAdapter.ENDPOINT_URL
-        == "https://www.microsoft.com/en-us/research/feed/"
-    )

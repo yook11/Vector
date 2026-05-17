@@ -22,16 +22,10 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from datetime import datetime
-from typing import ClassVar
 
 import httpx
 import structlog
 
-from app.collection.domain.observed_article import ObservedOrigin
-from app.collection.domain.source_completion_profile import (
-    DEFAULT_PROFILE,
-    SourceCompletionProfile,
-)
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.fetchers.tools.algolia_hn_client import HackerNewsApiClient
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
@@ -71,17 +65,18 @@ class HackerNewsAdapter:
     既に drop 済のため Adapter では行わない (旧仕様維持)。
     """
 
-    NAME: ClassVar[str] = "Hacker News"
-    ENDPOINT_URL: ClassVar[str] = "https://hn.algolia.com/api/v1/search_by_date"
-    observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.api
-    completion_profile: ClassVar[SourceCompletionProfile] = DEFAULT_PROFILE
-
-    def __init__(self, client: HackerNewsApiClient | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        source_name: str,
+        client: HackerNewsApiClient | None = None,
+    ) -> None:
+        self._source_name = source_name
         self._client = client or HackerNewsApiClient()
 
     async def collect(self) -> AsyncIterator[FetchedArticle]:
         hits = await self._client.search_recent_stories(
-            source_name=self.NAME,
+            source_name=self._source_name,
             min_points=HN_MIN_POINTS,
             window_seconds=HN_SLIDING_WINDOW_SECONDS,
             hits_per_page=HN_HITS_PER_PAGE,

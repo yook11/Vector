@@ -31,11 +31,6 @@ from urllib.parse import urljoin, urlparse
 
 from lxml import etree, html
 
-from app.collection.domain.observed_article import ObservedOrigin
-from app.collection.domain.source_completion_profile import (
-    HTML_TITLE_PROFILE,
-    SourceCompletionProfile,
-)
 from app.collection.external_fetch_errors import FetchParseError
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.raw_http_client import RawHttpClient
@@ -84,11 +79,6 @@ class ORNLAdapter:
     - ``MAX_ENTRIES=30`` 切り出し (大量バックフィル防止)
     """
 
-    NAME: ClassVar[str] = "ORNL"
-    ENDPOINT_URL: ClassVar[str] = "https://www.ornl.gov/news"
-    observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.listing
-    completion_profile: ClassVar[SourceCompletionProfile] = HTML_TITLE_PROFILE
-    LISTING_URL: ClassVar[str] = "https://www.ornl.gov/news"
     DETAIL_LINK_XPATH: ClassVar[str] = '//a[starts-with(@href, "/news/")]'
     DETAIL_URL_PREFIX: ClassVar[str] = "https://www.ornl.gov"
     # 2026-05-04 時点の実 listing で確認した category landing 6 件。
@@ -104,12 +94,20 @@ class ORNLAdapter:
     )
     MAX_ENTRIES: ClassVar[int] = 30
 
-    def __init__(self, client: RawHttpClient | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        endpoint_url: str,
+        source_name: str,
+        client: RawHttpClient | None = None,
+    ) -> None:
+        self._endpoint_url = endpoint_url
+        self._source_name = source_name
         self._client = client or RawHttpClient(accept="text/html")
 
     async def collect(self) -> AsyncIterator[FetchedArticle]:
         listing_bytes = await self._client.fetch(
-            url=self.LISTING_URL, source_name=self.NAME
+            url=self._endpoint_url, source_name=self._source_name
         )
         try:
             urls = await asyncio.to_thread(
@@ -119,7 +117,9 @@ class ORNLAdapter:
                 detail_url_prefix=self.DETAIL_URL_PREFIX,
             )
         except etree.LxmlError as e:
-            raise FetchParseError(f"html listing parse error: {self.NAME}: {e}") from e
+            raise FetchParseError(
+                f"html listing parse error: {self._source_name}: {e}"
+            ) from e
 
         seen: set[str] = set()
         emitted = 0
@@ -129,7 +129,7 @@ class ORNLAdapter:
             seen.add(url)
             if urlparse(url).path in self.EXCLUDED_PATHS:
                 continue
-            slug = _slug_from_url(url) or self.NAME
+            slug = _slug_from_url(url) or self._source_name
             yield FetchedArticle(
                 title=slug,
                 url=url,
