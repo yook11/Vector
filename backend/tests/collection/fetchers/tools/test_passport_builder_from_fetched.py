@@ -25,6 +25,8 @@ from app.collection.domain.observed_article import ObservedArticle, ObservedOrig
 from app.collection.domain.source_completion_profile import (
     DEFAULT_PROFILE,
     HTML_TITLE_PROFILE,
+    AnalyzableField,
+    FieldCompletionPolicy,
     SourceCompletionProfile,
 )
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
@@ -163,3 +165,25 @@ def test_html_preferred_profile_blocks_ready_path_even_when_body_and_published_p
     assert isinstance(result, ObservedArticle)
     assert result.published_at is not None
     assert result.published_at.value.value == _PUBLISHED
+
+
+def test_any_html_preferred_field_precludes_stage1_ready_even_with_valid_body_and_published() -> (  # noqa: E501
+    None
+):
+    """非 title field の ``html_preferred`` も Ready 経路を止める。
+
+    旧 ``force_html_title`` (title policy 単独 gate) では捕捉できなかった
+    一般不変条件を固定する: profile のどこかに ``html_preferred`` があれば
+    観測事実だけで品質ゲートを満たしても Stage-1 Ready にしない。実 2
+    profile も同一不変条件に従う (R/H byte 不変の証跡)。
+    """
+    body_html_preferred = SourceCompletionProfile(
+        {
+            AnalyzableField.title: FieldCompletionPolicy.observed_preferred,
+            AnalyzableField.body: FieldCompletionPolicy.html_preferred,
+            AnalyzableField.published_at: FieldCompletionPolicy.observed_preferred,
+        }
+    )
+    assert isinstance(_call(profile=body_html_preferred), ObservedArticle)
+    assert isinstance(_call(profile=DEFAULT_PROFILE), AnalyzableArticle)
+    assert isinstance(_call(profile=HTML_TITLE_PROFILE), ObservedArticle)

@@ -35,7 +35,9 @@ class AnalyzableField(StrEnum):
 class FieldCompletionPolicy(StrEnum):
     """フィールド単位の補完正本ルール。
 
-    - ``html_required``: 観測値なし前提・HTML が正本・両欠で失敗。
+    - ``html_required``: 観測値が無い / 妥当でないときは HTML 補完が必須
+      (Stage-2 merge では HTML を正本に採る)。ただし Stage-1 で妥当な値が
+      物理的に取れていれば Ready 条件を満たせる (= Ready を止めない)。
     - ``html_preferred``: 観測値があっても HTML を正本 (sitemap/listing 系の
       仮タイトル特例)。
     - ``observed_preferred``: 観測値が勝ち・HTML は fallback (旧 published_at hint)。
@@ -66,6 +68,27 @@ class SourceCompletionProfile:
             msg = f"profile missing policy for {sorted(f.value for f in missing)}"
             raise ValueError(msg)
         object.__setattr__(self, "policies", MappingProxyType(dict(self.policies)))
+
+    def precludes_stage1_ready(self) -> bool:
+        """Stage-1 Ready 昇格が profile 上構造的に不能か。
+
+        ``html_preferred`` の field は「観測値があっても HTML が正本」=
+        正本が Stage-2 HTML 経由でしか確定しないプレースホルダ。よって
+        いずれかの field が ``html_preferred`` なら、観測事実だけで品質
+        ゲートを満たしても Ready にせず ObservedArticle 保留へ落とす
+        (HTML 補完で正本上書きの機会を残す安全弁)。
+
+        ``observed_preferred`` / ``html_required`` は物理的存在 + 妥当性
+        (passport_builder の既存チェック) で Stage-1 充足。よって本述語は
+        「``html_preferred`` の field が 1 つでもあるか」と等価。
+
+        現行 2 profile: DEFAULT_PROFILE → False、HTML_TITLE_PROFILE
+        (Anthropic / ORNL の title=html_preferred) → True。旧
+        ``force_html_title`` (title policy 単独 gate) と全 45 ソースで同値。
+        """
+        return any(
+            p is FieldCompletionPolicy.html_preferred for p in self.policies.values()
+        )
 
 
 # 大多数のソース: title/published_at は観測 (RSS) を正本に、body のみ HTML 必須。
