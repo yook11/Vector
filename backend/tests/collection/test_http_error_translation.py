@@ -1,8 +1,9 @@
 """``http_error_translation`` の写像 SSoT を表駆動で固定するテスト。
 
 - ``classify_fetch_status``: status → origin error の全 row を固定する。特に
-  401 / 403 → ``FetchAccessDeniedError`` を明示的に lock し、現 html_extractor の
-  401 分類ズレを Stage 1 経路で正規化する意図をテスト化する。
+  401 / 403 → ``FetchAccessDeniedError`` を明示的に lock し、旧 extractor
+  (article_completion) の 401 分類ズレを Stage 1 経路で正規化する意図を
+  テスト化する。
 - ``translate_fetch_exception``: httpx / SSRF guard 例外の振り分けを固定する
   (``TimeoutException`` を ``RequestError`` より先に判定することを含む)。
 - ``RECOVERABLE_FETCH_ERRORS``: 旧 ``TemporaryFetchError`` 発生条件の忠実訳で

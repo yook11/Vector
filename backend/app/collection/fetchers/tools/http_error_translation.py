@@ -1,8 +1,9 @@
 """HTTP status / transport 例外 → ``ExternalFetchError`` 写像の SSoT。
 
-Stage 1 共通 tools (rss_parser / html_extractor / raw_http_client /
+Stage 1 共通 tools (rss_parser / raw_http_client /
 algolia_hn_client / crossref_client) が個別に ``status_code`` を直書きすると
-分類がズレる (現に html_extractor は 401 を access-denied 扱いしていなかった)。
+分類がズレる (旧 article_completion の extractor は 401 を
+access-denied 扱いしていなかった)。
 本モジュールに写像を 1 箇所集約し、表駆動テストで写像を固定する。
 
 - ``classify_fetch_status`` は **httpx 非依存の純関数** (status + headers のみ)。
