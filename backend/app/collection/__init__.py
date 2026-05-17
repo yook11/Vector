@@ -3,12 +3,12 @@
 サブパッケージ:
 
 - ``domain/`` — BC のドメイン語彙 (型のみ): ``AnalyzableArticle`` /
-  ``IncompleteArticle`` (``complete_with_html()``) / ``PublishedAt`` /
-  ``ArticleCompletionFailed`` + 長さ境界 SSoT (``article_limits``)
+  ``ObservedArticle`` (取得済み事実 = ``pending_html_articles.staged_attributes``
+  JSONB 契約。stage1 が書き stage2 が読む) / ``SourceCompletionProfile``
+  (per-source 補完方針) / ``PublishedAt`` / ``ArticleCompletionFailed`` +
+  長さ境界 SSoT (``article_limits``)
 - ``persistence/`` — 両工程が共有する永続化資産: ``ArticleStore``
-  (``articles`` 書込 + 重複判定。Pattern R 即時獲得 / Pattern H 補完獲得が共有) /
-  ``StagedArticleAttributes`` (``pending_html_articles.staged_attributes`` JSONB
-  契約。stage1 が書き stage2 が読む中立型)
+  (``articles`` 書込 + 重複判定。Pattern R 即時獲得 / Pattern H 補完獲得が共有)
 - ``source_fetch/`` — Stage 1 (取得) 工程: ``ArticleAcquisitionService``
   (即時獲得 / 補完待ち獲得の振り分け entry point) + ``PendingHtmlEnqueue``
   (pending 投入) + 失敗ハンドリング (marker / handler / audit)

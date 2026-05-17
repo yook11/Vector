@@ -1,27 +1,30 @@
-"""Passport (``AnalyzableArticle`` | ``IncompleteArticle``) 共通 builder。
+"""Passport (``AnalyzableArticle`` | ``ObservedArticle``) 共通 builder。
 
 per-source 責務は「body / published を信用できる形で渡せるか」のみに絞り、
-Ready / Incomplete / drop の最終分岐は本 builder で一手に行う。同じ source
-でも entry ごとに「Ready 昇格 / Incomplete 保留 / drop」が決まる。
+Ready / Observed / drop の最終分岐は本 builder で一手に行う。同じ source
+でも entry ごとに「Ready 昇格 / Observed 保留 / drop」が決まる。
 
 公開 API は ``try_build_passport`` ただ 1 つ。``ArticleFetcher`` +
 ``SourceAdapter`` 経路から ``FetchedArticle`` を受け取り passport に変換する。
 
 本関数は private helper ``_build_passport`` に委譲し、``AnalyzableArticle`` /
-``IncompleteArticle`` の直接構築箇所を 1 箇所に集約する。
+``ObservedArticle`` の直接構築箇所を 1 箇所に集約する。
 
 分岐契約:
 
 - title が空 / link が空 / link canonicalize 失敗 → ``None`` (drop)
 - body が ``ARTICLE_BODY_MIN_LENGTH`` 以上 ``ARTICLE_BODY_MAX_LENGTH`` 以下、
   かつ ``published`` が有効な ``PublishedAt`` を組める、かつ
-  ``prefer_html_title`` が ``False`` → Ready 構築
-  - ``AnalyzableArticle`` の Pydantic 制約違反 → Incomplete fallback
-- それ以外 → ``IncompleteArticle`` 構築 (``published_at_hint`` は組めた場合
-  だけ載せる、``prefer_html_title`` も伝播)
+  ``force_html_title`` が ``False`` → Ready 構築
+  - ``AnalyzableArticle`` の Pydantic 制約違反 → Observed fallback
+- それ以外 → ``ObservedArticle`` 構築 (**取れた事実は全部保存**:
+  title / body / published_at を存在する限り ``ObservedField`` に詰める。
+  要否 / 優先は Stage 2 で ``SourceCompletionProfile`` が決める)
 
-``prefer_html_title=True`` は「現 title は仮タイトル」を表すため、body / published
-が揃っていても Ready 経路は止める (HTML 補完で title 上書きの機会を残す安全弁)。
+``force_html_title`` は title policy が ``html_preferred`` (sitemap / HTML
+listing 系 = 「現 title は仮タイトル」) のとき ``True``。body / published が
+揃っていても Ready 経路は止める (HTML 補完で title 上書きの機会を残す安全弁)。
+profile 由来の単一 gate で、per-source の仮タイトル性を表す。
 
 title trim は本 builder で集約 (``title.strip()[:ARTICLE_TITLE_MAX_LENGTH]``)。
 per-source 側で ``entry.title[:500]`` を書く必要はない。
@@ -37,10 +40,21 @@ from app.collection.domain.article_limits import (
     ARTICLE_BODY_MIN_LENGTH,
     ARTICLE_TITLE_MAX_LENGTH,
 )
-from app.collection.domain.incomplete_article import IncompleteArticle
+from app.collection.domain.observed_article import (
+    ObservedArticle,
+    ObservedField,
+    ObservedOrigin,
+)
+from app.collection.domain.source_completion_profile import (
+    DEFAULT_PROFILE,
+    AnalyzableField,
+    FieldCompletionPolicy,
+    SourceCompletionProfile,
+)
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
+from app.shared.value_objects.source_name import SourceName
 
 
 def _build_passport(
@@ -50,12 +64,14 @@ def _build_passport(
     body_candidate: str | None,
     published_hint: datetime | None,
     source_id: int,
-    prefer_html_title: bool = False,
-) -> AnalyzableArticle | IncompleteArticle | None:
+    source_name: SourceName,
+    origin: ObservedOrigin,
+    force_html_title: bool = False,
+) -> AnalyzableArticle | ObservedArticle | None:
     """passport 構築の共通実装 (private)。
 
     公開 API ``try_build_passport`` が委譲する単一の判定ロジック。
-    ``AnalyzableArticle`` / ``IncompleteArticle`` の直接構築はこの関数内のみで
+    ``AnalyzableArticle`` / ``ObservedArticle`` の直接構築はこの関数内のみで
     行い、構築箇所を 1 箇所に閉じ込める。
     """
     if title is None:
@@ -72,7 +88,7 @@ def _build_passport(
         return None
 
     # tz-naive datetime は published として採用しない (PublishedAt が拒否)。
-    # 採用できなかった場合は Incomplete に published_at_hint=None で流す。
+    # 採用できなかった場合は Observed に published_at=None で流す。
     published_at: PublishedAt | None = None
     if published_hint is not None:
         try:
@@ -81,7 +97,7 @@ def _build_passport(
             published_at = None
 
     can_build_ready = (
-        not prefer_html_title
+        not force_html_title
         and body_candidate is not None
         and ARTICLE_BODY_MIN_LENGTH <= len(body_candidate) <= ARTICLE_BODY_MAX_LENGTH
         and published_at is not None
@@ -97,16 +113,27 @@ def _build_passport(
             )
         except ValueError:
             # Ready 二次的制約違反 (title sanitize 等の domain 側 invariant) は
-            # Incomplete fallback で救う。drop には落とさない (recovery 性優先)。
+            # Observed fallback で救う。drop には落とさない (recovery 性優先)。
             pass
 
+    # 取れた事実は全部保存する (原則: 観測は全部保存し、要否は profile が決める)。
+    # body は全現行ソースで html_required のため merge では無視されるが、観測
+    # された事実としては保持する (forward-compat。挙動は不変 — spec §7 等価表)。
     try:
-        return IncompleteArticle(
-            title=title_trimmed,
-            source_id=source_id,
+        return ObservedArticle(
+            source_name=source_name,
             source_url=source_url,
-            published_at_hint=published_at,
-            prefer_html_title=prefer_html_title,
+            title=ObservedField(value=title_trimmed, origin=origin),
+            body=(
+                ObservedField(value=body_candidate, origin=origin)
+                if body_candidate
+                else None
+            ),
+            published_at=(
+                ObservedField(value=published_at, origin=origin)
+                if published_at is not None
+                else None
+            ),
         )
     except ValueError:
         return None
@@ -116,28 +143,47 @@ def try_build_passport(
     fetched: FetchedArticle,
     *,
     source_id: int,
-) -> AnalyzableArticle | IncompleteArticle | None:
+    source_name: SourceName,
+    origin: ObservedOrigin,
+    profile: SourceCompletionProfile = DEFAULT_PROFILE,
+) -> AnalyzableArticle | ObservedArticle | None:
     """1 ``FetchedArticle`` を passport に変換する (Adapter 経路の唯一の builder)。
 
     ``FetchedArticle`` の field は External boundary 層で空 str / ``None`` を
     用いた "不在" の表現を許容するため、本関数で str → ``None`` への正規化
     (空 str を drop シグナルに昇格) を行ってから ``_build_passport`` に渡す。
 
+    title policy が ``html_preferred`` のソースは「現 title は仮タイトル」を
+    意味するため Ready 経路を止める。これは per-source の仮タイトル性を
+    profile 単独で表す唯一の gate (``force_html_title``) で、source 固有の
+    flag を中間型に持たせない (R/H 分岐自体は P2 まで温存)。
+
     Args:
         fetched: Adapter が外部 source から取り出した中間表現。
-        source_id: Stage 1 service が解決済の ``news_sources.id``。
+        source_id: Stage 1 service が解決済の ``news_sources.id`` (Ready 経路の
+            ``AnalyzableArticle`` が原産 FK として持つ。Observed 経路の
+            identity は pending 行の関心で enqueue 時に注入される)。
+        source_name: ソース表示名 (``Adapter.NAME``)。観測事実の出所。
+        origin: 取得チャネル (``Adapter.observed_origin``)。``ObservedField``
+            に stamp する audit 値 (merge は駆動しない)。
+        profile: ``Source`` の補完方針 (title policy で Ready gate を決める)。
 
     Returns:
         ``AnalyzableArticle`` — body + published_at が揃い品質ゲート通過
-        ``IncompleteArticle`` — title + URL は揃うが Ready 条件を満たさない、
-        または Ready 構築が Pydantic 制約で失敗した entry
+        ``ObservedArticle`` — title + URL は揃うが Ready 条件を満たさない、
+        または Ready 構築が Pydantic 制約で失敗した entry (取れた事実を全保存)
         ``None`` — title / URL が無効で次工程に渡せない entry (drop)
     """
+    force_html_title = (
+        profile.policies[AnalyzableField.title] is FieldCompletionPolicy.html_preferred
+    )
     return _build_passport(
         title=fetched.title or None,
         link=fetched.url or None,
         body_candidate=fetched.body,
         published_hint=fetched.published_at,
         source_id=source_id,
-        prefer_html_title=fetched.prefer_html_title,
+        source_name=source_name,
+        origin=origin,
+        force_html_title=force_html_title,
     )

@@ -8,7 +8,7 @@ BC の業務目的。本 Service はその中核ユースケースで、source 1
 
 新 2 表構成 (``articles`` / ``pending_html_articles``) を直接駆動する。
 
-Fetcher の ``AsyncIterator[AnalyzableArticle | IncompleteArticle]`` を回し
+Fetcher の ``AsyncIterator[AnalyzableArticle | ObservedArticle]`` を回し
 ``match`` で分岐する:
 
 - ``AnalyzableArticle`` → 即時獲得経路。
@@ -17,7 +17,7 @@ Fetcher の ``AsyncIterator[AnalyzableArticle | IncompleteArticle]`` を回し
   既知 URL を吸収する (``None`` 戻りは静かに skip)。caller (``ingest_source`` task)
   は返却された ``article_id`` を ``ExtractionTrigger`` に詰めて
   ``extract_content.kiq`` に chain する。
-- ``IncompleteArticle`` → 補完待ち獲得経路。
+- ``ObservedArticle`` → 補完待ち獲得経路。
   ``article_store.exists_by_source_url`` pre-check で feed 再露出を弾き、
   ``pending_html_articles.url`` で投入 (Stage 1 投入は ``PendingHtmlEnqueue``、
   Stage 2 の claim/sweep は ``article_completion/repository.py``)。下流は
@@ -42,7 +42,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.collection.domain.analyzable_article import AnalyzableArticle
-from app.collection.domain.incomplete_article import IncompleteArticle
+from app.collection.domain.observed_article import ObservedArticle
 from app.collection.external_fetch_errors import ExternalFetchError
 from app.collection.fetchers.protocol import Fetcher
 from app.collection.persistence.article_store import ArticleStore
@@ -88,16 +88,18 @@ class ArticleAcquisitionService:
                             if article_id is None:
                                 continue
                             persisted_ids.append(article_id)
-                        case IncompleteArticle() as pending:
+                        case ObservedArticle() as observed:
                             # pre-check: 既知 URL の HTML fetch 反復を避けるための
                             # コスト節約 (UNIQUE(url) と ON CONFLICT は enqueue 側で
                             # 構造的に担保)
                             if await article_store.exists_by_source_url(
-                                pending.source_url
+                                observed.source_url
                             ):
                                 continue
                             await pending_enqueue.enqueue(
-                                pending, ready_at=datetime.now(UTC)
+                                observed,
+                                source_id=source_id,
+                                ready_at=datetime.now(UTC),
                             )
             except ExternalFetchError as exc:
                 # tool 層で origin error に翻訳済。Layer 1 marker に CODE ごと

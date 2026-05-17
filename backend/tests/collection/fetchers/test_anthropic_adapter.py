@@ -5,7 +5,8 @@
 - fixture sitemap.xml から ``ArticleFetcher`` 経由で永続化 passport が yield される
 - ``URL_PATH_PREFIX="/news/"`` 以外の URL は yield されない
 - ``MAX_ENTRIES=30`` で切り出される
-- 各 passport は ``prefer_html_title=True`` 経由で ``IncompleteArticle`` 型
+- 各 passport は ``completion_profile = HTML_TITLE_PROFILE`` 経由で
+  ``ObservedArticle`` 型 (title=``html_preferred`` が Ready gate を止める)
 - ``RawHttpClient`` の ``ExternalFetchError`` は Adapter を素通しする
 - sitemap parser は XXE / 外部 entity を解決しない (defensive parsing 契約)
 """
@@ -17,9 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from app.collection.domain.incomplete_article import (
-    IncompleteArticle,
-)
+from app.collection.domain.observed_article import ObservedArticle
 from app.collection.external_fetch_errors import (
     FetchOriginServerError,
     FetchResourceNotFoundError,
@@ -83,7 +82,7 @@ async def test_only_news_urls_yielded() -> None:
     items = await _collect(ArticleFetcher(_build_adapter()).fetch(source_id=1))
     assert items
     for item in items:
-        assert isinstance(item, IncompleteArticle)
+        assert isinstance(item, ObservedArticle)
         url = str(item.source_url)
         assert url.startswith("https://www.anthropic.com/news"), url
 
@@ -96,11 +95,12 @@ async def test_max_entries_capped() -> None:
 
 @pytest.mark.asyncio
 async def test_all_passports_are_incomplete_for_html_title() -> None:
-    """``prefer_html_title=True`` 経由のため Ready 経路は発火しない。"""
+    """``HTML_TITLE_PROFILE`` (title=``html_preferred``) のため Ready 経路は
+    発火しない。"""
     items = await _collect(ArticleFetcher(_build_adapter()).fetch(source_id=1))
     assert items
     for item in items:
-        assert isinstance(item, IncompleteArticle)
+        assert isinstance(item, ObservedArticle)
 
 
 @pytest.mark.asyncio

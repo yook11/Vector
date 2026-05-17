@@ -24,9 +24,7 @@ import feedparser
 import pytest
 
 from app.collection.domain.analyzable_article import AnalyzableArticle
-from app.collection.domain.incomplete_article import (
-    IncompleteArticle,
-)
+from app.collection.domain.observed_article import ObservedArticle
 from app.collection.fetchers.article_fetcher import ArticleFetcher
 from app.collection.fetchers.cleantechnica import CleanTechnicaAdapter
 from app.collection.fetchers.cloudflare import CloudflareBlogAdapter
@@ -119,8 +117,8 @@ class _FixtureRssParser:
 
 
 # 旧 invariant test と同じ Ready/Incomplete 集合表記。
-_R_BODY_TRUSTED = {AnalyzableArticle, IncompleteArticle}
-_H_BODY_DISTRUSTED = {IncompleteArticle}
+_R_BODY_TRUSTED = {AnalyzableArticle, ObservedArticle}
+_H_BODY_DISTRUSTED = {ObservedArticle}
 
 # (adapter_class, fixture_filename, allowed_types, must_include_types)
 # Adapter は parser を __init__ で受けるため、test 本体で
@@ -131,48 +129,48 @@ _CASES: list[tuple[AdapterFactory, str, set[type], set[type]]] = [
     (
         VentureBeatAdapter,
         "venturebeat_teaser_rss.xml",
-        {IncompleteArticle},
-        {IncompleteArticle},
+        {ObservedArticle},
+        {ObservedArticle},
     ),
-    (TechCrunchAdapter, "techcrunch_rss.xml", _H_BODY_DISTRUSTED, {IncompleteArticle}),
+    (TechCrunchAdapter, "techcrunch_rss.xml", _H_BODY_DISTRUSTED, {ObservedArticle}),
     # P3a (Pattern H stand-alone, 17 本) — body 不信用、Incomplete 経路に固定
     (
         CleanTechnicaAdapter,
         "cleantechnica_rss.xml",
         _H_BODY_DISTRUSTED,
-        {IncompleteArticle},
+        {ObservedArticle},
     ),
-    (DeepMindAdapter, "deepmind_rss.xml", _H_BODY_DISTRUSTED, {IncompleteArticle}),
+    (DeepMindAdapter, "deepmind_rss.xml", _H_BODY_DISTRUSTED, {ObservedArticle}),
     (
         EETimesJapanAdapter,
         "eetimes_japan_rss.xml",
         _H_BODY_DISTRUSTED,
-        {IncompleteArticle},
+        {ObservedArticle},
     ),
-    (ElectrekAdapter, "electrek_rss.xml", _H_BODY_DISTRUSTED, {IncompleteArticle}),
-    (EngadgetAdapter, "engadget_rss.xml", _H_BODY_DISTRUSTED, {IncompleteArticle}),
+    (ElectrekAdapter, "electrek_rss.xml", _H_BODY_DISTRUSTED, {ObservedArticle}),
+    (EngadgetAdapter, "engadget_rss.xml", _H_BODY_DISTRUSTED, {ObservedArticle}),
     (
         HuggingFaceBlogAdapter,
         "huggingface_blog_rss.xml",
         _H_BODY_DISTRUSTED,
-        {IncompleteArticle},
+        {ObservedArticle},
     ),
-    (ITmediaAIAdapter, "itmedia_ai_rss.xml", _H_BODY_DISTRUSTED, {IncompleteArticle}),
+    (ITmediaAIAdapter, "itmedia_ai_rss.xml", _H_BODY_DISTRUSTED, {ObservedArticle}),
     (
         ITmediaNewsAdapter,
         "itmedia_news_rss.xml",
         _H_BODY_DISTRUSTED,
-        {IncompleteArticle},
+        {ObservedArticle},
     ),
-    (JPCERTAdapter, "jpcert_rss.xml", _H_BODY_DISTRUSTED, {IncompleteArticle}),
-    (METIAdapter, "meti_atom.xml", _H_BODY_DISTRUSTED, {IncompleteArticle}),
-    (MEXTAdapter, "mext_rdf.xml", _H_BODY_DISTRUSTED, {IncompleteArticle}),
-    (MICAdapter, "mic_rdf.xml", _H_BODY_DISTRUSTED, {IncompleteArticle}),
-    (MONOistAdapter, "monoist_rss.xml", _H_BODY_DISTRUSTED, {IncompleteArticle}),
-    (NISTAdapter, "nist_rss.xml", _H_BODY_DISTRUSTED, {IncompleteArticle}),
-    (NSFAdapter, "nsf_rss.xml", _H_BODY_DISTRUSTED, {IncompleteArticle}),
-    (OpenAIAdapter, "openai_rss.xml", _H_BODY_DISTRUSTED, {IncompleteArticle}),
-    (SpaceNewsAdapter, "spacenews_rss.xml", _H_BODY_DISTRUSTED, {IncompleteArticle}),
+    (JPCERTAdapter, "jpcert_rss.xml", _H_BODY_DISTRUSTED, {ObservedArticle}),
+    (METIAdapter, "meti_atom.xml", _H_BODY_DISTRUSTED, {ObservedArticle}),
+    (MEXTAdapter, "mext_rdf.xml", _H_BODY_DISTRUSTED, {ObservedArticle}),
+    (MICAdapter, "mic_rdf.xml", _H_BODY_DISTRUSTED, {ObservedArticle}),
+    (MONOistAdapter, "monoist_rss.xml", _H_BODY_DISTRUSTED, {ObservedArticle}),
+    (NISTAdapter, "nist_rss.xml", _H_BODY_DISTRUSTED, {ObservedArticle}),
+    (NSFAdapter, "nsf_rss.xml", _H_BODY_DISTRUSTED, {ObservedArticle}),
+    (OpenAIAdapter, "openai_rss.xml", _H_BODY_DISTRUSTED, {ObservedArticle}),
+    (SpaceNewsAdapter, "spacenews_rss.xml", _H_BODY_DISTRUSTED, {ObservedArticle}),
     # P6 Pattern R 群 — body 信用、Ready 主経路 (teaser 混入時のみ Incomplete)
     (
         CloudflareBlogAdapter,
@@ -243,27 +241,27 @@ _CASES: list[tuple[AdapterFactory, str, set[type], set[type]]] = [
         CornellChronicleAdapter,
         "cornell_rss.xml",
         _H_BODY_DISTRUSTED,
-        {IncompleteArticle},
+        {ObservedArticle},
     ),
     (
         TheRegisterAdapter,
         "the_register_atom.xml",
         _H_BODY_DISTRUSTED,
-        {IncompleteArticle},
+        {ObservedArticle},
     ),
     (
         FierceBiotechAdapter,
         "fierce_biotech_rss.xml",
         _H_BODY_DISTRUSTED,
-        {IncompleteArticle},
+        {ObservedArticle},
     ),
     (
         ESAHubbleAdapter,
         "esa_hubble_rss.xml",
         _H_BODY_DISTRUSTED,
-        {IncompleteArticle},
+        {ObservedArticle},
     ),
-    (ESAWebbAdapter, "esa_webb_rss.xml", _H_BODY_DISTRUSTED, {IncompleteArticle}),
+    (ESAWebbAdapter, "esa_webb_rss.xml", _H_BODY_DISTRUSTED, {ObservedArticle}),
 ]
 
 

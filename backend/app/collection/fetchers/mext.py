@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
+from app.collection.domain.observed_article import ObservedOrigin
+from app.collection.domain.source_completion_profile import DEFAULT_PROFILE
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.rss_parser import RssParser
 
@@ -17,6 +19,8 @@ class MEXTAdapter:
 
     NAME = "MEXT"
     ENDPOINT_URL = "https://www.mext.go.jp/b_menu/news/index.rdf"
+    observed_origin = ObservedOrigin.feed
+    completion_profile = DEFAULT_PROFILE
 
     def __init__(self, parser: RssParser | None = None) -> None:
         self._parser = parser or RssParser()

@@ -30,8 +30,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
 from app.collection.domain.analyzable_article import AnalyzableArticle
-from app.collection.domain.incomplete_article import (
-    IncompleteArticle,
+from app.collection.domain.observed_article import (
+    ObservedArticle,
+    ObservedField,
+    ObservedOrigin,
 )
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.source_fetch.service import ArticleAcquisitionService
@@ -39,8 +41,9 @@ from app.models.article import Article as ArticleORM
 from app.models.news_source import NewsSource, SourceType
 from app.models.pending_html_article import PendingHtmlArticle as PendingHtmlArticleORM
 from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
+from app.shared.value_objects.source_name import SourceName
 
-Passport = AnalyzableArticle | IncompleteArticle
+Passport = AnalyzableArticle | ObservedArticle
 
 
 def _ready(source_id: int, url: str) -> AnalyzableArticle:
@@ -53,12 +56,15 @@ def _ready(source_id: int, url: str) -> AnalyzableArticle:
     )
 
 
-def _pending(source_id: int, url: str) -> IncompleteArticle:
-    return IncompleteArticle(
-        title="TC Title",
-        source_id=source_id,
+def _pending(url: str) -> ObservedArticle:
+    return ObservedArticle(
+        source_name=SourceName("TC Source"),
         source_url=CanonicalArticleUrl(url),
-        published_at_hint=PublishedAt(value=datetime(2026, 4, 30, tzinfo=UTC)),
+        title=ObservedField(value="TC Title", origin=ObservedOrigin.feed),
+        published_at=ObservedField(
+            value=PublishedAt(value=datetime(2026, 4, 30, tzinfo=UTC)),
+            origin=ObservedOrigin.feed,
+        ),
     )
 
 
@@ -120,7 +126,7 @@ async def test_pattern_h_inserts_pending_with_canonicalized_url(
     """補完待ち獲得経路は pending_html_articles を作り、url は canonicalize 済み値。"""
     svc = ArticleAcquisitionService(
         session_factory,
-        lambda: _StubFetcher([_pending(vb_source.id, "https://techcrunch.com/h/")]),
+        lambda: _StubFetcher([_pending("https://techcrunch.com/h/")]),
     )
 
     article_ids = await svc.execute(vb_source.id)
@@ -159,7 +165,7 @@ async def test_pattern_h_skips_when_article_already_exists(
 
     svc = ArticleAcquisitionService(
         session_factory,
-        lambda: _StubFetcher([_pending(vb_source.id, "https://techcrunch.com/known")]),
+        lambda: _StubFetcher([_pending("https://techcrunch.com/known")]),
     )
     article_ids = await svc.execute(vb_source.id)
 
@@ -245,7 +251,7 @@ async def test_mixed_ready_pending_route_independently(
         lambda: _StubFetcher(
             [
                 _ready(vb_source.id, "https://venturebeat.com/ok/"),
-                _pending(vb_source.id, "https://techcrunch.com/h/"),
+                _pending("https://techcrunch.com/h/"),
             ]
         ),
     )

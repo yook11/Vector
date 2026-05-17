@@ -5,7 +5,7 @@ per-source 設計: VB の RSS feed は ``<description>`` / ``<content:encoded>``
 (`spec collection-source-rss-research.md`)。VB が時折 Vercel Challenge で
 5xx を返す問題を構造的に回避する目的で、body 候補を共通 builder に渡し
 Ready 昇格を試みる。RSS 仕様変動で body が短くなった entry は builder の
-fallback で ``IncompleteArticle`` に流し、recovery 性を維持する。
+fallback で ``ObservedArticle`` に流し、recovery 性を維持する。
 
 HTTP 取得 / feedparser / SSRF guard / title plain text 正規化は L2
 ``RssParser`` に集約済。本ファイルは L3 翻訳 (RssEntry → passport) の
@@ -19,6 +19,8 @@ import html
 import re
 from collections.abc import AsyncIterator
 
+from app.collection.domain.observed_article import ObservedOrigin
+from app.collection.domain.source_completion_profile import DEFAULT_PROFILE
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.rss_parser import RssEntry, RssParser
 
@@ -56,6 +58,8 @@ class VentureBeatAdapter:
 
     NAME = "VentureBeat"
     ENDPOINT_URL = "https://venturebeat.com/feed"
+    observed_origin = ObservedOrigin.feed
+    completion_profile = DEFAULT_PROFILE
 
     def __init__(self, parser: RssParser | None = None) -> None:
         self._parser = parser or RssParser()

@@ -27,9 +27,7 @@ from typing import Any
 import pytest
 
 from app.collection.domain.analyzable_article import AnalyzableArticle
-from app.collection.domain.incomplete_article import (
-    IncompleteArticle,
-)
+from app.collection.domain.observed_article import ObservedArticle
 from app.collection.fetchers.anthropic import AnthropicAdapter
 from app.collection.fetchers.article_fetcher import ArticleFetcher
 from app.collection.fetchers.hacker_news import HackerNewsAdapter
@@ -53,8 +51,8 @@ from tests.collection.fetchers._invariant import (
 _FIXTURES_DIR = Path(__file__).parent.parent.parent / "fixtures"
 
 # 型集合表記は test_rss_adapters_invariants.py と同じ。
-_R_BODY_TRUSTED = {AnalyzableArticle, IncompleteArticle}
-_H_BODY_DISTRUSTED = {IncompleteArticle}
+_R_BODY_TRUSTED = {AnalyzableArticle, ObservedArticle}
+_H_BODY_DISTRUSTED = {ObservedArticle}
 
 
 class _FixtureRawHttpClient(RawHttpClient):
@@ -146,9 +144,9 @@ AdapterBuilder = type(_build_hn)
 
 # (build_fn, allowed_types, must_include_types, label)
 _CASES: list[tuple[AdapterBuilder, set[type], set[type], str]] = [
-    (_build_hn, _H_BODY_DISTRUSTED, {IncompleteArticle}, "HackerNewsAdapter"),
-    (_build_anthropic, _H_BODY_DISTRUSTED, {IncompleteArticle}, "AnthropicAdapter"),
-    (_build_ornl, _H_BODY_DISTRUSTED, {IncompleteArticle}, "ORNLAdapter"),
+    (_build_hn, _H_BODY_DISTRUSTED, {ObservedArticle}, "HackerNewsAdapter"),
+    (_build_anthropic, _H_BODY_DISTRUSTED, {ObservedArticle}, "AnthropicAdapter"),
+    (_build_ornl, _H_BODY_DISTRUSTED, {ObservedArticle}, "ORNLAdapter"),
     (
         _build_mdpi_energies,
         _R_BODY_TRUSTED,

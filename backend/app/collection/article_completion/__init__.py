@@ -1,4 +1,4 @@
-"""Article Completion — Pattern H (IncompleteArticle → AnalyzableArticle) の補完
+"""Article Completion — Pattern H (ObservedArticle → AnalyzableArticle) の補完
 責務を担うパッケージ。
 
 ユビキタス語彙:
@@ -7,7 +7,7 @@
 - ``ArticleHtmlExtractor`` / ``ExtractedContent`` / ``ExtractionEmpty``:
   AI 境界 (HTML 抽出器) の戻り値。
 - ``ArticleHtmlCompleter`` / ``CompletionFailure`` / ``FetchFailed``:
-  ``IncompleteArticle`` を ``AnalyzableArticle | CompletionFailure`` に解決する
+  ``ObservedArticle`` を ``AnalyzableArticle | CompletionFailure`` に解決する
   純粋境界 (副作用なし、fetch 例外を ``FetchFailed`` 値に畳む)。
 - ``ArticleCompletionRepository``: ``pending_html_articles`` の Stage 2 操作
   (処理資格ロード / claim / sweep / 状態遷移 / 削除)。Stage 1 投入は

@@ -6,10 +6,9 @@
   (未満は ``ExtractionEmpty``)。
 - ``ARTICLE_BODY_MAX_LENGTH`` (=1 MiB): DoS 上限。日本語を考慮しても十分。
 
-consumer (``analyzable_article`` / ``incomplete_article`` /
-``article_completion.extractor`` / ``fetchers.tools.passport_builder``。
-P3 で ``persistence.staged_attributes`` も合流) は全てここから import し、
-リテラルの二重化 (drift) を構造的に排除する。
+consumer (``analyzable_article`` / ``observed_article`` /
+``article_completion.extractor`` / ``fetchers.tools.passport_builder``) は
+全てここから import し、リテラルの二重化 (drift) を構造的に排除する。
 """
 
 from __future__ import annotations

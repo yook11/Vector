@@ -13,7 +13,8 @@ from datetime import UTC, datetime
 
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.article_limits import ARTICLE_BODY_MIN_LENGTH
-from app.collection.domain.incomplete_article import IncompleteArticle
+from app.collection.domain.observed_article import ObservedArticle, ObservedOrigin
+from app.collection.domain.source_completion_profile import DEFAULT_PROFILE
 from app.collection.fetchers.article_fetcher import ArticleFetcher
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
 
@@ -26,6 +27,8 @@ _VALID_BODY = "x" * ARTICLE_BODY_MIN_LENGTH
 class _FakeAdapter:
     NAME = "Fake"
     ENDPOINT_URL = "https://example.test/feed"
+    observed_origin = ObservedOrigin.feed
+    completion_profile = DEFAULT_PROFILE
 
     def __init__(self, items: list[FetchedArticle]) -> None:
         self._items = items
@@ -81,7 +84,7 @@ async def test_skips_when_adapter_emits_drop_candidate() -> None:
     results = await _collect_fetch(fetcher, source_id=1)
 
     assert len(results) == 1
-    assert isinstance(results[0], IncompleteArticle)
+    assert isinstance(results[0], ObservedArticle)
 
 
 def test_exposes_adapter_name_and_endpoint_url_as_instance_attrs() -> None:

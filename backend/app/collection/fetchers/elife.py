@@ -12,6 +12,8 @@ import html
 import re
 from collections.abc import AsyncIterator
 
+from app.collection.domain.observed_article import ObservedOrigin
+from app.collection.domain.source_completion_profile import DEFAULT_PROFILE
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.rss_parser import RssEntry, RssParser
 
@@ -37,6 +39,8 @@ class ELifeAdapter:
 
     NAME = "eLife"
     ENDPOINT_URL = "https://elifesciences.org/rss/recent.xml"
+    observed_origin = ObservedOrigin.feed
+    completion_profile = DEFAULT_PROFILE
 
     def __init__(self, parser: RssParser | None = None) -> None:
         self._parser = parser or RssParser()

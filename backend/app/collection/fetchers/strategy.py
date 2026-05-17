@@ -1,4 +1,4 @@
-"""Adapter 駆動の per-source dispatch table。
+"""Adapter 駆動の per-source dispatch table (composition root)。
 
 collection-acquisition-redesign Phase 1 → fetcher big-bang リファクタ P6 完結。
 全 45 ソースが ``SourceAdapter`` を ``ArticleFetcher`` で駆動する形に収束し、
@@ -8,11 +8,18 @@ collection-acquisition-redesign Phase 1 → fetcher big-bang リファクタ P6 
 設計判断:
 
 - env / Settings を読まず hardcode (Pure DI)
-- 判定キーは ``news_sources.name`` (StrEnum 値) — id は環境差で揺れ得るため
-- factory は ``Callable[[], Fetcher]`` — ``ArticleFetcher`` は無状態のため毎回
-  new で OK。``lambda: ArticleFetcher(XxxAdapter())`` 形で Adapter を注入する
-  (``ArticleFetcher`` は Adapter の ``NAME`` / ``ENDPOINT_URL`` を instance
-  attr に格上げするため ``Fetcher`` Protocol を構造的に満たす)
+- 判定キーは ``news_sources.name`` (= 各 Adapter の ``NAME`` ClassVar) —
+  id は環境差で揺れ得るため
+- per-source 知識 (補完方針 / 取得出自) は各 ``SourceAdapter`` の
+  ``completion_profile`` / ``observed_origin`` ClassVar が所有する。
+  ``SOURCES`` は ``NAME → Adapter class`` の純レジストリで、Stage 2 の
+  ``CompletionProfileResolver`` が **無 instantiation** で
+  ``.completion_profile`` を引くために参照する
+- ``FETCHERS`` は ``SOURCES`` から導出する (2 辞書並走の desync を構造排除)。
+  ``ArticleFetcher`` は無状態のため factory は毎回 new で OK
+  (``lambda A=A: ArticleFetcher(A())`` 形)。``ArticleFetcher`` は Adapter の
+  ``NAME`` / ``ENDPOINT_URL`` を instance attr に格上げするため ``Fetcher``
+  Protocol を構造的に満たす
 """
 
 from __future__ import annotations
@@ -78,58 +85,65 @@ from app.collection.fetchers.spaceflight_now import SpaceflightNowAdapter
 from app.collection.fetchers.spacenews import SpaceNewsAdapter
 from app.collection.fetchers.techcrunch import TechCrunchAdapter
 from app.collection.fetchers.the_register import TheRegisterAdapter
+from app.collection.fetchers.tools.fetched_article import SourceAdapter
 from app.collection.fetchers.venturebeat import VentureBeatAdapter
 
+# 1 ニュースソース = 1 ``SourceAdapter`` クラス。順序は旧 ``FETCHERS`` を踏襲
+# (``FETCHERS`` の iteration order を byte 不変に保つ)。
+_ADAPTERS: Final[tuple[type[SourceAdapter], ...]] = (
+    VentureBeatAdapter,
+    TechCrunchAdapter,
+    QuantumInsiderAdapter,
+    KrebsOnSecurityAdapter,
+    SpaceflightNowAdapter,
+    NASAAdapter,
+    IEEESpectrumAdapter,
+    MicrosoftResearchAdapter,
+    ITmediaAIAdapter,
+    ITmediaNewsAdapter,
+    MONOistAdapter,
+    EETimesJapanAdapter,
+    EngadgetAdapter,
+    FierceBiotechAdapter,
+    JPCERTAdapter,
+    CleanTechnicaAdapter,
+    ElectrekAdapter,
+    SpaceNewsAdapter,
+    TheRegisterAdapter,
+    HackerNewsAdapter,
+    MEXTAdapter,
+    MICAdapter,
+    METIAdapter,
+    AnthropicAdapter,
+    NISTAdapter,
+    NSFAdapter,
+    CloudflareBlogAdapter,
+    DeepMindAdapter,
+    ESAHubbleAdapter,
+    ESAWebbAdapter,
+    OpenAIAdapter,
+    HuggingFaceBlogAdapter,
+    ELifeAdapter,
+    PLOSOneAdapter,
+    MetaAIAdapter,
+    CornellChronicleAdapter,
+    FrontiersAIAdapter,
+    FrontiersRoboticsAIAdapter,
+    FrontiersEnergyResearchAdapter,
+    FrontiersMaterialsAdapter,
+    ORNLAdapter,
+    MDPIMaterialsAdapter,
+    MDPIEnergiesAdapter,
+    MDPISensorsAdapter,
+    MDPINanomaterialsAdapter,
+)
+
+# ``NAME → Adapter class`` の純レジストリ。Stage 2 resolver はここから
+# 無 instantiation で ``.completion_profile`` / ``.observed_origin`` を引く。
+SOURCES: Final[dict[str, type[SourceAdapter]]] = {A.NAME: A for A in _ADAPTERS}
+
+# ``ingest_source`` task の ``FETCHERS[arg.name]`` 消費は無改修。``SOURCES``
+# から導出することで「name→adapter」と「name→fetcher」の desync を構造排除。
 FETCHERS: Final[dict[str, Callable[[], Fetcher]]] = {
-    "VentureBeat": lambda: ArticleFetcher(VentureBeatAdapter()),
-    "TechCrunch": lambda: ArticleFetcher(TechCrunchAdapter()),
-    "The Quantum Insider": lambda: ArticleFetcher(QuantumInsiderAdapter()),
-    "Krebs on Security": lambda: ArticleFetcher(KrebsOnSecurityAdapter()),
-    "Spaceflight Now": lambda: ArticleFetcher(SpaceflightNowAdapter()),
-    "NASA": lambda: ArticleFetcher(NASAAdapter()),
-    "IEEE Spectrum": lambda: ArticleFetcher(IEEESpectrumAdapter()),
-    "Microsoft Research": lambda: ArticleFetcher(MicrosoftResearchAdapter()),
-    "ITmedia AI+": lambda: ArticleFetcher(ITmediaAIAdapter()),
-    "ITmedia NEWS": lambda: ArticleFetcher(ITmediaNewsAdapter()),
-    "MONOist": lambda: ArticleFetcher(MONOistAdapter()),
-    "EE Times Japan": lambda: ArticleFetcher(EETimesJapanAdapter()),
-    "Engadget": lambda: ArticleFetcher(EngadgetAdapter()),
-    "FierceBiotech": lambda: ArticleFetcher(FierceBiotechAdapter()),
-    "JPCERT/CC": lambda: ArticleFetcher(JPCERTAdapter()),
-    "CleanTechnica": lambda: ArticleFetcher(CleanTechnicaAdapter()),
-    "Electrek": lambda: ArticleFetcher(ElectrekAdapter()),
-    "SpaceNews": lambda: ArticleFetcher(SpaceNewsAdapter()),
-    "The Register": lambda: ArticleFetcher(TheRegisterAdapter()),
-    "Hacker News": lambda: ArticleFetcher(HackerNewsAdapter()),
-    "MEXT": lambda: ArticleFetcher(MEXTAdapter()),
-    "MIC": lambda: ArticleFetcher(MICAdapter()),
-    "METI": lambda: ArticleFetcher(METIAdapter()),
-    "Anthropic": lambda: ArticleFetcher(AnthropicAdapter()),
-    "NIST": lambda: ArticleFetcher(NISTAdapter()),
-    "NSF": lambda: ArticleFetcher(NSFAdapter()),
-    "The Cloudflare Blog": lambda: ArticleFetcher(CloudflareBlogAdapter()),
-    "Google DeepMind": lambda: ArticleFetcher(DeepMindAdapter()),
-    "ESA/Hubble": lambda: ArticleFetcher(ESAHubbleAdapter()),
-    "ESA/Webb": lambda: ArticleFetcher(ESAWebbAdapter()),
-    "OpenAI": lambda: ArticleFetcher(OpenAIAdapter()),
-    "Hugging Face": lambda: ArticleFetcher(HuggingFaceBlogAdapter()),
-    "eLife": lambda: ArticleFetcher(ELifeAdapter()),
-    "PLOS ONE": lambda: ArticleFetcher(PLOSOneAdapter()),
-    "Meta AI": lambda: ArticleFetcher(MetaAIAdapter()),
-    "Cornell Chronicle": lambda: ArticleFetcher(CornellChronicleAdapter()),
-    "Frontiers in Artificial Intelligence": lambda: ArticleFetcher(
-        FrontiersAIAdapter()
-    ),
-    "Frontiers in Robotics and AI": lambda: ArticleFetcher(
-        FrontiersRoboticsAIAdapter()
-    ),
-    "Frontiers in Energy Research": lambda: ArticleFetcher(
-        FrontiersEnergyResearchAdapter()
-    ),
-    "Frontiers in Materials": lambda: ArticleFetcher(FrontiersMaterialsAdapter()),
-    "ORNL": lambda: ArticleFetcher(ORNLAdapter()),
-    "MDPI Materials": lambda: ArticleFetcher(MDPIMaterialsAdapter()),
-    "MDPI Energies": lambda: ArticleFetcher(MDPIEnergiesAdapter()),
-    "MDPI Sensors": lambda: ArticleFetcher(MDPISensorsAdapter()),
-    "MDPI Nanomaterials": lambda: ArticleFetcher(MDPINanomaterialsAdapter()),
+    name: (lambda A=A: ArticleFetcher(A())) for name, A in SOURCES.items()
 }

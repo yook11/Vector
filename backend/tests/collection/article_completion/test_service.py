@@ -33,8 +33,15 @@ from app.collection.article_completion.extractor import (
 from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.article_completion.repository import ArticleCompletionRepository
 from app.collection.article_completion.service import ArticleCompletionService
-from app.collection.domain.incomplete_article import (
-    IncompleteArticle,
+from app.collection.domain.observed_article import (
+    ObservedArticle,
+    ObservedField,
+    ObservedOrigin,
+)
+from app.collection.domain.source_completion_profile import (
+    DEFAULT_PROFILE,
+    HTML_TITLE_PROFILE,
+    SourceCompletionProfile,
 )
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.external_fetch_errors import (
@@ -47,6 +54,23 @@ from app.models.article import Article as ArticleORM
 from app.models.news_source import NewsSource, SourceType
 from app.models.pending_html_article import PendingHtmlArticle
 from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
+from app.shared.value_objects.source_name import SourceName
+
+
+class _StubResolver:
+    """``CompletionProfileResolver`` stub。テストが要求する profile を返し
+    production 45-registry / DB 引きと非結合にする (plan: stub 注入)。"""
+
+    def __init__(self, profile: SourceCompletionProfile = DEFAULT_PROFILE) -> None:
+        self._profile = profile
+
+    async def resolve(
+        self, *, source_id: int, source_name: SourceName | None
+    ) -> SourceCompletionProfile:
+        return self._profile
+
+    async def resolve_name(self, *, source_id: int) -> SourceName:
+        return SourceName("Resolved Source")
 
 
 @pytest.fixture
@@ -64,32 +88,41 @@ async def tc_source(db_session: AsyncSession) -> NewsSource:
     return source
 
 
-def _incomplete(
+def _observed(
     source: NewsSource,
     url: str,
     *,
     title: str = "TC Title",
-    published_at_hint: PublishedAt | None = PublishedAt(
+    observed_published: PublishedAt | None = PublishedAt(
         datetime(2026, 4, 30, 12, 0, 0, tzinfo=UTC)
     ),
-    prefer_html_title: bool = False,
-) -> IncompleteArticle:
-    return IncompleteArticle(
-        title=title,
-        source_id=source.id,
+) -> ObservedArticle:
+    return ObservedArticle(
+        source_name=SourceName(str(source.name)),
         source_url=CanonicalArticleUrl(url),
-        published_at_hint=published_at_hint,
-        prefer_html_title=prefer_html_title,
+        title=ObservedField(value=title, origin=ObservedOrigin.feed),
+        published_at=(
+            ObservedField(value=observed_published, origin=ObservedOrigin.feed)
+            if observed_published is not None
+            else None
+        ),
     )
 
 
 async def _load_ready(
-    db_session: AsyncSession, pending_id: int
+    db_session: AsyncSession,
+    pending_id: int,
+    *,
+    profile: SourceCompletionProfile = DEFAULT_PROFILE,
 ) -> ReadyForArticleCompletion:
-    """Task 層と同じく ``try_advance_from`` で厚い Ready を構築する。"""
+    """Task 層と同じく ``try_advance_from`` で厚い Ready を構築する。
+
+    profile は stub resolver 注入で固定する (per-source 補完方針は本来
+    ``SOURCES`` 由来だが、テストは production registry と非結合にする)。
+    """
     ready = await ReadyForArticleCompletion.try_advance_from(
         pending_id=pending_id,
-        repo=ArticleCompletionRepository(db_session),
+        repo=ArticleCompletionRepository(db_session, _StubResolver(profile)),
     )
     assert ready is not None
     return ready
@@ -100,7 +133,8 @@ async def _make_pending(
     source: NewsSource,
     url: str,
     *,
-    incomplete: IncompleteArticle | None = None,
+    observed: ObservedArticle | None = None,
+    profile: SourceCompletionProfile = DEFAULT_PROFILE,
 ) -> tuple[CanonicalArticleUrl, int, ReadyForArticleCompletion]:
     """``pending_html_articles`` 行を 1 件作って claim 状態にし Ready を構築する。
 
@@ -111,21 +145,24 @@ async def _make_pending(
     """
     canonical_url = CanonicalArticleUrl(url)
     pending_id = await PendingHtmlEnqueue(db_session).enqueue(
-        incomplete or _incomplete(source, url),
+        observed or _observed(source, url),
+        source_id=source.id,
         ready_at=datetime.now(UTC) - timedelta(seconds=1),
     )
     assert pending_id is not None
     await db_session.commit()
     # claim して running 状態に遷移 (cron poller の代わり)
     now = datetime.now(UTC)
-    ids = await ArticleCompletionRepository(db_session).claim_ready_batch(
+    ids = await ArticleCompletionRepository(
+        db_session, _StubResolver(profile)
+    ).claim_ready_batch(
         limit=10,
         now=now,
         leased_until=now + timedelta(minutes=5),
     )
     await db_session.commit()
     assert pending_id in ids
-    ready = await _load_ready(db_session, pending_id)
+    ready = await _load_ready(db_session, pending_id, profile=profile)
     return canonical_url, pending_id, ready
 
 
@@ -225,20 +262,15 @@ async def test_success_persists_extracted_body_and_published_at(
     """
     body = "x" * 250
     html_published_at = datetime(2026, 5, 1, 9, 30, 0, tzinfo=UTC)
-    # RSS hint=None で HTML published_at を fallback 経路で流入させ、
-    # prefer_html_title=True で HTML title を採用させる
+    # 観測 published=None で HTML published_at を fallback 経路で流入させ、
+    # HTML_TITLE_PROFILE (title=html_preferred) で HTML title を採用させる
     url = "https://techcrunch.com/article-3"
     _, _, ready = await _make_pending(
         db_session,
         tc_source,
         url,
-        incomplete=_incomplete(
-            tc_source,
-            url,
-            title="Feed Title",
-            published_at_hint=None,
-            prefer_html_title=True,
-        ),
+        observed=_observed(tc_source, url, title="Feed Title", observed_published=None),
+        profile=HTML_TITLE_PROFILE,
     )
     _patch_fetch(
         monkeypatch,
@@ -348,12 +380,8 @@ async def test_promotion_failure_closes_pending(
         db_session,
         tc_source,
         url,
-        incomplete=_incomplete(
-            tc_source,
-            url,
-            title="Short Title",
-            published_at_hint=None,
-            prefer_html_title=False,
+        observed=_observed(
+            tc_source, url, title="Short Title", observed_published=None
         ),
     )
     _patch_fetch(

@@ -3,7 +3,7 @@
 固定する固有不変条件:
 
 - Djangoplicity RSS は Pattern H のため ``collect()`` は ``body=None`` を
-  yield し、``ArticleFetcher`` 経由で全 entry が ``IncompleteArticle`` になる
+  yield し、``ArticleFetcher`` 経由で全 entry が ``ObservedArticle`` になる
 - Hubble / Webb subclass の ``NAME`` / ``ENDPOINT_URL`` ClassVar が期待値と一致
 """
 
@@ -14,9 +14,7 @@ from pathlib import Path
 import feedparser
 import pytest
 
-from app.collection.domain.incomplete_article import (
-    IncompleteArticle,
-)
+from app.collection.domain.observed_article import ObservedArticle
 from app.collection.fetchers.article_fetcher import ArticleFetcher
 from app.collection.fetchers.esa.hubble import ESAHubbleAdapter
 from app.collection.fetchers.esa.webb import ESAWebbAdapter
@@ -75,7 +73,7 @@ async def test_pattern_h_yields_incomplete_only(
     fetcher = ArticleFetcher(adapter_cls(parser=_FakeRssParser(fixture)))
     passports = [p async for p in fetcher.fetch(source_id=1)]
     assert passports
-    assert all(isinstance(p, IncompleteArticle) for p in passports)
+    assert all(isinstance(p, ObservedArticle) for p in passports)
 
 
 @pytest.mark.parametrize(

@@ -6,16 +6,21 @@
 (memory `feedback_test_invariants_over_change_tracking.md`)。
 
 Outcome 純化原則 (PR-2 以降): Fetcher が yield するのは
-``AnalyzableArticle | IncompleteArticle`` の passport のみ。品質ゲート未達 entry
+``AnalyzableArticle | ObservedArticle`` の passport のみ。品質ゲート未達 entry
 は yield しないため、観測点は「yield された passport」だけになる。
 
-passport builder への切替 (本 PR) 以降は同じ Fetcher でも entry ごとに
-Ready / Incomplete を選びうるため、type 集合の検証を 2 段階で行う:
+passport builder への切替以降は同じ Fetcher でも entry ごとに
+Ready / Observed を選びうるため、type 集合の検証を 2 段階で行う:
 
 - ``assert_passport_types_allowed`` — 全 passport が ``allowed`` 集合に属する
   (= 想定外の型が混ざっていないこと)
 - ``assert_passport_types_include`` — ``must_include`` の各型を最低 1 件含む
   (= 主経路 / 副経路が壊れていないこと)
+
+``ObservedArticle`` の永続化不変条件は free function ``complete_with_html``
+(profile 駆動) で固定する: ``DEFAULT_PROFILE`` + HTML 抽出値で
+``AnalyzableArticle`` に昇格できる = Stage 2 を通せば articles に焼ける、
+という業務不変条件。
 """
 
 from __future__ import annotations
@@ -23,15 +28,16 @@ from __future__ import annotations
 from collections.abc import Iterable
 from datetime import UTC, datetime
 
+from app.collection.article_completion.extractor import ExtractedContent
+from app.collection.article_completion.promotion import complete_with_html
 from app.collection.domain.analyzable_article import AnalyzableArticle
-from app.collection.domain.incomplete_article import (
-    IncompleteArticle,
-)
+from app.collection.domain.observed_article import ObservedArticle
+from app.collection.domain.source_completion_profile import DEFAULT_PROFILE
 from app.collection.domain.value_objects import PublishedAt
 
 _DEFAULT_HTML_PUBLISHED_AT = PublishedAt(value=datetime(2026, 5, 1, tzinfo=UTC))
 
-Passport = AnalyzableArticle | IncompleteArticle
+Passport = AnalyzableArticle | ObservedArticle
 
 
 def assert_at_least_one_passport(items: Iterable[Passport]) -> None:
@@ -51,8 +57,8 @@ def assert_passports_persistable(
     """全 passport が永続化不変条件を満たすこと。
 
     AnalyzableArticle: Pydantic 構築が成功している = 5 fields 通過済。
-    IncompleteArticle: HTML 抽出値で ``complete_with_html`` が AnalyzableArticle
-    を返せる (= Stage 2 を通せば永続化できる中間状態)。
+    ObservedArticle: HTML 抽出値で ``complete_with_html`` (``DEFAULT_PROFILE``)
+    が AnalyzableArticle を返せる (= Stage 2 を通せば永続化できる中間状態)。
 
     ``html_published_at`` 省略時は default を入れる (Pattern H が published_at を
     HTML 側から確定させる前提を表現するため)。
@@ -61,13 +67,20 @@ def assert_passports_persistable(
     for item in items:
         if isinstance(item, AnalyzableArticle):
             continue
-        assert isinstance(item, IncompleteArticle)
-        promoted = item.complete_with_html(
-            body=html_body,
-            html_published_at=pub,
+        assert isinstance(item, ObservedArticle)
+        promoted = complete_with_html(
+            item,
+            DEFAULT_PROFILE,
+            ExtractedContent(
+                title="HTML Title",
+                body=html_body,
+                published_at=pub,
+            ),
+            source_id=1,
+            source_url=item.source_url,
         )
         assert isinstance(promoted, AnalyzableArticle), (
-            f"IncompleteArticle could not be promoted to AnalyzableArticle: {promoted}"
+            f"ObservedArticle could not be promoted to AnalyzableArticle: {promoted}"
         )
 
 
@@ -79,7 +92,7 @@ def assert_passport_types_allowed(
     """全 passport の型が ``allowed`` 集合に属することを保証する。
 
     例: Pattern H 固定ソース (``body_candidate=None``) に対し
-    ``allowed={IncompleteArticle}`` を渡せば、Ready が混入していないことを固定。
+    ``allowed={ObservedArticle}`` を渡せば、Ready が混入していないことを固定。
     """
     materialized = list(items)
     actual_types = {type(item) for item in materialized}

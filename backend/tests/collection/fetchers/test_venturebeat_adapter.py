@@ -11,7 +11,7 @@
 - teaser RSS では body が 50 chars 未満になり、Adapter は ``str`` を yield する
   (Ready / Incomplete の分岐は ``passport_builder`` 側の責務)
 - ``ArticleFetcher`` 経由で full fixture → ``AnalyzableArticle`` を最低 1 件
-- ``ArticleFetcher`` 経由で teaser fixture → 全 entry が ``IncompleteArticle``
+- ``ArticleFetcher`` 経由で teaser fixture → 全 entry が ``ObservedArticle``
   (body 短い entry の Ready→Incomplete fallback 経路を構造的に固定)
 - ``NAME`` / ``ENDPOINT_URL`` が class attr として読める
 """
@@ -24,7 +24,7 @@ import feedparser
 
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.article_limits import ARTICLE_BODY_MIN_LENGTH
-from app.collection.domain.incomplete_article import IncompleteArticle
+from app.collection.domain.observed_article import ObservedArticle
 from app.collection.fetchers.article_fetcher import ArticleFetcher
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.rss_parser import RssEntry, normalize_entry
@@ -96,7 +96,7 @@ async def test_article_fetcher_yields_ready_for_full_rss() -> None:
 
 
 async def test_article_fetcher_falls_back_to_incomplete_for_teaser_rss() -> None:
-    """teaser-only fixture では全 entry が ``IncompleteArticle`` に落ちる。
+    """teaser-only fixture では全 entry が ``ObservedArticle`` に落ちる。
     builder の Ready→Incomplete fallback を Adapter 経路でも保つ構造的保証。"""
     adapter = VentureBeatAdapter(parser=_FakeRssParser("venturebeat_teaser_rss.xml"))  # type: ignore[arg-type]
     fetcher = ArticleFetcher(adapter)
@@ -104,7 +104,7 @@ async def test_article_fetcher_falls_back_to_incomplete_for_teaser_rss() -> None
     passports = [item async for item in fetcher.fetch(source_id=1)]
 
     assert passports
-    assert all(isinstance(p, IncompleteArticle) for p in passports)
+    assert all(isinstance(p, ObservedArticle) for p in passports)
 
 
 def test_exposes_name_and_endpoint_url() -> None:

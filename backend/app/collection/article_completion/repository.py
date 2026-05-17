@@ -20,9 +20,12 @@ from sqlmodel import select
 
 from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.domain.analyzable_article import AnalyzableArticle
-from app.collection.domain.incomplete_article import IncompleteArticle
+from app.collection.domain.observed_article import ObservedArticle
 from app.collection.persistence.article_store import ArticleStore
-from app.collection.persistence.staged_attributes import StagedArticleAttributes
+from app.collection.sources.profile_resolver import (
+    CompletionProfileResolver,
+    RegistryCompletionProfileResolver,
+)
 from app.models.pending_html_article import PendingHtmlArticle as PendingHtmlArticleORM
 from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 
@@ -43,8 +46,20 @@ class CompletionPersistResult:
 class ArticleCompletionRepository:
     """Stage 2 completion に必要な DB 操作をカプセル化する。"""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        profile_resolver: CompletionProfileResolver | None = None,
+    ) -> None:
         self._session = session
+        # ACL が session を持つので profile / legacy identity の解決もここに
+        # 集約する。default は ``SOURCES`` 引き + DB fallback の具象 (本 ACL は
+        # ``CompletionProfileResolver`` Protocol にのみ依存、``SOURCES`` を
+        # 直接 import しない — spec §4.6)。テストは stub を注入して production
+        # 45-registry と非結合にする。
+        self._resolver: CompletionProfileResolver = (
+            profile_resolver or RegistryCompletionProfileResolver(session)
+        )
 
     async def try_load_for_completion(
         self, pending_id: int
@@ -54,6 +69,13 @@ class ArticleCompletionRepository:
         ``status='running'`` の行だけを ``ReadyForArticleCompletion`` として
         物体化する。未 claim / sweep 済 / close 済 / delete 済の id はすべて
         ``None`` として扱い、Task は no-op で抜ける。
+
+        identity 注入 (ACL = Fowler LocalDTO / Vernon ACL): ``source_url`` は
+        全行で ``url`` 列が authoritative なので ``model_validate`` 前に raw に
+        注入する (JSONB は ``Field(exclude=True)`` で非永続)。legacy 行
+        (旧形 JSONB = ``schemaVersion`` 不在) は
+        ``sourceName`` を持たないため ``source_id`` から resolver で解決して
+        注入する。``ObservedArticle`` は Optional identity を持たない strict 型。
         """
         stmt = (
             select(
@@ -73,21 +95,27 @@ class ArticleCompletionRepository:
         if row is None:
             return None
 
-        staged = StagedArticleAttributes.model_validate(row.staged_attributes)
+        raw = dict(row.staged_attributes)
+        # 全行: ``url`` 列が記事 identity の authoritative (JSONB 非永続)。
+        raw["source_url"] = str(row.url.root)
+        # legacy 行は sourceName 不在 → source_id から解決して注入。
+        if "schemaVersion" not in raw and "schema_version" not in raw:
+            name = await self._resolver.resolve_name(source_id=row.source_id)
+            raw["sourceName"] = str(name)
+        observed = ObservedArticle.model_validate(raw)
         # ORM 列は SafeUrl 表現で読み出されるが、DB 上の値は INSERT 時の
         # canonical 値なので冪等に再構築できる。
-        canonical_url = CanonicalArticleUrl(row.url.root)
+        source_url = CanonicalArticleUrl(row.url.root)
+        profile = await self._resolver.resolve(
+            source_id=row.source_id, source_name=observed.source_name
+        )
         return ReadyForArticleCompletion(
             pending_id=row.id,
             source_id=row.source_id,
             attempt_count=row.attempt_count,
-            incomplete_article=IncompleteArticle(
-                title=staged.title,
-                source_id=row.source_id,
-                source_url=canonical_url,
-                published_at_hint=staged.published_at_hint,
-                prefer_html_title=staged.prefer_html_title,
-            ),
+            observed=observed,
+            profile=profile,
+            source_url=source_url,
         )
 
     async def claim_ready_batch(

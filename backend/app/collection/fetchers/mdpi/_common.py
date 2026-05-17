@@ -35,6 +35,11 @@ from typing import Any, ClassVar
 import httpx
 import structlog
 
+from app.collection.domain.observed_article import ObservedOrigin
+from app.collection.domain.source_completion_profile import (
+    DEFAULT_PROFILE,
+    SourceCompletionProfile,
+)
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.fetchers.tools.crossref_client import CrossrefApiClient
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
@@ -140,6 +145,8 @@ class BaseMDPICrossrefAdapter:
     JOURNAL_NAME: ClassVar[str]
     LANGUAGE: ClassVar[str] = "en"
     ENDPOINT_URL: ClassVar[str] = "https://api.crossref.org/works"
+    observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.feed
+    completion_profile: ClassVar[SourceCompletionProfile] = DEFAULT_PROFILE
     LOOKBACK_DAYS: ClassVar[int] = 7
     ROWS_PER_REQUEST: ClassVar[int] = 20
 

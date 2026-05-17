@@ -1,4 +1,4 @@
-"""``ArticleCompletionService`` — Pattern H (IncompleteArticle → AnalyzableArticle)
+"""``ArticleCompletionService`` — Pattern H (ObservedArticle → AnalyzableArticle)
 への補完責務全体を担う。``pending_html_articles`` 駆動。
 
 PR 4 で ``ContentFetchService`` から rename。「HTTP fetch する」技術名ではなく
@@ -14,8 +14,8 @@ log + ``None`` で短絡する。
 - ``ReadyForArticleCompletion`` を受け取る (precondition ``status='running'``
   は Ready 型で構造保証済、service は ID も queue 状態も知らない)
 - ``ArticleHtmlCompleter.complete`` (純粋境界 ``completer.py``) に
-  ``IncompleteArticle`` を渡し ``AnalyzableArticle | CompletionFailure`` を
-  値で受け取る。HTML 取得 + ``ExtractionEmpty`` 判定 + promotion は境界の責務で
+  ``ReadyForArticleCompletion`` を渡し ``AnalyzableArticle | CompletionFailure``
+  を値で受け取る。HTML 取得 + ``ExtractionEmpty`` 判定 + promotion は境界の責務で
   service は ``isinstance`` 1 回で成功主線を分岐する
 - repository で ``articles`` INSERT + ``pending_html_articles`` DELETE を
   **同 tx で一括 commit**。他 Stage (Extraction/Assessment/Embedding) と同形で
@@ -107,7 +107,7 @@ class ArticleCompletionService:
             ``None`` — lease 衝突 / 状態不整合 / 永続失敗 / 一時失敗 /
             race-loss (静かに exit)。失敗詳細は構造化ログで観測する。
         """
-        outcome = await self._completer.complete(ready.incomplete_article)
+        outcome = await self._completer.complete(ready)
         if not isinstance(outcome, AnalyzableArticle):
             await self._failure_handler.handle(
                 ready,
@@ -117,7 +117,7 @@ class ArticleCompletionService:
             return None
         advanced = outcome
 
-        canonical_url = ready.incomplete_article.source_url
+        canonical_url = ready.source_url
         async with self._session_factory() as session:
             result = await ArticleCompletionRepository(session).persist_completed(
                 ready, advanced

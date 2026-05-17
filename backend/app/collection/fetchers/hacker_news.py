@@ -3,7 +3,7 @@
 collection-acquisition-redesign Phase 1e。HN はソース仕様が API ベース (Algolia
 HN Search API) で RSS / Atom feed を持たないが、API hit の ``url`` は外部の
 任意サイトを指すため本文は HN 側で取得できない。よって ``AnalyzableArticle``
-invariant (body ≥ 50 chars) を API 単独で満たせず、``IncompleteArticle`` を
+invariant (body ≥ 50 chars) を API 単独で満たせず、``ObservedArticle`` を
 yield し後段 ``extract_html_body`` task が trafilatura で本文を取得する
 **Pattern H 構造同型** で実装する (FierceBiotech / The Register と同じ流れ)。
 
@@ -27,6 +27,11 @@ from typing import ClassVar
 import httpx
 import structlog
 
+from app.collection.domain.observed_article import ObservedOrigin
+from app.collection.domain.source_completion_profile import (
+    DEFAULT_PROFILE,
+    SourceCompletionProfile,
+)
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.fetchers.tools.algolia_hn_client import HackerNewsApiClient
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
@@ -68,6 +73,8 @@ class HackerNewsAdapter:
 
     NAME: ClassVar[str] = "Hacker News"
     ENDPOINT_URL: ClassVar[str] = "https://hn.algolia.com/api/v1/search_by_date"
+    observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.api
+    completion_profile: ClassVar[SourceCompletionProfile] = DEFAULT_PROFILE
 
     def __init__(self, client: HackerNewsApiClient | None = None) -> None:
         self._client = client or HackerNewsApiClient()

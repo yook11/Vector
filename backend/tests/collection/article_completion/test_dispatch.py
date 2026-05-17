@@ -37,16 +37,18 @@ from app.collection.article_completion.dispatch import (
     dispatch_html_fetch_jobs,
     sweep_expired_leases,
 )
-from app.collection.domain.incomplete_article import (
-    IncompleteArticle,
+from app.collection.domain.observed_article import (
+    ObservedArticle,
+    ObservedField,
+    ObservedOrigin,
 )
 from app.collection.domain.value_objects import PublishedAt
-from app.collection.persistence.staged_attributes import StagedArticleAttributes
 from app.collection.source_fetch.pending_enqueue import PendingHtmlEnqueue
 from app.models.news_source import NewsSource
 from app.models.pending_html_article import PendingHtmlArticle as PendingHtmlArticleORM
 from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 from app.shared.value_objects.safe_url import SafeUrl
+from app.shared.value_objects.source_name import SourceName
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
@@ -60,12 +62,20 @@ def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> MagicMock:
     return ctx
 
 
-def _attrs() -> StagedArticleAttributes:
-    return StagedArticleAttributes(
-        title="Pending Title",
-        published_at_hint=PublishedAt(datetime(2026, 5, 1, tzinfo=UTC)),
-        prefer_html_title=False,
+def _observed(url: str, title: str = "Pending Title") -> ObservedArticle:
+    return ObservedArticle(
+        source_name=SourceName("Sample Source"),
+        source_url=CanonicalArticleUrl(url),
+        title=ObservedField(value=title, origin=ObservedOrigin.feed),
+        published_at=ObservedField(
+            value=PublishedAt(datetime(2026, 5, 1, tzinfo=UTC)),
+            origin=ObservedOrigin.feed,
+        ),
     )
+
+
+def _attrs(url: str = "https://example.com/disp/staged") -> dict:
+    return _observed(url).model_dump(mode="json", by_alias=True)
 
 
 async def _make_pending(
@@ -89,13 +99,8 @@ async def _make_pending(
     if status == "open":
         enqueue = PendingHtmlEnqueue(db_session)
         pending_id = await enqueue.enqueue(
-            IncompleteArticle(
-                title="Pending Title",
-                source_id=source.id,
-                source_url=CanonicalArticleUrl(url),
-                published_at_hint=PublishedAt(datetime(2026, 5, 1, tzinfo=UTC)),
-                prefer_html_title=False,
-            ),
+            _observed(url),
+            source_id=source.id,
             ready_at=ready_at or datetime.now(UTC),
         )
         assert pending_id is not None
@@ -113,7 +118,7 @@ async def _make_pending(
         url=safe_url,
         source_id=source.id,
         status=status,
-        staged_attributes=_attrs().model_dump(mode="json"),
+        staged_attributes=_attrs(url),
         ready_at=ready_at,
         leased_until=leased_until,
         attempt_count=attempt_count,

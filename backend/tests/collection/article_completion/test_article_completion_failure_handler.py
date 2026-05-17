@@ -34,14 +34,33 @@ from app.collection.article_completion.retry_policy import (
     BLIP_POLICY,
     RETRY_AFTER_POLICY,
 )
-from app.collection.domain.incomplete_article import (
-    IncompleteArticle,
+from app.collection.domain.observed_article import (
+    ObservedArticle,
+    ObservedField,
+    ObservedOrigin,
+)
+from app.collection.domain.source_completion_profile import (
+    DEFAULT_PROFILE,
+    SourceCompletionProfile,
 )
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.source_fetch.pending_enqueue import PendingHtmlEnqueue
 from app.models.news_source import NewsSource, SourceType
 from app.models.pending_html_article import PendingHtmlArticle
 from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
+from app.shared.value_objects.source_name import SourceName
+
+
+class _StubResolver:
+    """``CompletionProfileResolver`` stub (production 45-registry と非結合)。"""
+
+    async def resolve(
+        self, *, source_id: int, source_name: SourceName | None
+    ) -> SourceCompletionProfile:
+        return DEFAULT_PROFILE
+
+    async def resolve_name(self, *, source_id: int) -> SourceName:
+        return SourceName("Resolved Source")
 
 
 @pytest.fixture
@@ -59,13 +78,15 @@ async def tc_source(db_session: AsyncSession) -> NewsSource:
     return source
 
 
-def _incomplete(source: NewsSource, url: str) -> IncompleteArticle:
-    return IncompleteArticle(
-        title="TC Title",
-        source_id=source.id,
+def _observed(source: NewsSource, url: str) -> ObservedArticle:
+    return ObservedArticle(
+        source_name=SourceName(str(source.name)),
         source_url=CanonicalArticleUrl(url),
-        published_at_hint=PublishedAt(datetime(2026, 4, 30, 12, 0, 0, tzinfo=UTC)),
-        prefer_html_title=False,
+        title=ObservedField(value="TC Title", origin=ObservedOrigin.feed),
+        published_at=ObservedField(
+            value=PublishedAt(datetime(2026, 4, 30, 12, 0, 0, tzinfo=UTC)),
+            origin=ObservedOrigin.feed,
+        ),
     )
 
 
@@ -80,13 +101,14 @@ async def _make_ready(
     Task 層が ``try_advance_from`` で構築するのと同じ厚い precondition 型。
     """
     pending_id = await PendingHtmlEnqueue(db_session).enqueue(
-        _incomplete(source, url),
+        _observed(source, url),
+        source_id=source.id,
         ready_at=datetime.now(UTC) - timedelta(seconds=1),
     )
     assert pending_id is not None
     await db_session.commit()
     now = datetime.now(UTC)
-    repository = ArticleCompletionRepository(db_session)
+    repository = ArticleCompletionRepository(db_session, _StubResolver())
     ids = await repository.claim_ready_batch(
         limit=10,
         now=now,

@@ -31,6 +31,11 @@ from urllib.parse import urljoin, urlparse
 
 from lxml import etree, html
 
+from app.collection.domain.observed_article import ObservedOrigin
+from app.collection.domain.source_completion_profile import (
+    HTML_TITLE_PROFILE,
+    SourceCompletionProfile,
+)
 from app.collection.external_fetch_errors import FetchParseError
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.raw_http_client import RawHttpClient
@@ -67,9 +72,11 @@ class ORNLAdapter:
     """ORNL news listing ``SourceAdapter`` (HTML listing, Pattern H)。
 
     listing HTML は title を持たないため、Adapter は URL slug をプレースホルダ
-    として ``title`` に詰め、``prefer_html_title=True`` で HTML 補完経路を
-    強制する。``published_at=None`` も intentional (listing は lastmod 情報を
-    持たない前提、HTML 抽出側で確定させる)。
+    として ``title`` に詰める。仮タイトル性は per-source の補完方針
+    (``completion_profile = HTML_TITLE_PROFILE``、title=``html_preferred``)
+    が表し、passport builder が ``ObservedArticle`` 経路に固定する。
+    ``published_at=None`` も intentional (listing は lastmod 情報を持たない
+    前提、HTML 抽出側で確定させる)。
 
     business critical drop:
     - 同一 listing 内 URL dedup (同 href が複数 ``<a>`` で出る物理問題への対処)
@@ -79,6 +86,8 @@ class ORNLAdapter:
 
     NAME: ClassVar[str] = "ORNL"
     ENDPOINT_URL: ClassVar[str] = "https://www.ornl.gov/news"
+    observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.listing
+    completion_profile: ClassVar[SourceCompletionProfile] = HTML_TITLE_PROFILE
     LISTING_URL: ClassVar[str] = "https://www.ornl.gov/news"
     DETAIL_LINK_XPATH: ClassVar[str] = '//a[starts-with(@href, "/news/")]'
     DETAIL_URL_PREFIX: ClassVar[str] = "https://www.ornl.gov"
@@ -126,7 +135,6 @@ class ORNLAdapter:
                 url=url,
                 body=None,
                 published_at=None,
-                prefer_html_title=True,
             )
             emitted += 1
             if emitted >= self.MAX_ENTRIES:

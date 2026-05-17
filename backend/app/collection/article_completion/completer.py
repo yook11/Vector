@@ -1,4 +1,4 @@
-"""Stage 2 の補完境界 — ``IncompleteArticle`` を完成形に解決する純粋関数。
+"""Stage 2 の補完境界 — ``ObservedArticle`` を完成形に解決する純粋関数。
 
 ``ArticleCompletionService`` が「資格判定 → 完成 → 分類 → 後始末 → 永続化」を
 1 メソッドに混ぜていた問題を解くため、**完成させる**責務だけをここに切り出す。
@@ -12,6 +12,11 @@
   これで失敗 3 種 (fetch 例外 / ``ExtractionEmpty`` / ``ArticleCompletionFailed``)
   が単一の閉じ union に揃い、caller は ``isinstance`` 1 回 + 委譲で読める。
 
+merge は ``complete_with_html`` (profile 駆動の純粋関数) に委譲する。HTML 抽出
+結果が ``ExtractionEmpty`` でも値のまま渡し、``body=html_required`` のとき
+``complete_with_html`` 内で ``ExtractionEmpty`` を値返しする (旧 completer の
+短絡と等価。spec §7 等価表)。本境界は profile を知らず Ready 経由で受け取る。
+
 失敗を ``CompletionDisposition`` に分類するのは ``disposition.py``、状態遷移 + log
 は ``failure_handling.py`` の責務。本境界はそのどちらも知らない (責務をファイルで
 分離)。
@@ -24,12 +29,12 @@ from dataclasses import dataclass
 
 from app.collection.article_completion.extractor import (
     ArticleHtmlExtractor,
-    ExtractedContent,
     ExtractionEmpty,
 )
+from app.collection.article_completion.promotion import complete_with_html
+from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.completion import ArticleCompletionFailed
-from app.collection.domain.incomplete_article import IncompleteArticle
 from app.collection.external_fetch_errors import ExternalFetchError
 
 
@@ -54,7 +59,7 @@ CompletionFailure = FetchFailed | ExtractionEmpty | ArticleCompletionFailed
 
 
 class ArticleHtmlCompleter:
-    """``IncompleteArticle`` を HTML 取得 + 抽出 + promotion で完成させる純粋境界。
+    """``ObservedArticle`` を HTML 取得 + profile 駆動 merge で完成させる純粋境界。
 
     ``complete`` が単一エントリポイント。副作用を持たず、出力型を閉じた union で
     保証することだけが責務。``extractor_factory`` は test seam (default は
@@ -68,28 +73,26 @@ class ArticleHtmlCompleter:
         self._extractor_factory = extractor_factory
 
     async def complete(
-        self, incomplete: IncompleteArticle
+        self, ready: ReadyForArticleCompletion
     ) -> AnalyzableArticle | CompletionFailure:
-        """HTML 取得 → 抽出判定 → promotion で ``AnalyzableArticle`` を解決する。
+        """HTML 取得 → profile 駆動 merge で ``AnalyzableArticle`` を解決する。
 
-        fetch origin failure は ``FetchFailed`` に、``ExtractionEmpty`` / promotion
-        失敗 (``ArticleCompletionFailed``) は値のまま返す。成功時のみ昇格済
-        ``AnalyzableArticle`` を返す。例外は外に出さない (境界で値に畳む)。
+        fetch origin failure は ``FetchFailed`` に畳む。``ExtractionEmpty`` /
+        promotion 失敗 (``ArticleCompletionFailed``) は ``complete_with_html``
+        が値で返す。成功時のみ昇格済 ``AnalyzableArticle`` を返す。例外は外に
+        出さない (境界で値に畳む)。
         """
         extractor = self._extractor_factory()
 
         try:
-            html_result = await extractor.fetch(incomplete.source_url.as_safe_url())
+            html_result = await extractor.fetch(ready.source_url.as_safe_url())
         except ExternalFetchError as exc:
             return FetchFailed(error=exc)
 
-        if isinstance(html_result, ExtractionEmpty):
-            return html_result
-
-        assert isinstance(html_result, ExtractedContent)  # noqa: S101
-
-        return incomplete.complete_with_html(
-            body=html_result.body,
-            html_published_at=html_result.published_at,
-            html_title=html_result.title,
+        return complete_with_html(
+            ready.observed,
+            ready.profile,
+            html_result,
+            source_id=ready.source_id,
+            source_url=ready.source_url,
         )

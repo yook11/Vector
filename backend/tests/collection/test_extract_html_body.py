@@ -32,10 +32,16 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.extraction.domain.ready import ExtractionTrigger
 from app.collection.article_completion.ready import ReadyForArticleCompletion
-from app.collection.domain.incomplete_article import IncompleteArticle
+from app.collection.domain.observed_article import (
+    ObservedArticle,
+    ObservedField,
+    ObservedOrigin,
+)
+from app.collection.domain.source_completion_profile import DEFAULT_PROFILE
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.tasks import extract_html_body
 from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
+from app.shared.value_objects.source_name import SourceName
 
 _SERVICE_EXECUTE = (
     "app.collection.article_completion.service.ArticleCompletionService.execute"
@@ -53,17 +59,22 @@ def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> MagicMock:
 
 def _fixed_ready(pending_id: int = 42) -> ReadyForArticleCompletion:
     """task 冒頭の Ready 自構築が返す固定 Ready。"""
+    url = CanonicalArticleUrl("https://example.com/a")
     return ReadyForArticleCompletion(
         pending_id=pending_id,
         source_id=1,
         attempt_count=1,
-        incomplete_article=IncompleteArticle(
-            title="Title",
-            source_id=1,
-            source_url=CanonicalArticleUrl("https://example.com/a"),
-            published_at_hint=PublishedAt(datetime(2026, 5, 1, tzinfo=UTC)),
-            prefer_html_title=False,
+        observed=ObservedArticle(
+            source_name=SourceName("Example"),
+            source_url=url,
+            title=ObservedField(value="Title", origin=ObservedOrigin.feed),
+            published_at=ObservedField(
+                value=PublishedAt(datetime(2026, 5, 1, tzinfo=UTC)),
+                origin=ObservedOrigin.feed,
+            ),
         ),
+        profile=DEFAULT_PROFILE,
+        source_url=url,
     )
 
 

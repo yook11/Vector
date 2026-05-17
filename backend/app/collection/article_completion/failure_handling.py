@@ -82,7 +82,7 @@ class ArticleCompletionFailureHandler:
         policy.max_attempts`` なら ``closed``、未満なら ``open`` + 未来の
         ``ready_at`` に戻す。policy 別のコード分岐は持たない。
         """
-        canonical_url = ready.incomplete_article.source_url
+        canonical_url = ready.source_url
         policy = disposition.policy
         delay_minutes = effective_delay_minutes(
             policy,
@@ -135,7 +135,7 @@ class ArticleCompletionFailureHandler:
         detail: str | None = None,
     ) -> None:
         """終端失敗を ``closed`` に閉じる。"""
-        canonical_url = ready.incomplete_article.source_url
+        canonical_url = ready.source_url
         now = datetime.now(UTC)
         async with self._session_factory() as session:
             updated = await ArticleCompletionRepository(session).close_claimed(

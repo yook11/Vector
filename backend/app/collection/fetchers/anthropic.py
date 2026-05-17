@@ -30,6 +30,11 @@ from urllib.parse import urlparse
 
 from lxml import etree
 
+from app.collection.domain.observed_article import ObservedOrigin
+from app.collection.domain.source_completion_profile import (
+    HTML_TITLE_PROFILE,
+    SourceCompletionProfile,
+)
 from app.collection.external_fetch_errors import FetchParseError
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.raw_http_client import RawHttpClient
@@ -77,8 +82,10 @@ class AnthropicAdapter:
     """Anthropic news の sitemap-only ``SourceAdapter`` (Pattern H)。
 
     sitemap.xml は title を持たないため、Adapter は URL slug をプレースホルダ
-    として ``title`` に詰め、``prefer_html_title=True`` で HTML 補完経路を
-    強制する (passport builder で Incomplete 経路に固定される)。
+    として ``title`` に詰める。仮タイトル性は per-source の補完方針
+    (``completion_profile = HTML_TITLE_PROFILE``、title=``html_preferred``)
+    が表し、passport builder が ``ObservedArticle`` 経路に固定する
+    (HTML 補完で title を上書きさせる)。
 
     business critical drop:
     - ``URL_PATH_PREFIX="/news/"`` で news セクション以外を弾く
@@ -88,6 +95,8 @@ class AnthropicAdapter:
 
     NAME: ClassVar[str] = "Anthropic"
     ENDPOINT_URL: ClassVar[str] = "https://www.anthropic.com/sitemap.xml"
+    observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.sitemap
+    completion_profile: ClassVar[SourceCompletionProfile] = HTML_TITLE_PROFILE
     URL_PATH_PREFIX: ClassVar[str] = "/news/"
     MAX_ENTRIES: ClassVar[int] = 30
 
@@ -118,5 +127,4 @@ class AnthropicAdapter:
                 url=loc,
                 body=None,
                 published_at=lastmod,
-                prefer_html_title=True,
             )

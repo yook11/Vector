@@ -1,4 +1,4 @@
-"""``IncompleteArticle.complete_with_html`` の失敗型。
+"""``complete_with_html`` (Pattern H profile 駆動 promotion) の失敗型。
 
 Pattern H の HTML 補完で merge / invariant 違反が起きた場合の戻り値。
 失敗種別は ``ArticleCompletionFailureCode``。これを Stage 2 がどう扱うか
@@ -33,7 +33,7 @@ class ArticleCompletionFailureReason(BaseModel):
 
 
 class ArticleCompletionFailed(BaseModel):
-    """``IncompleteArticle.complete_with_html`` の失敗戻り値。"""
+    """``complete_with_html`` (Pattern H promotion) の失敗戻り値。"""
 
     model_config = ConfigDict(frozen=True)
 

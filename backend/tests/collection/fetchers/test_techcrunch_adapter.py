@@ -2,13 +2,13 @@
 
 実 RSS fixture を ``_FakeRssParser`` 経由で食わせ、Adapter が body 候補を
 持たない ``FetchedArticle`` を yield することと、``ArticleFetcher`` 経由で
-``IncompleteArticle`` のみが yield されることを構造的に検証する。
+``ObservedArticle`` のみが yield されることを構造的に検証する。
 
 検証観点:
 
 - ``collect()`` が yield する全 ``FetchedArticle`` で ``body is None``
 - title / url は entry から正しく渡る (空でない fixture を前提)
-- ``ArticleFetcher`` 経由で全 passport が ``IncompleteArticle`` (Ready 混入 0)
+- ``ArticleFetcher`` 経由で全 passport が ``ObservedArticle`` (Ready 混入 0)
 - ``NAME`` / ``ENDPOINT_URL`` が class attr として読める
 """
 
@@ -18,9 +18,7 @@ from pathlib import Path
 
 import feedparser
 
-from app.collection.domain.incomplete_article import (
-    IncompleteArticle,
-)
+from app.collection.domain.observed_article import ObservedArticle
 from app.collection.fetchers.article_fetcher import ArticleFetcher
 from app.collection.fetchers.techcrunch import TechCrunchAdapter
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
@@ -77,14 +75,14 @@ async def test_collect_propagates_title_and_url_from_entries() -> None:
 
 async def test_article_fetcher_yields_incomplete_only() -> None:
     """``ArticleFetcher(TechCrunchAdapter())`` 経路で yield される passport は
-    全 ``IncompleteArticle`` (Ready 経路への昇格は構造的に発生しない)。"""
+    全 ``ObservedArticle`` (Ready 経路への昇格は構造的に発生しない)。"""
     adapter = TechCrunchAdapter(parser=_FakeRssParser("techcrunch_rss.xml"))  # type: ignore[arg-type]
     fetcher = ArticleFetcher(adapter)
 
     passports = [item async for item in fetcher.fetch(source_id=1)]
 
     assert passports
-    assert all(isinstance(p, IncompleteArticle) for p in passports)
+    assert all(isinstance(p, ObservedArticle) for p in passports)
 
 
 def test_exposes_name_and_endpoint_url() -> None:

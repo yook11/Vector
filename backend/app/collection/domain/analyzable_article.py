@@ -1,7 +1,7 @@
 """``AnalyzableArticle`` — 分析工程への進行が型で保証された記事 (passport)。
 
 collection BC の出口契約。Pattern R Fetcher が直接構築する / Pattern H で
-``IncompleteArticle.complete_with_html`` が補完成功時に返す。各 Fetcher は
+``complete_with_html`` (profile 駆動 promotion) が補完成功時に返す。各 Fetcher は
 何が取れようがこれを満たして次工程に渡す (per-entry の補足情報は Outcome
 純化により持ち越さない)。``id`` を持たない: identity は永続化後に
 analysis 以降の Stage が扱う概念で、本 BC の関心ではない。
@@ -27,7 +27,7 @@ class AnalyzableArticle(BaseModel):
     """次工程進行保証型 (passport)。
 
     Pattern R Fetcher が直接構築する / Pattern H で
-    ``IncompleteArticle.complete_with_html`` が補完成功時に返す。
+    ``complete_with_html`` (profile 駆動 promotion) が補完成功時に返す。
 
     Invariants (Field で構造的に保証):
     - ``title``: 1..500 文字

@@ -29,6 +29,11 @@ import re
 from collections.abc import AsyncIterator
 from typing import ClassVar
 
+from app.collection.domain.observed_article import ObservedOrigin
+from app.collection.domain.source_completion_profile import (
+    DEFAULT_PROFILE,
+    SourceCompletionProfile,
+)
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.rss_parser import RssEntry, RssParser
 
@@ -68,6 +73,8 @@ class BaseFrontiersJournalAdapter:
 
     NAME: ClassVar[str]
     ENDPOINT_URL: ClassVar[str]
+    observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.feed
+    completion_profile: ClassVar[SourceCompletionProfile] = DEFAULT_PROFILE
     JOURNAL_NAME: ClassVar[str]
     LANGUAGE: ClassVar[str] = _DEFAULT_LANGUAGE
 

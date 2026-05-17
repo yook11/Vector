@@ -19,9 +19,7 @@ from typing import Any
 
 import pytest
 
-from app.collection.domain.incomplete_article import (
-    IncompleteArticle,
-)
+from app.collection.domain.observed_article import ObservedArticle
 from app.collection.external_fetch_errors import (
     FetchAccessDeniedError,
     FetchOriginServerError,
@@ -97,7 +95,7 @@ async def test_adapter_yields_passports_from_fixture() -> None:
     items = await _collect(ArticleFetcher(adapter).fetch(source_id=1))
     assert_at_least_one_passport(items)
     # fixture は url 持ち 4 件 / url=None 2 件 → 4 件のみ pass
-    pendings = [o for o in items if isinstance(o, IncompleteArticle)]
+    pendings = [o for o in items if isinstance(o, ObservedArticle)]
     assert len(pendings) == 4
 
 

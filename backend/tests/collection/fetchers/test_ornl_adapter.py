@@ -6,8 +6,9 @@
 - ``EXCLUDED_PATHS`` (category landing) は yield されない
 - 同一 listing 内で同 URL が複数回 ``<a>`` から検出されても dedup される
 - ``MAX_ENTRIES=30`` で切り出される
-- 全 passport は ``IncompleteArticle`` (``prefer_html_title=True``)
-- ``published_at_hint=None`` (listing には lastmod 情報がない前提)
+- 全 passport は ``ObservedArticle`` (``completion_profile =
+  HTML_TITLE_PROFILE``、title=``html_preferred``)
+- ``published_at=None`` (listing には lastmod 情報がない前提)
 - ``RawHttpClient`` の ``ExternalFetchError`` は Adapter を素通しする
 """
 
@@ -18,9 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from app.collection.domain.incomplete_article import (
-    IncompleteArticle,
-)
+from app.collection.domain.observed_article import ObservedArticle
 from app.collection.external_fetch_errors import (
     FetchOriginServerError,
     FetchResourceNotFoundError,
@@ -80,7 +79,7 @@ async def test_category_landings_dropped() -> None:
     yielded_paths = {
         "/" + str(item.source_url).split("/", 3)[3].rstrip("/")
         for item in items
-        if isinstance(item, IncompleteArticle)
+        if isinstance(item, ObservedArticle)
     }
     for excluded in ORNLAdapter.EXCLUDED_PATHS:
         assert excluded not in yielded_paths
@@ -105,8 +104,8 @@ async def test_all_passports_are_incomplete() -> None:
     items = await _collect(ArticleFetcher(_build_adapter()).fetch(source_id=1))
     assert items
     for item in items:
-        assert isinstance(item, IncompleteArticle)
-        assert item.published_at_hint is None
+        assert isinstance(item, ObservedArticle)
+        assert item.published_at is None
 
 
 @pytest.mark.asyncio

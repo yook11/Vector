@@ -1,8 +1,16 @@
 """ReadyForArticleCompletion — Stage 2 実行可能状態の precondition 型 (厚い Ready)。
 
-Stage 2 (Pattern H: ``IncompleteArticle`` → ``AnalyzableArticle`` 補完) を実行して
-よい状態を構造保証し、かつ補完処理に必要な値 (``incomplete_article`` /
-stale worker guard 用 ``attempt_count``) を全揃えで運ぶ厚い Ready。
+Stage 2 (Pattern H: ``ObservedArticle`` → ``AnalyzableArticle`` 補完) を実行して
+よい状態を構造保証し、かつ補完処理に必要な値を全揃えで運ぶ厚い Ready:
+
+- ``observed`` — 取得済み事実 (``ObservedArticle``)。identity (``source_url``)
+  は ``Field(exclude=True)`` で JSONB に焼かれないため、repository が
+  ``url`` 列から復元して別フィールド ``source_url`` で運ぶ。
+- ``profile`` — per-source 補完方針 (``SourceCompletionProfile``)。記事は
+  ポリシーを持てない (policy は per-source) ため Ready が運ぶ。
+- ``source_url`` — 記事 identity (``pending_html_articles.url`` 列が
+  authoritative)。``ObservedArticle`` は持たない (pending 行の関心)。
+- ``attempt_count`` — stale worker guard / retry 予算判定の SSoT。
 
 設計方針 (2026-05-11 確定、案 3。memory ``project_typed_pipeline_preconditions``):
 Ready 型は **処理に必要な値の全揃え** を構造保証する厚い型であり、**下流 Stage
@@ -18,7 +26,7 @@ Ready を構築する。Stage 3 ``ReadyForExtraction`` / Stage 4 ``ReadyForAsses
 ``ArticleCompletionService.execute(ready)`` に直接渡すため、taskiq formatter の
 Pydantic BaseModel 要求 (memory ``feedback_taskiq_basemodel_required``) は非該当。
 ``status='running'`` precondition は repository query が構造保証する
-(memory ``feedback_structural_guarantee``)。``IncompleteArticle`` (Pydantic) を
+(memory ``feedback_structural_guarantee``)。``ObservedArticle`` (Pydantic) を
 内包する frozen dataclass という passport 形状を維持する。
 """
 
@@ -27,7 +35,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from app.collection.domain.incomplete_article import IncompleteArticle
+from app.collection.domain.observed_article import ObservedArticle
+from app.collection.domain.source_completion_profile import SourceCompletionProfile
+from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 
 
 class ArticleCompletionPreconditionProtocol(Protocol):
@@ -57,7 +67,9 @@ class ReadyForArticleCompletion:
     pending_id: int
     source_id: int
     attempt_count: int
-    incomplete_article: IncompleteArticle
+    observed: ObservedArticle
+    profile: SourceCompletionProfile
+    source_url: CanonicalArticleUrl
 
     @classmethod
     async def try_advance_from(

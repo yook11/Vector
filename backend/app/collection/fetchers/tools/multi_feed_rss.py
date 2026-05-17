@@ -43,6 +43,11 @@ from typing import ClassVar
 
 import structlog
 
+from app.collection.domain.observed_article import ObservedOrigin
+from app.collection.domain.source_completion_profile import (
+    DEFAULT_PROFILE,
+    SourceCompletionProfile,
+)
 from app.collection.external_fetch_errors import ExternalFetchError
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.rss_parser import ParseMode, RssEntry, RssParser
@@ -62,6 +67,8 @@ class BaseMultiFeedRssAdapter:
 
     NAME: ClassVar[str]
     ENDPOINT_URL: ClassVar[str]
+    observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.feed
+    completion_profile: ClassVar[SourceCompletionProfile] = DEFAULT_PROFILE
     FEEDS: ClassVar[tuple[str, ...]]
     PARSE_MODE: ClassVar[ParseMode] = "text"
 

@@ -3,7 +3,7 @@
 per-source 設計: TC の RSS feed は ``<description>`` にリード文 (~140 chars)
 しか含まず ``<content:encoded>`` も提供しない (`spec
 collection-source-rss-research.md`)。Fetcher は **RSS 本文を信用しない** —
-``body_candidate=None`` を builder に渡し、URL + title を ``IncompleteArticle``
+``body_candidate=None`` を builder に渡し、URL + title を ``ObservedArticle``
 として yield する。後段の ``ArticleCompletionService`` が HTML 本文を取得 +
 promotion する 2 段構成。
 
@@ -20,6 +20,8 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
+from app.collection.domain.observed_article import ObservedOrigin
+from app.collection.domain.source_completion_profile import DEFAULT_PROFILE
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.fetchers.tools.rss_parser import RssParser
 
@@ -35,6 +37,8 @@ class TechCrunchAdapter:
 
     NAME = "TechCrunch"
     ENDPOINT_URL = "https://techcrunch.com/feed/"
+    observed_origin = ObservedOrigin.feed
+    completion_profile = DEFAULT_PROFILE
 
     def __init__(self, parser: RssParser | None = None) -> None:
         self._parser = parser or RssParser()
