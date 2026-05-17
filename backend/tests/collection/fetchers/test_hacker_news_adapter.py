@@ -1,13 +1,13 @@
-"""``HackerNewsAdapter`` (Algolia Search API, Pattern H) の不変条件テスト (P2)。
+"""``HackerNewsSource`` (Algolia Search API, Pattern H) の不変条件テスト (P2-D)。
 
-P2 で identity ClassVar を廃し ``source_name`` を ``__init__`` 注入で受ける
-(endpoint は API base のため collect() では未使用、identity は
-``ArticleSource`` が所有)。検証する不変条件:
+P2-D で ``HackerNewsSource`` は identity / 補完方針を ``ClassVar`` 宣言し
+``collect(tools)`` で ``tools.hacker_news.search_recent_stories(...)`` を使う。
+検証する不変条件:
 
 - fixture hits から ``ArticleFetcher`` 経由で永続化 passport が yield される
 - ``url=None`` の Ask HN 系 hit は yield 自体されない (passport が増えない)
 - 空 title の hit は yield されない
-- ``HackerNewsApiClient`` の ``ExternalFetchError`` は machinery を素通しする
+- ``HackerNewsApiClient`` の ``ExternalFetchError`` は ``collect`` を素通しする
 - ``search_recent_stories`` に renamed kwargs (sliding window / min_points /
   hits_per_page) が必ず渡る (旧仕様: 24h window / points>20 / 100 hits)
 """
@@ -21,8 +21,7 @@ from typing import Any
 
 import pytest
 
-from app.collection.domain.observed_article import ObservedArticle, ObservedOrigin
-from app.collection.domain.source_completion_profile import DEFAULT_PROFILE
+from app.collection.domain.observed_article import ObservedArticle
 from app.collection.external_fetch_errors import (
     FetchAccessDeniedError,
     FetchOriginServerError,
@@ -32,11 +31,10 @@ from app.collection.fetchers.hacker_news import (
     HN_HITS_PER_PAGE,
     HN_MIN_POINTS,
     HN_SLIDING_WINDOW_SECONDS,
-    HackerNewsAdapter,
+    HackerNewsSource,
 )
 from app.collection.fetchers.tools.algolia_hn_client import HackerNewsApiClient
-from app.collection.sources.article_source import ArticleSource
-from app.shared.value_objects.source_name import SourceName
+from tests.collection.fetchers._fixture_tools import fixture_tools
 from tests.collection.fetchers._invariant import (
     Passport,
     assert_at_least_one_passport,
@@ -96,15 +94,8 @@ async def _collect(it: AsyncIterator[Passport]) -> list[Passport]:
 
 
 def _fetcher(client: HackerNewsApiClient) -> ArticleFetcher:
-    """HN machinery を本番同 profile (api+DEFAULT) でラップ。"""
-    source = ArticleSource(
-        name=SourceName(_HN_NAME),
-        endpoint_url="https://hn.algolia.com/api/v1/search_by_date",
-        observed_origin=ObservedOrigin.api,
-        completion_profile=DEFAULT_PROFILE,
-        adapter_factory=lambda: HackerNewsAdapter(source_name=_HN_NAME, client=client),
-    )
-    return ArticleFetcher(source)
+    """HN Source を fixture client 注入で ``ArticleFetcher`` 化 (api+DEFAULT)。"""
+    return ArticleFetcher(HackerNewsSource, tools=fixture_tools(hacker_news=client))
 
 
 @pytest.mark.asyncio
@@ -123,7 +114,7 @@ async def test_adapter_persistence_invariants() -> None:
 
 
 @pytest.mark.asyncio
-async def test_url_none_hits_skipped_in_adapter() -> None:
+async def test_url_none_hits_skipped_in_collect() -> None:
     """``url=None`` (Ask HN 系) は yield 自体されない (passport にならない)。"""
     only_url_none = [
         {
@@ -144,7 +135,7 @@ async def test_url_none_hits_skipped_in_adapter() -> None:
 
 
 @pytest.mark.asyncio
-async def test_empty_title_hits_skipped_in_adapter() -> None:
+async def test_empty_title_hits_skipped_in_collect() -> None:
     only_empty_title = [
         {
             "objectID": "x",
@@ -159,7 +150,7 @@ async def test_empty_title_hits_skipped_in_adapter() -> None:
 
 @pytest.mark.asyncio
 async def test_client_kwargs_carry_quality_filters() -> None:
-    """Adapter は旧仕様 (24h window / points>20 / 100 hits) を client に渡す。"""
+    """Source は旧仕様 (24h window / points>20 / 100 hits) を client に渡す。"""
     fake = _FakeHNClient([])
     await _collect(_fetcher(fake).fetch(source_id=1))
     assert fake.calls == [
@@ -173,7 +164,7 @@ async def test_client_kwargs_carry_quality_filters() -> None:
 
 
 @pytest.mark.asyncio
-async def test_non_recoverable_error_propagates_through_adapter() -> None:
+async def test_non_recoverable_error_propagates_through_collect() -> None:
     fetcher = _fetcher(
         _RaisingHNClient(FetchAccessDeniedError(status_code=403, reason="forbidden"))
     )
@@ -182,7 +173,7 @@ async def test_non_recoverable_error_propagates_through_adapter() -> None:
 
 
 @pytest.mark.asyncio
-async def test_recoverable_error_propagates_through_adapter() -> None:
+async def test_recoverable_error_propagates_through_collect() -> None:
     fetcher = _fetcher(
         _RaisingHNClient(
             FetchOriginServerError(status_code=500, reason="internal_error")

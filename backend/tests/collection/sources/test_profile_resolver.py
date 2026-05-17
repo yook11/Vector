@@ -1,8 +1,10 @@
 """``RegistryCompletionProfileResolver`` の profile 解決テスト (DB 非依存)。
 
-P2 で ``SOURCES`` は ``SourceName → ArticleSource`` になり、resolver は
-``SOURCES.get(SourceName(...))`` で集約を引き ``.completion_profile`` フィールド
-を直読みする (``make_adapter()`` 非呼出 = 無 instantiation 契約)。
+P2-D で ``SOURCES`` は ``SourceName → ArticleSource`` (= Source クラス
+オブジェクト) になり、resolver は ``SOURCES.get(SourceName(...))`` で引き
+``.completion_profile`` をクラス属性として直読みする (``collect`` 非呼出。
+``make_adapter`` / ``adapter_factory`` 不在で class-ref 構造保証 = 無
+instantiation 契約)。
 
 ``source_name`` を渡す経路は DB (``news_sources`` 引き) を一切触らないため
 session 不要で unit 検証できる。本テストは「登録ソースは自身の profile を、

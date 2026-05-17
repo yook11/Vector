@@ -1,7 +1,7 @@
-"""``MicrosoftResearchAdapter`` machinery の per-source 単体テスト (P2)。
+"""``MicrosoftResearchSource`` の per-source 単体テスト (P2-D)。
 
-P2 で identity ClassVar を廃し ``endpoint_url`` / ``source_name`` を
-``__init__`` 注入で受ける。固定する固有不変条件:
+P2-D で identity / 補完方針は ``ClassVar``、取得手順は ``collect(tools)``
+classmethod になった。固定する固有不変条件:
 
 - fixture の ``<content:encoded>`` に WordPress 固定 footer
   ("... appeared first on Microsoft Research.") が付くが、yield される
@@ -12,44 +12,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import feedparser
-
-from app.collection.fetchers.microsoft_research import MicrosoftResearchAdapter
+from app.collection.fetchers.microsoft_research import MicrosoftResearchSource
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
-from app.collection.fetchers.tools.rss_parser import RssEntry, normalize_entry
+from tests.collection.fetchers._fixture_tools import fixture_tools
 
 _FIXTURES_DIR = Path(__file__).parent.parent.parent / "fixtures"
 _FIXTURE = "microsoft_research_rss.xml"
 _FOOTER_MARKER = "appeared first on Microsoft Research"
 
 
-class _FakeRssParser:
-    def __init__(self, fixture_filename: str) -> None:
-        self._fixture_filename = fixture_filename
-
-    async def fetch(
-        self,
-        *,
-        endpoint_url: str,
-        source_name: str,
-        parse_mode: str = "text",
-        **_: object,
-    ) -> list[RssEntry]:
-        path = _FIXTURES_DIR / self._fixture_filename
-        feed = feedparser.parse(path.read_bytes())
-        return [normalize_entry(raw) for raw in feed.entries]
-
-
-def _adapter() -> MicrosoftResearchAdapter:
-    return MicrosoftResearchAdapter(
-        endpoint_url="https://www.microsoft.com/en-us/research/feed/",
-        source_name="Microsoft Research",
-        parser=_FakeRssParser(_FIXTURE),  # type: ignore[arg-type]
-    )
-
-
-async def _collect(adapter: MicrosoftResearchAdapter) -> list[FetchedArticle]:
-    return [item async for item in adapter.collect()]
+async def _collect() -> list[FetchedArticle]:
+    tools = fixture_tools(rss_fixture=_FIXTURE)
+    return [item async for item in MicrosoftResearchSource.collect(tools)]
 
 
 async def test_fixture_actually_contains_footer() -> None:
@@ -59,7 +33,7 @@ async def test_fixture_actually_contains_footer() -> None:
 
 
 async def test_footer_is_stripped_from_body() -> None:
-    items = await _collect(_adapter())
+    items = await _collect()
 
     assert items
     for item in items:

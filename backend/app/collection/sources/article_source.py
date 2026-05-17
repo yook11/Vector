@@ -1,52 +1,58 @@
-"""``ArticleSource`` — ニュースソースの明示的集約 (P2 の北極星)。
+"""``ArticleSource`` — ニュースソースを 1 クラスで表す構造的契約 (P2-D)。
 
-P1 までは「``XxxAdapter`` クラスが per-source 知識 (identity / 補完方針) と
-取得実装 (``collect()``) を同居させ、4 共有基底を継承で共有する」暫定構造
-だった。P2 は identity / 補完方針を本集約へ集約し、取得実装は ``Source`` が
-factory 経由で持つ machinery (``SourceAdapter``) として分離する
-(spec §4.1 「1 つの ``Source`` 集約が (a) どう fetch するか=Adapter、
-(b) どう完成させるか=``SourceCompletionProfile`` を所有」)。
+P1 まで: ``XxxAdapter`` が per-source 知識 (identity / 補完方針) と取得実装
+(``collect()``) を同居させ 4 共有基底を継承で共有。
+P2(B+C): identity / 補完方針を frozen 集約 ``ArticleSource`` へ移し、取得実装は
+``adapter_factory`` 経由の ``SourceAdapter`` machinery として分離 (中間 Adapter
+概念が残存)。
+P2-D (本実装): Adapter 概念を**除去**。1 ソース = 1 ``XxxSource`` クラスが
+identity / 補完方針を ``ClassVar`` で宣言し ``collect(tools)`` で取得手順を
+宣言する。**クラスオブジェクトそのもの**が本 Protocol を満たす (registry は
+class を値に持つ)。
 
-無 instantiation 契約 (spec §4.6 ガードレール): ``SOURCES`` は本集約の
-**インスタンス** を保持するが、``adapter_factory`` は遅延 callable のため
-レジストリ構築 (module import) 時に ``RssParser()`` 等の machinery は
-構築されない。Stage 2 の profile 解決は ``completion_profile`` フィールドを
-直読みするだけで ``make_adapter()`` を呼ばない。よって「profile を読むのに
-adapter を作らない」が class-ref ではなく **設計** で担保される。
+無 instantiation 契約 (spec §4.6 ガードレール): ``SOURCES`` は Source クラス
+オブジェクトを値に持ち、Stage 2 の profile 解決は ``completion_profile`` を
+クラス属性として副作用ゼロで読む。``make_adapter()`` / ``adapter_factory`` は
+存在しないため「profile を読むのに machinery を作る」経路が**構造的に不能**
+(P2 の設計担保より強い class-ref 構造保証)。
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import AsyncIterator
+from typing import Protocol, runtime_checkable
 
 from app.collection.domain.observed_article import ObservedOrigin
 from app.collection.domain.source_completion_profile import SourceCompletionProfile
-from app.collection.fetchers.tools.fetched_article import SourceAdapter
+from app.collection.fetchers.tools.fetch_tools import FetchTools
+from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.shared.value_objects.source_name import SourceName
 
 
-@dataclass(frozen=True, slots=True)
-class ArticleSource:
-    """1 ニュースソース = identity + 補完方針 + 取得 machinery factory。
+@runtime_checkable
+class ArticleSource(Protocol):
+    """1 ニュースソース = identity + 補完方針 + 取得手順 (class-level 契約)。
 
-    - ``name`` / ``endpoint_url``: ソースの identity (``Fetcher`` Protocol が
-      要求する ``NAME`` / ``ENDPOINT_URL`` の出所。``name`` は
-      ``news_sources.name`` = ``FETCHERS`` dispatch キーと一致する)。
+    具体 ``XxxSource`` は ``name`` / ``endpoint_url`` / ``observed_origin`` /
+    ``completion_profile`` を ``ClassVar`` 宣言し、``collect`` を
+    ``@classmethod`` 実装する。よって**クラスオブジェクト ``XxxSource`` 自体**
+    が本 Protocol を構造的に満たす (``XxxSource.collect(tools)`` は bound
+    classmethod = 本 Protocol の ``collect(self, tools)`` に一致)。Protocol 側は
+    instance 形シグネチャで宣言する (``@classmethod`` は書かない)。
+
+    - ``name`` / ``endpoint_url``: ソース identity (``Fetcher`` Protocol が要求
+      する ``NAME`` / ``ENDPOINT_URL`` の出所。``name`` は ``news_sources.name``
+      = ``FETCHERS`` dispatch キーと一致)。
     - ``observed_origin``: 取得チャネル (audit。``ObservedField.origin`` に
       stamp、merge は駆動しない)。
-    - ``completion_profile``: 補完方針 (Stage 2 が直読み)。
-    - ``adapter_factory``: 取得 machinery の遅延構築 callable。``make_adapter``
-      は Stage 1 の fetch 実行時のみ呼ばれる (レジストリ構築時には呼ばない =
-      無 instantiation 契約)。
+    - ``completion_profile``: 補完方針 (Stage 2 が無 instantiation で直読み)。
+    - ``collect``: ``FetchTools`` (共通取得道具箱) を使って外部取得し
+      ``FetchedArticle`` を逐次 yield する取得手順の宣言。
     """
 
     name: SourceName
     endpoint_url: str
     observed_origin: ObservedOrigin
     completion_profile: SourceCompletionProfile
-    adapter_factory: Callable[[], SourceAdapter]
 
-    def make_adapter(self) -> SourceAdapter:
-        """取得 machinery を構築する (Stage 1 fetch 実行時のみ呼ぶ)。"""
-        return self.adapter_factory()
+    def collect(self, tools: FetchTools) -> AsyncIterator[FetchedArticle]: ...

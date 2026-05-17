@@ -1,4 +1,4 @@
-"""ESA Djangoplicity 規格 RSS の取得 machinery (P2)。
+"""ESA Djangoplicity 規格 RSS の取得共通処理 (P2-D)。
 
 Djangoplicity の News module は ESA/Hubble / ESA/Webb / ESO / ALMA で広く
 使われる科学広報 CMS。RSS 出力は構造的に同型:
@@ -11,56 +11,46 @@ Djangoplicity の News module は ESA/Hubble / ESA/Webb / ESO / ALMA で広く
 - ``<author>`` / ``<dc:creator>`` / ``<media:*>`` は **未提供**
 - 本文は HTML 詳細ページに委譲 (Pattern H)
 
-P1 までは継承基底で subclass が ``NAME`` / ``ENDPOINT_URL`` ClassVar を
-差し替える形だった。P2 で per-source 知識は
-``ArticleSource`` 集約へ移し、本クラスは Source 定義 (``source_name`` /
-``endpoint_url``) を ``__init__`` で受け取る汎用 machinery になった
-(ESA/Hubble / ESA/Webb は ``ArticleSource`` の ``adapter_factory`` から本
-machinery を構築する)。
+P1 まで: 継承基底で subclass が ``NAME`` / ``ENDPOINT_URL`` ClassVar を差替。
+P2(B+C): ``DjangoplicityAdapter`` 汎用 machinery クラス。
+P2-D (本実装): Adapter 概念除去。本モジュールは **free function**
+``djangoplicity_entries(tools, *, source_name, endpoint_url)`` として共通処理
+だけを持つ。具体 Source (``ESAHubbleSource`` / ``ESAWebbSource``) は
+``esa/sources.py`` が宣言し、その ``collect`` が本関数へ委譲する
+(``_common.py`` に source-specific な事実を残さない)。
+
+判定順は旧 ``BaseDjangoplicityFetcher._convert_entry`` を踏襲: title 空のみ
+structural gate (URL canonical は ``passport_builder`` に委譲)。本文は HTML
+詳細ページに委譲する Pattern H のため ``body=None`` で渡す。
 """
 
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
+from app.collection.fetchers.tools.fetch_tools import FetchTools
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
-from app.collection.fetchers.tools.rss_parser import RssParser
 
 
-class DjangoplicityAdapter:
-    """ESA Djangoplicity News module の Pattern H 取得 machinery (P2)。
-
-    判定順は旧 ``BaseDjangoplicityFetcher._convert_entry`` を踏襲: title 空
-    のみ structural gate (URL canonical は ``passport_builder`` に委譲)。本文は
-    HTML 詳細ページに委譲する Pattern H のため ``body=None`` で渡す。
-    ``source_name`` / ``endpoint_url`` は ``ArticleSource.adapter_factory`` から
-    受け取る (identity の出所は Source 集約)。
-    """
-
-    def __init__(
-        self,
-        *,
-        source_name: str,
-        endpoint_url: str,
-        parser: RssParser | None = None,
-    ) -> None:
-        self._source_name = source_name
-        self._endpoint_url = endpoint_url
-        self._parser = parser or RssParser()
-
-    async def collect(self) -> AsyncIterator[FetchedArticle]:
-        entries = await self._parser.fetch(
-            endpoint_url=self._endpoint_url,
-            source_name=self._source_name,
-            parse_mode="bytes",
+async def djangoplicity_entries(
+    tools: FetchTools,
+    *,
+    source_name: str,
+    endpoint_url: str,
+) -> AsyncIterator[FetchedArticle]:
+    """ESA Djangoplicity News module RSS の Pattern H 取得共通処理。"""
+    entries = await tools.rss.fetch(
+        endpoint_url=endpoint_url,
+        source_name=source_name,
+        parse_mode="bytes",
+    )
+    for entry in entries:
+        title = entry.title[:500]
+        if not title:
+            continue
+        yield FetchedArticle(
+            title=title,
+            url=entry.link,
+            body=None,
+            published_at=entry.published,
         )
-        for entry in entries:
-            title = entry.title[:500]
-            if not title:
-                continue
-            yield FetchedArticle(
-                title=title,
-                url=entry.link,
-                body=None,
-                published_at=entry.published,
-            )

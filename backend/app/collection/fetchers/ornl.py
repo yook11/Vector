@@ -1,16 +1,11 @@
-"""ORNL (Oak Ridge National Laboratory) 用 Fetcher / Adapter — HTML listing Pattern H。
+"""ORNL (Oak Ridge National Laboratory) 用 Source — HTML listing Pattern H。
 
 RSS / Atom / sitemap.xml を提供しないため、``/news`` listing ページから記事
-URL を列挙する Pattern H 経路。
-
-旧 ``ORNLNewsFetcher`` は ``BaseHtmlListingFetcher`` を継承していたが、P5 で
-``SourceAdapter`` 化するに際し、本基底のサブクラスは ORNL 1 本のみで共用が
-成立しない (``feedback_no_share_different_problems``) ため、新 ``ORNLAdapter``
-は standalone とし、parse helper (``_parse_listing`` / ``_slug_from_url``)
-を本モジュール内に最小限再実装する。
-
-旧 ``ORNLNewsFetcher`` / ``BaseHtmlListingFetcher`` は P6 strategy 切替 +
-P7 cleanup まで無変更で残置 (Strangler 移行)。
+URL を列挙する Pattern H 経路。listing には title が無いため URL slug を
+プレースホルダとして ``title`` に詰め、仮タイトル性は per-source の補完方針
+(``completion_profile = HTML_TITLE_PROFILE``、title=``html_preferred``) が
+表す。parse helper (``_parse_listing`` / ``_slug_from_url``) は本モジュール
+内に閉じる (Anthropic sitemap と問題が違うため共用しない)。
 
 per-source 設計 (実 listing 観察ベース):
 
@@ -18,7 +13,7 @@ per-source 設計 (実 listing 観察ベース):
 - detail link 抽出: ``//a[starts-with(@href, "/news/")]`` で 17 件取得
 - category landing 除外: ``EXCLUDED_PATHS`` で path 単位の denylist
 - robots.txt: /news/ 配下を許可、Crawl-delay 10s (host-level limiter は
-  別レイヤ責務、Adapter 内で sleep しない)
+  別レイヤ責務、collect 内で sleep しない)
 - License: U.S. Government work、attribution_label = "ORNL · DOE"
 """
 
@@ -31,9 +26,15 @@ from urllib.parse import urljoin, urlparse
 
 from lxml import etree, html
 
+from app.collection.domain.observed_article import ObservedOrigin
+from app.collection.domain.source_completion_profile import (
+    HTML_TITLE_PROFILE,
+    SourceCompletionProfile,
+)
 from app.collection.external_fetch_errors import FetchParseError
+from app.collection.fetchers.tools.fetch_tools import FetchTools
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
-from app.collection.fetchers.tools.raw_http_client import RawHttpClient
+from app.shared.value_objects.source_name import SourceName
 
 
 def _parse_listing(
@@ -63,13 +64,9 @@ def _slug_from_url(url: str) -> str:
     return path.rsplit("/", 1)[-1]
 
 
-class ORNLAdapter:
-    """ORNL news listing ``SourceAdapter`` (HTML listing, Pattern H)。
+class ORNLSource:
+    """ORNL news listing ``XxxSource`` (HTML listing, Pattern H)。
 
-    listing HTML は title を持たないため、Adapter は URL slug をプレースホルダ
-    として ``title`` に詰める。仮タイトル性は per-source の補完方針
-    (``completion_profile = HTML_TITLE_PROFILE``、title=``html_preferred``)
-    が表し、passport builder が ``ObservedArticle`` 経路に固定する。
     ``published_at=None`` も intentional (listing は lastmod 情報を持たない
     前提、HTML 抽出側で確定させる)。
 
@@ -78,6 +75,11 @@ class ORNLAdapter:
     - ``EXCLUDED_PATHS`` denylist (category landing を弾く)
     - ``MAX_ENTRIES=30`` 切り出し (大量バックフィル防止)
     """
+
+    name: ClassVar[SourceName] = SourceName("ORNL")
+    endpoint_url: ClassVar[str] = "https://www.ornl.gov/news"
+    observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.listing
+    completion_profile: ClassVar[SourceCompletionProfile] = HTML_TITLE_PROFILE
 
     DETAIL_LINK_XPATH: ClassVar[str] = '//a[starts-with(@href, "/news/")]'
     DETAIL_URL_PREFIX: ClassVar[str] = "https://www.ornl.gov"
@@ -94,32 +96,21 @@ class ORNLAdapter:
     )
     MAX_ENTRIES: ClassVar[int] = 30
 
-    def __init__(
-        self,
-        *,
-        endpoint_url: str,
-        source_name: str,
-        client: RawHttpClient | None = None,
-    ) -> None:
-        self._endpoint_url = endpoint_url
-        self._source_name = source_name
-        self._client = client or RawHttpClient(accept="text/html")
-
-    async def collect(self) -> AsyncIterator[FetchedArticle]:
-        listing_bytes = await self._client.fetch(
-            url=self._endpoint_url, source_name=self._source_name
+    @classmethod
+    async def collect(cls, tools: FetchTools) -> AsyncIterator[FetchedArticle]:
+        client = tools.raw_http(accept="text/html")
+        listing_bytes = await client.fetch(
+            url=cls.endpoint_url, source_name=str(cls.name)
         )
         try:
             urls = await asyncio.to_thread(
                 _parse_listing,
                 listing_bytes,
-                detail_link_xpath=self.DETAIL_LINK_XPATH,
-                detail_url_prefix=self.DETAIL_URL_PREFIX,
+                detail_link_xpath=cls.DETAIL_LINK_XPATH,
+                detail_url_prefix=cls.DETAIL_URL_PREFIX,
             )
         except etree.LxmlError as e:
-            raise FetchParseError(
-                f"html listing parse error: {self._source_name}: {e}"
-            ) from e
+            raise FetchParseError(f"html listing parse error: {cls.name}: {e}") from e
 
         seen: set[str] = set()
         emitted = 0
@@ -127,9 +118,9 @@ class ORNLAdapter:
             if url in seen:
                 continue
             seen.add(url)
-            if urlparse(url).path in self.EXCLUDED_PATHS:
+            if urlparse(url).path in cls.EXCLUDED_PATHS:
                 continue
-            slug = _slug_from_url(url) or self._source_name
+            slug = _slug_from_url(url) or str(cls.name)
             yield FetchedArticle(
                 title=slug,
                 url=url,
@@ -137,5 +128,5 @@ class ORNLAdapter:
                 published_at=None,
             )
             emitted += 1
-            if emitted >= self.MAX_ENTRIES:
+            if emitted >= cls.MAX_ENTRIES:
                 break

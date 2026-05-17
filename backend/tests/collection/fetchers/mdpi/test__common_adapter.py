@@ -1,8 +1,8 @@
-"""``MDPICrossrefAdapter`` (Crossref API, Pattern R) の不変条件テスト (P2)。
+"""``mdpi_items`` 共通処理 (Crossref API, Pattern R) の不変条件テスト (P2-D)。
 
-P2 で MDPI 4 journal は継承具象を廃し、``MDPICrossrefAdapter`` 汎用 machinery
-に per-source config (``source_name`` / ``issn``) を注入する形になった。
-本テストは Materials config を代表に machinery の判定契約を pin する。
+P2-D で MDPI 4 journal は ``mdpi_items`` 共通処理を共有する独立 Source クラス
+(``mdpi/sources.py``) になった。本テストは ``MDPIMaterialsSource`` を代表に
+共通処理の判定契約を pin する。
 
 検証する不変条件:
 
@@ -10,7 +10,7 @@ P2 で MDPI 4 journal は継承具象を廃し、``MDPICrossrefAdapter`` 汎用 
 - ``type != "journal-article"`` / non-CC-BY-4 license / 必須フィールド欠落の
   各 drop branch が yield 自体されない (passport にならない)
 - 全 passport が ``AnalyzableArticle`` で ``source_url = https://doi.org/<DOI>``
-- ``CrossrefApiClient`` の ``ExternalFetchError`` は machinery を素通しする
+- ``CrossrefApiClient`` の ``ExternalFetchError`` は ``collect`` を素通しする
 - ``works()`` には注入 ``issn`` / ``from_pub_date`` / ``rows`` (既定 20) が渡る
 """
 
@@ -25,17 +25,14 @@ from typing import Any
 import pytest
 
 from app.collection.domain.analyzable_article import AnalyzableArticle
-from app.collection.domain.observed_article import ObservedOrigin
-from app.collection.domain.source_completion_profile import DEFAULT_PROFILE
 from app.collection.external_fetch_errors import (
     FetchAccessDeniedError,
     FetchOriginServerError,
 )
 from app.collection.fetchers.article_fetcher import ArticleFetcher
-from app.collection.fetchers.mdpi._common import MDPICrossrefAdapter
+from app.collection.fetchers.mdpi.sources import MDPIMaterialsSource
 from app.collection.fetchers.tools.crossref_client import CrossrefApiClient
-from app.collection.sources.article_source import ArticleSource
-from app.shared.value_objects.source_name import SourceName
+from tests.collection.fetchers._fixture_tools import fixture_tools
 from tests.collection.fetchers._invariant import (
     Passport,
     assert_at_least_one_passport,
@@ -102,17 +99,8 @@ async def _collect(it: AsyncIterator[Passport]) -> list[Passport]:
 
 
 def _fetcher(client: CrossrefApiClient) -> ArticleFetcher:
-    """Materials config の ``MDPICrossrefAdapter`` を ``ArticleSource`` でラップ。"""
-    source = ArticleSource(
-        name=SourceName("MDPI Materials"),
-        endpoint_url="https://api.crossref.org/works",
-        observed_origin=ObservedOrigin.feed,
-        completion_profile=DEFAULT_PROFILE,
-        adapter_factory=lambda: MDPICrossrefAdapter(
-            source_name="MDPI Materials", issn=_MATERIALS_ISSN, client=client
-        ),
-    )
-    return ArticleFetcher(source)
+    """``MDPIMaterialsSource`` を fixture client 注入で ``ArticleFetcher`` 化。"""
+    return ArticleFetcher(MDPIMaterialsSource, tools=fixture_tools(crossref=client))
 
 
 def _build(items: list[dict[str, Any]]) -> ArticleFetcher:
@@ -220,7 +208,7 @@ async def test_client_kwargs_carry_issn_lookback_rows() -> None:
 
 
 @pytest.mark.asyncio
-async def test_non_recoverable_error_propagates_through_adapter() -> None:
+async def test_non_recoverable_error_propagates_through_collect() -> None:
     fetcher = _fetcher(
         _RaisingCrossrefClient(
             FetchAccessDeniedError(status_code=403, reason="forbidden")
@@ -231,7 +219,7 @@ async def test_non_recoverable_error_propagates_through_adapter() -> None:
 
 
 @pytest.mark.asyncio
-async def test_recoverable_error_propagates_through_adapter() -> None:
+async def test_recoverable_error_propagates_through_collect() -> None:
     fetcher = _fetcher(
         _RaisingCrossrefClient(
             FetchOriginServerError(status_code=500, reason="internal_error")

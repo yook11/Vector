@@ -1,11 +1,11 @@
-"""Hacker News 用 Fetcher — Pattern H 設計 (Algolia HN Search API)。
+"""Hacker News 用 Source — Pattern H 設計 (Algolia HN Search API)。
 
-collection-acquisition-redesign Phase 1e。HN はソース仕様が API ベース (Algolia
-HN Search API) で RSS / Atom feed を持たないが、API hit の ``url`` は外部の
-任意サイトを指すため本文は HN 側で取得できない。よって ``AnalyzableArticle``
-invariant (body ≥ 50 chars) を API 単独で満たせず、``ObservedArticle`` を
-yield し後段 ``extract_html_body`` task が trafilatura で本文を取得する
-**Pattern H 構造同型** で実装する (FierceBiotech / The Register と同じ流れ)。
+HN はソース仕様が API ベース (Algolia HN Search API) で RSS / Atom feed を
+持たないが、API hit の ``url`` は外部の任意サイトを指すため本文は HN 側で
+取得できない。よって ``AnalyzableArticle`` invariant (body ≥ 50 chars) を
+API 単独で満たせず、``ObservedArticle`` を yield し後段 ``extract_html_body``
+task が trafilatura で本文を取得する **Pattern H 構造同型** で実装する
+(FierceBiotech / The Register と同じ流れ)。
 
 per-source 設計 (実 API 応答ベース):
 
@@ -22,24 +22,24 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from datetime import datetime
+from typing import ClassVar
 
-import httpx
-import structlog
-
+from app.collection.domain.observed_article import ObservedOrigin
+from app.collection.domain.source_completion_profile import (
+    DEFAULT_PROFILE,
+    SourceCompletionProfile,
+)
 from app.collection.domain.value_objects import PublishedAt
-from app.collection.fetchers.tools.algolia_hn_client import HackerNewsApiClient
+from app.collection.fetchers.tools.fetch_tools import FetchTools
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
-
-logger = structlog.get_logger(__name__)
+from app.shared.value_objects.source_name import SourceName
 
 # HN フェッチャー固有の運用値。Settings (環境変数経由) には載せない。
-# 動的に切り替える運用要件が出た時点でコンストラクタ DI に昇格させる。
+# 動的に切り替える運用要件が出た時点で config として宣言へ昇格させる。
 HN_MIN_POINTS = 20
 HN_HITS_PER_PAGE = 100
 HN_SLIDING_WINDOW_SECONDS = 86400  # 24h
 
-_USER_AGENT = "Mozilla/5.0 (compatible; Vector/1.0; +https://github.com/yook11/Vector)"
-_HTTP_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
 _TITLE_MAX_LENGTH = 500
 
 
@@ -54,29 +54,23 @@ def _parse_created_at(raw: str | None) -> PublishedAt | None:
     return PublishedAt(value=dt)
 
 
-class HackerNewsAdapter:
-    """Hacker News 用 ``SourceAdapter`` (Algolia Search API, Pattern H)。
+class HackerNewsSource:
+    """Hacker News 用 ``XxxSource`` (Algolia Search API, Pattern H)。
 
-    旧 ``HackerNewsFetcher`` と同じ Algolia HN Search API 経路を踏襲しつつ、
-    HTTP 取得 + numericFilters 構築は ``HackerNewsApiClient`` に委譲する。
-    business critical drop (``url=None`` skip / 空 title skip) は本 Adapter
-    内で旧 Fetcher と同位置・同順序で実施する (``hacker_news.py:131-137``
-    に対応)。``points>20`` の閾値は Algolia の server-side numericFilters で
-    既に drop 済のため Adapter では行わない (旧仕様維持)。
+    business critical drop (``url=None`` skip / 空 title skip) は collect 内で
+    旧 Fetcher と同位置・同順序で実施する。``points>20`` の閾値は Algolia の
+    server-side numericFilters で既に drop 済のため collect では行わない。
     """
 
-    def __init__(
-        self,
-        *,
-        source_name: str,
-        client: HackerNewsApiClient | None = None,
-    ) -> None:
-        self._source_name = source_name
-        self._client = client or HackerNewsApiClient()
+    name: ClassVar[SourceName] = SourceName("Hacker News")
+    endpoint_url: ClassVar[str] = "https://hn.algolia.com/api/v1/search_by_date"
+    observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.api
+    completion_profile: ClassVar[SourceCompletionProfile] = DEFAULT_PROFILE
 
-    async def collect(self) -> AsyncIterator[FetchedArticle]:
-        hits = await self._client.search_recent_stories(
-            source_name=self._source_name,
+    @classmethod
+    async def collect(cls, tools: FetchTools) -> AsyncIterator[FetchedArticle]:
+        hits = await tools.hacker_news.search_recent_stories(
+            source_name=str(cls.name),
             min_points=HN_MIN_POINTS,
             window_seconds=HN_SLIDING_WINDOW_SECONDS,
             hits_per_page=HN_HITS_PER_PAGE,
@@ -87,7 +81,7 @@ class HackerNewsAdapter:
                 continue  # Ask HN / text-only post: external URL を持たない
             title = (hit.get("title") or "")[:_TITLE_MAX_LENGTH]
             if not title:
-                continue  # business: title 欠落 skip (旧 hacker_news.py:135-137)
+                continue  # business: title 欠落 skip
             published = _parse_created_at(hit.get("created_at"))
             yield FetchedArticle(
                 title=title,

@@ -1,4 +1,4 @@
-"""FierceBiotech 用 Fetcher — Pattern H (RSS で URL 列挙、本文は HTML 必須)。
+"""FierceBiotech 用 Source — Pattern H (RSS で URL 列挙、本文は HTML 必須)。
 
 per-source 設計 (実 RSS 観察ベース):
 
@@ -13,11 +13,18 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from typing import ClassVar
 from zoneinfo import ZoneInfo
 
+from app.collection.domain.observed_article import ObservedOrigin
+from app.collection.domain.source_completion_profile import (
+    DEFAULT_PROFILE,
+    SourceCompletionProfile,
+)
 from app.collection.domain.value_objects import PublishedAt
+from app.collection.fetchers.tools.fetch_tools import FetchTools
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
-from app.collection.fetchers.tools.rss_parser import RssParser
+from app.shared.value_objects.source_name import SourceName
 
 _FB_PUBDATE_FORMAT = "%b %d, %Y %I:%M%p"
 """FierceBiotech 固有の pubDate format ("Apr 30, 2026 6:11pm")。
@@ -48,8 +55,8 @@ def _parse_fb_published_at(raw: str | None) -> PublishedAt | None:
     return PublishedAt(value=dt.replace(tzinfo=_FB_TZ).astimezone(UTC))
 
 
-class FierceBiotechAdapter:
-    """FierceBiotech 用 SourceAdapter (Pattern H)。
+class FierceBiotechSource:
+    """FierceBiotech 用 ``XxxSource`` (Pattern H)。
 
     ``<pubDate>`` が RFC822 非準拠 ("Apr 30, 2026 6:11pm") で
     ``feedparser.published_parsed`` が落ちる場合のみ ``_parse_fb_published_at``
@@ -58,21 +65,16 @@ class FierceBiotechAdapter:
     しない (HTML 抽出後に merge 確定)。
     """
 
-    def __init__(
-        self,
-        *,
-        endpoint_url: str,
-        source_name: str,
-        parser: RssParser | None = None,
-    ) -> None:
-        self._endpoint_url = endpoint_url
-        self._source_name = source_name
-        self._parser = parser or RssParser()
+    name: ClassVar[SourceName] = SourceName("FierceBiotech")
+    endpoint_url: ClassVar[str] = "https://www.fiercebiotech.com/rss/xml"
+    observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.feed
+    completion_profile: ClassVar[SourceCompletionProfile] = DEFAULT_PROFILE
 
-    async def collect(self) -> AsyncIterator[FetchedArticle]:
-        entries = await self._parser.fetch(
-            endpoint_url=self._endpoint_url,
-            source_name=self._source_name,
+    @classmethod
+    async def collect(cls, tools: FetchTools) -> AsyncIterator[FetchedArticle]:
+        entries = await tools.rss.fetch(
+            endpoint_url=cls.endpoint_url,
+            source_name=str(cls.name),
             parse_mode="text",
         )
         for entry in entries:

@@ -1,9 +1,9 @@
-"""``ORNLAdapter`` (HTML listing, Pattern H) の不変条件テスト (P2)。
+"""``ORNLSource`` (HTML listing, Pattern H) の不変条件テスト (P2-D)。
 
-P2 で ``ORNLAdapter`` は identity ClassVar を廃し ``endpoint_url`` /
-``source_name`` を ``__init__`` 注入で受ける machinery になった
+P2-D で ``ORNLSource`` は identity / 補完方針を ``ClassVar`` 宣言し
+``collect(tools)`` で ``tools.raw_http(accept="text/html")`` を使う
 (``DETAIL_LINK_XPATH`` / ``DETAIL_URL_PREFIX`` / ``EXCLUDED_PATHS`` /
-``MAX_ENTRIES`` は machinery tuning 定数として残置)。
+``MAX_ENTRIES`` は tuning 定数として ``ClassVar`` 残置)。
 
 検証する不変条件:
 
@@ -14,7 +14,7 @@ P2 で ``ORNLAdapter`` は identity ClassVar を廃し ``endpoint_url`` /
 - 全 passport は ``ObservedArticle`` (``completion_profile =
   HTML_TITLE_PROFILE``、title=``html_preferred``)
 - ``published_at=None`` (listing には lastmod 情報がない前提)
-- ``RawHttpClient`` の ``ExternalFetchError`` は machinery を素通しする
+- ``RawHttpClient`` の ``ExternalFetchError`` は ``collect`` を素通しする
 """
 
 from __future__ import annotations
@@ -24,17 +24,15 @@ from pathlib import Path
 
 import pytest
 
-from app.collection.domain.observed_article import ObservedArticle, ObservedOrigin
-from app.collection.domain.source_completion_profile import HTML_TITLE_PROFILE
+from app.collection.domain.observed_article import ObservedArticle
 from app.collection.external_fetch_errors import (
     FetchOriginServerError,
     FetchResourceNotFoundError,
 )
 from app.collection.fetchers.article_fetcher import ArticleFetcher
-from app.collection.fetchers.ornl import ORNLAdapter, _parse_listing
+from app.collection.fetchers.ornl import ORNLSource, _parse_listing
 from app.collection.fetchers.tools.raw_http_client import RawHttpClient
-from app.collection.sources.article_source import ArticleSource
-from app.shared.value_objects.source_name import SourceName
+from tests.collection.fetchers._fixture_tools import fixture_tools
 from tests.collection.fetchers._invariant import (
     Passport,
     assert_at_least_one_passport,
@@ -42,7 +40,6 @@ from tests.collection.fetchers._invariant import (
 )
 
 _FIXTURE = Path(__file__).parent.parent.parent / "fixtures" / "ornl_listing.html"
-_ENDPOINT = "https://www.ornl.gov/news"
 
 
 class _FakeRawHttpClient(RawHttpClient):
@@ -66,17 +63,12 @@ async def _collect(it: AsyncIterator[Passport]) -> list[Passport]:
 
 
 def _fetcher(client: RawHttpClient) -> ArticleFetcher:
-    """ORNL machinery を本番同 profile (listing+HTML_TITLE) でラップ。"""
-    source = ArticleSource(
-        name=SourceName("ORNL"),
-        endpoint_url=_ENDPOINT,
-        observed_origin=ObservedOrigin.listing,
-        completion_profile=HTML_TITLE_PROFILE,
-        adapter_factory=lambda: ORNLAdapter(
-            endpoint_url=_ENDPOINT, source_name="ORNL", client=client
-        ),
-    )
-    return ArticleFetcher(source)
+    """ORNL Source を fixture raw client 注入で ``ArticleFetcher`` 化。
+
+    profile / origin は ``ORNLSource`` の ``ClassVar`` 直読み
+    (listing + HTML_TITLE、本番経路と byte 同一)。
+    """
+    return ArticleFetcher(ORNLSource, tools=fixture_tools(raw=client))
 
 
 def _build_fetcher() -> ArticleFetcher:
@@ -104,7 +96,7 @@ async def test_category_landings_dropped() -> None:
         for item in items
         if isinstance(item, ObservedArticle)
     }
-    for excluded in ORNLAdapter.EXCLUDED_PATHS:
+    for excluded in ORNLSource.EXCLUDED_PATHS:
         assert excluded not in yielded_paths
 
 
@@ -119,7 +111,7 @@ async def test_listing_internal_dedup_applied() -> None:
 @pytest.mark.asyncio
 async def test_max_entries_capped() -> None:
     items = await _collect(_build_fetcher().fetch(source_id=1))
-    assert len(items) <= ORNLAdapter.MAX_ENTRIES
+    assert len(items) <= ORNLSource.MAX_ENTRIES
 
 
 @pytest.mark.asyncio
@@ -132,7 +124,7 @@ async def test_all_passports_are_incomplete() -> None:
 
 
 @pytest.mark.asyncio
-async def test_non_recoverable_error_propagates_through_adapter() -> None:
+async def test_non_recoverable_error_propagates_through_collect() -> None:
     fetcher = _fetcher(
         _RaisingRawHttpClient(
             FetchResourceNotFoundError(status_code=404, reason="not_found")
@@ -143,7 +135,7 @@ async def test_non_recoverable_error_propagates_through_adapter() -> None:
 
 
 @pytest.mark.asyncio
-async def test_recoverable_error_propagates_through_adapter() -> None:
+async def test_recoverable_error_propagates_through_collect() -> None:
     fetcher = _fetcher(
         _RaisingRawHttpClient(
             FetchOriginServerError(status_code=500, reason="internal_error")
@@ -156,8 +148,8 @@ async def test_recoverable_error_propagates_through_adapter() -> None:
 def test_listing_xpath_extracts_only_news_links() -> None:
     urls = _parse_listing(
         _FIXTURE.read_bytes(),
-        detail_link_xpath=ORNLAdapter.DETAIL_LINK_XPATH,
-        detail_url_prefix=ORNLAdapter.DETAIL_URL_PREFIX,
+        detail_link_xpath=ORNLSource.DETAIL_LINK_XPATH,
+        detail_url_prefix=ORNLSource.DETAIL_URL_PREFIX,
     )
     assert urls
     assert all(url.startswith("https://www.ornl.gov/news/") for url in urls)

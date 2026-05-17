@@ -1,4 +1,4 @@
-"""JPCERT/CC 用 Fetcher (RDF / RSS 1.0)。
+"""JPCERT/CC 用 Source (RDF / RSS 1.0)。
 
 per-source 設計: feed が RDF (RSS 1.0) ルート (``<rdf:RDF>``)。``<title>``
 は多行 + インデント空白を含むため ``RssParser.normalize_entry`` の whitespace
@@ -8,29 +8,31 @@ per-source 設計: feed が RDF (RSS 1.0) ルート (``<rdf:RDF>``)。``<title>`
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from typing import ClassVar
 
+from app.collection.domain.observed_article import ObservedOrigin
+from app.collection.domain.source_completion_profile import (
+    DEFAULT_PROFILE,
+    SourceCompletionProfile,
+)
+from app.collection.fetchers.tools.fetch_tools import FetchTools
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
-from app.collection.fetchers.tools.rss_parser import RssParser
+from app.shared.value_objects.source_name import SourceName
 
 
-class JPCERTAdapter:
-    """JPCERT/CC 用 SourceAdapter (Pattern H、body 不信用)。"""
+class JPCERTSource:
+    """JPCERT/CC 用 ``XxxSource`` (Pattern H、body 不信用)。"""
 
-    def __init__(
-        self,
-        *,
-        endpoint_url: str,
-        source_name: str,
-        parser: RssParser | None = None,
-    ) -> None:
-        self._endpoint_url = endpoint_url
-        self._source_name = source_name
-        self._parser = parser or RssParser()
+    name: ClassVar[SourceName] = SourceName("JPCERT/CC")
+    endpoint_url: ClassVar[str] = "https://www.jpcert.or.jp/rss/jpcert.rdf"
+    observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.feed
+    completion_profile: ClassVar[SourceCompletionProfile] = DEFAULT_PROFILE
 
-    async def collect(self) -> AsyncIterator[FetchedArticle]:
-        entries = await self._parser.fetch(
-            endpoint_url=self._endpoint_url,
-            source_name=self._source_name,
+    @classmethod
+    async def collect(cls, tools: FetchTools) -> AsyncIterator[FetchedArticle]:
+        entries = await tools.rss.fetch(
+            endpoint_url=cls.endpoint_url,
+            source_name=str(cls.name),
             parse_mode="text",
         )
         for entry in entries:

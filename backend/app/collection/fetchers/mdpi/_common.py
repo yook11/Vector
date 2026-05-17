@@ -1,4 +1,4 @@
-"""MDPI 4 journal の Crossref API 経路 取得 machinery (P2)。
+"""MDPI 4 journal の Crossref API 経路 取得共通処理 (P2-D)。
 
 MDPI は ``https://www.mdpi.com/<ISSN>/feed`` の RSS を提供するが、Cloudflare WAF
 で 4 ISSN 全 403 となり常時 block される (2026-05-04 PoC 確認済)。OAI-PMH
@@ -8,8 +8,6 @@ MDPI は ``https://www.mdpi.com/<ISSN>/feed`` の RSS を提供するが、Cloud
 代わりに Crossref API ``https://api.crossref.org/works`` の per-ISSN filter 経路
 を採用する (4 ISSN 全 200 OK + abstract 800-2000 chars + license CC BY 4.0 +
 DOI 直接取得を PoC で確認)。
-
-per-source 設計:
 
 - **Pattern R** via ``abstract``: 800-2000 chars の JATS XML 形式、``_strip_jats``
   で ``<jats:p>`` 含む markup を剥がす
@@ -24,14 +22,16 @@ per-source 設計:
   と整合させて初回投入時 backfill を防ぐ
 - ``rows`` / ``sort=published`` / ``order=desc`` で新着優先
 
-P1 までは継承基底で subclass が ``NAME`` / ``ISSN`` / ``JOURNAL_NAME``
-ClassVar を差し替える形だった。P2 で per-source
-知識は ``ArticleSource`` 集約へ移し、本クラスは Source 定義 (``source_name`` /
-``issn`` / ``lookback_days`` / ``rows_per_request``) を ``__init__`` で受け取る
-汎用 machinery になった。``ISSN`` は取得 logic に必須 (Crossref filter) のため
-config として注入する。``JOURNAL_NAME`` / ``LANGUAGE`` は取得 logic に一切
-寄与しない attribution メタだったため journal 識別は ``ArticleSource.name``
-に一本化した。
+P1 まで: 継承基底で subclass が ``NAME`` / ``ISSN`` / ``JOURNAL_NAME`` ClassVar
+を差替。
+P2(B+C): ``MDPICrossrefAdapter`` 汎用 machinery クラス。
+P2-D (本実装): Adapter 概念除去。本モジュールは **free function**
+``mdpi_items(tools, *, source_name, issn, lookback_days, rows_per_request)``
+として共通処理だけを持つ。具体 Source (``MDPI*Source`` ×4) は
+``mdpi/sources.py`` が宣言し、その ``collect`` が本関数へ委譲する
+(``_common.py`` に source-specific な事実を残さない)。``ISSN`` は取得 logic に
+必須 (Crossref filter) のため Source が宣言し引数で渡す。journal 識別は
+``XxxSource.name`` に一本化。
 """
 
 from __future__ import annotations
@@ -41,21 +41,10 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-import httpx
-import structlog
-
 from app.collection.domain.value_objects import PublishedAt
-from app.collection.fetchers.tools.crossref_client import CrossrefApiClient
+from app.collection.fetchers.tools.fetch_tools import FetchTools
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
 
-logger = structlog.get_logger(__name__)
-
-# Crossref polite pool 降格防止のため User-Agent に mailto: が必須。
-_USER_AGENT = (
-    "Mozilla/5.0 (compatible; Vector/1.0; "
-    "+https://github.com/yook11/Vector; mailto:crossref-contact@example.invalid)"
-)
-_HTTP_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
 _CC_BY_4_URL_RE = re.compile(r"creativecommons\.org/licenses/by/4\.0", re.IGNORECASE)
 # JATS prefix (<jats:p>) と HTML tag を一括で剥がす
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
@@ -132,65 +121,53 @@ def _extract_title(item: dict[str, Any]) -> str:
     return ""
 
 
-class MDPICrossrefAdapter:
-    """MDPI journal の Crossref API 経路 取得 machinery (Pattern R, P2)。
+async def mdpi_items(
+    tools: FetchTools,
+    *,
+    source_name: str,
+    issn: str,
+    lookback_days: int = 7,
+    rows_per_request: int = 20,
+) -> AsyncIterator[FetchedArticle]:
+    """MDPI journal の Crossref API 経路 取得共通処理 (Pattern R)。
 
-    HTTP 取得 + per-ISSN filter + sort/order 構築は ``CrossrefApiClient`` に
-    委譲する。machinery は item ごとの type/license/title/abstract/date/DOI
-    判定だけを担う (旧 ``BaseMDPICrossrefFetcher._convert_record`` の判定順を
-    完全踏襲)。``source_name`` / ``issn`` / ``lookback_days`` /
-    ``rows_per_request`` は ``ArticleSource.adapter_factory`` から受け取る
-    (``lookback_days=7`` / ``rows_per_request=20`` 既定は旧 ClassVar 同値)。
+    HTTP 取得 + per-ISSN filter + sort/order 構築は ``tools.crossref`` に委譲
+    する。共通処理は item ごとの type/license/title/abstract/date/DOI 判定だけ
+    を担う (旧 ``BaseMDPICrossrefFetcher._convert_record`` の判定順を完全踏襲)。
+    ``lookback_days=7`` / ``rows_per_request=20`` 既定は旧 ClassVar 同値。
     """
-
-    def __init__(
-        self,
-        *,
-        source_name: str,
-        issn: str,
-        lookback_days: int = 7,
-        rows_per_request: int = 20,
-        client: CrossrefApiClient | None = None,
-    ) -> None:
-        self._source_name = source_name
-        self._issn = issn
-        self._lookback_days = lookback_days
-        self._rows_per_request = rows_per_request
-        self._client = client or CrossrefApiClient()
-
-    async def collect(self) -> AsyncIterator[FetchedArticle]:
-        from_pub_date = (
-            (datetime.now(UTC) - timedelta(days=self._lookback_days)).date().isoformat()
+    from_pub_date = (
+        (datetime.now(UTC) - timedelta(days=lookback_days)).date().isoformat()
+    )
+    items = await tools.crossref.works(
+        source_name=source_name,
+        issn=issn,
+        from_pub_date=from_pub_date,
+        rows=rows_per_request,
+    )
+    # 判定順は旧 _convert_record と完全一致:
+    # type → license → title → body → date → DOI.
+    for item in items:
+        if item.get("type") != "journal-article":
+            continue  # business: corrections/editorials drop
+        if not _validate_license(item):
+            continue  # business: CC BY 4.0 のみ
+        title = _extract_title(item)
+        if not title:
+            continue
+        title = title[:_TITLE_MAX_LENGTH]
+        body = _strip_jats(item.get("abstract") or "")
+        if len(body) < 50:
+            continue  # business: 短い abstract は信用しない
+        published = _parse_date_parts(item)
+        if published is None:
+            continue
+        doi = _extract_doi(item)
+        if doi is None:
+            continue
+        yield FetchedArticle(
+            title=title,
+            url=f"https://doi.org/{doi}",
+            body=body,
+            published_at=published.value,
         )
-        items = await self._client.works(
-            source_name=self._source_name,
-            issn=self._issn,
-            from_pub_date=from_pub_date,
-            rows=self._rows_per_request,
-        )
-        # 判定順は旧 _convert_record (本ファイル冒頭) と完全一致:
-        # type → license → title → body → date → DOI.
-        for item in items:
-            if item.get("type") != "journal-article":
-                continue  # business: corrections/editorials drop
-            if not _validate_license(item):
-                continue  # business: CC BY 4.0 のみ
-            title = _extract_title(item)
-            if not title:
-                continue
-            title = title[:_TITLE_MAX_LENGTH]
-            body = _strip_jats(item.get("abstract") or "")
-            if len(body) < 50:
-                continue  # business: 短い abstract は信用しない
-            published = _parse_date_parts(item)
-            if published is None:
-                continue
-            doi = _extract_doi(item)
-            if doi is None:
-                continue
-            yield FetchedArticle(
-                title=title,
-                url=f"https://doi.org/{doi}",
-                body=body,
-                published_at=published.value,
-            )

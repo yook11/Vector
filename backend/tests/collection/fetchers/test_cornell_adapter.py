@@ -1,9 +1,9 @@
-"""Cornell Chronicle 取得経路 (``MultiFeedRssAdapter`` + Cornell config)。
+"""Cornell Chronicle 取得経路 (``multi_feed_rss`` 共通処理 + Cornell config)。
 
-P2 で Cornell は継承具象を廃し、``MultiFeedRssAdapter`` machinery に Cornell
-固有 config (``CORNELL_FEEDS`` / ``parse_mode="bytes"`` / body_builder 注入
-なし = Pattern H) を渡す形になった。純 thin config (body_builder 既定 =
-body なし) 経路を pin する。
+P2-D で Cornell は ``CornellChronicleSource.collect`` が ``multi_feed_rss``
+共通処理に Cornell 固有 config (``CORNELL_FEEDS`` / ``parse_mode="bytes"`` /
+body_builder 注入なし = Pattern H) を渡す形になった。純 thin config
+(body_builder 既定 = body なし) 経路を直接 pin する。
 
 固定する不変条件:
 
@@ -18,6 +18,7 @@ body なし) 経路を pin する。
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 
 import pytest
@@ -29,8 +30,9 @@ from app.collection.external_fetch_errors import (
 )
 from app.collection.fetchers.cornell import CORNELL_FEEDS
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
-from app.collection.fetchers.tools.multi_feed_rss import MultiFeedRssAdapter
+from app.collection.fetchers.tools.multi_feed_rss import multi_feed_rss
 from app.collection.fetchers.tools.rss_parser import RssEntry
+from tests.collection.fetchers._fixture_tools import fixture_tools
 
 _NOW = datetime(2026, 5, 1, 12, 0, tzinfo=UTC)
 
@@ -109,32 +111,28 @@ class _EmptyParser:
         return []
 
 
-def _cornell(parser: object) -> MultiFeedRssAdapter:
-    return MultiFeedRssAdapter(
+def _cornell(parser: object) -> AsyncIterator[FetchedArticle]:
+    return multi_feed_rss(
+        fixture_tools(rss=parser),
         source_name="Cornell Chronicle",
         feeds=CORNELL_FEEDS,
         parse_mode="bytes",
-        parser=parser,  # type: ignore[arg-type]
     )
 
 
-async def _collect(adapter: MultiFeedRssAdapter) -> list[FetchedArticle]:
-    return [item async for item in adapter.collect()]
+async def _collect(stream: AsyncIterator[FetchedArticle]) -> list[FetchedArticle]:
+    return [item async for item in stream]
 
 
 async def test_duplicate_urls_across_feeds_are_deduped() -> None:
-    adapter = _cornell(_DuplicatingParser())
-
-    items = await _collect(adapter)
+    items = await _collect(_cornell(_DuplicatingParser()))
 
     urls = [i.url for i in items]
     assert urls == ["https://news.cornell.edu/x", "https://news.cornell.edu/y"]
 
 
 async def test_body_is_none_pattern_h() -> None:
-    adapter = _cornell(_DuplicatingParser())
-
-    items = await _collect(adapter)
+    items = await _collect(_cornell(_DuplicatingParser()))
 
     assert items
     assert all(item.body is None for item in items)
@@ -143,10 +141,9 @@ async def test_body_is_none_pattern_h() -> None:
 async def test_feed_error_skips_feed_with_warning() -> None:
     skip_url = CORNELL_FEEDS[1]
     exc = FetchOriginServerError(status_code=503, reason="service_unavailable")
-    adapter = _cornell(_SkipOneFeedParser(skip_url, exc))
 
     with capture_logs() as logs:
-        items = await _collect(adapter)
+        items = await _collect(_cornell(_SkipOneFeedParser(skip_url, exc)))
 
     assert len(items) == len(CORNELL_FEEDS) - 1
     skips = [
@@ -163,10 +160,9 @@ async def test_feed_error_skips_feed_with_warning() -> None:
 async def test_non_recoverable_single_feed_does_not_propagate() -> None:
     skip_url = CORNELL_FEEDS[1]
     exc = FetchResourceNotFoundError(status_code=404, reason="not_found")
-    adapter = _cornell(_SkipOneFeedParser(skip_url, exc))
 
     with capture_logs() as logs:
-        items = await _collect(adapter)
+        items = await _collect(_cornell(_SkipOneFeedParser(skip_url, exc)))
 
     assert len(items) == len(CORNELL_FEEDS) - 1
     skips = [
@@ -181,16 +177,13 @@ async def test_non_recoverable_single_feed_does_not_propagate() -> None:
 
 async def test_all_feeds_fail_propagates_first_error() -> None:
     exc = FetchResourceNotFoundError(status_code=404, reason="not_found")
-    adapter = _cornell(_AllFailParser(exc))
 
     with pytest.raises(FetchResourceNotFoundError):
-        await _collect(adapter)
+        await _collect(_cornell(_AllFailParser(exc)))
 
 
 async def test_all_feeds_zero_entries_does_not_propagate() -> None:
-    adapter = _cornell(_EmptyParser())
-
-    items = await _collect(adapter)
+    items = await _collect(_cornell(_EmptyParser()))
 
     assert items == []
 

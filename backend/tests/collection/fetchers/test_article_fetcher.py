@@ -1,24 +1,29 @@
 """``ArticleFetcher`` のユニットテスト (DB / HTTP 非依存)。
 
-P2 で ``ArticleFetcher`` は ``ArticleSource`` 集約を受け、``source.make_adapter()``
-で取得 machinery を **毎 fetch 構築** する。fake machinery を
-``adapter_factory`` に注入し、Source → machinery → builder → passport の配線が
-薄い層として正しく動くことを検証する。machinery 単体の挙動 (RSS parse や
-filter) は per-source テストの責務、本テストは "machinery が yield する
-FetchedArticle を ArticleFetcher が正しく中継する" + "fetch 毎に
-make_adapter が呼ばれる" の 2 点に絞る。
+P2-D で ``ArticleFetcher`` は Source クラスオブジェクト (``ArticleSource``
+Protocol を満たす) を受け、``source.collect(tools)`` を **fetch 毎** に呼んで
+取得 stream を得る。fake Source クラスを渡し、Source → collect → builder →
+passport の配線が薄い層として正しく動くことを検証する。collect 本体の挙動
+(RSS parse や filter) は per-source テストの責務、本テストは "collect が
+yield する FetchedArticle を ArticleFetcher が正しく中継する" + "fetch 毎に
+collect が呼ばれる" の 2 点に絞る。
 """
 
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from typing import ClassVar
 
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.article_limits import ARTICLE_BODY_MIN_LENGTH
 from app.collection.domain.observed_article import ObservedArticle, ObservedOrigin
-from app.collection.domain.source_completion_profile import DEFAULT_PROFILE
+from app.collection.domain.source_completion_profile import (
+    DEFAULT_PROFILE,
+    SourceCompletionProfile,
+)
 from app.collection.fetchers.article_fetcher import ArticleFetcher
+from app.collection.fetchers.tools.fetch_tools import FetchTools
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
 from app.collection.sources.article_source import ArticleSource
 from app.shared.value_objects.source_name import SourceName
@@ -29,42 +34,40 @@ _VALID_TITLE = "Hello World"
 _VALID_BODY = "x" * ARTICLE_BODY_MIN_LENGTH
 
 
-class _FakeAdapter:
-    """slim ``SourceAdapter`` (collect() のみ)。構築回数を記録する。"""
+def _make_source(
+    items: list[FetchedArticle], *, collect_calls: list[int]
+) -> ArticleSource:
+    """``items`` を yield する fake Source クラスオブジェクトを生成する。
 
-    def __init__(self, items: list[FetchedArticle]) -> None:
-        self._items = items
-
-    async def collect(self) -> AsyncIterator[FetchedArticle]:
-        for item in self._items:
-            yield item
-
-
-def _source(items: list[FetchedArticle], *, build_calls: list[int]) -> ArticleSource:
-    """``_FakeAdapter`` を factory でラップした ``ArticleSource``。
-
-    ``build_calls`` に factory 呼出を記録し、fetch 毎 machinery 構築を観測する。
+    ``collect_calls`` に ``collect`` 起動を記録し、fetch 毎の collect 呼出を
+    観測する。各呼出で新クラスを ``type`` 生成せずクロージャで items を束ねる
+    (クラスオブジェクト自体が ``ArticleSource`` Protocol を構造的に満たす)。
     """
 
-    def _factory() -> _FakeAdapter:
-        build_calls.append(1)
-        return _FakeAdapter(items)
+    class _FakeSource:
+        name: ClassVar[SourceName] = SourceName("Fake")
+        endpoint_url: ClassVar[str] = "https://example.test/feed"
+        observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.feed
+        completion_profile: ClassVar[SourceCompletionProfile] = DEFAULT_PROFILE
 
-    return ArticleSource(
-        name=SourceName("Fake"),
-        endpoint_url="https://example.test/feed",
-        observed_origin=ObservedOrigin.feed,
-        completion_profile=DEFAULT_PROFILE,
-        adapter_factory=_factory,
-    )
+        @classmethod
+        async def collect(
+            cls,
+            tools: FetchTools,  # noqa: ARG003
+        ) -> AsyncIterator[FetchedArticle]:
+            collect_calls.append(1)
+            for item in items:
+                yield item
+
+    return _FakeSource
 
 
 async def _collect_fetch(fetcher: ArticleFetcher, source_id: int) -> list:
     return [item async for item in fetcher.fetch(source_id)]
 
 
-async def test_yields_ready_when_adapter_emits_valid_article() -> None:
-    source = _source(
+async def test_yields_ready_when_source_emits_valid_article() -> None:
+    source = _make_source(
         [
             FetchedArticle(
                 title=_VALID_TITLE,
@@ -73,7 +76,7 @@ async def test_yields_ready_when_adapter_emits_valid_article() -> None:
                 published_at=_PUBLISHED,
             )
         ],
-        build_calls=[],
+        collect_calls=[],
     )
     fetcher = ArticleFetcher(source)
 
@@ -83,9 +86,9 @@ async def test_yields_ready_when_adapter_emits_valid_article() -> None:
     assert isinstance(results[0], AnalyzableArticle)
 
 
-async def test_skips_when_adapter_emits_drop_candidate() -> None:
+async def test_skips_when_source_emits_drop_candidate() -> None:
     """title="" は builder で drop、ArticleFetcher は何も yield しない。"""
-    source = _source(
+    source = _make_source(
         [
             FetchedArticle(
                 title="",
@@ -100,7 +103,7 @@ async def test_skips_when_adapter_emits_drop_candidate() -> None:
                 published_at=None,
             ),
         ],
-        build_calls=[],
+        collect_calls=[],
     )
     fetcher = ArticleFetcher(source)
 
@@ -111,21 +114,21 @@ async def test_skips_when_adapter_emits_drop_candidate() -> None:
 
 
 def test_exposes_source_name_and_endpoint_url_as_instance_attrs() -> None:
-    source = _source([], build_calls=[])
+    source = _make_source([], collect_calls=[])
     fetcher = ArticleFetcher(source)
 
     assert fetcher.NAME == "Fake"
     assert fetcher.ENDPOINT_URL == "https://example.test/feed"
 
 
-async def test_make_adapter_is_called_once_per_fetch() -> None:
-    """machinery は ``fetch`` 毎に新規構築される (旧 ``A()`` 毎回 new の意味保存)。"""
-    build_calls: list[int] = []
-    source = _source([], build_calls=build_calls)
+async def test_collect_is_invoked_once_per_fetch() -> None:
+    """``collect`` は ``fetch`` 毎に新規起動される (旧 ``A()`` 毎回 new の意味保存)。"""
+    collect_calls: list[int] = []
+    source = _make_source([], collect_calls=collect_calls)
     fetcher = ArticleFetcher(source)
 
-    assert build_calls == []
+    assert collect_calls == []
     await _collect_fetch(fetcher, source_id=1)
-    assert len(build_calls) == 1
+    assert len(collect_calls) == 1
     await _collect_fetch(fetcher, source_id=1)
-    assert len(build_calls) == 2
+    assert len(collect_calls) == 2

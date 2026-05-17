@@ -1,4 +1,4 @@
-"""Meta AI 用 Fetcher — about.fb.com から AI 関連のみ抽出。
+"""Meta AI 用 Source — about.fb.com から AI 関連のみ抽出。
 
 per-source 設計:
 
@@ -17,10 +17,17 @@ from __future__ import annotations
 import html
 import re
 from collections.abc import AsyncIterator
-from typing import Final
+from typing import ClassVar, Final
 
+from app.collection.domain.observed_article import ObservedOrigin
+from app.collection.domain.source_completion_profile import (
+    DEFAULT_PROFILE,
+    SourceCompletionProfile,
+)
+from app.collection.fetchers.tools.fetch_tools import FetchTools
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
-from app.collection.fetchers.tools.rss_parser import RssEntry, RssParser
+from app.collection.fetchers.tools.rss_parser import RssEntry
+from app.shared.value_objects.source_name import SourceName
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -50,29 +57,24 @@ def _is_ai_tagged(tags: tuple[str, ...]) -> bool:
     return bool(_AI_TAGS.intersection(tags))
 
 
-class MetaAIAdapter:
-    """about.fb.com Newsroom から AI tagged entry のみ抽出する SourceAdapter。
+class MetaAISource:
+    """about.fb.com Newsroom から AI tagged entry のみ抽出する ``XxxSource``。
 
-    AI tag フィルタ (~60% drop) は business critical drop のため Adapter 内で
-    旧 ``MetaAIFetcher._convert_entry`` と同位置 (最初) に適用する。title /
-    body / published / URL の構造ゲートは ``passport_builder`` に委譲する。
+    AI tag フィルタ (~60% drop) は business critical drop のため collect 内で
+    最初に適用する。title / body / published / URL の構造ゲートは
+    ``passport_builder`` に委譲する。
     """
 
-    def __init__(
-        self,
-        *,
-        endpoint_url: str,
-        source_name: str,
-        parser: RssParser | None = None,
-    ) -> None:
-        self._endpoint_url = endpoint_url
-        self._source_name = source_name
-        self._parser = parser or RssParser()
+    name: ClassVar[SourceName] = SourceName("Meta AI")
+    endpoint_url: ClassVar[str] = "https://about.fb.com/news/feed/"
+    observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.feed
+    completion_profile: ClassVar[SourceCompletionProfile] = DEFAULT_PROFILE
 
-    async def collect(self) -> AsyncIterator[FetchedArticle]:
-        entries = await self._parser.fetch(
-            endpoint_url=self._endpoint_url,
-            source_name=self._source_name,
+    @classmethod
+    async def collect(cls, tools: FetchTools) -> AsyncIterator[FetchedArticle]:
+        entries = await tools.rss.fetch(
+            endpoint_url=cls.endpoint_url,
+            source_name=str(cls.name),
             parse_mode="bytes",
         )
         for entry in entries:

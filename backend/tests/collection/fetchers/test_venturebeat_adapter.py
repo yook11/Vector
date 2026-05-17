@@ -1,72 +1,30 @@
-"""``VentureBeatAdapter`` machinery の per-source 単体テスト (HTTP 非依存, P2)。
+"""``VentureBeatSource`` の per-source 単体テスト (HTTP 非依存, P2-D)。
 
-P2 で identity ClassVar を廃し ``endpoint_url`` / ``source_name`` を
-``__init__`` 注入で受ける。fixture を ``_FakeRssParser`` 経由で食わせ、Adapter
-の ``FetchedArticle`` field 内容と、``ArticleFetcher`` 経由の passport 出力を
-検証する (identity 固定は test_source_adapter_profiles に集約)。
+P2-D で identity / 補完方針は ``XxxSource`` の ``ClassVar``、取得手順は
+``collect(tools)`` classmethod になった。fixture を ``FetchTools.rss`` 差し替え
+(``fixture_tools``) 経由で食わせ、Source の ``FetchedArticle`` field 内容と、
+``ArticleFetcher`` 経由の passport 出力を検証する (identity 固定は
+test_source_adapter_profiles に集約)。
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from pathlib import Path
-
-import feedparser
-
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.article_limits import ARTICLE_BODY_MIN_LENGTH
-from app.collection.domain.observed_article import ObservedArticle, ObservedOrigin
-from app.collection.domain.source_completion_profile import DEFAULT_PROFILE
+from app.collection.domain.observed_article import ObservedArticle
 from app.collection.fetchers.article_fetcher import ArticleFetcher
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
-from app.collection.fetchers.tools.rss_parser import RssEntry, normalize_entry
-from app.collection.fetchers.venturebeat import VentureBeatAdapter
-from app.collection.sources.article_source import ArticleSource
-from app.shared.value_objects.source_name import SourceName
-
-_FIXTURES_DIR = Path(__file__).parent.parent.parent / "fixtures"
-_ENDPOINT = "https://venturebeat.com/feed"
-
-
-class _FakeRssParser:
-    def __init__(self, fixture_filename: str) -> None:
-        self._fixture_filename = fixture_filename
-
-    async def fetch(
-        self,
-        *,
-        endpoint_url: str,
-        source_name: str,
-        parse_mode: str = "text",
-        **_: object,
-    ) -> list[RssEntry]:
-        path = _FIXTURES_DIR / self._fixture_filename
-        feed = feedparser.parse(path.read_bytes())
-        return [normalize_entry(raw) for raw in feed.entries]
-
-
-def _adapter_factory(fixture: str) -> Callable[[], VentureBeatAdapter]:
-    return lambda: VentureBeatAdapter(
-        endpoint_url=_ENDPOINT,
-        source_name="VentureBeat",
-        parser=_FakeRssParser(fixture),  # type: ignore[arg-type]
-    )
+from app.collection.fetchers.venturebeat import VentureBeatSource
+from tests.collection.fetchers._fixture_tools import fixture_tools
 
 
 async def _collect_fetched(fixture: str) -> list[FetchedArticle]:
-    adapter = _adapter_factory(fixture)()
-    return [item async for item in adapter.collect()]
+    tools = fixture_tools(rss_fixture=fixture)
+    return [item async for item in VentureBeatSource.collect(tools)]
 
 
 def _fetcher(fixture: str) -> ArticleFetcher:
-    source = ArticleSource(
-        name=SourceName("VentureBeat"),
-        endpoint_url=_ENDPOINT,
-        observed_origin=ObservedOrigin.feed,
-        completion_profile=DEFAULT_PROFILE,
-        adapter_factory=_adapter_factory(fixture),
-    )
-    return ArticleFetcher(source)
+    return ArticleFetcher(VentureBeatSource, tools=fixture_tools(rss_fixture=fixture))
 
 
 async def test_collect_yields_fetched_articles_with_body_from_full_rss() -> None:

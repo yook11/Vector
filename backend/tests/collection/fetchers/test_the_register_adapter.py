@@ -1,7 +1,7 @@
-"""``TheRegisterAdapter`` machinery の per-source 単体テスト (P2)。
+"""``TheRegisterSource`` の per-source 単体テスト (P2-D)。
 
-P2 で identity ClassVar を廃し ``endpoint_url`` / ``source_name`` を
-``__init__`` 注入で受ける。固定する固有不変条件:
+P2-D で identity / 補完方針は ``ClassVar``、取得手順は ``collect(tools)``
+classmethod になった。固定する固有不変条件:
 
 - ``<link href>`` が redirector (``go.theregister.com/feed/...``) の entry が
   fixture に含まれるが、yield される ``FetchedArticle.url`` は実 host へ展開され
@@ -11,49 +11,20 @@ P2 で identity ClassVar を廃し ``endpoint_url`` / ``source_name`` を
 
 from __future__ import annotations
 
-from pathlib import Path
-
-import feedparser
-
-from app.collection.fetchers.the_register import TheRegisterAdapter
+from app.collection.fetchers.the_register import TheRegisterSource
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
-from app.collection.fetchers.tools.rss_parser import RssEntry, normalize_entry
+from tests.collection.fetchers._fixture_tools import fixture_tools
 
-_FIXTURES_DIR = Path(__file__).parent.parent.parent / "fixtures"
 _FIXTURE = "the_register_atom.xml"
 
 
-class _FakeRssParser:
-    def __init__(self, fixture_filename: str) -> None:
-        self._fixture_filename = fixture_filename
-
-    async def fetch(
-        self,
-        *,
-        endpoint_url: str,
-        source_name: str,
-        parse_mode: str = "text",
-        **_: object,
-    ) -> list[RssEntry]:
-        path = _FIXTURES_DIR / self._fixture_filename
-        feed = feedparser.parse(path.read_bytes())
-        return [normalize_entry(raw) for raw in feed.entries]
-
-
-def _adapter() -> TheRegisterAdapter:
-    return TheRegisterAdapter(
-        endpoint_url="https://www.theregister.com/headlines.atom",
-        source_name="The Register",
-        parser=_FakeRssParser(_FIXTURE),  # type: ignore[arg-type]
-    )
-
-
-async def _collect(adapter: TheRegisterAdapter) -> list[FetchedArticle]:
-    return [item async for item in adapter.collect()]
+async def _collect() -> list[FetchedArticle]:
+    tools = fixture_tools(rss_fixture=_FIXTURE)
+    return [item async for item in TheRegisterSource.collect(tools)]
 
 
 async def test_redirector_links_are_expanded_to_real_host() -> None:
-    items = await _collect(_adapter())
+    items = await _collect()
 
     assert items
     for item in items:
@@ -62,7 +33,7 @@ async def test_redirector_links_are_expanded_to_real_host() -> None:
 
 
 async def test_body_is_none_pattern_h() -> None:
-    items = await _collect(_adapter())
+    items = await _collect()
 
     assert items
     assert all(item.body is None for item in items)

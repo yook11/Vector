@@ -1,4 +1,4 @@
-"""Cloudflare Blog 用 Fetcher。
+"""Cloudflare Blog 用 Source。
 
 per-source 設計: RSS feed の ``<content:encoded>`` に full body が含まれる。
 body は ``content_encoded`` を直取り。``parse_mode="bytes"`` で feedparser
@@ -10,9 +10,17 @@ from __future__ import annotations
 import html
 import re
 from collections.abc import AsyncIterator
+from typing import ClassVar
 
+from app.collection.domain.observed_article import ObservedOrigin
+from app.collection.domain.source_completion_profile import (
+    DEFAULT_PROFILE,
+    SourceCompletionProfile,
+)
+from app.collection.fetchers.tools.fetch_tools import FetchTools
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
-from app.collection.fetchers.tools.rss_parser import RssEntry, RssParser
+from app.collection.fetchers.tools.rss_parser import RssEntry
+from app.shared.value_objects.source_name import SourceName
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -29,24 +37,19 @@ def _pick_body(entry: RssEntry) -> str:
     return entry.content_encoded or ""
 
 
-class CloudflareBlogAdapter:
-    """The Cloudflare Blog 用 SourceAdapter (Pattern R、body 信用)。"""
+class CloudflareBlogSource:
+    """The Cloudflare Blog 用 ``XxxSource`` (Pattern R、body 信用)。"""
 
-    def __init__(
-        self,
-        *,
-        endpoint_url: str,
-        source_name: str,
-        parser: RssParser | None = None,
-    ) -> None:
-        self._endpoint_url = endpoint_url
-        self._source_name = source_name
-        self._parser = parser or RssParser()
+    name: ClassVar[SourceName] = SourceName("The Cloudflare Blog")
+    endpoint_url: ClassVar[str] = "https://blog.cloudflare.com/rss/"
+    observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.feed
+    completion_profile: ClassVar[SourceCompletionProfile] = DEFAULT_PROFILE
 
-    async def collect(self) -> AsyncIterator[FetchedArticle]:
-        entries = await self._parser.fetch(
-            endpoint_url=self._endpoint_url,
-            source_name=self._source_name,
+    @classmethod
+    async def collect(cls, tools: FetchTools) -> AsyncIterator[FetchedArticle]:
+        entries = await tools.rss.fetch(
+            endpoint_url=cls.endpoint_url,
+            source_name=str(cls.name),
             parse_mode="bytes",
         )
         for entry in entries:

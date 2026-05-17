@@ -1,53 +1,48 @@
-"""TechCrunch 用 Fetcher。
+"""TechCrunch 用 Source。
 
 per-source 設計: TC の RSS feed は ``<description>`` にリード文 (~140 chars)
 しか含まず ``<content:encoded>`` も提供しない (`spec
-collection-source-rss-research.md`)。Fetcher は **RSS 本文を信用しない** —
-``body_candidate=None`` を builder に渡し、URL + title を ``ObservedArticle``
-として yield する。後段の ``ArticleCompletionService`` が HTML 本文を取得 +
-promotion する 2 段構成。
+collection-source-rss-research.md`)。RSS 本文を信用しない —
+``body=None`` を yield し、URL + title を ``ObservedArticle`` として後段に
+渡す。後段の ``ArticleCompletionService`` が HTML 本文を取得 + promotion
+する 2 段構成。
 
 将来 TC が ``<content:encoded>`` に full body を載せるようになった場合、
-``_pick_body`` 相当を持たせて builder に body を渡せば自然に Ready 経路に
-切り替わる。
+``collect`` で body 候補を組み立てれば自然に Ready 経路に切り替わる。
 
 HTTP 取得 / feedparser / SSRF guard / title plain text 正規化は L2
-``RssParser`` に集約済。本ファイルは L3 翻訳 (RssEntry → passport) の
-per-source 責務だけを持つ。
+``RssParser`` (``tools.rss``) に集約済。本ファイルは L3 翻訳
+(RssEntry → FetchedArticle) の per-source 責務だけを持つ。
 """
 
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from typing import ClassVar
 
+from app.collection.domain.observed_article import ObservedOrigin
+from app.collection.domain.source_completion_profile import (
+    DEFAULT_PROFILE,
+    SourceCompletionProfile,
+)
+from app.collection.fetchers.tools.fetch_tools import FetchTools
 from app.collection.fetchers.tools.fetched_article import FetchedArticle
-from app.collection.fetchers.tools.rss_parser import RssParser
+from app.shared.value_objects.source_name import SourceName
 
 
-class TechCrunchAdapter:
-    """TechCrunch 用 SourceAdapter (新経路、Adapter 駆動)。
+class TechCrunchSource:
+    """TechCrunch 用 ``XxxSource`` (Pattern H、body 不信用)。"""
 
-    旧 ``TechCrunchFetcher`` と並存させ、Adapter 経路では ``body=None`` を
-    ``FetchedArticle`` に焼き込む形で ``passport_builder`` 側の Incomplete 経路に
-    固定する。将来 TC が ``<content:encoded>`` を提供するようになったら、
-    ``_to_fetched`` 内で body 候補を組み立てる差分だけで Ready 経路に昇格できる。
-    """
+    name: ClassVar[SourceName] = SourceName("TechCrunch")
+    endpoint_url: ClassVar[str] = "https://techcrunch.com/feed/"
+    observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.feed
+    completion_profile: ClassVar[SourceCompletionProfile] = DEFAULT_PROFILE
 
-    def __init__(
-        self,
-        *,
-        endpoint_url: str,
-        source_name: str,
-        parser: RssParser | None = None,
-    ) -> None:
-        self._endpoint_url = endpoint_url
-        self._source_name = source_name
-        self._parser = parser or RssParser()
-
-    async def collect(self) -> AsyncIterator[FetchedArticle]:
-        entries = await self._parser.fetch(
-            endpoint_url=self._endpoint_url,
-            source_name=self._source_name,
+    @classmethod
+    async def collect(cls, tools: FetchTools) -> AsyncIterator[FetchedArticle]:
+        entries = await tools.rss.fetch(
+            endpoint_url=cls.endpoint_url,
+            source_name=str(cls.name),
             parse_mode="text",
         )
         for entry in entries:
