@@ -17,11 +17,11 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from app.collection.article_completion.completer import complete_with_html
 from app.collection.article_completion.extractor import (
     ExtractedContent,
     ExtractionEmpty,
 )
-from app.collection.article_completion.promotion import complete_with_html
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.completion import ArticleCompletionFailed
 from app.collection.domain.observed_article import (

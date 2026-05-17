@@ -28,8 +28,8 @@ from __future__ import annotations
 from collections.abc import Iterable
 from datetime import UTC, datetime
 
+from app.collection.article_completion.completer import complete_with_html
 from app.collection.article_completion.extractor import ExtractedContent
-from app.collection.article_completion.promotion import complete_with_html
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.domain.source_completion_profile import DEFAULT_PROFILE
