@@ -2,7 +2,7 @@
 
 ``test_rss_adapters_invariants.py`` と同思想で、``FetchTools`` に fixture-backed
 fake client を注入し、Source クラスオブジェクトを ``ArticleFetcher`` 本番経路
-(passport_builder) に通し、``_invariant.py`` の 4 assertion (passport 存在 /
+(fetched_article_converter) に通し、``_invariant.py`` の 4 assertion (passport 存在 /
 型許容 / 主経路 / 永続化不変条件) を回す。
 
 7 ケース内訳:

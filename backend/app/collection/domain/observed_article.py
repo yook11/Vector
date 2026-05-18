@@ -5,7 +5,7 @@
 domain mirror を別に作ると二重表現になるため作らない (spec §1.3/§4.4)。本型は
 **取れた事実だけ**を持ち、要否/優先は ``SourceCompletionProfile`` が決める。
 
-Pattern H で ``passport_builder`` が yield する中間表現であり、
+Pattern H で ``fetched_article_converter`` が yield する中間表現であり、
 ``pending_html_articles.staged_attributes`` (JSONB) に焼かれて Stage 2 cron
 poller で再 hydrate される。``model_dump(mode="json", by_alias=True)`` で永続化、
 ``model_validate`` で復元する。
@@ -39,7 +39,7 @@ from app.shared.value_objects.source_name import SourceName
 class ObservedOrigin(StrEnum):
     """観測値の出自 (audit only — merge を駆動しない)。
 
-    ``Source.observed_origin`` がソースごとに宣言し、``passport_builder`` が
+    ``Source.observed_origin`` がソースごとに宣言し、``fetched_article_converter`` が
     ``ObservedField.origin`` に stamp する。
     """
 

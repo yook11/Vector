@@ -1,18 +1,22 @@
-"""``try_build_passport`` のユニットテスト (DB 非依存)。
+"""``convert_fetched_article`` のユニットテスト (DB 非依存)。
 
-``FetchedArticle`` 入力を passport (Ready / Observed / drop) に変換する
-分岐契約を検証する。title / URL / body / published の各境界と、profile の
+``FetchedArticle`` 入力を ``AnalyzableArticle`` / ``ObservedArticle`` に変換
+する分岐契約を検証する。title / URL / body / published の各境界と、profile の
 title policy (``html_preferred`` = 仮タイトル) による Ready gate を網羅し、
-private helper ``_build_passport`` の判定順を固定する。
+private helper ``_convert_fetched_article`` の判定順を固定する。
 
-title policy が ``html_preferred`` のとき body + published が揃っても Ready
-経路を止め観測事実を全保存する不変は本ファイル固有のケース。
-``ObservedArticle`` は補完ポリシーを持たない (policy は per-source = profile)。
+旧 ``try_build_passport`` の ``return None`` (drop) は
+``FetchedArticleConversionError`` の raise に置換された。変換不能 entry は
+握りつぶさず理由付き例外で表に出す (2 ターゲット reason + 構造化フィールド)。
+Ready の Pydantic 失敗 / tz-naive published の Observed fallback は **結果不変**
+(byte 等価) であることを引き続き固定する。
 """
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta, timezone
+from typing import ClassVar
 
 import pytest
 
@@ -29,8 +33,16 @@ from app.collection.domain.source_completion_profile import (
     FieldCompletionPolicy,
     SourceCompletionProfile,
 )
+from app.collection.source_fetch.errors import (
+    ConversionReason,
+    FetchedArticleConversionError,
+)
 from app.collection.source_fetch.fetched_article import FetchedArticle
-from app.collection.source_fetch.passport_builder import try_build_passport
+from app.collection.source_fetch.fetched_article_converter import (
+    convert_fetched_article,
+)
+from app.collection.source_fetch.tools.fetch_tools import FetchTools
+from app.collection.sources.article_source import ArticleSource
 from app.shared.value_objects.source_name import SourceName
 
 _PUBLISHED = datetime(2026, 5, 1, 12, 0, tzinfo=UTC)
@@ -47,14 +59,40 @@ _BASE_FETCHED: dict = {
 }
 
 
+def _source(
+    *,
+    origin: ObservedOrigin = ObservedOrigin.feed,
+    profile: SourceCompletionProfile = DEFAULT_PROFILE,
+) -> ArticleSource:
+    """``convert_fetched_article`` が読む 3 属性を持つ fake Source。
+
+    ``collect`` は本変換器からは呼ばれないが ``ArticleSource`` を構造的に
+    満たすため no-op async generator を置く。
+    """
+
+    class _FakeSource:
+        name: ClassVar[SourceName] = _SOURCE_NAME
+        endpoint_url: ClassVar[str] = "https://example.test/feed"
+        observed_origin: ClassVar[ObservedOrigin] = origin
+        completion_profile: ClassVar[SourceCompletionProfile] = profile
+
+        @classmethod
+        async def collect(
+            cls,
+            tools: FetchTools,  # noqa: ARG003
+        ) -> AsyncIterator[FetchedArticle]:
+            for _ in ():
+                yield _
+
+    return _FakeSource
+
+
 def _call(*, profile: SourceCompletionProfile = DEFAULT_PROFILE, **overrides):
     args = {**_BASE_FETCHED, **overrides}
-    return try_build_passport(
+    return convert_fetched_article(
         FetchedArticle(**args),
+        source=_source(profile=profile),
         source_id=1,
-        source_name=_SOURCE_NAME,
-        origin=ObservedOrigin.feed,
-        profile=profile,
     )
 
 
@@ -96,7 +134,7 @@ def test_returns_observed_when_published_missing() -> None:
 
 
 def test_drops_naive_published_silently_and_falls_back_to_observed() -> None:
-    """tz-naive datetime は PublishedAt 構造違反 → published 不採用。"""
+    """tz-naive datetime は PublishedAt 構造違反 → published 不採用 (byte 不変)。"""
     naive = datetime(2026, 5, 1, 12, 0)
     result = _call(published_at=naive)
     assert isinstance(result, ObservedArticle)
@@ -110,8 +148,11 @@ def test_accepts_non_utc_published() -> None:
 
 
 @pytest.mark.parametrize("title", ["", "   ", "\n\t  "])
-def test_drops_when_title_is_empty(title: str) -> None:
-    assert _call(title=title) is None
+def test_raises_missing_title_when_title_is_empty(title: str) -> None:
+    with pytest.raises(FetchedArticleConversionError) as ei:
+        _call(title=title)
+    assert ei.value.analyzable_reason is ConversionReason.MISSING_TITLE
+    assert ei.value.observed_reason is ConversionReason.MISSING_TITLE
 
 
 def test_trims_title_whitespace_and_caps_500_chars() -> None:
@@ -121,26 +162,59 @@ def test_trims_title_whitespace_and_caps_500_chars() -> None:
     assert result.title == "a" * 500
 
 
-def test_drops_when_url_is_empty() -> None:
-    assert _call(url="") is None
+def test_raises_missing_url_when_url_is_empty() -> None:
+    with pytest.raises(FetchedArticleConversionError) as ei:
+        _call(url="")
+    assert ei.value.analyzable_reason is ConversionReason.MISSING_URL
+    assert ei.value.observed_reason is ConversionReason.MISSING_URL
 
 
-def test_drops_when_url_is_private_ip_literal() -> None:
-    """SSRF 防御 (SafeUrl): IP リテラルが private/loopback なら drop。"""
-    assert _call(url="http://127.0.0.1/secret") is None
+def test_raises_invalid_url_when_url_is_private_ip_literal() -> None:
+    """SSRF 防御 (SafeUrl): IP リテラルが private/loopback なら変換不能。"""
+    with pytest.raises(FetchedArticleConversionError) as ei:
+        _call(url="http://127.0.0.1/secret")
+    assert ei.value.analyzable_reason is ConversionReason.INVALID_URL
+    assert ei.value.observed_reason is ConversionReason.INVALID_URL
 
 
-def test_drops_when_url_is_not_http_scheme() -> None:
-    assert _call(url="javascript:alert(1)") is None
+def test_raises_invalid_url_when_url_is_not_http_scheme() -> None:
+    with pytest.raises(FetchedArticleConversionError) as ei:
+        _call(url="javascript:alert(1)")
+    assert ei.value.analyzable_reason is ConversionReason.INVALID_URL
+
+
+def test_invalid_url_error_carries_structured_observation_fields() -> None:
+    """raise 時に FetchedArticle の観測スナップショットを構造化保持する。"""
+    with pytest.raises(FetchedArticleConversionError) as ei:
+        _call(url="javascript:alert(1)", body=_VALID_BODY)
+    exc = ei.value
+    assert exc.code == FetchedArticleConversionError.CODE
+    assert exc.source_name == str(_SOURCE_NAME)
+    assert exc.raw_url == "javascript:alert(1)"
+    assert exc.has_title is True
+    assert exc.body_length == len(_VALID_BODY)
+    assert exc.has_published_at is True
+
+
+def test_missing_url_error_reports_absent_raw_url() -> None:
+    with pytest.raises(FetchedArticleConversionError) as ei:
+        _call(url="")
+    assert ei.value.raw_url is None
+
+
+def test_invalid_url_error_chains_origin_cause() -> None:
+    """canonicalize の ``ValueError`` を ``__cause__`` で連鎖する (audit 用)。"""
+    with pytest.raises(FetchedArticleConversionError) as ei:
+        _call(url="http://127.0.0.1/secret")
+    assert isinstance(ei.value.__cause__, ValueError)
 
 
 def test_stamps_origin_on_observed_facts() -> None:
-    """``origin`` 引数が ``ObservedField.origin`` に stamp される (audit)。"""
-    result = try_build_passport(
+    """``observed_origin`` が ``ObservedField.origin`` に stamp される (audit)。"""
+    result = convert_fetched_article(
         FetchedArticle(**{**_BASE_FETCHED, "body": None}),
+        source=_source(origin=ObservedOrigin.sitemap),
         source_id=1,
-        source_name=_SOURCE_NAME,
-        origin=ObservedOrigin.sitemap,
     )
     assert isinstance(result, ObservedArticle)
     assert result.title is not None

@@ -79,7 +79,7 @@ class SourceCompletionProfile:
         (HTML 補完で正本上書きの機会を残す安全弁)。
 
         ``observed_preferred`` / ``html_required`` は物理的存在 + 妥当性
-        (passport_builder の既存チェック) で Stage-1 充足。よって本述語は
+        (fetched_article_converter の既存チェック) で Stage-1 充足。よって本述語は
         「``html_preferred`` の field が 1 つでもあるか」と等価。
 
         現行 2 profile: DEFAULT_PROFILE → False、HTML_TITLE_PROFILE

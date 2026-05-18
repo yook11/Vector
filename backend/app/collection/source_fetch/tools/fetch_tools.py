@@ -3,8 +3,8 @@
 ``XxxSource.collect(tools)`` が外部取得に使う stateless I/O クライアントだけを
 束ねる純粋な道具箱。**新しいドメイン層ではない**: ``completion_profile`` や
 ``ObservedArticle`` 昇格判断は持たせない (それは Source の宣言 /
-``passport_builder`` の責務であり、ここに混ぜると取得とドメイン判断が再び
-癒着する)。共有 pipeline (multi-feed fan-out / Crossref item 変換等) も本型の
+``fetched_article_converter`` の責務であり、ここに混ぜると取得とドメイン
+判断が再び癒着する)。共有 pipeline (multi-feed fan-out / Crossref item 変換等) も本型の
 メソッドにはしない — ``tools`` を引数に取り ``FetchedArticle`` だけを yield する
 free function として別モジュールに置き、Source がそれを選ぶ。
 

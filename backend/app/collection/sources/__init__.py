@@ -10,6 +10,6 @@
 - ``definitions/``: 具象 ``XxxSource`` ×45 (1 source = 1 クラス)。
 
 ``SOURCES`` / ``FETCHERS`` レジストリ (= ``source_fetch/strategy.py``) と取得
-機構 (``ArticleFetcher`` / ``Fetcher`` Protocol / ``passport_builder`` /
+機構 (``ArticleFetcher`` / ``Fetcher`` Protocol / ``fetched_article_converter`` /
 ``tools``) は ``source_fetch/`` 側 (Stage-1 実行機構) に集約済。
 """

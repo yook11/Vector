@@ -62,7 +62,7 @@ class MetaAISource:
 
     AI tag フィルタ (~60% drop) は business critical drop のため collect 内で
     最初に適用する。title / body / published / URL の構造ゲートは
-    ``passport_builder`` に委譲する。
+    ``fetched_article_converter`` に委譲する。
     """
 
     name: ClassVar[SourceName] = SourceName("Meta AI")

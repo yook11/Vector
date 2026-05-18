@@ -36,14 +36,21 @@ from app.collection.domain.observed_article import (
     ObservedOrigin,
 )
 from app.collection.domain.value_objects import PublishedAt
+from app.collection.source_fetch.errors import (
+    ConversionReason,
+    FetchedArticleConversionError,
+)
+from app.collection.source_fetch.fetched_article_converter import ConversionRejection
 from app.collection.source_fetch.service import ArticleAcquisitionService
 from app.models.article import Article as ArticleORM
 from app.models.news_source import NewsSource, SourceType
 from app.models.pending_html_article import PendingHtmlArticle as PendingHtmlArticleORM
+from app.models.pipeline_event import PipelineEvent
 from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 from app.shared.value_objects.source_name import SourceName
 
 Passport = AnalyzableArticle | ObservedArticle
+FetchItem = AnalyzableArticle | ObservedArticle | ConversionRejection
 
 
 def _ready(source_id: int, url: str) -> AnalyzableArticle:
@@ -68,11 +75,31 @@ def _pending(url: str) -> ObservedArticle:
     )
 
 
+def _rejection(
+    *,
+    analyzable_reason: ConversionReason = ConversionReason.BODY_TOO_SHORT,
+    observed_reason: ConversionReason = ConversionReason.MISSING_TITLE,
+) -> ConversionRejection:
+    return ConversionRejection(
+        error=FetchedArticleConversionError(
+            f"analyzable rejected: {analyzable_reason}; "
+            f"observed rejected: {observed_reason}",
+            analyzable_reason=analyzable_reason,
+            observed_reason=observed_reason,
+            source_name="VentureBeat",
+            raw_url="https://venturebeat.com/x",
+            has_title=True,
+            body_length=42,
+            has_published_at=False,
+        )
+    )
+
+
 class _StubFetcher:
-    def __init__(self, items: list[Passport]) -> None:
+    def __init__(self, items: list[FetchItem]) -> None:
         self._items = items
 
-    async def fetch(self, source_id: int) -> AsyncIterator[Passport]:
+    async def fetch(self, source_id: int) -> AsyncIterator[FetchItem]:
         for item in self._items:
             yield item
 
@@ -263,3 +290,107 @@ async def test_mixed_ready_pending_route_independently(
     pendings = (await db_session.execute(select(PendingHtmlArticleORM))).scalars().all()
     assert len(articles) == 1  # R only
     assert len(pendings) == 1  # H only
+
+
+@pytest.mark.asyncio
+async def test_conversion_rejection_audited_without_stopping_source(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    vb_source: NewsSource,
+) -> None:
+    """棄却を挟んでも他 entry は永続化され source は止まらない。
+
+    棄却は握りつぶさず別 tx で ``pipeline_events`` に焼かれ、後続の R / H は
+    通常どおり永続化される (1 件不良で source 全体が落ちない)。
+    """
+    svc = ArticleAcquisitionService(
+        session_factory,
+        lambda: _StubFetcher(
+            [
+                _ready(vb_source.id, "https://venturebeat.com/ok/"),
+                _rejection(),
+                _pending("https://techcrunch.com/h/"),
+            ]
+        ),
+    )
+
+    article_ids = await svc.execute(vb_source.id)
+
+    assert len(article_ids) == 1  # 棄却を挟んでも R は永続化
+    articles = (await db_session.execute(select(ArticleORM))).scalars().all()
+    pendings = (await db_session.execute(select(PendingHtmlArticleORM))).scalars().all()
+    assert len(articles) == 1
+    assert len(pendings) == 1  # 棄却後の H も止まらず投入
+
+
+@pytest.mark.asyncio
+async def test_conversion_rejection_writes_rejected_event_in_separate_tx(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    vb_source: NewsSource,
+) -> None:
+    """棄却監査は別 session に commit 済の REJECTED 行として残る。
+
+    ``stage='source_fetch'`` / ``event_type='rejected'`` 固定、``code`` /
+    ``outcome_code`` は単一 code、``category`` は collection stage なので NULL。
+    深刻度細分は ``payload.conversion_*`` 構造化列で SQL drill-down できる。
+    """
+    svc = ArticleAcquisitionService(
+        session_factory,
+        lambda: _StubFetcher([_rejection()]),
+    )
+
+    await svc.execute(vb_source.id)
+
+    row = (
+        (
+            await db_session.execute(
+                select(PipelineEvent).where(PipelineEvent.event_type == "rejected")
+            )
+        )
+        .scalars()
+        .one()
+    )
+    assert row.stage == "source_fetch"
+    assert row.code == "fetched_article_conversion_failed"
+    assert row.outcome_code == "fetched_article_conversion_failed"
+    assert row.category is None
+    assert row.source_id == vb_source.id
+    assert row.attempt == 1
+    assert row.error_class.endswith(".FetchedArticleConversionError")
+    assert row.payload["conversion_analyzable_reason"] == "body_too_short"
+    assert row.payload["conversion_observed_reason"] == "missing_title"
+    assert row.payload["conversion_has_title"] is True
+    assert row.payload["conversion_body_length"] == 42
+    assert row.payload["conversion_has_published_at"] is False
+
+
+@pytest.mark.asyncio
+async def test_conversion_rejection_payload_is_sql_drillable(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    vb_source: NewsSource,
+) -> None:
+    """``payload->>'conversion_analyzable_reason'`` で JSONB drill-down できる。"""
+    svc = ArticleAcquisitionService(
+        session_factory,
+        lambda: _StubFetcher(
+            [_rejection(analyzable_reason=ConversionReason.READY_PRECLUDED)]
+        ),
+    )
+
+    await svc.execute(vb_source.id)
+
+    rows = (
+        (
+            await db_session.execute(
+                select(PipelineEvent).where(
+                    PipelineEvent.payload["conversion_analyzable_reason"].astext
+                    == "ready_precluded"
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 1

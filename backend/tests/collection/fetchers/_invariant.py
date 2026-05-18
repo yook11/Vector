@@ -5,9 +5,11 @@
 名や tags の中身など、ソース次第で変動する値の枚挙は書かない
 (memory `feedback_test_invariants_over_change_tracking.md`)。
 
-Outcome 純化原則 (PR-2 以降): Fetcher が yield するのは
-``AnalyzableArticle | ObservedArticle`` の passport のみ。品質ゲート未達 entry
-は yield しないため、観測点は「yield された passport」だけになる。
+Fetcher が yield するのは ``AnalyzableArticle | ObservedArticle`` の passport
+と、変換不能 entry の ``ConversionRejection`` 値。per-source 不変条件は
+「変換成功した passport」の業務性質を固定する関心なので、本 helper は
+``ConversionRejection`` を ``passports_only`` で分離してから assert する
+(棄却の値化 / 監査自体の検証は converter / fetcher / service テストの責務)。
 
 passport builder への切替以降は同じ Fetcher でも entry ごとに
 Ready / Observed を選びうるため、type 集合の検証を 2 段階で行う:
@@ -34,22 +36,34 @@ from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.domain.source_completion_profile import DEFAULT_PROFILE
 from app.collection.domain.value_objects import PublishedAt
+from app.collection.source_fetch.fetched_article_converter import ConversionRejection
 
 _DEFAULT_HTML_PUBLISHED_AT = PublishedAt(value=datetime(2026, 5, 1, tzinfo=UTC))
 
 Passport = AnalyzableArticle | ObservedArticle
+FetchItem = AnalyzableArticle | ObservedArticle | ConversionRejection
 
 
-def assert_at_least_one_passport(items: Iterable[Passport]) -> None:
-    """全 entry が drop = ソース壊滅。fixture で検知する。"""
-    materialized = list(items)
+def passports_only(items: Iterable[FetchItem]) -> list[Passport]:
+    """fetch stream から ``ConversionRejection`` を分離し passport のみ返す。
+
+    per-source 不変条件は変換成功分の業務性質を固定する関心。棄却の値化 /
+    監査の検証は converter / fetcher / service テストが担うため、ここでは
+    分離するだけ。
+    """
+    return [item for item in items if not isinstance(item, ConversionRejection)]
+
+
+def assert_at_least_one_passport(items: Iterable[FetchItem]) -> None:
+    """全 entry が変換不能 = ソース壊滅。fixture で検知する。"""
+    materialized = passports_only(items)
     assert materialized, (
         "fetcher produced no passport from fixture; pipeline cannot proceed"
     )
 
 
 def assert_passports_persistable(
-    items: Iterable[Passport],
+    items: Iterable[FetchItem],
     *,
     html_body: str = "x" * 200,
     html_published_at: PublishedAt | None = None,
@@ -64,7 +78,7 @@ def assert_passports_persistable(
     HTML 側から確定させる前提を表現するため)。
     """
     pub = html_published_at or _DEFAULT_HTML_PUBLISHED_AT
-    for item in items:
+    for item in passports_only(items):
         if isinstance(item, AnalyzableArticle):
             continue
         assert isinstance(item, ObservedArticle)
@@ -85,7 +99,7 @@ def assert_passports_persistable(
 
 
 def assert_passport_types_allowed(
-    items: Iterable[Passport],
+    items: Iterable[FetchItem],
     *,
     allowed: set[type],
 ) -> None:
@@ -94,7 +108,7 @@ def assert_passport_types_allowed(
     例: Pattern H 固定ソース (``body_candidate=None``) に対し
     ``allowed={ObservedArticle}`` を渡せば、Ready が混入していないことを固定。
     """
-    materialized = list(items)
+    materialized = passports_only(items)
     actual_types = {type(item) for item in materialized}
     unexpected = actual_types - allowed
     assert not unexpected, (
@@ -104,7 +118,7 @@ def assert_passport_types_allowed(
 
 
 def assert_passport_types_include(
-    items: Iterable[Passport],
+    items: Iterable[FetchItem],
     *,
     must_include: set[type],
 ) -> None:
@@ -113,7 +127,7 @@ def assert_passport_types_include(
     fallback で型が混じる可能性は ``allowed`` 側で許容しつつ、主経路の型が
     最低 1 件 yield されることを固定する用途。
     """
-    materialized = list(items)
+    materialized = passports_only(items)
     actual_types = {type(item) for item in materialized}
     missing = must_include - actual_types
     assert not missing, (

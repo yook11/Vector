@@ -23,7 +23,9 @@ from app.collection.domain.source_completion_profile import (
     SourceCompletionProfile,
 )
 from app.collection.source_fetch.article_fetcher import ArticleFetcher
+from app.collection.source_fetch.errors import ConversionReason
 from app.collection.source_fetch.fetched_article import FetchedArticle
+from app.collection.source_fetch.fetched_article_converter import ConversionRejection
 from app.collection.source_fetch.tools.fetch_tools import FetchTools
 from app.collection.sources.article_source import ArticleSource
 from app.shared.value_objects.source_name import SourceName
@@ -86,8 +88,11 @@ async def test_yields_ready_when_source_emits_valid_article() -> None:
     assert isinstance(results[0], AnalyzableArticle)
 
 
-async def test_skips_when_source_emits_drop_candidate() -> None:
-    """title="" は builder で drop、ArticleFetcher は何も yield しない。"""
+async def test_yields_rejection_for_unconvertible_entry_without_stopping_stream() -> (
+    None
+):
+    """title="" は変換不能だが握りつぶさず ``ConversionRejection`` を yield し、
+    後続 entry の変換は止まらない (stream 継続 = 1 件不良で source 全停止しない)。"""
     source = _make_source(
         [
             FetchedArticle(
@@ -109,8 +114,10 @@ async def test_skips_when_source_emits_drop_candidate() -> None:
 
     results = await _collect_fetch(fetcher, source_id=1)
 
-    assert len(results) == 1
-    assert isinstance(results[0], ObservedArticle)
+    assert len(results) == 2
+    assert isinstance(results[0], ConversionRejection)
+    assert results[0].error.analyzable_reason is ConversionReason.MISSING_TITLE
+    assert isinstance(results[1], ObservedArticle)
 
 
 def test_exposes_source_name_and_endpoint_url_as_instance_attrs() -> None:

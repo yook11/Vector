@@ -1,36 +1,17 @@
-"""Article Acquisition Service — 1 source 分のニュースから品質を担保した記事を獲得する。
+"""Article Acquisition Service — 1 source 分のニュースから記事を獲得する。
 
-外部ニュースを取得して品質を担保した ``articles`` に到達させることが ``collection``
-BC の業務目的。本 Service はその中核ユースケースで、source 1 件分の取り込みを担う。
-即時獲得 (本文込みで品質を満たす) 経路と補完待ち獲得 (本文 HTML 取得を経て獲得確定
-する) 経路の 2 系統を ``match`` で振り分けて永続化する。完成は後段
-``ArticleCompletionService`` が担う。
+Fetcher の ``AsyncIterator`` を回し ``match`` で 3 型を振り分ける:
 
-新 2 表構成 (``articles`` / ``pending_html_articles``) を直接駆動する。
+- ``AnalyzableArticle`` → ``article_store.save`` で即時獲得 (``source_url``
+  UNIQUE の ON CONFLICT で同 tick race / 既知 URL を吸収、``None`` は skip)。
+- ``ObservedArticle`` → ``exists_by_source_url`` pre-check 後
+  ``pending_html_articles`` に投入 (補完は後段 ``ArticleCompletionService``)。
+- ``ConversionRejection`` → 変換不能 entry。**業務 tx とは別 session** で
+  棄却監査を焼いて continue (後続の source 全体失敗で業務 session が rollback
+  しても監査を残すため。``failure_handling.py`` の 3 段防御 doctrine 再利用)。
 
-Fetcher の ``AsyncIterator[AnalyzableArticle | ObservedArticle]`` を回し
-``match`` で分岐する:
-
-- ``AnalyzableArticle`` → 即時獲得経路。
-  ``article_store.save(ready)`` に passport 型を直接渡し、
-  ``articles.source_url UNIQUE`` の ``ON CONFLICT DO NOTHING`` で同 tick race /
-  既知 URL を吸収する (``None`` 戻りは静かに skip)。caller (``ingest_source`` task)
-  は返却された ``article_id`` を ``ExtractionTrigger`` に詰めて
-  ``extract_content.kiq`` に chain する。
-- ``ObservedArticle`` → 補完待ち獲得経路。
-  ``article_store.exists_by_source_url`` pre-check で feed 再露出を弾き、
-  ``pending_html_articles.url`` で投入 (Stage 1 投入は ``PendingHtmlEnqueue``、
-  Stage 2 の claim/sweep は ``article_completion/repository.py``)。下流は
-  cron poller (``dispatch_html_fetch_jobs``) が DB 駆動で拾うため、Service /
-  Task は pending_id を caller に渡さない (Outcome 純化原則)。
-
-per-entry の品質ゲート未達は Fetcher 側で yield しない (Outcome 純化原則)。
-Service は「渡される passport は次工程に進めるべきもの」という前提だけを持つ。
-
-``commit`` までが Service の責務。``NewsSource`` ORM の lookup は
-``IngestSourceArg`` (=task envelope) で済んでいるため本 Service では行わない。
-成功側の監査焼付 (``pipeline_events.payload`` への件数 / breakdown 集計) は
-中途半端な構造として撤去済。後続で proper な audit subsystem を再導入する予定。
+``commit`` までが責務。``NewsSource`` lookup は ``IngestSourceArg`` 済で本
+Service では行わない。成功側の件数監査は撤去済 (後続で再導入予定)。
 """
 
 from __future__ import annotations
@@ -45,9 +26,12 @@ from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.external_fetch_errors import ExternalFetchError
 from app.collection.persistence.article_store import ArticleStore
+from app.collection.source_fetch.audit_repository import SourceFetchAuditRepository
 from app.collection.source_fetch.errors import SourceFetchError
+from app.collection.source_fetch.fetched_article_converter import ConversionRejection
 from app.collection.source_fetch.pending_enqueue import PendingHtmlEnqueue
 from app.collection.source_fetch.protocol import Fetcher
+from app.observability.redact import redact_secrets
 
 logger = structlog.get_logger(__name__)
 
@@ -101,6 +85,10 @@ class ArticleAcquisitionService:
                                 source_id=source_id,
                                 ready_at=datetime.now(UTC),
                             )
+                        case ConversionRejection() as rej:
+                            # 変換不能 entry。stream は止めず別 tx で監査して
+                            # 次 entry へ (本ループの業務 session には書かない)。
+                            await self._audit_conversion_rejected(source_id, rej)
             except ExternalFetchError as exc:
                 # tool 層で origin error に翻訳済。Layer 1 marker に CODE ごと
                 # 載せ替えて伝播する (cron 一本化のため Stage 1 は救済戦略の差を
@@ -115,3 +103,37 @@ class ArticleAcquisitionService:
             persisted_count=len(persisted_ids),
         )
         return persisted_ids
+
+    async def _audit_conversion_rejected(
+        self, source_id: int, rej: ConversionRejection
+    ) -> None:
+        """変換棄却を業務 tx とは別 session で best-effort 監査する。
+
+        業務 session に書くと後続 entry の source 全体失敗 (commit 前 rollback)
+        で監査も巻き戻るため、必ず別 tx で commit する。DB 落ち / schema 不整合
+        は log fallback (``failure_handling.py`` の 3 段防御 doctrine 再利用)。
+        監査 repository には ``ConversionRejection`` ではなく原因例外のみ渡す。
+        """
+        try:
+            async with self._session_factory() as audit_session:
+                await SourceFetchAuditRepository(
+                    audit_session
+                ).append_conversion_rejected(
+                    source_id=source_id,
+                    exc=rej.error,
+                    attempt=1,
+                )
+                await audit_session.commit()
+        except Exception as audit_exc:
+            logger.exception(
+                "fetched_article_conversion_audit_dropped",
+                source_id=source_id,
+                business_error_class=(
+                    f"{type(rej.error).__module__}.{type(rej.error).__qualname__}"
+                ),
+                business_error_message=redact_secrets(str(rej.error))[:500],
+                audit_error_class=(
+                    f"{type(audit_exc).__module__}.{type(audit_exc).__qualname__}"
+                ),
+                audit_error_message=redact_secrets(str(audit_exc))[:500],
+            )

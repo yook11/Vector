@@ -20,7 +20,7 @@ P2-D (本実装): Adapter 概念除去。本モジュールは **free function**
 (``_common.py`` に source-specific な事実を残さない)。
 
 判定順は旧 ``BaseDjangoplicityFetcher._convert_entry`` を踏襲: title 空のみ
-structural gate (URL canonical は ``passport_builder`` に委譲)。本文は HTML
+structural gate (URL canonical は ``fetched_article_converter`` に委譲)。本文は HTML
 詳細ページに委譲する Pattern H のため ``body=None`` で渡す。
 """
 

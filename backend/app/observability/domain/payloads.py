@@ -54,6 +54,16 @@ class SourceFetchPayload(BasePipelineEventPayload):
     content_type: str | None = None
     body_head: str | None = None  # 先頭 500 字
 
+    # per-entry 変換棄却 (REJECTED 経路で詰める。「なぜ Analyzable/Observed に
+    # できなかったか」を error_message へ畳まず構造化列で SQL drill-down 可能に
+    # する SSoT。全 optional で既存 failure path の組立は無回帰)
+    conversion_analyzable_reason: str | None = None
+    conversion_observed_reason: str | None = None
+    conversion_raw_url: str | None = None  # 永続化前に redact_secrets を通す
+    conversion_has_title: bool | None = None
+    conversion_body_length: int | None = None
+    conversion_has_published_at: bool | None = None
+
 
 class ContentFetchPayload(BasePipelineEventPayload):
     """Stage 2 — 1 記事 1 HTML 取得。

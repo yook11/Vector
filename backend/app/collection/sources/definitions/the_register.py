@@ -46,7 +46,7 @@ class TheRegisterSource:
     ``<link href>`` は redirector 経由 (``go.theregister.com/feed/...``) のため
     ``_normalize_register_link`` で実 URL に展開してから渡す (builder では
     復元できない per-source 変換)。title / URL の構造ゲートは
-    ``passport_builder`` に委譲する。
+    ``fetched_article_converter`` に委譲する。
     """
 
     name: ClassVar[SourceName] = SourceName("The Register")

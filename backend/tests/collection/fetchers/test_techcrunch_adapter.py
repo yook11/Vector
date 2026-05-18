@@ -12,9 +12,12 @@ from __future__ import annotations
 
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.source_fetch.article_fetcher import ArticleFetcher
+from app.collection.source_fetch.errors import ConversionReason
 from app.collection.source_fetch.fetched_article import FetchedArticle
+from app.collection.source_fetch.fetched_article_converter import ConversionRejection
 from app.collection.sources.definitions.techcrunch import TechCrunchSource
 from tests.collection.fetchers._fixture_tools import fixture_tools
+from tests.collection.fetchers._invariant import passports_only
 
 _FIXTURE = "techcrunch_rss.xml"
 
@@ -41,13 +44,31 @@ async def test_collect_propagates_title_and_url_from_entries() -> None:
 
 
 async def test_article_fetcher_yields_incomplete_only() -> None:
-    """``ArticleFetcher`` 経路で yield される passport は全 ``ObservedArticle``
-    (Ready 経路への昇格は構造的に発生しない)。"""
+    """``ArticleFetcher`` 経路で変換成功した passport は全 ``ObservedArticle``
+    (TC は body 不信用のため Ready 経路への昇格は構造的に発生しない)。"""
     fetcher = ArticleFetcher(
         TechCrunchSource, tools=fixture_tools(rss_fixture=_FIXTURE)
     )
 
-    passports = [item async for item in fetcher.fetch(source_id=1)]
+    items = [item async for item in fetcher.fetch(source_id=1)]
+    passports = passports_only(items)
 
     assert passports
     assert all(isinstance(p, ObservedArticle) for p in passports)
+
+
+async def test_article_fetcher_surfaces_empty_title_entry_as_rejection() -> None:
+    """空 title entry は握りつぶさず ``ConversionRejection`` で表に出る。
+
+    旧 ``try_build_passport`` は ``None`` で静かに drop していた fixture 内の
+    空 title entry が、変換不能として理由付きで可視化される (故障の見える化)。
+    """
+    fetcher = ArticleFetcher(
+        TechCrunchSource, tools=fixture_tools(rss_fixture=_FIXTURE)
+    )
+
+    items = [item async for item in fetcher.fetch(source_id=1)]
+    rejections = [i for i in items if isinstance(i, ConversionRejection)]
+
+    assert len(rejections) == 1
+    assert rejections[0].error.analyzable_reason is ConversionReason.MISSING_TITLE

@@ -54,7 +54,7 @@ class MicrosoftResearchSource:
 
     body は ``_strip_html`` → ``_strip_footer`` の順で WordPress 固定 footer を
     除去してから渡す (builder では復元できない per-source 変換)。title /
-    body 長 / published / URL の構造ゲートは ``passport_builder`` に委譲する。
+    body 長 / published / URL の構造ゲートは ``fetched_article_converter`` に委譲する。
     """
 
     name: ClassVar[SourceName] = SourceName("Microsoft Research")

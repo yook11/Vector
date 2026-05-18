@@ -57,7 +57,7 @@ def _pick_body(entry: RssEntry) -> str:
 class VentureBeatSource:
     """VentureBeat 用 ``XxxSource`` (Pattern R、body 信用)。
 
-    Ready / Incomplete の分岐は ``passport_builder`` 側に委ね、Source は body
+    Ready / Incomplete の分岐は ``fetched_article_converter`` 側に委ね、Source は body
     候補を組み立てることだけに専念する (``_pick_body`` / ``_strip_html``)。
     """
 

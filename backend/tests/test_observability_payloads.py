@@ -46,6 +46,39 @@ class TestSourceFetchPayloadFailureSnapshot:
         assert payload.body_head == "Forbidden"
 
 
+class TestSourceFetchPayloadConversionFields:
+    """per-entry 変換棄却 (REJECTED) 用 ``conversion_*`` 構造化列。"""
+
+    def test_conversion_fields_default_none(self) -> None:
+        """全 optional default None — 既存 failure payload 組立に無回帰。"""
+        payload = SourceFetchPayload()
+        assert payload.conversion_analyzable_reason is None
+        assert payload.conversion_observed_reason is None
+        assert payload.conversion_raw_url is None
+        assert payload.conversion_has_title is None
+        assert payload.conversion_body_length is None
+        assert payload.conversion_has_published_at is None
+
+    def test_conversion_fields_serialize_to_json(self) -> None:
+        """``conversion_*`` を与えると JSONB 焼付 (model_dump json) に乗る。"""
+        payload = SourceFetchPayload(
+            conversion_analyzable_reason="body_too_short",
+            conversion_observed_reason="missing_title",
+            conversion_raw_url="https://example.com/a",
+            conversion_has_title=True,
+            conversion_body_length=42,
+            conversion_has_published_at=False,
+        )
+        dumped = payload.model_dump(mode="json")
+        assert dumped["conversion_analyzable_reason"] == "body_too_short"
+        assert dumped["conversion_observed_reason"] == "missing_title"
+        assert dumped["conversion_raw_url"] == "https://example.com/a"
+        assert dumped["conversion_has_title"] is True
+        assert dumped["conversion_body_length"] == 42
+        assert dumped["conversion_has_published_at"] is False
+        assert SourceFetchPayload.model_validate(dumped) == payload
+
+
 class TestContentFetchPayloadAuditKeys:
     """``ContentFetchPayload`` の集計 key field 不変条件 (PR-E dual-fill)。"""
 

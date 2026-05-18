@@ -4,8 +4,9 @@
 ``SourceFetchPayload`` の組み立て・``PipelineEventRepository.append()`` の引数列・
 ``error_chain`` の FQN 組み立てを知らない。
 
-- 失敗経路のみ (``append_failure``)。成功側 audit (件数 / breakdown 集計) は
-  本 spec 範囲外で ``FetchLog`` が担う。
+- ソース全体失敗 (``append_failure``、FAILED) と per-entry 変換棄却
+  (``append_conversion_rejected``、REJECTED 固定) の 2 経路。成功側 audit
+  (件数 / breakdown 集計) は本 spec 範囲外で ``FetchLog`` が担う。
 - ``category`` は collection stage では ``Layer1Category`` の語彙が合わないため
   常に ``NULL`` (foundation taxonomy 準拠、``_category_of`` は持たない)。
 - ``code`` は origin ``ExternalFetchError.CODE`` (= ``SourceFetchError.code``) を
@@ -18,6 +19,7 @@ from __future__ import annotations
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.collection.source_fetch.errors import FetchedArticleConversionError
 from app.observability.domain.event import EventType, Stage
 from app.observability.domain.payloads import SourceFetchPayload
 from app.observability.recording import _extract_error_chain
@@ -76,6 +78,48 @@ class SourceFetchAuditRepository:
             error_class=_fqn(exc),
             category=None,
             code=code,
+        )
+
+    async def append_conversion_rejected(
+        self,
+        *,
+        source_id: int | None,
+        exc: FetchedArticleConversionError,
+        attempt: int,
+    ) -> None:
+        """per-entry 変換不能 entry の棄却を 1 行記録する。
+
+        ``event_type`` は **常に ``REJECTED``** (source 全体失敗寄りの
+        ``FAILED`` とは別軸。深刻度は ``code`` / reason / payload で表現し、
+        監視・集計で混ぜない)。``outcome_code`` / ``code`` は単一の
+        ``exc.code`` (集計 cardinality 爆発回避)、細分は payload の
+        ``conversion_*`` 列で drill-down する。引数は原因例外そのもの
+        (``ConversionRejection`` stream 値は受け取らない)。commit は呼出側。
+
+        ``conversion_raw_url`` は URL query に token 混入の可能性があるため
+        必ず ``redact_secrets`` を通してから永続化する。
+        """
+        payload = SourceFetchPayload(
+            source_name=exc.source_name,
+            error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
+            error_chain=_extract_error_chain(exc),
+            conversion_analyzable_reason=str(exc.analyzable_reason),
+            conversion_observed_reason=str(exc.observed_reason),
+            conversion_raw_url=(redact_secrets(exc.raw_url) if exc.raw_url else None),
+            conversion_has_title=exc.has_title,
+            conversion_body_length=exc.body_length,
+            conversion_has_published_at=exc.has_published_at,
+        )
+        await self._events.append(
+            stage=Stage.SOURCE_FETCH,
+            event_type=EventType.REJECTED,
+            outcome_code=exc.code,
+            payload=payload,
+            source_id=source_id,
+            attempt=attempt,
+            error_class=_fqn(exc),
+            category=None,
+            code=exc.code,
         )
 
 

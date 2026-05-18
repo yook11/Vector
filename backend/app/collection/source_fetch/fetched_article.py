@@ -2,8 +2,8 @@
 
 per-source の raw 取得結果を共通言語に翻訳する責務 (External boundary →
 Internal validation の境界層) を表現する。Source 自身は ``AnalyzableArticle``
-/ ``ObservedArticle`` を構築しない: 品質ゲート判定は ``passport_builder``
-に委ねる。
+/ ``ObservedArticle`` を構築しない: 品質ゲート判定は
+``fetched_article_converter`` に委ねる。
 
 ``FetchedArticle`` field 設計の意図:
 
@@ -30,8 +30,8 @@ class FetchedArticle:
     """1 entry / 1 record 分の取得材料。
 
     Source が外部 source から取り出した raw データを共通言語に揃えた中間型。
-    本データから passport (``AnalyzableArticle`` | ``ObservedArticle``) を
-    組むのは ``passport_builder`` の責務。
+    本データから ``AnalyzableArticle`` | ``ObservedArticle`` を組むのは
+    ``fetched_article_converter`` の責務。
     """
 
     title: str
