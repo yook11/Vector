@@ -15,9 +15,9 @@ from pathlib import Path
 
 import feedparser
 
-from app.collection.fetchers.meta_ai import MetaAISource, _is_ai_tagged
-from app.collection.fetchers.tools.fetched_article import FetchedArticle
-from app.collection.fetchers.tools.rss_parser import RssEntry, normalize_entry
+from app.collection.source_fetch.fetched_article import FetchedArticle
+from app.collection.source_fetch.tools.rss_parser import RssEntry, normalize_entry
+from app.collection.sources.definitions.meta_ai import MetaAISource, _is_ai_tagged
 from tests.collection.fetchers._fixture_tools import fixture_tools
 
 _FIXTURES_DIR = Path(__file__).parent.parent.parent / "fixtures"

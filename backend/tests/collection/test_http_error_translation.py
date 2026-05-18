@@ -29,7 +29,7 @@ from app.collection.external_fetch_errors import (
     FetchTimeoutError,
     FetchUnexpectedStatusError,
 )
-from app.collection.fetchers.tools.http_error_translation import (
+from app.collection.source_fetch.tools.http_error_translation import (
     RECOVERABLE_FETCH_ERRORS,
     classify_fetch_status,
     translate_fetch_exception,

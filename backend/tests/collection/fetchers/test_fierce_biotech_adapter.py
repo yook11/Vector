@@ -14,8 +14,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from app.collection.fetchers.fierce_biotech import FierceBiotechSource
-from app.collection.fetchers.tools.fetched_article import FetchedArticle
+from app.collection.source_fetch.fetched_article import FetchedArticle
+from app.collection.sources.definitions.fierce_biotech import FierceBiotechSource
 from tests.collection.fetchers._fixture_tools import fixture_tools
 
 _FIXTURE = "fierce_biotech_rss.xml"

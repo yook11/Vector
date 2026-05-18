@@ -19,7 +19,7 @@ from app.collection.domain.source_completion_profile import (
     DEFAULT_PROFILE,
     SourceCompletionProfile,
 )
-from app.collection.fetchers.strategy import SOURCES
+from app.collection.source_fetch.strategy import SOURCES
 from app.models.news_source import NewsSource as NewsSourceORM
 from app.shared.value_objects.source_name import SourceName
 

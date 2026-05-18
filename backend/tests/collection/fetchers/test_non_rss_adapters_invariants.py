@@ -31,21 +31,21 @@ import pytest
 
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.observed_article import ObservedArticle
-from app.collection.fetchers.anthropic import AnthropicSource
-from app.collection.fetchers.article_fetcher import ArticleFetcher
-from app.collection.fetchers.hacker_news import HackerNewsSource
-from app.collection.fetchers.mdpi.sources import (
+from app.collection.source_fetch.article_fetcher import ArticleFetcher
+from app.collection.source_fetch.tools.algolia_hn_client import HackerNewsApiClient
+from app.collection.source_fetch.tools.crossref_client import CrossrefApiClient
+from app.collection.source_fetch.tools.fetch_tools import FetchTools
+from app.collection.source_fetch.tools.raw_http_client import RawHttpClient
+from app.collection.sources.article_source import ArticleSource
+from app.collection.sources.definitions.anthropic import AnthropicSource
+from app.collection.sources.definitions.hacker_news import HackerNewsSource
+from app.collection.sources.definitions.mdpi.sources import (
     MDPIEnergiesSource,
     MDPIMaterialsSource,
     MDPINanomaterialsSource,
     MDPISensorsSource,
 )
-from app.collection.fetchers.ornl import ORNLSource
-from app.collection.fetchers.tools.algolia_hn_client import HackerNewsApiClient
-from app.collection.fetchers.tools.crossref_client import CrossrefApiClient
-from app.collection.fetchers.tools.fetch_tools import FetchTools
-from app.collection.fetchers.tools.raw_http_client import RawHttpClient
-from app.collection.sources.article_source import ArticleSource
+from app.collection.sources.definitions.ornl import ORNLSource
 from tests.collection.fetchers._fixture_tools import fixture_tools
 from tests.collection.fetchers._invariant import (
     Passport,

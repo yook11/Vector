@@ -20,14 +20,14 @@ import pytest
 
 from app.collection.domain.observed_article import ObservedOrigin
 from app.collection.domain.source_completion_profile import DEFAULT_PROFILE
-from app.collection.fetchers.mdpi.sources import (
+from app.collection.source_fetch.strategy import SOURCES
+from app.collection.sources.article_source import ArticleSource
+from app.collection.sources.definitions.mdpi.sources import (
     MDPIEnergiesSource,
     MDPIMaterialsSource,
     MDPINanomaterialsSource,
     MDPISensorsSource,
 )
-from app.collection.fetchers.strategy import SOURCES
-from app.collection.sources.article_source import ArticleSource
 from app.shared.value_objects.source_name import SourceName
 
 

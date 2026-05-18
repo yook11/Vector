@@ -29,9 +29,9 @@ from app.collection.external_fetch_errors import (
     FetchOriginServerError,
     FetchResourceNotFoundError,
 )
-from app.collection.fetchers.article_fetcher import ArticleFetcher
-from app.collection.fetchers.ornl import ORNLSource, _parse_listing
-from app.collection.fetchers.tools.raw_http_client import RawHttpClient
+from app.collection.source_fetch.article_fetcher import ArticleFetcher
+from app.collection.source_fetch.tools.raw_http_client import RawHttpClient
+from app.collection.sources.definitions.ornl import ORNLSource, _parse_listing
 from tests.collection.fetchers._fixture_tools import fixture_tools
 from tests.collection.fetchers._invariant import (
     Passport,

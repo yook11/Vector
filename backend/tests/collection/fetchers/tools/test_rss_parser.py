@@ -25,13 +25,13 @@ from app.collection.external_fetch_errors import (
     FetchResourceNotFoundError,
     FetchSsrfBlockedError,
 )
-from app.collection.fetchers.tools.rss_parser import (
+from app.collection.source_fetch.tools.rss_parser import (
     RssParser,
     normalize_entry,
 )
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 
-_MOD = "app.collection.fetchers.tools.rss_parser"
+_MOD = "app.collection.source_fetch.tools.rss_parser"
 
 _ENDPOINT = "https://example.com/feed.xml"
 _SOURCE = "Test Source"

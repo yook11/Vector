@@ -33,7 +33,7 @@ from app.collection.external_fetch_errors import (
     FetchResponseTooLargeError,
     FetchRobotsDisallowedError,
 )
-from app.collection.fetchers.tools.http_error_translation import (
+from app.collection.source_fetch.tools.http_error_translation import (
     translate_fetch_exception,
 )
 from app.shared.security.safe_http import make_safe_async_client

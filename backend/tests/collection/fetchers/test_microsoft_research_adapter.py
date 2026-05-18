@@ -12,8 +12,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.collection.fetchers.microsoft_research import MicrosoftResearchSource
-from app.collection.fetchers.tools.fetched_article import FetchedArticle
+from app.collection.source_fetch.fetched_article import FetchedArticle
+from app.collection.sources.definitions.microsoft_research import (
+    MicrosoftResearchSource,
+)
 from tests.collection.fetchers._fixture_tools import fixture_tools
 
 _FIXTURES_DIR = Path(__file__).parent.parent.parent / "fixtures"

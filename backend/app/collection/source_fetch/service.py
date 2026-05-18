@@ -44,10 +44,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.external_fetch_errors import ExternalFetchError
-from app.collection.fetchers.protocol import Fetcher
 from app.collection.persistence.article_store import ArticleStore
 from app.collection.source_fetch.errors import SourceFetchError
 from app.collection.source_fetch.pending_enqueue import PendingHtmlEnqueue
+from app.collection.source_fetch.protocol import Fetcher
 
 logger = structlog.get_logger(__name__)
 

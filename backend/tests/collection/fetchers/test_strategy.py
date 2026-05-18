@@ -20,8 +20,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from app.collection.fetchers.article_fetcher import ArticleFetcher
-from app.collection.fetchers.strategy import FETCHERS, SOURCES
+from app.collection.source_fetch.article_fetcher import ArticleFetcher
+from app.collection.source_fetch.strategy import FETCHERS, SOURCES
 from app.collection.sources.article_source import ArticleSource
 from app.shared.value_objects.source_name import SourceName
 

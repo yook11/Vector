@@ -33,10 +33,10 @@ from app.collection.external_fetch_errors import (
     FetchOriginServerError,
     FetchResourceNotFoundError,
 )
-from app.collection.fetchers.nasa import NASA_FEEDS, nasa_build_body
-from app.collection.fetchers.tools.fetched_article import FetchedArticle
-from app.collection.fetchers.tools.multi_feed_rss import multi_feed_rss
-from app.collection.fetchers.tools.rss_parser import RssEntry
+from app.collection.source_fetch.fetched_article import FetchedArticle
+from app.collection.source_fetch.tools.multi_feed_rss import multi_feed_rss
+from app.collection.source_fetch.tools.rss_parser import RssEntry
+from app.collection.sources.definitions.nasa import NASA_FEEDS, nasa_build_body
 from tests.collection.fetchers._fixture_tools import fixture_tools
 
 _NOW = datetime(2026, 5, 1, 12, 0, tzinfo=UTC)

@@ -11,9 +11,9 @@ test_source_adapter_profiles に集約)。
 from __future__ import annotations
 
 from app.collection.domain.observed_article import ObservedArticle
-from app.collection.fetchers.article_fetcher import ArticleFetcher
-from app.collection.fetchers.techcrunch import TechCrunchSource
-from app.collection.fetchers.tools.fetched_article import FetchedArticle
+from app.collection.source_fetch.article_fetcher import ArticleFetcher
+from app.collection.source_fetch.fetched_article import FetchedArticle
+from app.collection.sources.definitions.techcrunch import TechCrunchSource
 from tests.collection.fetchers._fixture_tools import fixture_tools
 
 _FIXTURE = "techcrunch_rss.xml"

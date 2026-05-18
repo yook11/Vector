@@ -29,8 +29,8 @@ from app.collection.domain.source_completion_profile import (
     FieldCompletionPolicy,
     SourceCompletionProfile,
 )
-from app.collection.fetchers.tools.fetched_article import FetchedArticle
-from app.collection.fetchers.tools.passport_builder import try_build_passport
+from app.collection.source_fetch.fetched_article import FetchedArticle
+from app.collection.source_fetch.passport_builder import try_build_passport
 from app.shared.value_objects.source_name import SourceName
 
 _PUBLISHED = datetime(2026, 5, 1, 12, 0, tzinfo=UTC)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.collection.fetchers.tools.text_normalizer import html_to_plain_text
+from app.collection.source_fetch.tools.text_normalizer import html_to_plain_text
 
 
 class TestHtmlToPlainText:

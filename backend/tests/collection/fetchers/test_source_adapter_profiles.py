@@ -29,7 +29,7 @@ from app.collection.domain.source_completion_profile import (
     FieldCompletionPolicy,
     SourceCompletionProfile,
 )
-from app.collection.fetchers.strategy import SOURCES
+from app.collection.source_fetch.strategy import SOURCES
 from app.shared.value_objects.source_name import SourceName
 
 # title が「仮」のため HTML 補完で上書きさせるソース (spec 特例)。

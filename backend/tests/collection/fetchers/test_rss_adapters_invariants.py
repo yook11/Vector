@@ -31,47 +31,52 @@ import pytest
 
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.observed_article import ObservedArticle
-from app.collection.fetchers.article_fetcher import ArticleFetcher
-from app.collection.fetchers.cleantechnica import CleanTechnicaSource
-from app.collection.fetchers.cloudflare import CloudflareBlogSource
-from app.collection.fetchers.cornell import CornellChronicleSource
-from app.collection.fetchers.deepmind import DeepMindSource
-from app.collection.fetchers.eetimes_japan import EETimesJapanSource
-from app.collection.fetchers.electrek import ElectrekSource
-from app.collection.fetchers.elife import ELifeSource
-from app.collection.fetchers.engadget import EngadgetSource
-from app.collection.fetchers.esa.sources import ESAHubbleSource, ESAWebbSource
-from app.collection.fetchers.fierce_biotech import FierceBiotechSource
-from app.collection.fetchers.frontiers.sources import (
+from app.collection.source_fetch.article_fetcher import ArticleFetcher
+from app.collection.sources.article_source import ArticleSource
+from app.collection.sources.definitions.cleantechnica import CleanTechnicaSource
+from app.collection.sources.definitions.cloudflare import CloudflareBlogSource
+from app.collection.sources.definitions.cornell import CornellChronicleSource
+from app.collection.sources.definitions.deepmind import DeepMindSource
+from app.collection.sources.definitions.eetimes_japan import EETimesJapanSource
+from app.collection.sources.definitions.electrek import ElectrekSource
+from app.collection.sources.definitions.elife import ELifeSource
+from app.collection.sources.definitions.engadget import EngadgetSource
+from app.collection.sources.definitions.esa.sources import (
+    ESAHubbleSource,
+    ESAWebbSource,
+)
+from app.collection.sources.definitions.fierce_biotech import FierceBiotechSource
+from app.collection.sources.definitions.frontiers.sources import (
     FrontiersAISource,
     FrontiersEnergyResearchSource,
     FrontiersMaterialsSource,
     FrontiersRoboticsAISource,
 )
-from app.collection.fetchers.huggingface import HuggingFaceBlogSource
-from app.collection.fetchers.ieee_spectrum import IEEESpectrumSource
-from app.collection.fetchers.itmedia_ai import ITmediaAISource
-from app.collection.fetchers.itmedia_news import ITmediaNewsSource
-from app.collection.fetchers.jpcert import JPCERTSource
-from app.collection.fetchers.krebs_on_security import KrebsOnSecuritySource
-from app.collection.fetchers.meta_ai import MetaAISource
-from app.collection.fetchers.meti import METISource
-from app.collection.fetchers.mext import MEXTSource
-from app.collection.fetchers.mic import MICSource
-from app.collection.fetchers.microsoft_research import MicrosoftResearchSource
-from app.collection.fetchers.monoist import MONOistSource
-from app.collection.fetchers.nasa import NASASource
-from app.collection.fetchers.nist import NISTSource
-from app.collection.fetchers.nsf import NSFSource
-from app.collection.fetchers.openai import OpenAISource
-from app.collection.fetchers.plos_one import PLOSOneSource
-from app.collection.fetchers.quantum_insider import QuantumInsiderSource
-from app.collection.fetchers.spaceflight_now import SpaceflightNowSource
-from app.collection.fetchers.spacenews import SpaceNewsSource
-from app.collection.fetchers.techcrunch import TechCrunchSource
-from app.collection.fetchers.the_register import TheRegisterSource
-from app.collection.fetchers.venturebeat import VentureBeatSource
-from app.collection.sources.article_source import ArticleSource
+from app.collection.sources.definitions.huggingface import HuggingFaceBlogSource
+from app.collection.sources.definitions.ieee_spectrum import IEEESpectrumSource
+from app.collection.sources.definitions.itmedia_ai import ITmediaAISource
+from app.collection.sources.definitions.itmedia_news import ITmediaNewsSource
+from app.collection.sources.definitions.jpcert import JPCERTSource
+from app.collection.sources.definitions.krebs_on_security import KrebsOnSecuritySource
+from app.collection.sources.definitions.meta_ai import MetaAISource
+from app.collection.sources.definitions.meti import METISource
+from app.collection.sources.definitions.mext import MEXTSource
+from app.collection.sources.definitions.mic import MICSource
+from app.collection.sources.definitions.microsoft_research import (
+    MicrosoftResearchSource,
+)
+from app.collection.sources.definitions.monoist import MONOistSource
+from app.collection.sources.definitions.nasa import NASASource
+from app.collection.sources.definitions.nist import NISTSource
+from app.collection.sources.definitions.nsf import NSFSource
+from app.collection.sources.definitions.openai import OpenAISource
+from app.collection.sources.definitions.plos_one import PLOSOneSource
+from app.collection.sources.definitions.quantum_insider import QuantumInsiderSource
+from app.collection.sources.definitions.spaceflight_now import SpaceflightNowSource
+from app.collection.sources.definitions.spacenews import SpaceNewsSource
+from app.collection.sources.definitions.techcrunch import TechCrunchSource
+from app.collection.sources.definitions.the_register import TheRegisterSource
+from app.collection.sources.definitions.venturebeat import VentureBeatSource
 from tests.collection.fetchers._fixture_tools import fixture_tools
 from tests.collection.fetchers._invariant import (
     Passport,

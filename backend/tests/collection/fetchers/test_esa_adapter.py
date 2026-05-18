@@ -13,10 +13,13 @@ from __future__ import annotations
 import pytest
 
 from app.collection.domain.observed_article import ObservedArticle
-from app.collection.fetchers.article_fetcher import ArticleFetcher
-from app.collection.fetchers.esa.sources import ESAHubbleSource, ESAWebbSource
-from app.collection.fetchers.tools.fetched_article import FetchedArticle
+from app.collection.source_fetch.article_fetcher import ArticleFetcher
+from app.collection.source_fetch.fetched_article import FetchedArticle
 from app.collection.sources.article_source import ArticleSource
+from app.collection.sources.definitions.esa.sources import (
+    ESAHubbleSource,
+    ESAWebbSource,
+)
 from tests.collection.fetchers._fixture_tools import fixture_tools
 
 

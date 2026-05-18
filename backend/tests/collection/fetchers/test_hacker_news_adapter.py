@@ -26,14 +26,14 @@ from app.collection.external_fetch_errors import (
     FetchAccessDeniedError,
     FetchOriginServerError,
 )
-from app.collection.fetchers.article_fetcher import ArticleFetcher
-from app.collection.fetchers.hacker_news import (
+from app.collection.source_fetch.article_fetcher import ArticleFetcher
+from app.collection.source_fetch.tools.algolia_hn_client import HackerNewsApiClient
+from app.collection.sources.definitions.hacker_news import (
     HN_HITS_PER_PAGE,
     HN_MIN_POINTS,
     HN_SLIDING_WINDOW_SECONDS,
     HackerNewsSource,
 )
-from app.collection.fetchers.tools.algolia_hn_client import HackerNewsApiClient
 from tests.collection.fetchers._fixture_tools import fixture_tools
 from tests.collection.fetchers._invariant import (
     Passport,

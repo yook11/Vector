@@ -9,7 +9,7 @@ URL 一意性 SSoT 用の canonicalize。spec の 5 項目を全て満たす:
 4. fragment (``#...``) 除去
 5. scheme は保存 (http と https は別 URL として扱う)
 
-既存 ``app.collection.fetchers.tools.url_normalizer`` は tracking strip のみで
+既存 ``app.collection.source_fetch.tools.url_normalizer`` は tracking strip のみで
 意図的に scheme/host/path を触らない設計のため、本 utility を別建てとする。
 共有する tracking parameter 集合は同モジュールから import している。
 """
@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-from app.collection.fetchers.tools.url_normalizer import _TRACKING_PARAMS
+from app.collection.source_fetch.tools.url_normalizer import _TRACKING_PARAMS
 
 
 def canonicalize_url(raw: str) -> str:

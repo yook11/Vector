@@ -29,9 +29,9 @@ from app.collection.external_fetch_errors import (
     FetchAccessDeniedError,
     FetchOriginServerError,
 )
-from app.collection.fetchers.article_fetcher import ArticleFetcher
-from app.collection.fetchers.mdpi.sources import MDPIMaterialsSource
-from app.collection.fetchers.tools.crossref_client import CrossrefApiClient
+from app.collection.source_fetch.article_fetcher import ArticleFetcher
+from app.collection.source_fetch.tools.crossref_client import CrossrefApiClient
+from app.collection.sources.definitions.mdpi.sources import MDPIMaterialsSource
 from tests.collection.fetchers._fixture_tools import fixture_tools
 from tests.collection.fetchers._invariant import (
     Passport,

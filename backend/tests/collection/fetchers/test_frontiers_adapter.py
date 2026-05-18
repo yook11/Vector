@@ -11,8 +11,8 @@ Source クラス (``frontiers/sources.py``) になった。固定する固有不
 
 from __future__ import annotations
 
-from app.collection.fetchers.frontiers.sources import FrontiersAISource
-from app.collection.fetchers.tools.fetched_article import FetchedArticle
+from app.collection.source_fetch.fetched_article import FetchedArticle
+from app.collection.sources.definitions.frontiers.sources import FrontiersAISource
 from tests.collection.fetchers._fixture_tools import fixture_tools
 
 _FIXTURE = "frontiers_ai_rss.xml"

@@ -22,9 +22,9 @@ from app.collection.domain.source_completion_profile import (
     DEFAULT_PROFILE,
     SourceCompletionProfile,
 )
-from app.collection.fetchers.article_fetcher import ArticleFetcher
-from app.collection.fetchers.tools.fetch_tools import FetchTools
-from app.collection.fetchers.tools.fetched_article import FetchedArticle
+from app.collection.source_fetch.article_fetcher import ArticleFetcher
+from app.collection.source_fetch.fetched_article import FetchedArticle
+from app.collection.source_fetch.tools.fetch_tools import FetchTools
 from app.collection.sources.article_source import ArticleSource
 from app.shared.value_objects.source_name import SourceName
 
