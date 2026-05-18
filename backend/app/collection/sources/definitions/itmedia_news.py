@@ -1,7 +1,6 @@
-"""ITmedia NEWS 用 Source (本文は HTML 必須)。
+"""ITmedia NEWS 用 Source。
 
-per-source 設計: RSS は ~100 chars のリード文のみ。RSS body を信用せず
-後段 HTML 抽出に委ねる。
+RSS は ~100 chars のリード文のみで本文を含まないため body は HTML 抽出に委ねる。
 """
 
 from __future__ import annotations
@@ -20,7 +19,7 @@ from app.shared.value_objects.source_name import SourceName
 
 
 class ITmediaNewsSource:
-    """ITmedia NEWS 用 ``XxxSource`` (Pattern H、body 不信用)。"""
+    """ITmedia NEWS 用 Source。"""
 
     name: ClassVar[SourceName] = SourceName("ITmedia NEWS")
     endpoint_url: ClassVar[str] = "https://rss.itmedia.co.jp/rss/2.0/news_bursts.xml"

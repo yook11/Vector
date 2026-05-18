@@ -1,8 +1,7 @@
 """OpenAI 用 Source (RSS 2.0、UTF-8)。
 
-per-source 設計: ``<description>`` は ~150 chars の短い概要のみで本文は
-HTML 詳細ページに委譲する。RSS body を信用しないため
-``body=None`` で yield し Incomplete (Pattern H) 経路に固定する。
+``<description>`` は ~150 chars の短い概要のみで本文を含まないため body は
+HTML 詳細ページに委ねる。
 """
 
 from __future__ import annotations
@@ -21,7 +20,7 @@ from app.shared.value_objects.source_name import SourceName
 
 
 class OpenAISource:
-    """OpenAI 用 ``XxxSource`` (Pattern H、body 不信用)。"""
+    """OpenAI 用 Source。"""
 
     name: ClassVar[SourceName] = SourceName("OpenAI")
     endpoint_url: ClassVar[str] = "https://openai.com/news/rss.xml"

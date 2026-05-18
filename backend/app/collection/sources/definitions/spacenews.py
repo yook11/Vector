@@ -1,8 +1,7 @@
 """SpaceNews 用 Source (WordPress 出力)。
 
-per-source 設計: RSS は ``<description>`` にリード文 + 画像 + truncate
-signature のみで full body を出さない。RSS body を信用せず本文は後段
-HTML 抽出に委ねる。
+RSS は ``<description>`` にリード文 + 画像 + truncate signature のみで
+full body を出さないため body は HTML 抽出に委ねる。
 """
 
 from __future__ import annotations
@@ -21,7 +20,7 @@ from app.shared.value_objects.source_name import SourceName
 
 
 class SpaceNewsSource:
-    """SpaceNews 用 ``XxxSource`` (Pattern H、body 不信用)。"""
+    """SpaceNews 用 Source。"""
 
     name: ClassVar[SourceName] = SourceName("SpaceNews")
     endpoint_url: ClassVar[str] = "https://spacenews.com/feed/"

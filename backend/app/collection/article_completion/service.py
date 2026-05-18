@@ -1,53 +1,17 @@
-"""``ArticleCompletionService`` — Pattern H (ObservedArticle → AnalyzableArticle)
-への補完責務全体を担う。``pending_html_articles`` 駆動。
+"""``ArticleCompletionService`` — 未完成記事を完成形に補完する use case。
 
-PR 4 で ``ContentFetchService`` から rename。「HTTP fetch する」技術名ではなく
-「未完成記事を完成形に補完する」責務全体 (HTTP 取得 + 抽出 + promotion + 永続化)
-を表す。案 3 cutover で「ID から処理資格を判定して load する」工程を service から
-除去し、Task 層が処理開始時に ``ReadyForArticleCompletion.try_advance_from`` で
-構築した厚い Ready を ``execute(ready)`` で受け取る (Stage 3/4 と同型)。
-``articles.source_url UNIQUE`` が重複の構造保証で、race-loss は read-back せず
-log + ``None`` で短絡する。
+``pending_html_articles`` 駆動。Task 層が構築した厚い Ready を
+``execute(ready)`` で受け取り、成功主線 (HTML 取得 + 抽出 + promotion +
+永続化) を担う。重複は ``articles.source_url UNIQUE`` が防ぎ、race-loss は
+read-back せず log + ``None`` で短絡する。
 
-責務 (成功主線):
-
-- ``ReadyForArticleCompletion`` を受け取る (precondition ``status='running'``
-  は Ready 型で構造保証済、service は ID も queue 状態も知らない)
-- ``ArticleHtmlCompleter.complete`` (純粋境界 ``completer.py``) に
-  ``ReadyForArticleCompletion`` を渡し ``AnalyzableArticle | CompletionFailure``
-  を値で受け取る。HTML 取得 + ``ExtractionEmpty`` 判定 + promotion は境界の責務で
-  service は ``isinstance`` 1 回で成功主線を分岐する
-- repository で ``articles`` INSERT + ``pending_html_articles`` DELETE を
-  **同 tx で一括 commit**。他 Stage (Extraction/Assessment/Embedding) と同形で
-  race-loss (``save`` が ``None``) は読み戻さず log + ``None`` で短絡、
-  pending は race / 成功とも DELETE、真の DB 異常は例外として伝播
-
-失敗後処理は ``ArticleCompletionFailureHandler`` に委譲する:
-
-- origin fetch / ``ExtractionEmpty`` / promotion / persist 異常の各失敗を
-  ``CompletionDisposition`` (``Terminal`` | ``Retryable``) に**分類**して
-  (``disposition.py``) handler に渡す。``pending_html_articles`` の状態遷移
-  (closed / open+ready_at / exhausted) + log は handler の責務。service は
-  分類して委譲するだけで、副作用は handler が完結させる (責務をファイルで分離)。
-
-caller (task) の責務:
-
-- 戻り値 ``int | None`` の dispatch (chain は ``int`` (article_id) が返った
-  時のみ ``extract_content.kiq``)
-- ``None`` (重複配送 / 状態不整合 / 永続失敗 / 一時失敗 / race-loss) は no-op
-  で exit。失敗詳細は構造化ログで観測する。
-
-設計上の決定:
-
-- origin fetch 例外は ``ArticleHtmlCompleter`` が境界で ``FetchFailed`` 値に畳む。
-  service は失敗 3 形を ``classify_completion_failure`` で ``Retryable`` /
-  ``Terminal`` に分類、retry は DB 駆動 (taskiq retry は使わない)
-- retry policy は ``Retryable`` が運ぶ **データ**。handler 側で policy ごとに
-  コード分岐せず ``exhausted`` 判定だけで処理経路を 1 本化する
-- ``attempt`` は ``ready.attempt_count`` を SSoT として使用 (caller から
-  受け取らない)
-- 成功側 / 失敗側の監査焼付 (``pipeline_events``) は中途半端な構造として撤去済。
-  後続で proper な audit subsystem を全 BC 横断で再導入する予定。
+- 完成は ``ArticleHtmlCompleter`` (純粋境界) に委譲し
+  ``AnalyzableArticle | CompletionFailure`` を値で受け取る。
+- ``articles`` INSERT + ``pending_html_articles`` DELETE は同 tx で一括
+  commit。真の DB 異常は例外として伝播。
+- 失敗は ``classify_completion_failure`` で分類し
+  ``ArticleCompletionFailureHandler`` に委譲 (状態遷移 + log は handler の
+  責務)。retry は DB 駆動で taskiq retry は使わない。
 """
 
 from __future__ import annotations
@@ -76,13 +40,13 @@ logger = structlog.get_logger(__name__)
 
 
 class ArticleCompletionService:
-    """Pattern H 2 段目 — Ready 1 件を HTML 取得 + 永続化する。
+    """Ready 1 件を HTML 取得 + 永続化する。
 
     ``execute(ready)`` が単一エントリポイント。完成は ``ArticleHtmlCompleter``
     (純粋境界) に委譲し ``AnalyzableArticle | CompletionFailure`` を値で受け取る。
     失敗は ``classify_completion_failure`` で分類して
     ``ArticleCompletionFailureHandler`` に委譲 (retry は DB 駆動、caller に
-    raise しない)。service は成功主線のみを持つ。
+    raise しない)。
     """
 
     def __init__(
@@ -97,9 +61,8 @@ class ArticleCompletionService:
     async def execute(self, ready: ReadyForArticleCompletion) -> int | None:
         """Ready 1 件を HTML 取得 → promotion → 永続化までの一連を担う。
 
-        precondition (``status='running'``) は ``ReadyForArticleCompletion`` で
-        構造保証済 (Task 層が処理開始時に ``try_advance_from`` で構築)。service は
-        ID も queue 状態も知らず、Ready を完成させるだけを責務とする。
+        precondition (``status='running'``) は ``ReadyForArticleCompletion``
+        で保証済。
 
         Returns:
             ``int`` — 永続化済 ``article_id``。caller は ``extract_content.kiq``

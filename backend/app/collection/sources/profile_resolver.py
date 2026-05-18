@@ -1,11 +1,7 @@
-"""``source_id`` / ``sourceName`` → ``SourceCompletionProfile`` 解決 seam。
+"""``source_id`` / ``source_name`` → ``SourceCompletionProfile`` 解決 seam。
 
-Stage 2 の pending 行は ``source_id`` (FK) しか持たない。新行は
-``ObservedArticle.source_name`` を持つが、in-flight 旧行は持たない (spec §5)。
-repository (ACL) は本 Protocol にのみ依存し、composition root ``SOURCES`` を
-import しない (spec §4.6 ガードレール 1)。具象 ``Registry...`` が
-``SOURCES`` 引き + ``source_id → news_sources.name`` DB フォールバックを内包
-する (session を持つのは ACL なので解決もここに集約する)。
+``source_name`` は新 pending 行のみ持つ。欠落する旧行は ``source_id`` から
+``news_sources.name`` を DB 解決する。
 """
 
 from __future__ import annotations
@@ -35,21 +31,13 @@ class CompletionProfileResolver(Protocol):
 
 
 class RegistryCompletionProfileResolver:
-    """``SOURCES`` 引き + ``source_id→name`` DB フォールバックの具象。
-
-    ``SOURCES`` を import するのは本ファイルのみ。repository は
-    ``CompletionProfileResolver`` Protocol にのみ依存する。
-    """
+    """``SOURCES`` 引き + ``source_id→name`` DB フォールバックの具象。"""
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
     async def resolve_name(self, *, source_id: int) -> SourceName:
-        """``news_sources.name`` を引く (legacy 行の identity 補完用)。
-
-        pending 行は ``source_id`` FK (RESTRICT) を持つため通常ヒットする。
-        万一不在なら data integrity 違反として ``ValueError``。
-        """
+        """``news_sources.name`` を引く (不在は ``ValueError``)。"""
         stmt = select(NewsSourceORM.name).where(NewsSourceORM.id == source_id)
         row = (await self._session.execute(stmt)).first()
         if row is None:
@@ -68,10 +56,5 @@ class RegistryCompletionProfileResolver:
             if source_name is not None
             else await self.resolve_name(source_id=source_id)
         )
-        # ``SOURCES`` は ``SourceName → ArticleSource`` (= Source クラス
-        # オブジェクト)。``.completion_profile`` はクラス属性直読み。Source は
-        # class そのものが Protocol を満たし ``adapter_factory`` /
-        # ``make_adapter`` のような構築経路が存在しないため、profile 読みで
-        # machinery を作る経路が構造的に不能 (class-ref 無 instantiation 保証)。
         source = SOURCES.get(SourceName(str(name)))
         return source.completion_profile if source is not None else DEFAULT_PROFILE

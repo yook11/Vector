@@ -1,7 +1,6 @@
 """Spaceflight Now 用 Source。
 
-per-source 設計: RSS には ``<description>`` が無く ``<content:encoded>`` に
-本文が入る。body は ``content_encoded`` を直取り。
+RSS には ``<description>`` が無く ``<content:encoded>`` に本文が入る。
 """
 
 from __future__ import annotations
@@ -36,7 +35,7 @@ def _pick_body(entry: RssEntry) -> str:
 
 
 class SpaceflightNowSource:
-    """Spaceflight Now 用 ``XxxSource`` (Pattern R、body 信用)。"""
+    """Spaceflight Now 用 Source。"""
 
     name: ClassVar[SourceName] = SourceName("Spaceflight Now")
     endpoint_url: ClassVar[str] = "https://spaceflightnow.com/feed/"

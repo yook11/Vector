@@ -1,12 +1,9 @@
-"""FierceBiotech 用 Source — Pattern H (RSS で URL 列挙、本文は HTML 必須)。
+"""FierceBiotech 用 Source。
 
-per-source 設計 (実 RSS 観察ベース):
-
-- body は **読まない** (Pattern H、Stage 2 = HTML 抽出の責務)
-- ``<pubDate>`` が **RFC822 非準拠** ("Apr 30, 2026 6:11pm") のため
-  ``feedparser.published_parsed`` が落ちるケースを strptime fallback で救済。
-  時刻部 TZ 情報なしのため ET (DST 自動切替) と仮定して UTC 換算する。
-- language は ``feed.feed.language`` (= "en", NOT "en-US")。
+RSS で URL を列挙し本文は HTML 抽出に委ねる。``<pubDate>`` が RFC822 非準拠
+("Apr 30, 2026 6:11pm") で ``feedparser.published_parsed`` が落ちる場合、
+strptime fallback で救済する (TZ 情報が無いため ET = DST 自動切替と仮定して
+UTC 換算)。language は ``feed.feed.language`` (= "en", NOT "en-US")。
 """
 
 from __future__ import annotations
@@ -36,11 +33,10 @@ _FB_PUBDATE_FORMAT = "%b %d, %Y %I:%M%p"
 """
 
 _FB_TZ = ZoneInfo("America/New_York")
-"""FierceBiotech の TZ 仮定 (Fierce Network = US biotech、東海岸)。
+"""FierceBiotech の TZ 仮定 (US biotech、東海岸)。
 
-RSS には TZ 情報が含まれないため、ローカル発信時刻と推定して ET (DST 自動
-切替) を適用する。本仮定は ±1 時間程度の誤差を許容する設計判断 (Stage 2 /
-Stage 3 での ranking や digest week 算出に微影響あり)。
+RSS には TZ 情報が含まれないため ET (DST 自動切替) を適用する。±1 時間程度の
+誤差を許容する。
 """
 
 
@@ -56,13 +52,11 @@ def _parse_fb_published_at(raw: str | None) -> PublishedAt | None:
 
 
 class FierceBiotechSource:
-    """FierceBiotech 用 ``XxxSource`` (Pattern H)。
+    """FierceBiotech 用 Source。
 
-    ``<pubDate>`` が RFC822 非準拠 ("Apr 30, 2026 6:11pm") で
-    ``feedparser.published_parsed`` が落ちる場合のみ ``_parse_fb_published_at``
-    で strptime fallback (ET→UTC) を適用する (builder では復元できない
-    per-source 変換)。Pattern H のため ``published`` が ``None`` でも drop
-    しない (HTML 抽出後に merge 確定)。
+    ``<pubDate>`` が RFC822 非準拠で ``feedparser.published_parsed`` が落ちる
+    場合のみ ``_parse_fb_published_at`` で strptime fallback (ET→UTC) を
+    適用する。``published`` が ``None`` でも除外しない (HTML 抽出後に確定)。
     """
 
     name: ClassVar[SourceName] = SourceName("FierceBiotech")

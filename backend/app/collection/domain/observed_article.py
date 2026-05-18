@@ -1,27 +1,17 @@
 """``ObservedArticle`` — 外部ソースから取得できた記事事実の値オブジェクト。
 
-補完待ち獲得経路で取得できた記事事実を運ぶ単一型。
-「補完待ち」という lifecycle 状態は ``pending_html_articles`` 行が表現済みで、
-domain mirror を別に作ると二重表現になるため作らない (spec §1.3/§4.4)。本型は
-**取れた事実だけ**を持ち、要否/優先は ``SourceCompletionProfile`` が決める。
-
-Pattern H で ``fetched_article_converter`` が yield する中間表現であり、
-``pending_html_articles.staged_attributes`` (JSONB) に焼かれて Stage 2 cron
-poller で再 hydrate される。``model_dump(mode="json", by_alias=True)`` で永続化、
-``model_validate`` で復元する。
-
-責務分離 (spec §4.5/§7):
+取れた事実だけを持つ (要否 / 優先は ``SourceCompletionProfile`` が決める)。
+``pending_html_articles.staged_attributes`` (JSONB) に焼かれ、cron poller で
+再 hydrate される (``model_dump(mode="json", by_alias=True)`` で永続化、
+``model_validate`` で復元)。
 
 - ``source_url`` は記事 identity (``pending_html_articles.url`` UNIQUE 列が
-  唯一の authoritative)。JSONB には焼かない — ``Field(exclude=True)`` で
-  シリアライズを型レベルで常時除外し、二重管理 (drift) を構造的に排除する。
-  Stage 1 の passport→enqueue 運搬のため in-memory では必須で保持する。
-- ``origin`` は audit メタで merge を駆動しない (``Source.observed_origin``
-  由来。RSS=feed / Anthropic=sitemap / ORNL=listing / API=api)。
-- 後方互換: ``schemaVersion`` 不在 = 旧形 (legacy) JSONB。
-  before-validator が **observed shape のみ** 変換する (DB 非アクセス)。
-  legacy 行の ``sourceName`` / ``source_url`` は repository (ACL) が列/resolver
-  から ``model_validate`` 前に raw へ注入する。
+  authoritative)。JSONB には焼かない (``Field(exclude=True)``) — in-memory では
+  運搬のため必須。
+- ``origin`` は audit メタで merge を駆動しない。
+- 後方互換: ``schemaVersion`` 不在 = 旧形 JSONB。before-validator が shape のみ
+  変換する (DB 非アクセス)。legacy 行の ``sourceName`` / ``source_url`` は
+  repository が ``model_validate`` 前に raw へ注入する。
 """
 
 from __future__ import annotations
@@ -37,11 +27,7 @@ from app.shared.value_objects.source_name import SourceName
 
 
 class ObservedOrigin(StrEnum):
-    """観測値の出自 (audit only — merge を駆動しない)。
-
-    ``Source.observed_origin`` がソースごとに宣言し、``fetched_article_converter`` が
-    ``ObservedField.origin`` に stamp する。
-    """
+    """観測値の出自 (audit only — merge を駆動しない)。"""
 
     feed = "feed"  # RSS / Atom item
     sitemap = "sitemap"  # sitemap <loc>/<lastmod>
@@ -59,7 +45,7 @@ class ObservedField[T](BaseModel):
 
 
 class ObservedArticle(BaseModel):
-    """外部取得できた記事事実の単一値型 (Pattern H passport / JSONB 契約)。"""
+    """外部取得できた記事事実の単一値型。"""
 
     model_config = ConfigDict(frozen=True, populate_by_name=True)
 
@@ -76,20 +62,15 @@ class ObservedArticle(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _absorb_legacy(cls, data: Any) -> Any:
-        """旧形 (legacy) JSONB (``schemaVersion`` 不在) を
-        新 observed 形へ変換する。**shape のみ** — DB は触らない。
+        """旧形 JSONB を新 observed 形へ変換する。shape のみ — DB は触らない。
 
-        旧形 = ``{title, published_at_hint, prefer_html_title}``。
-        ``title`` → ``title{value, origin:feed}`` / ``published_at_hint`` (非
-        null) → ``published_at{value, origin:feed}`` / ``body`` → 不在 /
-        ``prefer_html_title`` → 破棄 (policy は profile 所有)。``sourceName`` /
-        ``source_url`` は repository が legacy raw へ事前注入するため、ここでは
-        carry-through するだけで生成しない。
+        旧形 = ``{title, published_at_hint, prefer_html_title}``。``title`` /
+        ``published_at_hint`` (非 null) を ``{value, origin:feed}`` に包む。
+        ``prefer_html_title`` は破棄。``sourceName`` / ``source_url`` は
+        carry-through のみ (repository が legacy raw へ事前注入する)。
 
-        legacy 判定は legacy 専用キー (``prefer_html_title`` /
-        ``published_at_hint``) の存在で行う。``schemaVersion`` 不在のみで
-        判定すると、新規 in-memory 構築 (kwargs に schemaVersion を含めない =
-        default) を legacy と誤認するため不可。
+        legacy 判定は legacy 専用キーの存在で行う。``schemaVersion`` 不在のみだと
+        新規 in-memory 構築 (default) を legacy と誤認するため不可。
         """
         if not isinstance(data, dict):
             return data

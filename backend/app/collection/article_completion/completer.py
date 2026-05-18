@@ -1,8 +1,4 @@
-"""Stage 2 の補完境界 — ``ObservedArticle`` を完成形に解決する純粋関数。
-
-``ArticleCompletionService`` が「資格判定 → 完成 → 分類 → 後始末 → 永続化」を
-1 メソッドに混ぜていた問題を解くため、**完成させる**責務だけをここに切り出す。
-"""
+"""``ObservedArticle`` を完成形に解決する純粋境界 (副作用なし)。"""
 
 from __future__ import annotations
 
@@ -35,8 +31,7 @@ from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 class FetchFailed:
     """origin fetch が ``ExternalFetchError`` で失敗したことを表す値。
 
-    境界で例外を値に畳むためのラッパ。元の例外は ``error`` に保持し、分類
-    (``classify_external_fetch_error``) と log の ``error_class`` で使う。
+    元の例外は ``error`` に保持し、失敗分類と log で使う。
     """
 
     error: ExternalFetchError
@@ -46,8 +41,8 @@ CompletionFailure = FetchFailed | ExtractionEmpty | ArticleCompletionFailed
 """補完が失敗する 3 形を 1 つに揃えた閉じた値 union。
 
 - ``FetchFailed``: origin fetch 例外を畳んだ値。
-- ``ExtractionEmpty``: 取れたが使える本文でない (extractor の値)。
-- ``ArticleCompletionFailed``: merge / invariant 違反 (domain の値)。
+- ``ExtractionEmpty``: 取れたが使える本文でない。
+- ``ArticleCompletionFailed``: merge / invariant 違反。
 """
 
 
@@ -58,12 +53,9 @@ def _resolve[V](
 ) -> V | None:
     """policy に従い観測値と HTML 値を 1 フィールド分 merge する。
 
-    旧規則との等価:
-
-    - ``html_preferred`` = 旧 ``html if html else observed`` (仮タイトル特例)
-    - ``observed_preferred`` = 旧 ``observed or html`` (published_at hint /
-      title default。観測 title は Stage 1 invariant で常在 ⇒ 常に観測勝ち)
-    - ``html_required`` = 旧 body 規則 (HTML を正本・観測無視)
+    - ``html_required``: HTML を正本とし観測値は無視。
+    - ``html_preferred``: HTML があれば優先、なければ観測値。
+    - ``observed_preferred``: 観測値があれば優先、なければ HTML。
     """
     match policy:
         case FieldCompletionPolicy.html_required:
@@ -87,8 +79,7 @@ def complete_with_html(
     """観測事実 + profile + HTML 抽出結果を merge し ``AnalyzableArticle`` 昇格。"""
     pol = profile.policies
 
-    # body=html_required で抽出空 → 旧 completer 短絡と等価
-    # (ExtractionEmpty を値のまま返し disposition 分類を変えない)。
+    # body=html_required で抽出空なら ExtractionEmpty を値のまま返す。
     if (
         isinstance(html, ExtractionEmpty)
         and pol[AnalyzableField.body] is FieldCompletionPolicy.html_required

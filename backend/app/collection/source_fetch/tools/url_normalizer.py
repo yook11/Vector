@@ -1,16 +1,7 @@
 """URL 正規化道具 — tracking parameter (utm_*, gclid 等) の除去のみを担う。
 
-collection-acquisition-redesign Phase 0c。
-
-スコープを意図的に絞る:
-
-- ✅ 除去: tracking parameter (UTM 系 + 広告クリック ID + Mailchimp 系 + ref)
-- ❌ 触らない: scheme, host, path, fragment, www の有無, trailing slash の有無
-
-理由 (`spec collection-acquisition-redesign.md §5.1`): scheme / host / path の
-正規化はソース毎に挙動が異なる (例: TechCrunch は trailing slash 必須、HN は
-amp.example.com を例外的に保持) ため、共通道具では tracking parameter のみを
-扱い、その他は各 Fetcher の責務に委ねる。
+scheme / host / path / fragment / www / trailing slash には触らない
+(ソース毎に挙動が異なるため共通道具の責務外)。
 """
 
 from __future__ import annotations
@@ -47,9 +38,7 @@ _TRACKING_PARAMS: frozenset[str] = frozenset(
 def normalize_article_url(url: SafeUrl) -> SafeUrl:
     """tracking parameter を除去した ``SafeUrl`` を返す。
 
-    クエリ全体を除去せず、tracking parameter として識別された key のみを
-    捨てる: 残りのクエリ (記事 ID 等の必須パラメータ) は順序を保って
-    保持される。fragment / www / trailing slash には触らない。
+    残りのクエリは順序を保って保持する。
     """
     parsed = urlparse(str(url))
     if not parsed.query:

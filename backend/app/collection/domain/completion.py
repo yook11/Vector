@@ -1,8 +1,7 @@
-"""``complete_with_html`` (Pattern H profile 駆動 promotion) の失敗型。
+"""HTML 補完の失敗型。
 
-Pattern H の HTML 補完で merge / invariant 違反が起きた場合の戻り値。
-失敗種別は ``ArticleCompletionFailureCode``。これを Stage 2 がどう扱うか
-(reason_code 符号化 / disposition) は ``article_completion`` 側の責務。
+merge / invariant 違反が起きた場合の戻り値。失敗種別は
+``ArticleCompletionFailureCode``。これをどう扱うかは ``article_completion`` の責務。
 """
 
 from __future__ import annotations
@@ -14,9 +13,8 @@ from pydantic import BaseModel, ConfigDict
 ArticleCompletionFailureCode = Literal["published_at_missing", "ready_invariant_failed"]
 """HTML 補完で起きる失敗種別。
 
-- ``published_at_missing``: RSS hint / HTML フォールバックの両方で公開日時を取れず。
-- ``ready_invariant_failed``: ``AnalyzableArticle`` invariant 違反
-  (length / 形式) 等の派生失敗。
+- ``published_at_missing``: RSS hint / HTML の両方で公開日時を取れず。
+- ``ready_invariant_failed``: ``AnalyzableArticle`` の不変条件違反。
 """
 
 
@@ -33,7 +31,7 @@ class ArticleCompletionFailureReason(BaseModel):
 
 
 class ArticleCompletionFailed(BaseModel):
-    """``complete_with_html`` (Pattern H promotion) の失敗戻り値。"""
+    """HTML 補完の失敗戻り値。"""
 
     model_config = ConfigDict(frozen=True)
 

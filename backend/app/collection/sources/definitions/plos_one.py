@@ -1,8 +1,7 @@
 """PLOS ONE 用 Source (Atom 1.0)。
 
-per-source 設計: Atom 1.0 仕様で ``<content type="html">`` に abstract 本文
-(1.4K-3K chars 平均) を含む、Tier 1 ソース中で唯一の Atom feed。``content``
-を一級採用、欠落時のみ ``summary`` (= Atom ``<summary>``) に fallback する。
+``<content type="html">`` に abstract 本文を含む。``content`` を優先し
+欠落時のみ ``summary`` (= Atom ``<summary>``) に fallback する。
 """
 
 from __future__ import annotations
@@ -40,7 +39,7 @@ def _pick_body(entry: RssEntry) -> str:
 
 
 class PLOSOneSource:
-    """PLOS ONE 用 ``XxxSource`` (Atom 1.0、Pattern R、body 信用)。"""
+    """PLOS ONE 用 Source (Atom 1.0)。"""
 
     name: ClassVar[SourceName] = SourceName("PLOS ONE")
     endpoint_url: ClassVar[str] = "https://journals.plos.org/plosone/feed/atom"

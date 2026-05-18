@@ -15,10 +15,10 @@ from typing import Self
 
 @dataclass(frozen=True)
 class PublishedAt:
-    """公開日時 VO — tzinfo=UTC を構造的に保証する。
+    """公開日時 VO — tzinfo=UTC を不変条件として保持する。
 
     trafilatura が返す TZ なし日付文字列を UTC として解釈し、
-    以降のドメイン/永続化レイヤで TZ 一貫性を保つ。
+    以降のレイヤで TZ 一貫性を保つ。
     """
 
     value: datetime

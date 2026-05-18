@@ -1,19 +1,4 @@
-"""汎用 raw bytes HTTP 取得 wrapper (sitemap / HTML listing 共有)。
-
-P5 で Pattern H 系の sitemap.xml / HTML listing Adapter (Anthropic / ORNL) を
-``SourceAdapter`` 化するに際し、HTTP 取得 + SSRF guard + HTTP error 分類を
-本モジュールに集約する責務切り出し。
-
-設計判断:
-
-- SSRF guard ・HTTP error は ``translate_fetch_exception`` 経由で origin
-  ``ExternalFetchError`` に写像する。Adapter の ``collect()`` 本体には
-  ``try/except httpx.*`` を書かない (構造的に握り潰しが起きない設計)。
-- parse は呼び出し側 (Adapter) の責務。本 wrapper は ``bytes`` を返すだけ。
-- test では ``RawHttpClient`` を継承した fixture-backed fake を Adapter に
-  コンストラクタ DI で差し込む。本物の ``fetch`` は呼ばれないため
-  network I/O は完全に排除できる (P4 RSS の ``RssParser`` DI と相同)。
-"""
+"""汎用 raw bytes HTTP 取得 wrapper (sitemap / HTML listing 共有)。"""
 
 from __future__ import annotations
 
@@ -34,12 +19,7 @@ _DEFAULT_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
 
 
 class RawHttpClient:
-    """raw bytes を取得する thin HTTP client wrapper。
-
-    ``Accept`` ヘッダのみ source 種別 (sitemap.xml = ``application/xml``、
-    HTML listing = ``text/html``) で切替える。timeout は Crawl-delay 10s
-    対応で十分長めに取った既存値を共有する。
-    """
+    """raw bytes を取得する thin HTTP client wrapper。"""
 
     DEFAULT_USER_AGENT: ClassVar[str] = _DEFAULT_USER_AGENT
 
@@ -58,8 +38,7 @@ class RawHttpClient:
         """1 URL を GET し ``bytes`` を返す。
 
         Raises:
-            ExternalFetchError: HTTP status / transport / SSRF 例外を
-                ``translate_fetch_exception`` で写像した origin error。
+            ExternalFetchError: HTTP status / transport / SSRF 例外の写像。
         """
         async with make_safe_async_client(
             headers={"User-Agent": self._user_agent, "Accept": self._accept},

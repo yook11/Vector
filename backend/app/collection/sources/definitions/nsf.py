@@ -1,8 +1,7 @@
 """NSF 用 Source (RSS 2.0、UTF-8)。
 
-per-source 設計: description は記事概要 (~170 chars + ellipsis) で
-RSS body を信用せず本文は HTML 抽出に委譲。License は 17 U.S.C. §105
-(Public Domain)。
+description は記事概要 (~170 chars + ellipsis) のみで body は HTML 抽出に
+委ねる。License は 17 U.S.C. §105 (Public Domain)。
 """
 
 from __future__ import annotations
@@ -21,7 +20,7 @@ from app.shared.value_objects.source_name import SourceName
 
 
 class NSFSource:
-    """NSF 用 ``XxxSource`` (Pattern H、body 不信用)。"""
+    """NSF 用 Source。"""
 
     name: ClassVar[SourceName] = SourceName("NSF")
     endpoint_url: ClassVar[str] = "https://www.nsf.gov/rss/rss_www_news.xml"

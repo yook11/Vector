@@ -1,24 +1,9 @@
-"""NASA — Pattern R / 複数 feed の ``XxxSource`` (P2-D)。
+"""NASA 用 Source (複数 feed)。
 
-P1 まで: 継承具象が per-source 定数 (``FEEDS``) と Pattern R 拡張点 (本文
-override) を保持。
-P2(B+C): 固有データを module-level config 化 (``NASA_FEEDS`` /
-``nasa_build_body``)、identity/補完方針は ``ArticleSource`` 集約が所有。
-P2-D (本実装): Adapter 概念除去。``NASASource`` クラスが identity / 補完方針を
-``ClassVar`` 宣言し ``collect`` で per-feed fan-out 共通処理 ``multi_feed_rss``
-へ委譲する。「NASA は multi-feed RSS / 本文は ``content:encoded``」という
-ソース固有の取得判断が本クラスを見れば分かる。
-
-- ``NASA_FEEDS``: 6 feed (本体 + news-release / technology / aeronautics /
-  station / artemis)。
-- ``nasa_build_body``: body は ``entry.content_encoded`` (``<content:encoded>``)
-  を ``_strip_html`` で plain text 化して直取り (nav noise 含むまま、Stage 2
-  LLM 側で吸収する設計 = Pattern R)。
-
-per-feed 失敗隔離・feed 横断 dedup・全 feed 失敗時 surface は
-``multi_feed_rss`` 共通処理が一括で担う。``collect`` は async generator を
-plain ``@classmethod`` が forward する (余分な frame を挟まず GeneratorExit /
-re-raise 意味論を保存)。
+NASA は 6 feed の multi-feed RSS (本体 + news-release / technology /
+aeronautics / station / artemis)。body は ``<content:encoded>`` を plain text
+化して採用する (nav noise を含むまま後段 LLM 側で吸収)。per-feed 失敗隔離・
+feed 横断 dedup は ``multi_feed_rss`` が担う。
 """
 
 from __future__ import annotations
@@ -53,19 +38,17 @@ NASA_FEEDS: Final[tuple[str, ...]] = (
 
 
 def _strip_html(s: str) -> str:
-    """HTML タグを剥がして plain text に正規化する (body 用)。"""
     if not s:
         return ""
     return _WHITESPACE_RE.sub(" ", html.unescape(_HTML_TAG_RE.sub(" ", s))).strip()
 
 
 def nasa_build_body(entry: RssEntry) -> str | None:
-    """Pattern R: ``content_encoded`` を plain text 化して本文に採用する。"""
     return _strip_html(entry.content_encoded or "") or None
 
 
 class NASASource:
-    """NASA news の複数 feed ``XxxSource`` (Pattern R)。"""
+    """NASA news の複数 feed Source。"""
 
     name: ClassVar[SourceName] = SourceName("NASA")
     endpoint_url: ClassVar[str] = "https://www.nasa.gov/feed/"

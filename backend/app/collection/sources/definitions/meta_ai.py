@@ -1,15 +1,11 @@
 """Meta AI 用 Source — about.fb.com から AI 関連のみ抽出。
 
-per-source 設計:
-
-- ENDPOINT: ``https://about.fb.com/news/feed/`` (Meta Newsroom)。``ai.meta.com``
-  は専用 RSS / sitemap 一切提供なしのため代替経路として採用。
-- RSS 2.0 + dc/content/media WordPress 標準。``<content:encoded>`` に full
-  body (~3-4K chars) → Pattern R。
-- **AI tag フィルタ必須**: Newsroom は WhatsApp / Threads / Sustainability 等
-  全社カテゴリが流入する (実測 10 件中 6 件のみ AI tagged)。``<category>``
-  集合に ``"AI"`` を含む entry のみ採用、それ以外は drop する (business critical)。
-- attribution_label: ``"Meta Newsroom"``
+``ai.meta.com`` は専用 RSS / sitemap を提供しないため Meta Newsroom
+(``https://about.fb.com/news/feed/``, RSS 2.0 WordPress) を代替経路として
+採用する。Newsroom は WhatsApp / Threads / Sustainability 等の全社カテゴリが
+混在する (実測 10 件中 6 件のみ AI tagged) ため ``<category>`` に ``"AI"`` を
+含む entry のみ採用し他は対象外として除外する。``<content:encoded>`` に
+full body を含む。attribution_label は ``"Meta Newsroom"``。
 """
 
 from __future__ import annotations
@@ -39,30 +35,25 @@ _AI_TAGS: Final[frozenset[str]] = frozenset({"AI"})
 
 
 def _strip_html(s: str) -> str:
-    """HTML タグを剥がして plain text に正規化する (body 用)。"""
     if not s:
         return ""
     return _WHITESPACE_RE.sub(" ", html.unescape(_HTML_TAG_RE.sub(" ", s))).strip()
 
 
 def _pick_body(entry: RssEntry) -> str:
-    """``content_encoded`` と ``summary`` の長い方を本文として採用。"""
     content_encoded = entry.content_encoded or ""
     summary = entry.summary or ""
     return content_encoded if len(content_encoded) >= len(summary) else summary
 
 
 def _is_ai_tagged(tags: tuple[str, ...]) -> bool:
-    """``tags`` に AI 判定 tag が含まれているか。"""
     return bool(_AI_TAGS.intersection(tags))
 
 
 class MetaAISource:
-    """about.fb.com Newsroom から AI tagged entry のみ抽出する ``XxxSource``。
+    """about.fb.com Newsroom から AI tagged entry のみ抽出する Source。
 
-    AI tag フィルタ (~60% drop) は business critical drop のため collect 内で
-    最初に適用する。title / body / published / URL の構造ゲートは
-    ``fetched_article_converter`` に委譲する。
+    AI tag フィルタで非 AI 記事 (約 60%) を対象外として除外する。
     """
 
     name: ClassVar[SourceName] = SourceName("Meta AI")
@@ -79,7 +70,7 @@ class MetaAISource:
         )
         for entry in entries:
             if not _is_ai_tagged(entry.tags):
-                continue  # business critical drop (Newsroom 全社混在で約 60%)
+                continue  # non-AI entry: excluded (Newsroom mixes ~60%)
             yield FetchedArticle(
                 title=entry.title,
                 url=entry.link,

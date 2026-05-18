@@ -1,9 +1,8 @@
 """MIC (総務省) 用 Source (RDF / RSS 1.0、Shift_JIS)。
 
-per-source 設計: feed が RDF (RSS 1.0) 宣言で ``<?xml encoding="Shift_JIS"?>``。
-``parse_mode="bytes"`` を選ぶことで feedparser が XML 宣言から Shift_JIS を
-sniff できる (``response.text`` 経由だと httpx の charset 推定で文字化けする
-ため)。RSS body を信用せず本文は HTML 抽出に委譲。
+feed が ``<?xml encoding="Shift_JIS"?>`` のため ``parse_mode="bytes"`` で
+feedparser に Shift_JIS を sniff させる (``response.text`` 経由だと httpx の
+charset 推定で文字化けする)。body は HTML 抽出に委ねる。
 """
 
 from __future__ import annotations
@@ -22,10 +21,7 @@ from app.shared.value_objects.source_name import SourceName
 
 
 class MICSource:
-    """MIC 用 ``XxxSource`` (Pattern H、body 不信用、Shift_JIS feed)。
-
-    ``parse_mode="bytes"`` で feedparser に encoding sniff を任せる。
-    """
+    """MIC 用 Source (Shift_JIS feed)。"""
 
     name: ClassVar[SourceName] = SourceName("MIC")
     endpoint_url: ClassVar[str] = "https://www.soumu.go.jp/news.rdf"

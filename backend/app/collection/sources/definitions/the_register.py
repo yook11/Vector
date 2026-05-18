@@ -1,14 +1,9 @@
-"""The Register 用 Source — Pattern H (Atom feed)。
+"""The Register 用 Source (Atom feed)。
 
-The Register の Atom フィードは ``<summary>`` に短いリード文しか出さず、
-本文は HTML を別途取得して trafilatura で抽出する必要がある。
-
-per-source 設計 (実 Atom 観察ベース):
-
-- feed 形式は **Atom (RFC4287)**、``xml:lang="en"``
-- ``<link rel="alternate" href>`` は **redirector URL**
-  (``https://go.theregister.com/feed/<host>/<path>``)、
-  ``_normalize_register_link`` で実 URL に展開してから渡す
+Atom フィードは ``<summary>`` に短いリード文しか出さないため body は HTML
+抽出に委ねる。``<link rel="alternate" href>`` は redirector URL
+(``https://go.theregister.com/feed/<host>/<path>``) のため
+``_normalize_register_link`` で実 URL に展開してから渡す。
 """
 
 from __future__ import annotations
@@ -29,25 +24,14 @@ _REDIRECTOR_PREFIX = "https://go.theregister.com/feed/"
 
 
 def _normalize_register_link(raw: str) -> str:
-    """``go.theregister.com/feed/<host>/<path>`` → ``https://<host>/<path>`` に直す。
-
-    The Register の Atom フィードは ``<link href>`` がリダイレクタ経由
-    (``https://go.theregister.com/feed/www.theregister.com/2026/...``) のため、
-    プレフィックスを切り捨てて実 URL を再構築する。
-    """
+    """``go.theregister.com/feed/<host>/<path>`` → ``https://<host>/<path>`` に直す。"""
     if raw.startswith(_REDIRECTOR_PREFIX):
         return "https://" + raw[len(_REDIRECTOR_PREFIX) :]
     return raw
 
 
 class TheRegisterSource:
-    """The Register 用 ``XxxSource`` (Pattern H、Atom feed)。
-
-    ``<link href>`` は redirector 経由 (``go.theregister.com/feed/...``) のため
-    ``_normalize_register_link`` で実 URL に展開してから渡す (builder では
-    復元できない per-source 変換)。title / URL の構造ゲートは
-    ``fetched_article_converter`` に委譲する。
-    """
+    """The Register 用 Source (Atom feed)。"""
 
     name: ClassVar[SourceName] = SourceName("The Register")
     endpoint_url: ClassVar[str] = "https://www.theregister.com/headlines.atom"

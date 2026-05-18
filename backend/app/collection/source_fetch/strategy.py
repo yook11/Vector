@@ -1,31 +1,8 @@
-"""``ArticleSource`` レジストリ (composition root, P2-D)。
+"""``ArticleSource`` レジストリ (composition root)。
 
-collection-acquisition-redesign Phase 1 → fetcher big-bang → P2 Source 集約化
-→ P2-D Adapter 概念除去 完結。全 45 ソースが「1 つの ``XxxSource`` クラスが
-(a) どう fetch するか=``collect(tools)``、(b) どう完成させるか=
-``completion_profile`` を ``ClassVar`` 宣言する」形に収束し、本ファイルが唯一
-の dispatch エントリポイントとなる (``ingest_source`` task で参照される)。
-
-設計判断:
-
-- env / Settings を読まず hardcode (Pure DI)
-- 判定キーは ``news_sources.name`` (= ``XxxSource.name``) — id は環境差で
-  揺れ得るため
-- per-source 知識 (補完方針 / 取得出自 / identity / 取得手順) は各
-  ``XxxSource`` クラスが ``ClassVar`` / ``collect`` で所有する。``SOURCES`` は
-  ``SourceName → ArticleSource`` (= Source クラスオブジェクト) のレジストリで、
-  Stage 2 の ``CompletionProfileResolver`` が **無 instantiation** で
-  ``.completion_profile`` を引くために参照する (Source は class そのものが
-  ``ArticleSource`` Protocol を満たすため、``adapter_factory`` / ``make_adapter``
-  のような構築経路が存在せず、profile 読みで machinery を作る経路が構造的に
-  不能 = class-ref 構造保証。spec §4.6 ガードレール)
-- ``FETCHERS`` は ``SOURCES`` から導出する (2 辞書並走の desync を構造排除)。
-  ``ingest_source`` task の ``FETCHERS[arg.name]`` 消費 (str キー) は無改修の
-  ため ``str(source.name)`` をキーにする。``ArticleFetcher`` は無状態のため
-  factory は毎回 new で OK (``lambda s=s: ArticleFetcher(s)`` 形、default 引数
-  束縛で per-source 値を固定)。``ArticleFetcher`` は Source の ``name`` /
-  ``endpoint_url`` を instance attr に格上げするため ``Fetcher`` Protocol を
-  構造的に満たす
+``ingest_source`` task が参照する唯一の dispatch エントリポイント。env を
+読まず hardcode (Pure DI)、判定キーは ``news_sources.name``。``FETCHERS`` は
+``SOURCES`` から導出する (name→source / name→fetcher の desync を防ぐ)。
 """
 
 from __future__ import annotations
@@ -91,9 +68,7 @@ from app.collection.sources.definitions.the_register import TheRegisterSource
 from app.collection.sources.definitions.venturebeat import VentureBeatSource
 from app.shared.value_objects.source_name import SourceName
 
-# 1 ニュースソース = 1 ``XxxSource`` クラスオブジェクト。順序は P1 時点の
-# 登録順を踏襲 (``FETCHERS`` の iteration order を byte 不変に保つ)。値は
-# クラスそのもの (各々 ``ArticleSource`` Protocol を構造的に満たす)。
+# 順序は既存登録順を踏襲 (``FETCHERS`` の iteration order を保つ)。
 _SOURCES_LIST: Final[tuple[ArticleSource, ...]] = (
     VentureBeatSource,
     TechCrunchSource,
@@ -142,16 +117,13 @@ _SOURCES_LIST: Final[tuple[ArticleSource, ...]] = (
     MDPINanomaterialsSource,
 )
 
-# ``SourceName → ArticleSource`` (= Source クラスオブジェクト) レジストリ。
-# Stage 2 resolver はここから無 instantiation で ``.completion_profile`` /
-# ``.observed_origin`` を引く。
+# ``SourceName → ArticleSource`` レジストリ。
 SOURCES: Final[dict[SourceName, ArticleSource]] = {
     source.name: source for source in _SOURCES_LIST
 }
 
-# ``ingest_source`` task の ``FETCHERS[arg.name]`` 消費 (str キー) は無改修。
-# ``SOURCES`` から導出することで「name→source」と「name→fetcher」の desync を
-# 構造排除。``lambda s=s:`` の default 引数束縛で per-source 値を固定する。
+# ``SOURCES`` から導出。``lambda s=source:`` の default 引数束縛で per-source
+# 値を late-binding せず固定する。
 FETCHERS: Final[dict[str, Callable[[], Fetcher]]] = {
     str(source.name): (lambda s=source: ArticleFetcher(s)) for source in _SOURCES_LIST
 }

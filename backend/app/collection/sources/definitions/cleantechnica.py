@@ -1,7 +1,6 @@
 """CleanTechnica 用 Source (WordPress 出力)。
 
-per-source 設計: RSS は概要文のみ。RSS body を信用せず本文は後段
-HTML 取得 + 抽出に委ねる。
+RSS は概要文のみで本文を含まないため body は HTML 取得に委ねる。
 """
 
 from __future__ import annotations
@@ -20,7 +19,7 @@ from app.shared.value_objects.source_name import SourceName
 
 
 class CleanTechnicaSource:
-    """CleanTechnica 用 ``XxxSource`` (Pattern H、body 不信用)。"""
+    """CleanTechnica 用 Source。"""
 
     name: ClassVar[SourceName] = SourceName("CleanTechnica")
     endpoint_url: ClassVar[str] = "https://cleantechnica.com/feed/"

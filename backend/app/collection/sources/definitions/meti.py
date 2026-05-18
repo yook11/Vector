@@ -1,7 +1,7 @@
 """METI (経済産業省) 用 Source (Atom 1.0、UTF-8)。
 
-per-source 設計: Atom 1.0 ルート。``<summary>`` は 300-400 字程度の
-リード文のみ。RSS body を信用せず本文は detail HTML 抽出に委譲。
+``<summary>`` は 300-400 字程度のリード文のみで本文を含まないため body は
+detail HTML 抽出に委ねる。
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from app.shared.value_objects.source_name import SourceName
 
 
 class METISource:
-    """METI 用 ``XxxSource`` (Pattern H、body 不信用)。"""
+    """METI 用 Source。"""
 
     name: ClassVar[SourceName] = SourceName("METI")
     endpoint_url: ClassVar[str] = "https://www.meti.go.jp/ml_index_release_atom.xml"

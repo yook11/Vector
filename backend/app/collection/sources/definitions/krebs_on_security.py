@@ -1,8 +1,6 @@
 """Krebs on Security 用 Source。
 
-per-source 設計: RSS feed の ``<content:encoded>`` に full body (3600-5800
-chars) を含む、極めてクリーンな WordPress 出力 source。body は
-``content_encoded`` を直取り。
+RSS feed の ``<content:encoded>`` に full body を含む WordPress 出力。
 """
 
 from __future__ import annotations
@@ -33,12 +31,11 @@ def _strip_html(s: str) -> str:
 
 
 def _pick_body(entry: RssEntry) -> str:
-    """``<content:encoded>`` を直取り。"""
     return entry.content_encoded or ""
 
 
 class KrebsOnSecuritySource:
-    """Krebs on Security 用 ``XxxSource`` (Pattern R、body 信用)。"""
+    """Krebs on Security 用 Source。"""
 
     name: ClassVar[SourceName] = SourceName("Krebs on Security")
     endpoint_url: ClassVar[str] = "https://krebsonsecurity.com/feed/"

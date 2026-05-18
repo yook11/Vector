@@ -1,8 +1,6 @@
 """Cloudflare Blog 用 Source。
 
-per-source 設計: RSS feed の ``<content:encoded>`` に full body が含まれる。
-body は ``content_encoded`` を直取り。``parse_mode="bytes"`` で feedparser
-に encoding sniff を委ねる。
+RSS feed の ``<content:encoded>`` に full body が含まれる。
 """
 
 from __future__ import annotations
@@ -33,12 +31,11 @@ def _strip_html(s: str) -> str:
 
 
 def _pick_body(entry: RssEntry) -> str:
-    """``<content:encoded>`` を直取り。"""
     return entry.content_encoded or ""
 
 
 class CloudflareBlogSource:
-    """The Cloudflare Blog 用 ``XxxSource`` (Pattern R、body 信用)。"""
+    """The Cloudflare Blog 用 Source。"""
 
     name: ClassVar[SourceName] = SourceName("The Cloudflare Blog")
     endpoint_url: ClassVar[str] = "https://blog.cloudflare.com/rss/"

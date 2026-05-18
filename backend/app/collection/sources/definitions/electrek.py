@@ -1,7 +1,6 @@
 """Electrek 用 Source (WordPress 出力)。
 
-per-source 設計: RSS は概要文 + 画像のみ。RSS body を信用せず本文は
-後段 HTML 抽出に委ねる。
+RSS は概要文 + 画像のみで本文を含まないため body は HTML 抽出に委ねる。
 """
 
 from __future__ import annotations
@@ -20,7 +19,7 @@ from app.shared.value_objects.source_name import SourceName
 
 
 class ElectrekSource:
-    """Electrek 用 ``XxxSource`` (Pattern H、body 不信用)。"""
+    """Electrek 用 Source。"""
 
     name: ClassVar[SourceName] = SourceName("Electrek")
     endpoint_url: ClassVar[str] = "https://electrek.co/feed/"

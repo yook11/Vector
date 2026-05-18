@@ -1,34 +1,10 @@
-"""RSS / Atom / RDF feed の取得 + 正規化に専念する L2 共通道具。
+"""RSS / Atom / RDF feed の取得 + 正規化道具。
 
-per-source Fetcher (L3) は ``RssEntry`` だけを受け取り、source 固有の翻訳
-ルール (body picker / footer 除去 / URL 補正 / tag filter 等) に専念する。
-HTTP 取得・SSRF guard・feedparser 呼び出し・error 翻訳・title plain text
-正規化はすべて本モジュールが構造的に担う。
-
-設計:
-
-- ``RssParser`` は無状態 (HTTP cache を持たない)。``fetch(...)`` 1 発で
-  HTTP GET → feedparser → ``list[RssEntry]`` まで完結する。
-- ``make_safe_async_client`` は ``fetch`` 内部で ``async with`` するため、
-  外部注入を許さない (SSRF guard 抜けの構造的閉塞、memory:
-  ``feedback_structural_guarantee``)。
-- ``parse_mode`` を ``"text"`` / ``"bytes"`` で切り替える。Shift_JIS など
-  XML 宣言で encoding を持つ feed は ``bytes`` を選び、feedparser に sniff
-  を委ねる。
-- ``RssEntry.title`` は plain text 化済 (HTML tag 除去 + entity decode +
-  空白圧縮)。``[:500]`` の DB 制約由来 trim は per-source 責務。
-- body 系 (``summary`` / ``content_encoded``) は raw HTML のまま返す。body
-  picker / footer 除去等は per-source 固有の HTML 操作のため。
-- ``raw_published`` / ``raw_updated`` は元 ``<pubDate>`` / ``<updated>`` 文字列。
-  FierceBiotech のような非 RFC822 strptime fallback に使う。
-- ``tags`` は ``<category>`` 抽出済 tuple。Meta AI の AI tag filter 用。
-
-Error 翻訳:
-
-- HTTP status / transport / SSRF guard 例外は ``translate_fetch_exception``
-  経由で origin ``ExternalFetchError`` に写像する (status → error の SSoT は
-  ``http_error_translation`` に集約)。
-- bozo + entries 空 → ``FetchParseError``。
+HTTP 取得・SSRF guard・feedparser 呼び出し・error 翻訳・title 平文化を担い、
+正規化済の ``RssEntry`` を返す。body 系 (``summary`` / ``content_encoded``) は
+raw HTML のまま返し、body picker / footer 除去等は呼び出し側の責務。
+Shift_JIS など XML 宣言で encoding を持つ feed は ``parse_mode="bytes"`` を選び
+feedparser に sniff を委ねる。bozo かつ entries 空は ``FetchParseError``。
 """
 
 from __future__ import annotations
@@ -69,8 +45,7 @@ _WHITESPACE_RE = re.compile(r"\s+")
 class RssEntry:
     """正規化された RSS / Atom / RDF entry。
 
-    title は plain text 化済。body 系は raw HTML を保持する (per-source の
-    body picker / footer 除去等が L3 で必要なため)。
+    title は平文化済。body 系は raw HTML を保持する。
     """
 
     link: str
@@ -135,12 +110,7 @@ def _extract_tags(entry: dict[str, Any]) -> tuple[str, ...]:
 
 
 def normalize_entry(entry: dict[str, Any]) -> RssEntry:
-    """feedparser dict を ``RssEntry`` に正規化する。
-
-    本番経路 (``RssParser.fetch``) と per-source adapter test
-    (``test_rss_adapters_invariants`` / 各 ``*_adapter`` test) が同一ロジックを
-    共有するため public export している。
-    """
+    """feedparser dict を ``RssEntry`` に正規化する。"""
     raw_link = entry.get("link", "") or ""
     raw_title = entry.get("title", "") or ""
     plain_title = _strip_html_to_plain(raw_title)
@@ -186,11 +156,9 @@ def normalize_entry(entry: dict[str, Any]) -> RssEntry:
 
 
 class RssParser:
-    """L2 共通道具: HTTP + feedparser parse + 正規化に専念する。
+    """HTTP + feedparser parse + 正規化を行う無状態クライアント。
 
-    ``NewsSource`` を知らない。``endpoint_url`` / ``source_name`` を引数で受け、
-    SSRF guard 入り client を自前で組み立てる (外部注入不可 = 構造保証)。
-    無状態のため Fetcher が 1 個保持しておけば十分。
+    SSRF guard 入り client を内部で組み立てる (外部注入不可)。
     """
 
     async def fetch(
@@ -206,8 +174,7 @@ class RssParser:
 
         Raises:
             FetchParseError: bozo かつ entries 空 (feed 構造破損)。
-            ExternalFetchError: HTTP status / transport / SSRF 例外を
-                ``translate_fetch_exception`` で写像した origin error。
+            ExternalFetchError: HTTP status / transport / SSRF 例外の写像。
         """
         raw = await self._fetch_raw(
             endpoint_url=endpoint_url,

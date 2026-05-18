@@ -1,18 +1,8 @@
-"""Stage 2 (``ArticleCompletionService``) の失敗後処理を実行する application service。
+"""補完失敗後の ``pending_html_articles`` 後処理を行う application service。
 
-Stage 2 の失敗分類 (``CompletionDisposition`` = ``Terminal`` | ``Retryable``) を
+失敗分類 (``CompletionDisposition`` = ``Terminal`` | ``Retryable``) を
 ``pending_html_articles`` の状態遷移 (closed / open+ready_at / exhausted) +
-構造化ログに対応づける**唯一の場所**。disposition は「分類」のみ、本 handler は
-「状態遷移 + log」のみ、``ArticleCompletionService`` は「成功主線」のみ、と責務を
-型/ファイルで分離する。
-
-Stage 3 (``ExtractionFailureHandler``) は raw exception を受けて marker dispatch
-するが、本 handler は **既に分類済の ``CompletionDisposition`` を受ける** —
-Stage 2 は分類を別層 (``disposition.py``) に持つため。実装が似ていても解いて
-いる問題が違うので Handler は共有しない。
-
-Stage 2 の retry は ``pending_html_articles.ready_at`` 駆動 (cron poller が
-再投入) で taskiq retry に依存しないため、戻り値は ``-> None`` (副作用完結)。
+構造化ログに対応づける。retry は ``ready_at`` 駆動 (cron poller が再投入)。
 """
 
 from __future__ import annotations
@@ -35,11 +25,10 @@ logger = structlog.get_logger(__name__)
 
 
 class ArticleCompletionFailureHandler:
-    """Stage 2 失敗分類に応じた ``pending_html_articles`` 後処理を実行する。
+    """失敗分類に応じた ``pending_html_articles`` 後処理を実行する。
 
     ``handle`` が単一エントリポイント。``CompletionDisposition`` を受け取り
-    副作用 (状態遷移 + log) を完結させて ``None`` を返す。caller (Service /
-    transitional persist) は分類して委譲するだけ。
+    副作用 (状態遷移 + log) を完結させて ``None`` を返す。
     """
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
@@ -52,11 +41,10 @@ class ArticleCompletionFailureHandler:
         *,
         exc: BaseException | None = None,
     ) -> None:
-        """全失敗を disposition trichotomy の 1 経路に集約する。
+        """失敗を disposition に応じた 1 経路で捌く。
 
         ``Terminal`` → pending を ``closed``。``Retryable`` → policy データ駆動で
-        次 ``ready_at`` を計算 (exhausted なら ``closed``)。policy ごとの
-        コード分岐は持たず ``exhausted`` 判定だけで経路を 1 本化する。
+        次 ``ready_at`` を計算 (exhausted なら ``closed``)。
         """
         match disposition:
             case Terminal() as terminal:
@@ -80,7 +68,7 @@ class ArticleCompletionFailureHandler:
 
         ``effective_delay_minutes`` で次回遅延を算出し、``attempt_count >=
         policy.max_attempts`` なら ``closed``、未満なら ``open`` + 未来の
-        ``ready_at`` に戻す。policy 別のコード分岐は持たない。
+        ``ready_at`` に戻す。
         """
         canonical_url = ready.source_url
         policy = disposition.policy

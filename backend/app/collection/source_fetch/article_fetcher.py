@@ -1,25 +1,11 @@
-"""``ArticleSource`` を駆動して獲得型 / 棄却を yield する薄い runner (P2-D)。
+"""``ArticleSource`` を駆動して獲得型 / 棄却を yield する薄い runner。
 
-source 固有の取得 logic は ``XxxSource.collect(tools)`` に閉じ、
-``ArticleFetcher`` は ``FetchTools`` (共通取得道具箱) を渡して Source を実行し、
-yield される ``FetchedArticle`` を ``convert_fetched_article`` で
-``AnalyzableArticle`` / ``ObservedArticle`` に変換するだけの薄い層。
-
-``convert_fetched_article`` は変換不能 entry に対し
-``FetchedArticleConversionError`` を raise する純粋関数。本層はその例外を
-**stream 境界で捕捉して ``ConversionRejection`` 値に変換** して yield する
-(async generator から per-entry raise すると source stream 全体が止まり、
-恒久不良 entry なら source 全体が恒久停止するため)。棄却の監査 (別 tx 書込)
-は下流 Service の責務で、本層は DB session を持たない。
-
-``Fetcher`` Protocol (``protocol.py``) は ``NAME: str`` / ``ENDPOINT_URL: str``
-で宣言され、本層が Source の identity を instance attr に格上げすることで
-structural subtyping を満たす。per-source 知識は Source クラスオブジェクトを
-``convert_fetched_article`` へ渡すことで thread する。
-
-``tools`` は省略時 fetch 毎に ``FetchTools()`` を新規構築する (旧
-``adapter_factory`` の「fetch 毎に新 machinery」意味を保存)。test は
-fixture 注入済 ``FetchTools`` を渡す。
+``XxxSource.collect(tools)`` を実行し、yield された ``FetchedArticle`` を
+``convert_fetched_article`` で獲得型に変換する。変換不能 entry の
+``FetchedArticleConversionError`` は stream 境界で ``ConversionRejection`` 値に
+変換して yield する (per-entry raise は source stream 全体を止めるため)。
+棄却の監査は下流 Service の責務 (本層は DB session を持たない)。``tools``
+省略時は fetch 毎に ``FetchTools()`` を新規構築する。
 """
 
 from __future__ import annotations
@@ -40,9 +26,8 @@ from app.collection.sources.article_source import ArticleSource
 class ArticleFetcher:
     """``ArticleSource`` を駆動して獲得型 / 棄却を yield する共通 Fetcher。
 
-    ``source`` は Source クラスオブジェクト (``ArticleSource`` Protocol を満たす)。
-    ``Fetcher`` Protocol との互換のため Source の ``name`` / ``endpoint_url``
-    を instance attr に格上げする。
+    ``Fetcher`` 契約互換のため Source の ``name`` / ``endpoint_url`` を
+    instance attr に格上げする。
     """
 
     def __init__(self, source: ArticleSource, tools: FetchTools | None = None) -> None:

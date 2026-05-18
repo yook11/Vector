@@ -1,12 +1,4 @@
-"""ESA Djangoplicity 系の具体 ``XxxSource`` (P2-D)。
-
-ESA/Hubble + ESA/Webb は同型 (Djangoplicity News module) のため取得共通処理
-``djangoplicity_entries`` (``esa/_common.py``) を共有する。継承はせず、各
-Source が identity / 補完方針を ``ClassVar`` 宣言し ``collect`` で共通処理へ
-委譲する (「ESA は Djangoplicity 規格 RSS」というソース固有の取得判断が本
-クラスを見れば分かる)。将来 ESO / ALMA を追加する場合も本ファイルに Source を
-1 件 + ``strategy.py`` / alembic に 1 行追加で済む。
-"""
+"""ESA Djangoplicity 系の Source 定義。"""
 
 from __future__ import annotations
 
@@ -25,7 +17,7 @@ from app.shared.value_objects.source_name import SourceName
 
 
 class ESAHubbleSource:
-    """ESA/Hubble news の Djangoplicity ``XxxSource`` (Pattern H)。"""
+    """ESA/Hubble news (Djangoplicity RSS)。"""
 
     name: ClassVar[SourceName] = SourceName("ESA/Hubble")
     endpoint_url: ClassVar[str] = "https://esahubble.org/news/feed/"
@@ -40,7 +32,7 @@ class ESAHubbleSource:
 
 
 class ESAWebbSource:
-    """ESA/Webb news の Djangoplicity ``XxxSource`` (Pattern H)。"""
+    """ESA/Webb news (Djangoplicity RSS)。"""
 
     name: ClassVar[SourceName] = SourceName("ESA/Webb")
     endpoint_url: ClassVar[str] = "https://esawebb.org/news/feed/"

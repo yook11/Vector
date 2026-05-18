@@ -1,7 +1,6 @@
 """MEXT (文部科学省) 用 Source (RDF / RSS 1.0、UTF-8)。
 
-per-source 設計: RDF (RSS 1.0) ルート。``<description>`` は空であることが
-多く、RSS body を信用せず本文は HTML 抽出に委譲。
+``<description>`` は空であることが多いため body は HTML 抽出に委ねる。
 """
 
 from __future__ import annotations
@@ -20,7 +19,7 @@ from app.shared.value_objects.source_name import SourceName
 
 
 class MEXTSource:
-    """MEXT 用 ``XxxSource`` (Pattern H、body 不信用)。"""
+    """MEXT 用 Source。"""
 
     name: ClassVar[SourceName] = SourceName("MEXT")
     endpoint_url: ClassVar[str] = "https://www.mext.go.jp/b_menu/news/index.rdf"

@@ -1,8 +1,7 @@
 """IEEE Spectrum 用 Source。
 
-per-source 設計: IEEE では feed の ``<content:encoded>`` が空で
-``<description>`` (= ``summary``) に full body が入る。body は
-``summary`` 直取り (他の WordPress 系 source と body picker が逆)。
+IEEE では feed の ``<content:encoded>`` が空で ``<description>``
+(= ``summary``) に full body が入る。
 """
 
 from __future__ import annotations
@@ -33,12 +32,12 @@ def _strip_html(s: str) -> str:
 
 
 def _pick_body(entry: RssEntry) -> str:
-    """``<description>`` を直取り (IEEE では content[0] が空)。"""
+    """``<description>`` を直取り (IEEE では content が空)。"""
     return entry.summary or ""
 
 
 class IEEESpectrumSource:
-    """IEEE Spectrum 用 ``XxxSource`` (Pattern R、body 信用)。"""
+    """IEEE Spectrum 用 Source。"""
 
     name: ClassVar[SourceName] = SourceName("IEEE Spectrum")
     endpoint_url: ClassVar[str] = "https://spectrum.ieee.org/feeds/feed.rss"

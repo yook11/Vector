@@ -1,21 +1,11 @@
-"""Cornell Chronicle — Pattern H / 複数 feed の ``XxxSource`` (P2-D)。
+"""Cornell Chronicle 用 Source (複数 feed)。
 
 Cornell Chronicle (``https://news.cornell.edu/``) は学部別の
-``/taxonomy/term/<id>/feed`` で AI / Computing / Life Sci / Energy / Phys Sci /
-Health 等カテゴリ別 RSS を提供する。本体 ``/news/feed`` は site-wide 雑多な
-ため採用せず、対象 6 カテゴリのみを巡回する。
-
-P1 まで: 継承具象 (純 thin subclass)。
-P2(B+C): 固有データを module-level config 化 (``CORNELL_FEEDS``)、
-identity/補完方針は ``ArticleSource`` 集約が所有。
-P2-D (本実装): Adapter 概念除去。``CornellChronicleSource`` が identity /
-補完方針を ``ClassVar`` 宣言し ``collect`` で per-feed fan-out 共通処理
-``multi_feed_rss`` へ委譲する (feed は Drupal 生成 RSS 2.0 =
-``parse_mode="bytes"``、body builder は注入しない = Pattern H 既定。
-description は短い概要のみで本文は HTML 取得に委譲)。
-
-1 記事が複数 category に tag されるため feed 間 URL 重複が起きるが、feed 横断
-dedup は ``multi_feed_rss`` 共通処理が担う。
+``/taxonomy/term/<id>/feed`` でカテゴリ別 RSS を提供する。本体 ``/news/feed``
+は site-wide で雑多なため採用せず、対象 6 カテゴリのみを巡回する。feed は
+Drupal 生成 RSS 2.0。description は短い概要のみで本文は HTML 取得に委ねる。
+1 記事が複数 category に tag されるため feed 間で URL 重複が起きる
+(横断 dedup は ``multi_feed_rss`` が担う)。
 """
 
 from __future__ import annotations
@@ -50,7 +40,7 @@ CORNELL_FEEDS: Final[tuple[str, ...]] = (
 
 
 class CornellChronicleSource:
-    """Cornell Chronicle の複数 feed ``XxxSource`` (Pattern H)。"""
+    """Cornell Chronicle の複数 feed Source。"""
 
     name: ClassVar[SourceName] = SourceName("Cornell Chronicle")
     endpoint_url: ClassVar[str] = "https://news.cornell.edu/taxonomy/term/24043/feed"

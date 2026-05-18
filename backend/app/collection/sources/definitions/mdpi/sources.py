@@ -1,13 +1,4 @@
-"""MDPI journal の具体 ``XxxSource`` (P2-D)。
-
-MDPI Materials / Energies / Sensors / Nanomaterials の 4 journal は同型
-(Crossref API per-ISSN filter) のため取得共通処理 ``mdpi_items``
-(``mdpi/_common.py``) を共有する。継承はせず、各 Source が identity / 補完方針
-/ ISSN を ``ClassVar`` 宣言し ``collect`` で共通処理へ委譲する (「MDPI は
-Crossref API 経路」というソース固有の取得判断が本クラスを見れば分かる)。
-共有基底は作らず 4 ClassVar を各クラスに直書きする (継承で machinery を
-共有しない方針を literal に遵守)。journal 識別は ``name`` に一本化。
-"""
+"""MDPI journal の Source 定義。"""
 
 from __future__ import annotations
 
@@ -28,7 +19,7 @@ _MDPI_CROSSREF_ENDPOINT = "https://api.crossref.org/works"
 
 
 class MDPIMaterialsSource:
-    """MDPI Materials (ISSN 1996-1944, Pattern R)。"""
+    """MDPI Materials (ISSN 1996-1944)。"""
 
     name: ClassVar[SourceName] = SourceName("MDPI Materials")
     endpoint_url: ClassVar[str] = _MDPI_CROSSREF_ENDPOINT
@@ -42,7 +33,7 @@ class MDPIMaterialsSource:
 
 
 class MDPIEnergiesSource:
-    """MDPI Energies (ISSN 1996-1073, Pattern R)。"""
+    """MDPI Energies (ISSN 1996-1073)。"""
 
     name: ClassVar[SourceName] = SourceName("MDPI Energies")
     endpoint_url: ClassVar[str] = _MDPI_CROSSREF_ENDPOINT
@@ -56,7 +47,7 @@ class MDPIEnergiesSource:
 
 
 class MDPISensorsSource:
-    """MDPI Sensors (ISSN 1424-8220, Pattern R)。"""
+    """MDPI Sensors (ISSN 1424-8220)。"""
 
     name: ClassVar[SourceName] = SourceName("MDPI Sensors")
     endpoint_url: ClassVar[str] = _MDPI_CROSSREF_ENDPOINT
@@ -70,7 +61,7 @@ class MDPISensorsSource:
 
 
 class MDPINanomaterialsSource:
-    """MDPI Nanomaterials (ISSN 2079-4991, Pattern R)。"""
+    """MDPI Nanomaterials (ISSN 2079-4991)。"""
 
     name: ClassVar[SourceName] = SourceName("MDPI Nanomaterials")
     endpoint_url: ClassVar[str] = _MDPI_CROSSREF_ENDPOINT

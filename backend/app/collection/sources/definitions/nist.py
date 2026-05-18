@@ -1,7 +1,7 @@
 """NIST 用 Source (RSS 2.0、UTF-8)。
 
-per-source 設計: description は短い概要 (~80 chars) で RSS body を信用せず
-本文は HTML 抽出に委譲。License は 17 U.S.C. §105 (Public Domain)。
+description は短い概要 (~80 chars) のみで body は HTML 抽出に委ねる。
+License は 17 U.S.C. §105 (Public Domain)。
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from app.shared.value_objects.source_name import SourceName
 
 
 class NISTSource:
-    """NIST 用 ``XxxSource`` (Pattern H、body 不信用)。"""
+    """NIST 用 Source。"""
 
     name: ClassVar[SourceName] = SourceName("NIST")
     endpoint_url: ClassVar[str] = "https://www.nist.gov/news-events/news/rss.xml"

@@ -1,37 +1,19 @@
-"""MDPI 4 journal の Crossref API 経路 取得共通処理 (P2-D)。
+"""MDPI 4 journal の Crossref API 経路 取得共通処理。
 
-MDPI は ``https://www.mdpi.com/<ISSN>/feed`` の RSS を提供するが、Cloudflare WAF
-で 4 ISSN 全 403 となり常時 block される (2026-05-04 PoC 確認済)。OAI-PMH
-``https://oai.mdpi.com/oai/oai2.php`` は 200 OK だが setSpec が article-type 別
-のみで per-journal/ISSN フィルタができないため不採用。
+MDPI の RSS は Cloudflare WAF で 4 ISSN 全 403 となり使えない。代わりに
+Crossref API の per-ISSN filter 経路を採用する。
 
-代わりに Crossref API ``https://api.crossref.org/works`` の per-ISSN filter 経路
-を採用する (4 ISSN 全 200 OK + abstract 800-2000 chars + license CC BY 4.0 +
-DOI 直接取得を PoC で確認)。
+- 本文は ``abstract`` (JATS XML 形式、``_strip_jats`` で markup を剥がす)
+- ``type == "journal-article"`` 以外 (corrections / editorials) は Entry
+  化しない
+- license が CC BY 4.0 でない item は Entry 化しない (MDPI は uniform
+  CC BY 4.0 だが念のため検証)
+- source_url は ``https://doi.org/<DOI>`` (canonical resolver)
+- Crossref polite pool 維持のため User-Agent に ``mailto:`` が必要
+- ``from-pub-date`` で ``lookback_days`` 日窓、cron 周期と整合させ初回
+  投入時の backfill を防ぐ
 
-- **Pattern R** via ``abstract``: 800-2000 chars の JATS XML 形式、``_strip_jats``
-  で ``<jats:p>`` 含む markup を剥がす
-- **type filter**: ``item["type"] == "journal-article"`` のみ accept、corrections
-  / editorials は drop
-- **license gate**: ``license[i]["URL"]`` のいずれかが CC BY 4.0 URL を含まない
-  → drop (MDPI は uniform CC BY 4.0 だが念のため paranoid gate)
-- **source_url**: ``https://doi.org/<DOI>`` (canonical resolver、publisher 別
-  landing でなく DOI URL)
-- **polite pool**: User-Agent に ``mailto:`` 必須 (Crossref polite pool 降格防止)
-- **date filter**: ``from-pub-date`` で rolling ``lookback_days`` 日窓、cron 周期
-  と整合させて初回投入時 backfill を防ぐ
-- ``rows`` / ``sort=published`` / ``order=desc`` で新着優先
-
-P1 まで: 継承基底で subclass が ``NAME`` / ``ISSN`` / ``JOURNAL_NAME`` ClassVar
-を差替。
-P2(B+C): ``MDPICrossrefAdapter`` 汎用 machinery クラス。
-P2-D (本実装): Adapter 概念除去。本モジュールは **free function**
-``mdpi_items(tools, *, source_name, issn, lookback_days, rows_per_request)``
-として共通処理だけを持つ。具体 Source (``MDPI*Source`` ×4) は
-``mdpi/sources.py`` が宣言し、その ``collect`` が本関数へ委譲する
-(``_common.py`` に source-specific な事実を残さない)。``ISSN`` は取得 logic に
-必須 (Crossref filter) のため Source が宣言し引数で渡す。journal 識別は
-``XxxSource.name`` に一本化。
+``ISSN`` は Crossref filter に必須のため Source が宣言し引数で渡す。
 """
 
 from __future__ import annotations
@@ -129,12 +111,11 @@ async def mdpi_items(
     lookback_days: int = 7,
     rows_per_request: int = 20,
 ) -> AsyncIterator[FetchedArticle]:
-    """MDPI journal の Crossref API 経路 取得共通処理 (Pattern R)。
+    """MDPI journal の Crossref API 経路 取得共通処理。
 
     HTTP 取得 + per-ISSN filter + sort/order 構築は ``tools.crossref`` に委譲
-    する。共通処理は item ごとの type/license/title/abstract/date/DOI 判定だけ
-    を担う (旧 ``BaseMDPICrossrefFetcher._convert_record`` の判定順を完全踏襲)。
-    ``lookback_days=7`` / ``rows_per_request=20`` 既定は旧 ClassVar 同値。
+    する。共通処理は item ごとの type/license/title/abstract/date/DOI 判定
+    だけを担う。
     """
     from_pub_date = (
         (datetime.now(UTC) - timedelta(days=lookback_days)).date().isoformat()
@@ -145,20 +126,19 @@ async def mdpi_items(
         from_pub_date=from_pub_date,
         rows=rows_per_request,
     )
-    # 判定順は旧 _convert_record と完全一致:
-    # type → license → title → body → date → DOI.
+    # 判定順: type -> license -> title -> body -> date -> DOI.
     for item in items:
         if item.get("type") != "journal-article":
-            continue  # business: corrections/editorials drop
+            continue  # skip corrections/editorials
         if not _validate_license(item):
-            continue  # business: CC BY 4.0 のみ
+            continue  # CC BY 4.0 のみ
         title = _extract_title(item)
         if not title:
             continue
         title = title[:_TITLE_MAX_LENGTH]
         body = _strip_jats(item.get("abstract") or "")
         if len(body) < 50:
-            continue  # business: 短い abstract は信用しない
+            continue  # 短すぎる abstract は信用しない
         published = _parse_date_parts(item)
         if published is None:
             continue

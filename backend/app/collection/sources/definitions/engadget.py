@@ -1,8 +1,7 @@
-"""Engadget 用 Source (本文は HTML 必須)。
+"""Engadget 用 Source。
 
-per-source 設計: RSS の ``<content:encoded>`` は ~50 chars の caption
-程度で本文ではない。RSS body を信用せず本文は後段 HTML 抽出
-(trafilatura) に委ねる。
+RSS の ``<content:encoded>`` は ~50 chars の caption 程度で本文ではないため
+body は HTML 抽出に委ねる。
 """
 
 from __future__ import annotations
@@ -21,7 +20,7 @@ from app.shared.value_objects.source_name import SourceName
 
 
 class EngadgetSource:
-    """Engadget 用 ``XxxSource`` (Pattern H、body 不信用)。"""
+    """Engadget 用 Source。"""
 
     name: ClassVar[SourceName] = SourceName("Engadget")
     endpoint_url: ClassVar[str] = "https://www.engadget.com/rss.xml"

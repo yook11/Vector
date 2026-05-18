@@ -1,7 +1,7 @@
 """Hugging Face Blog 用 Source。
 
-per-source 設計: HF 公式 blog は ``<description>`` を空文字で出力する。
-RSS body を信用せず本文は後段 HTML 抽出 (trafilatura) に委ねる。
+HF 公式 blog は ``<description>`` を空文字で出力するため body は HTML 抽出に
+委ねる。
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from app.shared.value_objects.source_name import SourceName
 
 
 class HuggingFaceBlogSource:
-    """Hugging Face Blog 用 ``XxxSource`` (Pattern H、body 不信用)。"""
+    """Hugging Face Blog 用 Source。"""
 
     name: ClassVar[SourceName] = SourceName("Hugging Face")
     endpoint_url: ClassVar[str] = "https://huggingface.co/blog/feed.xml"

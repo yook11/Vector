@@ -1,16 +1,8 @@
-"""Pattern H の cron 駆動部 — open pending の claim 投入 + lease 切れの救出。
+"""補完 task の cron 駆動 — open pending の claim 投入 + lease 切れの救出。
 
-PR2.5-B cutover で taskiq の retry 機構は完全に殺し、再投入は **DB の
-``ready_at`` SSoT + cron poller** に統一する。これにより:
-
-- ``extract_html_body.kiq(pending_id)`` の caller は本ファイルの
-  ``dispatch_html_fetch_jobs`` のみ (静的 grep で他 caller がいないことを保証)
-- worker crash で ``status='running'`` のまま残った行は ``sweep_expired_leases``
-  が ``status='open'`` に戻すため永続スタック不能
-
-両 task は ``broker_metadata`` (= scheduler 側 broker) に登録、消費される
-``extract_html_body`` は ``broker_content``。cross-broker 投入は既存の
-``dispatch_sources → ingest_source`` と同パターン。
+再投入は DB の ``ready_at`` を SSoT とした cron poller に統一する。worker
+crash で ``status='running'`` のまま残った行は ``sweep_expired_leases`` が
+``status='open'`` に戻すため永続スタックしない。
 """
 
 from __future__ import annotations

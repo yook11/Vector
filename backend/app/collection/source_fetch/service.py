@@ -1,17 +1,12 @@
 """Article Acquisition Service — 1 source 分のニュースから記事を獲得する。
 
-Fetcher の ``AsyncIterator`` を回し ``match`` で 3 型を振り分ける:
+Fetcher の stream を ``match`` で 3 型に振り分ける:
 
-- ``AnalyzableArticle`` → ``article_store.save`` で即時獲得 (``source_url``
-  UNIQUE の ON CONFLICT で同 tick race / 既知 URL を吸収、``None`` は skip)。
-- ``ObservedArticle`` → ``exists_by_source_url`` pre-check 後
-  ``pending_html_articles`` に投入 (補完は後段 ``ArticleCompletionService``)。
-- ``ConversionRejection`` → 変換不能 entry。**業務 tx とは別 session** で
-  棄却監査を焼いて continue (後続の source 全体失敗で業務 session が rollback
-  しても監査を残すため。``failure_handling.py`` の 3 段防御 doctrine 再利用)。
+- ``AnalyzableArticle`` → 即時保存
+- ``ObservedArticle`` → ``pending_html_articles`` に投入 (後段補完)
+- ``ConversionRejection`` → 業務 tx とは別 session で棄却監査して継続
 
-``commit`` までが責務。``NewsSource`` lookup は ``IngestSourceArg`` 済で本
-Service では行わない。成功側の件数監査は撤去済 (後続で再導入予定)。
+``commit`` までが責務。``NewsSource`` lookup は本 Service では行わない。
 """
 
 from __future__ import annotations
@@ -39,13 +34,9 @@ logger = structlog.get_logger(__name__)
 class ArticleAcquisitionService:
     """1 source 分のニュースを取り込み、品質を担保した記事を獲得する。
 
-    即時獲得可能なものは ``articles`` に直接保存、本文補完を経て獲得するものは
-    ``pending_html_articles`` に保管する (後段 ``ArticleCompletionService`` が
-    完成させる)。
-
-    ソース全体の取得失敗は ``SourceFetchError`` で呼び出し側 (Task) に伝播する。
-    Stage 1 task は taskiq inline retry を持たず、監査して return → 次の cron tick
-    で再 dispatch で救済する設計。
+    即時獲得は ``articles`` に保存、本文補完を要するものは
+    ``pending_html_articles`` に保管 (後段 ``ArticleCompletionService``)。
+    ソース全体の取得失敗は ``SourceFetchError`` で Task に伝播する。
     """
 
     def __init__(
@@ -73,9 +64,8 @@ class ArticleAcquisitionService:
                                 continue
                             persisted_ids.append(article_id)
                         case ObservedArticle() as observed:
-                            # pre-check: 既知 URL の HTML fetch 反復を避けるための
-                            # コスト節約 (UNIQUE(url) と ON CONFLICT は enqueue 側で
-                            # 構造的に担保)
+                            # 既知 URL の HTML fetch 反復を避けるコスト節約
+                            # (UNIQUE は enqueue 側で担保)
                             if await article_store.exists_by_source_url(
                                 observed.source_url
                             ):
@@ -86,13 +76,12 @@ class ArticleAcquisitionService:
                                 ready_at=datetime.now(UTC),
                             )
                         case ConversionRejection() as rej:
-                            # 変換不能 entry。stream は止めず別 tx で監査して
-                            # 次 entry へ (本ループの業務 session には書かない)。
+                            # 変換不能 entry。業務 session には書かず別 tx で
+                            # 監査して次 entry へ。
                             await self._audit_conversion_rejected(source_id, rej)
             except ExternalFetchError as exc:
-                # tool 層で origin error に翻訳済。Layer 1 marker に CODE ごと
-                # 載せ替えて伝播する (cron 一本化のため Stage 1 は救済戦略の差を
-                # 持たず、CODE は監査解像度のためだけに保持する)。
+                # tool 層で翻訳済の error を CODE 付きで載せ替え伝播
+                # (CODE は監査解像度用)。
                 raise SourceFetchError(str(exc), code=exc.CODE) from exc
 
             await session.commit()
@@ -109,10 +98,8 @@ class ArticleAcquisitionService:
     ) -> None:
         """変換棄却を業務 tx とは別 session で best-effort 監査する。
 
-        業務 session に書くと後続 entry の source 全体失敗 (commit 前 rollback)
-        で監査も巻き戻るため、必ず別 tx で commit する。DB 落ち / schema 不整合
-        は log fallback (``failure_handling.py`` の 3 段防御 doctrine 再利用)。
-        監査 repository には ``ConversionRejection`` ではなく原因例外のみ渡す。
+        業務 session に書くと後続の source 全体失敗で監査も巻き戻るため、
+        必ず別 tx で commit する。失敗時は log fallback。
         """
         try:
             async with self._session_factory() as audit_session:

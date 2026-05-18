@@ -1,21 +1,8 @@
-"""Stage 2 (``ArticleCompletionService``) の失敗分類 mapper。
+"""補完失敗を ``CompletionDisposition`` (``Terminal`` | ``Retryable``) に分類する。
 
-``external_fetch_errors.py`` は「何が起きたか」(origin) の SSoT であり、
-retry / terminal 判断は持たない。本モジュールは Stage 2 側の関心として、
-各 origin failure を ``CompletionDisposition`` (= ``Terminal`` | ``Retryable``)
-に必ず分類する。
-
-2 軸を分離する:
-
-- ``reason_code``: 何が起きたか (監査・log の詳細ラベル)。``Retryable`` にも持たせる。
-- disposition: Stage 2 がどう扱うか (terminal close / policy 付き DB 駆動 retry)。
-
-retry policy は ``Retryable`` が運ぶ **データ**。Service 側は policy ごとに
-コード分岐せず ``exhausted`` 判定だけで処理経路を 1 本化する。
-
-``classify_external_fetch_error`` は ``type(exc)`` の exact lookup。subclass 追加で
-silent fallback しないことは ``test_article_completion_disposition.py`` の網羅
-テストが構造的に保証する (分類漏れ = テスト落ち)。
+``external_fetch_errors.py`` は「何が起きたか」の SSoT で retry / terminal 判断は
+持たない。本モジュールが各失敗を必ず分類する。``reason_code`` は監査・log 用の
+詳細ラベル、disposition はどう扱うか (close / DB 駆動 retry)。
 """
 
 from __future__ import annotations
@@ -71,7 +58,7 @@ class Terminal:
 
 @dataclass(frozen=True, slots=True)
 class Retryable:
-    """Stage 2 で DB 駆動 retry する失敗。
+    """DB 駆動 retry する失敗。
 
     ``policy`` は再投入の仕方を表す純データ。``retry_after_seconds`` は server
     指示があるときだけ載る (なければ ``policy`` の schedule に従う)。
@@ -87,7 +74,7 @@ CompletionDisposition = Terminal | Retryable
 
 
 # ---------------------------------------------------------------------------
-# ExternalFetchError の分類 (spec: ExternalFetchError の分類)
+# ExternalFetchError の分類
 # ---------------------------------------------------------------------------
 
 # 再試行しても結果が変わらない origin failure。reason_code は exc.CODE を素通し。
@@ -134,8 +121,7 @@ _RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY: tuple[
     ),
 )
 
-# module-load 時に exact type → disposition の dict を生成する。値は frozen
-# dataclass なので共有 singleton で安全。
+# exact type → disposition の lookup 表。値は frozen dataclass で共有可能。
 _FETCH_DISPOSITION_BY_TYPE: dict[type[ExternalFetchError], CompletionDisposition] = {
     **{t: Terminal(reason_code=t.CODE) for t in _TERMINAL_FETCH_ERROR_TYPES},
     **{
@@ -147,12 +133,11 @@ _FETCH_DISPOSITION_BY_TYPE: dict[type[ExternalFetchError], CompletionDisposition
 
 
 def classify_external_fetch_error(exc: ExternalFetchError) -> CompletionDisposition:
-    """origin fetch error を Stage 2 の disposition に分類する。
+    """origin fetch error を disposition に分類する。
 
-    ``FetchOriginServerError`` は ``reason`` と ``retry_after_seconds`` の
-    instance state を読むため明示分岐。それ以外は ``type(exc)`` の exact lookup
-    で、未登録 (= 未分類の将来 subclass) のみ保守的に ``UNKNOWN_POLICY`` retry。
-    既知 subclass が fallback に落ちないことは網羅テストが保証する。
+    ``FetchOriginServerError`` は ``reason`` / ``retry_after_seconds`` を読むため
+    明示分岐。それ以外は ``type(exc)`` の exact lookup で、未登録のみ保守的に
+    ``UNKNOWN_POLICY`` retry。
     """
     if isinstance(exc, FetchOriginServerError):
         if exc.reason == "service_unavailable" and exc.retry_after_seconds is not None:
@@ -185,11 +170,7 @@ def classify_extraction_empty(empty: ExtractionEmpty) -> Terminal:
 
 
 def classify_completion_failed(failed: ArticleCompletionFailed) -> Terminal:
-    """HTML 補完後の昇格失敗。``completion_*`` prefix で reason_code 化する。
-
-    domain code は Commit 1 で ``ready_invariant_failed`` に確定済のため、
-    ``f"completion_{code}"`` の素直な正規化で過不足ない (旧 ``other`` 残存なし)。
-    """
+    """HTML 補完後の昇格失敗。``completion_*`` prefix で reason_code 化する。"""
     return Terminal(
         reason_code=f"completion_{failed.reason.code}",
         detail=failed.reason.detail,
@@ -206,9 +187,7 @@ def classify_completion_failure(
 ) -> CompletionDisposition:
     """``ArticleHtmlCompleter`` が返す閉じ failure union を 1 点で分類する。
 
-    既存の 3 classifier (fetch / extraction-empty / promotion) に fan-out する
-    だけで分類ロジックは増やさない。union は閉じているので ``assert_never`` で
-    網羅性を構造保証する (新メンバ追加時に型検査 + 網羅テストで落ちる)。
+    3 classifier (fetch / extraction-empty / promotion) に振り分ける。
     """
     match failure:
         case FetchFailed(error=error):

@@ -1,12 +1,7 @@
 """HTML 抽出層 — URL から記事本文と公開日時を取得する。
 
-単一責務のクラス: URL を受け取り、HTML から本文テキストと公開日時を
-抽出して返す。恒久的な失敗と一時的な失敗は例外として分離し、
-呼び出し側でビジネス判断とリトライ判断を切り分けられるようにする。
-
-内部実装（``RobotsCache``、``httpx`` クライアントのライフサイクル、
-``trafilatura`` パーサ）はここで隠蔽され、呼び出し側は
-``URL -> HtmlExtractionResult`` の契約にのみ依存する。
+呼び出し側は ``URL -> HtmlExtractionResult`` の契約にのみ依存する。恒久的な
+失敗と一時的な失敗は例外として分離し、呼び出し側で扱いを切り分けられる。
 """
 
 from __future__ import annotations
@@ -151,8 +146,8 @@ class _RobotsCache:
     async def check(self, client: httpx.AsyncClient, url: str) -> bool:  # noqa: TID251
         """URL が robots.txt で許可されているか判定する。許可なら True。
 
-        ``client`` は ``make_safe_async_client`` 経由で構築されており、event_hook
-        により本メソッド内の ``client.get`` でも SSRF 検証が走る (Vuln 5)。
+        ``client`` は ``make_safe_async_client`` 経由なので本メソッド内の
+        ``client.get`` でも SSRF 検証が走る。
         """
         parsed = urlparse(url)
         domain = parsed.netloc
@@ -244,16 +239,15 @@ class ArticleHtmlExtractor:
         Raises:
             ExternalFetchError: robots Disallow / redirect block / response 過大 /
             HTTP status (4xx/5xx) / transport (timeout/network) / SSRF block。
-            どの origin failure かは subclass で表現し、retry / terminal の
-            判断は Stage 2 の disposition mapper が行う (本層は分類しない)。
+            どの origin failure かは subclass で表現する (本層は retry/terminal を
+            分類しない)。
         """
         url_str = str(url)
 
-        # SSRF defense は make_safe_async_client の event_hook に集約済み。
-        # 全 client.get 直前で ensure_host_is_public が走り、政策層の例外
-        # (HostBlockedError / HostResolutionError) が伝播する。HTTP status /
+        # SSRF defense は make_safe_async_client の event_hook に集約済み
+        # (全 client.get 直前で host が public か検証)。HTTP status /
         # transport / SSRF の origin error 翻訳は translate_fetch_exception
-        # (SSoT) に一本化し、本層で status_code を直書き分類しない。
+        # に一本化し、本層で status_code を直書き分類しない。
         async with make_safe_async_client(
             headers=HEADERS, timeout=HTTP_TIMEOUT
         ) as client:

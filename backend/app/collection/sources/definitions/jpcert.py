@@ -1,8 +1,7 @@
 """JPCERT/CC 用 Source (RDF / RSS 1.0)。
 
-per-source 設計: feed が RDF (RSS 1.0) ルート (``<rdf:RDF>``)。``<title>``
-は多行 + インデント空白を含むため ``RssParser.normalize_entry`` の whitespace
-正規化で吸収する。RSS body を信用せず本文は HTML 抽出に委譲。
+feed が RDF (RSS 1.0) ルート (``<rdf:RDF>``)。``<title>`` は多行 +
+インデント空白を含む。body は HTML 抽出に委ねる。
 """
 
 from __future__ import annotations
@@ -21,7 +20,7 @@ from app.shared.value_objects.source_name import SourceName
 
 
 class JPCERTSource:
-    """JPCERT/CC 用 ``XxxSource`` (Pattern H、body 不信用)。"""
+    """JPCERT/CC 用 Source。"""
 
     name: ClassVar[SourceName] = SourceName("JPCERT/CC")
     endpoint_url: ClassVar[str] = "https://www.jpcert.or.jp/rss/jpcert.rdf"

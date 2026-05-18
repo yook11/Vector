@@ -1,9 +1,7 @@
 """eLife (latest articles RSS) 用 Source。
 
-per-source 設計: eLife は実 feed では ``content`` が空 / 欠落で
-``summary`` (description) に abstract 全文を載せる。``content_encoded`` と
-``summary`` の長い方を採用 (VB と同型)。``parse_mode="bytes"`` で
-feedparser に encoding sniff を委ねる。
+eLife は ``content`` が空 / 欠落で ``summary`` (description) に abstract
+全文を載せるため ``content_encoded`` と ``summary`` の長い方を採用する。
 """
 
 from __future__ import annotations
@@ -34,14 +32,14 @@ def _strip_html(s: str) -> str:
 
 
 def _pick_body(entry: RssEntry) -> str:
-    """``<content:encoded>`` と ``<description>`` の長い方を採用 (VB と同型)。"""
+    """``<content:encoded>`` と ``<description>`` の長い方を採用する。"""
     content_encoded = entry.content_encoded or ""
     summary = entry.summary or ""
     return content_encoded if len(content_encoded) >= len(summary) else summary
 
 
 class ELifeSource:
-    """eLife 用 ``XxxSource`` (Pattern R、body 信用)。"""
+    """eLife 用 Source。"""
 
     name: ClassVar[SourceName] = SourceName("eLife")
     endpoint_url: ClassVar[str] = "https://elifesciences.org/rss/recent.xml"

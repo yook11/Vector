@@ -1,17 +1,13 @@
-"""URL 正規化道具 — ``articles.source_url`` / ``pending_html_articles.url`` 共通。
+"""URL 正規化 — ``articles.source_url`` / ``pending_html_articles.url`` 共通。
 
-URL 一意性 SSoT 用の canonicalize。spec の 5 項目を全て満たす:
+URL 一意性のための canonicalize。挙動:
 
-1. lowercase host (大文字小文字差分による偽 dup を避ける)
-2. tracking parameters strip (utm_* / fbclid / gclid / dclid / msclkid /
+1. host を lowercase 化 (大文字小文字差分による偽 dup を避ける)
+2. tracking parameters を除去 (utm_* / fbclid / gclid / dclid / msclkid /
    mc_cid / mc_eid / ref / ref_src / referrer)
-3. trailing slash 正規化 (path 末尾の ``/`` を除去、ただし root path ``/`` は保持)
-4. fragment (``#...``) 除去
+3. path 末尾の ``/`` を除去 (root path ``/`` は保持)
+4. fragment (``#...``) を除去
 5. scheme は保存 (http と https は別 URL として扱う)
-
-既存 ``app.collection.source_fetch.tools.url_normalizer`` は tracking strip のみで
-意図的に scheme/host/path を触らない設計のため、本 utility を別建てとする。
-共有する tracking parameter 集合は同モジュールから import している。
 """
 
 from __future__ import annotations

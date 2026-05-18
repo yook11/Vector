@@ -1,17 +1,9 @@
-"""Anthropic 用 Source — sitemap-only Pattern H。
+"""Anthropic 用 Source。
 
-Anthropic は ``/rss.xml`` ``/feed`` ``/news/rss.xml`` 全て 404 で RSS を一切
-提供せず、唯一 ``/sitemap.xml`` のみが利用可能。sitemap には title が無いため
-URL slug をプレースホルダとして ``title`` に詰め、仮タイトル性は per-source の
-補完方針 (``completion_profile = HTML_TITLE_PROFILE``、title=``html_preferred``)
-が表す。sitemap parse helper (``_parse_sitemap`` / ``_slug_from_url``) は本
-モジュール内に閉じる (ORNL listing と問題が違うため共用しない)。
-
-attribution は Anthropic 公式の標準利用規約相当文言が無いため、source name
-``"Anthropic"`` を ``news_sources.attribution_label`` に詰める (DB 行は
-alembic ``o3_add_anthropic`` で seed)。
-
-robots.txt: ``User-agent: *`` で ``Allow: /`` blanket + ``Sitemap:`` 明示。
+Anthropic は RSS を一切提供せず ``/sitemap.xml`` のみ利用可能。sitemap には
+title が無いため URL slug を title に詰める。robots.txt は ``Allow: /`` で
+``Sitemap:`` を明示。attribution_label は source name ``"Anthropic"`` を使う
+(DB 行は alembic ``o3_add_anthropic`` で seed)。
 """
 
 from __future__ import annotations
@@ -41,8 +33,8 @@ def _parse_sitemap(data: bytes) -> list[tuple[str, datetime | None]]:
     """``<urlset>`` から ``(loc, lastmod)`` のタプル列を抽出する。
 
     defensive parsing: ``resolve_entities=False`` + ``no_network=True`` +
-    ``load_dtd=False`` で XXE / 外部 DTD 読込を構造的に塞ぐ (defusedxml 不要)。
-    lastmod parse 失敗は ``None`` に落とす (entry 自体は drop しない)。
+    ``load_dtd=False`` で XXE / 外部 DTD 読込を塞ぐ。lastmod parse 失敗は
+    ``None`` に落とす (entry 自体は除外しない)。
     """
     parser = etree.XMLParser(resolve_entities=False, no_network=True, load_dtd=False)
     root = etree.fromstring(data, parser=parser)
@@ -74,12 +66,10 @@ def _slug_from_url(url: str) -> str:
 
 
 class AnthropicSource:
-    """Anthropic news の sitemap-only ``XxxSource`` (Pattern H)。
+    """Anthropic news の Source。
 
-    business critical drop:
-    - ``URL_PATH_PREFIX="/news/"`` で news セクション以外を弾く
-      (about / pricing 等の混入防止)
-    - lastmod 降順 sort 後に ``MAX_ENTRIES=30`` で切り出し (大量バックフィル防止)
+    ``URL_PATH_PREFIX="/news/"`` で about / pricing 等の混入を対象外として
+    除外し、lastmod 降順 sort 後に ``MAX_ENTRIES=30`` 件で打ち切る。
     """
 
     name: ClassVar[SourceName] = SourceName("Anthropic")

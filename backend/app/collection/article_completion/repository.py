@@ -1,12 +1,9 @@
-"""Article completion repository — Stage 2 の永続化境界。
+"""補完の永続化境界。
 
-``pending_html_articles`` は補完待ち記事の作業テーブルだが、application service に
-queue の状態モデルを漏らさない。Repository は「処理資格を満たす pending だけを
-物体化する」「claim / sweep / retry 状態遷移を DB に反映する」までを担う。
-
-他 Stage の ``ExtractionRepository`` / ``AssessmentRepository`` /
-``EmbeddingRepository`` と同じく、SQLAlchemy Core/ORM の式で DB 操作を表現し、
-呼び出し側が transaction の commit 境界を握る。
+``pending_html_articles`` は補完待ち記事の作業テーブルだが、application service
+に queue の状態モデルを漏らさない。Repository は処理資格を満たす pending の
+物体化と、claim / sweep / retry 状態遷移の DB 反映までを担う。commit 境界は
+呼び出し側が握る。
 """
 
 from __future__ import annotations
@@ -44,7 +41,7 @@ class CompletionPersistResult:
 
 
 class ArticleCompletionRepository:
-    """Stage 2 completion に必要な DB 操作をカプセル化する。"""
+    """補完に必要な DB 操作をカプセル化する。"""
 
     def __init__(
         self,
@@ -52,11 +49,8 @@ class ArticleCompletionRepository:
         profile_resolver: CompletionProfileResolver | None = None,
     ) -> None:
         self._session = session
-        # ACL が session を持つので profile / legacy identity の解決もここに
-        # 集約する。default は ``SOURCES`` 引き + DB fallback の具象 (本 ACL は
-        # ``CompletionProfileResolver`` Protocol にのみ依存、``SOURCES`` を
-        # 直接 import しない — spec §4.6)。テストは stub を注入して production
-        # 45-registry と非結合にする。
+        # profile / legacy identity の解決もここに集約する。default は
+        # registry 引き + DB fallback の具象。テストは stub を注入できる。
         self._resolver: CompletionProfileResolver = (
             profile_resolver or RegistryCompletionProfileResolver(session)
         )
@@ -64,18 +58,15 @@ class ArticleCompletionRepository:
     async def try_load_for_completion(
         self, pending_id: int
     ) -> ReadyForArticleCompletion | None:
-        """``ReadyForArticleCompletion.try_advance_from`` 用ロード。
+        """``ReadyForArticleCompletion`` を構築するためのロード。
 
-        ``status='running'`` の行だけを ``ReadyForArticleCompletion`` として
-        物体化する。未 claim / sweep 済 / close 済 / delete 済の id はすべて
-        ``None`` として扱い、Task は no-op で抜ける。
+        ``status='running'`` の行だけを物体化する。未 claim / sweep 済 /
+        close 済 / delete 済の id はすべて ``None`` として扱う。
 
-        identity 注入 (ACL = Fowler LocalDTO / Vernon ACL): ``source_url`` は
-        全行で ``url`` 列が authoritative なので ``model_validate`` 前に raw に
-        注入する (JSONB は ``Field(exclude=True)`` で非永続)。legacy 行
-        (旧形 JSONB = ``schemaVersion`` 不在) は
-        ``sourceName`` を持たないため ``source_id`` から resolver で解決して
-        注入する。``ObservedArticle`` は Optional identity を持たない strict 型。
+        identity 注入: ``source_url`` は全行で ``url`` 列が authoritative なので
+        ``model_validate`` 前に raw に注入する (JSONB は非永続)。legacy 行
+        (``schemaVersion`` 不在) は ``sourceName`` を持たないため ``source_id``
+        から resolver で解決して注入する。
         """
         stmt = (
             select(

@@ -1,7 +1,6 @@
 """The Quantum Insider 用 Source。
 
-per-source 設計: RSS feed の ``<content:encoded>`` に full body を含む
-WordPress 出力。body は ``content_encoded`` を直取り。
+RSS feed の ``<content:encoded>`` に full body を含む WordPress 出力。
 """
 
 from __future__ import annotations
@@ -36,7 +35,7 @@ def _pick_body(entry: RssEntry) -> str:
 
 
 class QuantumInsiderSource:
-    """The Quantum Insider 用 ``XxxSource`` (Pattern R、body 信用)。"""
+    """The Quantum Insider 用 Source。"""
 
     name: ClassVar[SourceName] = SourceName("The Quantum Insider")
     endpoint_url: ClassVar[str] = "https://thequantuminsider.com/feed/"

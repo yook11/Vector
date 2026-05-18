@@ -1,7 +1,6 @@
-"""EE Times Japan 用 Source (本文は HTML 必須)。
+"""EE Times Japan 用 Source。
 
-per-source 設計: RSS は ~150 chars のリード文のみで本文欠落。RSS body を
-信用せず後段 HTML 抽出 (trafilatura) に委ねる。
+RSS は ~150 chars のリード文のみで本文を含まないため body は HTML 抽出に委ねる。
 """
 
 from __future__ import annotations
@@ -20,7 +19,7 @@ from app.shared.value_objects.source_name import SourceName
 
 
 class EETimesJapanSource:
-    """EE Times Japan 用 ``XxxSource`` (Pattern H、body 不信用)。"""
+    """EE Times Japan 用 Source。"""
 
     name: ClassVar[SourceName] = SourceName("EE Times Japan")
     endpoint_url: ClassVar[str] = "https://rss.itmedia.co.jp/rss/2.0/eetimes.xml"

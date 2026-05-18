@@ -1,21 +1,11 @@
-"""Hacker News 用 Source — Pattern H 設計 (Algolia HN Search API)。
+"""Hacker News 用 Source (Algolia HN Search API)。
 
-HN はソース仕様が API ベース (Algolia HN Search API) で RSS / Atom feed を
-持たないが、API hit の ``url`` は外部の任意サイトを指すため本文は HN 側で
-取得できない。よって ``AnalyzableArticle`` invariant (body ≥ 50 chars) を
-API 単独で満たせず、``ObservedArticle`` を yield し後段 ``extract_html_body``
-task が trafilatura で本文を取得する **Pattern H 構造同型** で実装する
-(FierceBiotech / The Register と同じ流れ)。
-
-per-source 設計 (実 API 応答ベース):
-
-- 毎サイクル直近 ``HN_SLIDING_WINDOW_SECONDS`` 秒以内に投稿された
-  ``points > HN_MIN_POINTS`` のストーリーを全件取得する sliding window 設計
-- increment 用の Redis state は持たず、dedup は下流の
-  ``articles.source_url UNIQUE`` (Pattern R) / ``pending_html_articles.url
-  UNIQUE`` (Pattern H) の ``ON CONFLICT DO NOTHING`` に委ねる
-- ``url=None`` の hit (Ask HN / Show HN テキスト投稿等) は yield せずに skip
-- ``DAILY_REQUEST_LIMIT`` は持たない (HN は cron 1 回/日、Algolia API 無料)
+HN は RSS / Atom を持たず API ベース。API hit の ``url`` は外部の任意サイトを
+指すため本文は HN 側で取得できず、body は HTML 抽出に委ねる。直近
+``HN_SLIDING_WINDOW_SECONDS`` 秒以内に投稿された ``points > HN_MIN_POINTS``
+のストーリーを全件取得する sliding window 設計。``url=None`` の hit
+(Ask HN / Show HN テキスト投稿等) は対象外として除外する。dedup は下流の
+``ON CONFLICT DO NOTHING`` に委ねる。
 """
 
 from __future__ import annotations
@@ -55,11 +45,10 @@ def _parse_created_at(raw: str | None) -> PublishedAt | None:
 
 
 class HackerNewsSource:
-    """Hacker News 用 ``XxxSource`` (Algolia Search API, Pattern H)。
+    """Hacker News 用 Source (Algolia Search API)。
 
-    business critical drop (``url=None`` skip / 空 title skip) は collect 内で
-    旧 Fetcher と同位置・同順序で実施する。``points>20`` の閾値は Algolia の
-    server-side numericFilters で既に drop 済のため collect では行わない。
+    ``url=None`` / 空 title の hit は対象外として除外する。``points>20`` の
+    閾値は Algolia の server-side numericFilters で既に除外済。
     """
 
     name: ClassVar[SourceName] = SourceName("Hacker News")
@@ -78,10 +67,10 @@ class HackerNewsSource:
         for hit in hits:
             raw_url = hit.get("url")
             if not isinstance(raw_url, str) or not raw_url:
-                continue  # Ask HN / text-only post: external URL を持たない
+                continue  # Ask HN / text-only post: no external URL
             title = (hit.get("title") or "")[:_TITLE_MAX_LENGTH]
             if not title:
-                continue  # business: title 欠落 skip
+                continue  # title missing
             published = _parse_created_at(hit.get("created_at"))
             yield FetchedArticle(
                 title=title,

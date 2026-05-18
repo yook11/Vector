@@ -1,7 +1,6 @@
 """Google DeepMind 用 Source (RSS 2.0、UTF-8)。
 
-per-source 設計: ``<description>`` は短い概要のみで本文は HTML 取得に
-委譲する。RSS body を信用せず ``body=None`` で yield する。
+``<description>`` は短い概要のみで本文は HTML 取得に委ねる。
 """
 
 from __future__ import annotations
@@ -20,7 +19,7 @@ from app.shared.value_objects.source_name import SourceName
 
 
 class DeepMindSource:
-    """Google DeepMind 用 ``XxxSource`` (Pattern H、body 不信用)。"""
+    """Google DeepMind 用 Source。"""
 
     name: ClassVar[SourceName] = SourceName("Google DeepMind")
     endpoint_url: ClassVar[str] = "https://deepmind.google/blog/rss.xml"

@@ -1,20 +1,12 @@
-"""ORNL (Oak Ridge National Laboratory) 用 Source — HTML listing Pattern H。
+"""ORNL (Oak Ridge National Laboratory) 用 Source。
 
-RSS / Atom / sitemap.xml を提供しないため、``/news`` listing ページから記事
-URL を列挙する Pattern H 経路。listing には title が無いため URL slug を
-プレースホルダとして ``title`` に詰め、仮タイトル性は per-source の補完方針
-(``completion_profile = HTML_TITLE_PROFILE``、title=``html_preferred``) が
-表す。parse helper (``_parse_listing`` / ``_slug_from_url``) は本モジュール
-内に閉じる (Anthropic sitemap と問題が違うため共用しない)。
-
-per-source 設計 (実 listing 観察ベース):
-
-- listing URL: ``https://www.ornl.gov/news`` (200 OK、UTF-8、~64KB)
-- detail link 抽出: ``//a[starts-with(@href, "/news/")]`` で 17 件取得
-- category landing 除外: ``EXCLUDED_PATHS`` で path 単位の denylist
-- robots.txt: /news/ 配下を許可、Crawl-delay 10s (host-level limiter は
-  別レイヤ責務、collect 内で sleep しない)
-- License: U.S. Government work、attribution_label = "ORNL · DOE"
+RSS / Atom / sitemap.xml を提供しないため ``/news`` listing ページ
+(``https://www.ornl.gov/news``) から記事 URL を列挙する。listing には title
+が無いため URL slug を title に詰める。detail link は
+``//a[starts-with(@href, "/news/")]`` で抽出し ``EXCLUDED_PATHS`` で category
+landing を対象外として除外する。robots.txt は /news/ 配下を許可、
+Crawl-delay 10s。License は U.S. Government work、
+attribution_label = "ORNL · DOE"。
 """
 
 from __future__ import annotations
@@ -46,7 +38,7 @@ def _parse_listing(
     """listing HTML から XPath で href を抽出し絶対 URL 化する。
 
     defensive parsing: ``lxml.html.fromstring`` は外部 entity を解決せず
-    no_network parser を内部で使うため、defusedxml は不要。
+    no_network parser を内部で使う。
     """
     doc = html.fromstring(data)
     result: list[str] = []
@@ -65,15 +57,12 @@ def _slug_from_url(url: str) -> str:
 
 
 class ORNLSource:
-    """ORNL news listing ``XxxSource`` (HTML listing, Pattern H)。
+    """ORNL news listing 用 Source。
 
-    ``published_at=None`` も intentional (listing は lastmod 情報を持たない
-    前提、HTML 抽出側で確定させる)。
-
-    business critical drop:
-    - 同一 listing 内 URL dedup (同 href が複数 ``<a>`` で出る物理問題への対処)
-    - ``EXCLUDED_PATHS`` denylist (category landing を弾く)
-    - ``MAX_ENTRIES=30`` 切り出し (大量バックフィル防止)
+    listing は lastmod 情報を持たないため ``published_at=None`` で yield する
+    (HTML 抽出側で確定)。同一 listing 内 URL dedup、``EXCLUDED_PATHS``
+    denylist で category landing を対象外として除外、``MAX_ENTRIES=30`` 件で
+    打ち切る。
     """
 
     name: ClassVar[SourceName] = SourceName("ORNL")

@@ -16,15 +16,11 @@ from typing import ClassVar, Literal
 class ExternalFetchError(Exception):
     """外部取得境界で発生した失敗の共通祖先。
 
-    本クラスは origin error の識別 marker。Stage 1 / Stage 2 の retry 判断や
-    terminal 判断はここでは持たず、各 Stage 側の mapper / marker で解釈する。
-    具体 subclass は ``CODE`` を必ず override する。
+    origin error の識別 marker。retry / terminal 判断は各 Stage 側で解釈する。
+    具体 subclass は ``CODE`` を override する。
 
-    ``__str__`` は constructor で明示 message が渡されればそれを返し、空文字なら
-    ``_default_message()`` を返す。多くの subclass が ``message: str = ""`` 既定を
-    持つため、wrap 経路 (``SourceFetchError(str(exc), code=exc.CODE)``) の監査 /
-    ログが空文字にならないことを構造的に保証する (additive 非破壊: 明示 message を
-    渡す既存 raise の挙動は不変)。
+    ``__str__`` は明示 message があればそれを、空文字なら ``_default_message()``
+    を返す (wrap 経路の監査 / ログが空文字にならないように)。
     """
 
     CODE: ClassVar[str]

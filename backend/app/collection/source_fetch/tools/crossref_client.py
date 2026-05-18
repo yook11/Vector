@@ -1,20 +1,4 @@
-"""Crossref Works API thin client wrapper。
-
-P5 で MDPI 4 journal の Crossref API 経路 Adapter を ``SourceAdapter`` 化する
-に際し、Crossref REST API の HTTP 取得 + JSON decode + per-ISSN filter +
-sort/order 構築を集約する責務切り出し。
-
-設計判断:
-
-- ``works(*, issn, from_pub_date, rows)`` で呼び出し側は意味だけ渡し、
-  ``filter=issn:..,from-pub-date:..`` / ``sort=published`` / ``order=desc``
-  の構築は wrapper 内で完結 (旧 ``BaseMDPICrossrefFetcher._fetch_recent_works``
-  ``mdpi/_common.py:167`` と同 params 契約を継承)。
-- polite pool 降格防止のため User-Agent に ``mailto:`` を必須で乗せる。
-- ``list[dict]`` を返すだけ。type filter / license gate / JATS strip 等の
-  業務判定は Adapter の責務。
-- test では本 client を継承した fixture-backed fake を Adapter に DI する。
-"""
+"""Crossref Works API の thin client。"""
 
 from __future__ import annotations
 
@@ -40,12 +24,7 @@ _HTTP_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
 
 
 class CrossrefApiClient:
-    """Crossref Works API thin wrapper。
-
-    per-ISSN filter + 公開日 rolling window で取得し、``items: list[dict]`` を
-    返す。caller (Adapter) は各 item の type/license/title/abstract/date/DOI
-    判定を担う (旧 ``BaseMDPICrossrefFetcher._convert_record`` と同等の責務分担)。
-    """
+    """Crossref Works API thin wrapper。"""
 
     DEFAULT_ENDPOINT: ClassVar[str] = "https://api.crossref.org/works"
 
@@ -60,14 +39,10 @@ class CrossrefApiClient:
         from_pub_date: str,
         rows: int,
     ) -> list[dict[str, Any]]:
-        """per-ISSN + ``from-pub-date`` で recent works を取得。
-
-        ``sort=published`` / ``order=desc`` を継承して新着優先を契約として保つ
-        (旧 ``mdpi/_common.py:167`` と同値)。
+        """per-ISSN + ``from-pub-date`` で新着順に recent works を取得。
 
         Raises:
-            ExternalFetchError: HTTP status / transport / SSRF 例外を
-                ``translate_fetch_exception`` で写像した origin error。
+            ExternalFetchError: HTTP status / transport / SSRF 例外の写像。
         """
         params: dict[str, str | int] = {
             "filter": f"issn:{issn},from-pub-date:{from_pub_date}",
