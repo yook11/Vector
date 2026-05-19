@@ -1,18 +1,17 @@
-"""``AnthropicSource`` (sitemap.xml, Pattern H) の不変条件テスト (P2-D)。
+"""``AnthropicSource`` (sitemap.xml, Pattern H) の不変条件テスト。
 
-P2-D で ``AnthropicSource`` は identity / 補完方針を ``ClassVar`` 宣言し
-``collect(tools)`` で ``tools.raw_http(accept="application/xml")`` を使う
-(``URL_PATH_PREFIX`` / ``MAX_ENTRIES`` は tuning 定数として ``ClassVar`` 残置)。
+固定するのは Anthropic Source 固有で他に被覆の無い不変条件:
 
-検証する不変条件:
-
-- fixture sitemap.xml から ``ArticleFetcher`` 経由で永続化 passport が yield
-- ``URL_PATH_PREFIX="/news/"`` 以外の URL は yield されない
-- ``MAX_ENTRIES=30`` で切り出される
-- 各 passport は ``completion_profile = HTML_TITLE_PROFILE`` 経由で
-  ``ObservedArticle`` 型 (title=``html_preferred`` が Ready gate を止める)
+- fixture sitemap から ``ArticleFetcher`` 経由で永続化 passport が yield
+- 収集スコープ ``is_collectable_anthropic_url`` (``/news/`` のみ・対象外 ≠
+  変換失敗)。``MAX_ENTRIES`` cap / lastmod 降順
+- ``to_fetched_article`` が in-scope entry に対し total (None/raise しない)
+- 全 passport は ``ObservedArticle`` (``HTML_TITLE_PROFILE``)
 - ``RawHttpClient`` の ``ExternalFetchError`` は ``collect`` を素通しする
-- sitemap parser は XXE / 外部 entity を解決しない (defensive parsing 契約)
+
+loc/lastmod parse と XXE 防御は ``SitemapReader`` の責務へ移ったため
+``test_sitemap_reader_contract.py`` が SSoT。本ファイルは parse を再検証
+しない (旧 ``_parse_sitemap`` 直叩き XXE テストはそこへ relocation)。
 """
 
 from __future__ import annotations
@@ -28,8 +27,14 @@ from app.collection.external_fetch_errors import (
     FetchResourceNotFoundError,
 )
 from app.collection.source_fetch.article_fetcher import ArticleFetcher
+from app.collection.source_fetch.fetched_article import FetchedArticle
+from app.collection.source_fetch.reader.sitemap_reader import SitemapEntry
 from app.collection.source_fetch.tools.raw_http_client import RawHttpClient
-from app.collection.sources.definitions.anthropic import AnthropicSource, _parse_sitemap
+from app.collection.sources.definitions.anthropic import (
+    AnthropicSource,
+    is_collectable_anthropic_url,
+    to_fetched_article,
+)
 from tests.collection.fetchers._fixture_tools import fixture_tools
 from tests.collection.fetchers._invariant import (
     Passport,
@@ -63,8 +68,8 @@ async def _collect(it: AsyncIterator[Passport]) -> list[Passport]:
 def _fetcher(client: RawHttpClient) -> ArticleFetcher:
     """Anthropic Source を fixture raw client 注入で ``ArticleFetcher`` 化。
 
-    profile / origin は ``AnthropicSource`` の ``ClassVar`` 直読み
-    (sitemap + HTML_TITLE、本番経路と byte 同一)。
+    ``raw`` は ``SitemapReader`` が wrap するため fixture バイトはそのまま
+    本物の parse を通る (profile / origin は ``ClassVar`` 直読み)。
     """
     return ArticleFetcher(AnthropicSource, tools=fixture_tools(raw=client))
 
@@ -104,12 +109,38 @@ async def test_max_entries_capped() -> None:
 
 @pytest.mark.asyncio
 async def test_all_passports_are_incomplete_for_html_title() -> None:
-    """``HTML_TITLE_PROFILE`` (title=``html_preferred``) のため Ready 経路は
-    発火しない。"""
+    """``HTML_TITLE_PROFILE`` のため全 passport が ``ObservedArticle``。"""
     items = await _collect(_build_fetcher().fetch(source_id=1))
     assert items
     for item in items:
         assert isinstance(item, ObservedArticle)
+
+
+# ── 収集スコープ述語 / 写像 totality (穴1: シームごとに pin) ──────────────
+
+
+def test_scope_does_not_govern_lastmod() -> None:
+    """スコープ述語は lastmod を見ない (lastmod 欠落でも in-scope)。
+
+    これが ``to_fetched_article`` の totality 検証 (下記) の前提。
+    """
+    entry = SitemapEntry(loc="https://www.anthropic.com/news/x", lastmod=None)
+    assert is_collectable_anthropic_url(entry) is True
+
+
+def test_mapping_is_total_on_in_scope_missing_lastmod() -> None:
+    """in-scope だが lastmod 欠落の entry に写像は None/raise せず
+    ``FetchedArticle`` を返す (total)。
+
+    converter/fetcher テストは ``FetchedArticle`` を直接与え sitemap 写像を
+    通らないため、sitemap シームの totality はここでしか pin できない。
+    """
+    fa = to_fetched_article(
+        SitemapEntry(loc="https://www.anthropic.com/news/x", lastmod=None)
+    )
+    assert isinstance(fa, FetchedArticle)
+    assert fa.url == "https://www.anthropic.com/news/x"
+    assert fa.published_at is None
 
 
 @pytest.mark.asyncio
@@ -132,19 +163,3 @@ async def test_recoverable_error_propagates_through_collect() -> None:
     )
     with pytest.raises(FetchOriginServerError):
         await _collect(fetcher.fetch(source_id=1))
-
-
-def test_xxe_external_entity_disabled() -> None:
-    """sitemap parser は外部実体参照を解決しない (defensive parsing 契約)。"""
-    malicious = b"""<?xml version="1.0"?>
-<!DOCTYPE urlset [
-  <!ENTITY xxe SYSTEM "file:///etc/passwd">
-]>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://www.anthropic.com/news/&xxe;</loc></url>
-</urlset>
-"""
-    entries = _parse_sitemap(malicious)
-    loc = entries[0][0] if entries else ""
-    assert "/etc/passwd" not in loc
-    assert "root:" not in loc

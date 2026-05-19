@@ -14,8 +14,8 @@ import structlog
 
 from app.collection.external_fetch_errors import ExternalFetchError
 from app.collection.source_fetch.fetched_article import FetchedArticle
+from app.collection.source_fetch.reader.rss_reader import ParseMode, RssEntry
 from app.collection.source_fetch.tools.fetch_tools import FetchTools
-from app.collection.source_fetch.tools.rss_parser import ParseMode, RssEntry
 
 logger = structlog.get_logger(__name__)
 

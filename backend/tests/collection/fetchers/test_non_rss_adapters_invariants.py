@@ -7,11 +7,11 @@ fake client を注入し、Source クラスオブジェクトを ``ArticleFetche
 
 7 ケース内訳:
 
-- Hacker News (Algolia HN Search API) — ``_FixtureHackerNewsApiClient``
+- Hacker News (Algolia HN Search API) — ``_FixtureHackerNewsReader``
 - Anthropic (sitemap.xml) — ``_FixtureRawHttpClient`` + ``anthropic_sitemap.xml``
 - ORNL (HTML listing) — ``_FixtureRawHttpClient`` + ``ornl_listing.html``
 - MDPI Energies / Materials / Nanomaterials / Sensors (Crossref API) —
-  ``_FixtureCrossrefApiClient`` + ``mdpi_crossref.json`` (P2-D: 4 ISSN は
+  ``_FixtureCrossrefReader`` + ``mdpi_crossref.json`` (P2-D: 4 ISSN は
   独立した ``MDPIXxxSource`` クラスで区別。共通処理 ``mdpi_items`` を共有)
 
 profile / origin は P1 と byte 不変 (Source クラスの ``ClassVar`` 直読み):
@@ -32,8 +32,16 @@ import pytest
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.source_fetch.article_fetcher import ArticleFetcher
-from app.collection.source_fetch.tools.algolia_hn_client import HackerNewsApiClient
-from app.collection.source_fetch.tools.crossref_client import CrossrefApiClient
+from app.collection.source_fetch.reader.algolia_hn_reader import (
+    HackerNewsEntry,
+    HackerNewsReader,
+    normalize_hit,
+)
+from app.collection.source_fetch.reader.crossref_reader import (
+    CrossrefEntry,
+    CrossrefReader,
+    normalize_item,
+)
 from app.collection.source_fetch.tools.fetch_tools import FetchTools
 from app.collection.source_fetch.tools.raw_http_client import RawHttpClient
 from app.collection.sources.article_source import ArticleSource
@@ -73,8 +81,10 @@ class _FixtureRawHttpClient(RawHttpClient):
         return self._payload
 
 
-class _FixtureHackerNewsApiClient(HackerNewsApiClient):
-    """``HackerNewsApiClient`` の構造的 fake。fixture hits を直接返す。"""
+class _FixtureHackerNewsReader(HackerNewsReader):
+    """``HackerNewsReader`` の構造的 fake。fixture hits を本物の
+    ``normalize_hit`` 経由で ``HackerNewsEntry`` 列に写す
+    (``_FixtureRssReader`` が ``normalize_entry`` を使うのと同形)。"""
 
     def __init__(self, hits: list[dict[str, Any]]) -> None:
         self._hits = hits
@@ -86,25 +96,27 @@ class _FixtureHackerNewsApiClient(HackerNewsApiClient):
         min_points: int,  # noqa: ARG002
         window_seconds: int,  # noqa: ARG002
         hits_per_page: int,  # noqa: ARG002
-    ) -> list[dict[str, Any]]:
-        return self._hits
+    ) -> list[HackerNewsEntry]:
+        return [normalize_hit(h) for h in self._hits]
 
 
-class _FixtureCrossrefApiClient(CrossrefApiClient):
-    """``CrossrefApiClient`` の構造的 fake。fixture items を直接返す。"""
+class _FixtureCrossrefReader(CrossrefReader):
+    """``CrossrefReader`` の構造的 fake。fixture items を本物の
+    ``normalize_item`` 経由で ``CrossrefEntry`` 列に写す
+    (``_FixtureHackerNewsReader`` が ``normalize_hit`` を使うのと同形)。"""
 
     def __init__(self, items: list[dict[str, Any]]) -> None:
         self._items = items
 
-    async def works(
+    async def fetch_works(
         self,
         *,
         source_name: str,  # noqa: ARG002
         issn: str,  # noqa: ARG002
         from_pub_date: str,  # noqa: ARG002
         rows: int,  # noqa: ARG002
-    ) -> list[dict[str, Any]]:
-        return self._items
+    ) -> list[CrossrefEntry]:
+        return [normalize_item(item) for item in self._items]
 
 
 def _hn_hits() -> list[dict[str, Any]]:
@@ -118,7 +130,7 @@ def _mdpi_items() -> list[dict[str, Any]]:
 
 
 def _hn_tools() -> FetchTools:
-    return fixture_tools(hacker_news=_FixtureHackerNewsApiClient(_hn_hits()))
+    return fixture_tools(hacker_news=_FixtureHackerNewsReader(_hn_hits()))
 
 
 def _raw_tools(fixture_filename: str) -> Callable[[], FetchTools]:
@@ -127,7 +139,7 @@ def _raw_tools(fixture_filename: str) -> Callable[[], FetchTools]:
 
 
 def _mdpi_tools() -> FetchTools:
-    return fixture_tools(crossref=_FixtureCrossrefApiClient(_mdpi_items()))
+    return fixture_tools(crossref=_FixtureCrossrefReader(_mdpi_items()))
 
 
 # (label, SourceClass, tools_factory, allowed_types, must_include_types)

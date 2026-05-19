@@ -11,14 +11,14 @@
 
 P2-D で取得 machinery は ``XxxSource.collect(tools)`` になった。本テストは
 ネットワーク I/O を排除するため、``FetchTools`` の ``rss`` を
-``_FixtureRssParser`` に差し替える単一注入ヘルパ ``fixture_tools`` を使い、
+``_FixtureRssReader`` に差し替える単一注入ヘルパ ``fixture_tools`` を使い、
 Source クラスオブジェクトを ``ArticleFetcher`` 本番経路 (fetched_article_converter) に
 通す。fixture / 期待型集合は P1 時点から不変 = yield される passport の型・
 dedup・parse の同一性が byte 不変の証跡になる。
 
 NASA / Cornell は ``multi_feed_rss`` free function へ、Frontiers×4 /
 ESA×2 は ``frontiers_entries`` / ``djangoplicity_entries`` free function へ
-``collect`` が委譲する。``_FixtureRssParser`` は endpoint_url / source_name を
+``collect`` が委譲する。``_FixtureRssReader`` は endpoint_url / source_name を
 無視して同 fixture を返すため、共有 machinery 経路でも旧 invariant と同一の
 passport ストリームになる (NASA は multi-feed dedup を ``seen_urls`` が吸収)。
 """

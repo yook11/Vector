@@ -15,8 +15,8 @@ import re
 from collections.abc import AsyncIterator
 
 from app.collection.source_fetch.fetched_article import FetchedArticle
+from app.collection.source_fetch.reader.rss_reader import RssEntry
 from app.collection.source_fetch.tools.fetch_tools import FetchTools
-from app.collection.source_fetch.tools.rss_parser import RssEntry
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _WHITESPACE_RE = re.compile(r"\s+")

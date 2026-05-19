@@ -3,15 +3,12 @@
 HN は RSS / Atom を持たず API ベース。API hit の ``url`` は外部の任意サイトを
 指すため本文は HN 側で取得できず、body は HTML 抽出に委ねる。直近
 ``HN_SLIDING_WINDOW_SECONDS`` 秒以内に投稿された ``points > HN_MIN_POINTS``
-のストーリーを全件取得する sliding window 設計。``url=None`` の hit
-(Ask HN / Show HN テキスト投稿等) は対象外として除外する。dedup は下流の
-``ON CONFLICT DO NOTHING`` に委ねる。
+のストーリーを全件取得する sliding window 設計。
 """
 
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from datetime import datetime
 from typing import ClassVar
 
 from app.collection.domain.observed_article import ObservedOrigin
@@ -19,8 +16,8 @@ from app.collection.domain.source_completion_profile import (
     DEFAULT_PROFILE,
     SourceCompletionProfile,
 )
-from app.collection.domain.value_objects import PublishedAt
 from app.collection.source_fetch.fetched_article import FetchedArticle
+from app.collection.source_fetch.reader.algolia_hn_reader import HackerNewsEntry
 from app.collection.source_fetch.tools.fetch_tools import FetchTools
 from app.shared.value_objects.source_name import SourceName
 
@@ -30,25 +27,11 @@ HN_MIN_POINTS = 20
 HN_HITS_PER_PAGE = 100
 HN_SLIDING_WINDOW_SECONDS = 86400  # 24h
 
-_TITLE_MAX_LENGTH = 500
-
-
-def _parse_created_at(raw: str | None) -> PublishedAt | None:
-    """Algolia の ``created_at`` (ISO 8601 + ``Z``) を UTC ``PublishedAt`` に変換。"""
-    if not raw:
-        return None
-    try:
-        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    except (TypeError, ValueError):
-        return None
-    return PublishedAt(value=dt)
-
 
 class HackerNewsSource:
     """Hacker News 用 Source (Algolia Search API)。
 
-    ``url=None`` / 空 title の hit は対象外として除外する。``points>20`` の
-    閾値は Algolia の server-side numericFilters で既に除外済。
+    ``points>20`` の閾値は Algolia の server-side numericFilters で除外済。
     """
 
     name: ClassVar[SourceName] = SourceName("Hacker News")
@@ -57,24 +40,22 @@ class HackerNewsSource:
     completion_profile: ClassVar[SourceCompletionProfile] = DEFAULT_PROFILE
 
     @classmethod
+    def to_fetched_article(cls, entry: HackerNewsEntry) -> FetchedArticle:
+        """HN hit は外部サイトを指すため body は HTML 抽出に委ねる (None)。"""
+        return FetchedArticle(
+            title=entry.title or "",
+            url=entry.url or "",
+            body=None,
+            published_at=entry.published,
+        )
+
+    @classmethod
     async def collect(cls, tools: FetchTools) -> AsyncIterator[FetchedArticle]:
-        hits = await tools.hacker_news.search_recent_stories(
+        entries = await tools.hacker_news.search_recent_stories(
             source_name=str(cls.name),
             min_points=HN_MIN_POINTS,
             window_seconds=HN_SLIDING_WINDOW_SECONDS,
             hits_per_page=HN_HITS_PER_PAGE,
         )
-        for hit in hits:
-            raw_url = hit.get("url")
-            if not isinstance(raw_url, str) or not raw_url:
-                continue  # Ask HN / text-only post: no external URL
-            title = (hit.get("title") or "")[:_TITLE_MAX_LENGTH]
-            if not title:
-                continue  # title missing
-            published = _parse_created_at(hit.get("created_at"))
-            yield FetchedArticle(
-                title=title,
-                url=raw_url,
-                body=None,
-                published_at=published.value if published is not None else None,
-            )
+        for entry in entries:
+            yield cls.to_fetched_article(entry)

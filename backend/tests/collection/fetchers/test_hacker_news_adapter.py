@@ -1,22 +1,30 @@
 """``HackerNewsSource`` (Algolia Search API, Pattern H) の不変条件テスト (P2-D)。
 
-P2-D で ``HackerNewsSource`` は identity / 補完方針を ``ClassVar`` 宣言し
-``collect(tools)`` で ``tools.hacker_news.search_recent_stories(...)`` を使う。
-検証する不変条件:
+このファイルが固定するのは HN Source 固有で他に被覆の無い不変条件:
 
-- fixture hits から ``ArticleFetcher`` 経由で永続化 passport が yield される
-- ``url=None`` の Ask HN 系 hit は yield 自体されない (passport が増えない)
-- 空 title の hit は yield されない
-- ``HackerNewsApiClient`` の ``ExternalFetchError`` は ``collect`` を素通しする
 - ``search_recent_stories`` に renamed kwargs (sliding window / min_points /
   hits_per_page) が必ず渡る (旧仕様: 24h window / points>20 / 100 hits)
+- ``to_fetched_article`` が url 欠落 hit を握りつぶさず **total** に
+  ``FetchedArticle(url="")`` を出し、fetcher 経路で ``ConversionRejection``
+  として可視化される (spec「写像で None/drop/skip しない」は写像ごとに
+  pin が要る — converter/fetcher テストは ``FetchedArticle`` を直接与え HN
+  写像を通らないため、ここでしか HN シームの totality を pin できない。
+  HN は収集スコープ述語を持たず全 entry を写すため degenerate witness は
+  単に url=None entry)
+- ``HackerNewsReader`` の ``ExternalFetchError`` は ``collect`` を素通しする
+
+passport 業務不変条件は ``test_non_rss_adapters_invariants.py`` [HackerNews]
+が 系統A シートベルトとして所有。degenerate hit の棄却 *理由* (MISSING_URL
+等) は converter/fetcher 層 (``test_fetched_article_converter.py`` /
+``test_article_fetcher.py``) が機構非依存 SSoT として所有し、本ファイルは
+理由を再検証せず「HN 写像が total で可視化に到達する」リンクのみ pin する。
+旧 ``test_*_skipped_in_collect`` / ``count==4`` は spec が意図的に壊す
+silent-drop を業務ルールとして凍結する確認重複だったため削除した。
 """
 
 from __future__ import annotations
 
-import json
 from collections.abc import AsyncIterator
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -27,7 +35,13 @@ from app.collection.external_fetch_errors import (
     FetchOriginServerError,
 )
 from app.collection.source_fetch.article_fetcher import ArticleFetcher
-from app.collection.source_fetch.tools.algolia_hn_client import HackerNewsApiClient
+from app.collection.source_fetch.fetched_article import FetchedArticle
+from app.collection.source_fetch.fetched_article_converter import ConversionRejection
+from app.collection.source_fetch.reader.algolia_hn_reader import (
+    HackerNewsEntry,
+    HackerNewsReader,
+    normalize_hit,
+)
 from app.collection.sources.definitions.hacker_news import (
     HN_HITS_PER_PAGE,
     HN_MIN_POINTS,
@@ -35,22 +49,15 @@ from app.collection.sources.definitions.hacker_news import (
     HackerNewsSource,
 )
 from tests.collection.fetchers._fixture_tools import fixture_tools
-from tests.collection.fetchers._invariant import (
-    Passport,
-    assert_at_least_one_passport,
-    assert_passports_persistable,
-)
+from tests.collection.fetchers._invariant import FetchItem
 
-_FIXTURE = Path(__file__).parent.parent.parent / "fixtures" / "hacker_news_hits.json"
 _HN_NAME = "Hacker News"
 
 
-def _hits() -> list[dict[str, Any]]:
-    raw = json.loads(_FIXTURE.read_text())
-    return list(raw["hits"])
+class _FakeHNClient(HackerNewsReader):
+    """kwargs spy。呼出 kwargs を記録し hits を本物の ``normalize_hit`` で
+    ``HackerNewsEntry`` 列に写す (構造的 fake)。"""
 
-
-class _FakeHNClient(HackerNewsApiClient):
     def __init__(self, hits: list[dict[str, Any]]) -> None:
         self._hits = hits
         self.calls: list[dict[str, Any]] = []
@@ -62,7 +69,7 @@ class _FakeHNClient(HackerNewsApiClient):
         min_points: int,
         window_seconds: int,
         hits_per_page: int,
-    ) -> list[dict[str, Any]]:
+    ) -> list[HackerNewsEntry]:
         self.calls.append(
             {
                 "source_name": source_name,
@@ -71,10 +78,10 @@ class _FakeHNClient(HackerNewsApiClient):
                 "hits_per_page": hits_per_page,
             }
         )
-        return self._hits
+        return [normalize_hit(h) for h in self._hits]
 
 
-class _RaisingHNClient(HackerNewsApiClient):
+class _RaisingHNClient(HackerNewsReader):
     def __init__(self, exc: BaseException) -> None:
         self._exc = exc
 
@@ -85,67 +92,17 @@ class _RaisingHNClient(HackerNewsApiClient):
         min_points: int,  # noqa: ARG002
         window_seconds: int,  # noqa: ARG002
         hits_per_page: int,  # noqa: ARG002
-    ) -> list[dict[str, Any]]:
+    ) -> list[HackerNewsEntry]:
         raise self._exc
 
 
-async def _collect(it: AsyncIterator[Passport]) -> list[Passport]:
+async def _collect(it: AsyncIterator[FetchItem]) -> list[FetchItem]:
     return [o async for o in it]
 
 
-def _fetcher(client: HackerNewsApiClient) -> ArticleFetcher:
+def _fetcher(client: HackerNewsReader) -> ArticleFetcher:
     """HN Source を fixture client 注入で ``ArticleFetcher`` 化 (api+DEFAULT)。"""
     return ArticleFetcher(HackerNewsSource, tools=fixture_tools(hacker_news=client))
-
-
-@pytest.mark.asyncio
-async def test_adapter_yields_passports_from_fixture() -> None:
-    items = await _collect(_fetcher(_FakeHNClient(_hits())).fetch(source_id=1))
-    assert_at_least_one_passport(items)
-    # fixture は url 持ち 4 件 / url=None 2 件 → 4 件のみ pass
-    pendings = [o for o in items if isinstance(o, ObservedArticle)]
-    assert len(pendings) == 4
-
-
-@pytest.mark.asyncio
-async def test_adapter_persistence_invariants() -> None:
-    items = await _collect(_fetcher(_FakeHNClient(_hits())).fetch(source_id=1))
-    assert_passports_persistable(items)
-
-
-@pytest.mark.asyncio
-async def test_url_none_hits_skipped_in_collect() -> None:
-    """``url=None`` (Ask HN 系) は yield 自体されない (passport にならない)。"""
-    only_url_none = [
-        {
-            "objectID": "x",
-            "title": "Ask HN: ...",
-            "url": None,
-            "created_at": "2026-02-24T17:15:17Z",
-        },
-        {
-            "objectID": "y",
-            "title": "Ask HN: empty url",
-            "url": "",
-            "created_at": "2026-02-24T17:15:17Z",
-        },
-    ]
-    items = await _collect(_fetcher(_FakeHNClient(only_url_none)).fetch(source_id=1))
-    assert items == []
-
-
-@pytest.mark.asyncio
-async def test_empty_title_hits_skipped_in_collect() -> None:
-    only_empty_title = [
-        {
-            "objectID": "x",
-            "title": "",
-            "url": "https://example.com/foo",
-            "created_at": "2026-02-24T17:15:17Z",
-        },
-    ]
-    items = await _collect(_fetcher(_FakeHNClient(only_empty_title)).fetch(source_id=1))
-    assert items == []
 
 
 @pytest.mark.asyncio
@@ -161,6 +118,42 @@ async def test_client_kwargs_carry_quality_filters() -> None:
             "hits_per_page": HN_HITS_PER_PAGE,
         }
     ]
+
+
+# ── 写像 totality (spec「写像で None/drop/skip しない」を HN シームで pin) ──
+
+
+def test_mapping_is_total_on_url_none_hit() -> None:
+    """url 欠落 hit に対し写像は None/raise/skip せず ``FetchedArticle(url="")``
+    を返す (total)。
+
+    converter/fetcher テストは ``FetchedArticle`` を直接与え HN 写像を
+    通らないため、HN シームの totality はここでしか pin できない。
+    """
+    fa = HackerNewsSource.to_fetched_article(
+        HackerNewsEntry(
+            url=None, title="Ask HN: x", published=None, raw_created_at=None
+        )
+    )
+    assert isinstance(fa, FetchedArticle)
+    assert fa.url == ""  # 握りつぶさず空 URL を素通し (converter が可視化)
+
+
+@pytest.mark.asyncio
+async def test_url_none_hit_surfaces_as_rejection_without_stopping_stream() -> None:
+    """url 欠落 hit は黙って消えず ``ConversionRejection`` として現れ、
+    他の hit は ``ObservedArticle`` のまま stream が止まらない。
+
+    旧 ``test_url_none_hits_skipped_in_collect`` (``assert items == []``) が
+    凍結していた silent-drop の **真の不変条件** (failure-visibility) を
+    Red 先行で再建。
+    """
+    valid = {"url": "https://example.com/a", "title": "valid", "created_at": None}
+    no_url = {"title": "Ask HN: no url", "created_at": None}
+    items = await _collect(_fetcher(_FakeHNClient([valid, no_url])).fetch(source_id=1))
+    assert any(isinstance(i, ObservedArticle) for i in items)  # valid 健在
+    assert any(isinstance(i, ConversionRejection) for i in items)  # degenerate 可視
+    assert len(items) == 2  # stream が止まらず両方到達 (片方 raise で停止しない)
 
 
 @pytest.mark.asyncio

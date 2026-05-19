@@ -17,6 +17,7 @@ from app.collection.domain.source_completion_profile import (
     SourceCompletionProfile,
 )
 from app.collection.source_fetch.fetched_article import FetchedArticle
+from app.collection.source_fetch.reader.rss_reader import RssEntry
 from app.collection.source_fetch.tools.fetch_tools import FetchTools
 from app.shared.value_objects.source_name import SourceName
 
@@ -39,6 +40,16 @@ class TheRegisterSource:
     completion_profile: ClassVar[SourceCompletionProfile] = DEFAULT_PROFILE
 
     @classmethod
+    def to_fetched_article(cls, entry: RssEntry) -> FetchedArticle:
+        """RSS body を信用しないため body は採らない。"""
+        return FetchedArticle(
+            title=entry.title,
+            url=_normalize_register_link(entry.link),
+            body=None,
+            published_at=entry.published,
+        )
+
+    @classmethod
     async def collect(cls, tools: FetchTools) -> AsyncIterator[FetchedArticle]:
         entries = await tools.rss.fetch(
             endpoint_url=cls.endpoint_url,
@@ -46,11 +57,4 @@ class TheRegisterSource:
             parse_mode="text",
         )
         for entry in entries:
-            if not entry.link:
-                continue
-            yield FetchedArticle(
-                title=entry.title,
-                url=_normalize_register_link(entry.link),
-                body=None,
-                published_at=entry.published,
-            )
+            yield cls.to_fetched_article(entry)

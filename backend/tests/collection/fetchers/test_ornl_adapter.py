@@ -1,20 +1,17 @@
-"""``ORNLSource`` (HTML listing, Pattern H) の不変条件テスト (P2-D)。
+"""``ORNLSource`` (HTML listing, Pattern H) の不変条件テスト。
 
-P2-D で ``ORNLSource`` は identity / 補完方針を ``ClassVar`` 宣言し
-``collect(tools)`` で ``tools.raw_http(accept="text/html")`` を使う
-(``DETAIL_LINK_XPATH`` / ``DETAIL_URL_PREFIX`` / ``EXCLUDED_PATHS`` /
-``MAX_ENTRIES`` は tuning 定数として ``ClassVar`` 残置)。
-
-検証する不変条件:
+固定するのは ORNL Source 固有で他に被覆の無い不変条件:
 
 - fixture HTML listing から ``ArticleFetcher`` 経由で永続化 passport が yield
-- ``EXCLUDED_PATHS`` (category landing) は yield されない
-- 同一 listing 内で同 URL が複数回 ``<a>`` から検出されても dedup される
-- ``MAX_ENTRIES=30`` で切り出される
-- 全 passport は ``ObservedArticle`` (``completion_profile =
-  HTML_TITLE_PROFILE``、title=``html_preferred``)
-- ``published_at=None`` (listing には lastmod 情報がない前提)
+- 収集スコープ ``is_collectable_ornl_url`` (``EXCLUDED_PATHS`` 除外・対象外 ≠
+  変換失敗)。同 listing 内 URL dedup / ``MAX_ENTRIES`` cap
+- ``to_fetched_article`` が in-scope entry に対し total (None/raise しない)
+- 全 passport は ``ObservedArticle`` / ``published_at=None``
 - ``RawHttpClient`` の ``ExternalFetchError`` は ``collect`` を素通しする
+
+href 抽出と xpath 契約は ``HtmlListingReader`` の責務へ移ったため
+``test_html_listing_reader_contract.py`` が SSoT。本ファイルは抽出を再検証
+しない (旧 ``_parse_listing`` 直叩き xpath テストはそこへ relocation)。
 """
 
 from __future__ import annotations
@@ -30,8 +27,14 @@ from app.collection.external_fetch_errors import (
     FetchResourceNotFoundError,
 )
 from app.collection.source_fetch.article_fetcher import ArticleFetcher
+from app.collection.source_fetch.fetched_article import FetchedArticle
+from app.collection.source_fetch.reader.html_listing_reader import HtmlListingEntry
 from app.collection.source_fetch.tools.raw_http_client import RawHttpClient
-from app.collection.sources.definitions.ornl import ORNLSource, _parse_listing
+from app.collection.sources.definitions.ornl import (
+    ORNLSource,
+    is_collectable_ornl_url,
+    to_fetched_article,
+)
 from tests.collection.fetchers._fixture_tools import fixture_tools
 from tests.collection.fetchers._invariant import (
     Passport,
@@ -65,8 +68,8 @@ async def _collect(it: AsyncIterator[Passport]) -> list[Passport]:
 def _fetcher(client: RawHttpClient) -> ArticleFetcher:
     """ORNL Source を fixture raw client 注入で ``ArticleFetcher`` 化。
 
-    profile / origin は ``ORNLSource`` の ``ClassVar`` 直読み
-    (listing + HTML_TITLE、本番経路と byte 同一)。
+    ``raw`` は ``HtmlListingReader`` が wrap するため fixture バイトはそのまま
+    本物の parse を通る (profile / origin は ``ClassVar`` 直読み)。
     """
     return ArticleFetcher(ORNLSource, tools=fixture_tools(raw=client))
 
@@ -89,7 +92,7 @@ async def test_adapter_persistence_invariants() -> None:
 
 @pytest.mark.asyncio
 async def test_category_landings_dropped() -> None:
-    """``EXCLUDED_PATHS`` 配下の URL は yield されない。"""
+    """``EXCLUDED_PATHS`` 配下の URL は yield されない (収集スコープ外)。"""
     items = await _collect(_build_fetcher().fetch(source_id=1))
     yielded_paths = {
         "/" + str(item.source_url).split("/", 3)[3].rstrip("/")
@@ -123,6 +126,30 @@ async def test_all_passports_are_incomplete() -> None:
         assert item.published_at is None
 
 
+# ── 収集スコープ述語 / 写像 totality (穴1: シームごとに pin) ──────────────
+
+
+def test_scope_does_not_govern_slug() -> None:
+    """スコープ述語は slug を見ない (slug 空でも in-scope)。
+
+    これが ``to_fetched_article`` の totality 検証 (下記) の前提。
+    """
+    assert is_collectable_ornl_url(HtmlListingEntry(href="/news/x")) is True
+
+
+def test_mapping_is_total_on_in_scope_entry() -> None:
+    """in-scope entry に写像は None/raise せず ``FetchedArticle`` を返す
+    (total)。相対 href → 絶対 URL は Source 純写像。
+
+    converter/fetcher テストは ``FetchedArticle`` を直接与え listing 写像を
+    通らないため、listing シームの totality はここでしか pin できない。
+    """
+    fa = to_fetched_article(HtmlListingEntry(href="/news/x"))
+    assert isinstance(fa, FetchedArticle)
+    assert fa.url == "https://www.ornl.gov/news/x"
+    assert fa.published_at is None
+
+
 @pytest.mark.asyncio
 async def test_non_recoverable_error_propagates_through_collect() -> None:
     fetcher = _fetcher(
@@ -143,13 +170,3 @@ async def test_recoverable_error_propagates_through_collect() -> None:
     )
     with pytest.raises(FetchOriginServerError):
         await _collect(fetcher.fetch(source_id=1))
-
-
-def test_listing_xpath_extracts_only_news_links() -> None:
-    urls = _parse_listing(
-        _FIXTURE.read_bytes(),
-        detail_link_xpath=ORNLSource.DETAIL_LINK_XPATH,
-        detail_url_prefix=ORNLSource.DETAIL_URL_PREFIX,
-    )
-    assert urls
-    assert all(url.startswith("https://www.ornl.gov/news/") for url in urls)

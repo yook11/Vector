@@ -1,4 +1,4 @@
-"""``RssParser`` のユニットテスト (DB 非依存)。
+"""``RssReader`` のユニットテスト (DB 非依存)。
 
 新 API: SSRF guard 構造的内蔵、NewsSource 非依存、parse_mode 引数化、
 title plain text 正規化を ``normalize_entry`` に集約。HTTP cache は廃止
@@ -25,13 +25,13 @@ from app.collection.external_fetch_errors import (
     FetchResourceNotFoundError,
     FetchSsrfBlockedError,
 )
-from app.collection.source_fetch.tools.rss_parser import (
-    RssParser,
+from app.collection.source_fetch.reader.rss_reader import (
+    RssReader,
     normalize_entry,
 )
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 
-_MOD = "app.collection.source_fetch.tools.rss_parser"
+_MOD = "app.collection.source_fetch.reader.rss_reader"
 
 _ENDPOINT = "https://example.com/feed.xml"
 _SOURCE = "Test Source"
@@ -193,8 +193,8 @@ class TestNormalizeEntry:
         assert len(result.guid) == 2048
 
 
-class TestRssParserFetch:
-    """``RssParser.fetch`` の HTTP + feedparser 統合テスト。"""
+class TestRssReaderFetch:
+    """``RssReader.fetch`` の HTTP + feedparser 統合テスト。"""
 
     async def test_returns_normalized_entries(self) -> None:
         entries = [
@@ -208,7 +208,7 @@ class TestRssParserFetch:
             _patch_safe_client(response),
             patch(f"{_MOD}.feedparser.parse", return_value=feed),
         ):
-            results = await RssParser().fetch(
+            results = await RssReader().fetch(
                 endpoint_url=_ENDPOINT, source_name=_SOURCE
             )
 
@@ -223,7 +223,7 @@ class TestRssParserFetch:
             _patch_safe_client(response),
             patch(f"{_MOD}.feedparser.parse", return_value=feed) as mock_parse,
         ):
-            await RssParser().fetch(
+            await RssReader().fetch(
                 endpoint_url=_ENDPOINT, source_name=_SOURCE, parse_mode="text"
             )
 
@@ -238,7 +238,7 @@ class TestRssParserFetch:
             _patch_safe_client(response),
             patch(f"{_MOD}.feedparser.parse", return_value=feed) as mock_parse,
         ):
-            await RssParser().fetch(
+            await RssReader().fetch(
                 endpoint_url=_ENDPOINT, source_name=_SOURCE, parse_mode="bytes"
             )
 
@@ -248,52 +248,52 @@ class TestRssParserFetch:
         response = _mock_response(status_code=403)
         with _patch_safe_client(response):
             with pytest.raises(FetchAccessDeniedError):
-                await RssParser().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
+                await RssReader().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
 
     async def test_404_raises_resource_not_found(self) -> None:
         response = _mock_response(status_code=404)
         with _patch_safe_client(response):
             with pytest.raises(FetchResourceNotFoundError):
-                await RssParser().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
+                await RssReader().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
 
     async def test_410_raises_resource_not_found(self) -> None:
         response = _mock_response(status_code=410)
         with _patch_safe_client(response):
             with pytest.raises(FetchResourceNotFoundError):
-                await RssParser().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
+                await RssReader().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
 
     async def test_451_raises_legal_block(self) -> None:
         response = _mock_response(status_code=451)
         with _patch_safe_client(response):
             with pytest.raises(FetchLegalBlockError):
-                await RssParser().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
+                await RssReader().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
 
     async def test_500_raises_origin_server_error(self) -> None:
         response = _mock_response(status_code=500)
         with _patch_safe_client(response):
             with pytest.raises(FetchOriginServerError):
-                await RssParser().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
+                await RssReader().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
 
     async def test_429_raises_rate_limited(self) -> None:
         response = _mock_response(status_code=429)
         with _patch_safe_client(response):
             with pytest.raises(FetchRateLimitedError):
-                await RssParser().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
+                await RssReader().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
 
     async def test_request_error_raises_network(self) -> None:
         with _patch_safe_client(httpx.ConnectError("connection refused")):
             with pytest.raises(FetchNetworkError):
-                await RssParser().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
+                await RssReader().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
 
     async def test_host_blocked_raises_ssrf_blocked(self) -> None:
         with _patch_safe_client(HostBlockedError("private IP literal")):
             with pytest.raises(FetchSsrfBlockedError):
-                await RssParser().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
+                await RssReader().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
 
     async def test_host_resolution_raises_network(self) -> None:
         with _patch_safe_client(HostResolutionError("dns failure")):
             with pytest.raises(FetchNetworkError):
-                await RssParser().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
+                await RssReader().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
 
     async def test_bozo_with_no_entries_raises_parse_error(self) -> None:
         feed = _make_feed(entries=[], bozo=True)
@@ -304,7 +304,7 @@ class TestRssParserFetch:
             patch(f"{_MOD}.feedparser.parse", return_value=feed),
         ):
             with pytest.raises(FetchParseError):
-                await RssParser().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
+                await RssReader().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
 
     async def test_bozo_with_entries_does_not_raise(self) -> None:
         feed = _make_feed(
@@ -317,7 +317,7 @@ class TestRssParserFetch:
             _patch_safe_client(response),
             patch(f"{_MOD}.feedparser.parse", return_value=feed),
         ):
-            results = await RssParser().fetch(
+            results = await RssReader().fetch(
                 endpoint_url=_ENDPOINT, source_name=_SOURCE
             )
 

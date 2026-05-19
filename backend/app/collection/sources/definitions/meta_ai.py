@@ -21,8 +21,8 @@ from app.collection.domain.source_completion_profile import (
     SourceCompletionProfile,
 )
 from app.collection.source_fetch.fetched_article import FetchedArticle
+from app.collection.source_fetch.reader.rss_reader import RssEntry
 from app.collection.source_fetch.tools.fetch_tools import FetchTools
-from app.collection.source_fetch.tools.rss_parser import RssEntry
 from app.shared.value_objects.source_name import SourceName
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")

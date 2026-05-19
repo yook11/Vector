@@ -1,1 +1,2 @@
-"""ingestion BC の取得部品群 (RSS parse / URL 正規化 / HTML 平文化 等)。"""
+"""ingestion BC の取得補助部品 (Reader 合成根 / HTTP transport / error 変換 /
+多 feed 集約 / 正規化)。Reader 本体は ``source_fetch/reader/`` に在る。"""

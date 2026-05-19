@@ -18,8 +18,8 @@ from app.collection.domain.source_completion_profile import (
     SourceCompletionProfile,
 )
 from app.collection.source_fetch.fetched_article import FetchedArticle
+from app.collection.source_fetch.reader.rss_reader import RssEntry
 from app.collection.source_fetch.tools.fetch_tools import FetchTools
-from app.collection.source_fetch.tools.rss_parser import RssEntry
 from app.shared.value_objects.source_name import SourceName
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
@@ -48,6 +48,16 @@ class VentureBeatSource:
     completion_profile: ClassVar[SourceCompletionProfile] = DEFAULT_PROFILE
 
     @classmethod
+    def to_fetched_article(cls, entry: RssEntry) -> FetchedArticle:
+        """WordPress VIP の truncate 差吸収のため長い方を本文に採る。"""
+        return FetchedArticle(
+            title=entry.title,
+            url=entry.link,
+            body=_strip_html(_pick_body(entry)) or None,
+            published_at=entry.published,
+        )
+
+    @classmethod
     async def collect(cls, tools: FetchTools) -> AsyncIterator[FetchedArticle]:
         entries = await tools.rss.fetch(
             endpoint_url=cls.endpoint_url,
@@ -55,9 +65,4 @@ class VentureBeatSource:
             parse_mode="text",
         )
         for entry in entries:
-            yield FetchedArticle(
-                title=entry.title,
-                url=entry.link,
-                body=_strip_html(_pick_body(entry)) or None,
-                published_at=entry.published,
-            )
+            yield cls.to_fetched_article(entry)

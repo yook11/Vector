@@ -29,8 +29,8 @@ from app.collection.external_fetch_errors import (
     FetchResourceNotFoundError,
 )
 from app.collection.source_fetch.fetched_article import FetchedArticle
+from app.collection.source_fetch.reader.rss_reader import RssEntry
 from app.collection.source_fetch.tools.multi_feed_rss import multi_feed_rss
-from app.collection.source_fetch.tools.rss_parser import RssEntry
 from app.collection.sources.definitions.cornell import CORNELL_FEEDS
 from tests.collection.fetchers._fixture_tools import fixture_tools
 

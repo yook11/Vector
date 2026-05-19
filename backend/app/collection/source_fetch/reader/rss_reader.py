@@ -155,7 +155,7 @@ def normalize_entry(entry: dict[str, Any]) -> RssEntry:
     )
 
 
-class RssParser:
+class RssReader:
     """HTTP + feedparser parse + 正規化を行う無状態クライアント。
 
     SSRF guard 入り client を内部で組み立てる (外部注入不可)。

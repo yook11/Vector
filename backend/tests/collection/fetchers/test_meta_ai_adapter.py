@@ -16,7 +16,7 @@ from pathlib import Path
 import feedparser
 
 from app.collection.source_fetch.fetched_article import FetchedArticle
-from app.collection.source_fetch.tools.rss_parser import RssEntry, normalize_entry
+from app.collection.source_fetch.reader.rss_reader import RssEntry, normalize_entry
 from app.collection.sources.definitions.meta_ai import MetaAISource, _is_ai_tagged
 from tests.collection.fetchers._fixture_tools import fixture_tools
 

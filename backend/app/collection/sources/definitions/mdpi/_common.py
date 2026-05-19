@@ -1,19 +1,17 @@
 """MDPI 4 journal の Crossref API 経路 取得共通処理。
 
-MDPI の RSS は Cloudflare WAF で 4 ISSN 全 403 となり使えない。代わりに
-Crossref API の per-ISSN filter 経路を採用する。
+MDPI の RSS は Cloudflare WAF で 4 ISSN 全 403 となり使えないため Crossref
+API の per-ISSN filter 経路を採る。``ISSN`` は Crossref filter に必須のため
+Source が宣言し引数で渡す。``from-pub-date`` の ``lookback_days`` 窓は cron
+周期と整合させ初回投入時の backfill を防ぐ。
 
-- 本文は ``abstract`` (JATS XML 形式、``_strip_jats`` で markup を剥がす)
-- ``type == "journal-article"`` 以外 (corrections / editorials) は Entry
-  化しない
-- license が CC BY 4.0 でない item は Entry 化しない (MDPI は uniform
-  CC BY 4.0 だが念のため検証)
-- source_url は ``https://doi.org/<DOI>`` (canonical resolver)
-- Crossref polite pool 維持のため User-Agent に ``mailto:`` が必要
-- ``from-pub-date`` で ``lookback_days`` 日窓、cron 周期と整合させ初回
-  投入時の backfill を防ぐ
-
-``ISSN`` は Crossref filter に必須のため Source が宣言し引数で渡す。
+収集スコープ (``is_collectable_mdpi_work``): MDPI が採るのは CC BY 4.0 の
+journal-article のみ。corrections / editorials・非 CC BY・実体の薄い abstract・
+日付不明は **ソースが意図的に採らない対象外データ** であって変換失敗でも
+構造的非記事でもない (spec 第4責務 = 収集スコープ宣言。対象外を
+``ConversionRejection`` 化も converter 移設もしない)。スコープ通過後の
+degenerate (DOI 欠落 / 空 title) は写像で握りつぶさず素通しし converter が
+``MISSING_URL`` / ``MISSING_TITLE`` として可視化する。
 """
 
 from __future__ import annotations
@@ -21,86 +19,47 @@ from __future__ import annotations
 import re
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
-from app.collection.domain.value_objects import PublishedAt
 from app.collection.source_fetch.fetched_article import FetchedArticle
+from app.collection.source_fetch.reader.crossref_reader import CrossrefEntry
 from app.collection.source_fetch.tools.fetch_tools import FetchTools
 
 _CC_BY_4_URL_RE = re.compile(r"creativecommons\.org/licenses/by/4\.0", re.IGNORECASE)
-# JATS prefix (<jats:p>) と HTML tag を一括で剥がす
-_HTML_TAG_RE = re.compile(r"<[^>]+>")
-_WHITESPACE_RE = re.compile(r"\s+")
-_TITLE_MAX_LENGTH = 500
+# 実体の薄い abstract は本文として信用しない閾値 (収集スコープ判定の一部)。
+_MIN_BODY_LENGTH = 50
 
 
-def _strip_jats(s: str) -> str:
-    """JATS XML markup (``<jats:p>`` 等) と HTML タグを剥がし空白正規化。"""
-    if not s:
-        return ""
-    return _WHITESPACE_RE.sub(" ", _HTML_TAG_RE.sub(" ", s)).strip()
+def _is_cc_by_4_0(license_urls: tuple[str, ...]) -> bool:
+    """license URL のいずれかが CC BY 4.0 を指せば True。"""
+    return any(_CC_BY_4_URL_RE.search(url) for url in license_urls)
 
 
-def _parse_date_parts(item: dict[str, Any]) -> PublishedAt | None:
-    """``item["published"]["date-parts"][0]`` を UTC ``PublishedAt`` に変換。
+def is_collectable_mdpi_work(entry: CrossrefEntry) -> bool:
+    """MDPI が収集対象として宣言する work か (純粋なスコープ述語)。
 
-    Crossref 仕様により ``[YYYY]`` / ``[YYYY, M]`` / ``[YYYY, M, D]`` のいずれか。
-    年/月のみの場合は月=1 / 日=1 で補完する。``published`` が無い場合は
-    ``published-online`` / ``published-print`` / ``issued`` を順に fallback。
+    対象外 (非 journal-article / 非 CC BY 4.0 / 実体の薄い abstract / 日付
+    不明) は変換失敗ではなく「ソースが意図的に採らない対象外データ」。
     """
-    for key in ("published", "published-online", "published-print", "issued"):
-        block = item.get(key)
-        if not isinstance(block, dict):
-            continue
-        parts_list = block.get("date-parts")
-        if not isinstance(parts_list, list) or not parts_list:
-            continue
-        first = parts_list[0]
-        if not isinstance(first, list) or not first:
-            continue
-        try:
-            year = int(first[0])
-            month = int(first[1]) if len(first) >= 2 else 1
-            day = int(first[2]) if len(first) >= 3 else 1
-            dt = datetime(year, month, day, tzinfo=UTC)
-        except (TypeError, ValueError):
-            continue
-        return PublishedAt(value=dt)
-    return None
+    return (
+        entry.entry_type == "journal-article"
+        and _is_cc_by_4_0(entry.license_urls)
+        and len(entry.body) >= _MIN_BODY_LENGTH
+        and entry.published is not None
+    )
 
 
-def _validate_license(item: dict[str, Any]) -> bool:
-    """``item["license"][i]["URL"]`` のいずれかが CC BY 4.0 URL を含めば True。"""
-    licenses = item.get("license")
-    if not isinstance(licenses, list):
-        return False
-    for lic in licenses:
-        if not isinstance(lic, dict):
-            continue
-        url = lic.get("URL")
-        if isinstance(url, str) and _CC_BY_4_URL_RE.search(url):
-            return True
-    return False
+def to_fetched_article(entry: CrossrefEntry) -> FetchedArticle:
+    """in-scope な ``CrossrefEntry`` → ``FetchedArticle`` の純粋 total 写像。
 
-
-def _extract_doi(item: dict[str, Any]) -> str | None:
-    """``item["DOI"]`` を返す (型 / 空 guard 付き)。"""
-    raw = item.get("DOI")
-    if isinstance(raw, str) and raw.strip():
-        return raw.strip()
-    return None
-
-
-def _extract_title(item: dict[str, Any]) -> str:
-    """``item["title"]`` は list[str] (Crossref 仕様)、先頭要素を採用。"""
-    raw = item.get("title")
-    if isinstance(raw, list) and raw:
-        first = raw[0]
-        if isinstance(first, str):
-            return _strip_jats(first)
-    if isinstance(raw, str):
-        return _strip_jats(raw)
-    return ""
+    source_url は DOI の canonical resolver。DOI 欠落 / 空 title の degenerate
+    は drop せず素通し、converter が可視化する (failure-visibility)。
+    """
+    return FetchedArticle(
+        title=entry.title,
+        url=f"https://doi.org/{entry.doi}" if entry.doi else "",
+        body=entry.body,
+        published_at=entry.published,
+    )
 
 
 async def mdpi_items(
@@ -113,41 +72,18 @@ async def mdpi_items(
 ) -> AsyncIterator[FetchedArticle]:
     """MDPI journal の Crossref API 経路 取得共通処理。
 
-    HTTP 取得 + per-ISSN filter + sort/order 構築は ``tools.crossref`` に委譲
-    する。共通処理は item ごとの type/license/title/abstract/date/DOI 判定
-    だけを担う。
+    HTTP 取得 + parse + item→Entry 抽出は ``tools.crossref`` (Reader) に
+    委譲する。共通処理は収集スコープ判定と Entry→FetchedArticle 写像のみ。
     """
     from_pub_date = (
         (datetime.now(UTC) - timedelta(days=lookback_days)).date().isoformat()
     )
-    items = await tools.crossref.works(
+    entries = await tools.crossref.fetch_works(
         source_name=source_name,
         issn=issn,
         from_pub_date=from_pub_date,
         rows=rows_per_request,
     )
-    # 判定順: type -> license -> title -> body -> date -> DOI.
-    for item in items:
-        if item.get("type") != "journal-article":
-            continue  # skip corrections/editorials
-        if not _validate_license(item):
-            continue  # CC BY 4.0 のみ
-        title = _extract_title(item)
-        if not title:
-            continue
-        title = title[:_TITLE_MAX_LENGTH]
-        body = _strip_jats(item.get("abstract") or "")
-        if len(body) < 50:
-            continue  # 短すぎる abstract は信用しない
-        published = _parse_date_parts(item)
-        if published is None:
-            continue
-        doi = _extract_doi(item)
-        if doi is None:
-            continue
-        yield FetchedArticle(
-            title=title,
-            url=f"https://doi.org/{doi}",
-            body=body,
-            published_at=published.value,
-        )
+    for entry in entries:
+        if is_collectable_mdpi_work(entry):
+            yield to_fetched_article(entry)

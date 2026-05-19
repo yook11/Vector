@@ -4,9 +4,9 @@ P2-D で取得 machinery は ``XxxSource.collect(tools)`` になり、fake は
 per-machinery コンストラクタ (`parser=`/`client=`) ではなく **``FetchTools``
 1 点** に注入する。本モジュールはその単一注入ヘルパ。
 
-- ``_FixtureRssParser``: ``RssParser`` の構造的 fake (fixture を feedparser で
+- ``_FixtureRssReader``: ``RssReader`` の構造的 fake (fixture を feedparser で
   読み ``normalize_entry`` を通し本番と同じ ``RssEntry`` を返す)。本実装は P2
-  までの各 test の ``_FixtureRssParser``/``_FakeRssParser`` と同一 (C2 で各
+  までの各 test の ``_FixtureRssReader``/``_FakeRssReader`` と同一 (C2 で各
   test がこれへ repoint する)。
 - ``fixture_tools``: 選択した fake を載せた ``FetchTools`` を構築する
   (未指定は実クライアント既定)。
@@ -18,19 +18,19 @@ from pathlib import Path
 
 import feedparser
 
+from app.collection.source_fetch.reader.rss_reader import RssEntry, normalize_entry
 from app.collection.source_fetch.tools.fetch_tools import FetchTools
-from app.collection.source_fetch.tools.rss_parser import RssEntry, normalize_entry
 
 _FIXTURES_DIR = Path(__file__).parent.parent.parent / "fixtures"
 
 
-class _FixtureRssParser:
-    """``RssParser`` の構造的 fake。fixture を feedparser で読み、
+class _FixtureRssReader:
+    """``RssReader`` の構造的 fake。fixture を feedparser で読み、
     ``normalize_entry`` を通して本番経路と同じ ``RssEntry`` を返す。
 
     ``parse_mode`` / ``endpoint_url`` / ``source_name`` は受け取って無視する
     (fixture は静的バイナリなので encoding 差異を再現する必要がない)。本物の
-    ``RssParser.fetch`` と同じ kw シグネチャを満たすため ``**_`` で耐える。
+    ``RssReader.fetch`` と同じ kw シグネチャを満たすため ``**_`` で耐える。
     """
 
     def __init__(self, fixture_filename: str) -> None:
@@ -59,8 +59,8 @@ def fixture_tools(
 ) -> FetchTools:
     """選択した fake を載せた ``FetchTools`` を構築する。
 
-    - ``rss``: ``RssParser`` 構造的 fake を直指定 (NASA fan-out 等の特殊 parser)。
-    - ``rss_fixture``: 指定時 ``_FixtureRssParser(rss_fixture)`` を使う。
+    - ``rss``: ``RssReader`` 構造的 fake を直指定 (NASA fan-out 等の特殊 parser)。
+    - ``rss_fixture``: 指定時 ``_FixtureRssReader(rss_fixture)`` を使う。
     - ``crossref`` / ``hacker_news`` / ``raw``: 各クライアントの構造的 fake。
       ``raw`` は ``accept`` を無視して同一 fake を返す factory として注入する。
     - 未指定の道具は実クライアント既定 (``FetchTools`` の default_factory)。
@@ -69,7 +69,7 @@ def fixture_tools(
     if rss is not None:
         kwargs["rss"] = rss
     elif rss_fixture is not None:
-        kwargs["rss"] = _FixtureRssParser(rss_fixture)
+        kwargs["rss"] = _FixtureRssReader(rss_fixture)
     if crossref is not None:
         kwargs["crossref"] = crossref
     if hacker_news is not None:
