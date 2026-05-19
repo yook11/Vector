@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+Cornell fan-out 用 disjoint-URL fixture (feed_a)。本物の cornell_rss.xml を
+6 feed 全てに replay すると cross-feed dedup が 5 回発火し fixture invariant
+「dedup 未発火」を破る。本 fixture は feed_b と URL disjoint な 2 entry を持つ。
+-->
+<rss version="2.0">
+  <channel>
+    <title>Cornell Chronicle Oracle Feed A</title>
+    <link>https://news.cornell.edu/oracle/feed-a</link>
+    <description>Oracle fixture (feed A)</description>
+    <language>en</language>
+    <item>
+      <title>Oracle Cornell Feed A entry 1</title>
+      <link>https://news.cornell.edu/stories/oracle-feed-a-1</link>
+      <pubDate>Mon, 19 May 2026 12:00:00 GMT</pubDate>
+      <description>Oracle entry 1 description</description>
+    </item>
+    <item>
+      <title>Oracle Cornell Feed A entry 2</title>
+      <link>https://news.cornell.edu/stories/oracle-feed-a-2</link>
+      <pubDate>Mon, 19 May 2026 13:00:00 GMT</pubDate>
+      <description>Oracle entry 2 description</description>
+    </item>
+  </channel>
+</rss>

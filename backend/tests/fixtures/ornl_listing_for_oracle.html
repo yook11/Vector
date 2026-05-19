@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>ORNL News (oracle fixture)</title></head>
+<body>
+<!--
+ORNL HTML listing 用の dup-free 標本 (test_source_mapping_totality_contract.py
+専用)。本物の ornl_listing.html は dedup が発火する dup を 1 件含むため
+mapping totality オラクルでは false-red を生む。本 fixture は dedup / cap が
+未発火な最小標本 (4 unique entries = 3 in-scope + 1 EXCLUDED_PATHS) で R7 を
+純粋に観測する。
+-->
+<main>
+  <ul>
+    <li><a href="/news/article-foo">Foo</a></li>
+    <li><a href="/news/article-bar">Bar</a></li>
+    <li><a href="/news/article-baz">Baz</a></li>
+    <li><a href="/news/releases">Releases (excluded category landing)</a></li>
+  </ul>
+</main>
+</body>
+</html>
