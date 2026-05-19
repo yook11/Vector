@@ -46,8 +46,16 @@ def _pick_body(entry: RssEntry) -> str:
     return content_encoded if len(content_encoded) >= len(summary) else summary
 
 
-def _is_ai_tagged(tags: tuple[str, ...]) -> bool:
-    return bool(_AI_TAGS.intersection(tags))
+def is_collectable_meta_ai_entry(entry: RssEntry) -> bool:
+    """Newsroom entry が AI tagged かを判定する public scope predicate。
+
+    Meta Newsroom は WhatsApp / Threads / Sustainability 等の全社カテゴリが
+    混在するため ``<category>`` に ``"AI"`` を含む entry のみを対象範囲として
+    採用する。本判定は ``ConversionRejection`` でなく Source 層の意図的な
+    収集スコープ宣言 (3rd 責務) — Reader が返した entry のうちどれを Source
+    として収集対象とするかを named-public で表明する。
+    """
+    return bool(_AI_TAGS.intersection(entry.tags))
 
 
 class MetaAISource:
@@ -69,7 +77,7 @@ class MetaAISource:
             parse_mode="bytes",
         )
         for entry in entries:
-            if not _is_ai_tagged(entry.tags):
+            if not is_collectable_meta_ai_entry(entry):
                 continue  # non-AI entry: excluded (Newsroom mixes ~60%)
             yield FetchedArticle(
                 title=entry.title,

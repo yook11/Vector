@@ -116,7 +116,10 @@ from app.collection.sources.definitions.mdpi.sources import (
     MDPINanomaterialsSource,
     MDPISensorsSource,
 )
-from app.collection.sources.definitions.meta_ai import MetaAISource
+from app.collection.sources.definitions.meta_ai import (
+    MetaAISource,
+    is_collectable_meta_ai_entry,
+)
 from app.collection.sources.definitions.meti import METISource
 from app.collection.sources.definitions.mext import MEXTSource
 from app.collection.sources.definitions.mic import MICSource
@@ -358,23 +361,16 @@ _SCOPE_PREDICATES: dict[ArticleSource, Callable[[Any], bool]] = {
     MDPIEnergiesSource: is_collectable_mdpi_work,
     MDPISensorsSource: is_collectable_mdpi_work,
     MDPINanomaterialsSource: is_collectable_mdpi_work,
+    MetaAISource: is_collectable_meta_ai_entry,
 }
 
 
-# Step 0 で discovery 走行により発見した赤の reason (Step N strangler 対象)。
-# 機構別 strangler で drop 除去 or named scope predicate 昇格すれば xpass し
-# strict=True が「修正済の xfail を外す」signal を吐く。reason 文字列は赤の
-# *性質* (unrealized scope vs value-degenerate drop) で 2 分割し、後続作業者が
-# 何を直すべきか即わかる形で書く。
-
-_UNREALIZED_SCOPE_REASON_META_AI = (
-    "Step 0 discovery: Meta AI has intentional scope filter "
-    "(meta_ai.py:72 `if not _is_ai_tagged(entry.tags): continue`) that is not "
-    "named as a public scope predicate. Fix: promote `_is_ai_tagged` to public "
-    "`is_collectable_meta_ai_entry(entry: RssEntry) -> bool` and have `collect` "
-    "use it before mapping (MDPI/Anthropic same form). Add MetaAISource → "
-    "is_collectable_meta_ai_entry row to _SCOPE_PREDICATES."
-)
+# 発見オラクルの 2 相運用: Phase 1 (新規発見) は xfail 無しの bare 状態で走らせ
+# 赤を discovery、Phase 2 で発見済赤を xfail-strict + reason string で codify。
+# Step N の機構別 strangler で drop 除去 or named scope predicate 昇格すれば
+# xpass し strict=True が「修正済の xfail を外す」signal を吐く。reason 文字列
+# は赤の *性質* (unrealized scope / value-degenerate drop) で分類し、後続作業者
+# が何を直すべきか即わかる形で書く。
 
 _VALUE_DEGENERATE_DROP_REASON_FRONTIERS = (
     "Step 0 discovery: frontiers/_common.py:57-63 has 3 value-degenerate "
@@ -386,8 +382,7 @@ _VALUE_DEGENERATE_DROP_REASON_FRONTIERS = (
 )
 
 # 45 source × (fixture, case_factory)。順序は ``SOURCES`` レジストリ登録順を踏襲。
-# Phase 1 (本コミット前) は xfail 無しの bare 状態で走らせ discovery する。
-# Phase 2 で発見済赤を xfail-strict + reason string で codify する。
+# 2 相運用は上の reason 定数群のコメント参照。
 _ManifestEntry = tuple[ArticleSource, CaseFactory, pytest.MarkDecorator | None]
 _MANIFEST: list[_ManifestEntry] = [
     (VentureBeatSource, _rss("venturebeat_rss.xml"), None),
@@ -449,11 +444,7 @@ _MANIFEST: list[_ManifestEntry] = [
     (HuggingFaceBlogSource, _rss("huggingface_blog_rss.xml"), None),
     (ELifeSource, _rss("elife_rss.xml"), None),
     (PLOSOneSource, _rss("plos_one_atom.xml"), None),
-    (
-        MetaAISource,
-        _rss("meta_ai_rss.xml"),
-        pytest.mark.xfail(reason=_UNREALIZED_SCOPE_REASON_META_AI, strict=True),
-    ),
+    (MetaAISource, _rss("meta_ai_rss.xml"), None),
     # Cornell も同じ ``multi_feed_rss`` 共通基底経由のため NASA と同型の latent
     # 値欠落 drop を持つ。申し送り詳細は上の NASA inline comment 参照。
     (
