@@ -4,6 +4,9 @@ per-feed 巡回 + feed 横断 URL dedup + per-feed 失敗隔離を行う。1 fee
 source 全体は落とさず、全 feed 失敗時のみ最初の error を re-raise する。dedup の
 正しさは DB ``articles.source_url UNIQUE`` + ``ON CONFLICT`` が所有し、
 ``seen_urls`` は同 cron 周期内の no-op INSERT を省くコスト最適化に過ぎない。
+空 link entry は dedup 対象外として素通し、converter 層の ``MISSING_URL`` 監査
+経路 (``ConversionRejection``) で可視化する (failure-visibility、写像での
+implicit drop は禁止)。
 """
 
 from __future__ import annotations
@@ -71,9 +74,13 @@ async def multi_feed_rss(
             entries_count=len(entries),
         )
         for entry in entries:
-            if not entry.link or entry.link in seen_urls:
+            # dedup は非空 link のみ対象 (空文字列は URL でなく seen_urls に
+            # 入れない)。空 link は drop せず converter まで届け
+            # ``MISSING_URL`` 監査経路で可視化する (failure-visibility)。
+            if entry.link and entry.link in seen_urls:
                 continue
-            seen_urls.add(entry.link)
+            if entry.link:
+                seen_urls.add(entry.link)
             yield FetchedArticle(
                 title=entry.title,
                 url=entry.link,

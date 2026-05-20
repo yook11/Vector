@@ -381,16 +381,6 @@ _MANIFEST: list[_ManifestEntry] = [
     (QuantumInsiderSource, _rss("quantum_insider_rss.xml"), None),
     (KrebsOnSecuritySource, _rss("krebs_on_security_rss.xml"), None),
     (SpaceflightNowSource, _rss("spaceflight_now_rss.xml"), None),
-    # NASA / Cornell: count 軸では緑だが ``multi_feed_rss.py:74`` (共通基底) に
-    # ``if not entry.link or entry.link in seen_urls: continue`` の latent な
-    # 値欠落 drop (``not entry.link`` 部分) が在る。本オラクル fixture
-    # (disjoint URL 前提・全 entry 非空 link) に空 link entry が無いため未活性、
-    # 緑のまま。後者 (``entry.link in seen_urls``) は spec 許容の cross-feed
-    # dedup で違反でない。
-    # 申し送り: 層 2 の per-source 真理値表で「空 link の RssEntry を含む
-    # multi-feed fixture を直接与えて drop されず素通すこと」を pin する契約
-    # テストを書く (ESA / Frontiers と同種の failure-visibility 違反、
-    # Step N で除去対象)。
     (
         NASASource,
         _multi_feed_rss(
@@ -430,8 +420,6 @@ _MANIFEST: list[_ManifestEntry] = [
     (ELifeSource, _rss("elife_rss.xml"), None),
     (PLOSOneSource, _rss("plos_one_atom.xml"), None),
     (MetaAISource, _rss("meta_ai_rss.xml"), None),
-    # Cornell も同じ ``multi_feed_rss`` 共通基底経由のため NASA と同型の latent
-    # 値欠落 drop を持つ。申し送り詳細は上の NASA inline comment 参照。
     (
         CornellChronicleSource,
         _multi_feed_rss(

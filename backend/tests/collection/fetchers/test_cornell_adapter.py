@@ -13,7 +13,9 @@ body_builder 注入なし = Pattern H) を渡す形になった。純 thin confi
 - INV-3 全 feed 失敗時のみ最初の error が伝播する
 - INV-5 0-entry 成功: 全 feed が ``[]`` を返し失敗 0 → 正常終了
 - INV-6 Pattern H: yield 全 item の ``body`` は ``None`` (body_builder 既定)
-- INV-7 Cornell config: ``CORNELL_FEEDS`` は 6 taxonomy feed
+- INV-7 failure-visibility: 空 link entry は drop されず素通し、converter
+  層の ``MISSING_URL`` 監査経路 (``ConversionRejection``) を維持する
+- INV-8 Cornell config: ``CORNELL_FEEDS`` は 6 taxonomy feed
 """
 
 from __future__ import annotations
@@ -111,6 +113,20 @@ class _EmptyParser:
         return []
 
 
+class _EmptyLinkParser:
+    """全 feed が「空 link 1 件 + 非空 link 1 件」を返す (failure-visibility 用)。"""
+
+    async def fetch(
+        self,
+        *,
+        endpoint_url: str,
+        source_name: str,
+        parse_mode: str = "text",
+        **_: object,
+    ) -> list[RssEntry]:
+        return [_entry(""), _entry(f"{endpoint_url}#article")]
+
+
 def _cornell(parser: object) -> AsyncIterator[FetchedArticle]:
     return multi_feed_rss(
         fixture_tools(rss=parser),
@@ -186,6 +202,25 @@ async def test_all_feeds_zero_entries_does_not_propagate() -> None:
     items = await _collect(_cornell(_EmptyParser()))
 
     assert items == []
+
+
+async def test_empty_link_entry_passes_through_for_audit() -> None:
+    """空 link entry は drop されず素通し、Pattern H で ``body`` は ``None``。
+
+    値欠落の implicit drop は failure-visibility 違反 (converter 層の
+    ``ConversionRejection (MISSING_URL)`` 監査経路を逃れる)。本 test は同 contract
+    (データ flow continuity) の 2 軸 — 「空 link が通過する」と「非空 link path が
+    空 link 介入の影響を受けない」 — を同時に固定し、Pattern H (body=None) も
+    空 link entry 経由で維持されることを確認する。
+    """
+    items = await _collect(_cornell(_EmptyLinkParser()))
+
+    # 6 feed × (空 link 1 + 非空 link 1) = 12 件全部 yield。
+    assert len(items) == len(CORNELL_FEEDS) * 2
+    empty_link_items = [i for i in items if i.url == ""]
+    assert len(empty_link_items) == len(CORNELL_FEEDS)
+    # Pattern H: 空 link entry でも body_builder 既定 (_no_body) で body=None。
+    assert all(item.body is None for item in empty_link_items)
 
 
 def test_cornell_config_invariants() -> None:
