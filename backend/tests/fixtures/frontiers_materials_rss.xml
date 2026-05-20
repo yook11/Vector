@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss xmlns:dc="http://purl.org/dc/elements/1.1/" version="2.0">
+  <channel>
+    <title>Frontiers in Materials | New and Recent Articles</title>
+    <link>https://www.frontiersin.org/journals/materials</link>
+    <description>Recent articles from Frontiers in Materials</description>
+    <language>en</language>
+    <item>
+      <title>High-entropy oxide thin films with tunable bandgap for photocatalytic CO2 reduction</title>
+      <link>https://www.frontiersin.org/articles/10.3389/fmats.2026.1807223</link>
+      <description>We synthesize (Mg,Co,Ni,Cu,Zn)O high-entropy oxide thin films by pulsed laser deposition and demonstrate continuous bandgap tuning from 1.9 to 2.7 eV through cation ratio control. Photocatalytic CO2-to-CO conversion under visible illumination reaches an apparent quantum yield of 6.8% at 450 nm, the highest reported for single-phase HEO photocatalysts. In-situ XAFS shows that under-coordinated Cu sites act as the dominant active centers and remain stable through 200 h of continuous irradiation. The single-step deposition route is compatible with roll-to-roll substrates, opening a path to scalable solar fuel reactors.</description>
+      <pubDate>Mon, 04 May 2026 00:00:00 +0000</pubDate>
+      <category>Original Research</category>
+      <author>Yuki Tanabe</author>
+      <guid>https://www.frontiersin.org/articles/10.3389/fmats.2026.1807223</guid>
+    </item>
+    <item>
+      <title>Editorial: Reproducibility challenges in nanomaterial synthesis</title>
+      <link>https://www.frontiersin.org/articles/10.3389/fmats.2026.1730004</link>
+      <description>Brief editorial.</description>
+      <pubDate>Sat, 03 May 2026 00:00:00 +0000</pubDate>
+      <category>Editorial</category>
+      <author>Editor Name</author>
+      <guid>https://www.frontiersin.org/articles/10.3389/fmats.2026.1730004</guid>
+    </item>
+  </channel>
+</rss>

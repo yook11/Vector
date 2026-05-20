@@ -3,9 +3,6 @@
 Frontiers Media は Open Access の学術出版社で、全 journal が同形式の RSS
 を提供する (RSS 2.0、``<title>`` / ``<link>`` / ``<pubDate>``、本文は
 ``<description>`` の abstract 全文。license は全 journal CC BY 4.0)。
-
-``body < 50`` の entry は editorial/correction の空 description とみなし
-Entry 化しない (短すぎる本文は補完救済にも流さない)。
 """
 
 from __future__ import annotations
@@ -53,17 +50,9 @@ async def frontiers_entries(
         parse_mode="bytes",
     )
     for entry in entries:
-        title = entry.title[:500]
-        if not title:
-            continue
-        body = _strip_html(_pick_body(entry))
-        if len(body) < 50:
-            continue  # skip editorial/correction (empty description)
-        if entry.published is None:
-            continue
         yield FetchedArticle(
-            title=title,
+            title=entry.title,
             url=entry.link,
-            body=body,
+            body=_strip_html(_pick_body(entry)) or None,
             published_at=entry.published,
         )

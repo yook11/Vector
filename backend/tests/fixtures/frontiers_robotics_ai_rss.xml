@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss xmlns:dc="http://purl.org/dc/elements/1.1/" version="2.0">
+  <channel>
+    <title>Frontiers in Robotics and AI | New and Recent Articles</title>
+    <link>https://www.frontiersin.org/journals/robotics-and-ai</link>
+    <description>Recent articles from Frontiers in Robotics and AI</description>
+    <language>en</language>
+    <item>
+      <title>Compliant grasp planning for soft robotic manipulators under uncertain object geometry</title>
+      <link>https://www.frontiersin.org/articles/10.3389/frobt.2026.1782041</link>
+      <description>This work proposes a probabilistic grasp-planning framework for soft pneumatic manipulators handling objects with imperfectly known geometry. We model fingertip compliance as a stochastic process and derive closed-form expressions for expected contact wrench under shape uncertainty. Experiments on a four-finger silicone gripper across 120 household objects achieve a 92.4% success rate, outperforming rigid-body baselines by 11.7 percentage points. The method generalizes to deformable targets without retraining and reduces grasp-force overshoot by 38%. Implications for warehouse picking and assistive robotics are discussed.</description>
+      <pubDate>Mon, 04 May 2026 00:00:00 +0000</pubDate>
+      <category>Original Research</category>
+      <author>Helena Marchetti</author>
+      <guid>https://www.frontiersin.org/articles/10.3389/frobt.2026.1782041</guid>
+    </item>
+    <item>
+      <title>Editorial: Safe human-robot collaboration in shared workspaces</title>
+      <link>https://www.frontiersin.org/articles/10.3389/frobt.2026.1710002</link>
+      <description>Brief editorial.</description>
+      <pubDate>Sat, 03 May 2026 00:00:00 +0000</pubDate>
+      <category>Editorial</category>
+      <author>Editor Name</author>
+      <guid>https://www.frontiersin.org/articles/10.3389/frobt.2026.1710002</guid>
+    </item>
+  </channel>
+</rss>

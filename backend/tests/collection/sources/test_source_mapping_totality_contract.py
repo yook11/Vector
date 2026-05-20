@@ -372,15 +372,6 @@ _SCOPE_PREDICATES: dict[ArticleSource, Callable[[Any], bool]] = {
 # は赤の *性質* (unrealized scope / value-degenerate drop) で分類し、後続作業者
 # が何を直すべきか即わかる形で書く。
 
-_VALUE_DEGENERATE_DROP_REASON_FRONTIERS = (
-    "Step 0 discovery: frontiers/_common.py:57-63 has 3 value-degenerate "
-    "per-item drops (empty title / body < 50 chars / published is None). "
-    "Fix: remove these drops from `frontiers_entries`; let `convert_fetched_article` "
-    "raise ConversionRejection for degenerate entries (failure-visibility — "
-    "same seam Step 0af3867f established for HN / The Register). Source mapping "
-    "must be pure/total."
-)
-
 # 45 source × (fixture, case_factory)。順序は ``SOURCES`` レジストリ登録順を踏襲。
 # 2 相運用は上の reason 定数群のコメント参照。
 _ManifestEntry = tuple[ArticleSource, CaseFactory, pytest.MarkDecorator | None]
@@ -457,26 +448,10 @@ _MANIFEST: list[_ManifestEntry] = [
         ),
         None,
     ),
-    (
-        FrontiersAISource,
-        _rss("frontiers_ai_rss.xml"),
-        pytest.mark.xfail(reason=_VALUE_DEGENERATE_DROP_REASON_FRONTIERS, strict=True),
-    ),
-    (
-        FrontiersRoboticsAISource,
-        _rss("frontiers_ai_rss.xml"),
-        pytest.mark.xfail(reason=_VALUE_DEGENERATE_DROP_REASON_FRONTIERS, strict=True),
-    ),
-    (
-        FrontiersEnergyResearchSource,
-        _rss("frontiers_ai_rss.xml"),
-        pytest.mark.xfail(reason=_VALUE_DEGENERATE_DROP_REASON_FRONTIERS, strict=True),
-    ),
-    (
-        FrontiersMaterialsSource,
-        _rss("frontiers_ai_rss.xml"),
-        pytest.mark.xfail(reason=_VALUE_DEGENERATE_DROP_REASON_FRONTIERS, strict=True),
-    ),
+    (FrontiersAISource, _rss("frontiers_ai_rss.xml"), None),
+    (FrontiersRoboticsAISource, _rss("frontiers_robotics_ai_rss.xml"), None),
+    (FrontiersEnergyResearchSource, _rss("frontiers_energy_research_rss.xml"), None),
+    (FrontiersMaterialsSource, _rss("frontiers_materials_rss.xml"), None),
     (
         ORNLSource,
         _html_listing(

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss xmlns:dc="http://purl.org/dc/elements/1.1/" version="2.0">
+  <channel>
+    <title>Frontiers in Energy Research | New and Recent Articles</title>
+    <link>https://www.frontiersin.org/journals/energy-research</link>
+    <description>Recent articles from Frontiers in Energy Research</description>
+    <language>en</language>
+    <item>
+      <title>Long-cycle stability of solid-state lithium metal batteries enabled by a fluorinated polymer electrolyte interlayer</title>
+      <link>https://www.frontiersin.org/articles/10.3389/fenrg.2026.1795112</link>
+      <description>We report a fluorinated poly(ether) electrolyte interlayer that suppresses dendrite nucleation in solid-state lithium metal batteries operated at 0.5 mA/cm^2. Cells assembled with a Li/LiFePO4 chemistry retain 87% of initial capacity after 1,200 cycles at room temperature, more than doubling the lifetime of unmodified Li6PS5Cl baselines. Cryo-EM analysis reveals a 12-nm-thick LiF-rich interphase formed in-situ that mechanically anchors the lithium metal anode. The interlayer is solution-processable at scale and adds less than 4% to areal cell mass. Cost projections at 10 GWh annual production are within 15% of state-of-the-art liquid electrolyte packs.</description>
+      <pubDate>Mon, 04 May 2026 00:00:00 +0000</pubDate>
+      <category>Original Research</category>
+      <author>Ravi Subramanian</author>
+      <guid>https://www.frontiersin.org/articles/10.3389/fenrg.2026.1795112</guid>
+    </item>
+    <item>
+      <title>Editorial: Grid-scale storage pathways for the 2030 transition</title>
+      <link>https://www.frontiersin.org/articles/10.3389/fenrg.2026.1720003</link>
+      <description>Brief editorial.</description>
+      <pubDate>Sat, 03 May 2026 00:00:00 +0000</pubDate>
+      <category>Editorial</category>
+      <author>Editor Name</author>
+      <guid>https://www.frontiersin.org/articles/10.3389/fenrg.2026.1720003</guid>
+    </item>
+  </channel>
+</rss>
