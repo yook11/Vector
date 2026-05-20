@@ -17,7 +17,7 @@ nullable) が肝。
 - 既存全行で ``source_name IS NULL`` (backfill は 3b で行う)
 
 Revision ID: aa1_pending_source_name_add
-Revises: z3_drop_extraction_ai_model
+Revises: a3_drop_assessment_topic
 Create Date: 2026-05-20
 """
 
@@ -31,7 +31,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "aa1_pending_source_name_add"
-down_revision: str | None = "z3_drop_extraction_ai_model"
+down_revision: str | None = "a3_drop_assessment_topic"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

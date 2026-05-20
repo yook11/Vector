@@ -18,7 +18,7 @@ PendingHtmlArticle の source identity を表層列に昇格する 3 段 migrati
 読み手に「source_id は news_sources の id を指す」という単独不変条件を
 明示する。
 
-Revision ID: aa3_pending_source_name_constraints
+Revision ID: aa3_pending_source_name_nn_fk
 Revises: aa2_pending_source_name_backfill
 Create Date: 2026-05-20
 """
@@ -30,7 +30,7 @@ from collections.abc import Sequence
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "aa3_pending_source_name_constraints"
+revision: str = "aa3_pending_source_name_nn_fk"
 down_revision: str | None = "aa2_pending_source_name_backfill"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
