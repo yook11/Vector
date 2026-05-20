@@ -22,12 +22,12 @@ from app.collection.sources.definitions.eetimes_japan import EETimesJapanSource
 from app.collection.sources.definitions.electrek import ElectrekSource
 from app.collection.sources.definitions.elife import ELifeSource
 from app.collection.sources.definitions.engadget import EngadgetSource
-from app.collection.sources.definitions.esa.sources import (
+from app.collection.sources.definitions.esa import (
     ESAHubbleSource,
     ESAWebbSource,
 )
 from app.collection.sources.definitions.fierce_biotech import FierceBiotechSource
-from app.collection.sources.definitions.frontiers.sources import (
+from app.collection.sources.definitions.frontiers import (
     FrontiersAISource,
     FrontiersEnergyResearchSource,
     FrontiersMaterialsSource,
@@ -40,7 +40,7 @@ from app.collection.sources.definitions.itmedia_ai import ITmediaAISource
 from app.collection.sources.definitions.itmedia_news import ITmediaNewsSource
 from app.collection.sources.definitions.jpcert import JPCERTSource
 from app.collection.sources.definitions.krebs_on_security import KrebsOnSecuritySource
-from app.collection.sources.definitions.mdpi.sources import (
+from app.collection.sources.definitions.mdpi import (
     MDPIEnergiesSource,
     MDPIMaterialsSource,
     MDPINanomaterialsSource,

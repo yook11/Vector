@@ -55,11 +55,11 @@ from app.collection.source_fetch.reader.crossref_reader import (
     CrossrefReader,
     normalize_item,
 )
-from app.collection.sources.definitions.mdpi._common import (
+from app.collection.sources.definitions.mdpi import (
+    MDPIMaterialsSource,
     is_collectable_mdpi_work,
     to_fetched_article,
 )
-from app.collection.sources.definitions.mdpi.sources import MDPIMaterialsSource
 from tests.collection.fetchers._fixture_tools import fixture_tools
 from tests.collection.fetchers._invariant import FetchItem
 

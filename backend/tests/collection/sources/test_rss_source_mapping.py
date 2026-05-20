@@ -1,7 +1,7 @@
 """Source mapping (``RssEntry`` → ``FetchedArticle``) の新契約テスト。
 
 HTTP / fixture / DB 非依存。``XxxSource.to_fetched_article`` (classmethod) と
-ESA Djangoplicity family の module-level ``esa._common.to_fetched_article`` を
+ESA Djangoplicity family の module-level ``esa.to_fetched_article`` を
 手製 ``RssEntry`` で直接叩き、写像が宣言通り写すこと、および写像が **裁かない**
 (品質ゲート / URL 検証 / drop を converter に委ね、生値を素通しする) ことを
 固定する。enumerable な body policy が 2 source 以上で共有されるまで policy
@@ -21,7 +21,7 @@ import pytest
 from app.collection.domain.article_limits import ARTICLE_BODY_MAX_LENGTH
 from app.collection.source_fetch.fetched_article import FetchedArticle
 from app.collection.source_fetch.reader.rss_reader import RssEntry
-from app.collection.sources.definitions.esa._common import (
+from app.collection.sources.definitions.esa import (
     to_fetched_article as esa_to_fetched_article,
 )
 from app.collection.sources.definitions.techcrunch import TechCrunchSource

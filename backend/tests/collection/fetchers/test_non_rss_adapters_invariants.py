@@ -47,7 +47,7 @@ from app.collection.source_fetch.tools.raw_http_client import RawHttpClient
 from app.collection.sources.article_source import ArticleSource
 from app.collection.sources.definitions.anthropic import AnthropicSource
 from app.collection.sources.definitions.hacker_news import HackerNewsSource
-from app.collection.sources.definitions.mdpi.sources import (
+from app.collection.sources.definitions.mdpi import (
     MDPIEnergiesSource,
     MDPIMaterialsSource,
     MDPINanomaterialsSource,

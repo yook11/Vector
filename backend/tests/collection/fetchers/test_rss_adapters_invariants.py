@@ -41,12 +41,12 @@ from app.collection.sources.definitions.eetimes_japan import EETimesJapanSource
 from app.collection.sources.definitions.electrek import ElectrekSource
 from app.collection.sources.definitions.elife import ELifeSource
 from app.collection.sources.definitions.engadget import EngadgetSource
-from app.collection.sources.definitions.esa.sources import (
+from app.collection.sources.definitions.esa import (
     ESAHubbleSource,
     ESAWebbSource,
 )
 from app.collection.sources.definitions.fierce_biotech import FierceBiotechSource
-from app.collection.sources.definitions.frontiers.sources import (
+from app.collection.sources.definitions.frontiers import (
     FrontiersAISource,
     FrontiersEnergyResearchSource,
     FrontiersMaterialsSource,

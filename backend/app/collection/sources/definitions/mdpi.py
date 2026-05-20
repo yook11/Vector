@@ -1,4 +1,4 @@
-"""MDPI 4 journal の Crossref API 経路 取得共通処理。
+"""MDPI journal の Crossref API 経路 (機構 + Source 定義)。
 
 MDPI の RSS は Cloudflare WAF で 4 ISSN 全 403 となり使えないため Crossref
 API の per-ISSN filter 経路を採る。``ISSN`` は Crossref filter に必須のため
@@ -19,10 +19,19 @@ from __future__ import annotations
 import re
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
+from typing import ClassVar
 
+from app.collection.domain.observed_article import ObservedOrigin
+from app.collection.domain.source_completion_profile import (
+    DEFAULT_PROFILE,
+    SourceCompletionProfile,
+)
 from app.collection.source_fetch.fetched_article import FetchedArticle
 from app.collection.source_fetch.reader.crossref_reader import CrossrefEntry
 from app.collection.source_fetch.tools.fetch_tools import FetchTools
+from app.shared.value_objects.source_name import SourceName
+
+_MDPI_CROSSREF_ENDPOINT = "https://api.crossref.org/works"
 
 _CC_BY_4_URL_RE = re.compile(r"creativecommons\.org/licenses/by/4\.0", re.IGNORECASE)
 # 実体の薄い abstract は本文として信用しない閾値 (収集スコープ判定の一部)。
@@ -87,3 +96,59 @@ async def mdpi_items(
     for entry in entries:
         if is_collectable_mdpi_work(entry):
             yield to_fetched_article(entry)
+
+
+class MDPIMaterialsSource:
+    """MDPI Materials (ISSN 1996-1944)。"""
+
+    name: ClassVar[SourceName] = SourceName("MDPI Materials")
+    endpoint_url: ClassVar[str] = _MDPI_CROSSREF_ENDPOINT
+    observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.feed
+    completion_profile: ClassVar[SourceCompletionProfile] = DEFAULT_PROFILE
+    _ISSN: ClassVar[str] = "1996-1944"
+
+    @classmethod
+    def collect(cls, tools: FetchTools) -> AsyncIterator[FetchedArticle]:
+        return mdpi_items(tools, source_name=str(cls.name), issn=cls._ISSN)
+
+
+class MDPIEnergiesSource:
+    """MDPI Energies (ISSN 1996-1073)。"""
+
+    name: ClassVar[SourceName] = SourceName("MDPI Energies")
+    endpoint_url: ClassVar[str] = _MDPI_CROSSREF_ENDPOINT
+    observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.feed
+    completion_profile: ClassVar[SourceCompletionProfile] = DEFAULT_PROFILE
+    _ISSN: ClassVar[str] = "1996-1073"
+
+    @classmethod
+    def collect(cls, tools: FetchTools) -> AsyncIterator[FetchedArticle]:
+        return mdpi_items(tools, source_name=str(cls.name), issn=cls._ISSN)
+
+
+class MDPISensorsSource:
+    """MDPI Sensors (ISSN 1424-8220)。"""
+
+    name: ClassVar[SourceName] = SourceName("MDPI Sensors")
+    endpoint_url: ClassVar[str] = _MDPI_CROSSREF_ENDPOINT
+    observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.feed
+    completion_profile: ClassVar[SourceCompletionProfile] = DEFAULT_PROFILE
+    _ISSN: ClassVar[str] = "1424-8220"
+
+    @classmethod
+    def collect(cls, tools: FetchTools) -> AsyncIterator[FetchedArticle]:
+        return mdpi_items(tools, source_name=str(cls.name), issn=cls._ISSN)
+
+
+class MDPINanomaterialsSource:
+    """MDPI Nanomaterials (ISSN 2079-4991)。"""
+
+    name: ClassVar[SourceName] = SourceName("MDPI Nanomaterials")
+    endpoint_url: ClassVar[str] = _MDPI_CROSSREF_ENDPOINT
+    observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.feed
+    completion_profile: ClassVar[SourceCompletionProfile] = DEFAULT_PROFILE
+    _ISSN: ClassVar[str] = "2079-4991"
+
+    @classmethod
+    def collect(cls, tools: FetchTools) -> AsyncIterator[FetchedArticle]:
+        return mdpi_items(tools, source_name=str(cls.name), issn=cls._ISSN)

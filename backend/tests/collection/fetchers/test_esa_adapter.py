@@ -1,7 +1,7 @@
 """ESA Djangoplicity 取得経路 (``ESAHubbleSource`` / ``ESAWebbSource``)。
 
 P2-D で ESA/Hubble・ESA/Webb は ``djangoplicity_entries`` 共通処理を共有する
-独立 Source クラス (``esa/sources.py``) になった。固定する固有不変条件:
+独立 Source クラス (``esa.py``) になった。固定する固有不変条件:
 
 - Djangoplicity RSS は Pattern H のため ``collect()`` は ``body=None`` を
   yield し、``ArticleFetcher`` 経由で全 entry が ``ObservedArticle`` になる
@@ -16,7 +16,7 @@ from app.collection.domain.observed_article import ObservedArticle
 from app.collection.source_fetch.article_fetcher import ArticleFetcher
 from app.collection.source_fetch.fetched_article import FetchedArticle
 from app.collection.sources.article_source import ArticleSource
-from app.collection.sources.definitions.esa.sources import (
+from app.collection.sources.definitions.esa import (
     ESAHubbleSource,
     ESAWebbSource,
 )

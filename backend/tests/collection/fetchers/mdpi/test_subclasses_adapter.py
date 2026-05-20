@@ -2,7 +2,7 @@
 
 P1 までは 4 thin subclass の ClassVar (``NAME`` / ``ISSN`` / ``JOURNAL_NAME``)
 が per-journal 識別を持っていた。P2-D でこれらは独立した ``MDPIXxxSource``
-クラス (``mdpi/sources.py``、``mdpi_items`` 共通処理を共有) になり、
+クラス (``mdpi.py``、``mdpi_items`` 共通処理を共有) になり、
 ``strategy.py`` の ``SOURCES`` レジストリが ``name → クラスオブジェクト`` を
 束ねる。
 
@@ -22,7 +22,7 @@ from app.collection.domain.observed_article import ObservedOrigin
 from app.collection.domain.source_completion_profile import DEFAULT_PROFILE
 from app.collection.source_fetch.strategy import SOURCES
 from app.collection.sources.article_source import ArticleSource
-from app.collection.sources.definitions.mdpi.sources import (
+from app.collection.sources.definitions.mdpi import (
     MDPIEnergiesSource,
     MDPIMaterialsSource,
     MDPINanomaterialsSource,
