@@ -1,13 +1,15 @@
 """Source mapping (``RssEntry`` → ``FetchedArticle``) の新契約テスト。
 
-HTTP / fixture / DB 非依存。``XxxSource.to_fetched_article`` を手製
-``RssEntry`` で直接叩き、写像が宣言通り写すこと、および写像が **裁かない**
+HTTP / fixture / DB 非依存。``XxxSource.to_fetched_article`` (classmethod) と
+ESA Djangoplicity family の module-level ``esa._common.to_fetched_article`` を
+手製 ``RssEntry`` で直接叩き、写像が宣言通り写すこと、および写像が **裁かない**
 (品質ゲート / URL 検証 / drop を converter に委ね、生値を素通しする) ことを
 固定する。enumerable な body policy が 2 source 以上で共有されるまで policy
 表テストは作らず、TechCrunch / VentureBeat / The Register の代表 3 写像で契約を
 釘打つ。The Register は source 固有 URL 変換 (redirector→実 host) が
 canonicalize/SSRF でなく純粋 URL 組立に留まること、および空 link を写像で
-drop せず素通すこと (棄却の可視化は converter) を担う。
+drop せず素通すこと (棄却の可視化は converter) を担う。ESA Djangoplicity は
+Pattern H (body は HTML 詳細補完のため None 固定) を写像で宣言する。
 """
 
 from __future__ import annotations
@@ -19,6 +21,9 @@ import pytest
 from app.collection.domain.article_limits import ARTICLE_BODY_MAX_LENGTH
 from app.collection.source_fetch.fetched_article import FetchedArticle
 from app.collection.source_fetch.reader.rss_reader import RssEntry
+from app.collection.sources.definitions.esa._common import (
+    to_fetched_article as esa_to_fetched_article,
+)
 from app.collection.sources.definitions.techcrunch import TechCrunchSource
 from app.collection.sources.definitions.the_register import TheRegisterSource
 from app.collection.sources.definitions.venturebeat import VentureBeatSource
@@ -202,6 +207,35 @@ def test_the_register_does_not_drop_empty_link() -> None:
     result = TheRegisterSource.to_fetched_article(make_rss_entry(link=""))
     assert isinstance(result, FetchedArticle)
     assert result.url == ""
+
+
+# --- ESA Djangoplicity (Hubble/Webb 共通): module-level 写像 seam ----------
+
+
+def test_esa_djangoplicity_passes_empty_title_through() -> None:
+    """空 title でも drop / raise せず空 str のまま素通す。
+
+    空 title の棄却 (MISSING_TITLE 可視化) は converter の責務であり、
+    写像が握り潰すと故障が監査されないため写像は裁かない。
+    """
+    result = esa_to_fetched_article(make_rss_entry(title=""))
+    assert isinstance(result, FetchedArticle)
+    assert result.title == ""
+
+
+def test_esa_djangoplicity_does_not_truncate_long_title() -> None:
+    """500 字 cap は converter 一元、写像は per-source 複製しない。"""
+    long_title = "x" * 1000
+    result = esa_to_fetched_article(make_rss_entry(title=long_title))
+    assert len(result.title) == 1000
+
+
+def test_esa_djangoplicity_maps_body_to_none_regardless_of_feed_body() -> None:
+    """Pattern H: body は HTML 詳細補完のため常に None (RSS の本文は無視)。"""
+    entry = make_rss_entry(
+        content_encoded="<p>" + "x" * 500 + "</p>", summary="<p>" + "y" * 500 + "</p>"
+    )
+    assert esa_to_fetched_article(entry).body is None
 
 
 # --- 構造: pure / total ----------------------------------------------------

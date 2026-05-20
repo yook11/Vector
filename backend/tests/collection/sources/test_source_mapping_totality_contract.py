@@ -423,12 +423,6 @@ _MANIFEST: list[_ManifestEntry] = [
     (NSFSource, _rss("nsf_rss.xml"), None),
     (CloudflareBlogSource, _rss("cloudflare_rss.xml"), None),
     (DeepMindSource, _rss("deepmind_rss.xml"), None),
-    # ESA Hubble/Webb: count 軸では緑だが ``esa/_common.py:31-32`` に
-    # ``if not title: continue`` の latent な値欠落 drop が在る。本オラクル
-    # (count 軸) では現 fixture に空 title entry が無いため未活性、緑のまま。
-    # 申し送り: 層 2 の per-source 真理値表で「空 title の RssEntry を直接
-    # 与えて drop されず素通すこと」を pin する契約テストを書く (Frontiers
-    # と同種の failure-visibility 違反、Step N で除去対象)。
     (ESAHubbleSource, _rss("esa_hubble_rss.xml"), None),
     (ESAWebbSource, _rss("esa_webb_rss.xml"), None),
     (OpenAISource, _rss("openai_rss.xml"), None),
