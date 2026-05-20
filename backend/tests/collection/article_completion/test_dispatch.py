@@ -62,9 +62,13 @@ def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> MagicMock:
     return ctx
 
 
-def _observed(url: str, title: str = "Pending Title") -> ObservedArticle:
+def _observed(
+    source_name: SourceName,
+    url: str,
+    title: str = "Pending Title",
+) -> ObservedArticle:
     return ObservedArticle(
-        source_name=SourceName("Sample Source"),
+        source_name=source_name,
         source_url=CanonicalArticleUrl(url),
         title=ObservedField(value=title, origin=ObservedOrigin.feed),
         published_at=ObservedField(
@@ -74,8 +78,11 @@ def _observed(url: str, title: str = "Pending Title") -> ObservedArticle:
     )
 
 
-def _attrs(url: str = "https://example.com/disp/staged") -> dict:
-    return _observed(url).model_dump(mode="json", by_alias=True)
+def _attrs(
+    source_name: SourceName,
+    url: str = "https://example.com/disp/staged",
+) -> dict:
+    return _observed(source_name, url).model_dump(mode="json", by_alias=True)
 
 
 async def _make_pending(
@@ -99,7 +106,7 @@ async def _make_pending(
     if status == "open":
         enqueue = PendingHtmlEnqueue(db_session)
         pending_id = await enqueue.enqueue(
-            _observed(url),
+            _observed(source.name, url),
             source_id=source.id,
             ready_at=ready_at or datetime.now(UTC),
         )
@@ -117,8 +124,9 @@ async def _make_pending(
     pending = PendingHtmlArticleORM(
         url=safe_url,
         source_id=source.id,
+        source_name=source.name,
         status=status,
-        staged_attributes=_attrs(url),
+        staged_attributes=_attrs(source.name, url),
         ready_at=ready_at,
         leased_until=leased_until,
         attempt_count=attempt_count,

@@ -18,6 +18,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -29,8 +30,9 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
-from app.models.types import SafeUrlType
+from app.models.types import SafeUrlType, SourceNameType
 from app.shared.value_objects.safe_url import SafeUrl
+from app.shared.value_objects.source_name import SourceName
 
 
 class PendingHtmlArticle(Base):
@@ -57,6 +59,20 @@ class PendingHtmlArticle(Base):
     __tablename__ = "pending_html_articles"
     __table_args__ = (
         UniqueConstraint("url", name="uq_pending_html_articles_url"),
+        # composite FK (source_id, source_name) → news_sources(id, name)。
+        # ``news_sources`` 側の ``(id, name)`` UNIQUE を target にし、
+        # ``source_id`` 単独更新 (source_name は旧値のまま) のような drift
+        # を DB で構造的に遮断する (spec ``Pending source identity refactor.md``
+        # #2)。単独 FK ``source_id → news_sources.id`` も維持し、
+        # 読み手に「source_id は news_sources の id を指す」単独不変条件を
+        # 明示する。
+        ForeignKeyConstraint(
+            ["source_id", "source_name"],
+            ["news_sources.id", "news_sources.name"],
+            name="fk_pending_html_articles_source_id_name",
+            ondelete="RESTRICT",
+            onupdate="RESTRICT",
+        ),
         CheckConstraint(
             "url ~ '^https?://.+'",
             name="ck_pending_html_articles_url_scheme",
@@ -101,6 +117,12 @@ class PendingHtmlArticle(Base):
     source_id: Mapped[int] = mapped_column(
         ForeignKey("news_sources.id", ondelete="RESTRICT"),
     )
+    # domain identity (news_sources.name の denormalized copy)。
+    # composite FK ``(source_id, source_name) → news_sources(id, name)`` で
+    # 2 表現の整合を DB で構造保証する (spec ``Pending source identity
+    # refactor.md``)。Migration は 3 段 (3a nullable 列追加 → 3b backfill
+    # → 3c NOT NULL + composite FK) で進めるが、ORM 最終形は NOT NULL。
+    source_name: Mapped[SourceName] = mapped_column(SourceNameType, nullable=False)
     status: Mapped[str] = mapped_column(String(20))
     staged_attributes: Mapped[dict[str, Any]] = mapped_column(JSONB)
     ready_at: Mapped[datetime | None] = mapped_column(

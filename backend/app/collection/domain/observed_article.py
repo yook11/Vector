@@ -5,13 +5,15 @@
 再 hydrate される (``model_dump(mode="json", by_alias=True)`` で永続化、
 ``model_validate`` で復元)。
 
-- ``source_url`` は記事 identity (``pending_html_articles.url`` UNIQUE 列が
-  authoritative)。JSONB には焼かない (``Field(exclude=True)``) — in-memory では
-  運搬のため必須。
+- identity ``source_name`` / ``source_url`` は表層列が authoritative
+  (``pending_html_articles.source_name`` NOT NULL + composite FK /
+  ``pending_html_articles.url`` UNIQUE)。JSONB には焼かない
+  (``Field(exclude=True)``) — in-memory では運搬のため必須。Stage 2 reader
+  (``ArticleCompletionRepository``) は新形 / legacy を区別せず、常に表層列から
+  ``model_validate`` 前に raw へ注入する。
 - ``origin`` は audit メタで merge を駆動しない。
 - 後方互換: ``schemaVersion`` 不在 = 旧形 JSONB。before-validator が shape のみ
-  変換する (DB 非アクセス)。legacy 行の ``sourceName`` / ``source_url`` は
-  repository が ``model_validate`` 前に raw へ注入する。
+  変換する (DB 非アクセス、title→{value, origin} 等の構造化)。
 """
 
 from __future__ import annotations
@@ -50,8 +52,12 @@ class ObservedArticle(BaseModel):
     model_config = ConfigDict(frozen=True, populate_by_name=True)
 
     schema_version: Literal[1] = Field(default=1, alias="schemaVersion")
-    source_name: SourceName = Field(alias="sourceName")
     # identity: JSONB 非永続 (列が authoritative)。in-memory では必須。
+    # ``source_name`` も ``source_url`` と同形で表層列に identity を移譲する
+    # (spec ``Pending source identity refactor.md`` #1 倒立解消)。
+    # ``_absorb_legacy`` の ``sourceName`` carry-through は legacy 行
+    # (旧 JSONB に焼かれた sourceName) の hydrate 経路として保つ。
+    source_name: SourceName = Field(alias="sourceName", exclude=True)
     source_url: CanonicalArticleUrl = Field(exclude=True)
     title: ObservedField[str] | None = None
     body: ObservedField[str] | None = None

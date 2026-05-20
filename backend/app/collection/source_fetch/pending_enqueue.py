@@ -37,6 +37,11 @@ class PendingHtmlEnqueue:
             .values(
                 url=observed.source_url,
                 source_id=source_id,
+                # identity を表層列に書く (spec ``Pending source identity
+                # refactor.md`` #1/#7)。``observed.source_name`` は
+                # ``Field(exclude=True)`` で JSONB から除外され、ここで
+                # 表層列に焼かれる (倒立解消)。
+                source_name=observed.source_name,
                 status="open",
                 staged_attributes=observed.model_dump(mode="json", by_alias=True),
                 ready_at=ready_at,

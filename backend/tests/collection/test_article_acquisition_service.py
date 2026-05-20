@@ -63,9 +63,9 @@ def _ready(source_id: int, url: str) -> AnalyzableArticle:
     )
 
 
-def _pending(url: str) -> ObservedArticle:
+def _pending(source_name: SourceName, url: str) -> ObservedArticle:
     return ObservedArticle(
-        source_name=SourceName("TC Source"),
+        source_name=source_name,
         source_url=CanonicalArticleUrl(url),
         title=ObservedField(value="TC Title", origin=ObservedOrigin.feed),
         published_at=ObservedField(
@@ -153,7 +153,7 @@ async def test_pattern_h_inserts_pending_with_canonicalized_url(
     """補完待ち獲得経路は pending_html_articles を作り、url は canonicalize 済み値。"""
     svc = ArticleAcquisitionService(
         session_factory,
-        lambda: _StubFetcher([_pending("https://techcrunch.com/h/")]),
+        lambda: _StubFetcher([_pending(vb_source.name, "https://techcrunch.com/h/")]),
     )
 
     article_ids = await svc.execute(vb_source.id)
@@ -192,7 +192,9 @@ async def test_pattern_h_skips_when_article_already_exists(
 
     svc = ArticleAcquisitionService(
         session_factory,
-        lambda: _StubFetcher([_pending("https://techcrunch.com/known")]),
+        lambda: _StubFetcher(
+            [_pending(vb_source.name, "https://techcrunch.com/known")]
+        ),
     )
     article_ids = await svc.execute(vb_source.id)
 
@@ -278,7 +280,7 @@ async def test_mixed_ready_pending_route_independently(
         lambda: _StubFetcher(
             [
                 _ready(vb_source.id, "https://venturebeat.com/ok/"),
-                _pending("https://techcrunch.com/h/"),
+                _pending(vb_source.name, "https://techcrunch.com/h/"),
             ]
         ),
     )
@@ -309,7 +311,7 @@ async def test_conversion_rejection_audited_without_stopping_source(
             [
                 _ready(vb_source.id, "https://venturebeat.com/ok/"),
                 _rejection(),
-                _pending("https://techcrunch.com/h/"),
+                _pending(vb_source.name, "https://techcrunch.com/h/"),
             ]
         ),
     )

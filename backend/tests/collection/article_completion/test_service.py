@@ -18,6 +18,8 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
@@ -39,7 +41,6 @@ from app.collection.domain.observed_article import (
     ObservedOrigin,
 )
 from app.collection.domain.source_completion_profile import (
-    DEFAULT_PROFILE,
     HTML_TITLE_PROFILE,
     SourceCompletionProfile,
 )
@@ -49,7 +50,10 @@ from app.collection.external_fetch_errors import (
     FetchOriginServerError,
     FetchResourceNotFoundError,
 )
+from app.collection.source_fetch.fetched_article import FetchedArticle
 from app.collection.source_fetch.pending_enqueue import PendingHtmlEnqueue
+from app.collection.source_fetch.strategy import SOURCES
+from app.collection.source_fetch.tools.fetch_tools import FetchTools
 from app.models.article import Article as ArticleORM
 from app.models.news_source import NewsSource, SourceType
 from app.models.pending_html_article import PendingHtmlArticle
@@ -57,20 +61,24 @@ from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 from app.shared.value_objects.source_name import SourceName
 
 
-class _StubResolver:
-    """``CompletionProfileResolver`` stub。テストが要求する profile を返し
-    production 45-registry / DB 引きと非結合にする (plan: stub 注入)。"""
+@dataclass(frozen=True)
+class _StubArticleSource:
+    """``ArticleSource`` Protocol の test 用最小実装。
 
-    def __init__(self, profile: SourceCompletionProfile = DEFAULT_PROFILE) -> None:
-        self._profile = profile
+    ``monkeypatch.setitem(SOURCES, name, _StubArticleSource(...))`` で
+    repository の profile lookup を test 単位に差し替える運搬体。
+    production registry には登録しない。
+    """
 
-    async def resolve(
-        self, *, source_id: int, source_name: SourceName | None
-    ) -> SourceCompletionProfile:
-        return self._profile
+    name: SourceName
+    completion_profile: SourceCompletionProfile
+    endpoint_url: str = "https://example.com/feed"
+    observed_origin: ObservedOrigin = ObservedOrigin.feed
 
-    async def resolve_name(self, *, source_id: int) -> SourceName:
-        return SourceName("Resolved Source")
+    async def collect(self, tools: FetchTools) -> AsyncIterator[FetchedArticle]:
+        # 本テストでは呼ばれない (Protocol shape のため空 generator)。
+        if False:
+            yield  # pragma: no cover
 
 
 @pytest.fixture
@@ -112,17 +120,17 @@ def _observed(
 async def _load_ready(
     db_session: AsyncSession,
     pending_id: int,
-    *,
-    profile: SourceCompletionProfile = DEFAULT_PROFILE,
 ) -> ReadyForArticleCompletion:
     """Task 層と同じく ``try_advance_from`` で厚い Ready を構築する。
 
-    profile は stub resolver 注入で固定する (per-source 補完方針は本来
-    ``SOURCES`` 由来だが、テストは production registry と非結合にする)。
+    profile は repository が ``SOURCES[source_name]`` 経由で引く。本テストでは
+    production registry の ``tc_source`` 名前一致エントリ (TechCrunchSource =
+    DEFAULT_PROFILE) を経由する。差し替えたい test は ``monkeypatch.setitem``
+    で SOURCES エントリを上書きしてから呼ぶ。
     """
     ready = await ReadyForArticleCompletion.try_advance_from(
         pending_id=pending_id,
-        repo=ArticleCompletionRepository(db_session, _StubResolver(profile)),
+        repo=ArticleCompletionRepository(db_session),
     )
     assert ready is not None
     return ready
@@ -134,7 +142,6 @@ async def _make_pending(
     url: str,
     *,
     observed: ObservedArticle | None = None,
-    profile: SourceCompletionProfile = DEFAULT_PROFILE,
 ) -> tuple[CanonicalArticleUrl, int, ReadyForArticleCompletion]:
     """``pending_html_articles`` 行を 1 件作って claim 状態にし Ready を構築する。
 
@@ -153,16 +160,14 @@ async def _make_pending(
     await db_session.commit()
     # claim して running 状態に遷移 (cron poller の代わり)
     now = datetime.now(UTC)
-    ids = await ArticleCompletionRepository(
-        db_session, _StubResolver(profile)
-    ).claim_ready_batch(
+    ids = await ArticleCompletionRepository(db_session).claim_ready_batch(
         limit=10,
         now=now,
         leased_until=now + timedelta(minutes=5),
     )
     await db_session.commit()
     assert pending_id in ids
-    ready = await _load_ready(db_session, pending_id, profile=profile)
+    ready = await _load_ready(db_session, pending_id)
     return canonical_url, pending_id, ready
 
 
@@ -263,14 +268,21 @@ async def test_success_persists_extracted_body_and_published_at(
     body = "x" * 250
     html_published_at = datetime(2026, 5, 1, 9, 30, 0, tzinfo=UTC)
     # 観測 published=None で HTML published_at を fallback 経路で流入させ、
-    # HTML_TITLE_PROFILE (title=html_preferred) で HTML title を採用させる
+    # HTML_TITLE_PROFILE (title=html_preferred) で HTML title を採用させる。
+    # repository は ``SOURCES[name].completion_profile`` 直叩きになったため、
+    # SOURCES の TechCrunch エントリ (production DEFAULT_PROFILE) を test
+    # 単位に置き換える。
+    monkeypatch.setitem(
+        SOURCES,
+        tc_source.name,
+        _StubArticleSource(name=tc_source.name, completion_profile=HTML_TITLE_PROFILE),
+    )
     url = "https://techcrunch.com/article-3"
     _, _, ready = await _make_pending(
         db_session,
         tc_source,
         url,
         observed=_observed(tc_source, url, title="Feed Title", observed_published=None),
-        profile=HTML_TITLE_PROFILE,
     )
     _patch_fetch(
         monkeypatch,

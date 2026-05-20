@@ -39,28 +39,12 @@ from app.collection.domain.observed_article import (
     ObservedField,
     ObservedOrigin,
 )
-from app.collection.domain.source_completion_profile import (
-    DEFAULT_PROFILE,
-    SourceCompletionProfile,
-)
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.source_fetch.pending_enqueue import PendingHtmlEnqueue
 from app.models.news_source import NewsSource, SourceType
 from app.models.pending_html_article import PendingHtmlArticle
 from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 from app.shared.value_objects.source_name import SourceName
-
-
-class _StubResolver:
-    """``CompletionProfileResolver`` stub (production 45-registry と非結合)。"""
-
-    async def resolve(
-        self, *, source_id: int, source_name: SourceName | None
-    ) -> SourceCompletionProfile:
-        return DEFAULT_PROFILE
-
-    async def resolve_name(self, *, source_id: int) -> SourceName:
-        return SourceName("Resolved Source")
 
 
 @pytest.fixture
@@ -108,7 +92,7 @@ async def _make_ready(
     assert pending_id is not None
     await db_session.commit()
     now = datetime.now(UTC)
-    repository = ArticleCompletionRepository(db_session, _StubResolver())
+    repository = ArticleCompletionRepository(db_session)
     ids = await repository.claim_ready_batch(
         limit=10,
         now=now,

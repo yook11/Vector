@@ -19,10 +19,7 @@ from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.persistence.article_store import ArticleStore
-from app.collection.sources.profile_resolver import (
-    CompletionProfileResolver,
-    RegistryCompletionProfileResolver,
-)
+from app.collection.source_fetch.strategy import SOURCES
 from app.models.pending_html_article import PendingHtmlArticle as PendingHtmlArticleORM
 from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 
@@ -43,17 +40,8 @@ class CompletionPersistResult:
 class ArticleCompletionRepository:
     """補完に必要な DB 操作をカプセル化する。"""
 
-    def __init__(
-        self,
-        session: AsyncSession,
-        profile_resolver: CompletionProfileResolver | None = None,
-    ) -> None:
+    def __init__(self, session: AsyncSession) -> None:
         self._session = session
-        # profile / legacy identity の解決もここに集約する。default は
-        # registry 引き + DB fallback の具象。テストは stub を注入できる。
-        self._resolver: CompletionProfileResolver = (
-            profile_resolver or RegistryCompletionProfileResolver(session)
-        )
 
     async def try_load_for_completion(
         self, pending_id: int
@@ -63,43 +51,45 @@ class ArticleCompletionRepository:
         ``status='running'`` の行だけを物体化する。未 claim / sweep 済 /
         close 済 / delete 済の id はすべて ``None`` として扱う。
 
-        identity 注入: ``source_url`` は全行で ``url`` 列が authoritative なので
-        ``model_validate`` 前に raw に注入する (JSONB は非永続)。legacy 行
-        (``schemaVersion`` 不在) は ``sourceName`` を持たないため ``source_id``
-        から resolver で解決して注入する。
+        identity 注入: ``url`` / ``source_name`` 列が authoritative
+        (composite FK + NOT NULL で構造保証されており、Stage 1 writer の
+        ``Field(exclude=True)`` 契約と対称)。``model_validate`` 前に raw に
+        上書き注入することで、新形 (JSONB に identity 不在) / legacy (JSONB
+        に sourceName 不在) のいずれも同一経路で hydrate する。
+
+        profile 解決は ``SOURCES[source_name]`` 直叩き。registry 未登録
+        source は ``KeyError`` で上位に伝播する (drift fallback の隠蔽は
+        ``[[feedback_failure_visibility]]`` により禁止)。
         """
         stmt = (
-            select(
-                PendingHtmlArticleORM.id,
-                PendingHtmlArticleORM.url,
-                PendingHtmlArticleORM.source_id,
-                PendingHtmlArticleORM.staged_attributes,
-                PendingHtmlArticleORM.attempt_count,
-            )
+            select(PendingHtmlArticleORM)
             .where(
                 PendingHtmlArticleORM.id == pending_id,
                 PendingHtmlArticleORM.status == "running",
             )
             .limit(1)
         )
-        row = (await self._session.execute(stmt)).first()
+        row = (await self._session.execute(stmt)).scalar_one_or_none()
         if row is None:
             return None
 
-        raw = dict(row.staged_attributes)
-        # 全行: ``url`` 列が記事 identity の authoritative (JSONB 非永続)。
-        raw["source_url"] = str(row.url.root)
-        # legacy 行は sourceName 不在 → source_id から解決して注入。
-        if "schemaVersion" not in raw and "schema_version" not in raw:
-            name = await self._resolver.resolve_name(source_id=row.source_id)
-            raw["sourceName"] = str(name)
+        raw = dict(row.staged_attributes or {})
+        # 表層列が authoritative。新形 JSONB は ``Field(exclude=True)`` で
+        # identity キーが入らない、legacy JSONB は元から欠落、いずれも
+        # 表層列の上書きで吸収する。
+        # 書き込むキーは ``ObservedArticle`` の field 規約に追従:
+        #   source_name は alias="sourceName" → "sourceName" で書く
+        #   source_url は alias 未指定 (exclude=True のみ) → field name
+        #     "source_url" で書く (既存 _absorb_legacy と同じ規則)。
+        raw["sourceName"] = str(row.source_name)
+        raw["source_url"] = str(row.url)
         observed = ObservedArticle.model_validate(raw)
         # ORM 列は SafeUrl 表現で読み出されるが、DB 上の値は INSERT 時の
-        # canonical 値なので冪等に再構築できる。
-        source_url = CanonicalArticleUrl(row.url.root)
-        profile = await self._resolver.resolve(
-            source_id=row.source_id, source_name=observed.source_name
-        )
+        # canonical 値なので冪等に再構築できる。CanonicalArticleUrl の再検証は
+        # per-row で 1 回走る (cost は微小、SafeUrl → CanonicalArticleUrl の
+        # column type 昇格は別 PR の射程)。
+        source_url = CanonicalArticleUrl(str(row.url))
+        profile = SOURCES[observed.source_name].completion_profile
         return ReadyForArticleCompletion(
             pending_id=row.id,
             source_id=row.source_id,
