@@ -34,8 +34,8 @@ def test_code_is_stable_class_constant() -> None:
 
 
 def test_carries_conversion_reason() -> None:
-    exc = _make(conversion_reason=ConversionReason.OBSERVED_BUILD_FAILED)
-    assert exc.conversion_reason is ConversionReason.OBSERVED_BUILD_FAILED
+    exc = _make(conversion_reason=ConversionReason.UNEXPECTED_ERROR)
+    assert exc.conversion_reason is ConversionReason.UNEXPECTED_ERROR
 
 
 def test_carries_observation_snapshot() -> None:
@@ -55,7 +55,7 @@ def test_message_is_deterministic_english() -> None:
 def test_conversion_reason_values_are_stable_snake_case() -> None:
     assert str(ConversionReason.MISSING_TITLE) == "missing_title"
     assert str(ConversionReason.INVALID_URL) == "invalid_url"
-    assert str(ConversionReason.OBSERVED_BUILD_FAILED) == "observed_build_failed"
+    assert str(ConversionReason.UNEXPECTED_ERROR) == "unexpected_error"
 
 
 def test_is_an_exception() -> None:

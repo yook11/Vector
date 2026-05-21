@@ -12,15 +12,22 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
+import structlog
+
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.observed_article import ObservedArticle
-from app.collection.source_fetch.errors import FetchedArticleConversionError
+from app.collection.source_fetch.errors import (
+    ConversionReason,
+    FetchedArticleConversionError,
+)
 from app.collection.source_fetch.fetched_article_converter import (
     ConversionRejection,
     convert_fetched_article,
 )
 from app.collection.source_fetch.tools.fetch_tools import FetchTools
 from app.collection.sources.article_source import ArticleSource
+
+logger = structlog.get_logger(__name__)
 
 
 class ArticleFetcher:
@@ -49,3 +56,22 @@ class ArticleFetcher:
                 # per-entry の変換不能は stream を止めず値化して下流へ。
                 # 監査 (別 tx 書込) は Service が担う。
                 yield ConversionRejection(error=exc)
+            except Exception as exc:
+                # 想定外: precondition 通過後の invariant 違反が漏れた経路。
+                # stream は止めず unknown rejection に値化し、stack trace は残す。
+                logger.exception(
+                    "fetched_article_conversion_unexpected",
+                    source_name=self.NAME,
+                    error_class=f"{type(exc).__module__}.{type(exc).__qualname__}",
+                )
+                unexpected = FetchedArticleConversionError(
+                    f"unexpected conversion error: {exc}",
+                    conversion_reason=ConversionReason.UNEXPECTED_ERROR,
+                    source_name=self.NAME,
+                    raw_url=fetched.url or None,
+                    has_title=bool(fetched.title),
+                    body_length=len(fetched.body) if fetched.body else None,
+                    has_published_at=fetched.published_at is not None,
+                )
+                unexpected.__cause__ = exc  # 原因連鎖
+                yield ConversionRejection(error=unexpected)

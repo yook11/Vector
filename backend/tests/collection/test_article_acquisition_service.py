@@ -378,7 +378,7 @@ async def test_conversion_rejection_payload_is_sql_drillable(
     svc = ArticleAcquisitionService(
         session_factory,
         lambda: _StubFetcher(
-            [_rejection(conversion_reason=ConversionReason.OBSERVED_BUILD_FAILED)]
+            [_rejection(conversion_reason=ConversionReason.UNEXPECTED_ERROR)]
         ),
     )
 
@@ -389,7 +389,7 @@ async def test_conversion_rejection_payload_is_sql_drillable(
             await db_session.execute(
                 select(PipelineEvent).where(
                     PipelineEvent.payload["conversion_observed_reason"].astext
-                    == "observed_build_failed"
+                    == "unexpected_error"
                 )
             )
         )

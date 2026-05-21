@@ -24,7 +24,7 @@ class ConversionReason(StrEnum):
     PUBLISHED_ABSENT = "published_absent"
     READY_PRECLUDED = "ready_precluded"
     ANALYZABLE_INVARIANT = "analyzable_invariant"
-    OBSERVED_BUILD_FAILED = "observed_build_failed"
+    UNEXPECTED_ERROR = "unexpected_error"
 
 
 class FetchedArticleConversionError(Exception):

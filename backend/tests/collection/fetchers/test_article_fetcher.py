@@ -15,13 +15,17 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import ClassVar
 
+import pytest
+
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.article_limits import ARTICLE_BODY_MIN_LENGTH
+from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import ObservedArticle, ObservedOrigin
 from app.collection.domain.source_completion_profile import (
     DEFAULT_PROFILE,
     SourceCompletionProfile,
 )
+from app.collection.source_fetch import article_fetcher as article_fetcher_module
 from app.collection.source_fetch.article_fetcher import ArticleFetcher
 from app.collection.source_fetch.errors import ConversionReason
 from app.collection.source_fetch.fetched_article import FetchedArticle
@@ -126,6 +130,55 @@ def test_exposes_source_name_and_endpoint_url_as_instance_attrs() -> None:
 
     assert fetcher.NAME == "Fake"
     assert fetcher.ENDPOINT_URL == "https://example.test/feed"
+
+
+async def test_yields_unexpected_rejection_without_stopping_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``convert_fetched_article`` が想定外 ``Exception`` を raise しても stream は
+    止まらず ``UNEXPECTED_ERROR`` の ``ConversionRejection`` に値化される。
+
+    Stage 1 stream 境界の safety net: precondition 通過後の invariant 違反
+    (=ありえない筈の bug) が漏れたとき、source 全体 rollback ではなく per-entry
+    rejection 化 + stack trace 残存で運用可視化することを固定する。``__cause__``
+    に原因例外が連鎖し、後続 entry の変換は継続することを併せて検証する。
+    """
+    valid_fetched = FetchedArticle(
+        title=_VALID_TITLE,
+        url=_VALID_URL,
+        body=_VALID_BODY,
+        published_at=_PUBLISHED,
+    )
+    source = _make_source([valid_fetched, valid_fetched], collect_calls=[])
+    fetcher = ArticleFetcher(source)
+
+    cause = RuntimeError("unexpected post-precondition invariant violation")
+    call_count = {"n": 0}
+
+    def _flaky_convert(fetched, *, source, source_id):  # noqa: ANN001, ARG001
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise cause
+        return ObservedArticle.build(
+            source_name=source.name,
+            source_url=CanonicalArticleUrl(fetched.url),
+            title=fetched.title,
+            body=fetched.body,
+            published_at=None,
+            origin=source.observed_origin,
+        )
+
+    monkeypatch.setattr(
+        article_fetcher_module, "convert_fetched_article", _flaky_convert
+    )
+
+    results = await _collect_fetch(fetcher, source_id=1)
+
+    assert len(results) == 2
+    assert isinstance(results[0], ConversionRejection)
+    assert results[0].error.conversion_reason is ConversionReason.UNEXPECTED_ERROR
+    assert results[0].error.__cause__ is cause
+    assert isinstance(results[1], ObservedArticle)
 
 
 async def test_collect_is_invoked_once_per_fetch() -> None:
