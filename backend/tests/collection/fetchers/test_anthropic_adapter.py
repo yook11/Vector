@@ -6,7 +6,7 @@
 - 収集スコープ ``is_collectable_anthropic_url`` (``/news/`` のみ・対象外 ≠
   変換失敗)。``MAX_ENTRIES`` cap / lastmod 降順
 - ``to_fetched_article`` が in-scope entry に対し total (None/raise しない)
-- 全 passport は ``ObservedArticle`` (``HTML_TITLE_PROFILE``)
+- 全 passport は ``ObservedArticle`` (``HTML_TITLE_POLICY``)
 - ``RawHttpClient`` の ``ExternalFetchError`` は ``collect`` を素通しする
 
 loc/lastmod parse と XXE 防御は ``SitemapReader`` の責務へ移ったため
@@ -109,7 +109,7 @@ async def test_max_entries_capped() -> None:
 
 @pytest.mark.asyncio
 async def test_all_passports_are_incomplete_for_html_title() -> None:
-    """``HTML_TITLE_PROFILE`` のため全 passport が ``ObservedArticle``。"""
+    """``HTML_TITLE_POLICY`` のため全 passport が ``ObservedArticle``。"""
     items = await _collect(_build_fetcher().fetch(source_id=1))
     assert items
     for item in items:

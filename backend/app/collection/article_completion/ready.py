@@ -3,7 +3,7 @@
 補完に必要な値を全揃えで運ぶ:
 
 - ``observed`` — 取得済み事実 (``ObservedArticle``)。
-- ``profile`` — per-source 補完方針 (``SourceCompletionProfile``)。
+- ``profile`` — per-source 補完方針 (``ArticleCompletionPolicy``)。
 - ``source_url`` — 記事 identity (``pending_html_articles.url`` 列が
   authoritative。``ObservedArticle`` は持たない)。
 - ``attempt_count`` — stale worker guard / retry 予算判定の SSoT。
@@ -16,7 +16,7 @@ from typing import Protocol
 
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import ObservedArticle
-from app.collection.domain.source_completion_profile import SourceCompletionProfile
+from app.collection.sources.article_completion_policy import ArticleCompletionPolicy
 
 
 class ArticleCompletionPreconditionProtocol(Protocol):
@@ -43,7 +43,7 @@ class ReadyForArticleCompletion:
     source_id: int
     attempt_count: int
     observed: ObservedArticle
-    profile: SourceCompletionProfile
+    profile: ArticleCompletionPolicy
     source_url: CanonicalArticleUrl
 
     @classmethod

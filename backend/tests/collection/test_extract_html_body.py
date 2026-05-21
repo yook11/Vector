@@ -38,8 +38,8 @@ from app.collection.domain.observed_article import (
     ObservedField,
     ObservedOrigin,
 )
-from app.collection.domain.source_completion_profile import DEFAULT_PROFILE
 from app.collection.domain.value_objects import PublishedAt
+from app.collection.sources.article_completion_policy import DEFAULT_POLICY
 from app.collection.tasks import extract_html_body
 from app.shared.value_objects.source_name import SourceName
 
@@ -73,7 +73,7 @@ def _fixed_ready(pending_id: int = 42) -> ReadyForArticleCompletion:
                 origin=ObservedOrigin.feed,
             ),
         ),
-        profile=DEFAULT_PROFILE,
+        profile=DEFAULT_POLICY,
         source_url=url,
     )
 

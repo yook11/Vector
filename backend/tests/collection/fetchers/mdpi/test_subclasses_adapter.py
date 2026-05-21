@@ -19,8 +19,8 @@ from __future__ import annotations
 import pytest
 
 from app.collection.domain.observed_article import ObservedOrigin
-from app.collection.domain.source_completion_profile import DEFAULT_PROFILE
 from app.collection.source_fetch.strategy import SOURCES
+from app.collection.sources.article_completion_policy import DEFAULT_POLICY
 from app.collection.sources.article_source import ArticleSource
 from app.collection.sources.definitions.mdpi import (
     MDPIEnergiesSource,
@@ -48,7 +48,7 @@ def test_registry_binds_journal_name_to_issn(
     assert source is source_cls
     # 補完方針 / 取得出自は MDPI 共通 (feed + DEFAULT、Pattern R)
     assert source.observed_origin is ObservedOrigin.feed
-    assert source.completion_profile is DEFAULT_PROFILE
+    assert source.completion_policy is DEFAULT_POLICY
     # name → issn 束縛が P1 と一致 (ClassVar 直読み、drift 検出)
     assert source_cls._ISSN == issn
     assert source.name == SourceName(name)

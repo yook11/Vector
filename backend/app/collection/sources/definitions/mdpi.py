@@ -22,13 +22,13 @@ from datetime import UTC, datetime, timedelta
 from typing import ClassVar
 
 from app.collection.domain.observed_article import ObservedOrigin
-from app.collection.domain.source_completion_profile import (
-    DEFAULT_PROFILE,
-    SourceCompletionProfile,
-)
 from app.collection.source_fetch.fetched_article import FetchedArticle
 from app.collection.source_fetch.reader.crossref_reader import CrossrefEntry
 from app.collection.source_fetch.tools.fetch_tools import FetchTools
+from app.collection.sources.article_completion_policy import (
+    DEFAULT_POLICY,
+    ArticleCompletionPolicy,
+)
 from app.shared.value_objects.source_name import SourceName
 
 _MDPI_CROSSREF_ENDPOINT = "https://api.crossref.org/works"
@@ -104,7 +104,7 @@ class MDPIMaterialsSource:
     name: ClassVar[SourceName] = SourceName("MDPI Materials")
     endpoint_url: ClassVar[str] = _MDPI_CROSSREF_ENDPOINT
     observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.feed
-    completion_profile: ClassVar[SourceCompletionProfile] = DEFAULT_PROFILE
+    completion_policy: ClassVar[ArticleCompletionPolicy] = DEFAULT_POLICY
     _ISSN: ClassVar[str] = "1996-1944"
 
     @classmethod
@@ -118,7 +118,7 @@ class MDPIEnergiesSource:
     name: ClassVar[SourceName] = SourceName("MDPI Energies")
     endpoint_url: ClassVar[str] = _MDPI_CROSSREF_ENDPOINT
     observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.feed
-    completion_profile: ClassVar[SourceCompletionProfile] = DEFAULT_PROFILE
+    completion_policy: ClassVar[ArticleCompletionPolicy] = DEFAULT_POLICY
     _ISSN: ClassVar[str] = "1996-1073"
 
     @classmethod
@@ -132,7 +132,7 @@ class MDPISensorsSource:
     name: ClassVar[SourceName] = SourceName("MDPI Sensors")
     endpoint_url: ClassVar[str] = _MDPI_CROSSREF_ENDPOINT
     observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.feed
-    completion_profile: ClassVar[SourceCompletionProfile] = DEFAULT_PROFILE
+    completion_policy: ClassVar[ArticleCompletionPolicy] = DEFAULT_POLICY
     _ISSN: ClassVar[str] = "1424-8220"
 
     @classmethod
@@ -146,7 +146,7 @@ class MDPINanomaterialsSource:
     name: ClassVar[SourceName] = SourceName("MDPI Nanomaterials")
     endpoint_url: ClassVar[str] = _MDPI_CROSSREF_ENDPOINT
     observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.feed
-    completion_profile: ClassVar[SourceCompletionProfile] = DEFAULT_PROFILE
+    completion_policy: ClassVar[ArticleCompletionPolicy] = DEFAULT_POLICY
     _ISSN: ClassVar[str] = "2079-4991"
 
     @classmethod

@@ -39,10 +39,6 @@ from app.collection.domain.observed_article import (
     ObservedField,
     ObservedOrigin,
 )
-from app.collection.domain.source_completion_profile import (
-    HTML_TITLE_PROFILE,
-    SourceCompletionProfile,
-)
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.external_fetch_errors import (
     FetchGatewayError,
@@ -53,6 +49,10 @@ from app.collection.source_fetch.fetched_article import FetchedArticle
 from app.collection.source_fetch.pending_enqueue import PendingHtmlEnqueue
 from app.collection.source_fetch.strategy import SOURCES
 from app.collection.source_fetch.tools.fetch_tools import FetchTools
+from app.collection.sources.article_completion_policy import (
+    HTML_TITLE_POLICY,
+    ArticleCompletionPolicy,
+)
 from app.models.article import Article as ArticleORM
 from app.models.news_source import NewsSource, SourceType
 from app.models.pending_html_article import PendingHtmlArticle
@@ -69,7 +69,7 @@ class _StubArticleSource:
     """
 
     name: SourceName
-    completion_profile: SourceCompletionProfile
+    completion_policy: ArticleCompletionPolicy
     endpoint_url: str = "https://example.com/feed"
     observed_origin: ObservedOrigin = ObservedOrigin.feed
 
@@ -123,7 +123,7 @@ async def _load_ready(
 
     profile は repository が ``SOURCES[source_name]`` 経由で引く。本テストでは
     production registry の ``tc_source`` 名前一致エントリ (TechCrunchSource =
-    DEFAULT_PROFILE) を経由する。差し替えたい test は ``monkeypatch.setitem``
+    DEFAULT_POLICY) を経由する。差し替えたい test は ``monkeypatch.setitem``
     で SOURCES エントリを上書きしてから呼ぶ。
     """
     ready = await ReadyForArticleCompletion.try_advance_from(
@@ -266,14 +266,14 @@ async def test_success_persists_extracted_body_and_published_at(
     body = "x" * 250
     html_published_at = datetime(2026, 5, 1, 9, 30, 0, tzinfo=UTC)
     # 観測 published=None で HTML published_at を fallback 経路で流入させ、
-    # HTML_TITLE_PROFILE (title=html_preferred) で HTML title を採用させる。
-    # repository は ``SOURCES[name].completion_profile`` 直叩きになったため、
-    # SOURCES の TechCrunch エントリ (production DEFAULT_PROFILE) を test
+    # HTML_TITLE_POLICY (title=html_preferred) で HTML title を採用させる。
+    # repository は ``SOURCES[name].completion_policy`` 直叩きになったため、
+    # SOURCES の TechCrunch エントリ (production DEFAULT_POLICY) を test
     # 単位に置き換える。
     monkeypatch.setitem(
         SOURCES,
         tc_source.name,
-        _StubArticleSource(name=tc_source.name, completion_profile=HTML_TITLE_PROFILE),
+        _StubArticleSource(name=tc_source.name, completion_policy=HTML_TITLE_POLICY),
     )
     url = "https://techcrunch.com/article-3"
     _, _, ready = await _make_pending(

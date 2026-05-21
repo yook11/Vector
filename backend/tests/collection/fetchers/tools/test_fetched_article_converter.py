@@ -26,13 +26,6 @@ from app.collection.domain.article_limits import (
     ARTICLE_BODY_MIN_LENGTH,
 )
 from app.collection.domain.observed_article import ObservedArticle, ObservedOrigin
-from app.collection.domain.source_completion_profile import (
-    DEFAULT_PROFILE,
-    HTML_TITLE_PROFILE,
-    AnalyzableField,
-    FieldCompletionPolicy,
-    SourceCompletionProfile,
-)
 from app.collection.source_fetch.errors import (
     ConversionReason,
     FetchedArticleConversionError,
@@ -42,6 +35,13 @@ from app.collection.source_fetch.fetched_article_converter import (
     convert_fetched_article,
 )
 from app.collection.source_fetch.tools.fetch_tools import FetchTools
+from app.collection.sources.article_completion_policy import (
+    DEFAULT_POLICY,
+    HTML_TITLE_POLICY,
+    ArticleCompletionPolicy,
+    CompletableField,
+    FieldCompletionRule,
+)
 from app.collection.sources.article_source import ArticleSource
 from app.shared.value_objects.source_name import SourceName
 
@@ -62,7 +62,7 @@ _BASE_FETCHED: dict = {
 def _source(
     *,
     origin: ObservedOrigin = ObservedOrigin.feed,
-    profile: SourceCompletionProfile = DEFAULT_PROFILE,
+    profile: ArticleCompletionPolicy = DEFAULT_POLICY,
 ) -> ArticleSource:
     """``convert_fetched_article`` が読む 3 属性を持つ fake Source。
 
@@ -74,7 +74,7 @@ def _source(
         name: ClassVar[SourceName] = _SOURCE_NAME
         endpoint_url: ClassVar[str] = "https://example.test/feed"
         observed_origin: ClassVar[ObservedOrigin] = origin
-        completion_profile: ClassVar[SourceCompletionProfile] = profile
+        completion_policy: ClassVar[ArticleCompletionPolicy] = profile
 
         @classmethod
         async def collect(
@@ -87,7 +87,7 @@ def _source(
     return _FakeSource
 
 
-def _call(*, profile: SourceCompletionProfile = DEFAULT_PROFILE, **overrides):
+def _call(*, profile: ArticleCompletionPolicy = DEFAULT_POLICY, **overrides):
     args = {**_BASE_FETCHED, **overrides}
     return convert_fetched_article(
         FetchedArticle(**args),
@@ -221,7 +221,7 @@ def test_stamps_origin_on_observed_facts() -> None:
 
 def test_html_preferred_profile_propagates_observed_facts_when_body_is_none() -> None:
     """title=``html_preferred`` でも観測 title/published は事実として保存される。"""
-    result = _call(body=None, profile=HTML_TITLE_PROFILE)
+    result = _call(body=None, profile=HTML_TITLE_POLICY)
     assert isinstance(result, ObservedArticle)
     assert result.title is not None
     assert result.title.value == _VALID_TITLE
@@ -232,7 +232,7 @@ def test_html_preferred_profile_blocks_ready_path_even_when_body_and_published_p
 ):
     """title=``html_preferred`` (仮タイトル) は body + published が揃っても
     Ready 経路を止めて Observed に落ちる (HTML 補完で title 上書きの安全弁)。"""
-    result = _call(profile=HTML_TITLE_PROFILE)
+    result = _call(profile=HTML_TITLE_POLICY)
     assert isinstance(result, ObservedArticle)
     assert result.published_at is not None
     assert result.published_at.value.value == _PUBLISHED
@@ -248,13 +248,13 @@ def test_any_html_preferred_field_requires_html_completion_even_with_valid_body_
     観測事実だけで品質ゲートを満たしても Stage-1 Ready にしない。実 2
     profile も同一不変条件に従う (R/H byte 不変の証跡)。
     """
-    body_html_preferred = SourceCompletionProfile(
+    body_html_preferred = ArticleCompletionPolicy(
         {
-            AnalyzableField.title: FieldCompletionPolicy.observed_preferred,
-            AnalyzableField.body: FieldCompletionPolicy.html_preferred,
-            AnalyzableField.published_at: FieldCompletionPolicy.observed_preferred,
+            CompletableField.title: FieldCompletionRule.observed_preferred,
+            CompletableField.body: FieldCompletionRule.html_preferred,
+            CompletableField.published_at: FieldCompletionRule.observed_preferred,
         }
     )
     assert isinstance(_call(profile=body_html_preferred), ObservedArticle)
-    assert isinstance(_call(profile=DEFAULT_PROFILE), AnalyzableArticle)
-    assert isinstance(_call(profile=HTML_TITLE_PROFILE), ObservedArticle)
+    assert isinstance(_call(profile=DEFAULT_POLICY), AnalyzableArticle)
+    assert isinstance(_call(profile=HTML_TITLE_POLICY), ObservedArticle)

@@ -6,9 +6,9 @@ from collections.abc import AsyncIterator
 from typing import Protocol, runtime_checkable
 
 from app.collection.domain.observed_article import ObservedOrigin
-from app.collection.domain.source_completion_profile import SourceCompletionProfile
 from app.collection.source_fetch.fetched_article import FetchedArticle
 from app.collection.source_fetch.tools.fetch_tools import FetchTools
+from app.collection.sources.article_completion_policy import ArticleCompletionPolicy
 from app.shared.value_objects.source_name import SourceName
 
 
@@ -18,13 +18,13 @@ class ArticleSource(Protocol):
 
     - ``name`` / ``endpoint_url``: ソース identity
     - ``observed_origin``: 取得チャネル (audit 用)
-    - ``completion_profile``: 補完方針
+    - ``completion_policy``: 補完方針
     - ``collect``: ``FetchTools`` で外部取得し ``FetchedArticle`` を yield
     """
 
     name: SourceName
     endpoint_url: str
     observed_origin: ObservedOrigin
-    completion_profile: SourceCompletionProfile
+    completion_policy: ArticleCompletionPolicy
 
     def collect(self, tools: FetchTools) -> AsyncIterator[FetchedArticle]: ...

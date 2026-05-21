@@ -19,12 +19,12 @@ from app.collection.domain.completion import (
     ArticleCompletionFailureReason,
 )
 from app.collection.domain.observed_article import ObservedArticle
-from app.collection.domain.source_completion_profile import (
-    AnalyzableField,
-    FieldCompletionPolicy,
-    SourceCompletionProfile,
-)
 from app.collection.external_fetch_errors import ExternalFetchError
+from app.collection.sources.article_completion_policy import (
+    ArticleCompletionPolicy,
+    CompletableField,
+    FieldCompletionRule,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,7 +47,7 @@ CompletionFailure = FetchFailed | ExtractionFailure | ArticleCompletionFailed
 
 
 def _resolve[V](
-    policy: FieldCompletionPolicy,
+    policy: FieldCompletionRule,
     observed_value: V | None,
     html_value: V | None,
 ) -> V | None:
@@ -58,11 +58,11 @@ def _resolve[V](
     - ``observed_preferred``: 観測値があれば優先、なければ HTML。
     """
     match policy:
-        case FieldCompletionPolicy.html_required:
+        case FieldCompletionRule.html_required:
             return html_value
-        case FieldCompletionPolicy.html_preferred:
+        case FieldCompletionRule.html_preferred:
             return html_value if html_value else observed_value
-        case FieldCompletionPolicy.observed_preferred:
+        case FieldCompletionRule.observed_preferred:
             return observed_value if observed_value else html_value
         case _:
             assert_never(policy)
@@ -70,19 +70,19 @@ def _resolve[V](
 
 def complete_with_html(
     observed: ObservedArticle,
-    profile: SourceCompletionProfile,
+    profile: ArticleCompletionPolicy,
     html: ExtractedContent | ExtractionFailure,
     *,
     source_id: int,
     source_url: CanonicalArticleUrl,
 ) -> AnalyzableArticle | ArticleCompletionFailed | ExtractionFailure:
     """観測事実 + profile + HTML 抽出結果を merge し ``AnalyzableArticle`` 昇格。"""
-    pol = profile.policies
+    pol = profile.rules
 
     # body=html_required で抽出が失敗していれば ExtractionFailure を値のまま返す。
     if (
         not isinstance(html, ExtractedContent)
-        and pol[AnalyzableField.body] is FieldCompletionPolicy.html_required
+        and pol[CompletableField.body] is FieldCompletionRule.html_required
     ):
         return html
 
@@ -94,9 +94,9 @@ def complete_with_html(
     obs_body = observed.body.value if observed.body is not None else None
     obs_pub = observed.published_at.value if observed.published_at is not None else None
 
-    final_title = _resolve(pol[AnalyzableField.title], obs_title, html_title)
-    final_body = _resolve(pol[AnalyzableField.body], obs_body, html_body)
-    final_published = _resolve(pol[AnalyzableField.published_at], obs_pub, html_pub)
+    final_title = _resolve(pol[CompletableField.title], obs_title, html_title)
+    final_body = _resolve(pol[CompletableField.body], obs_body, html_body)
+    final_published = _resolve(pol[CompletableField.published_at], obs_pub, html_pub)
 
     if final_published is None:
         return ArticleCompletionFailed(

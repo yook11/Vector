@@ -11,7 +11,7 @@ P2 で ``ArticleSource`` 集約に移管した。本テストは実装の変更�
 3. 仮タイトルなソース (Anthropic=sitemap / ORNL=listing) は
    title=html_preferred で HTML 補完経路を強制する
    (旧 ``prefer_html_title=True`` の構造的後継)
-4. 他の全ソースは default 契約 (origin=feed / DEFAULT_PROFILE、
+4. 他の全ソースは default 契約 (origin=feed / DEFAULT_POLICY、
    title=observed_preferred = 旧「常に self.title」と同値)
 5. 取得出自は audit 値として取得チャネルを反映する
 6. **identity byte 不変**: 各 ``name → endpoint_url`` 束縛が P1 時点と完全
@@ -22,14 +22,14 @@ P2 で ``ArticleSource`` 集約に移管した。本テストは実装の変更�
 from __future__ import annotations
 
 from app.collection.domain.observed_article import ObservedOrigin
-from app.collection.domain.source_completion_profile import (
-    DEFAULT_PROFILE,
-    HTML_TITLE_PROFILE,
-    AnalyzableField,
-    FieldCompletionPolicy,
-    SourceCompletionProfile,
-)
 from app.collection.source_fetch.strategy import SOURCES
+from app.collection.sources.article_completion_policy import (
+    DEFAULT_POLICY,
+    HTML_TITLE_POLICY,
+    ArticleCompletionPolicy,
+    CompletableField,
+    FieldCompletionRule,
+)
 from app.shared.value_objects.source_name import SourceName
 
 # title が「仮」のため HTML 補完で上書きさせるソース (spec 特例)。
@@ -110,15 +110,15 @@ class TestCompletionKnowledgeIsRegistryReachable:
         assert len(SOURCES) == 45
         for name, source in SOURCES.items():
             origin = source.observed_origin
-            profile = source.completion_profile
+            profile = source.completion_policy
             assert isinstance(origin, ObservedOrigin), (
                 f"{name}.observed_origin must be an ObservedOrigin"
             )
-            assert isinstance(profile, SourceCompletionProfile), (
-                f"{name}.completion_profile must be a SourceCompletionProfile"
+            assert isinstance(profile, ArticleCompletionPolicy), (
+                f"{name}.completion_policy must be a ArticleCompletionPolicy"
             )
             # 全域性: 3 field すべてに policy がある (totality)
-            assert set(profile.policies) == set(AnalyzableField), name
+            assert set(profile.rules) == set(CompletableField), name
 
 
 class TestSourceIdentityIsByteInvariant:
@@ -135,8 +135,8 @@ class TestBodyMergeIsUnchangedAcrossAllSources:
     def test_body_policy_is_html_required_everywhere(self) -> None:
         """観測 body を保存しても merge は HTML 由来のまま (P1 挙動不変)。"""
         for name, source in SOURCES.items():
-            policy = source.completion_profile.policies[AnalyzableField.body]
-            assert policy is FieldCompletionPolicy.html_required, (
+            policy = source.completion_policy.rules[CompletableField.body]
+            assert policy is FieldCompletionRule.html_required, (
                 f"{name} body policy must stay html_required (merge unchanged)"
             )
 
@@ -147,11 +147,11 @@ class TestTitleAuthorityMatchesLegacyBehavior:
     def test_provisional_title_sources_force_html_completion(self) -> None:
         """Anthropic / ORNL は title=html_preferred (旧 ``=True`` 後継)。"""
         for name in _PROVISIONAL_TITLE_SOURCES:
-            profile = SOURCES[SourceName(name)].completion_profile
-            assert profile is HTML_TITLE_PROFILE, name
+            profile = SOURCES[SourceName(name)].completion_policy
+            assert profile is HTML_TITLE_POLICY, name
             assert (
-                profile.policies[AnalyzableField.title]
-                is FieldCompletionPolicy.html_preferred
+                profile.rules[CompletableField.title]
+                is FieldCompletionRule.html_preferred
             ), f"{name} must keep its provisional title overridable by HTML"
 
     def test_all_other_sources_keep_observed_title_authority(self) -> None:
@@ -159,13 +159,13 @@ class TestTitleAuthorityMatchesLegacyBehavior:
         for name, source in SOURCES.items():
             if str(name) in _PROVISIONAL_TITLE_SOURCES:
                 continue
-            profile = source.completion_profile
-            assert profile is DEFAULT_PROFILE, (
-                f"{name} must use DEFAULT_PROFILE (observed title wins)"
+            profile = source.completion_policy
+            assert profile is DEFAULT_POLICY, (
+                f"{name} must use DEFAULT_POLICY (observed title wins)"
             )
             assert (
-                profile.policies[AnalyzableField.title]
-                is FieldCompletionPolicy.observed_preferred
+                profile.rules[CompletableField.title]
+                is FieldCompletionRule.observed_preferred
             ), name
 
 

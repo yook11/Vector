@@ -87,7 +87,7 @@ class ArticleCompletionRepository:
         # per-row で 1 回走る (cost は微小、SafeUrl → CanonicalArticleUrl の
         # column type 昇格は別 PR の射程)。
         source_url = CanonicalArticleUrl(str(row.url))
-        profile = SOURCES[observed.source_name].completion_profile
+        profile = SOURCES[observed.source_name].completion_policy
         return ReadyForArticleCompletion(
             pending_id=row.id,
             source_id=row.source_id,

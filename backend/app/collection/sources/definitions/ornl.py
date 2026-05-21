@@ -20,13 +20,13 @@ from typing import ClassVar
 from urllib.parse import urljoin, urlparse
 
 from app.collection.domain.observed_article import ObservedOrigin
-from app.collection.domain.source_completion_profile import (
-    HTML_TITLE_PROFILE,
-    SourceCompletionProfile,
-)
 from app.collection.source_fetch.fetched_article import FetchedArticle
 from app.collection.source_fetch.reader.html_listing_reader import HtmlListingEntry
 from app.collection.source_fetch.tools.fetch_tools import FetchTools
+from app.collection.sources.article_completion_policy import (
+    HTML_TITLE_POLICY,
+    ArticleCompletionPolicy,
+)
 from app.shared.value_objects.source_name import SourceName
 
 _SOURCE_NAME = "ORNL"
@@ -90,7 +90,7 @@ class ORNLSource:
     name: ClassVar[SourceName] = SourceName(_SOURCE_NAME)
     endpoint_url: ClassVar[str] = "https://www.ornl.gov/news"
     observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.listing
-    completion_profile: ClassVar[SourceCompletionProfile] = HTML_TITLE_PROFILE
+    completion_policy: ClassVar[ArticleCompletionPolicy] = HTML_TITLE_POLICY
 
     DETAIL_LINK_XPATH: ClassVar[str] = _DETAIL_LINK_XPATH
     DETAIL_URL_PREFIX: ClassVar[str] = _DETAIL_URL_PREFIX

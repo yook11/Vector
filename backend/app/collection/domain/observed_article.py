@@ -1,6 +1,6 @@
 """``ObservedArticle`` — 外部ソースから取得できた記事事実の値オブジェクト。
 
-取れた事実だけを持つ (要否 / 優先は ``SourceCompletionProfile`` が決める)。
+取れた事実だけを持つ (要否 / 優先は ``ArticleCompletionPolicy`` が決める)。
 ``pending_html_articles.staged_attributes`` (JSONB) に焼かれ、cron poller で
 再 hydrate される (``model_dump(mode="json", by_alias=True)`` で永続化、
 ``model_validate`` で復元)。

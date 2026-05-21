@@ -34,9 +34,9 @@ from app.collection.domain.observed_article import (
     ObservedField,
     ObservedOrigin,
 )
-from app.collection.domain.source_completion_profile import DEFAULT_PROFILE
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.external_fetch_errors import FetchResourceNotFoundError
+from app.collection.sources.article_completion_policy import DEFAULT_POLICY
 from app.shared.value_objects.source_name import SourceName
 
 _URL = CanonicalArticleUrl("https://example.com/article")
@@ -69,7 +69,7 @@ def _ready(
                 else None
             ),
         ),
-        profile=DEFAULT_PROFILE,
+        profile=DEFAULT_POLICY,
         source_url=_URL,
     )
 

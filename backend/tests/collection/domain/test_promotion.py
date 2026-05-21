@@ -28,11 +28,11 @@ from app.collection.domain.observed_article import (
     ObservedField,
     ObservedOrigin,
 )
-from app.collection.domain.source_completion_profile import (
-    DEFAULT_PROFILE,
-    HTML_TITLE_PROFILE,
-)
 from app.collection.domain.value_objects import PublishedAt
+from app.collection.sources.article_completion_policy import (
+    DEFAULT_POLICY,
+    HTML_TITLE_POLICY,
+)
 from app.shared.value_objects.source_name import SourceName
 
 _URL = CanonicalArticleUrl("https://example.com/article")
@@ -80,37 +80,37 @@ def _promote(observed, profile, html, *, source_id=1):
 
 
 def test_html_preferred_title_takes_html_authority() -> None:
-    """``HTML_TITLE_PROFILE`` は観測 title があっても HTML title を正本にする。"""
+    """``HTML_TITLE_POLICY`` は観測 title があっても HTML title を正本にする。"""
     result = _promote(
-        _observed(title="Provisional"), HTML_TITLE_PROFILE, _html(title="Real HTML")
+        _observed(title="Provisional"), HTML_TITLE_POLICY, _html(title="Real HTML")
     )
     assert isinstance(result, AnalyzableArticle)
     assert result.title == "Real HTML"
 
 
 def test_observed_preferred_title_keeps_observed_authority() -> None:
-    """``DEFAULT_PROFILE`` は観測 title が常勝 (旧「常に self.title」と同値)。"""
+    """``DEFAULT_POLICY`` は観測 title が常勝 (旧「常に self.title」と同値)。"""
     result = _promote(
-        _observed(title="Feed Title"), DEFAULT_PROFILE, _html(title="HTML Title")
+        _observed(title="Feed Title"), DEFAULT_POLICY, _html(title="HTML Title")
     )
     assert isinstance(result, AnalyzableArticle)
     assert result.title == "Feed Title"
 
 
 def test_published_at_observed_preferred_uses_observed() -> None:
-    result = _promote(_observed(published=_OBS_PUB), DEFAULT_PROFILE, _html())
+    result = _promote(_observed(published=_OBS_PUB), DEFAULT_POLICY, _html())
     assert isinstance(result, AnalyzableArticle)
     assert result.published_at == _OBS_PUB
 
 
 def test_published_at_falls_back_to_html_when_observed_absent() -> None:
-    result = _promote(_observed(published=None), DEFAULT_PROFILE, _html())
+    result = _promote(_observed(published=None), DEFAULT_POLICY, _html())
     assert isinstance(result, AnalyzableArticle)
     assert result.published_at == _HTML_PUB
 
 
 def test_published_at_missing_both_fails_with_named_reason() -> None:
-    result = _promote(_observed(published=None), DEFAULT_PROFILE, _html(published=None))
+    result = _promote(_observed(published=None), DEFAULT_POLICY, _html(published=None))
     assert isinstance(result, ArticleCompletionFailed)
     assert result.reason.code == "published_at_missing"
     assert result.reason.detail == "rss_and_html_both_missing"
@@ -121,7 +121,7 @@ def test_body_html_required_with_extraction_failure_returns_value() -> None:
     failure = QualityGateFailed(
         body_length=10, title_present=True, body_sample="too short"
     )
-    result = _promote(_observed(), DEFAULT_PROFILE, failure)
+    result = _promote(_observed(), DEFAULT_POLICY, failure)
     assert result is failure
 
 
@@ -130,7 +130,7 @@ def test_observed_body_is_ignored_when_body_html_required() -> None:
     (事実の全保存が merge 挙動を変えない = spec §7 不変の核)。"""
     result = _promote(
         _observed(body="OBSERVED BODY " * 10),
-        DEFAULT_PROFILE,
+        DEFAULT_POLICY,
         _html(body="HTML_AUTHORITATIVE_BODY " * 10),
     )
     assert isinstance(result, AnalyzableArticle)
@@ -140,7 +140,7 @@ def test_observed_body_is_ignored_when_body_html_required() -> None:
 
 def test_analyzable_invariant_violation_wrapped_as_ready_invariant_failed() -> None:
     """``AnalyzableArticle`` の Field invariant 違反は名前付き失敗に畳む。"""
-    result = _promote(_observed(), DEFAULT_PROFILE, _html(), source_id=0)
+    result = _promote(_observed(), DEFAULT_POLICY, _html(), source_id=0)
     assert isinstance(result, ArticleCompletionFailed)
     assert result.reason.code == "ready_invariant_failed"
     assert result.reason.detail.startswith("invariant_violation:")

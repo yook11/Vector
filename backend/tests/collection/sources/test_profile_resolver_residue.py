@@ -32,26 +32,41 @@ def _git_grep(pattern: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+_SELF_RELPATH = "tests/collection/sources/test_profile_resolver_residue.py"
+
+
+def _residue_lines(stdout: str) -> list[str]:
+    # この oracle 自身の docstring / 関数名は grep 対象から除外する
+    # (resolver 削除完了は「他ファイルでの不在」で測る)。
+    return [
+        line for line in stdout.splitlines() if not line.startswith(f"{_SELF_RELPATH}:")
+    ]
+
+
 def test_completion_profile_resolver_class_is_gone() -> None:
     """``CompletionProfileResolver`` の名前が production / test から消えている。
 
-    ``git grep`` の stdout が空 = 0 件を semantic に直接 pin する
-    (returncode 規約 (0=match / 1=no match / 128=git error) に依存しない:
-    git error 時は stderr が空でない / stdout も空のため、debug は stderr
-    で取れる)。
+    ``git grep`` 結果から自身 (oracle ファイル) を除外した残骸が空 = 0 件を
+    semantic に直接 pin する (returncode 規約 (0=match / 1=no match /
+    128=git error) に依存しない)。
     """
     result = _git_grep("CompletionProfileResolver")
-    assert result.stdout == "", (
-        f"CompletionProfileResolver の残骸:\n{result.stdout}\n(stderr: {result.stderr})"
+    residue = _residue_lines(result.stdout)
+    assert not residue, (
+        "CompletionProfileResolver の残骸:\n"
+        + "\n".join(residue)
+        + f"\n(stderr: {result.stderr})"
     )
 
 
 def test_registry_completion_profile_resolver_class_is_gone() -> None:
     """具象 ``RegistryCompletionProfileResolver`` も完全消滅していること。"""
     result = _git_grep("RegistryCompletionProfileResolver")
-    assert result.stdout == "", (
-        f"RegistryCompletionProfileResolver の残骸:\n{result.stdout}\n"
-        f"(stderr: {result.stderr})"
+    residue = _residue_lines(result.stdout)
+    assert not residue, (
+        "RegistryCompletionProfileResolver の残骸:\n"
+        + "\n".join(residue)
+        + f"\n(stderr: {result.stderr})"
     )
 
 

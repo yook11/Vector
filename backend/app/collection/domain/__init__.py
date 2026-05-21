@@ -5,8 +5,6 @@
 - ``analyzable_article`` — ``AnalyzableArticle`` (次工程進行保証型)。
 - ``completion`` — ``ArticleCompletionFailed`` 系 (補完失敗の戻り値型)。
 - ``observed_article`` — ``ObservedArticle`` / ``ObservedField`` / ``ObservedOrigin``。
-- ``source_completion_profile`` — ``SourceCompletionProfile`` /
-  ``FieldCompletionPolicy`` (per-source 補完方針)。
 
 具体名は各 module から fully-qualified import すること (re-export はしない)。
 """

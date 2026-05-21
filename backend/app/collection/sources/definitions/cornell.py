@@ -14,13 +14,13 @@ from collections.abc import AsyncIterator
 from typing import ClassVar, Final
 
 from app.collection.domain.observed_article import ObservedOrigin
-from app.collection.domain.source_completion_profile import (
-    DEFAULT_PROFILE,
-    SourceCompletionProfile,
-)
 from app.collection.source_fetch.fetched_article import FetchedArticle
 from app.collection.source_fetch.tools.fetch_tools import FetchTools
 from app.collection.source_fetch.tools.multi_feed_rss import multi_feed_rss
+from app.collection.sources.article_completion_policy import (
+    DEFAULT_POLICY,
+    ArticleCompletionPolicy,
+)
 from app.shared.value_objects.source_name import SourceName
 
 CORNELL_FEEDS: Final[tuple[str, ...]] = (
@@ -45,7 +45,7 @@ class CornellChronicleSource:
     name: ClassVar[SourceName] = SourceName("Cornell Chronicle")
     endpoint_url: ClassVar[str] = "https://news.cornell.edu/taxonomy/term/24043/feed"
     observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.feed
-    completion_profile: ClassVar[SourceCompletionProfile] = DEFAULT_PROFILE
+    completion_policy: ClassVar[ArticleCompletionPolicy] = DEFAULT_POLICY
 
     @classmethod
     def collect(cls, tools: FetchTools) -> AsyncIterator[FetchedArticle]:

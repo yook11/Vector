@@ -19,13 +19,13 @@ from typing import ClassVar
 from urllib.parse import urlparse
 
 from app.collection.domain.observed_article import ObservedOrigin
-from app.collection.domain.source_completion_profile import (
-    HTML_TITLE_PROFILE,
-    SourceCompletionProfile,
-)
 from app.collection.source_fetch.fetched_article import FetchedArticle
 from app.collection.source_fetch.reader.sitemap_reader import SitemapEntry
 from app.collection.source_fetch.tools.fetch_tools import FetchTools
+from app.collection.sources.article_completion_policy import (
+    HTML_TITLE_POLICY,
+    ArticleCompletionPolicy,
+)
 from app.shared.value_objects.source_name import SourceName
 
 _SOURCE_NAME = "Anthropic"
@@ -72,7 +72,7 @@ class AnthropicSource:
     name: ClassVar[SourceName] = SourceName(_SOURCE_NAME)
     endpoint_url: ClassVar[str] = "https://www.anthropic.com/sitemap.xml"
     observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.sitemap
-    completion_profile: ClassVar[SourceCompletionProfile] = HTML_TITLE_PROFILE
+    completion_policy: ClassVar[ArticleCompletionPolicy] = HTML_TITLE_POLICY
 
     URL_PATH_PREFIX: ClassVar[str] = _NEWS_PATH_PREFIX
     MAX_ENTRIES: ClassVar[int] = _MAX_ENTRIES

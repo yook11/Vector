@@ -12,13 +12,13 @@ from collections.abc import AsyncIterator
 from typing import ClassVar
 
 from app.collection.domain.observed_article import ObservedOrigin
-from app.collection.domain.source_completion_profile import (
-    DEFAULT_PROFILE,
-    SourceCompletionProfile,
-)
 from app.collection.source_fetch.fetched_article import FetchedArticle
 from app.collection.source_fetch.reader.algolia_hn_reader import HackerNewsEntry
 from app.collection.source_fetch.tools.fetch_tools import FetchTools
+from app.collection.sources.article_completion_policy import (
+    DEFAULT_POLICY,
+    ArticleCompletionPolicy,
+)
 from app.shared.value_objects.source_name import SourceName
 
 # HN フェッチャー固有の運用値。Settings (環境変数経由) には載せない。
@@ -37,7 +37,7 @@ class HackerNewsSource:
     name: ClassVar[SourceName] = SourceName("Hacker News")
     endpoint_url: ClassVar[str] = "https://hn.algolia.com/api/v1/search_by_date"
     observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.api
-    completion_profile: ClassVar[SourceCompletionProfile] = DEFAULT_PROFILE
+    completion_policy: ClassVar[ArticleCompletionPolicy] = DEFAULT_POLICY
 
     @classmethod
     def to_fetched_article(cls, entry: HackerNewsEntry) -> FetchedArticle:

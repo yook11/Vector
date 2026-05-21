@@ -16,13 +16,13 @@ from collections.abc import AsyncIterator
 from typing import ClassVar, Final
 
 from app.collection.domain.observed_article import ObservedOrigin
-from app.collection.domain.source_completion_profile import (
-    DEFAULT_PROFILE,
-    SourceCompletionProfile,
-)
 from app.collection.source_fetch.fetched_article import FetchedArticle
 from app.collection.source_fetch.reader.rss_reader import RssEntry
 from app.collection.source_fetch.tools.fetch_tools import FetchTools
+from app.collection.sources.article_completion_policy import (
+    DEFAULT_POLICY,
+    ArticleCompletionPolicy,
+)
 from app.shared.value_objects.source_name import SourceName
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
@@ -67,7 +67,7 @@ class MetaAISource:
     name: ClassVar[SourceName] = SourceName("Meta AI")
     endpoint_url: ClassVar[str] = "https://about.fb.com/news/feed/"
     observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.feed
-    completion_profile: ClassVar[SourceCompletionProfile] = DEFAULT_PROFILE
+    completion_policy: ClassVar[ArticleCompletionPolicy] = DEFAULT_POLICY
 
     @classmethod
     async def collect(cls, tools: FetchTools) -> AsyncIterator[FetchedArticle]:

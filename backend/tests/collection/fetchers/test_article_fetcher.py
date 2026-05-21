@@ -21,16 +21,16 @@ from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.article_limits import ARTICLE_BODY_MIN_LENGTH
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import ObservedArticle, ObservedOrigin
-from app.collection.domain.source_completion_profile import (
-    DEFAULT_PROFILE,
-    SourceCompletionProfile,
-)
 from app.collection.source_fetch import article_fetcher as article_fetcher_module
 from app.collection.source_fetch.article_fetcher import ArticleFetcher
 from app.collection.source_fetch.errors import ConversionReason
 from app.collection.source_fetch.fetched_article import FetchedArticle
 from app.collection.source_fetch.fetched_article_converter import ConversionRejection
 from app.collection.source_fetch.tools.fetch_tools import FetchTools
+from app.collection.sources.article_completion_policy import (
+    DEFAULT_POLICY,
+    ArticleCompletionPolicy,
+)
 from app.collection.sources.article_source import ArticleSource
 from app.shared.value_objects.source_name import SourceName
 
@@ -54,7 +54,7 @@ def _make_source(
         name: ClassVar[SourceName] = SourceName("Fake")
         endpoint_url: ClassVar[str] = "https://example.test/feed"
         observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.feed
-        completion_profile: ClassVar[SourceCompletionProfile] = DEFAULT_PROFILE
+        completion_policy: ClassVar[ArticleCompletionPolicy] = DEFAULT_POLICY
 
         @classmethod
         async def collect(

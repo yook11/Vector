@@ -317,7 +317,7 @@ async def _collect_passports(
     ``FetchTools`` の ``rss`` を fixture parser に差し替えて Source クラス
     オブジェクトを ``ArticleFetcher`` の本番経路 (fetched_article_converter) に通す。
     profile / origin は Source クラスの ``ClassVar`` を直読みする (旧 synthetic
-    ``ArticleSource`` ラップを廃止、RSS 群は全て feed + DEFAULT_PROFILE)。
+    ``ArticleSource`` ラップを廃止、RSS 群は全て feed + DEFAULT_POLICY)。
     """
     fetcher = ArticleFetcher(source, tools=fixture_tools(rss_fixture=fixture_filename))
     items: AsyncIterator[Passport] = fetcher.fetch(source_id=1)

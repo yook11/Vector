@@ -127,7 +127,7 @@ def convert_fetched_article(
 
     published_at = PublishedAt.from_datetime(fetched.published_at)
 
-    if not source.completion_profile.requires_html_completion():
+    if not source.completion_policy.requires_html_completion():
         article = AnalyzableArticle.try_build(
             title=title,
             body=fetched.body,
