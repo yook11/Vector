@@ -11,7 +11,6 @@ import re
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Literal
 from urllib.parse import urlparse
 from urllib.robotparser import RobotFileParser
 
@@ -19,6 +18,13 @@ import httpx
 import structlog
 import trafilatura
 
+from app.collection.article_completion.extraction_failure import (
+    ExtractionCrashed,
+    ExtractionFailure,
+    NotHtml,
+    ParserRejected,
+    QualityGateFailed,
+)
 from app.collection.domain.article_limits import (
     ARTICLE_BODY_MIN_LENGTH as _BODY_MIN_LENGTH,
 )
@@ -92,9 +98,6 @@ def _decode_html_response(response: httpx.Response) -> str:
     return response.text
 
 
-ExtractionEmptyReason = Literal["not_html", "parse_error", "quality_gate"]
-
-
 @dataclass(frozen=True)
 class ExtractedContent:
     """抽出成功: 品質ゲートを通過した本文・タイトル。
@@ -118,18 +121,7 @@ class ExtractedContent:
             raise ValueError(f"body must be at least {_BODY_MIN_LENGTH} chars")
 
 
-@dataclass(frozen=True)
-class ExtractionEmpty:
-    """抽出不能: Content-Type 不一致 / パース失敗 / 品質ゲート未達。
-
-    ``reason`` は観測性のためだけに保持する（現状の呼び出し側は
-    全ケースを同一に扱うが、メトリクスとログに理由を載せる）。
-    """
-
-    reason: ExtractionEmptyReason
-
-
-HtmlExtractionResult = ExtractedContent | ExtractionEmpty
+HtmlExtractionResult = ExtractedContent | ExtractionFailure
 
 
 class _RobotsCache:
@@ -197,12 +189,14 @@ def _extract_from_html(html: str, url: str) -> HtmlExtractionResult:
     )
 
     if result is None:
-        return ExtractionEmpty(reason="parse_error")
+        logger.info("parser_rejected", url=url)
+        return ParserRejected()
 
     # trafilatura 2.0 以降、bare_extraction() は Document インスタンスを返す
     # 本文の品質ゲート: 50 文字未満は棄却
     text = result.text
-    body = text.strip() if text and len(text.strip()) >= _BODY_MIN_LENGTH else None
+    body_stripped = text.strip() if text else ""
+    body = body_stripped if len(body_stripped) >= _BODY_MIN_LENGTH else None
 
     # タイトル: trafilatura が OGP / Twitter Card / JSON-LD / <title> / h1 の順で抽出。
     # HTML タグ除去と 500 文字上限で整形し、空なら None。
@@ -210,7 +204,22 @@ def _extract_from_html(html: str, url: str) -> HtmlExtractionResult:
     title = cleaned_title[:_TITLE_MAX_LENGTH] if cleaned_title else None
 
     if body is None or title is None:
-        return ExtractionEmpty(reason="quality_gate")
+        title_present = title is not None
+        body_length = len(body_stripped)
+        # paywall stub / 拒否ページ判別に使えるよう、本文がゼロでも閾値未満でも
+        # ない (= title 欠落で落ちた) 場合は冒頭断片を残さない。
+        body_sample = body_stripped if 0 < body_length < _BODY_MIN_LENGTH else None
+        logger.info(
+            "quality_gate_failed",
+            url=url,
+            body_length=body_length,
+            title_present=title_present,
+        )
+        return QualityGateFailed(
+            body_length=body_length,
+            title_present=title_present,
+            body_sample=body_sample,
+        )
 
     return ExtractedContent(
         title=title,
@@ -234,7 +243,8 @@ class ArticleHtmlExtractor:
 
         Returns:
             HtmlExtractionResult: ``ExtractedContent``（成功）または
-            ``ExtractionEmpty``（Content-Type 不一致 / パース失敗 / 品質ゲート未達）。
+            ``ExtractionFailure``（Content-Type 不一致 / パーサ拒否 / decode|parse
+            例外 / 品質ゲート未達。証拠は variant に畳む）。
 
         Raises:
             ExternalFetchError: robots Disallow / redirect block / response 過大 /
@@ -298,11 +308,34 @@ class ArticleHtmlExtractor:
             content_type = response.headers.get("content-type", "")
             if "text/html" not in content_type:
                 logger.info("content_not_html", url=url_str, content_type=content_type)
-                return ExtractionEmpty(reason="not_html")
+                return NotHtml(content_type=content_type)
 
             try:
                 html_text = _decode_html_response(response)
+            except Exception as e:
+                logger.warning(
+                    "content_parse_error",
+                    url=url_str,
+                    stage="decode",
+                    error=str(e),
+                )
+                return ExtractionCrashed(
+                    stage="decode",
+                    error_class=type(e).__name__,
+                    error_message=str(e),
+                )
+
+            try:
                 return await asyncio.to_thread(_extract_from_html, html_text, url_str)
             except Exception as e:
-                logger.warning("content_parse_error", url=url_str, error=str(e))
-                return ExtractionEmpty(reason="parse_error")
+                logger.warning(
+                    "content_parse_error",
+                    url=url_str,
+                    stage="parse",
+                    error=str(e),
+                )
+                return ExtractionCrashed(
+                    stage="parse",
+                    error_class=type(e).__name__,
+                    error_message=str(e),
+                )

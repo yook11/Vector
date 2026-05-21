@@ -19,9 +19,15 @@ from app.collection.article_completion.disposition import (
     Terminal,
     classify_completion_failed,
     classify_external_fetch_error,
-    classify_extraction_empty,
+    classify_extraction_failure,
 )
-from app.collection.article_completion.extractor import ExtractionEmpty
+from app.collection.article_completion.extraction_failure import (
+    ExtractionCrashed,
+    ExtractionFailure,
+    NotHtml,
+    ParserRejected,
+    QualityGateFailed,
+)
 from app.collection.article_completion.retry_policy import (
     OUTAGE_POLICY,
     RETRY_AFTER_POLICY,
@@ -199,13 +205,55 @@ class TestFetchOriginServerErrorExplicitBranch:
         )
 
 
-@pytest.mark.parametrize("reason", ["not_html", "parse_error", "quality_gate"])
-def test_extraction_empty_maps_to_terminal_with_prefixed_reason(
-    reason: str,
+@pytest.mark.parametrize(
+    "failure,expected_reason_code,expected_detail",
+    [
+        (
+            NotHtml(content_type="application/pdf"),
+            "extraction_failure_not_html",
+            "content_type=application/pdf",
+        ),
+        (
+            ParserRejected(),
+            "extraction_failure_parser_rejected",
+            None,
+        ),
+        (
+            ExtractionCrashed(
+                stage="decode", error_class="UnicodeDecodeError", error_message="boom"
+            ),
+            "extraction_failure_extraction_crashed",
+            "stage=decode UnicodeDecodeError: boom",
+        ),
+        (
+            ExtractionCrashed(
+                stage="parse", error_class="ValueError", error_message="bad parse"
+            ),
+            "extraction_failure_extraction_crashed",
+            "stage=parse ValueError: bad parse",
+        ),
+        (
+            QualityGateFailed(body_length=0, title_present=False, body_sample=None),
+            "extraction_failure_quality_gate",
+            "body_length=0 title_present=False",
+        ),
+        (
+            QualityGateFailed(
+                body_length=12, title_present=True, body_sample="too short"
+            ),
+            "extraction_failure_quality_gate",
+            "body_length=12 title_present=True sample='too short'",
+        ),
+    ],
+)
+def test_extraction_failure_maps_to_terminal_with_evidence_detail(
+    failure: ExtractionFailure,
+    expected_reason_code: str,
+    expected_detail: str | None,
 ) -> None:
-    """``ExtractionEmpty`` の 3 reason が ``extraction_empty_*`` terminal になる。"""
-    result = classify_extraction_empty(ExtractionEmpty(reason=reason))  # type: ignore[arg-type]
-    assert result == Terminal(reason_code=f"extraction_empty_{reason}")
+    """各 variant が ``extraction_failure_*`` terminal + 証拠 detail を持つ。"""
+    result = classify_extraction_failure(failure)
+    assert result == Terminal(reason_code=expected_reason_code, detail=expected_detail)
 
 
 class TestClassifyCompletionFailed:

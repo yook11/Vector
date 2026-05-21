@@ -7,7 +7,7 @@
 - title ``observed_preferred``: 観測 title が常勝 (旧 default。観測常在のため)
 - published_at ``observed_preferred``: 観測優先 / HTML fallback / 両欠は
   ``published_at_missing`` (旧 ``hint or html``)
-- body ``html_required`` + ``ExtractionEmpty``: 値のまま返す (旧 completer 短絡)
+- body ``html_required`` + ``ExtractionFailure``: 値のまま返す (旧 completer 短絡)
 - **観測 body があっても ``html_required`` のとき完成 body は HTML 由来**
   (取れた事実を全部保存しても merge は不変 = forward-compat の核)
 - ``AnalyzableArticle`` invariant 違反は ``ready_invariant_failed`` で wrap
@@ -18,10 +18,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from app.collection.article_completion.completer import complete_with_html
-from app.collection.article_completion.extractor import (
-    ExtractedContent,
-    ExtractionEmpty,
-)
+from app.collection.article_completion.extraction_failure import QualityGateFailed
+from app.collection.article_completion.extractor import ExtractedContent
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.completion import ArticleCompletionFailed
@@ -118,11 +116,13 @@ def test_published_at_missing_both_fails_with_named_reason() -> None:
     assert result.reason.detail == "rss_and_html_both_missing"
 
 
-def test_body_html_required_with_extraction_empty_returns_value() -> None:
-    """``body=html_required`` + ``ExtractionEmpty`` → 値返し (旧短絡と等価)。"""
-    empty = ExtractionEmpty(reason="quality_gate")
-    result = _promote(_observed(), DEFAULT_PROFILE, empty)
-    assert result is empty
+def test_body_html_required_with_extraction_failure_returns_value() -> None:
+    """``body=html_required`` + ``ExtractionFailure`` → 値返し (旧短絡と等価)。"""
+    failure = QualityGateFailed(
+        body_length=10, title_present=True, body_sample="too short"
+    )
+    result = _promote(_observed(), DEFAULT_PROFILE, failure)
+    assert result is failure
 
 
 def test_observed_body_is_ignored_when_body_html_required() -> None:

@@ -77,7 +77,7 @@ class ContentFetchPayload(BasePipelineEventPayload):
     # A: pending → article をまたぐ canonicalize 済み URL key
     canonical_url: str | None = None
     extractor_class: str | None = None  # A
-    # S: drop 細分化 (permanent_fetch_error / extraction_empty_* / promotion_*)
+    # S: drop 細分化 (permanent_fetch_error / extraction_failure_* / completion_*)
     reason_code: str | None = None
     body_length: int | None = None  # A': 成功時の本文長分布観測
     # S: promotion Failed 等の {"body_length": N} 構造化メトリック

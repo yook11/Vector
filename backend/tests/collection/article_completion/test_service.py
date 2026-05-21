@@ -28,10 +28,8 @@ from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
-from app.collection.article_completion.extractor import (
-    ExtractedContent,
-    ExtractionEmpty,
-)
+from app.collection.article_completion.extraction_failure import NotHtml
+from app.collection.article_completion.extractor import ExtractedContent
 from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.article_completion.repository import ArticleCompletionRepository
 from app.collection.article_completion.service import ArticleCompletionService
@@ -308,7 +306,7 @@ async def test_success_persists_extracted_body_and_published_at(
 
 
 # ---------------------------------------------------------------------------
-# Terminal disposition (ExternalFetchError terminal / ExtractionEmpty / promotion)
+# Terminal disposition (ExternalFetchError terminal / ExtractionFailure / promotion)
 # ---------------------------------------------------------------------------
 
 
@@ -350,18 +348,19 @@ async def test_terminal_fetch_error_returns_none_and_closes_pending(
 
 
 @pytest.mark.asyncio
-async def test_extraction_empty_closes_pending(
+async def test_extraction_failure_closes_pending(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     tc_source: NewsSource,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """ExtractionEmpty → ``None`` + pending status='closed'。"""
+    """``ExtractionFailure`` → ``None`` + pending status='closed'。"""
     _, pending_id, ready = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/empty"
     )
     _patch_fetch(
-        monkeypatch, AsyncMock(return_value=ExtractionEmpty(reason="not_html"))
+        monkeypatch,
+        AsyncMock(return_value=NotHtml(content_type="application/pdf")),
     )
 
     svc = ArticleCompletionService(session_factory)

@@ -7,10 +7,14 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
+from app.collection.article_completion.extraction_failure import (
+    NotHtml,
+    ParserRejected,
+    QualityGateFailed,
+)
 from app.collection.article_completion.extractor import (
     ArticleHtmlExtractor,
     ExtractedContent,
-    ExtractionEmpty,
     _decode_html_response,
 )
 from app.collection.domain.value_objects import PublishedAt
@@ -224,12 +228,12 @@ class TestArticleHtmlExtractor:
         with _patch_client(client):
             result = await extractor.fetch(SafeUrl("https://example.com/doc.pdf"))
 
-        assert isinstance(result, ExtractionEmpty)
-        assert result.reason == "not_html"
+        assert isinstance(result, NotHtml)
+        assert result.content_type == "application/pdf"
 
     @pytest.mark.asyncio
     async def test_returns_empty_for_minimal_content(self) -> None:
-        """品質ゲートにより短すぎるコンテンツは ExtractionEmpty になる。"""
+        """品質ゲートにより短すぎるコンテンツは failure variant になる。"""
         robots_resp = httpx.Response(
             404,
             request=httpx.Request("GET", "https://example.com/robots.txt"),
@@ -247,8 +251,11 @@ class TestArticleHtmlExtractor:
         with _patch_client(client):
             result = await extractor.fetch(SafeUrl("https://example.com/short"))
 
-        assert isinstance(result, ExtractionEmpty)
-        assert result.reason in ("quality_gate", "parse_error")
+        # trafilatura が None を返す (ParserRejected) または品質ゲート未達
+        # (QualityGateFailed) のどちらか。decode/parse 例外は本テストでは想定しない。
+        assert isinstance(result, ParserRejected | QualityGateFailed)
+        if isinstance(result, QualityGateFailed):
+            assert result.body_length < 50
 
     @pytest.mark.asyncio
     async def test_raises_robots_disallowed_on_robots_blocked(self) -> None:

@@ -14,7 +14,13 @@ from app.collection.article_completion.completer import (
     CompletionFailure,
     FetchFailed,
 )
-from app.collection.article_completion.extractor import ExtractionEmpty
+from app.collection.article_completion.extraction_failure import (
+    ExtractionCrashed,
+    ExtractionFailure,
+    NotHtml,
+    ParserRejected,
+    QualityGateFailed,
+)
 from app.collection.article_completion.retry_policy import (
     BLIP_POLICY,
     OUTAGE_POLICY,
@@ -155,13 +161,30 @@ def classify_external_fetch_error(exc: ExternalFetchError) -> CompletionDisposit
 
 
 # ---------------------------------------------------------------------------
-# ExtractionEmpty の分類 (全 reason terminal)
+# ExtractionFailure の分類 (全 variant terminal、証拠を detail に畳む)
 # ---------------------------------------------------------------------------
 
 
-def classify_extraction_empty(empty: ExtractionEmpty) -> Terminal:
-    """「取れたが使える本文でない」結果。3 reason とも terminal に寄せる。"""
-    return Terminal(reason_code=f"extraction_empty_{empty.reason}")
+def classify_extraction_failure(failure: ExtractionFailure) -> Terminal:
+    """HTML 完成段の失敗を terminal に分類し、証拠を ``detail`` に畳む。
+
+    本層は文字列の ``detail`` までで、構造化 audit (``ContentFetchPayload``) への
+    転写は別 PR で terminal 経路に recorder を新設して行う。
+    """
+    detail: str | None
+    match failure:
+        case NotHtml(content_type=ct):
+            detail = f"content_type={ct}"
+        case ParserRejected():
+            detail = None
+        case ExtractionCrashed(stage=s, error_class=ec, error_message=em):
+            detail = f"stage={s} {ec}: {em}"
+        case QualityGateFailed(body_length=bl, title_present=tp, body_sample=bs):
+            sample = f" sample={bs!r}" if bs else ""
+            detail = f"body_length={bl} title_present={tp}{sample}"
+        case _ as unreachable:
+            assert_never(unreachable)
+    return Terminal(reason_code=f"extraction_failure_{failure.reason}", detail=detail)
 
 
 # ---------------------------------------------------------------------------
@@ -187,13 +210,17 @@ def classify_completion_failure(
 ) -> CompletionDisposition:
     """``ArticleHtmlCompleter`` が返す閉じ failure union を 1 点で分類する。
 
-    3 classifier (fetch / extraction-empty / promotion) に振り分ける。
+    3 classifier (fetch / extraction-failure / promotion) に振り分ける。
+    ``ExtractionFailure`` は union alias でクラスパターン非対応のため、
+    4 variant の OR パターンで展開する。
     """
     match failure:
         case FetchFailed(error=error):
             return classify_external_fetch_error(error)
-        case ExtractionEmpty() as empty:
-            return classify_extraction_empty(empty)
+        case (
+            NotHtml() | ParserRejected() | ExtractionCrashed() | QualityGateFailed()
+        ) as extraction_failure:
+            return classify_extraction_failure(extraction_failure)
         case ArticleCompletionFailed() as failed:
             return classify_completion_failed(failed)
         case _ as unreachable:

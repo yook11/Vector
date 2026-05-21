@@ -5,11 +5,16 @@ from app.collection.article_completion.completer import (
     CompletionFailure,
     FetchFailed,
 )
+from app.collection.article_completion.extraction_failure import (
+    ExtractionCrashed,
+    ExtractionFailure,
+    NotHtml,
+    ParserRejected,
+    QualityGateFailed,
+)
 from app.collection.article_completion.extractor import (
     ArticleHtmlExtractor,
     ExtractedContent,
-    ExtractionEmpty,
-    ExtractionEmptyReason,
 )
 
 __all__ = [
@@ -17,7 +22,10 @@ __all__ = [
     "ArticleHtmlExtractor",
     "CompletionFailure",
     "ExtractedContent",
-    "ExtractionEmpty",
-    "ExtractionEmptyReason",
+    "ExtractionCrashed",
+    "ExtractionFailure",
     "FetchFailed",
+    "NotHtml",
+    "ParserRejected",
+    "QualityGateFailed",
 ]

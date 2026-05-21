@@ -6,10 +6,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import assert_never
 
+from app.collection.article_completion.extraction_failure import ExtractionFailure
 from app.collection.article_completion.extractor import (
     ArticleHtmlExtractor,
     ExtractedContent,
-    ExtractionEmpty,
 )
 from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.domain.analyzable_article import AnalyzableArticle
@@ -37,11 +37,11 @@ class FetchFailed:
     error: ExternalFetchError
 
 
-CompletionFailure = FetchFailed | ExtractionEmpty | ArticleCompletionFailed
+CompletionFailure = FetchFailed | ExtractionFailure | ArticleCompletionFailed
 """補完が失敗する 3 形を 1 つに揃えた閉じた値 union。
 
 - ``FetchFailed``: origin fetch 例外を畳んだ値。
-- ``ExtractionEmpty``: 取れたが使える本文でない。
+- ``ExtractionFailure``: 取れたが使える本文でない (4 variant、証拠を保持)。
 - ``ArticleCompletionFailed``: merge / invariant 違反。
 """
 
@@ -71,17 +71,17 @@ def _resolve[V](
 def complete_with_html(
     observed: ObservedArticle,
     profile: SourceCompletionProfile,
-    html: ExtractedContent | ExtractionEmpty,
+    html: ExtractedContent | ExtractionFailure,
     *,
     source_id: int,
     source_url: CanonicalArticleUrl,
-) -> AnalyzableArticle | ArticleCompletionFailed | ExtractionEmpty:
+) -> AnalyzableArticle | ArticleCompletionFailed | ExtractionFailure:
     """観測事実 + profile + HTML 抽出結果を merge し ``AnalyzableArticle`` 昇格。"""
     pol = profile.policies
 
-    # body=html_required で抽出空なら ExtractionEmpty を値のまま返す。
+    # body=html_required で抽出が失敗していれば ExtractionFailure を値のまま返す。
     if (
-        isinstance(html, ExtractionEmpty)
+        not isinstance(html, ExtractedContent)
         and pol[AnalyzableField.body] is FieldCompletionPolicy.html_required
     ):
         return html

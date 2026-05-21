@@ -4,7 +4,7 @@
 戻り値が ``AnalyzableArticle | CompletionFailure`` の閉じ union に必ず収まる):
 
 - fetch 例外 (``ExternalFetchError``) → ``FetchFailed`` 値に畳まれ例外は出ない
-- ``ExtractionEmpty`` → ``body=html_required`` のため値のまま素通し
+- ``ExtractionFailure`` → ``body=html_required`` のため値のまま素通し
 - ``ExtractedContent`` + promotion 成功 → ``AnalyzableArticle``
 - ``ExtractedContent`` + promotion 失敗 → ``ArticleCompletionFailed``
 
@@ -23,10 +23,8 @@ from app.collection.article_completion.completer import (
     ArticleHtmlCompleter,
     FetchFailed,
 )
-from app.collection.article_completion.extractor import (
-    ExtractedContent,
-    ExtractionEmpty,
-)
+from app.collection.article_completion.extraction_failure import NotHtml
+from app.collection.article_completion.extractor import ExtractedContent
 from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
@@ -86,12 +84,12 @@ async def test_fetch_error_is_folded_into_fetch_failed_value() -> None:
 
 
 @pytest.mark.asyncio
-async def test_extraction_empty_passes_through_as_value() -> None:
-    """``ExtractionEmpty`` は ``body=html_required`` のため値のまま素通しする。"""
-    empty = ExtractionEmpty(reason="not_html")
-    result = await _completer(AsyncMock(return_value=empty)).complete(_ready())
+async def test_extraction_failure_passes_through_as_value() -> None:
+    """``ExtractionFailure`` は ``body=html_required`` のため値のまま素通しする。"""
+    failure = NotHtml(content_type="application/pdf")
+    result = await _completer(AsyncMock(return_value=failure)).complete(_ready())
 
-    assert result is empty
+    assert result is failure
 
 
 @pytest.mark.asyncio
