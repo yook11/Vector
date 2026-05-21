@@ -191,7 +191,7 @@ services:
     command: >
       taskiq worker
       app.brokers:broker_analysis
-      app.analysis.extraction.tasks
+      app.analysis.curation.tasks
       app.analysis.assessment.tasks
       --ack-type when_executed
 
