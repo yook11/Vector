@@ -6,7 +6,7 @@
 - fetch 例外 (``ExternalFetchError``) → ``FetchFailed`` 値に畳まれ例外は出ない
 - ``ExtractionFailure`` → ``body=html_required`` のため値のまま素通し
 - ``ExtractedContent`` + promotion 成功 → ``AnalyzableArticle``
-- ``ExtractedContent`` + promotion 失敗 → ``ArticleCompletionFailed``
+- ``ExtractedContent`` + promotion 失敗 → ``ArticleCompletionFailure`` (variant)
 
 completer は profile を知らず ``ReadyForArticleCompletion`` 経由で受け取り
 ``complete_with_html`` (純粋関数) に委譲する。
@@ -23,12 +23,12 @@ from app.collection.article_completion.completer import (
     ArticleHtmlCompleter,
     FetchFailed,
 )
+from app.collection.article_completion.completion_failure import PublishedAtMissing
 from app.collection.article_completion.extraction_failure import NotHtml
 from app.collection.article_completion.extractor import ExtractedContent
 from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
-from app.collection.domain.completion import ArticleCompletionFailed
 from app.collection.domain.observed_article import (
     ObservedArticle,
     ObservedField,
@@ -106,11 +106,13 @@ async def test_extracted_content_success_returns_analyzable_article() -> None:
 
 
 @pytest.mark.asyncio
-async def test_promotion_failure_returns_article_completion_failed() -> None:
-    """published_at が観測 / HTML 両方欠落 → ``ArticleCompletionFailed``。"""
+async def test_promotion_failure_returns_published_at_missing() -> None:
+    """published_at が観測 / HTML 両方欠落 → ``PublishedAtMissing`` (両源 False)。"""
     content = ExtractedContent(title="OK", body="x" * 200, published_at=None)
     result = await _completer(AsyncMock(return_value=content)).complete(
         _ready(observed_published=None)
     )
 
-    assert isinstance(result, ArticleCompletionFailed)
+    assert isinstance(result, PublishedAtMissing)
+    assert result.observed_had_value is False
+    assert result.html_had_value is False

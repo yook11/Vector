@@ -6,6 +6,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import assert_never
 
+from app.collection.article_completion.completion_failure import (
+    ArticleCompletionFailure,
+    CompletionInvariantRejected,
+    PublishedAtMissing,
+)
 from app.collection.article_completion.extraction_failure import ExtractionFailure
 from app.collection.article_completion.extractor import (
     ArticleHtmlExtractor,
@@ -14,10 +19,6 @@ from app.collection.article_completion.extractor import (
 from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
-from app.collection.domain.completion import (
-    ArticleCompletionFailed,
-    ArticleCompletionFailureReason,
-)
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.external_fetch_errors import ExternalFetchError
 from app.collection.sources.article_completion_policy import (
@@ -37,12 +38,12 @@ class FetchFailed:
     error: ExternalFetchError
 
 
-CompletionFailure = FetchFailed | ExtractionFailure | ArticleCompletionFailed
+CompletionFailure = FetchFailed | ExtractionFailure | ArticleCompletionFailure
 """補完が失敗する 3 形を 1 つに揃えた閉じた値 union。
 
 - ``FetchFailed``: origin fetch 例外を畳んだ値。
 - ``ExtractionFailure``: 取れたが使える本文でない (4 variant、証拠を保持)。
-- ``ArticleCompletionFailed``: merge / invariant 違反。
+- ``ArticleCompletionFailure``: merge / invariant 違反 (2 variant、証拠を保持)。
 """
 
 
@@ -75,7 +76,7 @@ def complete_with_html(
     *,
     source_id: int,
     source_url: CanonicalArticleUrl,
-) -> AnalyzableArticle | ArticleCompletionFailed | ExtractionFailure:
+) -> AnalyzableArticle | ArticleCompletionFailure | ExtractionFailure:
     """観測事実 + profile + HTML 抽出結果を merge し ``AnalyzableArticle`` 昇格。"""
     pol = profile.rules
 
@@ -99,11 +100,9 @@ def complete_with_html(
     final_published = _resolve(pol[CompletableField.published_at], obs_pub, html_pub)
 
     if final_published is None:
-        return ArticleCompletionFailed(
-            reason=ArticleCompletionFailureReason(
-                code="published_at_missing",
-                detail="rss_and_html_both_missing",
-            )
+        return PublishedAtMissing(
+            observed_had_value=obs_pub is not None,
+            html_had_value=html_pub is not None,
         )
     try:
         return AnalyzableArticle(
@@ -114,11 +113,9 @@ def complete_with_html(
             source_url=source_url,
         )
     except ValueError as e:
-        return ArticleCompletionFailed(
-            reason=ArticleCompletionFailureReason(
-                code="ready_invariant_failed",
-                detail=f"invariant_violation:{e}",
-            )
+        return CompletionInvariantRejected(
+            error_class=type(e).__name__,
+            error_message=str(e),
         )
 
 

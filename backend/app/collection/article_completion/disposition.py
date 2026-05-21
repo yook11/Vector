@@ -14,6 +14,10 @@ from app.collection.article_completion.completer import (
     CompletionFailure,
     FetchFailed,
 )
+from app.collection.article_completion.completion_failure import (
+    CompletionInvariantRejected,
+    PublishedAtMissing,
+)
 from app.collection.article_completion.extraction_failure import (
     ExtractionCrashed,
     ExtractionFailure,
@@ -29,7 +33,6 @@ from app.collection.article_completion.retry_policy import (
     UNKNOWN_POLICY,
     RetryPolicy,
 )
-from app.collection.domain.completion import ArticleCompletionFailed
 from app.collection.external_fetch_errors import (
     ExternalFetchError,
     FetchAccessDeniedError,
@@ -188,16 +191,28 @@ def classify_extraction_failure(failure: ExtractionFailure) -> Terminal:
 
 
 # ---------------------------------------------------------------------------
-# ArticleCompletionFailed の分類 (domain failure)
+# ArticleCompletionFailure の分類 (昇格段の domain failure)
 # ---------------------------------------------------------------------------
 
 
-def classify_completion_failed(failed: ArticleCompletionFailed) -> Terminal:
-    """HTML 補完後の昇格失敗。``completion_*`` prefix で reason_code 化する。"""
-    return Terminal(
-        reason_code=f"completion_{failed.reason.code}",
-        detail=failed.reason.detail,
-    )
+def classify_completion_failed(
+    failed: PublishedAtMissing | CompletionInvariantRejected,
+) -> Terminal:
+    """HTML 補完後の昇格失敗を ``completion_*`` prefix の terminal に分類する。
+
+    variant 型ベースで dispatch し、各 variant の証拠を ``detail`` に畳む。
+    ``reason_code`` は audit 集計 key として安定。
+    """
+    match failed:
+        case PublishedAtMissing():
+            return Terminal(reason_code="completion_published_at_missing")
+        case CompletionInvariantRejected(error_class=ec, error_message=em):
+            return Terminal(
+                reason_code="completion_invariant_rejected",
+                detail=f"{ec}: {em}",
+            )
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 # ---------------------------------------------------------------------------
@@ -211,8 +226,8 @@ def classify_completion_failure(
     """``ArticleHtmlCompleter`` が返す閉じ failure union を 1 点で分類する。
 
     3 classifier (fetch / extraction-failure / promotion) に振り分ける。
-    ``ExtractionFailure`` は union alias でクラスパターン非対応のため、
-    4 variant の OR パターンで展開する。
+    ``ExtractionFailure`` / ``ArticleCompletionFailure`` は union alias で
+    クラスパターン非対応のため、variant 型を OR で列挙する。
     """
     match failure:
         case FetchFailed(error=error):
@@ -221,7 +236,7 @@ def classify_completion_failure(
             NotHtml() | ParserRejected() | ExtractionCrashed() | QualityGateFailed()
         ) as extraction_failure:
             return classify_extraction_failure(extraction_failure)
-        case ArticleCompletionFailed() as failed:
+        case PublishedAtMissing() | CompletionInvariantRejected() as failed:
             return classify_completion_failed(failed)
         case _ as unreachable:
             assert_never(unreachable)

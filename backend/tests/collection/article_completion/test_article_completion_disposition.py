@@ -12,6 +12,10 @@ from __future__ import annotations
 
 import pytest
 
+from app.collection.article_completion.completion_failure import (
+    CompletionInvariantRejected,
+    PublishedAtMissing,
+)
 from app.collection.article_completion.disposition import (
     _RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY,
     _TERMINAL_FETCH_ERROR_TYPES,
@@ -32,10 +36,6 @@ from app.collection.article_completion.retry_policy import (
     OUTAGE_POLICY,
     RETRY_AFTER_POLICY,
     RetryPolicy,
-)
-from app.collection.domain.completion import (
-    ArticleCompletionFailed,
-    ArticleCompletionFailureReason,
 )
 from app.collection.external_fetch_errors import (
     ExternalFetchError,
@@ -257,26 +257,19 @@ def test_extraction_failure_maps_to_terminal_with_evidence_detail(
 
 
 class TestClassifyCompletionFailed:
-    """domain failure を ``completion_*`` prefix の terminal に正規化する。"""
+    """昇格段 failure を ``completion_*`` prefix の terminal に正規化する。"""
 
     def test_published_at_missing(self) -> None:
-        failed = ArticleCompletionFailed(
-            reason=ArticleCompletionFailureReason(
-                code="published_at_missing", detail="rss_and_html_both_missing"
-            )
-        )
+        failed = PublishedAtMissing(observed_had_value=False, html_had_value=False)
         assert classify_completion_failed(failed) == Terminal(
             reason_code="completion_published_at_missing",
-            detail="rss_and_html_both_missing",
         )
 
-    def test_ready_invariant_failed(self) -> None:
-        failed = ArticleCompletionFailed(
-            reason=ArticleCompletionFailureReason(
-                code="ready_invariant_failed", detail="invariant_violation:boom"
-            )
+    def test_invariant_rejected(self) -> None:
+        failed = CompletionInvariantRejected(
+            error_class="ValueError", error_message="boom"
         )
         assert classify_completion_failed(failed) == Terminal(
-            reason_code="completion_ready_invariant_failed",
-            detail="invariant_violation:boom",
+            reason_code="completion_invariant_rejected",
+            detail="ValueError: boom",
         )
