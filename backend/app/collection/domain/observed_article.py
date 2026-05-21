@@ -52,12 +52,22 @@ class ObservedArticle(BaseModel):
     # identity: JSONB 非永続 (列が authoritative)。in-memory では必須。
     # 表層列 ``pending_html_articles.source_name`` / ``url`` が identity の
     # SSoT (spec ``Pending source identity refactor.md`` #1 倒立解消)。
-    source_name: SourceName = Field(alias="sourceName", exclude=True)
+    # ``alias=`` ではなく validation/serialization を分離するのは、Pylance が
+    # ``populate_by_name=True`` を尊重せず ``alias`` 側でしか __init__ 引数を
+    # 受け付けないと誤判定するため。分離すれば __init__ シグネチャは Python
+    # 名となり、runtime も ``populate_by_name=True`` で両名受け付ける。
+    source_name: SourceName = Field(
+        validation_alias="sourceName",
+        serialization_alias="sourceName",
+        exclude=True,
+    )
     source_url: CanonicalArticleUrl = Field(exclude=True)
     title: ObservedField[str] | None = None
     body: ObservedField[str] | None = None
     published_at: ObservedField[PublishedAt] | None = Field(
-        default=None, alias="publishedAt"
+        default=None,
+        validation_alias="publishedAt",
+        serialization_alias="publishedAt",
     )
 
     @classmethod
