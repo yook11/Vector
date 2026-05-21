@@ -114,13 +114,13 @@ async def backfill_extractions(ctx: Context = TaskiqDepends()) -> None:
         logger.warning("backfill_extractions_daily_budget_exhausted", found=found)
         return
 
-    from app.analysis.extraction.domain.ready import ExtractionTrigger
-    from app.analysis.extraction.tasks import extract_content
+    from app.analysis.curation.domain.ready import CurationTrigger
+    from app.analysis.curation.tasks import curate_content
 
     requeued = 0
     for article_id in ids[:granted]:
         try:
-            await extract_content.kiq(ExtractionTrigger(article_id=article_id))
+            await curate_content.kiq(CurationTrigger(article_id=article_id))
             requeued += 1
         except Exception as e:  # noqa: BLE001
             logger.warning(

@@ -10,14 +10,14 @@ task は処理開始時に ``ReadyForArticleCompletion.try_advance_from`` で厚
 - precondition gateway (``status='running'`` 判定 / Ready 物体化):
   ``ArticleCompletionRepository.try_load_for_completion`` の責務 →
   ``tests/collection/article_completion/test_repository.py``
-- 下流 Stage 3 は ID-only ``ExtractionTrigger`` を kiq に渡すのみ
+- 下流 Stage 3 は ID-only ``CurationTrigger`` を kiq に渡すのみ
 
 検証する task 不変条件:
 
 - precondition 未充足 (``try_advance_from`` が ``None``) → skip log + ``None``
   返却、Service 不構築 / chain 発火せず
 - ``int`` (article_id) → ``extract_content.kiq`` を
-  ``ExtractionTrigger(article_id)`` で発火 + success dict 返却
+  ``CurationTrigger(article_id)`` で発火 + success dict 返却
 - ``None`` (lease 衝突 / 永続失敗 / 一時失敗 / race-loss) → ``None``
   返却、chain 発火せず
 """
@@ -30,7 +30,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.analysis.extraction.domain.ready import ExtractionTrigger
+from app.analysis.curation.domain.ready import CurationTrigger
 from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import (
@@ -47,7 +47,7 @@ _SERVICE_EXECUTE = (
     "app.collection.article_completion.service.ArticleCompletionService.execute"
 )
 _SERVICE_CLS = "app.collection.article_completion.service.ArticleCompletionService"
-_EXTRACT_CONTENT_KIQ = "app.analysis.extraction.tasks.extract_content.kiq"
+_CURATE_CONTENT_KIQ = "app.analysis.curation.tasks.curate_content.kiq"
 
 
 def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> MagicMock:
@@ -99,7 +99,7 @@ async def test_precondition_not_met_skips_and_does_not_call_service(
     with (
         _patch_try_advance_from(None),
         patch(_SERVICE_CLS) as mock_svc_cls,
-        patch(_EXTRACT_CONTENT_KIQ) as mock_kiq,
+        patch(_CURATE_CONTENT_KIQ) as mock_kiq,
     ):
         result = await extract_html_body(pending_id=999, ctx=_ctx(session_factory))
 
@@ -114,9 +114,9 @@ async def test_chains_extract_content_with_trigger_when_article_id_returned(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``int`` (article_id) → ``extract_content.kiq`` を Trigger で発火 + success dict."""  # noqa: E501
-    extract_content_kiq = AsyncMock()
+    curate_content_kiq = AsyncMock()
     monkeypatch.setattr(_SERVICE_EXECUTE, AsyncMock(return_value=123))
-    monkeypatch.setattr(_EXTRACT_CONTENT_KIQ, extract_content_kiq)
+    monkeypatch.setattr(_CURATE_CONTENT_KIQ, curate_content_kiq)
 
     with _patch_try_advance_from(_fixed_ready(pending_id=42)):
         result = await extract_html_body(pending_id=42, ctx=_ctx(session_factory))
@@ -126,7 +126,7 @@ async def test_chains_extract_content_with_trigger_when_article_id_returned(
         "article_id": 123,
         "status": "success",
     }
-    extract_content_kiq.assert_awaited_once_with(ExtractionTrigger(article_id=123))
+    curate_content_kiq.assert_awaited_once_with(CurationTrigger(article_id=123))
 
 
 @pytest.mark.asyncio
@@ -135,12 +135,12 @@ async def test_returns_none_when_service_returns_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Service が ``None`` を返したら task も ``None`` 返却、chain は発火しない。"""
-    extract_content_kiq = AsyncMock()
+    curate_content_kiq = AsyncMock()
     monkeypatch.setattr(_SERVICE_EXECUTE, AsyncMock(return_value=None))
-    monkeypatch.setattr(_EXTRACT_CONTENT_KIQ, extract_content_kiq)
+    monkeypatch.setattr(_CURATE_CONTENT_KIQ, curate_content_kiq)
 
     with _patch_try_advance_from(_fixed_ready(pending_id=123)):
         result = await extract_html_body(pending_id=123, ctx=_ctx(session_factory))
 
     assert result is None
-    extract_content_kiq.assert_not_awaited()
+    curate_content_kiq.assert_not_awaited()

@@ -1,7 +1,7 @@
 """収集タスク — パイプラインの前段。
 
-経路: ``dispatch_sources`` → ``ingest_source`` → ``analysis.tasks.extract_content``。
-本文込みで取得できた記事は ``extract_content`` に直接 chain、本文未取得の記事は
+経路: ``dispatch_sources`` → ``ingest_source`` → ``curation.tasks.curate_content``。
+本文込みで取得できた記事は ``curate_content`` に直接 chain、本文未取得の記事は
 ``extract_html_body`` task で HTML 取得 + 抽出 + 永続化へ進む。
 """
 
@@ -112,15 +112,15 @@ async def ingest_source(
     """ソースを取り込む。
 
     ``arg.id`` は ``news_sources.id`` (FK 用)、``arg.name`` は Fetcher dispatch の
-    lookup キー。本文込みで取れた記事は永続化して ``extract_content`` に enqueue、
+    lookup キー。本文込みで取れた記事は永続化して ``curate_content`` に enqueue、
     本文未取得の記事は後段 ``extract_html_body`` task へ進む。
 
     失敗ハンドリング: taskiq inline retry を持たず (``max_retries=0``)、捕捉した
     例外は ``SourceFetchFailureHandler`` に委譲する。次の cron tick で再 dispatch
     される。
     """
-    from app.analysis.extraction.domain.ready import ExtractionTrigger
-    from app.analysis.extraction.tasks import extract_content
+    from app.analysis.curation.domain.ready import CurationTrigger
+    from app.analysis.curation.tasks import curate_content
     from app.collection.source_fetch.service import ArticleAcquisitionService
     from app.collection.source_fetch.strategy import FETCHERS
 
@@ -162,7 +162,7 @@ async def ingest_source(
     )
     # 永続化済 article_id を Trigger に詰めて enqueue。
     for article_id in persisted_ids:
-        await extract_content.kiq(ExtractionTrigger(article_id=article_id))
+        await curate_content.kiq(CurationTrigger(article_id=article_id))
     # 本文未取得分は `pending_html_articles` の DB 駆動。`dispatch_html_fetch_jobs`
     # cron poller が `extract_html_body` に投入するため、ここでは直接 kiq しない。
     payload = {
@@ -195,11 +195,11 @@ async def extract_html_body(
     taskiq retry を持たず cron poller (``dispatch_html_fetch_jobs``) のみで
     再投入する。task は ``ReadyForArticleCompletion.try_advance_from`` で Ready を
     構築し (構築不能なら skip log + ``None``)、Service に渡す。article_id が返れば
-    ``extract_content`` に enqueue、``None`` は何もしない (DB 状態 + audit は
+    ``curate_content`` に enqueue、``None`` は何もしない (DB 状態 + audit は
     Service / failure handler 内で完結済)。
     """
-    from app.analysis.extraction.domain.ready import ExtractionTrigger
-    from app.analysis.extraction.tasks import extract_content
+    from app.analysis.curation.domain.ready import CurationTrigger
+    from app.analysis.curation.tasks import curate_content
     from app.collection.article_completion.ready import ReadyForArticleCompletion
     from app.collection.article_completion.repository import (
         ArticleCompletionRepository,
@@ -224,7 +224,7 @@ async def extract_html_body(
 
     if article_id is None:
         return None
-    await extract_content.kiq(ExtractionTrigger(article_id=article_id))
+    await curate_content.kiq(CurationTrigger(article_id=article_id))
     return {
         "pending_id": pending_id,
         "article_id": article_id,

@@ -65,7 +65,7 @@ async def test_extractions_empty_resets_circuit_and_does_not_dispatch() -> None:
             new=AsyncMock(return_value=0),
         ) as circuit,
         patch("app.maintenance.tasks.consume_daily_budget", new=AsyncMock()) as budget,
-        patch("app.analysis.extraction.tasks.extract_content") as extract_task,
+        patch("app.analysis.curation.tasks.curate_content") as extract_task,
     ):
         await tasks.backfill_extractions(ctx=ctx)
 
@@ -101,7 +101,7 @@ async def test_extractions_circuit_open_short_circuits() -> None:
             new=AsyncMock(return_value=tasks.CIRCUIT_THRESHOLD),
         ),
         patch("app.maintenance.tasks.consume_daily_budget", new=AsyncMock()) as budget,
-        patch("app.analysis.extraction.tasks.extract_content") as extract_task,
+        patch("app.analysis.curation.tasks.curate_content") as extract_task,
     ):
         await tasks.backfill_extractions(ctx=ctx)
 
@@ -139,7 +139,7 @@ async def test_extractions_budget_exhausted_skips_dispatch() -> None:
             "app.maintenance.tasks.consume_daily_budget",
             new=AsyncMock(return_value=0),
         ),
-        patch("app.analysis.extraction.tasks.extract_content") as extract_task,
+        patch("app.analysis.curation.tasks.curate_content") as extract_task,
     ):
         await tasks.backfill_extractions(ctx=ctx)
 
@@ -153,12 +153,12 @@ async def test_extractions_budget_exhausted_skips_dispatch() -> None:
 
 @pytest.mark.asyncio
 async def test_extractions_dispatches_triggers_for_each_article_id() -> None:
-    """対象 article_id を ``ExtractionTrigger`` に詰めて kiq する (案 3)。
+    """対象 article_id を ``CurationTrigger`` に詰めて kiq する (案 3)。
 
     precondition 判定 (article 既消滅 / 既処理) は下流 Stage 3 task に委譲。
     maintenance 層は ID-only Trigger を粛々と enqueue するだけの責務に縮約。
     """
-    from app.analysis.extraction.domain.ready import ExtractionTrigger
+    from app.analysis.curation.domain.ready import CurationTrigger
     from app.maintenance import tasks
 
     ctx = _ctx_with_session_factory()
@@ -186,16 +186,16 @@ async def test_extractions_dispatches_triggers_for_each_article_id() -> None:
             "app.maintenance.tasks.consume_daily_budget",
             new=AsyncMock(return_value=3),
         ),
-        patch("app.analysis.extraction.tasks.extract_content", extract_task),
+        patch("app.analysis.curation.tasks.curate_content", extract_task),
     ):
         await tasks.backfill_extractions(ctx=ctx)
 
     assert extract_task.kiq.await_count == 3
     dispatched = [call.args[0] for call in extract_task.kiq.await_args_list]
     assert dispatched == [
-        ExtractionTrigger(article_id=10),
-        ExtractionTrigger(article_id=20),
-        ExtractionTrigger(article_id=30),
+        CurationTrigger(article_id=10),
+        CurationTrigger(article_id=20),
+        CurationTrigger(article_id=30),
     ]
 
 
@@ -227,7 +227,7 @@ async def test_extractions_continues_when_one_kiq_fails() -> None:
             "app.maintenance.tasks.consume_daily_budget",
             new=AsyncMock(return_value=3),
         ),
-        patch("app.analysis.extraction.tasks.extract_content", extract_task),
+        patch("app.analysis.curation.tasks.curate_content", extract_task),
     ):
         await tasks.backfill_extractions(ctx=ctx)
 

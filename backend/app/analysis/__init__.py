@@ -1,6 +1,6 @@
 """Analysis BC — AI による記事分析と埋め込みベクトル生成。
 
-公開 API は各サブモジュール (``assessment``, ``embedding``, ``extraction``)
+公開 API は各サブモジュール (``curation``, ``assessment``, ``embedding``)
 から直接 import する。
 
 本 ``__init__.py`` を重い re-export ハブにすると、サブパッケージ経由で
