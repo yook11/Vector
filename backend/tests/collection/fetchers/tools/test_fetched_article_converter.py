@@ -238,7 +238,7 @@ def test_html_preferred_profile_blocks_ready_path_even_when_body_and_published_p
     assert result.published_at.value.value == _PUBLISHED
 
 
-def test_any_html_preferred_field_precludes_stage1_ready_even_with_valid_body_and_published() -> (  # noqa: E501
+def test_any_html_preferred_field_requires_html_completion_even_with_valid_body_and_published() -> (  # noqa: E501
     None
 ):
     """非 title field の ``html_preferred`` も Ready 経路を止める。

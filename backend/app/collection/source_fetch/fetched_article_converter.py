@@ -18,11 +18,7 @@ from typing import NoReturn
 import structlog
 
 from app.collection.domain.analyzable_article import AnalyzableArticle
-from app.collection.domain.article_limits import (
-    ARTICLE_BODY_MAX_LENGTH,
-    ARTICLE_BODY_MIN_LENGTH,
-    ARTICLE_TITLE_MAX_LENGTH,
-)
+from app.collection.domain.article_limits import ARTICLE_TITLE_MAX_LENGTH
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import ObservedArticle, ObservedField
 from app.collection.domain.value_objects import PublishedAt
@@ -102,10 +98,8 @@ def convert_fetched_article(
         FetchedArticleConversionError: title / URL 無効、または Observed 構築も
             失敗した entry。
     """
-    body = fetched.body
     source_name = source.name
     origin = source.observed_origin
-    ready_precluded = source.completion_profile.precludes_stage1_ready()
 
     title = fetched.title.strip()[:ARTICLE_TITLE_MAX_LENGTH]
     if not title:
@@ -134,35 +128,32 @@ def convert_fetched_article(
 
     published_at = PublishedAt.from_datetime(fetched.published_at)
 
-    if (
-        not ready_precluded
-        and body is not None
-        and ARTICLE_BODY_MIN_LENGTH <= len(body) <= ARTICLE_BODY_MAX_LENGTH
-        and published_at is not None
-    ):
-        try:
-            article = AnalyzableArticle(
-                title=title,
-                body=body,
-                published_at=published_at,
-                source_id=source_id,
-                source_url=source_url,
-            )
+    if not source.completion_profile.requires_html_completion():
+        article = AnalyzableArticle.try_build(
+            title=title,
+            body=fetched.body,
+            published_at=published_at,
+            source_id=source_id,
+            source_url=source_url,
+        )
+        if article is not None:
             logger.info(
                 "fetched_article_converted",
                 type="analyzable",
                 source_name=str(source_name),
             )
             return article
-        except ValueError:
-            pass
 
     try:
         observed = ObservedArticle(
             source_name=source_name,
             source_url=source_url,
             title=ObservedField(value=title, origin=origin),
-            body=(ObservedField(value=body, origin=origin) if body else None),
+            body=(
+                ObservedField(value=fetched.body, origin=origin)
+                if fetched.body
+                else None
+            ),
             published_at=(
                 ObservedField(value=published_at, origin=origin)
                 if published_at is not None

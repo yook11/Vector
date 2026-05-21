@@ -54,8 +54,8 @@ def test_html_title_profile_matches_equivalence_table() -> None:
     assert p[AnalyzableField.published_at] is FieldCompletionPolicy.observed_preferred
 
 
-def test_html_preferred_policy_precludes_stage1_ready_for_any_field() -> None:
-    """``html_preferred`` がどの field でも Stage-1 Ready を阻害する述語。
+def test_html_preferred_policy_requires_html_completion_for_any_field() -> None:
+    """``html_preferred`` がどの field でも HTML 補完を要求する述語。
 
     title 以外 (body) が ``html_preferred`` でも True を返すことを固定し、
     旧 title 単独 gate ではなく per-field 導出であることを保証する。実 2
@@ -68,6 +68,6 @@ def test_html_preferred_policy_precludes_stage1_ready_for_any_field() -> None:
             AnalyzableField.published_at: FieldCompletionPolicy.observed_preferred,
         }
     )
-    assert body_html_preferred.precludes_stage1_ready()
-    assert not DEFAULT_PROFILE.precludes_stage1_ready()
-    assert HTML_TITLE_PROFILE.precludes_stage1_ready()
+    assert body_html_preferred.requires_html_completion()
+    assert not DEFAULT_PROFILE.requires_html_completion()
+    assert HTML_TITLE_PROFILE.requires_html_completion()

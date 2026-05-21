@@ -55,13 +55,13 @@ class SourceCompletionProfile:
             raise ValueError(msg)
         object.__setattr__(self, "policies", MappingProxyType(dict(self.policies)))
 
-    def precludes_stage1_ready(self) -> bool:
-        """Stage-1 Ready 昇格を profile が許さないか。
+    def requires_html_completion(self) -> bool:
+        """profile が HTML 補完を必要とするか (= ``html_preferred`` field を持つか)。
 
         ``html_preferred`` の field は正本が Stage-2 HTML でしか確定しない。
-        よって 1 つでも ``html_preferred`` があれば、観測事実だけで品質ゲートを
-        満たしても Ready にせず ObservedArticle 保留へ落とす (HTML 補完で正本
-        上書きの機会を残す)。
+        1 つでもあれば、観測事実だけで品質ゲートを満たしても Stage-1 Ready
+        昇格させず ObservedArticle 保留に落とし、HTML 補完で正本上書きの機会
+        を残す。
         """
         return any(
             p is FieldCompletionPolicy.html_preferred for p in self.policies.values()

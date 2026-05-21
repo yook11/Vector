@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from typing import Self
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.collection.domain.article_limits import (
@@ -40,3 +42,36 @@ class AnalyzableArticle(BaseModel):
     published_at: PublishedAt
     source_id: int = Field(gt=0)
     source_url: CanonicalArticleUrl
+
+    @classmethod
+    def try_build(
+        cls,
+        *,
+        title: str,
+        body: str | None,
+        published_at: PublishedAt | None,
+        source_id: int,
+        source_url: CanonicalArticleUrl,
+    ) -> Self | None:
+        """素材から不変条件を満たすときのみ ``AnalyzableArticle`` を構築する。
+
+        不変条件 (title 長 / body 長 / published 存在 / source_id > 0) の判定は
+        Field constraint で構造的に保証されている。本 factory は失敗を値化して
+        呼び出し側が Observed fallback などの通常分岐を if で書けるようにする。
+
+        厳格コンストラクタ ``AnalyzableArticle(...)`` の型契約 (body /
+        published_at 必須) は不変。``try_build`` は素材を Optional で受ける
+        smart constructor。
+        """
+        if body is None or published_at is None:
+            return None
+        try:
+            return cls(
+                title=title,
+                body=body,
+                published_at=published_at,
+                source_id=source_id,
+                source_url=source_url,
+            )
+        except ValueError:
+            return None
