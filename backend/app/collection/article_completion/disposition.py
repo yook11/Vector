@@ -7,8 +7,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import assert_never
+from types import MappingProxyType
+from typing import Final, assert_never
 
 from app.collection.article_completion.completer import (
     CompletionFailure,
@@ -104,30 +106,22 @@ _TERMINAL_FETCH_ERROR_TYPES: tuple[type[ExternalFetchError], ...] = (
 # policy ごとに error type を束ねる。同 policy のグループが一目で分かる形。
 # ``FetchOriginServerError`` は instance state (reason / retry_after_seconds) を
 # 読むため表に入れず ``classify_external_fetch_error`` 内で明示分岐する。
-_RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY: tuple[
-    tuple[RetryPolicy, tuple[type[ExternalFetchError], ...]],
-    ...,
-] = (
-    (
-        BLIP_POLICY,
-        (
+_RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY: Final[
+    Mapping[RetryPolicy, tuple[type[ExternalFetchError], ...]]
+] = MappingProxyType(
+    {
+        BLIP_POLICY: (
             FetchGatewayError,
             FetchNetworkError,
         ),
-    ),
-    (
-        TIMEOUT_POLICY,
-        (FetchTimeoutError,),
-    ),
-    (
-        UNKNOWN_POLICY,
-        (
+        TIMEOUT_POLICY: (FetchTimeoutError,),
+        UNKNOWN_POLICY: (
             FetchRateLimitedError,
             FetchRequestTimeoutError,
             FetchRetryableStatusError,
             FetchUnexpectedStatusError,
         ),
-    ),
+    }
 )
 
 # exact type → disposition の lookup 表。値は frozen dataclass で共有可能。
@@ -135,7 +129,7 @@ _FETCH_DISPOSITION_BY_TYPE: dict[type[ExternalFetchError], CompletionDisposition
     **{t: Terminal(reason_code=t.CODE) for t in _TERMINAL_FETCH_ERROR_TYPES},
     **{
         t: Retryable(reason_code=t.CODE, policy=policy)
-        for policy, types in _RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY
+        for policy, types in _RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY.items()
         for t in types
     },
 }

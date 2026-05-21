@@ -110,7 +110,9 @@ class TestPartitionStructuralGuarantee:
     def test_classification_groups_are_pairwise_disjoint(self) -> None:
         terminal = set(_TERMINAL_FETCH_ERROR_TYPES)
         retryable = {
-            t for _, types in _RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY for t in types
+            t
+            for types in _RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY.values()
+            for t in types
         }
         explicit = {FetchOriginServerError}
         assert terminal.isdisjoint(retryable)
@@ -121,7 +123,9 @@ class TestPartitionStructuralGuarantee:
         # subclass 追加で分類漏れ → この等式が破れてテストが落ちる (構造保証)。
         terminal = set(_TERMINAL_FETCH_ERROR_TYPES)
         retryable = {
-            t for _, types in _RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY for t in types
+            t
+            for types in _RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY.values()
+            for t in types
         }
         explicit = {FetchOriginServerError}
         assert terminal | retryable | explicit == _concrete_subclasses(
@@ -145,12 +149,12 @@ def test_terminal_fetch_error_maps_to_terminal_with_code(
     "policy,cls",
     [
         (policy, cls)
-        for policy, types in _RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY
+        for policy, types in _RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY.items()
         for cls in types
     ],
     ids=[
         f"{policy.code}-{cls.__name__}"
-        for policy, types in _RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY
+        for policy, types in _RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY.items()
         for cls in types
     ],
 )
