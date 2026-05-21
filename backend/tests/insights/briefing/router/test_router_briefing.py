@@ -15,7 +15,7 @@ from app.insights.briefing.domain.briefing import (
     MAX_STORIES_PER_BRIEFING,
     MAX_STORY_TAKEAWAY_LEN,
 )
-from app.models.article_extraction import ArticleExtraction
+from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 from app.models.weekly_briefing import WeeklyBriefing
 
@@ -80,8 +80,8 @@ class TestGetBriefing:
         )
         # extraction relation を lazy load しないために article_id を SQL で取得
         result = await db_session.execute(
-            select(ArticleExtraction.article_id).where(
-                ArticleExtraction.id == analysis.extraction_id
+            select(ArticleCuration.article_id).where(
+                ArticleCuration.id == analysis.curation_id
             )
         )
         article_id = result.scalar_one()

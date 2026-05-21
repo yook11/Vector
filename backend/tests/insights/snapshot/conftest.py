@@ -2,7 +2,7 @@
 
 repository / Service テスト向けの ``seed_analysis`` ファクトリを提供する。
 seed_analysis は 1 件の ``InScopeAssessment`` を関連 ORM (Article /
-ArticleExtraction) とともに作成し、``InScopeAssessment.events`` JSONB に
+ArticleCuration) とともに作成し、``InScopeAssessment.events`` JSONB に
 mention 列を焼き付ける。
 
 PR 2 で集計軸を ``article_extraction_entities`` から
@@ -23,7 +23,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article
-from app.models.article_extraction import ArticleExtraction
+from app.models.article_curation import ArticleCuration
 from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource
 
@@ -69,7 +69,7 @@ def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAn
         db_session.add(article)
         await db_session.flush()
 
-        extraction = ArticleExtraction(
+        extraction = ArticleCuration(
             article_id=article.id,
             translated_title=f"seed-{n}",
             summary="summary body",
@@ -93,7 +93,7 @@ def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAn
             events = []
 
         analysis = InScopeAssessment(
-            extraction_id=extraction.id,
+            curation_id=extraction.id,
             translated_title=f"seed-{n}",
             summary="summary body",
             investor_take="investor take body",

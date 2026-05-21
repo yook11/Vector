@@ -40,7 +40,7 @@ async def _print_in_scope(session: AsyncSession, limit: int) -> None:
     rows = (await session.execute(stmt)).scalars().all()
     print(f"=== in_scope_assessments (latest {len(rows)}) ===")
     for row in rows:
-        print(f"--- id={row.id} extraction_id={row.extraction_id} ---")
+        print(f"--- id={row.id} curation_id={row.curation_id} ---")
         print(f"title: {row.translated_title}")
         print(f"category_id={row.category_id}")
         print(f"investor_take: {row.investor_take[:120]}")
@@ -60,7 +60,7 @@ async def _print_out_of_scope(session: AsyncSession, limit: int) -> None:
     rows = (await session.execute(stmt)).scalars().all()
     print(f"=== out_of_scope_assessments (latest {len(rows)}) ===")
     for row in rows:
-        print(f"--- id={row.id} extraction_id={row.extraction_id} ---")
+        print(f"--- id={row.id} curation_id={row.curation_id} ---")
         print(f"title: {row.translated_title}")
         print(f"investor_take: {row.investor_take[:120]}")
         events = row.events or []

@@ -88,7 +88,7 @@ async def curate_content(
         return
 
     if result is not None:
-        await assess_content.kiq(AssessmentTrigger(extraction_id=result))
+        await assess_content.kiq(AssessmentTrigger(curation_id=result))
 
 
 # PR-E.3 で削除予定。削除条件:

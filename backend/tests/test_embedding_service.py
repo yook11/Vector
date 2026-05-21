@@ -50,7 +50,7 @@ from app.analysis.embedding.errors import (
 )
 from app.analysis.embedding.service import EmbeddingService
 from app.models.article import Article
-from app.models.article_extraction import ArticleExtraction
+from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource
@@ -111,8 +111,8 @@ async def _build_extraction(
     *,
     translated_title: str = "テスト抽出タイトル",
     summary: str = "テスト抽出要約",
-) -> ArticleExtraction:
-    extraction = ArticleExtraction(
+) -> ArticleCuration:
+    extraction = ArticleCuration(
         article_id=article.id,
         translated_title=translated_title,
         summary=summary,
@@ -124,7 +124,7 @@ async def _build_extraction(
 
 async def _build_analysis(
     db_session: AsyncSession,
-    extraction: ArticleExtraction,
+    extraction: ArticleCuration,
     category_id: int,
     *,
     translated_title: str = "分析タイトル",
@@ -132,7 +132,7 @@ async def _build_analysis(
     embedding: list[float] | None = None,
 ) -> InScopeAssessment:
     analysis = InScopeAssessment(
-        extraction_id=extraction.id,
+        curation_id=extraction.id,
         translated_title=translated_title,
         summary=summary,
         investor_take="投資家視点",

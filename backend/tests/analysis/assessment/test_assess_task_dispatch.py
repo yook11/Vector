@@ -64,12 +64,12 @@ def _make_ctx(retry_count: int = 0, max_retries: int = 2) -> MagicMock:
 
 
 def _trigger() -> AssessmentTrigger:
-    return AssessmentTrigger(extraction_id=2)
+    return AssessmentTrigger(curation_id=2)
 
 
 def _fixed_ready() -> ReadyForAssessment:
     return ReadyForAssessment(
-        extraction_id=2,
+        curation_id=2,
         translated_title="title",
         summary="summary",
         article_id=7,

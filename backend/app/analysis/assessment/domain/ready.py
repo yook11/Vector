@@ -32,7 +32,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 
 class AssessmentPreconditionProtocol(Protocol):
@@ -45,7 +45,7 @@ class AssessmentPreconditionProtocol(Protocol):
     """
 
     async def try_load_for_assessment(
-        self, extraction_id: int
+        self, curation_id: int
     ) -> ReadyForAssessment | None: ...
 
 
@@ -58,16 +58,24 @@ class ReadyForAssessment(BaseModel):
     ``ready`` から直接値を取り、自身で DB 逆引きを行わない。
 
     Invariants:
-    - ``extraction_id``: 正の整数 (DB の ArticleExtraction.id を指す)
+    - ``curation_id``: 正の整数 (DB の ArticleCuration.id を指す)
     - ``translated_title`` / ``summary``: Stage 3 で確定済の本文 (assessor 入力)
     - ``article_id``: 正の整数 (audit の ``pipeline_events.article_id`` 列に詰める)
     - ``source_name``: NewsSource.name (audit payload)、FK 切断時は None
     - frozen: 生成後は不変
+
+    Rolling deploy 互換: ``curation_id`` field は ``validation_alias`` で旧
+    ``extraction_id`` field の in-flight message も受け入れる (PR-E.3 で alias
+    削除予定)。
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
 
-    extraction_id: int = Field(gt=0)
+    curation_id: int = Field(
+        gt=0,
+        validation_alias=AliasChoices("curation_id", "extraction_id"),
+        serialization_alias="curation_id",
+    )
     translated_title: str = Field(min_length=1)
     summary: str = Field(min_length=1)
     article_id: int = Field(gt=0)
@@ -77,15 +85,15 @@ class ReadyForAssessment(BaseModel):
     async def try_advance_from(
         cls,
         *,
-        extraction_id: int,
+        curation_id: int,
         repo: AssessmentPreconditionProtocol,
     ) -> ReadyForAssessment | None:
-        """extraction_id から Stage 4 へ advance できるかを判定する gatekeeper。
+        """curation_id から Stage 4 へ advance できるかを判定する gatekeeper。
 
         Precondition (Stage 4 に進める条件):
-        - 同 extraction_id の ArticleExtraction 行が存在
-        - 同 extraction_id の InScopeAssessment 未生成
-        - 同 extraction_id の OutOfScopeAssessment 未生成
+        - 同 curation_id の ArticleCuration 行が存在
+        - 同 curation_id の InScopeAssessment 未生成
+        - 同 curation_id の OutOfScopeAssessment 未生成
 
         本 method は Domain 層の named gateway として
         `Repository.try_load_for_assessment` にそのまま delegate する。
@@ -97,16 +105,16 @@ class ReadyForAssessment(BaseModel):
             進めない場合: `None` (業務正常状態、例外ではない)
 
         Args:
-            extraction_id: 上流 Stage 3 で永続化された ArticleExtraction.id
+            curation_id: 上流 Stage 3 で永続化された ArticleCuration.id
             repo: ``try_load_for_assessment`` を備える Repository
         """
-        return await repo.try_load_for_assessment(extraction_id)
+        return await repo.try_load_for_assessment(curation_id)
 
 
 class AssessmentTrigger(BaseModel):
     """Stage 4 起動 trigger — kiq message 用の軽量 ID キャリア。
 
-    precondition は保証せず ``extraction_id`` のみを運ぶ。下流 Stage 4 Task が
+    precondition は保証せず ``curation_id`` のみを運ぶ。下流 Stage 4 Task が
     ``ReadyForAssessment.try_advance_from`` を呼んで処理開始時に最新の DB 状態から
     Ready を構築する (案 3 = 厚い Ready + 下流 Stage 自身が処理開始時に構築)。
 
@@ -118,12 +126,15 @@ class AssessmentTrigger(BaseModel):
     taskiq formatter は Pydantic BaseModel(frozen=True) を要求するため
     ``BaseModel`` 派生 (memory `feedback_taskiq_basemodel_required.md`)。
 
-    Rolling deploy 互換: Pydantic の既定 extra='ignore' により、旧
-    ``ReadyForAssessment`` (3 fields: extraction_id / translated_title /
-    summary) の in-flight message を新 worker が受信しても
-    ``extraction_id`` だけ取り出して処理できる。
+    Rolling deploy 互換: ``curation_id`` field は ``validation_alias`` で旧
+    ``extraction_id`` field の in-flight message も受け入れる (PR-E.3 で alias
+    削除予定)。
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
 
-    extraction_id: int = Field(gt=0)
+    curation_id: int = Field(
+        gt=0,
+        validation_alias=AliasChoices("curation_id", "extraction_id"),
+        serialization_alias="curation_id",
+    )

@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.article import Article
-from app.models.article_extraction import ArticleExtraction
+from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 from app.models.in_scope_assessment import InScopeAssessment
 from app.repositories.articles import article_eager_options_brief
@@ -26,8 +26,8 @@ class SemanticSearchRepository:
         """セマンティック類似度に基づき記事を検索する (フィルタ+ページング付き)。"""
         stmt = (
             select(InScopeAssessment)
-            .join(InScopeAssessment.extraction)
-            .join(ArticleExtraction.article)
+            .join(InScopeAssessment.curation)
+            .join(ArticleCuration.article)
             .options(*article_eager_options_brief())
         )
 

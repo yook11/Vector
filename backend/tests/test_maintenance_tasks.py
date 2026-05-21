@@ -55,7 +55,7 @@ async def test_extractions_empty_resets_circuit_and_does_not_dispatch() -> None:
     ctx.state.session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
 
     backlog_instance = MagicMock()
-    backlog_instance.article_ids_pending_extraction = AsyncMock(return_value=[])
+    backlog_instance.article_ids_pending_curation = AsyncMock(return_value=[])
 
     with (
         patch.object(tasks.settings, "backfill_extractions_enabled", True),
@@ -91,7 +91,7 @@ async def test_extractions_circuit_open_short_circuits() -> None:
     ctx.state.session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
 
     backlog_instance = MagicMock()
-    backlog_instance.article_ids_pending_extraction = AsyncMock(return_value=[1, 2])
+    backlog_instance.article_ids_pending_curation = AsyncMock(return_value=[1, 2])
 
     with (
         patch.object(tasks.settings, "backfill_extractions_enabled", True),
@@ -126,7 +126,7 @@ async def test_extractions_budget_exhausted_skips_dispatch() -> None:
     ctx.state.session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
 
     backlog_instance = MagicMock()
-    backlog_instance.article_ids_pending_extraction = AsyncMock(return_value=[1, 2, 3])
+    backlog_instance.article_ids_pending_curation = AsyncMock(return_value=[1, 2, 3])
 
     with (
         patch.object(tasks.settings, "backfill_extractions_enabled", True),
@@ -168,9 +168,7 @@ async def test_extractions_dispatches_triggers_for_each_article_id() -> None:
     ctx.state.session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
 
     backlog_instance = MagicMock()
-    backlog_instance.article_ids_pending_extraction = AsyncMock(
-        return_value=[10, 20, 30]
-    )
+    backlog_instance.article_ids_pending_curation = AsyncMock(return_value=[10, 20, 30])
 
     extract_task = MagicMock()
     extract_task.kiq = AsyncMock()
@@ -211,7 +209,7 @@ async def test_extractions_continues_when_one_kiq_fails() -> None:
     ctx.state.session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
 
     backlog_instance = MagicMock()
-    backlog_instance.article_ids_pending_extraction = AsyncMock(return_value=[1, 2, 3])
+    backlog_instance.article_ids_pending_curation = AsyncMock(return_value=[1, 2, 3])
 
     extract_task = MagicMock()
     extract_task.kiq = AsyncMock(side_effect=[RuntimeError("queue down"), None, None])

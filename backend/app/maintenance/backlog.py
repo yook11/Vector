@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from app.models.article import Article
-from app.models.article_extraction import ArticleExtraction
+from app.models.article_curation import ArticleCuration
 from app.models.in_scope_assessment import InScopeAssessment
 from app.models.out_of_scope_assessment import OutOfScopeAssessment
 
@@ -28,19 +28,19 @@ class PipelineBacklog:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def article_ids_pending_extraction(
+    async def article_ids_pending_curation(
         self,
         *,
         created_before: datetime,
         created_after: datetime,
         limit: int,
     ) -> list[int]:
-        """``article_extractions`` の子が無い Article ID を返す (Stage 2a 残)."""
+        """``article_curations`` の子が無い Article ID を返す (Stage 2a 残)."""
         stmt = (
             select(Article.id)
-            .outerjoin(ArticleExtraction, ArticleExtraction.article_id == Article.id)
+            .outerjoin(ArticleCuration, ArticleCuration.article_id == Article.id)
             .where(
-                ArticleExtraction.id.is_(None),
+                ArticleCuration.id.is_(None),
                 Article.created_at < created_before,
                 Article.created_at >= created_after,
             )
@@ -50,31 +50,31 @@ class PipelineBacklog:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
-    async def extraction_ids_pending_assessment(
+    async def curation_ids_pending_assessment(
         self,
         *,
         created_before: datetime,
         created_after: datetime,
         limit: int,
     ) -> list[int]:
-        """extraction はあるが analysis / rejection が無い Extraction ID を返す
+        """curation はあるが analysis / rejection が無い Curation ID を返す
         (Stage 2b 残)。
 
         article 基準の age window を維持しつつ、返却列を ``Article.id`` から
-        ``ArticleExtraction.id`` に変えた版 (案 3: backfill_assessments が
-        ``AssessmentTrigger(extraction_id=...)`` を kiq するため、Article 起点
+        ``ArticleCuration.id`` に変えた版 (案 3: backfill_assessments が
+        ``AssessmentTrigger(curation_id=...)`` を kiq するため、Article 起点
         の 2-hop fetch は不要)。
         """
         stmt = (
-            select(ArticleExtraction.id)
-            .join(Article, Article.id == ArticleExtraction.article_id)
+            select(ArticleCuration.id)
+            .join(Article, Article.id == ArticleCuration.article_id)
             .outerjoin(
                 InScopeAssessment,
-                InScopeAssessment.extraction_id == ArticleExtraction.id,
+                InScopeAssessment.curation_id == ArticleCuration.id,
             )
             .outerjoin(
                 OutOfScopeAssessment,
-                OutOfScopeAssessment.extraction_id == ArticleExtraction.id,
+                OutOfScopeAssessment.curation_id == ArticleCuration.id,
             )
             .where(
                 InScopeAssessment.id.is_(None),
@@ -99,10 +99,10 @@ class PipelineBacklog:
         stmt = (
             select(InScopeAssessment.id)
             .join(
-                ArticleExtraction,
-                ArticleExtraction.id == InScopeAssessment.extraction_id,
+                ArticleCuration,
+                ArticleCuration.id == InScopeAssessment.curation_id,
             )
-            .join(Article, Article.id == ArticleExtraction.article_id)
+            .join(Article, Article.id == ArticleCuration.article_id)
             .where(
                 InScopeAssessment.embedding.is_(None),
                 Article.created_at < created_before,

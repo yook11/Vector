@@ -1,7 +1,7 @@
 """ReadyForCuration — Stage 3 実行可能状態の precondition 型 (案 3: 厚い Ready)。
 
 Stage 3 BC 実装。Stage 3 operation の前提条件 (Article 存在 +
-``article_extractions`` 未生成 + ``extraction_noises`` 未生成 + 本文サイズが
+``article_curations`` 未生成 + ``curation_noises`` 未生成 + 本文サイズが
 system hard cap 以内) を構造保証し、かつ curator 入力 (title / content) も
 含めて運ぶ厚い Ready。
 
@@ -84,8 +84,8 @@ class ReadyForCuration(BaseModel):
 
         Precondition (Stage 3 に進める条件):
         - 同 article_id の Article 行が存在
-        - 同 article_id の ``article_extractions`` 行が未生成
-        - 同 article_id の ``extraction_noises`` 行が未生成 (Stage 1 で既に
+        - 同 article_id の ``article_curations`` 行が未生成
+        - 同 article_id の ``curation_noises`` 行が未生成 (Stage 1 で既に
           noise 判定済の記事を再処理しない)
         - 本文長が ``MAX_CONTENT_LENGTH`` 以内 (system hard cap)
 

@@ -19,6 +19,10 @@
   ``tests/analysis/curation/ai/test_gemini_prompt.py`` の
   ``test_version_locked_post_pr2`` 参照。**class rename 後も ``title`` は
   wire format として ``"ExtractionResult"`` を維持** (prompt_version hash 連続性)。
+- class docstring 本文も ``model_json_schema()`` の ``description`` 経由で
+  prompt_version hash の入力になる。curation rename (PR-E.1) 後も docstring
+  内の table 名 (``extraction_noises``) は **意図的に旧名を保持** する
+  (意味的変更を伴わない rename で hash を rotate しない規律)。
 """
 
 from __future__ import annotations

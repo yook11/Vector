@@ -5,17 +5,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import contains_eager, defer, selectinload
 
 from app.models.article import Article
-from app.models.article_extraction import ArticleExtraction
+from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 from app.models.in_scope_assessment import InScopeAssessment
 from app.schemas.articles import ArticleListParams, SortOrder
 
 
 def article_eager_options_brief() -> list:
-    """一覧用. 呼び出し側で extraction → article まで join 済みであること."""
+    """一覧用. 呼び出し側で curation → article まで join 済みであること."""
     return [
-        contains_eager(InScopeAssessment.extraction)
-        .contains_eager(ArticleExtraction.article)
+        contains_eager(InScopeAssessment.curation)
+        .contains_eager(ArticleCuration.article)
         .options(
             defer(Article.original_content, raiseload=True),
             selectinload(Article.news_source),
@@ -24,10 +24,10 @@ def article_eager_options_brief() -> list:
 
 
 def article_eager_options_detail() -> list:
-    """詳細用. 呼び出し側で extraction → article まで join 済みであること."""
+    """詳細用. 呼び出し側で curation → article まで join 済みであること."""
     return [
-        contains_eager(InScopeAssessment.extraction)
-        .contains_eager(ArticleExtraction.article)
+        contains_eager(InScopeAssessment.curation)
+        .contains_eager(ArticleCuration.article)
         .options(
             defer(Article.original_content, raiseload=True),
             selectinload(Article.news_source),
@@ -48,8 +48,8 @@ class ArticleRepository:
         """ニュース閲覧用にページング済みの記事一覧を取得する."""
         stmt = (
             select(InScopeAssessment)
-            .join(InScopeAssessment.extraction)
-            .join(ArticleExtraction.article)
+            .join(InScopeAssessment.curation)
+            .join(ArticleCuration.article)
             .options(*article_eager_options_brief())
         )
 
@@ -83,8 +83,8 @@ class ArticleRepository:
         """
         stmt = (
             select(InScopeAssessment)
-            .join(InScopeAssessment.extraction)
-            .join(ArticleExtraction.article)
+            .join(InScopeAssessment.curation)
+            .join(ArticleCuration.article)
             .where(InScopeAssessment.id == article_id)
             .options(*article_eager_options_detail())
         )
@@ -102,8 +102,8 @@ class ArticleRepository:
     async def delete_by_id(self, article_id: int) -> int:
         """指定 ID の記事を物理削除する。
 
-        ``ondelete=CASCADE`` により ``article_extractions`` /
-        ``extraction_noises`` を経由して ``in_scope_assessments`` /
+        ``ondelete=CASCADE`` により ``article_curations`` /
+        ``curation_noises`` を経由して ``in_scope_assessments`` /
         ``out_of_scope_assessments`` まで削除される。
         ``pipeline_events.article_id`` は ``ondelete=SET NULL``
         のため監査行は残り、``source_id`` で起点ソースを追跡可能。
@@ -136,8 +136,8 @@ class ArticleRepository:
 
         stmt = (
             select(InScopeAssessment)
-            .join(InScopeAssessment.extraction)
-            .join(ArticleExtraction.article)
+            .join(InScopeAssessment.curation)
+            .join(ArticleCuration.article)
             .join(source_embedding, true())
             .options(*article_eager_options_brief())
             .where(

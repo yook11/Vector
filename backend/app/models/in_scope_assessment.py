@@ -1,6 +1,6 @@
-"""Stage 4 (Assessment) で in-scope と判定された extraction の評価結果 (ORM)。
+"""Stage 4 (Assessment) で in-scope と判定された curation の評価結果 (ORM)。
 
-translated_title / summary は extractions から複製保持し、assessment 単独で
+translated_title / summary は curation から複製保持し、assessment 単独で
 「ユーザーに見せる分析結果」として自己完結する。Category は第一級フィルタ軸
 として直接 FK を持つ。
 """
@@ -27,7 +27,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
 
 if TYPE_CHECKING:
-    from app.models.article_extraction import ArticleExtraction
+    from app.models.article_curation import ArticleCuration
     from app.models.watchlist_entry import WatchlistEntry
 
 
@@ -35,11 +35,11 @@ __all__ = ["InScopeAssessment"]
 
 
 class InScopeAssessment(Base):
-    """Stage 4 で in-scope と判定された extraction の評価結果 (ORM)。"""
+    """Stage 4 で in-scope と判定された curation の評価結果 (ORM)。"""
 
     __tablename__ = "in_scope_assessments"
     __table_args__ = (
-        UniqueConstraint("extraction_id", name="uq_in_scope_assessments_extraction_id"),
+        UniqueConstraint("curation_id", name="uq_in_scope_assessments_curation_id"),
         CheckConstraint(
             "translated_title != ''",
             name="ck_in_scope_assessments_translated_title_not_empty",
@@ -62,8 +62,8 @@ class InScopeAssessment(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    extraction_id: Mapped[int] = mapped_column(
-        ForeignKey("article_extractions.id", ondelete="CASCADE"),
+    curation_id: Mapped[int] = mapped_column(
+        ForeignKey("article_curations.id", ondelete="CASCADE"),
     )
     translated_title: Mapped[str] = mapped_column(String(500))
     summary: Mapped[str] = mapped_column(Text())
@@ -82,7 +82,7 @@ class InScopeAssessment(Base):
     events: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
 
     # リレーション
-    extraction: Mapped[ArticleExtraction] = relationship(
+    curation: Mapped[ArticleCuration] = relationship(
         back_populates="in_scope_assessment"
     )
     watchlist_entries: Mapped[list[WatchlistEntry]] = relationship(

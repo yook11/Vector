@@ -7,7 +7,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article
-from app.models.article_extraction import ArticleExtraction
+from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource
@@ -34,7 +34,7 @@ async def _build_article_with_analysis(
     )
     db_session.add(article)
     await db_session.flush()
-    extraction = ArticleExtraction(
+    extraction = ArticleCuration(
         article_id=article.id,
         translated_title=translated_title,
         summary=summary,
@@ -42,7 +42,7 @@ async def _build_article_with_analysis(
     db_session.add(extraction)
     await db_session.flush()
     analysis = InScopeAssessment(
-        extraction_id=extraction.id,
+        curation_id=extraction.id,
         translated_title=translated_title,
         summary=summary,
         investor_take=investor_take,
@@ -51,7 +51,7 @@ async def _build_article_with_analysis(
     db_session.add(analysis)
     await db_session.commit()
     await db_session.refresh(analysis)
-    await db_session.refresh(article, ["extraction"])
+    await db_session.refresh(article, ["curation"])
     return article, analysis
 
 

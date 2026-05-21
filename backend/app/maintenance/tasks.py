@@ -92,7 +92,7 @@ async def backfill_extractions(ctx: Context = TaskiqDepends()) -> None:
 
     async with session_factory() as session:
         backlog = PipelineBacklog(session)
-        ids = await backlog.article_ids_pending_extraction(
+        ids = await backlog.article_ids_pending_curation(
             created_before=before,
             created_after=after,
             limit=EXTRACTIONS_LIMIT,
@@ -158,7 +158,7 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
 
     案 3 (厚い Ready + 下流 Stage 自身が処理開始時に構築): maintenance は
     「投入数を見る」役割に縮退し、precondition 検証 + Ready 構築は下流 Stage 4
-    task に委ねる。各 extraction_id を ``AssessmentTrigger`` に詰めて kiq に
+    task に委ねる。各 curation_id を ``AssessmentTrigger`` に詰めて kiq に
     流すだけ。stale trigger (既 assess 済など) は Stage 4 task の
     ``assess_content_skipped`` ログで観測する。
     """
@@ -171,7 +171,7 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
 
     async with session_factory() as session:
         backlog = PipelineBacklog(session)
-        ids = await backlog.extraction_ids_pending_assessment(
+        ids = await backlog.curation_ids_pending_assessment(
             created_before=before,
             created_after=after,
             limit=ASSESSMENTS_LIMIT,
@@ -200,16 +200,16 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
     # Stage 4 Task 自身が処理開始時に行う。stale trigger は Stage 4 の
     # ``assess_content_skipped`` ログで観測する。
     requeued = 0
-    for extraction_id in ids[:granted]:
+    for curation_id in ids[:granted]:
         try:
             await assess_content.kiq(
-                AssessmentTrigger(extraction_id=extraction_id),
+                AssessmentTrigger(curation_id=curation_id),
             )
             requeued += 1
         except Exception as e:  # noqa: BLE001
             logger.warning(
                 "backfill_assessments_kiq_failed",
-                extraction_id=extraction_id,
+                curation_id=curation_id,
                 error=str(e),
             )
             continue

@@ -20,8 +20,8 @@ from app.models.types import SafeUrlType
 from app.shared.value_objects.safe_url import SafeUrl
 
 if TYPE_CHECKING:
-    from app.models.article_extraction import ArticleExtraction
-    from app.models.extraction_noise import ExtractionNoise
+    from app.models.article_curation import ArticleCuration
+    from app.models.curation_noise import CurationNoise
     from app.models.news_source import NewsSource
 
 
@@ -57,10 +57,10 @@ class Article(Base):
 
     # source_id FK 経由の直 relationship。
     news_source: Mapped[NewsSource] = relationship()
-    extraction: Mapped[ArticleExtraction | None] = relationship(
+    curation: Mapped[ArticleCuration | None] = relationship(
         back_populates="article", uselist=False
     )
-    extraction_noise: Mapped[ExtractionNoise | None] = relationship(
+    curation_noise: Mapped[CurationNoise | None] = relationship(
         back_populates="article", uselist=False
     )
 

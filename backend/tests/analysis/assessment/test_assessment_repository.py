@@ -39,7 +39,7 @@ from app.analysis.assessment.domain.result import (
 from app.analysis.assessment.errors import AssessmentCategoryMissingError
 from app.analysis.assessment.repository import AssessmentRepository
 from app.models.article import Article
-from app.models.article_extraction import ArticleExtraction
+from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 from app.models.in_scope_assessment import (
     InScopeAssessment as InScopeAssessmentORM,
@@ -54,7 +54,7 @@ _AI_MODEL = "gemini-2.5-flash-lite"
 
 async def _make_extraction(
     db_session: AsyncSession, sample_source: NewsSource
-) -> ArticleExtraction:
+) -> ArticleCuration:
     article = Article(
         source_id=sample_source.id,
         source_url="https://e.com/repo-test",  # type: ignore[arg-type]
@@ -65,7 +65,7 @@ async def _make_extraction(
     db_session.add(article)
     await db_session.commit()
     await db_session.refresh(article)
-    extraction = ArticleExtraction(
+    extraction = ArticleCuration(
         article_id=article.id,
         translated_title="抽出タイトル",
         summary="抽出要約",
@@ -77,10 +77,10 @@ async def _make_extraction(
 
 
 def _ready(
-    extraction: ArticleExtraction, *, source_name: str | None = "Test Source"
+    extraction: ArticleCuration, *, source_name: str | None = "Test Source"
 ) -> ReadyForAssessment:
     return ReadyForAssessment(
-        extraction_id=extraction.id,
+        curation_id=extraction.id,
         translated_title=extraction.translated_title,
         summary=extraction.summary,
         article_id=extraction.article_id,
@@ -145,7 +145,7 @@ async def test_save_out_of_scope_persists_snapshot_fields(
     row = (
         await db_session.execute(
             select(OutOfScopeAssessmentORM).where(
-                OutOfScopeAssessmentORM.extraction_id == extraction.id
+                OutOfScopeAssessmentORM.curation_id == extraction.id
             )
         )
     ).scalar_one()
@@ -164,7 +164,7 @@ async def test_save_out_of_scope_returns_none_on_race_lost(
     extraction = await _make_extraction(db_session, sample_source)
     # 勝者を先に焼く
     winner = OutOfScopeAssessmentORM(
-        extraction_id=extraction.id,
+        curation_id=extraction.id,
         translated_title="勝者タイトル",
         summary="勝者要約",
         investor_take="winner take",
@@ -176,7 +176,7 @@ async def test_save_out_of_scope_returns_none_on_race_lost(
     saved_id = await repo.save_out_of_scope(
         _out_of_scope_call(investor_take="loser take"),
         ready=ReadyForAssessment(
-            extraction_id=extraction.id,
+            curation_id=extraction.id,
             translated_title="敗者タイトル",
             summary="敗者要約",
             article_id=extraction.article_id,
@@ -190,7 +190,7 @@ async def test_save_out_of_scope_returns_none_on_race_lost(
     row = (
         await db_session.execute(
             select(OutOfScopeAssessmentORM).where(
-                OutOfScopeAssessmentORM.extraction_id == extraction.id
+                OutOfScopeAssessmentORM.curation_id == extraction.id
             )
         )
     ).scalar_one()
@@ -226,7 +226,7 @@ async def test_save_in_scope_persists_snapshot_fields(
     row = (
         await db_session.execute(
             select(InScopeAssessmentORM).where(
-                InScopeAssessmentORM.extraction_id == extraction.id
+                InScopeAssessmentORM.curation_id == extraction.id
             )
         )
     ).scalar_one()
@@ -246,7 +246,7 @@ async def test_save_in_scope_returns_none_on_race_lost(
     extraction = await _make_extraction(db_session, sample_source)
     ai_cat = next(c for c in sample_categories if str(c.slug) == "ai")
     winner = InScopeAssessmentORM(
-        extraction_id=extraction.id,
+        curation_id=extraction.id,
         translated_title="勝者タイトル",
         summary="勝者要約",
         category_id=ai_cat.id,
@@ -293,7 +293,7 @@ async def test_save_in_scope_persists_events_jsonb(
     row = (
         await db_session.execute(
             select(InScopeAssessmentORM).where(
-                InScopeAssessmentORM.extraction_id == extraction.id
+                InScopeAssessmentORM.curation_id == extraction.id
             )
         )
     ).scalar_one()
@@ -324,7 +324,7 @@ async def test_save_in_scope_persists_empty_events_as_empty_list(
     row = (
         await db_session.execute(
             select(InScopeAssessmentORM).where(
-                InScopeAssessmentORM.extraction_id == extraction.id
+                InScopeAssessmentORM.curation_id == extraction.id
             )
         )
     ).scalar_one()
@@ -355,7 +355,7 @@ async def test_save_out_of_scope_persists_events_jsonb(
     row = (
         await db_session.execute(
             select(OutOfScopeAssessmentORM).where(
-                OutOfScopeAssessmentORM.extraction_id == extraction.id
+                OutOfScopeAssessmentORM.curation_id == extraction.id
             )
         )
     ).scalar_one()
@@ -383,7 +383,7 @@ async def test_save_out_of_scope_persists_empty_events_as_empty_list(
     row = (
         await db_session.execute(
             select(OutOfScopeAssessmentORM).where(
-                OutOfScopeAssessmentORM.extraction_id == extraction.id
+                OutOfScopeAssessmentORM.curation_id == extraction.id
             )
         )
     ).scalar_one()
@@ -426,7 +426,7 @@ async def test_try_load_returns_ready_when_no_assessment(
     ready = await repo.try_load_for_assessment(extraction.id)
 
     assert ready is not None
-    assert ready.extraction_id == extraction.id
+    assert ready.curation_id == extraction.id
     assert ready.translated_title == extraction.translated_title
     assert ready.summary == extraction.summary
     assert ready.article_id == extraction.article_id
@@ -444,7 +444,7 @@ async def test_try_load_returns_none_when_in_scope_exists(
     ai_cat = next(c for c in sample_categories if str(c.slug) == "ai")
     db_session.add(
         InScopeAssessmentORM(
-            extraction_id=extraction.id,
+            curation_id=extraction.id,
             translated_title="t",
             summary="s",
             category_id=ai_cat.id,
@@ -466,7 +466,7 @@ async def test_try_load_returns_none_when_out_of_scope_exists(
     extraction = await _make_extraction(db_session, sample_source)
     db_session.add(
         OutOfScopeAssessmentORM(
-            extraction_id=extraction.id,
+            curation_id=extraction.id,
             translated_title="t",
             summary="s",
             investor_take="x",

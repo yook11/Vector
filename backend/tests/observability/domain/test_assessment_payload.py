@@ -83,7 +83,7 @@ def test_state_fields_optional_default_none() -> None:
     assert payload.source_name is None
     assert payload.error_message is None
     assert payload.error_chain is None
-    assert payload.extraction_id is None
+    assert payload.curation_id is None
     assert payload.ai_model is None
     assert payload.prompt_version is None
     assert payload.input_text is None
@@ -98,7 +98,7 @@ def test_full_in_scope_payload_construction() -> None:
     """全 field を埋めた in-scope 成功状態の構築 (型整合)。"""
     payload = AssessmentPayload(
         source_name="VentureBeat",
-        extraction_id=42,
+        curation_id=42,
         ai_model="gemini-2.5-pro",
         prompt_version="abcd1234",
         input_text="summary text",
@@ -108,7 +108,7 @@ def test_full_in_scope_payload_construction() -> None:
         category_slug="ai",
         investor_take="bullish for inference vendors",
     )
-    assert payload.extraction_id == 42
+    assert payload.curation_id == 42
     assert payload.category_slug == "ai"
     assert payload.investor_take == "bullish for inference vendors"
 
@@ -132,7 +132,7 @@ def test_serialization_roundtrip() -> None:
     """
     original = AssessmentPayload(
         source_name="VentureBeat",
-        extraction_id=42,
+        curation_id=42,
         ai_model="gemini-2.5-pro",
         category_slug="ai",
         investor_take="bullish",

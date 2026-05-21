@@ -1,7 +1,7 @@
 """RecurationService — 既存 Article に対する Stage 3 再 curation orchestrator。
 
 Phase 1B α-1 の clean break に伴い、過去に旧 prompt / 旧 schema で curation された
-``ArticleExtraction`` を新 prompt / 新 schema (surface + raw_type) で
+``ArticleCuration`` を新 prompt / 新 schema (surface + raw_type) で
 再生成するための CLI 用 Application Service。
 
 責務:
@@ -20,7 +20,7 @@ Phase 1B α-1 の clean break に伴い、過去に旧 prompt / 旧 schema で c
 Design notes:
 
 - ``Article`` は既存 ``ReadyForCuration`` を経由しない (再 curation 対象は既に
-  ``ArticleExtraction`` を持つので Pattern A' の precondition「未生成」と矛盾する)。
+  ``ArticleCuration`` を持つので Pattern A' の precondition「未生成」と矛盾する)。
   本サービスは fetch を内部で行い、無い article_id は ``skipped`` に集約する。
 - curator は呼び出し側で構築 (Pure DI / composition root pattern):
   feedback_pure_di_composition_root.md
@@ -63,7 +63,7 @@ class RecurationSummary:
       候補) に成功
     - ``failed_ids``: ``CurationTerminalKeepError`` (Configuration / Balance 等)
       で即失敗、または ``CurationRecoverableError`` が ``max_retries`` 回再現
-    - ``skipped_ids``: Article 不在 / 既存 ArticleExtraction 不在 /
+    - ``skipped_ids``: Article 不在 / 既存 ArticleCuration 不在 /
       ``CurationTerminalDropError`` (input rejected / output blocked)
     - ``dry_run``: ``True`` の場合は永続化していない (rollback 済み)
     """
@@ -78,7 +78,7 @@ class RecurationService:
     """既存 Article に対する Stage 3 再 curation ユースケースの orchestrator。
 
     1 article ごとに 1 transaction を張り、`update_signal_idempotent` で
-    parent ``ArticleExtraction`` を UPDATE のみで差し替える。
+    parent ``ArticleCuration`` を UPDATE のみで差し替える。
     """
 
     def __init__(
@@ -145,10 +145,10 @@ class RecurationService:
             if not await CurationRepository(session).signal_exists_for_article(
                 article_id
             ):
-                # 再 curation は既存 extraction の差し替えが目的。新規生成は通常
+                # 再 curation は既存 curation の差し替えが目的。新規生成は通常
                 # pipeline 任せ (CLI で orphan articles を curation しない)。
                 logger.warning(
-                    "re_curate_skip_no_existing_extraction", article_id=article_id
+                    "re_curate_skip_no_existing_curation", article_id=article_id
                 )
                 return "skipped"
 
@@ -185,14 +185,14 @@ class RecurationService:
             return "failed"
 
         # ``CurationCall[Signal]`` のみ ``update_signal_idempotent`` に渡せる
-        # 型 narrow。Noise が返った場合は既存 ArticleExtraction を上書きしない
+        # 型 narrow。Noise が返った場合は既存 ArticleCuration を上書きしない
         # (データ破壊防止の構造的保証、``feedback_structural_guarantee``)。
         match envelope:
             case CurationCall(result=Signal()):
                 started = perf_counter()
                 async with self._session_factory() as session:
                     repo = CurationRepository(session)
-                    extraction_id = await repo.update_signal_idempotent(
+                    curation_id = await repo.update_signal_idempotent(
                         envelope, article_id=article_id
                     )
                     if dry_run:
@@ -204,14 +204,14 @@ class RecurationService:
                 logger.info(
                     "re_curate_progress",
                     article_id=article_id,
-                    extraction_id=extraction_id,
+                    curation_id=curation_id,
                     elapsed_ms=elapsed_ms,
                     dry_run=dry_run,
                 )
                 return "success"
             case CurationCall(result=Noise()):
                 # 既存の signal 抽出に対し再 curation で Noise が返った場合は触らない。
-                # ``ArticleExtraction`` の上書きは型レベルで禁止
+                # ``ArticleCuration`` の上書きは型レベルで禁止
                 # (``update_signal_idempotent`` は ``CurationCall[Signal]`` のみ
                 # 受け付ける)。
                 logger.warning(

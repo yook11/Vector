@@ -44,7 +44,7 @@ from app.analysis.assessment.errors import (
 )
 from app.analysis.assessment.service import AssessmentService
 from app.models.article import Article
-from app.models.article_extraction import ArticleExtraction
+from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 from app.models.in_scope_assessment import InScopeAssessment as InScopeAssessmentORM
 from app.models.news_source import NewsSource
@@ -82,8 +82,8 @@ async def _make_article(
 
 async def _make_extraction(
     db_session: AsyncSession, article: Article
-) -> ArticleExtraction:
-    extraction = ArticleExtraction(
+) -> ArticleCuration:
+    extraction = ArticleCuration(
         article_id=article.id,
         translated_title="title",
         summary="summary text",
@@ -94,9 +94,9 @@ async def _make_extraction(
     return extraction
 
 
-def _ready(extraction: ArticleExtraction) -> ReadyForAssessment:
+def _ready(extraction: ArticleCuration) -> ReadyForAssessment:
     return ReadyForAssessment(
-        extraction_id=extraction.id,
+        curation_id=extraction.id,
         translated_title=extraction.translated_title,
         summary=extraction.summary,
         article_id=extraction.article_id,
@@ -189,7 +189,7 @@ async def test_in_scope_success_records_audit(
     assert ev.category == "success"
     assert ev.code == "assessed_in_scope"
     payload = ev.payload
-    assert payload["extraction_id"] == extraction.id
+    assert payload["curation_id"] == extraction.id
     assert payload["investor_take"] == "bullish"
     assert payload["ai_model"] == _AI_MODEL
     assert payload["category_slug"] == "ai"
@@ -219,7 +219,7 @@ async def test_out_of_scope_success_records_audit(
     assert ev.category == "success"
     assert ev.code == "assessed_out_of_scope"
     payload = ev.payload
-    assert payload["extraction_id"] == extraction.id
+    assert payload["curation_id"] == extraction.id
     # PR #447 対称化追従: investor_take は本体 DB と一致 (非 None)
     assert payload.get("investor_take") == "not relevant"
     # in-scope 固有 field のみ None (category_slug)
@@ -228,7 +228,7 @@ async def test_out_of_scope_success_records_audit(
     persisted = (
         await db_session.execute(
             select(OutOfScopeAssessmentORM).where(
-                OutOfScopeAssessmentORM.extraction_id == extraction.id
+                OutOfScopeAssessmentORM.curation_id == extraction.id
             )
         )
     ).scalar_one()
@@ -257,7 +257,7 @@ async def test_race_lost_does_not_record_audit(
     extraction = await _make_extraction(db_session, article)
     # 勝者 row を先に焼いておく (本 test は敗者経路)
     winner = InScopeAssessmentORM(
-        extraction_id=extraction.id,
+        curation_id=extraction.id,
         translated_title="title",
         summary="summary text",
         category_id=sample_categories[0].id,
@@ -302,7 +302,7 @@ async def test_provider_network_error_is_wrapped_to_recoverable_marker(
     assessor = _make_assessor(side_effect=provider_exc)
 
     ready = ReadyForAssessment(
-        extraction_id=1,
+        curation_id=1,
         translated_title="t",
         summary="s",
         article_id=1,
@@ -325,7 +325,7 @@ async def test_provider_configuration_error_is_wrapped_to_terminal_skip_marker(
     assessor = _make_assessor(side_effect=provider_exc)
 
     ready = ReadyForAssessment(
-        extraction_id=1,
+        curation_id=1,
         translated_title="t",
         summary="s",
         article_id=1,
@@ -430,7 +430,7 @@ async def test_audit_rolled_back_when_commit_fails(
         (
             await db_session.execute(
                 select(InScopeAssessmentORM).where(
-                    InScopeAssessmentORM.extraction_id == extraction.id
+                    InScopeAssessmentORM.curation_id == extraction.id
                 )
             )
         )
@@ -456,7 +456,7 @@ async def test_out_of_scope_race_lost_does_not_record_audit(
     extraction = await _make_extraction(db_session, article)
     # 勝者を先に焼く
     winner = OutOfScopeAssessmentORM(
-        extraction_id=extraction.id,
+        curation_id=extraction.id,
         translated_title="title",
         summary="summary text",
         investor_take="not relevant",

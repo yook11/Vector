@@ -1,9 +1,9 @@
-"""Stage 3 (extraction) で noise 判定された記事の永続化 ORM モデル。
+"""Stage 3 (curation) で noise 判定された記事の永続化 ORM モデル。
 
-``article_extractions`` (signal 側) と排他関係を DB トリガー対称ペア
-(``p1_add_extraction_noises`` migration) で構造的に強制する。1 article に
-対し ``article_extractions`` または ``extraction_noises`` のどちらか一方
-しか存在できない。
+``article_curations`` (signal 側) と排他関係を DB トリガー対称ペア
+(``t2_curation_table_rename`` migration で再作成) で構造的に強制する。
+1 article に対し ``article_curations`` または ``curation_noises`` のどちらか
+一方しか存在できない。
 """
 
 from __future__ import annotations
@@ -28,22 +28,22 @@ from app.models.base import Base
 if TYPE_CHECKING:
     from app.models.article import Article
 
-__all__ = ["ExtractionNoise"]
+__all__ = ["CurationNoise"]
 
 
-class ExtractionNoise(Base):
+class CurationNoise(Base):
     """Stage 3 で ``relevance="noise"`` と判定された記事の記録。"""
 
-    __tablename__ = "extraction_noises"
+    __tablename__ = "curation_noises"
     __table_args__ = (
-        UniqueConstraint("article_id", name="uq_extraction_noises_article_id"),
+        UniqueConstraint("article_id", name="uq_curation_noises_article_id"),
         CheckConstraint(
             "title_ja <> ''",
-            name="ck_extraction_noises_title_ja_not_empty",
+            name="ck_curation_noises_title_ja_not_empty",
         ),
         CheckConstraint(
             "summary_ja <> ''",
-            name="ck_extraction_noises_summary_ja_not_empty",
+            name="ck_curation_noises_summary_ja_not_empty",
         ),
     )
 
@@ -58,4 +58,4 @@ class ExtractionNoise(Base):
         DateTime(timezone=True), server_default=func.now()
     )
 
-    article: Mapped[Article] = relationship(back_populates="extraction_noise")
+    article: Mapped[Article] = relationship(back_populates="curation_noise")

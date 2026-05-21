@@ -49,7 +49,7 @@ from app.analysis.assessment.errors import (
     AssessmentTerminalSkipError,
 )
 from app.models.article import Article
-from app.models.article_extraction import ArticleExtraction
+from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 from app.models.in_scope_assessment import InScopeAssessment as InScopeAssessmentORM
 from app.models.news_source import NewsSource
@@ -90,8 +90,8 @@ async def _make_extraction(
     article: Article,
     *,
     summary: str = "summary text",
-) -> ArticleExtraction:
-    extraction = ArticleExtraction(
+) -> ArticleCuration:
+    extraction = ArticleCuration(
         article_id=article.id,
         translated_title="title",
         summary=summary,
@@ -103,13 +103,13 @@ async def _make_extraction(
 
 
 def _ready(
-    extraction: ArticleExtraction,
+    extraction: ArticleCuration,
     *,
     summary: str | None = None,
     source_name: str | None = "Test Source",
 ) -> ReadyForAssessment:
     return ReadyForAssessment(
-        extraction_id=extraction.id,
+        curation_id=extraction.id,
         translated_title=extraction.translated_title,
         summary=summary if summary is not None else extraction.summary,
         article_id=extraction.article_id,
@@ -152,7 +152,7 @@ def _out_of_scope_call() -> AssessmentCall[OutOfScope]:
 
 async def _persist_in_scope(
     db_session: AsyncSession,
-    extraction: ArticleExtraction,
+    extraction: ArticleCuration,
     category: Category,
 ) -> InScopeAssessmentORM:
     """テスト用に in_scope_assessments 行を 1 件焼いて ORM を返す。
@@ -161,7 +161,7 @@ async def _persist_in_scope(
     で audit row を引くための業務 row を焼くために使う。
     """
     orm = InScopeAssessmentORM(
-        extraction_id=extraction.id,
+        curation_id=extraction.id,
         translated_title="title",
         summary="summary text",
         category_id=category.id,
@@ -175,11 +175,11 @@ async def _persist_in_scope(
 
 async def _persist_out_of_scope(
     db_session: AsyncSession,
-    extraction: ArticleExtraction,
+    extraction: ArticleCuration,
 ) -> OutOfScopeAssessmentORM:
     """テスト用に out_of_scope_assessments 行を 1 件焼いて ORM を返す。"""
     orm = OutOfScopeAssessmentORM(
-        extraction_id=extraction.id,
+        curation_id=extraction.id,
         translated_title=extraction.translated_title,
         summary=extraction.summary,
         investor_take="not relevant",
@@ -233,7 +233,7 @@ async def test_append_in_scope_records_success_with_code(
     assert ev.outcome_code == "assessed_in_scope"
     assert ev.category == "success"
     assert ev.code == "assessed_in_scope"
-    assert ev.payload["extraction_id"] == extraction.id
+    assert ev.payload["curation_id"] == extraction.id
     assert ev.payload["investor_take"] == "bullish"
     assert ev.payload["ai_model"] == _AI_MODEL
 
@@ -683,12 +683,12 @@ async def test_append_failure_records_attempt(
 
 
 @pytest.mark.asyncio
-async def test_append_failure_records_extraction_id_in_payload(
+async def test_append_failure_records_curation_id_in_payload(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """payload.extraction_id が ready.extraction_id と一致する。
+    """payload.curation_id が ready.curation_id と一致する。
 
     Stage 4 固有 identifier (top-level column が無いため payload で保持)。
     """
@@ -705,4 +705,4 @@ async def test_append_failure_records_extraction_id_in_payload(
         await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
-    assert ev.payload["extraction_id"] == extraction.id
+    assert ev.payload["curation_id"] == extraction.id

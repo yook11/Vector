@@ -13,7 +13,7 @@ from app.schemas.embeds import NewsSourceEmbed, OriginalArticleEmbed
 
 
 def build_brief(analysis: InScopeAssessment) -> ArticleBrief:
-    a = analysis.extraction.article
+    a = analysis.curation.article
     return ArticleBrief(
         id=analysis.id,
         translated_title=analysis.translated_title,
@@ -27,7 +27,7 @@ def build_brief(analysis: InScopeAssessment) -> ArticleBrief:
 
 
 def build_detail(analysis: InScopeAssessment) -> ArticleDetail:
-    a = analysis.extraction.article
+    a = analysis.curation.article
     return ArticleDetail(
         id=analysis.id,
         translated_title=analysis.translated_title,

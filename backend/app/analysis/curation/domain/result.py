@@ -13,7 +13,7 @@ AI 境界では引き続きフラット形式 (``{relevance, title_ja, summary_j
 ``ai/schema.py::GeminiCurationResponse`` として分離し、``ai/parse.py::
 parse_curation`` が ``relevance`` 値を見て ``Signal`` / ``Noise`` に振り分ける。
 
-永続化結果 (``article_extractions`` / ``extraction_noises`` の 1 行) は
+永続化結果 (``article_curations`` / ``curation_noises`` の 1 行) は
 Repository が ``int`` id として返し、Domain Entity 化はしない (Stage 4 / Stage 5
 と対称な勝者 SSoT パターン、``feedback_outcome_purification``)。
 """
@@ -61,7 +61,7 @@ class Signal(BaseModel):
 
 
 class Noise(BaseModel):
-    """noise 判定された AI 分析結果 — ``extraction_noises`` に記録し chain しない。
+    """noise 判定された AI 分析結果 — ``curation_noises`` に記録し chain しない。
 
     ``Signal`` と shape は同一だが、型として分けることで Service の
     ``match call: case CurationCall(result=Signal()): | case

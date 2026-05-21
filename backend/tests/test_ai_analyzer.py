@@ -48,9 +48,9 @@ from app.analysis.curation.domain import CurationResult, Noise, Signal
 from app.analysis.curation.domain.ready import ReadyForCuration
 from app.analysis.curation.service import CurationService
 from app.models.article import Article
-from app.models.article_extraction import ArticleExtraction
+from app.models.article_curation import ArticleCuration
 from app.models.category import Category
-from app.models.extraction_noise import ExtractionNoise as ExtractionNoiseORM
+from app.models.curation_noise import CurationNoise
 from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource
 from app.models.out_of_scope_assessment import OutOfScopeAssessment
@@ -139,7 +139,7 @@ async def _create_article_with_extraction(
     title: str = "Test Article",
     translated_title: str = "テスト記事",
     summary: str = "要約テスト",
-) -> tuple[Article, ArticleExtraction]:
+) -> tuple[Article, ArticleCuration]:
     """Stage 1 完了済みの記事（article + extraction）を作成するヘルパー。"""
     article = Article(
         source_id=source.id,
@@ -150,7 +150,7 @@ async def _create_article_with_extraction(
     )
     db_session.add(article)
     await db_session.flush()
-    extraction = ArticleExtraction(
+    extraction = ArticleCuration(
         article_id=article.id,
         translated_title=translated_title,
         summary=summary,
@@ -364,8 +364,8 @@ async def test_extraction_creates_extraction(
     db_session.expire_all()
     persisted = (
         await db_session.execute(
-            select(ArticleExtraction).where(
-                ArticleExtraction.article_id == article_id,
+            select(ArticleCuration).where(
+                ArticleCuration.article_id == article_id,
             )
         )
     ).scalar_one()
@@ -414,7 +414,7 @@ async def test_extraction_race_loser_returns_none_and_skips_audit(
     # 既存 row は上書きされていない (UPDATE ではなく ON CONFLICT DO NOTHING)
     persisted = (
         await db_session.execute(
-            select(ArticleExtraction).where(ArticleExtraction.article_id == article_id)
+            select(ArticleCuration).where(ArticleCuration.article_id == article_id)
         )
     ).scalar_one()
     assert persisted.id == existing_id
@@ -484,8 +484,8 @@ async def test_extraction_routes_noise_to_extraction_noises_table(
     # extraction_noises に 1 行入っている
     persisted = (
         await db_session.execute(
-            select(ExtractionNoiseORM).where(
-                ExtractionNoiseORM.article_id == article_id,
+            select(CurationNoise).where(
+                CurationNoise.article_id == article_id,
             )
         )
     ).scalar_one()
@@ -493,8 +493,8 @@ async def test_extraction_routes_noise_to_extraction_noises_table(
     # article_extractions には入っていない (排他)
     assert (
         await db_session.execute(
-            select(ArticleExtraction).where(
-                ArticleExtraction.article_id == article_id,
+            select(ArticleCuration).where(
+                ArticleCuration.article_id == article_id,
             )
         )
     ).scalar_one_or_none() is None
@@ -536,9 +536,9 @@ async def test_assessment_persists_category(
         )
     )
 
-    extraction_id = extraction.id
+    curation_id = extraction.id
     ready = ReadyForAssessment(
-        extraction_id=extraction_id,
+        curation_id=curation_id,
         translated_title=extraction.translated_title,
         summary=extraction.summary,
         article_id=extraction.article_id,
@@ -553,7 +553,7 @@ async def test_assessment_persists_category(
     analysis = (
         await db_session.execute(
             select(InScopeAssessment).where(
-                InScopeAssessment.extraction_id == extraction_id
+                InScopeAssessment.curation_id == curation_id
             )
         )
     ).scalar_one()
@@ -586,10 +586,10 @@ async def test_assessment_persists_rejection_when_out_of_scope(
         )
     )
 
-    extraction_id = extraction.id
+    curation_id = extraction.id
     ready = ReadyForAssessment(
         article_id=article.id,
-        extraction_id=extraction_id,
+        curation_id=curation_id,
         translated_title=extraction.translated_title,
         summary=extraction.summary,
         source_name=str(sample_source.name),
@@ -603,7 +603,7 @@ async def test_assessment_persists_rejection_when_out_of_scope(
     rejection = (
         await db_session.execute(
             select(OutOfScopeAssessment).where(
-                OutOfScopeAssessment.extraction_id == extraction_id
+                OutOfScopeAssessment.curation_id == curation_id
             )
         )
     ).scalar_one()
@@ -611,7 +611,7 @@ async def test_assessment_persists_rejection_when_out_of_scope(
     analysis = (
         await db_session.execute(
             select(InScopeAssessment).where(
-                InScopeAssessment.extraction_id == extraction_id
+                InScopeAssessment.curation_id == curation_id
             )
         )
     ).scalar_one_or_none()
@@ -643,7 +643,7 @@ async def test_news_endpoint_includes_analysis(
         summary="テスト要約",
     )
     analysis = InScopeAssessment(
-        extraction_id=extraction.id,
+        curation_id=extraction.id,
         translated_title="テスト記事",
         summary="テスト要約",
         investor_take="テスト理由",

@@ -15,7 +15,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article
-from app.models.article_extraction import ArticleExtraction
+from app.models.article_curation import ArticleCuration
 from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource
 
@@ -28,7 +28,7 @@ def seed_briefing_analysis(
 ) -> SeedBriefingAnalysis:
     """1 件の analysis (translated_title + summary 付き) を関連 ORM ごと seed する。
 
-    Briefing repository が JOIN する Article / ArticleExtraction / InScopeAssessment を
+    Briefing repository が JOIN する Article / ArticleCuration / InScopeAssessment を
     最小限作る。``translated_title`` / ``summary`` を引数で上書きできる。
     """
     seq = count()
@@ -54,7 +54,7 @@ def seed_briefing_analysis(
         db_session.add(article)
         await db_session.flush()
 
-        extraction = ArticleExtraction(
+        extraction = ArticleCuration(
             article_id=article.id,
             translated_title=title,
             summary=body,
@@ -63,7 +63,7 @@ def seed_briefing_analysis(
         await db_session.flush()
 
         analysis = InScopeAssessment(
-            extraction_id=extraction.id,
+            curation_id=extraction.id,
             translated_title=title,
             summary=body,
             investor_take="investor take",

@@ -1,8 +1,12 @@
-"""記事からの Stage 3 抽出結果（翻訳タイトル・要約）。
+"""記事の Stage 3 curation 結果 (翻訳タイトル + 事実ベース要約)。
 
-Stage 4 (Assessment) が InScope か OutOfScope に振れる前の、
-原文から抽出した事実ベースの成果物。in_scope_assessment /
-out_of_scope_assessment のいずれか一方（排他）を持ちうる。
+Stage 4 (Assessment) が InScope か OutOfScope に振れる前の、原文を読み翻訳・
+要約して signal として残した成果物。in_scope_assessment / out_of_scope_assessment
+のいずれか一方 (排他) を持ちうる。CurationNoise (curation_noises) と article 単位で
+排他関係を持つ (DB trigger で構造的に保証)。
+
+``extracted_at`` 列名は Stage 3 出力時刻を表す事実列として据え置く
+(curation rename 配下でも変えない)。
 """
 
 from __future__ import annotations
@@ -29,17 +33,17 @@ if TYPE_CHECKING:
     from app.models.out_of_scope_assessment import OutOfScopeAssessment
 
 
-class ArticleExtraction(Base):
-    __tablename__ = "article_extractions"
+class ArticleCuration(Base):
+    __tablename__ = "article_curations"
     __table_args__ = (
-        UniqueConstraint("article_id", name="uq_article_extractions_article_id"),
+        UniqueConstraint("article_id", name="uq_article_curations_article_id"),
         CheckConstraint(
             "translated_title != ''",
-            name="ck_article_extractions_translated_title_not_empty",
+            name="ck_article_curations_translated_title_not_empty",
         ),
         CheckConstraint(
             "summary != ''",
-            name="ck_article_extractions_summary_not_empty",
+            name="ck_article_curations_summary_not_empty",
         ),
     )
 
@@ -54,10 +58,10 @@ class ArticleExtraction(Base):
     )
 
     # リレーション
-    article: Mapped[Article] = relationship(back_populates="extraction")
+    article: Mapped[Article] = relationship(back_populates="curation")
     in_scope_assessment: Mapped[InScopeAssessment | None] = relationship(
-        back_populates="extraction", uselist=False
+        back_populates="curation", uselist=False
     )
     out_of_scope_assessment: Mapped[OutOfScopeAssessment | None] = relationship(
-        back_populates="extraction", uselist=False
+        back_populates="curation", uselist=False
     )

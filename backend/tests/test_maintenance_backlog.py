@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.maintenance.backlog import PipelineBacklog
 from app.models.article import Article
-from app.models.article_extraction import ArticleExtraction
+from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource
@@ -42,16 +42,16 @@ async def _make_article(
 
 
 # ---------------------------------------------------------------------------
-# article_ids_pending_extraction
+# article_ids_pending_curation
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_pending_extraction_returns_articles_without_extraction(
+async def test_pending_curation_returns_articles_without_curation(
     db_session: AsyncSession,
     sample_source: NewsSource,
 ) -> None:
-    """extraction 子が無い Article が境界内なら返る。"""
+    """curation 子が無い Article が境界内なら返る。"""
     now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
     article = await _make_article(
         db_session,
@@ -61,7 +61,7 @@ async def test_pending_extraction_returns_articles_without_extraction(
     )
 
     backlog = PipelineBacklog(db_session)
-    ids = await backlog.article_ids_pending_extraction(
+    ids = await backlog.article_ids_pending_curation(
         created_before=now - timedelta(minutes=30),
         created_after=now - timedelta(days=7),
         limit=10,
@@ -70,7 +70,7 @@ async def test_pending_extraction_returns_articles_without_extraction(
 
 
 @pytest.mark.asyncio
-async def test_pending_extraction_excludes_too_recent(
+async def test_pending_curation_excludes_too_recent(
     db_session: AsyncSession,
     sample_source: NewsSource,
 ) -> None:
@@ -84,7 +84,7 @@ async def test_pending_extraction_excludes_too_recent(
     )
 
     backlog = PipelineBacklog(db_session)
-    ids = await backlog.article_ids_pending_extraction(
+    ids = await backlog.article_ids_pending_curation(
         created_before=now - timedelta(minutes=30),
         created_after=now - timedelta(days=7),
         limit=10,
@@ -93,7 +93,7 @@ async def test_pending_extraction_excludes_too_recent(
 
 
 @pytest.mark.asyncio
-async def test_pending_extraction_excludes_too_old(
+async def test_pending_curation_excludes_too_old(
     db_session: AsyncSession,
     sample_source: NewsSource,
 ) -> None:
@@ -107,7 +107,7 @@ async def test_pending_extraction_excludes_too_old(
     )
 
     backlog = PipelineBacklog(db_session)
-    ids = await backlog.article_ids_pending_extraction(
+    ids = await backlog.article_ids_pending_curation(
         created_before=now - timedelta(minutes=30),
         created_after=now - timedelta(days=7),
         limit=10,
@@ -116,11 +116,11 @@ async def test_pending_extraction_excludes_too_old(
 
 
 @pytest.mark.asyncio
-async def test_pending_extraction_excludes_articles_with_extraction(
+async def test_pending_curation_excludes_articles_with_curation(
     db_session: AsyncSession,
     sample_source: NewsSource,
 ) -> None:
-    """extraction 子がある Article は対象外。"""
+    """curation 子がある Article は対象外。"""
     now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
     article = await _make_article(
         db_session,
@@ -129,7 +129,7 @@ async def test_pending_extraction_excludes_articles_with_extraction(
         created_at=now - timedelta(hours=1),
     )
     db_session.add(
-        ArticleExtraction(
+        ArticleCuration(
             article_id=article.id,
             translated_title="tt",
             summary="ss",
@@ -138,7 +138,7 @@ async def test_pending_extraction_excludes_articles_with_extraction(
     await db_session.commit()
 
     backlog = PipelineBacklog(db_session)
-    ids = await backlog.article_ids_pending_extraction(
+    ids = await backlog.article_ids_pending_curation(
         created_before=now - timedelta(minutes=30),
         created_after=now - timedelta(days=7),
         limit=10,
@@ -147,16 +147,16 @@ async def test_pending_extraction_excludes_articles_with_extraction(
 
 
 # ---------------------------------------------------------------------------
-# extraction_ids_pending_assessment (案 3 で返却列を ArticleExtraction.id に変更)
+# curation_ids_pending_assessment (案 3 で返却列を ArticleCuration.id に変更)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_pending_assessment_returns_extractions_without_analysis_or_rejection(
+async def test_pending_assessment_returns_curations_without_analysis_or_rejection(
     db_session: AsyncSession,
     sample_source: NewsSource,
 ) -> None:
-    """extraction はあるが analysis / rejection が無い Extraction ID が返る。"""
+    """curation はあるが analysis / rejection が無い Curation ID が返る。"""
     now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
     article = await _make_article(
         db_session,
@@ -164,26 +164,26 @@ async def test_pending_assessment_returns_extractions_without_analysis_or_reject
         url="https://e.com/cls",
         created_at=now - timedelta(hours=1),
     )
-    extraction = ArticleExtraction(
+    curation = ArticleCuration(
         article_id=article.id,
         translated_title="tt",
         summary="ss",
     )
-    db_session.add(extraction)
+    db_session.add(curation)
     await db_session.commit()
-    await db_session.refresh(extraction)
+    await db_session.refresh(curation)
 
     backlog = PipelineBacklog(db_session)
-    ids = await backlog.extraction_ids_pending_assessment(
+    ids = await backlog.curation_ids_pending_assessment(
         created_before=now - timedelta(minutes=30),
         created_after=now - timedelta(days=7),
         limit=10,
     )
-    assert extraction.id in ids
+    assert curation.id in ids
 
 
 @pytest.mark.asyncio
-async def test_pending_assessment_excludes_extractions_with_analysis(
+async def test_pending_assessment_excludes_curations_with_analysis(
     db_session: AsyncSession,
     sample_source: NewsSource,
     sample_categories: list[Category],
@@ -196,17 +196,17 @@ async def test_pending_assessment_excludes_extractions_with_analysis(
         url="https://e.com/done",
         created_at=now - timedelta(hours=1),
     )
-    extraction = ArticleExtraction(
+    curation = ArticleCuration(
         article_id=article.id,
         translated_title="tt",
         summary="ss",
     )
-    db_session.add(extraction)
+    db_session.add(curation)
     await db_session.commit()
-    await db_session.refresh(extraction)
+    await db_session.refresh(curation)
     db_session.add(
         InScopeAssessment(
-            extraction_id=extraction.id,
+            curation_id=curation.id,
             translated_title="tt",
             summary="ss",
             investor_take="it",
@@ -216,12 +216,12 @@ async def test_pending_assessment_excludes_extractions_with_analysis(
     await db_session.commit()
 
     backlog = PipelineBacklog(db_session)
-    ids = await backlog.extraction_ids_pending_assessment(
+    ids = await backlog.curation_ids_pending_assessment(
         created_before=now - timedelta(minutes=30),
         created_after=now - timedelta(days=7),
         limit=10,
     )
-    assert extraction.id not in ids
+    assert curation.id not in ids
 
 
 # ---------------------------------------------------------------------------
@@ -243,16 +243,16 @@ async def test_pending_embedding_returns_analysis_with_null_embedding(
         url="https://e.com/emb",
         created_at=now - timedelta(hours=1),
     )
-    extraction = ArticleExtraction(
+    curation = ArticleCuration(
         article_id=article.id,
         translated_title="tt",
         summary="ss",
     )
-    db_session.add(extraction)
+    db_session.add(curation)
     await db_session.commit()
-    await db_session.refresh(extraction)
+    await db_session.refresh(curation)
     analysis = InScopeAssessment(
-        extraction_id=extraction.id,
+        curation_id=curation.id,
         translated_title="tt",
         summary="ss",
         investor_take="it",
@@ -286,16 +286,16 @@ async def test_pending_embedding_excludes_already_embedded(
         url="https://e.com/embedded",
         created_at=now - timedelta(hours=1),
     )
-    extraction = ArticleExtraction(
+    curation = ArticleCuration(
         article_id=article.id,
         translated_title="tt",
         summary="ss",
     )
-    db_session.add(extraction)
+    db_session.add(curation)
     await db_session.commit()
-    await db_session.refresh(extraction)
+    await db_session.refresh(curation)
     analysis = InScopeAssessment(
-        extraction_id=extraction.id,
+        curation_id=curation.id,
         translated_title="tt",
         summary="ss",
         investor_take="it",

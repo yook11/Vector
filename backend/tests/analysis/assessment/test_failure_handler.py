@@ -27,7 +27,7 @@ from app.analysis.assessment.errors import (
 )
 from app.analysis.assessment.failure_handling import AssessmentFailureHandler
 from app.models.article import Article
-from app.models.article_extraction import ArticleExtraction
+from app.models.article_curation import ArticleCuration
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
 
@@ -54,8 +54,8 @@ async def _make_article(
 async def _make_extraction(
     db_session: AsyncSession,
     article: Article,
-) -> ArticleExtraction:
-    extraction = ArticleExtraction(
+) -> ArticleCuration:
+    extraction = ArticleCuration(
         article_id=article.id,
         translated_title="title",
         summary="summary text",
@@ -66,9 +66,9 @@ async def _make_extraction(
     return extraction
 
 
-def _ready_from(extraction: ArticleExtraction) -> ReadyForAssessment:
+def _ready_from(extraction: ArticleCuration) -> ReadyForAssessment:
     return ReadyForAssessment(
-        extraction_id=extraction.id,
+        curation_id=extraction.id,
         translated_title=extraction.translated_title,
         summary=extraction.summary,
         article_id=extraction.article_id,
@@ -280,7 +280,7 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
     drops = [e for e in cap if e.get("event") == "assessment_failure_audit_dropped"]
     assert drops, "fallback ログが emit されていない"
     drop = drops[-1]
-    assert drop["extraction_id"] == extraction.id
+    assert drop["curation_id"] == extraction.id
     assert drop["attempt"] == 1
     assert drop["business_error_class"].endswith(".AssessmentTerminalSkipError")
     assert drop["audit_error_class"].endswith(".RuntimeError")

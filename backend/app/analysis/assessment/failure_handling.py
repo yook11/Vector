@@ -53,7 +53,7 @@ class AssessmentFailureHandler:
             case AssessmentTerminalSkipError():
                 logger.warning(
                     "assess_content_terminal_skip",
-                    extraction_id=ready.extraction_id,
+                    curation_id=ready.curation_id,
                     code=getattr(exc, "code", None),
                 )
                 await self._audit_failure(ready, exc, attempt)
@@ -63,7 +63,7 @@ class AssessmentFailureHandler:
                 if last_attempt:
                     logger.warning(
                         "assess_content_recoverable_exhausted",
-                        extraction_id=ready.extraction_id,
+                        curation_id=ready.curation_id,
                         code=getattr(exc, "code", None),
                     )
                     return False
@@ -73,7 +73,7 @@ class AssessmentFailureHandler:
                 if last_attempt:
                     logger.exception(
                         "assess_content_unexpected_exhausted",
-                        extraction_id=ready.extraction_id,
+                        curation_id=ready.curation_id,
                     )
                     return False
                 return True
@@ -99,7 +99,7 @@ class AssessmentFailureHandler:
         except Exception as audit_exc:
             logger.exception(
                 "assessment_failure_audit_dropped",
-                extraction_id=ready.extraction_id,
+                curation_id=ready.curation_id,
                 attempt=attempt,
                 business_error_class=(
                     f"{type(exc).__module__}.{type(exc).__qualname__}"

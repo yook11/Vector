@@ -8,7 +8,7 @@
   ``ReadyForAssessment.try_advance_from`` は本 method への thin delegate。
 - ``save_in_scope`` / ``save_out_of_scope``: AI 境界型 ``InScope`` / ``OutOfScope``
   を内包する ``AssessmentCall`` を受け、
-  ``INSERT ... ON CONFLICT (extraction_id) DO NOTHING RETURNING id`` で
+  ``INSERT ... ON CONFLICT (curation_id) DO NOTHING RETURNING id`` で
   永続化する。両 method とも DB 採番 ``id`` (``int | None``) を返し、race 敗北時
   (UNIQUE 違反) は ``None``。in-scope は category slug → id 解決を内部に閉じ、
   未登録 slug は ``AssessmentCategoryMissingError`` で fail-fast。
@@ -33,7 +33,7 @@ from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.domain.result import InScope, OutOfScope
 from app.analysis.assessment.errors import AssessmentCategoryMissingError
 from app.models.article import Article
-from app.models.article_extraction import ArticleExtraction
+from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource
@@ -49,11 +49,11 @@ class AssessmentRepository:
     # --- Ready 構築 (try_advance_from precondition + audit 参照値) -------------
 
     async def try_load_for_assessment(
-        self, extraction_id: int
+        self, curation_id: int
     ) -> ReadyForAssessment | None:
         """`ReadyForAssessment.try_advance_from` 用 atomic ロード。
 
-        1 query で「extraction 行存在 + 両 assessment 未生成」を判定し、
+        1 query で「curation 行存在 + 両 assessment 未生成」を判定し、
         満たす場合のみ assessor 入力 (``translated_title`` / ``summary``) と
         audit 参照値 (``article_id`` / ``source_name``) を取得して厚い Ready を
         構築して返す。
@@ -61,27 +61,27 @@ class AssessmentRepository:
         Returns:
             進める場合: precondition を満たし、audit 参照値も含む
                 ``ReadyForAssessment``
-            進めない場合: ``None`` (extraction 不在 / 既 in-scope / 既 out-of-scope)
+            進めない場合: ``None`` (curation 不在 / 既 in-scope / 既 out-of-scope)
         """
         stmt = (
             select(
-                ArticleExtraction.translated_title,
-                ArticleExtraction.summary,
-                ArticleExtraction.article_id,
+                ArticleCuration.translated_title,
+                ArticleCuration.summary,
+                ArticleCuration.article_id,
                 NewsSource.name,
             )
-            .join(Article, Article.id == ArticleExtraction.article_id)
+            .join(Article, Article.id == ArticleCuration.article_id)
             .outerjoin(NewsSource, NewsSource.id == Article.source_id)
             .outerjoin(
                 InScopeAssessment,
-                InScopeAssessment.extraction_id == ArticleExtraction.id,
+                InScopeAssessment.curation_id == ArticleCuration.id,
             )
             .outerjoin(
                 OutOfScopeAssessment,
-                OutOfScopeAssessment.extraction_id == ArticleExtraction.id,
+                OutOfScopeAssessment.curation_id == ArticleCuration.id,
             )
             .where(
-                ArticleExtraction.id == extraction_id,
+                ArticleCuration.id == curation_id,
                 InScopeAssessment.id.is_(None),
                 OutOfScopeAssessment.id.is_(None),
             )
@@ -92,7 +92,7 @@ class AssessmentRepository:
             return None
         translated_title, summary, article_id, source_name = row
         return ReadyForAssessment(
-            extraction_id=extraction_id,
+            curation_id=curation_id,
             translated_title=translated_title,
             summary=summary,
             article_id=article_id,
@@ -112,7 +112,7 @@ class AssessmentRepository:
         ``call.result`` から永続化に必要な値を直接取り出す
         (Stage 4 で起きた事実は envelope が抱え切る、
         `feedback_bc_boundary_guarantees_downstream`)。
-        ``extraction_id`` / ``translated_title`` / ``summary`` は ``ready`` から
+        ``curation_id`` / ``translated_title`` / ``summary`` は ``ready`` から
         取り出す (Stage 3 由来 snapshot)。``call.model_name`` は監査 SSoT
         (``pipeline_events.payload.ai_model``) に焼くのみで業務行には INSERT
         しない (`feedback_outcome_purification`)。
@@ -125,7 +125,7 @@ class AssessmentRepository:
 
         Returns:
             成功時: DB が採番した ``id``
-            race 敗北時 (期待した extraction_id への UNIQUE 違反): ``None``
+            race 敗北時 (期待した curation_id への UNIQUE 違反): ``None``
             (敗者は audit を焼かず短絡する — 勝者 task が自身の audit を焼く、
             audit actor SSoT 維持)
 
@@ -142,14 +142,14 @@ class AssessmentRepository:
         stmt = (
             pg_insert(InScopeAssessment)
             .values(
-                extraction_id=ready.extraction_id,
+                curation_id=ready.curation_id,
                 translated_title=ready.translated_title,
                 summary=ready.summary,
                 category_id=category_id,
                 investor_take=in_scope.investor_take,
                 events=[e.model_dump() for e in in_scope.events],
             )
-            .on_conflict_do_nothing(index_elements=["extraction_id"])
+            .on_conflict_do_nothing(index_elements=["curation_id"])
             .returning(InScopeAssessment.id)
         )
         row = (await self._session.execute(stmt)).first()
@@ -173,19 +173,19 @@ class AssessmentRepository:
 
         Returns:
             成功時: DB が採番した ``id``
-            race 敗北時 (期待した extraction_id への UNIQUE 違反): ``None``
+            race 敗北時 (期待した curation_id への UNIQUE 違反): ``None``
         """
         out_of_scope = call.result
         stmt = (
             pg_insert(OutOfScopeAssessment)
             .values(
-                extraction_id=ready.extraction_id,
+                curation_id=ready.curation_id,
                 translated_title=ready.translated_title,
                 summary=ready.summary,
                 investor_take=out_of_scope.investor_take,
                 events=[e.model_dump() for e in out_of_scope.events],
             )
-            .on_conflict_do_nothing(index_elements=["extraction_id"])
+            .on_conflict_do_nothing(index_elements=["curation_id"])
             .returning(OutOfScopeAssessment.id)
         )
         row = (await self._session.execute(stmt)).first()

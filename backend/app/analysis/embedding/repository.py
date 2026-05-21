@@ -26,7 +26,7 @@ from sqlmodel import select
 
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.domain.value_objects import EmbeddingVector
-from app.models.article_extraction import ArticleExtraction
+from app.models.article_curation import ArticleCuration
 from app.models.in_scope_assessment import InScopeAssessment
 
 
@@ -48,7 +48,7 @@ class EmbeddingRepository:
 
         1 query で「行存在 + 未 embedded」を判定し、満たす場合のみ embedder
         入力 (``translated_title`` + ``summary``) と audit 用 ``article_id``
-        (``ArticleExtraction`` 1-hop JOIN) を取得して厚い Ready を構築して返す。
+        (``ArticleCuration`` 1-hop JOIN) を取得して厚い Ready を構築して返す。
         行が存在しない / 既 embedded の場合は ``None`` (業務正常)。
 
         Returns:
@@ -60,11 +60,11 @@ class EmbeddingRepository:
             select(
                 InScopeAssessment.translated_title,
                 InScopeAssessment.summary,
-                ArticleExtraction.article_id,
+                ArticleCuration.article_id,
             )
             .join(
-                ArticleExtraction,
-                ArticleExtraction.id == InScopeAssessment.extraction_id,
+                ArticleCuration,
+                ArticleCuration.id == InScopeAssessment.curation_id,
             )
             .where(
                 InScopeAssessment.id == analysis_id,

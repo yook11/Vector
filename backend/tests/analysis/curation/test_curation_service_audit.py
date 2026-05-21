@@ -6,7 +6,7 @@ Outcome 型 assertion を「signal 勝者 → ``int``、noise 勝者 → ``None`
 
 検証する性質:
 - signal 勝者 → ``outcome_code='extracted'`` (SUCCEEDED) + ``category='success'`` +
-  ``code='extracted'``、Service は ``extraction_id`` (``int``) を返す
+  ``code='extracted'``、Service は ``curation_id`` (``int``) を返す
 - noise 勝者 → ``outcome_code='extracted_as_noise'`` (SUCCEEDED) +
   ``category='success'`` + ``code='extracted_as_noise'``、Service は ``None`` を返す
   (Stage 4 chain しない、Task 層は ``if result is None: return`` で短絡)

@@ -65,7 +65,7 @@ from app.dependencies import get_session
 from app.main import app
 from app.models import (  # noqa: F401
     Article,
-    ArticleExtraction,
+    ArticleCuration,
     Category,
     FetchLog,
     InScopeAssessment,

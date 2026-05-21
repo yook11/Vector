@@ -3,7 +3,7 @@
 検証する観点:
 
 - 新規 article_id (Article 不在) → ``skipped_ids``
-- ArticleExtraction 不在 (Article のみ) → ``skipped_ids``
+- ArticleCuration 不在 (Article のみ) → ``skipped_ids``
 - 正常: 既存 extraction が UPDATE され、子 entity が差し替わる → ``success_ids``
 - dry_run=True: extractor は呼ばれるが DB は変更されない (rollback)
 - ``CurationTerminalDropError`` (ACL 詰め替え後の
@@ -16,9 +16,9 @@
   を retry 上限まで → ``failed_ids``
 - ``AIProviderNetworkError`` 1 回 → 成功 → ``success_ids``
   (retry すれば成功するパターン)
-- 親 ``ArticleExtraction.id`` は保持される (CASCADE 連鎖防止の構造保証)
+- 親 ``ArticleCuration.id`` は保持される (CASCADE 連鎖防止の構造保証)
 - 再抽出で Noise が返った場合は ``skipped_ids`` に分類され、既存
-  ``ArticleExtraction`` は上書きされない (データ破壊防止の構造保証)
+  ``ArticleCuration`` は上書きされない (データ破壊防止の構造保証)
 
 extractor は ``unittest.mock`` で差し替え (実 Gemini を呼ばない)。
 """
@@ -46,7 +46,7 @@ from app.analysis.curation.application import (
 from app.analysis.curation.domain import Noise, Signal
 from app.analysis.curation.repository import CurationRepository
 from app.models.article import Article
-from app.models.article_extraction import ArticleExtraction
+from app.models.article_curation import ArticleCuration
 from app.models.news_source import NewsSource
 
 
@@ -115,8 +115,8 @@ async def _seed_extraction(
     db_session: AsyncSession,
     *,
     article: Article,
-) -> ArticleExtraction:
-    """Article + 既存 ArticleExtraction を作る。"""
+) -> ArticleCuration:
+    """Article + 既存 ArticleCuration を作る。"""
     repo = CurationRepository(db_session)
     saved = await repo.save_signal(
         _signal_call(title_ja="旧タイトル", summary_ja="旧要約"),
@@ -126,7 +126,7 @@ async def _seed_extraction(
     assert saved is not None
     parent = (
         await db_session.execute(
-            select(ArticleExtraction).where(ArticleExtraction.article_id == article.id)
+            select(ArticleCuration).where(ArticleCuration.article_id == article.id)
         )
     ).scalar_one()
     return parent
@@ -209,9 +209,7 @@ async def test_success_updates_parent_in_place_keeps_id(
     async with session_factory() as fresh:
         parent_after = (
             await fresh.execute(
-                select(ArticleExtraction).where(
-                    ArticleExtraction.article_id == article.id
-                )
+                select(ArticleCuration).where(ArticleCuration.article_id == article.id)
             )
         ).scalar_one()
         assert parent_after.id == parent_id_before
@@ -239,9 +237,7 @@ async def test_dry_run_calls_curator_but_rolls_back(
     async with session_factory() as fresh:
         parent = (
             await fresh.execute(
-                select(ArticleExtraction).where(
-                    ArticleExtraction.article_id == article.id
-                )
+                select(ArticleCuration).where(ArticleCuration.article_id == article.id)
             )
         ).scalar_one()
         # UPDATE が roll back されたので旧タイトルのまま
@@ -373,7 +369,7 @@ async def test_skips_when_re_extraction_returns_noise_and_keeps_signal_extractio
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """再抽出で Noise が返った場合は既存 ArticleExtraction を上書きしない。
+    """再抽出で Noise が返った場合は既存 ArticleCuration を上書きしない。
 
     ``update_signal_idempotent`` の signature が ``CurationCall[Signal]`` のみ
     受け付ける型 narrow を取っているため、Service 側 match で Noise は
@@ -394,13 +390,11 @@ async def test_skips_when_re_extraction_returns_noise_and_keeps_signal_extractio
     assert summary.success_ids == ()
     assert summary.failed_ids == ()
 
-    # 既存 ArticleExtraction が上書きされていない
+    # 既存 ArticleCuration が上書きされていない
     async with session_factory() as fresh:
         parent_after = (
             await fresh.execute(
-                select(ArticleExtraction).where(
-                    ArticleExtraction.article_id == article.id
-                )
+                select(ArticleCuration).where(ArticleCuration.article_id == article.id)
             )
         ).scalar_one()
         assert parent_after.id == parent_id_before

@@ -1,6 +1,6 @@
-"""Stage 4 (Assessment) で out-of-scope と判定された extraction の記録 (ORM)。
+"""Stage 4 (Assessment) で out-of-scope と判定された curation の記録 (ORM)。
 
-in_scope_assessments とは同一 extraction に対して排他（DB トリガーで強制）。
+in_scope_assessments とは同一 curation に対して排他（DB トリガーで強制）。
 """
 
 from __future__ import annotations
@@ -23,20 +23,18 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
 
 if TYPE_CHECKING:
-    from app.models.article_extraction import ArticleExtraction
+    from app.models.article_curation import ArticleCuration
 
 
 __all__ = ["OutOfScopeAssessment"]
 
 
 class OutOfScopeAssessment(Base):
-    """Stage 4 で out-of-scope と判定された extraction の記録 (ORM)。"""
+    """Stage 4 で out-of-scope と判定された curation の記録 (ORM)。"""
 
     __tablename__ = "out_of_scope_assessments"
     __table_args__ = (
-        UniqueConstraint(
-            "extraction_id", name="uq_out_of_scope_assessments_extraction_id"
-        ),
+        UniqueConstraint("curation_id", name="uq_out_of_scope_assessments_curation_id"),
         CheckConstraint(
             "translated_title != ''",
             name="ck_out_of_scope_assessments_translated_title_not_empty",
@@ -52,8 +50,8 @@ class OutOfScopeAssessment(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    extraction_id: Mapped[int] = mapped_column(
-        ForeignKey("article_extractions.id", ondelete="CASCADE"),
+    curation_id: Mapped[int] = mapped_column(
+        ForeignKey("article_curations.id", ondelete="CASCADE"),
     )
     translated_title: Mapped[str] = mapped_column(String(500))
     summary: Mapped[str] = mapped_column(Text())
@@ -68,6 +66,6 @@ class OutOfScopeAssessment(Base):
     )
 
     # リレーション
-    extraction: Mapped[ArticleExtraction] = relationship(
+    curation: Mapped[ArticleCuration] = relationship(
         back_populates="out_of_scope_assessment"
     )

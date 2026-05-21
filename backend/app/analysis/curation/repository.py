@@ -32,7 +32,7 @@ signal / noise 両 path を扱える。
   Ready 構築経路では ``try_load_for_curation`` 内に集約済)
 - ``save_noise``: ``CurationCall[Noise]`` envelope を ``INSERT ... ON
   CONFLICT DO NOTHING RETURNING id`` で永続化する。``ON CONFLICT`` の
-  target は指定しない (UNIQUE 違反だけでなく ``article_extractions`` 側の
+  target は指定しない (UNIQUE 違反だけでなく ``article_curations`` 側の
   排他トリガーが fire したケースも吸収するため。
   ``feedback_on_conflict_no_target.md``)。
 """
@@ -49,8 +49,8 @@ from app.analysis.curation.ai.envelope import CurationCall
 from app.analysis.curation.domain import Noise, Signal
 from app.analysis.curation.domain.ready import ReadyForCuration
 from app.models.article import Article
-from app.models.article_extraction import ArticleExtraction
-from app.models.extraction_noise import ExtractionNoise as ExtractionNoiseORM
+from app.models.article_curation import ArticleCuration
+from app.models.curation_noise import CurationNoise
 
 logger = structlog.get_logger(__name__)
 
@@ -82,12 +82,12 @@ class CurationRepository:
         """
         stmt = (
             select(Article.original_title, Article.original_content)
-            .outerjoin(ArticleExtraction, ArticleExtraction.article_id == Article.id)
-            .outerjoin(ExtractionNoiseORM, ExtractionNoiseORM.article_id == Article.id)
+            .outerjoin(ArticleCuration, ArticleCuration.article_id == Article.id)
+            .outerjoin(CurationNoise, CurationNoise.article_id == Article.id)
             .where(
                 Article.id == article_id,
-                ArticleExtraction.id.is_(None),
-                ExtractionNoiseORM.id.is_(None),
+                ArticleCuration.id.is_(None),
+                CurationNoise.id.is_(None),
             )
             .limit(1)
         )
@@ -116,8 +116,8 @@ class CurationRepository:
     async def signal_exists_for_article(self, article_id: int) -> bool:
         """``try_advance_from`` 用 cheap exists 判定 (signal 側、article_id 単位)。"""
         stmt = (
-            select(ArticleExtraction.id)
-            .where(ArticleExtraction.article_id == article_id)
+            select(ArticleCuration.id)
+            .where(ArticleCuration.article_id == article_id)
             .limit(1)
         )
         return (await self._session.execute(stmt)).first() is not None
@@ -142,20 +142,20 @@ class CurationRepository:
         DB が確定させる (本メソッドでは読み戻さない、id のみ返す)。
 
         Returns:
-            成功時: 永続化された ``article_extractions.id`` (``int``)
+            成功時: 永続化された ``article_curations.id`` (``int``)
             race 敗北時 (期待した article_id への UNIQUE 違反): ``None``
             (Service は audit / 後続 chain を焼かず短絡する、勝者 SSoT 同型)
         """
         signal = call.result
         stmt = (
-            pg_insert(ArticleExtraction)
+            pg_insert(ArticleCuration)
             .values(
                 article_id=article_id,
                 translated_title=signal.title_ja,
                 summary=signal.summary_ja,
             )
             .on_conflict_do_nothing(index_elements=["article_id"])
-            .returning(ArticleExtraction.id)
+            .returning(ArticleCuration.id)
         )
         return (await self._session.execute(stmt)).scalar()
 
@@ -173,7 +173,7 @@ class CurationRepository:
 
         Phase 1B α-1 の re-curation CLI 専用。再現性を持たせるため:
 
-        - 親 ``ArticleExtraction`` は **UPDATE のみ** (DELETE しない)。これにより
+        - 親 ``ArticleCuration`` は **UPDATE のみ** (DELETE しない)。これにより
           ``in_scope_assessments`` / ``out_of_scope_assessments`` /
           ``article_embeddings`` / ``watchlist_entries`` への CASCADE 連鎖を
           構造的に回避する
@@ -181,28 +181,28 @@ class CurationRepository:
         - ``extracted_at`` は ``func.now()`` で再採番する (再抽出した時刻として
           扱い、後段の運用で「いつ抽出された」を取り違えない)。
 
-        対象 article_id に対する extraction が存在しない前提 (CLI 側で事前に
+        対象 article_id に対する curation が存在しない前提 (CLI 側で事前に
         ``signal_exists_for_article`` で絞り込む)。存在しない場合は
         ``NoResultFound``。
 
         Returns:
-            更新された ``article_extractions.id`` (parent UPDATE のみで id は不変)
+            更新された ``article_curations.id`` (parent UPDATE のみで id は不変)
         """
         signal = call.result
         update_stmt = (
-            update(ArticleExtraction)
-            .where(ArticleExtraction.article_id == article_id)
+            update(ArticleCuration)
+            .where(ArticleCuration.article_id == article_id)
             .values(
                 translated_title=signal.title_ja,
                 summary=signal.summary_ja,
                 extracted_at=func.now(),
             )
-            .returning(ArticleExtraction.id)
+            .returning(ArticleCuration.id)
         )
-        extraction_id = (await self._session.execute(update_stmt)).scalar_one()
+        curation_id = (await self._session.execute(update_stmt)).scalar_one()
         await self._session.flush()
 
-        return extraction_id
+        return curation_id
 
     # ------------------------------------------------------------------
     # noise path
@@ -211,8 +211,8 @@ class CurationRepository:
     async def noise_exists_for_article(self, article_id: int) -> bool:
         """``try_advance_from`` 用 cheap exists 判定 (noise 側、article_id 単位)。"""
         stmt = (
-            select(ExtractionNoiseORM.id)
-            .where(ExtractionNoiseORM.article_id == article_id)
+            select(CurationNoise.id)
+            .where(CurationNoise.article_id == article_id)
             .limit(1)
         )
         return (await self._session.execute(stmt)).first() is not None
@@ -237,24 +237,24 @@ class CurationRepository:
 
         ``ON CONFLICT`` は target 指定なしで ``DO NOTHING`` を指定する。これに
         より同一 article への UNIQUE 違反だけでなく、排他トリガー
-        (``article_extractions`` 側に既に行がある) のケースも同経路で吸収する
+        (``article_curations`` 側に既に行がある) のケースも同経路で吸収する
         — トリガー fire は ``IntegrityError`` を raise するが、``DO NOTHING`` の
         スコープには入らない。後者は呼び出し側で再 try (taskiq retry) させる。
 
         Returns:
-            成功時: 永続化された ``extraction_noises.id`` (``int``)
+            成功時: 永続化された ``curation_noises.id`` (``int``)
             UNIQUE 違反による race 敗北時: ``None``
             (Service は audit / 後続 chain を焼かず短絡する、勝者 SSoT 同型)
         """
         noise = call.result
         stmt = (
-            pg_insert(ExtractionNoiseORM)
+            pg_insert(CurationNoise)
             .values(
                 article_id=article_id,
                 title_ja=noise.title_ja,
                 summary_ja=noise.summary_ja,
             )
             .on_conflict_do_nothing()
-            .returning(ExtractionNoiseORM.id)
+            .returning(CurationNoise.id)
         )
         return (await self._session.execute(stmt)).scalar()

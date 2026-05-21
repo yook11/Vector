@@ -48,14 +48,14 @@ from app.analysis.assessment.domain.result import (
 )
 from app.analysis.assessment.errors import AssessmentResponseInvalidError
 from app.db import engine
-from app.models.article_extraction import ArticleExtraction
+from app.models.article_curation import ArticleCuration
 
 
 @dataclass(frozen=True)
 class Sample:
     """Stage 2 への 1 件分の入力。"""
 
-    extraction_id: int
+    curation_id: int
     title_ja: str
     summary_ja: str
 
@@ -133,15 +133,15 @@ async def _process_sample(
 async def _load_samples(limit: int) -> list[Sample]:
     async with AsyncSession(engine) as session:
         stmt = (
-            select(ArticleExtraction)
-            .order_by(ArticleExtraction.extracted_at.desc())
+            select(ArticleCuration)
+            .order_by(ArticleCuration.extracted_at.desc())
             .limit(limit)
         )
         result = await session.execute(stmt)
         rows = result.scalars().all()
     return [
         Sample(
-            extraction_id=row.id,
+            curation_id=row.id,
             title_ja=row.translated_title,
             summary_ja=row.summary,
         )
@@ -280,12 +280,12 @@ def _render_markdown(
     lines += [f"## カテゴリ不一致 ({len(mismatches)} 件)", ""]
     if mismatches:
         lines += [
-            "| extraction_id | Gemini | DeepSeek | title |",
+            "| curation_id | Gemini | DeepSeek | title |",
             "|---|---|---|---|",
         ]
         for r in mismatches:
             lines.append(
-                f"| {r.sample.extraction_id} | "
+                f"| {r.sample.curation_id} | "
                 f"{r.gemini.category_value} | {r.deepseek.category_value} | "
                 f"{_escape_cell(r.sample.title_ja[:80])} |"
             )
@@ -301,7 +301,7 @@ def _render_markdown(
     lines += [f"## エラー ({len(errors)} 件)", ""]
     if errors:
         lines += [
-            "| extraction_id | provider | error_class | message |",
+            "| curation_id | provider | error_class | message |",
             "|---|---|---|---|",
         ]
         for r in errors:
@@ -309,7 +309,7 @@ def _render_markdown(
                 if call.error_class is not None:
                     msg = _escape_cell((call.error_message or "")[:120])
                     lines.append(
-                        f"| {r.sample.extraction_id} | {provider} | "
+                        f"| {r.sample.curation_id} | {provider} | "
                         f"{call.error_class} | {msg} |"
                     )
     else:
@@ -333,7 +333,7 @@ async def _run(limit: int, output_path: Path) -> int:
     results: list[SampleResult] = []
     for i, sample in enumerate(samples, 1):
         print(
-            f"[{i}/{len(samples)}] extraction_id={sample.extraction_id}",
+            f"[{i}/{len(samples)}] curation_id={sample.curation_id}",
             end=" ",
             flush=True,
         )

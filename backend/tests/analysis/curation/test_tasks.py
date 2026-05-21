@@ -97,7 +97,7 @@ def _patch_try_advance_from(ready: ReadyForCuration | None) -> object:
 
 class TestExtractContent:
     @pytest.mark.asyncio
-    async def test_chains_assess_with_trigger_when_service_returns_extraction_id(
+    async def test_chains_assess_with_trigger_when_service_returns_curation_id(
         self,
     ) -> None:
         """signal 勝者 (Service が int を返す) → ``assess_content.kiq`` で chain。
@@ -120,7 +120,7 @@ class TestExtractContent:
             await extract_content(trigger=_trigger(), ctx=mock_ctx)
 
         mock_assess.kiq.assert_awaited_once_with(
-            AssessmentTrigger(extraction_id=42),
+            AssessmentTrigger(curation_id=42),
         )
 
     @pytest.mark.asyncio

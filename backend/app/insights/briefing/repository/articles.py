@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.insights.briefing.domain.article import ArticleInput
 from app.insights.snapshot.config import WEEK_TZ
-from app.models.article_extraction import ArticleExtraction
+from app.models.article_curation import ArticleCuration
 from app.models.in_scope_assessment import InScopeAssessment
 
 
@@ -44,20 +44,20 @@ class BriefingArticleRepository:
 
         stmt = (
             select(
-                ArticleExtraction.article_id,
+                ArticleCuration.article_id,
                 InScopeAssessment.translated_title,
                 InScopeAssessment.summary,
             )
             .join(
-                ArticleExtraction,
-                InScopeAssessment.extraction_id == ArticleExtraction.id,
+                ArticleCuration,
+                InScopeAssessment.curation_id == ArticleCuration.id,
             )
             .where(
                 InScopeAssessment.category_id == category_id,
                 InScopeAssessment.analyzed_at >= week_start_jst,
                 InScopeAssessment.analyzed_at < week_end_jst,
             )
-            .order_by(ArticleExtraction.article_id)
+            .order_by(ArticleCuration.article_id)
         )
         rows = (await self._session.execute(stmt)).all()
         return [

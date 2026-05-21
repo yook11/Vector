@@ -89,7 +89,7 @@ class AssessmentAuditRepository:
 
         audit は witness — 事後に採番された ``assessment_id`` / FK 解決後の
         ``category_id`` は事実ではなく操作的副産物なので payload に持たない
-        (`specs/backlog/audit-payload-fact-purification.md`)。``extraction_id``
+        (`specs/backlog/audit-payload-fact-purification.md`)。``curation_id``
         (自然キー) と ``category_slug`` (検証後 slug) で 1-hop join 可能。
 
         Args:
@@ -103,7 +103,7 @@ class AssessmentAuditRepository:
         in_scope = call.result
         payload = AssessmentPayload(
             source_name=ready.source_name,
-            extraction_id=ready.extraction_id,
+            curation_id=ready.curation_id,
             ai_model=call.model_name,
             prompt_version=call.prompt_version,
             input_text=ready.summary[:_INPUT_TEXT_LIMIT] or None,
@@ -138,7 +138,7 @@ class AssessmentAuditRepository:
         out-of-scope では None。
 
         audit は witness — 事後に採番された ``assessment_id`` は事実ではない
-        (`specs/backlog/audit-payload-fact-purification.md`)。``extraction_id``
+        (`specs/backlog/audit-payload-fact-purification.md`)。``curation_id``
         (自然キー) で 1-hop join 可能。
 
         Args:
@@ -149,7 +149,7 @@ class AssessmentAuditRepository:
         out_of_scope = call.result
         payload = AssessmentPayload(
             source_name=ready.source_name,
-            extraction_id=ready.extraction_id,
+            curation_id=ready.curation_id,
             ai_model=call.model_name,
             prompt_version=call.prompt_version,
             input_text=ready.summary[:_INPUT_TEXT_LIMIT] or None,
@@ -196,7 +196,7 @@ class AssessmentAuditRepository:
         """
         payload = AssessmentPayload(
             source_name=ready.source_name,
-            extraction_id=ready.extraction_id,
+            curation_id=ready.curation_id,
             # red-team chain γ-2: SDK exception message に key prefix /
             # Authorization header が混入する経路を redact してから永続化
             # (Stage 3 と同 pattern)。

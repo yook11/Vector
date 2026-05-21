@@ -109,7 +109,7 @@ class AssessmentService:
             # 記録できるようにする。
             raise map_provider_to_assessment(exc) from exc
 
-        extraction_id = ready.extraction_id
+        curation_id = ready.curation_id
 
         async with self._session_factory() as session:
             match call:
@@ -123,7 +123,7 @@ class AssessmentService:
                     if assessment_id is None:
                         logger.info(
                             "assessment_in_scope_concurrent_write",
-                            extraction_id=extraction_id,
+                            curation_id=curation_id,
                         )
                         return None
                     # winner — 業務 INSERT + audit を同一 tx で commit
@@ -134,7 +134,7 @@ class AssessmentService:
                     await session.commit()
                     logger.info(
                         "assessment_in_scope_completed",
-                        extraction_id=extraction_id,
+                        curation_id=curation_id,
                     )
                     return assessment_id
 
@@ -148,7 +148,7 @@ class AssessmentService:
                     if assessment_id is None:
                         logger.info(
                             "assessment_out_of_scope_concurrent_write",
-                            extraction_id=extraction_id,
+                            curation_id=curation_id,
                         )
                         return None
                     # winner — 業務 INSERT + audit を同一 tx で commit
@@ -159,7 +159,7 @@ class AssessmentService:
                     await session.commit()
                     logger.info(
                         "assessment_out_of_scope_completed",
-                        extraction_id=extraction_id,
+                        curation_id=curation_id,
                     )
                     # Stage 5 chain なし
                     return None

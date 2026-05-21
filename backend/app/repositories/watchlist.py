@@ -4,7 +4,7 @@ from sqlalchemy import delete, exists
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import func, select
 
-from app.models.article_extraction import ArticleExtraction
+from app.models.article_curation import ArticleCuration
 from app.models.in_scope_assessment import InScopeAssessment
 from app.models.watchlist_entry import WatchlistEntry
 from app.repositories.articles import article_eager_options_brief
@@ -26,8 +26,8 @@ class WatchlistRepository:
         """
         base = (
             select(InScopeAssessment)
-            .join(InScopeAssessment.extraction)
-            .join(ArticleExtraction.article)
+            .join(InScopeAssessment.curation)
+            .join(ArticleCuration.article)
             .join(
                 WatchlistEntry,
                 WatchlistEntry.article_analysis_id == InScopeAssessment.id,

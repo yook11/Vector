@@ -6,7 +6,7 @@
   の解釈、--limit と --all の排他
 - ``run``: dry-run default, ``--execute`` 渡し / 件数選択 / id 範囲 / 0 件時 stdout
 - exit code: failed_ids 0 → 0, failed_ids あり → 3
-- 既存 ``ArticleExtraction`` を持たない article は selection から除外される
+- 既存 ``ArticleCuration`` を持たない article は selection から除外される
 - ``--limit`` 未指定 + ``--all`` 未指定 → デフォルト 3 件で打ち止め (誤爆防止)
 """
 
@@ -16,21 +16,21 @@ import json
 from datetime import UTC, datetime
 
 import pytest
-from app.analysis.curation.cli.re_curate_all import build_parser, run
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from tests.analysis.curation.application.test_recuration_service import (
-    _curator as make_curator,  # 再利用 (BaseCurator mock)
-)
 
 from app.analysis.curation.ai.envelope import CurationCall
 from app.analysis.curation.application import (
     RecurationService,
     RecurationSummary,
 )
+from app.analysis.curation.cli.re_curate_all import build_parser, run
 from app.analysis.curation.domain import Signal
 from app.analysis.curation.repository import CurationRepository
 from app.models.article import Article
 from app.models.news_source import NewsSource
+from tests.analysis.curation.application.test_recuration_service import (
+    _curator as make_curator,  # 再利用 (BaseCurator mock)
+)
 
 
 def _summary_from_stdout(captured: str) -> dict:
@@ -76,7 +76,7 @@ class TestBuildParser:
 
 
 # ---------------------------------------------------------------------------
-# run — Article + ArticleExtraction を seed して selection を検証する
+# run — Article + ArticleCuration を seed して selection を検証する
 # ---------------------------------------------------------------------------
 
 
@@ -160,7 +160,7 @@ async def test_run_excludes_articles_without_existing_extraction(
     sample_source: NewsSource,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """ArticleExtraction を持たない article は selection 段階で除外される。"""
+    """ArticleCuration を持たない article は selection 段階で除外される。"""
     a_with = await _seed_article_with_extraction(
         db_session, sample_source, url="https://example.com/with"
     )

@@ -36,7 +36,7 @@ from app.analysis.embedding.errors import (
     EmbeddingTerminalSkipError,
 )
 from app.models.article import Article
-from app.models.article_extraction import ArticleExtraction
+from app.models.article_curation import ArticleCuration
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
 
@@ -73,8 +73,8 @@ async def _make_article(
 async def _make_extraction(
     db_session: AsyncSession,
     article: Article,
-) -> ArticleExtraction:
-    extraction = ArticleExtraction(
+) -> ArticleCuration:
+    extraction = ArticleCuration(
         article_id=article.id,
         translated_title="title",
         summary="summary",

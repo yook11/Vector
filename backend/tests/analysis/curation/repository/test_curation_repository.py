@@ -31,8 +31,8 @@ from app.analysis.curation.ai.envelope import CurationCall
 from app.analysis.curation.domain import Noise, Signal
 from app.analysis.curation.repository import CurationRepository
 from app.models.article import Article
-from app.models.article_extraction import ArticleExtraction
-from app.models.extraction_noise import ExtractionNoise as ExtractionNoiseORM
+from app.models.article_curation import ArticleCuration
+from app.models.curation_noise import CurationNoise
 from app.models.news_source import NewsSource
 
 # ---------------------------------------------------------------------------
@@ -110,9 +110,9 @@ async def test_signal_exists_for_article_returns_true_after_save(
         db_session, sample_source, "https://example.com/exists"
     )
     repo = CurationRepository(db_session)
-    extraction_id = await repo.save_signal(_signal_call(), article_id=article.id)
+    curation_id = await repo.save_signal(_signal_call(), article_id=article.id)
     await db_session.commit()
-    assert extraction_id is not None
+    assert curation_id is not None
     assert await repo.signal_exists_for_article(article.id) is True
 
 
@@ -127,18 +127,18 @@ async def test_save_signal_returns_persisted_id(
 ) -> None:
     article = await _make_article(db_session, sample_source, "https://example.com/save")
     repo = CurationRepository(db_session)
-    extraction_id = await repo.save_signal(
+    curation_id = await repo.save_signal(
         _signal_call(title_ja="保存後", summary_ja="要約"),
         article_id=article.id,
     )
     await db_session.commit()
 
-    assert extraction_id is not None
-    assert extraction_id > 0
+    assert curation_id is not None
+    assert curation_id > 0
     # 永続化された行が新規 id と一致する
     persisted = (
         await db_session.execute(
-            select(ArticleExtraction).where(ArticleExtraction.id == extraction_id)
+            select(ArticleCuration).where(ArticleCuration.id == curation_id)
         )
     ).scalar_one()
     assert persisted.translated_title == "保存後"
@@ -169,7 +169,7 @@ async def test_save_signal_returns_none_on_duplicate_in_same_session(
 async def test_update_signal_idempotent_updates_parent_in_place(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
-    """parent ``ArticleExtraction`` は同じ id のまま値だけ差し替わる。
+    """parent ``ArticleCuration`` は同じ id のまま値だけ差し替わる。
 
     parent を DELETE しないことで ``in_scope_assessments`` /
     ``out_of_scope_assessments`` / ``article_embeddings`` / ``watchlist_entries``
@@ -193,7 +193,7 @@ async def test_update_signal_idempotent_updates_parent_in_place(
     assert updated_id == parent_id  # parent UPDATE only — id 不変
     parent_after = (
         await db_session.execute(
-            select(ArticleExtraction).where(ArticleExtraction.id == updated_id)
+            select(ArticleCuration).where(ArticleCuration.id == updated_id)
         )
     ).scalar_one()
     assert parent_after.translated_title == "新タイトル"
@@ -233,9 +233,7 @@ async def test_concurrent_save_signal_returns_one_persisted_one_none(
     rows = (
         (
             await db_session.execute(
-                select(ArticleExtraction).where(
-                    ArticleExtraction.article_id == article.id
-                )
+                select(ArticleCuration).where(ArticleCuration.article_id == article.id)
             )
         )
         .scalars()
@@ -292,7 +290,7 @@ async def test_save_noise_returns_persisted_id(
     assert noise_id is not None
     persisted = (
         await db_session.execute(
-            select(ExtractionNoiseORM).where(ExtractionNoiseORM.id == noise_id)
+            select(CurationNoise).where(CurationNoise.id == noise_id)
         )
     ).scalar_one()
     assert persisted.title_ja == "ノイズタイトル"

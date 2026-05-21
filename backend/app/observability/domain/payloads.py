@@ -13,13 +13,13 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 
 class BasePipelineEventPayload(BaseModel):
     """共通基底 — A 級保険 + S 級失敗詳細を共通化。"""
 
-    model_config = ConfigDict(extra="ignore", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, populate_by_name=True)
 
     kind: str
     source_name: str | None = None  # A: FK 切断耐性
@@ -138,7 +138,13 @@ class AssessmentPayload(BasePipelineEventPayload):
     kind: Literal["assessment"] = "assessment"
 
     # Stage 4 固有 identifier (top-level column が無いため payload で保持、自然キー)
-    extraction_id: int | None = None
+    # Rolling deploy 互換: 旧 in-flight payload の ``extraction_id`` field も
+    # ``validation_alias`` で受け入れる (PR-E.3 で alias 削除予定)。
+    curation_id: int | None = Field(
+        default=None,
+        validation_alias=AliasChoices("curation_id", "extraction_id"),
+        serialization_alias="curation_id",
+    )
 
     # A 級: メタデータ
     ai_model: str | None = None  # 使用 assessor の model 名

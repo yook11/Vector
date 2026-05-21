@@ -1,8 +1,8 @@
 from app.models.article import Article
-from app.models.article_extraction import ArticleExtraction
+from app.models.article_curation import ArticleCuration
 from app.models.auth_ref import auth_user_ref  # noqa: F401
 from app.models.category import Category
-from app.models.extraction_noise import ExtractionNoise
+from app.models.curation_noise import CurationNoise
 from app.models.fetch_log import FetchLog
 from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource, SourceType
@@ -15,9 +15,9 @@ from app.models.weekly_trends_snapshot import WeeklyTrendsSnapshot
 
 __all__ = [
     "Article",
-    "ArticleExtraction",
+    "ArticleCuration",
     "Category",
-    "ExtractionNoise",
+    "CurationNoise",
     "FetchLog",
     "InScopeAssessment",
     "NewsSource",

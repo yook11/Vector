@@ -29,7 +29,7 @@ from app.analysis.assessment.tasks import assess_content
 from app.analysis.curation.repository import CurationRepository
 from app.brokers import broker_analysis
 from app.db import engine
-from app.models.article_extraction import ArticleExtraction
+from app.models.article_curation import ArticleCuration
 
 
 async def main() -> None:
@@ -37,7 +37,7 @@ async def main() -> None:
 
     async with AsyncSession(engine) as session:
         result = await session.execute(
-            select(ArticleExtraction.article_id, ArticleExtraction.id)
+            select(ArticleCuration.article_id, ArticleCuration.id)
         )
         rows = [(row[0], row[1]) for row in result]
 
@@ -47,7 +47,7 @@ async def main() -> None:
     enqueued = 0
     skipped = 0
     try:
-        for article_id, _extraction_id in rows:
+        for article_id, _curation_id in rows:
             async with session_factory() as session:
                 extraction_repo = CurationRepository(session)
                 assessment_repo = AssessmentRepository(session)

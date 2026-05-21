@@ -28,7 +28,7 @@ from app.insights.briefing.schemas.briefing import (
     _StoryOut,
 )
 from app.models.article import Article
-from app.models.article_extraction import ArticleExtraction
+from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource
@@ -61,10 +61,10 @@ async def _fetch_article_summaries(
             InScopeAssessment.translated_title,
             NewsSource.name,
         )
-        .join(ArticleExtraction, ArticleExtraction.article_id == Article.id)
+        .join(ArticleCuration, ArticleCuration.article_id == Article.id)
         .join(
             InScopeAssessment,
-            InScopeAssessment.extraction_id == ArticleExtraction.id,
+            InScopeAssessment.curation_id == ArticleCuration.id,
         )
         .join(NewsSource, NewsSource.id == Article.source_id)
         .where(Article.id.in_(article_ids))

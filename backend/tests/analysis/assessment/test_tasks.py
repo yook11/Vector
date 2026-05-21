@@ -1,7 +1,7 @@
 """``assess_content`` task のテスト (chain 経路 + rate limit 経路 + skip 経路)。
 
 案 3 (厚い Ready + 下流 Stage 自身が処理開始時に構築): assess_content は
-``AssessmentTrigger`` (extraction_id のみ) を受領し、task 自身が
+``AssessmentTrigger`` (curation_id のみ) を受領し、task 自身が
 ``ReadyForAssessment.try_advance_from`` で Ready を構築する。
 
 - precondition 未充足 → svc.execute を呼ばずに return (rate limit も acquire しない)
@@ -68,13 +68,13 @@ def _make_ctx(
     return ctx
 
 
-def _make_trigger(extraction_id: int = 2) -> AssessmentTrigger:
-    return AssessmentTrigger(extraction_id=extraction_id)
+def _make_trigger(curation_id: int = 2) -> AssessmentTrigger:
+    return AssessmentTrigger(curation_id=curation_id)
 
 
-def _make_ready(extraction_id: int = 2) -> ReadyForAssessment:
+def _make_ready(curation_id: int = 2) -> ReadyForAssessment:
     return ReadyForAssessment(
-        extraction_id=extraction_id,
+        curation_id=curation_id,
         translated_title="title",
         summary="summary",
         article_id=7,
@@ -105,7 +105,7 @@ class TestAssessContent:
         from app.analysis.assessment.tasks import assess_content
 
         ctx = _make_ctx(assessor=_make_provider_fake())
-        trigger = _make_trigger(extraction_id=42)
+        trigger = _make_trigger(curation_id=42)
 
         with (
             _patch_ready_construction(None),
@@ -128,8 +128,8 @@ class TestAssessContent:
         from app.analysis.assessment.tasks import assess_content
 
         mock_ctx = _make_ctx(assessor=_make_provider_fake())
-        trigger = _make_trigger(extraction_id=2)
-        ready = _make_ready(extraction_id=2)
+        trigger = _make_trigger(curation_id=2)
+        ready = _make_ready(curation_id=2)
 
         with (
             _patch_ready_construction(ready),
@@ -156,10 +156,10 @@ class TestAssessContent:
         from app.analysis.assessment.tasks import assess_content
 
         mock_ctx = _make_ctx(assessor=_make_provider_fake())
-        trigger = _make_trigger(extraction_id=2)
+        trigger = _make_trigger(curation_id=2)
 
         with (
-            _patch_ready_construction(_make_ready(extraction_id=2)),
+            _patch_ready_construction(_make_ready(curation_id=2)),
             patch("app.analysis.assessment.tasks.AssessmentService") as mock_svc_cls,
             patch("app.analysis.assessment.tasks.generate_embedding") as mock_embed,
         ):

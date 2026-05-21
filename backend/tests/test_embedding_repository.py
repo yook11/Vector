@@ -18,7 +18,7 @@ from app.analysis.embedding.domain.value_objects import (
 )
 from app.analysis.embedding.repository import EmbeddingRepository
 from app.models.article import Article
-from app.models.article_extraction import ArticleExtraction
+from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource
@@ -42,7 +42,7 @@ async def _build_analysis(
     )
     db_session.add(article)
     await db_session.flush()
-    extraction = ArticleExtraction(
+    extraction = ArticleCuration(
         article_id=article.id,
         translated_title="抽出タイトル",
         summary="抽出要約",
@@ -50,7 +50,7 @@ async def _build_analysis(
     db_session.add(extraction)
     await db_session.flush()
     analysis = InScopeAssessment(
-        extraction_id=extraction.id,
+        curation_id=extraction.id,
         translated_title="分析タイトル",
         summary="分析要約",
         investor_take="投資家視点",
@@ -95,7 +95,7 @@ async def test_try_load_returns_ready_when_embedding_null(
     assert isinstance(ready, ReadyForEmbedding)
     assert ready.analysis_id == analysis.id
     assert ready.text_for_embedding == "分析タイトル\n分析要約"
-    # article_id は ArticleExtraction 1-hop JOIN で取得
+    # article_id は ArticleCuration 1-hop JOIN で取得
     assert ready.article_id > 0
 
 

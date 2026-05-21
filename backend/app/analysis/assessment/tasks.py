@@ -1,11 +1,11 @@
 """Stage 4 (Assessment) taskiq タスク。
 
-Stage 3 (extract_content) から ``AssessmentTrigger`` (extraction_id のみ運ぶ
+Stage 3 (curate_content) から ``AssessmentTrigger`` (curation_id のみ運ぶ
 軽量 ID キャリア) で chain される。本 task が処理開始時に
 ``ReadyForAssessment.try_advance_from`` を呼んで最新の DB 状態から厚い Ready を
 構築する (案 3 = 厚い Ready + 下流 Stage 自身が処理開始時に構築)。
 
-precondition 未充足 (extraction 不在 / 既 in-scope / 既 out-of-scope) の場合は
+precondition 未充足 (curation 不在 / 既 in-scope / 既 out-of-scope) の場合は
 rate limit acquire を試みず即 return する (Ready 構築が gatekeeper)。
 
 in-scope 判定で永続化に成功した場合は ``EmbeddingTrigger`` (analysis_id のみ)
@@ -47,15 +47,15 @@ async def assess_content(
     trigger: AssessmentTrigger,
     ctx: Context = TaskiqDepends(),
 ) -> None:
-    """単一 extraction に対して Stage 4 (Assessment) を実行する。
+    """単一 curation に対して Stage 4 (Assessment) を実行する。
 
     Stage 4 は in-scope / out-of-scope の判定 + 該当時の category / topic /
     investor_take 抽出を一括して行う。
 
-    案 3 適用: 受け取った ``AssessmentTrigger`` は ``extraction_id`` のみ運ぶ
+    案 3 適用: 受け取った ``AssessmentTrigger`` は ``curation_id`` のみ運ぶ
     軽量 message。本 task が処理開始時に
     ``ReadyForAssessment.try_advance_from`` を呼んで最新の DB 状態から厚い
-    Ready を構築する。Ready 構築が成功 = precondition (extraction 存在 +
+    Ready を構築する。Ready 構築が成功 = precondition (curation 存在 +
     未 in-scope 評価 + 未 out-of-scope 評価) が satisfy された状態。
 
     順序: Ready 構築 → rate limit acquire → Service.execute。precondition 未充足
@@ -68,13 +68,13 @@ async def assess_content(
     # 処理開始時に Ready を構築 (precondition + audit 参照値の全揃え)
     async with session_factory() as session:
         ready = await ReadyForAssessment.try_advance_from(
-            extraction_id=trigger.extraction_id,
+            curation_id=trigger.curation_id,
             repo=AssessmentRepository(session),
         )
     if ready is None:
         logger.info(
             "assess_content_skipped",
-            extraction_id=trigger.extraction_id,
+            curation_id=trigger.curation_id,
             reason="precondition_not_met",
         )
         return
@@ -83,7 +83,7 @@ async def assess_content(
     if not await ctx.state.provider_rate_limit_gate.acquire(assessor.rate_policy):
         logger.warning(
             "assess_content_daily_quota",
-            extraction_id=ready.extraction_id,
+            curation_id=ready.curation_id,
         )
         return
 

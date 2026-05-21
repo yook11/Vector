@@ -22,7 +22,7 @@
 - ``--limit`` のみ (デフォルト 3): 小さく試走、1 回の呼び出しで API クォータを
   使い切らないための保険
 - ``--all`` 指定時のみ全件 (--limit と排他)、それ以外は ``--limit`` で必ず制限
-- 対象 article: 既存 ``ArticleExtraction`` を持つもの (新規は通常 pipeline 任せ)
+- 対象 article: 既存 ``ArticleCuration`` を持つもの (新規は通常 pipeline 任せ)
   + ``--id-from`` / ``--id-to`` で範囲指定可 (CLI 中断後の再開用)
 
 戻り値 (exit code):
@@ -56,7 +56,7 @@ from app.analysis.curation.application import (
 )
 from app.config import settings
 from app.models.article import Article
-from app.models.article_extraction import ArticleExtraction
+from app.models.article_curation import ArticleCuration
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -114,10 +114,10 @@ async def _select_article_ids(
     id_to: int | None,
     limit: int | None,
 ) -> tuple[int, ...]:
-    """既存 ``ArticleExtraction`` を持つ article_id を昇順で取得する。"""
+    """既存 ``ArticleCuration`` を持つ article_id を昇順で取得する。"""
     stmt = (
         select(Article.id)
-        .join(ArticleExtraction, ArticleExtraction.article_id == Article.id)
+        .join(ArticleCuration, ArticleCuration.article_id == Article.id)
         .order_by(Article.id)
     )
     if id_from is not None:

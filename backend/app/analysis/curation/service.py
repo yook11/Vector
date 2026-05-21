@@ -8,7 +8,7 @@ AI 呼び出しは session 外で行い、並行実行に負けた場合は audi
 失敗時の retry / audit / DELETE 方針は ``CurationFailureHandler`` に委ねる。
 
 Returns:
-    Signal 保存成功時は ``article_extractions.id``。
+    Signal 保存成功時は ``article_curations.id``。
     Noise 保存成功時または race 敗北時は ``None``。
 """
 
@@ -61,7 +61,7 @@ class CurationService:
         Stage 3 marker に詰め替える (Anti-Corruption Layer)。
 
         Returns:
-            signal 勝者の ``article_extractions.id``、noise 勝者と race 敗北は
+            signal 勝者の ``article_curations.id``、noise 勝者と race 敗北は
             ``None`` (Task 層は ``None`` で Stage 4 chain を抑止)。
         """
         # AI 呼び出しは session 外。provider error は Stage 3 marker に詰め替えて
@@ -79,10 +79,10 @@ class CurationService:
         async with self._session_factory() as session:
             match envelope:
                 case CurationCall(result=Signal()):
-                    extraction_id = await CurationRepository(session).save_signal(
+                    curation_id = await CurationRepository(session).save_signal(
                         envelope, article_id=ready.article_id
                     )
-                    if extraction_id is None:
+                    if curation_id is None:
                         # race lost — 勝者 task が audit を焼く
                         logger.info(
                             "curate_race_loss_signal",
@@ -98,9 +98,9 @@ class CurationService:
                     logger.info(
                         "curation_completed",
                         article_id=ready.article_id,
-                        extraction_id=extraction_id,
+                        curation_id=curation_id,
                     )
-                    return extraction_id
+                    return curation_id
 
                 case CurationCall(result=Noise()):
                     noise_id = await CurationRepository(session).save_noise(

@@ -25,7 +25,7 @@ from app.analysis.assessment.domain.ready import (
 def _make_ready(**overrides: object) -> ReadyForAssessment:
     """Test fixtures 用の Ready 構築 helper (5 fields 既定値)。"""
     defaults: dict[str, object] = {
-        "extraction_id": 42,
+        "curation_id": 42,
         "translated_title": "量子コンピューティングの新たなブレイクスルー",
         "summary": "MIT が新手法を発表。量子エラー訂正の分野で大きな進展。",
         "article_id": 7,
@@ -57,20 +57,20 @@ class TestTryAdvanceFromPreconditionMet:
     @pytest.mark.asyncio
     async def test_returns_ready_from_repo(self) -> None:
         """Repository が Ready を返したら同 instance を返す (thin delegate)。"""
-        expected = _make_ready(extraction_id=42)
+        expected = _make_ready(curation_id=42)
         repo = _make_repo_mock(return_ready=expected)
 
-        ready = await ReadyForAssessment.try_advance_from(extraction_id=42, repo=repo)
+        ready = await ReadyForAssessment.try_advance_from(curation_id=42, repo=repo)
 
         assert ready is expected
 
     @pytest.mark.asyncio
-    async def test_calls_repo_with_extraction_id(self) -> None:
-        """Repository には extraction_id がそのまま渡される。"""
-        expected = _make_ready(extraction_id=99)
+    async def test_calls_repo_with_curation_id(self) -> None:
+        """Repository には curation_id がそのまま渡される。"""
+        expected = _make_ready(curation_id=99)
         repo = _make_repo_mock(return_ready=expected)
 
-        await ReadyForAssessment.try_advance_from(extraction_id=99, repo=repo)
+        await ReadyForAssessment.try_advance_from(curation_id=99, repo=repo)
 
         repo.try_load_for_assessment.assert_awaited_once_with(99)
 
@@ -81,7 +81,7 @@ class TestTryAdvanceFromPreconditionNotMet:
         """Repository が None を返したら None を返す (業務正常状態)。"""
         repo = _make_repo_mock(return_ready=None)
 
-        ready = await ReadyForAssessment.try_advance_from(extraction_id=42, repo=repo)
+        ready = await ReadyForAssessment.try_advance_from(curation_id=42, repo=repo)
 
         assert ready is None
         repo.try_load_for_assessment.assert_awaited_once_with(42)
@@ -97,24 +97,24 @@ class TestReadyForAssessmentImmutability:
         """frozen=True のため field 書き換えは ValidationError。"""
         ready = _make_ready()
         with pytest.raises(ValidationError):
-            ready.extraction_id = 999  # type: ignore[misc]
+            ready.curation_id = 999  # type: ignore[misc]
 
     def test_validates_int_fields(self) -> None:
         """構築時に Pydantic が int を validate する。"""
         with pytest.raises(ValidationError):
             ReadyForAssessment(
-                extraction_id="not-an-int",  # type: ignore[arg-type]
+                curation_id="not-an-int",  # type: ignore[arg-type]
                 translated_title="t",
                 summary="s",
                 article_id=1,
                 source_name=None,
             )
 
-    def test_rejects_non_positive_extraction_id(self) -> None:
-        """extraction_id は gt=0 (Field constraint)。"""
+    def test_rejects_non_positive_curation_id(self) -> None:
+        """curation_id は gt=0 (Field constraint)。"""
         with pytest.raises(ValidationError):
             ReadyForAssessment(
-                extraction_id=0,
+                curation_id=0,
                 translated_title="t",
                 summary="s",
                 article_id=1,
@@ -125,7 +125,7 @@ class TestReadyForAssessmentImmutability:
         """article_id は gt=0 (Field constraint)。"""
         with pytest.raises(ValidationError):
             ReadyForAssessment(
-                extraction_id=1,
+                curation_id=1,
                 translated_title="t",
                 summary="s",
                 article_id=0,
@@ -135,7 +135,7 @@ class TestReadyForAssessmentImmutability:
     def test_accepts_none_source_name(self) -> None:
         """source_name は NewsSource 不在 / FK 切断時に None を許容する。"""
         ready = ReadyForAssessment(
-            extraction_id=1,
+            curation_id=1,
             translated_title="t",
             summary="s",
             article_id=1,
@@ -151,18 +151,18 @@ class TestReadyForAssessmentImmutability:
 
 class TestAssessmentTrigger:
     def test_is_frozen(self) -> None:
-        trigger = AssessmentTrigger(extraction_id=42)
+        trigger = AssessmentTrigger(curation_id=42)
         with pytest.raises(ValidationError):
-            trigger.extraction_id = 999  # type: ignore[misc]
+            trigger.curation_id = 999  # type: ignore[misc]
 
-    def test_rejects_non_positive_extraction_id(self) -> None:
+    def test_rejects_non_positive_curation_id(self) -> None:
         with pytest.raises(ValidationError):
-            AssessmentTrigger(extraction_id=0)
+            AssessmentTrigger(curation_id=0)
 
-    def test_accepts_legacy_ready_message_shape(self) -> None:
-        """旧 ReadyForAssessment(extraction_id, translated_title, summary)
-        message を AssessmentTrigger が deserialize できる (rolling deploy
-        互換)。Pydantic 既定 extra='ignore' で legacy field は無視される。
+    def test_accepts_legacy_extraction_id_alias(self) -> None:
+        """旧 in-flight message (`extraction_id` field) を新 schema が
+        ``validation_alias=AliasChoices("curation_id", "extraction_id")`` で
+        受け入れる (rolling deploy 互換、PR-E.3 で alias 削除予定)。
         """
         trigger = AssessmentTrigger.model_validate(
             {
@@ -171,4 +171,9 @@ class TestAssessmentTrigger:
                 "summary": "s",
             }
         )
-        assert trigger.extraction_id == 1
+        assert trigger.curation_id == 1
+
+    def test_serializes_with_curation_id_alias(self) -> None:
+        """``model_dump(by_alias=True)`` は新 field 名 ``curation_id`` で出力。"""
+        trigger = AssessmentTrigger(curation_id=42)
+        assert trigger.model_dump(by_alias=True) == {"curation_id": 42}
