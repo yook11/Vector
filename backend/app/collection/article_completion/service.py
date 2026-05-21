@@ -65,7 +65,7 @@ class ArticleCompletionService:
         で保証済。
 
         Returns:
-            ``int`` — 永続化済 ``article_id``。caller は ``extract_content.kiq``
+            ``int`` — 永続化済 ``article_id``。caller は ``curate_content.kiq``
             に chain する。
             ``None`` — lease 衝突 / 状態不整合 / 永続失敗 / 一時失敗 /
             race-loss (静かに exit)。失敗詳細は構造化ログで観測する。

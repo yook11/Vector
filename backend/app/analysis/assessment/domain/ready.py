@@ -32,7 +32,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class AssessmentPreconditionProtocol(Protocol):
@@ -63,19 +63,11 @@ class ReadyForAssessment(BaseModel):
     - ``article_id``: 正の整数 (audit の ``pipeline_events.article_id`` 列に詰める)
     - ``source_name``: NewsSource.name (audit payload)、FK 切断時は None
     - frozen: 生成後は不変
-
-    Rolling deploy 互換: ``curation_id`` field は ``validation_alias`` で旧
-    ``extraction_id`` field の in-flight message も受け入れる (PR-E.3 で alias
-    削除予定)。
     """
 
-    model_config = ConfigDict(frozen=True, populate_by_name=True)
+    model_config = ConfigDict(frozen=True)
 
-    curation_id: int = Field(
-        gt=0,
-        validation_alias=AliasChoices("curation_id", "extraction_id"),
-        serialization_alias="curation_id",
-    )
+    curation_id: int = Field(gt=0)
     translated_title: str = Field(min_length=1)
     summary: str = Field(min_length=1)
     article_id: int = Field(gt=0)
@@ -125,16 +117,8 @@ class AssessmentTrigger(BaseModel):
 
     taskiq formatter は Pydantic BaseModel(frozen=True) を要求するため
     ``BaseModel`` 派生 (memory `feedback_taskiq_basemodel_required.md`)。
-
-    Rolling deploy 互換: ``curation_id`` field は ``validation_alias`` で旧
-    ``extraction_id`` field の in-flight message も受け入れる (PR-E.3 で alias
-    削除予定)。
     """
 
-    model_config = ConfigDict(frozen=True, populate_by_name=True)
+    model_config = ConfigDict(frozen=True)
 
-    curation_id: int = Field(
-        gt=0,
-        validation_alias=AliasChoices("curation_id", "extraction_id"),
-        serialization_alias="curation_id",
-    )
+    curation_id: int = Field(gt=0)

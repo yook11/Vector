@@ -16,7 +16,7 @@ task は処理開始時に ``ReadyForArticleCompletion.try_advance_from`` で厚
 
 - precondition 未充足 (``try_advance_from`` が ``None``) → skip log + ``None``
   返却、Service 不構築 / chain 発火せず
-- ``int`` (article_id) → ``extract_content.kiq`` を
+- ``int`` (article_id) → ``curate_content.kiq`` を
   ``CurationTrigger(article_id)`` で発火 + success dict 返却
 - ``None`` (lease 衝突 / 永続失敗 / 一時失敗 / race-loss) → ``None``
   返却、chain 発火せず
@@ -109,11 +109,11 @@ async def test_precondition_not_met_skips_and_does_not_call_service(
 
 
 @pytest.mark.asyncio
-async def test_chains_extract_content_with_trigger_when_article_id_returned(
+async def test_chains_curate_content_with_trigger_when_article_id_returned(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``int`` (article_id) → ``extract_content.kiq`` を Trigger で発火 + success dict."""  # noqa: E501
+    """``int`` (article_id) → ``curate_content.kiq`` を Trigger で発火 + success dict."""  # noqa: E501
     curate_content_kiq = AsyncMock()
     monkeypatch.setattr(_SERVICE_EXECUTE, AsyncMock(return_value=123))
     monkeypatch.setattr(_CURATE_CONTENT_KIQ, curate_content_kiq)

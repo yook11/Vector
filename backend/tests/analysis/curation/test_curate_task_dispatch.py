@@ -1,4 +1,4 @@
-"""``extract_content`` task の失敗 dispatch routing テスト。
+"""``curate_content`` task の失敗 dispatch routing テスト。
 
 Service の execute を mock して、tasks.py が **どんな exc** を受けたときに
 ``CurationFailureHandler.handle`` に正しく委譲し、戻り値の ``reraise`` を
@@ -100,7 +100,7 @@ def _patch_try_advance_from(ready: ReadyForCuration | None = None) -> object:
 @pytest.mark.asyncio
 async def test_drop_article_delegates_to_handler(exc_cls: type[Exception]) -> None:
     """Drop 系例外は handler.handle に委譲され、reraise=False で return する。"""
-    from app.analysis.curation.tasks import extract_content
+    from app.analysis.curation.tasks import curate_content
 
     ctx = _make_ctx()
     exc = exc_cls("boom")
@@ -112,7 +112,7 @@ async def test_drop_article_delegates_to_handler(exc_cls: type[Exception]) -> No
     ):
         mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
         mock_handler_cls.return_value.handle = AsyncMock(return_value=False)
-        await extract_content(trigger=_trigger(), ctx=ctx)
+        await curate_content(trigger=_trigger(), ctx=ctx)
 
     handler_handle = mock_handler_cls.return_value.handle
     handler_handle.assert_awaited_once()
@@ -139,7 +139,7 @@ async def test_drop_article_delegates_to_handler(exc_cls: type[Exception]) -> No
 @pytest.mark.asyncio
 async def test_keep_article_delegates_to_handler(exc_cls: type[Exception]) -> None:
     """Keep 系例外は handler に委譲され、reraise=False で return する。"""
-    from app.analysis.curation.tasks import extract_content
+    from app.analysis.curation.tasks import curate_content
 
     ctx = _make_ctx()
     with (
@@ -149,7 +149,7 @@ async def test_keep_article_delegates_to_handler(exc_cls: type[Exception]) -> No
     ):
         mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc_cls("boom"))
         mock_handler_cls.return_value.handle = AsyncMock(return_value=False)
-        await extract_content(trigger=_trigger(), ctx=ctx)
+        await curate_content(trigger=_trigger(), ctx=ctx)
 
     handler_handle = mock_handler_cls.return_value.handle
     handler_handle.assert_awaited_once()
@@ -172,7 +172,7 @@ async def test_keep_article_delegates_to_handler(exc_cls: type[Exception]) -> No
 @pytest.mark.asyncio
 async def test_retryable_reraise_true_raises(exc_cls: type[Exception]) -> None:
     """Handler が ``reraise=True`` を返したら task は元の exc を raise する。"""
-    from app.analysis.curation.tasks import extract_content
+    from app.analysis.curation.tasks import curate_content
 
     ctx = _make_ctx(retry_count=0, max_retries=1)  # retry 余地あり
 
@@ -184,7 +184,7 @@ async def test_retryable_reraise_true_raises(exc_cls: type[Exception]) -> None:
         mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc_cls("boom"))
         mock_handler_cls.return_value.handle = AsyncMock(return_value=True)
         with pytest.raises(exc_cls):
-            await extract_content(trigger=_trigger(), ctx=ctx)
+            await curate_content(trigger=_trigger(), ctx=ctx)
 
     mock_handler_cls.return_value.handle.assert_awaited_once()
 
@@ -192,7 +192,7 @@ async def test_retryable_reraise_true_raises(exc_cls: type[Exception]) -> None:
 @pytest.mark.asyncio
 async def test_retryable_reraise_false_returns() -> None:
     """Handler が ``reraise=False`` を返したら task は return する (raise しない)。"""
-    from app.analysis.curation.tasks import extract_content
+    from app.analysis.curation.tasks import curate_content
 
     ctx = _make_ctx(retry_count=1, max_retries=1)  # 最終試行
 
@@ -205,7 +205,7 @@ async def test_retryable_reraise_false_returns() -> None:
             side_effect=AIProviderNetworkError("connection reset")
         )
         mock_handler_cls.return_value.handle = AsyncMock(return_value=False)
-        await extract_content(trigger=_trigger(), ctx=ctx)
+        await curate_content(trigger=_trigger(), ctx=ctx)
 
     handler_handle = mock_handler_cls.return_value.handle
     handler_handle.assert_awaited_once()
@@ -229,7 +229,7 @@ async def test_rate_limit_class_delegates_to_handler(
     retry decision (taskiq retry に乗せるか) は Handler 内部の責務なので、本
     task テストでは Handler が呼ばれたことのみ確認する。
     """
-    from app.analysis.curation.tasks import extract_content
+    from app.analysis.curation.tasks import curate_content
 
     ctx = _make_ctx(retry_count=0, max_retries=1)
 
@@ -240,7 +240,7 @@ async def test_rate_limit_class_delegates_to_handler(
     ):
         mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc_cls("boom"))
         mock_handler_cls.return_value.handle = AsyncMock(return_value=False)
-        await extract_content(trigger=_trigger(), ctx=ctx)
+        await curate_content(trigger=_trigger(), ctx=ctx)
 
     mock_handler_cls.return_value.handle.assert_awaited_once()
 
@@ -253,7 +253,7 @@ async def test_rate_limit_class_delegates_to_handler(
 @pytest.mark.asyncio
 async def test_unexpected_exception_delegates_to_handler() -> None:
     """Stage 3 marker 外の exc も except Exception で Handler に届く。"""
-    from app.analysis.curation.tasks import extract_content
+    from app.analysis.curation.tasks import curate_content
 
     ctx = _make_ctx()
     with (
@@ -265,7 +265,7 @@ async def test_unexpected_exception_delegates_to_handler() -> None:
             side_effect=ValueError("surprise"),
         )
         mock_handler_cls.return_value.handle = AsyncMock(return_value=False)
-        await extract_content(trigger=_trigger(), ctx=ctx)
+        await curate_content(trigger=_trigger(), ctx=ctx)
 
     handler_handle = mock_handler_cls.return_value.handle
     handler_handle.assert_awaited_once()

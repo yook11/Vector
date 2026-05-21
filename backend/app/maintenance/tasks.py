@@ -76,12 +76,12 @@ async def _update_circuit_breaker(role: str, found: int) -> int:
     schedule=[{"cron": "*/15 * * * *"}],
 )
 async def backfill_extractions(ctx: Context = TaskiqDepends()) -> None:
-    """extraction 子が NULL の Article を発見し extract_content を再投入する。
+    """curation 子が NULL の Article を発見し curate_content を再投入する。
 
-    案 3 適用: 本 task は ID-only な ``ExtractionTrigger`` を kiq に詰めて
+    案 3 適用: 本 task は ID-only な ``CurationTrigger`` を kiq に詰めて
     enqueue するだけ。precondition 判定 (Article 存在 + signal/noise 未生成 +
     本文サイズ ≤ hard cap) と Ready 構築は下流 Stage 3 task が処理開始時に
-    行う (`extract_content_skipped reason=precondition_not_met` log で観測可能)。
+    行う (`curate_content_skipped reason=precondition_not_met` log で観測可能)。
     """
     if not settings.backfill_extractions_enabled:
         logger.info("backfill_extractions_disabled")
@@ -131,7 +131,7 @@ async def backfill_extractions(ctx: Context = TaskiqDepends()) -> None:
             continue
 
     # precondition_not_met (article 既消滅 / 既処理 / 本文 oversized) は
-    # 下流 Stage 3 task の ``extract_content_skipped`` log で観測する
+    # 下流 Stage 3 task の ``curate_content_skipped`` log で観測する
     logger.info(
         "backfill_extractions_completed",
         found=found,

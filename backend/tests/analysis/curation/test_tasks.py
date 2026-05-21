@@ -1,4 +1,4 @@
-"""``extract_content`` task のテスト (chain 経路 + rate limit 経路 + skip 経路)。
+"""``curate_content`` task のテスト (chain 経路 + rate limit 経路 + skip 経路)。
 
 PR3 案 3 化: task signature は ``trigger: CurationTrigger``。冒頭で
 ``ReadyForCuration.try_advance_from`` を呼んで Ready 自構築する。
@@ -12,7 +12,7 @@ True / False に振って routing を検証する。
 - gate.acquire=False → quota log + return (Service 未呼出)
 - legacy ``AIProviderRateLimitedError`` の audit 経路 (catch-all 経由)
 
-Layer 1 marker dispatch ルーティングは ``test_extract_task_dispatch.py`` 側で
+Layer 1 marker dispatch ルーティングは ``test_curate_task_dispatch.py`` 側で
 網羅する。
 """
 
@@ -91,11 +91,11 @@ def _patch_try_advance_from(ready: ReadyForCuration | None) -> object:
 
 
 # ---------------------------------------------------------------------------
-# extract_content
+# curate_content
 # ---------------------------------------------------------------------------
 
 
-class TestExtractContent:
+class TestCurateContent:
     @pytest.mark.asyncio
     async def test_chains_assess_with_trigger_when_service_returns_curation_id(
         self,
@@ -106,7 +106,7 @@ class TestExtractContent:
         AssessmentTrigger を kiq に enqueue する。Ready 構築は下流 Stage 4
         task が処理開始時に行う。
         """
-        from app.analysis.curation.tasks import extract_content
+        from app.analysis.curation.tasks import curate_content
 
         mock_ctx = _make_ctx(curator=_make_provider_fake())
 
@@ -117,7 +117,7 @@ class TestExtractContent:
         ):
             mock_svc_cls.return_value.execute = AsyncMock(return_value=42)
             mock_assess.kiq = AsyncMock()
-            await extract_content(trigger=_trigger(), ctx=mock_ctx)
+            await curate_content(trigger=_trigger(), ctx=mock_ctx)
 
         mock_assess.kiq.assert_awaited_once_with(
             AssessmentTrigger(curation_id=42),
@@ -126,7 +126,7 @@ class TestExtractContent:
     @pytest.mark.asyncio
     async def test_noise_or_race_loss_does_not_chain(self) -> None:
         """Service が None を返したら chain しない (noise 勝者 / race 敗北を吸収)。"""
-        from app.analysis.curation.tasks import extract_content
+        from app.analysis.curation.tasks import curate_content
 
         mock_ctx = _make_ctx(curator=_make_provider_fake())
 
@@ -137,7 +137,7 @@ class TestExtractContent:
         ):
             mock_svc_cls.return_value.execute = AsyncMock(return_value=None)
             mock_assess.kiq = AsyncMock()
-            await extract_content(trigger=_trigger(), ctx=mock_ctx)
+            await curate_content(trigger=_trigger(), ctx=mock_ctx)
 
         mock_assess.kiq.assert_not_called()
 
@@ -149,7 +149,7 @@ class TestExtractContent:
         判定は Stage 3 task 冒頭で Ready 自構築時に行われ、未充足なら
         AI quota / Service を消費せず短絡する。
         """
-        from app.analysis.curation.tasks import extract_content
+        from app.analysis.curation.tasks import curate_content
 
         mock_ctx = _make_ctx(curator=_make_provider_fake())
 
@@ -159,7 +159,7 @@ class TestExtractContent:
             patch("app.analysis.curation.tasks.assess_content") as mock_assess,
         ):
             mock_assess.kiq = AsyncMock()
-            await extract_content(trigger=_trigger(), ctx=mock_ctx)
+            await curate_content(trigger=_trigger(), ctx=mock_ctx)
 
         # Service / rate limit gate / chain firing いずれも触らない
         mock_svc_cls.assert_not_called()
@@ -169,7 +169,7 @@ class TestExtractContent:
     @pytest.mark.asyncio
     async def test_quota_skip_returns_without_invoking_service(self) -> None:
         """gate.acquire=False の場合 quota log + return、Service は呼ばない。"""
-        from app.analysis.curation.tasks import extract_content
+        from app.analysis.curation.tasks import curate_content
 
         mock_ctx = _make_ctx(curator=_make_provider_fake(), gate_acquire=False)
 
@@ -180,7 +180,7 @@ class TestExtractContent:
             capture_logs() as cap,
         ):
             mock_assess.kiq = AsyncMock()
-            await extract_content(trigger=_trigger(), ctx=mock_ctx)
+            await curate_content(trigger=_trigger(), ctx=mock_ctx)
 
         mock_svc_cls.assert_not_called()
         mock_assess.kiq.assert_not_called()
@@ -197,7 +197,7 @@ class TestExtractContent:
         handler の挙動 (last_attempt → audit + return) を再現する。
         """
         from app.analysis.curation.errors import map_provider_to_curation
-        from app.analysis.curation.tasks import extract_content
+        from app.analysis.curation.tasks import curate_content
 
         mock_ctx = _make_ctx(
             curator=_make_provider_fake(), retry_count=1, max_retries=1
@@ -217,7 +217,7 @@ class TestExtractContent:
         ):
             mock_svc_cls.return_value.execute = AsyncMock(side_effect=wrapped_exc)
             mock_audit_cls.return_value.append_failure = AsyncMock()
-            await extract_content(trigger=_trigger(), ctx=mock_ctx)
+            await curate_content(trigger=_trigger(), ctx=mock_ctx)
         mock_audit_cls.return_value.append_failure.assert_awaited_once()
         # 詰め替え済 Stage 3 marker が audit に渡る (元 provider は __cause__)。
         audit_exc = mock_audit_cls.return_value.append_failure.await_args.kwargs["exc"]
@@ -235,7 +235,7 @@ class TestExtractContent:
         message に混入した secret prefix が log field から除去されることも
         確認する (red-team chain γ-2 対称化)。
         """
-        from app.analysis.curation.tasks import extract_content
+        from app.analysis.curation.tasks import curate_content
 
         mock_ctx = _make_ctx(
             curator=_make_provider_fake(), retry_count=0, max_retries=1
@@ -259,7 +259,7 @@ class TestExtractContent:
                 )
             )
             # task は落ちずに完走する
-            await extract_content(trigger=_trigger(), ctx=mock_ctx)
+            await curate_content(trigger=_trigger(), ctx=mock_ctx)
 
         drops = [e for e in cap if e.get("event") == "curation_failure_audit_dropped"]
         assert drops, "fallback ログが emit されていない"

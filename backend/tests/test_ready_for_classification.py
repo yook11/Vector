@@ -2,7 +2,7 @@
 
 `try_advance_from` の precondition 充足 / 未充足 を Repository protocol mock で
 検証する (DB 不要)。BaseModel(frozen=True) の不変性、新規 ``AssessmentTrigger``
-の構造 + 旧 ``ReadyForAssessment`` message 受信互換も確認する。
+の構造も確認する。
 
 注: ファイル名 ``test_ready_for_classification.py`` は別 cleanup PR で
 ``test_ready_for_assessment.py`` に rename 予定。内容は assessment 命名に
@@ -158,22 +158,3 @@ class TestAssessmentTrigger:
     def test_rejects_non_positive_curation_id(self) -> None:
         with pytest.raises(ValidationError):
             AssessmentTrigger(curation_id=0)
-
-    def test_accepts_legacy_extraction_id_alias(self) -> None:
-        """旧 in-flight message (`extraction_id` field) を新 schema が
-        ``validation_alias=AliasChoices("curation_id", "extraction_id")`` で
-        受け入れる (rolling deploy 互換、PR-E.3 で alias 削除予定)。
-        """
-        trigger = AssessmentTrigger.model_validate(
-            {
-                "extraction_id": 1,
-                "translated_title": "t",
-                "summary": "s",
-            }
-        )
-        assert trigger.curation_id == 1
-
-    def test_serializes_with_curation_id_alias(self) -> None:
-        """``model_dump(by_alias=True)`` は新 field 名 ``curation_id`` で出力。"""
-        trigger = AssessmentTrigger(curation_id=42)
-        assert trigger.model_dump(by_alias=True) == {"curation_id": 42}

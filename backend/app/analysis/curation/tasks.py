@@ -89,27 +89,3 @@ async def curate_content(
 
     if result is not None:
         await assess_content.kiq(AssessmentTrigger(curation_id=result))
-
-
-# PR-E.3 で削除予定。削除条件:
-#   1. Redis stream pipeline:analysis に task_name="extract_content" の message 0 件
-#      (`XINFO STREAM pipeline:analysis FULL` で確認)
-#   2. logfire で task_name="extract_content" の invocation 過去 7 日 0 件
-#   3. DLQ に task_name="extract_content" message 0 件
-@broker_analysis.task(
-    task_name="extract_content",
-    timeout=180,
-    max_retries=1,
-    retry_on_error=True,
-)
-async def extract_content(
-    trigger: CurationTrigger,
-    ctx: Context = TaskiqDepends(),
-) -> None:
-    """DEPRECATED alias — use ``curate_content``. Kept for in-flight message drain.
-
-    PR-E.0 (package rename ``extraction`` → ``curation``) の deploy 後、Redis stream
-    に残っている古い ``extract_content`` task message を新 worker が受信できる
-    ようにするための alias。受信時の処理は ``curate_content`` に丸投げ。
-    """
-    await curate_content(trigger, ctx)
