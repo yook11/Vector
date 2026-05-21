@@ -9,14 +9,16 @@ read-back せず log + ``None`` で短絡する。
   ``AnalyzableArticle | CompletionFailure`` を値で受け取る。
 - ``articles`` INSERT + ``pending_html_articles`` DELETE は同 tx で一括
   commit。真の DB 異常は例外として伝播。
-- 失敗は ``classify_completion_failure`` で分類し
-  ``ArticleCompletionFailureHandler`` に委譲 (状態遷移 + log は handler の
-  責務)。retry は DB 駆動で taskiq retry は使わない。
+- 失敗は concern 別に分類し ``ArticleCompletionFailureHandler`` の 2 入口へ委譲:
+  Stage 1 (acquisition) は ``handle_acquisition_failure``、Stage 2 (completion)
+  は ``handle_completion_rejected`` (状態遷移 + log は handler の責務)。retry は
+  DB 駆動で taskiq retry は使わない。
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import assert_never
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -25,8 +27,20 @@ from app.collection.article_completion.completer import (
     ArticleHtmlCompleter,
     FetchFailed,
 )
+from app.collection.article_completion.completion_failure import (
+    CompletionInvariantRejected,
+    PublishedAtMissing,
+    classify_article_completion_failure,
+)
 from app.collection.article_completion.disposition import (
-    classify_completion_failure,
+    classify_external_fetch_error,
+    classify_extraction_failure,
+)
+from app.collection.article_completion.extraction_failure import (
+    ExtractionCrashed,
+    NotHtml,
+    ParserRejected,
+    QualityGateFailed,
 )
 from app.collection.article_completion.extractor import ArticleHtmlExtractor
 from app.collection.article_completion.failure_handling import (
@@ -44,9 +58,9 @@ class ArticleCompletionService:
 
     ``execute(ready)`` が単一エントリポイント。完成は ``ArticleHtmlCompleter``
     (純粋境界) に委譲し ``AnalyzableArticle | CompletionFailure`` を値で受け取る。
-    失敗は ``classify_completion_failure`` で分類して
-    ``ArticleCompletionFailureHandler`` に委譲 (retry は DB 駆動、caller に
-    raise しない)。
+    失敗は outcome を 3-way ``match`` で concern 別に分類し
+    ``ArticleCompletionFailureHandler`` の 2 入口に委譲 (retry は DB 駆動、
+    caller に raise しない)。
     """
 
     def __init__(
@@ -71,14 +85,28 @@ class ArticleCompletionService:
             race-loss (静かに exit)。失敗詳細は構造化ログで観測する。
         """
         outcome = await self._completer.complete(ready)
-        if not isinstance(outcome, AnalyzableArticle):
-            await self._failure_handler.handle(
-                ready,
-                classify_completion_failure(outcome),
-                exc=outcome.error if isinstance(outcome, FetchFailed) else None,
-            )
-            return None
-        advanced = outcome
+        match outcome:
+            case AnalyzableArticle():
+                advanced = outcome
+            case FetchFailed(error=err):
+                await self._failure_handler.handle_acquisition_failure(
+                    ready, classify_external_fetch_error(err), exc=err
+                )
+                return None
+            case (
+                NotHtml() | ParserRejected() | ExtractionCrashed() | QualityGateFailed()
+            ):
+                await self._failure_handler.handle_acquisition_failure(
+                    ready, classify_extraction_failure(outcome), exc=None
+                )
+                return None
+            case PublishedAtMissing() | CompletionInvariantRejected():
+                await self._failure_handler.handle_completion_rejected(
+                    ready, classify_article_completion_failure(outcome)
+                )
+                return None
+            case _ as unreachable:
+                assert_never(unreachable)
 
         canonical_url = ready.source_url
         async with self._session_factory() as session:

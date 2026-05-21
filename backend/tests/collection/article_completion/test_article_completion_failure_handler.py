@@ -2,17 +2,19 @@
 
 検証する性質 (failure 後処理 = ``pending_html_articles`` 状態遷移):
 
-- ``Terminal`` → pending を ``closed`` (leased_until=None)
-- ``Retryable`` 非 exhausted → pending ``open`` + 未来 ready_at (policy schedule)
-- ``Retryable`` exhausted (attempt_count >= policy.max_attempts) → ``closed``
-- ``Retryable`` + server 指示 retry_after_seconds → その秒数で ready_at
+- acquisition ``Terminal`` → pending を ``closed`` (leased_until=None)
+- acquisition ``Retryable`` 非 exhausted → ``open`` + 未来 ready_at (policy schedule)
+- acquisition ``Retryable`` exhausted (attempt_count >= max_attempts) → ``closed``
+- acquisition ``Retryable`` + server 指示 retry_after_seconds → その秒数で ready_at
+- completion ``CompletionRejection`` → pending を ``closed`` (retry なし)
 
-handler は分類済 ``CompletionDisposition`` を受け、自前 session で状態遷移 +
-log を完結させる (service の主線とは別ファイル / 別責務)。handler は DB を
-再読込せず ``ready.attempt_count`` を exhausted 判定に使うため、
-exhausted ケースは attempt_count を先に UPDATE してから Ready を構築する。
-handler は別 session で commit するので、検証前に ``db_session`` を rollback
-して fresh transaction で読む (cross-session read)。
+handler は 2 入口: ``handle_acquisition_failure`` (分類済 ``AcquisitionDecision``)
+と ``handle_completion_rejected`` (``CompletionRejection``)。いずれも自前 session
+で状態遷移 + log を完結させる (service の主線とは別ファイル / 別責務)。handler は
+DB を再読込せず ``ready.attempt_count`` を exhausted 判定に使うため、exhausted
+ケースは attempt_count を先に UPDATE してから Ready を構築する。handler は別
+session で commit するので、検証前に ``db_session`` を rollback して fresh
+transaction で読む (cross-session read)。
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
+from app.collection.article_completion.completion_failure import CompletionRejection
 from app.collection.article_completion.disposition import Retryable, Terminal
 from app.collection.article_completion.failure_handling import (
     ArticleCompletionFailureHandler,
@@ -118,16 +121,18 @@ async def _reload_pending(
 
 
 @pytest.mark.asyncio
-async def test_terminal_closes_pending(
+async def test_acquisition_terminal_closes_pending(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     tc_source: NewsSource,
 ) -> None:
-    """``Terminal`` → pending status='closed' / leased_until=None。"""
+    """acquisition ``Terminal`` → pending status='closed' / leased_until=None。"""
     ready = await _make_ready(db_session, tc_source, "https://techcrunch.com/term")
     handler = ArticleCompletionFailureHandler(session_factory)
 
-    await handler.handle(ready, Terminal(reason_code="test_terminal"))
+    await handler.handle_acquisition_failure(
+        ready, Terminal(reason_code="test_terminal")
+    )
 
     pending = await _reload_pending(db_session, ready.pending_id)
     assert pending.status == "closed"
@@ -135,12 +140,12 @@ async def test_terminal_closes_pending(
 
 
 @pytest.mark.asyncio
-async def test_retryable_non_exhausted_reopens_with_future_ready_at(
+async def test_acquisition_retryable_non_exhausted_reopens_with_future_ready_at(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     tc_source: NewsSource,
 ) -> None:
-    """``Retryable`` (BLIP, attempt=1 < max) → open + 未来 ready_at (約 30 秒後)。
+    """acquisition ``Retryable`` (BLIP, attempt=1 < max) → open + 未来 ready_at。
 
     BLIP_POLICY.schedule[0] = 0.5 分 = 30 秒。claim 直後 attempt_count=1 <
     max_attempts(8) なので exhausted ではなく retry scheduling。
@@ -148,7 +153,9 @@ async def test_retryable_non_exhausted_reopens_with_future_ready_at(
     ready = await _make_ready(db_session, tc_source, "https://techcrunch.com/blip")
     handler = ArticleCompletionFailureHandler(session_factory)
 
-    await handler.handle(ready, Retryable(reason_code="blip", policy=BLIP_POLICY))
+    await handler.handle_acquisition_failure(
+        ready, Retryable(reason_code="blip", policy=BLIP_POLICY)
+    )
 
     pending = await _reload_pending(db_session, ready.pending_id)
     assert pending.status == "open"
@@ -159,12 +166,12 @@ async def test_retryable_non_exhausted_reopens_with_future_ready_at(
 
 
 @pytest.mark.asyncio
-async def test_retryable_exhausted_closes_pending(
+async def test_acquisition_retryable_exhausted_closes_pending(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     tc_source: NewsSource,
 ) -> None:
-    """attempt_count >= policy.max_attempts → ``closed``。
+    """acquisition ``Retryable`` で attempt_count >= max_attempts → ``closed``。
 
     handler は DB 再読込せず ``ready.attempt_count`` を見るため、
     attempt_count を max まで UPDATE → commit → その後 Ready を構築して
@@ -184,7 +191,7 @@ async def test_retryable_exhausted_closes_pending(
     assert exhausted_ready.attempt_count == BLIP_POLICY.max_attempts
     handler = ArticleCompletionFailureHandler(session_factory)
 
-    await handler.handle(
+    await handler.handle_acquisition_failure(
         exhausted_ready, Retryable(reason_code="blip", policy=BLIP_POLICY)
     )
 
@@ -194,19 +201,19 @@ async def test_retryable_exhausted_closes_pending(
 
 
 @pytest.mark.asyncio
-async def test_retryable_uses_server_retry_after_seconds(
+async def test_acquisition_retryable_uses_server_retry_after_seconds(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     tc_source: NewsSource,
 ) -> None:
-    """``Retryable`` + retry_after_seconds=120 → ready_at が約 120 秒後。
+    """acquisition ``Retryable`` + retry_after_seconds=120 → ready_at が約 120 秒後。
 
     server 指示 (RETRY_AFTER policy + override 秒) は policy schedule より優先。
     """
     ready = await _make_ready(db_session, tc_source, "https://techcrunch.com/ra")
     handler = ArticleCompletionFailureHandler(session_factory)
 
-    await handler.handle(
+    await handler.handle_acquisition_failure(
         ready,
         Retryable(
             reason_code="server_retry_after",
@@ -220,3 +227,27 @@ async def test_retryable_uses_server_retry_after_seconds(
     assert pending.ready_at is not None
     delta = pending.ready_at - datetime.now(UTC)
     assert timedelta(seconds=100) < delta < timedelta(seconds=140)
+
+
+@pytest.mark.asyncio
+async def test_completion_rejected_closes_pending(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    tc_source: NewsSource,
+) -> None:
+    """completion ``CompletionRejection`` → pending status='closed'。
+
+    Stage 2 拒絶は Accept 軸で retry を持たず、acquisition Terminal と同様に
+    pending を閉じる (別入口 / 別 log event だが状態遷移は同じ closed)。
+    leased_until も None に戻る。
+    """
+    ready = await _make_ready(db_session, tc_source, "https://techcrunch.com/reject")
+    handler = ArticleCompletionFailureHandler(session_factory)
+
+    await handler.handle_completion_rejected(
+        ready, CompletionRejection(reason_code="completion_published_at_missing")
+    )
+
+    pending = await _reload_pending(db_session, ready.pending_id)
+    assert pending.status == "closed"
+    assert pending.leased_until is None

@@ -1,8 +1,14 @@
 """補完失敗後の ``pending_html_articles`` 後処理を行う application service。
 
-失敗分類 (``CompletionDisposition`` = ``Terminal`` | ``Retryable``) を
-``pending_html_articles`` の状態遷移 (closed / open+ready_at / exhausted) +
-構造化ログに対応づける。retry は ``ready_at`` 駆動 (cron poller が再投入)。
+failure 後処理を 2 つの concern で別入口に分ける:
+
+- acquisition concern (Stage 1, Retry 軸): ``handle_acquisition_failure`` が
+  ``AcquisitionDecision`` (= ``Terminal`` | ``Retryable``) を受け、closed /
+  open+ready_at / exhausted に遷移させる。
+- completion concern (Stage 2, Accept 軸): ``handle_completion_rejected`` が
+  ``CompletionRejection`` を受け、常に ``closed`` に閉じる (retry は発生しない)。
+
+retry は ``ready_at`` 駆動 (cron poller が再投入)。
 """
 
 from __future__ import annotations
@@ -12,8 +18,9 @@ from datetime import UTC, datetime, timedelta
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.collection.article_completion.completion_failure import CompletionRejection
 from app.collection.article_completion.disposition import (
-    CompletionDisposition,
+    AcquisitionDecision,
     Retryable,
     Terminal,
 )
@@ -27,26 +34,27 @@ logger = structlog.get_logger(__name__)
 class ArticleCompletionFailureHandler:
     """失敗分類に応じた ``pending_html_articles`` 後処理を実行する。
 
-    ``handle`` が単一エントリポイント。``CompletionDisposition`` を受け取り
+    2 入口: ``handle_acquisition_failure`` (Stage 1, Retry 軸) と
+    ``handle_completion_rejected`` (Stage 2, Accept 軸)。いずれも自前 session で
     副作用 (状態遷移 + log) を完結させて ``None`` を返す。
     """
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
 
-    async def handle(
+    async def handle_acquisition_failure(
         self,
         ready: ReadyForArticleCompletion,
-        disposition: CompletionDisposition,
+        decision: AcquisitionDecision,
         *,
         exc: BaseException | None = None,
     ) -> None:
-        """失敗を disposition に応じた 1 経路で捌く。
+        """Stage 1 (acquisition) 失敗を Retry 軸で捌く。
 
         ``Terminal`` → pending を ``closed``。``Retryable`` → policy データ駆動で
         次 ``ready_at`` を計算 (exhausted なら ``closed``)。
         """
-        match disposition:
+        match decision:
             case Terminal() as terminal:
                 await self._handle_terminal(
                     ready,
@@ -56,6 +64,45 @@ class ArticleCompletionFailureHandler:
                 )
             case Retryable() as retryable:
                 await self._handle_temporary(ready, disposition=retryable, exc=exc)
+
+    async def handle_completion_rejected(
+        self,
+        ready: ReadyForArticleCompletion,
+        rejection: CompletionRejection,
+    ) -> None:
+        """Stage 2 (completion) ドメイン拒絶を ``closed`` に閉じる。
+
+        Accept 軸のため retry は発生しない。``article_completion_rejected`` で
+        acquisition 失敗とは別ストリームに観測する。
+        """
+        canonical_url = ready.source_url
+        now = datetime.now(UTC)
+        async with self._session_factory() as session:
+            updated = await ArticleCompletionRepository(session).close_claimed(
+                ready, now=now
+            )
+            await session.commit()
+
+        if not updated:
+            logger.info(
+                "article_completion_stale_attempt_ignored",
+                pending_id=ready.pending_id,
+                source_id=ready.source_id,
+                canonical_url=str(canonical_url),
+                attempt_count=ready.attempt_count,
+                reason_code=rejection.reason_code,
+            )
+            return None
+
+        logger.warning(
+            "article_completion_rejected",
+            pending_id=ready.pending_id,
+            source_id=ready.source_id,
+            canonical_url=str(canonical_url),
+            reason_code=rejection.reason_code,
+            detail=rejection.detail,
+        )
+        return None
 
     async def _handle_temporary(
         self,
@@ -122,7 +169,7 @@ class ArticleCompletionFailureHandler:
         exc: BaseException | None = None,
         detail: str | None = None,
     ) -> None:
-        """終端失敗を ``closed`` に閉じる。"""
+        """acquisition 終端失敗を ``closed`` に閉じる。"""
         canonical_url = ready.source_url
         now = datetime.now(UTC)
         async with self._session_factory() as session:
@@ -143,7 +190,7 @@ class ArticleCompletionFailureHandler:
             return None
 
         logger.warning(
-            "article_completion_terminal",
+            "article_completion_acquisition_failed",
             pending_id=ready.pending_id,
             source_id=ready.source_id,
             canonical_url=str(canonical_url),

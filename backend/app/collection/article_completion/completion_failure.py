@@ -16,7 +16,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import ClassVar, assert_never
 
 _ERROR_MESSAGE_MAX = 500
 
@@ -56,3 +56,39 @@ class CompletionInvariantRejected:
 
 ArticleCompletionFailure = PublishedAtMissing | CompletionInvariantRejected
 """HTML 完成段で AnalyzableArticle に昇格できなかった理由の閉じ union (2 variant)。"""
+
+
+@dataclass(frozen=True, slots=True)
+class CompletionRejection:
+    """Stage 2 (完成段) のドメイン拒絶。Accept 軸の概念で Retry 軸を持たない。
+
+    完成段の失敗は「再試行で結果が変わるか?」ではなく「ドメイン的に成立するか?」
+    の判断であり、acquisition concern の ``Terminal`` | ``Retryable`` とは別の型。
+    pending は常に ``closed`` に閉じる (retry は発生しない)。
+
+    ``reason_code`` は ``completion_*`` prefix の audit 集計 key として安定。
+    ``detail`` は variant 固有の証拠 (例外 class+message 等) を畳んだ文字列。
+    """
+
+    reason_code: str
+    detail: str | None = None
+
+
+def classify_article_completion_failure(
+    failure: ArticleCompletionFailure,
+) -> CompletionRejection:
+    """完成段の失敗を ``completion_*`` prefix の ``CompletionRejection`` に分類する。
+
+    variant 型ベースで dispatch し、各 variant の証拠を ``detail`` に畳む。
+    ``reason_code`` は audit 集計 key として安定。
+    """
+    match failure:
+        case PublishedAtMissing():
+            return CompletionRejection(reason_code="completion_published_at_missing")
+        case CompletionInvariantRejected(error_class=ec, error_message=em):
+            return CompletionRejection(
+                reason_code="completion_invariant_rejected",
+                detail=f"{ec}: {em}",
+            )
+        case _ as unreachable:
+            assert_never(unreachable)

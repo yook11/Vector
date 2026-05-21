@@ -1,8 +1,12 @@
-"""補完失敗を ``CompletionDisposition`` (``Terminal`` | ``Retryable``) に分類する。
+"""acquisition concern (Stage 1: Fetch + HTML 抽出) の失敗を Retry 軸で分類する。
+
+Retry 軸は「再試行で結果が変わるか?」の Stage 1 固有概念。完成段 (Stage 2 =
+抽出物 + メタデータ合成) は別 concern (Accept 軸) として ``completion_failure``
+の ``CompletionRejection`` で扱う。本モジュールに Stage 2 を持ち込まない。
 
 ``external_fetch_errors.py`` は「何が起きたか」の SSoT で retry / terminal 判断は
 持たない。本モジュールが各失敗を必ず分類する。``reason_code`` は監査・log 用の
-詳細ラベル、disposition はどう扱うか (close / DB 駆動 retry)。
+詳細ラベル、``AcquisitionDecision`` はどう扱うか (close / DB 駆動 retry)。
 """
 
 from __future__ import annotations
@@ -12,14 +16,6 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, assert_never
 
-from app.collection.article_completion.completer import (
-    CompletionFailure,
-    FetchFailed,
-)
-from app.collection.article_completion.completion_failure import (
-    CompletionInvariantRejected,
-    PublishedAtMissing,
-)
 from app.collection.article_completion.extraction_failure import (
     ExtractionCrashed,
     ExtractionFailure,
@@ -81,7 +77,8 @@ class Retryable:
     detail: str | None = None
 
 
-CompletionDisposition = Terminal | Retryable
+AcquisitionDecision = Terminal | Retryable
+"""Stage 1 (Fetch + HTML 抽出) 失敗の Retry 軸での処理方針 (close / DB 駆動 retry)。"""
 
 
 # ---------------------------------------------------------------------------
@@ -124,8 +121,8 @@ _RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY: Final[
     }
 )
 
-# exact type → disposition の lookup 表。値は frozen dataclass で共有可能。
-_FETCH_DISPOSITION_BY_TYPE: dict[type[ExternalFetchError], CompletionDisposition] = {
+# exact type → decision の lookup 表。値は frozen dataclass で共有可能。
+_FETCH_DISPOSITION_BY_TYPE: dict[type[ExternalFetchError], AcquisitionDecision] = {
     **{t: Terminal(reason_code=t.CODE) for t in _TERMINAL_FETCH_ERROR_TYPES},
     **{
         t: Retryable(reason_code=t.CODE, policy=policy)
@@ -135,8 +132,8 @@ _FETCH_DISPOSITION_BY_TYPE: dict[type[ExternalFetchError], CompletionDisposition
 }
 
 
-def classify_external_fetch_error(exc: ExternalFetchError) -> CompletionDisposition:
-    """origin fetch error を disposition に分類する。
+def classify_external_fetch_error(exc: ExternalFetchError) -> AcquisitionDecision:
+    """origin fetch error を decision に分類する。
 
     ``FetchOriginServerError`` は ``reason`` / ``retry_after_seconds`` を読むため
     明示分岐。それ以外は ``type(exc)`` の exact lookup で、未登録のみ保守的に
@@ -151,9 +148,9 @@ def classify_external_fetch_error(exc: ExternalFetchError) -> CompletionDisposit
             )
         return Retryable(reason_code=exc.CODE, policy=OUTAGE_POLICY)
 
-    disposition = _FETCH_DISPOSITION_BY_TYPE.get(type(exc))
-    if disposition is not None:
-        return disposition
+    decision = _FETCH_DISPOSITION_BY_TYPE.get(type(exc))
+    if decision is not None:
+        return decision
     return Retryable(reason_code=exc.CODE, policy=UNKNOWN_POLICY)
 
 
@@ -182,55 +179,3 @@ def classify_extraction_failure(failure: ExtractionFailure) -> Terminal:
         case _ as unreachable:
             assert_never(unreachable)
     return Terminal(reason_code=f"extraction_failure_{failure.reason}", detail=detail)
-
-
-# ---------------------------------------------------------------------------
-# ArticleCompletionFailure の分類 (昇格段の domain failure)
-# ---------------------------------------------------------------------------
-
-
-def classify_completion_failed(
-    failed: PublishedAtMissing | CompletionInvariantRejected,
-) -> Terminal:
-    """HTML 補完後の昇格失敗を ``completion_*`` prefix の terminal に分類する。
-
-    variant 型ベースで dispatch し、各 variant の証拠を ``detail`` に畳む。
-    ``reason_code`` は audit 集計 key として安定。
-    """
-    match failed:
-        case PublishedAtMissing():
-            return Terminal(reason_code="completion_published_at_missing")
-        case CompletionInvariantRejected(error_class=ec, error_message=em):
-            return Terminal(
-                reason_code="completion_invariant_rejected",
-                detail=f"{ec}: {em}",
-            )
-        case _ as unreachable:
-            assert_never(unreachable)
-
-
-# ---------------------------------------------------------------------------
-# 閉じ union のディスパッチ (CompletionFailure -> CompletionDisposition)
-# ---------------------------------------------------------------------------
-
-
-def classify_completion_failure(
-    failure: CompletionFailure,
-) -> CompletionDisposition:
-    """``ArticleHtmlCompleter`` が返す閉じ failure union を 1 点で分類する。
-
-    3 classifier (fetch / extraction-failure / promotion) に振り分ける。
-    ``ExtractionFailure`` / ``ArticleCompletionFailure`` は union alias で
-    クラスパターン非対応のため、variant 型を OR で列挙する。
-    """
-    match failure:
-        case FetchFailed(error=error):
-            return classify_external_fetch_error(error)
-        case (
-            NotHtml() | ParserRejected() | ExtractionCrashed() | QualityGateFailed()
-        ) as extraction_failure:
-            return classify_extraction_failure(extraction_failure)
-        case PublishedAtMissing() | CompletionInvariantRejected() as failed:
-            return classify_completion_failed(failed)
-        case _ as unreachable:
-            assert_never(unreachable)

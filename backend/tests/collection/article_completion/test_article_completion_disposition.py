@@ -1,27 +1,25 @@
-"""``disposition`` mapper の網羅 + 振る舞いテスト。
+"""acquisition concern (Stage 1: Fetch + HTML 抽出) の分類 mapper テスト。
+
+Stage 2 (完成段) の分類は ``test_article_completion_completion_failure.py`` が
+所有する。本ファイルは acquisition の Retry 軸分類のみを検証する。
 
 構造保証 (spec 完了条件): 全 ``ExternalFetchError`` concrete subclass が
 (Terminal 集合 ∪ policy 別 Retryable ∪ ``FetchOriginServerError`` 明示分岐) で
 **過不足なく** 分割される。subclass を追加して分類し忘れると本テストが落ちる。
 
 ``_CONSTRUCT`` は ``test_external_fetch_error_codes.py`` の構築表と同形だが、
-解いている問題が違う (CODE 契約 vs disposition 分割) ため共有しない。
+解いている問題が違う (CODE 契約 vs decision 分割) ため共有しない。
 """
 
 from __future__ import annotations
 
 import pytest
 
-from app.collection.article_completion.completion_failure import (
-    CompletionInvariantRejected,
-    PublishedAtMissing,
-)
 from app.collection.article_completion.disposition import (
     _RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY,
     _TERMINAL_FETCH_ERROR_TYPES,
     Retryable,
     Terminal,
-    classify_completion_failed,
     classify_external_fetch_error,
     classify_extraction_failure,
 )
@@ -258,22 +256,3 @@ def test_extraction_failure_maps_to_terminal_with_evidence_detail(
     """各 variant が ``extraction_failure_*`` terminal + 証拠 detail を持つ。"""
     result = classify_extraction_failure(failure)
     assert result == Terminal(reason_code=expected_reason_code, detail=expected_detail)
-
-
-class TestClassifyCompletionFailed:
-    """昇格段 failure を ``completion_*`` prefix の terminal に正規化する。"""
-
-    def test_published_at_missing(self) -> None:
-        failed = PublishedAtMissing(observed_had_value=False, html_had_value=False)
-        assert classify_completion_failed(failed) == Terminal(
-            reason_code="completion_published_at_missing",
-        )
-
-    def test_invariant_rejected(self) -> None:
-        failed = CompletionInvariantRejected(
-            error_class="ValueError", error_message="boom"
-        )
-        assert classify_completion_failed(failed) == Terminal(
-            reason_code="completion_invariant_rejected",
-            detail="ValueError: boom",
-        )
