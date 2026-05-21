@@ -102,6 +102,7 @@ def convert_fetched_article(
         FetchedArticleConversionError: title / URL 無効、または Observed 構築も
             失敗した entry。
     """
+    body = fetched.body
     source_name = source.name
     origin = source.observed_origin
     ready_precluded = source.completion_profile.precludes_stage1_ready()
@@ -131,14 +132,7 @@ def convert_fetched_article(
             cause=err,
         )
 
-    published_at: PublishedAt | None = None
-    if fetched.published_at is not None:
-        try:
-            published_at = PublishedAt(value=fetched.published_at)
-        except ValueError:
-            published_at = None
-
-    body = fetched.body
+    published_at = PublishedAt.from_datetime(fetched.published_at)
 
     if (
         not ready_precluded

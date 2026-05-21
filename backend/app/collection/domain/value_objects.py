@@ -28,6 +28,19 @@ class PublishedAt:
             raise ValueError("PublishedAt.value must be timezone-aware")
 
     @classmethod
+    def from_datetime(cls, value: datetime | None) -> Self | None:
+        """tz-aware なら VO、tz-naive / ``None`` なら ``None``。
+
+        per-source が返す raw な ``datetime`` を不変条件 (tz-aware) に照らして
+        採用可否に畳み込む factory。tz-naive を ValueError として再 raise せず
+        不在として扱うのは「published 不在は獲得型不成立ではなく Observed で
+        救う」という Stage 1 の責務階層に従うため。
+        """
+        if value is None or value.tzinfo is None:
+            return None
+        return cls(value=value)
+
+    @classmethod
     def parse(cls, raw: str | None) -> Self | None:
         """trafilatura の日付文字列を解釈する。解釈不能なら ``None``。"""
         if not raw:
