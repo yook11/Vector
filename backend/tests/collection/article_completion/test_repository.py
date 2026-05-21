@@ -9,10 +9,7 @@ identity 解決は表層列 (``url`` / ``source_name``) から直接 hydrate す
 ``SOURCES[observed.source_name].completion_profile`` 直叩きで、registry 未登録
 source は ``KeyError`` 伝播 (``[[feedback_failure_visibility]]``)。
 production 45-registry と非結合にするため、profile を上書きする test では
-``monkeypatch.setitem(SOURCES, ...)`` で運搬体を差し替える。legacy 行 (旧形
-JSONB = ``schemaVersion`` / ``sourceName`` / ``sourceUrl`` 不在) でも、
-表層列が Chunk 2 backfill で埋まっているため同一経路で完走する (spec §5/§7
-後方互換)。
+``monkeypatch.setitem(SOURCES, ...)`` で運搬体を差し替える。
 """
 
 from __future__ import annotations
@@ -29,6 +26,7 @@ from sqlmodel import select
 
 from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.article_completion.repository import ArticleCompletionRepository
+from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import (
     ObservedArticle,
     ObservedField,
@@ -46,7 +44,6 @@ from app.collection.source_fetch.strategy import SOURCES
 from app.collection.source_fetch.tools.fetch_tools import FetchTools
 from app.models.news_source import NewsSource
 from app.models.pending_html_article import PendingHtmlArticle as PendingHtmlArticleORM
-from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 from app.shared.value_objects.safe_url import SafeUrl
 from app.shared.value_objects.source_name import SourceName
 
@@ -131,21 +128,6 @@ def _attrs(source_name: SourceName) -> dict:
         source_name=source_name,
         title="Pending Title",
     ).model_dump(mode="json", by_alias=True)
-
-
-def _legacy_attrs() -> dict:
-    """旧形 (legacy) JSONB の wire 表現 (schemaVersion / identity 不在)。
-
-    旧 ``StagedArticleAttributes.model_dump(mode="json")`` が出力していた wire
-    形を literal で固定する。型が消えても **後方互換契約 (in-flight 旧行が
-    Stage 2 を完走できる)** を回帰検出するため、コードでなく wire 契約を
-    pin する (memory ``feedback_test_invariants_over_change_tracking``)。
-    """
-    return {
-        "title": "Legacy Title",
-        "published_at_hint": {"value": "2026-05-01T00:00:00Z"},
-        "prefer_html_title": False,
-    }
 
 
 async def _enqueue(
@@ -269,40 +251,6 @@ async def test_try_load_for_completion_returns_claimed_target(
     assert target.observed.title is not None
     assert target.observed.title.value == "Find Me"
     assert target.source_url == url
-
-
-@pytest.mark.asyncio
-async def test_try_load_resolves_identity_from_surface_columns_even_for_legacy_jsonb(
-    db_session: AsyncSession, sample_source: NewsSource
-) -> None:
-    """旧形 JSONB (schemaVersion / sourceName / sourceUrl 不在) でも、
-    表層列 ``url`` + ``source_name`` から identity を hydrate して完走する。
-
-    Chunk 2 backfill 後の legacy 行は ``source_name`` 表層列が埋まっており、
-    新形 / legacy のいずれも同一の hydrate 経路で identity が立ち上がる
-    (resolver 経由の lookup は消えた)。
-    """
-    url = "https://example.com/p/legacy"
-    pending_id = await _make_running(
-        db_session,
-        source_id=sample_source.id,
-        source_name=sample_source.name,
-        url=url,
-        ready_at=datetime.now(UTC) - timedelta(minutes=1),
-        leased_until=datetime.now(UTC) + timedelta(minutes=5),
-        staged=_legacy_attrs(),
-    )
-
-    ready = await _repo(db_session).try_load_for_completion(pending_id)
-
-    assert ready is not None
-    # identity は表層列から hydrate される (resolver 経由でなく、FK 整合した実値)。
-    assert ready.source_url == CanonicalArticleUrl(url)
-    assert ready.observed.source_name == sample_source.name
-    assert ready.observed.title is not None
-    assert ready.observed.title.value == "Legacy Title"
-    assert ready.observed.body is None  # 旧形は body を持たない
-    assert ready.observed.published_at is not None
 
 
 @pytest.mark.asyncio

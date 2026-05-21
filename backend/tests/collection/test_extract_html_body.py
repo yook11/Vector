@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.extraction.domain.ready import ExtractionTrigger
 from app.collection.article_completion.ready import ReadyForArticleCompletion
+from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import (
     ObservedArticle,
     ObservedField,
@@ -40,7 +41,6 @@ from app.collection.domain.observed_article import (
 from app.collection.domain.source_completion_profile import DEFAULT_PROFILE
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.tasks import extract_html_body
-from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 from app.shared.value_objects.source_name import SourceName
 
 _SERVICE_EXECUTE = (

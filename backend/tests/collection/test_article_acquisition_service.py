@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
 from app.collection.domain.analyzable_article import AnalyzableArticle
+from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import (
     ObservedArticle,
     ObservedField,
@@ -46,7 +47,6 @@ from app.models.article import Article as ArticleORM
 from app.models.news_source import NewsSource, SourceType
 from app.models.pending_html_article import PendingHtmlArticle as PendingHtmlArticleORM
 from app.models.pipeline_event import PipelineEvent
-from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 from app.shared.value_objects.source_name import SourceName
 
 Passport = AnalyzableArticle | ObservedArticle
@@ -77,15 +77,12 @@ def _pending(source_name: SourceName, url: str) -> ObservedArticle:
 
 def _rejection(
     *,
-    analyzable_reason: ConversionReason = ConversionReason.BODY_TOO_SHORT,
-    observed_reason: ConversionReason = ConversionReason.MISSING_TITLE,
+    conversion_reason: ConversionReason = ConversionReason.MISSING_TITLE,
 ) -> ConversionRejection:
     return ConversionRejection(
         error=FetchedArticleConversionError(
-            f"analyzable rejected: {analyzable_reason}; "
-            f"observed rejected: {observed_reason}",
-            analyzable_reason=analyzable_reason,
-            observed_reason=observed_reason,
+            f"conversion rejected: {conversion_reason}",
+            conversion_reason=conversion_reason,
             source_name="VentureBeat",
             raw_url="https://venturebeat.com/x",
             has_title=True,
@@ -360,7 +357,11 @@ async def test_conversion_rejection_writes_rejected_event_in_separate_tx(
     assert row.source_id == vb_source.id
     assert row.attempt == 1
     assert row.error_class.endswith(".FetchedArticleConversionError")
-    assert row.payload["conversion_analyzable_reason"] == "body_too_short"
+    # ``conversion_analyzable_reason`` カラムは新コードでは未使用 (NULL)、
+    # JSONB に値が焼かれないことを固定する。
+    assert "conversion_analyzable_reason" not in row.payload or (
+        row.payload.get("conversion_analyzable_reason") is None
+    )
     assert row.payload["conversion_observed_reason"] == "missing_title"
     assert row.payload["conversion_has_title"] is True
     assert row.payload["conversion_body_length"] == 42
@@ -373,11 +374,11 @@ async def test_conversion_rejection_payload_is_sql_drillable(
     db_session: AsyncSession,
     vb_source: NewsSource,
 ) -> None:
-    """``payload->>'conversion_analyzable_reason'`` で JSONB drill-down できる。"""
+    """``payload->>'conversion_observed_reason'`` で JSONB drill-down できる。"""
     svc = ArticleAcquisitionService(
         session_factory,
         lambda: _StubFetcher(
-            [_rejection(analyzable_reason=ConversionReason.READY_PRECLUDED)]
+            [_rejection(conversion_reason=ConversionReason.OBSERVED_BUILD_FAILED)]
         ),
     )
 
@@ -387,8 +388,8 @@ async def test_conversion_rejection_payload_is_sql_drillable(
         (
             await db_session.execute(
                 select(PipelineEvent).where(
-                    PipelineEvent.payload["conversion_analyzable_reason"].astext
-                    == "ready_precluded"
+                    PipelineEvent.payload["conversion_observed_reason"].astext
+                    == "observed_build_failed"
                 )
             )
         )

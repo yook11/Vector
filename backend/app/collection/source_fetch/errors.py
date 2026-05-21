@@ -31,13 +31,15 @@ class FetchedArticleConversionError(Exception):
     """``FetchedArticle`` を ``AnalyzableArticle`` / ``ObservedArticle`` の
     どちらにも変換できなかった失敗。
 
+    ``AnalyzableArticle`` 不成立は想定内の正常系 (Ready 候補 ⊆ Observed 候補)
+    のため、失敗 reason は ``ObservedArticle`` にもなれなかった理由 1 つで足りる。
+
     ``message`` は決定的・非秘匿の英語文字列。秘匿値混入の可能性がある
     ``raw_url`` は素の値を保持し、redact は監査永続化側の責務。
 
     Attributes:
         code: audit ラベル (``pipeline_events.code`` / ``outcome_code`` 列)。
-        analyzable_reason: なぜ Analyzable にできなかったか。
-        observed_reason: なぜ Observed にもできなかったか。
+        conversion_reason: なぜ Observed にもなれなかったか (= 変換失敗理由)。
         source_name: 出所のソース表示名。
         raw_url: 変換前の生 URL (無い / 取れない場合 ``None``)。
         has_title: title が存在したか (trim 前で観測)。
@@ -48,8 +50,7 @@ class FetchedArticleConversionError(Exception):
     CODE: ClassVar[str] = "fetched_article_conversion_failed"
 
     code: str
-    analyzable_reason: ConversionReason
-    observed_reason: ConversionReason
+    conversion_reason: ConversionReason
     source_name: str | None
     raw_url: str | None
     has_title: bool
@@ -60,8 +61,7 @@ class FetchedArticleConversionError(Exception):
         self,
         message: str,
         *,
-        analyzable_reason: ConversionReason,
-        observed_reason: ConversionReason,
+        conversion_reason: ConversionReason,
         source_name: str | None,
         raw_url: str | None,
         has_title: bool,
@@ -70,8 +70,7 @@ class FetchedArticleConversionError(Exception):
     ) -> None:
         super().__init__(message)
         self.code = self.CODE
-        self.analyzable_reason = analyzable_reason
-        self.observed_reason = observed_reason
+        self.conversion_reason = conversion_reason
         self.source_name = source_name
         self.raw_url = raw_url
         self.has_title = has_title

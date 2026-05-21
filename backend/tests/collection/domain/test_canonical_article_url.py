@@ -5,7 +5,7 @@ import json
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
+from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.shared.value_objects.safe_url import SafeUrl
 
 

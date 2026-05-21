@@ -35,6 +35,7 @@ from app.collection.article_completion.extractor import (
 from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.article_completion.repository import ArticleCompletionRepository
 from app.collection.article_completion.service import ArticleCompletionService
+from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import (
     ObservedArticle,
     ObservedField,
@@ -57,7 +58,6 @@ from app.collection.source_fetch.tools.fetch_tools import FetchTools
 from app.models.article import Article as ArticleORM
 from app.models.news_source import NewsSource, SourceType
 from app.models.pending_html_article import PendingHtmlArticle
-from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 from app.shared.value_objects.source_name import SourceName
 
 

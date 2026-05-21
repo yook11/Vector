@@ -75,8 +75,9 @@ class SourceFetchAuditRepository:
             source_name=exc.source_name,
             error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
             error_chain=_extract_error_chain(exc),
-            conversion_analyzable_reason=str(exc.analyzable_reason),
-            conversion_observed_reason=str(exc.observed_reason),
+            # ``conversion_analyzable_reason`` カラムは新コードでは未使用
+            # (NULL)。DB 列は legacy row との互換のため据え置き。
+            conversion_observed_reason=str(exc.conversion_reason),
             conversion_raw_url=(redact_secrets(exc.raw_url) if exc.raw_url else None),
             conversion_has_title=exc.has_title,
             conversion_body_length=exc.body_length,

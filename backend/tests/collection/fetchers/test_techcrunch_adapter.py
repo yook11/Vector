@@ -71,4 +71,4 @@ async def test_article_fetcher_surfaces_empty_title_entry_as_rejection() -> None
     rejections = [i for i in items if isinstance(i, ConversionRejection)]
 
     assert len(rejections) == 1
-    assert rejections[0].error.analyzable_reason is ConversionReason.MISSING_TITLE
+    assert rejections[0].error.conversion_reason is ConversionReason.MISSING_TITLE

@@ -13,6 +13,7 @@ from app.collection.article_completion.extractor import (
 )
 from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.domain.analyzable_article import AnalyzableArticle
+from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.completion import (
     ArticleCompletionFailed,
     ArticleCompletionFailureReason,
@@ -24,7 +25,6 @@ from app.collection.domain.source_completion_profile import (
     SourceCompletionProfile,
 )
 from app.collection.external_fetch_errors import ExternalFetchError
-from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 
 
 @dataclass(frozen=True, slots=True)

@@ -37,6 +37,7 @@ from app.collection.article_completion.dispatch import (
     dispatch_html_fetch_jobs,
     sweep_expired_leases,
 )
+from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import (
     ObservedArticle,
     ObservedField,
@@ -46,7 +47,6 @@ from app.collection.domain.value_objects import PublishedAt
 from app.collection.source_fetch.pending_enqueue import PendingHtmlEnqueue
 from app.models.news_source import NewsSource
 from app.models.pending_html_article import PendingHtmlArticle as PendingHtmlArticleORM
-from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 from app.shared.value_objects.safe_url import SafeUrl
 from app.shared.value_objects.source_name import SourceName
 

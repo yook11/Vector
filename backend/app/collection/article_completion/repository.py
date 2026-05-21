@@ -17,11 +17,11 @@ from sqlmodel import select
 
 from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.domain.analyzable_article import AnalyzableArticle
+from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.persistence.article_store import ArticleStore
 from app.collection.source_fetch.strategy import SOURCES
 from app.models.pending_html_article import PendingHtmlArticle as PendingHtmlArticleORM
-from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,9 +53,8 @@ class ArticleCompletionRepository:
 
         identity 注入: ``url`` / ``source_name`` 列が authoritative
         (composite FK + NOT NULL で構造保証されており、Stage 1 writer の
-        ``Field(exclude=True)`` 契約と対称)。``model_validate`` 前に raw に
-        上書き注入することで、新形 (JSONB に identity 不在) / legacy (JSONB
-        に sourceName 不在) のいずれも同一経路で hydrate する。
+        ``Field(exclude=True)`` 契約と対称)。JSONB は identity を含まないため、
+        ``model_validate`` 前に表層列の値を raw に上書き注入する。
 
         profile 解決は ``SOURCES[source_name]`` 直叩き。registry 未登録
         source は ``KeyError`` で上位に伝播する (drift fallback の隠蔽は
@@ -74,13 +73,12 @@ class ArticleCompletionRepository:
             return None
 
         raw = dict(row.staged_attributes or {})
-        # 表層列が authoritative。新形 JSONB は ``Field(exclude=True)`` で
-        # identity キーが入らない、legacy JSONB は元から欠落、いずれも
-        # 表層列の上書きで吸収する。
-        # 書き込むキーは ``ObservedArticle`` の field 規約に追従:
+        # 表層列が authoritative。JSONB は ``Field(exclude=True)`` で identity
+        # キーを持たないため、表層列の値を raw に上書き注入する。書き込むキーは
+        # ``ObservedArticle`` field の alias 規約に追従:
         #   source_name は alias="sourceName" → "sourceName" で書く
         #   source_url は alias 未指定 (exclude=True のみ) → field name
-        #     "source_url" で書く (既存 _absorb_legacy と同じ規則)。
+        #     "source_url" で書く。
         raw["sourceName"] = str(row.source_name)
         raw["source_url"] = str(row.url)
         observed = ObservedArticle.model_validate(raw)

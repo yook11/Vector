@@ -34,6 +34,7 @@ from app.collection.article_completion.retry_policy import (
     BLIP_POLICY,
     RETRY_AFTER_POLICY,
 )
+from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import (
     ObservedArticle,
     ObservedField,
@@ -43,7 +44,6 @@ from app.collection.domain.value_objects import PublishedAt
 from app.collection.source_fetch.pending_enqueue import PendingHtmlEnqueue
 from app.models.news_source import NewsSource, SourceType
 from app.models.pending_html_article import PendingHtmlArticle
-from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 from app.shared.value_objects.source_name import SourceName
 
 

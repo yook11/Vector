@@ -116,7 +116,7 @@ async def test_yields_rejection_for_unconvertible_entry_without_stopping_stream(
 
     assert len(results) == 2
     assert isinstance(results[0], ConversionRejection)
-    assert results[0].error.analyzable_reason is ConversionReason.MISSING_TITLE
+    assert results[0].error.conversion_reason is ConversionReason.MISSING_TITLE
     assert isinstance(results[1], ObservedArticle)
 
 

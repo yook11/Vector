@@ -12,8 +12,8 @@ from sqlalchemy import String
 from sqlalchemy.engine import Dialect
 from sqlalchemy.types import TypeDecorator
 
+from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.domain.category import CategoryName, CategorySlug
-from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 from app.shared.value_objects.safe_url import SafeUrl
 from app.shared.value_objects.source_name import SourceName
 

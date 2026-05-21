@@ -3,11 +3,11 @@
 ``FetchedArticle`` 入力を ``AnalyzableArticle`` / ``ObservedArticle`` に変換
 する分岐契約を検証する。title / URL / body / published の各境界と、profile の
 title policy (``html_preferred`` = 仮タイトル) による Ready gate を網羅し、
-private helper ``_convert_fetched_article`` の判定順を固定する。
+``convert_fetched_article`` の判定順を固定する。
 
 旧 ``try_build_passport`` の ``return None`` (drop) は
 ``FetchedArticleConversionError`` の raise に置換された。変換不能 entry は
-握りつぶさず理由付き例外で表に出す (2 ターゲット reason + 構造化フィールド)。
+握りつぶさず理由付き例外で表に出す (``conversion_reason`` + 構造化フィールド)。
 Ready の Pydantic 失敗 / tz-naive published の Observed fallback は **結果不変**
 (byte 等価) であることを引き続き固定する。
 """
@@ -151,8 +151,7 @@ def test_accepts_non_utc_published() -> None:
 def test_raises_missing_title_when_title_is_empty(title: str) -> None:
     with pytest.raises(FetchedArticleConversionError) as ei:
         _call(title=title)
-    assert ei.value.analyzable_reason is ConversionReason.MISSING_TITLE
-    assert ei.value.observed_reason is ConversionReason.MISSING_TITLE
+    assert ei.value.conversion_reason is ConversionReason.MISSING_TITLE
 
 
 def test_trims_title_whitespace_and_caps_500_chars() -> None:
@@ -165,22 +164,20 @@ def test_trims_title_whitespace_and_caps_500_chars() -> None:
 def test_raises_missing_url_when_url_is_empty() -> None:
     with pytest.raises(FetchedArticleConversionError) as ei:
         _call(url="")
-    assert ei.value.analyzable_reason is ConversionReason.MISSING_URL
-    assert ei.value.observed_reason is ConversionReason.MISSING_URL
+    assert ei.value.conversion_reason is ConversionReason.MISSING_URL
 
 
 def test_raises_invalid_url_when_url_is_private_ip_literal() -> None:
     """SSRF 防御 (SafeUrl): IP リテラルが private/loopback なら変換不能。"""
     with pytest.raises(FetchedArticleConversionError) as ei:
         _call(url="http://127.0.0.1/secret")
-    assert ei.value.analyzable_reason is ConversionReason.INVALID_URL
-    assert ei.value.observed_reason is ConversionReason.INVALID_URL
+    assert ei.value.conversion_reason is ConversionReason.INVALID_URL
 
 
 def test_raises_invalid_url_when_url_is_not_http_scheme() -> None:
     with pytest.raises(FetchedArticleConversionError) as ei:
         _call(url="javascript:alert(1)")
-    assert ei.value.analyzable_reason is ConversionReason.INVALID_URL
+    assert ei.value.conversion_reason is ConversionReason.INVALID_URL
 
 
 def test_invalid_url_error_carries_structured_observation_fields() -> None:

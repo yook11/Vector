@@ -14,11 +14,11 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collection.domain.analyzable_article import AnalyzableArticle
+from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.persistence.article_store import ArticleStore
 from app.models.article import Article as ArticleORM
 from app.models.news_source import NewsSource
-from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 
 
 def _ready(

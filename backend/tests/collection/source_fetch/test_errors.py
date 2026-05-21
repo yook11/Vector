@@ -1,7 +1,7 @@
 """``FetchedArticleConversionError`` / ``ConversionReason`` の単体テスト。
 
-DB / IO 非依存。例外が 2 ターゲット reason と観測スナップショットを構造化
-保持すること、``code`` が単一の class 定数で安定すること、``ConversionReason``
+DB / IO 非依存。例外が変換失敗 reason と観測スナップショットを構造化保持
+すること、``code`` が単一の class 定数で安定すること、``ConversionReason``
 の値が監査集計 key として安定な snake_case であることを固定する。
 """
 
@@ -15,8 +15,7 @@ from app.collection.source_fetch.errors import (
 
 def _make(**overrides) -> FetchedArticleConversionError:
     kwargs = {
-        "analyzable_reason": ConversionReason.BODY_TOO_SHORT,
-        "observed_reason": ConversionReason.MISSING_TITLE,
+        "conversion_reason": ConversionReason.MISSING_TITLE,
         "source_name": "Example",
         "raw_url": "https://example.com/a",
         "has_title": True,
@@ -24,10 +23,7 @@ def _make(**overrides) -> FetchedArticleConversionError:
         "has_published_at": False,
     }
     kwargs.update(overrides)
-    msg = (
-        f"analyzable rejected: {kwargs['analyzable_reason']}; "
-        f"observed rejected: {kwargs['observed_reason']}"
-    )
+    msg = f"conversion rejected: {kwargs['conversion_reason']}"
     return FetchedArticleConversionError(msg, **kwargs)
 
 
@@ -37,13 +33,9 @@ def test_code_is_stable_class_constant() -> None:
     assert exc.code == FetchedArticleConversionError.CODE
 
 
-def test_carries_both_target_reasons() -> None:
-    exc = _make(
-        analyzable_reason=ConversionReason.READY_PRECLUDED,
-        observed_reason=ConversionReason.OBSERVED_BUILD_FAILED,
-    )
-    assert exc.analyzable_reason is ConversionReason.READY_PRECLUDED
-    assert exc.observed_reason is ConversionReason.OBSERVED_BUILD_FAILED
+def test_carries_conversion_reason() -> None:
+    exc = _make(conversion_reason=ConversionReason.OBSERVED_BUILD_FAILED)
+    assert exc.conversion_reason is ConversionReason.OBSERVED_BUILD_FAILED
 
 
 def test_carries_observation_snapshot() -> None:
@@ -56,13 +48,8 @@ def test_carries_observation_snapshot() -> None:
 
 
 def test_message_is_deterministic_english() -> None:
-    exc = _make(
-        analyzable_reason=ConversionReason.BODY_TOO_SHORT,
-        observed_reason=ConversionReason.MISSING_TITLE,
-    )
-    assert str(exc) == (
-        "analyzable rejected: body_too_short; observed rejected: missing_title"
-    )
+    exc = _make(conversion_reason=ConversionReason.MISSING_TITLE)
+    assert str(exc) == "conversion rejected: missing_title"
 
 
 def test_conversion_reason_values_are_stable_snake_case() -> None:

@@ -16,6 +16,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import (
     ObservedArticle,
     ObservedField,
@@ -24,7 +25,6 @@ from app.collection.domain.observed_article import (
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.source_fetch.pending_enqueue import PendingHtmlEnqueue
 from app.models.news_source import NewsSource
-from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 from app.shared.value_objects.source_name import SourceName
 
 

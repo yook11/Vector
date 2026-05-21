@@ -14,9 +14,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
+from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.domain.source_completion_profile import SourceCompletionProfile
-from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 
 
 class ArticleCompletionPreconditionProtocol(Protocol):

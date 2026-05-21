@@ -11,8 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from app.collection.domain.analyzable_article import AnalyzableArticle
+from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.models.article import Article as ArticleORM
-from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 
 
 class ArticleStore:

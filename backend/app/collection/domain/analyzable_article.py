@@ -14,8 +14,8 @@ from app.collection.domain.article_limits import (
     ARTICLE_TITLE_MAX_LENGTH,
     ARTICLE_TITLE_MIN_LENGTH,
 )
+from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.value_objects import PublishedAt
-from app.shared.value_objects.canonical_article_url import CanonicalArticleUrl
 
 
 class AnalyzableArticle(BaseModel):
