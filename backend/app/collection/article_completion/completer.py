@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import assert_never
 
 from app.collection.article_completion.acquirer import (
     AcquiredContent,
@@ -21,11 +20,7 @@ from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.external_fetch_errors import ExternalFetchError
-from app.collection.sources.article_completion_policy import (
-    ArticleCompletionPolicy,
-    CompletableField,
-    FieldCompletionRule,
-)
+from app.collection.sources.article_completion_policy import ArticleCompletionPolicy
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,28 +42,6 @@ CompletionFailure = FetchFailed | AcquisitionFailure | ArticleCompletionFailure
 """
 
 
-def _resolve[V](
-    policy: FieldCompletionRule,
-    observed_value: V | None,
-    html_value: V | None,
-) -> V | None:
-    """policy に従い観測値と HTML 値を 1 フィールド分 merge する。
-
-    - ``html_required``: HTML を正本とし観測値は無視。
-    - ``html_preferred``: HTML があれば優先、なければ観測値。
-    - ``observed_preferred``: 観測値があれば優先、なければ HTML。
-    """
-    match policy:
-        case FieldCompletionRule.html_required:
-            return html_value
-        case FieldCompletionRule.html_preferred:
-            return html_value if html_value else observed_value
-        case FieldCompletionRule.observed_preferred:
-            return observed_value if observed_value else html_value
-        case _:
-            assert_never(policy)
-
-
 def complete_with_html(
     observed: ObservedArticle,
     profile: ArticleCompletionPolicy,
@@ -77,14 +50,16 @@ def complete_with_html(
     source_id: int,
     source_url: CanonicalArticleUrl,
 ) -> AnalyzableArticle | ArticleCompletionFailure | AcquisitionFailure:
-    """観測事実 + profile + HTML 取得結果を merge し ``AnalyzableArticle`` 昇格。"""
-    pol = profile.rules
+    """観測事実 + profile + HTML 取得結果を merge し ``AnalyzableArticle`` 昇格。
 
-    # body=html_required で取得が失敗していれば AcquisitionFailure を値のまま返す。
-    if (
-        not isinstance(html, AcquiredContent)
-        and pol[CompletableField.body] is FieldCompletionRule.html_required
-    ):
+    責務は薄いオーケストレーション: per-field の正本 merge は ``profile.resolve``
+    (写像)、構築不変条件は ``AnalyzableArticle`` (出口契約) が担い、本関数は
+    precondition gate と失敗の証拠化 (``PublishedAtMissing`` /
+    ``CompletionInvariantRejected``) だけを行う。
+    """
+    # precondition gate: body=html_required で HTML 取得が失敗していれば、resolve
+    # させる前に AcquisitionFailure を値のまま返す (retry 分類を後段へ流す)。
+    if not isinstance(html, AcquiredContent) and profile.body_requires_html():
         return html
 
     html_title = html.title if isinstance(html, AcquiredContent) else None
@@ -95,20 +70,25 @@ def complete_with_html(
     obs_body = observed.body.value if observed.body is not None else None
     obs_pub = observed.published_at.value if observed.published_at is not None else None
 
-    final_title = _resolve(pol[CompletableField.title], obs_title, html_title)
-    final_body = _resolve(pol[CompletableField.body], obs_body, html_body)
-    final_published = _resolve(pol[CompletableField.published_at], obs_pub, html_pub)
+    resolved = profile.resolve(
+        observed_title=obs_title,
+        html_title=html_title,
+        observed_body=obs_body,
+        html_body=html_body,
+        observed_published_at=obs_pub,
+        html_published_at=html_pub,
+    )
 
-    if final_published is None:
+    if resolved.published_at is None:
         return PublishedAtMissing(
             observed_had_value=obs_pub is not None,
             html_had_value=html_pub is not None,
         )
     try:
         return AnalyzableArticle(
-            title=final_title,
-            body=final_body,
-            published_at=final_published,
+            title=resolved.title,
+            body=resolved.body,
+            published_at=resolved.published_at,
             source_id=source_id,
             source_url=source_url,
         )
