@@ -31,6 +31,13 @@ def reload_app_with_env(
 
     def _reload(env_value: str) -> FastAPI:
         monkeypatch.setenv("ENV", env_value)
+        if env_value == "production":
+            # config.py の production narrowing で revalidate 宛先は *.flycast 必須。
+            # docs gate の検証に集中するため flycast 値を入れて Settings 構築を通す。
+            monkeypatch.setenv(
+                "INTERNAL_FRONTEND_BASE_URL",
+                "http://your-vector-frontend-app.flycast:3000",
+            )
         from app import config, main
 
         importlib.reload(config)

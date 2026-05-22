@@ -163,3 +163,73 @@ def test_reject_when_secrets_equal() -> None:
             bff_jwt_signing_secret=SecretStr(_VALID_BFF_SECRET),
             revalidate_bearer_secret=SecretStr(_VALID_BFF_SECRET),
         )
+
+
+# --- internal_frontend_base_url の宛先 allowlist (notifier secret 持ち出し口防御) ---
+#
+# notifier (FrontendRevalidateNotifier) は SSRF guard をバイパスして
+# REVALIDATE_BEARER_SECRET を Bearer 送信するため、宛先が攻撃者制御に向くと
+# secret 持ち出し経路になる。env 値の正当性を Settings 構築時に構造検証する。
+
+_VALID_FLYCAST_URL = "http://your-vector-frontend-app.flycast:3000"
+
+# 本番では reject されるが development では許可される dev host 群。
+_DEV_HOST_URLS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://frontend:3000",
+]
+
+
+@pytest.mark.parametrize(
+    "bad_url",
+    [
+        "http://attacker.example.com",
+        "https://evil.com",
+        "http://169.254.169.254",
+        "http://frontend.attacker.com",  # substring 混同 (frontend で始まる別ホスト)
+        "http://xflycast:3000",  # suffix の前に dot が無い
+        "http://your-vector-frontend-app.flycast.attacker.com:3000",  # suffix が末尾でない
+    ],
+)
+def test_internal_frontend_base_url_rejects_external_host(bad_url: str) -> None:
+    """allowlist 外ホストは全環境で reject (naive な substring 検査ではない)。"""
+    with pytest.raises(ValidationError, match="INTERNAL_FRONTEND_BASE_URL"):
+        Settings(internal_frontend_base_url=bad_url)
+
+
+@pytest.mark.parametrize("bad_url", ["gopher://frontend:3000", "file:///etc/passwd"])
+def test_internal_frontend_base_url_rejects_non_http_scheme(bad_url: str) -> None:
+    """http / https 以外の scheme は ValidationError。"""
+    with pytest.raises(ValidationError, match="INTERNAL_FRONTEND_BASE_URL"):
+        Settings(internal_frontend_base_url=bad_url)
+
+
+def test_internal_frontend_base_url_accepts_flycast_in_development() -> None:
+    """development でも *.flycast は global allowlist で許可される。"""
+    s = Settings(internal_frontend_base_url=_VALID_FLYCAST_URL)
+    assert s.internal_frontend_base_url == _VALID_FLYCAST_URL
+
+
+@pytest.mark.parametrize("dev_host_url", _DEV_HOST_URLS)
+def test_internal_frontend_base_url_accepts_dev_host_in_development(
+    dev_host_url: str,
+) -> None:
+    """development では dev host を許可 (compose / CI 互換)。"""
+    s = Settings(internal_frontend_base_url=dev_host_url)
+    assert s.internal_frontend_base_url == dev_host_url
+
+
+@pytest.mark.parametrize("dev_host_url", _DEV_HOST_URLS)
+def test_internal_frontend_base_url_rejects_dev_host_in_production(
+    dev_host_url: str,
+) -> None:
+    """production では dev host は ValidationError (*.flycast のみ許可)。"""
+    with pytest.raises(ValidationError, match="production"):
+        Settings(env="production", internal_frontend_base_url=dev_host_url)
+
+
+def test_internal_frontend_base_url_accepts_flycast_in_production() -> None:
+    """production で *.flycast は許可される。"""
+    s = Settings(env="production", internal_frontend_base_url=_VALID_FLYCAST_URL)
+    assert s.internal_frontend_base_url == _VALID_FLYCAST_URL

@@ -10,9 +10,14 @@
 - raise すると taskiq retry → DeepSeek 重複呼出で害が大きい
 - 「降格」であって「握り潰し」ではない (warn ログで運用に見える)
 
-通信先は compose 内部 DNS (``http://frontend:3000``) を想定するため、
-SSRF guard 入りの ``make_safe_async_client`` (private IP を弾く) は使わず、
-``httpx.AsyncClient`` を直接構築する。internal 通信専用。
+通信先は compose 内部 DNS (``http://frontend:3000``) や Fly private network
+(``*.flycast``) を想定するため、SSRF guard 入りの ``make_safe_async_client``
+(private IP を弾く) は使わず、``httpx.AsyncClient`` を直接構築する。internal 通信専用。
+
+宛先 host は config 層の ``internal_frontend_base_url`` validator
+(``app/config.py``) で allowlist 制約済 = ここに渡る時点で宛先は定義上 internal。
+よって raw httpx でも REVALIDATE_BEARER_SECRET が攻撃者ホストに送られる経路は
+構造的に閉じている。
 """
 
 from __future__ import annotations

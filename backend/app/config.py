@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Literal, Self
+from urllib.parse import urlparse
 
 from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -35,6 +36,19 @@ _KNOWN_WEAK_DATABASE_URL_PATTERNS = frozenset(
         "<set-strong-password",
     }
 )
+
+# revalidate 通知 (internal_frontend_base_url) の宛先ホスト allowlist。
+# notifier (FrontendRevalidateNotifier) は SSRF guard をバイパスして
+# REVALIDATE_BEARER_SECRET を Bearer 送信するため、宛先が攻撃者制御に向くと
+# secret 持ち出し経路になる。env 値が攻撃者ホストに向かないことを起動時に構造検証する。
+# global allowlist は全環境共通、本番は *.flycast に絞る (production narrowing)。
+_ALLOWED_INTERNAL_FRONTEND_HOSTS = frozenset({"localhost", "127.0.0.1", "frontend"})
+_ALLOWED_INTERNAL_FRONTEND_HOST_SUFFIX = ".flycast"
+
+
+def _internal_frontend_host(url: str) -> str | None:
+    """internal_frontend_base_url から host を取り出す (小文字化・port 除去済)。"""
+    return urlparse(url).hostname
 
 
 def _assert_strong_secret(raw: str, name: str) -> None:
@@ -170,6 +184,36 @@ class Settings(BaseSettings):
                 )
         return v
 
+    @field_validator("internal_frontend_base_url")
+    @classmethod
+    def _validate_internal_frontend_base_url(cls, v: str) -> str:
+        """revalidate 通知の宛先を既知の internal ホストに限定する (起動時 fail-fast)。
+
+        notifier は SSRF guard をバイパスして REVALIDATE_BEARER_SECRET を Bearer
+        送信するため、env 値が攻撃者制御のホストに向くと secret 持ち出し経路になる。
+        全環境共通の global allowlist (localhost / 127.0.0.1 / frontend / *.flycast) で
+        任意ホストへの送信を構造遮断する。本番のみの絞り込みは
+        ``_enforce_flycast_in_production`` が担う。
+        """
+        scheme = urlparse(v).scheme
+        if scheme not in ("http", "https"):
+            raise ValueError(
+                "INTERNAL_FRONTEND_BASE_URL must use http or https scheme, "
+                f"got {scheme!r}"
+            )
+        host = _internal_frontend_host(v)
+        if host is None:
+            raise ValueError("INTERNAL_FRONTEND_BASE_URL must include a host")
+        if host in _ALLOWED_INTERNAL_FRONTEND_HOSTS or host.endswith(
+            _ALLOWED_INTERNAL_FRONTEND_HOST_SUFFIX
+        ):
+            return v
+        raise ValueError(
+            f"INTERNAL_FRONTEND_BASE_URL host {host!r} is not an allowed internal "
+            "destination; expected localhost / 127.0.0.1 / frontend (compose) or a "
+            "*.flycast host (Fly private network)"
+        )
+
     @model_validator(mode="after")
     def _validate_internal_secrets(self) -> Self:
         """BFF↔backend trust 境界の 2 秘密を起動時に検証する。
@@ -196,6 +240,26 @@ class Settings(BaseSettings):
                 "would compromise both trust boundaries)"
             )
 
+        return self
+
+    @model_validator(mode="after")
+    def _enforce_flycast_in_production(self) -> Self:
+        """production では revalidate 宛先を *.flycast に限定する (narrowing)。
+
+        dev host (localhost / 127.0.0.1 / frontend) は本番では到達できず silent fail に
+        なるため、起動時に弾いて「本番は Fly private network の flycast」を構造的契約に
+        する。dev / CI / test は env="development" のためこの絞り込みは効かない。
+        host format 自体は ``_validate_internal_frontend_base_url`` が保証済で、
+        ここは env 条件の narrowing のみ。
+        """
+        if self.env != "production":
+            return self
+        host = _internal_frontend_host(self.internal_frontend_base_url)
+        if host is None or not host.endswith(_ALLOWED_INTERNAL_FRONTEND_HOST_SUFFIX):
+            raise ValueError(
+                "in production INTERNAL_FRONTEND_BASE_URL must be a *.flycast host "
+                f"(Fly private network), got host {host!r}"
+            )
         return self
 
 
