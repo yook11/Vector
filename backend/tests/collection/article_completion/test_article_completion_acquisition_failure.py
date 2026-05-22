@@ -21,7 +21,7 @@ from app.collection.article_completion.acquisition_failure import (
     AcquisitionFailure,
     NotHtml,
     ParseCrashed,
-    ParserRejected,
+    ParserGaveUp,
     QualityGateFailed,
     Retryable,
     Terminal,
@@ -214,8 +214,8 @@ class TestFetchOriginServerErrorExplicitBranch:
             "content_type=application/pdf",
         ),
         (
-            ParserRejected(),
-            "acquisition_parser_rejected",
+            ParserGaveUp(),
+            "acquisition_parser_gave_up",
             None,
         ),
         (

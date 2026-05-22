@@ -8,7 +8,7 @@ from app.collection.article_completion.acquisition_failure import (
     AcquisitionFailure,
     NotHtml,
     ParseCrashed,
-    ParserRejected,
+    ParserGaveUp,
     QualityGateFailed,
 )
 from app.collection.article_completion.completer import (
@@ -26,6 +26,6 @@ __all__ = [
     "FetchFailed",
     "NotHtml",
     "ParseCrashed",
-    "ParserRejected",
+    "ParserGaveUp",
     "QualityGateFailed",
 ]

@@ -22,7 +22,7 @@ from app.collection.article_completion.acquisition_failure import (
     AcquisitionFailure,
     NotHtml,
     ParseCrashed,
-    ParserRejected,
+    ParserGaveUp,
     QualityGateFailed,
 )
 from app.collection.domain.article_limits import (
@@ -187,7 +187,7 @@ class _RobotsCache:
 def _parse_html(html: str, url: str) -> HtmlAcquisitionResult:
     """trafilatura で HTML をパースし本文・公開日時を取り出す（同期・CPU バウンド）。
 
-    抽出段 ``_extract`` の parse ステップ。失敗は ``ParserRejected`` /
+    抽出段 ``_extract`` の parse ステップ。失敗は ``ParserGaveUp`` /
     ``QualityGateFailed`` で表す (例外は呼び出し元 ``_extract`` が ``ParseCrashed``
     に畳む)。``_extract`` ごと ``asyncio.to_thread()`` でオフロードされる。
     """
@@ -208,8 +208,8 @@ def _parse_html(html: str, url: str) -> HtmlAcquisitionResult:
     )
 
     if result is None:
-        logger.info("parser_rejected", url=url)
-        return ParserRejected()
+        logger.info("parser_gave_up", url=url)
+        return ParserGaveUp()
 
     # trafilatura 2.0 以降、bare_extraction() は Document インスタンスを返す
     # 本文の品質ゲート: 50 文字未満は棄却
@@ -265,9 +265,9 @@ class ArticleHtmlAcquirer:
     """URL から記事本文と公開日時を取得する取得器。
 
     呼び出し側は ``acquire(url) -> HtmlAcquisitionResult`` の契約のみに依存する。
-    内部は取得 (_fetch: 接続できたか?) と抽出 (_extract: HTML として読めたか?)
-    の二段に分かれ、両者の境界に httpx 非依存の ``RawResponse`` を挟む。
-    robots キャッシュや HTTP クライアントのライフサイクルは内部で完結する。
+    内部は取得 (_fetch) と抽出 (_extract) の二段で、境界に httpx 非依存の
+    ``RawResponse`` を挟む。robots キャッシュと HTTP クライアントのライフサイクルは
+    内部で完結する。
     """
 
     def __init__(self) -> None:
@@ -276,19 +276,17 @@ class ArticleHtmlAcquirer:
     async def acquire(self, url: SafeUrl) -> HtmlAcquisitionResult:
         """指定 URL の HTML から記事本文・タイトル・公開日時を取得する。
 
-        取得 (_fetch) で接続成否を確定し、成功した RawResponse を抽出 (_extract)
-        に渡す。抽出は CPU バウンドなので ``asyncio.to_thread`` でオフロードする。
+        抽出は CPU バウンドなので ``asyncio.to_thread`` でオフロードする。
 
         Returns:
-            HtmlAcquisitionResult: ``AcquiredContent``（成功）または
-            ``AcquisitionFailure``（Content-Type 不一致 / パーサ拒否 / decode|parse
-            例外 / 品質ゲート未達。証拠は variant に畳む）。
+            HtmlAcquisitionResult: ``AcquiredContent`` (成功) または
+            ``AcquisitionFailure`` (Content-Type 不一致 / パーサ拒否 / parse 例外 /
+            品質ゲート未達)。
 
         Raises:
             ExternalFetchError: robots Disallow / redirect block / response 過大 /
-            HTTP status (4xx/5xx) / transport (timeout/network) / SSRF block。
-            どの origin failure かは subclass で表現する (本層は retry/terminal を
-            分類しない)。
+            HTTP status / transport / SSRF block。origin failure は subclass で
+            表現する (本層は retry/terminal を分類しない)。
         """
         raw = await self._fetch(url)
         return await asyncio.to_thread(self._extract, raw)
@@ -299,17 +297,12 @@ class ArticleHtmlAcquirer:
         成功すれば ``RawResponse`` を返し、失敗は ``ExternalFetchError`` を raise
         する非対称な二値。``httpx.Response`` は本メソッド内に封じ込め、redirect /
         status / size 判定もここで消費する。
-
-        Raises:
-            ExternalFetchError: robots Disallow / redirect block / response 過大 /
-            HTTP status (4xx/5xx) / transport (timeout/network) / SSRF block。
         """
         url_str = str(url)
 
-        # SSRF defense は make_safe_async_client の event_hook に集約済み
-        # (全 client.get 直前で host が public か検証)。HTTP status /
-        # transport / SSRF の origin error 翻訳は translate_fetch_exception
-        # に一本化し、本層で status_code を直書き分類しない。
+        # SSRF defense は make_safe_async_client の event_hook に集約 (client.get
+        # 直前で host を検証)。origin error 翻訳は translate_fetch_exception に
+        # 一本化し、本層で status_code を直書き分類しない。
         async with make_safe_async_client(
             headers=HEADERS, timeout=HTTP_TIMEOUT
         ) as client:
@@ -318,9 +311,8 @@ class ArticleHtmlAcquirer:
                     raise FetchRobotsDisallowedError(f"robots.txt blocked: {url_str}")
 
                 response = await client.get(url_str, timeout=HTTP_TIMEOUT)
-                # 3xx は raise_for_status では拾われない: 明示的に弾く。
-                # follow_redirects=False (make_safe_async_client の default) は
-                # Location 経由 SSRF を遮断する。
+                # 3xx は raise_for_status で拾われないので明示的に弾く。
+                # follow_redirects=False (client default) が Location 経由 SSRF を遮断。
                 if 300 <= response.status_code < 400:
                     logger.info(
                         "redirect_not_followed",
@@ -335,8 +327,8 @@ class ArticleHtmlAcquirer:
             except (httpx.HTTPError, HostBlockedError, HostResolutionError) as e:
                 raise translate_fetch_exception(e, source_name=url_str) from e
 
-            # レスポンスサイズ上限: 内部エンドポイントから巨大レスポンスを
-            # 引き出される攻撃面を閉じる (Content-Length 自己申告 + 実バイト数)。
+            # レスポンスサイズ上限: 巨大レスポンスを引き出す攻撃面を閉じる
+            # (Content-Length 自己申告 + 実バイト数の二段)。
             content_length_header = response.headers.get("content-length")
             if content_length_header is not None:
                 try:
@@ -357,9 +349,8 @@ class ArticleHtmlAcquirer:
                     limit_bytes=_MAX_RESPONSE_BYTES,
                 )
 
-            # httpx.Response をここで消費し RawResponse に畳む。decoded_text は
-            # response.text を一度だけ評価して持ち越す (抽出側で httpx の charset
-            # 挙動を再実装しないため)。
+            # httpx.Response を消費し RawResponse に畳む。decoded_text は
+            # response.text を一度評価して持ち越す (抽出側で charset 挙動を再現しない)。
             return RawResponse(
                 url=str(response.url),
                 content_type=response.headers.get("content-type", ""),
@@ -369,14 +360,11 @@ class ArticleHtmlAcquirer:
             )
 
     def _extract(self, raw: RawResponse) -> HtmlAcquisitionResult:
-        """抽出段: HTML として読み本文化できたか?。
+        """抽出段: HTML として読み本文化できたか? (同期)。
 
-        同期。Content-Type 判定 / decode / trafilatura の失敗を
-        ``AcquisitionFailure`` variant に畳む。decode は前工程で input 起因の
-        例外を出さない (charset 不一致は内部で握り UTF-8 fallback) ため畳まず、
-        例外を投げうるのは trafilatura のみ。これを ``ParseCrashed`` に畳む。
-        ``acquire`` から to_thread で丸ごとオフロードされるため parse の例外も
-        この thread 内で捕捉できる。
+        Content-Type 不一致は ``NotHtml``、trafilatura の例外は ``ParseCrashed`` に
+        畳む。decode は前工程で input 起因の例外を出さない (charset 不一致は内部で
+        握り UTF-8 fallback) ため畳まない。
         """
         if "text/html" not in raw.content_type:
             logger.info("content_not_html", url=raw.url, content_type=raw.content_type)

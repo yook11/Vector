@@ -91,10 +91,14 @@ class NotHtml:
 
 
 @dataclass(frozen=True)
-class ParserRejected:
-    """``trafilatura.bare_extraction`` が ``None`` — パーサがページ構造化を放棄。"""
+class ParserGaveUp:
+    """``trafilatura.bare_extraction`` が ``None`` — パーサがページ構造化を諦めた。
 
-    reason: ClassVar[str] = "parser_rejected"
+    例外ではなく正常な戻り値 (``None``) による失敗。「抽出対象がなかった」想定内の
+    結果で、経路が壊れた ``ParseCrashed`` (例外) と同一軸 (パーサの振る舞い) の対。
+    """
+
+    reason: ClassVar[str] = "parser_gave_up"
 
 
 @dataclass(frozen=True)
@@ -136,7 +140,7 @@ class QualityGateFailed:
             object.__setattr__(self, "body_sample", self.body_sample[:_BODY_SAMPLE_MAX])
 
 
-AcquisitionFailure = NotHtml | ParserRejected | ParseCrashed | QualityGateFailed
+AcquisitionFailure = NotHtml | ParserGaveUp | ParseCrashed | QualityGateFailed
 """acquisition 段で HTML が使える本文でなかった失敗を表す閉じ union (4 variant)。"""
 
 
@@ -259,7 +263,7 @@ def classify_acquisition_failure(failure: AcquisitionFailure) -> Terminal:
     match failure:
         case NotHtml(content_type=ct):
             detail = f"content_type={ct}"
-        case ParserRejected():
+        case ParserGaveUp():
             detail = None
         case ParseCrashed(error_class=ec, error_message=em):
             detail = f"{ec}: {em}"

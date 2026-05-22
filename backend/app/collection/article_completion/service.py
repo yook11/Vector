@@ -27,7 +27,7 @@ from app.collection.article_completion.acquirer import ArticleHtmlAcquirer
 from app.collection.article_completion.acquisition_failure import (
     NotHtml,
     ParseCrashed,
-    ParserRejected,
+    ParserGaveUp,
     QualityGateFailed,
     classify_acquisition_failure,
     classify_external_fetch_error,
@@ -91,7 +91,7 @@ class ArticleCompletionService:
                     ready, classify_external_fetch_error(err), exc=err
                 )
                 return None
-            case NotHtml() | ParserRejected() | ParseCrashed() | QualityGateFailed():
+            case NotHtml() | ParserGaveUp() | ParseCrashed() | QualityGateFailed():
                 await self._failure_handler.handle_acquisition_failure(
                     ready, classify_acquisition_failure(outcome), exc=None
                 )

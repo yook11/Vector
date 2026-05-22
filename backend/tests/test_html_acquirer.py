@@ -18,7 +18,7 @@ from app.collection.article_completion.acquirer import (
 from app.collection.article_completion.acquisition_failure import (
     NotHtml,
     ParseCrashed,
-    ParserRejected,
+    ParserGaveUp,
     QualityGateFailed,
 )
 from app.collection.domain.value_objects import PublishedAt
@@ -266,9 +266,9 @@ class TestArticleHtmlAcquirer:
         with _patch_client(client):
             result = await acquirer.acquire(SafeUrl("https://example.com/short"))
 
-        # trafilatura が None を返す (ParserRejected) または品質ゲート未達
+        # trafilatura が None を返す (ParserGaveUp) または品質ゲート未達
         # (QualityGateFailed) のどちらか。decode/parse 例外は本テストでは想定しない。
-        assert isinstance(result, ParserRejected | QualityGateFailed)
+        assert isinstance(result, ParserGaveUp | QualityGateFailed)
         if isinstance(result, QualityGateFailed):
             assert result.body_length < 50
 
@@ -593,7 +593,7 @@ class TestExtract:
 
     def test_valid_html_returns_acquired_content(self) -> None:
         # trafilatura の deduplicate はモジュール跨ぎの cache を持つため、他テストと
-        # 本文が衝突すると discard され ParserRejected になる。固有本文で隔離する。
+        # 本文が衝突すると discard され ParserGaveUp になる。固有本文で隔離する。
         unique_html = (
             "<html><head><title>Extract Phase Unit Test</title></head>"
             "<body><article><h1>Isolated Extraction Sample</h1>"
@@ -616,7 +616,7 @@ class TestExtract:
         assert len(result.body) > 50
 
     def test_minimal_html_returns_quality_failure(self) -> None:
-        """品質ゲート未達は ParserRejected か QualityGateFailed のどちらか。"""
+        """品質ゲート未達は ParserGaveUp か QualityGateFailed のどちらか。"""
         minimal_html = "<html><body><p>Short</p></body></html>"
         raw = RawResponse(
             url="https://example.com/short",
@@ -626,7 +626,7 @@ class TestExtract:
             decoded_text=minimal_html,
         )
         result = ArticleHtmlAcquirer()._extract(raw)
-        assert isinstance(result, ParserRejected | QualityGateFailed)
+        assert isinstance(result, ParserGaveUp | QualityGateFailed)
         if isinstance(result, QualityGateFailed):
             assert result.body_length < 50
 
