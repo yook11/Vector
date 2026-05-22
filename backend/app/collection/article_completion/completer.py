@@ -11,9 +11,7 @@ from app.collection.article_completion.acquirer import (
 )
 from app.collection.article_completion.acquisition_failure import AcquisitionFailure
 from app.collection.article_completion.completion_failure import (
-    ArticleCompletionFailure,
     CompletionInvariantRejected,
-    PublishedAtMissing,
 )
 from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.domain.analyzable_article import (
@@ -36,12 +34,12 @@ class FetchFailed:
     error: ExternalFetchError
 
 
-CompletionFailure = FetchFailed | AcquisitionFailure | ArticleCompletionFailure
+CompletionFailure = FetchFailed | AcquisitionFailure | CompletionInvariantRejected
 """補完が失敗する 3 形を 1 つに揃えた閉じた値 union。
 
 - ``FetchFailed``: origin fetch 例外を畳んだ値。
 - ``AcquisitionFailure``: 取れたが使える本文でない (4 variant、証拠を保持)。
-- ``ArticleCompletionFailure``: merge / invariant 違反 (2 variant、証拠を保持)。
+- ``CompletionInvariantRejected``: merge 後の構築不変条件違反 (例外証拠を保持)。
 """
 
 
@@ -52,13 +50,13 @@ def complete_with_html(
     *,
     source_id: int,
     source_url: CanonicalArticleUrl,
-) -> AnalyzableArticle | ArticleCompletionFailure | AcquisitionFailure:
+) -> AnalyzableArticle | CompletionInvariantRejected | AcquisitionFailure:
     """観測事実 + profile + HTML 取得結果を merge し ``AnalyzableArticle`` 昇格。
 
     責務は薄いオーケストレーション: per-field の正本 merge は ``profile.resolve``
-    (写像)、構築不変条件は ``AnalyzableArticle`` (出口契約) が担い、本関数は
-    precondition gate と失敗の証拠化 (``PublishedAtMissing`` /
-    ``CompletionInvariantRejected``) だけを行う。
+    (写像)、構築不変条件 (published_at 欠落含む) は ``AnalyzableArticle`` (出口契約)
+    が担い、本関数は precondition gate と失敗の証拠化
+    (``CompletionInvariantRejected``) だけを行う。
     """
     # precondition gate: body=html_required で HTML 取得が失敗していれば、resolve
     # させる前に AcquisitionFailure を値のまま返す (retry 分類を後段へ流す)。
@@ -82,11 +80,6 @@ def complete_with_html(
         html_published_at=html_pub,
     )
 
-    if resolved.published_at is None:
-        return PublishedAtMissing(
-            observed_had_value=obs_pub is not None,
-            html_had_value=html_pub is not None,
-        )
     built = AnalyzableArticle.build_or_reject(
         title=resolved.title,
         body=resolved.body,

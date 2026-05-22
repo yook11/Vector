@@ -38,7 +38,6 @@ from app.collection.article_completion.completer import (
 )
 from app.collection.article_completion.completion_failure import (
     CompletionInvariantRejected,
-    PublishedAtMissing,
     classify_article_completion_failure,
 )
 from app.collection.article_completion.failure_handling import (
@@ -96,7 +95,7 @@ class ArticleCompletionService:
                     ready, classify_acquisition_failure(outcome), exc=None
                 )
                 return None
-            case PublishedAtMissing() | CompletionInvariantRejected():
+            case CompletionInvariantRejected():
                 await self._failure_handler.handle_completion_rejected(
                     ready, classify_article_completion_failure(outcome)
                 )

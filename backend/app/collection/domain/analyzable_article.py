@@ -23,9 +23,11 @@ from app.collection.domain.value_objects import PublishedAt
 
 @dataclass(frozen=True, slots=True)
 class QualityTooLow:
-    """揃った材料が品質基準 (title/body 長等) に届かず構築できない理由。
+    """揃った材料が品質基準 (title/body 長 / published_at 欠落等) に届かず
+    構築できない理由。
 
     construct を拒んだ ``ValueError`` の証拠 (class 名 + message) を保持する。
+    published_at 欠落も他の不変条件違反と同様にこの型へ畳む。
     completer がこれを audit 語彙 ``CompletionInvariantRejected`` に翻訳する。
     message の長さ上限は下流の翻訳先が担うため、本型は最小に保つ。
     """
@@ -96,7 +98,7 @@ class AnalyzableArticle(BaseModel):
         *,
         title: str | None,
         body: str | None,
-        published_at: PublishedAt,
+        published_at: PublishedAt | None,
         source_id: int,
         source_url: CanonicalArticleUrl,
     ) -> Self | QualityTooLow:
@@ -104,11 +106,12 @@ class AnalyzableArticle(BaseModel):
 
         route 2 (完成段) 用の smart constructor。``try_build`` (route 1,
         ``Self | None``) と異なり、構築不能の理由を ``QualityTooLow`` の証拠として
-        返す。published_at 欠落は呼び出し側 (completer) が merge provenance 付きで
-        ``PublishedAtMissing`` を作るため、本 method は非 None を要求する。
+        返す。
 
-        ``title`` / ``body`` は ``str | None`` で受け、None は厳格コンストラクタが
-        ``ValueError`` で拒否し ``QualityTooLow`` に畳む。
+        ``title`` / ``body`` / ``published_at`` は ``... | None`` で受け、None は
+        厳格コンストラクタが ``ValueError`` で拒否し ``QualityTooLow`` に畳む。
+        published_at 欠落も title/body 長や source_id≤0 と同種の不変条件違反として
+        単一経路で扱う。
         """
         try:
             return cls(

@@ -26,11 +26,16 @@ _VALID_BODY = "x" * (ARTICLE_BODY_MIN_LENGTH + 10)
 _SHORT_BODY = "x" * (ARTICLE_BODY_MIN_LENGTH - 1)
 
 
-def _build(*, title: str | None = _VALID_TITLE, body: str | None = _VALID_BODY):
+def _build(
+    *,
+    title: str | None = _VALID_TITLE,
+    body: str | None = _VALID_BODY,
+    published_at: PublishedAt | None = _PUB,
+):
     return AnalyzableArticle.build_or_reject(
         title=title,
         body=body,
-        published_at=_PUB,
+        published_at=published_at,
         source_id=1,
         source_url=_URL,
     )
@@ -52,3 +57,14 @@ def test_quality_too_low_carries_validation_evidence() -> None:
     assert isinstance(result, QualityTooLow)
     assert result.error_class == "ValidationError"
     assert "body" in result.error_message
+
+
+def test_build_or_reject_returns_quality_too_low_when_published_at_missing() -> None:
+    """published_at 欠落も必須 Field 違反として ``QualityTooLow`` に畳む。
+
+    title/body と同種の構築不変条件違反であり、専用経路を持たない (正本)。
+    """
+    result = _build(published_at=None)
+    assert isinstance(result, QualityTooLow)
+    assert result.error_class == "ValidationError"
+    assert "published_at" in result.error_message

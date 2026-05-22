@@ -6,7 +6,7 @@
 - fetch 例外 (``ExternalFetchError``) → ``FetchFailed`` 値に畳まれ例外は出ない
 - ``AcquisitionFailure`` → ``body=html_required`` のため値のまま素通し
 - ``AcquiredContent`` + promotion 成功 → ``AnalyzableArticle``
-- ``AcquiredContent`` + promotion 失敗 → ``ArticleCompletionFailure`` (variant)
+- ``AcquiredContent`` + promotion 失敗 → ``CompletionInvariantRejected``
 
 completer は profile を知らず ``ReadyForArticleCompletion`` 経由で受け取り
 ``complete_with_html`` (純粋関数) に委譲する。
@@ -25,7 +25,9 @@ from app.collection.article_completion.completer import (
     ArticleHtmlCompleter,
     FetchFailed,
 )
-from app.collection.article_completion.completion_failure import PublishedAtMissing
+from app.collection.article_completion.completion_failure import (
+    CompletionInvariantRejected,
+)
 from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
@@ -106,13 +108,14 @@ async def test_acquired_content_success_returns_analyzable_article() -> None:
 
 
 @pytest.mark.asyncio
-async def test_promotion_failure_returns_published_at_missing() -> None:
-    """published_at が観測 / HTML 両方欠落 → ``PublishedAtMissing`` (両源 False)。"""
+async def test_promotion_failure_returns_invariant_rejected() -> None:
+    """published_at が観測 / HTML 両方欠落 → 必須 Field 違反として
+    ``CompletionInvariantRejected`` に畳む。"""
     content = AcquiredContent(title="OK", body="x" * 200, published_at=None)
     result = await _completer(AsyncMock(return_value=content)).complete(
         _ready(observed_published=None)
     )
 
-    assert isinstance(result, PublishedAtMissing)
-    assert result.observed_had_value is False
-    assert result.html_had_value is False
+    assert isinstance(result, CompletionInvariantRejected)
+    assert result.error_class == "ValidationError"
+    assert "published_at" in result.error_message

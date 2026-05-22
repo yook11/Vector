@@ -382,7 +382,7 @@ async def test_promotion_failure_closes_pending(
     tc_source: NewsSource,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """promotion ``ArticleCompletionFailure`` → ``None`` + pending status='closed'。
+    """promotion ``CompletionInvariantRejected`` → ``None`` + pending status='closed'。
 
     body はあるが published_at が両方 None で promotion failure を発生させる。
     """

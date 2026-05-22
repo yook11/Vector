@@ -6,7 +6,7 @@
 - title ``html_preferred``: HTML title が正本になる (旧 anthropic/ornl)
 - title ``observed_preferred``: 観測 title が常勝 (旧 default。観測常在のため)
 - published_at ``observed_preferred``: 観測優先 / HTML fallback / 両欠は
-  ``PublishedAtMissing`` (旧 ``hint or html``)
+  ``CompletionInvariantRejected`` (必須 Field 違反として畳む)
 - body ``html_required`` + ``AcquisitionFailure``: 値のまま返す (旧 completer 短絡)
 - **観測 body があっても ``html_required`` のとき完成 body は HTML 由来**
   (取れた事実を全部保存しても merge は不変 = forward-compat の核)
@@ -22,7 +22,6 @@ from app.collection.article_completion.acquisition_failure import QualityGateFai
 from app.collection.article_completion.completer import complete_with_html
 from app.collection.article_completion.completion_failure import (
     CompletionInvariantRejected,
-    PublishedAtMissing,
 )
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
@@ -112,11 +111,13 @@ def test_published_at_falls_back_to_html_when_observed_absent() -> None:
     assert result.published_at == _HTML_PUB
 
 
-def test_published_at_missing_both_fails_with_named_reason() -> None:
+def test_published_at_missing_both_fails_as_invariant_rejected() -> None:
+    """published_at が観測 / HTML 両欠 → 必須 Field 違反として
+    ``CompletionInvariantRejected`` に畳む (title/body/source_id と同種)。"""
     result = _promote(_observed(published=None), DEFAULT_POLICY, _html(published=None))
-    assert isinstance(result, PublishedAtMissing)
-    assert result.observed_had_value is False
-    assert result.html_had_value is False
+    assert isinstance(result, CompletionInvariantRejected)
+    assert result.error_class == "ValidationError"
+    assert "published_at" in result.error_message
 
 
 def test_body_html_required_with_acquisition_failure_returns_value() -> None:
