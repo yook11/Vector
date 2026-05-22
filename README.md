@@ -334,7 +334,7 @@ docker compose exec frontend npm test
 
 #### DB を要するテスト (integration)
 
-`-m integration` のテストは host から専用 `db-test` (`127.0.0.1:5433`, `-p vector-test`) を立てて回す。Makefile が `DATABASE_URL` / `MIGRATION_DATABASE_URL` / role password を OS env で注入するため **`.env` は不要**。worktree 直下からも `.env` symlink なしで動く。
+`-m integration` のテストは host から専用 `db-test` (`127.0.0.1` の random port, project 名 `vector-test-<worktree>`) を立てて回す。Makefile が `DATABASE_URL` / `MIGRATION_DATABASE_URL` / role password を OS env で注入するため **`.env` は不要**。worktree 直下からも `.env` symlink なしで動き、project 名・ポートが worktree ごとに分離されるため複数 worktree で並列実行できる。
 
 ```bash
 # 全 integration テスト

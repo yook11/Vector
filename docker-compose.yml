@@ -111,7 +111,8 @@ services:
   # - networks は internal 限定 (Docker の internal: true で外部 ingress/egress 遮断)
   # - ports は宣言なし (internal network では host port forward も無効化されるため)
   # dev で psql を使うときは `docker compose exec db psql -U vector vector` で
-  # container 内 psql を使う。host から直接 5433 に接続する経路は完全に閉じる。
+  # container 内 psql を使う。host から直接 db に接続する経路は完全に閉じる
+  # (host port 宣言なし。統合テストは別 compose の `db-test` を loopback 限定で立てる)。
   db:
     image: pgvector/pgvector:pg16
     environment:

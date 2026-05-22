@@ -17,7 +17,7 @@
 ## ワークフロー
 
 - 検証は `/review` スキルを実行すること
-- ローカル統合テスト: `make test-integration` で `db-test` (専用の ephemeral Postgres / 127.0.0.1:5433) を立てて `pytest -m integration` を流す。本体 `db` は host に出ない (本番想定 topology を維持)。終了時は `trap` で必ず `db-test` が停止し、`tmpfs` により全データが消える
+- ローカル統合テスト: `make test-integration` で `db-test` (専用の ephemeral Postgres / 127.0.0.1 loopback の動的ポート, project 名は worktree ごとに分離) を立てて `pytest -m integration` を流す。本体 `db` は host に出ない (本番想定 topology を維持)。終了時は `trap` で必ず `db-test` が停止し、`tmpfs` により全データが消える
 
 ## リサーチ義務
 
