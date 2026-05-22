@@ -18,12 +18,12 @@ from datetime import UTC, datetime, timedelta
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.collection.article_completion.completion_failure import CompletionRejection
-from app.collection.article_completion.disposition import (
+from app.collection.article_completion.acquisition_failure import (
     AcquisitionDecision,
     Retryable,
     Terminal,
 )
+from app.collection.article_completion.completion_failure import CompletionRejection
 from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.article_completion.repository import ArticleCompletionRepository
 from app.collection.article_completion.retry_policy import effective_delay_minutes

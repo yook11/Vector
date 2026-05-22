@@ -16,15 +16,13 @@ from __future__ import annotations
 import pytest
 
 from app.collection.article_completion.acquisition_failure import (
+    _RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY,
+    _TERMINAL_FETCH_ERROR_TYPES,
     AcquisitionCrashed,
     AcquisitionFailure,
     NotHtml,
     ParserRejected,
     QualityGateFailed,
-)
-from app.collection.article_completion.disposition import (
-    _RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY,
-    _TERMINAL_FETCH_ERROR_TYPES,
     Retryable,
     Terminal,
     classify_acquisition_failure,

@@ -1,7 +1,7 @@
 """completion concern (Stage 2: 抽出物 + メタデータ合成段) の分類テスト。
 
 acquisition concern (Stage 1) の Retry 軸分類は
-``test_article_completion_disposition.py`` が所有する。本ファイルは Stage 2 の
+``test_article_completion_acquisition_failure.py`` が所有する。本ファイルは Stage 2 の
 ``ArticleCompletionFailure`` を Accept 軸の ``CompletionRejection`` に正規化する
 ``classify_article_completion_failure`` の契約のみを検証する。
 

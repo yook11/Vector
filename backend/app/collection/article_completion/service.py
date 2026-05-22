@@ -29,6 +29,8 @@ from app.collection.article_completion.acquisition_failure import (
     NotHtml,
     ParserRejected,
     QualityGateFailed,
+    classify_acquisition_failure,
+    classify_external_fetch_error,
 )
 from app.collection.article_completion.completer import (
     ArticleHtmlCompleter,
@@ -38,10 +40,6 @@ from app.collection.article_completion.completion_failure import (
     CompletionInvariantRejected,
     PublishedAtMissing,
     classify_article_completion_failure,
-)
-from app.collection.article_completion.disposition import (
-    classify_acquisition_failure,
-    classify_external_fetch_error,
 )
 from app.collection.article_completion.failure_handling import (
     ArticleCompletionFailureHandler,

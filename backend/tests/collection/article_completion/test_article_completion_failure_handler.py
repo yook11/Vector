@@ -26,8 +26,8 @@ from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
+from app.collection.article_completion.acquisition_failure import Retryable, Terminal
 from app.collection.article_completion.completion_failure import CompletionRejection
-from app.collection.article_completion.disposition import Retryable, Terminal
 from app.collection.article_completion.failure_handling import (
     ArticleCompletionFailureHandler,
 )
