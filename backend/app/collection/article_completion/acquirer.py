@@ -1,6 +1,6 @@
-"""HTML 抽出層 — URL から記事本文と公開日時を取得する。
+"""HTML 取得層 (acquisition) — URL から記事本文と公開日時を取得する。
 
-呼び出し側は ``URL -> HtmlExtractionResult`` の契約にのみ依存する。恒久的な
+呼び出し側は ``URL -> HtmlAcquisitionResult`` の契約にのみ依存する。恒久的な
 失敗と一時的な失敗は例外として分離し、呼び出し側で扱いを切り分けられる。
 """
 
@@ -18,9 +18,9 @@ import httpx
 import structlog
 import trafilatura
 
-from app.collection.article_completion.extraction_failure import (
-    ExtractionCrashed,
-    ExtractionFailure,
+from app.collection.article_completion.acquisition_failure import (
+    AcquisitionCrashed,
+    AcquisitionFailure,
     NotHtml,
     ParserRejected,
     QualityGateFailed,
@@ -99,8 +99,8 @@ def _decode_html_response(response: httpx.Response) -> str:
 
 
 @dataclass(frozen=True)
-class ExtractedContent:
-    """抽出成功: 品質ゲートを通過した本文・タイトル。
+class AcquiredContent:
+    """取得成功: 品質ゲートを通過した本文・タイトル。
 
     invariant:
       - ``title``: 非空、500 文字以内
@@ -121,7 +121,7 @@ class ExtractedContent:
             raise ValueError(f"body must be at least {_BODY_MIN_LENGTH} chars")
 
 
-HtmlExtractionResult = ExtractedContent | ExtractionFailure
+HtmlAcquisitionResult = AcquiredContent | AcquisitionFailure
 
 
 class _RobotsCache:
@@ -167,7 +167,7 @@ class _RobotsCache:
             return rp is None or rp.can_fetch(USER_AGENT, url)
 
 
-def _extract_from_html(html: str, url: str) -> HtmlExtractionResult:
+def _extract_from_html(html: str, url: str) -> HtmlAcquisitionResult:
     """trafilatura で HTML から記事本文と公開日時を抽出する（同期・CPU バウンド）。
 
     本関数は ``asyncio.to_thread()`` 経由で呼ぶことを想定している。
@@ -221,29 +221,29 @@ def _extract_from_html(html: str, url: str) -> HtmlExtractionResult:
             body_sample=body_sample,
         )
 
-    return ExtractedContent(
+    return AcquiredContent(
         title=title,
         body=body,
         published_at=PublishedAt.parse(result.date),
     )
 
 
-class ArticleHtmlExtractor:
-    """URL から記事本文と公開日時を取得する抽出器。
+class ArticleHtmlAcquirer:
+    """URL から記事本文と公開日時を取得する取得器。
 
-    呼び出し側は ``fetch(url) -> HtmlExtractionResult`` の契約のみに依存する。
+    呼び出し側は ``fetch(url) -> HtmlAcquisitionResult`` の契約のみに依存する。
     robots キャッシュや HTTP クライアントのライフサイクルは内部で完結する。
     """
 
     def __init__(self) -> None:
         self._robots_cache = _RobotsCache()
 
-    async def fetch(self, url: SafeUrl) -> HtmlExtractionResult:
-        """指定 URL の HTML から記事本文・タイトル・公開日時を抽出する。
+    async def fetch(self, url: SafeUrl) -> HtmlAcquisitionResult:
+        """指定 URL の HTML から記事本文・タイトル・公開日時を取得する。
 
         Returns:
-            HtmlExtractionResult: ``ExtractedContent``（成功）または
-            ``ExtractionFailure``（Content-Type 不一致 / パーサ拒否 / decode|parse
+            HtmlAcquisitionResult: ``AcquiredContent``（成功）または
+            ``AcquisitionFailure``（Content-Type 不一致 / パーサ拒否 / decode|parse
             例外 / 品質ゲート未達。証拠は variant に畳む）。
 
         Raises:
@@ -319,7 +319,7 @@ class ArticleHtmlExtractor:
                     stage="decode",
                     error=str(e),
                 )
-                return ExtractionCrashed(
+                return AcquisitionCrashed(
                     stage="decode",
                     error_class=type(e).__name__,
                     error_message=str(e),
@@ -334,7 +334,7 @@ class ArticleHtmlExtractor:
                     stage="parse",
                     error=str(e),
                 )
-                return ExtractionCrashed(
+                return AcquisitionCrashed(
                     stage="parse",
                     error_class=type(e).__name__,
                     error_message=str(e),

@@ -1,4 +1,4 @@
-"""HTML 抽出層のテスト。"""
+"""HTML 取得層 (acquirer) のテスト。"""
 
 import socket
 from datetime import UTC, datetime
@@ -7,15 +7,15 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from app.collection.article_completion.extraction_failure import (
+from app.collection.article_completion.acquirer import (
+    AcquiredContent,
+    ArticleHtmlAcquirer,
+    _decode_html_response,
+)
+from app.collection.article_completion.acquisition_failure import (
     NotHtml,
     ParserRejected,
     QualityGateFailed,
-)
-from app.collection.article_completion.extractor import (
-    ArticleHtmlExtractor,
-    ExtractedContent,
-    _decode_html_response,
 )
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.external_fetch_errors import (
@@ -95,7 +95,7 @@ def _mock_async_client(responses: list[httpx.Response | Exception]) -> AsyncMock
 def _patch_client(client: AsyncMock):
     """``make_safe_async_client`` を patch して fetch() がモックを使うようにする。"""
     return patch(
-        "app.collection.article_completion.extractor.make_safe_async_client",
+        "app.collection.article_completion.acquirer.make_safe_async_client",
         return_value=_as_async_cm(client),
     )
 
@@ -108,7 +108,7 @@ def _as_async_cm(value: object) -> AsyncMock:
     return cm
 
 
-class TestArticleHtmlExtractor:
+class TestArticleHtmlAcquirer:
     @pytest.mark.asyncio
     async def test_fetches_body_from_url(self) -> None:
         robots_resp = httpx.Response(
@@ -123,11 +123,11 @@ class TestArticleHtmlExtractor:
         )
         client = _mock_async_client([robots_resp, html_resp])
 
-        extractor = ArticleHtmlExtractor()
+        acquirer = ArticleHtmlAcquirer()
         with _patch_client(client):
-            result = await extractor.fetch(SafeUrl("https://example.com/article"))
+            result = await acquirer.fetch(SafeUrl("https://example.com/article"))
 
-        assert isinstance(result, ExtractedContent)
+        assert isinstance(result, AcquiredContent)
         assert len(result.body) > 50
         assert result.title
 
@@ -148,9 +148,9 @@ class TestArticleHtmlExtractor:
         )
         client = _mock_async_client([robots_resp, error_resp])
 
-        extractor = ArticleHtmlExtractor()
+        acquirer = ArticleHtmlAcquirer()
         with _patch_client(client), pytest.raises(FetchAccessDeniedError, match="403"):
-            await extractor.fetch(SafeUrl("https://example.com/paywall"))
+            await acquirer.fetch(SafeUrl("https://example.com/paywall"))
 
     @pytest.mark.asyncio
     async def test_raises_access_denied_on_401(self) -> None:
@@ -170,9 +170,9 @@ class TestArticleHtmlExtractor:
         )
         client = _mock_async_client([robots_resp, error_resp])
 
-        extractor = ArticleHtmlExtractor()
+        acquirer = ArticleHtmlAcquirer()
         with _patch_client(client), pytest.raises(FetchAccessDeniedError, match="401"):
-            await extractor.fetch(SafeUrl("https://example.com/paywall"))
+            await acquirer.fetch(SafeUrl("https://example.com/paywall"))
 
     @pytest.mark.asyncio
     async def test_raises_origin_server_error_on_500(self) -> None:
@@ -191,9 +191,9 @@ class TestArticleHtmlExtractor:
         )
         client = _mock_async_client([robots_resp, error_resp])
 
-        extractor = ArticleHtmlExtractor()
+        acquirer = ArticleHtmlAcquirer()
         with _patch_client(client), pytest.raises(FetchOriginServerError, match="500"):
-            await extractor.fetch(SafeUrl("https://example.com/error"))
+            await acquirer.fetch(SafeUrl("https://example.com/error"))
 
     @pytest.mark.asyncio
     async def test_raises_timeout_on_connect_timeout(self) -> None:
@@ -203,12 +203,12 @@ class TestArticleHtmlExtractor:
         )
         client = _mock_async_client([robots_resp, httpx.ConnectTimeout("timed out")])
 
-        extractor = ArticleHtmlExtractor()
+        acquirer = ArticleHtmlAcquirer()
         with (
             _patch_client(client),
             pytest.raises(FetchTimeoutError, match="timed out"),
         ):
-            await extractor.fetch(SafeUrl("https://example.com/slow"))
+            await acquirer.fetch(SafeUrl("https://example.com/slow"))
 
     @pytest.mark.asyncio
     async def test_returns_empty_result_for_non_html(self) -> None:
@@ -224,9 +224,9 @@ class TestArticleHtmlExtractor:
         )
         client = _mock_async_client([robots_resp, pdf_resp])
 
-        extractor = ArticleHtmlExtractor()
+        acquirer = ArticleHtmlAcquirer()
         with _patch_client(client):
-            result = await extractor.fetch(SafeUrl("https://example.com/doc.pdf"))
+            result = await acquirer.fetch(SafeUrl("https://example.com/doc.pdf"))
 
         assert isinstance(result, NotHtml)
         assert result.content_type == "application/pdf"
@@ -247,9 +247,9 @@ class TestArticleHtmlExtractor:
         )
         client = _mock_async_client([robots_resp, html_resp])
 
-        extractor = ArticleHtmlExtractor()
+        acquirer = ArticleHtmlAcquirer()
         with _patch_client(client):
-            result = await extractor.fetch(SafeUrl("https://example.com/short"))
+            result = await acquirer.fetch(SafeUrl("https://example.com/short"))
 
         # trafilatura が None を返す (ParserRejected) または品質ゲート未達
         # (QualityGateFailed) のどちらか。decode/parse 例外は本テストでは想定しない。
@@ -267,45 +267,45 @@ class TestArticleHtmlExtractor:
         )
         client = _mock_async_client([robots_resp])
 
-        extractor = ArticleHtmlExtractor()
+        acquirer = ArticleHtmlAcquirer()
         with (
             _patch_client(client),
             pytest.raises(FetchRobotsDisallowedError, match="robots"),
         ):
-            await extractor.fetch(SafeUrl("https://example.com/private/article"))
+            await acquirer.fetch(SafeUrl("https://example.com/private/article"))
 
     @pytest.mark.asyncio
     async def test_raises_ssrf_blocked_when_host_resolves_to_private_ip(self) -> None:
         """ホスト名の DNS 解決結果が private IP なら fetch せず SSRF block。"""
-        extractor = ArticleHtmlExtractor()
+        acquirer = ArticleHtmlAcquirer()
         with patch(
             "app.shared.security.ssrf_guard._resolve_host",
             new=AsyncMock(return_value=["172.18.0.5"]),
         ):
             with pytest.raises(FetchSsrfBlockedError, match="non-public address"):
-                await extractor.fetch(SafeUrl("https://internal-trick.example.com/"))
+                await acquirer.fetch(SafeUrl("https://internal-trick.example.com/"))
 
     @pytest.mark.asyncio
     async def test_raises_ssrf_blocked_when_host_resolves_to_link_local(self) -> None:
         """A レコードがクラウドメタデータ (169.254.169.254) を指しているケース。"""
-        extractor = ArticleHtmlExtractor()
+        acquirer = ArticleHtmlAcquirer()
         with patch(
             "app.shared.security.ssrf_guard._resolve_host",
             new=AsyncMock(return_value=["169.254.169.254"]),
         ):
             with pytest.raises(FetchSsrfBlockedError, match="169.254.169.254"):
-                await extractor.fetch(SafeUrl("https://metadata-attack.example.com/"))
+                await acquirer.fetch(SafeUrl("https://metadata-attack.example.com/"))
 
     @pytest.mark.asyncio
     async def test_raises_network_error_on_dns_failure(self) -> None:
         """DNS 解決失敗は network origin error (disposition で retryable)。"""
-        extractor = ArticleHtmlExtractor()
+        acquirer = ArticleHtmlAcquirer()
         with patch(
             "app.shared.security.ssrf_guard._resolve_host",
             new=AsyncMock(side_effect=socket.gaierror("nope")),
         ):
             with pytest.raises(FetchNetworkError, match="DNS resolution failed"):
-                await extractor.fetch(SafeUrl("https://nonexistent.invalid/"))
+                await acquirer.fetch(SafeUrl("https://nonexistent.invalid/"))
 
     @pytest.mark.asyncio
     async def test_raises_redirect_blocked_on_3xx_redirect(self) -> None:
@@ -321,12 +321,12 @@ class TestArticleHtmlExtractor:
         )
         client = _mock_async_client([robots_resp, redirect_resp])
 
-        extractor = ArticleHtmlExtractor()
+        acquirer = ArticleHtmlAcquirer()
         with (
             _patch_client(client),
             pytest.raises(FetchRedirectBlockedError, match="redirect not followed"),
         ):
-            await extractor.fetch(SafeUrl("https://example.com/article"))
+            await acquirer.fetch(SafeUrl("https://example.com/article"))
 
     @pytest.mark.asyncio
     async def test_raises_response_too_large_on_oversized_content_length_header(
@@ -348,12 +348,12 @@ class TestArticleHtmlExtractor:
         )
         client = _mock_async_client([robots_resp, huge_resp])
 
-        extractor = ArticleHtmlExtractor()
+        acquirer = ArticleHtmlAcquirer()
         with (
             _patch_client(client),
             pytest.raises(FetchResponseTooLargeError, match="response too large"),
         ):
-            await extractor.fetch(SafeUrl("https://example.com/huge"))
+            await acquirer.fetch(SafeUrl("https://example.com/huge"))
 
     @pytest.mark.asyncio
     async def test_raises_response_too_large_on_oversized_actual_body(self) -> None:
@@ -371,12 +371,12 @@ class TestArticleHtmlExtractor:
         )
         client = _mock_async_client([robots_resp, huge_resp])
 
-        extractor = ArticleHtmlExtractor()
+        acquirer = ArticleHtmlAcquirer()
         with (
             _patch_client(client),
             pytest.raises(FetchResponseTooLargeError, match="response too large"),
         ):
-            await extractor.fetch(SafeUrl("https://example.com/huge2"))
+            await acquirer.fetch(SafeUrl("https://example.com/huge2"))
 
     @pytest.mark.asyncio
     async def test_caches_robots_txt_across_calls(self) -> None:
@@ -397,15 +397,15 @@ class TestArticleHtmlExtractor:
             headers={"content-type": "text/html"},
             request=httpx.Request("GET", "https://example.com/a2"),
         )
-        # 2 回の fetch は同じ extractor インスタンスを再利用 (robots cache 共有)
+        # 2 回の fetch は同じ acquirer インスタンスを再利用 (robots cache 共有)
         client_1 = _mock_async_client([robots_resp, html_resp_1])
         client_2 = _mock_async_client([html_resp_2])
 
-        extractor = ArticleHtmlExtractor()
+        acquirer = ArticleHtmlAcquirer()
         with _patch_client(client_1):
-            await extractor.fetch(SafeUrl("https://example.com/a1"))
+            await acquirer.fetch(SafeUrl("https://example.com/a1"))
         with _patch_client(client_2):
-            await extractor.fetch(SafeUrl("https://example.com/a2"))
+            await acquirer.fetch(SafeUrl("https://example.com/a2"))
 
         # 2 回目の fetch では robots.txt を再リクエストしないはず
         robots_calls_1 = [
@@ -418,23 +418,23 @@ class TestArticleHtmlExtractor:
         assert len(robots_calls_2) == 0
 
 
-class TestExtractedContentInvariant:
-    """ExtractedContent のコンストラクタ invariant。"""
+class TestAcquiredContentInvariant:
+    """AcquiredContent のコンストラクタ invariant。"""
 
     def test_rejects_empty_title(self) -> None:
         with pytest.raises(ValueError, match="title"):
-            ExtractedContent(title="", body="x" * 60, published_at=None)
+            AcquiredContent(title="", body="x" * 60, published_at=None)
 
     def test_rejects_title_over_limit(self) -> None:
         with pytest.raises(ValueError, match="title"):
-            ExtractedContent(title="x" * 501, body="x" * 60, published_at=None)
+            AcquiredContent(title="x" * 501, body="x" * 60, published_at=None)
 
     def test_rejects_short_body(self) -> None:
         with pytest.raises(ValueError, match="body"):
-            ExtractedContent(title="t", body="x" * 10, published_at=None)
+            AcquiredContent(title="t", body="x" * 10, published_at=None)
 
     def test_accepts_valid_fields(self) -> None:
-        content = ExtractedContent(
+        content = AcquiredContent(
             title="t",
             body="x" * 60,
             published_at=PublishedAt(datetime(2026, 4, 1, tzinfo=UTC)),
@@ -518,8 +518,8 @@ class TestDecodeHtmlResponse:
         assert isinstance(result, str)
 
     @pytest.mark.asyncio
-    async def test_extractor_handles_shift_jis_html(self) -> None:
-        """ArticleHtmlExtractor が Shift_JIS の HTML を文字化けなく抽出する。"""
+    async def test_acquirer_handles_shift_jis_html(self) -> None:
+        """ArticleHtmlAcquirer が Shift_JIS の HTML を文字化けなく抽出する。"""
         html_text = (
             '<html><head><meta charset="Shift_JIS"></head>'
             "<body><article>"
@@ -546,11 +546,11 @@ class TestDecodeHtmlResponse:
         )
         client = _mock_async_client([robots_resp, html_resp])
 
-        extractor = ArticleHtmlExtractor()
+        acquirer = ArticleHtmlAcquirer()
         with _patch_client(client):
-            result = await extractor.fetch(
+            result = await acquirer.fetch(
                 SafeUrl("https://www.itmedia.co.jp/news/articles/test.html")
             )
 
-        assert isinstance(result, ExtractedContent)
+        assert isinstance(result, AcquiredContent)
         assert "量子コンピューティング" in result.body

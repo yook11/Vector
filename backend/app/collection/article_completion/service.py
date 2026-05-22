@@ -23,6 +23,13 @@ from typing import assert_never
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.collection.article_completion.acquirer import ArticleHtmlAcquirer
+from app.collection.article_completion.acquisition_failure import (
+    AcquisitionCrashed,
+    NotHtml,
+    ParserRejected,
+    QualityGateFailed,
+)
 from app.collection.article_completion.completer import (
     ArticleHtmlCompleter,
     FetchFailed,
@@ -33,16 +40,9 @@ from app.collection.article_completion.completion_failure import (
     classify_article_completion_failure,
 )
 from app.collection.article_completion.disposition import (
+    classify_acquisition_failure,
     classify_external_fetch_error,
-    classify_extraction_failure,
 )
-from app.collection.article_completion.extraction_failure import (
-    ExtractionCrashed,
-    NotHtml,
-    ParserRejected,
-    QualityGateFailed,
-)
-from app.collection.article_completion.extractor import ArticleHtmlExtractor
 from app.collection.article_completion.failure_handling import (
     ArticleCompletionFailureHandler,
 )
@@ -66,10 +66,10 @@ class ArticleCompletionService:
     def __init__(
         self,
         session_factory: async_sessionmaker[AsyncSession],
-        extractor_factory: Callable[[], ArticleHtmlExtractor] = ArticleHtmlExtractor,
+        acquirer_factory: Callable[[], ArticleHtmlAcquirer] = ArticleHtmlAcquirer,
     ) -> None:
         self._session_factory = session_factory
-        self._completer = ArticleHtmlCompleter(extractor_factory)
+        self._completer = ArticleHtmlCompleter(acquirer_factory)
         self._failure_handler = ArticleCompletionFailureHandler(session_factory)
 
     async def execute(self, ready: ReadyForArticleCompletion) -> int | None:
@@ -94,10 +94,13 @@ class ArticleCompletionService:
                 )
                 return None
             case (
-                NotHtml() | ParserRejected() | ExtractionCrashed() | QualityGateFailed()
+                NotHtml()
+                | ParserRejected()
+                | AcquisitionCrashed()
+                | QualityGateFailed()
             ):
                 await self._failure_handler.handle_acquisition_failure(
-                    ready, classify_extraction_failure(outcome), exc=None
+                    ready, classify_acquisition_failure(outcome), exc=None
                 )
                 return None
             case PublishedAtMissing() | CompletionInvariantRejected():

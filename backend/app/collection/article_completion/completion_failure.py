@@ -1,13 +1,13 @@
 """HTML 完成段で AnalyzableArticle に昇格できなかった理由の閉じ union。
 
-接続/transport 失敗は ``ExternalFetchError`` family、HTML 抽出段の失敗は
-``ExtractionFailure`` が担う。本モジュールは Stage 2 完成段のうち
-「観測値 + HTML 抽出結果を merge して AnalyzableArticle を構築する」段で
+接続/transport 失敗は ``ExternalFetchError`` family、HTML 取得段 (acquisition) の
+失敗は ``AcquisitionFailure`` が担う。本モジュールは completion 段のうち
+「観測値 + HTML 取得結果を merge して AnalyzableArticle を構築する」段で
 起きる失敗だけを扱う。各 variant は失敗地点で得られる証拠 (どの源に値が
 あったか / 例外 class+message) を frozen dataclass のフィールドとして
 保持し、後段の audit と log emit の双方で構造のまま利用される。
 
-設計は ``extraction_failure`` と同じ:
+設計は ``acquisition_failure`` と同じ:
 - ``reason: ClassVar[str]`` は監査ラベル専用。識別は ``match`` + ``assert_never``
   で型ベースに行う。
 - ``__post_init__`` は upper-bound truncate のみ。

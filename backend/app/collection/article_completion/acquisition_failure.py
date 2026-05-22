@@ -1,11 +1,12 @@
-"""HTML 完成段の失敗を表す閉じ union — 失敗ごとに「どう失敗したか」の証拠を持つ。
+"""acquisition 段 (URL→本文取得) で HTML が使えなかった失敗を表す閉じ union。
 
-接続 / transport 失敗は ``ExternalFetchError`` family (``collection`` 共通) が担う。
-本モジュールは Stage 2 完成段 (URL → 本文・タイトル・公開日時) 固有の失敗だけを
-扱う。各 variant は失敗地点で得られる証拠 (content_type / parse stage /
-quality metric / 例外 class+message) を frozen dataclass のフィールドとして
-保持し、後段の audit 記録 (``ContentFetchPayload``) と log emit の双方で
-構造のまま利用される。
+acquisition は URL に HTTP GET して HTML を取り、trafilatura で本文・タイトル・
+公開日時を取り出す段。接続 / transport 失敗は ``ExternalFetchError`` family
+(``collection`` 共通) が担い、本モジュールは取得できたが使える本文でなかった失敗
+(content-type 不一致 / パーサ拒否 / decode|parse 例外 / 品質ゲート未達) だけを扱う。
+各 variant は失敗地点で得られる証拠 (content_type / parse stage / quality metric /
+例外 class+message) を frozen dataclass のフィールドとして保持し、後段の audit
+記録 (``ContentFetchPayload``) と log emit の双方で構造のまま利用される。
 
 設計:
 - ``reason: ClassVar[str]`` は監査ラベル専用。識別 (dispatch) は ``match`` +
@@ -48,13 +49,13 @@ class ParserRejected:
 
 
 @dataclass(frozen=True)
-class ExtractionCrashed:
-    """decode / 抽出処理中に例外。自コード or charset 経路の故障。"""
+class AcquisitionCrashed:
+    """decode / parse 処理中に例外。自コード or charset 経路の故障。"""
 
     stage: Literal["decode", "parse"]
     error_class: str
     error_message: str
-    reason: ClassVar[str] = "extraction_crashed"
+    reason: ClassVar[str] = "crashed"
 
     def __post_init__(self) -> None:
         if len(self.error_message) > _ERROR_MESSAGE_MAX:
@@ -83,5 +84,5 @@ class QualityGateFailed:
             object.__setattr__(self, "body_sample", self.body_sample[:_BODY_SAMPLE_MAX])
 
 
-ExtractionFailure = NotHtml | ParserRejected | ExtractionCrashed | QualityGateFailed
-"""HTML 完成段の失敗を表す閉じ union (4 variant)。"""
+AcquisitionFailure = NotHtml | ParserRejected | AcquisitionCrashed | QualityGateFailed
+"""acquisition 段で HTML が使える本文でなかった失敗を表す閉じ union (4 variant)。"""

@@ -1,4 +1,4 @@
-"""``extract_html_body`` task の振る舞い不変条件テスト (案 3: 厚い Ready 自構築)。
+"""``acquire_html_body`` task の振る舞い不変条件テスト (案 3: 厚い Ready 自構築)。
 
 task は処理開始時に ``ReadyForArticleCompletion.try_advance_from`` で厚い Ready を
 自構築し、Ready を ``ArticleCompletionService.execute(ready)`` に渡す薄ラッパー。
@@ -40,7 +40,7 @@ from app.collection.domain.observed_article import (
 )
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.sources.article_completion_policy import DEFAULT_POLICY
-from app.collection.tasks import extract_html_body
+from app.collection.tasks import acquire_html_body
 from app.shared.value_objects.source_name import SourceName
 
 _SERVICE_EXECUTE = (
@@ -101,7 +101,7 @@ async def test_precondition_not_met_skips_and_does_not_call_service(
         patch(_SERVICE_CLS) as mock_svc_cls,
         patch(_CURATE_CONTENT_KIQ) as mock_kiq,
     ):
-        result = await extract_html_body(pending_id=999, ctx=_ctx(session_factory))
+        result = await acquire_html_body(pending_id=999, ctx=_ctx(session_factory))
 
     assert result is None
     mock_svc_cls.assert_not_called()
@@ -119,7 +119,7 @@ async def test_chains_curate_content_with_trigger_when_article_id_returned(
     monkeypatch.setattr(_CURATE_CONTENT_KIQ, curate_content_kiq)
 
     with _patch_try_advance_from(_fixed_ready(pending_id=42)):
-        result = await extract_html_body(pending_id=42, ctx=_ctx(session_factory))
+        result = await acquire_html_body(pending_id=42, ctx=_ctx(session_factory))
 
     assert result == {
         "pending_id": 42,
@@ -140,7 +140,7 @@ async def test_returns_none_when_service_returns_none(
     monkeypatch.setattr(_CURATE_CONTENT_KIQ, curate_content_kiq)
 
     with _patch_try_advance_from(_fixed_ready(pending_id=123)):
-        result = await extract_html_body(pending_id=123, ctx=_ctx(session_factory))
+        result = await acquire_html_body(pending_id=123, ctx=_ctx(session_factory))
 
     assert result is None
     curate_content_kiq.assert_not_awaited()

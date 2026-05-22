@@ -28,8 +28,8 @@ from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
-from app.collection.article_completion.extraction_failure import NotHtml
-from app.collection.article_completion.extractor import ExtractedContent
+from app.collection.article_completion.acquirer import AcquiredContent
+from app.collection.article_completion.acquisition_failure import NotHtml
 from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.article_completion.repository import ArticleCompletionRepository
 from app.collection.article_completion.service import ArticleCompletionService
@@ -170,9 +170,9 @@ async def _make_pending(
 
 
 def _patch_fetch(monkeypatch: pytest.MonkeyPatch, mock: AsyncMock) -> None:
-    """``ArticleHtmlExtractor.fetch`` を Service の import path 経由で差し替える。"""
+    """``ArticleHtmlAcquirer.fetch`` を Service の import path 経由で差し替える。"""
     monkeypatch.setattr(
-        "app.collection.article_completion.service.ArticleHtmlExtractor.fetch",
+        "app.collection.article_completion.service.ArticleHtmlAcquirer.fetch",
         mock,
     )
 
@@ -182,7 +182,7 @@ def _patch_fetch(monkeypatch: pytest.MonkeyPatch, mock: AsyncMock) -> None:
 #
 # precondition 未充足 (missing / open / sweep 済) で ``None`` を返す経路は Ready
 # 構築段の責務になったため、repository (``test_repository.py``) と task
-# (``test_extract_html_body.py``) に移管した。service は厚い Ready だけ受け取る。
+# (``test_acquire_html_body.py``) に移管した。service は厚い Ready だけ受け取る。
 # ---------------------------------------------------------------------------
 
 
@@ -193,14 +193,14 @@ async def test_success_returns_article_id_and_persists_article(
     tc_source: NewsSource,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """ExtractedContent + 永続化成功 → ``int`` (article_id) 返却 + Article 1 件作成。"""
+    """AcquiredContent + 永続化成功 → ``int`` (article_id) 返却 + Article 1 件作成。"""
     canonical_url, _, ready = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/article-1"
     )
     _patch_fetch(
         monkeypatch,
         AsyncMock(
-            return_value=ExtractedContent(
+            return_value=AcquiredContent(
                 title="HTML Title",
                 body="x" * 200,
                 published_at=PublishedAt(value=datetime(2026, 5, 1, tzinfo=UTC)),
@@ -232,7 +232,7 @@ async def test_success_deletes_pending_in_same_tx(
     _patch_fetch(
         monkeypatch,
         AsyncMock(
-            return_value=ExtractedContent(
+            return_value=AcquiredContent(
                 title="HTML Title",
                 body="x" * 200,
                 published_at=PublishedAt(value=datetime(2026, 5, 1, tzinfo=UTC)),
@@ -285,7 +285,7 @@ async def test_success_persists_extracted_body_and_published_at(
     _patch_fetch(
         monkeypatch,
         AsyncMock(
-            return_value=ExtractedContent(
+            return_value=AcquiredContent(
                 title="HTML Title",
                 body=body,
                 published_at=PublishedAt(value=html_published_at),
@@ -306,7 +306,7 @@ async def test_success_persists_extracted_body_and_published_at(
 
 
 # ---------------------------------------------------------------------------
-# Terminal disposition (ExternalFetchError terminal / ExtractionFailure / promotion)
+# Terminal disposition (ExternalFetchError terminal / AcquisitionFailure / promotion)
 # ---------------------------------------------------------------------------
 
 
@@ -348,13 +348,13 @@ async def test_terminal_fetch_error_returns_none_and_closes_pending(
 
 
 @pytest.mark.asyncio
-async def test_extraction_failure_closes_pending(
+async def test_acquisition_failure_closes_pending(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     tc_source: NewsSource,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``ExtractionFailure`` → ``None`` + pending status='closed'。"""
+    """``AcquisitionFailure`` → ``None`` + pending status='closed'。"""
     _, pending_id, ready = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/empty"
     )
@@ -398,7 +398,7 @@ async def test_promotion_failure_closes_pending(
     _patch_fetch(
         monkeypatch,
         AsyncMock(
-            return_value=ExtractedContent(title="OK", body="x" * 200, published_at=None)
+            return_value=AcquiredContent(title="OK", body="x" * 200, published_at=None)
         ),
     )
 
@@ -584,7 +584,7 @@ async def test_race_lost_returns_none_and_deletes_pending(
     _patch_fetch(
         monkeypatch,
         AsyncMock(
-            return_value=ExtractedContent(
+            return_value=AcquiredContent(
                 title="HTML Title",
                 body="z" * 200,
                 published_at=PublishedAt(value=datetime(2026, 5, 1, tzinfo=UTC)),

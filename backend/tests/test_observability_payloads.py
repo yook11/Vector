@@ -129,7 +129,7 @@ class TestPayloadJsonSerialization:
     def test_content_fetch_roundtrip(self) -> None:
         original = ContentFetchPayload(
             canonical_url="https://example.com/article/round",
-            extractor_class="ArticleHtmlExtractor",
+            acquirer_class="ArticleHtmlAcquirer",
             body_length=12345,
         )
         dumped = original.model_dump(mode="json")

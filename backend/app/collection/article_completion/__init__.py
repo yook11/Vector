@@ -1,29 +1,29 @@
 """未完成記事 (ObservedArticle) を完成形 (AnalyzableArticle) に補完する。"""
 
+from app.collection.article_completion.acquirer import (
+    AcquiredContent,
+    ArticleHtmlAcquirer,
+)
+from app.collection.article_completion.acquisition_failure import (
+    AcquisitionCrashed,
+    AcquisitionFailure,
+    NotHtml,
+    ParserRejected,
+    QualityGateFailed,
+)
 from app.collection.article_completion.completer import (
     ArticleHtmlCompleter,
     CompletionFailure,
     FetchFailed,
 )
-from app.collection.article_completion.extraction_failure import (
-    ExtractionCrashed,
-    ExtractionFailure,
-    NotHtml,
-    ParserRejected,
-    QualityGateFailed,
-)
-from app.collection.article_completion.extractor import (
-    ArticleHtmlExtractor,
-    ExtractedContent,
-)
 
 __all__ = [
+    "AcquiredContent",
+    "AcquisitionCrashed",
+    "AcquisitionFailure",
+    "ArticleHtmlAcquirer",
     "ArticleHtmlCompleter",
-    "ArticleHtmlExtractor",
     "CompletionFailure",
-    "ExtractedContent",
-    "ExtractionCrashed",
-    "ExtractionFailure",
     "FetchFailed",
     "NotHtml",
     "ParserRejected",

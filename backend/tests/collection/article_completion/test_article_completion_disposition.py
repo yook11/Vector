@@ -15,20 +15,20 @@ from __future__ import annotations
 
 import pytest
 
+from app.collection.article_completion.acquisition_failure import (
+    AcquisitionCrashed,
+    AcquisitionFailure,
+    NotHtml,
+    ParserRejected,
+    QualityGateFailed,
+)
 from app.collection.article_completion.disposition import (
     _RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY,
     _TERMINAL_FETCH_ERROR_TYPES,
     Retryable,
     Terminal,
+    classify_acquisition_failure,
     classify_external_fetch_error,
-    classify_extraction_failure,
-)
-from app.collection.article_completion.extraction_failure import (
-    ExtractionCrashed,
-    ExtractionFailure,
-    NotHtml,
-    ParserRejected,
-    QualityGateFailed,
 )
 from app.collection.article_completion.retry_policy import (
     OUTAGE_POLICY,
@@ -212,47 +212,47 @@ class TestFetchOriginServerErrorExplicitBranch:
     [
         (
             NotHtml(content_type="application/pdf"),
-            "extraction_failure_not_html",
+            "acquisition_not_html",
             "content_type=application/pdf",
         ),
         (
             ParserRejected(),
-            "extraction_failure_parser_rejected",
+            "acquisition_parser_rejected",
             None,
         ),
         (
-            ExtractionCrashed(
+            AcquisitionCrashed(
                 stage="decode", error_class="UnicodeDecodeError", error_message="boom"
             ),
-            "extraction_failure_extraction_crashed",
+            "acquisition_crashed",
             "stage=decode UnicodeDecodeError: boom",
         ),
         (
-            ExtractionCrashed(
+            AcquisitionCrashed(
                 stage="parse", error_class="ValueError", error_message="bad parse"
             ),
-            "extraction_failure_extraction_crashed",
+            "acquisition_crashed",
             "stage=parse ValueError: bad parse",
         ),
         (
             QualityGateFailed(body_length=0, title_present=False, body_sample=None),
-            "extraction_failure_quality_gate",
+            "acquisition_quality_gate",
             "body_length=0 title_present=False",
         ),
         (
             QualityGateFailed(
                 body_length=12, title_present=True, body_sample="too short"
             ),
-            "extraction_failure_quality_gate",
+            "acquisition_quality_gate",
             "body_length=12 title_present=True sample='too short'",
         ),
     ],
 )
-def test_extraction_failure_maps_to_terminal_with_evidence_detail(
-    failure: ExtractionFailure,
+def test_acquisition_failure_maps_to_terminal_with_evidence_detail(
+    failure: AcquisitionFailure,
     expected_reason_code: str,
     expected_detail: str | None,
 ) -> None:
-    """各 variant が ``extraction_failure_*`` terminal + 証拠 detail を持つ。"""
-    result = classify_extraction_failure(failure)
+    """各 variant が ``acquisition_*`` terminal + 証拠 detail を持つ。"""
+    result = classify_acquisition_failure(failure)
     assert result == Terminal(reason_code=expected_reason_code, detail=expected_detail)

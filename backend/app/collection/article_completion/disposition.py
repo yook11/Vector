@@ -16,9 +16,9 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, assert_never
 
-from app.collection.article_completion.extraction_failure import (
-    ExtractionCrashed,
-    ExtractionFailure,
+from app.collection.article_completion.acquisition_failure import (
+    AcquisitionCrashed,
+    AcquisitionFailure,
     NotHtml,
     ParserRejected,
     QualityGateFailed,
@@ -155,12 +155,12 @@ def classify_external_fetch_error(exc: ExternalFetchError) -> AcquisitionDecisio
 
 
 # ---------------------------------------------------------------------------
-# ExtractionFailure の分類 (全 variant terminal、証拠を detail に畳む)
+# AcquisitionFailure の分類 (全 variant terminal、証拠を detail に畳む)
 # ---------------------------------------------------------------------------
 
 
-def classify_extraction_failure(failure: ExtractionFailure) -> Terminal:
-    """HTML 完成段の失敗を terminal に分類し、証拠を ``detail`` に畳む。
+def classify_acquisition_failure(failure: AcquisitionFailure) -> Terminal:
+    """acquisition 段の失敗を terminal に分類し、証拠を ``detail`` に畳む。
 
     本層は文字列の ``detail`` までで、構造化 audit (``ContentFetchPayload``) への
     転写は別 PR で terminal 経路に recorder を新設して行う。
@@ -171,11 +171,11 @@ def classify_extraction_failure(failure: ExtractionFailure) -> Terminal:
             detail = f"content_type={ct}"
         case ParserRejected():
             detail = None
-        case ExtractionCrashed(stage=s, error_class=ec, error_message=em):
+        case AcquisitionCrashed(stage=s, error_class=ec, error_message=em):
             detail = f"stage={s} {ec}: {em}"
         case QualityGateFailed(body_length=bl, title_present=tp, body_sample=bs):
             sample = f" sample={bs!r}" if bs else ""
             detail = f"body_length={bl} title_present={tp}{sample}"
         case _ as unreachable:
             assert_never(unreachable)
-    return Terminal(reason_code=f"extraction_failure_{failure.reason}", detail=detail)
+    return Terminal(reason_code=f"acquisition_{failure.reason}", detail=detail)

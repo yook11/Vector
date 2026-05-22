@@ -6,15 +6,15 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import assert_never
 
+from app.collection.article_completion.acquirer import (
+    AcquiredContent,
+    ArticleHtmlAcquirer,
+)
+from app.collection.article_completion.acquisition_failure import AcquisitionFailure
 from app.collection.article_completion.completion_failure import (
     ArticleCompletionFailure,
     CompletionInvariantRejected,
     PublishedAtMissing,
-)
-from app.collection.article_completion.extraction_failure import ExtractionFailure
-from app.collection.article_completion.extractor import (
-    ArticleHtmlExtractor,
-    ExtractedContent,
 )
 from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.domain.analyzable_article import AnalyzableArticle
@@ -38,11 +38,11 @@ class FetchFailed:
     error: ExternalFetchError
 
 
-CompletionFailure = FetchFailed | ExtractionFailure | ArticleCompletionFailure
+CompletionFailure = FetchFailed | AcquisitionFailure | ArticleCompletionFailure
 """補完が失敗する 3 形を 1 つに揃えた閉じた値 union。
 
 - ``FetchFailed``: origin fetch 例外を畳んだ値。
-- ``ExtractionFailure``: 取れたが使える本文でない (4 variant、証拠を保持)。
+- ``AcquisitionFailure``: 取れたが使える本文でない (4 variant、証拠を保持)。
 - ``ArticleCompletionFailure``: merge / invariant 違反 (2 variant、証拠を保持)。
 """
 
@@ -72,24 +72,24 @@ def _resolve[V](
 def complete_with_html(
     observed: ObservedArticle,
     profile: ArticleCompletionPolicy,
-    html: ExtractedContent | ExtractionFailure,
+    html: AcquiredContent | AcquisitionFailure,
     *,
     source_id: int,
     source_url: CanonicalArticleUrl,
-) -> AnalyzableArticle | ArticleCompletionFailure | ExtractionFailure:
-    """観測事実 + profile + HTML 抽出結果を merge し ``AnalyzableArticle`` 昇格。"""
+) -> AnalyzableArticle | ArticleCompletionFailure | AcquisitionFailure:
+    """観測事実 + profile + HTML 取得結果を merge し ``AnalyzableArticle`` 昇格。"""
     pol = profile.rules
 
-    # body=html_required で抽出が失敗していれば ExtractionFailure を値のまま返す。
+    # body=html_required で取得が失敗していれば AcquisitionFailure を値のまま返す。
     if (
-        not isinstance(html, ExtractedContent)
+        not isinstance(html, AcquiredContent)
         and pol[CompletableField.body] is FieldCompletionRule.html_required
     ):
         return html
 
-    html_title = html.title if isinstance(html, ExtractedContent) else None
-    html_body = html.body if isinstance(html, ExtractedContent) else None
-    html_pub = html.published_at if isinstance(html, ExtractedContent) else None
+    html_title = html.title if isinstance(html, AcquiredContent) else None
+    html_body = html.body if isinstance(html, AcquiredContent) else None
+    html_pub = html.published_at if isinstance(html, AcquiredContent) else None
 
     obs_title = observed.title.value if observed.title is not None else None
     obs_body = observed.body.value if observed.body is not None else None
@@ -124,18 +124,18 @@ class ArticleHtmlCompleter:
 
     def __init__(
         self,
-        extractor_factory: Callable[[], ArticleHtmlExtractor] = ArticleHtmlExtractor,
+        acquirer_factory: Callable[[], ArticleHtmlAcquirer] = ArticleHtmlAcquirer,
     ) -> None:
-        self._extractor_factory = extractor_factory
+        self._acquirer_factory = acquirer_factory
 
     async def complete(
         self, ready: ReadyForArticleCompletion
     ) -> AnalyzableArticle | CompletionFailure:
 
-        extractor = self._extractor_factory()
+        acquirer = self._acquirer_factory()
 
         try:
-            html_result = await extractor.fetch(ready.source_url.as_safe_url())
+            html_result = await acquirer.fetch(ready.source_url.as_safe_url())
         except ExternalFetchError as exc:
             return FetchFailed(error=exc)
 
