@@ -4,9 +4,9 @@
 
 1. content 失敗 union (variant): URL に HTTP GET して HTML を取り、trafilatura で
    本文・タイトル・公開日時を取り出す段で「取得できたが使える本文でなかった」失敗
-   (content-type 不一致 / パーサ拒否 / decode|parse 例外 / 品質ゲート未達)。接続 /
+   (content-type 不一致 / パーサ拒否 / parse 例外 / 品質ゲート未達)。接続 /
    transport 失敗は ``ExternalFetchError`` family (``collection`` 共通) が担う。
-   各 variant は失敗地点で得られる証拠 (content_type / parse stage / quality metric /
+   各 variant は失敗地点で得られる証拠 (content_type / quality metric /
    例外 class+message) を frozen dataclass のフィールドとして保持し、後段の audit
    記録 (``ContentFetchPayload``) と log emit の双方で構造のまま利用される。
 2. Retry 軸 disposition: Stage 1 の全失敗 (transport ``ExternalFetchError`` + content
@@ -33,7 +33,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import ClassVar, Final, Literal, assert_never
+from typing import ClassVar, Final, assert_never
 
 from app.collection.article_completion.retry_policy import (
     BLIP_POLICY,
@@ -98,10 +98,13 @@ class ParserRejected:
 
 
 @dataclass(frozen=True)
-class AcquisitionCrashed:
-    """decode / parse 処理中に例外。自コード or charset 経路の故障。"""
+class ParseCrashed:
+    """trafilatura (parse) が例外を投げた — 外部ライブラリ経路の故障。
 
-    stage: Literal["decode", "parse"]
+    decode は前工程で input 起因の例外を出さない (charset 不一致は内部で握って
+    UTF-8 fallback) ため crash 概念を持たない。本 variant は parse 専用。
+    """
+
     error_class: str
     error_message: str
     reason: ClassVar[str] = "crashed"
@@ -133,7 +136,7 @@ class QualityGateFailed:
             object.__setattr__(self, "body_sample", self.body_sample[:_BODY_SAMPLE_MAX])
 
 
-AcquisitionFailure = NotHtml | ParserRejected | AcquisitionCrashed | QualityGateFailed
+AcquisitionFailure = NotHtml | ParserRejected | ParseCrashed | QualityGateFailed
 """acquisition 段で HTML が使える本文でなかった失敗を表す閉じ union (4 variant)。"""
 
 
@@ -258,8 +261,8 @@ def classify_acquisition_failure(failure: AcquisitionFailure) -> Terminal:
             detail = f"content_type={ct}"
         case ParserRejected():
             detail = None
-        case AcquisitionCrashed(stage=s, error_class=ec, error_message=em):
-            detail = f"stage={s} {ec}: {em}"
+        case ParseCrashed(error_class=ec, error_message=em):
+            detail = f"{ec}: {em}"
         case QualityGateFailed(body_length=bl, title_present=tp, body_sample=bs):
             sample = f" sample={bs!r}" if bs else ""
             detail = f"body_length={bl} title_present={tp}{sample}"

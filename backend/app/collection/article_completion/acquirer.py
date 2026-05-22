@@ -19,9 +19,9 @@ import structlog
 import trafilatura
 
 from app.collection.article_completion.acquisition_failure import (
-    AcquisitionCrashed,
     AcquisitionFailure,
     NotHtml,
+    ParseCrashed,
     ParserRejected,
     QualityGateFailed,
 )
@@ -188,8 +188,8 @@ def _parse_html(html: str, url: str) -> HtmlAcquisitionResult:
     """trafilatura で HTML をパースし本文・公開日時を取り出す（同期・CPU バウンド）。
 
     抽出段 ``_extract`` の parse ステップ。失敗は ``ParserRejected`` /
-    ``QualityGateFailed`` で表す (例外は呼び出し元 ``_extract`` が ``stage="parse"``
-    の crash に畳む)。``_extract`` ごと ``asyncio.to_thread()`` でオフロードされる。
+    ``QualityGateFailed`` で表す (例外は呼び出し元 ``_extract`` が ``ParseCrashed``
+    に畳む)。``_extract`` ごと ``asyncio.to_thread()`` でオフロードされる。
     """
     result = trafilatura.bare_extraction(
         html,
@@ -215,6 +215,20 @@ def _parse_html(html: str, url: str) -> HtmlAcquisitionResult:
     # 本文の品質ゲート: 50 文字未満は棄却
     text = result.text
     body_stripped = text.strip() if text else ""
+
+    # 文字化け観測 (Phase 1 = ログのみ): charset 不明で UTF-8 fallback した本文に
+    # 置換文字 (U+FFFD) が残ると、品質ゲートを通過して silent に成功扱いになりうる。
+    # 結果は変えず生 metric だけ残し、成功・品質失敗どちらのパスでも発火させる。
+    replacement_char_count = body_stripped.count("�")
+    if replacement_char_count > 0:
+        logger.warning(
+            "mojibake_detected",
+            url=url,
+            replacement_char_count=replacement_char_count,
+            replacement_char_ratio=replacement_char_count / len(body_stripped),
+            body_length=len(body_stripped),
+        )
+
     body = body_stripped if len(body_stripped) >= _BODY_MIN_LENGTH else None
 
     # タイトル: trafilatura が OGP / Twitter Card / JSON-LD / <title> / h1 の順で抽出。
@@ -357,40 +371,24 @@ class ArticleHtmlAcquirer:
     def _extract(self, raw: RawResponse) -> HtmlAcquisitionResult:
         """抽出段: HTML として読み本文化できたか?。
 
-        同期・例外を投げない層。Content-Type 判定 / decode / trafilatura の各失敗を
-        ``AcquisitionFailure`` variant に畳む。``acquire`` から to_thread で丸ごと
-        オフロードされるため decode/parse の例外もこの thread 内で捕捉できる。
+        同期。Content-Type 判定 / decode / trafilatura の失敗を
+        ``AcquisitionFailure`` variant に畳む。decode は前工程で input 起因の
+        例外を出さない (charset 不一致は内部で握り UTF-8 fallback) ため畳まず、
+        例外を投げうるのは trafilatura のみ。これを ``ParseCrashed`` に畳む。
+        ``acquire`` から to_thread で丸ごとオフロードされるため parse の例外も
+        この thread 内で捕捉できる。
         """
         if "text/html" not in raw.content_type:
             logger.info("content_not_html", url=raw.url, content_type=raw.content_type)
             return NotHtml(content_type=raw.content_type)
 
-        try:
-            html_text = _decode_html_response(raw)
-        except Exception as e:
-            logger.warning(
-                "content_parse_error",
-                url=raw.url,
-                stage="decode",
-                error=str(e),
-            )
-            return AcquisitionCrashed(
-                stage="decode",
-                error_class=type(e).__name__,
-                error_message=str(e),
-            )
+        html_text = _decode_html_response(raw)
 
         try:
             return _parse_html(html_text, raw.url)
         except Exception as e:
-            logger.warning(
-                "content_parse_error",
-                url=raw.url,
-                stage="parse",
-                error=str(e),
-            )
-            return AcquisitionCrashed(
-                stage="parse",
+            logger.warning("content_parse_error", url=raw.url, error=str(e))
+            return ParseCrashed(
                 error_class=type(e).__name__,
                 error_message=str(e),
             )

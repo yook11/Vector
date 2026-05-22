@@ -25,8 +25,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.collection.article_completion.acquirer import ArticleHtmlAcquirer
 from app.collection.article_completion.acquisition_failure import (
-    AcquisitionCrashed,
     NotHtml,
+    ParseCrashed,
     ParserRejected,
     QualityGateFailed,
     classify_acquisition_failure,
@@ -91,12 +91,7 @@ class ArticleCompletionService:
                     ready, classify_external_fetch_error(err), exc=err
                 )
                 return None
-            case (
-                NotHtml()
-                | ParserRejected()
-                | AcquisitionCrashed()
-                | QualityGateFailed()
-            ):
+            case NotHtml() | ParserRejected() | ParseCrashed() | QualityGateFailed():
                 await self._failure_handler.handle_acquisition_failure(
                     ready, classify_acquisition_failure(outcome), exc=None
                 )

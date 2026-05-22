@@ -18,9 +18,9 @@ import pytest
 from app.collection.article_completion.acquisition_failure import (
     _RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY,
     _TERMINAL_FETCH_ERROR_TYPES,
-    AcquisitionCrashed,
     AcquisitionFailure,
     NotHtml,
+    ParseCrashed,
     ParserRejected,
     QualityGateFailed,
     Retryable,
@@ -219,18 +219,9 @@ class TestFetchOriginServerErrorExplicitBranch:
             None,
         ),
         (
-            AcquisitionCrashed(
-                stage="decode", error_class="UnicodeDecodeError", error_message="boom"
-            ),
+            ParseCrashed(error_class="ValueError", error_message="bad parse"),
             "acquisition_crashed",
-            "stage=decode UnicodeDecodeError: boom",
-        ),
-        (
-            AcquisitionCrashed(
-                stage="parse", error_class="ValueError", error_message="bad parse"
-            ),
-            "acquisition_crashed",
-            "stage=parse ValueError: bad parse",
+            "ValueError: bad parse",
         ),
         (
             QualityGateFailed(body_length=0, title_present=False, body_sample=None),

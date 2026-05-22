@@ -2,10 +2,12 @@
 
 import socket
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
+from structlog.testing import capture_logs
 
 from app.collection.article_completion.acquirer import (
     AcquiredContent,
@@ -14,8 +16,8 @@ from app.collection.article_completion.acquirer import (
     _decode_html_response,
 )
 from app.collection.article_completion.acquisition_failure import (
-    AcquisitionCrashed,
     NotHtml,
+    ParseCrashed,
     ParserRejected,
     QualityGateFailed,
 )
@@ -628,30 +630,8 @@ class TestExtract:
         if isinstance(result, QualityGateFailed):
             assert result.body_length < 50
 
-    def test_decode_crash_folds_into_acquisition_crashed(self) -> None:
-        """decode 段の例外を漏らさず crash variant に畳む (例外を投げない層の契約)。
-
-        decode crash は自然再現できない (httpx 済みテキストを持ち越すため) ので
-        例外注入で契約のみ検証する。
-        """
-        raw = RawResponse(
-            url="https://example.com/article",
-            content_type="text/html",
-            charset_from_header=None,
-            content=b"<html></html>",
-            decoded_text="<html></html>",
-        )
-        with patch(
-            "app.collection.article_completion.acquirer._decode_html_response",
-            side_effect=RuntimeError("decode boom"),
-        ):
-            result = ArticleHtmlAcquirer()._extract(raw)
-        assert isinstance(result, AcquisitionCrashed)
-        assert result.stage == "decode"
-        assert result.error_class == "RuntimeError"
-
-    def test_parse_crash_folds_into_acquisition_crashed(self) -> None:
-        """trafilatura 段の例外を漏らさず crash variant に畳む。"""
+    def test_parse_crash_folds_into_parse_crashed(self) -> None:
+        """trafilatura 段の例外を漏らさず ``ParseCrashed`` に畳む。"""
         raw = RawResponse(
             url="https://example.com/article",
             content_type="text/html; charset=utf-8",
@@ -664,6 +644,43 @@ class TestExtract:
             side_effect=RuntimeError("parse boom"),
         ):
             result = ArticleHtmlAcquirer()._extract(raw)
-        assert isinstance(result, AcquisitionCrashed)
-        assert result.stage == "parse"
+        assert isinstance(result, ParseCrashed)
         assert result.error_class == "RuntimeError"
+
+    def test_mojibake_in_body_emits_warning_log(self) -> None:
+        """文字化け body は outcome を変えず ``mojibake_detected`` を warning ログ。
+
+        Phase 1 は観測のみ: 置換文字 ``U+FFFD`` を含む本文でも結果は
+        ``AcquiredContent`` のまま、ログだけが生 metric を伴って出る。
+        trafilatura の正規化挙動に依存しないよう抽出結果を直接 patch する。
+        """
+        body_text = (
+            "This readable article body easily clears the fifty character "
+            "quality gate while carrying a garbled tail ��� here."
+        )
+        replacement_count = body_text.count("�")
+        fake_document = SimpleNamespace(
+            text=body_text, title="Mojibake Sample Title", date=None
+        )
+        raw = RawResponse(
+            url="https://example.com/mojibake",
+            content_type="text/html; charset=utf-8",
+            charset_from_header="utf-8",
+            content=b"<html></html>",
+            decoded_text="<html></html>",
+        )
+        with (
+            patch(
+                "app.collection.article_completion.acquirer.trafilatura."
+                "bare_extraction",
+                return_value=fake_document,
+            ),
+            capture_logs() as logs,
+        ):
+            result = ArticleHtmlAcquirer()._extract(raw)
+
+        assert isinstance(result, AcquiredContent)
+        mojibake_logs = [log for log in logs if log.get("event") == "mojibake_detected"]
+        assert len(mojibake_logs) == 1
+        assert mojibake_logs[0]["log_level"] == "warning"
+        assert mojibake_logs[0]["replacement_char_count"] == replacement_count
