@@ -17,7 +17,7 @@ from app.redis import get_redis as _get_redis_singleton
 
 # BFF (Next.js) と backend (FastAPI) 間の内部 API 認証は HS256 JWT で行う。
 # BFF が Better Auth セッションから user_id / role を取り出して短期 JWT に署名し、
-# backend は同じ secret で検証する。INTERNAL_API_SECRET 漏洩時の悪用ウィンドウを
+# backend は同じ secret で検証する。BFF_JWT_SIGNING_SECRET 漏洩時の悪用ウィンドウを
 # JWT 有効期限 (~60 秒) に限定するための構造。
 _JWT_ALGORITHM = "HS256"
 # iss / aud は frontend (`frontend/src/lib/api/internal-config.ts`) と
@@ -71,12 +71,12 @@ def _decode_internal_jwt(authorization: str | None) -> dict[str, object] | None:
         return None
     # 構造的厳格化 (red-team C2 / AUTH-N3 + AUTH-N2 対策):
     # - exp 不在を decode 層で reject (PyJWT/python-jose とも default 未要求)
-    # - iss / aud 検証で INTERNAL_API_SECRET 漏洩時の二重防御
+    # - iss / aud 検証で BFF_JWT_SIGNING_SECRET 漏洩時の二重防御
     # - sub / role の必須化で `_user_from_claims` の事後 None チェックを decode 層に降格
     try:
         return jwt.decode(
             token,
-            settings.internal_api_secret.get_secret_value(),
+            settings.bff_jwt_signing_secret.get_secret_value(),
             algorithms=[_JWT_ALGORITHM],
             audience=_JWT_AUDIENCE,
             issuer=_JWT_ISSUER,

@@ -18,22 +18,25 @@ WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
 
-# auth.ts / internal-config.ts が module load 時に requireEnv を呼ぶため、
-# build を完走させるためのダミー値を ARG default に埋め込む。これらは bundle に
-# 焼かれず、runtime には compose の environment が上書きする。
+# auth.ts / internal-config.ts / revalidate route が module load 時に requireEnv
+# を呼ぶため、build を完走させるためのダミー値を ARG default に埋め込む。これらは
+# bundle に焼かれず、runtime には compose の environment が上書きする。
 # placeholder 文字列は git grep で即発見できるよう警告色を付与している。
 ARG BETTER_AUTH_SECRET=build-time-placeholder-do-not-use-in-runtime-32bytes
 ARG BETTER_AUTH_URL=http://localhost:3000
 ARG AUTH_DATABASE_URL=postgresql://build:build@localhost:5432/build
 ARG INTERNAL_API_URL=http://backend:8000/api/v1
-ARG INTERNAL_API_SECRET=build-time-placeholder-do-not-use-in-runtime-32bytes
+# 内部 trust 境界の 2 secret (BFF JWT 署名鍵 / revalidate Bearer / red-team C1)。
+ARG BFF_JWT_SIGNING_SECRET=build-time-placeholder-do-not-use-in-runtime-bff
+ARG REVALIDATE_BEARER_SECRET=build-time-placeholder-do-not-use-in-runtime-rev
 ARG REDIS_URL=redis://build-time-placeholder:6379/1
 ARG REDIS_URL_RL=redis://build-time-placeholder-rl:6379/0
 ENV BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET} \
     BETTER_AUTH_URL=${BETTER_AUTH_URL} \
     AUTH_DATABASE_URL=${AUTH_DATABASE_URL} \
     INTERNAL_API_URL=${INTERNAL_API_URL} \
-    INTERNAL_API_SECRET=${INTERNAL_API_SECRET} \
+    BFF_JWT_SIGNING_SECRET=${BFF_JWT_SIGNING_SECRET} \
+    REVALIDATE_BEARER_SECRET=${REVALIDATE_BEARER_SECRET} \
     REDIS_URL=${REDIS_URL} \
     REDIS_URL_RL=${REDIS_URL_RL}
 

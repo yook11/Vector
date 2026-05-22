@@ -22,7 +22,7 @@ from fastapi import HTTPException
 from app.config import settings
 from app.dependencies import get_current_user, get_optional_user
 
-_SECRET = settings.internal_api_secret.get_secret_value()
+_SECRET = settings.bff_jwt_signing_secret.get_secret_value()
 _ALGO = "HS256"
 _USER_ID = "00000000-0000-4000-a000-000000000099"
 

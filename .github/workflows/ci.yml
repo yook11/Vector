@@ -83,8 +83,10 @@ jobs:
       # モジュール load 時に参照するため URL 形式 validation を満たすダミーが必要。
       DATABASE_URL: postgresql+asyncpg://vector:vector@localhost:5432/unit_dummy
       # CI 専用のダミー値。本番値とは無関係で、Settings の長さ要件 (>=32) を
-      # 満たすために 64 桁の hex を直書きする (秘密ではない)。
-      INTERNAL_API_SECRET: ci0000000000000000000000000000000000000000000000000000000000000000
+      # 満たすために 64 桁の hex を直書きする (秘密ではない)。2 分割した secret は
+      # 互いに別値で投入する (同一値拒否を回避)。
+      BFF_JWT_SIGNING_SECRET: ci4444444444444444444444444444444444444444444444444444444444444444
+      REVALIDATE_BEARER_SECRET: ci5555555555555555555555555555555555555555555555555555555555555555
       # PR8 (red-team S-AUTH-4) で default 撤去 → env 必須化された URL 系。
       FRONTEND_URL: http://localhost:3000
       INTERNAL_FRONTEND_BASE_URL: http://frontend:3000
@@ -140,8 +142,10 @@ jobs:
     env:
       DATABASE_URL: postgresql+asyncpg://vector:vector@localhost:5432/vector
       # CI 専用のダミー値。本番値とは無関係で、Settings の長さ要件 (>=32) を
-      # 満たすために 64 桁の hex を直書きする (秘密ではない)。
-      INTERNAL_API_SECRET: ci0000000000000000000000000000000000000000000000000000000000000000
+      # 満たすために 64 桁の hex を直書きする (秘密ではない)。2 分割した secret は
+      # 互いに別値で投入する (同一値拒否を回避)。
+      BFF_JWT_SIGNING_SECRET: ci4444444444444444444444444444444444444444444444444444444444444444
+      REVALIDATE_BEARER_SECRET: ci5555555555555555555555555555555555555555555555555555555555555555
       # PR8 (red-team S-AUTH-4) で default 撤去 → env 必須化された URL 系。
       FRONTEND_URL: http://localhost:3000
       INTERNAL_FRONTEND_BASE_URL: http://frontend:3000
@@ -257,8 +261,11 @@ jobs:
       INTERNAL_API_URL: http://localhost:8000/api/v1
       NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
       # CI 専用のダミー値。本番値とは無関係で、Settings の長さ要件 (>=32) を
-      # 満たすために 64 桁の hex を直書きする (秘密ではない)。
-      INTERNAL_API_SECRET: ci0000000000000000000000000000000000000000000000000000000000000000
+      # 満たすために 64 桁の hex を直書きする (秘密ではない)。2 分割した secret は
+      # 互いに別値で投入する。frontend (next dev) と backend (uvicorn) は
+      # この job env を共有するため、両側で同じ secret に揃う。
+      BFF_JWT_SIGNING_SECRET: ci4444444444444444444444444444444444444444444444444444444444444444
+      REVALIDATE_BEARER_SECRET: ci5555555555555555555555555555555555555555555555555555555555555555
       BETTER_AUTH_SECRET: ci1111111111111111111111111111111111111111111111111111111111111111
       POSTGRES_AUTH_PASSWORD: ci2222222222222222222222222222222222222222222222222222222222222222
       POSTGRES_APP_PASSWORD: ci3333333333333333333333333333333333333333333333333333333333333333

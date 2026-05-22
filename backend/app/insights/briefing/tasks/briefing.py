@@ -90,7 +90,7 @@ async def generate_briefing_for_category(
 
     notifier = FrontendRevalidateNotifier(
         frontend_base_url=settings.internal_frontend_base_url,
-        secret=settings.internal_api_secret.get_secret_value(),
+        secret=settings.revalidate_bearer_secret.get_secret_value(),
     )
     service = WeeklyBriefingService(
         session_factory, DeepSeekBriefingGenerator(), notifier

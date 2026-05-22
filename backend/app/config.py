@@ -1,7 +1,7 @@
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import SecretStr, field_validator
+from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # backend/app/config.py から 2 階層上がプロジェクトルート
@@ -9,7 +9,7 @@ _ENV_FILE = Path(__file__).resolve().parent.parent.parent / ".env"
 
 # BFF プロキシ認証で fail-open にしないため、起動時に拒否する既知の弱秘密。
 # `.env.example` のプレースホルダや典型的な暫定値が production にそのまま
-# 残るのを防ぐ（INTERNAL_API_SECRET 偽装による admin 権限取得対策）。
+# 残るのを防ぐ（共有秘密の偽装による admin 権限取得対策）。
 _KNOWN_WEAK_INTERNAL_SECRETS = frozenset(
     {
         "change-me-in-production",
@@ -35,6 +35,24 @@ _KNOWN_WEAK_DATABASE_URL_PATTERNS = frozenset(
         "<set-strong-password",
     }
 )
+
+
+def _assert_strong_secret(raw: str, name: str) -> None:
+    """BFF↔backend 共有秘密の強度を起動時に検証する。
+
+    既知の弱秘密や短すぎる値を ValueError として弾き、`.env` の設定漏れが
+    サイレントに fail-open するのを防ぐ。``name`` は error message 用の env 名。
+    """
+    if raw.lower() in _KNOWN_WEAK_INTERNAL_SECRETS:
+        raise ValueError(
+            f"{name} is set to a known weak default; "
+            "generate a new one with `openssl rand -hex 32`"
+        )
+    if len(raw) < _INTERNAL_API_SECRET_MIN_LENGTH:
+        raise ValueError(
+            f"{name} must be at least {_INTERNAL_API_SECRET_MIN_LENGTH} "
+            "characters; generate one with `openssl rand -hex 32`"
+        )
 
 
 class Settings(BaseSettings):
@@ -90,11 +108,14 @@ class Settings(BaseSettings):
     content_domain_delay: float = 1.0  # 同一ドメインへのリクエスト間隔（秒）
     content_max_fetch_attempts: int = 3  # N 回失敗した記事はスキップ
 
-    # 内部 API（BFF プロキシ信頼）
-    # デフォルト値を持たせない: .env で必ず強い乱数を設定させる（生成例:
-    # `openssl rand -hex 32`）。未設定や弱秘密の場合は起動時に
-    # ValidationError で落とす（_validate_internal_api_secret 参照）。
-    internal_api_secret: SecretStr
+    # 内部 API（BFF プロキシ信頼）— 2 つの trust 境界を別 secret で分離 (red-team
+    # C1 防御)。1 secret 漏洩で両境界が陥落するのを防ぐ構造分離。
+    # - bff_jwt_signing_secret: BFF→backend の HS256 JWT 署名/検証鍵
+    # - revalidate_bearer_secret: backend→frontend revalidate の Bearer
+    # どちらも必須 (default なし)。強度検査 / 同一値拒否は
+    # _validate_internal_secrets が担う。
+    bff_jwt_signing_secret: SecretStr
+    revalidate_bearer_secret: SecretStr
 
     # アプリ URL
     # ``frontend_url`` は CORS の allow_origins などブラウザ起源 URL に使う。
@@ -138,7 +159,7 @@ class Settings(BaseSettings):
         """DB 接続文字列に公開済 default / placeholder が残らないことを起動時に強制。
 
         `.env` 設定漏れで `vector_app:vector_app` 等の弱秘密が production に滲むのを防ぐ
-        (red-team S-SECRET-1 防御)。``_validate_internal_api_secret`` と同型の構造防御。
+        (red-team S-SECRET-1 防御)。``_assert_strong_secret`` と同型の構造防御。
         """
         for pattern in _KNOWN_WEAK_DATABASE_URL_PATTERNS:
             if pattern in v:
@@ -149,27 +170,33 @@ class Settings(BaseSettings):
                 )
         return v
 
-    @field_validator("internal_api_secret")
-    @classmethod
-    def _validate_internal_api_secret(cls, v: SecretStr) -> SecretStr:
-        """BFF とバックエンド間の共有秘密に対する起動時バリデーション。
+    @model_validator(mode="after")
+    def _validate_internal_secrets(self) -> Self:
+        """BFF↔backend trust 境界の 2 秘密を起動時に検証する。
 
-        既知の弱秘密や短すぎる値を ValidationError として弾き、
-        `.env` の設定漏れがサイレントに fail-open するのを防ぐ。
+        各 secret に強度検査をかけ、両者が同一値なら構造分離の意味を失うため拒否
+        する。未設定は Pydantic の required field 検査が起動時に弾く。
         """
-        raw = v.get_secret_value()
-        if raw.lower() in _KNOWN_WEAK_INTERNAL_SECRETS:
+        _assert_strong_secret(
+            self.bff_jwt_signing_secret.get_secret_value(), "BFF_JWT_SIGNING_SECRET"
+        )
+        _assert_strong_secret(
+            self.revalidate_bearer_secret.get_secret_value(),
+            "REVALIDATE_BEARER_SECRET",
+        )
+
+        # 同一値は構造分離を無効化するため拒否。
+        if (
+            self.bff_jwt_signing_secret.get_secret_value()
+            == self.revalidate_bearer_secret.get_secret_value()
+        ):
             raise ValueError(
-                "INTERNAL_API_SECRET is set to a known weak default; "
-                "generate a new one with `openssl rand -hex 32`"
+                "BFF_JWT_SIGNING_SECRET and REVALIDATE_BEARER_SECRET must differ; "
+                "using the same value defeats the secret split (a single leak "
+                "would compromise both trust boundaries)"
             )
-        if len(raw) < _INTERNAL_API_SECRET_MIN_LENGTH:
-            raise ValueError(
-                "INTERNAL_API_SECRET must be at least "
-                f"{_INTERNAL_API_SECRET_MIN_LENGTH} characters; "
-                "generate one with `openssl rand -hex 32`"
-            )
-        return v
+
+        return self
 
 
 settings = Settings()

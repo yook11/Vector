@@ -24,8 +24,9 @@
 # - ``.env`` の探索パスは ``app/config.py`` の ``_ENV_FILE`` と完全一致させる
 #   (``Path(__file__).resolve().parent.parent.parent / ".env"``)。worktree でも
 #   symlink などで ``.env`` を見えるようにすれば実 settings が走る。
-# - INTERNAL_API_SECRET は 32 chars 以上 + ``_KNOWN_WEAK_INTERNAL_SECRETS``
-#   ("secret" / "password" / "change-me*" 等) に該当しないこと。
+# - BFF_JWT_SIGNING_SECRET / REVALIDATE_BEARER_SECRET は 32 chars 以上 +
+#   ``_KNOWN_WEAK_INTERNAL_SECRETS`` ("secret" / "change-me*" 等) に該当せず、
+#   互いに別値であること (Phase A.3 で 2 secret を必須化 / 同一値拒否)。
 # - DATABASE_URL は ``_KNOWN_WEAK_DATABASE_URL_PATTERNS`` (vector_app:vector_app /
 #   <set-strong-password) を含まないこと。
 # - DATABASE_URL の host は意図的に到達不能 (`.invalid` は RFC 2606 予約 TLD)。
@@ -41,9 +42,15 @@ if not _REPO_ROOT_ENV.exists():
         "DATABASE_URL",
         "postgresql+asyncpg://test:test@unreachable.invalid:5432/none",
     )
+    # BFF_JWT_SIGNING_SECRET / REVALIDATE_BEARER_SECRET は必須なので bootstrap でも
+    # 両方設定する。2 値は同一値拒否を避けるため別値にする。
     os.environ.setdefault(
-        "INTERNAL_API_SECRET",
-        "test-only-collect-bootstrap-xxxxxxxxxxxx",
+        "BFF_JWT_SIGNING_SECRET",
+        "test-only-collect-bootstrap-bff-xxxxxxxxxxxx",
+    )
+    os.environ.setdefault(
+        "REVALIDATE_BEARER_SECRET",
+        "test-only-collect-bootstrap-rev-xxxxxxxxxxxx",
     )
     os.environ.setdefault("FRONTEND_URL", "http://localhost:3000")
     os.environ.setdefault("INTERNAL_FRONTEND_BASE_URL", "http://localhost:3000")
@@ -95,7 +102,7 @@ engine_test = create_async_engine(TEST_DATABASE_URL, echo=False, poolclass=NullP
 
 TEST_USER_ID = "00000000-0000-4000-a000-000000000001"
 TEST_ADMIN_ID = "00000000-0000-4000-a000-000000000002"
-INTERNAL_SECRET = settings.internal_api_secret.get_secret_value()
+INTERNAL_SECRET = settings.bff_jwt_signing_secret.get_secret_value()
 _JWT_ALGORITHM = "HS256"
 _JWT_TTL_SECONDS = 60
 

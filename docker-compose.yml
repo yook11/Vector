@@ -38,7 +38,11 @@ services:
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET is required; generate one with `openssl rand -hex 32` and set it in .env}
       - BETTER_AUTH_URL=http://localhost:3000
       - AUTH_DATABASE_URL=postgresql://vector_auth:${POSTGRES_AUTH_PASSWORD}@db:5432/${POSTGRES_DB:-vector}?search_path=auth
-      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:?INTERNAL_API_SECRET is required; generate one with `openssl rand -hex 32` and set it in .env}
+      # 内部 trust 境界の共有秘密 (red-team C1 防御で 2 分割)。frontend は BFF JWT
+      # を署名し revalidate Bearer を検証するため両 secret が必須。backend とは
+      # 同値を共有する (.env 集約)。
+      - BFF_JWT_SIGNING_SECRET=${BFF_JWT_SIGNING_SECRET:?BFF_JWT_SIGNING_SECRET is required; generate one with `openssl rand -hex 32` and set it in .env}
+      - REVALIDATE_BEARER_SECRET=${REVALIDATE_BEARER_SECRET:?REVALIDATE_BEARER_SECRET is required; generate one with `openssl rand -hex 32` and set it in .env}
       # red-team C9 対策: rate limit (proxy.ts) 専用 Redis instance。本体 redis は
       # backend taskiq broker と相乗りで、XFF 詐称 + key 増殖で本体が OOM すると
       # broker / worker 全体が道連れ shutdown する構造リスクがあったため物理分離。

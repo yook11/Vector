@@ -1,8 +1,8 @@
 /**
  * 内部 revalidate endpoint。backend (FrontendRevalidateNotifier) からのみ叩かれる。
  *
- * 認証は INTERNAL_API_SECRET を Bearer 直接 (system-to-system のため JWT TTL は不要、
- * 単一 endpoint でセッションも持たない)。constant-time 比較で timing 攻撃を防ぐ。
+ * 認証は REVALIDATE_BEARER_SECRET を Bearer 直接 (system-to-system のため JWT TTL は
+ * 不要、単一 endpoint でセッションも持たない)。constant-time 比較で timing 攻撃を防ぐ。
  *
  * 失敗の見える化: 401/403/400 はすべて status code + JSON で返す。backend 側は
  * raise しない warn 降格 (`feedback_failure_visibility.md`) なので、frontend log
@@ -17,12 +17,14 @@ import { type NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { requireEnv } from "@/lib/env";
 
-const INTERNAL_API_SECRET = requireEnv(
-  "INTERNAL_API_SECRET",
+// backend→frontend revalidate Bearer。BFF JWT 署名鍵とは別 secret に分離
+// (red-team C1: 1 secret 漏洩で両境界が陥落するのを防ぐ)。
+const REVALIDATE_BEARER_SECRET = requireEnv(
+  "REVALIDATE_BEARER_SECRET",
   "generate one with `openssl rand -hex 32`",
 );
 
-const SECRET_BYTES = Buffer.from(INTERNAL_API_SECRET);
+const SECRET_BYTES = Buffer.from(REVALIDATE_BEARER_SECRET);
 
 const Body = z.object({
   tags: z.array(z.string().min(1)).min(1),

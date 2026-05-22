@@ -8,7 +8,7 @@
  * 読込時に throw して fail-fast にする (build / 起動時に発覚させる)。
  *
  * `import "server-only"` で client component からの誤 import を build error
- * 化し、`INTERNAL_API_SECRET` がフロント bundle に滲み出す事故を構造的に防ぐ。
+ * 化し、`BFF_JWT_SIGNING_SECRET` がフロント bundle に滲み出す事故を構造的に防ぐ。
  */
 
 import "server-only";
@@ -20,19 +20,23 @@ import { requireEnv } from "@/lib/env";
 
 export const INTERNAL_API_URL = requireEnv("INTERNAL_API_URL");
 
-const INTERNAL_API_SECRET = requireEnv(
-  "INTERNAL_API_SECRET",
+// BFF→backend JWT 署名鍵。backend は同じ secret で検証する (red-team C1 で
+// revalidate Bearer と別 secret に分離)。
+const BFF_JWT_SIGNING_SECRET = requireEnv(
+  "BFF_JWT_SIGNING_SECRET",
   "generate one with `openssl rand -hex 32`",
 );
 
 // HS256 署名鍵: モジュール読込時に 1 度だけバイト列化してキャッシュする。
-// secret 文字列は >=32 バイト (backend Settings._validate_internal_api_secret で保証)。
-const INTERNAL_JWT_SIGNING_KEY = new TextEncoder().encode(INTERNAL_API_SECRET);
+// secret 文字列は >=32 バイト (backend Settings._assert_strong_secret で保証)。
+const INTERNAL_JWT_SIGNING_KEY = new TextEncoder().encode(
+  BFF_JWT_SIGNING_SECRET,
+);
 
 const INTERNAL_JWT_ALGORITHM = "HS256";
 const INTERNAL_JWT_TTL = "60s";
 // iss / aud は backend (`backend/app/dependencies.py`) と同じ literal を要求。
-// INTERNAL_API_SECRET 漏洩時に「Vector の文脈で署名された JWT」を強制する二重防御。
+// secret 漏洩時に「Vector の文脈で署名された JWT」を強制する二重防御。
 const INTERNAL_JWT_ISSUER = "vector-bff";
 const INTERNAL_JWT_AUDIENCE = "vector-backend";
 
@@ -40,7 +44,7 @@ const INTERNAL_JWT_AUDIENCE = "vector-backend";
  * BFF→backend 間の認証 JWT を 1 リクエスト分だけ発行する。
  *
  * Better Auth セッションから `user.id` / `user.role` を取り出し HS256 で署名。
- * backend は同じ INTERNAL_API_SECRET で検証する (`backend/app/dependencies.py`)。
+ * backend は同じ BFF_JWT_SIGNING_SECRET で検証する (`backend/app/dependencies.py`)。
  * 有効期限を 60 秒に絞ることで、secret 漏洩時の悪用ウィンドウを構造的に短縮する。
  */
 export async function buildInternalAuthHeaders(
