@@ -16,7 +16,10 @@ from app.collection.article_completion.completion_failure import (
     PublishedAtMissing,
 )
 from app.collection.article_completion.ready import ReadyForArticleCompletion
-from app.collection.domain.analyzable_article import AnalyzableArticle
+from app.collection.domain.analyzable_article import (
+    AnalyzableArticle,
+    QualityTooLow,
+)
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.external_fetch_errors import ExternalFetchError
@@ -84,19 +87,19 @@ def complete_with_html(
             observed_had_value=obs_pub is not None,
             html_had_value=html_pub is not None,
         )
-    try:
-        return AnalyzableArticle(
-            title=resolved.title,
-            body=resolved.body,
-            published_at=resolved.published_at,
-            source_id=source_id,
-            source_url=source_url,
-        )
-    except ValueError as e:
+    built = AnalyzableArticle.build_or_reject(
+        title=resolved.title,
+        body=resolved.body,
+        published_at=resolved.published_at,
+        source_id=source_id,
+        source_url=source_url,
+    )
+    if isinstance(built, QualityTooLow):
         return CompletionInvariantRejected(
-            error_class=type(e).__name__,
-            error_message=str(e),
+            error_class=built.error_class,
+            error_message=built.error_message,
         )
+    return built
 
 
 class ArticleHtmlCompleter:

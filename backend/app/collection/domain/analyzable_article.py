@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -18,6 +19,19 @@ from app.collection.domain.article_limits import (
 )
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.value_objects import PublishedAt
+
+
+@dataclass(frozen=True, slots=True)
+class QualityTooLow:
+    """揃った材料が品質基準 (title/body 長等) に届かず構築できない理由。
+
+    construct を拒んだ ``ValueError`` の証拠 (class 名 + message) を保持する。
+    completer がこれを audit 語彙 ``CompletionInvariantRejected`` に翻訳する。
+    message の長さ上限は下流の翻訳先が担うため、本型は最小に保つ。
+    """
+
+    error_class: str
+    error_message: str
 
 
 class AnalyzableArticle(BaseModel):
@@ -75,3 +89,34 @@ class AnalyzableArticle(BaseModel):
             )
         except ValueError:
             return None
+
+    @classmethod
+    def build_or_reject(
+        cls,
+        *,
+        title: str | None,
+        body: str | None,
+        published_at: PublishedAt,
+        source_id: int,
+        source_url: CanonicalArticleUrl,
+    ) -> Self | QualityTooLow:
+        """揃った材料から構築を試み、品質基準に届かなければ理由を値で返す。
+
+        route 2 (完成段) 用の smart constructor。``try_build`` (route 1,
+        ``Self | None``) と異なり、構築不能の理由を ``QualityTooLow`` の証拠として
+        返す。published_at 欠落は呼び出し側 (completer) が merge provenance 付きで
+        ``PublishedAtMissing`` を作るため、本 method は非 None を要求する。
+
+        ``title`` / ``body`` は ``str | None`` で受け、None は厳格コンストラクタが
+        ``ValueError`` で拒否し ``QualityTooLow`` に畳む。
+        """
+        try:
+            return cls(
+                title=title,
+                body=body,
+                published_at=published_at,
+                source_id=source_id,
+                source_url=source_url,
+            )
+        except ValueError as e:
+            return QualityTooLow(error_class=type(e).__name__, error_message=str(e))
