@@ -62,7 +62,24 @@ _META_HTTP_EQUIV_CHARSET_RE = re.compile(rb"charset\s*=\s*([^\s\"';>]+)", re.IGN
 _SNIFF_BYTES = 2048
 
 
-def _decode_html_response(response: httpx.Response) -> str:
+@dataclass(frozen=True, slots=True)
+class RawResponse:
+    """取得段 (_fetch) が返す httpx 非依存の中間値。
+
+    ``httpx.Response`` を ``_fetch`` 内に封じ込め、抽出段 (_extract) を httpx に
+    依存させず単体テスト可能にするための値。``decoded_text`` は httpx の
+    ``TextDecoder`` (Content-Type charset があればそれ、なければ UTF-8) で
+    デコード済みの本文で、抽出側で同じ文字列を再現するために持ち越す。
+    """
+
+    url: str
+    content_type: str
+    charset_from_header: str | None
+    content: bytes
+    decoded_text: str
+
+
+def _decode_html_response(raw: RawResponse) -> str:
     """HTTP レスポンスの HTML を正しいエンコーディングでデコードする。
 
     httpx はHTTP Content-Type ヘッダーの charset を優先するが、
@@ -75,27 +92,27 @@ def _decode_html_response(response: httpx.Response) -> str:
     スニッフィングし、正しいエンコーディングでデコードする。
     """
     # Content-Type ヘッダーに charset があれば httpx のデコードを信頼する
-    if response.charset_encoding is not None:
-        return response.text
+    if raw.charset_from_header is not None:
+        return raw.decoded_text
 
     # HTML 先頭バイトから meta charset を探す
-    raw = response.content
-    head = raw[:_SNIFF_BYTES]
+    content_bytes = raw.content
+    head = content_bytes[:_SNIFF_BYTES]
 
     match = _META_CHARSET_RE.search(head) or _META_HTTP_EQUIV_CHARSET_RE.search(head)
     if match:
         encoding = match.group(1).decode("ascii", errors="ignore").strip()
         try:
-            return raw.decode(encoding)
+            return content_bytes.decode(encoding)
         except (UnicodeDecodeError, LookupError):
             logger.warning(
                 "html_charset_decode_failed",
                 declared_charset=encoding,
-                url=str(response.url),
+                url=raw.url,
             )
 
     # meta charset もなければ httpx のデフォルト（UTF-8）にフォールバック
-    return response.text
+    return raw.decoded_text
 
 
 @dataclass(frozen=True)
@@ -167,10 +184,12 @@ class _RobotsCache:
             return rp is None or rp.can_fetch(USER_AGENT, url)
 
 
-def _extract_from_html(html: str, url: str) -> HtmlAcquisitionResult:
-    """trafilatura で HTML から記事本文と公開日時を抽出する（同期・CPU バウンド）。
+def _parse_html(html: str, url: str) -> HtmlAcquisitionResult:
+    """trafilatura で HTML をパースし本文・公開日時を取り出す（同期・CPU バウンド）。
 
-    本関数は ``asyncio.to_thread()`` 経由で呼ぶことを想定している。
+    抽出段 ``_extract`` の parse ステップ。失敗は ``ParserRejected`` /
+    ``QualityGateFailed`` で表す (例外は呼び出し元 ``_extract`` が ``stage="parse"``
+    の crash に畳む)。``_extract`` ごと ``asyncio.to_thread()`` でオフロードされる。
     """
     result = trafilatura.bare_extraction(
         html,
@@ -231,15 +250,20 @@ def _extract_from_html(html: str, url: str) -> HtmlAcquisitionResult:
 class ArticleHtmlAcquirer:
     """URL から記事本文と公開日時を取得する取得器。
 
-    呼び出し側は ``fetch(url) -> HtmlAcquisitionResult`` の契約のみに依存する。
+    呼び出し側は ``acquire(url) -> HtmlAcquisitionResult`` の契約のみに依存する。
+    内部は取得 (_fetch: 接続できたか?) と抽出 (_extract: HTML として読めたか?)
+    の二段に分かれ、両者の境界に httpx 非依存の ``RawResponse`` を挟む。
     robots キャッシュや HTTP クライアントのライフサイクルは内部で完結する。
     """
 
     def __init__(self) -> None:
         self._robots_cache = _RobotsCache()
 
-    async def fetch(self, url: SafeUrl) -> HtmlAcquisitionResult:
+    async def acquire(self, url: SafeUrl) -> HtmlAcquisitionResult:
         """指定 URL の HTML から記事本文・タイトル・公開日時を取得する。
+
+        取得 (_fetch) で接続成否を確定し、成功した RawResponse を抽出 (_extract)
+        に渡す。抽出は CPU バウンドなので ``asyncio.to_thread`` でオフロードする。
 
         Returns:
             HtmlAcquisitionResult: ``AcquiredContent``（成功）または
@@ -251,6 +275,20 @@ class ArticleHtmlAcquirer:
             HTTP status (4xx/5xx) / transport (timeout/network) / SSRF block。
             どの origin failure かは subclass で表現する (本層は retry/terminal を
             分類しない)。
+        """
+        raw = await self._fetch(url)
+        return await asyncio.to_thread(self._extract, raw)
+
+    async def _fetch(self, url: SafeUrl) -> RawResponse:
+        """取得段: 接続できたか? に純化する。
+
+        成功すれば ``RawResponse`` を返し、失敗は ``ExternalFetchError`` を raise
+        する非対称な二値。``httpx.Response`` は本メソッド内に封じ込め、redirect /
+        status / size 判定もここで消費する。
+
+        Raises:
+            ExternalFetchError: robots Disallow / redirect block / response 過大 /
+            HTTP status (4xx/5xx) / transport (timeout/network) / SSRF block。
         """
         url_str = str(url)
 
@@ -305,37 +343,54 @@ class ArticleHtmlAcquirer:
                     limit_bytes=_MAX_RESPONSE_BYTES,
                 )
 
-            content_type = response.headers.get("content-type", "")
-            if "text/html" not in content_type:
-                logger.info("content_not_html", url=url_str, content_type=content_type)
-                return NotHtml(content_type=content_type)
+            # httpx.Response をここで消費し RawResponse に畳む。decoded_text は
+            # response.text を一度だけ評価して持ち越す (抽出側で httpx の charset
+            # 挙動を再実装しないため)。
+            return RawResponse(
+                url=str(response.url),
+                content_type=response.headers.get("content-type", ""),
+                charset_from_header=response.charset_encoding,
+                content=response.content,
+                decoded_text=response.text,
+            )
 
-            try:
-                html_text = _decode_html_response(response)
-            except Exception as e:
-                logger.warning(
-                    "content_parse_error",
-                    url=url_str,
-                    stage="decode",
-                    error=str(e),
-                )
-                return AcquisitionCrashed(
-                    stage="decode",
-                    error_class=type(e).__name__,
-                    error_message=str(e),
-                )
+    def _extract(self, raw: RawResponse) -> HtmlAcquisitionResult:
+        """抽出段: HTML として読み本文化できたか?。
 
-            try:
-                return await asyncio.to_thread(_extract_from_html, html_text, url_str)
-            except Exception as e:
-                logger.warning(
-                    "content_parse_error",
-                    url=url_str,
-                    stage="parse",
-                    error=str(e),
-                )
-                return AcquisitionCrashed(
-                    stage="parse",
-                    error_class=type(e).__name__,
-                    error_message=str(e),
-                )
+        同期・例外を投げない層。Content-Type 判定 / decode / trafilatura の各失敗を
+        ``AcquisitionFailure`` variant に畳む。``acquire`` から to_thread で丸ごと
+        オフロードされるため decode/parse の例外もこの thread 内で捕捉できる。
+        """
+        if "text/html" not in raw.content_type:
+            logger.info("content_not_html", url=raw.url, content_type=raw.content_type)
+            return NotHtml(content_type=raw.content_type)
+
+        try:
+            html_text = _decode_html_response(raw)
+        except Exception as e:
+            logger.warning(
+                "content_parse_error",
+                url=raw.url,
+                stage="decode",
+                error=str(e),
+            )
+            return AcquisitionCrashed(
+                stage="decode",
+                error_class=type(e).__name__,
+                error_message=str(e),
+            )
+
+        try:
+            return _parse_html(html_text, raw.url)
+        except Exception as e:
+            logger.warning(
+                "content_parse_error",
+                url=raw.url,
+                stage="parse",
+                error=str(e),
+            )
+            return AcquisitionCrashed(
+                stage="parse",
+                error_class=type(e).__name__,
+                error_message=str(e),
+            )

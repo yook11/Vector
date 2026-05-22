@@ -10,9 +10,11 @@ import pytest
 from app.collection.article_completion.acquirer import (
     AcquiredContent,
     ArticleHtmlAcquirer,
+    RawResponse,
     _decode_html_response,
 )
 from app.collection.article_completion.acquisition_failure import (
+    AcquisitionCrashed,
     NotHtml,
     ParserRejected,
     QualityGateFailed,
@@ -93,7 +95,7 @@ def _mock_async_client(responses: list[httpx.Response | Exception]) -> AsyncMock
 
 
 def _patch_client(client: AsyncMock):
-    """``make_safe_async_client`` を patch して fetch() がモックを使うようにする。"""
+    """``make_safe_async_client`` を patch して acquire() がモックを使うようにする。"""
     return patch(
         "app.collection.article_completion.acquirer.make_safe_async_client",
         return_value=_as_async_cm(client),
@@ -106,6 +108,17 @@ def _as_async_cm(value: object) -> AsyncMock:
     cm.__aenter__ = AsyncMock(return_value=value)
     cm.__aexit__ = AsyncMock(return_value=None)
     return cm
+
+
+def _raw_from_httpx(resp: httpx.Response) -> RawResponse:
+    """httpx.Response を _fetch が生成するのと同じ RawResponse に畳む。"""
+    return RawResponse(
+        url=str(resp.url),
+        content_type=resp.headers.get("content-type", ""),
+        charset_from_header=resp.charset_encoding,
+        content=resp.content,
+        decoded_text=resp.text,
+    )
 
 
 class TestArticleHtmlAcquirer:
@@ -125,7 +138,7 @@ class TestArticleHtmlAcquirer:
 
         acquirer = ArticleHtmlAcquirer()
         with _patch_client(client):
-            result = await acquirer.fetch(SafeUrl("https://example.com/article"))
+            result = await acquirer.acquire(SafeUrl("https://example.com/article"))
 
         assert isinstance(result, AcquiredContent)
         assert len(result.body) > 50
@@ -150,7 +163,7 @@ class TestArticleHtmlAcquirer:
 
         acquirer = ArticleHtmlAcquirer()
         with _patch_client(client), pytest.raises(FetchAccessDeniedError, match="403"):
-            await acquirer.fetch(SafeUrl("https://example.com/paywall"))
+            await acquirer.acquire(SafeUrl("https://example.com/paywall"))
 
     @pytest.mark.asyncio
     async def test_raises_access_denied_on_401(self) -> None:
@@ -172,7 +185,7 @@ class TestArticleHtmlAcquirer:
 
         acquirer = ArticleHtmlAcquirer()
         with _patch_client(client), pytest.raises(FetchAccessDeniedError, match="401"):
-            await acquirer.fetch(SafeUrl("https://example.com/paywall"))
+            await acquirer.acquire(SafeUrl("https://example.com/paywall"))
 
     @pytest.mark.asyncio
     async def test_raises_origin_server_error_on_500(self) -> None:
@@ -193,7 +206,7 @@ class TestArticleHtmlAcquirer:
 
         acquirer = ArticleHtmlAcquirer()
         with _patch_client(client), pytest.raises(FetchOriginServerError, match="500"):
-            await acquirer.fetch(SafeUrl("https://example.com/error"))
+            await acquirer.acquire(SafeUrl("https://example.com/error"))
 
     @pytest.mark.asyncio
     async def test_raises_timeout_on_connect_timeout(self) -> None:
@@ -208,7 +221,7 @@ class TestArticleHtmlAcquirer:
             _patch_client(client),
             pytest.raises(FetchTimeoutError, match="timed out"),
         ):
-            await acquirer.fetch(SafeUrl("https://example.com/slow"))
+            await acquirer.acquire(SafeUrl("https://example.com/slow"))
 
     @pytest.mark.asyncio
     async def test_returns_empty_result_for_non_html(self) -> None:
@@ -226,7 +239,7 @@ class TestArticleHtmlAcquirer:
 
         acquirer = ArticleHtmlAcquirer()
         with _patch_client(client):
-            result = await acquirer.fetch(SafeUrl("https://example.com/doc.pdf"))
+            result = await acquirer.acquire(SafeUrl("https://example.com/doc.pdf"))
 
         assert isinstance(result, NotHtml)
         assert result.content_type == "application/pdf"
@@ -249,7 +262,7 @@ class TestArticleHtmlAcquirer:
 
         acquirer = ArticleHtmlAcquirer()
         with _patch_client(client):
-            result = await acquirer.fetch(SafeUrl("https://example.com/short"))
+            result = await acquirer.acquire(SafeUrl("https://example.com/short"))
 
         # trafilatura が None を返す (ParserRejected) または品質ゲート未達
         # (QualityGateFailed) のどちらか。decode/parse 例外は本テストでは想定しない。
@@ -272,7 +285,7 @@ class TestArticleHtmlAcquirer:
             _patch_client(client),
             pytest.raises(FetchRobotsDisallowedError, match="robots"),
         ):
-            await acquirer.fetch(SafeUrl("https://example.com/private/article"))
+            await acquirer.acquire(SafeUrl("https://example.com/private/article"))
 
     @pytest.mark.asyncio
     async def test_raises_ssrf_blocked_when_host_resolves_to_private_ip(self) -> None:
@@ -283,7 +296,7 @@ class TestArticleHtmlAcquirer:
             new=AsyncMock(return_value=["172.18.0.5"]),
         ):
             with pytest.raises(FetchSsrfBlockedError, match="non-public address"):
-                await acquirer.fetch(SafeUrl("https://internal-trick.example.com/"))
+                await acquirer.acquire(SafeUrl("https://internal-trick.example.com/"))
 
     @pytest.mark.asyncio
     async def test_raises_ssrf_blocked_when_host_resolves_to_link_local(self) -> None:
@@ -294,7 +307,7 @@ class TestArticleHtmlAcquirer:
             new=AsyncMock(return_value=["169.254.169.254"]),
         ):
             with pytest.raises(FetchSsrfBlockedError, match="169.254.169.254"):
-                await acquirer.fetch(SafeUrl("https://metadata-attack.example.com/"))
+                await acquirer.acquire(SafeUrl("https://metadata-attack.example.com/"))
 
     @pytest.mark.asyncio
     async def test_raises_network_error_on_dns_failure(self) -> None:
@@ -305,7 +318,7 @@ class TestArticleHtmlAcquirer:
             new=AsyncMock(side_effect=socket.gaierror("nope")),
         ):
             with pytest.raises(FetchNetworkError, match="DNS resolution failed"):
-                await acquirer.fetch(SafeUrl("https://nonexistent.invalid/"))
+                await acquirer.acquire(SafeUrl("https://nonexistent.invalid/"))
 
     @pytest.mark.asyncio
     async def test_raises_redirect_blocked_on_3xx_redirect(self) -> None:
@@ -326,7 +339,7 @@ class TestArticleHtmlAcquirer:
             _patch_client(client),
             pytest.raises(FetchRedirectBlockedError, match="redirect not followed"),
         ):
-            await acquirer.fetch(SafeUrl("https://example.com/article"))
+            await acquirer.acquire(SafeUrl("https://example.com/article"))
 
     @pytest.mark.asyncio
     async def test_raises_response_too_large_on_oversized_content_length_header(
@@ -353,7 +366,7 @@ class TestArticleHtmlAcquirer:
             _patch_client(client),
             pytest.raises(FetchResponseTooLargeError, match="response too large"),
         ):
-            await acquirer.fetch(SafeUrl("https://example.com/huge"))
+            await acquirer.acquire(SafeUrl("https://example.com/huge"))
 
     @pytest.mark.asyncio
     async def test_raises_response_too_large_on_oversized_actual_body(self) -> None:
@@ -376,7 +389,7 @@ class TestArticleHtmlAcquirer:
             _patch_client(client),
             pytest.raises(FetchResponseTooLargeError, match="response too large"),
         ):
-            await acquirer.fetch(SafeUrl("https://example.com/huge2"))
+            await acquirer.acquire(SafeUrl("https://example.com/huge2"))
 
     @pytest.mark.asyncio
     async def test_caches_robots_txt_across_calls(self) -> None:
@@ -403,9 +416,9 @@ class TestArticleHtmlAcquirer:
 
         acquirer = ArticleHtmlAcquirer()
         with _patch_client(client_1):
-            await acquirer.fetch(SafeUrl("https://example.com/a1"))
+            await acquirer.acquire(SafeUrl("https://example.com/a1"))
         with _patch_client(client_2):
-            await acquirer.fetch(SafeUrl("https://example.com/a2"))
+            await acquirer.acquire(SafeUrl("https://example.com/a2"))
 
         # 2 回目の fetch では robots.txt を再リクエストしないはず
         robots_calls_1 = [
@@ -454,7 +467,8 @@ class TestDecodeHtmlResponse:
             headers={"content-type": "text/html; charset=utf-8"},
             request=httpx.Request("GET", "https://example.com/article"),
         )
-        assert _decode_html_response(resp) == "<html><body>テスト</body></html>"
+        decoded = _decode_html_response(_raw_from_httpx(resp))
+        assert decoded == "<html><body>テスト</body></html>"
 
     def test_decodes_shift_jis_from_meta_charset(self) -> None:
         """Content-Type に charset がなく meta charset="Shift_JIS" の場合、
@@ -471,7 +485,7 @@ class TestDecodeHtmlResponse:
             headers={"content-type": "text/html"},
             request=httpx.Request("GET", "https://www.itmedia.co.jp/article"),
         )
-        decoded = _decode_html_response(resp)
+        decoded = _decode_html_response(_raw_from_httpx(resp))
         assert "日本語テスト記事" in decoded
 
     def test_decodes_from_http_equiv_charset(self) -> None:
@@ -489,7 +503,7 @@ class TestDecodeHtmlResponse:
             headers={"content-type": "text/html"},
             request=httpx.Request("GET", "https://www.itmedia.co.jp/article"),
         )
-        decoded = _decode_html_response(resp)
+        decoded = _decode_html_response(_raw_from_httpx(resp))
         assert "テスト本文" in decoded
 
     def test_falls_back_to_response_text_when_no_charset(self) -> None:
@@ -500,7 +514,7 @@ class TestDecodeHtmlResponse:
             headers={"content-type": "text/html"},
             request=httpx.Request("GET", "https://example.com/article"),
         )
-        assert "plain text" in _decode_html_response(resp)
+        assert "plain text" in _decode_html_response(_raw_from_httpx(resp))
 
     def test_falls_back_on_invalid_charset(self) -> None:
         """meta charset が不正なエンコーディング名でもクラッシュしない。"""
@@ -514,7 +528,7 @@ class TestDecodeHtmlResponse:
             headers={"content-type": "text/html"},
             request=httpx.Request("GET", "https://example.com/article"),
         )
-        result = _decode_html_response(resp)
+        result = _decode_html_response(_raw_from_httpx(resp))
         assert isinstance(result, str)
 
     @pytest.mark.asyncio
@@ -548,9 +562,108 @@ class TestDecodeHtmlResponse:
 
         acquirer = ArticleHtmlAcquirer()
         with _patch_client(client):
-            result = await acquirer.fetch(
+            result = await acquirer.acquire(
                 SafeUrl("https://www.itmedia.co.jp/news/articles/test.html")
             )
 
         assert isinstance(result, AcquiredContent)
         assert "量子コンピューティング" in result.body
+
+
+class TestExtract:
+    """_extract: RawResponse → HtmlAcquisitionResult (同期・例外を投げない層)。
+
+    取得 (_fetch) と切り離し、RawResponse を直接与えて抽出契約だけを検証する。
+    decode/parse の失敗を crash variant に畳む契約はここが正本。
+    """
+
+    def test_non_html_returns_not_html(self) -> None:
+        raw = RawResponse(
+            url="https://example.com/doc.pdf",
+            content_type="application/pdf",
+            charset_from_header=None,
+            content=b"%PDF-1.4",
+            decoded_text="",
+        )
+        result = ArticleHtmlAcquirer()._extract(raw)
+        assert isinstance(result, NotHtml)
+        assert result.content_type == "application/pdf"
+
+    def test_valid_html_returns_acquired_content(self) -> None:
+        # trafilatura の deduplicate はモジュール跨ぎの cache を持つため、他テストと
+        # 本文が衝突すると discard され ParserRejected になる。固有本文で隔離する。
+        unique_html = (
+            "<html><head><title>Extract Phase Unit Test</title></head>"
+            "<body><article><h1>Isolated Extraction Sample</h1>"
+            "<p>This paragraph exists solely to exercise the _extract phase in "
+            "isolation from the fetch phase. It carries enough unique prose to "
+            "clear the fifty character body quality gate while staying clear of "
+            "trafilatura cross-call deduplication.</p>"
+            "</article></body></html>"
+        )
+        raw = RawResponse(
+            url="https://example.com/extract-unit",
+            content_type="text/html; charset=utf-8",
+            charset_from_header="utf-8",
+            content=unique_html.encode("utf-8"),
+            decoded_text=unique_html,
+        )
+        result = ArticleHtmlAcquirer()._extract(raw)
+        assert isinstance(result, AcquiredContent)
+        assert result.title
+        assert len(result.body) > 50
+
+    def test_minimal_html_returns_quality_failure(self) -> None:
+        """品質ゲート未達は ParserRejected か QualityGateFailed のどちらか。"""
+        minimal_html = "<html><body><p>Short</p></body></html>"
+        raw = RawResponse(
+            url="https://example.com/short",
+            content_type="text/html",
+            charset_from_header=None,
+            content=minimal_html.encode("utf-8"),
+            decoded_text=minimal_html,
+        )
+        result = ArticleHtmlAcquirer()._extract(raw)
+        assert isinstance(result, ParserRejected | QualityGateFailed)
+        if isinstance(result, QualityGateFailed):
+            assert result.body_length < 50
+
+    def test_decode_crash_folds_into_acquisition_crashed(self) -> None:
+        """decode 段の例外を漏らさず crash variant に畳む (例外を投げない層の契約)。
+
+        decode crash は自然再現できない (httpx 済みテキストを持ち越すため) ので
+        例外注入で契約のみ検証する。
+        """
+        raw = RawResponse(
+            url="https://example.com/article",
+            content_type="text/html",
+            charset_from_header=None,
+            content=b"<html></html>",
+            decoded_text="<html></html>",
+        )
+        with patch(
+            "app.collection.article_completion.acquirer._decode_html_response",
+            side_effect=RuntimeError("decode boom"),
+        ):
+            result = ArticleHtmlAcquirer()._extract(raw)
+        assert isinstance(result, AcquisitionCrashed)
+        assert result.stage == "decode"
+        assert result.error_class == "RuntimeError"
+
+    def test_parse_crash_folds_into_acquisition_crashed(self) -> None:
+        """trafilatura 段の例外を漏らさず crash variant に畳む。"""
+        raw = RawResponse(
+            url="https://example.com/article",
+            content_type="text/html; charset=utf-8",
+            charset_from_header="utf-8",
+            content=SAMPLE_HTML.encode("utf-8"),
+            decoded_text=SAMPLE_HTML,
+        )
+        with patch(
+            "app.collection.article_completion.acquirer._parse_html",
+            side_effect=RuntimeError("parse boom"),
+        ):
+            result = ArticleHtmlAcquirer()._extract(raw)
+        assert isinstance(result, AcquisitionCrashed)
+        assert result.stage == "parse"
+        assert result.error_class == "RuntimeError"

@@ -135,7 +135,7 @@ class ArticleHtmlCompleter:
         acquirer = self._acquirer_factory()
 
         try:
-            html_result = await acquirer.fetch(ready.source_url.as_safe_url())
+            html_result = await acquirer.acquire(ready.source_url.as_safe_url())
         except ExternalFetchError as exc:
             return FetchFailed(error=exc)
 

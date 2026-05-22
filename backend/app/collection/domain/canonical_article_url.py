@@ -16,8 +16,8 @@ SafeUrl との責務分離:
 発火順序が公式未文書化で MRO 変更で破綻実績があるため、composition で
 SafeUrl の検証を呼んで結果を再利用する。
 
-外部 SSRF 境界 (``acquirer.fetch`` 等) は SafeUrl を要求するため、
-``as_safe_url()`` 経由で受け渡す。canonical かどうかは fetch 側の関心事
+外部 SSRF 境界 (``acquirer.acquire`` 等) は SafeUrl を要求するため、
+``as_safe_url()`` 経由で受け渡す。canonical かどうかは取得側の関心事
 ではなく、責務分離を保つ。
 """
 
@@ -71,7 +71,7 @@ class CanonicalArticleUrl(RootModel[str]):
         """SafeUrl 互換の値を取り出す (SSRF 境界呼出用)。
 
         validator で SafeUrl 検証を通過した値なので構築は冪等。
-        ``acquirer.fetch`` などの SafeUrl 要求 API への橋渡しに使う。
+        ``acquirer.acquire`` などの SafeUrl 要求 API への橋渡しに使う。
         """
         return SafeUrl(self.root)
 

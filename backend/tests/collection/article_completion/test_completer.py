@@ -1,6 +1,6 @@
 """``ArticleHtmlCompleter`` の契約テスト — 純粋境界の出力型保証。
 
-検証する不変条件 (副作用ゼロ。DB を触らず ``acquirer.fetch`` のみ差し替え、
+検証する不変条件 (副作用ゼロ。DB を触らず ``acquirer.acquire`` のみ差し替え、
 戻り値が ``AnalyzableArticle | CompletionFailure`` の閉じ union に必ず収まる):
 
 - fetch 例外 (``ExternalFetchError``) → ``FetchFailed`` 値に畳まれ例外は出ない
@@ -42,10 +42,10 @@ from app.shared.value_objects.source_name import SourceName
 _URL = CanonicalArticleUrl("https://example.com/article")
 
 
-def _completer(fetch: AsyncMock) -> ArticleHtmlCompleter:
-    """``acquirer.fetch`` を差し替えた completer を返す (副作用なし)。"""
+def _completer(acquire: AsyncMock) -> ArticleHtmlCompleter:
+    """``acquirer.acquire`` を差し替えた completer を返す (副作用なし)。"""
     acquirer = AsyncMock()
-    acquirer.fetch = fetch
+    acquirer.acquire = acquire
     return ArticleHtmlCompleter(acquirer_factory=lambda: acquirer)
 
 

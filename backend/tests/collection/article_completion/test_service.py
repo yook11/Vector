@@ -170,9 +170,9 @@ async def _make_pending(
 
 
 def _patch_fetch(monkeypatch: pytest.MonkeyPatch, mock: AsyncMock) -> None:
-    """``ArticleHtmlAcquirer.fetch`` を Service の import path 経由で差し替える。"""
+    """``ArticleHtmlAcquirer.acquire`` を Service の import path 経由で差し替える。"""
     monkeypatch.setattr(
-        "app.collection.article_completion.service.ArticleHtmlAcquirer.fetch",
+        "app.collection.article_completion.service.ArticleHtmlAcquirer.acquire",
         mock,
     )
 
