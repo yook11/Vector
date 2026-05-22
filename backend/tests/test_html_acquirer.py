@@ -2,12 +2,12 @@
 
 import socket
 from datetime import UTC, datetime
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 from structlog.testing import capture_logs
+from trafilatura.settings import Document
 
 from app.collection.article_completion.acquirer import (
     AcquiredContent,
@@ -20,6 +20,10 @@ from app.collection.article_completion.acquisition_failure import (
     ParseCrashed,
     ParserGaveUp,
     QualityGateFailed,
+)
+from app.collection.domain.article_limits import (
+    ARTICLE_BODY_MIN_LENGTH,
+    ARTICLE_TITLE_MAX_LENGTH,
 )
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.external_fetch_errors import (
@@ -458,6 +462,120 @@ class TestAcquiredContentInvariant:
         assert content.published_at is not None
 
 
+class TestAcquiredContentTryCreate:
+    """AcquiredContent.try_create: 品質ゲート判定の所有テスト。
+
+    閾値は ``article_limits`` SSoT を import して導出する (literal 直書きしない)。
+    成功時は ``AcquiredContent``、未達時は証拠付き ``QualityGateFailed`` を値で返す
+    契約を確かめる。
+    """
+
+    def test_valid_material_returns_acquired_content(self) -> None:
+        body = "x" * ARTICLE_BODY_MIN_LENGTH
+        outcome = AcquiredContent.try_create(
+            raw_title="Title", stripped_body=body, raw_date=None
+        )
+        assert isinstance(outcome, AcquiredContent)
+
+    def test_short_body_returns_quality_failure_with_body_length(self) -> None:
+        body = "x" * (ARTICLE_BODY_MIN_LENGTH - 1)
+        outcome = AcquiredContent.try_create(
+            raw_title="Title", stripped_body=body, raw_date=None
+        )
+        assert isinstance(outcome, QualityGateFailed)
+        assert outcome.body_length == len(body)
+
+    def test_short_body_keeps_title_present_true(self) -> None:
+        body = "x" * (ARTICLE_BODY_MIN_LENGTH - 1)
+        outcome = AcquiredContent.try_create(
+            raw_title="Title", stripped_body=body, raw_date=None
+        )
+        assert isinstance(outcome, QualityGateFailed)
+        assert outcome.title_present is True
+
+    def test_short_body_keeps_body_sample(self) -> None:
+        body = "x" * (ARTICLE_BODY_MIN_LENGTH - 1)
+        outcome = AcquiredContent.try_create(
+            raw_title="Title", stripped_body=body, raw_date=None
+        )
+        assert isinstance(outcome, QualityGateFailed)
+        assert outcome.body_sample == body
+
+    def test_empty_title_returns_quality_failure(self) -> None:
+        body = "x" * ARTICLE_BODY_MIN_LENGTH
+        outcome = AcquiredContent.try_create(
+            raw_title="", stripped_body=body, raw_date=None
+        )
+        assert isinstance(outcome, QualityGateFailed)
+        assert outcome.title_present is False
+
+    def test_none_title_returns_quality_failure(self) -> None:
+        body = "x" * ARTICLE_BODY_MIN_LENGTH
+        outcome = AcquiredContent.try_create(
+            raw_title=None, stripped_body=body, raw_date=None
+        )
+        assert isinstance(outcome, QualityGateFailed)
+        assert outcome.title_present is False
+
+    def test_title_present_but_body_at_least_min_drops_body_sample(self) -> None:
+        # body は閾値以上で title 欠落により落ちる → 冒頭断片は残さない。
+        body = "x" * ARTICLE_BODY_MIN_LENGTH
+        outcome = AcquiredContent.try_create(
+            raw_title=None, stripped_body=body, raw_date=None
+        )
+        assert isinstance(outcome, QualityGateFailed)
+        assert outcome.body_sample is None
+
+    def test_empty_body_drops_body_sample(self) -> None:
+        outcome = AcquiredContent.try_create(
+            raw_title="Title", stripped_body="", raw_date=None
+        )
+        assert isinstance(outcome, QualityGateFailed)
+        assert outcome.body_sample is None
+
+    def test_html_tags_stripped_from_title(self) -> None:
+        body = "x" * ARTICLE_BODY_MIN_LENGTH
+        outcome = AcquiredContent.try_create(
+            raw_title="<b>Bold Title</b>", stripped_body=body, raw_date=None
+        )
+        assert isinstance(outcome, AcquiredContent)
+        assert outcome.title == "Bold Title"
+
+    def test_title_over_limit_is_truncated(self) -> None:
+        body = "x" * ARTICLE_BODY_MIN_LENGTH
+        outcome = AcquiredContent.try_create(
+            raw_title="t" * (ARTICLE_TITLE_MAX_LENGTH + 10),
+            stripped_body=body,
+            raw_date=None,
+        )
+        assert isinstance(outcome, AcquiredContent)
+        assert len(outcome.title) == ARTICLE_TITLE_MAX_LENGTH
+
+    def test_parseable_date_populates_published_at(self) -> None:
+        body = "x" * ARTICLE_BODY_MIN_LENGTH
+        outcome = AcquiredContent.try_create(
+            raw_title="Title", stripped_body=body, raw_date="2026-03-15T10:30:00"
+        )
+        assert isinstance(outcome, AcquiredContent)
+        assert outcome.published_at is not None
+
+    def test_unparseable_date_leaves_published_at_none(self) -> None:
+        body = "x" * ARTICLE_BODY_MIN_LENGTH
+        outcome = AcquiredContent.try_create(
+            raw_title="Title", stripped_body=body, raw_date="not-a-date"
+        )
+        assert isinstance(outcome, AcquiredContent)
+        assert outcome.published_at is None
+
+    def test_none_date_leaves_published_at_none(self) -> None:
+        body = "x" * ARTICLE_BODY_MIN_LENGTH
+        outcome = AcquiredContent.try_create(
+            raw_title="Title", stripped_body=body, raw_date=None
+        )
+        assert isinstance(outcome, AcquiredContent)
+        assert outcome.published_at is None
+
+
 class TestDecodeHtmlResponse:
     """_decode_html_response のエンコーディング検出テスト。"""
 
@@ -659,7 +777,9 @@ class TestExtract:
             "quality gate while carrying a garbled tail ��� here."
         )
         replacement_count = body_text.count("�")
-        fake_document = SimpleNamespace(
+        # bare_extraction が返すのと同じ実型 (Document) で patch する。
+        # _parse_html は戻り値を Document に narrow するため duck-typed stub は不可。
+        fake_document = Document(
             text=body_text, title="Mojibake Sample Title", date=None
         )
         raw = RawResponse(

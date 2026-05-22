@@ -17,6 +17,7 @@ from urllib.robotparser import RobotFileParser
 import httpx
 import structlog
 import trafilatura
+from trafilatura.settings import Document
 
 from app.collection.article_completion.acquisition_failure import (
     AcquisitionFailure,
@@ -27,6 +28,9 @@ from app.collection.article_completion.acquisition_failure import (
 )
 from app.collection.domain.article_limits import (
     ARTICLE_BODY_MIN_LENGTH as _BODY_MIN_LENGTH,
+)
+from app.collection.domain.article_limits import (
+    ARTICLE_TITLE_MAX_LENGTH as _TITLE_MAX_LENGTH,
 )
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.external_fetch_errors import (
@@ -45,7 +49,6 @@ from app.utils.sanitize import strip_html_tags
 logger = structlog.get_logger(__name__)
 
 HTTP_TIMEOUT = 30.0
-_TITLE_MAX_LENGTH = 500
 # 1 記事あたりの HTTP レスポンス本体の上限 (10 MiB)。
 # CONTENT_MAX_LENGTH は抽出後の文字数上限なので別関心事。
 # ここではフェッチ層で「内部の大きなレスポンスを引き出される」攻撃面を
@@ -137,6 +140,38 @@ class AcquiredContent:
         if len(self.body) < _BODY_MIN_LENGTH:
             raise ValueError(f"body must be at least {_BODY_MIN_LENGTH} chars")
 
+    @classmethod
+    def try_create(
+        cls,
+        *,
+        raw_title: str | None,
+        stripped_body: str,
+        raw_date: str | None,
+    ) -> AcquiredContent | QualityGateFailed:
+        """素材から品質ゲートを満たすときのみ AcquiredContent を構築する。
+
+        ゲート判定 (本文 50 文字以上 + 非空タイトル ≤500) の SSoT。満たさなければ
+        証拠付き ``QualityGateFailed`` を値で返す。strict コンストラクタの invariant
+        (``__post_init__``) は本 factory が必ず満たす backstop。副作用なし (ログは
+        呼び出し側 ``_parse_html``)。``stripped_body`` は strip 済み本文を受ける。
+        """
+        cleaned_title = strip_html_tags(raw_title)
+        title = cleaned_title[:_TITLE_MAX_LENGTH] if cleaned_title else None
+        body = stripped_body if len(stripped_body) >= _BODY_MIN_LENGTH else None
+
+        if body is None or title is None:
+            body_length = len(stripped_body)
+            # paywall stub / 拒否ページ判別に使えるよう、本文がゼロでも閾値以上でも
+            # ない (= title 欠落で落ちた) 場合は冒頭断片を残さない。
+            body_sample = stripped_body if 0 < body_length < _BODY_MIN_LENGTH else None
+            return QualityGateFailed(
+                body_length=body_length,
+                title_present=title is not None,
+                body_sample=body_sample,
+            )
+
+        return cls(title=title, body=body, published_at=PublishedAt.parse(raw_date))
+
 
 HtmlAcquisitionResult = AcquiredContent | AcquisitionFailure
 
@@ -211,8 +246,14 @@ def _parse_html(html: str, url: str) -> HtmlAcquisitionResult:
         logger.info("parser_gave_up", url=url)
         return ParserGaveUp()
 
-    # trafilatura 2.0 以降、bare_extraction() は Document インスタンスを返す
-    # 本文の品質ゲート: 50 文字未満は棄却
+    # bare_extraction は as_dict=False (本呼び出しの default) のとき Document を返す。
+    # signature 上の dict 分岐は as_dict=True 専用。想定外の型は parse 故障として
+    # 例外で表し、_extract が ParseCrashed に畳む (本関数の失敗契約どおり)。
+    if not isinstance(result, Document):
+        raise TypeError(
+            f"bare_extraction returned unexpected type: {type(result).__name__}"
+        )
+
     text = result.text
     body_stripped = text.strip() if text else ""
 
@@ -229,36 +270,21 @@ def _parse_html(html: str, url: str) -> HtmlAcquisitionResult:
             body_length=len(body_stripped),
         )
 
-    body = body_stripped if len(body_stripped) >= _BODY_MIN_LENGTH else None
-
-    # タイトル: trafilatura が OGP / Twitter Card / JSON-LD / <title> / h1 の順で抽出。
-    # HTML タグ除去と 500 文字上限で整形し、空なら None。
-    cleaned_title = strip_html_tags(result.title)
-    title = cleaned_title[:_TITLE_MAX_LENGTH] if cleaned_title else None
-
-    if body is None or title is None:
-        title_present = title is not None
-        body_length = len(body_stripped)
-        # paywall stub / 拒否ページ判別に使えるよう、本文がゼロでも閾値未満でも
-        # ない (= title 欠落で落ちた) 場合は冒頭断片を残さない。
-        body_sample = body_stripped if 0 < body_length < _BODY_MIN_LENGTH else None
+    # 品質ゲート判定は AcquiredContent.try_create が SSoT。本関数は素材を渡し、
+    # 失敗値の log emit だけを担う (factory は純粋)。
+    outcome = AcquiredContent.try_create(
+        raw_title=result.title,
+        stripped_body=body_stripped,
+        raw_date=result.date,
+    )
+    if isinstance(outcome, QualityGateFailed):
         logger.info(
             "quality_gate_failed",
             url=url,
-            body_length=body_length,
-            title_present=title_present,
+            body_length=outcome.body_length,
+            title_present=outcome.title_present,
         )
-        return QualityGateFailed(
-            body_length=body_length,
-            title_present=title_present,
-            body_sample=body_sample,
-        )
-
-    return AcquiredContent(
-        title=title,
-        body=body,
-        published_at=PublishedAt.parse(result.date),
-    )
+    return outcome
 
 
 class ArticleHtmlAcquirer:
