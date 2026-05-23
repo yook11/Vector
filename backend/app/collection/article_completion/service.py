@@ -41,7 +41,12 @@ from app.collection.article_completion.failure_handling import (
     ArticleCompletionFailureHandler,
 )
 from app.collection.article_completion.ready import ReadyForArticleCompletion
-from app.collection.article_completion.repository import ArticleCompletionRepository
+from app.collection.article_completion.repository import (
+    ArticleCompletionRepository,
+    CompletionSucceeded,
+    CompletionSuperseded,
+    CompletionUrlConflict,
+)
 from app.collection.domain.analyzable_article import AnalyzableArticle
 
 logger = structlog.get_logger(__name__)
@@ -103,35 +108,37 @@ class ArticleCompletionService:
 
         # Stage 3: 永続化。
         async with self._session_factory() as session:
-            result = await ArticleCompletionRepository(session).persist_completed(
+            outcome = await ArticleCompletionRepository(session).persist_completed(
                 ready, advanced
             )
             await session.commit()
 
-        if not result.pending_deleted:
-            logger.info(
-                "article_completion_stale_attempt_ignored",
-                pending_id=ready.pending_id,
-                source_id=ready.source_id,
-                attempt_count=ready.attempt_count,
-                canonical_url=str(ready.source_url),
-            )
-            return None
-
-        if result.article_id is None:
-            logger.info(
-                "article_completion_conflict_lost",
-                pending_id=ready.pending_id,
-                source_id=ready.source_id,
-                canonical_url=str(ready.source_url),
-            )
-            return None
-
-        logger.info(
-            "article_completion_succeeded",
-            pending_id=ready.pending_id,
-            source_id=ready.source_id,
-            article_id=result.article_id,
-            canonical_url=str(ready.source_url),
-        )
-        return result.article_id
+        match outcome:
+            case CompletionSuperseded():
+                logger.info(
+                    "article_completion_stale_attempt_ignored",
+                    pending_id=ready.pending_id,
+                    source_id=ready.source_id,
+                    attempt_count=ready.attempt_count,
+                    canonical_url=str(ready.source_url),
+                )
+                return None
+            case CompletionUrlConflict():
+                logger.info(
+                    "article_completion_conflict_lost",
+                    pending_id=ready.pending_id,
+                    source_id=ready.source_id,
+                    canonical_url=str(ready.source_url),
+                )
+                return None
+            case CompletionSucceeded(article_id=article_id):
+                logger.info(
+                    "article_completion_succeeded",
+                    pending_id=ready.pending_id,
+                    source_id=ready.source_id,
+                    article_id=article_id,
+                    canonical_url=str(ready.source_url),
+                )
+                return article_id
+            case _ as unreachable:
+                assert_never(unreachable)

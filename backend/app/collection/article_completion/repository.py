@@ -25,16 +25,23 @@ from app.models.pending_html_article import PendingHtmlArticle as PendingHtmlArt
 
 
 @dataclass(frozen=True, slots=True)
-class CompletionPersistResult:
-    """補完成功の永続化結果。
+class CompletionSucceeded:
+    """正規所有者として ``articles`` に INSERT 成功。"""
 
-    ``pending_deleted=False`` は、service がロードした attempt が既に失効しており
-    repository が pending 行に触れなかったことを表す。その場合 article insert は
-    実行しない。
-    """
+    article_id: int
 
-    article_id: int | None
-    pending_deleted: bool
+
+@dataclass(frozen=True, slots=True)
+class CompletionSuperseded:
+    """別 worker に追い越され、自分の attempt は失効していた (pending DELETE 0 行)。"""
+
+
+@dataclass(frozen=True, slots=True)
+class CompletionUrlConflict:
+    """attempt は有効だが ``source_url`` 衝突で race-loss。"""
+
+
+CompletionOutcome = CompletionSucceeded | CompletionSuperseded | CompletionUrlConflict
 
 
 class ArticleCompletionRepository:
@@ -211,19 +218,22 @@ class ArticleCompletionRepository:
         self,
         ready: ReadyForArticleCompletion,
         advanced: AnalyzableArticle,
-    ) -> CompletionPersistResult:
-        """補完成功を永続化する。
+    ) -> CompletionOutcome:
+        """補完成功を永続化し、3 つの outcome を名前付きで返す。
 
         stale worker guard のため、まず ``pending_id`` + ``attempt_count`` で
-        pending を DELETE する。DELETE できた場合だけ ``articles`` に INSERT し、
-        ``source_url`` conflict は ``article_id=None`` として返す。
+        pending を DELETE する。DELETE が 0 行なら ``CompletionSuperseded``
+        (attempt 失効) で短絡し ``articles`` には触れない。DELETE できた場合だけ
+        INSERT し、``source_url`` conflict は ``CompletionUrlConflict``、成功は
+        ``CompletionSucceeded`` として返す。
         """
-        deleted = await self._delete_claimed(ready)
-        if not deleted:
-            return CompletionPersistResult(article_id=None, pending_deleted=False)
+        if not await self._delete_claimed(ready):
+            return CompletionSuperseded()
 
         article_id = await ArticleStore(self._session).save(advanced)
-        return CompletionPersistResult(article_id=article_id, pending_deleted=True)
+        if article_id is None:
+            return CompletionUrlConflict()
+        return CompletionSucceeded(article_id=article_id)
 
     async def _delete_claimed(self, ready: ReadyForArticleCompletion) -> bool:
         stmt = (

@@ -615,3 +615,52 @@ async def test_race_lost_returns_none_and_deletes_pending(
         )
     ).scalar_one_or_none()
     assert remaining is None
+
+
+@pytest.mark.asyncio
+async def test_superseded_attempt_returns_none_and_keeps_pending(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    tc_source: NewsSource,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """別 worker が再 claim し attempt_count がズレた → ``None`` + article 0 件 + pending 残置.
+
+    fence DELETE は ``pending_id`` + ``attempt_count`` で gate される。別 worker が
+    再 claim して DB の世代が ready の握る値と食い違うと DELETE は 0 行になり、
+    article INSERT は実行されず pending 行も残る (UrlConflict が pending を DELETE
+    するのと対になる差分)。
+    """  # noqa: E501
+    _, pending_id, ready = await _make_pending(
+        db_session, tc_source, "https://techcrunch.com/stale"
+    )
+    # 別 worker の再 claim を模す: DB の attempt_count を ready が握る値からズラす
+    await db_session.execute(
+        update(PendingHtmlArticle)
+        .where(PendingHtmlArticle.id == pending_id)
+        .values(attempt_count=ready.attempt_count + 1)
+    )
+    await db_session.commit()
+    _patch_fetch(
+        monkeypatch,
+        AsyncMock(
+            return_value=AcquiredContent(
+                title="HTML Title",
+                body="x" * 200,
+                published_at=PublishedAt(value=datetime(2026, 5, 1, tzinfo=UTC)),
+            )
+        ),
+    )
+
+    outcome = await ArticleCompletionService(session_factory).execute(ready)
+
+    assert outcome is None
+    # 失効 worker は INSERT しない
+    assert (await db_session.execute(select(ArticleORM))).scalars().all() == []
+    # DELETE は attempt 不一致で 0 行 → pending は残る (UrlConflict との差分)
+    remaining = (
+        await db_session.execute(
+            select(PendingHtmlArticle).where(PendingHtmlArticle.id == pending_id)
+        )
+    ).scalar_one_or_none()
+    assert remaining is not None
