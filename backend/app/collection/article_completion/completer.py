@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.collection.article_completion.acquirer import AcquiredContent
 from app.collection.article_completion.completion_failure import (
-    CompletionInvariantRejected,
+    CompletionRejection,
 )
 from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.domain.analyzable_article import (
@@ -23,12 +23,12 @@ def complete_with_html(
     *,
     source_id: int,
     source_url: CanonicalArticleUrl,
-) -> AnalyzableArticle | CompletionInvariantRejected:
+) -> AnalyzableArticle | CompletionRejection:
     """抽出結果 (``AcquiredContent``) を観測値と merge し ``AnalyzableArticle`` に昇格。
 
     責務は薄いオーケストレーション: per-field の正本 merge は ``profile.resolve``
     (写像)、構築不変条件 (published_at 欠落含む) は ``AnalyzableArticle`` (出口契約)
-    が担い、本関数は組み立てと不能の証拠化 (``CompletionInvariantRejected``) のみ。
+    が担い、本関数は組み立てと不能の audit 翻訳 (``CompletionRejection``) のみ。
     取得失敗 (``AcquisitionFailure``) はここに来ない (service が acquire 段で捌く)。
     """
     obs_title = observed.title.value if observed.title is not None else None
@@ -52,10 +52,7 @@ def complete_with_html(
         source_url=source_url,
     )
     if isinstance(built, QualityTooLow):
-        return CompletionInvariantRejected(
-            error_class=built.error_class,
-            error_message=built.error_message,
-        )
+        return CompletionRejection.from_quality_too_low(built)
     return built
 
 
@@ -69,7 +66,7 @@ class ArticleHtmlCompleter:
 
     def complete(
         self, ready: ReadyForArticleCompletion, acquired: AcquiredContent
-    ) -> AnalyzableArticle | CompletionInvariantRejected:
+    ) -> AnalyzableArticle | CompletionRejection:
         """``ready`` の観測値と ``acquired`` を merge し完成 or 構築拒否を返す。"""
         return complete_with_html(
             ready.observed,

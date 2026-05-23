@@ -8,7 +8,7 @@
 - Stage 1 取得: ``ArticleHtmlAcquirer.acquire`` (never raise の二値) を呼び
   ``AcquiredContent | AcquisitionFailure`` を値で受ける。
 - Stage 2 完成: ``ArticleHtmlCompleter.complete`` (純粋 sync アダプタ) に
-  ``AcquiredContent`` を渡し ``AnalyzableArticle | CompletionInvariantRejected``
+  ``AcquiredContent`` を渡し ``AnalyzableArticle | CompletionRejection``
   を受ける。
 - Stage 3 永続化: ``articles`` INSERT + ``pending_html_articles`` DELETE は同 tx で
   一括 commit。真の DB 異常は例外として伝播。
@@ -35,8 +35,7 @@ from app.collection.article_completion.acquisition_failure import (
 )
 from app.collection.article_completion.completer import ArticleHtmlCompleter
 from app.collection.article_completion.completion_failure import (
-    CompletionInvariantRejected,
-    classify_article_completion_failure,
+    CompletionRejection,
 )
 from app.collection.article_completion.failure_handling import (
     ArticleCompletionFailureHandler,
@@ -96,10 +95,8 @@ class ArticleCompletionService:
         match built:
             case AnalyzableArticle() as advanced:
                 pass
-            case CompletionInvariantRejected() as rejected:
-                await self._failure_handler.handle_completion_rejected(
-                    ready, classify_article_completion_failure(rejected)
-                )
+            case CompletionRejection() as rejection:
+                await self._failure_handler.handle_completion_rejected(ready, rejection)
                 return None
             case _ as unreachable:
                 assert_never(unreachable)

@@ -1,10 +1,10 @@
 """``ArticleHtmlCompleter`` の契約テスト — 純粋 sync アダプタの出力型保証。
 
 検証する不変条件 (副作用ゼロ。DB も network も触らず ``AcquiredContent`` を受けて
-``AnalyzableArticle | CompletionInvariantRejected`` の閉じ union に必ず収まる):
+``AnalyzableArticle | CompletionRejection`` の閉じ union に必ず収まる):
 
 - ``AcquiredContent`` + promotion 成功 → ``AnalyzableArticle``
-- ``AcquiredContent`` + promotion 失敗 → ``CompletionInvariantRejected``
+- ``AcquiredContent`` + promotion 失敗 → ``CompletionRejection``
 
 取得 (acquire) は service が先に済ませ、成功した ``AcquiredContent`` だけが
 completer に渡る。transport / acquisition 失敗の値化は acquirer / service の責務で、
@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 from app.collection.article_completion.acquirer import AcquiredContent
 from app.collection.article_completion.completer import ArticleHtmlCompleter
 from app.collection.article_completion.completion_failure import (
-    CompletionInvariantRejected,
+    CompletionRejection,
 )
 from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.domain.analyzable_article import AnalyzableArticle
@@ -74,12 +74,13 @@ def test_acquired_content_success_returns_analyzable_article() -> None:
     assert isinstance(result, AnalyzableArticle)
 
 
-def test_promotion_failure_returns_invariant_rejected() -> None:
+def test_promotion_failure_returns_completion_rejection() -> None:
     """published_at が観測 / HTML 両方欠落 → 必須 Field 違反として
-    ``CompletionInvariantRejected`` に畳む。"""
+    ``CompletionRejection`` に畳む。"""
     content = AcquiredContent(title="OK", body="x" * 200, published_at=None)
     result = ArticleHtmlCompleter().complete(_ready(observed_published=None), content)
 
-    assert isinstance(result, CompletionInvariantRejected)
-    assert result.error_class == "ValidationError"
-    assert "published_at" in result.error_message
+    assert isinstance(result, CompletionRejection)
+    assert result.reason_code == "completion_invariant_rejected"
+    assert result.detail is not None
+    assert "published_at" in result.detail

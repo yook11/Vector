@@ -28,7 +28,7 @@ class QualityTooLow:
 
     construct を拒んだ ``ValueError`` の証拠 (class 名 + message) を保持する。
     published_at 欠落も他の不変条件違反と同様にこの型へ畳む。
-    completer がこれを audit 語彙 ``CompletionInvariantRejected`` に翻訳する。
+    completer がこれを audit 語彙 ``CompletionRejection`` に翻訳する。
     message の長さ上限は下流の翻訳先が担うため、本型は最小に保つ。
     """
 

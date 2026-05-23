@@ -6,10 +6,10 @@
 - title ``html_preferred``: HTML title が正本になる (旧 anthropic/ornl)
 - title ``observed_preferred``: 観測 title が常勝 (旧 default。観測常在のため)
 - published_at ``observed_preferred``: 観測優先 / HTML fallback / 両欠は
-  ``CompletionInvariantRejected`` (必須 Field 違反として畳む)
+  ``CompletionRejection`` (必須 Field 違反として畳む)
 - **観測 body があっても ``html_required`` のとき完成 body は HTML 由来**
   (取れた事実を全部保存しても merge は不変 = forward-compat の核)
-- ``AnalyzableArticle`` invariant 違反は ``CompletionInvariantRejected`` で wrap
+- ``AnalyzableArticle`` invariant 違反は ``CompletionRejection`` で wrap
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 from app.collection.article_completion.acquirer import AcquiredContent
 from app.collection.article_completion.completer import complete_with_html
 from app.collection.article_completion.completion_failure import (
-    CompletionInvariantRejected,
+    CompletionRejection,
 )
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
@@ -111,11 +111,12 @@ def test_published_at_falls_back_to_html_when_observed_absent() -> None:
 
 def test_published_at_missing_both_fails_as_invariant_rejected() -> None:
     """published_at が観測 / HTML 両欠 → 必須 Field 違反として
-    ``CompletionInvariantRejected`` に畳む (title/body/source_id と同種)。"""
+    ``CompletionRejection`` に畳む (title/body/source_id と同種)。"""
     result = _promote(_observed(published=None), DEFAULT_POLICY, _html(published=None))
-    assert isinstance(result, CompletionInvariantRejected)
-    assert result.error_class == "ValidationError"
-    assert "published_at" in result.error_message
+    assert isinstance(result, CompletionRejection)
+    assert result.reason_code == "completion_invariant_rejected"
+    assert result.detail is not None
+    assert "published_at" in result.detail
 
 
 def test_observed_body_is_ignored_when_body_html_required() -> None:
@@ -134,6 +135,7 @@ def test_observed_body_is_ignored_when_body_html_required() -> None:
 def test_analyzable_invariant_violation_wrapped_as_invariant_rejected() -> None:
     """``AnalyzableArticle`` の Field invariant 違反は名前付き失敗に畳む。"""
     result = _promote(_observed(), DEFAULT_POLICY, _html(), source_id=0)
-    assert isinstance(result, CompletionInvariantRejected)
-    assert result.error_class == "ValidationError"
-    assert "source_id" in result.error_message
+    assert isinstance(result, CompletionRejection)
+    assert result.reason_code == "completion_invariant_rejected"
+    assert result.detail is not None
+    assert "source_id" in result.detail

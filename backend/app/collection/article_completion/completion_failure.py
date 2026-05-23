@@ -4,40 +4,24 @@
 失敗は ``AcquisitionFailure`` が担う。本モジュールは completion 段のうち
 「観測値 + HTML 取得結果を merge して AnalyzableArticle を構築する」段で
 起きる失敗だけを扱う。失敗は構築時の不変条件違反 (published_at 欠落を含む) に
-集約され、例外証拠 (class+message) を frozen dataclass のフィールドとして
-保持し、後段の audit と log emit の双方で構造のまま利用される。
+集約され、domain の ``QualityTooLow`` (例外証拠) を ``CompletionRejection`` に直接
+畳む (中間型を持たない)。
 
-設計は ``acquisition_failure`` と同じ:
-- ``reason: ClassVar[str]`` は監査ラベル専用。
-- ``__post_init__`` は upper-bound truncate のみ。
+設計:
+- ``CompletionRejection`` は Accept 軸の単一 disposition。``reason_code`` は audit
+  集計 key、``detail`` は例外証拠 (class+message) を畳んだ文字列。
+- ``from_quality_too_low`` が domain 失敗を audit 語彙に翻訳する唯一の入口。
+- ``__post_init__`` は ``detail`` の upper-bound truncate のみ。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import Self
+
+from app.collection.domain.analyzable_article import QualityTooLow
 
 _ERROR_MESSAGE_MAX = 500
-
-
-@dataclass(frozen=True)
-class CompletionInvariantRejected:
-    """merge した値が AnalyzableArticle の Field 制約を満たさず完成を拒否された。
-
-    ``AnalyzableArticle`` の不変条件 (title 長 / body 長 / published_at 必須 /
-    source_id > 0 等) を満たさず ``ValueError`` が raise されたケース。
-    例外証拠を保持する。
-    """
-
-    error_class: str
-    error_message: str
-    reason: ClassVar[str] = "invariant_rejected"
-
-    def __post_init__(self) -> None:
-        if len(self.error_message) > _ERROR_MESSAGE_MAX:
-            object.__setattr__(
-                self, "error_message", self.error_message[:_ERROR_MESSAGE_MAX]
-            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,16 +39,18 @@ class CompletionRejection:
     reason_code: str
     detail: str | None = None
 
+    def __post_init__(self) -> None:
+        if self.detail is not None and len(self.detail) > _ERROR_MESSAGE_MAX:
+            object.__setattr__(self, "detail", self.detail[:_ERROR_MESSAGE_MAX])
 
-def classify_article_completion_failure(
-    failure: CompletionInvariantRejected,
-) -> CompletionRejection:
-    """完成段の失敗を ``completion_*`` prefix の ``CompletionRejection`` に分類する。
+    @classmethod
+    def from_quality_too_low(cls, quality: QualityTooLow) -> Self:
+        """domain の構築拒否 (``QualityTooLow``) を audit 語彙に翻訳する。
 
-    例外証拠 (class+message) を ``detail`` に畳む。``reason_code`` は audit 集計
-    key として安定。
-    """
-    return CompletionRejection(
-        reason_code="completion_invariant_rejected",
-        detail=f"{failure.error_class}: {failure.error_message}",
-    )
+        ``reason_code`` は ``completion_*`` prefix の audit 集計 key として安定。
+        例外証拠 (class+message) を ``detail`` に畳む。
+        """
+        return cls(
+            reason_code="completion_invariant_rejected",
+            detail=f"{quality.error_class}: {quality.error_message}",
+        )
