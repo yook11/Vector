@@ -46,7 +46,7 @@ from app.collection.external_fetch_errors import (
     FetchResourceNotFoundError,
 )
 from app.collection.source_fetch.fetched_article import FetchedArticle
-from app.collection.source_fetch.pending_enqueue import PendingHtmlEnqueue
+from app.collection.source_fetch.repository import IncompleteArticleRepository
 from app.collection.source_fetch.strategy import SOURCES
 from app.collection.source_fetch.tools.fetch_tools import FetchTools
 from app.collection.sources.article_completion_policy import (
@@ -149,7 +149,7 @@ async def _make_pending(
         ``try_advance_from`` で構築するのと同じ厚い Ready。
     """
     canonical_url = CanonicalArticleUrl(url)
-    pending_id = await PendingHtmlEnqueue(db_session).enqueue(
+    pending_id = await IncompleteArticleRepository(db_session).save(
         observed or _observed(source, url),
         source_id=source.id,
         ready_at=datetime.now(UTC) - timedelta(seconds=1),

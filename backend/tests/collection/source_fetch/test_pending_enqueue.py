@@ -1,4 +1,4 @@
-"""``PendingHtmlEnqueue`` の統合テスト (実 Postgres)。
+"""``IncompleteArticleRepository`` の統合テスト (実 Postgres)。
 
 Stage 1 (source_fetch) の ``pending_html_articles`` 投入 (``status='open'``
 INSERT) の振る舞いを ``UNIQUE(url)`` と合わせて検証する。``url``
@@ -23,7 +23,7 @@ from app.collection.domain.observed_article import (
     ObservedOrigin,
 )
 from app.collection.domain.value_objects import PublishedAt
-from app.collection.source_fetch.pending_enqueue import PendingHtmlEnqueue
+from app.collection.source_fetch.repository import IncompleteArticleRepository
 from app.models.news_source import NewsSource
 from app.shared.value_objects.source_name import SourceName
 
@@ -46,8 +46,8 @@ def _observed(
 async def test_enqueue_returns_pending_id(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
-    enqueue = PendingHtmlEnqueue(db_session)
-    pending_id = await enqueue.enqueue(
+    enqueue = IncompleteArticleRepository(db_session)
+    pending_id = await enqueue.save(
         _observed(url="https://example.com/p/save", source_name=sample_source.name),
         source_id=sample_source.id,
         ready_at=datetime.now(UTC),
@@ -62,8 +62,8 @@ async def test_enqueue_returns_none_on_duplicate_url(
 ) -> None:
     """``UNIQUE(url)`` 違反 (同 tick race) は ``None`` で吸収される。"""
     url = "https://example.com/p/dup"
-    enqueue = PendingHtmlEnqueue(db_session)
-    first = await enqueue.enqueue(
+    enqueue = IncompleteArticleRepository(db_session)
+    first = await enqueue.save(
         _observed(url=url, source_name=sample_source.name),
         source_id=sample_source.id,
         ready_at=datetime.now(UTC),
@@ -71,7 +71,7 @@ async def test_enqueue_returns_none_on_duplicate_url(
     await db_session.commit()
     assert first is not None
 
-    second = await enqueue.enqueue(
+    second = await enqueue.save(
         _observed(url=url, source_name=sample_source.name),
         source_id=sample_source.id,
         ready_at=datetime.now(UTC),
@@ -93,8 +93,8 @@ async def test_enqueue_writes_identity_in_columns_not_jsonb(
     Stage 1 writer 1 回呼んだ後の同一行の状態を 1 fixture で語る。
     """
     url = CanonicalArticleUrl("https://example.com/p/url-only")
-    enqueue = PendingHtmlEnqueue(db_session)
-    pending_id = await enqueue.enqueue(
+    enqueue = IncompleteArticleRepository(db_session)
+    pending_id = await enqueue.save(
         _observed(url=str(url), source_name=sample_source.name),
         source_id=sample_source.id,
         ready_at=datetime.now(UTC),
@@ -136,8 +136,8 @@ async def test_enqueue_row_consistent_with_news_sources_join(
     実際に書いている」ことを動作で語る (#2 は構造、#7 は writer の output)。
     """
     url = "https://example.com/p/join-check"
-    enqueue = PendingHtmlEnqueue(db_session)
-    pending_id = await enqueue.enqueue(
+    enqueue = IncompleteArticleRepository(db_session)
+    pending_id = await enqueue.save(
         _observed(url=url, source_name=sample_source.name),
         source_id=sample_source.id,
         ready_at=datetime.now(UTC),

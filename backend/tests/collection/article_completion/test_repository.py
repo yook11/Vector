@@ -34,7 +34,7 @@ from app.collection.domain.observed_article import (
 )
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.source_fetch.fetched_article import FetchedArticle
-from app.collection.source_fetch.pending_enqueue import PendingHtmlEnqueue
+from app.collection.source_fetch.repository import IncompleteArticleRepository
 from app.collection.source_fetch.strategy import SOURCES
 from app.collection.source_fetch.tools.fetch_tools import FetchTools
 from app.collection.sources.article_completion_policy import (
@@ -140,7 +140,7 @@ async def _enqueue(
     ready_at: datetime,
 ) -> int:
     """Stage 1 投入で ``status='open'`` の pending を 1 件作る。"""
-    pending_id = await PendingHtmlEnqueue(db_session).enqueue(
+    pending_id = await IncompleteArticleRepository(db_session).save(
         _observed(url=url, source_name=source_name, title=title),
         source_id=source_id,
         ready_at=ready_at,

@@ -44,7 +44,7 @@ from app.collection.domain.observed_article import (
     ObservedOrigin,
 )
 from app.collection.domain.value_objects import PublishedAt
-from app.collection.source_fetch.pending_enqueue import PendingHtmlEnqueue
+from app.collection.source_fetch.repository import IncompleteArticleRepository
 from app.models.news_source import NewsSource, SourceType
 from app.models.pending_html_article import PendingHtmlArticle
 from app.shared.value_objects.source_name import SourceName
@@ -87,7 +87,7 @@ async def _make_ready(
     claim 後 ``status='running'`` / ``attempt_count=1``。返す Ready は
     Task 層が ``try_advance_from`` で構築するのと同じ厚い precondition 型。
     """
-    pending_id = await PendingHtmlEnqueue(db_session).enqueue(
+    pending_id = await IncompleteArticleRepository(db_session).save(
         _observed(source, url),
         source_id=source.id,
         ready_at=datetime.now(UTC) - timedelta(seconds=1),

@@ -44,7 +44,7 @@ from app.collection.domain.observed_article import (
     ObservedOrigin,
 )
 from app.collection.domain.value_objects import PublishedAt
-from app.collection.source_fetch.pending_enqueue import PendingHtmlEnqueue
+from app.collection.source_fetch.repository import IncompleteArticleRepository
 from app.models.news_source import NewsSource
 from app.models.pending_html_article import PendingHtmlArticle as PendingHtmlArticleORM
 from app.shared.value_objects.safe_url import SafeUrl
@@ -104,8 +104,8 @@ async def _make_pending(
 
     # status='open' は enqueue で作る (CHECK 整合・JSONB serialization 込)
     if status == "open":
-        enqueue = PendingHtmlEnqueue(db_session)
-        pending_id = await enqueue.enqueue(
+        enqueue = IncompleteArticleRepository(db_session)
+        pending_id = await enqueue.save(
             _observed(source.name, url),
             source_id=source.id,
             ready_at=ready_at or datetime.now(UTC),

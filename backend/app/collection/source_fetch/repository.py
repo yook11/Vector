@@ -14,13 +14,13 @@ from app.collection.domain.observed_article import ObservedArticle
 from app.models.pending_html_article import PendingHtmlArticle as PendingHtmlArticleORM
 
 
-class PendingHtmlEnqueue:
+class IncompleteArticleRepository:
     """``pending_html_articles`` への Stage 1 投入 (``status='open'``)。"""
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def enqueue(
+    async def save(
         self,
         observed: ObservedArticle,
         *,

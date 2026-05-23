@@ -24,8 +24,8 @@ from app.collection.persistence.article_store import ArticleStore
 from app.collection.source_fetch.audit_repository import SourceFetchAuditRepository
 from app.collection.source_fetch.errors import SourceFetchError
 from app.collection.source_fetch.fetched_article_converter import ConversionRejection
-from app.collection.source_fetch.pending_enqueue import PendingHtmlEnqueue
 from app.collection.source_fetch.protocol import Fetcher
+from app.collection.source_fetch.repository import IncompleteArticleRepository
 from app.observability.redact import redact_secrets
 
 logger = structlog.get_logger(__name__)
@@ -51,7 +51,7 @@ class ArticleAcquisitionService:
         async with self._session_factory() as session:
             fetcher = self._fetcher_factory()
             article_store = ArticleStore(session)
-            pending_enqueue = PendingHtmlEnqueue(session)
+            pending_enqueue = IncompleteArticleRepository(session)
 
             persisted_ids: list[int] = []
 
@@ -70,7 +70,7 @@ class ArticleAcquisitionService:
                                 observed.source_url
                             ):
                                 continue
-                            await pending_enqueue.enqueue(
+                            await pending_enqueue.save(
                                 observed,
                                 source_id=source_id,
                                 ready_at=datetime.now(UTC),
