@@ -102,7 +102,6 @@ class ArticleCompletionService:
                 assert_never(unreachable)
 
         # Stage 3: 永続化。
-        canonical_url = ready.source_url
         async with self._session_factory() as session:
             result = await ArticleCompletionRepository(session).persist_completed(
                 ready, advanced
@@ -115,7 +114,7 @@ class ArticleCompletionService:
                 pending_id=ready.pending_id,
                 source_id=ready.source_id,
                 attempt_count=ready.attempt_count,
-                canonical_url=str(canonical_url),
+                canonical_url=str(ready.source_url),
             )
             return None
 
@@ -124,7 +123,7 @@ class ArticleCompletionService:
                 "article_completion_conflict_lost",
                 pending_id=ready.pending_id,
                 source_id=ready.source_id,
-                canonical_url=str(canonical_url),
+                canonical_url=str(ready.source_url),
             )
             return None
 
@@ -133,6 +132,6 @@ class ArticleCompletionService:
             pending_id=ready.pending_id,
             source_id=ready.source_id,
             article_id=result.article_id,
-            canonical_url=str(canonical_url),
+            canonical_url=str(ready.source_url),
         )
         return result.article_id
