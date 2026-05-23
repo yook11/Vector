@@ -24,7 +24,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.collection import tasks as collection_tasks
-from app.collection.source_fetch.errors import SourceFetchError
+from app.collection.article_collection.errors import SourceFetchError
 from app.collection.staged import IngestSourceArg
 from app.models.news_source import NewsSource, SourceType
 from app.models.pipeline_event import PipelineEvent
@@ -71,7 +71,7 @@ def _patch_service_to_raise(monkeypatch: pytest.MonkeyPatch, exc: Exception) -> 
         {"exc": exc},
     )
     monkeypatch.setattr(
-        "app.collection.source_fetch.service.ArticleAcquisitionService",
+        "app.collection.article_collection.service.ArticleAcquisitionService",
         cls,
     )
 

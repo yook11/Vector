@@ -15,6 +15,11 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from app.collection.article_collection.tools.http_error_translation import (
+    RECOVERABLE_FETCH_ERRORS,
+    classify_fetch_status,
+    translate_fetch_exception,
+)
 from app.collection.external_fetch_errors import (
     FetchAccessDeniedError,
     FetchGatewayError,
@@ -28,11 +33,6 @@ from app.collection.external_fetch_errors import (
     FetchSsrfBlockedError,
     FetchTimeoutError,
     FetchUnexpectedStatusError,
-)
-from app.collection.source_fetch.tools.http_error_translation import (
-    RECOVERABLE_FETCH_ERRORS,
-    classify_fetch_status,
-    translate_fetch_exception,
 )
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 

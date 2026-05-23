@@ -42,18 +42,20 @@ from typing import Any
 
 import pytest
 
+from app.collection.article_collection.article_fetcher import ArticleFetcher
+from app.collection.article_collection.fetched_article import FetchedArticle
+from app.collection.article_collection.fetched_article_converter import (
+    ConversionRejection,
+)
+from app.collection.article_collection.reader.crossref_reader import (
+    CrossrefEntry,
+    CrossrefReader,
+    normalize_item,
+)
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.external_fetch_errors import (
     FetchAccessDeniedError,
     FetchOriginServerError,
-)
-from app.collection.source_fetch.article_fetcher import ArticleFetcher
-from app.collection.source_fetch.fetched_article import FetchedArticle
-from app.collection.source_fetch.fetched_article_converter import ConversionRejection
-from app.collection.source_fetch.reader.crossref_reader import (
-    CrossrefEntry,
-    CrossrefReader,
-    normalize_item,
 )
 from app.collection.sources.definitions.mdpi import (
     MDPIMaterialsSource,

@@ -9,11 +9,11 @@ test_source_adapter_profiles に集約)。
 
 from __future__ import annotations
 
+from app.collection.article_collection.article_fetcher import ArticleFetcher
+from app.collection.article_collection.fetched_article import FetchedArticle
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.article_limits import ARTICLE_BODY_MIN_LENGTH
 from app.collection.domain.observed_article import ObservedArticle
-from app.collection.source_fetch.article_fetcher import ArticleFetcher
-from app.collection.source_fetch.fetched_article import FetchedArticle
 from app.collection.sources.definitions.venturebeat import VentureBeatSource
 from tests.collection.fetchers._fixture_tools import fixture_tools
 

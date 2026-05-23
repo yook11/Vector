@@ -21,10 +21,10 @@ import feedparser
 import httpx
 import structlog
 
-from app.collection.external_fetch_errors import FetchParseError
-from app.collection.source_fetch.tools.http_error_translation import (
+from app.collection.article_collection.tools.http_error_translation import (
     translate_fetch_exception,
 )
+from app.collection.external_fetch_errors import FetchParseError
 from app.shared.security.safe_http import make_safe_async_client
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 

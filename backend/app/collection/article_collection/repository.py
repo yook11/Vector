@@ -1,4 +1,4 @@
-"""Stage 1 (source_fetch) の ``incomplete_articles`` 投入専用 writer。
+"""Stage 1 (article_collection) の ``incomplete_articles`` 投入専用 writer。
 
 commit は呼び出し側 (Service) が行う。本 writer は SQL 発行までで止まる。
 """

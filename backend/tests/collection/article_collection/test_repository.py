@@ -1,6 +1,6 @@
 """``IncompleteArticleRepository`` の統合テスト (実 Postgres)。
 
-Stage 1 (source_fetch) の ``incomplete_articles`` 投入 (``status='open'``
+Stage 1 (article_collection) の ``incomplete_articles`` 投入 (``status='open'``
 INSERT) の振る舞いを ``UNIQUE(url)`` と合わせて検証する。``url``
 (``CanonicalArticleUrl`` 型で canonical 性を構造保証) が記事 identity の
 唯一の authoritative。Stage 2 の claim/sweep/状態遷移は
@@ -16,6 +16,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.collection.article_collection.repository import IncompleteArticleRepository
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import (
     ObservedArticle,
@@ -23,7 +24,6 @@ from app.collection.domain.observed_article import (
     ObservedOrigin,
 )
 from app.collection.domain.value_objects import PublishedAt
-from app.collection.source_fetch.repository import IncompleteArticleRepository
 from app.models.news_source import NewsSource
 from app.shared.value_objects.source_name import SourceName
 

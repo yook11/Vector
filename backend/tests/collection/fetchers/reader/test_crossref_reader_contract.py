@@ -63,18 +63,18 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
+from app.collection.article_collection.reader.crossref_reader import (
+    CrossrefEntry,
+    CrossrefReader,
+)
 from app.collection.external_fetch_errors import (
     FetchAccessDeniedError,
     FetchOriginServerError,
 )
-from app.collection.source_fetch.reader.crossref_reader import (
-    CrossrefEntry,
-    CrossrefReader,
-)
 
 # reader/ -> fetchers/ -> collection/ -> tests/ -> tests/fixtures (C1 と同一)
 _FIXTURES_DIR = Path(__file__).parents[3] / "fixtures"
-_MOD = "app.collection.source_fetch.reader.crossref_reader"
+_MOD = "app.collection.article_collection.reader.crossref_reader"
 _FIXTURE = "mdpi_crossref.json"
 
 

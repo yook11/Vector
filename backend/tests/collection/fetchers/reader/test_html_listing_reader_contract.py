@@ -25,20 +25,20 @@ import httpx
 import pytest
 from lxml import html
 
+from app.collection.article_collection.reader.html_listing_reader import (
+    HtmlListingEntry,
+    HtmlListingReader,
+)
 from app.collection.external_fetch_errors import (
     FetchAccessDeniedError,
     FetchOriginServerError,
-)
-from app.collection.source_fetch.reader.html_listing_reader import (
-    HtmlListingEntry,
-    HtmlListingReader,
 )
 
 # reader/ -> fetchers/ -> collection/ -> tests/ -> tests/fixtures (C1 と同一)
 _FIXTURES_DIR = Path(__file__).parents[3] / "fixtures"
 # HtmlListingReader は RawHttpClient を wrap するため transport seam は
 # raw_http_client モジュールに在る (普遍オラクルと同じ patch 対象)。
-_MOD = "app.collection.source_fetch.tools.raw_http_client"
+_MOD = "app.collection.article_collection.tools.raw_http_client"
 _FIXTURE = "ornl_listing.html"
 _URL = "https://www.ornl.gov/news"
 # ORNL listing の detail link 抽出 xpath (Source 宣言値。fixture は ORNL の

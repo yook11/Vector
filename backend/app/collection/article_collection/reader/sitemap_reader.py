@@ -15,8 +15,8 @@ from datetime import UTC, datetime
 
 from lxml import etree
 
+from app.collection.article_collection.tools.raw_http_client import RawHttpClient
 from app.collection.external_fetch_errors import FetchParseError
-from app.collection.source_fetch.tools.raw_http_client import RawHttpClient
 
 _SITEMAP_NS = "http://www.sitemaps.org/schemas/sitemap/0.9"
 

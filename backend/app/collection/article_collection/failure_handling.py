@@ -1,4 +1,4 @@
-"""Stage 1 (source_fetch) の error handling policy を実行する application service。
+"""Stage 1 (article_collection) の error handling policy を実行する service。
 
 ``SourceFetchError`` → audit して return (False、次 cron tick で再 dispatch)。
 catch-all → audit + ``logger.exception`` で可視化し reraise (True)。
@@ -9,8 +9,10 @@ from __future__ import annotations
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.collection.source_fetch.audit_repository import SourceFetchAuditRepository
-from app.collection.source_fetch.errors import SourceFetchError
+from app.collection.article_collection.audit_repository import (
+    SourceFetchAuditRepository,
+)
+from app.collection.article_collection.errors import SourceFetchError
 from app.observability.redact import redact_secrets
 
 logger = structlog.get_logger(__name__)

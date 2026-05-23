@@ -58,13 +58,13 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from app.collection.source_fetch.reader.rss_reader import RssEntry, RssReader
+from app.collection.article_collection.reader.rss_reader import RssEntry, RssReader
 
 # reader/ -> fetchers/ -> collection/ -> tests/ -> tests/fixtures
 _FIXTURES_DIR = Path(__file__).parents[3] / "fixtures"
 
 # transport を差し替える対象モジュール (Reader 実装の所在)。
-_MOD = "app.collection.source_fetch.reader.rss_reader"
+_MOD = "app.collection.article_collection.reader.rss_reader"
 
 # feed の「形」の代表。各標本が特定 property の失敗モードを実際に踏む:
 #   nist_rss.xml          RSS 2.0 / <title> に &amp;       -> 平文化を非空虚に

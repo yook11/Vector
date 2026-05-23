@@ -1,4 +1,4 @@
-"""Stage 1 (source_fetch) の marker / per-entry 変換失敗例外。
+"""Stage 1 (article_collection) の marker / per-entry 変換失敗例外。
 
 ``app.collection.errors.SourceFetchError`` と同名だが別 module の別クラス。
 """

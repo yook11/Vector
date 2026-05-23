@@ -17,16 +17,16 @@ from typing import NoReturn
 
 import structlog
 
+from app.collection.article_collection.errors import (
+    ConversionReason,
+    FetchedArticleConversionError,
+)
+from app.collection.article_collection.fetched_article import FetchedArticle
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.article_limits import ARTICLE_TITLE_MAX_LENGTH
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.domain.value_objects import PublishedAt
-from app.collection.source_fetch.errors import (
-    ConversionReason,
-    FetchedArticleConversionError,
-)
-from app.collection.source_fetch.fetched_article import FetchedArticle
 from app.collection.sources.article_source import ArticleSource
 from app.shared.value_objects.source_name import SourceName
 

@@ -15,10 +15,10 @@ from collections.abc import AsyncIterator, Callable
 
 import structlog
 
+from app.collection.article_collection.fetched_article import FetchedArticle
+from app.collection.article_collection.reader.rss_reader import ParseMode, RssEntry
+from app.collection.article_collection.tools.fetch_tools import FetchTools
 from app.collection.external_fetch_errors import ExternalFetchError
-from app.collection.source_fetch.fetched_article import FetchedArticle
-from app.collection.source_fetch.reader.rss_reader import ParseMode, RssEntry
-from app.collection.source_fetch.tools.fetch_tools import FetchTools
 
 logger = structlog.get_logger(__name__)
 

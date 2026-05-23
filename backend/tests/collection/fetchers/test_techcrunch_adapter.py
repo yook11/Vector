@@ -10,11 +10,13 @@ test_source_adapter_profiles に集約)。
 
 from __future__ import annotations
 
+from app.collection.article_collection.article_fetcher import ArticleFetcher
+from app.collection.article_collection.errors import ConversionReason
+from app.collection.article_collection.fetched_article import FetchedArticle
+from app.collection.article_collection.fetched_article_converter import (
+    ConversionRejection,
+)
 from app.collection.domain.observed_article import ObservedArticle
-from app.collection.source_fetch.article_fetcher import ArticleFetcher
-from app.collection.source_fetch.errors import ConversionReason
-from app.collection.source_fetch.fetched_article import FetchedArticle
-from app.collection.source_fetch.fetched_article_converter import ConversionRejection
 from app.collection.sources.definitions.techcrunch import TechCrunchSource
 from tests.collection.fetchers._fixture_tools import fixture_tools
 from tests.collection.fetchers._invariant import passports_only

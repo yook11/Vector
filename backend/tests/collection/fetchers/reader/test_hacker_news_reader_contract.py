@@ -58,18 +58,18 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
+from app.collection.article_collection.reader.algolia_hn_reader import (
+    HackerNewsEntry,
+    HackerNewsReader,
+)
 from app.collection.external_fetch_errors import (
     FetchAccessDeniedError,
     FetchOriginServerError,
 )
-from app.collection.source_fetch.reader.algolia_hn_reader import (
-    HackerNewsEntry,
-    HackerNewsReader,
-)
 
 # reader/ -> fetchers/ -> collection/ -> tests/ -> tests/fixtures (C1 と同一)
 _FIXTURES_DIR = Path(__file__).parents[3] / "fixtures"
-_MOD = "app.collection.source_fetch.reader.algolia_hn_reader"
+_MOD = "app.collection.article_collection.reader.algolia_hn_reader"
 _FIXTURE = "hacker_news_hits.json"
 
 

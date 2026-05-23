@@ -15,8 +15,11 @@ from pathlib import Path
 
 import feedparser
 
-from app.collection.source_fetch.fetched_article import FetchedArticle
-from app.collection.source_fetch.reader.rss_reader import RssEntry, normalize_entry
+from app.collection.article_collection.fetched_article import FetchedArticle
+from app.collection.article_collection.reader.rss_reader import (
+    RssEntry,
+    normalize_entry,
+)
 from app.collection.sources.definitions.meta_ai import (
     MetaAISource,
     is_collectable_meta_ai_entry,

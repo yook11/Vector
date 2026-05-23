@@ -19,10 +19,12 @@ from collections.abc import AsyncIterator
 from typing import ClassVar
 from urllib.parse import urljoin, urlparse
 
+from app.collection.article_collection.fetched_article import FetchedArticle
+from app.collection.article_collection.reader.html_listing_reader import (
+    HtmlListingEntry,
+)
+from app.collection.article_collection.tools.fetch_tools import FetchTools
 from app.collection.domain.observed_article import ObservedOrigin
-from app.collection.source_fetch.fetched_article import FetchedArticle
-from app.collection.source_fetch.reader.html_listing_reader import HtmlListingEntry
-from app.collection.source_fetch.tools.fetch_tools import FetchTools
 from app.collection.sources.article_completion_policy import (
     HTML_TITLE_POLICY,
     ArticleCompletionPolicy,

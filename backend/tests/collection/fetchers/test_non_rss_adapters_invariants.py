@@ -29,21 +29,21 @@ from typing import Any
 
 import pytest
 
-from app.collection.domain.analyzable_article import AnalyzableArticle
-from app.collection.domain.observed_article import ObservedArticle
-from app.collection.source_fetch.article_fetcher import ArticleFetcher
-from app.collection.source_fetch.reader.algolia_hn_reader import (
+from app.collection.article_collection.article_fetcher import ArticleFetcher
+from app.collection.article_collection.reader.algolia_hn_reader import (
     HackerNewsEntry,
     HackerNewsReader,
     normalize_hit,
 )
-from app.collection.source_fetch.reader.crossref_reader import (
+from app.collection.article_collection.reader.crossref_reader import (
     CrossrefEntry,
     CrossrefReader,
     normalize_item,
 )
-from app.collection.source_fetch.tools.fetch_tools import FetchTools
-from app.collection.source_fetch.tools.raw_http_client import RawHttpClient
+from app.collection.article_collection.tools.fetch_tools import FetchTools
+from app.collection.article_collection.tools.raw_http_client import RawHttpClient
+from app.collection.domain.analyzable_article import AnalyzableArticle
+from app.collection.domain.observed_article import ObservedArticle
 from app.collection.sources.article_source import ArticleSource
 from app.collection.sources.definitions.anthropic import AnthropicSource
 from app.collection.sources.definitions.hacker_news import HackerNewsSource

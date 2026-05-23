@@ -10,10 +10,10 @@ import re
 from collections.abc import AsyncIterator
 from typing import ClassVar
 
+from app.collection.article_collection.fetched_article import FetchedArticle
+from app.collection.article_collection.reader.rss_reader import RssEntry
+from app.collection.article_collection.tools.fetch_tools import FetchTools
 from app.collection.domain.observed_article import ObservedOrigin
-from app.collection.source_fetch.fetched_article import FetchedArticle
-from app.collection.source_fetch.reader.rss_reader import RssEntry
-from app.collection.source_fetch.tools.fetch_tools import FetchTools
 from app.collection.sources.article_completion_policy import (
     DEFAULT_POLICY,
     ArticleCompletionPolicy,

@@ -96,11 +96,13 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from app.collection.source_fetch.reader.algolia_hn_reader import HackerNewsReader
-from app.collection.source_fetch.reader.crossref_reader import CrossrefReader
-from app.collection.source_fetch.reader.html_listing_reader import HtmlListingReader
-from app.collection.source_fetch.reader.rss_reader import RssReader
-from app.collection.source_fetch.reader.sitemap_reader import SitemapReader
+from app.collection.article_collection.reader.algolia_hn_reader import HackerNewsReader
+from app.collection.article_collection.reader.crossref_reader import CrossrefReader
+from app.collection.article_collection.reader.html_listing_reader import (
+    HtmlListingReader,
+)
+from app.collection.article_collection.reader.rss_reader import RssReader
+from app.collection.article_collection.reader.sitemap_reader import SitemapReader
 
 # reader/ -> fetchers/ -> collection/ -> tests/ -> tests/fixtures (C1 と同一)
 _FIXTURES_DIR = Path(__file__).parents[3] / "fixtures"
@@ -128,7 +130,7 @@ class _Mechanism:
 _MECHANISMS: list[_Mechanism] = [
     _Mechanism(
         name="rss",
-        module="app.collection.source_fetch.reader.rss_reader",
+        module="app.collection.article_collection.reader.rss_reader",
         fixture="nist_rss.xml",
         invoke=lambda: RssReader().fetch(
             endpoint_url=_URL, source_name=_NAME, parse_mode="bytes"
@@ -136,7 +138,7 @@ _MECHANISMS: list[_Mechanism] = [
     ),
     _Mechanism(
         name="hacker_news",
-        module="app.collection.source_fetch.reader.algolia_hn_reader",
+        module="app.collection.article_collection.reader.algolia_hn_reader",
         fixture="hacker_news_hits.json",
         invoke=lambda: HackerNewsReader().search_recent_stories(
             source_name=_NAME,
@@ -147,7 +149,7 @@ _MECHANISMS: list[_Mechanism] = [
     ),
     _Mechanism(
         name="crossref",
-        module="app.collection.source_fetch.reader.crossref_reader",
+        module="app.collection.article_collection.reader.crossref_reader",
         fixture="mdpi_crossref.json",
         invoke=lambda: CrossrefReader().fetch_works(
             source_name=_NAME,
@@ -161,13 +163,13 @@ _MECHANISMS: list[_Mechanism] = [
         # raw_http_client に在る → module= は不変、invoke= のみ新 Reader へ
         # 貼り替え (triage 操作2 の合成版。module 移動を伴わない)。
         name="raw_sitemap",
-        module="app.collection.source_fetch.tools.raw_http_client",
+        module="app.collection.article_collection.tools.raw_http_client",
         fixture="anthropic_sitemap.xml",
         invoke=lambda: SitemapReader().fetch(url=_URL, source_name=_NAME),
     ),
     _Mechanism(
         name="raw_html_listing",
-        module="app.collection.source_fetch.tools.raw_http_client",
+        module="app.collection.article_collection.tools.raw_http_client",
         fixture="ornl_listing.html",
         # detail_link_xpath は Source 宣言値。fixture は ORNL の実 listing
         # なのでこの値で抽出する (HN min_points 等と同じ機構別 invoke 引数)。

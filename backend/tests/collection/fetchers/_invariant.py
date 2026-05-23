@@ -30,12 +30,14 @@ from __future__ import annotations
 from collections.abc import Iterable
 from datetime import UTC, datetime
 
+from app.collection.article_collection.fetched_article_converter import (
+    ConversionRejection,
+)
 from app.collection.article_completion.acquirer import AcquiredContent
 from app.collection.article_completion.completer import complete_with_html
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.domain.value_objects import PublishedAt
-from app.collection.source_fetch.fetched_article_converter import ConversionRejection
 from app.collection.sources.article_completion_policy import DEFAULT_POLICY
 
 _DEFAULT_HTML_PUBLISHED_AT = PublishedAt(value=datetime(2026, 5, 1, tzinfo=UTC))

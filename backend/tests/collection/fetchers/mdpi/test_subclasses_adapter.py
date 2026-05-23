@@ -18,8 +18,8 @@ from __future__ import annotations
 
 import pytest
 
+from app.collection.article_collection.strategy import SOURCES
 from app.collection.domain.observed_article import ObservedOrigin
-from app.collection.source_fetch.strategy import SOURCES
 from app.collection.sources.article_completion_policy import DEFAULT_POLICY
 from app.collection.sources.article_source import ArticleSource
 from app.collection.sources.definitions.mdpi import (

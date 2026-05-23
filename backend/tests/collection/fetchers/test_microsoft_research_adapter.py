@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.collection.source_fetch.fetched_article import FetchedArticle
+from app.collection.article_collection.fetched_article import FetchedArticle
 from app.collection.sources.definitions.microsoft_research import (
     MicrosoftResearchSource,
 )

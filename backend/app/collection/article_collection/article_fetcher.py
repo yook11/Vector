@@ -14,17 +14,17 @@ from collections.abc import AsyncIterator
 
 import structlog
 
-from app.collection.domain.analyzable_article import AnalyzableArticle
-from app.collection.domain.observed_article import ObservedArticle
-from app.collection.source_fetch.errors import (
+from app.collection.article_collection.errors import (
     ConversionReason,
     FetchedArticleConversionError,
 )
-from app.collection.source_fetch.fetched_article_converter import (
+from app.collection.article_collection.fetched_article_converter import (
     ConversionRejection,
     convert_fetched_article,
 )
-from app.collection.source_fetch.tools.fetch_tools import FetchTools
+from app.collection.article_collection.tools.fetch_tools import FetchTools
+from app.collection.domain.analyzable_article import AnalyzableArticle
+from app.collection.domain.observed_article import ObservedArticle
 from app.collection.sources.article_source import ArticleSource
 
 logger = structlog.get_logger(__name__)

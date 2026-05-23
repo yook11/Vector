@@ -21,10 +21,10 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from typing import ClassVar
 
+from app.collection.article_collection.fetched_article import FetchedArticle
+from app.collection.article_collection.reader.crossref_reader import CrossrefEntry
+from app.collection.article_collection.tools.fetch_tools import FetchTools
 from app.collection.domain.observed_article import ObservedOrigin
-from app.collection.source_fetch.fetched_article import FetchedArticle
-from app.collection.source_fetch.reader.crossref_reader import CrossrefEntry
-from app.collection.source_fetch.tools.fetch_tools import FetchTools
 from app.collection.sources.article_completion_policy import (
     DEFAULT_POLICY,
     ArticleCompletionPolicy,

@@ -12,9 +12,11 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Protocol
 
+from app.collection.article_collection.fetched_article_converter import (
+    ConversionRejection,
+)
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.observed_article import ObservedArticle
-from app.collection.source_fetch.fetched_article_converter import ConversionRejection
 
 
 class Fetcher(Protocol):

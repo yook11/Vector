@@ -20,21 +20,21 @@ from typing import ClassVar
 
 import pytest
 
+from app.collection.article_collection.errors import (
+    ConversionReason,
+    FetchedArticleConversionError,
+)
+from app.collection.article_collection.fetched_article import FetchedArticle
+from app.collection.article_collection.fetched_article_converter import (
+    convert_fetched_article,
+)
+from app.collection.article_collection.tools.fetch_tools import FetchTools
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.article_limits import (
     ARTICLE_BODY_MAX_LENGTH,
     ARTICLE_BODY_MIN_LENGTH,
 )
 from app.collection.domain.observed_article import ObservedArticle, ObservedOrigin
-from app.collection.source_fetch.errors import (
-    ConversionReason,
-    FetchedArticleConversionError,
-)
-from app.collection.source_fetch.fetched_article import FetchedArticle
-from app.collection.source_fetch.fetched_article_converter import (
-    convert_fetched_article,
-)
-from app.collection.source_fetch.tools.fetch_tools import FetchTools
 from app.collection.sources.article_completion_policy import (
     DEFAULT_POLICY,
     HTML_TITLE_POLICY,

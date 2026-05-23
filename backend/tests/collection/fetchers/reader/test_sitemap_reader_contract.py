@@ -26,20 +26,20 @@ import httpx
 import pytest
 from lxml import etree
 
+from app.collection.article_collection.reader.sitemap_reader import (
+    SitemapEntry,
+    SitemapReader,
+)
 from app.collection.external_fetch_errors import (
     FetchAccessDeniedError,
     FetchOriginServerError,
-)
-from app.collection.source_fetch.reader.sitemap_reader import (
-    SitemapEntry,
-    SitemapReader,
 )
 
 # reader/ -> fetchers/ -> collection/ -> tests/ -> tests/fixtures (C1 と同一)
 _FIXTURES_DIR = Path(__file__).parents[3] / "fixtures"
 # SitemapReader は RawHttpClient を wrap するため transport seam は
 # raw_http_client モジュールに在る (普遍オラクルと同じ patch 対象)。
-_MOD = "app.collection.source_fetch.tools.raw_http_client"
+_MOD = "app.collection.article_collection.tools.raw_http_client"
 _FIXTURE = "anthropic_sitemap.xml"
 _SITEMAP_NS = "http://www.sitemaps.org/schemas/sitemap/0.9"
 _URL = "https://www.anthropic.com/sitemap.xml"

@@ -17,15 +17,19 @@ from datetime import UTC, datetime
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.collection.article_collection.audit_repository import (
+    SourceFetchAuditRepository,
+)
+from app.collection.article_collection.errors import SourceFetchError
+from app.collection.article_collection.fetched_article_converter import (
+    ConversionRejection,
+)
+from app.collection.article_collection.protocol import Fetcher
+from app.collection.article_collection.repository import IncompleteArticleRepository
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.external_fetch_errors import ExternalFetchError
 from app.collection.persistence.article_store import ArticleStore
-from app.collection.source_fetch.audit_repository import SourceFetchAuditRepository
-from app.collection.source_fetch.errors import SourceFetchError
-from app.collection.source_fetch.fetched_article_converter import ConversionRejection
-from app.collection.source_fetch.protocol import Fetcher
-from app.collection.source_fetch.repository import IncompleteArticleRepository
 from app.observability.redact import redact_secrets
 
 logger = structlog.get_logger(__name__)

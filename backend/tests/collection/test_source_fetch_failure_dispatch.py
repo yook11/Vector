@@ -22,8 +22,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
-from app.collection.source_fetch.errors import SourceFetchError
-from app.collection.source_fetch.failure_handling import SourceFetchFailureHandler
+from app.collection.article_collection.errors import SourceFetchError
+from app.collection.article_collection.failure_handling import SourceFetchFailureHandler
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
 
@@ -131,7 +131,7 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
 
     with (
         patch(
-            "app.collection.source_fetch.failure_handling.SourceFetchAuditRepository"
+            "app.collection.article_collection.failure_handling.SourceFetchAuditRepository"
         ) as mock_audit_cls,
         capture_logs() as cap,
     ):

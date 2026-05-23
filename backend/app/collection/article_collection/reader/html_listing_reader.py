@@ -15,8 +15,8 @@ from dataclasses import dataclass
 
 from lxml import etree, html
 
+from app.collection.article_collection.tools.raw_http_client import RawHttpClient
 from app.collection.external_fetch_errors import FetchParseError
-from app.collection.source_fetch.tools.raw_http_client import RawHttpClient
 
 # defensive parsing: network fetch / 外部 entity を構造的に塞ぐ hardened parser。
 _HTML_PARSER = html.HTMLParser(no_network=True)

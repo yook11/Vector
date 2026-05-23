@@ -28,6 +28,10 @@ from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
+from app.collection.article_collection.fetched_article import FetchedArticle
+from app.collection.article_collection.repository import IncompleteArticleRepository
+from app.collection.article_collection.strategy import SOURCES
+from app.collection.article_collection.tools.fetch_tools import FetchTools
 from app.collection.article_completion.acquirer import AcquiredContent
 from app.collection.article_completion.acquisition_failure import FetchFailed, NotHtml
 from app.collection.article_completion.ready import ReadyForArticleCompletion
@@ -45,10 +49,6 @@ from app.collection.external_fetch_errors import (
     FetchOriginServerError,
     FetchResourceNotFoundError,
 )
-from app.collection.source_fetch.fetched_article import FetchedArticle
-from app.collection.source_fetch.repository import IncompleteArticleRepository
-from app.collection.source_fetch.strategy import SOURCES
-from app.collection.source_fetch.tools.fetch_tools import FetchTools
 from app.collection.sources.article_completion_policy import (
     HTML_TITLE_POLICY,
     ArticleCompletionPolicy,

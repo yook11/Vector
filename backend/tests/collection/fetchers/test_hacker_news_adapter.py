@@ -29,18 +29,20 @@ from typing import Any
 
 import pytest
 
+from app.collection.article_collection.article_fetcher import ArticleFetcher
+from app.collection.article_collection.fetched_article import FetchedArticle
+from app.collection.article_collection.fetched_article_converter import (
+    ConversionRejection,
+)
+from app.collection.article_collection.reader.algolia_hn_reader import (
+    HackerNewsEntry,
+    HackerNewsReader,
+    normalize_hit,
+)
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.external_fetch_errors import (
     FetchAccessDeniedError,
     FetchOriginServerError,
-)
-from app.collection.source_fetch.article_fetcher import ArticleFetcher
-from app.collection.source_fetch.fetched_article import FetchedArticle
-from app.collection.source_fetch.fetched_article_converter import ConversionRejection
-from app.collection.source_fetch.reader.algolia_hn_reader import (
-    HackerNewsEntry,
-    HackerNewsReader,
-    normalize_hit,
 )
 from app.collection.sources.definitions.hacker_news import (
     HN_HITS_PER_PAGE,

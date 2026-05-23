@@ -15,12 +15,12 @@ from sqlalchemy import delete, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
+from app.collection.article_collection.strategy import SOURCES
 from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.persistence.article_store import ArticleStore
-from app.collection.source_fetch.strategy import SOURCES
 from app.models.incomplete_article import IncompleteArticle as IncompleteArticleORM
 
 

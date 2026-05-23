@@ -6,7 +6,7 @@ from typing import ClassVar
 
 import httpx
 
-from app.collection.source_fetch.tools.http_error_translation import (
+from app.collection.article_collection.tools.http_error_translation import (
     translate_fetch_exception,
 )
 from app.shared.security.safe_http import make_safe_async_client

@@ -29,6 +29,14 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
+from app.collection.article_collection.errors import (
+    ConversionReason,
+    FetchedArticleConversionError,
+)
+from app.collection.article_collection.fetched_article_converter import (
+    ConversionRejection,
+)
+from app.collection.article_collection.service import ArticleAcquisitionService
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import (
@@ -37,12 +45,6 @@ from app.collection.domain.observed_article import (
     ObservedOrigin,
 )
 from app.collection.domain.value_objects import PublishedAt
-from app.collection.source_fetch.errors import (
-    ConversionReason,
-    FetchedArticleConversionError,
-)
-from app.collection.source_fetch.fetched_article_converter import ConversionRejection
-from app.collection.source_fetch.service import ArticleAcquisitionService
 from app.models.article import Article as ArticleORM
 from app.models.incomplete_article import IncompleteArticle as IncompleteArticleORM
 from app.models.news_source import NewsSource, SourceType

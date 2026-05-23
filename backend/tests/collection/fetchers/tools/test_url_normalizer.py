@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.collection.source_fetch.tools.url_normalizer import normalize_article_url
+from app.collection.article_collection.tools.url_normalizer import normalize_article_url
 from app.shared.value_objects.safe_url import SafeUrl
 
 

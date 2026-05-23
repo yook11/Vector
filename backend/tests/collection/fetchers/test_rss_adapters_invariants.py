@@ -29,9 +29,9 @@ from collections.abc import AsyncIterator
 
 import pytest
 
+from app.collection.article_collection.article_fetcher import ArticleFetcher
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.observed_article import ObservedArticle
-from app.collection.source_fetch.article_fetcher import ArticleFetcher
 from app.collection.sources.article_source import ArticleSource
 from app.collection.sources.definitions.cleantechnica import CleanTechnicaSource
 from app.collection.sources.definitions.cloudflare import CloudflareBlogSource

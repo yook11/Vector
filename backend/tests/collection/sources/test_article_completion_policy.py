@@ -159,5 +159,3 @@ def test_resolve_published_at_both_absent_returns_none_not_failure() -> None:
         DEFAULT_POLICY, observed_published_at=None, html_published_at=None
     )
     assert resolved.published_at is None
-
-

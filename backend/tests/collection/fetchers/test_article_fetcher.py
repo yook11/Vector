@@ -17,16 +17,18 @@ from typing import ClassVar
 
 import pytest
 
+from app.collection.article_collection import article_fetcher as article_fetcher_module
+from app.collection.article_collection.article_fetcher import ArticleFetcher
+from app.collection.article_collection.errors import ConversionReason
+from app.collection.article_collection.fetched_article import FetchedArticle
+from app.collection.article_collection.fetched_article_converter import (
+    ConversionRejection,
+)
+from app.collection.article_collection.tools.fetch_tools import FetchTools
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.article_limits import ARTICLE_BODY_MIN_LENGTH
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import ObservedArticle, ObservedOrigin
-from app.collection.source_fetch import article_fetcher as article_fetcher_module
-from app.collection.source_fetch.article_fetcher import ArticleFetcher
-from app.collection.source_fetch.errors import ConversionReason
-from app.collection.source_fetch.fetched_article import FetchedArticle
-from app.collection.source_fetch.fetched_article_converter import ConversionRejection
-from app.collection.source_fetch.tools.fetch_tools import FetchTools
 from app.collection.sources.article_completion_policy import (
     DEFAULT_POLICY,
     ArticleCompletionPolicy,

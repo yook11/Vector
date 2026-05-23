@@ -19,7 +19,7 @@ from app.brokers import (
     broker_content,
     broker_metadata,
 )
-from app.collection.source_fetch.failure_handling import SourceFetchFailureHandler
+from app.collection.article_collection.failure_handling import SourceFetchFailureHandler
 from app.collection.staged import IngestSourceArg
 from app.models.fetch_log import FetchLog, FetchStatus
 from app.models.news_source import NewsSource
@@ -121,8 +121,8 @@ async def ingest_source(
     """
     from app.analysis.curation.domain.ready import CurationTrigger
     from app.analysis.curation.tasks import curate_content
-    from app.collection.source_fetch.service import ArticleAcquisitionService
-    from app.collection.source_fetch.strategy import FETCHERS
+    from app.collection.article_collection.service import ArticleAcquisitionService
+    from app.collection.article_collection.strategy import FETCHERS
 
     source_id = arg.id
     logger.info("ingest_source_started", source_id=source_id, source_name=arg.name)

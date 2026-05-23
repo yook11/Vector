@@ -10,8 +10,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Final
 
-from app.collection.source_fetch.article_fetcher import ArticleFetcher
-from app.collection.source_fetch.protocol import Fetcher
+from app.collection.article_collection.article_fetcher import ArticleFetcher
+from app.collection.article_collection.protocol import Fetcher
 from app.collection.sources.article_source import ArticleSource
 from app.collection.sources.definitions.anthropic import AnthropicSource
 from app.collection.sources.definitions.cleantechnica import CleanTechnicaSource

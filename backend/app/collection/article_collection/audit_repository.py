@@ -1,4 +1,4 @@
-"""Stage 1 (source_fetch) 専用の pipeline_events 監査リポジトリ。
+"""Stage 1 (article_collection) 専用の pipeline_events 監査リポジトリ。
 
 ソース全体失敗 (``append_failure``、FAILED) と per-entry 変換棄却
 (``append_conversion_rejected``、REJECTED) の 2 経路。``category`` は常に
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.collection.source_fetch.errors import FetchedArticleConversionError
+from app.collection.article_collection.errors import FetchedArticleConversionError
 from app.observability.domain.event import EventType, Stage
 from app.observability.domain.payloads import SourceFetchPayload
 from app.observability.recording import _extract_error_chain

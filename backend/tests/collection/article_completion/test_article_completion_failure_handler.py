@@ -26,6 +26,7 @@ from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
+from app.collection.article_collection.repository import IncompleteArticleRepository
 from app.collection.article_completion.acquisition_failure import Retryable, Terminal
 from app.collection.article_completion.completion_failure import CompletionRejection
 from app.collection.article_completion.failure_handling import (
@@ -44,7 +45,6 @@ from app.collection.domain.observed_article import (
     ObservedOrigin,
 )
 from app.collection.domain.value_objects import PublishedAt
-from app.collection.source_fetch.repository import IncompleteArticleRepository
 from app.models.incomplete_article import IncompleteArticle
 from app.models.news_source import NewsSource, SourceType
 from app.shared.value_objects.source_name import SourceName

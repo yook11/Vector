@@ -5,12 +5,14 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from app.collection.source_fetch.reader.algolia_hn_reader import HackerNewsReader
-from app.collection.source_fetch.reader.crossref_reader import CrossrefReader
-from app.collection.source_fetch.reader.html_listing_reader import HtmlListingReader
-from app.collection.source_fetch.reader.rss_reader import RssReader
-from app.collection.source_fetch.reader.sitemap_reader import SitemapReader
-from app.collection.source_fetch.tools.raw_http_client import RawHttpClient
+from app.collection.article_collection.reader.algolia_hn_reader import HackerNewsReader
+from app.collection.article_collection.reader.crossref_reader import CrossrefReader
+from app.collection.article_collection.reader.html_listing_reader import (
+    HtmlListingReader,
+)
+from app.collection.article_collection.reader.rss_reader import RssReader
+from app.collection.article_collection.reader.sitemap_reader import SitemapReader
+from app.collection.article_collection.tools.raw_http_client import RawHttpClient
 
 
 def _default_raw_http(accept: str) -> RawHttpClient:

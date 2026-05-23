@@ -15,6 +15,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from app.collection.article_collection.reader.rss_reader import (
+    RssReader,
+    normalize_entry,
+)
 from app.collection.external_fetch_errors import (
     FetchAccessDeniedError,
     FetchLegalBlockError,
@@ -25,13 +29,9 @@ from app.collection.external_fetch_errors import (
     FetchResourceNotFoundError,
     FetchSsrfBlockedError,
 )
-from app.collection.source_fetch.reader.rss_reader import (
-    RssReader,
-    normalize_entry,
-)
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 
-_MOD = "app.collection.source_fetch.reader.rss_reader"
+_MOD = "app.collection.article_collection.reader.rss_reader"
 
 _ENDPOINT = "https://example.com/feed.xml"
 _SOURCE = "Test Source"

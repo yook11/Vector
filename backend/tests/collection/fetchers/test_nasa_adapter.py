@@ -31,13 +31,13 @@ from datetime import UTC, datetime
 import pytest
 from structlog.testing import capture_logs
 
+from app.collection.article_collection.fetched_article import FetchedArticle
+from app.collection.article_collection.reader.rss_reader import RssEntry
+from app.collection.article_collection.tools.multi_feed_rss import multi_feed_rss
 from app.collection.external_fetch_errors import (
     FetchOriginServerError,
     FetchResourceNotFoundError,
 )
-from app.collection.source_fetch.fetched_article import FetchedArticle
-from app.collection.source_fetch.reader.rss_reader import RssEntry
-from app.collection.source_fetch.tools.multi_feed_rss import multi_feed_rss
 from app.collection.sources.definitions.nasa import NASA_FEEDS, nasa_build_body
 from tests.collection.fetchers._fixture_tools import fixture_tools
 

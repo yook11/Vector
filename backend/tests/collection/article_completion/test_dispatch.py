@@ -32,6 +32,7 @@ import pytest
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.collection.article_collection.repository import IncompleteArticleRepository
 from app.collection.article_completion import dispatch as dispatch_module
 from app.collection.article_completion.dispatch import (
     dispatch_html_fetch_jobs,
@@ -44,7 +45,6 @@ from app.collection.domain.observed_article import (
     ObservedOrigin,
 )
 from app.collection.domain.value_objects import PublishedAt
-from app.collection.source_fetch.repository import IncompleteArticleRepository
 from app.models.incomplete_article import IncompleteArticle as IncompleteArticleORM
 from app.models.news_source import NewsSource
 from app.shared.value_objects.safe_url import SafeUrl

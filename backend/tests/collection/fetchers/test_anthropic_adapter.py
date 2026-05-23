@@ -21,15 +21,15 @@ from pathlib import Path
 
 import pytest
 
+from app.collection.article_collection.article_fetcher import ArticleFetcher
+from app.collection.article_collection.fetched_article import FetchedArticle
+from app.collection.article_collection.reader.sitemap_reader import SitemapEntry
+from app.collection.article_collection.tools.raw_http_client import RawHttpClient
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.external_fetch_errors import (
     FetchOriginServerError,
     FetchResourceNotFoundError,
 )
-from app.collection.source_fetch.article_fetcher import ArticleFetcher
-from app.collection.source_fetch.fetched_article import FetchedArticle
-from app.collection.source_fetch.reader.sitemap_reader import SitemapEntry
-from app.collection.source_fetch.tools.raw_http_client import RawHttpClient
 from app.collection.sources.definitions.anthropic import (
     AnthropicSource,
     is_collectable_anthropic_url,
