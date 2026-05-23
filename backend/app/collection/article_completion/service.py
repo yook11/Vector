@@ -1,14 +1,17 @@
 """``ArticleCompletionService`` — 未完成記事を完成形に補完する use case。
 
-``pending_html_articles`` 駆動。Task 層が構築した厚い Ready を
-``execute(ready)`` で受け取り、成功主線 (HTML 取得 + 抽出 + promotion +
-永続化) を担う。重複は ``articles.source_url UNIQUE`` が防ぎ、race-loss は
-read-back せず log + ``None`` で短絡する。
+``pending_html_articles`` 駆動。Task 層が構築した厚い Ready を ``execute(ready)``
+で受け取り、唯一のオーケストレータとして 3 Stage を順に呼ぶ。重複は
+``articles.source_url UNIQUE`` が防ぎ、race-loss は read-back せず log + ``None``
+で短絡する。
 
-- 完成は ``ArticleHtmlCompleter`` (純粋境界) に委譲し
-  ``AnalyzableArticle | CompletionFailure`` を値で受け取る。
-- ``articles`` INSERT + ``pending_html_articles`` DELETE は同 tx で一括
-  commit。真の DB 異常は例外として伝播。
+- Stage 1 取得: ``ArticleHtmlAcquirer.acquire`` (never raise の二値) を呼び
+  ``AcquiredContent | AcquisitionFailure`` を値で受ける。
+- Stage 2 完成: ``ArticleHtmlCompleter.complete`` (純粋 sync アダプタ) に
+  ``AcquiredContent`` を渡し ``AnalyzableArticle | CompletionInvariantRejected``
+  を受ける。
+- Stage 3 永続化: ``articles`` INSERT + ``pending_html_articles`` DELETE は同 tx で
+  一括 commit。真の DB 異常は例外として伝播。
 - 失敗は concern 別に分類し ``ArticleCompletionFailureHandler`` の 2 入口へ委譲:
   Stage 1 (acquisition) は ``handle_acquisition_failure``、Stage 2 (completion)
   は ``handle_completion_rejected`` (状態遷移 + log は handler の責務)。retry は
@@ -23,19 +26,14 @@ from typing import assert_never
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.collection.article_completion.acquirer import ArticleHtmlAcquirer
+from app.collection.article_completion.acquirer import (
+    AcquiredContent,
+    ArticleHtmlAcquirer,
+)
 from app.collection.article_completion.acquisition_failure import (
-    NotHtml,
-    ParseCrashed,
-    ParserGaveUp,
-    QualityGateFailed,
     classify_acquisition_failure,
-    classify_external_fetch_error,
 )
-from app.collection.article_completion.completer import (
-    ArticleHtmlCompleter,
-    FetchFailed,
-)
+from app.collection.article_completion.completer import ArticleHtmlCompleter
 from app.collection.article_completion.completion_failure import (
     CompletionInvariantRejected,
     classify_article_completion_failure,
@@ -51,13 +49,12 @@ logger = structlog.get_logger(__name__)
 
 
 class ArticleCompletionService:
-    """Ready 1 件を HTML 取得 + 永続化する。
+    """Ready 1 件を取得 → 完成 → 永続化する。
 
-    ``execute(ready)`` が単一エントリポイント。完成は ``ArticleHtmlCompleter``
-    (純粋境界) に委譲し ``AnalyzableArticle | CompletionFailure`` を値で受け取る。
-    失敗は outcome を 3-way ``match`` で concern 別に分類し
-    ``ArticleCompletionFailureHandler`` の 2 入口に委譲 (retry は DB 駆動、
-    caller に raise しない)。
+    ``execute(ready)`` が単一エントリポイント。Stage 1 (acquire) と Stage 2
+    (complete) をそれぞれ二値の collaborator に委譲し、各失敗を concern 別に
+    ``ArticleCompletionFailureHandler`` の 2 入口へ委譲する (retry は DB 駆動、
+    caller に raise しない)。service を読めば取得 → 完成 → 永続化の流れが分かる。
     """
 
     def __init__(
@@ -66,7 +63,8 @@ class ArticleCompletionService:
         acquirer_factory: Callable[[], ArticleHtmlAcquirer] = ArticleHtmlAcquirer,
     ) -> None:
         self._session_factory = session_factory
-        self._completer = ArticleHtmlCompleter(acquirer_factory)
+        self._acquirer_factory = acquirer_factory
+        self._completer = ArticleHtmlCompleter()
         self._failure_handler = ArticleCompletionFailureHandler(session_factory)
 
     async def execute(self, ready: ReadyForArticleCompletion) -> int | None:
@@ -81,28 +79,32 @@ class ArticleCompletionService:
             ``None`` — lease 衝突 / 状態不整合 / 永続失敗 / 一時失敗 /
             race-loss (静かに exit)。失敗詳細は構造化ログで観測する。
         """
-        outcome = await self._completer.complete(ready)
-        match outcome:
-            case AnalyzableArticle():
-                advanced = outcome
-            case FetchFailed(error=err):
+        # Stage 1: 取得（URL → 抽出物 or 取得失敗）。acquire は never raise の二値。
+        acquirer = self._acquirer_factory()
+        acquired = await acquirer.acquire(ready.source_url.as_safe_url())
+        match acquired:
+            case AcquiredContent() as content:
+                pass
+            case _ as failure:  # AcquisitionFailure (transport + content の 5 variant)
                 await self._failure_handler.handle_acquisition_failure(
-                    ready, classify_external_fetch_error(err), exc=err
+                    ready, classify_acquisition_failure(failure)
                 )
                 return None
-            case NotHtml() | ParserGaveUp() | ParseCrashed() | QualityGateFailed():
-                await self._failure_handler.handle_acquisition_failure(
-                    ready, classify_acquisition_failure(outcome), exc=None
-                )
-                return None
-            case CompletionInvariantRejected():
+
+        # Stage 2: 完成（抽出物 → AnalyzableArticle or 構築拒否）。
+        built = self._completer.complete(ready, content)
+        match built:
+            case AnalyzableArticle() as advanced:
+                pass
+            case CompletionInvariantRejected() as rejected:
                 await self._failure_handler.handle_completion_rejected(
-                    ready, classify_article_completion_failure(outcome)
+                    ready, classify_article_completion_failure(rejected)
                 )
                 return None
             case _ as unreachable:
                 assert_never(unreachable)
 
+        # Stage 3: 永続化。
         canonical_url = ready.source_url
         async with self._session_factory() as session:
             result = await ArticleCompletionRepository(session).persist_completed(

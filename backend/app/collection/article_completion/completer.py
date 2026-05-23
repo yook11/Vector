@@ -2,14 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass
-
-from app.collection.article_completion.acquirer import (
-    AcquiredContent,
-    ArticleHtmlAcquirer,
-)
-from app.collection.article_completion.acquisition_failure import AcquisitionFailure
+from app.collection.article_completion.acquirer import AcquiredContent
 from app.collection.article_completion.completion_failure import (
     CompletionInvariantRejected,
 )
@@ -20,27 +13,7 @@ from app.collection.domain.analyzable_article import (
 )
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import ObservedArticle
-from app.collection.external_fetch_errors import ExternalFetchError
 from app.collection.sources.article_completion_policy import ArticleCompletionPolicy
-
-
-@dataclass(frozen=True, slots=True)
-class FetchFailed:
-    """origin fetch が ``ExternalFetchError`` で失敗したことを表す値。
-
-    元の例外は ``error`` に保持し、失敗分類と log で使う。
-    """
-
-    error: ExternalFetchError
-
-
-CompletionFailure = FetchFailed | AcquisitionFailure | CompletionInvariantRejected
-"""補完が失敗する 3 形を 1 つに揃えた閉じた値 union。
-
-- ``FetchFailed``: origin fetch 例外を畳んだ値。
-- ``AcquisitionFailure``: 取れたが使える本文でない (4 variant、証拠を保持)。
-- ``CompletionInvariantRejected``: merge 後の構築不変条件違反 (例外証拠を保持)。
-"""
 
 
 def complete_with_html(
@@ -56,7 +29,7 @@ def complete_with_html(
     責務は薄いオーケストレーション: per-field の正本 merge は ``profile.resolve``
     (写像)、構築不変条件 (published_at 欠落含む) は ``AnalyzableArticle`` (出口契約)
     が担い、本関数は組み立てと不能の証拠化 (``CompletionInvariantRejected``) のみ。
-    取得失敗 (``AcquisitionFailure``) はここに来ない (``complete`` が surface する)。
+    取得失敗 (``AcquisitionFailure``) はここに来ない (service が acquire 段で捌く)。
     """
     obs_title = observed.title.value if observed.title is not None else None
     obs_body = observed.body.value if observed.body is not None else None
@@ -87,34 +60,21 @@ def complete_with_html(
 
 
 class ArticleHtmlCompleter:
-    """HTMLから抽出をして AnalyzableArticle を完成させる責任を持つ。"""
+    """抽出結果 ``AcquiredContent`` から ``AnalyzableArticle`` を完成させる責任を持つ。
 
-    def __init__(
-        self,
-        acquirer_factory: Callable[[], ArticleHtmlAcquirer] = ArticleHtmlAcquirer,
-    ) -> None:
-        self._acquirer_factory = acquirer_factory
+    state を持たない薄いアダプタ: ``ready`` を unpack して純粋 merge 写像
+    ``complete_with_html`` に委譲するだけ。取得 (acquire) は service が先に済ませ、
+    成功した ``AcquiredContent`` だけが本クラスに渡る。
+    """
 
-    async def complete(
-        self, ready: ReadyForArticleCompletion
-    ) -> AnalyzableArticle | CompletionFailure:
-
-        acquirer = self._acquirer_factory()
-
-        try:
-            html_result = await acquirer.acquire(ready.source_url.as_safe_url())
-        except ExternalFetchError as exc:
-            return FetchFailed(error=exc)
-
-        # 抽出結果が無ければ (AcquisitionFailure) 完成のしようがないので、取得層の
-        # 判定を retry 分類付きのまま surface する。完成は抽出結果を持つ場合のみ。
-        if not isinstance(html_result, AcquiredContent):
-            return html_result
-
+    def complete(
+        self, ready: ReadyForArticleCompletion, acquired: AcquiredContent
+    ) -> AnalyzableArticle | CompletionInvariantRejected:
+        """``ready`` の観測値と ``acquired`` を merge し完成 or 構築拒否を返す。"""
         return complete_with_html(
             ready.observed,
             ready.profile,
-            html_result,
+            acquired,
             source_id=ready.source_id,
             source_url=ready.source_url,
         )

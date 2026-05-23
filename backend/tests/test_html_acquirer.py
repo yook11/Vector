@@ -16,6 +16,7 @@ from app.collection.article_completion.acquirer import (
     _decode_html_response,
 )
 from app.collection.article_completion.acquisition_failure import (
+    FetchFailed,
     NotHtml,
     ParseCrashed,
     ParserGaveUp,
@@ -151,7 +152,7 @@ class TestArticleHtmlAcquirer:
         assert result.title
 
     @pytest.mark.asyncio
-    async def test_raises_access_denied_on_403(self) -> None:
+    async def test_access_denied_403_returns_fetch_failed(self) -> None:
         robots_resp = httpx.Response(
             404,
             request=httpx.Request("GET", "https://example.com/robots.txt"),
@@ -168,11 +169,15 @@ class TestArticleHtmlAcquirer:
         client = _mock_async_client([robots_resp, error_resp])
 
         acquirer = ArticleHtmlAcquirer()
-        with _patch_client(client), pytest.raises(FetchAccessDeniedError, match="403"):
-            await acquirer.acquire(SafeUrl("https://example.com/paywall"))
+        with _patch_client(client):
+            result = await acquirer.acquire(SafeUrl("https://example.com/paywall"))
+
+        assert isinstance(result, FetchFailed)
+        assert isinstance(result.error, FetchAccessDeniedError)
+        assert "403" in str(result.error)
 
     @pytest.mark.asyncio
-    async def test_raises_access_denied_on_401(self) -> None:
+    async def test_access_denied_401_returns_fetch_failed(self) -> None:
         """paywall (WSJ 等) は 401 を返すため access-denied origin error にする。"""
         robots_resp = httpx.Response(
             404,
@@ -190,11 +195,15 @@ class TestArticleHtmlAcquirer:
         client = _mock_async_client([robots_resp, error_resp])
 
         acquirer = ArticleHtmlAcquirer()
-        with _patch_client(client), pytest.raises(FetchAccessDeniedError, match="401"):
-            await acquirer.acquire(SafeUrl("https://example.com/paywall"))
+        with _patch_client(client):
+            result = await acquirer.acquire(SafeUrl("https://example.com/paywall"))
+
+        assert isinstance(result, FetchFailed)
+        assert isinstance(result.error, FetchAccessDeniedError)
+        assert "401" in str(result.error)
 
     @pytest.mark.asyncio
-    async def test_raises_origin_server_error_on_500(self) -> None:
+    async def test_origin_server_error_500_returns_fetch_failed(self) -> None:
         robots_resp = httpx.Response(
             404,
             request=httpx.Request("GET", "https://example.com/robots.txt"),
@@ -211,11 +220,15 @@ class TestArticleHtmlAcquirer:
         client = _mock_async_client([robots_resp, error_resp])
 
         acquirer = ArticleHtmlAcquirer()
-        with _patch_client(client), pytest.raises(FetchOriginServerError, match="500"):
-            await acquirer.acquire(SafeUrl("https://example.com/error"))
+        with _patch_client(client):
+            result = await acquirer.acquire(SafeUrl("https://example.com/error"))
+
+        assert isinstance(result, FetchFailed)
+        assert isinstance(result.error, FetchOriginServerError)
+        assert "500" in str(result.error)
 
     @pytest.mark.asyncio
-    async def test_raises_timeout_on_connect_timeout(self) -> None:
+    async def test_connect_timeout_returns_fetch_failed(self) -> None:
         robots_resp = httpx.Response(
             404,
             request=httpx.Request("GET", "https://example.com/robots.txt"),
@@ -223,11 +236,12 @@ class TestArticleHtmlAcquirer:
         client = _mock_async_client([robots_resp, httpx.ConnectTimeout("timed out")])
 
         acquirer = ArticleHtmlAcquirer()
-        with (
-            _patch_client(client),
-            pytest.raises(FetchTimeoutError, match="timed out"),
-        ):
-            await acquirer.acquire(SafeUrl("https://example.com/slow"))
+        with _patch_client(client):
+            result = await acquirer.acquire(SafeUrl("https://example.com/slow"))
+
+        assert isinstance(result, FetchFailed)
+        assert isinstance(result.error, FetchTimeoutError)
+        assert "timed out" in str(result.error)
 
     @pytest.mark.asyncio
     async def test_returns_empty_result_for_non_html(self) -> None:
@@ -277,7 +291,7 @@ class TestArticleHtmlAcquirer:
             assert result.body_length < 50
 
     @pytest.mark.asyncio
-    async def test_raises_robots_disallowed_on_robots_blocked(self) -> None:
+    async def test_robots_blocked_returns_fetch_failed(self) -> None:
         robots_content = "User-agent: *\nDisallow: /private/"
         robots_resp = httpx.Response(
             200,
@@ -287,47 +301,63 @@ class TestArticleHtmlAcquirer:
         client = _mock_async_client([robots_resp])
 
         acquirer = ArticleHtmlAcquirer()
-        with (
-            _patch_client(client),
-            pytest.raises(FetchRobotsDisallowedError, match="robots"),
-        ):
-            await acquirer.acquire(SafeUrl("https://example.com/private/article"))
+        with _patch_client(client):
+            result = await acquirer.acquire(
+                SafeUrl("https://example.com/private/article")
+            )
+
+        assert isinstance(result, FetchFailed)
+        assert isinstance(result.error, FetchRobotsDisallowedError)
+        assert "robots" in str(result.error)
 
     @pytest.mark.asyncio
-    async def test_raises_ssrf_blocked_when_host_resolves_to_private_ip(self) -> None:
+    async def test_ssrf_private_ip_returns_fetch_failed(self) -> None:
         """ホスト名の DNS 解決結果が private IP なら fetch せず SSRF block。"""
         acquirer = ArticleHtmlAcquirer()
         with patch(
             "app.shared.security.ssrf_guard._resolve_host",
             new=AsyncMock(return_value=["172.18.0.5"]),
         ):
-            with pytest.raises(FetchSsrfBlockedError, match="non-public address"):
-                await acquirer.acquire(SafeUrl("https://internal-trick.example.com/"))
+            result = await acquirer.acquire(
+                SafeUrl("https://internal-trick.example.com/")
+            )
+
+        assert isinstance(result, FetchFailed)
+        assert isinstance(result.error, FetchSsrfBlockedError)
+        assert "non-public address" in str(result.error)
 
     @pytest.mark.asyncio
-    async def test_raises_ssrf_blocked_when_host_resolves_to_link_local(self) -> None:
+    async def test_ssrf_link_local_returns_fetch_failed(self) -> None:
         """A レコードがクラウドメタデータ (169.254.169.254) を指しているケース。"""
         acquirer = ArticleHtmlAcquirer()
         with patch(
             "app.shared.security.ssrf_guard._resolve_host",
             new=AsyncMock(return_value=["169.254.169.254"]),
         ):
-            with pytest.raises(FetchSsrfBlockedError, match="169.254.169.254"):
-                await acquirer.acquire(SafeUrl("https://metadata-attack.example.com/"))
+            result = await acquirer.acquire(
+                SafeUrl("https://metadata-attack.example.com/")
+            )
+
+        assert isinstance(result, FetchFailed)
+        assert isinstance(result.error, FetchSsrfBlockedError)
+        assert "169.254.169.254" in str(result.error)
 
     @pytest.mark.asyncio
-    async def test_raises_network_error_on_dns_failure(self) -> None:
+    async def test_dns_failure_returns_fetch_failed(self) -> None:
         """DNS 解決失敗は network origin error (disposition で retryable)。"""
         acquirer = ArticleHtmlAcquirer()
         with patch(
             "app.shared.security.ssrf_guard._resolve_host",
             new=AsyncMock(side_effect=socket.gaierror("nope")),
         ):
-            with pytest.raises(FetchNetworkError, match="DNS resolution failed"):
-                await acquirer.acquire(SafeUrl("https://nonexistent.invalid/"))
+            result = await acquirer.acquire(SafeUrl("https://nonexistent.invalid/"))
+
+        assert isinstance(result, FetchFailed)
+        assert isinstance(result.error, FetchNetworkError)
+        assert "DNS resolution failed" in str(result.error)
 
     @pytest.mark.asyncio
-    async def test_raises_redirect_blocked_on_3xx_redirect(self) -> None:
+    async def test_3xx_redirect_returns_fetch_failed(self) -> None:
         """3xx は follow せず明示的に拒否する (リダイレクト経由の SSRF 回避)。"""
         robots_resp = httpx.Response(
             404,
@@ -341,14 +371,15 @@ class TestArticleHtmlAcquirer:
         client = _mock_async_client([robots_resp, redirect_resp])
 
         acquirer = ArticleHtmlAcquirer()
-        with (
-            _patch_client(client),
-            pytest.raises(FetchRedirectBlockedError, match="redirect not followed"),
-        ):
-            await acquirer.acquire(SafeUrl("https://example.com/article"))
+        with _patch_client(client):
+            result = await acquirer.acquire(SafeUrl("https://example.com/article"))
+
+        assert isinstance(result, FetchFailed)
+        assert isinstance(result.error, FetchRedirectBlockedError)
+        assert "redirect not followed" in str(result.error)
 
     @pytest.mark.asyncio
-    async def test_raises_response_too_large_on_oversized_content_length_header(
+    async def test_oversized_content_length_header_returns_fetch_failed(
         self,
     ) -> None:
         """Content-Length が上限超過なら本文を読まずに拒否する。"""
@@ -368,14 +399,15 @@ class TestArticleHtmlAcquirer:
         client = _mock_async_client([robots_resp, huge_resp])
 
         acquirer = ArticleHtmlAcquirer()
-        with (
-            _patch_client(client),
-            pytest.raises(FetchResponseTooLargeError, match="response too large"),
-        ):
-            await acquirer.acquire(SafeUrl("https://example.com/huge"))
+        with _patch_client(client):
+            result = await acquirer.acquire(SafeUrl("https://example.com/huge"))
+
+        assert isinstance(result, FetchFailed)
+        assert isinstance(result.error, FetchResponseTooLargeError)
+        assert "response too large" in str(result.error)
 
     @pytest.mark.asyncio
-    async def test_raises_response_too_large_on_oversized_actual_body(self) -> None:
+    async def test_oversized_actual_body_returns_fetch_failed(self) -> None:
         """Content-Length が無くても、実バイト数が上限超過なら拒否する。"""
         robots_resp = httpx.Response(
             404,
@@ -391,11 +423,12 @@ class TestArticleHtmlAcquirer:
         client = _mock_async_client([robots_resp, huge_resp])
 
         acquirer = ArticleHtmlAcquirer()
-        with (
-            _patch_client(client),
-            pytest.raises(FetchResponseTooLargeError, match="response too large"),
-        ):
-            await acquirer.acquire(SafeUrl("https://example.com/huge2"))
+        with _patch_client(client):
+            result = await acquirer.acquire(SafeUrl("https://example.com/huge2"))
+
+        assert isinstance(result, FetchFailed)
+        assert isinstance(result.error, FetchResponseTooLargeError)
+        assert "response too large" in str(result.error)
 
     @pytest.mark.asyncio
     async def test_caches_robots_txt_across_calls(self) -> None:
@@ -691,7 +724,7 @@ class TestDecodeHtmlResponse:
 
 
 class TestExtract:
-    """_extract: RawResponse → HtmlAcquisitionResult (同期・例外を投げない層)。
+    """_extract: RawResponse → ExtractionResult (同期・例外を投げない層)。
 
     取得 (_fetch) と切り離し、RawResponse を直接与えて抽出契約だけを検証する。
     decode/parse の失敗を crash variant に畳む契約はここが正本。

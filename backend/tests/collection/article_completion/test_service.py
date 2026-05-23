@@ -29,7 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
 from app.collection.article_completion.acquirer import AcquiredContent
-from app.collection.article_completion.acquisition_failure import NotHtml
+from app.collection.article_completion.acquisition_failure import FetchFailed, NotHtml
 from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.article_completion.repository import ArticleCompletionRepository
 from app.collection.article_completion.service import ArticleCompletionService
@@ -328,7 +328,9 @@ async def test_terminal_fetch_error_returns_none_and_closes_pending(
     _patch_fetch(
         monkeypatch,
         AsyncMock(
-            side_effect=FetchResourceNotFoundError(status_code=404, reason="not_found")
+            return_value=FetchFailed(
+                error=FetchResourceNotFoundError(status_code=404, reason="not_found")
+            )
         ),
     )
 
@@ -436,7 +438,10 @@ async def test_temporary_blip_first_attempt_writes_will_retry(
     _, pending_id, ready = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/blip"
     )
-    _patch_fetch(monkeypatch, AsyncMock(side_effect=FetchGatewayError(status_code=502)))
+    _patch_fetch(
+        monkeypatch,
+        AsyncMock(return_value=FetchFailed(error=FetchGatewayError(status_code=502))),
+    )
 
     svc = ArticleCompletionService(session_factory)
     outcome = await svc.execute(ready)
@@ -484,10 +489,12 @@ async def test_temporary_outage_exhausted_closes_pending(
     _patch_fetch(
         monkeypatch,
         AsyncMock(
-            side_effect=FetchOriginServerError(
-                status_code=503,
-                reason="service_unavailable",
-                retry_after_seconds=None,
+            return_value=FetchFailed(
+                error=FetchOriginServerError(
+                    status_code=503,
+                    reason="service_unavailable",
+                    retry_after_seconds=None,
+                )
             )
         ),
     )
@@ -525,10 +532,12 @@ async def test_temporary_retry_after_uses_server_delay(
     _patch_fetch(
         monkeypatch,
         AsyncMock(
-            side_effect=FetchOriginServerError(
-                status_code=503,
-                reason="service_unavailable",
-                retry_after_seconds=120.0,
+            return_value=FetchFailed(
+                error=FetchOriginServerError(
+                    status_code=503,
+                    reason="service_unavailable",
+                    retry_after_seconds=120.0,
+                )
             )
         ),
     )

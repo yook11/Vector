@@ -2,18 +2,23 @@
 
 本モジュールは Stage 1 の失敗を 2 つの面から扱う:
 
-1. content 失敗 union (variant): URL に HTTP GET して HTML を取り、trafilatura で
-   本文・タイトル・公開日時を取り出す段で「取得できたが使える本文でなかった」失敗
-   (content-type 不一致 / パーサ拒否 / parse 例外 / 品質ゲート未達)。接続 /
-   transport 失敗は ``ExternalFetchError`` family (``collection`` 共通) が担う。
-   各 variant は失敗地点で得られる証拠 (content_type / quality metric /
-   例外 class+message) を frozen dataclass のフィールドとして保持し、後段の audit
-   記録 (``ContentFetchPayload``) と log emit の双方で構造のまま利用される。
-2. Retry 軸 disposition: Stage 1 の全失敗 (transport ``ExternalFetchError`` + content
-   ``AcquisitionFailure``) を ``Terminal`` | ``Retryable`` に分類する。Retry 軸は
-   「再試行で結果が変わるか?」の Stage 1 固有概念。完成段 (Stage 2 = 抽出物 +
-   メタデータ合成) は別 concern (Accept 軸) として ``completion_failure`` の
-   ``CompletionRejection`` で扱う。本モジュールに Stage 2 を持ち込まない。
+1. 失敗 union (二層): acquire 段の失敗を transport / content の二層で表す。
+   - ``ContentFailure`` (4 variant): URL に HTTP GET して HTML を取り、trafilatura で
+     本文・タイトル・公開日時を取り出す段で「取得できたが使える本文でなかった」失敗
+     (content-type 不一致 / パーサ拒否 / parse 例外 / 品質ゲート未達)。抽出層
+     (``_extract`` / ``_parse_html``) はネットワークを持たず構造的にこの union しか
+     返せない。各 variant は失敗地点で得られる証拠 (content_type / quality metric /
+     例外 class+message) を frozen dataclass のフィールドとして保持する。
+   - ``FetchFailed``: 接続 / transport 失敗 (``ExternalFetchError``) を値で畳んだ
+     transport variant。``acquire`` の公開境界が内部 ``_fetch`` の raise を捕えて
+     値化する。
+   - ``AcquisitionFailure = FetchFailed | ContentFailure``: acquire 境界の全失敗。
+   後段の audit 記録 (``ContentFetchPayload``) と log emit の双方で構造のまま使う。
+2. Retry 軸 disposition: Stage 1 の全失敗 (``AcquisitionFailure``) を ``Terminal`` |
+   ``Retryable`` に分類する。Retry 軸は「再試行で結果が変わるか?」の Stage 1 固有概念。
+   完成段 (Stage 2 = 抽出物 + メタデータ合成) は別 concern (Accept 軸) として
+   ``completion_failure`` の ``CompletionRejection`` で扱う。本モジュールに Stage 2 を
+   持ち込まない。
 
 ``external_fetch_errors.py`` は「何が起きたか」の SSoT で retry / terminal 判断は
 持たない。本モジュールが各失敗を必ず分類する。``reason_code`` は監査・log 用の
@@ -21,7 +26,8 @@
 
 設計:
 - ``reason: ClassVar[str]`` は監査ラベル専用。識別 (dispatch) は ``match`` +
-  ``assert_never`` で型ベースに行う。
+  ``assert_never`` で型ベースに行う。``FetchFailed`` のみ ``reason`` を持たず、監査
+  ラベル (reason_code) は保持する ``exc.CODE`` を素通しする。
 - 閾値 (例: ``ARTICLE_BODY_MIN_LENGTH``) は ``article_limits`` SSoT に委譲し、
   本モジュールは生の metric だけを記録する。
 - ``__post_init__`` は upper-bound truncate のみ。observation point を壊さない
@@ -31,7 +37,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import ClassVar, Final, assert_never
 
@@ -140,8 +146,37 @@ class QualityGateFailed:
             object.__setattr__(self, "body_sample", self.body_sample[:_BODY_SAMPLE_MAX])
 
 
-AcquisitionFailure = NotHtml | ParserGaveUp | ParseCrashed | QualityGateFailed
-"""acquisition 段で HTML が使える本文でなかった失敗を表す閉じ union (4 variant)。"""
+ContentFailure = NotHtml | ParserGaveUp | ParseCrashed | QualityGateFailed
+"""取得できたが使える本文でなかった content 失敗を表す閉じ union (4 variant)。
+
+抽出層 (``_extract`` / ``_parse_html``) はネットワークを持たず、構造的にこの union
+しか返せない。transport 失敗 (``FetchFailed``) はここに含めない。
+"""
+
+
+# ---------------------------------------------------------------------------
+# transport 失敗 variant (接続できなかった)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class FetchFailed:
+    """origin fetch が ``ExternalFetchError`` で失敗したことを表す transport variant。
+
+    ``acquire`` の公開境界が内部 ``_fetch`` の raise を捕えて値化する。元の例外は
+    ``error`` に保持し、Retry 軸分類 (``classify_external_fetch_error`` に委譲) と log
+    で使う。``reason: ClassVar`` は持たない — 監査ラベル (reason_code) は保持する
+    ``error.CODE`` を素通しする (``acquisition_{reason}`` 式に乗らない)。
+    """
+
+    error: ExternalFetchError
+
+
+AcquisitionFailure = FetchFailed | ContentFailure
+"""acquire 境界の全失敗を表す閉じ union (5 variant)。
+
+transport (``FetchFailed``) + content (``ContentFailure`` の 4 variant)。
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -253,12 +288,23 @@ def classify_external_fetch_error(exc: ExternalFetchError) -> AcquisitionDecisio
 # ---------------------------------------------------------------------------
 
 
-def classify_acquisition_failure(failure: AcquisitionFailure) -> Terminal:
-    """acquisition 段の失敗を terminal に分類し、証拠を ``detail`` に畳む。
+def classify_acquisition_failure(failure: AcquisitionFailure) -> AcquisitionDecision:
+    """acquisition 段の失敗を ``AcquisitionDecision`` (Terminal | Retryable) に分類。
+
+    - ``FetchFailed`` (transport): ``classify_external_fetch_error`` に委譲する
+      (retryable がありうる)。保持する例外の class+message を ``detail`` に畳む。
+    - content 4 種: 常に ``Terminal`` で、証拠を ``detail`` に畳む。
 
     本層は文字列の ``detail`` までで、構造化 audit (``ContentFetchPayload``) への
     転写は別 PR で terminal 経路に recorder を新設して行う。
     """
+    if isinstance(failure, FetchFailed):
+        err = failure.error
+        return replace(
+            classify_external_fetch_error(err),
+            detail=f"{type(err).__name__}: {err}",
+        )
+
     detail: str | None
     match failure:
         case NotHtml(content_type=ct):

@@ -46,13 +46,12 @@ class ArticleCompletionFailureHandler:
         self,
         ready: ReadyForArticleCompletion,
         decision: AcquisitionDecision,
-        *,
-        exc: BaseException | None = None,
     ) -> None:
         """Stage 1 (acquisition) 失敗を Retry 軸で捌く。
 
         ``Terminal`` → pending を ``closed``。``Retryable`` → policy データ駆動で
-        次 ``ready_at`` を計算 (exhausted なら ``closed``)。
+        次 ``ready_at`` を計算 (exhausted なら ``closed``)。失敗の証拠は
+        ``decision.detail`` に畳まれており、log は ``detail`` で観測する。
         """
         match decision:
             case Terminal() as terminal:
@@ -60,10 +59,9 @@ class ArticleCompletionFailureHandler:
                     ready,
                     reason_code=terminal.reason_code,
                     detail=terminal.detail,
-                    exc=exc,
                 )
             case Retryable() as retryable:
-                await self._handle_temporary(ready, disposition=retryable, exc=exc)
+                await self._handle_temporary(ready, disposition=retryable)
 
     async def handle_completion_rejected(
         self,
@@ -109,7 +107,6 @@ class ArticleCompletionFailureHandler:
         ready: ReadyForArticleCompletion,
         *,
         disposition: Retryable,
-        exc: BaseException | None = None,
     ) -> None:
         """``Retryable`` を policy データ駆動で捌く。
 
@@ -157,7 +154,7 @@ class ArticleCompletionFailureHandler:
             policy_code=policy.code,
             exhausted=exhausted,
             attempt_count=ready.attempt_count,
-            error_class=type(exc).__name__ if exc is not None else None,
+            detail=disposition.detail,
         )
         return None
 
@@ -166,7 +163,6 @@ class ArticleCompletionFailureHandler:
         ready: ReadyForArticleCompletion,
         *,
         reason_code: str,
-        exc: BaseException | None = None,
         detail: str | None = None,
     ) -> None:
         """acquisition 終端失敗を ``closed`` に閉じる。"""
@@ -195,7 +191,6 @@ class ArticleCompletionFailureHandler:
             source_id=ready.source_id,
             canonical_url=str(canonical_url),
             reason_code=reason_code,
-            error_class=type(exc).__name__ if exc is not None else None,
             detail=detail,
         )
         return None

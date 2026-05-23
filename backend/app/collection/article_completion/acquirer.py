@@ -1,7 +1,10 @@
 """HTML 取得層 (acquisition) — URL から記事本文と公開日時を取得する。
 
-呼び出し側は ``URL -> HtmlAcquisitionResult`` の契約にのみ依存する。恒久的な
-失敗と一時的な失敗は例外として分離し、呼び出し側で扱いを切り分けられる。
+公開境界 ``acquire`` は never raise の二値 (``AcquiredContent | AcquisitionFailure``)。
+transport 失敗は内部 ``_fetch`` が ``ExternalFetchError`` を raise し、``acquire`` が
+境界でそれを ``FetchFailed`` 値に畳む。content 失敗 (Content-Type 不一致 / パーサ拒否 /
+parse 例外 / 品質ゲート未達) は抽出層 (``_extract`` / ``_parse_html``) が
+``ContentFailure`` 値で返す。呼び出し側は分類済みの値だけを受け取る。
 """
 
 from __future__ import annotations
@@ -21,6 +24,8 @@ from trafilatura.settings import Document
 
 from app.collection.article_completion.acquisition_failure import (
     AcquisitionFailure,
+    ContentFailure,
+    FetchFailed,
     NotHtml,
     ParseCrashed,
     ParserGaveUp,
@@ -34,6 +39,7 @@ from app.collection.domain.article_limits import (
 )
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.external_fetch_errors import (
+    ExternalFetchError,
     FetchRedirectBlockedError,
     FetchResponseTooLargeError,
     FetchRobotsDisallowedError,
@@ -173,6 +179,10 @@ class AcquiredContent:
         return cls(title=title, body=body, published_at=PublishedAt.parse(raw_date))
 
 
+# 抽出層 (_extract / _parse_html) の出口。ネットワークを持たないため transport
+# 失敗 (FetchFailed) は構造的に返せない — content 失敗のみを型で固定する。
+ExtractionResult = AcquiredContent | ContentFailure
+# acquire 公開境界の全結果空間。transport 失敗 (FetchFailed) を含む。
 HtmlAcquisitionResult = AcquiredContent | AcquisitionFailure
 
 
@@ -219,7 +229,7 @@ class _RobotsCache:
             return rp is None or rp.can_fetch(USER_AGENT, url)
 
 
-def _parse_html(html: str, url: str) -> HtmlAcquisitionResult:
+def _parse_html(html: str, url: str) -> ExtractionResult:
     """trafilatura で HTML をパースし本文・公開日時を取り出す（同期・CPU バウンド）。
 
     抽出段 ``_extract`` の parse ステップ。失敗は ``ParserGaveUp`` /
@@ -300,21 +310,24 @@ class ArticleHtmlAcquirer:
         self._robots_cache = _RobotsCache()
 
     async def acquire(self, url: SafeUrl) -> HtmlAcquisitionResult:
-        """指定 URL の HTML から記事本文・タイトル・公開日時を取得する。
+        """指定 URL の HTML から記事本文・タイトル・公開日時を取得する (never raise)。
 
-        抽出は CPU バウンドなので ``asyncio.to_thread`` でオフロードする。
+        抽出は CPU バウンドなので ``asyncio.to_thread`` でオフロードする。公開境界
+        として transport 失敗を値化する: 内部 ``_fetch`` が raise する
+        ``ExternalFetchError`` (robots Disallow / redirect block / response 過大 /
+        HTTP status / transport / SSRF block) を捕え ``FetchFailed`` に畳む。
 
         Returns:
             HtmlAcquisitionResult: ``AcquiredContent`` (成功) または
-            ``AcquisitionFailure`` (Content-Type 不一致 / パーサ拒否 / parse 例外 /
-            品質ゲート未達)。
-
-        Raises:
-            ExternalFetchError: robots Disallow / redirect block / response 過大 /
-            HTTP status / transport / SSRF block。origin failure は subclass で
-            表現する (本層は retry/terminal を分類しない)。
+            ``AcquisitionFailure`` — ``FetchFailed`` (transport) /
+            ``NotHtml`` (Content-Type 不一致) / ``ParserGaveUp`` (パーサ拒否) /
+            ``ParseCrashed`` (parse 例外) / ``QualityGateFailed`` (品質ゲート未達)。
+            本層は retry/terminal を分類しない (証拠だけを値で返す)。
         """
-        raw = await self._fetch(url)
+        try:
+            raw = await self._fetch(url)
+        except ExternalFetchError as exc:
+            return FetchFailed(error=exc)
         return await asyncio.to_thread(self._extract, raw)
 
     async def _fetch(self, url: SafeUrl) -> RawResponse:
@@ -385,7 +398,7 @@ class ArticleHtmlAcquirer:
                 decoded_text=response.text,
             )
 
-    def _extract(self, raw: RawResponse) -> HtmlAcquisitionResult:
+    def _extract(self, raw: RawResponse) -> ExtractionResult:
         """抽出段: HTML として読み本文化できたか? (同期)。
 
         Content-Type 不一致は ``NotHtml``、trafilatura の例外は ``ParseCrashed`` に

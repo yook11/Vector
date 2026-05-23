@@ -19,6 +19,7 @@ from app.collection.article_completion.acquisition_failure import (
     _RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY,
     _TERMINAL_FETCH_ERROR_TYPES,
     AcquisitionFailure,
+    FetchFailed,
     NotHtml,
     ParseCrashed,
     ParserGaveUp,
@@ -29,6 +30,7 @@ from app.collection.article_completion.acquisition_failure import (
     classify_external_fetch_error,
 )
 from app.collection.article_completion.retry_policy import (
+    BLIP_POLICY,
     OUTAGE_POLICY,
     RETRY_AFTER_POLICY,
     RetryPolicy,
@@ -242,6 +244,30 @@ def test_acquisition_failure_maps_to_terminal_with_evidence_detail(
     expected_reason_code: str,
     expected_detail: str | None,
 ) -> None:
-    """各 variant が ``acquisition_*`` terminal + 証拠 detail を持つ。"""
+    """各 content variant が ``acquisition_*`` terminal + 証拠 detail を持つ。"""
     result = classify_acquisition_failure(failure)
     assert result == Terminal(reason_code=expected_reason_code, detail=expected_detail)
+
+
+class TestFetchFailedDelegation:
+    """transport variant ``FetchFailed`` は ``classify_external_fetch_error`` に委譲し、
+    保持する例外の class+message を ``detail`` に畳む (retryable がありうる)。"""
+
+    def test_terminal_fetch_error_folds_into_terminal_with_detail(self) -> None:
+        # 404 は terminal 集合。reason_code は exc.CODE 素通し、detail に class 名。
+        err = FetchResourceNotFoundError(status_code=404, reason="not_found")
+        result = classify_acquisition_failure(FetchFailed(error=err))
+        assert isinstance(result, Terminal)
+        assert result.reason_code == err.CODE
+        assert result.detail is not None
+        assert result.detail.startswith("FetchResourceNotFoundError")
+
+    def test_retryable_fetch_error_folds_into_retryable_with_detail(self) -> None:
+        # 502 は BLIP policy の retryable。content 失敗と違い terminal に落とさない。
+        err = FetchGatewayError(status_code=502)
+        result = classify_acquisition_failure(FetchFailed(error=err))
+        assert isinstance(result, Retryable)
+        assert result.reason_code == err.CODE
+        assert result.policy == BLIP_POLICY
+        assert result.detail is not None
+        assert result.detail.startswith("FetchGatewayError")

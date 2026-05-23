@@ -6,23 +6,19 @@ from app.collection.article_completion.acquirer import (
 )
 from app.collection.article_completion.acquisition_failure import (
     AcquisitionFailure,
+    FetchFailed,
     NotHtml,
     ParseCrashed,
     ParserGaveUp,
     QualityGateFailed,
 )
-from app.collection.article_completion.completer import (
-    ArticleHtmlCompleter,
-    CompletionFailure,
-    FetchFailed,
-)
+from app.collection.article_completion.completer import ArticleHtmlCompleter
 
 __all__ = [
     "AcquiredContent",
     "AcquisitionFailure",
     "ArticleHtmlAcquirer",
     "ArticleHtmlCompleter",
-    "CompletionFailure",
     "FetchFailed",
     "NotHtml",
     "ParseCrashed",
