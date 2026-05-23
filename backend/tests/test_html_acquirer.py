@@ -724,7 +724,7 @@ class TestDecodeHtmlResponse:
 
 
 class TestExtract:
-    """_acquire_content_from_response: RawResponse → ContentAcquisitionOutcome
+    """_acquire_content_from_response: RawResponse → AcquiredContent | ContentFailure
     (同期・例外を投げない層)。
 
     取得 (_fetch) と切り離し、RawResponse を直接与えて content acquisition 契約だけを

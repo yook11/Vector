@@ -127,6 +127,15 @@ class ParseCrashed:
             )
 
 
+ParseFailure = NotHtml | ParserGaveUp | ParseCrashed
+"""parse 段 (``_parse_raw_response_as_html_document``) の失敗 union (3 variant)。
+
+RawResponse を HTML document として解釈する段の失敗: Content-Type 不一致
+(``NotHtml``) / パーサ拒否 (``ParserGaveUp``) / parse 例外 (``ParseCrashed``)。
+build 段で初めて判定する品質ゲート (``QualityGateFailed``) は後段なので含めない。
+"""
+
+
 @dataclass(frozen=True)
 class QualityGateFailed:
     """品質ゲート (本文 50 文字以上 + 非空タイトル) を満たさなかった。
@@ -147,12 +156,13 @@ class QualityGateFailed:
             object.__setattr__(self, "body_sample", self.body_sample[:_BODY_SAMPLE_MAX])
 
 
-ContentFailure = NotHtml | ParserGaveUp | ParseCrashed | QualityGateFailed
+ContentFailure = ParseFailure | QualityGateFailed
 """取得できたが使える本文でなかった content 失敗を表す閉じ union (4 variant)。
 
 content acquisition 層 (parse: ``_parse_raw_response_as_html_document`` / build:
 ``_build_acquired_content_from_document``) はネットワークを持たず、構造的にこの union
-しか返せない。transport 失敗 (``FetchFailed``) はここに含めない。
+しか返せない。transport 失敗 (``FetchFailed``) はここに含めない。parse 段の 3 variant
+は ``ParseFailure``、build 段の品質ゲート未達は ``QualityGateFailed``。
 """
 
 

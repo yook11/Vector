@@ -30,6 +30,7 @@ from app.collection.article_completion.acquisition_failure import (
     FetchFailed,
     NotHtml,
     ParseCrashed,
+    ParseFailure,
     ParserGaveUp,
     QualityGateFailed,
 )
@@ -183,17 +184,6 @@ class AcquiredContent:
         return cls(title=title, body=body, published_at=PublishedAt.parse(raw_date))
 
 
-# parse の出口: RawResponse を HTML document として解釈できたか。
-HtmlDocumentParseOutcome = TrafilaturaDocument | NotHtml | ParserGaveUp | ParseCrashed
-# build の出口: TrafilaturaDocument を AcquiredContent にできたか。
-AcquiredContentBuildOutcome = AcquiredContent | QualityGateFailed
-# content acquisition 全体の出口。ネットワークを持たないため transport 失敗
-# (FetchFailed) は構造的に返せない — content 失敗のみを型で固定する。
-ContentAcquisitionOutcome = AcquiredContent | ContentFailure
-# acquire 公開境界の全結果空間。transport 失敗 (FetchFailed) を含む。
-HtmlAcquisitionResult = AcquiredContent | AcquisitionFailure
-
-
 class _RobotsCache:
     """並行アクセス対応の robots.txt キャッシュ。
 
@@ -239,7 +229,7 @@ class _RobotsCache:
 
 def _parse_raw_response_as_html_document(
     raw: RawResponse,
-) -> HtmlDocumentParseOutcome:
+) -> TrafilaturaDocument | ParseFailure:
     """RawResponse を HTML document として解釈できるか? に純化する（同期・CPU）。
 
     content-type 判定と decode を済ませ、trafilatura で parse して
@@ -295,7 +285,7 @@ def _build_acquired_content_from_document(
     document: TrafilaturaDocument,
     *,
     url: str,
-) -> AcquiredContentBuildOutcome:
+) -> AcquiredContent | QualityGateFailed:
     """``TrafilaturaDocument`` を品質ゲートに通して ``AcquiredContent`` を組む。
 
     ``TrafilaturaDocument`` (trafilatura foreign type) に触れる唯一の場所。受け取った
@@ -339,16 +329,16 @@ def _build_acquired_content_from_document(
 class ArticleHtmlAcquirer:
     """URL から記事本文と公開日時を取得する取得器。
 
-    呼び出し側は ``acquire(url) -> HtmlAcquisitionResult`` の契約のみに依存する。
-    内部は取得 (_fetch) と content acquisition (_acquire_content_from_response) の
-    二段で、境界に httpx 非依存の ``RawResponse`` を挟む。robots キャッシュと HTTP
-    クライアントのライフサイクルは内部で完結する。
+    呼び出し側は ``acquire(url) -> AcquiredContent | AcquisitionFailure`` の契約のみに
+    依存する。内部は取得 (_fetch) と content acquisition
+    (_acquire_content_from_response) の二段で、境界に httpx 非依存の ``RawResponse`` を
+    挟む。robots キャッシュと HTTP クライアントのライフサイクルは内部で完結する。
     """
 
     def __init__(self) -> None:
         self._robots_cache = _RobotsCache()
 
-    async def acquire(self, url: SafeUrl) -> HtmlAcquisitionResult:
+    async def acquire(self, url: SafeUrl) -> AcquiredContent | AcquisitionFailure:
         """指定 URL の HTML から記事本文・タイトル・公開日時を取得する (never raise)。
 
         抽出は CPU バウンドなので ``asyncio.to_thread`` でオフロードする。公開境界
@@ -357,11 +347,11 @@ class ArticleHtmlAcquirer:
         HTTP status / transport / SSRF block) を捕え ``FetchFailed`` に畳む。
 
         Returns:
-            HtmlAcquisitionResult: ``AcquiredContent`` (成功) または
-            ``AcquisitionFailure`` — ``FetchFailed`` (transport) /
-            ``NotHtml`` (Content-Type 不一致) / ``ParserGaveUp`` (パーサ拒否) /
-            ``ParseCrashed`` (parse 例外) / ``QualityGateFailed`` (品質ゲート未達)。
-            本層は retry/terminal を分類しない (証拠だけを値で返す)。
+            ``AcquiredContent`` (成功) または ``AcquisitionFailure`` —
+            ``FetchFailed`` (transport) / ``NotHtml`` (Content-Type 不一致) /
+            ``ParserGaveUp`` (パーサ拒否) / ``ParseCrashed`` (parse 例外) /
+            ``QualityGateFailed`` (品質ゲート未達)。本層は retry/terminal を
+            分類しない (証拠だけを値で返す)。
         """
         try:
             raw = await self._fetch(url)
@@ -439,13 +429,15 @@ class ArticleHtmlAcquirer:
 
     def _acquire_content_from_response(
         self, raw: RawResponse
-    ) -> ContentAcquisitionOutcome:
+    ) -> AcquiredContent | ContentFailure:
         """content acquisition: RawResponse から AcquiredContent を得る (同期)。
 
         parse (RawResponse → TrafilaturaDocument) と build (TrafilaturaDocument →
-        AcquiredContent) を順に呼ぶユースケース。失敗はすべて値で返る。
+        AcquiredContent) を順に呼ぶユースケース。失敗はすべて値で返る。本段は
+        ネットワークを持たないため transport 失敗 (``FetchFailed``) は構造的に返せず、
+        戻り型は content 失敗 (``ContentFailure``) のみで固定される。
         """
         parsed = _parse_raw_response_as_html_document(raw)
         if not isinstance(parsed, TrafilaturaDocument):
-            return parsed  # NotHtml | ParserGaveUp | ParseCrashed
+            return parsed  # ParseFailure (NotHtml | ParserGaveUp | ParseCrashed)
         return _build_acquired_content_from_document(parsed, url=raw.url)
