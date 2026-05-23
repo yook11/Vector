@@ -27,12 +27,12 @@ from trafilatura.settings import Document as TrafilaturaDocument
 from app.collection.article_completion.acquisition_failure import (
     AcquisitionFailure,
     ContentFailure,
+    ContentQualityTooLow,
     FetchFailed,
     NotHtml,
     ParseCrashed,
     ParseFailure,
     ParserGaveUp,
-    QualityGateFailed,
 )
 from app.collection.domain.article_limits import (
     ARTICLE_BODY_MIN_LENGTH as _BODY_MIN_LENGTH,
@@ -157,11 +157,11 @@ class AcquiredContent:
         raw_title: str | None,
         stripped_body: str,
         raw_date: str | None,
-    ) -> AcquiredContent | QualityGateFailed:
+    ) -> AcquiredContent | ContentQualityTooLow:
         """素材から品質ゲートを満たすときのみ AcquiredContent を構築する。
 
         ゲート判定 (本文 50 文字以上 + 非空タイトル ≤500) の SSoT。満たさなければ
-        証拠付き ``QualityGateFailed`` を値で返す。strict コンストラクタの invariant
+        証拠付き ``ContentQualityTooLow`` を値で返す。strict コンストラクタの invariant
         (``__post_init__``) は本 factory が必ず満たす backstop。副作用なし (ログは
         呼び出し側 ``_build_acquired_content_from_document``)。``stripped_body`` は
         strip 済み本文を受ける。
@@ -175,7 +175,7 @@ class AcquiredContent:
             # paywall stub / 拒否ページ判別に使えるよう、本文がゼロでも閾値以上でも
             # ない (= title 欠落で落ちた) 場合は冒頭断片を残さない。
             body_sample = stripped_body if 0 < body_length < _BODY_MIN_LENGTH else None
-            return QualityGateFailed(
+            return ContentQualityTooLow(
                 body_length=body_length,
                 title_present=title is not None,
                 body_sample=body_sample,
@@ -285,7 +285,7 @@ def _build_acquired_content_from_document(
     document: TrafilaturaDocument,
     *,
     url: str,
-) -> AcquiredContent | QualityGateFailed:
+) -> AcquiredContent | ContentQualityTooLow:
     """``TrafilaturaDocument`` を品質ゲートに通して ``AcquiredContent`` を組む。
 
     ``TrafilaturaDocument`` (trafilatura foreign type) に触れる唯一の場所。受け取った
@@ -316,9 +316,9 @@ def _build_acquired_content_from_document(
         stripped_body=body_stripped,
         raw_date=document.date,
     )
-    if isinstance(outcome, QualityGateFailed):
+    if isinstance(outcome, ContentQualityTooLow):
         logger.info(
-            "quality_gate_failed",
+            "content_quality_too_low",
             url=url,
             body_length=outcome.body_length,
             title_present=outcome.title_present,
@@ -350,7 +350,7 @@ class ArticleHtmlAcquirer:
             ``AcquiredContent`` (成功) または ``AcquisitionFailure`` —
             ``FetchFailed`` (transport) / ``NotHtml`` (Content-Type 不一致) /
             ``ParserGaveUp`` (パーサ拒否) / ``ParseCrashed`` (parse 例外) /
-            ``QualityGateFailed`` (品質ゲート未達)。本層は retry/terminal を
+            ``ContentQualityTooLow`` (品質ゲート未達)。本層は retry/terminal を
             分類しない (証拠だけを値で返す)。
         """
         try:

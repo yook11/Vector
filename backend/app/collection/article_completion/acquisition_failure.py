@@ -132,12 +132,12 @@ ParseFailure = NotHtml | ParserGaveUp | ParseCrashed
 
 RawResponse を HTML document として解釈する段の失敗: Content-Type 不一致
 (``NotHtml``) / パーサ拒否 (``ParserGaveUp``) / parse 例外 (``ParseCrashed``)。
-build 段で初めて判定する品質ゲート (``QualityGateFailed``) は後段なので含めない。
+build 段で初めて判定する品質ゲート (``ContentQualityTooLow``) は後段なので含めない。
 """
 
 
 @dataclass(frozen=True)
-class QualityGateFailed:
+class ContentQualityTooLow:
     """品質ゲート (本文 50 文字以上 + 非空タイトル) を満たさなかった。
 
     - ``body_length``: strip 後の実数 (0 含む)。閾値は ``article_limits`` SSoT。
@@ -149,20 +149,20 @@ class QualityGateFailed:
     body_length: int
     title_present: bool
     body_sample: str | None
-    reason: ClassVar[str] = "quality_gate"
+    reason: ClassVar[str] = "content_quality_too_low"
 
     def __post_init__(self) -> None:
         if self.body_sample is not None and len(self.body_sample) > _BODY_SAMPLE_MAX:
             object.__setattr__(self, "body_sample", self.body_sample[:_BODY_SAMPLE_MAX])
 
 
-ContentFailure = ParseFailure | QualityGateFailed
+ContentFailure = ParseFailure | ContentQualityTooLow
 """取得できたが使える本文でなかった content 失敗を表す閉じ union (4 variant)。
 
 content acquisition 層 (parse: ``_parse_raw_response_as_html_document`` / build:
 ``_build_acquired_content_from_document``) はネットワークを持たず、構造的にこの union
 しか返せない。transport 失敗 (``FetchFailed``) はここに含めない。parse 段の 3 variant
-は ``ParseFailure``、build 段の品質ゲート未達は ``QualityGateFailed``。
+は ``ParseFailure``、build 段の品質ゲート未達は ``ContentQualityTooLow``。
 """
 
 
@@ -325,7 +325,7 @@ def classify_acquisition_failure(failure: AcquisitionFailure) -> AcquisitionDeci
             detail = None
         case ParseCrashed(error_class=ec, error_message=em):
             detail = f"{ec}: {em}"
-        case QualityGateFailed(body_length=bl, title_present=tp, body_sample=bs):
+        case ContentQualityTooLow(body_length=bl, title_present=tp, body_sample=bs):
             sample = f" sample={bs!r}" if bs else ""
             detail = f"body_length={bl} title_present={tp}{sample}"
         case _ as unreachable:

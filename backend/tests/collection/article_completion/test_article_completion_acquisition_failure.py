@@ -19,11 +19,11 @@ from app.collection.article_completion.acquisition_failure import (
     _RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY,
     _TERMINAL_FETCH_ERROR_TYPES,
     AcquisitionFailure,
+    ContentQualityTooLow,
     FetchFailed,
     NotHtml,
     ParseCrashed,
     ParserGaveUp,
-    QualityGateFailed,
     Retryable,
     Terminal,
     classify_acquisition_failure,
@@ -226,15 +226,15 @@ class TestFetchOriginServerErrorExplicitBranch:
             "ValueError: bad parse",
         ),
         (
-            QualityGateFailed(body_length=0, title_present=False, body_sample=None),
-            "acquisition_quality_gate",
+            ContentQualityTooLow(body_length=0, title_present=False, body_sample=None),
+            "acquisition_content_quality_too_low",
             "body_length=0 title_present=False",
         ),
         (
-            QualityGateFailed(
+            ContentQualityTooLow(
                 body_length=12, title_present=True, body_sample="too short"
             ),
-            "acquisition_quality_gate",
+            "acquisition_content_quality_too_low",
             "body_length=12 title_present=True sample='too short'",
         ),
     ],

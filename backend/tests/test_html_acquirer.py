@@ -16,11 +16,11 @@ from app.collection.article_completion.acquirer import (
     _decode_html_response,
 )
 from app.collection.article_completion.acquisition_failure import (
+    ContentQualityTooLow,
     FetchFailed,
     NotHtml,
     ParseCrashed,
     ParserGaveUp,
-    QualityGateFailed,
 )
 from app.collection.domain.article_limits import (
     ARTICLE_BODY_MIN_LENGTH,
@@ -285,9 +285,9 @@ class TestArticleHtmlAcquirer:
             result = await acquirer.acquire(SafeUrl("https://example.com/short"))
 
         # trafilatura が None を返す (ParserGaveUp) または品質ゲート未達
-        # (QualityGateFailed) のどちらか。decode/parse 例外は本テストでは想定しない。
-        assert isinstance(result, ParserGaveUp | QualityGateFailed)
-        if isinstance(result, QualityGateFailed):
+        # (ContentQualityTooLow) のどちらか。decode/parse 例外は本テストでは想定しない。
+        assert isinstance(result, ParserGaveUp | ContentQualityTooLow)
+        if isinstance(result, ContentQualityTooLow):
             assert result.body_length < 50
 
     @pytest.mark.asyncio
@@ -499,7 +499,7 @@ class TestAcquiredContentTryCreate:
     """AcquiredContent.try_create: 品質ゲート判定の所有テスト。
 
     閾値は ``article_limits`` SSoT を import して導出する (literal 直書きしない)。
-    成功時は ``AcquiredContent``、未達時は証拠付き ``QualityGateFailed`` を値で返す
+    成功時は ``AcquiredContent``、未達時は証拠付き ``ContentQualityTooLow`` を値で返す
     契約を確かめる。
     """
 
@@ -515,7 +515,7 @@ class TestAcquiredContentTryCreate:
         outcome = AcquiredContent.try_create(
             raw_title="Title", stripped_body=body, raw_date=None
         )
-        assert isinstance(outcome, QualityGateFailed)
+        assert isinstance(outcome, ContentQualityTooLow)
         assert outcome.body_length == len(body)
 
     def test_short_body_keeps_title_present_true(self) -> None:
@@ -523,7 +523,7 @@ class TestAcquiredContentTryCreate:
         outcome = AcquiredContent.try_create(
             raw_title="Title", stripped_body=body, raw_date=None
         )
-        assert isinstance(outcome, QualityGateFailed)
+        assert isinstance(outcome, ContentQualityTooLow)
         assert outcome.title_present is True
 
     def test_short_body_keeps_body_sample(self) -> None:
@@ -531,7 +531,7 @@ class TestAcquiredContentTryCreate:
         outcome = AcquiredContent.try_create(
             raw_title="Title", stripped_body=body, raw_date=None
         )
-        assert isinstance(outcome, QualityGateFailed)
+        assert isinstance(outcome, ContentQualityTooLow)
         assert outcome.body_sample == body
 
     def test_empty_title_returns_quality_failure(self) -> None:
@@ -539,7 +539,7 @@ class TestAcquiredContentTryCreate:
         outcome = AcquiredContent.try_create(
             raw_title="", stripped_body=body, raw_date=None
         )
-        assert isinstance(outcome, QualityGateFailed)
+        assert isinstance(outcome, ContentQualityTooLow)
         assert outcome.title_present is False
 
     def test_none_title_returns_quality_failure(self) -> None:
@@ -547,7 +547,7 @@ class TestAcquiredContentTryCreate:
         outcome = AcquiredContent.try_create(
             raw_title=None, stripped_body=body, raw_date=None
         )
-        assert isinstance(outcome, QualityGateFailed)
+        assert isinstance(outcome, ContentQualityTooLow)
         assert outcome.title_present is False
 
     def test_title_present_but_body_at_least_min_drops_body_sample(self) -> None:
@@ -556,14 +556,14 @@ class TestAcquiredContentTryCreate:
         outcome = AcquiredContent.try_create(
             raw_title=None, stripped_body=body, raw_date=None
         )
-        assert isinstance(outcome, QualityGateFailed)
+        assert isinstance(outcome, ContentQualityTooLow)
         assert outcome.body_sample is None
 
     def test_empty_body_drops_body_sample(self) -> None:
         outcome = AcquiredContent.try_create(
             raw_title="Title", stripped_body="", raw_date=None
         )
-        assert isinstance(outcome, QualityGateFailed)
+        assert isinstance(outcome, ContentQualityTooLow)
         assert outcome.body_sample is None
 
     def test_html_tags_stripped_from_title(self) -> None:
@@ -768,7 +768,7 @@ class TestExtract:
         assert len(result.body) > 50
 
     def test_minimal_html_returns_quality_failure(self) -> None:
-        """品質ゲート未達は ParserGaveUp か QualityGateFailed のどちらか。"""
+        """品質ゲート未達は ParserGaveUp か ContentQualityTooLow のどちらか。"""
         minimal_html = "<html><body><p>Short</p></body></html>"
         raw = RawResponse(
             url="https://example.com/short",
@@ -778,8 +778,8 @@ class TestExtract:
             decoded_text=minimal_html,
         )
         result = ArticleHtmlAcquirer()._acquire_content_from_response(raw)
-        assert isinstance(result, ParserGaveUp | QualityGateFailed)
-        if isinstance(result, QualityGateFailed):
+        assert isinstance(result, ParserGaveUp | ContentQualityTooLow)
+        if isinstance(result, ContentQualityTooLow):
             assert result.body_length < 50
 
     def test_parse_crash_folds_into_parse_crashed(self) -> None:
