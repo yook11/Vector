@@ -1,10 +1,10 @@
-"""``pending_html_articles`` composite FK の **動作** 保証テスト。
+"""``incomplete_articles`` composite FK の **動作** 保証テスト。
 
 spec ``Pending source identity refactor.md`` #4 のみを pin する。
 
 不変条件の所在分業:
 - #1 NOT NULL / #2 composite FK / #3 (id, name) UNIQUE — ORM 定義
-  (``app/models/pending_html_article.py`` / ``app/models/news_source.py``) +
+  (``app/models/incomplete_article.py`` / ``app/models/news_source.py``) +
   Alembic migration が SSoT。catalog 引きで重複検査しない (ORM = SSoT、
   ``[[feedback_structural_guarantee]]`` は production code 内の指針)。
 - #4 — **制約が runtime で効く** ことを動作で語る (ORM 宣言だけでは PG が
@@ -56,7 +56,7 @@ async def test_source_id_only_update_fails_with_composite_fk_violation(
     await db_session.execute(
         text(
             """
-            INSERT INTO pending_html_articles
+            INSERT INTO incomplete_articles
                 (url, source_id, source_name, status, staged_attributes,
                  ready_at, attempt_count)
             VALUES (:url, :sid, :sname, 'open', '{}'::jsonb, NOW(), 0)
@@ -76,7 +76,7 @@ async def test_source_id_only_update_fails_with_composite_fk_violation(
         await db_session.execute(
             text(
                 """
-                UPDATE pending_html_articles
+                UPDATE incomplete_articles
                 SET source_id = :new_sid
                 WHERE url = :url
                 """

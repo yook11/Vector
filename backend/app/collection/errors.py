@@ -21,7 +21,7 @@ class SourceFetchError(Exception):
 class PermanentFetchError(SourceFetchError):
     """リトライ不可のフェッチ失敗 (403 / 404 / 410 / 451 / robots.txt 拒否)。
 
-    Stage 2 が ``pending_html_articles.status='closed'`` に閉じる判断に使う。
+    Stage 2 が ``incomplete_articles.status='closed'`` に閉じる判断に使う。
     """
 
 

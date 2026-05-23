@@ -1,4 +1,4 @@
-"""補完失敗後の ``pending_html_articles`` 後処理を行う application service。
+"""補完失敗後の ``incomplete_articles`` 後処理を行う application service。
 
 failure 後処理を 2 つの concern で別入口に分ける:
 
@@ -32,7 +32,7 @@ logger = structlog.get_logger(__name__)
 
 
 class ArticleCompletionFailureHandler:
-    """失敗分類に応じた ``pending_html_articles`` 後処理を実行する。
+    """失敗分類に応じた ``incomplete_articles`` 後処理を実行する。
 
     2 入口: ``handle_acquisition_failure`` (Stage 1, Retry 軸) と
     ``handle_completion_rejected`` (Stage 2, Accept 軸)。いずれも自前 session で

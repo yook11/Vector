@@ -1,6 +1,6 @@
 """``ArticleCompletionFailureHandler`` の integration test。
 
-検証する性質 (failure 後処理 = ``pending_html_articles`` 状態遷移):
+検証する性質 (failure 後処理 = ``incomplete_articles`` 状態遷移):
 
 - acquisition ``Terminal`` → pending を ``closed`` (leased_until=None)
 - acquisition ``Retryable`` 非 exhausted → ``open`` + 未来 ready_at (policy schedule)
@@ -45,8 +45,8 @@ from app.collection.domain.observed_article import (
 )
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.source_fetch.repository import IncompleteArticleRepository
+from app.models.incomplete_article import IncompleteArticle
 from app.models.news_source import NewsSource, SourceType
-from app.models.pending_html_article import PendingHtmlArticle
 from app.shared.value_objects.source_name import SourceName
 
 
@@ -82,7 +82,7 @@ async def _make_ready(
     source: NewsSource,
     url: str,
 ) -> ReadyForArticleCompletion:
-    """``pending_html_articles`` 行を 1 件作って claim 済 Ready を返す。
+    """``incomplete_articles`` 行を 1 件作って claim 済 Ready を返す。
 
     claim 後 ``status='running'`` / ``attempt_count=1``。返す Ready は
     Task 層が ``try_advance_from`` で構築するのと同じ厚い precondition 型。
@@ -110,12 +110,12 @@ async def _make_ready(
 
 async def _reload_pending(
     db_session: AsyncSession, pending_id: int
-) -> PendingHtmlArticle:
+) -> IncompleteArticle:
     """handler の別 session commit を見るため fresh tx で pending を読み直す。"""
     await db_session.rollback()
     return (
         await db_session.execute(
-            select(PendingHtmlArticle).where(PendingHtmlArticle.id == pending_id)
+            select(IncompleteArticle).where(IncompleteArticle.id == pending_id)
         )
     ).scalar_one()
 
@@ -179,8 +179,8 @@ async def test_acquisition_retryable_exhausted_closes_pending(
     """
     ready = await _make_ready(db_session, tc_source, "https://techcrunch.com/exhaust")
     await db_session.execute(
-        update(PendingHtmlArticle)
-        .where(PendingHtmlArticle.id == ready.pending_id)
+        update(IncompleteArticle)
+        .where(IncompleteArticle.id == ready.pending_id)
         .values(attempt_count=BLIP_POLICY.max_attempts)
     )
     await db_session.commit()

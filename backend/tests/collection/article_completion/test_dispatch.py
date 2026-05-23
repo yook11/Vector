@@ -45,8 +45,8 @@ from app.collection.domain.observed_article import (
 )
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.source_fetch.repository import IncompleteArticleRepository
+from app.models.incomplete_article import IncompleteArticle as IncompleteArticleORM
 from app.models.news_source import NewsSource
-from app.models.pending_html_article import PendingHtmlArticle as PendingHtmlArticleORM
 from app.shared.value_objects.safe_url import SafeUrl
 from app.shared.value_objects.source_name import SourceName
 
@@ -113,15 +113,15 @@ async def _make_pending(
         assert pending_id is not None
         if attempt_count != 0:
             await db_session.execute(
-                update(PendingHtmlArticleORM)
-                .where(PendingHtmlArticleORM.id == pending_id)
+                update(IncompleteArticleORM)
+                .where(IncompleteArticleORM.id == pending_id)
                 .values(attempt_count=attempt_count)
             )
         await db_session.commit()
         return pending_id
 
     # status='running' / 'closed' は ORM 直接組み立て (CHECK 制約整合)
-    pending = PendingHtmlArticleORM(
+    pending = IncompleteArticleORM(
         url=safe_url,
         source_id=source.id,
         source_name=source.name,
@@ -139,11 +139,11 @@ async def _make_pending(
 
 async def _select_pending(
     db_session: AsyncSession, pending_id: int
-) -> PendingHtmlArticleORM:
+) -> IncompleteArticleORM:
     """pending を id で再 SELECT (post-condition 確認用)。"""
     row = (
         await db_session.execute(
-            select(PendingHtmlArticleORM).where(PendingHtmlArticleORM.id == pending_id)
+            select(IncompleteArticleORM).where(IncompleteArticleORM.id == pending_id)
         )
     ).scalar_one()
     await db_session.refresh(row)

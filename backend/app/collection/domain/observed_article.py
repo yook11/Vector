@@ -1,13 +1,13 @@
 """``ObservedArticle`` — 外部ソースから取得できた記事事実の値オブジェクト。
 
 取れた事実だけを持つ (要否 / 優先は ``ArticleCompletionPolicy`` が決める)。
-``pending_html_articles.staged_attributes`` (JSONB) に焼かれ、cron poller で
+``incomplete_articles.staged_attributes`` (JSONB) に焼かれ、cron poller で
 再 hydrate される (``model_dump(mode="json", by_alias=True)`` で永続化、
 ``model_validate`` で復元)。
 
 - identity ``source_name`` / ``source_url`` は表層列が authoritative
-  (``pending_html_articles.source_name`` NOT NULL + composite FK /
-  ``pending_html_articles.url`` UNIQUE)。JSONB には焼かない
+  (``incomplete_articles.source_name`` NOT NULL + composite FK /
+  ``incomplete_articles.url`` UNIQUE)。JSONB には焼かない
   (``Field(exclude=True)``) — in-memory では運搬のため必須。Stage 2 reader
   (``ArticleCompletionRepository``) は表層列の値を ``model_validate`` 前に
   raw へ注入する。
@@ -50,7 +50,7 @@ class ObservedArticle(BaseModel):
     model_config = ConfigDict(frozen=True, populate_by_name=True)
 
     # identity: JSONB 非永続 (列が authoritative)。in-memory では必須。
-    # 表層列 ``pending_html_articles.source_name`` / ``url`` が identity の
+    # 表層列 ``incomplete_articles.source_name`` / ``url`` が identity の
     # SSoT (spec ``Pending source identity refactor.md`` #1 倒立解消)。
     # ``alias=`` ではなく validation/serialization を分離するのは、Pylance が
     # ``populate_by_name=True`` を尊重せず ``alias`` 側でしか __init__ 引数を

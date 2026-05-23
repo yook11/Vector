@@ -1,7 +1,7 @@
 """``ArticleCompletionRepository`` の統合テスト (実 Postgres)。
 
 Stage 2 completion の永続化境界を検証する。Repository は queue 抽象ではなく、
-``pending_html_articles`` に対する処理資格ロード / claim / sweep / 状態遷移を担う。
+``incomplete_articles`` に対する処理資格ロード / claim / sweep / 状態遷移を担う。
 service には ``status`` / ``ready_at`` / ``leased_until`` を漏らさない。
 
 identity 解決は表層列 (``url`` / ``source_name``) から直接 hydrate する
@@ -42,8 +42,8 @@ from app.collection.sources.article_completion_policy import (
     HTML_TITLE_POLICY,
     ArticleCompletionPolicy,
 )
+from app.models.incomplete_article import IncompleteArticle as IncompleteArticleORM
 from app.models.news_source import NewsSource
-from app.models.pending_html_article import PendingHtmlArticle as PendingHtmlArticleORM
 from app.shared.value_objects.safe_url import SafeUrl
 from app.shared.value_objects.source_name import SourceName
 
@@ -164,7 +164,7 @@ async def _make_running(
     attempt_count: int = 1,
     staged: dict | None = None,
 ) -> int:
-    pending = PendingHtmlArticleORM(
+    pending = IncompleteArticleORM(
         url=SafeUrl(url),
         source_id=source_id,
         source_name=source_name,
@@ -182,10 +182,10 @@ async def _make_running(
 
 async def _select_pending(
     db_session: AsyncSession, pending_id: int
-) -> PendingHtmlArticleORM:
+) -> IncompleteArticleORM:
     row = (
         await db_session.execute(
-            select(PendingHtmlArticleORM).where(PendingHtmlArticleORM.id == pending_id)
+            select(IncompleteArticleORM).where(IncompleteArticleORM.id == pending_id)
         )
     ).scalar_one()
     await db_session.refresh(row)
@@ -594,8 +594,8 @@ async def test_state_transitions_ignore_stale_attempt(
     await db_session.commit()
     target = await _claim_one(db_session, pending_id)
     await db_session.execute(
-        update(PendingHtmlArticleORM)
-        .where(PendingHtmlArticleORM.id == pending_id)
+        update(IncompleteArticleORM)
+        .where(IncompleteArticleORM.id == pending_id)
         .values(attempt_count=target.attempt_count + 1)
     )
     await db_session.commit()

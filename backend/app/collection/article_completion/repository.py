@@ -1,6 +1,6 @@
 """補完の永続化境界。
 
-``pending_html_articles`` は補完待ち記事の作業テーブルだが、application service
+``incomplete_articles`` は補完待ち記事の作業テーブルだが、application service
 に queue の状態モデルを漏らさない。Repository は処理資格を満たす pending の
 物体化と、claim / sweep / retry 状態遷移の DB 反映までを担う。commit 境界は
 呼び出し側が握る。
@@ -21,7 +21,7 @@ from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.persistence.article_store import ArticleStore
 from app.collection.source_fetch.strategy import SOURCES
-from app.models.pending_html_article import PendingHtmlArticle as PendingHtmlArticleORM
+from app.models.incomplete_article import IncompleteArticle as IncompleteArticleORM
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,10 +68,10 @@ class ArticleCompletionRepository:
         ``[[feedback_failure_visibility]]`` により禁止)。
         """
         stmt = (
-            select(PendingHtmlArticleORM)
+            select(IncompleteArticleORM)
             .where(
-                PendingHtmlArticleORM.id == pending_id,
-                PendingHtmlArticleORM.status == "running",
+                IncompleteArticleORM.id == pending_id,
+                IncompleteArticleORM.status == "running",
             )
             .limit(1)
         )
@@ -121,12 +121,12 @@ class ArticleCompletionRepository:
             return []
 
         select_stmt = (
-            select(PendingHtmlArticleORM.id)
+            select(IncompleteArticleORM.id)
             .where(
-                PendingHtmlArticleORM.status == "open",
-                PendingHtmlArticleORM.ready_at <= now,
+                IncompleteArticleORM.status == "open",
+                IncompleteArticleORM.ready_at <= now,
             )
-            .order_by(PendingHtmlArticleORM.ready_at, PendingHtmlArticleORM.id)
+            .order_by(IncompleteArticleORM.ready_at, IncompleteArticleORM.id)
             .limit(limit)
             .with_for_update(skip_locked=True)
         )
@@ -135,18 +135,18 @@ class ArticleCompletionRepository:
             return []
 
         update_stmt = (
-            update(PendingHtmlArticleORM)
+            update(IncompleteArticleORM)
             .where(
-                PendingHtmlArticleORM.id.in_(ids),
-                PendingHtmlArticleORM.status == "open",
+                IncompleteArticleORM.id.in_(ids),
+                IncompleteArticleORM.status == "open",
             )
             .values(
                 status="running",
                 leased_until=leased_until,
-                attempt_count=PendingHtmlArticleORM.attempt_count + 1,
+                attempt_count=IncompleteArticleORM.attempt_count + 1,
                 updated_at=now,
             )
-            .returning(PendingHtmlArticleORM.id)
+            .returning(IncompleteArticleORM.id)
         )
         updated_ids = set((await self._session.execute(update_stmt)).scalars().all())
         return [pending_id for pending_id in ids if pending_id in updated_ids]
@@ -154,10 +154,10 @@ class ArticleCompletionRepository:
     async def sweep_expired_leases(self, *, now: datetime) -> int:
         """期限切れ lease の ``running`` 行を ``open`` に戻す。"""
         stmt = (
-            update(PendingHtmlArticleORM)
+            update(IncompleteArticleORM)
             .where(
-                PendingHtmlArticleORM.status == "running",
-                PendingHtmlArticleORM.leased_until <= now,
+                IncompleteArticleORM.status == "running",
+                IncompleteArticleORM.leased_until <= now,
             )
             .values(
                 status="open",
@@ -165,7 +165,7 @@ class ArticleCompletionRepository:
                 leased_until=None,
                 updated_at=now,
             )
-            .returning(PendingHtmlArticleORM.id)
+            .returning(IncompleteArticleORM.id)
         )
         rows = (await self._session.execute(stmt)).all()
         return len(rows)
@@ -178,14 +178,14 @@ class ArticleCompletionRepository:
     ) -> bool:
         """現在の attempt がまだ有効なら ``closed`` に閉じる。"""
         stmt = (
-            update(PendingHtmlArticleORM)
+            update(IncompleteArticleORM)
             .where(
-                PendingHtmlArticleORM.id == ready.pending_id,
-                PendingHtmlArticleORM.status == "running",
-                PendingHtmlArticleORM.attempt_count == ready.attempt_count,
+                IncompleteArticleORM.id == ready.pending_id,
+                IncompleteArticleORM.status == "running",
+                IncompleteArticleORM.attempt_count == ready.attempt_count,
             )
             .values(status="closed", leased_until=None, updated_at=now)
-            .returning(PendingHtmlArticleORM.id)
+            .returning(IncompleteArticleORM.id)
         )
         return (await self._session.execute(stmt)).first() is not None
 
@@ -198,11 +198,11 @@ class ArticleCompletionRepository:
     ) -> bool:
         """現在の attempt がまだ有効なら ``open`` に戻し、次回時刻を設定する。"""
         stmt = (
-            update(PendingHtmlArticleORM)
+            update(IncompleteArticleORM)
             .where(
-                PendingHtmlArticleORM.id == ready.pending_id,
-                PendingHtmlArticleORM.status == "running",
-                PendingHtmlArticleORM.attempt_count == ready.attempt_count,
+                IncompleteArticleORM.id == ready.pending_id,
+                IncompleteArticleORM.status == "running",
+                IncompleteArticleORM.attempt_count == ready.attempt_count,
             )
             .values(
                 status="open",
@@ -210,7 +210,7 @@ class ArticleCompletionRepository:
                 leased_until=None,
                 updated_at=now,
             )
-            .returning(PendingHtmlArticleORM.id)
+            .returning(IncompleteArticleORM.id)
         )
         return (await self._session.execute(stmt)).first() is not None
 
@@ -237,12 +237,12 @@ class ArticleCompletionRepository:
 
     async def _delete_claimed(self, ready: ReadyForArticleCompletion) -> bool:
         stmt = (
-            delete(PendingHtmlArticleORM)
+            delete(IncompleteArticleORM)
             .where(
-                PendingHtmlArticleORM.id == ready.pending_id,
-                PendingHtmlArticleORM.status == "running",
-                PendingHtmlArticleORM.attempt_count == ready.attempt_count,
+                IncompleteArticleORM.id == ready.pending_id,
+                IncompleteArticleORM.status == "running",
+                IncompleteArticleORM.attempt_count == ready.attempt_count,
             )
-            .returning(PendingHtmlArticleORM.id)
+            .returning(IncompleteArticleORM.id)
         )
         return (await self._session.execute(stmt)).first() is not None

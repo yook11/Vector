@@ -1,6 +1,6 @@
 """``ArticleCompletionService`` — 未完成記事を完成形に補完する use case。
 
-``pending_html_articles`` 駆動。Task 層が構築した厚い Ready を ``execute(ready)``
+``incomplete_articles`` 駆動。Task 層が構築した厚い Ready を ``execute(ready)``
 で受け取り、唯一のオーケストレータとして 3 Stage を順に呼ぶ。重複は
 ``articles.source_url UNIQUE`` が防ぎ、race-loss は read-back せず log + ``None``
 で短絡する。
@@ -10,7 +10,7 @@
 - Stage 2 完成: ``ArticleHtmlCompleter.complete`` (純粋 sync アダプタ) に
   ``AcquiredContent`` を渡し ``AnalyzableArticle | CompletionRejection``
   を受ける。
-- Stage 3 永続化: ``articles`` INSERT + ``pending_html_articles`` DELETE は同 tx で
+- Stage 3 永続化: ``articles`` INSERT + ``incomplete_articles`` DELETE は同 tx で
   一括 commit。真の DB 異常は例外として伝播。
 - 失敗は concern 別に分類し ``ArticleCompletionFailureHandler`` の 2 入口へ委譲:
   Stage 1 (acquisition) は ``handle_acquisition_failure``、Stage 2 (completion)
@@ -89,27 +89,27 @@ class ArticleCompletionService:
         match acquired:
             case AcquiredContent() as content:
                 pass
-            case _ as failure:  # AcquisitionFailure (transport + content の 5 variant)
+            case failure:  # AcquisitionFailure (transport + content の 5 variant)
                 await self._failure_handler.handle_acquisition_failure(
                     ready, classify_acquisition_failure(failure)
                 )
                 return None
 
         # Stage 2: 完成（抽出物 → AnalyzableArticle or 構築拒否）。
-        built = self._completer.complete(ready, content)
-        match built:
-            case AnalyzableArticle() as advanced:
+        completed = self._completer.complete(ready, content)
+        match completed:
+            case AnalyzableArticle() as article:
                 pass
             case CompletionRejection() as rejection:
                 await self._failure_handler.handle_completion_rejected(ready, rejection)
                 return None
-            case _ as unreachable:
+            case unreachable:
                 assert_never(unreachable)
 
         # Stage 3: 永続化。
         async with self._session_factory() as session:
             outcome = await ArticleCompletionRepository(session).persist_completed(
-                ready, advanced
+                ready, article
             )
             await session.commit()
 
@@ -140,5 +140,5 @@ class ArticleCompletionService:
                     canonical_url=str(ready.source_url),
                 )
                 return article_id
-            case _ as unreachable:
+            case unreachable:
                 assert_never(unreachable)

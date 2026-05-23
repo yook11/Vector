@@ -1,6 +1,6 @@
 """``IncompleteArticleRepository`` の統合テスト (実 Postgres)。
 
-Stage 1 (source_fetch) の ``pending_html_articles`` 投入 (``status='open'``
+Stage 1 (source_fetch) の ``incomplete_articles`` 投入 (``status='open'``
 INSERT) の振る舞いを ``UNIQUE(url)`` と合わせて検証する。``url``
 (``CanonicalArticleUrl`` 型で canonical 性を構造保証) が記事 identity の
 唯一の authoritative。Stage 2 の claim/sweep/状態遷移は
@@ -106,7 +106,7 @@ async def test_enqueue_writes_identity_in_columns_not_jsonb(
         await db_session.execute(
             text(
                 "SELECT url, source_name, staged_attributes "
-                "FROM pending_html_articles WHERE id = :id"
+                "FROM incomplete_articles WHERE id = :id"
             ),
             {"id": pending_id},
         )
@@ -148,7 +148,7 @@ async def test_enqueue_row_consistent_with_news_sources_join(
     join_row = (
         await db_session.execute(
             text(
-                "SELECT 1 AS hit FROM pending_html_articles p "
+                "SELECT 1 AS hit FROM incomplete_articles p "
                 "JOIN news_sources ns "
                 "  ON ns.id = p.source_id AND ns.name = p.source_name "
                 "WHERE p.id = :id"

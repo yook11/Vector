@@ -4,7 +4,7 @@
 
 - ``observed`` — 取得済み事実 (``ObservedArticle``)。
 - ``profile`` — per-source 補完方針 (``ArticleCompletionPolicy``)。
-- ``source_url`` — 記事 identity (``pending_html_articles.url`` 列が
+- ``source_url`` — 記事 identity (``incomplete_articles.url`` 列が
   authoritative。``ObservedArticle`` は持たない)。
 - ``attempt_count`` — stale worker guard / retry 予算判定の SSoT。
 """
@@ -55,7 +55,7 @@ class ReadyForArticleCompletion:
     ) -> ReadyForArticleCompletion | None:
         """pending_id から補完へ進めるかを判定する gateway。
 
-        進める条件: 同 pending_id の ``pending_html_articles`` 行が
+        進める条件: 同 pending_id の ``incomplete_articles`` 行が
         ``status='running'`` (cron dispatcher が claim 済)。未 claim / sweep 済 /
         close 済 / delete 済はすべて進めない。
 

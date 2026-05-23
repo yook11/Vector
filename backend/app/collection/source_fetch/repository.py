@@ -1,4 +1,4 @@
-"""Stage 1 (source_fetch) の ``pending_html_articles`` 投入専用 writer。
+"""Stage 1 (source_fetch) の ``incomplete_articles`` 投入専用 writer。
 
 commit は呼び出し側 (Service) が行う。本 writer は SQL 発行までで止まる。
 """
@@ -11,11 +11,11 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collection.domain.observed_article import ObservedArticle
-from app.models.pending_html_article import PendingHtmlArticle as PendingHtmlArticleORM
+from app.models.incomplete_article import IncompleteArticle as IncompleteArticleORM
 
 
 class IncompleteArticleRepository:
-    """``pending_html_articles`` への Stage 1 投入 (``status='open'``)。"""
+    """``incomplete_articles`` への Stage 1 投入 (``status='open'``)。"""
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
@@ -33,7 +33,7 @@ class IncompleteArticleRepository:
         呼び出し側 (Service) が行う。
         """
         stmt = (
-            pg_insert(PendingHtmlArticleORM)
+            pg_insert(IncompleteArticleORM)
             .values(
                 url=observed.source_url,
                 source_id=source_id,
@@ -49,7 +49,7 @@ class IncompleteArticleRepository:
                 attempt_count=0,
             )
             .on_conflict_do_nothing()
-            .returning(PendingHtmlArticleORM.id)
+            .returning(IncompleteArticleORM.id)
         )
         row = (await self._session.execute(stmt)).first()
         return row.id if row is not None else None

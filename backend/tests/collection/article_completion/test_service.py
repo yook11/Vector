@@ -1,12 +1,12 @@
 """``ArticleCompletionService`` の不変条件テスト (PR-E 仕様: ``pending.url`` SSoT)。
 
-検証する不変条件 (DB 状態 = ``articles`` / ``pending_html_articles`` の遷移で
+検証する不変条件 (DB 状態 = ``articles`` / ``incomplete_articles`` の遷移で
 振る舞いを assert する。``pipeline_events`` 監査基盤は撤去済で、戻り値 + DB 状態 +
 構造化ログが観測点):
 
 - ``execute()`` が成功時 ``int`` (article_id) を返し、失敗・skip・race-loss
   時はすべて ``None`` を返す
-- ``pending_html_articles`` の状態遷移が DB に焼き付く
+- ``incomplete_articles`` の状態遷移が DB に焼き付く
   (成功: DELETE / 永続失敗: closed / 一時失敗 (will retry): open + 未来 ready_at /
   一時失敗 (exhausted): closed)
 - 成功時に HTML から抽出した ``body`` / ``title`` / ``published_at`` がそのまま
@@ -54,8 +54,8 @@ from app.collection.sources.article_completion_policy import (
     ArticleCompletionPolicy,
 )
 from app.models.article import Article as ArticleORM
+from app.models.incomplete_article import IncompleteArticle
 from app.models.news_source import NewsSource, SourceType
-from app.models.pending_html_article import PendingHtmlArticle
 from app.shared.value_objects.source_name import SourceName
 
 
@@ -141,7 +141,7 @@ async def _make_pending(
     *,
     observed: ObservedArticle | None = None,
 ) -> tuple[CanonicalArticleUrl, int, ReadyForArticleCompletion]:
-    """``pending_html_articles`` 行を 1 件作って claim 状態にし Ready を構築する。
+    """``incomplete_articles`` 行を 1 件作って claim 状態にし Ready を構築する。
 
     Returns:
         (canonical_url, pending_id, ready) — pending は claim 済
@@ -225,7 +225,7 @@ async def test_success_deletes_pending_in_same_tx(
     tc_source: NewsSource,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """成功時に ``pending_html_articles`` 行は DELETE (articles INSERT と同 tx)。"""
+    """成功時に ``incomplete_articles`` 行は DELETE (articles INSERT と同 tx)。"""
     _, pending_id, ready = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/article-2"
     )
@@ -245,7 +245,7 @@ async def test_success_deletes_pending_in_same_tx(
 
     remaining = (
         await db_session.execute(
-            select(PendingHtmlArticle).where(PendingHtmlArticle.id == pending_id)
+            select(IncompleteArticle).where(IncompleteArticle.id == pending_id)
         )
     ).scalar_one_or_none()
     assert remaining is None
@@ -342,7 +342,7 @@ async def test_terminal_fetch_error_returns_none_and_closes_pending(
     assert articles == []
     pending = (
         await db_session.execute(
-            select(PendingHtmlArticle).where(PendingHtmlArticle.id == pending_id)
+            select(IncompleteArticle).where(IncompleteArticle.id == pending_id)
         )
     ).scalar_one()
     assert pending.status == "closed"
@@ -371,7 +371,7 @@ async def test_acquisition_failure_closes_pending(
     assert outcome is None
     pending = (
         await db_session.execute(
-            select(PendingHtmlArticle).where(PendingHtmlArticle.id == pending_id)
+            select(IncompleteArticle).where(IncompleteArticle.id == pending_id)
         )
     ).scalar_one()
     assert pending.status == "closed"
@@ -412,7 +412,7 @@ async def test_promotion_failure_closes_pending(
     assert articles == []
     pending = (
         await db_session.execute(
-            select(PendingHtmlArticle).where(PendingHtmlArticle.id == pending_id)
+            select(IncompleteArticle).where(IncompleteArticle.id == pending_id)
         )
     ).scalar_one()
     assert pending.status == "closed"
@@ -450,7 +450,7 @@ async def test_temporary_blip_first_attempt_writes_will_retry(
 
     pending = (
         await db_session.execute(
-            select(PendingHtmlArticle).where(PendingHtmlArticle.id == pending_id)
+            select(IncompleteArticle).where(IncompleteArticle.id == pending_id)
         )
     ).scalar_one()
     assert pending.status == "open"
@@ -478,8 +478,8 @@ async def test_temporary_outage_exhausted_closes_pending(
     )
     # OUTAGE_POLICY.max_attempts = 12 を超過させる: attempt_count を 12 に強制セット
     await db_session.execute(
-        update(PendingHtmlArticle)
-        .where(PendingHtmlArticle.id == pending_id)
+        update(IncompleteArticle)
+        .where(IncompleteArticle.id == pending_id)
         .values(attempt_count=12)
     )
     await db_session.commit()
@@ -506,7 +506,7 @@ async def test_temporary_outage_exhausted_closes_pending(
 
     pending = (
         await db_session.execute(
-            select(PendingHtmlArticle).where(PendingHtmlArticle.id == pending_id)
+            select(IncompleteArticle).where(IncompleteArticle.id == pending_id)
         )
     ).scalar_one()
     assert pending.status == "closed"
@@ -549,7 +549,7 @@ async def test_temporary_retry_after_uses_server_delay(
 
     pending = (
         await db_session.execute(
-            select(PendingHtmlArticle).where(PendingHtmlArticle.id == pending_id)
+            select(IncompleteArticle).where(IncompleteArticle.id == pending_id)
         )
     ).scalar_one()
     assert pending.status == "open"
@@ -611,7 +611,7 @@ async def test_race_lost_returns_none_and_deletes_pending(
     # pending は DELETE
     remaining = (
         await db_session.execute(
-            select(PendingHtmlArticle).where(PendingHtmlArticle.id == pending_id)
+            select(IncompleteArticle).where(IncompleteArticle.id == pending_id)
         )
     ).scalar_one_or_none()
     assert remaining is None
@@ -636,8 +636,8 @@ async def test_superseded_attempt_returns_none_and_keeps_pending(
     )
     # 別 worker の再 claim を模す: DB の attempt_count を ready が握る値からズラす
     await db_session.execute(
-        update(PendingHtmlArticle)
-        .where(PendingHtmlArticle.id == pending_id)
+        update(IncompleteArticle)
+        .where(IncompleteArticle.id == pending_id)
         .values(attempt_count=ready.attempt_count + 1)
     )
     await db_session.commit()
@@ -660,7 +660,7 @@ async def test_superseded_attempt_returns_none_and_keeps_pending(
     # DELETE は attempt 不一致で 0 行 → pending は残る (UrlConflict との差分)
     remaining = (
         await db_session.execute(
-            select(PendingHtmlArticle).where(PendingHtmlArticle.id == pending_id)
+            select(IncompleteArticle).where(IncompleteArticle.id == pending_id)
         )
     ).scalar_one_or_none()
     assert remaining is not None

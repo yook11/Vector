@@ -1,7 +1,7 @@
 """記事同一性用に正規化された URL の値オブジェクト。
 
 CanonicalArticleUrl は ``articles.source_url`` /
-``pending_html_articles.url`` の SSoT を「永続化キーとして使える形」で
+``incomplete_articles.url`` の SSoT を「永続化キーとして使える形」で
 構造保証する VO。canonicalize_url で表記揺れを吸収し、加えて SafeUrl の
 不変条件 (http/https + 構文 + SSRF) を canonical 値で満たすことを保証する。
 
@@ -41,7 +41,7 @@ class CanonicalArticleUrl(RootModel[str]):
     - 生成後は不変
 
     本 VO のインスタンスが存在する = 「``articles.source_url`` /
-    ``pending_html_articles.url`` UNIQUE 制約のキーとしてそのまま使える」
+    ``incomplete_articles.url`` UNIQUE 制約のキーとしてそのまま使える」
     という型レベル保証。
     """
 

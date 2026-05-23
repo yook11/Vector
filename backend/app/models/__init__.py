@@ -5,9 +5,9 @@ from app.models.category import Category
 from app.models.curation_noise import CurationNoise
 from app.models.fetch_log import FetchLog
 from app.models.in_scope_assessment import InScopeAssessment
+from app.models.incomplete_article import IncompleteArticle
 from app.models.news_source import NewsSource, SourceType
 from app.models.out_of_scope_assessment import OutOfScopeAssessment
-from app.models.pending_html_article import PendingHtmlArticle
 from app.models.pipeline_event import PipelineEvent
 from app.models.watchlist_entry import WatchlistEntry
 from app.models.weekly_briefing import WeeklyBriefing
@@ -22,7 +22,7 @@ __all__ = [
     "InScopeAssessment",
     "NewsSource",
     "OutOfScopeAssessment",
-    "PendingHtmlArticle",
+    "IncompleteArticle",
     "PipelineEvent",
     "SourceType",
     "WatchlistEntry",

@@ -163,7 +163,7 @@ async def ingest_source(
     # 永続化済 article_id を Trigger に詰めて enqueue。
     for article_id in persisted_ids:
         await curate_content.kiq(CurationTrigger(article_id=article_id))
-    # 本文未取得分は `pending_html_articles` の DB 駆動。`dispatch_html_fetch_jobs`
+    # 本文未取得分は `incomplete_articles` の DB 駆動。`dispatch_html_fetch_jobs`
     # cron poller が `acquire_html_body` に投入するため、ここでは直接 kiq しない。
     payload = {
         "source_id": source_id,

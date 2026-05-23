@@ -1,7 +1,8 @@
-"""``pending_html_articles`` テーブル — HTML 取得待ちの作業領域 (Pattern H 専用)。
+"""``incomplete_articles`` テーブル — 本文未取得の未完成記事 (Pattern H 専用)。
 
 PR2.5-A 新設。Stage 1 で entry が ``Failed`` (RSS で本文不足等) と判定された場合、
-この行が作られ、Stage 2 で HTML 取得を行うキューとなる。
+この行が作られ、Stage 2 の HTML 取得で本文を補って ``articles`` へ完成させる。
+それまでは「未完成記事」としてこの作業テーブルに滞留する。
 lease 方式 (status=open/running/closed + ready_at + leased_until +
 attempt_count) で多 worker 安全な claim と sweeper による lease 救出を行う。
 
@@ -35,7 +36,7 @@ from app.shared.value_objects.safe_url import SafeUrl
 from app.shared.value_objects.source_name import SourceName
 
 
-class PendingHtmlArticle(Base):
+class IncompleteArticle(Base):
     """HTML 取得待ちのキュー行 (lease 方式)。
 
     state model:
@@ -56,9 +57,9 @@ class PendingHtmlArticle(Base):
     (caller は canonicalize 済み URL を渡すこと)。
     """
 
-    __tablename__ = "pending_html_articles"
+    __tablename__ = "incomplete_articles"
     __table_args__ = (
-        UniqueConstraint("url", name="uq_pending_html_articles_url"),
+        UniqueConstraint("url", name="uq_incomplete_articles_url"),
         # composite FK (source_id, source_name) → news_sources(id, name)。
         # ``news_sources`` 側の ``(id, name)`` UNIQUE を target にし、
         # ``source_id`` 単独更新 (source_name は旧値のまま) のような drift
@@ -69,44 +70,44 @@ class PendingHtmlArticle(Base):
         ForeignKeyConstraint(
             ["source_id", "source_name"],
             ["news_sources.id", "news_sources.name"],
-            name="fk_pending_html_articles_source_id_name",
+            name="fk_incomplete_articles_source_id_name",
             ondelete="RESTRICT",
             onupdate="RESTRICT",
         ),
         CheckConstraint(
             "url ~ '^https?://.+'",
-            name="ck_pending_html_articles_url_scheme",
+            name="ck_incomplete_articles_url_scheme",
         ),
         CheckConstraint(
             "status IN ('open','running','closed')",
-            name="ck_pending_html_articles_status",
+            name="ck_incomplete_articles_status",
         ),
         # state ↔ leased_until の整合性
         CheckConstraint(
             "(status = 'open'    AND leased_until IS NULL) OR "
             "(status = 'running' AND leased_until IS NOT NULL) OR "
             "(status = 'closed'  AND leased_until IS NULL)",
-            name="ck_pending_html_articles_state_consistency",
+            name="ck_incomplete_articles_state_consistency",
         ),
         # open / running は ready_at 必須 (NULL だと picking から漏れる事故を防ぐ)
         CheckConstraint(
             "(status IN ('open','running') AND ready_at IS NOT NULL) OR "
             "(status = 'closed')",
-            name="ck_pending_html_articles_ready_required",
+            name="ck_incomplete_articles_ready_required",
         ),
         CheckConstraint(
             "attempt_count >= 0",
-            name="ck_pending_html_articles_attempt_nonneg",
+            name="ck_incomplete_articles_attempt_nonneg",
         ),
         # picking 用 (open のみ、ready_at で order)
         Index(
-            "ix_pending_html_articles_ready",
+            "ix_incomplete_articles_ready",
             "ready_at",
             postgresql_where=text("status = 'open'"),
         ),
         # sweeper 用 (running のみ、leased_until で order)
         Index(
-            "ix_pending_html_articles_expired_lease",
+            "ix_incomplete_articles_expired_lease",
             "leased_until",
             postgresql_where=text("status = 'running'"),
         ),

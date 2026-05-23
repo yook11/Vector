@@ -3,7 +3,7 @@
 Fetcher の stream を ``match`` で 3 型に振り分ける:
 
 - ``AnalyzableArticle`` → 即時保存
-- ``ObservedArticle`` → ``pending_html_articles`` に投入 (後段補完)
+- ``ObservedArticle`` → ``incomplete_articles`` に投入 (後段補完)
 - ``ConversionRejection`` → 業務 tx とは別 session で棄却監査して継続
 
 ``commit`` までが責務。``NewsSource`` lookup は本 Service では行わない。
@@ -35,7 +35,7 @@ class ArticleAcquisitionService:
     """1 source 分のニュースを取り込み、品質を担保した記事を獲得する。
 
     即時獲得は ``articles`` に保存、本文補完を要するものは
-    ``pending_html_articles`` に保管 (後段 ``ArticleCompletionService``)。
+    ``incomplete_articles`` に保管 (後段 ``ArticleCompletionService``)。
     ソース全体の取得失敗は ``SourceFetchError`` で Task に伝播する。
     """
 
@@ -51,7 +51,7 @@ class ArticleAcquisitionService:
         async with self._session_factory() as session:
             fetcher = self._fetcher_factory()
             article_store = ArticleStore(session)
-            pending_enqueue = IncompleteArticleRepository(session)
+            incomplete_repo = IncompleteArticleRepository(session)
 
             persisted_ids: list[int] = []
 
@@ -70,7 +70,7 @@ class ArticleAcquisitionService:
                                 observed.source_url
                             ):
                                 continue
-                            await pending_enqueue.save(
+                            await incomplete_repo.save(
                                 observed,
                                 source_id=source_id,
                                 ready_at=datetime.now(UTC),

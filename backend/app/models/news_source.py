@@ -29,7 +29,7 @@ class NewsSource(Base):
         # composite FK ``(id, name)`` の target invariant。``id`` 単独で PK
         # 一意だが、PostgreSQL の composite FK target は明示的な
         # UNIQUE / PK 制約を要するため必要 (spec ``Pending source identity
-        # refactor.md`` #3、``pending_html_articles`` 側 composite FK の参照先)。
+        # refactor.md`` #3、``incomplete_articles`` 側 composite FK の参照先)。
         UniqueConstraint("id", "name", name="uq_news_sources_id_name"),
         CheckConstraint(
             "name != ''",
