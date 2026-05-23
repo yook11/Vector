@@ -130,15 +130,6 @@ class ArticleCompletionPolicy:
             ),
         )
 
-    def body_requires_html(self) -> bool:
-        """body の正本が HTML 必須か (= ``html_required``)。
-
-        HTML 取得が失敗した場合に completer が「観測値で resolve させる前に短絡し、
-        ``AcquisitionFailure`` を値のまま返す」かを判定する gate 述語。
-        ``AcquisitionFailure`` 型を policy に持ち込まないための bool 境界。
-        """
-        return self.rules[CompletableField.body] is FieldCompletionRule.html_required
-
 
 # 大多数のソース: title/published_at は観測 (RSS) を正本に、body のみ HTML 必須。
 DEFAULT_POLICY = ArticleCompletionPolicy(

@@ -46,38 +46,29 @@ CompletionFailure = FetchFailed | AcquisitionFailure | CompletionInvariantReject
 def complete_with_html(
     observed: ObservedArticle,
     profile: ArticleCompletionPolicy,
-    html: AcquiredContent | AcquisitionFailure,
+    html: AcquiredContent,
     *,
     source_id: int,
     source_url: CanonicalArticleUrl,
-) -> AnalyzableArticle | CompletionInvariantRejected | AcquisitionFailure:
-    """観測事実 + profile + HTML 取得結果を merge し ``AnalyzableArticle`` 昇格。
+) -> AnalyzableArticle | CompletionInvariantRejected:
+    """抽出結果 (``AcquiredContent``) を観測値と merge し ``AnalyzableArticle`` に昇格。
 
     責務は薄いオーケストレーション: per-field の正本 merge は ``profile.resolve``
     (写像)、構築不変条件 (published_at 欠落含む) は ``AnalyzableArticle`` (出口契約)
-    が担い、本関数は precondition gate と失敗の証拠化
-    (``CompletionInvariantRejected``) だけを行う。
+    が担い、本関数は組み立てと不能の証拠化 (``CompletionInvariantRejected``) のみ。
+    取得失敗 (``AcquisitionFailure``) はここに来ない (``complete`` が surface する)。
     """
-    # precondition gate: body=html_required で HTML 取得が失敗していれば、resolve
-    # させる前に AcquisitionFailure を値のまま返す (retry 分類を後段へ流す)。
-    if not isinstance(html, AcquiredContent) and profile.body_requires_html():
-        return html
-
-    html_title = html.title if isinstance(html, AcquiredContent) else None
-    html_body = html.body if isinstance(html, AcquiredContent) else None
-    html_pub = html.published_at if isinstance(html, AcquiredContent) else None
-
     obs_title = observed.title.value if observed.title is not None else None
     obs_body = observed.body.value if observed.body is not None else None
     obs_pub = observed.published_at.value if observed.published_at is not None else None
 
     resolved = profile.resolve(
         observed_title=obs_title,
-        html_title=html_title,
+        html_title=html.title,
         observed_body=obs_body,
-        html_body=html_body,
+        html_body=html.body,
         observed_published_at=obs_pub,
-        html_published_at=html_pub,
+        html_published_at=html.published_at,
     )
 
     built = AnalyzableArticle.build_or_reject(
@@ -114,6 +105,11 @@ class ArticleHtmlCompleter:
             html_result = await acquirer.acquire(ready.source_url.as_safe_url())
         except ExternalFetchError as exc:
             return FetchFailed(error=exc)
+
+        # 抽出結果が無ければ (AcquisitionFailure) 完成のしようがないので、取得層の
+        # 判定を retry 分類付きのまま surface する。完成は抽出結果を持つ場合のみ。
+        if not isinstance(html_result, AcquiredContent):
+            return html_result
 
         return complete_with_html(
             ready.observed,

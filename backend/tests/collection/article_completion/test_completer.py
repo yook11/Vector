@@ -4,7 +4,7 @@
 戻り値が ``AnalyzableArticle | CompletionFailure`` の閉じ union に必ず収まる):
 
 - fetch 例外 (``ExternalFetchError``) → ``FetchFailed`` 値に畳まれ例外は出ない
-- ``AcquisitionFailure`` → ``body=html_required`` のため値のまま素通し
+- ``AcquisitionFailure`` → 抽出結果が無く完成できないので取得層の判定を surface
 - ``AcquiredContent`` + promotion 成功 → ``AnalyzableArticle``
 - ``AcquiredContent`` + promotion 失敗 → ``CompletionInvariantRejected``
 
@@ -87,7 +87,7 @@ async def test_fetch_error_is_folded_into_fetch_failed_value() -> None:
 
 @pytest.mark.asyncio
 async def test_acquisition_failure_passes_through_as_value() -> None:
-    """``AcquisitionFailure`` は ``body=html_required`` のため値のまま素通しする。"""
+    """``AcquisitionFailure`` は抽出結果が無く完成不能なので取得層の判定を surface。"""
     failure = NotHtml(content_type="application/pdf")
     result = await _completer(AsyncMock(return_value=failure)).complete(_ready())
 

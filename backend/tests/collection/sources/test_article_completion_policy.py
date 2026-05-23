@@ -9,7 +9,6 @@ per-source 補完方針は composition root の純データ。検証する不変
 3. 既定 profile の policy 値が spec §7 等価表どおり。
 4. ``resolve`` 写像: observed/html を per-field rule で merge する正本
    (spec §7 等価表の所有テスト。construct はしない=None でも値で返す)。
-5. ``body_requires_html`` 述語: body=html_required の有無を返す (gate 用)。
 """
 
 from __future__ import annotations
@@ -53,17 +52,6 @@ def _resolve_fields(
         html_body=html_body,
         observed_published_at=observed_published_at,
         html_published_at=html_published_at,
-    )
-
-
-def _policy_with_body(rule: FieldCompletionRule) -> ArticleCompletionPolicy:
-    """body だけ ``rule`` を変えた写像 (他 field は observed_preferred 固定)。"""
-    return ArticleCompletionPolicy(
-        {
-            CompletableField.title: FieldCompletionRule.observed_preferred,
-            CompletableField.body: rule,
-            CompletableField.published_at: FieldCompletionRule.observed_preferred,
-        }
     )
 
 
@@ -173,22 +161,3 @@ def test_resolve_published_at_both_absent_returns_none_not_failure() -> None:
     assert resolved.published_at is None
 
 
-# ---------------------------------------------------------------------------
-# body_requires_html 述語 (gate 用)
-# ---------------------------------------------------------------------------
-
-
-def test_body_requires_html_true_for_default_policies() -> None:
-    """両既定 profile は body=html_required (gate が発火する)。"""
-    assert DEFAULT_POLICY.body_requires_html()
-    assert HTML_TITLE_POLICY.body_requires_html()
-
-
-def test_body_requires_html_false_when_body_not_html_required() -> None:
-    """body が html_required 以外なら gate は発火しない (写像 totality)。"""
-    assert not _policy_with_body(
-        FieldCompletionRule.observed_preferred
-    ).body_requires_html()
-    assert not _policy_with_body(
-        FieldCompletionRule.html_preferred
-    ).body_requires_html()
