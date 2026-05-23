@@ -5,10 +5,11 @@
 1. 失敗 union (二層): acquire 段の失敗を transport / content の二層で表す。
    - ``ContentFailure`` (4 variant): URL に HTTP GET して HTML を取り、trafilatura で
      本文・タイトル・公開日時を取り出す段で「取得できたが使える本文でなかった」失敗
-     (content-type 不一致 / パーサ拒否 / parse 例外 / 品質ゲート未達)。抽出層
-     (``_extract`` / ``_parse_html``) はネットワークを持たず構造的にこの union しか
-     返せない。各 variant は失敗地点で得られる証拠 (content_type / quality metric /
-     例外 class+message) を frozen dataclass のフィールドとして保持する。
+     (content-type 不一致 / パーサ拒否 / parse 例外 / 品質ゲート未達)。content
+     acquisition 層 (parse: ``_parse_raw_response_as_html_document`` / build:
+     ``_build_acquired_content_from_document``) はネットワークを持たず構造的にこの
+     union しか返せない。各 variant は失敗地点で得られる証拠 (content_type /
+     quality metric / 例外 class+message) を frozen dataclass のフィールドに保持する。
    - ``FetchFailed``: 接続 / transport 失敗 (``ExternalFetchError``) を値で畳んだ
      transport variant。``acquire`` の公開境界が内部 ``_fetch`` の raise を捕えて
      値化する。
@@ -149,7 +150,8 @@ class QualityGateFailed:
 ContentFailure = NotHtml | ParserGaveUp | ParseCrashed | QualityGateFailed
 """取得できたが使える本文でなかった content 失敗を表す閉じ union (4 variant)。
 
-抽出層 (``_extract`` / ``_parse_html``) はネットワークを持たず、構造的にこの union
+content acquisition 層 (parse: ``_parse_raw_response_as_html_document`` / build:
+``_build_acquired_content_from_document``) はネットワークを持たず、構造的にこの union
 しか返せない。transport 失敗 (``FetchFailed``) はここに含めない。
 """
 

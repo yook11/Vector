@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 from structlog.testing import capture_logs
-from trafilatura.settings import Document
+from trafilatura.settings import Document as TrafilaturaDocument
 
 from app.collection.article_completion.acquirer import (
     AcquiredContent,
@@ -724,10 +724,11 @@ class TestDecodeHtmlResponse:
 
 
 class TestExtract:
-    """_extract: RawResponse → ExtractionResult (同期・例外を投げない層)。
+    """_acquire_content_from_response: RawResponse → ContentAcquisitionOutcome
+    (同期・例外を投げない層)。
 
-    取得 (_fetch) と切り離し、RawResponse を直接与えて抽出契約だけを検証する。
-    decode/parse の失敗を crash variant に畳む契約はここが正本。
+    取得 (_fetch) と切り離し、RawResponse を直接与えて content acquisition 契約だけを
+    検証する。decode/parse の失敗を crash variant に畳む契約はここが正本。
     """
 
     def test_non_html_returns_not_html(self) -> None:
@@ -738,7 +739,7 @@ class TestExtract:
             content=b"%PDF-1.4",
             decoded_text="",
         )
-        result = ArticleHtmlAcquirer()._extract(raw)
+        result = ArticleHtmlAcquirer()._acquire_content_from_response(raw)
         assert isinstance(result, NotHtml)
         assert result.content_type == "application/pdf"
 
@@ -748,9 +749,9 @@ class TestExtract:
         unique_html = (
             "<html><head><title>Extract Phase Unit Test</title></head>"
             "<body><article><h1>Isolated Extraction Sample</h1>"
-            "<p>This paragraph exists solely to exercise the _extract phase in "
-            "isolation from the fetch phase. It carries enough unique prose to "
-            "clear the fifty character body quality gate while staying clear of "
+            "<p>This paragraph exists solely to exercise the content acquisition "
+            "phase in isolation from the fetch phase. It carries enough unique prose "
+            "to clear the fifty character body quality gate while staying clear of "
             "trafilatura cross-call deduplication.</p>"
             "</article></body></html>"
         )
@@ -761,7 +762,7 @@ class TestExtract:
             content=unique_html.encode("utf-8"),
             decoded_text=unique_html,
         )
-        result = ArticleHtmlAcquirer()._extract(raw)
+        result = ArticleHtmlAcquirer()._acquire_content_from_response(raw)
         assert isinstance(result, AcquiredContent)
         assert result.title
         assert len(result.body) > 50
@@ -776,7 +777,7 @@ class TestExtract:
             content=minimal_html.encode("utf-8"),
             decoded_text=minimal_html,
         )
-        result = ArticleHtmlAcquirer()._extract(raw)
+        result = ArticleHtmlAcquirer()._acquire_content_from_response(raw)
         assert isinstance(result, ParserGaveUp | QualityGateFailed)
         if isinstance(result, QualityGateFailed):
             assert result.body_length < 50
@@ -791,10 +792,10 @@ class TestExtract:
             decoded_text=SAMPLE_HTML,
         )
         with patch(
-            "app.collection.article_completion.acquirer._parse_html",
+            "app.collection.article_completion.acquirer.trafilatura.bare_extraction",
             side_effect=RuntimeError("parse boom"),
         ):
-            result = ArticleHtmlAcquirer()._extract(raw)
+            result = ArticleHtmlAcquirer()._acquire_content_from_response(raw)
         assert isinstance(result, ParseCrashed)
         assert result.error_class == "RuntimeError"
 
@@ -810,9 +811,10 @@ class TestExtract:
             "quality gate while carrying a garbled tail ��� here."
         )
         replacement_count = body_text.count("�")
-        # bare_extraction が返すのと同じ実型 (Document) で patch する。
-        # _parse_html は戻り値を Document に narrow するため duck-typed stub は不可。
-        fake_document = Document(
+        # bare_extraction が返すのと同じ実型 (TrafilaturaDocument) で patch する。
+        # orchestrator が isinstance(parsed, TrafilaturaDocument) で narrow するため
+        # duck-typed stub は不可。
+        fake_document = TrafilaturaDocument(
             text=body_text, title="Mojibake Sample Title", date=None
         )
         raw = RawResponse(
@@ -830,7 +832,7 @@ class TestExtract:
             ),
             capture_logs() as logs,
         ):
-            result = ArticleHtmlAcquirer()._extract(raw)
+            result = ArticleHtmlAcquirer()._acquire_content_from_response(raw)
 
         assert isinstance(result, AcquiredContent)
         mojibake_logs = [log for log in logs if log.get("event") == "mojibake_detected"]
