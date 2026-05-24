@@ -99,14 +99,14 @@ async def _ready(article: Article) -> ReadyForCuration:
     )
 
 
-async def _fetch_extraction_events(
+async def _fetch_curation_events(
     db_session: AsyncSession, article_id: int
 ) -> list[PipelineEvent]:
     stmt = (
         select(PipelineEvent)
         .where(
             PipelineEvent.article_id == article_id,
-            PipelineEvent.stage == "extraction",
+            PipelineEvent.stage == "curation",
         )
         .order_by(PipelineEvent.id)
     )
@@ -129,7 +129,7 @@ async def test_signal_outcome_writes_extracted_audit_with_category_and_code(
     # signal 勝者 → Service は新規 article_extractions.id を返す
     assert isinstance(result, int)
     assert result > 0
-    events = await _fetch_extraction_events(db_session, article.id)
+    events = await _fetch_curation_events(db_session, article.id)
     assert len(events) == 1
     ev = events[0]
     assert ev.event_type == "succeeded"
@@ -162,7 +162,7 @@ async def test_noise_outcome_writes_extracted_as_noise_audit_with_category_and_c
 
     # noise 勝者 → Service は None (Stage 4 chain しない、Task 層 short return 対象)
     assert result is None
-    events = await _fetch_extraction_events(db_session, article.id)
+    events = await _fetch_curation_events(db_session, article.id)
     assert len(events) == 1
     ev = events[0]
     assert ev.event_type == "succeeded"
@@ -189,5 +189,5 @@ async def test_response_invalid_error_passes_through_without_service_audit(
         )
 
     # Service は audit を焼かない (失敗経路は task 層末尾の inline audit 責務、PR4)
-    events = await _fetch_extraction_events(db_session, article.id)
+    events = await _fetch_curation_events(db_session, article.id)
     assert len(events) == 0

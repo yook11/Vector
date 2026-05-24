@@ -426,7 +426,7 @@ async def test_extraction_race_loser_returns_none_and_skips_audit(
             await db_session.execute(
                 select(PipelineEvent).where(
                     PipelineEvent.article_id == article_id,
-                    PipelineEvent.stage == "extraction",
+                    PipelineEvent.stage == "curation",
                 )
             )
         )

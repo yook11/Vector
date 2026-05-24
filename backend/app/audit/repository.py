@@ -47,9 +47,9 @@ class PipelineEventRepository:
     ) -> None:
         """1 行 INSERT。``commit()`` は呼出側で。
 
-        ``category`` / ``code`` は article-bound analysis stages (extraction /
+        ``category`` / ``code`` は article-bound analysis stages (curation /
         assessment / embedding) のみ呼出側が指定する。dispatch / acquisition
-        / content_fetch では ``Layer1Category`` の語彙が合わないため ``None`` の
+        / completion では ``Layer1Category`` の語彙が合わないため ``None`` の
         まま (DB 列は nullable + ``IS NULL OR`` を許容する CHECK 制約)。
         """
         # source_id 自動補完: article_id だけ与えられた場合に逆引き

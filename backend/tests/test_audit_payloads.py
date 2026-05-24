@@ -4,7 +4,7 @@ field schema を検証する:
 
 - ``AcquisitionPayload``: failure path 専用 (fetcher_class + HTTP snapshot 系)。
   成功側 audit (件数 / breakdown 集計) は撤去済。
-- ``ContentFetchPayload``: ``canonical_url`` field
+- ``CompletionPayload``: ``canonical_url`` field
 - ``BasePipelineEventPayload``: ``extra="ignore"`` で未知 field を drop
   (rolling deploy 中に新 publisher → 旧 worker の読戻しを爆発させない)
 """
@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from app.audit.domain.payloads import (
     AcquisitionPayload,
-    ContentFetchPayload,
+    CompletionPayload,
 )
 
 
@@ -79,15 +79,15 @@ class TestAcquisitionPayloadConversionFields:
         assert AcquisitionPayload.model_validate(dumped) == payload
 
 
-class TestContentFetchPayloadAuditKeys:
-    """``ContentFetchPayload`` の集計 key field 不変条件 (PR-E dual-fill)。"""
+class TestCompletionPayloadAuditKeys:
+    """``CompletionPayload`` の集計 key field 不変条件 (PR-E dual-fill)。"""
 
     def test_canonical_url_field_exists(self) -> None:
-        payload = ContentFetchPayload(canonical_url="https://example.com/a")
+        payload = CompletionPayload(canonical_url="https://example.com/a")
         assert payload.canonical_url == "https://example.com/a"
 
     def test_canonical_url_defaults_none(self) -> None:
-        payload = ContentFetchPayload()
+        payload = CompletionPayload()
         assert payload.canonical_url is None
 
     def test_unknown_field_dropped_silently(self) -> None:
@@ -97,9 +97,9 @@ class TestContentFetchPayloadAuditKeys:
         worker が ``model_validate`` で読み戻しても ValidationError で死なない
         ことを保証する (kiq message envelope の ``extra="ignore"`` 既定との対称性)。
         """
-        restored = ContentFetchPayload.model_validate(
+        restored = CompletionPayload.model_validate(
             {
-                "kind": "content_fetch",
+                "kind": "completion",
                 "canonical_url": "https://example.com/a",
                 "future_field": "x",
             }
@@ -126,12 +126,12 @@ class TestPayloadJsonSerialization:
         restored = AcquisitionPayload.model_validate(dumped)
         assert restored == original
 
-    def test_content_fetch_roundtrip(self) -> None:
-        original = ContentFetchPayload(
+    def test_completion_roundtrip(self) -> None:
+        original = CompletionPayload(
             canonical_url="https://example.com/article/round",
             scraper_class="ArticleScraper",
             body_length=12345,
         )
         dumped = original.model_dump(mode="json")
-        restored = ContentFetchPayload.model_validate(dumped)
+        restored = CompletionPayload.model_validate(dumped)
         assert restored == original

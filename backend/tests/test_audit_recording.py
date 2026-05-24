@@ -19,9 +19,9 @@ from app.audit.domain.event import Stage
 from app.audit.domain.payloads import (
     AcquisitionPayload,
     AssessmentPayload,
-    ContentFetchPayload,
+    CompletionPayload,
+    CurationPayload,
     EmbeddingPayload,
-    ExtractionPayload,
 )
 from app.audit.error_chain import extract_error_chain
 from app.audit.recording import _record_failure_event, build_failure_payload
@@ -67,8 +67,8 @@ def test_error_chain_handles_cycle() -> None:
 
 def test_build_failure_payload_returns_correct_subclass() -> None:
     exc = ValueError("boom")
-    payload = build_failure_payload(Stage.EXTRACTION, exc)
-    assert isinstance(payload, ExtractionPayload)
+    payload = build_failure_payload(Stage.CURATION, exc)
+    assert isinstance(payload, CurationPayload)
     assert payload.error_message == "boom"
     assert payload.error_chain is not None
     assert payload.error_chain[0].endswith(".ValueError")
@@ -78,7 +78,7 @@ def test_build_failure_payload_for_each_stage_variant() -> None:
     exc = RuntimeError("x")
     cases: list[tuple[Stage, type]] = [
         (Stage.ACQUISITION, AcquisitionPayload),
-        (Stage.CONTENT_FETCH, ContentFetchPayload),
+        (Stage.COMPLETION, CompletionPayload),
         (Stage.ASSESSMENT, AssessmentPayload),
         (Stage.EMBEDDING, EmbeddingPayload),
     ]
@@ -93,7 +93,7 @@ def test_build_failure_payload_redacts_secrets_in_error_message() -> None:
         "Authorization: Bearer "
         "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.SflKxwRJSMeKKF2QT4abc failed"
     )
-    payload = build_failure_payload(Stage.EXTRACTION, exc)
+    payload = build_failure_payload(Stage.CURATION, exc)
 
     assert payload.error_message is not None
     assert "SflKxwRJSMeKKF2QT4abc" not in payload.error_message
@@ -104,7 +104,7 @@ def test_build_failure_payload_redacts_secrets_in_error_message() -> None:
 def test_build_failure_payload_preserves_normal_message() -> None:
     """secret なしの普通 exception は元 message が変わらない (可読性保持)。"""
     exc = RuntimeError("Connection refused on host db.internal port 5432")
-    payload = build_failure_payload(Stage.EXTRACTION, exc)
+    payload = build_failure_payload(Stage.CURATION, exc)
     assert payload.error_message == "Connection refused on host db.internal port 5432"
 
 
@@ -113,7 +113,7 @@ def test_build_failure_payload_truncation_after_redact() -> None:
     secret = "AIzaSyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q"
     long_filler = "x" * 5000
     exc = RuntimeError(f"prefix {secret} {long_filler}")
-    payload = build_failure_payload(Stage.EXTRACTION, exc)
+    payload = build_failure_payload(Stage.CURATION, exc)
 
     assert payload.error_message is not None
     assert len(payload.error_message) <= 2000

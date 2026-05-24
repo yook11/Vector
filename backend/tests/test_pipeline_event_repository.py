@@ -152,8 +152,8 @@ def test_stage_strenum_matches_check_constraint() -> None:
     expected = {
         "dispatch",
         "acquisition",
-        "content_fetch",
-        "extraction",
+        "completion",
+        "curation",
         "assessment",
         "embedding",
         "backfill_extract",
@@ -190,7 +190,7 @@ async def test_category_check_constraint(db_session: AsyncSession) -> None:
     """category 列の CHECK 制約検証: 7 値 + NULL は OK、不正値で IntegrityError。
 
     Layer1Category は article-bound analysis stages 専用の語彙のため、collection 系
-    stage (dispatch / acquisition / content_fetch) では NULL のまま記録される。
+    stage (dispatch / acquisition / completion) では NULL のまま記録される。
     DB CHECK は ``category IS NULL OR category IN (7 values)`` の形で NULL を許容。
 
     PR4: 'non_retryable_keep_extraction' を追加。
@@ -209,7 +209,7 @@ async def test_category_check_constraint(db_session: AsyncSession) -> None:
     # 6 値はすべて OK — article-bound analysis stages の正規パス
     for cat in Layer1Category:
         await repo.append(
-            stage=Stage.EXTRACTION,
+            stage=Stage.CURATION,
             event_type=EventType.FAILED,
             outcome_code=f"test_{cat.value}",
             payload=AcquisitionPayload(),
@@ -223,7 +223,7 @@ async def test_category_check_constraint(db_session: AsyncSession) -> None:
             text(
                 "INSERT INTO pipeline_events "
                 "(stage, event_type, outcome_code, category, attempt, payload) "
-                "VALUES ('extraction', 'failed', 'test', 'invalid_value', 1, '{}')"
+                "VALUES ('curation', 'failed', 'test', 'invalid_value', 1, '{}')"
             )
         )
     await db_session.rollback()

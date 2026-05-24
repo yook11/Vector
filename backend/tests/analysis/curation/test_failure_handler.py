@@ -112,7 +112,7 @@ async def test_output_blocked_writes_audit_then_deletes_article(
     events = list(
         (
             await db_session.execute(
-                select(PipelineEvent).where(PipelineEvent.stage == "extraction")
+                select(PipelineEvent).where(PipelineEvent.stage == "curation")
             )
         )
         .scalars()
@@ -166,7 +166,7 @@ async def test_input_rejected_writes_audit_then_deletes_article(
     events = list(
         (
             await db_session.execute(
-                select(PipelineEvent).where(PipelineEvent.stage == "extraction")
+                select(PipelineEvent).where(PipelineEvent.stage == "curation")
             )
         )
         .scalars()

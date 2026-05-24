@@ -1,7 +1,7 @@
 """Stage 3 (curation) 専用の pipeline_events 監査リポジトリ。
 
 監査 row の **shape SSoT**。Service / Task / application helper は本 class の
-semantic method を呼ぶだけで、``ExtractionPayload`` の組み立て・
+semantic method を呼ぶだけで、``CurationPayload`` の組み立て・
 ``PipelineEventRepository.append()`` の引数列・``error_chain`` の FQN 組み立て
 を一切知らない。
 
@@ -24,8 +24,8 @@ tx 境界は呼出側が握る (本 class は ``await session.commit()`` を呼�
 ``prompt_version`` を埋める (PR4 で ClassVar 強制を property 契約に置換、
 Gemini hardcode 依存は引き続き持たない)。
 
-PR-E.1.5 で rename 予定: ``Stage.EXTRACTION`` / ``ExtractionPayload`` (現在は
-wire format として据え置き)。
+PR-E.1.5 で ``Stage.CURATION`` / ``CurationPayload`` に rename 済み (旧
+``extraction`` wire 値は migration z1_curation_completion_rename で移行)。
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ from app.analysis.curation.errors import (
 )
 from app.audit.categories import Layer1Category
 from app.audit.domain.event import EventType, Stage
-from app.audit.domain.payloads import ExtractionPayload
+from app.audit.domain.payloads import CurationPayload
 from app.audit.error_chain import extract_error_chain
 from app.audit.repository import PipelineEventRepository
 from app.models.article import Article
@@ -86,7 +86,7 @@ class CurationAuditRepository:
         source_name = await self._resolve_source_name(ready.article_id)
         payload = self._success_payload(ready, envelope, source_name)
         await self._events.append(
-            stage=Stage.EXTRACTION,
+            stage=Stage.CURATION,
             event_type=EventType.SUCCEEDED,
             outcome_code=code,
             payload=payload,
@@ -110,7 +110,7 @@ class CurationAuditRepository:
         source_name = await self._resolve_source_name(ready.article_id)
         payload = self._success_payload(ready, envelope, source_name)
         await self._events.append(
-            stage=Stage.EXTRACTION,
+            stage=Stage.CURATION,
             event_type=EventType.SUCCEEDED,
             outcome_code=code,
             payload=payload,
@@ -145,7 +145,7 @@ class CurationAuditRepository:
         ``raise from exc`` で保持された元 ``AIProviderError`` まで記録する。
         """
         source_name = await self._resolve_source_name(article_id)
-        payload = ExtractionPayload(
+        payload = CurationPayload(
             **base_curation_payload_fields(
                 original_content=original_content,
                 source_name=source_name,
@@ -158,7 +158,7 @@ class CurationAuditRepository:
             error_chain=extract_error_chain(exc),
         )
         await self._events.append(
-            stage=Stage.EXTRACTION,
+            stage=Stage.CURATION,
             event_type=EventType.FAILED,
             outcome_code=code,
             payload=payload,
@@ -194,7 +194,7 @@ class CurationAuditRepository:
         ``raise from exc`` で保持された元 ``AIProviderError`` まで記録する。
         """
         source_name = await self._resolve_source_name(ready.article_id)
-        payload = ExtractionPayload(
+        payload = CurationPayload(
             **base_curation_payload_fields(
                 original_content=ready.original_content,
                 source_name=source_name,
@@ -209,7 +209,7 @@ class CurationAuditRepository:
         category = self._category_of(exc)
         code = self._code_of(exc)
         await self._events.append(
-            stage=Stage.EXTRACTION,
+            stage=Stage.CURATION,
             event_type=EventType.FAILED,
             outcome_code=code,
             payload=payload,
@@ -227,7 +227,7 @@ class CurationAuditRepository:
         ready: ReadyForCuration,
         envelope: CurationCall[Signal] | CurationCall[Noise],
         source_name: str | None,
-    ) -> ExtractionPayload:
+    ) -> CurationPayload:
         """成功経路 audit payload を envelope 経由で組み立てる。
 
         Stage 4 ``append_in_scope`` / ``append_out_of_scope`` と対称: ``ai_model``
@@ -236,7 +236,7 @@ class CurationAuditRepository:
         (``feedback_bc_boundary_guarantees_downstream``)。``ai_raw_response`` は
         ``raw_response[:LIMIT]`` で切り詰める。
         """
-        return ExtractionPayload(
+        return CurationPayload(
             **base_curation_payload_fields(
                 original_content=ready.original_content,
                 source_name=source_name,

@@ -14,7 +14,7 @@
      transport variant。``scrape`` の公開境界が内部 ``_fetch`` の raise を捕えて
      値化する。
    - ``ScrapeFailure = FetchFailed | ContentFailure``: scrape 境界の全失敗。
-   後段の audit 記録 (``ContentFetchPayload``) と log emit の双方で構造のまま使う。
+   後段の audit 記録 (``CompletionPayload``) と log emit の双方で構造のまま使う。
 2. Retry 軸 disposition: Stage 1 の全失敗 (``ScrapeFailure``) を ``Terminal`` |
    ``Retryable`` に分類する。Retry 軸は「再試行で結果が変わるか?」の Stage 1 固有概念。
    完成段 (Stage 2 = 抽出物 + メタデータ合成) は別 concern (Accept 軸) として
@@ -305,7 +305,7 @@ def classify_scrape_failure(failure: ScrapeFailure) -> ScrapeDecision:
       (retryable がありうる)。保持する例外の class+message を ``detail`` に畳む。
     - content 4 種: 常に ``Terminal`` で、証拠を ``detail`` に畳む。
 
-    本層は文字列の ``detail`` までで、構造化 audit (``ContentFetchPayload``) への
+    本層は文字列の ``detail`` までで、構造化 audit (``CompletionPayload``) への
     転写は別 PR で terminal 経路に recorder を新設して行う。
     """
     if isinstance(failure, FetchFailed):

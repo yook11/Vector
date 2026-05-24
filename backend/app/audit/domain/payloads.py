@@ -65,15 +65,15 @@ class AcquisitionPayload(BasePipelineEventPayload):
     conversion_has_published_at: bool | None = None
 
 
-class ContentFetchPayload(BasePipelineEventPayload):
-    """Stage 2 — 1 記事 1 HTML 取得。
+class CompletionPayload(BasePipelineEventPayload):
+    """Stage 2 — 1 記事 1 HTML 取得 (article_completion)。
 
     集計 key は ``canonical_url`` (= pending.url / articles.source_url の
     SSoT 値)。``articles.id`` は別途 ``article_id`` カラム (pipeline_events)
     で関連付ける。
     """
 
-    kind: Literal["content_fetch"] = "content_fetch"
+    kind: Literal["completion"] = "completion"
     # A: pending → article をまたぐ canonicalize 済み URL key
     canonical_url: str | None = None
     scraper_class: str | None = None  # A
@@ -89,10 +89,10 @@ class ContentFetchPayload(BasePipelineEventPayload):
     body_head: str | None = None  # 先頭 500 字
 
 
-class ExtractionPayload(BasePipelineEventPayload):
-    """Stage 3 — 大きい入力 (記事本文) は head + length + hash で扱う。"""
+class CurationPayload(BasePipelineEventPayload):
+    """Stage 3 — 大きい入力 (記事本文) は head + length + hash で扱う (curation)。"""
 
-    kind: Literal["extraction"] = "extraction"
+    kind: Literal["curation"] = "curation"
     ai_model: str | None = None  # S
     # A: prompt+model+gen_config+response_schema+system_instruction の SHA-256 prefix 8
     # (Prompt class が ClassVar で確定。詳細は ADR §prompt_version の規律)
@@ -172,8 +172,8 @@ class EmbeddingPayload(BasePipelineEventPayload):
 PipelineEventPayload = Annotated[
     DispatchPayload
     | AcquisitionPayload
-    | ContentFetchPayload
-    | ExtractionPayload
+    | CompletionPayload
+    | CurationPayload
     | AssessmentPayload
     | EmbeddingPayload,
     Field(discriminator="kind"),

@@ -10,10 +10,10 @@ from app.audit.domain.payloads import (
     AcquisitionPayload,
     AssessmentPayload,
     BasePipelineEventPayload,
-    ContentFetchPayload,
+    CompletionPayload,
+    CurationPayload,
     DispatchPayload,
     EmbeddingPayload,
-    ExtractionPayload,
     PipelineEventPayload,
 )
 from app.audit.recording import _record_failure_event
@@ -22,11 +22,11 @@ from app.audit.repository import PipelineEventRepository
 __all__ = [
     "AssessmentPayload",
     "BasePipelineEventPayload",
-    "ContentFetchPayload",
+    "CompletionPayload",
+    "CurationPayload",
     "DispatchPayload",
     "EmbeddingPayload",
     "EventType",
-    "ExtractionPayload",
     "PipelineEventPayload",
     "PipelineEventRepository",
     "AcquisitionPayload",

@@ -10,7 +10,7 @@
 - 第 3 防御: ``articles`` の "穴" 症状検知 (運用 SQL、本実装範囲外)
 
 PR3.5-b 規律: ``category`` / ``code`` は **呼出側が明示渡し** する。本ヘルパーは
-``exc`` からの自動導出を行わない (Stage 3 は ``ExtractionAuditRepository`` 経由
+``exc`` からの自動導出を行わない (Stage 3 は ``CurationAuditRepository`` 経由
 で audit を焼くため本経路は通らない、collection 系 / backfill 系は Layer1Category
 の語彙が合わないため明示渡しもしない、PR3.5-d で Stage 4/5 が独自 audit_repository
 を持つ予定)。
@@ -30,10 +30,10 @@ from app.audit.domain.payloads import (
     AcquisitionPayload,
     AssessmentPayload,
     BasePipelineEventPayload,
-    ContentFetchPayload,
+    CompletionPayload,
+    CurationPayload,
     DispatchPayload,
     EmbeddingPayload,
-    ExtractionPayload,
 )
 from app.audit.error_chain import extract_error_chain
 from app.audit.repository import PipelineEventRepository
@@ -46,8 +46,8 @@ _ERR_MSG_LIMIT = 2000
 _PAYLOAD_BY_STAGE: dict[Stage, type[BasePipelineEventPayload]] = {
     Stage.DISPATCH: DispatchPayload,
     Stage.ACQUISITION: AcquisitionPayload,
-    Stage.CONTENT_FETCH: ContentFetchPayload,
-    Stage.EXTRACTION: ExtractionPayload,
+    Stage.COMPLETION: CompletionPayload,
+    Stage.CURATION: CurationPayload,
     Stage.ASSESSMENT: AssessmentPayload,
     Stage.EMBEDDING: EmbeddingPayload,
     # backfill_* は PR4 で対応 (専用 Payload variant が必要かを判断後に追加)

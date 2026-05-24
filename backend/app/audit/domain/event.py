@@ -14,8 +14,8 @@ class Stage(StrEnum):
 
     DISPATCH = "dispatch"
     ACQUISITION = "acquisition"
-    CONTENT_FETCH = "content_fetch"
-    EXTRACTION = "extraction"
+    COMPLETION = "completion"
+    CURATION = "curation"
     ASSESSMENT = "assessment"
     EMBEDDING = "embedding"
     BACKFILL_EXTRACT = "backfill_extract"

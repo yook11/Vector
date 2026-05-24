@@ -56,7 +56,7 @@ def base_curation_payload_fields(
             payload にも保存する)。``None`` の場合は payload key も None。
 
     Returns:
-        ``BasePipelineEventPayload`` / ``ExtractionPayload`` に直接展開可能な
+        ``BasePipelineEventPayload`` / ``CurationPayload`` に直接展開可能な
         4 key を含む dict (``source_name``, ``input_content_length``,
         ``input_content_head``, ``input_content_hash``)。
     """
