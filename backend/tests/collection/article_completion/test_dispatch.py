@@ -32,7 +32,7 @@ import pytest
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.collection.article_collection.repository import IncompleteArticleRepository
+from app.collection.article_acquisition.repository import IncompleteArticleRepository
 from app.collection.article_completion import dispatch as dispatch_module
 from app.collection.article_completion.dispatch import (
     dispatch_html_fetch_jobs,

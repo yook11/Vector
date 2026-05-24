@@ -1,3 +1,15 @@
+> **SUPERSEDED (2026-05-25)**: 本 spec の stage1 語彙 (`source_fetch` / `article_collection` /
+> `SourceFetch*` / `ingest_source`) は **acquisition** に統一済。正本は
+> [`stage1-acquisition-vocabulary-unification.md`](./stage1-acquisition-vocabulary-unification.md)。
+>
+> 主要語彙 (旧 → 新): `source_fetch` → `acquisition` (stage token / `kind`) /
+> `article_collection` → `article_acquisition` (dir) / `SourceFetchError` → `SourceAcquisitionError` /
+> `SourceFetchFailureHandler` → `SourceAcquisitionFailureHandler` /
+> `SourceFetchAuditRepository` → `SourceAcquisitionAuditRepository` /
+> `SourceFetchPayload` → `AcquisitionPayload` / `ingest_source` → `acquire_source` (task) /
+> `IngestSourceArg` → `AcquireSourceArg`。`fetch` I/O 基層 (ExternalFetchError / FetchedArticle /
+> FetchLog 等) は据え置き。本 spec の当該記述は歴史的経緯として残し、現行仕様としては読まないこと。
+
 # Stage 2 (content_fetch) 監査統合 + Stage 2 リトライ基盤再設計
 
 PR2 / PR2.5 の設計討議メモ。

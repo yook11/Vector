@@ -13,7 +13,7 @@ class Stage(StrEnum):
     """パイプラインの 9 Stage。"""
 
     DISPATCH = "dispatch"
-    SOURCE_FETCH = "source_fetch"
+    ACQUISITION = "acquisition"
     CONTENT_FETCH = "content_fetch"
     EXTRACTION = "extraction"
     ASSESSMENT = "assessment"

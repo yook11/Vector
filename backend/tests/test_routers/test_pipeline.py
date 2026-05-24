@@ -6,7 +6,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.collection.staged import IngestSourceArg
+from app.collection.staged import AcquireSourceArg
 from app.models.news_source import NewsSource, SourceType
 
 
@@ -34,7 +34,7 @@ class TestFetchNews:
     async def test_fetch_with_source_ids(
         self, admin_client: AsyncClient, db_session: AsyncSession
     ) -> None:
-        """source_ids 指定時は IngestSourceArg envelope を kiq する。"""
+        """source_ids 指定時は AcquireSourceArg envelope を kiq する。"""
         sources = [
             NewsSource(
                 name="VentureBeat",
@@ -59,7 +59,7 @@ class TestFetchNews:
         source_ids = [s.id for s in sources]
 
         with patch(
-            "app.collection.tasks.ingest_source",
+            "app.collection.tasks.acquire_source",
         ) as mock_task:
             mock_task.kiq = AsyncMock()
             resp = await admin_client.post(
@@ -74,7 +74,7 @@ class TestFetchNews:
         assert mock_task.kiq.call_count == 2
         for call in mock_task.kiq.call_args_list:
             (arg,) = call.args
-            assert isinstance(arg, IngestSourceArg)
+            assert isinstance(arg, AcquireSourceArg)
             assert arg.id in source_ids
             assert arg.name in {"VentureBeat", "TechCrunch"}
 
@@ -83,7 +83,7 @@ class TestFetchNews:
     ) -> None:
         """source_ids がちょうど 100 件なら受理される (validation 境界の上限)。"""
         with patch(
-            "app.collection.tasks.ingest_source",
+            "app.collection.tasks.acquire_source",
         ) as mock_task:
             mock_task.kiq = AsyncMock()
             resp = await admin_client.post(

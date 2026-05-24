@@ -40,7 +40,7 @@ class PipelineEvent(Base):
             # migration y1_backfill_stage_rename と完全に揃える (metadata.create_all
             # 経由のテスト DB が古い CHECK を持たないように)。
             "stage IN ("
-            "'dispatch','source_fetch','content_fetch',"
+            "'dispatch','acquisition','content_fetch',"
             "'extraction','assessment','embedding',"
             "'backfill_extract','backfill_assess','backfill_embed'"
             ")",

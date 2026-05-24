@@ -26,13 +26,13 @@ async def fetch_news(
     source_ids 指定時はソースごとに個別タスクを dispatch、
     未指定時は dispatch_sources で全アクティブソースを dispatch。
     """
-    from app.collection.staged import IngestSourceArg
-    from app.collection.tasks import dispatch_sources, ingest_source
+    from app.collection.staged import AcquireSourceArg
+    from app.collection.tasks import acquire_source, dispatch_sources
 
     source_ids = body.source_ids if body else None
 
     if source_ids:
-        # ingest_source は IngestSourceArg(id, name) envelope を要求するため、
+        # acquire_source は AcquireSourceArg(id, name) envelope を要求するため、
         # 指定された source_id 群の name を 1 度の query で解決する。
         result = await session.execute(
             select(NewsSource.id, NewsSource.name).where(
@@ -44,7 +44,7 @@ async def fetch_news(
             name = name_by_id.get(sid)
             if name is None:
                 continue
-            await ingest_source.kiq(IngestSourceArg(id=sid, name=name))
+            await acquire_source.kiq(AcquireSourceArg(id=sid, name=name))
         return FetchResponse(
             message="Fetch tasks submitted",
             dispatched_count=sum(1 for sid in source_ids if sid in name_by_id),

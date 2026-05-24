@@ -19,11 +19,11 @@ from __future__ import annotations
 from typing import ClassVar
 from urllib.parse import urljoin, urlparse
 
-from app.collection.article_collection.fetched_article import FetchedArticle
-from app.collection.article_collection.reader.html_listing_reader import (
+from app.collection.article_acquisition.fetched_article import FetchedArticle
+from app.collection.article_acquisition.reader.html_listing_reader import (
     HtmlListingEntry,
 )
-from app.collection.article_collection.tools.reader_tools import ReaderTools
+from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.domain.observed_article import ObservedOrigin
 from app.collection.sources.article_completion_policy import (
     HTML_TITLE_POLICY,

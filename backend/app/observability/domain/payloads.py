@@ -3,7 +3,7 @@
 ADR §データモデル §Payload の宣言と一致。Stage ごとに別 variant、
 ``kind`` フィールドで discriminator を取る。
 
-現状 ``SourceFetchPayload`` は failure path (Task 例外パス) のみ書込されている。
+現状 ``AcquisitionPayload`` は failure path (Task 例外パス) のみ書込されている。
 成功側 audit (件数 / breakdown 集計) は中途半端な構造として撤去済で、後続で
 proper な audit subsystem を再導入する際に集計単位を整理して入れ直す予定。
 他 Stage の variant は schema として用意するが書込は順次活性化される。
@@ -33,7 +33,7 @@ class DispatchPayload(BasePipelineEventPayload):
     skip_reason: Literal["no_active_sources"] | None = None
 
 
-class SourceFetchPayload(BasePipelineEventPayload):
+class AcquisitionPayload(BasePipelineEventPayload):
     """Stage 1 — failure path 専用の S 級 snapshot payload。
 
     成功側 audit (件数 / breakdown 集計) は中途半端な構造として撤去済。
@@ -44,7 +44,7 @@ class SourceFetchPayload(BasePipelineEventPayload):
     に集計単位を整理して入れ直す予定。
     """
 
-    kind: Literal["source_fetch"] = "source_fetch"
+    kind: Literal["acquisition"] = "acquisition"
     fetcher_class: str | None = None  # A: type(fetcher).__name__
 
     # 失敗時 S 級 snapshot (Task 例外パスで詰める)
@@ -171,7 +171,7 @@ class EmbeddingPayload(BasePipelineEventPayload):
 
 PipelineEventPayload = Annotated[
     DispatchPayload
-    | SourceFetchPayload
+    | AcquisitionPayload
     | ContentFetchPayload
     | ExtractionPayload
     | AssessmentPayload

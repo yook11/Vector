@@ -18,8 +18,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.collection.article_collection.fetched_article import FetchedArticle
-from app.collection.article_collection.reader.rss_reader import RssEntry
+from app.collection.article_acquisition.fetched_article import FetchedArticle
+from app.collection.article_acquisition.reader.rss_reader import RssEntry
 from app.collection.domain.article_limits import ARTICLE_BODY_MAX_LENGTH
 from app.collection.sources.definitions.esa import (
     to_fetched_article as esa_to_fetched_article,

@@ -10,9 +10,9 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from app.collection.article_collection.fetched_article import FetchedArticle
-from app.collection.article_collection.reader.algolia_hn_reader import HackerNewsEntry
-from app.collection.article_collection.tools.reader_tools import ReaderTools
+from app.collection.article_acquisition.fetched_article import FetchedArticle
+from app.collection.article_acquisition.reader.algolia_hn_reader import HackerNewsEntry
+from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.domain.observed_article import ObservedOrigin
 from app.collection.sources.article_completion_policy import (
     DEFAULT_POLICY,

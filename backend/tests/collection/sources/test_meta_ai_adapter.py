@@ -15,9 +15,9 @@ from pathlib import Path
 
 import feedparser
 
-from app.collection.article_collection.fetched_article import FetchedArticle
-from app.collection.article_collection.fetcher import fetch_articles
-from app.collection.article_collection.reader.rss_reader import (
+from app.collection.article_acquisition.fetched_article import FetchedArticle
+from app.collection.article_acquisition.fetcher import fetch_articles
+from app.collection.article_acquisition.reader.rss_reader import (
     RssEntry,
     normalize_entry,
 )

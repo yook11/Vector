@@ -29,18 +29,18 @@ from typing import Any
 
 import pytest
 
-from app.collection.article_collection.reader.algolia_hn_reader import (
+from app.collection.article_acquisition.reader.algolia_hn_reader import (
     HackerNewsEntry,
     HackerNewsReader,
     normalize_hit,
 )
-from app.collection.article_collection.reader.crossref_reader import (
+from app.collection.article_acquisition.reader.crossref_reader import (
     CrossrefEntry,
     CrossrefReader,
     normalize_item,
 )
-from app.collection.article_collection.tools.raw_http_client import RawHttpClient
-from app.collection.article_collection.tools.reader_tools import ReaderTools
+from app.collection.article_acquisition.tools.raw_http_client import RawHttpClient
+from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.sources.article_source import ArticleSource

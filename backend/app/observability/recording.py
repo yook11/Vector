@@ -27,13 +27,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.observability.categories import Layer1Category
 from app.observability.domain.event import EventType, Stage
 from app.observability.domain.payloads import (
+    AcquisitionPayload,
     AssessmentPayload,
     BasePipelineEventPayload,
     ContentFetchPayload,
     DispatchPayload,
     EmbeddingPayload,
     ExtractionPayload,
-    SourceFetchPayload,
 )
 from app.observability.redact import redact_secrets
 from app.observability.repository import PipelineEventRepository
@@ -45,7 +45,7 @@ _ERR_MSG_LIMIT = 2000
 
 _PAYLOAD_BY_STAGE: dict[Stage, type[BasePipelineEventPayload]] = {
     Stage.DISPATCH: DispatchPayload,
-    Stage.SOURCE_FETCH: SourceFetchPayload,
+    Stage.ACQUISITION: AcquisitionPayload,
     Stage.CONTENT_FETCH: ContentFetchPayload,
     Stage.EXTRACTION: ExtractionPayload,
     Stage.ASSESSMENT: AssessmentPayload,

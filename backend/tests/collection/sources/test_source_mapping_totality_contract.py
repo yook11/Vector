@@ -54,30 +54,30 @@ from typing import Any
 import feedparser
 import pytest
 
-from app.collection.article_collection.fetcher import fetch_articles
-from app.collection.article_collection.reader.algolia_hn_reader import (
+from app.collection.article_acquisition.fetcher import fetch_articles
+from app.collection.article_acquisition.reader.algolia_hn_reader import (
     HackerNewsEntry,
     normalize_hit,
 )
-from app.collection.article_collection.reader.crossref_reader import (
+from app.collection.article_acquisition.reader.crossref_reader import (
     CrossrefEntry,
     normalize_item,
 )
-from app.collection.article_collection.reader.html_listing_reader import (
+from app.collection.article_acquisition.reader.html_listing_reader import (
     HtmlListingEntry,
     HtmlListingReader,
 )
-from app.collection.article_collection.reader.rss_reader import (
+from app.collection.article_acquisition.reader.rss_reader import (
     RssEntry,
     normalize_entry,
 )
-from app.collection.article_collection.reader.sitemap_reader import (
+from app.collection.article_acquisition.reader.sitemap_reader import (
     SitemapEntry,
     SitemapReader,
 )
-from app.collection.article_collection.strategy import SOURCES
-from app.collection.article_collection.tools.raw_http_client import RawHttpClient
-from app.collection.article_collection.tools.reader_tools import ReaderTools
+from app.collection.article_acquisition.strategy import SOURCES
+from app.collection.article_acquisition.tools.raw_http_client import RawHttpClient
+from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.external_fetch_errors import ExternalFetchError
 from app.collection.sources.article_source import ArticleSource
 from app.collection.sources.definitions.anthropic import (

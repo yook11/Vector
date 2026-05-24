@@ -24,7 +24,7 @@ import structlog
 import trafilatura
 from trafilatura.settings import Document as TrafilaturaDocument
 
-from app.collection.article_collection.tools.http_error_translation import (
+from app.collection.article_acquisition.tools.http_error_translation import (
     translate_fetch_exception,
 )
 from app.collection.article_completion.scrape_failure import (

@@ -1,3 +1,15 @@
+> **SUPERSEDED (2026-05-25)**: 本 spec の stage1 語彙 (`source_fetch` / `article_collection` /
+> `SourceFetch*` / `ingest_source`) は **acquisition** に統一済。正本は
+> [`stage1-acquisition-vocabulary-unification.md`](./stage1-acquisition-vocabulary-unification.md)。
+>
+> 主要語彙 (旧 → 新): `source_fetch` → `acquisition` (stage token / `kind`) /
+> `article_collection` → `article_acquisition` (dir) / `SourceFetchError` → `SourceAcquisitionError` /
+> `SourceFetchFailureHandler` → `SourceAcquisitionFailureHandler` /
+> `SourceFetchAuditRepository` → `SourceAcquisitionAuditRepository` /
+> `SourceFetchPayload` → `AcquisitionPayload` / `ingest_source` → `acquire_source` (task) /
+> `IngestSourceArg` → `AcquireSourceArg`。`fetch` I/O 基層 (ExternalFetchError / FetchedArticle /
+> FetchLog 等) は据え置き。本 spec の当該記述は歴史的経緯として残し、現行仕様としては読まないこと。
+
 # pipeline_events Stage 4 (Assessment) — 実装仕様
 
 Stage 4 (assessment) の error taxonomy / audit 永続化 / Task 層 dispatch の実装確定仕様。共通基盤 (foundation Layer 1 marker / DB schema / AuditRepository パターン) は `pipeline-events-error-taxonomy.md` を参照する。Stage 3 (extraction) の同等仕様は `pipeline-events-stage3-extraction.md` を参照。

@@ -18,11 +18,11 @@ from pathlib import Path
 
 import feedparser
 
-from app.collection.article_collection.reader.rss_reader import (
+from app.collection.article_acquisition.reader.rss_reader import (
     RssEntry,
     normalize_entry,
 )
-from app.collection.article_collection.tools.reader_tools import ReaderTools
+from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 
 _FIXTURES_DIR = Path(__file__).parent.parent.parent / "fixtures"
 

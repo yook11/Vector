@@ -38,7 +38,7 @@ async def _insert_event_at(
             """
             INSERT INTO pipeline_events
                 (occurred_at, stage, event_type, outcome_code, payload, attempt)
-            VALUES (:occurred_at, 'source_fetch', 'failed', :code, '{}'::jsonb, 1)
+            VALUES (:occurred_at, 'acquisition', 'failed', :code, '{}'::jsonb, 1)
             """
         ),
         {"occurred_at": occurred_at, "code": outcome_code},

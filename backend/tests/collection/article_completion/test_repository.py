@@ -23,10 +23,10 @@ from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
-from app.collection.article_collection.fetched_article import FetchedArticle
-from app.collection.article_collection.repository import IncompleteArticleRepository
-from app.collection.article_collection.strategy import SOURCES
-from app.collection.article_collection.tools.reader_tools import ReaderTools
+from app.collection.article_acquisition.fetched_article import FetchedArticle
+from app.collection.article_acquisition.repository import IncompleteArticleRepository
+from app.collection.article_acquisition.strategy import SOURCES
+from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.article_completion.repository import ArticleCompletionRepository
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl

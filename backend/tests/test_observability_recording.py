@@ -18,11 +18,11 @@ from structlog.testing import capture_logs
 from app.models.pipeline_event import PipelineEvent
 from app.observability.domain.event import Stage
 from app.observability.domain.payloads import (
+    AcquisitionPayload,
     AssessmentPayload,
     ContentFetchPayload,
     EmbeddingPayload,
     ExtractionPayload,
-    SourceFetchPayload,
 )
 from app.observability.recording import (
     _extract_error_chain,
@@ -80,7 +80,7 @@ def test_build_failure_payload_returns_correct_subclass() -> None:
 def test_build_failure_payload_for_each_stage_variant() -> None:
     exc = RuntimeError("x")
     cases: list[tuple[Stage, type]] = [
-        (Stage.SOURCE_FETCH, SourceFetchPayload),
+        (Stage.ACQUISITION, AcquisitionPayload),
         (Stage.CONTENT_FETCH, ContentFetchPayload),
         (Stage.ASSESSMENT, AssessmentPayload),
         (Stage.EMBEDDING, EmbeddingPayload),
@@ -132,7 +132,7 @@ async def test_record_failure_event_inserts_row(
     exc = RuntimeError("permanent fetch boom")
     await _record_failure_event(
         session_factory=session_factory,
-        stage=Stage.SOURCE_FETCH,
+        stage=Stage.ACQUISITION,
         outcome_code="permanent_fetch_error",
         exc=exc,
         attempt=2,
@@ -162,7 +162,7 @@ async def test_record_failure_event_falls_back_to_log_on_db_error() -> None:
     with capture_logs() as cap:
         await _record_failure_event(
             session_factory=_BoomFactory(),  # type: ignore[arg-type]
-            stage=Stage.SOURCE_FETCH,
+            stage=Stage.ACQUISITION,
             outcome_code="temporary_fetch_error_exhausted",
             exc=business_exc,
             attempt=3,

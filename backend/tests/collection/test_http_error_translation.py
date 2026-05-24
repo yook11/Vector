@@ -15,7 +15,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from app.collection.article_collection.tools.http_error_translation import (
+from app.collection.article_acquisition.tools.http_error_translation import (
     RECOVERABLE_FETCH_ERRORS,
     classify_fetch_status,
     translate_fetch_exception,

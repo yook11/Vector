@@ -40,11 +40,11 @@ from typing import Any
 
 import pytest
 
-from app.collection.article_collection.fetched_article import FetchedArticle
-from app.collection.article_collection.fetched_article_converter import (
+from app.collection.article_acquisition.fetched_article import FetchedArticle
+from app.collection.article_acquisition.fetched_article_converter import (
     ConversionRejection,
 )
-from app.collection.article_collection.reader.crossref_reader import (
+from app.collection.article_acquisition.reader.crossref_reader import (
     CrossrefEntry,
     CrossrefReader,
     normalize_item,

@@ -11,8 +11,8 @@ classmethod になった。固定する固有不変条件:
 
 from __future__ import annotations
 
-from app.collection.article_collection.fetched_article import FetchedArticle
-from app.collection.article_collection.fetcher import fetch_articles
+from app.collection.article_acquisition.fetched_article import FetchedArticle
+from app.collection.article_acquisition.fetcher import fetch_articles
 from app.collection.sources.definitions.the_register import TheRegisterSource
 from tests.collection.sources._fixture_tools import fixture_tools
 

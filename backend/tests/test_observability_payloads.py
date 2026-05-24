@@ -2,7 +2,7 @@
 
 field schema を検証する:
 
-- ``SourceFetchPayload``: failure path 専用 (fetcher_class + HTTP snapshot 系)。
+- ``AcquisitionPayload``: failure path 専用 (fetcher_class + HTTP snapshot 系)。
   成功側 audit (件数 / breakdown 集計) は撤去済。
 - ``ContentFetchPayload``: ``canonical_url`` field
 - ``BasePipelineEventPayload``: ``extra="ignore"`` で未知 field を drop
@@ -12,16 +12,16 @@ field schema を検証する:
 from __future__ import annotations
 
 from app.observability.domain.payloads import (
+    AcquisitionPayload,
     ContentFetchPayload,
-    SourceFetchPayload,
 )
 
 
-class TestSourceFetchPayloadFailureSnapshot:
+class TestAcquisitionPayloadFailureSnapshot:
     """failure path で使う fetcher_class + HTTP snapshot 系 field。"""
 
     def test_defaults_are_none(self) -> None:
-        payload = SourceFetchPayload()
+        payload = AcquisitionPayload()
         assert payload.fetcher_class is None
         assert payload.http_status is None
         assert payload.final_url is None
@@ -30,7 +30,7 @@ class TestSourceFetchPayloadFailureSnapshot:
         assert payload.body_head is None
 
     def test_http_snapshot_fields_can_be_set(self) -> None:
-        payload = SourceFetchPayload(
+        payload = AcquisitionPayload(
             fetcher_class="VentureBeatFetcher",
             http_status=403,
             final_url="https://venturebeat.com/feed/",
@@ -46,12 +46,12 @@ class TestSourceFetchPayloadFailureSnapshot:
         assert payload.body_head == "Forbidden"
 
 
-class TestSourceFetchPayloadConversionFields:
+class TestAcquisitionPayloadConversionFields:
     """per-entry 変換棄却 (REJECTED) 用 ``conversion_*`` 構造化列。"""
 
     def test_conversion_fields_default_none(self) -> None:
         """全 optional default None — 既存 failure payload 組立に無回帰。"""
-        payload = SourceFetchPayload()
+        payload = AcquisitionPayload()
         assert payload.conversion_analyzable_reason is None
         assert payload.conversion_observed_reason is None
         assert payload.conversion_raw_url is None
@@ -61,7 +61,7 @@ class TestSourceFetchPayloadConversionFields:
 
     def test_conversion_fields_serialize_to_json(self) -> None:
         """``conversion_*`` を与えると JSONB 焼付 (model_dump json) に乗る。"""
-        payload = SourceFetchPayload(
+        payload = AcquisitionPayload(
             conversion_analyzable_reason="body_too_short",
             conversion_observed_reason="missing_title",
             conversion_raw_url="https://example.com/a",
@@ -76,7 +76,7 @@ class TestSourceFetchPayloadConversionFields:
         assert dumped["conversion_has_title"] is True
         assert dumped["conversion_body_length"] == 42
         assert dumped["conversion_has_published_at"] is False
-        assert SourceFetchPayload.model_validate(dumped) == payload
+        assert AcquisitionPayload.model_validate(dumped) == payload
 
 
 class TestContentFetchPayloadAuditKeys:
@@ -111,8 +111,8 @@ class TestContentFetchPayloadAuditKeys:
 class TestPayloadJsonSerialization:
     """JSONB 焼付経路: ``model_dump(mode='json')`` → Pydantic 再構築の往復。"""
 
-    def test_source_fetch_roundtrip(self) -> None:
-        original = SourceFetchPayload(
+    def test_acquisition_roundtrip(self) -> None:
+        original = AcquisitionPayload(
             fetcher_class="VBFetcher",
             http_status=403,
             final_url="https://venturebeat.com/feed/",
@@ -123,7 +123,7 @@ class TestPayloadJsonSerialization:
             error_chain=["httpx.HTTPStatusError"],
         )
         dumped = original.model_dump(mode="json")
-        restored = SourceFetchPayload.model_validate(dumped)
+        restored = AcquisitionPayload.model_validate(dumped)
         assert restored == original
 
     def test_content_fetch_roundtrip(self) -> None:

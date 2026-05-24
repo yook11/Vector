@@ -8,7 +8,7 @@ failure-visibility)。
 
 from __future__ import annotations
 
-from app.collection.article_collection.reader.rss_reader import RssEntry
+from app.collection.article_acquisition.reader.rss_reader import RssEntry
 
 
 def dedup_by_link(entries: list[RssEntry]) -> list[RssEntry]:

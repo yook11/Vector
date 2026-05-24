@@ -9,8 +9,8 @@ test_source_adapter_profiles に集約)。
 
 from __future__ import annotations
 
-from app.collection.article_collection.fetched_article import FetchedArticle
-from app.collection.article_collection.fetcher import fetch_articles
+from app.collection.article_acquisition.fetched_article import FetchedArticle
+from app.collection.article_acquisition.fetcher import fetch_articles
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.article_limits import ARTICLE_BODY_MIN_LENGTH
 from app.collection.domain.observed_article import ObservedArticle

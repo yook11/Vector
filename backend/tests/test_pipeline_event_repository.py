@@ -19,8 +19,8 @@ from app.models.pipeline_event import PipelineEvent
 from app.observability.categories import Layer1Category
 from app.observability.domain.event import EventType, Stage
 from app.observability.domain.payloads import (
+    AcquisitionPayload,
     EmbeddingPayload,
-    SourceFetchPayload,
 )
 from app.observability.repository import PipelineEventRepository
 
@@ -59,14 +59,14 @@ async def article_row(db_session: AsyncSession, source_row: NewsSource) -> Artic
 async def test_append_inserts_row_with_payload_roundtrip(
     db_session: AsyncSession, source_row: NewsSource
 ) -> None:
-    """``SourceFetchPayload`` (failure-style snapshot) の DB roundtrip。
+    """``AcquisitionPayload`` (failure-style snapshot) の DB roundtrip。
 
-    成功側 audit 撤去後、``SourceFetchPayload`` は failure path 専用に
+    成功側 audit 撤去後、``AcquisitionPayload`` は failure path 専用に
     なったので Task 例外パスでの書込形態 (``event_type=FAILED`` +
     ``outcome_code=permanent_fetch_error`` + HTTP snapshot) で検証する。
     """
     repo = PipelineEventRepository(db_session)
-    payload = SourceFetchPayload(
+    payload = AcquisitionPayload(
         fetcher_class="VentureBeatFetcher",
         http_status=403,
         final_url="https://venturebeat.com/feed/",
@@ -78,7 +78,7 @@ async def test_append_inserts_row_with_payload_roundtrip(
     )
 
     await repo.append(
-        stage=Stage.SOURCE_FETCH,
+        stage=Stage.ACQUISITION,
         event_type=EventType.FAILED,
         outcome_code="permanent_fetch_error",
         payload=payload,
@@ -91,12 +91,12 @@ async def test_append_inserts_row_with_payload_roundtrip(
     rows = (await db_session.execute(select(PipelineEvent))).scalars().all()
     assert len(rows) == 1
     row = rows[0]
-    assert row.stage == "source_fetch"
+    assert row.stage == "acquisition"
     assert row.event_type == "failed"
     assert row.outcome_code == "permanent_fetch_error"
     assert row.source_id == source_row.id
     assert row.duration_ms == 42
-    assert row.payload["kind"] == "source_fetch"
+    assert row.payload["kind"] == "acquisition"
     assert row.payload["fetcher_class"] == "VentureBeatFetcher"
     assert row.payload["http_status"] == 403
     assert row.payload["final_url"] == "https://venturebeat.com/feed/"
@@ -135,7 +135,7 @@ async def test_append_with_no_ids_leaves_both_null(
         stage=Stage.DISPATCH,
         event_type=EventType.SKIPPED,
         outcome_code="no_active_sources",
-        payload=SourceFetchPayload(),  # 共通基底だけ使う
+        payload=AcquisitionPayload(),  # 共通基底だけ使う
     )
     await db_session.commit()
 
@@ -151,7 +151,7 @@ def test_stage_strenum_matches_check_constraint() -> None:
     """
     expected = {
         "dispatch",
-        "source_fetch",
+        "acquisition",
         "content_fetch",
         "extraction",
         "assessment",
@@ -190,7 +190,7 @@ async def test_category_check_constraint(db_session: AsyncSession) -> None:
     """category 列の CHECK 制約検証: 7 値 + NULL は OK、不正値で IntegrityError。
 
     Layer1Category は article-bound analysis stages 専用の語彙のため、collection 系
-    stage (dispatch / source_fetch / content_fetch) では NULL のまま記録される。
+    stage (dispatch / acquisition / content_fetch) では NULL のまま記録される。
     DB CHECK は ``category IS NULL OR category IN (7 values)`` の形で NULL を許容。
 
     PR4: 'non_retryable_keep_extraction' を追加。
@@ -202,7 +202,7 @@ async def test_category_check_constraint(db_session: AsyncSession) -> None:
         stage=Stage.DISPATCH,
         event_type=EventType.SKIPPED,
         outcome_code="test_null_category",
-        payload=SourceFetchPayload(),
+        payload=AcquisitionPayload(),
     )
     await db_session.commit()
 
@@ -212,7 +212,7 @@ async def test_category_check_constraint(db_session: AsyncSession) -> None:
             stage=Stage.EXTRACTION,
             event_type=EventType.FAILED,
             outcome_code=f"test_{cat.value}",
-            payload=SourceFetchPayload(),
+            payload=AcquisitionPayload(),
             category=cat,
         )
     await db_session.commit()

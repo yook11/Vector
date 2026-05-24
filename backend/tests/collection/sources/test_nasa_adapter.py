@@ -20,9 +20,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from app.collection.article_collection.fetched_article import FetchedArticle
-from app.collection.article_collection.fetcher import fetch_articles
-from app.collection.article_collection.reader.rss_reader import RssEntry
+from app.collection.article_acquisition.fetched_article import FetchedArticle
+from app.collection.article_acquisition.fetcher import fetch_articles
+from app.collection.article_acquisition.reader.rss_reader import RssEntry
 from app.collection.sources.definitions.nasa import (
     NASA_FEEDS,
     NASASource,

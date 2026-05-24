@@ -31,10 +31,10 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
-from app.collection.article_collection import service as service_module
-from app.collection.article_collection.fetched_article import FetchedArticle
-from app.collection.article_collection.service import ArticleAcquisitionService
-from app.collection.article_collection.tools.reader_tools import ReaderTools
+from app.collection.article_acquisition import service as service_module
+from app.collection.article_acquisition.fetched_article import FetchedArticle
+from app.collection.article_acquisition.service import ArticleAcquisitionService
+from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import ObservedOrigin
 from app.collection.sources.article_completion_policy import (
@@ -342,7 +342,7 @@ async def test_conversion_rejection_writes_rejected_event_in_separate_tx(
 ) -> None:
     """棄却監査は別 session に commit 済の REJECTED 行として残る。
 
-    ``stage='source_fetch'`` / ``event_type='rejected'`` 固定、``code`` /
+    ``stage='acquisition'`` / ``event_type='rejected'`` 固定、``code`` /
     ``outcome_code`` は単一 code、``category`` は collection stage なので NULL。
     深刻度細分は ``payload.conversion_*`` 構造化列で SQL drill-down できる。
     """
@@ -362,7 +362,7 @@ async def test_conversion_rejection_writes_rejected_event_in_separate_tx(
         .scalars()
         .one()
     )
-    assert row.stage == "source_fetch"
+    assert row.stage == "acquisition"
     assert row.code == "fetched_article_conversion_failed"
     assert row.outcome_code == "fetched_article_conversion_failed"
     assert row.category is None

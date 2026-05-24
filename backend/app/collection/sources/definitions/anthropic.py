@@ -17,9 +17,9 @@ from datetime import UTC, datetime
 from typing import ClassVar
 from urllib.parse import urlparse
 
-from app.collection.article_collection.fetched_article import FetchedArticle
-from app.collection.article_collection.reader.sitemap_reader import SitemapEntry
-from app.collection.article_collection.tools.reader_tools import ReaderTools
+from app.collection.article_acquisition.fetched_article import FetchedArticle
+from app.collection.article_acquisition.reader.sitemap_reader import SitemapEntry
+from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.domain.observed_article import ObservedOrigin
 from app.collection.sources.article_completion_policy import (
     HTML_TITLE_POLICY,

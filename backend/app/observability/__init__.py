@@ -7,6 +7,7 @@
 
 from app.observability.domain.event import EventType, Stage
 from app.observability.domain.payloads import (
+    AcquisitionPayload,
     AssessmentPayload,
     BasePipelineEventPayload,
     ContentFetchPayload,
@@ -14,7 +15,6 @@ from app.observability.domain.payloads import (
     EmbeddingPayload,
     ExtractionPayload,
     PipelineEventPayload,
-    SourceFetchPayload,
 )
 from app.observability.prompt_versions import compute_call_signature
 from app.observability.recording import _record_failure_event
@@ -30,7 +30,7 @@ __all__ = [
     "ExtractionPayload",
     "PipelineEventPayload",
     "PipelineEventRepository",
-    "SourceFetchPayload",
+    "AcquisitionPayload",
     "Stage",
     "_record_failure_event",
     "compute_call_signature",

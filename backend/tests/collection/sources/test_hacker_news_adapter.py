@@ -28,11 +28,11 @@ from typing import Any
 
 import pytest
 
-from app.collection.article_collection.fetched_article import FetchedArticle
-from app.collection.article_collection.fetched_article_converter import (
+from app.collection.article_acquisition.fetched_article import FetchedArticle
+from app.collection.article_acquisition.fetched_article_converter import (
     ConversionRejection,
 )
-from app.collection.article_collection.reader.algolia_hn_reader import (
+from app.collection.article_acquisition.reader.algolia_hn_reader import (
     HackerNewsEntry,
     HackerNewsReader,
     normalize_hit,

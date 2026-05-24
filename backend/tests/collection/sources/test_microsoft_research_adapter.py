@@ -12,8 +12,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.collection.article_collection.fetched_article import FetchedArticle
-from app.collection.article_collection.fetcher import fetch_articles
+from app.collection.article_acquisition.fetched_article import FetchedArticle
+from app.collection.article_acquisition.fetcher import fetch_articles
 from app.collection.sources.definitions.microsoft_research import (
     MicrosoftResearchSource,
 )

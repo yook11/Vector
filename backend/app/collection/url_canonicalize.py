@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-from app.collection.article_collection.tools.url_normalizer import _TRACKING_PARAMS
+from app.collection.article_acquisition.tools.url_normalizer import _TRACKING_PARAMS
 
 
 def canonicalize_url(raw: str) -> str:

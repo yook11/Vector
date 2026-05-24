@@ -1,6 +1,6 @@
 """収集タスク — パイプラインの前段。
 
-経路: ``dispatch_sources`` → ``ingest_source`` → ``curation.tasks.curate_content``。
+経路: ``dispatch_sources`` → ``acquire_source`` → ``curation.tasks.curate_content``。
 本文込みで取得できた記事は ``curate_content`` に直接 chain、本文未取得の記事は
 ``scrape_html_body`` task で HTML 取得 + 抽出 + 永続化へ進む。
 """
@@ -19,8 +19,10 @@ from app.brokers import (
     broker_content,
     broker_metadata,
 )
-from app.collection.article_collection.failure_handling import SourceFetchFailureHandler
-from app.collection.staged import IngestSourceArg
+from app.collection.article_acquisition.failure_handling import (
+    SourceAcquisitionFailureHandler,
+)
+from app.collection.staged import AcquireSourceArg
 from app.models.fetch_log import FetchLog, FetchStatus
 from app.models.news_source import NewsSource
 
@@ -87,7 +89,7 @@ async def dispatch_sources(
         return {"dispatched_count": 0}
 
     for source in sources:
-        await ingest_source.kiq(IngestSourceArg(id=source.id, name=str(source.name)))
+        await acquire_source.kiq(AcquireSourceArg(id=source.id, name=str(source.name)))
 
     result = {"dispatched_count": len(sources)}
     logger.info("dispatch_sources_completed", **result)
@@ -100,13 +102,13 @@ async def dispatch_sources(
 
 
 @broker_content.task(
-    task_name="ingest_source",
+    task_name="acquire_source",
     timeout=300,
     max_retries=0,
     retry_on_error=False,
 )
-async def ingest_source(
-    arg: IngestSourceArg,
+async def acquire_source(
+    arg: AcquireSourceArg,
     ctx: Context = TaskiqDepends(),
 ) -> dict:
     """ソースを取り込む。
@@ -116,24 +118,24 @@ async def ingest_source(
     本文未取得の記事は後段 ``scrape_html_body`` task へ進む。
 
     失敗ハンドリング: taskiq inline retry を持たず (``max_retries=0``)、捕捉した
-    例外は ``SourceFetchFailureHandler`` に委譲する。次の cron tick で再 dispatch
+    例外は ``SourceAcquisitionFailureHandler`` に委譲する。次の cron tick で再 dispatch
     される。
     """
     from app.analysis.curation.domain.ready import CurationTrigger
     from app.analysis.curation.tasks import curate_content
-    from app.collection.article_collection.service import ArticleAcquisitionService
-    from app.collection.article_collection.strategy import SOURCES
+    from app.collection.article_acquisition.service import ArticleAcquisitionService
+    from app.collection.article_acquisition.strategy import SOURCES
     from app.shared.value_objects.source_name import SourceName
 
     source_id = arg.id
-    logger.info("ingest_source_started", source_id=source_id, source_name=arg.name)
+    logger.info("acquire_source_started", source_id=source_id, source_name=arg.name)
     session_factory = ctx.state.session_factory
     start_time = time.monotonic()
 
     source = SOURCES[SourceName(arg.name)]
     svc = ArticleAcquisitionService(session_factory, source)
 
-    handler = SourceFetchFailureHandler(session_factory)
+    handler = SourceAcquisitionFailureHandler(session_factory)
     try:
         persisted_ids = await svc.execute(source_id)
     except Exception as exc:
@@ -172,7 +174,7 @@ async def ingest_source(
         "status": "success",
         "article_created_count": article_created_count,
     }
-    logger.info("ingest_source_completed", **payload)
+    logger.info("acquire_source_completed", **payload)
     return payload
 
 

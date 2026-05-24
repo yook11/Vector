@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import pytest
 
-from app.collection.article_collection.fetched_article import FetchedArticle
-from app.collection.article_collection.fetcher import fetch_articles
+from app.collection.article_acquisition.fetched_article import FetchedArticle
+from app.collection.article_acquisition.fetcher import fetch_articles
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.sources.article_source import ArticleSource
 from app.collection.sources.definitions.esa import (

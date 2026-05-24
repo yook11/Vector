@@ -12,9 +12,9 @@ from datetime import UTC, datetime
 from typing import ClassVar
 from zoneinfo import ZoneInfo
 
-from app.collection.article_collection.fetched_article import FetchedArticle
-from app.collection.article_collection.reader.rss_reader import RssEntry
-from app.collection.article_collection.tools.reader_tools import ReaderTools
+from app.collection.article_acquisition.fetched_article import FetchedArticle
+from app.collection.article_acquisition.reader.rss_reader import RssEntry
+from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.domain.observed_article import ObservedOrigin
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.sources.article_completion_policy import (
