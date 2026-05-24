@@ -184,19 +184,23 @@ class AcquiredContent:
         return cls(title=title, body=body, published_at=PublishedAt.parse(raw_date))
 
 
-class _RobotsCache:
-    """並行アクセス対応の robots.txt キャッシュ。
+class _RobotsGate:
+    """robots.txt に基づき取得可否を判定する関所 (並行アクセス対応)。
 
-    同じドメインを複数コルーチンが同時参照した際の重複フェッチを防ぐため、
-    ドメイン単位の ``asyncio.Lock`` を用いる。
+    判定材料の robots.txt はドメイン単位でキャッシュし、同じドメインを複数
+    コルーチンが同時参照した際の重複フェッチを ``asyncio.Lock`` で防ぐ。
     """
 
     def __init__(self) -> None:
         self._cache: dict[str, RobotFileParser | None] = {}
         self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
-    async def check(self, client: httpx.AsyncClient, url: str) -> bool:  # noqa: TID251
-        """URL が robots.txt で許可されているか判定する。許可なら True。
+    async def is_fetch_allowed(
+        self,
+        client: httpx.AsyncClient,  # noqa: TID251
+        url: str,
+    ) -> bool:
+        """URL を取得してよいか robots.txt に照らして判定する。許可なら True。
 
         ``client`` は ``make_safe_async_client`` 経由なので本メソッド内の
         ``client.get`` でも SSRF 検証が走る。
@@ -336,7 +340,7 @@ class ArticleHtmlAcquirer:
     """
 
     def __init__(self) -> None:
-        self._robots_cache = _RobotsCache()
+        self._robots_gate = _RobotsGate()
 
     async def acquire(self, url: SafeUrl) -> AcquiredContent | AcquisitionFailure:
         """指定 URL の HTML から記事本文・タイトル・公開日時を取得する (never raise)。
@@ -375,23 +379,25 @@ class ArticleHtmlAcquirer:
             headers=HEADERS, timeout=HTTP_TIMEOUT
         ) as client:
             try:
-                if not await self._robots_cache.check(client, url_str):
+                if await self._robots_gate.is_fetch_allowed(client, url_str):
+                    response = await client.get(url_str, timeout=HTTP_TIMEOUT)
+                    # 3xx は raise_for_status で拾われないので明示的に弾く。
+                    # follow_redirects=False (client default) が
+                    # Location 経由 SSRF を遮断。
+                    if 300 <= response.status_code < 400:
+                        logger.info(
+                            "redirect_not_followed",
+                            url=url_str,
+                            status=response.status_code,
+                            location=response.headers.get("location", "")[:200],
+                        )
+                        raise FetchRedirectBlockedError(
+                            f"redirect not followed: HTTP "
+                            f"{response.status_code}: {url_str}"
+                        )
+                    response.raise_for_status()
+                else:
                     raise FetchRobotsDisallowedError(f"robots.txt blocked: {url_str}")
-
-                response = await client.get(url_str, timeout=HTTP_TIMEOUT)
-                # 3xx は raise_for_status で拾われないので明示的に弾く。
-                # follow_redirects=False (client default) が Location 経由 SSRF を遮断。
-                if 300 <= response.status_code < 400:
-                    logger.info(
-                        "redirect_not_followed",
-                        url=url_str,
-                        status=response.status_code,
-                        location=response.headers.get("location", "")[:200],
-                    )
-                    raise FetchRedirectBlockedError(
-                        f"redirect not followed: HTTP {response.status_code}: {url_str}"
-                    )
-                response.raise_for_status()
             except (httpx.HTTPError, HostBlockedError, HostResolutionError) as e:
                 raise translate_fetch_exception(e, source_name=url_str) from e
 
