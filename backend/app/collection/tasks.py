@@ -111,7 +111,7 @@ async def ingest_source(
 ) -> dict:
     """ソースを取り込む。
 
-    ``arg.id`` は ``news_sources.id`` (FK 用)、``arg.name`` は Fetcher dispatch の
+    ``arg.id`` は ``news_sources.id`` (FK 用)、``arg.name`` は ``SOURCES`` dispatch の
     lookup キー。本文込みで取れた記事は永続化して ``curate_content`` に enqueue、
     本文未取得の記事は後段 ``acquire_html_body`` task へ進む。
 
@@ -122,15 +122,16 @@ async def ingest_source(
     from app.analysis.curation.domain.ready import CurationTrigger
     from app.analysis.curation.tasks import curate_content
     from app.collection.article_collection.service import ArticleAcquisitionService
-    from app.collection.article_collection.strategy import FETCHERS
+    from app.collection.article_collection.strategy import SOURCES
+    from app.shared.value_objects.source_name import SourceName
 
     source_id = arg.id
     logger.info("ingest_source_started", source_id=source_id, source_name=arg.name)
     session_factory = ctx.state.session_factory
     start_time = time.monotonic()
 
-    fetcher_factory = FETCHERS[arg.name]
-    svc = ArticleAcquisitionService(session_factory, fetcher_factory)
+    source = SOURCES[SourceName(arg.name)]
+    svc = ArticleAcquisitionService(session_factory, source)
 
     handler = SourceFetchFailureHandler(session_factory)
     try:

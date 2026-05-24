@@ -39,7 +39,7 @@ from app.collection.external_fetch_errors import (
     FetchResourceNotFoundError,
 )
 from app.collection.sources.definitions.nasa import NASA_FEEDS, nasa_build_body
-from tests.collection.fetchers._fixture_tools import fixture_tools
+from tests.collection.sources._fixture_tools import fixture_tools
 
 _NOW = datetime(2026, 5, 1, 12, 0, tzinfo=UTC)
 

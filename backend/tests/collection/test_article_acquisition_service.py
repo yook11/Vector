@@ -1,104 +1,104 @@
-"""``ArticleAcquisitionService`` の振り分け責務テスト。
+"""``ArticleAcquisitionService`` の収集 → 変換 → 永続化テスト。
 
-PR-E 以降は新 2 表 (``articles`` / ``incomplete_articles``) を直接駆動する。
+Fetcher 解体後、service は ``source.collect`` の ``FetchedArticle`` を本物の
+``convert_fetched_article`` に通して「何ができたか」を出し、``match`` で永続化
+する唯一のオーケストレータになった。よって本テストは変換済みの型を直接
+注入するのではなく、``FetchedArticle`` を yield する ``_StubSource`` を渡して
+**本物の convert を通る配線**を検証する (収集 → 変換 → 永続化のリンクを固定)。
 
 検証する不変条件:
 
 - 即時獲得経路 (``AnalyzableArticle``): ``articles.source_url``
   (型 ``CanonicalArticleUrl`` で canonicalize 済が構造保証) に直 INSERT、
   ``execute()`` 戻り値の ``list[int]`` に永続化された article_id が積まれる
-- 補完待ち獲得経路 (``IncompleteArticle``): ``seen_repo.exists_by_source_url``
-  pre-check を通過したら ``incomplete_articles.url`` で INSERT。Outcome は
-  純化されているため caller には何も渡らない (cron poller が DB 駆動)
-- 同 URL の重複 yield は ``articles.source_url UNIQUE`` で 1 件に絞られる
-- ``CanonicalArticleUrl`` 型構築時点で tracking parameter / trailing slash が
-  吸収される (Service 側で後付け正規化を行わない)
+- 補完待ち獲得経路 (``ObservedArticle``): ``article_store.exists_by_source_url``
+  pre-check を通過したら ``incomplete_articles.url`` で INSERT
+- 同 URL の重複 / canonicalize 後同一 URL は ``articles.source_url UNIQUE`` で
+  1 件に絞られる
 - 既知 URL (= articles 既存) を補完待ち経路で受けたら pre-check で skip
 - 混在 (即時 + 補完待ち) でも各経路が独立して正しく分岐する
-
-PR-2 (Outcome 純化): 品質ゲート未達は Fetcher 側で yield しないため、
-Service の責務は「渡された passport は次工程に進めるべきもの」前提のみ。
+- 変換棄却は握りつぶさず別 tx で ``pipeline_events`` に焼き、後続を止めない
+- convert が想定外 bug を raise しても service が ``unexpected_rejection`` で
+  値化し source を止めず、bug は ``UNEXPECTED_ERROR`` として監査される
 """
 
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from typing import ClassVar
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
-from app.collection.article_collection.errors import (
-    ConversionReason,
-    FetchedArticleConversionError,
-)
-from app.collection.article_collection.fetched_article_converter import (
-    ConversionRejection,
-)
+from app.collection.article_collection import service as service_module
+from app.collection.article_collection.fetched_article import FetchedArticle
 from app.collection.article_collection.service import ArticleAcquisitionService
-from app.collection.domain.analyzable_article import AnalyzableArticle
+from app.collection.article_collection.tools.fetch_tools import FetchTools
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
-from app.collection.domain.observed_article import (
-    ObservedArticle,
-    ObservedField,
-    ObservedOrigin,
+from app.collection.domain.observed_article import ObservedOrigin
+from app.collection.sources.article_completion_policy import (
+    DEFAULT_POLICY,
+    ArticleCompletionPolicy,
 )
-from app.collection.domain.value_objects import PublishedAt
 from app.models.article import Article as ArticleORM
 from app.models.incomplete_article import IncompleteArticle as IncompleteArticleORM
 from app.models.news_source import NewsSource, SourceType
 from app.models.pipeline_event import PipelineEvent
 from app.shared.value_objects.source_name import SourceName
 
-Passport = AnalyzableArticle | ObservedArticle
-FetchItem = AnalyzableArticle | ObservedArticle | ConversionRejection
+_PUBLISHED = datetime(2026, 4, 30, tzinfo=UTC)
 
 
-def _ready(source_id: int, url: str) -> AnalyzableArticle:
-    return AnalyzableArticle(
-        title="Test Title",
-        body="x" * 100,
-        published_at=PublishedAt(value=datetime(2026, 4, 30, tzinfo=UTC)),
-        source_id=source_id,
-        source_url=CanonicalArticleUrl(url),
+def _ready_fetched(url: str) -> FetchedArticle:
+    """real convert → ``AnalyzableArticle`` (body + published 揃い, DEFAULT_POLICY)。"""
+    return FetchedArticle(
+        title="Test Title", url=url, body="x" * 100, published_at=_PUBLISHED
     )
 
 
-def _pending(source_name: SourceName, url: str) -> ObservedArticle:
-    return ObservedArticle(
-        source_name=source_name,
-        source_url=CanonicalArticleUrl(url),
-        title=ObservedField(value="TC Title", origin=ObservedOrigin.feed),
-        published_at=ObservedField(
-            value=PublishedAt(value=datetime(2026, 4, 30, tzinfo=UTC)),
-            origin=ObservedOrigin.feed,
-        ),
+def _pending_fetched(url: str) -> FetchedArticle:
+    """real convert → ``ObservedArticle`` (body=None で Ready 不成立)。"""
+    return FetchedArticle(title="TC Title", url=url, body=None, published_at=_PUBLISHED)
+
+
+def _rejection_fetched(url: str = "https://venturebeat.com/x") -> FetchedArticle:
+    """real convert → ``MISSING_TITLE`` の ``ConversionRejection``。
+
+    title は whitespace: ``bool(title)`` は True (= ``has_title`` True) だが
+    strip 後は空で MISSING_TITLE 棄却になる。body 42 / published None で
+    audit payload の構造化 field を固定する。
+    """
+    return FetchedArticle(title="   ", url=url, body="x" * 42, published_at=None)
+
+
+def _bug_fetched(url: str) -> FetchedArticle:
+    """convert を monkeypatch で raise させる対象 entry (URL で識別)。"""
+    return FetchedArticle(
+        title="Bug Title", url=url, body="x" * 100, published_at=_PUBLISHED
     )
 
 
-def _rejection(
-    *,
-    conversion_reason: ConversionReason = ConversionReason.MISSING_TITLE,
-) -> ConversionRejection:
-    return ConversionRejection(
-        error=FetchedArticleConversionError(
-            f"conversion rejected: {conversion_reason}",
-            conversion_reason=conversion_reason,
-            source_name="VentureBeat",
-            raw_url="https://venturebeat.com/x",
-            has_title=True,
-            body_length=42,
-            has_published_at=False,
-        )
-    )
+class _StubSource:
+    """``FetchedArticle`` を yield する ``ArticleSource`` 構造的 fake。
 
+    identity / 補完方針は本物の RSS source 相当 (feed + DEFAULT_POLICY) に
+    固定し、``collect`` は注入された ``FetchedArticle`` 列をそのまま流す。
+    """
 
-class _StubFetcher:
-    def __init__(self, items: list[FetchItem]) -> None:
+    name: ClassVar[SourceName] = SourceName("VentureBeat")
+    endpoint_url: ClassVar[str] = "https://venturebeat.com/feed/"
+    observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.feed
+    completion_policy: ClassVar[ArticleCompletionPolicy] = DEFAULT_POLICY
+
+    def __init__(self, items: list[FetchedArticle]) -> None:
         self._items = items
 
-    async def fetch(self, source_id: int) -> AsyncIterator[FetchItem]:
+    async def collect(
+        self,
+        tools: FetchTools,  # noqa: ARG002
+    ) -> AsyncIterator[FetchedArticle]:
         for item in self._items:
             yield item
 
@@ -127,7 +127,7 @@ async def test_pattern_r_inserts_canonicalized_article(
     """即時獲得経路は articles を 1 件作り、source_url が canonicalize 済み値で入る。"""
     svc = ArticleAcquisitionService(
         session_factory,
-        lambda: _StubFetcher([_ready(vb_source.id, "https://venturebeat.com/a/")]),
+        _StubSource([_ready_fetched("https://venturebeat.com/a/")]),
     )
 
     article_ids = await svc.execute(vb_source.id)
@@ -152,7 +152,7 @@ async def test_pattern_h_inserts_pending_with_canonicalized_url(
     """補完待ち獲得経路は incomplete_articles を作り、url は canonicalize 済み値。"""
     svc = ArticleAcquisitionService(
         session_factory,
-        lambda: _StubFetcher([_pending(vb_source.name, "https://techcrunch.com/h/")]),
+        _StubSource([_pending_fetched("https://techcrunch.com/h/")]),
     )
 
     article_ids = await svc.execute(vb_source.id)
@@ -191,9 +191,7 @@ async def test_pattern_h_skips_when_article_already_exists(
 
     svc = ArticleAcquisitionService(
         session_factory,
-        lambda: _StubFetcher(
-            [_pending(vb_source.name, "https://techcrunch.com/known")]
-        ),
+        _StubSource([_pending_fetched("https://techcrunch.com/known")]),
     )
     article_ids = await svc.execute(vb_source.id)
 
@@ -208,12 +206,8 @@ async def test_empty_yield_does_not_persist(
     db_session: AsyncSession,
     vb_source: NewsSource,
 ) -> None:
-    """Fetcher が 1 件も yield しないとき、永続化は走らない。
-
-    Outcome 純化原則: 品質ゲート未達 entry は Fetcher 側で drop されるため、
-    Service には届かない。
-    """
-    svc = ArticleAcquisitionService(session_factory, lambda: _StubFetcher([]))
+    """Source が 1 件も yield しないとき、永続化は走らない。"""
+    svc = ArticleAcquisitionService(session_factory, _StubSource([]))
 
     article_ids = await svc.execute(vb_source.id)
 
@@ -234,9 +228,15 @@ async def test_duplicate_url_yielded_twice_persists_once(
 
     2 度目は ON CONFLICT DO NOTHING で ``known_url`` skip となる。
     """
-    e1 = _ready(vb_source.id, "https://venturebeat.com/dup/")
-    e2 = _ready(vb_source.id, "https://venturebeat.com/dup/")
-    svc = ArticleAcquisitionService(session_factory, lambda: _StubFetcher([e1, e2]))
+    svc = ArticleAcquisitionService(
+        session_factory,
+        _StubSource(
+            [
+                _ready_fetched("https://venturebeat.com/dup/"),
+                _ready_fetched("https://venturebeat.com/dup/"),
+            ]
+        ),
+    )
 
     article_ids = await svc.execute(vb_source.id)
 
@@ -256,9 +256,15 @@ async def test_canonicalization_dedupes_tracking_query(
     異なる原始 URL でも canonicalize 後が同じなら ``articles.source_url UNIQUE``
     で 2 度目は弾かれ ``known_url`` skip。
     """
-    e1 = _ready(vb_source.id, "https://venturebeat.com/a")
-    e2 = _ready(vb_source.id, "https://venturebeat.com/a/?utm_source=twitter")
-    svc = ArticleAcquisitionService(session_factory, lambda: _StubFetcher([e1, e2]))
+    svc = ArticleAcquisitionService(
+        session_factory,
+        _StubSource(
+            [
+                _ready_fetched("https://venturebeat.com/a"),
+                _ready_fetched("https://venturebeat.com/a/?utm_source=twitter"),
+            ]
+        ),
+    )
 
     article_ids = await svc.execute(vb_source.id)
 
@@ -276,10 +282,10 @@ async def test_mixed_ready_pending_route_independently(
     """混在 (R + H) でも各経路が独立して正しく分岐する。"""
     svc = ArticleAcquisitionService(
         session_factory,
-        lambda: _StubFetcher(
+        _StubSource(
             [
-                _ready(vb_source.id, "https://venturebeat.com/ok/"),
-                _pending(vb_source.name, "https://techcrunch.com/h/"),
+                _ready_fetched("https://venturebeat.com/ok/"),
+                _pending_fetched("https://techcrunch.com/h/"),
             ]
         ),
     )
@@ -306,11 +312,11 @@ async def test_conversion_rejection_audited_without_stopping_source(
     """
     svc = ArticleAcquisitionService(
         session_factory,
-        lambda: _StubFetcher(
+        _StubSource(
             [
-                _ready(vb_source.id, "https://venturebeat.com/ok/"),
-                _rejection(),
-                _pending(vb_source.name, "https://techcrunch.com/h/"),
+                _ready_fetched("https://venturebeat.com/ok/"),
+                _rejection_fetched(),
+                _pending_fetched("https://techcrunch.com/h/"),
             ]
         ),
     )
@@ -338,7 +344,7 @@ async def test_conversion_rejection_writes_rejected_event_in_separate_tx(
     """
     svc = ArticleAcquisitionService(
         session_factory,
-        lambda: _StubFetcher([_rejection()]),
+        _StubSource([_rejection_fetched()]),
     )
 
     await svc.execute(vb_source.id)
@@ -371,20 +377,44 @@ async def test_conversion_rejection_writes_rejected_event_in_separate_tx(
 
 
 @pytest.mark.asyncio
-async def test_conversion_rejection_payload_is_sql_drillable(
+async def test_unexpected_convert_bug_is_valued_and_stream_continues(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     vb_source: NewsSource,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``payload->>'conversion_observed_reason'`` で JSONB drill-down できる。"""
+    """convert が想定外 bug を raise しても service が値化し source を止めない。
+
+    bug entry は握りつぶされず ``UNEXPECTED_ERROR`` として別 tx で監査され
+    (``payload`` を SQL drill-down できる)、前後の R / H は通常どおり永続化
+    される (1 件の bug で source 全体が落ちない = stream resilience は
+    orchestrator の責務)。
+    """
+    real_convert = service_module.convert_fetched_article
+
+    def _flaky_convert(fetched: FetchedArticle, *, source: object, source_id: int):  # noqa: ANN202
+        if fetched.url == "https://venturebeat.com/bug":
+            raise RuntimeError("post-precondition invariant violation")
+        return real_convert(fetched, source=source, source_id=source_id)
+
+    monkeypatch.setattr(service_module, "convert_fetched_article", _flaky_convert)
+
     svc = ArticleAcquisitionService(
         session_factory,
-        lambda: _StubFetcher(
-            [_rejection(conversion_reason=ConversionReason.UNEXPECTED_ERROR)]
+        _StubSource(
+            [
+                _ready_fetched("https://venturebeat.com/ok/"),
+                _bug_fetched("https://venturebeat.com/bug"),
+                _pending_fetched("https://techcrunch.com/h/"),
+            ]
         ),
     )
 
-    await svc.execute(vb_source.id)
+    article_ids = await svc.execute(vb_source.id)
+
+    assert len(article_ids) == 1  # bug を挟んでも R は永続化
+    pendings = (await db_session.execute(select(IncompleteArticleORM))).scalars().all()
+    assert len(pendings) == 1  # bug 後の H も止まらず投入
 
     rows = (
         (
@@ -399,3 +429,4 @@ async def test_conversion_rejection_payload_is_sql_drillable(
         .all()
     )
     assert len(rows) == 1
+    assert rows[0].error_class.endswith(".FetchedArticleConversionError")

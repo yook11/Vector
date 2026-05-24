@@ -32,18 +32,40 @@ from datetime import UTC, datetime
 
 from app.collection.article_collection.fetched_article_converter import (
     ConversionRejection,
+    convert_fetched_article,
 )
+from app.collection.article_collection.tools.fetch_tools import FetchTools
 from app.collection.article_completion.acquirer import AcquiredContent
 from app.collection.article_completion.completer import complete_with_html
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.sources.article_completion_policy import DEFAULT_POLICY
+from app.collection.sources.article_source import ArticleSource
 
 _DEFAULT_HTML_PUBLISHED_AT = PublishedAt(value=datetime(2026, 5, 1, tzinfo=UTC))
 
 Passport = AnalyzableArticle | ObservedArticle
 FetchItem = AnalyzableArticle | ObservedArticle | ConversionRejection
+
+
+async def drive_source(
+    source: ArticleSource,
+    *,
+    tools: FetchTools,
+    source_id: int = 1,
+) -> list[FetchItem]:
+    """本番経路 (収集 → 変換) を駆動して「何ができたか」の列を返す test harness。
+
+    旧 ``ArticleFetcher`` を置換する。``convert_fetched_article`` が total 化
+    したため、per-source テストは ``source.collect`` の各 ``FetchedArticle`` を
+    本物の converter に通すだけで passport / 棄却の列が得られる (想定外 bug の
+    値化は service の責務なので harness は素通しする)。
+    """
+    return [
+        convert_fetched_article(fetched, source=source, source_id=source_id)
+        async for fetched in source.collect(tools)
+    ]
 
 
 def passports_only(items: Iterable[FetchItem]) -> list[Passport]:

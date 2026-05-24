@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from app.collection.article_collection.fetched_article import FetchedArticle
 from app.collection.sources.definitions.the_register import TheRegisterSource
-from tests.collection.fetchers._fixture_tools import fixture_tools
+from tests.collection.sources._fixture_tools import fixture_tools
 
 _FIXTURE = "the_register_atom.xml"
 

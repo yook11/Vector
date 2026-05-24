@@ -5,9 +5,9 @@
 - ``search_recent_stories`` に renamed kwargs (sliding window / min_points /
   hits_per_page) が必ず渡る (旧仕様: 24h window / points>20 / 100 hits)
 - ``to_fetched_article`` が url 欠落 hit を握りつぶさず **total** に
-  ``FetchedArticle(url="")`` を出し、fetcher 経路で ``ConversionRejection``
+  ``FetchedArticle(url="")`` を出し、収集 → 変換経路で ``ConversionRejection``
   として可視化される (spec「写像で None/drop/skip しない」は写像ごとに
-  pin が要る — converter/fetcher テストは ``FetchedArticle`` を直接与え HN
+  pin が要る — converter テストは ``FetchedArticle`` を直接与え HN
   写像を通らないため、ここでしか HN シームの totality を pin できない。
   HN は収集スコープ述語を持たず全 entry を写すため degenerate witness は
   単に url=None entry)
@@ -15,21 +15,19 @@
 
 passport 業務不変条件は ``test_non_rss_adapters_invariants.py`` [HackerNews]
 が 系統A シートベルトとして所有。degenerate hit の棄却 *理由* (MISSING_URL
-等) は converter/fetcher 層 (``test_fetched_article_converter.py`` /
-``test_article_fetcher.py``) が機構非依存 SSoT として所有し、本ファイルは
-理由を再検証せず「HN 写像が total で可視化に到達する」リンクのみ pin する。
-旧 ``test_*_skipped_in_collect`` / ``count==4`` は spec が意図的に壊す
-silent-drop を業務ルールとして凍結する確認重複だったため削除した。
+等) は converter 層 (``test_fetched_article_converter.py``) が機構非依存 SSoT
+として所有し、本ファイルは理由を再検証せず「HN 写像が total で可視化に到達
+する」リンクのみ pin する。旧 ``test_*_skipped_in_collect`` / ``count==4`` は
+spec が意図的に壊す silent-drop を業務ルールとして凍結する確認重複だったため
+削除した。
 """
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
 
-from app.collection.article_collection.article_fetcher import ArticleFetcher
 from app.collection.article_collection.fetched_article import FetchedArticle
 from app.collection.article_collection.fetched_article_converter import (
     ConversionRejection,
@@ -50,8 +48,8 @@ from app.collection.sources.definitions.hacker_news import (
     HN_SLIDING_WINDOW_SECONDS,
     HackerNewsSource,
 )
-from tests.collection.fetchers._fixture_tools import fixture_tools
-from tests.collection.fetchers._invariant import FetchItem
+from tests.collection.sources._fixture_tools import fixture_tools
+from tests.collection.sources._invariant import FetchItem, drive_source
 
 _HN_NAME = "Hacker News"
 
@@ -98,20 +96,16 @@ class _RaisingHNClient(HackerNewsReader):
         raise self._exc
 
 
-async def _collect(it: AsyncIterator[FetchItem]) -> list[FetchItem]:
-    return [o async for o in it]
-
-
-def _fetcher(client: HackerNewsReader) -> ArticleFetcher:
-    """HN Source を fixture client 注入で ``ArticleFetcher`` 化 (api+DEFAULT)。"""
-    return ArticleFetcher(HackerNewsSource, tools=fixture_tools(hacker_news=client))
+async def _drive(client: HackerNewsReader) -> list[FetchItem]:
+    """HN Source を fixture client 注入で収集 → 変換経路に通す (api+DEFAULT)。"""
+    return await drive_source(HackerNewsSource, tools=fixture_tools(hacker_news=client))
 
 
 @pytest.mark.asyncio
 async def test_client_kwargs_carry_quality_filters() -> None:
     """Source は旧仕様 (24h window / points>20 / 100 hits) を client に渡す。"""
     fake = _FakeHNClient([])
-    await _collect(_fetcher(fake).fetch(source_id=1))
+    await _drive(fake)
     assert fake.calls == [
         {
             "source_name": _HN_NAME,
@@ -152,7 +146,7 @@ async def test_url_none_hit_surfaces_as_rejection_without_stopping_stream() -> N
     """
     valid = {"url": "https://example.com/a", "title": "valid", "created_at": None}
     no_url = {"title": "Ask HN: no url", "created_at": None}
-    items = await _collect(_fetcher(_FakeHNClient([valid, no_url])).fetch(source_id=1))
+    items = await _drive(_FakeHNClient([valid, no_url]))
     assert any(isinstance(i, ObservedArticle) for i in items)  # valid 健在
     assert any(isinstance(i, ConversionRejection) for i in items)  # degenerate 可視
     assert len(items) == 2  # stream が止まらず両方到達 (片方 raise で停止しない)
@@ -160,19 +154,17 @@ async def test_url_none_hit_surfaces_as_rejection_without_stopping_stream() -> N
 
 @pytest.mark.asyncio
 async def test_non_recoverable_error_propagates_through_collect() -> None:
-    fetcher = _fetcher(
-        _RaisingHNClient(FetchAccessDeniedError(status_code=403, reason="forbidden"))
+    client = _RaisingHNClient(
+        FetchAccessDeniedError(status_code=403, reason="forbidden")
     )
     with pytest.raises(FetchAccessDeniedError):
-        await _collect(fetcher.fetch(source_id=1))
+        await _drive(client)
 
 
 @pytest.mark.asyncio
 async def test_recoverable_error_propagates_through_collect() -> None:
-    fetcher = _fetcher(
-        _RaisingHNClient(
-            FetchOriginServerError(status_code=500, reason="internal_error")
-        )
+    client = _RaisingHNClient(
+        FetchOriginServerError(status_code=500, reason="internal_error")
     )
     with pytest.raises(FetchOriginServerError):
-        await _collect(fetcher.fetch(source_id=1))
+        await _drive(client)

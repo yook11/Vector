@@ -23,18 +23,16 @@ passport 業務不変条件 (at_least_one / 型許容 / 主経路型 / 永続化
 parametrized ``test_non_rss_adapters_invariants.py`` [MDPI*] が 系統A
 シートベルトとして所有 (scope 述語が旧 ``mdpi_items`` の Cat A 除外を byte
 不変に再現するため自然生存)。degenerate の棄却 *理由* (MISSING_URL 等) は
-converter/fetcher 層 (``test_fetched_article_converter.py`` /
-``test_article_fetcher.py``) が機構非依存 SSoT として所有し、本ファイルは
-理由を再検証せず「MDPI 写像が total で可視化に到達する」リンクのみ pin
-する。旧 ``test_*_dropped`` (``assert items == []``) / ``count == 1`` /
-``yields_passports_from_fixture`` は spec が意図的に壊す silent-drop と
-系統A 重複を業務ルールとして凍結する確認重複だったため削除した。
+converter 層 (``test_fetched_article_converter.py``) が機構非依存 SSoT として
+所有し、本ファイルは理由を再検証せず「MDPI 写像が total で可視化に到達する」
+リンクのみ pin する。旧 ``test_*_dropped`` (``assert items == []``) /
+``count == 1`` / ``yields_passports_from_fixture`` は spec が意図的に壊す
+silent-drop と系統A 重複を業務ルールとして凍結する確認重複だったため削除した。
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
@@ -42,7 +40,6 @@ from typing import Any
 
 import pytest
 
-from app.collection.article_collection.article_fetcher import ArticleFetcher
 from app.collection.article_collection.fetched_article import FetchedArticle
 from app.collection.article_collection.fetched_article_converter import (
     ConversionRejection,
@@ -62,8 +59,8 @@ from app.collection.sources.definitions.mdpi import (
     is_collectable_mdpi_work,
     to_fetched_article,
 )
-from tests.collection.fetchers._fixture_tools import fixture_tools
-from tests.collection.fetchers._invariant import FetchItem
+from tests.collection.sources._fixture_tools import fixture_tools
+from tests.collection.sources._invariant import FetchItem, drive_source
 
 _FIXTURE = (
     Path(__file__).parent.parent.parent.parent / "fixtures" / "mdpi_crossref.json"
@@ -138,13 +135,9 @@ class _RaisingCrossrefClient(CrossrefReader):
         raise self._exc
 
 
-async def _collect(it: AsyncIterator[FetchItem]) -> list[FetchItem]:
-    return [o async for o in it]
-
-
-def _fetcher(client: CrossrefReader) -> ArticleFetcher:
-    """``MDPIMaterialsSource`` を fixture client 注入で ``ArticleFetcher`` 化。"""
-    return ArticleFetcher(MDPIMaterialsSource, tools=fixture_tools(crossref=client))
+async def _drive(client: CrossrefReader) -> list[FetchItem]:
+    """``MDPIMaterialsSource`` を fixture client 注入で収集 → 変換経路に通す。"""
+    return await drive_source(MDPIMaterialsSource, tools=fixture_tools(crossref=client))
 
 
 # ── 収集スコープ述語の真理値表 (scope 規則の SSoT) ──────────────────────
@@ -237,7 +230,7 @@ async def test_in_scope_degenerate_surfaces_as_rejection_without_stopping_stream
     valid = _items()[0]
     no_doi = deepcopy(_items()[0])
     del no_doi["DOI"]
-    items = await _collect(_fetcher(_FakeCrossrefClient([valid, no_doi])).fetch(1))
+    items = await _drive(_FakeCrossrefClient([valid, no_doi]))
     assert any(isinstance(i, AnalyzableArticle) for i in items)  # valid 健在
     assert any(isinstance(i, ConversionRejection) for i in items)  # degenerate 可視
     assert len(items) == 2  # stream が止まらず両方到達 (片方 raise で停止しない)
@@ -249,7 +242,7 @@ async def test_in_scope_degenerate_surfaces_as_rejection_without_stopping_stream
 @pytest.mark.asyncio
 async def test_doi_url_used_as_source_url() -> None:
     """``to_fetched_article`` 写像: source_url は DOI canonical resolver。"""
-    items = await _collect(_fetcher(_FakeCrossrefClient(_items())).fetch(source_id=1))
+    items = await _drive(_FakeCrossrefClient(_items()))
     assert items
     for item in items:
         assert isinstance(item, AnalyzableArticle)
@@ -264,7 +257,7 @@ async def test_collect_does_not_over_filter_documented_in_scope_count() -> None:
     を 1 本落とす) と 系統A も真理値表も件数を見ないため escape する。
     期待値は predicate をテスト内で呼ばず標本 provenance から固定。
     """
-    items = await _collect(_fetcher(_FakeCrossrefClient(_items())).fetch(source_id=1))
+    items = await _drive(_FakeCrossrefClient(_items()))
     analyzable = [i for i in items if isinstance(i, AnalyzableArticle)]
     assert len(analyzable) == _DOCUMENTED_IN_SCOPE_COUNT
 
@@ -272,7 +265,7 @@ async def test_collect_does_not_over_filter_documented_in_scope_count() -> None:
 @pytest.mark.asyncio
 async def test_client_kwargs_carry_issn_lookback_rows() -> None:
     fake = _FakeCrossrefClient([])
-    await _collect(_fetcher(fake).fetch(source_id=1))
+    await _drive(fake)
     assert len(fake.calls) == 1
     call = fake.calls[0]
     assert call["source_name"] == "MDPI Materials"
@@ -285,21 +278,17 @@ async def test_client_kwargs_carry_issn_lookback_rows() -> None:
 
 @pytest.mark.asyncio
 async def test_non_recoverable_error_propagates_through_collect() -> None:
-    fetcher = _fetcher(
-        _RaisingCrossrefClient(
-            FetchAccessDeniedError(status_code=403, reason="forbidden")
-        )
+    client = _RaisingCrossrefClient(
+        FetchAccessDeniedError(status_code=403, reason="forbidden")
     )
     with pytest.raises(FetchAccessDeniedError):
-        await _collect(fetcher.fetch(source_id=1))
+        await _drive(client)
 
 
 @pytest.mark.asyncio
 async def test_recoverable_error_propagates_through_collect() -> None:
-    fetcher = _fetcher(
-        _RaisingCrossrefClient(
-            FetchOriginServerError(status_code=500, reason="internal_error")
-        )
+    client = _RaisingCrossrefClient(
+        FetchOriginServerError(status_code=500, reason="internal_error")
     )
     with pytest.raises(FetchOriginServerError):
-        await _collect(fetcher.fetch(source_id=1))
+        await _drive(client)

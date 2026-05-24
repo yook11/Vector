@@ -1,15 +1,16 @@
 """``convert_fetched_article`` のユニットテスト (DB 非依存)。
 
-``FetchedArticle`` 入力を ``AnalyzableArticle`` / ``ObservedArticle`` に変換
-する分岐契約を検証する。title / URL / body / published の各境界と、profile の
-title policy (``html_preferred`` = 仮タイトル) による Ready gate を網羅し、
-``convert_fetched_article`` の判定順を固定する。
+``FetchedArticle`` 入力を ``AnalyzableArticle`` / ``ObservedArticle`` / 棄却
+(``ConversionRejection``) に変換する分岐契約を検証する。title / URL / body /
+published の各境界と、profile の title policy (``html_preferred`` = 仮タイトル)
+による Ready gate を網羅し、``convert_fetched_article`` の判定順を固定する。
 
-旧 ``try_build_passport`` の ``return None`` (drop) は
-``FetchedArticleConversionError`` の raise に置換された。変換不能 entry は
-握りつぶさず理由付き例外で表に出す (``conversion_reason`` + 構造化フィールド)。
-Ready の Pydantic 失敗 / tz-naive published の Observed fallback は **結果不変**
-(byte 等価) であることを引き続き固定する。
+convert は想定内に total: 変換不能 entry は raise でなく ``ConversionRejection``
+値で返し、握りつぶさず理由付きで表に出す (``conversion_reason`` + 構造化
+フィールド)。想定外 bug の値化 funnel ``unexpected_rejection`` の契約
+(UNEXPECTED_ERROR + ``__cause__`` 連鎖) も併せて固定する。Ready の Pydantic
+失敗 / tz-naive published の Observed fallback は **結果不変** (byte 等価) で
+あることを引き続き固定する。
 """
 
 from __future__ import annotations
@@ -26,7 +27,9 @@ from app.collection.article_collection.errors import (
 )
 from app.collection.article_collection.fetched_article import FetchedArticle
 from app.collection.article_collection.fetched_article_converter import (
+    ConversionRejection,
     convert_fetched_article,
+    unexpected_rejection,
 )
 from app.collection.article_collection.tools.fetch_tools import FetchTools
 from app.collection.domain.analyzable_article import AnalyzableArticle
@@ -148,10 +151,10 @@ def test_accepts_non_utc_published() -> None:
 
 
 @pytest.mark.parametrize("title", ["", "   ", "\n\t  "])
-def test_raises_missing_title_when_title_is_empty(title: str) -> None:
-    with pytest.raises(FetchedArticleConversionError) as ei:
-        _call(title=title)
-    assert ei.value.conversion_reason is ConversionReason.MISSING_TITLE
+def test_rejects_missing_title_when_title_is_empty(title: str) -> None:
+    result = _call(title=title)
+    assert isinstance(result, ConversionRejection)
+    assert result.error.conversion_reason is ConversionReason.MISSING_TITLE
 
 
 def test_trims_title_whitespace_and_caps_500_chars() -> None:
@@ -161,30 +164,30 @@ def test_trims_title_whitespace_and_caps_500_chars() -> None:
     assert result.title == "a" * 500
 
 
-def test_raises_missing_url_when_url_is_empty() -> None:
-    with pytest.raises(FetchedArticleConversionError) as ei:
-        _call(url="")
-    assert ei.value.conversion_reason is ConversionReason.MISSING_URL
+def test_rejects_missing_url_when_url_is_empty() -> None:
+    result = _call(url="")
+    assert isinstance(result, ConversionRejection)
+    assert result.error.conversion_reason is ConversionReason.MISSING_URL
 
 
-def test_raises_invalid_url_when_url_is_private_ip_literal() -> None:
+def test_rejects_invalid_url_when_url_is_private_ip_literal() -> None:
     """SSRF 防御 (SafeUrl): IP リテラルが private/loopback なら変換不能。"""
-    with pytest.raises(FetchedArticleConversionError) as ei:
-        _call(url="http://127.0.0.1/secret")
-    assert ei.value.conversion_reason is ConversionReason.INVALID_URL
+    result = _call(url="http://127.0.0.1/secret")
+    assert isinstance(result, ConversionRejection)
+    assert result.error.conversion_reason is ConversionReason.INVALID_URL
 
 
-def test_raises_invalid_url_when_url_is_not_http_scheme() -> None:
-    with pytest.raises(FetchedArticleConversionError) as ei:
-        _call(url="javascript:alert(1)")
-    assert ei.value.conversion_reason is ConversionReason.INVALID_URL
+def test_rejects_invalid_url_when_url_is_not_http_scheme() -> None:
+    result = _call(url="javascript:alert(1)")
+    assert isinstance(result, ConversionRejection)
+    assert result.error.conversion_reason is ConversionReason.INVALID_URL
 
 
-def test_invalid_url_error_carries_structured_observation_fields() -> None:
-    """raise 時に FetchedArticle の観測スナップショットを構造化保持する。"""
-    with pytest.raises(FetchedArticleConversionError) as ei:
-        _call(url="javascript:alert(1)", body=_VALID_BODY)
-    exc = ei.value
+def test_rejection_carries_structured_observation_fields() -> None:
+    """棄却値は FetchedArticle の観測スナップショットを構造化保持する。"""
+    result = _call(url="javascript:alert(1)", body=_VALID_BODY)
+    assert isinstance(result, ConversionRejection)
+    exc = result.error
     assert exc.code == FetchedArticleConversionError.CODE
     assert exc.source_name == str(_SOURCE_NAME)
     assert exc.raw_url == "javascript:alert(1)"
@@ -193,17 +196,17 @@ def test_invalid_url_error_carries_structured_observation_fields() -> None:
     assert exc.has_published_at is True
 
 
-def test_missing_url_error_reports_absent_raw_url() -> None:
-    with pytest.raises(FetchedArticleConversionError) as ei:
-        _call(url="")
-    assert ei.value.raw_url is None
+def test_missing_url_rejection_reports_absent_raw_url() -> None:
+    result = _call(url="")
+    assert isinstance(result, ConversionRejection)
+    assert result.error.raw_url is None
 
 
-def test_invalid_url_error_chains_origin_cause() -> None:
+def test_invalid_url_rejection_chains_origin_cause() -> None:
     """canonicalize の ``ValueError`` を ``__cause__`` で連鎖する (audit 用)。"""
-    with pytest.raises(FetchedArticleConversionError) as ei:
-        _call(url="http://127.0.0.1/secret")
-    assert isinstance(ei.value.__cause__, ValueError)
+    result = _call(url="http://127.0.0.1/secret")
+    assert isinstance(result, ConversionRejection)
+    assert isinstance(result.error.__cause__, ValueError)
 
 
 def test_stamps_origin_on_observed_facts() -> None:
@@ -258,3 +261,39 @@ def test_any_html_preferred_field_requires_html_completion_even_with_valid_body_
     assert isinstance(_call(profile=body_html_preferred), ObservedArticle)
     assert isinstance(_call(profile=DEFAULT_POLICY), AnalyzableArticle)
     assert isinstance(_call(profile=HTML_TITLE_POLICY), ObservedArticle)
+
+
+# ── 想定外 bug の値化 funnel ``unexpected_rejection`` ───────────────────────
+
+
+def test_unexpected_rejection_funnels_to_unexpected_error_reason() -> None:
+    """想定外 bug は ``UNEXPECTED_ERROR`` の ``ConversionRejection`` に値化される。"""
+    result = unexpected_rejection(
+        FetchedArticle(**_BASE_FETCHED),
+        source=_source(),
+        cause=RuntimeError("post-precondition invariant violation"),
+    )
+    assert isinstance(result, ConversionRejection)
+    assert result.error.conversion_reason is ConversionReason.UNEXPECTED_ERROR
+
+
+def test_unexpected_rejection_chains_origin_cause() -> None:
+    """原因例外を ``__cause__`` に連鎖させ監査が辿れる。"""
+    cause = RuntimeError("boom")
+    result = unexpected_rejection(
+        FetchedArticle(**_BASE_FETCHED), source=_source(), cause=cause
+    )
+    assert result.error.__cause__ is cause
+
+
+def test_unexpected_rejection_carries_structured_observation_fields() -> None:
+    """観測スナップショット (source_name / raw_url / has_title 等) を構造化保持する。"""
+    result = unexpected_rejection(
+        FetchedArticle(**_BASE_FETCHED), source=_source(), cause=RuntimeError("x")
+    )
+    exc = result.error
+    assert exc.source_name == str(_SOURCE_NAME)
+    assert exc.raw_url == _VALID_URL
+    assert exc.has_title is True
+    assert exc.body_length == len(_VALID_BODY)
+    assert exc.has_published_at is True

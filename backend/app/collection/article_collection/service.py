@@ -1,10 +1,14 @@
 """Article Acquisition Service — 1 source 分のニュースから記事を獲得する。
 
-Fetcher の stream を ``match`` で 3 型に振り分ける:
+収集 → 変換 → 永続化 の 3 工程を順に駆動する唯一のオーケストレータ:
 
-- ``AnalyzableArticle`` → 即時保存
-- ``ObservedArticle`` → ``incomplete_articles`` に投入 (後段補完)
-- ``ConversionRejection`` → 業務 tx とは別 session で棄却監査して継続
+1. **収集** ``source.collect(tools)`` が ``FetchedArticle`` を yield する。
+2. **変換** ``convert_fetched_article`` が「何ができたか」(Ready / Observed /
+   棄却) に変換する。
+3. **永続化** 変換結果を ``match`` で振り分ける:
+   - ``AnalyzableArticle`` → 即時保存
+   - ``ObservedArticle`` → ``incomplete_articles`` に投入 (後段補完)
+   - ``ConversionRejection`` → 業務 tx とは別 session で棄却監査して継続
 
 ``commit`` までが責務。``NewsSource`` lookup は本 Service では行わない。
 """
@@ -23,13 +27,16 @@ from app.collection.article_collection.audit_repository import (
 from app.collection.article_collection.errors import SourceFetchError
 from app.collection.article_collection.fetched_article_converter import (
     ConversionRejection,
+    convert_fetched_article,
+    unexpected_rejection,
 )
-from app.collection.article_collection.protocol import Fetcher
 from app.collection.article_collection.repository import IncompleteArticleRepository
+from app.collection.article_collection.tools.fetch_tools import FetchTools
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.external_fetch_errors import ExternalFetchError
 from app.collection.persistence.article_store import ArticleStore
+from app.collection.sources.article_source import ArticleSource
 from app.observability.redact import redact_secrets
 
 logger = structlog.get_logger(__name__)
@@ -46,22 +53,34 @@ class ArticleAcquisitionService:
     def __init__(
         self,
         session_factory: async_sessionmaker[AsyncSession],
-        fetcher_factory: Callable[[], Fetcher],
+        source: ArticleSource,
+        tools_factory: Callable[[], FetchTools] = FetchTools,
     ) -> None:
         self._session_factory = session_factory
-        self._fetcher_factory = fetcher_factory
+        self._source = source
+        self._tools_factory = tools_factory
 
     async def execute(self, source_id: int) -> list[int]:
         async with self._session_factory() as session:
-            fetcher = self._fetcher_factory()
             article_store = ArticleStore(session)
             incomplete_repo = IncompleteArticleRepository(session)
-
             persisted_ids: list[int] = []
+            tools = self._tools_factory()
 
             try:
-                async for item in fetcher.fetch(source_id):
-                    match item:
+                async for fetched in self._source.collect(tools):  # 1. 収集
+                    try:
+                        outcome = convert_fetched_article(  # 2. 変換 (= 何ができたか)
+                            fetched, source=self._source, source_id=source_id
+                        )
+                    except Exception as exc:
+                        # 想定外 bug のみ: convert 呼び出し 1 行だけを極小スコープで
+                        # 値化する。collect 失敗 (外側 except) / persist 失敗 (try 外)
+                        # と分離し、握りつぶし範囲を広げない。
+                        outcome = unexpected_rejection(
+                            fetched, source=self._source, cause=exc
+                        )
+                    match outcome:  # 3. 永続化 (DB error は try 外で素通り)
                         case AnalyzableArticle() as ready:
                             article_id = await article_store.save(ready)
                             if article_id is None:

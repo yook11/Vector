@@ -24,7 +24,7 @@ from app.collection.sources.definitions.meta_ai import (
     MetaAISource,
     is_collectable_meta_ai_entry,
 )
-from tests.collection.fetchers._fixture_tools import fixture_tools
+from tests.collection.sources._fixture_tools import fixture_tools
 
 _FIXTURES_DIR = Path(__file__).parent.parent.parent / "fixtures"
 _FIXTURE = "meta_ai_rss.xml"

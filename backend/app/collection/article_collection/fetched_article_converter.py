@@ -1,19 +1,20 @@
-"""``FetchedArticle`` → ``AnalyzableArticle | ObservedArticle`` 変換 (純粋関数)。
+"""``FetchedArticle`` → 「何ができたか」への総変換 (純粋関数)。
 
 per-source 責務は body / published を信用できる形で渡せるかのみ。Ready 昇格 /
-Observed 保留 / 変換不能 の最終分岐を ``convert_fetched_article`` に集約する。
-変換不能 entry は ``None`` を返さず ``FetchedArticleConversionError`` を raise
-する (stream を止めないための値化は ``ArticleFetcher`` の責務)。
+Observed 保留 / 変換不能(棄却) の最終分岐を ``convert_fetched_article`` に集約し、
+想定内の 3 結末すべてに対して total にする (棄却も raise せず
+``ConversionRejection`` 値で返す)。
 
 ``AnalyzableArticle`` 不成立は想定内の正常系 (Ready 候補 ⊆ Observed 候補)。
-precondition (title / URL) を満たさない entry のみ変換失敗 = 例外となる。失敗時
-の理由判定とログ出力は ``_raise_conversion_failed`` に集約する。
+precondition (title / URL) を満たさない entry は棄却となる。棄却理由の判定と
+ログ出力は ``_reject`` に集約する。想定外 bug (precondition 通過後の invariant
+違反) は本関数では catch せず素通りさせ、stream orchestrator (service) が
+``unexpected_rejection`` で値化する。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import NoReturn
 
 import structlog
 
@@ -44,14 +45,14 @@ class ConversionRejection:
     error: FetchedArticleConversionError
 
 
-def _raise_conversion_failed(
+def _reject(
     *,
     reason: ConversionReason,
     fetched: FetchedArticle,
     source_name: SourceName,
     cause: Exception | None = None,
-) -> NoReturn:
-    """``FetchedArticleConversionError`` 構築 + ログ出力 + raise の集約点。"""
+) -> ConversionRejection:
+    """``FetchedArticleConversionError`` 構築 + ログ出力 + 値化の集約点。"""
     has_title = bool(fetched.title)
     body_length = len(fetched.body) if fetched.body is not None else None
     has_published_at = fetched.published_at is not None
@@ -66,6 +67,8 @@ def _raise_conversion_failed(
         body_length=body_length,
         has_published_at=has_published_at,
     )
+    if cause is not None:
+        err.__cause__ = cause  # 原因連鎖 (監査が __cause__ を辿れる)
     logger.info(
         "fetched_article_conversion_failed",
         source_name=str(source_name),
@@ -74,7 +77,38 @@ def _raise_conversion_failed(
         body_length=body_length,
         has_published_at=has_published_at,
     )
-    raise err from cause
+    return ConversionRejection(error=err)
+
+
+def unexpected_rejection(
+    fetched: FetchedArticle,
+    *,
+    source: ArticleSource,
+    cause: Exception,
+) -> ConversionRejection:
+    """想定外 bug を ``UNEXPECTED_ERROR`` の ``ConversionRejection`` に値化する funnel。
+
+    precondition 通過後の invariant 違反 (= ありえない筈の bug) が ``convert`` から
+    漏れたとき、stream orchestrator (service) がこれを呼んで値化する。stack trace は
+    ``logger.exception`` で残し、原因例外を ``__cause__`` に連鎖させて監査が辿れる
+    ようにする (``except`` 節内から呼ばれる前提なので active exception が記録される)。
+    """
+    logger.exception(
+        "fetched_article_conversion_unexpected",
+        source_name=str(source.name),
+        error_class=f"{type(cause).__module__}.{type(cause).__qualname__}",
+    )
+    err = FetchedArticleConversionError(
+        f"unexpected conversion error: {cause}",
+        conversion_reason=ConversionReason.UNEXPECTED_ERROR,
+        source_name=str(source.name),
+        raw_url=fetched.url or None,
+        has_title=bool(fetched.title),
+        body_length=len(fetched.body) if fetched.body else None,
+        has_published_at=fetched.published_at is not None,
+    )
+    err.__cause__ = cause  # 原因連鎖
+    return ConversionRejection(error=err)
 
 
 def convert_fetched_article(
@@ -82,34 +116,33 @@ def convert_fetched_article(
     *,
     source: ArticleSource,
     source_id: int,
-) -> AnalyzableArticle | ObservedArticle:
-    """1 ``FetchedArticle`` を獲得型に変換する。
+) -> AnalyzableArticle | ObservedArticle | ConversionRejection:
+    """1 ``FetchedArticle`` を「何ができたか」に変換する (想定内に total)。
 
     URL / title は獲得型の土台 (identity)。不在 / 不正なら獲得型は成立し得ない
-    ため、Phase 0 で precondition として即 raise する。残りの正規化と Ready /
+    ため、Phase 0 で precondition として棄却する。残りの正規化と Ready /
     Observed の構築はこの precondition 通過を前提に進む。
 
     Returns:
         ``AnalyzableArticle`` — body + published_at が揃い品質ゲート通過。
         ``ObservedArticle`` — title + URL は揃うが Ready 不成立 (取れた事実を
         全保存)。
-
-    Raises:
-        FetchedArticleConversionError: title / URL precondition を満たさない entry。
+        ``ConversionRejection`` — title / URL precondition を満たさない棄却
+        (raise せず値で返す)。
     """
     source_name = source.name
     origin = source.observed_origin
 
     title = fetched.title.strip()[:ARTICLE_TITLE_MAX_LENGTH]
     if not title:
-        _raise_conversion_failed(
+        return _reject(
             reason=ConversionReason.MISSING_TITLE,
             fetched=fetched,
             source_name=source_name,
         )
 
     if not fetched.url:
-        _raise_conversion_failed(
+        return _reject(
             reason=ConversionReason.MISSING_URL,
             fetched=fetched,
             source_name=source_name,
@@ -118,7 +151,7 @@ def convert_fetched_article(
     try:
         source_url = CanonicalArticleUrl(fetched.url)
     except ValueError as err:
-        _raise_conversion_failed(
+        return _reject(
             reason=ConversionReason.INVALID_URL,
             fetched=fetched,
             source_name=source_name,

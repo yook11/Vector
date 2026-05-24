@@ -16,7 +16,7 @@ from app.collection.article_collection.fetched_article import FetchedArticle
 from app.collection.sources.definitions.microsoft_research import (
     MicrosoftResearchSource,
 )
-from tests.collection.fetchers._fixture_tools import fixture_tools
+from tests.collection.sources._fixture_tools import fixture_tools
 
 _FIXTURES_DIR = Path(__file__).parent.parent.parent / "fixtures"
 _FIXTURE = "microsoft_research_rss.xml"

@@ -1,17 +1,13 @@
 """``ArticleSource`` レジストリ (composition root)。
 
 ``ingest_source`` task が参照する唯一の dispatch エントリポイント。env を
-読まず hardcode (Pure DI)、判定キーは ``news_sources.name``。``FETCHERS`` は
-``SOURCES`` から導出する (name→source / name→fetcher の desync を防ぐ)。
+読まず hardcode (Pure DI)、判定キーは ``news_sources.name``。
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import Final
 
-from app.collection.article_collection.article_fetcher import ArticleFetcher
-from app.collection.article_collection.protocol import Fetcher
 from app.collection.sources.article_source import ArticleSource
 from app.collection.sources.definitions.anthropic import AnthropicSource
 from app.collection.sources.definitions.cleantechnica import CleanTechnicaSource
@@ -68,7 +64,7 @@ from app.collection.sources.definitions.the_register import TheRegisterSource
 from app.collection.sources.definitions.venturebeat import VentureBeatSource
 from app.shared.value_objects.source_name import SourceName
 
-# 順序は既存登録順を踏襲 (``FETCHERS`` の iteration order を保つ)。
+# 順序は既存登録順を踏襲 (登録順の安定性を保つ)。
 _SOURCES_LIST: Final[tuple[ArticleSource, ...]] = (
     VentureBeatSource,
     TechCrunchSource,
@@ -120,10 +116,4 @@ _SOURCES_LIST: Final[tuple[ArticleSource, ...]] = (
 # ``SourceName → ArticleSource`` レジストリ。
 SOURCES: Final[dict[SourceName, ArticleSource]] = {
     source.name: source for source in _SOURCES_LIST
-}
-
-# ``SOURCES`` から導出。``lambda s=source:`` の default 引数束縛で per-source
-# 値を late-binding せず固定する。
-FETCHERS: Final[dict[str, Callable[[], Fetcher]]] = {
-    str(source.name): (lambda s=source: ArticleFetcher(s)) for source in _SOURCES_LIST
 }

@@ -1,9 +1,9 @@
 """non-RSS ``XxxSource`` 7 本の invariant 一括検証 (P2-D)。
 
 ``test_rss_adapters_invariants.py`` と同思想で、``FetchTools`` に fixture-backed
-fake client を注入し、Source クラスオブジェクトを ``ArticleFetcher`` 本番経路
-(fetched_article_converter) に通し、``_invariant.py`` の 4 assertion (passport 存在 /
-型許容 / 主経路 / 永続化不変条件) を回す。
+fake client を注入し、Source クラスオブジェクトを ``drive_source`` (収集 → 変換)
+本番経路に通し、``_invariant.py`` の 4 assertion (passport 存在 / 型許容 /
+主経路 / 永続化不変条件) を回す。
 
 7 ケース内訳:
 
@@ -23,13 +23,12 @@ AnalyzableArticle)。
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator, Callable
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from app.collection.article_collection.article_fetcher import ArticleFetcher
 from app.collection.article_collection.reader.algolia_hn_reader import (
     HackerNewsEntry,
     HackerNewsReader,
@@ -54,13 +53,14 @@ from app.collection.sources.definitions.mdpi import (
     MDPISensorsSource,
 )
 from app.collection.sources.definitions.ornl import ORNLSource
-from tests.collection.fetchers._fixture_tools import fixture_tools
-from tests.collection.fetchers._invariant import (
+from tests.collection.sources._fixture_tools import fixture_tools
+from tests.collection.sources._invariant import (
     Passport,
     assert_at_least_one_passport,
     assert_passport_types_allowed,
     assert_passport_types_include,
     assert_passports_persistable,
+    drive_source,
 )
 
 _FIXTURES_DIR = Path(__file__).parent.parent.parent / "fixtures"
@@ -194,9 +194,7 @@ _CASES: list[_Case] = [
 async def _collect_passports(
     source: ArticleSource, tools: FetchTools
 ) -> list[Passport]:
-    fetcher = ArticleFetcher(source, tools=tools)
-    items: AsyncIterator[Passport] = fetcher.fetch(source_id=1)
-    return [item async for item in items]
+    return await drive_source(source, tools=tools)
 
 
 @pytest.fixture(params=_CASES, ids=lambda c: c[0])

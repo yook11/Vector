@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 
 from app.collection.article_collection.fetched_article import FetchedArticle
 from app.collection.sources.definitions.fierce_biotech import FierceBiotechSource
-from tests.collection.fetchers._fixture_tools import fixture_tools
+from tests.collection.sources._fixture_tools import fixture_tools
 
 _FIXTURE = "fierce_biotech_rss.xml"
 
