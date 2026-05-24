@@ -101,7 +101,7 @@ class TestCanonicalArticleUrlRejectsInvalidInput:
 
 
 class TestCanonicalArticleUrlBridges:
-    """SafeUrl 境界 (acquirer.acquire 等) への橋渡し。"""
+    """SafeUrl 境界 (scraper.scrape 等) への橋渡し。"""
 
     def test_as_safe_url_returns_safe_url(self) -> None:
         canonical = CanonicalArticleUrl("https://example.com/foo")

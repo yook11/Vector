@@ -2,8 +2,8 @@
 
 failure 後処理を 2 つの concern で別入口に分ける:
 
-- acquisition concern (Stage 1, Retry 軸): ``handle_acquisition_failure`` が
-  ``AcquisitionDecision`` (= ``Terminal`` | ``Retryable``) を受け、closed /
+- scrape concern (Stage 1, Retry 軸): ``handle_scrape_failure`` が
+  ``ScrapeDecision`` (= ``Terminal`` | ``Retryable``) を受け、closed /
   open+ready_at / exhausted に遷移させる。
 - completion concern (Stage 2, Accept 軸): ``handle_completion_rejected`` が
   ``CompletionRejection`` を受け、常に ``closed`` に閉じる (retry は発生しない)。
@@ -18,15 +18,15 @@ from datetime import UTC, datetime, timedelta
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.collection.article_completion.acquisition_failure import (
-    AcquisitionDecision,
-    Retryable,
-    Terminal,
-)
 from app.collection.article_completion.completion_failure import CompletionRejection
 from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.article_completion.repository import ArticleCompletionRepository
 from app.collection.article_completion.retry_policy import effective_delay_minutes
+from app.collection.article_completion.scrape_failure import (
+    Retryable,
+    ScrapeDecision,
+    Terminal,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -34,7 +34,7 @@ logger = structlog.get_logger(__name__)
 class ArticleCompletionFailureHandler:
     """失敗分類に応じた ``incomplete_articles`` 後処理を実行する。
 
-    2 入口: ``handle_acquisition_failure`` (Stage 1, Retry 軸) と
+    2 入口: ``handle_scrape_failure`` (Stage 1, Retry 軸) と
     ``handle_completion_rejected`` (Stage 2, Accept 軸)。いずれも自前 session で
     副作用 (状態遷移 + log) を完結させて ``None`` を返す。
     """
@@ -42,12 +42,12 @@ class ArticleCompletionFailureHandler:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
 
-    async def handle_acquisition_failure(
+    async def handle_scrape_failure(
         self,
         ready: ReadyForArticleCompletion,
-        decision: AcquisitionDecision,
+        decision: ScrapeDecision,
     ) -> None:
-        """Stage 1 (acquisition) 失敗を Retry 軸で捌く。
+        """Stage 1 (scrape) 失敗を Retry 軸で捌く。
 
         ``Terminal`` → pending を ``closed``。``Retryable`` → policy データ駆動で
         次 ``ready_at`` を計算 (exhausted なら ``closed``)。失敗の証拠は
@@ -71,7 +71,7 @@ class ArticleCompletionFailureHandler:
         """Stage 2 (completion) ドメイン拒絶を ``closed`` に閉じる。
 
         Accept 軸のため retry は発生しない。``article_completion_rejected`` で
-        acquisition 失敗とは別ストリームに観測する。
+        scrape 失敗とは別ストリームに観測する。
         """
         canonical_url = ready.source_url
         now = datetime.now(UTC)
@@ -165,7 +165,7 @@ class ArticleCompletionFailureHandler:
         reason_code: str,
         detail: str | None = None,
     ) -> None:
-        """acquisition 終端失敗を ``closed`` に閉じる。"""
+        """scrape 終端失敗を ``closed`` に閉じる。"""
         canonical_url = ready.source_url
         now = datetime.now(UTC)
         async with self._session_factory() as session:
@@ -186,7 +186,7 @@ class ArticleCompletionFailureHandler:
             return None
 
         logger.warning(
-            "article_completion_acquisition_failed",
+            "article_completion_scrape_failed",
             pending_id=ready.pending_id,
             source_id=ready.source_id,
             canonical_url=str(canonical_url),

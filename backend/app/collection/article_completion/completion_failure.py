@@ -1,7 +1,7 @@
 """HTML 完成段で AnalyzableArticle に昇格できなかった理由を表す値。
 
-接続/transport 失敗は ``ExternalFetchError`` family、HTML 取得段 (acquisition) の
-失敗は ``AcquisitionFailure`` が担う。本モジュールは completion 段のうち
+接続/transport 失敗は ``ExternalFetchError`` family、HTML 取得段 (scrape) の
+失敗は ``ScrapeFailure`` が担う。本モジュールは completion 段のうち
 「観測値 + HTML 取得結果を merge して AnalyzableArticle を構築する」段で
 起きる失敗だけを扱う。失敗は構築時の不変条件違反 (published_at 欠落を含む) に
 集約され、domain の ``QualityTooLow`` (例外証拠) を ``CompletionRejection`` に直接
@@ -29,7 +29,7 @@ class CompletionRejection:
     """Stage 2 (完成段) のドメイン拒絶。Accept 軸の概念で Retry 軸を持たない。
 
     完成段の失敗は「再試行で結果が変わるか?」ではなく「ドメイン的に成立するか?」
-    の判断であり、acquisition concern の ``Terminal`` | ``Retryable`` とは別の型。
+    の判断であり、scrape concern の ``Terminal`` | ``Retryable`` とは別の型。
     pending は常に ``closed`` に閉じる (retry は発生しない)。
 
     ``reason_code`` は ``completion_*`` prefix の audit 集計 key として安定。

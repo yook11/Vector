@@ -2,7 +2,7 @@
 
 経路: ``dispatch_sources`` → ``ingest_source`` → ``curation.tasks.curate_content``。
 本文込みで取得できた記事は ``curate_content`` に直接 chain、本文未取得の記事は
-``acquire_html_body`` task で HTML 取得 + 抽出 + 永続化へ進む。
+``scrape_html_body`` task で HTML 取得 + 抽出 + 永続化へ進む。
 """
 
 from __future__ import annotations
@@ -113,7 +113,7 @@ async def ingest_source(
 
     ``arg.id`` は ``news_sources.id`` (FK 用)、``arg.name`` は ``SOURCES`` dispatch の
     lookup キー。本文込みで取れた記事は永続化して ``curate_content`` に enqueue、
-    本文未取得の記事は後段 ``acquire_html_body`` task へ進む。
+    本文未取得の記事は後段 ``scrape_html_body`` task へ進む。
 
     失敗ハンドリング: taskiq inline retry を持たず (``max_retries=0``)、捕捉した
     例外は ``SourceFetchFailureHandler`` に委譲する。次の cron tick で再 dispatch
@@ -165,7 +165,7 @@ async def ingest_source(
     for article_id in persisted_ids:
         await curate_content.kiq(CurationTrigger(article_id=article_id))
     # 本文未取得分は `incomplete_articles` の DB 駆動。`dispatch_html_fetch_jobs`
-    # cron poller が `acquire_html_body` に投入するため、ここでは直接 kiq しない。
+    # cron poller が `scrape_html_body` に投入するため、ここでは直接 kiq しない。
     payload = {
         "source_id": source_id,
         "source_name": arg.name,
@@ -182,12 +182,12 @@ async def ingest_source(
 
 
 @broker_content.task(
-    task_name="acquire_html_body",
+    task_name="scrape_html_body",
     timeout=60,
     max_retries=0,
     retry_on_error=False,
 )
-async def acquire_html_body(
+async def scrape_html_body(
     pending_id: int,
     ctx: Context = TaskiqDepends(),
 ) -> dict | None:
@@ -215,7 +215,7 @@ async def acquire_html_body(
         )
     if ready is None:
         logger.info(
-            "acquire_html_body_skipped",
+            "scrape_html_body_skipped",
             pending_id=pending_id,
             reason="precondition_not_met",
         )

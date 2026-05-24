@@ -5,15 +5,15 @@
 ``articles.source_url UNIQUE`` が防ぎ、race-loss は read-back せず log + ``None``
 で短絡する。
 
-- Stage 1 取得: ``ArticleHtmlAcquirer.acquire`` (never raise の二値) を呼び
-  ``AcquiredContent | AcquisitionFailure`` を値で受ける。
+- Stage 1 取得: ``ArticleScraper.scrape`` (never raise の二値) を呼び
+  ``ScrapedContent | ScrapeFailure`` を値で受ける。
 - Stage 2 完成: ``ArticleHtmlCompleter.complete`` (純粋 sync アダプタ) に
-  ``AcquiredContent`` を渡し ``AnalyzableArticle | CompletionRejection``
+  ``ScrapedContent`` を渡し ``AnalyzableArticle | CompletionRejection``
   を受ける。
 - Stage 3 永続化: ``articles`` INSERT + ``incomplete_articles`` DELETE は同 tx で
   一括 commit。真の DB 異常は例外として伝播。
 - 失敗は concern 別に分類し ``ArticleCompletionFailureHandler`` の 2 入口へ委譲:
-  Stage 1 (acquisition) は ``handle_acquisition_failure``、Stage 2 (completion)
+  Stage 1 (scrape) は ``handle_scrape_failure``、Stage 2 (completion)
   は ``handle_completion_rejected`` (状態遷移 + log は handler の責務)。retry は
   DB 駆動で taskiq retry は使わない。
 """
@@ -26,13 +26,6 @@ from typing import assert_never
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.collection.article_completion.acquirer import (
-    AcquiredContent,
-    ArticleHtmlAcquirer,
-)
-from app.collection.article_completion.acquisition_failure import (
-    classify_acquisition_failure,
-)
 from app.collection.article_completion.completer import ArticleHtmlCompleter
 from app.collection.article_completion.completion_failure import (
     CompletionRejection,
@@ -47,6 +40,13 @@ from app.collection.article_completion.repository import (
     CompletionSuperseded,
     CompletionUrlConflict,
 )
+from app.collection.article_completion.scrape_failure import (
+    classify_scrape_failure,
+)
+from app.collection.article_completion.scraper import (
+    ArticleScraper,
+    ScrapedContent,
+)
 from app.collection.domain.analyzable_article import AnalyzableArticle
 
 logger = structlog.get_logger(__name__)
@@ -55,7 +55,7 @@ logger = structlog.get_logger(__name__)
 class ArticleCompletionService:
     """Ready 1 件を取得 → 完成 → 永続化する。
 
-    ``execute(ready)`` が単一エントリポイント。Stage 1 (acquire) と Stage 2
+    ``execute(ready)`` が単一エントリポイント。Stage 1 (scrape) と Stage 2
     (complete) をそれぞれ二値の collaborator に委譲し、各失敗を concern 別に
     ``ArticleCompletionFailureHandler`` の 2 入口へ委譲する (retry は DB 駆動、
     caller に raise しない)。service を読めば取得 → 完成 → 永続化の流れが分かる。
@@ -64,10 +64,10 @@ class ArticleCompletionService:
     def __init__(
         self,
         session_factory: async_sessionmaker[AsyncSession],
-        acquirer_factory: Callable[[], ArticleHtmlAcquirer] = ArticleHtmlAcquirer,
+        scraper_factory: Callable[[], ArticleScraper] = ArticleScraper,
     ) -> None:
         self._session_factory = session_factory
-        self._acquirer_factory = acquirer_factory
+        self._scraper_factory = scraper_factory
         self._completer = ArticleHtmlCompleter()
         self._failure_handler = ArticleCompletionFailureHandler(session_factory)
 
@@ -83,15 +83,15 @@ class ArticleCompletionService:
             ``None`` — lease 衝突 / 状態不整合 / 永続失敗 / 一時失敗 /
             race-loss (静かに exit)。失敗詳細は構造化ログで観測する。
         """
-        # Stage 1: 取得（URL → 抽出物 or 取得失敗）。acquire は never raise の二値。
-        acquirer = self._acquirer_factory()
-        acquired = await acquirer.acquire(ready.source_url.as_safe_url())
-        match acquired:
-            case AcquiredContent() as content:
+        # Stage 1: 取得（URL → 抽出物 or 取得失敗）。scrape は never raise の二値。
+        scraper = self._scraper_factory()
+        scraped = await scraper.scrape(ready.source_url.as_safe_url())
+        match scraped:
+            case ScrapedContent() as content:
                 pass
-            case failure:  # AcquisitionFailure (transport + content の 5 variant)
-                await self._failure_handler.handle_acquisition_failure(
-                    ready, classify_acquisition_failure(failure)
+            case failure:  # ScrapeFailure (transport + content の 5 variant)
+                await self._failure_handler.handle_scrape_failure(
+                    ready, classify_scrape_failure(failure)
                 )
                 return None
 

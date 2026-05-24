@@ -8,7 +8,7 @@
   - claim された pending は ``status='running'`` + ``leased_until`` が将来 +
     ``attempt_count++`` に遷移する (副作用の不変条件を 1 ケースに圧縮)
   - ``_DISPATCH_BATCH_LIMIT`` を超える件数があっても LIMIT 件のみ dispatch
-  - ``acquire_html_body.kiq`` が claim 済 pending_id 列で正確に呼ばれる
+  - ``scrape_html_body.kiq`` が claim 済 pending_id 列で正確に呼ばれる
   - 候補ゼロでも空 tick (dispatched_count=0) として正常終了
 
 - ``sweep_expired_leases``:
@@ -19,7 +19,7 @@
 テスト方針 (持続可能性):
 - pending を直接 INSERT し、Fetcher / NewsSource / ArticleAcquisitionService 経由しない
 - ソースが増えても破綻しない (横軸独立)
-- ``acquire_html_body.kiq`` は AsyncMock で「呼ばれた回数 + 引数」のみ確認
+- ``scrape_html_body.kiq`` は AsyncMock で「呼ばれた回数 + 引数」のみ確認
 - 内部実装 (private method / log message / 中間 dict) は assert しない
 """
 
@@ -209,7 +209,7 @@ async def test_dispatches_only_open_and_ready_pending(
     )
 
     kiq_mock = AsyncMock()
-    monkeypatch.setattr("app.collection.tasks.acquire_html_body.kiq", kiq_mock)
+    monkeypatch.setattr("app.collection.tasks.scrape_html_body.kiq", kiq_mock)
 
     result = await dispatch_html_fetch_jobs(ctx=_ctx(session_factory))
 
@@ -245,7 +245,7 @@ async def test_increments_attempt_count_and_sets_lease(
         attempt_count=2,
     )
 
-    monkeypatch.setattr("app.collection.tasks.acquire_html_body.kiq", AsyncMock())
+    monkeypatch.setattr("app.collection.tasks.scrape_html_body.kiq", AsyncMock())
 
     before = datetime.now(UTC)
     await dispatch_html_fetch_jobs(ctx=_ctx(session_factory))
@@ -287,7 +287,7 @@ async def test_respects_dispatch_batch_limit(
     ]
 
     kiq_mock = AsyncMock()
-    monkeypatch.setattr("app.collection.tasks.acquire_html_body.kiq", kiq_mock)
+    monkeypatch.setattr("app.collection.tasks.scrape_html_body.kiq", kiq_mock)
 
     result = await dispatch_html_fetch_jobs(ctx=_ctx(session_factory))
 
@@ -322,7 +322,7 @@ async def test_returns_zero_when_no_ready_pending(
     )
 
     kiq_mock = AsyncMock()
-    monkeypatch.setattr("app.collection.tasks.acquire_html_body.kiq", kiq_mock)
+    monkeypatch.setattr("app.collection.tasks.scrape_html_body.kiq", kiq_mock)
 
     result = await dispatch_html_fetch_jobs(ctx=_ctx(session_factory))
 

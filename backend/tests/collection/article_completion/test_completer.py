@@ -1,14 +1,14 @@
 """``ArticleHtmlCompleter`` の契約テスト — 純粋 sync アダプタの出力型保証。
 
-検証する不変条件 (副作用ゼロ。DB も network も触らず ``AcquiredContent`` を受けて
+検証する不変条件 (副作用ゼロ。DB も network も触らず ``ScrapedContent`` を受けて
 ``AnalyzableArticle | CompletionRejection`` の閉じ union に必ず収まる):
 
-- ``AcquiredContent`` + promotion 成功 → ``AnalyzableArticle``
-- ``AcquiredContent`` + promotion 失敗 → ``CompletionRejection``
+- ``ScrapedContent`` + promotion 成功 → ``AnalyzableArticle``
+- ``ScrapedContent`` + promotion 失敗 → ``CompletionRejection``
 
-取得 (acquire) は service が先に済ませ、成功した ``AcquiredContent`` だけが
-completer に渡る。transport / acquisition 失敗の値化は acquirer / service の責務で、
-本テストの対象外 (``test_html_acquirer.py`` / ``test_service.py`` が所有)。completer は
+取得 (scrape) は service が先に済ませ、成功した ``ScrapedContent`` だけが
+completer に渡る。transport / scrape 失敗の値化は scraper / service の責務で、
+本テストの対象外 (``test_scraper.py`` / ``test_service.py`` が所有)。completer は
 profile を知らず ``ReadyForArticleCompletion`` 経由で受け取り ``complete_with_html``
 (純粋関数) に委譲する。
 """
@@ -17,12 +17,12 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from app.collection.article_completion.acquirer import AcquiredContent
 from app.collection.article_completion.completer import ArticleHtmlCompleter
 from app.collection.article_completion.completion_failure import (
     CompletionRejection,
 )
 from app.collection.article_completion.ready import ReadyForArticleCompletion
+from app.collection.article_completion.scraper import ScrapedContent
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import (
@@ -62,9 +62,9 @@ def _ready(
     )
 
 
-def test_acquired_content_success_returns_analyzable_article() -> None:
-    """``AcquiredContent`` + promotion 成功 → ``AnalyzableArticle``。"""
-    content = AcquiredContent(
+def test_scraped_content_success_returns_analyzable_article() -> None:
+    """``ScrapedContent`` + promotion 成功 → ``AnalyzableArticle``。"""
+    content = ScrapedContent(
         title="HTML Title",
         body="x" * 200,
         published_at=PublishedAt(value=datetime(2026, 5, 1, tzinfo=UTC)),
@@ -77,7 +77,7 @@ def test_acquired_content_success_returns_analyzable_article() -> None:
 def test_promotion_failure_returns_completion_rejection() -> None:
     """published_at が観測 / HTML 両方欠落 → 必須 Field 違反として
     ``CompletionRejection`` に畳む。"""
-    content = AcquiredContent(title="OK", body="x" * 200, published_at=None)
+    content = ScrapedContent(title="OK", body="x" * 200, published_at=None)
     result = ArticleHtmlCompleter().complete(_ready(observed_published=None), content)
 
     assert isinstance(result, CompletionRejection)

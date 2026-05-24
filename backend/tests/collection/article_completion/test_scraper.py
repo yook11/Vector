@@ -1,4 +1,4 @@
-"""HTML 取得層 (acquirer) のテスト。"""
+"""HTML scrape 層 (scraper) のテスト。"""
 
 import socket
 from datetime import UTC, datetime
@@ -9,18 +9,18 @@ import pytest
 from structlog.testing import capture_logs
 from trafilatura.settings import Document as TrafilaturaDocument
 
-from app.collection.article_completion.acquirer import (
-    AcquiredContent,
-    ArticleHtmlAcquirer,
-    RawResponse,
-    _decode_html_response,
-)
-from app.collection.article_completion.acquisition_failure import (
+from app.collection.article_completion.scrape_failure import (
     ContentQualityTooLow,
     FetchFailed,
     NotHtml,
     ParseCrashed,
     ParserGaveUp,
+)
+from app.collection.article_completion.scraper import (
+    ArticleScraper,
+    RawResponse,
+    ScrapedContent,
+    _decode_html_response,
 )
 from app.collection.domain.article_limits import (
     ARTICLE_BODY_MIN_LENGTH,
@@ -102,9 +102,9 @@ def _mock_async_client(responses: list[httpx.Response | Exception]) -> AsyncMock
 
 
 def _patch_client(client: AsyncMock):
-    """``make_safe_async_client`` を patch して acquire() がモックを使うようにする。"""
+    """``make_safe_async_client`` を patch して scrape() がモックを使うようにする。"""
     return patch(
-        "app.collection.article_completion.acquirer.make_safe_async_client",
+        "app.collection.article_completion.scraper.make_safe_async_client",
         return_value=_as_async_cm(client),
     )
 
@@ -128,7 +128,7 @@ def _raw_from_httpx(resp: httpx.Response) -> RawResponse:
     )
 
 
-class TestArticleHtmlAcquirer:
+class TestArticleScraper:
     @pytest.mark.asyncio
     async def test_fetches_body_from_url(self) -> None:
         robots_resp = httpx.Response(
@@ -143,11 +143,11 @@ class TestArticleHtmlAcquirer:
         )
         client = _mock_async_client([robots_resp, html_resp])
 
-        acquirer = ArticleHtmlAcquirer()
+        scraper = ArticleScraper()
         with _patch_client(client):
-            result = await acquirer.acquire(SafeUrl("https://example.com/article"))
+            result = await scraper.scrape(SafeUrl("https://example.com/article"))
 
-        assert isinstance(result, AcquiredContent)
+        assert isinstance(result, ScrapedContent)
         assert len(result.body) > 50
         assert result.title
 
@@ -168,9 +168,9 @@ class TestArticleHtmlAcquirer:
         )
         client = _mock_async_client([robots_resp, error_resp])
 
-        acquirer = ArticleHtmlAcquirer()
+        scraper = ArticleScraper()
         with _patch_client(client):
-            result = await acquirer.acquire(SafeUrl("https://example.com/paywall"))
+            result = await scraper.scrape(SafeUrl("https://example.com/paywall"))
 
         assert isinstance(result, FetchFailed)
         assert isinstance(result.error, FetchAccessDeniedError)
@@ -194,9 +194,9 @@ class TestArticleHtmlAcquirer:
         )
         client = _mock_async_client([robots_resp, error_resp])
 
-        acquirer = ArticleHtmlAcquirer()
+        scraper = ArticleScraper()
         with _patch_client(client):
-            result = await acquirer.acquire(SafeUrl("https://example.com/paywall"))
+            result = await scraper.scrape(SafeUrl("https://example.com/paywall"))
 
         assert isinstance(result, FetchFailed)
         assert isinstance(result.error, FetchAccessDeniedError)
@@ -219,9 +219,9 @@ class TestArticleHtmlAcquirer:
         )
         client = _mock_async_client([robots_resp, error_resp])
 
-        acquirer = ArticleHtmlAcquirer()
+        scraper = ArticleScraper()
         with _patch_client(client):
-            result = await acquirer.acquire(SafeUrl("https://example.com/error"))
+            result = await scraper.scrape(SafeUrl("https://example.com/error"))
 
         assert isinstance(result, FetchFailed)
         assert isinstance(result.error, FetchOriginServerError)
@@ -235,9 +235,9 @@ class TestArticleHtmlAcquirer:
         )
         client = _mock_async_client([robots_resp, httpx.ConnectTimeout("timed out")])
 
-        acquirer = ArticleHtmlAcquirer()
+        scraper = ArticleScraper()
         with _patch_client(client):
-            result = await acquirer.acquire(SafeUrl("https://example.com/slow"))
+            result = await scraper.scrape(SafeUrl("https://example.com/slow"))
 
         assert isinstance(result, FetchFailed)
         assert isinstance(result.error, FetchTimeoutError)
@@ -257,9 +257,9 @@ class TestArticleHtmlAcquirer:
         )
         client = _mock_async_client([robots_resp, pdf_resp])
 
-        acquirer = ArticleHtmlAcquirer()
+        scraper = ArticleScraper()
         with _patch_client(client):
-            result = await acquirer.acquire(SafeUrl("https://example.com/doc.pdf"))
+            result = await scraper.scrape(SafeUrl("https://example.com/doc.pdf"))
 
         assert isinstance(result, NotHtml)
         assert result.content_type == "application/pdf"
@@ -280,9 +280,9 @@ class TestArticleHtmlAcquirer:
         )
         client = _mock_async_client([robots_resp, html_resp])
 
-        acquirer = ArticleHtmlAcquirer()
+        scraper = ArticleScraper()
         with _patch_client(client):
-            result = await acquirer.acquire(SafeUrl("https://example.com/short"))
+            result = await scraper.scrape(SafeUrl("https://example.com/short"))
 
         # trafilatura が None を返す (ParserGaveUp) または品質ゲート未達
         # (ContentQualityTooLow) のどちらか。decode/parse 例外は本テストでは想定しない。
@@ -300,9 +300,9 @@ class TestArticleHtmlAcquirer:
         )
         client = _mock_async_client([robots_resp])
 
-        acquirer = ArticleHtmlAcquirer()
+        scraper = ArticleScraper()
         with _patch_client(client):
-            result = await acquirer.acquire(
+            result = await scraper.scrape(
                 SafeUrl("https://example.com/private/article")
             )
 
@@ -313,12 +313,12 @@ class TestArticleHtmlAcquirer:
     @pytest.mark.asyncio
     async def test_ssrf_private_ip_returns_fetch_failed(self) -> None:
         """ホスト名の DNS 解決結果が private IP なら fetch せず SSRF block。"""
-        acquirer = ArticleHtmlAcquirer()
+        scraper = ArticleScraper()
         with patch(
             "app.shared.security.ssrf_guard._resolve_host",
             new=AsyncMock(return_value=["172.18.0.5"]),
         ):
-            result = await acquirer.acquire(
+            result = await scraper.scrape(
                 SafeUrl("https://internal-trick.example.com/")
             )
 
@@ -329,12 +329,12 @@ class TestArticleHtmlAcquirer:
     @pytest.mark.asyncio
     async def test_ssrf_link_local_returns_fetch_failed(self) -> None:
         """A レコードがクラウドメタデータ (169.254.169.254) を指しているケース。"""
-        acquirer = ArticleHtmlAcquirer()
+        scraper = ArticleScraper()
         with patch(
             "app.shared.security.ssrf_guard._resolve_host",
             new=AsyncMock(return_value=["169.254.169.254"]),
         ):
-            result = await acquirer.acquire(
+            result = await scraper.scrape(
                 SafeUrl("https://metadata-attack.example.com/")
             )
 
@@ -345,12 +345,12 @@ class TestArticleHtmlAcquirer:
     @pytest.mark.asyncio
     async def test_dns_failure_returns_fetch_failed(self) -> None:
         """DNS 解決失敗は network origin error (disposition で retryable)。"""
-        acquirer = ArticleHtmlAcquirer()
+        scraper = ArticleScraper()
         with patch(
             "app.shared.security.ssrf_guard._resolve_host",
             new=AsyncMock(side_effect=socket.gaierror("nope")),
         ):
-            result = await acquirer.acquire(SafeUrl("https://nonexistent.invalid/"))
+            result = await scraper.scrape(SafeUrl("https://nonexistent.invalid/"))
 
         assert isinstance(result, FetchFailed)
         assert isinstance(result.error, FetchNetworkError)
@@ -370,9 +370,9 @@ class TestArticleHtmlAcquirer:
         )
         client = _mock_async_client([robots_resp, redirect_resp])
 
-        acquirer = ArticleHtmlAcquirer()
+        scraper = ArticleScraper()
         with _patch_client(client):
-            result = await acquirer.acquire(SafeUrl("https://example.com/article"))
+            result = await scraper.scrape(SafeUrl("https://example.com/article"))
 
         assert isinstance(result, FetchFailed)
         assert isinstance(result.error, FetchRedirectBlockedError)
@@ -398,9 +398,9 @@ class TestArticleHtmlAcquirer:
         )
         client = _mock_async_client([robots_resp, huge_resp])
 
-        acquirer = ArticleHtmlAcquirer()
+        scraper = ArticleScraper()
         with _patch_client(client):
-            result = await acquirer.acquire(SafeUrl("https://example.com/huge"))
+            result = await scraper.scrape(SafeUrl("https://example.com/huge"))
 
         assert isinstance(result, FetchFailed)
         assert isinstance(result.error, FetchResponseTooLargeError)
@@ -422,9 +422,9 @@ class TestArticleHtmlAcquirer:
         )
         client = _mock_async_client([robots_resp, huge_resp])
 
-        acquirer = ArticleHtmlAcquirer()
+        scraper = ArticleScraper()
         with _patch_client(client):
-            result = await acquirer.acquire(SafeUrl("https://example.com/huge2"))
+            result = await scraper.scrape(SafeUrl("https://example.com/huge2"))
 
         assert isinstance(result, FetchFailed)
         assert isinstance(result.error, FetchResponseTooLargeError)
@@ -449,15 +449,15 @@ class TestArticleHtmlAcquirer:
             headers={"content-type": "text/html"},
             request=httpx.Request("GET", "https://example.com/a2"),
         )
-        # 2 回の fetch は同じ acquirer インスタンスを再利用 (robots cache 共有)
+        # 2 回の fetch は同じ scraper インスタンスを再利用 (robots cache 共有)
         client_1 = _mock_async_client([robots_resp, html_resp_1])
         client_2 = _mock_async_client([html_resp_2])
 
-        acquirer = ArticleHtmlAcquirer()
+        scraper = ArticleScraper()
         with _patch_client(client_1):
-            await acquirer.acquire(SafeUrl("https://example.com/a1"))
+            await scraper.scrape(SafeUrl("https://example.com/a1"))
         with _patch_client(client_2):
-            await acquirer.acquire(SafeUrl("https://example.com/a2"))
+            await scraper.scrape(SafeUrl("https://example.com/a2"))
 
         # 2 回目の fetch では robots.txt を再リクエストしないはず
         robots_calls_1 = [
@@ -470,23 +470,23 @@ class TestArticleHtmlAcquirer:
         assert len(robots_calls_2) == 0
 
 
-class TestAcquiredContentInvariant:
-    """AcquiredContent のコンストラクタ invariant。"""
+class TestScrapedContentInvariant:
+    """ScrapedContent のコンストラクタ invariant。"""
 
     def test_rejects_empty_title(self) -> None:
         with pytest.raises(ValueError, match="title"):
-            AcquiredContent(title="", body="x" * 60, published_at=None)
+            ScrapedContent(title="", body="x" * 60, published_at=None)
 
     def test_rejects_title_over_limit(self) -> None:
         with pytest.raises(ValueError, match="title"):
-            AcquiredContent(title="x" * 501, body="x" * 60, published_at=None)
+            ScrapedContent(title="x" * 501, body="x" * 60, published_at=None)
 
     def test_rejects_short_body(self) -> None:
         with pytest.raises(ValueError, match="body"):
-            AcquiredContent(title="t", body="x" * 10, published_at=None)
+            ScrapedContent(title="t", body="x" * 10, published_at=None)
 
     def test_accepts_valid_fields(self) -> None:
-        content = AcquiredContent(
+        content = ScrapedContent(
             title="t",
             body="x" * 60,
             published_at=PublishedAt(datetime(2026, 4, 1, tzinfo=UTC)),
@@ -495,24 +495,24 @@ class TestAcquiredContentInvariant:
         assert content.published_at is not None
 
 
-class TestAcquiredContentTryCreate:
-    """AcquiredContent.try_create: 品質ゲート判定の所有テスト。
+class TestScrapedContentTryCreate:
+    """ScrapedContent.try_create: 品質ゲート判定の所有テスト。
 
     閾値は ``article_limits`` SSoT を import して導出する (literal 直書きしない)。
-    成功時は ``AcquiredContent``、未達時は証拠付き ``ContentQualityTooLow`` を値で返す
+    成功時は ``ScrapedContent``、未達時は証拠付き ``ContentQualityTooLow`` を値で返す
     契約を確かめる。
     """
 
-    def test_valid_material_returns_acquired_content(self) -> None:
+    def test_valid_material_returns_scraped_content(self) -> None:
         body = "x" * ARTICLE_BODY_MIN_LENGTH
-        outcome = AcquiredContent.try_create(
+        outcome = ScrapedContent.try_create(
             raw_title="Title", stripped_body=body, raw_date=None
         )
-        assert isinstance(outcome, AcquiredContent)
+        assert isinstance(outcome, ScrapedContent)
 
     def test_short_body_returns_quality_failure_with_body_length(self) -> None:
         body = "x" * (ARTICLE_BODY_MIN_LENGTH - 1)
-        outcome = AcquiredContent.try_create(
+        outcome = ScrapedContent.try_create(
             raw_title="Title", stripped_body=body, raw_date=None
         )
         assert isinstance(outcome, ContentQualityTooLow)
@@ -520,7 +520,7 @@ class TestAcquiredContentTryCreate:
 
     def test_short_body_keeps_title_present_true(self) -> None:
         body = "x" * (ARTICLE_BODY_MIN_LENGTH - 1)
-        outcome = AcquiredContent.try_create(
+        outcome = ScrapedContent.try_create(
             raw_title="Title", stripped_body=body, raw_date=None
         )
         assert isinstance(outcome, ContentQualityTooLow)
@@ -528,7 +528,7 @@ class TestAcquiredContentTryCreate:
 
     def test_short_body_keeps_body_sample(self) -> None:
         body = "x" * (ARTICLE_BODY_MIN_LENGTH - 1)
-        outcome = AcquiredContent.try_create(
+        outcome = ScrapedContent.try_create(
             raw_title="Title", stripped_body=body, raw_date=None
         )
         assert isinstance(outcome, ContentQualityTooLow)
@@ -536,7 +536,7 @@ class TestAcquiredContentTryCreate:
 
     def test_empty_title_returns_quality_failure(self) -> None:
         body = "x" * ARTICLE_BODY_MIN_LENGTH
-        outcome = AcquiredContent.try_create(
+        outcome = ScrapedContent.try_create(
             raw_title="", stripped_body=body, raw_date=None
         )
         assert isinstance(outcome, ContentQualityTooLow)
@@ -544,7 +544,7 @@ class TestAcquiredContentTryCreate:
 
     def test_none_title_returns_quality_failure(self) -> None:
         body = "x" * ARTICLE_BODY_MIN_LENGTH
-        outcome = AcquiredContent.try_create(
+        outcome = ScrapedContent.try_create(
             raw_title=None, stripped_body=body, raw_date=None
         )
         assert isinstance(outcome, ContentQualityTooLow)
@@ -553,14 +553,14 @@ class TestAcquiredContentTryCreate:
     def test_title_present_but_body_at_least_min_drops_body_sample(self) -> None:
         # body は閾値以上で title 欠落により落ちる → 冒頭断片は残さない。
         body = "x" * ARTICLE_BODY_MIN_LENGTH
-        outcome = AcquiredContent.try_create(
+        outcome = ScrapedContent.try_create(
             raw_title=None, stripped_body=body, raw_date=None
         )
         assert isinstance(outcome, ContentQualityTooLow)
         assert outcome.body_sample is None
 
     def test_empty_body_drops_body_sample(self) -> None:
-        outcome = AcquiredContent.try_create(
+        outcome = ScrapedContent.try_create(
             raw_title="Title", stripped_body="", raw_date=None
         )
         assert isinstance(outcome, ContentQualityTooLow)
@@ -568,44 +568,44 @@ class TestAcquiredContentTryCreate:
 
     def test_html_tags_stripped_from_title(self) -> None:
         body = "x" * ARTICLE_BODY_MIN_LENGTH
-        outcome = AcquiredContent.try_create(
+        outcome = ScrapedContent.try_create(
             raw_title="<b>Bold Title</b>", stripped_body=body, raw_date=None
         )
-        assert isinstance(outcome, AcquiredContent)
+        assert isinstance(outcome, ScrapedContent)
         assert outcome.title == "Bold Title"
 
     def test_title_over_limit_is_truncated(self) -> None:
         body = "x" * ARTICLE_BODY_MIN_LENGTH
-        outcome = AcquiredContent.try_create(
+        outcome = ScrapedContent.try_create(
             raw_title="t" * (ARTICLE_TITLE_MAX_LENGTH + 10),
             stripped_body=body,
             raw_date=None,
         )
-        assert isinstance(outcome, AcquiredContent)
+        assert isinstance(outcome, ScrapedContent)
         assert len(outcome.title) == ARTICLE_TITLE_MAX_LENGTH
 
     def test_parseable_date_populates_published_at(self) -> None:
         body = "x" * ARTICLE_BODY_MIN_LENGTH
-        outcome = AcquiredContent.try_create(
+        outcome = ScrapedContent.try_create(
             raw_title="Title", stripped_body=body, raw_date="2026-03-15T10:30:00"
         )
-        assert isinstance(outcome, AcquiredContent)
+        assert isinstance(outcome, ScrapedContent)
         assert outcome.published_at is not None
 
     def test_unparseable_date_leaves_published_at_none(self) -> None:
         body = "x" * ARTICLE_BODY_MIN_LENGTH
-        outcome = AcquiredContent.try_create(
+        outcome = ScrapedContent.try_create(
             raw_title="Title", stripped_body=body, raw_date="not-a-date"
         )
-        assert isinstance(outcome, AcquiredContent)
+        assert isinstance(outcome, ScrapedContent)
         assert outcome.published_at is None
 
     def test_none_date_leaves_published_at_none(self) -> None:
         body = "x" * ARTICLE_BODY_MIN_LENGTH
-        outcome = AcquiredContent.try_create(
+        outcome = ScrapedContent.try_create(
             raw_title="Title", stripped_body=body, raw_date=None
         )
-        assert isinstance(outcome, AcquiredContent)
+        assert isinstance(outcome, ScrapedContent)
         assert outcome.published_at is None
 
 
@@ -685,8 +685,8 @@ class TestDecodeHtmlResponse:
         assert isinstance(result, str)
 
     @pytest.mark.asyncio
-    async def test_acquirer_handles_shift_jis_html(self) -> None:
-        """ArticleHtmlAcquirer が Shift_JIS の HTML を文字化けなく抽出する。"""
+    async def test_scraper_handles_shift_jis_html(self) -> None:
+        """ArticleScraper が Shift_JIS の HTML を文字化けなく抽出する。"""
         html_text = (
             '<html><head><meta charset="Shift_JIS"></head>'
             "<body><article>"
@@ -713,21 +713,21 @@ class TestDecodeHtmlResponse:
         )
         client = _mock_async_client([robots_resp, html_resp])
 
-        acquirer = ArticleHtmlAcquirer()
+        scraper = ArticleScraper()
         with _patch_client(client):
-            result = await acquirer.acquire(
+            result = await scraper.scrape(
                 SafeUrl("https://www.itmedia.co.jp/news/articles/test.html")
             )
 
-        assert isinstance(result, AcquiredContent)
+        assert isinstance(result, ScrapedContent)
         assert "量子コンピューティング" in result.body
 
 
 class TestExtract:
-    """_acquire_content_from_response: RawResponse → AcquiredContent | ContentFailure
+    """_extract_content_from_response: RawResponse → ScrapedContent | ContentFailure
     (同期・例外を投げない層)。
 
-    取得 (_fetch) と切り離し、RawResponse を直接与えて content acquisition 契約だけを
+    取得 (_fetch) と切り離し、RawResponse を直接与えて content extraction 契約だけを
     検証する。decode/parse の失敗を crash variant に畳む契約はここが正本。
     """
 
@@ -739,17 +739,17 @@ class TestExtract:
             content=b"%PDF-1.4",
             decoded_text="",
         )
-        result = ArticleHtmlAcquirer()._acquire_content_from_response(raw)
+        result = ArticleScraper()._extract_content_from_response(raw)
         assert isinstance(result, NotHtml)
         assert result.content_type == "application/pdf"
 
-    def test_valid_html_returns_acquired_content(self) -> None:
+    def test_valid_html_returns_scraped_content(self) -> None:
         # trafilatura の deduplicate はモジュール跨ぎの cache を持つため、他テストと
         # 本文が衝突すると discard され ParserGaveUp になる。固有本文で隔離する。
         unique_html = (
             "<html><head><title>Extract Phase Unit Test</title></head>"
             "<body><article><h1>Isolated Extraction Sample</h1>"
-            "<p>This paragraph exists solely to exercise the content acquisition "
+            "<p>This paragraph exists solely to exercise the content extraction "
             "phase in isolation from the fetch phase. It carries enough unique prose "
             "to clear the fifty character body quality gate while staying clear of "
             "trafilatura cross-call deduplication.</p>"
@@ -762,8 +762,8 @@ class TestExtract:
             content=unique_html.encode("utf-8"),
             decoded_text=unique_html,
         )
-        result = ArticleHtmlAcquirer()._acquire_content_from_response(raw)
-        assert isinstance(result, AcquiredContent)
+        result = ArticleScraper()._extract_content_from_response(raw)
+        assert isinstance(result, ScrapedContent)
         assert result.title
         assert len(result.body) > 50
 
@@ -777,7 +777,7 @@ class TestExtract:
             content=minimal_html.encode("utf-8"),
             decoded_text=minimal_html,
         )
-        result = ArticleHtmlAcquirer()._acquire_content_from_response(raw)
+        result = ArticleScraper()._extract_content_from_response(raw)
         assert isinstance(result, ParserGaveUp | ContentQualityTooLow)
         if isinstance(result, ContentQualityTooLow):
             assert result.body_length < 50
@@ -792,10 +792,10 @@ class TestExtract:
             decoded_text=SAMPLE_HTML,
         )
         with patch(
-            "app.collection.article_completion.acquirer.trafilatura.bare_extraction",
+            "app.collection.article_completion.scraper.trafilatura.bare_extraction",
             side_effect=RuntimeError("parse boom"),
         ):
-            result = ArticleHtmlAcquirer()._acquire_content_from_response(raw)
+            result = ArticleScraper()._extract_content_from_response(raw)
         assert isinstance(result, ParseCrashed)
         assert result.error_class == "RuntimeError"
 
@@ -803,7 +803,7 @@ class TestExtract:
         """文字化け body は outcome を変えず ``mojibake_detected`` を warning ログ。
 
         Phase 1 は観測のみ: 置換文字 ``U+FFFD`` を含む本文でも結果は
-        ``AcquiredContent`` のまま、ログだけが生 metric を伴って出る。
+        ``ScrapedContent`` のまま、ログだけが生 metric を伴って出る。
         trafilatura の正規化挙動に依存しないよう抽出結果を直接 patch する。
         """
         body_text = (
@@ -826,15 +826,14 @@ class TestExtract:
         )
         with (
             patch(
-                "app.collection.article_completion.acquirer.trafilatura."
-                "bare_extraction",
+                "app.collection.article_completion.scraper.trafilatura.bare_extraction",
                 return_value=fake_document,
             ),
             capture_logs() as logs,
         ):
-            result = ArticleHtmlAcquirer()._acquire_content_from_response(raw)
+            result = ArticleScraper()._extract_content_from_response(raw)
 
-        assert isinstance(result, AcquiredContent)
+        assert isinstance(result, ScrapedContent)
         mojibake_logs = [log for log in logs if log.get("event") == "mojibake_detected"]
         assert len(mojibake_logs) == 1
         assert mojibake_logs[0]["log_level"] == "warning"

@@ -16,11 +16,11 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from app.collection.article_completion.acquirer import AcquiredContent
 from app.collection.article_completion.completer import complete_with_html
 from app.collection.article_completion.completion_failure import (
     CompletionRejection,
 )
+from app.collection.article_completion.scraper import ScrapedContent
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import (
@@ -69,8 +69,8 @@ def _observed(
 
 def _html(
     *, title: str = "HTML Title", body: str = "h" * 200, published=_HTML_PUB
-) -> AcquiredContent:
-    return AcquiredContent(title=title, body=body, published_at=published)
+) -> ScrapedContent:
+    return ScrapedContent(title=title, body=body, published_at=published)
 
 
 def _promote(observed, profile, html, *, source_id=1):

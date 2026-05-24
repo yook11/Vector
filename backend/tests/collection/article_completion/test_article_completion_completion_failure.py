@@ -1,7 +1,7 @@
 """completion concern (Stage 2: 抽出物 + メタデータ合成段) の翻訳テスト。
 
-acquisition concern (Stage 1) の Retry 軸分類は
-``test_article_completion_acquisition_failure.py`` が所有する。本ファイルは Stage 2 の
+scrape concern (Stage 1) の Retry 軸分類は
+``test_article_completion_scrape_failure.py`` が所有する。本ファイルは Stage 2 の
 domain 失敗 ``QualityTooLow`` を Accept 軸の ``CompletionRejection`` に畳む
 ``CompletionRejection.from_quality_too_low`` と、``detail`` の上限 truncation の
 契約のみを検証する。

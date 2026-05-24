@@ -116,7 +116,7 @@ class ArticleCompletionPolicy:
         「どの源を各 field の正本にするか」の写像であり、construct はしない。
         ``published_at`` が両源 ``None`` でも ``None`` を載せて返すだけで、完成可否
         (失敗証拠化) は呼び出し側 (completer) の責務。受けるのは primitive 値で、
-        ``AcquiredContent`` / ``ObservedArticle`` 型に依存しない (import 循環回避)。
+        ``ScrapedContent`` / ``ObservedArticle`` 型に依存しない (import 循環回避)。
         """
         return ResolvedFields(
             title=_resolve(

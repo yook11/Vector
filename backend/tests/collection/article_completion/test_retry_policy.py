@@ -2,8 +2,8 @@
 
 policy table の値そのものはスナップショット (spec line 232-238) を反映した
 だけなので、ここで再検証するのは無価値。代わりに **policy データの振る舞い**
-に絞る (exception → policy の写像は acquisition_failure.py の関心に移管済、
-``test_article_completion_acquisition_failure.py`` が網羅する):
+に絞る (exception → policy の写像は scrape_failure.py の関心に移管済、
+``test_article_completion_scrape_failure.py`` が網羅する):
 
 - ``next_delay_minutes`` の境界 (attempt_count 範囲外、schedule 長を超える)
 - ``effective_delay_minutes`` の retry_after 優先 / 分換算 / ``MAX_DELAY_MINUTES`` cap

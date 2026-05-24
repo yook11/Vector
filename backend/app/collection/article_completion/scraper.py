@@ -1,11 +1,11 @@
-"""HTML 取得層 (acquisition) — URL から記事本文と公開日時を取得する。
+"""HTML scrape 層 — URL から記事本文と公開日時を取得する。
 
-公開境界 ``acquire`` は never raise の二値 (``AcquiredContent | AcquisitionFailure``)。
-transport 失敗は内部 ``_fetch`` が ``ExternalFetchError`` を raise し、``acquire`` が
+公開境界 ``scrape`` は never raise の二値 (``ScrapedContent | ScrapeFailure``)。
+transport 失敗は内部 ``_fetch`` が ``ExternalFetchError`` を raise し、``scrape`` が
 境界でそれを ``FetchFailed`` 値に畳む。content 失敗 (Content-Type 不一致 / パーサ拒否 /
-parse 例外 / 品質ゲート未達) は content acquisition 層
+parse 例外 / 品質ゲート未達) は content extraction 段
 (parse: ``_parse_raw_response_as_html_document`` /
-build: ``_build_acquired_content_from_document``) が ``ContentFailure`` 値で返す。
+build: ``_build_scraped_content_from_document``) が ``ContentFailure`` 値で返す。
 呼び出し側は分類済みの値だけを受け取る。
 """
 
@@ -27,8 +27,7 @@ from trafilatura.settings import Document as TrafilaturaDocument
 from app.collection.article_collection.tools.http_error_translation import (
     translate_fetch_exception,
 )
-from app.collection.article_completion.acquisition_failure import (
-    AcquisitionFailure,
+from app.collection.article_completion.scrape_failure import (
     ContentFailure,
     ContentQualityTooLow,
     FetchFailed,
@@ -36,6 +35,7 @@ from app.collection.article_completion.acquisition_failure import (
     ParseCrashed,
     ParseFailure,
     ParserGaveUp,
+    ScrapeFailure,
 )
 from app.collection.domain.article_limits import (
     ARTICLE_BODY_MIN_LENGTH as _BODY_MIN_LENGTH,
@@ -78,8 +78,8 @@ _SNIFF_BYTES = 2048
 class RawResponse:
     """取得段 (_fetch) が返す httpx 非依存の中間値。
 
-    ``httpx.Response`` を ``_fetch`` 内に封じ込め、content acquisition 段
-    (_acquire_content_from_response) を httpx に依存させず単体テスト可能にするための値。
+    ``httpx.Response`` を ``_fetch`` 内に封じ込め、content extraction 段
+    (_extract_content_from_response) を httpx に依存させず単体テスト可能にするための値。
     ``decoded_text`` は httpx の
     ``TextDecoder`` (Content-Type charset があればそれ、なければ UTF-8) で
     デコード済みの本文で、抽出側で同じ文字列を再現するために持ち越す。
@@ -129,7 +129,7 @@ def _decode_html_response(raw: RawResponse) -> str:
 
 
 @dataclass(frozen=True)
-class AcquiredContent:
+class ScrapedContent:
     """取得成功: 品質ゲートを通過した本文・タイトル。
 
     invariant:
@@ -157,13 +157,13 @@ class AcquiredContent:
         raw_title: str | None,
         stripped_body: str,
         raw_date: str | None,
-    ) -> AcquiredContent | ContentQualityTooLow:
-        """素材から品質ゲートを満たすときのみ AcquiredContent を構築する。
+    ) -> ScrapedContent | ContentQualityTooLow:
+        """素材から品質ゲートを満たすときのみ ScrapedContent を構築する。
 
         ゲート判定 (本文 50 文字以上 + 非空タイトル ≤500) の SSoT。満たさなければ
         証拠付き ``ContentQualityTooLow`` を値で返す。strict コンストラクタの invariant
         (``__post_init__``) は本 factory が必ず満たす backstop。副作用なし (ログは
-        呼び出し側 ``_build_acquired_content_from_document``)。``stripped_body`` は
+        呼び出し側 ``_build_scraped_content_from_document``)。``stripped_body`` は
         strip 済み本文を受ける。
         """
         cleaned_title = strip_html_tags(raw_title)
@@ -239,7 +239,7 @@ def _parse_raw_response_as_html_document(
     content-type 判定と decode を済ませ、trafilatura で parse して
     ``TrafilaturaDocument`` を得る。失敗はすべて値で返す: Content-Type 不一致は
     ``NotHtml``、パーサ拒否 (``None``) は ``ParserGaveUp``、parse 例外と想定外戻り型は
-    ``ParseCrashed``。``_acquire_content_from_response`` ごと ``asyncio.to_thread()``
+    ``ParseCrashed``。``_extract_content_from_response`` ごと ``asyncio.to_thread()``
     でオフロードされる。
     """
     if "text/html" not in raw.content_type:
@@ -285,16 +285,16 @@ def _parse_raw_response_as_html_document(
     return result
 
 
-def _build_acquired_content_from_document(
+def _build_scraped_content_from_document(
     document: TrafilaturaDocument,
     *,
     url: str,
-) -> AcquiredContent | ContentQualityTooLow:
-    """``TrafilaturaDocument`` を品質ゲートに通して ``AcquiredContent`` を組む。
+) -> ScrapedContent | ContentQualityTooLow:
+    """``TrafilaturaDocument`` を品質ゲートに通して ``ScrapedContent`` を組む。
 
     ``TrafilaturaDocument`` (trafilatura foreign type) に触れる唯一の場所。受け取った
     document は即座に primitives (``title`` / ``text`` / ``date``) へ射影してから
-    ``AcquiredContent.try_create`` に渡し、``TrafilaturaDocument`` を try_create や
+    ``ScrapedContent.try_create`` に渡し、``TrafilaturaDocument`` を try_create や
     公開境界へ漏らさない (parse↔build 境界に閉じ込める)。
     """
     text = document.text
@@ -313,9 +313,9 @@ def _build_acquired_content_from_document(
             body_length=len(body_stripped),
         )
 
-    # 品質ゲート判定は AcquiredContent.try_create が SSoT。本関数は素材を渡し、
+    # 品質ゲート判定は ScrapedContent.try_create が SSoT。本関数は素材を渡し、
     # 失敗値の log emit だけを担う (factory は純粋)。
-    outcome = AcquiredContent.try_create(
+    outcome = ScrapedContent.try_create(
         raw_title=document.title,
         stripped_body=body_stripped,
         raw_date=document.date,
@@ -330,19 +330,19 @@ def _build_acquired_content_from_document(
     return outcome
 
 
-class ArticleHtmlAcquirer:
-    """URL から記事本文と公開日時を取得する取得器。
+class ArticleScraper:
+    """URL から記事本文と公開日時を取得する scraper。
 
-    呼び出し側は ``acquire(url) -> AcquiredContent | AcquisitionFailure`` の契約のみに
-    依存する。内部は取得 (_fetch) と content acquisition
-    (_acquire_content_from_response) の二段で、境界に httpx 非依存の ``RawResponse`` を
+    呼び出し側は ``scrape(url) -> ScrapedContent | ScrapeFailure`` の契約のみに
+    依存する。内部は取得 (_fetch) と content extraction
+    (_extract_content_from_response) の二段で、境界に httpx 非依存の ``RawResponse`` を
     挟む。robots キャッシュと HTTP クライアントのライフサイクルは内部で完結する。
     """
 
     def __init__(self) -> None:
         self._robots_gate = _RobotsGate()
 
-    async def acquire(self, url: SafeUrl) -> AcquiredContent | AcquisitionFailure:
+    async def scrape(self, url: SafeUrl) -> ScrapedContent | ScrapeFailure:
         """指定 URL の HTML から記事本文・タイトル・公開日時を取得する (never raise)。
 
         抽出は CPU バウンドなので ``asyncio.to_thread`` でオフロードする。公開境界
@@ -351,7 +351,7 @@ class ArticleHtmlAcquirer:
         HTTP status / transport / SSRF block) を捕え ``FetchFailed`` に畳む。
 
         Returns:
-            ``AcquiredContent`` (成功) または ``AcquisitionFailure`` —
+            ``ScrapedContent`` (成功) または ``ScrapeFailure`` —
             ``FetchFailed`` (transport) / ``NotHtml`` (Content-Type 不一致) /
             ``ParserGaveUp`` (パーサ拒否) / ``ParseCrashed`` (parse 例外) /
             ``ContentQualityTooLow`` (品質ゲート未達)。本層は retry/terminal を
@@ -361,7 +361,7 @@ class ArticleHtmlAcquirer:
             raw = await self._fetch(url)
         except ExternalFetchError as exc:
             return FetchFailed(error=exc)
-        return await asyncio.to_thread(self._acquire_content_from_response, raw)
+        return await asyncio.to_thread(self._extract_content_from_response, raw)
 
     async def _fetch(self, url: SafeUrl) -> RawResponse:
         """取得段: 接続できたか? に純化する。
@@ -433,17 +433,17 @@ class ArticleHtmlAcquirer:
                 decoded_text=response.text,
             )
 
-    def _acquire_content_from_response(
+    def _extract_content_from_response(
         self, raw: RawResponse
-    ) -> AcquiredContent | ContentFailure:
-        """content acquisition: RawResponse から AcquiredContent を得る (同期)。
+    ) -> ScrapedContent | ContentFailure:
+        """content extraction: RawResponse から ScrapedContent を得る (同期)。
 
         parse (RawResponse → TrafilaturaDocument) と build (TrafilaturaDocument →
-        AcquiredContent) を順に呼ぶユースケース。失敗はすべて値で返る。本段は
+        ScrapedContent) を順に呼ぶユースケース。失敗はすべて値で返る。本段は
         ネットワークを持たないため transport 失敗 (``FetchFailed``) は構造的に返せず、
         戻り型は content 失敗 (``ContentFailure``) のみで固定される。
         """
         parsed = _parse_raw_response_as_html_document(raw)
         if not isinstance(parsed, TrafilaturaDocument):
             return parsed  # ParseFailure (NotHtml | ParserGaveUp | ParseCrashed)
-        return _build_acquired_content_from_document(parsed, url=raw.url)
+        return _build_scraped_content_from_document(parsed, url=raw.url)

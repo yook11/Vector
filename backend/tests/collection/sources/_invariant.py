@@ -36,8 +36,8 @@ from app.collection.article_collection.fetched_article_converter import (
 )
 from app.collection.article_collection.fetcher import fetch_articles
 from app.collection.article_collection.tools.reader_tools import ReaderTools
-from app.collection.article_completion.acquirer import AcquiredContent
 from app.collection.article_completion.completer import complete_with_html
+from app.collection.article_completion.scraper import ScrapedContent
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.domain.value_objects import PublishedAt
@@ -110,7 +110,7 @@ def assert_passports_persistable(
         promoted = complete_with_html(
             item,
             DEFAULT_POLICY,
-            AcquiredContent(
+            ScrapedContent(
                 title="HTML Title",
                 body=html_body,
                 published_at=pub,

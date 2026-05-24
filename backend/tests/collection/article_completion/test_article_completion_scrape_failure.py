@@ -1,7 +1,7 @@
-"""acquisition concern (Stage 1: Fetch + HTML 抽出) の分類 mapper テスト。
+"""scrape concern (Stage 1: Fetch + HTML 抽出) の分類 mapper テスト。
 
 Stage 2 (完成段) の分類は ``test_article_completion_completion_failure.py`` が
-所有する。本ファイルは acquisition の Retry 軸分類のみを検証する。
+所有する。本ファイルは scrape の Retry 軸分類のみを検証する。
 
 構造保証 (spec 完了条件): 全 ``ExternalFetchError`` concrete subclass が
 (Terminal 集合 ∪ policy 別 Retryable ∪ ``FetchOriginServerError`` 明示分岐) で
@@ -15,25 +15,25 @@ from __future__ import annotations
 
 import pytest
 
-from app.collection.article_completion.acquisition_failure import (
+from app.collection.article_completion.retry_policy import (
+    BLIP_POLICY,
+    OUTAGE_POLICY,
+    RETRY_AFTER_POLICY,
+    RetryPolicy,
+)
+from app.collection.article_completion.scrape_failure import (
     _RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY,
     _TERMINAL_FETCH_ERROR_TYPES,
-    AcquisitionFailure,
     ContentQualityTooLow,
     FetchFailed,
     NotHtml,
     ParseCrashed,
     ParserGaveUp,
     Retryable,
+    ScrapeFailure,
     Terminal,
-    classify_acquisition_failure,
     classify_external_fetch_error,
-)
-from app.collection.article_completion.retry_policy import (
-    BLIP_POLICY,
-    OUTAGE_POLICY,
-    RETRY_AFTER_POLICY,
-    RetryPolicy,
+    classify_scrape_failure,
 )
 from app.collection.external_fetch_errors import (
     ExternalFetchError,
@@ -210,40 +210,40 @@ class TestFetchOriginServerErrorExplicitBranch:
     [
         (
             NotHtml(content_type="application/pdf"),
-            "acquisition_not_html",
+            "scrape_not_html",
             "content_type=application/pdf",
         ),
         (
             ParserGaveUp(),
-            "acquisition_parser_gave_up",
+            "scrape_parser_gave_up",
             None,
         ),
         (
             ParseCrashed(error_class="ValueError", error_message="bad parse"),
-            "acquisition_crashed",
+            "scrape_crashed",
             "ValueError: bad parse",
         ),
         (
             ContentQualityTooLow(body_length=0, title_present=False, body_sample=None),
-            "acquisition_content_quality_too_low",
+            "scrape_content_quality_too_low",
             "body_length=0 title_present=False",
         ),
         (
             ContentQualityTooLow(
                 body_length=12, title_present=True, body_sample="too short"
             ),
-            "acquisition_content_quality_too_low",
+            "scrape_content_quality_too_low",
             "body_length=12 title_present=True sample='too short'",
         ),
     ],
 )
-def test_acquisition_failure_maps_to_terminal_with_evidence_detail(
-    failure: AcquisitionFailure,
+def test_scrape_failure_maps_to_terminal_with_evidence_detail(
+    failure: ScrapeFailure,
     expected_reason_code: str,
     expected_detail: str | None,
 ) -> None:
-    """各 content variant が ``acquisition_*`` terminal + 証拠 detail を持つ。"""
-    result = classify_acquisition_failure(failure)
+    """各 content variant が ``scrape_*`` terminal + 証拠 detail を持つ。"""
+    result = classify_scrape_failure(failure)
     assert result == Terminal(reason_code=expected_reason_code, detail=expected_detail)
 
 
@@ -254,7 +254,7 @@ class TestFetchFailedDelegation:
     def test_terminal_fetch_error_folds_into_terminal_with_detail(self) -> None:
         # 404 は terminal 集合。reason_code は exc.CODE 素通し、detail に class 名。
         err = FetchResourceNotFoundError(status_code=404, reason="not_found")
-        result = classify_acquisition_failure(FetchFailed(error=err))
+        result = classify_scrape_failure(FetchFailed(error=err))
         assert isinstance(result, Terminal)
         assert result.reason_code == err.CODE
         assert result.detail is not None
@@ -263,7 +263,7 @@ class TestFetchFailedDelegation:
     def test_retryable_fetch_error_folds_into_retryable_with_detail(self) -> None:
         # 502 は BLIP policy の retryable。content 失敗と違い terminal に落とさない。
         err = FetchGatewayError(status_code=502)
-        result = classify_acquisition_failure(FetchFailed(error=err))
+        result = classify_scrape_failure(FetchFailed(error=err))
         assert isinstance(result, Retryable)
         assert result.reason_code == err.CODE
         assert result.policy == BLIP_POLICY
