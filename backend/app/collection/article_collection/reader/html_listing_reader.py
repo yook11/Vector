@@ -15,8 +15,8 @@ from dataclasses import dataclass
 
 from lxml import etree, html
 
+from app.collection.article_collection.errors import UnreadableResponseError
 from app.collection.article_collection.tools.raw_http_client import RawHttpClient
-from app.collection.external_fetch_errors import FetchParseError
 
 # defensive parsing: network fetch / 外部 entity を構造的に塞ぐ hardened parser。
 _HTML_PARSER = html.HTMLParser(no_network=True)
@@ -60,7 +60,7 @@ class HtmlListingReader:
         """HTTP GET → defensive HTML parse → ``list[HtmlListingEntry]``。
 
         Raises:
-            FetchParseError: HTML 構造破損 (payload 全体の失敗)。
+            UnreadableResponseError: HTML 構造破損 (payload 全体の失敗)。
             ExternalFetchError: HTTP status / transport / SSRF 例外の写像。
         """
         raw = await self._http.fetch(url=url, source_name=source_name)
@@ -69,6 +69,6 @@ class HtmlListingReader:
                 _parse_listing_entries, raw, detail_link_xpath=detail_link_xpath
             )
         except etree.LxmlError as e:
-            raise FetchParseError(
+            raise UnreadableResponseError(
                 f"html listing parse error: {source_name}: {e}"
             ) from e

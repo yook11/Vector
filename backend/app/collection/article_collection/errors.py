@@ -78,6 +78,28 @@ class FetchedArticleConversionError(Exception):
         self.has_published_at = has_published_at
 
 
+class UnreadableResponseError(Exception):
+    """応答は受領したが構造化できない read 段固有の失敗 (接続エラーではない)。
+
+    接続 (transport/status/SSRF) は成功し payload は受理したのに、RSS bozo / XML
+    syntax / HTML parse / JSON decode / envelope shape 不正で構造化できないことを
+    表す。接続境界の ``ExternalFetchError`` とは別系統 — 「接続できたか」ではなく
+    「読めたか」の軸であり、接続エラーの SSoT (``external_fetch_errors.py``) には
+    置かない。記事品質ゲートの不合格は domain validation として別軸で扱う
+    (normalize が ``None``/``""`` に畳むのでこのエラーにはならない)。
+
+    Attributes:
+        CODE: audit ラベル (``pipeline_events.code`` 列)。接続コードと別カテゴリと
+            分かるよう ``fetch_`` でなく ``read_`` prefix。
+    """
+
+    CODE: ClassVar[str] = "read_unreadable_response"
+
+    def __str__(self) -> str:
+        explicit = super().__str__()
+        return explicit if explicit else self.CODE
+
+
 class SourceFetchError(Exception):
     """ソース全体の取得に失敗したことを示す Stage 1 marker。
 

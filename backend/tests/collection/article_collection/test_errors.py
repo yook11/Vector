@@ -1,8 +1,11 @@
-"""``FetchedArticleConversionError`` / ``ConversionReason`` の単体テスト。
+"""``FetchedArticleConversionError`` / ``ConversionReason`` /
+``UnreadableResponseError`` の単体テスト。
 
 DB / IO 非依存。例外が変換失敗 reason と観測スナップショットを構造化保持
 すること、``code`` が単一の class 定数で安定すること、``ConversionReason``
-の値が監査集計 key として安定な snake_case であることを固定する。
+の値が監査集計 key として安定な snake_case であること、read 段固有の
+``UnreadableResponseError`` が接続 family と独立で CODE / 非空 message を
+持つことを固定する。
 """
 
 from __future__ import annotations
@@ -10,7 +13,9 @@ from __future__ import annotations
 from app.collection.article_collection.errors import (
     ConversionReason,
     FetchedArticleConversionError,
+    UnreadableResponseError,
 )
+from app.collection.external_fetch_errors import ExternalFetchError
 
 
 def _make(**overrides) -> FetchedArticleConversionError:
@@ -60,3 +65,27 @@ def test_conversion_reason_values_are_stable_snake_case() -> None:
 
 def test_is_an_exception() -> None:
     assert isinstance(_make(), Exception)
+
+
+def test_unreadable_response_error_code_is_stable_read_prefixed() -> None:
+    """CODE は接続 family の ``fetch_`` と別カテゴリと分かる ``read_`` prefix。"""
+    assert UnreadableResponseError.CODE == "read_unreadable_response"
+
+
+def test_unreadable_response_error_is_not_a_connection_error() -> None:
+    """接続境界 ``ExternalFetchError`` family とは独立した別系統 (継承しない)。"""
+    assert not issubclass(UnreadableResponseError, ExternalFetchError)
+
+
+def test_unreadable_response_error_str_nonempty_without_message() -> None:
+    """message 無しでも ``str(exc)`` が非空 (既定 message に CODE を合成)。
+
+    service が ``SourceFetchError(str(exc), code=exc.CODE)`` で監査に載せるため、
+    空文字にならない構造保証が要る。
+    """
+    assert str(UnreadableResponseError()) == "read_unreadable_response"
+
+
+def test_unreadable_response_error_explicit_message_takes_precedence() -> None:
+    exc = UnreadableResponseError("sitemap parse error: Foo")
+    assert str(exc) == "sitemap parse error: Foo"

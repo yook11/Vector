@@ -2,7 +2,9 @@
 
 engine は Source 宣言を **read → in_scope filter → select → map_entry** の順に
 合成する。stub source で (1) 合成順序、(2) ``BaseArticleSource`` default の供給、
-(3) ``read`` の ``ExternalFetchError`` 素通りを固定する。
+(3) ``read`` の read error (接続失敗 ``ExternalFetchError`` / 読取失敗
+``UnreadableResponseError``) の明示素通り、(4) それ以外 (契約違反 bug) を funnel
+せず素通しすることを固定する。
 """
 
 from __future__ import annotations
@@ -11,6 +13,7 @@ from typing import ClassVar
 
 import pytest
 
+from app.collection.article_collection.errors import UnreadableResponseError
 from app.collection.article_collection.fetched_article import FetchedArticle
 from app.collection.article_collection.fetcher import fetch_articles
 from app.collection.article_collection.tools.reader_tools import ReaderTools
@@ -101,3 +104,39 @@ async def test_read_external_fetch_error_passes_through() -> None:
     """``read`` の ``ExternalFetchError`` を engine は握りつぶさず素通りさせる。"""
     with pytest.raises(FetchOriginServerError):
         await _drain(_FailingReadSource)
+
+
+class _UnreadableReadSource(BaseArticleSource):
+    """``read`` が ``UnreadableResponseError`` を raise する stub。"""
+
+    @classmethod
+    async def read(cls, tools: ReaderTools) -> list[str]:  # noqa: ARG003
+        raise UnreadableResponseError("unreadable boom")
+
+    @classmethod
+    def map_entry(cls, entry: str) -> FetchedArticle:
+        return _fa(entry)
+
+
+async def test_read_unreadable_response_error_passes_through() -> None:
+    """``read`` の ``UnreadableResponseError`` (読取失敗) も明示素通りさせる。"""
+    with pytest.raises(UnreadableResponseError):
+        await _drain(_UnreadableReadSource)
+
+
+class _BuggyReadSource(BaseArticleSource):
+    """``read`` が read error 以外 (契約違反 bug) を raise する stub。"""
+
+    @classmethod
+    async def read(cls, tools: ReaderTools) -> list[str]:  # noqa: ARG003
+        raise RuntimeError("contract violation")
+
+    @classmethod
+    def map_entry(cls, entry: str) -> FetchedArticle:
+        return _fa(entry)
+
+
+async def test_read_non_read_error_is_not_funneled() -> None:
+    """read error でない例外 (bug) は funnel せず素の型のまま伝播させる。"""
+    with pytest.raises(RuntimeError):
+        await _drain(_BuggyReadSource)

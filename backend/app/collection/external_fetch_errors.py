@@ -387,14 +387,3 @@ class FetchContentTypeMismatchError(ExternalFetchError):
             f"{self.CODE}: expected={self.expected_content_type} "
             f"detected={self.detected_content_type}"
         )
-
-
-class FetchParseError(ExternalFetchError):
-    """取得した payload の parse に失敗した。
-
-    RSS / Atom / sitemap / HTML など、取得後の外部 payload 解釈に失敗したことを
-    表す。HTTP response を受け取った後の content decoding 失敗もここに含める。
-    記事品質ゲートの不合格は domain validation として別軸で扱う。
-    """
-
-    CODE: ClassVar[str] = "fetch_payload_parse_failed"

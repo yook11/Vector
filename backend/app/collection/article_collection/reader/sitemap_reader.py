@@ -15,8 +15,8 @@ from datetime import UTC, datetime
 
 from lxml import etree
 
+from app.collection.article_collection.errors import UnreadableResponseError
 from app.collection.article_collection.tools.raw_http_client import RawHttpClient
-from app.collection.external_fetch_errors import FetchParseError
 
 _SITEMAP_NS = "http://www.sitemaps.org/schemas/sitemap/0.9"
 
@@ -76,11 +76,13 @@ class SitemapReader:
         """HTTP GET → defensive XML parse → ``list[SitemapEntry]``。
 
         Raises:
-            FetchParseError: XML 構造破損 (payload 全体の失敗)。
+            UnreadableResponseError: XML 構造破損 (payload 全体の失敗)。
             ExternalFetchError: HTTP status / transport / SSRF 例外の写像。
         """
         raw = await self._http.fetch(url=url, source_name=source_name)
         try:
             return await asyncio.to_thread(_parse_sitemap_entries, raw)
         except etree.XMLSyntaxError as e:
-            raise FetchParseError(f"sitemap parse error: {source_name}: {e}") from e
+            raise UnreadableResponseError(
+                f"sitemap parse error: {source_name}: {e}"
+            ) from e

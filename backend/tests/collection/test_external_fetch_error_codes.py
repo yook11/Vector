@@ -24,7 +24,6 @@ from app.collection.external_fetch_errors import (
     FetchLegalBlockError,
     FetchNetworkError,
     FetchOriginServerError,
-    FetchParseError,
     FetchRateLimitedError,
     FetchRedirectBlockedError,
     FetchRedirectLoopError,
@@ -39,7 +38,7 @@ from app.collection.external_fetch_errors import (
     FetchUnexpectedStatusError,
 )
 
-_EXPECTED_CODE_COUNT = 19
+_EXPECTED_CODE_COUNT = 18
 
 # 各 concrete subclass を「message 空」で構築するための必須 kwargs 表。
 # 新 subclass を追加して本表に登録し忘れると ``test_construction_table_covers_
@@ -66,7 +65,6 @@ _CONSTRUCTION: dict[type[ExternalFetchError], dict[str, object]] = {
         "expected_content_type": "text/html",
         "detected_content_type": None,
     },
-    FetchParseError: {},
 }
 
 

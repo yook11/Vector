@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from app.collection.article_collection.errors import UnreadableResponseError
 from app.collection.article_collection.reader.rss_reader import (
     RssReader,
     normalize_entry,
@@ -24,7 +25,6 @@ from app.collection.external_fetch_errors import (
     FetchLegalBlockError,
     FetchNetworkError,
     FetchOriginServerError,
-    FetchParseError,
     FetchRateLimitedError,
     FetchResourceNotFoundError,
     FetchSsrfBlockedError,
@@ -303,7 +303,7 @@ class TestRssReaderFetch:
             _patch_safe_client(response),
             patch(f"{_MOD}.feedparser.parse", return_value=feed),
         ):
-            with pytest.raises(FetchParseError):
+            with pytest.raises(UnreadableResponseError):
                 await RssReader().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
 
     async def test_bozo_with_entries_does_not_raise(self) -> None:

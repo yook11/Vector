@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import structlog
 
+from app.collection.article_collection.errors import UnreadableResponseError
 from app.collection.article_collection.reader.rss_reader import (
     ParseMode,
     RssEntry,
@@ -39,13 +40,14 @@ class MultiFeedRssReader:
     ) -> list[RssEntry]:
         """``feeds`` を per-feed 巡回し結合 ``RssEntry`` 列を返す。
 
-        per-feed の ``ExternalFetchError`` はログに記録して次 feed へ。全 feed が
-        失敗したときだけ最初の error を re-raise する (≥1 feed 成功なら正常終了、
-        entries 空でも成功扱い)。
+        per-feed の read error (接続失敗 ``ExternalFetchError`` / 読取失敗
+        ``UnreadableResponseError``) はログに記録して次 feed へ。全 feed が失敗した
+        ときだけ最初の error を re-raise する (≥1 feed 成功なら正常終了、entries 空
+        でも成功扱い)。
         """
         collected: list[RssEntry] = []
         success_count = 0
-        first_error: ExternalFetchError | None = None
+        first_error: ExternalFetchError | UnreadableResponseError | None = None
 
         for feed_url in feeds:
             try:
@@ -54,7 +56,7 @@ class MultiFeedRssReader:
                     source_name=source_name,
                     parse_mode=parse_mode,
                 )
-            except ExternalFetchError as exc:
+            except (ExternalFetchError, UnreadableResponseError) as exc:
                 # この feed をログに記録して次 feed へ。source 全体は落とさない。
                 logger.warning(
                     "source_feed_fetch_failed",

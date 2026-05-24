@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -10,6 +11,7 @@ from typing import Any, ClassVar
 import httpx
 import structlog
 
+from app.collection.article_collection.errors import UnreadableResponseError
 from app.collection.article_collection.tools.http_error_translation import (
     translate_fetch_exception,
 )
@@ -99,9 +101,21 @@ class HackerNewsReader:
             ) as e:
                 raise translate_fetch_exception(e, source_name=source_name) from e
 
-            data = response.json()
+            try:
+                data = response.json()
+            except json.JSONDecodeError as e:
+                raise UnreadableResponseError(
+                    f"hn json decode error: {source_name}: {e}"
+                ) from e
 
-        hits: list[dict[str, Any]] = list(data.get("hits", []))
+        # envelope shape を確定してから抽出 (接続成功でも構造化できなければ
+        # read 失敗。absent key は寛容に空へ、present だが型違いは unreadable)。
+        if not isinstance(data, dict):
+            raise UnreadableResponseError(f"hn envelope shape error: {source_name}")
+        hits_raw = data.get("hits", [])
+        if not isinstance(hits_raw, list):
+            raise UnreadableResponseError(f"hn envelope shape error: {source_name}")
+        hits: list[dict[str, Any]] = hits_raw
         if not hits:
             logger.info("hn_no_new_stories", source=source_name)
         return [normalize_hit(hit) for hit in hits]

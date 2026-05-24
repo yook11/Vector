@@ -58,6 +58,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
+from app.collection.article_collection.errors import UnreadableResponseError
 from app.collection.article_collection.reader.algolia_hn_reader import (
     HackerNewsEntry,
     HackerNewsReader,
@@ -155,3 +156,44 @@ async def test_http_500_raises_origin_server_error() -> None:
     """R4: payload 全体の失敗 (500) は ``ExternalFetchError`` 系に写る。"""
     with pytest.raises(FetchOriginServerError):
         await _raise_through(500)
+
+
+async def _fetch_body(content: bytes) -> list[HackerNewsEntry]:
+    """200 応答に任意 body を載せて本物の ``search_recent_stories`` を走らせる。"""
+    response = _response(200, content)
+
+    @asynccontextmanager
+    async def _fake_safe_client(**_: Any) -> AsyncIterator[Any]:
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get = AsyncMock(return_value=response)
+        yield client
+
+    with patch(f"{_MOD}.make_safe_async_client", _fake_safe_client):
+        return await HackerNewsReader().search_recent_stories(
+            source_name="hn-reader-contract",
+            min_points=0,
+            window_seconds=10**12,
+            hits_per_page=100,
+        )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(b"{not valid json", id="json_decode_error"),
+        pytest.param(b"[]", id="top_level_not_dict"),
+        pytest.param(b'{"hits": {}}', id="hits_not_list"),
+    ],
+)
+async def test_unreadable_payload_raises_unreadable_response(body: bytes) -> None:
+    """接続は成功したが構造化できない payload (JSON decode 失敗 / envelope shape
+    不正) は read 段固有の ``UnreadableResponseError`` に写る (接続境界
+    ``ExternalFetchError`` とは別系統)。生 ``JSONDecodeError`` / ``AttributeError``
+    を上位に漏らさない。"""
+    with pytest.raises(UnreadableResponseError):
+        await _fetch_body(body)
+
+
+async def test_empty_hits_is_success_not_unreadable() -> None:
+    """正常な空 hits は成功 (空列) で、unreadable に倒さない。"""
+    assert await _fetch_body(b'{"hits":[]}') == []

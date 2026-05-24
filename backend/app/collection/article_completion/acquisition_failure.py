@@ -58,7 +58,6 @@ from app.collection.external_fetch_errors import (
     FetchLegalBlockError,
     FetchNetworkError,
     FetchOriginServerError,
-    FetchParseError,
     FetchRateLimitedError,
     FetchRedirectBlockedError,
     FetchRedirectLoopError,
@@ -238,7 +237,6 @@ _TERMINAL_FETCH_ERROR_TYPES: tuple[type[ExternalFetchError], ...] = (
     FetchRedirectLoopError,
     FetchResponseTooLargeError,
     FetchContentTypeMismatchError,
-    FetchParseError,
 )
 
 # policy ごとに error type を束ねる。同 policy のグループが一目で分かる形。

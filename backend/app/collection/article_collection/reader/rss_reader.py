@@ -4,7 +4,7 @@ HTTP 取得・SSRF guard・feedparser 呼び出し・error 翻訳・title 平文
 正規化済の ``RssEntry`` を返す。body 系 (``summary`` / ``content_encoded``) は
 raw HTML のまま返し、body picker / footer 除去等は呼び出し側の責務。
 Shift_JIS など XML 宣言で encoding を持つ feed は ``parse_mode="bytes"`` を選び
-feedparser に sniff を委ねる。bozo かつ entries 空は ``FetchParseError``。
+feedparser に sniff を委ねる。bozo かつ entries 空は ``UnreadableResponseError``。
 """
 
 from __future__ import annotations
@@ -21,10 +21,10 @@ import feedparser
 import httpx
 import structlog
 
+from app.collection.article_collection.errors import UnreadableResponseError
 from app.collection.article_collection.tools.http_error_translation import (
     translate_fetch_exception,
 )
-from app.collection.external_fetch_errors import FetchParseError
 from app.shared.security.safe_http import make_safe_async_client
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 
@@ -173,7 +173,7 @@ class RssReader:
         """HTTP GET → feedparser → ``list[RssEntry]`` まで完結する。
 
         Raises:
-            FetchParseError: bozo かつ entries 空 (feed 構造破損)。
+            UnreadableResponseError: bozo かつ entries 空 (feed 構造破損)。
             ExternalFetchError: HTTP status / transport / SSRF 例外の写像。
         """
         raw = await self._fetch_raw(
@@ -190,7 +190,7 @@ class RssReader:
                 source=source_name,
                 error=str(feed.bozo_exception),
             )
-            raise FetchParseError(
+            raise UnreadableResponseError(
                 f"feed parse error: {source_name}: {feed.bozo_exception}"
             )
         return [normalize_entry(entry) for entry in feed.entries]

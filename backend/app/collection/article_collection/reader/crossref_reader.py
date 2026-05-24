@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -10,6 +11,7 @@ from typing import Any, ClassVar
 import httpx
 import structlog
 
+from app.collection.article_collection.errors import UnreadableResponseError
 from app.collection.article_collection.tools.http_error_translation import (
     translate_fetch_exception,
 )
@@ -174,9 +176,30 @@ class CrossrefReader:
             ) as e:
                 raise translate_fetch_exception(e, source_name=source_name) from e
 
-            data = response.json()
+            try:
+                data = response.json()
+            except json.JSONDecodeError as e:
+                raise UnreadableResponseError(
+                    f"crossref json decode error: {source_name}: {e}"
+                ) from e
 
-        items: list[dict[str, Any]] = list(data.get("message", {}).get("items", []))
+        # envelope shape を確定してから抽出 (接続成功でも構造化できなければ
+        # read 失敗。absent key は寛容に空へ、present だが型違いは unreadable)。
+        if not isinstance(data, dict):
+            raise UnreadableResponseError(
+                f"crossref envelope shape error: {source_name}"
+            )
+        message = data.get("message", {})
+        if not isinstance(message, dict):
+            raise UnreadableResponseError(
+                f"crossref envelope shape error: {source_name}"
+            )
+        items_raw = message.get("items", [])
+        if not isinstance(items_raw, list):
+            raise UnreadableResponseError(
+                f"crossref envelope shape error: {source_name}"
+            )
+        items: list[dict[str, Any]] = items_raw
         if not items:
             logger.info("crossref_no_new_items", source=source_name)
         return [normalize_item(item) for item in items]

@@ -43,7 +43,6 @@ from app.collection.external_fetch_errors import (
     FetchLegalBlockError,
     FetchNetworkError,
     FetchOriginServerError,
-    FetchParseError,
     FetchRateLimitedError,
     FetchRedirectBlockedError,
     FetchRedirectLoopError,
@@ -82,7 +81,6 @@ _CONSTRUCT: dict[type[ExternalFetchError], dict[str, object]] = {
         "expected_content_type": "text/html",
         "detected_content_type": None,
     },
-    FetchParseError: {},
 }
 
 

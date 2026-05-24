@@ -24,7 +24,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.collection.article_collection.audit_repository import (
     SourceFetchAuditRepository,
 )
-from app.collection.article_collection.errors import SourceFetchError
+from app.collection.article_collection.errors import (
+    SourceFetchError,
+    UnreadableResponseError,
+)
 from app.collection.article_collection.fetched_article_converter import (
     ConversionRejection,
     convert_fetched_article,
@@ -103,8 +106,8 @@ class ArticleAcquisitionService:
                             # 変換不能 entry。業務 session には書かず別 tx で
                             # 監査して次 entry へ。
                             await self._audit_conversion_rejected(source_id, rej)
-            except ExternalFetchError as exc:
-                # tool 層で翻訳済の error を CODE 付きで載せ替え伝播
+            except (ExternalFetchError, UnreadableResponseError) as exc:
+                # read 失敗 (接続/読取) を CODE 付きで載せ替え伝播
                 # (CODE は監査解像度用)。
                 raise SourceFetchError(str(exc), code=exc.CODE) from exc
 
