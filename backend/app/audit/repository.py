@@ -11,11 +11,11 @@ import contextvars
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit.categories import Layer1Category
+from app.audit.domain.event import EventType, Stage
+from app.audit.domain.payloads import BasePipelineEventPayload
 from app.models.article import Article
 from app.models.pipeline_event import PipelineEvent
-from app.observability.categories import Layer1Category
-from app.observability.domain.event import EventType, Stage
-from app.observability.domain.payloads import BasePipelineEventPayload
 
 # trace_id 伝播用 contextvar — PR1 では誰もセットしない (常に None)。
 # post-v1 で OpenTelemetry / Logfire 連携時に span ID を入れる経路。

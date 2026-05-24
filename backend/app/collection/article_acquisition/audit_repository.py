@@ -9,12 +9,12 @@ from __future__ import annotations
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit.domain.event import EventType, Stage
+from app.audit.domain.payloads import AcquisitionPayload
+from app.audit.error_chain import extract_error_chain
+from app.audit.repository import PipelineEventRepository
 from app.collection.article_acquisition.errors import FetchedArticleConversionError
-from app.observability.domain.event import EventType, Stage
-from app.observability.domain.payloads import AcquisitionPayload
-from app.observability.recording import _extract_error_chain
-from app.observability.redact import redact_secrets
-from app.observability.repository import PipelineEventRepository
+from app.shared.security.redaction import redact_secrets
 
 _ERROR_MESSAGE_LIMIT = 2000  # foundation 共通 (Extraction / Assessment と同値)
 
@@ -44,7 +44,7 @@ class SourceAcquisitionAuditRepository:
             source_name=source_name,
             # exception message に混入しうる secret を redact してから永続化する。
             error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
-            error_chain=_extract_error_chain(exc),
+            error_chain=extract_error_chain(exc),
         )
         await self._events.append(
             stage=Stage.ACQUISITION,
@@ -74,7 +74,7 @@ class SourceAcquisitionAuditRepository:
         payload = AcquisitionPayload(
             source_name=exc.source_name,
             error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
-            error_chain=_extract_error_chain(exc),
+            error_chain=extract_error_chain(exc),
             # ``conversion_analyzable_reason`` カラムは新コードでは未使用
             # (NULL)。DB 列は legacy row との互換のため据え置き。
             conversion_observed_reason=str(exc.conversion_reason),

@@ -1,4 +1,4 @@
-"""``app.observability.retention.purge_pipeline_events`` のテスト
+"""``app.audit.retention.purge_pipeline_events`` のテスト
 (red-team chain γ-4)。
 
 - 90 日経過行が削除され、新しい行は残ること
@@ -18,8 +18,8 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
+from app.audit import retention
 from app.models.pipeline_event import PipelineEvent
-from app.observability import retention
 
 
 def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> MagicMock:

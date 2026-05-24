@@ -43,14 +43,14 @@ from app.analysis.curation.errors import (
     CurationTerminalDropError,
     CurationTerminalKeepError,
 )
+from app.audit.categories import Layer1Category
+from app.audit.domain.event import EventType, Stage
+from app.audit.domain.payloads import ExtractionPayload
+from app.audit.error_chain import extract_error_chain
+from app.audit.repository import PipelineEventRepository
 from app.models.article import Article
 from app.models.news_source import NewsSource
-from app.observability.categories import Layer1Category
-from app.observability.domain.event import EventType, Stage
-from app.observability.domain.payloads import ExtractionPayload
-from app.observability.recording import _extract_error_chain
-from app.observability.redact import redact_secrets
-from app.observability.repository import PipelineEventRepository
+from app.shared.security.redaction import redact_secrets
 
 _AI_RAW_RESPONSE_LIMIT = 2048
 _ERROR_MESSAGE_LIMIT = 2000
@@ -141,7 +141,7 @@ class CurationAuditRepository:
         ``ai_model`` / ``prompt_version`` は ``curator`` の property
         (``model_name`` / ``prompt_version``) から埋める。
 
-        ``error_chain`` は ``_extract_error_chain`` で ``__cause__`` を辿り、ACL の
+        ``error_chain`` は ``extract_error_chain`` で ``__cause__`` を辿り、ACL の
         ``raise from exc`` で保持された元 ``AIProviderError`` まで記録する。
         """
         source_name = await self._resolve_source_name(article_id)
@@ -155,7 +155,7 @@ class CurationAuditRepository:
             # red-team chain γ-2: SDK exception message に key prefix /
             # Authorization header が混入する経路を redact してから永続化する。
             error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
-            error_chain=_extract_error_chain(exc),
+            error_chain=extract_error_chain(exc),
         )
         await self._events.append(
             stage=Stage.EXTRACTION,
@@ -190,7 +190,7 @@ class CurationAuditRepository:
         ``ai_model`` / ``prompt_version`` は ``curator`` の property
         (``model_name`` / ``prompt_version``) から埋める。
 
-        ``error_chain`` は ``_extract_error_chain`` で ``__cause__`` を辿り、ACL の
+        ``error_chain`` は ``extract_error_chain`` で ``__cause__`` を辿り、ACL の
         ``raise from exc`` で保持された元 ``AIProviderError`` まで記録する。
         """
         source_name = await self._resolve_source_name(ready.article_id)
@@ -204,7 +204,7 @@ class CurationAuditRepository:
             # red-team chain γ-2: SDK exception message に key prefix /
             # Authorization header が混入する経路を redact してから永続化する。
             error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
-            error_chain=_extract_error_chain(exc),
+            error_chain=extract_error_chain(exc),
         )
         category = self._category_of(exc)
         code = self._code_of(exc)

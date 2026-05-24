@@ -296,7 +296,7 @@ async def test_provider_network_error_is_wrapped_to_recoverable_marker(
     """``AIProviderNetworkError`` → ``AssessmentRecoverableError`` で wrap。
 
     ``__cause__`` に元 ``AIProvider*Error`` が紐付くこと (PR5 の
-    ``_extract_error_chain`` が 2 段以上を error_chain 列に記録できる前提)。
+    ``extract_error_chain`` が 2 段以上を error_chain 列に記録できる前提)。
     """
     provider_exc = AIProviderNetworkError("connection reset")
     assessor = _make_assessor(side_effect=provider_exc)

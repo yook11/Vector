@@ -1,4 +1,4 @@
-"""``app.observability.domain.payloads`` の単体テスト。
+"""``app.audit.domain.payloads`` の単体テスト。
 
 field schema を検証する:
 
@@ -11,7 +11,7 @@ field schema を検証する:
 
 from __future__ import annotations
 
-from app.observability.domain.payloads import (
+from app.audit.domain.payloads import (
     AcquisitionPayload,
     ContentFetchPayload,
 )

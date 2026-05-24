@@ -1,12 +1,12 @@
-"""観測 bounded context — pipeline_events 監査基盤の実装。
+"""監査 bounded context — pipeline_events 監査基盤の実装。
 
 詳細は ``docs/observability/pipeline-events-design.md`` 参照。
 
-依存方向: ``collection`` / ``analysis`` → ``observability`` (片方向)。
+依存方向: ``collection`` / ``analysis`` → ``audit`` (片方向)。
 """
 
-from app.observability.domain.event import EventType, Stage
-from app.observability.domain.payloads import (
+from app.audit.domain.event import EventType, Stage
+from app.audit.domain.payloads import (
     AcquisitionPayload,
     AssessmentPayload,
     BasePipelineEventPayload,
@@ -16,9 +16,8 @@ from app.observability.domain.payloads import (
     ExtractionPayload,
     PipelineEventPayload,
 )
-from app.observability.prompt_versions import compute_call_signature
-from app.observability.recording import _record_failure_event
-from app.observability.repository import PipelineEventRepository
+from app.audit.recording import _record_failure_event
+from app.audit.repository import PipelineEventRepository
 
 __all__ = [
     "AssessmentPayload",
@@ -33,5 +32,4 @@ __all__ = [
     "AcquisitionPayload",
     "Stage",
     "_record_failure_event",
-    "compute_call_signature",
 ]

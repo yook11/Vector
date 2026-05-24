@@ -20,7 +20,7 @@ from app.analysis.assessment.errors import (
     AssessmentRecoverableError,
     AssessmentTerminalSkipError,
 )
-from app.observability.redact import redact_secrets
+from app.shared.security.redaction import redact_secrets
 
 logger = structlog.get_logger(__name__)
 

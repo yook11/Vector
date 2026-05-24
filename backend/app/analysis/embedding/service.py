@@ -74,7 +74,7 @@ class EmbeddingService:
         except AIProviderError as exc:
             # ACL boundary: provider error を Stage 5 Layer 1 marker に wrap。
             # ``from exc`` で __cause__ に元 AIProvider*Error を紐付け、
-            # ``recording.py::_extract_error_chain`` が wrapper marker → 元
+            # ``error_chain.py::extract_error_chain`` が wrapper marker → 元
             # provider error の 2 段以上を audit ``payload.error_chain`` に
             # 記録できるようにする。
             raise to_embedding_error(exc) from exc

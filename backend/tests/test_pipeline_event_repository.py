@@ -13,16 +13,16 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.article import Article as ArticleORM
-from app.models.news_source import NewsSource, SourceType
-from app.models.pipeline_event import PipelineEvent
-from app.observability.categories import Layer1Category
-from app.observability.domain.event import EventType, Stage
-from app.observability.domain.payloads import (
+from app.audit.categories import Layer1Category
+from app.audit.domain.event import EventType, Stage
+from app.audit.domain.payloads import (
     AcquisitionPayload,
     EmbeddingPayload,
 )
-from app.observability.repository import PipelineEventRepository
+from app.audit.repository import PipelineEventRepository
+from app.models.article import Article as ArticleORM
+from app.models.news_source import NewsSource, SourceType
+from app.models.pipeline_event import PipelineEvent
 
 
 @pytest.fixture

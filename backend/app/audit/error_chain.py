@@ -1,0 +1,28 @@
+"""例外チェーンを FQN リスト化する pure helper。
+
+監査 payload の ``error_chain`` field を組み立てる SSoT。session も I/O も持たない
+純粋関数で、失敗書込 (``recording.build_failure_payload``) と各 BC の
+``audit_repository`` の双方から再利用される (越境 import を public API で受ける)。
+"""
+
+from __future__ import annotations
+
+_MAX_CHAIN_DEPTH = 8
+
+
+def extract_error_chain(exc: BaseException) -> list[str]:
+    """``__cause__`` / ``__context__`` を辿って FQN リスト化。
+
+    深さ上限 ``_MAX_CHAIN_DEPTH`` + ``id()`` 集合で循環防止。``__cause__``
+    優先、無ければ ``__context__``。
+    """
+    chain: list[str] = []
+    seen: set[int] = set()
+    cur: BaseException | None = exc
+    while cur is not None and len(chain) < _MAX_CHAIN_DEPTH:
+        if id(cur) in seen:
+            break
+        seen.add(id(cur))
+        chain.append(f"{type(cur).__module__}.{type(cur).__qualname__}")
+        cur = cur.__cause__ or cur.__context__
+    return chain

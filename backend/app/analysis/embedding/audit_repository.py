@@ -28,12 +28,12 @@ from app.analysis.embedding.errors import (
     EmbeddingRecoverableError,
     EmbeddingTerminalSkipError,
 )
-from app.observability.categories import Layer1Category
-from app.observability.domain.event import EventType, Stage
-from app.observability.domain.payloads import EmbeddingPayload
-from app.observability.recording import _extract_error_chain
-from app.observability.redact import redact_secrets
-from app.observability.repository import PipelineEventRepository
+from app.audit.categories import Layer1Category
+from app.audit.domain.event import EventType, Stage
+from app.audit.domain.payloads import EmbeddingPayload
+from app.audit.error_chain import extract_error_chain
+from app.audit.repository import PipelineEventRepository
+from app.shared.security.redaction import redact_secrets
 
 _ERROR_MESSAGE_LIMIT = 2000  # foundation 共通 (Stage 4 と同値)
 
@@ -98,7 +98,7 @@ class EmbeddingAuditRepository:
         PR4 で helper 廃止、task 末尾に inline)。
         commit は caller 側で行う (本 method は単一行 append のみ)。
 
-        ``error_chain`` は ``recording.py::_extract_error_chain`` を再利用して
+        ``error_chain`` は ``error_chain.py::extract_error_chain`` を再利用して
         ``__cause__`` / ``__context__`` を辿る。
         ``raise to_embedding_error(exc) from exc`` する想定のため、
         wrapper marker (``EmbeddingRecoverableError`` 等) と元 ``AIProviderError``
@@ -112,7 +112,7 @@ class EmbeddingAuditRepository:
             # (Stage 4 と同 pattern)。
             error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
             # `raise X from exc` 連鎖を辿って FQN 列を payload に残す。
-            error_chain=_extract_error_chain(exc),
+            error_chain=extract_error_chain(exc),
         )
         category = self._category_of(exc)
         code = self._code_of(exc)

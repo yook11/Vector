@@ -1,5 +1,5 @@
-from app.observability.domain.event import EventType, Stage
-from app.observability.domain.payloads import (
+from app.audit.domain.event import EventType, Stage
+from app.audit.domain.payloads import (
     AcquisitionPayload,
     AssessmentPayload,
     BasePipelineEventPayload,

@@ -4,7 +4,7 @@
 
 - 全 9 Stage × 4 EventType を 1 行 = 1 イベントで表現
 - 業務 tx と同一トランザクション (成功/skip パス) または別 session (例外パス) で書込
-- ``payload`` は Pydantic Discriminated Union (``app/observability/domain/payloads.py``)
+- ``payload`` は Pydantic Discriminated Union (``app/audit/domain/payloads.py``)
 - ``Base.metadata`` は ``SQLModel.metadata`` と共有 (``app/models/base.py``)
 """
 

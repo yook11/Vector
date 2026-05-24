@@ -22,8 +22,8 @@ from app.analysis.curation.errors import (
     CurationTerminalDropError,
     CurationTerminalKeepError,
 )
-from app.observability.redact import redact_secrets
 from app.repositories.articles import ArticleRepository
+from app.shared.security.redaction import redact_secrets
 
 logger = structlog.get_logger(__name__)
 

@@ -167,11 +167,11 @@ async def _wire_embedding_adapters(state: TaskiqState) -> None:
 
 
 # scheduler に cron を登録するため、import で副作用を起こす。
+import app.audit.retention  # noqa: E402, F401
 import app.collection.article_completion.dispatch  # noqa: E402, F401
 import app.insights.briefing.tasks.briefing  # noqa: E402, F401
 import app.insights.snapshot.tasks.snapshot  # noqa: E402, F401
 import app.maintenance.tasks  # noqa: E402, F401
-import app.observability.retention  # noqa: E402, F401
 
 # ---------------------------------------------------------------------------
 # ヘルパー（タスクモジュール間で共有）

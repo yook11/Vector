@@ -1,6 +1,6 @@
-"""``app.observability.recording`` の単体テスト。
+"""``app.audit.recording`` の単体テスト。
 
-- ``_extract_error_chain`` の cause/context 走査と循環防止
+- ``extract_error_chain`` の cause/context 走査と循環防止
 - ``build_failure_payload`` が Stage に対応する Payload を返す
 - ``_record_failure_event`` 正常系: 新 session で 1 行 INSERT
 - ``_record_failure_event`` DB 失敗: structlog で fallback ログを残す
@@ -15,20 +15,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
-from app.models.pipeline_event import PipelineEvent
-from app.observability.domain.event import Stage
-from app.observability.domain.payloads import (
+from app.audit.domain.event import Stage
+from app.audit.domain.payloads import (
     AcquisitionPayload,
     AssessmentPayload,
     ContentFetchPayload,
     EmbeddingPayload,
     ExtractionPayload,
 )
-from app.observability.recording import (
-    _extract_error_chain,
-    _record_failure_event,
-    build_failure_payload,
-)
+from app.audit.error_chain import extract_error_chain
+from app.audit.recording import _record_failure_event, build_failure_payload
+from app.models.pipeline_event import PipelineEvent
 
 
 def test_error_chain_walks_cause() -> None:
@@ -38,7 +35,7 @@ def test_error_chain_walks_cause() -> None:
         except ValueError as inner:
             raise RuntimeError("outer") from inner
     except RuntimeError as e:
-        chain = _extract_error_chain(e)
+        chain = extract_error_chain(e)
 
     assert chain[0].endswith(".RuntimeError")
     assert chain[1].endswith(".ValueError")
@@ -52,7 +49,7 @@ def test_error_chain_walks_context_when_no_cause() -> None:
         except ValueError:
             raise RuntimeError("outer")  # noqa: B904
     except RuntimeError as e:
-        chain = _extract_error_chain(e)
+        chain = extract_error_chain(e)
 
     assert chain[0].endswith(".RuntimeError")
     assert chain[1].endswith(".ValueError")
@@ -64,7 +61,7 @@ def test_error_chain_handles_cycle() -> None:
     b = RuntimeError("b")
     a.__cause__ = b
     b.__cause__ = a
-    chain = _extract_error_chain(a)
+    chain = extract_error_chain(a)
     assert len(chain) <= 8  # _MAX_CHAIN_DEPTH
 
 

@@ -24,9 +24,9 @@ from typing import Any
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.observability.categories import Layer1Category
-from app.observability.domain.event import EventType, Stage
-from app.observability.domain.payloads import (
+from app.audit.categories import Layer1Category
+from app.audit.domain.event import EventType, Stage
+from app.audit.domain.payloads import (
     AcquisitionPayload,
     AssessmentPayload,
     BasePipelineEventPayload,
@@ -35,12 +35,12 @@ from app.observability.domain.payloads import (
     EmbeddingPayload,
     ExtractionPayload,
 )
-from app.observability.redact import redact_secrets
-from app.observability.repository import PipelineEventRepository
+from app.audit.error_chain import extract_error_chain
+from app.audit.repository import PipelineEventRepository
+from app.shared.security.redaction import redact_secrets
 
 logger = structlog.get_logger(__name__)
 
-_MAX_CHAIN_DEPTH = 8
 _ERR_MSG_LIMIT = 2000
 
 _PAYLOAD_BY_STAGE: dict[Stage, type[BasePipelineEventPayload]] = {
@@ -54,24 +54,6 @@ _PAYLOAD_BY_STAGE: dict[Stage, type[BasePipelineEventPayload]] = {
 }
 
 
-def _extract_error_chain(exc: BaseException) -> list[str]:
-    """``__cause__`` / ``__context__`` を辿って FQN リスト化。
-
-    深さ上限 ``_MAX_CHAIN_DEPTH`` + ``id()`` 集合で循環防止。``__cause__``
-    優先、無ければ ``__context__``。
-    """
-    chain: list[str] = []
-    seen: set[int] = set()
-    cur: BaseException | None = exc
-    while cur is not None and len(chain) < _MAX_CHAIN_DEPTH:
-        if id(cur) in seen:
-            break
-        seen.add(id(cur))
-        chain.append(f"{type(cur).__module__}.{type(cur).__qualname__}")
-        cur = cur.__cause__ or cur.__context__
-    return chain
-
-
 def build_failure_payload(
     stage: Stage,
     exc: BaseException,
@@ -80,7 +62,7 @@ def build_failure_payload(
     """Stage に対応する Payload variant を組み立てる。"""
     cls = _PAYLOAD_BY_STAGE[stage]
     base: dict[str, Any] = {
-        "error_chain": _extract_error_chain(exc),
+        "error_chain": extract_error_chain(exc),
         # red-team chain γ-2: SDK exception message に key prefix /
         # Authorization header が混入する経路を redact してから永続化する。
         "error_message": redact_secrets(str(exc))[:_ERR_MSG_LIMIT] or None,

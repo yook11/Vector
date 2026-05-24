@@ -41,7 +41,7 @@ from app.collection.domain.observed_article import ObservedArticle
 from app.collection.external_fetch_errors import ExternalFetchError
 from app.collection.persistence.article_store import ArticleStore
 from app.collection.sources.article_source import ArticleSource
-from app.observability.redact import redact_secrets
+from app.shared.security.redaction import redact_secrets
 
 logger = structlog.get_logger(__name__)
 

@@ -15,7 +15,7 @@ import re
 
 import pytest
 
-from app.observability.prompt_versions import compute_call_signature
+from app.analysis.prompt_versions import compute_call_signature
 
 _HEX8 = re.compile(r"^[0-9a-f]{8}$")
 

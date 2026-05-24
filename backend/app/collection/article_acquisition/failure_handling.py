@@ -13,7 +13,7 @@ from app.collection.article_acquisition.audit_repository import (
     SourceAcquisitionAuditRepository,
 )
 from app.collection.article_acquisition.errors import SourceAcquisitionError
-from app.observability.redact import redact_secrets
+from app.shared.security.redaction import redact_secrets
 
 logger = structlog.get_logger(__name__)
 

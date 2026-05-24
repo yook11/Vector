@@ -25,8 +25,8 @@ from pydantic import BaseModel
 
 from app.analysis.curation.ai.gemini_prompt import GeminiCurationPrompt
 from app.analysis.curation.ai.schema import GeminiCurationResponse
+from app.analysis.prompt_versions import compute_call_signature
 from app.analysis.rate_limit import RatePolicy
-from app.observability.prompt_versions import compute_call_signature
 
 _MODEL: Final[str] = "gemini-2.5-flash-lite"
 _GEN_CONFIG: Final[Mapping[str, Any]] = MappingProxyType(

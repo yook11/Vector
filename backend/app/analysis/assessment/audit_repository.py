@@ -31,12 +31,12 @@ from app.analysis.assessment.errors import (
     AssessmentRecoverableError,
     AssessmentTerminalSkipError,
 )
-from app.observability.categories import Layer1Category
-from app.observability.domain.event import EventType, Stage
-from app.observability.domain.payloads import AssessmentPayload
-from app.observability.recording import _extract_error_chain
-from app.observability.redact import redact_secrets
-from app.observability.repository import PipelineEventRepository
+from app.audit.categories import Layer1Category
+from app.audit.domain.event import EventType, Stage
+from app.audit.domain.payloads import AssessmentPayload
+from app.audit.error_chain import extract_error_chain
+from app.audit.repository import PipelineEventRepository
+from app.shared.security.redaction import redact_secrets
 
 _INPUT_TEXT_LIMIT = 4096  # spec §AssessmentPayload: input full 4KB
 _AI_RAW_RESPONSE_LIMIT = 2048  # spec: ai_raw_response 2KB (Extraction と同値)
@@ -187,7 +187,7 @@ class AssessmentAuditRepository:
         PR4 で helper 廃止、task 末尾に inline)。
         commit は caller 側で行う (本 method は単一行 append のみ)。
 
-        ``error_chain`` は ``recording.py::_extract_error_chain`` を再利用して
+        ``error_chain`` は ``error_chain.py::extract_error_chain`` を再利用して
         ``__cause__`` / ``__context__`` を辿る。
         ``raise map_provider_to_assessment(exc) from exc`` する想定のため、
         wrapper marker (``AssessmentRecoverableError``) と元 ``AIProviderError``
@@ -202,7 +202,7 @@ class AssessmentAuditRepository:
             # (Stage 3 と同 pattern)。
             error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
             # `raise X from exc` 連鎖を辿って FQN 列を payload に残す。
-            error_chain=_extract_error_chain(exc),
+            error_chain=extract_error_chain(exc),
             # parse 失敗 forensics: ``AssessmentResponseInvalidError`` 等が
             # 将来 ``raw_response`` instance attr を持った場合の hook
             # (現状 errors.py の Layer 2-B 群は raw_response を持たない、

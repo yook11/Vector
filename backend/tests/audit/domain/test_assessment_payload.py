@@ -16,7 +16,7 @@ from __future__ import annotations
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
-from app.observability.domain.payloads import (
+from app.audit.domain.payloads import (
     AssessmentPayload,
     PipelineEventPayload,
 )
