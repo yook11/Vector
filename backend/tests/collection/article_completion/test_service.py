@@ -18,7 +18,6 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
@@ -31,7 +30,7 @@ from sqlmodel import select
 from app.collection.article_collection.fetched_article import FetchedArticle
 from app.collection.article_collection.repository import IncompleteArticleRepository
 from app.collection.article_collection.strategy import SOURCES
-from app.collection.article_collection.tools.fetch_tools import FetchTools
+from app.collection.article_collection.tools.reader_tools import ReaderTools
 from app.collection.article_completion.acquirer import AcquiredContent
 from app.collection.article_completion.acquisition_failure import FetchFailed, NotHtml
 from app.collection.article_completion.ready import ReadyForArticleCompletion
@@ -53,6 +52,7 @@ from app.collection.sources.article_completion_policy import (
     HTML_TITLE_POLICY,
     ArticleCompletionPolicy,
 )
+from app.collection.sources.base_article_source import BaseArticleSource
 from app.models.article import Article as ArticleORM
 from app.models.incomplete_article import IncompleteArticle
 from app.models.news_source import NewsSource, SourceType
@@ -60,12 +60,13 @@ from app.shared.value_objects.source_name import SourceName
 
 
 @dataclass(frozen=True)
-class _StubArticleSource:
+class _StubArticleSource(BaseArticleSource):
     """``ArticleSource`` Protocol の test 用最小実装。
 
     ``monkeypatch.setitem(SOURCES, name, _StubArticleSource(...))`` で
     repository の profile lookup を test 単位に差し替える運搬体。
-    production registry には登録しない。
+    production registry には登録しない。``read`` / ``map_entry`` は本テストで
+    呼ばれないが Protocol shape を満たすため no-op を残す。
     """
 
     name: SourceName
@@ -73,10 +74,11 @@ class _StubArticleSource:
     endpoint_url: str = "https://example.com/feed"
     observed_origin: ObservedOrigin = ObservedOrigin.feed
 
-    async def collect(self, tools: FetchTools) -> AsyncIterator[FetchedArticle]:
-        # 本テストでは呼ばれない (Protocol shape のため空 generator)。
-        if False:
-            yield  # pragma: no cover
+    async def read(self, tools: ReaderTools) -> list[FetchedArticle]:  # noqa: ARG002
+        return []
+
+    def map_entry(self, entry: FetchedArticle) -> FetchedArticle:
+        return entry
 
 
 @pytest.fixture

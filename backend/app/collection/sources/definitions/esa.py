@@ -13,17 +13,17 @@ converter の ``ARTICLE_TITLE_MAX_LENGTH`` 一元、写像は複製しない。
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from typing import ClassVar
 
 from app.collection.article_collection.fetched_article import FetchedArticle
 from app.collection.article_collection.reader.rss_reader import RssEntry
-from app.collection.article_collection.tools.fetch_tools import FetchTools
+from app.collection.article_collection.tools.reader_tools import ReaderTools
 from app.collection.domain.observed_article import ObservedOrigin
 from app.collection.sources.article_completion_policy import (
     DEFAULT_POLICY,
     ArticleCompletionPolicy,
 )
+from app.collection.sources.base_article_source import BaseArticleSource
 from app.shared.value_objects.source_name import SourceName
 
 
@@ -41,23 +41,21 @@ def to_fetched_article(entry: RssEntry) -> FetchedArticle:
     )
 
 
-async def djangoplicity_entries(
-    tools: FetchTools,
+async def djangoplicity_read(
+    tools: ReaderTools,
     *,
     source_name: str,
     endpoint_url: str,
-) -> AsyncIterator[FetchedArticle]:
+) -> list[RssEntry]:
     """ESA Djangoplicity News module RSS の取得共通処理。"""
-    entries = await tools.rss.fetch(
+    return await tools.rss.fetch(
         endpoint_url=endpoint_url,
         source_name=source_name,
         parse_mode="bytes",
     )
-    for entry in entries:
-        yield to_fetched_article(entry)
 
 
-class ESAHubbleSource:
+class ESAHubbleSource(BaseArticleSource):
     """ESA/Hubble news (Djangoplicity RSS)。"""
 
     name: ClassVar[SourceName] = SourceName("ESA/Hubble")
@@ -66,13 +64,17 @@ class ESAHubbleSource:
     completion_policy: ClassVar[ArticleCompletionPolicy] = DEFAULT_POLICY
 
     @classmethod
-    def collect(cls, tools: FetchTools) -> AsyncIterator[FetchedArticle]:
-        return djangoplicity_entries(
+    async def read(cls, tools: ReaderTools) -> list[RssEntry]:
+        return await djangoplicity_read(
             tools, source_name=str(cls.name), endpoint_url=cls.endpoint_url
         )
 
+    @classmethod
+    def map_entry(cls, entry: RssEntry) -> FetchedArticle:
+        return to_fetched_article(entry)
 
-class ESAWebbSource:
+
+class ESAWebbSource(BaseArticleSource):
     """ESA/Webb news (Djangoplicity RSS)。"""
 
     name: ClassVar[SourceName] = SourceName("ESA/Webb")
@@ -81,7 +83,11 @@ class ESAWebbSource:
     completion_policy: ClassVar[ArticleCompletionPolicy] = DEFAULT_POLICY
 
     @classmethod
-    def collect(cls, tools: FetchTools) -> AsyncIterator[FetchedArticle]:
-        return djangoplicity_entries(
+    async def read(cls, tools: ReaderTools) -> list[RssEntry]:
+        return await djangoplicity_read(
             tools, source_name=str(cls.name), endpoint_url=cls.endpoint_url
         )
+
+    @classmethod
+    def map_entry(cls, entry: RssEntry) -> FetchedArticle:
+        return to_fetched_article(entry)

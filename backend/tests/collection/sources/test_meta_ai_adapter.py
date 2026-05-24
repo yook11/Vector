@@ -16,6 +16,7 @@ from pathlib import Path
 import feedparser
 
 from app.collection.article_collection.fetched_article import FetchedArticle
+from app.collection.article_collection.fetcher import fetch_articles
 from app.collection.article_collection.reader.rss_reader import (
     RssEntry,
     normalize_entry,
@@ -37,7 +38,7 @@ def _raw_entries() -> list[RssEntry]:
 
 async def _collect() -> list[FetchedArticle]:
     tools = fixture_tools(rss_fixture=_FIXTURE)
-    return [item async for item in MetaAISource.collect(tools)]
+    return [item async for item in fetch_articles(MetaAISource, tools)]
 
 
 async def test_only_ai_tagged_entries_are_yielded() -> None:

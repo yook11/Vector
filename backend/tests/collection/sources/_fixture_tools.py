@@ -1,14 +1,14 @@
-"""``FetchTools`` テスト seam (P2-D)。
+"""``ReaderTools`` テスト seam (P2-D)。
 
-P2-D で取得 machinery は ``XxxSource.collect(tools)`` になり、fake は
-per-machinery コンストラクタ (`parser=`/`client=`) ではなく **``FetchTools``
-1 点** に注入する。本モジュールはその単一注入ヘルパ。
+取得 machinery は ``fetch_articles(source, tools)`` engine が ``XxxSource.read``
+を駆動する形になり、fake は per-machinery コンストラクタ (`parser=`/`client=`)
+ではなく **``ReaderTools`` 1 点** に注入する。本モジュールはその単一注入ヘルパ。
 
 - ``_FixtureRssReader``: ``RssReader`` の構造的 fake (fixture を feedparser で
   読み ``normalize_entry`` を通し本番と同じ ``RssEntry`` を返す)。本実装は P2
   までの各 test の ``_FixtureRssReader``/``_FakeRssReader`` と同一 (C2 で各
   test がこれへ repoint する)。
-- ``fixture_tools``: 選択した fake を載せた ``FetchTools`` を構築する
+- ``fixture_tools``: 選択した fake を載せた ``ReaderTools`` を構築する
   (未指定は実クライアント既定)。
 """
 
@@ -22,7 +22,7 @@ from app.collection.article_collection.reader.rss_reader import (
     RssEntry,
     normalize_entry,
 )
-from app.collection.article_collection.tools.fetch_tools import FetchTools
+from app.collection.article_collection.tools.reader_tools import ReaderTools
 
 _FIXTURES_DIR = Path(__file__).parent.parent.parent / "fixtures"
 
@@ -59,14 +59,14 @@ def fixture_tools(
     crossref: object | None = None,
     hacker_news: object | None = None,
     raw: object | None = None,
-) -> FetchTools:
-    """選択した fake を載せた ``FetchTools`` を構築する。
+) -> ReaderTools:
+    """選択した fake を載せた ``ReaderTools`` を構築する。
 
     - ``rss``: ``RssReader`` 構造的 fake を直指定 (NASA fan-out 等の特殊 parser)。
     - ``rss_fixture``: 指定時 ``_FixtureRssReader(rss_fixture)`` を使う。
     - ``crossref`` / ``hacker_news`` / ``raw``: 各クライアントの構造的 fake。
       ``raw`` は ``accept`` を無視して同一 fake を返す factory として注入する。
-    - 未指定の道具は実クライアント既定 (``FetchTools`` の default_factory)。
+    - 未指定の道具は実クライアント既定 (``ReaderTools`` の default_factory)。
     """
     kwargs: dict[str, object] = {}
     if rss is not None:
@@ -79,4 +79,4 @@ def fixture_tools(
         kwargs["hacker_news"] = hacker_news
     if raw is not None:
         kwargs["raw_http_factory"] = lambda _accept: raw
-    return FetchTools(**kwargs)  # type: ignore[arg-type]
+    return ReaderTools(**kwargs)  # type: ignore[arg-type]

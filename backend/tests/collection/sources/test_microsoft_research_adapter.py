@@ -13,6 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.collection.article_collection.fetched_article import FetchedArticle
+from app.collection.article_collection.fetcher import fetch_articles
 from app.collection.sources.definitions.microsoft_research import (
     MicrosoftResearchSource,
 )
@@ -25,7 +26,7 @@ _FOOTER_MARKER = "appeared first on Microsoft Research"
 
 async def _collect() -> list[FetchedArticle]:
     tools = fixture_tools(rss_fixture=_FIXTURE)
-    return [item async for item in MicrosoftResearchSource.collect(tools)]
+    return [item async for item in fetch_articles(MicrosoftResearchSource, tools)]
 
 
 async def test_fixture_actually_contains_footer() -> None:

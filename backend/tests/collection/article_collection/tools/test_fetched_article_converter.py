@@ -15,7 +15,6 @@ convert は想定内に total: 変換不能 entry は raise でなく ``Conversi
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta, timezone
 from typing import ClassVar
 
@@ -31,7 +30,7 @@ from app.collection.article_collection.fetched_article_converter import (
     convert_fetched_article,
     unexpected_rejection,
 )
-from app.collection.article_collection.tools.fetch_tools import FetchTools
+from app.collection.article_collection.tools.reader_tools import ReaderTools
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.article_limits import (
     ARTICLE_BODY_MAX_LENGTH,
@@ -46,6 +45,7 @@ from app.collection.sources.article_completion_policy import (
     FieldCompletionRule,
 )
 from app.collection.sources.article_source import ArticleSource
+from app.collection.sources.base_article_source import BaseArticleSource
 from app.shared.value_objects.source_name import SourceName
 
 _PUBLISHED = datetime(2026, 5, 1, 12, 0, tzinfo=UTC)
@@ -69,23 +69,23 @@ def _source(
 ) -> ArticleSource:
     """``convert_fetched_article`` が読む 3 属性を持つ fake Source。
 
-    ``collect`` は本変換器からは呼ばれないが ``ArticleSource`` を構造的に
-    満たすため no-op async generator を置く。
+    ``read`` / ``map_entry`` は本変換器からは呼ばれないが ``ArticleSource`` を
+    構造的に満たすため no-op を置く (in_scope/select は ``BaseArticleSource``)。
     """
 
-    class _FakeSource:
+    class _FakeSource(BaseArticleSource):
         name: ClassVar[SourceName] = _SOURCE_NAME
         endpoint_url: ClassVar[str] = "https://example.test/feed"
         observed_origin: ClassVar[ObservedOrigin] = origin
         completion_policy: ClassVar[ArticleCompletionPolicy] = profile
 
         @classmethod
-        async def collect(
-            cls,
-            tools: FetchTools,  # noqa: ARG003
-        ) -> AsyncIterator[FetchedArticle]:
-            for _ in ():
-                yield _
+        async def read(cls, tools: ReaderTools) -> list[FetchedArticle]:  # noqa: ARG003
+            return []
+
+        @classmethod
+        def map_entry(cls, entry: FetchedArticle) -> FetchedArticle:
+            return entry
 
     return _FakeSource
 

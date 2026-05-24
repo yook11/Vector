@@ -1,39 +1,31 @@
-"""Cornell Chronicle 取得経路 (``multi_feed_rss`` 共通処理 + Cornell config)。
+"""Cornell Chronicle 取得経路 (Source 宣言 + ``MultiFeedRssReader``)。
 
-P2-D で Cornell は ``CornellChronicleSource.collect`` が ``multi_feed_rss``
-共通処理に Cornell 固有 config (``CORNELL_FEEDS`` / ``parse_mode="bytes"`` /
-body_builder 注入なし = Pattern H) を渡す形になった。純 thin config
-(body_builder 既定 = body なし) 経路を直接 pin する。
+per-feed 失敗隔離 / 全 feed 失敗 raise / 0-entry 成功は ``MultiFeedRssReader``
+の責務 (``test_multi_feed_rss_reader``)。本テストは Cornell Source 固有の不変条件
+— feed 横断 dedup (``select``) / Pattern H (body=None, ``map_entry``) / 空 link
+素通し (failure-visibility) / Cornell config — を ``fetch_articles`` engine 経由で
+pin する。
 
 固定する不変条件:
 
 - INV-1 dedup: 1 記事が複数 taxonomy feed に出現しても yield URL は一意
-- INV-2 per-feed 耐性: 単一 feed が **任意の** ``ExternalFetchError`` を
-  raise しても他 feed は継続し ``source_feed_fetch_failed`` warning が残る
-- INV-3 全 feed 失敗時のみ最初の error が伝播する
-- INV-5 0-entry 成功: 全 feed が ``[]`` を返し失敗 0 → 正常終了
-- INV-6 Pattern H: yield 全 item の ``body`` は ``None`` (body_builder 既定)
-- INV-7 failure-visibility: 空 link entry は drop されず素通し、converter
-  層の ``MISSING_URL`` 監査経路 (``ConversionRejection``) を維持する
-- INV-8 Cornell config: ``CORNELL_FEEDS`` は 6 taxonomy feed
+- INV-2 Pattern H: yield 全 item の ``body`` は ``None`` (``map_entry`` 既定)
+- INV-3 failure-visibility: 空 link entry は dedup 対象外で素通し、converter 層の
+  ``MISSING_URL`` 監査経路を維持する (Pattern H なので body も None)
+- INV-4 Cornell config: ``CORNELL_FEEDS`` は 6 taxonomy feed
 """
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 
-import pytest
-from structlog.testing import capture_logs
-
 from app.collection.article_collection.fetched_article import FetchedArticle
+from app.collection.article_collection.fetcher import fetch_articles
 from app.collection.article_collection.reader.rss_reader import RssEntry
-from app.collection.article_collection.tools.multi_feed_rss import multi_feed_rss
-from app.collection.external_fetch_errors import (
-    FetchOriginServerError,
-    FetchResourceNotFoundError,
+from app.collection.sources.definitions.cornell import (
+    CORNELL_FEEDS,
+    CornellChronicleSource,
 )
-from app.collection.sources.definitions.cornell import CORNELL_FEEDS
 from tests.collection.sources._fixture_tools import fixture_tools
 
 _NOW = datetime(2026, 5, 1, 12, 0, tzinfo=UTC)
@@ -54,6 +46,8 @@ def _entry(url: str) -> RssEntry:
 
 
 class _DuplicatingParser:
+    """全 feed_url で同一 2 entry を返す (feed 間 URL 重複を再現)。"""
+
     async def fetch(
         self,
         *,
@@ -66,51 +60,6 @@ class _DuplicatingParser:
             _entry("https://news.cornell.edu/x"),
             _entry("https://news.cornell.edu/y"),
         ]
-
-
-class _SkipOneFeedParser:
-    def __init__(self, skip_url: str, exc: Exception) -> None:
-        self._skip_url = skip_url
-        self._exc = exc
-
-    async def fetch(
-        self,
-        *,
-        endpoint_url: str,
-        source_name: str,
-        parse_mode: str = "text",
-        **_: object,
-    ) -> list[RssEntry]:
-        if endpoint_url == self._skip_url:
-            raise self._exc
-        return [_entry(f"{endpoint_url}#article")]
-
-
-class _AllFailParser:
-    def __init__(self, exc: Exception) -> None:
-        self._exc = exc
-
-    async def fetch(
-        self,
-        *,
-        endpoint_url: str,
-        source_name: str,
-        parse_mode: str = "text",
-        **_: object,
-    ) -> list[RssEntry]:
-        raise self._exc
-
-
-class _EmptyParser:
-    async def fetch(
-        self,
-        *,
-        endpoint_url: str,
-        source_name: str,
-        parse_mode: str = "text",
-        **_: object,
-    ) -> list[RssEntry]:
-        return []
 
 
 class _EmptyLinkParser:
@@ -127,99 +76,39 @@ class _EmptyLinkParser:
         return [_entry(""), _entry(f"{endpoint_url}#article")]
 
 
-def _cornell(parser: object) -> AsyncIterator[FetchedArticle]:
-    return multi_feed_rss(
-        fixture_tools(rss=parser),
-        source_name="Cornell Chronicle",
-        feeds=CORNELL_FEEDS,
-        parse_mode="bytes",
-    )
-
-
-async def _collect(stream: AsyncIterator[FetchedArticle]) -> list[FetchedArticle]:
-    return [item async for item in stream]
+async def _collect(parser: object) -> list[FetchedArticle]:
+    tools = fixture_tools(rss=parser)
+    return [item async for item in fetch_articles(CornellChronicleSource, tools)]
 
 
 async def test_duplicate_urls_across_feeds_are_deduped() -> None:
-    items = await _collect(_cornell(_DuplicatingParser()))
+    items = await _collect(_DuplicatingParser())
 
     urls = [i.url for i in items]
     assert urls == ["https://news.cornell.edu/x", "https://news.cornell.edu/y"]
 
 
 async def test_body_is_none_pattern_h() -> None:
-    items = await _collect(_cornell(_DuplicatingParser()))
+    items = await _collect(_DuplicatingParser())
 
     assert items
     assert all(item.body is None for item in items)
 
 
-async def test_feed_error_skips_feed_with_warning() -> None:
-    skip_url = CORNELL_FEEDS[1]
-    exc = FetchOriginServerError(status_code=503, reason="service_unavailable")
-
-    with capture_logs() as logs:
-        items = await _collect(_cornell(_SkipOneFeedParser(skip_url, exc)))
-
-    assert len(items) == len(CORNELL_FEEDS) - 1
-    skips = [
-        log
-        for log in logs
-        if log.get("event") == "source_feed_fetch_failed"
-        and log.get("feed") == skip_url
-    ]
-    assert len(skips) == 1
-    assert skips[0]["log_level"] == "warning"
-    assert skips[0]["code"] == "fetch_origin_server_error"
-
-
-async def test_non_recoverable_single_feed_does_not_propagate() -> None:
-    skip_url = CORNELL_FEEDS[1]
-    exc = FetchResourceNotFoundError(status_code=404, reason="not_found")
-
-    with capture_logs() as logs:
-        items = await _collect(_cornell(_SkipOneFeedParser(skip_url, exc)))
-
-    assert len(items) == len(CORNELL_FEEDS) - 1
-    skips = [
-        log
-        for log in logs
-        if log.get("event") == "source_feed_fetch_failed"
-        and log.get("feed") == skip_url
-    ]
-    assert len(skips) == 1
-    assert skips[0]["code"] == "fetch_resource_not_found"
-
-
-async def test_all_feeds_fail_propagates_first_error() -> None:
-    exc = FetchResourceNotFoundError(status_code=404, reason="not_found")
-
-    with pytest.raises(FetchResourceNotFoundError):
-        await _collect(_cornell(_AllFailParser(exc)))
-
-
-async def test_all_feeds_zero_entries_does_not_propagate() -> None:
-    items = await _collect(_cornell(_EmptyParser()))
-
-    assert items == []
-
-
 async def test_empty_link_entry_passes_through_for_audit() -> None:
     """空 link entry は drop されず素通し、Pattern H で ``body`` は ``None``。
 
-    値欠落の implicit drop は failure-visibility 違反 (converter 層の
-    ``ConversionRejection (MISSING_URL)`` 監査経路を逃れる)。本 test は同 contract
-    (データ flow continuity) の 2 軸 — 「空 link が通過する」と「非空 link path が
-    空 link 介入の影響を受けない」 — を同時に固定し、Pattern H (body=None) も
-    空 link entry 経由で維持されることを確認する。
+    空 link は dedup key にならないため全 feed 分が yield される。値欠落の
+    implicit drop は failure-visibility 違反 (converter 層の
+    ``ConversionRejection (MISSING_URL)`` 監査経路を逃れる)。
     """
-    items = await _collect(_cornell(_EmptyLinkParser()))
+    items = await _collect(_EmptyLinkParser())
 
     # 6 feed × (空 link 1 + 非空 link 1) = 12 件全部 yield。
     assert len(items) == len(CORNELL_FEEDS) * 2
     empty_link_items = [i for i in items if i.url == ""]
     assert len(empty_link_items) == len(CORNELL_FEEDS)
-    # Pattern H: 空 link entry でも body_builder 既定 (_no_body) で body=None。
+    # Pattern H: 空 link entry でも map_entry は body=None。
     assert all(item.body is None for item in empty_link_items)
 
 

@@ -9,7 +9,7 @@
 2. キーは ``str(name)`` で dispatch でき ``source.name`` と一致する
    (``tasks.py`` の ``SOURCES[SourceName(arg.name)]`` 消費を支える)
 3. **無 instantiation 契約**: ``SOURCES`` 走査 + ``completion_policy`` /
-   ``observed_origin`` クラス属性読みで ``collect`` が呼ばれない
+   ``observed_origin`` クラス属性読みで ``read`` (取得 machinery) が呼ばれない
    (= 取得 machinery を構築しない。``make_adapter`` / ``adapter_factory`` 自体が
    不在のため class-ref で構造的に担保される。Stage 2 resolver が副作用無しで
    profile を引ける spec §4.6 ガードレールを設計で担保)
@@ -51,20 +51,21 @@ class TestStrategyConsistency:
 class TestNoInstantiationContract:
     """profile 解決経路で取得 machinery が構築されないこと (spec §4.6)。"""
 
-    def test_reading_profile_fields_never_invokes_collect(self) -> None:
-        """``SOURCES`` 走査 + profile/origin 読みで ``collect`` 非呼出。
+    def test_reading_profile_fields_never_invokes_read(self) -> None:
+        """``SOURCES`` 走査 + profile/origin 読みで ``read`` 非呼出。
 
         P2-D では ``adapter_factory`` / ``make_adapter`` 自体が不在のため
         「profile を読むのに machinery を作る」経路は class-ref で構造的に
-        不能。それでも回帰防止として、各 Source クラスの ``collect`` を spy に
-        差し替えた状態で全 45 件の ``completion_policy`` / ``observed_origin``
-        を読み、``collect`` が一度も呼ばれないことを固定する (旧 P2 の
-        ``adapter_factory`` spy を新形 retarget・構造的に強化)。
+        不能。それでも回帰防止として、各 Source クラスの ``read`` (取得 I/O を
+        起動する唯一の宣言) を spy に差し替えた状態で全 45 件の
+        ``completion_policy`` / ``observed_origin`` を読み、``read`` が一度も
+        呼ばれないことを固定する (旧 P2 の ``adapter_factory`` spy を新形
+        retarget・構造的に強化)。
         """
         for source in SOURCES.values():
-            collect_spy = MagicMock()
-            with patch.object(source, "collect", collect_spy):
+            read_spy = MagicMock()
+            with patch.object(source, "read", read_spy):
                 # Stage 2 resolver 相当の読み取り (クラス属性直読み)
                 _ = source.completion_policy
                 _ = source.observed_origin
-            collect_spy.assert_not_called()
+            read_spy.assert_not_called()

@@ -1,6 +1,6 @@
 """non-RSS ``XxxSource`` 7 本の invariant 一括検証 (P2-D)。
 
-``test_rss_adapters_invariants.py`` と同思想で、``FetchTools`` に fixture-backed
+``test_rss_adapters_invariants.py`` と同思想で、``ReaderTools`` に fixture-backed
 fake client を注入し、Source クラスオブジェクトを ``drive_source`` (収集 → 変換)
 本番経路に通し、``_invariant.py`` の 4 assertion (passport 存在 / 型許容 /
 主経路 / 永続化不変条件) を回す。
@@ -39,8 +39,8 @@ from app.collection.article_collection.reader.crossref_reader import (
     CrossrefReader,
     normalize_item,
 )
-from app.collection.article_collection.tools.fetch_tools import FetchTools
 from app.collection.article_collection.tools.raw_http_client import RawHttpClient
+from app.collection.article_collection.tools.reader_tools import ReaderTools
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.sources.article_source import ArticleSource
@@ -129,21 +129,21 @@ def _mdpi_items() -> list[dict[str, Any]]:
     return list(raw["message"]["items"])
 
 
-def _hn_tools() -> FetchTools:
+def _hn_tools() -> ReaderTools:
     return fixture_tools(hacker_news=_FixtureHackerNewsReader(_hn_hits()))
 
 
-def _raw_tools(fixture_filename: str) -> Callable[[], FetchTools]:
+def _raw_tools(fixture_filename: str) -> Callable[[], ReaderTools]:
     payload = (_FIXTURES_DIR / fixture_filename).read_bytes()
     return lambda: fixture_tools(raw=_FixtureRawHttpClient(payload))
 
 
-def _mdpi_tools() -> FetchTools:
+def _mdpi_tools() -> ReaderTools:
     return fixture_tools(crossref=_FixtureCrossrefReader(_mdpi_items()))
 
 
 # (label, SourceClass, tools_factory, allowed_types, must_include_types)
-_Case = tuple[str, ArticleSource, Callable[[], FetchTools], set[type], set[type]]
+_Case = tuple[str, ArticleSource, Callable[[], ReaderTools], set[type], set[type]]
 _CASES: list[_Case] = [
     ("HackerNews", HackerNewsSource, _hn_tools, _H_BODY_DISTRUSTED, {ObservedArticle}),
     (
@@ -192,7 +192,7 @@ _CASES: list[_Case] = [
 
 
 async def _collect_passports(
-    source: ArticleSource, tools: FetchTools
+    source: ArticleSource, tools: ReaderTools
 ) -> list[Passport]:
     return await drive_source(source, tools=tools)
 

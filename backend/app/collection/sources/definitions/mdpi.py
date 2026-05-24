@@ -17,18 +17,18 @@ degenerate (DOI 欠落 / 空 title) は写像で握りつぶさず素通しし c
 from __future__ import annotations
 
 import re
-from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from typing import ClassVar
 
 from app.collection.article_collection.fetched_article import FetchedArticle
 from app.collection.article_collection.reader.crossref_reader import CrossrefEntry
-from app.collection.article_collection.tools.fetch_tools import FetchTools
+from app.collection.article_collection.tools.reader_tools import ReaderTools
 from app.collection.domain.observed_article import ObservedOrigin
 from app.collection.sources.article_completion_policy import (
     DEFAULT_POLICY,
     ArticleCompletionPolicy,
 )
+from app.collection.sources.base_article_source import BaseArticleSource
 from app.shared.value_objects.source_name import SourceName
 
 _MDPI_CROSSREF_ENDPOINT = "https://api.crossref.org/works"
@@ -71,34 +71,31 @@ def to_fetched_article(entry: CrossrefEntry) -> FetchedArticle:
     )
 
 
-async def mdpi_items(
-    tools: FetchTools,
+async def mdpi_read(
+    tools: ReaderTools,
     *,
     source_name: str,
     issn: str,
     lookback_days: int = 7,
     rows_per_request: int = 20,
-) -> AsyncIterator[FetchedArticle]:
-    """MDPI journal の Crossref API 経路 取得共通処理。
+) -> list[CrossrefEntry]:
+    """MDPI journal の Crossref API 取得共通処理 (thin binding)。
 
     HTTP 取得 + parse + item→Entry 抽出は ``tools.crossref`` (Reader) に
-    委譲する。共通処理は収集スコープ判定と Entry→FetchedArticle 写像のみ。
+    委譲する。``from-pub-date`` 窓だけ Source 宣言として組み立てる。
     """
     from_pub_date = (
         (datetime.now(UTC) - timedelta(days=lookback_days)).date().isoformat()
     )
-    entries = await tools.crossref.fetch_works(
+    return await tools.crossref.fetch_works(
         source_name=source_name,
         issn=issn,
         from_pub_date=from_pub_date,
         rows=rows_per_request,
     )
-    for entry in entries:
-        if is_collectable_mdpi_work(entry):
-            yield to_fetched_article(entry)
 
 
-class MDPIMaterialsSource:
+class MDPIMaterialsSource(BaseArticleSource):
     """MDPI Materials (ISSN 1996-1944)。"""
 
     name: ClassVar[SourceName] = SourceName("MDPI Materials")
@@ -108,11 +105,19 @@ class MDPIMaterialsSource:
     _ISSN: ClassVar[str] = "1996-1944"
 
     @classmethod
-    def collect(cls, tools: FetchTools) -> AsyncIterator[FetchedArticle]:
-        return mdpi_items(tools, source_name=str(cls.name), issn=cls._ISSN)
+    async def read(cls, tools: ReaderTools) -> list[CrossrefEntry]:
+        return await mdpi_read(tools, source_name=str(cls.name), issn=cls._ISSN)
+
+    @classmethod
+    def in_scope(cls, entry: CrossrefEntry) -> bool:
+        return is_collectable_mdpi_work(entry)
+
+    @classmethod
+    def map_entry(cls, entry: CrossrefEntry) -> FetchedArticle:
+        return to_fetched_article(entry)
 
 
-class MDPIEnergiesSource:
+class MDPIEnergiesSource(BaseArticleSource):
     """MDPI Energies (ISSN 1996-1073)。"""
 
     name: ClassVar[SourceName] = SourceName("MDPI Energies")
@@ -122,11 +127,19 @@ class MDPIEnergiesSource:
     _ISSN: ClassVar[str] = "1996-1073"
 
     @classmethod
-    def collect(cls, tools: FetchTools) -> AsyncIterator[FetchedArticle]:
-        return mdpi_items(tools, source_name=str(cls.name), issn=cls._ISSN)
+    async def read(cls, tools: ReaderTools) -> list[CrossrefEntry]:
+        return await mdpi_read(tools, source_name=str(cls.name), issn=cls._ISSN)
+
+    @classmethod
+    def in_scope(cls, entry: CrossrefEntry) -> bool:
+        return is_collectable_mdpi_work(entry)
+
+    @classmethod
+    def map_entry(cls, entry: CrossrefEntry) -> FetchedArticle:
+        return to_fetched_article(entry)
 
 
-class MDPISensorsSource:
+class MDPISensorsSource(BaseArticleSource):
     """MDPI Sensors (ISSN 1424-8220)。"""
 
     name: ClassVar[SourceName] = SourceName("MDPI Sensors")
@@ -136,11 +149,19 @@ class MDPISensorsSource:
     _ISSN: ClassVar[str] = "1424-8220"
 
     @classmethod
-    def collect(cls, tools: FetchTools) -> AsyncIterator[FetchedArticle]:
-        return mdpi_items(tools, source_name=str(cls.name), issn=cls._ISSN)
+    async def read(cls, tools: ReaderTools) -> list[CrossrefEntry]:
+        return await mdpi_read(tools, source_name=str(cls.name), issn=cls._ISSN)
+
+    @classmethod
+    def in_scope(cls, entry: CrossrefEntry) -> bool:
+        return is_collectable_mdpi_work(entry)
+
+    @classmethod
+    def map_entry(cls, entry: CrossrefEntry) -> FetchedArticle:
+        return to_fetched_article(entry)
 
 
-class MDPINanomaterialsSource:
+class MDPINanomaterialsSource(BaseArticleSource):
     """MDPI Nanomaterials (ISSN 2079-4991)。"""
 
     name: ClassVar[SourceName] = SourceName("MDPI Nanomaterials")
@@ -150,5 +171,13 @@ class MDPINanomaterialsSource:
     _ISSN: ClassVar[str] = "2079-4991"
 
     @classmethod
-    def collect(cls, tools: FetchTools) -> AsyncIterator[FetchedArticle]:
-        return mdpi_items(tools, source_name=str(cls.name), issn=cls._ISSN)
+    async def read(cls, tools: ReaderTools) -> list[CrossrefEntry]:
+        return await mdpi_read(tools, source_name=str(cls.name), issn=cls._ISSN)
+
+    @classmethod
+    def in_scope(cls, entry: CrossrefEntry) -> bool:
+        return is_collectable_mdpi_work(entry)
+
+    @classmethod
+    def map_entry(cls, entry: CrossrefEntry) -> FetchedArticle:
+        return to_fetched_article(entry)

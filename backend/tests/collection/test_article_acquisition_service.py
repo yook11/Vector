@@ -1,10 +1,10 @@
 """``ArticleAcquisitionService`` の収集 → 変換 → 永続化テスト。
 
-Fetcher 解体後、service は ``source.collect`` の ``FetchedArticle`` を本物の
-``convert_fetched_article`` に通して「何ができたか」を出し、``match`` で永続化
-する唯一のオーケストレータになった。よって本テストは変換済みの型を直接
-注入するのではなく、``FetchedArticle`` を yield する ``_StubSource`` を渡して
-**本物の convert を通る配線**を検証する (収集 → 変換 → 永続化のリンクを固定)。
+Fetcher 解体後、service は ``fetch_articles`` engine の ``FetchedArticle`` を
+本物の ``convert_fetched_article`` に通して「何ができたか」を出し、``match`` で
+永続化する唯一のオーケストレータになった。よって本テストは変換済みの型を直接
+注入するのではなく、``FetchedArticle`` を返す ``_StubSource`` を渡して
+**本物の convert を通る配線**を検証する (取得 → 変換 → 永続化のリンクを固定)。
 
 検証する不変条件:
 
@@ -24,7 +24,6 @@ Fetcher 解体後、service は ``source.collect`` の ``FetchedArticle`` を本
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import ClassVar
 
@@ -35,13 +34,14 @@ from sqlmodel import select
 from app.collection.article_collection import service as service_module
 from app.collection.article_collection.fetched_article import FetchedArticle
 from app.collection.article_collection.service import ArticleAcquisitionService
-from app.collection.article_collection.tools.fetch_tools import FetchTools
+from app.collection.article_collection.tools.reader_tools import ReaderTools
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import ObservedOrigin
 from app.collection.sources.article_completion_policy import (
     DEFAULT_POLICY,
     ArticleCompletionPolicy,
 )
+from app.collection.sources.base_article_source import BaseArticleSource
 from app.models.article import Article as ArticleORM
 from app.models.incomplete_article import IncompleteArticle as IncompleteArticleORM
 from app.models.news_source import NewsSource, SourceType
@@ -80,11 +80,13 @@ def _bug_fetched(url: str) -> FetchedArticle:
     )
 
 
-class _StubSource:
-    """``FetchedArticle`` を yield する ``ArticleSource`` 構造的 fake。
+class _StubSource(BaseArticleSource):
+    """``FetchedArticle`` を直接注入する ``ArticleSource`` 構造的 fake。
 
     identity / 補完方針は本物の RSS source 相当 (feed + DEFAULT_POLICY) に
-    固定し、``collect`` は注入された ``FetchedArticle`` 列をそのまま流す。
+    固定し、``read`` は注入された ``FetchedArticle`` 列をそのまま返す
+    (Entry 型 = ``FetchedArticle``、``map_entry`` は恒等、in_scope/select は
+    ``BaseArticleSource`` の default)。
     """
 
     name: ClassVar[SourceName] = SourceName("VentureBeat")
@@ -95,12 +97,14 @@ class _StubSource:
     def __init__(self, items: list[FetchedArticle]) -> None:
         self._items = items
 
-    async def collect(
+    async def read(
         self,
-        tools: FetchTools,  # noqa: ARG002
-    ) -> AsyncIterator[FetchedArticle]:
-        for item in self._items:
-            yield item
+        tools: ReaderTools,  # noqa: ARG002
+    ) -> list[FetchedArticle]:
+        return self._items
+
+    def map_entry(self, entry: FetchedArticle) -> FetchedArticle:
+        return entry
 
 
 @pytest.fixture

@@ -54,6 +54,7 @@ from typing import Any
 import feedparser
 import pytest
 
+from app.collection.article_collection.fetcher import fetch_articles
 from app.collection.article_collection.reader.algolia_hn_reader import (
     HackerNewsEntry,
     normalize_hit,
@@ -75,8 +76,8 @@ from app.collection.article_collection.reader.sitemap_reader import (
     SitemapReader,
 )
 from app.collection.article_collection.strategy import SOURCES
-from app.collection.article_collection.tools.fetch_tools import FetchTools
 from app.collection.article_collection.tools.raw_http_client import RawHttpClient
+from app.collection.article_collection.tools.reader_tools import ReaderTools
 from app.collection.external_fetch_errors import ExternalFetchError
 from app.collection.sources.article_source import ArticleSource
 from app.collection.sources.definitions.anthropic import (
@@ -251,7 +252,7 @@ class _FakeHackerNewsReader:
 class _OracleCase:
     """1 source 用のオラクル case (entry 列 + 同 fixture を載せた tools)。"""
 
-    tools: FetchTools
+    tools: ReaderTools
     entries: list[Any]
 
 
@@ -260,7 +261,7 @@ async def _rss_case(fixture_filename: str) -> _OracleCase:
     payload = (_FIXTURES_DIR / fixture_filename).read_bytes()
     fake = _FakeRssReader(payload)
     entries = await fake.fetch(endpoint_url="x", source_name="oracle")
-    return _OracleCase(tools=FetchTools(rss=fake), entries=entries)  # type: ignore[arg-type]
+    return _OracleCase(tools=ReaderTools(rss=fake), entries=entries)  # type: ignore[arg-type]
 
 
 async def _sitemap_case(fixture_filename: str) -> _OracleCase:
@@ -271,7 +272,7 @@ async def _sitemap_case(fixture_filename: str) -> _OracleCase:
     entries: list[SitemapEntry] = await SitemapReader(http=http).fetch(
         url="x", source_name="oracle"
     )
-    tools = FetchTools(raw_http_factory=lambda _accept: http)
+    tools = ReaderTools(raw_http_factory=lambda _accept: http)
     return _OracleCase(tools=tools, entries=entries)
 
 
@@ -285,7 +286,7 @@ async def _html_listing_case(
     entries: list[HtmlListingEntry] = await HtmlListingReader(http=http).fetch(
         url="x", source_name="oracle", detail_link_xpath=detail_link_xpath
     )
-    tools = FetchTools(raw_http_factory=lambda _accept: http)
+    tools = ReaderTools(raw_http_factory=lambda _accept: http)
     return _OracleCase(tools=tools, entries=entries)
 
 
@@ -295,7 +296,7 @@ async def _crossref_case(fixture_filename: str) -> _OracleCase:
     entries = await fake.fetch_works(
         source_name="oracle", issn="x", from_pub_date="2000-01-01", rows=20
     )
-    return _OracleCase(tools=FetchTools(crossref=fake), entries=entries)  # type: ignore[arg-type]
+    return _OracleCase(tools=ReaderTools(crossref=fake), entries=entries)  # type: ignore[arg-type]
 
 
 async def _hn_case(fixture_filename: str) -> _OracleCase:
@@ -304,7 +305,7 @@ async def _hn_case(fixture_filename: str) -> _OracleCase:
     entries = await fake.search_recent_stories(
         source_name="oracle", min_points=0, window_seconds=86400, hits_per_page=100
     )
-    return _OracleCase(tools=FetchTools(hacker_news=fake), entries=entries)  # type: ignore[arg-type]
+    return _OracleCase(tools=ReaderTools(hacker_news=fake), entries=entries)  # type: ignore[arg-type]
 
 
 async def _multi_feed_rss_case(
@@ -322,7 +323,7 @@ async def _multi_feed_rss_case(
     for payload in payloads.values():
         feed = feedparser.parse(payload)
         all_entries.extend(normalize_entry(raw) for raw in feed.entries)
-    return _OracleCase(tools=FetchTools(rss=fake), entries=all_entries)  # type: ignore[arg-type]
+    return _OracleCase(tools=ReaderTools(rss=fake), entries=all_entries)  # type: ignore[arg-type]
 
 
 # ─── manifest: (source, scope_predicate, case_factory) ───────────────────
@@ -491,7 +492,7 @@ async def test_collect_yields_in_scope_count(
         else len(case.entries)
     )
     try:
-        yielded = [fa async for fa in source.collect(case.tools)]
+        yielded = [fa async for fa in fetch_articles(source, case.tools)]
     except ExternalFetchError as exc:  # pragma: no cover — fixture 不整合
         pytest.fail(f"unexpected fetch error from fake transport: {exc!r}")
     assert len(yielded) == expected, (

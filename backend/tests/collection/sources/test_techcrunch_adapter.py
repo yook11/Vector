@@ -1,7 +1,7 @@
 """``TechCrunchSource`` の per-source 単体テスト (HTTP 非依存, P2-D)。
 
 P2-D で identity / 補完方針は ``XxxSource`` の ``ClassVar``、取得手順は
-``collect(tools)`` classmethod になった。実 RSS fixture を ``FetchTools.rss``
+``collect(tools)`` classmethod になった。実 RSS fixture を ``ReaderTools.rss``
 差し替え (``fixture_tools``) 経由で食わせ、Source が body 候補を持たない
 ``FetchedArticle`` を yield し、収集 → 変換の本番経路で ``ObservedArticle``
 のみが yield されることを検証する (identity 固定は
@@ -15,6 +15,7 @@ from app.collection.article_collection.fetched_article import FetchedArticle
 from app.collection.article_collection.fetched_article_converter import (
     ConversionRejection,
 )
+from app.collection.article_collection.fetcher import fetch_articles
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.sources.definitions.techcrunch import TechCrunchSource
 from tests.collection.sources._fixture_tools import fixture_tools
@@ -25,7 +26,7 @@ _FIXTURE = "techcrunch_rss.xml"
 
 async def _collect_fetched() -> list[FetchedArticle]:
     tools = fixture_tools(rss_fixture=_FIXTURE)
-    return [item async for item in TechCrunchSource.collect(tools)]
+    return [item async for item in fetch_articles(TechCrunchSource, tools)]
 
 
 async def test_collect_yields_fetched_articles_with_none_body() -> None:

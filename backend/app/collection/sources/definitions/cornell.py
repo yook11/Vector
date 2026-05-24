@@ -5,22 +5,23 @@ Cornell Chronicle (``https://news.cornell.edu/``) は学部別の
 は site-wide で雑多なため採用せず、対象 6 カテゴリのみを巡回する。feed は
 Drupal 生成 RSS 2.0。description は短い概要のみで本文は HTML 取得に委ねる。
 1 記事が複数 category に tag されるため feed 間で URL 重複が起きる
-(横断 dedup は ``multi_feed_rss`` が担う)。
+(per-feed 失敗隔離は ``MultiFeedRssReader``、横断 dedup は ``select`` が担う)。
 """
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from typing import ClassVar, Final
 
 from app.collection.article_collection.fetched_article import FetchedArticle
-from app.collection.article_collection.tools.fetch_tools import FetchTools
-from app.collection.article_collection.tools.multi_feed_rss import multi_feed_rss
+from app.collection.article_collection.reader.rss_reader import RssEntry
+from app.collection.article_collection.tools.reader_tools import ReaderTools
 from app.collection.domain.observed_article import ObservedOrigin
 from app.collection.sources.article_completion_policy import (
     DEFAULT_POLICY,
     ArticleCompletionPolicy,
 )
+from app.collection.sources.base_article_source import BaseArticleSource
+from app.collection.sources.rss_dedup import dedup_by_link
 from app.shared.value_objects.source_name import SourceName
 
 CORNELL_FEEDS: Final[tuple[str, ...]] = (
@@ -39,7 +40,7 @@ CORNELL_FEEDS: Final[tuple[str, ...]] = (
 )
 
 
-class CornellChronicleSource:
+class CornellChronicleSource(BaseArticleSource):
     """Cornell Chronicle の複数 feed Source。"""
 
     name: ClassVar[SourceName] = SourceName("Cornell Chronicle")
@@ -48,10 +49,23 @@ class CornellChronicleSource:
     completion_policy: ClassVar[ArticleCompletionPolicy] = DEFAULT_POLICY
 
     @classmethod
-    def collect(cls, tools: FetchTools) -> AsyncIterator[FetchedArticle]:
-        return multi_feed_rss(
-            tools,
+    async def read(cls, tools: ReaderTools) -> list[RssEntry]:
+        return await tools.multi_feed_rss().fetch(
             source_name=str(cls.name),
             feeds=CORNELL_FEEDS,
             parse_mode="bytes",
+        )
+
+    @classmethod
+    def select(cls, entries: list[RssEntry]) -> list[RssEntry]:
+        """feed 横断 URL dedup (空 link は除外せず素通し)。"""
+        return dedup_by_link(entries)
+
+    @classmethod
+    def map_entry(cls, entry: RssEntry) -> FetchedArticle:
+        return FetchedArticle(
+            title=entry.title,
+            url=entry.link,
+            body=None,
+            published_at=entry.published,
         )

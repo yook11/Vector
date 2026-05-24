@@ -1,7 +1,7 @@
 """``XxxSource`` 経路の RSS 共通不変条件テスト (P2-D)。
 
-収集 → 変換の本番経路 (``source.collect(tools)`` → ``fetched_article_converter``)
-を通すとき、各 source が以下の不変条件を満たすことを fixture ベースで検証する:
+取得 → 変換の本番経路 (``fetch_articles`` → ``fetched_article_converter``) を
+通すとき、各 source が以下の不変条件を満たすことを fixture ベースで検証する:
 
 - 実 fixture から少なくとも 1 件は永続化 passport を yield する
 - yield された passport の型は ``allowed_types`` 集合に属する
@@ -9,8 +9,8 @@
 - yield された passport は永続化不変条件 (Stage 2 を通せば articles に
   永続化できる) を満たす
 
-P2-D で取得 machinery は ``XxxSource.collect(tools)`` になった。本テストは
-ネットワーク I/O を排除するため、``FetchTools`` の ``rss`` を
+取得 machinery は ``fetch_articles`` engine が ``XxxSource.read`` を駆動する形に
+なった。本テストはネットワーク I/O を排除するため、``ReaderTools`` の ``rss`` を
 ``_FixtureRssReader`` に差し替える単一注入ヘルパ ``fixture_tools`` を使い、
 Source クラスオブジェクトを ``drive_source`` (収集 → 変換) 本番経路に
 通す。fixture / 期待型集合は P1 時点から不変 = yield される passport の型・
@@ -312,7 +312,7 @@ async def _collect_passports(
 ) -> list[Passport]:
     """収集 → 変換の本番経路で fixture を流し passport を集める。
 
-    ``FetchTools`` の ``rss`` を fixture parser に差し替えて Source クラス
+    ``ReaderTools`` の ``rss`` を fixture parser に差し替えて Source クラス
     オブジェクトを本番経路 (fetched_article_converter) に通す。profile / origin
     は Source クラスの ``ClassVar`` を直読みする (旧 synthetic ``ArticleSource``
     ラップを廃止、RSS 群は全て feed + DEFAULT_POLICY)。

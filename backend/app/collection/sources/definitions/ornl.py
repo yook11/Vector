@@ -11,11 +11,11 @@ attribution_label = "ORNL · DOE"。
 landing は妥当な URL を持つが**ソースが意図的に採らない対象外データ**
 (spec 第4責務 = 収集スコープ宣言。対象外 ≠ 変換失敗 ≠ 構造的非記事)。
 href 抽出は ``HtmlListingReader`` の責務、相対→絶対 URL 化は Source 純写像。
+``select`` で listing 内 URL dedup + ``MAX_ENTRIES`` 件で打ち切る。
 """
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from typing import ClassVar
 from urllib.parse import urljoin, urlparse
 
@@ -23,12 +23,13 @@ from app.collection.article_collection.fetched_article import FetchedArticle
 from app.collection.article_collection.reader.html_listing_reader import (
     HtmlListingEntry,
 )
-from app.collection.article_collection.tools.fetch_tools import FetchTools
+from app.collection.article_collection.tools.reader_tools import ReaderTools
 from app.collection.domain.observed_article import ObservedOrigin
 from app.collection.sources.article_completion_policy import (
     HTML_TITLE_POLICY,
     ArticleCompletionPolicy,
 )
+from app.collection.sources.base_article_source import BaseArticleSource
 from app.shared.value_objects.source_name import SourceName
 
 _SOURCE_NAME = "ORNL"
@@ -82,11 +83,11 @@ def to_fetched_article(entry: HtmlListingEntry) -> FetchedArticle:
     )
 
 
-class ORNLSource:
+class ORNLSource(BaseArticleSource):
     """ORNL news listing 用 Source。
 
-    同一 listing 内 URL dedup、``EXCLUDED_PATHS`` denylist で category
-    landing を収集スコープ外として除外、``MAX_ENTRIES`` 件で打ち切る。
+    ``EXCLUDED_PATHS`` denylist で category landing を収集スコープ外として
+    除外し、``select`` で同一 listing 内 URL dedup + ``MAX_ENTRIES`` 件打ち切り。
     """
 
     name: ClassVar[SourceName] = SourceName(_SOURCE_NAME)
@@ -100,23 +101,32 @@ class ORNLSource:
     MAX_ENTRIES: ClassVar[int] = _MAX_ENTRIES
 
     @classmethod
-    async def collect(cls, tools: FetchTools) -> AsyncIterator[FetchedArticle]:
-        reader = tools.html_listing()
-        entries = await reader.fetch(
+    async def read(cls, tools: ReaderTools) -> list[HtmlListingEntry]:
+        return await tools.html_listing().fetch(
             url=cls.endpoint_url,
             source_name=str(cls.name),
             detail_link_xpath=cls.DETAIL_LINK_XPATH,
         )
+
+    @classmethod
+    def in_scope(cls, entry: HtmlListingEntry) -> bool:
+        return is_collectable_ornl_url(entry)
+
+    @classmethod
+    def select(cls, entries: list[HtmlListingEntry]) -> list[HtmlListingEntry]:
+        """同一 URL dedup 後に ``MAX_ENTRIES`` 件で打ち切る (出現順を保つ)。"""
         seen: set[str] = set()
-        emitted = 0
+        result: list[HtmlListingEntry] = []
         for entry in entries:
             absolute = _absolute_url(entry)
             if absolute in seen:
                 continue
             seen.add(absolute)
-            if not is_collectable_ornl_url(entry):
-                continue
-            yield to_fetched_article(entry)
-            emitted += 1
-            if emitted >= cls.MAX_ENTRIES:
+            result.append(entry)
+            if len(result) >= cls.MAX_ENTRIES:
                 break
+        return result
+
+    @classmethod
+    def map_entry(cls, entry: HtmlListingEntry) -> FetchedArticle:
+        return to_fetched_article(entry)

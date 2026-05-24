@@ -1,4 +1,4 @@
-"""``FetchTools`` — Source が取得に使う stateless I/O クライアントの束。"""
+"""``ReaderTools`` — Source が取得に使う stateless I/O クライアントの束。"""
 
 from __future__ import annotations
 
@@ -9,6 +9,9 @@ from app.collection.article_collection.reader.algolia_hn_reader import HackerNew
 from app.collection.article_collection.reader.crossref_reader import CrossrefReader
 from app.collection.article_collection.reader.html_listing_reader import (
     HtmlListingReader,
+)
+from app.collection.article_collection.reader.multi_feed_rss_reader import (
+    MultiFeedRssReader,
 )
 from app.collection.article_collection.reader.rss_reader import RssReader
 from app.collection.article_collection.reader.sitemap_reader import SitemapReader
@@ -21,7 +24,7 @@ def _default_raw_http(accept: str) -> RawHttpClient:
 
 
 @dataclass(frozen=True, slots=True)
-class FetchTools:
+class ReaderTools:
     """stateless I/O クライアントの束。"""
 
     rss: RssReader = field(default_factory=RssReader)
@@ -42,3 +45,7 @@ class FetchTools:
     def html_listing(self) -> HtmlListingReader:
         """HTML listing Reader (transport は ``raw_http`` を wrap)。"""
         return HtmlListingReader(http=self.raw_http(accept="text/html"))
+
+    def multi_feed_rss(self) -> MultiFeedRssReader:
+        """複数 feed fan-out Reader (共有 ``rss`` を per-feed に駆動)。"""
+        return MultiFeedRssReader(rss=self.rss)

@@ -13,6 +13,7 @@ from __future__ import annotations
 import pytest
 
 from app.collection.article_collection.fetched_article import FetchedArticle
+from app.collection.article_collection.fetcher import fetch_articles
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.sources.article_source import ArticleSource
 from app.collection.sources.definitions.esa import (
@@ -34,8 +35,9 @@ async def test_pattern_h_yields_incomplete_only(
     source: ArticleSource,
     fixture: str,
 ) -> None:
+    tools = fixture_tools(rss_fixture=fixture)
     collected: list[FetchedArticle] = [
-        item async for item in source.collect(fixture_tools(rss_fixture=fixture))
+        item async for item in fetch_articles(source, tools)
     ]
     assert collected
     assert all(item.body is None for item in collected)

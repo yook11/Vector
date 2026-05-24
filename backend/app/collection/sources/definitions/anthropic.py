@@ -13,19 +13,19 @@ title が無いため URL slug を title に詰める。robots.txt は ``Allow: 
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import ClassVar
 from urllib.parse import urlparse
 
 from app.collection.article_collection.fetched_article import FetchedArticle
 from app.collection.article_collection.reader.sitemap_reader import SitemapEntry
-from app.collection.article_collection.tools.fetch_tools import FetchTools
+from app.collection.article_collection.tools.reader_tools import ReaderTools
 from app.collection.domain.observed_article import ObservedOrigin
 from app.collection.sources.article_completion_policy import (
     HTML_TITLE_POLICY,
     ArticleCompletionPolicy,
 )
+from app.collection.sources.base_article_source import BaseArticleSource
 from app.shared.value_objects.source_name import SourceName
 
 _SOURCE_NAME = "Anthropic"
@@ -62,7 +62,7 @@ def to_fetched_article(entry: SitemapEntry) -> FetchedArticle:
     )
 
 
-class AnthropicSource:
+class AnthropicSource(BaseArticleSource):
     """Anthropic news の Source。
 
     ``URL_PATH_PREFIX`` 以外を収集スコープ外として除外し、lastmod 降順
@@ -78,10 +78,21 @@ class AnthropicSource:
     MAX_ENTRIES: ClassVar[int] = _MAX_ENTRIES
 
     @classmethod
-    async def collect(cls, tools: FetchTools) -> AsyncIterator[FetchedArticle]:
-        reader = tools.sitemap()
-        entries = await reader.fetch(url=cls.endpoint_url, source_name=str(cls.name))
-        in_scope = [e for e in entries if is_collectable_anthropic_url(e)]
-        in_scope.sort(key=lambda e: e.lastmod or _EPOCH, reverse=True)
-        for entry in in_scope[: cls.MAX_ENTRIES]:
-            yield to_fetched_article(entry)
+    async def read(cls, tools: ReaderTools) -> list[SitemapEntry]:
+        return await tools.sitemap().fetch(
+            url=cls.endpoint_url, source_name=str(cls.name)
+        )
+
+    @classmethod
+    def in_scope(cls, entry: SitemapEntry) -> bool:
+        return is_collectable_anthropic_url(entry)
+
+    @classmethod
+    def select(cls, entries: list[SitemapEntry]) -> list[SitemapEntry]:
+        """lastmod 降順 sort 後に ``MAX_ENTRIES`` 件で打ち切る。"""
+        ordered = sorted(entries, key=lambda e: e.lastmod or _EPOCH, reverse=True)
+        return ordered[: cls.MAX_ENTRIES]
+
+    @classmethod
+    def map_entry(cls, entry: SitemapEntry) -> FetchedArticle:
+        return to_fetched_article(entry)

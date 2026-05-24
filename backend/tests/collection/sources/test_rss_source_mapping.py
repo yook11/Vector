@@ -1,6 +1,6 @@
 """Source mapping (``RssEntry`` → ``FetchedArticle``) の新契約テスト。
 
-HTTP / fixture / DB 非依存。``XxxSource.to_fetched_article`` (classmethod) と
+HTTP / fixture / DB 非依存。``XxxSource.map_entry`` (classmethod) と
 ESA Djangoplicity family の module-level ``esa.to_fetched_article`` を
 手製 ``RssEntry`` で直接叩き、写像が宣言通り写すこと、および写像が **裁かない**
 (品質ゲート / URL 検証 / drop を converter に委ね、生値を素通しする) ことを
@@ -30,7 +30,7 @@ from app.collection.sources.definitions.venturebeat import VentureBeatSource
 
 _PUBLISHED = datetime(2026, 5, 1, 12, 0, tzinfo=UTC)
 
-# to_fetched_article を持つ代表 source。共通の不変条件を parametrize。
+# map_entry を持つ代表 source。共通の不変条件を parametrize。
 # The Register の redirector 変換は SSRF/javascript テスト URL の prefix に
 # 一致しないため raw URL 素通し不変条件を侵さない (共通 set に同居可)。
 _SOURCES = [TechCrunchSource, VentureBeatSource, TheRegisterSource]
@@ -60,12 +60,12 @@ def test_techcrunch_maps_body_to_none_even_when_feed_carries_content() -> None:
     entry = make_rss_entry(
         content_encoded="<p>" + "x" * 500 + "</p>", summary="<p>" + "y" * 500 + "</p>"
     )
-    assert TechCrunchSource.to_fetched_article(entry).body is None
+    assert TechCrunchSource.map_entry(entry).body is None
 
 
 def test_techcrunch_passes_through_title_url_published() -> None:
     entry = make_rss_entry()
-    result = TechCrunchSource.to_fetched_article(entry)
+    result = TechCrunchSource.map_entry(entry)
     assert (result.title, result.url, result.published_at) == (
         entry.title,
         entry.link,
@@ -77,21 +77,21 @@ def test_venturebeat_picks_longer_content_encoded_as_body() -> None:
     entry = make_rss_entry(
         content_encoded="<p>" + "A" * 100 + "</p>", summary="<p>short</p>"
     )
-    assert VentureBeatSource.to_fetched_article(entry).body == "A" * 100
+    assert VentureBeatSource.map_entry(entry).body == "A" * 100
 
 
 def test_venturebeat_picks_longer_summary_as_body() -> None:
     entry = make_rss_entry(
         content_encoded="<p>short</p>", summary="<p>" + "B" * 100 + "</p>"
     )
-    assert VentureBeatSource.to_fetched_article(entry).body == "B" * 100
+    assert VentureBeatSource.map_entry(entry).body == "B" * 100
 
 
 def test_venturebeat_strips_html_tags_and_decodes_entities_in_body() -> None:
     entry = make_rss_entry(
         content_encoded="<p>Hello &amp; <b>world</b></p>", summary=""
     )
-    body = VentureBeatSource.to_fetched_article(entry).body
+    body = VentureBeatSource.map_entry(entry).body
     assert body == "Hello & world"
 
 
@@ -101,7 +101,7 @@ def test_venturebeat_strips_html_tags_and_decodes_entities_in_body() -> None:
 def test_venturebeat_returns_none_body_when_both_sources_empty() -> None:
     """body 候補が無くても None を返すだけで raise / drop しない。"""
     entry = make_rss_entry(content_encoded=None, summary=None)
-    result = VentureBeatSource.to_fetched_article(entry)
+    result = VentureBeatSource.map_entry(entry)
     assert isinstance(result, FetchedArticle)
     assert result.body is None
 
@@ -109,7 +109,7 @@ def test_venturebeat_returns_none_body_when_both_sources_empty() -> None:
 @pytest.mark.parametrize("source", _SOURCES)
 def test_mapping_does_not_reject_empty_title(source: type) -> None:
     """空 title は写像で裁かず空 str のまま FetchedArticle に載る。"""
-    result = source.to_fetched_article(make_rss_entry(title=""))
+    result = source.map_entry(make_rss_entry(title=""))
     assert isinstance(result, FetchedArticle)
     assert result.title == ""
 
@@ -127,34 +127,34 @@ def test_mapping_passes_raw_url_through_without_canonicalize_or_validation(
     source: type, raw_url: str
 ) -> None:
     """canonicalize / SSRF 検証は converter の責務。写像は生 URL を素通し。"""
-    result = source.to_fetched_article(make_rss_entry(link=raw_url))
+    result = source.map_entry(make_rss_entry(link=raw_url))
     assert result.url == raw_url
 
 
 def test_venturebeat_passes_short_body_through_without_min_length_judgement() -> None:
     """短いが非空の body は短さで None 化しない (空→None は strip 結果と別)。"""
     entry = make_rss_entry(content_encoded="x", summary=None)
-    assert VentureBeatSource.to_fetched_article(entry).body == "x"
+    assert VentureBeatSource.map_entry(entry).body == "x"
 
 
 def test_venturebeat_passes_oversized_body_through_without_truncation() -> None:
     """converter の最大長 cap を写像は適用しない (素通し)。"""
     huge = "y" * (ARTICLE_BODY_MAX_LENGTH + 1)
     entry = make_rss_entry(content_encoded="<p>" + huge + "</p>", summary=None)
-    assert len(VentureBeatSource.to_fetched_article(entry).body or "") == len(huge)
+    assert len(VentureBeatSource.map_entry(entry).body or "") == len(huge)
 
 
 @pytest.mark.parametrize("source", _SOURCES)
 def test_mapping_passes_published_none_through(source: type) -> None:
     """published 不在は捏造せず None のまま素通し。"""
-    result = source.to_fetched_article(make_rss_entry(published=None))
+    result = source.map_entry(make_rss_entry(published=None))
     assert result.published_at is None
 
 
 @pytest.mark.parametrize("source", _SOURCES)
 def test_mapping_passes_published_value_through_unchanged(source: type) -> None:
     """Reader が出した published を写像は補正せずそのまま渡す。"""
-    result = source.to_fetched_article(make_rss_entry(published=_PUBLISHED))
+    result = source.map_entry(make_rss_entry(published=_PUBLISHED))
     assert result.published_at == _PUBLISHED
 
 
@@ -168,7 +168,7 @@ def test_url_comes_from_link_not_guid(source: type) -> None:
         link="https://example.com/real-article",
         guid="https://example.com/wrong-guid-as-url",
     )
-    result = source.to_fetched_article(entry)
+    result = source.map_entry(entry)
     assert result.url == "https://example.com/real-article"
     assert result.url != entry.guid
 
@@ -181,21 +181,21 @@ def test_the_register_expands_redirector_link_to_real_host() -> None:
     entry = make_rss_entry(
         link="https://go.theregister.com/feed/www.theregister.com/2026/05/01/foo/"
     )
-    result = TheRegisterSource.to_fetched_article(entry)
+    result = TheRegisterSource.map_entry(entry)
     assert result.url == "https://www.theregister.com/2026/05/01/foo/"
 
 
 def test_the_register_passes_non_redirector_link_through_unchanged() -> None:
     """redirector prefix を持たない link は変換せず素通す。"""
     entry = make_rss_entry(link="https://www.theregister.com/2026/05/01/direct/")
-    result = TheRegisterSource.to_fetched_article(entry)
+    result = TheRegisterSource.map_entry(entry)
     assert result.url == "https://www.theregister.com/2026/05/01/direct/"
 
 
 def test_the_register_maps_body_to_none_even_when_summary_present() -> None:
     """The Register は summary が在っても body を採らない。"""
     entry = make_rss_entry(summary="<p>" + "x" * 500 + "</p>", content_encoded=None)
-    assert TheRegisterSource.to_fetched_article(entry).body is None
+    assert TheRegisterSource.map_entry(entry).body is None
 
 
 def test_the_register_does_not_drop_empty_link() -> None:
@@ -204,7 +204,7 @@ def test_the_register_does_not_drop_empty_link() -> None:
     空 link の棄却 (MISSING_URL 可視化) は converter の責務であり、
     写像が握り潰すと故障が監査されないため写像は裁かない。
     """
-    result = TheRegisterSource.to_fetched_article(make_rss_entry(link=""))
+    result = TheRegisterSource.map_entry(make_rss_entry(link=""))
     assert isinstance(result, FetchedArticle)
     assert result.url == ""
 
@@ -245,7 +245,7 @@ def test_esa_djangoplicity_maps_body_to_none_regardless_of_feed_body() -> None:
 def test_mapping_is_pure_same_entry_same_result(source: type) -> None:
     """同じ Entry を 2 回 → byte 等価 (IO / 状態を持たない pure 写像)。"""
     entry = make_rss_entry()
-    assert source.to_fetched_article(entry) == source.to_fetched_article(entry)
+    assert source.map_entry(entry) == source.map_entry(entry)
 
 
 @pytest.mark.parametrize("source", _SOURCES)
@@ -254,4 +254,4 @@ def test_mapping_is_total_on_degenerate_entry(source: type) -> None:
     entry = make_rss_entry(
         title="", link="", summary=None, content_encoded=None, published=None, guid=None
     )
-    assert isinstance(source.to_fetched_article(entry), FetchedArticle)
+    assert isinstance(source.map_entry(entry), FetchedArticle)

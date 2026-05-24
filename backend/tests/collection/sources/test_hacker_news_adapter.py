@@ -4,7 +4,7 @@
 
 - ``search_recent_stories`` に renamed kwargs (sliding window / min_points /
   hits_per_page) が必ず渡る (旧仕様: 24h window / points>20 / 100 hits)
-- ``to_fetched_article`` が url 欠落 hit を握りつぶさず **total** に
+- ``map_entry`` が url 欠落 hit を握りつぶさず **total** に
   ``FetchedArticle(url="")`` を出し、収集 → 変換経路で ``ConversionRejection``
   として可視化される (spec「写像で None/drop/skip しない」は写像ごとに
   pin が要る — converter テストは ``FetchedArticle`` を直接与え HN
@@ -126,7 +126,7 @@ def test_mapping_is_total_on_url_none_hit() -> None:
     converter/fetcher テストは ``FetchedArticle`` を直接与え HN 写像を
     通らないため、HN シームの totality はここでしか pin できない。
     """
-    fa = HackerNewsSource.to_fetched_article(
+    fa = HackerNewsSource.map_entry(
         HackerNewsEntry(
             url=None, title="Ask HN: x", published=None, raw_created_at=None
         )

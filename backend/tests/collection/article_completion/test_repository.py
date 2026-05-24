@@ -15,7 +15,6 @@ production 45-registry と非結合にするため、profile を上書きする 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -27,7 +26,7 @@ from sqlmodel import select
 from app.collection.article_collection.fetched_article import FetchedArticle
 from app.collection.article_collection.repository import IncompleteArticleRepository
 from app.collection.article_collection.strategy import SOURCES
-from app.collection.article_collection.tools.fetch_tools import FetchTools
+from app.collection.article_collection.tools.reader_tools import ReaderTools
 from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.article_completion.repository import ArticleCompletionRepository
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
@@ -42,6 +41,7 @@ from app.collection.sources.article_completion_policy import (
     HTML_TITLE_POLICY,
     ArticleCompletionPolicy,
 )
+from app.collection.sources.base_article_source import BaseArticleSource
 from app.models.incomplete_article import IncompleteArticle as IncompleteArticleORM
 from app.models.news_source import NewsSource
 from app.shared.value_objects.safe_url import SafeUrl
@@ -49,11 +49,12 @@ from app.shared.value_objects.source_name import SourceName
 
 
 @dataclass(frozen=True)
-class _StubArticleSource:
+class _StubArticleSource(BaseArticleSource):
     """``ArticleSource`` Protocol の test 用最小実装。
 
-    repository は ``completion_policy`` のみ参照する。``collect`` は本テストで
-    呼ばれないが Protocol shape を満たすため no-op generator を残す。
+    repository は ``completion_policy`` のみ参照する。``read`` / ``map_entry``
+    は本テストで呼ばれないが Protocol shape を満たすため no-op を残す
+    (in_scope/select は ``BaseArticleSource``)。
     ``monkeypatch.setitem(SOURCES, name, _StubArticleSource(...))`` で
     profile を test 単位に差し替えるための運搬体 (production registry には
     登録しない)。
@@ -64,10 +65,11 @@ class _StubArticleSource:
     endpoint_url: str = "https://example.com/feed"
     observed_origin: ObservedOrigin = ObservedOrigin.feed
 
-    async def collect(self, tools: FetchTools) -> AsyncIterator[FetchedArticle]:
-        # 本テストでは呼ばれない (Protocol shape のため空 generator)。
-        if False:
-            yield  # pragma: no cover
+    async def read(self, tools: ReaderTools) -> list[FetchedArticle]:  # noqa: ARG002
+        return []
+
+    def map_entry(self, entry: FetchedArticle) -> FetchedArticle:
+        return entry
 
 
 def _repo(db_session: AsyncSession) -> ArticleCompletionRepository:

@@ -2,7 +2,7 @@
 
 収集 → 変換 → 永続化 の 3 工程を順に駆動する唯一のオーケストレータ:
 
-1. **収集** ``source.collect(tools)`` が ``FetchedArticle`` を yield する。
+1. **取得** ``fetch_articles(source, tools)`` engine が ``FetchedArticle`` を流す。
 2. **変換** ``convert_fetched_article`` が「何ができたか」(Ready / Observed /
    棄却) に変換する。
 3. **永続化** 変換結果を ``match`` で振り分ける:
@@ -30,8 +30,9 @@ from app.collection.article_collection.fetched_article_converter import (
     convert_fetched_article,
     unexpected_rejection,
 )
+from app.collection.article_collection.fetcher import fetch_articles
 from app.collection.article_collection.repository import IncompleteArticleRepository
-from app.collection.article_collection.tools.fetch_tools import FetchTools
+from app.collection.article_collection.tools.reader_tools import ReaderTools
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.external_fetch_errors import ExternalFetchError
@@ -54,7 +55,7 @@ class ArticleAcquisitionService:
         self,
         session_factory: async_sessionmaker[AsyncSession],
         source: ArticleSource,
-        tools_factory: Callable[[], FetchTools] = FetchTools,
+        tools_factory: Callable[[], ReaderTools] = ReaderTools,
     ) -> None:
         self._session_factory = session_factory
         self._source = source
@@ -68,7 +69,7 @@ class ArticleAcquisitionService:
             tools = self._tools_factory()
 
             try:
-                async for fetched in self._source.collect(tools):  # 1. 収集
+                async for fetched in fetch_articles(self._source, tools):  # 1. 取得
                     try:
                         outcome = convert_fetched_article(  # 2. 変換 (= 何ができたか)
                             fetched, source=self._source, source_id=source_id
