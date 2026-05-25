@@ -18,14 +18,16 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.ai_provider_errors import (
+    AIProviderConfigurationError,
     AIProviderInputRejectedError,
+    AIProviderNetworkError,
     AIProviderOutputBlockedError,
 )
 from app.analysis.curation.ai.base import BaseCurator
@@ -178,3 +180,89 @@ async def test_input_rejected_writes_audit_then_deletes_article(
     assert ev.outcome_code == "ai_error_input_rejected"
     assert ev.category == "non_retryable_drop_article"
     assert ev.code == "ai_error_input_rejected"
+
+
+# ---------------------------------------------------------------------------
+# hold gate — terminal_keep は failure 観測時に curation hold を立てる
+# ---------------------------------------------------------------------------
+
+
+def _wrap(raw: BaseException) -> BaseException:
+    """ACL で Stage 3 marker に詰め替え + ``__cause__`` を保持する helper。"""
+    try:
+        raise map_provider_to_curation(raw) from raw  # type: ignore[arg-type]
+    except BaseException as wrapped:  # noqa: BLE001
+        return wrapped
+
+
+@pytest.mark.asyncio
+async def test_terminal_keep_sets_curation_hold(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """terminal_keep は failure audit を焼いた上で hold を失敗 code で立てる。"""
+    article = await _make_article(db_session, sample_source)
+    # rollback 後の expired-attr lazy reload を避けるため事前に id を取り出す
+    article_id = article.id
+    ready = _ready_from(article)
+    handler = CurationFailureHandler(session_factory)
+    # AIProviderConfigurationError → CurationTerminalKeepError (keep, config 起因)
+    exc = _wrap(AIProviderConfigurationError("api key missing"))
+
+    with patch(
+        "app.analysis.curation.failure_handling.set_curation_hold",
+        new=AsyncMock(),
+    ) as set_hold:
+        reraise = await handler.handle(
+            ready=ready,
+            exc=exc,
+            curator=_curator_mock(),
+            attempt=1,
+            last_attempt=False,
+        )
+
+    assert reraise is False  # terminal_keep は taskiq retry させない
+    set_hold.assert_awaited_once()
+    # reason は失敗 code (exc.code 由来、provider 健全性問題の識別子)
+    assert set_hold.await_args.kwargs["reason"] == exc.code
+    # failure audit は keep カテゴリで記録される (hold とは独立に必ず残す)
+    await db_session.rollback()
+    ev = (
+        (
+            await db_session.execute(
+                select(PipelineEvent).where(PipelineEvent.article_id == article_id)
+            )
+        )
+        .scalars()
+        .one()
+    )
+    assert ev.category == "non_retryable_keep_article"
+
+
+@pytest.mark.asyncio
+async def test_recoverable_does_not_set_curation_hold(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """recoverable 失敗では hold を立てない (hold は failure の性質で立つ)。"""
+    article = await _make_article(db_session, sample_source)
+    ready = _ready_from(article)
+    handler = CurationFailureHandler(session_factory)
+    # AIProviderNetworkError → CurationRecoverableError (retryable)
+    exc = _wrap(AIProviderNetworkError("conn reset"))
+
+    with patch(
+        "app.analysis.curation.failure_handling.set_curation_hold",
+        new=AsyncMock(),
+    ) as set_hold:
+        await handler.handle(
+            ready=ready,
+            exc=exc,
+            curator=_curator_mock(),
+            attempt=1,
+            last_attempt=True,
+        )
+
+    set_hold.assert_not_called()

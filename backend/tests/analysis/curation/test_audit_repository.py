@@ -234,6 +234,46 @@ async def test_append_drop_article_records_failure_with_drop_category(
 
 
 # ---------------------------------------------------------------------------
+# 救済断念経路 — append_backfill_curation_aged_out
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_append_backfill_curation_aged_out_records_rejected_with_aged_code(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """年齢削除の監査は drop と別 stage/event_type/category/code で記録される。
+
+    意図的な組合せ: stage=backfill_curate (curation 救済の保守動作) +
+    payload.kind=curation。content 拒否の drop (stage=curation /
+    category=non_retryable_drop_article) とは全軸が異なる。
+    """
+    from app.analysis.curation.audit_repository import (
+        BACKFILL_CURATION_AGED_OUT_CODE,
+    )
+
+    article = await _make_article(db_session, sample_source)
+    async with session_factory() as session:
+        await CurationAuditRepository(session).append_backfill_curation_aged_out(
+            article_id=article.id
+        )
+        await session.commit()
+
+    ev = await _fetch_one(db_session, article.id)
+    assert ev.stage == "backfill_curate"
+    assert ev.event_type == "rejected"
+    assert ev.code == BACKFILL_CURATION_AGED_OUT_CODE
+    assert ev.outcome_code == BACKFILL_CURATION_AGED_OUT_CODE
+    # 年齢削除は curation 分類ではないので category は NULL
+    assert ev.category is None
+    # payload は curation variant (FK 切断耐性のため source_name を保持)
+    assert ev.payload["kind"] == "curation"
+    assert ev.payload["source_name"] == str(sample_source.name)
+
+
+# ---------------------------------------------------------------------------
 # 失敗経路 — append_failure (4 marker dispatch)
 # ---------------------------------------------------------------------------
 

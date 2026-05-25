@@ -11,9 +11,13 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import structlog
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from taskiq import Context, TaskiqDepends
 
+from app.analysis.curation.hold import is_curation_held
 from app.brokers import broker_metadata
 from app.config import settings
 from app.maintenance.backlog import PipelineBacklog
@@ -29,6 +33,8 @@ logger = structlog.get_logger(__name__)
 
 CURATIONS_LIMIT = 50
 CURATIONS_DAILY_MAX = 600
+# 1 run で年齢削除する記事の上限 (AI 非依存 = budget 非消費、削除負荷の頭打ち)。
+CURATIONS_DELETE_LIMIT = 200
 
 ASSESSMENTS_LIMIT = 50
 ASSESSMENTS_DAILY_MAX = 600
@@ -63,6 +69,42 @@ async def _update_circuit_breaker(role: str, found: int) -> int:
     return int(streak)
 
 
+async def _delete_aged_out_curations(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    created_before: datetime,
+) -> None:
+    """通常窓から落ちた古い未処理記事を、監査を焼いてから物理削除する。
+
+    記事ごとに 1 tx (audit INSERT → DELETE → commit)。``source_id`` の逆引きは
+    Article 存在中にしか動かないため audit を先に焼く (``_drop_article`` と同規約。
+    FK は ``ondelete=SET NULL`` 済で DELETE 後も監査行は残る)。AI 非依存のため
+    budget は消費しない。
+    """
+    from app.analysis.curation.audit_repository import CurationAuditRepository
+    from app.repositories.articles import ArticleRepository
+
+    async with session_factory() as session:
+        backlog = PipelineBacklog(session)
+        ids = await backlog.article_ids_aged_out_curation(
+            created_before=created_before,
+            limit=CURATIONS_DELETE_LIMIT,
+        )
+
+    deleted = 0
+    for article_id in ids:
+        async with session_factory() as session:
+            await CurationAuditRepository(session).append_backfill_curation_aged_out(
+                article_id=article_id
+            )
+            await ArticleRepository(session).delete_by_id(article_id)
+            await session.commit()
+        deleted += 1
+
+    if deleted:
+        logger.info("backfill_curations_aged_out", deleted=deleted)
+
+
 # ---------------------------------------------------------------------------
 # Stage 2a: curation の塩漬け救済
 # ---------------------------------------------------------------------------
@@ -76,19 +118,32 @@ async def _update_circuit_breaker(role: str, found: int) -> int:
     schedule=[{"cron": "*/15 * * * *"}],
 )
 async def backfill_curations(ctx: Context = TaskiqDepends()) -> None:
-    """curation 子が NULL の Article を発見し curate_content を再投入する。
+    """curation 子が NULL の Article を救済する (再投入 + 年齢削除)。
 
-    案 3 適用: 本 task は ID-only な ``CurationTrigger`` を kiq に詰めて
-    enqueue するだけ。precondition 判定 (Article 存在 + signal/noise 未生成 +
-    本文サイズ ≤ hard cap) と Ready 構築は下流 Stage 3 task が処理開始時に
-    行う (`curate_content_skipped reason=precondition_not_met` log で観測可能)。
+    救済機構の本体。3 段階で動く:
+
+    1. **hold gate**: terminal_keep (key/残高/config 等の provider/stage 健全性
+       問題) が起きると失敗ハンドラが ``curation:hold`` を立てる。hold 中は
+       confirmed に失敗する AI 呼び出しを避けるため run 全体を skip する。
+       circuit breaker (件数で止まる) の差し替え。
+    2. **年齢削除**: 通常窓 (``[after, before)``) から落ちた 7 日超の未処理記事は
+       「分析価値なし」として監査を焼いてから物理削除する (P2 = silent loss 解消)。
+    3. **通常再投入**: 窓内の child-NULL 記事を ID-only な ``CurationTrigger`` で
+       kiq する。precondition 判定 / Ready 構築は下流 Stage 3 task に委ねる
+       (``curate_content_skipped reason=precondition_not_met`` log で観測可能)。
     """
     if not settings.backfill_curations_enabled:
         logger.info("backfill_curations_disabled")
         return
 
+    if await is_curation_held(get_redis()):
+        logger.warning("backfill_curations_held")
+        return
+
     session_factory = ctx.state.session_factory
     before, after = BackfillWindow().boundaries_at(utc_now())
+
+    await _delete_aged_out_curations(session_factory, created_before=after)
 
     async with session_factory() as session:
         backlog = PipelineBacklog(session)
@@ -99,10 +154,6 @@ async def backfill_curations(ctx: Context = TaskiqDepends()) -> None:
         )
 
     found = len(ids)
-    streak = await _update_circuit_breaker("curate", found)
-    if streak >= CIRCUIT_THRESHOLD:
-        logger.warning("backfill_curations_circuit_open", streak=streak, found=found)
-        return
     if found == 0:
         logger.info("backfill_curations_empty")
         return

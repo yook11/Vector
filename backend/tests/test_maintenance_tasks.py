@@ -1,11 +1,21 @@
-"""back-fill cron タスクのユニットテスト。
+"""back-fill cron タスクのテスト。
 
-kill switch / circuit / 予算枯渇 / kiq 失敗続行を検証する。
+curation: kill switch / hold gate / 年齢削除 / 予算枯渇 / kiq 失敗続行を検証する。
+hold gate (terminal_keep の性質で止まる) が旧 circuit breaker (件数で止まる) を
+差し替えたことを反映する。年齢削除は実 DB で監査 + 物理削除を検証する。
 """
 
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from app.models.article import Article
+from app.models.curation_noise import CurationNoise
+from app.models.news_source import NewsSource
+from app.models.pipeline_event import PipelineEvent
 
 
 def _ctx_with_session_factory() -> MagicMock:
@@ -15,6 +25,14 @@ def _ctx_with_session_factory() -> MagicMock:
     return ctx
 
 
+def _stub_session_cm(ctx: MagicMock) -> None:
+    """session_factory() の async context manager をモックする。"""
+    ctx.state.session_factory.return_value.__aenter__ = AsyncMock(
+        return_value=MagicMock()
+    )
+    ctx.state.session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+
 # ---------------------------------------------------------------------------
 # kill switch
 # ---------------------------------------------------------------------------
@@ -22,89 +40,89 @@ def _ctx_with_session_factory() -> MagicMock:
 
 @pytest.mark.asyncio
 async def test_curations_disabled_returns_early() -> None:
-    """kill switch False のときは backlog 参照も circuit 更新もしない。"""
+    """kill switch False → hold 確認も backlog 参照も年齢削除もしない。"""
     from app.maintenance import tasks
 
     ctx = _ctx_with_session_factory()
     with (
         patch.object(tasks.settings, "backfill_curations_enabled", False),
+        patch("app.maintenance.tasks.is_curation_held", new=AsyncMock()) as held,
+        patch(
+            "app.maintenance.tasks._delete_aged_out_curations", new=AsyncMock()
+        ) as delete,
         patch("app.maintenance.tasks.PipelineBacklog") as backlog_cls,
-        patch("app.maintenance.tasks._update_circuit_breaker") as circuit,
     ):
         await tasks.backfill_curations(ctx=ctx)
 
+    held.assert_not_called()
+    delete.assert_not_called()
     backlog_cls.assert_not_called()
-    circuit.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
-# 空クエリ → circuit リセット、kiq dispatch なし
+# hold gate — terminal_keep の hold 中は run 全体を skip (circuit breaker 差替)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_curations_empty_resets_circuit_and_does_not_dispatch() -> None:
-    """backlog 空 → circuit reset + kiq 未呼び出し。"""
+async def test_curations_held_skips_entire_run() -> None:
+    """hold 中は年齢削除も backlog 参照も dispatch も行わず即 return。"""
     from app.maintenance import tasks
 
     ctx = _ctx_with_session_factory()
-    fake_session = MagicMock()
-    ctx.state.session_factory.return_value.__aenter__ = AsyncMock(
-        return_value=fake_session
-    )
-    ctx.state.session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+    with (
+        patch.object(tasks.settings, "backfill_curations_enabled", True),
+        patch(
+            "app.maintenance.tasks.is_curation_held",
+            new=AsyncMock(return_value=True),
+        ),
+        patch(
+            "app.maintenance.tasks._delete_aged_out_curations", new=AsyncMock()
+        ) as delete,
+        patch("app.maintenance.tasks.PipelineBacklog") as backlog_cls,
+        patch("app.maintenance.tasks.consume_daily_budget", new=AsyncMock()) as budget,
+        patch("app.analysis.curation.tasks.curate_content") as curate_task,
+    ):
+        await tasks.backfill_curations(ctx=ctx)
+
+    delete.assert_not_called()
+    backlog_cls.assert_not_called()
+    budget.assert_not_called()
+    curate_task.kiq.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# 空クエリ → 年齢削除は走るが dispatch なし
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_curations_empty_does_not_dispatch() -> None:
+    """backlog 空 → budget も kiq も呼ばない (年齢削除は実行される)。"""
+    from app.maintenance import tasks
+
+    ctx = _ctx_with_session_factory()
+    _stub_session_cm(ctx)
 
     backlog_instance = MagicMock()
     backlog_instance.article_ids_pending_curation = AsyncMock(return_value=[])
 
     with (
         patch.object(tasks.settings, "backfill_curations_enabled", True),
-        patch("app.maintenance.tasks.PipelineBacklog", return_value=backlog_instance),
         patch(
-            "app.maintenance.tasks._update_circuit_breaker",
-            new=AsyncMock(return_value=0),
-        ) as circuit,
-        patch("app.maintenance.tasks.consume_daily_budget", new=AsyncMock()) as budget,
-        patch("app.analysis.curation.tasks.curate_content") as curate_task,
-    ):
-        await tasks.backfill_curations(ctx=ctx)
-
-    circuit.assert_awaited_once_with("curate", 0)
-    budget.assert_not_called()
-    curate_task.kiq.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# circuit_open → 早期 return
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_curations_circuit_open_short_circuits() -> None:
-    """streak が CIRCUIT_THRESHOLD 以上 → kiq dispatch せず early return。"""
-    from app.maintenance import tasks
-
-    ctx = _ctx_with_session_factory()
-    ctx.state.session_factory.return_value.__aenter__ = AsyncMock(
-        return_value=MagicMock()
-    )
-    ctx.state.session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
-
-    backlog_instance = MagicMock()
-    backlog_instance.article_ids_pending_curation = AsyncMock(return_value=[1, 2])
-
-    with (
-        patch.object(tasks.settings, "backfill_curations_enabled", True),
-        patch("app.maintenance.tasks.PipelineBacklog", return_value=backlog_instance),
-        patch(
-            "app.maintenance.tasks._update_circuit_breaker",
-            new=AsyncMock(return_value=tasks.CIRCUIT_THRESHOLD),
+            "app.maintenance.tasks.is_curation_held",
+            new=AsyncMock(return_value=False),
         ),
+        patch(
+            "app.maintenance.tasks._delete_aged_out_curations", new=AsyncMock()
+        ) as delete,
+        patch("app.maintenance.tasks.PipelineBacklog", return_value=backlog_instance),
         patch("app.maintenance.tasks.consume_daily_budget", new=AsyncMock()) as budget,
         patch("app.analysis.curation.tasks.curate_content") as curate_task,
     ):
         await tasks.backfill_curations(ctx=ctx)
 
+    delete.assert_awaited_once()
     budget.assert_not_called()
     curate_task.kiq.assert_not_called()
 
@@ -120,21 +138,19 @@ async def test_curations_budget_exhausted_skips_dispatch() -> None:
     from app.maintenance import tasks
 
     ctx = _ctx_with_session_factory()
-    ctx.state.session_factory.return_value.__aenter__ = AsyncMock(
-        return_value=MagicMock()
-    )
-    ctx.state.session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+    _stub_session_cm(ctx)
 
     backlog_instance = MagicMock()
     backlog_instance.article_ids_pending_curation = AsyncMock(return_value=[1, 2, 3])
 
     with (
         patch.object(tasks.settings, "backfill_curations_enabled", True),
-        patch("app.maintenance.tasks.PipelineBacklog", return_value=backlog_instance),
         patch(
-            "app.maintenance.tasks._update_circuit_breaker",
-            new=AsyncMock(return_value=1),
+            "app.maintenance.tasks.is_curation_held",
+            new=AsyncMock(return_value=False),
         ),
+        patch("app.maintenance.tasks._delete_aged_out_curations", new=AsyncMock()),
+        patch("app.maintenance.tasks.PipelineBacklog", return_value=backlog_instance),
         patch(
             "app.maintenance.tasks.consume_daily_budget",
             new=AsyncMock(return_value=0),
@@ -147,7 +163,7 @@ async def test_curations_budget_exhausted_skips_dispatch() -> None:
 
 
 # ---------------------------------------------------------------------------
-# kiq 失敗 1 件 → 残り続行
+# dispatch — 対象 article_id を CurationTrigger で kiq
 # ---------------------------------------------------------------------------
 
 
@@ -162,10 +178,7 @@ async def test_curations_dispatches_triggers_for_each_article_id() -> None:
     from app.maintenance import tasks
 
     ctx = _ctx_with_session_factory()
-    ctx.state.session_factory.return_value.__aenter__ = AsyncMock(
-        return_value=MagicMock()
-    )
-    ctx.state.session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+    _stub_session_cm(ctx)
 
     backlog_instance = MagicMock()
     backlog_instance.article_ids_pending_curation = AsyncMock(return_value=[10, 20, 30])
@@ -175,11 +188,12 @@ async def test_curations_dispatches_triggers_for_each_article_id() -> None:
 
     with (
         patch.object(tasks.settings, "backfill_curations_enabled", True),
-        patch("app.maintenance.tasks.PipelineBacklog", return_value=backlog_instance),
         patch(
-            "app.maintenance.tasks._update_circuit_breaker",
-            new=AsyncMock(return_value=1),
+            "app.maintenance.tasks.is_curation_held",
+            new=AsyncMock(return_value=False),
         ),
+        patch("app.maintenance.tasks._delete_aged_out_curations", new=AsyncMock()),
+        patch("app.maintenance.tasks.PipelineBacklog", return_value=backlog_instance),
         patch(
             "app.maintenance.tasks.consume_daily_budget",
             new=AsyncMock(return_value=3),
@@ -203,10 +217,7 @@ async def test_curations_continues_when_one_kiq_fails() -> None:
     from app.maintenance import tasks
 
     ctx = _ctx_with_session_factory()
-    ctx.state.session_factory.return_value.__aenter__ = AsyncMock(
-        return_value=MagicMock()
-    )
-    ctx.state.session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+    _stub_session_cm(ctx)
 
     backlog_instance = MagicMock()
     backlog_instance.article_ids_pending_curation = AsyncMock(return_value=[1, 2, 3])
@@ -216,11 +227,12 @@ async def test_curations_continues_when_one_kiq_fails() -> None:
 
     with (
         patch.object(tasks.settings, "backfill_curations_enabled", True),
-        patch("app.maintenance.tasks.PipelineBacklog", return_value=backlog_instance),
         patch(
-            "app.maintenance.tasks._update_circuit_breaker",
-            new=AsyncMock(return_value=1),
+            "app.maintenance.tasks.is_curation_held",
+            new=AsyncMock(return_value=False),
         ),
+        patch("app.maintenance.tasks._delete_aged_out_curations", new=AsyncMock()),
+        patch("app.maintenance.tasks.PipelineBacklog", return_value=backlog_instance),
         patch(
             "app.maintenance.tasks.consume_daily_budget",
             new=AsyncMock(return_value=3),
@@ -230,6 +242,96 @@ async def test_curations_continues_when_one_kiq_fails() -> None:
         await tasks.backfill_curations(ctx=ctx)
 
     assert curate_task.kiq.await_count == 3
+
+
+# ---------------------------------------------------------------------------
+# 年齢削除 (実 DB) — 監査 INSERT → 物理削除、noise は残す
+# ---------------------------------------------------------------------------
+
+
+async def _make_article(
+    db_session: AsyncSession,
+    source: NewsSource,
+    *,
+    url: str,
+    created_at: datetime,
+) -> Article:
+    """指定 created_at の Article を作成 (server_default を後追い UPDATE で上書き)。"""
+    article = Article(
+        source_id=source.id,
+        source_url=url,  # type: ignore[arg-type]
+        original_title="title",
+        original_content="x" * 60,
+    )
+    db_session.add(article)
+    await db_session.commit()
+    await db_session.refresh(article)
+    await db_session.execute(
+        text("UPDATE articles SET created_at = :ts WHERE id = :id"),
+        {"ts": created_at, "id": article.id},
+    )
+    await db_session.commit()
+    return article
+
+
+@pytest.mark.asyncio
+async def test_delete_aged_out_curations_deletes_old_child_null_and_audits(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """古い child-NULL は監査を残して削除、noise を持つ古い記事は残す。"""
+    from app.analysis.curation.audit_repository import BACKFILL_CURATION_AGED_OUT_CODE
+    from app.maintenance import tasks
+
+    now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
+    aged = await _make_article(
+        db_session,
+        sample_source,
+        url="https://e.com/aged",
+        created_at=now - timedelta(days=10),
+    )
+    kept = await _make_article(
+        db_session,
+        sample_source,
+        url="https://e.com/kept-noise",
+        created_at=now - timedelta(days=10),
+    )
+    db_session.add(
+        CurationNoise(article_id=kept.id, title_ja="ノイズ", summary_ja="ノイズ要約")
+    )
+    await db_session.commit()
+    aged_id, kept_id = aged.id, kept.id
+
+    await tasks._delete_aged_out_curations(
+        session_factory, created_before=now - timedelta(days=7)
+    )
+
+    # 削除は別 session (session_factory) で commit 済。db_session の identity map を
+    # 明示破棄して DB の最新状態を読む (rollback だけだと cached 値を返し得る)。
+    db_session.expire_all()
+    # child-NULL の古い記事は物理削除される
+    assert await db_session.get(Article, aged_id) is None
+    # noise (= 正常完了) を持つ記事は古くても残る (data-loss 防止)
+    assert await db_session.get(Article, kept_id) is not None
+
+    # 削除には監査が 1 行残る (article_id は FK SET NULL で NULL)
+    events = list(
+        (
+            await db_session.execute(
+                select(PipelineEvent).where(PipelineEvent.stage == "backfill_curate")
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.event_type == "rejected"
+    assert ev.code == BACKFILL_CURATION_AGED_OUT_CODE
+    assert ev.category is None
+    assert ev.article_id is None
+    assert ev.payload["kind"] == "curation"
 
 
 # ---------------------------------------------------------------------------

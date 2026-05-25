@@ -14,6 +14,7 @@ from sqlmodel import select
 
 from app.models.article import Article
 from app.models.article_curation import ArticleCuration
+from app.models.curation_noise import CurationNoise
 from app.models.in_scope_assessment import InScopeAssessment
 from app.models.out_of_scope_assessment import OutOfScopeAssessment
 
@@ -35,14 +36,48 @@ class PipelineBacklog:
         created_after: datetime,
         limit: int,
     ) -> list[int]:
-        """``article_curations`` の子が無い Article ID を返す (Stage 2a 残)."""
+        """curation/noise いずれの子も無い未処理 Article ID を返す (Stage 2a 残)。
+
+        ``curation_noises`` (noise 判定済み = 正常完了) も anti-join する。
+        signal/noise は排他で、どちらかが在れば curation は完了している
+        (precondition の ``try_load_for_curation`` と同一定義)。
+        """
         stmt = (
             select(Article.id)
             .outerjoin(ArticleCuration, ArticleCuration.article_id == Article.id)
+            .outerjoin(CurationNoise, CurationNoise.article_id == Article.id)
             .where(
                 ArticleCuration.id.is_(None),
+                CurationNoise.id.is_(None),
                 Article.created_at < created_before,
                 Article.created_at >= created_after,
+            )
+            .order_by(Article.created_at.asc())
+            .limit(limit)
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def article_ids_aged_out_curation(
+        self,
+        *,
+        created_before: datetime,
+        limit: int,
+    ) -> list[int]:
+        """``created_before`` より古い child-NULL Article ID を返す (救済断念対象)。
+
+        curation/noise いずれの子も無く物理削除する対象。下限 (年齢ウィンドウの
+        ``created_after``) を持たず、``article_ids_pending_curation`` の通常再投入窓
+        (``[after, before)``) とは disjoint な「窓から落ちた古い記事」を拾う。
+        """
+        stmt = (
+            select(Article.id)
+            .outerjoin(ArticleCuration, ArticleCuration.article_id == Article.id)
+            .outerjoin(CurationNoise, CurationNoise.article_id == Article.id)
+            .where(
+                ArticleCuration.id.is_(None),
+                CurationNoise.id.is_(None),
+                Article.created_at < created_before,
             )
             .order_by(Article.created_at.asc())
             .limit(limit)

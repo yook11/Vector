@@ -155,8 +155,10 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
 
     # back-fill (パイプライン保守)
-    # 既定 false。段階的有効化は PLAN §8-6 (Step 1 → 2 → 3) を参照。
-    backfill_curations_enabled: bool = False
+    # curation は救済機構 (年齢削除 / terminal_keep hold 明けの再投入) の前提と
+    # して常時有効。assessments / embeddings は段階的有効化 (PLAN §8-6) のため
+    # 既定 false のまま。
+    backfill_curations_enabled: bool = True
     backfill_assessments_enabled: bool = False
     backfill_embeddings_enabled: bool = False
 

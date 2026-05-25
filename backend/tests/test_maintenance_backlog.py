@@ -10,6 +10,7 @@ from app.maintenance.backlog import PipelineBacklog
 from app.models.article import Article
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category
+from app.models.curation_noise import CurationNoise
 from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource
 
@@ -141,6 +142,147 @@ async def test_pending_curation_excludes_articles_with_curation(
     ids = await backlog.article_ids_pending_curation(
         created_before=now - timedelta(minutes=30),
         created_after=now - timedelta(days=7),
+        limit=10,
+    )
+    assert article.id not in ids
+
+
+@pytest.mark.asyncio
+async def test_pending_curation_excludes_noise_articles(
+    db_session: AsyncSession,
+    sample_source: NewsSource,
+) -> None:
+    """noise 判定済み (= curation 正常完了) の Article は再投入対象に入らない。
+
+    signal/noise は排他なので noise 行が在れば curation は完了している。
+    旧クエリは ArticleCuration だけ見て noise を child-NULL 扱いしていた
+    (latent bug = 無駄な再投入 / 年齢削除ではデータ欠損)。
+    """
+    now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
+    article = await _make_article(
+        db_session,
+        sample_source,
+        url="https://e.com/noise",
+        created_at=now - timedelta(hours=1),
+    )
+    db_session.add(
+        CurationNoise(
+            article_id=article.id,
+            title_ja="ノイズタイトル",
+            summary_ja="ノイズ要約",
+        )
+    )
+    await db_session.commit()
+
+    backlog = PipelineBacklog(db_session)
+    ids = await backlog.article_ids_pending_curation(
+        created_before=now - timedelta(minutes=30),
+        created_after=now - timedelta(days=7),
+        limit=10,
+    )
+    assert article.id not in ids
+
+
+# ---------------------------------------------------------------------------
+# article_ids_aged_out_curation (年齢削除対象 = 窓外の child-NULL)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_aged_out_curation_returns_old_child_null_articles(
+    db_session: AsyncSession,
+    sample_source: NewsSource,
+) -> None:
+    """created_before より古い child-NULL Article が返る。"""
+    now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
+    article = await _make_article(
+        db_session,
+        sample_source,
+        url="https://e.com/aged",
+        created_at=now - timedelta(days=10),
+    )
+
+    backlog = PipelineBacklog(db_session)
+    ids = await backlog.article_ids_aged_out_curation(
+        created_before=now - timedelta(days=7),
+        limit=10,
+    )
+    assert article.id in ids
+
+
+@pytest.mark.asyncio
+async def test_aged_out_curation_excludes_recent_articles(
+    db_session: AsyncSession,
+    sample_source: NewsSource,
+) -> None:
+    """created_before 以降の記事は年齢削除対象外 (通常窓と disjoint)。"""
+    now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
+    article = await _make_article(
+        db_session,
+        sample_source,
+        url="https://e.com/recent",
+        created_at=now - timedelta(days=1),
+    )
+
+    backlog = PipelineBacklog(db_session)
+    ids = await backlog.article_ids_aged_out_curation(
+        created_before=now - timedelta(days=7),
+        limit=10,
+    )
+    assert article.id not in ids
+
+
+@pytest.mark.asyncio
+async def test_aged_out_curation_excludes_articles_with_curation(
+    db_session: AsyncSession,
+    sample_source: NewsSource,
+) -> None:
+    """signal (ArticleCuration) を持つ古い記事は削除対象外。"""
+    now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
+    article = await _make_article(
+        db_session,
+        sample_source,
+        url="https://e.com/aged-signal",
+        created_at=now - timedelta(days=10),
+    )
+    db_session.add(
+        ArticleCuration(article_id=article.id, translated_title="tt", summary="ss")
+    )
+    await db_session.commit()
+
+    backlog = PipelineBacklog(db_session)
+    ids = await backlog.article_ids_aged_out_curation(
+        created_before=now - timedelta(days=7),
+        limit=10,
+    )
+    assert article.id not in ids
+
+
+@pytest.mark.asyncio
+async def test_aged_out_curation_excludes_articles_with_noise(
+    db_session: AsyncSession,
+    sample_source: NewsSource,
+) -> None:
+    """noise を持つ古い記事は削除対象外 (data-loss 防止の要点)。"""
+    now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
+    article = await _make_article(
+        db_session,
+        sample_source,
+        url="https://e.com/aged-noise",
+        created_at=now - timedelta(days=10),
+    )
+    db_session.add(
+        CurationNoise(
+            article_id=article.id,
+            title_ja="ノイズタイトル",
+            summary_ja="ノイズ要約",
+        )
+    )
+    await db_session.commit()
+
+    backlog = PipelineBacklog(db_session)
+    ids = await backlog.article_ids_aged_out_curation(
+        created_before=now - timedelta(days=7),
         limit=10,
     )
     assert article.id not in ids

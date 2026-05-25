@@ -22,6 +22,8 @@ from app.analysis.curation.errors import (
     CurationTerminalDropError,
     CurationTerminalKeepError,
 )
+from app.analysis.curation.hold import set_curation_hold
+from app.redis import get_redis
 from app.repositories.articles import ArticleRepository
 from app.shared.security.redaction import redact_secrets
 
@@ -62,6 +64,11 @@ class CurationFailureHandler:
                 return False
             case CurationTerminalKeepError():
                 await self._audit_failure(ready, exc, curator, attempt)
+                # provider/stage 全体の健全性問題。backfill 再投入を一時停止する
+                # (hold は best-effort、set 失敗でも task は落とさない)。
+                await set_curation_hold(
+                    get_redis(), reason=getattr(exc, "code", "unknown")
+                )
                 return False
             case CurationRecoverableError():
                 await self._audit_failure(ready, exc, curator, attempt)

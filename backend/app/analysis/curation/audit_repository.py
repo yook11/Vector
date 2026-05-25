@@ -55,6 +55,10 @@ from app.shared.security.redaction import redact_secrets
 _AI_RAW_RESPONSE_LIMIT = 2048
 _ERROR_MESSAGE_LIMIT = 2000
 
+# 年齢起因の救済断念 (backfill が古い未処理記事を物理削除) の outcome code。
+# 内容拒否の drop (NON_RETRYABLE_DROP_ARTICLE) とは性質が全く異なるため別 code。
+BACKFILL_CURATION_AGED_OUT_CODE = "backfill_curation_aged_out"
+
 
 class CurationAuditRepository:
     """Stage 3 監査 row の semantic API。
@@ -166,6 +170,29 @@ class CurationAuditRepository:
             error_class=_fqn(exc),
             category=Layer1Category.NON_RETRYABLE_DROP_ARTICLE,
             code=code,
+        )
+
+    # --- 救済断念経路 (年齢削除と同一 tx) ---------------------------------
+
+    async def append_backfill_curation_aged_out(self, *, article_id: int) -> None:
+        """backfill が古い未処理記事を物理削除する直前に焼く監査(commit は caller)。
+
+        意図的な組合せ: ``stage=BACKFILL_CURATE``(curation 救済の保守動作) +
+        ``payload.kind=curation``(curation 対象記事の事実)。AI 呼び出しを伴わない
+        年齢起因の断念のため envelope / curator / exc は持たない。
+
+        内容拒否の drop(``stage=CURATION`` / ``category=NON_RETRYABLE_DROP_ARTICLE``)
+        とは stage / event_type / category / code が全て異なる別経路。
+        """
+        source_name = await self._resolve_source_name(article_id)
+        await self._events.append(
+            stage=Stage.BACKFILL_CURATE,
+            event_type=EventType.REJECTED,
+            outcome_code=BACKFILL_CURATION_AGED_OUT_CODE,
+            payload=CurationPayload(source_name=source_name),
+            article_id=article_id,
+            category=None,  # 明示的に NULL(curation 分類ではない)
+            code=BACKFILL_CURATION_AGED_OUT_CODE,
         )
 
     # --- 失敗経路 (Task 層 4 marker dispatch) -----------------------------
