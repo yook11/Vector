@@ -49,7 +49,7 @@ class FetchedArticleConversionError(Exception):
         has_published_at: published_at hint が存在したか。
     """
 
-    CODE: ClassVar[str] = "fetched_article_conversion_failed"
+    CODE: ClassVar[str] = "article_conversion_rejected"
 
     code: str
     conversion_reason: ConversionReason

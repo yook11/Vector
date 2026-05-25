@@ -106,7 +106,7 @@ class ObservedArticle(BaseModel):
     def to_audit_fields(self) -> dict[str, bool | int | str | None]:
         """structured log / audit 向けの per-field 充足スナップショット。
 
-        Stage 1 失敗 log (``fetched_article_conversion_failed``) と key を揃え、
+        Stage 1 棄却 log (``article_conversion_rejected``) と key を揃え、
         Observed 成立 / 変換失敗を同じ key 集合で集計可能にする。
 
         値そのもの (title 文字列 / body 本文 / published_at 日時) は出さない:

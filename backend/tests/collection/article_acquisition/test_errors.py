@@ -34,7 +34,7 @@ def _make(**overrides) -> FetchedArticleConversionError:
 
 def test_code_is_stable_class_constant() -> None:
     exc = _make()
-    assert exc.code == "fetched_article_conversion_failed"
+    assert exc.code == "article_conversion_rejected"
     assert exc.code == FetchedArticleConversionError.CODE
 
 

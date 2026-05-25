@@ -70,7 +70,7 @@ def _reject(
     if cause is not None:
         err.__cause__ = cause  # 原因連鎖 (監査が __cause__ を辿れる)
     logger.info(
-        "fetched_article_conversion_failed",
+        "article_conversion_rejected",
         source_name=str(source_name),
         conversion_reason=str(reason),
         has_title=has_title,

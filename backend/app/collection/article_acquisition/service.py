@@ -6,11 +6,13 @@
 2. **変換** ``convert_fetched_article`` が「何ができたか」(Ready / Observed /
    棄却) に変換する。
 3. **永続化** 変換結果を ``match`` で振り分ける:
-   - ``AnalyzableArticle`` → 即時保存
-   - ``ObservedArticle`` → ``incomplete_articles`` に投入 (後段補完)
+   - ``AnalyzableArticle`` → 即時保存 + 成功 witness を同一 tx で焼く
+   - ``ObservedArticle`` → ``incomplete_articles`` に投入 + 成功 witness を同一 tx
    - ``ConversionRejection`` → 業務 tx とは別 session で棄却監査して継続
 
-``commit`` までが責務。``NewsSource`` lookup は本 Service では行わない。
+成功 witness (article_created / incomplete_article_created) は新規 URL 初回のみ発火
+(再掲の ON CONFLICT / race skip は定常的なので flood 回避で非記録)。``commit``
+までが責務。``NewsSource`` lookup は本 Service では行わない。
 """
 
 from __future__ import annotations
@@ -68,6 +70,8 @@ class ArticleAcquisitionService:
         async with self._session_factory() as session:
             article_store = ArticleStore(session)
             incomplete_repo = IncompleteArticleRepository(session)
+            audit = SourceAcquisitionAuditRepository(session)
+            source_name = str(self._source.name)
             persisted_ids: list[int] = []
             tools = self._tools_factory()
 
@@ -88,8 +92,18 @@ class ArticleAcquisitionService:
                         case AnalyzableArticle() as ready:
                             article_id = await article_store.save(ready)
                             if article_id is None:
+                                # 既知 URL / race は ON CONFLICT → None。定常的に
+                                # 発火するため flood 回避で非記録 (steady-state)。
                                 continue
                             persisted_ids.append(article_id)
+                            # 成功 witness は業務 INSERT と同一 tx で焼く
+                            # (commit 失敗時は記事ごと巻き戻り divergence しない)。
+                            await audit.append_article_created(
+                                source_id=source_id,
+                                source_name=source_name,
+                                article_id=article_id,
+                                canonical_url=str(ready.source_url),
+                            )
                         case ObservedArticle() as observed:
                             # 既知 URL の HTML fetch 反復を避けるコスト節約
                             # (UNIQUE は enqueue 側で担保)
@@ -97,10 +111,19 @@ class ArticleAcquisitionService:
                                 observed.source_url
                             ):
                                 continue
-                            await incomplete_repo.save(
+                            incomplete_id = await incomplete_repo.save(
                                 observed,
                                 source_id=source_id,
                                 ready_at=datetime.now(UTC),
+                            )
+                            if incomplete_id is None:
+                                # race-loss (UNIQUE 違反)。pending 中は毎 tick 衝突
+                                # しうる定常経路のため非記録。
+                                continue
+                            await audit.append_incomplete_article_created(
+                                source_id=source_id,
+                                source_name=source_name,
+                                canonical_url=str(observed.source_url),
                             )
                         case ConversionRejection() as rej:
                             # 変換不能 entry。業務 session には書かず別 tx で

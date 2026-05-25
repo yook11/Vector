@@ -363,8 +363,8 @@ async def test_conversion_rejection_writes_rejected_event_in_separate_tx(
         .one()
     )
     assert row.stage == "acquisition"
-    assert row.code == "fetched_article_conversion_failed"
-    assert row.outcome_code == "fetched_article_conversion_failed"
+    assert row.code == "article_conversion_rejected"
+    assert row.outcome_code == "article_conversion_rejected"
     assert row.category is None
     assert row.source_id == vb_source.id
     assert row.attempt == 1
@@ -434,3 +434,128 @@ async def test_unexpected_convert_bug_is_valued_and_stream_continues(
     )
     assert len(rows) == 1
     assert rows[0].error_class.endswith(".FetchedArticleConversionError")
+
+
+async def _succeeded_events(db_session: AsyncSession) -> list[PipelineEvent]:
+    return list(
+        (
+            await db_session.execute(
+                select(PipelineEvent).where(PipelineEvent.event_type == "succeeded")
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+@pytest.mark.asyncio
+async def test_immediate_acquisition_writes_article_created_succeeded(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    vb_source: NewsSource,
+) -> None:
+    """即時獲得成功は SUCCEEDED/article_created を同一 tx で 1 行焼く。
+
+    ``article_id`` は採番済み新規行 (execute 戻り値と一致)、``canonical_url`` は
+    canonicalize 済み値、``category`` / ``error_class`` は collection 成功なので NULL。
+    """
+    svc = ArticleAcquisitionService(
+        session_factory,
+        _StubSource([_ready_fetched("https://venturebeat.com/a/")]),
+    )
+
+    article_ids = await svc.execute(vb_source.id)
+
+    rows = await _succeeded_events(db_session)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.stage == "acquisition"
+    assert row.outcome_code == "article_created"
+    assert row.article_id == article_ids[0]  # 採番済み新規行 id
+    assert row.source_id == vb_source.id
+    assert row.category is None
+    assert row.error_class is None
+    # canonicalize で trailing slash 削除済
+    assert row.payload["canonical_url"] == "https://venturebeat.com/a"
+
+
+@pytest.mark.asyncio
+async def test_incomplete_staging_writes_incomplete_article_created_succeeded(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    vb_source: NewsSource,
+) -> None:
+    """補完待ち投入成功は SUCCEEDED/incomplete_article_created を焼く。
+
+    ``article_id`` はこの段ではまだ無い (後段 completion の promote 時に採番)。
+    """
+    svc = ArticleAcquisitionService(
+        session_factory,
+        _StubSource([_pending_fetched("https://techcrunch.com/h/")]),
+    )
+
+    article_ids = await svc.execute(vb_source.id)
+    assert article_ids == []  # 補完待ち経路は cron poller 駆動
+
+    rows = await _succeeded_events(db_session)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.outcome_code == "incomplete_article_created"
+    assert row.article_id is None  # 補完後の promote 時に採番
+    assert row.payload["canonical_url"] == "https://techcrunch.com/h"
+
+
+@pytest.mark.asyncio
+async def test_redelivered_full_content_writes_single_succeeded(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    vb_source: NewsSource,
+) -> None:
+    """同 URL 再掲は ON CONFLICT で skip され、SUCCEEDED は初回 1 件のみ (bounded)。
+
+    成功 witness は新規 URL 初回のみ発火し、定常的な重複再掲は非記録。2 件 yield して
+    1 件しか焼かれないことで「件数ぶん焼く」naive 実装と区別する (非空虚)。
+    """
+    svc = ArticleAcquisitionService(
+        session_factory,
+        _StubSource(
+            [
+                _ready_fetched("https://venturebeat.com/dup/"),
+                _ready_fetched("https://venturebeat.com/dup/"),
+            ]
+        ),
+    )
+
+    await svc.execute(vb_source.id)
+
+    rows = await _succeeded_events(db_session)
+    assert len(rows) == 1  # 2 度目は ON CONFLICT → 非記録
+    assert rows[0].outcome_code == "article_created"
+
+
+@pytest.mark.asyncio
+async def test_known_url_observed_writes_no_succeeded(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    vb_source: NewsSource,
+) -> None:
+    """既知 URL を補完待ち経路で受けると pre-check skip され SUCCEEDED を焼かない。"""
+    canonical = CanonicalArticleUrl("https://techcrunch.com/known")
+    db_session.add(
+        ArticleORM(
+            original_title="Already there",
+            original_content="x" * 100,
+            published_at=datetime(2026, 4, 1, tzinfo=UTC),
+            source_id=vb_source.id,
+            source_url=canonical,
+        )
+    )
+    await db_session.commit()
+
+    svc = ArticleAcquisitionService(
+        session_factory,
+        _StubSource([_pending_fetched("https://techcrunch.com/known")]),
+    )
+    await svc.execute(vb_source.id)
+
+    assert await _succeeded_events(db_session) == []  # pre-check skip は非記録

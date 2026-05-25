@@ -3,9 +3,12 @@
 ADR §データモデル §Payload の宣言と一致。Stage ごとに別 variant、
 ``kind`` フィールドで discriminator を取る。
 
-現状 ``AcquisitionPayload`` は failure path (Task 例外パス) のみ書込されている。
-成功側 audit (件数 / breakdown 集計) は中途半端な構造として撤去済で、後続で
-proper な audit subsystem を再導入する際に集計単位を整理して入れ直す予定。
+``AcquisitionPayload`` は FAILED (source 全体故障) / REJECTED (per-entry 変換棄却)
+に加え SUCCEEDED (per-article: article_created / incomplete_article_created) を
+書き込む。
+かつて検討した「件数 / breakdown 集計」型の成功 audit は per-source 集計で
+witness 型と相容れず撤去し、新規 URL 初回のみ発火する per-article witness として
+入れ直した (定常的な重複 / race の skip は flood 回避のため非記録)。
 他 Stage の variant は schema として用意するが書込は順次活性化される。
 """
 
@@ -34,18 +37,24 @@ class DispatchPayload(BasePipelineEventPayload):
 
 
 class AcquisitionPayload(BasePipelineEventPayload):
-    """Stage 1 — failure path 専用の S 級 snapshot payload。
+    """Stage 1 — SUCCEEDED / REJECTED / FAILED を兼ねる payload。
 
-    成功側 audit (件数 / breakdown 集計) は中途半端な構造として撤去済。
-    現状は Task 例外パスで ``build_failure_payload`` 経由でのみ書き込まれ、
-    ``error_chain`` / ``error_message`` (Base) と本クラス固有の HTTP snapshot
-    系 (``http_status`` / ``final_url`` / ``response_size`` / ``content_type``
-    / ``body_head``) が詰まる。後続で proper な audit subsystem を再導入する際
-    に集計単位を整理して入れ直す予定。
+    - SUCCEEDED (per-article): ``canonical_url`` のみ。article_created /
+      incomplete_article_created の witness。新規 URL 初回だけ発火 (再掲は
+      ON CONFLICT で skip され非記録)。
+    - REJECTED (per-entry 変換棄却): ``conversion_*`` 構造化列。
+    - FAILED (source 全体故障): ``error_chain`` / ``error_message`` (Base) +
+      HTTP snapshot 系 (``http_status`` / ``final_url`` / ``response_size`` /
+      ``content_type`` / ``body_head``)。
     """
 
     kind: Literal["acquisition"] = "acquisition"
     fetcher_class: str | None = None  # A: type(fetcher).__name__
+
+    # A: SUCCEEDED (article_created / incomplete_article_created) の identity key。
+    # 新規 URL 初回のみ発火する per-article witness の自然キー
+    # (CompletionPayload.canonical_url と対称)。
+    canonical_url: str | None = None
 
     # 失敗時 S 級 snapshot (Task 例外パスで詰める)
     http_status: int | None = None

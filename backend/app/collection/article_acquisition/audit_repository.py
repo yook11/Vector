@@ -1,8 +1,16 @@
 """Stage 1 (article_acquisition) 専用の pipeline_events 監査リポジトリ。
 
-ソース全体失敗 (``append_failure``、FAILED) と per-entry 変換棄却
-(``append_conversion_rejected``、REJECTED) の 2 経路。``category`` は常に
-``NULL``。tx 境界は呼出側が握る (本 class は commit しない)。
+4 経路:
+- ``append_article_created`` (SUCCEEDED): 即時獲得成功 (articles 新規行)。
+- ``append_incomplete_article_created`` (SUCCEEDED): 補完待ち投入成功
+  (incomplete_articles 新規行)。
+- ``append_failure`` (FAILED): source 全体故障。
+- ``append_conversion_rejected`` (REJECTED): per-entry 変換棄却。
+
+SUCCEEDED 2 経路は新規 URL 初回のみ発火する per-article witness で、業務 INSERT と
+**同一 tx** に焼く (commit 失敗時は記事ごと巻き戻り、divergence しない)。定常的な
+重複 / race の skip は flood 回避のため記録しない。``category`` は常に ``NULL``。
+tx 境界は呼出側が握る (本 class は commit しない)。
 """
 
 from __future__ import annotations
@@ -18,6 +26,9 @@ from app.shared.security.redaction import redact_secrets
 
 _ERROR_MESSAGE_LIMIT = 2000  # foundation 共通 (Extraction / Assessment と同値)
 
+_ARTICLE_CREATED = "article_created"
+_INCOMPLETE_ARTICLE_CREATED = "incomplete_article_created"
+
 
 class SourceAcquisitionAuditRepository:
     """Stage 1 監査 row の semantic API。"""
@@ -25,6 +36,63 @@ class SourceAcquisitionAuditRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
         self._events = PipelineEventRepository(session)
+
+    async def append_article_created(
+        self,
+        *,
+        source_id: int | None,
+        source_name: str | None,
+        article_id: int,
+        canonical_url: str,
+    ) -> None:
+        """即時獲得成功 (articles 新規行) を SUCCEEDED で 1 行記録する。
+
+        ``article_id`` は採番済みの新規行 id。``attempt`` は acquisition が単発
+        (retry 概念なし) のため 1 固定。commit は呼出側。
+        """
+        payload = AcquisitionPayload(
+            source_name=source_name, canonical_url=canonical_url
+        )
+        await self._events.append(
+            stage=Stage.ACQUISITION,
+            event_type=EventType.SUCCEEDED,
+            outcome_code=_ARTICLE_CREATED,
+            payload=payload,
+            article_id=article_id,
+            source_id=source_id,
+            attempt=1,
+            error_class=None,
+            category=None,
+            code=_ARTICLE_CREATED,
+        )
+
+    async def append_incomplete_article_created(
+        self,
+        *,
+        source_id: int | None,
+        source_name: str | None,
+        canonical_url: str,
+    ) -> None:
+        """補完待ち投入成功 (incomplete_articles 新規行) を SUCCEEDED で記録する。
+
+        ``article_id`` はまだ無い (後段 completion で promote 時に採番)。
+        ``attempt`` は単発のため 1 固定。commit は呼出側。
+        """
+        payload = AcquisitionPayload(
+            source_name=source_name, canonical_url=canonical_url
+        )
+        await self._events.append(
+            stage=Stage.ACQUISITION,
+            event_type=EventType.SUCCEEDED,
+            outcome_code=_INCOMPLETE_ARTICLE_CREATED,
+            payload=payload,
+            article_id=None,
+            source_id=source_id,
+            attempt=1,
+            error_class=None,
+            category=None,
+            code=_INCOMPLETE_ARTICLE_CREATED,
+        )
 
     async def append_failure(
         self,
