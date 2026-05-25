@@ -39,6 +39,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import ClassVar, Final, assert_never
 
@@ -49,6 +50,7 @@ from app.collection.article_completion.retry_policy import (
     TIMEOUT_POLICY,
     UNKNOWN_POLICY,
     RetryPolicy,
+    effective_delay_minutes,
 )
 from app.collection.external_fetch_errors import (
     ExternalFetchError,
@@ -209,12 +211,36 @@ class Retryable:
 
     ``policy`` は再投入の仕方を表す純データ。``retry_after_seconds`` は server
     指示があるときだけ載る (なければ ``policy`` の schedule に従う)。
+    再投入の決定 (打ち切り判定 / 次回 ready_at) は本オブジェクトが純粋に答え、
+    handler は答えを実行 (I/O) するだけに保つ。
     """
 
     reason_code: str
     policy: RetryPolicy
     retry_after_seconds: float | None = None
     detail: str | None = None
+
+    def is_exhausted(self, attempt_count: int) -> bool:
+        """この試行番号で打ち切りか (``>= policy.max_attempts``)。"""
+        return attempt_count >= self.policy.max_attempts
+
+    def next_ready_at(self, *, now: datetime, attempt_count: int) -> datetime:
+        """次回 retry の ``ready_at`` を算出する純関数 (I/O なし)。
+
+        server 指示 (``retry_after_seconds``) があれば優先、なければ policy の
+        schedule。``MAX_DELAY_MINUTES`` cap は ``effective_delay_minutes`` が持つ。
+        """
+        delay_minutes = effective_delay_minutes(
+            self.policy,
+            retry_after_seconds=self.retry_after_seconds,
+            attempt_count=attempt_count,
+        )
+        return now + timedelta(minutes=delay_minutes)
+
+    @property
+    def policy_code(self) -> str:
+        """log 用の policy 識別子 (handler が ``.policy`` を覗かずに済む)。"""
+        return self.policy.code
 
 
 ScrapeDecision = Terminal | Retryable

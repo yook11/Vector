@@ -13,12 +13,15 @@ Stage 2 (完成段) の分類は ``test_article_completion_completion_failure.py
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
 from app.collection.article_completion.retry_policy import (
     BLIP_POLICY,
     OUTAGE_POLICY,
     RETRY_AFTER_POLICY,
+    TIMEOUT_POLICY,
     RetryPolicy,
 )
 from app.collection.article_completion.scrape_failure import (
@@ -269,3 +272,37 @@ class TestFetchFailedDelegation:
         assert result.policy == BLIP_POLICY
         assert result.detail is not None
         assert result.detail.startswith("FetchGatewayError")
+
+
+class TestRetryableDecisionMethods:
+    """``Retryable`` が再投入の決定 (打ち切り / 次回 ready_at) を純粋に答える。
+
+    handler はこの答えを実行 (I/O) するだけで policy 内部を覗かない
+    (Feature Envy 解消)。本クラスは DB を介さない純粋契約のみを検証する。
+    """
+
+    def test_is_exhausted_at_max_attempts_boundary(self) -> None:
+        # 境界を非空虚に踏む: max ちょうどで打ち切り、直前は継続。
+        retryable = Retryable(reason_code="x", policy=TIMEOUT_POLICY)
+        assert retryable.is_exhausted(TIMEOUT_POLICY.max_attempts) is True
+        assert retryable.is_exhausted(TIMEOUT_POLICY.max_attempts - 1) is False
+
+    def test_next_ready_at_uses_policy_schedule_without_server_hint(self) -> None:
+        now = datetime(2026, 5, 25, tzinfo=UTC)
+        retryable = Retryable(reason_code="x", policy=TIMEOUT_POLICY)
+        # 1 回目失敗 → schedule[0] 分後。
+        expected = now + timedelta(minutes=TIMEOUT_POLICY.delay_minutes_schedule[0])
+        assert retryable.next_ready_at(now=now, attempt_count=1) == expected
+
+    def test_next_ready_at_prefers_server_retry_after(self) -> None:
+        now = datetime(2026, 5, 25, tzinfo=UTC)
+        # server 指示 120s=2 分が policy schedule[0]=5 分より優先される (非空虚)。
+        retryable = Retryable(
+            reason_code="x", policy=OUTAGE_POLICY, retry_after_seconds=120.0
+        )
+        assert retryable.next_ready_at(now=now, attempt_count=1) == now + timedelta(
+            minutes=2
+        )
+
+    def test_policy_code_exposes_policy_identifier(self) -> None:
+        assert Retryable(reason_code="x", policy=OUTAGE_POLICY).policy_code == "outage"

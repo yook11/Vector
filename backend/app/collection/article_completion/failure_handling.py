@@ -16,7 +16,7 @@ failure 後処理を 2 つの concern で別入口に分ける:
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -27,7 +27,6 @@ from app.collection.article_completion.audit_repository import (
 from app.collection.article_completion.completion_failure import CompletionRejection
 from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.article_completion.repository import ArticleCompletionRepository
-from app.collection.article_completion.retry_policy import effective_delay_minutes
 from app.collection.article_completion.scrape_failure import (
     Retryable,
     ScrapeFailure,
@@ -129,20 +128,16 @@ class ArticleCompletionFailureHandler:
         理由で共通、give-up は payload ``retry_exhausted`` で表す。
         """
         canonical_url = ready.source_url
-        policy = disposition.policy
-        delay_minutes = effective_delay_minutes(
-            policy,
-            retry_after_seconds=disposition.retry_after_seconds,
-            attempt_count=ready.attempt_count,
-        )
-        exhausted = ready.attempt_count >= policy.max_attempts
+        exhausted = disposition.is_exhausted(ready.attempt_count)
         now = datetime.now(UTC)
         async with self._session_factory() as session:
             repository = ArticleCompletionRepository(session)
             if exhausted:
                 updated = await repository.close_claimed(ready, now=now)
             else:
-                next_at = now + timedelta(minutes=delay_minutes)
+                next_at = disposition.next_ready_at(
+                    now=now, attempt_count=ready.attempt_count
+                )
                 updated = await repository.schedule_retry(
                     ready, ready_at=next_at, now=now
                 )
@@ -172,7 +167,7 @@ class ArticleCompletionFailureHandler:
             source_id=ready.source_id,
             canonical_url=str(canonical_url),
             reason_code=disposition.reason_code,
-            policy_code=policy.code,
+            policy_code=disposition.policy_code,
             exhausted=exhausted,
             attempt_count=ready.attempt_count,
             detail=disposition.detail,
