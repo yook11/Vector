@@ -2,7 +2,7 @@
 
 audit row の shape SSoT が repository に集約されたことを検証する:
 
-- ``append_extracted`` / ``append_noise`` で
+- ``append_signal`` / ``append_noise`` で
   ``category=success`` + ``code`` (caller 渡し) / ``outcome_code=code`` が記録
 - ``append_drop_article`` で
   ``category=non_retryable_drop_article`` + ``code=exc.code`` (Stage 3 marker
@@ -121,31 +121,31 @@ async def _fetch_one(db_session: AsyncSession, article_id: int) -> PipelineEvent
 
 
 # ---------------------------------------------------------------------------
-# 成功経路 — append_extracted / append_noise
+# 成功経路 — append_signal / append_noise
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_append_extracted_records_success_with_code(
+async def test_append_signal_records_success_with_code(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """signal 経路で category=success / code=extracted が記録される。"""
+    """signal 経路で category=success / code=curated_signal が記録される。"""
     article = await _make_article(db_session, sample_source)
     async with session_factory() as session:
-        await CurationAuditRepository(session).append_extracted(
+        await CurationAuditRepository(session).append_signal(
             ready=_ready(article),
             envelope=_signal_envelope(),
-            code="extracted",
+            code="curated_signal",
         )
         await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
     assert ev.event_type == "succeeded"
-    assert ev.outcome_code == "extracted"
+    assert ev.outcome_code == "curated_signal"
     assert ev.category == "success"
-    assert ev.code == "extracted"
+    assert ev.code == "curated_signal"
     assert ev.payload["ai_raw_response"]
     assert ev.payload["source_name"] == str(sample_source.name)
     # PR1-a: ai_model / prompt_version / raw_relevance は envelope 経由で焼かれる
@@ -155,25 +155,25 @@ async def test_append_extracted_records_success_with_code(
 
 
 @pytest.mark.asyncio
-async def test_append_noise_records_extracted_as_noise(
+async def test_append_noise_records_curated_noise(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """noise 経路で code=extracted_as_noise が記録される。"""
+    """noise 経路で code=curated_noise が記録される。"""
     article = await _make_article(db_session, sample_source)
     async with session_factory() as session:
         await CurationAuditRepository(session).append_noise(
             ready=_ready(article),
             envelope=_noise_envelope(),
-            code="extracted_as_noise",
+            code="curated_noise",
         )
         await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
-    assert ev.outcome_code == "extracted_as_noise"
+    assert ev.outcome_code == "curated_noise"
     assert ev.category == "success"
-    assert ev.code == "extracted_as_noise"
+    assert ev.code == "curated_noise"
     # PR1-a: raw_relevance は envelope.raw_relevance ("noise") から焼かれる
     assert ev.payload["raw_relevance"] == "noise"
 
@@ -324,10 +324,10 @@ async def test_repository_does_not_commit(
     article = await _make_article(db_session, sample_source)
 
     async with session_factory() as session:
-        await CurationAuditRepository(session).append_extracted(
+        await CurationAuditRepository(session).append_signal(
             ready=_ready(article),
             envelope=_signal_envelope(),
-            code="extracted",
+            code="curated_signal",
         )
         # 意図的に commit しない (rollback で消える)
 

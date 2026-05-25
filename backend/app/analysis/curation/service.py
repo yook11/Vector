@@ -30,9 +30,9 @@ from app.analysis.curation.repository import CurationRepository
 
 logger = structlog.get_logger(__name__)
 
-# wire format kept (outcome_code in pipeline_events) - do not rename.
-_EXTRACTED_CODE = "extracted"
-_EXTRACTED_AS_NOISE_CODE = "extracted_as_noise"
+# outcome_code (pipeline_events) — stage 'curation' と語彙整合 (assessed_* と対称)。
+_CURATED_SIGNAL_CODE = "curated_signal"
+_CURATED_NOISE_CODE = "curated_noise"
 
 
 class CurationService:
@@ -89,10 +89,10 @@ class CurationService:
                             article_id=ready.article_id,
                         )
                         return None
-                    await CurationAuditRepository(session).append_extracted(
+                    await CurationAuditRepository(session).append_signal(
                         ready=ready,
                         envelope=envelope,
-                        code=_EXTRACTED_CODE,
+                        code=_CURATED_SIGNAL_CODE,
                     )
                     await session.commit()
                     logger.info(
@@ -116,7 +116,7 @@ class CurationService:
                     await CurationAuditRepository(session).append_noise(
                         ready=ready,
                         envelope=envelope,
-                        code=_EXTRACTED_AS_NOISE_CODE,
+                        code=_CURATED_NOISE_CODE,
                     )
                     await session.commit()
                     logger.info(
