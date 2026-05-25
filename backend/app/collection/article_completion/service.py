@@ -26,6 +26,9 @@ from typing import assert_never
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.collection.article_completion.audit_repository import (
+    ArticleCompletionAuditRepository,
+)
 from app.collection.article_completion.completer import ArticleHtmlCompleter
 from app.collection.article_completion.completion_failure import (
     CompletionRejection,
@@ -39,9 +42,6 @@ from app.collection.article_completion.repository import (
     CompletionSucceeded,
     CompletionSuperseded,
     CompletionUrlConflict,
-)
-from app.collection.article_completion.scrape_failure import (
-    classify_scrape_failure,
 )
 from app.collection.article_completion.scraper import (
     ArticleScraper,
@@ -90,9 +90,8 @@ class ArticleCompletionService:
             case ScrapedContent() as content:
                 pass
             case failure:  # ScrapeFailure (transport + content の 5 variant)
-                await self._failure_handler.handle_scrape_failure(
-                    ready, classify_scrape_failure(failure)
-                )
+                # 分類は handler 内。元の variant を audit へ運ぶため raw を渡す。
+                await self._failure_handler.handle_scrape_failure(ready, failure)
                 return None
 
         # Stage 2: 完成（抽出物 → AnalyzableArticle or 構築拒否）。
@@ -106,12 +105,20 @@ class ArticleCompletionService:
             case unreachable:
                 assert_never(unreachable)
 
-        # Stage 3: 永続化。
-        async with self._session_factory() as session:
-            outcome = await ArticleCompletionRepository(session).persist_completed(
-                ready, article
-            )
-            await session.commit()
+        # Stage 3: 永続化 + audit (状態遷移と同一 tx)。真の DB 例外は経路 9 として
+        # 別 session で焼く (同一 tx だと audit ごと rollback して痕跡が消えるため)。
+        try:
+            async with self._session_factory() as session:
+                outcome = await ArticleCompletionRepository(session).persist_completed(
+                    ready, article
+                )
+                await ArticleCompletionAuditRepository(session).append_persist_outcome(
+                    ready=ready, outcome=outcome, advanced=article
+                )
+                await session.commit()
+        except Exception as exc:
+            await self._audit_persist_crashed(ready, exc)
+            raise
 
         match outcome:
             case CompletionSuperseded():
@@ -142,3 +149,32 @@ class ArticleCompletionService:
                 return article_id
             case unreachable:
                 assert_never(unreachable)
+
+    async def _audit_persist_crashed(
+        self, ready: ReadyForArticleCompletion, exc: BaseException
+    ) -> None:
+        """persist 段の DB 例外を別 session で best-effort 監査する (経路 9)。
+
+        同一 tx だと audit ごと rollback して痕跡が消えるため独立 session で焼く。
+        audit 自体の失敗は log fallback で握り、元の例外伝播 (lease 失効 → sweep →
+        retry の self-heal) を妨げない。
+        """
+        try:
+            async with self._session_factory() as audit_session:
+                await ArticleCompletionAuditRepository(
+                    audit_session
+                ).append_persist_crashed(ready=ready, exc=exc)
+                await audit_session.commit()
+        except Exception as audit_exc:
+            logger.exception(
+                "article_completion_persist_audit_dropped",
+                pending_id=ready.pending_id,
+                source_id=ready.source_id,
+                canonical_url=str(ready.source_url),
+                business_error_class=(
+                    f"{type(exc).__module__}.{type(exc).__qualname__}"
+                ),
+                audit_error_class=(
+                    f"{type(audit_exc).__module__}.{type(audit_exc).__qualname__}"
+                ),
+            )

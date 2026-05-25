@@ -1,20 +1,18 @@
 """``ArticleCompletionFailureHandler`` の integration test。
 
-検証する性質 (failure 後処理 = ``incomplete_articles`` 状態遷移):
+検証する性質 (failure 後処理 = ``incomplete_articles`` 状態遷移 + same-tx audit):
 
-- scrape ``Terminal`` → pending を ``closed`` (leased_until=None)
-- scrape ``Retryable`` 非 exhausted → ``open`` + 未来 ready_at (policy schedule)
-- scrape ``Retryable`` exhausted (attempt_count >= max_attempts) → ``closed``
-- scrape ``Retryable`` + server 指示 retry_after_seconds → その秒数で ready_at
-- completion ``CompletionRejection`` → pending を ``closed`` (retry なし)
+- scrape ``Terminal`` (内容棄却) → pending ``closed`` + ``rejected`` audit
+- scrape ``Retryable`` 非 exhausted → ``open`` + 未来 ready_at + ``failed`` audit
+  (payload ``retry_exhausted`` 無し)
+- scrape ``Retryable`` exhausted → ``closed`` + ``failed`` audit (``retry_exhausted``)
+- scrape ``Retryable`` + server retry_after_seconds → その秒数で ready_at
+- completion ``CompletionRejection`` → ``closed`` + ``rejected`` audit
+- 失効 attempt (updated=False) → 状態変化なし + ``skipped`` / ``stale_attempt`` audit
 
-handler は 2 入口: ``handle_scrape_failure`` (分類済 ``ScrapeDecision``)
-と ``handle_completion_rejected`` (``CompletionRejection``)。いずれも自前 session
-で状態遷移 + log を完結させる (service の主線とは別ファイル / 別責務)。handler は
-DB を再読込せず ``ready.attempt_count`` を exhausted 判定に使うため、exhausted
-ケースは attempt_count を先に UPDATE してから Ready を構築する。handler は別
-session で commit するので、検証前に ``db_session`` を rollback して fresh
-transaction で読む (cross-session read)。
+handler は元の ``ScrapeFailure`` を受け内部で分類する (audit に variant を運ぶ J2)。
+handler は別 session で commit するので、検証前に ``db_session`` を rollback して
+fresh transaction で読む (cross-session read)。state 遷移と audit は同一 tx。
 """
 
 from __future__ import annotations
@@ -33,11 +31,9 @@ from app.collection.article_completion.failure_handling import (
 )
 from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.article_completion.repository import ArticleCompletionRepository
-from app.collection.article_completion.retry_policy import (
-    BLIP_POLICY,
-    RETRY_AFTER_POLICY,
-)
-from app.collection.article_completion.scrape_failure import Retryable, Terminal
+from app.collection.article_completion.retry_policy import BLIP_POLICY
+from app.collection.article_completion.scrape_failure import FetchFailed, NotHtml
+from app.collection.domain.analyzable_article import QualityTooLow
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import (
     ObservedArticle,
@@ -45,8 +41,13 @@ from app.collection.domain.observed_article import (
     ObservedOrigin,
 )
 from app.collection.domain.value_objects import PublishedAt
+from app.collection.external_fetch_errors import (
+    FetchGatewayError,
+    FetchOriginServerError,
+)
 from app.models.incomplete_article import IncompleteArticle
 from app.models.news_source import NewsSource, SourceType
+from app.models.pipeline_event import PipelineEvent
 from app.shared.value_objects.source_name import SourceName
 
 
@@ -120,21 +121,60 @@ async def _reload_pending(
     ).scalar_one()
 
 
+async def _fetch_event(db_session: AsyncSession, source_id: int) -> PipelineEvent:
+    """handler が same-tx で焼いた completion audit row を 1 件読む。"""
+    await db_session.rollback()
+    rows = (
+        (
+            await db_session.execute(
+                select(PipelineEvent).where(
+                    PipelineEvent.stage == "completion",
+                    PipelineEvent.source_id == source_id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 1
+    return rows[0]
+
+
 @pytest.mark.asyncio
 async def test_scrape_terminal_closes_pending(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     tc_source: NewsSource,
 ) -> None:
-    """scrape ``Terminal`` → pending status='closed' / leased_until=None。"""
+    """scrape 内容棄却 (NotHtml) → pending status='closed' / leased_until=None。"""
     ready = await _make_ready(db_session, tc_source, "https://techcrunch.com/term")
     handler = ArticleCompletionFailureHandler(session_factory)
 
-    await handler.handle_scrape_failure(ready, Terminal(reason_code="test_terminal"))
+    await handler.handle_scrape_failure(ready, NotHtml(content_type="application/pdf"))
 
     pending = await _reload_pending(db_session, ready.pending_id)
     assert pending.status == "closed"
     assert pending.leased_until is None
+
+
+@pytest.mark.asyncio
+async def test_scrape_terminal_content_rejection_audits_rejected(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    tc_source: NewsSource,
+) -> None:
+    """内容棄却は 2 軸原則で event_type='rejected' (error_class None)。"""
+    ready = await _make_ready(db_session, tc_source, "https://techcrunch.com/pdf")
+    handler = ArticleCompletionFailureHandler(session_factory)
+
+    await handler.handle_scrape_failure(ready, NotHtml(content_type="application/pdf"))
+
+    ev = await _fetch_event(db_session, tc_source.id)
+    assert ev.event_type == "rejected"
+    # outcome_code = scrape_* prefix (spec のサブ段階規約)
+    assert ev.outcome_code == "scrape_not_html"
+    assert ev.error_class is None
+    assert ev.payload["content_type"] == "application/pdf"
 
 
 @pytest.mark.asyncio
@@ -143,7 +183,7 @@ async def test_scrape_retryable_non_exhausted_reopens_with_future_ready_at(
     db_session: AsyncSession,
     tc_source: NewsSource,
 ) -> None:
-    """scrape ``Retryable`` (BLIP, attempt=1 < max) → open + 未来 ready_at。
+    """scrape ``Retryable`` (502→BLIP, attempt=1 < max) → open + 未来 ready_at。
 
     BLIP_POLICY.schedule[0] = 0.5 分 = 30 秒。claim 直後 attempt_count=1 <
     max_attempts(8) なので exhausted ではなく retry scheduling。
@@ -152,7 +192,7 @@ async def test_scrape_retryable_non_exhausted_reopens_with_future_ready_at(
     handler = ArticleCompletionFailureHandler(session_factory)
 
     await handler.handle_scrape_failure(
-        ready, Retryable(reason_code="blip", policy=BLIP_POLICY)
+        ready, FetchFailed(error=FetchGatewayError(status_code=502))
     )
 
     pending = await _reload_pending(db_session, ready.pending_id)
@@ -164,6 +204,25 @@ async def test_scrape_retryable_non_exhausted_reopens_with_future_ready_at(
 
 
 @pytest.mark.asyncio
+async def test_scrape_retryable_non_exhausted_audits_failed_without_exhausted_flag(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    tc_source: NewsSource,
+) -> None:
+    """retry 中 (経路 3) は transport CODE で failed、exhausted flag は書かない。"""
+    ready = await _make_ready(db_session, tc_source, "https://techcrunch.com/blip2")
+    err = FetchGatewayError(status_code=502)
+    handler = ArticleCompletionFailureHandler(session_factory)
+
+    await handler.handle_scrape_failure(ready, FetchFailed(error=err))
+
+    ev = await _fetch_event(db_session, tc_source.id)
+    assert ev.event_type == "failed"
+    assert ev.outcome_code == err.CODE  # transport 理由 (input 由来)
+    assert ev.payload["retry_exhausted"] is None  # exclude_none=False で null
+
+
+@pytest.mark.asyncio
 async def test_scrape_retryable_exhausted_closes_pending(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
@@ -171,9 +230,8 @@ async def test_scrape_retryable_exhausted_closes_pending(
 ) -> None:
     """scrape ``Retryable`` で attempt_count >= max_attempts → ``closed``。
 
-    handler は DB 再読込せず ``ready.attempt_count`` を見るため、
-    attempt_count を max まで UPDATE → commit → その後 Ready を構築して
-    exhausted 判定に反映させる (Ready 構築後の UPDATE は反映されない)。
+    handler は DB 再読込せず ``ready.attempt_count`` を見るため、attempt_count を
+    max まで UPDATE → commit → その後 Ready を構築して exhausted 判定に反映させる。
     """
     ready = await _make_ready(db_session, tc_source, "https://techcrunch.com/exhaust")
     await db_session.execute(
@@ -190,12 +248,41 @@ async def test_scrape_retryable_exhausted_closes_pending(
     handler = ArticleCompletionFailureHandler(session_factory)
 
     await handler.handle_scrape_failure(
-        exhausted_ready, Retryable(reason_code="blip", policy=BLIP_POLICY)
+        exhausted_ready, FetchFailed(error=FetchGatewayError(status_code=502))
     )
 
     pending = await _reload_pending(db_session, ready.pending_id)
     assert pending.status == "closed"
     assert pending.leased_until is None
+
+
+@pytest.mark.asyncio
+async def test_scrape_retryable_exhausted_audits_retry_exhausted_flag(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    tc_source: NewsSource,
+) -> None:
+    """give-up (経路 4) は同じ transport CODE + payload ``retry_exhausted=true``。"""
+    ready = await _make_ready(db_session, tc_source, "https://techcrunch.com/giveup")
+    await db_session.execute(
+        update(IncompleteArticle)
+        .where(IncompleteArticle.id == ready.pending_id)
+        .values(attempt_count=BLIP_POLICY.max_attempts)
+    )
+    await db_session.commit()
+    exhausted_ready = await ArticleCompletionRepository(
+        db_session
+    ).try_load_for_completion(ready.pending_id)
+    assert exhausted_ready is not None
+    handler = ArticleCompletionFailureHandler(session_factory)
+
+    await handler.handle_scrape_failure(
+        exhausted_ready, FetchFailed(error=FetchGatewayError(status_code=502))
+    )
+
+    ev = await _fetch_event(db_session, tc_source.id)
+    assert ev.event_type == "failed"
+    assert ev.payload["retry_exhausted"] is True
 
 
 @pytest.mark.asyncio
@@ -206,17 +293,19 @@ async def test_scrape_retryable_uses_server_retry_after_seconds(
 ) -> None:
     """scrape ``Retryable`` + retry_after_seconds=120 → ready_at が約 120 秒後。
 
-    server 指示 (RETRY_AFTER policy + override 秒) は policy schedule より優先。
+    server 指示 (503 service_unavailable + retry_after) は policy schedule より優先。
     """
     ready = await _make_ready(db_session, tc_source, "https://techcrunch.com/ra")
     handler = ArticleCompletionFailureHandler(session_factory)
 
     await handler.handle_scrape_failure(
         ready,
-        Retryable(
-            reason_code="server_retry_after",
-            policy=RETRY_AFTER_POLICY,
-            retry_after_seconds=120.0,
+        FetchFailed(
+            error=FetchOriginServerError(
+                status_code=503,
+                reason="service_unavailable",
+                retry_after_seconds=120.0,
+            )
         ),
     )
 
@@ -237,15 +326,72 @@ async def test_completion_rejected_closes_pending(
 
     Stage 2 拒絶は Accept 軸で retry を持たず、scrape Terminal と同様に
     pending を閉じる (別入口 / 別 log event だが状態遷移は同じ closed)。
-    leased_until も None に戻る。
     """
     ready = await _make_ready(db_session, tc_source, "https://techcrunch.com/reject")
     handler = ArticleCompletionFailureHandler(session_factory)
 
     await handler.handle_completion_rejected(
-        ready, CompletionRejection(reason_code="completion_published_at_missing")
+        ready,
+        CompletionRejection.from_quality_too_low(
+            QualityTooLow(error_class="ValidationError", error_message="body too short")
+        ),
     )
 
     pending = await _reload_pending(db_session, ready.pending_id)
     assert pending.status == "closed"
     assert pending.leased_until is None
+
+
+@pytest.mark.asyncio
+async def test_completion_rejected_audits_rejected_with_error_class(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    tc_source: NewsSource,
+) -> None:
+    """完成段棄却は rejected + error_class (raise された例外型) 記録 (経路 5)。"""
+    ready = await _make_ready(db_session, tc_source, "https://techcrunch.com/reject2")
+    handler = ArticleCompletionFailureHandler(session_factory)
+
+    await handler.handle_completion_rejected(
+        ready,
+        CompletionRejection.from_quality_too_low(
+            QualityTooLow(error_class="ValidationError", error_message="body too short")
+        ),
+    )
+
+    ev = await _fetch_event(db_session, tc_source.id)
+    assert ev.event_type == "rejected"
+    assert ev.outcome_code == "completion_invariant_rejected"
+    assert ev.error_class == "ValidationError"
+    assert ev.payload["error_message"] == "body too short"
+
+
+@pytest.mark.asyncio
+async def test_stale_attempt_records_skipped_without_state_change(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    tc_source: NewsSource,
+) -> None:
+    """attempt 失効 (他 worker が attempt_count を進めた) → stale_attempt audit。
+
+    ready は attempt_count=1 のまま、DB は別 worker が 2 に進めた状況を作る。
+    close_claimed が 0 行 (updated=False) になり、本来の outcome ではなく
+    ``skipped`` / ``stale_attempt`` が焼かれる。pending state は触られない。
+    """
+    ready = await _make_ready(db_session, tc_source, "https://techcrunch.com/stale")
+    # 別 worker が再 claim して attempt を進めた状況 (ready.attempt_count=1 は失効)。
+    await db_session.execute(
+        update(IncompleteArticle)
+        .where(IncompleteArticle.id == ready.pending_id)
+        .values(attempt_count=ready.attempt_count + 1)
+    )
+    await db_session.commit()
+    handler = ArticleCompletionFailureHandler(session_factory)
+
+    await handler.handle_scrape_failure(ready, NotHtml(content_type="application/pdf"))
+
+    ev = await _fetch_event(db_session, tc_source.id)
+    assert ev.event_type == "skipped"
+    assert ev.outcome_code == "stale_attempt"
+    pending = await _reload_pending(db_session, ready.pending_id)
+    assert pending.status == "running"  # void な attempt は状態を変えない

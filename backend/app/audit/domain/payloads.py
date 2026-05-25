@@ -87,6 +87,10 @@ class CompletionPayload(BasePipelineEventPayload):
     response_size: int | None = None
     content_type: str | None = None
     body_head: str | None = None  # 先頭 500 字
+    # S: retry 軸 give-up。route 4 (exhausted) のみ True。可変 state (ready_at) から
+    # 事後復元できない事実のため audit が持つ。retry 中 (route 3) は None のまま
+    # (= JSON null)。``payload @> '{"retry_exhausted": true}'`` で give-up を集計する
+    retry_exhausted: bool | None = None
 
 
 class CurationPayload(BasePipelineEventPayload):

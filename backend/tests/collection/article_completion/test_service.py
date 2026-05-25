@@ -1,8 +1,8 @@
 """``ArticleCompletionService`` の不変条件テスト (PR-E 仕様: ``pending.url`` SSoT)。
 
 検証する不変条件 (DB 状態 = ``articles`` / ``incomplete_articles`` の遷移で
-振る舞いを assert する。``pipeline_events`` 監査基盤は撤去済で、戻り値 + DB 状態 +
-構造化ログが観測点):
+振る舞いを assert する。persist 段では ``pipeline_events`` 監査も観測点 — 成功 /
+race-loss は状態遷移と同一 tx、真の DB 例外 (経路 9) は別 session で焼かれ再 raise):
 
 - ``execute()`` が成功時 ``int`` (article_id) を返し、失敗・skip・race-loss
   時はすべて ``None`` を返す
@@ -56,7 +56,22 @@ from app.collection.sources.base_article_source import BaseArticleSource
 from app.models.article import Article as ArticleORM
 from app.models.incomplete_article import IncompleteArticle
 from app.models.news_source import NewsSource, SourceType
+from app.models.pipeline_event import PipelineEvent
 from app.shared.value_objects.source_name import SourceName
+
+
+async def _completion_events(db_session: AsyncSession) -> list[PipelineEvent]:
+    """service が別 session で commit した completion audit を fresh tx で読む。"""
+    await db_session.rollback()
+    return list(
+        (
+            await db_session.execute(
+                select(PipelineEvent).where(PipelineEvent.stage == "completion")
+            )
+        )
+        .scalars()
+        .all()
+    )
 
 
 @dataclass(frozen=True)
@@ -666,3 +681,169 @@ async def test_superseded_attempt_returns_none_and_keeps_pending(
         )
     ).scalar_one_or_none()
     assert remaining is not None
+
+
+# ---------------------------------------------------------------------------
+# persist 段 audit 配線 (route 1 / 6 / 7 = same-tx、route 9 = 別 session + re-raise)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_success_writes_article_completed_audit(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    tc_source: NewsSource,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """成功 → ``succeeded`` / ``article_completed`` audit を INSERT と同 tx。"""
+    _, _, ready = await _make_pending(
+        db_session, tc_source, "https://techcrunch.com/audit-ok"
+    )
+    _patch_fetch(
+        monkeypatch,
+        AsyncMock(
+            return_value=ScrapedContent(
+                title="HTML Title",
+                body="x" * 200,
+                published_at=PublishedAt(value=datetime(2026, 5, 1, tzinfo=UTC)),
+            )
+        ),
+    )
+
+    article_id = await ArticleCompletionService(session_factory).execute(ready)
+
+    events = await _completion_events(db_session)
+    assert len(events) == 1
+    assert events[0].event_type == "succeeded"
+    assert events[0].outcome_code == "article_completed"
+    assert events[0].article_id == article_id
+
+
+@pytest.mark.asyncio
+async def test_url_conflict_writes_persist_url_conflict_audit(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    tc_source: NewsSource,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """別 worker が同 URL を先に記事化 → skipped / persist_url_conflict audit。"""
+    canonical_url, _, ready = await _make_pending(
+        db_session, tc_source, "https://techcrunch.com/audit-conflict"
+    )
+    db_session.add(
+        ArticleORM(
+            original_title="Existing",
+            original_content="y" * 100,
+            published_at=datetime(2026, 4, 30, tzinfo=UTC),
+            source_id=tc_source.id,
+            source_url=canonical_url,
+        )
+    )
+    await db_session.commit()
+    _patch_fetch(
+        monkeypatch,
+        AsyncMock(
+            return_value=ScrapedContent(
+                title="HTML Title",
+                body="z" * 200,
+                published_at=PublishedAt(value=datetime(2026, 5, 1, tzinfo=UTC)),
+            )
+        ),
+    )
+
+    await ArticleCompletionService(session_factory).execute(ready)
+
+    events = await _completion_events(db_session)
+    assert len(events) == 1
+    assert events[0].event_type == "skipped"
+    assert events[0].outcome_code == "persist_url_conflict"
+    assert events[0].article_id is None
+
+
+@pytest.mark.asyncio
+async def test_superseded_writes_persist_superseded_audit(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    tc_source: NewsSource,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """attempt 失効で DELETE 0 行 → ``skipped`` / ``persist_superseded`` audit。"""
+    _, pending_id, ready = await _make_pending(
+        db_session, tc_source, "https://techcrunch.com/audit-superseded"
+    )
+    await db_session.execute(
+        update(IncompleteArticle)
+        .where(IncompleteArticle.id == pending_id)
+        .values(attempt_count=ready.attempt_count + 1)
+    )
+    await db_session.commit()
+    _patch_fetch(
+        monkeypatch,
+        AsyncMock(
+            return_value=ScrapedContent(
+                title="HTML Title",
+                body="x" * 200,
+                published_at=PublishedAt(value=datetime(2026, 5, 1, tzinfo=UTC)),
+            )
+        ),
+    )
+
+    await ArticleCompletionService(session_factory).execute(ready)
+
+    events = await _completion_events(db_session)
+    assert len(events) == 1
+    assert events[0].event_type == "skipped"
+    assert events[0].outcome_code == "persist_superseded"
+
+
+@pytest.mark.asyncio
+async def test_persist_db_exception_writes_persist_crashed_and_reraises(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    tc_source: NewsSource,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """persist の真の DB 例外 (経路 9) → 別 session で ``persist_crashed`` + 再 raise。
+
+    同一 tx audit (経路 1/6/7) は rollback に巻き込まれるため、本経路だけは別 session
+    で焼かれ痕跡が残る。pending は running のまま (lease 失効 → sweep で self-heal)。
+    """
+    _, pending_id, ready = await _make_pending(
+        db_session, tc_source, "https://techcrunch.com/audit-crash"
+    )
+    _patch_fetch(
+        monkeypatch,
+        AsyncMock(
+            return_value=ScrapedContent(
+                title="HTML Title",
+                body="x" * 200,
+                published_at=PublishedAt(value=datetime(2026, 5, 1, tzinfo=UTC)),
+            )
+        ),
+    )
+
+    async def _boom(self: object, ready: object, advanced: object) -> None:  # noqa: ARG001
+        raise RuntimeError("db connection lost mid-INSERT")
+
+    monkeypatch.setattr(
+        "app.collection.article_completion.service."
+        "ArticleCompletionRepository.persist_completed",
+        _boom,
+    )
+
+    svc = ArticleCompletionService(session_factory)
+    with pytest.raises(RuntimeError, match="db connection lost"):
+        await svc.execute(ready)
+
+    events = await _completion_events(db_session)
+    assert len(events) == 1
+    assert events[0].event_type == "failed"
+    assert events[0].outcome_code == "persist_crashed"
+    assert events[0].error_class.endswith(".RuntimeError")
+    # 状態は触られず running のまま (self-heal は lease 失効に委ねる)
+    pending = (
+        await db_session.execute(
+            select(IncompleteArticle).where(IncompleteArticle.id == pending_id)
+        )
+    ).scalar_one()
+    assert pending.status == "running"

@@ -220,7 +220,7 @@ class TestFetchOriginServerErrorExplicitBranch:
         ),
         (
             ParseCrashed(error_class="ValueError", error_message="bad parse"),
-            "scrape_crashed",
+            "scrape_parse_crashed",
             "ValueError: bad parse",
         ),
         (

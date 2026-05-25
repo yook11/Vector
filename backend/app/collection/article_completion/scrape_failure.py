@@ -117,7 +117,7 @@ class ParseCrashed:
 
     error_class: str
     error_message: str
-    reason: ClassVar[str] = "crashed"
+    reason: ClassVar[str] = "parse_crashed"
 
     def __post_init__(self) -> None:
         if len(self.error_message) > _ERROR_MESSAGE_MAX:

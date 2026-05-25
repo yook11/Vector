@@ -9,9 +9,10 @@
 
 設計:
 - ``CompletionRejection`` は Accept 軸の単一 disposition。``reason_code`` は audit
-  集計 key、``detail`` は例外証拠 (class+message) を畳んだ文字列。
+  集計 key、例外証拠は ``error_class`` / ``error_message`` を分離保持 (audit が構造化
+  列へそのまま写す)。``detail`` property は log 用に両者を畳み直す。
 - ``from_quality_too_low`` が domain 失敗を audit 語彙に翻訳する唯一の入口。
-- ``__post_init__`` は ``detail`` の upper-bound truncate のみ。
+- ``__post_init__`` は ``error_message`` の upper-bound truncate のみ。
 """
 
 from __future__ import annotations
@@ -33,24 +34,40 @@ class CompletionRejection:
     pending は常に ``closed`` に閉じる (retry は発生しない)。
 
     ``reason_code`` は ``completion_*`` prefix の audit 集計 key として安定。
-    ``detail`` は variant 固有の証拠 (例外 class+message 等) を畳んだ文字列。
+    例外証拠は ``error_class`` (raise された例外型) と ``error_message`` (Pydantic
+    message) を**分離保持**する (audit が構造化列へそのまま写すため。畳んだ文字列は
+    ``detail`` property で log 用に組み直す)。
     """
 
     reason_code: str
-    detail: str | None = None
+    error_class: str | None = None
+    error_message: str | None = None
 
     def __post_init__(self) -> None:
-        if self.detail is not None and len(self.detail) > _ERROR_MESSAGE_MAX:
-            object.__setattr__(self, "detail", self.detail[:_ERROR_MESSAGE_MAX])
+        if (
+            self.error_message is not None
+            and len(self.error_message) > _ERROR_MESSAGE_MAX
+        ):
+            object.__setattr__(
+                self, "error_message", self.error_message[:_ERROR_MESSAGE_MAX]
+            )
+
+    @property
+    def detail(self) -> str | None:
+        """log 用に ``error_class`` + ``error_message`` を畳んだ文字列。"""
+        if self.error_class and self.error_message:
+            return f"{self.error_class}: {self.error_message}"
+        return self.error_message
 
     @classmethod
     def from_quality_too_low(cls, quality: QualityTooLow) -> Self:
         """domain の構築拒否 (``QualityTooLow``) を audit 語彙に翻訳する。
 
         ``reason_code`` は ``completion_*`` prefix の audit 集計 key として安定。
-        例外証拠 (class+message) を ``detail`` に畳む。
+        例外証拠 (class / message) は分離したまま運ぶ。
         """
         return cls(
             reason_code="completion_invariant_rejected",
-            detail=f"{quality.error_class}: {quality.error_message}",
+            error_class=quality.error_class,
+            error_message=quality.error_message,
         )
