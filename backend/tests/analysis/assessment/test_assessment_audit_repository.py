@@ -13,11 +13,11 @@ audit row の shape SSoT が repository に集約されたことを検証する:
   (PR #447 対称化追従、in-scope 固有 field の ``category_slug`` のみ None)
 - ``append_failure`` で **exc 型による 3 dispatch + Layer 2-B + catch-all** が動作:
   - ``AssessmentRecoverableError`` → ``category=retryable``
-  - ``AssessmentTerminalSkipError`` → ``category=non_retryable_keep_extraction``
+  - ``AssessmentTerminalSkipError`` → ``category=non_retryable_keep_curation``
   - ``AssessmentResponseInvalidError`` (Layer 2-B) → ``retryable`` /
     ``code="assessment_response_invalid"``
   - ``AssessmentCategoryMissingError`` (Layer 2-B) →
-    ``non_retryable_keep_extraction`` / ``code="assessment_category_missing"``
+    ``non_retryable_keep_curation`` / ``code="assessment_category_missing"``
   - 想定外 ``RuntimeError`` → ``category=unknown`` / ``code="unexpected_error"``
 - ``error_chain`` が ``__cause__`` 経由で 2 段以上を記録
 - ``error_message`` が ``redact_secrets()`` 経由
@@ -465,14 +465,14 @@ async def test_append_failure_recoverable_maps_to_retryable(
 
 
 @pytest.mark.asyncio
-async def test_append_failure_terminal_skip_maps_to_keep_extraction(
+async def test_append_failure_terminal_skip_maps_to_keep_curation(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """AssessmentTerminalSkipError → category=non_retryable_keep_extraction。
+    """AssessmentTerminalSkipError → category=non_retryable_keep_curation。
 
-    Stage 4 の意図的命名差: extraction は捨てない、article 保持の最も
+    Stage 4 の意図的命名差: curation は捨てない、article 保持の最も
     保守的な category。
     """
     article = await _make_article(db_session, sample_source)
@@ -488,7 +488,7 @@ async def test_append_failure_terminal_skip_maps_to_keep_extraction(
         await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
-    assert ev.category == "non_retryable_keep_extraction"
+    assert ev.category == "non_retryable_keep_curation"
     assert ev.code == "ai_error_input_rejected"
 
 
@@ -526,7 +526,7 @@ async def test_append_failure_layer_2b_category_missing(
     sample_source: NewsSource,
 ) -> None:
     """Layer 2-B AssessmentCategoryMissingError は TerminalSkip 継承で
-    category=non_retryable_keep_extraction にマップされる。
+    category=non_retryable_keep_curation にマップされる。
     """
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
@@ -541,7 +541,7 @@ async def test_append_failure_layer_2b_category_missing(
         await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
-    assert ev.category == "non_retryable_keep_extraction"
+    assert ev.category == "non_retryable_keep_curation"
     assert ev.code == "assessment_category_missing"
 
 

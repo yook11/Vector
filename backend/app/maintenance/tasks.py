@@ -1,4 +1,4 @@
-"""back-fill cron タスク 3 本 (extractions / assessments / embeddings)。
+"""back-fill cron タスク 3 本 (curations / assessments / embeddings)。
 
 各タスクは broker_metadata 上で cron 駆動し、塩漬け化した記事 ID を発見して
 対応するメインフロー task を ``kiq`` で再投入する。kill switch (Settings)
@@ -27,8 +27,8 @@ logger = structlog.get_logger(__name__)
 # ツマミ (env で動かすのは kill switch のみ。実行時に変えたい値はここに集約)
 # ---------------------------------------------------------------------------
 
-EXTRACTIONS_LIMIT = 50
-EXTRACTIONS_DAILY_MAX = 600
+CURATIONS_LIMIT = 50
+CURATIONS_DAILY_MAX = 600
 
 ASSESSMENTS_LIMIT = 50
 ASSESSMENTS_DAILY_MAX = 600
@@ -64,18 +64,18 @@ async def _update_circuit_breaker(role: str, found: int) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Stage 2a: extraction の塩漬け救済
+# Stage 2a: curation の塩漬け救済
 # ---------------------------------------------------------------------------
 
 
 @broker_metadata.task(
-    task_name="backfill_extractions",
+    task_name="backfill_curations",
     timeout=120,
     max_retries=0,
     retry_on_error=False,
     schedule=[{"cron": "*/15 * * * *"}],
 )
-async def backfill_extractions(ctx: Context = TaskiqDepends()) -> None:
+async def backfill_curations(ctx: Context = TaskiqDepends()) -> None:
     """curation 子が NULL の Article を発見し curate_content を再投入する。
 
     案 3 適用: 本 task は ID-only な ``CurationTrigger`` を kiq に詰めて
@@ -83,8 +83,8 @@ async def backfill_extractions(ctx: Context = TaskiqDepends()) -> None:
     本文サイズ ≤ hard cap) と Ready 構築は下流 Stage 3 task が処理開始時に
     行う (`curate_content_skipped reason=precondition_not_met` log で観測可能)。
     """
-    if not settings.backfill_extractions_enabled:
-        logger.info("backfill_extractions_disabled")
+    if not settings.backfill_curations_enabled:
+        logger.info("backfill_curations_disabled")
         return
 
     session_factory = ctx.state.session_factory
@@ -95,23 +95,23 @@ async def backfill_extractions(ctx: Context = TaskiqDepends()) -> None:
         ids = await backlog.article_ids_pending_curation(
             created_before=before,
             created_after=after,
-            limit=EXTRACTIONS_LIMIT,
+            limit=CURATIONS_LIMIT,
         )
 
     found = len(ids)
-    streak = await _update_circuit_breaker("extract", found)
+    streak = await _update_circuit_breaker("curate", found)
     if streak >= CIRCUIT_THRESHOLD:
-        logger.warning("backfill_extractions_circuit_open", streak=streak, found=found)
+        logger.warning("backfill_curations_circuit_open", streak=streak, found=found)
         return
     if found == 0:
-        logger.info("backfill_extractions_empty")
+        logger.info("backfill_curations_empty")
         return
 
     granted = await consume_daily_budget(
-        get_redis(), "extract", found, EXTRACTIONS_DAILY_MAX
+        get_redis(), "curate", found, CURATIONS_DAILY_MAX
     )
     if granted == 0:
-        logger.warning("backfill_extractions_daily_budget_exhausted", found=found)
+        logger.warning("backfill_curations_daily_budget_exhausted", found=found)
         return
 
     from app.analysis.curation.domain.ready import CurationTrigger
@@ -124,7 +124,7 @@ async def backfill_extractions(ctx: Context = TaskiqDepends()) -> None:
             requeued += 1
         except Exception as e:  # noqa: BLE001
             logger.warning(
-                "backfill_extractions_kiq_failed",
+                "backfill_curations_kiq_failed",
                 article_id=article_id,
                 error=str(e),
             )
@@ -133,7 +133,7 @@ async def backfill_extractions(ctx: Context = TaskiqDepends()) -> None:
     # precondition_not_met (article 既消滅 / 既処理 / 本文 oversized) は
     # 下流 Stage 3 task の ``curate_content_skipped`` log で観測する
     logger.info(
-        "backfill_extractions_completed",
+        "backfill_curations_completed",
         found=found,
         granted=granted,
         requeued=requeued,

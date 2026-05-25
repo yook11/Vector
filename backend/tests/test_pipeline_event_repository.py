@@ -156,7 +156,7 @@ def test_stage_strenum_matches_check_constraint() -> None:
         "curation",
         "assessment",
         "embedding",
-        "backfill_extract",
+        "backfill_curate",
         "backfill_assess",
         "backfill_embed",
     }
@@ -166,7 +166,7 @@ def test_stage_strenum_matches_check_constraint() -> None:
 def test_layer1_category_strenum_matches_check_constraint() -> None:
     """Layer1Category StrEnum 値 set が ORM/migration の CHECK 制約値と一致。
 
-    PR4: 'non_retryable_keep_extraction' を追加 (7 値)。
+    'non_retryable_keep_curation' を含む 7 値。
     """
     expected = {
         "success",
@@ -174,7 +174,7 @@ def test_layer1_category_strenum_matches_check_constraint() -> None:
         "retryable",
         "non_retryable_drop_article",
         "non_retryable_keep_article",
-        "non_retryable_keep_extraction",
+        "non_retryable_keep_curation",
         "unknown",
     }
     assert {c.value for c in Layer1Category} == expected
@@ -193,7 +193,7 @@ async def test_category_check_constraint(db_session: AsyncSession) -> None:
     stage (dispatch / acquisition / completion) では NULL のまま記録される。
     DB CHECK は ``category IS NULL OR category IN (7 values)`` の形で NULL を許容。
 
-    PR4: 'non_retryable_keep_extraction' を追加。
+    'non_retryable_keep_curation' を含む 7 値。
     """
     repo = PipelineEventRepository(db_session)
 

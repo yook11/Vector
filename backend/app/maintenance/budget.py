@@ -51,7 +51,7 @@ async def consume_daily_budget(
 
     Args:
         redis: 共有 Redis クライアント。
-        role: ``extract`` / ``assess`` / ``embed`` のいずれか。
+        role: ``curate`` / ``assess`` / ``embed`` のいずれか。
         requested: dispatch したい件数 (backlog SELECT の結果数)。
         daily_max: 当日の上限。0 以下を渡すと例外。
 

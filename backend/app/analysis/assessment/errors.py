@@ -78,9 +78,9 @@ class AssessmentRecoverableError(AssessmentError):
 
 
 class AssessmentTerminalSkipError(AssessmentError):
-    """リトライ無効、現状の extraction では assess できないと諦める Stage 4 失敗。
+    """リトライ無効、現状の curation では assess できないと諦める Stage 4 失敗。
 
-    article / extraction は保持、assessment 行は作らず audit を焼いて return する。
+    article / curation は保持、assessment 行は作らず audit を焼いて return する。
     "Terminal" は「これ以上の試行は無意味、終端」、"Skip" は「assessment を作らず
     skip する」の意。
 
@@ -190,7 +190,7 @@ ASSESSMENT_TERMINAL_SKIP_PROVIDER_ERRORS: tuple[type[AIProviderError], ...] = (
 """``AssessmentTerminalSkipError`` に詰め替えるべき provider error 一覧。
 
 retry しても同じ結果になる (configuration / request / balance / safety block)。
-extraction は保持し、assessment 行は作らず audit を焼いて skip する。
+curation は保持し、assessment 行は作らず audit を焼いて skip する。
 """
 
 

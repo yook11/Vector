@@ -18,7 +18,7 @@ class Stage(StrEnum):
     CURATION = "curation"
     ASSESSMENT = "assessment"
     EMBEDDING = "embedding"
-    BACKFILL_EXTRACT = "backfill_extract"
+    BACKFILL_CURATE = "backfill_curate"
     BACKFILL_ASSESS = "backfill_assess"
     BACKFILL_EMBED = "backfill_embed"
 

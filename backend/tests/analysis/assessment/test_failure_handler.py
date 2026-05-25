@@ -104,7 +104,7 @@ async def test_terminal_skip_writes_audit_and_returns_false(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """TerminalSkip → ``category='non_retryable_keep_extraction'`` / ``code=exc.code``
+    """TerminalSkip → ``category='non_retryable_keep_curation'`` / ``code=exc.code``
     の audit + ``reraise=False``。"""
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
@@ -122,7 +122,7 @@ async def test_terminal_skip_writes_audit_and_returns_false(
     assert len(events) == 1
     ev = events[0]
     assert ev.event_type == "failed"
-    assert ev.category == "non_retryable_keep_extraction"
+    assert ev.category == "non_retryable_keep_curation"
     assert ev.code == "ai_error_configuration"
     assert ev.outcome_code == "ai_error_configuration"
 

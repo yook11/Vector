@@ -135,15 +135,15 @@ class EmbeddingAuditRepository:
         """Layer 1 marker から DB ``category`` 値を導出する (Stage 4 と同形)。
 
         Stage 5 の意図的命名差: ``EmbeddingTerminalSkipError`` は
-        ``Layer1Category.NON_RETRYABLE_KEEP_EXTRACTION`` にマップする
-        (extraction を捨てない、article 保持の最も保守的な意味、Stage 4 と同)。
+        ``Layer1Category.NON_RETRYABLE_KEEP_CURATION`` にマップする
+        (curation を捨てない、article 保持の最も保守的な意味、Stage 4 と同)。
 
         dispatch 順は TerminalSkip → Recoverable → fallback。Layer 2-B は
         対応する Layer 1 marker (``Recoverable`` or ``TerminalSkip``) を継承
         するため、specific-first で並べる。
         """
         if isinstance(exc, EmbeddingTerminalSkipError):
-            return Layer1Category.NON_RETRYABLE_KEEP_EXTRACTION
+            return Layer1Category.NON_RETRYABLE_KEEP_CURATION
         if isinstance(exc, EmbeddingRecoverableError):
             return Layer1Category.RETRYABLE
         return Layer1Category.UNKNOWN

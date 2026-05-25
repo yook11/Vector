@@ -84,7 +84,7 @@ class EmbeddingRecoverableError(EmbeddingError):
 class EmbeddingTerminalSkipError(EmbeddingError):
     """リトライ無効、現状の analysis では embed できないと諦める Stage 5 失敗。
 
-    article / extraction / analysis は保持、embedding は作らず audit を焼いて
+    article / curation / analysis は保持、embedding は作らず audit を焼いて
     return する。"Terminal" は「これ以上の試行は無意味、終端」、"Skip" は
     「embedding を作らず skip する」の意。
 

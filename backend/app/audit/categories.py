@@ -26,7 +26,7 @@ class Layer1Category(StrEnum):
     型階層には ``UNKNOWN`` は登場しない — catch-all (``except Exception``) で任意の
     Exception に付与する DB ラベルとしてのみ存在する。
 
-    ``NON_RETRYABLE_KEEP_EXTRACTION`` は assessment が回復不能でも extraction
+    ``NON_RETRYABLE_KEEP_CURATION`` は assessment が回復不能でも curation
     結果は保存維持する用途 (``AssessmentTerminalSkipError`` の dispatch 先)。
     """
 
@@ -35,5 +35,5 @@ class Layer1Category(StrEnum):
     RETRYABLE = "retryable"
     NON_RETRYABLE_DROP_ARTICLE = "non_retryable_drop_article"
     NON_RETRYABLE_KEEP_ARTICLE = "non_retryable_keep_article"
-    NON_RETRYABLE_KEEP_EXTRACTION = "non_retryable_keep_extraction"
+    NON_RETRYABLE_KEEP_CURATION = "non_retryable_keep_curation"
     UNKNOWN = "unknown"

@@ -157,7 +157,7 @@ class Settings(BaseSettings):
 
     # back-fill (パイプライン保守)
     # 既定 false。段階的有効化は PLAN §8-6 (Step 1 → 2 → 3) を参照。
-    backfill_extractions_enabled: bool = False
+    backfill_curations_enabled: bool = False
     backfill_assessments_enabled: bool = False
     backfill_embeddings_enabled: bool = False
 

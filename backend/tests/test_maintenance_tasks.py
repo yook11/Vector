@@ -21,17 +21,17 @@ def _ctx_with_session_factory() -> MagicMock:
 
 
 @pytest.mark.asyncio
-async def test_extractions_disabled_returns_early() -> None:
+async def test_curations_disabled_returns_early() -> None:
     """kill switch False のときは backlog 参照も circuit 更新もしない。"""
     from app.maintenance import tasks
 
     ctx = _ctx_with_session_factory()
     with (
-        patch.object(tasks.settings, "backfill_extractions_enabled", False),
+        patch.object(tasks.settings, "backfill_curations_enabled", False),
         patch("app.maintenance.tasks.PipelineBacklog") as backlog_cls,
         patch("app.maintenance.tasks._update_circuit_breaker") as circuit,
     ):
-        await tasks.backfill_extractions(ctx=ctx)
+        await tasks.backfill_curations(ctx=ctx)
 
     backlog_cls.assert_not_called()
     circuit.assert_not_called()
@@ -43,7 +43,7 @@ async def test_extractions_disabled_returns_early() -> None:
 
 
 @pytest.mark.asyncio
-async def test_extractions_empty_resets_circuit_and_does_not_dispatch() -> None:
+async def test_curations_empty_resets_circuit_and_does_not_dispatch() -> None:
     """backlog 空 → circuit reset + kiq 未呼び出し。"""
     from app.maintenance import tasks
 
@@ -58,20 +58,20 @@ async def test_extractions_empty_resets_circuit_and_does_not_dispatch() -> None:
     backlog_instance.article_ids_pending_curation = AsyncMock(return_value=[])
 
     with (
-        patch.object(tasks.settings, "backfill_extractions_enabled", True),
+        patch.object(tasks.settings, "backfill_curations_enabled", True),
         patch("app.maintenance.tasks.PipelineBacklog", return_value=backlog_instance),
         patch(
             "app.maintenance.tasks._update_circuit_breaker",
             new=AsyncMock(return_value=0),
         ) as circuit,
         patch("app.maintenance.tasks.consume_daily_budget", new=AsyncMock()) as budget,
-        patch("app.analysis.curation.tasks.curate_content") as extract_task,
+        patch("app.analysis.curation.tasks.curate_content") as curate_task,
     ):
-        await tasks.backfill_extractions(ctx=ctx)
+        await tasks.backfill_curations(ctx=ctx)
 
-    circuit.assert_awaited_once_with("extract", 0)
+    circuit.assert_awaited_once_with("curate", 0)
     budget.assert_not_called()
-    extract_task.kiq.assert_not_called()
+    curate_task.kiq.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -80,7 +80,7 @@ async def test_extractions_empty_resets_circuit_and_does_not_dispatch() -> None:
 
 
 @pytest.mark.asyncio
-async def test_extractions_circuit_open_short_circuits() -> None:
+async def test_curations_circuit_open_short_circuits() -> None:
     """streak が CIRCUIT_THRESHOLD 以上 → kiq dispatch せず early return。"""
     from app.maintenance import tasks
 
@@ -94,19 +94,19 @@ async def test_extractions_circuit_open_short_circuits() -> None:
     backlog_instance.article_ids_pending_curation = AsyncMock(return_value=[1, 2])
 
     with (
-        patch.object(tasks.settings, "backfill_extractions_enabled", True),
+        patch.object(tasks.settings, "backfill_curations_enabled", True),
         patch("app.maintenance.tasks.PipelineBacklog", return_value=backlog_instance),
         patch(
             "app.maintenance.tasks._update_circuit_breaker",
             new=AsyncMock(return_value=tasks.CIRCUIT_THRESHOLD),
         ),
         patch("app.maintenance.tasks.consume_daily_budget", new=AsyncMock()) as budget,
-        patch("app.analysis.curation.tasks.curate_content") as extract_task,
+        patch("app.analysis.curation.tasks.curate_content") as curate_task,
     ):
-        await tasks.backfill_extractions(ctx=ctx)
+        await tasks.backfill_curations(ctx=ctx)
 
     budget.assert_not_called()
-    extract_task.kiq.assert_not_called()
+    curate_task.kiq.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -115,7 +115,7 @@ async def test_extractions_circuit_open_short_circuits() -> None:
 
 
 @pytest.mark.asyncio
-async def test_extractions_budget_exhausted_skips_dispatch() -> None:
+async def test_curations_budget_exhausted_skips_dispatch() -> None:
     """consume_daily_budget が 0 を返したら kiq dispatch せず終了。"""
     from app.maintenance import tasks
 
@@ -129,7 +129,7 @@ async def test_extractions_budget_exhausted_skips_dispatch() -> None:
     backlog_instance.article_ids_pending_curation = AsyncMock(return_value=[1, 2, 3])
 
     with (
-        patch.object(tasks.settings, "backfill_extractions_enabled", True),
+        patch.object(tasks.settings, "backfill_curations_enabled", True),
         patch("app.maintenance.tasks.PipelineBacklog", return_value=backlog_instance),
         patch(
             "app.maintenance.tasks._update_circuit_breaker",
@@ -139,11 +139,11 @@ async def test_extractions_budget_exhausted_skips_dispatch() -> None:
             "app.maintenance.tasks.consume_daily_budget",
             new=AsyncMock(return_value=0),
         ),
-        patch("app.analysis.curation.tasks.curate_content") as extract_task,
+        patch("app.analysis.curation.tasks.curate_content") as curate_task,
     ):
-        await tasks.backfill_extractions(ctx=ctx)
+        await tasks.backfill_curations(ctx=ctx)
 
-    extract_task.kiq.assert_not_called()
+    curate_task.kiq.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -152,7 +152,7 @@ async def test_extractions_budget_exhausted_skips_dispatch() -> None:
 
 
 @pytest.mark.asyncio
-async def test_extractions_dispatches_triggers_for_each_article_id() -> None:
+async def test_curations_dispatches_triggers_for_each_article_id() -> None:
     """対象 article_id を ``CurationTrigger`` に詰めて kiq する (案 3)。
 
     precondition 判定 (article 既消滅 / 既処理) は下流 Stage 3 task に委譲。
@@ -170,11 +170,11 @@ async def test_extractions_dispatches_triggers_for_each_article_id() -> None:
     backlog_instance = MagicMock()
     backlog_instance.article_ids_pending_curation = AsyncMock(return_value=[10, 20, 30])
 
-    extract_task = MagicMock()
-    extract_task.kiq = AsyncMock()
+    curate_task = MagicMock()
+    curate_task.kiq = AsyncMock()
 
     with (
-        patch.object(tasks.settings, "backfill_extractions_enabled", True),
+        patch.object(tasks.settings, "backfill_curations_enabled", True),
         patch("app.maintenance.tasks.PipelineBacklog", return_value=backlog_instance),
         patch(
             "app.maintenance.tasks._update_circuit_breaker",
@@ -184,12 +184,12 @@ async def test_extractions_dispatches_triggers_for_each_article_id() -> None:
             "app.maintenance.tasks.consume_daily_budget",
             new=AsyncMock(return_value=3),
         ),
-        patch("app.analysis.curation.tasks.curate_content", extract_task),
+        patch("app.analysis.curation.tasks.curate_content", curate_task),
     ):
-        await tasks.backfill_extractions(ctx=ctx)
+        await tasks.backfill_curations(ctx=ctx)
 
-    assert extract_task.kiq.await_count == 3
-    dispatched = [call.args[0] for call in extract_task.kiq.await_args_list]
+    assert curate_task.kiq.await_count == 3
+    dispatched = [call.args[0] for call in curate_task.kiq.await_args_list]
     assert dispatched == [
         CurationTrigger(article_id=10),
         CurationTrigger(article_id=20),
@@ -198,7 +198,7 @@ async def test_extractions_dispatches_triggers_for_each_article_id() -> None:
 
 
 @pytest.mark.asyncio
-async def test_extractions_continues_when_one_kiq_fails() -> None:
+async def test_curations_continues_when_one_kiq_fails() -> None:
     """1 件目 kiq が例外を上げても 2 件目以降は dispatch される。"""
     from app.maintenance import tasks
 
@@ -211,11 +211,11 @@ async def test_extractions_continues_when_one_kiq_fails() -> None:
     backlog_instance = MagicMock()
     backlog_instance.article_ids_pending_curation = AsyncMock(return_value=[1, 2, 3])
 
-    extract_task = MagicMock()
-    extract_task.kiq = AsyncMock(side_effect=[RuntimeError("queue down"), None, None])
+    curate_task = MagicMock()
+    curate_task.kiq = AsyncMock(side_effect=[RuntimeError("queue down"), None, None])
 
     with (
-        patch.object(tasks.settings, "backfill_extractions_enabled", True),
+        patch.object(tasks.settings, "backfill_curations_enabled", True),
         patch("app.maintenance.tasks.PipelineBacklog", return_value=backlog_instance),
         patch(
             "app.maintenance.tasks._update_circuit_breaker",
@@ -225,11 +225,11 @@ async def test_extractions_continues_when_one_kiq_fails() -> None:
             "app.maintenance.tasks.consume_daily_budget",
             new=AsyncMock(return_value=3),
         ),
-        patch("app.analysis.curation.tasks.curate_content", extract_task),
+        patch("app.analysis.curation.tasks.curate_content", curate_task),
     ):
-        await tasks.backfill_extractions(ctx=ctx)
+        await tasks.backfill_curations(ctx=ctx)
 
-    assert extract_task.kiq.await_count == 3
+    assert curate_task.kiq.await_count == 3
 
 
 # ---------------------------------------------------------------------------

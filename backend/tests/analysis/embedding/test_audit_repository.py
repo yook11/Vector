@@ -7,7 +7,7 @@ audit row の shape SSoT が repository に集約されたことを検証する:
   ``embedding_model`` / ``vector_dimension`` が embedder から取得されている
 - ``append_failure`` で **exc 型による 2 dispatch + Layer 2-B + catch-all** が動作:
   - ``EmbeddingRecoverableError`` → ``category=retryable``
-  - ``EmbeddingTerminalSkipError`` → ``category=non_retryable_keep_extraction``
+  - ``EmbeddingTerminalSkipError`` → ``category=non_retryable_keep_curation``
   - ``EmbeddingResponseInvalidError`` (Layer 2-B) → ``retryable`` /
     ``code="embedding_response_invalid"``
   - 想定外 ``RuntimeError`` → ``category=unknown`` / ``code="unexpected_error"``
@@ -220,14 +220,14 @@ async def test_append_failure_recoverable_maps_to_retryable(
 
 
 @pytest.mark.asyncio
-async def test_append_failure_terminal_skip_maps_to_keep_extraction(
+async def test_append_failure_terminal_skip_maps_to_keep_curation(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """EmbeddingTerminalSkipError → category=non_retryable_keep_extraction。
+    """EmbeddingTerminalSkipError → category=non_retryable_keep_curation。
 
-    Stage 5 の意図的命名差: extraction / analysis は捨てない、article 保持の
+    Stage 5 の意図的命名差: curation / analysis は捨てない、article 保持の
     最も保守的な category (Stage 4 と同)。
     """
     article = await _make_article(db_session, sample_source)
@@ -243,7 +243,7 @@ async def test_append_failure_terminal_skip_maps_to_keep_extraction(
         await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
-    assert ev.category == "non_retryable_keep_extraction"
+    assert ev.category == "non_retryable_keep_curation"
     assert ev.code == "ai_error_input_rejected"
 
 
