@@ -19,6 +19,7 @@ from app.collection.sources.article_completion_policy import (
     ArticleCompletionPolicy,
 )
 from app.collection.sources.base_article_source import BaseArticleSource
+from app.collection.sources.fetch_cadence import FetchCadence
 from app.shared.value_objects.source_name import SourceName
 
 # HN フェッチャー固有の運用値。Settings (環境変数経由) には載せない。
@@ -38,6 +39,7 @@ class HackerNewsSource(BaseArticleSource):
     endpoint_url: ClassVar[str] = "https://hn.algolia.com/api/v1/search_by_date"
     observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.api
     completion_policy: ClassVar[ArticleCompletionPolicy] = DEFAULT_POLICY
+    fetch_cadence: ClassVar[FetchCadence] = FetchCadence.MEDIUM
 
     @classmethod
     async def read(cls, tools: ReaderTools) -> list[HackerNewsEntry]:

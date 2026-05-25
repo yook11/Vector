@@ -21,6 +21,7 @@ from app.collection.article_acquisition.fetched_article import FetchedArticle
 from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.domain.observed_article import ObservedOrigin
 from app.collection.sources.article_completion_policy import ArticleCompletionPolicy
+from app.collection.sources.fetch_cadence import FetchCadence
 from app.shared.value_objects.source_name import SourceName
 
 # その source が使う Reader の Entry 型 (RssEntry / SitemapEntry / ...)。
@@ -34,12 +35,14 @@ class ArticleSource(Protocol[T]):
     - ``name`` / ``endpoint_url``: ソース identity
     - ``observed_origin``: 取得チャネル (audit 用)
     - ``completion_policy``: 補完方針
+    - ``fetch_cadence``: 取得間隔 tier (dispatch が cron に写像)
     """
 
     name: ClassVar[SourceName]
     endpoint_url: ClassVar[str]
     observed_origin: ClassVar[ObservedOrigin]
     completion_policy: ClassVar[ArticleCompletionPolicy]
+    fetch_cadence: ClassVar[FetchCadence]
 
     @classmethod
     async def read(cls, tools: ReaderTools) -> list[T]:

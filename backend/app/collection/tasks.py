@@ -15,13 +15,14 @@ from sqlmodel import select
 from taskiq import Context, TaskiqDepends
 
 from app.brokers import (
-    _FETCH_CRON,
+    CADENCE_CRON,
     broker_content,
     broker_metadata,
 )
 from app.collection.article_acquisition.failure_handling import (
     SourceAcquisitionFailureHandler,
 )
+from app.collection.sources.fetch_cadence import FetchCadence
 from app.collection.staged import AcquireSourceArg
 from app.models.fetch_log import FetchLog, FetchStatus
 from app.models.news_source import NewsSource
@@ -53,8 +54,96 @@ async def _record_fetch_log(
 
 
 # ---------------------------------------------------------------------------
-# Dispatch
+# Dispatch — tier 別 cron + 全 tier 一括 (admin 手動)
 # ---------------------------------------------------------------------------
+
+
+async def _dispatch_active_sources(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    cadence: FetchCadence | None,
+) -> dict:
+    """active なソースを走査し、各ソースに個別 acquire タスクを dispatch する。
+
+    ``cadence`` 指定時はその tier の source 定義のみ dispatch する。``None`` は
+    全 tier 一括 (admin 手動 fetch 経路)。DB の active source 名が ``SOURCES`` に
+    無い場合はコード未登録としてスキップする (failure-visibility のため warning)。
+    """
+    # SOURCES は import が重いため lazy (scheduler の tasks.py import を軽く保つ)。
+    from app.collection.article_acquisition.strategy import SOURCES
+    from app.shared.value_objects.source_name import SourceName
+
+    async with session_factory() as session:
+        rows = list(
+            (
+                await session.execute(
+                    select(NewsSource.id, NewsSource.name)
+                    .where(NewsSource.is_active == True)  # noqa: E712
+                    .order_by(NewsSource.name)
+                )
+            ).all()
+        )
+
+    dispatched = 0
+    for row in rows:
+        source_def = SOURCES.get(SourceName(row.name))
+        if source_def is None:
+            logger.warning("dispatch_source_unknown", source_name=str(row.name))
+            continue
+        if cadence is not None and source_def.fetch_cadence is not cadence:
+            continue
+        await acquire_source.kiq(AcquireSourceArg(id=row.id, name=str(row.name)))
+        dispatched += 1
+
+    result = {"dispatched_count": dispatched}
+    logger.info(
+        "dispatch_sources_completed",
+        cadence=cadence.value if cadence is not None else "all",
+        **result,
+    )
+    return result
+
+
+@broker_metadata.task(
+    task_name="dispatch_high",
+    timeout=60,
+    max_retries=1,
+    retry_on_error=True,
+    schedule=[{"cron": CADENCE_CRON[FetchCadence.HIGH]}],
+)
+async def dispatch_high(ctx: Context = TaskiqDepends()) -> dict:
+    """HIGH tier のソースを dispatch する (15 分間隔)。"""
+    return await _dispatch_active_sources(
+        ctx.state.session_factory, cadence=FetchCadence.HIGH
+    )
+
+
+@broker_metadata.task(
+    task_name="dispatch_medium",
+    timeout=60,
+    max_retries=1,
+    retry_on_error=True,
+    schedule=[{"cron": CADENCE_CRON[FetchCadence.MEDIUM]}],
+)
+async def dispatch_medium(ctx: Context = TaskiqDepends()) -> dict:
+    """MEDIUM tier のソースを dispatch する (1 時間間隔)。"""
+    return await _dispatch_active_sources(
+        ctx.state.session_factory, cadence=FetchCadence.MEDIUM
+    )
+
+
+@broker_metadata.task(
+    task_name="dispatch_low",
+    timeout=60,
+    max_retries=1,
+    retry_on_error=True,
+    schedule=[{"cron": CADENCE_CRON[FetchCadence.LOW]}],
+)
+async def dispatch_low(ctx: Context = TaskiqDepends()) -> dict:
+    """LOW tier のソースを dispatch する (6 時間間隔)。"""
+    return await _dispatch_active_sources(
+        ctx.state.session_factory, cadence=FetchCadence.LOW
+    )
 
 
 @broker_metadata.task(
@@ -62,38 +151,17 @@ async def _record_fetch_log(
     timeout=60,
     max_retries=1,
     retry_on_error=True,
-    schedule=[{"cron": _FETCH_CRON}],
 )
 async def dispatch_sources(
     ctx: Context = TaskiqDepends(),
 ) -> dict:
-    """全アクティブソースを走査し、ソースごとに個別タスクを dispatch する。"""
+    """全 tier の active ソースを一括 dispatch する (admin 手動 fetch 経路)。
+
+    cron 発火は tier 別 ``dispatch_high`` / ``dispatch_medium`` / ``dispatch_low``
+    が担うため、本タスクは schedule を持たず ``.kiq()`` 明示呼び出し専用。
+    """
     logger.info("dispatch_sources_started")
-    session_factory = ctx.state.session_factory
-
-    async with session_factory() as session:
-        sources = list(
-            (
-                await session.execute(
-                    select(NewsSource)
-                    .where(NewsSource.is_active == True)  # noqa: E712
-                    .order_by(NewsSource.name)
-                )
-            )
-            .scalars()
-            .all()
-        )
-
-    if not sources:
-        logger.info("dispatch_sources_skipped", reason="no active sources")
-        return {"dispatched_count": 0}
-
-    for source in sources:
-        await acquire_source.kiq(AcquireSourceArg(id=source.id, name=str(source.name)))
-
-    result = {"dispatched_count": len(sources)}
-    logger.info("dispatch_sources_completed", **result)
-    return result
+    return await _dispatch_active_sources(ctx.state.session_factory, cadence=None)
 
 
 # ---------------------------------------------------------------------------

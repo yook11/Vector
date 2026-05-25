@@ -22,6 +22,7 @@ from app.collection.sources.article_completion_policy import (
     ArticleCompletionPolicy,
 )
 from app.collection.sources.base_article_source import BaseArticleSource
+from app.collection.sources.fetch_cadence import FetchCadence
 from app.shared.value_objects.source_name import SourceName
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
@@ -79,6 +80,7 @@ class FrontiersAISource(BaseArticleSource):
     )
     observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.feed
     completion_policy: ClassVar[ArticleCompletionPolicy] = DEFAULT_POLICY
+    fetch_cadence: ClassVar[FetchCadence] = FetchCadence.LOW
 
     @classmethod
     async def read(cls, tools: ReaderTools) -> list[RssEntry]:
@@ -100,6 +102,7 @@ class FrontiersRoboticsAISource(BaseArticleSource):
     )
     observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.feed
     completion_policy: ClassVar[ArticleCompletionPolicy] = DEFAULT_POLICY
+    fetch_cadence: ClassVar[FetchCadence] = FetchCadence.LOW
 
     @classmethod
     async def read(cls, tools: ReaderTools) -> list[RssEntry]:
@@ -121,6 +124,7 @@ class FrontiersEnergyResearchSource(BaseArticleSource):
     )
     observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.feed
     completion_policy: ClassVar[ArticleCompletionPolicy] = DEFAULT_POLICY
+    fetch_cadence: ClassVar[FetchCadence] = FetchCadence.LOW
 
     @classmethod
     async def read(cls, tools: ReaderTools) -> list[RssEntry]:
@@ -140,6 +144,7 @@ class FrontiersMaterialsSource(BaseArticleSource):
     endpoint_url: ClassVar[str] = "https://www.frontiersin.org/journals/materials/rss"
     observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.feed
     completion_policy: ClassVar[ArticleCompletionPolicy] = DEFAULT_POLICY
+    fetch_cadence: ClassVar[FetchCadence] = FetchCadence.LOW
 
     @classmethod
     async def read(cls, tools: ReaderTools) -> list[RssEntry]:

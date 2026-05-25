@@ -30,6 +30,7 @@ from app.collection.sources.article_completion_policy import (
     CompletableField,
     FieldCompletionRule,
 )
+from app.collection.sources.fetch_cadence import FetchCadence
 from app.shared.value_objects.source_name import SourceName
 
 # title が「仮」のため HTML 補完で上書きさせるソース (spec 特例)。
@@ -119,6 +120,23 @@ class TestCompletionKnowledgeIsRegistryReachable:
             )
             # 全域性: 3 field すべてに policy がある (totality)
             assert set(profile.rules) == set(CompletableField), name
+
+
+class TestFetchCadenceDeclaredOnAllSources:
+    """全ソースが取得間隔 tier を宣言する (presence + 全域性)。
+
+    ``BaseArticleSource`` に default を置かず、registry も isinstance ガードを
+    持たないため、宣言漏れを実行前に捕まえるのは本テスト (と Pylance) のみ。
+    全 45 件を走査し、各 ``fetch_cadence`` が ``FetchCadence`` メンバであること
+    を確認する (isinstance 単独でなく登録総数も固定する)。
+    """
+
+    def test_every_source_declares_a_fetch_cadence(self) -> None:
+        assert len(SOURCES) == 45
+        for name, source in SOURCES.items():
+            assert isinstance(source.fetch_cadence, FetchCadence), (
+                f"{name}.fetch_cadence must be a FetchCadence member"
+            )
 
 
 class TestSourceIdentityIsByteInvariant:

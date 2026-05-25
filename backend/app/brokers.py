@@ -34,25 +34,22 @@ from app.analysis.assessment.ai.deepseek import DeepSeekAssessor
 from app.analysis.curation.ai.gemini import GeminiCurator
 from app.analysis.embedding.ai.gemini import GeminiEmbedder
 from app.analysis.rate_limit import ProviderRateLimitGate
+from app.collection.sources.fetch_cadence import FetchCadence
 from app.config import settings
 
 logger = structlog.get_logger(__name__)
 
 # ---------------------------------------------------------------------------
-# settings から導出する cron スケジュール
+# Fetch cadence tier → cron 写像
 # ---------------------------------------------------------------------------
+# tier 別に固定間隔で dispatch する。間隔はコード固定 (cadence spec §2)。
+# 調整は本 dict の変更 + scheduler restart のみで可逆 (env / DB を経由しない)。
 
-_VALID_INTERVAL_MINUTES = {5, 10, 15, 20, 30, 60}
-if settings.check_interval_minutes not in _VALID_INTERVAL_MINUTES:
-    raise ValueError(
-        f"check_interval_minutes={settings.check_interval_minutes} "
-        f"is not a divisor of 60. "
-        f"Valid values: {sorted(_VALID_INTERVAL_MINUTES)}"
-    )
-if settings.check_interval_minutes == 60:
-    _FETCH_CRON = "0 * * * *"
-else:
-    _FETCH_CRON = f"*/{settings.check_interval_minutes} * * * *"
+CADENCE_CRON: dict[FetchCadence, str] = {
+    FetchCadence.HIGH: "*/15 * * * *",  # 15 分
+    FetchCadence.MEDIUM: "0 * * * *",  # 1 時間
+    FetchCadence.LOW: "0 */6 * * *",  # 6 時間
+}
 
 # ---------------------------------------------------------------------------
 # Broker factory

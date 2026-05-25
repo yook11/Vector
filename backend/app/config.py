@@ -110,7 +110,6 @@ class Settings(BaseSettings):
     deepseek_api_key: SecretStr = SecretStr("")
 
     # ニュース取得
-    check_interval_minutes: int = 30
     max_articles_per_fetch: int = 50
     max_analysis_per_run: int = 200
 

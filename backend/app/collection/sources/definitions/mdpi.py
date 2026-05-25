@@ -29,6 +29,7 @@ from app.collection.sources.article_completion_policy import (
     ArticleCompletionPolicy,
 )
 from app.collection.sources.base_article_source import BaseArticleSource
+from app.collection.sources.fetch_cadence import FetchCadence
 from app.shared.value_objects.source_name import SourceName
 
 _MDPI_CROSSREF_ENDPOINT = "https://api.crossref.org/works"
@@ -102,6 +103,7 @@ class MDPIMaterialsSource(BaseArticleSource):
     endpoint_url: ClassVar[str] = _MDPI_CROSSREF_ENDPOINT
     observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.feed
     completion_policy: ClassVar[ArticleCompletionPolicy] = DEFAULT_POLICY
+    fetch_cadence: ClassVar[FetchCadence] = FetchCadence.LOW
     _ISSN: ClassVar[str] = "1996-1944"
 
     @classmethod
@@ -124,6 +126,7 @@ class MDPIEnergiesSource(BaseArticleSource):
     endpoint_url: ClassVar[str] = _MDPI_CROSSREF_ENDPOINT
     observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.feed
     completion_policy: ClassVar[ArticleCompletionPolicy] = DEFAULT_POLICY
+    fetch_cadence: ClassVar[FetchCadence] = FetchCadence.LOW
     _ISSN: ClassVar[str] = "1996-1073"
 
     @classmethod
@@ -146,6 +149,7 @@ class MDPISensorsSource(BaseArticleSource):
     endpoint_url: ClassVar[str] = _MDPI_CROSSREF_ENDPOINT
     observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.feed
     completion_policy: ClassVar[ArticleCompletionPolicy] = DEFAULT_POLICY
+    fetch_cadence: ClassVar[FetchCadence] = FetchCadence.LOW
     _ISSN: ClassVar[str] = "1424-8220"
 
     @classmethod
@@ -168,6 +172,7 @@ class MDPINanomaterialsSource(BaseArticleSource):
     endpoint_url: ClassVar[str] = _MDPI_CROSSREF_ENDPOINT
     observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.feed
     completion_policy: ClassVar[ArticleCompletionPolicy] = DEFAULT_POLICY
+    fetch_cadence: ClassVar[FetchCadence] = FetchCadence.LOW
     _ISSN: ClassVar[str] = "2079-4991"
 
     @classmethod

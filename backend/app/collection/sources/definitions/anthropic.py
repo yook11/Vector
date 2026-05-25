@@ -26,6 +26,7 @@ from app.collection.sources.article_completion_policy import (
     ArticleCompletionPolicy,
 )
 from app.collection.sources.base_article_source import BaseArticleSource
+from app.collection.sources.fetch_cadence import FetchCadence
 from app.shared.value_objects.source_name import SourceName
 
 _SOURCE_NAME = "Anthropic"
@@ -73,6 +74,7 @@ class AnthropicSource(BaseArticleSource):
     endpoint_url: ClassVar[str] = "https://www.anthropic.com/sitemap.xml"
     observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.sitemap
     completion_policy: ClassVar[ArticleCompletionPolicy] = HTML_TITLE_POLICY
+    fetch_cadence: ClassVar[FetchCadence] = FetchCadence.MEDIUM
 
     URL_PATH_PREFIX: ClassVar[str] = _NEWS_PATH_PREFIX
     MAX_ENTRIES: ClassVar[int] = _MAX_ENTRIES

@@ -21,6 +21,7 @@ from app.collection.sources.article_completion_policy import (
     ArticleCompletionPolicy,
 )
 from app.collection.sources.base_article_source import BaseArticleSource
+from app.collection.sources.fetch_cadence import FetchCadence
 from app.collection.sources.rss_dedup import dedup_by_link
 from app.shared.value_objects.source_name import SourceName
 
@@ -47,6 +48,7 @@ class CornellChronicleSource(BaseArticleSource):
     endpoint_url: ClassVar[str] = "https://news.cornell.edu/taxonomy/term/24043/feed"
     observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.feed
     completion_policy: ClassVar[ArticleCompletionPolicy] = DEFAULT_POLICY
+    fetch_cadence: ClassVar[FetchCadence] = FetchCadence.MEDIUM
 
     @classmethod
     async def read(cls, tools: ReaderTools) -> list[RssEntry]:

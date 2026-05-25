@@ -17,6 +17,7 @@ from app.collection.sources.article_completion_policy import (
     ArticleCompletionPolicy,
 )
 from app.collection.sources.base_article_source import BaseArticleSource
+from app.collection.sources.fetch_cadence import FetchCadence
 from app.shared.value_objects.source_name import SourceName
 
 
@@ -27,6 +28,7 @@ class TechCrunchSource(BaseArticleSource):
     endpoint_url: ClassVar[str] = "https://techcrunch.com/feed/"
     observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.feed
     completion_policy: ClassVar[ArticleCompletionPolicy] = DEFAULT_POLICY
+    fetch_cadence: ClassVar[FetchCadence] = FetchCadence.HIGH
 
     @classmethod
     async def read(cls, tools: ReaderTools) -> list[RssEntry]:

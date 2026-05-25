@@ -30,6 +30,7 @@ from app.collection.sources.article_completion_policy import (
     ArticleCompletionPolicy,
 )
 from app.collection.sources.base_article_source import BaseArticleSource
+from app.collection.sources.fetch_cadence import FetchCadence
 from app.shared.value_objects.source_name import SourceName
 
 _SOURCE_NAME = "ORNL"
@@ -94,6 +95,7 @@ class ORNLSource(BaseArticleSource):
     endpoint_url: ClassVar[str] = "https://www.ornl.gov/news"
     observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.listing
     completion_policy: ClassVar[ArticleCompletionPolicy] = HTML_TITLE_POLICY
+    fetch_cadence: ClassVar[FetchCadence] = FetchCadence.LOW
 
     DETAIL_LINK_XPATH: ClassVar[str] = _DETAIL_LINK_XPATH
     DETAIL_URL_PREFIX: ClassVar[str] = _DETAIL_URL_PREFIX
