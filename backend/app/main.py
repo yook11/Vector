@@ -20,6 +20,7 @@ from app.exception_handlers import (
 from app.exceptions import DuplicateError, InvalidQueryError, NotFoundError
 from app.insights.briefing.router.briefing import router as briefing_router
 from app.insights.snapshot.router.weekly_trends import router as weekly_trends_router
+from app.logfire_setup import setup_logfire
 from app.routers import (
     admin,
     articles,
@@ -35,8 +36,11 @@ logger = structlog.get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
-    # 起動時: タスクワーカーは別の Docker サービス（worker/scheduler）で動作する。
-    # 必要に応じてキャッシュのウォーミングや接続チェックなどをここに追加する。
+    # 起動時: 可観測性 (Logfire + structlog 集約) を初期化する。
+    # token 未設定の dev/CI/test では完全 no-op (外部送信なし) で安全。
+    # タスクワーカーは別の Docker サービス (worker/scheduler) で動作するため、
+    # 各 worker プロセスは brokers.py の WORKER_STARTUP で同じ bootstrap を呼ぶ。
+    setup_logfire("vector-api")
     yield
     # 終了処理
     await engine.dispose()

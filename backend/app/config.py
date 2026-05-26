@@ -168,6 +168,14 @@ class Settings(BaseSettings):
     pipeline_events_retention_enabled: bool = True
     pipeline_events_retention_max_batches: int = 5
 
+    # 可観測性 (Logfire)
+    # token は production のみ Fly secret (LOGFIRE_TOKEN) で投入する。未設定の
+    # dev/CI/test では send_to_logfire="if-token-present" により logfire は完全
+    # no-op (外部送信ゼロ)。``os.environ`` 直参照禁止の規約 (CLAUDE.md) に従い、
+    # token は必ず settings 経由で観測層 bootstrap (observability.logfire_setup)
+    # に渡す。
+    logfire_token: SecretStr | None = None
+
     @field_validator("database_url")
     @classmethod
     def _validate_database_url(cls, v: str) -> str:

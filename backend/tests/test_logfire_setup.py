@@ -1,0 +1,248 @@
+"""``setup_logfire`` の不変条件テスト。
+
+検証する性質:
+- token 未設定 (dev/CI/test) では ``logfire.configure`` に ``token=None`` と
+  ``send_to_logfire="if-token-present"`` が渡され、外部送信が **絶対に** 起きない。
+- token 設定時は ``SecretStr.get_secret_value()`` の生値が渡る (Settings 経由
+  での秘密保管を維持しつつ logfire SDK へは生値が必要)。
+- ``settings.env`` で stdout renderer を切り替える (prod=JSON / dev=Console)。
+- ``StructlogProcessor`` は **必ず** ``format_exc_info`` より前に置かれる
+  (逆順だと prod で例外が文字列 attribute に劣化し native スタックトレース
+  解析に乗らない / feedback_failure_visibility)。
+- bootstrap 後に ``structlog.get_logger(...).info(...)`` が例外を投げない
+  (processor チェーンとして実際に成立する)。
+
+注意: ``structlog.configure()`` / ``logfire.configure()`` は global 可変状態
+なので、本テストはどちらも patch して processor 列の検査で完結させ、他テスト
+への state 汚染を避ける (plan §テスト方針)。
+
+検証は **identity / isinstance** で行う (名前 string 一致ではなく):
+- ``structlog.processors.format_exc_info`` は singleton インスタンス (25.x で
+  ``ExceptionRenderer`` の instance) なので identity 検査が正本契約。
+- ``logfire.StructlogProcessor`` は instance ごとに別個なので isinstance 検査。
+"""
+
+from __future__ import annotations
+
+from typing import Any
+from unittest.mock import MagicMock
+
+import logfire
+import pytest
+import structlog
+from logfire.integrations.structlog import LogfireProcessor
+from pydantic import SecretStr
+
+from app import logfire_setup as logfire_setup_module
+from app.logfire_setup import setup_logfire
+
+
+@pytest.fixture
+def patched_configures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[MagicMock, MagicMock]:
+    """``logfire.configure`` と ``structlog.configure`` を patch して呼出を捕捉。
+
+    Global 可変状態への副作用を完全に遮断するため、両方を MagicMock に差し替える。
+    """
+    mock_logfire_configure = MagicMock()
+    mock_structlog_configure = MagicMock()
+    monkeypatch.setattr(
+        logfire_setup_module.logfire, "configure", mock_logfire_configure
+    )
+    monkeypatch.setattr(
+        logfire_setup_module.structlog, "configure", mock_structlog_configure
+    )
+    return mock_logfire_configure, mock_structlog_configure
+
+
+def _processors(mock_structlog_configure: MagicMock) -> list[Any]:
+    """``structlog.configure(processors=[...])`` に渡された生 list を取り出す。"""
+    return mock_structlog_configure.call_args.kwargs["processors"]
+
+
+def _has_renderer(processors: list[Any], renderer_cls: type) -> bool:
+    """processor 列に ``renderer_cls`` の instance が含まれるか。"""
+    return any(isinstance(p, renderer_cls) for p in processors)
+
+
+# ---------------------------------------------------------------------------
+# token gate — 外部送信は token がある時しか起きない (Phase 1 安全弁の要)
+# ---------------------------------------------------------------------------
+
+
+def test_no_token_passes_none_and_if_token_present(
+    monkeypatch: pytest.MonkeyPatch,
+    patched_configures: tuple[MagicMock, MagicMock],
+) -> None:
+    """token 未設定 → ``token=None`` + ``send_to_logfire="if-token-present"``。"""
+    mock_logfire_configure, _ = patched_configures
+    monkeypatch.setattr(logfire_setup_module.settings, "logfire_token", None)
+    monkeypatch.setattr(logfire_setup_module.settings, "env", "development")
+
+    setup_logfire("vector-api")
+
+    kwargs = mock_logfire_configure.call_args.kwargs
+    assert kwargs["token"] is None
+    assert kwargs["send_to_logfire"] == "if-token-present"
+    assert kwargs["console"] is False
+    assert kwargs["service_name"] == "vector-api"
+    assert kwargs["environment"] == "development"
+
+
+def test_token_set_passes_secret_value(
+    monkeypatch: pytest.MonkeyPatch,
+    patched_configures: tuple[MagicMock, MagicMock],
+) -> None:
+    """token 設定時は ``SecretStr.get_secret_value()`` の生値が渡る。"""
+    mock_logfire_configure, _ = patched_configures
+    monkeypatch.setattr(
+        logfire_setup_module.settings,
+        "logfire_token",
+        SecretStr("pylf_v1_us_xxxxxxxxxxxxxxxx"),
+    )
+    monkeypatch.setattr(logfire_setup_module.settings, "env", "production")
+
+    setup_logfire("vector-worker-analysis")
+
+    kwargs = mock_logfire_configure.call_args.kwargs
+    assert kwargs["token"] == "pylf_v1_us_xxxxxxxxxxxxxxxx"
+    assert kwargs["send_to_logfire"] == "if-token-present"
+    assert kwargs["service_name"] == "vector-worker-analysis"
+    assert kwargs["environment"] == "production"
+
+
+# ---------------------------------------------------------------------------
+# renderer gate — stdout の見た目は env 別
+# ---------------------------------------------------------------------------
+
+
+def test_production_uses_json_renderer_with_format_exc_info(
+    monkeypatch: pytest.MonkeyPatch,
+    patched_configures: tuple[MagicMock, MagicMock],
+) -> None:
+    """prod では JSONRenderer + format_exc_info (singleton) が含まれる。"""
+    _, mock_structlog_configure = patched_configures
+    monkeypatch.setattr(logfire_setup_module.settings, "logfire_token", None)
+    monkeypatch.setattr(logfire_setup_module.settings, "env", "production")
+
+    setup_logfire("vector-api")
+
+    procs = _processors(mock_structlog_configure)
+    assert _has_renderer(procs, structlog.processors.JSONRenderer)
+    assert not _has_renderer(procs, structlog.dev.ConsoleRenderer)
+    # format_exc_info は singleton instance なので identity 検査が契約。
+    assert structlog.processors.format_exc_info in procs
+
+
+def test_development_uses_console_renderer_without_format_exc_info(
+    monkeypatch: pytest.MonkeyPatch,
+    patched_configures: tuple[MagicMock, MagicMock],
+) -> None:
+    """dev では ConsoleRenderer のみ (format_exc_info は renderer に委ねる)。"""
+    _, mock_structlog_configure = patched_configures
+    monkeypatch.setattr(logfire_setup_module.settings, "logfire_token", None)
+    monkeypatch.setattr(logfire_setup_module.settings, "env", "development")
+
+    setup_logfire("vector-api")
+
+    procs = _processors(mock_structlog_configure)
+    assert _has_renderer(procs, structlog.dev.ConsoleRenderer)
+    assert not _has_renderer(procs, structlog.processors.JSONRenderer)
+    assert structlog.processors.format_exc_info not in procs
+
+
+# ---------------------------------------------------------------------------
+# 順序の不変条件 — prod 例外の Logfire ネイティブ表示が壊れないこと
+# ---------------------------------------------------------------------------
+
+
+def test_structlog_processor_precedes_format_exc_info_in_production(
+    monkeypatch: pytest.MonkeyPatch,
+    patched_configures: tuple[MagicMock, MagicMock],
+) -> None:
+    """``StructlogProcessor`` は ``format_exc_info`` より前に置かれる。
+
+    逆順だと prod で例外が ``format_exc_info`` に消費されて文字列化された後
+    Logfire に届くため、native スタックトレース解析に乗らない。Logfire
+    (token 設定済) こそ「例外を見たい」環境なので、この順序は構造的契約。
+    """
+    _, mock_structlog_configure = patched_configures
+    monkeypatch.setattr(logfire_setup_module.settings, "logfire_token", None)
+    monkeypatch.setattr(logfire_setup_module.settings, "env", "production")
+
+    setup_logfire("vector-api")
+
+    procs = _processors(mock_structlog_configure)
+    lp_idx = next(
+        (i for i, p in enumerate(procs) if isinstance(p, LogfireProcessor)),
+        None,
+    )
+    fei_idx = procs.index(structlog.processors.format_exc_info)
+    assert lp_idx is not None, "LogfireProcessor (StructlogProcessor) missing"
+    assert lp_idx < fei_idx, (
+        "LogfireProcessor must precede format_exc_info so Logfire sees raw exc_info"
+    )
+
+
+def test_structlog_processor_always_present(
+    monkeypatch: pytest.MonkeyPatch,
+    patched_configures: tuple[MagicMock, MagicMock],
+) -> None:
+    """``StructlogProcessor`` は env を問わず常にチェーンに乗る。
+
+    Logfire への集約は token の有無で no-op 化されるため、processor を常時
+    挿しても dev で外部送信は発生しない (二重防御)。
+    """
+    _, mock_structlog_configure = patched_configures
+    monkeypatch.setattr(logfire_setup_module.settings, "logfire_token", None)
+
+    for env_value in ("development", "production"):
+        mock_structlog_configure.reset_mock()
+        monkeypatch.setattr(logfire_setup_module.settings, "env", env_value)
+        setup_logfire("vector-api")
+        procs = _processors(mock_structlog_configure)
+        assert any(isinstance(p, LogfireProcessor) for p in procs), (
+            f"LogfireProcessor missing in env={env_value!r}"
+        )
+
+
+def test_structlog_processor_is_logfire_reexport() -> None:
+    """``logfire.StructlogProcessor`` が ``LogfireProcessor`` の re-export である。
+
+    本テストは契約の出所を pin する: logfire 側で名前/実体がずれたら
+    型検査ベースの assert (上記 4 件) が全滅する前にここで気付ける。
+    """
+    assert logfire.StructlogProcessor is LogfireProcessor
+
+
+# ---------------------------------------------------------------------------
+# 実チェーンの妥当性 — bootstrap 後の logger 呼出が例外を投げない
+# ---------------------------------------------------------------------------
+
+
+def test_logger_works_after_bootstrap_in_development(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """bootstrap → ``logger.info(...)`` が dev で例外を投げない (チェーン妥当)。
+
+    本テストは ``structlog.configure`` を patch せず実状態に書き込むため、
+    最後に既定設定へ戻して state 汚染を避ける。``logfire.configure`` は
+    patch で外部送信を遮断する (token 無しでも念のため二重防御)。
+    """
+    # 外部送信ゼロを保証するため logfire.configure は no-op に。
+    monkeypatch.setattr(logfire_setup_module.logfire, "configure", MagicMock())
+    monkeypatch.setattr(logfire_setup_module.settings, "logfire_token", None)
+    monkeypatch.setattr(logfire_setup_module.settings, "env", "development")
+
+    try:
+        setup_logfire("vector-api")
+        log = structlog.get_logger("vector.test")
+        # 例外なく完了することのみ確認 (出力内容は本テストの対象外)。
+        log.info("logfire_setup_smoke", attr="value")
+        try:
+            raise RuntimeError("smoke")
+        except RuntimeError:
+            log.exception("logfire_setup_exception_smoke")
+    finally:
+        structlog.reset_defaults()

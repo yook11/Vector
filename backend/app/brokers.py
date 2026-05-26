@@ -36,6 +36,7 @@ from app.analysis.embedding.ai.gemini import GeminiEmbedder
 from app.analysis.rate_limit import ProviderRateLimitGate
 from app.collection.sources.fetch_cadence import FetchCadence
 from app.config import settings
+from app.logfire_setup import setup_logfire
 
 logger = structlog.get_logger(__name__)
 
@@ -106,6 +107,12 @@ scheduler_briefing = TaskiqScheduler(
 def _register_lifecycle(broker: RedisStreamBroker, label: str) -> None:
     @broker.on_event(TaskiqEvents.WORKER_STARTUP)
     async def on_startup(state: TaskiqState) -> None:
+        # 可観測性 bootstrap は engine 生成や追加 startup hook
+        # (_wire_*_adapters) より先に走らせ、それらのログも structlog →
+        # Logfire 経路に乗るようにする。各 worker プロセスでは自分の broker の
+        # on_startup だけが発火するため、プロセスごとに正しい service_name で
+        # 1 回ずつ呼ばれる。
+        setup_logfire(f"vector-worker-{label}")
         state.engine = create_async_engine(settings.database_url, echo=False)
         state.session_factory = async_sessionmaker(
             state.engine,
