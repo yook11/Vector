@@ -19,13 +19,14 @@ dependencies = [
     "sqlmodel>=0.0.38,<1",
     "structlog>=24.4,<26",
     "pgvector>=0.3.0,<1",
-    "taskiq>=0.12.4,<1",
+    "taskiq[opentelemetry]>=0.12.4,<1",
     "taskiq-redis>=1.0,<2",
     "uvicorn[standard]>=0.46.0,<1",
     "redis>=7.4.0,<8",
     "openai>=2.36.0",
     "supervisor>=4.2,<5",
     "logfire[fastapi,httpx,sqlalchemy]>=4.33.0",
+    "psutil>=7.2.2",
 ]
 
 # uv の dev group は `uv sync` (no flags) でも default で install され、

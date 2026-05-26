@@ -28,6 +28,11 @@ from taskiq import (
     TaskiqScheduler,
     TaskiqState,
 )
+
+# taskiq 0.12.4: taskiq.middlewares.__init__ には未公開のためサブモジュール直 import
+# が正規 (re-export がない)。version up で公開された場合は `from taskiq.middlewares
+# import OpenTelemetryMiddleware` に切替可。
+from taskiq.middlewares.opentelemetry_middleware import OpenTelemetryMiddleware
 from taskiq.schedule_sources import LabelScheduleSource
 from taskiq_redis import RedisAsyncResultBackend, RedisStreamBroker
 
@@ -72,7 +77,24 @@ def _make_broker(queue_name: str) -> RedisStreamBroker:
                 result_ex_time=3600,
             )
         )
-        .with_middlewares(SimpleRetryMiddleware(default_retry_count=0))
+        # OTel middleware を **最初** に挿す。pre_execute は登録順 (FIFO) ・
+        # post_execute / post_save は逆順 (LIFO) のため、これで consumer span が
+        # SimpleRetry の判定より外側に open/close する (1 execute サイクル内の
+        # handler 例外は span 範囲に含まれる)。tracer / meter provider 引数なしで
+        # logfire.configure() が立てた OTel global Proxy provider に遅延束縛される
+        # (configure は WORKER_STARTUP / CLIENT_STARTUP の中、middleware __init__
+        # は本ファイル import 時で先行するが、Proxy{Tracer,Meter}Provider が後付け
+        # 実 provider に委譲する設計のため成立する; 本契約は
+        # tests/test_brokers_otel_middleware.py の 4-3 capfire oracle で pin)。
+        #
+        # 注: SimpleRetry の retry 経路は新規 enqueue (broker.kick) で実装されて
+        # おり、retry が発火する execute は別 trace_id を持つ (現状
+        # default_retry_count=0 で発火しないため実害ゼロ)。retry を有効化する
+        # 場合は別 spec で trace 連結戦略を定める。
+        .with_middlewares(
+            OpenTelemetryMiddleware(),
+            SimpleRetryMiddleware(default_retry_count=0),
+        )
     )
 
 
@@ -139,6 +161,43 @@ _register_lifecycle(broker_analysis, "analysis")
 _register_lifecycle(broker_embedding, "embedding")
 _register_lifecycle(broker_digest, "digest")
 _register_lifecycle(broker_briefing, "briefing")
+
+
+def _register_scheduler_lifecycle(broker: RedisStreamBroker, label: str) -> None:
+    """Scheduler プロセス専用の bootstrap hook を broker に attach する。
+
+    ``broker.startup()`` は ``is_worker_process`` 分岐で WORKER_STARTUP /
+    CLIENT_STARTUP を発火する (taskiq.abc.broker)。API プロセスはそもそも
+    ``broker.startup()`` を呼ばず ``.kiq()`` は AsyncKicker による lazy 経路なので、
+    CLIENT_STARTUP は **scheduler プロセスでのみ発火する** (no gate required)。
+    cron 駆動を持つ broker (broker_metadata / broker_digest / broker_briefing) のみ
+    に本関数を当てる。content / analysis / embedding broker は scheduler が存在し
+    ないため不要。
+
+    Scheduler 自身は DB を触らない (全 cron task は worker 側で実行され、
+    state.engine も session_factory も WORKER_STARTUP でしか初期化されない) ため、
+    setup_logfire のみで充分 (engine 生成 / instrument_sqlalchemy は意図的に呼ば
+    ない)。enqueue 自体の telemetry は OpenTelemetryMiddleware.pre_send が
+    PRODUCER span として出す (scheduler process でも middleware は実行される)。
+    """
+
+    @broker.on_event(TaskiqEvents.CLIENT_STARTUP)
+    async def on_scheduler_startup(state: TaskiqState) -> None:
+        setup_logfire(f"vector-scheduler-{label}")
+        logger.info(f"{label}_scheduler_startup")
+
+    @broker.on_event(TaskiqEvents.CLIENT_SHUTDOWN)
+    async def on_scheduler_shutdown(state: TaskiqState) -> None:
+        logger.info(f"{label}_scheduler_shutdown")
+
+
+# broker_metadata / broker_digest / broker_briefing は worker process と scheduler
+# process の両方で同じ broker object を共有するため、_register_lifecycle
+# (WORKER_STARTUP) と _register_scheduler_lifecycle (CLIENT_STARTUP) の両方を呼ぶ。
+# プロセスが違うのでイベント発火が衝突することはない。
+_register_scheduler_lifecycle(broker_metadata, "metadata")
+_register_scheduler_lifecycle(broker_digest, "digest")
+_register_scheduler_lifecycle(broker_briefing, "briefing")
 
 # ---------------------------------------------------------------------------
 # AI アダプター wiring — broker_analysis 専用 composition root
