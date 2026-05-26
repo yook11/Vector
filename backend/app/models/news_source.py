@@ -2,18 +2,14 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
 from sqlalchemy import CheckConstraint, DateTime, String, UniqueConstraint, func
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.collection.sources.source_name import SourceName
 from app.models.base import Base
 from app.shared.security.safe_url import SafeUrl
-
-if TYPE_CHECKING:
-    from app.models.fetch_log import FetchLog
 
 
 class SourceType(StrEnum):
@@ -63,9 +59,6 @@ class NewsSource(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
-
-    # リレーション
-    fetch_logs: Mapped[list[FetchLog]] = relationship(back_populates="source")
 
     # ドメインメソッド
     def activate(self) -> None:

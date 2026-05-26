@@ -74,7 +74,6 @@ from app.models import (  # noqa: F401
     Article,
     ArticleCuration,
     Category,
-    FetchLog,
     InScopeAssessment,
     NewsSource,
     OutOfScopeAssessment,

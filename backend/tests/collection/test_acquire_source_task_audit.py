@@ -3,7 +3,7 @@
 Stage 1 設計 (cron 一本化、taskiq inline retry なし) における Service 例外の
 task 層配線を検証する。audit row の CODE / category / payload 不変条件の網羅は
 ``test_source_acquisition_failure_dispatch`` が担うため、本 file は task の分岐配線
-(catch → _record_fetch_log → handler dispatch → return / reraise) に集中する:
+(catch → handler dispatch → return / reraise) に集中する:
 
 - ``SourceAcquisitionError`` (Layer 1 marker) → audit + return、taskiq retry なし。
   ``pipeline_events.code`` に origin CODE がそのまま入り SQL 可能になる

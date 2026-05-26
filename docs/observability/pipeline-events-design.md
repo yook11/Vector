@@ -11,7 +11,7 @@
 Vector のパイプラインは 4 broker × 5 Stage（dispatch / source_fetch / content_fetch / extraction / classification / embedding）と back-fill 3 系統で構成されている。現状の観測手段は以下に限られる：
 
 - **structlog** の標準出力（コンテナ再起動で失われる、ローテーションで消える）
-- `fetch_logs` テーブル（読み手ゼロ、stage 1 のみカバー）
+- `fetch_logs` テーブル（読み手ゼロ、stage 1 のみカバー）— **撤去済み (z7_drop_fetch_logs)**
 - AI raw response は **どこにも残らない**（プロンプトインジェクション検知不能）
 - 失敗の "事実" を SQL で集計する手段が無い
 
@@ -27,7 +27,7 @@ Vector のパイプラインは 4 broker × 5 Stage（dispatch / source_fetch / 
 4. **失敗時は別 tx で DB に永続化**（Task 層の `except` 節で `_record_failure_event` 呼び出し）
 5. **3 段防御**（DB 主、ログ副、症状検知が最終バックストップ）
 6. **AI raw response / 入力 snapshot を payload で永続化**（プロンプトインジェクション検知）
-7. **`fetch_logs` は段階的に撤去**（読み手ゼロ）
+7. **`fetch_logs` は撤去済み**（z7_drop_fetch_logs migration、読み手ゼロのまま並走期間を経ず 1 PR で物理 drop）
 
 ---
 
@@ -757,15 +757,19 @@ class PipelineEventRepository:
 
 ## fetch_logs の処遇
 
-`fetch_logs` テーブルは現状読み手が居ない（API / UI / agent / 診断 SQL いずれも参照ゼロ）。
-`pipeline_events.stage='source_fetch'` で完全に代替可能。段階的に撤去する。
+**完了 (z7_drop_fetch_logs migration, 2026-05-26)**。`fetch_logs` テーブルは
+`pipeline_events.stage='acquisition'` への per-article SUCCEEDED + per-failure
+FAILED 焼き付けで完全代替され、読み手ゼロのまま物理 drop した。
 
-```
-PR1〜PR4: pipeline_events 全 Stage 統合（fetch_logs と並行書き、移行期間）
-↓ 1〜2 週間運用検証
-PR5: _record_fetch_log を削除、test_fetch_logs.py 削除、relationship 削除
-PR6: Alembic で fetch_logs テーブルを drop
-```
+本番未 deploy (fly.toml `[processes]` に worker/scheduler 未配線) でデータ消失
+リスクが無かったため、当初計画の PR5 (アプリ撤去) + PR6 (テーブル drop) 分割は
+1 PR に集約した (並走期間不要)。
+
+`articles_count` / `duration_ms` の事前計算済み指標は失ったが、後者は Logfire
+taskiq span (Phase 3 trace 伝搬) で自動記録され、前者は pipeline_events を
+`event_type='succeeded' AND outcome_code IN ('article_created',
+'incomplete_article_created')` で COUNT すれば導出可能。集計 consumer 出現時に
+焼き直す方針 (consumer-driven audit scope)。
 
 ---
 
@@ -778,8 +782,7 @@ PR6: Alembic で fetch_logs テーブルを drop
 | **PR2** | Stage 2 (`content_fetch`) 統合 | 中 |
 | **PR3** | Stage 3〜5 (extraction / classification / embedding) — Stage 3 を Outcome 化する PR を含む。**AI client / extractor の戻り値拡張**（raw response / 入力 snapshot を業務戻り値に含める）もここで導入 | 大 or 分割 |
 | **PR4** | dispatch + backfill 統合 | 小 |
-| **PR5** | fetch_logs 書込撤去 + 関連テスト撤去 | 小 |
-| **PR6** | fetch_logs テーブル drop（Alembic）| 小 |
+| **PR5 + PR6** (集約) | fetch_logs 書込撤去 + テーブル drop (本番未 deploy のため 1 PR、`z7_drop_fetch_logs`) | 小 |
 
 PR1 + PR1.5 + PR2 で payload 形を実運用検証してから PR3 以降に進む。
 
@@ -807,7 +810,7 @@ PR1 + PR1.5 + PR2 で payload 形を実運用検証してから PR3 以降に進
 | 二系統（DB + ログ基盤）却下 | Vector のスケールでは過剰、structlog で fallback すれば十分 |
 | 冪等ヒット | succeeded + outcome_code='already_*' で記録 |
 | dispatch / backfill | event 化する |
-| fetch_logs | 段階撤去 |
+| fetch_logs | 撤去済み (z7_drop_fetch_logs) |
 | Source_id denormalize | 全 Stage で実施、Repository が article_id から自動補完 |
 | ORM 配置 | `app/models/pipeline_event.py` |
 | 第一原理 | 「未来の自分（全てを忘れた状態）」、判定期間「3 ヶ月後」|
