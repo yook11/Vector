@@ -84,7 +84,7 @@ async def _invoke_with_aged_ids(
             return_value=backlog,
         ),
         patch(
-            "app.analysis.curation.audit_repository.CurationAuditRepository",
+            "app.audit.stages.curation.CurationAuditRepository",
             return_value=audit_repo,
         ),
         patch(

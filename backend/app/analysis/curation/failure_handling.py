@@ -15,7 +15,6 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.curation.ai.base import BaseCurator
-from app.analysis.curation.audit_repository import CurationAuditRepository
 from app.analysis.curation.domain.ready import ReadyForCuration
 from app.analysis.curation.errors import (
     CurationRecoverableError,
@@ -23,6 +22,7 @@ from app.analysis.curation.errors import (
     CurationTerminalKeepError,
 )
 from app.analysis.curation.hold import set_curation_hold
+from app.audit.stages.curation import CurationAuditRepository
 from app.redis import get_redis
 from app.repositories.articles import ArticleRepository
 from app.shared.security.redaction import redact_secrets

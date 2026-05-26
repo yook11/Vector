@@ -26,9 +26,7 @@ from typing import assert_never
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.collection.article_completion.audit_repository import (
-    ArticleCompletionAuditRepository,
-)
+from app.audit.stages.completion import ArticleCompletionAuditRepository
 from app.collection.article_completion.completer import ArticleHtmlCompleter
 from app.collection.article_completion.completion_failure import (
     CompletionRejection,

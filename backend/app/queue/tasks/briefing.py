@@ -24,10 +24,10 @@ import structlog
 from sqlalchemy import select
 from taskiq import Context, TaskiqDepends
 
+from app.audit.stages.briefing import BriefingAuditRepository
 from app.config import settings
 from app.insights.briefing.application.notifier import FrontendRevalidateNotifier
 from app.insights.briefing.application.service import WeeklyBriefingService
-from app.insights.briefing.audit_repository import BriefingAuditRepository
 from app.insights.briefing.domain.ready import ReadyForBriefing
 from app.insights.briefing.domain.week import latest_completed_week_start, now_in_jst
 from app.insights.briefing.llm.deepseek import DeepSeekBriefingGenerator

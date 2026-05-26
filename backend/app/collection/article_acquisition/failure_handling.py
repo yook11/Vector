@@ -9,9 +9,7 @@ from __future__ import annotations
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.collection.article_acquisition.audit_repository import (
-    SourceAcquisitionAuditRepository,
-)
+from app.audit.stages.acquisition import SourceAcquisitionAuditRepository
 from app.collection.article_acquisition.errors import SourceAcquisitionError
 from app.shared.security.redaction import redact_secrets
 

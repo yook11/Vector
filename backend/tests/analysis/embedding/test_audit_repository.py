@@ -34,13 +34,13 @@ from sqlalchemy.exc import (
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.embedding.ai.base import BaseEmbedder
-from app.analysis.embedding.audit_repository import EmbeddingAuditRepository
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.errors import (
     EmbeddingRecoverableError,
     EmbeddingResponseInvalidError,
     EmbeddingTerminalSkipError,
 )
+from app.audit.stages.embedding import EmbeddingAuditRepository
 from app.models.article import Article
 from app.models.article_curation import ArticleCuration
 from app.models.news_source import NewsSource

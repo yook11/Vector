@@ -11,12 +11,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
 
-from app.insights.briefing.application.notifier import NullBriefingNotifier
-from app.insights.briefing.application.service import WeeklyBriefingService
-from app.insights.briefing.audit_repository import (
+from app.audit.stages.briefing import (
     OUTCOME_BRIEFING_COMPLETED,
     OUTCOME_BRIEFING_INPUT_EMPTY,
 )
+from app.insights.briefing.application.notifier import NullBriefingNotifier
+from app.insights.briefing.application.service import WeeklyBriefingService
 from app.insights.briefing.domain.briefing import (
     BriefingStory,
     WeeklyBriefingContent,

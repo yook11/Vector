@@ -24,8 +24,8 @@ from datetime import date
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.audit.stages.briefing import BriefingAuditRepository
 from app.insights.briefing.application.notifier import BriefingNotifier
-from app.insights.briefing.audit_repository import BriefingAuditRepository
 from app.insights.briefing.domain.ready import ReadyForBriefing
 from app.insights.briefing.llm.deepseek import DeepSeekBriefingGenerator
 from app.insights.briefing.repository.articles import BriefingArticleRepository

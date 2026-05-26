@@ -26,6 +26,20 @@ Gemini hardcode 依存は引き続き持たない)。
 
 PR-E.1.5 で ``Stage.CURATION`` / ``CurationPayload`` に rename 済み (旧
 ``extraction`` wire 値は migration z1_curation_completion_rename で移行)。
+
+逆依存の暫定許容 (本 PR 一時的):
+    本 module は curation context 内の helper
+    ``app.analysis.curation.audit.base_curation_payload_fields`` に依存する
+    (helper は ``GeminiCurationPrompt.CONTENT_MAX_LENGTH`` /
+    ``sanitize_for_untrusted_block`` への参照を内包するため curation 側に残した方が
+    cohesive)。これは ``app/audit/`` → ``app/analysis/curation/`` の逆方向 import を
+    一時的に許容している (``app/audit/__init__.py`` の依存方向宣言と矛盾)。
+
+    別 PR で「caller pre-compute (案 C)」に置換する宿題:
+    curation Service / failure_handling / backfill task 側で
+    ``base_curation_payload_fields(...)`` を事前算出し、
+    ``CurationAuditRepository.append_*`` に kwargs で渡す。これにより audit context は
+    curation domain を import しなくなり、依存方向が完全に片方向化する。
 """
 
 from __future__ import annotations

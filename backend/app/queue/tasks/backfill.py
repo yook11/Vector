@@ -120,7 +120,7 @@ async def _delete_aged_out_curations(
     FK は ``ondelete=SET NULL`` 済で DELETE 後も監査行は残る)。AI 非依存のため
     budget は消費しない。
     """
-    from app.analysis.curation.audit_repository import CurationAuditRepository
+    from app.audit.stages.curation import CurationAuditRepository
     from app.repositories.articles import ArticleRepository
 
     async with session_factory() as session:

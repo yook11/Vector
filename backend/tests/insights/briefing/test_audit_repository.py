@@ -37,7 +37,7 @@ from sqlalchemy.exc import (
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.audit.categories import Layer1Category
-from app.insights.briefing.audit_repository import (
+from app.audit.stages.briefing import (
     OUTCOME_BRIEFING_COMPLETED,
     OUTCOME_BRIEFING_DISPATCHED,
     OUTCOME_BRIEFING_INPUT_EMPTY,

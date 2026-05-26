@@ -293,7 +293,7 @@ async def test_delete_aged_out_curations_deletes_old_child_null_and_audits(
     sample_source: NewsSource,
 ) -> None:
     """古い child-NULL は監査を残して削除、noise を持つ古い記事は残す。"""
-    from app.analysis.curation.audit_repository import BACKFILL_CURATION_AGED_OUT_CODE
+    from app.audit.stages.curation import BACKFILL_CURATION_AGED_OUT_CODE
     from app.queue.tasks import backfill as tasks
 
     now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)

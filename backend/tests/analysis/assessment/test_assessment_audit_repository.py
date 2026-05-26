@@ -41,7 +41,6 @@ from sqlalchemy.exc import (
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.assessment.ai.envelope import AssessmentCall
-from app.analysis.assessment.audit_repository import AssessmentAuditRepository
 from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.domain.result import (
     InScope,
@@ -54,6 +53,7 @@ from app.analysis.assessment.errors import (
     AssessmentResponseInvalidError,
     AssessmentTerminalSkipError,
 )
+from app.audit.stages.assessment import AssessmentAuditRepository
 from app.models.article import Article
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category

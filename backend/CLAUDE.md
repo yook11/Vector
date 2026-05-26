@@ -12,7 +12,7 @@ FastAPI + Python 3.13 + SQLModel (SQLAlchemy 2.0 async) による非同期APIサ
 - `app/analysis/` — 記事単位の AI 分析 (assessor / embedder / extractor)
 - `app/insights/` — 集約 AI: snapshot (weekly_trends) / briefing (weekly_briefing)
 - `app/digest/` — 週次トレンドダイジェスト pipeline
-- `app/audit/` — `pipeline_events` 監査基盤 (Discriminated Union payload)
+- `app/audit/` — `pipeline_events` 監査基盤 (Discriminated Union payload / per-stage semantic API in `stages/`)
 - `app/search/` — semantic search + per-user 1 日 quota
 - `app/routers/` — REST endpoint
 - `app/schemas/` — API SSoT (Pydantic v2 / FastAPI 自動 OpenAPI)

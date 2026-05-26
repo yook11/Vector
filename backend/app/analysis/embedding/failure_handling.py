@@ -14,12 +14,12 @@ from __future__ import annotations
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.analysis.embedding.audit_repository import EmbeddingAuditRepository
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.errors import (
     EmbeddingRecoverableError,
     EmbeddingTerminalSkipError,
 )
+from app.audit.stages.embedding import EmbeddingAuditRepository
 from app.shared.security.redaction import redact_secrets
 
 logger = structlog.get_logger(__name__)

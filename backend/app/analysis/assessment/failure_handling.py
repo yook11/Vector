@@ -14,12 +14,12 @@ from __future__ import annotations
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.analysis.assessment.audit_repository import AssessmentAuditRepository
 from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.errors import (
     AssessmentRecoverableError,
     AssessmentTerminalSkipError,
 )
+from app.audit.stages.assessment import AssessmentAuditRepository
 from app.shared.security.redaction import redact_secrets
 
 logger = structlog.get_logger(__name__)

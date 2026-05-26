@@ -39,13 +39,13 @@ from app.analysis.ai_provider_errors import (
 from app.analysis.curation.ai.base import BaseCurator
 from app.analysis.curation.ai.envelope import CurationCall
 from app.analysis.curation.ai.gemini_spec import GEMINI_CURATION_SPEC
-from app.analysis.curation.audit_repository import CurationAuditRepository
 from app.analysis.curation.domain import Noise, Signal
 from app.analysis.curation.domain.ready import ReadyForCuration
 from app.analysis.curation.errors import (
     CurationResponseInvalidError,
     map_provider_to_curation,
 )
+from app.audit.stages.curation import CurationAuditRepository
 from app.models.article import Article
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
@@ -256,7 +256,7 @@ async def test_append_backfill_curation_aged_out_records_rejected_with_aged_code
     payload.kind=curation。content 拒否の drop (stage=curation /
     category=non_retryable_drop_article) とは全軸が異なる。
     """
-    from app.analysis.curation.audit_repository import (
+    from app.audit.stages.curation import (
         BACKFILL_CURATION_AGED_OUT_CODE,
     )
 

@@ -29,10 +29,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.ai_provider_errors import AIProviderError
 from app.analysis.embedding.ai.base import BaseEmbedder
-from app.analysis.embedding.audit_repository import EmbeddingAuditRepository
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.errors import to_embedding_error
 from app.analysis.embedding.repository import EmbeddingRepository
+from app.audit.stages.embedding import EmbeddingAuditRepository
 
 logger = structlog.get_logger(__name__)
 

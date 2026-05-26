@@ -19,10 +19,8 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
+from app.audit.stages.completion import ArticleCompletionAuditRepository
 from app.collection.article_acquisition.repository import IncompleteArticleRepository
-from app.collection.article_completion.audit_repository import (
-    ArticleCompletionAuditRepository,
-)
 from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.article_completion.repository import (
     ArticleCompletionRepository,

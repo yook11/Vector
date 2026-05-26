@@ -1,8 +1,7 @@
 """例外チェーンを FQN リスト化する pure helper。
 
 監査 payload の ``error_chain`` field を組み立てる SSoT。session も I/O も持たない
-純粋関数で、失敗書込 (``recording.build_failure_payload``) と各 BC の
-``audit_repository`` の双方から再利用される (越境 import を public API で受ける)。
+純粋関数で、各 stage の ``audit.stages.*`` から再利用される。
 """
 
 from __future__ import annotations

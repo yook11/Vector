@@ -22,11 +22,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.analysis.ai_provider_errors import AIProviderError
 from app.analysis.curation.ai.base import BaseCurator
 from app.analysis.curation.ai.envelope import CurationCall
-from app.analysis.curation.audit_repository import CurationAuditRepository
 from app.analysis.curation.domain import Noise, Signal
 from app.analysis.curation.domain.ready import ReadyForCuration
 from app.analysis.curation.errors import map_provider_to_curation
 from app.analysis.curation.repository import CurationRepository
+from app.audit.stages.curation import CurationAuditRepository
 
 logger = structlog.get_logger(__name__)
 
