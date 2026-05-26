@@ -1,4 +1,4 @@
-from app.domain.category import CategoryName, CategorySlug
+from app.models.value_objects.category import CategoryName, CategorySlug
 from app.schemas.base import _CamelBase
 
 

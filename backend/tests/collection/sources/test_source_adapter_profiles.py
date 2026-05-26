@@ -31,7 +31,7 @@ from app.collection.sources.article_completion_policy import (
     FieldCompletionRule,
 )
 from app.collection.sources.fetch_cadence import FetchCadence
-from app.shared.value_objects.source_name import SourceName
+from app.collection.sources.source_name import SourceName
 
 # title が「仮」のため HTML 補完で上書きさせるソース (spec 特例)。
 _PROVISIONAL_TITLE_SOURCES = {"Anthropic", "ORNL"}

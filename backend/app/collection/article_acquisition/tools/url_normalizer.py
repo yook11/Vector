@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-from app.shared.value_objects.safe_url import SafeUrl
+from app.shared.security.safe_url import SafeUrl
 
 _TRACKING_PARAMS: frozenset[str] = frozenset(
     {

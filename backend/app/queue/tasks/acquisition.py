@@ -171,7 +171,7 @@ async def acquire_source(
     # 重い import は task body 内 (scheduler 起動を軽く保つ)。
     from app.collection.article_acquisition.service import ArticleAcquisitionService
     from app.collection.article_acquisition.strategy import SOURCES
-    from app.shared.value_objects.source_name import SourceName
+    from app.collection.sources.source_name import SourceName
 
     source_id = arg.id
     logger.info("acquire_source_started", source_id=source_id, source_name=arg.name)

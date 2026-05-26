@@ -29,7 +29,7 @@ from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.sources.article_source import ArticleSource
-from app.shared.value_objects.source_name import SourceName
+from app.collection.sources.source_name import SourceName
 
 logger = structlog.get_logger(__name__)
 

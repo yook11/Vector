@@ -5,7 +5,7 @@ import json
 import pytest
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from app.domain.category import CategoryName, CategorySlug
+from app.models.value_objects.category import CategoryName, CategorySlug
 
 
 # ---------------------------------------------------------------------------

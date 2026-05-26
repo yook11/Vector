@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.collection.article_acquisition.tools.url_normalizer import (
     normalize_article_url,
 )
-from app.shared.value_objects.safe_url import SafeUrl
+from app.shared.security.safe_url import SafeUrl
 
 
 def _norm(raw: str) -> str:

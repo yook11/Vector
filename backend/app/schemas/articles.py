@@ -12,7 +12,7 @@ from pydantic import field_validator
 if TYPE_CHECKING:
     from app.schemas.base import PaginationParams
 
-from app.domain.category import CategorySlug
+from app.models.value_objects.category import CategorySlug
 from app.schemas.base import PaginationParams, _CamelBase
 from app.schemas.embeds import NewsSourceEmbed, OriginalArticleEmbed
 

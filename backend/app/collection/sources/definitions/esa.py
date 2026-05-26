@@ -25,7 +25,7 @@ from app.collection.sources.article_completion_policy import (
 )
 from app.collection.sources.base_article_source import BaseArticleSource
 from app.collection.sources.fetch_cadence import FetchCadence
-from app.shared.value_objects.source_name import SourceName
+from app.collection.sources.source_name import SourceName
 
 
 def to_fetched_article(entry: RssEntry) -> FetchedArticle:

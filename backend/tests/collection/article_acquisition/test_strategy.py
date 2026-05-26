@@ -21,7 +21,7 @@ from unittest.mock import MagicMock, patch
 
 from app.collection.article_acquisition.strategy import SOURCES
 from app.collection.sources.article_source import ArticleSource
-from app.shared.value_objects.source_name import SourceName
+from app.collection.sources.source_name import SourceName
 
 
 class TestStrategyConsistency:

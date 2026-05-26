@@ -30,7 +30,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.utils.sanitize import normalize_text
+from app.shared.text import normalize_text
 
 
 class ValidCategory(StrEnum):

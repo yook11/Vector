@@ -53,11 +53,11 @@ from app.collection.sources.article_completion_policy import (
     ArticleCompletionPolicy,
 )
 from app.collection.sources.base_article_source import BaseArticleSource
+from app.collection.sources.source_name import SourceName
 from app.models.article import Article as ArticleORM
 from app.models.incomplete_article import IncompleteArticle
 from app.models.news_source import NewsSource, SourceType
 from app.models.pipeline_event import PipelineEvent
-from app.shared.value_objects.source_name import SourceName
 
 
 async def _completion_events(db_session: AsyncSession) -> list[PipelineEvent]:

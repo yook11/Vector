@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from app.utils.sanitize import normalize_text
+from app.shared.text import normalize_text
 
 _BR_RE = re.compile(r"<br\s*/?\s*>", re.IGNORECASE)
 _CLOSING_P_RE = re.compile(r"</\s*p\s*>", re.IGNORECASE)

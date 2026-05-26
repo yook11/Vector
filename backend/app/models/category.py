@@ -3,8 +3,8 @@ from __future__ import annotations
 from sqlalchemy import CheckConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.domain.category import CategoryName, CategorySlug
 from app.models.base import Base
+from app.models.value_objects.category import CategoryName, CategorySlug
 
 
 class Category(Base):

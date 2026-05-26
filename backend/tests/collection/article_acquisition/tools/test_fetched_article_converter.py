@@ -46,7 +46,7 @@ from app.collection.sources.article_completion_policy import (
 )
 from app.collection.sources.article_source import ArticleSource
 from app.collection.sources.base_article_source import BaseArticleSource
-from app.shared.value_objects.source_name import SourceName
+from app.collection.sources.source_name import SourceName
 
 _PUBLISHED = datetime(2026, 5, 1, 12, 0, tzinfo=UTC)
 _VALID_URL = "https://example.com/articles/hello-world"

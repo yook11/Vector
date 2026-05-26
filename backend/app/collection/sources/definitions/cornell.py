@@ -23,7 +23,7 @@ from app.collection.sources.article_completion_policy import (
 from app.collection.sources.base_article_source import BaseArticleSource
 from app.collection.sources.fetch_cadence import FetchCadence
 from app.collection.sources.rss_dedup import dedup_by_link
-from app.shared.value_objects.source_name import SourceName
+from app.collection.sources.source_name import SourceName
 
 CORNELL_FEEDS: Final[tuple[str, ...]] = (
     # Artificial Intelligence

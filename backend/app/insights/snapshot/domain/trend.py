@@ -28,9 +28,9 @@ from typing import Final
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from app.analysis.assessment.domain.result import MentionType
-from app.domain.category import CategoryName, CategorySlug
 from app.insights.snapshot.config import MIN_CURRENT, SMOOTHING
 from app.insights.snapshot.domain.mention_name import MentionName
+from app.models.value_objects.category import CategoryName, CategorySlug
 
 # 集約サイズの構造的上限。生成側の truncate 値 (snapshot.py の `[:N]`) と
 # Field(max_length=N) の SSoT を domain 側に集約する。

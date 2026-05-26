@@ -28,7 +28,7 @@ from app.collection.sources.definitions.mdpi import (
     MDPINanomaterialsSource,
     MDPISensorsSource,
 )
-from app.shared.value_objects.source_name import SourceName
+from app.collection.sources.source_name import SourceName
 
 
 @pytest.mark.parametrize(

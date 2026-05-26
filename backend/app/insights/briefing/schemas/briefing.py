@@ -21,7 +21,6 @@ from typing import Annotated, Final, Literal
 
 from pydantic import Field
 
-from app.domain.category import CategoryName, CategorySlug
 from app.insights.briefing.domain.briefing import (
     MAX_ARTICLE_IDS_PER_STORY,
     MAX_BRIEFING_HEADLINE_LEN,
@@ -29,6 +28,7 @@ from app.insights.briefing.domain.briefing import (
     MAX_STORIES_PER_BRIEFING,
     MAX_STORY_TAKEAWAY_LEN,
 )
+from app.models.value_objects.category import CategoryName, CategorySlug
 from app.schemas.base import _CamelBase
 
 # response 固有の上限 (domain VO に対応物がない一覧系・参照記事系)。

@@ -43,9 +43,9 @@ from app.collection.domain.observed_article import (
 )
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.persistence.article_store import ArticleStore
+from app.collection.sources.source_name import SourceName
 from app.models.news_source import NewsSource, SourceType
 from app.models.pipeline_event import PipelineEvent
-from app.shared.value_objects.source_name import SourceName
 
 _URL = "https://techcrunch.com/audit"
 

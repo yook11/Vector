@@ -20,7 +20,6 @@ from typing import Annotated, Literal
 from pydantic import Field
 
 from app.analysis.assessment.domain.result import MentionType
-from app.domain.category import CategoryName, CategorySlug
 from app.insights.snapshot.domain.mention_name import MentionName
 from app.insights.snapshot.domain.trend import (
     EntityTrend,
@@ -28,6 +27,7 @@ from app.insights.snapshot.domain.trend import (
     WeeklyCategoryTrends,
     WeeklyTrendsBundle,
 )
+from app.models.value_objects.category import CategoryName, CategorySlug
 from app.schemas.base import _CamelBase
 
 

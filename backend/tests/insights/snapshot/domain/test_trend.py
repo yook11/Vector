@@ -17,7 +17,6 @@ import pytest
 from pydantic import ValidationError
 
 from app.analysis.assessment.domain.result import MentionType
-from app.domain.category import CategoryName, CategorySlug
 from app.insights.snapshot.config import (
     MIN_CURRENT,
     NEW_ENTITY_LOOKBACK_WEEKS,
@@ -30,6 +29,7 @@ from app.insights.snapshot.domain.trend import (
     WeeklyCategoryTrends,
     WeeklyTrendsBundle,
 )
+from app.models.value_objects.category import CategoryName, CategorySlug
 
 
 def _entity(

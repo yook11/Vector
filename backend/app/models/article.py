@@ -17,7 +17,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
 from app.models.types import SafeUrlType
-from app.shared.value_objects.safe_url import SafeUrl
+from app.shared.security.safe_url import SafeUrl
 
 if TYPE_CHECKING:
     from app.models.article_curation import ArticleCuration

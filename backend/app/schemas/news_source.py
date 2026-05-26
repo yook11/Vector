@@ -2,10 +2,10 @@
 
 from datetime import datetime
 
+from app.collection.sources.source_name import SourceName
 from app.models.news_source import SourceType
 from app.schemas.base import _CamelBase
-from app.shared.value_objects.safe_url import SafeUrl
-from app.shared.value_objects.source_name import SourceName
+from app.shared.security.safe_url import SafeUrl
 
 
 class NewsSourceCreate(_CamelBase):

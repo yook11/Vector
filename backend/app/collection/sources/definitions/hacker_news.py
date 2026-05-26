@@ -20,7 +20,7 @@ from app.collection.sources.article_completion_policy import (
 )
 from app.collection.sources.base_article_source import BaseArticleSource
 from app.collection.sources.fetch_cadence import FetchCadence
-from app.shared.value_objects.source_name import SourceName
+from app.collection.sources.source_name import SourceName
 
 # HN フェッチャー固有の運用値。Settings (環境変数経由) には載せない。
 # 動的に切り替える運用要件が出た時点で config として宣言へ昇格させる。

@@ -18,9 +18,9 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.collection.sources.source_name import SourceName
 from app.models.news_source import NewsSource, SourceType
-from app.shared.value_objects.safe_url import SafeUrl
-from app.shared.value_objects.source_name import SourceName
+from app.shared.security.safe_url import SafeUrl
 
 
 @pytest.mark.asyncio

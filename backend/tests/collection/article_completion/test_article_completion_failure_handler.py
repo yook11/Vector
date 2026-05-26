@@ -45,10 +45,10 @@ from app.collection.external_fetch_errors import (
     FetchGatewayError,
     FetchOriginServerError,
 )
+from app.collection.sources.source_name import SourceName
 from app.models.incomplete_article import IncompleteArticle
 from app.models.news_source import NewsSource, SourceType
 from app.models.pipeline_event import PipelineEvent
-from app.shared.value_objects.source_name import SourceName
 
 
 @pytest.fixture

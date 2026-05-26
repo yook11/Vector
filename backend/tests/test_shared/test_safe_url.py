@@ -5,7 +5,7 @@ import json
 import pytest
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from app.shared.value_objects.safe_url import SafeUrl
+from app.shared.security.safe_url import SafeUrl
 
 
 # ---------------------------------------------------------------------------

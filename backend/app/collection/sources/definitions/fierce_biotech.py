@@ -23,7 +23,7 @@ from app.collection.sources.article_completion_policy import (
 )
 from app.collection.sources.base_article_source import BaseArticleSource
 from app.collection.sources.fetch_cadence import FetchCadence
-from app.shared.value_objects.source_name import SourceName
+from app.collection.sources.source_name import SourceName
 
 _FB_PUBDATE_FORMAT = "%b %d, %Y %I:%M%p"
 """FierceBiotech 固有の pubDate format ("Apr 30, 2026 6:11pm")。

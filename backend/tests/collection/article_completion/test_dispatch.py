@@ -40,6 +40,7 @@ from app.collection.domain.observed_article import (
     ObservedOrigin,
 )
 from app.collection.domain.value_objects import PublishedAt
+from app.collection.sources.source_name import SourceName
 from app.models.incomplete_article import IncompleteArticle as IncompleteArticleORM
 from app.models.news_source import NewsSource
 from app.queue.tasks import completion as dispatch_module
@@ -47,8 +48,7 @@ from app.queue.tasks.completion import (
     dispatch_html_fetch_jobs,
     sweep_expired_leases,
 )
-from app.shared.value_objects.safe_url import SafeUrl
-from app.shared.value_objects.source_name import SourceName
+from app.shared.security.safe_url import SafeUrl
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers

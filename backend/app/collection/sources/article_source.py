@@ -22,7 +22,7 @@ from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.domain.observed_article import ObservedOrigin
 from app.collection.sources.article_completion_policy import ArticleCompletionPolicy
 from app.collection.sources.fetch_cadence import FetchCadence
-from app.shared.value_objects.source_name import SourceName
+from app.collection.sources.source_name import SourceName
 
 # その source が使う Reader の Entry 型 (RssEntry / SitemapEntry / ...)。
 T = TypeVar("T")

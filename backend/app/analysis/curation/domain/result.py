@@ -24,7 +24,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
-from app.utils.sanitize import normalize_text
+from app.shared.text import normalize_text
 
 
 class Signal(BaseModel):

@@ -8,9 +8,9 @@ import sqlalchemy as sa
 from sqlalchemy import CheckConstraint, DateTime, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.collection.sources.source_name import SourceName
 from app.models.base import Base
-from app.shared.value_objects.safe_url import SafeUrl
-from app.shared.value_objects.source_name import SourceName
+from app.shared.security.safe_url import SafeUrl
 
 if TYPE_CHECKING:
     from app.models.fetch_log import FetchLog

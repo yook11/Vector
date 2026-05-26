@@ -21,8 +21,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
 from app.collection.sources.fetch_cadence import FetchCadence
+from app.collection.sources.source_name import SourceName
 from app.models.news_source import NewsSource
-from app.shared.value_objects.source_name import SourceName
 
 logger = structlog.get_logger(__name__)
 

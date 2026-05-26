@@ -6,7 +6,7 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
-from app.shared.value_objects.safe_url import SafeUrl
+from app.shared.security.safe_url import SafeUrl
 
 
 class TestCanonicalArticleUrlNormalization:

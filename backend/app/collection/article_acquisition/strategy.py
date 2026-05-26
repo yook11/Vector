@@ -62,7 +62,7 @@ from app.collection.sources.definitions.spacenews import SpaceNewsSource
 from app.collection.sources.definitions.techcrunch import TechCrunchSource
 from app.collection.sources.definitions.the_register import TheRegisterSource
 from app.collection.sources.definitions.venturebeat import VentureBeatSource
-from app.shared.value_objects.source_name import SourceName
+from app.collection.sources.source_name import SourceName
 
 # 順序は既存登録順を踏襲 (登録順の安定性を保つ)。
 _SOURCES_LIST: Final[tuple[ArticleSource, ...]] = (

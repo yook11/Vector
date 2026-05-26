@@ -9,15 +9,15 @@ from __future__ import annotations
 from sqlalchemy.orm import DeclarativeBase
 from sqlmodel import SQLModel
 
-from app.domain.category import CategoryName, CategorySlug
+from app.collection.sources.source_name import SourceName
 from app.models.types import (
     CategoryNameType,
     CategorySlugType,
     SafeUrlType,
     SourceNameType,
 )
-from app.shared.value_objects.safe_url import SafeUrl
-from app.shared.value_objects.source_name import SourceName
+from app.models.value_objects.category import CategoryName, CategorySlug
+from app.shared.security.safe_url import SafeUrl
 
 
 class Base(DeclarativeBase):

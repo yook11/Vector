@@ -33,7 +33,7 @@ from app.collection.sources.article_completion_policy import (
     DEFAULT_POLICY,
     HTML_TITLE_POLICY,
 )
-from app.shared.value_objects.source_name import SourceName
+from app.collection.sources.source_name import SourceName
 
 _URL = CanonicalArticleUrl("https://example.com/article")
 _OBS_PUB = PublishedAt(value=datetime(2026, 4, 30, tzinfo=UTC))

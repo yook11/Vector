@@ -37,7 +37,7 @@ from app.collection.external_fetch_errors import (
     FetchSsrfBlockedError,
     FetchTimeoutError,
 )
-from app.shared.value_objects.safe_url import SafeUrl
+from app.shared.security.safe_url import SafeUrl
 
 
 @pytest.fixture(autouse=True)

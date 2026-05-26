@@ -23,7 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.value_objects import PublishedAt
-from app.shared.value_objects.source_name import SourceName
+from app.collection.sources.source_name import SourceName
 
 
 class ObservedOrigin(StrEnum):

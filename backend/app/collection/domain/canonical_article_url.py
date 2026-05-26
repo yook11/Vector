@@ -28,7 +28,7 @@ from typing import Any
 from pydantic import ConfigDict, RootModel, field_validator
 
 from app.collection.url_canonicalize import canonicalize_url
-from app.shared.value_objects.safe_url import SafeUrl
+from app.shared.security.safe_url import SafeUrl
 
 
 class CanonicalArticleUrl(RootModel[str]):

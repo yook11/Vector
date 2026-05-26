@@ -25,7 +25,7 @@ from app.collection.domain.observed_article import (
     ObservedOrigin,
 )
 from app.collection.domain.value_objects import PublishedAt
-from app.shared.value_objects.source_name import SourceName
+from app.collection.sources.source_name import SourceName
 
 _URL = "https://example.com/p/observed"
 _PUB = PublishedAt(value=datetime(2026, 5, 1, tzinfo=UTC))

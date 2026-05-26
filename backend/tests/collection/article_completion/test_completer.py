@@ -32,7 +32,7 @@ from app.collection.domain.observed_article import (
 )
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.sources.article_completion_policy import DEFAULT_POLICY
-from app.shared.value_objects.source_name import SourceName
+from app.collection.sources.source_name import SourceName
 
 _URL = CanonicalArticleUrl("https://example.com/article")
 

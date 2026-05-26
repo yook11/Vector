@@ -20,9 +20,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.queue.tasks import acquisition as collection_tasks
 from app.collection.sources.fetch_cadence import FetchCadence
-from app.shared.value_objects.source_name import SourceName
+from app.collection.sources.source_name import SourceName
+from app.queue.tasks import acquisition as collection_tasks
 
 # fake registry: name → tier だけ持つ source 定義スタンド。
 _FAKE_SOURCES = {

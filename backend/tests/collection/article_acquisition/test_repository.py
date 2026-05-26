@@ -24,8 +24,8 @@ from app.collection.domain.observed_article import (
     ObservedOrigin,
 )
 from app.collection.domain.value_objects import PublishedAt
+from app.collection.sources.source_name import SourceName
 from app.models.news_source import NewsSource
-from app.shared.value_objects.source_name import SourceName
 
 
 def _observed(
