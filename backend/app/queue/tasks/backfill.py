@@ -2,8 +2,7 @@
 
 各タスクは broker_metadata 上で cron 駆動し、塩漬け化した記事 ID を発見して
 対応するメインフロー task を ``kiq`` で再投入する。kill switch (Settings)
-が False のときは即 return し、circuit breaker (連続塩漬け検出) と
-日次予算 (Redis) で暴走を防ぐ。
+が False のときは即 return し、日次予算 (Redis) で暴走を防ぐ。
 
 ツマミの所在は本ファイル冒頭の定数群。env で動的に変えるのは kill switch
 のみ。
@@ -55,11 +54,6 @@ ASSESSMENTS_DAILY_MAX = 600
 EMBEDDINGS_LIMIT = 50
 EMBEDDINGS_DAILY_MAX = 1500
 
-# 連続して塩漬け SELECT が空でない回数がこれを超えたら、メインフローに
-# 根本的な詰まりがあると見なして本日分の back-fill を止める。
-CIRCUIT_THRESHOLD = 4
-_CIRCUIT_TTL_SECONDS = 6 * 60 * 60
-
 
 # ---------------------------------------------------------------------------
 # Logfire metrics (Phase 4: 年齢削除の救済可視化)
@@ -90,22 +84,6 @@ _age_delete_batch_size_histogram = logfire.metric_histogram(
 # ---------------------------------------------------------------------------
 # 共通ヘルパー
 # ---------------------------------------------------------------------------
-
-
-def _circuit_key(role: str) -> str:
-    return f"backfill:circuit:{role}:streak"
-
-
-async def _update_circuit_breaker(role: str, found: int) -> int:
-    """空クエリで streak リセット、非空なら increment。現在の streak を返す。"""
-    redis = get_redis()
-    key = _circuit_key(role)
-    if found == 0:
-        await redis.delete(key)
-        return 0
-    streak = await redis.incr(key)
-    await redis.expire(key, _CIRCUIT_TTL_SECONDS)
-    return int(streak)
 
 
 async def _delete_aged_out_curations(
@@ -169,7 +147,6 @@ async def backfill_curations(ctx: Context = TaskiqDepends()) -> None:
     1. **hold gate**: terminal_keep (key/残高/config 等の provider/stage 健全性
        問題) が起きると失敗ハンドラが ``curation:hold`` を立てる。hold 中は
        confirmed に失敗する AI 呼び出しを避けるため run 全体を skip する。
-       circuit breaker (件数で止まる) の差し替え。
     2. **年齢削除**: 通常窓 (``[after, before)``) から落ちた 7 日超の未処理記事は
        「分析価値なし」として監査を焼いてから物理削除する (P2 = silent loss 解消)。
     3. **通常再投入**: 窓内の child-NULL 記事を ID-only な ``CurationTrigger`` で
@@ -270,10 +247,6 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
         )
 
     found = len(ids)
-    streak = await _update_circuit_breaker("assess", found)
-    if streak >= CIRCUIT_THRESHOLD:
-        logger.warning("backfill_assessments_circuit_open", streak=streak, found=found)
-        return
     if found == 0:
         logger.info("backfill_assessments_empty")
         return
@@ -348,10 +321,6 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
         )
 
     found = len(ids)
-    streak = await _update_circuit_breaker("embed", found)
-    if streak >= CIRCUIT_THRESHOLD:
-        logger.warning("backfill_embeddings_circuit_open", streak=streak, found=found)
-        return
     if found == 0:
         logger.info("backfill_embeddings_empty")
         return

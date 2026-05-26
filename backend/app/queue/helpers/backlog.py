@@ -22,8 +22,8 @@ from app.models.out_of_scope_assessment import OutOfScopeAssessment
 class PipelineBacklog:
     """子テーブル NULL 状態を年齢ウィンドウ + LIMIT で発見する。
 
-    各メソッドは「発見可能な ID」のみを返し、kiq dispatch・予算消費・circuit
-    breaker などの判断は呼び出し側 (cron task) の責務。
+    各メソッドは「発見可能な ID」のみを返し、kiq dispatch・予算消費の判断は
+    呼び出し側 (cron task) の責務。
     """
 
     def __init__(self, session: AsyncSession) -> None:

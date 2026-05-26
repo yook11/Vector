@@ -1,8 +1,8 @@
 """back-fill cron タスクのテスト。
 
 curation: kill switch / hold gate / 年齢削除 / 予算枯渇 / kiq 失敗続行を検証する。
-hold gate (terminal_keep の性質で止まる) が旧 circuit breaker (件数で止まる) を
-差し替えたことを反映する。年齢削除は実 DB で監査 + 物理削除を検証する。
+hold gate (terminal_keep の性質で止まる) で運転中の停止を行う。年齢削除は実 DB
+で監査 + 物理削除を検証する。
 """
 
 from datetime import UTC, datetime, timedelta

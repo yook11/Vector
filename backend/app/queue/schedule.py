@@ -10,10 +10,10 @@
   -------------------|--------------|--------------|---------------------------------
   * * * * *          | 毎分         | 毎分         | dispatch_html_fetch_jobs
                      |              |              | sweep_expired_leases
-  */10 * * * *       | :00,:10,...  | :00,:10,...  | backfill_embeddings
   */15 * * * *       | :00,:15,...  | :00,:15,...  | dispatch_high
-                     |              |              | backfill_curations
-  5,20,35,50 * * * * | :05,:20,...  | :05,:20,...  | backfill_assessments
+  0,30 * * * *       | :00,:30      | :00,:30      | backfill_curations
+  5,35 * * * *       | :05,:35      | :05,:35      | backfill_assessments
+  10,40 * * * *      | :10,:40      | :10,:40      | backfill_embeddings
   25 * * * *         | :25          | :25          | purge_pipeline_events
   0 * * * *          | :00          | :00          | dispatch_medium
   0 */6 * * *        | 00,06,12,18  | (UTC=JST-9)  | dispatch_low
@@ -35,14 +35,14 @@ from app.collection.sources.fetch_cadence import FetchCadence
 # 1 分間隔 — article_completion stage の DB 駆動 poll / lease sweep
 CRON_HTML_FETCH = "* * * * *"
 
-# 10 分間隔 — embedding back-fill (Stage 5 救済)
-CRON_BACKFILL_EMBEDDINGS = "*/10 * * * *"
+# 30 分間隔 — curation back-fill (Stage 3 救済、:00 / :30 起動)
+CRON_BACKFILL_CURATIONS = "0,30 * * * *"
 
-# 15 分間隔 — curation back-fill (Stage 3 救済、dispatch_high と同 minute)
-CRON_BACKFILL_CURATIONS = "*/15 * * * *"
+# 30 分間隔 + 5 分オフセット — assessment back-fill (Stage 4 救済、:05 / :35 起動)
+CRON_BACKFILL_ASSESSMENTS = "5,35 * * * *"
 
-# :05,:20,:35,:50 — assessment back-fill (Stage 4 救済、:00/:15 系と offset)
-CRON_BACKFILL_ASSESSMENTS = "5,20,35,50 * * * *"
+# 30 分間隔 + 10 分オフセット — embedding back-fill (Stage 5 救済、:10 / :40 起動)
+CRON_BACKFILL_EMBEDDINGS = "10,40 * * * *"
 
 # :25 — pipeline_events retention purge (他 cron と最少 overlap な minute)
 CRON_PIPELINE_EVENTS_PURGE = "25 * * * *"

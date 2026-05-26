@@ -6,7 +6,7 @@
 ``app.queue.schedule`` の SSoT に集約済 (時刻表 docstring で overlap 検証)。
 
 スケジューリング設計:
-- :25 は既存 cron (`*/15`, `5,20,35,50`, `*/10`) と最少 overlap な minute。
+- :25 は既存 cron (`0,30`, `5,35`, `10,40`) と最少 overlap な minute。
   html_dispatch (`* * * * *`) のみが常時走るが軽量タスク (< 1 秒)。
 - 1 時間最大 5k 行削除 (BATCH_SIZE=1000 × MAX_BATCHES=5) で insert rate
   (steady state ~1k/hour) を上回る capacity を確保。spike を作らない。
