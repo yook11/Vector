@@ -91,7 +91,12 @@ def test_server_error_translates_to_service_unavailable() -> None:
 
 
 def test_leaked_key_message_is_fixed_string_not_sdk_echo() -> None:
-    """red-team chain γ-1: key prefix を含む SDK message も固定文言に丸める。"""
+    """red-team chain γ-1: key prefix を含む SDK message が ``__str__`` に出ない。
+
+    Phase 4: translator は ``AIProviderConfigurationError()`` を引数なしで返し、
+    ``__str__`` は SAFE_ATTRS=("CODE",) 経路で ``CODE='ai_error_configuration'``
+    のみを返す (= SDK 由来の key prefix / URL が構造的に乗らない契約)。
+    """
     sdk_message = (
         "API key AIzaSyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q has been "
         "reported as leaked at https://github.com/foo/bar"
@@ -101,12 +106,10 @@ def test_leaked_key_message_is_fixed_string_not_sdk_echo() -> None:
     translated = translate_gemini_error(exc)
 
     assert isinstance(translated, AIProviderConfigurationError)
-    assert (
-        str(translated)
-        == "Gemini API key has been reported as leaked; rotate immediately"
-    )
+    # SAFE_ATTRS 経路で SDK 生 message が一切残らない構造的契約 (PII 隔離)
     assert "AIza" not in str(translated)
     assert "github.com" not in str(translated)
+    assert "ai_error_configuration" in str(translated)
 
 
 # ---------------------------------------------------------------------------

@@ -163,15 +163,20 @@ async def test_keep_article_delegates_to_handler(exc_cls: type[Exception]) -> No
 
 
 @pytest.mark.parametrize(
-    "exc_cls",
+    "exc_factory",
     [
+        # Phase 4: Layer 2-B (CurationResponseInvalidError) は no-arg constructor
+        # 必須、AIProvider*Error は accept-and-discard。factory で正常に
+        # 構築できる呼び方を class ごとに分離する。
         AIProviderNetworkError,
         AIProviderServiceUnavailableError,
         CurationResponseInvalidError,
     ],
 )
 @pytest.mark.asyncio
-async def test_retryable_reraise_true_raises(exc_cls: type[Exception]) -> None:
+async def test_retryable_reraise_true_raises(
+    exc_factory: type[Exception],
+) -> None:
     """Handler が ``reraise=True`` を返したら task は元の exc を raise する。"""
     from app.queue.tasks.curation import curate_content
 
@@ -182,9 +187,9 @@ async def test_retryable_reraise_true_raises(exc_cls: type[Exception]) -> None:
         patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
         patch("app.queue.tasks.curation.CurationFailureHandler") as mock_handler_cls,
     ):
-        mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc_cls("boom"))
+        mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc_factory())
         mock_handler_cls.return_value.handle = AsyncMock(return_value=True)
-        with pytest.raises(exc_cls):
+        with pytest.raises(exc_factory):
             await curate_content(trigger=_trigger(), ctx=ctx)
 
     mock_handler_cls.return_value.handle.assert_awaited_once()

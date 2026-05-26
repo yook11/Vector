@@ -61,7 +61,7 @@ def test_init_raises_configuration_error_when_api_key_missing() -> None:
     """API key が空文字なら ``AIProviderConfigurationError`` で初期化失敗。"""
     with patch("app.analysis.embedding.ai.gemini.settings") as mock_settings:
         mock_settings.gemini_api_key.get_secret_value.return_value = ""
-        with pytest.raises(AIProviderConfigurationError, match="GEMINI_API_KEY"):
+        with pytest.raises(AIProviderConfigurationError):
             GeminiEmbedder()
 
 
@@ -119,7 +119,7 @@ async def test_embed_document_raises_request_invalid_when_embeddings_empty() -> 
     response.embeddings = []
     embedder._client.aio.models.embed_content = AsyncMock(return_value=response)
 
-    with pytest.raises(AIProviderRequestInvalidError, match="no embeddings"):
+    with pytest.raises(AIProviderRequestInvalidError):
         await embedder.embed_document(_ready())
 
 
@@ -130,7 +130,7 @@ async def test_embed_document_raises_request_invalid_when_values_missing() -> No
     response.embeddings = [MagicMock(values=None)]
     embedder._client.aio.models.embed_content = AsyncMock(return_value=response)
 
-    with pytest.raises(AIProviderRequestInvalidError, match="without values"):
+    with pytest.raises(AIProviderRequestInvalidError):
         await embedder.embed_document(_ready())
 
 

@@ -128,6 +128,8 @@ class TestDeepSeekToolCallStructure:
 
     @pytest.mark.asyncio
     async def test_no_tool_call_raises_response_invalid(self) -> None:
+        """Phase 4: 旧 message 検査は廃止 (__str__ は code 固定値のみ)。
+        marker class + 固定 code で identity を pin する。"""
         assessor = DeepSeekAssessor()
         _patch_assessor_call(
             assessor,
@@ -137,8 +139,7 @@ class TestDeepSeekToolCallStructure:
         with pytest.raises(AssessmentResponseInvalidError) as exc_info:
             await assessor._call_api("prompt")
 
-        assert "did not return" in str(exc_info.value)
-        assert "stop" in str(exc_info.value)
+        assert exc_info.value.code == "assessment_response_invalid"
 
     @pytest.mark.asyncio
     async def test_wrong_tool_name_raises_response_invalid(self) -> None:
@@ -151,7 +152,7 @@ class TestDeepSeekToolCallStructure:
         with pytest.raises(AssessmentResponseInvalidError) as exc_info:
             await assessor._call_api("prompt")
 
-        assert "did not return" in str(exc_info.value)
+        assert exc_info.value.code == "assessment_response_invalid"
 
 
 # ---------------------------------------------------------------------------
@@ -162,13 +163,15 @@ class TestDeepSeekToolCallStructure:
 class TestDeepSeekInvalidArguments:
     @pytest.mark.asyncio
     async def test_invalid_arguments_json_raises_response_invalid(self) -> None:
+        """Phase 4: marker class + 固定 code で identity を pin する
+        (__str__ に payload を載せない契約)。"""
         assessor = DeepSeekAssessor()
         _patch_assessor_call(assessor, _stub_response(arguments="not json at all"))
 
         with pytest.raises(AssessmentResponseInvalidError) as exc_info:
             await assessor._call_api("prompt")
 
-        assert "not valid JSON" in str(exc_info.value)
+        assert exc_info.value.code == "assessment_response_invalid"
 
     @pytest.mark.asyncio
     async def test_non_object_arguments_raises_response_invalid(self) -> None:
@@ -178,7 +181,7 @@ class TestDeepSeekInvalidArguments:
         with pytest.raises(AssessmentResponseInvalidError) as exc_info:
             await assessor._call_api("prompt")
 
-        assert "not a JSON object" in str(exc_info.value)
+        assert exc_info.value.code == "assessment_response_invalid"
 
     @pytest.mark.asyncio
     async def test_missing_key_arguments_raises_response_invalid(self) -> None:

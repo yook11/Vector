@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+import logfire
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from taskiq import Context, TaskiqDepends
@@ -58,6 +59,32 @@ EMBEDDINGS_DAILY_MAX = 1500
 # 根本的な詰まりがあると見なして本日分の back-fill を止める。
 CIRCUIT_THRESHOLD = 4
 _CIRCUIT_TTL_SECONDS = 6 * 60 * 60
+
+
+# ---------------------------------------------------------------------------
+# Logfire metrics (Phase 4: 年齢削除の救済可視化)
+# ---------------------------------------------------------------------------
+#
+# 年齢削除 (7日超 child-NULL curation の物理削除) を ``vector.curation.age_deleted``
+# counter + ``vector.curation.age_delete_batch_size`` histogram で計測する。前者で
+# 24h 合計の異常 spike (上流パイプライン障害の疑い)、後者で 1 cycle (15 min) の
+# batch 分布 p99 を見て突発的な大量削除を検知する設計
+# (``specs/logfire-stage3-rescue-dashboard.md`` §panel 3/4)。
+#
+# attribute は ``stage="curation"`` のみ (Phase 5+ で assessment/embedding を追加
+# する場合の dimension)。``article_id`` は attribute に乗せない (cardinality 爆発
+# 防止 + PII 隔離契約、test_maintenance_age_delete_metrics の capfire oracle で pin)。
+
+_age_deleted_counter = logfire.metric_counter(
+    "vector.curation.age_deleted",
+    unit="1",
+    description="年齢起因 (7日超 child-NULL) で物理削除された article 数",
+)
+_age_delete_batch_size_histogram = logfire.metric_histogram(
+    "vector.curation.age_delete_batch_size",
+    unit="1",
+    description="1 cycle (cron) で年齢削除された article 数の分布 (p99 で spike 検知)",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -113,7 +140,12 @@ async def _delete_aged_out_curations(
             await session.commit()
         deleted += 1
 
+    # Phase 4: 0 件 cycle も histogram に baseline として残す (平常時の分布形を
+    # p99 の参照に活用)。counter 側は 0 件のときの ``add(0, ...)`` は spec 上
+    # 許容されるが metric noise になるため > 0 時のみ。
+    _age_delete_batch_size_histogram.record(deleted, attributes={"stage": "curation"})
     if deleted:
+        _age_deleted_counter.add(deleted, attributes={"stage": "curation"})
         logger.info("backfill_curations_aged_out", deleted=deleted)
 
 

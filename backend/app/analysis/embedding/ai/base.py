@@ -108,9 +108,9 @@ class BaseEmbedder(abc.ABC):
         try:
             return EmbeddingVector(root=tuple(raw))
         except ValidationError as exc:
-            raise EmbeddingResponseInvalidError(
-                f"embedder returned vector violating EmbeddingVector invariants: {exc}"
-            ) from exc
+            # Phase 4: 旧 message 引数廃止 (ValidationError は vector 値を含みうる)。
+            # __cause__ 連鎖は残るので debug 時は traceback で辿れる。
+            raise EmbeddingResponseInvalidError() from exc
 
     # -- 単発呼び出し ----------------------------------------------------
 

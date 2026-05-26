@@ -202,7 +202,7 @@ async def test_append_drop_article_records_failure_with_drop_category(
     """
     article = await _make_article(db_session, sample_source)
     article_id = article.id
-    raw_exc = AIProviderOutputBlockedError("blocked by SAFETY")
+    raw_exc = AIProviderOutputBlockedError()
     try:
         raise map_provider_to_curation(raw_exc) from raw_exc
     except Exception as wrapped:  # noqa: BLE001
@@ -297,22 +297,22 @@ def _wrap(raw: BaseException) -> BaseException:
     ("exc_factory", "expected_category", "expected_code"),
     [
         (
-            lambda: _wrap(AIProviderInputRejectedError("ctx too long")),
+            lambda: _wrap(AIProviderInputRejectedError()),
             "non_retryable_drop_article",
             "ai_error_input_rejected",
         ),
         (
-            lambda: _wrap(AIProviderConfigurationError("api key missing")),
+            lambda: _wrap(AIProviderConfigurationError()),
             "non_retryable_keep_article",
             "ai_error_configuration",
         ),
         (
-            lambda: _wrap(AIProviderNetworkError("conn reset")),
+            lambda: _wrap(AIProviderNetworkError()),
             "retryable",
             "ai_error_network",
         ),
         (
-            lambda: CurationResponseInvalidError("schema violation"),
+            lambda: CurationResponseInvalidError(),
             "retryable",
             "extraction_response_invalid",
         ),

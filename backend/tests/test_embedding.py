@@ -88,7 +88,8 @@ class StubEmbedder(BaseEmbedder):
 
     def _translate_error(self, exc: Exception) -> Exception:
         if isinstance(exc, _InvalidInputSDKError):
-            return AIProviderInputRejectedError(str(exc))
+            # Phase 4: AIProvider*Error は class 識別のみ (SAFE_ATTRS=CODE)。
+            return AIProviderInputRejectedError()
         # マップできない例外は exc をそのまま return (bare re-raise 規約)
         return exc
 
@@ -129,9 +130,14 @@ async def test_embed_document_wraps_wrong_dimension_in_layer_2b_marker() -> None
 
 @pytest.mark.asyncio
 async def test_embed_once_translates_sdk_error() -> None:
-    """SDK 例外は _translate_error で AIProvider*Error にマップされる。"""
+    """SDK 例外は _translate_error で AIProvider*Error にマップされる。
+
+    Phase 4: AIProvider*Error は VectorDomainError 継承で __str__ 経路に PII を
+    乗せない。class 名で発火経路を pin する (旧 match=message は str(exc) に
+    出ない)。
+    """
     embedder = StubEmbedder(side_effects=[_InvalidInputSDKError("bad input")])
-    with pytest.raises(AIProviderInputRejectedError, match="bad input"):
+    with pytest.raises(AIProviderInputRejectedError):
         await embedder.embed_document(_ready())
     assert len(embedder._calls) == 1
 

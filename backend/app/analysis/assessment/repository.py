@@ -24,6 +24,7 @@
 
 from __future__ import annotations
 
+import structlog
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
@@ -38,6 +39,8 @@ from app.models.category import Category
 from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource
 from app.models.out_of_scope_assessment import OutOfScopeAssessment
+
+logger = structlog.get_logger(__name__)
 
 
 class AssessmentRepository:
@@ -135,9 +138,14 @@ class AssessmentRepository:
         in_scope = call.result
         category_id = await self._get_category_id_by_slug(in_scope.category.value)
         if category_id is None:
-            raise AssessmentCategoryMissingError(
-                f"AI returned unknown category slug: {in_scope.category.value!r}"
+            # Phase 4: 旧 message 引数廃止 (具体 slug は PII 隔離契約上 SaaS span
+            # には乗せない)。slug 値は logger.warning で stdout 側に別経路で残す。
+            logger.warning(
+                "assessment_category_missing",
+                slug=in_scope.category.value,
+                curation_id=ready.curation_id,
             )
+            raise AssessmentCategoryMissingError()
 
         stmt = (
             pg_insert(InScopeAssessment)

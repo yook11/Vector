@@ -208,7 +208,7 @@ async def test_append_failure_recoverable_maps_to_retryable(
     """EmbeddingRecoverableError → category=retryable / code=instance attr。"""
     article = await _make_article(db_session, sample_source)
     await _make_extraction(db_session, article)
-    exc = EmbeddingRecoverableError("net error", code="ai_error_network")
+    exc = EmbeddingRecoverableError(code="ai_error_network")
 
     async with session_factory() as session:
         await EmbeddingAuditRepository(session).append_failure(
@@ -238,7 +238,7 @@ async def test_append_failure_terminal_skip_maps_to_keep_curation(
     """
     article = await _make_article(db_session, sample_source)
     await _make_extraction(db_session, article)
-    exc = EmbeddingTerminalSkipError("rejected", code="ai_error_input_rejected")
+    exc = EmbeddingTerminalSkipError(code="ai_error_input_rejected")
 
     async with session_factory() as session:
         await EmbeddingAuditRepository(session).append_failure(
@@ -265,7 +265,7 @@ async def test_append_failure_layer_2b_response_invalid(
     """
     article = await _make_article(db_session, sample_source)
     await _make_extraction(db_session, article)
-    exc = EmbeddingResponseInvalidError("dimension mismatch")
+    exc = EmbeddingResponseInvalidError()
 
     async with session_factory() as session:
         await EmbeddingAuditRepository(session).append_failure(
@@ -377,9 +377,8 @@ async def test_append_failure_walks_error_chain_via_cause(
         try:
             raise RuntimeError("upstream provider error")
         except RuntimeError as inner:
-            raise EmbeddingRecoverableError(
-                "wrapped", code="ai_error_network"
-            ) from inner
+            # Phase 4: kwargs-only constructor。message 引数廃止 (PII 隔離契約)。
+            raise EmbeddingRecoverableError(code="ai_error_network") from inner
     except EmbeddingRecoverableError as exc:
         async with session_factory() as session:
             await EmbeddingAuditRepository(session).append_failure(
@@ -434,7 +433,7 @@ async def test_append_failure_records_attempt(
     """任意 marker / attempt=3 → pipeline_events.attempt == 3。"""
     article = await _make_article(db_session, sample_source)
     await _make_extraction(db_session, article)
-    exc = EmbeddingRecoverableError("net", code="ai_error_network")
+    exc = EmbeddingRecoverableError(code="ai_error_network")
 
     async with session_factory() as session:
         await EmbeddingAuditRepository(session).append_failure(

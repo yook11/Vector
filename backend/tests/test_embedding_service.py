@@ -392,9 +392,8 @@ async def test_execute_propagates_response_invalid_from_embedder(
     article_id = article.id
 
     # embedder 境界が VO 構造違反を Layer 2-B に詰め替えた状態を直接 mock
-    response_invalid = EmbeddingResponseInvalidError(
-        "embedder returned vector violating EmbeddingVector invariants: NaN at [0]"
-    )
+    # Phase 4: 旧 message 引数廃止 (Layer 2-B も SAFE_ATTRS=("code",) 固定)。
+    response_invalid = EmbeddingResponseInvalidError()
     embedder = _mock_embedder(raises=response_invalid)
     svc = EmbeddingService(session_factory)
     ready = _make_ready(analysis_id=analysis_id, article_id=article_id)

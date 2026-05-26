@@ -20,9 +20,16 @@ Stage 5 で raise されうる例外と、外部 BC (``AIProviderError``) を St
 「TerminalSkip した事実」は ``pipeline_events.code`` カラムに上記
 ``AIProvider*Error`` の ``CODE`` が焼かれた行として表現される (DB 状態列の追加は
 不要、Stage 4 と同思想)。
+
+Phase 4: Layer 1 marker を ``VectorDomainError`` 継承 + kwargs-only constructor
+に締めて、``__str__`` 経路 (Logfire span ``exception.message``) から PII を
+構造的に排除する。``str(exc)`` で構築していた message 引数は ACL / Layer 2-B
+ともに撤去する。
 """
 
 from __future__ import annotations
+
+from typing import ClassVar
 
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
@@ -36,13 +43,14 @@ from app.analysis.ai_provider_errors import (
     AIProviderRequestInvalidError,
     AIProviderServiceUnavailableError,
 )
+from app.logfire_exceptions import VectorDomainError
 
 # ---------------------------------------------------------------------------
 # Layer 1 marker (Stage 5 task 層の dispatch 軸)
 # ---------------------------------------------------------------------------
 
 
-class EmbeddingError(Exception):
+class EmbeddingError(VectorDomainError):
     """Stage 5 全例外の共通基底。
 
     task 層は本クラスでなく ``EmbeddingRecoverableError`` /
@@ -57,6 +65,9 @@ class EmbeddingRecoverableError(EmbeddingError):
     現状は taskiq の cron 救済 (単純 retry) で消化する。inline retry の判定軸は
     logfire 設計で詰める (本 spec では持たない)。
 
+    Phase 4: constructor は kwargs-only。``message`` 引数は廃止し ``__str__``
+    は ``EmbeddingRecoverableError(code='...')`` 固定形式になる。
+
     Attributes:
         code: audit ラベル (``pipeline_events.code`` 列に直接書き込む)。
             provider 由来は ``exc.CODE`` を引き継ぎ、Stage 5 specific は
@@ -66,17 +77,18 @@ class EmbeddingRecoverableError(EmbeddingError):
             Stage 5 specific (Layer 2-B) では ``None``。
     """
 
+    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("code",)
+
     code: str
     provider_error: AIProviderError | None
 
     def __init__(
         self,
-        message: str = "",
         *,
         code: str,
         provider_error: AIProviderError | None = None,
     ) -> None:
-        super().__init__(message)
+        super().__init__()
         self.code = code
         self.provider_error = provider_error
 
@@ -88,6 +100,8 @@ class EmbeddingTerminalSkipError(EmbeddingError):
     return する。"Terminal" は「これ以上の試行は無意味、終端」、"Skip" は
     「embedding を作らず skip する」の意。
 
+    Phase 4: kwargs-only constructor、``__str__`` は SAFE_ATTRS=(``code``,) のみ。
+
     Attributes:
         code: audit ラベル (``pipeline_events.code`` 列に直接書き込む)。
             provider 由来は ``exc.CODE`` を引き継ぎ、Stage 5 specific は
@@ -96,17 +110,18 @@ class EmbeddingTerminalSkipError(EmbeddingError):
             identity 付きで保持。Stage 5 specific (Layer 2-B) では ``None``。
     """
 
+    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("code",)
+
     code: str
     provider_error: AIProviderError | None
 
     def __init__(
         self,
-        message: str = "",
         *,
         code: str,
         provider_error: AIProviderError | None = None,
     ) -> None:
-        super().__init__(message)
+        super().__init__()
         self.code = code
         self.provider_error = provider_error
 
@@ -126,11 +141,12 @@ class EmbeddingResponseInvalidError(EmbeddingRecoverableError):
 
     モデルや provider 側のバグ・揺らぎで稀に発生し、cron 救済で回復する見込み。
     ``provider_error=None`` で marker を継承 (provider 例外起源ではないため)。
+
+    Phase 4: 旧 ``message`` 引数は廃止 (PII 含有経路)。
     """
 
-    def __init__(self, message: str) -> None:
+    def __init__(self) -> None:
         super().__init__(
-            message,
             code="embedding_response_invalid",
             provider_error=None,
         )
@@ -186,6 +202,10 @@ def to_embedding_error(exc: AIProviderError) -> EmbeddingError:
     subclass で上記 2 tuple のいずれにも未登録のものは ``TypeError`` を raise する
     (新規 provider error 種別の登録漏れを deploy 前に検知する fail-fast)。
 
+    Phase 4: ``str(exc)`` を marker constructor に渡していた旧経路は廃止
+    (Layer 1 marker が kwargs-only に締まったため、SDK message が ``__str__``
+    に乗らない構造)。
+
     Args:
         exc: embedder 層が raise した ``AIProviderError`` instance。
 
@@ -200,13 +220,11 @@ def to_embedding_error(exc: AIProviderError) -> EmbeddingError:
     """
     if isinstance(exc, EMBEDDING_RECOVERABLE_PROVIDER_ERRORS):
         return EmbeddingRecoverableError(
-            str(exc),
             code=exc.CODE,
             provider_error=exc,
         )
     if isinstance(exc, EMBEDDING_TERMINAL_SKIP_PROVIDER_ERRORS):
         return EmbeddingTerminalSkipError(
-            str(exc),
             code=exc.CODE,
             provider_error=exc,
         )

@@ -16,9 +16,16 @@ section に対応する:
   の ``OPENAI_TIMEOUT_EXCEPTIONS`` 流に、Stage 4 の解釈を tuple 2 つに集約する。
 
 設計詳細: ``specs/pipeline-events-stage4-assessment.md`` §Layer 1 marker / §Layer 2-A
+
+Phase 4: Layer 1 marker を ``VectorDomainError`` 継承 + kwargs-only constructor
+に締めて、``__str__`` 経路 (Logfire span ``exception.message``) から PII を
+構造的に排除する。``str(exc)`` で構築していた message 引数は ACL / Layer 2-B
+ともに撤去する。
 """
 
 from __future__ import annotations
+
+from typing import ClassVar
 
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
@@ -32,13 +39,14 @@ from app.analysis.ai_provider_errors import (
     AIProviderRequestInvalidError,
     AIProviderServiceUnavailableError,
 )
+from app.logfire_exceptions import VectorDomainError
 
 # ---------------------------------------------------------------------------
 # Layer 1 marker (Stage 4 task 層の dispatch 軸)
 # ---------------------------------------------------------------------------
 
 
-class AssessmentError(Exception):
+class AssessmentError(VectorDomainError):
     """Stage 4 全例外の共通基底。
 
     task 層は本クラスでなく ``AssessmentRecoverableError`` /
@@ -53,6 +61,9 @@ class AssessmentRecoverableError(AssessmentError):
     現状は taskiq の cron 救済 (単純 retry) で消化する。inline retry の判定軸は
     logfire 設計で詰める (本 spec では持たない)。
 
+    Phase 4: constructor は kwargs-only。``message`` 引数は廃止し ``__str__``
+    は ``AssessmentRecoverableError(code='...')`` 固定形式になる。
+
     Attributes:
         code: audit ラベル (``pipeline_events.code`` 列に直接書き込む)。
             provider 由来は ``exc.CODE`` を引き継ぎ、Stage 4 specific は
@@ -62,17 +73,18 @@ class AssessmentRecoverableError(AssessmentError):
             Stage 4 specific (Layer 2-B) では ``None``。
     """
 
+    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("code",)
+
     code: str
     provider_error: AIProviderError | None
 
     def __init__(
         self,
-        message: str = "",
         *,
         code: str,
         provider_error: AIProviderError | None = None,
     ) -> None:
-        super().__init__(message)
+        super().__init__()
         self.code = code
         self.provider_error = provider_error
 
@@ -84,6 +96,8 @@ class AssessmentTerminalSkipError(AssessmentError):
     "Terminal" は「これ以上の試行は無意味、終端」、"Skip" は「assessment を作らず
     skip する」の意。
 
+    Phase 4: kwargs-only constructor、``__str__`` は SAFE_ATTRS=(``code``,) のみ。
+
     Attributes:
         code: audit ラベル (``pipeline_events.code`` 列に直接書き込む)。
             provider 由来は ``exc.CODE`` を引き継ぎ、Stage 4 specific は
@@ -92,17 +106,18 @@ class AssessmentTerminalSkipError(AssessmentError):
             identity 付きで保持。Stage 4 specific (Layer 2-B) では ``None``。
     """
 
+    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("code",)
+
     code: str
     provider_error: AIProviderError | None
 
     def __init__(
         self,
-        message: str = "",
         *,
         code: str,
         provider_error: AIProviderError | None = None,
     ) -> None:
-        super().__init__(message)
+        super().__init__()
         self.code = code
         self.provider_error = provider_error
 
@@ -124,11 +139,12 @@ class AssessmentResponseInvalidError(AssessmentRecoverableError):
     AI モデルの揺らぎ (構造化出力でも稀に schema を外す) で発生、cron 救済で
     現実的に回復する見込み。``provider_error=None`` で marker を継承
     (provider 例外起源ではないため)。
+
+    Phase 4: 旧 ``message`` 引数は廃止 (PII 含有経路)。
     """
 
-    def __init__(self, message: str) -> None:
+    def __init__(self) -> None:
         super().__init__(
-            message,
             code="assessment_response_invalid",
             provider_error=None,
         )
@@ -140,11 +156,14 @@ class AssessmentCategoryMissingError(AssessmentTerminalSkipError):
     catalog 側の追加または prompt 側の category 列挙不一致が原因。retry しても
     AI は同じ slug を返し続けるので terminal-skip。catalog を拡張すれば解消。
     ``AssessmentRepository.save_in_scope`` の slug → id 解決失敗で raise される。
+
+    Phase 4: 旧 ``message`` 引数は廃止 (PII 含有経路 — message に category slug が
+    入る経路があった)。具体 slug は repository 側で structlog の attribute
+    として stdout には残せるが、``__str__`` 経由 (Logfire span) には流さない。
     """
 
-    def __init__(self, message: str) -> None:
+    def __init__(self) -> None:
         super().__init__(
-            message,
             code="assessment_category_missing",
             provider_error=None,
         )
@@ -201,6 +220,10 @@ def map_provider_to_assessment(exc: AIProviderError) -> AssessmentError:
     subclass で上記 2 tuple のいずれにも未登録のものは ``TypeError`` を raise する
     (新規 provider error 種別の登録漏れを deploy 前に検知する fail-fast)。
 
+    Phase 4: ``str(exc)`` を marker constructor に渡していた旧経路は廃止
+    (Layer 1 marker が kwargs-only に締まったため、SDK message が ``__str__``
+    に乗らない構造)。
+
     Args:
         exc: assessor 層が raise した ``AIProviderError`` instance。
 
@@ -215,13 +238,11 @@ def map_provider_to_assessment(exc: AIProviderError) -> AssessmentError:
     """
     if isinstance(exc, ASSESSMENT_RECOVERABLE_PROVIDER_ERRORS):
         return AssessmentRecoverableError(
-            str(exc),
             code=exc.CODE,
             provider_error=exc,
         )
     if isinstance(exc, ASSESSMENT_TERMINAL_SKIP_PROVIDER_ERRORS):
         return AssessmentTerminalSkipError(
-            str(exc),
             code=exc.CODE,
             provider_error=exc,
         )

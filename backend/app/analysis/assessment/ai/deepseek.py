@@ -75,7 +75,8 @@ class DeepSeekAssessor(BaseAssessor):
     def __init__(self) -> None:
         api_key = settings.deepseek_api_key.get_secret_value()
         if not api_key:
-            raise AIProviderConfigurationError("DEEPSEEK_API_KEY is not configured")
+            # Phase 4: 引数 message は SAFE_ATTRS 外。CODE と起動ログで識別。
+            raise AIProviderConfigurationError()
         self._client = AsyncOpenAI(api_key=api_key, base_url=self.SPEC.base_url)
 
     # -- BaseAssessor property 契約 --
@@ -141,24 +142,18 @@ class DeepSeekAssessor(BaseAssessor):
             # (terminal-skip / retry 不能) ではなく、AssessmentResponseInvalidError
             # (recoverable / cron 救済) で raise する。モデル一時的な tool 省略を
             # 「リトライ無駄」扱いにしないため。
-            raise AssessmentResponseInvalidError(
-                f"DeepSeek did not return {tool_name} tool_call "
-                f"(finish_reason={choice.finish_reason})"
-            )
+            # Phase 4: 旧 message 引数廃止 (finish_reason 値は CODE 経路で識別)。
+            raise AssessmentResponseInvalidError()
 
         raw_arguments = tool_calls[0].function.arguments or ""
         try:
             payload = json.loads(raw_arguments)
         except json.JSONDecodeError as exc:
-            raise AssessmentResponseInvalidError(
-                f"DeepSeek tool arguments are not valid JSON: {exc}"
-            ) from exc
+            # Phase 4: 旧 message 引数廃止 (DeepSeek 応答 raw 文字列を含む経路)。
+            raise AssessmentResponseInvalidError() from exc
 
         if not isinstance(payload, dict):
-            raise AssessmentResponseInvalidError(
-                f"DeepSeek tool arguments are not a JSON object: "
-                f"{type(payload).__name__}"
-            )
+            raise AssessmentResponseInvalidError()
 
         # parse_assessment を先に通すことで strict 規約 (3 key 存在 + str 型強制)
         # を担保。通過後の payload["category"] は str 確定なので str() 暗黙 coerce
@@ -196,32 +191,31 @@ class DeepSeekAssessor(BaseAssessor):
         ``_call_once`` が bare re-raise する規約)。
         """
         # network 系
+        # Phase 4: AIProvider*Error は VectorDomainError 継承で __str__ が SAFE_ATTRS
+        # 経路のみ。SDK 生 message を引き渡しても捨てられるが、call site で str(exc)
+        # 経由を明示的に消して PII 含有経路が残っていないことを grep で示す。
         if isinstance(exc, (APIConnectionError, APITimeoutError)):
-            return AIProviderNetworkError(f"{type(exc).__name__}: {exc}")
+            return AIProviderNetworkError()
         if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
-            return AIProviderNetworkError(f"{type(exc).__name__}: {exc}")
+            return AIProviderNetworkError()
 
         if isinstance(exc, (AuthenticationError, PermissionDeniedError, NotFoundError)):
-            return AIProviderConfigurationError(str(exc))
+            return AIProviderConfigurationError()
 
         # HTTP 402 を OpenAIRateLimitError より先に評価 (DeepSeek 固有)
         if isinstance(exc, APIStatusError) and exc.status_code == 402:
-            return AIProviderInsufficientBalanceError(
-                f"DeepSeek insufficient balance (HTTP 402): {exc}"
-            )
+            return AIProviderInsufficientBalanceError()
 
         if isinstance(exc, OpenAIRateLimitError):
-            return AIProviderRateLimitedError(f"DeepSeek rate limit: {exc}")
+            return AIProviderRateLimitedError()
 
         if isinstance(exc, (BadRequestError, UnprocessableEntityError)):
-            return AIProviderRequestInvalidError(f"DeepSeek bad request: {exc}")
+            return AIProviderRequestInvalidError()
 
         if isinstance(exc, InternalServerError):
-            return AIProviderServiceUnavailableError(f"DeepSeek server error: {exc}")
+            return AIProviderServiceUnavailableError()
 
         if isinstance(exc, APIStatusError) and 500 <= exc.status_code < 600:
-            return AIProviderServiceUnavailableError(
-                f"DeepSeek server error (HTTP {exc.status_code}): {exc}"
-            )
+            return AIProviderServiceUnavailableError()
 
         return exc  # bare re-raise (UNKNOWN)

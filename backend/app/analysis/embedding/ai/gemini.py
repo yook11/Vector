@@ -47,7 +47,8 @@ class GeminiEmbedder(BaseEmbedder):
     def __init__(self) -> None:
         api_key = settings.gemini_api_key.get_secret_value()
         if not api_key:
-            raise AIProviderConfigurationError("GEMINI_API_KEY is not configured")
+            # Phase 4: 引数 message は SAFE_ATTRS 外。CODE と起動ログで識別。
+            raise AIProviderConfigurationError()
         self._client = genai.Client(api_key=api_key)
 
     @property
@@ -87,14 +88,12 @@ class GeminiEmbedder(BaseEmbedder):
         )
         embeddings = response.embeddings
         if not embeddings:
-            raise AIProviderRequestInvalidError(
-                f"Gemini returned no embeddings (response={response!r})"
-            )
+            # Phase 4: SDK response 全文 (PII 含有) を __str__ 経路に乗せない。
+            # CODE (= ai_error_request_invalid) で識別、詳細は structlog で別経路。
+            raise AIProviderRequestInvalidError()
         first = embeddings[0]
         if first.values is None:
-            raise AIProviderRequestInvalidError(
-                f"Gemini returned embedding without values (embedding={first!r})"
-            )
+            raise AIProviderRequestInvalidError()
         return list(first.values)
 
     def _translate_error(self, exc: Exception) -> Exception:

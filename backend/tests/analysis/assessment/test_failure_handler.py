@@ -113,7 +113,7 @@ async def test_terminal_skip_writes_audit_and_returns_false(
     ready = _ready_from(extraction)
     handler = AssessmentFailureHandler(session_factory)
 
-    exc = AssessmentTerminalSkipError("bad config", code="ai_error_configuration")
+    exc = AssessmentTerminalSkipError(code="ai_error_configuration")
     reraise = await handler.handle(ready=ready, exc=exc, attempt=1, last_attempt=False)
 
     assert reraise is False
@@ -145,7 +145,7 @@ async def test_recoverable_with_retry_budget_writes_audit_and_returns_true(
     ready = _ready_from(extraction)
     handler = AssessmentFailureHandler(session_factory)
 
-    exc = AssessmentRecoverableError("network", code="ai_error_network")
+    exc = AssessmentRecoverableError(code="ai_error_network")
     reraise = await handler.handle(ready=ready, exc=exc, attempt=1, last_attempt=False)
 
     assert reraise is True
@@ -171,7 +171,7 @@ async def test_recoverable_last_attempt_writes_audit_and_returns_false(
     ready = _ready_from(extraction)
     handler = AssessmentFailureHandler(session_factory)
 
-    exc = AssessmentRecoverableError("network", code="ai_error_network")
+    exc = AssessmentRecoverableError(code="ai_error_network")
     reraise = await handler.handle(ready=ready, exc=exc, attempt=3, last_attempt=True)
 
     assert reraise is False
@@ -255,10 +255,10 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
     ready = _ready_from(extraction)
     handler = AssessmentFailureHandler(session_factory)
 
-    business_exc = AssessmentTerminalSkipError(
-        "config Authorization: Bearer sk-live-BUSINESSSECRETabc",
-        code="ai_error_configuration",
-    )
+    # Phase 4: AssessmentTerminalSkipError は kwargs-only constructor。
+    # business 側の secret 混入経路は Phase 4 で構造的に塞がれている
+    # (__str__ は code 固定値のみ、SAFE_ATTRS=("code",))。
+    business_exc = AssessmentTerminalSkipError(code="ai_error_configuration")
 
     with (
         patch(
@@ -284,6 +284,7 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
     assert drop["attempt"] == 1
     assert drop["business_error_class"].endswith(".AssessmentTerminalSkipError")
     assert drop["audit_error_class"].endswith(".RuntimeError")
-    # red-team chain γ-2: business / audit 両方の secret が redact される
-    assert "sk-live-BUSINESSSECRETabc" not in drop["business_error_message"]
+    # business: Phase 4 で __str__ が SAFE_ATTRS のみになり secret は原理上不在。
+    assert "sk-live" not in drop["business_error_message"]
+    # red-team chain γ-2: audit 側 (任意 RuntimeError) は redact_secrets で secret 落ち。
     assert "sk-live-AUDITSECRETxyz" not in drop["audit_error_message"]

@@ -78,7 +78,11 @@ class GeminiCurator(BaseCurator):
     def __init__(self) -> None:
         api_key = settings.gemini_api_key.get_secret_value()
         if not api_key:
-            raise AIProviderConfigurationError("GEMINI_API_KEY is not configured")
+            # Phase 4: 引数 message は SAFE_ATTRS 外 (str(exc) には出ない)。診断は
+            # AIProviderConfigurationError.CODE (= "ai_error_configuration") + 起動
+            # ログ ("GEMINI_API_KEY is not configured" を logger.error 等で別経路で
+            # 残す) で行う。本 raise 時点では空 instance で十分。
+            raise AIProviderConfigurationError()
         self._client = genai.Client(api_key=api_key)
 
     # -- BaseCurator property 契約 --
@@ -122,16 +126,16 @@ class GeminiCurator(BaseCurator):
         # DELETE 対象になる)
         finish_reason = _detect_finish_reason(response)
         if finish_reason in _POLICY_BLOCKED_FINISH_REASONS:
-            raise AIProviderOutputBlockedError(f"blocked by policy: {finish_reason}")
+            # Phase 4: finish_reason は audit 軸として CODE 経由で残す (現状
+            # ai_error_output_blocked)。SDK 由来の文字列は __str__ には出さない。
+            raise AIProviderOutputBlockedError()
 
         parsed = response.parsed
         if not isinstance(parsed, GeminiCurationResponse):
             # provider は応答したが Stage 3 schema として消化不可 (Layer 2-B、
             # CurationRecoverableError 派生、taskiq retry → cron 救済)
-            raise CurationResponseInvalidError(
-                f"Gemini did not return GeminiCurationResponse "
-                f"(got {type(parsed).__name__}, finish_reason={finish_reason})"
-            )
+            # Phase 4: 旧 message 引数廃止。詳細は repository/logger 側で別経路で残す。
+            raise CurationResponseInvalidError()
         result = parse_curation(parsed)
         # ``CurationCall[T]`` の T は invariant のため Signal | Noise を直接
         # 渡すと ``CurationCall[Signal | Noise]`` に推論される。戻り値型は
@@ -167,10 +171,10 @@ class GeminiCurator(BaseCurator):
         その他の SDK 例外分類は ``translate_gemini_error`` に委譲する。
         """
         if isinstance(exc, ValidationError):
-            return CurationResponseInvalidError(
-                f"Invalid curation result schema: {exc}"
-            )
+            # Phase 4: 旧 message 引数廃止 (PII 含有経路)。Pydantic の詳細は
+            # __cause__ 連鎖と structlog 経路で別途残せる。
+            return CurationResponseInvalidError()
         if is_context_length_error(exc):
-            msg = getattr(exc, "message", None) or str(exc)
-            return AIProviderInputRejectedError(f"input exceeds context length: {msg}")
+            # Phase 4: 引数 message 廃止。CODE (= ai_error_input_rejected) で識別。
+            return AIProviderInputRejectedError()
         return translate_gemini_error(exc)

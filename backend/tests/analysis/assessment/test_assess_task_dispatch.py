@@ -95,7 +95,7 @@ async def test_terminal_skip_delegates_to_handler() -> None:
     from app.queue.tasks.assessment import assess_content
 
     ctx = _make_ctx()
-    exc = AssessmentTerminalSkipError("bad config", code="ai_error_configuration")
+    exc = AssessmentTerminalSkipError(code="ai_error_configuration")
 
     with (
         _patch_ready_construction(),
@@ -123,7 +123,7 @@ async def test_category_missing_dispatches_to_handler() -> None:
     from app.queue.tasks.assessment import assess_content
 
     ctx = _make_ctx()
-    exc = AssessmentCategoryMissingError("unknown slug 'foo'")
+    exc = AssessmentCategoryMissingError()
 
     with (
         _patch_ready_construction(),
@@ -154,7 +154,7 @@ async def test_recoverable_reraise_true_raises() -> None:
     from app.queue.tasks.assessment import assess_content
 
     ctx = _make_ctx(retry_count=0, max_retries=2)  # retry 余地あり
-    exc = AssessmentRecoverableError("network", code="ai_error_network")
+    exc = AssessmentRecoverableError(code="ai_error_network")
 
     with (
         _patch_ready_construction(),
@@ -182,7 +182,7 @@ async def test_recoverable_reraise_false_returns() -> None:
     from app.queue.tasks.assessment import assess_content
 
     ctx = _make_ctx(retry_count=2, max_retries=2)  # 最終試行
-    exc = AssessmentRecoverableError("network", code="ai_error_network")
+    exc = AssessmentRecoverableError(code="ai_error_network")
 
     with (
         _patch_ready_construction(),
@@ -207,7 +207,7 @@ async def test_response_invalid_dispatches_to_handler() -> None:
     from app.queue.tasks.assessment import assess_content
 
     ctx = _make_ctx()
-    exc = AssessmentResponseInvalidError("schema violation")
+    exc = AssessmentResponseInvalidError()
 
     with (
         _patch_ready_construction(),

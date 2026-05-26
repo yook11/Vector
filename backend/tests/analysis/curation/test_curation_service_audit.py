@@ -185,7 +185,7 @@ async def test_response_invalid_error_passes_through_without_service_audit(
     with pytest.raises(CurationResponseInvalidError):
         await svc.execute(
             ready,
-            _curator(side_effect=CurationResponseInvalidError("schema violation")),
+            _curator(side_effect=CurationResponseInvalidError()),
         )
 
     # Service は audit を焼かない (失敗経路は task 層末尾の inline audit 責務、PR4)

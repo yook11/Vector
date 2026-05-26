@@ -1,4 +1,9 @@
-"""Stage 4 (Assessment) Layer 1 / Layer 2-B marker の振る舞いテスト。"""
+"""Stage 4 (Assessment) Layer 1 / Layer 2-B marker の振る舞いテスト。
+
+Phase 4: Layer 1 marker は kwargs-only constructor、``__str__`` は SAFE_ATTRS=
+("code",) のみ。Layer 2-B (Response / Category) は no-arg constructor + 固定
+code。``message`` 引数経路は廃止 (PII 隔離契約)。
+"""
 
 from __future__ import annotations
 
@@ -21,36 +26,27 @@ class TestAssessmentRecoverableError:
     """``AssessmentRecoverableError`` の constructor / instance attr 振る舞い。"""
 
     def test_holds_code_and_provider_error(self) -> None:
-        original = AIProviderRateLimitedError("rate limited")
+        original = AIProviderRateLimitedError()
         exc = AssessmentRecoverableError(
-            "wrapped",
             code="ai_error_rate_limited",
             provider_error=original,
         )
 
         assert exc.code == "ai_error_rate_limited"
         assert exc.provider_error is original
-        assert str(exc) == "wrapped"
+        assert str(exc) == "AssessmentRecoverableError(code='ai_error_rate_limited')"
 
     def test_provider_error_defaults_to_none(self) -> None:
-        # PR2 の Layer 2-B で provider_error なしで raise するための準備。
-        exc = AssessmentRecoverableError(
-            "no provider",
-            code="assessment_response_invalid",
-        )
+        exc = AssessmentRecoverableError(code="assessment_response_invalid")
 
         assert exc.code == "assessment_response_invalid"
         assert exc.provider_error is None
 
-    def test_message_defaults_to_empty_string(self) -> None:
-        exc = AssessmentRecoverableError(code="x")
+    def test_code_is_required_kwarg(self) -> None:
+        with pytest.raises(TypeError):
+            AssessmentRecoverableError()  # type: ignore[call-arg]
 
-        assert exc.code == "x"
-        assert exc.provider_error is None
-        assert str(exc) == ""
-
-    def test_code_is_keyword_only_required(self) -> None:
-        # ``code`` は keyword-only かつ required (positional 渡しは reject)。
+    def test_positional_message_rejected(self) -> None:
         with pytest.raises(TypeError):
             AssessmentRecoverableError("msg")  # type: ignore[call-arg]
 
@@ -59,27 +55,23 @@ class TestAssessmentTerminalSkipError:
     """``AssessmentTerminalSkipError`` の constructor / instance attr 振る舞い。"""
 
     def test_holds_code_and_provider_error(self) -> None:
-        original = AIProviderConfigurationError("bad api key")
+        original = AIProviderConfigurationError()
         exc = AssessmentTerminalSkipError(
-            "wrapped",
             code="ai_error_configuration",
             provider_error=original,
         )
 
         assert exc.code == "ai_error_configuration"
         assert exc.provider_error is original
-        assert str(exc) == "wrapped"
+        assert str(exc) == "AssessmentTerminalSkipError(code='ai_error_configuration')"
 
     def test_provider_error_defaults_to_none(self) -> None:
-        exc = AssessmentTerminalSkipError(
-            "no provider",
-            code="assessment_category_missing",
-        )
+        exc = AssessmentTerminalSkipError(code="assessment_category_missing")
 
         assert exc.code == "assessment_category_missing"
         assert exc.provider_error is None
 
-    def test_code_is_keyword_only_required(self) -> None:
+    def test_positional_message_rejected(self) -> None:
         with pytest.raises(TypeError):
             AssessmentTerminalSkipError("msg")  # type: ignore[call-arg]
 
@@ -117,17 +109,22 @@ class TestAssessmentResponseInvalidError:
         assert issubclass(AssessmentResponseInvalidError, AssessmentError)
 
     def test_holds_fixed_code(self) -> None:
-        exc = AssessmentResponseInvalidError("schema mismatch")
+        exc = AssessmentResponseInvalidError()
         assert exc.code == "assessment_response_invalid"
 
     def test_provider_error_is_none(self) -> None:
-        # Stage 4 工程由来なので provider 例外起源ではない
-        exc = AssessmentResponseInvalidError("schema mismatch")
+        exc = AssessmentResponseInvalidError()
         assert exc.provider_error is None
 
-    def test_message_propagates(self) -> None:
-        exc = AssessmentResponseInvalidError("schema mismatch")
-        assert str(exc) == "schema mismatch"
+    def test_str_renders_code_only(self) -> None:
+        exc = AssessmentResponseInvalidError()
+        # Phase 4: 旧 message 引数廃止、__str__ は code のみ
+        expected = "AssessmentResponseInvalidError(code='assessment_response_invalid')"
+        assert str(exc) == expected
+
+    def test_positional_message_rejected(self) -> None:
+        with pytest.raises(TypeError):
+            AssessmentResponseInvalidError("schema mismatch")  # type: ignore[call-arg]
 
 
 class TestAssessmentCategoryMissingError:
@@ -140,16 +137,22 @@ class TestAssessmentCategoryMissingError:
         assert issubclass(AssessmentCategoryMissingError, AssessmentError)
 
     def test_holds_fixed_code(self) -> None:
-        exc = AssessmentCategoryMissingError("unknown slug")
+        exc = AssessmentCategoryMissingError()
         assert exc.code == "assessment_category_missing"
 
     def test_provider_error_is_none(self) -> None:
-        exc = AssessmentCategoryMissingError("unknown slug")
+        exc = AssessmentCategoryMissingError()
         assert exc.provider_error is None
 
-    def test_message_propagates(self) -> None:
-        exc = AssessmentCategoryMissingError("unknown slug")
-        assert str(exc) == "unknown slug"
+    def test_str_renders_code_only(self) -> None:
+        exc = AssessmentCategoryMissingError()
+        expected = "AssessmentCategoryMissingError(code='assessment_category_missing')"
+        assert str(exc) == expected
+
+    def test_positional_message_rejected(self) -> None:
+        # Phase 4: 具体 slug は SAFE_ATTRS 外で構造的に SaaS に流れない契約。
+        with pytest.raises(TypeError):
+            AssessmentCategoryMissingError("unknown slug")  # type: ignore[call-arg]
 
 
 class TestLayer2BMarkersDisjoint:

@@ -82,23 +82,27 @@ def _make_curator(
 async def test_policy_block_finish_reason_raises_output_blocked(
     blocked_reason: FinishReason,
 ) -> None:
-    """policy block 系 finish_reason は Layer 2-A の OutputBlocked を raise する。"""
+    """policy block 系 finish_reason は Layer 2-A の OutputBlocked を raise する。
+
+    Phase 4: 旧 ``str(exc)`` 経由の finish_reason 文字列検査は廃止
+    (AIProvider*Error は SAFE_ATTRS=("CODE",) で SDK 値を載せない構造的契約)。
+    finish_reason 種別の確認は class 名と CODE 値で行う。
+    """
     response = _make_response(finish_reason=blocked_reason, text="some draft")
     curator = _make_curator(response)
     with pytest.raises(AIProviderOutputBlockedError) as ei:
         await curator._call_api("prompt")
-    assert blocked_reason.name in str(ei.value)
     assert ei.value.CODE == "ai_error_output_blocked"
 
 
 @pytest.mark.asyncio
 async def test_policy_block_with_no_text_still_raises_output_blocked() -> None:
-    """raw_response 空でも OutputBlocked は raise (message に finish_reason 含む)。"""
+    """raw_response 空でも OutputBlocked は raise (class 名で識別)。"""
     response = _make_response(finish_reason=FinishReason.SAFETY, text="")
     curator = _make_curator(response)
     with pytest.raises(AIProviderOutputBlockedError) as ei:
         await curator._call_api("prompt")
-    assert "SAFETY" in str(ei.value)
+    assert ei.value.CODE == "ai_error_output_blocked"
 
 
 @pytest.mark.asyncio

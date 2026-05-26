@@ -279,11 +279,12 @@ async def test_curator_call_once_translates_sdk_error() -> None:
 async def test_curator_call_once_passes_through_domain_error() -> None:
     curator = _create_curator()
     # AIProviderError サブクラスは _call_api 内で raise 済として透過する
-    curator._call_api = AsyncMock(
-        side_effect=AIProviderServiceUnavailableError("empty response")
-    )
+    # Phase 4: AIProvider*Error は VectorDomainError 継承で __str__ が SAFE_ATTRS
+    # 経路のみ。constructor は accept-and-discard で legacy 互換、test は class 名
+    # で発火経路を pin する (旧 match=message は str(exc) に出ないため不要)。
+    curator._call_api = AsyncMock(side_effect=AIProviderServiceUnavailableError())
 
-    with pytest.raises(AIProviderServiceUnavailableError, match="empty response"):
+    with pytest.raises(AIProviderServiceUnavailableError):
         await curator._call_once("test prompt")
 
 

@@ -131,7 +131,7 @@ class TestCallOncePassthrough:
 
     @pytest.mark.asyncio
     async def test_assessment_response_invalid_passes_through_unchanged(self) -> None:
-        original = AssessmentResponseInvalidError("schema mismatch")
+        original = AssessmentResponseInvalidError()
         cls = _StubAssessor()
         cls._call_api = AsyncMock(side_effect=original)  # type: ignore[method-assign]
         cls._translate_error = MagicMock(  # type: ignore[method-assign]
@@ -145,7 +145,7 @@ class TestCallOncePassthrough:
 
     @pytest.mark.asyncio
     async def test_assessment_recoverable_base_passes_through(self) -> None:
-        original = AssessmentRecoverableError("x", code="z")
+        original = AssessmentRecoverableError(code="z")
         cls = _StubAssessor()
         cls._call_api = AsyncMock(side_effect=original)  # type: ignore[method-assign]
         cls._translate_error = MagicMock(  # type: ignore[method-assign]
@@ -158,7 +158,7 @@ class TestCallOncePassthrough:
 
     @pytest.mark.asyncio
     async def test_assessment_terminal_skip_base_passes_through(self) -> None:
-        original = AssessmentTerminalSkipError("x", code="z")
+        original = AssessmentTerminalSkipError(code="z")
         cls = _StubAssessor()
         cls._call_api = AsyncMock(side_effect=original)  # type: ignore[method-assign]
         cls._translate_error = MagicMock(  # type: ignore[method-assign]

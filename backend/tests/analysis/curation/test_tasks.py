@@ -241,6 +241,10 @@ class TestCurateContent:
         mock_ctx = _make_ctx(
             curator=_make_provider_fake(), retry_count=0, max_retries=1
         )
+        # Phase 4: AIProviderConfigurationError は accept-and-discard。message
+        # 引数は __str__ に出ない (SAFE_ATTRS=("CODE",) 経路のみ) ため、business
+        # 側の secret 混入経路は構造的に塞がれる。本テストでは audit 側の
+        # redact_secrets 経路を主軸に検証する。
         business_exc = AIProviderConfigurationError(
             "api key missing Authorization: Bearer sk-live-BUSINESSSECRETabc"
         )

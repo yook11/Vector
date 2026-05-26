@@ -58,7 +58,8 @@ class GeminiAssessor(BaseAssessor):
     def __init__(self) -> None:
         api_key = settings.gemini_api_key.get_secret_value()
         if not api_key:
-            raise AIProviderConfigurationError("GEMINI_API_KEY is not configured")
+            # Phase 4: 引数 message は SAFE_ATTRS 外。CODE と起動ログで識別。
+            raise AIProviderConfigurationError()
         self._client = genai.Client(api_key=api_key)
 
     # -- BaseAssessor property 契約 --
@@ -107,22 +108,18 @@ class GeminiAssessor(BaseAssessor):
         # 例外ではなくレスポンス attribute として届く)。
         finish_reason_name = self._extract_finish_reason_name(response)
         if finish_reason_name in _BLOCKED_FINISH_REASONS:
-            raise AIProviderOutputBlockedError(
-                f"gemini blocked output: finish_reason={finish_reason_name}"
-            )
+            # Phase 4: finish_reason 値は audit context として CODE 経由で残す。
+            raise AIProviderOutputBlockedError()
 
         text = response.text or ""
         try:
             payload = json.loads(text)
         except json.JSONDecodeError as exc:
-            raise AssessmentResponseInvalidError(
-                f"Gemini response is not valid JSON: {exc}"
-            ) from exc
+            # Phase 4: 旧 message 引数廃止 (Gemini response 本文を含む経路)。
+            raise AssessmentResponseInvalidError() from exc
 
         if not isinstance(payload, dict):
-            raise AssessmentResponseInvalidError(
-                f"Gemini response is not a JSON object: {type(payload).__name__}"
-            )
+            raise AssessmentResponseInvalidError()
 
         # parse_assessment を先に通すことで strict 規約 (3 key 存在 + str 型強制)
         # を担保。通過後の payload["category"] は str 確定なので str() 暗黙 coerce

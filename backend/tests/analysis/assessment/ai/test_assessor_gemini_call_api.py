@@ -131,6 +131,8 @@ class TestGeminiCallApiSuccess:
 class TestGeminiFinishReasonBlocked:
     @pytest.mark.asyncio
     async def test_finish_reason_safety_raises_blocked(self) -> None:
+        """Phase 4: 旧 ``str(exc)`` で finish_reason 検査は廃止。
+        AIProvider*Error は SAFE_ATTRS=("CODE",) のみで識別する契約。"""
         assessor = GeminiAssessor()
         text = json.dumps({"category": "ai", "investor_take": "x", "events": []})
         _patch_assessor_call(
@@ -140,7 +142,7 @@ class TestGeminiFinishReasonBlocked:
         with pytest.raises(AIProviderOutputBlockedError) as exc_info:
             await assessor._call_api("prompt")
 
-        assert "SAFETY" in str(exc_info.value)
+        assert exc_info.value.CODE == "ai_error_output_blocked"
 
     @pytest.mark.asyncio
     async def test_finish_reason_recitation_raises_blocked(self) -> None:
@@ -152,7 +154,7 @@ class TestGeminiFinishReasonBlocked:
         with pytest.raises(AIProviderOutputBlockedError) as exc_info:
             await assessor._call_api("prompt")
 
-        assert "RECITATION" in str(exc_info.value)
+        assert exc_info.value.CODE == "ai_error_output_blocked"
 
     @pytest.mark.asyncio
     async def test_finish_reason_stop_does_not_raise(self) -> None:
@@ -173,13 +175,14 @@ class TestGeminiFinishReasonBlocked:
 class TestGeminiInvalidPayload:
     @pytest.mark.asyncio
     async def test_invalid_json_raises_response_invalid(self) -> None:
+        """Phase 4: __str__ は code 固定値のみ。marker class + code で identity を pin。"""
         assessor = GeminiAssessor()
         _patch_assessor_call(assessor, _stub_response("not json at all"))
 
         with pytest.raises(AssessmentResponseInvalidError) as exc_info:
             await assessor._call_api("prompt")
 
-        assert "not valid JSON" in str(exc_info.value)
+        assert exc_info.value.code == "assessment_response_invalid"
 
     @pytest.mark.asyncio
     async def test_non_object_payload_raises_response_invalid(self) -> None:
@@ -190,7 +193,7 @@ class TestGeminiInvalidPayload:
         with pytest.raises(AssessmentResponseInvalidError) as exc_info:
             await assessor._call_api("prompt")
 
-        assert "not a JSON object" in str(exc_info.value)
+        assert exc_info.value.code == "assessment_response_invalid"
 
     @pytest.mark.asyncio
     async def test_missing_key_payload_raises_response_invalid(self) -> None:

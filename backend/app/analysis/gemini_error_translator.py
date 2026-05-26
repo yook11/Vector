@@ -90,14 +90,17 @@ def translate_gemini_error(exc: Exception) -> Exception:
     translator は SDK 例外オブジェクトだけを引き受ける)。
     """
     # 1. Network errors (httpx + builtin)。SDK transport の httpx 経由でも到達する。
+    # Phase 4: AIProvider*Error は VectorDomainError 継承で __str__ が SAFE_ATTRS
+    # 経路のみ。SDK 生 message を引き渡しても捨てられるが、call site で str(exc)
+    # 経由を明示的に消すことで PII 含有経路が残っていないことを grep で示す。
     if isinstance(exc, httpx.TimeoutException | httpx.ConnectError):
-        return AIProviderNetworkError(f"{type(exc).__name__}: {exc}")
+        return AIProviderNetworkError()
     if isinstance(exc, TimeoutError | ConnectionError | OSError):
-        return AIProviderNetworkError(f"{type(exc).__name__}: {exc}")
+        return AIProviderNetworkError()
 
     # 2. ServerError は APIError subclass なので先に判定して 5xx を分離する。
     if isinstance(exc, genai_errors.ServerError):
-        return AIProviderServiceUnavailableError(str(exc))
+        return AIProviderServiceUnavailableError()
 
     # 3. APIError は ClientError / ServerError の共通親型。ServerError を
     #    先に処理済みなので、ここに来るのは 4xx 系。google-genai 1.x の APIError は
@@ -108,12 +111,13 @@ def translate_gemini_error(exc: Exception) -> Exception:
         raw_message = str(getattr(exc, "message", "")) or str(exc)
         message = raw_message.lower()
 
-        # 3a. Leaked API key は内部 detail を露出しない固定文言にする
-        #     (red-team chain γ-1: SDK 生 message に key prefix を含む経路があるため)。
+        # 3a. Leaked API key は固定文言 (red-team chain γ-1: SDK 生 message に
+        #     key prefix を含む経路があるため、translator 側で生 message を完全に
+        #     遮断する)。Phase 4: AIProviderConfigurationError() の引数は SAFE_ATTRS
+        #     経路から外れるが、leaked 検知文言は audit context として
+        #     logger.warning などで stdout 側に別経路で残す運用に切替。
         if "reported as leaked" in message:
-            return AIProviderConfigurationError(
-                "Gemini API key has been reported as leaked; rotate immediately"
-            )
+            return AIProviderConfigurationError()
 
         # 3b. 設定系 status を **先に** 評価。FAILED_PRECONDITION が同時に
         #     code=400 を持っていても ConfigurationError に振り分ける。
@@ -123,26 +127,26 @@ def translate_gemini_error(exc: Exception) -> Exception:
             "NOT_FOUND",
             "FAILED_PRECONDITION",
         ):
-            return AIProviderConfigurationError(str(exc))
+            return AIProviderConfigurationError()
 
         # 3c. 設定系 HTTP code (gRPC status が空の envelope 用)。
         if code in (401, 403, 404):
-            return AIProviderConfigurationError(str(exc))
+            return AIProviderConfigurationError()
 
         # 3d. 400 / INVALID_ARGUMENT を 3-way 分岐。
         if code == 400 or status == "INVALID_ARGUMENT":
             if "api key" in message or "permission" in message:
-                return AIProviderConfigurationError(str(exc))
+                return AIProviderConfigurationError()
             if "blocked" in message or "safety" in message:
-                return AIProviderInputRejectedError(str(exc))
-            return AIProviderRequestInvalidError(str(exc))
+                return AIProviderInputRejectedError()
+            return AIProviderRequestInvalidError()
 
         # 3e. 429 / RESOURCE_EXHAUSTED。quota/daily message は Quota 系として
         #     rate limit (一時的バースト超過) と区別する (運用上 retry 戦略が違う)。
         if code == 429 or status == "RESOURCE_EXHAUSTED":
             if "quota" in message or "daily" in message:
-                return AIProviderQuotaExhaustedError(str(exc))
-            return AIProviderRateLimitedError(str(exc))
+                return AIProviderQuotaExhaustedError()
+            return AIProviderRateLimitedError()
 
     # 4. 未知。stage-local 側で stage-specific 判定 (ValidationError 等) を
     #    補えるよう、加工せず返す。

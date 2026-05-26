@@ -96,7 +96,7 @@ async def test_terminal_skip_delegates_to_handler() -> None:
     from app.queue.tasks.embedding import generate_embedding
 
     ctx = _make_ctx()
-    exc = EmbeddingTerminalSkipError("bad config", code="ai_error_configuration")
+    exc = EmbeddingTerminalSkipError(code="ai_error_configuration")
 
     with (
         _patch_ready_construction(),
@@ -126,7 +126,7 @@ async def test_recoverable_reraise_true_raises() -> None:
     from app.queue.tasks.embedding import generate_embedding
 
     ctx = _make_ctx(retry_count=0, max_retries=2)  # retry 余地あり
-    exc = EmbeddingRecoverableError("network", code="ai_error_network")
+    exc = EmbeddingRecoverableError(code="ai_error_network")
 
     with (
         _patch_ready_construction(),
@@ -152,7 +152,7 @@ async def test_recoverable_reraise_false_returns() -> None:
     from app.queue.tasks.embedding import generate_embedding
 
     ctx = _make_ctx(retry_count=2, max_retries=2)  # 最終試行
-    exc = EmbeddingRecoverableError("network", code="ai_error_network")
+    exc = EmbeddingRecoverableError(code="ai_error_network")
 
     with (
         _patch_ready_construction(),
@@ -175,7 +175,7 @@ async def test_response_invalid_dispatches_to_handler() -> None:
     from app.queue.tasks.embedding import generate_embedding
 
     ctx = _make_ctx()
-    exc = EmbeddingResponseInvalidError("dimension mismatch")
+    exc = EmbeddingResponseInvalidError()
 
     with (
         _patch_ready_construction(),

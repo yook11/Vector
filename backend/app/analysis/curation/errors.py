@@ -16,9 +16,16 @@ Stage 4 (assessment) / Stage 5 (embedding) と対称の構造を取る。Stage 3
   Stage 3 の解釈を tuple 3 つ (Drop / Keep / Recoverable) に集約する。
 
 設計詳細: ``specs/pipeline-events-error-taxonomy.md`` §Layer 1 marker / §Layer 2-A
+
+Phase 4: Layer 1 marker を ``VectorDomainError`` 継承 + kwargs-only constructor
+に締めて、``__str__`` 経路 (Logfire span ``exception.message``) から PII を
+構造的に排除する。``str(exc)`` で構築していた message 引数は ACL / Layer 2-B
+ともに撤去する。
 """
 
 from __future__ import annotations
+
+from typing import ClassVar
 
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
@@ -32,13 +39,14 @@ from app.analysis.ai_provider_errors import (
     AIProviderRequestInvalidError,
     AIProviderServiceUnavailableError,
 )
+from app.logfire_exceptions import VectorDomainError
 
 # ---------------------------------------------------------------------------
 # Layer 1 marker (Stage 3 task 層の dispatch 軸、3 axis)
 # ---------------------------------------------------------------------------
 
 
-class CurationError(Exception):
+class CurationError(VectorDomainError):
     """Stage 3 全例外の共通基底。
 
     task 層は本クラスでなく ``CurationRecoverableError`` /
@@ -55,6 +63,10 @@ class CurationRecoverableError(CurationError):
     違反 (parse 不能) など。taskiq retry の上限後は cron 救済で消化する
     (旧 INLINE_RETRY 軸は廃止、Stage 4/5 と統一)。
 
+    Phase 4: constructor は kwargs-only。``message`` 引数は廃止し ``__str__``
+    は ``CurationRecoverableError(code='...')`` 固定形式になる
+    (Logfire span attribute への PII 漏出経路封鎖)。
+
     Attributes:
         code: audit ラベル (``pipeline_events.code`` 列に直接書き込む)。
             provider 由来は ``exc.CODE`` を引き継ぎ、Stage 3 specific は
@@ -64,17 +76,18 @@ class CurationRecoverableError(CurationError):
             Stage 3 specific (Layer 2-B) では ``None``。
     """
 
+    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("code",)
+
     code: str
     provider_error: AIProviderError | None
 
     def __init__(
         self,
-        message: str = "",
         *,
         code: str,
         provider_error: AIProviderError | None = None,
     ) -> None:
-        super().__init__(message)
+        super().__init__()
         self.code = code
         self.provider_error = provider_error
 
@@ -86,6 +99,8 @@ class CurationTerminalKeepError(CurationError):
     復旧する系統。article DELETE せず audit のみ焼いて return する。運用者が
     根本原因 (API key / 残高など) を直したあと cron で再 dispatch される。
 
+    Phase 4: kwargs-only constructor、``__str__`` は SAFE_ATTRS=(``code``,) のみ。
+
     Attributes:
         code: audit ラベル (``pipeline_events.code`` 列に直接書き込む)。
             provider 由来は ``exc.CODE`` を引き継ぐ。
@@ -93,17 +108,18 @@ class CurationTerminalKeepError(CurationError):
             identity 付きで保持。
     """
 
+    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("code",)
+
     code: str
     provider_error: AIProviderError | None
 
     def __init__(
         self,
-        message: str = "",
         *,
         code: str,
         provider_error: AIProviderError | None = None,
     ) -> None:
-        super().__init__(message)
+        super().__init__()
         self.code = code
         self.provider_error = provider_error
 
@@ -115,23 +131,26 @@ class CurationTerminalDropError(CurationError):
     (output blocked) ケース。記事自体に問題があり、別 model / 再試行でも通らない
     ため audit 後 article を repository から削除する。
 
+    Phase 4: kwargs-only constructor、``__str__`` は SAFE_ATTRS=(``code``,) のみ。
+
     Attributes:
         code: audit ラベル (``pipeline_events.code`` 列に直接書き込む)。
             provider 由来は ``exc.CODE`` を引き継ぐ。
         provider_error: 元 ``AIProviderError`` instance を identity 付きで保持。
     """
 
+    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("code",)
+
     code: str
     provider_error: AIProviderError | None
 
     def __init__(
         self,
-        message: str = "",
         *,
         code: str,
         provider_error: AIProviderError | None = None,
     ) -> None:
-        super().__init__(message)
+        super().__init__()
         self.code = code
         self.provider_error = provider_error
 
@@ -151,11 +170,13 @@ class CurationResponseInvalidError(CurationRecoverableError):
 
     AI モデルの揺らぎで発生、cron 救済で現実的に回復する見込み。
     ``provider_error=None`` で marker を継承 (provider 例外起源ではないため)。
+
+    Phase 4: 旧 ``message`` 引数は廃止 (PII 含有経路)。code は固定値を継承元に
+    伝える。
     """
 
-    def __init__(self, message: str) -> None:
+    def __init__(self) -> None:
         super().__init__(
-            message,
             code="extraction_response_invalid",
             provider_error=None,
         )
@@ -218,6 +239,11 @@ def map_provider_to_curation(exc: AIProviderError) -> CurationError:
     subclass で上記 3 tuple のいずれにも未登録のものは ``TypeError`` を raise する
     (新規 provider error 種別の登録漏れを deploy 前に検知する fail-fast)。
 
+    Phase 4: ``str(exc)`` を marker constructor に渡していた旧経路は廃止
+    (Layer 1 marker が kwargs-only に締まったため、SDK message が ``__str__``
+    に乗らない構造)。``provider_error`` は instance attr として保持し audit
+    forensics で利用する。
+
     Args:
         exc: curator 層が raise した ``AIProviderError`` instance。
 
@@ -232,19 +258,16 @@ def map_provider_to_curation(exc: AIProviderError) -> CurationError:
     """
     if isinstance(exc, CURATION_RECOVERABLE_PROVIDER_ERRORS):
         return CurationRecoverableError(
-            str(exc),
             code=exc.CODE,
             provider_error=exc,
         )
     if isinstance(exc, CURATION_TERMINAL_KEEP_PROVIDER_ERRORS):
         return CurationTerminalKeepError(
-            str(exc),
             code=exc.CODE,
             provider_error=exc,
         )
     if isinstance(exc, CURATION_TERMINAL_DROP_PROVIDER_ERRORS):
         return CurationTerminalDropError(
-            str(exc),
             code=exc.CODE,
             provider_error=exc,
         )

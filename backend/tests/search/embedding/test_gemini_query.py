@@ -66,7 +66,7 @@ def test_init_raises_configuration_error_when_api_key_missing() -> None:
     """API key が空文字なら ``AIProviderConfigurationError`` で初期化失敗。"""
     with patch("app.search.embedding.gemini.settings") as mock_settings:
         mock_settings.gemini_api_key.get_secret_value.return_value = ""
-        with pytest.raises(AIProviderConfigurationError, match="GEMINI_API_KEY"):
+        with pytest.raises(AIProviderConfigurationError):
             GeminiQueryEmbedder()
 
 
@@ -111,7 +111,7 @@ async def test_embed_query_raises_request_invalid_when_embeddings_empty() -> Non
     response.embeddings = []
     embedder._client.aio.models.embed_content = AsyncMock(return_value=response)
 
-    with pytest.raises(AIProviderRequestInvalidError, match="no embeddings"):
+    with pytest.raises(AIProviderRequestInvalidError):
         await embedder.embed_query("text")
 
 
@@ -122,7 +122,7 @@ async def test_embed_query_raises_request_invalid_when_values_missing() -> None:
     response.embeddings = [MagicMock(values=None)]
     embedder._client.aio.models.embed_content = AsyncMock(return_value=response)
 
-    with pytest.raises(AIProviderRequestInvalidError, match="without values"):
+    with pytest.raises(AIProviderRequestInvalidError):
         await embedder.embed_query("text")
 
 
@@ -152,7 +152,13 @@ def test_translate_leaked_key_to_configuration_error() -> None:
 
 
 def test_translate_leaked_key_message_is_fixed_string_not_sdk_echo() -> None:
-    """red-team chain γ-1: SDK の生 message は捨て固定文言のみを保持する。"""
+    """red-team chain γ-1: SDK の生 message が ``__str__`` 経路に乗らない。
+
+    Phase 4: AIProvider*Error は VectorDomainError 継承で ``__str__`` が
+    SAFE_ATTRS=("CODE",) 経路のみ。SDK の key prefix / URL は構造的に SAFE_ATTRS
+    に乗らないため、translator が引数なしで AIProviderConfigurationError() を
+    返してもそれ自体が PII 隔離契約として機能する。
+    """
     embedder = _make_query_embedder()
     sdk_message = (
         "API key AIzaSyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q has been reported as leaked"
@@ -160,10 +166,8 @@ def test_translate_leaked_key_message_is_fixed_string_not_sdk_echo() -> None:
     result = embedder._translate_error(_api_error(400, "INVALID_ARGUMENT", sdk_message))
 
     assert isinstance(result, AIProviderConfigurationError)
-    assert (
-        str(result) == "Gemini API key has been reported as leaked; rotate immediately"
-    )
     assert "AIza" not in str(result)
+    assert "ai_error_configuration" in str(result)
 
 
 def test_translate_invalid_argument_to_request_invalid_error() -> None:

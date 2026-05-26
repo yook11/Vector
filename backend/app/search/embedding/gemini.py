@@ -41,7 +41,8 @@ class GeminiQueryEmbedder(QueryEmbedder):
     def __init__(self) -> None:
         api_key = settings.gemini_api_key.get_secret_value()
         if not api_key:
-            raise AIProviderConfigurationError("GEMINI_API_KEY is not configured")
+            # Phase 4: 引数 message は SAFE_ATTRS 外。CODE と起動ログで識別。
+            raise AIProviderConfigurationError()
         self._client = genai.Client(api_key=api_key)
 
     async def _call_api(self, text: str) -> list[float]:
@@ -60,14 +61,11 @@ class GeminiQueryEmbedder(QueryEmbedder):
         )
         embeddings = response.embeddings
         if not embeddings:
-            raise AIProviderRequestInvalidError(
-                f"Gemini returned no embeddings (response={response!r})"
-            )
+            # Phase 4: SDK response (PII 含有) を __str__ 経路に乗せない。
+            raise AIProviderRequestInvalidError()
         first = embeddings[0]
         if first.values is None:
-            raise AIProviderRequestInvalidError(
-                f"Gemini returned embedding without values (embedding={first!r})"
-            )
+            raise AIProviderRequestInvalidError()
         return list(first.values)
 
     def _translate_error(self, exc: Exception) -> Exception:
@@ -78,10 +76,13 @@ class GeminiQueryEmbedder(QueryEmbedder):
         (caller である ``_embed_once`` が bare re-raise する規約)。
         """
         # network 系 (httpx は SDK の transport)
+        # Phase 4: AIProvider*Error は VectorDomainError 継承で __str__ が SAFE_ATTRS
+        # 経路のみ。str(exc) を引き渡しても __str__ には出ないが、call site を
+        # 明示的に空引数化して PII 含有経路が残っていないことを grep で示す。
         if isinstance(exc, (httpx.TimeoutException, httpx.ConnectError)):
-            return AIProviderNetworkError(f"{type(exc).__name__}: {exc}")
+            return AIProviderNetworkError()
         if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
-            return AIProviderNetworkError(f"{type(exc).__name__}: {exc}")
+            return AIProviderNetworkError()
 
         # genai SDK の例外階層 (HTTP status + gRPC status の両方を見る)
         if isinstance(exc, genai_errors.ClientError):
@@ -93,29 +94,27 @@ class GeminiQueryEmbedder(QueryEmbedder):
             # red-team chain γ-1: SDK 生 message に key prefix /
             # Authorization header が含まれる経路があるため固定文言に丸める。
             if "reported as leaked" in message:
-                return AIProviderConfigurationError(
-                    "Gemini API key has been reported as leaked; rotate immediately"
-                )
+                return AIProviderConfigurationError()
 
             if code == 400 or status == "INVALID_ARGUMENT":
                 if "api key" in message or "permission" in message:
-                    return AIProviderConfigurationError(str(exc))
+                    return AIProviderConfigurationError()
                 if "blocked" in message or "safety" in message:
-                    return AIProviderInputRejectedError(str(exc))
-                return AIProviderRequestInvalidError(str(exc))
+                    return AIProviderInputRejectedError()
+                return AIProviderRequestInvalidError()
             if code in (401, 403, 404) or status in (
                 "UNAUTHENTICATED",
                 "PERMISSION_DENIED",
                 "NOT_FOUND",
                 "FAILED_PRECONDITION",
             ):
-                return AIProviderConfigurationError(str(exc))
+                return AIProviderConfigurationError()
             if code == 429 or status == "RESOURCE_EXHAUSTED":
                 if "quota" in message or "daily" in message:
-                    return AIProviderQuotaExhaustedError(str(exc))
-                return AIProviderRateLimitedError(str(exc))
+                    return AIProviderQuotaExhaustedError()
+                return AIProviderRateLimitedError()
 
         if isinstance(exc, genai_errors.ServerError):
-            return AIProviderServiceUnavailableError(str(exc))
+            return AIProviderServiceUnavailableError()
 
         return exc  # bare re-raise (UNKNOWN)
