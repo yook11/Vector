@@ -144,6 +144,9 @@ async def test_append_signal_records_success_with_code(
             ready=_ready(article),
             envelope=_signal_envelope(),
             code="curated_signal",
+            input_content_length=123,
+            input_content_head="CALLER_PRECOMPUTED_HEAD",
+            input_content_hash="CALLER_HASH_16XX",
         )
         await session.commit()
 
@@ -154,6 +157,10 @@ async def test_append_signal_records_success_with_code(
     assert ev.code == "curated_signal"
     assert ev.payload["ai_raw_response"]
     assert ev.payload["source_name"] == str(sample_source.name)
+    # caller pre-compute 値がそのまま payload に焼かれる (repository は計算しない)
+    assert ev.payload["input_content_length"] == 123
+    assert ev.payload["input_content_head"] == "CALLER_PRECOMPUTED_HEAD"
+    assert ev.payload["input_content_hash"] == "CALLER_HASH_16XX"
     # PR1-a: ai_model / prompt_version / raw_relevance は envelope 経由で焼かれる
     assert ev.payload["ai_model"] == GEMINI_CURATION_SPEC.model
     assert ev.payload["prompt_version"] == GEMINI_CURATION_SPEC.version
@@ -173,6 +180,9 @@ async def test_append_noise_records_curated_noise(
             ready=_ready(article),
             envelope=_noise_envelope(),
             code="curated_noise",
+            input_content_length=456,
+            input_content_head="NOISE_PRECOMPUTED_HEAD",
+            input_content_hash="NOISE_HASH_16XYZ",
         )
         await session.commit()
 
@@ -180,6 +190,10 @@ async def test_append_noise_records_curated_noise(
     assert ev.outcome_code == "curated_noise"
     assert ev.category == "success"
     assert ev.code == "curated_noise"
+    # caller pre-compute 値がそのまま payload に焼かれる
+    assert ev.payload["input_content_length"] == 456
+    assert ev.payload["input_content_head"] == "NOISE_PRECOMPUTED_HEAD"
+    assert ev.payload["input_content_hash"] == "NOISE_HASH_16XYZ"
     # PR1-a: raw_relevance は envelope.raw_relevance ("noise") から焼かれる
     assert ev.payload["raw_relevance"] == "noise"
 
@@ -212,10 +226,12 @@ async def test_append_drop_article_records_failure_with_drop_category(
     async with session_factory() as session:
         await CurationAuditRepository(session).append_drop_article(
             article_id=article_id,
-            original_content=article.original_content,
             code=exc.code,
             exc=exc,
             curator=curator,
+            input_content_length=789,
+            input_content_head="DROP_PRECOMPUTED_HEAD",
+            input_content_hash="DROP_HASH_16ABCDEF",
         )
         await session.commit()
 
@@ -233,6 +249,10 @@ async def test_append_drop_article_records_failure_with_drop_category(
     assert any(
         s.endswith(".AIProviderOutputBlockedError") for s in ev.payload["error_chain"]
     )
+    # caller pre-compute 値がそのまま payload に焼かれる (drop path も同形)
+    assert ev.payload["input_content_length"] == 789
+    assert ev.payload["input_content_head"] == "DROP_PRECOMPUTED_HEAD"
+    assert ev.payload["input_content_hash"] == "DROP_HASH_16ABCDEF"
     # PR2: 失敗 audit の ai_model / prompt_version は extractor 経由
     # (Gemini ClassVar hardcode を消した)
     assert ev.payload["ai_model"] == "test-extract-model"
@@ -361,6 +381,9 @@ async def test_append_failure_dispatches_category_and_code_from_exc(
             exc=exc,
             attempt=2,
             curator=curator,
+            input_content_length=42,
+            input_content_head="FAIL_PRECOMPUTED_HEAD",
+            input_content_hash="FAIL_HASH_16AAAAA",
         )
         await session.commit()
 
@@ -372,6 +395,10 @@ async def test_append_failure_dispatches_category_and_code_from_exc(
     assert ev.attempt == 2
     assert ev.error_class is not None
     assert ev.error_class.endswith(f".{type(exc).__name__}")
+    # caller pre-compute 値がそのまま payload に焼かれる (failure path も同形)
+    assert ev.payload["input_content_length"] == 42
+    assert ev.payload["input_content_head"] == "FAIL_PRECOMPUTED_HEAD"
+    assert ev.payload["input_content_hash"] == "FAIL_HASH_16AAAAA"
     # PR2: 失敗 audit の ai_model / prompt_version は extractor 経由
     # (Gemini ClassVar hardcode を消した)
     assert ev.payload["ai_model"] == "test-extract-model"
@@ -397,6 +424,9 @@ async def test_repository_does_not_commit(
             ready=_ready(article),
             envelope=_signal_envelope(),
             code="curated_signal",
+            input_content_length=1,
+            input_content_head="x",
+            input_content_hash="0000000000000000",
         )
         # 意図的に commit しない (rollback で消える)
 

@@ -27,19 +27,13 @@ Gemini hardcode 依存は引き続き持たない)。
 PR-E.1.5 で ``Stage.CURATION`` / ``CurationPayload`` に rename 済み (旧
 ``extraction`` wire 値は migration z1_curation_completion_rename で移行)。
 
-逆依存の暫定許容 (本 PR 一時的):
-    本 module は curation context 内の helper
-    ``app.analysis.curation.audit.base_curation_payload_fields`` に依存する
-    (helper は ``GeminiCurationPrompt.CONTENT_MAX_LENGTH`` /
-    ``sanitize_for_untrusted_block`` への参照を内包するため curation 側に残した方が
-    cohesive)。これは ``app/audit/`` → ``app/analysis/curation/`` の逆方向 import を
-    一時的に許容している (``app/audit/__init__.py`` の依存方向宣言と矛盾)。
-
-    別 PR で「caller pre-compute (案 C)」に置換する宿題:
-    curation Service / failure_handling / backfill task 側で
-    ``base_curation_payload_fields(...)`` を事前算出し、
-    ``CurationAuditRepository.append_*`` に kwargs で渡す。これにより audit context は
-    curation domain を import しなくなり、依存方向が完全に片方向化する。
+caller pre-compute による依存方向の片方向化:
+    ``input_content_length`` / ``input_content_head`` / ``input_content_hash`` は
+    caller (``app.analysis.curation.service`` / ``...failure_handling``) が
+    ``build_curation_audit_input(...)`` で事前算出し kwargs として渡す。
+    sanitize / truncate / hash の計算 (curation domain knowledge) は curation
+    内部に閉じ、本 module は ``app.analysis.curation.audit`` への import を
+    持たない (``app/audit/__init__.py`` の依存方向宣言と整合)。
 """
 
 from __future__ import annotations
@@ -49,7 +43,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis.curation.ai.base import BaseCurator
 from app.analysis.curation.ai.envelope import CurationCall
-from app.analysis.curation.audit import base_curation_payload_fields
 from app.analysis.curation.domain import Noise, Signal
 from app.analysis.curation.domain.ready import ReadyForCuration
 from app.analysis.curation.errors import (
@@ -95,15 +88,29 @@ class CurationAuditRepository:
         ready: ReadyForCuration,
         envelope: CurationCall[Signal],
         code: str,
+        input_content_length: int,
+        input_content_head: str,
+        input_content_hash: str,
     ) -> None:
         """signal 経路の成功 audit を 1 行記録する。
 
         ``code`` は caller である Service が outcome 種別から渡す
         (例: ``"curated_signal"``)。``envelope`` は ``CurationCall[Signal]`` に
         narrow され、Service が ``match`` で振り分けた後にのみ呼ばれる。
+
+        ``input_content_*`` 3 field は caller (Service) が
+        ``build_curation_audit_input(...)`` で事前算出し kwargs で渡す。
         """
-        source_name = await self._resolve_source_name(ready.article_id)
-        payload = self._success_payload(ready, envelope, source_name)
+        payload = CurationPayload(
+            source_name=await self._resolve_source_name(ready.article_id),
+            input_content_length=input_content_length,
+            input_content_head=input_content_head,
+            input_content_hash=input_content_hash,
+            ai_model=envelope.model_name,
+            prompt_version=envelope.prompt_version,
+            ai_raw_response=envelope.raw_response[:_AI_RAW_RESPONSE_LIMIT] or None,
+            raw_relevance=envelope.raw_relevance,
+        )
         await self._events.append(
             stage=Stage.CURATION,
             event_type=EventType.SUCCEEDED,
@@ -120,14 +127,28 @@ class CurationAuditRepository:
         ready: ReadyForCuration,
         envelope: CurationCall[Noise],
         code: str,
+        input_content_length: int,
+        input_content_head: str,
+        input_content_hash: str,
     ) -> None:
         """noise 経路の成功 audit を 1 行記録する (``code="curated_noise"``)。
 
         ``envelope`` は ``CurationCall[Noise]`` に narrow され、Service が
         ``match`` で振り分けた後にのみ呼ばれる。
+
+        ``input_content_*`` 3 field は caller (Service) が
+        ``build_curation_audit_input(...)`` で事前算出し kwargs で渡す。
         """
-        source_name = await self._resolve_source_name(ready.article_id)
-        payload = self._success_payload(ready, envelope, source_name)
+        payload = CurationPayload(
+            source_name=await self._resolve_source_name(ready.article_id),
+            input_content_length=input_content_length,
+            input_content_head=input_content_head,
+            input_content_hash=input_content_hash,
+            ai_model=envelope.model_name,
+            prompt_version=envelope.prompt_version,
+            ai_raw_response=envelope.raw_response[:_AI_RAW_RESPONSE_LIMIT] or None,
+            raw_relevance=envelope.raw_relevance,
+        )
         await self._events.append(
             stage=Stage.CURATION,
             event_type=EventType.SUCCEEDED,
@@ -144,10 +165,12 @@ class CurationAuditRepository:
         self,
         *,
         article_id: int,
-        original_content: str,
         code: str,
         exc: BaseException,
         curator: BaseCurator,
+        input_content_length: int,
+        input_content_head: str,
+        input_content_hash: str,
     ) -> None:
         """``mark_article_unprocessable`` 内で article DELETE 直前に焼く audit。
 
@@ -163,12 +186,11 @@ class CurationAuditRepository:
         ``error_chain`` は ``extract_error_chain`` で ``__cause__`` を辿り、ACL の
         ``raise from exc`` で保持された元 ``AIProviderError`` まで記録する。
         """
-        source_name = await self._resolve_source_name(article_id)
         payload = CurationPayload(
-            **base_curation_payload_fields(
-                original_content=original_content,
-                source_name=source_name,
-            ),
+            source_name=await self._resolve_source_name(article_id),
+            input_content_length=input_content_length,
+            input_content_head=input_content_head,
+            input_content_hash=input_content_hash,
             ai_model=curator.model_name,
             prompt_version=curator.prompt_version,
             # red-team chain γ-2: SDK exception message に key prefix /
@@ -219,6 +241,9 @@ class CurationAuditRepository:
         exc: BaseException,
         attempt: int,
         curator: BaseCurator,
+        input_content_length: int,
+        input_content_head: str,
+        input_content_hash: str,
     ) -> None:
         """CurationTerminalKeepError / CurationRecoverableError / catch-all
         経路の failure audit を 1 行記録する。
@@ -235,12 +260,11 @@ class CurationAuditRepository:
         ``error_chain`` は ``extract_error_chain`` で ``__cause__`` を辿り、ACL の
         ``raise from exc`` で保持された元 ``AIProviderError`` まで記録する。
         """
-        source_name = await self._resolve_source_name(ready.article_id)
         payload = CurationPayload(
-            **base_curation_payload_fields(
-                original_content=ready.original_content,
-                source_name=source_name,
-            ),
+            source_name=await self._resolve_source_name(ready.article_id),
+            input_content_length=input_content_length,
+            input_content_head=input_content_head,
+            input_content_hash=input_content_hash,
             ai_model=curator.model_name,
             prompt_version=curator.prompt_version,
             # red-team chain γ-2: SDK exception message に key prefix /
@@ -263,31 +287,6 @@ class CurationAuditRepository:
         )
 
     # --- internal helpers -------------------------------------------------
-
-    def _success_payload(
-        self,
-        ready: ReadyForCuration,
-        envelope: CurationCall[Signal] | CurationCall[Noise],
-        source_name: str | None,
-    ) -> CurationPayload:
-        """成功経路 audit payload を envelope 経由で組み立てる。
-
-        Stage 4 ``append_in_scope`` / ``append_out_of_scope`` と対称: ``ai_model``
-        / ``prompt_version`` / ``raw_relevance`` は envelope から直接読み、Gemini
-        ClassVar への静的依存を持たない
-        (``feedback_bc_boundary_guarantees_downstream``)。``ai_raw_response`` は
-        ``raw_response[:LIMIT]`` で切り詰める。
-        """
-        return CurationPayload(
-            **base_curation_payload_fields(
-                original_content=ready.original_content,
-                source_name=source_name,
-            ),
-            ai_model=envelope.model_name,
-            prompt_version=envelope.prompt_version,
-            ai_raw_response=envelope.raw_response[:_AI_RAW_RESPONSE_LIMIT] or None,
-            raw_relevance=envelope.raw_relevance,
-        )
 
     async def _resolve_source_name(self, article_id: int) -> str | None:
         """``article_id`` から ``news_sources.name`` を引く (FK 切断耐性のため

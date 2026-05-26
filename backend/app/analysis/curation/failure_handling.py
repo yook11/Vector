@@ -15,6 +15,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.curation.ai.base import BaseCurator
+from app.analysis.curation.audit import build_curation_audit_input
 from app.analysis.curation.domain.ready import ReadyForCuration
 from app.analysis.curation.errors import (
     CurationRecoverableError,
@@ -90,13 +91,19 @@ class CurationFailureHandler:
         DELETE 後も audit 行は残る。
         """
         code = getattr(exc, "code", None) or _DROP_FALLBACK_CODE
+        # audit INSERT → DELETE → commit を同一 tx で実行する。pre-compute は
+        # この外で先に済ませる (audit に失敗したら DELETE も進まない構造を維持、
+        # best-effort 化しない — 「削除だけ起きて audit が残らない」を避ける)。
+        audit_input = build_curation_audit_input(
+            original_content=ready.original_content
+        )
         async with self._session_factory() as session:
             await CurationAuditRepository(session).append_drop_article(
                 article_id=ready.article_id,
-                original_content=ready.original_content,
                 code=code,
                 exc=exc,
                 curator=curator,
+                **audit_input,
             )
             deleted = await ArticleRepository(session).delete_by_id(ready.article_id)
             await session.commit()
@@ -122,12 +129,18 @@ class CurationFailureHandler:
         うるため、log 経路にも ``redact_secrets`` を通す (red-team chain γ-2)。
         """
         try:
+            # pre-compute も best-effort try 内で実行 — helper 構築で例外が出ても
+            # failure path 全体の best-effort semantics を維持する。
+            audit_input = build_curation_audit_input(
+                original_content=ready.original_content
+            )
             async with self._session_factory() as session:
                 await CurationAuditRepository(session).append_failure(
                     ready=ready,
                     exc=exc,
                     attempt=attempt,
                     curator=curator,
+                    **audit_input,
                 )
                 await session.commit()
         except Exception as audit_exc:

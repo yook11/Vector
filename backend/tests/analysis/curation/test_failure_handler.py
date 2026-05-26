@@ -88,6 +88,7 @@ async def test_output_blocked_writes_audit_then_deletes_article(
     # rollback 後の expired-attr lazy reload を避けるため事前に値を取り出す
     expected_source_id = sample_source.id
     expected_source_name = str(sample_source.name)
+    expected_raw_length = len(article.original_content)
     ready = _ready_from(article)
     handler = CurationFailureHandler(session_factory)
 
@@ -135,6 +136,11 @@ async def test_output_blocked_writes_audit_then_deletes_article(
     assert payload["ai_model"] == GEMINI_CURATION_SPEC.model
     assert payload["error_message"] is not None
     assert payload["error_chain"] is not None
+    # caller pre-compute (build_curation_audit_input) が drop 経路でも走り、
+    # 値が payload に焼かれる (DELETE 前 pre-compute の保険)。
+    assert payload["input_content_length"] == expected_raw_length
+    assert payload["input_content_head"]  # non-empty
+    assert len(payload["input_content_hash"]) == 16
 
 
 @pytest.mark.asyncio
@@ -205,6 +211,7 @@ async def test_terminal_keep_sets_curation_hold(
     article = await _make_article(db_session, sample_source)
     # rollback 後の expired-attr lazy reload を避けるため事前に id を取り出す
     article_id = article.id
+    expected_raw_length = len(article.original_content)
     ready = _ready_from(article)
     handler = CurationFailureHandler(session_factory)
     # AIProviderConfigurationError → CurationTerminalKeepError (keep, config 起因)
@@ -238,6 +245,11 @@ async def test_terminal_keep_sets_curation_hold(
         .one()
     )
     assert ev.category == "non_retryable_keep_article"
+    # caller pre-compute (build_curation_audit_input) が failure 経路でも走り、
+    # 値が payload に焼かれる (best-effort try 内 pre-compute の保険)。
+    assert ev.payload["input_content_length"] == expected_raw_length
+    assert ev.payload["input_content_head"]  # non-empty
+    assert len(ev.payload["input_content_hash"]) == 16
 
 
 @pytest.mark.asyncio

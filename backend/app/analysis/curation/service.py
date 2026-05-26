@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.analysis.ai_provider_errors import AIProviderError
 from app.analysis.curation.ai.base import BaseCurator
 from app.analysis.curation.ai.envelope import CurationCall
+from app.analysis.curation.audit import build_curation_audit_input
 from app.analysis.curation.domain import Noise, Signal
 from app.analysis.curation.domain.ready import ReadyForCuration
 from app.analysis.curation.errors import map_provider_to_curation
@@ -76,6 +77,9 @@ class CurationService:
         except AIProviderError as exc:
             raise map_provider_to_curation(exc) from exc
 
+        audit_input = build_curation_audit_input(
+            original_content=ready.original_content
+        )
         async with self._session_factory() as session:
             match envelope:
                 case CurationCall(result=Signal()):
@@ -93,6 +97,7 @@ class CurationService:
                         ready=ready,
                         envelope=envelope,
                         code=_CURATED_SIGNAL_CODE,
+                        **audit_input,
                     )
                     await session.commit()
                     logger.info(
@@ -117,6 +122,7 @@ class CurationService:
                         ready=ready,
                         envelope=envelope,
                         code=_CURATED_NOISE_CODE,
+                        **audit_input,
                     )
                     await session.commit()
                     logger.info(
