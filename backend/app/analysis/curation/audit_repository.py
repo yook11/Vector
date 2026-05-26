@@ -44,6 +44,7 @@ from app.analysis.curation.errors import (
     CurationTerminalKeepError,
 )
 from app.audit.categories import Layer1Category
+from app.audit.db_errors import DbErrorCause, classify_db_error
 from app.audit.domain.event import EventType, Stage
 from app.audit.domain.payloads import CurationPayload
 from app.audit.error_chain import extract_error_chain
@@ -288,24 +289,50 @@ class CurationAuditRepository:
 
     @staticmethod
     def _category_of(exc: BaseException) -> Layer1Category:
-        """Stage 3 marker から DB ``category`` 値を導出する (spec §原則 3)。"""
+        """Stage 3 marker / 外部 DB 例外から DB ``category`` 値を導出する。
+
+        自前 marker を先に isinstance 分岐し、非 marker の外部 DB 例外は
+        ``classify_db_error`` adapter で分類する (末尾 ``UNKNOWN`` の直前)。
+        """
         if isinstance(exc, CurationTerminalDropError):
             return Layer1Category.NON_RETRYABLE_DROP_ARTICLE
         if isinstance(exc, CurationTerminalKeepError):
             return Layer1Category.NON_RETRYABLE_KEEP_ARTICLE
         if isinstance(exc, CurationRecoverableError):
             return Layer1Category.RETRYABLE
+        db = classify_db_error(exc)
+        if db is not None:
+            if db.cause is DbErrorCause.RUNTIME:
+                return Layer1Category.RETRYABLE
+            if db.cause is DbErrorCause.UNKNOWN:
+                return Layer1Category.UNKNOWN
+            # CONSTRAINT / QUERY_OR_SCHEMA: DB エラーで記事削除は危険、KEEP が保守的。
+            return Layer1Category.NON_RETRYABLE_KEEP_ARTICLE
         return Layer1Category.UNKNOWN
 
     @staticmethod
     def _code_of(exc: BaseException) -> str:
-        """Stage 3 marker の ``code`` instance attr を抽出する。
+        """失敗 audit の ``code`` を導出する。
 
-        ACL が provider ``CODE`` を引き継ぐ + Stage 3 specific は ``code=...`` を
-        pin している。未定義なら catch-all label。
+        自前 Stage 3 marker だけ ``.code`` instance attr を信用する (ACL が provider
+        ``CODE`` を引き継ぎ、Stage 3 specific は ``code=...`` を pin)。非 marker の
+        外部 DB 例外は ``classify_db_error`` adapter で分類し、それ以外は catch-all。
+        原則「知らない例外の ``.code`` は読まない」(SQLAlchemy の ``.code=gkpj``
+        誤取得を防ぐため ``getattr`` は使わない)。
         """
-        code = getattr(exc, "code", None)
-        return code if isinstance(code, str) and code else "unexpected_error"
+        if isinstance(
+            exc,
+            (
+                CurationTerminalDropError,
+                CurationTerminalKeepError,
+                CurationRecoverableError,
+            ),
+        ):
+            return exc.code
+        db = classify_db_error(exc)
+        if db is not None:
+            return db.code
+        return "unexpected_error"
 
 
 def _fqn(exc: BaseException) -> str:

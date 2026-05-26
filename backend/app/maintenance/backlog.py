@@ -130,7 +130,7 @@ class PipelineBacklog:
         created_after: datetime,
         limit: int,
     ) -> list[int]:
-        """analysis はあるが embedding が NULL な Analysis ID を返す (Stage E 残)."""
+        """analysis はあるが embedding が NULL な Analysis ID を返す (Stage 5 残)."""
         stmt = (
             select(InScopeAssessment.id)
             .join(

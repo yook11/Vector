@@ -25,6 +25,12 @@ from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import (
+    IntegrityError,
+    InvalidRequestError,
+    OperationalError,
+    ProgrammingError,
+)
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.embedding.ai.base import BaseEmbedder
@@ -296,6 +302,62 @@ async def test_append_failure_unknown_exception_maps_to_unknown(
     ev = await _fetch_one(db_session, article.id)
     assert ev.category == "unknown"
     assert ev.code == "unexpected_error"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("exc_factory", "expected_category", "expected_code"),
+    [
+        # 外部 DB 例外は classify_db_error adapter で意味ラベルに分類される
+        # (SQLAlchemy が振る .code=gkpj 等を拾わない)。Stage 5 の KEEP は
+        # NON_RETRYABLE_KEEP_CURATION。
+        (
+            lambda: OperationalError("SELECT 1", {}, Exception("conn reset")),
+            "retryable",
+            "db_runtime_error",
+        ),
+        (
+            lambda: IntegrityError("INSERT", {}, Exception("unique violation")),
+            "non_retryable_keep_curation",
+            "db_constraint_error",
+        ),
+        (
+            lambda: ProgrammingError("SELECT bad", {}, Exception("no such column")),
+            "non_retryable_keep_curation",
+            "db_query_or_schema_error",
+        ),
+        (
+            lambda: InvalidRequestError("detached instance"),
+            "unknown",
+            "db_unknown_error",
+        ),
+    ],
+)
+async def test_append_failure_classifies_db_exceptions(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+    exc_factory: object,
+    expected_category: str,
+    expected_code: str,
+) -> None:
+    """SQLAlchemy DB 例外を意味ラベルに分類して焼く (gkpj 誤取得の撲滅)。"""
+    article = await _make_article(db_session, sample_source)
+    await _make_extraction(db_session, article)
+    exc = exc_factory()  # type: ignore[operator]
+
+    async with session_factory() as session:
+        await EmbeddingAuditRepository(session).append_failure(
+            ready=_ready(article),
+            exc=exc,
+            attempt=1,
+        )
+        await session.commit()
+
+    ev = await _fetch_one(db_session, article.id)
+    assert ev.category == expected_category
+    assert ev.code == expected_code
+    assert ev.outcome_code == expected_code  # Phase A: outcome_code = code
 
 
 @pytest.mark.asyncio

@@ -22,6 +22,12 @@ from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import (
+    IntegrityError,
+    InvalidRequestError,
+    OperationalError,
+    ProgrammingError,
+)
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.ai_provider_errors import (
@@ -311,6 +317,29 @@ def _wrap(raw: BaseException) -> BaseException:
             "extraction_response_invalid",
         ),
         (lambda: RuntimeError("surprise"), "unknown", "unexpected_error"),
+        # 外部 DB 例外は classify_db_error adapter で意味ラベルに分類される
+        # (SQLAlchemy が振る .code=gkpj 等を拾わない)。Stage 3 の KEEP は
+        # NON_RETRYABLE_KEEP_ARTICLE。
+        (
+            lambda: OperationalError("SELECT 1", {}, Exception("conn reset")),
+            "retryable",
+            "db_runtime_error",
+        ),
+        (
+            lambda: IntegrityError("INSERT", {}, Exception("unique violation")),
+            "non_retryable_keep_article",
+            "db_constraint_error",
+        ),
+        (
+            lambda: ProgrammingError("SELECT bad", {}, Exception("no such column")),
+            "non_retryable_keep_article",
+            "db_query_or_schema_error",
+        ),
+        (
+            lambda: InvalidRequestError("detached instance"),
+            "unknown",
+            "db_unknown_error",
+        ),
     ],
 )
 async def test_append_failure_dispatches_category_and_code_from_exc(

@@ -29,6 +29,7 @@ from app.analysis.embedding.errors import (
     EmbeddingTerminalSkipError,
 )
 from app.audit.categories import Layer1Category
+from app.audit.db_errors import DbErrorCause, classify_db_error
 from app.audit.domain.event import EventType, Stage
 from app.audit.domain.payloads import EmbeddingPayload
 from app.audit.error_chain import extract_error_chain
@@ -140,31 +141,44 @@ class EmbeddingAuditRepository:
 
         dispatch 順は TerminalSkip → Recoverable → fallback。Layer 2-B は
         対応する Layer 1 marker (``Recoverable`` or ``TerminalSkip``) を継承
-        するため、specific-first で並べる。
+        するため、specific-first で並べる。非 marker の外部 DB 例外は
+        ``classify_db_error`` adapter で分類する (末尾 ``UNKNOWN`` の直前)。
         """
         if isinstance(exc, EmbeddingTerminalSkipError):
             return Layer1Category.NON_RETRYABLE_KEEP_CURATION
         if isinstance(exc, EmbeddingRecoverableError):
             return Layer1Category.RETRYABLE
+        db = classify_db_error(exc)
+        if db is not None:
+            if db.cause is DbErrorCause.RUNTIME:
+                return Layer1Category.RETRYABLE
+            if db.cause is DbErrorCause.UNKNOWN:
+                return Layer1Category.UNKNOWN
+            # CONSTRAINT / QUERY_OR_SCHEMA: curation は捨てない保守的な KEEP。
+            return Layer1Category.NON_RETRYABLE_KEEP_CURATION
         return Layer1Category.UNKNOWN
 
     @staticmethod
     def _code_of(exc: BaseException) -> str:
-        """Stage 5 marker の **instance 属性** ``code`` を抽出する (Stage 4 と同形)。
+        """失敗 audit の ``code`` を導出する (Stage 4 と同形)。
 
-        Stage 5 marker は ctor で ``code: str`` を必須キーワードとして受け
-        instance attr に保持する設計 (``backend/app/analysis/embedding/errors.py``)。
+        自前 Stage 5 marker だけ ``.code`` instance attr を信用する。Stage 5 marker
+        は ctor で ``code: str`` を必須キーワードとして受け instance attr に保持する
+        設計 (``backend/app/analysis/embedding/errors.py``)。provider 由来は ACL
+        mapper が ``AIProviderError.CODE`` を引き継いで instance attr に詰めるため、
+        marker 経路で全パターン (Layer 2-A: provider mapped / Layer 2-B:
+        ``embedding_response_invalid``) をカバーできる。
 
-        provider 由来は ACL mapper (``errors.py`` Layer 2-A section) が
-        ``AIProviderError.CODE`` を引き継いで instance attr に詰めるため、
-        本 method は instance 経路のみで全パターン (Layer 2-A: provider mapped /
-        Layer 2-B: ``EmbeddingResponseInvalidError`` ctor 内 hardcode
-        ``"embedding_response_invalid"`` / catch-all: ``Exception``) をカバーできる。
-
-        未定義 / 空文字 / 非 str は catch-all label に fallback。
+        非 marker の外部 DB 例外は ``classify_db_error`` adapter で分類し、それ以外は
+        catch-all。原則「知らない例外の ``.code`` は読まない」(SQLAlchemy の
+        ``.code=gkpj`` 誤取得を防ぐため ``getattr`` は使わない)。
         """
-        code = getattr(exc, "code", None)
-        return code if isinstance(code, str) and code else "unexpected_error"
+        if isinstance(exc, (EmbeddingTerminalSkipError, EmbeddingRecoverableError)):
+            return exc.code
+        db = classify_db_error(exc)
+        if db is not None:
+            return db.code
+        return "unexpected_error"
 
 
 def _fqn(exc: BaseException) -> str:
