@@ -1,8 +1,10 @@
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from typing import Any
 
+import logfire
 import structlog
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request, Response, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRoute
 from sqlalchemy import text
@@ -34,6 +36,41 @@ from app.search.router import router as search_router
 logger = structlog.get_logger(__name__)
 
 
+def _sanitize_validation_errors(
+    errors: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Pydantic v2 ``ValidationError.errors()`` から rejected input を落とす。
+
+    各 error の ``input`` は送信値そのもの (例: ``q="x"*1000`` で長さ違反すれば
+    入力 1000 文字がそのまま入る)、``ctx`` は型検査の文脈値、``url`` は pydantic
+    docs URL。これらは PII / 事業データを含みうるため span attribute に残すのは
+    ``type`` / ``loc`` / ``msg`` (= どこで何を期待していたか) のみ。
+    """
+    return [
+        {"type": e.get("type"), "loc": e.get("loc"), "msg": e.get("msg")}
+        for e in errors
+    ]
+
+
+def _drop_endpoint_args_on_success(
+    _request: Request | WebSocket,
+    attributes: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Endpoint 引数の log message 化を抑制 (PII 抑制)。
+
+    成功時は ``None`` を返して log message を作らず span だけ残す
+    (= 「成功は沈黙、失敗だけ説明する」)。validation error 時は ``errors`` を
+    sanitize してから返し、``values`` (parsed body / query) と各 error の
+    ``input`` (送信値) は捨てる。検索クエリ (q) や article body などが
+    Logfire dashboard に焼かれない構造的契約 (feedback_failure_visibility と
+    整合: 失敗は見せ、成功本文は隠す)。
+    """
+    errors = attributes.get("errors")
+    if errors:
+        return {"errors": _sanitize_validation_errors(errors)}
+    return None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # 起動時: 可観測性 (Logfire + structlog 集約) を初期化する。
@@ -41,6 +78,27 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # タスクワーカーは別の Docker サービス (worker/scheduler) で動作するため、
     # 各 worker プロセスは brokers.py の WORKER_STARTUP で同じ bootstrap を呼ぶ。
     setup_logfire("vector-api")
+    # FastAPI request / SQLAlchemy query の auto-instrument を bootstrap 直後に
+    # 1 度だけ走らせる。setup_logfire 内の logfire.configure() が OTel provider
+    # を立てたあとに hook する順序契約 (configure 前に呼ぶと patch は走るが span
+    # の送り先が proxy provider のまま固定される)。
+    #
+    # kwargs は source default と一致するが、明示で「PII / body を span に乗せ
+    # ない」を構造的契約として固定する (feedback_structural_guarantee)。特に
+    # ``record_send_receive=False`` が将来 True に逆転すると ASGI send/receive
+    # span 経由で body が乗る経路ができるため、明示で塞ぐ意義が大きい。
+    logfire.instrument_fastapi(
+        app,
+        request_attributes_mapper=_drop_endpoint_args_on_success,
+        capture_headers=False,
+        record_send_receive=False,
+        extra_spans=False,
+    )
+    # logfire 4.x は AsyncEngine をネイティブで受ける (旧版の .sync_engine 不要)。
+    # 1 query = 1 span として bind param と SQL を span attribute に乗せる。
+    # asyncpg instrumentor は意図的に入れない (ORM 層 + driver 層で二重 span
+    # を出さないため)。
+    logfire.instrument_sqlalchemy(engine=engine)
     yield
     # 終了処理
     await engine.dispose()

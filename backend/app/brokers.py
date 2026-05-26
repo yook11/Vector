@@ -17,6 +17,7 @@ Scheduler:
 
 from __future__ import annotations
 
+import logfire
 import structlog
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
@@ -119,6 +120,10 @@ def _register_lifecycle(broker: RedisStreamBroker, label: str) -> None:
             class_=SQLModelAsyncSession,
             expire_on_commit=False,
         )
+        # worker engine の DB query を 1 query = 1 span として Logfire に乗せる。
+        # 各 worker プロセスは自分の broker の on_startup だけが発火するため、
+        # プロセスごとに 1 engine が 1 度 instrument される (重複なし)。
+        logfire.instrument_sqlalchemy(engine=state.engine)
         logger.info(f"{label}_worker_startup")
 
     @broker.on_event(TaskiqEvents.WORKER_SHUTDOWN)

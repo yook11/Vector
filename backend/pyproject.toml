@@ -25,7 +25,7 @@ dependencies = [
     "redis>=7.4.0,<8",
     "openai>=2.36.0",
     "supervisor>=4.2,<5",
-    "logfire>=4.33.0",
+    "logfire[fastapi,httpx,sqlalchemy]>=4.33.0",
 ]
 
 # uv の dev group は `uv sync` (no flags) でも default で install され、

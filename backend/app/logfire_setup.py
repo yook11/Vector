@@ -9,6 +9,11 @@ stdout の見た目は env 別 (dev=ConsoleRenderer / prod=JSONRenderer)。
 設計スタンス: pipeline_events は監査 SSoT として温存し、Logfire は追加の
 telemetry 層に徹する (audit BC を Logfire に移さない)。token は
 ``app.config.settings`` 経由で渡し、``os.environ`` 直参照禁止 (CLAUDE.md) を維持。
+
+Phase 2 で httpx の auto-instrument を本関数の末尾に組込む。FastAPI / SQLAlchemy
+の instrument は engine / app object に紐付くため呼び出し側 (main.py / brokers.py)
+に置く。httpx は ``AsyncClient.send`` を module-level に patch する global hook
+なので「全プロセス共通」の本 bootstrap に置くのが構造上正しい (各プロセス 1 回)。
 """
 
 from __future__ import annotations
@@ -68,4 +73,17 @@ def setup_logfire(service_name: str) -> None:
             *exc_processors,
             renderer,
         ],
+    )
+    # httpx outbound (AI provider 呼出 + internal frontend revalidate) を span 化。
+    # 本文系 (prompt / AI response / 記事翻訳 / Authorization header) を Logfire
+    # SaaS に **絶対に** 載せない構造的契約として、source default と一致する
+    # 3 つの kwargs を明示する (将来 default が変わっても安全側に倒れる:
+    # feedback_structural_guarantee)。``AsyncClient.send`` 層の global patch
+    # なので冪等で、複数プロセスから呼ばれても二重計装にならない (logfire 4.x)。
+    # ``_PinnedDnsTransport`` (SSRF 対策, safe_http.py) は ``handle_async_request``
+    # 層で動き本 patch とは層が違うため共存可能 (span 上の URL は pin 後の IP)。
+    logfire.instrument_httpx(
+        capture_headers=False,
+        capture_request_body=False,
+        capture_response_body=False,
     )

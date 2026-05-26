@@ -40,20 +40,27 @@ from app.logfire_setup import setup_logfire
 @pytest.fixture
 def patched_configures(
     monkeypatch: pytest.MonkeyPatch,
-) -> tuple[MagicMock, MagicMock]:
-    """``logfire.configure`` と ``structlog.configure`` を patch して呼出を捕捉。
+) -> tuple[MagicMock, MagicMock, MagicMock]:
+    """``logfire.configure`` / ``structlog.configure`` / ``logfire.instrument_httpx``
+    を patch して呼出を捕捉。
 
-    Global 可変状態への副作用を完全に遮断するため、両方を MagicMock に差し替える。
+    Global 可変状態への副作用を完全に遮断するため 3 つすべて MagicMock に差し
+    替える。``instrument_httpx`` は ``AsyncClient.send`` の module-level patch
+    なので、patch せずに本物を呼ぶと httpx の通常使用が壊れる (テスト並走時)。
     """
     mock_logfire_configure = MagicMock()
     mock_structlog_configure = MagicMock()
+    mock_instrument_httpx = MagicMock()
     monkeypatch.setattr(
         logfire_setup_module.logfire, "configure", mock_logfire_configure
     )
     monkeypatch.setattr(
         logfire_setup_module.structlog, "configure", mock_structlog_configure
     )
-    return mock_logfire_configure, mock_structlog_configure
+    monkeypatch.setattr(
+        logfire_setup_module.logfire, "instrument_httpx", mock_instrument_httpx
+    )
+    return mock_logfire_configure, mock_structlog_configure, mock_instrument_httpx
 
 
 def _processors(mock_structlog_configure: MagicMock) -> list[Any]:
@@ -73,10 +80,10 @@ def _has_renderer(processors: list[Any], renderer_cls: type) -> bool:
 
 def test_no_token_passes_none_and_if_token_present(
     monkeypatch: pytest.MonkeyPatch,
-    patched_configures: tuple[MagicMock, MagicMock],
+    patched_configures: tuple[MagicMock, MagicMock, MagicMock],
 ) -> None:
     """token 未設定 → ``token=None`` + ``send_to_logfire="if-token-present"``。"""
-    mock_logfire_configure, _ = patched_configures
+    mock_logfire_configure, _, _ = patched_configures
     monkeypatch.setattr(logfire_setup_module.settings, "logfire_token", None)
     monkeypatch.setattr(logfire_setup_module.settings, "env", "development")
 
@@ -92,10 +99,10 @@ def test_no_token_passes_none_and_if_token_present(
 
 def test_token_set_passes_secret_value(
     monkeypatch: pytest.MonkeyPatch,
-    patched_configures: tuple[MagicMock, MagicMock],
+    patched_configures: tuple[MagicMock, MagicMock, MagicMock],
 ) -> None:
     """token 設定時は ``SecretStr.get_secret_value()`` の生値が渡る。"""
-    mock_logfire_configure, _ = patched_configures
+    mock_logfire_configure, _, _ = patched_configures
     monkeypatch.setattr(
         logfire_setup_module.settings,
         "logfire_token",
@@ -119,10 +126,10 @@ def test_token_set_passes_secret_value(
 
 def test_production_uses_json_renderer_with_format_exc_info(
     monkeypatch: pytest.MonkeyPatch,
-    patched_configures: tuple[MagicMock, MagicMock],
+    patched_configures: tuple[MagicMock, MagicMock, MagicMock],
 ) -> None:
     """prod では JSONRenderer + format_exc_info (singleton) が含まれる。"""
-    _, mock_structlog_configure = patched_configures
+    _, mock_structlog_configure, _ = patched_configures
     monkeypatch.setattr(logfire_setup_module.settings, "logfire_token", None)
     monkeypatch.setattr(logfire_setup_module.settings, "env", "production")
 
@@ -137,10 +144,10 @@ def test_production_uses_json_renderer_with_format_exc_info(
 
 def test_development_uses_console_renderer_without_format_exc_info(
     monkeypatch: pytest.MonkeyPatch,
-    patched_configures: tuple[MagicMock, MagicMock],
+    patched_configures: tuple[MagicMock, MagicMock, MagicMock],
 ) -> None:
     """dev では ConsoleRenderer のみ (format_exc_info は renderer に委ねる)。"""
-    _, mock_structlog_configure = patched_configures
+    _, mock_structlog_configure, _ = patched_configures
     monkeypatch.setattr(logfire_setup_module.settings, "logfire_token", None)
     monkeypatch.setattr(logfire_setup_module.settings, "env", "development")
 
@@ -159,7 +166,7 @@ def test_development_uses_console_renderer_without_format_exc_info(
 
 def test_structlog_processor_precedes_format_exc_info_in_production(
     monkeypatch: pytest.MonkeyPatch,
-    patched_configures: tuple[MagicMock, MagicMock],
+    patched_configures: tuple[MagicMock, MagicMock, MagicMock],
 ) -> None:
     """``StructlogProcessor`` は ``format_exc_info`` より前に置かれる。
 
@@ -167,7 +174,7 @@ def test_structlog_processor_precedes_format_exc_info_in_production(
     Logfire に届くため、native スタックトレース解析に乗らない。Logfire
     (token 設定済) こそ「例外を見たい」環境なので、この順序は構造的契約。
     """
-    _, mock_structlog_configure = patched_configures
+    _, mock_structlog_configure, _ = patched_configures
     monkeypatch.setattr(logfire_setup_module.settings, "logfire_token", None)
     monkeypatch.setattr(logfire_setup_module.settings, "env", "production")
 
@@ -187,14 +194,14 @@ def test_structlog_processor_precedes_format_exc_info_in_production(
 
 def test_structlog_processor_always_present(
     monkeypatch: pytest.MonkeyPatch,
-    patched_configures: tuple[MagicMock, MagicMock],
+    patched_configures: tuple[MagicMock, MagicMock, MagicMock],
 ) -> None:
     """``StructlogProcessor`` は env を問わず常にチェーンに乗る。
 
     Logfire への集約は token の有無で no-op 化されるため、processor を常時
     挿しても dev で外部送信は発生しない (二重防御)。
     """
-    _, mock_structlog_configure = patched_configures
+    _, mock_structlog_configure, _ = patched_configures
     monkeypatch.setattr(logfire_setup_module.settings, "logfire_token", None)
 
     for env_value in ("development", "production"):
@@ -217,6 +224,52 @@ def test_structlog_processor_is_logfire_reexport() -> None:
 
 
 # ---------------------------------------------------------------------------
+# httpx auto-instrument — PII off の構造的契約 (Phase 2)
+# ---------------------------------------------------------------------------
+
+
+def test_setup_logfire_calls_instrument_httpx_once(
+    monkeypatch: pytest.MonkeyPatch,
+    patched_configures: tuple[MagicMock, MagicMock, MagicMock],
+) -> None:
+    """``setup_logfire`` は ``logfire.instrument_httpx`` を **1 度** 呼ぶ。
+
+    複数回呼ばれると `AsyncClient.send` への monkey-patch が積み重なる懸念が
+    あり、また「プロセスごとに 1 度」契約 (Phase 1 と整合) を pin する。
+    """
+    _, _, mock_instrument_httpx = patched_configures
+    monkeypatch.setattr(logfire_setup_module.settings, "logfire_token", None)
+    monkeypatch.setattr(logfire_setup_module.settings, "env", "development")
+
+    setup_logfire("vector-api")
+
+    assert mock_instrument_httpx.call_count == 1
+
+
+def test_setup_logfire_passes_pii_off_kwargs_to_instrument_httpx(
+    monkeypatch: pytest.MonkeyPatch,
+    patched_configures: tuple[MagicMock, MagicMock, MagicMock],
+) -> None:
+    """``instrument_httpx`` に PII off の 3 kwargs が **明示的に** 渡される。
+
+    source default と一致するが、将来 default が変わっても安全側に倒れる
+    構造的契約 (feedback_structural_guarantee)。``capture_request_body=True``
+    に逆転すると AI provider への prompt / 翻訳結果が span に乗る経路ができる
+    ため、明示で塞ぐ意義が最も大きい kwarg。
+    """
+    _, _, mock_instrument_httpx = patched_configures
+    monkeypatch.setattr(logfire_setup_module.settings, "logfire_token", None)
+    monkeypatch.setattr(logfire_setup_module.settings, "env", "production")
+
+    setup_logfire("vector-api")
+
+    kwargs = mock_instrument_httpx.call_args.kwargs
+    assert kwargs["capture_headers"] is False
+    assert kwargs["capture_request_body"] is False
+    assert kwargs["capture_response_body"] is False
+
+
+# ---------------------------------------------------------------------------
 # 実チェーンの妥当性 — bootstrap 後の logger 呼出が例外を投げない
 # ---------------------------------------------------------------------------
 
@@ -227,11 +280,14 @@ def test_logger_works_after_bootstrap_in_development(
     """bootstrap → ``logger.info(...)`` が dev で例外を投げない (チェーン妥当)。
 
     本テストは ``structlog.configure`` を patch せず実状態に書き込むため、
-    最後に既定設定へ戻して state 汚染を避ける。``logfire.configure`` は
-    patch で外部送信を遮断する (token 無しでも念のため二重防御)。
+    最後に既定設定へ戻して state 汚染を避ける。``logfire.configure`` および
+    ``logfire.instrument_httpx`` は patch で外部送信 / module-level patch を
+    遮断する (token 無しでも念のため二重防御)。
     """
     # 外部送信ゼロを保証するため logfire.configure は no-op に。
     monkeypatch.setattr(logfire_setup_module.logfire, "configure", MagicMock())
+    # AsyncClient.send への global patch も他テスト並走で副作用にならないよう no-op に。
+    monkeypatch.setattr(logfire_setup_module.logfire, "instrument_httpx", MagicMock())
     monkeypatch.setattr(logfire_setup_module.settings, "logfire_token", None)
     monkeypatch.setattr(logfire_setup_module.settings, "env", "development")
 
