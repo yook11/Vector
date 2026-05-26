@@ -22,11 +22,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.analysis.embedding.domain.ready import (
-    EmbeddingTrigger,
-    ReadyForEmbedding,
-)
+from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.rate_limit import RatePolicy
+from app.queue.messages.embedding import EmbeddingTrigger
 
 
 def _make_embedder_fake() -> MagicMock:
@@ -88,7 +86,7 @@ def _make_ready(analysis_id: int = 1, article_id: int = 7) -> ReadyForEmbedding:
 def _patch_ready_construction(ready: ReadyForEmbedding | None):
     """task 内 ``ReadyForEmbedding.try_advance_from`` を mock する patch。"""
     return patch(
-        "app.analysis.embedding.tasks.ReadyForEmbedding.try_advance_from",
+        "app.queue.tasks.embedding.ReadyForEmbedding.try_advance_from",
         new=AsyncMock(return_value=ready),
     )
 
@@ -102,7 +100,7 @@ class TestGenerateEmbedding:
     @pytest.mark.asyncio
     async def test_task_completes_on_service_success(self) -> None:
         """Service.execute が None を返したら task は完了する。"""
-        from app.analysis.embedding.tasks import generate_embedding
+        from app.queue.tasks.embedding import generate_embedding
 
         mock_ctx = _make_ctx(embedder=_make_embedder_fake())
         trigger = _make_trigger(analysis_id=1)
@@ -110,7 +108,7 @@ class TestGenerateEmbedding:
 
         with (
             _patch_ready_construction(ready),
-            patch("app.analysis.embedding.tasks.EmbeddingService") as mock_svc_cls,
+            patch("app.queue.tasks.embedding.EmbeddingService") as mock_svc_cls,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(return_value=None)
             await generate_embedding(trigger=trigger, ctx=mock_ctx)
@@ -130,7 +128,7 @@ class TestGenerateEmbedding:
 
         rate limit acquire も試みない (Ready 構築が gatekeeper、案 3 順序)。
         """
-        from app.analysis.embedding.tasks import generate_embedding
+        from app.queue.tasks.embedding import generate_embedding
 
         gate = _make_gate_fake()
         mock_ctx = _make_ctx(embedder=_make_embedder_fake(), gate=gate)
@@ -138,7 +136,7 @@ class TestGenerateEmbedding:
 
         with (
             _patch_ready_construction(None),
-            patch("app.analysis.embedding.tasks.EmbeddingService") as mock_svc_cls,
+            patch("app.queue.tasks.embedding.EmbeddingService") as mock_svc_cls,
         ):
             await generate_embedding(trigger=trigger, ctx=mock_ctx)
 
@@ -149,7 +147,7 @@ class TestGenerateEmbedding:
     @pytest.mark.asyncio
     async def test_skips_when_gate_denies_quota(self) -> None:
         """gate.acquire が False を返したら svc.execute を呼ばずに return。"""
-        from app.analysis.embedding.tasks import generate_embedding
+        from app.queue.tasks.embedding import generate_embedding
 
         gate = _make_gate_fake(acquired=False)
         mock_ctx = _make_ctx(embedder=_make_embedder_fake(), gate=gate)
@@ -158,7 +156,7 @@ class TestGenerateEmbedding:
 
         with (
             _patch_ready_construction(ready),
-            patch("app.analysis.embedding.tasks.EmbeddingService") as mock_svc_cls,
+            patch("app.queue.tasks.embedding.EmbeddingService") as mock_svc_cls,
         ):
             await generate_embedding(trigger=trigger, ctx=mock_ctx)
 

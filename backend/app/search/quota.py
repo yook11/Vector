@@ -17,7 +17,7 @@ from uuid import UUID
 
 import redis.asyncio as aioredis
 
-from app.maintenance.policy import utc_now
+from app.shared.time import utc_now
 
 _QUOTA_TTL_SECONDS = 26 * 60 * 60  # 26h: 日跨ぎ猶予 (budget.py 同ポリシ)
 

@@ -1,7 +1,7 @@
 """rolling 7d daily snapshot 生成 cron タスク。
 
 スケジュール:
-- ``cron="5 15 * * *"`` (UTC) = JST 毎日 00:05 — 直近完了 7 日窓
+- ``CRON_WEEKLY_SNAPSHOT`` (UTC) = JST 毎日 00:05 — 直近完了 7 日窓
   (``[今日0:00 - 7d, 今日0:00)`` JST) を集計し、
   ``weekly_trends_snapshots`` に 1 行 INSERT する
 
@@ -21,11 +21,12 @@ from __future__ import annotations
 import structlog
 from taskiq import Context, TaskiqDepends
 
-from app.brokers import broker_digest
 from app.insights.snapshot.application.snapshot import WeeklyTrendsSnapshotService
 from app.insights.snapshot.domain.ready import ReadyForDigest
 from app.insights.snapshot.domain.week import latest_window_end, now_in_jst
 from app.insights.snapshot.repository.snapshots import SnapshotRepository
+from app.queue.brokers import broker_digest
+from app.queue.schedule import CRON_WEEKLY_SNAPSHOT
 
 logger = structlog.get_logger(__name__)
 
@@ -35,7 +36,7 @@ logger = structlog.get_logger(__name__)
     timeout=600,
     max_retries=0,
     retry_on_error=False,
-    schedule=[{"cron": "5 15 * * *"}],
+    schedule=[{"cron": CRON_WEEKLY_SNAPSHOT}],
 )
 async def generate_weekly_snapshot(ctx: Context = TaskiqDepends()) -> None:
     """rolling 7d window (JST 当日 0:00 を上限) の snapshot を生成する。"""

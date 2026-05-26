@@ -6,8 +6,8 @@ import pytest
 from pydantic import SecretStr
 from taskiq import TaskiqState
 
-from app.brokers import CADENCE_CRON
 from app.collection.sources.fetch_cadence import FetchCadence
+from app.queue.schedule import CADENCE_CRON
 
 
 class TestCadenceCronMapping:
@@ -31,7 +31,7 @@ async def test_wire_analysis_adapters_attaches_adapters_to_state() -> None:
     """
     from app.analysis.assessment.ai.deepseek import DeepSeekAssessor
     from app.analysis.curation.ai.gemini import GeminiCurator
-    from app.brokers import _wire_analysis_adapters
+    from app.queue.composition import _wire_analysis_adapters
 
     state = TaskiqState()
     with (

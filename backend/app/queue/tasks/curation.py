@@ -12,17 +12,16 @@ from __future__ import annotations
 import structlog
 from taskiq import Context, TaskiqDepends
 
-from app.analysis.assessment.domain.ready import AssessmentTrigger
-from app.analysis.assessment.tasks import assess_content
 from app.analysis.curation.ai.base import BaseCurator
-from app.analysis.curation.domain.ready import (
-    CurationTrigger,
-    ReadyForCuration,
-)
+from app.analysis.curation.domain.ready import ReadyForCuration
 from app.analysis.curation.failure_handling import CurationFailureHandler
 from app.analysis.curation.repository import CurationRepository
 from app.analysis.curation.service import CurationService
-from app.brokers import broker_analysis, is_last_attempt
+from app.queue.brokers import broker_analysis
+from app.queue.messages.assessment import AssessmentTrigger
+from app.queue.messages.curation import CurationTrigger
+from app.queue.retry import is_last_attempt
+from app.queue.tasks.assessment import assess_content
 
 logger = structlog.get_logger(__name__)
 

@@ -7,7 +7,7 @@ from datetime import date
 import pytest
 from pydantic import ValidationError
 
-from app.insights.briefing.domain.task_input import BriefingTaskInput
+from app.queue.messages.briefing import BriefingTaskInput
 
 
 class TestBriefingTaskInput:

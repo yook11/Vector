@@ -34,9 +34,10 @@ from app.analysis.ai_provider_errors import (
     AIProviderRequestInvalidError,
     AIProviderServiceUnavailableError,
 )
-from app.analysis.curation.domain.ready import CurationTrigger, ReadyForCuration
+from app.analysis.curation.domain.ready import ReadyForCuration
 from app.analysis.curation.errors import CurationResponseInvalidError
 from app.analysis.rate_limit import RatePolicy
+from app.queue.messages.curation import CurationTrigger
 
 
 def _make_provider_fake() -> MagicMock:
@@ -100,15 +101,15 @@ def _patch_try_advance_from(ready: ReadyForCuration | None = None) -> object:
 @pytest.mark.asyncio
 async def test_drop_article_delegates_to_handler(exc_cls: type[Exception]) -> None:
     """Drop 系例外は handler.handle に委譲され、reraise=False で return する。"""
-    from app.analysis.curation.tasks import curate_content
+    from app.queue.tasks.curation import curate_content
 
     ctx = _make_ctx()
     exc = exc_cls("boom")
 
     with (
         _patch_try_advance_from(),
-        patch("app.analysis.curation.tasks.CurationService") as mock_svc_cls,
-        patch("app.analysis.curation.tasks.CurationFailureHandler") as mock_handler_cls,
+        patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
+        patch("app.queue.tasks.curation.CurationFailureHandler") as mock_handler_cls,
     ):
         mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
         mock_handler_cls.return_value.handle = AsyncMock(return_value=False)
@@ -139,13 +140,13 @@ async def test_drop_article_delegates_to_handler(exc_cls: type[Exception]) -> No
 @pytest.mark.asyncio
 async def test_keep_article_delegates_to_handler(exc_cls: type[Exception]) -> None:
     """Keep 系例外は handler に委譲され、reraise=False で return する。"""
-    from app.analysis.curation.tasks import curate_content
+    from app.queue.tasks.curation import curate_content
 
     ctx = _make_ctx()
     with (
         _patch_try_advance_from(),
-        patch("app.analysis.curation.tasks.CurationService") as mock_svc_cls,
-        patch("app.analysis.curation.tasks.CurationFailureHandler") as mock_handler_cls,
+        patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
+        patch("app.queue.tasks.curation.CurationFailureHandler") as mock_handler_cls,
     ):
         mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc_cls("boom"))
         mock_handler_cls.return_value.handle = AsyncMock(return_value=False)
@@ -172,14 +173,14 @@ async def test_keep_article_delegates_to_handler(exc_cls: type[Exception]) -> No
 @pytest.mark.asyncio
 async def test_retryable_reraise_true_raises(exc_cls: type[Exception]) -> None:
     """Handler が ``reraise=True`` を返したら task は元の exc を raise する。"""
-    from app.analysis.curation.tasks import curate_content
+    from app.queue.tasks.curation import curate_content
 
     ctx = _make_ctx(retry_count=0, max_retries=1)  # retry 余地あり
 
     with (
         _patch_try_advance_from(),
-        patch("app.analysis.curation.tasks.CurationService") as mock_svc_cls,
-        patch("app.analysis.curation.tasks.CurationFailureHandler") as mock_handler_cls,
+        patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
+        patch("app.queue.tasks.curation.CurationFailureHandler") as mock_handler_cls,
     ):
         mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc_cls("boom"))
         mock_handler_cls.return_value.handle = AsyncMock(return_value=True)
@@ -192,14 +193,14 @@ async def test_retryable_reraise_true_raises(exc_cls: type[Exception]) -> None:
 @pytest.mark.asyncio
 async def test_retryable_reraise_false_returns() -> None:
     """Handler が ``reraise=False`` を返したら task は return する (raise しない)。"""
-    from app.analysis.curation.tasks import curate_content
+    from app.queue.tasks.curation import curate_content
 
     ctx = _make_ctx(retry_count=1, max_retries=1)  # 最終試行
 
     with (
         _patch_try_advance_from(),
-        patch("app.analysis.curation.tasks.CurationService") as mock_svc_cls,
-        patch("app.analysis.curation.tasks.CurationFailureHandler") as mock_handler_cls,
+        patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
+        patch("app.queue.tasks.curation.CurationFailureHandler") as mock_handler_cls,
     ):
         mock_svc_cls.return_value.execute = AsyncMock(
             side_effect=AIProviderNetworkError("connection reset")
@@ -229,14 +230,14 @@ async def test_rate_limit_class_delegates_to_handler(
     retry decision (taskiq retry に乗せるか) は Handler 内部の責務なので、本
     task テストでは Handler が呼ばれたことのみ確認する。
     """
-    from app.analysis.curation.tasks import curate_content
+    from app.queue.tasks.curation import curate_content
 
     ctx = _make_ctx(retry_count=0, max_retries=1)
 
     with (
         _patch_try_advance_from(),
-        patch("app.analysis.curation.tasks.CurationService") as mock_svc_cls,
-        patch("app.analysis.curation.tasks.CurationFailureHandler") as mock_handler_cls,
+        patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
+        patch("app.queue.tasks.curation.CurationFailureHandler") as mock_handler_cls,
     ):
         mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc_cls("boom"))
         mock_handler_cls.return_value.handle = AsyncMock(return_value=False)
@@ -253,13 +254,13 @@ async def test_rate_limit_class_delegates_to_handler(
 @pytest.mark.asyncio
 async def test_unexpected_exception_delegates_to_handler() -> None:
     """Stage 3 marker 外の exc も except Exception で Handler に届く。"""
-    from app.analysis.curation.tasks import curate_content
+    from app.queue.tasks.curation import curate_content
 
     ctx = _make_ctx()
     with (
         _patch_try_advance_from(),
-        patch("app.analysis.curation.tasks.CurationService") as mock_svc_cls,
-        patch("app.analysis.curation.tasks.CurationFailureHandler") as mock_handler_cls,
+        patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
+        patch("app.queue.tasks.curation.CurationFailureHandler") as mock_handler_cls,
     ):
         mock_svc_cls.return_value.execute = AsyncMock(
             side_effect=ValueError("surprise"),

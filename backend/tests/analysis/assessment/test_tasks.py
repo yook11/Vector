@@ -23,12 +23,10 @@ import pytest
 from structlog.testing import capture_logs
 
 from app.analysis.ai_provider_errors import AIProviderRateLimitedError
-from app.analysis.assessment.domain.ready import (
-    AssessmentTrigger,
-    ReadyForAssessment,
-)
-from app.analysis.embedding.domain.ready import EmbeddingTrigger
+from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.rate_limit import RatePolicy
+from app.queue.messages.assessment import AssessmentTrigger
+from app.queue.messages.embedding import EmbeddingTrigger
 
 
 def _make_provider_fake() -> MagicMock:
@@ -85,7 +83,7 @@ def _make_ready(curation_id: int = 2) -> ReadyForAssessment:
 def _patch_ready_construction(ready: ReadyForAssessment | None):
     """task 内 ``ReadyForAssessment.try_advance_from`` を mock する patch。"""
     return patch(
-        "app.analysis.assessment.tasks.ReadyForAssessment.try_advance_from",
+        "app.queue.tasks.assessment.ReadyForAssessment.try_advance_from",
         new=AsyncMock(return_value=ready),
     )
 
@@ -102,14 +100,14 @@ class TestAssessContent:
 
         rate limit acquire も試みない (Ready 構築が gatekeeper、案 3 順序)。
         """
-        from app.analysis.assessment.tasks import assess_content
+        from app.queue.tasks.assessment import assess_content
 
         ctx = _make_ctx(assessor=_make_provider_fake())
         trigger = _make_trigger(curation_id=42)
 
         with (
             _patch_ready_construction(None),
-            patch("app.analysis.assessment.tasks.AssessmentService") as mock_svc_cls,
+            patch("app.queue.tasks.assessment.AssessmentService") as mock_svc_cls,
         ):
             await assess_content(trigger=trigger, ctx=ctx)
 
@@ -125,7 +123,7 @@ class TestAssessContent:
         EmbeddingTrigger を kiq に enqueue する。Ready 構築は下流 Stage 5
         task が処理開始時に行う。
         """
-        from app.analysis.assessment.tasks import assess_content
+        from app.queue.tasks.assessment import assess_content
 
         mock_ctx = _make_ctx(assessor=_make_provider_fake())
         trigger = _make_trigger(curation_id=2)
@@ -133,8 +131,8 @@ class TestAssessContent:
 
         with (
             _patch_ready_construction(ready),
-            patch("app.analysis.assessment.tasks.AssessmentService") as mock_svc_cls,
-            patch("app.analysis.assessment.tasks.generate_embedding") as mock_embed,
+            patch("app.queue.tasks.assessment.AssessmentService") as mock_svc_cls,
+            patch("app.queue.tasks.assessment.generate_embedding") as mock_embed,
         ):
             # Service は in-scope 成功時 assessment id を返す
             mock_svc_cls.return_value.execute = AsyncMock(return_value=100)
@@ -153,15 +151,15 @@ class TestAssessContent:
         in-scope 経路だけが Stage 5 chain の対象。out-of-scope はパイプライン終了で、
         race lost は勝者 task が自身で chain を起動する責務。
         """
-        from app.analysis.assessment.tasks import assess_content
+        from app.queue.tasks.assessment import assess_content
 
         mock_ctx = _make_ctx(assessor=_make_provider_fake())
         trigger = _make_trigger(curation_id=2)
 
         with (
             _patch_ready_construction(_make_ready(curation_id=2)),
-            patch("app.analysis.assessment.tasks.AssessmentService") as mock_svc_cls,
-            patch("app.analysis.assessment.tasks.generate_embedding") as mock_embed,
+            patch("app.queue.tasks.assessment.AssessmentService") as mock_svc_cls,
+            patch("app.queue.tasks.assessment.generate_embedding") as mock_embed,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(return_value=None)
             mock_embed.kiq = AsyncMock()
@@ -172,15 +170,15 @@ class TestAssessContent:
     @pytest.mark.asyncio
     async def test_quota_skip_returns_without_invoking_service(self) -> None:
         """gate.acquire=False の場合 quota log + return、Service は呼ばない。"""
-        from app.analysis.assessment.tasks import assess_content
+        from app.queue.tasks.assessment import assess_content
 
         mock_ctx = _make_ctx(assessor=_make_provider_fake(), gate_acquire=False)
         trigger = _make_trigger()
 
         with (
             _patch_ready_construction(_make_ready()),
-            patch("app.analysis.assessment.tasks.AssessmentService") as mock_svc_cls,
-            patch("app.analysis.assessment.tasks.generate_embedding") as mock_embed,
+            patch("app.queue.tasks.assessment.AssessmentService") as mock_svc_cls,
+            patch("app.queue.tasks.assessment.generate_embedding") as mock_embed,
             capture_logs() as cap,
         ):
             mock_embed.kiq = AsyncMock()
@@ -199,7 +197,7 @@ class TestAssessContent:
         ので catch-all 経路で Handler に委譲される。retry 余地ありで Handler
         が True を返した想定で task が raise することを確認する。
         """
-        from app.analysis.assessment.tasks import assess_content
+        from app.queue.tasks.assessment import assess_content
 
         mock_ctx = _make_ctx(
             assessor=_make_provider_fake(), retry_count=0, max_retries=2
@@ -208,9 +206,9 @@ class TestAssessContent:
 
         with (
             _patch_ready_construction(_make_ready()),
-            patch("app.analysis.assessment.tasks.AssessmentService") as mock_svc_cls,
+            patch("app.queue.tasks.assessment.AssessmentService") as mock_svc_cls,
             patch(
-                "app.analysis.assessment.tasks.AssessmentFailureHandler"
+                "app.queue.tasks.assessment.AssessmentFailureHandler"
             ) as mock_handler_cls,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
@@ -223,7 +221,7 @@ class TestAssessContent:
     @pytest.mark.asyncio
     async def test_rate_limit_last_attempt_returns(self) -> None:
         """Handler が ``reraise=False`` を返したら task は return する。"""
-        from app.analysis.assessment.tasks import assess_content
+        from app.queue.tasks.assessment import assess_content
 
         mock_ctx = _make_ctx(
             assessor=_make_provider_fake(), retry_count=2, max_retries=2
@@ -232,9 +230,9 @@ class TestAssessContent:
 
         with (
             _patch_ready_construction(_make_ready()),
-            patch("app.analysis.assessment.tasks.AssessmentService") as mock_svc_cls,
+            patch("app.queue.tasks.assessment.AssessmentService") as mock_svc_cls,
             patch(
-                "app.analysis.assessment.tasks.AssessmentFailureHandler"
+                "app.queue.tasks.assessment.AssessmentFailureHandler"
             ) as mock_handler_cls,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(

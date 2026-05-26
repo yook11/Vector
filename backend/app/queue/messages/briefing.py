@@ -1,8 +1,11 @@
-"""taskiq subtask 引数の VO (BaseModel frozen)。
+"""briefing の kiq message DTO。
 
 taskiq の formatter は素の dataclass を扱えず PydanticSerializationError で死ぬ
 ため (Issue #441 / #558)、kiq 引数は必ず Pydantic ``BaseModel(frozen=True)``
 を採る (`feedback_taskiq_basemodel_required.md`)。
+
+※他 stage と異なり ID-only Trigger ではなく thick TaskInput
+(week_start + category_id) を運ぶ。
 """
 
 from __future__ import annotations

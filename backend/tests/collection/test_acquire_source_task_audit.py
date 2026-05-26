@@ -23,11 +23,11 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.collection import tasks as collection_tasks
 from app.collection.article_acquisition.errors import SourceAcquisitionError
-from app.collection.staged import AcquireSourceArg
 from app.models.news_source import NewsSource, SourceType
 from app.models.pipeline_event import PipelineEvent
+from app.queue.messages.collection import AcquireSourceArg
+from app.queue.tasks import acquisition as collection_tasks
 
 
 @pytest.fixture

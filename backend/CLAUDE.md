@@ -14,11 +14,10 @@ FastAPI + Python 3.13 + SQLModel (SQLAlchemy 2.0 async) による非同期APIサ
 - `app/digest/` — 週次トレンドダイジェスト pipeline
 - `app/audit/` — `pipeline_events` 監査基盤 (Discriminated Union payload)
 - `app/search/` — semantic search + per-user 1 日 quota
-- `app/maintenance/` — backlog / budget / policy (back-fill 制御)
 - `app/routers/` — REST endpoint
 - `app/schemas/` — API SSoT (Pydantic v2 / FastAPI 自動 OpenAPI)
 - `app/models/` — DB SSoT (SQLModel + Alembic migration)
-- `app/brokers.py` — Pure DI composition root (taskiq broker / scheduler / AI provider 配線)
+- `app/queue/` — Pure DI composition root (taskiq broker / scheduler / AI provider 配線) + 全 cron task / back-fill helper / kiq message DTO
 
 ## 禁止事項（NEVER）
 

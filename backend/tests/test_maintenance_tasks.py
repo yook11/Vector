@@ -41,16 +41,16 @@ def _stub_session_cm(ctx: MagicMock) -> None:
 @pytest.mark.asyncio
 async def test_curations_disabled_returns_early() -> None:
     """kill switch False → hold 確認も backlog 参照も年齢削除もしない。"""
-    from app.maintenance import tasks
+    from app.queue.tasks import backfill as tasks
 
     ctx = _ctx_with_session_factory()
     with (
         patch.object(tasks.settings, "backfill_curations_enabled", False),
-        patch("app.maintenance.tasks.is_curation_held", new=AsyncMock()) as held,
+        patch("app.queue.tasks.backfill.is_curation_held", new=AsyncMock()) as held,
         patch(
-            "app.maintenance.tasks._delete_aged_out_curations", new=AsyncMock()
+            "app.queue.tasks.backfill._delete_aged_out_curations", new=AsyncMock()
         ) as delete,
-        patch("app.maintenance.tasks.PipelineBacklog") as backlog_cls,
+        patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
     ):
         await tasks.backfill_curations(ctx=ctx)
 
@@ -67,21 +67,23 @@ async def test_curations_disabled_returns_early() -> None:
 @pytest.mark.asyncio
 async def test_curations_held_skips_entire_run() -> None:
     """hold 中は年齢削除も backlog 参照も dispatch も行わず即 return。"""
-    from app.maintenance import tasks
+    from app.queue.tasks import backfill as tasks
 
     ctx = _ctx_with_session_factory()
     with (
         patch.object(tasks.settings, "backfill_curations_enabled", True),
         patch(
-            "app.maintenance.tasks.is_curation_held",
+            "app.queue.tasks.backfill.is_curation_held",
             new=AsyncMock(return_value=True),
         ),
         patch(
-            "app.maintenance.tasks._delete_aged_out_curations", new=AsyncMock()
+            "app.queue.tasks.backfill._delete_aged_out_curations", new=AsyncMock()
         ) as delete,
-        patch("app.maintenance.tasks.PipelineBacklog") as backlog_cls,
-        patch("app.maintenance.tasks.consume_daily_budget", new=AsyncMock()) as budget,
-        patch("app.analysis.curation.tasks.curate_content") as curate_task,
+        patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
+        patch(
+            "app.queue.tasks.backfill.consume_daily_budget", new=AsyncMock()
+        ) as budget,
+        patch("app.queue.tasks.backfill.curate_content") as curate_task,
     ):
         await tasks.backfill_curations(ctx=ctx)
 
@@ -99,7 +101,7 @@ async def test_curations_held_skips_entire_run() -> None:
 @pytest.mark.asyncio
 async def test_curations_empty_does_not_dispatch() -> None:
     """backlog 空 → budget も kiq も呼ばない (年齢削除は実行される)。"""
-    from app.maintenance import tasks
+    from app.queue.tasks import backfill as tasks
 
     ctx = _ctx_with_session_factory()
     _stub_session_cm(ctx)
@@ -110,15 +112,19 @@ async def test_curations_empty_does_not_dispatch() -> None:
     with (
         patch.object(tasks.settings, "backfill_curations_enabled", True),
         patch(
-            "app.maintenance.tasks.is_curation_held",
+            "app.queue.tasks.backfill.is_curation_held",
             new=AsyncMock(return_value=False),
         ),
         patch(
-            "app.maintenance.tasks._delete_aged_out_curations", new=AsyncMock()
+            "app.queue.tasks.backfill._delete_aged_out_curations", new=AsyncMock()
         ) as delete,
-        patch("app.maintenance.tasks.PipelineBacklog", return_value=backlog_instance),
-        patch("app.maintenance.tasks.consume_daily_budget", new=AsyncMock()) as budget,
-        patch("app.analysis.curation.tasks.curate_content") as curate_task,
+        patch(
+            "app.queue.tasks.backfill.PipelineBacklog", return_value=backlog_instance
+        ),
+        patch(
+            "app.queue.tasks.backfill.consume_daily_budget", new=AsyncMock()
+        ) as budget,
+        patch("app.queue.tasks.backfill.curate_content") as curate_task,
     ):
         await tasks.backfill_curations(ctx=ctx)
 
@@ -135,7 +141,7 @@ async def test_curations_empty_does_not_dispatch() -> None:
 @pytest.mark.asyncio
 async def test_curations_budget_exhausted_skips_dispatch() -> None:
     """consume_daily_budget が 0 を返したら kiq dispatch せず終了。"""
-    from app.maintenance import tasks
+    from app.queue.tasks import backfill as tasks
 
     ctx = _ctx_with_session_factory()
     _stub_session_cm(ctx)
@@ -146,16 +152,18 @@ async def test_curations_budget_exhausted_skips_dispatch() -> None:
     with (
         patch.object(tasks.settings, "backfill_curations_enabled", True),
         patch(
-            "app.maintenance.tasks.is_curation_held",
+            "app.queue.tasks.backfill.is_curation_held",
             new=AsyncMock(return_value=False),
         ),
-        patch("app.maintenance.tasks._delete_aged_out_curations", new=AsyncMock()),
-        patch("app.maintenance.tasks.PipelineBacklog", return_value=backlog_instance),
+        patch("app.queue.tasks.backfill._delete_aged_out_curations", new=AsyncMock()),
         patch(
-            "app.maintenance.tasks.consume_daily_budget",
+            "app.queue.tasks.backfill.PipelineBacklog", return_value=backlog_instance
+        ),
+        patch(
+            "app.queue.tasks.backfill.consume_daily_budget",
             new=AsyncMock(return_value=0),
         ),
-        patch("app.analysis.curation.tasks.curate_content") as curate_task,
+        patch("app.queue.tasks.backfill.curate_content") as curate_task,
     ):
         await tasks.backfill_curations(ctx=ctx)
 
@@ -174,8 +182,8 @@ async def test_curations_dispatches_triggers_for_each_article_id() -> None:
     precondition 判定 (article 既消滅 / 既処理) は下流 Stage 3 task に委譲。
     maintenance 層は ID-only Trigger を粛々と enqueue するだけの責務に縮約。
     """
-    from app.analysis.curation.domain.ready import CurationTrigger
-    from app.maintenance import tasks
+    from app.queue.messages.curation import CurationTrigger
+    from app.queue.tasks import backfill as tasks
 
     ctx = _ctx_with_session_factory()
     _stub_session_cm(ctx)
@@ -189,16 +197,18 @@ async def test_curations_dispatches_triggers_for_each_article_id() -> None:
     with (
         patch.object(tasks.settings, "backfill_curations_enabled", True),
         patch(
-            "app.maintenance.tasks.is_curation_held",
+            "app.queue.tasks.backfill.is_curation_held",
             new=AsyncMock(return_value=False),
         ),
-        patch("app.maintenance.tasks._delete_aged_out_curations", new=AsyncMock()),
-        patch("app.maintenance.tasks.PipelineBacklog", return_value=backlog_instance),
+        patch("app.queue.tasks.backfill._delete_aged_out_curations", new=AsyncMock()),
         patch(
-            "app.maintenance.tasks.consume_daily_budget",
+            "app.queue.tasks.backfill.PipelineBacklog", return_value=backlog_instance
+        ),
+        patch(
+            "app.queue.tasks.backfill.consume_daily_budget",
             new=AsyncMock(return_value=3),
         ),
-        patch("app.analysis.curation.tasks.curate_content", curate_task),
+        patch("app.queue.tasks.backfill.curate_content", curate_task),
     ):
         await tasks.backfill_curations(ctx=ctx)
 
@@ -214,7 +224,7 @@ async def test_curations_dispatches_triggers_for_each_article_id() -> None:
 @pytest.mark.asyncio
 async def test_curations_continues_when_one_kiq_fails() -> None:
     """1 件目 kiq が例外を上げても 2 件目以降は dispatch される。"""
-    from app.maintenance import tasks
+    from app.queue.tasks import backfill as tasks
 
     ctx = _ctx_with_session_factory()
     _stub_session_cm(ctx)
@@ -228,16 +238,18 @@ async def test_curations_continues_when_one_kiq_fails() -> None:
     with (
         patch.object(tasks.settings, "backfill_curations_enabled", True),
         patch(
-            "app.maintenance.tasks.is_curation_held",
+            "app.queue.tasks.backfill.is_curation_held",
             new=AsyncMock(return_value=False),
         ),
-        patch("app.maintenance.tasks._delete_aged_out_curations", new=AsyncMock()),
-        patch("app.maintenance.tasks.PipelineBacklog", return_value=backlog_instance),
+        patch("app.queue.tasks.backfill._delete_aged_out_curations", new=AsyncMock()),
         patch(
-            "app.maintenance.tasks.consume_daily_budget",
+            "app.queue.tasks.backfill.PipelineBacklog", return_value=backlog_instance
+        ),
+        patch(
+            "app.queue.tasks.backfill.consume_daily_budget",
             new=AsyncMock(return_value=3),
         ),
-        patch("app.analysis.curation.tasks.curate_content", curate_task),
+        patch("app.queue.tasks.backfill.curate_content", curate_task),
     ):
         await tasks.backfill_curations(ctx=ctx)
 
@@ -282,7 +294,7 @@ async def test_delete_aged_out_curations_deletes_old_child_null_and_audits(
 ) -> None:
     """古い child-NULL は監査を残して削除、noise を持つ古い記事は残す。"""
     from app.analysis.curation.audit_repository import BACKFILL_CURATION_AGED_OUT_CODE
-    from app.maintenance import tasks
+    from app.queue.tasks import backfill as tasks
 
     now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
     aged = await _make_article(
@@ -341,12 +353,12 @@ async def test_delete_aged_out_curations_deletes_old_child_null_and_audits(
 
 @pytest.mark.asyncio
 async def test_assessments_disabled_returns_early() -> None:
-    from app.maintenance import tasks
+    from app.queue.tasks import backfill as tasks
 
     ctx = _ctx_with_session_factory()
     with (
         patch.object(tasks.settings, "backfill_assessments_enabled", False),
-        patch("app.maintenance.tasks.PipelineBacklog") as backlog_cls,
+        patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
     ):
         await tasks.backfill_assessments(ctx=ctx)
     backlog_cls.assert_not_called()
@@ -354,12 +366,12 @@ async def test_assessments_disabled_returns_early() -> None:
 
 @pytest.mark.asyncio
 async def test_embeddings_disabled_returns_early() -> None:
-    from app.maintenance import tasks
+    from app.queue.tasks import backfill as tasks
 
     ctx = _ctx_with_session_factory()
     with (
         patch.object(tasks.settings, "backfill_embeddings_enabled", False),
-        patch("app.maintenance.tasks.PipelineBacklog") as backlog_cls,
+        patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
     ):
         await tasks.backfill_embeddings(ctx=ctx)
     backlog_cls.assert_not_called()

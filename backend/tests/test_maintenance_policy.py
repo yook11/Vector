@@ -2,7 +2,8 @@
 
 from datetime import UTC, datetime, timedelta
 
-from app.maintenance.policy import BackfillWindow, utc_now
+from app.queue.helpers.window import BackfillWindow
+from app.shared.time import utc_now
 
 
 def test_utc_now_returns_timezone_aware_utc() -> None:

@@ -1,4 +1,4 @@
-"""back-fill cron タスク 3 本 (curations / assessments / embeddings)。
+"""Back-fill cron タスク 3 本 (curations / assessments / embeddings)。
 
 各タスクは broker_metadata 上で cron 駆動し、塩漬け化した記事 ID を発見して
 対応するメインフロー task を ``kiq`` で再投入する。kill switch (Settings)
@@ -6,7 +6,7 @@
 日次予算 (Redis) で暴走を防ぐ。
 
 ツマミの所在は本ファイル冒頭の定数群。env で動的に変えるのは kill switch
-のみ (PLAN §3-6 / §3-9)。
+のみ。
 """
 
 from __future__ import annotations
@@ -18,12 +18,24 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from taskiq import Context, TaskiqDepends
 
 from app.analysis.curation.hold import is_curation_held
-from app.brokers import broker_metadata
 from app.config import settings
-from app.maintenance.backlog import PipelineBacklog
-from app.maintenance.budget import consume_daily_budget
-from app.maintenance.policy import BackfillWindow, utc_now
+from app.queue.brokers import broker_metadata
+from app.queue.helpers.backlog import PipelineBacklog
+from app.queue.helpers.budget import consume_daily_budget
+from app.queue.helpers.window import BackfillWindow
+from app.queue.messages.assessment import AssessmentTrigger
+from app.queue.messages.curation import CurationTrigger
+from app.queue.messages.embedding import EmbeddingTrigger
+from app.queue.schedule import (
+    CRON_BACKFILL_ASSESSMENTS,
+    CRON_BACKFILL_CURATIONS,
+    CRON_BACKFILL_EMBEDDINGS,
+)
+from app.queue.tasks.assessment import assess_content
+from app.queue.tasks.curation import curate_content
+from app.queue.tasks.embedding import generate_embedding
 from app.redis import get_redis
+from app.shared.time import utc_now
 
 logger = structlog.get_logger(__name__)
 
@@ -115,7 +127,7 @@ async def _delete_aged_out_curations(
     timeout=120,
     max_retries=0,
     retry_on_error=False,
-    schedule=[{"cron": "*/15 * * * *"}],
+    schedule=[{"cron": CRON_BACKFILL_CURATIONS}],
 )
 async def backfill_curations(ctx: Context = TaskiqDepends()) -> None:
     """curation 子が NULL の Article を救済する (再投入 + 年齢削除)。
@@ -165,9 +177,6 @@ async def backfill_curations(ctx: Context = TaskiqDepends()) -> None:
         logger.warning("backfill_curations_daily_budget_exhausted", found=found)
         return
 
-    from app.analysis.curation.domain.ready import CurationTrigger
-    from app.analysis.curation.tasks import curate_content
-
     requeued = 0
     for article_id in ids[:granted]:
         try:
@@ -201,7 +210,7 @@ async def backfill_curations(ctx: Context = TaskiqDepends()) -> None:
     timeout=120,
     max_retries=0,
     retry_on_error=False,
-    schedule=[{"cron": "5,20,35,50 * * * *"}],
+    schedule=[{"cron": CRON_BACKFILL_ASSESSMENTS}],
 )
 async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
     """in-scope / out-of-scope assessment が無い Extraction を発見して
@@ -244,9 +253,6 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
         logger.warning("backfill_assessments_daily_budget_exhausted", found=found)
         return
 
-    from app.analysis.assessment.domain.ready import AssessmentTrigger
-    from app.analysis.assessment.tasks import assess_content
-
     # 案 3: maintenance も上流相当 → ID のみ enqueue。precondition 検証は
     # Stage 4 Task 自身が処理開始時に行う。stale trigger は Stage 4 の
     # ``assess_content_skipped`` ログで観測する。
@@ -283,7 +289,7 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
     timeout=120,
     max_retries=0,
     retry_on_error=False,
-    schedule=[{"cron": "*/10 * * * *"}],
+    schedule=[{"cron": CRON_BACKFILL_EMBEDDINGS}],
 )
 async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
     """embedding NULL の analysis を発見し ``generate_embedding`` を再投入する。
@@ -324,9 +330,6 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
     if granted == 0:
         logger.warning("backfill_embeddings_daily_budget_exhausted", found=found)
         return
-
-    from app.analysis.embedding.domain.ready import EmbeddingTrigger
-    from app.analysis.embedding.tasks import generate_embedding
 
     # 案 3: maintenance も上流相当 → ID のみ enqueue。precondition 検証は
     # Stage 5 Task 自身が処理開始時に行う。stale trigger は Stage 5 の

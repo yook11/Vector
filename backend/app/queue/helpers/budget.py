@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import redis.asyncio as aioredis
 
-from app.maintenance.policy import utc_now
+from app.shared.time import utc_now
 
 _BUDGET_TTL_SECONDS = 26 * 60 * 60  # 26h: 日跨ぎの猶予
 

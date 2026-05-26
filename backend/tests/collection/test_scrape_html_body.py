@@ -30,7 +30,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.analysis.curation.domain.ready import CurationTrigger
 from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import (
@@ -40,14 +39,15 @@ from app.collection.domain.observed_article import (
 )
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.sources.article_completion_policy import DEFAULT_POLICY
-from app.collection.tasks import scrape_html_body
+from app.queue.messages.curation import CurationTrigger
+from app.queue.tasks.completion import scrape_html_body
 from app.shared.value_objects.source_name import SourceName
 
 _SERVICE_EXECUTE = (
     "app.collection.article_completion.service.ArticleCompletionService.execute"
 )
 _SERVICE_CLS = "app.collection.article_completion.service.ArticleCompletionService"
-_CURATE_CONTENT_KIQ = "app.analysis.curation.tasks.curate_content.kiq"
+_CURATE_CONTENT_KIQ = "app.queue.tasks.curation.curate_content.kiq"
 
 
 def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> MagicMock:

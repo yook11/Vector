@@ -16,10 +16,8 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import ValidationError
 
-from app.analysis.assessment.domain.ready import (
-    AssessmentTrigger,
-    ReadyForAssessment,
-)
+from app.analysis.assessment.domain.ready import ReadyForAssessment
+from app.queue.messages.assessment import AssessmentTrigger
 
 
 def _make_ready(**overrides: object) -> ReadyForAssessment:

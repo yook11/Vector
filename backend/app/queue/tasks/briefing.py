@@ -1,7 +1,7 @@
 """週次 briefing 生成タスク (dispatcher + per-category subtask)。
 
 スケジュール:
-- ``cron="5 15 * * 0"`` (UTC) = JST 月曜 00:05
+- ``CRON_WEEKLY_BRIEFING`` (UTC) = JST 月曜 00:05
 - dispatcher が直近完了週 × 全カテゴリ分の subtask を kiq する
 
 責務分離:
@@ -24,17 +24,19 @@ import structlog
 from sqlalchemy import select
 from taskiq import Context, TaskiqDepends
 
-from app.brokers import broker_briefing, is_last_attempt
 from app.config import settings
 from app.insights.briefing.application.notifier import FrontendRevalidateNotifier
 from app.insights.briefing.application.service import WeeklyBriefingService
 from app.insights.briefing.audit_repository import BriefingAuditRepository
 from app.insights.briefing.domain.ready import ReadyForBriefing
-from app.insights.briefing.domain.task_input import BriefingTaskInput
 from app.insights.briefing.domain.week import latest_completed_week_start, now_in_jst
 from app.insights.briefing.llm.deepseek import DeepSeekBriefingGenerator
 from app.insights.briefing.repository.briefings import BriefingRepository
 from app.models.category import Category
+from app.queue.brokers import broker_briefing
+from app.queue.messages.briefing import BriefingTaskInput
+from app.queue.retry import is_last_attempt
+from app.queue.schedule import CRON_WEEKLY_BRIEFING
 
 logger = structlog.get_logger(__name__)
 
@@ -44,7 +46,7 @@ logger = structlog.get_logger(__name__)
     timeout=120,
     max_retries=0,
     retry_on_error=False,
-    schedule=[{"cron": "5 15 * * 0"}],
+    schedule=[{"cron": CRON_WEEKLY_BRIEFING}],
 )
 async def dispatch_weekly_briefings(ctx: Context = TaskiqDepends()) -> None:
     """JST 月曜 00:05、直近完了週の全カテゴリ briefing を subtask として kiq する。

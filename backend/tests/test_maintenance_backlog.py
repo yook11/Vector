@@ -6,13 +6,13 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.maintenance.backlog import PipelineBacklog
 from app.models.article import Article
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 from app.models.curation_noise import CurationNoise
 from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource
+from app.queue.helpers.backlog import PipelineBacklog
 
 
 async def _make_article(

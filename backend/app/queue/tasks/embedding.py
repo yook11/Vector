@@ -30,11 +30,13 @@ import structlog
 from taskiq import Context, TaskiqDepends
 
 from app.analysis.embedding.ai.base import BaseEmbedder
-from app.analysis.embedding.domain.ready import EmbeddingTrigger, ReadyForEmbedding
+from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.failure_handling import EmbeddingFailureHandler
 from app.analysis.embedding.repository import EmbeddingRepository
 from app.analysis.embedding.service import EmbeddingService
-from app.brokers import broker_embedding, is_last_attempt
+from app.queue.brokers import broker_embedding
+from app.queue.messages.embedding import EmbeddingTrigger
+from app.queue.retry import is_last_attempt
 
 logger = structlog.get_logger(__name__)
 

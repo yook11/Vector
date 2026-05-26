@@ -17,15 +17,12 @@ audit / curator 入力値を取得して Ready を構築する。
 
 詳細は memory `project_typed_pipeline_preconditions.md` (2026-05-11 確定版)。
 
-`@dataclass(frozen=True, slots=True)` ではなく `BaseModel(frozen=True)` を使う
-理由: taskiq の formatter が Pydantic ベースのため、kiq 引数で素の dataclass を
-渡すと serializer 到達前に PydanticSerializationError で死ぬ (taskiq Issue #441)。
-詳細は memory `feedback_taskiq_basemodel_required.md`。
-
 `MAX_CONTENT_LENGTH` は system 不変条件としての hard cap (リソース保護) であり、
 adapter 固有の入力整形 (例: GeminiCurationPrompt.CONTENT_MAX_LENGTH = 20_000) と
 責務が異なる。前者は「ここを超える本文は Stage 3 の対象外」を表し、後者は
 「特定モデルにこのサイズで投げる」を表す。
+
+CurationTrigger (kiq message DTO) は ``app/queue/messages/curation.py`` 配下。
 """
 
 from __future__ import annotations
@@ -33,6 +30,8 @@ from __future__ import annotations
 from typing import ClassVar, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
+
+__all__ = ["CurationPreconditionProtocol", "ReadyForCuration"]
 
 
 class CurationPreconditionProtocol(Protocol):
@@ -104,29 +103,3 @@ class ReadyForCuration(BaseModel):
             repo: ``try_load_for_curation`` を備える Repository
         """
         return await repo.try_load_for_curation(article_id)
-
-
-class CurationTrigger(BaseModel):
-    """Stage 3 起動 trigger — kiq message 用の軽量 ID キャリア。
-
-    precondition は保証せず ``article_id`` のみを運ぶ。下流 Stage 3 Task が
-    ``ReadyForCuration.try_advance_from`` を呼んで処理開始時に最新の DB 状態から
-    Ready を構築する (案 3 = 厚い Ready + 下流 Stage 自身が処理開始時に構築)。
-
-    上流 (collection acquire_source / scrape_html_body / maintenance backfill) は値
-    fetch を行わず本 Trigger に ID だけ詰めて kiq に enqueue する。これにより
-    kiq message が軽量になり、かつ enqueue → 実行までの時間ずれの影響を受けない
-    (Ready 構築時に最新の DB 状態を反映する)。
-
-    taskiq formatter は Pydantic BaseModel(frozen=True) を要求するため
-    ``BaseModel`` 派生 (memory `feedback_taskiq_basemodel_required.md`)。
-
-    Rolling deploy 互換: Pydantic の既定 ``extra='ignore'`` により、旧
-    ``ReadyForCuration`` (3 fields: article_id / original_title /
-    original_content) の in-flight message を新 worker が受信しても
-    ``article_id`` だけ取り出して処理できる。
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    article_id: int = Field(gt=0)

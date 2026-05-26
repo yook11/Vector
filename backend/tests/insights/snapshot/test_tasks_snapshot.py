@@ -43,7 +43,7 @@ def _ctx_with_session_factory() -> MagicMock:
 class TestSchedule:
     def test_cron_matches_jst_daily_midnight(self) -> None:
         """UTC 毎日 15:05 = JST 毎日 00:05 の cron 文字列が登録されている。"""
-        from app.insights.snapshot.tasks import snapshot
+        from app.queue.tasks import snapshot
 
         schedule = snapshot.generate_weekly_snapshot.labels.get("schedule")
         assert isinstance(schedule, list)
@@ -59,7 +59,7 @@ class TestRun:
     @pytest.mark.asyncio
     async def test_invokes_service_with_ready(self) -> None:
         """try_advance_from で Ready が返ったら Service.execute(ready) を呼ぶ。"""
-        from app.insights.snapshot.tasks import snapshot
+        from app.queue.tasks import snapshot
 
         ctx = _ctx_with_session_factory()
         target_window_end = date(2026, 5, 3)
@@ -74,14 +74,14 @@ class TestRun:
 
         with (
             patch(
-                "app.insights.snapshot.tasks.snapshot.now_in_jst",
+                "app.queue.tasks.snapshot.now_in_jst",
                 return_value=datetime(2026, 5, 3, 0, 5, tzinfo=JST),
             ),
             patch.object(
                 ReadyForDigest, "try_advance_from", new=AsyncMock(return_value=ready)
             ),
             patch(
-                "app.insights.snapshot.tasks.snapshot.WeeklyTrendsSnapshotService",
+                "app.queue.tasks.snapshot.WeeklyTrendsSnapshotService",
                 return_value=service,
             ) as service_cls,
         ):
@@ -93,7 +93,7 @@ class TestRun:
     @pytest.mark.asyncio
     async def test_skips_service_when_ready_is_none(self) -> None:
         """try_advance_from が None を返したら Service.execute は呼ばれない。"""
-        from app.insights.snapshot.tasks import snapshot
+        from app.queue.tasks import snapshot
 
         ctx = _ctx_with_session_factory()
         service = MagicMock()
@@ -101,14 +101,14 @@ class TestRun:
 
         with (
             patch(
-                "app.insights.snapshot.tasks.snapshot.now_in_jst",
+                "app.queue.tasks.snapshot.now_in_jst",
                 return_value=datetime(2026, 5, 3, 0, 5, tzinfo=JST),
             ),
             patch.object(
                 ReadyForDigest, "try_advance_from", new=AsyncMock(return_value=None)
             ),
             patch(
-                "app.insights.snapshot.tasks.snapshot.WeeklyTrendsSnapshotService",
+                "app.queue.tasks.snapshot.WeeklyTrendsSnapshotService",
                 return_value=service,
             ),
         ):
@@ -119,7 +119,7 @@ class TestRun:
     @pytest.mark.asyncio
     async def test_propagates_service_exception(self) -> None:
         """Service が例外を上げたら捕まえず再 raise する (failure_visibility)。"""
-        from app.insights.snapshot.tasks import snapshot
+        from app.queue.tasks import snapshot
 
         ctx = _ctx_with_session_factory()
         ready = ReadyForDigest(window_end=date(2026, 5, 3), force=False)
@@ -129,14 +129,14 @@ class TestRun:
 
         with (
             patch(
-                "app.insights.snapshot.tasks.snapshot.now_in_jst",
+                "app.queue.tasks.snapshot.now_in_jst",
                 return_value=datetime(2026, 5, 3, 0, 5, tzinfo=JST),
             ),
             patch.object(
                 ReadyForDigest, "try_advance_from", new=AsyncMock(return_value=ready)
             ),
             patch(
-                "app.insights.snapshot.tasks.snapshot.WeeklyTrendsSnapshotService",
+                "app.queue.tasks.snapshot.WeeklyTrendsSnapshotService",
                 return_value=service,
             ),
             pytest.raises(RuntimeError, match="aggregation failed"),

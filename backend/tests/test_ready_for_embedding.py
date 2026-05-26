@@ -16,10 +16,8 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import ValidationError
 
-from app.analysis.embedding.domain.ready import (
-    EmbeddingTrigger,
-    ReadyForEmbedding,
-)
+from app.analysis.embedding.domain.ready import ReadyForEmbedding
+from app.queue.messages.embedding import EmbeddingTrigger
 
 
 def _make_repo_mock(*, ready: ReadyForEmbedding | None = None) -> AsyncMock:

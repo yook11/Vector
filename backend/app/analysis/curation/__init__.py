@@ -12,10 +12,7 @@ from app.analysis.curation.domain import (
     Noise,
     Signal,
 )
-from app.analysis.curation.domain.ready import (
-    CurationTrigger,
-    ReadyForCuration,
-)
+from app.analysis.curation.domain.ready import ReadyForCuration
 from app.analysis.curation.repository import CurationRepository
 from app.analysis.curation.service import CurationService
 
@@ -23,7 +20,6 @@ __all__ = [
     "CurationRepository",
     "CurationResult",
     "CurationService",
-    "CurationTrigger",
     "Noise",
     "ReadyForCuration",
     "Signal",

@@ -1,0 +1,64 @@
+"""全 taskiq cron schedule の SSoT。
+
+各 task の ``@broker.task(schedule=...)`` は本ファイルから定数を import する。
+ハードコードを禁じることで、minute 衝突確認と JST/UTC 換算を本ファイルの
+時刻表 docstring 1 か所で完結させる。
+
+時刻表 (UTC / JST 換算):
+
+  cron               | UTC          | JST          | task
+  -------------------|--------------|--------------|---------------------------------
+  * * * * *          | 毎分         | 毎分         | dispatch_html_fetch_jobs
+                     |              |              | sweep_expired_leases
+  */10 * * * *       | :00,:10,...  | :00,:10,...  | backfill_embeddings
+  */15 * * * *       | :00,:15,...  | :00,:15,...  | dispatch_high
+                     |              |              | backfill_curations
+  5,20,35,50 * * * * | :05,:20,...  | :05,:20,...  | backfill_assessments
+  25 * * * *         | :25          | :25          | purge_pipeline_events
+  0 * * * *          | :00          | :00          | dispatch_medium
+  0 */6 * * *        | 00,06,12,18  | (UTC=JST-9)  | dispatch_low
+  5 15 * * *         | 15:05        | 00:05 (毎日) | generate_weekly_snapshot
+  5 15 * * 0         | Sun 15:05    | Mon 00:05    | dispatch_weekly_briefings
+
+minute 衝突確認は本表で行う (新規 cron 追加時の overlap 回避 SSoT)。
+新規 cron を増やすときは:
+  1. 本表に行を追加 (UTC / JST 換算を併記)
+  2. `CRON_*` 定数を追加
+  3. task 側で `from app.queue.schedule import CRON_XXX` し
+     `@broker.task(schedule=[{"cron": CRON_XXX}])` で参照する
+"""
+
+from __future__ import annotations
+
+from app.collection.sources.fetch_cadence import FetchCadence
+
+# 1 分間隔 — article_completion stage の DB 駆動 poll / lease sweep
+CRON_HTML_FETCH = "* * * * *"
+
+# 10 分間隔 — embedding back-fill (Stage 5 救済)
+CRON_BACKFILL_EMBEDDINGS = "*/10 * * * *"
+
+# 15 分間隔 — curation back-fill (Stage 3 救済、dispatch_high と同 minute)
+CRON_BACKFILL_CURATIONS = "*/15 * * * *"
+
+# :05,:20,:35,:50 — assessment back-fill (Stage 4 救済、:00/:15 系と offset)
+CRON_BACKFILL_ASSESSMENTS = "5,20,35,50 * * * *"
+
+# :25 — pipeline_events retention purge (他 cron と最少 overlap な minute)
+CRON_PIPELINE_EVENTS_PURGE = "25 * * * *"
+
+# JST 毎日 00:05 — rolling 7d snapshot 生成 (UTC 前日 15:05)
+CRON_WEEKLY_SNAPSHOT = "5 15 * * *"
+
+# JST 月曜 00:05 — 週次 briefing 生成 (UTC 日曜 15:05)
+CRON_WEEKLY_BRIEFING = "5 15 * * 0"
+
+
+# FetchCadence tier → cron 写像 (旧 brokers.CADENCE_CRON)。
+# tier 別に固定間隔で dispatch する。調整は本 dict の変更 + scheduler restart のみで
+# 可逆 (env / DB を経由しない)。
+CADENCE_CRON: dict[FetchCadence, str] = {
+    FetchCadence.HIGH: "*/15 * * * *",  # 15 分間隔
+    FetchCadence.MEDIUM: "0 * * * *",  # 1 時間間隔
+    FetchCadence.LOW: "0 */6 * * *",  # 6 時間間隔
+}

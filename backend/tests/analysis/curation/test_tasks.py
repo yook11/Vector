@@ -26,9 +26,10 @@ from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderRateLimitedError,
 )
-from app.analysis.assessment.domain.ready import AssessmentTrigger
-from app.analysis.curation.domain.ready import CurationTrigger, ReadyForCuration
+from app.analysis.curation.domain.ready import ReadyForCuration
 from app.analysis.rate_limit import RatePolicy
+from app.queue.messages.assessment import AssessmentTrigger
+from app.queue.messages.curation import CurationTrigger
 
 
 def _make_provider_fake() -> MagicMock:
@@ -106,14 +107,14 @@ class TestCurateContent:
         AssessmentTrigger を kiq に enqueue する。Ready 構築は下流 Stage 4
         task が処理開始時に行う。
         """
-        from app.analysis.curation.tasks import curate_content
+        from app.queue.tasks.curation import curate_content
 
         mock_ctx = _make_ctx(curator=_make_provider_fake())
 
         with (
             _patch_try_advance_from(_fixed_ready()),
-            patch("app.analysis.curation.tasks.CurationService") as mock_svc_cls,
-            patch("app.analysis.curation.tasks.assess_content") as mock_assess,
+            patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
+            patch("app.queue.tasks.curation.assess_content") as mock_assess,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(return_value=42)
             mock_assess.kiq = AsyncMock()
@@ -126,14 +127,14 @@ class TestCurateContent:
     @pytest.mark.asyncio
     async def test_noise_or_race_loss_does_not_chain(self) -> None:
         """Service が None を返したら chain しない (noise 勝者 / race 敗北を吸収)。"""
-        from app.analysis.curation.tasks import curate_content
+        from app.queue.tasks.curation import curate_content
 
         mock_ctx = _make_ctx(curator=_make_provider_fake())
 
         with (
             _patch_try_advance_from(_fixed_ready()),
-            patch("app.analysis.curation.tasks.CurationService") as mock_svc_cls,
-            patch("app.analysis.curation.tasks.assess_content") as mock_assess,
+            patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
+            patch("app.queue.tasks.curation.assess_content") as mock_assess,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(return_value=None)
             mock_assess.kiq = AsyncMock()
@@ -149,14 +150,14 @@ class TestCurateContent:
         判定は Stage 3 task 冒頭で Ready 自構築時に行われ、未充足なら
         AI quota / Service を消費せず短絡する。
         """
-        from app.analysis.curation.tasks import curate_content
+        from app.queue.tasks.curation import curate_content
 
         mock_ctx = _make_ctx(curator=_make_provider_fake())
 
         with (
             _patch_try_advance_from(None),
-            patch("app.analysis.curation.tasks.CurationService") as mock_svc_cls,
-            patch("app.analysis.curation.tasks.assess_content") as mock_assess,
+            patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
+            patch("app.queue.tasks.curation.assess_content") as mock_assess,
         ):
             mock_assess.kiq = AsyncMock()
             await curate_content(trigger=_trigger(), ctx=mock_ctx)
@@ -169,14 +170,14 @@ class TestCurateContent:
     @pytest.mark.asyncio
     async def test_quota_skip_returns_without_invoking_service(self) -> None:
         """gate.acquire=False の場合 quota log + return、Service は呼ばない。"""
-        from app.analysis.curation.tasks import curate_content
+        from app.queue.tasks.curation import curate_content
 
         mock_ctx = _make_ctx(curator=_make_provider_fake(), gate_acquire=False)
 
         with (
             _patch_try_advance_from(_fixed_ready()),
-            patch("app.analysis.curation.tasks.CurationService") as mock_svc_cls,
-            patch("app.analysis.curation.tasks.assess_content") as mock_assess,
+            patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
+            patch("app.queue.tasks.curation.assess_content") as mock_assess,
             capture_logs() as cap,
         ):
             mock_assess.kiq = AsyncMock()
@@ -197,7 +198,7 @@ class TestCurateContent:
         handler の挙動 (last_attempt → audit + return) を再現する。
         """
         from app.analysis.curation.errors import map_provider_to_curation
-        from app.analysis.curation.tasks import curate_content
+        from app.queue.tasks.curation import curate_content
 
         mock_ctx = _make_ctx(
             curator=_make_provider_fake(), retry_count=1, max_retries=1
@@ -210,7 +211,7 @@ class TestCurateContent:
 
         with (
             _patch_try_advance_from(_fixed_ready()),
-            patch("app.analysis.curation.tasks.CurationService") as mock_svc_cls,
+            patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
             patch(
                 "app.analysis.curation.failure_handling.CurationAuditRepository"
             ) as mock_audit_cls,
@@ -235,7 +236,7 @@ class TestCurateContent:
         message に混入した secret prefix が log field から除去されることも
         確認する (red-team chain γ-2 対称化)。
         """
-        from app.analysis.curation.tasks import curate_content
+        from app.queue.tasks.curation import curate_content
 
         mock_ctx = _make_ctx(
             curator=_make_provider_fake(), retry_count=0, max_retries=1
@@ -246,7 +247,7 @@ class TestCurateContent:
 
         with (
             _patch_try_advance_from(_fixed_ready()),
-            patch("app.analysis.curation.tasks.CurationService") as mock_svc_cls,
+            patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
             patch(
                 "app.analysis.curation.failure_handling.CurationAuditRepository"
             ) as mock_audit_cls,

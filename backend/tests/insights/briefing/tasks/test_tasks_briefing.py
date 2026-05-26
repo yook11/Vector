@@ -20,8 +20,8 @@ import pytest
 
 from app.insights.briefing.application.service import GeneratedBriefing
 from app.insights.briefing.domain.ready import ReadyForBriefing
-from app.insights.briefing.domain.task_input import BriefingTaskInput
 from app.insights.briefing.llm.errors import BriefingConfigurationError
+from app.queue.messages.briefing import BriefingTaskInput
 
 JST = ZoneInfo("Asia/Tokyo")
 
@@ -48,14 +48,14 @@ def _ctx_with_session_factory(
 
 class TestSchedule:
     def test_dispatch_cron_matches_jst_monday_midnight(self) -> None:
-        from app.insights.briefing.tasks import briefing
+        from app.queue.tasks import briefing
 
         schedule = briefing.dispatch_weekly_briefings.labels.get("schedule")
         assert isinstance(schedule, list)
         assert any(entry.get("cron") == "5 15 * * 0" for entry in schedule)
 
     def test_subtask_has_retry_2(self) -> None:
-        from app.insights.briefing.tasks import briefing
+        from app.queue.tasks import briefing
 
         labels = briefing.generate_briefing_for_category.labels
         assert labels.get("max_retries") == 2
@@ -66,7 +66,7 @@ class TestDispatcher:
     @pytest.mark.asyncio
     async def test_kiq_per_category(self) -> None:
         """全カテゴリに対して subtask が 1 つずつ kiq される。"""
-        from app.insights.briefing.tasks import briefing
+        from app.queue.tasks import briefing
 
         ctx = _ctx_with_session_factory()
 
@@ -85,7 +85,7 @@ class TestDispatcher:
 
         with (
             patch(
-                "app.insights.briefing.tasks.briefing.now_in_jst",
+                "app.queue.tasks.briefing.now_in_jst",
                 return_value=datetime(2026, 4, 27, 0, 5, tzinfo=JST),
             ),
             patch.object(
@@ -93,9 +93,7 @@ class TestDispatcher:
                 "kiq",
                 new=AsyncMock(),
             ) as kiq,
-            patch(
-                "app.insights.briefing.tasks.briefing.BriefingAuditRepository"
-            ) as audit_cls,
+            patch("app.queue.tasks.briefing.BriefingAuditRepository") as audit_cls,
         ):
             audit_cls.return_value.append_dispatched = AsyncMock()
             await briefing.dispatch_weekly_briefings(ctx=ctx)
@@ -111,7 +109,7 @@ class TestDispatcher:
 class TestSubtask:
     @pytest.mark.asyncio
     async def test_skips_when_ready_is_none(self) -> None:
-        from app.insights.briefing.tasks import briefing
+        from app.queue.tasks import briefing
 
         ctx = _ctx_with_session_factory()
         service = MagicMock()
@@ -124,11 +122,11 @@ class TestSubtask:
                 new=AsyncMock(return_value=None),
             ),
             patch(
-                "app.insights.briefing.tasks.briefing.WeeklyBriefingService",
+                "app.queue.tasks.briefing.WeeklyBriefingService",
                 return_value=service,
             ),
             patch(
-                "app.insights.briefing.tasks.briefing.DeepSeekBriefingGenerator",
+                "app.queue.tasks.briefing.DeepSeekBriefingGenerator",
                 return_value=MagicMock(),
             ),
         ):
@@ -141,7 +139,7 @@ class TestSubtask:
 
     @pytest.mark.asyncio
     async def test_invokes_service_when_ready(self) -> None:
-        from app.insights.briefing.tasks import briefing
+        from app.queue.tasks import briefing
 
         ctx = _ctx_with_session_factory()
         ready = ReadyForBriefing(
@@ -164,11 +162,11 @@ class TestSubtask:
                 new=AsyncMock(return_value=ready),
             ),
             patch(
-                "app.insights.briefing.tasks.briefing.WeeklyBriefingService",
+                "app.queue.tasks.briefing.WeeklyBriefingService",
                 return_value=service,
             ),
             patch(
-                "app.insights.briefing.tasks.briefing.DeepSeekBriefingGenerator",
+                "app.queue.tasks.briefing.DeepSeekBriefingGenerator",
                 return_value=MagicMock(),
             ),
         ):
@@ -181,7 +179,7 @@ class TestSubtask:
 
     @pytest.mark.asyncio
     async def test_propagates_service_exception(self) -> None:
-        from app.insights.briefing.tasks import briefing
+        from app.queue.tasks import briefing
 
         ctx = _ctx_with_session_factory()
         ready = ReadyForBriefing(
@@ -197,18 +195,16 @@ class TestSubtask:
                 new=AsyncMock(return_value=ready),
             ),
             patch(
-                "app.insights.briefing.tasks.briefing.WeeklyBriefingService",
+                "app.queue.tasks.briefing.WeeklyBriefingService",
                 return_value=service,
             ),
             patch(
-                "app.insights.briefing.tasks.briefing.DeepSeekBriefingGenerator",
+                "app.queue.tasks.briefing.DeepSeekBriefingGenerator",
                 return_value=MagicMock(),
             ),
             # audit 書込は別 PR で検証 (Service / repo 経由)。task 層は raise 伝播
             # だけを確認するため、ここでは BriefingAuditRepository を no-op patch。
-            patch(
-                "app.insights.briefing.tasks.briefing.BriefingAuditRepository"
-            ) as audit_cls,
+            patch("app.queue.tasks.briefing.BriefingAuditRepository") as audit_cls,
             pytest.raises(RuntimeError, match="LLM down"),
         ):
             audit_cls.return_value.append_failure = AsyncMock()
@@ -233,7 +229,7 @@ class TestSubtaskFailureAudit:
         Returns:
             (audit_cls_mock, append_failure_mock)
         """
-        from app.insights.briefing.tasks import briefing
+        from app.queue.tasks import briefing
 
         ctx = _ctx_with_session_factory(
             retry_count=retry_count, max_retries=max_retries
@@ -252,16 +248,14 @@ class TestSubtaskFailureAudit:
                 new=AsyncMock(return_value=ready),
             ),
             patch(
-                "app.insights.briefing.tasks.briefing.WeeklyBriefingService",
+                "app.queue.tasks.briefing.WeeklyBriefingService",
                 return_value=service,
             ),
             patch(
-                "app.insights.briefing.tasks.briefing.DeepSeekBriefingGenerator",
+                "app.queue.tasks.briefing.DeepSeekBriefingGenerator",
                 return_value=MagicMock(),
             ),
-            patch(
-                "app.insights.briefing.tasks.briefing.BriefingAuditRepository"
-            ) as audit_cls,
+            patch("app.queue.tasks.briefing.BriefingAuditRepository") as audit_cls,
         ):
             audit_cls.return_value.append_failure = AsyncMock()
             with pytest.raises(type(exc)):
@@ -309,7 +303,7 @@ class TestDispatcherAudit:
     @pytest.mark.asyncio
     async def test_writes_dispatched_anchor_after_kiq(self) -> None:
         """全 subtask kiq 後に ``append_dispatched`` を 1 回呼ぶ。"""
-        from app.insights.briefing.tasks import briefing
+        from app.queue.tasks import briefing
 
         ctx = _ctx_with_session_factory()
 
@@ -325,7 +319,7 @@ class TestDispatcherAudit:
 
         with (
             patch(
-                "app.insights.briefing.tasks.briefing.now_in_jst",
+                "app.queue.tasks.briefing.now_in_jst",
                 return_value=datetime(2026, 4, 27, 0, 5, tzinfo=JST),
             ),
             patch.object(
@@ -333,9 +327,7 @@ class TestDispatcherAudit:
                 "kiq",
                 new=AsyncMock(),
             ),
-            patch(
-                "app.insights.briefing.tasks.briefing.BriefingAuditRepository"
-            ) as audit_cls,
+            patch("app.queue.tasks.briefing.BriefingAuditRepository") as audit_cls,
         ):
             audit_cls.return_value.append_dispatched = AsyncMock()
             audit_cls.return_value.append_dispatcher_failure = AsyncMock()
@@ -354,7 +346,7 @@ class TestDispatcherAudit:
         ``broker_briefing`` は ``max_retries=0`` で初回即 give-up のため
         ``retry_exhausted=True`` 固定で焼く (semantic は repo 側で保証)。
         """
-        from app.insights.briefing.tasks import briefing
+        from app.queue.tasks import briefing
 
         ctx = _ctx_with_session_factory()
         # 最初に session_factory() で session を取りに行ったところで例外を出す
@@ -363,12 +355,10 @@ class TestDispatcherAudit:
 
         with (
             patch(
-                "app.insights.briefing.tasks.briefing.now_in_jst",
+                "app.queue.tasks.briefing.now_in_jst",
                 return_value=datetime(2026, 4, 27, 0, 5, tzinfo=JST),
             ),
-            patch(
-                "app.insights.briefing.tasks.briefing.BriefingAuditRepository"
-            ) as audit_cls,
+            patch("app.queue.tasks.briefing.BriefingAuditRepository") as audit_cls,
         ):
             audit_cls.return_value.append_dispatched = AsyncMock()
             audit_cls.return_value.append_dispatcher_failure = AsyncMock()

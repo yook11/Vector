@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app.maintenance.budget import consume_daily_budget
+from app.queue.helpers.budget import consume_daily_budget
 
 
 @pytest.mark.asyncio

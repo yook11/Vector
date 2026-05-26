@@ -26,8 +26,8 @@ async def fetch_news(
     source_ids 指定時はソースごとに個別タスクを dispatch、
     未指定時は dispatch_sources で全アクティブソースを dispatch。
     """
-    from app.collection.staged import AcquireSourceArg
-    from app.collection.tasks import acquire_source, dispatch_sources
+    from app.queue.messages.collection import AcquireSourceArg
+    from app.queue.tasks.acquisition import acquire_source, dispatch_sources
 
     source_ids = body.source_ids if body else None
 

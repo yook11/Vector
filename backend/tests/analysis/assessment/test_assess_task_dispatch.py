@@ -22,10 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.analysis.assessment.domain.ready import (
-    AssessmentTrigger,
-    ReadyForAssessment,
-)
+from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.errors import (
     AssessmentCategoryMissingError,
     AssessmentRecoverableError,
@@ -33,6 +30,7 @@ from app.analysis.assessment.errors import (
     AssessmentTerminalSkipError,
 )
 from app.analysis.rate_limit import RatePolicy
+from app.queue.messages.assessment import AssessmentTrigger
 
 
 def _make_provider_fake() -> MagicMock:
@@ -80,7 +78,7 @@ def _fixed_ready() -> ReadyForAssessment:
 def _patch_ready_construction(ready: ReadyForAssessment | None = None) -> object:
     """``ReadyForAssessment.try_advance_from`` を固定値返却に patch するヘルパ。"""
     return patch(
-        "app.analysis.assessment.tasks.ReadyForAssessment.try_advance_from",
+        "app.queue.tasks.assessment.ReadyForAssessment.try_advance_from",
         new=AsyncMock(return_value=ready if ready is not None else _fixed_ready()),
     )
 
@@ -94,16 +92,16 @@ def _patch_ready_construction(ready: ReadyForAssessment | None = None) -> object
 async def test_terminal_skip_delegates_to_handler() -> None:
     """``AssessmentTerminalSkipError`` は handler.handle に委譲され、
     reraise=False で return する。"""
-    from app.analysis.assessment.tasks import assess_content
+    from app.queue.tasks.assessment import assess_content
 
     ctx = _make_ctx()
     exc = AssessmentTerminalSkipError("bad config", code="ai_error_configuration")
 
     with (
         _patch_ready_construction(),
-        patch("app.analysis.assessment.tasks.AssessmentService") as mock_svc_cls,
+        patch("app.queue.tasks.assessment.AssessmentService") as mock_svc_cls,
         patch(
-            "app.analysis.assessment.tasks.AssessmentFailureHandler"
+            "app.queue.tasks.assessment.AssessmentFailureHandler"
         ) as mock_handler_cls,
     ):
         mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
@@ -122,16 +120,16 @@ async def test_terminal_skip_delegates_to_handler() -> None:
 async def test_category_missing_dispatches_to_handler() -> None:
     """``AssessmentCategoryMissingError`` (Layer 2-B、TerminalSkip 継承) も
     Handler 経由で扱われる (kwargs["exc"] は AssessmentTerminalSkipError instance)。"""
-    from app.analysis.assessment.tasks import assess_content
+    from app.queue.tasks.assessment import assess_content
 
     ctx = _make_ctx()
     exc = AssessmentCategoryMissingError("unknown slug 'foo'")
 
     with (
         _patch_ready_construction(),
-        patch("app.analysis.assessment.tasks.AssessmentService") as mock_svc_cls,
+        patch("app.queue.tasks.assessment.AssessmentService") as mock_svc_cls,
         patch(
-            "app.analysis.assessment.tasks.AssessmentFailureHandler"
+            "app.queue.tasks.assessment.AssessmentFailureHandler"
         ) as mock_handler_cls,
     ):
         mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
@@ -153,16 +151,16 @@ async def test_category_missing_dispatches_to_handler() -> None:
 @pytest.mark.asyncio
 async def test_recoverable_reraise_true_raises() -> None:
     """Handler が ``reraise=True`` を返したら task は元の exc を raise する。"""
-    from app.analysis.assessment.tasks import assess_content
+    from app.queue.tasks.assessment import assess_content
 
     ctx = _make_ctx(retry_count=0, max_retries=2)  # retry 余地あり
     exc = AssessmentRecoverableError("network", code="ai_error_network")
 
     with (
         _patch_ready_construction(),
-        patch("app.analysis.assessment.tasks.AssessmentService") as mock_svc_cls,
+        patch("app.queue.tasks.assessment.AssessmentService") as mock_svc_cls,
         patch(
-            "app.analysis.assessment.tasks.AssessmentFailureHandler"
+            "app.queue.tasks.assessment.AssessmentFailureHandler"
         ) as mock_handler_cls,
     ):
         mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
@@ -181,16 +179,16 @@ async def test_recoverable_reraise_false_returns() -> None:
     その経路で task が最後まで完走し、``last_attempt=True`` が Handler に渡る
     ことを確認する。
     """
-    from app.analysis.assessment.tasks import assess_content
+    from app.queue.tasks.assessment import assess_content
 
     ctx = _make_ctx(retry_count=2, max_retries=2)  # 最終試行
     exc = AssessmentRecoverableError("network", code="ai_error_network")
 
     with (
         _patch_ready_construction(),
-        patch("app.analysis.assessment.tasks.AssessmentService") as mock_svc_cls,
+        patch("app.queue.tasks.assessment.AssessmentService") as mock_svc_cls,
         patch(
-            "app.analysis.assessment.tasks.AssessmentFailureHandler"
+            "app.queue.tasks.assessment.AssessmentFailureHandler"
         ) as mock_handler_cls,
     ):
         mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
@@ -206,16 +204,16 @@ async def test_recoverable_reraise_false_returns() -> None:
 async def test_response_invalid_dispatches_to_handler() -> None:
     """``AssessmentResponseInvalidError`` (Layer 2-B、Recoverable 継承) も
     Handler 経由で扱われる (kwargs["exc"] は AssessmentRecoverableError instance)。"""
-    from app.analysis.assessment.tasks import assess_content
+    from app.queue.tasks.assessment import assess_content
 
     ctx = _make_ctx()
     exc = AssessmentResponseInvalidError("schema violation")
 
     with (
         _patch_ready_construction(),
-        patch("app.analysis.assessment.tasks.AssessmentService") as mock_svc_cls,
+        patch("app.queue.tasks.assessment.AssessmentService") as mock_svc_cls,
         patch(
-            "app.analysis.assessment.tasks.AssessmentFailureHandler"
+            "app.queue.tasks.assessment.AssessmentFailureHandler"
         ) as mock_handler_cls,
     ):
         mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
@@ -237,14 +235,14 @@ async def test_response_invalid_dispatches_to_handler() -> None:
 @pytest.mark.asyncio
 async def test_unexpected_exception_delegates_to_handler() -> None:
     """marker いずれにも該当しない exc も except Exception で Handler に渡る。"""
-    from app.analysis.assessment.tasks import assess_content
+    from app.queue.tasks.assessment import assess_content
 
     ctx = _make_ctx()
     with (
         _patch_ready_construction(),
-        patch("app.analysis.assessment.tasks.AssessmentService") as mock_svc_cls,
+        patch("app.queue.tasks.assessment.AssessmentService") as mock_svc_cls,
         patch(
-            "app.analysis.assessment.tasks.AssessmentFailureHandler"
+            "app.queue.tasks.assessment.AssessmentFailureHandler"
         ) as mock_handler_cls,
     ):
         mock_svc_cls.return_value.execute = AsyncMock(

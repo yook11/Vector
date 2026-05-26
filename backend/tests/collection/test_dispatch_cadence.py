@@ -20,7 +20,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.collection import tasks as collection_tasks
+from app.queue.tasks import acquisition as collection_tasks
 from app.collection.sources.fetch_cadence import FetchCadence
 from app.shared.value_objects.source_name import SourceName
 

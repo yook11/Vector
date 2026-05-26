@@ -49,7 +49,7 @@ from logfire.testing import CaptureLogfire
 from taskiq import InMemoryBroker, SimpleRetryMiddleware, TaskiqEvents
 from taskiq.middlewares.opentelemetry_middleware import OpenTelemetryMiddleware
 
-from app.brokers import (
+from app.queue.brokers import (
     broker_analysis,
     broker_briefing,
     broker_content,

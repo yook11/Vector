@@ -6,8 +6,8 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.collection.staged import AcquireSourceArg
 from app.models.news_source import NewsSource, SourceType
+from app.queue.messages.collection import AcquireSourceArg
 
 
 @pytest.mark.asyncio
@@ -20,7 +20,7 @@ class TestFetchNews:
         mock_task_handle.task_id = "test-task-id-123"
 
         with patch(
-            "app.collection.tasks.dispatch_sources",
+            "app.queue.tasks.acquisition.dispatch_sources",
         ) as mock_task:
             mock_task.kiq = AsyncMock(return_value=mock_task_handle)
             resp = await admin_client.post("/api/v1/admin/pipeline/fetch")
@@ -59,7 +59,7 @@ class TestFetchNews:
         source_ids = [s.id for s in sources]
 
         with patch(
-            "app.collection.tasks.acquire_source",
+            "app.queue.tasks.acquisition.acquire_source",
         ) as mock_task:
             mock_task.kiq = AsyncMock()
             resp = await admin_client.post(
@@ -83,7 +83,7 @@ class TestFetchNews:
     ) -> None:
         """source_ids がちょうど 100 件なら受理される (validation 境界の上限)。"""
         with patch(
-            "app.collection.tasks.acquire_source",
+            "app.queue.tasks.acquisition.acquire_source",
         ) as mock_task:
             mock_task.kiq = AsyncMock()
             resp = await admin_client.post(

@@ -25,11 +25,11 @@ from sqlmodel import select
 
 from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.repository import AssessmentRepository
-from app.analysis.assessment.tasks import assess_content
 from app.analysis.curation.repository import CurationRepository
-from app.brokers import broker_analysis
 from app.db import engine
 from app.models.article_curation import ArticleCuration
+from app.queue.brokers import broker_analysis
+from app.queue.tasks.assessment import assess_content
 
 
 async def main() -> None:

@@ -1,8 +1,9 @@
 """``pipeline_events`` の retention TTL purge (red-team chain γ-4)。
 
-90 日経過した監査行を **毎時 :25** に小バッチで削除する。`maintenance/tasks.py`
+90 日経過した監査行を **毎時 :25** に小バッチで削除する。`queue/tasks/backfill.py`
 の back-fill タスクが「詰まり救済 (gatekeeper)」を担うのに対し、本タスクは
-「データ寿命管理」という独立した責務として `observability/` 配下に配置する。
+「データ寿命管理」という独立した責務を持つ。schedule literal は
+``app.queue.schedule`` の SSoT に集約済 (時刻表 docstring で overlap 検証)。
 
 スケジューリング設計:
 - :25 は既存 cron (`*/15`, `5,20,35,50`, `*/10`) と最少 overlap な minute。
@@ -22,8 +23,9 @@ import structlog
 from sqlalchemy import text
 from taskiq import Context, TaskiqDepends
 
-from app.brokers import broker_metadata
 from app.config import settings
+from app.queue.brokers import broker_metadata
+from app.queue.schedule import CRON_PIPELINE_EVENTS_PURGE
 
 logger = structlog.get_logger(__name__)
 
@@ -37,7 +39,7 @@ INTER_BATCH_SLEEP_SECONDS = 0.1
     timeout=60,
     max_retries=0,
     retry_on_error=False,
-    schedule=[{"cron": "25 * * * *"}],
+    schedule=[{"cron": CRON_PIPELINE_EVENTS_PURGE}],
 )
 async def purge_pipeline_events(ctx: Context = TaskiqDepends()) -> None:
     """90 日経過した pipeline_events 行を batch 削除する。

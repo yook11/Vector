@@ -3,18 +3,14 @@
 メインフローのリトライ猶予 (``pipeline_grace``) を待ってから back-fill 対象に
 する。古すぎる記事 (``freshness_window`` 超え) はビジネス価値が薄いため対象外。
 
-決定の一覧は ``plans/drafts/20260426-100205/PLAN.md`` §3-5 を参照。
+時刻 helper (``utc_now``) は cross-context で参照されるため ``app.shared.time``
+に分離している (本 module は domain-specific な window 計算のみ)。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
-
-
-def utc_now() -> datetime:
-    """UTC の現在時刻を返す (テスト時に freezegun 等で差し替えられる窓口)。"""
-    return datetime.now(UTC)
+from datetime import datetime, timedelta
 
 
 @dataclass(frozen=True, slots=True)

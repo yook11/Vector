@@ -19,10 +19,8 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import ValidationError
 
-from app.analysis.curation.domain.ready import (
-    CurationTrigger,
-    ReadyForCuration,
-)
+from app.analysis.curation.domain.ready import ReadyForCuration
+from app.queue.messages.curation import CurationTrigger
 
 
 def _ready_repo_returning(ready: ReadyForCuration | None) -> AsyncMock:

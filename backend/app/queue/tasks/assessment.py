@@ -23,16 +23,15 @@ import structlog
 from taskiq import Context, TaskiqDepends
 
 from app.analysis.assessment.ai.base import BaseAssessor
-from app.analysis.assessment.domain.ready import (
-    AssessmentTrigger,
-    ReadyForAssessment,
-)
+from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.failure_handling import AssessmentFailureHandler
 from app.analysis.assessment.repository import AssessmentRepository
 from app.analysis.assessment.service import AssessmentService
-from app.analysis.embedding.domain.ready import EmbeddingTrigger
-from app.analysis.embedding.tasks import generate_embedding
-from app.brokers import broker_analysis, is_last_attempt
+from app.queue.brokers import broker_analysis
+from app.queue.messages.assessment import AssessmentTrigger
+from app.queue.messages.embedding import EmbeddingTrigger
+from app.queue.retry import is_last_attempt
+from app.queue.tasks.embedding import generate_embedding
 
 logger = structlog.get_logger(__name__)
 

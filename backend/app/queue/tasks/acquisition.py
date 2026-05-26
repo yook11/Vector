@@ -1,8 +1,14 @@
-"""収集タスク — パイプラインの前段。
+"""収集 (acquisition) タスク — パイプラインの最前段 (Stage 1)。
 
-経路: ``dispatch_sources`` → ``acquire_source`` → ``curation.tasks.curate_content``。
-本文込みで取得できた記事は ``curate_content`` に直接 chain、本文未取得の記事は
-``scrape_html_body`` task で HTML 取得 + 抽出 + 永続化へ進む。
+経路: ``dispatch_high/medium/low`` (cron) または ``dispatch_sources`` (admin 手動) →
+``acquire_source`` → ``curate_content`` chain (本文込み) または
+``scrape_html_body`` (completion, DB 駆動)。本ファイルは Stage 1 の cron dispatch
+と per-source 取り込みに絞り、HTML 取得 + 本文抽出 (Stage 2) は
+``app/queue/tasks/completion.py`` の責務。
+
+dispatch 系 task は ``SourceDispatchService`` に「何を dispatch すべきか」の決定を
+委譲する。task の責務は VO リストを kiq message DTO に変換して ``.kiq()`` を
+呼ぶ orchestration のみ。
 """
 
 from __future__ import annotations
@@ -11,21 +17,19 @@ import time
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from sqlmodel import select
 from taskiq import Context, TaskiqDepends
 
-from app.brokers import (
-    CADENCE_CRON,
-    broker_content,
-    broker_metadata,
-)
 from app.collection.article_acquisition.failure_handling import (
     SourceAcquisitionFailureHandler,
 )
+from app.collection.sources.dispatch import SourceDispatchService
 from app.collection.sources.fetch_cadence import FetchCadence
-from app.collection.staged import AcquireSourceArg
 from app.models.fetch_log import FetchLog, FetchStatus
-from app.models.news_source import NewsSource
+from app.queue.brokers import broker_content, broker_metadata
+from app.queue.messages.collection import AcquireSourceArg
+from app.queue.messages.curation import CurationTrigger
+from app.queue.schedule import CADENCE_CRON
+from app.queue.tasks.curation import curate_content
 
 logger = structlog.get_logger(__name__)
 
@@ -38,7 +42,11 @@ async def _record_fetch_log(
     error_message: str | None,
     start_time: float,
 ) -> None:
-    """単一 FetchLog 行を書き込む。"""
+    """単一 FetchLog 行を書き込む。
+
+    NOTE: FetchLog は pipeline_events / Logfire span で完全代替可能であり、別タスクで
+    撤去予定 (本タスクのスコープ外)。本 helper はそれまでの暫定残置。
+    """
     duration_ms = int((time.monotonic() - start_time) * 1000)
     async with session_factory() as session:
         session.add(
@@ -58,44 +66,21 @@ async def _record_fetch_log(
 # ---------------------------------------------------------------------------
 
 
-async def _dispatch_active_sources(
+async def _dispatch(
     session_factory: async_sessionmaker[AsyncSession],
     *,
     cadence: FetchCadence | None,
 ) -> dict:
-    """active なソースを走査し、各ソースに個別 acquire タスクを dispatch する。
+    """``SourceDispatchService`` で対象を決め、各 source に acquire を kiq する。
 
-    ``cadence`` 指定時はその tier の source 定義のみ dispatch する。``None`` は
-    全 tier 一括 (admin 手動 fetch 経路)。DB の active source 名が ``SOURCES`` に
-    無い場合はコード未登録としてスキップする (failure-visibility のため warning)。
+    Service は「何を dispatch するか」を VO で返し、本関数 (task orchestration)
+    が VO を ``AcquireSourceArg`` に変換して ``.kiq()`` を呼ぶ。
     """
-    # SOURCES は import が重いため lazy (scheduler の tasks.py import を軽く保つ)。
-    from app.collection.article_acquisition.strategy import SOURCES
-    from app.shared.value_objects.source_name import SourceName
-
-    async with session_factory() as session:
-        rows = list(
-            (
-                await session.execute(
-                    select(NewsSource.id, NewsSource.name)
-                    .where(NewsSource.is_active == True)  # noqa: E712
-                    .order_by(NewsSource.name)
-                )
-            ).all()
-        )
-
-    dispatched = 0
-    for row in rows:
-        source_def = SOURCES.get(SourceName(row.name))
-        if source_def is None:
-            logger.warning("dispatch_source_unknown", source_name=str(row.name))
-            continue
-        if cadence is not None and source_def.fetch_cadence is not cadence:
-            continue
-        await acquire_source.kiq(AcquireSourceArg(id=row.id, name=str(row.name)))
-        dispatched += 1
-
-    result = {"dispatched_count": dispatched}
+    service = SourceDispatchService(session_factory)
+    targets = await service.select(cadence)
+    for t in targets:
+        await acquire_source.kiq(AcquireSourceArg(id=t.id, name=str(t.name)))
+    result = {"dispatched_count": len(targets)}
     logger.info(
         "dispatch_sources_completed",
         cadence=cadence.value if cadence is not None else "all",
@@ -113,9 +98,7 @@ async def _dispatch_active_sources(
 )
 async def dispatch_high(ctx: Context = TaskiqDepends()) -> dict:
     """HIGH tier のソースを dispatch する (15 分間隔)。"""
-    return await _dispatch_active_sources(
-        ctx.state.session_factory, cadence=FetchCadence.HIGH
-    )
+    return await _dispatch(ctx.state.session_factory, cadence=FetchCadence.HIGH)
 
 
 @broker_metadata.task(
@@ -127,9 +110,7 @@ async def dispatch_high(ctx: Context = TaskiqDepends()) -> dict:
 )
 async def dispatch_medium(ctx: Context = TaskiqDepends()) -> dict:
     """MEDIUM tier のソースを dispatch する (1 時間間隔)。"""
-    return await _dispatch_active_sources(
-        ctx.state.session_factory, cadence=FetchCadence.MEDIUM
-    )
+    return await _dispatch(ctx.state.session_factory, cadence=FetchCadence.MEDIUM)
 
 
 @broker_metadata.task(
@@ -141,9 +122,7 @@ async def dispatch_medium(ctx: Context = TaskiqDepends()) -> dict:
 )
 async def dispatch_low(ctx: Context = TaskiqDepends()) -> dict:
     """LOW tier のソースを dispatch する (6 時間間隔)。"""
-    return await _dispatch_active_sources(
-        ctx.state.session_factory, cadence=FetchCadence.LOW
-    )
+    return await _dispatch(ctx.state.session_factory, cadence=FetchCadence.LOW)
 
 
 @broker_metadata.task(
@@ -161,7 +140,7 @@ async def dispatch_sources(
     が担うため、本タスクは schedule を持たず ``.kiq()`` 明示呼び出し専用。
     """
     logger.info("dispatch_sources_started")
-    return await _dispatch_active_sources(ctx.state.session_factory, cadence=None)
+    return await _dispatch(ctx.state.session_factory, cadence=None)
 
 
 # ---------------------------------------------------------------------------
@@ -189,8 +168,7 @@ async def acquire_source(
     例外は ``SourceAcquisitionFailureHandler`` に委譲する。次の cron tick で再 dispatch
     される。
     """
-    from app.analysis.curation.domain.ready import CurationTrigger
-    from app.analysis.curation.tasks import curate_content
+    # 重い import は task body 内 (scheduler 起動を軽く保つ)。
     from app.collection.article_acquisition.service import ArticleAcquisitionService
     from app.collection.article_acquisition.strategy import SOURCES
     from app.shared.value_objects.source_name import SourceName
@@ -244,60 +222,3 @@ async def acquire_source(
     }
     logger.info("acquire_source_completed", **payload)
     return payload
-
-
-# ---------------------------------------------------------------------------
-# 2 段目 — HTML 取得 + 本文抽出 + Article 永続化
-# ---------------------------------------------------------------------------
-
-
-@broker_content.task(
-    task_name="scrape_html_body",
-    timeout=60,
-    max_retries=0,
-    retry_on_error=False,
-)
-async def scrape_html_body(
-    pending_id: int,
-    ctx: Context = TaskiqDepends(),
-) -> dict | None:
-    """HTML 取得 + 本文抽出 + Article 永続化を Service に委譲。
-
-    taskiq retry を持たず cron poller (``dispatch_html_fetch_jobs``) のみで
-    再投入する。task は ``ReadyForArticleCompletion.try_advance_from`` で Ready を
-    構築し (構築不能なら skip log + ``None``)、Service に渡す。article_id が返れば
-    ``curate_content`` に enqueue、``None`` は何もしない (DB 状態 + audit は
-    Service / failure handler 内で完結済)。
-    """
-    from app.analysis.curation.domain.ready import CurationTrigger
-    from app.analysis.curation.tasks import curate_content
-    from app.collection.article_completion.ready import ReadyForArticleCompletion
-    from app.collection.article_completion.repository import (
-        ArticleCompletionRepository,
-    )
-    from app.collection.article_completion.service import ArticleCompletionService
-
-    session_factory = ctx.state.session_factory
-    async with session_factory() as session:
-        ready = await ReadyForArticleCompletion.try_advance_from(
-            pending_id=pending_id,
-            repo=ArticleCompletionRepository(session),
-        )
-    if ready is None:
-        logger.info(
-            "scrape_html_body_skipped",
-            pending_id=pending_id,
-            reason="precondition_not_met",
-        )
-        return None
-
-    article_id = await ArticleCompletionService(session_factory).execute(ready)
-
-    if article_id is None:
-        return None
-    await curate_content.kiq(CurationTrigger(article_id=article_id))
-    return {
-        "pending_id": pending_id,
-        "article_id": article_id,
-        "status": "success",
-    }

@@ -33,11 +33,6 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.collection.article_acquisition.repository import IncompleteArticleRepository
-from app.collection.article_completion import dispatch as dispatch_module
-from app.collection.article_completion.dispatch import (
-    dispatch_html_fetch_jobs,
-    sweep_expired_leases,
-)
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import (
     ObservedArticle,
@@ -47,6 +42,11 @@ from app.collection.domain.observed_article import (
 from app.collection.domain.value_objects import PublishedAt
 from app.models.incomplete_article import IncompleteArticle as IncompleteArticleORM
 from app.models.news_source import NewsSource
+from app.queue.tasks import completion as dispatch_module
+from app.queue.tasks.completion import (
+    dispatch_html_fetch_jobs,
+    sweep_expired_leases,
+)
 from app.shared.value_objects.safe_url import SafeUrl
 from app.shared.value_objects.source_name import SourceName
 
@@ -209,7 +209,7 @@ async def test_dispatches_only_open_and_ready_pending(
     )
 
     kiq_mock = AsyncMock()
-    monkeypatch.setattr("app.collection.tasks.scrape_html_body.kiq", kiq_mock)
+    monkeypatch.setattr("app.queue.tasks.completion.scrape_html_body.kiq", kiq_mock)
 
     result = await dispatch_html_fetch_jobs(ctx=_ctx(session_factory))
 
@@ -245,7 +245,7 @@ async def test_increments_attempt_count_and_sets_lease(
         attempt_count=2,
     )
 
-    monkeypatch.setattr("app.collection.tasks.scrape_html_body.kiq", AsyncMock())
+    monkeypatch.setattr("app.queue.tasks.completion.scrape_html_body.kiq", AsyncMock())
 
     before = datetime.now(UTC)
     await dispatch_html_fetch_jobs(ctx=_ctx(session_factory))
@@ -287,7 +287,7 @@ async def test_respects_dispatch_batch_limit(
     ]
 
     kiq_mock = AsyncMock()
-    monkeypatch.setattr("app.collection.tasks.scrape_html_body.kiq", kiq_mock)
+    monkeypatch.setattr("app.queue.tasks.completion.scrape_html_body.kiq", kiq_mock)
 
     result = await dispatch_html_fetch_jobs(ctx=_ctx(session_factory))
 
@@ -322,7 +322,7 @@ async def test_returns_zero_when_no_ready_pending(
     )
 
     kiq_mock = AsyncMock()
-    monkeypatch.setattr("app.collection.tasks.scrape_html_body.kiq", kiq_mock)
+    monkeypatch.setattr("app.queue.tasks.completion.scrape_html_body.kiq", kiq_mock)
 
     result = await dispatch_html_fetch_jobs(ctx=_ctx(session_factory))
 
