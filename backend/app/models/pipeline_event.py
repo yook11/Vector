@@ -37,12 +37,14 @@ class PipelineEvent(Base):
     __tablename__ = "pipeline_events"
     __table_args__ = (
         CheckConstraint(
-            # migration z4_backfill_keep_curate_rename と完全に揃える
+            # migration z6_briefing_audit_setup と完全に揃える
             # (metadata.create_all 経由のテスト DB が古い CHECK を持たないように)。
+            # 10 値 (article-bound 9 stage + briefing)。
             "stage IN ("
             "'dispatch','acquisition','completion',"
             "'curation','assessment','embedding',"
-            "'backfill_curate','backfill_assess','backfill_embed'"
+            "'backfill_curate','backfill_assess','backfill_embed',"
+            "'briefing'"
             ")",
             name="ck_pipeline_events_stage",
         ),
@@ -53,10 +55,11 @@ class PipelineEvent(Base):
         CheckConstraint(
             # 'non_retryable_keep_curation': assessment / embedding が回復不能でも
             # curation 結果は保存維持する用途 (TerminalSkip dispatch)。
+            # 'non_retryable': briefing 用、entity 固有後処理なしの汎用 non-retry。
             "category IS NULL OR category IN ("
             "'success','idempotent_skip','retryable',"
             "'non_retryable_drop_article','non_retryable_keep_article',"
-            "'non_retryable_keep_curation',"
+            "'non_retryable_keep_curation','non_retryable',"
             "'unknown'"
             ")",
             name="ck_pipeline_events_category",

@@ -182,12 +182,54 @@ class EmbeddingPayload(BasePipelineEventPayload):
     vector_dimension: int | None = None  # A'
 
 
+class BriefingPayload(BasePipelineEventPayload):
+    """Briefing stage — 週次カテゴリ別 LLM ブリーフィング生成。
+
+    subtask (per-category) と dispatcher (per-week anchor) の 2 経路で書込まれる。
+    AI raw response / 構造化応答 (headline / overview / stories) は ``weekly_briefing``
+    テーブルに full 保存済のため payload では持たない (二重持ち回避)。
+
+    state 識別:
+
+    - subtask 成功: ``category_id`` / ``category_slug`` + ``article_count`` +
+      ``ai_model`` 埋め、``retry_exhausted=None``
+    - subtask 入力ゼロ (REJECTED): 同上 + ``article_count=0``、event_type で完結
+      (category 列は NULL、retry 概念外)
+    - subtask 失敗: 同 identifier + ``ai_model`` + Base の error_* + 最終 attempt のみ
+      ``retry_exhausted=True``
+    - dispatcher 成功 anchor: ``week_start`` + ``category_count`` のみ
+      (per-category 軸は埋めない)
+    - dispatcher 失敗 anchor: ``week_start`` + Base の error_* +
+      ``retry_exhausted=True`` (``broker_briefing`` は ``max_retries=0`` で
+      初回即 give-up)
+
+    詳細: ``specs/pipeline-events-briefing-audit.md``
+    """
+
+    kind: Literal["briefing"] = "briefing"
+    # A: 自然キー (ISO 文字列。週次 cron の月曜日)
+    week_start: str | None = None
+    # A: subtask 行の自然キー (FK は SET NULL のため id だけだと事後に消失)
+    category_id: int | None = None
+    category_slug: str | None = None  # A: 可読 + FK 切断耐性
+    # A': 入力規模 (subtask 行のみ。REJECTED 行では 0)
+    article_count: int | None = None
+    # A': dispatcher anchor 行のみ (subtask の article_count とは意味が違うため別 field)
+    category_count: int | None = None
+    ai_model: str | None = None  # S: 失敗時にどの model で落ちたか
+    # S: retry 軸 give-up。最終 attempt のみ True (CompletionPayload precedent)。
+    # 中間 attempt は None のまま (= JSON null)。
+    # ``payload @> '{"retry_exhausted": true}'`` で give-up を集計する。
+    retry_exhausted: bool | None = None
+
+
 PipelineEventPayload = Annotated[
     DispatchPayload
     | AcquisitionPayload
     | CompletionPayload
     | CurationPayload
     | AssessmentPayload
-    | EmbeddingPayload,
+    | EmbeddingPayload
+    | BriefingPayload,
     Field(discriminator="kind"),
 ]

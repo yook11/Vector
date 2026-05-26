@@ -25,6 +25,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.insights.briefing.application.notifier import BriefingNotifier
+from app.insights.briefing.audit_repository import BriefingAuditRepository
 from app.insights.briefing.domain.ready import ReadyForBriefing
 from app.insights.briefing.llm.deepseek import DeepSeekBriefingGenerator
 from app.insights.briefing.repository.articles import BriefingArticleRepository
@@ -81,6 +82,11 @@ class WeeklyBriefingService:
                 category_id=ready.category_id,
                 category_slug=category.slug,
             )
+            # 記事ゼロは steady-state 異常系 (D2) — REJECTED で audit に焼く。
+            # 読 tx 直後の独立した別 tx で焼く (LLM 呼出も write tx も走らない)。
+            async with self._session_factory() as session:
+                await BriefingAuditRepository(session).append_input_empty(ready=ready)
+                await session.commit()
             return GeneratedBriefing(
                 persisted=False,
                 week_start=ready.week_start,
@@ -108,9 +114,21 @@ class WeeklyBriefingService:
                 input_article_count=len(articles),
             )
             saved = await briefing_repo.save(briefing, force=ready.force)
+            # audit は INSERT 勝者だけが焼く (saved is None = race 敗北は沈黙、
+            # 勝者プロセスが SUCCEEDED を 1 行付ける構造で完成行の重複を防ぐ)。
+            # 同 tx atomic で「briefing 行はあるが SUCCEEDED 無し」の偽ギャップ
+            # を構造的に排除する。
+            if saved is not None:
+                await BriefingAuditRepository(session).append_completed(
+                    ready=ready,
+                    article_count=len(articles),
+                    ai_model=self._llm.MODEL,
+                )
             await session.commit()
             if saved is None:
-                # race 敗北 (force=False で他 worker が先行 INSERT): 勝者を読戻す
+                # race 敗北 (force=False で他 worker が先行 INSERT): 勝者を読戻す。
+                # race-loss modernization は本 PR スコープ外 (Phase B で
+                # briefing + snapshot まとめて readback / RuntimeError 撤去)。
                 logger.info(
                     "briefing_concurrent_write",
                     week_start=ready.week_start.isoformat(),

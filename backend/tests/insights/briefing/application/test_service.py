@@ -7,11 +7,16 @@ from unittest.mock import AsyncMock, MagicMock
 from zoneinfo import ZoneInfo
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
 
 from app.insights.briefing.application.notifier import NullBriefingNotifier
 from app.insights.briefing.application.service import WeeklyBriefingService
+from app.insights.briefing.audit_repository import (
+    OUTCOME_BRIEFING_COMPLETED,
+    OUTCOME_BRIEFING_INPUT_EMPTY,
+)
 from app.insights.briefing.domain.briefing import (
     BriefingStory,
     WeeklyBriefingContent,
@@ -19,6 +24,7 @@ from app.insights.briefing.domain.briefing import (
 from app.insights.briefing.domain.ready import ReadyForBriefing
 from app.insights.briefing.repository.briefings import BriefingRepository
 from app.models.category import Category
+from app.models.pipeline_event import PipelineEvent
 
 JST = ZoneInfo("Asia/Tokyo")
 
@@ -213,3 +219,93 @@ class TestNotifierIntegration:
 
         outcome = await service.execute(ready)
         assert outcome.persisted is True
+
+
+class TestAuditIntegration:
+    """SUCCEEDED 同 tx / REJECTED 別 tx の audit 書込検証。"""
+
+    @pytest.mark.asyncio
+    async def test_writes_succeeded_audit_alongside_briefing(
+        self,
+        db_session,
+        ai_category: Category,
+        seed_briefing_analysis,
+    ) -> None:
+        """成功時に briefing 行と SUCCEEDED audit 行が同時に観測される。
+
+        Service が write tx 内で audit を append し commit するため、SUCCEEDED 行は
+        briefing UPSERT と atomic (D5)。「briefing 行はあるが SUCCEEDED 無し」の
+        偽ギャップが構造的に発生しない。
+        """
+        await seed_briefing_analysis(
+            category_id=ai_category.id,
+            analyzed_at=datetime(2026, 4, 22, 12, 0, tzinfo=JST),
+        )
+        await db_session.commit()
+
+        service = WeeklyBriefingService(
+            _factory_for(db_session), _llm_mock(), NullBriefingNotifier()
+        )
+        ready = ReadyForBriefing(
+            week_start=date(2026, 4, 20), category_id=ai_category.id
+        )
+
+        await service.execute(ready)
+
+        rows = (
+            (
+                await db_session.execute(
+                    select(PipelineEvent).where(
+                        PipelineEvent.outcome_code == OUTCOME_BRIEFING_COMPLETED
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(rows) == 1
+        ev = rows[0]
+        assert ev.stage == "briefing"
+        assert ev.event_type == "succeeded"
+        assert ev.category == "success"
+        assert ev.payload["category_id"] == ai_category.id
+        assert ev.payload["category_slug"] == "ai"
+        assert ev.payload["article_count"] == 1
+        assert ev.payload["ai_model"] == "deepseek-v4-pro"
+
+    @pytest.mark.asyncio
+    async def test_writes_rejected_audit_when_no_articles(
+        self,
+        db_session,
+        ai_category: Category,
+    ) -> None:
+        """articles 0 件 (steady-state 異常系) で REJECTED audit が焼かれる。
+
+        LLM 呼出も write tx も走らず、read tx 直後の別 tx で 1 行記録する。
+        ``category`` は NULL (retry 概念外、event_type で完結)。
+        """
+        service = WeeklyBriefingService(
+            _factory_for(db_session), _llm_mock(), NullBriefingNotifier()
+        )
+        ready = ReadyForBriefing(
+            week_start=date(2026, 4, 20), category_id=ai_category.id
+        )
+
+        await service.execute(ready)
+
+        rows = (
+            (
+                await db_session.execute(
+                    select(PipelineEvent).where(
+                        PipelineEvent.outcome_code == OUTCOME_BRIEFING_INPUT_EMPTY
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(rows) == 1
+        ev = rows[0]
+        assert ev.event_type == "rejected"
+        assert ev.category is None
+        assert ev.payload["article_count"] == 0

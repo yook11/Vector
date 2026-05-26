@@ -147,7 +147,8 @@ async def test_append_with_no_ids_leaves_both_null(
 def test_stage_strenum_matches_check_constraint() -> None:
     """Stage StrEnum 値 set が ORM/migration の CHECK 制約値と一致。
 
-    値追加時は両方の更新を要求する自然な fail-fast。
+    値追加時は両方の更新を要求する自然な fail-fast。10 値 (article-bound 9 stage +
+    briefing)。
     """
     expected = {
         "dispatch",
@@ -159,6 +160,7 @@ def test_stage_strenum_matches_check_constraint() -> None:
         "backfill_curate",
         "backfill_assess",
         "backfill_embed",
+        "briefing",
     }
     assert {s.value for s in Stage} == expected
 
@@ -166,7 +168,7 @@ def test_stage_strenum_matches_check_constraint() -> None:
 def test_layer1_category_strenum_matches_check_constraint() -> None:
     """Layer1Category StrEnum 値 set が ORM/migration の CHECK 制約値と一致。
 
-    'non_retryable_keep_curation' を含む 7 値。
+    'non_retryable_keep_curation' + briefing 用 'non_retryable' を含む 8 値。
     """
     expected = {
         "success",
@@ -175,6 +177,7 @@ def test_layer1_category_strenum_matches_check_constraint() -> None:
         "non_retryable_drop_article",
         "non_retryable_keep_article",
         "non_retryable_keep_curation",
+        "non_retryable",
         "unknown",
     }
     assert {c.value for c in Layer1Category} == expected
@@ -187,13 +190,14 @@ def test_event_type_strenum_matches_check_constraint() -> None:
 
 @pytest.mark.asyncio
 async def test_category_check_constraint(db_session: AsyncSession) -> None:
-    """category 列の CHECK 制約検証: 7 値 + NULL は OK、不正値で IntegrityError。
+    """category 列の CHECK 制約検証: 8 値 + NULL は OK、不正値で IntegrityError。
 
-    Layer1Category は article-bound analysis stages 専用の語彙のため、collection 系
-    stage (dispatch / acquisition / completion) では NULL のまま記録される。
-    DB CHECK は ``category IS NULL OR category IN (7 values)`` の形で NULL を許容。
+    Layer1Category は article-bound analysis stages + briefing 用の語彙のため、
+    collection 系 stage (dispatch / acquisition / completion) では NULL のまま
+    記録される。DB CHECK は ``category IS NULL OR category IN (8 values)`` の形で
+    NULL を許容。
 
-    'non_retryable_keep_curation' を含む 7 値。
+    'non_retryable_keep_curation' + briefing 用 'non_retryable' を含む 8 値。
     """
     repo = PipelineEventRepository(db_session)
 
