@@ -43,6 +43,8 @@ from app.analysis.ai_provider_errors import (
     AIProviderRequestInvalidError,
     AIProviderServiceUnavailableError,
 )
+from app.audit.domain.event import Stage
+from app.audit.failure_projection import FailureAction, Retryability
 from app.logfire_exceptions import VectorDomainError
 
 # ---------------------------------------------------------------------------
@@ -57,6 +59,8 @@ class EmbeddingError(VectorDomainError):
     ``EmbeddingTerminalSkipError`` を except する。``EmbeddingError`` は
     型階層上の祖先として保持し (Stage 5 例外の identity)、catch には使わない。
     """
+
+    STAGE: ClassVar[Stage] = Stage.EMBEDDING
 
 
 class EmbeddingRecoverableError(EmbeddingError):
@@ -78,6 +82,9 @@ class EmbeddingRecoverableError(EmbeddingError):
     """
 
     SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("code",)
+    FAILURE_KIND: ClassVar[str] = "recoverable"
+    RETRYABILITY: ClassVar[Retryability] = Retryability.RETRYABLE
+    FAILURE_ACTION: ClassVar[FailureAction | None] = None
 
     code: str
     provider_error: AIProviderError | None
@@ -111,6 +118,9 @@ class EmbeddingTerminalSkipError(EmbeddingError):
     """
 
     SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("code",)
+    FAILURE_KIND: ClassVar[str] = "terminal_skip"
+    RETRYABILITY: ClassVar[Retryability] = Retryability.NON_RETRYABLE
+    FAILURE_ACTION: ClassVar[FailureAction | None] = None
 
     code: str
     provider_error: AIProviderError | None

@@ -24,15 +24,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis.embedding.ai.base import BaseEmbedder
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
-from app.analysis.embedding.errors import (
-    EmbeddingRecoverableError,
-    EmbeddingTerminalSkipError,
-)
 from app.audit.categories import Layer1Category
-from app.audit.db_errors import DbErrorCause, classify_db_error
 from app.audit.domain.event import EventType, Stage
 from app.audit.domain.payloads import EmbeddingPayload
 from app.audit.error_chain import extract_error_chain
+from app.audit.failure_projection import (
+    FailureProjection,
+    legacy_category_for_projection,
+    project_failure,
+)
 from app.audit.repository import PipelineEventRepository
 from app.shared.security.redaction import redact_secrets
 
@@ -115,8 +115,11 @@ class EmbeddingAuditRepository:
             # `raise X from exc` 連鎖を辿って FQN 列を payload に残す。
             error_chain=extract_error_chain(exc),
         )
-        category = self._category_of(exc)
-        code = self._code_of(exc)
+        projection = self._projection_of(exc)
+        category = legacy_category_for_projection(
+            stage=Stage.EMBEDDING, projection=projection
+        )
+        code = projection.code
         await self._events.append(
             stage=Stage.EMBEDDING,
             event_type=EventType.FAILED,
@@ -132,53 +135,22 @@ class EmbeddingAuditRepository:
     # --- internal helpers -------------------------------------------------
 
     @staticmethod
+    def _projection_of(exc: BaseException) -> FailureProjection:
+        """Stage 5 失敗を class attr / adapter から projection する。"""
+        return project_failure(exc)
+
+    @staticmethod
     def _category_of(exc: BaseException) -> Layer1Category:
-        """Layer 1 marker から DB ``category`` 値を導出する (Stage 4 と同形)。
-
-        Stage 5 の意図的命名差: ``EmbeddingTerminalSkipError`` は
-        ``Layer1Category.NON_RETRYABLE_KEEP_CURATION`` にマップする
-        (curation を捨てない、article 保持の最も保守的な意味、Stage 4 と同)。
-
-        dispatch 順は TerminalSkip → Recoverable → fallback。Layer 2-B は
-        対応する Layer 1 marker (``Recoverable`` or ``TerminalSkip``) を継承
-        するため、specific-first で並べる。非 marker の外部 DB 例外は
-        ``classify_db_error`` adapter で分類する (末尾 ``UNKNOWN`` の直前)。
-        """
-        if isinstance(exc, EmbeddingTerminalSkipError):
-            return Layer1Category.NON_RETRYABLE_KEEP_CURATION
-        if isinstance(exc, EmbeddingRecoverableError):
-            return Layer1Category.RETRYABLE
-        db = classify_db_error(exc)
-        if db is not None:
-            if db.cause is DbErrorCause.RUNTIME:
-                return Layer1Category.RETRYABLE
-            if db.cause is DbErrorCause.UNKNOWN:
-                return Layer1Category.UNKNOWN
-            # CONSTRAINT / QUERY_OR_SCHEMA: curation は捨てない保守的な KEEP。
-            return Layer1Category.NON_RETRYABLE_KEEP_CURATION
-        return Layer1Category.UNKNOWN
+        """互換用: projection から legacy ``category`` を導出する。"""
+        return legacy_category_for_projection(
+            stage=Stage.EMBEDDING,
+            projection=EmbeddingAuditRepository._projection_of(exc),
+        )
 
     @staticmethod
     def _code_of(exc: BaseException) -> str:
-        """失敗 audit の ``code`` を導出する (Stage 4 と同形)。
-
-        自前 Stage 5 marker だけ ``.code`` instance attr を信用する。Stage 5 marker
-        は ctor で ``code: str`` を必須キーワードとして受け instance attr に保持する
-        設計 (``backend/app/analysis/embedding/errors.py``)。provider 由来は ACL
-        mapper が ``AIProviderError.CODE`` を引き継いで instance attr に詰めるため、
-        marker 経路で全パターン (Layer 2-A: provider mapped / Layer 2-B:
-        ``embedding_response_invalid``) をカバーできる。
-
-        非 marker の外部 DB 例外は ``classify_db_error`` adapter で分類し、それ以外は
-        catch-all。原則「知らない例外の ``.code`` は読まない」(SQLAlchemy の
-        ``.code=gkpj`` 誤取得を防ぐため ``getattr`` は使わない)。
-        """
-        if isinstance(exc, (EmbeddingTerminalSkipError, EmbeddingRecoverableError)):
-            return exc.code
-        db = classify_db_error(exc)
-        if db is not None:
-            return db.code
-        return "unexpected_error"
+        """互換用: projection から ``code`` を導出する。"""
+        return EmbeddingAuditRepository._projection_of(exc).code
 
 
 def _fqn(exc: BaseException) -> str:

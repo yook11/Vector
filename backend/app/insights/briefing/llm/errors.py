@@ -9,10 +9,22 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
+from app.audit.domain.event import Stage
+from app.audit.failure_projection import FailureAction, Retryability
+
 
 class BriefingError(Exception):
     """Briefing 系処理の基底例外。"""
 
+    STAGE: ClassVar[Stage] = Stage.BRIEFING
+
 
 class BriefingConfigurationError(BriefingError):
     """設定不整合 (API key 未設定等)。retry しても解決しないため fail-fast。"""
+
+    CODE: ClassVar[str] = "briefing_configuration_error"
+    FAILURE_KIND: ClassVar[str] = "configuration"
+    RETRYABILITY: ClassVar[Retryability] = Retryability.NON_RETRYABLE
+    FAILURE_ACTION: ClassVar[FailureAction | None] = None

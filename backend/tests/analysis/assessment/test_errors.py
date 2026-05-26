@@ -20,6 +20,8 @@ from app.analysis.assessment.errors import (
     AssessmentResponseInvalidError,
     AssessmentTerminalSkipError,
 )
+from app.audit.domain.event import Stage
+from app.audit.failure_projection import Retryability
 
 
 class TestAssessmentRecoverableError:
@@ -92,6 +94,17 @@ class TestStage4MarkerHierarchy:
 
     def test_assessment_error_is_exception(self) -> None:
         assert issubclass(AssessmentError, Exception)
+
+    def test_marker_classvars_are_audit_projection_ssot(self) -> None:
+        assert AssessmentError.STAGE is Stage.ASSESSMENT
+        assert AssessmentRecoverableError.FAILURE_KIND == "recoverable"
+        assert AssessmentRecoverableError.RETRYABILITY is Retryability.RETRYABLE
+        assert AssessmentRecoverableError.FAILURE_ACTION is None
+        assert AssessmentTerminalSkipError.FAILURE_KIND == "terminal_skip"
+        assert (
+            AssessmentTerminalSkipError.RETRYABILITY is Retryability.NON_RETRYABLE
+        )
+        assert AssessmentTerminalSkipError.FAILURE_ACTION is None
 
 
 # ---------------------------------------------------------------------------

@@ -39,6 +39,8 @@ from app.analysis.ai_provider_errors import (
     AIProviderRequestInvalidError,
     AIProviderServiceUnavailableError,
 )
+from app.audit.domain.event import Stage
+from app.audit.failure_projection import FailureAction, Retryability
 from app.logfire_exceptions import VectorDomainError
 
 # ---------------------------------------------------------------------------
@@ -54,6 +56,8 @@ class CurationError(VectorDomainError):
     する。``CurationError`` は型階層上の祖先として保持し (Stage 3 例外の
     identity)、catch には使わない。
     """
+
+    STAGE: ClassVar[Stage] = Stage.CURATION
 
 
 class CurationRecoverableError(CurationError):
@@ -77,6 +81,9 @@ class CurationRecoverableError(CurationError):
     """
 
     SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("code",)
+    FAILURE_KIND: ClassVar[str] = "recoverable"
+    RETRYABILITY: ClassVar[Retryability] = Retryability.RETRYABLE
+    FAILURE_ACTION: ClassVar[FailureAction | None] = None
 
     code: str
     provider_error: AIProviderError | None
@@ -109,6 +116,9 @@ class CurationTerminalKeepError(CurationError):
     """
 
     SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("code",)
+    FAILURE_KIND: ClassVar[str] = "terminal_keep"
+    RETRYABILITY: ClassVar[Retryability] = Retryability.NON_RETRYABLE
+    FAILURE_ACTION: ClassVar[FailureAction | None] = None
 
     code: str
     provider_error: AIProviderError | None
@@ -140,6 +150,9 @@ class CurationTerminalDropError(CurationError):
     """
 
     SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("code",)
+    FAILURE_KIND: ClassVar[str] = "terminal_drop"
+    RETRYABILITY: ClassVar[Retryability] = Retryability.NON_RETRYABLE
+    FAILURE_ACTION: ClassVar[FailureAction | None] = FailureAction.DROP_ARTICLE
 
     code: str
     provider_error: AIProviderError | None

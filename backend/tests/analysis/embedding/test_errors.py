@@ -19,6 +19,8 @@ from app.analysis.embedding.errors import (
     EmbeddingResponseInvalidError,
     EmbeddingTerminalSkipError,
 )
+from app.audit.domain.event import Stage
+from app.audit.failure_projection import Retryability
 
 
 class TestEmbeddingRecoverableError:
@@ -95,6 +97,15 @@ class TestStage5MarkerHierarchy:
 
     def test_embedding_error_is_exception(self) -> None:
         assert issubclass(EmbeddingError, Exception)
+
+    def test_marker_classvars_are_audit_projection_ssot(self) -> None:
+        assert EmbeddingError.STAGE is Stage.EMBEDDING
+        assert EmbeddingRecoverableError.FAILURE_KIND == "recoverable"
+        assert EmbeddingRecoverableError.RETRYABILITY is Retryability.RETRYABLE
+        assert EmbeddingRecoverableError.FAILURE_ACTION is None
+        assert EmbeddingTerminalSkipError.FAILURE_KIND == "terminal_skip"
+        assert EmbeddingTerminalSkipError.RETRYABILITY is Retryability.NON_RETRYABLE
+        assert EmbeddingTerminalSkipError.FAILURE_ACTION is None
 
 
 # ---------------------------------------------------------------------------

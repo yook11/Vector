@@ -27,15 +27,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.analysis.assessment.ai.envelope import AssessmentCall
 from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.domain.result import InScope, OutOfScope
-from app.analysis.assessment.errors import (
-    AssessmentRecoverableError,
-    AssessmentTerminalSkipError,
-)
 from app.audit.categories import Layer1Category
-from app.audit.db_errors import DbErrorCause, classify_db_error
 from app.audit.domain.event import EventType, Stage
 from app.audit.domain.payloads import AssessmentPayload
 from app.audit.error_chain import extract_error_chain
+from app.audit.failure_projection import (
+    FailureProjection,
+    legacy_category_for_projection,
+    project_failure,
+)
 from app.audit.repository import PipelineEventRepository
 from app.shared.security.redaction import redact_secrets
 
@@ -213,8 +213,11 @@ class AssessmentAuditRepository:
                 getattr(exc, "raw_response", None), _AI_RAW_RESPONSE_LIMIT
             ),
         )
-        category = self._category_of(exc)
-        code = self._code_of(exc)
+        projection = self._projection_of(exc)
+        category = legacy_category_for_projection(
+            stage=Stage.ASSESSMENT, projection=projection
+        )
+        code = projection.code
         await self._events.append(
             stage=Stage.ASSESSMENT,
             event_type=EventType.FAILED,
@@ -230,56 +233,22 @@ class AssessmentAuditRepository:
     # --- internal helpers -------------------------------------------------
 
     @staticmethod
+    def _projection_of(exc: BaseException) -> FailureProjection:
+        """Stage 4 失敗を class attr / adapter から projection する。"""
+        return project_failure(exc)
+
+    @staticmethod
     def _category_of(exc: BaseException) -> Layer1Category:
-        """Layer 1 marker から DB ``category`` 値を導出する
-        (spec §_category_of line 1081-1089)。
-
-        Stage 4 の意図的命名差: ``AssessmentTerminalSkipError`` は
-        ``Layer1Category.NON_RETRYABLE_KEEP_CURATION`` にマップする
-        (curation を捨てない、article 保持の最も保守的な意味)。
-
-        dispatch 順は TerminalSkip → Recoverable → fallback。Layer 2-B は
-        対応する Layer 1 marker (``Recoverable`` or ``TerminalSkip``) を継承
-        するため、より固有な class を先に判定する必要は無いが、明示性のため
-        Stage 3 と同じく specific-first で並べる。非 marker の外部 DB 例外は
-        ``classify_db_error`` adapter で分類する (末尾 ``UNKNOWN`` の直前)。
-        """
-        if isinstance(exc, AssessmentTerminalSkipError):
-            return Layer1Category.NON_RETRYABLE_KEEP_CURATION
-        if isinstance(exc, AssessmentRecoverableError):
-            return Layer1Category.RETRYABLE
-        db = classify_db_error(exc)
-        if db is not None:
-            if db.cause is DbErrorCause.RUNTIME:
-                return Layer1Category.RETRYABLE
-            if db.cause is DbErrorCause.UNKNOWN:
-                return Layer1Category.UNKNOWN
-            # CONSTRAINT / QUERY_OR_SCHEMA: curation は捨てない保守的な KEEP。
-            return Layer1Category.NON_RETRYABLE_KEEP_CURATION
-        return Layer1Category.UNKNOWN
+        """互換用: projection から legacy ``category`` を導出する。"""
+        return legacy_category_for_projection(
+            stage=Stage.ASSESSMENT,
+            projection=AssessmentAuditRepository._projection_of(exc),
+        )
 
     @staticmethod
     def _code_of(exc: BaseException) -> str:
-        """失敗 audit の ``code`` を導出する。
-
-        自前 Stage 4 marker だけ ``.code`` instance attr を信用する。Stage 4 marker
-        は ctor で ``code: str`` を必須キーワードとして受け instance attr に保持する
-        設計 (PR1 で導入、``backend/app/analysis/assessment/errors.py``)。provider
-        由来は ACL mapper が ``AIProviderError.CODE`` を引き継いで instance attr に
-        詰めるため、marker 経路で全パターン (Layer 2-A: provider mapped / Layer 2-B:
-        ``assessment_response_invalid`` / ``assessment_category_missing``) を
-        カバーできる。
-
-        非 marker の外部 DB 例外は ``classify_db_error`` adapter で分類し、それ以外は
-        catch-all。原則「知らない例外の ``.code`` は読まない」(SQLAlchemy の
-        ``.code=gkpj`` 誤取得を防ぐため ``getattr`` は使わない)。
-        """
-        if isinstance(exc, (AssessmentTerminalSkipError, AssessmentRecoverableError)):
-            return exc.code
-        db = classify_db_error(exc)
-        if db is not None:
-            return db.code
-        return "unexpected_error"
+        """互換用: projection から ``code`` を導出する。"""
+        return AssessmentAuditRepository._projection_of(exc).code
 
 
 def _fqn(exc: BaseException) -> str:

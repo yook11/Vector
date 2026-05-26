@@ -35,13 +35,19 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.categories import Layer1Category
-from app.audit.db_errors import DbErrorCause, classify_db_error
 from app.audit.domain.event import EventType, Stage
 from app.audit.domain.payloads import BriefingPayload
 from app.audit.error_chain import extract_error_chain
+from app.audit.failure_projection import (
+    FailureProjection,
+    Retryability,
+    legacy_category_for_projection,
+    project_db_failure,
+    project_marker_failure,
+    unknown_failure_projection,
+)
 from app.audit.repository import PipelineEventRepository
 from app.insights.briefing.domain.ready import ReadyForBriefing
-from app.insights.briefing.llm.errors import BriefingConfigurationError
 from app.models.category import Category
 from app.shared.security.redaction import redact_secrets
 
@@ -159,8 +165,11 @@ class BriefingAuditRepository:
             error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
             error_chain=extract_error_chain(exc),
         )
-        category = self._category_of(exc)
-        code = self._code_of(exc)
+        projection = self._projection_of(exc)
+        category = legacy_category_for_projection(
+            stage=Stage.BRIEFING, projection=projection
+        )
+        code = projection.code
         await self._events.append(
             stage=Stage.BRIEFING,
             event_type=EventType.FAILED,
@@ -221,8 +230,11 @@ class BriefingAuditRepository:
             error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
             error_chain=extract_error_chain(exc),
         )
-        category = self._category_of(exc)
-        code = self._code_of(exc)
+        projection = self._projection_of(exc)
+        category = legacy_category_for_projection(
+            stage=Stage.BRIEFING, projection=projection
+        )
+        code = projection.code
         await self._events.append(
             stage=Stage.BRIEFING,
             event_type=EventType.FAILED,
@@ -245,53 +257,42 @@ class BriefingAuditRepository:
         return str(slug) if slug is not None else None
 
     @staticmethod
-    def _category_of(exc: BaseException) -> Layer1Category:
-        """例外クラス由来の intrinsic な retry-friendliness を ``Layer1Category``
-        へ写像する (D8 改訂版)。
-
-        順序 1〜2 は SQLAlchemy / openai と独立階層なので順序非依存。順序 3〜4 は
-        互いに独立階層だが「より specific を先に」の慣習で SQLAlchemy 系を先に置く
-        (DB 連携処理の例外を openai 由来として誤分類するのを防ぐ)。
-        """
-        if isinstance(exc, BriefingConfigurationError):
-            # API key 欠落 / tool_call 欠落、retry で直らない
-            return Layer1Category.NON_RETRYABLE
+    def _projection_of(exc: BaseException) -> FailureProjection:
+        """Briefing 失敗を class attr / stage-local adapter から projection する。"""
+        marker = project_marker_failure(exc)
+        if marker is not None:
+            return marker
         if isinstance(exc, ValidationError):
-            # schema バグ / strict tool 違反 / article_id ハルシネーション、保守的に non
-            return Layer1Category.NON_RETRYABLE
-        db = classify_db_error(exc)
+            return FailureProjection(
+                failure_kind="response_invalid",
+                retryability=Retryability.NON_RETRYABLE,
+                failure_action=None,
+                code="briefing_response_invalid",
+            )
+        db = project_db_failure(exc)
         if db is not None:
-            if db.cause is DbErrorCause.RUNTIME:
-                return Layer1Category.RETRYABLE
-            if db.cause is DbErrorCause.UNKNOWN:
-                return Layer1Category.UNKNOWN
-            # CONSTRAINT / QUERY_OR_SCHEMA: 制約違反 / SQL バグ、retry しても同じ
-            return Layer1Category.NON_RETRYABLE
+            return db
         if isinstance(exc, openai.APIError):
-            # RateLimit / 5xx / network 等、transient なので retry-friendly
-            return Layer1Category.RETRYABLE
-        return Layer1Category.UNKNOWN
+            return FailureProjection(
+                failure_kind="llm_error",
+                retryability=Retryability.RETRYABLE,
+                failure_action=None,
+                code="briefing_llm_error",
+            )
+        return unknown_failure_projection()
+
+    @staticmethod
+    def _category_of(exc: BaseException) -> Layer1Category:
+        """互換用: projection から legacy ``category`` を導出する。"""
+        return legacy_category_for_projection(
+            stage=Stage.BRIEFING,
+            projection=BriefingAuditRepository._projection_of(exc),
+        )
 
     @staticmethod
     def _code_of(exc: BaseException) -> str:
-        """失敗 audit の ``code`` を導出する (D4)。
-
-        順序 1〜2 は SQLAlchemy / openai と独立階層なので順序非依存。順序 3〜4 は
-        互いに独立階層だが「より specific を先に」の慣習で SQLAlchemy 系を先に置く
-        (DB 連携処理の例外を ``briefing_llm_error`` に潰さない)。
-
-        ``outcome_code`` と ``code`` 列に同値を入れる (Phase A 不変)。
-        """
-        if isinstance(exc, BriefingConfigurationError):
-            return "briefing_configuration_error"
-        if isinstance(exc, ValidationError):
-            return "briefing_response_invalid"
-        db = classify_db_error(exc)
-        if db is not None:
-            return db.code
-        if isinstance(exc, openai.APIError):
-            return "briefing_llm_error"
-        return "unexpected_error"
+        """互換用: projection から ``code`` を導出する。"""
+        return BriefingAuditRepository._projection_of(exc).code
 
 
 def _fqn(exc: BaseException) -> str:

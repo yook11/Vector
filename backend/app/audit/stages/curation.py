@@ -45,16 +45,15 @@ from app.analysis.curation.ai.base import BaseCurator
 from app.analysis.curation.ai.envelope import CurationCall
 from app.analysis.curation.domain import Noise, Signal
 from app.analysis.curation.domain.ready import ReadyForCuration
-from app.analysis.curation.errors import (
-    CurationRecoverableError,
-    CurationTerminalDropError,
-    CurationTerminalKeepError,
-)
 from app.audit.categories import Layer1Category
-from app.audit.db_errors import DbErrorCause, classify_db_error
 from app.audit.domain.event import EventType, Stage
 from app.audit.domain.payloads import CurationPayload
 from app.audit.error_chain import extract_error_chain
+from app.audit.failure_projection import (
+    FailureProjection,
+    legacy_category_for_projection,
+    project_failure,
+)
 from app.audit.repository import PipelineEventRepository
 from app.models.article import Article
 from app.models.news_source import NewsSource
@@ -198,15 +197,18 @@ class CurationAuditRepository:
             error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
             error_chain=extract_error_chain(exc),
         )
+        projection = self._projection_of(exc, fallback_code=code)
         await self._events.append(
             stage=Stage.CURATION,
             event_type=EventType.FAILED,
-            outcome_code=code,
+            outcome_code=projection.code,
             payload=payload,
             article_id=article_id,
             error_class=_fqn(exc),
-            category=Layer1Category.NON_RETRYABLE_DROP_ARTICLE,
-            code=code,
+            category=legacy_category_for_projection(
+                stage=Stage.CURATION, projection=projection
+            ),
+            code=projection.code,
         )
 
     # --- 救済断念経路 (年齢削除と同一 tx) ---------------------------------
@@ -272,8 +274,11 @@ class CurationAuditRepository:
             error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
             error_chain=extract_error_chain(exc),
         )
-        category = self._category_of(exc)
-        code = self._code_of(exc)
+        projection = self._projection_of(exc)
+        category = legacy_category_for_projection(
+            stage=Stage.CURATION, projection=projection
+        )
+        code = projection.code
         await self._events.append(
             stage=Stage.CURATION,
             event_type=EventType.FAILED,
@@ -301,51 +306,24 @@ class CurationAuditRepository:
         return str(name) if name is not None else None
 
     @staticmethod
-    def _category_of(exc: BaseException) -> Layer1Category:
-        """Stage 3 marker / 外部 DB 例外から DB ``category`` 値を導出する。
+    def _projection_of(
+        exc: BaseException, *, fallback_code: str = "unexpected_error"
+    ) -> FailureProjection:
+        """Stage 3 失敗を class attr / adapter から projection する。"""
+        return project_failure(exc, fallback_code=fallback_code)
 
-        自前 marker を先に isinstance 分岐し、非 marker の外部 DB 例外は
-        ``classify_db_error`` adapter で分類する (末尾 ``UNKNOWN`` の直前)。
-        """
-        if isinstance(exc, CurationTerminalDropError):
-            return Layer1Category.NON_RETRYABLE_DROP_ARTICLE
-        if isinstance(exc, CurationTerminalKeepError):
-            return Layer1Category.NON_RETRYABLE_KEEP_ARTICLE
-        if isinstance(exc, CurationRecoverableError):
-            return Layer1Category.RETRYABLE
-        db = classify_db_error(exc)
-        if db is not None:
-            if db.cause is DbErrorCause.RUNTIME:
-                return Layer1Category.RETRYABLE
-            if db.cause is DbErrorCause.UNKNOWN:
-                return Layer1Category.UNKNOWN
-            # CONSTRAINT / QUERY_OR_SCHEMA: DB エラーで記事削除は危険、KEEP が保守的。
-            return Layer1Category.NON_RETRYABLE_KEEP_ARTICLE
-        return Layer1Category.UNKNOWN
+    @staticmethod
+    def _category_of(exc: BaseException) -> Layer1Category:
+        """互換用: projection から legacy ``category`` を導出する。"""
+        return legacy_category_for_projection(
+            stage=Stage.CURATION,
+            projection=CurationAuditRepository._projection_of(exc),
+        )
 
     @staticmethod
     def _code_of(exc: BaseException) -> str:
-        """失敗 audit の ``code`` を導出する。
-
-        自前 Stage 3 marker だけ ``.code`` instance attr を信用する (ACL が provider
-        ``CODE`` を引き継ぎ、Stage 3 specific は ``code=...`` を pin)。非 marker の
-        外部 DB 例外は ``classify_db_error`` adapter で分類し、それ以外は catch-all。
-        原則「知らない例外の ``.code`` は読まない」(SQLAlchemy の ``.code=gkpj``
-        誤取得を防ぐため ``getattr`` は使わない)。
-        """
-        if isinstance(
-            exc,
-            (
-                CurationTerminalDropError,
-                CurationTerminalKeepError,
-                CurationRecoverableError,
-            ),
-        ):
-            return exc.code
-        db = classify_db_error(exc)
-        if db is not None:
-            return db.code
-        return "unexpected_error"
+        """互換用: projection から ``code`` を導出する。"""
+        return CurationAuditRepository._projection_of(exc).code
 
 
 def _fqn(exc: BaseException) -> str:
