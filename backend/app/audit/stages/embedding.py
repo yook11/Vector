@@ -18,6 +18,7 @@ from app.audit.failure_projection import (
     unknown_failure_projection,
 )
 from app.audit.repository import PipelineEventRepository
+from app.models.backfill_exclusion import BackfillExclusionReason
 from app.shared.security.redaction import redact_secrets
 
 _ERROR_MESSAGE_LIMIT = 2000
@@ -42,6 +43,7 @@ class EmbeddingAuditRepository:
     ) -> None:
         """embedding 成功を記録する。"""
         payload = EmbeddingPayload(
+            analysis_id=ready.analysis_id,
             embedding_model=embedder.model_name,
             vector_dimension=embedder.dimension,
         )
@@ -51,6 +53,23 @@ class EmbeddingAuditRepository:
             outcome_code=_SUCCESS_OUTCOME_CODE,
             payload=payload,
             article_id=ready.article_id,
+        )
+
+    # --- 救済断念経路 (backfill exclusion と同一 tx) ----------------------
+
+    async def append_backfill_embedding_aged_out(
+        self,
+        *,
+        analysis_id: int,
+        article_id: int,
+    ) -> None:
+        """古い embedding NULL analysis を backfill が対象外にした事実を記録する。"""
+        await self._events.append(
+            stage=Stage.BACKFILL_EMBED,
+            event_type=EventType.REJECTED,
+            outcome_code=BackfillExclusionReason.EMBEDDING_AGED_OUT.value,
+            payload=EmbeddingPayload(analysis_id=analysis_id),
+            article_id=article_id,
         )
 
     # --- 失敗経路 (Task 層 2 marker dispatch + catch-all、別 session 別 tx) -
@@ -88,6 +107,7 @@ class EmbeddingAuditRepository:
         payload = EmbeddingPayload(
             failure_kind=projection.failure_kind,
             failure_action=failure_action_value(projection),
+            analysis_id=ready.analysis_id,
             embedding_model=None,
             vector_dimension=None,
             error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,

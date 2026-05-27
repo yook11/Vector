@@ -14,6 +14,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article
 from app.models.article_curation import ArticleCuration
+from app.models.backfill_exclusion import (
+    AssessmentBackfillExclusion,
+    EmbeddingBackfillExclusion,
+)
 from app.models.curation_noise import CurationNoise
 from app.models.in_scope_assessment import InScopeAssessment
 from app.models.out_of_scope_assessment import OutOfScopeAssessment
@@ -114,9 +118,14 @@ class PipelineBacklog:
                 OutOfScopeAssessment,
                 OutOfScopeAssessment.curation_id == ArticleCuration.id,
             )
+            .outerjoin(
+                AssessmentBackfillExclusion,
+                AssessmentBackfillExclusion.curation_id == ArticleCuration.id,
+            )
             .where(
                 InScopeAssessment.id.is_(None),
                 OutOfScopeAssessment.id.is_(None),
+                AssessmentBackfillExclusion.curation_id.is_(None),
                 Article.created_at < created_before,
                 Article.created_at >= created_after,
             )
@@ -154,15 +163,58 @@ class PipelineBacklog:
                 OutOfScopeAssessment,
                 OutOfScopeAssessment.curation_id == ArticleCuration.id,
             )
+            .outerjoin(
+                AssessmentBackfillExclusion,
+                AssessmentBackfillExclusion.curation_id == ArticleCuration.id,
+            )
             .where(
                 InScopeAssessment.id.is_(None),
                 OutOfScopeAssessment.id.is_(None),
+                AssessmentBackfillExclusion.curation_id.is_(None),
                 Article.created_at < created_before,
                 Article.created_at >= created_after,
             )
         )
         result = await self._session.execute(stmt)
         return int(result.scalar_one())
+
+    async def curation_ids_aged_out_assessment(
+        self,
+        *,
+        created_before: datetime,
+        limit: int,
+    ) -> list[int]:
+        """通常窓から落ちた assessment 未完了 Curation ID を返す。
+
+        Stage 4/5 は保全価値のある部分結果を持つため物理削除せず、呼び出し側が
+        ``assessment_backfill_exclusions`` に current-state sentinel を作る。
+        """
+        stmt = (
+            select(ArticleCuration.id)
+            .join(Article, Article.id == ArticleCuration.article_id)
+            .outerjoin(
+                InScopeAssessment,
+                InScopeAssessment.curation_id == ArticleCuration.id,
+            )
+            .outerjoin(
+                OutOfScopeAssessment,
+                OutOfScopeAssessment.curation_id == ArticleCuration.id,
+            )
+            .outerjoin(
+                AssessmentBackfillExclusion,
+                AssessmentBackfillExclusion.curation_id == ArticleCuration.id,
+            )
+            .where(
+                InScopeAssessment.id.is_(None),
+                OutOfScopeAssessment.id.is_(None),
+                AssessmentBackfillExclusion.curation_id.is_(None),
+                Article.created_at < created_before,
+            )
+            .order_by(Article.created_at.asc())
+            .limit(limit)
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
 
     async def analysis_ids_pending_embedding(
         self,
@@ -179,10 +231,44 @@ class PipelineBacklog:
                 ArticleCuration.id == InScopeAssessment.curation_id,
             )
             .join(Article, Article.id == ArticleCuration.article_id)
+            .outerjoin(
+                EmbeddingBackfillExclusion,
+                EmbeddingBackfillExclusion.analysis_id == InScopeAssessment.id,
+            )
             .where(
                 InScopeAssessment.embedding.is_(None),
+                EmbeddingBackfillExclusion.analysis_id.is_(None),
                 Article.created_at < created_before,
                 Article.created_at >= created_after,
+            )
+            .order_by(Article.created_at.asc())
+            .limit(limit)
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def analysis_ids_aged_out_embedding(
+        self,
+        *,
+        created_before: datetime,
+        limit: int,
+    ) -> list[int]:
+        """通常窓から落ちた embedding NULL Analysis ID を返す。"""
+        stmt = (
+            select(InScopeAssessment.id)
+            .join(
+                ArticleCuration,
+                ArticleCuration.id == InScopeAssessment.curation_id,
+            )
+            .join(Article, Article.id == ArticleCuration.article_id)
+            .outerjoin(
+                EmbeddingBackfillExclusion,
+                EmbeddingBackfillExclusion.analysis_id == InScopeAssessment.id,
+            )
+            .where(
+                InScopeAssessment.embedding.is_(None),
+                EmbeddingBackfillExclusion.analysis_id.is_(None),
+                Article.created_at < created_before,
             )
             .order_by(Article.created_at.asc())
             .limit(limit)

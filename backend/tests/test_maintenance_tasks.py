@@ -13,7 +13,15 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.models.article import Article
+from app.models.article_curation import ArticleCuration
+from app.models.backfill_exclusion import (
+    AssessmentBackfillExclusion,
+    BackfillExclusionReason,
+    EmbeddingBackfillExclusion,
+)
+from app.models.category import Category
 from app.models.curation_noise import CurationNoise
+from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
 
@@ -286,6 +294,44 @@ async def _make_article(
     return article
 
 
+async def _make_curation(
+    db_session: AsyncSession,
+    article: Article,
+) -> ArticleCuration:
+    """テスト用 curation を作成する。"""
+    curation = ArticleCuration(
+        article_id=article.id,
+        translated_title="tt",
+        summary="ss",
+    )
+    db_session.add(curation)
+    await db_session.commit()
+    await db_session.refresh(curation)
+    return curation
+
+
+async def _make_in_scope_assessment(
+    db_session: AsyncSession,
+    curation: ArticleCuration,
+    category: Category,
+    *,
+    embedding: list[float] | None = None,
+) -> InScopeAssessment:
+    """テスト用 in-scope assessment を作成する。"""
+    assessment = InScopeAssessment(
+        curation_id=curation.id,
+        translated_title=curation.translated_title,
+        summary=curation.summary,
+        investor_take="it",
+        category_id=category.id,
+        embedding=embedding,
+    )
+    db_session.add(assessment)
+    await db_session.commit()
+    await db_session.refresh(assessment)
+    return assessment
+
+
 @pytest.mark.asyncio
 async def test_delete_aged_out_curations_deletes_old_child_null_and_audits(
     db_session: AsyncSession,
@@ -347,6 +393,199 @@ async def test_delete_aged_out_curations_deletes_old_child_null_and_audits(
 
 
 # ---------------------------------------------------------------------------
+# Stage 4/5 年齢除外 (実 DB) — 監査 INSERT → soft exclude、業務 row は保持
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_exclude_aged_out_assessments_keeps_article_and_audits(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """古い未 assessment curation は削除せず exclusion + audit を残す。"""
+    from app.queue.tasks import backfill as tasks
+
+    now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
+    article = await _make_article(
+        db_session,
+        sample_source,
+        url="https://e.com/aged-assessment",
+        created_at=now - timedelta(days=10),
+    )
+    curation = await _make_curation(db_session, article)
+    article_id = article.id
+    curation_id = curation.id
+    source_name = str(sample_source.name)
+
+    await tasks._exclude_aged_out_assessments(
+        session_factory, created_before=now - timedelta(days=7)
+    )
+
+    db_session.expire_all()
+    assert await db_session.get(Article, article_id) is not None
+    assert await db_session.get(ArticleCuration, curation_id) is not None
+
+    exclusion = await db_session.get(AssessmentBackfillExclusion, curation_id)
+    assert exclusion is not None
+    assert exclusion.reason_code == BackfillExclusionReason.ASSESSMENT_AGED_OUT.value
+
+    events = list(
+        (
+            await db_session.execute(
+                select(PipelineEvent).where(PipelineEvent.stage == "backfill_assess")
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.event_type == "rejected"
+    assert ev.outcome_code == BackfillExclusionReason.ASSESSMENT_AGED_OUT.value
+    assert ev.retryability is None
+    assert ev.article_id == article_id
+    assert ev.payload["kind"] == "assessment"
+    assert ev.payload["source_name"] == source_name
+    assert ev.payload["curation_id"] == curation_id
+
+
+@pytest.mark.asyncio
+async def test_exclude_aged_out_assessments_skips_completed_race(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+    sample_categories: list[Category],
+) -> None:
+    """helper 実行時点で assessment 済みなら exclusion / audit を作らない。"""
+    from app.queue.tasks import backfill as tasks
+
+    now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
+    article = await _make_article(
+        db_session,
+        sample_source,
+        url="https://e.com/aged-assessment-done",
+        created_at=now - timedelta(days=10),
+    )
+    curation = await _make_curation(db_session, article)
+    await _make_in_scope_assessment(db_session, curation, sample_categories[0])
+
+    await tasks._exclude_aged_out_assessments(
+        session_factory, created_before=now - timedelta(days=7)
+    )
+
+    assert await db_session.get(AssessmentBackfillExclusion, curation.id) is None
+    events = list(
+        (
+            await db_session.execute(
+                select(PipelineEvent).where(PipelineEvent.stage == "backfill_assess")
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert events == []
+
+
+@pytest.mark.asyncio
+async def test_exclude_aged_out_embeddings_keeps_assessment_and_audits(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+    sample_categories: list[Category],
+) -> None:
+    """古い embedding NULL analysis は削除せず exclusion + audit を残す。"""
+    from app.queue.tasks import backfill as tasks
+
+    now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
+    article = await _make_article(
+        db_session,
+        sample_source,
+        url="https://e.com/aged-embedding",
+        created_at=now - timedelta(days=10),
+    )
+    curation = await _make_curation(db_session, article)
+    analysis = await _make_in_scope_assessment(
+        db_session,
+        curation,
+        sample_categories[0],
+    )
+    article_id = article.id
+    analysis_id = analysis.id
+
+    await tasks._exclude_aged_out_embeddings(
+        session_factory, created_before=now - timedelta(days=7)
+    )
+
+    db_session.expire_all()
+    assert await db_session.get(InScopeAssessment, analysis_id) is not None
+
+    exclusion = await db_session.get(EmbeddingBackfillExclusion, analysis_id)
+    assert exclusion is not None
+    assert exclusion.reason_code == BackfillExclusionReason.EMBEDDING_AGED_OUT.value
+
+    events = list(
+        (
+            await db_session.execute(
+                select(PipelineEvent).where(PipelineEvent.stage == "backfill_embed")
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.event_type == "rejected"
+    assert ev.outcome_code == BackfillExclusionReason.EMBEDDING_AGED_OUT.value
+    assert ev.retryability is None
+    assert ev.article_id == article_id
+    assert ev.payload["kind"] == "embedding"
+    assert ev.payload["analysis_id"] == analysis_id
+
+
+@pytest.mark.asyncio
+async def test_exclude_aged_out_embeddings_skips_completed_race(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+    sample_categories: list[Category],
+) -> None:
+    """helper 実行時点で embedding 済みなら exclusion / audit を作らない。"""
+    from app.queue.tasks import backfill as tasks
+
+    now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
+    article = await _make_article(
+        db_session,
+        sample_source,
+        url="https://e.com/aged-embedding-done",
+        created_at=now - timedelta(days=10),
+    )
+    curation = await _make_curation(db_session, article)
+    analysis = await _make_in_scope_assessment(
+        db_session,
+        curation,
+        sample_categories[0],
+        embedding=[0.1] * 768,
+    )
+
+    await tasks._exclude_aged_out_embeddings(
+        session_factory, created_before=now - timedelta(days=7)
+    )
+
+    assert await db_session.get(EmbeddingBackfillExclusion, analysis.id) is None
+    events = list(
+        (
+            await db_session.execute(
+                select(PipelineEvent).where(PipelineEvent.stage == "backfill_embed")
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert events == []
+
+
+# ---------------------------------------------------------------------------
 # assessments / embeddings の disabled パスも同様に early-return することの確認
 # ---------------------------------------------------------------------------
 
@@ -359,10 +598,14 @@ async def test_assessments_disabled_returns_early() -> None:
     with (
         patch.object(tasks.settings, "backfill_assessments_enabled", False),
         patch("app.queue.tasks.backfill.is_assessment_held", new=AsyncMock()) as held,
+        patch(
+            "app.queue.tasks.backfill._exclude_aged_out_assessments", new=AsyncMock()
+        ) as exclude,
         patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
     ):
         await tasks.backfill_assessments(ctx=ctx)
     held.assert_not_called()
+    exclude.assert_not_called()
     backlog_cls.assert_not_called()
 
 
@@ -374,10 +617,14 @@ async def test_embeddings_disabled_returns_early() -> None:
     with (
         patch.object(tasks.settings, "backfill_embeddings_enabled", False),
         patch("app.queue.tasks.backfill.is_embedding_held", new=AsyncMock()) as held,
+        patch(
+            "app.queue.tasks.backfill._exclude_aged_out_embeddings", new=AsyncMock()
+        ) as exclude,
         patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
     ):
         await tasks.backfill_embeddings(ctx=ctx)
     held.assert_not_called()
+    exclude.assert_not_called()
     backlog_cls.assert_not_called()
 
 
@@ -393,6 +640,9 @@ async def test_assessments_held_skips_entire_run() -> None:
             "app.queue.tasks.backfill.is_assessment_held",
             new=AsyncMock(return_value=True),
         ) as held,
+        patch(
+            "app.queue.tasks.backfill._exclude_aged_out_assessments", new=AsyncMock()
+        ) as exclude,
         patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
         patch(
             "app.queue.tasks.backfill.consume_daily_budget", new=AsyncMock()
@@ -402,6 +652,7 @@ async def test_assessments_held_skips_entire_run() -> None:
         await tasks.backfill_assessments(ctx=ctx)
 
     held.assert_awaited_once()
+    exclude.assert_not_called()
     backlog_cls.assert_not_called()
     budget.assert_not_called()
     assess_task.kiq.assert_not_called()
@@ -419,6 +670,9 @@ async def test_embeddings_held_skips_entire_run() -> None:
             "app.queue.tasks.backfill.is_embedding_held",
             new=AsyncMock(return_value=True),
         ) as held,
+        patch(
+            "app.queue.tasks.backfill._exclude_aged_out_embeddings", new=AsyncMock()
+        ) as exclude,
         patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
         patch(
             "app.queue.tasks.backfill.consume_daily_budget", new=AsyncMock()
@@ -428,6 +682,7 @@ async def test_embeddings_held_skips_entire_run() -> None:
         await tasks.backfill_embeddings(ctx=ctx)
 
     held.assert_awaited_once()
+    exclude.assert_not_called()
     backlog_cls.assert_not_called()
     budget.assert_not_called()
     embedding_task.kiq.assert_not_called()

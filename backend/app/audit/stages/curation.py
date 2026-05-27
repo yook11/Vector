@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.analysis.curation.ai.base import BaseCurator
-from app.analysis.curation.ai.envelope import CurationCall
-from app.analysis.curation.domain import Noise, Signal
-from app.analysis.curation.domain.ready import ReadyForCuration
-from app.analysis.curation.errors import CurationError, CurationTerminalDropError
 from app.audit.domain.event import EventType, Stage
 from app.audit.domain.payloads import CurationPayload
 from app.audit.error_chain import extract_error_chain
@@ -24,6 +21,13 @@ from app.audit.repository import PipelineEventRepository
 from app.models.article import Article
 from app.models.news_source import NewsSource
 from app.shared.security.redaction import redact_secrets
+
+if TYPE_CHECKING:
+    from app.analysis.curation.ai.base import BaseCurator
+    from app.analysis.curation.ai.envelope import CurationCall
+    from app.analysis.curation.domain import Noise, Signal
+    from app.analysis.curation.domain.ready import ReadyForCuration
+    from app.analysis.curation.errors import CurationError, CurationTerminalDropError
 
 _AI_RAW_RESPONSE_LIMIT = 2048
 _ERROR_MESSAGE_LIMIT = 2000

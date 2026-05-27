@@ -14,6 +14,8 @@ from datetime import datetime
 
 import logfire
 import structlog
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from taskiq import Context, TaskiqDepends
 
@@ -21,6 +23,16 @@ from app.analysis.assessment.hold import is_assessment_held
 from app.analysis.curation.hold import is_curation_held
 from app.analysis.embedding.hold import is_embedding_held
 from app.config import settings
+from app.models.article import Article
+from app.models.article_curation import ArticleCuration
+from app.models.backfill_exclusion import (
+    AssessmentBackfillExclusion,
+    BackfillExclusionReason,
+    EmbeddingBackfillExclusion,
+)
+from app.models.in_scope_assessment import InScopeAssessment
+from app.models.news_source import NewsSource
+from app.models.out_of_scope_assessment import OutOfScopeAssessment
 from app.queue.brokers import broker_metadata
 from app.queue.helpers.backlog import PipelineBacklog
 from app.queue.helpers.budget import consume_daily_budget
@@ -154,6 +166,144 @@ async def _delete_aged_out_curations(
         logger.info("backfill_curations_aged_out", deleted=deleted)
 
 
+async def _exclude_aged_out_assessments(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    created_before: datetime,
+) -> None:
+    """通常窓から落ちた未 assessment curation を backfill 対象外にする。
+
+    Stage 4 は curation という保全価値のある部分結果を持つため、Stage 3 のように
+    article を物理削除せず、current-state sentinel と audit を同一 tx で残す。
+    """
+    from app.audit.stages.assessment import AssessmentAuditRepository
+
+    async with session_factory() as session:
+        backlog = PipelineBacklog(session)
+        ids = await backlog.curation_ids_aged_out_assessment(
+            created_before=created_before,
+            limit=ASSESSMENTS_LIMIT,
+        )
+
+    excluded = 0
+    for curation_id in ids:
+        async with session_factory() as session:
+            stmt = (
+                select(ArticleCuration.article_id, NewsSource.name)
+                .join(Article, Article.id == ArticleCuration.article_id)
+                .join(NewsSource, NewsSource.id == Article.source_id)
+                .outerjoin(
+                    InScopeAssessment,
+                    InScopeAssessment.curation_id == ArticleCuration.id,
+                )
+                .outerjoin(
+                    OutOfScopeAssessment,
+                    OutOfScopeAssessment.curation_id == ArticleCuration.id,
+                )
+                .outerjoin(
+                    AssessmentBackfillExclusion,
+                    AssessmentBackfillExclusion.curation_id == ArticleCuration.id,
+                )
+                .where(
+                    ArticleCuration.id == curation_id,
+                    InScopeAssessment.id.is_(None),
+                    OutOfScopeAssessment.id.is_(None),
+                    AssessmentBackfillExclusion.curation_id.is_(None),
+                )
+                .limit(1)
+            )
+            row = (await session.execute(stmt)).first()
+            if row is None:
+                continue
+
+            article_id, source_name = row
+            session.add(
+                AssessmentBackfillExclusion(
+                    curation_id=curation_id,
+                    reason_code=BackfillExclusionReason.ASSESSMENT_AGED_OUT.value,
+                )
+            )
+            try:
+                await AssessmentAuditRepository(
+                    session
+                ).append_backfill_assessment_aged_out(
+                    curation_id=curation_id,
+                    article_id=article_id,
+                    source_name=str(source_name) if source_name is not None else None,
+                )
+                await session.commit()
+            except IntegrityError:
+                await session.rollback()
+                continue
+        excluded += 1
+
+    if excluded:
+        logger.info("backfill_assessments_aged_out_excluded", excluded=excluded)
+
+
+async def _exclude_aged_out_embeddings(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    created_before: datetime,
+) -> None:
+    """通常窓から落ちた embedding NULL analysis を backfill 対象外にする。"""
+    from app.audit.stages.embedding import EmbeddingAuditRepository
+
+    async with session_factory() as session:
+        backlog = PipelineBacklog(session)
+        ids = await backlog.analysis_ids_aged_out_embedding(
+            created_before=created_before,
+            limit=EMBEDDINGS_LIMIT,
+        )
+
+    excluded = 0
+    for analysis_id in ids:
+        async with session_factory() as session:
+            stmt = (
+                select(ArticleCuration.article_id)
+                .select_from(InScopeAssessment)
+                .join(
+                    ArticleCuration,
+                    ArticleCuration.id == InScopeAssessment.curation_id,
+                )
+                .outerjoin(
+                    EmbeddingBackfillExclusion,
+                    EmbeddingBackfillExclusion.analysis_id == InScopeAssessment.id,
+                )
+                .where(
+                    InScopeAssessment.id == analysis_id,
+                    InScopeAssessment.embedding.is_(None),
+                    EmbeddingBackfillExclusion.analysis_id.is_(None),
+                )
+                .limit(1)
+            )
+            article_id = await session.scalar(stmt)
+            if article_id is None:
+                continue
+
+            session.add(
+                EmbeddingBackfillExclusion(
+                    analysis_id=analysis_id,
+                    reason_code=BackfillExclusionReason.EMBEDDING_AGED_OUT.value,
+                )
+            )
+            try:
+                await EmbeddingAuditRepository(
+                    session
+                ).append_backfill_embedding_aged_out(
+                    analysis_id=analysis_id,
+                    article_id=article_id,
+                )
+                await session.commit()
+            except IntegrityError:
+                await session.rollback()
+                continue
+        excluded += 1
+
+    if excluded:
+        logger.info("backfill_embeddings_aged_out_excluded", excluded=excluded)
+
+
 # ---------------------------------------------------------------------------
 # Stage 2a: curation の塩漬け救済
 # ---------------------------------------------------------------------------
@@ -255,7 +405,9 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
     案 3 (厚い Ready + 下流 Stage 自身が処理開始時に構築): maintenance は
     「投入数を見る」役割に縮退し、precondition 検証 + Ready 構築は下流 Stage 4
     task に委ねる。各 curation_id を ``AssessmentTrigger`` に詰めて kiq に
-    流すだけ。stale trigger (既 assess 済など) は Stage 4 task の
+    流すだけ。通常窓から落ちた未 assessment curation は、保全価値のある部分結果
+    を残すため削除せず ``assessment_backfill_exclusions`` に current-state
+    sentinel を作る。stale trigger (既 assess 済など) は Stage 4 task の
     ``assess_content_skipped`` ログで観測する。
     """
     if not settings.backfill_assessments_enabled:
@@ -268,6 +420,8 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
 
     session_factory = ctx.state.session_factory
     before, after = BackfillWindow().boundaries_at(utc_now())
+
+    await _exclude_aged_out_assessments(session_factory, created_before=after)
 
     async with session_factory() as session:
         backlog = PipelineBacklog(session)
@@ -355,6 +509,8 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
 
     session_factory = ctx.state.session_factory
     before, after = BackfillWindow().boundaries_at(utc_now())
+
+    await _exclude_aged_out_embeddings(session_factory, created_before=after)
 
     async with session_factory() as session:
         backlog = PipelineBacklog(session)

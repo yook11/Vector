@@ -90,6 +90,24 @@ attempt 系 payload を追加しない。
 - `assessed_out_of_scope`
 - `briefing_input_empty`
 - `stale_attempt`
+- `backfill_assessment_aged_out`
+- `backfill_embedding_aged_out`
+
+## Backfill Exclusion Events
+
+Stage 4/5 の backfill age-out は、Stage 3 の物理削除とは非対称に扱う。
+Stage 4 は `ArticleCuration`、Stage 5 は `InScopeAssessment` という保全価値のある
+部分結果を持つため、記事や分析結果を削除せず current-state sentinel によって
+通常 backfill から除外する。
+
+- 現在状態: `assessment_backfill_exclusions` /
+  `embedding_backfill_exclusions`
+- 監査履歴: `pipeline_events` の `backfill_assess` /
+  `backfill_embed` rejected event
+- outcome code: `BackfillExclusionReason` enum value を SSoT とする
+
+`pipeline_events` は immutable audit であり、通常 backfill の制御状態は
+`*_backfill_exclusions` 側で保持する。
 
 ### retryability
 

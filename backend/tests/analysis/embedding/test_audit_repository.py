@@ -44,6 +44,7 @@ from app.analysis.embedding.errors import (
 from app.audit.stages.embedding import EmbeddingAuditRepository
 from app.models.article import Article
 from app.models.article_curation import ArticleCuration
+from app.models.backfill_exclusion import BackfillExclusionReason
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
 
@@ -140,6 +141,7 @@ async def test_append_success_records_with_code(
     assert ev.event_type == "succeeded"
     assert ev.outcome_code == "embedding_completed"
     assert ev.retryability is None
+    assert ev.payload["analysis_id"] == 1
     assert ev.payload["embedding_model"] == "cl-nagoya/ruri-v3-310m"
     assert ev.payload["vector_dimension"] == 768
 
@@ -192,6 +194,37 @@ async def test_append_success_does_not_commit(
         .all()
     )
     assert len(rows) == 0  # 未 commit のため永続化されていない
+
+
+# ---------------------------------------------------------------------------
+# 救済断念経路 — append_backfill_embedding_aged_out
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_append_backfill_embedding_aged_out_records_rejected(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """backfill age-out exclusion を rejected event として記録する。"""
+    article = await _make_article(db_session, sample_source)
+    await _make_extraction(db_session, article)
+
+    async with session_factory() as session:
+        await EmbeddingAuditRepository(session).append_backfill_embedding_aged_out(
+            analysis_id=123,
+            article_id=article.id,
+        )
+        await session.commit()
+
+    ev = await _fetch_one(db_session, article.id)
+    assert ev.stage == "backfill_embed"
+    assert ev.event_type == "rejected"
+    assert ev.outcome_code == BackfillExclusionReason.EMBEDDING_AGED_OUT.value
+    assert ev.retryability is None
+    assert ev.payload["kind"] == "embedding"
+    assert ev.payload["analysis_id"] == 123
 
 
 # ---------------------------------------------------------------------------

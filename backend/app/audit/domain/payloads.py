@@ -116,6 +116,7 @@ class EmbeddingPayload(BasePipelineEventPayload):
     kind: Literal["embedding"] = "embedding"
     failure_kind: str | None = None
     failure_action: str | None = None
+    analysis_id: int | None = None
     embedding_model: str | None = None
     vector_dimension: int | None = None
 

@@ -19,6 +19,7 @@ from app.audit.failure_projection import (
     unknown_failure_projection,
 )
 from app.audit.repository import PipelineEventRepository
+from app.models.backfill_exclusion import BackfillExclusionReason
 from app.shared.security.redaction import redact_secrets
 
 _INPUT_TEXT_LIMIT = 4096
@@ -99,6 +100,27 @@ class AssessmentAuditRepository:
             outcome_code=_OUT_OF_SCOPE_OUTCOME_CODE,
             payload=payload,
             article_id=ready.article_id,
+        )
+
+    # --- 救済断念経路 (backfill exclusion と同一 tx) ----------------------
+
+    async def append_backfill_assessment_aged_out(
+        self,
+        *,
+        curation_id: int,
+        article_id: int,
+        source_name: str | None,
+    ) -> None:
+        """古い未 assessment curation を backfill が対象外にした事実を記録する。"""
+        await self._events.append(
+            stage=Stage.BACKFILL_ASSESS,
+            event_type=EventType.REJECTED,
+            outcome_code=BackfillExclusionReason.ASSESSMENT_AGED_OUT.value,
+            payload=AssessmentPayload(
+                source_name=source_name,
+                curation_id=curation_id,
+            ),
+            article_id=article_id,
         )
 
     # --- 失敗経路 (Task 層 3 marker dispatch、別 session 別 tx) ----------

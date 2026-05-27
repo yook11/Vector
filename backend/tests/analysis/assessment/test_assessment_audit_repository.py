@@ -58,6 +58,7 @@ from app.analysis.assessment.errors import (
 from app.audit.stages.assessment import AssessmentAuditRepository
 from app.models.article import Article
 from app.models.article_curation import ArticleCuration
+from app.models.backfill_exclusion import BackfillExclusionReason
 from app.models.category import Category
 from app.models.in_scope_assessment import InScopeAssessment as InScopeAssessmentORM
 from app.models.news_source import NewsSource
@@ -440,6 +441,39 @@ async def test_append_out_of_scope_records_investor_take(
 
 
 # ---------------------------------------------------------------------------
+# 救済断念経路 — append_backfill_assessment_aged_out
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_append_backfill_assessment_aged_out_records_rejected(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """backfill age-out exclusion を rejected event として記録する。"""
+    article = await _make_article(db_session, sample_source)
+    extraction = await _make_extraction(db_session, article)
+
+    async with session_factory() as session:
+        await AssessmentAuditRepository(session).append_backfill_assessment_aged_out(
+            curation_id=extraction.id,
+            article_id=article.id,
+            source_name=str(sample_source.name),
+        )
+        await session.commit()
+
+    ev = await _fetch_one(db_session, article.id)
+    assert ev.stage == "backfill_assess"
+    assert ev.event_type == "rejected"
+    assert ev.outcome_code == BackfillExclusionReason.ASSESSMENT_AGED_OUT.value
+    assert ev.retryability is None
+    assert ev.payload["kind"] == "assessment"
+    assert ev.payload["source_name"] == str(sample_source.name)
+    assert ev.payload["curation_id"] == extraction.id
+
+
+# ---------------------------------------------------------------------------
 # 失敗経路 — append_failure (Layer 1 marker dispatch)
 # ---------------------------------------------------------------------------
 
@@ -554,8 +588,7 @@ async def test_append_failure_layer_2b_category_missing(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """Layer 2-B AssessmentCategoryMissingError は分類未解決として記録される。
-    """
+    """Layer 2-B AssessmentCategoryMissingError は分類未解決として記録される。"""
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
     exc = AssessmentCategoryMissingError()
