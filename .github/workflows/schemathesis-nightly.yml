@@ -34,7 +34,7 @@ jobs:
 
     services:
       postgres:
-        image: pgvector/pgvector:pg16
+        image: pgvector/pgvector:0.8.2-pg18-bookworm
         env:
           POSTGRES_USER: vector
           POSTGRES_PASSWORD: vector

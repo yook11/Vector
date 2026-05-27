@@ -6,7 +6,7 @@
 
 - Frontend: Next.js 16 (App Router, TypeScript, Tailwind CSS, shadcn/ui, Biome)
 - Backend: FastAPI (Python 3.13+, SQLModel, Pydantic v2)
-- Database: PostgreSQL 16 (Alembic マイグレーション)
+- Database: PostgreSQL 18 (Alembic マイグレーション)
 - AI: Gemini API (抽象化済み、差し替え可能)
 - インフラ: Docker Compose
 

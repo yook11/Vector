@@ -6,7 +6,7 @@
 
 - Frontend: Next.js 16 (App Router, TypeScript, Tailwind CSS, shadcn/ui, Biome)
 - Backend: FastAPI (Python 3.13+, SQLModel, Pydantic v2)
-- Database: PostgreSQL 16 (Alembic マイグレーション)
+- Database: PostgreSQL 18 (Alembic マイグレーション)
 - AI: Gemini + DeepSeek (multi-provider、Pure DI で `backend/app/brokers.py` に hardcode、env 切替なし。DeepSeek は OpenAI 互換 API のため `openai` SDK を流用)
 - インフラ: Docker Compose (dev) + Fly.io (production, nrt region)
 

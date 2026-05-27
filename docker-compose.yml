@@ -114,7 +114,7 @@ services:
   # container 内 psql を使う。host から直接 db に接続する経路は完全に閉じる
   # (host port 宣言なし。統合テストは別 compose の `db-test` を loopback 限定で立てる)。
   db:
-    image: pgvector/pgvector:pg16
+    image: pgvector/pgvector:0.8.2-pg18-bookworm
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-vector}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required; set a strong value in .env}
@@ -124,7 +124,11 @@ services:
       POSTGRES_AUTH_PASSWORD: ${POSTGRES_AUTH_PASSWORD:?POSTGRES_AUTH_PASSWORD is required for vector_auth role}
       POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:?POSTGRES_APP_PASSWORD is required for vector_app role}
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      # PG18 以降の Docker image は major-version 別ディレクトリ
+      # (/var/lib/postgresql/18/docs/) にデータを置く設計に変わったため、
+      # mount は親ディレクトリ /var/lib/postgresql を指す
+      # (docker-library/postgres#1259)。
+      - pgdata:/var/lib/postgresql
       # 初回 db 起動時に application role を作成する init script を mount。
       # 既存 dev volume では実行されないため、PR 本文の手動手順を参照すること。
       - ./infra/db/init:/docker-entrypoint-initdb.d:ro

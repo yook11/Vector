@@ -31,7 +31,7 @@ AIで翻訳・要約・インパクト分析を行う投資ダッシュボード
 | Frontend | Next.js 16 (App Router) + TypeScript | Tailwind CSS + shadcn/ui + Biome |
 | Backend | FastAPI + **Python 3.13** + SQLModel (SQLAlchemy 2.0 async) | Pydantic v2、非同期処理 |
 | Auth | Better Auth (BFF Proxy) | Cookie ベースセッション + 内部 API ヘッダー認証 |
-| Database | PostgreSQL 16 + pgvector | Alembic マイグレーション、**二重ロール** (vector_app / vector_auth) |
+| Database | PostgreSQL 18 + pgvector | Alembic マイグレーション、**二重ロール** (vector_app / vector_auth) |
 | AI | **Gemini + DeepSeek + OpenAI** (multi-provider) | Pure DI で `backend/app/brokers.py` に hardcode |
 | Embedding | `gemini-embedding-001` (768-dim halfvec) | pgvector + per-user quota |
 | Task Queue | taskiq + Redis (**6 broker 分離**) | metadata / content / analysis / embedding / digest / briefing |
@@ -58,11 +58,29 @@ cp .env.example .env
 #   ※ secrets が未設定または弱い値だと backend / frontend は起動拒否
 
 # 2. Start all services
-docker compose up --build
+docker compose up -d --build
 
 # 3. Access
 # Frontend: http://localhost:3000 (唯一の host-exposed エントリポイント)
 ```
+
+> **Note (初回 / fresh dev volume)**: `pgdata` volume が空の状態で `docker compose
+> up` を直接実行すると、backend 起動時の `alembic upgrade head` が `auth.user`
+> (Better Auth が作るテーブル) を要求するため `UndefinedTableError` で起動失敗する。
+> 初回は db → Better Auth migration → 残り service の順序で立ち上げる:
+>
+> ```bash
+> docker compose up -d --wait db
+> # Better Auth CLI は core (`better-auth`) と version 体系が別。1.4.22 は
+> # 2026-05 時点の release-1.4 系 stable 最新 (npm dist-tag `release-1.4`)。
+> # CLI 更新時は `npm view @better-auth/cli dist-tags` で stable を確認すること。
+> docker compose run --rm --no-deps frontend \
+>   npx @better-auth/cli@1.4.22 migrate --config src/lib/auth/auth.cli.ts
+> docker compose up -d --build
+> ```
+>
+> 既存 dev volume (auth schema 作成済) があれば `docker compose up -d --build`
+> のみで起動できる。
 
 > **Note**: backend / db / redis / redis-rl / 4 worker / scheduler は全て Docker 内部
 > ネットワーク (`internal: true`) のみで動作し host port を持ちません。
@@ -98,7 +116,7 @@ Browser
               ├── search/       — semantic search + per-user 1 日 quota
               ├── observability/— pipeline_events 監査 (Discriminated Union payload)
               ├── maintenance/  — back-fill backlog / budget / policy
-              └── PostgreSQL 16 + pgvector (二重ロール: vector_app / vector_auth)
+              └── PostgreSQL 18 + pgvector (二重ロール: vector_app / vector_auth)
 
 Redis (taskiq broker) ◄── worker-fetch / worker-analysis / worker-embedding / worker-insights
                        ◄── scheduler (metadata / digest / briefing cron)
@@ -112,7 +130,7 @@ Redis (rate-limit, ephemeral) ◄── proxy.ts sliding window log
 |---------|------------|
 | `frontend` | Next.js 16 BFF — 唯一の public エントリーポイント |
 | `backend` | FastAPI — internal network 限定 |
-| `db` | PostgreSQL 16 + pgvector (`internal: true`、host port 非公開) |
+| `db` | PostgreSQL 18 + pgvector (`internal: true`、host port 非公開) |
 | `redis` | taskiq broker (本体)、`maxmemory 256mb` + `allkeys-lru` |
 | `redis-rl` | frontend rate-limit 専用 (本体 redis と OOM 道連れを防ぐ物理分離) |
 | `worker-fetch` | metadata + content fetch worker (supervisord Pattern B) |
@@ -144,26 +162,27 @@ Redis (rate-limit, ephemeral) ◄── proxy.ts sliding window log
 ### ニュース処理パイプライン
 
 ```
-taskiq scheduler (cron)
+taskiq scheduler (cron) → broker_metadata 投函
   ↓
-[Stage A] dispatch         — アクティブソース読込 → broker_metadata に投函
+[Stage 1] acquisition      — アクティブソースから記事メタデータを取得
+                             (RSS/Atom/HTML listing/Sitemap/Hacker News API)
+                             + 新規記事 row 作成
   ↓
-[Stage B] source_fetch     — RSS/Atom/HTML listing/Sitemap からメタデータ取得
+[Stage 2] completion       — 全文取得 (trafilatura) で記事本体を充足
   ↓
-[Stage C] content_fetch    — 全文取得 (trafilatura)
+[Stage 3] curation         — Gemini extractor (タイトル正規化 / 構造抽出)
   ↓
-[Stage D] extraction       — Gemini extractor (タイトル正規化 / 構造抽出)
+[Stage 4] assessment       — DeepSeek assessor (signal/noise + Category + Topic)
   ↓
-[Stage E] assessment       — DeepSeek assessor (signal/noise + Category + Topic)
-  ↓
-[Stage F] embedding        — Gemini Embedding (gemini-embedding-001, 768-dim halfvec)
+[Stage 5] embedding        — Gemini Embedding (gemini-embedding-001, 768-dim halfvec)
 
-並行: back-fill 3 系統 (extractions / classifications / embeddings、kill switch あり)
+並行: back-fill 3 系統 (curation / assessment / embedding、kill switch あり)
 並行: digest cron (週次 snapshot)、briefing cron (週次 LLM ブリーフィング)
 
 各 stage は pipeline_events に監査記録 (Discriminated Union payload)。
 業務処理と監査書込はアトミック (成功/skip パスは同 tx 内、失敗は別 tx で永続化)。
-詳細は docs/observability/pipeline-events-design.md。
+stage モジュールは [backend/app/audit/stages/](backend/app/audit/stages/) を SSoT とする。
+詳細は [docs/observability/pipeline-events-design.md](docs/observability/pipeline-events-design.md)。
 ```
 
 ## Environment Variables
