@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article
@@ -20,9 +20,12 @@ from app.models.out_of_scope_assessment import OutOfScopeAssessment
 
 
 class PipelineBacklog:
-    """子テーブル NULL 状態を年齢ウィンドウ + LIMIT で発見する。
+    """子テーブル NULL 状態を年齢ウィンドウで発見する。
 
-    各メソッドは「発見可能な ID」のみを返し、kiq dispatch・予算消費の判断は
+    ID 取得メソッド (``*_pending_*``) は LIMIT 付きで dispatch 対象を返す。
+    COUNT メソッド (``count_*``) は LIMIT なしの真の総数を Logfire gauge
+    観測用に返す (dispatch list の ``len()`` は LIMIT で saturate するため、
+    詰まりの可視化には COUNT 経路が必要)。kiq dispatch・予算消費の判断は
     呼び出し側 (cron task) の責務。
     """
 
@@ -122,6 +125,44 @@ class PipelineBacklog:
         )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
+
+    async def count_curations_pending_assessment(
+        self,
+        *,
+        created_before: datetime,
+        created_after: datetime,
+    ) -> int:
+        """assessment 未処理 curation の真の総数 (LIMIT なし COUNT)。観測専用。
+
+        ``curation_ids_pending_assessment`` と同じ JOIN / where 条件を共有
+        するが、LIMIT を持たない。Logfire gauge への observability 用途で、
+        dispatch とは別経路 (dispatch は ``ASSESSMENTS_LIMIT`` で頭打ち、観測は
+        それを超えた真値を出す)。
+
+        同一 ``AsyncSession`` 内で COUNT → ID 取得を順に呼ぶことで read
+        committed snapshot 上で一貫した値を返す (並行 INSERT/DELETE による
+        僅かな乖離は観測値として許容)。
+        """
+        stmt = (
+            select(func.count(ArticleCuration.id))
+            .join(Article, Article.id == ArticleCuration.article_id)
+            .outerjoin(
+                InScopeAssessment,
+                InScopeAssessment.curation_id == ArticleCuration.id,
+            )
+            .outerjoin(
+                OutOfScopeAssessment,
+                OutOfScopeAssessment.curation_id == ArticleCuration.id,
+            )
+            .where(
+                InScopeAssessment.id.is_(None),
+                OutOfScopeAssessment.id.is_(None),
+                Article.created_at < created_before,
+                Article.created_at >= created_after,
+            )
+        )
+        result = await self._session.execute(stmt)
+        return int(result.scalar_one())
 
     async def analysis_ids_pending_embedding(
         self,

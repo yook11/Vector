@@ -80,6 +80,31 @@ _age_delete_batch_size_histogram = logfire.metric_histogram(
     description="1 cycle (cron) で年齢削除された article 数の分布 (p99 で spike 検知)",
 )
 
+# ---------------------------------------------------------------------------
+# Logfire metrics (Phase 5-A: backfill backlog の現在値)
+# ---------------------------------------------------------------------------
+#
+# PR #640 で撤去した circuit_breaker (連続 4 cycle 非空 streak で本日分停止)
+# の観測代替。cron tick 毎に DB 上の真の未処理件数 (LIMIT なし COUNT) を
+# gauge で set し、Logfire dashboard 側で時系列を見て「詰まりが解消しない」
+# 状況を人間が判断する。
+#
+# ``len(ids)`` (LIMIT で頭打ち) ではなく count メソッド経由で真値を取る理由:
+# 健全な高負荷 (50 件で消化済み) と詰まり (500 件超が残存) を dashboard 上で
+# 区別可能にするため (test_gauge_records_true_count_not_capped_by_limit で pin)。
+#
+# attribute は ``stage`` のみ (低 cardinality contract)。本 PR では assessment
+# 段階のみ書き込み (``stage="assessment"``) し、curation / embedding への
+# 横展開は別 PR (attribute 値を追加するだけで metric 名は不変)。``curation_id``
+# / ``article_id`` は attribute に乗せない (test_backfill_backlog_metrics の
+# capfire PII oracle で pin)。
+
+_backlog_gauge = logfire.metric_gauge(
+    "vector.backfill.backlog",
+    unit="1",
+    description="backfill cron 冒頭で観測した DB 上の真の未処理件数 (stage 別)",
+)
+
 
 # ---------------------------------------------------------------------------
 # 共通ヘルパー
@@ -240,11 +265,20 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
 
     async with session_factory() as session:
         backlog = PipelineBacklog(session)
+        # 観測 (COUNT) → dispatch (ID 取得) の順で同一 session 内に並べ、read
+        # committed snapshot 上で一貫値を返す。dispatch list は LIMIT で頭打ち
+        # するため backlog 観測には別途 COUNT 経路が必要。
+        backlog_count = await backlog.count_curations_pending_assessment(
+            created_before=before,
+            created_after=after,
+        )
         ids = await backlog.curation_ids_pending_assessment(
             created_before=before,
             created_after=after,
             limit=ASSESSMENTS_LIMIT,
         )
+
+    _backlog_gauge.set(backlog_count, attributes={"stage": "assessment"})
 
     found = len(ids)
     if found == 0:
