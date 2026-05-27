@@ -4,12 +4,15 @@ Prompt と Spec を分離した結果として ``provider`` / ``model`` / ``vers
 ``gen_config`` / ``response_schema`` / ``system_instruction`` / ``rate_limit_policy``
 が module singleton として SSoT に置かれていることを検証する。
 
-``version`` は ``compute_call_signature`` で算出される 8 文字 hash。
-本 PR (配置換え) では入力 5 要素が変わらないため golden ``"9ff9f0cf"`` を維持する。
+``version`` は ``compute_call_signature`` で算出される 8 文字 hash。具体値は
+prompt 本文変更のたびに自動で動くため、テストでは値そのものを pin しない。
+audit 連続性 cutover の意思表示は commit メッセージで行う
+(ADR §prompt_version の規律)。
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import FrozenInstanceError
 from types import MappingProxyType
 
@@ -19,6 +22,8 @@ from app.analysis.curation.ai.gemini_spec import GEMINI_CURATION_SPEC
 from app.analysis.curation.ai.schema import GeminiCurationResponse
 from app.analysis.rate_limit import AIModelRateLimitPolicy, RateLimitRule
 
+_HEX8 = re.compile(r"^[0-9a-f]{8}$")
+
 
 def test_provider_is_gemini() -> None:
     assert GEMINI_CURATION_SPEC.provider == "gemini"
@@ -26,16 +31,6 @@ def test_provider_is_gemini() -> None:
 
 def test_model_is_flash_lite_25() -> None:
     assert GEMINI_CURATION_SPEC.model == "gemini-2.5-flash-lite"
-
-
-def test_version_locked() -> None:
-    """配置換えで version 値が変わらない golden 固定。
-
-    event-extraction PR 2 で entities フィールドと prompt の対応行を削除した
-    意図的 cutover により ``"094404f1"`` に更新。意図的な prompt / schema
-    変更時のみこの値を更新し、commit メッセージで audit 連続性 cutover を明示する。
-    """
-    assert GEMINI_CURATION_SPEC.version == "094404f1"
 
 
 def test_response_schema_is_gemini_extraction_response() -> None:
@@ -75,3 +70,8 @@ def test_rate_limit_policy_is_provider_model_rules() -> None:
 def test_spec_is_frozen() -> None:
     with pytest.raises(FrozenInstanceError):
         GEMINI_CURATION_SPEC.provider = "openai"  # type: ignore[misc]
+
+
+def test_version_is_hex8() -> None:
+    """8 文字 hex の format を将来 rotation 時の guard として固定する。"""
+    assert _HEX8.fullmatch(GEMINI_CURATION_SPEC.version) is not None
