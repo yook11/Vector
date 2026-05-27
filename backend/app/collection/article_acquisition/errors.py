@@ -10,6 +10,9 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import ClassVar
 
+from app.audit.domain.event import Stage
+from app.logfire_exceptions import VectorDomainError
+
 
 class ConversionReason(StrEnum):
     """``FetchedArticle`` 変換が不成立になった理由語彙。
@@ -40,7 +43,7 @@ class FetchedArticleConversionError(Exception):
     ``raw_url`` は素の値を保持し、redact は監査永続化側の責務。
 
     Attributes:
-        code: audit ラベル (``pipeline_events.code`` / ``outcome_code`` 列)。
+        code: audit event code (``outcome_code`` に焼く値)。
         conversion_reason: なぜ Observed にもなれなかったか (= 変換失敗理由)。
         source_name: 出所のソース表示名。
         raw_url: 変換前の生 URL (無い / 取れない場合 ``None``)。
@@ -91,8 +94,8 @@ class UnreadableResponseError(Exception):
     (normalize が ``None``/``""`` に畳むのでこのエラーにはならない)。
 
     Attributes:
-        CODE: audit ラベル (``pipeline_events.code`` 列)。接続コードと別カテゴリと
-            分かるよう ``fetch_`` でなく ``read_`` prefix。
+        CODE: audit event code (``outcome_code`` に焼く値)。接続コードと
+            別カテゴリと分かるよう ``fetch_`` でなく ``read_`` prefix。
     """
 
     CODE: ClassVar[str] = "read_unreadable_response"
@@ -102,12 +105,24 @@ class UnreadableResponseError(Exception):
         return explicit if explicit else self.CODE
 
 
-class SourceAcquisitionError(Exception):
+class AcquisitionError(VectorDomainError):
+    """Stage 1 固有例外の共通基底。
+
+    外部接続境界の ``ExternalFetchError`` family は origin error なので、本基底を
+    継承しない。Stage 1 の処理方針を持つ marker だけがここに属する。
+    """
+
+    STAGE: ClassVar[Stage] = Stage.ACQUISITION
+
+
+class SourceAcquisitionError(AcquisitionError):
     """ソース全体の取得に失敗したことを示す Stage 1 marker。
 
     Attributes:
-        code: audit ラベル (``pipeline_events.code`` 列)。
+        code: audit event code (``outcome_code`` に焼く値)。
     """
+
+    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("code",)
 
     code: str
 

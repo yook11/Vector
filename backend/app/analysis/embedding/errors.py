@@ -1,31 +1,4 @@
-"""Stage 5 (Embedding) ドメインエラー定義 — Layer 1 / 2-A / 2-B を本ファイルに集約。
-
-Stage 5 で raise されうる例外と、外部 BC (``AIProviderError``) を Stage 5 marker
-に詰め替える ACL を 1 ファイルにまとめる。Stage 4 Assessment と完全同形の
-``assessment/errors.py`` を雛形にした構造で、section 構成も対称:
-
-- **Layer 1 marker**: Stage 5 task 層の **唯一の dispatch 軸**。Stage 5 で raise
-  されうる全例外がこの 2 種のどちらかを継承する。Stage 共通 marker は **持たない**
-  (原則 2: Stage 共通 marker は作らない、Stage 3 / Stage 4 と同思想)。
-- **Layer 2-B (Stage 5 工程由来)**: embedder 内部の応答 schema 不整合
-  (``EmbeddingVector`` VO の次元 ≠ 768 / NaN / 非有限 / 範囲外) など、provider
-  例外でない Stage 5 specific failure。Layer 1 marker を直接継承し、
-  ``provider_error=None`` で marker を再利用する。
-- **Layer 2-A ACL (provider 由来の詰め替え)**: ACL mapper
-  ``to_embedding_error`` が ``AIProviderError`` を Layer 1 marker に詰め替え、
-  ``provider_error`` instance attr に元の ``AIProviderError`` を保持する。Stage 4
-  の ``map_provider_to_assessment`` と完全同形で、Stage 5 の解釈を tuple 2 つに
-  集約する。
-
-「TerminalSkip した事実」は ``pipeline_events.code`` カラムに上記
-``AIProvider*Error`` の ``CODE`` が焼かれた行として表現される (DB 状態列の追加は
-不要、Stage 4 と同思想)。
-
-Phase 4: Layer 1 marker を ``VectorDomainError`` 継承 + kwargs-only constructor
-に締めて、``__str__`` 経路 (Logfire span ``exception.message``) から PII を
-構造的に排除する。``str(exc)`` で構築していた message 引数は ACL / Layer 2-B
-ともに撤去する。
-"""
+"""Stage 5 embedding の marker error と provider error adapter。"""
 
 from __future__ import annotations
 
@@ -53,33 +26,13 @@ from app.logfire_exceptions import VectorDomainError
 
 
 class EmbeddingError(VectorDomainError):
-    """Stage 5 全例外の共通基底。
-
-    task 層は本クラスでなく ``EmbeddingRecoverableError`` /
-    ``EmbeddingTerminalSkipError`` を except する。``EmbeddingError`` は
-    型階層上の祖先として保持し (Stage 5 例外の identity)、catch には使わない。
-    """
+    """Stage 5 全例外の共通基底。直接の catch 対象にはしない。"""
 
     STAGE: ClassVar[Stage] = Stage.EMBEDDING
 
 
 class EmbeddingRecoverableError(EmbeddingError):
-    """将来の再実行で成功する可能性がある Stage 5 失敗。
-
-    現状は taskiq の cron 救済 (単純 retry) で消化する。inline retry の判定軸は
-    logfire 設計で詰める (本 spec では持たない)。
-
-    Phase 4: constructor は kwargs-only。``message`` 引数は廃止し ``__str__``
-    は ``EmbeddingRecoverableError(code='...')`` 固定形式になる。
-
-    Attributes:
-        code: audit ラベル (``pipeline_events.code`` 列に直接書き込む)。
-            provider 由来は ``exc.CODE`` を引き継ぎ、Stage 5 specific は
-            ``"embedding_*"`` を pin。
-        provider_error: provider 由来の場合は元 ``AIProviderError`` instance を
-            identity 付きで保持 (audit forensics + ``__cause__`` 連鎖)。
-            Stage 5 specific (Layer 2-B) では ``None``。
-    """
+    """再実行で回復しうる embedding 失敗。"""
 
     SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("code",)
     FAILURE_KIND: ClassVar[str] = "recoverable"
@@ -101,21 +54,7 @@ class EmbeddingRecoverableError(EmbeddingError):
 
 
 class EmbeddingTerminalSkipError(EmbeddingError):
-    """リトライ無効、現状の analysis では embed できないと諦める Stage 5 失敗。
-
-    article / curation / analysis は保持、embedding は作らず audit を焼いて
-    return する。"Terminal" は「これ以上の試行は無意味、終端」、"Skip" は
-    「embedding を作らず skip する」の意。
-
-    Phase 4: kwargs-only constructor、``__str__`` は SAFE_ATTRS=(``code``,) のみ。
-
-    Attributes:
-        code: audit ラベル (``pipeline_events.code`` 列に直接書き込む)。
-            provider 由来は ``exc.CODE`` を引き継ぎ、Stage 5 specific は
-            ``"embedding_*"`` を pin。
-        provider_error: provider 由来の場合は元 ``AIProviderError`` instance を
-            identity 付きで保持。Stage 5 specific (Layer 2-B) では ``None``。
-    """
+    """再試行は無効で embedding を作らない Stage 5 失敗。"""
 
     SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("code",)
     FAILURE_KIND: ClassVar[str] = "terminal_skip"
@@ -142,18 +81,7 @@ class EmbeddingTerminalSkipError(EmbeddingError):
 
 
 class EmbeddingResponseInvalidError(EmbeddingRecoverableError):
-    """embedder 応答が Stage 5 schema に合致しない (Layer 2-B、Stage 5 工程由来)。
-
-    具体的には Service 内の ``EmbeddingVector`` VO 構築で:
-    - 次元数 ≠ 768 (``EMBEDDING_DIMENSION``)
-    - NaN / ±inf を含む (``math.isfinite`` 違反)
-    - サニティ範囲 (``[-1e4, 1e4]``) 外の要素
-
-    モデルや provider 側のバグ・揺らぎで稀に発生し、cron 救済で回復する見込み。
-    ``provider_error=None`` で marker を継承 (provider 例外起源ではないため)。
-
-    Phase 4: 旧 ``message`` 引数は廃止 (PII 含有経路)。
-    """
+    """embedder 応答が embedding schema に合致しない。"""
 
     def __init__(self) -> None:
         super().__init__(
@@ -206,28 +134,7 @@ analysis は保持し、embedding は作らず audit を焼いて skip する。
 
 
 def to_embedding_error(exc: AIProviderError) -> EmbeddingError:
-    """provider 例外を Stage 5 marker に詰め替える (Anti-Corruption Layer)。
-
-    Stage 5 boundary (``EmbeddingService.execute``) で呼ぶ。``AIProviderError`` の
-    subclass で上記 2 tuple のいずれにも未登録のものは ``TypeError`` を raise する
-    (新規 provider error 種別の登録漏れを deploy 前に検知する fail-fast)。
-
-    Phase 4: ``str(exc)`` を marker constructor に渡していた旧経路は廃止
-    (Layer 1 marker が kwargs-only に締まったため、SDK message が ``__str__``
-    に乗らない構造)。
-
-    Args:
-        exc: embedder 層が raise した ``AIProviderError`` instance。
-
-    Returns:
-        Stage 5 marker (``EmbeddingRecoverableError`` /
-        ``EmbeddingTerminalSkipError``) の instance。``provider_error`` attr に元
-        ``exc`` を identity 付きで保持。``code`` attr は元 ``exc.CODE`` を引き継ぐ
-        (audit ラベル連鎖)。
-
-    Raises:
-        TypeError: ``AIProviderError`` subclass がどちらの tuple にも未登録の場合。
-    """
+    """provider 例外を Stage 5 marker に詰め替える。"""
     if isinstance(exc, EMBEDDING_RECOVERABLE_PROVIDER_ERRORS):
         return EmbeddingRecoverableError(
             code=exc.CODE,

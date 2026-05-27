@@ -13,12 +13,12 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.audit.categories import Layer1Category
 from app.audit.domain.event import EventType, Stage
 from app.audit.domain.payloads import (
     AcquisitionPayload,
     EmbeddingPayload,
 )
+from app.audit.failure_projection import Retryability
 from app.audit.repository import PipelineEventRepository
 from app.models.article import Article as ArticleORM
 from app.models.news_source import NewsSource, SourceType
@@ -83,7 +83,6 @@ async def test_append_inserts_row_with_payload_roundtrip(
         outcome_code="permanent_fetch_error",
         payload=payload,
         source_id=source_row.id,
-        attempt=1,
         duration_ms=42,
     )
     await db_session.commit()
@@ -102,6 +101,7 @@ async def test_append_inserts_row_with_payload_roundtrip(
     assert row.payload["final_url"] == "https://venturebeat.com/feed/"
     assert row.payload["error_message"] == "upstream returned 403"
     assert row.payload["error_chain"] == ["httpx.HTTPStatusError"]
+    assert row.retryability is None
 
 
 @pytest.mark.asyncio
@@ -124,6 +124,27 @@ async def test_source_id_auto_filled_from_article_id(
     row = (await db_session.execute(select(PipelineEvent))).scalars().one()
     assert row.article_id == article_row.id
     assert row.source_id == article_row.source_id
+
+
+@pytest.mark.asyncio
+async def test_append_persists_retryability(
+    db_session: AsyncSession, article_row: ArticleORM
+) -> None:
+    repo = PipelineEventRepository(db_session)
+    payload = EmbeddingPayload(embedding_model="gemini-embedding-001")
+
+    await repo.append(
+        stage=Stage.EMBEDDING,
+        event_type=EventType.FAILED,
+        outcome_code="ai_error_network",
+        payload=payload,
+        article_id=article_row.id,
+        retryability=Retryability.RETRYABLE,
+    )
+    await db_session.commit()
+
+    row = (await db_session.execute(select(PipelineEvent))).scalars().one()
+    assert row.retryability == "retryable"
 
 
 @pytest.mark.asyncio
@@ -165,69 +186,67 @@ def test_stage_strenum_matches_check_constraint() -> None:
     assert {s.value for s in Stage} == expected
 
 
-def test_layer1_category_strenum_matches_check_constraint() -> None:
-    """Layer1Category StrEnum 値 set が ORM/migration の CHECK 制約値と一致。
-
-    'non_retryable_keep_curation' + briefing 用 'non_retryable' を含む 8 値。
-    """
-    expected = {
-        "success",
-        "idempotent_skip",
-        "retryable",
-        "non_retryable_drop_article",
-        "non_retryable_keep_article",
-        "non_retryable_keep_curation",
-        "non_retryable",
-        "unknown",
-    }
-    assert {c.value for c in Layer1Category} == expected
-
-
 def test_event_type_strenum_matches_check_constraint() -> None:
     expected = {"succeeded", "skipped", "rejected", "failed"}
     assert {e.value for e in EventType} == expected
 
 
+def test_retryability_strenum_matches_check_constraint() -> None:
+    expected = {"retryable", "non_retryable", "unknown"}
+    assert {r.value for r in Retryability} == expected
+
+
+def test_pipeline_event_top_level_columns_match_current_contract() -> None:
+    """撤去済みの旧 3 列を戻さず、失敗詳細は payload に閉じることを固定する。"""
+    expected = {
+        "id",
+        "occurred_at",
+        "stage",
+        "event_type",
+        "outcome_code",
+        "retryability",
+        "source_id",
+        "article_id",
+        "duration_ms",
+        "error_class",
+        "trace_id",
+        "payload",
+    }
+    actual = set(PipelineEvent.__table__.columns.keys())
+    assert actual == expected
+    assert {"category", "code", "attempt"}.isdisjoint(actual)
+    assert {"failure_kind", "failure_action", "attempt_count"}.isdisjoint(actual)
+
+
 @pytest.mark.asyncio
-async def test_category_check_constraint(db_session: AsyncSession) -> None:
-    """category 列の CHECK 制約検証: 8 値 + NULL は OK、不正値で IntegrityError。
-
-    Layer1Category は article-bound analysis stages + briefing 用の語彙のため、
-    collection 系 stage (dispatch / acquisition / completion) では NULL のまま
-    記録される。DB CHECK は ``category IS NULL OR category IN (8 values)`` の形で
-    NULL を許容。
-
-    'non_retryable_keep_curation' + briefing 用 'non_retryable' を含む 8 値。
-    """
+async def test_retryability_check_constraint(db_session: AsyncSession) -> None:
+    """retryability 列の CHECK 制約検証: 3 値 + NULL は OK、不正値は失敗。"""
     repo = PipelineEventRepository(db_session)
 
-    # NULL (category 引数省略) は OK — collection 系 stage の通常パス
     await repo.append(
         stage=Stage.DISPATCH,
         event_type=EventType.SKIPPED,
-        outcome_code="test_null_category",
+        outcome_code="test_null_retryability",
         payload=AcquisitionPayload(),
     )
     await db_session.commit()
 
-    # 6 値はすべて OK — article-bound analysis stages の正規パス
-    for cat in Layer1Category:
+    for retryability in Retryability:
         await repo.append(
             stage=Stage.CURATION,
             event_type=EventType.FAILED,
-            outcome_code=f"test_{cat.value}",
+            outcome_code=f"test_{retryability.value}",
             payload=AcquisitionPayload(),
-            category=cat,
+            retryability=retryability,
         )
     await db_session.commit()
 
-    # 不正値は IntegrityError (raw SQL で挿入を試みる)
     with pytest.raises(IntegrityError):
         await db_session.execute(
             text(
                 "INSERT INTO pipeline_events "
-                "(stage, event_type, outcome_code, category, attempt, payload) "
-                "VALUES ('curation', 'failed', 'test', 'invalid_value', 1, '{}')"
+                "(stage, event_type, outcome_code, retryability, payload) "
+                "VALUES ('curation', 'failed', 'test', 'invalid_value', '{}')"
             )
         )
     await db_session.rollback()

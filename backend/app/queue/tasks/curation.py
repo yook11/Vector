@@ -70,7 +70,6 @@ async def curate_content(
 
     svc = CurationService(session_factory)
     handler = CurationFailureHandler(session_factory)
-    attempt = int(ctx.message.labels.get("retry_count", 0)) + 1
 
     try:
         result = await svc.execute(ready, curator)
@@ -79,7 +78,6 @@ async def curate_content(
             ready=ready,
             exc=exc,
             curator=curator,
-            attempt=attempt,
             last_attempt=is_last_attempt(ctx),
         )
         if reraise:

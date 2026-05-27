@@ -716,7 +716,9 @@ async def test_success_writes_article_completed_audit(
     assert len(events) == 1
     assert events[0].event_type == "succeeded"
     assert events[0].outcome_code == "article_completed"
+    assert events[0].retryability is None
     assert events[0].article_id == article_id
+    assert events[0].payload["attempt_count"] == ready.attempt_count
 
 
 @pytest.mark.asyncio
@@ -757,7 +759,9 @@ async def test_url_conflict_writes_persist_url_conflict_audit(
     assert len(events) == 1
     assert events[0].event_type == "skipped"
     assert events[0].outcome_code == "persist_url_conflict"
+    assert events[0].retryability is None
     assert events[0].article_id is None
+    assert events[0].payload["attempt_count"] == ready.attempt_count
 
 
 @pytest.mark.asyncio
@@ -794,6 +798,8 @@ async def test_superseded_writes_persist_superseded_audit(
     assert len(events) == 1
     assert events[0].event_type == "skipped"
     assert events[0].outcome_code == "persist_superseded"
+    assert events[0].retryability is None
+    assert events[0].payload["attempt_count"] == ready.attempt_count
 
 
 @pytest.mark.asyncio
@@ -839,7 +845,11 @@ async def test_persist_db_exception_writes_persist_crashed_and_reraises(
     assert len(events) == 1
     assert events[0].event_type == "failed"
     assert events[0].outcome_code == "persist_crashed"
+    assert events[0].retryability == "unknown"
     assert events[0].error_class.endswith(".RuntimeError")
+    assert events[0].payload["attempt_count"] == ready.attempt_count
+    assert events[0].payload["failure_kind"] == "persist_crashed"
+    assert events[0].payload["failure_action"] is None
     # 状態は触られず running のまま (self-heal は lease 失効に委ねる)
     pending = (
         await db_session.execute(

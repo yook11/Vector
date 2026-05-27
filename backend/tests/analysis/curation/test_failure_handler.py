@@ -10,8 +10,8 @@
 - ``source_name`` が payload に保存される (FK 切断耐性)
 - ``CurationTerminalDropError`` (ACL ``map_provider_to_curation`` で
   ``AIProviderOutputBlockedError`` / ``AIProviderInputRejectedError`` から
-  詰め替えられる) で ``category='non_retryable_drop_article'`` /
-  ``code=exc.CODE`` / ``outcome_code=code`` (Phase A 同値) が記録される
+  詰め替えられる) で ``outcome_code`` / ``retryability`` /
+  payload failure attrs が記録される
 - 戻り値 ``False`` (Drop 経路は taskiq retry させない)
 """
 
@@ -82,7 +82,7 @@ async def test_output_blocked_writes_audit_then_deletes_article(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """AIProviderOutputBlockedError 経路で category/code が正しく記録される。"""
+    """AIProviderOutputBlockedError 経路で failure attrs が正しく記録される。"""
     article = await _make_article(db_session, sample_source)
     article_id = article.id
     # rollback 後の expired-attr lazy reload を避けるため事前に値を取り出す
@@ -101,7 +101,6 @@ async def test_output_blocked_writes_audit_then_deletes_article(
         ready=ready,
         exc=exc,
         curator=_curator_mock(),
-        attempt=1,
         last_attempt=False,
     )
 
@@ -125,8 +124,9 @@ async def test_output_blocked_writes_audit_then_deletes_article(
     ev = events[0]
     assert ev.event_type == "failed"
     assert ev.outcome_code == "ai_error_output_blocked"
-    assert ev.category == "non_retryable_drop_article"
-    assert ev.code == "ai_error_output_blocked"
+    assert ev.retryability == "non_retryable"
+    assert ev.payload["failure_kind"] == "terminal_drop"
+    assert ev.payload["failure_action"] == "drop_article"
     # SET NULL: article_id は NULL に
     assert ev.article_id is None
     # source_id は auto-resolve で埋まっている (DELETE 前に INSERT したため)
@@ -164,7 +164,6 @@ async def test_input_rejected_writes_audit_then_deletes_article(
         ready=ready,
         exc=exc,
         curator=_curator_mock(),
-        attempt=1,
         last_attempt=False,
     )
 
@@ -184,8 +183,9 @@ async def test_input_rejected_writes_audit_then_deletes_article(
     ev = events[0]
     assert ev.event_type == "failed"
     assert ev.outcome_code == "ai_error_input_rejected"
-    assert ev.category == "non_retryable_drop_article"
-    assert ev.code == "ai_error_input_rejected"
+    assert ev.retryability == "non_retryable"
+    assert ev.payload["failure_kind"] == "terminal_drop"
+    assert ev.payload["failure_action"] == "drop_article"
 
 
 # ---------------------------------------------------------------------------
@@ -225,7 +225,6 @@ async def test_terminal_keep_sets_curation_hold(
             ready=ready,
             exc=exc,
             curator=_curator_mock(),
-            attempt=1,
             last_attempt=False,
         )
 
@@ -233,7 +232,7 @@ async def test_terminal_keep_sets_curation_hold(
     set_hold.assert_awaited_once()
     # reason は失敗 code (exc.code 由来、provider 健全性問題の識別子)
     assert set_hold.await_args.kwargs["reason"] == exc.code
-    # failure audit は keep カテゴリで記録される (hold とは独立に必ず残す)
+    # failure audit は hold と独立に必ず残す
     await db_session.rollback()
     ev = (
         (
@@ -244,7 +243,10 @@ async def test_terminal_keep_sets_curation_hold(
         .scalars()
         .one()
     )
-    assert ev.category == "non_retryable_keep_article"
+    assert ev.outcome_code == "ai_error_configuration"
+    assert ev.retryability == "non_retryable"
+    assert ev.payload["failure_kind"] == "terminal_keep"
+    assert ev.payload["failure_action"] is None
     # caller pre-compute (build_curation_audit_input) が failure 経路でも走り、
     # 値が payload に焼かれる (best-effort try 内 pre-compute の保険)。
     assert ev.payload["input_content_length"] == expected_raw_length
@@ -273,7 +275,6 @@ async def test_recoverable_does_not_set_curation_hold(
             ready=ready,
             exc=exc,
             curator=_curator_mock(),
-            attempt=1,
             last_attempt=True,
         )
 

@@ -111,7 +111,6 @@ async def test_terminal_skip_delegates_to_handler() -> None:
     handler_handle.assert_awaited_once()
     kwargs = handler_handle.await_args.kwargs
     assert kwargs["exc"] is exc
-    assert kwargs["attempt"] == 1
     assert kwargs["last_attempt"] is False
 
 
@@ -145,7 +144,7 @@ async def test_recoverable_reraise_true_raises() -> None:
 async def test_recoverable_reraise_false_returns() -> None:
     """Handler が ``reraise=False`` を返したら task は return する (raise しない)。
 
-    最終 attempt のとき Handler は False を返す想定 (Stage 5 仕様)。本 test は
+    retry 上限到達 のとき Handler は False を返す想定 (Stage 5 仕様)。本 test は
     その経路で task が最後まで完走し、``last_attempt=True`` が Handler に渡る
     ことを確認する。
     """

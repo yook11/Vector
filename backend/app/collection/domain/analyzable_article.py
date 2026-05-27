@@ -108,18 +108,20 @@ class AnalyzableArticle(BaseModel):
         ``Self | None``) と異なり、構築不能の理由を ``QualityTooLow`` の証拠として
         返す。
 
-        ``title`` / ``body`` / ``published_at`` は ``... | None`` で受け、None は
-        厳格コンストラクタが ``ValueError`` で拒否し ``QualityTooLow`` に畳む。
-        published_at 欠落も title/body 長や source_id≤0 と同種の不変条件違反として
-        単一経路で扱う。
+        ``title`` / ``body`` / ``published_at`` は ``... | None`` で受け、
+        Pydantic の validation path で ``QualityTooLow`` に畳む。published_at
+        欠落も title/body 長や source_id≤0 と同種の不変条件違反として単一経路で
+        扱う。
         """
         try:
-            return cls(
-                title=title,
-                body=body,
-                published_at=published_at,
-                source_id=source_id,
-                source_url=source_url,
+            return cls.model_validate(
+                {
+                    "title": title,
+                    "body": body,
+                    "published_at": published_at,
+                    "source_id": source_id,
+                    "source_url": source_url,
+                }
             )
         except ValueError as e:
             return QualityTooLow(error_class=type(e).__name__, error_message=str(e))

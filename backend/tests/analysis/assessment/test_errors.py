@@ -101,9 +101,7 @@ class TestStage4MarkerHierarchy:
         assert AssessmentRecoverableError.RETRYABILITY is Retryability.RETRYABLE
         assert AssessmentRecoverableError.FAILURE_ACTION is None
         assert AssessmentTerminalSkipError.FAILURE_KIND == "terminal_skip"
-        assert (
-            AssessmentTerminalSkipError.RETRYABILITY is Retryability.NON_RETRYABLE
-        )
+        assert AssessmentTerminalSkipError.RETRYABILITY is Retryability.NON_RETRYABLE
         assert AssessmentTerminalSkipError.FAILURE_ACTION is None
 
 

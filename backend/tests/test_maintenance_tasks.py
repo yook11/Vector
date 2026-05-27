@@ -340,8 +340,8 @@ async def test_delete_aged_out_curations_deletes_old_child_null_and_audits(
     assert len(events) == 1
     ev = events[0]
     assert ev.event_type == "rejected"
-    assert ev.code == BACKFILL_CURATION_AGED_OUT_CODE
-    assert ev.category is None
+    assert ev.outcome_code == BACKFILL_CURATION_AGED_OUT_CODE
+    assert ev.retryability is None
     assert ev.article_id is None
     assert ev.payload["kind"] == "curation"
 

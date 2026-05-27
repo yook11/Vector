@@ -3,22 +3,23 @@
 audit row の shape SSoT が repository に集約されたことを検証する:
 
 - ``append_in_scope`` で
-  ``category=success`` + ``code="assessed_in_scope"`` + payload に
+  ``outcome_code="assessed_in_scope"`` + payload に
   ``category_slug`` / ``investor_take`` 詰まる
   (``category_slug`` は ``in_scope.category.value`` から Repository 内で導出、
   ``raw_category`` envelope 由来とは独立)
 - ``append_out_of_scope`` で
-  ``category=success`` + ``code="assessed_out_of_scope"`` + payload に
+  ``outcome_code="assessed_out_of_scope"`` + payload に
   ``investor_take`` が非 None
   (PR #447 対称化追従、in-scope 固有 field の ``category_slug`` のみ None)
 - ``append_failure`` で **exc 型による 3 dispatch + Layer 2-B + catch-all** が動作:
-  - ``AssessmentRecoverableError`` → ``category=retryable``
-  - ``AssessmentTerminalSkipError`` → ``category=non_retryable_keep_curation``
-  - ``AssessmentResponseInvalidError`` (Layer 2-B) → ``retryable`` /
-    ``code="assessment_response_invalid"``
+  - ``AssessmentRecoverableError`` → ``retryability=retryable``
+  - ``AssessmentTerminalSkipError`` → ``retryability=non_retryable``
+  - ``AssessmentResponseInvalidError`` (Layer 2-B) → ``retryability=retryable`` /
+    ``outcome_code="assessment_response_invalid"``
   - ``AssessmentCategoryMissingError`` (Layer 2-B) →
-    ``non_retryable_keep_curation`` / ``code="assessment_category_missing"``
-  - 想定外 ``RuntimeError`` → ``category=unknown`` / ``code="unexpected_error"``
+    ``retryability=non_retryable`` / ``outcome_code="assessment_category_missing"``
+  - 想定外 ``RuntimeError`` → ``retryability=unknown`` /
+    ``outcome_code="unexpected_error"``
 - ``error_chain`` が ``__cause__`` 経由で 2 段以上を記録
 - ``error_message`` が ``redact_secrets()`` 経由
 - ``ai_raw_response`` が成功・失敗両経路で ``[:_AI_RAW_RESPONSE_LIMIT]`` 切詰
@@ -222,7 +223,7 @@ async def test_append_in_scope_records_success_with_code(
     sample_source: NewsSource,
     sample_categories: list[Category],
 ) -> None:
-    """category=success / code=assessed_in_scope と payload の主要 field を確認。"""
+    """succeeded / outcome_code=assessed_in_scope と payload の主要 field を確認。"""
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
     await _persist_in_scope(db_session, extraction, sample_categories[0])
@@ -237,8 +238,7 @@ async def test_append_in_scope_records_success_with_code(
     ev = await _fetch_one(db_session, article.id)
     assert ev.event_type == "succeeded"
     assert ev.outcome_code == "assessed_in_scope"
-    assert ev.category == "success"
-    assert ev.code == "assessed_in_scope"
+    assert ev.retryability is None
     assert ev.payload["curation_id"] == extraction.id
     assert ev.payload["investor_take"] == "bullish"
     assert ev.payload["ai_model"] == _AI_MODEL
@@ -392,7 +392,7 @@ async def test_append_out_of_scope_records_success_with_code(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """category=success / code=assessed_out_of_scope。"""
+    """succeeded / outcome_code=assessed_out_of_scope。"""
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
     await _persist_out_of_scope(db_session, extraction)
@@ -407,8 +407,7 @@ async def test_append_out_of_scope_records_success_with_code(
     ev = await _fetch_one(db_session, article.id)
     assert ev.event_type == "succeeded"
     assert ev.outcome_code == "assessed_out_of_scope"
-    assert ev.category == "success"
-    assert ev.code == "assessed_out_of_scope"
+    assert ev.retryability is None
 
 
 @pytest.mark.asyncio
@@ -450,7 +449,7 @@ async def test_append_failure_recoverable_maps_to_retryable(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """AssessmentRecoverableError → category=retryable / code=instance attr。"""
+    """AssessmentRecoverableError → retryable / outcome_code=instance attr。"""
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
     exc = AssessmentRecoverableError(code="ai_error_network")
@@ -459,15 +458,15 @@ async def test_append_failure_recoverable_maps_to_retryable(
         await AssessmentAuditRepository(session).append_failure(
             ready=_ready(extraction),
             exc=exc,
-            attempt=1,
         )
         await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
     assert ev.event_type == "failed"
-    assert ev.category == "retryable"
-    assert ev.code == "ai_error_network"
     assert ev.outcome_code == "ai_error_network"
+    assert ev.retryability == "retryable"
+    assert ev.payload["failure_kind"] == "recoverable"
+    assert ev.payload["failure_action"] is None
 
 
 @pytest.mark.asyncio
@@ -476,11 +475,7 @@ async def test_append_failure_terminal_skip_maps_to_keep_curation(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """AssessmentTerminalSkipError → category=non_retryable_keep_curation。
-
-    Stage 4 の意図的命名差: curation は捨てない、article 保持の最も
-    保守的な category。
-    """
+    """AssessmentTerminalSkipError → non_retryable / terminal_skip。"""
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
     exc = AssessmentTerminalSkipError(code="ai_error_input_rejected")
@@ -489,13 +484,14 @@ async def test_append_failure_terminal_skip_maps_to_keep_curation(
         await AssessmentAuditRepository(session).append_failure(
             ready=_ready(extraction),
             exc=exc,
-            attempt=1,
         )
         await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
-    assert ev.category == "non_retryable_keep_curation"
-    assert ev.code == "ai_error_input_rejected"
+    assert ev.outcome_code == "ai_error_input_rejected"
+    assert ev.retryability == "non_retryable"
+    assert ev.payload["failure_kind"] == "terminal_skip"
+    assert ev.payload["failure_action"] is None
 
 
 @pytest.mark.asyncio
@@ -516,13 +512,14 @@ async def test_append_failure_layer_2b_response_invalid(
         await AssessmentAuditRepository(session).append_failure(
             ready=_ready(extraction),
             exc=exc,
-            attempt=1,
         )
         await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
-    assert ev.category == "retryable"
-    assert ev.code == "assessment_response_invalid"
+    assert ev.outcome_code == "assessment_response_invalid"
+    assert ev.retryability == "retryable"
+    assert ev.payload["failure_kind"] == "recoverable"
+    assert ev.payload["failure_action"] is None
 
 
 @pytest.mark.asyncio
@@ -532,7 +529,7 @@ async def test_append_failure_layer_2b_category_missing(
     sample_source: NewsSource,
 ) -> None:
     """Layer 2-B AssessmentCategoryMissingError は TerminalSkip 継承で
-    category=non_retryable_keep_curation にマップされる。
+    non_retryable / terminal_skip にマップされる。
     """
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
@@ -542,13 +539,14 @@ async def test_append_failure_layer_2b_category_missing(
         await AssessmentAuditRepository(session).append_failure(
             ready=_ready(extraction),
             exc=exc,
-            attempt=1,
         )
         await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
-    assert ev.category == "non_retryable_keep_curation"
-    assert ev.code == "assessment_category_missing"
+    assert ev.outcome_code == "assessment_category_missing"
+    assert ev.retryability == "non_retryable"
+    assert ev.payload["failure_kind"] == "terminal_skip"
+    assert ev.payload["failure_action"] is None
 
 
 @pytest.mark.asyncio
@@ -557,62 +555,72 @@ async def test_append_failure_unknown_exception_maps_to_unknown(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """非 marker exception は category=unknown / code=unexpected_error。"""
+    """非 marker exception は unknown / outcome_code=unexpected_error。"""
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
     exc = RuntimeError("boom")
 
     async with session_factory() as session:
-        await AssessmentAuditRepository(session).append_failure(
+        await AssessmentAuditRepository(session).append_unexpected_failure(
             ready=_ready(extraction),
             exc=exc,
-            attempt=1,
         )
         await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
-    assert ev.category == "unknown"
-    assert ev.code == "unexpected_error"
+    assert ev.outcome_code == "unexpected_error"
+    assert ev.retryability == "unknown"
+    assert ev.payload["failure_kind"] == "unknown"
+    assert ev.payload["failure_action"] is None
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("exc_factory", "expected_category", "expected_code"),
+    (
+        "exc_factory",
+        "expected_outcome_code",
+        "expected_retryability",
+        "expected_failure_kind",
+    ),
     [
         # 外部 DB 例外は classify_db_error adapter で意味ラベルに分類される
-        # (SQLAlchemy が振る .code=gkpj 等を拾わない)。Stage 4 の KEEP は
-        # NON_RETRYABLE_KEEP_CURATION。
+        # (SQLAlchemy が振る .code=gkpj 等を拾わない)。
         (
             lambda: OperationalError("SELECT 1", {}, Exception("conn reset")),
-            "retryable",
             "db_runtime_error",
+            "retryable",
+            "db_runtime",
         ),
         (
             lambda: IntegrityError("INSERT", {}, Exception("unique violation")),
-            "non_retryable_keep_curation",
             "db_constraint_error",
+            "non_retryable",
+            "db_constraint",
         ),
         (
             lambda: ProgrammingError("SELECT bad", {}, Exception("no such column")),
-            "non_retryable_keep_curation",
             "db_query_or_schema_error",
+            "non_retryable",
+            "db_query_or_schema",
         ),
         (
             lambda: InvalidRequestError("detached instance"),
-            "unknown",
             "db_unknown_error",
+            "unknown",
+            "db_unknown",
         ),
     ],
 )
-async def test_append_failure_classifies_db_exceptions(
+async def test_append_failure_projects_db_exceptions(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
     exc_factory: object,
-    expected_category: str,
-    expected_code: str,
+    expected_outcome_code: str,
+    expected_retryability: str,
+    expected_failure_kind: str,
 ) -> None:
-    """SQLAlchemy DB 例外を意味ラベルに分類して焼く (gkpj 誤取得の撲滅)。"""
+    """SQLAlchemy DB 例外を failure projection に分類する。"""
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
     exc = exc_factory()  # type: ignore[operator]
@@ -621,14 +629,14 @@ async def test_append_failure_classifies_db_exceptions(
         await AssessmentAuditRepository(session).append_failure(
             ready=_ready(extraction),
             exc=exc,
-            attempt=1,
         )
         await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
-    assert ev.category == expected_category
-    assert ev.code == expected_code
-    assert ev.outcome_code == expected_code  # Phase A: outcome_code = code
+    assert ev.outcome_code == expected_outcome_code
+    assert ev.retryability == expected_retryability
+    assert ev.payload["failure_kind"] == expected_failure_kind
+    assert ev.payload["failure_action"] is None
 
 
 @pytest.mark.asyncio
@@ -655,7 +663,6 @@ async def test_append_failure_walks_error_chain_via_cause(
             await AssessmentAuditRepository(session).append_failure(
                 ready=_ready(extraction),
                 exc=exc,
-                attempt=1,
             )
             await session.commit()
 
@@ -682,10 +689,9 @@ async def test_append_failure_redacts_secrets_in_error_message(
     )
 
     async with session_factory() as session:
-        await AssessmentAuditRepository(session).append_failure(
+        await AssessmentAuditRepository(session).append_unexpected_failure(
             ready=_ready(extraction),
             exc=exc,
-            attempt=1,
         )
         await session.commit()
 
@@ -708,39 +714,15 @@ async def test_append_failure_truncates_raw_response_attr(
     exc.raw_response = "x" * 5000
 
     async with session_factory() as session:
-        await AssessmentAuditRepository(session).append_failure(
+        await AssessmentAuditRepository(session).append_unexpected_failure(
             ready=_ready(extraction),
             exc=exc,
-            attempt=1,
         )
         await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
     assert ev.payload["ai_raw_response"] is not None
     assert len(ev.payload["ai_raw_response"]) == 2048
-
-
-@pytest.mark.asyncio
-async def test_append_failure_records_attempt(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-    sample_source: NewsSource,
-) -> None:
-    """任意 marker / attempt=3 → pipeline_events.attempt == 3。"""
-    article = await _make_article(db_session, sample_source)
-    extraction = await _make_extraction(db_session, article)
-    exc = AssessmentRecoverableError(code="ai_error_network")
-
-    async with session_factory() as session:
-        await AssessmentAuditRepository(session).append_failure(
-            ready=_ready(extraction),
-            exc=exc,
-            attempt=3,
-        )
-        await session.commit()
-
-    ev = await _fetch_one(db_session, article.id)
-    assert ev.attempt == 3
 
 
 @pytest.mark.asyncio
@@ -758,10 +740,9 @@ async def test_append_failure_records_curation_id_in_payload(
     exc = RuntimeError("boom")
 
     async with session_factory() as session:
-        await AssessmentAuditRepository(session).append_failure(
+        await AssessmentAuditRepository(session).append_unexpected_failure(
             ready=_ready(extraction),
             exc=exc,
-            attempt=1,
         )
         await session.commit()
 

@@ -3,7 +3,7 @@
 Stage 5 も内容起因 DELETE 経路を持たないため、検証する性質は:
 
 - TerminalSkip / Recoverable / catch-all の各 marker で audit row が正しい
-  ``category`` / ``code`` / ``outcome_code`` で記録される
+  ``outcome_code`` / ``retryability`` / payload failure attrs で記録される
 - ``last_attempt`` flag で raise/return が分岐する (Recoverable / catch-all)
 - audit Repository が raise しても task は落ちず ``embedding_failure_audit_dropped``
   構造ログにフォールバックする (business / audit exception の secret prefix
@@ -86,8 +86,7 @@ async def test_terminal_skip_writes_audit_and_returns_false(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """TerminalSkip → ``category='non_retryable_keep_curation'`` / ``code=exc.code``
-    の audit + ``reraise=False``。"""
+    """TerminalSkip → non-retryable failure audit + ``reraise=False``。"""
     article = await _make_article(db_session, sample_source)
     # rollback 後の expired-attr lazy reload を避けるため事前に値を取り出す
     article_id = article.id
@@ -95,7 +94,7 @@ async def test_terminal_skip_writes_audit_and_returns_false(
     handler = EmbeddingFailureHandler(session_factory)
 
     exc = EmbeddingTerminalSkipError(code="ai_error_configuration")
-    reraise = await handler.handle(ready=ready, exc=exc, attempt=1, last_attempt=False)
+    reraise = await handler.handle(ready=ready, exc=exc, last_attempt=False)
 
     assert reraise is False
     await db_session.rollback()
@@ -103,9 +102,10 @@ async def test_terminal_skip_writes_audit_and_returns_false(
     assert len(events) == 1
     ev = events[0]
     assert ev.event_type == "failed"
-    assert ev.category == "non_retryable_keep_curation"
-    assert ev.code == "ai_error_configuration"
     assert ev.outcome_code == "ai_error_configuration"
+    assert ev.retryability == "non_retryable"
+    assert ev.payload["failure_kind"] == "terminal_skip"
+    assert ev.payload["failure_action"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -119,14 +119,14 @@ async def test_recoverable_with_retry_budget_writes_audit_and_returns_true(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """Recoverable + retry 余地あり → category='retryable' audit + reraise=True。"""
+    """Recoverable + retry 余地あり → retryable audit + reraise=True。"""
     article = await _make_article(db_session, sample_source)
     article_id = article.id
     ready = _ready_for(article_id)
     handler = EmbeddingFailureHandler(session_factory)
 
     exc = EmbeddingRecoverableError(code="ai_error_network")
-    reraise = await handler.handle(ready=ready, exc=exc, attempt=1, last_attempt=False)
+    reraise = await handler.handle(ready=ready, exc=exc, last_attempt=False)
 
     assert reraise is True
     await db_session.rollback()
@@ -134,8 +134,10 @@ async def test_recoverable_with_retry_budget_writes_audit_and_returns_true(
     assert len(events) == 1
     ev = events[0]
     assert ev.event_type == "failed"
-    assert ev.category == "retryable"
-    assert ev.code == "ai_error_network"
+    assert ev.outcome_code == "ai_error_network"
+    assert ev.retryability == "retryable"
+    assert ev.payload["failure_kind"] == "recoverable"
+    assert ev.payload["failure_action"] is None
 
 
 @pytest.mark.asyncio
@@ -144,20 +146,21 @@ async def test_recoverable_last_attempt_writes_audit_and_returns_false(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """Recoverable + 最終 attempt → audit + ``reraise=False``。"""
+    """Recoverable + retry 上限到達 → audit + ``reraise=False``。"""
     article = await _make_article(db_session, sample_source)
     article_id = article.id
     ready = _ready_for(article_id)
     handler = EmbeddingFailureHandler(session_factory)
 
     exc = EmbeddingRecoverableError(code="ai_error_network")
-    reraise = await handler.handle(ready=ready, exc=exc, attempt=3, last_attempt=True)
+    reraise = await handler.handle(ready=ready, exc=exc, last_attempt=True)
 
     assert reraise is False
     await db_session.rollback()
     events = await _fetch_embedding_events(db_session, article_id)
     assert len(events) == 1
-    assert events[0].category == "retryable"
+    assert events[0].retryability == "retryable"
+    assert events[0].payload["failure_kind"] == "recoverable"
 
 
 # ---------------------------------------------------------------------------
@@ -171,23 +174,24 @@ async def test_unexpected_with_retry_budget_writes_audit_and_returns_true(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """catch-all + retry 余地あり → ``category='unknown'`` / ``code='unexpected_error'``
-    audit + ``reraise=True``。"""
+    """catch-all + retry 余地あり → unknown audit + ``reraise=True``。"""
     article = await _make_article(db_session, sample_source)
     article_id = article.id
     ready = _ready_for(article_id)
     handler = EmbeddingFailureHandler(session_factory)
 
     exc = ValueError("surprise")
-    reraise = await handler.handle(ready=ready, exc=exc, attempt=1, last_attempt=False)
+    reraise = await handler.handle(ready=ready, exc=exc, last_attempt=False)
 
     assert reraise is True
     await db_session.rollback()
     events = await _fetch_embedding_events(db_session, article_id)
     assert len(events) == 1
     ev = events[0]
-    assert ev.category == "unknown"
-    assert ev.code == "unexpected_error"
+    assert ev.outcome_code == "unexpected_error"
+    assert ev.retryability == "unknown"
+    assert ev.payload["failure_kind"] == "unknown"
+    assert ev.payload["failure_action"] is None
 
 
 @pytest.mark.asyncio
@@ -196,20 +200,21 @@ async def test_unexpected_last_attempt_writes_audit_and_returns_false(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """catch-all + 最終 attempt → audit + ``reraise=False``。"""
+    """catch-all + retry 上限到達 → audit + ``reraise=False``。"""
     article = await _make_article(db_session, sample_source)
     article_id = article.id
     ready = _ready_for(article_id)
     handler = EmbeddingFailureHandler(session_factory)
 
     exc = ValueError("surprise")
-    reraise = await handler.handle(ready=ready, exc=exc, attempt=3, last_attempt=True)
+    reraise = await handler.handle(ready=ready, exc=exc, last_attempt=True)
 
     assert reraise is False
     await db_session.rollback()
     events = await _fetch_embedding_events(db_session, article_id)
     assert len(events) == 1
-    assert events[0].category == "unknown"
+    assert events[0].retryability == "unknown"
+    assert events[0].payload["failure_kind"] == "unknown"
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +254,7 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
         )
         # handler は落ちずに完走 (TerminalSkip → reraise=False)
         reraise = await handler.handle(
-            ready=ready, exc=business_exc, attempt=1, last_attempt=False
+            ready=ready, exc=business_exc, last_attempt=False
         )
 
     assert reraise is False
@@ -257,7 +262,6 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
     assert drops, "fallback ログが emit されていない"
     drop = drops[-1]
     assert drop["analysis_id"] == ready.analysis_id
-    assert drop["attempt"] == 1
     assert drop["business_error_class"].endswith(".EmbeddingTerminalSkipError")
     assert drop["audit_error_class"].endswith(".RuntimeError")
     # business: Phase 4 で __str__ が SAFE_ATTRS のみになり、secret が原理上

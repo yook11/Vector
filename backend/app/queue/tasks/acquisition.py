@@ -158,7 +158,6 @@ async def acquire_source(
             source_id=source_id,
             source_name=arg.name,
             exc=exc,
-            attempt=1,
         )
         if reraise:
             raise

@@ -10,9 +10,9 @@ Function Calling + ``strict: true`` + inline flat schema で構造化出力を�
   (``app/insights/briefing/domain/briefing.py``)。
 
 例外:
-- OpenAI SDK 例外 (RateLimitError / APIStatusError / 等) はそのまま伝播させ、
-  taskiq の retry / failure tracking に委ねる (`feedback_failure_visibility.md`)
-- API key 未設定のみ ``BriefingConfigurationError`` で fail-fast
+- OpenAI SDK 例外は ``BriefingLlmError`` に wrap して stage marker として伝播
+- 応答 schema 不一致は ``BriefingResponseInvalidError`` に wrap
+- API key 未設定は ``BriefingConfigurationError`` で fail-fast
 """
 
 from __future__ import annotations
@@ -20,14 +20,20 @@ from __future__ import annotations
 from datetime import date
 from typing import Any, ClassVar, Final
 
+import openai
 import structlog
 from openai import AsyncOpenAI
+from pydantic import ValidationError
 
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 from app.config import settings
 from app.insights.briefing.domain.article import ArticleInput
 from app.insights.briefing.domain.briefing import WeeklyBriefingContent
-from app.insights.briefing.llm.errors import BriefingConfigurationError
+from app.insights.briefing.llm.errors import (
+    BriefingConfigurationError,
+    BriefingLlmError,
+    BriefingResponseInvalidError,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -142,8 +148,8 @@ class DeepSeekBriefingGenerator:
         """指定カテゴリの週次 briefing を 1 回の API 呼出で生成する。
 
         Raises:
-            OpenAI SDK 例外: そのまま伝播 (taskiq の retry/failure tracking 対象)
-            ValidationError: schema 不一致 / article_ids ハルシネーション
+            BriefingLlmError: OpenAI SDK 例外を stage marker に wrap。
+            BriefingResponseInvalidError: schema 不一致 / article_ids ハルシネーション。
         """
         prompt = BRIEFING_PROMPT.format(
             category_name=category_name,
@@ -158,28 +164,31 @@ class DeepSeekBriefingGenerator:
             week_start=week_start.isoformat(),
             article_count=len(articles),
         )
-        resp = await self._client.chat.completions.create(
-            model=self.MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            tools=[
-                {
-                    "type": "function",
-                    "function": {
-                        "name": _TOOL_NAME,
-                        "strict": True,
-                        "description": (
-                            "1 カテゴリ × 1 週の業界週次 briefing を提出する"
-                        ),
-                        "parameters": BRIEFING_TOOL_SCHEMA,
-                    },
-                }
-            ],
-            tool_choice={"type": "function", "function": {"name": _TOOL_NAME}},
-            # DeepSeek-V4 Pro は thinking モードで起動すると tool_choice と衝突
-            # して 400 になる (内部的に reasoner 系として扱われるため)。Stage 2
-            # 分類器と同じく thinking を明示無効化する。
-            extra_body={"thinking": {"type": "disabled"}},
-        )
+        try:
+            resp = await self._client.chat.completions.create(
+                model=self.MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                tools=[
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": _TOOL_NAME,
+                            "strict": True,
+                            "description": (
+                                "1 カテゴリ × 1 週の業界週次 briefing を提出する"
+                            ),
+                            "parameters": BRIEFING_TOOL_SCHEMA,
+                        },
+                    }
+                ],
+                tool_choice={"type": "function", "function": {"name": _TOOL_NAME}},
+                # DeepSeek-V4 Pro は thinking モードで起動すると tool_choice と衝突
+                # して 400 になる (内部的に reasoner 系として扱われるため)。Stage 2
+                # 分類器と同じく thinking を明示無効化する。
+                extra_body={"thinking": {"type": "disabled"}},
+            )
+        except openai.APIError as exc:
+            raise BriefingLlmError(provider_error=exc) from exc
         choice = resp.choices[0]
         tool_calls = choice.message.tool_calls or []
         if not tool_calls or tool_calls[0].function.name != _TOOL_NAME:
@@ -188,10 +197,13 @@ class DeepSeekBriefingGenerator:
                 f"(finish_reason={choice.finish_reason})"
             )
         input_ids = {a.id for a in articles}
-        return WeeklyBriefingContent.model_validate_json(
-            tool_calls[0].function.arguments,
-            context={"input_ids": input_ids},
-        )
+        try:
+            return WeeklyBriefingContent.model_validate_json(
+                tool_calls[0].function.arguments,
+                context={"input_ids": input_ids},
+            )
+        except ValidationError as exc:
+            raise BriefingResponseInvalidError() from exc
 
     @staticmethod
     def _format_articles(articles: list[ArticleInput]) -> str:

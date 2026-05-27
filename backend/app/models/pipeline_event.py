@@ -20,7 +20,6 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
-    SmallInteger,
     String,
     func,
     text,
@@ -53,20 +52,9 @@ class PipelineEvent(Base):
             name="ck_pipeline_events_event_type",
         ),
         CheckConstraint(
-            # 'non_retryable_keep_curation': assessment / embedding が回復不能でも
-            # curation 結果は保存維持する用途 (TerminalSkip dispatch)。
-            # 'non_retryable': briefing 用、entity 固有後処理なしの汎用 non-retry。
-            "category IS NULL OR category IN ("
-            "'success','idempotent_skip','retryable',"
-            "'non_retryable_drop_article','non_retryable_keep_article',"
-            "'non_retryable_keep_curation','non_retryable',"
-            "'unknown'"
-            ")",
-            name="ck_pipeline_events_category",
-        ),
-        CheckConstraint(
-            "attempt >= 1",
-            name="ck_pipeline_events_attempt_positive",
+            "retryability IS NULL OR retryability IN "
+            "('retryable','non_retryable','unknown')",
+            name="ck_pipeline_events_retryability",
         ),
         CheckConstraint(
             "duration_ms IS NULL OR duration_ms >= 0",
@@ -114,8 +102,7 @@ class PipelineEvent(Base):
     stage: Mapped[str] = mapped_column(String(40), nullable=False)
     event_type: Mapped[str] = mapped_column(String(20), nullable=False)
     outcome_code: Mapped[str] = mapped_column(String(60), nullable=False)
-    category: Mapped[str | None] = mapped_column(String(40), nullable=True)
-    code: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    retryability: Mapped[str | None] = mapped_column(String(20), nullable=True)
     source_id: Mapped[int | None] = mapped_column(
         Integer,
         ForeignKey("news_sources.id", ondelete="SET NULL"),
@@ -125,9 +112,6 @@ class PipelineEvent(Base):
         Integer,
         ForeignKey("articles.id", ondelete="SET NULL"),
         nullable=True,
-    )
-    attempt: Mapped[int] = mapped_column(
-        SmallInteger, nullable=False, server_default=text("1")
     )
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error_class: Mapped[str | None] = mapped_column(String(160), nullable=True)

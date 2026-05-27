@@ -1,3 +1,7 @@
+> **HISTORICAL NOTE (Scope 6)**: このファイルは現行の失敗属性契約より前の
+> 実装仕様。旧分類 enum / 旧 top-level 監査列への参照は履歴としてのみ読む。
+> 現行契約は `pipeline-events-failure-attribute-projection.md` を正本とする。
+
 # pipeline_events Stage 3 (Extraction) — 実装仕様
 
 Stage 3 (extraction) の error taxonomy / audit 永続化 / Task 層 dispatch の

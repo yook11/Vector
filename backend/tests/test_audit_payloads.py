@@ -1,24 +1,24 @@
 """``app.audit.domain.payloads`` の単体テスト。
 
-field schema を検証する:
-
-- ``AcquisitionPayload``: failure path 専用 (fetcher_class + HTTP snapshot 系)。
-  成功側 audit (件数 / breakdown 集計) は撤去済。
-- ``CompletionPayload``: ``canonical_url`` field
-- ``BasePipelineEventPayload``: ``extra="ignore"`` で未知 field を drop
-  (rolling deploy 中に新 publisher → 旧 worker の読戻しを爆発させない)
+field schema と payload field の所有権を検証する。
 """
 
 from __future__ import annotations
 
 from app.audit.domain.payloads import (
     AcquisitionPayload,
+    AssessmentPayload,
+    BasePipelineEventPayload,
+    BriefingPayload,
     CompletionPayload,
+    CurationPayload,
+    DispatchPayload,
+    EmbeddingPayload,
 )
 
 
 class TestAcquisitionPayloadFailureSnapshot:
-    """failure path で使う fetcher_class + HTTP snapshot 系 field。"""
+    """acquisition failure snapshot field。"""
 
     def test_defaults_are_none(self) -> None:
         payload = AcquisitionPayload()
@@ -28,6 +28,8 @@ class TestAcquisitionPayloadFailureSnapshot:
         assert payload.response_size is None
         assert payload.content_type is None
         assert payload.body_head is None
+        assert payload.failure_kind is None
+        assert payload.failure_action is None
 
     def test_http_snapshot_fields_can_be_set(self) -> None:
         payload = AcquisitionPayload(
@@ -45,12 +47,21 @@ class TestAcquisitionPayloadFailureSnapshot:
         assert payload.content_type == "text/html"
         assert payload.body_head == "Forbidden"
 
+    def test_failure_attribute_fields_can_be_set(self) -> None:
+        payload = AcquisitionPayload(
+            failure_kind="external_fetch",
+            failure_action=None,
+        )
+        dumped = payload.model_dump(mode="json")
+        assert dumped["failure_kind"] == "external_fetch"
+        assert dumped["failure_action"] is None
+
 
 class TestAcquisitionPayloadConversionFields:
     """per-entry 変換棄却 (REJECTED) 用 ``conversion_*`` 構造化列。"""
 
     def test_conversion_fields_default_none(self) -> None:
-        """全 optional default None — 既存 failure payload 組立に無回帰。"""
+        """全 optional field の default は None。"""
         payload = AcquisitionPayload()
         assert payload.conversion_analyzable_reason is None
         assert payload.conversion_observed_reason is None
@@ -80,7 +91,7 @@ class TestAcquisitionPayloadConversionFields:
 
 
 class TestCompletionPayloadAuditKeys:
-    """``CompletionPayload`` の集計 key field 不変条件 (PR-E dual-fill)。"""
+    """``CompletionPayload`` の key field 不変条件。"""
 
     def test_canonical_url_field_exists(self) -> None:
         payload = CompletionPayload(canonical_url="https://example.com/a")
@@ -89,6 +100,23 @@ class TestCompletionPayloadAuditKeys:
     def test_canonical_url_defaults_none(self) -> None:
         payload = CompletionPayload()
         assert payload.canonical_url is None
+        assert payload.attempt_count is None
+        assert payload.failure_kind is None
+        assert payload.failure_action is None
+
+    def test_attempt_count_field_can_be_set(self) -> None:
+        payload = CompletionPayload(attempt_count=3)
+        dumped = payload.model_dump(mode="json")
+        assert dumped["attempt_count"] == 3
+
+    def test_failure_attribute_fields_can_be_set(self) -> None:
+        payload = CompletionPayload(
+            failure_kind="external_fetch",
+            failure_action=None,
+        )
+        dumped = payload.model_dump(mode="json")
+        assert dumped["failure_kind"] == "external_fetch"
+        assert dumped["failure_action"] is None
 
     def test_unknown_field_dropped_silently(self) -> None:
         """未知 field は ``extra="ignore"`` で silent drop される。
@@ -129,9 +157,48 @@ class TestPayloadJsonSerialization:
     def test_completion_roundtrip(self) -> None:
         original = CompletionPayload(
             canonical_url="https://example.com/article/round",
+            attempt_count=2,
             scraper_class="ArticleScraper",
             body_length=12345,
         )
         dumped = original.model_dump(mode="json")
         restored = CompletionPayload.model_validate(dumped)
         assert restored == original
+
+
+class TestPayloadFieldOwnership:
+    """top-level column にしない stage-local field の所有権を固定する。"""
+
+    def test_failure_attributes_are_stage_payload_fields(self) -> None:
+        stage_payloads = (
+            AcquisitionPayload,
+            CompletionPayload,
+            CurationPayload,
+            AssessmentPayload,
+            EmbeddingPayload,
+            BriefingPayload,
+        )
+        for payload_cls in stage_payloads:
+            assert "failure_kind" in payload_cls.model_fields
+            assert "failure_action" in payload_cls.model_fields
+
+        assert "failure_kind" not in BasePipelineEventPayload.model_fields
+        assert "failure_action" not in BasePipelineEventPayload.model_fields
+        assert "failure_kind" not in DispatchPayload.model_fields
+        assert "failure_action" not in DispatchPayload.model_fields
+
+    def test_only_completion_payload_owns_attempt_count(self) -> None:
+        assert "attempt_count" in CompletionPayload.model_fields
+
+        payloads_without_attempt_count = (
+            BasePipelineEventPayload,
+            DispatchPayload,
+            AcquisitionPayload,
+            CurationPayload,
+            AssessmentPayload,
+            EmbeddingPayload,
+            BriefingPayload,
+        )
+        for payload_cls in payloads_without_attempt_count:
+            assert "attempt_count" not in payload_cls.model_fields
+            assert "retry_attempt" not in payload_cls.model_fields

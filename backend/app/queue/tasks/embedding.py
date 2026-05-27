@@ -86,7 +86,6 @@ async def generate_embedding(
 
     svc = EmbeddingService(session_factory)
     handler = EmbeddingFailureHandler(session_factory)
-    attempt = int(ctx.message.labels.get("retry_count", 0)) + 1
 
     try:
         await svc.execute(ready, embedder)
@@ -94,7 +93,6 @@ async def generate_embedding(
         reraise = await handler.handle(
             ready=ready,
             exc=exc,
-            attempt=attempt,
             last_attempt=is_last_attempt(ctx),
         )
         if reraise:

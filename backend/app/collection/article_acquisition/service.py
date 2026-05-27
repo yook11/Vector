@@ -156,7 +156,6 @@ class ArticleAcquisitionService:
                 ).append_conversion_rejected(
                     source_id=source_id,
                     exc=rej.error,
-                    attempt=1,
                 )
                 await audit_session.commit()
         except Exception as audit_exc:

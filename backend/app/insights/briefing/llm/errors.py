@@ -1,11 +1,4 @@
-"""Briefing LLM 呼出の最小エラー階層。
-
-設計方針:
-- 詳細な ``_translate_error`` 多階層分類は briefing では不要
-  (`feedback_failure_visibility.md`): OpenAI SDK 例外はそのまま raise し、
-  taskiq の retry / failure tracking に判断を委ねる
-- ``BriefingConfigurationError`` だけ用意し、API key 欠落は fail-fast
-"""
+"""Briefing LLM 呼出の stage marker 例外。"""
 
 from __future__ import annotations
 
@@ -28,3 +21,30 @@ class BriefingConfigurationError(BriefingError):
     FAILURE_KIND: ClassVar[str] = "configuration"
     RETRYABILITY: ClassVar[Retryability] = Retryability.NON_RETRYABLE
     FAILURE_ACTION: ClassVar[FailureAction | None] = None
+
+
+class BriefingLlmError(BriefingError):
+    """LLM provider 呼出由来の一時失敗。"""
+
+    CODE: ClassVar[str] = "briefing_llm_error"
+    FAILURE_KIND: ClassVar[str] = "llm_error"
+    RETRYABILITY: ClassVar[Retryability] = Retryability.RETRYABLE
+    FAILURE_ACTION: ClassVar[FailureAction | None] = None
+
+    provider_error: BaseException
+
+    def __init__(self, *, provider_error: BaseException) -> None:
+        super().__init__(str(provider_error) or self.CODE)
+        self.provider_error = provider_error
+
+
+class BriefingResponseInvalidError(BriefingError):
+    """LLM 応答が briefing schema / article id 制約に合致しない。"""
+
+    CODE: ClassVar[str] = "briefing_response_invalid"
+    FAILURE_KIND: ClassVar[str] = "response_invalid"
+    RETRYABILITY: ClassVar[Retryability] = Retryability.NON_RETRYABLE
+    FAILURE_ACTION: ClassVar[FailureAction | None] = None
+
+    def __init__(self) -> None:
+        super().__init__(self.CODE)

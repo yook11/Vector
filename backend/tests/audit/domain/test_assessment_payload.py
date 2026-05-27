@@ -79,8 +79,10 @@ def test_frozen_immutable() -> None:
 def test_state_fields_optional_default_none() -> None:
     """``kind`` 以外の全 field が default ``None`` (state 未指定構築可)。"""
     payload = AssessmentPayload()
-    # 10 field (kind 除く) すべて None
+    # ``kind`` 以外の optional field はすべて None
     assert payload.source_name is None
+    assert payload.failure_kind is None
+    assert payload.failure_action is None
     assert payload.error_message is None
     assert payload.error_chain is None
     assert payload.curation_id is None

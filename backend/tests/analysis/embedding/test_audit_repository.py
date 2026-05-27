@@ -3,18 +3,18 @@
 audit row の shape SSoT が repository に集約されたことを検証する:
 
 - ``append_success`` で
-  ``category=success`` + ``code="embedding_completed"`` + payload に
+  ``outcome_code="embedding_completed"`` + payload に
   ``embedding_model`` / ``vector_dimension`` が embedder から取得されている
 - ``append_failure`` で **exc 型による 2 dispatch + Layer 2-B + catch-all** が動作:
-  - ``EmbeddingRecoverableError`` → ``category=retryable``
-  - ``EmbeddingTerminalSkipError`` → ``category=non_retryable_keep_curation``
-  - ``EmbeddingResponseInvalidError`` (Layer 2-B) → ``retryable`` /
-    ``code="embedding_response_invalid"``
-  - 想定外 ``RuntimeError`` → ``category=unknown`` / ``code="unexpected_error"``
+  - ``EmbeddingRecoverableError`` → ``retryability=retryable``
+  - ``EmbeddingTerminalSkipError`` → ``retryability=non_retryable``
+  - ``EmbeddingResponseInvalidError`` (Layer 2-B) → ``retryability=retryable`` /
+    ``outcome_code="embedding_response_invalid"``
+  - 想定外 ``RuntimeError`` → ``retryability=unknown`` /
+    ``outcome_code="unexpected_error"``
 - ``error_chain`` が ``__cause__`` 経由で 2 段以上を記録 (Service の
   ``raise to_embedding_error(exc) from exc`` の wrapper 連鎖を想定)
 - ``error_message`` が ``redact_secrets()`` 経由
-- ``attempt`` 列への書込み
 - repository は ``commit`` を呼ばない (caller の tx 境界保持)
 """
 
@@ -124,7 +124,7 @@ async def test_append_success_records_with_code(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """category=success / code=embedding_completed + payload に model / dimension。"""
+    """succeeded / outcome_code=embedding_completed + payload に model / dimension。"""
     article = await _make_article(db_session, sample_source)
     await _make_extraction(db_session, article)
 
@@ -138,8 +138,7 @@ async def test_append_success_records_with_code(
     ev = await _fetch_one(db_session, article.id)
     assert ev.event_type == "succeeded"
     assert ev.outcome_code == "embedding_completed"
-    assert ev.category == "success"
-    assert ev.code == "embedding_completed"
+    assert ev.retryability is None
     assert ev.payload["embedding_model"] == "cl-nagoya/ruri-v3-310m"
     assert ev.payload["vector_dimension"] == 768
 
@@ -205,7 +204,7 @@ async def test_append_failure_recoverable_maps_to_retryable(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """EmbeddingRecoverableError → category=retryable / code=instance attr。"""
+    """EmbeddingRecoverableError → retryable / outcome_code=instance attr。"""
     article = await _make_article(db_session, sample_source)
     await _make_extraction(db_session, article)
     exc = EmbeddingRecoverableError(code="ai_error_network")
@@ -214,15 +213,15 @@ async def test_append_failure_recoverable_maps_to_retryable(
         await EmbeddingAuditRepository(session).append_failure(
             ready=_ready(article),
             exc=exc,
-            attempt=1,
         )
         await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
     assert ev.event_type == "failed"
-    assert ev.category == "retryable"
-    assert ev.code == "ai_error_network"
     assert ev.outcome_code == "ai_error_network"
+    assert ev.retryability == "retryable"
+    assert ev.payload["failure_kind"] == "recoverable"
+    assert ev.payload["failure_action"] is None
 
 
 @pytest.mark.asyncio
@@ -231,11 +230,7 @@ async def test_append_failure_terminal_skip_maps_to_keep_curation(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """EmbeddingTerminalSkipError → category=non_retryable_keep_curation。
-
-    Stage 5 の意図的命名差: curation / analysis は捨てない、article 保持の
-    最も保守的な category (Stage 4 と同)。
-    """
+    """EmbeddingTerminalSkipError → non_retryable / terminal_skip。"""
     article = await _make_article(db_session, sample_source)
     await _make_extraction(db_session, article)
     exc = EmbeddingTerminalSkipError(code="ai_error_input_rejected")
@@ -244,13 +239,14 @@ async def test_append_failure_terminal_skip_maps_to_keep_curation(
         await EmbeddingAuditRepository(session).append_failure(
             ready=_ready(article),
             exc=exc,
-            attempt=1,
         )
         await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
-    assert ev.category == "non_retryable_keep_curation"
-    assert ev.code == "ai_error_input_rejected"
+    assert ev.outcome_code == "ai_error_input_rejected"
+    assert ev.retryability == "non_retryable"
+    assert ev.payload["failure_kind"] == "terminal_skip"
+    assert ev.payload["failure_action"] is None
 
 
 @pytest.mark.asyncio
@@ -271,13 +267,14 @@ async def test_append_failure_layer_2b_response_invalid(
         await EmbeddingAuditRepository(session).append_failure(
             ready=_ready(article),
             exc=exc,
-            attempt=1,
         )
         await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
-    assert ev.category == "retryable"
-    assert ev.code == "embedding_response_invalid"
+    assert ev.outcome_code == "embedding_response_invalid"
+    assert ev.retryability == "retryable"
+    assert ev.payload["failure_kind"] == "recoverable"
+    assert ev.payload["failure_action"] is None
 
 
 @pytest.mark.asyncio
@@ -286,62 +283,72 @@ async def test_append_failure_unknown_exception_maps_to_unknown(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """非 marker exception は category=unknown / code=unexpected_error。"""
+    """非 marker exception は unknown / outcome_code=unexpected_error。"""
     article = await _make_article(db_session, sample_source)
     await _make_extraction(db_session, article)
     exc = RuntimeError("boom")
 
     async with session_factory() as session:
-        await EmbeddingAuditRepository(session).append_failure(
+        await EmbeddingAuditRepository(session).append_unexpected_failure(
             ready=_ready(article),
             exc=exc,
-            attempt=1,
         )
         await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
-    assert ev.category == "unknown"
-    assert ev.code == "unexpected_error"
+    assert ev.outcome_code == "unexpected_error"
+    assert ev.retryability == "unknown"
+    assert ev.payload["failure_kind"] == "unknown"
+    assert ev.payload["failure_action"] is None
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("exc_factory", "expected_category", "expected_code"),
+    (
+        "exc_factory",
+        "expected_outcome_code",
+        "expected_retryability",
+        "expected_failure_kind",
+    ),
     [
         # 外部 DB 例外は classify_db_error adapter で意味ラベルに分類される
-        # (SQLAlchemy が振る .code=gkpj 等を拾わない)。Stage 5 の KEEP は
-        # NON_RETRYABLE_KEEP_CURATION。
+        # (SQLAlchemy が振る .code=gkpj 等を拾わない)。
         (
             lambda: OperationalError("SELECT 1", {}, Exception("conn reset")),
-            "retryable",
             "db_runtime_error",
+            "retryable",
+            "db_runtime",
         ),
         (
             lambda: IntegrityError("INSERT", {}, Exception("unique violation")),
-            "non_retryable_keep_curation",
             "db_constraint_error",
+            "non_retryable",
+            "db_constraint",
         ),
         (
             lambda: ProgrammingError("SELECT bad", {}, Exception("no such column")),
-            "non_retryable_keep_curation",
             "db_query_or_schema_error",
+            "non_retryable",
+            "db_query_or_schema",
         ),
         (
             lambda: InvalidRequestError("detached instance"),
-            "unknown",
             "db_unknown_error",
+            "unknown",
+            "db_unknown",
         ),
     ],
 )
-async def test_append_failure_classifies_db_exceptions(
+async def test_append_failure_projects_db_exceptions(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
     exc_factory: object,
-    expected_category: str,
-    expected_code: str,
+    expected_outcome_code: str,
+    expected_retryability: str,
+    expected_failure_kind: str,
 ) -> None:
-    """SQLAlchemy DB 例外を意味ラベルに分類して焼く (gkpj 誤取得の撲滅)。"""
+    """SQLAlchemy DB 例外を failure projection に分類する。"""
     article = await _make_article(db_session, sample_source)
     await _make_extraction(db_session, article)
     exc = exc_factory()  # type: ignore[operator]
@@ -350,14 +357,14 @@ async def test_append_failure_classifies_db_exceptions(
         await EmbeddingAuditRepository(session).append_failure(
             ready=_ready(article),
             exc=exc,
-            attempt=1,
         )
         await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
-    assert ev.category == expected_category
-    assert ev.code == expected_code
-    assert ev.outcome_code == expected_code  # Phase A: outcome_code = code
+    assert ev.outcome_code == expected_outcome_code
+    assert ev.retryability == expected_retryability
+    assert ev.payload["failure_kind"] == expected_failure_kind
+    assert ev.payload["failure_action"] is None
 
 
 @pytest.mark.asyncio
@@ -384,7 +391,6 @@ async def test_append_failure_walks_error_chain_via_cause(
             await EmbeddingAuditRepository(session).append_failure(
                 ready=_ready(article),
                 exc=exc,
-                attempt=1,
             )
             await session.commit()
 
@@ -411,10 +417,9 @@ async def test_append_failure_redacts_secrets_in_error_message(
     )
 
     async with session_factory() as session:
-        await EmbeddingAuditRepository(session).append_failure(
+        await EmbeddingAuditRepository(session).append_unexpected_failure(
             ready=_ready(article),
             exc=exc,
-            attempt=1,
         )
         await session.commit()
 
@@ -422,26 +427,3 @@ async def test_append_failure_redacts_secrets_in_error_message(
     assert ev.payload["error_message"] is not None
     assert "SflKxwRJSMeKKF2QT4abc" not in ev.payload["error_message"]
     assert "***" in ev.payload["error_message"]
-
-
-@pytest.mark.asyncio
-async def test_append_failure_records_attempt(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-    sample_source: NewsSource,
-) -> None:
-    """任意 marker / attempt=3 → pipeline_events.attempt == 3。"""
-    article = await _make_article(db_session, sample_source)
-    await _make_extraction(db_session, article)
-    exc = EmbeddingRecoverableError(code="ai_error_network")
-
-    async with session_factory() as session:
-        await EmbeddingAuditRepository(session).append_failure(
-            ready=_ready(article),
-            exc=exc,
-            attempt=3,
-        )
-        await session.commit()
-
-    ev = await _fetch_one(db_session, article.id)
-    assert ev.attempt == 3

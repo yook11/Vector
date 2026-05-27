@@ -236,6 +236,7 @@ class TestCurateContent:
         message に混入した secret prefix が log field から除去されることも
         確認する (red-team chain γ-2 対称化)。
         """
+        from app.analysis.curation.errors import map_provider_to_curation
         from app.queue.tasks.curation import curate_content
 
         mock_ctx = _make_ctx(
@@ -245,9 +246,13 @@ class TestCurateContent:
         # 引数は __str__ に出ない (SAFE_ATTRS=("CODE",) 経路のみ) ため、business
         # 側の secret 混入経路は構造的に塞がれる。本テストでは audit 側の
         # redact_secrets 経路を主軸に検証する。
-        business_exc = AIProviderConfigurationError(
+        raw_exc = AIProviderConfigurationError(
             "api key missing Authorization: Bearer sk-live-BUSINESSSECRETabc"
         )
+        try:
+            raise map_provider_to_curation(raw_exc) from raw_exc
+        except Exception as wrapped:  # noqa: BLE001
+            business_exc = wrapped
 
         with (
             _patch_try_advance_from(_fixed_ready()),
@@ -270,8 +275,7 @@ class TestCurateContent:
         assert drops, "fallback ログが emit されていない"
         drop = drops[-1]
         assert drop["article_id"] == 1
-        assert drop["attempt"] == 1
-        assert drop["business_error_class"].endswith(".AIProviderConfigurationError")
+        assert drop["business_error_class"].endswith(".CurationTerminalKeepError")
         assert drop["audit_error_class"].endswith(".RuntimeError")
         # red-team chain γ-2: business / audit 両方の secret が redact される
         assert "sk-live-BUSINESSSECRETabc" not in drop["business_error_message"]

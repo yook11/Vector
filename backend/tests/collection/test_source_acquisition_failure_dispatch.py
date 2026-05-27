@@ -1,12 +1,13 @@
 """``SourceAcquisitionFailureHandler`` の dispatch integration test。
 
-Stage 1 は cron 一本化 (taskiq inline retry なし、``max_retries=0``、attempt は
-常に 1) のため、検証する不変条件は:
+Stage 1 は cron 一本化 (taskiq inline retry なし、``max_retries=0``) のため、
+検証する不変条件は:
 
 - ``SourceAcquisitionError`` → ``pipeline_events`` 1 行 (stage=acquisition /
-  event_type=failed / ``code`` = origin CODE / ``category`` = NULL /
+  event_type=failed / ``outcome_code`` = origin CODE /
   ``payload`` に ``code`` キー無し) + ``reraise=False``
-- 想定外 ``Exception`` → audit (``code`` = ``unexpected_error``) + ``reraise=True``
+- 想定外 ``Exception`` → audit (``outcome_code`` = ``unexpected_error``) +
+  ``reraise=True``
 - audit Repository が落ちても handler は完走し
   ``source_acquisition_failure_audit_dropped`` 構造ログにフォールバックする
   (business / audit exception の secret prefix が log field から除去される、
@@ -62,7 +63,6 @@ async def test_acquisition_error_writes_audit_and_returns_false(
         source_id=source_id,
         source_name="VentureBeat",
         exc=exc,
-        attempt=1,
     )
 
     assert reraise is False
@@ -71,16 +71,18 @@ async def test_acquisition_error_writes_audit_and_returns_false(
     assert len(events) == 1
     ev = events[0]
     assert ev.event_type == "failed"
-    assert ev.code == "fetch_access_denied"
     assert ev.outcome_code == "fetch_access_denied"
-    assert ev.category is None
-    assert ev.attempt == 1
+    assert ev.retryability == "non_retryable"
     assert ev.error_class is not None
     assert ev.error_class.endswith(".SourceAcquisitionError")
-    # state は top-level 軸で識別。payload に code を二重に焼かない。
+    # outcome_code が識別子。payload に code を二重に焼かない。
     assert "code" not in ev.payload
     assert ev.payload["source_name"] == "VentureBeat"
-    assert ev.payload["error_message"] == "HTTP 403: VentureBeat"
+    assert ev.payload["error_message"] == (
+        "SourceAcquisitionError(code='fetch_access_denied')"
+    )
+    assert ev.payload["failure_kind"] == "external_fetch"
+    assert ev.payload["failure_action"] is None
 
 
 @pytest.mark.asyncio
@@ -89,7 +91,7 @@ async def test_unexpected_error_writes_audit_and_returns_true(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """想定外 ``Exception`` → ``code='unexpected_error'`` audit + ``reraise=True``。"""
+    """想定外 ``Exception`` → unexpected_error audit + ``reraise=True``。"""
     source_id = sample_source.id
     handler = SourceAcquisitionFailureHandler(session_factory)
 
@@ -97,7 +99,6 @@ async def test_unexpected_error_writes_audit_and_returns_true(
         source_id=source_id,
         source_name="VentureBeat",
         exc=RuntimeError("boom"),
-        attempt=1,
     )
 
     assert reraise is True
@@ -106,10 +107,12 @@ async def test_unexpected_error_writes_audit_and_returns_true(
     assert len(events) == 1
     ev = events[0]
     assert ev.event_type == "failed"
-    assert ev.code == "unexpected_error"
-    assert ev.category is None
+    assert ev.outcome_code == "unexpected_error"
+    assert ev.retryability == "unknown"
     assert ev.error_class is not None
     assert ev.error_class.endswith(".RuntimeError")
+    assert ev.payload["failure_kind"] == "unknown"
+    assert ev.payload["failure_action"] is None
 
 
 @pytest.mark.asyncio
@@ -146,7 +149,6 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
             source_id=source_id,
             source_name="VentureBeat",
             exc=business_exc,
-            attempt=1,
         )
 
     assert reraise is False
@@ -156,7 +158,6 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
     assert drops, "fallback ログが emit されていない"
     drop = drops[-1]
     assert drop["source_id"] == source_id
-    assert drop["attempt"] == 1
     assert drop["business_error_class"].endswith(".SourceAcquisitionError")
     assert drop["audit_error_class"].endswith(".RuntimeError")
     assert "sk-live-BUSINESSSECRETabc" not in drop["business_error_message"]

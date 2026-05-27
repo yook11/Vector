@@ -342,8 +342,8 @@ async def test_conversion_rejection_writes_rejected_event_in_separate_tx(
 ) -> None:
     """棄却監査は別 session に commit 済の REJECTED 行として残る。
 
-    ``stage='acquisition'`` / ``event_type='rejected'`` 固定、``code`` /
-    ``outcome_code`` は単一 code、``category`` は collection stage なので NULL。
+    ``stage='acquisition'`` / ``event_type='rejected'`` 固定、``outcome_code`` は
+    単一 event code。
     深刻度細分は ``payload.conversion_*`` 構造化列で SQL drill-down できる。
     """
     svc = ArticleAcquisitionService(
@@ -363,11 +363,9 @@ async def test_conversion_rejection_writes_rejected_event_in_separate_tx(
         .one()
     )
     assert row.stage == "acquisition"
-    assert row.code == "article_conversion_rejected"
     assert row.outcome_code == "article_conversion_rejected"
-    assert row.category is None
+    assert row.retryability is None
     assert row.source_id == vb_source.id
-    assert row.attempt == 1
     assert row.error_class.endswith(".FetchedArticleConversionError")
     # ``conversion_analyzable_reason`` カラムは新コードでは未使用 (NULL)、
     # JSONB に値が焼かれないことを固定する。
@@ -457,7 +455,8 @@ async def test_immediate_acquisition_writes_article_created_succeeded(
     """即時獲得成功は SUCCEEDED/article_created を同一 tx で 1 行焼く。
 
     ``article_id`` は採番済み新規行 (execute 戻り値と一致)、``canonical_url`` は
-    canonicalize 済み値、``category`` / ``error_class`` は collection 成功なので NULL。
+    canonicalize 済み値、``retryability`` / ``error_class`` は collection 成功なので
+    NULL。
     """
     svc = ArticleAcquisitionService(
         session_factory,
@@ -473,7 +472,7 @@ async def test_immediate_acquisition_writes_article_created_succeeded(
     assert row.outcome_code == "article_created"
     assert row.article_id == article_ids[0]  # 採番済み新規行 id
     assert row.source_id == vb_source.id
-    assert row.category is None
+    assert row.retryability is None
     assert row.error_class is None
     # canonicalize で trailing slash 削除済
     assert row.payload["canonical_url"] == "https://venturebeat.com/a"
@@ -502,6 +501,7 @@ async def test_incomplete_staging_writes_incomplete_article_created_succeeded(
     row = rows[0]
     assert row.outcome_code == "incomplete_article_created"
     assert row.article_id is None  # 補完後の promote 時に採番
+    assert row.retryability is None
     assert row.payload["canonical_url"] == "https://techcrunch.com/h"
 
 

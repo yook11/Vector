@@ -1,15 +1,14 @@
 """失敗属性 projection の内部表現。
 
-``Layer1Category`` は当面 DB 互換の legacy wire 値として残し、失敗の意味論は
-stage error class の ClassVar と本 module の projection に集約する。
+失敗の意味論は stage error class の ClassVar と本 module の projection に集約する。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import TypedDict
 
-from app.audit.categories import Layer1Category
 from app.audit.db_errors import DbErrorCause, classify_db_error
 from app.audit.domain.event import Stage
 
@@ -36,6 +35,37 @@ class FailureProjection:
     retryability: Retryability
     failure_action: FailureAction | None
     code: str
+    stage: Stage | None = None
+
+
+class FailurePayloadFields(TypedDict):
+    """stage payload へ展開する失敗属性 keyword。
+
+    ``dict[str, str | None]`` だと ``**`` 展開時に ``kind`` など任意 keyword へ
+    流入し得ると型検査されるため、key set を固定する。
+    """
+
+    failure_kind: str
+    failure_action: str | None
+
+
+def failure_payload_fields(
+    projection: FailureProjection,
+) -> FailurePayloadFields:
+    """失敗 projection から stage payload 用の属性 dict を作る。"""
+    return {
+        "failure_kind": projection.failure_kind,
+        "failure_action": failure_action_value(projection),
+    }
+
+
+def failure_action_value(projection: FailureProjection) -> str | None:
+    """payload に保存する ``failure_action`` の wire 値を返す。"""
+    return (
+        projection.failure_action.value
+        if projection.failure_action is not None
+        else None
+    )
 
 
 def project_failure(
@@ -55,8 +85,11 @@ def project_failure(
 
 def project_marker_failure(exc: BaseException) -> FailureProjection | None:
     """ClassVar を持つ自前 marker 例外を失敗属性へ投影する。"""
+    stage = getattr(exc, "STAGE", None)
     failure_kind = getattr(exc, "FAILURE_KIND", None)
     retryability = getattr(exc, "RETRYABILITY", None)
+    if not isinstance(stage, Stage):
+        return None
     if not isinstance(failure_kind, str):
         return None
     if not isinstance(retryability, Retryability):
@@ -75,6 +108,7 @@ def project_marker_failure(exc: BaseException) -> FailureProjection | None:
         retryability=retryability,
         failure_action=failure_action,
         code=code,
+        stage=stage,
     )
 
 
@@ -121,23 +155,6 @@ def unknown_failure_projection(*, code: str = "unexpected_error") -> FailureProj
         failure_action=None,
         code=code,
     )
-
-
-def legacy_category_for_projection(
-    *, stage: Stage, projection: FailureProjection
-) -> Layer1Category:
-    """失敗属性を既存 ``pipeline_events.category`` 互換値へ変換する。"""
-    if projection.retryability is Retryability.RETRYABLE:
-        return Layer1Category.RETRYABLE
-    if projection.retryability is Retryability.UNKNOWN:
-        return Layer1Category.UNKNOWN
-    if projection.failure_action is FailureAction.DROP_ARTICLE:
-        return Layer1Category.NON_RETRYABLE_DROP_ARTICLE
-    if stage is Stage.CURATION:
-        return Layer1Category.NON_RETRYABLE_KEEP_ARTICLE
-    if stage in (Stage.ASSESSMENT, Stage.EMBEDDING):
-        return Layer1Category.NON_RETRYABLE_KEEP_CURATION
-    return Layer1Category.NON_RETRYABLE
 
 
 def _code_of_marker(exc: BaseException) -> str | None:

@@ -1,16 +1,4 @@
-"""pipeline_events.payload の Pydantic Discriminated Union。
-
-ADR §データモデル §Payload の宣言と一致。Stage ごとに別 variant、
-``kind`` フィールドで discriminator を取る。
-
-``AcquisitionPayload`` は FAILED (source 全体故障) / REJECTED (per-entry 変換棄却)
-に加え SUCCEEDED (per-article: article_created / incomplete_article_created) を
-書き込む。
-かつて検討した「件数 / breakdown 集計」型の成功 audit は per-source 集計で
-witness 型と相容れず撤去し、新規 URL 初回のみ発火する per-article witness として
-入れ直した (定常的な重複 / race の skip は flood 回避のため非記録)。
-他 Stage の variant は schema として用意するが書込は順次活性化される。
-"""
+"""pipeline_events.payload の stage 別 Pydantic payload。"""
 
 from __future__ import annotations
 
@@ -20,14 +8,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class BasePipelineEventPayload(BaseModel):
-    """共通基底 — A 級保険 + S 級失敗詳細を共通化。"""
+    """全 payload variant の共通 field。"""
 
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     kind: str
-    source_name: str | None = None  # A: FK 切断耐性
-    error_message: str | None = None  # S: 失敗時
-    error_chain: list[str] | None = None  # S: cause chain FQN list
+    source_name: str | None = None
+    error_message: str | None = None
+    error_chain: list[str] | None = None
 
 
 class DispatchPayload(BasePipelineEventPayload):
@@ -37,68 +25,49 @@ class DispatchPayload(BasePipelineEventPayload):
 
 
 class AcquisitionPayload(BasePipelineEventPayload):
-    """Stage 1 — SUCCEEDED / REJECTED / FAILED を兼ねる payload。
-
-    - SUCCEEDED (per-article): ``canonical_url`` のみ。article_created /
-      incomplete_article_created の witness。新規 URL 初回だけ発火 (再掲は
-      ON CONFLICT で skip され非記録)。
-    - REJECTED (per-entry 変換棄却): ``conversion_*`` 構造化列。
-    - FAILED (source 全体故障): ``error_chain`` / ``error_message`` (Base) +
-      HTTP snapshot 系 (``http_status`` / ``final_url`` / ``response_size`` /
-      ``content_type`` / ``body_head``)。
-    """
+    """Stage 1 acquisition payload。"""
 
     kind: Literal["acquisition"] = "acquisition"
-    fetcher_class: str | None = None  # A: type(fetcher).__name__
+    failure_kind: str | None = None
+    failure_action: str | None = None
+    fetcher_class: str | None = None
 
-    # A: SUCCEEDED (article_created / incomplete_article_created) の identity key。
-    # 新規 URL 初回のみ発火する per-article witness の自然キー
-    # (CompletionPayload.canonical_url と対称)。
+    # acquisition / completion をまたぐ canonical URL key。
     canonical_url: str | None = None
 
-    # 失敗時 S 級 snapshot (Task 例外パスで詰める)
     http_status: int | None = None
     final_url: str | None = None
     response_size: int | None = None
     content_type: str | None = None
-    body_head: str | None = None  # 先頭 500 字
+    body_head: str | None = None
 
-    # per-entry 変換棄却 (REJECTED 経路で詰める。「なぜ Analyzable/Observed に
-    # できなかったか」を error_message へ畳まず構造化列で SQL drill-down 可能に
-    # する SSoT。全 optional で既存 failure path の組立は無回帰)
     conversion_analyzable_reason: str | None = None
     conversion_observed_reason: str | None = None
-    conversion_raw_url: str | None = None  # 永続化前に redact_secrets を通す
+    conversion_raw_url: str | None = None
     conversion_has_title: bool | None = None
     conversion_body_length: int | None = None
     conversion_has_published_at: bool | None = None
 
 
 class CompletionPayload(BasePipelineEventPayload):
-    """Stage 2 — 1 記事 1 HTML 取得 (article_completion)。
-
-    集計 key は ``canonical_url`` (= pending.url / articles.source_url の
-    SSoT 値)。``articles.id`` は別途 ``article_id`` カラム (pipeline_events)
-    で関連付ける。
-    """
+    """Stage 2 completion payload。"""
 
     kind: Literal["completion"] = "completion"
-    # A: pending → article をまたぐ canonicalize 済み URL key
+    failure_kind: str | None = None
+    failure_action: str | None = None
     canonical_url: str | None = None
-    scraper_class: str | None = None  # A
-    # S: drop 細分化 (permanent_fetch_error / scrape_* / completion_*)
+    # completion の claim / retry 制御に由来する snapshot。
+    attempt_count: int | None = None
+    scraper_class: str | None = None
     reason_code: str | None = None
-    body_length: int | None = None  # A': 成功時の本文長分布観測
-    # S: promotion Failed 等の {"body_length": N} 構造化メトリック
+    body_length: int | None = None
     quality_gate_metric: dict[str, Any] | None = None
     http_status: int | None = None
     final_url: str | None = None
     response_size: int | None = None
     content_type: str | None = None
-    body_head: str | None = None  # 先頭 500 字
-    # S: retry 軸 give-up。route 4 (exhausted) のみ True。可変 state (ready_at) から
-    # 事後復元できない事実のため audit が持つ。retry 中 (route 3) は None のまま
-    # (= JSON null)。``payload @> '{"retry_exhausted": true}'`` で give-up を集計する
+    body_head: str | None = None
+    # retry 上限に到達して諦めた行だけ True。
     retry_exhausted: bool | None = None
 
 
@@ -106,68 +75,35 @@ class CurationPayload(BasePipelineEventPayload):
     """Stage 3 — 大きい入力 (記事本文) は head + length + hash で扱う (curation)。"""
 
     kind: Literal["curation"] = "curation"
-    ai_model: str | None = None  # S
-    # A: prompt+model+gen_config+response_schema+system_instruction の SHA-256 prefix 8
-    # (Prompt class が ClassVar で確定。詳細は ADR §prompt_version の規律)
+    failure_kind: str | None = None
+    failure_action: str | None = None
+    ai_model: str | None = None
     prompt_version: str | None = None
 
-    # 入力 (外部由来 raw、article.original_content 経由)
-    input_content_head: str | None = None  # S: 先頭 2KB
-    input_content_length: int | None = None  # A': 全体長 (truncate 検知)
-    input_content_hash: str | None = None  # A: sha256 prefix 16 文字
-
-    # 出力 (AI raw、Vector 内のどこにも残らない極めて貴重な情報)
-    ai_raw_response: str | None = None  # S: 2KB 上限
-
-    # A 級: AI 応答の生メタデータ (詰め替え前生値、Stage 4 raw_category と対称)
-    raw_relevance: str | None = None  # signal / noise / それ以外の AI 生値
+    input_content_head: str | None = None
+    input_content_length: int | None = None
+    input_content_hash: str | None = None
+    ai_raw_response: str | None = None
+    raw_relevance: str | None = None
 
 
 class AssessmentPayload(BasePipelineEventPayload):
-    """Stage 4 (assessment) — 入力が小さい (記事サマリ) ので full 保存。
-
-    PR5: ``ClassificationPayload`` を本クラスに置換 (class 名と discriminator
-    値の一致を回復)。spec ``specs/pipeline-events-stage4-assessment.md``
-    §AssessmentPayload SSoT に準拠 (14 field)。caller (PR6 で Service / Task)
-    はまだいない dead code。
-
-    state representation を持たない (top-level column の ``article_id`` /
-    ``outcome_code`` / ``category`` / ``code`` / ``event_type`` / ``attempt``
-    と二重化禁止)。state は top-level 4 軸 (event_type / outcome_code /
-    category / code) で完全識別可能で、payload は詳細情報のみ。
-
-    audit は witness — AI 境界で起きた事実を証言する。事後に採番された PK や
-    その時点で偶然 FK が指していた id は事実ではなく操作的副産物なので保持しない
-    (詳細は ``specs/backlog/audit-payload-fact-purification.md``)。
-
-    状態識別:
-
-    - in-scope 成功: ``category_slug`` / ``investor_take`` が非 None
-    - out-of-scope 成功: ``investor_take`` のみ非 None
-      (in-scope 系 ``category_slug`` は None)
-    - 失敗: Base の ``error_message`` / ``error_chain`` (+ 該当時 ``ai_raw_response``)
-    """
+    """Stage 4 assessment payload。"""
 
     kind: Literal["assessment"] = "assessment"
+    failure_kind: str | None = None
+    failure_action: str | None = None
 
-    # Stage 4 固有 identifier (top-level column が無いため payload で保持、自然キー)
     curation_id: int | None = None
 
-    # A 級: メタデータ
-    ai_model: str | None = None  # 使用 assessor の model 名
-    prompt_version: str | None = None  # prompt+model+config の SHA-256 prefix 8
-
-    # A' / S 級: AI 入出力 (Stage 4 = input full 4KB + raw 2KB)
-    input_text: str | None = None  # 入力 summary 全文 (4KB 上限)
-    input_text_length: int | None = None  # truncate 検知用
-    ai_raw_response: str | None = None  # AI raw JSON response (2KB 上限)
-
-    # A 級: AI 応答の生メタデータ (validation 前、failure forensics 用)
-    raw_category: str | None = None  # AI が返した未検証 category slug
-
-    # A 級: 成功時の AI 応答 (検証通過後の値、失敗時は None)
-    category_slug: str | None = None  # category catalog 確認後の slug
-    investor_take: str | None = None  # in-scope / out-of-scope の AI コメント
+    ai_model: str | None = None
+    prompt_version: str | None = None
+    input_text: str | None = None
+    input_text_length: int | None = None
+    ai_raw_response: str | None = None
+    raw_category: str | None = None
+    category_slug: str | None = None
+    investor_take: str | None = None
 
 
 class EmbeddingPayload(BasePipelineEventPayload):
@@ -178,48 +114,24 @@ class EmbeddingPayload(BasePipelineEventPayload):
     """
 
     kind: Literal["embedding"] = "embedding"
-    embedding_model: str | None = None  # A
-    vector_dimension: int | None = None  # A'
+    failure_kind: str | None = None
+    failure_action: str | None = None
+    embedding_model: str | None = None
+    vector_dimension: int | None = None
 
 
 class BriefingPayload(BasePipelineEventPayload):
-    """Briefing stage — 週次カテゴリ別 LLM ブリーフィング生成。
-
-    subtask (per-category) と dispatcher (per-week anchor) の 2 経路で書込まれる。
-    AI raw response / 構造化応答 (headline / overview / stories) は ``weekly_briefing``
-    テーブルに full 保存済のため payload では持たない (二重持ち回避)。
-
-    state 識別:
-
-    - subtask 成功: ``category_id`` / ``category_slug`` + ``article_count`` +
-      ``ai_model`` 埋め、``retry_exhausted=None``
-    - subtask 入力ゼロ (REJECTED): 同上 + ``article_count=0``、event_type で完結
-      (category 列は NULL、retry 概念外)
-    - subtask 失敗: 同 identifier + ``ai_model`` + Base の error_* + 最終 attempt のみ
-      ``retry_exhausted=True``
-    - dispatcher 成功 anchor: ``week_start`` + ``category_count`` のみ
-      (per-category 軸は埋めない)
-    - dispatcher 失敗 anchor: ``week_start`` + Base の error_* +
-      ``retry_exhausted=True`` (``broker_briefing`` は ``max_retries=0`` で
-      初回即 give-up)
-
-    詳細: ``specs/pipeline-events-briefing-audit.md``
-    """
+    """Briefing stage payload。"""
 
     kind: Literal["briefing"] = "briefing"
-    # A: 自然キー (ISO 文字列。週次 cron の月曜日)
+    failure_kind: str | None = None
+    failure_action: str | None = None
     week_start: str | None = None
-    # A: subtask 行の自然キー (FK は SET NULL のため id だけだと事後に消失)
     category_id: int | None = None
-    category_slug: str | None = None  # A: 可読 + FK 切断耐性
-    # A': 入力規模 (subtask 行のみ。REJECTED 行では 0)
+    category_slug: str | None = None
     article_count: int | None = None
-    # A': dispatcher anchor 行のみ (subtask の article_count とは意味が違うため別 field)
     category_count: int | None = None
-    ai_model: str | None = None  # S: 失敗時にどの model で落ちたか
-    # S: retry 軸 give-up。最終 attempt のみ True (CompletionPayload precedent)。
-    # 中間 attempt は None のまま (= JSON null)。
-    # ``payload @> '{"retry_exhausted": true}'`` で give-up を集計する。
+    ai_model: str | None = None
     retry_exhausted: bool | None = None
 
 

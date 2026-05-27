@@ -173,7 +173,9 @@ async def test_scrape_terminal_content_rejection_audits_rejected(
     assert ev.event_type == "rejected"
     # outcome_code = scrape_* prefix (spec のサブ段階規約)
     assert ev.outcome_code == "scrape_not_html"
+    assert ev.retryability is None
     assert ev.error_class is None
+    assert ev.payload["attempt_count"] == ready.attempt_count
     assert ev.payload["content_type"] == "application/pdf"
 
 
@@ -183,7 +185,7 @@ async def test_scrape_retryable_non_exhausted_reopens_with_future_ready_at(
     db_session: AsyncSession,
     tc_source: NewsSource,
 ) -> None:
-    """scrape ``Retryable`` (502→BLIP, attempt=1 < max) → open + 未来 ready_at。
+    """scrape ``Retryable`` (502→BLIP, attempt_count=1 < max) → open + 未来 ready_at。
 
     BLIP_POLICY.schedule[0] = 0.5 分 = 30 秒。claim 直後 attempt_count=1 <
     max_attempts(8) なので exhausted ではなく retry scheduling。
@@ -219,6 +221,10 @@ async def test_scrape_retryable_non_exhausted_audits_failed_without_exhausted_fl
     ev = await _fetch_event(db_session, tc_source.id)
     assert ev.event_type == "failed"
     assert ev.outcome_code == err.CODE  # transport 理由 (input 由来)
+    assert ev.retryability == "retryable"
+    assert ev.payload["attempt_count"] == ready.attempt_count
+    assert ev.payload["failure_kind"] == "external_fetch"
+    assert ev.payload["failure_action"] is None
     assert ev.payload["retry_exhausted"] is None  # exclude_none=False で null
 
 
@@ -282,6 +288,10 @@ async def test_scrape_retryable_exhausted_audits_retry_exhausted_flag(
 
     ev = await _fetch_event(db_session, tc_source.id)
     assert ev.event_type == "failed"
+    assert ev.retryability == "retryable"
+    assert ev.payload["attempt_count"] == exhausted_ready.attempt_count
+    assert ev.payload["failure_kind"] == "external_fetch"
+    assert ev.payload["failure_action"] is None
     assert ev.payload["retry_exhausted"] is True
 
 
@@ -362,7 +372,9 @@ async def test_completion_rejected_audits_rejected_with_error_class(
     ev = await _fetch_event(db_session, tc_source.id)
     assert ev.event_type == "rejected"
     assert ev.outcome_code == "completion_invariant_rejected"
+    assert ev.retryability is None
     assert ev.error_class == "ValidationError"
+    assert ev.payload["attempt_count"] == ready.attempt_count
     assert ev.payload["error_message"] == "body too short"
 
 
@@ -393,5 +405,7 @@ async def test_stale_attempt_records_skipped_without_state_change(
     ev = await _fetch_event(db_session, tc_source.id)
     assert ev.event_type == "skipped"
     assert ev.outcome_code == "stale_attempt"
+    assert ev.retryability is None
+    assert ev.payload["attempt_count"] == ready.attempt_count
     pending = await _reload_pending(db_session, ready.pending_id)
     assert pending.status == "running"  # void な attempt は状態を変えない

@@ -175,7 +175,10 @@ class TestGeminiFinishReasonBlocked:
 class TestGeminiInvalidPayload:
     @pytest.mark.asyncio
     async def test_invalid_json_raises_response_invalid(self) -> None:
-        """Phase 4: __str__ は code 固定値のみ。marker class + code で identity を pin。"""
+        """Phase 4: __str__ は code 固定値のみ。
+
+        marker class + code で identity を pin。
+        """
         assessor = GeminiAssessor()
         _patch_assessor_call(assessor, _stub_response("not json at all"))
 

@@ -120,7 +120,6 @@ async def test_drop_article_delegates_to_handler(exc_cls: type[Exception]) -> No
     kwargs = handler_handle.await_args.kwargs
     assert kwargs["exc"] is exc
     assert kwargs["curator"] is ctx.state.curator
-    assert kwargs["attempt"] == 1
     assert kwargs["last_attempt"] is False
 
 

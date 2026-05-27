@@ -168,7 +168,7 @@ async def test_in_scope_success_records_audit(
     sample_source: NewsSource,
     sample_categories: list[Category],
 ) -> None:
-    """``_handle_in_scope`` 成功で ``code=assessed_in_scope`` の audit 1 行。"""
+    """``_handle_in_scope`` 成功で ``outcome_code=assessed_in_scope`` の audit 1 行。"""
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
     # InScopeCategory.AI が catalog に存在する slug "ai" になることを前提
@@ -186,8 +186,7 @@ async def test_in_scope_success_records_audit(
     ev = events[0]
     assert ev.event_type == "succeeded"
     assert ev.outcome_code == "assessed_in_scope"
-    assert ev.category == "success"
-    assert ev.code == "assessed_in_scope"
+    assert ev.retryability is None
     payload = ev.payload
     assert payload["curation_id"] == extraction.id
     assert payload["investor_take"] == "bullish"
@@ -201,7 +200,7 @@ async def test_out_of_scope_success_records_audit(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """``_handle_out_of_scope`` 成功で ``code=assessed_out_of_scope`` の audit 1 行。"""
+    """out-of-scope 成功で ``outcome_code=assessed_out_of_scope`` の audit 1 行。"""
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
     assessor = _make_assessor(return_envelope=_out_of_scope_call())
@@ -216,8 +215,7 @@ async def test_out_of_scope_success_records_audit(
     ev = events[0]
     assert ev.event_type == "succeeded"
     assert ev.outcome_code == "assessed_out_of_scope"
-    assert ev.category == "success"
-    assert ev.code == "assessed_out_of_scope"
+    assert ev.retryability is None
     payload = ev.payload
     assert payload["curation_id"] == extraction.id
     # PR #447 対称化追従: investor_take は本体 DB と一致 (非 None)

@@ -1,3 +1,7 @@
+> **HISTORICAL NOTE (Scope 6)**: このファイルは現行の失敗属性契約より前の
+> 実装計画。旧分類 enum / 旧 top-level 監査列への参照は履歴としてのみ読む。
+> 現行契約は `pipeline-events-failure-attribute-projection.md` を正本とする。
+
 # Stage 4 Assessment 振る舞いリファクタ — 実装プラン
 
 `specs/pipeline-events-stage4-assessment.md` (確定 spec) の実装ロードマップ。**案 B (6 PR 細粒度)** で段階的に切り替える。各 PR は独立 review / 独立 deploy 可能、中途半端な状態でも production の挙動が壊れない設計。

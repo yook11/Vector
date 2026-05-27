@@ -88,7 +88,6 @@ async def assess_content(
 
     svc = AssessmentService(session_factory)
     handler = AssessmentFailureHandler(session_factory)
-    attempt = int(ctx.message.labels.get("retry_count", 0)) + 1
 
     try:
         result = await svc.execute(ready, assessor)
@@ -96,7 +95,6 @@ async def assess_content(
         reraise = await handler.handle(
             ready=ready,
             exc=exc,
-            attempt=attempt,
             last_attempt=is_last_attempt(ctx),
         )
         if reraise:

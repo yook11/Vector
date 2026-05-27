@@ -3,15 +3,15 @@
 audit row の shape SSoT が repository に集約されたことを検証する:
 
 - ``append_signal`` / ``append_noise`` で
-  ``category=success`` + ``code`` (caller 渡し) / ``outcome_code=code`` が記録
+  ``outcome_code`` と成功 payload が記録される
 - ``append_drop_article`` で
-  ``category=non_retryable_drop_article`` + ``code=exc.code`` (Stage 3 marker
-  の instance attr。ACL が provider ``CODE`` を引き継ぐ)
+  Stage 3 marker の ``code`` 由来の ``outcome_code`` と failure attrs が記録
 - ``append_failure`` で **Stage 3 marker 型による dispatch** が動作:
-  - ``CurationTerminalDropError`` → ``category=non_retryable_drop_article``
-  - ``CurationTerminalKeepError`` → ``category=non_retryable_keep_article``
-  - ``CurationRecoverableError`` → ``category=retryable``
-  - 想定外 ``RuntimeError`` → ``category=unknown`` / ``code=unexpected_error``
+  - ``CurationTerminalDropError`` → ``retryability=non_retryable`` / ``drop_article``
+  - ``CurationTerminalKeepError`` → ``retryability=non_retryable``
+  - ``CurationRecoverableError`` → ``retryability=retryable``
+  - 想定外 ``RuntimeError`` → ``retryability=unknown`` /
+    ``outcome_code=unexpected_error``
 - repository は ``commit`` を呼ばない (caller の tx 境界保持)
 """
 
@@ -137,7 +137,7 @@ async def test_append_signal_records_success_with_code(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """signal 経路で category=success / code=curated_signal が記録される。"""
+    """signal 経路で succeeded / outcome_code=curated_signal が記録される。"""
     article = await _make_article(db_session, sample_source)
     async with session_factory() as session:
         await CurationAuditRepository(session).append_signal(
@@ -153,8 +153,7 @@ async def test_append_signal_records_success_with_code(
     ev = await _fetch_one(db_session, article.id)
     assert ev.event_type == "succeeded"
     assert ev.outcome_code == "curated_signal"
-    assert ev.category == "success"
-    assert ev.code == "curated_signal"
+    assert ev.retryability is None
     assert ev.payload["ai_raw_response"]
     assert ev.payload["source_name"] == str(sample_source.name)
     # caller pre-compute 値がそのまま payload に焼かれる (repository は計算しない)
@@ -173,7 +172,7 @@ async def test_append_noise_records_curated_noise(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """noise 経路で code=curated_noise が記録される。"""
+    """noise 経路で outcome_code=curated_noise が記録される。"""
     article = await _make_article(db_session, sample_source)
     async with session_factory() as session:
         await CurationAuditRepository(session).append_noise(
@@ -188,8 +187,7 @@ async def test_append_noise_records_curated_noise(
 
     ev = await _fetch_one(db_session, article.id)
     assert ev.outcome_code == "curated_noise"
-    assert ev.category == "success"
-    assert ev.code == "curated_noise"
+    assert ev.retryability is None
     # caller pre-compute 値がそのまま payload に焼かれる
     assert ev.payload["input_content_length"] == 456
     assert ev.payload["input_content_head"] == "NOISE_PRECOMPUTED_HEAD"
@@ -209,7 +207,7 @@ async def test_append_drop_article_records_failure_with_drop_category(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """drop 経路で category=non_retryable_drop_article / code=exc.code が記録。
+    """drop 経路で failure attrs と outcome_code=exc.code が記録。
 
     本番の failure_handling は AIProviderError を ACL で Stage 3 marker に
     詰め替えてから本 method を呼ぶため、テストも同じ流れを再現する。
@@ -238,10 +236,11 @@ async def test_append_drop_article_records_failure_with_drop_category(
     ev = await _fetch_one(db_session, article_id)
     assert ev.event_type == "failed"
     assert ev.outcome_code == "ai_error_output_blocked"
-    assert ev.category == "non_retryable_drop_article"
-    assert ev.code == "ai_error_output_blocked"
+    assert ev.retryability == "non_retryable"
     assert ev.error_class is not None
     assert ev.error_class.endswith(".CurationTerminalDropError")
+    assert ev.payload["failure_kind"] == "terminal_drop"
+    assert ev.payload["failure_action"] == "drop_article"
     assert ev.payload["error_message"] is not None
     assert ev.payload["error_chain"]
     # __cause__ chain に元 provider error も保持される
@@ -270,11 +269,11 @@ async def test_append_backfill_curation_aged_out_records_rejected_with_aged_code
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """年齢削除の監査は drop と別 stage/event_type/category/code で記録される。
+    """年齢削除の監査は drop と別 stage/event_type/outcome_code で記録される。
 
     意図的な組合せ: stage=backfill_curate (curation 救済の保守動作) +
-    payload.kind=curation。content 拒否の drop (stage=curation /
-    category=non_retryable_drop_article) とは全軸が異なる。
+    payload.kind=curation。content 拒否の drop (stage=curation / failed /
+    outcome_code=ai_error_*) とは全軸が異なる。
     """
     from app.audit.stages.curation import (
         BACKFILL_CURATION_AGED_OUT_CODE,
@@ -290,10 +289,8 @@ async def test_append_backfill_curation_aged_out_records_rejected_with_aged_code
     ev = await _fetch_one(db_session, article.id)
     assert ev.stage == "backfill_curate"
     assert ev.event_type == "rejected"
-    assert ev.code == BACKFILL_CURATION_AGED_OUT_CODE
     assert ev.outcome_code == BACKFILL_CURATION_AGED_OUT_CODE
-    # 年齢削除は curation 分類ではないので category は NULL
-    assert ev.category is None
+    assert ev.retryability is None
     # payload は curation variant (FK 切断耐性のため source_name を保持)
     assert ev.payload["kind"] == "curation"
     assert ev.payload["source_name"] == str(sample_source.name)
@@ -314,87 +311,126 @@ def _wrap(raw: BaseException) -> BaseException:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("exc_factory", "expected_category", "expected_code"),
+    (
+        "exc_factory",
+        "expected_outcome_code",
+        "expected_retryability",
+        "expected_failure_kind",
+        "expected_failure_action",
+    ),
     [
         (
             lambda: _wrap(AIProviderInputRejectedError()),
-            "non_retryable_drop_article",
             "ai_error_input_rejected",
+            "non_retryable",
+            "terminal_drop",
+            "drop_article",
         ),
         (
             lambda: _wrap(AIProviderConfigurationError()),
-            "non_retryable_keep_article",
             "ai_error_configuration",
+            "non_retryable",
+            "terminal_keep",
+            None,
         ),
         (
             lambda: _wrap(AIProviderNetworkError()),
-            "retryable",
             "ai_error_network",
+            "retryable",
+            "recoverable",
+            None,
         ),
         (
             lambda: CurationResponseInvalidError(),
-            "retryable",
             "extraction_response_invalid",
+            "retryable",
+            "recoverable",
+            None,
         ),
-        (lambda: RuntimeError("surprise"), "unknown", "unexpected_error"),
+        (
+            lambda: RuntimeError("surprise"),
+            "unexpected_error",
+            "unknown",
+            "unknown",
+            None,
+        ),
         # 外部 DB 例外は classify_db_error adapter で意味ラベルに分類される
-        # (SQLAlchemy が振る .code=gkpj 等を拾わない)。Stage 3 の KEEP は
-        # NON_RETRYABLE_KEEP_ARTICLE。
+        # (SQLAlchemy が振る .code=gkpj 等を拾わない)。
         (
             lambda: OperationalError("SELECT 1", {}, Exception("conn reset")),
-            "retryable",
             "db_runtime_error",
+            "retryable",
+            "db_runtime",
+            None,
         ),
         (
             lambda: IntegrityError("INSERT", {}, Exception("unique violation")),
-            "non_retryable_keep_article",
             "db_constraint_error",
+            "non_retryable",
+            "db_constraint",
+            None,
         ),
         (
             lambda: ProgrammingError("SELECT bad", {}, Exception("no such column")),
-            "non_retryable_keep_article",
             "db_query_or_schema_error",
+            "non_retryable",
+            "db_query_or_schema",
+            None,
         ),
         (
             lambda: InvalidRequestError("detached instance"),
-            "unknown",
             "db_unknown_error",
+            "unknown",
+            "db_unknown",
+            None,
         ),
     ],
 )
-async def test_append_failure_dispatches_category_and_code_from_exc(
+async def test_append_failure_dispatches_failure_projection_from_exc(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
     exc_factory: object,
-    expected_category: str,
-    expected_code: str,
+    expected_outcome_code: str,
+    expected_retryability: str,
+    expected_failure_kind: str,
+    expected_failure_action: str | None,
 ) -> None:
-    """append_failure は exc 型から category/code を自動導出する。"""
+    """append_failure は exc 型から failure projection を自動導出する。"""
     article = await _make_article(db_session, sample_source)
     exc = exc_factory()  # type: ignore[operator]
     curator = _curator_mock()
 
     async with session_factory() as session:
-        await CurationAuditRepository(session).append_failure(
-            ready=_ready(article),
-            exc=exc,
-            attempt=2,
-            curator=curator,
-            input_content_length=42,
-            input_content_head="FAIL_PRECOMPUTED_HEAD",
-            input_content_hash="FAIL_HASH_16AAAAA",
-        )
+        repo = CurationAuditRepository(session)
+        if isinstance(exc, RuntimeError):
+            await repo.append_unexpected_failure(
+                ready=_ready(article),
+                exc=exc,
+                curator=curator,
+                input_content_length=42,
+                input_content_head="FAIL_PRECOMPUTED_HEAD",
+                input_content_hash="FAIL_HASH_16AAAAA",
+            )
+        else:
+            await repo.append_failure(
+                ready=_ready(article),
+                exc=exc,
+                curator=curator,
+                input_content_length=42,
+                input_content_head="FAIL_PRECOMPUTED_HEAD",
+                input_content_hash="FAIL_HASH_16AAAAA",
+            )
         await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
     assert ev.event_type == "failed"
-    assert ev.category == expected_category
-    assert ev.code == expected_code
-    assert ev.outcome_code == expected_code  # Phase A: outcome_code = code
-    assert ev.attempt == 2
+    assert ev.outcome_code == expected_outcome_code
+    assert ev.retryability == expected_retryability
     assert ev.error_class is not None
     assert ev.error_class.endswith(f".{type(exc).__name__}")
+    assert ev.payload["failure_kind"] == expected_failure_kind
+    assert ev.payload["failure_action"] == expected_failure_action
     # caller pre-compute 値がそのまま payload に焼かれる (failure path も同形)
     assert ev.payload["input_content_length"] == 42
     assert ev.payload["input_content_head"] == "FAIL_PRECOMPUTED_HEAD"

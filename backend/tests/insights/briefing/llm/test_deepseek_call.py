@@ -13,13 +13,19 @@ import json
 from datetime import date
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
+import openai
 import pytest
-from pydantic import SecretStr, ValidationError
+from pydantic import SecretStr
 
 from app.insights.briefing.domain.article import ArticleInput
 from app.insights.briefing.domain.briefing import (
     MAX_STORIES_PER_BRIEFING,
     MAX_STORY_TAKEAWAY_LEN,
+)
+from app.insights.briefing.llm.errors import (
+    BriefingLlmError,
+    BriefingResponseInvalidError,
 )
 
 
@@ -118,7 +124,7 @@ async def _generate_with_mocked_response(arguments: dict) -> None:
 
 @pytest.mark.asyncio
 async def test_generator_rejects_oversized_stories_from_llm() -> None:
-    """LLM が上限超の stories を返したら ValidationError raise (taskiq に伝播)。
+    """LLM が上限超の stories を返したら briefing marker に wrap する。
 
     AUTH-N4/AUTH-C1 を持たない LLM 暴走 / prompt injection シナリオでも、
     domain VO の Field(max_length=MAX_STORIES_PER_BRIEFING) で巨大 briefing
@@ -132,13 +138,13 @@ async def test_generator_rejects_oversized_stories_from_llm() -> None:
             for i in range(MAX_STORIES_PER_BRIEFING + 1)
         ],
     }
-    with pytest.raises(ValidationError):
+    with pytest.raises(BriefingResponseInvalidError):
         await _generate_with_mocked_response(oversized)
 
 
 @pytest.mark.asyncio
 async def test_generator_rejects_oversized_takeaway_from_llm() -> None:
-    """LLM が上限超の takeaway を返したら ValidationError raise (F10 二次防衛)。"""
+    """LLM が上限超の takeaway を返したら briefing marker に wrap する。"""
     oversized = {
         "headline": "h",
         "overview": "o",
@@ -149,5 +155,35 @@ async def test_generator_rejects_oversized_takeaway_from_llm() -> None:
             }
         ],
     }
-    with pytest.raises(ValidationError):
+    with pytest.raises(BriefingResponseInvalidError):
         await _generate_with_mocked_response(oversized)
+
+
+@pytest.mark.asyncio
+async def test_generator_wraps_openai_api_error() -> None:
+    """OpenAI SDK 例外は briefing marker に wrap して stage 境界へ出す。"""
+    request = httpx.Request("POST", "https://api.deepseek.com/beta/chat/completions")
+    provider_error = openai.APIError("upstream", request=request, body=None)
+    create = AsyncMock(side_effect=provider_error)
+    fake_client = MagicMock()
+    fake_client.chat.completions.create = create
+
+    with (
+        patch("app.insights.briefing.llm.deepseek.settings") as mock_settings,
+        patch(
+            "app.insights.briefing.llm.deepseek.AsyncOpenAI", return_value=fake_client
+        ),
+    ):
+        mock_settings.deepseek_api_key = SecretStr("test-key")
+        from app.insights.briefing.llm.deepseek import DeepSeekBriefingGenerator
+
+        gen = DeepSeekBriefingGenerator()
+        with pytest.raises(BriefingLlmError) as raised:
+            await gen.generate(
+                category_name="AI",
+                week_start=date(2026, 4, 20),
+                articles=[ArticleInput(id=1, title_ja="t", summary_ja="s")],
+            )
+
+    assert raised.value.provider_error is provider_error
+    assert raised.value.__cause__ is provider_error

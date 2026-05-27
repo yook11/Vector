@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import structlog
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from taskiq import Context, TaskiqDepends
 
 from app.audit.stages.briefing import BriefingAuditRepository
@@ -31,6 +32,7 @@ from app.insights.briefing.application.service import WeeklyBriefingService
 from app.insights.briefing.domain.ready import ReadyForBriefing
 from app.insights.briefing.domain.week import latest_completed_week_start, now_in_jst
 from app.insights.briefing.llm.deepseek import DeepSeekBriefingGenerator
+from app.insights.briefing.llm.errors import BriefingError
 from app.insights.briefing.repository.briefings import BriefingRepository
 from app.models.category import Category
 from app.queue.brokers import broker_briefing
@@ -80,10 +82,17 @@ async def dispatch_weekly_briefings(ctx: Context = TaskiqDepends()) -> None:
         # 別 session で焼いて re-raise (taskiq の failure tracking を維持)。
         # dispatch 中の例外でも常に week_start は確定済 (cron 起動直後に算出)。
         async with session_factory() as session:
-            await BriefingAuditRepository(session).append_dispatcher_failure(
-                week_start=week_start,
-                exc=exc,
-            )
+            repo = BriefingAuditRepository(session)
+            if isinstance(exc, (BriefingError, SQLAlchemyError)):
+                await repo.append_dispatcher_failure(
+                    week_start=week_start,
+                    exc=exc,
+                )
+            else:
+                await repo.append_unexpected_dispatcher_failure(
+                    week_start=week_start,
+                    exc=exc,
+                )
             await session.commit()
         raise
 
@@ -124,20 +133,28 @@ async def generate_briefing_for_category(
         session_factory, DeepSeekBriefingGenerator(), notifier
     )
     # 失敗は監査に焼いた上で raise する (taskiq の retry / failure tracking を維持)。
-    # `is_last_attempt(ctx)` で extrinsic な give-up timing を判定し、最終 attempt
-    # のみ payload.retry_exhausted=True を焼く (CompletionPayload precedent)。
-    attempt = int(ctx.message.labels.get("retry_count", 0)) + 1
+    # `is_last_attempt(ctx)` で extrinsic な give-up timing を判定し、retry 上限到達時
+    # のみ payload.retry_exhausted=True を焼く。
     try:
         outcome = await service.execute(ready)
     except Exception as exc:
         async with session_factory() as session:
-            await BriefingAuditRepository(session).append_failure(
-                ready=ready,
-                exc=exc,
-                attempt=attempt,
-                retry_exhausted=True if is_last_attempt(ctx) else None,
-                ai_model=service._llm.MODEL,
-            )
+            repo = BriefingAuditRepository(session)
+            retry_exhausted = True if is_last_attempt(ctx) else None
+            if isinstance(exc, (BriefingError, SQLAlchemyError)):
+                await repo.append_failure(
+                    ready=ready,
+                    exc=exc,
+                    retry_exhausted=retry_exhausted,
+                    ai_model=service._llm.MODEL,
+                )
+            else:
+                await repo.append_unexpected_failure(
+                    ready=ready,
+                    exc=exc,
+                    retry_exhausted=retry_exhausted,
+                    ai_model=service._llm.MODEL,
+                )
             await session.commit()
         raise
     logger.info(

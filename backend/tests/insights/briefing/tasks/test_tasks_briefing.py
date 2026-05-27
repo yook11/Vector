@@ -32,7 +32,7 @@ def _ctx_with_session_factory(
     """``ctx.message.labels`` を持つ taskiq Context モック。
 
     ``is_last_attempt(ctx)`` は labels の ``retry_count`` / ``max_retries`` を
-    読むので、attempt 軸を切り替える試験ではここを差し替える。
+    読むので、retry 軸を切り替える試験ではここを差し替える。
     """
     ctx = MagicMock()
     session = MagicMock()
@@ -207,7 +207,7 @@ class TestSubtask:
             patch("app.queue.tasks.briefing.BriefingAuditRepository") as audit_cls,
             pytest.raises(RuntimeError, match="LLM down"),
         ):
-            audit_cls.return_value.append_failure = AsyncMock()
+            audit_cls.return_value.append_unexpected_failure = AsyncMock()
             await briefing.generate_briefing_for_category(
                 BriefingTaskInput(week_start=date(2026, 4, 20), category_id=1),
                 ctx=ctx,
@@ -224,7 +224,7 @@ class TestSubtaskFailureAudit:
         retry_count: int,
         max_retries: int,
     ) -> tuple[MagicMock, MagicMock]:
-        """指定 exc + attempt 軸で subtask を 1 回流し、audit cls の mock を返す。
+        """指定 exc + retry 軸で subtask を 1 回流し、audit cls の mock を返す。
 
         Returns:
             (audit_cls_mock, append_failure_mock)
@@ -267,10 +267,10 @@ class TestSubtaskFailureAudit:
 
     @pytest.mark.asyncio
     async def test_records_failure_then_reraises_middle_attempt(self) -> None:
-        """中間 attempt (retry_count=1, max=2) は ``retry_exhausted=None`` で焼く。
+        """中間 retry (retry_count=1, max=2) は ``retry_exhausted=None`` で焼く。
 
-        ``CompletionPayload`` precedent: extrinsic な give-up timing は最終 attempt
-        のみ True、中間は None (= JSON null) で payload に出さない。
+        extrinsic な give-up timing は retry 上限到達時のみ True、中間は
+        None (= JSON null) で payload に出さない。
         """
         exc = BriefingConfigurationError("DEEPSEEK_API_KEY missing")
         _, append_failure = await self._run_with_exc(exc, retry_count=1, max_retries=2)
@@ -278,13 +278,12 @@ class TestSubtaskFailureAudit:
         append_failure.assert_awaited_once()
         kwargs = append_failure.await_args.kwargs
         assert kwargs["exc"] is exc
-        assert kwargs["attempt"] == 2  # retry_count=1 → attempt 2
         assert kwargs["retry_exhausted"] is None
         assert kwargs["ai_model"] == "deepseek-v4-pro"
 
     @pytest.mark.asyncio
     async def test_records_failure_with_retry_exhausted_on_last_attempt(self) -> None:
-        """最終 attempt (retry_count=2, max=2) は ``retry_exhausted=True`` で焼く。
+        """最終 retry (retry_count=2, max=2) は ``retry_exhausted=True`` で焼く。
 
         ``is_last_attempt(ctx)`` が True を返すケース。consumer は
         ``payload @> '{"retry_exhausted": true}'`` で give-up を集計する。
@@ -293,7 +292,6 @@ class TestSubtaskFailureAudit:
         _, append_failure = await self._run_with_exc(exc, retry_count=2, max_retries=2)
 
         kwargs = append_failure.await_args.kwargs
-        assert kwargs["attempt"] == 3
         assert kwargs["retry_exhausted"] is True
 
 
@@ -331,6 +329,7 @@ class TestDispatcherAudit:
         ):
             audit_cls.return_value.append_dispatched = AsyncMock()
             audit_cls.return_value.append_dispatcher_failure = AsyncMock()
+            audit_cls.return_value.append_unexpected_dispatcher_failure = AsyncMock()
             await briefing.dispatch_weekly_briefings(ctx=ctx)
 
         audit_cls.return_value.append_dispatched.assert_awaited_once_with(
@@ -338,10 +337,11 @@ class TestDispatcherAudit:
             category_count=2,
         )
         audit_cls.return_value.append_dispatcher_failure.assert_not_awaited()
+        audit_cls.return_value.append_unexpected_dispatcher_failure.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_writes_dispatcher_failure_when_session_raises(self) -> None:
-        """dispatcher 本体の例外で ``append_dispatcher_failure`` が呼ばれ re-raise。
+        """dispatcher 本体の想定外例外で failure anchor が焼かれ re-raise。
 
         ``broker_briefing`` は ``max_retries=0`` で初回即 give-up のため
         ``retry_exhausted=True`` 固定で焼く (semantic は repo 側で保証)。
@@ -362,6 +362,7 @@ class TestDispatcherAudit:
         ):
             audit_cls.return_value.append_dispatched = AsyncMock()
             audit_cls.return_value.append_dispatcher_failure = AsyncMock()
+            audit_cls.return_value.append_unexpected_dispatcher_failure = AsyncMock()
             # 失敗 audit を焼くときの session も同じ factory を通るため、ここでは
             # __aenter__ を最初の呼び出しだけ raise させて、後段の audit 用 session は
             # 通常 session を返すように差し替える。
@@ -382,7 +383,9 @@ class TestDispatcherAudit:
             with pytest.raises(RuntimeError, match="session factory boom"):
                 await briefing.dispatch_weekly_briefings(ctx=ctx)
 
-        audit_cls.return_value.append_dispatcher_failure.assert_awaited_once()
-        kwargs = audit_cls.return_value.append_dispatcher_failure.await_args.kwargs
+        audit_cls.return_value.append_dispatcher_failure.assert_not_awaited()
+        append_unexpected = audit_cls.return_value.append_unexpected_dispatcher_failure
+        append_unexpected.assert_awaited_once()
+        kwargs = append_unexpected.await_args.kwargs
         assert kwargs["week_start"] == date(2026, 4, 20)
         assert kwargs["exc"] is boom

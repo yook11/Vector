@@ -1,3 +1,7 @@
+> **HISTORICAL NOTE (Scope 6)**: このファイルは現行の失敗属性契約より前の
+> foundation 記録。旧分類 enum / 旧 top-level 監査列への参照は履歴としてのみ読む。
+> 現行契約は `pipeline-events-failure-attribute-projection.md` を正本とする。
+
 > **SUPERSEDED (2026-05-25)**: 本 spec の stage1 語彙 (`source_fetch` / `article_collection` /
 > `SourceFetch*` / `ingest_source`) は **acquisition** に統一済。正本は
 > [`stage1-acquisition-vocabulary-unification.md`](./stage1-acquisition-vocabulary-unification.md)。

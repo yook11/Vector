@@ -267,7 +267,7 @@ class TestAuditIntegration:
         ev = rows[0]
         assert ev.stage == "briefing"
         assert ev.event_type == "succeeded"
-        assert ev.category == "success"
+        assert ev.retryability is None
         assert ev.payload["category_id"] == ai_category.id
         assert ev.payload["category_slug"] == "ai"
         assert ev.payload["article_count"] == 1
@@ -282,7 +282,7 @@ class TestAuditIntegration:
         """articles 0 件 (steady-state 異常系) で REJECTED audit が焼かれる。
 
         LLM 呼出も write tx も走らず、read tx 直後の別 tx で 1 行記録する。
-        ``category`` は NULL (retry 概念外、event_type で完結)。
+        retryability は NULL (retry 概念外、event_type で完結)。
         """
         service = WeeklyBriefingService(
             _factory_for(db_session), _llm_mock(), NullBriefingNotifier()
@@ -307,5 +307,5 @@ class TestAuditIntegration:
         assert len(rows) == 1
         ev = rows[0]
         assert ev.event_type == "rejected"
-        assert ev.category is None
+        assert ev.retryability is None
         assert ev.payload["article_count"] == 0

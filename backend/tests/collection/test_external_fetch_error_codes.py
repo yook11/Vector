@@ -1,6 +1,6 @@
 """``ExternalFetchError`` の CODE 契約 + 既定 message 合成の不変条件テスト。
 
-``pipeline_events.code`` に直接書き込む SSoT なので、CODE のコメント契約だけ
+``outcome_code`` に投影される origin error code なので、CODE のコメント契約だけ
 ではなく機械的に強制する:
 
 - 全 concrete subclass を再帰的に辿り、CODE が 非空・一意・``fetch_`` prefix・

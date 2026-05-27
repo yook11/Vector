@@ -11,5 +11,6 @@
 
 各 *AuditRepository は ``app.audit.repository.PipelineEventRepository`` を
 compose し、generic な append SQL は repository に委譲する。本 package の
-責務は Stage 固有の payload shape と Layer1Category / code の決定に閉じる。
+責務は Stage 固有の payload shape、``outcome_code``、failure projection の決定に
+閉じる。
 """

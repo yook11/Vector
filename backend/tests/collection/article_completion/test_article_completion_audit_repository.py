@@ -16,6 +16,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
@@ -30,6 +31,7 @@ from app.collection.article_completion.repository import (
 )
 from app.collection.article_completion.scrape_failure import (
     ContentQualityTooLow,
+    FetchFailed,
     ParseCrashed,
 )
 from app.collection.domain.analyzable_article import AnalyzableArticle
@@ -40,6 +42,10 @@ from app.collection.domain.observed_article import (
     ObservedOrigin,
 )
 from app.collection.domain.value_objects import PublishedAt
+from app.collection.external_fetch_errors import (
+    FetchAccessDeniedError,
+    FetchGatewayError,
+)
 from app.collection.persistence.article_store import ArticleStore
 from app.collection.sources.source_name import SourceName
 from app.models.news_source import NewsSource, SourceType
@@ -150,8 +156,9 @@ async def test_append_persist_outcome_success(
     assert ev.event_type == "succeeded"
     assert ev.outcome_code == "article_completed"
     assert ev.article_id == article_id
-    assert ev.category is None
+    assert ev.retryability is None
     assert ev.payload["canonical_url"] == _URL
+    assert ev.payload["attempt_count"] == ready.attempt_count
     assert ev.payload["body_length"] == len(advanced.body)  # 入力由来
     assert ev.payload["body_head"] is None  # 成功は焼かない (articles 重複)
     assert ev.payload["scraper_class"] is None  # 定数列は書かない
@@ -177,6 +184,8 @@ async def test_append_persist_outcome_superseded(
     assert ev.event_type == "skipped"
     assert ev.outcome_code == "persist_superseded"
     assert ev.article_id is None
+    assert ev.retryability is None
+    assert ev.payload["attempt_count"] == ready.attempt_count
     assert ev.payload["body_length"] is None  # 完成 body は破棄、焼かない
 
 
@@ -200,6 +209,60 @@ async def test_append_persist_outcome_url_conflict(
     assert ev.event_type == "skipped"
     assert ev.outcome_code == "persist_url_conflict"
     assert ev.article_id is None
+    assert ev.retryability is None
+    assert ev.payload["attempt_count"] == ready.attempt_count
+
+
+@pytest.mark.asyncio
+async def test_append_scrape_outcome_retryable_fetch_failed_projection(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    tc_source: NewsSource,
+) -> None:
+    """retryable な transport 失敗は failed + retryability / failure_kind を焼く。"""
+    ready = await _make_ready(db_session, tc_source, _URL)
+
+    async with session_factory() as session:
+        await ArticleCompletionAuditRepository(session).append_scrape_outcome(
+            ready=ready,
+            failure=FetchFailed(error=FetchGatewayError(status_code=502)),
+        )
+        await session.commit()
+
+    ev = await _fetch_one(db_session, tc_source.id)
+    assert ev.event_type == "failed"
+    assert ev.outcome_code == "fetch_gateway_failure"
+    assert ev.retryability == "retryable"
+    assert ev.payload["attempt_count"] == ready.attempt_count
+    assert ev.payload["failure_kind"] == "external_fetch"
+    assert ev.payload["failure_action"] is None
+
+
+@pytest.mark.asyncio
+async def test_append_scrape_outcome_terminal_fetch_failed_projection(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    tc_source: NewsSource,
+) -> None:
+    """terminal な transport 失敗は non_retryable として projection する。"""
+    ready = await _make_ready(db_session, tc_source, _URL)
+
+    async with session_factory() as session:
+        await ArticleCompletionAuditRepository(session).append_scrape_outcome(
+            ready=ready,
+            failure=FetchFailed(
+                error=FetchAccessDeniedError(status_code=403, reason="forbidden")
+            ),
+        )
+        await session.commit()
+
+    ev = await _fetch_one(db_session, tc_source.id)
+    assert ev.event_type == "failed"
+    assert ev.outcome_code == "fetch_access_denied"
+    assert ev.retryability == "non_retryable"
+    assert ev.payload["attempt_count"] == ready.attempt_count
+    assert ev.payload["failure_kind"] == "external_fetch"
+    assert ev.payload["failure_action"] is None
 
 
 @pytest.mark.asyncio
@@ -221,8 +284,12 @@ async def test_append_scrape_outcome_parse_crashed_is_failed_with_error_class(
     ev = await _fetch_one(db_session, tc_source.id)
     assert ev.event_type == "failed"
     assert ev.outcome_code == "scrape_parse_crashed"
+    assert ev.retryability == "non_retryable"
     assert ev.error_class == "LxmlError"
+    assert ev.payload["attempt_count"] == ready.attempt_count
     assert ev.payload["error_message"] == "boom"
+    assert ev.payload["failure_kind"] == "scrape_parse_crashed"
+    assert ev.payload["failure_action"] is None
 
 
 @pytest.mark.asyncio
@@ -246,7 +313,9 @@ async def test_append_scrape_outcome_content_quality_is_rejected_with_metric(
     ev = await _fetch_one(db_session, tc_source.id)
     assert ev.event_type == "rejected"
     assert ev.outcome_code == "scrape_content_quality_too_low"
+    assert ev.retryability is None
     assert ev.error_class is None  # 値判定なので mechanism なし
+    assert ev.payload["attempt_count"] == ready.attempt_count
     assert ev.payload["body_length"] == 12
     assert ev.payload["quality_gate_metric"] == {"title_present": False}
     assert ev.payload["body_head"] == "too short"  # 失敗経路は唯一の witness
@@ -280,8 +349,12 @@ async def test_append_persist_crashed_records_failed_with_chain_and_redaction(
     ev = await _fetch_one(db_session, tc_source.id)
     assert ev.event_type == "failed"
     assert ev.outcome_code == "persist_crashed"
+    assert ev.retryability == "unknown"
     assert ev.error_class is not None
     assert ev.error_class.endswith(".RuntimeError")
+    assert ev.payload["attempt_count"] == ready.attempt_count
+    assert ev.payload["failure_kind"] == "persist_crashed"
+    assert ev.payload["failure_action"] is None
     # cause chain が FQN list で残る (RuntimeError → ValueError)
     assert ev.payload["error_chain"][0].endswith(".RuntimeError")
     assert any(c.endswith(".ValueError") for c in ev.payload["error_chain"])
@@ -289,6 +362,31 @@ async def test_append_persist_crashed_records_failed_with_chain_and_redaction(
     assert ev.payload["error_message"] is not None
     assert "SflKxwRJSMeKKF2QT4secret" not in ev.payload["error_message"]
     assert "***" in ev.payload["error_message"]
+
+
+@pytest.mark.asyncio
+async def test_append_persist_crashed_db_error_uses_db_projection(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    tc_source: NewsSource,
+) -> None:
+    """persist DB 例外は outcome 互換を保ちつつ DB failure_kind を焼く。"""
+    ready = await _make_ready(db_session, tc_source, _URL)
+    exc = OperationalError("SELECT 1", {}, Exception("connection dropped"))
+
+    async with session_factory() as session:
+        await ArticleCompletionAuditRepository(session).append_persist_crashed(
+            ready=ready, exc=exc
+        )
+        await session.commit()
+
+    ev = await _fetch_one(db_session, tc_source.id)
+    assert ev.event_type == "failed"
+    assert ev.outcome_code == "persist_crashed"
+    assert ev.retryability == "retryable"
+    assert ev.payload["attempt_count"] == ready.attempt_count
+    assert ev.payload["failure_kind"] == "db_runtime"
+    assert ev.payload["failure_action"] is None
 
 
 @pytest.mark.asyncio

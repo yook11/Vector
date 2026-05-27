@@ -1,58 +1,24 @@
-"""Stage 3 (curation) 専用の pipeline_events 監査リポジトリ。
-
-監査 row の **shape SSoT**。Service / Task / application helper は本 class の
-semantic method を呼ぶだけで、``CurationPayload`` の組み立て・
-``PipelineEventRepository.append()`` の引数列・``error_chain`` の FQN 組み立て
-を一切知らない。
-
-tx 境界は呼出側が握る (本 class は ``await session.commit()`` を呼ばない)。
-
-設計:
-- ``append_signal`` / ``append_noise`` は成功 audit (caller である Service が
-  ``"curated_signal"`` / ``"curated_noise"`` の outcome code 文字列を ``code`` で
-  渡す)。``ai_model`` / ``prompt_version`` / ``raw_relevance`` は envelope
-  (``call.model_name`` / ``call.prompt_version`` / ``call.raw_relevance``) から
-  直接埋める (Stage 4 ``append_in_scope`` / ``append_out_of_scope`` と対称)
-- ``append_drop_article`` は ``mark_article_unprocessable`` 内で article DELETE
-  と同一 tx に焼く (caller が ``type(exc).CODE`` を ``code`` で渡す)
-- ``append_failure`` は Task 層 4 marker dispatch 経路で別 session 別 tx として
-  焼く (``exc`` から ``category`` / ``code`` を内部導出する SSoT)
-
-失敗経路 (``append_drop_article`` / ``append_failure``) は envelope を持たない
-ため、``curator: BaseCurator`` を引数で受け、``curator.model_name`` /
-``curator.prompt_version`` (property 経由) から ``ai_model`` /
-``prompt_version`` を埋める (PR4 で ClassVar 強制を property 契約に置換、
-Gemini hardcode 依存は引き続き持たない)。
-
-PR-E.1.5 で ``Stage.CURATION`` / ``CurationPayload`` に rename 済み (旧
-``extraction`` wire 値は migration z1_curation_completion_rename で移行)。
-
-caller pre-compute による依存方向の片方向化:
-    ``input_content_length`` / ``input_content_head`` / ``input_content_hash`` は
-    caller (``app.analysis.curation.service`` / ``...failure_handling``) が
-    ``build_curation_audit_input(...)`` で事前算出し kwargs として渡す。
-    sanitize / truncate / hash の計算 (curation domain knowledge) は curation
-    内部に閉じ、本 module は ``app.analysis.curation.audit`` への import を
-    持たない (``app/audit/__init__.py`` の依存方向宣言と整合)。
-"""
+"""Stage 3 curation の監査イベントを組み立てる。"""
 
 from __future__ import annotations
 
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis.curation.ai.base import BaseCurator
 from app.analysis.curation.ai.envelope import CurationCall
 from app.analysis.curation.domain import Noise, Signal
 from app.analysis.curation.domain.ready import ReadyForCuration
-from app.audit.categories import Layer1Category
+from app.analysis.curation.errors import CurationError, CurationTerminalDropError
 from app.audit.domain.event import EventType, Stage
 from app.audit.domain.payloads import CurationPayload
 from app.audit.error_chain import extract_error_chain
 from app.audit.failure_projection import (
     FailureProjection,
-    legacy_category_for_projection,
+    failure_action_value,
     project_failure,
+    unknown_failure_projection,
 )
 from app.audit.repository import PipelineEventRepository
 from app.models.article import Article
@@ -62,18 +28,11 @@ from app.shared.security.redaction import redact_secrets
 _AI_RAW_RESPONSE_LIMIT = 2048
 _ERROR_MESSAGE_LIMIT = 2000
 
-# 年齢起因の救済断念 (backfill が古い未処理記事を物理削除) の outcome code。
-# 内容拒否の drop (NON_RETRYABLE_DROP_ARTICLE) とは性質が全く異なるため別 code。
 BACKFILL_CURATION_AGED_OUT_CODE = "backfill_curation_aged_out"
 
 
 class CurationAuditRepository:
-    """Stage 3 監査 row の semantic API。
-
-    内部で ``PipelineEventRepository`` を compose し、generic な append SQL は
-    そちらに委譲する。本 class の責務は **Stage 3 固有の payload shape と
-    Layer1Category / code の決定** に閉じる。
-    """
+    """Stage 3 専用の payload / outcome_code / failure projection を決める。"""
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
@@ -91,15 +50,7 @@ class CurationAuditRepository:
         input_content_head: str,
         input_content_hash: str,
     ) -> None:
-        """signal 経路の成功 audit を 1 行記録する。
-
-        ``code`` は caller である Service が outcome 種別から渡す
-        (例: ``"curated_signal"``)。``envelope`` は ``CurationCall[Signal]`` に
-        narrow され、Service が ``match`` で振り分けた後にのみ呼ばれる。
-
-        ``input_content_*`` 3 field は caller (Service) が
-        ``build_curation_audit_input(...)`` で事前算出し kwargs で渡す。
-        """
+        """signal 成功を記録する。"""
         payload = CurationPayload(
             source_name=await self._resolve_source_name(ready.article_id),
             input_content_length=input_content_length,
@@ -116,8 +67,6 @@ class CurationAuditRepository:
             outcome_code=code,
             payload=payload,
             article_id=ready.article_id,
-            category=Layer1Category.SUCCESS,
-            code=code,
         )
 
     async def append_noise(
@@ -130,14 +79,7 @@ class CurationAuditRepository:
         input_content_head: str,
         input_content_hash: str,
     ) -> None:
-        """noise 経路の成功 audit を 1 行記録する (``code="curated_noise"``)。
-
-        ``envelope`` は ``CurationCall[Noise]`` に narrow され、Service が
-        ``match`` で振り分けた後にのみ呼ばれる。
-
-        ``input_content_*`` 3 field は caller (Service) が
-        ``build_curation_audit_input(...)`` で事前算出し kwargs で渡す。
-        """
+        """noise 成功を記録する。"""
         payload = CurationPayload(
             source_name=await self._resolve_source_name(ready.article_id),
             input_content_length=input_content_length,
@@ -154,8 +96,6 @@ class CurationAuditRepository:
             outcome_code=code,
             payload=payload,
             article_id=ready.article_id,
-            category=Layer1Category.SUCCESS,
-            code=code,
         )
 
     # --- DROP 経路 (article DELETE と同一 tx) -----------------------------
@@ -165,64 +105,40 @@ class CurationAuditRepository:
         *,
         article_id: int,
         code: str,
-        exc: BaseException,
+        exc: CurationTerminalDropError,
         curator: BaseCurator,
         input_content_length: int,
         input_content_head: str,
         input_content_hash: str,
     ) -> None:
-        """``mark_article_unprocessable`` 内で article DELETE 直前に焼く audit。
-
-        Service が同一 tx で DELETE と組み合わせる (本 class は commit しない)。
-        ``code`` は Stage 3 marker の ``code`` instance attr (Layer 2 SSoT、ACL が
-        provider ``CODE`` を引き継ぐ)、``category`` は固定で
-        ``NON_RETRYABLE_DROP_ARTICLE``。
-
-        失敗経路は envelope を持たない (AI 呼び出し前 or 中の失敗) ため
-        ``ai_model`` / ``prompt_version`` は ``curator`` の property
-        (``model_name`` / ``prompt_version``) から埋める。
-
-        ``error_chain`` は ``extract_error_chain`` で ``__cause__`` を辿り、ACL の
-        ``raise from exc`` で保持された元 ``AIProviderError`` まで記録する。
-        """
+        """article 削除を伴う curation 失敗を記録する。"""
+        projection = self._projection_of(exc, fallback_code=code)
         payload = CurationPayload(
+            failure_kind=projection.failure_kind,
+            failure_action=failure_action_value(projection),
             source_name=await self._resolve_source_name(article_id),
             input_content_length=input_content_length,
             input_content_head=input_content_head,
             input_content_hash=input_content_hash,
             ai_model=curator.model_name,
             prompt_version=curator.prompt_version,
-            # red-team chain γ-2: SDK exception message に key prefix /
-            # Authorization header が混入する経路を redact してから永続化する。
             error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
             error_chain=extract_error_chain(exc),
         )
-        projection = self._projection_of(exc, fallback_code=code)
         await self._events.append(
-            stage=Stage.CURATION,
+            stage=projection.stage or Stage.CURATION,
             event_type=EventType.FAILED,
             outcome_code=projection.code,
             payload=payload,
             article_id=article_id,
             error_class=_fqn(exc),
-            category=legacy_category_for_projection(
-                stage=Stage.CURATION, projection=projection
-            ),
-            code=projection.code,
+            retryability=projection.retryability,
         )
 
     # --- 救済断念経路 (年齢削除と同一 tx) ---------------------------------
 
     async def append_backfill_curation_aged_out(self, *, article_id: int) -> None:
-        """backfill が古い未処理記事を物理削除する直前に焼く監査(commit は caller)。
-
-        意図的な組合せ: ``stage=BACKFILL_CURATE``(curation 救済の保守動作) +
-        ``payload.kind=curation``(curation 対象記事の事実)。AI 呼び出しを伴わない
-        年齢起因の断念のため envelope / curator / exc は持たない。
-
-        内容拒否の drop(``stage=CURATION`` / ``category=NON_RETRYABLE_DROP_ARTICLE``)
-        とは stage / event_type / category / code が全て異なる別経路。
-        """
+        """古い未処理記事を backfill が諦めた事実を記録する。"""
         source_name = await self._resolve_source_name(article_id)
         await self._events.append(
             stage=Stage.BACKFILL_CURATE,
@@ -230,8 +146,6 @@ class CurationAuditRepository:
             outcome_code=BACKFILL_CURATION_AGED_OUT_CODE,
             payload=CurationPayload(source_name=source_name),
             article_id=article_id,
-            category=None,  # 明示的に NULL(curation 分類ではない)
-            code=BACKFILL_CURATION_AGED_OUT_CODE,
         )
 
     # --- 失敗経路 (Task 層 4 marker dispatch) -----------------------------
@@ -240,55 +154,76 @@ class CurationAuditRepository:
         self,
         *,
         ready: ReadyForCuration,
-        exc: BaseException,
-        attempt: int,
+        exc: CurationError | SQLAlchemyError,
         curator: BaseCurator,
         input_content_length: int,
         input_content_head: str,
         input_content_hash: str,
     ) -> None:
-        """CurationTerminalKeepError / CurationRecoverableError / catch-all
-        経路の failure audit を 1 行記録する。
+        """article を削除しない curation 失敗を記録する。"""
+        projection = self._projection_of(exc)
+        await self._append_failed_event(
+            ready=ready,
+            exc=exc,
+            curator=curator,
+            input_content_length=input_content_length,
+            input_content_head=input_content_head,
+            input_content_hash=input_content_hash,
+            projection=projection,
+        )
 
-        ``category`` / ``code`` は ``exc`` から自動導出 (Stage 3 marker
-        isinstance 分岐 + ``exc.code`` instance attr 抽出)。Service と独立に
-        Task 層から呼ばれるため別 session (caller が ``tasks.py`` の task 関数
-        末尾で開閉 + commit する; PR4 で helper 廃止、task 末尾に inline)。
+    async def append_unexpected_failure(
+        self,
+        *,
+        ready: ReadyForCuration,
+        exc: BaseException,
+        curator: BaseCurator,
+        input_content_length: int,
+        input_content_head: str,
+        input_content_hash: str,
+    ) -> None:
+        """想定外の curation 失敗を unknown として記録する。"""
+        await self._append_failed_event(
+            ready=ready,
+            exc=exc,
+            curator=curator,
+            input_content_length=input_content_length,
+            input_content_head=input_content_head,
+            input_content_hash=input_content_hash,
+            projection=unknown_failure_projection(),
+        )
 
-        失敗経路は envelope を持たない (AI 呼び出し前 or 中の失敗) ため
-        ``ai_model`` / ``prompt_version`` は ``curator`` の property
-        (``model_name`` / ``prompt_version``) から埋める。
-
-        ``error_chain`` は ``extract_error_chain`` で ``__cause__`` を辿り、ACL の
-        ``raise from exc`` で保持された元 ``AIProviderError`` まで記録する。
-        """
+    async def _append_failed_event(
+        self,
+        *,
+        ready: ReadyForCuration,
+        exc: BaseException,
+        curator: BaseCurator,
+        input_content_length: int,
+        input_content_head: str,
+        input_content_hash: str,
+        projection: FailureProjection,
+    ) -> None:
         payload = CurationPayload(
+            failure_kind=projection.failure_kind,
+            failure_action=failure_action_value(projection),
             source_name=await self._resolve_source_name(ready.article_id),
             input_content_length=input_content_length,
             input_content_head=input_content_head,
             input_content_hash=input_content_hash,
             ai_model=curator.model_name,
             prompt_version=curator.prompt_version,
-            # red-team chain γ-2: SDK exception message に key prefix /
-            # Authorization header が混入する経路を redact してから永続化する。
             error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
             error_chain=extract_error_chain(exc),
         )
-        projection = self._projection_of(exc)
-        category = legacy_category_for_projection(
-            stage=Stage.CURATION, projection=projection
-        )
-        code = projection.code
         await self._events.append(
-            stage=Stage.CURATION,
+            stage=projection.stage or Stage.CURATION,
             event_type=EventType.FAILED,
-            outcome_code=code,
+            outcome_code=projection.code,
             payload=payload,
             article_id=ready.article_id,
-            attempt=attempt,
             error_class=_fqn(exc),
-            category=category,
-            code=code,
+            retryability=projection.retryability,
         )
 
     # --- internal helpers -------------------------------------------------
@@ -311,19 +246,6 @@ class CurationAuditRepository:
     ) -> FailureProjection:
         """Stage 3 失敗を class attr / adapter から projection する。"""
         return project_failure(exc, fallback_code=fallback_code)
-
-    @staticmethod
-    def _category_of(exc: BaseException) -> Layer1Category:
-        """互換用: projection から legacy ``category`` を導出する。"""
-        return legacy_category_for_projection(
-            stage=Stage.CURATION,
-            projection=CurationAuditRepository._projection_of(exc),
-        )
-
-    @staticmethod
-    def _code_of(exc: BaseException) -> str:
-        """互換用: projection から ``code`` を導出する。"""
-        return CurationAuditRepository._projection_of(exc).code
 
 
 def _fqn(exc: BaseException) -> str:

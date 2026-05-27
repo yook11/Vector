@@ -5,10 +5,9 @@ Outcome 型 assertion を「signal 勝者 → ``int``、noise 勝者 → ``None`
 書き換えている。
 
 検証する性質:
-- signal 勝者 → ``outcome_code='curated_signal'`` (SUCCEEDED) + ``category='success'`` +
-  ``code='curated_signal'``、Service は ``curation_id`` (``int``) を返す
-- noise 勝者 → ``outcome_code='curated_noise'`` (SUCCEEDED) +
-  ``category='success'`` + ``code='curated_noise'``、Service は ``None`` を返す
+- signal 勝者 → ``outcome_code='curated_signal'`` (SUCCEEDED)、Service は
+  ``curation_id`` (``int``) を返す
+- noise 勝者 → ``outcome_code='curated_noise'`` (SUCCEEDED)、Service は ``None`` を返す
   (Stage 4 chain しない、Task 層は ``if result is None: return`` で短絡)
 - ``CurationResponseInvalidError`` (Layer 2-B) は Service が catch せず
   そのまま raise される (audit は task 層が焼く責務)
@@ -114,12 +113,12 @@ async def _fetch_curation_events(
 
 
 @pytest.mark.asyncio
-async def test_signal_outcome_writes_curated_signal_audit_with_category_and_code(
+async def test_signal_outcome_writes_curated_signal_audit_with_outcome_code(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """signal Outcome 経路で category=success / code=curated_signal が焼かれる。"""
+    """signal Outcome 経路で succeeded / outcome_code=curated_signal が焼かれる。"""
     article = await _make_article(db_session, sample_source)
     ready = await _ready(article)
     svc = CurationService(session_factory)
@@ -134,8 +133,7 @@ async def test_signal_outcome_writes_curated_signal_audit_with_category_and_code
     ev = events[0]
     assert ev.event_type == "succeeded"
     assert ev.outcome_code == "curated_signal"
-    assert ev.category == "success"
-    assert ev.code == "curated_signal"
+    assert ev.retryability is None
     assert ev.source_id == sample_source.id
     payload = ev.payload
     assert payload["ai_model"] == GEMINI_CURATION_SPEC.model
@@ -148,12 +146,12 @@ async def test_signal_outcome_writes_curated_signal_audit_with_category_and_code
 
 
 @pytest.mark.asyncio
-async def test_noise_outcome_writes_curated_noise_audit_with_category_and_code(
+async def test_noise_outcome_writes_curated_noise_audit(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """noise Outcome 経路で category=success / code=curated_noise が焼かれる。"""
+    """noise Outcome 経路で succeeded / outcome_code=curated_noise が焼かれる。"""
     article = await _make_article(db_session, sample_source)
     ready = await _ready(article)
     svc = CurationService(session_factory)
@@ -167,8 +165,7 @@ async def test_noise_outcome_writes_curated_noise_audit_with_category_and_code(
     ev = events[0]
     assert ev.event_type == "succeeded"
     assert ev.outcome_code == "curated_noise"
-    assert ev.category == "success"
-    assert ev.code == "curated_noise"
+    assert ev.retryability is None
 
 
 @pytest.mark.asyncio
