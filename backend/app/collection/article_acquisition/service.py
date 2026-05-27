@@ -1,19 +1,4 @@
-"""Article Acquisition Service — 1 source 分のニュースから記事を獲得する。
-
-収集 → 変換 → 永続化 の 3 工程を順に駆動する唯一のオーケストレータ:
-
-1. **取得** ``fetch_articles(source, tools)`` engine が ``FetchedArticle`` を流す。
-2. **変換** ``convert_fetched_article`` が「何ができたか」(Ready / Observed /
-   棄却) に変換する。
-3. **永続化** 変換結果を ``match`` で振り分ける:
-   - ``AnalyzableArticle`` → 即時保存 + 成功 witness を同一 tx で焼く
-   - ``ObservedArticle`` → ``incomplete_articles`` に投入 + 成功 witness を同一 tx
-   - ``ConversionRejection`` → 業務 tx とは別 session で棄却監査して継続
-
-成功 witness (article_created / incomplete_article_created) は新規 URL 初回のみ発火
-(再掲の ON CONFLICT / race skip は定常的なので flood 回避で非記録)。``commit``
-までが責務。``NewsSource`` lookup は本 Service では行わない。
-"""
+"""1 source 分の記事取得・変換・保存・監査をまとめる application service。"""
 
 from __future__ import annotations
 
@@ -25,8 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.audit.stages.acquisition import SourceAcquisitionAuditRepository
 from app.collection.article_acquisition.errors import (
-    SourceAcquisitionError,
     UnreadableResponseError,
+    map_origin_to_acquisition,
 )
 from app.collection.article_acquisition.fetched_article_converter import (
     ConversionRejection,
@@ -47,12 +32,7 @@ logger = structlog.get_logger(__name__)
 
 
 class ArticleAcquisitionService:
-    """1 source 分のニュースを取り込み、品質を担保した記事を獲得する。
-
-    即時獲得は ``articles`` に保存、本文補完を要するものは
-    ``incomplete_articles`` に保管 (後段 ``ArticleCompletionService``)。
-    ソース全体の取得失敗は ``SourceAcquisitionError`` で Task に伝播する。
-    """
+    """取得失敗は Stage 1 marker に詰め替えて Task に伝播する。"""
 
     def __init__(
         self,
@@ -74,28 +54,22 @@ class ArticleAcquisitionService:
             tools = self._tools_factory()
 
             try:
-                async for fetched in fetch_articles(self._source, tools):  # 1. 取得
+                async for fetched in fetch_articles(self._source, tools):
                     try:
-                        outcome = convert_fetched_article(  # 2. 変換 (= 何ができたか)
+                        outcome = convert_fetched_article(
                             fetched, source=self._source, source_id=source_id
                         )
                     except Exception as exc:
-                        # 想定外 bug のみ: convert 呼び出し 1 行だけを極小スコープで
-                        # 値化する。collect 失敗 (外側 except) / persist 失敗 (try 外)
-                        # と分離し、握りつぶし範囲を広げない。
+                        # entry 単位の変換 bug は source 全体を止めず rejected に畳む。
                         outcome = unexpected_rejection(
                             fetched, source=self._source, cause=exc
                         )
-                    match outcome:  # 3. 永続化 (DB error は try 外で素通り)
+                    match outcome:
                         case AnalyzableArticle() as ready:
                             article_id = await article_store.save(ready)
                             if article_id is None:
-                                # 既知 URL / race は ON CONFLICT → None。定常的に
-                                # 発火するため flood 回避で非記録 (steady-state)。
                                 continue
                             persisted_ids.append(article_id)
-                            # 成功 witness は業務 INSERT と同一 tx で焼く
-                            # (commit 失敗時は記事ごと巻き戻り divergence しない)。
                             await audit.append_article_created(
                                 source_id=source_id,
                                 source_name=source_name,
@@ -103,8 +77,6 @@ class ArticleAcquisitionService:
                                 canonical_url=str(ready.source_url),
                             )
                         case ObservedArticle() as observed:
-                            # 既知 URL の HTML fetch 反復を避けるコスト節約
-                            # (UNIQUE は enqueue 側で担保)
                             if await article_store.exists_by_source_url(
                                 observed.source_url
                             ):
@@ -115,8 +87,6 @@ class ArticleAcquisitionService:
                                 ready_at=datetime.now(UTC),
                             )
                             if incomplete_id is None:
-                                # race-loss (UNIQUE 違反)。pending 中は毎 tick 衝突
-                                # しうる定常経路のため非記録。
                                 continue
                             await audit.append_incomplete_article_created(
                                 source_id=source_id,
@@ -124,13 +94,9 @@ class ArticleAcquisitionService:
                                 canonical_url=str(observed.source_url),
                             )
                         case ConversionRejection() as rej:
-                            # 変換不能 entry。業務 session には書かず別 tx で
-                            # 監査して次 entry へ。
                             await self._audit_conversion_rejected(source_id, rej)
             except (ExternalFetchError, UnreadableResponseError) as exc:
-                # read 失敗 (接続/読取) を CODE 付きで載せ替え伝播
-                # (CODE は監査解像度用)。
-                raise SourceAcquisitionError(str(exc), code=exc.CODE) from exc
+                raise map_origin_to_acquisition(exc) from exc
 
             await session.commit()
 
@@ -144,11 +110,7 @@ class ArticleAcquisitionService:
     async def _audit_conversion_rejected(
         self, source_id: int, rej: ConversionRejection
     ) -> None:
-        """変換棄却を業務 tx とは別 session で best-effort 監査する。
-
-        業務 session に書くと後続の source 全体失敗で監査も巻き戻るため、
-        必ず別 tx で commit する。失敗時は log fallback。
-        """
+        """変換棄却を業務 tx とは別 session で best-effort 監査する。"""
         try:
             async with self._session_factory() as audit_session:
                 await SourceAcquisitionAuditRepository(

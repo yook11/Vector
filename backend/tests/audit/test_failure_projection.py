@@ -26,9 +26,13 @@ from app.audit.failure_projection import (
     project_failure,
     project_marker_failure,
 )
-from app.audit.stages.acquisition import SourceAcquisitionAuditRepository
 from app.audit.stages.completion import ArticleCompletionAuditRepository
-from app.collection.article_acquisition.errors import SourceAcquisitionError
+from app.collection.article_acquisition.errors import (
+    AcquisitionExternalFetchRecoverableError,
+    AcquisitionExternalFetchTerminalError,
+    AcquisitionUnreadableResponseError,
+    UnreadableResponseError,
+)
 from app.collection.article_completion.scrape_failure import (
     FetchFailed,
 )
@@ -143,10 +147,12 @@ def test_project_failure_returns_unknown_for_catch_all() -> None:
 
 
 @pytest.mark.parametrize(
-    ("code", "expected"),
+    ("exc", "expected"),
     [
         (
-            "fetch_gateway_failure",
+            AcquisitionExternalFetchRecoverableError(
+                origin_error=FetchGatewayError(status_code=502)
+            ),
             FailureProjection(
                 failure_kind="external_fetch",
                 retryability=Retryability.RETRYABLE,
@@ -156,7 +162,9 @@ def test_project_failure_returns_unknown_for_catch_all() -> None:
             ),
         ),
         (
-            "fetch_access_denied",
+            AcquisitionExternalFetchTerminalError(
+                origin_error=FetchAccessDeniedError(status_code=403, reason="forbidden")
+            ),
             FailureProjection(
                 failure_kind="external_fetch",
                 retryability=Retryability.NON_RETRYABLE,
@@ -166,7 +174,7 @@ def test_project_failure_returns_unknown_for_catch_all() -> None:
             ),
         ),
         (
-            "read_unreadable_response",
+            AcquisitionUnreadableResponseError(origin_error=UnreadableResponseError()),
             FailureProjection(
                 failure_kind="unreadable_response",
                 retryability=Retryability.NON_RETRYABLE,
@@ -177,23 +185,10 @@ def test_project_failure_returns_unknown_for_catch_all() -> None:
         ),
     ],
 )
-def test_source_acquisition_projection_maps_origin_codes(
-    code: str, expected: FailureProjection
+def test_source_acquisition_marker_projection_reads_classvars(
+    exc: BaseException, expected: FailureProjection
 ) -> None:
-    exc = SourceAcquisitionError("origin failure", code=code)
-
-    assert SourceAcquisitionAuditRepository._projection_of(exc) == expected
-
-
-def test_source_acquisition_projection_returns_unknown_for_catch_all() -> None:
-    assert SourceAcquisitionAuditRepository._projection_of(RuntimeError("boom")) == (
-        FailureProjection(
-            failure_kind="unknown",
-            retryability=Retryability.UNKNOWN,
-            failure_action=None,
-            code="unexpected_error",
-        )
-    )
+    assert project_failure(exc) == expected
 
 
 def test_completion_fetch_failed_projection_uses_scrape_decision() -> None:

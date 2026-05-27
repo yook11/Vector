@@ -1,18 +1,4 @@
-"""``SourceAcquisitionFailureHandler`` の dispatch integration test。
-
-Stage 1 は cron 一本化 (taskiq inline retry なし、``max_retries=0``) のため、
-検証する不変条件は:
-
-- ``SourceAcquisitionError`` → ``pipeline_events`` 1 行 (stage=acquisition /
-  event_type=failed / ``outcome_code`` = origin CODE /
-  ``payload`` に ``code`` キー無し) + ``reraise=False``
-- 想定外 ``Exception`` → audit (``outcome_code`` = ``unexpected_error``) +
-  ``reraise=True``
-- audit Repository が落ちても handler は完走し
-  ``source_acquisition_failure_audit_dropped`` 構造ログにフォールバックする
-  (business / audit exception の secret prefix が log field から除去される、
-  red-team chain γ-2 対称化)
-"""
+"""``SourceAcquisitionFailureHandler`` の dispatch integration test。"""
 
 from __future__ import annotations
 
@@ -23,9 +9,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
-from app.collection.article_acquisition.errors import SourceAcquisitionError
+from app.collection.article_acquisition.errors import (
+    AcquisitionExternalFetchTerminalError,
+)
 from app.collection.article_acquisition.failure_handling import (
     SourceAcquisitionFailureHandler,
+)
+from app.collection.external_fetch_errors import (
+    FetchAccessDeniedError,
+    FetchSsrfBlockedError,
 )
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
@@ -54,11 +46,13 @@ async def test_acquisition_error_writes_audit_and_returns_false(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """``SourceAcquisitionError`` → origin CODE の audit 1 行 + ``reraise=False``。"""
+    """Stage 1 marker → origin CODE の audit 1 行 + ``reraise=False``。"""
     source_id = sample_source.id
     handler = SourceAcquisitionFailureHandler(session_factory)
 
-    exc = SourceAcquisitionError("HTTP 403: VentureBeat", code="fetch_access_denied")
+    exc = AcquisitionExternalFetchTerminalError(
+        origin_error=FetchAccessDeniedError(status_code=403, reason="forbidden")
+    )
     reraise = await handler.handle(
         source_id=source_id,
         source_name="VentureBeat",
@@ -74,12 +68,11 @@ async def test_acquisition_error_writes_audit_and_returns_false(
     assert ev.outcome_code == "fetch_access_denied"
     assert ev.retryability == "non_retryable"
     assert ev.error_class is not None
-    assert ev.error_class.endswith(".SourceAcquisitionError")
-    # outcome_code が識別子。payload に code を二重に焼かない。
+    assert ev.error_class.endswith(".AcquisitionExternalFetchTerminalError")
     assert "code" not in ev.payload
     assert ev.payload["source_name"] == "VentureBeat"
     assert ev.payload["error_message"] == (
-        "SourceAcquisitionError(code='fetch_access_denied')"
+        "AcquisitionExternalFetchTerminalError(code='fetch_access_denied')"
     )
     assert ev.payload["failure_kind"] == "external_fetch"
     assert ev.payload["failure_action"] is None
@@ -121,17 +114,14 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """audit Repository が落ちても handler は完走しログにフォールバックする。
-
-    business / audit exception message に混入した secret prefix が log field
-    から redact されることも検証する (red-team chain γ-2 対称化)。
-    """
+    """audit Repository が落ちても handler は完走し redacted log に退避する。"""
     source_id = sample_source.id
     handler = SourceAcquisitionFailureHandler(session_factory)
 
-    business_exc = SourceAcquisitionError(
-        "blocked Authorization: Bearer sk-live-BUSINESSSECRETabc",
-        code="fetch_ssrf_blocked",
+    business_exc = AcquisitionExternalFetchTerminalError(
+        origin_error=FetchSsrfBlockedError(
+            "blocked Authorization: Bearer sk-live-BUSINESSSECRETabc"
+        )
     )
 
     with (
@@ -158,7 +148,9 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
     assert drops, "fallback ログが emit されていない"
     drop = drops[-1]
     assert drop["source_id"] == source_id
-    assert drop["business_error_class"].endswith(".SourceAcquisitionError")
+    assert drop["business_error_class"].endswith(
+        ".AcquisitionExternalFetchTerminalError"
+    )
     assert drop["audit_error_class"].endswith(".RuntimeError")
     assert "sk-live-BUSINESSSECRETabc" not in drop["business_error_message"]
     assert "sk-live-AUDITSECRETxyz" not in drop["audit_error_message"]

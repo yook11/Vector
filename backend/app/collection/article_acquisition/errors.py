@@ -1,9 +1,4 @@
-"""Stage 1 (article_acquisition) の marker / per-entry 変換失敗例外。
-
-``SourceAcquisitionError`` は stage1 専用の取得失敗 marker。共用の fetch transport
-例外階層の基底 ``app.collection.errors.SourceFetchError`` とは別物 (あちらは I/O
-動詞 ``fetch`` の語彙、本 module は工程 ``acquisition`` の語彙)。
-"""
+"""Stage 1 (article_acquisition) の marker / 変換失敗例外。"""
 
 from __future__ import annotations
 
@@ -11,6 +6,28 @@ from enum import StrEnum
 from typing import ClassVar
 
 from app.audit.domain.event import Stage
+from app.audit.failure_projection import FailureAction, Retryability
+from app.collection.external_fetch_errors import (
+    ExternalFetchError,
+    FetchAccessDeniedError,
+    FetchContentTypeMismatchError,
+    FetchGatewayError,
+    FetchLegalBlockError,
+    FetchNetworkError,
+    FetchOriginServerError,
+    FetchRateLimitedError,
+    FetchRedirectBlockedError,
+    FetchRedirectLoopError,
+    FetchRequestTimeoutError,
+    FetchResourceNotFoundError,
+    FetchResponseTooLargeError,
+    FetchRetryableStatusError,
+    FetchRobotsDisallowedError,
+    FetchRobotsUnavailableError,
+    FetchSsrfBlockedError,
+    FetchTimeoutError,
+    FetchUnexpectedStatusError,
+)
 from app.logfire_exceptions import VectorDomainError
 
 
@@ -36,20 +53,16 @@ class FetchedArticleConversionError(Exception):
     """``FetchedArticle`` を ``AnalyzableArticle`` / ``ObservedArticle`` の
     どちらにも変換できなかった失敗。
 
-    ``AnalyzableArticle`` 不成立は想定内の正常系 (Ready 候補 ⊆ Observed 候補)
-    のため、失敗 reason は ``ObservedArticle`` にもなれなかった理由 1 つで足りる。
-
-    ``message`` は決定的・非秘匿の英語文字列。秘匿値混入の可能性がある
-    ``raw_url`` は素の値を保持し、redact は監査永続化側の責務。
+    ``raw_url`` は素の値を保持し、redact は監査永続化側で行う。
 
     Attributes:
-        code: audit event code (``outcome_code`` に焼く値)。
-        conversion_reason: なぜ Observed にもなれなかったか (= 変換失敗理由)。
-        source_name: 出所のソース表示名。
-        raw_url: 変換前の生 URL (無い / 取れない場合 ``None``)。
-        has_title: title が存在したか (trim 前で観測)。
-        body_length: body 候補の長さ (無い場合 ``None``)。
-        has_published_at: published_at hint が存在したか。
+        code: ``outcome_code`` に焼く event code。
+        conversion_reason: Observed にもなれなかった理由。
+        source_name: source 表示名。
+        raw_url: 変換前の URL。
+        has_title: trim 前 title の有無。
+        body_length: body 候補の長さ。
+        has_published_at: published_at hint の有無。
     """
 
     CODE: ClassVar[str] = "article_conversion_rejected"
@@ -84,19 +97,7 @@ class FetchedArticleConversionError(Exception):
 
 
 class UnreadableResponseError(Exception):
-    """応答は受領したが構造化できない read 段固有の失敗 (接続エラーではない)。
-
-    接続 (transport/status/SSRF) は成功し payload は受理したのに、RSS bozo / XML
-    syntax / HTML parse / JSON decode / envelope shape 不正で構造化できないことを
-    表す。接続境界の ``ExternalFetchError`` とは別系統 — 「接続できたか」ではなく
-    「読めたか」の軸であり、接続エラーの SSoT (``external_fetch_errors.py``) には
-    置かない。記事品質ゲートの不合格は domain validation として別軸で扱う
-    (normalize が ``None``/``""`` に畳むのでこのエラーにはならない)。
-
-    Attributes:
-        CODE: audit event code (``outcome_code`` に焼く値)。接続コードと
-            別カテゴリと分かるよう ``fetch_`` でなく ``read_`` prefix。
-    """
+    """応答を受け取ったが reader が構造化できなかった read-domain origin error。"""
 
     CODE: ClassVar[str] = "read_unreadable_response"
 
@@ -116,16 +117,90 @@ class AcquisitionError(VectorDomainError):
 
 
 class SourceAcquisitionError(AcquisitionError):
-    """ソース全体の取得に失敗したことを示す Stage 1 marker。
+    """ソース全体の取得失敗を示す Stage 1 marker base。
 
-    Attributes:
-        code: audit event code (``outcome_code`` に焼く値)。
+    leaf class が retry 方針と failure kind を持つ。``code`` は origin error の
+    ``CODE`` を ``outcome_code`` に焼くための instance 属性。
     """
 
     SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("code",)
 
     code: str
+    origin_error: ExternalFetchError | UnreadableResponseError
 
-    def __init__(self, message: str, *, code: str) -> None:
-        super().__init__(message)
-        self.code = code
+    def __init__(
+        self,
+        *,
+        origin_error: ExternalFetchError | UnreadableResponseError,
+    ) -> None:
+        super().__init__()
+        self.origin_error = origin_error
+        self.code = origin_error.CODE
+
+
+class AcquisitionExternalFetchRecoverableError(SourceAcquisitionError):
+    """再実行で回復しうる Stage 1 外部取得失敗。"""
+
+    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("code",)
+    FAILURE_KIND: ClassVar[str] = "external_fetch"
+    RETRYABILITY: ClassVar[Retryability] = Retryability.RETRYABLE
+    FAILURE_ACTION: ClassVar[FailureAction | None] = None
+
+
+class AcquisitionExternalFetchTerminalError(SourceAcquisitionError):
+    """再実行しても同じ結果になる Stage 1 外部取得失敗。"""
+
+    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("code",)
+    FAILURE_KIND: ClassVar[str] = "external_fetch"
+    RETRYABILITY: ClassVar[Retryability] = Retryability.NON_RETRYABLE
+    FAILURE_ACTION: ClassVar[FailureAction | None] = None
+
+
+class AcquisitionUnreadableResponseError(SourceAcquisitionError):
+    """取得済み payload を Stage 1 reader が構造化できなかった失敗。"""
+
+    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("code",)
+    FAILURE_KIND: ClassVar[str] = "unreadable_response"
+    RETRYABILITY: ClassVar[Retryability] = Retryability.NON_RETRYABLE
+    FAILURE_ACTION: ClassVar[FailureAction | None] = None
+
+
+ACQUISITION_RECOVERABLE_FETCH_ERRORS: tuple[type[ExternalFetchError], ...] = (
+    FetchTimeoutError,
+    FetchNetworkError,
+    FetchOriginServerError,
+    FetchGatewayError,
+    FetchRequestTimeoutError,
+    FetchRateLimitedError,
+    FetchRetryableStatusError,
+    FetchUnexpectedStatusError,
+)
+"""Stage 1 で再実行により回復しうる外部取得 origin error。"""
+
+
+ACQUISITION_TERMINAL_FETCH_ERRORS: tuple[type[ExternalFetchError], ...] = (
+    FetchAccessDeniedError,
+    FetchLegalBlockError,
+    FetchResourceNotFoundError,
+    FetchSsrfBlockedError,
+    FetchRobotsDisallowedError,
+    FetchRobotsUnavailableError,
+    FetchRedirectBlockedError,
+    FetchRedirectLoopError,
+    FetchResponseTooLargeError,
+    FetchContentTypeMismatchError,
+)
+"""Stage 1 で再実行しても同じ結果になる外部取得 origin error。"""
+
+
+def map_origin_to_acquisition(
+    exc: ExternalFetchError | UnreadableResponseError,
+) -> SourceAcquisitionError:
+    """取得 / 読取 origin error を Stage 1 marker に詰め替える。"""
+    if isinstance(exc, UnreadableResponseError):
+        return AcquisitionUnreadableResponseError(origin_error=exc)
+    if isinstance(exc, ACQUISITION_RECOVERABLE_FETCH_ERRORS):
+        return AcquisitionExternalFetchRecoverableError(origin_error=exc)
+    if isinstance(exc, ACQUISITION_TERMINAL_FETCH_ERRORS):
+        return AcquisitionExternalFetchTerminalError(origin_error=exc)
+    raise TypeError(f"unmapped acquisition origin error: {type(exc).__qualname__}")

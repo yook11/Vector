@@ -1,18 +1,4 @@
-"""``acquire_source`` task の例外パス監査テスト。
-
-Stage 1 設計 (cron 一本化、taskiq inline retry なし) における Service 例外の
-task 層配線を検証する。audit row の outcome code / failure attrs / payload
-不変条件の網羅は ``test_source_acquisition_failure_dispatch`` が担うため、本 file
-は task の分岐配線 (catch → handler dispatch → return / reraise) に集中する:
-
-- ``SourceAcquisitionError`` (Layer 1 marker) → audit + return、taskiq retry なし。
-  ``outcome_code`` に origin CODE がそのまま入り SQL 可能になる
-  (payload に code を二重焼きしない)。
-- 想定外 ``Exception`` → audit + re-raise (worker log で可視化、code は
-  ``unexpected_error``)。
-
-Stage 1 では ``max_retries=0 / retry_on_error=False`` で、audit に attempt は焼かない。
-"""
+"""``acquire_source`` task の例外パス監査テスト。"""
 
 from __future__ import annotations
 
@@ -23,7 +9,10 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.collection.article_acquisition.errors import SourceAcquisitionError
+from app.collection.article_acquisition.errors import (
+    AcquisitionExternalFetchTerminalError,
+)
+from app.collection.external_fetch_errors import FetchSsrfBlockedError
 from app.models.news_source import NewsSource, SourceType
 from app.models.pipeline_event import PipelineEvent
 from app.queue.messages.collection import AcquireSourceArg
@@ -46,10 +35,7 @@ async def vb_source(db_session: AsyncSession) -> NewsSource:
 
 
 def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> SimpleNamespace:
-    """taskiq Context の最低限な mock。
-
-    Stage 1 は retry concept を持たないため labels は空で十分。
-    """
+    """taskiq Context の最低限な mock。"""
     state = SimpleNamespace(session_factory=session_factory)
     message = SimpleNamespace(labels={})
     return SimpleNamespace(state=state, message=message)
@@ -95,14 +81,12 @@ async def test_acquisition_error_records_origin_code_and_returns(
     vb_source: NewsSource,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``SourceAcquisitionError`` → origin CODE で audit + error dict を return。
-
-    ``outcome_code`` に marker の origin CODE がそのまま入り、``payload`` に
-    ``code`` を二重に焼かない。
-    """
+    """Stage 1 marker → audit + error dict を return。"""
     _patch_service_to_raise(
         monkeypatch,
-        SourceAcquisitionError("ssrf blocked: 10.0.0.1", code="fetch_ssrf_blocked"),
+        AcquisitionExternalFetchTerminalError(
+            origin_error=FetchSsrfBlockedError("ssrf blocked: 10.0.0.1")
+        ),
     )
     ctx = _ctx(session_factory)
 
@@ -117,7 +101,9 @@ async def test_acquisition_error_records_origin_code_and_returns(
     assert row.retryability == "non_retryable"
     assert "code" not in row.payload
     assert row.source_id == vb_source.id
-    assert row.error_class.endswith(".SourceAcquisitionError")  # type: ignore[union-attr]
+    assert row.error_class.endswith(  # type: ignore[union-attr]
+        ".AcquisitionExternalFetchTerminalError"
+    )
     assert row.payload["failure_kind"] == "external_fetch"
     assert row.payload["failure_action"] is None
 
@@ -129,10 +115,7 @@ async def test_unexpected_error_records_then_reraises(
     vb_source: NewsSource,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``SourceAcquisitionError`` 外の Exception は audit + re-raise する。
-
-    catch-all 分岐の検証 (worker log で可視化される想定)。
-    """
+    """Stage 1 marker 外の Exception は audit + re-raise する。"""
     _patch_service_to_raise(monkeypatch, RuntimeError("boom"))
     ctx = _ctx(session_factory)
 

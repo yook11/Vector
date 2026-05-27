@@ -1,26 +1,4 @@
-"""``ArticleAcquisitionService`` の収集 → 変換 → 永続化テスト。
-
-Fetcher 解体後、service は ``fetch_articles`` engine の ``FetchedArticle`` を
-本物の ``convert_fetched_article`` に通して「何ができたか」を出し、``match`` で
-永続化する唯一のオーケストレータになった。よって本テストは変換済みの型を直接
-注入するのではなく、``FetchedArticle`` を返す ``_StubSource`` を渡して
-**本物の convert を通る配線**を検証する (取得 → 変換 → 永続化のリンクを固定)。
-
-検証する不変条件:
-
-- 即時獲得経路 (``AnalyzableArticle``): ``articles.source_url``
-  (型 ``CanonicalArticleUrl`` で canonicalize 済が構造保証) に直 INSERT、
-  ``execute()`` 戻り値の ``list[int]`` に永続化された article_id が積まれる
-- 補完待ち獲得経路 (``ObservedArticle``): ``article_store.exists_by_source_url``
-  pre-check を通過したら ``incomplete_articles.url`` で INSERT
-- 同 URL の重複 / canonicalize 後同一 URL は ``articles.source_url UNIQUE`` で
-  1 件に絞られる
-- 既知 URL (= articles 既存) を補完待ち経路で受けたら pre-check で skip
-- 混在 (即時 + 補完待ち) でも各経路が独立して正しく分岐する
-- 変換棄却は握りつぶさず別 tx で ``pipeline_events`` に焼き、後続を止めない
-- convert が想定外 bug を raise しても service が ``unexpected_rejection`` で
-  値化し source を止めず、bug は ``UNEXPECTED_ERROR`` として監査される
-"""
+"""``ArticleAcquisitionService`` の取得・変換・保存・監査テスト。"""
 
 from __future__ import annotations
 
@@ -32,11 +10,20 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.collection.article_acquisition import service as service_module
+from app.collection.article_acquisition.errors import (
+    AcquisitionExternalFetchTerminalError,
+    AcquisitionUnreadableResponseError,
+    UnreadableResponseError,
+)
 from app.collection.article_acquisition.fetched_article import FetchedArticle
 from app.collection.article_acquisition.service import ArticleAcquisitionService
 from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import ObservedOrigin
+from app.collection.external_fetch_errors import (
+    ExternalFetchError,
+    FetchAccessDeniedError,
+)
 from app.collection.sources.article_completion_policy import (
     DEFAULT_POLICY,
     ArticleCompletionPolicy,
@@ -102,6 +89,27 @@ class _StubSource(BaseArticleSource):
         tools: ReaderTools,  # noqa: ARG002
     ) -> list[FetchedArticle]:
         return self._items
+
+    def map_entry(self, entry: FetchedArticle) -> FetchedArticle:
+        return entry
+
+
+class _RaisingReadSource(BaseArticleSource):
+    """``read`` で取得 / 読取 origin error を発生させる fake source。"""
+
+    name: ClassVar[SourceName] = SourceName("VentureBeat")
+    endpoint_url: ClassVar[str] = "https://venturebeat.com/feed/"
+    observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.feed
+    completion_policy: ClassVar[ArticleCompletionPolicy] = DEFAULT_POLICY
+
+    def __init__(self, exc: ExternalFetchError | UnreadableResponseError) -> None:
+        self._exc = exc
+
+    async def read(
+        self,
+        tools: ReaderTools,  # noqa: ARG002
+    ) -> list[FetchedArticle]:
+        raise self._exc
 
     def map_entry(self, entry: FetchedArticle) -> FetchedArticle:
         return entry
@@ -444,6 +452,40 @@ async def _succeeded_events(db_session: AsyncSession) -> list[PipelineEvent]:
         .scalars()
         .all()
     )
+
+
+@pytest.mark.asyncio
+async def test_external_fetch_error_is_wrapped_to_acquisition_marker(
+    session_factory: async_sessionmaker[AsyncSession],
+    vb_source: NewsSource,
+) -> None:
+    """外部取得 origin error は Stage 1 terminal marker に詰め替えて伝播する。"""
+    origin = FetchAccessDeniedError(status_code=403, reason="forbidden")
+    svc = ArticleAcquisitionService(session_factory, _RaisingReadSource(origin))
+
+    with pytest.raises(AcquisitionExternalFetchTerminalError) as raised:
+        await svc.execute(vb_source.id)
+
+    assert raised.value.code == "fetch_access_denied"
+    assert raised.value.origin_error is origin
+    assert raised.value.__cause__ is origin
+
+
+@pytest.mark.asyncio
+async def test_unreadable_response_error_is_wrapped_to_acquisition_marker(
+    session_factory: async_sessionmaker[AsyncSession],
+    vb_source: NewsSource,
+) -> None:
+    """読取 origin error は Stage 1 unreadable marker に詰め替えて伝播する。"""
+    origin = UnreadableResponseError("rss bozo")
+    svc = ArticleAcquisitionService(session_factory, _RaisingReadSource(origin))
+
+    with pytest.raises(AcquisitionUnreadableResponseError) as raised:
+        await svc.execute(vb_source.id)
+
+    assert raised.value.code == "read_unreadable_response"
+    assert raised.value.origin_error is origin
+    assert raised.value.__cause__ is origin
 
 
 @pytest.mark.asyncio

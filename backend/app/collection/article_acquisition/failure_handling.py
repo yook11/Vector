@@ -1,8 +1,4 @@
-"""Stage 1 (article_acquisition) の error handling policy を実行する service。
-
-``SourceAcquisitionError`` → audit して return (False、次 cron tick で再 dispatch)。
-catch-all → audit + ``logger.exception`` で可視化し reraise (True)。
-"""
+"""Stage 1 の失敗後処理を実行する service。"""
 
 from __future__ import annotations
 
@@ -18,7 +14,7 @@ logger = structlog.get_logger(__name__)
 
 
 class SourceAcquisitionFailureHandler:
-    """Stage 1 の失敗分類に応じた後処理を実行する application service。"""
+    """marker は監査して return、unknown は監査して再 raise させる。"""
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
@@ -30,11 +26,7 @@ class SourceAcquisitionFailureHandler:
         source_name: str | None,
         exc: BaseException,
     ) -> bool:
-        """marker dispatch を実行する。
-
-        Returns:
-            taskiq に raise すべきなら ``True``、return すべきなら ``False``。
-        """
+        """taskiq に raise すべきなら ``True``、return すべきなら ``False``。"""
         match exc:
             case SourceAcquisitionError():
                 await self._audit_failure(source_id, source_name, exc)
@@ -56,11 +48,7 @@ class SourceAcquisitionFailureHandler:
         source_name: str | None,
         exc: SourceAcquisitionError | SQLAlchemyError,
     ) -> None:
-        """best-effort failure audit (DB 落ち / schema 不整合は log fallback)。
-
-        exception message に秘匿値が混入しうるため log 経路にも
-        ``redact_secrets`` を通す。
-        """
+        """best-effort failure audit。失敗時は redacted log に退避する。"""
         try:
             async with self._session_factory() as session:
                 await SourceAcquisitionAuditRepository(session).append_failure(

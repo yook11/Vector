@@ -10,44 +10,21 @@ from app.audit.domain.payloads import AcquisitionPayload
 from app.audit.error_chain import extract_error_chain
 from app.audit.failure_projection import (
     FailureProjection,
-    Retryability,
     failure_action_value,
-    project_db_failure,
+    project_failure,
     unknown_failure_projection,
 )
 from app.audit.repository import PipelineEventRepository
 from app.collection.article_acquisition.errors import (
     FetchedArticleConversionError,
     SourceAcquisitionError,
-    UnreadableResponseError,
 )
-from app.collection.article_acquisition.tools.http_error_translation import (
-    RECOVERABLE_FETCH_ERRORS,
-)
-from app.collection.external_fetch_errors import ExternalFetchError
 from app.shared.security.redaction import redact_secrets
 
 _ERROR_MESSAGE_LIMIT = 2000
 
 _ARTICLE_CREATED = "article_created"
 _INCOMPLETE_ARTICLE_CREATED = "incomplete_article_created"
-
-
-def _external_fetch_error_types(
-    root: type[ExternalFetchError],
-) -> tuple[type[ExternalFetchError], ...]:
-    """``ExternalFetchError`` の具象 subclass を再帰的に列挙する。"""
-    found: list[type[ExternalFetchError]] = []
-    for subclass in root.__subclasses__():
-        found.append(subclass)
-        found.extend(_external_fetch_error_types(subclass))
-    return tuple(found)
-
-
-_RECOVERABLE_EXTERNAL_FETCH_CODES = {cls.CODE for cls in RECOVERABLE_FETCH_ERRORS}
-_EXTERNAL_FETCH_CODES = {
-    cls.CODE for cls in _external_fetch_error_types(ExternalFetchError)
-}
 
 
 class SourceAcquisitionAuditRepository:
@@ -108,7 +85,7 @@ class SourceAcquisitionAuditRepository:
         exc: SourceAcquisitionError | SQLAlchemyError,
     ) -> None:
         """source 全体の acquisition 失敗を記録する。"""
-        projection = self._projection_of(exc)
+        projection = project_failure(exc, fallback_code="unexpected_error")
         await self._append_failed_event(
             source_id=source_id,
             source_name=source_name,
@@ -181,56 +158,6 @@ class SourceAcquisitionAuditRepository:
             source_id=source_id,
             error_class=_fqn(exc),
         )
-
-    @staticmethod
-    def _projection_of(exc: BaseException) -> FailureProjection:
-        """origin error code を Stage 1 の失敗属性へ投影する。"""
-        if isinstance(exc, SourceAcquisitionError):
-            code = _extract_outcome_code(exc)
-            if code == UnreadableResponseError.CODE:
-                return FailureProjection(
-                    failure_kind="unreadable_response",
-                    retryability=Retryability.NON_RETRYABLE,
-                    failure_action=None,
-                    code=code,
-                    stage=Stage.ACQUISITION,
-                )
-            if code in _EXTERNAL_FETCH_CODES:
-                retryability = (
-                    Retryability.RETRYABLE
-                    if code in _RECOVERABLE_EXTERNAL_FETCH_CODES
-                    else Retryability.NON_RETRYABLE
-                )
-                return FailureProjection(
-                    failure_kind="external_fetch",
-                    retryability=retryability,
-                    failure_action=None,
-                    code=code,
-                    stage=Stage.ACQUISITION,
-                )
-            if code.startswith("fetch_"):
-                return FailureProjection(
-                    failure_kind="external_fetch",
-                    retryability=Retryability.UNKNOWN,
-                    failure_action=None,
-                    code=code,
-                    stage=Stage.ACQUISITION,
-                )
-            return FailureProjection(
-                failure_kind="source_acquisition",
-                retryability=Retryability.UNKNOWN,
-                failure_action=None,
-                code=code,
-                stage=Stage.ACQUISITION,
-            )
-        db = project_db_failure(exc)
-        return db if db is not None else unknown_failure_projection()
-
-
-def _extract_outcome_code(exc: BaseException) -> str:
-    """``exc.code`` から event code を取り出し、無ければ catch-all にする。"""
-    code = getattr(exc, "code", None)
-    return code if isinstance(code, str) and code else "unexpected_error"
 
 
 def _fqn(exc: BaseException) -> str:
