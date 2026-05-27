@@ -199,7 +199,12 @@ class BasePipelineEventPayload(BaseModel):
 
 class DispatchPayload(BasePipelineEventPayload):
     kind: Literal["dispatch"] = "dispatch"
-    dispatched_count: int                                   # S
+    cadence: Literal["high", "medium", "low", "all"] | None = None
+    dispatched_count: int | None = None
+    selected_count: int | None = None
+    rejected_count: int | None = None
+    failed_count: int | None = None
+    raw_source_name: str | None = None
     skip_reason: Literal["no_active_sources"] | None = None # S
 
 

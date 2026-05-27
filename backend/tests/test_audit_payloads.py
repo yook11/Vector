@@ -166,6 +166,24 @@ class TestPayloadJsonSerialization:
         assert restored == original
 
 
+class TestDispatchPayloadAuditKeys:
+    """``DispatchPayload`` の key field 不変条件。"""
+
+    def test_dispatch_audit_fields_roundtrip(self) -> None:
+        payload = DispatchPayload(
+            source_name="TechCrunch",
+            cadence="high",
+            raw_source_name="TechCrunch",
+            selected_count=1,
+            dispatched_count=1,
+            rejected_count=0,
+            failed_count=0,
+        )
+        dumped = payload.model_dump(mode="json")
+        restored = DispatchPayload.model_validate(dumped)
+        assert restored == payload
+
+
 class TestPayloadFieldOwnership:
     """top-level column にしない stage-local field の所有権を固定する。"""
 

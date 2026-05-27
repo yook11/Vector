@@ -86,10 +86,19 @@ attempt 系 payload を追加しない。
 
 例:
 
+- `source_dispatched`
+- `source_not_registered`
 - `curated_signal`
 - `assessed_out_of_scope`
 - `briefing_input_empty`
 - `stale_attempt`
+
+dispatch stage は fan-out 入口のため、source 単位 outcome と run 単位 outcome を
+分ける。
+
+- source 単位: `source_dispatched` / `source_enqueue_failed` /
+  `source_not_registered` / `source_name_invalid`
+- run 単位: `dispatch_run_no_targets` / `dispatch_run_failed`
 - `backfill_assessment_aged_out`
 - `backfill_embedding_aged_out`
 
