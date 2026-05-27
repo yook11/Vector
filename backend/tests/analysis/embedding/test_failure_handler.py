@@ -2,7 +2,7 @@
 
 Stage 5 も内容起因 DELETE 経路を持たないため、検証する性質は:
 
-- TerminalSkip / Recoverable / catch-all の各 marker で audit row が正しい
+- Terminal / Recoverable / catch-all の各 marker で audit row が正しい
   ``outcome_code`` / ``retryability`` / payload failure attrs で記録される
 - ``last_attempt`` flag で raise/return が分岐する (Recoverable / catch-all)
 - audit Repository が raise しても task は落ちず ``embedding_failure_audit_dropped``
@@ -23,7 +23,8 @@ from structlog.testing import capture_logs
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.errors import (
     EmbeddingRecoverableError,
-    EmbeddingTerminalSkipError,
+    EmbeddingTerminalStageBlockedError,
+    EmbeddingTerminalTargetRejectedError,
 )
 from app.analysis.embedding.failure_handling import EmbeddingFailureHandler
 from app.models.article import Article
@@ -76,27 +77,33 @@ async def _fetch_embedding_events(
 
 
 # ---------------------------------------------------------------------------
-# TerminalSkip 経路
+# Terminal 経路
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_terminal_skip_writes_audit_and_returns_false(
+async def test_terminal_stage_blocked_writes_audit_sets_hold_and_returns_false(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """TerminalSkip → non-retryable failure audit + ``reraise=False``。"""
+    """StageBlocked → non-retryable audit + embedding hold + ``reraise=False``。"""
     article = await _make_article(db_session, sample_source)
     # rollback 後の expired-attr lazy reload を避けるため事前に値を取り出す
     article_id = article.id
     ready = _ready_for(article_id)
     handler = EmbeddingFailureHandler(session_factory)
 
-    exc = EmbeddingTerminalSkipError(code="ai_error_configuration")
-    reraise = await handler.handle(ready=ready, exc=exc, last_attempt=False)
+    exc = EmbeddingTerminalStageBlockedError(code="ai_error_configuration")
+    with patch(
+        "app.analysis.embedding.failure_handling.set_embedding_hold",
+        new=AsyncMock(),
+    ) as set_hold:
+        reraise = await handler.handle(ready=ready, exc=exc, last_attempt=False)
 
     assert reraise is False
+    set_hold.assert_awaited_once()
+    assert set_hold.await_args.kwargs["reason"] == "ai_error_configuration"
     await db_session.rollback()
     events = await _fetch_embedding_events(db_session, article_id)
     assert len(events) == 1
@@ -104,8 +111,68 @@ async def test_terminal_skip_writes_audit_and_returns_false(
     assert ev.event_type == "failed"
     assert ev.outcome_code == "ai_error_configuration"
     assert ev.retryability == "non_retryable"
-    assert ev.payload["failure_kind"] == "terminal_skip"
+    assert ev.payload["failure_kind"] == "terminal_stage_blocked"
     assert ev.payload["failure_action"] is None
+
+
+@pytest.mark.asyncio
+async def test_terminal_target_rejected_writes_audit_without_hold(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """TargetRejected は対象 assessment 固有の失敗なので hold を立てない。"""
+    article = await _make_article(db_session, sample_source)
+    article_id = article.id
+    ready = _ready_for(article_id)
+    handler = EmbeddingFailureHandler(session_factory)
+
+    exc = EmbeddingTerminalTargetRejectedError(code="ai_error_input_rejected")
+    with patch(
+        "app.analysis.embedding.failure_handling.set_embedding_hold",
+        new=AsyncMock(),
+    ) as set_hold:
+        reraise = await handler.handle(ready=ready, exc=exc, last_attempt=False)
+
+    assert reraise is False
+    set_hold.assert_not_called()
+    await db_session.rollback()
+    events = await _fetch_embedding_events(db_session, article_id)
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.outcome_code == "ai_error_input_rejected"
+    assert ev.retryability == "non_retryable"
+    assert ev.payload["failure_kind"] == "terminal_target_rejected"
+    assert ev.payload["failure_action"] is None
+
+
+@pytest.mark.asyncio
+async def test_terminal_stage_blocked_redis_failure_still_returns_false(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """hold set の Redis 障害は helper が呑み、handler は完走する。"""
+    article = await _make_article(db_session, sample_source)
+    article_id = article.id
+    ready = _ready_for(article_id)
+    handler = EmbeddingFailureHandler(session_factory)
+
+    fake_redis = AsyncMock()
+    fake_redis.set.side_effect = RuntimeError("redis down")
+    exc = EmbeddingTerminalStageBlockedError(code="ai_error_configuration")
+
+    with patch(
+        "app.analysis.embedding.failure_handling.get_redis",
+        return_value=fake_redis,
+    ):
+        reraise = await handler.handle(ready=ready, exc=exc, last_attempt=False)
+
+    assert reraise is False
+    await db_session.rollback()
+    events = await _fetch_embedding_events(db_session, article_id)
+    assert len(events) == 1
+    assert events[0].payload["failure_kind"] == "terminal_stage_blocked"
 
 
 # ---------------------------------------------------------------------------
@@ -236,15 +303,19 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
     ready = _ready_for(article.id)
     handler = EmbeddingFailureHandler(session_factory)
 
-    # Phase 4: EmbeddingTerminalSkipError は kwargs-only constructor。
+    # Phase 4: EmbeddingTerminalStageBlockedError は kwargs-only constructor。
     # business 側の secret 混入経路は Phase 4 で構造的に塞がれている
     # (__str__ は code 固定値のみ、SAFE_ATTRS=("code",))。
-    business_exc = EmbeddingTerminalSkipError(code="ai_error_configuration")
+    business_exc = EmbeddingTerminalStageBlockedError(code="ai_error_configuration")
 
     with (
         patch(
             "app.analysis.embedding.failure_handling.EmbeddingAuditRepository"
         ) as mock_audit_cls,
+        patch(
+            "app.analysis.embedding.failure_handling.set_embedding_hold",
+            new=AsyncMock(),
+        ),
         capture_logs() as cap,
     ):
         mock_audit_cls.return_value.append_failure = AsyncMock(
@@ -252,7 +323,7 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
                 "audit db down Authorization: Bearer sk-live-AUDITSECRETxyz"
             )
         )
-        # handler は落ちずに完走 (TerminalSkip → reraise=False)
+        # handler は落ちずに完走 (StageBlocked → reraise=False)
         reraise = await handler.handle(
             ready=ready, exc=business_exc, last_attempt=False
         )
@@ -262,7 +333,7 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
     assert drops, "fallback ログが emit されていない"
     drop = drops[-1]
     assert drop["analysis_id"] == ready.analysis_id
-    assert drop["business_error_class"].endswith(".EmbeddingTerminalSkipError")
+    assert drop["business_error_class"].endswith(".EmbeddingTerminalStageBlockedError")
     assert drop["audit_error_class"].endswith(".RuntimeError")
     # business: Phase 4 で __str__ が SAFE_ATTRS のみになり、secret が原理上
     # 混入しない (= business_error_message に code 文字列のみ残る)。

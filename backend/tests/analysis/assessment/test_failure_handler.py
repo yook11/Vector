@@ -2,7 +2,7 @@
 
 Stage 4 は内容起因 DELETE 経路を持たないため、検証する性質は:
 
-- TerminalSkip / Recoverable / catch-all の各 marker で audit row が正しい
+- Terminal / Recoverable / catch-all の各 marker で audit row が正しい
   ``outcome_code`` / ``retryability`` / payload failure attrs で記録される
 - ``last_attempt`` flag で raise/return が分岐する (Recoverable / catch-all)
 - audit Repository が raise しても task は落ちず ``assessment_failure_audit_dropped``
@@ -22,8 +22,10 @@ from structlog.testing import capture_logs
 
 from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.errors import (
+    AssessmentCategoryMissingError,
     AssessmentRecoverableError,
-    AssessmentTerminalSkipError,
+    AssessmentTerminalStageBlockedError,
+    AssessmentTerminalTargetRejectedError,
 )
 from app.analysis.assessment.failure_handling import AssessmentFailureHandler
 from app.models.article import Article
@@ -94,17 +96,17 @@ async def _fetch_assessment_events(
 
 
 # ---------------------------------------------------------------------------
-# TerminalSkip 経路
+# Terminal 経路
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_terminal_skip_writes_audit_and_returns_false(
+async def test_terminal_stage_blocked_writes_audit_sets_hold_and_returns_false(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """TerminalSkip → non-retryable failure audit + ``reraise=False``。"""
+    """StageBlocked → non-retryable audit + assessment hold + ``reraise=False``。"""
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
     # rollback 後の expired-attr lazy reload を避けるため事前に値を取り出す
@@ -112,10 +114,16 @@ async def test_terminal_skip_writes_audit_and_returns_false(
     ready = _ready_from(extraction)
     handler = AssessmentFailureHandler(session_factory)
 
-    exc = AssessmentTerminalSkipError(code="ai_error_configuration")
-    reraise = await handler.handle(ready=ready, exc=exc, last_attempt=False)
+    exc = AssessmentTerminalStageBlockedError(code="ai_error_configuration")
+    with patch(
+        "app.analysis.assessment.failure_handling.set_assessment_hold",
+        new=AsyncMock(),
+    ) as set_hold:
+        reraise = await handler.handle(ready=ready, exc=exc, last_attempt=False)
 
     assert reraise is False
+    set_hold.assert_awaited_once()
+    assert set_hold.await_args.kwargs["reason"] == "ai_error_configuration"
     await db_session.rollback()
     events = await _fetch_assessment_events(db_session, article_id)
     assert len(events) == 1
@@ -123,8 +131,102 @@ async def test_terminal_skip_writes_audit_and_returns_false(
     assert ev.event_type == "failed"
     assert ev.outcome_code == "ai_error_configuration"
     assert ev.retryability == "non_retryable"
-    assert ev.payload["failure_kind"] == "terminal_skip"
+    assert ev.payload["failure_kind"] == "terminal_stage_blocked"
     assert ev.payload["failure_action"] is None
+
+
+@pytest.mark.asyncio
+async def test_terminal_target_rejected_writes_audit_without_hold(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """TargetRejected は対象 curation 固有の失敗なので hold を立てない。"""
+    article = await _make_article(db_session, sample_source)
+    extraction = await _make_extraction(db_session, article)
+    article_id = article.id
+    ready = _ready_from(extraction)
+    handler = AssessmentFailureHandler(session_factory)
+
+    exc = AssessmentTerminalTargetRejectedError(code="ai_error_input_rejected")
+    with patch(
+        "app.analysis.assessment.failure_handling.set_assessment_hold",
+        new=AsyncMock(),
+    ) as set_hold:
+        reraise = await handler.handle(ready=ready, exc=exc, last_attempt=False)
+
+    assert reraise is False
+    set_hold.assert_not_called()
+    await db_session.rollback()
+    events = await _fetch_assessment_events(db_session, article_id)
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.outcome_code == "ai_error_input_rejected"
+    assert ev.retryability == "non_retryable"
+    assert ev.payload["failure_kind"] == "terminal_target_rejected"
+    assert ev.payload["failure_action"] is None
+
+
+@pytest.mark.asyncio
+async def test_category_missing_writes_audit_without_hold(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """CategoryMissing は分類未解決として audit のみ焼き、hold は立てない。"""
+    article = await _make_article(db_session, sample_source)
+    extraction = await _make_extraction(db_session, article)
+    article_id = article.id
+    ready = _ready_from(extraction)
+    handler = AssessmentFailureHandler(session_factory)
+
+    exc = AssessmentCategoryMissingError()
+    with patch(
+        "app.analysis.assessment.failure_handling.set_assessment_hold",
+        new=AsyncMock(),
+    ) as set_hold:
+        reraise = await handler.handle(ready=ready, exc=exc, last_attempt=False)
+
+    assert reraise is False
+    set_hold.assert_not_called()
+    await db_session.rollback()
+    events = await _fetch_assessment_events(db_session, article_id)
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.outcome_code == "assessment_category_missing"
+    assert ev.retryability == "non_retryable"
+    assert ev.payload["failure_kind"] == "terminal_classification_unresolved"
+    assert ev.payload["failure_action"] is None
+
+
+@pytest.mark.asyncio
+async def test_terminal_stage_blocked_redis_failure_still_returns_false(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """hold set の Redis 障害は helper が呑み、handler は完走する。"""
+    article = await _make_article(db_session, sample_source)
+    extraction = await _make_extraction(db_session, article)
+    article_id = article.id
+    ready = _ready_from(extraction)
+    handler = AssessmentFailureHandler(session_factory)
+
+    fake_redis = AsyncMock()
+    fake_redis.set.side_effect = RuntimeError("redis down")
+    exc = AssessmentTerminalStageBlockedError(code="ai_error_configuration")
+
+    with patch(
+        "app.analysis.assessment.failure_handling.get_redis",
+        return_value=fake_redis,
+    ):
+        reraise = await handler.handle(ready=ready, exc=exc, last_attempt=False)
+
+    assert reraise is False
+    await db_session.rollback()
+    events = await _fetch_assessment_events(db_session, article_id)
+    assert len(events) == 1
+    assert events[0].payload["failure_kind"] == "terminal_stage_blocked"
 
 
 # ---------------------------------------------------------------------------
@@ -260,15 +362,19 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
     ready = _ready_from(extraction)
     handler = AssessmentFailureHandler(session_factory)
 
-    # Phase 4: AssessmentTerminalSkipError は kwargs-only constructor。
+    # Phase 4: AssessmentTerminalStageBlockedError は kwargs-only constructor。
     # business 側の secret 混入経路は Phase 4 で構造的に塞がれている
     # (__str__ は code 固定値のみ、SAFE_ATTRS=("code",))。
-    business_exc = AssessmentTerminalSkipError(code="ai_error_configuration")
+    business_exc = AssessmentTerminalStageBlockedError(code="ai_error_configuration")
 
     with (
         patch(
             "app.analysis.assessment.failure_handling.AssessmentAuditRepository"
         ) as mock_audit_cls,
+        patch(
+            "app.analysis.assessment.failure_handling.set_assessment_hold",
+            new=AsyncMock(),
+        ),
         capture_logs() as cap,
     ):
         mock_audit_cls.return_value.append_failure = AsyncMock(
@@ -276,7 +382,7 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
                 "audit db down Authorization: Bearer sk-live-AUDITSECRETxyz"
             )
         )
-        # handler は落ちずに完走 (TerminalSkip → reraise=False)
+        # handler は落ちずに完走 (StageBlocked → reraise=False)
         reraise = await handler.handle(
             ready=ready, exc=business_exc, last_attempt=False
         )
@@ -286,7 +392,7 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
     assert drops, "fallback ログが emit されていない"
     drop = drops[-1]
     assert drop["curation_id"] == extraction.id
-    assert drop["business_error_class"].endswith(".AssessmentTerminalSkipError")
+    assert drop["business_error_class"].endswith(".AssessmentTerminalStageBlockedError")
     assert drop["audit_error_class"].endswith(".RuntimeError")
     # business: Phase 4 で __str__ が SAFE_ATTRS のみになり secret は原理上不在。
     assert "sk-live" not in drop["business_error_message"]

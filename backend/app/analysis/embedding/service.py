@@ -18,7 +18,7 @@ AI 呼び出しは session 外で行う (slow IO 中の DB 接続専有を排除
 (``EmbeddingResponseInvalidError``) に詰め替え済 (BC 境界原則:
 feedback_bc_boundary_guarantees_downstream)。本 Service の ACL 責務は
 ``AIProviderError`` を Stage 5 marker (``EmbeddingRecoverableError`` /
-``EmbeddingTerminalSkipError``) に詰め替えるところのみ。Task 層は Stage 5
+``EmbeddingTerminalError``) に詰め替えるところのみ。Task 層は Stage 5
 marker で 2 marker dispatch + catch-all を行う。
 """
 
@@ -65,7 +65,7 @@ class EmbeddingService:
            (勝者 task が自身の audit を焼く、二重記録回避)
 
         Raises:
-            ``EmbeddingRecoverableError`` / ``EmbeddingTerminalSkipError``
+            ``EmbeddingRecoverableError`` / ``EmbeddingTerminalError``
             (Task 層 2 marker dispatch に委ねる)。``AIProviderError`` は ACL で
             Stage 5 marker に詰め替えてから raise される。
         """

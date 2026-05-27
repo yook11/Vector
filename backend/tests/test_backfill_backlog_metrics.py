@@ -90,6 +90,10 @@ async def test_gauge_records_true_count_not_capped_by_limit(
 
     with (
         patch.object(backfill.settings, "backfill_assessments_enabled", True),
+        patch(
+            "app.queue.tasks.backfill.is_assessment_held",
+            AsyncMock(return_value=False),
+        ),
         patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
         patch(
             "app.queue.tasks.backfill.consume_daily_budget",
@@ -131,6 +135,10 @@ async def test_gauge_records_count_with_stage_attribute(
 
     with (
         patch.object(backfill.settings, "backfill_assessments_enabled", True),
+        patch(
+            "app.queue.tasks.backfill.is_assessment_held",
+            AsyncMock(return_value=False),
+        ),
         patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
         patch(
             "app.queue.tasks.backfill.consume_daily_budget",
@@ -173,6 +181,10 @@ async def test_gauge_records_zero_when_empty_backlog(
 
     with (
         patch.object(backfill.settings, "backfill_assessments_enabled", True),
+        patch(
+            "app.queue.tasks.backfill.is_assessment_held",
+            AsyncMock(return_value=False),
+        ),
         patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
     ):
         backlog_cls.return_value.count_curations_pending_assessment = AsyncMock(
@@ -212,6 +224,7 @@ async def test_gauge_not_recorded_when_kill_switch_disabled(
 
     with (
         patch.object(backfill.settings, "backfill_assessments_enabled", False),
+        patch("app.queue.tasks.backfill.is_assessment_held", AsyncMock()) as held,
         patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
     ):
         # 早期 return が起きれば PipelineBacklog 自体が触られないが、念のため設定
@@ -220,6 +233,7 @@ async def test_gauge_not_recorded_when_kill_switch_disabled(
         )
         await backfill.backfill_assessments(ctx=ctx)
 
+    held.assert_not_called()
     # logfire.testing.get_collected_metrics は metric が 1 つも record されない
     # と内部 ``get_metrics_data()`` が ``None`` を返し AttributeError になる
     # (testing.py:125)。本テストの期待は「metric 不在」なのでこれを正常解釈する。
@@ -255,6 +269,10 @@ async def test_gauge_attributes_do_not_leak_curation_ids(
 
     with (
         patch.object(backfill.settings, "backfill_assessments_enabled", True),
+        patch(
+            "app.queue.tasks.backfill.is_assessment_held",
+            AsyncMock(return_value=False),
+        ),
         patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
         patch(
             "app.queue.tasks.backfill.consume_daily_budget",

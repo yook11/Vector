@@ -24,7 +24,7 @@ from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.errors import (
     EmbeddingRecoverableError,
     EmbeddingResponseInvalidError,
-    EmbeddingTerminalSkipError,
+    EmbeddingTerminalStageBlockedError,
 )
 from app.analysis.rate_limit import RatePolicy
 from app.queue.messages.embedding import EmbeddingTrigger
@@ -85,18 +85,18 @@ def _patch_ready_construction(ready: ReadyForEmbedding | None = None) -> object:
 
 
 # ---------------------------------------------------------------------------
-# TerminalSkip 系 — Handler が False を返し、task は return (raise しない)
+# Terminal 系 — Handler が False を返し、task は return (raise しない)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_terminal_skip_delegates_to_handler() -> None:
-    """``EmbeddingTerminalSkipError`` は handler.handle に委譲され、
+async def test_terminal_stage_blocked_delegates_to_handler() -> None:
+    """``EmbeddingTerminalStageBlockedError`` は handler.handle に委譲され、
     reraise=False で return する。"""
     from app.queue.tasks.embedding import generate_embedding
 
     ctx = _make_ctx()
-    exc = EmbeddingTerminalSkipError(code="ai_error_configuration")
+    exc = EmbeddingTerminalStageBlockedError(code="ai_error_configuration")
 
     with (
         _patch_ready_construction(),

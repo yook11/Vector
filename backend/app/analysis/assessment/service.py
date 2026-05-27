@@ -24,7 +24,7 @@ Repository / AuditRepository は ``call`` 1 つを取り回す
 は ``None`` を観測したら Stage 5 chain を起動しない。勝者 task が crash 等で
 chain に失敗した case の救済は本 Service の責務外で、別経路の reconcile cron が
 担う。``AIProviderError`` は ACL boundary (``map_provider_to_assessment``) で
-Stage 4 marker (``AssessmentRecoverableError`` / ``AssessmentTerminalSkipError``)
+Stage 4 marker (``AssessmentRecoverableError`` / ``AssessmentTerminalError``)
 に詰め替え、Task 層は Stage 4 marker のみで 3 marker dispatch を行う。
 
 戻り値は ``int | None`` (in-scope 成功時のみ assessment id、out-of-scope と
@@ -93,7 +93,7 @@ class AssessmentService:
                 経路に委ねる)
 
         Raises:
-            ``AssessmentRecoverableError`` / ``AssessmentTerminalSkipError``
+            ``AssessmentRecoverableError`` / ``AssessmentTerminalError``
             (Task 層 retry に委ねる)。
         """
         try:

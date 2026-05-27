@@ -13,7 +13,7 @@ audit row の shape SSoT が repository に集約されたことを検証する:
   (PR #447 対称化追従、in-scope 固有 field の ``category_slug`` のみ None)
 - ``append_failure`` で **exc 型による 3 dispatch + Layer 2-B + catch-all** が動作:
   - ``AssessmentRecoverableError`` → ``retryability=retryable``
-  - ``AssessmentTerminalSkipError`` → ``retryability=non_retryable``
+  - ``AssessmentTerminalStageBlockedError`` → ``retryability=non_retryable``
   - ``AssessmentResponseInvalidError`` (Layer 2-B) → ``retryability=retryable`` /
     ``outcome_code="assessment_response_invalid"``
   - ``AssessmentCategoryMissingError`` (Layer 2-B) →
@@ -52,7 +52,8 @@ from app.analysis.assessment.errors import (
     AssessmentCategoryMissingError,
     AssessmentRecoverableError,
     AssessmentResponseInvalidError,
-    AssessmentTerminalSkipError,
+    AssessmentTerminalStageBlockedError,
+    AssessmentTerminalTargetRejectedError,
 )
 from app.audit.stages.assessment import AssessmentAuditRepository
 from app.models.article import Article
@@ -470,15 +471,40 @@ async def test_append_failure_recoverable_maps_to_retryable(
 
 
 @pytest.mark.asyncio
-async def test_append_failure_terminal_skip_maps_to_keep_curation(
+async def test_append_failure_terminal_stage_blocked(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """AssessmentTerminalSkipError → non_retryable / terminal_skip。"""
+    """AssessmentTerminalStageBlockedError → non_retryable / stage_blocked。"""
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
-    exc = AssessmentTerminalSkipError(code="ai_error_input_rejected")
+    exc = AssessmentTerminalStageBlockedError(code="ai_error_configuration")
+
+    async with session_factory() as session:
+        await AssessmentAuditRepository(session).append_failure(
+            ready=_ready(extraction),
+            exc=exc,
+        )
+        await session.commit()
+
+    ev = await _fetch_one(db_session, article.id)
+    assert ev.outcome_code == "ai_error_configuration"
+    assert ev.retryability == "non_retryable"
+    assert ev.payload["failure_kind"] == "terminal_stage_blocked"
+    assert ev.payload["failure_action"] is None
+
+
+@pytest.mark.asyncio
+async def test_append_failure_terminal_target_rejected(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """AssessmentTerminalTargetRejectedError → non_retryable / target_rejected。"""
+    article = await _make_article(db_session, sample_source)
+    extraction = await _make_extraction(db_session, article)
+    exc = AssessmentTerminalTargetRejectedError(code="ai_error_input_rejected")
 
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_failure(
@@ -490,7 +516,7 @@ async def test_append_failure_terminal_skip_maps_to_keep_curation(
     ev = await _fetch_one(db_session, article.id)
     assert ev.outcome_code == "ai_error_input_rejected"
     assert ev.retryability == "non_retryable"
-    assert ev.payload["failure_kind"] == "terminal_skip"
+    assert ev.payload["failure_kind"] == "terminal_target_rejected"
     assert ev.payload["failure_action"] is None
 
 
@@ -528,8 +554,7 @@ async def test_append_failure_layer_2b_category_missing(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """Layer 2-B AssessmentCategoryMissingError は TerminalSkip 継承で
-    non_retryable / terminal_skip にマップされる。
+    """Layer 2-B AssessmentCategoryMissingError は分類未解決として記録される。
     """
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
@@ -545,7 +570,7 @@ async def test_append_failure_layer_2b_category_missing(
     ev = await _fetch_one(db_session, article.id)
     assert ev.outcome_code == "assessment_category_missing"
     assert ev.retryability == "non_retryable"
-    assert ev.payload["failure_kind"] == "terminal_skip"
+    assert ev.payload["failure_kind"] == "terminal_classification_unresolved"
     assert ev.payload["failure_action"] is None
 
 

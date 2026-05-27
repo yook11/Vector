@@ -18,7 +18,9 @@ from app.analysis.assessment.errors import (
     AssessmentError,
     AssessmentRecoverableError,
     AssessmentResponseInvalidError,
-    AssessmentTerminalSkipError,
+    AssessmentTerminalError,
+    AssessmentTerminalStageBlockedError,
+    AssessmentTerminalTargetRejectedError,
 )
 from app.audit.domain.event import Stage
 from app.audit.failure_projection import Retryability
@@ -53,29 +55,32 @@ class TestAssessmentRecoverableError:
             AssessmentRecoverableError("msg")  # type: ignore[call-arg]
 
 
-class TestAssessmentTerminalSkipError:
-    """``AssessmentTerminalSkipError`` の constructor / instance attr 振る舞い。"""
+class TestAssessmentTerminalStageBlockedError:
+    """``AssessmentTerminalStageBlockedError`` の constructor / instance attr 振る舞い。"""
 
     def test_holds_code_and_provider_error(self) -> None:
         original = AIProviderConfigurationError()
-        exc = AssessmentTerminalSkipError(
+        exc = AssessmentTerminalStageBlockedError(
             code="ai_error_configuration",
             provider_error=original,
         )
 
         assert exc.code == "ai_error_configuration"
         assert exc.provider_error is original
-        assert str(exc) == "AssessmentTerminalSkipError(code='ai_error_configuration')"
+        assert (
+            str(exc)
+            == "AssessmentTerminalStageBlockedError(code='ai_error_configuration')"
+        )
 
     def test_provider_error_defaults_to_none(self) -> None:
-        exc = AssessmentTerminalSkipError(code="assessment_category_missing")
+        exc = AssessmentTerminalStageBlockedError(code="ai_error_configuration")
 
-        assert exc.code == "assessment_category_missing"
+        assert exc.code == "ai_error_configuration"
         assert exc.provider_error is None
 
     def test_positional_message_rejected(self) -> None:
         with pytest.raises(TypeError):
-            AssessmentTerminalSkipError("msg")  # type: ignore[call-arg]
+            AssessmentTerminalStageBlockedError("msg")  # type: ignore[call-arg]
 
 
 class TestStage4MarkerHierarchy:
@@ -84,13 +89,45 @@ class TestStage4MarkerHierarchy:
     def test_recoverable_subclasses_assessment_error(self) -> None:
         assert issubclass(AssessmentRecoverableError, AssessmentError)
 
-    def test_terminal_skip_subclasses_assessment_error(self) -> None:
-        assert issubclass(AssessmentTerminalSkipError, AssessmentError)
+    def test_terminal_stage_blocked_subclasses_terminal_error(self) -> None:
+        assert issubclass(AssessmentTerminalStageBlockedError, AssessmentTerminalError)
+
+    def test_terminal_target_rejected_subclasses_terminal_error(self) -> None:
+        assert issubclass(
+            AssessmentTerminalTargetRejectedError, AssessmentTerminalError
+        )
+
+    def test_terminal_error_subclasses_assessment_error(self) -> None:
+        assert issubclass(AssessmentTerminalError, AssessmentError)
+
+    def test_terminal_error_base_is_abstract(self) -> None:
+        with pytest.raises(TypeError, match="abstract"):
+            AssessmentTerminalError(code="ai_error_configuration")
+
+    def test_terminal_subclass_must_declare_failure_kind(self) -> None:
+        with pytest.raises(TypeError, match="FAILURE_KIND"):
+
+            class _MissingFailureKind(AssessmentTerminalError):
+                pass
+
+    def test_terminal_markers_subclass_assessment_error(self) -> None:
+        assert issubclass(AssessmentTerminalStageBlockedError, AssessmentError)
+        assert issubclass(AssessmentTerminalTargetRejectedError, AssessmentError)
 
     def test_two_markers_are_disjoint(self) -> None:
         # 2 marker の階層は独立 (片方が他方の subclass にならない)。
-        assert not issubclass(AssessmentRecoverableError, AssessmentTerminalSkipError)
-        assert not issubclass(AssessmentTerminalSkipError, AssessmentRecoverableError)
+        assert not issubclass(
+            AssessmentRecoverableError, AssessmentTerminalStageBlockedError
+        )
+        assert not issubclass(
+            AssessmentTerminalStageBlockedError, AssessmentRecoverableError
+        )
+        assert not issubclass(
+            AssessmentRecoverableError, AssessmentTerminalTargetRejectedError
+        )
+        assert not issubclass(
+            AssessmentTerminalTargetRejectedError, AssessmentRecoverableError
+        )
 
     def test_assessment_error_is_exception(self) -> None:
         assert issubclass(AssessmentError, Exception)
@@ -100,9 +137,23 @@ class TestStage4MarkerHierarchy:
         assert AssessmentRecoverableError.FAILURE_KIND == "recoverable"
         assert AssessmentRecoverableError.RETRYABILITY is Retryability.RETRYABLE
         assert AssessmentRecoverableError.FAILURE_ACTION is None
-        assert AssessmentTerminalSkipError.FAILURE_KIND == "terminal_skip"
-        assert AssessmentTerminalSkipError.RETRYABILITY is Retryability.NON_RETRYABLE
-        assert AssessmentTerminalSkipError.FAILURE_ACTION is None
+        assert (
+            AssessmentTerminalStageBlockedError.FAILURE_KIND == "terminal_stage_blocked"
+        )
+        assert (
+            AssessmentTerminalStageBlockedError.RETRYABILITY
+            is Retryability.NON_RETRYABLE
+        )
+        assert AssessmentTerminalStageBlockedError.FAILURE_ACTION is None
+        assert (
+            AssessmentTerminalTargetRejectedError.FAILURE_KIND
+            == "terminal_target_rejected"
+        )
+        assert (
+            AssessmentTerminalTargetRejectedError.RETRYABILITY
+            is Retryability.NON_RETRYABLE
+        )
+        assert AssessmentTerminalTargetRejectedError.FAILURE_ACTION is None
 
 
 # ---------------------------------------------------------------------------
@@ -139,10 +190,15 @@ class TestAssessmentResponseInvalidError:
 
 
 class TestAssessmentCategoryMissingError:
-    """Layer 2-B marker: ``AssessmentCategoryMissingError`` (TerminalSkip 系)。"""
+    """Layer 2-B marker: ``AssessmentCategoryMissingError`` (non-hold terminal 系)。"""
 
-    def test_is_terminal_skip_subclass(self) -> None:
-        assert issubclass(AssessmentCategoryMissingError, AssessmentTerminalSkipError)
+    def test_is_terminal_error_subclass(self) -> None:
+        assert issubclass(AssessmentCategoryMissingError, AssessmentTerminalError)
+
+    def test_is_not_stage_blocked_subclass(self) -> None:
+        assert not issubclass(
+            AssessmentCategoryMissingError, AssessmentTerminalStageBlockedError
+        )
 
     def test_is_assessment_error_subclass(self) -> None:
         assert issubclass(AssessmentCategoryMissingError, AssessmentError)
@@ -154,6 +210,12 @@ class TestAssessmentCategoryMissingError:
     def test_provider_error_is_none(self) -> None:
         exc = AssessmentCategoryMissingError()
         assert exc.provider_error is None
+
+    def test_failure_kind_is_classification_unresolved(self) -> None:
+        assert (
+            AssessmentCategoryMissingError.FAILURE_KIND
+            == "terminal_classification_unresolved"
+        )
 
     def test_str_renders_code_only(self) -> None:
         exc = AssessmentCategoryMissingError()
@@ -167,12 +229,10 @@ class TestAssessmentCategoryMissingError:
 
 
 class TestLayer2BMarkersDisjoint:
-    """Layer 2-B 2 marker は互いに独立 (Recoverable と TerminalSkip の階層分離)。"""
+    """Layer 2-B 2 marker は互いに独立 (Recoverable と Terminal の階層分離)。"""
 
-    def test_response_invalid_not_terminal_skip(self) -> None:
-        assert not issubclass(
-            AssessmentResponseInvalidError, AssessmentTerminalSkipError
-        )
+    def test_response_invalid_not_terminal(self) -> None:
+        assert not issubclass(AssessmentResponseInvalidError, AssessmentTerminalError)
 
     def test_category_missing_not_recoverable(self) -> None:
         assert not issubclass(

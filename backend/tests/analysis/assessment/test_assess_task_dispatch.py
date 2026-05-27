@@ -27,7 +27,8 @@ from app.analysis.assessment.errors import (
     AssessmentCategoryMissingError,
     AssessmentRecoverableError,
     AssessmentResponseInvalidError,
-    AssessmentTerminalSkipError,
+    AssessmentTerminalError,
+    AssessmentTerminalStageBlockedError,
 )
 from app.analysis.rate_limit import RatePolicy
 from app.queue.messages.assessment import AssessmentTrigger
@@ -84,18 +85,18 @@ def _patch_ready_construction(ready: ReadyForAssessment | None = None) -> object
 
 
 # ---------------------------------------------------------------------------
-# TerminalSkip 系 — Handler が False を返し、task は return (raise しない)
+# Terminal 系 — Handler が False を返し、task は return (raise しない)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_terminal_skip_delegates_to_handler() -> None:
-    """``AssessmentTerminalSkipError`` は handler.handle に委譲され、
+async def test_terminal_stage_blocked_delegates_to_handler() -> None:
+    """``AssessmentTerminalStageBlockedError`` は handler.handle に委譲され、
     reraise=False で return する。"""
     from app.queue.tasks.assessment import assess_content
 
     ctx = _make_ctx()
-    exc = AssessmentTerminalSkipError(code="ai_error_configuration")
+    exc = AssessmentTerminalStageBlockedError(code="ai_error_configuration")
 
     with (
         _patch_ready_construction(),
@@ -117,8 +118,7 @@ async def test_terminal_skip_delegates_to_handler() -> None:
 
 @pytest.mark.asyncio
 async def test_category_missing_dispatches_to_handler() -> None:
-    """``AssessmentCategoryMissingError`` (Layer 2-B、TerminalSkip 継承) も
-    Handler 経由で扱われる (kwargs["exc"] は AssessmentTerminalSkipError instance)。"""
+    """``AssessmentCategoryMissingError`` も terminal として Handler 経由で扱われる。"""
     from app.queue.tasks.assessment import assess_content
 
     ctx = _make_ctx()
@@ -137,9 +137,7 @@ async def test_category_missing_dispatches_to_handler() -> None:
 
     handler_handle = mock_handler_cls.return_value.handle
     handler_handle.assert_awaited_once()
-    assert isinstance(
-        handler_handle.await_args.kwargs["exc"], AssessmentTerminalSkipError
-    )
+    assert isinstance(handler_handle.await_args.kwargs["exc"], AssessmentTerminalError)
 
 
 # ---------------------------------------------------------------------------

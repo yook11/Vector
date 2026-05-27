@@ -358,9 +358,11 @@ async def test_assessments_disabled_returns_early() -> None:
     ctx = _ctx_with_session_factory()
     with (
         patch.object(tasks.settings, "backfill_assessments_enabled", False),
+        patch("app.queue.tasks.backfill.is_assessment_held", new=AsyncMock()) as held,
         patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
     ):
         await tasks.backfill_assessments(ctx=ctx)
+    held.assert_not_called()
     backlog_cls.assert_not_called()
 
 
@@ -371,7 +373,61 @@ async def test_embeddings_disabled_returns_early() -> None:
     ctx = _ctx_with_session_factory()
     with (
         patch.object(tasks.settings, "backfill_embeddings_enabled", False),
+        patch("app.queue.tasks.backfill.is_embedding_held", new=AsyncMock()) as held,
         patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
     ):
         await tasks.backfill_embeddings(ctx=ctx)
+    held.assert_not_called()
     backlog_cls.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_assessments_held_skips_entire_run() -> None:
+    """assessment hold 中は backlog / budget / kiq に進まない。"""
+    from app.queue.tasks import backfill as tasks
+
+    ctx = _ctx_with_session_factory()
+    with (
+        patch.object(tasks.settings, "backfill_assessments_enabled", True),
+        patch(
+            "app.queue.tasks.backfill.is_assessment_held",
+            new=AsyncMock(return_value=True),
+        ) as held,
+        patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
+        patch(
+            "app.queue.tasks.backfill.consume_daily_budget", new=AsyncMock()
+        ) as budget,
+        patch("app.queue.tasks.backfill.assess_content") as assess_task,
+    ):
+        await tasks.backfill_assessments(ctx=ctx)
+
+    held.assert_awaited_once()
+    backlog_cls.assert_not_called()
+    budget.assert_not_called()
+    assess_task.kiq.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_embeddings_held_skips_entire_run() -> None:
+    """embedding hold 中は backlog / budget / kiq に進まない。"""
+    from app.queue.tasks import backfill as tasks
+
+    ctx = _ctx_with_session_factory()
+    with (
+        patch.object(tasks.settings, "backfill_embeddings_enabled", True),
+        patch(
+            "app.queue.tasks.backfill.is_embedding_held",
+            new=AsyncMock(return_value=True),
+        ) as held,
+        patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
+        patch(
+            "app.queue.tasks.backfill.consume_daily_budget", new=AsyncMock()
+        ) as budget,
+        patch("app.queue.tasks.backfill.generate_embedding") as embedding_task,
+    ):
+        await tasks.backfill_embeddings(ctx=ctx)
+
+    held.assert_awaited_once()
+    backlog_cls.assert_not_called()
+    budget.assert_not_called()
+    embedding_task.kiq.assert_not_called()

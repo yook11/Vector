@@ -42,7 +42,9 @@ from app.analysis.assessment.errors import (
     AssessmentError,
     AssessmentRecoverableError,
     AssessmentResponseInvalidError,
-    AssessmentTerminalSkipError,
+    AssessmentTerminalError,
+    AssessmentTerminalStageBlockedError,
+    AssessmentTerminalTargetRejectedError,
 )
 from app.analysis.curation.errors import (
     CurationError,
@@ -55,7 +57,8 @@ from app.analysis.embedding.errors import (
     EmbeddingError,
     EmbeddingRecoverableError,
     EmbeddingResponseInvalidError,
-    EmbeddingTerminalSkipError,
+    EmbeddingTerminalStageBlockedError,
+    EmbeddingTerminalTargetRejectedError,
 )
 from app.logfire_exceptions import VectorDomainError
 
@@ -228,14 +231,16 @@ def test_curation_layer1_requires_code_kwarg(cls: type[CurationError]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Assessment / Embedding Layer 1 marker (5 class): kwargs-only, 同律
+# Assessment / Embedding Layer 1 marker (6 class): kwargs-only, 同律
 # ---------------------------------------------------------------------------
 
 _OTHER_LAYER1_MARKERS: tuple[type[VectorDomainError], ...] = (
     AssessmentRecoverableError,
-    AssessmentTerminalSkipError,
+    AssessmentTerminalStageBlockedError,
+    AssessmentTerminalTargetRejectedError,
     EmbeddingRecoverableError,
-    EmbeddingTerminalSkipError,
+    EmbeddingTerminalStageBlockedError,
+    EmbeddingTerminalTargetRejectedError,
 )
 
 
@@ -300,7 +305,7 @@ def _build_22_class_instances() -> list[VectorDomainError]:
     """Phase 4 migration 対象 22 class の代表 instance を 1 つずつ構築する。"""
     provider = AIProviderRateLimitedError()
     return [
-        # AIProvider*Error 10 種 (引数なし)
+        # AIProvider*Error 9 種 (引数なし)
         AIProviderInputRejectedError(),
         AIProviderOutputBlockedError(),
         AIProviderConfigurationError(),
@@ -319,17 +324,23 @@ def _build_22_class_instances() -> list[VectorDomainError]:
             code="ai_error_input_rejected", provider_error=provider
         ),
         CurationResponseInvalidError(),
-        # Assessment 2 (Layer 1) + 2 (Layer 2-B)
+        # Assessment 3 (Layer 1) + 2 (Layer 2-B)
         AssessmentRecoverableError(code="ai_error_network", provider_error=provider),
-        AssessmentTerminalSkipError(
+        AssessmentTerminalStageBlockedError(
             code="ai_error_configuration", provider_error=provider
+        ),
+        AssessmentTerminalTargetRejectedError(
+            code="ai_error_input_rejected", provider_error=provider
         ),
         AssessmentResponseInvalidError(),
         AssessmentCategoryMissingError(),
-        # Embedding 2 (Layer 1) + 1 (Layer 2-B)
+        # Embedding 3 (Layer 1) + 1 (Layer 2-B)
         EmbeddingRecoverableError(code="ai_error_network", provider_error=provider),
-        EmbeddingTerminalSkipError(
+        EmbeddingTerminalStageBlockedError(
             code="ai_error_configuration", provider_error=provider
+        ),
+        EmbeddingTerminalTargetRejectedError(
+            code="ai_error_input_rejected", provider_error=provider
         ),
         EmbeddingResponseInvalidError(),
     ]
@@ -402,12 +413,16 @@ def test_layer2b_subclasses_inherit_from_layer1_marker() -> None:
 
     CurationResponseInvalid → Recoverable (cron 救済対象)、
     AssessmentResponseInvalid → Recoverable、
-    AssessmentCategoryMissing → TerminalSkip (catalog 拡張で解消するまで諦め)、
+    AssessmentCategoryMissing → terminal base (分類未解決、hold 対象外)、
     EmbeddingResponseInvalid → Recoverable。
     """
     assert issubclass(CurationResponseInvalidError, CurationRecoverableError)
     assert issubclass(AssessmentResponseInvalidError, AssessmentRecoverableError)
-    assert issubclass(AssessmentCategoryMissingError, AssessmentTerminalSkipError)
+    assert issubclass(AssessmentCategoryMissingError, AssessmentTerminalError)
+    assert not issubclass(
+        AssessmentCategoryMissingError,
+        AssessmentTerminalStageBlockedError,
+    )
     assert issubclass(EmbeddingResponseInvalidError, EmbeddingRecoverableError)
 
 

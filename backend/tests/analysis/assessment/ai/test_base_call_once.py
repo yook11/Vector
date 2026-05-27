@@ -26,7 +26,7 @@ from app.analysis.assessment.domain.result import InScope, OutOfScope
 from app.analysis.assessment.errors import (
     AssessmentRecoverableError,
     AssessmentResponseInvalidError,
-    AssessmentTerminalSkipError,
+    AssessmentTerminalStageBlockedError,
 )
 from app.analysis.rate_limit import RatePolicy
 
@@ -157,15 +157,15 @@ class TestCallOncePassthrough:
         assert exc_info.value is original
 
     @pytest.mark.asyncio
-    async def test_assessment_terminal_skip_base_passes_through(self) -> None:
-        original = AssessmentTerminalSkipError(code="z")
+    async def test_assessment_terminal_stage_blocked_base_passes_through(self) -> None:
+        original = AssessmentTerminalStageBlockedError(code="z")
         cls = _StubAssessor()
         cls._call_api = AsyncMock(side_effect=original)  # type: ignore[method-assign]
         cls._translate_error = MagicMock(  # type: ignore[method-assign]
             side_effect=AssertionError("must not be called")
         )
 
-        with pytest.raises(AssessmentTerminalSkipError) as exc_info:
+        with pytest.raises(AssessmentTerminalStageBlockedError) as exc_info:
             await cls._call_once("prompt")
         assert exc_info.value is original
 

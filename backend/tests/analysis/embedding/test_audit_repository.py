@@ -7,7 +7,7 @@ audit row の shape SSoT が repository に集約されたことを検証する:
   ``embedding_model`` / ``vector_dimension`` が embedder から取得されている
 - ``append_failure`` で **exc 型による 2 dispatch + Layer 2-B + catch-all** が動作:
   - ``EmbeddingRecoverableError`` → ``retryability=retryable``
-  - ``EmbeddingTerminalSkipError`` → ``retryability=non_retryable``
+  - ``EmbeddingTerminalStageBlockedError`` → ``retryability=non_retryable``
   - ``EmbeddingResponseInvalidError`` (Layer 2-B) → ``retryability=retryable`` /
     ``outcome_code="embedding_response_invalid"``
   - 想定外 ``RuntimeError`` → ``retryability=unknown`` /
@@ -38,7 +38,8 @@ from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.errors import (
     EmbeddingRecoverableError,
     EmbeddingResponseInvalidError,
-    EmbeddingTerminalSkipError,
+    EmbeddingTerminalStageBlockedError,
+    EmbeddingTerminalTargetRejectedError,
 )
 from app.audit.stages.embedding import EmbeddingAuditRepository
 from app.models.article import Article
@@ -225,15 +226,40 @@ async def test_append_failure_recoverable_maps_to_retryable(
 
 
 @pytest.mark.asyncio
-async def test_append_failure_terminal_skip_maps_to_keep_curation(
+async def test_append_failure_terminal_stage_blocked(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """EmbeddingTerminalSkipError → non_retryable / terminal_skip。"""
+    """EmbeddingTerminalStageBlockedError → non_retryable / stage_blocked。"""
     article = await _make_article(db_session, sample_source)
     await _make_extraction(db_session, article)
-    exc = EmbeddingTerminalSkipError(code="ai_error_input_rejected")
+    exc = EmbeddingTerminalStageBlockedError(code="ai_error_configuration")
+
+    async with session_factory() as session:
+        await EmbeddingAuditRepository(session).append_failure(
+            ready=_ready(article),
+            exc=exc,
+        )
+        await session.commit()
+
+    ev = await _fetch_one(db_session, article.id)
+    assert ev.outcome_code == "ai_error_configuration"
+    assert ev.retryability == "non_retryable"
+    assert ev.payload["failure_kind"] == "terminal_stage_blocked"
+    assert ev.payload["failure_action"] is None
+
+
+@pytest.mark.asyncio
+async def test_append_failure_terminal_target_rejected(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """EmbeddingTerminalTargetRejectedError → non_retryable / target_rejected。"""
+    article = await _make_article(db_session, sample_source)
+    await _make_extraction(db_session, article)
+    exc = EmbeddingTerminalTargetRejectedError(code="ai_error_input_rejected")
 
     async with session_factory() as session:
         await EmbeddingAuditRepository(session).append_failure(
@@ -245,7 +271,7 @@ async def test_append_failure_terminal_skip_maps_to_keep_curation(
     ev = await _fetch_one(db_session, article.id)
     assert ev.outcome_code == "ai_error_input_rejected"
     assert ev.retryability == "non_retryable"
-    assert ev.payload["failure_kind"] == "terminal_skip"
+    assert ev.payload["failure_kind"] == "terminal_target_rejected"
     assert ev.payload["failure_action"] is None
 
 

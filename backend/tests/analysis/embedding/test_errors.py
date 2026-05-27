@@ -17,7 +17,9 @@ from app.analysis.embedding.errors import (
     EmbeddingError,
     EmbeddingRecoverableError,
     EmbeddingResponseInvalidError,
-    EmbeddingTerminalSkipError,
+    EmbeddingTerminalError,
+    EmbeddingTerminalStageBlockedError,
+    EmbeddingTerminalTargetRejectedError,
 )
 from app.audit.domain.event import Stage
 from app.audit.failure_projection import Retryability
@@ -56,29 +58,32 @@ class TestEmbeddingRecoverableError:
             EmbeddingRecoverableError("msg")  # type: ignore[call-arg]
 
 
-class TestEmbeddingTerminalSkipError:
-    """``EmbeddingTerminalSkipError`` の constructor / instance attr 振る舞い。"""
+class TestEmbeddingTerminalStageBlockedError:
+    """``EmbeddingTerminalStageBlockedError`` の constructor / instance attr 振る舞い。"""
 
     def test_holds_code_and_provider_error(self) -> None:
         original = AIProviderConfigurationError()
-        exc = EmbeddingTerminalSkipError(
+        exc = EmbeddingTerminalStageBlockedError(
             code="ai_error_configuration",
             provider_error=original,
         )
 
         assert exc.code == "ai_error_configuration"
         assert exc.provider_error is original
-        assert str(exc) == "EmbeddingTerminalSkipError(code='ai_error_configuration')"
+        assert (
+            str(exc)
+            == "EmbeddingTerminalStageBlockedError(code='ai_error_configuration')"
+        )
 
     def test_provider_error_defaults_to_none(self) -> None:
-        exc = EmbeddingTerminalSkipError(code="ai_error_input_rejected")
+        exc = EmbeddingTerminalStageBlockedError(code="ai_error_configuration")
 
-        assert exc.code == "ai_error_input_rejected"
+        assert exc.code == "ai_error_configuration"
         assert exc.provider_error is None
 
     def test_positional_message_rejected(self) -> None:
         with pytest.raises(TypeError):
-            EmbeddingTerminalSkipError("msg")  # type: ignore[call-arg]
+            EmbeddingTerminalStageBlockedError("msg")  # type: ignore[call-arg]
 
 
 class TestStage5MarkerHierarchy:
@@ -87,13 +92,43 @@ class TestStage5MarkerHierarchy:
     def test_recoverable_subclasses_embedding_error(self) -> None:
         assert issubclass(EmbeddingRecoverableError, EmbeddingError)
 
-    def test_terminal_skip_subclasses_embedding_error(self) -> None:
-        assert issubclass(EmbeddingTerminalSkipError, EmbeddingError)
+    def test_terminal_stage_blocked_subclasses_terminal_error(self) -> None:
+        assert issubclass(EmbeddingTerminalStageBlockedError, EmbeddingTerminalError)
+
+    def test_terminal_target_rejected_subclasses_terminal_error(self) -> None:
+        assert issubclass(EmbeddingTerminalTargetRejectedError, EmbeddingTerminalError)
+
+    def test_terminal_error_subclasses_embedding_error(self) -> None:
+        assert issubclass(EmbeddingTerminalError, EmbeddingError)
+
+    def test_terminal_error_base_is_abstract(self) -> None:
+        with pytest.raises(TypeError, match="abstract"):
+            EmbeddingTerminalError(code="ai_error_configuration")
+
+    def test_terminal_subclass_must_declare_failure_kind(self) -> None:
+        with pytest.raises(TypeError, match="FAILURE_KIND"):
+
+            class _MissingFailureKind(EmbeddingTerminalError):
+                pass
+
+    def test_terminal_markers_subclass_embedding_error(self) -> None:
+        assert issubclass(EmbeddingTerminalStageBlockedError, EmbeddingError)
+        assert issubclass(EmbeddingTerminalTargetRejectedError, EmbeddingError)
 
     def test_two_markers_are_disjoint(self) -> None:
         # 2 marker の階層は独立 (片方が他方の subclass にならない)。
-        assert not issubclass(EmbeddingRecoverableError, EmbeddingTerminalSkipError)
-        assert not issubclass(EmbeddingTerminalSkipError, EmbeddingRecoverableError)
+        assert not issubclass(
+            EmbeddingRecoverableError, EmbeddingTerminalStageBlockedError
+        )
+        assert not issubclass(
+            EmbeddingTerminalStageBlockedError, EmbeddingRecoverableError
+        )
+        assert not issubclass(
+            EmbeddingRecoverableError, EmbeddingTerminalTargetRejectedError
+        )
+        assert not issubclass(
+            EmbeddingTerminalTargetRejectedError, EmbeddingRecoverableError
+        )
 
     def test_embedding_error_is_exception(self) -> None:
         assert issubclass(EmbeddingError, Exception)
@@ -103,9 +138,23 @@ class TestStage5MarkerHierarchy:
         assert EmbeddingRecoverableError.FAILURE_KIND == "recoverable"
         assert EmbeddingRecoverableError.RETRYABILITY is Retryability.RETRYABLE
         assert EmbeddingRecoverableError.FAILURE_ACTION is None
-        assert EmbeddingTerminalSkipError.FAILURE_KIND == "terminal_skip"
-        assert EmbeddingTerminalSkipError.RETRYABILITY is Retryability.NON_RETRYABLE
-        assert EmbeddingTerminalSkipError.FAILURE_ACTION is None
+        assert (
+            EmbeddingTerminalStageBlockedError.FAILURE_KIND == "terminal_stage_blocked"
+        )
+        assert (
+            EmbeddingTerminalStageBlockedError.RETRYABILITY
+            is Retryability.NON_RETRYABLE
+        )
+        assert EmbeddingTerminalStageBlockedError.FAILURE_ACTION is None
+        assert (
+            EmbeddingTerminalTargetRejectedError.FAILURE_KIND
+            == "terminal_target_rejected"
+        )
+        assert (
+            EmbeddingTerminalTargetRejectedError.RETRYABILITY
+            is Retryability.NON_RETRYABLE
+        )
+        assert EmbeddingTerminalTargetRejectedError.FAILURE_ACTION is None
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +191,6 @@ class TestEmbeddingResponseInvalidError:
         with pytest.raises(TypeError):
             EmbeddingResponseInvalidError("dimension mismatch")  # type: ignore[call-arg]
 
-    def test_is_not_terminal_skip(self) -> None:
-        # Layer 2-B Recoverable は TerminalSkip の subclass ではない
-        assert not issubclass(EmbeddingResponseInvalidError, EmbeddingTerminalSkipError)
+    def test_is_not_terminal(self) -> None:
+        # Layer 2-B Recoverable は terminal 系の subclass ではない
+        assert not issubclass(EmbeddingResponseInvalidError, EmbeddingTerminalError)

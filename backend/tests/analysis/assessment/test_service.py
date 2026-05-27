@@ -3,10 +3,10 @@
 PR6 で Service が以下を行うようになったことを固定する:
 
 - ``assessor.assess`` の ``AIProviderError`` を ``map_provider_to_assessment``
-  で Stage 4 marker (``AssessmentRecoverableError`` / ``AssessmentTerminalSkipError``)
+  で Stage 4 marker (``AssessmentRecoverableError`` / ``AssessmentTerminalStageBlockedError``)
   に詰め替え、``__cause__`` に元 ``AIProvider*Error`` を紐付ける (ACL boundary)。
 - ``_handle_in_scope`` で category 解決失敗 (``category_id is None``) のとき
-  ``AssessmentCategoryMissingError`` (Layer 2-B、TerminalSkip 継承) を raise する。
+  ``AssessmentCategoryMissingError`` (Layer 2-B、hold 対象外 terminal) を raise する。
 - 業務 INSERT (in-scope / out-of-scope) と同 session 同 tx で
   ``AssessmentAuditRepository.append_*`` を呼び、成功 audit を 1 行焼く。
 - race lost (``save()`` が None) の場合は audit を焼かず ``None`` を返す
@@ -40,7 +40,7 @@ from app.analysis.assessment.domain.result import (
 from app.analysis.assessment.errors import (
     AssessmentCategoryMissingError,
     AssessmentRecoverableError,
-    AssessmentTerminalSkipError,
+    AssessmentTerminalStageBlockedError,
 )
 from app.analysis.assessment.service import AssessmentService
 from app.models.article import Article
@@ -315,10 +315,10 @@ async def test_provider_network_error_is_wrapped_to_recoverable_marker(
 
 
 @pytest.mark.asyncio
-async def test_provider_configuration_error_is_wrapped_to_terminal_skip_marker(
+async def test_provider_configuration_error_is_wrapped_to_stage_blocked_marker(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """``AIProviderConfigurationError`` → ``AssessmentTerminalSkipError``。"""
+    """``AIProviderConfigurationError`` → ``AssessmentTerminalStageBlockedError``。"""
     provider_exc = AIProviderConfigurationError("bad api key")
     assessor = _make_assessor(side_effect=provider_exc)
 
@@ -331,7 +331,7 @@ async def test_provider_configuration_error_is_wrapped_to_terminal_skip_marker(
     )
     svc = AssessmentService(session_factory)
 
-    with pytest.raises(AssessmentTerminalSkipError) as excinfo:
+    with pytest.raises(AssessmentTerminalStageBlockedError) as excinfo:
         await svc.execute(ready, assessor)
     assert excinfo.value.__cause__ is provider_exc
     assert excinfo.value.provider_error is provider_exc

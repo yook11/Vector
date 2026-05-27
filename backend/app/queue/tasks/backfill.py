@@ -17,7 +17,9 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from taskiq import Context, TaskiqDepends
 
+from app.analysis.assessment.hold import is_assessment_held
 from app.analysis.curation.hold import is_curation_held
+from app.analysis.embedding.hold import is_embedding_held
 from app.config import settings
 from app.queue.brokers import broker_metadata
 from app.queue.helpers.backlog import PipelineBacklog
@@ -260,6 +262,10 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
         logger.info("backfill_assessments_disabled")
         return
 
+    if await is_assessment_held(get_redis()):
+        logger.warning("backfill_assessments_held")
+        return
+
     session_factory = ctx.state.session_factory
     before, after = BackfillWindow().boundaries_at(utc_now())
 
@@ -341,6 +347,10 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
     """
     if not settings.backfill_embeddings_enabled:
         logger.info("backfill_embeddings_disabled")
+        return
+
+    if await is_embedding_held(get_redis()):
+        logger.warning("backfill_embeddings_held")
         return
 
     session_factory = ctx.state.session_factory

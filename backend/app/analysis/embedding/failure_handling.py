@@ -1,6 +1,6 @@
 """Stage 5 の error handling policy を実行する application service。
 
-Layer 1 marker (``EmbeddingTerminalSkipError`` / ``EmbeddingRecoverableError`` /
+Layer 1 marker (``EmbeddingTerminalError`` / ``EmbeddingRecoverableError`` /
 catch-all) を audit / inline retry decision に対応づける唯一の場所。Task 層は
 taskiq retry のために reraise decision (``bool``) だけを解釈する。
 
@@ -19,9 +19,12 @@ from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.errors import (
     EmbeddingError,
     EmbeddingRecoverableError,
-    EmbeddingTerminalSkipError,
+    EmbeddingTerminalError,
+    EmbeddingTerminalStageBlockedError,
 )
+from app.analysis.embedding.hold import set_embedding_hold
 from app.audit.stages.embedding import EmbeddingAuditRepository
+from app.redis import get_redis
 from app.shared.security.redaction import redact_secrets
 
 logger = structlog.get_logger(__name__)
@@ -51,9 +54,20 @@ class EmbeddingFailureHandler:
             taskiq に raise すべきなら ``True``、return すべきなら ``False``。
         """
         match exc:
-            case EmbeddingTerminalSkipError():
+            case EmbeddingTerminalStageBlockedError():
                 logger.warning(
-                    "generate_embedding_terminal_skip",
+                    "generate_embedding_terminal_stage_blocked",
+                    analysis_id=ready.analysis_id,
+                    code=getattr(exc, "code", None),
+                )
+                await self._audit_failure(ready, exc)
+                await set_embedding_hold(
+                    get_redis(), reason=getattr(exc, "code", "unknown")
+                )
+                return False
+            case EmbeddingTerminalError():
+                logger.warning(
+                    "generate_embedding_terminal",
                     analysis_id=ready.analysis_id,
                     code=getattr(exc, "code", None),
                 )

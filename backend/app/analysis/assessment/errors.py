@@ -53,16 +53,23 @@ class AssessmentRecoverableError(AssessmentError):
         self.provider_error = provider_error
 
 
-class AssessmentTerminalSkipError(AssessmentError):
-    """再試行は無効で assessment を作らない Stage 4 失敗。"""
+class AssessmentTerminalError(AssessmentError):
+    """再試行は無効で assessment を作らない Stage 4 失敗の共通基底。
+
+    leaf class は audit projection 用の ``FAILURE_KIND`` を必ず宣言する。
+    """
 
     SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("code",)
-    FAILURE_KIND: ClassVar[str] = "terminal_skip"
     RETRYABILITY: ClassVar[Retryability] = Retryability.NON_RETRYABLE
     FAILURE_ACTION: ClassVar[FailureAction | None] = None
 
     code: str
     provider_error: AIProviderError | None
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        super().__init_subclass__(**kwargs)
+        if "FAILURE_KIND" not in cls.__dict__:
+            raise TypeError(f"{cls.__qualname__} must declare FAILURE_KIND")
 
     def __init__(
         self,
@@ -70,9 +77,23 @@ class AssessmentTerminalSkipError(AssessmentError):
         code: str,
         provider_error: AIProviderError | None = None,
     ) -> None:
+        if type(self) is AssessmentTerminalError:
+            raise TypeError("AssessmentTerminalError is abstract")
         super().__init__()
         self.code = code
         self.provider_error = provider_error
+
+
+class AssessmentTerminalStageBlockedError(AssessmentTerminalError):
+    """stage/provider 全体が停止している Stage 4 失敗。"""
+
+    FAILURE_KIND: ClassVar[str] = "terminal_stage_blocked"
+
+
+class AssessmentTerminalTargetRejectedError(AssessmentTerminalError):
+    """処理対象 curation 固有の拒否により assessment を作らない失敗。"""
+
+    FAILURE_KIND: ClassVar[str] = "terminal_target_rejected"
 
 
 # ---------------------------------------------------------------------------
@@ -90,8 +111,10 @@ class AssessmentResponseInvalidError(AssessmentRecoverableError):
         )
 
 
-class AssessmentCategoryMissingError(AssessmentTerminalSkipError):
+class AssessmentCategoryMissingError(AssessmentTerminalError):
     """AI が catalog に存在しない category slug を返した。"""
+
+    FAILURE_KIND: ClassVar[str] = "terminal_classification_unresolved"
 
     def __init__(self) -> None:
         super().__init__(
@@ -105,8 +128,9 @@ class AssessmentCategoryMissingError(AssessmentTerminalSkipError):
 # ---------------------------------------------------------------------------
 #
 # ``AssessmentService.execute()`` の boundary で ``map_provider_to_assessment`` を
-# 呼ぶ。Stage 4 が「どの provider error を recoverable として扱うか / terminal-skip
-# として扱うか」を tuple 2 つに集約する (OpenAI evals の
+# 呼ぶ。Stage 4 が「どの provider error を recoverable として扱うか / stage-wide
+# terminal と target-local terminal のどちらとして扱うか」を tuple 3 つに集約する
+# (OpenAI evals の
 # ``OPENAI_TIMEOUT_EXCEPTIONS`` 流)。Stage 3 が別の方針を持ちたければ Stage 3 専用の
 # tuple を作る (本 PR では Stage 3 経路は touch しない)。
 #
@@ -125,22 +149,32 @@ ASSESSMENT_RECOVERABLE_PROVIDER_ERRORS: tuple[type[AIProviderError], ...] = (
 """``AssessmentRecoverableError`` に詰め替えるべき provider error 一覧。
 
 将来の再実行で成功する可能性があるもの (transient / rate limit / quota)。
-新しい provider error 種別を追加したら必ず本 tuple または下記 terminal-skip tuple
+新しい provider error 種別を追加したら必ず本 tuple または下記 terminal tuple
 のいずれかに 1 行加える運用ルール。
 """
 
 
-ASSESSMENT_TERMINAL_SKIP_PROVIDER_ERRORS: tuple[type[AIProviderError], ...] = (
+ASSESSMENT_TERMINAL_STAGE_BLOCKED_PROVIDER_ERRORS: tuple[type[AIProviderError], ...] = (
     AIProviderConfigurationError,
     AIProviderRequestInvalidError,
     AIProviderInsufficientBalanceError,
+)
+"""``AssessmentTerminalStageBlockedError`` に詰め替える provider error 一覧。
+
+どの記事を投入しても同じ失敗になる stage/provider 全体の健全性問題。
+観測時に assessment hold を立てる対象。
+"""
+
+
+ASSESSMENT_TERMINAL_TARGET_REJECTED_PROVIDER_ERRORS: tuple[
+    type[AIProviderError], ...
+] = (
     AIProviderInputRejectedError,
     AIProviderOutputBlockedError,
 )
-"""``AssessmentTerminalSkipError`` に詰め替えるべき provider error 一覧。
+"""``AssessmentTerminalTargetRejectedError`` に詰め替える provider error 一覧。
 
-retry しても同じ結果になる (configuration / request / balance / safety block)。
-curation は保持し、assessment 行は作らず audit を焼いて skip する。
+対象 curation 固有の content/safety 拒否。stage 全体は健全なため hold しない。
 """
 
 
@@ -151,8 +185,13 @@ def map_provider_to_assessment(exc: AIProviderError) -> AssessmentError:
             code=exc.CODE,
             provider_error=exc,
         )
-    if isinstance(exc, ASSESSMENT_TERMINAL_SKIP_PROVIDER_ERRORS):
-        return AssessmentTerminalSkipError(
+    if isinstance(exc, ASSESSMENT_TERMINAL_STAGE_BLOCKED_PROVIDER_ERRORS):
+        return AssessmentTerminalStageBlockedError(
+            code=exc.CODE,
+            provider_error=exc,
+        )
+    if isinstance(exc, ASSESSMENT_TERMINAL_TARGET_REJECTED_PROVIDER_ERRORS):
+        return AssessmentTerminalTargetRejectedError(
             code=exc.CODE,
             provider_error=exc,
         )

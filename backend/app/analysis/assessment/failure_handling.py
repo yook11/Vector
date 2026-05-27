@@ -1,12 +1,11 @@
 """Stage 4 の error handling policy を実行する application service。
 
-Layer 1 marker (``AssessmentTerminalSkipError`` / ``AssessmentRecoverableError`` /
+Layer 1 marker (``AssessmentTerminalError`` / ``AssessmentRecoverableError`` /
 catch-all) を audit / inline retry decision に対応づける唯一の場所。Task 層は
 taskiq retry のために reraise decision (``bool``) だけを解釈する。
 
 Stage 4 は内容起因 DELETE 経路を持たない (extraction を保持して assessment を
-skip する設計) ため、Stage 3 と Handler は共有しない。Stage 5 も同型の Handler
-を別 PR で導入する想定。
+skip する設計) ため、Stage 3 と Handler は共有しない。
 """
 
 from __future__ import annotations
@@ -19,9 +18,12 @@ from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.errors import (
     AssessmentError,
     AssessmentRecoverableError,
-    AssessmentTerminalSkipError,
+    AssessmentTerminalError,
+    AssessmentTerminalStageBlockedError,
 )
+from app.analysis.assessment.hold import set_assessment_hold
 from app.audit.stages.assessment import AssessmentAuditRepository
+from app.redis import get_redis
 from app.shared.security.redaction import redact_secrets
 
 logger = structlog.get_logger(__name__)
@@ -51,9 +53,20 @@ class AssessmentFailureHandler:
             taskiq に raise すべきなら ``True``、return すべきなら ``False``。
         """
         match exc:
-            case AssessmentTerminalSkipError():
+            case AssessmentTerminalStageBlockedError():
                 logger.warning(
-                    "assess_content_terminal_skip",
+                    "assess_content_terminal_stage_blocked",
+                    curation_id=ready.curation_id,
+                    code=getattr(exc, "code", None),
+                )
+                await self._audit_failure(ready, exc)
+                await set_assessment_hold(
+                    get_redis(), reason=getattr(exc, "code", "unknown")
+                )
+                return False
+            case AssessmentTerminalError():
+                logger.warning(
+                    "assess_content_terminal",
                     curation_id=ready.curation_id,
                     code=getattr(exc, "code", None),
                 )
