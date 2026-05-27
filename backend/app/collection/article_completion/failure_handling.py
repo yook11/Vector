@@ -22,7 +22,7 @@ logger = structlog.get_logger(__name__)
 
 
 class ArticleCompletionFailureHandler:
-    """scrape failure と complete rejection を別入口で処理する。"""
+    """scrape / complete / persist の失敗経路を処理する。"""
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
@@ -81,6 +81,32 @@ class ArticleCompletionFailureHandler:
             detail=rejection.detail,
         )
         return None
+
+    async def handle_persist_crashed(
+        self,
+        ready: ReadyForArticleCompletion,
+        exc: BaseException,
+    ) -> None:
+        """persist の DB 例外を別 session で best-effort 監査する。"""
+        try:
+            async with self._session_factory() as audit_session:
+                await ArticleCompletionAuditRepository(
+                    audit_session
+                ).append_persist_crashed(ready=ready, exc=exc)
+                await audit_session.commit()
+        except Exception as audit_exc:
+            logger.exception(
+                "article_completion_persist_audit_dropped",
+                pending_id=ready.pending_id,
+                source_id=ready.source_id,
+                canonical_url=str(ready.source_url),
+                business_error_class=(
+                    f"{type(exc).__module__}.{type(exc).__qualname__}"
+                ),
+                audit_error_class=(
+                    f"{type(audit_exc).__module__}.{type(audit_exc).__qualname__}"
+                ),
+            )
 
     async def _handle_temporary(
         self,

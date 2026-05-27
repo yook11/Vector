@@ -83,7 +83,7 @@ class ArticleCompletionService:
                 )
                 await session.commit()
         except Exception as exc:
-            await self._audit_persist_crashed(ready, exc)
+            await self._failure_handler.handle_persist_crashed(ready, exc)
             raise
 
         match outcome:
@@ -115,27 +115,3 @@ class ArticleCompletionService:
                 return article_id
             case unreachable:
                 assert_never(unreachable)
-
-    async def _audit_persist_crashed(
-        self, ready: ReadyForArticleCompletion, exc: BaseException
-    ) -> None:
-        """persist の DB 例外を別 session で best-effort 監査する。"""
-        try:
-            async with self._session_factory() as audit_session:
-                await ArticleCompletionAuditRepository(
-                    audit_session
-                ).append_persist_crashed(ready=ready, exc=exc)
-                await audit_session.commit()
-        except Exception as audit_exc:
-            logger.exception(
-                "article_completion_persist_audit_dropped",
-                pending_id=ready.pending_id,
-                source_id=ready.source_id,
-                canonical_url=str(ready.source_url),
-                business_error_class=(
-                    f"{type(exc).__module__}.{type(exc).__qualname__}"
-                ),
-                audit_error_class=(
-                    f"{type(audit_exc).__module__}.{type(audit_exc).__qualname__}"
-                ),
-            )
