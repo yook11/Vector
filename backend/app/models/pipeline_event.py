@@ -56,10 +56,6 @@ class PipelineEvent(Base):
             "('retryable','non_retryable','unknown')",
             name="ck_pipeline_events_retryability",
         ),
-        CheckConstraint(
-            "duration_ms IS NULL OR duration_ms >= 0",
-            name="ck_pipeline_events_duration_nonneg",
-        ),
         Index(
             "ix_pipeline_events_stage_outcome",
             "stage",
@@ -113,7 +109,6 @@ class PipelineEvent(Base):
         ForeignKey("articles.id", ondelete="SET NULL"),
         nullable=True,
     )
-    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error_class: Mapped[str | None] = mapped_column(String(160), nullable=True)
     trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     payload: Mapped[dict[str, Any]] = mapped_column(

@@ -83,7 +83,6 @@ async def test_append_inserts_row_with_payload_roundtrip(
         outcome_code="permanent_fetch_error",
         payload=payload,
         source_id=source_row.id,
-        duration_ms=42,
     )
     await db_session.commit()
 
@@ -94,7 +93,6 @@ async def test_append_inserts_row_with_payload_roundtrip(
     assert row.event_type == "failed"
     assert row.outcome_code == "permanent_fetch_error"
     assert row.source_id == source_row.id
-    assert row.duration_ms == 42
     assert row.payload["kind"] == "acquisition"
     assert row.payload["fetcher_class"] == "VentureBeatFetcher"
     assert row.payload["http_status"] == 403
@@ -207,7 +205,6 @@ def test_pipeline_event_top_level_columns_match_current_contract() -> None:
         "retryability",
         "source_id",
         "article_id",
-        "duration_ms",
         "error_class",
         "trace_id",
         "payload",

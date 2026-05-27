@@ -33,7 +33,6 @@ class PipelineEventRepository:
         payload: BasePipelineEventPayload,
         article_id: int | None = None,
         source_id: int | None = None,
-        duration_ms: int | None = None,
         error_class: str | None = None,
         retryability: Retryability | None = None,
     ) -> None:
@@ -55,7 +54,6 @@ class PipelineEventRepository:
             retryability=retryability.value if retryability is not None else None,
             source_id=source_id,
             article_id=article_id,
-            duration_ms=duration_ms,
             error_class=error_class,
             trace_id=self._get_current_trace_id(),
             payload=payload.model_dump(mode="json", exclude_none=False),
