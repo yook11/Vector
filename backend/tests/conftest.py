@@ -64,7 +64,6 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
-from sqlmodel import SQLModel
 
 from app.config import settings
 from app.dependencies import get_session
@@ -81,11 +80,12 @@ from app.models import (  # noqa: F401
     WatchlistEntry,
     WeeklyBriefing,
 )
+from app.models.base import Base
 from app.search.router import get_embedder_for_search
 from tests.fakes.stub_query_embedder import StubQueryEmbedder
 
 # テスト用 DB は admin (migration role) で接続する: vector_test の create / drop、
-# auth schema 作成、SQLModel.metadata.create_all、seed user 投入は table owner
+# auth schema 作成、Base.metadata.create_all、seed user 投入は table owner
 # の権限が必要なため、application role (vector_app) では実行できない。
 # 権限境界の振る舞いは tests/test_db_user_isolation.py で別途 application role
 # 接続を作って assert する。
@@ -213,7 +213,7 @@ async def setup_db(request: pytest.FixtureRequest) -> AsyncGenerator[None]:
         return
     await _ensure_test_database_once()
     async with engine_test.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.create_all)
+        await conn.run_sync(Base.metadata.create_all)
         # watchlist_entries.user_id の FK を満たすため auth.user を seed する
         await conn.execute(
             text(
@@ -224,7 +224,7 @@ async def setup_db(request: pytest.FixtureRequest) -> AsyncGenerator[None]:
         )
     yield
     async with engine_test.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.drop_all)
+        await conn.run_sync(Base.metadata.drop_all)
 
 
 @pytest.fixture

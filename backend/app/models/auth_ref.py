@@ -6,11 +6,12 @@ Better Auth が管理する auth.user テーブルを SQLAlchemy MetaData に登
 
 from sqlalchemy import Column, Table
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
-from sqlmodel import SQLModel
+
+from app.models.base import Base
 
 auth_user_ref = Table(
     "user",
-    SQLModel.metadata,
+    Base.metadata,
     Column("id", PgUUID(as_uuid=True), primary_key=True),
     schema="auth",
 )

@@ -1,7 +1,7 @@
 from sqlalchemy.ext.asyncio import create_async_engine
-from sqlmodel import SQLModel
 
 from app.config import settings
+from app.models.base import Base
 
 # Pool 設定明示 (red-team C6 / F18 対策)。
 #
@@ -29,4 +29,4 @@ engine = create_async_engine(
 
 async def init_db() -> None:
     async with engine.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.create_all)
+        await conn.run_sync(Base.metadata.create_all)

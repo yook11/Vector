@@ -231,7 +231,7 @@ class TestPydanticIntegration:
         """from_attributes=True での ORM → schema 変換をシミュレートする。"""
 
         class OrmLike:
-            """素の str 属性を持つ SQLModel 行を模したクラス。"""
+            """素の str 属性を持つ ORM 行を模したクラス。"""
 
             def __init__(self, slug: str, name: str) -> None:
                 self.slug = slug
