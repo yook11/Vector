@@ -15,6 +15,7 @@ import structlog
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.analysis.ai_provider_errors import AIProviderUsageLimitExhaustedError
 from app.analysis.curation.ai.base import BaseCurator
 from app.analysis.curation.audit import build_curation_audit_input
 from app.analysis.curation.domain.ready import ReadyForCuration
@@ -73,7 +74,13 @@ class CurationFailureHandler:
                 )
                 return False
             case CurationRecoverableError():
-                await self._audit_failure(ready, exc, curator)
+                recoverable = exc
+                await self._audit_failure(ready, recoverable, curator)
+                if last_attempt and isinstance(
+                    recoverable.provider_error,
+                    AIProviderUsageLimitExhaustedError,
+                ):
+                    await set_curation_hold(get_redis(), reason=recoverable.code)
                 return not last_attempt
             case SQLAlchemyError():
                 await self._audit_failure(ready, exc, curator)

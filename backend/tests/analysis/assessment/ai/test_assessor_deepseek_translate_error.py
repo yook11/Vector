@@ -125,7 +125,7 @@ def test_status_402_translates_to_insufficient_balance() -> None:
 
 
 # ---------------------------------------------------------------------------
-# RateLimited: HTTP 429
+# RateLimited: HTTP 429 (DeepSeek concurrency/rate limit)
 # ---------------------------------------------------------------------------
 
 

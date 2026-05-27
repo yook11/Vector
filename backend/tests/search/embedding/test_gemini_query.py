@@ -17,10 +17,10 @@ from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderInputRejectedError,
     AIProviderNetworkError,
-    AIProviderQuotaExhaustedError,
     AIProviderRateLimitedError,
     AIProviderRequestInvalidError,
     AIProviderServiceUnavailableError,
+    AIProviderUsageLimitExhaustedError,
 )
 from app.search.embedding.gemini import GeminiQueryEmbedder
 
@@ -191,13 +191,13 @@ def test_translate_resource_exhausted_to_rate_limited_error() -> None:
     assert isinstance(result, AIProviderRateLimitedError)
 
 
-def test_translate_resource_exhausted_with_quota_to_quota_exhausted() -> None:
-    """message に "quota"/"daily" 含む 429 は QuotaExhausted へ。"""
+def test_translate_resource_exhausted_with_quota_to_usage_limit_exhausted() -> None:
+    """message に "quota"/"daily" 含む 429 は UsageLimitExhausted へ。"""
     embedder = _make_query_embedder()
     result = embedder._translate_error(
         _api_error(429, "RESOURCE_EXHAUSTED", "daily quota exceeded")
     )
-    assert isinstance(result, AIProviderQuotaExhaustedError)
+    assert isinstance(result, AIProviderUsageLimitExhaustedError)
 
 
 def test_translate_server_error_to_service_unavailable() -> None:

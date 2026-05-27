@@ -27,10 +27,10 @@ from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderInputRejectedError,
     AIProviderNetworkError,
-    AIProviderQuotaExhaustedError,
     AIProviderRateLimitedError,
     AIProviderRequestInvalidError,
     AIProviderServiceUnavailableError,
+    AIProviderUsageLimitExhaustedError,
 )
 
 # Stage 3 で「入力長超過」を InputRejected として表現するための message pattern。
@@ -78,7 +78,7 @@ def translate_gemini_error(exc: Exception) -> Exception:
           FAILED_PRECONDITION) → ConfigurationError
        c. 設定系 HTTP code (401/403/404) → ConfigurationError
        d. INVALID_ARGUMENT / code=400 の 3-way 分岐
-       e. RESOURCE_EXHAUSTED / code=429 の 2-way 分岐 (quota vs rate)
+       e. RESOURCE_EXHAUSTED / code=429 の 2-way 分岐 (usage limit vs rate)
     4. unknown → return exc
 
     設計判断: 設定系 status を INVALID_ARGUMENT 分岐より **先に** 評価する。
@@ -141,11 +141,11 @@ def translate_gemini_error(exc: Exception) -> Exception:
                 return AIProviderInputRejectedError()
             return AIProviderRequestInvalidError()
 
-        # 3e. 429 / RESOURCE_EXHAUSTED。quota/daily message は Quota 系として
-        #     rate limit (一時的バースト超過) と区別する (運用上 retry 戦略が違う)。
+        # 3e. 429 / RESOURCE_EXHAUSTED。quota/daily message は利用枠 exhausted
+        #     として、rate limit (一時的バースト超過) と区別する。
         if code == 429 or status == "RESOURCE_EXHAUSTED":
             if "quota" in message or "daily" in message:
-                return AIProviderQuotaExhaustedError()
+                return AIProviderUsageLimitExhaustedError()
             return AIProviderRateLimitedError()
 
     # 4. 未知。stage-local 側で stage-specific 判定 (ValidationError 等) を

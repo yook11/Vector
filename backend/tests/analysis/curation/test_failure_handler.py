@@ -29,6 +29,8 @@ from app.analysis.ai_provider_errors import (
     AIProviderInputRejectedError,
     AIProviderNetworkError,
     AIProviderOutputBlockedError,
+    AIProviderRateLimitedError,
+    AIProviderUsageLimitExhaustedError,
 )
 from app.analysis.curation.ai.base import BaseCurator
 from app.analysis.curation.ai.gemini_spec import GEMINI_CURATION_SPEC
@@ -278,4 +280,100 @@ async def test_recoverable_does_not_set_curation_hold(
             last_attempt=True,
         )
 
+    set_hold.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_usage_limit_recoverable_sets_curation_hold_on_last_attempt(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """UsageLimitExhausted は recoverable のまま retry exhaustion で hold する。"""
+    article = await _make_article(db_session, sample_source)
+    article_id = article.id
+    ready = _ready_from(article)
+    handler = CurationFailureHandler(session_factory)
+    exc = _wrap(AIProviderUsageLimitExhaustedError("usage exhausted"))
+
+    with patch(
+        "app.analysis.curation.failure_handling.set_curation_hold",
+        new=AsyncMock(),
+    ) as set_hold:
+        reraise = await handler.handle(
+            ready=ready,
+            exc=exc,
+            curator=_curator_mock(),
+            last_attempt=True,
+        )
+
+    assert reraise is False
+    set_hold.assert_awaited_once()
+    assert set_hold.await_args.kwargs["reason"] == exc.code
+    await db_session.rollback()
+    ev = (
+        (
+            await db_session.execute(
+                select(PipelineEvent).where(PipelineEvent.article_id == article_id)
+            )
+        )
+        .scalars()
+        .one()
+    )
+    assert ev.outcome_code == AIProviderUsageLimitExhaustedError.CODE
+    assert ev.retryability == "retryable"
+    assert ev.payload["failure_kind"] == "recoverable"
+
+
+@pytest.mark.asyncio
+async def test_usage_limit_recoverable_with_retry_budget_does_not_set_hold(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """UsageLimitExhausted でも retry 余地があれば taskiq retry に任せる。"""
+    article = await _make_article(db_session, sample_source)
+    ready = _ready_from(article)
+    handler = CurationFailureHandler(session_factory)
+    exc = _wrap(AIProviderUsageLimitExhaustedError("usage exhausted"))
+
+    with patch(
+        "app.analysis.curation.failure_handling.set_curation_hold",
+        new=AsyncMock(),
+    ) as set_hold:
+        reraise = await handler.handle(
+            ready=ready,
+            exc=exc,
+            curator=_curator_mock(),
+            last_attempt=False,
+        )
+
+    assert reraise is True
+    set_hold.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_rate_limited_recoverable_last_attempt_does_not_set_curation_hold(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """RateLimited は短期 throttle として recoverable exhaustion でも hold しない。"""
+    article = await _make_article(db_session, sample_source)
+    ready = _ready_from(article)
+    handler = CurationFailureHandler(session_factory)
+    exc = _wrap(AIProviderRateLimitedError("429"))
+
+    with patch(
+        "app.analysis.curation.failure_handling.set_curation_hold",
+        new=AsyncMock(),
+    ) as set_hold:
+        reraise = await handler.handle(
+            ready=ready,
+            exc=exc,
+            curator=_curator_mock(),
+            last_attempt=True,
+        )
+
+    assert reraise is False
     set_hold.assert_not_called()

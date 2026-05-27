@@ -14,6 +14,7 @@ import structlog
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.analysis.ai_provider_errors import AIProviderUsageLimitExhaustedError
 from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.errors import (
     AssessmentError,
@@ -73,12 +74,21 @@ class AssessmentFailureHandler:
                 await self._audit_failure(ready, exc)
                 return False
             case AssessmentRecoverableError():
-                await self._audit_failure(ready, exc)
+                recoverable = exc
+                await self._audit_failure(ready, recoverable)
                 if last_attempt:
+                    if isinstance(
+                        recoverable.provider_error,
+                        AIProviderUsageLimitExhaustedError,
+                    ):
+                        await set_assessment_hold(
+                            get_redis(),
+                            reason=recoverable.code,
+                        )
                     logger.warning(
                         "assess_content_recoverable_exhausted",
                         curation_id=ready.curation_id,
-                        code=getattr(exc, "code", None),
+                        code=getattr(recoverable, "code", None),
                     )
                     return False
                 return True

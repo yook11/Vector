@@ -12,10 +12,10 @@ from app.analysis.ai_provider_errors import (
     AIProviderError,
     AIProviderInputRejectedError,
     AIProviderNetworkError,
-    AIProviderQuotaExhaustedError,
     AIProviderRateLimitedError,
     AIProviderRequestInvalidError,
     AIProviderServiceUnavailableError,
+    AIProviderUsageLimitExhaustedError,
 )
 from app.exceptions import InvalidQueryError
 from app.schemas.articles import PaginatedArticleResponse, SemanticSearchParams
@@ -38,7 +38,7 @@ _SEARCH_INFRA_PROVIDER_ERRORS: tuple[type[AIProviderError], ...] = (
     AIProviderNetworkError,
     AIProviderServiceUnavailableError,
     AIProviderRateLimitedError,
-    AIProviderQuotaExhaustedError,
+    AIProviderUsageLimitExhaustedError,
     AIProviderRequestInvalidError,
 )
 
@@ -97,7 +97,7 @@ async def embed_search_query(
     try:
         vector = await embedder.embed_query(text)
     except _SEARCH_INFRA_PROVIDER_ERRORS as e:
-        # provider/infra 起因 (RateLimit / 5xx / network / configuration / quota /
+        # provider/infra 起因 (RateLimit / 5xx / network / configuration / usage limit /
         # provider response shape 違反) → 503 維持。retry or 運用対応が筋。
         raise SearchError(str(e)) from e
     except AIProviderInputRejectedError as e:

@@ -20,6 +20,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
+from app.analysis.ai_provider_errors import (
+    AIProviderRateLimitedError,
+    AIProviderUsageLimitExhaustedError,
+)
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.errors import (
     EmbeddingRecoverableError,
@@ -220,14 +224,105 @@ async def test_recoverable_last_attempt_writes_audit_and_returns_false(
     handler = EmbeddingFailureHandler(session_factory)
 
     exc = EmbeddingRecoverableError(code="ai_error_network")
-    reraise = await handler.handle(ready=ready, exc=exc, last_attempt=True)
+    with patch(
+        "app.analysis.embedding.failure_handling.set_embedding_hold",
+        new=AsyncMock(),
+    ) as set_hold:
+        reraise = await handler.handle(ready=ready, exc=exc, last_attempt=True)
 
     assert reraise is False
+    set_hold.assert_not_called()
     await db_session.rollback()
     events = await _fetch_embedding_events(db_session, article_id)
     assert len(events) == 1
     assert events[0].retryability == "retryable"
     assert events[0].payload["failure_kind"] == "recoverable"
+
+
+@pytest.mark.asyncio
+async def test_usage_limit_recoverable_with_retry_budget_does_not_set_hold(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """UsageLimitExhausted でも retry 余地があれば taskiq retry に任せる。"""
+    article = await _make_article(db_session, sample_source)
+    ready = _ready_for(article.id)
+    handler = EmbeddingFailureHandler(session_factory)
+    provider_exc = AIProviderUsageLimitExhaustedError()
+    exc = EmbeddingRecoverableError(
+        code=provider_exc.CODE,
+        provider_error=provider_exc,
+    )
+
+    with patch(
+        "app.analysis.embedding.failure_handling.set_embedding_hold",
+        new=AsyncMock(),
+    ) as set_hold:
+        reraise = await handler.handle(ready=ready, exc=exc, last_attempt=False)
+
+    assert reraise is True
+    set_hold.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_usage_limit_recoverable_sets_hold_on_last_attempt(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """UsageLimitExhausted は recoverable のまま retry exhaustion で hold する。"""
+    article = await _make_article(db_session, sample_source)
+    article_id = article.id
+    ready = _ready_for(article_id)
+    handler = EmbeddingFailureHandler(session_factory)
+    provider_exc = AIProviderUsageLimitExhaustedError()
+    exc = EmbeddingRecoverableError(
+        code=provider_exc.CODE,
+        provider_error=provider_exc,
+    )
+
+    with patch(
+        "app.analysis.embedding.failure_handling.set_embedding_hold",
+        new=AsyncMock(),
+    ) as set_hold:
+        reraise = await handler.handle(ready=ready, exc=exc, last_attempt=True)
+
+    assert reraise is False
+    set_hold.assert_awaited_once()
+    assert set_hold.await_args.kwargs["reason"] == provider_exc.CODE
+    await db_session.rollback()
+    events = await _fetch_embedding_events(db_session, article_id)
+    assert len(events) == 1
+    assert events[0].outcome_code == provider_exc.CODE
+    assert events[0].retryability == "retryable"
+    assert events[0].payload["failure_kind"] == "recoverable"
+
+
+@pytest.mark.asyncio
+async def test_rate_limited_recoverable_last_attempt_does_not_set_hold(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """RateLimited は短期 throttle として recoverable exhaustion でも hold しない。"""
+    article = await _make_article(db_session, sample_source)
+    ready = _ready_for(article.id)
+    handler = EmbeddingFailureHandler(session_factory)
+    provider_exc = AIProviderRateLimitedError()
+    exc = EmbeddingRecoverableError(
+        code=provider_exc.CODE,
+        provider_error=provider_exc,
+    )
+
+    with patch(
+        "app.analysis.embedding.failure_handling.set_embedding_hold",
+        new=AsyncMock(),
+    ) as set_hold:
+        reraise = await handler.handle(ready=ready, exc=exc, last_attempt=True)
+
+    assert reraise is False
+    set_hold.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

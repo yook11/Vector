@@ -11,10 +11,10 @@ from app.analysis.ai_provider_errors import (
     AIProviderInsufficientBalanceError,
     AIProviderNetworkError,
     AIProviderOutputBlockedError,
-    AIProviderQuotaExhaustedError,
     AIProviderRateLimitedError,
     AIProviderRequestInvalidError,
     AIProviderServiceUnavailableError,
+    AIProviderUsageLimitExhaustedError,
 )
 from app.audit.domain.event import Stage
 from app.audit.failure_projection import FailureAction, Retryability
@@ -130,11 +130,11 @@ CURATION_RECOVERABLE_PROVIDER_ERRORS: tuple[type[AIProviderError], ...] = (
     AIProviderNetworkError,
     AIProviderServiceUnavailableError,
     AIProviderRateLimitedError,
-    AIProviderQuotaExhaustedError,
+    AIProviderUsageLimitExhaustedError,
 )
 """``CurationRecoverableError`` に詰め替えるべき provider error 一覧。
 
-将来の再実行で成功する可能性があるもの (transient / rate limit / quota)。
+将来の再実行で成功する可能性があるもの (transient / rate limit / usage limit)。
 """
 
 

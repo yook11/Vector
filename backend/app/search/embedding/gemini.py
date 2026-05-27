@@ -20,10 +20,10 @@ from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderInputRejectedError,
     AIProviderNetworkError,
-    AIProviderQuotaExhaustedError,
     AIProviderRateLimitedError,
     AIProviderRequestInvalidError,
     AIProviderServiceUnavailableError,
+    AIProviderUsageLimitExhaustedError,
 )
 from app.config import settings
 from app.search.embedding.base import QueryEmbedder
@@ -111,7 +111,7 @@ class GeminiQueryEmbedder(QueryEmbedder):
                 return AIProviderConfigurationError()
             if code == 429 or status == "RESOURCE_EXHAUSTED":
                 if "quota" in message or "daily" in message:
-                    return AIProviderQuotaExhaustedError()
+                    return AIProviderUsageLimitExhaustedError()
                 return AIProviderRateLimitedError()
 
         if isinstance(exc, genai_errors.ServerError):

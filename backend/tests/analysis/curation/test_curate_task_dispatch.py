@@ -29,10 +29,10 @@ from app.analysis.ai_provider_errors import (
     AIProviderInsufficientBalanceError,
     AIProviderNetworkError,
     AIProviderOutputBlockedError,
-    AIProviderQuotaExhaustedError,
     AIProviderRateLimitedError,
     AIProviderRequestInvalidError,
     AIProviderServiceUnavailableError,
+    AIProviderUsageLimitExhaustedError,
 )
 from app.analysis.curation.domain.ready import ReadyForCuration
 from app.analysis.curation.errors import CurationResponseInvalidError
@@ -229,14 +229,14 @@ async def test_retryable_reraise_false_returns() -> None:
     "exc_cls",
     [
         AIProviderRateLimitedError,
-        AIProviderQuotaExhaustedError,
+        AIProviderUsageLimitExhaustedError,
     ],
 )
 @pytest.mark.asyncio
 async def test_rate_limit_class_delegates_to_handler(
     exc_cls: type[Exception],
 ) -> None:
-    """rate limit / quota 系 (Recoverable に詰め替えられる) も Handler に委譲。
+    """rate limit / usage limit 系 (Recoverable に詰め替えられる) も Handler に委譲。
 
     retry decision (taskiq retry に乗せるか) は Handler 内部の責務なので、本
     task テストでは Handler が呼ばれたことのみ確認する。

@@ -19,10 +19,10 @@ from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderInputRejectedError,
     AIProviderNetworkError,
-    AIProviderQuotaExhaustedError,
     AIProviderRateLimitedError,
     AIProviderRequestInvalidError,
     AIProviderServiceUnavailableError,
+    AIProviderUsageLimitExhaustedError,
 )
 from app.analysis.gemini_error_translator import (
     is_context_length_error,
@@ -196,15 +196,15 @@ def test_code_400_without_status_3way_branch(message: str, expected: type) -> No
 
 
 # ---------------------------------------------------------------------------
-# RESOURCE_EXHAUSTED / code=429 → 2-way 分岐 (quota vs rate)
+# RESOURCE_EXHAUSTED / code=429 → 2-way 分岐 (usage limit vs rate)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
     "message,expected",
     [
-        ("daily quota exceeded", AIProviderQuotaExhaustedError),
-        ("quota for project exceeded", AIProviderQuotaExhaustedError),
+        ("daily quota exceeded", AIProviderUsageLimitExhaustedError),
+        ("quota for project exceeded", AIProviderUsageLimitExhaustedError),
         ("rate limit reached", AIProviderRateLimitedError),
         ("too many requests", AIProviderRateLimitedError),
     ],
@@ -219,7 +219,10 @@ def test_code_429_without_status_routes_to_rate_or_quota() -> None:
     """``status`` 空でも ``code=429`` で同じ 2-way 分岐に入る。"""
     quota_exc = _client_error(code=429, status="", message="daily quota exceeded")
     rate_exc = _client_error(code=429, status="", message="rate limit reached")
-    assert isinstance(translate_gemini_error(quota_exc), AIProviderQuotaExhaustedError)
+    assert isinstance(
+        translate_gemini_error(quota_exc),
+        AIProviderUsageLimitExhaustedError,
+    )
     assert isinstance(translate_gemini_error(rate_exc), AIProviderRateLimitedError)
 
 

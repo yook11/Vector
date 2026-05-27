@@ -11,10 +11,10 @@ from app.analysis.ai_provider_errors import (
     AIProviderInsufficientBalanceError,
     AIProviderNetworkError,
     AIProviderOutputBlockedError,
-    AIProviderQuotaExhaustedError,
     AIProviderRateLimitedError,
     AIProviderRequestInvalidError,
     AIProviderServiceUnavailableError,
+    AIProviderUsageLimitExhaustedError,
 )
 from app.analysis.assessment.errors import (
     ASSESSMENT_RECOVERABLE_PROVIDER_ERRORS,
@@ -35,7 +35,7 @@ _EXPECTED_PROVIDER_ERROR_TYPES: frozenset[type[AIProviderError]] = frozenset(
         AIProviderRequestInvalidError,
         AIProviderInsufficientBalanceError,
         AIProviderRateLimitedError,
-        AIProviderQuotaExhaustedError,
+        AIProviderUsageLimitExhaustedError,
         AIProviderServiceUnavailableError,
         AIProviderNetworkError,
         AIProviderInputRejectedError,
@@ -53,7 +53,7 @@ class TestTupleContents:
             AIProviderNetworkError,
             AIProviderServiceUnavailableError,
             AIProviderRateLimitedError,
-            AIProviderQuotaExhaustedError,
+            AIProviderUsageLimitExhaustedError,
         ],
     )
     def test_recoverable_tuple_contains_expected_types(
@@ -125,7 +125,7 @@ class TestMapProviderToAssessmentRecoverable:
             AIProviderNetworkError,
             AIProviderServiceUnavailableError,
             AIProviderRateLimitedError,
-            AIProviderQuotaExhaustedError,
+            AIProviderUsageLimitExhaustedError,
         ],
     )
     def test_dispatches_to_recoverable_marker(
@@ -143,7 +143,7 @@ class TestMapProviderToAssessmentRecoverable:
             AIProviderNetworkError,
             AIProviderServiceUnavailableError,
             AIProviderRateLimitedError,
-            AIProviderQuotaExhaustedError,
+            AIProviderUsageLimitExhaustedError,
         ],
     )
     def test_preserves_provider_error_identity(
@@ -161,7 +161,7 @@ class TestMapProviderToAssessmentRecoverable:
             AIProviderNetworkError,
             AIProviderServiceUnavailableError,
             AIProviderRateLimitedError,
-            AIProviderQuotaExhaustedError,
+            AIProviderUsageLimitExhaustedError,
         ],
     )
     def test_propagates_code_from_provider_class_var(

@@ -32,10 +32,10 @@ from app.analysis.ai_provider_errors import (
     AIProviderInsufficientBalanceError,
     AIProviderNetworkError,
     AIProviderOutputBlockedError,
-    AIProviderQuotaExhaustedError,
     AIProviderRateLimitedError,
     AIProviderRequestInvalidError,
     AIProviderServiceUnavailableError,
+    AIProviderUsageLimitExhaustedError,
 )
 from app.analysis.assessment.errors import (
     AssessmentCategoryMissingError,
@@ -123,7 +123,7 @@ _AI_PROVIDER_SUBCLASSES: tuple[tuple[type[AIProviderError], str], ...] = (
     (AIProviderRequestInvalidError, "ai_error_request_invalid"),
     (AIProviderInsufficientBalanceError, "ai_error_insufficient_balance"),
     (AIProviderRateLimitedError, "ai_error_rate_limited"),
-    (AIProviderQuotaExhaustedError, "ai_error_quota_exhausted"),
+    (AIProviderUsageLimitExhaustedError, "ai_error_usage_limit_exhausted"),
     (AIProviderServiceUnavailableError, "ai_error_service_unavailable"),
     (AIProviderNetworkError, "ai_error_network"),
 )
@@ -312,7 +312,7 @@ def _build_22_class_instances() -> list[VectorDomainError]:
         AIProviderRequestInvalidError(),
         AIProviderInsufficientBalanceError(),
         AIProviderRateLimitedError(),
-        AIProviderQuotaExhaustedError(),
+        AIProviderUsageLimitExhaustedError(),
         AIProviderServiceUnavailableError(),
         AIProviderNetworkError(),
         # Curation 3 (Layer 1) + 1 (Layer 2-B)

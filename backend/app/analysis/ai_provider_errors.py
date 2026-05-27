@@ -71,10 +71,10 @@ class AIProviderRateLimitedError(AIProviderError):
     CODE: ClassVar[str] = "ai_error_rate_limited"
 
 
-class AIProviderQuotaExhaustedError(AIProviderError):
-    """日次 quota (RPD) 到達。翌日まで recover 見込みなしだが再 dispatch 可能。"""
+class AIProviderUsageLimitExhaustedError(AIProviderError):
+    """provider/account/project/model の利用枠を使い切った。時間経過等で復旧。"""
 
-    CODE: ClassVar[str] = "ai_error_quota_exhausted"
+    CODE: ClassVar[str] = "ai_error_usage_limit_exhausted"
 
 
 class AIProviderServiceUnavailableError(AIProviderError):

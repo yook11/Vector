@@ -15,6 +15,7 @@ import structlog
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.analysis.ai_provider_errors import AIProviderUsageLimitExhaustedError
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.errors import (
     EmbeddingError,
@@ -74,12 +75,21 @@ class EmbeddingFailureHandler:
                 await self._audit_failure(ready, exc)
                 return False
             case EmbeddingRecoverableError():
-                await self._audit_failure(ready, exc)
+                recoverable = exc
+                await self._audit_failure(ready, recoverable)
                 if last_attempt:
+                    if isinstance(
+                        recoverable.provider_error,
+                        AIProviderUsageLimitExhaustedError,
+                    ):
+                        await set_embedding_hold(
+                            get_redis(),
+                            reason=recoverable.code,
+                        )
                     logger.warning(
                         "generate_embedding_recoverable_exhausted",
                         analysis_id=ready.analysis_id,
-                        code=getattr(exc, "code", None),
+                        code=getattr(recoverable, "code", None),
                     )
                     return False
                 return True
