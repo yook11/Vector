@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from taskiq import Context, TaskiqDepends
 
 from app.collection.article_acquisition.failure_handling import (
-    SourceAcquisitionFailureHandler,
+    ArticleAcquisitionFailureHandler,
 )
 from app.collection.sources.dispatch import SourceDispatchService
 from app.collection.sources.fetch_cadence import FetchCadence
@@ -135,7 +135,7 @@ async def acquire_source(
     本文未取得の記事は後段 ``scrape_html_body`` task へ進む。
 
     失敗ハンドリング: taskiq inline retry を持たず (``max_retries=0``)、捕捉した
-    例外は ``SourceAcquisitionFailureHandler`` に委譲する。次の cron tick で再 dispatch
+    例外は ``ArticleAcquisitionFailureHandler`` に委譲する。次の cron tick で再 dispatch
     される。
     """
     # 重い import は task body 内 (scheduler 起動を軽く保つ)。
@@ -150,11 +150,11 @@ async def acquire_source(
     source = SOURCES[SourceName(arg.name)]
     svc = ArticleAcquisitionService(session_factory, source)
 
-    handler = SourceAcquisitionFailureHandler(session_factory)
+    handler = ArticleAcquisitionFailureHandler(session_factory)
     try:
         persisted_ids = await svc.execute(source_id)
     except Exception as exc:
-        reraise = await handler.handle(
+        reraise = await handler.handle_source_failure(
             source_id=source_id,
             source_name=arg.name,
             exc=exc,

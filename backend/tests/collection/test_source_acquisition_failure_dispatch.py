@@ -1,4 +1,4 @@
-"""``SourceAcquisitionFailureHandler`` の dispatch integration test。"""
+"""``ArticleAcquisitionFailureHandler`` の dispatch integration test。"""
 
 from __future__ import annotations
 
@@ -11,9 +11,14 @@ from structlog.testing import capture_logs
 
 from app.collection.article_acquisition.errors import (
     AcquisitionExternalFetchTerminalError,
+    ConversionReason,
+    FetchedArticleConversionError,
 )
 from app.collection.article_acquisition.failure_handling import (
-    SourceAcquisitionFailureHandler,
+    ArticleAcquisitionFailureHandler,
+)
+from app.collection.article_acquisition.fetched_article_converter import (
+    ConversionRejection,
 )
 from app.collection.external_fetch_errors import (
     FetchAccessDeniedError,
@@ -40,6 +45,22 @@ async def _fetch_acquisition_events(
     return list(rows)
 
 
+def _conversion_rejection(
+    message: str = "conversion rejected: missing_title",
+) -> ConversionRejection:
+    return ConversionRejection(
+        error=FetchedArticleConversionError(
+            message,
+            conversion_reason=ConversionReason.MISSING_TITLE,
+            source_name="VentureBeat",
+            raw_url="https://venturebeat.com/rejected",
+            has_title=True,
+            body_length=42,
+            has_published_at=False,
+        )
+    )
+
+
 @pytest.mark.asyncio
 async def test_acquisition_error_writes_audit_and_returns_false(
     db_session: AsyncSession,
@@ -48,12 +69,12 @@ async def test_acquisition_error_writes_audit_and_returns_false(
 ) -> None:
     """Stage 1 marker → origin CODE の audit 1 行 + ``reraise=False``。"""
     source_id = sample_source.id
-    handler = SourceAcquisitionFailureHandler(session_factory)
+    handler = ArticleAcquisitionFailureHandler(session_factory)
 
     exc = AcquisitionExternalFetchTerminalError(
         origin_error=FetchAccessDeniedError(status_code=403, reason="forbidden")
     )
-    reraise = await handler.handle(
+    reraise = await handler.handle_source_failure(
         source_id=source_id,
         source_name="VentureBeat",
         exc=exc,
@@ -86,9 +107,9 @@ async def test_unexpected_error_writes_audit_and_returns_true(
 ) -> None:
     """想定外 ``Exception`` → unexpected_error audit + ``reraise=True``。"""
     source_id = sample_source.id
-    handler = SourceAcquisitionFailureHandler(session_factory)
+    handler = ArticleAcquisitionFailureHandler(session_factory)
 
-    reraise = await handler.handle(
+    reraise = await handler.handle_source_failure(
         source_id=source_id,
         source_name="VentureBeat",
         exc=RuntimeError("boom"),
@@ -116,7 +137,7 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
 ) -> None:
     """audit Repository が落ちても handler は完走し redacted log に退避する。"""
     source_id = sample_source.id
-    handler = SourceAcquisitionFailureHandler(session_factory)
+    handler = ArticleAcquisitionFailureHandler(session_factory)
 
     business_exc = AcquisitionExternalFetchTerminalError(
         origin_error=FetchSsrfBlockedError(
@@ -135,7 +156,7 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
                 "audit db down Authorization: Bearer sk-live-AUDITSECRETxyz"
             )
         )
-        reraise = await handler.handle(
+        reraise = await handler.handle_source_failure(
             source_id=source_id,
             source_name="VentureBeat",
             exc=business_exc,
@@ -151,6 +172,71 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
     assert drop["business_error_class"].endswith(
         ".AcquisitionExternalFetchTerminalError"
     )
+    assert drop["audit_error_class"].endswith(".RuntimeError")
+    assert "sk-live-BUSINESSSECRETabc" not in drop["business_error_message"]
+    assert "sk-live-AUDITSECRETxyz" not in drop["audit_error_message"]
+
+
+@pytest.mark.asyncio
+async def test_conversion_rejection_writes_rejected_audit(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """entry 単位の変換棄却 → rejected audit。source failure とは分けて扱う。"""
+    source_id = sample_source.id
+    handler = ArticleAcquisitionFailureHandler(session_factory)
+
+    await handler.handle_conversion_rejected(source_id, _conversion_rejection())
+
+    await db_session.rollback()
+    events = await _fetch_acquisition_events(db_session, source_id)
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.event_type == "rejected"
+    assert ev.outcome_code == "article_conversion_rejected"
+    assert ev.retryability is None
+    assert ev.error_class is not None
+    assert ev.error_class.endswith(".FetchedArticleConversionError")
+    assert ev.payload["source_name"] == "VentureBeat"
+    assert ev.payload["conversion_observed_reason"] == "missing_title"
+    assert ev.payload["conversion_has_title"] is True
+    assert ev.payload["conversion_body_length"] == 42
+    assert ev.payload["conversion_has_published_at"] is False
+
+
+@pytest.mark.asyncio
+async def test_conversion_rejection_audit_drop_is_logged_with_secrets_redacted(
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """変換棄却 audit が落ちても例外を外へ出さず redacted log に退避する。"""
+    handler = ArticleAcquisitionFailureHandler(session_factory)
+    rejection = _conversion_rejection(
+        "conversion rejected Authorization: Bearer sk-live-BUSINESSSECRETabc"
+    )
+
+    with (
+        patch(
+            "app.collection.article_acquisition.failure_handling.SourceAcquisitionAuditRepository"
+        ) as mock_audit_cls,
+        capture_logs() as cap,
+    ):
+        mock_audit_cls.return_value.append_conversion_rejected = AsyncMock(
+            side_effect=RuntimeError(
+                "audit db down Authorization: Bearer sk-live-AUDITSECRETxyz"
+            )
+        )
+
+        await handler.handle_conversion_rejected(sample_source.id, rejection)
+
+    drops = [
+        e for e in cap if e.get("event") == "fetched_article_conversion_audit_dropped"
+    ]
+    assert drops, "conversion rejection fallback ログが emit されていない"
+    drop = drops[-1]
+    assert drop["source_id"] == sample_source.id
+    assert drop["business_error_class"].endswith(".FetchedArticleConversionError")
     assert drop["audit_error_class"].endswith(".RuntimeError")
     assert "sk-live-BUSINESSSECRETabc" not in drop["business_error_message"]
     assert "sk-live-AUDITSECRETxyz" not in drop["audit_error_message"]

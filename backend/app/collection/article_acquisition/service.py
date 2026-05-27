@@ -13,6 +13,9 @@ from app.collection.article_acquisition.errors import (
     UnreadableResponseError,
     map_origin_to_acquisition,
 )
+from app.collection.article_acquisition.failure_handling import (
+    ArticleAcquisitionFailureHandler,
+)
 from app.collection.article_acquisition.fetched_article_converter import (
     ConversionRejection,
     convert_fetched_article,
@@ -26,7 +29,6 @@ from app.collection.domain.observed_article import ObservedArticle
 from app.collection.external_fetch_errors import ExternalFetchError
 from app.collection.persistence.article_store import ArticleStore
 from app.collection.sources.article_source import ArticleSource
-from app.shared.security.redaction import redact_secrets
 
 logger = structlog.get_logger(__name__)
 
@@ -43,6 +45,7 @@ class ArticleAcquisitionService:
         self._session_factory = session_factory
         self._source = source
         self._tools_factory = tools_factory
+        self._failure_handler = ArticleAcquisitionFailureHandler(session_factory)
 
     async def execute(self, source_id: int) -> list[int]:
         async with self._session_factory() as session:
@@ -94,7 +97,9 @@ class ArticleAcquisitionService:
                                 canonical_url=str(observed.source_url),
                             )
                         case ConversionRejection() as rej:
-                            await self._audit_conversion_rejected(source_id, rej)
+                            await self._failure_handler.handle_conversion_rejected(
+                                source_id, rej
+                            )
             except (ExternalFetchError, UnreadableResponseError) as exc:
                 raise map_origin_to_acquisition(exc) from exc
 
@@ -106,30 +111,3 @@ class ArticleAcquisitionService:
             persisted_count=len(persisted_ids),
         )
         return persisted_ids
-
-    async def _audit_conversion_rejected(
-        self, source_id: int, rej: ConversionRejection
-    ) -> None:
-        """変換棄却を業務 tx とは別 session で best-effort 監査する。"""
-        try:
-            async with self._session_factory() as audit_session:
-                await SourceAcquisitionAuditRepository(
-                    audit_session
-                ).append_conversion_rejected(
-                    source_id=source_id,
-                    exc=rej.error,
-                )
-                await audit_session.commit()
-        except Exception as audit_exc:
-            logger.exception(
-                "fetched_article_conversion_audit_dropped",
-                source_id=source_id,
-                business_error_class=(
-                    f"{type(rej.error).__module__}.{type(rej.error).__qualname__}"
-                ),
-                business_error_message=redact_secrets(str(rej.error))[:500],
-                audit_error_class=(
-                    f"{type(audit_exc).__module__}.{type(audit_exc).__qualname__}"
-                ),
-                audit_error_message=redact_secrets(str(audit_exc))[:500],
-            )
