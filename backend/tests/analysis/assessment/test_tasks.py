@@ -24,19 +24,26 @@ from structlog.testing import capture_logs
 
 from app.analysis.ai_provider_errors import AIProviderRateLimitedError
 from app.analysis.assessment.domain.ready import ReadyForAssessment
-from app.analysis.rate_limit import RatePolicy
+from app.analysis.rate_limit import AIModelRateLimitPolicy, RateLimitRule
 from app.queue.messages.assessment import AssessmentTrigger
 from app.queue.messages.embedding import EmbeddingTrigger
 
 
 def _make_provider_fake() -> MagicMock:
     """assessor 用のスタブ。property 契約 (model_name / prompt_version /
-    rate_policy) を持つ。"""
+    rate_limit_policy) を持つ。"""
     fake = MagicMock()
     fake.model_name = "test-model"
     fake.prompt_version = "abc12345"
-    fake.rate_policy = RatePolicy(
-        provider="gemini", model="test-model", rpm=50, rpd=1500
+    fake.rate_limit_policy = AIModelRateLimitPolicy(
+        provider="gemini",
+        model="test-model",
+        rules=(
+            RateLimitRule(
+                name="rpd", max_requests=1500, window_seconds=86400, block=False
+            ),
+            RateLimitRule(name="rpm", max_requests=50, window_seconds=60, block=True),
+        ),
     )
     return fake
 

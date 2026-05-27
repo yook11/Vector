@@ -26,7 +26,7 @@ from app.analysis.embedding.errors import (
     EmbeddingResponseInvalidError,
     EmbeddingTerminalStageBlockedError,
 )
-from app.analysis.rate_limit import RatePolicy
+from app.analysis.rate_limit import AIModelRateLimitPolicy
 from app.queue.messages.embedding import EmbeddingTrigger
 
 
@@ -34,11 +34,10 @@ def _make_embedder_fake() -> MagicMock:
     fake = MagicMock()
     fake.model_name = "gemini-embedding-001"
     fake.dimension = 768
-    fake.rate_policy = RatePolicy(
+    fake.rate_limit_policy = AIModelRateLimitPolicy(
         provider="gemini",
         model="gemini-embedding-001",
-        rpm=None,
-        rpd=None,
+        rules=(),
     )
     fake.document_prefix = ""
     return fake

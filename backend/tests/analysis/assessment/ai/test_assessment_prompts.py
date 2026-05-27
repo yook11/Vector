@@ -3,7 +3,7 @@
 Gemini / DeepSeek 双方の Prompt class に共通する性質と、各 provider 固有の差分を
 parametrize で検証する。
 
-call config (model / gen_config / response_schema / version / rate_policy /
+call config (model / gen_config / response_schema / version / rate_limit_policy /
 tool_name / base_url) は ``GEMINI_ASSESSMENT_SPEC`` /
 ``DEEPSEEK_ASSESSMENT_SPEC`` (``spec.py``) が SSoT であり、本ファイルでは触らない
 (``test_assessment_specs.py`` で golden 固定)。Prompt class 側は render + TEMPLATE

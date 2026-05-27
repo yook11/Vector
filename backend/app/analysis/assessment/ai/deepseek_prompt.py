@@ -7,7 +7,7 @@ Gemini との差分は ``MAX_SUMMARY_CHARS = 8000`` の cost guard 1 点 (render
 動作に直接関わる prompt 概念なので Prompt class 側に置く)。
 
 call config (model / gen_config / response_schema / tool_name / base_url /
-version / rate_policy) は ``DEEPSEEK_ASSESSMENT_SPEC`` (``spec.py``) が SSoT。
+version / rate_limit_policy) は ``DEEPSEEK_ASSESSMENT_SPEC`` (``spec.py``) が SSoT。
 """
 
 from __future__ import annotations

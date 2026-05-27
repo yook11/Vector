@@ -64,7 +64,7 @@ async def curate_content(
         return
 
     # AI を呼ぶ見込みが立ってから rate limit acquire (Stage 4 / Stage 5 と対称)
-    if not await ctx.state.provider_rate_limit_gate.acquire(curator.rate_policy):
+    if not await ctx.state.provider_rate_limit_gate.acquire(curator.rate_limit_policy):
         logger.warning("curate_content_daily_quota", article_id=ready.article_id)
         return
 

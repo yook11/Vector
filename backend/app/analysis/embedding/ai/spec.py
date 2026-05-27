@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final
 
-from app.analysis.rate_limit import RatePolicy
+from app.analysis.rate_limit import AIModelRateLimitPolicy
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,7 +27,7 @@ class EmbeddingCallSpec:
       (運用上 ``dimension`` と一致する。テストで等値を担保)
     - ``task_type``: SDK の task hint (``"RETRIEVAL_DOCUMENT"`` 等)
     - ``document_prefix``: 文書埋め込み時の prefix (空なら付与なし)
-    - ``rate_policy``: provider × model 単位の rate limit policy
+    - ``rate_limit_policy``: provider × model 単位の rate limit policy
     """
 
     provider: str
@@ -36,7 +36,7 @@ class EmbeddingCallSpec:
     output_dimensionality: int
     task_type: str
     document_prefix: str
-    rate_policy: RatePolicy
+    rate_limit_policy: AIModelRateLimitPolicy
 
 
 # ---------------------------------------------------------------------------
@@ -54,10 +54,9 @@ GEMINI_EMBEDDING_SPEC: Final[EmbeddingCallSpec] = EmbeddingCallSpec(
     output_dimensionality=_GEMINI_DIMENSION,
     task_type="RETRIEVAL_DOCUMENT",
     document_prefix="",
-    rate_policy=RatePolicy(
+    rate_limit_policy=AIModelRateLimitPolicy(
         provider=_GEMINI_PROVIDER,
         model=_GEMINI_MODEL,
-        rpm=None,
-        rpd=None,
+        rules=(),
     ),
 )

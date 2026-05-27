@@ -36,7 +36,7 @@ from app.analysis.ai_provider_errors import (
 )
 from app.analysis.curation.domain.ready import ReadyForCuration
 from app.analysis.curation.errors import CurationResponseInvalidError
-from app.analysis.rate_limit import RatePolicy
+from app.analysis.rate_limit import AIModelRateLimitPolicy, RateLimitRule
 from app.queue.messages.curation import CurationTrigger
 
 
@@ -44,8 +44,15 @@ def _make_provider_fake() -> MagicMock:
     fake = MagicMock()
     fake.model_name = "test-model"
     fake.prompt_version = "test-prompt-v1"
-    fake.rate_policy = RatePolicy(
-        provider="gemini", model="test-model", rpm=50, rpd=1500
+    fake.rate_limit_policy = AIModelRateLimitPolicy(
+        provider="gemini",
+        model="test-model",
+        rules=(
+            RateLimitRule(
+                name="rpd", max_requests=1500, window_seconds=86400, block=False
+            ),
+            RateLimitRule(name="rpm", max_requests=50, window_seconds=60, block=True),
+        ),
     )
     return fake
 

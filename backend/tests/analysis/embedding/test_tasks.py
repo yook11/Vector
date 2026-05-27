@@ -23,7 +23,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
-from app.analysis.rate_limit import RatePolicy
+from app.analysis.rate_limit import AIModelRateLimitPolicy
 from app.queue.messages.embedding import EmbeddingTrigger
 
 
@@ -32,11 +32,10 @@ def _make_embedder_fake() -> MagicMock:
     fake = MagicMock()
     fake.model_name = "gemini-embedding-001"
     fake.dimension = 768
-    fake.rate_policy = RatePolicy(
+    fake.rate_limit_policy = AIModelRateLimitPolicy(
         provider="gemini",
         model="gemini-embedding-001",
-        rpm=None,
-        rpd=None,
+        rules=(),
     )
     fake.document_prefix = ""
     return fake
@@ -117,9 +116,9 @@ class TestGenerateEmbedding:
         # 構築された Ready が Service に渡されていること
         call_args = mock_svc_cls.return_value.execute.call_args
         assert call_args[0][0] is ready
-        # gate.acquire は embedder.rate_policy で呼ばれる
+        # gate.acquire は embedder.rate_limit_policy で呼ばれる
         mock_ctx.state.provider_rate_limit_gate.acquire.assert_awaited_once_with(
-            mock_ctx.state.embedder.rate_policy
+            mock_ctx.state.embedder.rate_limit_policy
         )
 
     @pytest.mark.asyncio

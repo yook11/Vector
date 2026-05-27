@@ -1,7 +1,7 @@
 """``GeminiCurationSpec`` (singleton) の構造を固定する golden table テスト。
 
 Prompt と Spec を分離した結果として ``provider`` / ``model`` / ``version`` /
-``gen_config`` / ``response_schema`` / ``system_instruction`` / ``rate_policy``
+``gen_config`` / ``response_schema`` / ``system_instruction`` / ``rate_limit_policy``
 が module singleton として SSoT に置かれていることを検証する。
 
 ``version`` は ``compute_call_signature`` で算出される 8 文字 hash。
@@ -17,7 +17,7 @@ import pytest
 
 from app.analysis.curation.ai.gemini_spec import GEMINI_CURATION_SPEC
 from app.analysis.curation.ai.schema import GeminiCurationResponse
-from app.analysis.rate_limit import RatePolicy
+from app.analysis.rate_limit import AIModelRateLimitPolicy, RateLimitRule
 
 
 def test_provider_is_gemini() -> None:
@@ -59,12 +59,16 @@ def test_system_instruction_is_none() -> None:
     assert GEMINI_CURATION_SPEC.system_instruction is None
 
 
-def test_rate_policy_is_provider_model_rpm_rpd() -> None:
-    assert GEMINI_CURATION_SPEC.rate_policy == RatePolicy(
+def test_rate_limit_policy_is_provider_model_rules() -> None:
+    assert GEMINI_CURATION_SPEC.rate_limit_policy == AIModelRateLimitPolicy(
         provider="gemini",
         model="gemini-2.5-flash-lite",
-        rpm=100,
-        rpd=1500,
+        rules=(
+            RateLimitRule(
+                name="rpd", max_requests=1500, window_seconds=86400, block=False
+            ),
+            RateLimitRule(name="rpm", max_requests=100, window_seconds=60, block=True),
+        ),
     )
 
 

@@ -59,7 +59,7 @@ def _curator_mock(
     """失敗 audit テスト用の ``BaseCurator`` mock。
 
     PR4 で ``BaseCurator`` の構造保証は property 契約 (model_name /
-    prompt_version / rate_policy) に置き換わったため、property 属性として
+    prompt_version / rate_limit_policy) に置き換わったため、property 属性として
     値を bind する。値は test-* で Gemini と衝突しない名前にする。
     """
     mock = MagicMock(spec=BaseCurator)

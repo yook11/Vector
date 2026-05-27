@@ -27,9 +27,11 @@ from app.analysis.embedding.domain.value_objects import (
     EmbeddingVector,
 )
 from app.analysis.embedding.errors import EmbeddingResponseInvalidError
-from app.analysis.rate_limit import RatePolicy
+from app.analysis.rate_limit import AIModelRateLimitPolicy
 
-_STUB_RATE_POLICY = RatePolicy(provider="stub", model="stub-model", rpm=None, rpd=None)
+_STUB_RATE_LIMIT_POLICY = AIModelRateLimitPolicy(
+    provider="stub", model="stub-model", rules=()
+)
 
 
 def _v(value: float = 0.1) -> list[float]:
@@ -68,8 +70,8 @@ class StubEmbedder(BaseEmbedder):
         return EMBEDDING_DIMENSION
 
     @property
-    def rate_policy(self) -> RatePolicy:
-        return _STUB_RATE_POLICY
+    def rate_limit_policy(self) -> AIModelRateLimitPolicy:
+        return _STUB_RATE_LIMIT_POLICY
 
     def __init__(
         self, *, side_effects: list[list[float] | Exception] | None = None
@@ -197,7 +199,7 @@ def test_base_embedder_rejects_subclass_without_required_properties() -> None:
     """必須 abstract property を欠く具象サブクラスは instance 化で TypeError。"""
 
     class BadEmbedder(BaseEmbedder):
-        # model_name / dimension / rate_policy を意図的に未実装
+        # model_name / dimension / rate_limit_policy を意図的に未実装
 
         async def _call_api(self, text: str) -> list[float]:
             return [0.0]

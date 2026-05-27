@@ -18,7 +18,7 @@ from dataclasses import FrozenInstanceError
 import pytest
 
 from app.analysis.embedding.ai.spec import GEMINI_EMBEDDING_SPEC
-from app.analysis.rate_limit import RatePolicy
+from app.analysis.rate_limit import AIModelRateLimitPolicy
 
 # ---------------------------------------------------------------------------
 # Gemini
@@ -53,13 +53,12 @@ def test_gemini_document_prefix_is_empty() -> None:
     assert GEMINI_EMBEDDING_SPEC.document_prefix == ""
 
 
-def test_gemini_rate_policy_equals_provider_model_with_none_rpm_rpd() -> None:
+def test_gemini_rate_limit_policy_equals_provider_model_with_no_rules() -> None:
     """Gemini embedding API の RPM/RPD は tier 依存で確定値なし。"""
-    assert GEMINI_EMBEDDING_SPEC.rate_policy == RatePolicy(
+    assert GEMINI_EMBEDDING_SPEC.rate_limit_policy == AIModelRateLimitPolicy(
         provider="gemini",
         model="gemini-embedding-001",
-        rpm=None,
-        rpd=None,
+        rules=(),
     )
 
 

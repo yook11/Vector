@@ -80,7 +80,7 @@ def test_property_contracts_return_spec_values() -> None:
     embedder = _make_embedder()
     assert embedder.model_name == GEMINI_EMBEDDING_SPEC.model
     assert embedder.dimension == GEMINI_EMBEDDING_SPEC.dimension
-    assert embedder.rate_policy == GEMINI_EMBEDDING_SPEC.rate_policy
+    assert embedder.rate_limit_policy == GEMINI_EMBEDDING_SPEC.rate_limit_policy
     assert embedder.document_prefix == GEMINI_EMBEDDING_SPEC.document_prefix
 
 

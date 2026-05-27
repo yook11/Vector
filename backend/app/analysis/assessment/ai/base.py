@@ -10,7 +10,7 @@ from app.analysis.ai_provider_errors import AIProviderError
 from app.analysis.assessment.ai.envelope import AssessmentCall
 from app.analysis.assessment.domain.result import InScope, OutOfScope
 from app.analysis.assessment.errors import AssessmentError
-from app.analysis.rate_limit import RatePolicy
+from app.analysis.rate_limit import AIModelRateLimitPolicy
 
 logger = structlog.get_logger(__name__)
 
@@ -39,7 +39,7 @@ class BaseAssessor(abc.ABC):
     - ``model_name``: モデル識別子
     - ``prompt_version``: プロンプト version 識別子 (失敗 audit の
       ``prompt_version`` を埋めるために必須、成功時は envelope が SSoT)
-    - ``rate_policy``: provider/model/rpm/rpd を保持する VO
+    - ``rate_limit_policy``: provider/model ごとの rate limit policy
     """
 
     # -- 抽象 property (call spec exposure) --
@@ -58,8 +58,8 @@ class BaseAssessor(abc.ABC):
 
     @property
     @abc.abstractmethod
-    def rate_policy(self) -> RatePolicy:
-        """provider × model × RPM × RPD の rate limit policy。"""
+    def rate_limit_policy(self) -> AIModelRateLimitPolicy:
+        """provider × model 粒度の rate limit policy。"""
         ...
 
     # -- 抽象フック --

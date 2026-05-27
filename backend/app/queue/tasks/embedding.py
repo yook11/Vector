@@ -77,7 +77,7 @@ async def generate_embedding(
     # AI を呼ぶ見込みが立ってから rate limit acquire (stale trigger で quota を
     # 消費しない設計)
     gate = ctx.state.provider_rate_limit_gate
-    if not await gate.acquire(embedder.rate_policy):
+    if not await gate.acquire(embedder.rate_limit_policy):
         logger.warning(
             "generate_embedding_daily_quota",
             analysis_id=ready.analysis_id,

@@ -5,7 +5,7 @@ provider 共通の ``ASSESSMENT_PROMPT`` を ClassVar で alias する
 (``DeepSeekAssessmentPrompt`` も同じ TEMPLATE を share)。
 
 call config (model / gen_config / response_schema / system_instruction /
-version / rate_policy) は ``GEMINI_ASSESSMENT_SPEC`` (``spec.py``) が SSoT。
+version / rate_limit_policy) は ``GEMINI_ASSESSMENT_SPEC`` (``spec.py``) が SSoT。
 本 class は Prompt 文面と render (sanitize) のみに責務を絞る。
 """
 

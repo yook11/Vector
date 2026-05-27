@@ -165,7 +165,7 @@ async def _create_article_with_extraction(
 
 def test_base_curator_rejects_subclass_without_abstract_properties() -> None:
     """PR4: BaseCurator は property 契約 (model_name / prompt_version /
-    rate_policy) の abstract method 検査で構造保証する。``__init_subclass__``
+    rate_limit_policy) の abstract method 検査で構造保証する。``__init_subclass__``
     runtime check は廃止し、abc が instance 化時に TypeError を出す。"""
 
     class BadCurator(BaseCurator):
@@ -180,12 +180,12 @@ def test_base_curator_rejects_subclass_without_abstract_properties() -> None:
 
 
 def test_base_assessor_rejects_subclass_without_property_contract() -> None:
-    """abstract property (model_name / prompt_version / rate_policy) を実装しない
+    """abstract property (model_name / prompt_version / rate_limit_policy) を実装しない
     sub class は instantiate 時に ``TypeError: Can't instantiate abstract class``
     で reject される。"""
 
     class BadAssessor(BaseAssessor):
-        # model_name / prompt_version / rate_policy property を実装しない
+        # model_name / prompt_version / rate_limit_policy property を実装しない
 
         async def assess(self, title_ja, summary_ja): ...
 

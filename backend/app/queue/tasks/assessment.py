@@ -79,7 +79,7 @@ async def assess_content(
         return
 
     # AI を呼ぶ見込みが立ってから rate limit acquire (Stage 3 / Stage 5 と対称)
-    if not await ctx.state.provider_rate_limit_gate.acquire(assessor.rate_policy):
+    if not await ctx.state.provider_rate_limit_gate.acquire(assessor.rate_limit_policy):
         logger.warning(
             "assess_content_daily_quota",
             curation_id=ready.curation_id,

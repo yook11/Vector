@@ -2,7 +2,7 @@
 golden table テスト。
 
 Prompt と Spec を分離した結果として ``provider`` / ``model`` / ``version`` /
-``gen_config`` / ``response_schema`` / ``system_instruction`` / ``rate_policy``
+``gen_config`` / ``response_schema`` / ``system_instruction`` / ``rate_limit_policy``
 + DeepSeek 固有 ``tool_name`` / ``base_url`` が module singleton として SSoT に
 置かれていることを検証する。
 
@@ -27,7 +27,7 @@ from app.analysis.assessment.ai.spec import (
     DEEPSEEK_ASSESSMENT_SPEC,
     GEMINI_ASSESSMENT_SPEC,
 )
-from app.analysis.rate_limit import RatePolicy
+from app.analysis.rate_limit import AIModelRateLimitPolicy, RateLimitRule
 
 _HEX8 = re.compile(r"^[0-9a-f]{8}$")
 
@@ -52,7 +52,7 @@ def test_gemini_version_locked() -> None:
     のいずれかが変わったらこの値も変わる。意図的変更でない場合は配置換え以外の
     差分が混入したサイン。
     """
-    assert GEMINI_ASSESSMENT_SPEC.version == "2ccfb2bd"
+    assert GEMINI_ASSESSMENT_SPEC.version == "00d06f4e"
 
 
 def test_gemini_response_schema_equals_gemini_schema() -> None:
@@ -76,12 +76,16 @@ def test_gemini_system_instruction_is_none() -> None:
     assert GEMINI_ASSESSMENT_SPEC.system_instruction is None
 
 
-def test_gemini_rate_policy_equals_provider_model_rpm_rpd() -> None:
-    assert GEMINI_ASSESSMENT_SPEC.rate_policy == RatePolicy(
+def test_gemini_rate_limit_policy_equals_provider_model_rules() -> None:
+    assert GEMINI_ASSESSMENT_SPEC.rate_limit_policy == AIModelRateLimitPolicy(
         provider="gemini",
         model="gemini-2.5-flash-lite",
-        rpm=100,
-        rpd=1500,
+        rules=(
+            RateLimitRule(
+                name="rpd", max_requests=1500, window_seconds=86400, block=False
+            ),
+            RateLimitRule(name="rpm", max_requests=100, window_seconds=60, block=True),
+        ),
     )
 
 
@@ -105,7 +109,7 @@ def test_deepseek_model_is_v4_flash() -> None:
 
 def test_deepseek_version_locked() -> None:
     """配置換えで version 値が変わらない golden 固定。"""
-    assert DEEPSEEK_ASSESSMENT_SPEC.version == "f8add15c"
+    assert DEEPSEEK_ASSESSMENT_SPEC.version == "9982898c"
 
 
 def test_deepseek_response_schema_equals_tool_schema() -> None:
@@ -134,13 +138,12 @@ def test_deepseek_system_instruction_is_none() -> None:
     assert DEEPSEEK_ASSESSMENT_SPEC.system_instruction is None
 
 
-def test_deepseek_rate_policy_has_none_rpm_rpd() -> None:
+def test_deepseek_rate_limit_policy_has_no_rules() -> None:
     """DeepSeek は公式 RPM/RPD 公開なし、429 は OpenAI SDK retry に任せる方針。"""
-    assert DEEPSEEK_ASSESSMENT_SPEC.rate_policy == RatePolicy(
+    assert DEEPSEEK_ASSESSMENT_SPEC.rate_limit_policy == AIModelRateLimitPolicy(
         provider="deepseek",
         model="deepseek-v4-flash",
-        rpm=None,
-        rpd=None,
+        rules=(),
     )
 
 

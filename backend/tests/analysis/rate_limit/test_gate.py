@@ -2,7 +2,7 @@
 
 3 stage (extraction/assessment/embedding) 共通の rate limit facade として、
 
-1) ``acquire(policy) -> bool`` の戻り値契約 (RPD/RPM 両 acquire の結果を bool に圧縮)
+1) ``acquire(policy) -> bool`` の戻り値契約 (rule acquire の結果を bool に圧縮)
 2) Redis key 名前空間 (provider × model で stage 横断共有) の構造的不変条件
 
 の 2 観点を gate の振る舞い経由で検証する。``_build_limiters`` は module-private
@@ -16,12 +16,25 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.analysis.rate_limit import ProviderRateLimitGate, RatePolicy
+from app.analysis.rate_limit import (
+    AIModelRateLimitPolicy,
+    ProviderRateLimitGate,
+    RateLimitRule,
+)
 from app.redis.sliding_window import RateLimitExceededError
 
 
-def _policy() -> RatePolicy:
-    return RatePolicy(provider="gemini", model="m", rpm=100, rpd=1500)
+def _policy() -> AIModelRateLimitPolicy:
+    return AIModelRateLimitPolicy(
+        provider="gemini",
+        model="m",
+        rules=(
+            RateLimitRule(
+                name="rpd", max_requests=1500, window_seconds=86400, block=False
+            ),
+            RateLimitRule(name="rpm", max_requests=100, window_seconds=60, block=True),
+        ),
+    )
 
 
 class TestAcquireReturnValue:
@@ -35,7 +48,7 @@ class TestAcquireReturnValue:
         rpd.acquire = AsyncMock(return_value=None)
         with patch(
             "app.analysis.rate_limit.gate._build_limiters",
-            return_value=(rpm, rpd),
+            return_value=(rpd, rpm),
         ):
             gate = ProviderRateLimitGate()
             assert await gate.acquire(_policy()) is True
@@ -51,7 +64,7 @@ class TestAcquireReturnValue:
         rpd.acquire = AsyncMock(side_effect=RateLimitExceededError("rpd"))
         with patch(
             "app.analysis.rate_limit.gate._build_limiters",
-            return_value=(rpm, rpd),
+            return_value=(rpd, rpm),
         ):
             gate = ProviderRateLimitGate()
             assert await gate.acquire(_policy()) is False
@@ -66,7 +79,7 @@ class TestAcquireReturnValue:
         rpd.acquire = AsyncMock(return_value=None)
         with patch(
             "app.analysis.rate_limit.gate._build_limiters",
-            return_value=(rpm, rpd),
+            return_value=(rpd, rpm),
         ):
             gate = ProviderRateLimitGate()
             assert await gate.acquire(_policy()) is False
@@ -75,19 +88,19 @@ class TestAcquireReturnValue:
 
     @pytest.mark.asyncio
     async def test_returns_true_when_both_limiters_none(self) -> None:
-        """RPM/RPD 未設定 policy (Stage 5 embedder 想定) で True を返す。"""
+        """no-limit policy (Stage 5 embedder 想定) で True を返す。"""
         with patch(
             "app.analysis.rate_limit.gate._build_limiters",
-            return_value=(None, None),
+            return_value=(),
         ):
             gate = ProviderRateLimitGate()
-            policy = RatePolicy(provider="gemini", model="m", rpm=None, rpd=None)
+            policy = AIModelRateLimitPolicy(provider="gemini", model="m", rules=())
             assert await gate.acquire(policy) is True
 
     @pytest.mark.asyncio
     async def test_no_limit_policy_does_not_touch_redis(self) -> None:
-        """RPM/RPD 未設定なら Redis 接続を作らず ``True`` を返す。"""
-        policy = RatePolicy(provider="gemini", model="m", rpm=None, rpd=None)
+        """``rules=()`` なら Redis 接続を作らず ``True`` を返す。"""
+        policy = AIModelRateLimitPolicy(provider="gemini", model="m", rules=())
         with patch("app.analysis.rate_limit.gate.get_redis") as get_redis:
             gate = ProviderRateLimitGate()
             assert await gate.acquire(policy) is True
@@ -119,18 +132,29 @@ class TestRedisKeyContract:
         stage (extract/assess/embed) は key 設計に影響しない。
         """
         redis_mock, script = self._patched_redis()
-        policy = RatePolicy(
-            provider="gemini", model="gemini-2.5-flash-lite", rpm=100, rpd=1500
+        policy = AIModelRateLimitPolicy(
+            provider="gemini",
+            model="gemini-2.5-flash-lite",
+            rules=(
+                RateLimitRule(
+                    name="rpd", max_requests=1500, window_seconds=86400, block=False
+                ),
+                RateLimitRule(
+                    name="rpm", max_requests=100, window_seconds=60, block=True
+                ),
+            ),
         )
         with patch("app.analysis.rate_limit.gate.get_redis", return_value=redis_mock):
             gate = ProviderRateLimitGate()
             await gate.acquire(policy)
             await gate.acquire(policy)
-        keys = {call.kwargs["keys"][0] for call in script.call_args_list}
-        assert keys == {
+        keys = [call.kwargs["keys"][0] for call in script.call_args_list]
+        assert keys == [
             "ratelimit:gemini:gemini-2.5-flash-lite:rpd",
             "ratelimit:gemini:gemini-2.5-flash-lite:rpm",
-        }
+            "ratelimit:gemini:gemini-2.5-flash-lite:rpd",
+            "ratelimit:gemini:gemini-2.5-flash-lite:rpm",
+        ]
 
     @pytest.mark.asyncio
     async def test_different_provider_distinct_redis_keys(self) -> None:
@@ -139,10 +163,44 @@ class TestRedisKeyContract:
         with patch("app.analysis.rate_limit.gate.get_redis", return_value=redis_mock):
             gate = ProviderRateLimitGate()
             await gate.acquire(
-                RatePolicy(provider="gemini", model="m", rpm=100, rpd=1500)
+                AIModelRateLimitPolicy(
+                    provider="gemini",
+                    model="m",
+                    rules=(
+                        RateLimitRule(
+                            name="rpd",
+                            max_requests=1500,
+                            window_seconds=86400,
+                            block=False,
+                        ),
+                        RateLimitRule(
+                            name="rpm",
+                            max_requests=100,
+                            window_seconds=60,
+                            block=True,
+                        ),
+                    ),
+                )
             )
             await gate.acquire(
-                RatePolicy(provider="deepseek", model="m", rpm=100, rpd=1500)
+                AIModelRateLimitPolicy(
+                    provider="deepseek",
+                    model="m",
+                    rules=(
+                        RateLimitRule(
+                            name="rpd",
+                            max_requests=1500,
+                            window_seconds=86400,
+                            block=False,
+                        ),
+                        RateLimitRule(
+                            name="rpm",
+                            max_requests=100,
+                            window_seconds=60,
+                            block=True,
+                        ),
+                    ),
+                )
             )
         keys = {call.kwargs["keys"][0] for call in script.call_args_list}
         assert "ratelimit:gemini:m:rpd" in keys
@@ -157,10 +215,44 @@ class TestRedisKeyContract:
         with patch("app.analysis.rate_limit.gate.get_redis", return_value=redis_mock):
             gate = ProviderRateLimitGate()
             await gate.acquire(
-                RatePolicy(provider="gemini", model="flash", rpm=100, rpd=1500)
+                AIModelRateLimitPolicy(
+                    provider="gemini",
+                    model="flash",
+                    rules=(
+                        RateLimitRule(
+                            name="rpd",
+                            max_requests=1500,
+                            window_seconds=86400,
+                            block=False,
+                        ),
+                        RateLimitRule(
+                            name="rpm",
+                            max_requests=100,
+                            window_seconds=60,
+                            block=True,
+                        ),
+                    ),
+                )
             )
             await gate.acquire(
-                RatePolicy(provider="gemini", model="pro", rpm=100, rpd=1500)
+                AIModelRateLimitPolicy(
+                    provider="gemini",
+                    model="pro",
+                    rules=(
+                        RateLimitRule(
+                            name="rpd",
+                            max_requests=1500,
+                            window_seconds=86400,
+                            block=False,
+                        ),
+                        RateLimitRule(
+                            name="rpm",
+                            max_requests=100,
+                            window_seconds=60,
+                            block=True,
+                        ),
+                    ),
+                )
             )
         keys = {call.kwargs["keys"][0] for call in script.call_args_list}
         assert "ratelimit:gemini:flash:rpd" in keys
@@ -169,25 +261,47 @@ class TestRedisKeyContract:
         assert "ratelimit:gemini:pro:rpm" in keys
 
     @pytest.mark.asyncio
-    async def test_rpm_none_skips_rpm_call(self) -> None:
-        """``rpm=None`` なら RPM 用の Redis call は発生せず、RPD のみ呼ばれる。"""
+    async def test_single_rpd_rule_only_calls_rpd_key(self) -> None:
+        """RPD rule のみなら RPD 用の Redis call だけが発生する。"""
         redis_mock, script = self._patched_redis()
         with patch("app.analysis.rate_limit.gate.get_redis", return_value=redis_mock):
             gate = ProviderRateLimitGate()
             await gate.acquire(
-                RatePolicy(provider="gemini", model="m", rpm=None, rpd=1500)
+                AIModelRateLimitPolicy(
+                    provider="gemini",
+                    model="m",
+                    rules=(
+                        RateLimitRule(
+                            name="rpd",
+                            max_requests=1500,
+                            window_seconds=86400,
+                            block=False,
+                        ),
+                    ),
+                )
             )
         keys = [call.kwargs["keys"][0] for call in script.call_args_list]
         assert keys == ["ratelimit:gemini:m:rpd"]
 
     @pytest.mark.asyncio
-    async def test_rpd_none_skips_rpd_call(self) -> None:
-        """``rpd=None`` なら RPD 用の Redis call は発生せず、RPM のみ呼ばれる。"""
+    async def test_single_rpm_rule_only_calls_rpm_key(self) -> None:
+        """RPM rule のみなら RPM 用の Redis call だけが発生する。"""
         redis_mock, script = self._patched_redis()
         with patch("app.analysis.rate_limit.gate.get_redis", return_value=redis_mock):
             gate = ProviderRateLimitGate()
             await gate.acquire(
-                RatePolicy(provider="gemini", model="m", rpm=100, rpd=None)
+                AIModelRateLimitPolicy(
+                    provider="gemini",
+                    model="m",
+                    rules=(
+                        RateLimitRule(
+                            name="rpm",
+                            max_requests=100,
+                            window_seconds=60,
+                            block=True,
+                        ),
+                    ),
+                )
             )
         keys = [call.kwargs["keys"][0] for call in script.call_args_list]
         assert keys == ["ratelimit:gemini:m:rpm"]

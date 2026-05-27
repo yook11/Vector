@@ -25,16 +25,15 @@ import struct
 from typing import Final
 
 from app.analysis.embedding.ai.base import BaseEmbedder
-from app.analysis.rate_limit import RatePolicy
+from app.analysis.rate_limit import AIModelRateLimitPolicy
 
 _STUB_PROVIDER: Final[str] = "stub"
 _STUB_MODEL: Final[str] = "stub-embedder"
 _STUB_DIMENSION: Final[int] = 768
-_STUB_RATE_POLICY: Final[RatePolicy] = RatePolicy(
+_STUB_RATE_LIMIT_POLICY: Final[AIModelRateLimitPolicy] = AIModelRateLimitPolicy(
     provider=_STUB_PROVIDER,
     model=_STUB_MODEL,
-    rpm=None,
-    rpd=None,
+    rules=(),
 )
 
 
@@ -50,8 +49,8 @@ class StubEmbedder(BaseEmbedder):
         return _STUB_DIMENSION
 
     @property
-    def rate_policy(self) -> RatePolicy:
-        return _STUB_RATE_POLICY
+    def rate_limit_policy(self) -> AIModelRateLimitPolicy:
+        return _STUB_RATE_LIMIT_POLICY
 
     async def _call_api(self, text: str) -> list[float]:
         return self._vector_from(text)
