@@ -37,4 +37,4 @@ vitest (unit / component / RSC) と Playwright (E2E) の両方をここで扱う
 - **NEVER** `vi.mock` で features 横断 module を mock してはならない (テスト対象を絞る)
 - **NEVER** msw handler を `src/test/msw/handlers/` 等で features 横断に集約してはならない (各 test 内で `server.use` する)
 - **NEVER** test ファイルで `any` 型を使用してはならない (`as unknown as Foo` で対応)
-- **NEVER** E2E spec の storageState を git に commit してはならない (`.gitignore` で構造的に防止)
+- **NEVER** E2E spec の storageState を git に commit してはならない
