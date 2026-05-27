@@ -1,4 +1,4 @@
-"""AI API 呼び出し向けの Redis ZSET スライディングウィンドウ・レートリミッター。
+"""Redis ZSET スライディングウィンドウ primitive。
 
 ``acquire()`` は Lua スクリプトを介して容量チェックとリクエスト記録を
 アトミックに実行する。*window_seconds* より古いエントリは同じスクリプト内で削除する。
@@ -8,15 +8,11 @@ Single Source of Truth として用いる。
 分散ワーカー間でクロックがずれていても正しく動くようにするため。
 
 ZSET のメンバ数が *max_requests* に達している場合、``block=True`` であれば
-最古のエントリが期限切れになるまでスリープし（RPM 用途）、
-``block=False`` であれば ``RateLimitExceededError`` を即座に送出する（RPD 用途）。
+最古のエントリが期限切れになるまでスリープし、
+``block=False`` であれば ``RateLimitExceededError`` を即座に送出する。
 
 メンバには UUID を用いて一意性を保証し、スコアには Redis サーバー時刻を用いる。
 Lua スクリプトによって check-and-add はアトミックに保たれる。
-
-本 module は ``rate_limit`` サブパッケージの実装詳細 (leading underscore で
-明示)。外部 caller は ``app.analysis.rate_limit`` package 経由で
-``ProviderRateLimitGate`` を使うこと。
 """
 
 from __future__ import annotations
@@ -66,7 +62,7 @@ return {0, oldest_score, tostring(now)}
 """
 
 
-class RateLimiter:
+class SlidingWindowLimiter:
     """Redis ZSET による分散スライディングウィンドウ・レートリミッター。"""
 
     def __init__(

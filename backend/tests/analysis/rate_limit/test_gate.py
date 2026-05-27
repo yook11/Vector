@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.analysis.rate_limit import ProviderRateLimitGate, RatePolicy
-from app.analysis.rate_limit._redis_limiter import RateLimitExceededError
+from app.redis.sliding_window import RateLimitExceededError
 
 
 def _policy() -> RatePolicy:
@@ -83,6 +83,15 @@ class TestAcquireReturnValue:
             gate = ProviderRateLimitGate()
             policy = RatePolicy(provider="gemini", model="m", rpm=None, rpd=None)
             assert await gate.acquire(policy) is True
+
+    @pytest.mark.asyncio
+    async def test_no_limit_policy_does_not_touch_redis(self) -> None:
+        """RPM/RPD 未設定なら Redis 接続を作らず ``True`` を返す。"""
+        policy = RatePolicy(provider="gemini", model="m", rpm=None, rpd=None)
+        with patch("app.analysis.rate_limit.gate.get_redis") as get_redis:
+            gate = ProviderRateLimitGate()
+            assert await gate.acquire(policy) is True
+        get_redis.assert_not_called()
 
 
 class TestRedisKeyContract:

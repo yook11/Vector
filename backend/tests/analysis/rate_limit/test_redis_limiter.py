@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.analysis.rate_limit._redis_limiter import RateLimiter, RateLimitExceededError
+from app.redis.sliding_window import RateLimitExceededError, SlidingWindowLimiter
 
 
 def _make_mock_redis(script_results: list[list]) -> MagicMock:
@@ -19,7 +19,7 @@ def _make_mock_redis(script_results: list[list]) -> MagicMock:
 async def test_acquire_succeeds_when_under_limit() -> None:
     """空きあり: スクリプトが [1, 0, now] を返し acquire が成功する。"""
     mock_redis = _make_mock_redis([[1, 0, "1000.0"]])
-    limiter = RateLimiter(
+    limiter = SlidingWindowLimiter(
         redis=mock_redis, key="test:rpm", max_requests=10, window_seconds=60
     )
     await limiter.acquire()  # 例外を送出しないこと
@@ -29,7 +29,7 @@ async def test_acquire_succeeds_when_under_limit() -> None:
 async def test_acquire_raises_when_non_blocking_and_full() -> None:
     """非ブロックモードでは上限到達時に RateLimitExceededError を送出する。"""
     mock_redis = _make_mock_redis([[0, "990.0", "1000.0"]])
-    limiter = RateLimiter(
+    limiter = SlidingWindowLimiter(
         redis=mock_redis,
         key="test:rpd",
         max_requests=100,
@@ -49,12 +49,10 @@ async def test_acquire_blocking_waits_then_succeeds() -> None:
             [1, 0, "1060.1"],  # 2 回目: 空きができた
         ]
     )
-    limiter = RateLimiter(
+    limiter = SlidingWindowLimiter(
         redis=mock_redis, key="test:rpm", max_requests=10, window_seconds=60
     )
-    with patch(
-        "app.analysis.rate_limit._redis_limiter.asyncio.sleep", AsyncMock()
-    ) as mock_sleep:
+    with patch("app.redis.sliding_window.asyncio.sleep", AsyncMock()) as mock_sleep:
         await limiter.acquire()
 
     # sleep は 1 回: (999.0 + 60) - 1000.0 = 59.0 であるはず
@@ -65,11 +63,11 @@ async def test_acquire_blocking_waits_then_succeeds() -> None:
 async def test_lua_script_receives_correct_args() -> None:
     """Lua スクリプトが正しい keys と args で呼び出されることを検証する。"""
     mock_redis = _make_mock_redis([[1, 0, "1000.0"]])
-    limiter = RateLimiter(
+    limiter = SlidingWindowLimiter(
         redis=mock_redis, key="ratelimit:model:rpm", max_requests=500, window_seconds=60
     )
 
-    with patch("app.analysis.rate_limit._redis_limiter.uuid.uuid4") as mock_uuid:
+    with patch("app.redis.sliding_window.uuid.uuid4") as mock_uuid:
         mock_uuid.return_value.hex = "abc123"
         await limiter.acquire()
 
