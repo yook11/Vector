@@ -60,6 +60,24 @@ ENV NODE_ENV=development \
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
+# Better Auth CLI を build-time に /opt/ba-cli に焼き込む。db-init-better-auth
+# service が internal network (外部 egress 不可) のまま CLI を起動できるよう、
+# runtime での npm install を回避する設計。
+#
+# Apple Silicon / aarch64 で @better-auth/cli@1.4.x が依存する better-sqlite3
+# は linux-arm64 prebuild を持たず (#7761)、node-gyp source build に fallback
+# する。frontend dev image は Python を持たないため build が失敗する。
+# --ignore-scripts で全 dep の post-install を抑止する。CLI は migrate 時に
+# pg/kysely しか load しないため機能影響なし。Better Auth 1.5 stable で
+# better-sqlite3 が dependencies から外れ次第 (PR #7771)、--ignore-scripts は
+# 撤去予定。
+ARG BETTER_AUTH_CLI_VERSION=1.4.22
+RUN mkdir -p /opt/ba-cli \
+ && cd /opt/ba-cli \
+ && npm init -y >/dev/null \
+ && npm install --ignore-scripts --no-fund --no-audit \
+      "@better-auth/cli@${BETTER_AUTH_CLI_VERSION}" >/dev/null
+
 EXPOSE 3000
 # dev stage は host bind mount + .next 書込のため root 維持 (host uid との衝突回避)。
 # 本番経路の production stage (Stage 4) は USER nextjs (uid 1001) で non-root 化済で

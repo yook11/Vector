@@ -69,6 +69,132 @@ services:
       - public
       - internal
 
+  # --- DB init: fresh volume bootstrap (3-stage) ---
+  # docker compose up 一発で fresh volume が立ち上がるよう順序を宣言する。
+  # 各 step は冪等で、既存 volume では数秒以内に no-op で通過する。
+  # 順序:
+  #   1. db-init-schema      auth schema 作成 + vector_auth に一時 CREATE 権限
+  #   2. db-init-better-auth Better Auth CLI migrate (auth.user 等を作成)
+  #   3. db-init-revoke-create 一時 CREATE 権限を REVOKE (n3 の意図と整合)
+  #   4. db-init-alembic     alembic upgrade head (c7 で auth.user FK を張る)
+  # 完走後に backend / worker / scheduler / frontend が起動する。
+  db-init-schema:
+    image: pgvector/pgvector:0.8.2-pg18-bookworm
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    # auth schema 作成 + Better Auth CLI が migrate 中に CREATE TABLE できるよう
+    # vector_auth に一時的に CREATE 権限を付与する (n3_grant_app_db_users は
+    # USAGE のみ GRANT する設計のため、bootstrap には不足する)。CREATE 権限は
+    # db-init-revoke-create で剥がす。
+    entrypoint:
+      - psql
+      - -h
+      - db
+      - -U
+      - ${POSTGRES_USER:-vector}
+      - -d
+      - ${POSTGRES_DB:-vector}
+      - -v
+      - ON_ERROR_STOP=1
+      - -c
+    command:
+      - |
+        CREATE SCHEMA IF NOT EXISTS auth;
+        GRANT USAGE, CREATE ON SCHEMA auth TO vector_auth;
+    networks:
+      - internal
+    restart: "no"
+
+  db-init-better-auth:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: development
+      args:
+        BETTER_AUTH_CLI_VERSION: ${BETTER_AUTH_CLI_VERSION:-1.4.22}
+    depends_on:
+      db-init-schema:
+        condition: service_completed_successfully
+    environment:
+      # vector_auth ロールで接続し search_path=auth で auth schema 内に
+      # user / session / account / verification を作る。
+      AUTH_DATABASE_URL: postgresql://vector_auth:${POSTGRES_AUTH_PASSWORD}@db:5432/${POSTGRES_DB:-vector}?search_path=auth
+      # auth.cli.ts は trustedOrigins で BETTER_AUTH_URL を requireEnv する
+      # (config 全体が CLI 起動時に evaluate されるため値が必要)。値自体は
+      # migrate 経路では使われないが Settings 検証に必要。
+      BETTER_AUTH_URL: http://localhost:3000
+    working_dir: /app
+    user: root
+    # frontend dev image の build 段階で /opt/ba-cli に Better Auth CLI を
+    # 焼き込んでいるため (frontend/Dockerfile dev stage)、internal network
+    # (外部 egress 不可) のまま binary を呼べる。auth.cli.ts は
+    # requireEnv("AUTH_DATABASE_URL") のみ参照するため BETTER_AUTH_SECRET 等
+    # は不要 (CLI は schema 生成のみ)。
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        set -e
+        cd /app
+        yes y | /opt/ba-cli/node_modules/.bin/better-auth migrate \
+          --config src/lib/auth/auth.cli.ts
+    networks:
+      - internal
+    restart: "no"
+
+  db-init-revoke-create:
+    image: pgvector/pgvector:0.8.2-pg18-bookworm
+    depends_on:
+      db-init-better-auth:
+        condition: service_completed_successfully
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    entrypoint:
+      - psql
+      - -h
+      - db
+      - -U
+      - ${POSTGRES_USER:-vector}
+      - -d
+      - ${POSTGRES_DB:-vector}
+      - -v
+      - ON_ERROR_STOP=1
+      - -c
+    command:
+      - REVOKE CREATE ON SCHEMA auth FROM vector_auth;
+    networks:
+      - internal
+    restart: "no"
+
+  db-init-alembic:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    depends_on:
+      db-init-revoke-create:
+        condition: service_completed_successfully
+    # backend Settings (Pydantic) は migration 経路でも全 env を validate する
+    # ため .env を読み込む。backend service と同一構成。
+    env_file:
+      - .env
+    environment:
+      # vector (table owner) で接続。alembic は public.* DDL を伴うため
+      # vector_app では権限不足になる。
+      MIGRATION_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-vector}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-vector}
+      # 過去の destructive migrations (4d16d9b326a0 等) は env guard 付き。
+      # init service にのみ渡し backend runtime には渡さないことで accidental
+      # destructive re-run を構造的に防ぐ。
+      ALEMBIC_ALLOW_DESTRUCTIVE: "yes-i-know"
+    volumes:
+      - ./backend/alembic:/app/alembic
+      - ./backend/alembic.ini:/app/alembic.ini
+    command: ["alembic", "upgrade", "head"]
+    networks:
+      - internal
+    restart: "no"
+
   # --- Backend (internal only — no ports exposed to host) ---
   backend:
     build:
@@ -82,12 +208,10 @@ services:
       # alembic migration / pytest: vector (table owner) で接続
       - MIGRATION_DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-vector}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-vector}
       - REDIS_URL=redis://redis:6379/0
-    # Dockerfile CMD は uvicorn のみ (PR4 / red-team C2 防御)。dev では起動時に
-    # migration を流す体験を維持するため、ここで command override で直列実行する。
+    # Dockerfile CMD は uvicorn のみ (PR4 / red-team C2 防御)。migration は
+    # db-init-alembic service が責務を持ち、backend は uvicorn 起動だけを行う。
     # 本番 (Fly.io) は fly.toml [deploy].release_command で migration を別経路実行。
-    command: >
-      sh -c "alembic upgrade head &&
-             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     volumes:
       - ./backend/app:/app/app
       - ./backend/alembic:/app/alembic
@@ -95,6 +219,8 @@ services:
       - ./backend/scripts:/app/scripts
       - ./backend/tests:/app/tests
     depends_on:
+      db-init-alembic:
+        condition: service_completed_successfully
       db:
         condition: service_healthy
     healthcheck:

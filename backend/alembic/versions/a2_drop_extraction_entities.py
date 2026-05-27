@@ -44,7 +44,7 @@ def upgrade() -> None:
     op.execute("SET lock_timeout = '5s';")
 
     # 1. 旧 EntityType 値域の snapshot を全削除 (新 MentionType 軸で再生成される)。
-    op.execute("DELETE FROM weekly_trend_snapshots")
+    op.execute("DELETE FROM weekly_trends_snapshots")
 
     # 2. article_extraction_entities テーブル drop (CASCADE で index も消える)。
     op.drop_index(

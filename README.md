@@ -64,23 +64,27 @@ docker compose up -d --build
 # Frontend: http://localhost:3000 (唯一の host-exposed エントリポイント)
 ```
 
-> **Note (初回 / fresh dev volume)**: `pgdata` volume が空の状態で `docker compose
-> up` を直接実行すると、backend 起動時の `alembic upgrade head` が `auth.user`
-> (Better Auth が作るテーブル) を要求するため `UndefinedTableError` で起動失敗する。
-> 初回は db → Better Auth migration → 残り service の順序で立ち上げる:
+> **Note (初回 / fresh dev volume)**: `docker compose up -d --build` 一発で
+> fresh volume が立ち上がる。内部的には `db-init-*` 4 service が `db` healthy
+> 後に `service_completed_successfully` で直列実行される:
 >
-> ```bash
-> docker compose up -d --wait db
-> # Better Auth CLI は core (`better-auth`) と version 体系が別。1.4.22 は
-> # 2026-05 時点の release-1.4 系 stable 最新 (npm dist-tag `release-1.4`)。
-> # CLI 更新時は `npm view @better-auth/cli dist-tags` で stable を確認すること。
-> docker compose run --rm --no-deps frontend \
->   npx @better-auth/cli@1.4.22 migrate --config src/lib/auth/auth.cli.ts
-> docker compose up -d --build
-> ```
+> 1. `db-init-schema` — `auth` schema 作成 + `vector_auth` に一時 CREATE 権限付与
+> 2. `db-init-better-auth` — Better Auth CLI migrate (`auth.user/session/account/verification` 作成)
+> 3. `db-init-revoke-create` — 一時 CREATE 権限を REVOKE
+> 4. `db-init-alembic` — `alembic upgrade head` (`c7` で `auth.user` への cross-schema FK を張る)
 >
-> 既存 dev volume (auth schema 作成済) があれば `docker compose up -d --build`
-> のみで起動できる。
+> 全 step は冪等 (`CREATE SCHEMA IF NOT EXISTS` / Better Auth CLI 自体冪等 /
+> `alembic upgrade head` は head 到達済なら no-op)。既存 volume では数秒以内に
+> 通過する。docker compose を経由せず手動で順序を踏みたい場合は
+> [scripts/init-fresh-dev.sh](scripts/init-fresh-dev.sh) が同じ手順を 1 コマンドで流す。
+>
+> **Apple Silicon / aarch64 ホストでの注意**: `@better-auth/cli@1.4.22` は
+> `better-sqlite3` を dependencies に持ち、後者は linux-arm64 の Node prebuild
+> を提供しない ([WiseLibs/better-sqlite3 releases](https://github.com/WiseLibs/better-sqlite3/releases))。
+> `db-init-better-auth` service は `NPM_CONFIG_IGNORE_SCRIPTS=true` で
+> post-install を抑止して回避している (CLI は pg/kysely しか load しないため
+> 機能影響なし)。Better Auth 1.5 stable で `better-sqlite3` が dependencies から
+> 外れ次第 ([PR #7771](https://github.com/better-auth/better-auth/pull/7771))、この workaround は撤去する。
 
 > **Note**: backend / db / redis / redis-rl / 4 worker / scheduler は全て Docker 内部
 > ネットワーク (`internal: true`) のみで動作し host port を持ちません。
