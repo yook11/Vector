@@ -1,38 +1,8 @@
-"""scrape concern (Stage 1: Fetch + HTML 抽出) の失敗とその Retry 軸分類。
+"""scrape concern の失敗 value union と Retry 軸分類。
 
-本モジュールは Stage 1 の失敗を 2 つの面から扱う:
-
-1. 失敗 union (二層): scrape 段の失敗を transport / content の二層で表す。
-   - ``ContentFailure`` (4 variant): URL に HTTP GET して HTML を取り、trafilatura で
-     本文・タイトル・公開日時を取り出す段で「取得できたが使える本文でなかった」失敗
-     (content-type 不一致 / パーサ拒否 / parse 例外 / 品質ゲート未達)。content
-     extraction 段 (parse: ``_parse_raw_response_as_html_document`` / build:
-     ``_build_scraped_content_from_document``) はネットワークを持たず構造的にこの
-     union しか返せない。各 variant は失敗地点で得られる証拠 (content_type /
-     quality metric / 例外 class+message) を frozen dataclass のフィールドに保持する。
-   - ``FetchFailed``: 接続 / transport 失敗 (``ExternalFetchError``) を値で畳んだ
-     transport variant。``scrape`` の公開境界が内部 ``_fetch`` の raise を捕えて
-     値化する。
-   - ``ScrapeFailure = FetchFailed | ContentFailure``: scrape 境界の全失敗。
-   後段の audit 記録 (``CompletionPayload``) と log emit の双方で構造のまま使う。
-2. Retry 軸 disposition: Stage 1 の全失敗 (``ScrapeFailure``) を ``Terminal`` |
-   ``Retryable`` に分類する。Retry 軸は「再試行で結果が変わるか?」の Stage 1 固有概念。
-   完成段 (Stage 2 = 抽出物 + メタデータ合成) は別 concern (Accept 軸) として
-   ``completion_failure`` の ``CompletionRejection`` で扱う。本モジュールに Stage 2 を
-   持ち込まない。
-
-``external_fetch_errors.py`` は「何が起きたか」の SSoT で retry / terminal 判断は
-持たない。本モジュールが各失敗を必ず分類する。``reason_code`` は監査・log 用の
-詳細ラベル、``ScrapeDecision`` はどう扱うか (close / DB 駆動 retry)。
-
-設計:
-- ``reason: ClassVar[str]`` は監査ラベル専用。識別 (dispatch) は ``match`` +
-  ``assert_never`` で型ベースに行う。``FetchFailed`` のみ ``reason`` を持たず、監査
-  ラベル (reason_code) は保持する ``exc.CODE`` を素通しする。
-- 閾値 (例: ``ARTICLE_BODY_MIN_LENGTH``) は ``article_limits`` SSoT に委譲し、
-  本モジュールは生の metric だけを記録する。
-- ``__post_init__`` は upper-bound truncate のみ。observation point を壊さない
-  ため invariant 違反では raise しない。
+``ExternalFetchError`` は origin error のまま ``FetchFailed`` に保持する。
+content 失敗は ``ContentFailure`` value として返し、``ScrapeDecision`` が
+closed / retry の後処理方針を表す。
 """
 
 from __future__ import annotations
@@ -100,22 +70,14 @@ class NotHtml:
 
 @dataclass(frozen=True)
 class ParserGaveUp:
-    """``trafilatura.bare_extraction`` が ``None`` — パーサがページ構造化を諦めた。
-
-    例外ではなく正常な戻り値 (``None``) による失敗。「抽出対象がなかった」想定内の
-    結果で、経路が壊れた ``ParseCrashed`` (例外) と同一軸 (パーサの振る舞い) の対。
-    """
+    """``trafilatura.bare_extraction`` が ``None`` を返した。"""
 
     reason: ClassVar[str] = "parser_gave_up"
 
 
 @dataclass(frozen=True)
 class ParseCrashed:
-    """trafilatura (parse) が例外を投げた — 外部ライブラリ経路の故障。
-
-    decode は前工程で input 起因の例外を出さない (charset 不一致は内部で握って
-    UTF-8 fallback) ため crash 概念を持たない。本 variant は parse 専用。
-    """
+    """trafilatura parse が例外または想定外戻り値で失敗した。"""
 
     error_class: str
     error_message: str
@@ -129,23 +91,12 @@ class ParseCrashed:
 
 
 ParseFailure = NotHtml | ParserGaveUp | ParseCrashed
-"""parse 段 (``_parse_raw_response_as_html_document``) の失敗 union (3 variant)。
-
-RawResponse を HTML document として解釈する段の失敗: Content-Type 不一致
-(``NotHtml``) / パーサ拒否 (``ParserGaveUp``) / parse 例外 (``ParseCrashed``)。
-build 段で初めて判定する品質ゲート (``ContentQualityTooLow``) は後段なので含めない。
-"""
+"""RawResponse を HTML document として解釈できなかった失敗 union。"""
 
 
 @dataclass(frozen=True)
 class ContentQualityTooLow:
-    """品質ゲート (本文 50 文字以上 + 非空タイトル) を満たさなかった。
-
-    - ``body_length``: strip 後の実数 (0 含む)。閾値は ``article_limits`` SSoT。
-    - ``title_present``: trafilatura が title を返したか (空 / None を ``False``)。
-    - ``body_sample``: paywall stub / 拒否ページ判別用の冒頭断片 (≤200 chars)。
-      ``None`` のときは本文ゼロまたは閾値以上 (= title 欠落で落ちた) ケース。
-    """
+    """品質ゲートを満たさなかった本文・タイトルの観測値。"""
 
     body_length: int
     title_present: bool
@@ -158,13 +109,7 @@ class ContentQualityTooLow:
 
 
 ContentFailure = ParseFailure | ContentQualityTooLow
-"""取得できたが使える本文でなかった content 失敗を表す閉じ union (4 variant)。
-
-content extraction 段 (parse: ``_parse_raw_response_as_html_document`` / build:
-``_build_scraped_content_from_document``) はネットワークを持たず、構造的にこの union
-しか返せない。transport 失敗 (``FetchFailed``) はここに含めない。parse 段の 3 variant
-は ``ParseFailure``、build 段の品質ゲート未達は ``ContentQualityTooLow``。
-"""
+"""取得できたが使える本文でなかった content 失敗 union。"""
 
 
 # ---------------------------------------------------------------------------
@@ -174,22 +119,13 @@ content extraction 段 (parse: ``_parse_raw_response_as_html_document`` / build:
 
 @dataclass(frozen=True, slots=True)
 class FetchFailed:
-    """origin fetch が ``ExternalFetchError`` で失敗したことを表す transport variant。
-
-    ``scrape`` の公開境界が内部 ``_fetch`` の raise を捕えて値化する。元の例外は
-    ``error`` に保持し、Retry 軸分類 (``classify_external_fetch_error`` に委譲) と log
-    で使う。``reason: ClassVar`` は持たない — 監査ラベル (reason_code) は保持する
-    ``error.CODE`` を素通しする (``scrape_{reason}`` 式に乗らない)。
-    """
+    """``ExternalFetchError`` を scrape 境界で値化した transport variant。"""
 
     error: ExternalFetchError
 
 
 ScrapeFailure = FetchFailed | ContentFailure
-"""scrape 境界の全失敗を表す閉じ union (5 variant)。
-
-transport (``FetchFailed``) + content (``ContentFailure`` の 4 variant)。
-"""
+"""scrape 境界の全失敗を表す閉じ union。"""
 
 
 # ---------------------------------------------------------------------------
@@ -199,7 +135,7 @@ transport (``FetchFailed``) + content (``ContentFailure`` の 4 variant)。
 
 @dataclass(frozen=True, slots=True)
 class Terminal:
-    """Stage 1 (scrape) で再試行しない終端失敗。pending を ``closed`` に閉じる。"""
+    """scrape retry を行わず pending を ``closed`` に閉じる失敗。"""
 
     reason_code: str
     detail: str | None = None
@@ -207,13 +143,7 @@ class Terminal:
 
 @dataclass(frozen=True, slots=True)
 class Retryable:
-    """DB 駆動 retry する失敗。
-
-    ``policy`` は再投入の仕方を表す純データ。``retry_after_seconds`` は server
-    指示があるときだけ載る (なければ ``policy`` の schedule に従う)。
-    再投入の決定 (打ち切り判定 / 次回 ready_at) は本オブジェクトが純粋に答え、
-    handler は答えを実行 (I/O) するだけに保つ。
-    """
+    """DB 駆動 retry する失敗。"""
 
     reason_code: str
     policy: RetryPolicy
@@ -225,11 +155,7 @@ class Retryable:
         return attempt_count >= self.policy.max_attempts
 
     def next_ready_at(self, *, now: datetime, attempt_count: int) -> datetime:
-        """次回 retry の ``ready_at`` を算出する純関数 (I/O なし)。
-
-        server 指示 (``retry_after_seconds``) があれば優先、なければ policy の
-        schedule。``MAX_DELAY_MINUTES`` cap は ``effective_delay_minutes`` が持つ。
-        """
+        """次回 retry の ``ready_at`` を算出する純関数。"""
         delay_minutes = effective_delay_minutes(
             self.policy,
             retry_after_seconds=self.retry_after_seconds,
@@ -244,14 +170,14 @@ class Retryable:
 
 
 ScrapeDecision = Terminal | Retryable
-"""Stage 1 (Fetch + HTML 抽出) 失敗の Retry 軸での処理方針 (close / DB 駆動 retry)。"""
+"""scrape 失敗の Retry 軸での処理方針。"""
 
 
 # ---------------------------------------------------------------------------
 # ExternalFetchError の分類
 # ---------------------------------------------------------------------------
 
-# 再試行しても結果が変わらない origin failure。reason_code は exc.CODE を素通し。
+# 再試行しても結果が変わらない origin failure。
 _TERMINAL_FETCH_ERROR_TYPES: tuple[type[ExternalFetchError], ...] = (
     FetchAccessDeniedError,
     FetchLegalBlockError,
@@ -265,7 +191,6 @@ _TERMINAL_FETCH_ERROR_TYPES: tuple[type[ExternalFetchError], ...] = (
     FetchContentTypeMismatchError,
 )
 
-# policy ごとに error type を束ねる。同 policy のグループが一目で分かる形。
 # ``FetchOriginServerError`` は instance state (reason / retry_after_seconds) を
 # 読むため表に入れず ``classify_external_fetch_error`` 内で明示分岐する。
 _RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY: Final[
@@ -286,7 +211,7 @@ _RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY: Final[
     }
 )
 
-# exact type → decision の lookup 表。値は frozen dataclass で共有可能。
+# exact type → decision の lookup 表。
 _FETCH_DISPOSITION_BY_TYPE: dict[type[ExternalFetchError], ScrapeDecision] = {
     **{t: Terminal(reason_code=t.CODE) for t in _TERMINAL_FETCH_ERROR_TYPES},
     **{
@@ -298,11 +223,10 @@ _FETCH_DISPOSITION_BY_TYPE: dict[type[ExternalFetchError], ScrapeDecision] = {
 
 
 def classify_external_fetch_error(exc: ExternalFetchError) -> ScrapeDecision:
-    """origin fetch error を decision に分類する。
+    """origin fetch error を completion scrape 用 decision に分類する。
 
     ``FetchOriginServerError`` は ``reason`` / ``retry_after_seconds`` を読むため
-    明示分岐。それ以外は ``type(exc)`` の exact lookup で、未登録のみ保守的に
-    ``UNKNOWN_POLICY`` retry。
+    明示分岐する。未登録 error は保守的に ``UNKNOWN_POLICY`` retry とする。
     """
     if isinstance(exc, FetchOriginServerError):
         if exc.reason == "service_unavailable" and exc.retry_after_seconds is not None:
@@ -320,20 +244,12 @@ def classify_external_fetch_error(exc: ExternalFetchError) -> ScrapeDecision:
 
 
 # ---------------------------------------------------------------------------
-# ScrapeFailure の分類 (全 variant terminal、証拠を detail に畳む)
+# ScrapeFailure の分類
 # ---------------------------------------------------------------------------
 
 
 def classify_scrape_failure(failure: ScrapeFailure) -> ScrapeDecision:
-    """scrape 段の失敗を ``ScrapeDecision`` (Terminal | Retryable) に分類。
-
-    - ``FetchFailed`` (transport): ``classify_external_fetch_error`` に委譲する
-      (retryable がありうる)。保持する例外の class+message を ``detail`` に畳む。
-    - content 4 種: 常に ``Terminal`` で、証拠を ``detail`` に畳む。
-
-    本層は文字列の ``detail`` までで、構造化 audit (``CompletionPayload``) への
-    転写は別 PR で terminal 経路に recorder を新設して行う。
-    """
+    """scrape failure を ``Terminal | Retryable`` に分類する。"""
     if isinstance(failure, FetchFailed):
         err = failure.error
         return replace(

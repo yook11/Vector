@@ -1,13 +1,4 @@
-"""補完を実行してよい状態を表す precondition 型と、その構築 gateway。
-
-補完に必要な値を全揃えで運ぶ:
-
-- ``observed`` — 取得済み事実 (``ObservedArticle``)。
-- ``profile`` — per-source 補完方針 (``ArticleCompletionPolicy``)。
-- ``source_url`` — 記事 identity (``incomplete_articles.url`` 列が
-  authoritative。``ObservedArticle`` は持たない)。
-- ``attempt_count`` — stale worker guard / retry 予算判定の SSoT。
-"""
+"""補完を実行できる pending 行を表す precondition 型。"""
 
 from __future__ import annotations
 
@@ -20,11 +11,7 @@ from app.collection.sources.article_completion_policy import ArticleCompletionPo
 
 
 class ArticleCompletionPreconditionProtocol(Protocol):
-    """補完進行判定用の Repository contract。
-
-    precondition (``status='running'``) を満たす場合に
-    ``ReadyForArticleCompletion`` を構築して返す。
-    """
+    """補完進行判定用の Repository contract。"""
 
     async def try_load_for_completion(
         self, pending_id: int
@@ -33,11 +20,7 @@ class ArticleCompletionPreconditionProtocol(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class ReadyForArticleCompletion:
-    """補完を実行可能な状態を表す precondition 型。
-
-    この型が作られるのは ``status='running'`` の pending 行だけ。
-    ``attempt_count`` は retry 予算判定と stale worker guard の SSoT。
-    """
+    """``status='running'`` の pending 行から作る補完入力。"""
 
     pending_id: int
     source_id: int
@@ -53,14 +36,5 @@ class ReadyForArticleCompletion:
         pending_id: int,
         repo: ArticleCompletionPreconditionProtocol,
     ) -> ReadyForArticleCompletion | None:
-        """pending_id から補完へ進めるかを判定する gateway。
-
-        進める条件: 同 pending_id の ``incomplete_articles`` 行が
-        ``status='running'`` (cron dispatcher が claim 済)。未 claim / sweep 済 /
-        close 済 / delete 済はすべて進めない。
-
-        Returns:
-            進める場合: ``ReadyForArticleCompletion``
-            進めない場合: ``None`` (業務正常状態、例外ではない)
-        """
+        """pending_id から補完へ進める場合だけ Ready を返す。"""
         return await repo.try_load_for_completion(pending_id)

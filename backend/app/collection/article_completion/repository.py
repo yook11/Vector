@@ -1,10 +1,4 @@
-"""補完の永続化境界。
-
-``incomplete_articles`` は補完待ち記事の作業テーブルだが、application service
-に queue の状態モデルを漏らさない。Repository は処理資格を満たす pending の
-物体化と、claim / sweep / retry 状態遷移の DB 反映までを担う。commit 境界は
-呼び出し側が握る。
-"""
+"""completion の pending 読み出し・状態遷移・永続化境界。"""
 
 from __future__ import annotations
 
@@ -52,20 +46,7 @@ class ArticleCompletionRepository:
     async def try_load_for_completion(
         self, pending_id: int
     ) -> ReadyForArticleCompletion | None:
-        """``ReadyForArticleCompletion`` を構築するためのロード。
-
-        ``status='running'`` の行だけを物体化する。未 claim / sweep 済 /
-        close 済 / delete 済の id はすべて ``None`` として扱う。
-
-        identity 注入: ``url`` / ``source_name`` 列が authoritative
-        (composite FK + NOT NULL で構造保証されており、Stage 1 writer の
-        ``Field(exclude=True)`` 契約と対称)。JSONB は identity を含まないため、
-        ``model_validate`` 前に表層列の値を raw に上書き注入する。
-
-        profile 解決は ``SOURCES[source_name]`` 直叩き。registry 未登録
-        source は ``KeyError`` で上位に伝播する (drift fallback の隠蔽は
-        ``[[feedback_failure_visibility]]`` により禁止)。
-        """
+        """``status='running'`` の pending 行だけを Ready として物体化する。"""
         stmt = (
             select(IncompleteArticleORM)
             .where(
@@ -79,19 +60,11 @@ class ArticleCompletionRepository:
             return None
 
         raw = dict(row.staged_attributes or {})
-        # 表層列が authoritative。JSONB は ``Field(exclude=True)`` で identity
-        # キーを持たないため、表層列の値を raw に上書き注入する。書き込むキーは
-        # ``ObservedArticle`` field の alias 規約に追従:
-        #   source_name は alias="sourceName" → "sourceName" で書く
-        #   source_url は alias 未指定 (exclude=True のみ) → field name
-        #     "source_url" で書く。
+        # Identity は表層列が authoritative。
+        # ObservedArticle の alias に合わせて注入する。
         raw["sourceName"] = str(row.source_name)
         raw["source_url"] = str(row.url)
         observed = ObservedArticle.model_validate(raw)
-        # ORM 列は SafeUrl 表現で読み出されるが、DB 上の値は INSERT 時の
-        # canonical 値なので冪等に再構築できる。CanonicalArticleUrl の再検証は
-        # per-row で 1 回走る (cost は微小、SafeUrl → CanonicalArticleUrl の
-        # column type 昇格は別 PR の射程)。
         source_url = CanonicalArticleUrl(str(row.url))
         profile = SOURCES[observed.source_name].completion_policy
         return ReadyForArticleCompletion(
@@ -110,12 +83,7 @@ class ArticleCompletionRepository:
         now: datetime,
         leased_until: datetime,
     ) -> list[int]:
-        """ready な open pending を claim し、claim できた id を返す。
-
-        dispatcher が lease policy (``now`` / ``leased_until`` / ``limit``) を決め、
-        repository は DB 更新だけを行う。``FOR UPDATE SKIP LOCKED`` で並行
-        dispatcher が同じ行を二重 claim しない。
-        """
+        """ready な open pending を claim し、claim できた id を返す。"""
         if limit <= 0:
             return []
 
@@ -218,14 +186,7 @@ class ArticleCompletionRepository:
         ready: ReadyForArticleCompletion,
         advanced: AnalyzableArticle,
     ) -> CompletionOutcome:
-        """補完成功を永続化し、3 つの outcome を名前付きで返す。
-
-        stale worker guard のため、まず ``pending_id`` + ``attempt_count`` で
-        pending を DELETE する。DELETE が 0 行なら ``CompletionSuperseded``
-        (attempt 失効) で短絡し ``articles`` には触れない。DELETE できた場合だけ
-        INSERT し、``source_url`` conflict は ``CompletionUrlConflict``、成功は
-        ``CompletionSucceeded`` として返す。
-        """
+        """有効な attempt だけを article に昇格し、race outcome を値で返す。"""
         if not await self._delete_claimed(ready):
             return CompletionSuperseded()
 

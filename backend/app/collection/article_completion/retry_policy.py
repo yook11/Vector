@@ -1,9 +1,4 @@
-"""エラー種別ごとの retry policy 純データ + 遅延算出。
-
-``Retryable`` が再投入の仕方を ``RetryPolicy`` データとして載せ、failure
-handler は ``effective_delay_minutes`` で次回 ``ready_at`` の遅延を、
-``policy.max_attempts`` で exhausted 判定だけを行う。
-"""
+"""completion scrape retry policy の純データと遅延算出。"""
 
 from __future__ import annotations
 
@@ -12,7 +7,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class RetryPolicy:
-    """policy 1 つを表す純データ。``next_delay_minutes`` は副作用なし。"""
+    """retry policy 1 つを表す純データ。"""
 
     code: str
     """audit ``reason_code`` suffix (例: ``blip`` → ``temporary_will_retry_blip``)."""
@@ -24,12 +19,7 @@ class RetryPolicy:
     """attempt_count (1-indexed) ごとの遅延分。長さを超えたら末尾を使う。"""
 
     def next_delay_minutes(self, attempt_count: int) -> float:
-        """``attempt_count`` 番目の試行が失敗した直後に使う next delay。
-
-        ``attempt_count`` は **lease 取得後の今回の試行番号** (1-indexed)。
-        1 回目失敗なら schedule[0] を返す。schedule 長を超えたら末尾を返す
-        (e.g. blip の 5 分定常状態)。
-        """
+        """``attempt_count`` 番目の試行が失敗した直後に使う next delay。"""
         if attempt_count < 1:
             raise ValueError(f"attempt_count must be >= 1, got {attempt_count}")
         if not self.delay_minutes_schedule:
@@ -64,7 +54,7 @@ OUTAGE_POLICY = RetryPolicy(
 RETRY_AFTER_POLICY = RetryPolicy(
     code="retry_after",
     max_attempts=12,
-    # schedule は server 指示で上書きされるので fallback として outage と同じ値
+    # server 指示がない場合の fallback。
     delay_minutes_schedule=OUTAGE_POLICY.delay_minutes_schedule,
 )
 TIMEOUT_POLICY = RetryPolicy(
@@ -79,7 +69,6 @@ UNKNOWN_POLICY = RetryPolicy(
 )
 
 
-# delay の絶対上限 (分)。
 MAX_DELAY_MINUTES = 60.0
 
 
@@ -89,12 +78,7 @@ def effective_delay_minutes(
     retry_after_seconds: float | None,
     attempt_count: int,
 ) -> float:
-    """policy データだけで次回 retry までの遅延 (分) を算出する純関数。
-
-    ``retry_after_seconds`` (server 指示) があれば分換算で優先、なければ
-    ``policy.next_delay_minutes(attempt_count)``。どちらも ``MAX_DELAY_MINUTES``
-    で cap する。
-    """
+    """server 指示または policy schedule から次回 retry までの分数を返す。"""
     if retry_after_seconds is not None:
         delay = retry_after_seconds / 60.0
     else:

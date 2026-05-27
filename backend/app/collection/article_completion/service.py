@@ -1,22 +1,4 @@
-"""``ArticleCompletionService`` — 未完成記事を完成形に補完する use case。
-
-``incomplete_articles`` 駆動。Task 層が構築した厚い Ready を ``execute(ready)``
-で受け取り、唯一のオーケストレータとして 3 Stage を順に呼ぶ。重複は
-``articles.source_url UNIQUE`` が防ぎ、race-loss は read-back せず log + ``None``
-で短絡する。
-
-- Stage 1 取得: ``ArticleScraper.scrape`` (never raise の二値) を呼び
-  ``ScrapedContent | ScrapeFailure`` を値で受ける。
-- Stage 2 完成: ``ArticleHtmlCompleter.complete`` (純粋 sync アダプタ) に
-  ``ScrapedContent`` を渡し ``AnalyzableArticle | CompletionRejection``
-  を受ける。
-- Stage 3 永続化: ``articles`` INSERT + ``incomplete_articles`` DELETE は同 tx で
-  一括 commit。真の DB 異常は例外として伝播。
-- 失敗は concern 別に分類し ``ArticleCompletionFailureHandler`` の 2 入口へ委譲:
-  Stage 1 (scrape) は ``handle_scrape_failure``、Stage 2 (completion)
-  は ``handle_completion_rejected`` (状態遷移 + log は handler の責務)。retry は
-  DB 駆動で taskiq retry は使わない。
-"""
+"""未完成記事を scrape / complete / persist の順で完成形に補完する use case。"""
 
 from __future__ import annotations
 
@@ -51,13 +33,7 @@ logger = structlog.get_logger(__name__)
 
 
 class ArticleCompletionService:
-    """Ready 1 件を取得 → 完成 → 永続化する。
-
-    ``execute(ready)`` が単一エントリポイント。Stage 1 (scrape) と Stage 2
-    (complete) をそれぞれ二値の collaborator に委譲し、各失敗を concern 別に
-    ``ArticleCompletionFailureHandler`` の 2 入口へ委譲する (retry は DB 駆動、
-    caller に raise しない)。service を読めば取得 → 完成 → 永続化の流れが分かる。
-    """
+    """Ready 1 件の scrape / complete / persist を orchestration する。"""
 
     def __init__(
         self,
@@ -70,29 +46,22 @@ class ArticleCompletionService:
         self._failure_handler = ArticleCompletionFailureHandler(session_factory)
 
     async def execute(self, ready: ReadyForArticleCompletion) -> int | None:
-        """Ready 1 件を HTML 取得 → promotion → 永続化までの一連を担う。
+        """Ready 1 件を補完し、成功時は ``article_id``、失敗時は ``None`` を返す。
 
-        precondition (``status='running'``) は ``ReadyForArticleCompletion``
-        で保証済。
-
-        Returns:
-            ``int`` — 永続化済 ``article_id``。caller は ``curate_content.kiq``
-            に chain する。
-            ``None`` — lease 衝突 / 状態不整合 / 永続失敗 / 一時失敗 /
-            race-loss (静かに exit)。失敗詳細は構造化ログで観測する。
+        scrape / complete の失敗は handler が状態遷移と audit を完了させる。
+        persist の DB 例外は別 tx で audit したうえで再 raise する。
         """
-        # Stage 1: 取得（URL → 抽出物 or 取得失敗）。scrape は never raise の二値。
+        # scrape: URL → 抽出物または失敗値。scrape は never raise の二値。
         scraper = self._scraper_factory()
         scraped = await scraper.scrape(ready.source_url.as_safe_url())
         match scraped:
             case ScrapedContent() as content:
                 pass
             case failure:  # ScrapeFailure (transport + content の 5 variant)
-                # 分類は handler 内。元の variant を audit へ運ぶため raw を渡す。
                 await self._failure_handler.handle_scrape_failure(ready, failure)
                 return None
 
-        # Stage 2: 完成（抽出物 → AnalyzableArticle or 構築拒否）。
+        # complete: 抽出物 → AnalyzableArticle またはドメイン拒絶。
         completed = self._completer.complete(ready, content)
         match completed:
             case AnalyzableArticle() as article:
@@ -103,8 +72,7 @@ class ArticleCompletionService:
             case unreachable:
                 assert_never(unreachable)
 
-        # Stage 3: 永続化 + audit (状態遷移と同一 tx)。真の DB 例外は経路 9 として
-        # 別 session で焼く (同一 tx だと audit ごと rollback して痕跡が消えるため)。
+        # persist: 成功 / race-loss は同一 tx、DB 例外は別 tx で audit。
         try:
             async with self._session_factory() as session:
                 outcome = await ArticleCompletionRepository(session).persist_completed(
@@ -151,12 +119,7 @@ class ArticleCompletionService:
     async def _audit_persist_crashed(
         self, ready: ReadyForArticleCompletion, exc: BaseException
     ) -> None:
-        """persist 段の DB 例外を別 session で best-effort 監査する (経路 9)。
-
-        同一 tx だと audit ごと rollback して痕跡が消えるため独立 session で焼く。
-        audit 自体の失敗は log fallback で握り、元の例外伝播 (lease 失効 → sweep →
-        retry の self-heal) を妨げない。
-        """
+        """persist の DB 例外を別 session で best-effort 監査する。"""
         try:
             async with self._session_factory() as audit_session:
                 await ArticleCompletionAuditRepository(
