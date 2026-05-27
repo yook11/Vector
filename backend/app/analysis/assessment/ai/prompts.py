@@ -35,7 +35,7 @@ ASSESSMENT_PROMPT = """\
 - ai: AI モデル・エージェント・研究・規制
 - semiconductor: チップ設計・製造プロセス・パッケージング
 - materials: 新材料発見・MI・物性研究
-- computing: 非古典計算（量子・ニューロモーフィック・光・DNA）
+- computing: 次世代コンピューティング（量子・ニューロモーフィック・光・DNA）
 - network: 6G・Open RAN・SDN・量子ネットワーキング・通信インフラ
 - security: PQC・機密計算・FHE・ZKP・QKD・暗号
 - bio: ゲノム編集・合成生物学・mRNA・BCI・新モダリティ
