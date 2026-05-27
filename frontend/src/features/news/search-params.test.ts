@@ -56,15 +56,10 @@ describe("parseArticleQuery", () => {
     });
   });
 
-  describe("page / perPage (numeric)", () => {
+  describe("page (numeric range)", () => {
     it("parses numeric page", () => {
       const { query } = parseArticleQuery({ page: "3" });
       expect(query.page).toBe(3);
-    });
-
-    it("parses numeric perPage", () => {
-      const { query } = parseArticleQuery({ perPage: "50" });
-      expect(query.perPage).toBe(50);
     });
 
     it("rejects non-numeric page (NaN)", () => {
@@ -91,14 +86,50 @@ describe("parseArticleQuery", () => {
       );
     });
 
-    it("rejects values outside configured bounds", () => {
+    it("rejects page values outside configured bounds", () => {
       expect(parseArticleQuery({ page: "0" }).query).not.toHaveProperty("page");
       expect(parseArticleQuery({ page: "10001" }).query).not.toHaveProperty(
         "page",
       );
+    });
+  });
+
+  describe("perPage (allowlist)", () => {
+    it.each([
+      "12",
+      "24",
+      "48",
+      "100",
+    ])("accepts allowlist value %s as number", (raw) => {
+      const { query } = parseArticleQuery({ perPage: raw });
+      expect(query.perPage).toBe(Number(raw));
+    });
+
+    it("rejects retired values (legacy 20 / 50 fall back to default)", () => {
+      expect(parseArticleQuery({ perPage: "20" }).query).not.toHaveProperty(
+        "perPage",
+      );
+      expect(parseArticleQuery({ perPage: "50" }).query).not.toHaveProperty(
+        "perPage",
+      );
+    });
+
+    it("rejects arbitrary numbers outside the allowlist", () => {
+      expect(parseArticleQuery({ perPage: "30" }).query).not.toHaveProperty(
+        "perPage",
+      );
       expect(parseArticleQuery({ perPage: "101" }).query).not.toHaveProperty(
         "perPage",
       );
+    });
+
+    it("rejects non-numeric / array perPage", () => {
+      expect(parseArticleQuery({ perPage: "abc" }).query).not.toHaveProperty(
+        "perPage",
+      );
+      expect(
+        parseArticleQuery({ perPage: ["24", "48"] }).query,
+      ).not.toHaveProperty("perPage");
     });
   });
 
@@ -134,14 +165,14 @@ describe("parseArticleQuery", () => {
       category: "ai",
       sortOrder: "desc",
       page: "2",
-      perPage: "20",
+      perPage: "48",
       q: "claude",
     });
     expect(query).toEqual({
       category: "ai",
       sortOrder: "desc",
       page: 2,
-      perPage: 20,
+      perPage: 48,
     });
     expect(q).toBe("claude");
   });

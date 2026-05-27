@@ -14,10 +14,10 @@
 import { z } from "zod";
 import type { SearchParams } from "@/lib/types/route";
 import type { ArticleQuery } from "@/types";
+import { isPerPageOption } from "./per-page";
 
 const CATEGORY_SLUG_PATTERN = /^[a-z0-9][a-z0-9_]{0,49}$/;
 const MAX_PAGE = 10_000;
-const MAX_PER_PAGE = 100;
 const MAX_SEARCH_QUERY_LENGTH = 200;
 
 const CategorySlug = z.preprocess((v) => {
@@ -44,6 +44,15 @@ function boundedIntFromString(max: number) {
   }, z.number().int().positive().optional());
 }
 
+// perPage は数値範囲ではなく UI と揃った allowlist で受ける。範囲外
+// (旧値 20 / 50 含む) は未指定扱いに丸めて backend default にフォールバック。
+const PerPageFromAllowlist = z.preprocess((v) => {
+  if (typeof v !== "string") return undefined;
+  const s = v.trim();
+  if (!isPerPageOption(s)) return undefined;
+  return Number(s);
+}, z.number().int().positive().optional());
+
 const SortOrder = z.preprocess(
   (v) => (v === "asc" || v === "desc" ? v : undefined),
   z.enum(["asc", "desc"]).optional(),
@@ -53,7 +62,7 @@ const ArticleQueryParamsSchema = z.object({
   category: CategorySlug,
   sortOrder: SortOrder,
   page: boundedIntFromString(MAX_PAGE),
-  perPage: boundedIntFromString(MAX_PER_PAGE),
+  perPage: PerPageFromAllowlist,
   q: SearchQuery,
 });
 

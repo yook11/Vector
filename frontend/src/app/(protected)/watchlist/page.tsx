@@ -4,7 +4,15 @@ import { Suspense } from "react";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { PageContainer } from "@/components/layout/PageContainer";
 import { Skeleton } from "@/components/ui/skeleton";
-import { NewsList, NewsPagination, parseArticleQuery } from "@/features/news";
+import {
+  DEFAULT_PER_PAGE,
+  isPerPageOption,
+  NewsList,
+  NewsPagination,
+  parseArticleQuery,
+  PerPageSelect,
+  type PerPageOption,
+} from "@/features/news";
 import { getWatchlist } from "@/features/watchlist";
 import type { SearchParams } from "@/lib/types/route";
 
@@ -16,8 +24,14 @@ interface WatchlistPageProps {
   searchParams: Promise<SearchParams>;
 }
 
-async function WatchlistContent({ page }: { page: number }) {
-  const data = await getWatchlist(page);
+async function WatchlistContent({
+  page,
+  perPage,
+}: {
+  page: number;
+  perPage?: number;
+}) {
+  const data = await getWatchlist(page, perPage);
 
   if (data.items.length === 0) {
     return (
@@ -74,16 +88,31 @@ export default async function WatchlistPage({
   const raw = await searchParams;
   const { query } = parseArticleQuery(raw);
   const page = query.page ?? 1;
+  const perPage = query.perPage;
+  // PerPageSelect の current は parser で allowlist 通過済の値を文字列化、
+  // 未指定なら DEFAULT_PER_PAGE。allowlist 外は parser 段で undefined 化されている。
+  const perPageSelectValue: PerPageOption =
+    perPage !== undefined && isPerPageOption(String(perPage))
+      ? (String(perPage) as PerPageOption)
+      : DEFAULT_PER_PAGE;
 
   return (
     <PageContainer>
-      <h1 className="text-base font-medium">Watchlist</h1>
+      <div className="flex items-center justify-between gap-4">
+        <h1 className="text-base font-medium">Watchlist</h1>
+        <Suspense fallback={null}>
+          <PerPageSelect current={perPageSelectValue} />
+        </Suspense>
+      </div>
       {/* URL searchParams を JSON 化して Suspense key に与えることで、
           searchParams が変化したときに fallback (skeleton) を再表示する。
           dashboard 側 (`(protected)/page.tsx`) と統一した戦略。今後
           searchParams が増えた際に key 候補の追加漏れを防ぐ。 */}
-      <Suspense key={JSON.stringify({ page })} fallback={<WatchlistSkeleton />}>
-        <WatchlistContent page={page} />
+      <Suspense
+        key={JSON.stringify({ page, perPage })}
+        fallback={<WatchlistSkeleton />}
+      >
+        <WatchlistContent page={page} perPage={perPage} />
       </Suspense>
     </PageContainer>
   );

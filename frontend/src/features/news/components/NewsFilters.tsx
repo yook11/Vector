@@ -9,8 +9,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useUpdateSearchParams } from "@/lib/search-params/client";
-
-const PER_PAGE_OPTIONS = new Set(["12", "20", "24", "48", "50", "100"]);
+import { DEFAULT_PER_PAGE, isPerPageOption } from "../per-page";
+import { PerPageSelect } from "./PerPageSelect";
 
 export function NewsFilters() {
   // SearchBar と同じく <Suspense> 配下なので非 null。空フォールバックで型を確定。
@@ -20,18 +20,17 @@ export function NewsFilters() {
   const sortOrderValue = rawSortOrder === "asc" ? "asc" : "default";
   const rawPerPage = searchParams.get("perPage");
   const perPageValue =
-    rawPerPage && PER_PAGE_OPTIONS.has(rawPerPage) ? rawPerPage : "20";
-
-  const updateParam = (key: string, value: string | undefined) => {
-    updateSearchParams({ [key]: value, page: undefined });
-  };
+    rawPerPage && isPerPageOption(rawPerPage) ? rawPerPage : DEFAULT_PER_PAGE;
 
   return (
     <div className="flex flex-wrap items-center gap-2.5">
       <Select
         value={sortOrderValue}
         onValueChange={(v) =>
-          updateParam("sortOrder", v === "default" ? undefined : v)
+          updateSearchParams({
+            sortOrder: v === "default" ? undefined : v,
+            page: undefined,
+          })
         }
       >
         <SelectTrigger
@@ -46,25 +45,7 @@ export function NewsFilters() {
         </SelectContent>
       </Select>
 
-      <Select
-        value={perPageValue}
-        onValueChange={(v) => updateParam("perPage", v)}
-      >
-        <SelectTrigger
-          className="h-9 w-[100px] text-xs border-border"
-          aria-label="1ページあたりの件数"
-        >
-          <SelectValue placeholder="Per page" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="12">12 / page</SelectItem>
-          <SelectItem value="20">20 / page</SelectItem>
-          <SelectItem value="24">24 / page</SelectItem>
-          <SelectItem value="48">48 / page</SelectItem>
-          <SelectItem value="50">50 / page</SelectItem>
-          <SelectItem value="100">100 / page</SelectItem>
-        </SelectContent>
-      </Select>
+      <PerPageSelect current={perPageValue} />
     </div>
   );
 }

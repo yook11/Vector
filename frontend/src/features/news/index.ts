@@ -9,6 +9,13 @@ export { NewsDetail } from "./components/NewsDetail";
 export { NewsFilters } from "./components/NewsFilters";
 export { NewsList } from "./components/NewsList";
 export { NewsPagination } from "./components/NewsPagination";
+export { PerPageSelect } from "./components/PerPageSelect";
 export { RelatedArticles } from "./components/RelatedArticles";
 export { SearchBar } from "./components/SearchBar";
+export {
+  DEFAULT_PER_PAGE,
+  isPerPageOption,
+  PER_PAGE_OPTIONS,
+  type PerPageOption,
+} from "./per-page";
 export { parseArticleQuery } from "./search-params";

@@ -14,11 +14,14 @@ import type { PaginatedArticleResponse } from "@/types/types.gen";
  */
 export async function getWatchlist(
   page = 1,
-  perPage = 20,
+  perPage?: number,
 ): Promise<PaginatedArticleResponse> {
   const { data } = await listArticlesInWatchlist({
     throwOnError: true,
-    query: { page, perPage },
+    query: {
+      page,
+      ...(perPage !== undefined ? { perPage } : {}),
+    },
     next: { tags: [cacheTags.watchlistMe] },
   });
   return data;

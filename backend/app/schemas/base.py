@@ -29,7 +29,7 @@ class PaginationParams(BaseModel):
     """
 
     page: Annotated[int, Query(ge=1, le=MAX_PAGE)] = 1
-    per_page: Annotated[int, Query(ge=1, le=MAX_PER_PAGE, alias="perPage")] = 20
+    per_page: Annotated[int, Query(ge=1, le=MAX_PER_PAGE, alias="perPage")] = 24
 
     @property
     def offset(self) -> int:
