@@ -1,8 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import Row
+from sqlalchemy import Row, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import func, select
 
 from app.models.category import Category
 from app.models.in_scope_assessment import InScopeAssessment

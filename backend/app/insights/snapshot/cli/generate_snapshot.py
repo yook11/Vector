@@ -35,7 +35,6 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
-from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
 
 from app.config import settings
 from app.insights.snapshot.application.snapshot import WeeklyTrendsSnapshotService
@@ -115,7 +114,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         engine = create_async_engine(settings.database_url, echo=False)
         try:
             session_factory = async_sessionmaker(
-                engine, class_=SQLModelAsyncSession, expire_on_commit=False
+                engine, class_=AsyncSession, expire_on_commit=False
             )
             service = WeeklyTrendsSnapshotService(session_factory)
             return await run(args, service, session_factory)

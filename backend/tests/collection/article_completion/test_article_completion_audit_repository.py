@@ -16,9 +16,9 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from sqlmodel import select
 
 from app.audit.stages.completion import ArticleCompletionAuditRepository
 from app.collection.article_acquisition.repository import IncompleteArticleRepository

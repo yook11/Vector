@@ -33,8 +33,8 @@ from dataclasses import dataclass
 from time import perf_counter
 
 import structlog
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from sqlmodel import select
 
 from app.analysis.ai_provider_errors import AIProviderError
 from app.analysis.curation.ai.base import BaseCurator

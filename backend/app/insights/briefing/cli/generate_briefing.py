@@ -36,7 +36,6 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
-from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
 
 from app.config import settings
 from app.insights.briefing.application.notifier import NullBriefingNotifier
@@ -139,7 +138,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         engine = create_async_engine(settings.database_url, echo=False)
         try:
             session_factory = async_sessionmaker(
-                engine, class_=SQLModelAsyncSession, expire_on_commit=False
+                engine, class_=AsyncSession, expire_on_commit=False
             )
             # CLI は手動運用 / 復旧経路のため、frontend revalidate は飛ばす
             # (本番 cron 経路と異なり 11 連続 POST が即時走るのを避ける)。

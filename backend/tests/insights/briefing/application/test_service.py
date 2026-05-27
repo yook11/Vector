@@ -8,8 +8,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker
-from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.audit.stages.briefing import (
     OUTCOME_BRIEFING_COMPLETED,
@@ -32,7 +31,7 @@ JST = ZoneInfo("Asia/Tokyo")
 def _factory_for(db_session) -> async_sessionmaker:
     """テスト中の db_session をそのまま返す session_factory (Service 注入用)。"""
     return async_sessionmaker(
-        db_session.bind, class_=SQLModelAsyncSession, expire_on_commit=False
+        db_session.bind, class_=AsyncSession, expire_on_commit=False
     )
 
 

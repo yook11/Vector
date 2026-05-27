@@ -17,8 +17,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import structlog
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from sqlmodel import select
 
 from app.collection.sources.fetch_cadence import FetchCadence
 from app.collection.sources.source_name import SourceName

@@ -6,9 +6,9 @@
 
 from __future__ import annotations
 
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import select
 
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl

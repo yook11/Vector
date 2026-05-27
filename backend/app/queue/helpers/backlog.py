@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import select
 
 from app.models.article import Article
 from app.models.article_curation import ArticleCuration

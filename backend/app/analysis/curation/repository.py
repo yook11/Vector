@@ -40,10 +40,9 @@ signal / noise 両 path を扱える。
 from __future__ import annotations
 
 import structlog
-from sqlalchemy import func, update
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import select
 
 from app.analysis.curation.ai.envelope import CurationCall
 from app.analysis.curation.domain import Noise, Signal

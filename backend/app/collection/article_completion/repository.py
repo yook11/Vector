@@ -11,9 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import delete, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import select
 
 from app.collection.article_acquisition.strategy import SOURCES
 from app.collection.article_completion.ready import ReadyForArticleCompletion

@@ -23,9 +23,8 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from sqlmodel import select
 
 from app.collection.article_acquisition.fetched_article import FetchedArticle
 from app.collection.article_acquisition.repository import IncompleteArticleRepository

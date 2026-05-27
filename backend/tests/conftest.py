@@ -65,7 +65,6 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 from sqlmodel import SQLModel
-from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
 
 from app.config import settings
 from app.dependencies import get_session
@@ -233,7 +232,7 @@ def session_factory() -> async_sessionmaker[AsyncSession]:
     """Service クラスのテスト用に session factory を提供する。"""
     return async_sessionmaker(
         engine_test,
-        class_=SQLModelAsyncSession,
+        class_=AsyncSession,
         expire_on_commit=False,
     )
 
@@ -241,7 +240,7 @@ def session_factory() -> async_sessionmaker[AsyncSession]:
 @pytest.fixture
 async def db_session() -> AsyncGenerator[AsyncSession]:
     """テスト用 DB セッションを提供する。"""
-    async with SQLModelAsyncSession(engine_test, expire_on_commit=False) as session:
+    async with AsyncSession(engine_test, expire_on_commit=False) as session:
         yield session
 
 

@@ -1,8 +1,7 @@
 from uuid import UUID
 
-from sqlalchemy import delete, exists
+from sqlalchemy import delete, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import func, select
 
 from app.models.article_curation import ArticleCuration
 from app.models.in_scope_assessment import InScopeAssessment

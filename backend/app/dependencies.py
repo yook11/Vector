@@ -9,7 +9,6 @@ import redis.asyncio as aioredis
 from fastapi import Depends, Header, HTTPException, status
 from jwt.exceptions import InvalidTokenError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
 
 from app.config import settings
 from app.db import engine
@@ -52,7 +51,7 @@ async def get_session() -> AsyncGenerator[AsyncSession]:
     新規作成・削除は Repository.create / Repository.delete 経由で行う。
     詳細は docs/adr/004_unit_of_work_service_convention.md を参照。
     """
-    async with SQLModelAsyncSession(engine) as session:
+    async with AsyncSession(engine) as session:
         async with session.begin():
             yield session
 

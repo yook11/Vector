@@ -40,13 +40,12 @@ import json
 import sys
 from collections.abc import Sequence
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
-from sqlmodel import select
-from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
 
 from app.analysis.curation.ai.base import BaseCurator
 from app.analysis.curation.ai.gemini import GeminiCurator
@@ -203,7 +202,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         engine = create_async_engine(settings.database_url, echo=False)
         try:
             session_factory = async_sessionmaker(
-                engine, class_=SQLModelAsyncSession, expire_on_commit=False
+                engine, class_=AsyncSession, expire_on_commit=False
             )
             service = RecurationService(session_factory, max_retries=args.max_retries)
             curator = GeminiCurator()

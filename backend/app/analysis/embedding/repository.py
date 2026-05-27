@@ -20,9 +20,8 @@ ORM → Entity 復元は持たない。
 
 from __future__ import annotations
 
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import select
 
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.domain.value_objects import EmbeddingVector

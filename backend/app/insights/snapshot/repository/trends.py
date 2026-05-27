@@ -28,9 +28,8 @@ from __future__ import annotations
 from datetime import datetime
 
 import sqlalchemy as sa
-from sqlalchemy import and_, func, or_, text
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import select
 
 from app.insights.snapshot.config import MIN_CURRENT, MIN_PREVIOUS, NEW_BURST_THRESHOLD
 from app.insights.snapshot.domain.trend import EntityTrend, NewEntity

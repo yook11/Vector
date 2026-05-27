@@ -20,9 +20,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from sqlmodel import select
 
 from app.collection.article_acquisition.repository import IncompleteArticleRepository
 from app.collection.article_completion.completion_failure import CompletionRejection

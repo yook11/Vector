@@ -28,8 +28,8 @@ from datetime import UTC, datetime
 from typing import ClassVar
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from sqlmodel import select
 
 from app.collection.article_acquisition import service as service_module
 from app.collection.article_acquisition.fetched_article import FetchedArticle

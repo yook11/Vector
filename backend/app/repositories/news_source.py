@@ -1,5 +1,5 @@
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import select
 
 from app.models.news_source import NewsSource
 

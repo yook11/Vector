@@ -11,8 +11,7 @@ from __future__ import annotations
 
 import logfire
 import structlog
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from taskiq import TaskiqEvents, TaskiqState
 from taskiq_redis import RedisStreamBroker
 
@@ -42,7 +41,7 @@ def _register_worker_lifecycle(broker: RedisStreamBroker, label: str) -> None:
         state.engine = create_async_engine(settings.database_url, echo=False)
         state.session_factory = async_sessionmaker(
             state.engine,
-            class_=SQLModelAsyncSession,
+            class_=AsyncSession,
             expire_on_commit=False,
         )
         # worker engine の DB query を 1 query = 1 span として Logfire に乗せる。
