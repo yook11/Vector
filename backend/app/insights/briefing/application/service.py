@@ -85,7 +85,9 @@ class WeeklyBriefingService:
             # 記事ゼロは steady-state 異常系 (D2) — REJECTED で audit に焼く。
             # 読 tx 直後の独立した別 tx で焼く (LLM 呼出も write tx も走らない)。
             async with self._session_factory() as session:
-                await BriefingAuditRepository(session).append_input_empty(ready=ready)
+                await BriefingAuditRepository(session).append_generation_input_empty(
+                    ready=ready
+                )
                 await session.commit()
             return GeneratedBriefing(
                 persisted=False,
@@ -119,7 +121,7 @@ class WeeklyBriefingService:
             # 同 tx atomic で「briefing 行はあるが SUCCEEDED 無し」の偽ギャップ
             # を構造的に排除する。
             if saved is not None:
-                await BriefingAuditRepository(session).append_completed(
+                await BriefingAuditRepository(session).append_generation_completed(
                     ready=ready,
                     article_count=len(articles),
                     ai_model=self._llm.MODEL,

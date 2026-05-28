@@ -204,6 +204,21 @@ class TestTrendDiscoveryPayloadAuditKeys:
         assert restored == payload
 
 
+class TestBriefingPayloadAuditKeys:
+    """``BriefingPayload`` の dispatch / generation field contract。"""
+
+    def test_briefing_dispatch_count_fields_roundtrip(self) -> None:
+        payload = BriefingPayload(
+            week_start="2026-04-20",
+            selected_category_count=3,
+            enqueued_category_count=2,
+            failed_category_count=1,
+        )
+        dumped = payload.model_dump(mode="json")
+        restored = BriefingPayload.model_validate(dumped)
+        assert restored == payload
+
+
 class TestPayloadFieldOwnership:
     """top-level column にしない stage-local field の所有権を固定する。"""
 

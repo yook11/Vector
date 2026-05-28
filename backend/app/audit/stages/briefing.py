@@ -25,9 +25,15 @@ from app.shared.security.redaction import redact_secrets
 
 _ERROR_MESSAGE_LIMIT = 2000
 
-OUTCOME_BRIEFING_COMPLETED = "briefing_completed"
-OUTCOME_BRIEFING_INPUT_EMPTY = "briefing_input_empty"
-OUTCOME_BRIEFING_DISPATCHED = "briefing_dispatched"
+OUTCOME_BRIEFING_GENERATION_COMPLETED = "briefing_generation_completed"
+OUTCOME_BRIEFING_GENERATION_INPUT_EMPTY = "briefing_generation_input_empty"
+OUTCOME_BRIEFING_GENERATION_ALREADY_EXISTS = "briefing_generation_already_exists"
+OUTCOME_BRIEFING_DISPATCH_COMPLETED = "briefing_dispatch_completed"
+OUTCOME_BRIEFING_CATEGORY_ENQUEUED = "briefing_category_enqueued"
+OUTCOME_BRIEFING_CATEGORY_ENQUEUE_FAILED = "briefing_category_enqueue_failed"
+OUTCOME_BRIEFING_DISPATCH_CATEGORY_MASTER_LOAD_FAILED = (
+    "briefing_dispatch_category_master_load_failed"
+)
 
 
 class BriefingAuditRepository:
@@ -37,16 +43,16 @@ class BriefingAuditRepository:
         self._session = session
         self._events = PipelineEventRepository(session)
 
-    # --- 成功経路 (subtask) -----------------------------------------------
+    # --- generation: 成功 / skip / rejected ------------------------------
 
-    async def append_completed(
+    async def append_generation_completed(
         self,
         *,
         ready: ReadyForBriefing,
         article_count: int,
         ai_model: str,
     ) -> None:
-        """subtask の成功を記録する。"""
+        """1カテゴリの briefing 生成成功を記録する。"""
         category_slug = await self._resolve_category_slug(ready.category_id)
         payload = BriefingPayload(
             week_start=ready.week_start.isoformat(),
@@ -58,18 +64,16 @@ class BriefingAuditRepository:
         await self._events.append(
             stage=Stage.BRIEFING,
             event_type=EventType.SUCCEEDED,
-            outcome_code=OUTCOME_BRIEFING_COMPLETED,
+            outcome_code=OUTCOME_BRIEFING_GENERATION_COMPLETED,
             payload=payload,
         )
 
-    # --- REJECTED 経路 (subtask 入力ゼロ) -------------------------------
-
-    async def append_input_empty(
+    async def append_generation_input_empty(
         self,
         *,
         ready: ReadyForBriefing,
     ) -> None:
-        """subtask の入力ゼロを rejected として記録する。"""
+        """対象記事ゼロで LLM を呼ばなかったことを記録する。"""
         category_slug = await self._resolve_category_slug(ready.category_id)
         payload = BriefingPayload(
             week_start=ready.week_start.isoformat(),
@@ -80,11 +84,31 @@ class BriefingAuditRepository:
         await self._events.append(
             stage=Stage.BRIEFING,
             event_type=EventType.REJECTED,
-            outcome_code=OUTCOME_BRIEFING_INPUT_EMPTY,
+            outcome_code=OUTCOME_BRIEFING_GENERATION_INPUT_EMPTY,
             payload=payload,
         )
 
-    # --- 失敗経路 (subtask Task 層 try/except) ----------------------------
+    async def append_generation_already_exists(
+        self,
+        *,
+        week_start: date,
+        category_id: int,
+    ) -> None:
+        """既存 briefing があり、生成しなかったことを記録する。"""
+        category_slug = await self._resolve_category_slug(category_id)
+        payload = BriefingPayload(
+            week_start=week_start.isoformat(),
+            category_id=category_id,
+            category_slug=category_slug,
+        )
+        await self._events.append(
+            stage=Stage.BRIEFING,
+            event_type=EventType.SKIPPED,
+            outcome_code=OUTCOME_BRIEFING_GENERATION_ALREADY_EXISTS,
+            payload=payload,
+        )
+
+    # --- generation: 失敗経路 (subtask Task 層 try/except) ----------------
 
     async def append_failure(
         self,
@@ -94,10 +118,10 @@ class BriefingAuditRepository:
         retry_exhausted: bool | None,
         ai_model: str,
     ) -> None:
-        """subtask の失敗を記録する。"""
+        """1カテゴリの briefing 生成失敗を記録する。"""
         category_slug = await self._resolve_category_slug(ready.category_id)
         projection = self._projection_of(exc)
-        await self._append_subtask_failed_event(
+        await self._append_generation_failed_event(
             ready=ready,
             category_slug=category_slug,
             exc=exc,
@@ -114,9 +138,9 @@ class BriefingAuditRepository:
         retry_exhausted: bool | None,
         ai_model: str,
     ) -> None:
-        """想定外の briefing subtask 失敗を unknown として記録する。"""
+        """想定外の briefing 生成失敗を unknown として記録する。"""
         category_slug = await self._resolve_category_slug(ready.category_id)
-        await self._append_subtask_failed_event(
+        await self._append_generation_failed_event(
             ready=ready,
             category_slug=category_slug,
             exc=exc,
@@ -125,7 +149,7 @@ class BriefingAuditRepository:
             projection=unknown_failure_projection(),
         )
 
-    async def _append_subtask_failed_event(
+    async def _append_generation_failed_event(
         self,
         *,
         ready: ReadyForBriefing,
@@ -155,74 +179,104 @@ class BriefingAuditRepository:
             retryability=projection.retryability,
         )
 
-    # --- 成功経路 (dispatcher anchor) -------------------------------------
+    # --- dispatch: run summary / category enqueue ------------------------
 
-    async def append_dispatched(
+    async def append_dispatch_completed(
         self,
         *,
         week_start: date,
-        category_count: int,
+        selected_category_count: int,
+        enqueued_category_count: int,
+        failed_category_count: int,
     ) -> None:
-        """dispatcher の週次成功 anchor を記録する。"""
+        """dispatcher がカテゴリ enqueue ループを完了したことを記録する。"""
         payload = BriefingPayload(
             week_start=week_start.isoformat(),
-            category_count=category_count,
+            selected_category_count=selected_category_count,
+            enqueued_category_count=enqueued_category_count,
+            failed_category_count=failed_category_count,
         )
         await self._events.append(
             stage=Stage.BRIEFING,
             event_type=EventType.SUCCEEDED,
-            outcome_code=OUTCOME_BRIEFING_DISPATCHED,
+            outcome_code=OUTCOME_BRIEFING_DISPATCH_COMPLETED,
             payload=payload,
         )
 
-    # --- 失敗経路 (dispatcher 自体の障害) ---------------------------------
-
-    async def append_dispatcher_failure(
+    async def append_category_enqueued(
         self,
         *,
-        week_start: date | None,
-        exc: BriefingError | SQLAlchemyError,
+        week_start: date,
+        category_id: int,
     ) -> None:
-        """dispatcher 自体の失敗 anchor を記録する。"""
-        projection = self._projection_of(exc)
-        await self._append_dispatcher_failed_event(
-            week_start=week_start,
-            exc=exc,
-            projection=projection,
+        """1カテゴリ分の generation task enqueue 成功を記録する。"""
+        category_slug = await self._resolve_category_slug(category_id)
+        payload = BriefingPayload(
+            week_start=week_start.isoformat(),
+            category_id=category_id,
+            category_slug=category_slug,
+        )
+        await self._events.append(
+            stage=Stage.BRIEFING,
+            event_type=EventType.SUCCEEDED,
+            outcome_code=OUTCOME_BRIEFING_CATEGORY_ENQUEUED,
+            payload=payload,
         )
 
-    async def append_unexpected_dispatcher_failure(
+    async def append_category_enqueue_failed(
         self,
         *,
-        week_start: date | None,
+        week_start: date,
+        category_id: int,
         exc: BaseException,
     ) -> None:
-        """想定外の dispatcher 失敗 anchor を unknown として記録する。"""
-        await self._append_dispatcher_failed_event(
-            week_start=week_start,
-            exc=exc,
-            projection=unknown_failure_projection(),
+        """1カテゴリ分の generation task enqueue 失敗を記録する。"""
+        category_slug = await self._resolve_category_slug(category_id)
+        projection = _fixed_projection(
+            exc,
+            code=OUTCOME_BRIEFING_CATEGORY_ENQUEUE_FAILED,
         )
-
-    async def _append_dispatcher_failed_event(
-        self,
-        *,
-        week_start: date | None,
-        exc: BaseException,
-        projection: FailureProjection,
-    ) -> None:
         payload = BriefingPayload(
             failure_kind=projection.failure_kind,
             failure_action=failure_action_value(projection),
-            week_start=week_start.isoformat() if week_start is not None else None,
+            week_start=week_start.isoformat(),
+            category_id=category_id,
+            category_slug=category_slug,
+            error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
+            error_chain=extract_error_chain(exc),
+        )
+        await self._events.append(
+            stage=Stage.BRIEFING,
+            event_type=EventType.FAILED,
+            outcome_code=OUTCOME_BRIEFING_CATEGORY_ENQUEUE_FAILED,
+            payload=payload,
+            error_class=_fqn(exc),
+            retryability=projection.retryability,
+        )
+
+    async def append_dispatch_category_master_load_failed(
+        self,
+        *,
+        week_start: date,
+        exc: BaseException,
+    ) -> None:
+        """dispatcher がカテゴリマスタを読めなかったことを記録する。"""
+        projection = _fixed_projection(
+            exc,
+            code=OUTCOME_BRIEFING_DISPATCH_CATEGORY_MASTER_LOAD_FAILED,
+        )
+        payload = BriefingPayload(
+            failure_kind=projection.failure_kind,
+            failure_action=failure_action_value(projection),
+            week_start=week_start.isoformat(),
             retry_exhausted=True,
             error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
             error_chain=extract_error_chain(exc),
         )
         await self._events.append(
-            stage=projection.stage or Stage.BRIEFING,
+            stage=Stage.BRIEFING,
             event_type=EventType.FAILED,
-            outcome_code=projection.code,
+            outcome_code=OUTCOME_BRIEFING_DISPATCH_CATEGORY_MASTER_LOAD_FAILED,
             payload=payload,
             error_class=_fqn(exc),
             retryability=projection.retryability,
@@ -241,6 +295,18 @@ class BriefingAuditRepository:
     def _projection_of(exc: BriefingError | SQLAlchemyError) -> FailureProjection:
         """Briefing marker / DB 例外を projection する。"""
         return project_failure(exc)
+
+
+def _fixed_projection(exc: BaseException, *, code: str) -> FailureProjection:
+    """retryability / failure_kind は保ちつつ outcome_code だけ固定する。"""
+    projection = project_failure(exc, fallback_code=code)
+    return FailureProjection(
+        failure_kind=projection.failure_kind,
+        retryability=projection.retryability,
+        failure_action=projection.failure_action,
+        code=code,
+        stage=Stage.BRIEFING,
+    )
 
 
 def _fqn(exc: BaseException) -> str:

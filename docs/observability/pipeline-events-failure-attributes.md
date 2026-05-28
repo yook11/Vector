@@ -90,7 +90,7 @@ attempt 系 payload を追加しない。
 - `source_not_registered`
 - `curated_signal`
 - `assessed_out_of_scope`
-- `briefing_input_empty`
+- `briefing_generation_input_empty`
 - `stale_attempt`
 
 dispatch stage は fan-out 入口のため、source 単位 outcome と run 単位 outcome を
@@ -131,6 +131,26 @@ trend discovery event の payload は `kind="trend_discovery"` とし、
 `requested_update`、`source_analysis_count`、`completed_category_count` を保存する。
 カテゴリ集計前に skip / failure した場合、`completed_category_count` は `null`。
 failed event の `retryability` は `unknown` とする。
+
+briefing stage は、カテゴリ task を積む dispatch と 1 カテゴリ分を生成する
+generation に分けて焼く。
+
+- dispatch summary: `briefing_dispatch_completed`
+- category enqueue: `briefing_category_enqueued` /
+  `briefing_category_enqueue_failed`
+- dispatch failure: `briefing_dispatch_category_master_load_failed`
+- generation: `briefing_generation_completed` /
+  `briefing_generation_already_exists` /
+  `briefing_generation_input_empty` /
+  `briefing_generation_llm_configuration_invalid` /
+  `briefing_generation_llm_provider_call_failed` /
+  `briefing_generation_llm_response_contract_invalid`
+
+briefing dispatch summary の payload は `kind="briefing"` とし、`week_start`、
+`selected_category_count`、`enqueued_category_count`、
+`failed_category_count` を保存する。カテゴリ単位 event は `week_start`、
+`category_id`、`category_slug` を保存する。`run_id` は持たせず、
+`week_start + category_id` を追跡キーにする。
 
 ## Backfill Exclusion Events
 

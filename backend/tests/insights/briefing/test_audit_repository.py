@@ -1,13 +1,4 @@
-"""``BriefingAuditRepository`` の統合テスト。
-
-- 5 semantic API 各 1 (``append_completed`` / ``append_input_empty`` /
-  ``append_failure`` / ``append_dispatched`` / ``append_dispatcher_failure``)
-- ``append_failure`` は failure projection parametrize +
-  ``retry_exhausted`` 軸 (``True`` / ``None`` = retry 中)
-- repository は ``commit`` を呼ばない (caller の tx 境界保持)
-- ``error_chain`` は ``__cause__`` を辿り 2 段以上を記録
-- ``error_message`` は ``redact_secrets()`` 経由
-"""
+"""``BriefingAuditRepository`` の統合テスト。"""
 
 from __future__ import annotations
 
@@ -22,9 +13,13 @@ from sqlalchemy.exc import (
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.audit.stages.briefing import (
-    OUTCOME_BRIEFING_COMPLETED,
-    OUTCOME_BRIEFING_DISPATCHED,
-    OUTCOME_BRIEFING_INPUT_EMPTY,
+    OUTCOME_BRIEFING_CATEGORY_ENQUEUE_FAILED,
+    OUTCOME_BRIEFING_CATEGORY_ENQUEUED,
+    OUTCOME_BRIEFING_DISPATCH_CATEGORY_MASTER_LOAD_FAILED,
+    OUTCOME_BRIEFING_DISPATCH_COMPLETED,
+    OUTCOME_BRIEFING_GENERATION_ALREADY_EXISTS,
+    OUTCOME_BRIEFING_GENERATION_COMPLETED,
+    OUTCOME_BRIEFING_GENERATION_INPUT_EMPTY,
     BriefingAuditRepository,
 )
 from app.insights.briefing.domain.ready import ReadyForBriefing
@@ -35,10 +30,6 @@ from app.insights.briefing.llm.errors import (
 )
 from app.models.category import Category
 from app.models.pipeline_event import PipelineEvent
-
-# ===========================================================================
-# Integration tests — 5 semantic API
-# ===========================================================================
 
 
 @pytest.fixture
@@ -61,14 +52,14 @@ async def _fetch_one(db_session: AsyncSession) -> PipelineEvent:
 
 
 @pytest.mark.asyncio
-async def test_append_completed_records_succeeded_row(
+async def test_append_generation_completed_records_succeeded_row(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     ai_category: Category,
 ) -> None:
-    """成功 audit が SUCCEEDED + outcome_code + payload 整合で記録される。"""
+    """生成成功 audit が SUCCEEDED + outcome_code + payload 整合で記録される。"""
     async with session_factory() as session:
-        await BriefingAuditRepository(session).append_completed(
+        await BriefingAuditRepository(session).append_generation_completed(
             ready=_ready(ai_category.id),
             article_count=7,
             ai_model="deepseek-v4-pro",
@@ -78,7 +69,7 @@ async def test_append_completed_records_succeeded_row(
     ev = await _fetch_one(db_session)
     assert ev.stage == "briefing"
     assert ev.event_type == "succeeded"
-    assert ev.outcome_code == OUTCOME_BRIEFING_COMPLETED
+    assert ev.outcome_code == OUTCOME_BRIEFING_GENERATION_COMPLETED
     assert ev.retryability is None
     assert ev.payload["kind"] == "briefing"
     assert ev.payload["week_start"] == "2026-04-20"
@@ -89,14 +80,14 @@ async def test_append_completed_records_succeeded_row(
 
 
 @pytest.mark.asyncio
-async def test_append_input_empty_records_rejected_row(
+async def test_append_generation_input_empty_records_rejected_row(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     ai_category: Category,
 ) -> None:
-    """記事ゼロが REJECTED + outcome_code + article_count=0 で記録される。"""
+    """記事ゼロが REJECTED + article_count=0 で記録される。"""
     async with session_factory() as session:
-        await BriefingAuditRepository(session).append_input_empty(
+        await BriefingAuditRepository(session).append_generation_input_empty(
             ready=_ready(ai_category.id),
         )
         await session.commit()
@@ -104,9 +95,33 @@ async def test_append_input_empty_records_rejected_row(
     ev = await _fetch_one(db_session)
     assert ev.stage == "briefing"
     assert ev.event_type == "rejected"
-    assert ev.outcome_code == OUTCOME_BRIEFING_INPUT_EMPTY
+    assert ev.outcome_code == OUTCOME_BRIEFING_GENERATION_INPUT_EMPTY
     assert ev.retryability is None
     assert ev.payload["article_count"] == 0
+    assert ev.payload["category_slug"] == "ai"
+
+
+@pytest.mark.asyncio
+async def test_append_generation_already_exists_records_skipped_row(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    ai_category: Category,
+) -> None:
+    """既存 briefing skip が SKIPPED として記録される。"""
+    async with session_factory() as session:
+        await BriefingAuditRepository(session).append_generation_already_exists(
+            week_start=date(2026, 4, 20),
+            category_id=ai_category.id,
+        )
+        await session.commit()
+
+    ev = await _fetch_one(db_session)
+    assert ev.stage == "briefing"
+    assert ev.event_type == "skipped"
+    assert ev.outcome_code == OUTCOME_BRIEFING_GENERATION_ALREADY_EXISTS
+    assert ev.retryability is None
+    assert ev.payload["week_start"] == "2026-04-20"
+    assert ev.payload["category_id"] == ai_category.id
     assert ev.payload["category_slug"] == "ai"
 
 
@@ -122,21 +137,21 @@ async def test_append_input_empty_records_rejected_row(
     [
         (
             lambda: BriefingConfigurationError("DEEPSEEK_API_KEY missing"),
-            "briefing_configuration_error",
+            "briefing_generation_llm_configuration_invalid",
             "non_retryable",
             "configuration",
             None,
         ),
         (
             lambda: BriefingResponseInvalidError(),
-            "briefing_response_invalid",
+            "briefing_generation_llm_response_contract_invalid",
             "non_retryable",
             "response_invalid",
             None,
         ),
         (
             lambda: BriefingLlmError(provider_error=RuntimeError("upstream")),
-            "briefing_llm_error",
+            "briefing_generation_llm_provider_call_failed",
             "retryable",
             "llm_error",
             None,
@@ -164,7 +179,7 @@ async def test_append_input_empty_records_rejected_row(
         ),
     ],
 )
-async def test_append_failure_projects_exceptions(
+async def test_append_failure_projects_generation_exceptions(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     ai_category: Category,
@@ -174,7 +189,7 @@ async def test_append_failure_projects_exceptions(
     expected_failure_kind: str,
     expected_failure_action: str | None,
 ) -> None:
-    """failure audit が例外クラスから projection を導出する。"""
+    """generation failure audit が例外クラスから projection を導出する。"""
     exc = exc_factory()  # type: ignore[operator]
     async with session_factory() as session:
         repo = BriefingAuditRepository(session)
@@ -211,12 +226,7 @@ async def test_append_failure_records_retry_exhausted_only_when_true(
     session_factory: async_sessionmaker[AsyncSession],
     ai_category: Category,
 ) -> None:
-    """``retry_exhausted=True`` のみ payload に出る (``None`` 時は null/欠落)。
-
-    ``CompletionPayload`` precedent と同型: extrinsic な give-up timing で、
-    retry 上限到達時のみ記録する。consumer は
-    ``payload @> '{"retry_exhausted": true}'`` で give-up を集計する。
-    """
+    """``retry_exhausted=True`` のみ payload に出る。"""
     async with session_factory() as session:
         await BriefingAuditRepository(session).append_unexpected_failure(
             ready=_ready(ai_category.id),
@@ -266,9 +276,7 @@ async def test_append_failure_redacts_secrets_in_error_message(
     session_factory: async_sessionmaker[AsyncSession],
     ai_category: Category,
 ) -> None:
-    """``error_message`` が ``redact_secrets()`` を通る (SDK exception の
-    API key 混入経路を redact)。
-    """
+    """``error_message`` が ``redact_secrets()`` を通る。"""
     exc = RuntimeError(
         "Authorization: Bearer "
         "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.SflKxwRJSMeKKF2QT4abc failed"
@@ -285,48 +293,101 @@ async def test_append_failure_redacts_secrets_in_error_message(
     ev = await _fetch_one(db_session)
     msg = ev.payload["error_message"]
     assert msg is not None
-    # JWT 本体 (eyJ...) が生のまま残っていないことを構造的に検証
     assert "eyJhbGciOiJIUzI1NiJ9" not in msg
 
 
 @pytest.mark.asyncio
-async def test_append_dispatched_records_weekly_anchor(
+async def test_append_dispatch_completed_records_counts(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
-    ai_category: Category,
 ) -> None:
-    """dispatcher の週次成功 anchor: per-category 軸は埋めず category_count のみ。"""
+    """dispatcher summary はカテゴリ count snapshot を保存する。"""
     async with session_factory() as session:
-        await BriefingAuditRepository(session).append_dispatched(
+        await BriefingAuditRepository(session).append_dispatch_completed(
             week_start=date(2026, 4, 20),
-            category_count=3,
+            selected_category_count=3,
+            enqueued_category_count=2,
+            failed_category_count=1,
         )
         await session.commit()
 
     ev = await _fetch_one(db_session)
     assert ev.stage == "briefing"
     assert ev.event_type == "succeeded"
-    assert ev.outcome_code == OUTCOME_BRIEFING_DISPATCHED
+    assert ev.outcome_code == OUTCOME_BRIEFING_DISPATCH_COMPLETED
     assert ev.retryability is None
     assert ev.payload["week_start"] == "2026-04-20"
-    assert ev.payload["category_count"] == 3
-    # per-category 軸は埋めない
+    assert ev.payload["selected_category_count"] == 3
+    assert ev.payload["enqueued_category_count"] == 2
+    assert ev.payload["failed_category_count"] == 1
+    assert ev.payload["category_count"] is None
     assert ev.payload["category_id"] is None
-    assert ev.payload["category_slug"] is None
-    assert ev.payload["article_count"] is None
 
 
 @pytest.mark.asyncio
-async def test_append_dispatcher_failure_marks_retry_exhausted_true(
+async def test_append_category_enqueued_records_category_row(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    ai_category: Category,
+) -> None:
+    """カテゴリ単位 enqueue 成功が記録される。"""
+    async with session_factory() as session:
+        await BriefingAuditRepository(session).append_category_enqueued(
+            week_start=date(2026, 4, 20),
+            category_id=ai_category.id,
+        )
+        await session.commit()
+
+    ev = await _fetch_one(db_session)
+    assert ev.stage == "briefing"
+    assert ev.event_type == "succeeded"
+    assert ev.outcome_code == OUTCOME_BRIEFING_CATEGORY_ENQUEUED
+    assert ev.retryability is None
+    assert ev.payload["week_start"] == "2026-04-20"
+    assert ev.payload["category_id"] == ai_category.id
+    assert ev.payload["category_slug"] == "ai"
+
+
+@pytest.mark.asyncio
+async def test_append_category_enqueue_failed_records_error_fields(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    ai_category: Category,
+) -> None:
+    """カテゴリ単位 enqueue 失敗は固定 outcome と error fields を保存する。"""
+    exc = RuntimeError("broker unavailable")
+    async with session_factory() as session:
+        await BriefingAuditRepository(session).append_category_enqueue_failed(
+            week_start=date(2026, 4, 20),
+            category_id=ai_category.id,
+            exc=exc,
+        )
+        await session.commit()
+
+    ev = await _fetch_one(db_session)
+    assert ev.stage == "briefing"
+    assert ev.event_type == "failed"
+    assert ev.outcome_code == OUTCOME_BRIEFING_CATEGORY_ENQUEUE_FAILED
+    assert ev.retryability == "unknown"
+    assert ev.error_class == "builtins.RuntimeError"
+    assert ev.payload["failure_kind"] == "unknown"
+    assert ev.payload["category_id"] == ai_category.id
+    assert ev.payload["category_slug"] == "ai"
+    assert ev.payload["error_message"] == "broker unavailable"
+    assert ev.payload["error_chain"] == ["builtins.RuntimeError"]
+
+
+@pytest.mark.asyncio
+async def test_append_dispatch_category_master_load_failed_marks_retry_exhausted_true(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """dispatcher 失敗 anchor: ``max_retries=0`` 即 give-up を
-    ``retry_exhausted=True`` で示す。
-    """
+    """カテゴリマスタ取得失敗は dispatch 固定 outcome で記録される。"""
     exc = RuntimeError("session_factory misconfigured")
     async with session_factory() as session:
-        await BriefingAuditRepository(session).append_unexpected_dispatcher_failure(
+        await BriefingAuditRepository(
+            session
+        ).append_dispatch_category_master_load_failed(
             week_start=date(2026, 4, 20),
             exc=exc,
         )
@@ -335,12 +396,13 @@ async def test_append_dispatcher_failure_marks_retry_exhausted_true(
     ev = await _fetch_one(db_session)
     assert ev.stage == "briefing"
     assert ev.event_type == "failed"
-    assert ev.outcome_code == "unexpected_error"
+    assert ev.outcome_code == OUTCOME_BRIEFING_DISPATCH_CATEGORY_MASTER_LOAD_FAILED
     assert ev.payload["retry_exhausted"] is True
     assert ev.payload["week_start"] == "2026-04-20"
     assert ev.retryability == "unknown"
     assert ev.payload["failure_kind"] == "unknown"
     assert ev.payload["failure_action"] is None
+    assert ev.payload["error_message"] == "session_factory misconfigured"
 
 
 @pytest.mark.asyncio
@@ -349,14 +411,13 @@ async def test_repository_does_not_commit(
     session_factory: async_sessionmaker[AsyncSession],
     ai_category: Category,
 ) -> None:
-    """repository は ``session.commit()`` を呼ばない (caller の tx 境界保持)。"""
+    """repository は ``session.commit()`` を呼ばない。"""
     async with session_factory() as session:
-        await BriefingAuditRepository(session).append_completed(
+        await BriefingAuditRepository(session).append_generation_completed(
             ready=_ready(ai_category.id),
             article_count=1,
             ai_model="deepseek-v4-pro",
         )
-        # 意図的に commit しない (session close = rollback)
 
     rows = (await db_session.execute(select(PipelineEvent))).scalars().all()
     assert len(rows) == 0

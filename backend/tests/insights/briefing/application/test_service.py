@@ -11,8 +11,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.audit.stages.briefing import (
-    OUTCOME_BRIEFING_COMPLETED,
-    OUTCOME_BRIEFING_INPUT_EMPTY,
+    OUTCOME_BRIEFING_GENERATION_COMPLETED,
+    OUTCOME_BRIEFING_GENERATION_INPUT_EMPTY,
 )
 from app.insights.briefing.application.notifier import NullBriefingNotifier
 from app.insights.briefing.application.service import WeeklyBriefingService
@@ -255,7 +255,8 @@ class TestAuditIntegration:
             (
                 await db_session.execute(
                     select(PipelineEvent).where(
-                        PipelineEvent.outcome_code == OUTCOME_BRIEFING_COMPLETED
+                        PipelineEvent.outcome_code
+                        == OUTCOME_BRIEFING_GENERATION_COMPLETED
                     )
                 )
             )
@@ -296,7 +297,8 @@ class TestAuditIntegration:
             (
                 await db_session.execute(
                     select(PipelineEvent).where(
-                        PipelineEvent.outcome_code == OUTCOME_BRIEFING_INPUT_EMPTY
+                        PipelineEvent.outcome_code
+                        == OUTCOME_BRIEFING_GENERATION_INPUT_EMPTY
                     )
                 )
             )

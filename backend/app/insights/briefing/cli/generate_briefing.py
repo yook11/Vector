@@ -37,6 +37,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from app.audit.stages.briefing import BriefingAuditRepository
 from app.config import settings
 from app.insights.briefing.application.notifier import NullBriefingNotifier
 from app.insights.briefing.application.service import WeeklyBriefingService
@@ -87,6 +88,24 @@ async def _resolve_categories(
     return [cat]
 
 
+async def _append_generation_already_exists_audit(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    week_start: date,
+    category_id: int,
+) -> None:
+    try:
+        async with session_factory() as session:
+            await BriefingAuditRepository(session).append_generation_already_exists(
+                week_start=week_start,
+                category_id=category_id,
+            )
+            await session.commit()
+    except Exception:
+        # CLI の既存 skip は業務上の正常終了なので、監査 write 失敗で壊さない。
+        return
+
+
 async def run(
     args: argparse.Namespace,
     service: WeeklyBriefingService,
@@ -110,6 +129,11 @@ async def run(
                 briefing_repo=repo,
             )
         if ready is None:
+            await _append_generation_already_exists_audit(
+                session_factory,
+                week_start=week_start,
+                category_id=category.id,
+            )
             print(
                 f"skipped existing: week={week_start.isoformat()} "
                 f"category={category.slug} (use --force to overwrite)"

@@ -155,6 +155,9 @@ class BriefingPayload(BasePipelineEventPayload):
     category_slug: str | None = None
     article_count: int | None = None
     category_count: int | None = None
+    selected_category_count: int | None = None
+    enqueued_category_count: int | None = None
+    failed_category_count: int | None = None
     ai_model: str | None = None
     retry_exhausted: bool | None = None
 
