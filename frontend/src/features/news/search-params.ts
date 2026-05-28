@@ -18,19 +18,11 @@ import { isPerPageOption } from "./per-page";
 
 const CATEGORY_SLUG_PATTERN = /^[a-z0-9][a-z0-9_]{0,49}$/;
 const MAX_PAGE = 10_000;
-const MAX_SEARCH_QUERY_LENGTH = 200;
 
 const CategorySlug = z.preprocess((v) => {
   if (typeof v !== "string") return undefined;
   const slug = v.trim();
   return CATEGORY_SLUG_PATTERN.test(slug) ? slug : undefined;
-}, z.string().optional());
-
-const SearchQuery = z.preprocess((v) => {
-  if (typeof v !== "string") return undefined;
-  const q = v.trim();
-  if (!q || q.length > MAX_SEARCH_QUERY_LENGTH) return undefined;
-  return q;
 }, z.string().optional());
 
 function boundedIntFromString(max: number) {
@@ -63,30 +55,25 @@ const ArticleQueryParamsSchema = z.object({
   sortOrder: SortOrder,
   page: boundedIntFromString(MAX_PAGE),
   perPage: PerPageFromAllowlist,
-  q: SearchQuery,
 });
 
 /**
- * SSR の `searchParams` を `ArticleQuery` + 検索クエリ q に正規化する。
+ * SSR の `searchParams` を `ArticleQuery` に正規化する。
  * 無効値・配列値・範囲外の値は未指定扱いにし、オブジェクトに含めない。
  */
 export function parseArticleQuery(raw: SearchParams): {
   query: ArticleQuery;
-  q?: string;
 } {
   const result = ArticleQueryParamsSchema.safeParse(raw);
   // schema の各フィールドは preprocess 段階で型不一致を undefined に丸めるため
   // safeParse は基本 success になる。failure は schema 側のバグ扱いで空クエリへ。
   const data = result.success ? result.data : {};
-  const { q, ...rest } = data;
 
   const query: ArticleQuery = {};
-  if (rest.category) query.category = rest.category;
-  if (rest.sortOrder) query.sortOrder = rest.sortOrder;
-  if (rest.page !== undefined) query.page = rest.page;
-  if (rest.perPage !== undefined) query.perPage = rest.perPage;
+  if (data.category) query.category = data.category;
+  if (data.sortOrder) query.sortOrder = data.sortOrder;
+  if (data.page !== undefined) query.page = data.page;
+  if (data.perPage !== undefined) query.perPage = data.perPage;
 
-  // exactOptionalPropertyTypes 下で q?: string に undefined を明示代入
-  // できないため、未指定時は q キー自体を省く。
-  return q !== undefined ? { query, q } : { query };
+  return { query };
 }

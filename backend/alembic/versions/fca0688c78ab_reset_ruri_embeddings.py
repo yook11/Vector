@@ -14,9 +14,6 @@ NULL に更新する (片側だけだと制約違反)。
 HNSW インデックス ``idx_article_analyses_embedding`` は DROP しない。pgvector
 HNSW は incremental 追加に対応しており、backfill による段階的な再構築で十分。
 
-Redis 側のクエリ embedding キャッシュ (``embed:query:*``) は本マイグレーション
-の責務外。デプロイ手順として別途 flush する (PR 本文参照)。
-
 Revision ID: fca0688c78ab
 Revises: k7_articles_source_strict
 Create Date: 2026-05-01 04:20:27.422498

@@ -2,9 +2,7 @@
 
 CI / Schemathesis 等、外部 API (Gemini) への到達を避けたい環境で使う。
 本番経路の Pure DI composition root (``app/brokers.py``) は ``GeminiEmbedder`` を
-hardcode しており、本クラスを import しない。Search BC 用 stub は
-``tests/fakes/stub_query_embedder.py::StubQueryEmbedder`` に独立する
-(BC 分離の徹底、memory `feedback_no_share_different_problems`)。
+hardcode しており、本クラスを import しない。
 
 セキュリティ / 設計上の不変条件:
 - 入力テキストの SHA256 を seed に決定的なベクトルを生成する

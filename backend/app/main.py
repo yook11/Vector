@@ -16,8 +16,6 @@ from app.exception_handlers import (
     duplicate_handler,
     invalid_query_handler,
     not_found_handler,
-    search_error_handler,
-    search_quota_exceeded_handler,
 )
 from app.exceptions import DuplicateError, InvalidQueryError, NotFoundError
 from app.insights.briefing.router.briefing import router as briefing_router
@@ -29,9 +27,6 @@ from app.routers import (
     categories,
     watchlist,
 )
-from app.search.errors import SearchError
-from app.search.quota import SearchQuotaExceededError
-from app.search.router import router as search_router
 
 logger = structlog.get_logger(__name__)
 
@@ -41,10 +36,10 @@ def _sanitize_validation_errors(
 ) -> list[dict[str, Any]]:
     """Pydantic v2 ``ValidationError.errors()`` から rejected input を落とす。
 
-    各 error の ``input`` は送信値そのもの (例: ``q="x"*1000`` で長さ違反すれば
-    入力 1000 文字がそのまま入る)、``ctx`` は型検査の文脈値、``url`` は pydantic
-    docs URL。これらは PII / 事業データを含みうるため span attribute に残すのは
-    ``type`` / ``loc`` / ``msg`` (= どこで何を期待していたか) のみ。
+    各 error の ``input`` は送信値そのもの (例: 長すぎる body field で長さ違反
+    すれば入力文字列がそのまま入る)、``ctx`` は型検査の文脈値、``url`` は
+    pydantic docs URL。これらは PII / 事業データを含みうるため span attribute
+    に残すのは ``type`` / ``loc`` / ``msg`` (= どこで何を期待していたか) のみ。
     """
     return [
         {"type": e.get("type"), "loc": e.get("loc"), "msg": e.get("msg")}
@@ -61,8 +56,8 @@ def _drop_endpoint_args_on_success(
     成功時は ``None`` を返して log message を作らず span だけ残す
     (= 「成功は沈黙、失敗だけ説明する」)。validation error 時は ``errors`` を
     sanitize してから返し、``values`` (parsed body / query) と各 error の
-    ``input`` (送信値) は捨てる。検索クエリ (q) や article body などが
-    Logfire dashboard に焼かれない構造的契約 (feedback_failure_visibility と
+    ``input`` (送信値) は捨てる。article body などが Logfire dashboard に
+    焼かれない構造的契約 (feedback_failure_visibility と
     整合: 失敗は見せ、成功本文は隠す)。
     """
     errors = attributes.get("errors")
@@ -169,13 +164,7 @@ app.add_exception_handler(NotFoundError, not_found_handler)
 app.add_exception_handler(DuplicateError, duplicate_handler)
 app.add_exception_handler(InvalidQueryError, invalid_query_handler)
 
-app.add_exception_handler(SearchError, search_error_handler)
-app.add_exception_handler(SearchQuotaExceededError, search_quota_exceeded_handler)
-
 # ルーター登録
-# NOTE: /articles/search を /articles/{article_id} より先にマッチさせるため、
-# semantic_search を articles より先に登録する必要がある。
-app.include_router(search_router)
 app.include_router(articles.router)
 app.include_router(categories.router)
 app.include_router(watchlist.router)
@@ -206,8 +195,8 @@ async def health_check() -> dict:
 
 # operation_id を route handler の関数名に揃える。
 # 指定しない場合 FastAPI 既定で `<fn>_<path>_<method>` 形になり、フロントの型生成
-# (hey-api SDK) が `searchArticlesApiV1ArticlesSearchGet` のような長大な関数名を
-# 出力する。Vector では関数名がアプリ内でユニークなので、route.name (= 関数名)
+# (hey-api SDK) が path 由来の長大な関数名を出力する。Vector では関数名が
+# アプリ内でユニークなので、route.name (= 関数名)
 # をそのまま operation_id とする FastAPI 標準パターンを採用する。
 for _route in app.routes:
     if isinstance(_route, APIRoute):

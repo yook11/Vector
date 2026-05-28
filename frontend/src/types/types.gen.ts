@@ -177,22 +177,6 @@ export type EmptyWeeklyTrends = {
 };
 
 /**
- * EntityName
- *
- * エンティティの固有名。
- *
- * Invariants:
- * - NFKC 正規化 + 前後空白除去 + 連続空白を単一半角空白に統合
- * - 正規化後 1-200 文字
- * - 大文字小文字は保持（"NVIDIA" を表示用にそのまま維持）
- * - 生成後は不変
- *
- * `match_key` プロパティは正規化済み文字列を str.lower() した値を返す。
- * 重複検出・JOIN キーに使う。casefold は使わない (AI 抽出 casing は文脈情報)。
- */
-export type EntityName = string;
-
-/**
  * FetchRequest
  *
  * POST /api/v1/admin/pipeline/fetch のリクエストボディ。
@@ -233,6 +217,22 @@ export type HttpValidationError = {
      */
     detail?: Array<ValidationError>;
 };
+
+/**
+ * MentionName
+ *
+ * mention の固有名 (週次集計の表示ラベル)。
+ *
+ * Invariants:
+ * - NFKC 正規化 + 前後空白除去 + 連続空白を単一半角空白に統合
+ * - 正規化後 1-200 文字
+ * - 大文字小文字は保持（"NVIDIA" を表示用にそのまま維持）
+ * - 生成後は不変
+ *
+ * `match_key` プロパティは正規化済み文字列を str.lower() した値を返す。
+ * 重複検出・JOIN キーに使う。casefold は使わない (AI 抽出 casing は文脈情報)。
+ */
+export type MentionName = string;
 
 /**
  * MentionType
@@ -448,11 +448,6 @@ export type ReadyWeeklyTrends = {
 export type SafeUrl = string;
 
 /**
- * SortBy
- */
-export type SortBy = 'date' | 'relevance';
-
-/**
  * SortOrder
  */
 export type SortOrder = 'asc' | 'desc';
@@ -610,7 +605,7 @@ export type CategoryTrendsOut = {
  * _EntityTrendOut
  */
 export type EntityTrendOut = {
-    name: EntityName;
+    name: MentionName;
     type: MentionType;
     /**
      * Currentcount
@@ -630,7 +625,7 @@ export type EntityTrendOut = {
  * _NewEntityOut
  */
 export type NewEntityOut = {
-    name: EntityName;
+    name: MentionName;
     type: MentionType;
     /**
      * Currentcount
@@ -651,58 +646,6 @@ export type StoryOut = {
      */
     articleIds: Array<number>;
 };
-
-export type SearchArticlesData = {
-    body?: never;
-    headers?: {
-        /**
-         * Authorization
-         */
-        authorization?: string | null;
-    };
-    path?: never;
-    query: {
-        /**
-         * Page
-         */
-        page?: number;
-        /**
-         * Perpage
-         */
-        perPage?: number;
-        /**
-         * Q
-         */
-        q: string;
-        sortBy?: SortBy;
-        /**
-         * Category
-         *
-         * Outbound primary filter key. Accepts a category slug.
-         */
-        category?: CategorySlug | null;
-        sortOrder?: SortOrder;
-    };
-    url: '/api/v1/articles/search';
-};
-
-export type SearchArticlesErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type SearchArticlesError = SearchArticlesErrors[keyof SearchArticlesErrors];
-
-export type SearchArticlesResponses = {
-    /**
-     * Successful Response
-     */
-    200: PaginatedArticleResponse;
-};
-
-export type SearchArticlesResponse = SearchArticlesResponses[keyof SearchArticlesResponses];
 
 export type ListArticlesData = {
     body?: never;
@@ -728,6 +671,10 @@ export type ListArticlesData = {
 };
 
 export type ListArticlesErrors = {
+    /**
+     * Bad request
+     */
+    400: unknown;
     /**
      * Validation Error
      */
@@ -763,6 +710,10 @@ export type GetSimilarArticlesData = {
 };
 
 export type GetSimilarArticlesErrors = {
+    /**
+     * Bad request
+     */
+    400: unknown;
     /**
      * News article not found
      */
@@ -800,6 +751,10 @@ export type GetArticleData = {
 
 export type GetArticleErrors = {
     /**
+     * Bad request
+     */
+    400: unknown;
+    /**
      * News article not found
      */
     404: unknown;
@@ -835,6 +790,10 @@ export type ListCategoriesData = {
 
 export type ListCategoriesErrors = {
     /**
+     * Bad request
+     */
+    400: unknown;
+    /**
      * Validation Error
      */
     422: HttpValidationError;
@@ -865,6 +824,10 @@ export type ListWatchlistIdsData = {
 };
 
 export type ListWatchlistIdsErrors = {
+    /**
+     * Bad request
+     */
+    400: unknown;
     /**
      * Validation Error
      */
@@ -906,6 +869,10 @@ export type ListArticlesInWatchlistData = {
 
 export type ListArticlesInWatchlistErrors = {
     /**
+     * Bad request
+     */
+    400: unknown;
+    /**
      * Validation Error
      */
     422: HttpValidationError;
@@ -936,6 +903,10 @@ export type AddToWatchlistData = {
 };
 
 export type AddToWatchlistErrors = {
+    /**
+     * Bad request
+     */
+    400: unknown;
     /**
      * News article not found
      */
@@ -975,6 +946,10 @@ export type RemoveFromWatchlistData = {
 
 export type RemoveFromWatchlistErrors = {
     /**
+     * Bad request
+     */
+    400: unknown;
+    /**
      * Watchlist item not found
      */
     404: unknown;
@@ -1009,6 +984,10 @@ export type GetWeeklyTrendsData = {
 };
 
 export type GetWeeklyTrendsErrors = {
+    /**
+     * Bad request
+     */
+    400: unknown;
     /**
      * Validation Error
      */
@@ -1047,6 +1026,10 @@ export type ListBriefingsData = {
 
 export type ListBriefingsErrors = {
     /**
+     * Bad request
+     */
+    400: unknown;
+    /**
      * Validation Error
      */
     422: HttpValidationError;
@@ -1082,6 +1065,10 @@ export type GetLatestBriefingData = {
 };
 
 export type GetLatestBriefingErrors = {
+    /**
+     * Bad request
+     */
+    400: unknown;
     /**
      * category not found
      */
@@ -1124,6 +1111,10 @@ export type ListNewsSourcesData = {
 
 export type ListNewsSourcesErrors = {
     /**
+     * Bad request
+     */
+    400: unknown;
+    /**
      * Validation Error
      */
     422: HttpValidationError;
@@ -1154,6 +1145,10 @@ export type CreateNewsSourceData = {
 };
 
 export type CreateNewsSourceErrors = {
+    /**
+     * Bad request
+     */
+    400: unknown;
     /**
      * Validation Error
      */
@@ -1190,6 +1185,10 @@ export type DeleteNewsSourceData = {
 };
 
 export type DeleteNewsSourceErrors = {
+    /**
+     * Bad request
+     */
+    400: unknown;
     /**
      * News source not found
      */
@@ -1231,6 +1230,10 @@ export type ActivateSourceData = {
 
 export type ActivateSourceErrors = {
     /**
+     * Bad request
+     */
+    400: unknown;
+    /**
      * News source not found
      */
     404: unknown;
@@ -1271,6 +1274,10 @@ export type DeactivateSourceData = {
 
 export type DeactivateSourceErrors = {
     /**
+     * Bad request
+     */
+    400: unknown;
+    /**
      * News source not found
      */
     404: unknown;
@@ -1309,6 +1316,10 @@ export type FetchNewsData = {
 
 export type FetchNewsErrors = {
     /**
+     * Bad request
+     */
+    400: unknown;
+    /**
      * Validation Error
      */
     422: HttpValidationError;
@@ -1330,6 +1341,13 @@ export type HealthCheckData = {
     path?: never;
     query?: never;
     url: '/api/v1/health';
+};
+
+export type HealthCheckErrors = {
+    /**
+     * Bad request
+     */
+    400: unknown;
 };
 
 export type HealthCheckResponses = {

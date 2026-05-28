@@ -2,7 +2,7 @@
 
 import type { Client, Options as Options2, TDataShape } from './client';
 import { client } from './client.gen';
-import type { ActivateSourceData, ActivateSourceErrors, ActivateSourceResponses, AddToWatchlistData, AddToWatchlistErrors, AddToWatchlistResponses, CreateNewsSourceData, CreateNewsSourceErrors, CreateNewsSourceResponses, DeactivateSourceData, DeactivateSourceErrors, DeactivateSourceResponses, DeleteNewsSourceData, DeleteNewsSourceErrors, DeleteNewsSourceResponses, FetchNewsData, FetchNewsErrors, FetchNewsResponses, GetArticleData, GetArticleErrors, GetArticleResponses, GetLatestBriefingData, GetLatestBriefingErrors, GetLatestBriefingResponses, GetSimilarArticlesData, GetSimilarArticlesErrors, GetSimilarArticlesResponses, GetWeeklyTrendsData, GetWeeklyTrendsErrors, GetWeeklyTrendsResponses, HealthCheckData, HealthCheckResponses, ListArticlesData, ListArticlesErrors, ListArticlesInWatchlistData, ListArticlesInWatchlistErrors, ListArticlesInWatchlistResponses, ListArticlesResponses, ListBriefingsData, ListBriefingsErrors, ListBriefingsResponses, ListCategoriesData, ListCategoriesErrors, ListCategoriesResponses, ListNewsSourcesData, ListNewsSourcesErrors, ListNewsSourcesResponses, ListWatchlistIdsData, ListWatchlistIdsErrors, ListWatchlistIdsResponses, RemoveFromWatchlistData, RemoveFromWatchlistErrors, RemoveFromWatchlistResponses, SearchArticlesData, SearchArticlesErrors, SearchArticlesResponses } from './types.gen';
+import type { ActivateSourceData, ActivateSourceErrors, ActivateSourceResponses, AddToWatchlistData, AddToWatchlistErrors, AddToWatchlistResponses, CreateNewsSourceData, CreateNewsSourceErrors, CreateNewsSourceResponses, DeactivateSourceData, DeactivateSourceErrors, DeactivateSourceResponses, DeleteNewsSourceData, DeleteNewsSourceErrors, DeleteNewsSourceResponses, FetchNewsData, FetchNewsErrors, FetchNewsResponses, GetArticleData, GetArticleErrors, GetArticleResponses, GetLatestBriefingData, GetLatestBriefingErrors, GetLatestBriefingResponses, GetSimilarArticlesData, GetSimilarArticlesErrors, GetSimilarArticlesResponses, GetWeeklyTrendsData, GetWeeklyTrendsErrors, GetWeeklyTrendsResponses, HealthCheckData, HealthCheckErrors, HealthCheckResponses, ListArticlesData, ListArticlesErrors, ListArticlesInWatchlistData, ListArticlesInWatchlistErrors, ListArticlesInWatchlistResponses, ListArticlesResponses, ListBriefingsData, ListBriefingsErrors, ListBriefingsResponses, ListCategoriesData, ListCategoriesErrors, ListCategoriesResponses, ListNewsSourcesData, ListNewsSourcesErrors, ListNewsSourcesResponses, ListWatchlistIdsData, ListWatchlistIdsErrors, ListWatchlistIdsResponses, RemoveFromWatchlistData, RemoveFromWatchlistErrors, RemoveFromWatchlistResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -17,20 +17,6 @@ export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends 
      */
     meta?: Record<string, unknown>;
 };
-
-/**
- * Search Articles
- *
- * セマンティック類似度で記事を検索する (red-team C1 対策: auth + per-user quota)。
- *
- * 認証済みユーザーごとに 1 日 ``semantic_search_daily_quota_per_user`` 回まで
- * embedding を生成する (Redis atomic counter)。cache hit はクォータを消費しない。
- * anon access は 401、quota 超過は 429。
- *
- * レスポンスは user 非依存。per-user の watchlist 状態は
- * GET /api/v1/me/watchlist/ids で別取得し frontend で merge する。
- */
-export const searchArticles = <ThrowOnError extends boolean = false>(options: Options<SearchArticlesData, ThrowOnError>) => (options.client ?? client).get<SearchArticlesResponses, SearchArticlesErrors, ThrowOnError>({ url: '/api/v1/articles/search', ...options });
 
 /**
  * List Articles
@@ -181,4 +167,4 @@ export const fetchNews = <ThrowOnError extends boolean = false>(options?: Option
 /**
  * Health Check
  */
-export const healthCheck = <ThrowOnError extends boolean = false>(options?: Options<HealthCheckData, ThrowOnError>) => (options?.client ?? client).get<HealthCheckResponses, unknown, ThrowOnError>({ url: '/api/v1/health', ...options });
+export const healthCheck = <ThrowOnError extends boolean = false>(options?: Options<HealthCheckData, ThrowOnError>) => (options?.client ?? client).get<HealthCheckResponses, HealthCheckErrors, ThrowOnError>({ url: '/api/v1/health', ...options });

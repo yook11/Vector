@@ -16,7 +16,7 @@ AIで翻訳・要約・インパクト分析を行う投資ダッシュボード
 
 - テックニュースの自動収集（**44+ source fetchers** — RSS / Atom / HTML listing / Sitemap、Hacker News API 含む）
 - AI翻訳・要約・インパクト分析（**Gemini + DeepSeek + OpenAI** の multi-provider）
-- セマンティック検索・類似記事推薦（pgvector）+ 認証ユーザー単位の 1 日 quota
+- 類似記事推薦（pgvector）
 - 重複記事の自動検出・グループ化
 - ウォッチリスト（記事ブックマーク）
 - **週次トレンドダイジェスト** (`weekly_trends_snapshots`) と **週次 LLM ブリーフィング**
@@ -33,7 +33,7 @@ AIで翻訳・要約・インパクト分析を行う投資ダッシュボード
 | Auth | Better Auth (BFF Proxy) | Cookie ベースセッション + 内部 API ヘッダー認証 |
 | Database | PostgreSQL 18 + pgvector | Alembic マイグレーション、**二重ロール** (vector_app / vector_auth) |
 | AI | **Gemini + DeepSeek + OpenAI** (multi-provider) | Pure DI で `backend/app/brokers.py` に hardcode |
-| Embedding | `gemini-embedding-001` (768-dim halfvec) | pgvector + per-user quota |
+| Embedding | `gemini-embedding-001` (768-dim halfvec) | pgvector |
 | Task Queue | taskiq + Redis (**6 broker 分離**) | metadata / content / analysis / embedding / digest / briefing |
 | CI/CD | GitHub Actions | lint + test + type check + 4 系統 security gate |
 | Infrastructure | Docker Compose (dev) | **10 services**、internal network 中心 |
@@ -117,7 +117,6 @@ Browser
               ├── analysis/     — AI 分析 (Gemini extractor / DeepSeek assessor / Gemini embedder)
               ├── insights/     — snapshot (weekly_trends) / briefing (weekly LLM brief)
               ├── digest/       — 週次トレンドダイジェスト pipeline
-              ├── search/       — semantic search + per-user 1 日 quota
               ├── observability/— pipeline_events 監査 (Discriminated Union payload)
               ├── maintenance/  — back-fill backlog / budget / policy
               └── PostgreSQL 18 + pgvector (二重ロール: vector_app / vector_auth)
@@ -161,8 +160,6 @@ Redis (rate-limit, ephemeral) ◄── proxy.ts sliding window log
 | 週次トレンドスナップショット | 週次ダイジェスト用の集約結果 | `WeeklyTrendsSnapshot` |
 | 週次ブリーフィング | 週次 LLM 生成サマリー (カテゴリ別) | `WeeklyBriefing` |
 | パイプラインイベント | 全 stage 監査ログ (Discriminated Union payload) | `PipelineEvent` |
-| 検索クォータ | 認証ユーザー単位の 1 日 embedding 生成上限 | `SearchQuotaCounter` |
-
 ### ニュース処理パイプライン
 
 ```
@@ -248,12 +245,6 @@ stage モジュールは [backend/app/audit/stages/](backend/app/audit/stages/) 
 | `REDIS_URL_RL` | `redis://redis-rl:6379/0` | frontend rate-limit 専用 (未設定なら REDIS_URL に fallback) |
 | `REDIS_PORT` | `6379` | host から起動するときの参考値 |
 | `RATE_LIMIT_PER_MIN` | `60` | proxy.ts per-IP sliding window 上限 |
-
-### Search Quota
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `SEMANTIC_SEARCH_DAILY_QUOTA_PER_USER` | `100` | 認証ユーザー 1 人の 1 日 embedding 生成上限 (cache miss のみ消費) |
 
 ### Backfill kill switches
 

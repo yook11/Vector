@@ -142,15 +142,6 @@ class Settings(BaseSettings):
     frontend_url: str
     internal_frontend_base_url: str
 
-    # セマンティック検索
-    semantic_search_max_distance: float = 0.8  # コサイン距離のしきい値
-    # 1 ユーザー 1 日あたりの embedding 生成上限。embedding cache miss が起きた
-    # ときだけ消費する (cache hit は無料)。anon は router で 401。
-    # 構造防御: q=$RANDOM で cache miss を強制する DoS を per-user でキャップ
-    # (red-team C1 対策)。memory project_embedding_migration_plan.md の
-    # 根拠数値「100 / day」を採用。
-    semantic_search_daily_quota_per_user: int = 100
-
     # タスクキュー
     redis_url: str = "redis://localhost:6379/0"
 

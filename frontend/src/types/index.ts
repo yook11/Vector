@@ -29,7 +29,6 @@ import type {
   EntityTrendOut,
   ListArticlesData,
   NewEntityOut,
-  SearchArticlesData,
   StoryOut,
 } from "@/types/types.gen";
 
@@ -41,11 +40,6 @@ type StripNull<T> = { [K in keyof T]: Exclude<T[K], null> };
 
 /** Query parameters for GET /articles (article listing). */
 export type ArticleQuery = StripNull<NonNullable<ListArticlesData["query"]>>;
-
-/** Query parameters for GET /articles/search (semantic search). */
-export type SemanticSearchQuery = StripNull<
-  NonNullable<SearchArticlesData["query"]>
->;
 
 // ---------------------------------------------------------------------------
 // Pick narrowing

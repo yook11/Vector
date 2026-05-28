@@ -13,7 +13,7 @@ import { DEFAULT_PER_PAGE, isPerPageOption } from "../per-page";
 import { PerPageSelect } from "./PerPageSelect";
 
 export function NewsFilters() {
-  // SearchBar と同じく <Suspense> 配下なので非 null。空フォールバックで型を確定。
+  // <Suspense> 配下なので非 null。空フォールバックで型を確定。
   const searchParams = useSearchParams() ?? new URLSearchParams();
   const updateSearchParams = useUpdateSearchParams();
   const rawSortOrder = searchParams.get("sortOrder");

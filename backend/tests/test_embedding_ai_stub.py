@@ -1,8 +1,7 @@
 """StubEmbedder の不変条件ユニットテスト (Stage 5 CI 専用 stub)。
 
-Stage 5 BC 分離後、``StubEmbedder`` は ``ReadyForEmbedding`` を受ける document
-専用 hierarchy となった。Search BC 用の stub は
-``tests/fakes/stub_query_embedder.py::StubQueryEmbedder`` に独立する。
+``StubEmbedder`` は ``ReadyForEmbedding`` を受ける Stage 5 document 専用
+hierarchy として扱う。
 """
 
 from __future__ import annotations

@@ -133,40 +133,19 @@ describe("parseArticleQuery", () => {
     });
   });
 
-  describe("q (search term)", () => {
-    it("returns string q passthrough", () => {
-      const { q } = parseArticleQuery({ q: "openai" });
-      expect(q).toBe("openai");
-    });
-
-    it("trims q and rejects blank values", () => {
-      expect(parseArticleQuery({ q: "  openai  " }).q).toBe("openai");
-      expect(parseArticleQuery({ q: "   " }).q).toBeUndefined();
-    });
-
-    it("rejects oversized q values", () => {
-      const { q } = parseArticleQuery({ q: "a".repeat(201) });
-      expect(q).toBeUndefined();
-    });
-
-    it("returns undefined when q is array", () => {
-      const { q } = parseArticleQuery({ q: ["a", "b"] });
-      expect(q).toBeUndefined();
-    });
-
-    it("returns undefined when q is missing", () => {
-      const { q } = parseArticleQuery({});
-      expect(q).toBeUndefined();
+  describe("unknown params", () => {
+    it("ignores retired q search param", () => {
+      expect(parseArticleQuery({ q: "openai" })).not.toHaveProperty("q");
+      expect(parseArticleQuery({ q: "openai" }).query).toEqual({});
     });
   });
 
   it("combines all params into a single query object", () => {
-    const { query, q } = parseArticleQuery({
+    const { query } = parseArticleQuery({
       category: "ai",
       sortOrder: "desc",
       page: "2",
       perPage: "48",
-      q: "claude",
     });
     expect(query).toEqual({
       category: "ai",
@@ -174,6 +153,5 @@ describe("parseArticleQuery", () => {
       page: 2,
       perPage: 48,
     });
-    expect(q).toBe("claude");
   });
 });

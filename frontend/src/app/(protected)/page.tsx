@@ -9,8 +9,6 @@ import {
   NewsList,
   NewsPagination,
   parseArticleQuery,
-  SearchBar,
-  searchArticles,
 } from "@/features/news";
 import { getWatchlistIds } from "@/features/watchlist";
 import type { SearchParams } from "@/lib/types/route";
@@ -36,18 +34,9 @@ async function MobileSidebarTrigger(props: { activeCategory?: string }) {
   return <MobileSidebar categories={items} {...props} />;
 }
 
-async function NewsGridSection({
-  filters,
-  q,
-}: {
-  filters: ArticleQuery;
-  q?: string;
-}) {
-  const fetchNews = q
-    ? searchArticles({ q, ...filters })
-    : getArticles(filters);
+async function NewsGridSection({ filters }: { filters: ArticleQuery }) {
   const [newsData, watchedIds] = await Promise.all([
-    fetchNews,
+    getArticles(filters),
     getWatchlistIds(),
   ]);
   return (
@@ -93,12 +82,11 @@ export default async function DashboardPage({
   searchParams,
 }: DashboardPageProps) {
   const raw = await searchParams;
-  const { query: filters, q } = parseArticleQuery(raw);
+  const { query: filters } = parseArticleQuery(raw);
   // EOP 下で undefined を optional prop に明示代入できないため、
   // 条件付き spread で「未指定 or 値あり」を表現する。
   const categoryProps =
     filters.category !== undefined ? { activeCategory: filters.category } : {};
-  const qProps = q !== undefined ? { q } : {};
 
   return (
     <div className="flex h-full gap-0">
@@ -120,11 +108,8 @@ export default async function DashboardPage({
             <h1 className="text-base font-medium text-foreground">Dashboard</h1>
           </div>
 
-          {/* Controls row: Search + Filters */}
+          {/* Controls row: Filters */}
           <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-            <Suspense>
-              <SearchBar />
-            </Suspense>
             <Suspense>
               <NewsFilters />
             </Suspense>
@@ -132,13 +117,13 @@ export default async function DashboardPage({
 
           {/* News grid */}
           {/* URL searchParams を JSON 化して Suspense key に与えることで、
-              filters / q が変化したときに fallback (skeleton) を再表示する。
+              filters が変化したときに fallback (skeleton) を再表示する。
               watchlist 側 (`(protected)/watchlist/page.tsx`) と統一した戦略。 */}
           <Suspense
-            key={JSON.stringify({ q, filters })}
+            key={JSON.stringify({ filters })}
             fallback={<NewsGridSkeleton />}
           >
-            <NewsGridSection filters={filters} {...qProps} />
+            <NewsGridSection filters={filters} />
           </Suspense>
         </div>
       </main>

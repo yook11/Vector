@@ -81,8 +81,6 @@ from app.models import (  # noqa: F401
     WeeklyBriefing,
 )
 from app.models.base import Base
-from app.search.router import get_embedder_for_search
-from tests.fakes.stub_query_embedder import StubQueryEmbedder
 
 # テスト用 DB は admin (migration role) で接続する: vector_test の create / drop、
 # auth schema 作成、Base.metadata.create_all、seed user 投入は table owner
@@ -258,7 +256,6 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient]:
             yield db_session
 
     app.dependency_overrides[get_session] = override_session
-    app.dependency_overrides[get_embedder_for_search] = lambda: StubQueryEmbedder()
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test",
@@ -289,7 +286,6 @@ async def authed_client(
             yield db_session
 
     app.dependency_overrides[get_session] = override_session
-    app.dependency_overrides[get_embedder_for_search] = lambda: StubQueryEmbedder()
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test",
@@ -315,7 +311,6 @@ async def admin_client(
             yield db_session
 
     app.dependency_overrides[get_session] = override_session
-    app.dependency_overrides[get_embedder_for_search] = lambda: StubQueryEmbedder()
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test",

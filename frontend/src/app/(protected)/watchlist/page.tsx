@@ -9,9 +9,9 @@ import {
   isPerPageOption,
   NewsList,
   NewsPagination,
-  parseArticleQuery,
-  PerPageSelect,
   type PerPageOption,
+  PerPageSelect,
+  parseArticleQuery,
 } from "@/features/news";
 import { getWatchlist } from "@/features/watchlist";
 import type { SearchParams } from "@/lib/types/route";

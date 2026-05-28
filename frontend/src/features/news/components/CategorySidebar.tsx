@@ -25,7 +25,7 @@ export function CategorySidebar({
 
   const isAll = !activeCategory;
 
-  // Preserve existing filter params (sortOrder, perPage, q etc.) but reset
+  // Preserve existing filter params (sortOrder, perPage etc.) but reset
   // category and page when navigating between category facets.
   function buildHref(category: string | undefined): string {
     return buildHrefBase({ category, page: undefined });

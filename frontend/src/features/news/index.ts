@@ -2,7 +2,6 @@ export { getArticleById } from "./api/get-article-by-id";
 export { getArticles } from "./api/get-articles";
 export { getCategories } from "./api/get-categories";
 export { getSimilarArticles } from "./api/get-similar-articles";
-export { searchArticles } from "./api/search-articles";
 export { CategorySidebar } from "./components/CategorySidebar";
 export { MobileSidebar } from "./components/MobileSidebar";
 export { NewsDetail } from "./components/NewsDetail";
@@ -11,7 +10,6 @@ export { NewsList } from "./components/NewsList";
 export { NewsPagination } from "./components/NewsPagination";
 export { PerPageSelect } from "./components/PerPageSelect";
 export { RelatedArticles } from "./components/RelatedArticles";
-export { SearchBar } from "./components/SearchBar";
 export {
   DEFAULT_PER_PAGE,
   isPerPageOption,

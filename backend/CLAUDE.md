@@ -12,7 +12,6 @@ bounded context (ドメイン):
 - `app/collection/` — ニュース収集 BC。stage1=取得 (`article_acquisition/`) / stage2=本文補完 (`article_completion/`) / 宣言 (`sources/`)
 - `app/analysis/` — 記事単位 AI 分析。投資判定 (`assessment/`) / 本文整形 (`curation/`) / ベクトル化 (`embedding/`)
 - `app/insights/` — 集約 AI。週次トレンド (`snapshot/`) / 週次ブリーフィング (`briefing/`)
-- `app/search/` — semantic search + per-user 1 日 quota
 - `app/audit/` — `pipeline_events` 監査基盤 (Discriminated Union payload / per-stage semantic API in `stages/`)
 - `app/queue/` — Pure DI composition root (broker / scheduler / AI provider 配線) + cron task + kiq message DTO
 

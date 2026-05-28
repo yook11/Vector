@@ -13,9 +13,8 @@ Stage 固有の以下は translator に持ち込まない (stage-local で扱う
 - finish_reason 判定 (SDK response attribute 由来、exception ではない)
 - ValidationError / JSONDecodeError / response shape 違反 (Layer 2-B、stage 責任)
 
-Search BC (``app.search.embedding.gemini.GeminiQueryEmbedder``) は memory
-``feedback_no_share_different_problems`` により独立 hierarchy として複製されており、
-本 module は import しない。
+ユーザー任意 query embedding 経路は廃止済み。記事 embedding pipeline は
+Stage 5 document embedding として本 translator を使い続ける。
 """
 
 from __future__ import annotations
