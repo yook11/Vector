@@ -10,6 +10,7 @@ from app.audit.domain.event import EventType, Stage
 from app.audit.domain.payloads import (
     AcquisitionPayload,
     AssessmentPayload,
+    BackfillPayload,
     BasePipelineEventPayload,
     BriefingPayload,
     CompletionPayload,
@@ -23,6 +24,7 @@ from app.audit.repository import PipelineEventRepository
 __all__ = [
     "AcquisitionPayload",
     "AssessmentPayload",
+    "BackfillPayload",
     "BasePipelineEventPayload",
     "BriefingPayload",
     "CompletionPayload",

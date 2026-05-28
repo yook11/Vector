@@ -119,6 +119,34 @@ async def test_pending_curation_returns_articles_without_curation(
 
 
 @pytest.mark.asyncio
+async def test_pending_curation_targets_include_audit_snapshot(
+    db_session: AsyncSession,
+    sample_source: NewsSource,
+) -> None:
+    """curation backfill target は article_id / source_name を含む。"""
+    now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
+    article = await _make_article(
+        db_session,
+        sample_source,
+        url="https://e.com/curation-target",
+        created_at=now - timedelta(hours=1),
+    )
+
+    backlog = PipelineBacklog(db_session)
+    targets = await backlog.curation_targets_pending(
+        created_before=now - timedelta(minutes=30),
+        created_after=now - timedelta(days=7),
+        limit=10,
+    )
+    assert any(
+        target.target_id == article.id
+        and target.article_id == article.id
+        and target.source_name == str(sample_source.name)
+        for target in targets
+    )
+
+
+@pytest.mark.asyncio
 async def test_pending_curation_excludes_too_recent(
     db_session: AsyncSession,
     sample_source: NewsSource,
@@ -373,6 +401,35 @@ async def test_pending_assessment_returns_curations_without_analysis_or_rejectio
 
 
 @pytest.mark.asyncio
+async def test_pending_assessment_targets_include_audit_snapshot(
+    db_session: AsyncSession,
+    sample_source: NewsSource,
+) -> None:
+    """assessment backfill target は curation_id / article_id / source_name を含む。"""
+    now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
+    article = await _make_article(
+        db_session,
+        sample_source,
+        url="https://e.com/assessment-target",
+        created_at=now - timedelta(hours=1),
+    )
+    curation = await _make_curation(db_session, article)
+
+    backlog = PipelineBacklog(db_session)
+    targets = await backlog.assessment_targets_pending(
+        created_before=now - timedelta(minutes=30),
+        created_after=now - timedelta(days=7),
+        limit=10,
+    )
+    assert any(
+        target.target_id == curation.id
+        and target.article_id == article.id
+        and target.source_name == str(sample_source.name)
+        for target in targets
+    )
+
+
+@pytest.mark.asyncio
 async def test_pending_assessment_excludes_curations_with_analysis(
     db_session: AsyncSession,
     sample_source: NewsSource,
@@ -614,6 +671,41 @@ async def test_pending_embedding_returns_analysis_with_null_embedding(
         limit=10,
     )
     assert analysis.id in ids
+
+
+@pytest.mark.asyncio
+async def test_pending_embedding_targets_include_audit_snapshot(
+    db_session: AsyncSession,
+    sample_source: NewsSource,
+    sample_categories: list[Category],
+) -> None:
+    """embedding backfill target は analysis_id / article_id / source_name を含む。"""
+    now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
+    article = await _make_article(
+        db_session,
+        sample_source,
+        url="https://e.com/embedding-target",
+        created_at=now - timedelta(hours=1),
+    )
+    curation = await _make_curation(db_session, article)
+    analysis = await _make_in_scope_assessment(
+        db_session,
+        curation,
+        sample_categories[0],
+    )
+
+    backlog = PipelineBacklog(db_session)
+    targets = await backlog.embedding_targets_pending(
+        created_before=now - timedelta(minutes=30),
+        created_after=now - timedelta(days=7),
+        limit=10,
+    )
+    assert any(
+        target.target_id == analysis.id
+        and target.article_id == article.id
+        and target.source_name == str(sample_source.name)
+        for target in targets
+    )
 
 
 @pytest.mark.asyncio

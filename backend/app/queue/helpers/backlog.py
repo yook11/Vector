@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 
 from sqlalchemy import func, select
@@ -20,7 +21,17 @@ from app.models.backfill_exclusion import (
 )
 from app.models.curation_noise import CurationNoise
 from app.models.in_scope_assessment import InScopeAssessment
+from app.models.news_source import NewsSource
 from app.models.out_of_scope_assessment import OutOfScopeAssessment
+
+
+@dataclass(frozen=True, slots=True)
+class BackfillTarget:
+    """backfill が enqueue と監査に使う対象 snapshot。"""
+
+    target_id: int
+    article_id: int
+    source_name: str | None
 
 
 class PipelineBacklog:
@@ -65,6 +76,31 @@ class PipelineBacklog:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
+    async def curation_targets_pending(
+        self,
+        *,
+        created_before: datetime,
+        created_after: datetime,
+        limit: int,
+    ) -> list[BackfillTarget]:
+        """Stage 3 backfill の enqueue / audit 対象を返す。"""
+        stmt = (
+            select(Article.id, Article.id, NewsSource.name)
+            .outerjoin(NewsSource, NewsSource.id == Article.source_id)
+            .outerjoin(ArticleCuration, ArticleCuration.article_id == Article.id)
+            .outerjoin(CurationNoise, CurationNoise.article_id == Article.id)
+            .where(
+                ArticleCuration.id.is_(None),
+                CurationNoise.id.is_(None),
+                Article.created_at < created_before,
+                Article.created_at >= created_after,
+            )
+            .order_by(Article.created_at.asc())
+            .limit(limit)
+        )
+        rows = (await self._session.execute(stmt)).all()
+        return [_target_from_row(row) for row in rows]
+
     async def article_ids_aged_out_curation(
         self,
         *,
@@ -91,6 +127,43 @@ class PipelineBacklog:
         )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
+
+    async def assessment_targets_pending(
+        self,
+        *,
+        created_before: datetime,
+        created_after: datetime,
+        limit: int,
+    ) -> list[BackfillTarget]:
+        """Stage 4 backfill の enqueue / audit 対象を返す。"""
+        stmt = (
+            select(ArticleCuration.id, ArticleCuration.article_id, NewsSource.name)
+            .join(Article, Article.id == ArticleCuration.article_id)
+            .outerjoin(NewsSource, NewsSource.id == Article.source_id)
+            .outerjoin(
+                InScopeAssessment,
+                InScopeAssessment.curation_id == ArticleCuration.id,
+            )
+            .outerjoin(
+                OutOfScopeAssessment,
+                OutOfScopeAssessment.curation_id == ArticleCuration.id,
+            )
+            .outerjoin(
+                AssessmentBackfillExclusion,
+                AssessmentBackfillExclusion.curation_id == ArticleCuration.id,
+            )
+            .where(
+                InScopeAssessment.id.is_(None),
+                OutOfScopeAssessment.id.is_(None),
+                AssessmentBackfillExclusion.curation_id.is_(None),
+                Article.created_at < created_before,
+                Article.created_at >= created_after,
+            )
+            .order_by(Article.created_at.asc())
+            .limit(limit)
+        )
+        rows = (await self._session.execute(stmt)).all()
+        return [_target_from_row(row) for row in rows]
 
     async def curation_ids_pending_assessment(
         self,
@@ -247,6 +320,38 @@ class PipelineBacklog:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
+    async def embedding_targets_pending(
+        self,
+        *,
+        created_before: datetime,
+        created_after: datetime,
+        limit: int,
+    ) -> list[BackfillTarget]:
+        """Stage 5 backfill の enqueue / audit 対象を返す。"""
+        stmt = (
+            select(InScopeAssessment.id, ArticleCuration.article_id, NewsSource.name)
+            .join(
+                ArticleCuration,
+                ArticleCuration.id == InScopeAssessment.curation_id,
+            )
+            .join(Article, Article.id == ArticleCuration.article_id)
+            .outerjoin(NewsSource, NewsSource.id == Article.source_id)
+            .outerjoin(
+                EmbeddingBackfillExclusion,
+                EmbeddingBackfillExclusion.analysis_id == InScopeAssessment.id,
+            )
+            .where(
+                InScopeAssessment.embedding.is_(None),
+                EmbeddingBackfillExclusion.analysis_id.is_(None),
+                Article.created_at < created_before,
+                Article.created_at >= created_after,
+            )
+            .order_by(Article.created_at.asc())
+            .limit(limit)
+        )
+        rows = (await self._session.execute(stmt)).all()
+        return [_target_from_row(row) for row in rows]
+
     async def analysis_ids_aged_out_embedding(
         self,
         *,
@@ -275,3 +380,12 @@ class PipelineBacklog:
         )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
+
+
+def _target_from_row(row: tuple[int, int, object | None]) -> BackfillTarget:
+    target_id, article_id, source_name = row
+    return BackfillTarget(
+        target_id=target_id,
+        article_id=article_id,
+        source_name=str(source_name) if source_name is not None else None,
+    )

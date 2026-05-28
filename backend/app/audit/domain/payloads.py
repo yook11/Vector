@@ -31,6 +31,22 @@ class DispatchPayload(BasePipelineEventPayload):
     skip_reason: Literal["no_active_sources"] | None = None
 
 
+class BackfillPayload(BasePipelineEventPayload):
+    """Backfill stage payload。"""
+
+    kind: Literal["backfill"] = "backfill"
+    backfill_stage: Literal["curate", "assess", "embed"]
+    run_id: str | None = None
+    target_kind: Literal["article", "curation", "analysis"] | None = None
+    target_id: int | None = None
+    selected_count: int | None = None
+    granted_count: int | None = None
+    enqueued_count: int | None = None
+    failed_count: int | None = None
+    limit: int | None = None
+    daily_max: int | None = None
+
+
 class AcquisitionPayload(BasePipelineEventPayload):
     """Stage 1 acquisition payload。"""
 
@@ -145,6 +161,7 @@ class BriefingPayload(BasePipelineEventPayload):
 
 PipelineEventPayload = Annotated[
     DispatchPayload
+    | BackfillPayload
     | AcquisitionPayload
     | CompletionPayload
     | CurationPayload

@@ -8,6 +8,7 @@
 - ``curation`` — Stage 3 (curation)
 - ``assessment`` — Stage 4 (assessment)
 - ``embedding`` — Stage 5 (embedding)
+- ``backfill`` — AI 分析系 backfill run / enqueue
 - ``briefing`` — 週次 LLM briefing
 
 各 *AuditRepository は ``app.audit.repository.PipelineEventRepository`` を

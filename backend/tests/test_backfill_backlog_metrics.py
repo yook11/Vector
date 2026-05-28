@@ -31,6 +31,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from logfire.testing import CaptureLogfire
 
+from app.queue.helpers.backlog import BackfillTarget
 from app.queue.tasks import backfill
 
 # ---------------------------------------------------------------------------
@@ -65,6 +66,15 @@ def _ctx_with_session_factory() -> MagicMock:
     ctx = MagicMock()
     ctx.state.session_factory = _make_session_factory()
     return ctx
+
+
+def _target(curation_id: int) -> BackfillTarget:
+    """assessment backfill target の test double を返す。"""
+    return BackfillTarget(
+        target_id=curation_id,
+        article_id=curation_id + 1000,
+        source_name="VentureBeat",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -103,12 +113,13 @@ async def test_gauge_records_true_count_not_capped_by_limit(
             "app.queue.tasks.backfill.consume_daily_budget",
             AsyncMock(return_value=0),  # daily_budget で early-return → kiq 不要
         ),
+        patch("app.queue.tasks.backfill._append_backfill_run_event", AsyncMock()),
     ):
         backlog_cls.return_value.count_curations_pending_assessment = AsyncMock(
             return_value=true_count
         )
-        backlog_cls.return_value.curation_ids_pending_assessment = AsyncMock(
-            return_value=fake_ids_at_limit
+        backlog_cls.return_value.assessment_targets_pending = AsyncMock(
+            return_value=[_target(curation_id) for curation_id in fake_ids_at_limit]
         )
         await backfill.backfill_assessments(ctx=ctx)
 
@@ -152,12 +163,13 @@ async def test_gauge_records_count_with_stage_attribute(
             "app.queue.tasks.backfill.consume_daily_budget",
             AsyncMock(return_value=0),
         ),
+        patch("app.queue.tasks.backfill._append_backfill_run_event", AsyncMock()),
     ):
         backlog_cls.return_value.count_curations_pending_assessment = AsyncMock(
             return_value=3
         )
-        backlog_cls.return_value.curation_ids_pending_assessment = AsyncMock(
-            return_value=[101, 102, 103]
+        backlog_cls.return_value.assessment_targets_pending = AsyncMock(
+            return_value=[_target(101), _target(102), _target(103)]
         )
         await backfill.backfill_assessments(ctx=ctx)
 
@@ -198,13 +210,12 @@ async def test_gauge_records_zero_when_empty_backlog(
             AsyncMock(),
         ),
         patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
+        patch("app.queue.tasks.backfill._append_backfill_run_event", AsyncMock()),
     ):
         backlog_cls.return_value.count_curations_pending_assessment = AsyncMock(
             return_value=0
         )
-        backlog_cls.return_value.curation_ids_pending_assessment = AsyncMock(
-            return_value=[]
-        )
+        backlog_cls.return_value.assessment_targets_pending = AsyncMock(return_value=[])
         # empty 経路は found==0 で早期 return するため consume_daily_budget は呼ばれない
         await backfill.backfill_assessments(ctx=ctx)
 
@@ -238,6 +249,7 @@ async def test_gauge_not_recorded_when_kill_switch_disabled(
         patch.object(backfill.settings, "backfill_assessments_enabled", False),
         patch("app.queue.tasks.backfill.is_assessment_held", AsyncMock()) as held,
         patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
+        patch("app.queue.tasks.backfill._append_backfill_run_event", AsyncMock()),
     ):
         # 早期 return が起きれば PipelineBacklog 自体が触られないが、念のため設定
         backlog_cls.return_value.count_curations_pending_assessment = AsyncMock(
@@ -294,12 +306,13 @@ async def test_gauge_attributes_do_not_leak_curation_ids(
             "app.queue.tasks.backfill.consume_daily_budget",
             AsyncMock(return_value=0),
         ),
+        patch("app.queue.tasks.backfill._append_backfill_run_event", AsyncMock()),
     ):
         backlog_cls.return_value.count_curations_pending_assessment = AsyncMock(
             return_value=distinctive_count
         )
-        backlog_cls.return_value.curation_ids_pending_assessment = AsyncMock(
-            return_value=distinctive_ids
+        backlog_cls.return_value.assessment_targets_pending = AsyncMock(
+            return_value=[_target(curation_id) for curation_id in distinctive_ids]
         )
         await backfill.backfill_assessments(ctx=ctx)
 
