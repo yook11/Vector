@@ -24,6 +24,7 @@ class _TaskCase:
     hold_patch: str
     ageout_patch: str
     queue_task_patch: str
+    count_method: str
     target_method: str
     budget_role: str
     stage: Stage
@@ -41,6 +42,7 @@ CASES = [
         hold_patch="app.queue.tasks.backfill.is_curation_held",
         ageout_patch="app.queue.tasks.backfill._delete_aged_out_curations",
         queue_task_patch="app.queue.tasks.backfill.curate_content",
+        count_method="count_articles_pending_curation",
         target_method="curation_targets_pending",
         budget_role="curate",
         stage=Stage.BACKFILL_CURATE,
@@ -56,6 +58,7 @@ CASES = [
         hold_patch="app.queue.tasks.backfill.is_assessment_held",
         ageout_patch="app.queue.tasks.backfill._exclude_aged_out_assessments",
         queue_task_patch="app.queue.tasks.backfill.assess_content",
+        count_method="count_curations_pending_assessment",
         target_method="assessment_targets_pending",
         budget_role="assess",
         stage=Stage.BACKFILL_ASSESS,
@@ -71,6 +74,7 @@ CASES = [
         hold_patch="app.queue.tasks.backfill.is_embedding_held",
         ageout_patch="app.queue.tasks.backfill._exclude_aged_out_embeddings",
         queue_task_patch="app.queue.tasks.backfill.generate_embedding",
+        count_method="count_analyses_pending_embedding",
         target_method="embedding_targets_pending",
         budget_role="embed",
         stage=Stage.BACKFILL_EMBED,
@@ -132,7 +136,7 @@ async def test_stage_hold_is_audited(case: _TaskCase) -> None:
     with (
         patch.object(tasks.settings, case.enabled_attr, True),
         patch(case.hold_patch, AsyncMock(return_value=True)),
-        patch(case.ageout_patch, AsyncMock()) as ageout,
+        patch(case.ageout_patch, AsyncMock(return_value=0)) as ageout,
         patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
         patch("app.queue.tasks.backfill._append_backfill_run_event", run_audit),
     ):
@@ -149,13 +153,13 @@ async def test_no_targets_is_audited(case: _TaskCase) -> None:
     """対象 0 件は run no-targets として監査される。"""
     backlog = MagicMock()
     setattr(backlog, case.target_method, AsyncMock(return_value=[]))
-    backlog.count_curations_pending_assessment = AsyncMock(return_value=0)
+    setattr(backlog, case.count_method, AsyncMock(return_value=0))
     run_audit = AsyncMock()
 
     with (
         patch.object(tasks.settings, case.enabled_attr, True),
         patch(case.hold_patch, AsyncMock(return_value=False)),
-        patch(case.ageout_patch, AsyncMock()),
+        patch(case.ageout_patch, AsyncMock(return_value=0)),
         patch("app.queue.tasks.backfill.PipelineBacklog", return_value=backlog),
         patch("app.queue.tasks.backfill.consume_daily_budget", AsyncMock()) as budget,
         patch("app.queue.tasks.backfill._append_backfill_run_event", run_audit),
@@ -174,13 +178,13 @@ async def test_budget_exhausted_is_audited(case: _TaskCase) -> None:
     targets = [_target(1), _target(2)]
     backlog = MagicMock()
     setattr(backlog, case.target_method, AsyncMock(return_value=targets))
-    backlog.count_curations_pending_assessment = AsyncMock(return_value=len(targets))
+    setattr(backlog, case.count_method, AsyncMock(return_value=len(targets)))
     run_audit = AsyncMock()
 
     with (
         patch.object(tasks.settings, case.enabled_attr, True),
         patch(case.hold_patch, AsyncMock(return_value=False)),
-        patch(case.ageout_patch, AsyncMock()),
+        patch(case.ageout_patch, AsyncMock(return_value=0)),
         patch("app.queue.tasks.backfill.PipelineBacklog", return_value=backlog),
         patch(
             "app.queue.tasks.backfill.consume_daily_budget",
@@ -206,7 +210,7 @@ async def test_enqueue_success_items_and_completed_run_are_audited(
     targets = [_target(1), _target(2)]
     backlog = MagicMock()
     setattr(backlog, case.target_method, AsyncMock(return_value=targets))
-    backlog.count_curations_pending_assessment = AsyncMock(return_value=len(targets))
+    setattr(backlog, case.count_method, AsyncMock(return_value=len(targets)))
     run_audit = AsyncMock()
     item_audit = AsyncMock()
     queue_task = SimpleNamespace(kiq=AsyncMock())
@@ -214,7 +218,7 @@ async def test_enqueue_success_items_and_completed_run_are_audited(
     with (
         patch.object(tasks.settings, case.enabled_attr, True),
         patch(case.hold_patch, AsyncMock(return_value=False)),
-        patch(case.ageout_patch, AsyncMock()),
+        patch(case.ageout_patch, AsyncMock(return_value=0)),
         patch("app.queue.tasks.backfill.PipelineBacklog", return_value=backlog),
         patch(
             "app.queue.tasks.backfill.consume_daily_budget",
@@ -245,7 +249,7 @@ async def test_enqueue_failure_is_audited_and_later_items_continue(
     targets = [_target(1), _target(2), _target(3)]
     backlog = MagicMock()
     setattr(backlog, case.target_method, AsyncMock(return_value=targets))
-    backlog.count_curations_pending_assessment = AsyncMock(return_value=len(targets))
+    setattr(backlog, case.count_method, AsyncMock(return_value=len(targets)))
     run_audit = AsyncMock()
     item_audit = AsyncMock()
     queue_task = SimpleNamespace(
@@ -255,7 +259,7 @@ async def test_enqueue_failure_is_audited_and_later_items_continue(
     with (
         patch.object(tasks.settings, case.enabled_attr, True),
         patch(case.hold_patch, AsyncMock(return_value=False)),
-        patch(case.ageout_patch, AsyncMock()),
+        patch(case.ageout_patch, AsyncMock(return_value=0)),
         patch("app.queue.tasks.backfill.PipelineBacklog", return_value=backlog),
         patch(
             "app.queue.tasks.backfill.consume_daily_budget",
@@ -288,13 +292,13 @@ async def test_selection_failure_is_audited_and_reraised(case: _TaskCase) -> Non
         case.target_method,
         AsyncMock(side_effect=RuntimeError("select failed")),
     )
-    backlog.count_curations_pending_assessment = AsyncMock(return_value=1)
+    setattr(backlog, case.count_method, AsyncMock(return_value=1))
     run_audit = AsyncMock()
 
     with (
         patch.object(tasks.settings, case.enabled_attr, True),
         patch(case.hold_patch, AsyncMock(return_value=False)),
-        patch(case.ageout_patch, AsyncMock()),
+        patch(case.ageout_patch, AsyncMock(return_value=0)),
         patch("app.queue.tasks.backfill.PipelineBacklog", return_value=backlog),
         patch("app.queue.tasks.backfill._append_backfill_run_event", run_audit),
     ):

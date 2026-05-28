@@ -102,29 +102,37 @@ _age_delete_batch_size_histogram = logfire.metric_histogram(
     description="1 cycle (cron) で年齢削除された article 数の分布 (p99 で spike 検知)",
 )
 
+# Logfire metrics (Backfill core: 毎 tick で見る根本指標)
 # ---------------------------------------------------------------------------
-# Logfire metrics (Phase 5-A: backfill backlog の現在値)
-# ---------------------------------------------------------------------------
 #
-# PR #640 で撤去した circuit_breaker (連続 4 cycle 非空 streak で本日分停止)
-# の観測代替。cron tick 毎に DB 上の真の未処理件数 (LIMIT なし COUNT) を
-# gauge で set し、Logfire dashboard 側で時系列を見て「詰まりが解消しない」
-# 状況を人間が判断する。
+# rescue cron の current-state は低 cardinality の 4 metric に絞る。
+# 詳細な失敗理由や対象 ID は pipeline_events に寄せ、Logfire attribute には
+# stage / action だけを乗せる。
 #
-# ``len(ids)`` (LIMIT で頭打ち) ではなく count メソッド経由で真値を取る理由:
-# 健全な高負荷 (50 件で消化済み) と詰まり (500 件超が残存) を dashboard 上で
-# 区別可能にするため (test_gauge_records_true_count_not_capped_by_limit で pin)。
-#
-# attribute は ``stage`` のみ (低 cardinality contract)。本 PR では assessment
-# 段階のみ書き込み (``stage="assessment"``) し、curation / embedding への
-# 横展開は別 PR (attribute 値を追加するだけで metric 名は不変)。``curation_id``
-# / ``article_id`` は attribute に乗せない (test_backfill_backlog_metrics の
-# capfire PII oracle で pin)。
+# ``backlog`` は LIMIT 付き dispatch list の長さではなく、LIMIT なし COUNT の真値。
+# ``held`` は最後の cron tick 時点で stage hold 中なら 1、通常運転なら 0。
+# ``dispatched`` は実際に kiq 成功した件数だけを increment。
+# ``aged_out`` は年齢削除 / soft exclusion が commit できた件数だけを increment。
 
 _backlog_gauge = logfire.metric_gauge(
     "vector.backfill.backlog",
     unit="1",
     description="backfill cron 冒頭で観測した DB 上の真の未処理件数 (stage 別)",
+)
+_held_gauge = logfire.metric_gauge(
+    "vector.backfill.held",
+    unit="1",
+    description="backfill cron の最後の tick 時点で stage hold 中なら 1、通常なら 0",
+)
+_dispatched_counter = logfire.metric_counter(
+    "vector.backfill.dispatched",
+    unit="1",
+    description="backfill cron が実際に kiq 成功した対象件数 (stage 別)",
+)
+_aged_out_counter = logfire.metric_counter(
+    "vector.backfill.aged_out",
+    unit="1",
+    description="古すぎて通常 backfill から整理完了した対象件数 (stage/action 別)",
 )
 
 
@@ -226,11 +234,28 @@ def _exception_fqn(exc: BaseException) -> str:
     return f"{type(exc).__module__}.{type(exc).__qualname__}"
 
 
+def _record_hold_state(stage: str, *, held: bool) -> None:
+    """hold gate の現在状態を low-cardinality gauge に記録する。"""
+    _held_gauge.set(1 if held else 0, attributes={"stage": stage})
+
+
+def _record_dispatched(stage: str, count: int) -> None:
+    """実際に broker enqueue できた件数だけを記録する。"""
+    if count:
+        _dispatched_counter.add(count, attributes={"stage": stage})
+
+
+def _record_aged_out(stage: str, *, action: str, count: int) -> None:
+    """通常 backfill から整理完了した件数だけを記録する。"""
+    if count:
+        _aged_out_counter.add(count, attributes={"stage": stage, "action": action})
+
+
 async def _delete_aged_out_curations(
     session_factory: async_sessionmaker[AsyncSession],
     *,
     created_before: datetime,
-) -> None:
+) -> int:
     """通常窓から落ちた古い未処理記事を、監査を焼いてから物理削除する。
 
     記事ごとに 1 tx (audit INSERT → DELETE → commit)。``source_id`` の逆引きは
@@ -265,13 +290,14 @@ async def _delete_aged_out_curations(
     if deleted:
         _age_deleted_counter.add(deleted, attributes={"stage": "curation"})
         logger.info("backfill_curations_aged_out", deleted=deleted)
+    return deleted
 
 
 async def _exclude_aged_out_assessments(
     session_factory: async_sessionmaker[AsyncSession],
     *,
     created_before: datetime,
-) -> None:
+) -> int:
     """通常窓から落ちた未 assessment curation を backfill 対象外にする。
 
     Stage 4 は curation という保全価値のある部分結果を持つため、Stage 3 のように
@@ -340,13 +366,14 @@ async def _exclude_aged_out_assessments(
 
     if excluded:
         logger.info("backfill_assessments_aged_out_excluded", excluded=excluded)
+    return excluded
 
 
 async def _exclude_aged_out_embeddings(
     session_factory: async_sessionmaker[AsyncSession],
     *,
     created_before: datetime,
-) -> None:
+) -> int:
     """通常窓から落ちた embedding NULL analysis を backfill 対象外にする。"""
     from app.audit.stages.embedding import EmbeddingAuditRepository
 
@@ -403,6 +430,7 @@ async def _exclude_aged_out_embeddings(
 
     if excluded:
         logger.info("backfill_embeddings_aged_out_excluded", excluded=excluded)
+    return excluded
 
 
 # ---------------------------------------------------------------------------
@@ -448,7 +476,9 @@ async def backfill_curations(ctx: Context = TaskiqDepends()) -> None:
         return
 
     try:
-        if await is_curation_held(get_redis()):
+        curation_held = await is_curation_held(get_redis())
+        _record_hold_state("curation", held=curation_held)
+        if curation_held:
             await _append_backfill_run_event(
                 session_factory,
                 stage=Stage.BACKFILL_CURATE,
@@ -464,15 +494,24 @@ async def backfill_curations(ctx: Context = TaskiqDepends()) -> None:
 
         before, after = BackfillWindow().boundaries_at(utc_now())
 
-        await _delete_aged_out_curations(session_factory, created_before=after)
+        aged_out_count = await _delete_aged_out_curations(
+            session_factory, created_before=after
+        )
+        _record_aged_out("curation", action="deleted", count=aged_out_count)
 
         async with session_factory() as session:
             backlog = PipelineBacklog(session)
+            backlog_count = await backlog.count_articles_pending_curation(
+                created_before=before,
+                created_after=after,
+            )
             targets = await backlog.curation_targets_pending(
                 created_before=before,
                 created_after=after,
                 limit=CURATIONS_LIMIT,
             )
+
+        _backlog_gauge.set(backlog_count, attributes={"stage": "curation"})
 
         found = len(targets)
         if found == 0:
@@ -565,6 +604,7 @@ async def backfill_curations(ctx: Context = TaskiqDepends()) -> None:
             limit=CURATIONS_LIMIT,
             daily_max=CURATIONS_DAILY_MAX,
         )
+        _record_dispatched("curation", enqueued)
     except Exception as exc:
         await _append_backfill_run_event(
             session_factory,
@@ -630,7 +670,9 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
         return
 
     try:
-        if await is_assessment_held(get_redis()):
+        assessment_held = await is_assessment_held(get_redis())
+        _record_hold_state("assessment", held=assessment_held)
+        if assessment_held:
             await _append_backfill_run_event(
                 session_factory,
                 stage=Stage.BACKFILL_ASSESS,
@@ -646,7 +688,10 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
 
         before, after = BackfillWindow().boundaries_at(utc_now())
 
-        await _exclude_aged_out_assessments(session_factory, created_before=after)
+        aged_out_count = await _exclude_aged_out_assessments(
+            session_factory, created_before=after
+        )
+        _record_aged_out("assessment", action="excluded", count=aged_out_count)
 
         async with session_factory() as session:
             backlog = PipelineBacklog(session)
@@ -760,6 +805,7 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
             limit=ASSESSMENTS_LIMIT,
             daily_max=ASSESSMENTS_DAILY_MAX,
         )
+        _record_dispatched("assessment", enqueued)
     except Exception as exc:
         await _append_backfill_run_event(
             session_factory,
@@ -820,7 +866,9 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
         return
 
     try:
-        if await is_embedding_held(get_redis()):
+        embedding_held = await is_embedding_held(get_redis())
+        _record_hold_state("embedding", held=embedding_held)
+        if embedding_held:
             await _append_backfill_run_event(
                 session_factory,
                 stage=Stage.BACKFILL_EMBED,
@@ -836,15 +884,24 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
 
         before, after = BackfillWindow().boundaries_at(utc_now())
 
-        await _exclude_aged_out_embeddings(session_factory, created_before=after)
+        aged_out_count = await _exclude_aged_out_embeddings(
+            session_factory, created_before=after
+        )
+        _record_aged_out("embedding", action="excluded", count=aged_out_count)
 
         async with session_factory() as session:
             backlog = PipelineBacklog(session)
+            backlog_count = await backlog.count_analyses_pending_embedding(
+                created_before=before,
+                created_after=after,
+            )
             targets = await backlog.embedding_targets_pending(
                 created_before=before,
                 created_after=after,
                 limit=EMBEDDINGS_LIMIT,
             )
+
+        _backlog_gauge.set(backlog_count, attributes={"stage": "embedding"})
 
         found = len(targets)
         if found == 0:
@@ -942,6 +999,7 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
             limit=EMBEDDINGS_LIMIT,
             daily_max=EMBEDDINGS_DAILY_MAX,
         )
+        _record_dispatched("embedding", enqueued)
     except Exception as exc:
         await _append_backfill_run_event(
             session_factory,

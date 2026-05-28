@@ -71,7 +71,8 @@ async def test_curations_disabled_returns_early() -> None:
         patch.object(tasks.settings, "backfill_curations_enabled", False),
         patch("app.queue.tasks.backfill.is_curation_held", new=AsyncMock()) as held,
         patch(
-            "app.queue.tasks.backfill._delete_aged_out_curations", new=AsyncMock()
+            "app.queue.tasks.backfill._delete_aged_out_curations",
+            new=AsyncMock(return_value=0),
         ) as delete,
         patch("app.queue.tasks.backfill._append_backfill_run_event", new=AsyncMock()),
         patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
@@ -101,7 +102,8 @@ async def test_curations_held_skips_entire_run() -> None:
             new=AsyncMock(return_value=True),
         ),
         patch(
-            "app.queue.tasks.backfill._delete_aged_out_curations", new=AsyncMock()
+            "app.queue.tasks.backfill._delete_aged_out_curations",
+            new=AsyncMock(return_value=0),
         ) as delete,
         patch("app.queue.tasks.backfill._append_backfill_run_event", new=AsyncMock()),
         patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
@@ -132,6 +134,7 @@ async def test_curations_empty_does_not_dispatch() -> None:
     _stub_session_cm(ctx)
 
     backlog_instance = MagicMock()
+    backlog_instance.count_articles_pending_curation = AsyncMock(return_value=0)
     backlog_instance.curation_targets_pending = AsyncMock(return_value=[])
 
     with (
@@ -141,7 +144,8 @@ async def test_curations_empty_does_not_dispatch() -> None:
             new=AsyncMock(return_value=False),
         ),
         patch(
-            "app.queue.tasks.backfill._delete_aged_out_curations", new=AsyncMock()
+            "app.queue.tasks.backfill._delete_aged_out_curations",
+            new=AsyncMock(return_value=0),
         ) as delete,
         patch(
             "app.queue.tasks.backfill.PipelineBacklog", return_value=backlog_instance
@@ -172,6 +176,7 @@ async def test_curations_budget_exhausted_skips_dispatch() -> None:
     _stub_session_cm(ctx)
 
     backlog_instance = MagicMock()
+    backlog_instance.count_articles_pending_curation = AsyncMock(return_value=3)
     backlog_instance.curation_targets_pending = AsyncMock(
         return_value=[_target(1), _target(2), _target(3)]
     )
@@ -182,7 +187,10 @@ async def test_curations_budget_exhausted_skips_dispatch() -> None:
             "app.queue.tasks.backfill.is_curation_held",
             new=AsyncMock(return_value=False),
         ),
-        patch("app.queue.tasks.backfill._delete_aged_out_curations", new=AsyncMock()),
+        patch(
+            "app.queue.tasks.backfill._delete_aged_out_curations",
+            new=AsyncMock(return_value=0),
+        ),
         patch(
             "app.queue.tasks.backfill.PipelineBacklog", return_value=backlog_instance
         ),
@@ -216,6 +224,7 @@ async def test_curations_dispatches_triggers_for_each_article_id() -> None:
     _stub_session_cm(ctx)
 
     backlog_instance = MagicMock()
+    backlog_instance.count_articles_pending_curation = AsyncMock(return_value=3)
     backlog_instance.curation_targets_pending = AsyncMock(
         return_value=[_target(10), _target(20), _target(30)]
     )
@@ -229,7 +238,10 @@ async def test_curations_dispatches_triggers_for_each_article_id() -> None:
             "app.queue.tasks.backfill.is_curation_held",
             new=AsyncMock(return_value=False),
         ),
-        patch("app.queue.tasks.backfill._delete_aged_out_curations", new=AsyncMock()),
+        patch(
+            "app.queue.tasks.backfill._delete_aged_out_curations",
+            new=AsyncMock(return_value=0),
+        ),
         patch(
             "app.queue.tasks.backfill.PipelineBacklog", return_value=backlog_instance
         ),
@@ -259,6 +271,7 @@ async def test_curations_continues_when_one_kiq_fails() -> None:
     _stub_session_cm(ctx)
 
     backlog_instance = MagicMock()
+    backlog_instance.count_articles_pending_curation = AsyncMock(return_value=3)
     backlog_instance.curation_targets_pending = AsyncMock(
         return_value=[_target(1), _target(2), _target(3)]
     )
@@ -272,7 +285,10 @@ async def test_curations_continues_when_one_kiq_fails() -> None:
             "app.queue.tasks.backfill.is_curation_held",
             new=AsyncMock(return_value=False),
         ),
-        patch("app.queue.tasks.backfill._delete_aged_out_curations", new=AsyncMock()),
+        patch(
+            "app.queue.tasks.backfill._delete_aged_out_curations",
+            new=AsyncMock(return_value=0),
+        ),
         patch(
             "app.queue.tasks.backfill.PipelineBacklog", return_value=backlog_instance
         ),
@@ -384,7 +400,7 @@ async def test_delete_aged_out_curations_deletes_old_child_null_and_audits(
     await db_session.commit()
     aged_id, kept_id = aged.id, kept.id
 
-    await tasks._delete_aged_out_curations(
+    deleted = await tasks._delete_aged_out_curations(
         session_factory, created_before=now - timedelta(days=7)
     )
 
@@ -413,6 +429,7 @@ async def test_delete_aged_out_curations_deletes_old_child_null_and_audits(
     assert ev.retryability is None
     assert ev.article_id is None
     assert ev.payload["kind"] == "curation"
+    assert deleted == 1
 
 
 # ---------------------------------------------------------------------------
@@ -441,7 +458,7 @@ async def test_exclude_aged_out_assessments_keeps_article_and_audits(
     curation_id = curation.id
     source_name = str(sample_source.name)
 
-    await tasks._exclude_aged_out_assessments(
+    excluded = await tasks._exclude_aged_out_assessments(
         session_factory, created_before=now - timedelta(days=7)
     )
 
@@ -471,6 +488,7 @@ async def test_exclude_aged_out_assessments_keeps_article_and_audits(
     assert ev.payload["kind"] == "assessment"
     assert ev.payload["source_name"] == source_name
     assert ev.payload["curation_id"] == curation_id
+    assert excluded == 1
 
 
 @pytest.mark.asyncio
@@ -493,7 +511,7 @@ async def test_exclude_aged_out_assessments_skips_completed_race(
     curation = await _make_curation(db_session, article)
     await _make_in_scope_assessment(db_session, curation, sample_categories[0])
 
-    await tasks._exclude_aged_out_assessments(
+    excluded = await tasks._exclude_aged_out_assessments(
         session_factory, created_before=now - timedelta(days=7)
     )
 
@@ -508,6 +526,7 @@ async def test_exclude_aged_out_assessments_skips_completed_race(
         .all()
     )
     assert events == []
+    assert excluded == 0
 
 
 @pytest.mark.asyncio
@@ -536,7 +555,7 @@ async def test_exclude_aged_out_embeddings_keeps_assessment_and_audits(
     article_id = article.id
     analysis_id = analysis.id
 
-    await tasks._exclude_aged_out_embeddings(
+    excluded = await tasks._exclude_aged_out_embeddings(
         session_factory, created_before=now - timedelta(days=7)
     )
 
@@ -564,6 +583,7 @@ async def test_exclude_aged_out_embeddings_keeps_assessment_and_audits(
     assert ev.article_id == article_id
     assert ev.payload["kind"] == "embedding"
     assert ev.payload["analysis_id"] == analysis_id
+    assert excluded == 1
 
 
 @pytest.mark.asyncio
@@ -591,7 +611,7 @@ async def test_exclude_aged_out_embeddings_skips_completed_race(
         embedding=[0.1] * 768,
     )
 
-    await tasks._exclude_aged_out_embeddings(
+    excluded = await tasks._exclude_aged_out_embeddings(
         session_factory, created_before=now - timedelta(days=7)
     )
 
@@ -606,6 +626,7 @@ async def test_exclude_aged_out_embeddings_skips_completed_race(
         .all()
     )
     assert events == []
+    assert excluded == 0
 
 
 # ---------------------------------------------------------------------------
@@ -622,7 +643,8 @@ async def test_assessments_disabled_returns_early() -> None:
         patch.object(tasks.settings, "backfill_assessments_enabled", False),
         patch("app.queue.tasks.backfill.is_assessment_held", new=AsyncMock()) as held,
         patch(
-            "app.queue.tasks.backfill._exclude_aged_out_assessments", new=AsyncMock()
+            "app.queue.tasks.backfill._exclude_aged_out_assessments",
+            new=AsyncMock(return_value=0),
         ) as exclude,
         patch("app.queue.tasks.backfill._append_backfill_run_event", new=AsyncMock()),
         patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
@@ -642,7 +664,8 @@ async def test_embeddings_disabled_returns_early() -> None:
         patch.object(tasks.settings, "backfill_embeddings_enabled", False),
         patch("app.queue.tasks.backfill.is_embedding_held", new=AsyncMock()) as held,
         patch(
-            "app.queue.tasks.backfill._exclude_aged_out_embeddings", new=AsyncMock()
+            "app.queue.tasks.backfill._exclude_aged_out_embeddings",
+            new=AsyncMock(return_value=0),
         ) as exclude,
         patch("app.queue.tasks.backfill._append_backfill_run_event", new=AsyncMock()),
         patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
@@ -666,7 +689,8 @@ async def test_assessments_held_skips_entire_run() -> None:
             new=AsyncMock(return_value=True),
         ) as held,
         patch(
-            "app.queue.tasks.backfill._exclude_aged_out_assessments", new=AsyncMock()
+            "app.queue.tasks.backfill._exclude_aged_out_assessments",
+            new=AsyncMock(return_value=0),
         ) as exclude,
         patch("app.queue.tasks.backfill._append_backfill_run_event", new=AsyncMock()),
         patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
@@ -697,7 +721,8 @@ async def test_embeddings_held_skips_entire_run() -> None:
             new=AsyncMock(return_value=True),
         ) as held,
         patch(
-            "app.queue.tasks.backfill._exclude_aged_out_embeddings", new=AsyncMock()
+            "app.queue.tasks.backfill._exclude_aged_out_embeddings",
+            new=AsyncMock(return_value=0),
         ) as exclude,
         patch("app.queue.tasks.backfill._append_backfill_run_event", new=AsyncMock()),
         patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,

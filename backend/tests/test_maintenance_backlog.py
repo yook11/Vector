@@ -259,6 +259,60 @@ async def test_pending_curation_excludes_noise_articles(
     assert article.id not in ids
 
 
+@pytest.mark.asyncio
+async def test_count_pending_curation_returns_true_count_without_limit(
+    db_session: AsyncSession,
+    sample_source: NewsSource,
+) -> None:
+    """curation backlog COUNT は ID 取得と同じ条件で LIMIT に saturate しない。"""
+    now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
+    pending = [
+        await _make_article(
+            db_session,
+            sample_source,
+            url=f"https://e.com/curation-count-{index}",
+            created_at=now - timedelta(hours=1, minutes=index),
+        )
+        for index in range(3)
+    ]
+    signal_article = await _make_article(
+        db_session,
+        sample_source,
+        url="https://e.com/curation-count-signal",
+        created_at=now - timedelta(hours=1),
+    )
+    await _make_curation(db_session, signal_article)
+    noise_article = await _make_article(
+        db_session,
+        sample_source,
+        url="https://e.com/curation-count-noise",
+        created_at=now - timedelta(hours=1),
+    )
+    db_session.add(
+        CurationNoise(
+            article_id=noise_article.id,
+            title_ja="ノイズタイトル",
+            summary_ja="ノイズ要約",
+        )
+    )
+    await db_session.commit()
+
+    backlog = PipelineBacklog(db_session)
+    count = await backlog.count_articles_pending_curation(
+        created_before=now - timedelta(minutes=30),
+        created_after=now - timedelta(days=7),
+    )
+    ids = await backlog.article_ids_pending_curation(
+        created_before=now - timedelta(minutes=30),
+        created_after=now - timedelta(days=7),
+        limit=2,
+    )
+    pending_ids = {article.id for article in pending}
+    assert count == 3
+    assert len(ids) == 2
+    assert set(ids).issubset(pending_ids)
+
+
 # ---------------------------------------------------------------------------
 # article_ids_aged_out_curation (年齢削除対象 = 窓外の child-NULL)
 # ---------------------------------------------------------------------------
@@ -786,6 +840,78 @@ async def test_pending_embedding_excludes_backfill_excluded_analysis(
         limit=10,
     )
     assert analysis.id not in ids
+
+
+@pytest.mark.asyncio
+async def test_count_pending_embedding_returns_true_count_without_limit(
+    db_session: AsyncSession,
+    sample_source: NewsSource,
+    sample_categories: list[Category],
+) -> None:
+    """embedding backlog COUNT は ID 取得と同じ条件で LIMIT に saturate しない。"""
+    now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
+    pending: list[InScopeAssessment] = []
+    for index in range(3):
+        article = await _make_article(
+            db_session,
+            sample_source,
+            url=f"https://e.com/embedding-count-{index}",
+            created_at=now - timedelta(hours=1, minutes=index),
+        )
+        pending.append(
+            await _make_in_scope_assessment(
+                db_session,
+                await _make_curation(db_session, article),
+                sample_categories[0],
+            )
+        )
+
+    embedded_article = await _make_article(
+        db_session,
+        sample_source,
+        url="https://e.com/embedding-count-done",
+        created_at=now - timedelta(hours=1),
+    )
+    await _make_in_scope_assessment(
+        db_session,
+        await _make_curation(db_session, embedded_article),
+        sample_categories[0],
+        embedding=[0.1] * 768,
+    )
+
+    excluded_article = await _make_article(
+        db_session,
+        sample_source,
+        url="https://e.com/embedding-count-excluded",
+        created_at=now - timedelta(hours=1),
+    )
+    excluded = await _make_in_scope_assessment(
+        db_session,
+        await _make_curation(db_session, excluded_article),
+        sample_categories[0],
+    )
+    db_session.add(
+        EmbeddingBackfillExclusion(
+            analysis_id=excluded.id,
+            reason_code=BackfillExclusionReason.EMBEDDING_AGED_OUT.value,
+        )
+    )
+    await db_session.commit()
+
+    backlog = PipelineBacklog(db_session)
+    count = await backlog.count_analyses_pending_embedding(
+        created_before=now - timedelta(minutes=30),
+        created_after=now - timedelta(days=7),
+    )
+    ids = await backlog.analysis_ids_pending_embedding(
+        created_before=now - timedelta(minutes=30),
+        created_after=now - timedelta(days=7),
+        limit=2,
+    )
+    pending_ids = {analysis.id for analysis in pending}
+    assert count == 3
+    assert len(ids) == 2
+    assert set(ids).issubset(pending_ids)
 
 
 # ---------------------------------------------------------------------------

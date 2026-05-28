@@ -98,8 +98,29 @@ class PipelineBacklog:
             .order_by(Article.created_at.asc())
             .limit(limit)
         )
-        rows = (await self._session.execute(stmt)).all()
+        rows = (await self._session.execute(stmt)).tuples().all()
         return [_target_from_row(row) for row in rows]
+
+    async def count_articles_pending_curation(
+        self,
+        *,
+        created_before: datetime,
+        created_after: datetime,
+    ) -> int:
+        """curation/noise 未処理 Article の真の総数 (LIMIT なし COUNT)。観測専用。"""
+        stmt = (
+            select(func.count(Article.id))
+            .outerjoin(ArticleCuration, ArticleCuration.article_id == Article.id)
+            .outerjoin(CurationNoise, CurationNoise.article_id == Article.id)
+            .where(
+                ArticleCuration.id.is_(None),
+                CurationNoise.id.is_(None),
+                Article.created_at < created_before,
+                Article.created_at >= created_after,
+            )
+        )
+        result = await self._session.execute(stmt)
+        return int(result.scalar_one())
 
     async def article_ids_aged_out_curation(
         self,
@@ -162,7 +183,7 @@ class PipelineBacklog:
             .order_by(Article.created_at.asc())
             .limit(limit)
         )
-        rows = (await self._session.execute(stmt)).all()
+        rows = (await self._session.execute(stmt)).tuples().all()
         return [_target_from_row(row) for row in rows]
 
     async def curation_ids_pending_assessment(
@@ -349,8 +370,36 @@ class PipelineBacklog:
             .order_by(Article.created_at.asc())
             .limit(limit)
         )
-        rows = (await self._session.execute(stmt)).all()
+        rows = (await self._session.execute(stmt)).tuples().all()
         return [_target_from_row(row) for row in rows]
+
+    async def count_analyses_pending_embedding(
+        self,
+        *,
+        created_before: datetime,
+        created_after: datetime,
+    ) -> int:
+        """embedding NULL analysis の真の総数 (LIMIT なし COUNT)。観測専用。"""
+        stmt = (
+            select(func.count(InScopeAssessment.id))
+            .join(
+                ArticleCuration,
+                ArticleCuration.id == InScopeAssessment.curation_id,
+            )
+            .join(Article, Article.id == ArticleCuration.article_id)
+            .outerjoin(
+                EmbeddingBackfillExclusion,
+                EmbeddingBackfillExclusion.analysis_id == InScopeAssessment.id,
+            )
+            .where(
+                InScopeAssessment.embedding.is_(None),
+                EmbeddingBackfillExclusion.analysis_id.is_(None),
+                Article.created_at < created_before,
+                Article.created_at >= created_after,
+            )
+        )
+        result = await self._session.execute(stmt)
+        return int(result.scalar_one())
 
     async def analysis_ids_aged_out_embedding(
         self,

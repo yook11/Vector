@@ -106,7 +106,7 @@ async def test_gauge_records_true_count_not_capped_by_limit(
         ),
         patch(
             "app.queue.tasks.backfill._exclude_aged_out_assessments",
-            AsyncMock(),
+            AsyncMock(return_value=0),
         ),
         patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
         patch(
@@ -156,7 +156,7 @@ async def test_gauge_records_count_with_stage_attribute(
         ),
         patch(
             "app.queue.tasks.backfill._exclude_aged_out_assessments",
-            AsyncMock(),
+            AsyncMock(return_value=0),
         ),
         patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
         patch(
@@ -207,7 +207,7 @@ async def test_gauge_records_zero_when_empty_backlog(
         ),
         patch(
             "app.queue.tasks.backfill._exclude_aged_out_assessments",
-            AsyncMock(),
+            AsyncMock(return_value=0),
         ),
         patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
         patch("app.queue.tasks.backfill._append_backfill_run_event", AsyncMock()),
@@ -299,7 +299,7 @@ async def test_gauge_attributes_do_not_leak_curation_ids(
         ),
         patch(
             "app.queue.tasks.backfill._exclude_aged_out_assessments",
-            AsyncMock(),
+            AsyncMock(return_value=0),
         ),
         patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
         patch(
