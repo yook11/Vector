@@ -21,9 +21,9 @@ from app.queue.brokers import (
     broker_analysis,
     broker_briefing,
     broker_content,
-    broker_digest,
     broker_embedding,
     broker_metadata,
+    broker_trend_discovery,
 )
 
 logger = structlog.get_logger(__name__)
@@ -64,9 +64,9 @@ def _register_scheduler_lifecycle(broker: RedisStreamBroker, label: str) -> None
     CLIENT_STARTUP を発火する (taskiq.abc.broker)。API プロセスはそもそも
     ``broker.startup()`` を呼ばず ``.kiq()`` は AsyncKicker による lazy 経路なので、
     CLIENT_STARTUP は **scheduler プロセスでのみ発火する** (no gate required)。
-    cron 駆動を持つ broker (broker_metadata / broker_digest / broker_briefing) のみ
-    に本関数を当てる。content / analysis / embedding broker は scheduler が存在し
-    ないため不要。
+    cron 駆動を持つ broker (broker_metadata / broker_trend_discovery /
+    broker_briefing) のみに本関数を当てる。content / analysis / embedding broker は
+    scheduler が存在しないため不要。
 
     Scheduler 自身は DB を触らない (全 cron task は worker 側で実行され、
     state.engine も session_factory も WORKER_STARTUP でしか初期化されない) ため、
@@ -89,13 +89,14 @@ _register_worker_lifecycle(broker_metadata, "metadata")
 _register_worker_lifecycle(broker_content, "content")
 _register_worker_lifecycle(broker_analysis, "analysis")
 _register_worker_lifecycle(broker_embedding, "embedding")
-_register_worker_lifecycle(broker_digest, "digest")
+_register_worker_lifecycle(broker_trend_discovery, "trend_discovery")
 _register_worker_lifecycle(broker_briefing, "briefing")
 
-# broker_metadata / broker_digest / broker_briefing は worker process と scheduler
-# process の両方で同じ broker object を共有するため、_register_worker_lifecycle
-# (WORKER_STARTUP) と _register_scheduler_lifecycle (CLIENT_STARTUP) の両方を呼ぶ。
+# broker_metadata / broker_trend_discovery / broker_briefing は worker process と
+# scheduler process の両方で同じ broker object を共有するため、
+# _register_worker_lifecycle (WORKER_STARTUP) と _register_scheduler_lifecycle
+# (CLIENT_STARTUP) の両方を呼ぶ。
 # プロセスが違うのでイベント発火が衝突することはない。
 _register_scheduler_lifecycle(broker_metadata, "metadata")
-_register_scheduler_lifecycle(broker_digest, "digest")
+_register_scheduler_lifecycle(broker_trend_discovery, "trend_discovery")
 _register_scheduler_lifecycle(broker_briefing, "briefing")

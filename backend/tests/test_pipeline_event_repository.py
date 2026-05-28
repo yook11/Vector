@@ -166,8 +166,7 @@ async def test_append_with_no_ids_leaves_both_null(
 def test_stage_strenum_matches_check_constraint() -> None:
     """Stage StrEnum 値 set が ORM/migration の CHECK 制約値と一致。
 
-    値追加時は両方の更新を要求する自然な fail-fast。10 値 (article-bound 9 stage +
-    briefing)。
+    値追加時は両方の更新を要求する自然な fail-fast。11 値。
     """
     expected = {
         "dispatch",
@@ -180,6 +179,7 @@ def test_stage_strenum_matches_check_constraint() -> None:
         "backfill_assess",
         "backfill_embed",
         "briefing",
+        "trend_discovery",
     }
     assert {s.value for s in Stage} == expected
 

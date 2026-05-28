@@ -9,7 +9,7 @@
      retry より外側に open する登録順契約)。
    - ``OpenTelemetryMiddleware`` instance が各 broker に **1 つだけ** (span/metric
      重複出力を防ぐ)。
-   - scheduler を持つ 3 broker (metadata / digest / briefing) に CLIENT_STARTUP
+   - scheduler を持つ 3 broker (metadata / trend_discovery / briefing) に CLIENT_STARTUP
      hook が **1 つ以上** 登録される。残り 3 broker には登録されない。
    - WORKER_STARTUP は全 6 broker に登録される (Phase 1/2 既存契約の回帰検知)。
 
@@ -53,9 +53,9 @@ from app.queue.brokers import (
     broker_analysis,
     broker_briefing,
     broker_content,
-    broker_digest,
     broker_embedding,
     broker_metadata,
+    broker_trend_discovery,
 )
 
 # ---------------------------------------------------------------------------
@@ -64,7 +64,7 @@ from app.queue.brokers import (
 
 _BROKERS_WITH_SCHEDULER = (
     (broker_metadata, "metadata"),
-    (broker_digest, "digest"),
+    (broker_trend_discovery, "trend_discovery"),
     (broker_briefing, "briefing"),
 )
 _BROKERS_WITHOUT_SCHEDULER = (
@@ -123,7 +123,7 @@ def test_worker_lifecycle_registered_for_all_brokers() -> None:
 
     Phase 3 で追加した ``_register_scheduler_lifecycle`` (CLIENT_STARTUP) が
     ``_register_lifecycle`` (WORKER_STARTUP) の登録を上書き / 排他にしていない
-    ことの回帰検知。broker_metadata / broker_digest / broker_briefing は同じ
+    ことの回帰検知。broker_metadata / broker_trend_discovery / broker_briefing は同じ
     broker object に WORKER_STARTUP と CLIENT_STARTUP の 2 種の hook が共存する
     (プロセスが違うため発火は競合せず、ワンプロセス内で両方発火する経路は存在
     しない)。

@@ -5,7 +5,7 @@ broker:
   - broker_content:   記事単位のコンテンツ抽出
   - broker_analysis:  AI 分析
   - broker_embedding: ベクトル埋め込み生成
-  - broker_digest:    週次トレンド snapshot 生成 (cron 駆動)
+  - broker_trend_discovery: rolling 7d Trend Discovery 実行 (cron 駆動)
   - broker_briefing:  週次カテゴリ別 LLM ブリーフィング生成 (cron 駆動、別 queue)
 
 Workers: broker ごとに 1 つ (docker-compose.yml / supervisord conf を参照)。
@@ -73,7 +73,7 @@ broker_metadata = _make_broker("pipeline:metadata")
 broker_content = _make_broker("pipeline:content")
 broker_analysis = _make_broker("pipeline:analysis")
 broker_embedding = _make_broker("pipeline:embedding")
-broker_digest = _make_broker("digest")
+broker_trend_discovery = _make_broker("trend_discovery")
 broker_briefing = _make_broker("briefing")
 
 

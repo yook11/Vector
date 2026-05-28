@@ -59,7 +59,7 @@ class TestEmbeddingRecoverableError:
 
 
 class TestEmbeddingTerminalStageBlockedError:
-    """``EmbeddingTerminalStageBlockedError`` の constructor / instance attr 振る舞い。"""
+    """``EmbeddingTerminalStageBlockedError`` の constructor / attr 振る舞い。"""
 
     def test_holds_code_and_provider_error(self) -> None:
         original = AIProviderConfigurationError()

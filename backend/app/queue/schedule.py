@@ -17,7 +17,7 @@
   25 * * * *         | :25          | :25          | purge_pipeline_events
   0 * * * *          | :00          | :00          | dispatch_medium
   0 */6 * * *        | 00,06,12,18  | (UTC=JST-9)  | dispatch_low
-  5 15 * * *         | 15:05        | 00:05 (毎日) | generate_weekly_snapshot
+  5 15 * * *         | 15:05        | 00:05 (毎日) | run_trend_discovery
   5 15 * * 0         | Sun 15:05    | Mon 00:05    | dispatch_weekly_briefings
 
 minute 衝突確認は本表で行う (新規 cron 追加時の overlap 回避 SSoT)。
@@ -47,8 +47,8 @@ CRON_BACKFILL_EMBEDDINGS = "10,40 * * * *"
 # :25 — pipeline_events retention purge (他 cron と最少 overlap な minute)
 CRON_PIPELINE_EVENTS_PURGE = "25 * * * *"
 
-# JST 毎日 00:05 — rolling 7d snapshot 生成 (UTC 前日 15:05)
-CRON_WEEKLY_SNAPSHOT = "5 15 * * *"
+# JST 毎日 00:05 — rolling 7d Trend Discovery 実行 (UTC 前日 15:05)
+CRON_TREND_DISCOVERY = "5 15 * * *"
 
 # JST 月曜 00:05 — 週次 briefing 生成 (UTC 日曜 15:05)
 CRON_WEEKLY_BRIEFING = "5 15 * * 0"

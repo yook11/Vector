@@ -3,8 +3,9 @@
 PR6 で Service が以下を行うようになったことを固定する:
 
 - ``assessor.assess`` の ``AIProviderError`` を ``map_provider_to_assessment``
-  で Stage 4 marker (``AssessmentRecoverableError`` / ``AssessmentTerminalStageBlockedError``)
-  に詰め替え、``__cause__`` に元 ``AIProvider*Error`` を紐付ける (ACL boundary)。
+  で Stage 4 marker (``AssessmentRecoverableError`` /
+  ``AssessmentTerminalStageBlockedError``) に詰め替え、``__cause__`` に元
+  ``AIProvider*Error`` を紐付ける (ACL boundary)。
 - ``_handle_in_scope`` で category 解決失敗 (``category_id is None``) のとき
   ``AssessmentCategoryMissingError`` (Layer 2-B、hold 対象外 terminal) を raise する。
 - 業務 INSERT (in-scope / out-of-scope) と同 session 同 tx で

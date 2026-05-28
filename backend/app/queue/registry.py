@@ -16,4 +16,4 @@ import app.queue.tasks.backfill  # noqa: F401  (backfill_curations/assessments/e
 import app.queue.tasks.briefing  # noqa: F401  (dispatch_weekly_briefings)
 import app.queue.tasks.completion  # noqa: F401  (dispatch_html_fetch_jobs, sweep_expired_leases)
 import app.queue.tasks.retention  # noqa: F401  (purge_pipeline_events)
-import app.queue.tasks.snapshot  # noqa: F401  (generate_weekly_snapshot)
+import app.queue.tasks.trend_discovery  # noqa: F401  (run_trend_discovery)

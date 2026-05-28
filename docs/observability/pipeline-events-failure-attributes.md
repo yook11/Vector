@@ -117,6 +117,21 @@ backfill run / item event の payload は `kind="backfill"` とし、`run_id`、
 `limit`、`daily_max` を必要に応じて保存する。skip 理由は `outcome_code` を
 SSoT とし、payload に別の reason field は持たせない。
 
+trend discovery stage は、保存物としての snapshot ではなく、rolling 7d の
+分析済み記事から trend discovery run がどう終わったかを焼く。
+
+- succeeded: `trend_discovery_run_completed` /
+  `trend_discovery_run_updated`
+- skipped: `trend_discovery_run_no_target_articles` /
+  `trend_discovery_run_already_exists` / `trend_discovery_run_conflict`
+- failed: `trend_discovery_run_failed`
+
+trend discovery event の payload は `kind="trend_discovery"` とし、
+`window_start`、`window_end`、`trigger` (`cron` / `cli`)、
+`requested_update`、`source_analysis_count`、`completed_category_count` を保存する。
+カテゴリ集計前に skip / failure した場合、`completed_category_count` は `null`。
+failed event の `retryability` は `unknown` とする。
+
 ## Backfill Exclusion Events
 
 Stage 4/5 の backfill age-out は、Stage 3 の物理削除とは非対称に扱う。

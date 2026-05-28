@@ -48,7 +48,6 @@ from app.analysis.embedding.domain.value_objects import (
 from app.analysis.embedding.errors import (
     EmbeddingRecoverableError,
     EmbeddingResponseInvalidError,
-    EmbeddingTerminalStageBlockedError,
     EmbeddingTerminalTargetRejectedError,
 )
 from app.analysis.embedding.service import EmbeddingService

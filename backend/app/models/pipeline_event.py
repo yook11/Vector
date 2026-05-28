@@ -2,7 +2,7 @@
 
 詳細は ``docs/observability/pipeline-events-design.md`` 参照。
 
-- 全 9 Stage × 4 EventType を 1 行 = 1 イベントで表現
+- 全 11 Stage × 4 EventType を 1 行 = 1 イベントで表現
 - 業務 tx と同一トランザクション (成功/skip パス) または別 session (例外パス) で書込
 - ``payload`` は Pydantic Discriminated Union (``app/audit/domain/payloads.py``)
 """
@@ -35,14 +35,14 @@ class PipelineEvent(Base):
     __tablename__ = "pipeline_events"
     __table_args__ = (
         CheckConstraint(
-            # migration z6_briefing_audit_setup と完全に揃える
+            # pipeline_events stage CHECK migration と完全に揃える
             # (metadata.create_all 経由のテスト DB が古い CHECK を持たないように)。
-            # 10 値 (article-bound 9 stage + briefing)。
+            # 11 値 (article-bound 9 stage + briefing + trend_discovery)。
             "stage IN ("
             "'dispatch','acquisition','completion',"
             "'curation','assessment','embedding',"
             "'backfill_curate','backfill_assess','backfill_embed',"
-            "'briefing'"
+            "'briefing','trend_discovery'"
             ")",
             name="ck_pipeline_events_stage",
         ),

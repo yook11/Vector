@@ -19,7 +19,7 @@ AIで翻訳・要約・インパクト分析を行う投資ダッシュボード
 - 類似記事推薦（pgvector）
 - 重複記事の自動検出・グループ化
 - ウォッチリスト（記事ブックマーク）
-- **週次トレンドダイジェスト** (`weekly_trends_snapshots`) と **週次 LLM ブリーフィング**
+- **Trend Discovery** (`weekly_trends_snapshots`) と **週次 LLM ブリーフィング**
 - **Pipeline Events 監査基盤** — 全ステージの成功/失敗/AI raw response を SQL で再構成可能
 - キーワード・ニュースソース管理（管理者向け）
 - カテゴリ別のニュースフィルタリング
@@ -34,7 +34,7 @@ AIで翻訳・要約・インパクト分析を行う投資ダッシュボード
 | Database | PostgreSQL 18 + pgvector | Alembic マイグレーション、**二重ロール** (vector_app / vector_auth) |
 | AI | **Gemini + DeepSeek + OpenAI** (multi-provider) | Pure DI で `backend/app/brokers.py` に hardcode |
 | Embedding | `gemini-embedding-001` (768-dim halfvec) | pgvector |
-| Task Queue | taskiq + Redis (**6 broker 分離**) | metadata / content / analysis / embedding / digest / briefing |
+| Task Queue | taskiq + Redis (**6 broker 分離**) | metadata / content / analysis / embedding / trend_discovery / briefing |
 | CI/CD | GitHub Actions | lint + test + type check + 4 系統 security gate |
 | Infrastructure | Docker Compose (dev) | **10 services**、internal network 中心 |
 | Deployment | Fly.io (`your-vector-backend-app`, nrt region) | 本番設定は [backend/fly.toml](backend/fly.toml) |
@@ -115,14 +115,13 @@ Browser
               ├── Header Auth (X-User-ID / X-Internal-Secret)
               ├── collection/   — News Fetcher (44+ sources: RSS/Atom/HTML/Sitemap)
               ├── analysis/     — AI 分析 (Gemini extractor / DeepSeek assessor / Gemini embedder)
-              ├── insights/     — snapshot (weekly_trends) / briefing (weekly LLM brief)
-              ├── digest/       — 週次トレンドダイジェスト pipeline
+              ├── insights/     — trend_discovery (weekly_trends) / briefing (weekly LLM brief)
               ├── observability/— pipeline_events 監査 (Discriminated Union payload)
               ├── maintenance/  — back-fill backlog / budget / policy
               └── PostgreSQL 18 + pgvector (二重ロール: vector_app / vector_auth)
 
 Redis (taskiq broker) ◄── worker-fetch / worker-analysis / worker-embedding / worker-insights
-                       ◄── scheduler (metadata / digest / briefing cron)
+                       ◄── scheduler (metadata / trend_discovery / briefing cron)
 
 Redis (rate-limit, ephemeral) ◄── proxy.ts sliding window log
 ```
@@ -139,8 +138,8 @@ Redis (rate-limit, ephemeral) ◄── proxy.ts sliding window log
 | `worker-fetch` | metadata + content fetch worker (supervisord Pattern B) |
 | `worker-analysis` | AI 分類 / 分析 worker |
 | `worker-embedding` | Embedding 生成 worker |
-| `worker-insights` | snapshot + briefing worker (supervisord Pattern B) |
-| `scheduler` | metadata / digest / briefing cron scheduler (supervisord Pattern B) |
+| `worker-insights` | Trend Discovery + briefing worker (supervisord Pattern B) |
+| `scheduler` | metadata / trend_discovery / briefing cron scheduler (supervisord Pattern B) |
 
 > **supervisord Pattern B**: `autorestart=unexpected` + `startretries=3` + FATAL listener。
 > 一過性故障は吸収しつつ、永続バグは 3 retries で FATAL → fail_fast eventlistener が
@@ -178,7 +177,7 @@ taskiq scheduler (cron) → broker_metadata 投函
 [Stage 5] embedding        — Gemini Embedding (gemini-embedding-001, 768-dim halfvec)
 
 並行: back-fill 3 系統 (curation / assessment / embedding、kill switch あり)
-並行: digest cron (週次 snapshot)、briefing cron (週次 LLM ブリーフィング)
+並行: Trend Discovery cron (weekly_trends snapshot)、briefing cron (週次 LLM ブリーフィング)
 
 各 stage は pipeline_events に監査記録 (Discriminated Union payload)。
 業務処理と監査書込はアトミック (成功/skip パスは同 tx 内、失敗は別 tx で永続化)。

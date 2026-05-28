@@ -10,12 +10,11 @@ from enum import StrEnum
 
 
 class Stage(StrEnum):
-    """パイプラインの 10 Stage。
+    """パイプラインの 11 Stage。
 
     BRIEFING は週次 LLM ブリーフィング生成 (``app/insights/briefing/``)。
-    現状 Vector の ``pipeline_events`` で「briefing」が指す対象は週次 briefing 以外
-    に存在しない (snapshot は別 stage、daily 等は未導入)。将来 daily 等を入れる
-    ことになったら z1/z4 と同型の rename migration で対処する。
+    TREND_DISCOVERY は rolling 7d の trend discovery run
+    (``app/insights/trend_discovery/``)。
     """
 
     DISPATCH = "dispatch"
@@ -28,6 +27,7 @@ class Stage(StrEnum):
     BACKFILL_ASSESS = "backfill_assess"
     BACKFILL_EMBED = "backfill_embed"
     BRIEFING = "briefing"
+    TREND_DISCOVERY = "trend_discovery"
 
 
 class EventType(StrEnum):

@@ -1,6 +1,6 @@
 """ReadyForBriefing — 1 カテゴリ × 1 週の briefing 実行可能状態の precondition 型。
 
-snapshot の ``ReadyForDigest`` と同じ pattern A'
+Trend Discovery の ``ReadyForTrendDiscovery`` と同じ pattern A'
 (``feedback_taskiq_basemodel_required.md``, typed-pipeline spec):
 
 - 入口 task (cron / CLI) が cron/CLI 引数から構築する Ready

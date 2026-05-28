@@ -19,7 +19,9 @@ from app.exception_handlers import (
 )
 from app.exceptions import DuplicateError, InvalidQueryError, NotFoundError
 from app.insights.briefing.router.briefing import router as briefing_router
-from app.insights.snapshot.router.weekly_trends import router as weekly_trends_router
+from app.insights.trend_discovery.router.weekly_trends import (
+    router as weekly_trends_router,
+)
 from app.logfire_setup import setup_logfire
 from app.routers import (
     admin,

@@ -14,6 +14,7 @@ from app.audit.domain.payloads import (
     CurationPayload,
     DispatchPayload,
     EmbeddingPayload,
+    TrendDiscoveryPayload,
 )
 
 
@@ -184,6 +185,25 @@ class TestDispatchPayloadAuditKeys:
         assert restored == payload
 
 
+class TestTrendDiscoveryPayloadAuditKeys:
+    """``TrendDiscoveryPayload`` の run-level field contract。"""
+
+    def test_trend_discovery_fields_roundtrip(self) -> None:
+        payload = TrendDiscoveryPayload(
+            window_start="2026-04-26",
+            window_end="2026-05-03",
+            trigger="cli",
+            requested_update=True,
+            source_analysis_count=42,
+            completed_category_count=3,
+            error_message="aggregation failed",
+            error_chain=["builtins.RuntimeError"],
+        )
+        dumped = payload.model_dump(mode="json")
+        restored = TrendDiscoveryPayload.model_validate(dumped)
+        assert restored == payload
+
+
 class TestPayloadFieldOwnership:
     """top-level column にしない stage-local field の所有権を固定する。"""
 
@@ -204,6 +224,8 @@ class TestPayloadFieldOwnership:
         assert "failure_action" not in BasePipelineEventPayload.model_fields
         assert "failure_kind" not in DispatchPayload.model_fields
         assert "failure_action" not in DispatchPayload.model_fields
+        assert "failure_kind" not in TrendDiscoveryPayload.model_fields
+        assert "failure_action" not in TrendDiscoveryPayload.model_fields
 
     def test_only_completion_payload_owns_attempt_count(self) -> None:
         assert "attempt_count" in CompletionPayload.model_fields
@@ -216,6 +238,7 @@ class TestPayloadFieldOwnership:
             AssessmentPayload,
             EmbeddingPayload,
             BriefingPayload,
+            TrendDiscoveryPayload,
         )
         for payload_cls in payloads_without_attempt_count:
             assert "attempt_count" not in payload_cls.model_fields

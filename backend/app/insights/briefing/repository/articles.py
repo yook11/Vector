@@ -20,7 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.insights.briefing.domain.article import ArticleInput
-from app.insights.snapshot.config import WEEK_TZ
+from app.insights.trend_discovery.config import WEEK_TZ
 from app.models.article_curation import ArticleCuration
 from app.models.in_scope_assessment import InScopeAssessment
 

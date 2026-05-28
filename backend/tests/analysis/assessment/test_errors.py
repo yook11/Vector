@@ -56,7 +56,7 @@ class TestAssessmentRecoverableError:
 
 
 class TestAssessmentTerminalStageBlockedError:
-    """``AssessmentTerminalStageBlockedError`` の constructor / instance attr 振る舞い。"""
+    """``AssessmentTerminalStageBlockedError`` の constructor / attr 振る舞い。"""
 
     def test_holds_code_and_provider_error(self) -> None:
         original = AIProviderConfigurationError()

@@ -79,6 +79,4 @@ async def test_set_hold_failure_increments_failed_counter_with_reason_only(
     hold_failed = _find_metric(metrics, metric_name)
     assert hold_failed is not None
     assert _sum_value(hold_failed) == 1
-    assert _attributes_for(hold_failed) == [
-        {"reason": "ai_error_insufficient_balance"}
-    ]
+    assert _attributes_for(hold_failed) == [{"reason": "ai_error_insufficient_balance"}]

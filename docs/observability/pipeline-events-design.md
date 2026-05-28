@@ -320,6 +320,9 @@ PipelineEventPayload = Annotated[
 | backfill_* | succeeded | `backfill_item_enqueued` / `backfill_run_completed` | Task orchestration 別 tx |
 | backfill_* | skipped | `backfill_run_no_targets` / `backfill_run_kill_switch_disabled` / `backfill_run_held_by_stage_hold` / `backfill_run_daily_budget_exhausted` | Task orchestration 別 tx |
 | backfill_* | failed | `backfill_item_enqueue_failed` / `backfill_run_failed` | Task orchestration 別 tx |
+| trend_discovery | succeeded | `trend_discovery_run_completed` / `trend_discovery_run_updated` | Task / CLI orchestration 別 tx |
+| trend_discovery | skipped | `trend_discovery_run_no_target_articles` / `trend_discovery_run_already_exists` / `trend_discovery_run_conflict` | Task / CLI orchestration 別 tx |
+| trend_discovery | failed | `trend_discovery_run_failed` | Task / CLI orchestration 別 tx |
 
 > **注**: `source_fetch.succeeded` audit は撤去済 (中途半端な構造を再設計するため)。失敗系 (`permanent_fetch_error` / `temporary_fetch_error_exhausted` / `unexpected_error`) のみ Task 層から書込中。再導入時は集計単位と分類コードを整理して入れ直す。
 
