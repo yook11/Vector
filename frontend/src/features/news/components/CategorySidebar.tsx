@@ -53,6 +53,12 @@ export function CategorySidebar({
         All
       </Link>
 
+      <div className="px-3 flex justify-end">
+        <span className="w-12 text-center text-xs font-medium text-muted-foreground whitespace-nowrap">
+          Last 24h
+        </span>
+      </div>
+
       <Separator className="my-2" />
 
       {categories.map((cat) => {
@@ -68,10 +74,12 @@ export function CategorySidebar({
               isActiveCat && "text-foreground font-medium bg-accent",
             )}
           >
-            <span className="truncate">{cat.name}</span>
+            <span className="min-w-0 flex-1 line-clamp-2 leading-tight font-semibold">
+              {cat.name}
+            </span>
             {(cat.recentCount ?? 0) > 0 && (
-              <span className="ml-2 text-xs tabular-nums text-muted-foreground/60">
-                {cat.recentCount}
+              <span className="ml-2 w-12 text-center text-xs font-medium tabular-nums text-muted-foreground shrink-0">
+                +{cat.recentCount}
               </span>
             )}
           </Link>
