@@ -18,7 +18,72 @@ import { narrowRole } from "@/lib/auth/role";
 import type { Session } from "@/lib/auth/session";
 import { requireEnv } from "@/lib/env";
 
-export const INTERNAL_API_URL = requireEnv("INTERNAL_API_URL");
+// BFF→backend の呼び出し先 host を構造的に絞り込む allowlist。
+// hey-api interceptor は本 URL に BFF_JWT_SIGNING_SECRET 署名済 JWT を
+// 載せて送るため、env 値が攻撃者制御 host に向くと secret 持ち出し経路に
+// なる。backend 側の _validate_internal_frontend_base_url と対称。
+const _ALLOWED_INTERNAL_API_HOSTS = new Set([
+  "localhost",
+  "127.0.0.1",
+  "backend",
+]);
+const _ALLOWED_INTERNAL_API_HOST_SUFFIX = ".flycast";
+
+/**
+ * INTERNAL_API_URL の host を全環境 allowlist + production narrowing で検証する。
+ *
+ * 全環境共通 (global allowlist): localhost / 127.0.0.1 / backend (compose DNS)
+ * または *.flycast (Fly private network) を許可。
+ *
+ * production narrowing (NODE_ENV="production"): dev host は本番で到達不能なため
+ * *.flycast 以外を fail-closed で拒否する (backend の
+ * _enforce_flycast_in_production と対称)。
+ *
+ * `nodeEnv` を引数化することでテストでは env を tampering せず純粋関数として
+ * 検証できる (default は `process.env.NODE_ENV`)。
+ */
+export function assertAllowedInternalApiUrl(
+  rawUrl: string,
+  nodeEnv: string | undefined = process.env.NODE_ENV,
+): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new Error(`INTERNAL_API_URL is not a valid URL: ${rawUrl}`);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(
+      `INTERNAL_API_URL must use http or https scheme, got ${parsed.protocol}`,
+    );
+  }
+  const host = parsed.hostname;
+  const isAllowed =
+    _ALLOWED_INTERNAL_API_HOSTS.has(host) ||
+    host.endsWith(_ALLOWED_INTERNAL_API_HOST_SUFFIX);
+  if (!isAllowed) {
+    throw new Error(
+      `INTERNAL_API_URL host "${host}" is not an allowed internal destination; ` +
+        "expected localhost / 127.0.0.1 / backend (compose) or a *.flycast host (Fly private network)",
+    );
+  }
+  if (
+    nodeEnv === "production" &&
+    !host.endsWith(_ALLOWED_INTERNAL_API_HOST_SUFFIX)
+  ) {
+    throw new Error(
+      `in production INTERNAL_API_URL must be a *.flycast host (Fly private network), got host "${host}"`,
+    );
+  }
+}
+
+function _loadInternalApiUrl(): string {
+  const url = requireEnv("INTERNAL_API_URL");
+  assertAllowedInternalApiUrl(url);
+  return url;
+}
+
+export const INTERNAL_API_URL = _loadInternalApiUrl();
 
 // BFF→backend JWT 署名鍵。backend は同じ secret で検証する (red-team C1 で
 // revalidate Bearer と別 secret に分離)。
