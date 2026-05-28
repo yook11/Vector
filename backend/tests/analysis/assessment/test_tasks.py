@@ -1,20 +1,4 @@
-"""``assess_content`` task のテスト (chain 経路 + rate limit 経路 + skip 経路)。
-
-案 3 (厚い Ready + 下流 Stage 自身が処理開始時に構築): assess_content は
-``AssessmentTrigger`` (curation_id のみ) を受領し、task 自身が
-``ReadyForAssessment.try_advance_from`` で Ready を構築する。
-
-- precondition 未充足 → svc.execute を呼ばずに return (rate limit も acquire しない)
-- in-scope 成功 (int 返却) → EmbeddingTrigger で embedding chain (ID のみ運ぶ)
-- out-of-scope / race lost (``None`` 返却) は chain しないこと
-- rate limit (``AIProviderRateLimitedError``) 経路で Handler に委譲され、
-  ``reraise`` 戻り値で raise/return が決まること
-- gate.acquire=False (quota skip) → svc.execute も Handler も呼ばずに return
-
-Layer 1 marker dispatch ルーティングは ``test_assess_task_dispatch.py`` 側で
-網羅する。Handler 内部の audit 経路は ``test_failure_handler.py`` で integration
-として検証する。
-"""
+"""``assess_content`` task の分岐テスト。"""
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -23,15 +7,18 @@ import pytest
 from structlog.testing import capture_logs
 
 from app.analysis.ai_provider_errors import AIProviderRateLimitedError
-from app.analysis.assessment.domain.ready import ReadyForAssessment
+from app.analysis.assessment.domain.ready import (
+    AssessmentReadyBuildBlocked,
+    AssessmentReadyBuildBlockedCode,
+    AssessmentReadyBuildBlockedError,
+    ReadyForAssessment,
+)
 from app.analysis.rate_limit import AIModelRateLimitPolicy, RateLimitRule
 from app.queue.messages.assessment import AssessmentTrigger
 from app.queue.messages.embedding import EmbeddingTrigger
 
 
 def _make_provider_fake() -> MagicMock:
-    """assessor 用のスタブ。property 契約 (model_name / prompt_version /
-    rate_limit_policy) を持つ。"""
     fake = MagicMock()
     fake.model_name = "test-model"
     fake.prompt_version = "abc12345"
@@ -55,8 +42,6 @@ def _make_ctx(
     max_retries: int = 0,
     gate_acquire: bool = True,
 ) -> MagicMock:
-    """taskiq Context モック。``provider_rate_limit_gate.acquire`` は
-    ``gate_acquire`` で True / False を選ぶ。"""
     ctx = MagicMock()
     gate = MagicMock()
     gate.acquire = AsyncMock(return_value=gate_acquire)
@@ -87,11 +72,17 @@ def _make_ready(curation_id: int = 2) -> ReadyForAssessment:
     )
 
 
-def _patch_ready_construction(ready: ReadyForAssessment | None):
-    """task 内 ``ReadyForAssessment.try_advance_from`` を mock する patch。"""
+def _patch_ready_construction(
+    result: ReadyForAssessment | AssessmentReadyBuildBlocked,
+):
+    mock = (
+        AsyncMock(side_effect=AssessmentReadyBuildBlockedError(result))
+        if isinstance(result, AssessmentReadyBuildBlocked)
+        else AsyncMock(return_value=result)
+    )
     return patch(
         "app.queue.tasks.assessment.ReadyForAssessment.try_advance_from",
-        new=AsyncMock(return_value=ready),
+        new=mock,
     )
 
 
@@ -102,8 +93,8 @@ def _patch_ready_construction(ready: ReadyForAssessment | None):
 
 class TestAssessContent:
     @pytest.mark.asyncio
-    async def test_skips_when_precondition_not_met(self) -> None:
-        """try_advance_from が None を返したら svc.execute を呼ばずに return。
+    async def test_ready_build_blocked_audits_and_does_not_call_service(self) -> None:
+        """Ready build blocked なら rejected audit + return、Service は呼ばない。
 
         rate limit acquire も試みない (Ready 構築が gatekeeper、案 3 順序)。
         """
@@ -111,14 +102,54 @@ class TestAssessContent:
 
         ctx = _make_ctx(assessor=_make_provider_fake())
         trigger = _make_trigger(curation_id=42)
+        blocked = AssessmentReadyBuildBlocked(
+            curation_id=42,
+            code=AssessmentReadyBuildBlockedCode.CURATION_MISSING,
+        )
 
         with (
-            _patch_ready_construction(None),
+            _patch_ready_construction(blocked),
+            patch("app.queue.tasks.assessment.AssessmentAuditRepository") as mock_audit,
             patch("app.queue.tasks.assessment.AssessmentService") as mock_svc_cls,
         ):
+            mock_audit.return_value.append_ready_build_blocked = AsyncMock()
             await assess_content(trigger=trigger, ctx=ctx)
 
+        mock_audit.return_value.append_ready_build_blocked.assert_awaited_once_with(
+            blocked=blocked
+        )
         # rate limit acquire は試みず、Service も呼ばない
+        ctx.state.provider_rate_limit_gate.acquire.assert_not_called()
+        mock_svc_cls.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_ready_build_exception_audits_and_reraises(self) -> None:
+        """Ready 判定中の例外は failed audit 後に元例外を raise する。"""
+        from app.queue.tasks.assessment import assess_content
+
+        ctx = _make_ctx(assessor=_make_provider_fake())
+        trigger = _make_trigger(curation_id=42)
+        exc = RuntimeError("ready build exploded")
+
+        with (
+            patch(
+                "app.queue.tasks.assessment.ReadyForAssessment.try_advance_from",
+                new=AsyncMock(side_effect=exc),
+            ),
+            patch(
+                "app.queue.tasks.assessment._append_ready_build_failed_audit",
+                new=AsyncMock(),
+            ) as audit_failed,
+            patch("app.queue.tasks.assessment.AssessmentService") as mock_svc_cls,
+        ):
+            with pytest.raises(RuntimeError):
+                await assess_content(trigger=trigger, ctx=ctx)
+
+        audit_failed.assert_awaited_once_with(
+            ctx.state.session_factory,
+            curation_id=42,
+            exc=exc,
+        )
         ctx.state.provider_rate_limit_gate.acquire.assert_not_called()
         mock_svc_cls.assert_not_called()
 

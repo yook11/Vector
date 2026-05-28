@@ -457,7 +457,7 @@ async def backfill_curations(ctx: Context = TaskiqDepends()) -> None:
        「分析価値なし」として監査を焼いてから物理削除する (P2 = silent loss 解消)。
     3. **通常再投入**: 窓内の child-NULL 記事を ID-only な ``CurationTrigger`` で
        kiq する。precondition 判定 / Ready 構築は下流 Stage 3 task に委ねる
-       (``curate_content_skipped reason=precondition_not_met`` log で観測可能)。
+       (Ready build blocked audit で観測可能)。
     """
     session_factory = ctx.state.session_factory
     run_id = _new_backfill_run_id()
@@ -619,8 +619,8 @@ async def backfill_curations(ctx: Context = TaskiqDepends()) -> None:
         )
         raise
 
-    # precondition_not_met (article 既消滅 / 既処理 / 本文 oversized) は
-    # 下流 Stage 3 task の ``curate_content_skipped`` log で観測する
+    # article 既消滅 / 既処理 / 本文 oversized は、下流 Stage 3 task の
+    # Ready build blocked audit で観測する
     logger.info(
         "backfill_curations_completed",
         found=found,

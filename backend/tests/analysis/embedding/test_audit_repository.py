@@ -34,7 +34,11 @@ from sqlalchemy.exc import (
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.embedding.ai.base import BaseEmbedder
-from app.analysis.embedding.domain.ready import ReadyForEmbedding
+from app.analysis.embedding.domain.ready import (
+    EmbeddingReadyBuildBlocked,
+    EmbeddingReadyBuildBlockedCode,
+    ReadyForEmbedding,
+)
 from app.analysis.embedding.errors import (
     EmbeddingRecoverableError,
     EmbeddingResponseInvalidError,
@@ -115,9 +119,72 @@ async def _fetch_one(db_session: AsyncSession, article_id: int) -> PipelineEvent
     return rows[0]
 
 
+async def _fetch_by_outcome(
+    db_session: AsyncSession, outcome_code: str
+) -> PipelineEvent:
+    rows = (
+        (
+            await db_session.execute(
+                select(PipelineEvent).where(PipelineEvent.outcome_code == outcome_code)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 1
+    return rows[0]
+
+
 # ---------------------------------------------------------------------------
 # 成功経路 — append_success
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_append_ready_build_blocked_records_missing_analysis_rejected(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Ready build blocked は rejected として analysis_id を payload に残す。"""
+    async with session_factory() as session:
+        await EmbeddingAuditRepository(session).append_ready_build_blocked(
+            blocked=EmbeddingReadyBuildBlocked(
+                analysis_id=999,
+                code=EmbeddingReadyBuildBlockedCode.ANALYSIS_MISSING,
+            )
+        )
+        await session.commit()
+
+    ev = await _fetch_by_outcome(
+        db_session, "embedding_ready_build_blocked_analysis_missing"
+    )
+    assert ev.event_type == "rejected"
+    assert ev.article_id is None
+    assert ev.payload["analysis_id"] == 999
+
+
+@pytest.mark.asyncio
+async def test_append_ready_build_failed_records_unknown_failure(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Ready build failed は failed / unknown retryability で trigger id を残す。"""
+    exc = RuntimeError("ready build exploded")
+    async with session_factory() as session:
+        await EmbeddingAuditRepository(session).append_ready_build_failed(
+            analysis_id=123,
+            exc=exc,
+        )
+        await session.commit()
+
+    ev = await _fetch_by_outcome(
+        db_session, "embedding_ready_build_failed_unexpected_error"
+    )
+    assert ev.event_type == "failed"
+    assert ev.retryability == "unknown"
+    assert ev.error_class == "builtins.RuntimeError"
+    assert ev.payload["failure_kind"] == "unexpected_error"
+    assert ev.payload["analysis_id"] == 123
 
 
 @pytest.mark.asyncio

@@ -1,22 +1,20 @@
-"""Stage 3 (Curation) taskiq タスク。
-
-collection 経由で起動され、curation 成功時は assess_content (Stage 4) へ chain する。
-失敗時の marker dispatch / audit / DELETE / inline retry decision は
-``CurationFailureHandler`` (``failure_handling.py``) に委譲し、本 task は
-trigger 受信、Ready 構築、rate limit、taskiq retry の raise/return semantics
-だけに責務を絞る。
-"""
+"""Stage 3 curation task。Ready 構築後に quota と Service 実行へ進む。"""
 
 from __future__ import annotations
 
 import structlog
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from taskiq import Context, TaskiqDepends
 
 from app.analysis.curation.ai.base import BaseCurator
-from app.analysis.curation.domain.ready import ReadyForCuration
+from app.analysis.curation.domain.ready import (
+    CurationReadyBuildBlockedError,
+    ReadyForCuration,
+)
 from app.analysis.curation.failure_handling import CurationFailureHandler
 from app.analysis.curation.repository import CurationRepository
 from app.analysis.curation.service import CurationService
+from app.audit.stages.curation import CurationAuditRepository
 from app.queue.brokers import broker_analysis
 from app.queue.messages.assessment import AssessmentTrigger
 from app.queue.messages.curation import CurationTrigger
@@ -36,34 +34,38 @@ async def curate_content(
     trigger: CurationTrigger,
     ctx: Context = TaskiqDepends(),
 ) -> None:
-    """単一記事に対して curation (Stage 3) を実行する。
-
-    順序: Ready 構築 → rate limit acquire → Service.execute → 成功 chain。
-    precondition 未充足で AI quota を消費しないよう、Ready 構築を rate limit
-    より前に置く (Stage 4 / Stage 5 と対称)。
-
-    失敗は ``CurationFailureHandler.handle`` に委譲し、戻り値 ``bool`` で
-    taskiq retry を起動するかを決める (raise すると taskiq が retry、return
-    すれば retry なし)。marker dispatch は Handler 内に閉じる。
-    """
+    """単一記事を curation し、signal 成功時だけ assessment に chain する。"""
     session_factory = ctx.state.session_factory
     curator: BaseCurator = ctx.state.curator
 
-    # 処理開始時に Ready を構築 (precondition + curator 入力値の全揃え)
     async with session_factory() as session:
-        ready = await ReadyForCuration.try_advance_from(
-            article_id=trigger.article_id,
-            repo=CurationRepository(session),
-        )
-    if ready is None:
-        logger.info(
-            "curate_content_skipped",
-            article_id=trigger.article_id,
-            reason="precondition_not_met",
-        )
-        return
+        try:
+            ready = await ReadyForCuration.try_advance_from(
+                article_id=trigger.article_id,
+                repo=CurationRepository(session),
+            )
+        except CurationReadyBuildBlockedError as exc:
+            blocked = exc.blocked
+            await CurationAuditRepository(session).append_ready_build_blocked(
+                blocked=blocked
+            )
+            await session.commit()
+            logger.info(
+                "curate_content_rejected",
+                article_id=trigger.article_id,
+                reason="ready_build_blocked",
+                code=blocked.code.value,
+            )
+            return
+        except Exception as exc:
+            await _append_ready_build_failed_audit(
+                session_factory,
+                article_id=trigger.article_id,
+                exc=exc,
+            )
+            raise
 
-    # AI を呼ぶ見込みが立ってから rate limit acquire (Stage 4 / Stage 5 と対称)
+    # precondition 未充足の stale trigger で AI quota を消費しない。
     if not await ctx.state.provider_rate_limit_gate.acquire(curator.rate_limit_policy):
         logger.warning("curate_content_daily_quota", article_id=ready.article_id)
         return
@@ -86,3 +88,30 @@ async def curate_content(
 
     if result is not None:
         await assess_content.kiq(AssessmentTrigger(curation_id=result))
+
+
+async def _append_ready_build_failed_audit(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    article_id: int,
+    exc: Exception,
+) -> None:
+    """Ready 構築例外を best-effort で監査し、失敗時は構造ログへ退避する。"""
+    try:
+        async with session_factory() as audit_session:
+            await CurationAuditRepository(audit_session).append_ready_build_failed(
+                target_article_id=article_id,
+                exc=exc,
+            )
+            await audit_session.commit()
+    except Exception as audit_exc:
+        logger.exception(
+            "curation_ready_build_failed_audit_dropped",
+            article_id=article_id,
+            business_error_class=_fqn(exc),
+            audit_error_class=_fqn(audit_exc),
+        )
+
+
+def _fqn(exc: BaseException) -> str:
+    return f"{type(exc).__module__}.{type(exc).__qualname__}"

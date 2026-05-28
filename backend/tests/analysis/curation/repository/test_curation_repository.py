@@ -1,22 +1,4 @@
-"""CurationRepository (signal / noise 両 path) の統合テスト。
-
-PR1-b で Stage 3 永続化層を 1 クラスに集約 (旧 ``NoiseRepository`` を吸収)。
-PR1-c で戻り値を ``int | None`` に縮小し ``find_*_by_article_id`` 経路を撤去
-(race 敗北は audit / chain を焼かない短絡で表現、Stage 4 と完全対称)。
-
-検証する振る舞い:
-
-signal path:
-- ``signal_exists_for_article`` の cheap 判定が article_id 単位で正しい
-- ``save_signal`` の戻り値 (``int | None``、新規 id / race 敗北 None)
-- ``update_signal_idempotent`` で parent UPDATE のみ
-  (戻り値は parent ``int`` で id は不変)
-
-noise path:
-- ``noise_exists_for_article`` の cheap 判定が article_id 単位で正しい
-- ``save_noise`` の戻り値 (``int | None``、新規 id / race 敗北 None)
-- ``save_noise`` の race 敗北 (UNIQUE 違反) 時は ``None`` を返す
-"""
+"""CurationRepository の DB 境界テスト。"""
 
 from __future__ import annotations
 
@@ -247,32 +229,6 @@ async def test_concurrent_save_signal_returns_one_persisted_one_none(
 # ===========================================================================
 
 # ---------------------------------------------------------------------------
-# noise_exists_for_article
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_noise_exists_for_article_returns_false_when_no_noise(
-    db_session: AsyncSession, sample_source: NewsSource
-) -> None:
-    article = await _make_article(db_session, sample_source, "https://example.com/n0")
-    repo = CurationRepository(db_session)
-    assert await repo.noise_exists_for_article(article.id) is False
-
-
-@pytest.mark.asyncio
-async def test_noise_exists_for_article_returns_true_after_save(
-    db_session: AsyncSession, sample_source: NewsSource
-) -> None:
-    article = await _make_article(db_session, sample_source, "https://example.com/n1")
-    repo = CurationRepository(db_session)
-    noise_id = await repo.save_noise(_noise_call(), article_id=article.id)
-    await db_session.commit()
-    assert noise_id is not None
-    assert await repo.noise_exists_for_article(article.id) is True
-
-
-# ---------------------------------------------------------------------------
 # save_noise → int | None
 # ---------------------------------------------------------------------------
 
@@ -318,42 +274,42 @@ async def test_save_noise_returns_none_on_unique_race_loss(
 
 
 # ===========================================================================
-# try_load_for_curation (PR3 案 3: atomic loader)
+# Ready 構築用 DB 事実取得
 # ===========================================================================
 
 
 @pytest.mark.asyncio
-async def test_try_load_returns_ready_when_precondition_met(
+async def test_load_ready_build_facts_returns_values_for_unprocessed_article(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
-    """signal/noise 未生成 + 本文サイズ妥当なら厚い Ready を返す。"""
     article = await _make_article(
         db_session, sample_source, "https://example.com/load-ok"
     )
     repo = CurationRepository(db_session)
 
-    ready = await repo.try_load_for_curation(article.id)
+    facts = await repo.load_ready_build_facts(article.id)
 
-    assert ready is not None
-    assert ready.article_id == article.id
-    assert ready.original_title == article.original_title
-    assert ready.original_content == article.original_content
+    assert facts is not None
+    assert facts.article_id == article.id
+    assert facts.original_title == article.original_title
+    assert facts.original_content == article.original_content
+    assert facts.source_name == str(sample_source.name)
+    assert facts.has_signal_curation is False
+    assert facts.has_noise_curation is False
 
 
 @pytest.mark.asyncio
-async def test_try_load_returns_none_when_article_missing(
-    db_session: AsyncSession, sample_source: NewsSource
+async def test_load_ready_build_facts_returns_none_when_missing(
+    db_session: AsyncSession,
 ) -> None:
-    """Article 不在 (既消滅 / 未永続化) なら None を返す。"""
     repo = CurationRepository(db_session)
-    assert await repo.try_load_for_curation(article_id=999_999_999) is None
+    assert await repo.load_ready_build_facts(article_id=999_999_999) is None
 
 
 @pytest.mark.asyncio
-async def test_try_load_returns_none_when_signal_exists(
+async def test_load_ready_build_facts_marks_existing_signal(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
-    """既に signal extraction が永続化済なら None を返す (再処理しない)。"""
     article = await _make_article(
         db_session, sample_source, "https://example.com/load-signal"
     )
@@ -361,14 +317,17 @@ async def test_try_load_returns_none_when_signal_exists(
     await repo.save_signal(_signal_call(), article_id=article.id)
     await db_session.commit()
 
-    assert await repo.try_load_for_curation(article.id) is None
+    facts = await repo.load_ready_build_facts(article.id)
+
+    assert facts is not None
+    assert facts.has_signal_curation is True
+    assert facts.has_noise_curation is False
 
 
 @pytest.mark.asyncio
-async def test_try_load_returns_none_when_noise_exists(
+async def test_load_ready_build_facts_marks_existing_noise(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
-    """既に noise 判定済なら None (Stage 1 noise 記事を再処理しない)。"""
     article = await _make_article(
         db_session, sample_source, "https://example.com/load-noise"
     )
@@ -376,30 +335,8 @@ async def test_try_load_returns_none_when_noise_exists(
     await repo.save_noise(_noise_call(), article_id=article.id)
     await db_session.commit()
 
-    assert await repo.try_load_for_curation(article.id) is None
+    facts = await repo.load_ready_build_facts(article.id)
 
-
-@pytest.mark.asyncio
-async def test_try_load_returns_none_for_oversized_content(
-    db_session: AsyncSession, sample_source: NewsSource
-) -> None:
-    """本文サイズ > MAX_CONTENT_LENGTH なら skip log + None を返す。
-
-    AI 呼び出し前の枝刈り (Stage 4/5 と同じレイヤで実施)。
-    """
-    from app.analysis.curation.domain.ready import ReadyForCuration
-
-    oversized = "x" * (ReadyForCuration.MAX_CONTENT_LENGTH + 1)
-    article = Article(
-        source_id=sample_source.id,
-        source_url="https://example.com/oversized",
-        original_title="Title",
-        original_content=oversized,
-        published_at=datetime.now(UTC),
-    )
-    db_session.add(article)
-    await db_session.commit()
-    await db_session.refresh(article)
-
-    repo = CurationRepository(db_session)
-    assert await repo.try_load_for_curation(article.id) is None
+    assert facts is not None
+    assert facts.has_signal_curation is False
+    assert facts.has_noise_curation is True

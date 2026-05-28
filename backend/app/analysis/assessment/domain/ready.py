@@ -1,68 +1,75 @@
-"""ReadyForAssessment — Stage 4 実行可能状態の precondition 型 (案 3: 厚い Ready)。
-
-Stage 4 BC 実装。Stage 4 operation の前提条件 (Extraction 存在 +
-InScopeAssessment 未生成 + OutOfScopeAssessment 未生成) を構造保証し、かつ
-assessor 入力 text + audit に必要な参照値も含めて運ぶ厚い Ready。
-
-設計方針 (2026-05-12 確定、案 3): Ready 型は **処理に必要な値の全揃え** を構造保証する
-厚い型であり、**下流 Stage 自身 (Stage 4 Task) が処理開始時に DB から内容を fetch
-して構築** する。上流 Stage 3 Task から Stage 4 への kiq message は ID のみ運ぶ
-``AssessmentTrigger`` を用い、Stage 4 Task が ``Ready.try_advance_from`` を呼んで
-最新の DB 状態から Ready を構築する。
-
-旧 Pattern A' (ID-only Ready + 上流 Task 構築 + AuditRepository 2-hop 逆引き) は
-以下 3 点で構造保証の実体が弱かったため撤回:
-
-1. 値弱の Ready (3 fields) で audit に必要な ``article_id`` / ``source_name`` を
-   AuditRepository が DB 逆引きで再構築 → BC 境界の責務が漏出
-2. kiq enqueue → 実行までに DB 状態が変わるため、上流 Task で構築した Ready は
-   precondition の時間ずれを許容し、Service が暗黙的に再検証
-3. 「下流で次に進むことを上流が保証する」設計で責務の主語が間違っている
-
-詳細は memory `project_typed_pipeline_preconditions.md` (2026-05-11 確定版) と
-spec `specs/backlog/stage4-ready-thick-pattern.md`。
-
-AssessmentTrigger (kiq message DTO) は ``app/queue/messages/assessment.py`` 配下。
-"""
+"""Stage 4 assessment を開始できる状態を Domain 側で構築する。"""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from enum import StrEnum
 from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-__all__ = ["AssessmentPreconditionProtocol", "ReadyForAssessment"]
+__all__ = [
+    "AssessmentPreconditionProtocol",
+    "AssessmentReadyBuildBlocked",
+    "AssessmentReadyBuildBlockedCode",
+    "AssessmentReadyBuildBlockedError",
+    "AssessmentReadyBuildFacts",
+    "ReadyForAssessment",
+]
+
+
+class AssessmentReadyBuildBlockedCode(StrEnum):
+    """Stage 4 Ready 構築が業務状態により進めなかった理由。"""
+
+    CURATION_MISSING = "curation_missing"
+    ALREADY_IN_SCOPE = "already_in_scope"
+    ALREADY_OUT_OF_SCOPE = "already_out_of_scope"
+
+
+@dataclass(frozen=True, slots=True)
+class AssessmentReadyBuildBlocked:
+    """Stage 4 Ready 構築が正常に判定され、対象外だった結果。"""
+
+    curation_id: int
+    code: AssessmentReadyBuildBlockedCode
+    article_id: int | None = None
+    source_name: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AssessmentReadyBuildFacts:
+    """Stage 4 Ready 構築に必要な DB 射影。"""
+
+    curation_id: int
+    article_id: int
+    translated_title: str
+    summary: str
+    source_name: str | None
+    has_in_scope_assessment: bool
+    has_out_of_scope_assessment: bool
+
+
+class AssessmentReadyBuildBlockedError(Exception):
+    """Stage 4 Ready 構築が業務状態により進めなかったことを表す例外。"""
+
+    def __init__(self, blocked: AssessmentReadyBuildBlocked) -> None:
+        self.blocked = blocked
+        super().__init__(blocked.code.value)
 
 
 class AssessmentPreconditionProtocol(Protocol):
-    """Stage 4 進行判定用 Assessment Repository contract。
+    """Ready 構築に必要な DB 事実だけを読む repository contract。
 
-    「Ready 構築に必要なデータをロードする」= 「ReadyForAssessment を満たす」
-    という意味論で、Repository は precondition を満たす場合に
-    ``ReadyForAssessment`` を atomic な 1 query で構築して返す責務を持つ。
-    `try_advance_from` は本 Protocol への thin delegate。
+    構築可否と blocked 理由は ``ReadyForAssessment`` が判定する。
     """
 
-    async def try_load_for_assessment(
+    async def load_ready_build_facts(
         self, curation_id: int
-    ) -> ReadyForAssessment | None: ...
+    ) -> AssessmentReadyBuildFacts | None: ...
 
 
 class ReadyForAssessment(BaseModel):
-    """Stage 4 assessment を実行可能な状態を表す precondition 型 (厚い Ready)。
-
-    フィールドは operation を特定する ID と、assessor 入力 + audit 用参照値の全揃え。
-    Ready が存在する = 処理開始時点で DB から値を取得済 + 行存在 + 両 assessment
-    未生成 が verify された状態 (時間ずれゼロ)。Service / AuditRepository は
-    ``ready`` から直接値を取り、自身で DB 逆引きを行わない。
-
-    Invariants:
-    - ``curation_id``: 正の整数 (DB の ArticleCuration.id を指す)
-    - ``translated_title`` / ``summary``: Stage 3 で確定済の本文 (assessor 入力)
-    - ``article_id``: 正の整数 (audit の ``pipeline_events.article_id`` 列に詰める)
-    - ``source_name``: NewsSource.name (audit payload)、FK 切断時は None
-    - frozen: 生成後は不変
-    """
+    """assessor 入力と Stage 4 precondition を満たした不変オブジェクト。"""
 
     model_config = ConfigDict(frozen=True)
 
@@ -78,25 +85,41 @@ class ReadyForAssessment(BaseModel):
         *,
         curation_id: int,
         repo: AssessmentPreconditionProtocol,
-    ) -> ReadyForAssessment | None:
-        """curation_id から Stage 4 へ advance できるかを判定する gatekeeper。
+    ) -> ReadyForAssessment:
+        """DB 事実から Ready を構築し、対象外なら blocked 例外を投げる。"""
+        facts = await repo.load_ready_build_facts(curation_id)
+        if facts is None:
+            raise AssessmentReadyBuildBlockedError(
+                AssessmentReadyBuildBlocked(
+                    curation_id=curation_id,
+                    code=AssessmentReadyBuildBlockedCode.CURATION_MISSING,
+                )
+            )
 
-        Precondition (Stage 4 に進める条件):
-        - 同 curation_id の ArticleCuration 行が存在
-        - 同 curation_id の InScopeAssessment 未生成
-        - 同 curation_id の OutOfScopeAssessment 未生成
+        if facts.has_in_scope_assessment:
+            raise AssessmentReadyBuildBlockedError(
+                AssessmentReadyBuildBlocked(
+                    curation_id=curation_id,
+                    code=AssessmentReadyBuildBlockedCode.ALREADY_IN_SCOPE,
+                    article_id=facts.article_id,
+                    source_name=facts.source_name,
+                )
+            )
 
-        本 method は Domain 層の named gateway として
-        `Repository.try_load_for_assessment` にそのまま delegate する。
-        Repository が atomic な 1 query で precondition 判定 + 厚い Ready の
-        構築を完結させる。
+        if facts.has_out_of_scope_assessment:
+            raise AssessmentReadyBuildBlockedError(
+                AssessmentReadyBuildBlocked(
+                    curation_id=curation_id,
+                    code=AssessmentReadyBuildBlockedCode.ALREADY_OUT_OF_SCOPE,
+                    article_id=facts.article_id,
+                    source_name=facts.source_name,
+                )
+            )
 
-        Returns:
-            進める場合: `ReadyForAssessment` (audit 参照値も含む厚い型)
-            進めない場合: `None` (業務正常状態、例外ではない)
-
-        Args:
-            curation_id: 上流 Stage 3 で永続化された ArticleCuration.id
-            repo: ``try_load_for_assessment`` を備える Repository
-        """
-        return await repo.try_load_for_assessment(curation_id)
+        return cls(
+            curation_id=facts.curation_id,
+            translated_title=facts.translated_title,
+            summary=facts.summary,
+            article_id=facts.article_id,
+            source_name=facts.source_name,
+        )

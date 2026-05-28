@@ -6,7 +6,11 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis.assessment.ai.envelope import AssessmentCall
-from app.analysis.assessment.domain.ready import ReadyForAssessment
+from app.analysis.assessment.domain.ready import (
+    AssessmentReadyBuildBlocked,
+    AssessmentReadyBuildBlockedCode,
+    ReadyForAssessment,
+)
 from app.analysis.assessment.domain.result import InScope, OutOfScope
 from app.analysis.assessment.errors import AssessmentError
 from app.audit.domain.event import EventType, Stage
@@ -14,10 +18,12 @@ from app.audit.domain.payloads import AssessmentPayload
 from app.audit.error_chain import extract_error_chain
 from app.audit.failure_projection import (
     FailureProjection,
+    Retryability,
     failure_action_value,
     project_failure,
     unknown_failure_projection,
 )
+from app.audit.ready_build import project_ready_build_failure
 from app.audit.repository import PipelineEventRepository
 from app.models.backfill_exclusion import BackfillExclusionReason
 from app.shared.security.redaction import redact_secrets
@@ -28,6 +34,18 @@ _ERROR_MESSAGE_LIMIT = 2000
 
 _IN_SCOPE_OUTCOME_CODE = "assessed_in_scope"
 _OUT_OF_SCOPE_OUTCOME_CODE = "assessed_out_of_scope"
+
+_READY_BUILD_BLOCKED_CODES = {
+    AssessmentReadyBuildBlockedCode.CURATION_MISSING: (
+        "assessment_ready_build_blocked_curation_missing"
+    ),
+    AssessmentReadyBuildBlockedCode.ALREADY_IN_SCOPE: (
+        "assessment_ready_build_blocked_already_in_scope"
+    ),
+    AssessmentReadyBuildBlockedCode.ALREADY_OUT_OF_SCOPE: (
+        "assessment_ready_build_blocked_already_out_of_scope"
+    ),
+}
 
 
 def _limited_str(value: object, limit: int) -> str | None:
@@ -121,6 +139,43 @@ class AssessmentAuditRepository:
                 curation_id=curation_id,
             ),
             article_id=article_id,
+        )
+
+    # --- Ready 構築 blocked / failed ---------------------------------------
+
+    async def append_ready_build_blocked(
+        self, *, blocked: AssessmentReadyBuildBlocked
+    ) -> None:
+        """Ready 構築が業務状態により対象外だった事実を記録する。"""
+        await self._events.append(
+            stage=Stage.ASSESSMENT,
+            event_type=EventType.REJECTED,
+            outcome_code=_READY_BUILD_BLOCKED_CODES[blocked.code],
+            payload=AssessmentPayload(
+                source_name=blocked.source_name,
+                curation_id=blocked.curation_id,
+            ),
+            article_id=blocked.article_id,
+        )
+
+    async def append_ready_build_failed(
+        self, *, curation_id: int, exc: Exception
+    ) -> None:
+        """Ready 構築フェーズの例外を failed として記録する。"""
+        projection = project_ready_build_failure(stage_prefix="assessment", exc=exc)
+        payload = AssessmentPayload(
+            failure_kind=projection.failure_kind,
+            curation_id=curation_id,
+            error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
+            error_chain=extract_error_chain(exc),
+        )
+        await self._events.append(
+            stage=Stage.ASSESSMENT,
+            event_type=EventType.FAILED,
+            outcome_code=projection.outcome_code,
+            payload=payload,
+            error_class=_fqn(exc),
+            retryability=Retryability.UNKNOWN,
         )
 
     # --- 失敗経路 (Task 層 3 marker dispatch、別 session 別 tx) ----------

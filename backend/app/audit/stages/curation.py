@@ -8,15 +8,18 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.analysis.curation.domain.ready import CurationReadyBuildBlockedCode
 from app.audit.domain.event import EventType, Stage
 from app.audit.domain.payloads import CurationPayload
 from app.audit.error_chain import extract_error_chain
 from app.audit.failure_projection import (
     FailureProjection,
+    Retryability,
     failure_action_value,
     project_failure,
     unknown_failure_projection,
 )
+from app.audit.ready_build import project_ready_build_failure
 from app.audit.repository import PipelineEventRepository
 from app.models.article import Article
 from app.models.news_source import NewsSource
@@ -26,13 +29,31 @@ if TYPE_CHECKING:
     from app.analysis.curation.ai.base import BaseCurator
     from app.analysis.curation.ai.envelope import CurationCall
     from app.analysis.curation.domain import Noise, Signal
-    from app.analysis.curation.domain.ready import ReadyForCuration
+    from app.analysis.curation.domain.ready import (
+        CurationReadyBuildBlocked,
+        ReadyForCuration,
+    )
     from app.analysis.curation.errors import CurationError, CurationTerminalDropError
 
 _AI_RAW_RESPONSE_LIMIT = 2048
 _ERROR_MESSAGE_LIMIT = 2000
 
 BACKFILL_CURATION_AGED_OUT_CODE = "backfill_curation_aged_out"
+
+_READY_BUILD_BLOCKED_CODES = {
+    CurationReadyBuildBlockedCode.ARTICLE_MISSING: (
+        "curation_ready_build_blocked_article_missing"
+    ),
+    CurationReadyBuildBlockedCode.ALREADY_CURATED: (
+        "curation_ready_build_blocked_already_curated"
+    ),
+    CurationReadyBuildBlockedCode.ALREADY_REJECTED_AS_NOISE: (
+        "curation_ready_build_blocked_already_rejected_as_noise"
+    ),
+    CurationReadyBuildBlockedCode.CONTENT_TOO_LARGE: (
+        "curation_ready_build_blocked_content_too_large"
+    ),
+}
 
 
 class CurationAuditRepository:
@@ -150,6 +171,51 @@ class CurationAuditRepository:
             outcome_code=BACKFILL_CURATION_AGED_OUT_CODE,
             payload=CurationPayload(source_name=source_name),
             article_id=article_id,
+        )
+
+    # --- Ready 構築 blocked / failed ---------------------------------------
+
+    async def append_ready_build_blocked(
+        self, *, blocked: CurationReadyBuildBlocked
+    ) -> None:
+        """Ready 構築が業務状態により対象外だった事実を記録する。"""
+        payload = CurationPayload(
+            source_name=blocked.source_name,
+            target_article_id=blocked.target_article_id,
+            input_content_length=blocked.content_length,
+            max_content_length=blocked.max_content_length,
+        )
+        article_id = (
+            None
+            if blocked.code is CurationReadyBuildBlockedCode.ARTICLE_MISSING
+            else blocked.target_article_id
+        )
+        await self._events.append(
+            stage=Stage.CURATION,
+            event_type=EventType.REJECTED,
+            outcome_code=_READY_BUILD_BLOCKED_CODES[blocked.code],
+            payload=payload,
+            article_id=article_id,
+        )
+
+    async def append_ready_build_failed(
+        self, *, target_article_id: int, exc: Exception
+    ) -> None:
+        """Ready 構築フェーズの例外を failed として記録する。"""
+        projection = project_ready_build_failure(stage_prefix="curation", exc=exc)
+        payload = CurationPayload(
+            failure_kind=projection.failure_kind,
+            target_article_id=target_article_id,
+            error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
+            error_chain=extract_error_chain(exc),
+        )
+        await self._events.append(
+            stage=Stage.CURATION,
+            event_type=EventType.FAILED,
+            outcome_code=projection.outcome_code,
+            payload=payload,
+            error_class=_fqn(exc),
+            retryability=Retryability.UNKNOWN,
         )
 
     # --- 失敗経路 (Task 層 4 marker dispatch) -----------------------------

@@ -1,22 +1,4 @@
-"""``AssessmentRepository`` のユニットテスト。
-
-in-scope / out-of-scope 永続化責務 + Ready 構築 (案 3 = 厚い Ready の 1 query
-atomic ロード) を 1 class に統合した repository を検証する。
-``AssessmentCall`` envelope (``call.model_name`` / ``call.result``) を 1 つ渡せば
-業務 INSERT が完結することと、楽観ロック敗北時の戻り値が ``None`` であることを
-業務観点で固定する (memory ``feedback_test_invariants_over_change_tracking``)。
-
-検証する不変条件:
-- ``try_load_for_assessment`` が precondition (両 assessment 未生成) を満たす場合
-  のみ厚い Ready (5 fields) を返し、満たさない場合は ``None`` を返す
-- ``save_out_of_scope`` 成功時、戻り値の id が DB 上の主キーと一致し、snapshot
-  (``translated_title`` / ``summary`` / ``investor_take``) が DB row に保持される
-- ``save_out_of_scope`` 既存 row 存在時 (race lost) には ``None`` を返し、勝者 row
-  はそのまま残る
-- ``save_in_scope`` 成功時、戻り値 ``id`` が DB 上の主キーと一致する
-- ``save_in_scope`` race lost で ``None`` を返す
-- ``save_in_scope`` で AI が未登録 slug を返したら ``AssessmentCategoryMissingError``
-"""
+"""AssessmentRepository の DB 境界テスト。"""
 
 from __future__ import annotations
 
@@ -53,11 +35,14 @@ _AI_MODEL = "gemini-2.5-flash-lite"
 
 
 async def _make_extraction(
-    db_session: AsyncSession, sample_source: NewsSource
+    db_session: AsyncSession,
+    sample_source: NewsSource,
+    *,
+    url: str = "https://e.com/repo-test",
 ) -> ArticleCuration:
     article = Article(
         source_id=sample_source.id,
-        source_url="https://e.com/repo-test",  # type: ignore[arg-type]
+        source_url=url,  # type: ignore[arg-type]
         original_title="Original",
         original_content="c" * 100,
         published_at=datetime.now(UTC),
@@ -410,37 +395,49 @@ async def test_save_in_scope_raises_when_category_unknown(
 
 
 # ---------------------------------------------------------------------------
-# try_load_for_assessment (try_advance_from atomic loader)
+# Ready 構築用 DB 事実取得
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_try_load_returns_ready_when_no_assessment(
+async def test_load_ready_build_facts_returns_values_for_unprocessed_curation(
     db_session: AsyncSession,
     sample_source: NewsSource,
 ) -> None:
-    """行存在 / 両 assessment 不在 → 5 field 揃った Ready を返す。"""
     extraction = await _make_extraction(db_session, sample_source)
 
     repo = AssessmentRepository(db_session)
-    ready = await repo.try_load_for_assessment(extraction.id)
+    facts = await repo.load_ready_build_facts(extraction.id)
 
-    assert ready is not None
-    assert ready.curation_id == extraction.id
-    assert ready.translated_title == extraction.translated_title
-    assert ready.summary == extraction.summary
-    assert ready.article_id == extraction.article_id
-    assert ready.source_name == str(sample_source.name)
+    assert facts is not None
+    assert facts.curation_id == extraction.id
+    assert facts.article_id == extraction.article_id
+    assert facts.translated_title == extraction.translated_title
+    assert facts.summary == extraction.summary
+    assert facts.source_name == str(sample_source.name)
+    assert facts.has_in_scope_assessment is False
+    assert facts.has_out_of_scope_assessment is False
 
 
 @pytest.mark.asyncio
-async def test_try_load_returns_none_when_in_scope_exists(
+async def test_load_ready_build_facts_returns_none_when_missing(
+    db_session: AsyncSession,
+) -> None:
+    repo = AssessmentRepository(db_session)
+    assert await repo.load_ready_build_facts(999_999) is None
+
+
+@pytest.mark.asyncio
+async def test_load_ready_build_facts_marks_existing_in_scope_assessment(
     db_session: AsyncSession,
     sample_source: NewsSource,
     sample_categories: list[Category],
 ) -> None:
-    """in_scope_assessment あり → None。"""
-    extraction = await _make_extraction(db_session, sample_source)
+    extraction = await _make_extraction(
+        db_session,
+        sample_source,
+        url="https://example.com/assessment-facts-in",
+    )
     ai_cat = next(c for c in sample_categories if str(c.slug) == "ai")
     db_session.add(
         InScopeAssessmentORM(
@@ -454,16 +451,23 @@ async def test_try_load_returns_none_when_in_scope_exists(
     await db_session.commit()
 
     repo = AssessmentRepository(db_session)
-    assert await repo.try_load_for_assessment(extraction.id) is None
+    facts = await repo.load_ready_build_facts(extraction.id)
+
+    assert facts is not None
+    assert facts.has_in_scope_assessment is True
+    assert facts.has_out_of_scope_assessment is False
 
 
 @pytest.mark.asyncio
-async def test_try_load_returns_none_when_out_of_scope_exists(
+async def test_load_ready_build_facts_marks_existing_out_of_scope_assessment(
     db_session: AsyncSession,
     sample_source: NewsSource,
 ) -> None:
-    """out_of_scope_assessment あり → None。"""
-    extraction = await _make_extraction(db_session, sample_source)
+    extraction = await _make_extraction(
+        db_session,
+        sample_source,
+        url="https://example.com/assessment-facts-out",
+    )
     db_session.add(
         OutOfScopeAssessmentORM(
             curation_id=extraction.id,
@@ -475,12 +479,8 @@ async def test_try_load_returns_none_when_out_of_scope_exists(
     await db_session.commit()
 
     repo = AssessmentRepository(db_session)
-    assert await repo.try_load_for_assessment(extraction.id) is None
+    facts = await repo.load_ready_build_facts(extraction.id)
 
-
-@pytest.mark.asyncio
-async def test_try_load_returns_none_for_missing_extraction(
-    db_session: AsyncSession,
-) -> None:
-    repo = AssessmentRepository(db_session)
-    assert await repo.try_load_for_assessment(999_999) is None
+    assert facts is not None
+    assert facts.has_in_scope_assessment is False
+    assert facts.has_out_of_scope_assessment is True

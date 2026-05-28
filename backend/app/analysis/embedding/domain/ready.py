@@ -1,67 +1,70 @@
-"""ReadyForEmbedding — Stage 5 実行可能状態の precondition 型 (案 3: 厚い Ready)。
-
-spec `specs/typed-pipeline-preconditions.md` (案 3 で再ドラフト予定) の embedding
-BC 実装。Stage 5 operation の前提条件 (Embedding 未生成) を構造保証し、かつ
-embedder 入力 text + audit に必要な参照値も含めて運ぶ厚い Ready。
-
-設計方針 (2026-05-12 確定、案 3): Ready 型は **処理に必要な値の全揃え** を構造保証する
-厚い型であり、**下流 Stage 自身 (Stage 5 Task) が処理開始時に DB から内容を fetch
-して構築** する。上流 Stage 4 Task から Stage 5 への kiq message は ID のみ運ぶ
-``EmbeddingTrigger`` を用い、Stage 5 Task が ``Ready.try_advance_from`` を呼んで
-最新の DB 状態から Ready を構築する。
-
-旧 Pattern A' (ID-only Ready) は以下 3 点で型として保証の実体が無いため撤回:
-
-1. `int` の nominal wrapper で中身に invariant が無い (`InScope` のような
-   型としての価値を持たない)
-2. kiq enqueue → 実行までに DB 状態が変わるため、Service が DB fetch +
-   None チェックで実質的に precondition を再検証 → 「Service の precondition 分岐を
-   消す」当初目的に反する
-3. 「下流で次に進むことを上流が保証する」設計で責務の主語が間違っている
-
-詳細は memory `project_typed_pipeline_preconditions.md` (2026-05-11 確定版)。
-
-EmbeddingTrigger (kiq message DTO) は ``app/queue/messages/embedding.py`` 配下。
-"""
+"""Stage 5 embedding を開始できる状態を Domain 側で構築する。"""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from enum import StrEnum
 from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-__all__ = ["EmbeddingPreconditionProtocol", "ReadyForEmbedding"]
+__all__ = [
+    "EmbeddingPreconditionProtocol",
+    "EmbeddingReadyBuildBlocked",
+    "EmbeddingReadyBuildBlockedCode",
+    "EmbeddingReadyBuildBlockedError",
+    "EmbeddingReadyBuildFacts",
+    "ReadyForEmbedding",
+]
+
+
+class EmbeddingReadyBuildBlockedCode(StrEnum):
+    """Stage 5 Ready 構築が業務状態により進めなかった理由。"""
+
+    ANALYSIS_MISSING = "analysis_missing"
+    ALREADY_EMBEDDED = "already_embedded"
+
+
+@dataclass(frozen=True, slots=True)
+class EmbeddingReadyBuildBlocked:
+    """Stage 5 Ready 構築が正常に判定され、対象外だった結果。"""
+
+    analysis_id: int
+    code: EmbeddingReadyBuildBlockedCode
+    article_id: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class EmbeddingReadyBuildFacts:
+    """Stage 5 Ready 構築に必要な DB 射影。"""
+
+    article_id: int
+    has_embedding: bool
+    translated_title: str
+    summary: str
+
+
+class EmbeddingReadyBuildBlockedError(Exception):
+    """Stage 5 Ready 構築が業務状態により進めなかったことを表す例外。"""
+
+    def __init__(self, blocked: EmbeddingReadyBuildBlocked) -> None:
+        self.blocked = blocked
+        super().__init__(blocked.code.value)
 
 
 class EmbeddingPreconditionProtocol(Protocol):
-    """Stage 5 進行判定用 Embedding Repository contract。
+    """Ready 構築に必要な DB 事実だけを読む repository contract。
 
-    「Ready 構築に必要なデータをロードする」= 「ReadyForEmbedding を満たす」
-    という意味論で、Repository は precondition を満たす場合に
-    ``ReadyForEmbedding`` を atomic な 1 query で構築して返す責務を持つ。
-    `try_advance_from` は本 Protocol への thin delegate。
+    構築可否と blocked 理由は ``ReadyForEmbedding`` が判定する。
     """
 
-    async def try_load_for_embedding(
+    async def load_ready_build_facts(
         self, analysis_id: int
-    ) -> ReadyForEmbedding | None: ...
+    ) -> EmbeddingReadyBuildFacts | None: ...
 
 
 class ReadyForEmbedding(BaseModel):
-    """Stage 5 embedding を実行可能な状態を表す precondition 型 (厚い Ready)。
-
-    フィールドは operation を特定する ID と、embedder 入力 text + audit 用参照値
-    の全揃え。Ready が存在する = 処理開始時点で DB から text を取得済 + 行存在 +
-    未 embedded が verify された状態 (時間ずれゼロ)。Service / AuditRepository は
-    ``ready`` から直接値を取り、自身で DB fetch / 逆引きを行わない。
-
-    Invariants:
-    - ``analysis_id``: 正の整数 (DB の InScopeAssessment.id を指す)
-    - ``text_for_embedding``: 結合済の embedder 入力 (translated_title + "\\n" +
-      summary)。Repository が結合して返す
-    - ``article_id``: 正の整数 (audit の ``pipeline_events.article_id`` 列に詰める)
-    - frozen: 生成後は不変
-    """
+    """embedder 入力と Stage 5 precondition を満たした不変オブジェクト。"""
 
     model_config = ConfigDict(frozen=True)
 
@@ -74,25 +77,28 @@ class ReadyForEmbedding(BaseModel):
         cls,
         analysis_id: int,
         embedding_repo: EmbeddingPreconditionProtocol,
-    ) -> ReadyForEmbedding | None:
-        """analysis_id から Stage 5 へ advance できるかを判定する gatekeeper。
+    ) -> ReadyForEmbedding:
+        """DB 事実から Ready を構築し、対象外なら blocked 例外を投げる。"""
+        facts = await embedding_repo.load_ready_build_facts(analysis_id)
+        if facts is None:
+            raise EmbeddingReadyBuildBlockedError(
+                EmbeddingReadyBuildBlocked(
+                    analysis_id=analysis_id,
+                    code=EmbeddingReadyBuildBlockedCode.ANALYSIS_MISSING,
+                )
+            )
 
-        Precondition (Stage 5 に進める条件):
-        - 同 analysis_id の InScopeAssessment 行が存在
-        - 同 analysis_id の Embedding 未生成
-        - translated_title / summary が確定済 (Stage 4 の BC 境界が保証)
+        if facts.has_embedding:
+            raise EmbeddingReadyBuildBlockedError(
+                EmbeddingReadyBuildBlocked(
+                    analysis_id=analysis_id,
+                    code=EmbeddingReadyBuildBlockedCode.ALREADY_EMBEDDED,
+                    article_id=facts.article_id,
+                )
+            )
 
-        本 method は Domain 層の named gateway として
-        `Repository.try_load_for_embedding` にそのまま delegate する。
-        Repository が atomic な 1 query で precondition 判定 + 厚い Ready の
-        構築を完結させる。
-
-        Returns:
-            進める場合: `ReadyForEmbedding` (text + article_id 含む厚い型)
-            進めない場合: `None` (業務正常状態、例外ではない)
-
-        Args:
-            analysis_id: 上流 Stage 4 で永続化された InScopeAssessment.id
-            embedding_repo: ``try_load_for_embedding`` を備える Repository
-        """
-        return await embedding_repo.try_load_for_embedding(analysis_id)
+        return cls(
+            analysis_id=analysis_id,
+            text_for_embedding=f"{facts.translated_title}\n{facts.summary}",
+            article_id=facts.article_id,
+        )

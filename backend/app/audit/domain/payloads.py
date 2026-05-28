@@ -100,11 +100,13 @@ class CurationPayload(BasePipelineEventPayload):
     kind: Literal["curation"] = "curation"
     failure_kind: str | None = None
     failure_action: str | None = None
+    target_article_id: int | None = None
     ai_model: str | None = None
     prompt_version: str | None = None
 
     input_content_head: str | None = None
     input_content_length: int | None = None
+    max_content_length: int | None = None
     input_content_hash: str | None = None
     ai_raw_response: str | None = None
     raw_relevance: str | None = None

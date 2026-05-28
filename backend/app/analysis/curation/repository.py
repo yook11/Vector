@@ -1,111 +1,67 @@
-"""Curation リポジトリ — Stage 3 (signal / noise 両経路) の永続化 + Ready 構築。
-
-Stage 4 ``AssessmentRepository`` (``save_in_scope`` / ``save_out_of_scope`` で
-``int | None`` を返す勝者 SSoT パターン) と完全対称に揃え、Stage 3 永続化層を
-1 クラス + ``int | None`` 戻り値で表現する。caller は
-``CurationRepository(session)`` 1 つだけ instantiate すれば
-signal / noise 両 path を扱える。
-
-責務 (Ready 構築):
-
-- ``try_load_for_curation``: 「Article 行存在 + signal/noise 未生成 + 本文サイズ
-  ≤ hard cap」を 1 query で atomic に判定し、満たす場合のみ
-  ``ReadyForCuration`` を直接構築して返す (案 3 = 厚い Ready)。Domain 層
-  ``ReadyForCuration.try_advance_from`` は本 method への thin delegate。
-  Stage 4 ``try_load_for_assessment`` と同型。
-
-責務 (signal 経路):
-
-- ``signal_exists_for_article``: cheap な exists 判定 (旧経路 / 別用途で残置、
-  Ready 構築経路では ``try_load_for_curation`` 内に集約済)
-- ``save_signal``: ``CurationCall[Signal]`` envelope を
-  ``INSERT ... ON CONFLICT (article_id) DO NOTHING RETURNING id`` で永続化する。
-  race 敗北時 (rowcount=0) は ``None`` を返し、Service が audit / 後続 chain を
-  焼かず短絡する (勝者 SSoT、Stage 4 AssessmentRepository と同型)。
-- ``update_signal_idempotent``: re-curation CLI 専用 —
-  ``CurationCall[Signal]`` のみ受け付け、Noise を update 経路に流す可能性を
-  型レベルで排除する (``feedback_structural_guarantee``)。
-
-責務 (noise 経路):
-
-- ``noise_exists_for_article``: cheap な exists 判定 (旧経路 / 別用途で残置、
-  Ready 構築経路では ``try_load_for_curation`` 内に集約済)
-- ``save_noise``: ``CurationCall[Noise]`` envelope を ``INSERT ... ON
-  CONFLICT DO NOTHING RETURNING id`` で永続化する。``ON CONFLICT`` の
-  target は指定しない (UNIQUE 違反だけでなく ``article_curations`` 側の
-  排他トリガーが fire したケースも吸収するため。
-  ``feedback_on_conflict_no_target.md``)。
-"""
+"""Stage 3 curation の DB 読み取りと永続化を担う repository。"""
 
 from __future__ import annotations
 
-import structlog
 from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis.curation.ai.envelope import CurationCall
 from app.analysis.curation.domain import Noise, Signal
-from app.analysis.curation.domain.ready import ReadyForCuration
+from app.analysis.curation.domain.ready import CurationReadyBuildFacts
 from app.models.article import Article
 from app.models.article_curation import ArticleCuration
 from app.models.curation_noise import CurationNoise
-
-logger = structlog.get_logger(__name__)
+from app.models.news_source import NewsSource
 
 
 class CurationRepository:
-    """curation（Stage 3、signal / noise 両経路）に必要な DB 操作をカプセル化する。"""
+    """Domain 判断を持たず、DB 事実と保存結果だけを返す。"""
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
     # ------------------------------------------------------------------
-    # Ready 構築 (try_advance_from precondition + curator 入力値)
+    # Ready 構築用 DB 事実取得
     # ------------------------------------------------------------------
 
-    async def try_load_for_curation(self, article_id: int) -> ReadyForCuration | None:
-        """`ReadyForCuration.try_advance_from` 用 atomic ロード (案 3)。
-
-        1 query で「Article 行存在 + signal/noise 未生成」を判定し、満たす場合
-        のみ curator 入力 (title / content) を取得して厚い Ready を構築して返す。
-        本文サイズ > ``MAX_CONTENT_LENGTH`` の場合は AI 呼び出し前に枝刈りする
-        ため skip log を残して ``None`` を返す (Stage 4 ``try_load_for_assessment``
-        と同型の atomic 1 query パターン)。
-
-        Returns:
-            進める場合: precondition を満たし、curator 入力値を含む
-                ``ReadyForCuration``
-            進めない場合: ``None`` (Article 不在 / signal 既存 / noise 既存 /
-                本文 oversized)
-        """
+    async def load_ready_build_facts(
+        self, article_id: int
+    ) -> CurationReadyBuildFacts | None:
         stmt = (
-            select(Article.original_title, Article.original_content)
+            select(
+                Article.id,
+                Article.original_title,
+                Article.original_content,
+                NewsSource.name,
+                ArticleCuration.id.is_not(None),
+                CurationNoise.id.is_not(None),
+            )
+            .select_from(Article)
+            .join(NewsSource, NewsSource.id == Article.source_id)
             .outerjoin(ArticleCuration, ArticleCuration.article_id == Article.id)
             .outerjoin(CurationNoise, CurationNoise.article_id == Article.id)
-            .where(
-                Article.id == article_id,
-                ArticleCuration.id.is_(None),
-                CurationNoise.id.is_(None),
-            )
+            .where(Article.id == article_id)
             .limit(1)
         )
         row = (await self._session.execute(stmt)).first()
         if row is None:
             return None
-        title, content = row
-        if len(content) > ReadyForCuration.MAX_CONTENT_LENGTH:
-            logger.warning(
-                "curation_skipped_oversized_article",
-                article_id=article_id,
-                content_length=len(content),
-                max_length=ReadyForCuration.MAX_CONTENT_LENGTH,
-            )
-            return None
-        return ReadyForCuration(
-            article_id=article_id,
-            original_title=title,
-            original_content=content,
+        (
+            loaded_article_id,
+            original_title,
+            original_content,
+            source_name,
+            has_signal_curation,
+            has_noise_curation,
+        ) = row
+        return CurationReadyBuildFacts(
+            article_id=loaded_article_id,
+            original_title=original_title,
+            original_content=original_content,
+            source_name=str(source_name) if source_name is not None else None,
+            has_signal_curation=has_signal_curation,
+            has_noise_curation=has_noise_curation,
         )
 
     # ------------------------------------------------------------------
@@ -113,7 +69,7 @@ class CurationRepository:
     # ------------------------------------------------------------------
 
     async def signal_exists_for_article(self, article_id: int) -> bool:
-        """``try_advance_from`` 用 cheap exists 判定 (signal 側、article_id 単位)。"""
+        """signal curation が既に存在するかを返す。"""
         stmt = (
             select(ArticleCuration.id)
             .where(ArticleCuration.article_id == article_id)
@@ -127,24 +83,7 @@ class CurationRepository:
         *,
         article_id: int,
     ) -> int | None:
-        """``CurationCall[Signal]`` を受け、AI 分析結果を
-        ``INSERT ... ON CONFLICT (article_id) DO NOTHING RETURNING id`` で
-        永続化する。
-
-        ``call.result`` (= ``Signal``) から永続化に必要な値を直接取り出す
-        (Stage 3 で起きた事実は envelope が抱え切る、
-        ``feedback_bc_boundary_guarantees_downstream``)。
-        ``call.model_name`` は監査 SSoT (``pipeline_events.payload.ai_model``)
-        に焼くのみで業務行には INSERT しない (``feedback_outcome_purification``)。
-
-        commit は呼び出し側 (Service) が行う。``extracted_at`` は server_default で
-        DB が確定させる (本メソッドでは読み戻さない、id のみ返す)。
-
-        Returns:
-            成功時: 永続化された ``article_curations.id`` (``int``)
-            race 敗北時 (期待した article_id への UNIQUE 違反): ``None``
-            (Service は audit / 後続 chain を焼かず短絡する、勝者 SSoT 同型)
-        """
+        """signal を保存し、既存行に負けた場合は ``None`` を返す。"""
         signal = call.result
         stmt = (
             pg_insert(ArticleCuration)
@@ -207,44 +146,13 @@ class CurationRepository:
     # noise path
     # ------------------------------------------------------------------
 
-    async def noise_exists_for_article(self, article_id: int) -> bool:
-        """``try_advance_from`` 用 cheap exists 判定 (noise 側、article_id 単位)。"""
-        stmt = (
-            select(CurationNoise.id)
-            .where(CurationNoise.article_id == article_id)
-            .limit(1)
-        )
-        return (await self._session.execute(stmt)).first() is not None
-
     async def save_noise(
         self,
         call: CurationCall[Noise],
         *,
         article_id: int,
     ) -> int | None:
-        """``CurationCall[Noise]`` を受け、noise 記録を ``INSERT ... ON
-        CONFLICT DO NOTHING RETURNING id`` で永続化する。
-
-        ``call.result`` (= ``Noise``) から永続化に必要な値を直接取り出す
-        (Stage 3 で起きた事実は envelope が抱え切る、
-        ``feedback_bc_boundary_guarantees_downstream``)。
-        ``call.model_name`` は監査 SSoT (``pipeline_events.payload.ai_model``)
-        に焼くのみで業務行には INSERT しない (``feedback_outcome_purification``)。
-
-        commit は呼び出し側 (Service) が行う。``rejected_at`` は server_default
-        で DB が確定させる (本メソッドでは読み戻さない、id のみ返す)。
-
-        ``ON CONFLICT`` は target 指定なしで ``DO NOTHING`` を指定する。これに
-        より同一 article への UNIQUE 違反だけでなく、排他トリガー
-        (``article_curations`` 側に既に行がある) のケースも同経路で吸収する
-        — トリガー fire は ``IntegrityError`` を raise するが、``DO NOTHING`` の
-        スコープには入らない。後者は呼び出し側で再 try (taskiq retry) させる。
-
-        Returns:
-            成功時: 永続化された ``curation_noises.id`` (``int``)
-            UNIQUE 違反による race 敗北時: ``None``
-            (Service は audit / 後続 chain を焼かず短絡する、勝者 SSoT 同型)
-        """
+        """noise を保存し、既存行に負けた場合は ``None`` を返す。"""
         noise = call.result
         stmt = (
             pg_insert(CurationNoise)

@@ -1,34 +1,21 @@
-"""``generate_embedding`` task のテスト (chain 経路 + skip 経路)。
-
-案 3 (厚い Ready + 下流 Stage 自身が処理開始時に構築): generate_embedding は
-``EmbeddingTrigger`` (analysis_id のみ) を受領し、task 自身が
-``ReadyForEmbedding.try_advance_from`` で Ready を構築する。embedder は
-``ctx.state.embedder`` 経由で Pure DI される。
-
-Service.execute は副作用のみで戻り値 ``None`` 一本化 (2026-05-12 確定)。
-
-- precondition 未充足 → svc.execute を呼ばずに return
-  (rate limit gate も acquire しない)
-- 成功 → task 完了 (Stage 5 は終端、chain firing なし)
-- quota 超過 (gate.acquire が False) → svc.execute を呼ばずに return
-
-Layer 1 marker dispatch ルーティングは ``test_embedding_task_dispatch.py`` 側で
-網羅する。Handler 内部の audit 経路は ``test_failure_handler.py`` で integration
-として検証する。
-"""
+"""``generate_embedding`` task の分岐テスト。"""
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.analysis.embedding.domain.ready import ReadyForEmbedding
+from app.analysis.embedding.domain.ready import (
+    EmbeddingReadyBuildBlocked,
+    EmbeddingReadyBuildBlockedCode,
+    EmbeddingReadyBuildBlockedError,
+    ReadyForEmbedding,
+)
 from app.analysis.rate_limit import AIModelRateLimitPolicy
 from app.queue.messages.embedding import EmbeddingTrigger
 
 
 def _make_embedder_fake() -> MagicMock:
-    """ctx.state.embedder 用のスタブ。property 契約を満たす。"""
     fake = MagicMock()
     fake.model_name = "gemini-embedding-001"
     fake.dimension = 768
@@ -42,7 +29,6 @@ def _make_embedder_fake() -> MagicMock:
 
 
 def _make_gate_fake(*, acquired: bool = True) -> MagicMock:
-    """ctx.state.provider_rate_limit_gate 用のスタブ。"""
     gate = MagicMock()
     gate.acquire = AsyncMock(return_value=acquired)
     return gate
@@ -55,7 +41,6 @@ def _make_ctx(
     retry_count: int = 0,
     max_retries: int = 0,
 ) -> MagicMock:
-    """taskiq Context モック (state.embedder / provider_rate_limit_gate Pure DI)。"""
     ctx = MagicMock()
     ctx.state = SimpleNamespace(
         session_factory=MagicMock(),
@@ -82,11 +67,15 @@ def _make_ready(analysis_id: int = 1, article_id: int = 7) -> ReadyForEmbedding:
     )
 
 
-def _patch_ready_construction(ready: ReadyForEmbedding | None):
-    """task 内 ``ReadyForEmbedding.try_advance_from`` を mock する patch。"""
+def _patch_ready_construction(result: ReadyForEmbedding | EmbeddingReadyBuildBlocked):
+    mock = (
+        AsyncMock(side_effect=EmbeddingReadyBuildBlockedError(result))
+        if isinstance(result, EmbeddingReadyBuildBlocked)
+        else AsyncMock(return_value=result)
+    )
     return patch(
         "app.queue.tasks.embedding.ReadyForEmbedding.try_advance_from",
-        new=AsyncMock(return_value=ready),
+        new=mock,
     )
 
 
@@ -122,8 +111,8 @@ class TestGenerateEmbedding:
         )
 
     @pytest.mark.asyncio
-    async def test_skips_when_precondition_not_met(self) -> None:
-        """try_advance_from が None を返したら svc.execute を呼ばずに return。
+    async def test_ready_build_blocked_audits_and_does_not_call_service(self) -> None:
+        """Ready build blocked なら rejected audit + return、Service は呼ばない。
 
         rate limit acquire も試みない (Ready 構築が gatekeeper、案 3 順序)。
         """
@@ -132,14 +121,55 @@ class TestGenerateEmbedding:
         gate = _make_gate_fake()
         mock_ctx = _make_ctx(embedder=_make_embedder_fake(), gate=gate)
         trigger = _make_trigger(analysis_id=42)
+        blocked = EmbeddingReadyBuildBlocked(
+            analysis_id=42,
+            code=EmbeddingReadyBuildBlockedCode.ANALYSIS_MISSING,
+        )
 
         with (
-            _patch_ready_construction(None),
+            _patch_ready_construction(blocked),
+            patch("app.queue.tasks.embedding.EmbeddingAuditRepository") as mock_audit,
             patch("app.queue.tasks.embedding.EmbeddingService") as mock_svc_cls,
         ):
+            mock_audit.return_value.append_ready_build_blocked = AsyncMock()
             await generate_embedding(trigger=trigger, ctx=mock_ctx)
 
+        mock_audit.return_value.append_ready_build_blocked.assert_awaited_once_with(
+            blocked=blocked
+        )
         # rate limit acquire は試みず、Service も呼ばない
+        gate.acquire.assert_not_called()
+        mock_svc_cls.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_ready_build_exception_audits_and_reraises(self) -> None:
+        """Ready 判定中の例外は failed audit 後に元例外を raise する。"""
+        from app.queue.tasks.embedding import generate_embedding
+
+        gate = _make_gate_fake()
+        mock_ctx = _make_ctx(embedder=_make_embedder_fake(), gate=gate)
+        trigger = _make_trigger(analysis_id=42)
+        exc = RuntimeError("ready build exploded")
+
+        with (
+            patch(
+                "app.queue.tasks.embedding.ReadyForEmbedding.try_advance_from",
+                new=AsyncMock(side_effect=exc),
+            ),
+            patch(
+                "app.queue.tasks.embedding._append_ready_build_failed_audit",
+                new=AsyncMock(),
+            ) as audit_failed,
+            patch("app.queue.tasks.embedding.EmbeddingService") as mock_svc_cls,
+        ):
+            with pytest.raises(RuntimeError):
+                await generate_embedding(trigger=trigger, ctx=mock_ctx)
+
+        audit_failed.assert_awaited_once_with(
+            mock_ctx.state.session_factory,
+            analysis_id=42,
+            exc=exc,
+        )
         gate.acquire.assert_not_called()
         mock_svc_cls.assert_not_called()
 

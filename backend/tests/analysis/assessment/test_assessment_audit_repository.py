@@ -42,7 +42,11 @@ from sqlalchemy.exc import (
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.assessment.ai.envelope import AssessmentCall
-from app.analysis.assessment.domain.ready import ReadyForAssessment
+from app.analysis.assessment.domain.ready import (
+    AssessmentReadyBuildBlocked,
+    AssessmentReadyBuildBlockedCode,
+    ReadyForAssessment,
+)
 from app.analysis.assessment.domain.result import (
     InScope,
     InScopeCategory,
@@ -213,9 +217,72 @@ async def _fetch_one(db_session: AsyncSession, article_id: int) -> PipelineEvent
     return rows[0]
 
 
+async def _fetch_by_outcome(
+    db_session: AsyncSession, outcome_code: str
+) -> PipelineEvent:
+    rows = (
+        (
+            await db_session.execute(
+                select(PipelineEvent).where(PipelineEvent.outcome_code == outcome_code)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 1
+    return rows[0]
+
+
 # ---------------------------------------------------------------------------
 # 成功経路 — append_in_scope
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_append_ready_build_blocked_records_missing_curation_rejected(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Ready build blocked は rejected として curation_id を payload に残す。"""
+    async with session_factory() as session:
+        await AssessmentAuditRepository(session).append_ready_build_blocked(
+            blocked=AssessmentReadyBuildBlocked(
+                curation_id=999,
+                code=AssessmentReadyBuildBlockedCode.CURATION_MISSING,
+            )
+        )
+        await session.commit()
+
+    ev = await _fetch_by_outcome(
+        db_session, "assessment_ready_build_blocked_curation_missing"
+    )
+    assert ev.event_type == "rejected"
+    assert ev.article_id is None
+    assert ev.payload["curation_id"] == 999
+
+
+@pytest.mark.asyncio
+async def test_append_ready_build_failed_records_unknown_failure(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Ready build failed は failed / unknown retryability で trigger id を残す。"""
+    exc = RuntimeError("ready build exploded")
+    async with session_factory() as session:
+        await AssessmentAuditRepository(session).append_ready_build_failed(
+            curation_id=123,
+            exc=exc,
+        )
+        await session.commit()
+
+    ev = await _fetch_by_outcome(
+        db_session, "assessment_ready_build_failed_unexpected_error"
+    )
+    assert ev.event_type == "failed"
+    assert ev.retryability == "unknown"
+    assert ev.error_class == "builtins.RuntimeError"
+    assert ev.payload["failure_kind"] == "unexpected_error"
+    assert ev.payload["curation_id"] == 123
 
 
 @pytest.mark.asyncio

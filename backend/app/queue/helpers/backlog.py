@@ -58,7 +58,7 @@ class PipelineBacklog:
 
         ``curation_noises`` (noise 判定済み = 正常完了) も anti-join する。
         signal/noise は排他で、どちらかが在れば curation は完了している
-        (precondition の ``try_load_for_curation`` と同一定義)。
+        (``ReadyForCuration.try_advance_from`` の precondition と同一定義)。
         """
         stmt = (
             select(Article.id)

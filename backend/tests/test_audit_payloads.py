@@ -137,6 +137,22 @@ class TestCompletionPayloadAuditKeys:
         assert not hasattr(restored, "future_field")
 
 
+class TestCurationPayloadReadyBuildFields:
+    """Ready build blocked / failed 用の curation payload field。"""
+
+    def test_ready_build_fields_can_be_set(self) -> None:
+        payload = CurationPayload(
+            target_article_id=123,
+            input_content_length=200_001,
+            max_content_length=200_000,
+        )
+        dumped = payload.model_dump(mode="json")
+
+        assert dumped["target_article_id"] == 123
+        assert dumped["input_content_length"] == 200_001
+        assert dumped["max_content_length"] == 200_000
+
+
 class TestPayloadJsonSerialization:
     """JSONB 焼付経路: ``model_dump(mode='json')`` → Pydantic 再構築の往復。"""
 

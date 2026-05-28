@@ -1,68 +1,76 @@
-"""ReadyForCuration — Stage 3 実行可能状態の precondition 型 (案 3: 厚い Ready)。
-
-Stage 3 BC 実装。Stage 3 operation の前提条件 (Article 存在 +
-``article_curations`` 未生成 + ``curation_noises`` 未生成 + 本文サイズが
-system hard cap 以内) を構造保証し、かつ curator 入力 (title / content) も
-含めて運ぶ厚い Ready。
-
-設計方針 (2026-05-11 確定、案 3): Ready 型は **処理に必要な値の全揃え** を構造保証する
-厚い型であり、**下流 Stage 自身 (Stage 3 Task) が処理開始時に DB から内容を fetch
-して構築** する。上流 Stage 2 (collection / maintenance backfill) から Stage 3 への
-kiq message は ID のみ運ぶ ``CurationTrigger`` を用い、Stage 3 Task が
-``Ready.try_advance_from`` を呼んで最新の DB 状態から Ready を構築する。
-
-Stage 4 (Assessment) / Stage 5 (Embedding) と完全同型: 上流は Trigger を kiq に詰めて
-enqueue、下流 Task が処理開始時に Repository の atomic 1 query で precondition +
-audit / curator 入力値を取得して Ready を構築する。
-
-詳細は memory `project_typed_pipeline_preconditions.md` (2026-05-11 確定版)。
-
-`MAX_CONTENT_LENGTH` は system 不変条件としての hard cap (リソース保護) であり、
-adapter 固有の入力整形 (例: GeminiCurationPrompt.CONTENT_MAX_LENGTH = 20_000) と
-責務が異なる。前者は「ここを超える本文は Stage 3 の対象外」を表し、後者は
-「特定モデルにこのサイズで投げる」を表す。
-
-CurationTrigger (kiq message DTO) は ``app/queue/messages/curation.py`` 配下。
-"""
+"""Stage 3 curation を開始できる状態を Domain 側で構築する。"""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from enum import StrEnum
 from typing import ClassVar, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-__all__ = ["CurationPreconditionProtocol", "ReadyForCuration"]
+__all__ = [
+    "CurationPreconditionProtocol",
+    "CurationReadyBuildBlocked",
+    "CurationReadyBuildBlockedCode",
+    "CurationReadyBuildBlockedError",
+    "CurationReadyBuildFacts",
+    "ReadyForCuration",
+]
+
+
+class CurationReadyBuildBlockedCode(StrEnum):
+    """Stage 3 Ready 構築が業務状態により進めなかった理由。"""
+
+    ARTICLE_MISSING = "article_missing"
+    ALREADY_CURATED = "already_curated"
+    ALREADY_REJECTED_AS_NOISE = "already_rejected_as_noise"
+    CONTENT_TOO_LARGE = "content_too_large"
+
+
+@dataclass(frozen=True, slots=True)
+class CurationReadyBuildBlocked:
+    """Stage 3 Ready 構築が正常に判定され、対象外だった結果。"""
+
+    target_article_id: int
+    code: CurationReadyBuildBlockedCode
+    content_length: int | None = None
+    max_content_length: int | None = None
+    source_name: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CurationReadyBuildFacts:
+    """Stage 3 Ready 構築に必要な DB 射影。"""
+
+    article_id: int
+    original_title: str
+    original_content: str
+    source_name: str | None
+    has_signal_curation: bool
+    has_noise_curation: bool
+
+
+class CurationReadyBuildBlockedError(Exception):
+    """Stage 3 Ready 構築が業務状態により進めなかったことを表す例外。"""
+
+    def __init__(self, blocked: CurationReadyBuildBlocked) -> None:
+        self.blocked = blocked
+        super().__init__(blocked.code.value)
 
 
 class CurationPreconditionProtocol(Protocol):
-    """Stage 3 進行判定用 Curation Repository contract。
+    """Ready 構築に必要な DB 事実だけを読む repository contract。
 
-    「Ready 構築に必要なデータをロードする」= 「ReadyForCuration を満たす」
-    という意味論で、Repository は precondition を満たす場合に
-    ``ReadyForCuration`` を atomic な 1 query で構築して返す責務を持つ。
-    `try_advance_from` は本 Protocol への thin delegate (Stage 4
-    ``AssessmentPreconditionProtocol`` と同型)。
+    構築可否と blocked 理由は ``ReadyForCuration`` が判定する。
     """
 
-    async def try_load_for_curation(
+    async def load_ready_build_facts(
         self, article_id: int
-    ) -> ReadyForCuration | None: ...
+    ) -> CurationReadyBuildFacts | None: ...
 
 
 class ReadyForCuration(BaseModel):
-    """Stage 3 curation を実行可能な状態を表す precondition 型 (厚い Ready)。
-
-    フィールドは operation を特定する ID と、curator 入力 (title / content) の全揃え。
-    Ready が存在する = 処理開始時点で DB から値を取得済 + Article 行存在 +
-    signal/noise 未生成 + 本文サイズ ≤ hard cap が verify された状態 (時間ずれゼロ)。
-
-    Invariants:
-    - ``article_id``: 正の整数 (DB の Article.id を指す)
-    - ``original_title``: 非空 (構築時 ``Field(min_length=1)`` で保証)
-    - ``original_content``: 非空かつ ``MAX_CONTENT_LENGTH`` 以内
-      (構築時 ``Field(min_length=1, max_length=...)`` で保証)
-    - frozen: 生成後は不変 (Stage 間 passport として副作用なしに受け渡せる)
-    """
+    """curator 入力と Stage 3 precondition を満たした不変オブジェクト。"""
 
     model_config = ConfigDict(frozen=True)
 
@@ -78,28 +86,49 @@ class ReadyForCuration(BaseModel):
         *,
         article_id: int,
         repo: CurationPreconditionProtocol,
-    ) -> ReadyForCuration | None:
-        """article_id から Stage 3 へ advance できるかを判定する gatekeeper。
+    ) -> ReadyForCuration:
+        """DB 事実から Ready を構築し、対象外なら blocked 例外を投げる。"""
+        facts = await repo.load_ready_build_facts(article_id)
+        if facts is None:
+            raise CurationReadyBuildBlockedError(
+                CurationReadyBuildBlocked(
+                    target_article_id=article_id,
+                    code=CurationReadyBuildBlockedCode.ARTICLE_MISSING,
+                )
+            )
 
-        Precondition (Stage 3 に進める条件):
-        - 同 article_id の Article 行が存在
-        - 同 article_id の ``article_curations`` 行が未生成
-        - 同 article_id の ``curation_noises`` 行が未生成 (Stage 1 で既に
-          noise 判定済の記事を再処理しない)
-        - 本文長が ``MAX_CONTENT_LENGTH`` 以内 (system hard cap)
+        if facts.has_signal_curation:
+            raise CurationReadyBuildBlockedError(
+                CurationReadyBuildBlocked(
+                    target_article_id=article_id,
+                    code=CurationReadyBuildBlockedCode.ALREADY_CURATED,
+                    source_name=facts.source_name,
+                )
+            )
 
-        本 method は Domain 層の named gateway として
-        `Repository.try_load_for_curation` にそのまま delegate する。
-        Repository が atomic な 1 query で precondition 判定 + 厚い Ready の
-        構築を完結させる (Stage 4 ``ReadyForAssessment.try_advance_from`` と同型)。
+        if facts.has_noise_curation:
+            raise CurationReadyBuildBlockedError(
+                CurationReadyBuildBlocked(
+                    target_article_id=article_id,
+                    code=CurationReadyBuildBlockedCode.ALREADY_REJECTED_AS_NOISE,
+                    source_name=facts.source_name,
+                )
+            )
 
-        Returns:
-            進める場合: `ReadyForCuration` (curator 入力値を含む厚い型)
-            進めない場合: `None` (業務正常状態、例外ではない)
+        content_length = len(facts.original_content)
+        if content_length > cls.MAX_CONTENT_LENGTH:
+            raise CurationReadyBuildBlockedError(
+                CurationReadyBuildBlocked(
+                    target_article_id=article_id,
+                    code=CurationReadyBuildBlockedCode.CONTENT_TOO_LARGE,
+                    content_length=content_length,
+                    max_content_length=cls.MAX_CONTENT_LENGTH,
+                    source_name=facts.source_name,
+                )
+            )
 
-        Args:
-            article_id: 上流 Stage 2 (collection / maintenance) で永続化された
-                Article.id
-            repo: ``try_load_for_curation`` を備える Repository
-        """
-        return await repo.try_load_for_curation(article_id)
+        return cls(
+            article_id=facts.article_id,
+            original_title=facts.original_title,
+            original_content=facts.original_content,
+        )

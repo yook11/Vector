@@ -1,20 +1,4 @@
-"""``curate_content`` task のテスト (chain 経路 + rate limit 経路 + skip 経路)。
-
-PR3 案 3 化: task signature は ``trigger: CurationTrigger``。冒頭で
-``ReadyForCuration.try_advance_from`` を呼んで Ready 自構築する。
-PR4 で rate limit 配線は ``ProviderRateLimitGate.acquire`` に置き換わったため、
-本ファイルでは ``ctx.state.provider_rate_limit_gate.acquire`` を AsyncMock で
-True / False に振って routing を検証する。
-
-- signal 勝者 (``execute`` が ``int`` を返す) → ``assess_content.kiq`` で chain
-- noise 勝者 / race 敗北 (``execute`` が ``None`` を返す) → chain しない
-- precondition_not_met (``try_advance_from`` が ``None`` を返す) → skip log + return
-- gate.acquire=False → quota log + return (Service 未呼出)
-- legacy ``AIProviderRateLimitedError`` の audit 経路 (catch-all 経由)
-
-Layer 1 marker dispatch ルーティングは ``test_curate_task_dispatch.py`` 側で
-網羅する。
-"""
+"""``curate_content`` task の分岐テスト。"""
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -26,15 +10,18 @@ from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderRateLimitedError,
 )
-from app.analysis.curation.domain.ready import ReadyForCuration
+from app.analysis.curation.domain.ready import (
+    CurationReadyBuildBlocked,
+    CurationReadyBuildBlockedCode,
+    CurationReadyBuildBlockedError,
+    ReadyForCuration,
+)
 from app.analysis.rate_limit import AIModelRateLimitPolicy, RateLimitRule
 from app.queue.messages.assessment import AssessmentTrigger
 from app.queue.messages.curation import CurationTrigger
 
 
 def _make_provider_fake() -> MagicMock:
-    """extractor 用のスタブ。property 契約 (model_name / prompt_version /
-    rate_limit_policy) を持つ。"""
     fake = MagicMock()
     fake.model_name = "test-model"
     fake.prompt_version = "test-prompt-v1"
@@ -58,8 +45,6 @@ def _make_ctx(
     max_retries: int = 0,
     gate_acquire: bool = True,
 ) -> MagicMock:
-    """taskiq Context モック。``provider_rate_limit_gate.acquire`` は
-    ``gate_acquire`` で True / False を選ぶ。"""
     ctx = MagicMock()
     gate = MagicMock()
     gate.acquire = AsyncMock(return_value=gate_acquire)
@@ -81,7 +66,6 @@ def _trigger(article_id: int = 1) -> CurationTrigger:
 
 
 def _fixed_ready(article_id: int = 1) -> ReadyForCuration:
-    """task 冒頭の Ready 自構築が返す固定 Ready。"""
     return ReadyForCuration(
         article_id=article_id,
         original_title="Title",
@@ -89,12 +73,18 @@ def _fixed_ready(article_id: int = 1) -> ReadyForCuration:
     )
 
 
-def _patch_try_advance_from(ready: ReadyForCuration | None) -> object:
-    """``ReadyForCuration.try_advance_from`` を固定値返却に patch するヘルパ。"""
+def _patch_try_advance_from(
+    result: ReadyForCuration | CurationReadyBuildBlocked,
+) -> object:
+    mock = (
+        AsyncMock(side_effect=CurationReadyBuildBlockedError(result))
+        if isinstance(result, CurationReadyBuildBlocked)
+        else AsyncMock(return_value=result)
+    )
     return patch.object(
         ReadyForCuration,
         "try_advance_from",
-        new=AsyncMock(return_value=ready),
+        new=mock,
     )
 
 
@@ -150,8 +140,8 @@ class TestCurateContent:
         mock_assess.kiq.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_precondition_not_met_skips_and_does_not_call_service(self) -> None:
-        """try_advance_from が None を返したら skip log + return、Service は呼ばない。
+    async def test_ready_build_blocked_audits_and_does_not_call_service(self) -> None:
+        """Ready build blocked なら rejected audit + return、Service は呼ばない。
 
         案 3: precondition (article 既消滅 / 既処理 / 本文 oversized) の
         判定は Stage 3 task 冒頭で Ready 自構築時に行われ、未充足なら
@@ -160,16 +150,59 @@ class TestCurateContent:
         from app.queue.tasks.curation import curate_content
 
         mock_ctx = _make_ctx(curator=_make_provider_fake())
+        blocked = CurationReadyBuildBlocked(
+            target_article_id=1,
+            code=CurationReadyBuildBlockedCode.ARTICLE_MISSING,
+        )
 
         with (
-            _patch_try_advance_from(None),
+            _patch_try_advance_from(blocked),
+            patch("app.queue.tasks.curation.CurationAuditRepository") as mock_audit,
+            patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
+            patch("app.queue.tasks.curation.assess_content") as mock_assess,
+        ):
+            mock_audit.return_value.append_ready_build_blocked = AsyncMock()
+            mock_assess.kiq = AsyncMock()
+            await curate_content(trigger=_trigger(), ctx=mock_ctx)
+
+        mock_audit.return_value.append_ready_build_blocked.assert_awaited_once_with(
+            blocked=blocked
+        )
+        # Service / rate limit gate / chain firing いずれも触らない
+        mock_svc_cls.assert_not_called()
+        mock_ctx.state.provider_rate_limit_gate.acquire.assert_not_called()
+        mock_assess.kiq.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_ready_build_exception_audits_and_reraises(self) -> None:
+        """Ready 判定中の例外は failed audit 後に元例外を raise する。"""
+        from app.queue.tasks.curation import curate_content
+
+        mock_ctx = _make_ctx(curator=_make_provider_fake())
+        exc = RuntimeError("ready build exploded")
+
+        with (
+            patch.object(
+                ReadyForCuration,
+                "try_advance_from",
+                new=AsyncMock(side_effect=exc),
+            ),
+            patch(
+                "app.queue.tasks.curation._append_ready_build_failed_audit",
+                new=AsyncMock(),
+            ) as audit_failed,
             patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
             patch("app.queue.tasks.curation.assess_content") as mock_assess,
         ):
             mock_assess.kiq = AsyncMock()
-            await curate_content(trigger=_trigger(), ctx=mock_ctx)
+            with pytest.raises(RuntimeError):
+                await curate_content(trigger=_trigger(), ctx=mock_ctx)
 
-        # Service / rate limit gate / chain firing いずれも触らない
+        audit_failed.assert_awaited_once_with(
+            mock_ctx.state.session_factory,
+            article_id=1,
+            exc=exc,
+        )
         mock_svc_cls.assert_not_called()
         mock_ctx.state.provider_rate_limit_gate.acquire.assert_not_called()
         mock_assess.kiq.assert_not_called()

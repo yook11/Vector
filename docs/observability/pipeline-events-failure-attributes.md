@@ -117,6 +117,32 @@ backfill run / item event の payload は `kind="backfill"` とし、`run_id`、
 `limit`、`daily_max` を必要に応じて保存する。skip 理由は `outcome_code` を
 SSoT とし、payload に別の reason field は持たせない。
 
+通常 AI stage (`curation` / `assessment` / `embedding`) の task 入口では、
+Ready 構築が業務状態により進めなかった場合を rejected として焼く。
+blocked 理由は `ReadyFor*` の domain gatekeeper が判定し、repository は
+DB 事実取得のみを担う。
+
+- curation: `curation_ready_build_blocked_article_missing` /
+  `curation_ready_build_blocked_already_curated` /
+  `curation_ready_build_blocked_already_rejected_as_noise` /
+  `curation_ready_build_blocked_content_too_large`
+- assessment: `assessment_ready_build_blocked_curation_missing` /
+  `assessment_ready_build_blocked_already_in_scope` /
+  `assessment_ready_build_blocked_already_out_of_scope`
+- embedding: `embedding_ready_build_blocked_analysis_missing` /
+  `embedding_ready_build_blocked_already_embedded`
+
+Ready 判定中の例外は failed として焼き、task は raise する。
+
+- `*_ready_build_failed_db_error`
+- `*_ready_build_failed_contract_invalid`
+- `*_ready_build_failed_unexpected_error`
+
+Ready build blocked / failed では `outcome_code` を SSoT とし、payload に
+`skip_reason` や blocked code は重複保存しない。trigger ID は payload に残す
+(`target_article_id` / `curation_id` / `analysis_id`)。top-level `article_id` は
+対象 article を解決できた場合だけ保存する。
+
 trend discovery stage は、保存物としての snapshot ではなく、rolling 7d の
 分析済み記事から trend discovery run がどう終わったかを焼く。
 

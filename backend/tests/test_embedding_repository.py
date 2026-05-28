@@ -1,8 +1,4 @@
-"""EmbeddingRepository の DB 統合テスト。
-
-try_load_for_embedding / save (条件付き UPDATE + RETURNING) を実 PostgreSQL に
-対して検証する。読み戻し / ORM→Entity 復元は廃止済み (2026-05-12)。
-"""
+"""EmbeddingRepository の DB 境界テスト。"""
 
 from __future__ import annotations
 
@@ -11,7 +7,6 @@ from datetime import UTC, datetime
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.domain.value_objects import (
     EMBEDDING_DIMENSION,
     EmbeddingVector,
@@ -72,57 +67,62 @@ def _vector(value: float = 0.1) -> EmbeddingVector:
 
 
 # ---------------------------------------------------------------------------
-# try_load_for_embedding — atomic 1-query Ready loader (try_advance_from delegate)
+# Ready 構築用 DB 事実取得
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_try_load_returns_ready_when_embedding_null(
+async def test_load_ready_build_facts_returns_values_when_unembedded(
     db_session: AsyncSession,
     sample_source: NewsSource,
     sample_categories: list[Category],
 ) -> None:
-    """embedding NULL かつ行存在 → translated_title + summary を結合した Ready。"""
     analysis = await _build_analysis(
         db_session,
         sample_source,
         sample_categories[0].id,
-        url="https://example.com/load-null",
+        url="https://example.com/load-ready-facts",
     )
     repo = EmbeddingRepository(db_session)
-    ready = await repo.try_load_for_embedding(analysis.id)
+    curation = await db_session.get(ArticleCuration, analysis.curation_id)
+    assert curation is not None
 
-    assert isinstance(ready, ReadyForEmbedding)
-    assert ready.analysis_id == analysis.id
-    assert ready.text_for_embedding == "分析タイトル\n分析要約"
-    # article_id は ArticleCuration 1-hop JOIN で取得
-    assert ready.article_id > 0
+    facts = await repo.load_ready_build_facts(analysis.id)
+
+    assert facts is not None
+    assert facts.article_id == curation.article_id
+    assert facts.has_embedding is False
+    assert facts.translated_title == "分析タイトル"
+    assert facts.summary == "分析要約"
 
 
 @pytest.mark.asyncio
-async def test_try_load_returns_none_when_already_embedded(
+async def test_load_ready_build_facts_marks_existing_embedding(
     db_session: AsyncSession,
     sample_source: NewsSource,
     sample_categories: list[Category],
 ) -> None:
-    """embedding 値あり → None (既 embedded のため再実行不要、業務正常)。"""
     analysis = await _build_analysis(
         db_session,
         sample_source,
         sample_categories[0].id,
-        url="https://example.com/load-existing",
+        url="https://example.com/load-ready-facts-embedded",
         embedding=_zero_vector(),
     )
     repo = EmbeddingRepository(db_session)
-    assert await repo.try_load_for_embedding(analysis.id) is None
+
+    facts = await repo.load_ready_build_facts(analysis.id)
+
+    assert facts is not None
+    assert facts.has_embedding is True
 
 
 @pytest.mark.asyncio
-async def test_try_load_returns_none_for_missing_analysis(
+async def test_load_ready_build_facts_returns_none_when_missing(
     db_session: AsyncSession,
 ) -> None:
     repo = EmbeddingRepository(db_session)
-    assert await repo.try_load_for_embedding(999_999) is None
+    assert await repo.load_ready_build_facts(999_999) is None
 
 
 # ---------------------------------------------------------------------------

@@ -1,16 +1,4 @@
-"""ReadyForCuration (Stage 3 precondition 型) のドメインユニットテスト。
-
-PR3 案 3 化: ``try_advance_from`` は Repository の ``try_load_for_curation``
-への thin delegate になったため、本ファイルでは:
-
-- ``try_advance_from`` が Protocol の ``try_load_for_curation`` をそのまま
-  呼び返し値を返すこと (thin delegate)
-- ``BaseModel(frozen=True)`` の不変性 + ``Field`` 制約 (構造保証)
-
-を検証する。precondition 判定の中身 (Article fetch / signal/noise exists 判定 /
-oversize check) は Repository 単独テスト (``test_extraction_repository.py``) で
-カバーする。
-"""
+"""ReadyForCuration (Stage 3 precondition 型) のドメインユニットテスト。"""
 
 from __future__ import annotations
 
@@ -19,67 +7,126 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import ValidationError
 
-from app.analysis.curation.domain.ready import ReadyForCuration
+from app.analysis.curation.domain.ready import (
+    CurationReadyBuildBlockedCode,
+    CurationReadyBuildBlockedError,
+    CurationReadyBuildFacts,
+    ReadyForCuration,
+)
 from app.queue.messages.curation import CurationTrigger
 
 
-def _ready_repo_returning(ready: ReadyForCuration | None) -> AsyncMock:
-    """``CurationPreconditionProtocol`` の thin mock を返す。"""
+def _facts(
+    *,
+    article_id: int = 42,
+    title: str = "Quantum Breakthrough",
+    content: str = "Article body",
+    source_name: str | None = "MIT News",
+    has_signal_curation: bool = False,
+    has_noise_curation: bool = False,
+) -> CurationReadyBuildFacts:
+    return CurationReadyBuildFacts(
+        article_id=article_id,
+        original_title=title,
+        original_content=content,
+        source_name=source_name,
+        has_signal_curation=has_signal_curation,
+        has_noise_curation=has_noise_curation,
+    )
+
+
+def _repo_mock(
+    *,
+    facts: CurationReadyBuildFacts | None = None,
+    missing: bool = False,
+) -> AsyncMock:
     repo = AsyncMock()
-    repo.try_load_for_curation = AsyncMock(return_value=ready)
+    repo.load_ready_build_facts = AsyncMock(
+        return_value=None if missing else facts or _facts()
+    )
     return repo
 
 
-# ---------------------------------------------------------------------------
-# try_advance_from — thin delegate (Repository.try_load_for_curation)
-# ---------------------------------------------------------------------------
-
-
-class TestTryAdvanceFromThinDelegate:
+class TestTryAdvanceFrom:
     @pytest.mark.asyncio
-    async def test_returns_ready_when_repo_returns_ready(self) -> None:
-        """repo が Ready を返したら、try_advance_from もそのまま返す。"""
-        expected = ReadyForCuration(
-            article_id=42,
-            original_title="Quantum Breakthrough",
-            original_content="Article body" * 10,
-        )
-        repo = _ready_repo_returning(expected)
+    async def test_builds_ready_from_repository_facts(self) -> None:
+        facts = _facts(article_id=42, content="Article body" * 10)
+        repo = _repo_mock(facts=facts)
 
         ready = await ReadyForCuration.try_advance_from(article_id=42, repo=repo)
 
-        assert ready is expected
-        repo.try_load_for_curation.assert_awaited_once_with(42)
+        assert ready == ReadyForCuration(
+            article_id=42,
+            original_title=facts.original_title,
+            original_content=facts.original_content,
+        )
+        repo.load_ready_build_facts.assert_awaited_once_with(42)
 
     @pytest.mark.asyncio
-    async def test_returns_none_when_repo_returns_none(self) -> None:
-        """repo が None を返したら、try_advance_from も None を返す。"""
-        repo = _ready_repo_returning(None)
+    async def test_raises_blocked_when_article_missing(self) -> None:
+        repo = _repo_mock(missing=True)
 
-        ready = await ReadyForCuration.try_advance_from(article_id=99, repo=repo)
+        with pytest.raises(CurationReadyBuildBlockedError) as exc_info:
+            await ReadyForCuration.try_advance_from(article_id=99, repo=repo)
 
-        assert ready is None
-        repo.try_load_for_curation.assert_awaited_once_with(99)
+        assert exc_info.value.blocked.target_article_id == 99
+        assert (
+            exc_info.value.blocked.code is CurationReadyBuildBlockedCode.ARTICLE_MISSING
+        )
+        repo.load_ready_build_facts.assert_awaited_once_with(99)
 
+    @pytest.mark.asyncio
+    async def test_raises_blocked_when_signal_exists(self) -> None:
+        repo = _repo_mock(facts=_facts(has_signal_curation=True))
 
-# ---------------------------------------------------------------------------
-# Ready 型の Field 制約 (Pydantic 構造保証 — 直接構築の防御層)
-# ---------------------------------------------------------------------------
+        with pytest.raises(CurationReadyBuildBlockedError) as exc_info:
+            await ReadyForCuration.try_advance_from(article_id=42, repo=repo)
+
+        assert (
+            exc_info.value.blocked.code is CurationReadyBuildBlockedCode.ALREADY_CURATED
+        )
+        assert exc_info.value.blocked.source_name == "MIT News"
+        repo.load_ready_build_facts.assert_awaited_once_with(42)
+
+    @pytest.mark.asyncio
+    async def test_raises_blocked_when_noise_exists(self) -> None:
+        repo = _repo_mock(facts=_facts(has_noise_curation=True))
+
+        with pytest.raises(CurationReadyBuildBlockedError) as exc_info:
+            await ReadyForCuration.try_advance_from(article_id=42, repo=repo)
+
+        assert (
+            exc_info.value.blocked.code
+            is CurationReadyBuildBlockedCode.ALREADY_REJECTED_AS_NOISE
+        )
+        assert exc_info.value.blocked.source_name == "MIT News"
+        repo.load_ready_build_facts.assert_awaited_once_with(42)
+
+    @pytest.mark.asyncio
+    async def test_raises_blocked_when_content_too_large(self) -> None:
+        oversized = "x" * (ReadyForCuration.MAX_CONTENT_LENGTH + 1)
+        repo = _repo_mock(facts=_facts(content=oversized))
+
+        with pytest.raises(CurationReadyBuildBlockedError) as exc_info:
+            await ReadyForCuration.try_advance_from(article_id=42, repo=repo)
+
+        blocked = exc_info.value.blocked
+        assert blocked.code is CurationReadyBuildBlockedCode.CONTENT_TOO_LARGE
+        assert blocked.content_length == len(oversized)
+        assert blocked.max_content_length == ReadyForCuration.MAX_CONTENT_LENGTH
+        assert blocked.source_name == "MIT News"
 
 
 class TestReadyForCurationFieldConstraints:
     def test_rejects_empty_original_title(self) -> None:
-        """空文字 original_title は Field(min_length=1) が拒否する。"""
         with pytest.raises(ValidationError):
             ReadyForCuration(article_id=1, original_title="", original_content="x")
 
     def test_rejects_empty_original_content(self) -> None:
-        """空文字 original_content は Field(min_length=1) が拒否する。"""
         with pytest.raises(ValidationError):
             ReadyForCuration(article_id=1, original_title="t", original_content="")
 
     def test_rejects_oversized_original_content(self) -> None:
-        """直接構築でも MAX_CONTENT_LENGTH 超過は ValidationError (防御層)。"""
         oversized = "x" * (ReadyForCuration.MAX_CONTENT_LENGTH + 1)
         with pytest.raises(ValidationError):
             ReadyForCuration(
@@ -87,39 +134,24 @@ class TestReadyForCurationFieldConstraints:
             )
 
     def test_rejects_non_positive_article_id(self) -> None:
-        """article_id <= 0 は Field(gt=0) が拒否する。"""
         with pytest.raises(ValidationError):
             ReadyForCuration(article_id=0, original_title="t", original_content="x")
         with pytest.raises(ValidationError):
             ReadyForCuration(article_id=-1, original_title="t", original_content="x")
 
     def test_is_frozen(self) -> None:
-        """frozen=True のため field 書き換えは ValidationError。"""
         ready = ReadyForCuration(article_id=1, original_title="t", original_content="x")
         with pytest.raises(ValidationError):
             ready.article_id = 999  # type: ignore[misc]
 
 
-# ---------------------------------------------------------------------------
-# CurationTrigger — 軽量 ID キャリア (kiq message 用)
-# ---------------------------------------------------------------------------
-
-
 class TestCurationTrigger:
     def test_carries_article_id_only(self) -> None:
-        """article_id のみを保持する軽量 BaseModel。"""
         trigger = CurationTrigger(article_id=42)
         assert trigger.article_id == 42
 
     def test_rejects_non_positive_article_id(self) -> None:
-        """article_id <= 0 は Field(gt=0) が拒否する。"""
         with pytest.raises(ValidationError):
             CurationTrigger(article_id=0)
         with pytest.raises(ValidationError):
             CurationTrigger(article_id=-1)
-
-    def test_is_frozen(self) -> None:
-        """frozen=True のため field 書き換えは ValidationError。"""
-        trigger = CurationTrigger(article_id=1)
-        with pytest.raises(ValidationError):
-            trigger.article_id = 999  # type: ignore[misc]

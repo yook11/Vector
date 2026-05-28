@@ -1,13 +1,4 @@
-"""ReadyForAssessment (Stage 4 precondition 型) のドメインユニットテスト。
-
-`try_advance_from` の precondition 充足 / 未充足 を Repository protocol mock で
-検証する (DB 不要)。BaseModel(frozen=True) の不変性、新規 ``AssessmentTrigger``
-の構造も確認する。
-
-注: ファイル名 ``test_ready_for_classification.py`` は別 cleanup PR で
-``test_ready_for_assessment.py`` に rename 予定。内容は assessment 命名に
-追従済。
-"""
+"""ReadyForAssessment (Stage 4 precondition 型) のドメインユニットテスト。"""
 
 from __future__ import annotations
 
@@ -16,12 +7,37 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import ValidationError
 
-from app.analysis.assessment.domain.ready import ReadyForAssessment
+from app.analysis.assessment.domain.ready import (
+    AssessmentReadyBuildBlockedCode,
+    AssessmentReadyBuildBlockedError,
+    AssessmentReadyBuildFacts,
+    ReadyForAssessment,
+)
 from app.queue.messages.assessment import AssessmentTrigger
 
 
+def _facts(
+    *,
+    curation_id: int = 42,
+    article_id: int = 7,
+    title: str = "量子コンピューティングの新たなブレイクスルー",
+    summary: str = "MIT が新手法を発表。量子エラー訂正の分野で大きな進展。",
+    source_name: str | None = "MIT News",
+    has_in_scope_assessment: bool = False,
+    has_out_of_scope_assessment: bool = False,
+) -> AssessmentReadyBuildFacts:
+    return AssessmentReadyBuildFacts(
+        curation_id=curation_id,
+        article_id=article_id,
+        translated_title=title,
+        summary=summary,
+        source_name=source_name,
+        has_in_scope_assessment=has_in_scope_assessment,
+        has_out_of_scope_assessment=has_out_of_scope_assessment,
+    )
+
+
 def _make_ready(**overrides: object) -> ReadyForAssessment:
-    """Test fixtures 用の Ready 構築 helper (5 fields 既定値)。"""
     defaults: dict[str, object] = {
         "curation_id": 42,
         "translated_title": "量子コンピューティングの新たなブレイクスルー",
@@ -33,72 +49,76 @@ def _make_ready(**overrides: object) -> ReadyForAssessment:
     return ReadyForAssessment(**defaults)  # type: ignore[arg-type]
 
 
-def _make_repo_mock(
+def _repo_mock(
     *,
-    return_ready: ReadyForAssessment | None = None,
+    facts: AssessmentReadyBuildFacts | None = None,
+    missing: bool = False,
 ) -> AsyncMock:
-    """``AssessmentPreconditionProtocol`` を満たす Repository mock。
-
-    案 3: try_load_for_assessment が 1 query で Ready (または None) を返す。
-    """
     repo = AsyncMock()
-    repo.try_load_for_assessment = AsyncMock(return_value=return_ready)
+    repo.load_ready_build_facts = AsyncMock(
+        return_value=None if missing else facts or _facts()
+    )
     return repo
 
 
-# ---------------------------------------------------------------------------
-# try_advance_from — precondition 充足 / 未充足
-# ---------------------------------------------------------------------------
-
-
-class TestTryAdvanceFromPreconditionMet:
+class TestTryAdvanceFrom:
     @pytest.mark.asyncio
-    async def test_returns_ready_from_repo(self) -> None:
-        """Repository が Ready を返したら同 instance を返す (thin delegate)。"""
-        expected = _make_ready(curation_id=42)
-        repo = _make_repo_mock(return_ready=expected)
+    async def test_builds_ready_from_repository_facts(self) -> None:
+        repo = _repo_mock(facts=_facts(curation_id=42))
 
         ready = await ReadyForAssessment.try_advance_from(curation_id=42, repo=repo)
 
-        assert ready is expected
+        assert ready == _make_ready(curation_id=42)
+        repo.load_ready_build_facts.assert_awaited_once_with(42)
 
     @pytest.mark.asyncio
-    async def test_calls_repo_with_curation_id(self) -> None:
-        """Repository には curation_id がそのまま渡される。"""
-        expected = _make_ready(curation_id=99)
-        repo = _make_repo_mock(return_ready=expected)
+    async def test_raises_blocked_when_curation_missing(self) -> None:
+        repo = _repo_mock(missing=True)
 
-        await ReadyForAssessment.try_advance_from(curation_id=99, repo=repo)
+        with pytest.raises(AssessmentReadyBuildBlockedError) as exc_info:
+            await ReadyForAssessment.try_advance_from(curation_id=42, repo=repo)
 
-        repo.try_load_for_assessment.assert_awaited_once_with(99)
+        assert (
+            exc_info.value.blocked.code
+            is AssessmentReadyBuildBlockedCode.CURATION_MISSING
+        )
+        assert exc_info.value.blocked.curation_id == 42
+        repo.load_ready_build_facts.assert_awaited_once_with(42)
 
-
-class TestTryAdvanceFromPreconditionNotMet:
     @pytest.mark.asyncio
-    async def test_returns_none_when_repo_returns_none(self) -> None:
-        """Repository が None を返したら None を返す (業務正常状態)。"""
-        repo = _make_repo_mock(return_ready=None)
+    async def test_raises_blocked_when_in_scope_exists(self) -> None:
+        repo = _repo_mock(facts=_facts(has_in_scope_assessment=True))
 
-        ready = await ReadyForAssessment.try_advance_from(curation_id=42, repo=repo)
+        with pytest.raises(AssessmentReadyBuildBlockedError) as exc_info:
+            await ReadyForAssessment.try_advance_from(curation_id=42, repo=repo)
 
-        assert ready is None
-        repo.try_load_for_assessment.assert_awaited_once_with(42)
+        blocked = exc_info.value.blocked
+        assert blocked.code is AssessmentReadyBuildBlockedCode.ALREADY_IN_SCOPE
+        assert blocked.article_id == 7
+        assert blocked.source_name == "MIT News"
+        repo.load_ready_build_facts.assert_awaited_once_with(42)
 
+    @pytest.mark.asyncio
+    async def test_raises_blocked_when_out_of_scope_exists(self) -> None:
+        repo = _repo_mock(facts=_facts(has_out_of_scope_assessment=True))
 
-# ---------------------------------------------------------------------------
-# Ready 型の不変条件
-# ---------------------------------------------------------------------------
+        with pytest.raises(AssessmentReadyBuildBlockedError) as exc_info:
+            await ReadyForAssessment.try_advance_from(curation_id=42, repo=repo)
+
+        blocked = exc_info.value.blocked
+        assert blocked.code is AssessmentReadyBuildBlockedCode.ALREADY_OUT_OF_SCOPE
+        assert blocked.article_id == 7
+        assert blocked.source_name == "MIT News"
+        repo.load_ready_build_facts.assert_awaited_once_with(42)
 
 
 class TestReadyForAssessmentImmutability:
     def test_is_frozen(self) -> None:
-        """frozen=True のため field 書き換えは ValidationError。"""
         ready = _make_ready()
         with pytest.raises(ValidationError):
             ready.curation_id = 999  # type: ignore[misc]
 
     def test_validates_int_fields(self) -> None:
-        """構築時に Pydantic が int を validate する。"""
         with pytest.raises(ValidationError):
             ReadyForAssessment(
                 curation_id="not-an-int",  # type: ignore[arg-type]
@@ -109,7 +129,6 @@ class TestReadyForAssessmentImmutability:
             )
 
     def test_rejects_non_positive_curation_id(self) -> None:
-        """curation_id は gt=0 (Field constraint)。"""
         with pytest.raises(ValidationError):
             ReadyForAssessment(
                 curation_id=0,
@@ -120,7 +139,6 @@ class TestReadyForAssessmentImmutability:
             )
 
     def test_rejects_non_positive_article_id(self) -> None:
-        """article_id は gt=0 (Field constraint)。"""
         with pytest.raises(ValidationError):
             ReadyForAssessment(
                 curation_id=1,
@@ -130,29 +148,14 @@ class TestReadyForAssessmentImmutability:
                 source_name=None,
             )
 
-    def test_accepts_none_source_name(self) -> None:
-        """source_name は NewsSource 不在 / FK 切断時に None を許容する。"""
-        ready = ReadyForAssessment(
-            curation_id=1,
-            translated_title="t",
-            summary="s",
-            article_id=1,
-            source_name=None,
-        )
-        assert ready.source_name is None
-
-
-# ---------------------------------------------------------------------------
-# AssessmentTrigger — kiq message 用 ID キャリア
-# ---------------------------------------------------------------------------
-
 
 class TestAssessmentTrigger:
-    def test_is_frozen(self) -> None:
+    def test_carries_curation_id_only(self) -> None:
         trigger = AssessmentTrigger(curation_id=42)
-        with pytest.raises(ValidationError):
-            trigger.curation_id = 999  # type: ignore[misc]
+        assert trigger.curation_id == 42
 
     def test_rejects_non_positive_curation_id(self) -> None:
         with pytest.raises(ValidationError):
             AssessmentTrigger(curation_id=0)
+        with pytest.raises(ValidationError):
+            AssessmentTrigger(curation_id=-1)

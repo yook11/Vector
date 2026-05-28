@@ -40,7 +40,11 @@ from app.analysis.curation.ai.base import BaseCurator
 from app.analysis.curation.ai.envelope import CurationCall
 from app.analysis.curation.ai.gemini_spec import GEMINI_CURATION_SPEC
 from app.analysis.curation.domain import Noise, Signal
-from app.analysis.curation.domain.ready import ReadyForCuration
+from app.analysis.curation.domain.ready import (
+    CurationReadyBuildBlocked,
+    CurationReadyBuildBlockedCode,
+    ReadyForCuration,
+)
 from app.analysis.curation.errors import (
     CurationResponseInvalidError,
     map_provider_to_curation,
@@ -126,9 +130,102 @@ async def _fetch_one(db_session: AsyncSession, article_id: int) -> PipelineEvent
     return rows[0]
 
 
+async def _fetch_by_outcome(
+    db_session: AsyncSession, outcome_code: str
+) -> PipelineEvent:
+    rows = (
+        (
+            await db_session.execute(
+                select(PipelineEvent).where(PipelineEvent.outcome_code == outcome_code)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 1
+    return rows[0]
+
+
 # ---------------------------------------------------------------------------
 # 成功経路 — append_signal / append_noise
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_append_ready_build_blocked_records_missing_article_rejected(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Ready build blocked は rejected として trigger article id を payload に残す。"""
+    async with session_factory() as session:
+        await CurationAuditRepository(session).append_ready_build_blocked(
+            blocked=CurationReadyBuildBlocked(
+                target_article_id=999,
+                code=CurationReadyBuildBlockedCode.ARTICLE_MISSING,
+            )
+        )
+        await session.commit()
+
+    ev = await _fetch_by_outcome(
+        db_session, "curation_ready_build_blocked_article_missing"
+    )
+    assert ev.event_type == "rejected"
+    assert ev.article_id is None
+    assert ev.payload["target_article_id"] == 999
+
+
+@pytest.mark.asyncio
+async def test_append_ready_build_blocked_records_content_too_large(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """content too large は article FK と入力サイズ snapshot を残す。"""
+    article = await _make_article(db_session, sample_source)
+    async with session_factory() as session:
+        await CurationAuditRepository(session).append_ready_build_blocked(
+            blocked=CurationReadyBuildBlocked(
+                target_article_id=article.id,
+                code=CurationReadyBuildBlockedCode.CONTENT_TOO_LARGE,
+                content_length=200_001,
+                max_content_length=200_000,
+                source_name=str(sample_source.name),
+            )
+        )
+        await session.commit()
+
+    ev = await _fetch_by_outcome(
+        db_session, "curation_ready_build_blocked_content_too_large"
+    )
+    assert ev.event_type == "rejected"
+    assert ev.article_id == article.id
+    assert ev.payload["source_name"] == str(sample_source.name)
+    assert ev.payload["input_content_length"] == 200_001
+    assert ev.payload["max_content_length"] == 200_000
+
+
+@pytest.mark.asyncio
+async def test_append_ready_build_failed_records_unknown_failure(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Ready build failed は failed / unknown retryability で trigger id を残す。"""
+    exc = RuntimeError("ready build exploded")
+    async with session_factory() as session:
+        await CurationAuditRepository(session).append_ready_build_failed(
+            target_article_id=123,
+            exc=exc,
+        )
+        await session.commit()
+
+    ev = await _fetch_by_outcome(
+        db_session, "curation_ready_build_failed_unexpected_error"
+    )
+    assert ev.event_type == "failed"
+    assert ev.retryability == "unknown"
+    assert ev.error_class == "builtins.RuntimeError"
+    assert ev.payload["failure_kind"] == "unexpected_error"
+    assert ev.payload["target_article_id"] == 123
 
 
 @pytest.mark.asyncio
