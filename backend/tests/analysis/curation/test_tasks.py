@@ -300,6 +300,7 @@ class TestCurateContent:
             patch(
                 "app.analysis.curation.failure_handling.CurationAuditRepository"
             ) as mock_audit_cls,
+            patch("app.queue.tasks.curation.set_curation_hold", new=AsyncMock()),
             capture_logs() as cap,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(side_effect=business_exc)

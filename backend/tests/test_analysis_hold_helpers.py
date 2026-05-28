@@ -9,8 +9,12 @@ from unittest.mock import AsyncMock
 import pytest
 from redis.exceptions import ConnectionError as RedisConnectionError
 
-from app.analysis.assessment.hold import is_assessment_held, set_assessment_hold
-from app.analysis.embedding.hold import is_embedding_held, set_embedding_hold
+from app.queue.helpers.stage_hold import (
+    is_assessment_held,
+    is_embedding_held,
+    set_assessment_hold,
+    set_embedding_hold,
+)
 
 SetHold = Callable[..., Awaitable[None]]
 IsHeld = Callable[[Any], Awaitable[bool]]

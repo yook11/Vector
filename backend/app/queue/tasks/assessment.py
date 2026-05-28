@@ -16,10 +16,12 @@ from app.analysis.assessment.repository import AssessmentRepository
 from app.analysis.assessment.service import AssessmentService
 from app.audit.stages.assessment import AssessmentAuditRepository
 from app.queue.brokers import broker_analysis
+from app.queue.helpers.stage_hold import set_assessment_hold
 from app.queue.messages.assessment import AssessmentTrigger
 from app.queue.messages.embedding import EmbeddingTrigger
 from app.queue.retry import is_last_attempt
 from app.queue.tasks.embedding import generate_embedding
+from app.redis import get_redis
 
 logger = structlog.get_logger(__name__)
 
@@ -79,12 +81,14 @@ async def assess_content(
     try:
         result = await svc.execute(ready, assessor)
     except Exception as exc:
-        reraise = await handler.handle(
+        decision = await handler.handle(
             ready=ready,
             exc=exc,
             last_attempt=is_last_attempt(ctx),
         )
-        if reraise:
+        if decision.stage_hold_reason is not None:
+            await set_assessment_hold(get_redis(), reason=decision.stage_hold_reason)
+        if decision.reraise:
             raise
         return
 

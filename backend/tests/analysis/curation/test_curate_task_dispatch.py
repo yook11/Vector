@@ -36,6 +36,7 @@ from app.analysis.ai_provider_errors import (
 )
 from app.analysis.curation.domain.ready import ReadyForCuration
 from app.analysis.curation.errors import CurationResponseInvalidError
+from app.analysis.failure_handling import FailureHandlingDecision
 from app.analysis.rate_limit import AIModelRateLimitPolicy, RateLimitRule
 from app.queue.messages.curation import CurationTrigger
 
@@ -119,7 +120,9 @@ async def test_drop_article_delegates_to_handler(exc_cls: type[Exception]) -> No
         patch("app.queue.tasks.curation.CurationFailureHandler") as mock_handler_cls,
     ):
         mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
-        mock_handler_cls.return_value.handle = AsyncMock(return_value=False)
+        mock_handler_cls.return_value.handle = AsyncMock(
+            return_value=FailureHandlingDecision(reraise=False)
+        )
         await curate_content(trigger=_trigger(), ctx=ctx)
 
     handler_handle = mock_handler_cls.return_value.handle
@@ -153,14 +156,22 @@ async def test_keep_article_delegates_to_handler(exc_cls: type[Exception]) -> No
         _patch_try_advance_from(),
         patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
         patch("app.queue.tasks.curation.CurationFailureHandler") as mock_handler_cls,
+        patch("app.queue.tasks.curation.set_curation_hold", new=AsyncMock()) as hold,
     ):
         mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc_cls("boom"))
-        mock_handler_cls.return_value.handle = AsyncMock(return_value=False)
+        mock_handler_cls.return_value.handle = AsyncMock(
+            return_value=FailureHandlingDecision(
+                reraise=False,
+                stage_hold_reason="ai_error_configuration",
+            )
+        )
         await curate_content(trigger=_trigger(), ctx=ctx)
 
     handler_handle = mock_handler_cls.return_value.handle
     handler_handle.assert_awaited_once()
     assert handler_handle.await_args.kwargs["exc"].__class__ is exc_cls
+    hold.assert_awaited_once()
+    assert hold.await_args.kwargs["reason"] == "ai_error_configuration"
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +205,9 @@ async def test_retryable_reraise_true_raises(
         patch("app.queue.tasks.curation.CurationFailureHandler") as mock_handler_cls,
     ):
         mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc_factory())
-        mock_handler_cls.return_value.handle = AsyncMock(return_value=True)
+        mock_handler_cls.return_value.handle = AsyncMock(
+            return_value=FailureHandlingDecision(reraise=True)
+        )
         with pytest.raises(exc_factory):
             await curate_content(trigger=_trigger(), ctx=ctx)
 
@@ -216,7 +229,9 @@ async def test_retryable_reraise_false_returns() -> None:
         mock_svc_cls.return_value.execute = AsyncMock(
             side_effect=AIProviderNetworkError("connection reset")
         )
-        mock_handler_cls.return_value.handle = AsyncMock(return_value=False)
+        mock_handler_cls.return_value.handle = AsyncMock(
+            return_value=FailureHandlingDecision(reraise=False)
+        )
         await curate_content(trigger=_trigger(), ctx=ctx)
 
     handler_handle = mock_handler_cls.return_value.handle
@@ -251,7 +266,9 @@ async def test_rate_limit_class_delegates_to_handler(
         patch("app.queue.tasks.curation.CurationFailureHandler") as mock_handler_cls,
     ):
         mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc_cls("boom"))
-        mock_handler_cls.return_value.handle = AsyncMock(return_value=False)
+        mock_handler_cls.return_value.handle = AsyncMock(
+            return_value=FailureHandlingDecision(reraise=False)
+        )
         await curate_content(trigger=_trigger(), ctx=ctx)
 
     mock_handler_cls.return_value.handle.assert_awaited_once()
@@ -276,7 +293,9 @@ async def test_unexpected_exception_delegates_to_handler() -> None:
         mock_svc_cls.return_value.execute = AsyncMock(
             side_effect=ValueError("surprise"),
         )
-        mock_handler_cls.return_value.handle = AsyncMock(return_value=False)
+        mock_handler_cls.return_value.handle = AsyncMock(
+            return_value=FailureHandlingDecision(reraise=False)
+        )
         await curate_content(trigger=_trigger(), ctx=ctx)
 
     handler_handle = mock_handler_cls.return_value.handle

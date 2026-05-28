@@ -16,8 +16,10 @@ from app.analysis.embedding.repository import EmbeddingRepository
 from app.analysis.embedding.service import EmbeddingService
 from app.audit.stages.embedding import EmbeddingAuditRepository
 from app.queue.brokers import broker_embedding
+from app.queue.helpers.stage_hold import set_embedding_hold
 from app.queue.messages.embedding import EmbeddingTrigger
 from app.queue.retry import is_last_attempt
+from app.redis import get_redis
 
 logger = structlog.get_logger(__name__)
 
@@ -78,12 +80,14 @@ async def generate_embedding(
     try:
         await svc.execute(ready, embedder)
     except Exception as exc:
-        reraise = await handler.handle(
+        decision = await handler.handle(
             ready=ready,
             exc=exc,
             last_attempt=is_last_attempt(ctx),
         )
-        if reraise:
+        if decision.stage_hold_reason is not None:
+            await set_embedding_hold(get_redis(), reason=decision.stage_hold_reason)
+        if decision.reraise:
             raise
         return
 

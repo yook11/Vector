@@ -13,12 +13,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.analysis.curation.hold import (
-    _HOLD_KEY,
-    _HOLD_TTL_SECONDS,
+from app.queue.helpers.stage_hold import (
     is_curation_held,
     set_curation_hold,
 )
+
+_CURATION_HOLD_KEY = "curation:hold"
+_HOLD_TTL_SECONDS = 6 * 60 * 60
 
 
 def test_hold_ttl_matches_spec() -> None:
@@ -32,7 +33,7 @@ async def test_set_curation_hold_writes_key_with_ttl() -> None:
     redis = AsyncMock()
     await set_curation_hold(redis, reason="ai_error_configuration")
     redis.set.assert_awaited_once_with(
-        _HOLD_KEY, "ai_error_configuration", ex=_HOLD_TTL_SECONDS
+        _CURATION_HOLD_KEY, "ai_error_configuration", ex=_HOLD_TTL_SECONDS
     )
 
 
@@ -42,7 +43,7 @@ async def test_is_curation_held_true_when_key_exists() -> None:
     redis = AsyncMock()
     redis.exists = AsyncMock(return_value=1)
     assert await is_curation_held(redis) is True
-    redis.exists.assert_awaited_once_with(_HOLD_KEY)
+    redis.exists.assert_awaited_once_with(_CURATION_HOLD_KEY)
 
 
 @pytest.mark.asyncio

@@ -26,6 +26,7 @@ from app.analysis.embedding.errors import (
     EmbeddingResponseInvalidError,
     EmbeddingTerminalStageBlockedError,
 )
+from app.analysis.failure_handling import FailureHandlingDecision
 from app.analysis.rate_limit import AIModelRateLimitPolicy
 from app.queue.messages.embedding import EmbeddingTrigger
 
@@ -103,14 +104,24 @@ async def test_terminal_stage_blocked_delegates_to_handler() -> None:
         patch("app.queue.tasks.embedding.EmbeddingFailureHandler") as mock_handler_cls,
     ):
         mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
-        mock_handler_cls.return_value.handle = AsyncMock(return_value=False)
-        await generate_embedding(trigger=_trigger(), ctx=ctx)
+        mock_handler_cls.return_value.handle = AsyncMock(
+            return_value=FailureHandlingDecision(
+                reraise=False,
+                stage_hold_reason="ai_error_configuration",
+            )
+        )
+        with patch(
+            "app.queue.tasks.embedding.set_embedding_hold", new=AsyncMock()
+        ) as hold:
+            await generate_embedding(trigger=_trigger(), ctx=ctx)
 
     handler_handle = mock_handler_cls.return_value.handle
     handler_handle.assert_awaited_once()
     kwargs = handler_handle.await_args.kwargs
     assert kwargs["exc"] is exc
     assert kwargs["last_attempt"] is False
+    hold.assert_awaited_once()
+    assert hold.await_args.kwargs["reason"] == "ai_error_configuration"
 
 
 # ---------------------------------------------------------------------------
@@ -132,7 +143,9 @@ async def test_recoverable_reraise_true_raises() -> None:
         patch("app.queue.tasks.embedding.EmbeddingFailureHandler") as mock_handler_cls,
     ):
         mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
-        mock_handler_cls.return_value.handle = AsyncMock(return_value=True)
+        mock_handler_cls.return_value.handle = AsyncMock(
+            return_value=FailureHandlingDecision(reraise=True)
+        )
         with pytest.raises(EmbeddingRecoverableError):
             await generate_embedding(trigger=_trigger(), ctx=ctx)
 
@@ -158,7 +171,9 @@ async def test_recoverable_reraise_false_returns() -> None:
         patch("app.queue.tasks.embedding.EmbeddingFailureHandler") as mock_handler_cls,
     ):
         mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
-        mock_handler_cls.return_value.handle = AsyncMock(return_value=False)
+        mock_handler_cls.return_value.handle = AsyncMock(
+            return_value=FailureHandlingDecision(reraise=False)
+        )
         await generate_embedding(trigger=_trigger(), ctx=ctx)
 
     handler_handle = mock_handler_cls.return_value.handle
@@ -181,7 +196,9 @@ async def test_response_invalid_dispatches_to_handler() -> None:
         patch("app.queue.tasks.embedding.EmbeddingFailureHandler") as mock_handler_cls,
     ):
         mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
-        mock_handler_cls.return_value.handle = AsyncMock(return_value=False)
+        mock_handler_cls.return_value.handle = AsyncMock(
+            return_value=FailureHandlingDecision(reraise=False)
+        )
         await generate_embedding(trigger=_trigger(), ctx=ctx)
 
     handler_handle = mock_handler_cls.return_value.handle
@@ -210,7 +227,9 @@ async def test_unexpected_exception_delegates_to_handler() -> None:
         mock_svc_cls.return_value.execute = AsyncMock(
             side_effect=ValueError("surprise"),
         )
-        mock_handler_cls.return_value.handle = AsyncMock(return_value=False)
+        mock_handler_cls.return_value.handle = AsyncMock(
+            return_value=FailureHandlingDecision(reraise=False)
+        )
         await generate_embedding(trigger=_trigger(), ctx=ctx)
 
     handler_handle = mock_handler_cls.return_value.handle

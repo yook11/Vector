@@ -2,7 +2,7 @@
 
 Layer 1 marker (``EmbeddingTerminalError`` / ``EmbeddingRecoverableError`` /
 catch-all) を audit / inline retry decision に対応づける唯一の場所。Task 層は
-taskiq retry のために reraise decision (``bool``) だけを解釈する。
+taskiq retry / stage hold の decision だけを解釈する。
 
 Stage 5 は内容起因 DELETE 経路を持たない (analysis を保持して embedding を
 skip する設計) ため、Stage 4 と Handler は共有しない (Stage 4 PR #497 と
@@ -23,9 +23,8 @@ from app.analysis.embedding.errors import (
     EmbeddingTerminalError,
     EmbeddingTerminalStageBlockedError,
 )
-from app.analysis.embedding.hold import set_embedding_hold
+from app.analysis.failure_handling import FailureHandlingDecision
 from app.audit.stages.embedding import EmbeddingAuditRepository
-from app.redis import get_redis
 from app.shared.security.redaction import redact_secrets
 
 logger = structlog.get_logger(__name__)
@@ -35,8 +34,9 @@ class EmbeddingFailureHandler:
     """Stage 5 の失敗分類に応じた後処理を実行する application service。
 
     全 marker で best-effort failure audit (DB 落ち時は log fallback) を実行し、
-    taskiq に raise すべきかどうかを ``bool`` で返す。branch ごとの分類ログも
-    本 class 内で完結させ、task 層は marker の意味を知らずに済む。
+    taskiq に raise すべきか、stage hold を立てるべきかを decision で返す。
+    branch ごとの分類ログも本 class 内で完結させ、task 層は marker の意味を
+    知らずに済む。
     """
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
@@ -48,11 +48,11 @@ class EmbeddingFailureHandler:
         ready: ReadyForEmbedding,
         exc: BaseException,
         last_attempt: bool,
-    ) -> bool:
+    ) -> FailureHandlingDecision:
         """marker dispatch を実行する。
 
         Returns:
-            taskiq に raise すべきなら ``True``、return すべきなら ``False``。
+            taskiq retry と stage hold の decision。
         """
         match exc:
             case EmbeddingTerminalStageBlockedError():
@@ -62,10 +62,10 @@ class EmbeddingFailureHandler:
                     code=getattr(exc, "code", None),
                 )
                 await self._audit_failure(ready, exc)
-                await set_embedding_hold(
-                    get_redis(), reason=getattr(exc, "code", "unknown")
+                return FailureHandlingDecision(
+                    reraise=False,
+                    stage_hold_reason=getattr(exc, "code", "unknown"),
                 )
-                return False
             case EmbeddingTerminalError():
                 logger.warning(
                     "generate_embedding_terminal",
@@ -73,29 +73,30 @@ class EmbeddingFailureHandler:
                     code=getattr(exc, "code", None),
                 )
                 await self._audit_failure(ready, exc)
-                return False
+                return FailureHandlingDecision(reraise=False)
             case EmbeddingRecoverableError():
                 recoverable = exc
                 await self._audit_failure(ready, recoverable)
                 if last_attempt:
+                    hold_reason = None
                     if isinstance(
                         recoverable.provider_error,
                         AIProviderUsageLimitExhaustedError,
                     ):
-                        await set_embedding_hold(
-                            get_redis(),
-                            reason=recoverable.code,
-                        )
+                        hold_reason = recoverable.code
                     logger.warning(
                         "generate_embedding_recoverable_exhausted",
                         analysis_id=ready.analysis_id,
                         code=getattr(recoverable, "code", None),
                     )
-                    return False
-                return True
+                    return FailureHandlingDecision(
+                        reraise=False,
+                        stage_hold_reason=hold_reason,
+                    )
+                return FailureHandlingDecision(reraise=True)
             case SQLAlchemyError():
                 await self._audit_failure(ready, exc)
-                return not last_attempt
+                return FailureHandlingDecision(reraise=not last_attempt)
             case _:
                 await self._audit_unexpected_failure(ready, exc)
                 if last_attempt:
@@ -103,8 +104,8 @@ class EmbeddingFailureHandler:
                         "generate_embedding_unexpected_exhausted",
                         analysis_id=ready.analysis_id,
                     )
-                    return False
-                return True
+                    return FailureHandlingDecision(reraise=False)
+                return FailureHandlingDecision(reraise=True)
 
     async def _audit_failure(
         self,

@@ -18,7 +18,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy import select
@@ -99,14 +99,15 @@ async def test_output_blocked_writes_audit_then_deletes_article(
         raise map_provider_to_curation(raw_exc) from raw_exc
     except Exception as wrapped:  # noqa: BLE001
         exc = wrapped
-    reraise = await handler.handle(
+    decision = await handler.handle(
         ready=ready,
         exc=exc,
         curator=_curator_mock(),
         last_attempt=False,
     )
 
-    assert reraise is False
+    assert decision.reraise is False
+    assert decision.stage_hold_reason is None
 
     # commit が走った別 tx の DB 状態を確認するため fresh session で検証
     await db_session.rollback()
@@ -138,8 +139,7 @@ async def test_output_blocked_writes_audit_then_deletes_article(
     assert payload["ai_model"] == GEMINI_CURATION_SPEC.model
     assert payload["error_message"] is not None
     assert payload["error_chain"] is not None
-    # caller pre-compute (build_curation_audit_input) が drop 経路でも走り、
-    # 値が payload に焼かれる (DELETE 前 pre-compute の保険)。
+    # audit repository が drop 経路でも original_content から値を焼く。
     assert payload["input_content_length"] == expected_raw_length
     assert payload["input_content_head"]  # non-empty
     assert len(payload["input_content_hash"]) == 16
@@ -162,14 +162,15 @@ async def test_input_rejected_writes_audit_then_deletes_article(
         raise map_provider_to_curation(raw_exc) from raw_exc
     except Exception as wrapped:  # noqa: BLE001
         exc = wrapped
-    reraise = await handler.handle(
+    decision = await handler.handle(
         ready=ready,
         exc=exc,
         curator=_curator_mock(),
         last_attempt=False,
     )
 
-    assert reraise is False
+    assert decision.reraise is False
+    assert decision.stage_hold_reason is None
     await db_session.rollback()
     assert (await db_session.get(Article, article_id)) is None
     events = list(
@@ -219,21 +220,16 @@ async def test_terminal_keep_sets_curation_hold(
     # AIProviderConfigurationError → CurationTerminalKeepError (keep, config 起因)
     exc = _wrap(AIProviderConfigurationError("api key missing"))
 
-    with patch(
-        "app.analysis.curation.failure_handling.set_curation_hold",
-        new=AsyncMock(),
-    ) as set_hold:
-        reraise = await handler.handle(
-            ready=ready,
-            exc=exc,
-            curator=_curator_mock(),
-            last_attempt=False,
-        )
+    decision = await handler.handle(
+        ready=ready,
+        exc=exc,
+        curator=_curator_mock(),
+        last_attempt=False,
+    )
 
-    assert reraise is False  # terminal_keep は taskiq retry させない
-    set_hold.assert_awaited_once()
+    assert decision.reraise is False  # terminal_keep は taskiq retry させない
     # reason は失敗 code (exc.code 由来、provider 健全性問題の識別子)
-    assert set_hold.await_args.kwargs["reason"] == exc.code
+    assert decision.stage_hold_reason == exc.code
     # failure audit は hold と独立に必ず残す
     await db_session.rollback()
     ev = (
@@ -249,8 +245,7 @@ async def test_terminal_keep_sets_curation_hold(
     assert ev.retryability == "non_retryable"
     assert ev.payload["failure_kind"] == "terminal_keep"
     assert ev.payload["failure_action"] is None
-    # caller pre-compute (build_curation_audit_input) が failure 経路でも走り、
-    # 値が payload に焼かれる (best-effort try 内 pre-compute の保険)。
+    # audit repository が failure 経路でも original_content から値を焼く。
     assert ev.payload["input_content_length"] == expected_raw_length
     assert ev.payload["input_content_head"]  # non-empty
     assert len(ev.payload["input_content_hash"]) == 16
@@ -269,18 +264,15 @@ async def test_recoverable_does_not_set_curation_hold(
     # AIProviderNetworkError → CurationRecoverableError (retryable)
     exc = _wrap(AIProviderNetworkError("conn reset"))
 
-    with patch(
-        "app.analysis.curation.failure_handling.set_curation_hold",
-        new=AsyncMock(),
-    ) as set_hold:
-        await handler.handle(
-            ready=ready,
-            exc=exc,
-            curator=_curator_mock(),
-            last_attempt=True,
-        )
+    decision = await handler.handle(
+        ready=ready,
+        exc=exc,
+        curator=_curator_mock(),
+        last_attempt=True,
+    )
 
-    set_hold.assert_not_called()
+    assert decision.reraise is False
+    assert decision.stage_hold_reason is None
 
 
 @pytest.mark.asyncio
@@ -296,20 +288,15 @@ async def test_usage_limit_recoverable_sets_curation_hold_on_last_attempt(
     handler = CurationFailureHandler(session_factory)
     exc = _wrap(AIProviderUsageLimitExhaustedError("usage exhausted"))
 
-    with patch(
-        "app.analysis.curation.failure_handling.set_curation_hold",
-        new=AsyncMock(),
-    ) as set_hold:
-        reraise = await handler.handle(
-            ready=ready,
-            exc=exc,
-            curator=_curator_mock(),
-            last_attempt=True,
-        )
+    decision = await handler.handle(
+        ready=ready,
+        exc=exc,
+        curator=_curator_mock(),
+        last_attempt=True,
+    )
 
-    assert reraise is False
-    set_hold.assert_awaited_once()
-    assert set_hold.await_args.kwargs["reason"] == exc.code
+    assert decision.reraise is False
+    assert decision.stage_hold_reason == exc.code
     await db_session.rollback()
     ev = (
         (
@@ -337,19 +324,15 @@ async def test_usage_limit_recoverable_with_retry_budget_does_not_set_hold(
     handler = CurationFailureHandler(session_factory)
     exc = _wrap(AIProviderUsageLimitExhaustedError("usage exhausted"))
 
-    with patch(
-        "app.analysis.curation.failure_handling.set_curation_hold",
-        new=AsyncMock(),
-    ) as set_hold:
-        reraise = await handler.handle(
-            ready=ready,
-            exc=exc,
-            curator=_curator_mock(),
-            last_attempt=False,
-        )
+    decision = await handler.handle(
+        ready=ready,
+        exc=exc,
+        curator=_curator_mock(),
+        last_attempt=False,
+    )
 
-    assert reraise is True
-    set_hold.assert_not_called()
+    assert decision.reraise is True
+    assert decision.stage_hold_reason is None
 
 
 @pytest.mark.asyncio
@@ -364,16 +347,12 @@ async def test_rate_limited_recoverable_last_attempt_does_not_set_curation_hold(
     handler = CurationFailureHandler(session_factory)
     exc = _wrap(AIProviderRateLimitedError("429"))
 
-    with patch(
-        "app.analysis.curation.failure_handling.set_curation_hold",
-        new=AsyncMock(),
-    ) as set_hold:
-        reraise = await handler.handle(
-            ready=ready,
-            exc=exc,
-            curator=_curator_mock(),
-            last_attempt=True,
-        )
+    decision = await handler.handle(
+        ready=ready,
+        exc=exc,
+        curator=_curator_mock(),
+        last_attempt=True,
+    )
 
-    assert reraise is False
-    set_hold.assert_not_called()
+    assert decision.reraise is False
+    assert decision.stage_hold_reason is None

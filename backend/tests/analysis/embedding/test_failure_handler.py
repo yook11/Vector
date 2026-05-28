@@ -99,15 +99,10 @@ async def test_terminal_stage_blocked_writes_audit_sets_hold_and_returns_false(
     handler = EmbeddingFailureHandler(session_factory)
 
     exc = EmbeddingTerminalStageBlockedError(code="ai_error_configuration")
-    with patch(
-        "app.analysis.embedding.failure_handling.set_embedding_hold",
-        new=AsyncMock(),
-    ) as set_hold:
-        reraise = await handler.handle(ready=ready, exc=exc, last_attempt=False)
+    decision = await handler.handle(ready=ready, exc=exc, last_attempt=False)
 
-    assert reraise is False
-    set_hold.assert_awaited_once()
-    assert set_hold.await_args.kwargs["reason"] == "ai_error_configuration"
+    assert decision.reraise is False
+    assert decision.stage_hold_reason == "ai_error_configuration"
     await db_session.rollback()
     events = await _fetch_embedding_events(db_session, article_id)
     assert len(events) == 1
@@ -132,14 +127,10 @@ async def test_terminal_target_rejected_writes_audit_without_hold(
     handler = EmbeddingFailureHandler(session_factory)
 
     exc = EmbeddingTerminalTargetRejectedError(code="ai_error_input_rejected")
-    with patch(
-        "app.analysis.embedding.failure_handling.set_embedding_hold",
-        new=AsyncMock(),
-    ) as set_hold:
-        reraise = await handler.handle(ready=ready, exc=exc, last_attempt=False)
+    decision = await handler.handle(ready=ready, exc=exc, last_attempt=False)
 
-    assert reraise is False
-    set_hold.assert_not_called()
+    assert decision.reraise is False
+    assert decision.stage_hold_reason is None
     await db_session.rollback()
     events = await _fetch_embedding_events(db_session, article_id)
     assert len(events) == 1
@@ -151,28 +142,23 @@ async def test_terminal_target_rejected_writes_audit_without_hold(
 
 
 @pytest.mark.asyncio
-async def test_terminal_stage_blocked_redis_failure_still_returns_false(
+async def test_terminal_stage_blocked_returns_hold_reason_without_redis(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """hold set の Redis 障害は helper が呑み、handler は完走する。"""
+    """handler は Redis に触らず、hold reason だけを decision に乗せる。"""
     article = await _make_article(db_session, sample_source)
     article_id = article.id
     ready = _ready_for(article_id)
     handler = EmbeddingFailureHandler(session_factory)
 
-    fake_redis = AsyncMock()
-    fake_redis.set.side_effect = RuntimeError("redis down")
     exc = EmbeddingTerminalStageBlockedError(code="ai_error_configuration")
 
-    with patch(
-        "app.analysis.embedding.failure_handling.get_redis",
-        return_value=fake_redis,
-    ):
-        reraise = await handler.handle(ready=ready, exc=exc, last_attempt=False)
+    decision = await handler.handle(ready=ready, exc=exc, last_attempt=False)
 
-    assert reraise is False
+    assert decision.reraise is False
+    assert decision.stage_hold_reason == "ai_error_configuration"
     await db_session.rollback()
     events = await _fetch_embedding_events(db_session, article_id)
     assert len(events) == 1
@@ -197,9 +183,10 @@ async def test_recoverable_with_retry_budget_writes_audit_and_returns_true(
     handler = EmbeddingFailureHandler(session_factory)
 
     exc = EmbeddingRecoverableError(code="ai_error_network")
-    reraise = await handler.handle(ready=ready, exc=exc, last_attempt=False)
+    decision = await handler.handle(ready=ready, exc=exc, last_attempt=False)
 
-    assert reraise is True
+    assert decision.reraise is True
+    assert decision.stage_hold_reason is None
     await db_session.rollback()
     events = await _fetch_embedding_events(db_session, article_id)
     assert len(events) == 1
@@ -224,14 +211,10 @@ async def test_recoverable_last_attempt_writes_audit_and_returns_false(
     handler = EmbeddingFailureHandler(session_factory)
 
     exc = EmbeddingRecoverableError(code="ai_error_network")
-    with patch(
-        "app.analysis.embedding.failure_handling.set_embedding_hold",
-        new=AsyncMock(),
-    ) as set_hold:
-        reraise = await handler.handle(ready=ready, exc=exc, last_attempt=True)
+    decision = await handler.handle(ready=ready, exc=exc, last_attempt=True)
 
-    assert reraise is False
-    set_hold.assert_not_called()
+    assert decision.reraise is False
+    assert decision.stage_hold_reason is None
     await db_session.rollback()
     events = await _fetch_embedding_events(db_session, article_id)
     assert len(events) == 1
@@ -255,14 +238,10 @@ async def test_usage_limit_recoverable_with_retry_budget_does_not_set_hold(
         provider_error=provider_exc,
     )
 
-    with patch(
-        "app.analysis.embedding.failure_handling.set_embedding_hold",
-        new=AsyncMock(),
-    ) as set_hold:
-        reraise = await handler.handle(ready=ready, exc=exc, last_attempt=False)
+    decision = await handler.handle(ready=ready, exc=exc, last_attempt=False)
 
-    assert reraise is True
-    set_hold.assert_not_called()
+    assert decision.reraise is True
+    assert decision.stage_hold_reason is None
 
 
 @pytest.mark.asyncio
@@ -282,15 +261,10 @@ async def test_usage_limit_recoverable_sets_hold_on_last_attempt(
         provider_error=provider_exc,
     )
 
-    with patch(
-        "app.analysis.embedding.failure_handling.set_embedding_hold",
-        new=AsyncMock(),
-    ) as set_hold:
-        reraise = await handler.handle(ready=ready, exc=exc, last_attempt=True)
+    decision = await handler.handle(ready=ready, exc=exc, last_attempt=True)
 
-    assert reraise is False
-    set_hold.assert_awaited_once()
-    assert set_hold.await_args.kwargs["reason"] == provider_exc.CODE
+    assert decision.reraise is False
+    assert decision.stage_hold_reason == provider_exc.CODE
     await db_session.rollback()
     events = await _fetch_embedding_events(db_session, article_id)
     assert len(events) == 1
@@ -315,14 +289,10 @@ async def test_rate_limited_recoverable_last_attempt_does_not_set_hold(
         provider_error=provider_exc,
     )
 
-    with patch(
-        "app.analysis.embedding.failure_handling.set_embedding_hold",
-        new=AsyncMock(),
-    ) as set_hold:
-        reraise = await handler.handle(ready=ready, exc=exc, last_attempt=True)
+    decision = await handler.handle(ready=ready, exc=exc, last_attempt=True)
 
-    assert reraise is False
-    set_hold.assert_not_called()
+    assert decision.reraise is False
+    assert decision.stage_hold_reason is None
 
 
 # ---------------------------------------------------------------------------
@@ -343,9 +313,10 @@ async def test_unexpected_with_retry_budget_writes_audit_and_returns_true(
     handler = EmbeddingFailureHandler(session_factory)
 
     exc = ValueError("surprise")
-    reraise = await handler.handle(ready=ready, exc=exc, last_attempt=False)
+    decision = await handler.handle(ready=ready, exc=exc, last_attempt=False)
 
-    assert reraise is True
+    assert decision.reraise is True
+    assert decision.stage_hold_reason is None
     await db_session.rollback()
     events = await _fetch_embedding_events(db_session, article_id)
     assert len(events) == 1
@@ -369,9 +340,10 @@ async def test_unexpected_last_attempt_writes_audit_and_returns_false(
     handler = EmbeddingFailureHandler(session_factory)
 
     exc = ValueError("surprise")
-    reraise = await handler.handle(ready=ready, exc=exc, last_attempt=True)
+    decision = await handler.handle(ready=ready, exc=exc, last_attempt=True)
 
-    assert reraise is False
+    assert decision.reraise is False
+    assert decision.stage_hold_reason is None
     await db_session.rollback()
     events = await _fetch_embedding_events(db_session, article_id)
     assert len(events) == 1
@@ -407,10 +379,6 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
         patch(
             "app.analysis.embedding.failure_handling.EmbeddingAuditRepository"
         ) as mock_audit_cls,
-        patch(
-            "app.analysis.embedding.failure_handling.set_embedding_hold",
-            new=AsyncMock(),
-        ),
         capture_logs() as cap,
     ):
         mock_audit_cls.return_value.append_failure = AsyncMock(
@@ -419,11 +387,12 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
             )
         )
         # handler は落ちずに完走 (StageBlocked → reraise=False)
-        reraise = await handler.handle(
+        decision = await handler.handle(
             ready=ready, exc=business_exc, last_attempt=False
         )
 
-    assert reraise is False
+    assert decision.reraise is False
+    assert decision.stage_hold_reason == "ai_error_configuration"
     drops = [e for e in cap if e.get("event") == "embedding_failure_audit_dropped"]
     assert drops, "fallback ログが emit されていない"
     drop = drops[-1]

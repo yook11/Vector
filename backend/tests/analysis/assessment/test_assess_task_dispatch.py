@@ -30,6 +30,7 @@ from app.analysis.assessment.errors import (
     AssessmentTerminalError,
     AssessmentTerminalStageBlockedError,
 )
+from app.analysis.failure_handling import FailureHandlingDecision
 from app.analysis.rate_limit import AIModelRateLimitPolicy, RateLimitRule
 from app.queue.messages.assessment import AssessmentTrigger
 
@@ -113,14 +114,24 @@ async def test_terminal_stage_blocked_delegates_to_handler() -> None:
         ) as mock_handler_cls,
     ):
         mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
-        mock_handler_cls.return_value.handle = AsyncMock(return_value=False)
-        await assess_content(trigger=_trigger(), ctx=ctx)
+        mock_handler_cls.return_value.handle = AsyncMock(
+            return_value=FailureHandlingDecision(
+                reraise=False,
+                stage_hold_reason="ai_error_configuration",
+            )
+        )
+        with patch(
+            "app.queue.tasks.assessment.set_assessment_hold", new=AsyncMock()
+        ) as hold:
+            await assess_content(trigger=_trigger(), ctx=ctx)
 
     handler_handle = mock_handler_cls.return_value.handle
     handler_handle.assert_awaited_once()
     kwargs = handler_handle.await_args.kwargs
     assert kwargs["exc"] is exc
     assert kwargs["last_attempt"] is False
+    hold.assert_awaited_once()
+    assert hold.await_args.kwargs["reason"] == "ai_error_configuration"
 
 
 @pytest.mark.asyncio
@@ -139,7 +150,9 @@ async def test_category_missing_dispatches_to_handler() -> None:
         ) as mock_handler_cls,
     ):
         mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
-        mock_handler_cls.return_value.handle = AsyncMock(return_value=False)
+        mock_handler_cls.return_value.handle = AsyncMock(
+            return_value=FailureHandlingDecision(reraise=False)
+        )
         await assess_content(trigger=_trigger(), ctx=ctx)
 
     handler_handle = mock_handler_cls.return_value.handle
@@ -168,7 +181,9 @@ async def test_recoverable_reraise_true_raises() -> None:
         ) as mock_handler_cls,
     ):
         mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
-        mock_handler_cls.return_value.handle = AsyncMock(return_value=True)
+        mock_handler_cls.return_value.handle = AsyncMock(
+            return_value=FailureHandlingDecision(reraise=True)
+        )
         with pytest.raises(AssessmentRecoverableError):
             await assess_content(trigger=_trigger(), ctx=ctx)
 
@@ -196,7 +211,9 @@ async def test_recoverable_reraise_false_returns() -> None:
         ) as mock_handler_cls,
     ):
         mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
-        mock_handler_cls.return_value.handle = AsyncMock(return_value=False)
+        mock_handler_cls.return_value.handle = AsyncMock(
+            return_value=FailureHandlingDecision(reraise=False)
+        )
         await assess_content(trigger=_trigger(), ctx=ctx)
 
     handler_handle = mock_handler_cls.return_value.handle
@@ -221,7 +238,9 @@ async def test_response_invalid_dispatches_to_handler() -> None:
         ) as mock_handler_cls,
     ):
         mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
-        mock_handler_cls.return_value.handle = AsyncMock(return_value=False)
+        mock_handler_cls.return_value.handle = AsyncMock(
+            return_value=FailureHandlingDecision(reraise=False)
+        )
         await assess_content(trigger=_trigger(), ctx=ctx)
 
     handler_handle = mock_handler_cls.return_value.handle
@@ -252,7 +271,9 @@ async def test_unexpected_exception_delegates_to_handler() -> None:
         mock_svc_cls.return_value.execute = AsyncMock(
             side_effect=ValueError("surprise"),
         )
-        mock_handler_cls.return_value.handle = AsyncMock(return_value=False)
+        mock_handler_cls.return_value.handle = AsyncMock(
+            return_value=FailureHandlingDecision(reraise=False)
+        )
         await assess_content(trigger=_trigger(), ctx=ctx)
 
     handler_handle = mock_handler_cls.return_value.handle

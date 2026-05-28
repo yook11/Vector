@@ -1,4 +1,4 @@
-"""``app/analysis/curation/hold.py`` の Logfire metric 記録 oracle。
+"""``app/queue/helpers/stage_hold.py`` の curation Logfire metric 記録 oracle。
 
 検証する性質 (Phase 4):
 - ``set_curation_hold`` 成功時に ``vector.curation.hold_set`` counter が +1
@@ -26,7 +26,7 @@ import pytest
 from logfire.testing import CaptureLogfire
 from redis.exceptions import ConnectionError as RedisConnectionError
 
-from app.analysis.curation.hold import set_curation_hold
+from app.queue.helpers.stage_hold import set_curation_hold
 
 # ---------------------------------------------------------------------------
 # ヘルパー

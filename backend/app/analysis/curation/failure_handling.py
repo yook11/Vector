@@ -3,7 +3,7 @@
 Stage 3 Layer 1 marker (``CurationTerminalDropError`` /
 ``CurationTerminalKeepError`` / ``CurationRecoverableError`` / catch-all)
 を audit / DELETE / taskiq retry decision に対応づける**唯一の場所**。Task 層
-は taskiq retry のために reraise decision (``bool``) だけを解釈する。
+は taskiq retry / stage hold の decision だけを解釈する。
 
 Stage 3 固有要件 (失敗時に記事削除する Drop 経路) を持つため、Stage 4 / Stage 5
 とは Handler を共有しない。Stage 4/5 の同型 Handler を導入する場合は別 PR。
@@ -17,7 +17,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.ai_provider_errors import AIProviderUsageLimitExhaustedError
 from app.analysis.curation.ai.base import BaseCurator
-from app.analysis.curation.audit import build_curation_audit_input
 from app.analysis.curation.domain.ready import ReadyForCuration
 from app.analysis.curation.errors import (
     CurationError,
@@ -25,9 +24,8 @@ from app.analysis.curation.errors import (
     CurationTerminalDropError,
     CurationTerminalKeepError,
 )
-from app.analysis.curation.hold import set_curation_hold
+from app.analysis.failure_handling import FailureHandlingDecision
 from app.audit.stages.curation import CurationAuditRepository
-from app.redis import get_redis
 from app.repositories.articles import ArticleRepository
 from app.shared.security.redaction import redact_secrets
 
@@ -42,7 +40,7 @@ class CurationFailureHandler:
     Drop 経路は audit + article DELETE の 1 tx を、それ以外は best-effort
     failure audit (DB 落ち時は log fallback) を実行する。recoverable failure は
     taskiq retry に乗せる (``max_retries`` 上限後は cron 救済)、それ以外は即
-    return する。結果を ``bool`` (taskiq に raise すべきかどうか) で返す。
+    return する。結果を taskiq retry / stage hold の decision で返す。
     """
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
@@ -55,39 +53,41 @@ class CurationFailureHandler:
         exc: BaseException,
         curator: BaseCurator,
         last_attempt: bool,
-    ) -> bool:
+    ) -> FailureHandlingDecision:
         """marker dispatch を実行する。
 
         Returns:
-            taskiq に raise すべきなら ``True``、return すべきなら ``False``。
+            taskiq retry と stage hold の decision。
         """
         match exc:
             case CurationTerminalDropError():
                 await self._drop_article(ready, exc, curator)
-                return False
+                return FailureHandlingDecision(reraise=False)
             case CurationTerminalKeepError():
                 await self._audit_failure(ready, exc, curator)
-                # provider/stage 全体の健全性問題。backfill 再投入を一時停止する
-                # (hold は best-effort、set 失敗でも task は落とさない)。
-                await set_curation_hold(
-                    get_redis(), reason=getattr(exc, "code", "unknown")
+                return FailureHandlingDecision(
+                    reraise=False,
+                    stage_hold_reason=getattr(exc, "code", "unknown"),
                 )
-                return False
             case CurationRecoverableError():
                 recoverable = exc
                 await self._audit_failure(ready, recoverable, curator)
+                hold_reason = None
                 if last_attempt and isinstance(
                     recoverable.provider_error,
                     AIProviderUsageLimitExhaustedError,
                 ):
-                    await set_curation_hold(get_redis(), reason=recoverable.code)
-                return not last_attempt
+                    hold_reason = recoverable.code
+                return FailureHandlingDecision(
+                    reraise=not last_attempt,
+                    stage_hold_reason=hold_reason,
+                )
             case SQLAlchemyError():
                 await self._audit_failure(ready, exc, curator)
-                return False
+                return FailureHandlingDecision(reraise=False)
             case _:
                 await self._audit_unexpected_failure(ready, exc, curator)
-                return False
+                return FailureHandlingDecision(reraise=False)
 
     async def _drop_article(
         self,
@@ -102,19 +102,14 @@ class CurationFailureHandler:
         DELETE 後も audit 行は残る。
         """
         code = getattr(exc, "code", None) or _DROP_FALLBACK_CODE
-        # audit INSERT → DELETE → commit を同一 tx で実行する。pre-compute は
-        # この外で先に済ませる (audit に失敗したら DELETE も進まない構造を維持、
-        # best-effort 化しない — 「削除だけ起きて audit が残らない」を避ける)。
-        audit_input = build_curation_audit_input(
-            original_content=ready.original_content
-        )
+        # audit INSERT → DELETE → commit を同一 tx で実行する。audit に失敗したら
+        # DELETE も進まない構造を維持し、「削除だけ起きて audit が残らない」を避ける。
         async with self._session_factory() as session:
             await CurationAuditRepository(session).append_drop_article(
-                article_id=ready.article_id,
+                ready=ready,
                 code=code,
                 exc=exc,
                 curator=curator,
-                **audit_input,
             )
             deleted = await ArticleRepository(session).delete_by_id(ready.article_id)
             await session.commit()
@@ -139,17 +134,11 @@ class CurationFailureHandler:
         うるため、log 経路にも ``redact_secrets`` を通す (red-team chain γ-2)。
         """
         try:
-            # pre-compute も best-effort try 内で実行 — helper 構築で例外が出ても
-            # failure path 全体の best-effort semantics を維持する。
-            audit_input = build_curation_audit_input(
-                original_content=ready.original_content
-            )
             async with self._session_factory() as session:
                 await CurationAuditRepository(session).append_failure(
                     ready=ready,
                     exc=exc,
                     curator=curator,
-                    **audit_input,
                 )
                 await session.commit()
         except Exception as audit_exc:
@@ -174,15 +163,11 @@ class CurationFailureHandler:
     ) -> None:
         """想定外失敗の best-effort audit。"""
         try:
-            audit_input = build_curation_audit_input(
-                original_content=ready.original_content
-            )
             async with self._session_factory() as session:
                 await CurationAuditRepository(session).append_unexpected_failure(
                     ready=ready,
                     exc=exc,
                     curator=curator,
-                    **audit_input,
                 )
                 await session.commit()
         except Exception as audit_exc:

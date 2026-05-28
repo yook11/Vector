@@ -16,10 +16,12 @@ from app.analysis.curation.repository import CurationRepository
 from app.analysis.curation.service import CurationService
 from app.audit.stages.curation import CurationAuditRepository
 from app.queue.brokers import broker_analysis
+from app.queue.helpers.stage_hold import set_curation_hold
 from app.queue.messages.assessment import AssessmentTrigger
 from app.queue.messages.curation import CurationTrigger
 from app.queue.retry import is_last_attempt
 from app.queue.tasks.assessment import assess_content
+from app.redis import get_redis
 
 logger = structlog.get_logger(__name__)
 
@@ -76,13 +78,15 @@ async def curate_content(
     try:
         result = await svc.execute(ready, curator)
     except Exception as exc:
-        reraise = await handler.handle(
+        decision = await handler.handle(
             ready=ready,
             exc=exc,
             curator=curator,
             last_attempt=is_last_attempt(ctx),
         )
-        if reraise:
+        if decision.stage_hold_reason is not None:
+            await set_curation_hold(get_redis(), reason=decision.stage_hold_reason)
+        if decision.reraise:
             raise
         return
 

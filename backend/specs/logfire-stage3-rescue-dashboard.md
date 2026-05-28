@@ -21,7 +21,7 @@ histogram の record 経路)、Logfire dashboard / alert routing は staging で
 
 ### 1. `vector.curation.hold_set` (counter)
 
-- 実体: [app/analysis/curation/hold.py](../app/analysis/curation/hold.py)
+- 実体: [app/queue/helpers/stage_hold.py](../app/queue/helpers/stage_hold.py)
 - 計測契機: `set_curation_hold(...)` が Redis SET に成功したとき
 - attribute: `reason` (= `AIProvider*Error.CODE` または `"unknown"`、enum-like 固定値)
 - 想定 reason 値: `ai_error_configuration` / `ai_error_insufficient_balance` /
@@ -31,7 +31,7 @@ histogram の record 経路)、Logfire dashboard / alert routing は staging で
 
 ### 2. `vector.curation.hold_set_failed` (counter)
 
-- 実体: [app/analysis/curation/hold.py](../app/analysis/curation/hold.py)
+- 実体: [app/queue/helpers/stage_hold.py](../app/queue/helpers/stage_hold.py)
 - 計測契機: `set_curation_hold(...)` の Redis SET が例外で失敗したとき
 - attribute: `reason` (set 試行の reason をそのまま記録、検査軸として)
 - 期待 baseline: **0 / 週**。Redis 自体の問題なので発火は事業継続リスク。

@@ -2,8 +2,8 @@
 
 詳細は ``docs/observability/pipeline-events-design.md`` 参照。
 
-依存方向: ``collection`` / ``analysis`` / ``insights`` → ``audit`` (片方向)。
-per-stage semantic API は ``app.audit.stages`` に集約。
+per-stage semantic API は ``app.audit.stages`` に集約し、stage 固有の DTO /
+payload snapshot 規律を受け取って監査行へ写像する。
 """
 
 from app.audit.domain.event import EventType, Stage

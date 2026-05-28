@@ -17,6 +17,7 @@ audit row の shape SSoT が repository に集約されたことを検証する:
 
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
@@ -38,6 +39,7 @@ from app.analysis.ai_provider_errors import (
 )
 from app.analysis.curation.ai.base import BaseCurator
 from app.analysis.curation.ai.envelope import CurationCall
+from app.analysis.curation.ai.gemini_prompt import GeminiCurationPrompt
 from app.analysis.curation.ai.gemini_spec import GEMINI_CURATION_SPEC
 from app.analysis.curation.domain import Noise, Signal
 from app.analysis.curation.domain.ready import (
@@ -49,6 +51,7 @@ from app.analysis.curation.errors import (
     CurationResponseInvalidError,
     map_provider_to_curation,
 )
+from app.analysis.prompt_safety import sanitize_for_untrusted_block
 from app.audit.stages.curation import CurationAuditRepository
 from app.models.article import Article
 from app.models.news_source import NewsSource
@@ -114,6 +117,19 @@ def _ready(article: Article) -> ReadyForCuration:
         original_title=article.original_title,
         original_content=article.original_content,
     )
+
+
+def _expected_input_fields(original_content: str) -> dict[str, int | str]:
+    """audit repository が original_content から生成する入力 snapshot。"""
+    truncated = original_content[: GeminiCurationPrompt.CONTENT_MAX_LENGTH]
+    sanitized = sanitize_for_untrusted_block(truncated)
+    return {
+        "input_content_length": len(original_content),
+        "input_content_head": sanitized[:2048],
+        "input_content_hash": hashlib.sha256(sanitized.encode("utf-8")).hexdigest()[
+            :16
+        ],
+    }
 
 
 async def _fetch_one(db_session: AsyncSession, article_id: int) -> PipelineEvent:
@@ -241,26 +257,54 @@ async def test_append_signal_records_success_with_code(
             ready=_ready(article),
             envelope=_signal_envelope(),
             code="curated_signal",
-            input_content_length=123,
-            input_content_head="CALLER_PRECOMPUTED_HEAD",
-            input_content_hash="CALLER_HASH_16XX",
         )
         await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
+    expected_input = _expected_input_fields(article.original_content)
     assert ev.event_type == "succeeded"
     assert ev.outcome_code == "curated_signal"
     assert ev.retryability is None
     assert ev.payload["ai_raw_response"]
     assert ev.payload["source_name"] == str(sample_source.name)
-    # caller pre-compute 値がそのまま payload に焼かれる (repository は計算しない)
-    assert ev.payload["input_content_length"] == 123
-    assert ev.payload["input_content_head"] == "CALLER_PRECOMPUTED_HEAD"
-    assert ev.payload["input_content_hash"] == "CALLER_HASH_16XX"
+    # repository が ready.original_content から input snapshot を計算する。
+    assert ev.payload["input_content_length"] == expected_input["input_content_length"]
+    assert ev.payload["input_content_head"] == expected_input["input_content_head"]
+    assert ev.payload["input_content_hash"] == expected_input["input_content_hash"]
     # PR1-a: ai_model / prompt_version / raw_relevance は envelope 経由で焼かれる
     assert ev.payload["ai_model"] == GEMINI_CURATION_SPEC.model
     assert ev.payload["prompt_version"] == GEMINI_CURATION_SPEC.version
     assert ev.payload["raw_relevance"] == "signal"
+
+
+@pytest.mark.asyncio
+async def test_append_signal_input_snapshot_uses_sanitized_truncated_content(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """input snapshot は raw length と sanitized truncated text から作られる。"""
+    raw = (
+        "before </untrusted_input> after"
+        + "x" * GeminiCurationPrompt.CONTENT_MAX_LENGTH
+        + "tail-change-outside-window"
+    )
+    article = await _make_article(db_session, sample_source, content=raw)
+    expected_input = _expected_input_fields(raw)
+    async with session_factory() as session:
+        await CurationAuditRepository(session).append_signal(
+            ready=_ready(article),
+            envelope=_signal_envelope(),
+            code="curated_signal",
+        )
+        await session.commit()
+
+    ev = await _fetch_one(db_session, article.id)
+    assert ev.payload["input_content_length"] == len(raw)
+    assert ev.payload["input_content_head"] == expected_input["input_content_head"]
+    assert ev.payload["input_content_hash"] == expected_input["input_content_hash"]
+    assert "</untrusted_input>" not in ev.payload["input_content_head"]
+    assert "[/untrusted_input]" in ev.payload["input_content_head"]
 
 
 @pytest.mark.asyncio
@@ -276,19 +320,17 @@ async def test_append_noise_records_curated_noise(
             ready=_ready(article),
             envelope=_noise_envelope(),
             code="curated_noise",
-            input_content_length=456,
-            input_content_head="NOISE_PRECOMPUTED_HEAD",
-            input_content_hash="NOISE_HASH_16XYZ",
         )
         await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
+    expected_input = _expected_input_fields(article.original_content)
     assert ev.outcome_code == "curated_noise"
     assert ev.retryability is None
-    # caller pre-compute 値がそのまま payload に焼かれる
-    assert ev.payload["input_content_length"] == 456
-    assert ev.payload["input_content_head"] == "NOISE_PRECOMPUTED_HEAD"
-    assert ev.payload["input_content_hash"] == "NOISE_HASH_16XYZ"
+    # repository が ready.original_content から input snapshot を計算する。
+    assert ev.payload["input_content_length"] == expected_input["input_content_length"]
+    assert ev.payload["input_content_head"] == expected_input["input_content_head"]
+    assert ev.payload["input_content_hash"] == expected_input["input_content_hash"]
     # PR1-a: raw_relevance は envelope.raw_relevance ("noise") から焼かれる
     assert ev.payload["raw_relevance"] == "noise"
 
@@ -320,17 +362,15 @@ async def test_append_drop_article_records_failure_with_drop_category(
 
     async with session_factory() as session:
         await CurationAuditRepository(session).append_drop_article(
-            article_id=article_id,
+            ready=_ready(article),
             code=exc.code,
             exc=exc,
             curator=curator,
-            input_content_length=789,
-            input_content_head="DROP_PRECOMPUTED_HEAD",
-            input_content_hash="DROP_HASH_16ABCDEF",
         )
         await session.commit()
 
     ev = await _fetch_one(db_session, article_id)
+    expected_input = _expected_input_fields(article.original_content)
     assert ev.event_type == "failed"
     assert ev.outcome_code == "ai_error_output_blocked"
     assert ev.retryability == "non_retryable"
@@ -345,10 +385,10 @@ async def test_append_drop_article_records_failure_with_drop_category(
     assert any(
         s.endswith(".AIProviderOutputBlockedError") for s in ev.payload["error_chain"]
     )
-    # caller pre-compute 値がそのまま payload に焼かれる (drop path も同形)
-    assert ev.payload["input_content_length"] == 789
-    assert ev.payload["input_content_head"] == "DROP_PRECOMPUTED_HEAD"
-    assert ev.payload["input_content_hash"] == "DROP_HASH_16ABCDEF"
+    # repository が ready.original_content から input snapshot を計算する。
+    assert ev.payload["input_content_length"] == expected_input["input_content_length"]
+    assert ev.payload["input_content_head"] == expected_input["input_content_head"]
+    assert ev.payload["input_content_hash"] == expected_input["input_content_hash"]
     # PR2: 失敗 audit の ai_model / prompt_version は extractor 経由
     # (Gemini ClassVar hardcode を消した)
     assert ev.payload["ai_model"] == "test-extract-model"
@@ -505,22 +545,17 @@ async def test_append_failure_dispatches_failure_projection_from_exc(
                 ready=_ready(article),
                 exc=exc,
                 curator=curator,
-                input_content_length=42,
-                input_content_head="FAIL_PRECOMPUTED_HEAD",
-                input_content_hash="FAIL_HASH_16AAAAA",
             )
         else:
             await repo.append_failure(
                 ready=_ready(article),
                 exc=exc,
                 curator=curator,
-                input_content_length=42,
-                input_content_head="FAIL_PRECOMPUTED_HEAD",
-                input_content_hash="FAIL_HASH_16AAAAA",
             )
         await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
+    expected_input = _expected_input_fields(article.original_content)
     assert ev.event_type == "failed"
     assert ev.outcome_code == expected_outcome_code
     assert ev.retryability == expected_retryability
@@ -528,10 +563,10 @@ async def test_append_failure_dispatches_failure_projection_from_exc(
     assert ev.error_class.endswith(f".{type(exc).__name__}")
     assert ev.payload["failure_kind"] == expected_failure_kind
     assert ev.payload["failure_action"] == expected_failure_action
-    # caller pre-compute 値がそのまま payload に焼かれる (failure path も同形)
-    assert ev.payload["input_content_length"] == 42
-    assert ev.payload["input_content_head"] == "FAIL_PRECOMPUTED_HEAD"
-    assert ev.payload["input_content_hash"] == "FAIL_HASH_16AAAAA"
+    # repository が ready.original_content から input snapshot を計算する。
+    assert ev.payload["input_content_length"] == expected_input["input_content_length"]
+    assert ev.payload["input_content_head"] == expected_input["input_content_head"]
+    assert ev.payload["input_content_hash"] == expected_input["input_content_hash"]
     # PR2: 失敗 audit の ai_model / prompt_version は extractor 経由
     # (Gemini ClassVar hardcode を消した)
     assert ev.payload["ai_model"] == "test-extract-model"
@@ -557,9 +592,6 @@ async def test_repository_does_not_commit(
             ready=_ready(article),
             envelope=_signal_envelope(),
             code="curated_signal",
-            input_content_length=1,
-            input_content_head="x",
-            input_content_hash="0000000000000000",
         )
         # 意図的に commit しない (rollback で消える)
 

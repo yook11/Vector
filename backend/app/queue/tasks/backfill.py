@@ -20,9 +20,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from taskiq import Context, TaskiqDepends
 
-from app.analysis.assessment.hold import is_assessment_held
-from app.analysis.curation.hold import is_curation_held
-from app.analysis.embedding.hold import is_embedding_held
 from app.audit.domain.event import EventType, Stage
 from app.audit.stages.backfill import (
     BackfillAuditRepository,
@@ -44,6 +41,11 @@ from app.models.out_of_scope_assessment import OutOfScopeAssessment
 from app.queue.brokers import broker_metadata
 from app.queue.helpers.backlog import BackfillTarget, PipelineBacklog
 from app.queue.helpers.budget import consume_daily_budget
+from app.queue.helpers.stage_hold import (
+    is_assessment_held,
+    is_curation_held,
+    is_embedding_held,
+)
 from app.queue.helpers.window import BackfillWindow
 from app.queue.messages.assessment import AssessmentTrigger
 from app.queue.messages.curation import CurationTrigger

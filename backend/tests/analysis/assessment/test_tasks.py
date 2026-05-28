@@ -13,6 +13,7 @@ from app.analysis.assessment.domain.ready import (
     AssessmentReadyBuildBlockedError,
     ReadyForAssessment,
 )
+from app.analysis.failure_handling import FailureHandlingDecision
 from app.analysis.rate_limit import AIModelRateLimitPolicy, RateLimitRule
 from app.queue.messages.assessment import AssessmentTrigger
 from app.queue.messages.embedding import EmbeddingTrigger
@@ -252,7 +253,9 @@ class TestAssessContent:
             mock_svc_cls.return_value.execute = AsyncMock(
                 side_effect=AIProviderRateLimitedError("429"),
             )
-            mock_handler_cls.return_value.handle = AsyncMock(return_value=True)
+            mock_handler_cls.return_value.handle = AsyncMock(
+                return_value=FailureHandlingDecision(reraise=True)
+            )
             with pytest.raises(AIProviderRateLimitedError):
                 await assess_content(trigger=trigger, ctx=mock_ctx)
 
@@ -276,5 +279,7 @@ class TestAssessContent:
             mock_svc_cls.return_value.execute = AsyncMock(
                 side_effect=AIProviderRateLimitedError("429"),
             )
-            mock_handler_cls.return_value.handle = AsyncMock(return_value=False)
+            mock_handler_cls.return_value.handle = AsyncMock(
+                return_value=FailureHandlingDecision(reraise=False)
+            )
             await assess_content(trigger=trigger, ctx=mock_ctx)

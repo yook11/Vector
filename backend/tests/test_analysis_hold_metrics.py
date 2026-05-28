@@ -10,8 +10,7 @@ import pytest
 from logfire.testing import CaptureLogfire
 from redis.exceptions import ConnectionError as RedisConnectionError
 
-from app.analysis.assessment.hold import set_assessment_hold
-from app.analysis.embedding.hold import set_embedding_hold
+from app.queue.helpers.stage_hold import set_assessment_hold, set_embedding_hold
 
 SetHold = Callable[..., Awaitable[None]]
 
