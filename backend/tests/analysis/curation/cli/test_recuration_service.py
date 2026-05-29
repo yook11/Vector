@@ -39,7 +39,7 @@ from app.analysis.ai_provider_errors import (
 )
 from app.analysis.curation.ai.base import BaseCurator
 from app.analysis.curation.ai.envelope import CurationCall
-from app.analysis.curation.application import (
+from app.analysis.curation.cli.recuration_service import (
     RecurationService,
     RecurationSummary,
 )

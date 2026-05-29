@@ -49,7 +49,7 @@ from sqlalchemy.ext.asyncio import (
 
 from app.analysis.curation.ai.base import BaseCurator
 from app.analysis.curation.ai.gemini import GeminiCurator
-from app.analysis.curation.application import (
+from app.analysis.curation.cli.recuration_service import (
     RecurationService,
     RecurationSummary,
 )

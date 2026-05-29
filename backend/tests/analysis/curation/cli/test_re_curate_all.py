@@ -19,16 +19,16 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.curation.ai.envelope import CurationCall
-from app.analysis.curation.application import (
+from app.analysis.curation.cli.re_curate_all import build_parser, run
+from app.analysis.curation.cli.recuration_service import (
     RecurationService,
     RecurationSummary,
 )
-from app.analysis.curation.cli.re_curate_all import build_parser, run
 from app.analysis.curation.domain import Signal
 from app.analysis.curation.repository import CurationRepository
 from app.models.article import Article
 from app.models.news_source import NewsSource
-from tests.analysis.curation.application.test_recuration_service import (
+from tests.analysis.curation.cli.test_recuration_service import (
     _curator as make_curator,  # 再利用 (BaseCurator mock)
 )
 

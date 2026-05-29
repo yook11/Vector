@@ -1,8 +1,8 @@
-"""RecurationService — 既存 Article に対する Stage 3 再 curation orchestrator。
+"""RecurationService — 既存 Article に対する Stage 3 再 curation CLI helper。
 
 Phase 1B α-1 の clean break に伴い、過去に旧 prompt / 旧 schema で curation された
 ``ArticleCuration`` を新 prompt / 新 schema (surface + raw_type) で
-再生成するための CLI 用 Application Service。
+再生成するための保守 CLI 用サービス。
 
 責務:
 
@@ -75,7 +75,7 @@ class RecurationSummary:
 
 
 class RecurationService:
-    """既存 Article に対する Stage 3 再 curation ユースケースの orchestrator。
+    """既存 Article に対する Stage 3 再 curation CLI の処理本体。
 
     1 article ごとに 1 transaction を張り、`update_signal_idempotent` で
     parent ``ArticleCuration`` を UPDATE のみで差し替える。
