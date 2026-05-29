@@ -14,6 +14,7 @@ from app.analysis.curation.domain.ready import (
 from app.analysis.curation.failure_handling import CurationFailureHandler
 from app.analysis.curation.repository import CurationRepository
 from app.analysis.curation.service import CurationService
+from app.analysis.rate_limit import record_rate_limit_gate_skipped
 from app.audit.stages.curation import CurationAuditRepository
 from app.queue.brokers import broker_analysis
 from app.queue.helpers.stage_hold import set_curation_hold
@@ -69,7 +70,13 @@ async def curate_content(
 
     # precondition 未充足の stale trigger で AI quota を消費しない。
     if not await ctx.state.provider_rate_limit_gate.acquire(curator.rate_limit_policy):
-        logger.warning("curate_content_daily_quota", article_id=ready.article_id)
+        record_rate_limit_gate_skipped(stage="curation", model=curator.model_name)
+        logger.info(
+            "curation_ai_rate_limit_gate_skipped",
+            article_id=ready.article_id,
+            ai_model=curator.model_name,
+            prompt_version=curator.prompt_version,
+        )
         return
 
     svc = CurationService(session_factory)

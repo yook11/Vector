@@ -14,6 +14,7 @@ from app.analysis.embedding.domain.ready import (
 from app.analysis.embedding.failure_handling import EmbeddingFailureHandler
 from app.analysis.embedding.repository import EmbeddingRepository
 from app.analysis.embedding.service import EmbeddingService
+from app.analysis.rate_limit import record_rate_limit_gate_skipped
 from app.audit.stages.embedding import EmbeddingAuditRepository
 from app.queue.brokers import broker_embedding
 from app.queue.helpers.stage_hold import set_embedding_hold
@@ -68,9 +69,12 @@ async def generate_embedding(
     # precondition 未充足の stale trigger で AI quota を消費しない。
     gate = ctx.state.provider_rate_limit_gate
     if not await gate.acquire(embedder.rate_limit_policy):
-        logger.warning(
-            "generate_embedding_daily_quota",
+        record_rate_limit_gate_skipped(stage="embedding", model=embedder.model_name)
+        logger.info(
+            "embedding_ai_rate_limit_gate_skipped",
             analysis_id=ready.analysis_id,
+            article_id=ready.article_id,
+            embedding_model=embedder.model_name,
         )
         return
 

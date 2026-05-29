@@ -208,7 +208,7 @@ class TestCurateContent:
 
     @pytest.mark.asyncio
     async def test_quota_skip_returns_without_invoking_service(self) -> None:
-        """gate.acquire=False の場合 quota log + return、Service は呼ばない。"""
+        """gate.acquire=False の場合 gate skip の log + metric を出して return する。"""
         from app.queue.tasks.curation import curate_content
 
         mock_ctx = _make_ctx(curator=_make_provider_fake(), gate_acquire=False)
@@ -217,6 +217,9 @@ class TestCurateContent:
             _patch_try_advance_from(_fixed_ready()),
             patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
             patch("app.queue.tasks.curation.assess_content") as mock_assess,
+            patch(
+                "app.queue.tasks.curation.record_rate_limit_gate_skipped"
+            ) as mock_record,
             capture_logs() as cap,
         ):
             mock_assess.kiq = AsyncMock()
@@ -224,8 +227,13 @@ class TestCurateContent:
 
         mock_svc_cls.assert_not_called()
         mock_assess.kiq.assert_not_called()
-        warnings = [e for e in cap if e.get("event") == "curate_content_daily_quota"]
-        assert warnings, "quota skip 時の warning log が emit されていない"
+        mock_record.assert_called_once_with(stage="curation", model="test-model")
+        skips = [
+            e for e in cap if e.get("event") == "curation_ai_rate_limit_gate_skipped"
+        ]
+        assert skips, "gate skip log が emit されていない"
+        assert skips[-1]["ai_model"] == "test-model"
+        assert skips[-1]["prompt_version"] == "test-prompt-v1"
 
     @pytest.mark.asyncio
     async def test_rate_limited_records_audit_and_returns(self) -> None:

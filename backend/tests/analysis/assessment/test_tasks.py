@@ -207,7 +207,7 @@ class TestAssessContent:
 
     @pytest.mark.asyncio
     async def test_quota_skip_returns_without_invoking_service(self) -> None:
-        """gate.acquire=False の場合 quota log + return、Service は呼ばない。"""
+        """gate.acquire=False の場合 gate skip の log + metric を出して return する。"""
         from app.queue.tasks.assessment import assess_content
 
         mock_ctx = _make_ctx(assessor=_make_provider_fake(), gate_acquire=False)
@@ -217,6 +217,9 @@ class TestAssessContent:
             _patch_ready_construction(_make_ready()),
             patch("app.queue.tasks.assessment.AssessmentService") as mock_svc_cls,
             patch("app.queue.tasks.assessment.generate_embedding") as mock_embed,
+            patch(
+                "app.queue.tasks.assessment.record_rate_limit_gate_skipped"
+            ) as mock_record,
             capture_logs() as cap,
         ):
             mock_embed.kiq = AsyncMock()
@@ -224,8 +227,13 @@ class TestAssessContent:
 
         mock_svc_cls.assert_not_called()
         mock_embed.kiq.assert_not_called()
-        warnings = [e for e in cap if e.get("event") == "assess_content_daily_quota"]
-        assert warnings, "quota skip 時の warning log が emit されていない"
+        mock_record.assert_called_once_with(stage="assessment", model="test-model")
+        skips = [
+            e for e in cap if e.get("event") == "assessment_ai_rate_limit_gate_skipped"
+        ]
+        assert skips, "gate skip log が emit されていない"
+        assert skips[-1]["article_id"] == 7
+        assert skips[-1]["ai_model"] == "test-model"
 
     @pytest.mark.asyncio
     async def test_rate_limit_raises_for_retry(self) -> None:

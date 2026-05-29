@@ -14,6 +14,7 @@ from app.analysis.assessment.domain.ready import (
 from app.analysis.assessment.failure_handling import AssessmentFailureHandler
 from app.analysis.assessment.repository import AssessmentRepository
 from app.analysis.assessment.service import AssessmentService
+from app.analysis.rate_limit import record_rate_limit_gate_skipped
 from app.audit.stages.assessment import AssessmentAuditRepository
 from app.queue.brokers import broker_analysis
 from app.queue.helpers.stage_hold import set_assessment_hold
@@ -69,9 +70,13 @@ async def assess_content(
 
     # precondition 未充足の stale trigger で AI quota を消費しない。
     if not await ctx.state.provider_rate_limit_gate.acquire(assessor.rate_limit_policy):
-        logger.warning(
-            "assess_content_daily_quota",
+        record_rate_limit_gate_skipped(stage="assessment", model=assessor.model_name)
+        logger.info(
+            "assessment_ai_rate_limit_gate_skipped",
             curation_id=ready.curation_id,
+            article_id=ready.article_id,
+            ai_model=assessor.model_name,
+            prompt_version=assessor.prompt_version,
         )
         return
 

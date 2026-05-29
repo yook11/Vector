@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from structlog.testing import capture_logs
 
 from app.analysis.embedding.domain.ready import (
     EmbeddingReadyBuildBlockedCode,
@@ -176,7 +177,7 @@ class TestGenerateEmbedding:
 
     @pytest.mark.asyncio
     async def test_skips_when_gate_denies_quota(self) -> None:
-        """gate.acquire が False を返したら svc.execute を呼ばずに return。"""
+        """gate.acquire が False なら svc を呼ばず gate skip の log + metric を出す。"""
         from app.queue.tasks.embedding import generate_embedding
 
         gate = _make_gate_fake(acquired=False)
@@ -187,8 +188,22 @@ class TestGenerateEmbedding:
         with (
             _patch_ready_construction(ready),
             patch("app.queue.tasks.embedding.EmbeddingService") as mock_svc_cls,
+            patch(
+                "app.queue.tasks.embedding.record_rate_limit_gate_skipped"
+            ) as mock_record,
+            capture_logs() as cap,
         ):
             await generate_embedding(trigger=trigger, ctx=mock_ctx)
 
         gate.acquire.assert_awaited_once()
         mock_svc_cls.assert_not_called()
+        mock_record.assert_called_once_with(
+            stage="embedding", model="gemini-embedding-001"
+        )
+        skips = [
+            e for e in cap if e.get("event") == "embedding_ai_rate_limit_gate_skipped"
+        ]
+        assert skips, "gate skip log が emit されていない"
+        assert skips[-1]["analysis_id"] == 1
+        assert skips[-1]["article_id"] == 7
+        assert skips[-1]["embedding_model"] == "gemini-embedding-001"
