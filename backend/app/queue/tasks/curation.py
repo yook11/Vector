@@ -47,16 +47,16 @@ async def curate_content(
                 repo=CurationRepository(session),
             )
         except CurationReadyBuildBlockedError as exc:
-            blocked = exc.blocked
             await CurationAuditRepository(session).append_ready_build_blocked(
-                blocked=blocked
+                target_article_id=trigger.article_id,
+                exc=exc,
             )
             await session.commit()
             logger.info(
                 "curate_content_rejected",
                 article_id=trigger.article_id,
                 reason="ready_build_blocked",
-                code=blocked.code.value,
+                code=exc.code.value,
             )
             return
         except Exception as exc:

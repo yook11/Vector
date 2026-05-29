@@ -47,16 +47,16 @@ async def assess_content(
                 repo=AssessmentRepository(session),
             )
         except AssessmentReadyBuildBlockedError as exc:
-            blocked = exc.blocked
             await AssessmentAuditRepository(session).append_ready_build_blocked(
-                blocked=blocked
+                curation_id=trigger.curation_id,
+                exc=exc,
             )
             await session.commit()
             logger.info(
                 "assess_content_rejected",
                 curation_id=trigger.curation_id,
                 reason="ready_build_blocked",
-                code=blocked.code.value,
+                code=exc.code.value,
             )
             return
         except Exception as exc:

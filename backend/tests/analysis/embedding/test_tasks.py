@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.analysis.embedding.domain.ready import (
-    EmbeddingReadyBuildBlocked,
     EmbeddingReadyBuildBlockedCode,
     EmbeddingReadyBuildBlockedError,
     ReadyForEmbedding,
@@ -67,10 +66,12 @@ def _make_ready(analysis_id: int = 1, article_id: int = 7) -> ReadyForEmbedding:
     )
 
 
-def _patch_ready_construction(result: ReadyForEmbedding | EmbeddingReadyBuildBlocked):
+def _patch_ready_construction(
+    result: ReadyForEmbedding | EmbeddingReadyBuildBlockedError,
+):
     mock = (
-        AsyncMock(side_effect=EmbeddingReadyBuildBlockedError(result))
-        if isinstance(result, EmbeddingReadyBuildBlocked)
+        AsyncMock(side_effect=result)
+        if isinstance(result, EmbeddingReadyBuildBlockedError)
         else AsyncMock(return_value=result)
     )
     return patch(
@@ -121,13 +122,12 @@ class TestGenerateEmbedding:
         gate = _make_gate_fake()
         mock_ctx = _make_ctx(embedder=_make_embedder_fake(), gate=gate)
         trigger = _make_trigger(analysis_id=42)
-        blocked = EmbeddingReadyBuildBlocked(
-            analysis_id=42,
-            code=EmbeddingReadyBuildBlockedCode.ANALYSIS_MISSING,
+        exc = EmbeddingReadyBuildBlockedError(
+            EmbeddingReadyBuildBlockedCode.ANALYSIS_MISSING
         )
 
         with (
-            _patch_ready_construction(blocked),
+            _patch_ready_construction(exc),
             patch("app.queue.tasks.embedding.EmbeddingAuditRepository") as mock_audit,
             patch("app.queue.tasks.embedding.EmbeddingService") as mock_svc_cls,
         ):
@@ -135,7 +135,8 @@ class TestGenerateEmbedding:
             await generate_embedding(trigger=trigger, ctx=mock_ctx)
 
         mock_audit.return_value.append_ready_build_blocked.assert_awaited_once_with(
-            blocked=blocked
+            analysis_id=42,
+            exc=exc,
         )
         # rate limit acquire は試みず、Service も呼ばない
         gate.acquire.assert_not_called()

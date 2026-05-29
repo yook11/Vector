@@ -43,8 +43,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.assessment.ai.envelope import AssessmentCall
 from app.analysis.assessment.domain.ready import (
-    AssessmentReadyBuildBlocked,
     AssessmentReadyBuildBlockedCode,
+    AssessmentReadyBuildBlockedError,
     ReadyForAssessment,
 )
 from app.analysis.assessment.domain.result import (
@@ -246,17 +246,18 @@ async def test_append_ready_build_blocked_records_missing_curation_rejected(
     """Ready build blocked は rejected として curation_id を payload に残す。"""
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_ready_build_blocked(
-            blocked=AssessmentReadyBuildBlocked(
-                curation_id=999,
-                code=AssessmentReadyBuildBlockedCode.CURATION_MISSING,
-            )
+            curation_id=999,
+            exc=AssessmentReadyBuildBlockedError(
+                AssessmentReadyBuildBlockedCode.CURATION_MISSING
+            ),
         )
         await session.commit()
 
     ev = await _fetch_by_outcome(
-        db_session, "assessment_ready_build_blocked_curation_missing"
+        db_session, AssessmentReadyBuildBlockedCode.CURATION_MISSING.value
     )
     assert ev.event_type == "rejected"
+    assert ev.outcome_code == AssessmentReadyBuildBlockedCode.CURATION_MISSING.value
     assert ev.article_id is None
     assert ev.payload["curation_id"] == 999
 

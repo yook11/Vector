@@ -69,10 +69,7 @@ class TestTryAdvanceFrom:
         with pytest.raises(CurationReadyBuildBlockedError) as exc_info:
             await ReadyForCuration.try_advance_from(article_id=99, repo=repo)
 
-        assert exc_info.value.blocked.target_article_id == 99
-        assert (
-            exc_info.value.blocked.code is CurationReadyBuildBlockedCode.ARTICLE_MISSING
-        )
+        assert exc_info.value.code is CurationReadyBuildBlockedCode.ARTICLE_MISSING
         repo.load_ready_build_facts.assert_awaited_once_with(99)
 
     @pytest.mark.asyncio
@@ -82,10 +79,7 @@ class TestTryAdvanceFrom:
         with pytest.raises(CurationReadyBuildBlockedError) as exc_info:
             await ReadyForCuration.try_advance_from(article_id=42, repo=repo)
 
-        assert (
-            exc_info.value.blocked.code is CurationReadyBuildBlockedCode.ALREADY_CURATED
-        )
-        assert exc_info.value.blocked.source_name == "MIT News"
+        assert exc_info.value.code is CurationReadyBuildBlockedCode.ALREADY_CURATED
         repo.load_ready_build_facts.assert_awaited_once_with(42)
 
     @pytest.mark.asyncio
@@ -96,10 +90,9 @@ class TestTryAdvanceFrom:
             await ReadyForCuration.try_advance_from(article_id=42, repo=repo)
 
         assert (
-            exc_info.value.blocked.code
+            exc_info.value.code
             is CurationReadyBuildBlockedCode.ALREADY_REJECTED_AS_NOISE
         )
-        assert exc_info.value.blocked.source_name == "MIT News"
         repo.load_ready_build_facts.assert_awaited_once_with(42)
 
     @pytest.mark.asyncio
@@ -110,11 +103,9 @@ class TestTryAdvanceFrom:
         with pytest.raises(CurationReadyBuildBlockedError) as exc_info:
             await ReadyForCuration.try_advance_from(article_id=42, repo=repo)
 
-        blocked = exc_info.value.blocked
-        assert blocked.code is CurationReadyBuildBlockedCode.CONTENT_TOO_LARGE
-        assert blocked.content_length == len(oversized)
-        assert blocked.max_content_length == ReadyForCuration.MAX_CONTENT_LENGTH
-        assert blocked.source_name == "MIT News"
+        assert exc_info.value.code is CurationReadyBuildBlockedCode.CONTENT_TOO_LARGE
+        assert exc_info.value.content_length == len(oversized)
+        assert exc_info.value.max_content_length == ReadyForCuration.MAX_CONTENT_LENGTH
 
 
 class TestReadyForCurationFieldConstraints:

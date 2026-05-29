@@ -13,7 +13,6 @@ from app.analysis.curation.domain import (
     Signal,
 )
 from app.analysis.curation.domain.ready import (
-    CurationReadyBuildBlocked,
     CurationReadyBuildBlockedCode,
     CurationReadyBuildBlockedError,
     ReadyForCuration,
@@ -23,7 +22,6 @@ from app.analysis.curation.service import CurationService
 
 __all__ = [
     "CurationRepository",
-    "CurationReadyBuildBlocked",
     "CurationReadyBuildBlockedCode",
     "CurationReadyBuildBlockedError",
     "CurationResult",

@@ -43,8 +43,8 @@ from app.analysis.curation.ai.gemini_prompt import GeminiCurationPrompt
 from app.analysis.curation.ai.gemini_spec import GEMINI_CURATION_SPEC
 from app.analysis.curation.domain import Noise, Signal
 from app.analysis.curation.domain.ready import (
-    CurationReadyBuildBlocked,
     CurationReadyBuildBlockedCode,
+    CurationReadyBuildBlockedError,
     ReadyForCuration,
 )
 from app.analysis.curation.errors import (
@@ -175,17 +175,18 @@ async def test_append_ready_build_blocked_records_missing_article_rejected(
     """Ready build blocked は rejected として trigger article id を payload に残す。"""
     async with session_factory() as session:
         await CurationAuditRepository(session).append_ready_build_blocked(
-            blocked=CurationReadyBuildBlocked(
-                target_article_id=999,
-                code=CurationReadyBuildBlockedCode.ARTICLE_MISSING,
-            )
+            target_article_id=999,
+            exc=CurationReadyBuildBlockedError(
+                CurationReadyBuildBlockedCode.ARTICLE_MISSING
+            ),
         )
         await session.commit()
 
     ev = await _fetch_by_outcome(
-        db_session, "curation_ready_build_blocked_article_missing"
+        db_session, CurationReadyBuildBlockedCode.ARTICLE_MISSING.value
     )
     assert ev.event_type == "rejected"
+    assert ev.outcome_code == CurationReadyBuildBlockedCode.ARTICLE_MISSING.value
     assert ev.article_id is None
     assert ev.payload["target_article_id"] == 999
 
@@ -194,28 +195,28 @@ async def test_append_ready_build_blocked_records_missing_article_rejected(
 async def test_append_ready_build_blocked_records_content_too_large(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
-    sample_source: NewsSource,
 ) -> None:
-    """content too large は article FK と入力サイズ snapshot を残す。"""
-    article = await _make_article(db_session, sample_source)
+    """content too large は reason-specific evidence を payload に残す。"""
+    exc = CurationReadyBuildBlockedError(
+        CurationReadyBuildBlockedCode.CONTENT_TOO_LARGE,
+        content_length=200_001,
+        max_content_length=200_000,
+    )
     async with session_factory() as session:
         await CurationAuditRepository(session).append_ready_build_blocked(
-            blocked=CurationReadyBuildBlocked(
-                target_article_id=article.id,
-                code=CurationReadyBuildBlockedCode.CONTENT_TOO_LARGE,
-                content_length=200_001,
-                max_content_length=200_000,
-                source_name=str(sample_source.name),
-            )
+            target_article_id=123,
+            exc=exc,
         )
         await session.commit()
 
     ev = await _fetch_by_outcome(
-        db_session, "curation_ready_build_blocked_content_too_large"
+        db_session, CurationReadyBuildBlockedCode.CONTENT_TOO_LARGE.value
     )
     assert ev.event_type == "rejected"
-    assert ev.article_id == article.id
-    assert ev.payload["source_name"] == str(sample_source.name)
+    assert ev.outcome_code == CurationReadyBuildBlockedCode.CONTENT_TOO_LARGE.value
+    assert ev.article_id is None
+    assert ev.payload["target_article_id"] == 123
+    assert ev.payload["source_name"] is None
     assert ev.payload["input_content_length"] == 200_001
     assert ev.payload["max_content_length"] == 200_000
 

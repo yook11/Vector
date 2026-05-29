@@ -35,8 +35,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.embedding.ai.base import BaseEmbedder
 from app.analysis.embedding.domain.ready import (
-    EmbeddingReadyBuildBlocked,
     EmbeddingReadyBuildBlockedCode,
+    EmbeddingReadyBuildBlockedError,
     ReadyForEmbedding,
 )
 from app.analysis.embedding.errors import (
@@ -148,17 +148,18 @@ async def test_append_ready_build_blocked_records_missing_analysis_rejected(
     """Ready build blocked は rejected として analysis_id を payload に残す。"""
     async with session_factory() as session:
         await EmbeddingAuditRepository(session).append_ready_build_blocked(
-            blocked=EmbeddingReadyBuildBlocked(
-                analysis_id=999,
-                code=EmbeddingReadyBuildBlockedCode.ANALYSIS_MISSING,
-            )
+            analysis_id=999,
+            exc=EmbeddingReadyBuildBlockedError(
+                EmbeddingReadyBuildBlockedCode.ANALYSIS_MISSING
+            ),
         )
         await session.commit()
 
     ev = await _fetch_by_outcome(
-        db_session, "embedding_ready_build_blocked_analysis_missing"
+        db_session, EmbeddingReadyBuildBlockedCode.ANALYSIS_MISSING.value
     )
     assert ev.event_type == "rejected"
+    assert ev.outcome_code == EmbeddingReadyBuildBlockedCode.ANALYSIS_MISSING.value
     assert ev.article_id is None
     assert ev.payload["analysis_id"] == 999
 

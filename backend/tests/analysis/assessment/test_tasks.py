@@ -8,7 +8,6 @@ from structlog.testing import capture_logs
 
 from app.analysis.ai_provider_errors import AIProviderRateLimitedError
 from app.analysis.assessment.domain.ready import (
-    AssessmentReadyBuildBlocked,
     AssessmentReadyBuildBlockedCode,
     AssessmentReadyBuildBlockedError,
     ReadyForAssessment,
@@ -74,11 +73,11 @@ def _make_ready(curation_id: int = 2) -> ReadyForAssessment:
 
 
 def _patch_ready_construction(
-    result: ReadyForAssessment | AssessmentReadyBuildBlocked,
+    result: ReadyForAssessment | AssessmentReadyBuildBlockedError,
 ):
     mock = (
-        AsyncMock(side_effect=AssessmentReadyBuildBlockedError(result))
-        if isinstance(result, AssessmentReadyBuildBlocked)
+        AsyncMock(side_effect=result)
+        if isinstance(result, AssessmentReadyBuildBlockedError)
         else AsyncMock(return_value=result)
     )
     return patch(
@@ -103,13 +102,12 @@ class TestAssessContent:
 
         ctx = _make_ctx(assessor=_make_provider_fake())
         trigger = _make_trigger(curation_id=42)
-        blocked = AssessmentReadyBuildBlocked(
-            curation_id=42,
-            code=AssessmentReadyBuildBlockedCode.CURATION_MISSING,
+        exc = AssessmentReadyBuildBlockedError(
+            AssessmentReadyBuildBlockedCode.CURATION_MISSING
         )
 
         with (
-            _patch_ready_construction(blocked),
+            _patch_ready_construction(exc),
             patch("app.queue.tasks.assessment.AssessmentAuditRepository") as mock_audit,
             patch("app.queue.tasks.assessment.AssessmentService") as mock_svc_cls,
         ):
@@ -117,7 +115,8 @@ class TestAssessContent:
             await assess_content(trigger=trigger, ctx=ctx)
 
         mock_audit.return_value.append_ready_build_blocked.assert_awaited_once_with(
-            blocked=blocked
+            curation_id=42,
+            exc=exc,
         )
         # rate limit acquire は試みず、Service も呼ばない
         ctx.state.provider_rate_limit_gate.acquire.assert_not_called()

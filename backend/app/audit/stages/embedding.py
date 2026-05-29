@@ -7,8 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis.embedding.ai.base import BaseEmbedder
 from app.analysis.embedding.domain.ready import (
-    EmbeddingReadyBuildBlocked,
-    EmbeddingReadyBuildBlockedCode,
+    EmbeddingReadyBuildBlockedError,
     ReadyForEmbedding,
 )
 from app.analysis.embedding.errors import EmbeddingError
@@ -30,15 +29,6 @@ from app.shared.security.redaction import redact_secrets
 _ERROR_MESSAGE_LIMIT = 2000
 
 _SUCCESS_OUTCOME_CODE = "embedding_completed"
-
-_READY_BUILD_BLOCKED_CODES = {
-    EmbeddingReadyBuildBlockedCode.ANALYSIS_MISSING: (
-        "embedding_ready_build_blocked_analysis_missing"
-    ),
-    EmbeddingReadyBuildBlockedCode.ALREADY_EMBEDDED: (
-        "embedding_ready_build_blocked_already_embedded"
-    ),
-}
 
 
 class EmbeddingAuditRepository:
@@ -90,21 +80,23 @@ class EmbeddingAuditRepository:
     # --- Ready 構築 blocked / failed ---------------------------------------
 
     async def append_ready_build_blocked(
-        self, *, blocked: EmbeddingReadyBuildBlocked
+        self, *, analysis_id: int, exc: EmbeddingReadyBuildBlockedError
     ) -> None:
-        """Ready 構築が業務状態により対象外だった事実を記録する。"""
+        """Ready 構築が domain precondition により進めなかった事実を記録する。
+
+        Domain が reason code で説明できた停止なので rejected として焼く。
+        """
         await self._events.append(
             stage=Stage.EMBEDDING,
             event_type=EventType.REJECTED,
-            outcome_code=_READY_BUILD_BLOCKED_CODES[blocked.code],
-            payload=EmbeddingPayload(analysis_id=blocked.analysis_id),
-            article_id=blocked.article_id,
+            outcome_code=exc.code.value,
+            payload=EmbeddingPayload(analysis_id=analysis_id),
         )
 
     async def append_ready_build_failed(
         self, *, analysis_id: int, exc: Exception
     ) -> None:
-        """Ready 構築フェーズの例外を failed として記録する。"""
+        """Ready 構築中に blocked 以外の例外が出た事実を failed として記録する。"""
         projection = project_ready_build_failure(stage_prefix="embedding", exc=exc)
         payload = EmbeddingPayload(
             failure_kind=projection.failure_kind,

@@ -10,7 +10,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 __all__ = [
     "AssessmentPreconditionProtocol",
-    "AssessmentReadyBuildBlocked",
     "AssessmentReadyBuildBlockedCode",
     "AssessmentReadyBuildBlockedError",
     "AssessmentReadyBuildFacts",
@@ -19,21 +18,11 @@ __all__ = [
 
 
 class AssessmentReadyBuildBlockedCode(StrEnum):
-    """Stage 4 Ready 構築が業務状態により進めなかった理由。"""
+    """Stage 4 Ready 構築 blocked の監査 outcome_code。"""
 
-    CURATION_MISSING = "curation_missing"
-    ALREADY_IN_SCOPE = "already_in_scope"
-    ALREADY_OUT_OF_SCOPE = "already_out_of_scope"
-
-
-@dataclass(frozen=True, slots=True)
-class AssessmentReadyBuildBlocked:
-    """Stage 4 Ready 構築が正常に判定され、対象外だった結果。"""
-
-    curation_id: int
-    code: AssessmentReadyBuildBlockedCode
-    article_id: int | None = None
-    source_name: str | None = None
+    CURATION_MISSING = "assessment_ready_build_blocked_curation_missing"
+    ALREADY_IN_SCOPE = "assessment_ready_build_blocked_already_in_scope"
+    ALREADY_OUT_OF_SCOPE = "assessment_ready_build_blocked_already_out_of_scope"
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,11 +39,11 @@ class AssessmentReadyBuildFacts:
 
 
 class AssessmentReadyBuildBlockedError(Exception):
-    """Stage 4 Ready 構築が業務状態により進めなかったことを表す例外。"""
+    """Stage 4 入力として採用できなかった場合に投げる例外。"""
 
-    def __init__(self, blocked: AssessmentReadyBuildBlocked) -> None:
-        self.blocked = blocked
-        super().__init__(blocked.code.value)
+    def __init__(self, code: AssessmentReadyBuildBlockedCode) -> None:
+        self.code = code
+        super().__init__(code.value)
 
 
 class AssessmentPreconditionProtocol(Protocol):
@@ -90,30 +79,17 @@ class ReadyForAssessment(BaseModel):
         facts = await repo.load_ready_build_facts(curation_id)
         if facts is None:
             raise AssessmentReadyBuildBlockedError(
-                AssessmentReadyBuildBlocked(
-                    curation_id=curation_id,
-                    code=AssessmentReadyBuildBlockedCode.CURATION_MISSING,
-                )
+                AssessmentReadyBuildBlockedCode.CURATION_MISSING
             )
 
         if facts.has_in_scope_assessment:
             raise AssessmentReadyBuildBlockedError(
-                AssessmentReadyBuildBlocked(
-                    curation_id=curation_id,
-                    code=AssessmentReadyBuildBlockedCode.ALREADY_IN_SCOPE,
-                    article_id=facts.article_id,
-                    source_name=facts.source_name,
-                )
+                AssessmentReadyBuildBlockedCode.ALREADY_IN_SCOPE
             )
 
         if facts.has_out_of_scope_assessment:
             raise AssessmentReadyBuildBlockedError(
-                AssessmentReadyBuildBlocked(
-                    curation_id=curation_id,
-                    code=AssessmentReadyBuildBlockedCode.ALREADY_OUT_OF_SCOPE,
-                    article_id=facts.article_id,
-                    source_name=facts.source_name,
-                )
+                AssessmentReadyBuildBlockedCode.ALREADY_OUT_OF_SCOPE
             )
 
         return cls(

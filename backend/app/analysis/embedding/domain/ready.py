@@ -10,7 +10,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 __all__ = [
     "EmbeddingPreconditionProtocol",
-    "EmbeddingReadyBuildBlocked",
     "EmbeddingReadyBuildBlockedCode",
     "EmbeddingReadyBuildBlockedError",
     "EmbeddingReadyBuildFacts",
@@ -19,19 +18,10 @@ __all__ = [
 
 
 class EmbeddingReadyBuildBlockedCode(StrEnum):
-    """Stage 5 Ready 構築が業務状態により進めなかった理由。"""
+    """Stage 5 Ready 構築 blocked の監査 outcome_code。"""
 
-    ANALYSIS_MISSING = "analysis_missing"
-    ALREADY_EMBEDDED = "already_embedded"
-
-
-@dataclass(frozen=True, slots=True)
-class EmbeddingReadyBuildBlocked:
-    """Stage 5 Ready 構築が正常に判定され、対象外だった結果。"""
-
-    analysis_id: int
-    code: EmbeddingReadyBuildBlockedCode
-    article_id: int | None = None
+    ANALYSIS_MISSING = "embedding_ready_build_blocked_analysis_missing"
+    ALREADY_EMBEDDED = "embedding_ready_build_blocked_already_embedded"
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,11 +35,11 @@ class EmbeddingReadyBuildFacts:
 
 
 class EmbeddingReadyBuildBlockedError(Exception):
-    """Stage 5 Ready 構築が業務状態により進めなかったことを表す例外。"""
+    """Stage 5 入力として採用できなかった場合に投げる例外。"""
 
-    def __init__(self, blocked: EmbeddingReadyBuildBlocked) -> None:
-        self.blocked = blocked
-        super().__init__(blocked.code.value)
+    def __init__(self, code: EmbeddingReadyBuildBlockedCode) -> None:
+        self.code = code
+        super().__init__(code.value)
 
 
 class EmbeddingPreconditionProtocol(Protocol):
@@ -82,19 +72,12 @@ class ReadyForEmbedding(BaseModel):
         facts = await embedding_repo.load_ready_build_facts(analysis_id)
         if facts is None:
             raise EmbeddingReadyBuildBlockedError(
-                EmbeddingReadyBuildBlocked(
-                    analysis_id=analysis_id,
-                    code=EmbeddingReadyBuildBlockedCode.ANALYSIS_MISSING,
-                )
+                EmbeddingReadyBuildBlockedCode.ANALYSIS_MISSING
             )
 
         if facts.has_embedding:
             raise EmbeddingReadyBuildBlockedError(
-                EmbeddingReadyBuildBlocked(
-                    analysis_id=analysis_id,
-                    code=EmbeddingReadyBuildBlockedCode.ALREADY_EMBEDDED,
-                    article_id=facts.article_id,
-                )
+                EmbeddingReadyBuildBlockedCode.ALREADY_EMBEDDED
             )
 
         return cls(

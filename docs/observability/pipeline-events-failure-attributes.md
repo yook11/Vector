@@ -139,9 +139,12 @@ Ready 判定中の例外は failed として焼き、task は raise する。
 - `*_ready_build_failed_unexpected_error`
 
 Ready build blocked / failed では `outcome_code` を SSoT とし、payload に
-`skip_reason` や blocked code は重複保存しない。trigger ID は payload に残す
-(`target_article_id` / `curation_id` / `analysis_id`)。top-level `article_id` は
-対象 article を解決できた場合だけ保存する。
+`skip_reason` や blocked code は重複保存しない。blocked は trigger ID
+(`target_article_id` / `curation_id` / `analysis_id`) を payload に残し、
+top-level `article_id` は保存しない。curation の content too large だけ、
+判定時の evidence として `input_content_length` / `max_content_length` を残す。
+通常 AI stage の blocked outcome は `*ReadyBuildBlockedCode.value` をそのまま
+焼く。
 
 completion stage の `scrape_html_body` 入口でも、pending から Ready を構築
 できなかった結果を audit する。pending lifecycle による対象外は skipped とし、

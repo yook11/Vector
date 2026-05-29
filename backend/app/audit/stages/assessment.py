@@ -7,8 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis.assessment.ai.envelope import AssessmentCall
 from app.analysis.assessment.domain.ready import (
-    AssessmentReadyBuildBlocked,
-    AssessmentReadyBuildBlockedCode,
+    AssessmentReadyBuildBlockedError,
     ReadyForAssessment,
 )
 from app.analysis.assessment.domain.result import InScope, OutOfScope
@@ -34,18 +33,6 @@ _ERROR_MESSAGE_LIMIT = 2000
 
 _IN_SCOPE_OUTCOME_CODE = "assessed_in_scope"
 _OUT_OF_SCOPE_OUTCOME_CODE = "assessed_out_of_scope"
-
-_READY_BUILD_BLOCKED_CODES = {
-    AssessmentReadyBuildBlockedCode.CURATION_MISSING: (
-        "assessment_ready_build_blocked_curation_missing"
-    ),
-    AssessmentReadyBuildBlockedCode.ALREADY_IN_SCOPE: (
-        "assessment_ready_build_blocked_already_in_scope"
-    ),
-    AssessmentReadyBuildBlockedCode.ALREADY_OUT_OF_SCOPE: (
-        "assessment_ready_build_blocked_already_out_of_scope"
-    ),
-}
 
 
 def _limited_str(value: object, limit: int) -> str | None:
@@ -144,24 +131,25 @@ class AssessmentAuditRepository:
     # --- Ready 構築 blocked / failed ---------------------------------------
 
     async def append_ready_build_blocked(
-        self, *, blocked: AssessmentReadyBuildBlocked
+        self, *, curation_id: int, exc: AssessmentReadyBuildBlockedError
     ) -> None:
-        """Ready 構築が業務状態により対象外だった事実を記録する。"""
+        """Ready 構築が domain precondition により進めなかった事実を記録する。
+
+        Domain が reason code で説明できた停止なので rejected として焼く。
+        """
         await self._events.append(
             stage=Stage.ASSESSMENT,
             event_type=EventType.REJECTED,
-            outcome_code=_READY_BUILD_BLOCKED_CODES[blocked.code],
+            outcome_code=exc.code.value,
             payload=AssessmentPayload(
-                source_name=blocked.source_name,
-                curation_id=blocked.curation_id,
+                curation_id=curation_id,
             ),
-            article_id=blocked.article_id,
         )
 
     async def append_ready_build_failed(
         self, *, curation_id: int, exc: Exception
     ) -> None:
-        """Ready 構築フェーズの例外を failed として記録する。"""
+        """Ready 構築中に blocked 以外の例外が出た事実を failed として記録する。"""
         projection = project_ready_build_failure(stage_prefix="assessment", exc=exc)
         payload = AssessmentPayload(
             failure_kind=projection.failure_kind,

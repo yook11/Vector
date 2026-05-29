@@ -10,7 +10,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 __all__ = [
     "CurationPreconditionProtocol",
-    "CurationReadyBuildBlocked",
     "CurationReadyBuildBlockedCode",
     "CurationReadyBuildBlockedError",
     "CurationReadyBuildFacts",
@@ -19,23 +18,12 @@ __all__ = [
 
 
 class CurationReadyBuildBlockedCode(StrEnum):
-    """Stage 3 Ready 構築が業務状態により進めなかった理由。"""
+    """Stage 3 Ready 構築 blocked の監査 outcome_code。"""
 
-    ARTICLE_MISSING = "article_missing"
-    ALREADY_CURATED = "already_curated"
-    ALREADY_REJECTED_AS_NOISE = "already_rejected_as_noise"
-    CONTENT_TOO_LARGE = "content_too_large"
-
-
-@dataclass(frozen=True, slots=True)
-class CurationReadyBuildBlocked:
-    """Stage 3 Ready 構築が正常に判定され、対象外だった結果。"""
-
-    target_article_id: int
-    code: CurationReadyBuildBlockedCode
-    content_length: int | None = None
-    max_content_length: int | None = None
-    source_name: str | None = None
+    ARTICLE_MISSING = "curation_ready_build_blocked_article_missing"
+    ALREADY_CURATED = "curation_ready_build_blocked_already_curated"
+    ALREADY_REJECTED_AS_NOISE = "curation_ready_build_blocked_already_rejected_as_noise"
+    CONTENT_TOO_LARGE = "curation_ready_build_blocked_content_too_large"
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,11 +39,19 @@ class CurationReadyBuildFacts:
 
 
 class CurationReadyBuildBlockedError(Exception):
-    """Stage 3 Ready 構築が業務状態により進めなかったことを表す例外。"""
+    """Stage 3 入力として採用できなかった場合に投げる例外。"""
 
-    def __init__(self, blocked: CurationReadyBuildBlocked) -> None:
-        self.blocked = blocked
-        super().__init__(blocked.code.value)
+    def __init__(
+        self,
+        code: CurationReadyBuildBlockedCode,
+        *,
+        content_length: int | None = None,
+        max_content_length: int | None = None,
+    ) -> None:
+        self.code = code
+        self.content_length = content_length
+        self.max_content_length = max_content_length
+        super().__init__(code.value)
 
 
 class CurationPreconditionProtocol(Protocol):
@@ -91,40 +87,25 @@ class ReadyForCuration(BaseModel):
         facts = await repo.load_ready_build_facts(article_id)
         if facts is None:
             raise CurationReadyBuildBlockedError(
-                CurationReadyBuildBlocked(
-                    target_article_id=article_id,
-                    code=CurationReadyBuildBlockedCode.ARTICLE_MISSING,
-                )
+                CurationReadyBuildBlockedCode.ARTICLE_MISSING
             )
 
         if facts.has_signal_curation:
             raise CurationReadyBuildBlockedError(
-                CurationReadyBuildBlocked(
-                    target_article_id=article_id,
-                    code=CurationReadyBuildBlockedCode.ALREADY_CURATED,
-                    source_name=facts.source_name,
-                )
+                CurationReadyBuildBlockedCode.ALREADY_CURATED
             )
 
         if facts.has_noise_curation:
             raise CurationReadyBuildBlockedError(
-                CurationReadyBuildBlocked(
-                    target_article_id=article_id,
-                    code=CurationReadyBuildBlockedCode.ALREADY_REJECTED_AS_NOISE,
-                    source_name=facts.source_name,
-                )
+                CurationReadyBuildBlockedCode.ALREADY_REJECTED_AS_NOISE
             )
 
         content_length = len(facts.original_content)
         if content_length > cls.MAX_CONTENT_LENGTH:
             raise CurationReadyBuildBlockedError(
-                CurationReadyBuildBlocked(
-                    target_article_id=article_id,
-                    code=CurationReadyBuildBlockedCode.CONTENT_TOO_LARGE,
-                    content_length=content_length,
-                    max_content_length=cls.MAX_CONTENT_LENGTH,
-                    source_name=facts.source_name,
-                )
+                CurationReadyBuildBlockedCode.CONTENT_TOO_LARGE,
+                content_length=content_length,
+                max_content_length=cls.MAX_CONTENT_LENGTH,
             )
 
         return cls(

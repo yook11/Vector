@@ -78,11 +78,7 @@ class TestTryAdvanceFrom:
         with pytest.raises(AssessmentReadyBuildBlockedError) as exc_info:
             await ReadyForAssessment.try_advance_from(curation_id=42, repo=repo)
 
-        assert (
-            exc_info.value.blocked.code
-            is AssessmentReadyBuildBlockedCode.CURATION_MISSING
-        )
-        assert exc_info.value.blocked.curation_id == 42
+        assert exc_info.value.code is AssessmentReadyBuildBlockedCode.CURATION_MISSING
         repo.load_ready_build_facts.assert_awaited_once_with(42)
 
     @pytest.mark.asyncio
@@ -92,10 +88,7 @@ class TestTryAdvanceFrom:
         with pytest.raises(AssessmentReadyBuildBlockedError) as exc_info:
             await ReadyForAssessment.try_advance_from(curation_id=42, repo=repo)
 
-        blocked = exc_info.value.blocked
-        assert blocked.code is AssessmentReadyBuildBlockedCode.ALREADY_IN_SCOPE
-        assert blocked.article_id == 7
-        assert blocked.source_name == "MIT News"
+        assert exc_info.value.code is AssessmentReadyBuildBlockedCode.ALREADY_IN_SCOPE
         repo.load_ready_build_facts.assert_awaited_once_with(42)
 
     @pytest.mark.asyncio
@@ -105,10 +98,9 @@ class TestTryAdvanceFrom:
         with pytest.raises(AssessmentReadyBuildBlockedError) as exc_info:
             await ReadyForAssessment.try_advance_from(curation_id=42, repo=repo)
 
-        blocked = exc_info.value.blocked
-        assert blocked.code is AssessmentReadyBuildBlockedCode.ALREADY_OUT_OF_SCOPE
-        assert blocked.article_id == 7
-        assert blocked.source_name == "MIT News"
+        assert (
+            exc_info.value.code is AssessmentReadyBuildBlockedCode.ALREADY_OUT_OF_SCOPE
+        )
         repo.load_ready_build_facts.assert_awaited_once_with(42)
 
 

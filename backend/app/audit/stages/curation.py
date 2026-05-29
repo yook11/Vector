@@ -10,7 +10,6 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis.curation.ai.gemini_prompt import GeminiCurationPrompt
-from app.analysis.curation.domain.ready import CurationReadyBuildBlockedCode
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 from app.audit.domain.event import EventType, Stage
 from app.audit.domain.payloads import CurationPayload
@@ -33,7 +32,7 @@ if TYPE_CHECKING:
     from app.analysis.curation.ai.envelope import CurationCall
     from app.analysis.curation.domain import Noise, Signal
     from app.analysis.curation.domain.ready import (
-        CurationReadyBuildBlocked,
+        CurationReadyBuildBlockedError,
         ReadyForCuration,
     )
     from app.analysis.curation.errors import CurationError, CurationTerminalDropError
@@ -44,21 +43,6 @@ _INPUT_CONTENT_HEAD_LIMIT = 2048
 _INPUT_CONTENT_HASH_PREFIX_LEN = 16
 
 BACKFILL_CURATION_AGED_OUT_CODE = "backfill_curation_aged_out"
-
-_READY_BUILD_BLOCKED_CODES = {
-    CurationReadyBuildBlockedCode.ARTICLE_MISSING: (
-        "curation_ready_build_blocked_article_missing"
-    ),
-    CurationReadyBuildBlockedCode.ALREADY_CURATED: (
-        "curation_ready_build_blocked_already_curated"
-    ),
-    CurationReadyBuildBlockedCode.ALREADY_REJECTED_AS_NOISE: (
-        "curation_ready_build_blocked_already_rejected_as_noise"
-    ),
-    CurationReadyBuildBlockedCode.CONTENT_TOO_LARGE: (
-        "curation_ready_build_blocked_content_too_large"
-    ),
-}
 
 
 class CurationAuditRepository:
@@ -166,32 +150,28 @@ class CurationAuditRepository:
     # --- Ready 構築 blocked / failed ---------------------------------------
 
     async def append_ready_build_blocked(
-        self, *, blocked: CurationReadyBuildBlocked
+        self, *, target_article_id: int, exc: CurationReadyBuildBlockedError
     ) -> None:
-        """Ready 構築が業務状態により対象外だった事実を記録する。"""
+        """Ready 構築が domain precondition により進めなかった事実を記録する。
+
+        Domain が reason code で説明できた停止なので rejected として焼く。
+        """
         payload = CurationPayload(
-            source_name=blocked.source_name,
-            target_article_id=blocked.target_article_id,
-            input_content_length=blocked.content_length,
-            max_content_length=blocked.max_content_length,
-        )
-        article_id = (
-            None
-            if blocked.code is CurationReadyBuildBlockedCode.ARTICLE_MISSING
-            else blocked.target_article_id
+            target_article_id=target_article_id,
+            input_content_length=exc.content_length,
+            max_content_length=exc.max_content_length,
         )
         await self._events.append(
             stage=Stage.CURATION,
             event_type=EventType.REJECTED,
-            outcome_code=_READY_BUILD_BLOCKED_CODES[blocked.code],
+            outcome_code=exc.code.value,
             payload=payload,
-            article_id=article_id,
         )
 
     async def append_ready_build_failed(
         self, *, target_article_id: int, exc: Exception
     ) -> None:
-        """Ready 構築フェーズの例外を failed として記録する。"""
+        """Ready 構築中に blocked 以外の例外が出た事実を failed として記録する。"""
         projection = project_ready_build_failure(stage_prefix="curation", exc=exc)
         payload = CurationPayload(
             failure_kind=projection.failure_kind,

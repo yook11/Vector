@@ -66,11 +66,7 @@ class TestTryAdvanceFrom:
                 analysis_id=100, embedding_repo=repo
             )
 
-        assert (
-            exc_info.value.blocked.code
-            is EmbeddingReadyBuildBlockedCode.ANALYSIS_MISSING
-        )
-        assert exc_info.value.blocked.analysis_id == 100
+        assert exc_info.value.code is EmbeddingReadyBuildBlockedCode.ANALYSIS_MISSING
         repo.load_ready_build_facts.assert_awaited_once_with(100)
 
     @pytest.mark.asyncio
@@ -82,9 +78,7 @@ class TestTryAdvanceFrom:
                 analysis_id=100, embedding_repo=repo
             )
 
-        blocked = exc_info.value.blocked
-        assert blocked.code is EmbeddingReadyBuildBlockedCode.ALREADY_EMBEDDED
-        assert blocked.article_id == 42
+        assert exc_info.value.code is EmbeddingReadyBuildBlockedCode.ALREADY_EMBEDDED
         repo.load_ready_build_facts.assert_awaited_once_with(100)
 
 

@@ -45,16 +45,16 @@ async def generate_embedding(
                 embedding_repo=EmbeddingRepository(session),
             )
         except EmbeddingReadyBuildBlockedError as exc:
-            blocked = exc.blocked
             await EmbeddingAuditRepository(session).append_ready_build_blocked(
-                blocked=blocked
+                analysis_id=trigger.analysis_id,
+                exc=exc,
             )
             await session.commit()
             logger.info(
                 "generate_embedding_rejected",
                 analysis_id=trigger.analysis_id,
                 reason="ready_build_blocked",
-                code=blocked.code.value,
+                code=exc.code.value,
             )
             return
         except Exception as exc:

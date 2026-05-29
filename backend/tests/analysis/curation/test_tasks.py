@@ -11,7 +11,6 @@ from app.analysis.ai_provider_errors import (
     AIProviderRateLimitedError,
 )
 from app.analysis.curation.domain.ready import (
-    CurationReadyBuildBlocked,
     CurationReadyBuildBlockedCode,
     CurationReadyBuildBlockedError,
     ReadyForCuration,
@@ -74,11 +73,11 @@ def _fixed_ready(article_id: int = 1) -> ReadyForCuration:
 
 
 def _patch_try_advance_from(
-    result: ReadyForCuration | CurationReadyBuildBlocked,
+    result: ReadyForCuration | CurationReadyBuildBlockedError,
 ) -> object:
     mock = (
-        AsyncMock(side_effect=CurationReadyBuildBlockedError(result))
-        if isinstance(result, CurationReadyBuildBlocked)
+        AsyncMock(side_effect=result)
+        if isinstance(result, CurationReadyBuildBlockedError)
         else AsyncMock(return_value=result)
     )
     return patch.object(
@@ -150,13 +149,12 @@ class TestCurateContent:
         from app.queue.tasks.curation import curate_content
 
         mock_ctx = _make_ctx(curator=_make_provider_fake())
-        blocked = CurationReadyBuildBlocked(
-            target_article_id=1,
-            code=CurationReadyBuildBlockedCode.ARTICLE_MISSING,
+        exc = CurationReadyBuildBlockedError(
+            CurationReadyBuildBlockedCode.ARTICLE_MISSING
         )
 
         with (
-            _patch_try_advance_from(blocked),
+            _patch_try_advance_from(exc),
             patch("app.queue.tasks.curation.CurationAuditRepository") as mock_audit,
             patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
             patch("app.queue.tasks.curation.assess_content") as mock_assess,
@@ -166,7 +164,8 @@ class TestCurateContent:
             await curate_content(trigger=_trigger(), ctx=mock_ctx)
 
         mock_audit.return_value.append_ready_build_blocked.assert_awaited_once_with(
-            blocked=blocked
+            target_article_id=1,
+            exc=exc,
         )
         # Service / rate limit gate / chain firing いずれも触らない
         mock_svc_cls.assert_not_called()
