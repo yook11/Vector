@@ -260,6 +260,32 @@ async def test_append_ready_build_blocked_records_missing_curation_rejected(
     assert ev.outcome_code == AssessmentReadyBuildBlockedCode.CURATION_MISSING.value
     assert ev.article_id is None
     assert ev.payload["curation_id"] == 999
+    # CURATION_MISSING は facts が無いため source_name を解決できない
+    assert ev.payload["source_name"] is None
+
+
+@pytest.mark.asyncio
+async def test_append_ready_build_blocked_records_source_name_when_present(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """blocked が source_name を持つ場合は payload に焼かれる (ALREADY_* 経路)。"""
+    async with session_factory() as session:
+        await AssessmentAuditRepository(session).append_ready_build_blocked(
+            curation_id=42,
+            exc=AssessmentReadyBuildBlockedError(
+                AssessmentReadyBuildBlockedCode.ALREADY_IN_SCOPE,
+                source_name="MIT News",
+            ),
+        )
+        await session.commit()
+
+    ev = await _fetch_by_outcome(
+        db_session, AssessmentReadyBuildBlockedCode.ALREADY_IN_SCOPE.value
+    )
+    assert ev.event_type == "rejected"
+    assert ev.payload["curation_id"] == 42
+    assert ev.payload["source_name"] == "MIT News"
 
 
 @pytest.mark.asyncio

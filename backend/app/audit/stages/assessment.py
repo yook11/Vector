@@ -142,6 +142,7 @@ class AssessmentAuditRepository:
             event_type=EventType.REJECTED,
             outcome_code=exc.code.value,
             payload=AssessmentPayload(
+                source_name=exc.source_name,
                 curation_id=curation_id,
             ),
         )

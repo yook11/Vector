@@ -157,6 +157,7 @@ class CurationAuditRepository:
         Domain が reason code で説明できた停止なので rejected として焼く。
         """
         payload = CurationPayload(
+            source_name=await self._resolve_source_name(target_article_id),
             target_article_id=target_article_id,
             input_content_length=exc.content_length,
             max_content_length=exc.max_content_length,

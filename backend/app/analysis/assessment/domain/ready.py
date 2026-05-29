@@ -41,8 +41,14 @@ class AssessmentReadyBuildFacts:
 class AssessmentReadyBuildBlockedError(Exception):
     """Stage 4 入力として採用できなかった場合に投げる例外。"""
 
-    def __init__(self, code: AssessmentReadyBuildBlockedCode) -> None:
+    def __init__(
+        self,
+        code: AssessmentReadyBuildBlockedCode,
+        *,
+        source_name: str | None = None,
+    ) -> None:
         self.code = code
+        self.source_name = source_name
         super().__init__(code.value)
 
 
@@ -84,12 +90,14 @@ class ReadyForAssessment(BaseModel):
 
         if facts.has_in_scope_assessment:
             raise AssessmentReadyBuildBlockedError(
-                AssessmentReadyBuildBlockedCode.ALREADY_IN_SCOPE
+                AssessmentReadyBuildBlockedCode.ALREADY_IN_SCOPE,
+                source_name=facts.source_name,
             )
 
         if facts.has_out_of_scope_assessment:
             raise AssessmentReadyBuildBlockedError(
-                AssessmentReadyBuildBlockedCode.ALREADY_OUT_OF_SCOPE
+                AssessmentReadyBuildBlockedCode.ALREADY_OUT_OF_SCOPE,
+                source_name=facts.source_name,
             )
 
         return cls(

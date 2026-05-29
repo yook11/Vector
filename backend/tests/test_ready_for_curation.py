@@ -21,7 +21,6 @@ def _facts(
     article_id: int = 42,
     title: str = "Quantum Breakthrough",
     content: str = "Article body",
-    source_name: str | None = "MIT News",
     has_signal_curation: bool = False,
     has_noise_curation: bool = False,
 ) -> CurationReadyBuildFacts:
@@ -29,7 +28,6 @@ def _facts(
         article_id=article_id,
         original_title=title,
         original_content=content,
-        source_name=source_name,
         has_signal_curation=has_signal_curation,
         has_noise_curation=has_noise_curation,
     )

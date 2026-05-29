@@ -189,14 +189,19 @@ async def test_append_ready_build_blocked_records_missing_article_rejected(
     assert ev.outcome_code == CurationReadyBuildBlockedCode.ARTICLE_MISSING.value
     assert ev.article_id is None
     assert ev.payload["target_article_id"] == 999
+    # article が無いため source_name は解決できない
+    assert ev.payload["source_name"] is None
 
 
 @pytest.mark.asyncio
 async def test_append_ready_build_blocked_records_content_too_large(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
 ) -> None:
-    """content too large は reason-specific evidence を payload に残す。"""
+    """content too large は reason evidence と source_name を payload に残す。"""
+    # 実在 article を sample_source に紐付け、source_name 解決を非空虚に検証する
+    article = await _make_article(db_session, sample_source)
     exc = CurationReadyBuildBlockedError(
         CurationReadyBuildBlockedCode.CONTENT_TOO_LARGE,
         content_length=200_001,
@@ -204,7 +209,7 @@ async def test_append_ready_build_blocked_records_content_too_large(
     )
     async with session_factory() as session:
         await CurationAuditRepository(session).append_ready_build_blocked(
-            target_article_id=123,
+            target_article_id=article.id,
             exc=exc,
         )
         await session.commit()
@@ -215,8 +220,8 @@ async def test_append_ready_build_blocked_records_content_too_large(
     assert ev.event_type == "rejected"
     assert ev.outcome_code == CurationReadyBuildBlockedCode.CONTENT_TOO_LARGE.value
     assert ev.article_id is None
-    assert ev.payload["target_article_id"] == 123
-    assert ev.payload["source_name"] is None
+    assert ev.payload["target_article_id"] == article.id
+    assert ev.payload["source_name"] == str(sample_source.name)
     assert ev.payload["input_content_length"] == 200_001
     assert ev.payload["max_content_length"] == 200_000
 

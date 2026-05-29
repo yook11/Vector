@@ -79,21 +79,29 @@ class TestTryAdvanceFrom:
             await ReadyForAssessment.try_advance_from(curation_id=42, repo=repo)
 
         assert exc_info.value.code is AssessmentReadyBuildBlockedCode.CURATION_MISSING
+        # facts が無いため source_name は解決できない
+        assert exc_info.value.source_name is None
         repo.load_ready_build_facts.assert_awaited_once_with(42)
 
     @pytest.mark.asyncio
     async def test_raises_blocked_when_in_scope_exists(self) -> None:
-        repo = _repo_mock(facts=_facts(has_in_scope_assessment=True))
+        repo = _repo_mock(
+            facts=_facts(has_in_scope_assessment=True, source_name="Ars Technica")
+        )
 
         with pytest.raises(AssessmentReadyBuildBlockedError) as exc_info:
             await ReadyForAssessment.try_advance_from(curation_id=42, repo=repo)
 
         assert exc_info.value.code is AssessmentReadyBuildBlockedCode.ALREADY_IN_SCOPE
+        # facts.source_name が例外経由で監査まで運ばれる
+        assert exc_info.value.source_name == "Ars Technica"
         repo.load_ready_build_facts.assert_awaited_once_with(42)
 
     @pytest.mark.asyncio
     async def test_raises_blocked_when_out_of_scope_exists(self) -> None:
-        repo = _repo_mock(facts=_facts(has_out_of_scope_assessment=True))
+        repo = _repo_mock(
+            facts=_facts(has_out_of_scope_assessment=True, source_name="Ars Technica")
+        )
 
         with pytest.raises(AssessmentReadyBuildBlockedError) as exc_info:
             await ReadyForAssessment.try_advance_from(curation_id=42, repo=repo)
@@ -101,6 +109,8 @@ class TestTryAdvanceFrom:
         assert (
             exc_info.value.code is AssessmentReadyBuildBlockedCode.ALREADY_OUT_OF_SCOPE
         )
+        # facts.source_name が例外経由で監査まで運ばれる
+        assert exc_info.value.source_name == "Ars Technica"
         repo.load_ready_build_facts.assert_awaited_once_with(42)
 
 

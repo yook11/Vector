@@ -293,7 +293,6 @@ async def test_load_ready_build_facts_returns_values_for_unprocessed_article(
     assert facts.article_id == article.id
     assert facts.original_title == article.original_title
     assert facts.original_content == article.original_content
-    assert facts.source_name == str(sample_source.name)
     assert facts.has_signal_curation is False
     assert facts.has_noise_curation is False
 

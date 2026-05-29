@@ -33,7 +33,6 @@ class CurationReadyBuildFacts:
     article_id: int
     original_title: str
     original_content: str
-    source_name: str | None
     has_signal_curation: bool
     has_noise_curation: bool
 

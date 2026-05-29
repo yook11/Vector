@@ -12,7 +12,6 @@ from app.analysis.curation.domain.ready import CurationReadyBuildFacts
 from app.models.article import Article
 from app.models.article_curation import ArticleCuration
 from app.models.curation_noise import CurationNoise
-from app.models.news_source import NewsSource
 
 
 class CurationRepository:
@@ -33,12 +32,10 @@ class CurationRepository:
                 Article.id,
                 Article.original_title,
                 Article.original_content,
-                NewsSource.name,
                 ArticleCuration.id.is_not(None),
                 CurationNoise.id.is_not(None),
             )
             .select_from(Article)
-            .join(NewsSource, NewsSource.id == Article.source_id)
             .outerjoin(ArticleCuration, ArticleCuration.article_id == Article.id)
             .outerjoin(CurationNoise, CurationNoise.article_id == Article.id)
             .where(Article.id == article_id)
@@ -51,7 +48,6 @@ class CurationRepository:
             loaded_article_id,
             original_title,
             original_content,
-            source_name,
             has_signal_curation,
             has_noise_curation,
         ) = row
@@ -59,7 +55,6 @@ class CurationRepository:
             article_id=loaded_article_id,
             original_title=original_title,
             original_content=original_content,
-            source_name=str(source_name) if source_name is not None else None,
             has_signal_curation=has_signal_curation,
             has_noise_curation=has_noise_curation,
         )
