@@ -41,6 +41,9 @@ from app.collection.article_completion.scrape_failure import (
     classify_external_fetch_error,
 )
 from app.collection.domain.analyzable_article import AnalyzableArticle
+from app.collection.domain.canonical_article_url import (
+    CanonicalArticleUrlInvalidError,
+)
 from app.collection.domain.observed_article import ObservedArticleInvalidError
 from app.collection.sources.errors import SourceNotRegisteredError
 from app.shared.security.redaction import redact_secrets
@@ -57,6 +60,7 @@ _SCRAPE_PARSER_GAVE_UP = "scrape_parser_gave_up"
 _SCRAPE_CONTENT_QUALITY_TOO_LOW = "scrape_content_quality_too_low"
 _STALE_ATTEMPT = "stale_attempt"
 
+_READY_BUILD_FAILED_URL_INVALID = "completion_ready_build_failed_url_invalid"
 _READY_BUILD_FAILED_OBSERVED_ARTICLE_INVALID = (
     "completion_ready_build_failed_observed_article_invalid"
 )
@@ -300,6 +304,7 @@ class ArticleCompletionAuditRepository:
                 if projection.event_type is EventType.FAILED
                 else None
             ),
+            reason_code=projection.reason_code,
         )
         await self._events.append(
             stage=Stage.COMPLETION,
@@ -389,6 +394,8 @@ class _ReadyBuildErrorProjection:
     event_type: EventType
     code: str
     failure_kind: str | None
+    # failure_kind は粗い集計タグ、reason_code は VO が掴んだ機械可読な細分
+    reason_code: str | None = None
 
 
 def _project_ready_build_error(exc: Exception) -> _ReadyBuildErrorProjection:
@@ -398,11 +405,19 @@ def _project_ready_build_error(exc: Exception) -> _ReadyBuildErrorProjection:
             code=exc.CODE,
             failure_kind=exc.FAILURE_KIND,
         )
+    if isinstance(exc, CanonicalArticleUrlInvalidError):
+        return _ReadyBuildErrorProjection(
+            event_type=EventType.FAILED,
+            failure_kind="url_invalid",
+            code=_READY_BUILD_FAILED_URL_INVALID,
+            reason_code=exc.reason,
+        )
     if isinstance(exc, ObservedArticleInvalidError):
         return _ReadyBuildErrorProjection(
             event_type=EventType.FAILED,
             failure_kind="observed_article_invalid",
             code=_READY_BUILD_FAILED_OBSERVED_ARTICLE_INVALID,
+            reason_code=exc.reason,
         )
     if isinstance(exc, SourceNotRegisteredError):
         return _ReadyBuildErrorProjection(

@@ -26,7 +26,6 @@ from app.collection.article_completion.ready import (
     ArticleCompletionReadyBuildFacts,
     ArticleCompletionReadyBuildPendingMissingError,
     ArticleCompletionReadyBuildPendingNotRunningError,
-    ArticleCompletionReadyBuildUrlInvalidError,
     ReadyForArticleCompletion,
 )
 from app.collection.article_completion.repository import (
@@ -41,10 +40,14 @@ from app.collection.article_completion.scrape_failure import (
     ParseCrashed,
 )
 from app.collection.domain.analyzable_article import AnalyzableArticle
-from app.collection.domain.canonical_article_url import CanonicalArticleUrl
+from app.collection.domain.canonical_article_url import (
+    CanonicalArticleUrl,
+    CanonicalArticleUrlInvalidError,
+)
 from app.collection.domain.observed_article import (
     ObservedArticle,
     ObservedArticleInvalidError,
+    ObservedArticleInvalidReason,
     ObservedField,
     ObservedOrigin,
 )
@@ -58,6 +61,7 @@ from app.collection.sources.errors import SourceNotRegisteredError
 from app.collection.sources.source_name import SourceName
 from app.models.news_source import NewsSource, SourceType
 from app.models.pipeline_event import PipelineEvent
+from app.shared.security.safe_url import SafeUrlInvalidReason
 
 _URL = "https://techcrunch.com/audit"
 
@@ -500,25 +504,30 @@ async def test_append_ready_build_error_records_pending_not_running_skipped(
 
 
 @pytest.mark.parametrize(
-    ("error_cls", "canonical_url", "outcome_code", "failure_kind"),
+    ("exc", "canonical_url", "outcome_code", "failure_kind", "reason_code"),
     [
         (
-            ObservedArticleInvalidError,
+            ObservedArticleInvalidError(
+                reason=ObservedArticleInvalidReason.TITLE_INVALID
+            ),
             "https://techcrunch.com/bad",
             "completion_ready_build_failed_observed_article_invalid",
             "observed_article_invalid",
+            "title_invalid",
         ),
         (
-            SourceNotRegisteredError,
+            SourceNotRegisteredError(),
             "https://techcrunch.com/bad",
             "completion_ready_build_failed_source_not_registered",
             "source_not_registered",
+            None,
         ),
         (
-            ArticleCompletionReadyBuildUrlInvalidError,
+            CanonicalArticleUrlInvalidError(reason=SafeUrlInvalidReason.URL_NOT_HTTP),
             "ftp://techcrunch.com/bad",
             "completion_ready_build_failed_url_invalid",
             "url_invalid",
+            "url_not_http",
         ),
     ],
 )
@@ -527,12 +536,12 @@ async def test_append_ready_build_error_uses_domain_error_code(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     tc_source: NewsSource,
-    error_cls: type[Exception],
+    exc: Exception,
     canonical_url: str,
     outcome_code: str,
     failure_kind: str,
+    reason_code: str | None,
 ) -> None:
-    exc = error_cls()
     facts = _ready_build_facts(tc_source, url=canonical_url)
 
     async with session_factory() as session:
@@ -548,6 +557,7 @@ async def test_append_ready_build_error_uses_domain_error_code(
     assert ev.retryability == "unknown"
     assert ev.error_class is not None
     assert ev.payload["failure_kind"] == failure_kind
+    assert ev.payload["reason_code"] == reason_code
     assert ev.payload["pending_id"] == 42
     assert ev.payload["pending_status"] == "running"
     assert ev.payload["source_name"] == "TechCrunch"

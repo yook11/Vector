@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from enum import StrEnum
-from typing import Any, Self
+from typing import Any, ClassVar, Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -27,13 +27,53 @@ from app.collection.domain.value_objects import PublishedAt
 from app.collection.sources.source_name import SourceName
 
 
+class ObservedArticleInvalidReason(StrEnum):
+    """ObservedArticle 復元失敗の field 単位分類 (PII-free、値だけで読める)。"""
+
+    STAGED_ATTRIBUTES_NOT_OBJECT = "staged_attributes_not_object"
+    SOURCE_NAME_MISSING = "source_name_missing"
+    SOURCE_NAME_INVALID = "source_name_invalid"
+    SOURCE_URL_INVALID = "source_url_invalid"
+    TITLE_INVALID = "title_invalid"
+    BODY_INVALID = "body_invalid"
+    PUBLISHED_AT_INVALID = "published_at_invalid"
+    OBSERVED_FIELD_INVALID = "observed_field_invalid"
+
+
 class ObservedArticleInvalidError(Exception):
-    """ObservedArticle として復元できない入力。"""
+    """ObservedArticle として復元できない入力。reason で失敗 field を分類する。"""
 
-    MESSAGE = "observed article input is invalid"
+    MESSAGE: ClassVar[str] = "observed article input is invalid"
 
-    def __init__(self) -> None:
-        super().__init__(self.MESSAGE)
+    def __init__(self, *, reason: ObservedArticleInvalidReason) -> None:
+        self.reason = reason
+        super().__init__(f"{self.MESSAGE}: {reason}")
+
+
+def _classify_observed_article_error(
+    exc: ValidationError,
+) -> ObservedArticleInvalidReason:
+    """loc[0]/type で失敗 field を分類する (input 非参照で PII フリー)。
+
+    identity (sourceName/source_url) を content より優先: sourceName 欠落は
+    ACL/repository 注入漏れ、source_url 不正は DB URL 汚染 / canonical VO 由来で、
+    content 系と「次に見る場所」が違う。alias 形と populate_by_name 名の両方を拾う。
+    """
+    fields = {str(e["loc"][0]): e for e in exc.errors() if e.get("loc")}
+    source_name_err = fields.get("sourceName") or fields.get("source_name")
+    if source_name_err is not None:
+        if source_name_err.get("type") == "missing":
+            return ObservedArticleInvalidReason.SOURCE_NAME_MISSING
+        return ObservedArticleInvalidReason.SOURCE_NAME_INVALID
+    if "source_url" in fields:
+        return ObservedArticleInvalidReason.SOURCE_URL_INVALID
+    if "title" in fields:
+        return ObservedArticleInvalidReason.TITLE_INVALID
+    if "body" in fields:
+        return ObservedArticleInvalidReason.BODY_INVALID
+    if "publishedAt" in fields or "published_at" in fields:
+        return ObservedArticleInvalidReason.PUBLISHED_AT_INVALID
+    return ObservedArticleInvalidReason.OBSERVED_FIELD_INVALID
 
 
 class ObservedOrigin(StrEnum):
@@ -122,13 +162,20 @@ class ObservedArticle(BaseModel):
         source_url: CanonicalArticleUrl,
     ) -> Self:
         """JSONB へ退避した観測値に authoritative identity を戻して復元する。"""
-        raw = dict(staged_attributes)
+        try:
+            raw = dict(staged_attributes)
+        except (TypeError, ValueError) as exc:
+            raise ObservedArticleInvalidError(
+                reason=ObservedArticleInvalidReason.STAGED_ATTRIBUTES_NOT_OBJECT
+            ) from exc
         raw["sourceName"] = str(source_name)
         raw["source_url"] = source_url
         try:
             return cls.model_validate(raw)
         except ValidationError as exc:
-            raise ObservedArticleInvalidError() from exc
+            raise ObservedArticleInvalidError(
+                reason=_classify_observed_article_error(exc)
+            ) from exc
 
     def to_audit_fields(self) -> dict[str, bool | int | str | None]:
         """structured log / audit 向けの per-field 充足スナップショット。

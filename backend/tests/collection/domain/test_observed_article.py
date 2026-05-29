@@ -22,8 +22,10 @@ from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import (
     ObservedArticle,
     ObservedArticleInvalidError,
+    ObservedArticleInvalidReason,
     ObservedField,
     ObservedOrigin,
+    _classify_observed_article_error,
 )
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.sources.source_name import SourceName
@@ -87,12 +89,13 @@ def test_from_staged_attributes_restores_authoritative_identity() -> None:
 
 def test_from_staged_attributes_raises_domain_error_for_invalid_shape() -> None:
     """復元不能な staged_attributes は ObservedArticle 側の例外で表す。"""
-    with pytest.raises(ObservedArticleInvalidError):
+    with pytest.raises(ObservedArticleInvalidError) as exc_info:
         ObservedArticle.from_staged_attributes(
             {"title": {"value": "x", "origin": "invalid"}},
             source_name=SourceName("TechCrunch"),
             source_url=CanonicalArticleUrl(_URL),
         )
+    assert exc_info.value.reason is ObservedArticleInvalidReason.TITLE_INVALID
 
 
 def test_missing_identity_is_strict_validation_error() -> None:
@@ -163,3 +166,87 @@ def test_to_audit_fields_keeps_per_field_origin_and_body_value_length() -> None:
     assert audit["body_length"] == len(body_text)
     assert audit["has_published_at"] is True
     assert audit["published_at_origin"] == "sitemap"
+
+
+class TestObservedArticleInvalidReason:
+    """復元失敗を field 単位 reason で分類することの所有テスト。
+
+    reason は ObservedArticle 構築段階だけが loc[0] で掴める PII-free な運用情報。
+    """
+
+    @staticmethod
+    def _error_for(raw: dict[str, object]) -> ValidationError:
+        try:
+            ObservedArticle.model_validate(raw)
+        except ValidationError as exc:
+            return exc
+        raise AssertionError("expected ValidationError")
+
+    @pytest.mark.parametrize(
+        ("raw", "expected_reason"),
+        [
+            (
+                {"source_url": _URL, "title": {"value": "x", "origin": "feed"}},
+                ObservedArticleInvalidReason.SOURCE_NAME_MISSING,
+            ),
+            (
+                {"sourceName": "bad@name!", "source_url": _URL},
+                ObservedArticleInvalidReason.SOURCE_NAME_INVALID,
+            ),
+            (
+                {"sourceName": "TechCrunch", "source_url": "ftp://x"},
+                ObservedArticleInvalidReason.SOURCE_URL_INVALID,
+            ),
+            (
+                {
+                    "sourceName": "TechCrunch",
+                    "source_url": _URL,
+                    "title": {"value": "x", "origin": "bad"},
+                },
+                ObservedArticleInvalidReason.TITLE_INVALID,
+            ),
+            (
+                {
+                    "sourceName": "TechCrunch",
+                    "source_url": _URL,
+                    "body": {"value": 123, "origin": "feed"},
+                },
+                ObservedArticleInvalidReason.BODY_INVALID,
+            ),
+            (
+                {
+                    "sourceName": "TechCrunch",
+                    "source_url": _URL,
+                    "publishedAt": {"value": "not-a-date", "origin": "feed"},
+                },
+                ObservedArticleInvalidReason.PUBLISHED_AT_INVALID,
+            ),
+        ],
+    )
+    def test_classifies_failure_field(
+        self, raw: dict[str, object], expected_reason: ObservedArticleInvalidReason
+    ) -> None:
+        assert _classify_observed_article_error(self._error_for(raw)) is expected_reason
+
+    def test_non_object_staged_attributes(self) -> None:
+        with pytest.raises(ObservedArticleInvalidError) as exc_info:
+            ObservedArticle.from_staged_attributes(
+                None,  # type: ignore[arg-type]
+                source_name=SourceName("TechCrunch"),
+                source_url=CanonicalArticleUrl(_URL),
+            )
+        assert (
+            exc_info.value.reason
+            is ObservedArticleInvalidReason.STAGED_ATTRIBUTES_NOT_OBJECT
+        )
+
+    def test_error_message_is_pii_free(self) -> None:
+        # input 値 (origin 文字列等) は str(exc) に出ず reason タグのみ
+        with pytest.raises(ObservedArticleInvalidError) as exc_info:
+            ObservedArticle.from_staged_attributes(
+                {"title": {"value": "x", "origin": "secret-internal-marker"}},
+                source_name=SourceName("TechCrunch"),
+                source_url=CanonicalArticleUrl(_URL),
+            )
+        assert "secret-internal-marker" not in str(exc_info.value)
+        assert str(exc_info.value) == "observed article input is invalid: title_invalid"

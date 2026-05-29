@@ -23,12 +23,30 @@ SafeUrl の検証を呼んで結果を再利用する。
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar, Self
 
 from pydantic import ConfigDict, RootModel, field_validator
 
 from app.collection.url_canonicalize import canonicalize_url
-from app.shared.security.safe_url import SafeUrl
+from app.shared.security.safe_url import (
+    SafeUrl,
+    SafeUrlInvalidError,
+    SafeUrlInvalidReason,
+)
+
+
+class CanonicalArticleUrlInvalidError(Exception):
+    """canonicalize 後の値が SafeUrl 不変条件を満たさず記事 URL にできなかった失敗。
+
+    canonicalize_url は失敗しない (冪等 transform) ため、本失敗は全て SafeUrl 由来。
+    reason は下位 SafeUrl の失敗段をそのまま運ぶ (URL/IP の input は載せない)。
+    """
+
+    MESSAGE: ClassVar[str] = "value is not a valid canonical article URL"
+
+    def __init__(self, *, reason: SafeUrlInvalidReason) -> None:
+        self.reason = reason
+        super().__init__(f"{self.MESSAGE}: {reason}")
 
 
 class CanonicalArticleUrl(RootModel[str]):
@@ -63,9 +81,26 @@ class CanonicalArticleUrl(RootModel[str]):
             )
             raise ValueError(msg)
         canonical = canonicalize_url(raw)
-        # SafeUrl の invariant (構文 + SSRF) を canonical 値で再検証
-        SafeUrl(canonical)
-        return canonical
+        # SafeUrl の invariant (構文 + SSRF) を canonical 値で再検証し strip 済み値を
+        # 返す。SafeUrlInvalidError は ValueError サブクラスなので pydantic が
+        # ValidationError 化する (CanonicalArticleUrl(x) 直接構築の契約を維持)。
+        return SafeUrl._validate(canonical)
+
+    @classmethod
+    def from_raw(cls, raw: str) -> Self:
+        """生 URL を canonicalize → SafeUrl 検証し、失敗時は reason 付き例外へ翻訳する。
+
+        ``CanonicalArticleUrl(x)`` 直接構築は validator 経由で ValidationError を
+        維持する (stage1 converter / ORM / テスト用)。本 factory は失敗理由を型で
+        運ぶ stage2 用の経路で、``SafeUrl._validate`` を pydantic 非経由で直接呼ぶ
+        ため reason を型で受け取れ ``__cause__`` 連鎖も保たれる。
+        """
+        canonical = canonicalize_url(raw)
+        try:
+            validated = SafeUrl._validate(canonical)
+        except SafeUrlInvalidError as exc:
+            raise CanonicalArticleUrlInvalidError(reason=exc.reason) from exc
+        return cls(validated)
 
     def as_safe_url(self) -> SafeUrl:
         """SafeUrl 互換の値を取り出す (SSRF 境界呼出用)。

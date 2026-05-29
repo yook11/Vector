@@ -12,10 +12,12 @@ from app.collection.article_completion.ready import (
     ArticleCompletionReadyBuildFacts,
     ArticleCompletionReadyBuildPendingMissingError,
     ArticleCompletionReadyBuildPendingNotRunningError,
-    ArticleCompletionReadyBuildUrlInvalidError,
     ReadyForArticleCompletion,
 )
-from app.collection.domain.canonical_article_url import CanonicalArticleUrl
+from app.collection.domain.canonical_article_url import (
+    CanonicalArticleUrl,
+    CanonicalArticleUrlInvalidError,
+)
 from app.collection.domain.observed_article import (
     ObservedArticle,
     ObservedArticleInvalidError,
@@ -28,6 +30,7 @@ from app.collection.sources.article_completion_policy import (
 )
 from app.collection.sources.errors import SourceNotRegisteredError
 from app.collection.sources.source_name import SourceName
+from app.shared.security.safe_url import SafeUrlInvalidReason
 
 
 def _staged_attributes(
@@ -158,12 +161,11 @@ async def test_raises_failed_when_source_not_registered() -> None:
 async def test_raises_failed_when_url_invalid() -> None:
     facts = _facts(source_url="ftp://example.com/a", staged_attributes={})
 
-    with pytest.raises(ArticleCompletionReadyBuildUrlInvalidError) as exc_info:
+    with pytest.raises(CanonicalArticleUrlInvalidError) as exc_info:
         await ReadyForArticleCompletion.try_advance_from(
             pending_id=42,
             repo=_repo_mock(facts),
         )
 
-    assert exc_info.value.CODE == "completion_ready_build_failed_url_invalid"
-    assert exc_info.value.EVENT_TYPE is EventType.FAILED
-    assert exc_info.value.FAILURE_KIND == "url_invalid"
+    # ready の URL 失敗は VO 例外で reason を運ぶ (where/code は audit の責務)
+    assert exc_info.value.reason is SafeUrlInvalidReason.URL_NOT_HTTP

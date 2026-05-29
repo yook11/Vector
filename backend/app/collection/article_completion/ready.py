@@ -5,8 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, ClassVar, Protocol
 
-from pydantic import ValidationError
-
 from app.audit.domain.event import EventType
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import ObservedArticle
@@ -20,7 +18,6 @@ __all__ = [
     "ArticleCompletionReadyBuildFacts",
     "ArticleCompletionReadyBuildPendingMissingError",
     "ArticleCompletionReadyBuildPendingNotRunningError",
-    "ArticleCompletionReadyBuildUrlInvalidError",
     "ReadyForArticleCompletion",
 ]
 
@@ -68,15 +65,6 @@ class ArticleCompletionReadyBuildPendingNotRunningError(
     MESSAGE: ClassVar[str] = "pending row is not running for completion ready build"
 
 
-class ArticleCompletionReadyBuildUrlInvalidError(ArticleCompletionReadyBuildError):
-    """pending URL を completion 用 canonical URL として扱えなかった。"""
-
-    CODE: ClassVar[str] = "completion_ready_build_failed_url_invalid"
-    EVENT_TYPE: ClassVar[EventType] = EventType.FAILED
-    FAILURE_KIND: ClassVar[str] = "url_invalid"
-    MESSAGE: ClassVar[str] = "pending URL is not a valid canonical article URL"
-
-
 class ArticleCompletionPreconditionProtocol(Protocol):
     """Ready 構築に必要な DB 事実だけを読む repository contract。"""
 
@@ -111,10 +99,10 @@ class ReadyForArticleCompletion:
         if facts.status != "running":
             raise ArticleCompletionReadyBuildPendingNotRunningError()
 
-        try:
-            source_url = CanonicalArticleUrl(facts.source_url)
-        except ValidationError as exc:
-            raise ArticleCompletionReadyBuildUrlInvalidError() from exc
+        # CanonicalArticleUrlInvalidError / ObservedArticleInvalidError は
+        # VO 層が reason 付きで投げる。ready は翻訳せずそのまま伝播し、where
+        # (Stage.COMPLETION) は呼び出し側の監査が焼く。
+        source_url = CanonicalArticleUrl.from_raw(facts.source_url)
 
         observed = ObservedArticle.from_staged_attributes(
             facts.staged_attributes,

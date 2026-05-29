@@ -5,8 +5,15 @@ import json
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from app.collection.domain.canonical_article_url import CanonicalArticleUrl
-from app.shared.security.safe_url import SafeUrl
+from app.collection.domain.canonical_article_url import (
+    CanonicalArticleUrl,
+    CanonicalArticleUrlInvalidError,
+)
+from app.shared.security.safe_url import (
+    SafeUrl,
+    SafeUrlInvalidError,
+    SafeUrlInvalidReason,
+)
 
 
 class TestCanonicalArticleUrlNormalization:
@@ -98,6 +105,47 @@ class TestCanonicalArticleUrlRejectsInvalidInput:
     def test_rejects_non_string_non_url_type(self) -> None:
         with pytest.raises(ValidationError):
             CanonicalArticleUrl(123)  # type: ignore[arg-type]
+
+
+class TestCanonicalArticleUrlFromRaw:
+    """``from_raw`` は失敗理由を型 (reason) で運ぶ stage2 用 factory。
+
+    reason の正本テスト: ``__cause__`` 連鎖が pydantic 非経由で保たれることも確かめる。
+    """
+
+    def test_from_raw_canonicalizes_on_success(self) -> None:
+        url = CanonicalArticleUrl.from_raw(
+            "https://Example.com/foo/?utm_source=rss#main"
+        )
+        assert url.root == "https://example.com/foo"
+
+    @pytest.mark.parametrize(
+        ("raw", "expected_reason"),
+        [
+            ("", SafeUrlInvalidReason.URL_EMPTY),
+            ("ftp://example.com/foo", SafeUrlInvalidReason.URL_NOT_HTTP),
+            ("example.com/foo", SafeUrlInvalidReason.URL_NOT_HTTP),
+            ("http://127.0.0.1/admin", SafeUrlInvalidReason.HOST_NOT_PUBLIC_IP),
+            (
+                "https://example.com/" + "a" * (2049 - len("https://example.com/")),
+                SafeUrlInvalidReason.URL_TOO_LONG,
+            ),
+        ],
+    )
+    def test_from_raw_classifies_reason(
+        self, raw: str, expected_reason: SafeUrlInvalidReason
+    ) -> None:
+        with pytest.raises(CanonicalArticleUrlInvalidError) as exc_info:
+            CanonicalArticleUrl.from_raw(raw)
+        assert exc_info.value.reason is expected_reason
+
+    def test_from_raw_chains_safe_url_invalid_error(self) -> None:
+        # __cause__ に SafeUrlInvalidError が残り、監査 error_chain で系統が辿れる
+        with pytest.raises(CanonicalArticleUrlInvalidError) as exc_info:
+            CanonicalArticleUrl.from_raw("ftp://example.com")
+        cause = exc_info.value.__cause__
+        assert isinstance(cause, SafeUrlInvalidError)
+        assert cause.reason is SafeUrlInvalidReason.URL_NOT_HTTP
 
 
 class TestCanonicalArticleUrlBridges:

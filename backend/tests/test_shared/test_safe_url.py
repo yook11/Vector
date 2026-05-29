@@ -5,7 +5,11 @@ import json
 import pytest
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from app.shared.security.safe_url import SafeUrl
+from app.shared.security.safe_url import (
+    SafeUrl,
+    SafeUrlInvalidError,
+    SafeUrlInvalidReason,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -31,37 +35,47 @@ class TestSafeUrl:
         assert url.root == "https://example.com"
 
     def test_rejects_empty(self) -> None:
-        with pytest.raises(ValidationError, match="must not be empty"):
+        with pytest.raises(ValidationError):
             SafeUrl("")
 
     def test_rejects_whitespace_only(self) -> None:
-        with pytest.raises(ValidationError, match="must not be empty"):
+        with pytest.raises(ValidationError):
             SafeUrl("   ")
 
     def test_rejects_javascript_scheme(self) -> None:
-        with pytest.raises(ValidationError, match="valid http or https"):
+        with pytest.raises(ValidationError):
             SafeUrl("javascript:alert(1)")
 
     def test_rejects_data_scheme(self) -> None:
-        with pytest.raises(ValidationError, match="valid http or https"):
+        with pytest.raises(ValidationError):
             SafeUrl("data:text/html,<h1>hi</h1>")
 
     def test_rejects_ftp_scheme(self) -> None:
-        with pytest.raises(ValidationError, match="valid http or https"):
+        with pytest.raises(ValidationError):
             SafeUrl("ftp://files.example.com")
 
     def test_rejects_no_scheme(self) -> None:
-        with pytest.raises(ValidationError, match="valid http or https"):
+        with pytest.raises(ValidationError):
             SafeUrl("example.com")
 
     def test_rejects_non_string(self) -> None:
         with pytest.raises(ValidationError):
             SafeUrl(123)  # type: ignore[arg-type]
 
-    def test_rejects_over_max_length(self) -> None:
-        long_url = "https://example.com/" + "a" * 2030
-        with pytest.raises(ValidationError, match="at most 2048"):
-            SafeUrl(long_url)
+    def test_accepts_exactly_max_length(self) -> None:
+        # _MAX_LENGTH (2048) ちょうどは通る境界
+        prefix = "https://example.com/"
+        url = prefix + "a" * (2048 - len(prefix))
+        assert len(url) == 2048
+        assert SafeUrl(url).root == url
+
+    def test_rejects_one_over_max_length(self) -> None:
+        # _MAX_LENGTH + 1 (2049) は弾かれる境界
+        prefix = "https://example.com/"
+        url = prefix + "a" * (2049 - len(prefix))
+        assert len(url) == 2049
+        with pytest.raises(ValidationError):
+            SafeUrl(url)
 
     def test_equality(self) -> None:
         assert SafeUrl("https://a.com") == SafeUrl("https://a.com")
@@ -113,7 +127,7 @@ class TestSafeUrlBlocksPrivateIpLiterals:
         ],
     )
     def test_rejects_private_ip_literal(self, url: str) -> None:
-        with pytest.raises(ValidationError, match="private/loopback IP literal"):
+        with pytest.raises(ValidationError):
             SafeUrl(url)
 
     @pytest.mark.parametrize(
@@ -182,3 +196,36 @@ class TestPydanticIntegration:
         m = ModelWithFromAttributes.model_validate(orm_obj)
         assert isinstance(m.url, SafeUrl)
         assert m.url.root == "https://example.com"
+
+
+# ---------------------------------------------------------------------------
+# SafeUrl — 失敗理由 (reason) の所有テスト
+# ---------------------------------------------------------------------------
+class TestSafeUrlValidateReason:
+    """``SafeUrl`` 検証が失敗段を ``SafeUrlInvalidReason`` で分類することの所有テスト。
+
+    reason は ``SafeUrl(x)`` 経由だと pydantic の ValidationError ctx に潜るため、
+    検証本体 ``_validate`` を直接呼んで型で確かめる
+    (``CanonicalArticleUrl.from_raw`` が消費するのと同じ経路)。
+    """
+
+    @pytest.mark.parametrize(
+        ("raw", "expected_reason"),
+        [
+            (123, SafeUrlInvalidReason.URL_NOT_A_STRING),
+            ("", SafeUrlInvalidReason.URL_EMPTY),
+            ("   ", SafeUrlInvalidReason.URL_EMPTY),
+            ("https://example.com/" + "a" * 2040, SafeUrlInvalidReason.URL_TOO_LONG),
+            ("ftp://files.example.com", SafeUrlInvalidReason.URL_NOT_HTTP),
+            ("javascript:alert(1)", SafeUrlInvalidReason.URL_NOT_HTTP),
+            ("example.com", SafeUrlInvalidReason.URL_NOT_HTTP),
+            ("http://127.0.0.1/", SafeUrlInvalidReason.HOST_NOT_PUBLIC_IP),
+            ("http://169.254.169.254/", SafeUrlInvalidReason.HOST_NOT_PUBLIC_IP),
+        ],
+    )
+    def test_validate_classifies_failure_reason(
+        self, raw: object, expected_reason: SafeUrlInvalidReason
+    ) -> None:
+        with pytest.raises(SafeUrlInvalidError) as exc_info:
+            SafeUrl._validate(raw)
+        assert exc_info.value.reason is expected_reason
