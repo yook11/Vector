@@ -23,7 +23,10 @@ from app.collection.article_completion.completion_failure import (
 )
 from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.article_completion.scraper import ScrapedContent
-from app.collection.domain.analyzable_article import AnalyzableArticle
+from app.collection.domain.analyzable_article import (
+    AnalyzableArticle,
+    AnalyzableArticleDefect,
+)
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import (
     ObservedArticle,
@@ -81,6 +84,4 @@ def test_promotion_failure_returns_completion_rejection() -> None:
     result = ArticleHtmlCompleter().complete(_ready(observed_published=None), content)
 
     assert isinstance(result, CompletionRejection)
-    assert result.reason_code == "completion_invariant_rejected"
-    assert result.detail is not None
-    assert "published_at" in result.detail
+    assert result.reason_code == AnalyzableArticleDefect.PUBLISHED_AT_MISSING

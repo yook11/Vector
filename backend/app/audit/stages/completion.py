@@ -243,7 +243,12 @@ class ArticleCompletionAuditRepository:
         ready: ReadyForArticleCompletion,
         rejection: CompletionRejection,
     ) -> None:
-        """complete 段のドメイン不変条件棄却を記録する。"""
+        """complete 段のドメイン不変条件棄却を記録する。
+
+        主 defect を ``outcome_code``、全 defect 集合を ``payload.defects`` に焼く。
+        free-text の error_message / error_class は持たない (構造的に PII-free)。
+        写像漏れ (``unmapped`` 非空) は ``quality_gate_metric`` に痕跡を残す。
+        """
         await self._events.append(
             stage=Stage.COMPLETION,
             event_type=EventType.REJECTED,
@@ -251,14 +256,14 @@ class ArticleCompletionAuditRepository:
             payload=CompletionPayload(
                 canonical_url=str(ready.source_url),
                 attempt_count=ready.attempt_count,
-                error_message=(
-                    _redacted(rejection.error_message)
-                    if rejection.error_message is not None
+                defects=list(rejection.defect_codes),
+                quality_gate_metric=(
+                    {"unmapped_validation_errors": list(rejection.unmapped)}
+                    if rejection.unmapped
                     else None
                 ),
             ),
             source_id=ready.source_id,
-            error_class=rejection.error_class,
         )
 
     async def append_stale_attempt(self, *, ready: ReadyForArticleCompletion) -> None:

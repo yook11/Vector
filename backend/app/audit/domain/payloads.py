@@ -85,6 +85,8 @@ class CompletionPayload(BasePipelineEventPayload):
     attempt_count: int | None = None
     scraper_class: str | None = None
     reason_code: str | None = None
+    # 完成段ドメイン棄却の defect 全集合 (outcome_code は主 defect = defects[0])。
+    defects: list[str] | None = None
     body_length: int | None = None
     quality_gate_metric: dict[str, Any] | None = None
     http_status: int | None = None

@@ -78,7 +78,7 @@ class ArticleCompletionFailureHandler:
             source_id=ready.source_id,
             canonical_url=str(canonical_url),
             reason_code=rejection.reason_code,
-            detail=rejection.detail,
+            defects=list(rejection.defect_codes),
         )
         return None
 

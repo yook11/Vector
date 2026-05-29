@@ -32,7 +32,10 @@ from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.article_completion.repository import ArticleCompletionRepository
 from app.collection.article_completion.retry_policy import BLIP_POLICY
 from app.collection.article_completion.scrape_failure import FetchFailed, NotHtml
-from app.collection.domain.analyzable_article import QualityTooLow
+from app.collection.domain.analyzable_article import (
+    AnalyzableArticleDefect,
+    QualityTooLow,
+)
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import (
     ObservedArticle,
@@ -343,7 +346,7 @@ async def test_completion_rejected_closes_pending(
     await handler.handle_completion_rejected(
         ready,
         CompletionRejection.from_quality_too_low(
-            QualityTooLow(error_class="ValidationError", error_message="body too short")
+            QualityTooLow(defects=(AnalyzableArticleDefect.BODY_TOO_SHORT,))
         ),
     )
 
@@ -353,29 +356,39 @@ async def test_completion_rejected_closes_pending(
 
 
 @pytest.mark.asyncio
-async def test_completion_rejected_audits_rejected_with_error_class(
+async def test_completion_rejected_audits_rejected_with_defects(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     tc_source: NewsSource,
 ) -> None:
-    """完成段棄却は rejected + error_class (raise された例外型) 記録 (経路 5)。"""
+    """完成段棄却は rejected + 主 defect を outcome_code、全集合を payload.defects に
+    焼く (経路 5)。free-text の error_class / error_message は持たない (PII-free)。"""
     ready = await _make_ready(db_session, tc_source, "https://techcrunch.com/reject2")
     handler = ArticleCompletionFailureHandler(session_factory)
 
     await handler.handle_completion_rejected(
         ready,
         CompletionRejection.from_quality_too_low(
-            QualityTooLow(error_class="ValidationError", error_message="body too short")
+            QualityTooLow(
+                defects=(
+                    AnalyzableArticleDefect.BODY_TOO_SHORT,
+                    AnalyzableArticleDefect.PUBLISHED_AT_MISSING,
+                )
+            )
         ),
     )
 
     ev = await _fetch_event(db_session, tc_source.id)
     assert ev.event_type == "rejected"
-    assert ev.outcome_code == "completion_invariant_rejected"
+    assert ev.outcome_code == AnalyzableArticleDefect.BODY_TOO_SHORT
     assert ev.retryability is None
-    assert ev.error_class == "ValidationError"
+    assert ev.error_class is None
     assert ev.payload["attempt_count"] == ready.attempt_count
-    assert ev.payload["error_message"] == "body too short"
+    assert ev.payload["defects"] == [
+        AnalyzableArticleDefect.BODY_TOO_SHORT,
+        AnalyzableArticleDefect.PUBLISHED_AT_MISSING,
+    ]
+    assert ev.payload.get("error_message") is None
 
 
 @pytest.mark.asyncio

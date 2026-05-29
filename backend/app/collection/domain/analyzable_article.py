@@ -7,9 +7,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Self
 
-from pydantic import BaseModel, ConfigDict, Field
+import structlog
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.collection.domain.article_limits import (
     ARTICLE_BODY_MAX_LENGTH,
@@ -20,20 +22,81 @@ from app.collection.domain.article_limits import (
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.value_objects import PublishedAt
 
+logger = structlog.get_logger(__name__)
+
+
+class AnalyzableArticleDefect(StrEnum):
+    """``AnalyzableArticle`` 不変条件を満たせなかった理由 (自己記述コード)。
+
+    value はそのまま audit の ``outcome_code`` / ``payload.defects`` に焼かれる
+    (analysis BC の ready ``*ReadyBuildBlockedCode`` と同形)。stage 非依存。
+    メンバーは Field 宣言順 = errors() 順に並べる (主 defect は先頭)。
+    """
+
+    TITLE_MISSING = "analyzable_article_title_missing"
+    TITLE_TOO_SHORT = "analyzable_article_title_too_short"
+    TITLE_TOO_LONG = "analyzable_article_title_too_long"
+    BODY_MISSING = "analyzable_article_body_missing"
+    BODY_TOO_SHORT = "analyzable_article_body_too_short"
+    BODY_TOO_LONG = "analyzable_article_body_too_long"
+    PUBLISHED_AT_MISSING = "analyzable_article_published_at_missing"
+    SOURCE_ID_INVALID = "analyzable_article_source_id_invalid"
+    # value は語順が逆 = 規約外。contract test では個別 assert する。
+    UNMAPPED_VALIDATION_ERROR = "analyzable_article_validation_error_unmapped"
+
+
+_DEFECT_BY_LOC_TYPE: dict[tuple[str, str], AnalyzableArticleDefect] = {
+    ("title", "string_type"): AnalyzableArticleDefect.TITLE_MISSING,
+    ("title", "string_too_short"): AnalyzableArticleDefect.TITLE_TOO_SHORT,
+    ("title", "string_too_long"): AnalyzableArticleDefect.TITLE_TOO_LONG,
+    ("body", "string_type"): AnalyzableArticleDefect.BODY_MISSING,
+    ("body", "string_too_short"): AnalyzableArticleDefect.BODY_TOO_SHORT,
+    ("body", "string_too_long"): AnalyzableArticleDefect.BODY_TOO_LONG,
+    ("published_at", "dataclass_type"): AnalyzableArticleDefect.PUBLISHED_AT_MISSING,
+    ("source_id", "greater_than"): AnalyzableArticleDefect.SOURCE_ID_INVALID,
+}
+
+
+def _classify_defects(
+    exc: ValidationError,
+) -> tuple[tuple[AnalyzableArticleDefect, ...], tuple[str, ...]]:
+    """``ValidationError`` を defect 集合 + 写像漏れ痕跡に分類する。
+
+    再チェックでなく分類: Field constraint が捕えた error を ``(loc[0], type)`` で
+    写像する。未知の組は ``UNMAPPED_VALIDATION_ERROR`` に落とし、生 ``"loc:type"``
+    を ``unmapped`` に残し ``logger.warning`` で可視化する。
+    """
+    defects: list[AnalyzableArticleDefect] = []
+    unmapped: list[str] = []
+    for err in exc.errors():
+        loc = err["loc"]
+        field = str(loc[0]) if loc else ""
+        error_type = err["type"]
+        defect = _DEFECT_BY_LOC_TYPE.get((field, error_type))
+        if defect is None:
+            defects.append(AnalyzableArticleDefect.UNMAPPED_VALIDATION_ERROR)
+            unmapped.append(f"{field}:{error_type}")
+            logger.warning(
+                "analyzable_article_validation_error_unmapped",
+                loc=field,
+                type=error_type,
+            )
+            continue
+        defects.append(defect)
+    return tuple(defects), tuple(unmapped)
+
 
 @dataclass(frozen=True, slots=True)
 class QualityTooLow:
-    """揃った材料が品質基準 (title/body 長 / published_at 欠落等) に届かず
-    構築できない理由。
+    """不変条件に届かず構築できない理由を分類済み defect 集合で表す。
 
-    construct を拒んだ ``ValueError`` の証拠 (class 名 + message) を保持する。
-    published_at 欠落も他の不変条件違反と同様にこの型へ畳む。
-    completer がこれを audit 語彙 ``CompletionRejection`` に翻訳する。
-    message の長さ上限は下流の翻訳先が担うため、本型は最小に保つ。
+    free-text の Pydantic message (body 断片を含みうる = PII リスク) は保持せず、
+    監査に焼くのは構造化 defect のみ。completer がこれを ``CompletionRejection``
+    に翻訳する。
     """
 
-    error_class: str
-    error_message: str
+    defects: tuple[AnalyzableArticleDefect, ...]
+    unmapped: tuple[str, ...] = ()
 
 
 class AnalyzableArticle(BaseModel):
@@ -105,13 +168,13 @@ class AnalyzableArticle(BaseModel):
         """揃った材料から構築を試み、品質基準に届かなければ理由を値で返す。
 
         route 2 (完成段) 用の smart constructor。``try_build`` (route 1,
-        ``Self | None``) と異なり、構築不能の理由を ``QualityTooLow`` の証拠として
-        返す。
+        ``Self | None``) と異なり、構築不能の理由を ``QualityTooLow`` の分類済み
+        defect 集合として返す。
 
         ``title`` / ``body`` / ``published_at`` は ``... | None`` で受け、
-        Pydantic の validation path で ``QualityTooLow`` に畳む。published_at
-        欠落も title/body 長や source_id≤0 と同種の不変条件違反として単一経路で
-        扱う。
+        Pydantic の validation path で捕えた ``ValidationError`` を defect に
+        分類する。published_at 欠落も title/body 長や source_id≤0 と同種の
+        不変条件違反として単一経路で扱う。
         """
         try:
             return cls.model_validate(
@@ -123,5 +186,6 @@ class AnalyzableArticle(BaseModel):
                     "source_url": source_url,
                 }
             )
-        except ValueError as e:
-            return QualityTooLow(error_class=type(e).__name__, error_message=str(e))
+        except ValidationError as exc:
+            defects, unmapped = _classify_defects(exc)
+            return QualityTooLow(defects=defects, unmapped=unmapped)

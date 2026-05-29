@@ -21,7 +21,10 @@ from app.collection.article_completion.completion_failure import (
     CompletionRejection,
 )
 from app.collection.article_completion.scraper import ScrapedContent
-from app.collection.domain.analyzable_article import AnalyzableArticle
+from app.collection.domain.analyzable_article import (
+    AnalyzableArticle,
+    AnalyzableArticleDefect,
+)
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import (
     ObservedArticle,
@@ -114,9 +117,7 @@ def test_published_at_missing_both_fails_as_invariant_rejected() -> None:
     ``CompletionRejection`` に畳む (title/body/source_id と同種)。"""
     result = _promote(_observed(published=None), DEFAULT_POLICY, _html(published=None))
     assert isinstance(result, CompletionRejection)
-    assert result.reason_code == "completion_invariant_rejected"
-    assert result.detail is not None
-    assert "published_at" in result.detail
+    assert result.reason_code == AnalyzableArticleDefect.PUBLISHED_AT_MISSING
 
 
 def test_observed_body_is_ignored_when_body_html_required() -> None:
@@ -136,6 +137,4 @@ def test_analyzable_invariant_violation_wrapped_as_invariant_rejected() -> None:
     """``AnalyzableArticle`` の Field invariant 違反は名前付き失敗に畳む。"""
     result = _promote(_observed(), DEFAULT_POLICY, _html(), source_id=0)
     assert isinstance(result, CompletionRejection)
-    assert result.reason_code == "completion_invariant_rejected"
-    assert result.detail is not None
-    assert "source_id" in result.detail
+    assert result.reason_code == AnalyzableArticleDefect.SOURCE_ID_INVALID
