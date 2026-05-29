@@ -103,9 +103,10 @@ async def _make_ready(
     )
     await db_session.commit()
     assert pending_id in ids
-    ready = await repository.try_load_for_completion(pending_id)
-    assert ready is not None
-    return ready
+    return await ReadyForArticleCompletion.try_advance_from(
+        pending_id=pending_id,
+        repo=repository,
+    )
 
 
 async def _reload_pending(
@@ -245,10 +246,10 @@ async def test_scrape_retryable_exhausted_closes_pending(
         .values(attempt_count=BLIP_POLICY.max_attempts)
     )
     await db_session.commit()
-    exhausted_ready = await ArticleCompletionRepository(
-        db_session
-    ).try_load_for_completion(ready.pending_id)
-    assert exhausted_ready is not None
+    exhausted_ready = await ReadyForArticleCompletion.try_advance_from(
+        pending_id=ready.pending_id,
+        repo=ArticleCompletionRepository(db_session),
+    )
     assert exhausted_ready.attempt_count == BLIP_POLICY.max_attempts
     handler = ArticleCompletionFailureHandler(session_factory)
 
@@ -275,10 +276,10 @@ async def test_scrape_retryable_exhausted_audits_retry_exhausted_flag(
         .values(attempt_count=BLIP_POLICY.max_attempts)
     )
     await db_session.commit()
-    exhausted_ready = await ArticleCompletionRepository(
-        db_session
-    ).try_load_for_completion(ready.pending_id)
-    assert exhausted_ready is not None
+    exhausted_ready = await ReadyForArticleCompletion.try_advance_from(
+        pending_id=ready.pending_id,
+        repo=ArticleCompletionRepository(db_session),
+    )
     handler = ArticleCompletionFailureHandler(session_factory)
 
     await handler.handle_scrape_failure(

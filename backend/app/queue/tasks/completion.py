@@ -18,9 +18,15 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import structlog
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from taskiq import Context, TaskiqDepends
 
-from app.collection.article_completion.ready import ReadyForArticleCompletion
+from app.audit.domain.event import EventType
+from app.audit.stages.completion import ArticleCompletionAuditRepository
+from app.collection.article_completion.ready import (
+    ArticleCompletionReadyBuildError,
+    ReadyForArticleCompletion,
+)
 from app.collection.article_completion.repository import ArticleCompletionRepository
 from app.collection.article_completion.service import ArticleCompletionService
 from app.queue.brokers import broker_content, broker_metadata
@@ -98,23 +104,39 @@ async def scrape_html_body(
 
     taskiq retry を持たず cron poller (``dispatch_html_fetch_jobs``) のみで
     再投入する。task は ``ReadyForArticleCompletion.try_advance_from`` で Ready を
-    構築し (構築不能なら skip log + ``None``)、Service に渡す。article_id が返れば
+    構築し (対象外なら skipped audit + ``None``)、Service に渡す。article_id が返れば
     ``curate_content`` に enqueue、``None`` は何もしない (DB 状態 + audit は
     Service / failure handler 内で完結済)。
     """
     session_factory = ctx.state.session_factory
     async with session_factory() as session:
-        ready = await ReadyForArticleCompletion.try_advance_from(
-            pending_id=pending_id,
-            repo=ArticleCompletionRepository(session),
-        )
-    if ready is None:
-        logger.info(
-            "scrape_html_body_skipped",
-            pending_id=pending_id,
-            reason="precondition_not_met",
-        )
-        return None
+        try:
+            ready = await ReadyForArticleCompletion.try_advance_from(
+                pending_id=pending_id,
+                repo=ArticleCompletionRepository(session),
+            )
+        except ArticleCompletionReadyBuildError as exc:
+            await _append_ready_build_error_audit(
+                session_factory,
+                pending_id=pending_id,
+                exc=exc,
+            )
+            if exc.EVENT_TYPE == EventType.FAILED:
+                raise
+            logger.info(
+                "scrape_html_body_skipped",
+                pending_id=pending_id,
+                reason="ready_build_error",
+                outcome_code=exc.CODE,
+            )
+            return None
+        except Exception as exc:
+            await _append_ready_build_error_audit(
+                session_factory,
+                pending_id=pending_id,
+                exc=exc,
+            )
+            raise
 
     article_id = await ArticleCompletionService(session_factory).execute(ready)
 
@@ -126,3 +148,46 @@ async def scrape_html_body(
         "article_id": article_id,
         "status": "success",
     }
+
+
+async def _append_ready_build_error_audit(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    pending_id: int,
+    exc: Exception,
+) -> None:
+    """Ready 構築例外を best-effort で監査し、失敗時は構造ログへ退避する。"""
+    try:
+        async with session_factory() as audit_session:
+            facts = None
+            try:
+                facts = await ArticleCompletionRepository(
+                    audit_session
+                ).load_ready_build_facts(pending_id)
+            except Exception as context_exc:
+                await audit_session.rollback()
+                logger.warning(
+                    "completion_ready_build_context_load_failed",
+                    pending_id=pending_id,
+                    context_error_class=_fqn(context_exc),
+                )
+
+            await ArticleCompletionAuditRepository(
+                audit_session
+            ).append_ready_build_error(
+                pending_id=pending_id,
+                exc=exc,
+                facts=facts,
+            )
+            await audit_session.commit()
+    except Exception as audit_exc:
+        logger.exception(
+            "completion_ready_build_error_audit_dropped",
+            pending_id=pending_id,
+            business_error_class=_fqn(exc),
+            audit_error_class=_fqn(audit_exc),
+        )
+
+
+def _fqn(exc: BaseException) -> str:
+    return f"{type(exc).__module__}.{type(exc).__qualname__}"

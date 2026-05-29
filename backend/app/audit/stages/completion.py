@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import assert_never
 
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.domain.event import EventType, Stage
@@ -17,7 +19,11 @@ from app.audit.failure_projection import (
 )
 from app.audit.repository import PipelineEventRepository
 from app.collection.article_completion.completion_failure import CompletionRejection
-from app.collection.article_completion.ready import ReadyForArticleCompletion
+from app.collection.article_completion.ready import (
+    ArticleCompletionReadyBuildError,
+    ArticleCompletionReadyBuildFacts,
+    ReadyForArticleCompletion,
+)
 from app.collection.article_completion.repository import (
     CompletionOutcome,
     CompletionSucceeded,
@@ -35,6 +41,8 @@ from app.collection.article_completion.scrape_failure import (
     classify_external_fetch_error,
 )
 from app.collection.domain.analyzable_article import AnalyzableArticle
+from app.collection.domain.observed_article import ObservedArticleInvalidError
+from app.collection.sources.errors import SourceNotRegisteredError
 from app.shared.security.redaction import redact_secrets
 
 _ERROR_MESSAGE_LIMIT = 2000
@@ -48,6 +56,15 @@ _SCRAPE_NOT_HTML = "scrape_not_html"
 _SCRAPE_PARSER_GAVE_UP = "scrape_parser_gave_up"
 _SCRAPE_CONTENT_QUALITY_TOO_LOW = "scrape_content_quality_too_low"
 _STALE_ATTEMPT = "stale_attempt"
+
+_READY_BUILD_FAILED_OBSERVED_ARTICLE_INVALID = (
+    "completion_ready_build_failed_observed_article_invalid"
+)
+_READY_BUILD_FAILED_SOURCE_NOT_REGISTERED = (
+    "completion_ready_build_failed_source_not_registered"
+)
+_READY_BUILD_FAILED_DB_ERROR = "completion_ready_build_failed_db_error"
+_READY_BUILD_FAILED_UNEXPECTED_ERROR = "completion_ready_build_failed_unexpected_error"
 
 
 def _fqn(exc: BaseException) -> str:
@@ -253,6 +270,53 @@ class ArticleCompletionAuditRepository:
             source_id=ready.source_id,
         )
 
+    async def append_ready_build_error(
+        self,
+        *,
+        pending_id: int,
+        exc: Exception,
+        facts: ArticleCompletionReadyBuildFacts | None = None,
+    ) -> None:
+        """Ready 構築不能の typed error / fallback error を記録する。"""
+        projection = _project_ready_build_error(exc)
+        payload = CompletionPayload(
+            failure_kind=(
+                projection.failure_kind
+                if projection.event_type is EventType.FAILED
+                else None
+            ),
+            pending_id=pending_id,
+            pending_status=facts.status if facts is not None else None,
+            source_name=str(facts.source_name) if facts is not None else None,
+            canonical_url=facts.source_url if facts is not None else None,
+            attempt_count=facts.attempt_count if facts is not None else None,
+            error_message=(
+                _redacted(str(exc))
+                if projection.event_type is EventType.FAILED
+                else None
+            ),
+            error_chain=(
+                extract_error_chain(exc)
+                if projection.event_type is EventType.FAILED
+                else None
+            ),
+        )
+        await self._events.append(
+            stage=Stage.COMPLETION,
+            event_type=projection.event_type,
+            outcome_code=projection.code,
+            payload=payload,
+            source_id=facts.source_id if facts is not None else None,
+            error_class=(
+                _fqn(exc) if projection.event_type is EventType.FAILED else None
+            ),
+            retryability=(
+                Retryability.UNKNOWN
+                if projection.event_type is EventType.FAILED
+                else None
+            ),
+        )
+
     async def append_persist_crashed(
         self, *, ready: ReadyForArticleCompletion, exc: BaseException
     ) -> None:
@@ -318,3 +382,42 @@ class ArticleCompletionAuditRepository:
             failure_action=None,
             code=_PERSIST_CRASHED,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class _ReadyBuildErrorProjection:
+    event_type: EventType
+    code: str
+    failure_kind: str | None
+
+
+def _project_ready_build_error(exc: Exception) -> _ReadyBuildErrorProjection:
+    if isinstance(exc, ArticleCompletionReadyBuildError):
+        return _ReadyBuildErrorProjection(
+            event_type=exc.EVENT_TYPE,
+            code=exc.CODE,
+            failure_kind=exc.FAILURE_KIND,
+        )
+    if isinstance(exc, ObservedArticleInvalidError):
+        return _ReadyBuildErrorProjection(
+            event_type=EventType.FAILED,
+            failure_kind="observed_article_invalid",
+            code=_READY_BUILD_FAILED_OBSERVED_ARTICLE_INVALID,
+        )
+    if isinstance(exc, SourceNotRegisteredError):
+        return _ReadyBuildErrorProjection(
+            event_type=EventType.FAILED,
+            failure_kind="source_not_registered",
+            code=_READY_BUILD_FAILED_SOURCE_NOT_REGISTERED,
+        )
+    if isinstance(exc, SQLAlchemyError):
+        return _ReadyBuildErrorProjection(
+            event_type=EventType.FAILED,
+            failure_kind="db_error",
+            code=_READY_BUILD_FAILED_DB_ERROR,
+        )
+    return _ReadyBuildErrorProjection(
+        event_type=EventType.FAILED,
+        failure_kind="unexpected_error",
+        code=_READY_BUILD_FAILED_UNEXPECTED_ERROR,
+    )

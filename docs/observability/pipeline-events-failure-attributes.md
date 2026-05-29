@@ -143,6 +143,35 @@ Ready build blocked / failed では `outcome_code` を SSoT とし、payload に
 (`target_article_id` / `curation_id` / `analysis_id`)。top-level `article_id` は
 対象 article を解決できた場合だけ保存する。
 
+completion stage の `scrape_html_body` 入口でも、pending から Ready を構築
+できなかった結果を audit する。pending lifecycle による対象外は skipped とし、
+構築中の例外は failed として焼く。
+
+- skipped: `completion_ready_build_blocked_pending_missing` /
+  `completion_ready_build_blocked_pending_not_running`
+- failed: `completion_ready_build_failed_db_error` /
+  `completion_ready_build_failed_observed_article_invalid` /
+  `completion_ready_build_failed_source_not_registered` /
+  `completion_ready_build_failed_url_invalid` /
+  `completion_ready_build_failed_unexpected_error`
+
+completion Ready build event の payload は `kind="completion"` とし、
+`pending_id`、`pending_status`、`canonical_url`、`attempt_count`、
+`source_name` を解決できた範囲で保存する。`staged_attributes` の中身は
+payload に保存しない。pending lifecycle / URL の completion typed error は
+`CODE` / `EVENT_TYPE` / `FAILURE_KIND` を SSoT とする。`ObservedArticle` 復元失敗は
+`ObservedArticleInvalidError`、source registry miss は `SourceNotRegisteredError`
+をそのまま伝え、audit 側で completion Ready build outcome に投影する。
+`source_not_registered` は dispatch / completion で同じ registry miss 概念だが、
+dispatch では outcome、completion では failure_kind として使う。acquisition の
+raw `SOURCES[...]` miss は trusted dispatch invariant 違反として現状維持し、
+completion registry helper の miss は永続 pending 由来の実行時 failure として
+audit する。
+監査 payload 用の `pending_id` / `attempt_count` などは error には詰めず、task /
+audit 側が task 引数と pending facts から補う。task は completion typed error の
+`EVENT_TYPE` が `failed` なら audit 後に raise し、`skipped` なら audit 後に
+return する。DB 例外と想定外例外だけ audit 側で fallback 分類する。
+
 trend discovery stage は、保存物としての snapshot ではなく、rolling 7d の
 分析済み記事から trend discovery run がどう終わったかを焼く。
 

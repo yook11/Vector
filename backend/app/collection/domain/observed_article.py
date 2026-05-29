@@ -16,14 +16,24 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import StrEnum
-from typing import Self
+from typing import Any, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.sources.source_name import SourceName
+
+
+class ObservedArticleInvalidError(Exception):
+    """ObservedArticle として復元できない入力。"""
+
+    MESSAGE = "observed article input is invalid"
+
+    def __init__(self) -> None:
+        super().__init__(self.MESSAGE)
 
 
 class ObservedOrigin(StrEnum):
@@ -102,6 +112,23 @@ class ObservedArticle(BaseModel):
                 else None
             ),
         )
+
+    @classmethod
+    def from_staged_attributes(
+        cls,
+        staged_attributes: Mapping[str, Any],
+        *,
+        source_name: SourceName,
+        source_url: CanonicalArticleUrl,
+    ) -> Self:
+        """JSONB へ退避した観測値に authoritative identity を戻して復元する。"""
+        raw = dict(staged_attributes)
+        raw["sourceName"] = str(source_name)
+        raw["source_url"] = source_url
+        try:
+            return cls.model_validate(raw)
+        except ValidationError as exc:
+            raise ObservedArticleInvalidError() from exc
 
     def to_audit_fields(self) -> dict[str, bool | int | str | None]:
         """structured log / audit 向けの per-field 充足スナップショット。

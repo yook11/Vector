@@ -21,6 +21,7 @@ from pydantic import ValidationError
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import (
     ObservedArticle,
+    ObservedArticleInvalidError,
     ObservedField,
     ObservedOrigin,
 )
@@ -68,6 +69,30 @@ def test_round_trip_identity_with_acl_injected_identity() -> None:
     assert restored == original
     assert restored.published_at is not None
     assert restored.published_at.origin is ObservedOrigin.sitemap
+
+
+def test_from_staged_attributes_restores_authoritative_identity() -> None:
+    """JSONB 退避値に表層 identity を戻して ObservedArticle に復元する。"""
+    original = _observed()
+    staged = original.model_dump(mode="json", by_alias=True)
+
+    restored = ObservedArticle.from_staged_attributes(
+        staged,
+        source_name=SourceName("TechCrunch"),
+        source_url=CanonicalArticleUrl(_URL),
+    )
+
+    assert restored == original
+
+
+def test_from_staged_attributes_raises_domain_error_for_invalid_shape() -> None:
+    """復元不能な staged_attributes は ObservedArticle 側の例外で表す。"""
+    with pytest.raises(ObservedArticleInvalidError):
+        ObservedArticle.from_staged_attributes(
+            {"title": {"value": "x", "origin": "invalid"}},
+            source_name=SourceName("TechCrunch"),
+            source_url=CanonicalArticleUrl(_URL),
+        )
 
 
 def test_missing_identity_is_strict_validation_error() -> None:

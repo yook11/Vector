@@ -110,6 +110,15 @@ class TestCompletionPayloadAuditKeys:
         dumped = payload.model_dump(mode="json")
         assert dumped["attempt_count"] == 3
 
+    def test_ready_build_fields_can_be_set(self) -> None:
+        payload = CompletionPayload(
+            pending_id=42,
+            pending_status="open",
+        )
+        dumped = payload.model_dump(mode="json")
+        assert dumped["pending_id"] == 42
+        assert dumped["pending_status"] == "open"
+
     def test_failure_attribute_fields_can_be_set(self) -> None:
         payload = CompletionPayload(
             failure_kind="external_fetch",

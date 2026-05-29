@@ -1,21 +1,88 @@
-"""補完を実行できる pending 行を表す precondition 型。"""
+"""補完を実行できる pending 行を Domain 側で構築する。"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, ClassVar, Protocol
 
+from pydantic import ValidationError
+
+from app.audit.domain.event import EventType
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.sources.article_completion_policy import ArticleCompletionPolicy
+from app.collection.sources.registry import completion_policy_for
+from app.collection.sources.source_name import SourceName
+
+__all__ = [
+    "ArticleCompletionPreconditionProtocol",
+    "ArticleCompletionReadyBuildError",
+    "ArticleCompletionReadyBuildFacts",
+    "ArticleCompletionReadyBuildPendingMissingError",
+    "ArticleCompletionReadyBuildPendingNotRunningError",
+    "ArticleCompletionReadyBuildUrlInvalidError",
+    "ReadyForArticleCompletion",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class ArticleCompletionReadyBuildFacts:
+    """Stage 2 Ready 構築に必要な DB 射影。"""
+
+    pending_id: int
+    source_id: int
+    source_name: SourceName
+    status: str
+    staged_attributes: dict[str, Any]
+    source_url: str
+    attempt_count: int
+
+
+class ArticleCompletionReadyBuildError(Exception):
+    """Stage 2 Ready を構築できなかった理由を表す typed error。"""
+
+    CODE: ClassVar[str]
+    EVENT_TYPE: ClassVar[EventType]
+    FAILURE_KIND: ClassVar[str | None] = None
+    MESSAGE: ClassVar[str]
+
+    def __init__(self) -> None:
+        super().__init__(self.MESSAGE)
+
+
+class ArticleCompletionReadyBuildPendingMissingError(ArticleCompletionReadyBuildError):
+    """pending_id に対応する pending 行が存在しなかった。"""
+
+    CODE: ClassVar[str] = "completion_ready_build_blocked_pending_missing"
+    EVENT_TYPE: ClassVar[EventType] = EventType.SKIPPED
+    MESSAGE: ClassVar[str] = "pending row is missing for completion ready build"
+
+
+class ArticleCompletionReadyBuildPendingNotRunningError(
+    ArticleCompletionReadyBuildError
+):
+    """pending 行は存在するが completion 実行対象の running ではなかった。"""
+
+    CODE: ClassVar[str] = "completion_ready_build_blocked_pending_not_running"
+    EVENT_TYPE: ClassVar[EventType] = EventType.SKIPPED
+    MESSAGE: ClassVar[str] = "pending row is not running for completion ready build"
+
+
+class ArticleCompletionReadyBuildUrlInvalidError(ArticleCompletionReadyBuildError):
+    """pending URL を completion 用 canonical URL として扱えなかった。"""
+
+    CODE: ClassVar[str] = "completion_ready_build_failed_url_invalid"
+    EVENT_TYPE: ClassVar[EventType] = EventType.FAILED
+    FAILURE_KIND: ClassVar[str] = "url_invalid"
+    MESSAGE: ClassVar[str] = "pending URL is not a valid canonical article URL"
 
 
 class ArticleCompletionPreconditionProtocol(Protocol):
-    """補完進行判定用の Repository contract。"""
+    """Ready 構築に必要な DB 事実だけを読む repository contract。"""
 
-    async def try_load_for_completion(
+    async def load_ready_build_facts(
         self, pending_id: int
-    ) -> ReadyForArticleCompletion | None: ...
+    ) -> ArticleCompletionReadyBuildFacts | None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +102,32 @@ class ReadyForArticleCompletion:
         *,
         pending_id: int,
         repo: ArticleCompletionPreconditionProtocol,
-    ) -> ReadyForArticleCompletion | None:
-        """pending_id から補完へ進める場合だけ Ready を返す。"""
-        return await repo.try_load_for_completion(pending_id)
+    ) -> ReadyForArticleCompletion:
+        """DB 事実から Ready を構築し、構築不能なら typed error を投げる。"""
+        facts = await repo.load_ready_build_facts(pending_id)
+        if facts is None:
+            raise ArticleCompletionReadyBuildPendingMissingError()
+
+        if facts.status != "running":
+            raise ArticleCompletionReadyBuildPendingNotRunningError()
+
+        try:
+            source_url = CanonicalArticleUrl(facts.source_url)
+        except ValidationError as exc:
+            raise ArticleCompletionReadyBuildUrlInvalidError() from exc
+
+        observed = ObservedArticle.from_staged_attributes(
+            facts.staged_attributes,
+            source_name=facts.source_name,
+            source_url=source_url,
+        )
+        profile = completion_policy_for(observed.source_name)
+
+        return cls(
+            pending_id=facts.pending_id,
+            source_id=facts.source_id,
+            attempt_count=facts.attempt_count,
+            observed=observed,
+            profile=profile,
+            source_url=source_url,
+        )

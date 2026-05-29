@@ -1,15 +1,10 @@
 """``ArticleCompletionRepository`` の統合テスト (実 Postgres)。
 
 Stage 2 completion の永続化境界を検証する。Repository は queue 抽象ではなく、
-``incomplete_articles`` に対する処理資格ロード / claim / sweep / 状態遷移を担う。
+``incomplete_articles`` に対する Ready 構築 facts / claim / sweep / 状態遷移を担う。
 service には ``status`` / ``ready_at`` / ``leased_until`` を漏らさない。
 
-identity 解決は表層列 (``url`` / ``source_name``) から直接 hydrate する
-(spec ``Pending source identity refactor.md`` Chunk 4)。profile は
-``SOURCES[observed.source_name].completion_policy`` 直叩きで、registry 未登録
-source は ``KeyError`` 伝播 (``[[feedback_failure_visibility]]``)。
-production 45-registry と非結合にするため、profile を上書きする test では
-``monkeypatch.setitem(SOURCES, ...)`` で運搬体を差し替える。
+Ready 構築可否や profile 解決は domain / source registry helper の責務。
 """
 
 from __future__ import annotations
@@ -37,7 +32,6 @@ from app.collection.domain.observed_article import (
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.sources.article_completion_policy import (
     DEFAULT_POLICY,
-    HTML_TITLE_POLICY,
     ArticleCompletionPolicy,
 )
 from app.collection.sources.base_article_source import BaseArticleSource
@@ -51,11 +45,11 @@ from app.shared.security.safe_url import SafeUrl
 class _StubArticleSource(BaseArticleSource):
     """``ArticleSource`` Protocol の test 用最小実装。
 
-    repository は ``completion_policy`` のみ参照する。``read`` / ``map_entry``
+    Ready 構築 helper は ``completion_policy`` のみ参照する。``read`` / ``map_entry``
     は本テストで呼ばれないが Protocol shape を満たすため no-op を残す
     (in_scope/select は ``BaseArticleSource``)。
     ``monkeypatch.setitem(SOURCES, name, _StubArticleSource(...))`` で
-    profile を test 単位に差し替えるための運搬体 (production registry には
+    policy を test 単位に差し替えるための運搬体 (production registry には
     登録しない)。
     """
 
@@ -80,15 +74,10 @@ def _register_sample_source_in_registry(
     request: pytest.FixtureRequest,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``sample_source`` を使う test で SOURCES に ``DEFAULT_POLICY`` を登録する。
+    """``sample_source`` を使う Ready 構築 helper 用に policy を登録する。
 
-    repository が ``SOURCES[observed.source_name]`` 直叩きで profile を引く
-    ため、production registry に未登録の test fixture (``sample_source.name =
-    'Test Tech Source'``) では KeyError が起きる。本 fixture は production
-    と整合する形 (DEFAULT_POLICY) を default として SOURCES に挿入し、test が
-    profile を上書きしたい場合は test 内で ``monkeypatch.setitem`` を再度
-    呼べば override できる。``sample_source`` を要求しない test (例:
-    missing_or_open 999999 path) には何もしない。
+    repository 自体は ``SOURCES`` を参照しない。state transition test の setup で
+    domain Ready を作るため、test fixture の source 名に default policy を挿入する。
     """
     if "sample_source" not in request.fixturenames:
         return
@@ -213,26 +202,22 @@ async def _claim_one(
             f"pending_id={pending_id} (picked={ids})"
         )
         raise RuntimeError(msg)
-    ready = await repository.try_load_for_completion(pending_id)
-    if ready is None:
-        msg = (
-            "setup precondition violated: try_load returned None after claim "
-            f"(id={pending_id})"
-        )
-        raise RuntimeError(msg)
-    return ready
+    return await ReadyForArticleCompletion.try_advance_from(
+        pending_id=pending_id,
+        repo=repository,
+    )
 
 
 # ---------------------------------------------------------------------------
-# try_load_for_completion
+# load_ready_build_facts
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_try_load_for_completion_returns_claimed_target(
+async def test_load_ready_build_facts_returns_claimed_target(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
-    """``status='running'`` の行だけが completion target として物体化される。"""
+    """pending 行の Ready 構築 facts を status ごと返す。"""
     url = CanonicalArticleUrl("https://example.com/p/find")
     pending_id = await _enqueue(
         db_session,
@@ -244,22 +229,31 @@ async def test_try_load_for_completion_returns_claimed_target(
     )
     await db_session.commit()
 
-    target = await _claim_one(db_session, pending_id)
+    await _claim_one(db_session, pending_id)
+    target = await _repo(db_session).load_ready_build_facts(pending_id)
 
+    assert target is not None
     assert target.pending_id == pending_id
     assert target.source_id == sample_source.id
+    assert target.status == "running"
     assert target.attempt_count == 1
-    assert target.observed.title is not None
-    assert target.observed.title.value == "Find Me"
-    assert target.source_url == url
+    assert target.staged_attributes["title"]["value"] == "Find Me"
+    assert target.source_url == str(url)
 
 
 @pytest.mark.asyncio
-async def test_try_load_for_completion_returns_none_for_missing_or_open(
+async def test_load_ready_build_facts_returns_none_for_missing(
+    db_session: AsyncSession,
+) -> None:
+    repository = _repo(db_session)
+    assert await repository.load_ready_build_facts(999999) is None
+
+
+@pytest.mark.asyncio
+async def test_load_ready_build_facts_returns_open_status(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
     repository = _repo(db_session)
-    assert await repository.try_load_for_completion(999999) is None
 
     pending_id = await _enqueue(
         db_session,
@@ -270,78 +264,9 @@ async def test_try_load_for_completion_returns_none_for_missing_or_open(
     )
     await db_session.commit()
 
-    assert await repository.try_load_for_completion(pending_id) is None
-
-
-@pytest.mark.asyncio
-async def test_try_load_resolves_profile_from_source_name_registry(
-    db_session: AsyncSession,
-    sample_source: NewsSource,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """spec #8: profile は ``SOURCES[observed.source_name]`` から直接引かれる。
-
-    repository の旧 DI seam (resolver adapter) が消えた後、表層列
-    ``source_name`` 経由で SOURCES を引いた値がそのまま ``ready.profile`` に
-    流れることを動作で pin する (registry を test 単位で差し替えて、
-    ``HTML_TITLE_POLICY`` が ``DEFAULT_POLICY`` と区別される寄り辺を作る)。
-    """
-    monkeypatch.setitem(
-        SOURCES,
-        sample_source.name,
-        _StubArticleSource(
-            name=sample_source.name, completion_policy=HTML_TITLE_POLICY
-        ),
-    )
-    pending_id = await _enqueue(
-        db_session,
-        source_id=sample_source.id,
-        source_name=sample_source.name,
-        url="https://example.com/p/profile-registry",
-        ready_at=datetime.now(UTC) - timedelta(seconds=1),
-    )
-    await db_session.commit()
-    ready = await _claim_one(db_session, pending_id)
-
-    assert ready.profile is HTML_TITLE_POLICY
-
-
-@pytest.mark.asyncio
-async def test_try_load_raises_keyerror_for_unregistered_source(
-    db_session: AsyncSession,
-    sample_source: NewsSource,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """spec #9b: registry 未登録 source は ``KeyError`` で上位に伝播する。
-
-    ``DEFAULT_POLICY`` fallback (旧 ``SOURCES.get(name) or DEFAULT_POLICY``)
-    は drift 隠蔽になるため明示的に廃止 (``[[feedback_failure_visibility]]``)。
-    """
-    # まず Stage 1 投入 (sample_source は SOURCES 未登録だが、enqueue は
-    # composite FK のみで成立する)。
-    pending_id = await _enqueue(
-        db_session,
-        source_id=sample_source.id,
-        source_name=sample_source.name,
-        url="https://example.com/p/drift",
-        ready_at=datetime.now(UTC) - timedelta(seconds=1),
-    )
-    await db_session.commit()
-    # SOURCES に万一登録があっても fail-fast を強制するため、明示的に消す。
-    monkeypatch.delitem(SOURCES, sample_source.name, raising=False)
-    # claim までは通る (DB 更新のみ)。try_load で profile lookup が走る。
-    repository = _repo(db_session)
-    claim_now = datetime.now(UTC)
-    ids = await repository.claim_ready_batch(
-        limit=10,
-        now=claim_now,
-        leased_until=claim_now + timedelta(minutes=5),
-    )
-    await db_session.commit()
-    assert pending_id in ids
-
-    with pytest.raises(KeyError):
-        await repository.try_load_for_completion(pending_id)
+    target = await repository.load_ready_build_facts(pending_id)
+    assert target is not None
+    assert target.status == "open"
 
 
 # ---------------------------------------------------------------------------

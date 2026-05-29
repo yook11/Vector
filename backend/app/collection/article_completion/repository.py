@@ -8,11 +8,11 @@ from datetime import datetime
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.collection.article_acquisition.strategy import SOURCES
-from app.collection.article_completion.ready import ReadyForArticleCompletion
+from app.collection.article_completion.ready import (
+    ArticleCompletionReadyBuildFacts,
+    ReadyForArticleCompletion,
+)
 from app.collection.domain.analyzable_article import AnalyzableArticle
-from app.collection.domain.canonical_article_url import CanonicalArticleUrl
-from app.collection.domain.observed_article import ObservedArticle
 from app.collection.persistence.article_store import ArticleStore
 from app.models.incomplete_article import IncompleteArticle as IncompleteArticleORM
 
@@ -43,37 +43,43 @@ class ArticleCompletionRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def try_load_for_completion(
+    async def load_ready_build_facts(
         self, pending_id: int
-    ) -> ReadyForArticleCompletion | None:
-        """``status='running'`` の pending 行だけを Ready として物体化する。"""
+    ) -> ArticleCompletionReadyBuildFacts | None:
+        """Ready 構築に必要な pending 行の DB 事実を取得する。"""
         stmt = (
-            select(IncompleteArticleORM)
-            .where(
-                IncompleteArticleORM.id == pending_id,
-                IncompleteArticleORM.status == "running",
+            select(
+                IncompleteArticleORM.id,
+                IncompleteArticleORM.source_id,
+                IncompleteArticleORM.source_name,
+                IncompleteArticleORM.status,
+                IncompleteArticleORM.staged_attributes,
+                IncompleteArticleORM.url,
+                IncompleteArticleORM.attempt_count,
             )
+            .where(IncompleteArticleORM.id == pending_id)
             .limit(1)
         )
-        row = (await self._session.execute(stmt)).scalar_one_or_none()
+        row = (await self._session.execute(stmt)).first()
         if row is None:
             return None
-
-        raw = dict(row.staged_attributes or {})
-        # Identity は表層列が authoritative。
-        # ObservedArticle の alias に合わせて注入する。
-        raw["sourceName"] = str(row.source_name)
-        raw["source_url"] = str(row.url)
-        observed = ObservedArticle.model_validate(raw)
-        source_url = CanonicalArticleUrl(str(row.url))
-        profile = SOURCES[observed.source_name].completion_policy
-        return ReadyForArticleCompletion(
-            pending_id=row.id,
-            source_id=row.source_id,
-            attempt_count=row.attempt_count,
-            observed=observed,
-            profile=profile,
-            source_url=source_url,
+        (
+            row_id,
+            source_id,
+            source_name,
+            status,
+            staged_attributes,
+            source_url,
+            attempt_count,
+        ) = row
+        return ArticleCompletionReadyBuildFacts(
+            pending_id=row_id,
+            source_id=source_id,
+            source_name=source_name,
+            status=status,
+            staged_attributes=dict(staged_attributes or {}),
+            source_url=str(source_url),
+            attempt_count=attempt_count,
         )
 
     async def claim_ready_batch(

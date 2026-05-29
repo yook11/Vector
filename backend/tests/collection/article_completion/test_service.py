@@ -137,16 +137,15 @@ async def _load_ready(
 ) -> ReadyForArticleCompletion:
     """Task 層と同じく ``try_advance_from`` で厚い Ready を構築する。
 
-    profile は repository が ``SOURCES[source_name]`` 経由で引く。本テストでは
-    production registry の ``tc_source`` 名前一致エントリ (TechCrunchSource =
-    DEFAULT_POLICY) を経由する。差し替えたい test は ``monkeypatch.setitem``
-    で SOURCES エントリを上書きしてから呼ぶ。
+    profile は source registry helper が ``SOURCES[source_name]`` 経由で引く。
+    本テストでは production registry の ``tc_source`` 名前一致エントリ
+    (TechCrunchSource = DEFAULT_POLICY) を経由する。差し替えたい test は
+    ``monkeypatch.setitem`` で SOURCES エントリを上書きしてから呼ぶ。
     """
     ready = await ReadyForArticleCompletion.try_advance_from(
         pending_id=pending_id,
         repo=ArticleCompletionRepository(db_session),
     )
-    assert ready is not None
     return ready
 
 
@@ -283,7 +282,7 @@ async def test_success_persists_extracted_body_and_published_at(
     html_published_at = datetime(2026, 5, 1, 9, 30, 0, tzinfo=UTC)
     # 観測 published=None で HTML published_at を fallback 経路で流入させ、
     # HTML_TITLE_POLICY (title=html_preferred) で HTML title を採用させる。
-    # repository は ``SOURCES[name].completion_policy`` 直叩きになったため、
+    # registry helper は ``SOURCES[name].completion_policy`` 経由で解決するため、
     # SOURCES の TechCrunch エントリ (production DEFAULT_POLICY) を test
     # 単位に置き換える。
     monkeypatch.setitem(

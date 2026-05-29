@@ -7,15 +7,14 @@ task は処理開始時に ``ReadyForArticleCompletion.try_advance_from`` で厚
 
 - Service 内部 (HTTP 取得 / DB 永続化 / 各失敗 reason_code):
   ``tests/collection/article_completion/test_service.py``
-- precondition gateway (``status='running'`` 判定 / Ready 物体化):
-  ``ArticleCompletionRepository.try_load_for_completion`` の責務 →
+- precondition gateway (pending lifecycle 判定 / Ready 構築):
   ``tests/collection/article_completion/test_repository.py``
 - 下流 Stage 3 は ID-only ``CurationTrigger`` を kiq に渡すのみ
 
 検証する task 不変条件:
 
-- precondition 未充足 (``try_advance_from`` が ``None``) → skip log + ``None``
-  返却、Service 不構築 / chain 発火せず
+- Ready build blocked → skipped audit + ``None`` 返却、Service 不構築 / chain 不発火
+- Ready build failed → failed audit 後に re-raise、Service 不構築 / chain 不発火
 - ``int`` (article_id) → ``curate_content.kiq`` を
   ``CurationTrigger(article_id)`` で発火 + success dict 返却
 - ``None`` (lease 衝突 / 永続失敗 / 一時失敗 / race-loss) → ``None``
@@ -30,7 +29,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.collection.article_completion.ready import ReadyForArticleCompletion
+from app.collection.article_completion.ready import (
+    ArticleCompletionReadyBuildPendingMissingError,
+    ReadyForArticleCompletion,
+)
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import (
     ObservedArticle,
@@ -39,6 +41,7 @@ from app.collection.domain.observed_article import (
 )
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.sources.article_completion_policy import DEFAULT_POLICY
+from app.collection.sources.errors import SourceNotRegisteredError
 from app.collection.sources.source_name import SourceName
 from app.queue.messages.curation import CurationTrigger
 from app.queue.tasks.completion import scrape_html_body
@@ -46,8 +49,8 @@ from app.queue.tasks.completion import scrape_html_body
 _SERVICE_EXECUTE = (
     "app.collection.article_completion.service.ArticleCompletionService.execute"
 )
-_SERVICE_CLS = "app.collection.article_completion.service.ArticleCompletionService"
-_CURATE_CONTENT_KIQ = "app.queue.tasks.curation.curate_content.kiq"
+_SERVICE_CLS = "app.queue.tasks.completion.ArticleCompletionService"
+_CURATE_CONTENT_KIQ = "app.queue.tasks.completion.curate_content.kiq"
 
 
 def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> MagicMock:
@@ -78,32 +81,98 @@ def _fixed_ready(pending_id: int = 42) -> ReadyForArticleCompletion:
     )
 
 
-def _patch_try_advance_from(ready: ReadyForArticleCompletion | None) -> object:
+def _patch_try_advance_from(
+    result: ReadyForArticleCompletion | Exception,
+) -> object:
     """``ReadyForArticleCompletion.try_advance_from`` を固定値返却に patch する。"""
+    if isinstance(result, Exception):
+        mock = AsyncMock(side_effect=result)
+    else:
+        mock = AsyncMock(return_value=result)
     return patch.object(
         ReadyForArticleCompletion,
         "try_advance_from",
-        new=AsyncMock(return_value=ready),
+        new=mock,
     )
 
 
 @pytest.mark.asyncio
-async def test_precondition_not_met_skips_and_does_not_call_service(
+async def test_ready_build_skipped_error_audits_and_does_not_call_service(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """``try_advance_from`` が ``None`` → skip + ``None``、Service / chain 不発火。
-
-    案 3: precondition (未 claim / sweep 済 / close 済 / delete 済) の判定は
-    task 冒頭の Ready 自構築時に行われ、未充足なら Service を消費せず短絡する。
-    """
+    """Ready build skipped error → audit + return、Service / chain 不発火。"""
+    exc = ArticleCompletionReadyBuildPendingMissingError()
     with (
-        _patch_try_advance_from(None),
+        _patch_try_advance_from(exc),
+        patch("app.queue.tasks.completion.ArticleCompletionAuditRepository") as audit,
         patch(_SERVICE_CLS) as mock_svc_cls,
         patch(_CURATE_CONTENT_KIQ) as mock_kiq,
     ):
+        audit.return_value.append_ready_build_error = AsyncMock()
         result = await scrape_html_body(pending_id=999, ctx=_ctx(session_factory))
 
     assert result is None
+    audit.return_value.append_ready_build_error.assert_awaited_once_with(
+        pending_id=999,
+        exc=exc,
+        facts=None,
+    )
+    mock_svc_cls.assert_not_called()
+    mock_kiq.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ready_build_failed_error_audits_and_reraises(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Ready build failed error は audit 後に元例外を raise する。"""
+    exc = SourceNotRegisteredError()
+
+    with (
+        _patch_try_advance_from(exc),
+        patch(
+            "app.queue.tasks.completion._append_ready_build_error_audit",
+            new=AsyncMock(),
+        ) as audit_error,
+        patch(_SERVICE_CLS) as mock_svc_cls,
+        patch(_CURATE_CONTENT_KIQ) as mock_kiq,
+    ):
+        with pytest.raises(SourceNotRegisteredError):
+            await scrape_html_body(pending_id=999, ctx=_ctx(session_factory))
+
+    audit_error.assert_awaited_once_with(
+        session_factory,
+        pending_id=999,
+        exc=exc,
+    )
+    mock_svc_cls.assert_not_called()
+    mock_kiq.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ready_build_unexpected_exception_audits_and_reraises(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Ready 判定中の想定外例外も fallback audit 後に元例外を raise する。"""
+    exc = RuntimeError("ready build exploded")
+
+    with (
+        _patch_try_advance_from(exc),
+        patch(
+            "app.queue.tasks.completion._append_ready_build_error_audit",
+            new=AsyncMock(),
+        ) as audit_error,
+        patch(_SERVICE_CLS) as mock_svc_cls,
+        patch(_CURATE_CONTENT_KIQ) as mock_kiq,
+    ):
+        with pytest.raises(RuntimeError):
+            await scrape_html_body(pending_id=999, ctx=_ctx(session_factory))
+
+    audit_error.assert_awaited_once_with(
+        session_factory,
+        pending_id=999,
+        exc=exc,
+    )
     mock_svc_cls.assert_not_called()
     mock_kiq.assert_not_awaited()
 

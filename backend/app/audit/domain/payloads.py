@@ -78,6 +78,8 @@ class CompletionPayload(BasePipelineEventPayload):
     kind: Literal["completion"] = "completion"
     failure_kind: str | None = None
     failure_action: str | None = None
+    pending_id: int | None = None
+    pending_status: str | None = None
     canonical_url: str | None = None
     # completion の claim / retry 制御に由来する snapshot。
     attempt_count: int | None = None
