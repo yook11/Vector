@@ -99,13 +99,11 @@ class ObservedArticle(BaseModel):
 
     model_config = ConfigDict(frozen=True, populate_by_name=True)
 
-    # identity: JSONB 非永続 (列が authoritative)。in-memory では必須。
-    # 表層列 ``incomplete_articles.source_name`` / ``url`` が identity の
-    # SSoT (spec ``Pending source identity refactor.md`` #1 倒立解消)。
-    # ``alias=`` ではなく validation/serialization を分離するのは、Pylance が
-    # ``populate_by_name=True`` を尊重せず ``alias`` 側でしか __init__ 引数を
-    # 受け付けないと誤判定するため。分離すれば __init__ シグネチャは Python
-    # 名となり、runtime も ``populate_by_name=True`` で両名受け付ける。
+    # source_name / source_url は表層列が authoritative なため JSONB 非永続
+    # (exclude=True)。in-memory では運搬に必須。
+    # alias= でなく validation/serialization を分離するのは、Pylance が
+    # populate_by_name=True を無視し alias 側しか __init__ 引数に認めない
+    # 誤検出を避けるため (runtime は両名受け付ける)。
     source_name: SourceName = Field(
         validation_alias="sourceName",
         serialization_alias="sourceName",
@@ -131,15 +129,11 @@ class ObservedArticle(BaseModel):
         published_at: PublishedAt | None,
         origin: ObservedOrigin,
     ) -> Self:
-        """素材 + origin から ObservedArticle を確定構築する (Stage 1 converter 便宜)。
+        """素材 + origin から ObservedArticle を構築する (Stage 1 converter 用)。
 
-        Stage 1 converter 経由では per-source observation = 単一 origin で全 field を
-        stamp する。本 factory は ``ObservedField`` lift を 3 回 / ``origin=origin``
-        を 3 回 converter に散らさないための置き場で、VO 不変条件ではない
-        (Stage 2 HTML 補完では per-field origin 混在が起きる)。
-
-        title 不在は precondition で raise 済みのため required。``body`` の truthy
-        判定 (空文字を None 扱い) は converter 元コードの semantics 維持。
+        単一 origin で全 field を stamp する便宜 factory で、VO 不変条件ではない
+        (Stage 2 補完では per-field origin が混在する)。title は precondition で
+        非空が保証済みのため required。
         """
         return cls(
             source_name=source_name,
@@ -161,44 +155,20 @@ class ObservedArticle(BaseModel):
         source_name: SourceName,
         source_url: CanonicalArticleUrl,
     ) -> Self:
-        """JSONB へ退避した観測値に authoritative identity を戻して復元する。"""
-        try:
-            raw = dict(staged_attributes)
-        except (TypeError, ValueError) as exc:
+        """JSONB の観測 content をほどき、検証済み identity を差し戻して復元する。"""
+        if not isinstance(staged_attributes, Mapping):
             raise ObservedArticleInvalidError(
                 reason=ObservedArticleInvalidReason.STAGED_ATTRIBUTES_NOT_OBJECT
-            ) from exc
-        raw["sourceName"] = str(source_name)
-        raw["source_url"] = source_url
+            )
+        # identity は JSONB 非永続なので検証済み VO を差し戻す。
+        content_with_identity = {
+            **staged_attributes,
+            "source_name": str(source_name),
+            "source_url": source_url,
+        }
         try:
-            return cls.model_validate(raw)
+            return cls.model_validate(content_with_identity)
         except ValidationError as exc:
             raise ObservedArticleInvalidError(
                 reason=_classify_observed_article_error(exc)
             ) from exc
-
-    def to_audit_fields(self) -> dict[str, bool | int | str | None]:
-        """structured log / audit 向けの per-field 充足スナップショット。
-
-        Stage 1 棄却 log (``article_conversion_rejected``) と key を揃え、
-        Observed 成立 / 変換失敗を同じ key 集合で集計可能にする。
-
-        値そのもの (title 文字列 / body 本文 / published_at 日時) は出さない:
-        body は MB スケールになりうる外部入力でログ汚染 / PII / ストレージコスト
-        リスクが大きく、Stage 1 監視に必要なのは「何が取れて何が欠けたか」だけ。
-        per-field origin は ``ObservedField`` 設計どおり field 単位で出す
-        (Stage 2 HTML 補完で origin が混在する将来に備える)。
-        """
-        return {
-            "has_title": self.title is not None,
-            "title_origin": (
-                str(self.title.origin) if self.title is not None else None
-            ),
-            "has_body": self.body is not None,
-            "body_origin": (str(self.body.origin) if self.body is not None else None),
-            "body_length": (len(self.body.value) if self.body is not None else None),
-            "has_published_at": self.published_at is not None,
-            "published_at_origin": (
-                str(self.published_at.origin) if self.published_at is not None else None
-            ),
-        }

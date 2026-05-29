@@ -189,6 +189,14 @@ def convert_fetched_article(
         "fetched_article_converted",
         type="observed",
         source_name=str(source_name),
-        **observed.to_audit_fields(),
+        has_title=observed.title is not None,
+        title_origin=str(observed.title.origin) if observed.title else None,
+        has_body=observed.body is not None,
+        body_origin=str(observed.body.origin) if observed.body else None,
+        body_length=len(observed.body.value) if observed.body else None,
+        has_published_at=observed.published_at is not None,
+        published_at_origin=(
+            str(observed.published_at.origin) if observed.published_at else None
+        ),
     )
     return observed

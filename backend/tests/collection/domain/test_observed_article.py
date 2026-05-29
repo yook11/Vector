@@ -116,58 +116,6 @@ def test_frozen_instance_rejects_mutation() -> None:
         observed.source_name = SourceName("Other")  # type: ignore[misc]
 
 
-def test_to_audit_fields_handles_missing_observed_fields() -> None:
-    """全 ObservedField が None の状態でも boolean / origin / length は欠けず
-    None で揃う (VO 全状態の非破綻保証)。
-
-    converter 経路では title なし ObservedArticle は基本作られないが、VO の型
-    は 3 field 全て Optional を許す。``to_audit_fields()`` が VO の全状態に
-    対して落ちず構造化 dict を返すことを保証する。
-    """
-    observed = ObservedArticle(
-        source_name=SourceName("TechCrunch"),
-        source_url=CanonicalArticleUrl(_URL),
-        title=None,
-        body=None,
-        published_at=None,
-    )
-    assert observed.to_audit_fields() == {
-        "has_title": False,
-        "title_origin": None,
-        "has_body": False,
-        "body_origin": None,
-        "body_length": None,
-        "has_published_at": False,
-        "published_at_origin": None,
-    }
-
-
-def test_to_audit_fields_keeps_per_field_origin_and_body_value_length() -> None:
-    """per-field origin が独立に出力され、body_length は ObservedField.value
-    の長さに一致する。
-
-    実装者が後で単一 origin に潰す (例: ``origin = self.title.origin``) と
-    気付けないリスクを抑える。混在 origin (title=feed / body=listing /
-    published_at=sitemap) で各 origin が独立に出ることを固定。
-    """
-    body_text = "x" * 123
-    observed = ObservedArticle(
-        source_name=SourceName("TechCrunch"),
-        source_url=CanonicalArticleUrl(_URL),
-        title=ObservedField(value="T", origin=ObservedOrigin.feed),
-        body=ObservedField(value=body_text, origin=ObservedOrigin.listing),
-        published_at=ObservedField(value=_PUB, origin=ObservedOrigin.sitemap),
-    )
-    audit = observed.to_audit_fields()
-    assert audit["has_title"] is True
-    assert audit["title_origin"] == "feed"
-    assert audit["has_body"] is True
-    assert audit["body_origin"] == "listing"
-    assert audit["body_length"] == len(body_text)
-    assert audit["has_published_at"] is True
-    assert audit["published_at_origin"] == "sitemap"
-
-
 class TestObservedArticleInvalidReason:
     """復元失敗を field 単位 reason で分類することの所有テスト。
 
