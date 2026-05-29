@@ -2,8 +2,8 @@
 
 取れた事実だけを持つ (要否 / 優先は ``ArticleCompletionPolicy`` が決める)。
 ``incomplete_articles.staged_attributes`` (JSONB) に焼かれ、cron poller で
-再 hydrate される (``model_dump(mode="json", by_alias=True)`` で永続化、
-``model_validate`` で復元)。
+再 hydrate される (``to_staged_attributes`` で永続化、
+``from_staged_attributes`` で復元)。
 
 - identity ``source_name`` / ``source_url`` は表層列が authoritative
   (``incomplete_articles.source_name`` NOT NULL + composite FK /
@@ -147,6 +147,14 @@ class ObservedArticle(BaseModel):
             ),
         )
 
+    def to_staged_attributes(self) -> dict[str, Any]:
+        """``staged_attributes`` (JSONB) へ焼く永続化形式に変換する。
+
+        identity (``source_name`` / ``source_url``) は ``exclude=True`` のため
+        含まれない (表層列が authoritative)。``from_staged_attributes`` の逆写像。
+        """
+        return self.model_dump(mode="json", by_alias=True)
+
     @classmethod
     def from_staged_attributes(
         cls,
@@ -155,19 +163,19 @@ class ObservedArticle(BaseModel):
         source_name: SourceName,
         source_url: CanonicalArticleUrl,
     ) -> Self:
-        """JSONB の観測 content をほどき、検証済み identity を差し戻して復元する。"""
+        """JSONB 永続化形式をほどき、検証済み identity を差し戻して復元する。"""
         if not isinstance(staged_attributes, Mapping):
             raise ObservedArticleInvalidError(
                 reason=ObservedArticleInvalidReason.STAGED_ATTRIBUTES_NOT_OBJECT
             )
         # identity は JSONB 非永続なので検証済み VO を差し戻す。
-        content_with_identity = {
+        observed_input = {
             **staged_attributes,
             "source_name": str(source_name),
             "source_url": source_url,
         }
         try:
-            return cls.model_validate(content_with_identity)
+            return cls.model_validate(observed_input)
         except ValidationError as exc:
             raise ObservedArticleInvalidError(
                 reason=_classify_observed_article_error(exc)

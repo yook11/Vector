@@ -48,7 +48,7 @@ def _staged_attributes(
             origin=ObservedOrigin.feed,
         ),
     )
-    return observed.model_dump(mode="json", by_alias=True)
+    return observed.to_staged_attributes()
 
 
 def _facts(

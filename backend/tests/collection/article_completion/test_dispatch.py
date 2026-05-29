@@ -82,7 +82,7 @@ def _attrs(
     source_name: SourceName,
     url: str = "https://example.com/disp/staged",
 ) -> dict:
-    return _observed(source_name, url).model_dump(mode="json", by_alias=True)
+    return _observed(source_name, url).to_staged_attributes()
 
 
 async def _make_pending(

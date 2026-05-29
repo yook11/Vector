@@ -43,7 +43,7 @@ class IncompleteArticleRepository:
                 # 表層列に焼かれる (倒立解消)。
                 source_name=observed.source_name,
                 status="open",
-                staged_attributes=observed.model_dump(mode="json", by_alias=True),
+                staged_attributes=observed.to_staged_attributes(),
                 ready_at=ready_at,
                 leased_until=None,
                 attempt_count=0,

@@ -117,7 +117,7 @@ def _attrs(source_name: SourceName) -> dict:
         url="https://example.com/p/staged",
         source_name=source_name,
         title="Pending Title",
-    ).model_dump(mode="json", by_alias=True)
+    ).to_staged_attributes()
 
 
 async def _enqueue(

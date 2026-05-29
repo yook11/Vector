@@ -5,7 +5,7 @@
 1. identity (``source_name`` / ``source_url``) は ``Field(exclude=True)`` で
    JSONB に焼かれない (二重管理排除。表層列 ``source_name`` / ``url`` が唯一の
    authoritative)。in-memory では必須。
-2. round-trip 恒等: ``model_dump(by_alias=True)`` → identity 注入 →
+2. round-trip 恒等: ``to_staged_attributes`` → identity 注入 →
    ``model_validate`` で同値復元 (Stage1 enqueue → Stage2 hydrate)。
 3. strict 性: identity (sourceName) 欠落 raw は ``ValidationError``
    (Optional identity を持たない = ACL が必ず注入する契約)。
@@ -44,11 +44,11 @@ def _observed() -> ObservedArticle:
     )
 
 
-def test_identity_is_excluded_from_jsonb_dump() -> None:
-    """identity (``source_name`` / ``source_url``) は ``Field(exclude=True)``
-    で永続化対象外 (drift 排除)。表層列が SSoT で JSONB は事実だけを焼く。
+def test_to_staged_attributes_omits_identity() -> None:
+    """``to_staged_attributes`` は identity (``source_name`` / ``source_url``) を
+    ``exclude=True`` で焼かず、content (title/body/publishedAt) だけを永続化する。
     """
-    dumped = _observed().model_dump(mode="json", by_alias=True)
+    dumped = _observed().to_staged_attributes()
     assert "source_url" not in dumped
     assert "sourceUrl" not in dumped
     assert "source_name" not in dumped
@@ -64,7 +64,7 @@ def test_round_trip_identity_with_acl_injected_identity() -> None:
     raw に注入する責務を負う。本 test は wire 契約をその責務込みで pin する。
     """
     original = _observed()
-    raw = original.model_dump(mode="json", by_alias=True)
+    raw = original.to_staged_attributes()
     raw["sourceName"] = "TechCrunch"  # repository が source_name 列から注入
     raw["source_url"] = _URL  # repository が url 列から注入
     restored = ObservedArticle.model_validate(raw)
@@ -76,7 +76,7 @@ def test_round_trip_identity_with_acl_injected_identity() -> None:
 def test_from_staged_attributes_restores_authoritative_identity() -> None:
     """JSONB 退避値に表層 identity を戻して ObservedArticle に復元する。"""
     original = _observed()
-    staged = original.model_dump(mode="json", by_alias=True)
+    staged = original.to_staged_attributes()
 
     restored = ObservedArticle.from_staged_attributes(
         staged,
