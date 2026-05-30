@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.collection.article_acquisition import service as service_module
 from app.collection.article_acquisition.errors import (
-    AcquisitionExternalFetchTerminalError,
+    AcquisitionExternalFetchError,
     AcquisitionUnreadableResponseError,
     UnreadableResponseError,
 )
@@ -509,7 +509,7 @@ async def test_external_fetch_error_is_wrapped_to_acquisition_marker(
     origin = FetchAccessDeniedError(status_code=403, reason="forbidden")
     svc = ArticleAcquisitionService(session_factory, _RaisingReadSource(origin))
 
-    with pytest.raises(AcquisitionExternalFetchTerminalError) as raised:
+    with pytest.raises(AcquisitionExternalFetchError) as raised:
         await svc.execute(vb_source.id)
 
     assert raised.value.code == "fetch_access_denied"

@@ -24,22 +24,12 @@ from app.collection.article_completion.retry_policy import (
 )
 from app.collection.external_fetch_errors import (
     ExternalFetchError,
-    FetchAccessDeniedError,
-    FetchContentTypeMismatchError,
     FetchGatewayError,
-    FetchLegalBlockError,
     FetchNetworkError,
     FetchOriginServerError,
     FetchRateLimitedError,
-    FetchRedirectBlockedError,
-    FetchRedirectLoopError,
     FetchRequestTimeoutError,
-    FetchResourceNotFoundError,
-    FetchResponseTooLargeError,
     FetchRetryableStatusError,
-    FetchRobotsDisallowedError,
-    FetchRobotsUnavailableError,
-    FetchSsrfBlockedError,
     FetchTimeoutError,
     FetchUnexpectedStatusError,
 )
@@ -177,22 +167,11 @@ ScrapeDecision = Terminal | Retryable
 # ExternalFetchError の分類
 # ---------------------------------------------------------------------------
 
-# 再試行しても結果が変わらない origin failure。
-_TERMINAL_FETCH_ERROR_TYPES: tuple[type[ExternalFetchError], ...] = (
-    FetchAccessDeniedError,
-    FetchLegalBlockError,
-    FetchResourceNotFoundError,
-    FetchSsrfBlockedError,
-    FetchRobotsDisallowedError,
-    FetchRobotsUnavailableError,
-    FetchRedirectBlockedError,
-    FetchRedirectLoopError,
-    FetchResponseTooLargeError,
-    FetchContentTypeMismatchError,
-)
-
-# ``FetchOriginServerError`` は instance state (reason / retry_after_seconds) を
-# 読むため表に入れず ``classify_external_fetch_error`` 内で明示分岐する。
+# retry 可否は origin error 自身の ``retryable`` (失敗の性質、SSoT) が答える。
+# ここが持つのは段固有の handling = どの backoff policy で再投入するかという
+# scheduling のみ。``FetchOriginServerError`` は instance state (reason /
+# retry_after_seconds) を読むため表に入れず ``classify_external_fetch_error``
+# 内で明示分岐する。
 _RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY: Final[
     Mapping[RetryPolicy, tuple[type[ExternalFetchError], ...]]
 ] = MappingProxyType(
@@ -211,23 +190,25 @@ _RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY: Final[
     }
 )
 
-# exact type → decision の lookup 表。
-_FETCH_DISPOSITION_BY_TYPE: dict[type[ExternalFetchError], ScrapeDecision] = {
-    **{t: Terminal(reason_code=t.CODE) for t in _TERMINAL_FETCH_ERROR_TYPES},
-    **{
-        t: Retryable(reason_code=t.CODE, policy=policy)
-        for policy, types in _RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY.items()
-        for t in types
-    },
+# retryable origin error の exact type → backoff policy 付き Retryable の lookup 表。
+_FETCH_RETRYABLE_DISPOSITION_BY_TYPE: dict[type[ExternalFetchError], Retryable] = {
+    t: Retryable(reason_code=t.CODE, policy=policy)
+    for policy, types in _RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY.items()
+    for t in types
 }
 
 
 def classify_external_fetch_error(exc: ExternalFetchError) -> ScrapeDecision:
     """origin fetch error を completion scrape 用 decision に分類する。
 
-    ``FetchOriginServerError`` は ``reason`` / ``retry_after_seconds`` を読むため
-    明示分岐する。未登録 error は保守的に ``UNKNOWN_POLICY`` retry とする。
+    retry 可否は origin の ``retryable`` (SSoT) に従う。retryable=False は段に依らず
+    ``Terminal``。retryable=True のうち ``FetchOriginServerError`` は ``reason`` /
+    ``retry_after_seconds`` を読むため明示分岐し、残りは段固有の backoff policy 表で
+    引く (未登録は保守的に ``UNKNOWN_POLICY``)。
     """
+    if not exc.retryable:
+        return Terminal(reason_code=exc.CODE)
+
     if isinstance(exc, FetchOriginServerError):
         if exc.reason == "service_unavailable" and exc.retry_after_seconds is not None:
             return Retryable(
@@ -237,7 +218,7 @@ def classify_external_fetch_error(exc: ExternalFetchError) -> ScrapeDecision:
             )
         return Retryable(reason_code=exc.CODE, policy=OUTAGE_POLICY)
 
-    decision = _FETCH_DISPOSITION_BY_TYPE.get(type(exc))
+    decision = _FETCH_RETRYABLE_DISPOSITION_BY_TYPE.get(type(exc))
     if decision is not None:
         return decision
     return Retryable(reason_code=exc.CODE, policy=UNKNOWN_POLICY)

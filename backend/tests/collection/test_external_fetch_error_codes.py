@@ -10,6 +10,12 @@
   ``str(exc)`` が非空であることを各 subclass で assert (wrap 経路の監査 / ログ
   が空文字にならない構造保証)。明示 message を渡した場合はそれが優先される
   (additive 非破壊) ことも合わせて固定する。
+- ``retryable`` (再実行で結果が変わりうるか=失敗の性質) を origin error 自身が
+  持つ SSoT 契約を固定する。全 concrete subclass が ``retryable: bool`` を宣言
+  (base は注釈のみなので宣言漏れは Red)、かつ retryable / terminal の CODE 集合を
+  spec として pin する。CODE 文字列で pin する理由: CODE は ``outcome_code`` に
+  焼かれる外部契約で、class rename では変わらず分類 drift でのみ落ちる自己記述的
+  oracle。
 """
 
 from __future__ import annotations
@@ -122,3 +128,59 @@ def test_explicit_message_takes_precedence(
     """明示 message を渡せばそれが ``str(exc)`` になる (additive 非破壊)。"""
     exc = cls("explicit boom", **kwargs)  # type: ignore[arg-type]
     assert str(exc) == "explicit boom"
+
+
+# ``retryable`` SSoT 契約 (CODE 文字列で pin する spec)。再実行で結果が変わりうる
+# CODE (8) と、再実行しても同じ結果になる CODE (10) で family 18 を過不足なく分割
+# する。class ではなく CODE 集合で固定する: CODE は outcome_code に焼かれる外部契約で
+# class rename に不変、分類 drift でのみ落ちる自己記述的 oracle。
+_RETRYABLE_CODES = frozenset(
+    {
+        "fetch_timeout",
+        "fetch_network",
+        "fetch_origin_server_error",
+        "fetch_gateway_failure",
+        "fetch_request_timeout",
+        "fetch_rate_limited",
+        "fetch_retryable_status",
+        "fetch_unexpected_status",
+    }
+)
+_TERMINAL_CODES = frozenset(
+    {
+        "fetch_access_denied",
+        "fetch_legal_block",
+        "fetch_resource_not_found",
+        "fetch_ssrf_blocked",
+        "fetch_robots_disallowed",
+        "fetch_robots_unavailable",
+        "fetch_redirect_blocked",
+        "fetch_redirect_loop",
+        "fetch_response_too_large",
+        "fetch_content_type_mismatch",
+    }
+)
+
+
+def test_every_subclass_declares_retryable_bool() -> None:
+    """全 concrete subclass が ``retryable: bool`` を宣言する (base は注釈のみ)。
+
+    base に default を持たせていないため、宣言漏れの subclass は ``retryable``
+    属性を欠き ``getattr(..., None)`` が ``None`` を返して落ちる (totality)。
+    """
+    for cls in _concrete_subclasses(ExternalFetchError):
+        flag = getattr(cls, "retryable", None)
+        assert isinstance(flag, bool), f"{cls.__name__}: retryable bool 未宣言"
+
+
+def test_retryable_terminal_code_partition_matches_spec() -> None:
+    """retryable / terminal の CODE 集合が spec と一致し family を分割被覆する。"""
+    subclasses = _concrete_subclasses(ExternalFetchError)
+    retryable_codes = {cls.CODE for cls in subclasses if cls.retryable}
+    terminal_codes = {cls.CODE for cls in subclasses if not cls.retryable}
+
+    assert retryable_codes == _RETRYABLE_CODES
+    assert terminal_codes == _TERMINAL_CODES
+    # spec 同士が交わらず family の全 CODE を覆う (分割被覆の二重化)。
+    assert _RETRYABLE_CODES.isdisjoint(_TERMINAL_CODES)
+    assert _RETRYABLE_CODES | _TERMINAL_CODES == {cls.CODE for cls in subclasses}

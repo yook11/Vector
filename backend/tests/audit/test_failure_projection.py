@@ -28,8 +28,7 @@ from app.audit.failure_projection import (
 )
 from app.audit.stages.completion import ArticleCompletionAuditRepository
 from app.collection.article_acquisition.errors import (
-    AcquisitionExternalFetchRecoverableError,
-    AcquisitionExternalFetchTerminalError,
+    AcquisitionExternalFetchError,
     AcquisitionUnreadableResponseError,
     UnreadableResponseError,
 )
@@ -150,7 +149,7 @@ def test_project_failure_returns_unknown_for_catch_all() -> None:
     ("exc", "expected"),
     [
         (
-            AcquisitionExternalFetchRecoverableError(
+            AcquisitionExternalFetchError(
                 origin_error=FetchGatewayError(status_code=502)
             ),
             FailureProjection(
@@ -162,7 +161,7 @@ def test_project_failure_returns_unknown_for_catch_all() -> None:
             ),
         ),
         (
-            AcquisitionExternalFetchTerminalError(
+            AcquisitionExternalFetchError(
                 origin_error=FetchAccessDeniedError(status_code=403, reason="forbidden")
             ),
             FailureProjection(
@@ -185,9 +184,14 @@ def test_project_failure_returns_unknown_for_catch_all() -> None:
         ),
     ],
 )
-def test_source_acquisition_marker_projection_reads_classvars(
+def test_source_acquisition_marker_projection_reads_marker_attrs(
     exc: BaseException, expected: FailureProjection
 ) -> None:
+    """統合 marker は instance ``RETRYABILITY`` を origin から導いて projection する。
+
+    gateway (retryable) と access_denied (terminal) を同一クラスで構築し、片方は
+    ``RETRYABLE`` 片方は ``NON_RETRYABLE`` に投影される (per-instance 導出の witness)。
+    """
     assert project_failure(exc) == expected
 
 

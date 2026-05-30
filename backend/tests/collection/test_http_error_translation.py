@@ -6,8 +6,10 @@
   テスト化する。
 - ``translate_fetch_exception``: httpx / SSRF guard 例外の振り分けを固定する
   (``TimeoutException`` を ``RequestError`` より先に判定することを含む)。
-- ``RECOVERABLE_FETCH_ERRORS``: 旧 ``TemporaryFetchError`` 発生条件の忠実訳で
-  あることを membership で固定する。
+
+retryable / terminal の分類は origin error 自身の ``retryable`` 属性 (SSoT) が
+持ち、その CODE 集合の spec-lock は ``test_external_fetch_error_codes.py`` が所有
+する。本 module は status / 例外 → origin error の写像のみを扱う。
 """
 
 from __future__ import annotations
@@ -16,7 +18,6 @@ import httpx
 import pytest
 
 from app.collection.article_acquisition.tools.http_error_translation import (
-    RECOVERABLE_FETCH_ERRORS,
     classify_fetch_status,
     translate_fetch_exception,
 )
@@ -155,22 +156,3 @@ def test_translate_unknown_exception_falls_back_to_network() -> None:
     """呼出側 except が広すぎて未知例外が来ても翻訳自体は落ちない。"""
     err = translate_fetch_exception(ValueError("surprise"), source_name="S")
     assert isinstance(err, FetchNetworkError)
-
-
-def test_recoverable_fetch_errors_composition() -> None:
-    """旧 ``TemporaryFetchError`` 発生条件の忠実訳であることを固定する。"""
-    assert set(RECOVERABLE_FETCH_ERRORS) == {
-        FetchTimeoutError,
-        FetchNetworkError,
-        FetchOriginServerError,
-        FetchGatewayError,
-        FetchRequestTimeoutError,
-        FetchRateLimitedError,
-        FetchRetryableStatusError,
-        FetchUnexpectedStatusError,
-    }
-    # bubble 側 (source 全体失敗) は recoverable に含めない。
-    assert FetchAccessDeniedError not in RECOVERABLE_FETCH_ERRORS
-    assert FetchResourceNotFoundError not in RECOVERABLE_FETCH_ERRORS
-    assert FetchLegalBlockError not in RECOVERABLE_FETCH_ERRORS
-    assert FetchSsrfBlockedError not in RECOVERABLE_FETCH_ERRORS

@@ -7,27 +7,7 @@ from typing import ClassVar
 
 from app.audit.domain.event import Stage
 from app.audit.failure_projection import FailureAction, Retryability
-from app.collection.external_fetch_errors import (
-    ExternalFetchError,
-    FetchAccessDeniedError,
-    FetchContentTypeMismatchError,
-    FetchGatewayError,
-    FetchLegalBlockError,
-    FetchNetworkError,
-    FetchOriginServerError,
-    FetchRateLimitedError,
-    FetchRedirectBlockedError,
-    FetchRedirectLoopError,
-    FetchRequestTimeoutError,
-    FetchResourceNotFoundError,
-    FetchResponseTooLargeError,
-    FetchRetryableStatusError,
-    FetchRobotsDisallowedError,
-    FetchRobotsUnavailableError,
-    FetchSsrfBlockedError,
-    FetchTimeoutError,
-    FetchUnexpectedStatusError,
-)
+from app.collection.external_fetch_errors import ExternalFetchError
 from app.logfire_exceptions import VectorDomainError
 
 
@@ -86,22 +66,31 @@ class SourceAcquisitionError(AcquisitionError):
         self.code = origin_error.CODE
 
 
-class AcquisitionExternalFetchRecoverableError(SourceAcquisitionError):
-    """再実行で回復しうる Stage 1 外部取得失敗。"""
+class AcquisitionExternalFetchError(SourceAcquisitionError):
+    """Stage 1 外部取得失敗 marker。
+
+    retry 可否は origin error 自身の ``retryable`` (失敗の性質、SSoT) から
+    per-instance で導く。``code`` と同じく origin から運ぶため leaf を分けない。
+    family の bool を audit の ``Retryability`` enum へ変換するのは marker の責務
+    (family を audit 語彙に結合させず段境界を保つ)。
+    """
 
     SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("code",)
     FAILURE_KIND: ClassVar[str] = "external_fetch"
-    RETRYABILITY: ClassVar[Retryability] = Retryability.RETRYABLE
     FAILURE_ACTION: ClassVar[FailureAction | None] = None
+    RETRYABILITY: Retryability  # per-instance (origin.retryable から導出)
 
-
-class AcquisitionExternalFetchTerminalError(SourceAcquisitionError):
-    """再実行しても同じ結果になる Stage 1 外部取得失敗。"""
-
-    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("code",)
-    FAILURE_KIND: ClassVar[str] = "external_fetch"
-    RETRYABILITY: ClassVar[Retryability] = Retryability.NON_RETRYABLE
-    FAILURE_ACTION: ClassVar[FailureAction | None] = None
+    def __init__(
+        self,
+        *,
+        origin_error: ExternalFetchError | UnreadableResponseError,
+    ) -> None:
+        super().__init__(origin_error=origin_error)
+        self.RETRYABILITY = (
+            Retryability.RETRYABLE
+            if isinstance(origin_error, ExternalFetchError) and origin_error.retryable
+            else Retryability.NON_RETRYABLE
+        )
 
 
 class AcquisitionUnreadableResponseError(SourceAcquisitionError):
@@ -113,42 +102,16 @@ class AcquisitionUnreadableResponseError(SourceAcquisitionError):
     FAILURE_ACTION: ClassVar[FailureAction | None] = None
 
 
-ACQUISITION_RECOVERABLE_FETCH_ERRORS: tuple[type[ExternalFetchError], ...] = (
-    FetchTimeoutError,
-    FetchNetworkError,
-    FetchOriginServerError,
-    FetchGatewayError,
-    FetchRequestTimeoutError,
-    FetchRateLimitedError,
-    FetchRetryableStatusError,
-    FetchUnexpectedStatusError,
-)
-"""Stage 1 で再実行により回復しうる外部取得 origin error。"""
-
-
-ACQUISITION_TERMINAL_FETCH_ERRORS: tuple[type[ExternalFetchError], ...] = (
-    FetchAccessDeniedError,
-    FetchLegalBlockError,
-    FetchResourceNotFoundError,
-    FetchSsrfBlockedError,
-    FetchRobotsDisallowedError,
-    FetchRobotsUnavailableError,
-    FetchRedirectBlockedError,
-    FetchRedirectLoopError,
-    FetchResponseTooLargeError,
-    FetchContentTypeMismatchError,
-)
-"""Stage 1 で再実行しても同じ結果になる外部取得 origin error。"""
-
-
 def map_origin_to_acquisition(
     exc: ExternalFetchError | UnreadableResponseError,
 ) -> SourceAcquisitionError:
-    """取得 / 読取 origin error を Stage 1 marker に詰め替える。"""
+    """取得 / 読取 origin error を Stage 1 marker に詰め替える。
+
+    retry 可否の分類は ``AcquisitionExternalFetchError`` が origin の
+    ``retryable`` から導くため、ここでは origin の種別だけで marker を選ぶ。
+    """
     if isinstance(exc, UnreadableResponseError):
         return AcquisitionUnreadableResponseError(origin_error=exc)
-    if isinstance(exc, ACQUISITION_RECOVERABLE_FETCH_ERRORS):
-        return AcquisitionExternalFetchRecoverableError(origin_error=exc)
-    if isinstance(exc, ACQUISITION_TERMINAL_FETCH_ERRORS):
-        return AcquisitionExternalFetchTerminalError(origin_error=exc)
+    if isinstance(exc, ExternalFetchError):
+        return AcquisitionExternalFetchError(origin_error=exc)
     raise TypeError(f"unmapped acquisition origin error: {type(exc).__qualname__}")

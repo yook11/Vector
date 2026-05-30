@@ -6,9 +6,6 @@ from collections.abc import Mapping
 
 import httpx
 
-from app.collection.article_acquisition.errors import (
-    ACQUISITION_RECOVERABLE_FETCH_ERRORS,
-)
 from app.collection.external_fetch_errors import (
     ExternalFetchError,
     FetchAccessDeniedError,
@@ -25,11 +22,6 @@ from app.collection.external_fetch_errors import (
     FetchUnexpectedStatusError,
 )
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
-
-RECOVERABLE_FETCH_ERRORS: tuple[type[ExternalFetchError], ...] = (
-    ACQUISITION_RECOVERABLE_FETCH_ERRORS
-)
-"""Stage 1 recoverable policy tuple の互換 alias。"""
 
 
 def _retry_after_seconds(headers: Mapping[str, str]) -> float | None:

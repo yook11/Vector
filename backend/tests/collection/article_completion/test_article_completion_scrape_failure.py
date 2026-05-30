@@ -3,9 +3,12 @@
 Stage 2 (完成段) の分類は ``test_article_completion_completion_failure.py`` が
 所有する。本ファイルは scrape の Retry 軸分類のみを検証する。
 
-構造保証 (spec 完了条件): 全 ``ExternalFetchError`` concrete subclass が
-(Terminal 集合 ∪ policy 別 Retryable ∪ ``FetchOriginServerError`` 明示分岐) で
-**過不足なく** 分割される。subclass を追加して分類し忘れると本テストが落ちる。
+構造保証 (spec 完了条件): retryable=True の全 ``ExternalFetchError`` concrete
+subclass が stage2 の backoff policy (policy 別 Retryable ∪ ``FetchOriginServerError``
+明示分岐) を割当済みであること。新 retryable subclass を policy 表に登録し忘れると
+本テストが落ちる。terminal は origin error 自身の ``retryable`` 属性 (SSoT) から
+導出し、family の分割被覆 (retryable/terminal の CODE 集合) は
+``test_external_fetch_error_codes.py`` が所有する。
 
 ``_CONSTRUCT`` は ``test_external_fetch_error_codes.py`` の構築表と同形だが、
 解いている問題が違う (CODE 契約 vs decision 分割) ため共有しない。
@@ -26,7 +29,6 @@ from app.collection.article_completion.retry_policy import (
 )
 from app.collection.article_completion.scrape_failure import (
     _RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY,
-    _TERMINAL_FETCH_ERROR_TYPES,
     ContentQualityTooLow,
     FetchFailed,
     NotHtml,
@@ -100,14 +102,22 @@ def _build(cls: type[ExternalFetchError]) -> ExternalFetchError:
     return cls(**_CONSTRUCT[cls])  # type: ignore[arg-type]
 
 
+# terminal は origin error 自身の ``retryable`` 属性 (SSoT) から導出する。
+# scrape_failure は専用 terminal タプルを持たず ``not exc.retryable`` で分岐する。
+_TERMINAL_SUBCLASSES: list[type[ExternalFetchError]] = sorted(
+    (c for c in _concrete_subclasses(ExternalFetchError) if not c.retryable),
+    key=lambda c: c.__name__,
+)
+
+
 class TestPartitionStructuralGuarantee:
-    """3 分類グループが全 concrete subclass を過不足なく分割すること。"""
+    """retryable 属性 (SSoT) と stage2 の backoff policy 割当の整合を固定する。"""
 
     def test_construct_table_covers_all_subclasses(self) -> None:
         assert set(_CONSTRUCT) == _concrete_subclasses(ExternalFetchError)
 
     def test_classification_groups_are_pairwise_disjoint(self) -> None:
-        terminal = set(_TERMINAL_FETCH_ERROR_TYPES)
+        terminal = set(_TERMINAL_SUBCLASSES)
         retryable = {
             t
             for types in _RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY.values()
@@ -118,29 +128,29 @@ class TestPartitionStructuralGuarantee:
         assert terminal.isdisjoint(explicit)
         assert retryable.isdisjoint(explicit)
 
-    def test_classification_covers_every_concrete_subclass(self) -> None:
-        # subclass 追加で分類漏れ → この等式が破れてテストが落ちる (構造保証)。
-        terminal = set(_TERMINAL_FETCH_ERROR_TYPES)
-        retryable = {
+    def test_every_retryable_subclass_has_a_backoff_policy(self) -> None:
+        # 別不変条件 (family 分割被覆は test_external_fetch_error_codes が所有):
+        # retryable=True の全 origin error が backoff policy を割当済みであること。
+        # ``FetchOriginServerError`` は instance state で分岐するため明示加算する。
+        # 新 retryable subclass を policy 表に登録し忘れると等式が破れて落ちる。
+        policy_assigned = {
             t
             for types in _RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY.values()
             for t in types
         }
-        explicit = {FetchOriginServerError}
-        assert terminal | retryable | explicit == _concrete_subclasses(
-            ExternalFetchError
-        )
+        retryable = {c for c in _concrete_subclasses(ExternalFetchError) if c.retryable}
+        assert policy_assigned | {FetchOriginServerError} == retryable
 
 
 @pytest.mark.parametrize(
     "cls",
-    list(_TERMINAL_FETCH_ERROR_TYPES),
-    ids=[c.__name__ for c in _TERMINAL_FETCH_ERROR_TYPES],
+    _TERMINAL_SUBCLASSES,
+    ids=[c.__name__ for c in _TERMINAL_SUBCLASSES],
 )
 def test_terminal_fetch_error_maps_to_terminal_with_code(
     cls: type[ExternalFetchError],
 ) -> None:
-    """terminal グループは ``Terminal(reason_code=cls.CODE)`` になる。"""
+    """terminal (retryable=False) は ``Terminal(reason_code=cls.CODE)`` になる。"""
     assert classify_external_fetch_error(_build(cls)) == Terminal(reason_code=cls.CODE)
 
 

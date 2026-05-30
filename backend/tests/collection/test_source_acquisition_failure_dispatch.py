@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
 from app.collection.article_acquisition.errors import (
-    AcquisitionExternalFetchTerminalError,
+    AcquisitionExternalFetchError,
 )
 from app.collection.article_acquisition.failure_handling import (
     ArticleAcquisitionFailureHandler,
@@ -66,7 +66,7 @@ async def test_acquisition_error_writes_audit_and_returns_false(
     source_id = sample_source.id
     handler = ArticleAcquisitionFailureHandler(session_factory)
 
-    exc = AcquisitionExternalFetchTerminalError(
+    exc = AcquisitionExternalFetchError(
         origin_error=FetchAccessDeniedError(status_code=403, reason="forbidden")
     )
     reraise = await handler.handle_source_failure(
@@ -84,11 +84,11 @@ async def test_acquisition_error_writes_audit_and_returns_false(
     assert ev.outcome_code == "fetch_access_denied"
     assert ev.retryability == "non_retryable"
     assert ev.error_class is not None
-    assert ev.error_class.endswith(".AcquisitionExternalFetchTerminalError")
+    assert ev.error_class.endswith(".AcquisitionExternalFetchError")
     assert "code" not in ev.payload
     assert ev.payload["source_name"] == "VentureBeat"
     assert ev.payload["error_message"] == (
-        "AcquisitionExternalFetchTerminalError(code='fetch_access_denied')"
+        "AcquisitionExternalFetchError(code='fetch_access_denied')"
     )
     assert ev.payload["failure_kind"] == "external_fetch"
     assert ev.payload["failure_action"] is None
@@ -134,7 +134,7 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
     source_id = sample_source.id
     handler = ArticleAcquisitionFailureHandler(session_factory)
 
-    business_exc = AcquisitionExternalFetchTerminalError(
+    business_exc = AcquisitionExternalFetchError(
         origin_error=FetchSsrfBlockedError(
             "blocked Authorization: Bearer sk-live-BUSINESSSECRETabc"
         )
@@ -164,9 +164,7 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
     assert drops, "fallback ログが emit されていない"
     drop = drops[-1]
     assert drop["source_id"] == source_id
-    assert drop["business_error_class"].endswith(
-        ".AcquisitionExternalFetchTerminalError"
-    )
+    assert drop["business_error_class"].endswith(".AcquisitionExternalFetchError")
     assert drop["audit_error_class"].endswith(".RuntimeError")
     assert "sk-live-BUSINESSSECRETabc" not in drop["business_error_message"]
     assert "sk-live-AUDITSECRETxyz" not in drop["audit_error_message"]

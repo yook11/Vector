@@ -3,9 +3,14 @@
 ニュースソース、RSS、HTML、sitemap など Vector 外部の取得境界で
 起きうる失敗カテゴリを定義する。
 
-本モジュールは「何が起きたか」という origin error の語彙を扱う。
-Stage 1 / Stage 2 でどうハンドリングするかは、各 Stage 側の marker
-または mapper で表現する。
+本モジュールは「何が起きたか」という origin error の語彙を扱う。各 origin error は
+``CODE`` (何が起きたか) と ``retryable`` (再実行で結果が変わりうるか=失敗の性質) を
+持つ。403 は何度叩いても 403、timeout は変わりうる、という二値は段に依らない失敗
+原因の本質なので origin 側に SSoT として持つ。
+
+一方「いつ / どう retry するか (scheduling)」と「失敗時にどう後始末するか (action)」は
+段ごとの事情なので各 Stage 側の marker / mapper が持つ。family は audit の
+``Retryability`` enum を知らない (bool のみ公開し段境界を保つ)。
 """
 
 from __future__ import annotations
@@ -16,14 +21,16 @@ from typing import ClassVar, Literal
 class ExternalFetchError(Exception):
     """外部取得境界で発生した失敗の共通祖先。
 
-    origin error の識別 marker。retry / terminal 判断は各 Stage 側で解釈する。
-    具体 subclass は ``CODE`` を override する。
+    origin error の識別 marker。具体 subclass は ``CODE`` と ``retryable`` を
+    override する。``retryable`` は「再実行で結果が変わりうるか」という失敗原因の
+    性質であって handling ではない (scheduling / action は各 Stage 側)。
 
     ``__str__`` は明示 message があればそれを、空文字なら ``_default_message()``
     を返す (wrap 経路の監査 / ログが空文字にならないように)。
     """
 
     CODE: ClassVar[str]
+    retryable: ClassVar[bool]
 
     def __str__(self) -> str:
         explicit = super().__str__()
@@ -59,6 +66,7 @@ class FetchAccessDeniedError(ExternalFetchError):
     """
 
     CODE: ClassVar[str] = "fetch_access_denied"
+    retryable: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -82,6 +90,7 @@ class FetchLegalBlockError(ExternalFetchError):
     """
 
     CODE: ClassVar[str] = "fetch_legal_block"
+    retryable: ClassVar[bool] = False
 
     def __init__(self, message: str = "", *, status_code: int = 451) -> None:
         super().__init__(message)
@@ -99,6 +108,7 @@ class FetchResourceNotFoundError(ExternalFetchError):
     """
 
     CODE: ClassVar[str] = "fetch_resource_not_found"
+    retryable: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -123,6 +133,7 @@ class FetchRateLimitedError(ExternalFetchError):
     """
 
     CODE: ClassVar[str] = "fetch_rate_limited"
+    retryable: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -153,6 +164,7 @@ class FetchOriginServerError(ExternalFetchError):
     """
 
     CODE: ClassVar[str] = "fetch_origin_server_error"
+    retryable: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -182,6 +194,7 @@ class FetchGatewayError(ExternalFetchError):
     """
 
     CODE: ClassVar[str] = "fetch_gateway_failure"
+    retryable: ClassVar[bool] = True
 
     def __init__(self, message: str = "", *, status_code: int) -> None:
         super().__init__(message)
@@ -199,6 +212,7 @@ class FetchRequestTimeoutError(ExternalFetchError):
     """
 
     CODE: ClassVar[str] = "fetch_request_timeout"
+    retryable: ClassVar[bool] = True
 
     def __init__(self, message: str = "", *, status_code: int = 408) -> None:
         super().__init__(message)
@@ -216,6 +230,7 @@ class FetchRetryableStatusError(ExternalFetchError):
     """
 
     CODE: ClassVar[str] = "fetch_retryable_status"
+    retryable: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -239,6 +254,7 @@ class FetchUnexpectedStatusError(ExternalFetchError):
     """
 
     CODE: ClassVar[str] = "fetch_unexpected_status"
+    retryable: ClassVar[bool] = True
 
     def __init__(self, message: str = "", *, status_code: int) -> None:
         super().__init__(message)
@@ -260,6 +276,7 @@ class FetchTimeoutError(ExternalFetchError):
     """
 
     CODE: ClassVar[str] = "fetch_timeout"
+    retryable: ClassVar[bool] = True
 
 
 class FetchNetworkError(ExternalFetchError):
@@ -271,6 +288,7 @@ class FetchNetworkError(ExternalFetchError):
     """
 
     CODE: ClassVar[str] = "fetch_network"
+    retryable: ClassVar[bool] = True
 
 
 # ---------------------------------------------------------------------------
@@ -286,12 +304,14 @@ class FetchSsrfBlockedError(ExternalFetchError):
     """
 
     CODE: ClassVar[str] = "fetch_ssrf_blocked"
+    retryable: ClassVar[bool] = False
 
 
 class FetchRobotsDisallowedError(ExternalFetchError):
     """robots.txt の明示的な Disallow により対象 URL の取得が許可されなかった。"""
 
     CODE: ClassVar[str] = "fetch_robots_disallowed"
+    retryable: ClassVar[bool] = False
 
 
 class FetchRobotsUnavailableError(ExternalFetchError):
@@ -302,6 +322,7 @@ class FetchRobotsUnavailableError(ExternalFetchError):
     """
 
     CODE: ClassVar[str] = "fetch_robots_unavailable"
+    retryable: ClassVar[bool] = False
 
 
 class FetchRedirectBlockedError(ExternalFetchError):
@@ -311,6 +332,7 @@ class FetchRedirectBlockedError(ExternalFetchError):
     """
 
     CODE: ClassVar[str] = "fetch_redirect_blocked"
+    retryable: ClassVar[bool] = False
 
 
 class FetchRedirectLoopError(ExternalFetchError):
@@ -320,6 +342,7 @@ class FetchRedirectLoopError(ExternalFetchError):
     """
 
     CODE: ClassVar[str] = "fetch_redirect_loop"
+    retryable: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -345,6 +368,7 @@ class FetchResponseTooLargeError(ExternalFetchError):
     """外部レスポンスが許容サイズを超過した。"""
 
     CODE: ClassVar[str] = "fetch_response_too_large"
+    retryable: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -370,6 +394,7 @@ class FetchContentTypeMismatchError(ExternalFetchError):
     """
 
     CODE: ClassVar[str] = "fetch_content_type_mismatch"
+    retryable: ClassVar[bool] = False
 
     def __init__(
         self,

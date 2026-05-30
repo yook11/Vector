@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.collection.article_acquisition.errors import (
-    AcquisitionExternalFetchTerminalError,
+    AcquisitionExternalFetchError,
 )
 from app.collection.external_fetch_errors import FetchSsrfBlockedError
 from app.models.news_source import NewsSource, SourceType
@@ -84,7 +84,7 @@ async def test_acquisition_error_records_origin_code_and_returns(
     """Stage 1 marker → audit + error dict を return。"""
     _patch_service_to_raise(
         monkeypatch,
-        AcquisitionExternalFetchTerminalError(
+        AcquisitionExternalFetchError(
             origin_error=FetchSsrfBlockedError("ssrf blocked: 10.0.0.1")
         ),
     )
@@ -102,7 +102,7 @@ async def test_acquisition_error_records_origin_code_and_returns(
     assert "code" not in row.payload
     assert row.source_id == vb_source.id
     assert row.error_class.endswith(  # type: ignore[union-attr]
-        ".AcquisitionExternalFetchTerminalError"
+        ".AcquisitionExternalFetchError"
     )
     assert row.payload["failure_kind"] == "external_fetch"
     assert row.payload["failure_action"] is None
