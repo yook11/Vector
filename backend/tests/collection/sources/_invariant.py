@@ -6,9 +6,9 @@
 (memory `feedback_test_invariants_over_change_tracking.md`)。
 
 Fetcher が yield するのは ``AnalyzableArticle | ObservedArticle`` の passport
-と、変換不能 entry の ``ConversionRejection`` 値。per-source 不変条件は
+と、変換不能 entry の ``AcquisitionConversionRejection`` 値。per-source 不変条件は
 「変換成功した passport」の業務性質を固定する関心なので、本 helper は
-``ConversionRejection`` を ``passports_only`` で分離してから assert する
+``AcquisitionConversionRejection`` を ``passports_only`` で分離してから assert する
 (棄却の値化 / 監査自体の検証は converter / fetcher / service テストの責務)。
 
 passport builder への切替以降は同じ Fetcher でも entry ごとに
@@ -31,7 +31,7 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 
 from app.collection.article_acquisition.fetched_article_converter import (
-    ConversionRejection,
+    AcquisitionConversionRejection,
     convert_fetched_article,
 )
 from app.collection.article_acquisition.fetcher import fetch_articles
@@ -47,7 +47,7 @@ from app.collection.sources.article_source import ArticleSource
 _DEFAULT_HTML_PUBLISHED_AT = PublishedAt(value=datetime(2026, 5, 1, tzinfo=UTC))
 
 Passport = AnalyzableArticle | ObservedArticle
-FetchItem = AnalyzableArticle | ObservedArticle | ConversionRejection
+FetchItem = AnalyzableArticle | ObservedArticle | AcquisitionConversionRejection
 
 
 async def drive_source(
@@ -70,13 +70,15 @@ async def drive_source(
 
 
 def passports_only(items: Iterable[FetchItem]) -> list[Passport]:
-    """fetch stream から ``ConversionRejection`` を分離し passport のみ返す。
+    """fetch stream から ``AcquisitionConversionRejection`` を分離し passport のみ返す。
 
     per-source 不変条件は変換成功分の業務性質を固定する関心。棄却の値化 /
     監査の検証は converter / fetcher / service テストが担うため、ここでは
     分離するだけ。
     """
-    return [item for item in items if not isinstance(item, ConversionRejection)]
+    return [
+        item for item in items if not isinstance(item, AcquisitionConversionRejection)
+    ]
 
 
 def assert_at_least_one_passport(items: Iterable[FetchItem]) -> None:

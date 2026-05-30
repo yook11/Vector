@@ -112,6 +112,28 @@ class TestAcquisitionPayloadReadFailureFields:
         assert AcquisitionPayload.model_validate(dumped) == payload
 
 
+class TestAcquisitionPayloadFetchFailureFields:
+    """接続失敗 (fetch origin) の specifics 列。``http_status`` (既存) と対称に
+    ``reason`` / ``retry_after`` を構造化列で残す (outcome_code = CODE とは別に、後から
+    どの reason / どの retry-after で落ちたかを復元できるようにする)。
+    """
+
+    def test_fetch_fields_default_none(self) -> None:
+        payload = AcquisitionPayload()
+        assert payload.fetch_reason is None
+        assert payload.fetch_retry_after_seconds is None
+
+    def test_fetch_fields_serialize_to_json(self) -> None:
+        payload = AcquisitionPayload(
+            fetch_reason="service_unavailable",
+            fetch_retry_after_seconds=30.0,
+        )
+        dumped = payload.model_dump(mode="json")
+        assert dumped["fetch_reason"] == "service_unavailable"
+        assert dumped["fetch_retry_after_seconds"] == 30.0
+        assert AcquisitionPayload.model_validate(dumped) == payload
+
+
 class TestCompletionPayloadAuditKeys:
     """``CompletionPayload`` の key field 不変条件。"""
 
@@ -305,6 +327,25 @@ class TestPayloadFieldOwnership:
         )
         for payload_cls in payloads_without_read_fields:
             for field in read_fields:
+                assert field not in payload_cls.model_fields
+
+    def test_only_acquisition_payload_owns_fetch_failure_fields(self) -> None:
+        fetch_fields = ("fetch_reason", "fetch_retry_after_seconds")
+        for field in fetch_fields:
+            assert field in AcquisitionPayload.model_fields
+
+        payloads_without_fetch_fields = (
+            BasePipelineEventPayload,
+            DispatchPayload,
+            CompletionPayload,
+            CurationPayload,
+            AssessmentPayload,
+            EmbeddingPayload,
+            BriefingPayload,
+            TrendDiscoveryPayload,
+        )
+        for payload_cls in payloads_without_fetch_fields:
+            for field in fetch_fields:
                 assert field not in payload_cls.model_fields
 
     def test_injection_markers_present_owned_by_input_baking_payloads(self) -> None:

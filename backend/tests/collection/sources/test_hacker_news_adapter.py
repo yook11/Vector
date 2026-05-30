@@ -5,8 +5,9 @@
 - ``search_recent_stories`` に renamed kwargs (sliding window / min_points /
   hits_per_page) が必ず渡る (旧仕様: 24h window / points>20 / 100 hits)
 - ``map_entry`` が url 欠落 hit を握りつぶさず **total** に
-  ``FetchedArticle(url="")`` を出し、収集 → 変換経路で ``ConversionRejection``
-  として可視化される (spec「写像で None/drop/skip しない」は写像ごとに
+  ``FetchedArticle(url="")`` を出し、収集 → 変換経路で
+  ``AcquisitionConversionRejection`` として可視化される (spec「写像で None/drop/skip
+  しない」は写像ごとに
   pin が要る — converter テストは ``FetchedArticle`` を直接与え HN
   写像を通らないため、ここでしか HN シームの totality を pin できない。
   HN は収集スコープ述語を持たず全 entry を写すため degenerate witness は
@@ -30,7 +31,7 @@ import pytest
 
 from app.collection.article_acquisition.fetched_article import FetchedArticle
 from app.collection.article_acquisition.fetched_article_converter import (
-    ConversionRejection,
+    AcquisitionConversionRejection,
 )
 from app.collection.article_acquisition.reader.algolia_hn_reader import (
     HackerNewsEntry,
@@ -137,7 +138,7 @@ def test_mapping_is_total_on_url_none_hit() -> None:
 
 @pytest.mark.asyncio
 async def test_url_none_hit_surfaces_as_rejection_without_stopping_stream() -> None:
-    """url 欠落 hit は黙って消えず ``ConversionRejection`` として現れ、
+    """url 欠落 hit は黙って消えず ``AcquisitionConversionRejection`` として現れ、
     他の hit は ``ObservedArticle`` のまま stream が止まらない。
 
     旧 ``test_url_none_hits_skipped_in_collect`` (``assert items == []``) が
@@ -148,7 +149,9 @@ async def test_url_none_hit_surfaces_as_rejection_without_stopping_stream() -> N
     no_url = {"title": "Ask HN: no url", "created_at": None}
     items = await _drive(_FakeHNClient([valid, no_url]))
     assert any(isinstance(i, ObservedArticle) for i in items)  # valid 健在
-    assert any(isinstance(i, ConversionRejection) for i in items)  # degenerate 可視
+    assert any(
+        isinstance(i, AcquisitionConversionRejection) for i in items
+    )  # degenerate 可視
     assert len(items) == 2  # stream が止まらず両方到達 (片方 raise で停止しない)
 
 

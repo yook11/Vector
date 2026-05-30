@@ -11,7 +11,7 @@ per-feed parser を注入)。
 - INV-1 dedup: 同一 URL が複数 feed に出現しても yield URL は一意
   (``select`` の feed 横断 dedup)
 - INV-2 failure-visibility: 空 link entry は dedup 対象外で全 feed 分が素通し、
-  converter 層の ``url_empty`` 監査経路 (``ConversionRejection``) を維持する
+  converter 層の ``url_empty`` 監査経路 (``AcquisitionConversionRejection``) を維持する
 - INV-3 NASA config: ``NASA_FEEDS`` は 6 feed、``nasa_build_body`` は
   ``content_encoded`` を plain text 化 (Pattern R)
 """
@@ -95,7 +95,7 @@ async def test_empty_link_entry_passes_through_for_audit() -> None:
 
     空 link は dedup key にならない (空文字列は URL でない) ため全 feed 分が
     yield される。値欠落の implicit drop は failure-visibility 違反 (converter 層の
-    ``ConversionRejection (url_empty)`` 監査経路を逃れる)。
+    ``AcquisitionConversionRejection (url_empty)`` 監査経路を逃れる)。
     """
     items = await _collect(_EmptyLinkParser())
 

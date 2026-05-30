@@ -100,7 +100,7 @@ async def test_empty_link_entry_passes_through_for_audit() -> None:
 
     空 link は dedup key にならないため全 feed 分が yield される。値欠落の
     implicit drop は failure-visibility 違反 (converter 層の
-    ``ConversionRejection (url_empty)`` 監査経路を逃れる)。
+    ``AcquisitionConversionRejection (url_empty)`` 監査経路を逃れる)。
     """
     items = await _collect(_EmptyLinkParser())
 

@@ -4,13 +4,13 @@
 
 - ``is_collectable_mdpi_work`` の収集スコープ真理値表 (spec 第4責務 =
   Source のスコープ宣言述語。対象外 ≠ 変換失敗 ≠ 構造的非記事。
-  ``ConversionRejection`` 化も converter 移設もしない)。**scope 規則の SSoT
+  ``AcquisitionConversionRejection`` 化も converter 移設もしない)。**scope 規則の SSoT
   はここ**。CC BY 4.0 / journal-article のみ採るという法務・選別ルールは
   converter も 系統A invariants も持たないため、純粋述語の真理値表として
   ここが唯一の不変条件所有点。
 - ``to_fetched_article`` が in-scope な degenerate (DOI 欠落) を握りつぶさず
   **total** に ``FetchedArticle(url="")`` を出し、fetcher 経路で
-  ``ConversionRejection`` として可視化される (spec「写像で None/drop/skip
+  ``AcquisitionConversionRejection`` として可視化される (spec「写像で None/drop/skip
   しない」は写像ごとに pin が要る — converter/fetcher テストは
   ``FetchedArticle`` を直接与え MDPI 写像を通らないため、ここでしか
   MDPI シームの totality を pin できない)。
@@ -42,7 +42,7 @@ import pytest
 
 from app.collection.article_acquisition.fetched_article import FetchedArticle
 from app.collection.article_acquisition.fetched_article_converter import (
-    ConversionRejection,
+    AcquisitionConversionRejection,
 )
 from app.collection.article_acquisition.reader.crossref_reader import (
     CrossrefEntry,
@@ -221,7 +221,7 @@ def test_mapping_is_total_on_in_scope_degenerate() -> None:
 async def test_in_scope_degenerate_surfaces_as_rejection_without_stopping_stream() -> (
     None
 ):
-    """DOI 欠落 in-scope は黙って消えず ``ConversionRejection`` として現れ、
+    """DOI 欠落 in-scope は黙って消えず ``AcquisitionConversionRejection`` として現れ、
     他の in-scope は ``AnalyzableArticle`` のまま stream が止まらない。
 
     旧 ``test_missing_doi_dropped`` (``assert items == []``) が凍結していた
@@ -232,7 +232,9 @@ async def test_in_scope_degenerate_surfaces_as_rejection_without_stopping_stream
     del no_doi["DOI"]
     items = await _drive(_FakeCrossrefClient([valid, no_doi]))
     assert any(isinstance(i, AnalyzableArticle) for i in items)  # valid 健在
-    assert any(isinstance(i, ConversionRejection) for i in items)  # degenerate 可視
+    assert any(
+        isinstance(i, AcquisitionConversionRejection) for i in items
+    )  # degenerate 可視
     assert len(items) == 2  # stream が止まらず両方到達 (片方 raise で停止しない)
 
 

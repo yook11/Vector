@@ -7,9 +7,9 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.audit.stages.acquisition import SourceAcquisitionAuditRepository
-from app.collection.article_acquisition.errors import SourceAcquisitionError
+from app.collection.article_acquisition.errors import AcquisitionError
 from app.collection.article_acquisition.fetched_article_converter import (
-    ConversionRejection,
+    AcquisitionConversionRejection,
 )
 from app.shared.security.redaction import redact_secrets
 
@@ -31,7 +31,7 @@ class ArticleAcquisitionFailureHandler:
     ) -> bool:
         """taskiq に raise すべきなら ``True``、return すべきなら ``False``。"""
         match exc:
-            case SourceAcquisitionError():
+            case AcquisitionError():
                 await self._audit_failure(source_id, source_name, exc)
                 return False
             case SQLAlchemyError():
@@ -48,7 +48,7 @@ class ArticleAcquisitionFailureHandler:
     async def handle_conversion_rejected(
         self,
         source_id: int,
-        rej: ConversionRejection,
+        rej: AcquisitionConversionRejection,
     ) -> None:
         """entry 単位の変換棄却を別 session で best-effort 監査する。"""
         try:
@@ -80,7 +80,7 @@ class ArticleAcquisitionFailureHandler:
         self,
         source_id: int | None,
         source_name: str | None,
-        exc: SourceAcquisitionError | SQLAlchemyError,
+        exc: AcquisitionError | SQLAlchemyError,
     ) -> None:
         """best-effort failure audit。失敗時は redacted log に退避する。"""
         try:

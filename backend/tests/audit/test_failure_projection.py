@@ -28,8 +28,7 @@ from app.audit.failure_projection import (
 )
 from app.audit.stages.completion import ArticleCompletionAuditRepository
 from app.collection.article_acquisition.errors import (
-    AcquisitionExternalFetchError,
-    AcquisitionUnreadableResponseError,
+    AcquisitionReadError,
 )
 from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseError,
@@ -152,9 +151,7 @@ def test_project_failure_returns_unknown_for_catch_all() -> None:
     ("exc", "expected"),
     [
         (
-            AcquisitionExternalFetchError(
-                origin_error=FetchGatewayError(status_code=502)
-            ),
+            AcquisitionReadError(origin=FetchGatewayError(status_code=502)),
             FailureProjection(
                 failure_kind="external_fetch",
                 retryability=Retryability.RETRYABLE,
@@ -164,8 +161,8 @@ def test_project_failure_returns_unknown_for_catch_all() -> None:
             ),
         ),
         (
-            AcquisitionExternalFetchError(
-                origin_error=FetchAccessDeniedError(status_code=403, reason="forbidden")
+            AcquisitionReadError(
+                origin=FetchAccessDeniedError(status_code=403, reason="forbidden")
             ),
             FailureProjection(
                 failure_kind="external_fetch",
@@ -176,8 +173,8 @@ def test_project_failure_returns_unknown_for_catch_all() -> None:
             ),
         ),
         (
-            AcquisitionUnreadableResponseError(
-                origin_error=UnreadableResponseError(
+            AcquisitionReadError(
+                origin=UnreadableResponseError(
                     reason=UnreadableResponseReason.UNEXPECTED_FIELD_SHAPE,
                     response_format="json",
                     field="items",

@@ -16,7 +16,7 @@ from app.collection.article_acquisition.failure_handling import (
     ArticleAcquisitionFailureHandler,
 )
 from app.collection.article_acquisition.fetched_article_converter import (
-    ConversionRejection,
+    AcquisitionConversionRejection,
     convert_fetched_article,
     unexpected_rejection,
 )
@@ -98,7 +98,7 @@ class ArticleAcquisitionService:
                                 source_name=source_name,
                                 canonical_url=str(observed.source_url),
                             )
-                        case ConversionRejection() as rej:
+                        case AcquisitionConversionRejection() as rej:
                             await self._failure_handler.handle_conversion_rejected(
                                 source_id, rej
                             )

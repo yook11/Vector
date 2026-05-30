@@ -3,7 +3,7 @@
 per-source 責務は body / published を信用できる形で渡せるかのみ。Ready 昇格 /
 Observed 保留 / 変換不能(棄却) の最終分岐を ``convert_fetched_article`` に集約し、
 想定内の 3 結末すべてに対して total にする (棄却も raise せず
-``ConversionRejection`` 値で返す)。
+``AcquisitionConversionRejection`` 値で返す)。
 
 ``AnalyzableArticle`` 不成立は想定内の正常系 (Ready 候補 ⊆ Observed 候補)。
 precondition (title / URL) を満たさない entry は棄却となる。棄却理由の判定と
@@ -35,7 +35,7 @@ logger = structlog.get_logger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
-class ConversionRejection:
+class AcquisitionConversionRejection:
     """stream 境界で変換不能 entry を表す値。
 
     per-entry raise だと source stream 全体が止まるため、棄却を値に落として
@@ -61,7 +61,7 @@ def _reject(
     fetched: FetchedArticle,
     source_name: SourceName,
     cause: Exception | None = None,
-) -> ConversionRejection:
+) -> AcquisitionConversionRejection:
     """観測スナップショット取得 + 構造化ログ + 値化の集約点。"""
     has_title = bool(fetched.title)
     body_length = len(fetched.body) if fetched.body is not None else None
@@ -76,7 +76,7 @@ def _reject(
         body_length=body_length,
         has_published_at=has_published_at,
     )
-    return ConversionRejection(
+    return AcquisitionConversionRejection(
         outcome_code=outcome_code,
         source_name=str(source_name),
         raw_url=raw_url,
@@ -92,8 +92,9 @@ def unexpected_rejection(
     *,
     source: ArticleSource,
     cause: Exception,
-) -> ConversionRejection:
-    """想定外 bug を ``UNEXPECTED_ERROR`` の ``ConversionRejection`` に値化する funnel。
+) -> AcquisitionConversionRejection:
+    """想定外 bug を ``UNEXPECTED_ERROR`` の ``AcquisitionConversionRejection`` に
+    値化する funnel。
 
     precondition 通過後の invariant 違反 (= ありえない筈の bug) が ``convert`` から
     漏れたとき、stream orchestrator (service) がこれを呼んで値化する。stack trace は
@@ -105,7 +106,7 @@ def unexpected_rejection(
         source_name=str(source.name),
         error_class=f"{type(cause).__module__}.{type(cause).__qualname__}",
     )
-    return ConversionRejection(
+    return AcquisitionConversionRejection(
         outcome_code=AcquisitionConversionDefect.UNEXPECTED_ERROR.value,
         source_name=str(source.name),
         raw_url=fetched.url or None,
@@ -121,7 +122,7 @@ def convert_fetched_article(
     *,
     source: ArticleSource,
     source_id: int,
-) -> AnalyzableArticle | ObservedArticle | ConversionRejection:
+) -> AnalyzableArticle | ObservedArticle | AcquisitionConversionRejection:
     """1 ``FetchedArticle`` を「何ができたか」に変換する (想定内に total)。
 
     URL / title は獲得型の土台 (identity)。不在 / 不正なら獲得型は成立し得ない
@@ -132,7 +133,7 @@ def convert_fetched_article(
         ``AnalyzableArticle`` — body + published_at が揃い品質ゲート通過。
         ``ObservedArticle`` — title + URL は揃うが Ready 不成立 (取れた事実を
         全保存)。
-        ``ConversionRejection`` — title / URL precondition を満たさない棄却
+        ``AcquisitionConversionRejection`` — title / URL precondition を満たさない棄却
         (raise せず値で返す)。
     """
     source_name = source.name

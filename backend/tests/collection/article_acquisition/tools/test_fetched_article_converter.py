@@ -1,12 +1,13 @@
 """``convert_fetched_article`` のユニットテスト (DB 非依存)。
 
 ``FetchedArticle`` 入力を ``AnalyzableArticle`` / ``ObservedArticle`` / 棄却
-(``ConversionRejection``) に変換する分岐契約を検証する。title / URL / body /
+(``AcquisitionConversionRejection``) に変換する分岐契約を検証する。title / URL / body /
 published の各境界と、profile の title policy (``html_preferred`` = 仮タイトル)
 による Ready gate を網羅し、``convert_fetched_article`` の判定順を固定する。
 
-convert は想定内に total: 変換不能 entry は raise でなく ``ConversionRejection``
-値で返し、握りつぶさず理由付きで表に出す。棄却値は責任元 VO の reason を
+convert は想定内に total: 変換不能 entry は raise でなく
+``AcquisitionConversionRejection`` 値で返し、握りつぶさず理由付きで表に出す。棄却値は
+責任元 VO の reason を
 ``outcome_code`` に verbatim で運ぶ (URL は ``SafeUrlInvalidReason``、title 欠落 /
 想定外バグは acquisition 所有の ``AcquisitionConversionDefect``)。想定外 bug の
 値化 funnel ``unexpected_rejection`` の契約 (UNEXPECTED_ERROR + ``cause`` 保持) も
@@ -23,7 +24,7 @@ import pytest
 
 from app.collection.article_acquisition.fetched_article import FetchedArticle
 from app.collection.article_acquisition.fetched_article_converter import (
-    ConversionRejection,
+    AcquisitionConversionRejection,
     convert_fetched_article,
     unexpected_rejection,
 )
@@ -153,7 +154,7 @@ def test_accepts_non_utc_published() -> None:
 @pytest.mark.parametrize("title", ["", "   ", "\n\t  "])
 def test_rejects_missing_title_when_title_is_empty(title: str) -> None:
     result = _call(title=title)
-    assert isinstance(result, ConversionRejection)
+    assert isinstance(result, AcquisitionConversionRejection)
     assert result.outcome_code == "acquisition_conversion_title_missing"
     assert result.cause is None  # acquisition 方針違反であり VO 例外ではない
 
@@ -168,7 +169,7 @@ def test_trims_title_whitespace_and_caps_500_chars() -> None:
 def test_rejects_empty_url_as_url_empty() -> None:
     """空 URL は SafeUrl の ``url_empty`` を verbatim で運ぶ (責任元 = URL VO)。"""
     result = _call(url="")
-    assert isinstance(result, ConversionRejection)
+    assert isinstance(result, AcquisitionConversionRejection)
     assert result.outcome_code == "url_empty"
     assert isinstance(result.cause, CanonicalArticleUrlInvalidError)
 
@@ -176,27 +177,27 @@ def test_rejects_empty_url_as_url_empty() -> None:
 def test_rejects_private_ip_url_as_host_not_public_ip() -> None:
     """SSRF 防御 (SafeUrl): private/loopback IP は ``host_not_public_ip``。"""
     result = _call(url="http://127.0.0.1/secret")
-    assert isinstance(result, ConversionRejection)
+    assert isinstance(result, AcquisitionConversionRejection)
     assert result.outcome_code == "host_not_public_ip"
 
 
 def test_rejects_non_http_url_as_url_not_http() -> None:
     result = _call(url="javascript:alert(1)")
-    assert isinstance(result, ConversionRejection)
+    assert isinstance(result, AcquisitionConversionRejection)
     assert result.outcome_code == "url_not_http"
 
 
 def test_rejects_overlong_url_as_url_too_long() -> None:
     """2048 字超の URL は ``url_too_long`` に精密分類される (旧 INVALID_URL 潰し)。"""
     result = _call(url="https://example.com/" + "a" * 2050)
-    assert isinstance(result, ConversionRejection)
+    assert isinstance(result, AcquisitionConversionRejection)
     assert result.outcome_code == "url_too_long"
 
 
 def test_rejection_carries_structured_observation_fields() -> None:
     """棄却値は FetchedArticle の観測スナップショットを構造化保持する。"""
     result = _call(url="javascript:alert(1)", body=_VALID_BODY)
-    assert isinstance(result, ConversionRejection)
+    assert isinstance(result, AcquisitionConversionRejection)
     assert result.outcome_code == "url_not_http"
     assert result.source_name == str(_SOURCE_NAME)
     assert result.raw_url == "javascript:alert(1)"
@@ -207,7 +208,7 @@ def test_rejection_carries_structured_observation_fields() -> None:
 
 def test_empty_url_rejection_reports_absent_raw_url() -> None:
     result = _call(url="")
-    assert isinstance(result, ConversionRejection)
+    assert isinstance(result, AcquisitionConversionRejection)
     assert result.raw_url is None
 
 
@@ -215,7 +216,7 @@ def test_invalid_url_rejection_carries_url_invalid_cause() -> None:
     """URL VO の例外を ``cause`` に保持し、その下に SafeUrl 由来 (ValueError) を
     連鎖する (監査が error_chain を深さ>1 で辿れる)。"""
     result = _call(url="http://127.0.0.1/secret")
-    assert isinstance(result, ConversionRejection)
+    assert isinstance(result, AcquisitionConversionRejection)
     assert isinstance(result.cause, CanonicalArticleUrlInvalidError)
     assert isinstance(result.cause.__cause__, ValueError)
 
@@ -278,13 +279,14 @@ def test_any_html_preferred_field_requires_html_completion_even_with_valid_body_
 
 
 def test_unexpected_rejection_funnels_to_unexpected_error_reason() -> None:
-    """想定外 bug は ``UNEXPECTED_ERROR`` の ``ConversionRejection`` に値化される。"""
+    """想定外 bug は ``UNEXPECTED_ERROR`` の ``AcquisitionConversionRejection`` に
+    値化される。"""
     result = unexpected_rejection(
         FetchedArticle(**_BASE_FETCHED),
         source=_source(),
         cause=RuntimeError("post-precondition invariant violation"),
     )
-    assert isinstance(result, ConversionRejection)
+    assert isinstance(result, AcquisitionConversionRejection)
     assert result.outcome_code == "acquisition_conversion_unexpected_error"
 
 

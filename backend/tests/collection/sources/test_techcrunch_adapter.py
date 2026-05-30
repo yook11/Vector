@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from app.collection.article_acquisition.fetched_article import FetchedArticle
 from app.collection.article_acquisition.fetched_article_converter import (
-    ConversionRejection,
+    AcquisitionConversionRejection,
 )
 from app.collection.article_acquisition.fetcher import fetch_articles
 from app.collection.domain.observed_article import ObservedArticle
@@ -57,7 +57,7 @@ async def test_collect_convert_yields_incomplete_only() -> None:
 
 
 async def test_collect_convert_surfaces_empty_title_entry_as_rejection() -> None:
-    """空 title entry は握りつぶさず ``ConversionRejection`` で表に出る。
+    """空 title entry は握りつぶさず ``AcquisitionConversionRejection`` で表に出る。
 
     旧 ``try_build_passport`` は ``None`` で静かに drop していた fixture 内の
     空 title entry が、変換不能として理由付きで可視化される (故障の見える化)。
@@ -65,7 +65,7 @@ async def test_collect_convert_surfaces_empty_title_entry_as_rejection() -> None
     items = await drive_source(
         TechCrunchSource, tools=fixture_tools(rss_fixture=_FIXTURE)
     )
-    rejections = [i for i in items if isinstance(i, ConversionRejection)]
+    rejections = [i for i in items if isinstance(i, AcquisitionConversionRejection)]
 
     assert len(rejections) == 1
     assert rejections[0].outcome_code == "acquisition_conversion_title_missing"

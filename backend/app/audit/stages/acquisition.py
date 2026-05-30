@@ -17,13 +17,14 @@ from app.audit.failure_projection import (
     unknown_failure_projection,
 )
 from app.audit.repository import PipelineEventRepository
-from app.collection.article_acquisition.errors import SourceAcquisitionError
+from app.collection.article_acquisition.errors import AcquisitionError
 from app.collection.article_acquisition.fetched_article_converter import (
-    ConversionRejection,
+    AcquisitionConversionRejection,
 )
 from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseError,
 )
+from app.collection.external_fetch_errors import ExternalFetchError
 from app.shared.security.redaction import redact_secrets
 
 _ERROR_MESSAGE_LIMIT = 2000
@@ -87,7 +88,7 @@ class SourceAcquisitionAuditRepository:
         *,
         source_id: int | None,
         source_name: str | None,
-        exc: SourceAcquisitionError | SQLAlchemyError,
+        exc: AcquisitionError | SQLAlchemyError,
     ) -> None:
         """source 全体の acquisition 失敗を記録する。"""
         projection = project_failure(exc, fallback_code="unexpected_error")
@@ -125,9 +126,10 @@ class SourceAcquisitionAuditRepository:
             failure_kind=projection.failure_kind,
             failure_action=failure_action_value(projection),
             source_name=source_name,
-            error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
+            error_message=redact_secrets(_error_message(exc))[:_ERROR_MESSAGE_LIMIT]
+            or None,
             error_chain=extract_error_chain(exc),
-            **_read_failure_payload_fields(exc),
+            **_origin_payload_fields(exc),
         )
         await self._events.append(
             stage=projection.stage or Stage.ACQUISITION,
@@ -143,7 +145,7 @@ class SourceAcquisitionAuditRepository:
         self,
         *,
         source_id: int | None,
-        rejection: ConversionRejection,
+        rejection: AcquisitionConversionRejection,
     ) -> None:
         """per-entry 変換不能を rejected として記録する。
 
@@ -172,34 +174,71 @@ class SourceAcquisitionAuditRepository:
         )
 
 
-class _ReadFailurePayloadFields(TypedDict):
-    """read 失敗 specifics を ``read_*`` 列へ展開する keyword。
+class _OriginPayloadFields(TypedDict):
+    """marker の origin specifics を構造化 payload 列へ展開する keyword (固定 key set)。
 
     key set を TypedDict で固定し ``**`` 展開で任意 keyword へ流入しないようにする
-    (``failure_payload_fields`` と同じ理由)。
+    (``failure_payload_fields`` と同じ理由)。read 側 3 (format / field / position) と
+    fetch 側 3 (status / reason / retry_after) を持ち、該当しない側は None。
     """
 
     read_format: str | None
     read_field: str | None
     read_parser_position: str | None
+    http_status: int | None
+    fetch_reason: str | None
+    fetch_retry_after_seconds: float | None
 
 
-def _read_failure_payload_fields(exc: BaseException) -> _ReadFailurePayloadFields:
-    """read marker の origin specifics を ``read_*`` payload 列へ写す。
+def _origin_payload_fields(exc: BaseException) -> _OriginPayloadFields:
+    """統合 marker の origin specifics を構造化 payload 列へ写す。
 
-    ``exc.origin_error`` が ``UnreadableResponseError`` のときだけ format / field /
-    parser_position を載せる。接続失敗 / DB / 想定外例外では全て None で payload に
-    影響しない (outcome_code = reason.value とは別に、後から壊れた形式 / フィールド /
-    位置を復元できるようにする consumer 側整形)。
+    ``exc.origin`` が ``UnreadableResponseError`` なら read_* を、``ExternalFetchError``
+    なら http_status / fetch_* を載せる。fetch subclass は status_code / reason /
+    retry_after の有無が異なるため getattr+None で拾う。origin に当たらない例外
+    (DB / 想定外) は全列 None で payload に影響しない (outcome_code = CODE とは別に、
+    後から壊れた形式 / status / reason を復元できるようにする consumer 側整形)。
     """
-    origin = getattr(exc, "origin_error", None)
+    origin = getattr(exc, "origin", None)
     if isinstance(origin, UnreadableResponseError):
         return {
             "read_format": origin.response_format,
             "read_field": origin.field,
             "read_parser_position": origin.parser_position,
+            "http_status": None,
+            "fetch_reason": None,
+            "fetch_retry_after_seconds": None,
         }
-    return {"read_format": None, "read_field": None, "read_parser_position": None}
+    if isinstance(origin, ExternalFetchError):
+        return {
+            "read_format": None,
+            "read_field": None,
+            "read_parser_position": None,
+            "http_status": getattr(origin, "status_code", None),
+            "fetch_reason": getattr(origin, "reason", None),
+            "fetch_retry_after_seconds": getattr(origin, "retry_after_seconds", None),
+        }
+    return {
+        "read_format": None,
+        "read_field": None,
+        "read_parser_position": None,
+        "http_status": None,
+        "fetch_reason": None,
+        "fetch_retry_after_seconds": None,
+    }
+
+
+def _error_message(exc: BaseException) -> str:
+    """error_message に焼く文字列を決める。
+
+    統合 marker は origin の ``_default_message`` (PII-free な自己記述) を採り、explicit
+    message に載りうる secret (SSRF guard 等) を ``str(origin)`` 経由で漏らさない。
+    origin を持たない例外 (DB / 想定外) は ``str(exc)`` に退避する。
+    """
+    origin = getattr(exc, "origin", None)
+    if isinstance(origin, ExternalFetchError | UnreadableResponseError):
+        return origin._default_message()  # noqa: SLF001 (PII-free 既定の意図的利用)
+    return str(exc)
 
 
 def _fqn(exc: BaseException) -> str:

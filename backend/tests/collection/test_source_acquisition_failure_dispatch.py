@@ -10,14 +10,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
 from app.collection.article_acquisition.errors import (
-    AcquisitionExternalFetchError,
-    AcquisitionUnreadableResponseError,
+    AcquisitionReadError,
 )
 from app.collection.article_acquisition.failure_handling import (
     ArticleAcquisitionFailureHandler,
 )
 from app.collection.article_acquisition.fetched_article_converter import (
-    ConversionRejection,
+    AcquisitionConversionRejection,
 )
 from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseError,
@@ -48,9 +47,9 @@ async def _fetch_acquisition_events(
     return list(rows)
 
 
-def _conversion_rejection() -> ConversionRejection:
+def _conversion_rejection() -> AcquisitionConversionRejection:
     """title 欠落の棄却値 (acquisition 所有の reason、cause 無し)。"""
-    return ConversionRejection(
+    return AcquisitionConversionRejection(
         outcome_code="acquisition_conversion_title_missing",
         source_name="VentureBeat",
         raw_url="https://venturebeat.com/rejected",
@@ -67,12 +66,12 @@ async def test_acquisition_error_writes_audit_and_returns_false(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """Stage 1 marker → origin CODE の audit 1 行 + ``reraise=False``。"""
+    """fetch 失敗 → origin CODE の audit 1 行 + fetch specifics + ``reraise=False``。"""
     source_id = sample_source.id
     handler = ArticleAcquisitionFailureHandler(session_factory)
 
-    exc = AcquisitionExternalFetchError(
-        origin_error=FetchAccessDeniedError(status_code=403, reason="forbidden")
+    exc = AcquisitionReadError(
+        origin=FetchAccessDeniedError(status_code=403, reason="forbidden")
     )
     reraise = await handler.handle_source_failure(
         source_id=source_id,
@@ -89,14 +88,19 @@ async def test_acquisition_error_writes_audit_and_returns_false(
     assert ev.outcome_code == "fetch_access_denied"
     assert ev.retryability == "non_retryable"
     assert ev.error_class is not None
-    assert ev.error_class.endswith(".AcquisitionExternalFetchError")
+    assert ev.error_class.endswith(".AcquisitionReadError")
     assert "code" not in ev.payload
     assert ev.payload["source_name"] == "VentureBeat"
-    assert ev.payload["error_message"] == (
-        "AcquisitionExternalFetchError(code='fetch_access_denied')"
-    )
+    # error_message は origin の自己記述 (_default_message)。marker の repr ではない。
+    assert ev.payload["error_message"] == "fetch_access_denied: HTTP 403 (forbidden)"
     assert ev.payload["failure_kind"] == "external_fetch"
     assert ev.payload["failure_action"] is None
+    # fetch origin specifics は構造化列へ (marker 境界で落とさない)。
+    assert ev.payload["http_status"] == 403
+    assert ev.payload["fetch_reason"] == "forbidden"
+    assert ev.payload["fetch_retry_after_seconds"] is None
+    # fetch 経路は read_* を載せない (read/fetch の列分離)。
+    assert ev.payload["read_format"] is None
 
 
 @pytest.mark.asyncio
@@ -111,8 +115,8 @@ async def test_read_failure_writes_reason_outcome_and_read_payload(
     source_id = sample_source.id
     handler = ArticleAcquisitionFailureHandler(session_factory)
 
-    exc = AcquisitionUnreadableResponseError(
-        origin_error=UnreadableResponseError(
+    exc = AcquisitionReadError(
+        origin=UnreadableResponseError(
             reason=UnreadableResponseReason.UNEXPECTED_FIELD_SHAPE,
             response_format="json",
             field="items",
@@ -133,11 +137,56 @@ async def test_read_failure_writes_reason_outcome_and_read_payload(
     assert ev.outcome_code == "read_unexpected_field_shape"
     assert ev.retryability == "non_retryable"
     assert ev.error_class is not None
-    assert ev.error_class.endswith(".AcquisitionUnreadableResponseError")
+    assert ev.error_class.endswith(".AcquisitionReadError")
     assert ev.payload["failure_kind"] == "unreadable_response"
+    # error_message は read origin の自己記述 (_default_message)。
+    assert (
+        ev.payload["error_message"] == "read_unexpected_field_shape: json field=items"
+    )
     assert ev.payload["read_format"] == "json"
     assert ev.payload["read_field"] == "items"
     assert ev.payload["read_parser_position"] is None
+    # read 経路は fetch 列を載せない (read/fetch の列分離)。
+    assert ev.payload["http_status"] is None
+    assert ev.payload["fetch_reason"] is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_failure_error_message_uses_self_describing_default_excluding_pii(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """error_message は origin の ``_default_message`` (PII-free) を焼き、explicit
+    message に載った secret を構造的に排除する。
+
+    ``FetchSsrfBlockedError`` は ``_default_message`` を override しないため自己記述は
+    ``CODE`` のみ。constructor に渡した secret は explicit message (= ``str(origin)``)
+    に載るため、``== "fetch_ssrf_blocked"`` が ``_default_message`` を使う配線の
+    discriminator になる (redaction の有無に依らず str(origin) と区別できる)。
+    """
+    source_id = sample_source.id
+    handler = ArticleAcquisitionFailureHandler(session_factory)
+
+    exc = AcquisitionReadError(
+        origin=FetchSsrfBlockedError(
+            "blocked Authorization: Bearer sk-live-SSRFSECRETvalue123"
+        )
+    )
+    reraise = await handler.handle_source_failure(
+        source_id=source_id,
+        source_name="VentureBeat",
+        exc=exc,
+    )
+
+    assert reraise is False
+    await db_session.rollback()
+    events = await _fetch_acquisition_events(db_session, source_id)
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.outcome_code == "fetch_ssrf_blocked"
+    assert "sk-live-SSRFSECRETvalue123" not in (ev.payload["error_message"] or "")
+    assert ev.payload["error_message"] == "fetch_ssrf_blocked"
 
 
 @pytest.mark.asyncio
@@ -180,8 +229,8 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
     source_id = sample_source.id
     handler = ArticleAcquisitionFailureHandler(session_factory)
 
-    business_exc = AcquisitionExternalFetchError(
-        origin_error=FetchSsrfBlockedError(
+    business_exc = AcquisitionReadError(
+        origin=FetchSsrfBlockedError(
             "blocked Authorization: Bearer sk-live-BUSINESSSECRETabc"
         )
     )
@@ -210,7 +259,7 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
     assert drops, "fallback ログが emit されていない"
     drop = drops[-1]
     assert drop["source_id"] == source_id
-    assert drop["business_error_class"].endswith(".AcquisitionExternalFetchError")
+    assert drop["business_error_class"].endswith(".AcquisitionReadError")
     assert drop["audit_error_class"].endswith(".RuntimeError")
     assert "sk-live-BUSINESSSECRETabc" not in drop["business_error_message"]
     assert "sk-live-AUDITSECRETxyz" not in drop["audit_error_message"]

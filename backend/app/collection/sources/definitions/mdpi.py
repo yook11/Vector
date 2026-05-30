@@ -9,7 +9,7 @@ Source が宣言し引数で渡す。``from-pub-date`` の ``lookback_days`` 窓
 journal-article のみ。corrections / editorials・非 CC BY・実体の薄い abstract・
 日付不明は **ソースが意図的に採らない対象外データ** であって変換失敗でも
 構造的非記事でもない (spec 第4責務 = 収集スコープ宣言。対象外を
-``ConversionRejection`` 化も converter 移設もしない)。スコープ通過後の
+``AcquisitionConversionRejection`` 化も converter 移設もしない)。スコープ通過後の
 degenerate (DOI 欠落 / 空 title) は写像で握りつぶさず素通しし converter が
 ``MISSING_URL`` / ``MISSING_TITLE`` として可視化する。
 """

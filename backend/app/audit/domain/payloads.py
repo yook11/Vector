@@ -64,6 +64,11 @@ class AcquisitionPayload(BasePipelineEventPayload):
     content_type: str | None = None
     body_head: str | None = None
 
+    # 接続失敗 (fetch origin) の specifics。http_status (上の HTTP snapshot 列) と対称に
+    # outcome_code = CODE とは別に reason / Retry-After を復元できるようにする。
+    fetch_reason: str | None = None
+    fetch_retry_after_seconds: float | None = None
+
     # read 失敗 (reader 構造化不能) の specifics。outcome_code = reason.value とは別に
     # どの形式 / どのフィールド / どの位置で落ちたかを残す。
     read_format: str | None = None

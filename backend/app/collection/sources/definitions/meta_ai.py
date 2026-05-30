@@ -52,7 +52,7 @@ def is_collectable_meta_ai_entry(entry: RssEntry) -> bool:
 
     Meta Newsroom は WhatsApp / Threads / Sustainability 等の全社カテゴリが
     混在するため ``<category>`` に ``"AI"`` を含む entry のみを対象範囲として
-    採用する。本判定は ``ConversionRejection`` でなく Source 層の意図的な
+    採用する。本判定は ``AcquisitionConversionRejection`` でなく Source 層の意図的な
     収集スコープ宣言 (3rd 責務) — Reader が返した entry のうちどれを Source
     として収集対象とするかを named-public で表明する。
     """

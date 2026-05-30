@@ -37,74 +37,63 @@ class AcquisitionError(VectorDomainError):
     STAGE: ClassVar[Stage] = Stage.ACQUISITION
 
 
-class SourceAcquisitionError(AcquisitionError):
-    """ソース全体の取得失敗を示す Stage 1 marker base。
+class AcquisitionReadError(AcquisitionError):
+    """source を read する失敗 (取得 / 読取 を集約した Stage 1 marker)。
 
-    leaf class が retry 方針と failure kind を持つ。``code`` は origin error の
-    ``CODE`` を ``outcome_code`` に焼くための instance 属性。
+    fetch (接続境界 ``ExternalFetchError``) と read (構造化境界
+    ``UnreadableResponseError``) はどちらも「source を読めなかった」失敗で、origin が
+    ``CODE`` / 型 / ``_default_message`` で既に自己記述している。marker は origin を
+    そのまま hold し、段境界で要る分類だけを origin から per-instance で導く:
+
+    - ``code`` = origin の ``CODE`` (outcome_code に焼く)。
+    - ``FAILURE_KIND`` = origin 種別 (fetch=``external_fetch`` /
+      read=``unreadable_response``)。
+    - ``RETRYABILITY`` = read は全 terminal なので ``NON_RETRYABLE`` 固定、fetch は
+      origin 自身の ``retryable`` (失敗の性質、SSoT) を ``Retryability`` enum へ変換。
+
+    ``code`` / ``FAILURE_KIND`` / ``RETRYABILITY`` は instance 属性。projection
+    (``project_marker_failure``) が大文字 ``FAILURE_KIND`` / ``RETRYABILITY`` を
+    getattr し ``code`` を小文字で先読みする配線に合わせる。``__str__``
+    (``SAFE_ATTRS``) は ``code`` のみ公開し origin の生 message を載せない。
     """
 
     SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("code",)
+    FAILURE_ACTION: ClassVar[FailureAction | None] = None
 
+    origin: ExternalFetchError | UnreadableResponseError
     code: str
-    origin_error: ExternalFetchError | UnreadableResponseError
+    FAILURE_KIND: str  # per-instance (origin 種別から導出)
+    RETRYABILITY: Retryability  # per-instance (read=terminal / fetch=origin.retryable)
 
     def __init__(
         self,
         *,
-        origin_error: ExternalFetchError | UnreadableResponseError,
+        origin: ExternalFetchError | UnreadableResponseError,
     ) -> None:
         super().__init__()
-        self.origin_error = origin_error
-        self.code = origin_error.CODE
-
-
-class AcquisitionExternalFetchError(SourceAcquisitionError):
-    """Stage 1 外部取得失敗 marker。
-
-    retry 可否は origin error 自身の ``retryable`` (失敗の性質、SSoT) から
-    per-instance で導く。``code`` と同じく origin から運ぶため leaf を分けない。
-    family の bool を audit の ``Retryability`` enum へ変換するのは marker の責務
-    (family を audit 語彙に結合させず段境界を保つ)。
-    """
-
-    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("code",)
-    FAILURE_KIND: ClassVar[str] = "external_fetch"
-    FAILURE_ACTION: ClassVar[FailureAction | None] = None
-    RETRYABILITY: Retryability  # per-instance (origin.retryable から導出)
-
-    def __init__(
-        self,
-        *,
-        origin_error: ExternalFetchError | UnreadableResponseError,
-    ) -> None:
-        super().__init__(origin_error=origin_error)
-        self.RETRYABILITY = (
-            Retryability.RETRYABLE
-            if isinstance(origin_error, ExternalFetchError) and origin_error.retryable
-            else Retryability.NON_RETRYABLE
-        )
-
-
-class AcquisitionUnreadableResponseError(SourceAcquisitionError):
-    """取得済み payload を Stage 1 reader が構造化できなかった失敗。"""
-
-    SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("code",)
-    FAILURE_KIND: ClassVar[str] = "unreadable_response"
-    RETRYABILITY: ClassVar[Retryability] = Retryability.NON_RETRYABLE
-    FAILURE_ACTION: ClassVar[FailureAction | None] = None
+        self.origin = origin
+        self.code = origin.CODE
+        if isinstance(origin, ExternalFetchError):
+            self.FAILURE_KIND = "external_fetch"
+            self.RETRYABILITY = (
+                Retryability.RETRYABLE
+                if origin.retryable
+                else Retryability.NON_RETRYABLE
+            )
+        else:
+            self.FAILURE_KIND = "unreadable_response"
+            self.RETRYABILITY = Retryability.NON_RETRYABLE
 
 
 def map_origin_to_acquisition(
     exc: ExternalFetchError | UnreadableResponseError,
-) -> SourceAcquisitionError:
-    """取得 / 読取 origin error を Stage 1 marker に詰め替える。
+) -> AcquisitionReadError:
+    """取得 / 読取 origin error を Stage 1 統合 marker に詰め替える。
 
-    retry 可否の分類は ``AcquisitionExternalFetchError`` が origin の
-    ``retryable`` から導くため、ここでは origin の種別だけで marker を選ぶ。
+    fetch / read の分類は ``AcquisitionReadError.__init__`` が origin から導くため、
+    ここは union 型一致を検査して詰め替えるだけ (型注釈上 ``TypeError`` は不到達だが、
+    動的経路の混入を弾く防御ガードとして残す)。
     """
-    if isinstance(exc, UnreadableResponseError):
-        return AcquisitionUnreadableResponseError(origin_error=exc)
-    if isinstance(exc, ExternalFetchError):
-        return AcquisitionExternalFetchError(origin_error=exc)
+    if isinstance(exc, ExternalFetchError | UnreadableResponseError):
+        return AcquisitionReadError(origin=exc)
     raise TypeError(f"unmapped acquisition origin error: {type(exc).__qualname__}")
