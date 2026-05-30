@@ -36,6 +36,15 @@ def reload_app_with_env(
                 "INTERNAL_FRONTEND_BASE_URL",
                 "http://your-vector-frontend-app.flycast:3000",
             )
+            # 同様に production SSL fail-safe (_require_ssl_in_production) も
+            # DB 接続文字列に TLS sslmode を要求する。docs gate の検証に集中する
+            # ため sslmode=require 付き URL を入れ、migration URL は外す。
+            monkeypatch.setenv(
+                "DATABASE_URL",
+                "postgresql+asyncpg://vector_app:strongpassword@db.neon.tech/neondb"
+                "?sslmode=require",
+            )
+            monkeypatch.delenv("MIGRATION_DATABASE_URL", raising=False)
         from app import config, main
 
         importlib.reload(config)

@@ -11,7 +11,13 @@ from app.config import Settings
 
 _VALID_BFF_SECRET = "b" * 64
 _VALID_REVALIDATE_SECRET = "c" * 64
-_VALID_DATABASE_URL = "postgresql+asyncpg://vector_app:strongpassword@db:5432/vector"
+# baseline は sslmode=require 付き。production SSL fail-safe
+# (_require_ssl_in_production) は env="production" のとき DB URL に TLS sslmode を
+# 要求するため、production を渡す既存テスト (flycast narrowing 等) がこの fixture を
+# 流用しても先に SSL で落ちない。dev では sslmode は無視されるので harmless。
+_VALID_DATABASE_URL = (
+    "postgresql+asyncpg://vector_app:strongpassword@db:5432/vector?sslmode=require"
+)
 _VALID_FRONTEND_URL = "https://app.example.com"
 _VALID_INTERNAL_FRONTEND_BASE_URL = "http://frontend:3000"
 
@@ -225,3 +231,62 @@ def test_internal_frontend_base_url_accepts_flycast_in_production() -> None:
     """production で *.flycast は許可される。"""
     s = Settings(env="production", internal_frontend_base_url=_VALID_FLYCAST_URL)
     assert s.internal_frontend_base_url == _VALID_FLYCAST_URL
+
+
+# --- production DB URL の SSL 強制 (_require_ssl_in_production) ----------------
+#
+# Neon は public internet 越しの接続のため、production では DB 接続文字列に TLS
+# sslmode (require / verify-ca / verify-full) を要求する。dev は docker 同一
+# network の平文で良いので何も強制しない。
+
+# sslmode を持たない Neon 風 URL。各テストで sslmode を付け外しする土台。
+_NEON_DB_URL_NO_SSL = (
+    "postgresql+asyncpg://vector_app:strongpassword@ep-x.neon.tech/neondb"
+)
+
+
+def test_production_rejects_database_url_without_sslmode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """production で DATABASE_URL に sslmode が無ければ ValidationError。"""
+    monkeypatch.setenv("DATABASE_URL", _NEON_DB_URL_NO_SSL)
+    with pytest.raises(ValidationError, match="sslmode"):
+        Settings(env="production", internal_frontend_base_url=_VALID_FLYCAST_URL)
+
+
+def test_production_accepts_database_url_with_sslmode_require(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """production で sslmode=require 付き DATABASE_URL は通る。"""
+    monkeypatch.setenv("DATABASE_URL", f"{_NEON_DB_URL_NO_SSL}?sslmode=require")
+    s = Settings(env="production", internal_frontend_base_url=_VALID_FLYCAST_URL)
+    assert "sslmode=require" in s.database_url
+
+
+def test_production_rejects_database_url_with_sslmode_disable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """production で sslmode=disable (平文) は ValidationError。"""
+    monkeypatch.setenv("DATABASE_URL", f"{_NEON_DB_URL_NO_SSL}?sslmode=disable")
+    with pytest.raises(ValidationError, match="sslmode"):
+        Settings(env="production", internal_frontend_base_url=_VALID_FLYCAST_URL)
+
+
+def test_production_rejects_migration_url_without_sslmode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """production で MIGRATION_DATABASE_URL に sslmode が無ければ ValidationError。"""
+    # DATABASE_URL 側は TLS を満たし、MIGRATION_DATABASE_URL だけ平文にする。
+    monkeypatch.setenv("DATABASE_URL", f"{_NEON_DB_URL_NO_SSL}?sslmode=require")
+    monkeypatch.setenv("MIGRATION_DATABASE_URL", _NEON_DB_URL_NO_SSL)
+    with pytest.raises(ValidationError, match="MIGRATION_DATABASE_URL"):
+        Settings(env="production", internal_frontend_base_url=_VALID_FLYCAST_URL)
+
+
+def test_development_allows_database_url_without_sslmode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """development では sslmode 無し DATABASE_URL でも起動できる (docker 平文)。"""
+    monkeypatch.setenv("DATABASE_URL", _NEON_DB_URL_NO_SSL)
+    s = Settings()  # env は default の development
+    assert s.database_url == _NEON_DB_URL_NO_SSL

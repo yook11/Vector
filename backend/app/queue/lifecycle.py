@@ -11,11 +11,12 @@ from __future__ import annotations
 
 import logfire
 import structlog
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from taskiq import TaskiqEvents, TaskiqState
 from taskiq_redis import RedisStreamBroker
 
 from app.config import settings
+from app.db_ssl import create_app_engine
 from app.logfire_setup import setup_logfire
 from app.queue.brokers import (
     broker_analysis,
@@ -38,7 +39,7 @@ def _register_worker_lifecycle(broker: RedisStreamBroker, label: str) -> None:
         # on_startup だけが発火するため、プロセスごとに正しい service_name で
         # 1 回ずつ呼ばれる。
         setup_logfire(f"vector-worker-{label}")
-        state.engine = create_async_engine(settings.database_url, echo=False)
+        state.engine = create_app_engine(settings.database_url, echo=False)
         state.session_factory = async_sessionmaker(
             state.engine,
             class_=AsyncSession,

@@ -1,10 +1,9 @@
 import asyncio
 from logging.config import fileConfig
 
-from sqlalchemy.ext.asyncio import create_async_engine
-
 from alembic import context
 from app.config import settings
+from app.db_ssl import clean_db_url, create_app_engine
 from app.models import *  # noqa: F401, F403  — register all models
 from app.models.base import Base
 
@@ -38,8 +37,10 @@ def _migration_url() -> str:
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode."""
+    # offline は接続しないが、ssl 系 param が literal SQL に漏れないよう
+    # online と同じく URL を clean する (整合)。
     context.configure(
-        url=_migration_url(),
+        url=clean_db_url(_migration_url()),
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -63,7 +64,7 @@ def do_run_migrations(connection) -> None:  # type: ignore[no-untyped-def]
 
 async def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""
-    connectable = create_async_engine(_migration_url())
+    connectable = create_app_engine(_migration_url())
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
     await connectable.dispose()

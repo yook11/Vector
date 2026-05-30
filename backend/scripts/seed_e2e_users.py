@@ -36,9 +36,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sqlalchemy import text  # noqa: E402
-from sqlalchemy.ext.asyncio import create_async_engine  # noqa: E402
 
 from app.config import settings  # noqa: E402
+from app.db_ssl import create_app_engine  # noqa: E402
 
 # Better Auth `@better-auth/utils/password.node.mjs` 既定値と一致させる。
 # i4_seed_e2e_users.py から移植 (互換性は実機 signUp との完全一致で検証済み)。
@@ -93,7 +93,7 @@ async def _seed() -> None:
     # auth schema への write は table owner (vector) role で接続する必要がある。
     # alembic env.py と同じ fallback (migration_database_url or database_url)。
     db_url = settings.migration_database_url or settings.database_url
-    engine = create_async_engine(db_url)
+    engine = create_app_engine(db_url)
     now = datetime.datetime.now(datetime.UTC)
     try:
         async with engine.begin() as conn:

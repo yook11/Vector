@@ -4,6 +4,9 @@ from urllib.parse import urlparse
 
 from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.exc import ArgumentError
+
+from app.db_ssl import parse_sslmode
 
 # backend/app/config.py から 2 階層上がプロジェクトルート
 _ENV_FILE = Path(__file__).resolve().parent.parent.parent / ".env"
@@ -38,6 +41,11 @@ _KNOWN_WEAK_DATABASE_URL_PATTERNS = frozenset(
 # global allowlist は全環境共通、本番は *.flycast に絞る (production narrowing)。
 _ALLOWED_INTERNAL_FRONTEND_HOSTS = frozenset({"localhost", "127.0.0.1", "frontend"})
 _ALLOWED_INTERNAL_FRONTEND_HOST_SUFFIX = ".flycast"
+
+# production で DB 接続文字列に要求する TLS sslmode。Neon は public internet
+# 越しのため平文 (disable / allow / prefer / 未指定) を起動時に拒否する。
+# sslmode の解釈と allowlist は db_ssl.parse_sslmode に SSoT 化 (二重定義回避)。
+_PRODUCTION_REQUIRED_SSLMODES = frozenset({"require", "verify-ca", "verify-full"})
 
 
 def _internal_frontend_host(url: str) -> str | None:
@@ -234,6 +242,43 @@ class Settings(BaseSettings):
                 "in production INTERNAL_FRONTEND_BASE_URL must be a *.flycast host "
                 f"(Fly private network), got host {host!r}"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _require_ssl_in_production(self) -> Self:
+        """production では DB 接続文字列に TLS sslmode を強制する (起動時 fail-fast)。
+
+        Neon は public internet 越しの接続のため平文は不可。``database_url`` と
+        (設定されていれば) ``migration_database_url`` の sslmode が
+        require / verify-ca / verify-full のいずれかでなければ起動を拒否する。
+        sslmode の解釈と allowlist は ``db_ssl.parse_sslmode`` に委譲し二重定義を
+        避ける (typo は parse_sslmode が ValueError で弾く)。SSLContext の組み立て
+        自体は接続側 (``db_ssl.create_app_engine``) に一元化し、config は本番の
+        最低ラインだけを強制する。dev (docker 同一 network) は平文で良いため何も
+        しない。
+        """
+        if self.env != "production":
+            return self
+        for name, url in (
+            ("DATABASE_URL", self.database_url),
+            ("MIGRATION_DATABASE_URL", self.migration_database_url),
+        ):
+            if url is None:
+                continue
+            try:
+                sslmode = parse_sslmode(url)
+            except ArgumentError as exc:
+                # make_url が parse できない URL は ValueError に包んで Pydantic の
+                # ValidationError 経路に乗せる (生の ArgumentError を漏らさない)。
+                # password 漏洩を避けるため URL 自体は message に含めない。
+                raise ValueError(f"{name} is not a parseable connection URL") from exc
+            if sslmode not in _PRODUCTION_REQUIRED_SSLMODES:
+                raise ValueError(
+                    f"in production {name} must use a TLS sslmode "
+                    f"({sorted(_PRODUCTION_REQUIRED_SSLMODES)}), got {sslmode!r}; "
+                    "append `?sslmode=require` (connections to Neon cross the "
+                    "public internet)"
+                )
         return self
 
 

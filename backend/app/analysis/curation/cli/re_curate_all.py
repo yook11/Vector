@@ -44,7 +44,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
-    create_async_engine,
 )
 
 from app.analysis.curation.ai.base import BaseCurator
@@ -54,6 +53,7 @@ from app.analysis.curation.cli.recuration_service import (
     RecurationSummary,
 )
 from app.config import settings
+from app.db_ssl import create_app_engine
 from app.models.article import Article
 from app.models.article_curation import ArticleCuration
 
@@ -199,7 +199,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     async def _bootstrap() -> int:
-        engine = create_async_engine(settings.database_url, echo=False)
+        engine = create_app_engine(settings.database_url, echo=False)
         try:
             session_factory = async_sessionmaker(
                 engine, class_=AsyncSession, expire_on_commit=False
