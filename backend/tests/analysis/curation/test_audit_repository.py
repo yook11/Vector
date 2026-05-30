@@ -56,6 +56,7 @@ from app.audit.stages.curation import CurationAuditRepository
 from app.models.article import Article
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
+from app.repositories.articles import ArticleRepository
 
 
 def _curator_mock(
@@ -438,6 +439,41 @@ async def test_append_backfill_curation_aged_out_records_rejected_with_aged_code
     # payload は curation variant (article_id 経由で top-level source_id を補填)
     assert ev.payload["kind"] == "curation"
     assert ev.source_id == sample_source.id
+
+
+@pytest.mark.asyncio
+async def test_append_backfill_curation_aged_out_keeps_article_identity_after_delete(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """救済断念の監査は記事 DELETE 後も payload で記事を特定できる。
+
+    本番 caller (``_delete_aged_out_curations``) は「audit INSERT → 記事 DELETE →
+    commit」を同一 tx で行う。FK ``ondelete=SET NULL`` で ``article_id`` 列は NULL
+    に落ち article 軸 index から外れるため、記事識別子は削除に耐える payload
+    snapshot (``target_article_id``) で残さねば「どの記事か」が失われる。
+    """
+    from app.audit.stages.curation import BACKFILL_CURATION_AGED_OUT_CODE
+
+    article = await _make_article(db_session, sample_source)
+    article_id = article.id
+
+    # 本番 caller と同じ tx 順序を再現する
+    async with session_factory() as session:
+        await CurationAuditRepository(session).append_backfill_curation_aged_out(
+            article_id=article_id
+        )
+        await ArticleRepository(session).delete_by_id(article_id)
+        await session.commit()
+
+    ev = await _fetch_by_outcome(db_session, BACKFILL_CURATION_AGED_OUT_CODE)
+    # FK 列は記事削除で NULL に落ちる
+    assert ev.article_id is None
+    # source_id は DELETE 前の逆引きで残る (source は削除されない)
+    assert ev.source_id == sample_source.id
+    # 記事識別子は削除に耐える payload snapshot で残る
+    assert ev.payload["target_article_id"] == article_id
 
 
 # ---------------------------------------------------------------------------

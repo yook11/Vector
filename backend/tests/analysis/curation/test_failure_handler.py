@@ -132,6 +132,8 @@ async def test_output_blocked_writes_audit_then_deletes_article(
     assert ev.article_id is None
     # source_id は auto-resolve で埋まっている (DELETE 前に INSERT したため)
     assert ev.source_id == expected_source_id
+    # 記事識別子は削除に耐える payload snapshot で残る (article_id は SET NULL)
+    assert ev.payload["target_article_id"] == article_id
     payload = ev.payload
     assert payload["ai_model"] == GEMINI_CURATION_SPEC.model
     assert payload["error_message"] is not None

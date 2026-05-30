@@ -112,6 +112,9 @@ class CurationAuditRepository:
         payload = CurationPayload(
             failure_kind=projection.failure_kind,
             failure_action=failure_action_value(projection),
+            # DROP は記事 DELETE と同一 tx で焼かれ FK article_id が SET NULL に
+            # 落ちるため、削除に耐える記事識別子を payload に控える。
+            target_article_id=ready.article_id,
             **_input_content_fields(ready.original_content),
             ai_model=curator.model_name,
             prompt_version=curator.prompt_version,
@@ -131,12 +134,17 @@ class CurationAuditRepository:
     # --- 救済断念経路 (年齢削除と同一 tx) ---------------------------------
 
     async def append_backfill_curation_aged_out(self, *, article_id: int) -> None:
-        """古い未処理記事を backfill が諦めた事実を記録する。"""
+        """古い未処理記事を backfill が諦めた事実を記録する。
+
+        記事 DELETE と同一 tx で焼かれ FK article_id が SET NULL に落ちるため、
+        削除に耐える記事識別子を payload に控える (これが無いと「どの記事か」が
+        削除後に失われる)。
+        """
         await self._events.append(
             stage=Stage.BACKFILL_CURATE,
             event_type=EventType.REJECTED,
             outcome_code=BACKFILL_CURATION_AGED_OUT_CODE,
-            payload=CurationPayload(),
+            payload=CurationPayload(target_article_id=article_id),
             article_id=article_id,
         )
 
