@@ -10,7 +10,6 @@ test_source_adapter_profiles に集約)。
 
 from __future__ import annotations
 
-from app.collection.article_acquisition.errors import ConversionReason
 from app.collection.article_acquisition.fetched_article import FetchedArticle
 from app.collection.article_acquisition.fetched_article_converter import (
     ConversionRejection,
@@ -69,4 +68,4 @@ async def test_collect_convert_surfaces_empty_title_entry_as_rejection() -> None
     rejections = [i for i in items if isinstance(i, ConversionRejection)]
 
     assert len(rejections) == 1
-    assert rejections[0].error.conversion_reason is ConversionReason.MISSING_TITLE
+    assert rejections[0].outcome_code == "acquisition_conversion_title_missing"

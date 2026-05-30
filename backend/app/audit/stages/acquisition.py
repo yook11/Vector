@@ -15,9 +15,9 @@ from app.audit.failure_projection import (
     unknown_failure_projection,
 )
 from app.audit.repository import PipelineEventRepository
-from app.collection.article_acquisition.errors import (
-    FetchedArticleConversionError,
-    SourceAcquisitionError,
+from app.collection.article_acquisition.errors import SourceAcquisitionError
+from app.collection.article_acquisition.fetched_article_converter import (
+    ConversionRejection,
 )
 from app.shared.security.redaction import redact_secrets
 
@@ -137,26 +137,32 @@ class SourceAcquisitionAuditRepository:
         self,
         *,
         source_id: int | None,
-        exc: FetchedArticleConversionError,
+        rejection: ConversionRejection,
     ) -> None:
-        """per-entry 変換不能を rejected として記録する。"""
+        """per-entry 変換不能を rejected として記録する。
+
+        ``outcome_code`` は責任元 VO の reason を verbatim で焼く (URL=SafeUrl 由来 /
+        title 欠落・想定外=acquisition 由来)。``error_class`` / ``error_chain`` は
+        原因例外 ``cause`` から導く (title 欠落は cause 無しなので NULL)。
+        """
+        cause = rejection.cause
         payload = AcquisitionPayload(
-            source_name=exc.source_name,
-            error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
-            error_chain=extract_error_chain(exc),
-            conversion_observed_reason=str(exc.conversion_reason),
-            conversion_raw_url=(redact_secrets(exc.raw_url) if exc.raw_url else None),
-            conversion_has_title=exc.has_title,
-            conversion_body_length=exc.body_length,
-            conversion_has_published_at=exc.has_published_at,
+            source_name=rejection.source_name,
+            error_chain=extract_error_chain(cause) if cause is not None else None,
+            conversion_raw_url=(
+                redact_secrets(rejection.raw_url) if rejection.raw_url else None
+            ),
+            conversion_has_title=rejection.has_title,
+            conversion_body_length=rejection.body_length,
+            conversion_has_published_at=rejection.has_published_at,
         )
         await self._events.append(
             stage=Stage.ACQUISITION,
             event_type=EventType.REJECTED,
-            outcome_code=exc.code,
+            outcome_code=rejection.outcome_code,
             payload=payload,
             source_id=source_id,
-            error_class=_fqn(exc),
+            error_class=_fqn(cause) if cause is not None else None,
         )
 
 

@@ -64,8 +64,6 @@ class TestAcquisitionPayloadConversionFields:
     def test_conversion_fields_default_none(self) -> None:
         """全 optional field の default は None。"""
         payload = AcquisitionPayload()
-        assert payload.conversion_analyzable_reason is None
-        assert payload.conversion_observed_reason is None
         assert payload.conversion_raw_url is None
         assert payload.conversion_has_title is None
         assert payload.conversion_body_length is None
@@ -74,16 +72,12 @@ class TestAcquisitionPayloadConversionFields:
     def test_conversion_fields_serialize_to_json(self) -> None:
         """``conversion_*`` を与えると JSONB 焼付 (model_dump json) に乗る。"""
         payload = AcquisitionPayload(
-            conversion_analyzable_reason="body_too_short",
-            conversion_observed_reason="missing_title",
             conversion_raw_url="https://example.com/a",
             conversion_has_title=True,
             conversion_body_length=42,
             conversion_has_published_at=False,
         )
         dumped = payload.model_dump(mode="json")
-        assert dumped["conversion_analyzable_reason"] == "body_too_short"
-        assert dumped["conversion_observed_reason"] == "missing_title"
         assert dumped["conversion_raw_url"] == "https://example.com/a"
         assert dumped["conversion_has_title"] is True
         assert dumped["conversion_body_length"] == 42

@@ -57,17 +57,19 @@ class ArticleAcquisitionFailureHandler:
                     audit_session
                 ).append_conversion_rejected(
                     source_id=source_id,
-                    exc=rej.error,
+                    rejection=rej,
                 )
                 await audit_session.commit()
         except Exception as audit_exc:
             logger.exception(
                 "fetched_article_conversion_audit_dropped",
                 source_id=source_id,
+                business_outcome_code=rej.outcome_code,
                 business_error_class=(
-                    f"{type(rej.error).__module__}.{type(rej.error).__qualname__}"
+                    f"{type(rej.cause).__module__}.{type(rej.cause).__qualname__}"
+                    if rej.cause is not None
+                    else None
                 ),
-                business_error_message=redact_secrets(str(rej.error))[:500],
                 audit_error_class=(
                     f"{type(audit_exc).__module__}.{type(audit_exc).__qualname__}"
                 ),

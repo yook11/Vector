@@ -60,6 +60,18 @@ def _rejection_fetched(url: str = "https://venturebeat.com/x") -> FetchedArticle
     return FetchedArticle(title="   ", url=url, body="x" * 42, published_at=None)
 
 
+def _url_rejection_fetched(url: str = "http://127.0.0.1/secret") -> FetchedArticle:
+    """real convert → URL VO 失敗 (private IP) の ``ConversionRejection``。
+
+    title は揃うが SafeUrl の SSRF 防御で ``host_not_public_ip`` 棄却になる。
+    ``CanonicalArticleUrlInvalidError`` → ``SafeUrlInvalidError`` の cause 連鎖を
+    監査が辿れる (error_chain 深さ>1) ことを固定するための入力。
+    """
+    return FetchedArticle(
+        title="Has Title", url=url, body="x" * 42, published_at=_PUBLISHED
+    )
+
+
 def _bug_fetched(url: str) -> FetchedArticle:
     """convert を monkeypatch で raise させる対象 entry (URL で識別)。"""
     return FetchedArticle(
@@ -351,8 +363,9 @@ async def test_conversion_rejection_writes_rejected_event_in_separate_tx(
     """棄却監査は別 session に commit 済の REJECTED 行として残る。
 
     ``stage='acquisition'`` / ``event_type='rejected'`` 固定、``outcome_code`` は
-    単一 event code。
-    深刻度細分は ``payload.conversion_*`` 構造化列で SQL drill-down できる。
+    責任元の reason を verbatim で運ぶ (title 欠落は acquisition 所有の
+    ``acquisition_conversion_title_missing``)。観測スナップショットは
+    ``payload.conversion_*`` 構造化列で SQL drill-down できる。
     """
     svc = ArticleAcquisitionService(
         session_factory,
@@ -371,19 +384,51 @@ async def test_conversion_rejection_writes_rejected_event_in_separate_tx(
         .one()
     )
     assert row.stage == "acquisition"
-    assert row.outcome_code == "article_conversion_rejected"
+    assert row.outcome_code == "acquisition_conversion_title_missing"
     assert row.retryability is None
     assert row.source_id == vb_source.id
-    assert row.error_class.endswith(".FetchedArticleConversionError")
-    # ``conversion_analyzable_reason`` カラムは新コードでは未使用 (NULL)、
-    # JSONB に値が焼かれないことを固定する。
-    assert "conversion_analyzable_reason" not in row.payload or (
-        row.payload.get("conversion_analyzable_reason") is None
-    )
-    assert row.payload["conversion_observed_reason"] == "missing_title"
+    # title 欠落は責任元 VO 例外を持たない (acquisition 方針違反)。
+    # cause 無し → error_class は NULL。
+    assert row.error_class is None
     assert row.payload["conversion_has_title"] is True
     assert row.payload["conversion_body_length"] == 42
     assert row.payload["conversion_has_published_at"] is False
+
+
+@pytest.mark.asyncio
+async def test_invalid_url_rejection_burns_url_vo_reason_with_cause_chain(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    vb_source: NewsSource,
+) -> None:
+    """URL VO 失敗は責任元 reason を verbatim で焼き、cause 連鎖を監査に残す。
+
+    private IP は SafeUrl の SSRF 防御で ``host_not_public_ip`` に精密分類され
+    (旧 ``INVALID_URL`` 潰しを解消)、``CanonicalArticleUrlInvalidError`` →
+    ``SafeUrlInvalidError`` の cause が ``error_class`` / ``error_chain`` (深さ>1)
+    として残る。
+    """
+    svc = ArticleAcquisitionService(
+        session_factory,
+        _StubSource([_url_rejection_fetched()]),
+    )
+
+    await svc.execute(vb_source.id)
+
+    row = (
+        (
+            await db_session.execute(
+                select(PipelineEvent).where(PipelineEvent.event_type == "rejected")
+            )
+        )
+        .scalars()
+        .one()
+    )
+    assert row.outcome_code == "host_not_public_ip"
+    assert row.error_class.endswith(".CanonicalArticleUrlInvalidError")
+    # URL VO 失敗は下位 SafeUrl 失敗を __cause__ に連鎖 → chain 深さ>1 (非空虚)。
+    assert row.payload["error_chain"] is not None
+    assert len(row.payload["error_chain"]) > 1
 
 
 @pytest.mark.asyncio
@@ -430,8 +475,8 @@ async def test_unexpected_convert_bug_is_valued_and_stream_continues(
         (
             await db_session.execute(
                 select(PipelineEvent).where(
-                    PipelineEvent.payload["conversion_observed_reason"].astext
-                    == "unexpected_error"
+                    PipelineEvent.outcome_code
+                    == "acquisition_conversion_unexpected_error"
                 )
             )
         )
@@ -439,7 +484,8 @@ async def test_unexpected_convert_bug_is_valued_and_stream_continues(
         .all()
     )
     assert len(rows) == 1
-    assert rows[0].error_class.endswith(".FetchedArticleConversionError")
+    # error_class は本当のバグ (cause) 由来 — 再分類器でラップしない。
+    assert rows[0].error_class.endswith(".RuntimeError")
 
 
 async def _succeeded_events(db_session: AsyncSession) -> list[PipelineEvent]:

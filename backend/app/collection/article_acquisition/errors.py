@@ -31,69 +31,17 @@ from app.collection.external_fetch_errors import (
 from app.logfire_exceptions import VectorDomainError
 
 
-class ConversionReason(StrEnum):
-    """``FetchedArticle`` 変換が不成立になった理由語彙。
+class AcquisitionConversionDefect(StrEnum):
+    """acquisition がスコープ所有する変換棄却理由 (自己記述コード)。
 
-    値は audit/監視で集計 key になるため安定な snake_case 文字列。
+    value はそのまま audit の ``outcome_code`` に焼かれる (analysis BC の
+    ``AnalyzableArticleDefect`` と同形)。URL 不正は責任元 ``CanonicalArticleUrl``
+    の ``SafeUrlInvalidReason`` を直接運ぶため、ここには載らない。本 enum は
+    収集側固有の理由 (title 欠落 / precondition 通過後の想定外バグ) のみを持つ。
     """
 
-    MISSING_TITLE = "missing_title"
-    MISSING_URL = "missing_url"
-    INVALID_URL = "invalid_url"
-    BODY_TOO_SHORT = "body_too_short"
-    BODY_TOO_LONG = "body_too_long"
-    BODY_ABSENT = "body_absent"
-    PUBLISHED_ABSENT = "published_absent"
-    READY_PRECLUDED = "ready_precluded"
-    ANALYZABLE_INVARIANT = "analyzable_invariant"
-    UNEXPECTED_ERROR = "unexpected_error"
-
-
-class FetchedArticleConversionError(Exception):
-    """``FetchedArticle`` を ``AnalyzableArticle`` / ``ObservedArticle`` の
-    どちらにも変換できなかった失敗。
-
-    ``raw_url`` は素の値を保持し、redact は監査永続化側で行う。
-
-    Attributes:
-        code: ``outcome_code`` に焼く event code。
-        conversion_reason: Observed にもなれなかった理由。
-        source_name: source 表示名。
-        raw_url: 変換前の URL。
-        has_title: trim 前 title の有無。
-        body_length: body 候補の長さ。
-        has_published_at: published_at hint の有無。
-    """
-
-    CODE: ClassVar[str] = "article_conversion_rejected"
-
-    code: str
-    conversion_reason: ConversionReason
-    source_name: str | None
-    raw_url: str | None
-    has_title: bool
-    body_length: int | None
-    has_published_at: bool
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        conversion_reason: ConversionReason,
-        source_name: str | None,
-        raw_url: str | None,
-        has_title: bool,
-        body_length: int | None,
-        has_published_at: bool,
-    ) -> None:
-        super().__init__(message)
-        self.code = self.CODE
-        self.conversion_reason = conversion_reason
-        self.source_name = source_name
-        self.raw_url = raw_url
-        self.has_title = has_title
-        self.body_length = body_length
-        self.has_published_at = has_published_at
+    TITLE_MISSING = "acquisition_conversion_title_missing"
+    UNEXPECTED_ERROR = "acquisition_conversion_unexpected_error"
 
 
 class UnreadableResponseError(Exception):

@@ -64,8 +64,6 @@ class AcquisitionPayload(BasePipelineEventPayload):
     content_type: str | None = None
     body_head: str | None = None
 
-    conversion_analyzable_reason: str | None = None
-    conversion_observed_reason: str | None = None
     conversion_raw_url: str | None = None
     conversion_has_title: bool | None = None
     conversion_body_length: int | None = None

@@ -11,8 +11,6 @@ from structlog.testing import capture_logs
 
 from app.collection.article_acquisition.errors import (
     AcquisitionExternalFetchTerminalError,
-    ConversionReason,
-    FetchedArticleConversionError,
 )
 from app.collection.article_acquisition.failure_handling import (
     ArticleAcquisitionFailureHandler,
@@ -45,19 +43,16 @@ async def _fetch_acquisition_events(
     return list(rows)
 
 
-def _conversion_rejection(
-    message: str = "conversion rejected: missing_title",
-) -> ConversionRejection:
+def _conversion_rejection() -> ConversionRejection:
+    """title 欠落の棄却値 (acquisition 所有の reason、cause 無し)。"""
     return ConversionRejection(
-        error=FetchedArticleConversionError(
-            message,
-            conversion_reason=ConversionReason.MISSING_TITLE,
-            source_name="VentureBeat",
-            raw_url="https://venturebeat.com/rejected",
-            has_title=True,
-            body_length=42,
-            has_published_at=False,
-        )
+        outcome_code="acquisition_conversion_title_missing",
+        source_name="VentureBeat",
+        raw_url="https://venturebeat.com/rejected",
+        has_title=True,
+        body_length=42,
+        has_published_at=False,
+        cause=None,
     )
 
 
@@ -194,12 +189,12 @@ async def test_conversion_rejection_writes_rejected_audit(
     assert len(events) == 1
     ev = events[0]
     assert ev.event_type == "rejected"
-    assert ev.outcome_code == "article_conversion_rejected"
+    assert ev.outcome_code == "acquisition_conversion_title_missing"
     assert ev.retryability is None
-    assert ev.error_class is not None
-    assert ev.error_class.endswith(".FetchedArticleConversionError")
+    # title 欠落は責任元 VO 例外を持たない (acquisition 方針違反)。
+    # cause 無し → error_class は NULL。
+    assert ev.error_class is None
     assert ev.payload["source_name"] == "VentureBeat"
-    assert ev.payload["conversion_observed_reason"] == "missing_title"
     assert ev.payload["conversion_has_title"] is True
     assert ev.payload["conversion_body_length"] == 42
     assert ev.payload["conversion_has_published_at"] is False
@@ -210,11 +205,14 @@ async def test_conversion_rejection_audit_drop_is_logged_with_secrets_redacted(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """変換棄却 audit が落ちても例外を外へ出さず redacted log に退避する。"""
+    """変換棄却 audit が落ちても例外を外へ出さず redacted log に退避する。
+
+    棄却値の観測スナップショットは PII-free なので business 側に free-text は焼かず
+    ``business_outcome_code`` のみを残す (secret 混入経路が構造的に消える)。redaction
+    の witness は audit 例外 (落ちた監査 DB から漏れうる secret) の方で保つ。
+    """
     handler = ArticleAcquisitionFailureHandler(session_factory)
-    rejection = _conversion_rejection(
-        "conversion rejected Authorization: Bearer sk-live-BUSINESSSECRETabc"
-    )
+    rejection = _conversion_rejection()
 
     with (
         patch(
@@ -236,7 +234,8 @@ async def test_conversion_rejection_audit_drop_is_logged_with_secrets_redacted(
     assert drops, "conversion rejection fallback ログが emit されていない"
     drop = drops[-1]
     assert drop["source_id"] == sample_source.id
-    assert drop["business_error_class"].endswith(".FetchedArticleConversionError")
+    assert drop["business_outcome_code"] == "acquisition_conversion_title_missing"
+    # title 欠落は cause 無し → business_error_class は None。
+    assert drop["business_error_class"] is None
     assert drop["audit_error_class"].endswith(".RuntimeError")
-    assert "sk-live-BUSINESSSECRETabc" not in drop["business_error_message"]
     assert "sk-live-AUDITSECRETxyz" not in drop["audit_error_message"]

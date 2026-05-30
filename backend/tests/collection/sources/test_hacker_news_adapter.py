@@ -14,7 +14,7 @@
 - ``HackerNewsReader`` の ``ExternalFetchError`` は ``collect`` を素通しする
 
 passport 業務不変条件は ``test_non_rss_adapters_invariants.py`` [HackerNews]
-が 系統A シートベルトとして所有。degenerate hit の棄却 *理由* (MISSING_URL
+が 系統A シートベルトとして所有。degenerate hit の棄却 *理由* (``url_empty``
 等) は converter 層 (``test_fetched_article_converter.py``) が機構非依存 SSoT
 として所有し、本ファイルは理由を再検証せず「HN 写像が total で可視化に到達
 する」リンクのみ pin する。旧 ``test_*_skipped_in_collect`` / ``count==4`` は

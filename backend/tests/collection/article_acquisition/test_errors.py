@@ -13,8 +13,6 @@ from app.collection.article_acquisition.errors import (
     AcquisitionExternalFetchRecoverableError,
     AcquisitionExternalFetchTerminalError,
     AcquisitionUnreadableResponseError,
-    ConversionReason,
-    FetchedArticleConversionError,
     SourceAcquisitionError,
     UnreadableResponseError,
     map_origin_to_acquisition,
@@ -28,55 +26,6 @@ from tests.collection.test_external_fetch_error_codes import (
     _CONSTRUCTION,
     _concrete_subclasses,
 )
-
-
-def _make(**overrides) -> FetchedArticleConversionError:
-    kwargs = {
-        "conversion_reason": ConversionReason.MISSING_TITLE,
-        "source_name": "Example",
-        "raw_url": "https://example.com/a",
-        "has_title": True,
-        "body_length": 12,
-        "has_published_at": False,
-    }
-    kwargs.update(overrides)
-    msg = f"conversion rejected: {kwargs['conversion_reason']}"
-    return FetchedArticleConversionError(msg, **kwargs)
-
-
-def test_code_is_stable_class_constant() -> None:
-    exc = _make()
-    assert exc.code == "article_conversion_rejected"
-    assert exc.code == FetchedArticleConversionError.CODE
-
-
-def test_carries_conversion_reason() -> None:
-    exc = _make(conversion_reason=ConversionReason.UNEXPECTED_ERROR)
-    assert exc.conversion_reason is ConversionReason.UNEXPECTED_ERROR
-
-
-def test_carries_observation_snapshot() -> None:
-    exc = _make(raw_url="https://x/y", has_title=False, body_length=None)
-    assert exc.source_name == "Example"
-    assert exc.raw_url == "https://x/y"
-    assert exc.has_title is False
-    assert exc.body_length is None
-    assert exc.has_published_at is False
-
-
-def test_message_is_deterministic_english() -> None:
-    exc = _make(conversion_reason=ConversionReason.MISSING_TITLE)
-    assert str(exc) == "conversion rejected: missing_title"
-
-
-def test_conversion_reason_values_are_stable_snake_case() -> None:
-    assert str(ConversionReason.MISSING_TITLE) == "missing_title"
-    assert str(ConversionReason.INVALID_URL) == "invalid_url"
-    assert str(ConversionReason.UNEXPECTED_ERROR) == "unexpected_error"
-
-
-def test_is_an_exception() -> None:
-    assert isinstance(_make(), Exception)
 
 
 def test_unreadable_response_error_code_is_stable_read_prefixed() -> None:

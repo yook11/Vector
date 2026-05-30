@@ -11,7 +11,7 @@ pin する。
 - INV-1 dedup: 1 記事が複数 taxonomy feed に出現しても yield URL は一意
 - INV-2 Pattern H: yield 全 item の ``body`` は ``None`` (``map_entry`` 既定)
 - INV-3 failure-visibility: 空 link entry は dedup 対象外で素通し、converter 層の
-  ``MISSING_URL`` 監査経路を維持する (Pattern H なので body も None)
+  ``url_empty`` 監査経路を維持する (Pattern H なので body も None)
 - INV-4 Cornell config: ``CORNELL_FEEDS`` は 6 taxonomy feed
 """
 
@@ -100,7 +100,7 @@ async def test_empty_link_entry_passes_through_for_audit() -> None:
 
     空 link は dedup key にならないため全 feed 分が yield される。値欠落の
     implicit drop は failure-visibility 違反 (converter 層の
-    ``ConversionRejection (MISSING_URL)`` 監査経路を逃れる)。
+    ``ConversionRejection (url_empty)`` 監査経路を逃れる)。
     """
     items = await _collect(_EmptyLinkParser())
 

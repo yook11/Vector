@@ -201,7 +201,7 @@ def test_the_register_maps_body_to_none_even_when_summary_present() -> None:
 def test_the_register_does_not_drop_empty_link() -> None:
     """空 link でも写像は drop / raise せず空 url のまま素通す。
 
-    空 link の棄却 (MISSING_URL 可視化) は converter の責務であり、
+    空 link の棄却 (url_empty 可視化) は converter の責務であり、
     写像が握り潰すと故障が監査されないため写像は裁かない。
     """
     result = TheRegisterSource.map_entry(make_rss_entry(link=""))
