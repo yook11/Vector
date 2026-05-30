@@ -320,24 +320,15 @@ services:
     init: true
     command: supervisord -n -c /app/supervisord/fetch.conf
 
+  # --- taskiq workers: analysis (curation + assessment) + embedding を 1 container に同居 ---
+  # broker (broker_analysis / broker_embedding) は分離維持し、container 単位で集約。
+  # embedding は related-articles 専用で独立スケール要件が無く、analysis と failure
+  # domain を共有するため同居する: 起動は GEMINI_API_KEY 共有で共倒れ、稼働時も
+  # fail_fast が片 program の FATAL でコンテナごと落とすため同一 failure domain。
   worker-analysis:
     <<: *worker-base
     init: true
-    command: >
-      taskiq worker
-      app.queue.brokers:broker_analysis
-      app.queue.tasks.curation
-      app.queue.tasks.assessment
-      --ack-type when_executed
-
-  worker-embedding:
-    <<: *worker-base
-    init: true
-    command: >
-      taskiq worker
-      app.queue.brokers:broker_embedding
-      app.queue.tasks.embedding
-      --ack-type when_executed
+    command: supervisord -n -c /app/supervisord/analysis.conf
 
   worker-insights:
     <<: *worker-base

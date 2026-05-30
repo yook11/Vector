@@ -15,7 +15,7 @@
         test-integration-guard test-integration-print-project
 
 # サービス分類（変更する時はここだけ触る）
-WORKERS  := worker-fetch worker-analysis worker-embedding worker-insights scheduler
+WORKERS  := worker-fetch worker-analysis worker-insights scheduler
 PIPELINE := backend $(WORKERS)
 QUEUES   := pipeline:metadata pipeline:content pipeline:analysis pipeline:embedding digest briefing
 

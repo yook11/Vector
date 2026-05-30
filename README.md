@@ -36,7 +36,7 @@ AIで翻訳・要約・インパクト分析を行う投資ダッシュボード
 | Embedding | `gemini-embedding-001` (768-dim halfvec) | pgvector |
 | Task Queue | taskiq + Redis (**6 broker 分離**) | metadata / content / analysis / embedding / trend_discovery / briefing |
 | CI/CD | GitHub Actions | lint + test + type check + 4 系統 security gate |
-| Infrastructure | Docker Compose (dev) | **10 services**、internal network 中心 |
+| Infrastructure | Docker Compose (dev) | **9 services**、internal network 中心 |
 | Deployment | Fly.io (`your-vector-backend-app`, nrt region) | 本番設定は [backend/fly.toml](backend/fly.toml) |
 
 ## Prerequisites
@@ -86,7 +86,7 @@ docker compose up -d --build
 > 機能影響なし)。Better Auth 1.5 stable で `better-sqlite3` が dependencies から
 > 外れ次第 ([PR #7771](https://github.com/better-auth/better-auth/pull/7771))、この workaround は撤去する。
 
-> **Note**: backend / db / redis / redis-rl / 4 worker / scheduler は全て Docker 内部
+> **Note**: backend / db / redis / redis-rl / 3 worker / scheduler は全て Docker 内部
 > ネットワーク (`internal: true`) のみで動作し host port を持ちません。
 > フロントエンド (BFF) がプロキシとして機能するため、ブラウザからは
 > `localhost:3000` のみにアクセスします。db に直接 psql したい場合は
@@ -120,13 +120,13 @@ Browser
               ├── maintenance/  — back-fill backlog / budget / policy
               └── PostgreSQL 18 + pgvector (二重ロール: vector_app / vector_auth)
 
-Redis (taskiq broker) ◄── worker-fetch / worker-analysis / worker-embedding / worker-insights
+Redis (taskiq broker) ◄── worker-fetch / worker-analysis (analysis+embedding) / worker-insights
                        ◄── scheduler (metadata / trend_discovery / briefing cron)
 
 Redis (rate-limit, ephemeral) ◄── proxy.ts sliding window log
 ```
 
-### Docker Compose サービス一覧 (10 services)
+### Docker Compose サービス一覧 (9 services)
 
 | Service | Description |
 |---------|------------|
@@ -136,8 +136,7 @@ Redis (rate-limit, ephemeral) ◄── proxy.ts sliding window log
 | `redis` | taskiq broker (本体)、`maxmemory 256mb` + `allkeys-lru` |
 | `redis-rl` | frontend rate-limit 専用 (本体 redis と OOM 道連れを防ぐ物理分離) |
 | `worker-fetch` | metadata + content fetch worker (supervisord Pattern B) |
-| `worker-analysis` | AI 分類 / 分析 worker |
-| `worker-embedding` | Embedding 生成 worker |
+| `worker-analysis` | AI 分類 / 分析 + Embedding 生成 worker (supervisord Pattern B) |
 | `worker-insights` | Trend Discovery + briefing worker (supervisord Pattern B) |
 | `scheduler` | metadata / trend_discovery / briefing cron scheduler (supervisord Pattern B) |
 
