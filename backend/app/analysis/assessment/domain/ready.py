@@ -33,7 +33,6 @@ class AssessmentReadyBuildFacts:
     article_id: int
     translated_title: str
     summary: str
-    source_name: str | None
     has_in_scope_assessment: bool
     has_out_of_scope_assessment: bool
 
@@ -45,10 +44,10 @@ class AssessmentReadyBuildBlockedError(Exception):
         self,
         code: AssessmentReadyBuildBlockedCode,
         *,
-        source_name: str | None = None,
+        article_id: int | None = None,
     ) -> None:
         self.code = code
-        self.source_name = source_name
+        self.article_id = article_id
         super().__init__(code.value)
 
 
@@ -72,7 +71,6 @@ class ReadyForAssessment(BaseModel):
     translated_title: str = Field(min_length=1)
     summary: str = Field(min_length=1)
     article_id: int = Field(gt=0)
-    source_name: str | None = None
 
     @classmethod
     async def try_advance_from(
@@ -91,13 +89,13 @@ class ReadyForAssessment(BaseModel):
         if facts.has_in_scope_assessment:
             raise AssessmentReadyBuildBlockedError(
                 AssessmentReadyBuildBlockedCode.ALREADY_IN_SCOPE,
-                source_name=facts.source_name,
+                article_id=facts.article_id,
             )
 
         if facts.has_out_of_scope_assessment:
             raise AssessmentReadyBuildBlockedError(
                 AssessmentReadyBuildBlockedCode.ALREADY_OUT_OF_SCOPE,
-                source_name=facts.source_name,
+                article_id=facts.article_id,
             )
 
         return cls(
@@ -105,5 +103,4 @@ class ReadyForAssessment(BaseModel):
             translated_title=facts.translated_title,
             summary=facts.summary,
             article_id=facts.article_id,
-            source_name=facts.source_name,
         )

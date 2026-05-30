@@ -14,11 +14,9 @@ from app.analysis.assessment.domain.ready import (
 )
 from app.analysis.assessment.domain.result import InScope, OutOfScope
 from app.analysis.assessment.errors import AssessmentCategoryMissingError
-from app.models.article import Article
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 from app.models.in_scope_assessment import InScopeAssessment
-from app.models.news_source import NewsSource
 from app.models.out_of_scope_assessment import OutOfScopeAssessment
 
 logger = structlog.get_logger(__name__)
@@ -41,13 +39,10 @@ class AssessmentRepository:
                 ArticleCuration.article_id,
                 ArticleCuration.translated_title,
                 ArticleCuration.summary,
-                NewsSource.name,
                 InScopeAssessment.id.is_not(None),
                 OutOfScopeAssessment.id.is_not(None),
             )
             .select_from(ArticleCuration)
-            .join(Article, Article.id == ArticleCuration.article_id)
-            .join(NewsSource, NewsSource.id == Article.source_id)
             .outerjoin(
                 InScopeAssessment,
                 InScopeAssessment.curation_id == ArticleCuration.id,
@@ -67,7 +62,6 @@ class AssessmentRepository:
             article_id,
             translated_title,
             summary,
-            source_name,
             has_in_scope_assessment,
             has_out_of_scope_assessment,
         ) = row
@@ -76,7 +70,6 @@ class AssessmentRepository:
             article_id=article_id,
             translated_title=translated_title,
             summary=summary,
-            source_name=str(source_name) if source_name is not None else None,
             has_in_scope_assessment=has_in_scope_assessment,
             has_out_of_scope_assessment=has_out_of_scope_assessment,
         )

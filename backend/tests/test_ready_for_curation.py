@@ -68,6 +68,8 @@ class TestTryAdvanceFrom:
             await ReadyForCuration.try_advance_from(article_id=99, repo=repo)
 
         assert exc_info.value.code is CurationReadyBuildBlockedCode.ARTICLE_MISSING
+        # 記事不在 → article_id は運べない (audit の source_id も空になる)
+        assert exc_info.value.article_id is None
         repo.load_ready_build_facts.assert_awaited_once_with(99)
 
     @pytest.mark.asyncio
@@ -78,6 +80,8 @@ class TestTryAdvanceFrom:
             await ReadyForCuration.try_advance_from(article_id=42, repo=repo)
 
         assert exc_info.value.code is CurationReadyBuildBlockedCode.ALREADY_CURATED
+        # facts.article_id が例外経由で監査まで運ばれる (source_id 補填の根拠)
+        assert exc_info.value.article_id == 42
         repo.load_ready_build_facts.assert_awaited_once_with(42)
 
     @pytest.mark.asyncio
@@ -91,6 +95,8 @@ class TestTryAdvanceFrom:
             exc_info.value.code
             is CurationReadyBuildBlockedCode.ALREADY_REJECTED_AS_NOISE
         )
+        # facts.article_id が例外経由で監査まで運ばれる (source_id 補填の根拠)
+        assert exc_info.value.article_id == 42
         repo.load_ready_build_facts.assert_awaited_once_with(42)
 
     @pytest.mark.asyncio
@@ -102,6 +108,8 @@ class TestTryAdvanceFrom:
             await ReadyForCuration.try_advance_from(article_id=42, repo=repo)
 
         assert exc_info.value.code is CurationReadyBuildBlockedCode.CONTENT_TOO_LARGE
+        # facts.article_id が例外経由で監査まで運ばれる (source_id 補填の根拠)
+        assert exc_info.value.article_id == 42
         assert exc_info.value.content_length == len(oversized)
         assert exc_info.value.max_content_length == ReadyForCuration.MAX_CONTENT_LENGTH
 

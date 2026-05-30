@@ -11,8 +11,8 @@ Outcome 型 assertion を「signal 勝者 → ``int``、noise 勝者 → ``None`
   (Stage 4 chain しない、Task 層は ``if result is None: return`` で短絡)
 - ``CurationResponseInvalidError`` (Layer 2-B) は Service が catch せず
   そのまま raise される (audit は task 層が焼く責務)
-- 各 audit row に ``ai_model`` / ``prompt_version`` / ``input_content_*`` /
-  ``source_name`` が payload に焼かれている
+- 各 audit row に ``ai_model`` / ``prompt_version`` / ``input_content_*``
+  が payload に焼かれている
 - 成功系では ``ai_raw_response`` も焼かれる
 - ``article_id`` / ``source_id`` (auto-resolve) が両方埋まる
 """
@@ -138,7 +138,6 @@ async def test_signal_outcome_writes_curated_signal_audit_with_outcome_code(
     payload = ev.payload
     assert payload["ai_model"] == GEMINI_CURATION_SPEC.model
     assert payload["prompt_version"] == GEMINI_CURATION_SPEC.version
-    assert payload["source_name"] == str(sample_source.name)
     assert payload["ai_raw_response"]
     assert payload["input_content_length"] == len(article.original_content)
     # PR1-a: raw_relevance は envelope.raw_relevance から焼かれる (Stage 4 対称)

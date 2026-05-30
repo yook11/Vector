@@ -28,7 +28,6 @@ from app.audit.stages.backfill import (
     BackfillTargetKind,
 )
 from app.config import settings
-from app.models.article import Article
 from app.models.article_curation import ArticleCuration
 from app.models.backfill_exclusion import (
     AssessmentBackfillExclusion,
@@ -36,7 +35,6 @@ from app.models.backfill_exclusion import (
     EmbeddingBackfillExclusion,
 )
 from app.models.in_scope_assessment import InScopeAssessment
-from app.models.news_source import NewsSource
 from app.models.out_of_scope_assessment import OutOfScopeAssessment
 from app.queue.brokers import broker_metadata
 from app.queue.helpers.backlog import BackfillTarget, PipelineBacklog
@@ -318,9 +316,7 @@ async def _exclude_aged_out_assessments(
     for curation_id in ids:
         async with session_factory() as session:
             stmt = (
-                select(ArticleCuration.article_id, NewsSource.name)
-                .join(Article, Article.id == ArticleCuration.article_id)
-                .join(NewsSource, NewsSource.id == Article.source_id)
+                select(ArticleCuration.article_id)
                 .outerjoin(
                     InScopeAssessment,
                     InScopeAssessment.curation_id == ArticleCuration.id,
@@ -341,11 +337,10 @@ async def _exclude_aged_out_assessments(
                 )
                 .limit(1)
             )
-            row = (await session.execute(stmt)).first()
-            if row is None:
+            article_id = await session.scalar(stmt)
+            if article_id is None:
                 continue
 
-            article_id, source_name = row
             session.add(
                 AssessmentBackfillExclusion(
                     curation_id=curation_id,
@@ -358,7 +353,6 @@ async def _exclude_aged_out_assessments(
                 ).append_backfill_assessment_aged_out(
                     curation_id=curation_id,
                     article_id=article_id,
-                    source_name=str(source_name) if source_name is not None else None,
                 )
                 await session.commit()
             except IntegrityError:

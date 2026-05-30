@@ -60,7 +60,6 @@ class AssessmentAuditRepository:
         """in-scope 成功を記録する。"""
         in_scope = call.result
         payload = AssessmentPayload(
-            source_name=ready.source_name,
             curation_id=ready.curation_id,
             ai_model=call.model_name,
             prompt_version=call.prompt_version,
@@ -88,7 +87,6 @@ class AssessmentAuditRepository:
         """out-of-scope 成功を記録する。"""
         out_of_scope = call.result
         payload = AssessmentPayload(
-            source_name=ready.source_name,
             curation_id=ready.curation_id,
             ai_model=call.model_name,
             prompt_version=call.prompt_version,
@@ -114,7 +112,6 @@ class AssessmentAuditRepository:
         *,
         curation_id: int,
         article_id: int,
-        source_name: str | None,
     ) -> None:
         """古い未 assessment curation を backfill が対象外にした事実を記録する。"""
         await self._events.append(
@@ -122,7 +119,6 @@ class AssessmentAuditRepository:
             event_type=EventType.REJECTED,
             outcome_code=BackfillExclusionReason.ASSESSMENT_AGED_OUT.value,
             payload=AssessmentPayload(
-                source_name=source_name,
                 curation_id=curation_id,
             ),
             article_id=article_id,
@@ -136,15 +132,17 @@ class AssessmentAuditRepository:
         """Ready 構築が domain precondition により進めなかった事実を記録する。
 
         Domain が reason code で説明できた停止なので rejected として焼く。
+        ``article_id`` が判明する経路では top-level に渡して source_id を補填する
+        (CURATION_MISSING は対象 curation 不在で article_id なし = source_id 空)。
         """
         await self._events.append(
             stage=Stage.ASSESSMENT,
             event_type=EventType.REJECTED,
             outcome_code=exc.code.value,
             payload=AssessmentPayload(
-                source_name=exc.source_name,
                 curation_id=curation_id,
             ),
+            article_id=exc.article_id,
         )
 
     async def append_ready_build_failed(
@@ -202,7 +200,6 @@ class AssessmentAuditRepository:
         payload = AssessmentPayload(
             failure_kind=projection.failure_kind,
             failure_action=failure_action_value(projection),
-            source_name=ready.source_name,
             curation_id=ready.curation_id,
             error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
             error_chain=extract_error_chain(exc),

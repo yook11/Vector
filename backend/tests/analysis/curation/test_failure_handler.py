@@ -7,7 +7,6 @@
 - ``pipeline_events.article_id`` は ``ondelete=SET NULL`` のため audit 行は残る
   ただし新規 INSERT 時点では ``article_id`` が埋まっている (DELETE 前)
 - ``source_id`` が auto-resolve される (article DELETE 後でも source 追跡可能)
-- ``source_name`` が payload に保存される (FK 切断耐性)
 - ``CurationTerminalDropError`` (ACL ``map_provider_to_curation`` で
   ``AIProviderOutputBlockedError`` / ``AIProviderInputRejectedError`` から
   詰め替えられる) で ``outcome_code`` / ``retryability`` /
@@ -89,7 +88,6 @@ async def test_output_blocked_writes_audit_then_deletes_article(
     article_id = article.id
     # rollback 後の expired-attr lazy reload を避けるため事前に値を取り出す
     expected_source_id = sample_source.id
-    expected_source_name = str(sample_source.name)
     expected_raw_length = len(article.original_content)
     ready = _ready_from(article)
     handler = CurationFailureHandler(session_factory)
@@ -135,7 +133,6 @@ async def test_output_blocked_writes_audit_then_deletes_article(
     # source_id は auto-resolve で埋まっている (DELETE 前に INSERT したため)
     assert ev.source_id == expected_source_id
     payload = ev.payload
-    assert payload["source_name"] == expected_source_name
     assert payload["ai_model"] == GEMINI_CURATION_SPEC.model
     assert payload["error_message"] is not None
     assert payload["error_chain"] is not None

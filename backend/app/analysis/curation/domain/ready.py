@@ -44,10 +44,14 @@ class CurationReadyBuildBlockedError(Exception):
         self,
         code: CurationReadyBuildBlockedCode,
         *,
+        article_id: int | None = None,
         content_length: int | None = None,
         max_content_length: int | None = None,
     ) -> None:
         self.code = code
+        # 対象記事が現存する blocked のみ article_id を持つ (audit が source_id を
+        # 補填する根拠)。ARTICLE_MISSING は記事不在で None。
+        self.article_id = article_id
         self.content_length = content_length
         self.max_content_length = max_content_length
         super().__init__(code.value)
@@ -91,18 +95,21 @@ class ReadyForCuration(BaseModel):
 
         if facts.has_signal_curation:
             raise CurationReadyBuildBlockedError(
-                CurationReadyBuildBlockedCode.ALREADY_CURATED
+                CurationReadyBuildBlockedCode.ALREADY_CURATED,
+                article_id=facts.article_id,
             )
 
         if facts.has_noise_curation:
             raise CurationReadyBuildBlockedError(
-                CurationReadyBuildBlockedCode.ALREADY_REJECTED_AS_NOISE
+                CurationReadyBuildBlockedCode.ALREADY_REJECTED_AS_NOISE,
+                article_id=facts.article_id,
             )
 
         content_length = len(facts.original_content)
         if content_length > cls.MAX_CONTENT_LENGTH:
             raise CurationReadyBuildBlockedError(
                 CurationReadyBuildBlockedCode.CONTENT_TOO_LARGE,
+                article_id=facts.article_id,
                 content_length=content_length,
                 max_content_length=cls.MAX_CONTENT_LENGTH,
             )

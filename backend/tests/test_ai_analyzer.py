@@ -543,7 +543,6 @@ async def test_assessment_persists_category(
         translated_title=extraction.translated_title,
         summary=extraction.summary,
         article_id=extraction.article_id,
-        source_name=str(sample_source.name),
     )
     svc = AssessmentService(session_factory)
     result = await svc.execute(ready, mock_assessor)
@@ -593,7 +592,6 @@ async def test_assessment_persists_rejection_when_out_of_scope(
         curation_id=curation_id,
         translated_title=extraction.translated_title,
         summary=extraction.summary,
-        source_name=str(sample_source.name),
     )
     svc = AssessmentService(session_factory)
     result = await svc.execute(ready, mock_assessor)

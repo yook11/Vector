@@ -187,10 +187,10 @@ async def test_append_ready_build_blocked_records_missing_article_rejected(
     )
     assert ev.event_type == "rejected"
     assert ev.outcome_code == CurationReadyBuildBlockedCode.ARTICLE_MISSING.value
+    # ARTICLE_MISSING は対象記事が不在で FK 不能 → article_id / source_id とも空
     assert ev.article_id is None
+    assert ev.source_id is None
     assert ev.payload["target_article_id"] == 999
-    # article が無いため source_name は解決できない
-    assert ev.payload["source_name"] is None
 
 
 @pytest.mark.asyncio
@@ -199,11 +199,12 @@ async def test_append_ready_build_blocked_records_content_too_large(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """content too large は reason evidence と source_name を payload に残す。"""
-    # 実在 article を sample_source に紐付け、source_name 解決を非空虚に検証する
+    """content too large は reason evidence と source_id を残す (記事は現存)。"""
+    # 実在 article を sample_source に紐付け、source_id 補填を非空虚に検証する
     article = await _make_article(db_session, sample_source)
     exc = CurationReadyBuildBlockedError(
         CurationReadyBuildBlockedCode.CONTENT_TOO_LARGE,
+        article_id=article.id,
         content_length=200_001,
         max_content_length=200_000,
     )
@@ -219,9 +220,9 @@ async def test_append_ready_build_blocked_records_content_too_large(
     )
     assert ev.event_type == "rejected"
     assert ev.outcome_code == CurationReadyBuildBlockedCode.CONTENT_TOO_LARGE.value
-    assert ev.article_id is None
+    assert ev.article_id == article.id
+    assert ev.source_id == sample_source.id
     assert ev.payload["target_article_id"] == article.id
-    assert ev.payload["source_name"] == str(sample_source.name)
     assert ev.payload["input_content_length"] == 200_001
     assert ev.payload["max_content_length"] == 200_000
 
@@ -272,7 +273,7 @@ async def test_append_signal_records_success_with_code(
     assert ev.outcome_code == "curated_signal"
     assert ev.retryability is None
     assert ev.payload["ai_raw_response"]
-    assert ev.payload["source_name"] == str(sample_source.name)
+    assert ev.source_id == sample_source.id
     # repository が ready.original_content から input snapshot を計算する。
     assert ev.payload["input_content_length"] == expected_input["input_content_length"]
     assert ev.payload["input_content_head"] == expected_input["input_content_head"]
@@ -434,9 +435,9 @@ async def test_append_backfill_curation_aged_out_records_rejected_with_aged_code
     assert ev.event_type == "rejected"
     assert ev.outcome_code == BACKFILL_CURATION_AGED_OUT_CODE
     assert ev.retryability is None
-    # payload は curation variant (FK 切断耐性のため source_name を保持)
+    # payload は curation variant (article_id 経由で top-level source_id を補填)
     assert ev.payload["kind"] == "curation"
-    assert ev.payload["source_name"] == str(sample_source.name)
+    assert ev.source_id == sample_source.id
 
 
 # ---------------------------------------------------------------------------

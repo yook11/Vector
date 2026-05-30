@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,8 +22,6 @@ from app.audit.failure_projection import (
 )
 from app.audit.ready_build import project_ready_build_failure
 from app.audit.repository import PipelineEventRepository
-from app.models.article import Article
-from app.models.news_source import NewsSource
 from app.shared.security.redaction import redact_secrets
 
 if TYPE_CHECKING:
@@ -63,7 +60,6 @@ class CurationAuditRepository:
     ) -> None:
         """signal 成功を記録する。"""
         payload = CurationPayload(
-            source_name=await self._resolve_source_name(ready.article_id),
             **_input_content_fields(ready.original_content),
             ai_model=envelope.model_name,
             prompt_version=envelope.prompt_version,
@@ -87,7 +83,6 @@ class CurationAuditRepository:
     ) -> None:
         """noise 成功を記録する。"""
         payload = CurationPayload(
-            source_name=await self._resolve_source_name(ready.article_id),
             **_input_content_fields(ready.original_content),
             ai_model=envelope.model_name,
             prompt_version=envelope.prompt_version,
@@ -117,7 +112,6 @@ class CurationAuditRepository:
         payload = CurationPayload(
             failure_kind=projection.failure_kind,
             failure_action=failure_action_value(projection),
-            source_name=await self._resolve_source_name(ready.article_id),
             **_input_content_fields(ready.original_content),
             ai_model=curator.model_name,
             prompt_version=curator.prompt_version,
@@ -138,12 +132,11 @@ class CurationAuditRepository:
 
     async def append_backfill_curation_aged_out(self, *, article_id: int) -> None:
         """古い未処理記事を backfill が諦めた事実を記録する。"""
-        source_name = await self._resolve_source_name(article_id)
         await self._events.append(
             stage=Stage.BACKFILL_CURATE,
             event_type=EventType.REJECTED,
             outcome_code=BACKFILL_CURATION_AGED_OUT_CODE,
-            payload=CurationPayload(source_name=source_name),
+            payload=CurationPayload(),
             article_id=article_id,
         )
 
@@ -157,7 +150,6 @@ class CurationAuditRepository:
         Domain が reason code で説明できた停止なので rejected として焼く。
         """
         payload = CurationPayload(
-            source_name=await self._resolve_source_name(target_article_id),
             target_article_id=target_article_id,
             input_content_length=exc.content_length,
             max_content_length=exc.max_content_length,
@@ -167,6 +159,10 @@ class CurationAuditRepository:
             event_type=EventType.REJECTED,
             outcome_code=exc.code.value,
             payload=payload,
+            # 記事が現存する blocked (ALREADY_* / CONTENT_TOO_LARGE) のみ
+            # article_id を運び source_id を補填する。ARTICLE_MISSING は対象
+            # 記事が無く FK 不能なため None (sought id は payload.target_article_id)。
+            article_id=exc.article_id,
         )
 
     async def append_ready_build_failed(
@@ -233,7 +229,6 @@ class CurationAuditRepository:
         payload = CurationPayload(
             failure_kind=projection.failure_kind,
             failure_action=failure_action_value(projection),
-            source_name=await self._resolve_source_name(ready.article_id),
             **_input_content_fields(ready.original_content),
             ai_model=curator.model_name,
             prompt_version=curator.prompt_version,
@@ -251,18 +246,6 @@ class CurationAuditRepository:
         )
 
     # --- internal helpers -------------------------------------------------
-
-    async def _resolve_source_name(self, article_id: int) -> str | None:
-        """``article_id`` から ``news_sources.name`` を引く (FK 切断耐性のため
-        payload にも保存する)。``str`` 化して返す (NewsSource.name は VO のため)。
-        """
-        stmt = (
-            select(NewsSource.name)
-            .join(Article, Article.source_id == NewsSource.id)
-            .where(Article.id == article_id)
-        )
-        name = await self._session.scalar(stmt)
-        return str(name) if name is not None else None
 
     @staticmethod
     def _projection_of(

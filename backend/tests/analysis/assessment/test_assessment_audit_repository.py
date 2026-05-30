@@ -119,14 +119,12 @@ def _ready(
     extraction: ArticleCuration,
     *,
     summary: str | None = None,
-    source_name: str | None = "Test Source",
 ) -> ReadyForAssessment:
     return ReadyForAssessment(
         curation_id=extraction.id,
         translated_title=extraction.translated_title,
         summary=summary if summary is not None else extraction.summary,
         article_id=extraction.article_id,
-        source_name=source_name,
     )
 
 
@@ -258,24 +256,28 @@ async def test_append_ready_build_blocked_records_missing_curation_rejected(
     )
     assert ev.event_type == "rejected"
     assert ev.outcome_code == AssessmentReadyBuildBlockedCode.CURATION_MISSING.value
+    # CURATION_MISSING は対象 curation 不在で article_id が無く source_id も空
     assert ev.article_id is None
+    assert ev.source_id is None
     assert ev.payload["curation_id"] == 999
-    # CURATION_MISSING は facts が無いため source_name を解決できない
-    assert ev.payload["source_name"] is None
 
 
 @pytest.mark.asyncio
-async def test_append_ready_build_blocked_records_source_name_when_present(
+async def test_append_ready_build_blocked_records_source_id_for_already_assessed(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
 ) -> None:
-    """blocked が source_name を持つ場合は payload に焼かれる (ALREADY_* 経路)。"""
+    """ALREADY_* blocked は article_id を運び top-level source_id を補填する。"""
+    article = await _make_article(db_session, sample_source)
+    extraction = await _make_extraction(db_session, article)
+
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_ready_build_blocked(
-            curation_id=42,
+            curation_id=extraction.id,
             exc=AssessmentReadyBuildBlockedError(
                 AssessmentReadyBuildBlockedCode.ALREADY_IN_SCOPE,
-                source_name="MIT News",
+                article_id=article.id,
             ),
         )
         await session.commit()
@@ -284,8 +286,9 @@ async def test_append_ready_build_blocked_records_source_name_when_present(
         db_session, AssessmentReadyBuildBlockedCode.ALREADY_IN_SCOPE.value
     )
     assert ev.event_type == "rejected"
-    assert ev.payload["curation_id"] == 42
-    assert ev.payload["source_name"] == "MIT News"
+    assert ev.payload["curation_id"] == extraction.id
+    assert ev.article_id == article.id
+    assert ev.source_id == sample_source.id
 
 
 @pytest.mark.asyncio
@@ -395,29 +398,6 @@ async def test_append_in_scope_uses_article_id_from_ready(
 
     ev = await _fetch_one(db_session, article.id)
     assert ev.article_id == article.id  # ready.article_id を直接利用
-
-
-@pytest.mark.asyncio
-async def test_append_in_scope_uses_source_name_from_ready(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-    sample_source: NewsSource,
-    sample_categories: list[Category],
-) -> None:
-    """payload.source_name が Ready 由来 (案 3: 2-hop 逆引き撤去)。"""
-    article = await _make_article(db_session, sample_source)
-    extraction = await _make_extraction(db_session, article)
-    await _persist_in_scope(db_session, extraction, sample_categories[0])
-
-    async with session_factory() as session:
-        await AssessmentAuditRepository(session).append_in_scope(
-            ready=_ready(extraction, source_name=str(sample_source.name)),
-            call=_in_scope_call(),
-        )
-        await session.commit()
-
-    ev = await _fetch_one(db_session, article.id)
-    assert ev.payload["source_name"] == str(sample_source.name)
 
 
 @pytest.mark.asyncio
@@ -553,7 +533,6 @@ async def test_append_backfill_assessment_aged_out_records_rejected(
         await AssessmentAuditRepository(session).append_backfill_assessment_aged_out(
             curation_id=extraction.id,
             article_id=article.id,
-            source_name=str(sample_source.name),
         )
         await session.commit()
 
@@ -563,7 +542,7 @@ async def test_append_backfill_assessment_aged_out_records_rejected(
     assert ev.outcome_code == BackfillExclusionReason.ASSESSMENT_AGED_OUT.value
     assert ev.retryability is None
     assert ev.payload["kind"] == "assessment"
-    assert ev.payload["source_name"] == str(sample_source.name)
+    assert ev.source_id == sample_source.id
     assert ev.payload["curation_id"] == extraction.id
 
 

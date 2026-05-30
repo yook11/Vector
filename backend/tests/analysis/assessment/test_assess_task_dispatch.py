@@ -80,7 +80,6 @@ def _fixed_ready() -> ReadyForAssessment:
         translated_title="title",
         summary="summary",
         article_id=7,
-        source_name="Test Source",
     )
 
 

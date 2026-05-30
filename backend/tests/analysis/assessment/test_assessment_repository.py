@@ -61,15 +61,12 @@ async def _make_extraction(
     return extraction
 
 
-def _ready(
-    extraction: ArticleCuration, *, source_name: str | None = "Test Source"
-) -> ReadyForAssessment:
+def _ready(extraction: ArticleCuration) -> ReadyForAssessment:
     return ReadyForAssessment(
         curation_id=extraction.id,
         translated_title=extraction.translated_title,
         summary=extraction.summary,
         article_id=extraction.article_id,
-        source_name=source_name,
     )
 
 
@@ -165,7 +162,6 @@ async def test_save_out_of_scope_returns_none_on_race_lost(
             translated_title="敗者タイトル",
             summary="敗者要約",
             article_id=extraction.article_id,
-            source_name=None,
         ),
     )
     await db_session.commit()
@@ -414,7 +410,6 @@ async def test_load_ready_build_facts_returns_values_for_unprocessed_curation(
     assert facts.article_id == extraction.article_id
     assert facts.translated_title == extraction.translated_title
     assert facts.summary == extraction.summary
-    assert facts.source_name == str(sample_source.name)
     assert facts.has_in_scope_assessment is False
     assert facts.has_out_of_scope_assessment is False
 

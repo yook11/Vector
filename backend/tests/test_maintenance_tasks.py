@@ -456,7 +456,7 @@ async def test_exclude_aged_out_assessments_keeps_article_and_audits(
     curation = await _make_curation(db_session, article)
     article_id = article.id
     curation_id = curation.id
-    source_name = str(sample_source.name)
+    source_id = sample_source.id
 
     excluded = await tasks._exclude_aged_out_assessments(
         session_factory, created_before=now - timedelta(days=7)
@@ -485,8 +485,8 @@ async def test_exclude_aged_out_assessments_keeps_article_and_audits(
     assert ev.outcome_code == BackfillExclusionReason.ASSESSMENT_AGED_OUT.value
     assert ev.retryability is None
     assert ev.article_id == article_id
+    assert ev.source_id == source_id
     assert ev.payload["kind"] == "assessment"
-    assert ev.payload["source_name"] == source_name
     assert ev.payload["curation_id"] == curation_id
     assert excluded == 1
 

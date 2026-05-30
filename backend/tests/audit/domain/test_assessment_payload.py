@@ -99,7 +99,6 @@ def test_state_fields_optional_default_none() -> None:
 def test_full_in_scope_payload_construction() -> None:
     """全 field を埋めた in-scope 成功状態の構築 (型整合)。"""
     payload = AssessmentPayload(
-        source_name="VentureBeat",
         curation_id=42,
         ai_model="gemini-2.5-pro",
         prompt_version="abcd1234",
@@ -133,7 +132,6 @@ def test_serialization_roundtrip() -> None:
     の dump → DB → load 経路が壊れていないことを確認。
     """
     original = AssessmentPayload(
-        source_name="VentureBeat",
         curation_id=42,
         ai_model="gemini-2.5-pro",
         category_slug="ai",

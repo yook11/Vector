@@ -101,7 +101,6 @@ def _ready(extraction: ArticleCuration) -> ReadyForAssessment:
         translated_title=extraction.translated_title,
         summary=extraction.summary,
         article_id=extraction.article_id,
-        source_name="Test Source",
     )
 
 
@@ -305,7 +304,6 @@ async def test_provider_network_error_is_wrapped_to_recoverable_marker(
         translated_title="t",
         summary="s",
         article_id=1,
-        source_name=None,
     )
     svc = AssessmentService(session_factory)
 
@@ -328,7 +326,6 @@ async def test_provider_configuration_error_is_wrapped_to_stage_blocked_marker(
         translated_title="t",
         summary="s",
         article_id=1,
-        source_name=None,
     )
     svc = AssessmentService(session_factory)
 
