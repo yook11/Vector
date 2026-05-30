@@ -7,6 +7,9 @@ from typing import ClassVar
 
 from app.audit.domain.event import Stage
 from app.audit.failure_projection import FailureAction, Retryability
+from app.collection.article_acquisition.reader.read_errors import (
+    UnreadableResponseError,
+)
 from app.collection.external_fetch_errors import ExternalFetchError
 from app.logfire_exceptions import VectorDomainError
 
@@ -22,16 +25,6 @@ class AcquisitionConversionDefect(StrEnum):
 
     TITLE_MISSING = "acquisition_conversion_title_missing"
     UNEXPECTED_ERROR = "acquisition_conversion_unexpected_error"
-
-
-class UnreadableResponseError(Exception):
-    """応答を受け取ったが reader が構造化できなかった read-domain origin error。"""
-
-    CODE: ClassVar[str] = "read_unreadable_response"
-
-    def __str__(self) -> str:
-        explicit = super().__str__()
-        return explicit if explicit else self.CODE
 
 
 class AcquisitionError(VectorDomainError):

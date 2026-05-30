@@ -29,6 +29,10 @@ from app.collection.article_acquisition.reader.html_listing_reader import (
     HtmlListingEntry,
     HtmlListingReader,
 )
+from app.collection.article_acquisition.reader.read_errors import (
+    UnreadableResponseError,
+    UnreadableResponseReason,
+)
 from app.collection.external_fetch_errors import (
     FetchAccessDeniedError,
     FetchOriginServerError,
@@ -124,6 +128,20 @@ async def test_http_500_raises_origin_server_error() -> None:
     """R4: payload 全体失敗 (500) は ``ExternalFetchError`` 系に写る。"""
     with pytest.raises(FetchOriginServerError):
         await _raise_through(500)
+
+
+async def test_empty_body_raises_empty_body() -> None:
+    """空 body は parse 手前で ``EMPTY_BODY`` に倒す (空応答とブロックは別運用)。
+
+    lxml HTML parser は非空入力に寛容で (壊れた markup も復元して parse する)、
+    実際に読取失敗となるのは空 / 空白のみ body。これを ``EMPTY_BODY`` として
+    自己記述する (構文破損 ``MALFORMED_CONTENT`` の except は防御的フォールバック)。
+    """
+    with pytest.raises(UnreadableResponseError) as raised:
+        await _reader_entries(b"")
+
+    assert raised.value.reason is UnreadableResponseReason.EMPTY_BODY
+    assert raised.value.response_format == "html"
 
 
 async def test_xxe_external_entity_not_resolved() -> None:

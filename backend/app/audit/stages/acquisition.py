@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import TypedDict
+
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,6 +20,9 @@ from app.audit.repository import PipelineEventRepository
 from app.collection.article_acquisition.errors import SourceAcquisitionError
 from app.collection.article_acquisition.fetched_article_converter import (
     ConversionRejection,
+)
+from app.collection.article_acquisition.reader.read_errors import (
+    UnreadableResponseError,
 )
 from app.shared.security.redaction import redact_secrets
 
@@ -122,6 +127,7 @@ class SourceAcquisitionAuditRepository:
             source_name=source_name,
             error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
             error_chain=extract_error_chain(exc),
+            **_read_failure_payload_fields(exc),
         )
         await self._events.append(
             stage=projection.stage or Stage.ACQUISITION,
@@ -164,6 +170,36 @@ class SourceAcquisitionAuditRepository:
             source_id=source_id,
             error_class=_fqn(cause) if cause is not None else None,
         )
+
+
+class _ReadFailurePayloadFields(TypedDict):
+    """read 失敗 specifics を ``read_*`` 列へ展開する keyword。
+
+    key set を TypedDict で固定し ``**`` 展開で任意 keyword へ流入しないようにする
+    (``failure_payload_fields`` と同じ理由)。
+    """
+
+    read_format: str | None
+    read_field: str | None
+    read_parser_position: str | None
+
+
+def _read_failure_payload_fields(exc: BaseException) -> _ReadFailurePayloadFields:
+    """read marker の origin specifics を ``read_*`` payload 列へ写す。
+
+    ``exc.origin_error`` が ``UnreadableResponseError`` のときだけ format / field /
+    parser_position を載せる。接続失敗 / DB / 想定外例外では全て None で payload に
+    影響しない (outcome_code = reason.value とは別に、後から壊れた形式 / フィールド /
+    位置を復元できるようにする consumer 側整形)。
+    """
+    origin = getattr(exc, "origin_error", None)
+    if isinstance(origin, UnreadableResponseError):
+        return {
+            "read_format": origin.response_format,
+            "read_field": origin.field,
+            "read_parser_position": origin.parser_position,
+        }
+    return {"read_format": None, "read_field": None, "read_parser_position": None}
 
 
 def _fqn(exc: BaseException) -> str:

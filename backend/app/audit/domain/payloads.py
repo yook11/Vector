@@ -64,6 +64,12 @@ class AcquisitionPayload(BasePipelineEventPayload):
     content_type: str | None = None
     body_head: str | None = None
 
+    # read 失敗 (reader 構造化不能) の specifics。outcome_code = reason.value とは別に
+    # どの形式 / どのフィールド / どの位置で落ちたかを残す。
+    read_format: str | None = None
+    read_field: str | None = None
+    read_parser_position: str | None = None
+
     conversion_raw_url: str | None = None
     conversion_has_title: bool | None = None
     conversion_body_length: int | None = None

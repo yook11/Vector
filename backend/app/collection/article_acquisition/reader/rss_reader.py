@@ -4,7 +4,8 @@ HTTP 取得・SSRF guard・feedparser 呼び出し・error 翻訳・title 平文
 正規化済の ``RssEntry`` を返す。body 系 (``summary`` / ``content_encoded``) は
 raw HTML のまま返し、body picker / footer 除去等は呼び出し側の責務。
 Shift_JIS など XML 宣言で encoding を持つ feed は ``parse_mode="bytes"`` を選び
-feedparser に sniff を委ねる。bozo かつ entries 空は ``UnreadableResponseError``。
+feedparser に sniff を委ねる。空 body / bozo かつ entries 空は read 失敗として
+``UnreadableResponseError`` (reason 付き) に写す。
 """
 
 from __future__ import annotations
@@ -21,7 +22,10 @@ import feedparser
 import httpx
 import structlog
 
-from app.collection.article_acquisition.errors import UnreadableResponseError
+from app.collection.article_acquisition.reader.read_errors import (
+    UnreadableResponseError,
+    UnreadableResponseReason,
+)
 from app.collection.article_acquisition.tools.http_error_translation import (
     translate_fetch_exception,
 )
@@ -173,7 +177,7 @@ class RssReader:
         """HTTP GET → feedparser → ``list[RssEntry]`` まで完結する。
 
         Raises:
-            UnreadableResponseError: bozo かつ entries 空 (feed 構造破損)。
+            UnreadableResponseError: 空 body / bozo かつ entries 空 (feed 構造破損)。
             ExternalFetchError: HTTP status / transport / SSRF 例外の写像。
         """
         raw = await self._fetch_raw(
@@ -183,16 +187,26 @@ class RssReader:
             user_agent=user_agent,
             timeout=timeout,
         )
+        if not raw.strip():
+            raise UnreadableResponseError(
+                reason=UnreadableResponseReason.EMPTY_BODY, response_format="feed"
+            )
         feed = await asyncio.to_thread(feedparser.parse, raw)
         if feed.bozo and not feed.entries:
+            bozo_exception = feed.bozo_exception
             logger.warning(
                 "rss_feed_parse_error",
                 source=source_name,
-                error=str(feed.bozo_exception),
+                error_type=type(bozo_exception).__qualname__,
             )
-            raise UnreadableResponseError(
-                f"feed parse error: {source_name}: {feed.bozo_exception}"
+            error = UnreadableResponseError(
+                reason=UnreadableResponseReason.MALFORMED_CONTENT,
+                response_format="feed",
             )
+            # bozo_exception の FQN だけを error_chain に残す (生 message は載せない)。
+            if bozo_exception is not None:
+                raise error from bozo_exception
+            raise error
         return [normalize_entry(entry) for entry in feed.entries]
 
     async def _fetch_raw(

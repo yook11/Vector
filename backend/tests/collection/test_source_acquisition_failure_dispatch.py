@@ -11,12 +11,17 @@ from structlog.testing import capture_logs
 
 from app.collection.article_acquisition.errors import (
     AcquisitionExternalFetchError,
+    AcquisitionUnreadableResponseError,
 )
 from app.collection.article_acquisition.failure_handling import (
     ArticleAcquisitionFailureHandler,
 )
 from app.collection.article_acquisition.fetched_article_converter import (
     ConversionRejection,
+)
+from app.collection.article_acquisition.reader.read_errors import (
+    UnreadableResponseError,
+    UnreadableResponseReason,
 )
 from app.collection.external_fetch_errors import (
     FetchAccessDeniedError,
@@ -92,6 +97,47 @@ async def test_acquisition_error_writes_audit_and_returns_false(
     )
     assert ev.payload["failure_kind"] == "external_fetch"
     assert ev.payload["failure_action"] is None
+
+
+@pytest.mark.asyncio
+async def test_read_failure_writes_reason_outcome_and_read_payload(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """read 失敗は origin の reason.value を outcome_code に、read specifics を
+    ``read_*`` payload に焼く (接続失敗と別 outcome + 構造化列を end-to-end で固定)。
+    """
+    source_id = sample_source.id
+    handler = ArticleAcquisitionFailureHandler(session_factory)
+
+    exc = AcquisitionUnreadableResponseError(
+        origin_error=UnreadableResponseError(
+            reason=UnreadableResponseReason.UNEXPECTED_FIELD_SHAPE,
+            response_format="json",
+            field="items",
+        )
+    )
+    reraise = await handler.handle_source_failure(
+        source_id=source_id,
+        source_name="VentureBeat",
+        exc=exc,
+    )
+
+    assert reraise is False
+    await db_session.rollback()
+    events = await _fetch_acquisition_events(db_session, source_id)
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.event_type == "failed"
+    assert ev.outcome_code == "read_unexpected_field_shape"
+    assert ev.retryability == "non_retryable"
+    assert ev.error_class is not None
+    assert ev.error_class.endswith(".AcquisitionUnreadableResponseError")
+    assert ev.payload["failure_kind"] == "unreadable_response"
+    assert ev.payload["read_format"] == "json"
+    assert ev.payload["read_field"] == "items"
+    assert ev.payload["read_parser_position"] is None
 
 
 @pytest.mark.asyncio

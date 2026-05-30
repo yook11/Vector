@@ -15,7 +15,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from app.collection.article_acquisition.errors import UnreadableResponseError
+from app.collection.article_acquisition.reader.read_errors import (
+    UnreadableResponseError,
+    UnreadableResponseReason,
+)
 from app.collection.article_acquisition.reader.rss_reader import (
     RssReader,
     normalize_entry,
@@ -303,8 +306,31 @@ class TestRssReaderFetch:
             _patch_safe_client(response),
             patch(f"{_MOD}.feedparser.parse", return_value=feed),
         ):
-            with pytest.raises(UnreadableResponseError):
+            with pytest.raises(UnreadableResponseError) as raised:
                 await RssReader().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
+
+        # bozo + entries 空 = feed 構文破損。reason / format で自己記述する
+        # (空 body との切り分けは下の empty-body テストが所有)。
+        assert raised.value.reason is UnreadableResponseReason.MALFORMED_CONTENT
+        assert raised.value.response_format == "feed"
+
+    async def test_empty_body_raises_empty_body_before_parse(self) -> None:
+        """空 body は parse 手前で ``EMPTY_BODY`` に倒す (feedparser は呼ばない)。
+
+        空応答 (ブロック / ダウン) と壊れた中身 (bozo) は運用対処が違うため別 reason。
+        """
+        response = _mock_response(text="")
+
+        with (
+            _patch_safe_client(response),
+            patch(f"{_MOD}.feedparser.parse") as mock_parse,
+        ):
+            with pytest.raises(UnreadableResponseError) as raised:
+                await RssReader().fetch(endpoint_url=_ENDPOINT, source_name=_SOURCE)
+
+        assert raised.value.reason is UnreadableResponseReason.EMPTY_BODY
+        assert raised.value.response_format == "feed"
+        mock_parse.assert_not_called()
 
     async def test_bozo_with_entries_does_not_raise(self) -> None:
         feed = _make_feed(

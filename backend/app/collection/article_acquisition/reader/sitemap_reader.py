@@ -15,7 +15,10 @@ from datetime import UTC, datetime
 
 from lxml import etree
 
-from app.collection.article_acquisition.errors import UnreadableResponseError
+from app.collection.article_acquisition.reader.read_errors import (
+    UnreadableResponseError,
+    UnreadableResponseReason,
+)
 from app.collection.article_acquisition.tools.raw_http_client import RawHttpClient
 
 _SITEMAP_NS = "http://www.sitemaps.org/schemas/sitemap/0.9"
@@ -64,6 +67,12 @@ def _parse_sitemap_entries(data: bytes) -> list[SitemapEntry]:
     return entries
 
 
+def _xml_parser_position(e: etree.XMLSyntaxError) -> str | None:
+    """``XMLSyntaxError`` の ``(line, col)`` を PII-free な位置文字列にする。"""
+    pos = e.position
+    return f"{pos[0]}:{pos[1]}" if pos else None
+
+
 class SitemapReader:
     """sitemap.xml Reader。transport は ``RawHttpClient`` を wrap する。"""
 
@@ -76,13 +85,19 @@ class SitemapReader:
         """HTTP GET → defensive XML parse → ``list[SitemapEntry]``。
 
         Raises:
-            UnreadableResponseError: XML 構造破損 (payload 全体の失敗)。
+            UnreadableResponseError: 空 body / XML 構造破損 (payload 全体の失敗)。
             ExternalFetchError: HTTP status / transport / SSRF 例外の写像。
         """
         raw = await self._http.fetch(url=url, source_name=source_name)
+        if not raw.strip():
+            raise UnreadableResponseError(
+                reason=UnreadableResponseReason.EMPTY_BODY, response_format="xml"
+            )
         try:
             return await asyncio.to_thread(_parse_sitemap_entries, raw)
         except etree.XMLSyntaxError as e:
             raise UnreadableResponseError(
-                f"sitemap parse error: {source_name}: {e}"
+                reason=UnreadableResponseReason.MALFORMED_CONTENT,
+                response_format="xml",
+                parser_position=_xml_parser_position(e),
             ) from e

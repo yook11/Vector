@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import structlog
 
-from app.collection.article_acquisition.errors import UnreadableResponseError
+from app.collection.article_acquisition.reader.read_errors import (
+    UnreadableResponseError,
+)
 from app.collection.article_acquisition.reader.rss_reader import (
     ParseMode,
     RssEntry,

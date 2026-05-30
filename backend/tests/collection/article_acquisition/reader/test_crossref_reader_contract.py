@@ -63,10 +63,13 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from app.collection.article_acquisition.errors import UnreadableResponseError
 from app.collection.article_acquisition.reader.crossref_reader import (
     CrossrefEntry,
     CrossrefReader,
+)
+from app.collection.article_acquisition.reader.read_errors import (
+    UnreadableResponseError,
+    UnreadableResponseReason,
 )
 from app.collection.external_fetch_errors import (
     FetchAccessDeniedError,
@@ -182,21 +185,56 @@ async def _fetch_body(content: bytes) -> list[CrossrefEntry]:
 
 
 @pytest.mark.parametrize(
-    "body",
+    "body,expected_reason,expected_field",
     [
-        pytest.param(b"{not valid json", id="json_decode_error"),
-        pytest.param(b"[]", id="top_level_not_dict"),
-        pytest.param(b'{"message": []}', id="message_not_dict"),
-        pytest.param(b'{"message": {"items": {}}}', id="items_not_list"),
+        pytest.param(b"", UnreadableResponseReason.EMPTY_BODY, None, id="empty_body"),
+        pytest.param(
+            b"   ", UnreadableResponseReason.EMPTY_BODY, None, id="whitespace_body"
+        ),
+        pytest.param(
+            b"{not valid json",
+            UnreadableResponseReason.MALFORMED_CONTENT,
+            None,
+            id="json_decode_error",
+        ),
+        pytest.param(
+            b"[]",
+            UnreadableResponseReason.UNEXPECTED_ROOT_SHAPE,
+            "data",
+            id="top_level_not_dict",
+        ),
+        pytest.param(
+            b'{"message": []}',
+            UnreadableResponseReason.UNEXPECTED_FIELD_SHAPE,
+            "message",
+            id="message_not_dict",
+        ),
+        pytest.param(
+            b'{"message": {"items": {}}}',
+            UnreadableResponseReason.UNEXPECTED_FIELD_SHAPE,
+            "items",
+            id="items_not_list",
+        ),
     ],
 )
-async def test_unreadable_payload_raises_unreadable_response(body: bytes) -> None:
-    """接続は成功したが構造化できない payload (JSON decode 失敗 / envelope shape
-    不正) は read 段固有の ``UnreadableResponseError`` に写る (接続境界
-    ``ExternalFetchError`` とは別系統)。生 ``JSONDecodeError`` / ``AttributeError``
-    を上位に漏らさない。"""
-    with pytest.raises(UnreadableResponseError):
+async def test_unreadable_payload_classified_by_reason(
+    body: bytes,
+    expected_reason: UnreadableResponseReason,
+    expected_field: str | None,
+) -> None:
+    """接続成功だが構造化不能な payload は read 段固有の ``UnreadableResponseError``
+    に写り、**どこがどう壊れたか** を reason + field で自己記述する (接続境界
+    ``ExternalFetchError`` とは別系統。生 ``JSONDecodeError`` / ``AttributeError`` を
+    上位へ漏らさない)。空 body / decode 失敗 / envelope shape 不正を別 reason に
+    切り分けるのが本テストの非空虚 oracle (旧 single-CODE では全て同一に潰れていた)。
+    """
+    with pytest.raises(UnreadableResponseError) as raised:
         await _fetch_body(body)
+
+    exc = raised.value
+    assert exc.reason is expected_reason
+    assert exc.field == expected_field
+    assert exc.response_format == "json"
 
 
 async def test_empty_items_is_success_not_unreadable() -> None:

@@ -30,7 +30,10 @@ from app.audit.stages.completion import ArticleCompletionAuditRepository
 from app.collection.article_acquisition.errors import (
     AcquisitionExternalFetchError,
     AcquisitionUnreadableResponseError,
+)
+from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseError,
+    UnreadableResponseReason,
 )
 from app.collection.article_completion.scrape_failure import (
     FetchFailed,
@@ -173,12 +176,18 @@ def test_project_failure_returns_unknown_for_catch_all() -> None:
             ),
         ),
         (
-            AcquisitionUnreadableResponseError(origin_error=UnreadableResponseError()),
+            AcquisitionUnreadableResponseError(
+                origin_error=UnreadableResponseError(
+                    reason=UnreadableResponseReason.UNEXPECTED_FIELD_SHAPE,
+                    response_format="json",
+                    field="items",
+                )
+            ),
             FailureProjection(
                 failure_kind="unreadable_response",
                 retryability=Retryability.NON_RETRYABLE,
                 failure_action=None,
-                code="read_unreadable_response",
+                code="read_unexpected_field_shape",
                 stage=Stage.ACQUISITION,
             ),
         ),

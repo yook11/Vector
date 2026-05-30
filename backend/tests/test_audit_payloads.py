@@ -85,6 +85,33 @@ class TestAcquisitionPayloadConversionFields:
         assert AcquisitionPayload.model_validate(dumped) == payload
 
 
+class TestAcquisitionPayloadReadFailureFields:
+    """read 失敗 (reader が取得済み payload を構造化できない) 用の ``read_*`` 列。
+
+    接続失敗の ``http_status`` 等と対称に、読取失敗の specifics (format / field /
+    parser position) を構造化列で残す (outcome_code = reason.value とは別に、後から
+    どの形式のどのフィールドで落ちたかを復元できるようにする)。
+    """
+
+    def test_read_fields_default_none(self) -> None:
+        payload = AcquisitionPayload()
+        assert payload.read_format is None
+        assert payload.read_field is None
+        assert payload.read_parser_position is None
+
+    def test_read_fields_serialize_to_json(self) -> None:
+        payload = AcquisitionPayload(
+            read_format="json",
+            read_field="items",
+            read_parser_position="3:7",
+        )
+        dumped = payload.model_dump(mode="json")
+        assert dumped["read_format"] == "json"
+        assert dumped["read_field"] == "items"
+        assert dumped["read_parser_position"] == "3:7"
+        assert AcquisitionPayload.model_validate(dumped) == payload
+
+
 class TestCompletionPayloadAuditKeys:
     """``CompletionPayload`` の key field 不変条件。"""
 
@@ -260,6 +287,25 @@ class TestPayloadFieldOwnership:
         assert "failure_action" not in DispatchPayload.model_fields
         assert "failure_kind" not in TrendDiscoveryPayload.model_fields
         assert "failure_action" not in TrendDiscoveryPayload.model_fields
+
+    def test_only_acquisition_payload_owns_read_failure_fields(self) -> None:
+        read_fields = ("read_format", "read_field", "read_parser_position")
+        for field in read_fields:
+            assert field in AcquisitionPayload.model_fields
+
+        payloads_without_read_fields = (
+            BasePipelineEventPayload,
+            DispatchPayload,
+            CompletionPayload,
+            CurationPayload,
+            AssessmentPayload,
+            EmbeddingPayload,
+            BriefingPayload,
+            TrendDiscoveryPayload,
+        )
+        for payload_cls in payloads_without_read_fields:
+            for field in read_fields:
+                assert field not in payload_cls.model_fields
 
     def test_only_completion_payload_owns_attempt_count(self) -> None:
         assert "attempt_count" in CompletionPayload.model_fields

@@ -10,7 +10,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.audit.stages.acquisition import SourceAcquisitionAuditRepository
 from app.collection.article_acquisition.errors import (
-    UnreadableResponseError,
     map_origin_to_acquisition,
 )
 from app.collection.article_acquisition.failure_handling import (
@@ -22,6 +21,9 @@ from app.collection.article_acquisition.fetched_article_converter import (
     unexpected_rejection,
 )
 from app.collection.article_acquisition.fetcher import fetch_articles
+from app.collection.article_acquisition.reader.read_errors import (
+    UnreadableResponseError,
+)
 from app.collection.article_acquisition.repository import IncompleteArticleRepository
 from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.domain.analyzable_article import AnalyzableArticle

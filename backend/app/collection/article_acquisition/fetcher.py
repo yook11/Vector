@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
-from app.collection.article_acquisition.errors import UnreadableResponseError
 from app.collection.article_acquisition.fetched_article import FetchedArticle
+from app.collection.article_acquisition.reader.read_errors import (
+    UnreadableResponseError,
+)
 from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.external_fetch_errors import ExternalFetchError
 from app.collection.sources.article_source import ArticleSource

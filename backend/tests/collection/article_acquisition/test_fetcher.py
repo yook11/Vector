@@ -13,9 +13,12 @@ from typing import ClassVar
 
 import pytest
 
-from app.collection.article_acquisition.errors import UnreadableResponseError
 from app.collection.article_acquisition.fetched_article import FetchedArticle
 from app.collection.article_acquisition.fetcher import fetch_articles
+from app.collection.article_acquisition.reader.read_errors import (
+    UnreadableResponseError,
+    UnreadableResponseReason,
+)
 from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.external_fetch_errors import FetchOriginServerError
 from app.collection.sources.base_article_source import BaseArticleSource
@@ -111,7 +114,9 @@ class _UnreadableReadSource(BaseArticleSource):
 
     @classmethod
     async def read(cls, tools: ReaderTools) -> list[str]:  # noqa: ARG003
-        raise UnreadableResponseError("unreadable boom")
+        raise UnreadableResponseError(
+            reason=UnreadableResponseReason.MALFORMED_CONTENT, response_format="feed"
+        )
 
     @classmethod
     def map_entry(cls, entry: str) -> FetchedArticle:

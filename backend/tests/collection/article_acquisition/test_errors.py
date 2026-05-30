@@ -11,8 +11,11 @@ from app.collection.article_acquisition.errors import (
     AcquisitionExternalFetchError,
     AcquisitionUnreadableResponseError,
     SourceAcquisitionError,
-    UnreadableResponseError,
     map_origin_to_acquisition,
+)
+from app.collection.article_acquisition.reader.read_errors import (
+    UnreadableResponseError,
+    UnreadableResponseReason,
 )
 from app.collection.external_fetch_errors import (
     ExternalFetchError,
@@ -23,26 +26,6 @@ from tests.collection.test_external_fetch_error_codes import (
     _CONSTRUCTION,
     _concrete_subclasses,
 )
-
-
-def test_unreadable_response_error_code_is_stable_read_prefixed() -> None:
-    """CODE は接続 family の ``fetch_`` と別カテゴリと分かる ``read_`` prefix。"""
-    assert UnreadableResponseError.CODE == "read_unreadable_response"
-
-
-def test_unreadable_response_error_is_not_a_connection_error() -> None:
-    """接続境界 ``ExternalFetchError`` family とは独立した別系統 (継承しない)。"""
-    assert not issubclass(UnreadableResponseError, ExternalFetchError)
-
-
-def test_unreadable_response_error_str_nonempty_without_message() -> None:
-    """message 無しでも ``str(exc)`` が非空 (既定 message に CODE を合成)。"""
-    assert str(UnreadableResponseError()) == "read_unreadable_response"
-
-
-def test_unreadable_response_error_explicit_message_takes_precedence() -> None:
-    exc = UnreadableResponseError("sitemap parse error: Foo")
-    assert str(exc) == "sitemap parse error: Foo"
 
 
 def test_acquisition_error_is_stage_1_marker_base() -> None:
@@ -82,17 +65,26 @@ def test_external_fetch_marker_derives_non_retryable_from_origin() -> None:
     assert str(exc) == "AcquisitionExternalFetchError(code='fetch_access_denied')"
 
 
-def test_unreadable_response_marker_has_failure_attrs() -> None:
-    origin = UnreadableResponseError("rss bozo")
+def test_unreadable_response_marker_carries_origin_reason_code() -> None:
+    """read marker は origin の reason.value を ``code`` (outcome_code) として運ぶ。
+
+    単一 CODE 定数は廃止され、code は reason ごとに変わる (fetch marker が origin の
+    ``CODE`` を運ぶのと同型。read 失敗は全 terminal なので ``NON_RETRYABLE`` 固定)。
+    """
+    origin = UnreadableResponseError(
+        reason=UnreadableResponseReason.UNEXPECTED_FIELD_SHAPE,
+        response_format="json",
+        field="items",
+    )
     exc = AcquisitionUnreadableResponseError(origin_error=origin)
 
     assert exc.FAILURE_KIND == "unreadable_response"
     assert exc.RETRYABILITY is Retryability.NON_RETRYABLE
     assert exc.FAILURE_ACTION is None
-    assert exc.code == "read_unreadable_response"
+    assert exc.code == origin.reason.value == "read_unexpected_field_shape"
     assert exc.origin_error is origin
     assert str(exc) == (
-        "AcquisitionUnreadableResponseError(code='read_unreadable_response')"
+        "AcquisitionUnreadableResponseError(code='read_unexpected_field_shape')"
     )
 
 
@@ -122,12 +114,14 @@ def test_map_origin_to_acquisition_preserves_origin_code(
 
 
 def test_map_origin_to_acquisition_maps_unreadable_response() -> None:
-    origin = UnreadableResponseError("rss bozo")
+    origin = UnreadableResponseError(
+        reason=UnreadableResponseReason.MALFORMED_CONTENT, response_format="feed"
+    )
 
     marker = map_origin_to_acquisition(origin)
 
     assert isinstance(marker, AcquisitionUnreadableResponseError)
-    assert marker.code == "read_unreadable_response"
+    assert marker.code == "read_malformed_content"
     assert marker.origin_error is origin
 
 

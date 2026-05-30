@@ -26,6 +26,10 @@ import httpx
 import pytest
 from lxml import etree
 
+from app.collection.article_acquisition.reader.read_errors import (
+    UnreadableResponseError,
+    UnreadableResponseReason,
+)
 from app.collection.article_acquisition.reader.sitemap_reader import (
     SitemapEntry,
     SitemapReader,
@@ -140,6 +144,26 @@ async def test_http_500_raises_origin_server_error() -> None:
     """R4: payload 全体失敗 (500) は ``ExternalFetchError`` 系に写る。"""
     with pytest.raises(FetchOriginServerError):
         await _raise_through(500)
+
+
+async def test_malformed_xml_raises_malformed_content() -> None:
+    """構文破損 XML (非空) は ``MALFORMED_CONTENT`` に写り format / position で
+    自己記述する (空 body との切り分けは下の empty-body テストが所有)。"""
+    with pytest.raises(UnreadableResponseError) as raised:
+        await _reader_entries(b"<urlset><url>")
+
+    assert raised.value.reason is UnreadableResponseReason.MALFORMED_CONTENT
+    assert raised.value.response_format == "xml"
+    assert raised.value.parser_position is not None  # XMLSyntaxError 由来の line:col
+
+
+async def test_empty_body_raises_empty_body() -> None:
+    """空 body は parse 手前で ``EMPTY_BODY`` に倒す (空応答とブロックは別運用)。"""
+    with pytest.raises(UnreadableResponseError) as raised:
+        await _reader_entries(b"")
+
+    assert raised.value.reason is UnreadableResponseReason.EMPTY_BODY
+    assert raised.value.response_format == "xml"
 
 
 async def test_xxe_external_entity_not_resolved() -> None:

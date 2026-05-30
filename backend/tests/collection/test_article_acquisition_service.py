@@ -13,9 +13,12 @@ from app.collection.article_acquisition import service as service_module
 from app.collection.article_acquisition.errors import (
     AcquisitionExternalFetchError,
     AcquisitionUnreadableResponseError,
-    UnreadableResponseError,
 )
 from app.collection.article_acquisition.fetched_article import FetchedArticle
+from app.collection.article_acquisition.reader.read_errors import (
+    UnreadableResponseError,
+    UnreadableResponseReason,
+)
 from app.collection.article_acquisition.service import ArticleAcquisitionService
 from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
@@ -522,14 +525,19 @@ async def test_unreadable_response_error_is_wrapped_to_acquisition_marker(
     session_factory: async_sessionmaker[AsyncSession],
     vb_source: NewsSource,
 ) -> None:
-    """読取 origin error は Stage 1 unreadable marker に詰め替えて伝播する。"""
-    origin = UnreadableResponseError("rss bozo")
+    """読取 origin error は Stage 1 unreadable marker に詰め替えて伝播する。
+
+    marker の ``code`` は origin の reason.value を運ぶ (単一 CODE は廃止)。
+    """
+    origin = UnreadableResponseError(
+        reason=UnreadableResponseReason.MALFORMED_CONTENT, response_format="feed"
+    )
     svc = ArticleAcquisitionService(session_factory, _RaisingReadSource(origin))
 
     with pytest.raises(AcquisitionUnreadableResponseError) as raised:
         await svc.execute(vb_source.id)
 
-    assert raised.value.code == "read_unreadable_response"
+    assert raised.value.code == "read_malformed_content"
     assert raised.value.origin_error is origin
     assert raised.value.__cause__ is origin
 

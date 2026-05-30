@@ -11,7 +11,10 @@ from typing import Any, ClassVar
 import httpx
 import structlog
 
-from app.collection.article_acquisition.errors import UnreadableResponseError
+from app.collection.article_acquisition.reader.read_errors import (
+    UnreadableResponseError,
+    UnreadableResponseReason,
+)
 from app.collection.article_acquisition.tools.http_error_translation import (
     translate_fetch_exception,
 )
@@ -176,28 +179,41 @@ class CrossrefReader:
             ) as e:
                 raise translate_fetch_exception(e, source_name=source_name) from e
 
+            if not response.content.strip():
+                raise UnreadableResponseError(
+                    reason=UnreadableResponseReason.EMPTY_BODY,
+                    response_format="json",
+                )
             try:
                 data = response.json()
             except json.JSONDecodeError as e:
                 raise UnreadableResponseError(
-                    f"crossref json decode error: {source_name}: {e}"
+                    reason=UnreadableResponseReason.MALFORMED_CONTENT,
+                    response_format="json",
+                    parser_position=f"{e.lineno}:{e.colno}",
                 ) from e
 
         # envelope shape を確定してから抽出 (接続成功でも構造化できなければ
         # read 失敗。absent key は寛容に空へ、present だが型違いは unreadable)。
         if not isinstance(data, dict):
             raise UnreadableResponseError(
-                f"crossref envelope shape error: {source_name}"
+                reason=UnreadableResponseReason.UNEXPECTED_ROOT_SHAPE,
+                response_format="json",
+                field="data",
             )
         message = data.get("message", {})
         if not isinstance(message, dict):
             raise UnreadableResponseError(
-                f"crossref envelope shape error: {source_name}"
+                reason=UnreadableResponseReason.UNEXPECTED_FIELD_SHAPE,
+                response_format="json",
+                field="message",
             )
         items_raw = message.get("items", [])
         if not isinstance(items_raw, list):
             raise UnreadableResponseError(
-                f"crossref envelope shape error: {source_name}"
+                reason=UnreadableResponseReason.UNEXPECTED_FIELD_SHAPE,
+                response_format="json",
+                field="items",
             )
         items: list[dict[str, Any]] = items_raw
         if not items:
