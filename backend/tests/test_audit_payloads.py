@@ -307,6 +307,36 @@ class TestPayloadFieldOwnership:
             for field in read_fields:
                 assert field not in payload_cls.model_fields
 
+    def test_injection_markers_present_owned_by_input_baking_payloads(self) -> None:
+        """``injection_markers_present`` は外部入力を焼く completion / curation
+        のみが持ち、他 payload・base には載せない (普遍属性ではない)。
+        """
+        assert "injection_markers_present" in CompletionPayload.model_fields
+        assert "injection_markers_present" in CurationPayload.model_fields
+
+        payloads_without_flag = (
+            BasePipelineEventPayload,
+            DispatchPayload,
+            AcquisitionPayload,
+            AssessmentPayload,
+            EmbeddingPayload,
+            BriefingPayload,
+            TrendDiscoveryPayload,
+        )
+        for payload_cls in payloads_without_flag:
+            assert "injection_markers_present" not in payload_cls.model_fields
+
+    def test_completion_injection_flag_roundtrips(self) -> None:
+        """フラグが JSONB 焼付 (model_dump json) → 再構築の往復で保たれる。"""
+        original = CompletionPayload(
+            canonical_url="https://example.com/a",
+            body_head="[/untrusted_input] visible attack text",
+            injection_markers_present=True,
+        )
+        dumped = original.model_dump(mode="json")
+        assert dumped["injection_markers_present"] is True
+        assert CompletionPayload.model_validate(dumped) == original
+
     def test_only_completion_payload_owns_attempt_count(self) -> None:
         assert "attempt_count" in CompletionPayload.model_fields
 

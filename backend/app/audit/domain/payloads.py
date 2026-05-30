@@ -98,6 +98,8 @@ class CompletionPayload(BasePipelineEventPayload):
     response_size: int | None = None
     content_type: str | None = None
     body_head: str | None = None
+    # body_head に prompt-injection 境界タグを検出した行だけ True。
+    injection_markers_present: bool | None = None
     # retry 上限に到達して諦めた行だけ True。
     retry_exhausted: bool | None = None
 
@@ -116,6 +118,8 @@ class CurationPayload(BasePipelineEventPayload):
     input_content_length: int | None = None
     max_content_length: int | None = None
     input_content_hash: str | None = None
+    # input_content に prompt-injection 境界タグを検出した行だけ True。
+    injection_markers_present: bool | None = None
     ai_raw_response: str | None = None
     raw_relevance: str | None = None
 

@@ -54,6 +54,19 @@ _ATX_HEADER = re.compile(r"^(#{1,6})[ \t　]+", flags=re.MULTILINE)
 _FULLWIDTH_BRACKET_HEADER = re.compile(r"【([^】\n]+)】")
 
 
+def contains_injection_boundary(text: str) -> bool:
+    """untrusted 境界タグ (``<untrusted_input>`` / ``</untrusted_input>`` の全
+    バリアント) を含むかを判定する。
+
+    sanitize と違い「無害化」ではなく「検知」が目的。境界タグは正当な記事本文
+    にはほぼ出現しない高信号 (near-zero false positive) なので、監査の injection
+    検知信号として使える。行頭 ATX ``#`` / 全角括弧 ``【】`` は benign なニュース
+    本文 (``# 見出し`` / ``【速報】``) に頻出しノイズ化するため、sanitize では
+    無害化しても検知 (本述語) には含めない。
+    """
+    return bool(_BOUNDARY_OPEN.search(text) or _BOUNDARY_CLOSE.search(text))
+
+
 def sanitize_for_untrusted_block(text: str) -> str:
     """境界タグ・行頭 ATX マーカ・全角括弧 section header を無害化し、
     LLM 命令層への汚染を防ぐ。

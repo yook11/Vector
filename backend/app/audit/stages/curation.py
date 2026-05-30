@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import hashlib
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypedDict
 
+import structlog
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis.curation.ai.gemini_prompt import GeminiCurationPrompt
-from app.analysis.prompt_safety import sanitize_for_untrusted_block
+from app.analysis.prompt_safety import (
+    contains_injection_boundary,
+    sanitize_for_untrusted_block,
+)
 from app.audit.domain.event import EventType, Stage
 from app.audit.domain.payloads import CurationPayload
 from app.audit.error_chain import extract_error_chain
@@ -20,6 +24,7 @@ from app.audit.failure_projection import (
     project_failure,
     unknown_failure_projection,
 )
+from app.audit.injection_signal import record_injection_boundary_detected
 from app.audit.ready_build import project_ready_build_failure
 from app.audit.repository import PipelineEventRepository
 from app.shared.security.redaction import redact_secrets
@@ -33,6 +38,8 @@ if TYPE_CHECKING:
         ReadyForCuration,
     )
     from app.analysis.curation.errors import CurationError, CurationTerminalDropError
+
+logger = structlog.get_logger(__name__)
 
 _AI_RAW_RESPONSE_LIMIT = 2048
 _ERROR_MESSAGE_LIMIT = 2000
@@ -59,8 +66,9 @@ class CurationAuditRepository:
         code: str,
     ) -> None:
         """signal 成功を記録する。"""
+        content = _input_content_fields(ready.original_content)
         payload = CurationPayload(
-            **_input_content_fields(ready.original_content),
+            **content,
             ai_model=envelope.model_name,
             prompt_version=envelope.prompt_version,
             ai_raw_response=envelope.raw_response[:_AI_RAW_RESPONSE_LIMIT] or None,
@@ -73,6 +81,8 @@ class CurationAuditRepository:
             payload=payload,
             article_id=ready.article_id,
         )
+        if content["injection_markers_present"]:
+            self._record_injection_detected(article_id=ready.article_id)
 
     async def append_noise(
         self,
@@ -82,8 +92,9 @@ class CurationAuditRepository:
         code: str,
     ) -> None:
         """noise 成功を記録する。"""
+        content = _input_content_fields(ready.original_content)
         payload = CurationPayload(
-            **_input_content_fields(ready.original_content),
+            **content,
             ai_model=envelope.model_name,
             prompt_version=envelope.prompt_version,
             ai_raw_response=envelope.raw_response[:_AI_RAW_RESPONSE_LIMIT] or None,
@@ -96,6 +107,8 @@ class CurationAuditRepository:
             payload=payload,
             article_id=ready.article_id,
         )
+        if content["injection_markers_present"]:
+            self._record_injection_detected(article_id=ready.article_id)
 
     # --- DROP 経路 (article DELETE と同一 tx) -----------------------------
 
@@ -109,13 +122,14 @@ class CurationAuditRepository:
     ) -> None:
         """article 削除を伴う curation 失敗を記録する。"""
         projection = self._projection_of(exc, fallback_code=code)
+        content = _input_content_fields(ready.original_content)
         payload = CurationPayload(
             failure_kind=projection.failure_kind,
             failure_action=failure_action_value(projection),
             # DROP は記事 DELETE と同一 tx で焼かれ FK article_id が SET NULL に
             # 落ちるため、削除に耐える記事識別子を payload に控える。
             target_article_id=ready.article_id,
-            **_input_content_fields(ready.original_content),
+            **content,
             ai_model=curator.model_name,
             prompt_version=curator.prompt_version,
             error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
@@ -130,6 +144,8 @@ class CurationAuditRepository:
             error_class=_fqn(exc),
             retryability=projection.retryability,
         )
+        if content["injection_markers_present"]:
+            self._record_injection_detected(article_id=ready.article_id)
 
     # --- 救済断念経路 (年齢削除と同一 tx) ---------------------------------
 
@@ -234,10 +250,11 @@ class CurationAuditRepository:
         curator: BaseCurator,
         projection: FailureProjection,
     ) -> None:
+        content = _input_content_fields(ready.original_content)
         payload = CurationPayload(
             failure_kind=projection.failure_kind,
             failure_action=failure_action_value(projection),
-            **_input_content_fields(ready.original_content),
+            **content,
             ai_model=curator.model_name,
             prompt_version=curator.prompt_version,
             error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
@@ -252,8 +269,24 @@ class CurationAuditRepository:
             error_class=_fqn(exc),
             retryability=projection.retryability,
         )
+        if content["injection_markers_present"]:
+            self._record_injection_detected(article_id=ready.article_id)
 
     # --- internal helpers -------------------------------------------------
+
+    def _record_injection_detected(self, *, article_id: int | None) -> None:
+        """injection 検知信号 (metric + log) を emit する。
+
+        監査行の永続化 (``_events.append``) 成功後に呼ぶ。payload 構築や append が
+        倒れた場合に signal だけ残る「metric +1 だが pipeline_events 行なし」の乖離
+        を防ぐ。検知自体は境界タグ限定の高信号、無害化 (sanitize) とは別軸。
+        """
+        record_injection_boundary_detected(stage="curation")
+        logger.warning(
+            "audit_injection_boundary_detected",
+            stage="curation",
+            article_id=article_id,
+        )
 
     @staticmethod
     def _projection_of(
@@ -267,9 +300,25 @@ def _fqn(exc: BaseException) -> str:
     return f"{type(exc).__module__}.{type(exc).__qualname__}"
 
 
-def _input_content_fields(original_content: str) -> dict[str, int | str]:
-    """curation audit payload に詰める input content field を計算する。"""
+class _InputContentFields(TypedDict):
+    """curation audit payload の input content snapshot + injection 検知フラグ。"""
+
+    input_content_length: int
+    input_content_head: str
+    input_content_hash: str
+    injection_markers_present: bool | None
+
+
+def _input_content_fields(original_content: str) -> _InputContentFields:
+    """curation audit payload の input content field と injection 信号を計算する。
+
+    検知・無害化はともに LLM プロンプトへ渡る窓 (= 保存する窓) と同じ ``truncated``
+    スライス上で行う。窓を超えた位置の境界タグは truncate で LLM に届かず無害なので
+    検知しない (裏取り不能な false positive と、2 万字超記事での full scan を同時に
+    避ける)。検知は境界タグ限定の高信号、無害化は sanitize による別軸。
+    """
     truncated = original_content[: GeminiCurationPrompt.CONTENT_MAX_LENGTH]
+    injected = contains_injection_boundary(truncated)
     sanitized = sanitize_for_untrusted_block(truncated)
     return {
         "input_content_length": len(original_content),
@@ -277,4 +326,5 @@ def _input_content_fields(original_content: str) -> dict[str, int | str]:
         "input_content_hash": hashlib.sha256(sanitized.encode("utf-8")).hexdigest()[
             :_INPUT_CONTENT_HASH_PREFIX_LEN
         ],
+        "injection_markers_present": injected or None,
     }

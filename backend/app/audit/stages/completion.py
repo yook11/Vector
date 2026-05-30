@@ -5,9 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import assert_never
 
+import structlog
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.analysis.prompt_safety import (
+    contains_injection_boundary,
+    sanitize_for_untrusted_block,
+)
 from app.audit.domain.event import EventType, Stage
 from app.audit.domain.payloads import CompletionPayload
 from app.audit.error_chain import extract_error_chain
@@ -17,6 +22,7 @@ from app.audit.failure_projection import (
     failure_action_value,
     project_db_failure,
 )
+from app.audit.injection_signal import record_injection_boundary_detected
 from app.audit.repository import PipelineEventRepository
 from app.collection.article_completion.completion_failure import CompletionRejection
 from app.collection.article_completion.ready import (
@@ -47,6 +53,8 @@ from app.collection.domain.canonical_article_url import (
 from app.collection.domain.observed_article import ObservedArticleInvalidError
 from app.collection.sources.errors import SourceNotRegisteredError
 from app.shared.security.redaction import redact_secrets
+
+logger = structlog.get_logger(__name__)
 
 _ERROR_MESSAGE_LIMIT = 2000
 
@@ -207,6 +215,9 @@ class ArticleCompletionAuditRepository:
                 title_present=title_present,
                 body_sample=body_sample,
             ):
+                injected = bool(body_sample) and contains_injection_boundary(
+                    body_sample
+                )
                 await self._append_content_rejected(
                     ready=ready,
                     outcome_code=_SCRAPE_CONTENT_QUALITY_TOO_LOW,
@@ -215,9 +226,29 @@ class ArticleCompletionAuditRepository:
                         attempt_count=ready.attempt_count,
                         body_length=body_length,
                         quality_gate_metric={"title_present": title_present},
-                        body_head=body_sample,
+                        # body_head は curation の input_content と同様に無害化して
+                        # 焼く (監査 payload を将来 LLM 再投入しても injection を
+                        # 持ち込まないため)。
+                        body_head=(
+                            sanitize_for_untrusted_block(body_sample)
+                            if body_sample
+                            else None
+                        ),
+                        injection_markers_present=injected or None,
                     ),
                 )
+                # 観測信号 (metric + log) は監査行の永続化後にのみ出す。append が
+                # 倒れた場合に signal だけ残る乖離を防ぐ。completion の Ready は
+                # article_id を持たないので source_id + canonical_url で対象を辿れる
+                # よう log に残す。
+                if injected:
+                    record_injection_boundary_detected(stage="completion")
+                    logger.warning(
+                        "audit_injection_boundary_detected",
+                        stage="completion",
+                        source_id=ready.source_id,
+                        canonical_url=canonical_url,
+                    )
             case _ as unreachable:
                 assert_never(unreachable)
 
