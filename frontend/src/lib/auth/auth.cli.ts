@@ -21,11 +21,12 @@
 import { betterAuth } from "better-auth";
 import type { PoolClient } from "pg";
 import { Pool } from "pg";
+import { poolConfigFromUrl } from "@/lib/auth/pool-ssl";
 import { requireEnv } from "@/lib/env";
 
-const pool = new Pool({
-  connectionString: requireEnv("AUTH_DATABASE_URL"),
-});
+// CLI からも Neon (SSL 必須) に migrate するため、runtime (auth.ts) と同じ
+// SSL 変換を通す。詳細は pool-ssl.ts を参照。
+const pool = new Pool(poolConfigFromUrl(requireEnv("AUTH_DATABASE_URL")));
 
 pool.on("connect", (client: PoolClient) => {
   client.query("SET search_path TO auth, public");

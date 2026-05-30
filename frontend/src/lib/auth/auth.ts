@@ -4,6 +4,7 @@ import { betterAuth } from "better-auth";
 import type { PoolClient } from "pg";
 import { Pool } from "pg";
 import { v7 as uuidv7 } from "uuid";
+import { poolConfigFromUrl } from "@/lib/auth/pool-ssl";
 import { getRateLimitRedisClient } from "@/lib/auth/rate-limit";
 import { requireEnv } from "@/lib/env";
 
@@ -21,7 +22,9 @@ const isProduction = process.env.NODE_ENV === "production";
 // ハングし続ける増幅源になる。5 秒 fail-fast に格下げして 5xx を即返す。
 // statement_timeout は pg server side で query 自体も 5 秒で切る二重防御。
 const pool = new Pool({
-  connectionString: requireEnv("AUTH_DATABASE_URL"),
+  // 接続文字列の sslmode を ssl オブジェクトに変換する (Neon は SSL 必須、
+  // dev docker は SSL なし)。詳細は pool-ssl.ts を参照。
+  ...poolConfigFromUrl(requireEnv("AUTH_DATABASE_URL")),
   max: 20,
   connectionTimeoutMillis: 5000,
   idleTimeoutMillis: 10_000,
