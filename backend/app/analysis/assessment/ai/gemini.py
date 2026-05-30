@@ -4,15 +4,6 @@ Prompt 文面は ``GeminiAssessmentPrompt`` が SSoT、call config (model /
 gen_config / response_schema / version / rate_limit_policy) は
 ``GEMINI_ASSESSMENT_SPEC`` (``spec.py``) が SSoT。本 class は I/O 駆動
 (rate limit + SDK 例外翻訳) に責務を絞る。
-
-PR3 で:
-- 戻り値を ``AssessmentResult`` 直接 → ``AssessmentCall`` envelope に切り替え
-- ``ClassificationRawResponse`` 経由を削除し、SDK text → ``json.loads`` →
-  ``parse_assessment`` の流れに統一 (PR2 で導入済の AI 境界 ACL)
-- ``finish_reason == SAFETY|RECITATION`` を ``_call_api`` 内で
-  ``AIProviderOutputBlockedError`` に直接 raise (translate 経由ではない)
-- ``_translate_error`` を spec の Gemini SDK 翻訳テーブル (``AIProvider*Error``
-  系への翻訳) に書き直し、catch-all は exc を return する bare re-raise guard 規約
 """
 
 from __future__ import annotations
@@ -58,7 +49,7 @@ class GeminiAssessor(BaseAssessor):
     def __init__(self) -> None:
         api_key = settings.gemini_api_key.get_secret_value()
         if not api_key:
-            # Phase 4: 引数 message は SAFE_ATTRS 外。CODE と起動ログで識別。
+            # provider error detail に secret や provider message を含めない。
             raise AIProviderConfigurationError()
         self._client = genai.Client(api_key=api_key)
 
@@ -108,14 +99,13 @@ class GeminiAssessor(BaseAssessor):
         # 例外ではなくレスポンス attribute として届く)。
         finish_reason_name = self._extract_finish_reason_name(response)
         if finish_reason_name in _BLOCKED_FINISH_REASONS:
-            # Phase 4: finish_reason 値は audit context として CODE 経由で残す。
             raise AIProviderOutputBlockedError()
 
         text = response.text or ""
         try:
             payload = json.loads(text)
         except json.JSONDecodeError as exc:
-            # Phase 4: 旧 message 引数廃止 (Gemini response 本文を含む経路)。
+            # raw AI 応答は例外 message に含めない。
             raise AssessmentResponseInvalidError() from exc
 
         if not isinstance(payload, dict):

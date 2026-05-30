@@ -2,8 +2,7 @@
 
 `@dataclass(frozen=True, slots=True)` ではなく `BaseModel(frozen=True)` を使う
 理由: taskiq の formatter が Pydantic ベースのため、kiq 引数で素の dataclass を
-渡すと serializer 到達前に PydanticSerializationError で死ぬ (taskiq Issue #441)。
-詳細は memory `feedback_taskiq_basemodel_required.md`。
+渡すと serializer 到達前に PydanticSerializationError で死ぬ。
 """
 
 from __future__ import annotations

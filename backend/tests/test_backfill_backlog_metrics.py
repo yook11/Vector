@@ -1,25 +1,7 @@
-"""``app/queue/tasks/backfill.py`` の ``vector.backfill.backlog`` gauge oracle。
+"""``vector.backfill.backlog`` gauge の契約テスト。
 
-PR #640 で撤去した circuit_breaker の観測代替として、``backfill_assessments``
-cron tick 毎に DB 上の真の未処理件数 (LIMIT なし COUNT) を Logfire gauge で
-set する設計を pin する。
-
-検証する性質 (Phase 5-A):
-- 真値が ``ASSESSMENTS_LIMIT`` を超えても gauge は saturate しない
-  (= dispatch list の ``len(ids)`` でなく count メソッドの返値が使われる正本契約)
-- 通常運転で gauge value = 真の count + attribute ``{"stage": "assessment"}``
-- empty backlog でも ``set(0, ...)`` で baseline が記録される (gauge セマンティクス)
-- kill switch off の時は SELECT 自体走らないため gauge も更新されない
-  (= 「metric 不在 = kill switch off」のシグナル)
-- attribute / value に固有 curation_id 等の dynamic 値が乗らない (capfire PII oracle)
-
-設計スタンス:
-- 実際の DB session_factory を立てるとテストが integration 寄りになる。本テストは
-  unit 層で metric 経路のみ検証するため、``PipelineBacklog`` / ``consume_daily_budget``
-  を patch 対象に絞り、metric record の attribute 契約を pin する
-  (``feedback_test_invariants_over_change_tracking``)。
-- capfire fixture が ``logfire.configure(...)`` を自前で呼ぶため本テスト内では
-  ``setup_logfire`` を呼ばない (二重 configure 回避、Phase 4 慣習と同形)。
+assessment backlog の真の未処理件数を Logfire gauge に記録すること、empty /
+kill switch / attribute の低 cardinality を確認する。
 """
 
 from __future__ import annotations
@@ -35,8 +17,7 @@ from app.queue.helpers.backlog import BackfillTarget
 from app.queue.tasks import backfill
 
 # ---------------------------------------------------------------------------
-# ヘルパー (Phase 4 の test_maintenance_age_delete_metrics.py と同形 —
-# module 跨ぎで複製、共通化は「同じ問題」検出時に括る)
+# ヘルパー
 # ---------------------------------------------------------------------------
 
 
@@ -78,7 +59,7 @@ def _target(curation_id: int) -> BackfillTarget:
 
 
 # ---------------------------------------------------------------------------
-# Test 1 (最重要 oracle): LIMIT を超えた真値が gauge に出る
+# Test 1: LIMIT を超えた真値が gauge に出る
 # ---------------------------------------------------------------------------
 
 
@@ -88,10 +69,6 @@ async def test_gauge_records_true_count_not_capped_by_limit(
 ) -> None:
     """真の backlog が ASSESSMENTS_LIMIT を超えても gauge は真値を返す
     (= saturate しない構造的契約)。
-
-    本テストは circuit_breaker 代替の観測機能を pin する正本 oracle。将来誰かが
-    ``gauge.set(len(ids), ...)`` に戻す回帰を入れたら即落ちる
-    (``feedback_per_seam_mapping_totality_oracle``)。
     """
     ctx = _ctx_with_session_factory()
     # dispatch list は LIMIT で頭打ち、真の backlog はそれを大きく超過
@@ -272,7 +249,7 @@ async def test_gauge_not_recorded_when_kill_switch_disabled(
 
 
 # ---------------------------------------------------------------------------
-# Test 5: PII 非含有契約 (capfire 全文検索 oracle)
+# Test 5: PII 非含有契約
 # ---------------------------------------------------------------------------
 
 
@@ -282,9 +259,7 @@ async def test_gauge_attributes_do_not_leak_curation_ids(
 ) -> None:
     """metric の attribute / dump 全体に固有 curation_id が乗らない。
 
-    低 cardinality 契約 (attribute は ``stage`` のみ) を構造的に pin。将来
-    ``attributes={"stage": ..., "curation_id": curation_id}`` のような変更が
-    入った場合に発見する PII oracle。
+    低 cardinality 契約として attribute は ``stage`` のみにする。
     """
     distinctive_ids = [987654321, 876543210]  # 識別可能な大きな数値
     distinctive_count = 555444333  # count 値も dump に直接出ないことを確認

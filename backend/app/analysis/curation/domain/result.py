@@ -1,12 +1,5 @@
 """Curation BC のドメイン結果型 (AI 出力 DTO)。
 
-2 つの型で Stage 3 の AI 出力を表す:
-
-- ``Signal`` / ``Noise`` — AI が記事を分析した結果として産出する domain 結果型。
-  ``CurationResult = Signal | Noise`` の union alias を経由して Service /
-  Repository が ``match`` で型ディスパッチする (Stage 4 ``InScope`` /
-  ``OutOfScope`` と対称)。
-
 AI 境界では引き続きフラット形式 (``{relevance, title_ja, summary_ja}``)
 を AI に要求する (構造化出力で discriminated union を要求すると AI 精度が
 落ちる + Gemini SDK structured response の制約)。Gemini SDK 契約型は
@@ -14,8 +7,7 @@ AI 境界では引き続きフラット形式 (``{relevance, title_ja, summary_j
 parse_curation`` が ``relevance`` 値を見て ``Signal`` / ``Noise`` に振り分ける。
 
 永続化結果 (``article_curations`` / ``curation_noises`` の 1 行) は
-Repository が ``int`` id として返し、Domain Entity 化はしない (Stage 4 / Stage 5
-と対称な勝者 SSoT パターン、``feedback_outcome_purification``)。
+Repository が ``int`` id として返し、Domain Entity 化はしない。
 """
 
 from __future__ import annotations
@@ -92,8 +84,4 @@ class Noise(BaseModel):
 
 
 CurationResult = Signal | Noise
-"""Stage 3 (Curation) の判定結果。Service はこの union を受け取り
-``match`` で ``Signal`` / ``Noise`` に型ディスパッチする (Stage 4
-``AssessmentResult = InScope | OutOfScope`` と対称)。AI 境界の Gemini SDK
-契約型は ``ai/schema.py::GeminiCurationResponse`` を参照。
-"""
+"""Stage 3 (Curation) の判定結果。Service はこの union を ``match`` で分岐する。"""

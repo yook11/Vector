@@ -1,39 +1,13 @@
 /**
  * リクエスト識別子抽出の純関数群。
  *
- * 副作用 (NextRequest からの header 読み出しと環境判定) は呼び出し側 (proxy.ts)
- * に残し、ここでは「与えられたヘッダ値と環境フラグから識別子を組み立てる」だけを
- * 担当する純関数として実装する。
+ * proxy.ts から渡された header 値と環境フラグだけで識別子を組み立てる。
+ * identifier は cookie ではなく IP に統一し、認証状態ごとの緩和は後段に任せる。
  *
- * 識別子は IP-based に統一 (red-team C1 / F2-F4 対策):
- *   - cookie 値を identifier に使うと「任意の non-empty cookie で別 bucket」
- *     「auth bucket への昇格 (limit 2x)」両方の bypass 経路が開く。proxy 層の
- *     rate-limit は per-IP の上限を確実に課す責務に絞り、認証状態に応じた
- *     limit 緩和は後段 (Better Auth 内蔵 rate-limit / backend 側) に任せる。
- *
- * 信頼境界 (red-team C1 / F2-F4 構造防御 / PR10 で確立):
- *   - production runtime は Fly.io edge proxy 経由で必ず `Fly-Client-IP` を
- *     上書き付与される (incoming 値を信頼せず、TCP 接続元の真の client IP に
- *     差し替える)。client から偽装不能。
- *   - production で Fly-Client-IP 欠如 = Fly proxy bypass された異常経路。
- *     詐称された `x-forwarded-for` を採用すると per-IP rate limit が回避される
- *     ため、fail-closed で `null` を返し "unknown" bucket に集約する
- *     (memory feedback_structural_guarantee.md / feedback_failure_visibility.md)。
- *   - development / test (docker-compose / npm run dev) は Fly Edge を経由
- *     しないため、`x-forwarded-for` 第一値 → `x-real-ip` の従来 fallback を維持。
- *
- * 識別子の優先順位 (production):
- *   1. `Fly-Client-IP` (Fly.io edge 注入、trusted)
- *   2. fail-closed → `null` → 呼び出し側で "unknown" bucket
- *
- * 識別子の優先順位 (development / test):
- *   1. `Fly-Client-IP` (将来 Fly Edge 経由 dev に切り替えた場合に備える)
- *   2. `x-forwarded-for` 第一値
- *   3. `x-real-ip`
- *   4. `null` → 呼び出し側で "unknown" bucket (curl --no-headers 等の非正規
- *      request を 1 つの bucket に集約する fail-closed fallback)。攻撃者が
- *      "unknown" を消費しても他の "unknown" 群が共倒れするだけで IP-bucket
- *      群への影響なし。
+ * production は Fly.io edge proxy が上書きする Fly-Client-IP だけを信頼する。
+ * 欠如時は fail-closed で null を返し、呼び出し側が "unknown" bucket に集約する。
+ * dev/test では Fly-Client-IP → x-forwarded-for 第一値 → x-real-ip の順に
+ * fallback する。
  */
 
 export type RequestIdentifier = { kind: "ip"; key: string };
@@ -55,9 +29,8 @@ export function extractClientIp(
     const trimmed = flyClientIp.trim();
     if (trimmed) return trimmed;
   }
-  // production で Fly-Client-IP が無い = Fly proxy bypass / Fly Edge 設定崩壊。
-  // 詐称可能な x-forwarded-for を信頼すると per-IP rate limit が回避される
-  // ため、ここで打ち切って "unknown" bucket に全異常 request を集約する。
+  // production では詐称可能な XFF/X-Real-IP を採用せず、
+  // "unknown" bucket に集約する。
   if (isProduction) {
     return null;
   }

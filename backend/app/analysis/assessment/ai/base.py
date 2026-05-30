@@ -19,8 +19,7 @@ class BaseAssessor(abc.ABC):
     """Stage 4 — Assessment のテンプレートメソッド基底。
 
     Stage 3 (Extraction) の構造化出力に対して判断を下す。原文は読まない。
-    判定結果は ``AssessmentCall`` envelope (``result`` + 監査用 raw 情報) で返す
-    (PR3 で `AssessmentResult` 直接返却から切り替え)。
+    判定結果は ``AssessmentCall`` envelope (``result`` + 監査用 raw 情報) で返す。
 
     SDK 例外は ``_translate_error`` で ``AIProvider*Error`` (Stage 中立の
     Layer 2-A 識別 marker) に翻訳する。Stage 4 marker (``AssessmentError`` 系)
@@ -120,7 +119,7 @@ class BaseAssessor(abc.ABC):
     ) -> AssessmentCall[InScope] | AssessmentCall[OutOfScope]:
         """1 回の API call。SDK 例外を ``AIProvider*Error`` 階層に翻訳して raise。
 
-        Pattern:
+        例外処理:
         - 既に階層内 (``AIProviderError`` / ``AssessmentError``) の例外は **素通し**
           (二重翻訳防止)
         - それ以外は ``_translate_error`` 経由で翻訳。同じ exc が返ったら

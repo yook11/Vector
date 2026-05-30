@@ -1,21 +1,8 @@
-"""``VectorDomainError`` 基底 + analysis BC 22 class の不変条件テスト。
+"""``VectorDomainError`` と analysis error class の PII 安全性テスト。
 
-Phase 4 の中心契約:
-- ``VectorDomainError.__str__`` は class name + SAFE_ATTRS の固定形式しか返さない
-  (Logfire SaaS への PII 流出経路封鎖)。
-- subclass の constructor は kwargs-only または accept-and-discard *args/**kwargs
-  で、SDK 生 message / payload 値が ``__str__`` 経路に乗らない。
-- PII 全文検索 oracle: 22 class について sensitive 文字列を constructor / 周辺に
-  入れても ``str(exc)`` の json dump で 1 文字もヒットしない
-  (``feedback_per_seam_mapping_totality_oracle``: 機構の分離でなく結果として
-  PII が消えていることを oracle 化)。
-
-設計スタンス:
-- 「``__str__`` の format が変わらない」ことを pin する identity 系の test と、
-  「結果として PII が乗らない」ことを pin する oracle 系の test を併用する。
-- ACL / Layer 2-B の constructor 互換性 (kwargs-only 強制) を ``pytest.raises``
-  で構造的に表明し、将来 positional message が混入する regression を CI で
-  捕捉する。
+``__str__`` は class name + SAFE_ATTRS の固定形式だけを返す。SDK 生 message や
+payload 値が constructor 経由で渡っても、Logfire に載る文字列へ漏れないことを
+確認する。
 """
 
 from __future__ import annotations
@@ -68,7 +55,7 @@ from app.logfire_exceptions import VectorDomainError
 
 
 class _NoAttrs(VectorDomainError):
-    """SAFE_ATTRS = () の subclass — class name のみ返す path を pin。"""
+    """SAFE_ATTRS = () の subclass。"""
 
 
 class _WithAttrs(VectorDomainError):
@@ -145,8 +132,7 @@ def test_ai_provider_error_constructor_swallows_legacy_positional_message(
     """legacy 互換: positional message を渡しても捨てて ``__str__`` には出ない。
 
     PII 含有が想定される SDK 生 message を渡してもクラスは構築でき、かつ
-    ``__str__`` 経路 (Logfire span attribute) には漏れないことを構造的に
-    pin する (`feedback_per_seam_mapping_totality_oracle`)。
+    ``__str__`` 経路 (Logfire span attribute) には漏れない。
     """
     sensitive = "sensitive_sdk_message_xxxxxxxxxxxxxxxxxx"
     exc = cls(sensitive)
@@ -161,8 +147,7 @@ def test_ai_provider_error_constructor_swallows_legacy_kwargs(
 ) -> None:
     """legacy 互換: 未知 kwargs を渡しても落とさず ``__str__`` には出ない。
 
-    将来 SDK 翻訳側で kwargs 経路を引き入れる regression が入っても、本 oracle
-    で ``__str__`` に乗らないことを構造的に証明できる。
+    SDK 翻訳側から kwargs が渡っても ``__str__`` に乗らない。
     """
     sensitive = "sensitive_kwarg_value_yyyyyyyyyyyyyyyyy"
     exc = cls(unrelated_attr=sensitive)
@@ -277,7 +262,7 @@ _LAYER2B_FIXED_CODE: tuple[tuple[type[VectorDomainError], str], ...] = (
 def test_layer2b_no_arg_constructor_sets_fixed_code(
     cls: type[VectorDomainError], fixed_code: str
 ) -> None:
-    """Layer 2-B は引数なし construction で固定 code が立つ (Stage 工程由来 marker)。"""
+    """Layer 2-B は引数なし construction で固定 code が立つ。"""
     exc = cls()  # type: ignore[call-arg]
     assert getattr(exc, "code", None) == fixed_code
     assert str(exc) == f"{cls.__name__}(code={fixed_code!r})"
@@ -289,8 +274,8 @@ def test_layer2b_rejects_positional_message(
 ) -> None:
     """Layer 2-B も positional message 引数を ``TypeError`` で拒否する。
 
-    旧 API の ``CurationResponseInvalidError("payload dump")`` 形で PII を
-    constructor に入れる regression を構造的に阻止する。
+    ``CurationResponseInvalidError("payload dump")`` 形で PII を constructor に
+    入れる regression を構造的に阻止する。
     """
     with pytest.raises(TypeError):
         cls("legacy_message")  # type: ignore[call-arg]
@@ -302,7 +287,7 @@ def test_layer2b_rejects_positional_message(
 
 
 def _build_22_class_instances() -> list[VectorDomainError]:
-    """Phase 4 migration 対象 22 class の代表 instance を 1 つずつ構築する。"""
+    """PII 安全性を確認する 22 class の代表 instance を 1 つずつ構築する。"""
     provider = AIProviderRateLimitedError()
     return [
         # AIProvider*Error 9 種 (引数なし)
@@ -352,8 +337,7 @@ def test_22_class_str_never_contains_provider_error_repr_payload() -> None:
 
     意図的に provider_error として ``AIProviderRateLimitedError`` instance を
     Layer 1 marker に紐付け、provider 側の class 名や CODE 値が外側 marker の
-    ``__str__`` に **連鎖して出ない** ことを検証 (SAFE_ATTRS が provider_error
-    を含まない構造的契約)。
+    ``__str__`` に **連鎖して出ない** ことを検証する。
     """
     instances = _build_22_class_instances()
     rendered_all = json.dumps(
@@ -361,13 +345,7 @@ def test_22_class_str_never_contains_provider_error_repr_payload() -> None:
         default=str,
         ensure_ascii=False,
     )
-    # provider_error は SAFE_ATTRS の対象外、外側 marker から「rate_limited」が
-    # 派生してはいけない。Layer 1 marker 自身が ai_error_rate_limited で構築
-    # された case (CurationRecoverableError 等) では code として出るのは OK。
-    # → 検査対象は「provider_error 紐付けによる派生情報の出現」なので、
-    #    AssessmentRecoverable (code=ai_error_network) が provider_error=
-    #    AIProviderRateLimitedError 紐付け時に "rate_limited" を含んでは
-    #    いけない、を見るのが正本検査。
+    # provider_error は SAFE_ATTRS の対象外なので、外側 marker から派生情報を出さない。
     assessment_record = str(
         AssessmentRecoverableError(
             code="ai_error_network",
@@ -427,7 +405,7 @@ def test_layer2b_subclasses_inherit_from_layer1_marker() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Stage base class そのものは catch されない (Phase 1〜3 invariant の維持)
+# Stage base class そのものは catch 対象にしない
 # ---------------------------------------------------------------------------
 
 

@@ -65,9 +65,8 @@ function mockNextRequest(
 
 describe("proxy — red-team C1 5 経路 bypass 防止 (構造的 regression)", () => {
   it("(1) /api/auth/sign-in/email POST anon は matcher 対象内で rate-limit が走る", async () => {
-    // matcher が /api/* を含むようになったため (旧: /api/* 完全除外)、
-    // /api/auth/* も rate-limit を経由する。Better Auth handler の動作には
-    // NextResponse.next() で透過するため副作用なし。
+    // /api/auth/* も rate-limit を経由するが、
+    // handler には NextResponse.next() で透過する。
     mockIsOpenValue = true;
     mockEval.mockResolvedValue(1);
     const req = mockNextRequest(
@@ -84,8 +83,7 @@ describe("proxy — red-team C1 5 経路 bypass 防止 (構造的 regression)", 
   });
 
   it("(2) cookie/XFF/X-Real-IP すべて欠如の anon GET は 'unknown' bucket で rate-limit が走る", async () => {
-    // 旧実装では `if (identifier)` ガードで rate-limit を skip していたが、
-    // identifier null fail-closed (F2 対策) で "unknown" bucket に集約される。
+    // IP source 欠如時も "unknown" bucket で rate-limit を走らせる。
     mockIsOpenValue = true;
     mockEval.mockResolvedValue(1);
     const req = mockNextRequest("http://localhost:3000/");
@@ -107,8 +105,7 @@ describe("proxy — red-team C1 5 経路 bypass 防止 (構造的 regression)", 
   });
 
   it("(4) cookie present + XFF なしでも identifier は IP-based ('unknown' bucket、cookie 値で別 bucket にしない / F4 対策)", async () => {
-    // 旧実装では非空 cookie で auth bucket 120/min に昇格していたが、
-    // 新実装では cookie を identifier に渡さない。同じ "unknown" bucket になる。
+    // cookie 値は identifier に使わず、IP source 欠如時は "unknown" bucket になる。
     mockIsOpenValue = true;
     mockEval.mockResolvedValue(1);
     const req = mockNextRequest("http://localhost:3000/", {
@@ -120,14 +117,13 @@ describe("proxy — red-team C1 5 経路 bypass 防止 (構造的 regression)", 
   });
 
   it("(5) Redis 障害時は fail-open で透過し warn を 1 度出す", async () => {
-    // F5 対策: silent fail-open は禁止。warn は出すが request は通す。
+    // Redis 障害は warn を出しつつ fail-open する。
     mockIsOpenValue = true;
     mockEval.mockRejectedValue(new Error("redis down"));
     const req = mockNextRequest("http://localhost:3000/", {
       headers: { "x-forwarded-for": "1.2.3.4" },
     });
     const res = await proxy(req);
-    // 429 ではない (fail-open で抜ける)
     expect(res.status).not.toBe(429);
     expect(warnSpy).toHaveBeenCalledOnce();
   });
@@ -158,8 +154,7 @@ describe("proxy — auth-redirect の挙動", () => {
   });
 
   it("anon が /api/auth/sign-in/email を叩いても redirect しない (API route は除外、Better Auth handler に任せる)", async () => {
-    // /api/* は matcher 対象に入ったが、redirect は適用しない。anon が
-    // sign-in を叩く正規経路を壊さないため。
+    // /api/* には redirect を適用せず、anon の sign-in 経路を壊さない。
     mockIsOpenValue = true;
     mockEval.mockResolvedValue(1);
     const req = mockNextRequest(

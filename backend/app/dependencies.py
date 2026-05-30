@@ -19,9 +19,8 @@ from app.redis import get_redis as _get_redis_singleton
 # backend は同じ secret で検証する。BFF_JWT_SIGNING_SECRET 漏洩時の悪用ウィンドウを
 # JWT 有効期限 (~60 秒) に限定するための構造。
 _JWT_ALGORITHM = "HS256"
-# iss / aud は frontend (`frontend/src/lib/api/internal-config.ts`) と
-# 同じ literal を要求。secret 漏洩時に「Vector の文脈で署名された JWT」を
-# 強制する二重防御 (red-team C2 / AUTH-N2)。
+# iss / aud は frontend (`frontend/src/lib/api/internal-config.ts`) と同じ
+# literal を要求し、Vector 向けに署名された JWT だけを受け付ける。
 _JWT_ISSUER = "vector-bff"
 _JWT_AUDIENCE = "vector-backend"
 
@@ -68,10 +67,8 @@ def _decode_internal_jwt(authorization: str | None) -> dict[str, object] | None:
     token = authorization.removeprefix("Bearer ").strip()
     if not token:
         return None
-    # 構造的厳格化 (red-team C2 / AUTH-N3 + AUTH-N2 対策):
-    # - exp 不在を decode 層で reject (PyJWT/python-jose とも default 未要求)
-    # - iss / aud 検証で BFF_JWT_SIGNING_SECRET 漏洩時の二重防御
-    # - sub / role の必須化で `_user_from_claims` の事後 None チェックを decode 層に降格
+    # PyJWT は exp などを既定では必須にしないため、decode 層で claim の
+    # 存在と iss / aud をまとめて検証する。
     try:
         return jwt.decode(
             token,

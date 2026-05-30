@@ -86,7 +86,7 @@ def _patch_ready_construction(
 
 
 # ---------------------------------------------------------------------------
-# assess_content (Stage 4)
+# assess_content
 # ---------------------------------------------------------------------------
 
 
@@ -95,7 +95,7 @@ class TestAssessContent:
     async def test_ready_build_blocked_audits_and_does_not_call_service(self) -> None:
         """Ready build blocked なら rejected audit + return、Service は呼ばない。
 
-        rate limit acquire も試みない (Ready 構築が gatekeeper、案 3 順序)。
+        rate limit acquire も試みない (Ready 構築が gatekeeper)。
         """
         from app.queue.tasks.assessment import assess_content
 
@@ -156,9 +156,8 @@ class TestAssessContent:
     async def test_in_scope_chains_embedding_with_trigger(self) -> None:
         """in-scope 成功 (assessment_id 返却) → EmbeddingTrigger で chain。
 
-        案 3: 上流 Stage 4 task は Stage 5 Ready を構築せず、ID だけ運ぶ
-        EmbeddingTrigger を kiq に enqueue する。Ready 構築は下流 Stage 5
-        task が処理開始時に行う。
+        assessment task は embedding 用 Ready を構築せず、ID だけを運ぶ
+        EmbeddingTrigger を kiq に enqueue する。
         """
         from app.queue.tasks.assessment import assess_content
 
@@ -185,7 +184,7 @@ class TestAssessContent:
     async def test_none_result_does_not_chain(self) -> None:
         """``execute`` が None (out-of-scope / race lost) → embedding chain しない。
 
-        in-scope 経路だけが Stage 5 chain の対象。out-of-scope はパイプライン終了で、
+        in-scope 経路だけが embedding chain の対象。out-of-scope はパイプライン終了で、
         race lost は勝者 task が自身で chain を起動する責務。
         """
         from app.queue.tasks.assessment import assess_content
@@ -238,7 +237,7 @@ class TestAssessContent:
     async def test_rate_limit_raises_for_retry(self) -> None:
         """Handler が ``reraise=True`` を返したら task は元の exc を raise する。
 
-        ``AIProviderRateLimitedError`` は Stage 4 marker のいずれにも該当しない
+        ``AIProviderRateLimitedError`` は assessment marker のいずれにも該当しない
         ので catch-all 経路で Handler に委譲される。retry 余地ありで Handler
         が True を返した想定で task が raise することを確認する。
         """

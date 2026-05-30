@@ -1,13 +1,13 @@
 """``EmbeddingFailureHandler`` の integration test。
 
-Stage 5 も内容起因 DELETE 経路を持たないため、検証する性質は:
+embedding は内容起因 DELETE 経路を持たないため、検証する性質は:
 
 - Terminal / Recoverable / catch-all の各 marker で audit row が正しい
   ``outcome_code`` / ``retryability`` / payload failure attrs で記録される
 - ``last_attempt`` flag で raise/return が分岐する (Recoverable / catch-all)
 - audit Repository が raise しても task は落ちず ``embedding_failure_audit_dropped``
   構造ログにフォールバックする (business / audit exception の secret prefix
-  が log field から除去される、red-team chain γ-2 対称化)
+  が log field から除去される)
 """
 
 from __future__ import annotations
@@ -352,7 +352,7 @@ async def test_unexpected_last_attempt_writes_audit_and_returns_false(
 
 
 # ---------------------------------------------------------------------------
-# audit DB 落ち時の log fallback (red-team chain γ-2)
+# audit DB 落ち時の log fallback
 # ---------------------------------------------------------------------------
 
 
@@ -365,14 +365,12 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
     """audit Repository が raise しても handler は完走し
     ``embedding_failure_audit_dropped`` log にフォールバックする。
     business / audit exception message に混入した secret prefix が log field
-    から redact されることも検証する (red-team chain γ-2 対称化)。"""
+    から redact されることも検証する。"""
     article = await _make_article(db_session, sample_source)
     ready = _ready_for(article.id)
     handler = EmbeddingFailureHandler(session_factory)
 
-    # Phase 4: EmbeddingTerminalStageBlockedError は kwargs-only constructor。
-    # business 側の secret 混入経路は Phase 4 で構造的に塞がれている
-    # (__str__ は code 固定値のみ、SAFE_ATTRS=("code",))。
+    # business 側の例外は __str__ が code 固定値のみ。
     business_exc = EmbeddingTerminalStageBlockedError(code="ai_error_configuration")
 
     with (
@@ -399,9 +397,7 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
     assert drop["analysis_id"] == ready.analysis_id
     assert drop["business_error_class"].endswith(".EmbeddingTerminalStageBlockedError")
     assert drop["audit_error_class"].endswith(".RuntimeError")
-    # business: Phase 4 で __str__ が SAFE_ATTRS のみになり、secret が原理上
-    # 混入しない (= business_error_message に code 文字列のみ残る)。
+    # business 側は code 固定値のみなので secret は入らない。
     assert "sk-live" not in drop["business_error_message"]
-    # red-team chain γ-2: audit 側 (任意 RuntimeError) は redact_secrets で
-    # secret が落ちることを検証。
+    # audit 側 (任意 RuntimeError) は redact_secrets で secret が落ちる。
     assert "sk-live-AUDITSECRETxyz" not in drop["audit_error_message"]

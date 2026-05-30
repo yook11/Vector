@@ -3,9 +3,7 @@
  *
  * `app/(protected)/page.tsx` / `app/(protected)/watchlist/page.tsx` の Server
  * Component から `searchParams` を `ArticleQuery` に正規化する。zod preprocess
- * helper (`CategorySlug` / `boundedIntFromString` / `SortOrder`) は news 同梱
- * (現状 news 以外の caller なし。将来再利用要件が出た時点で `lib/zod-helpers/`
- * に昇格する想定)。
+ * helper (`CategorySlug` / `boundedIntFromString` / `SortOrder`) は news 同梱。
  *
  * Client 側のフック (`useUpdateSearchParams` 等) は `lib/search-params/client.ts`
  * に残留 (URL 更新自体は cross-cutting)。
@@ -36,8 +34,8 @@ function boundedIntFromString(max: number) {
   }, z.number().int().positive().optional());
 }
 
-// perPage は数値範囲ではなく UI と揃った allowlist で受ける。範囲外
-// (旧値 20 / 50 含む) は未指定扱いに丸めて backend default にフォールバック。
+// perPage は UI と揃った allowlist で受ける。
+// 範囲外は未指定扱いで backend default に任せる。
 const PerPageFromAllowlist = z.preprocess((v) => {
   if (typeof v !== "string") return undefined;
   const s = v.trim();

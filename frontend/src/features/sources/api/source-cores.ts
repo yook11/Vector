@@ -3,14 +3,12 @@
  *
  * 副作用 (guard / updateTag) は wrapper 側の Server Action に残し、
  * ここでは fetcher を引数で受けて path / body / RequestInit を組み立てるだけ
- * にする。これにより `vi.fn()` を fetcher として渡せばテスト可能 (Phase 1 の
- * proxy 抽出と同じ思想)。
+ * にし、`vi.fn()` fetcher でテスト可能にする。
  *
  * 各 fetcher は hey-api 生成の SDK 関数 (`activateSource` 等) と同じ signature
  * を持つ。`{ throwOnError: true }` を付けると戻り値の `data` フィールドが
- * `T | undefined` ではなく `T` に narrow される (#1565 解消済)。auth header
- * 注入は side-effect import した `hey-api-interceptors` の singleton client
- * 経由で実施される。
+ * `T | undefined` ではなく `T` に narrow される。auth header 注入は
+ * side-effect import した `hey-api-interceptors` の singleton client 経由で実施される。
  */
 
 import "@/lib/api/hey-api-interceptors";

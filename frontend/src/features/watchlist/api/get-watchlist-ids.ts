@@ -6,9 +6,8 @@ import { listWatchlistIds } from "@/types/sdk.gen";
 /**
  * 認証済 user の watched article ID 集合を取得する。
  *
- * Pattern B: ウォッチ状態は記事リソースに含めず独立リソース化することで、
- * `/articles` 系 response が user 非依存になり `'use cache'` で全 user
- * 共有できる。本関数のみ per-user で fetch し、render 時に Set lookup で
+ * ウォッチ状態は記事リソースに含めず独立リソースとして取得する。
+ * `/articles` 系 response は user 非依存のまま cache し、render 時に Set lookup で
  * merge する。未ログインは空 Set を返す。
  *
  * cache 戦略: `next.tags: [cacheTags.watchlistMe]` で server data cache に

@@ -16,19 +16,16 @@ from app.exceptions import DuplicateError, InvalidQueryError, NotFoundError
 
 logger = structlog.get_logger(__name__)
 
-# red-team chain θ-1: NotFoundError / DuplicateError の detail に内部 ID /
-# source 名 / DB 構造 hint が紛れ込む regression を defense-in-depth で閉鎖する。
-# 許可 form は `<Entity> not found` / `<Entity> already exists` のみ。
+# NotFoundError / DuplicateError の detail は公開レスポンスに出るため、
+# allowlist 形式だけを通し、内部 ID や DB 構造 hint の混入を防ぐ。
 _NOT_FOUND_DETAIL_RE = re.compile(r"^[A-Z][A-Za-z ]{1,40} not found$")
 _DUPLICATE_DETAIL_RE = re.compile(r"^[A-Z][A-Za-z ]{1,40} already exists$")
 
 
 def _safe_detail(raw_detail: str, allow_re: re.Pattern[str], fallback: str) -> str:
-    """allowlist にマッチする detail のみ pass、それ以外は generic に丸める。
+    """allowlist にマッチする detail だけを通し、それ以外は generic に丸める。
 
-    log 出力では raw 文字列を焼かず、長さ + sha256 prefix のみ記録する
-    (将来 ``f"Article {user_input} not found"`` 経路が紛れた場合の log
-    injection 二次経路を防ぐ)。
+    raw 文字列は log に焼かず、長さと sha256 prefix だけを記録する。
     """
     if allow_re.fullmatch(raw_detail):
         return raw_detail

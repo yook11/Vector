@@ -1,49 +1,8 @@
-"""Hacker News Reader の契約テスト (凍らせた実標本 × 性質)。
+"""Hacker News Reader の契約テスト。
 
-C1 [test_rss_reader_contract.py](./test_rss_reader_contract.py) の HN 姉妹。
-普遍オラクル [test_reader_role_contract.py](./test_reader_role_contract.py) が
-見るのは R1/R5 (typed Entry 箱の*形*) だけ。本テストはその射程外の
-**R3 (per-item を drop / 裁かない) と R4 (typed-error 境界 = transport/payload
-全体のみ)** を HN Reader について固定する (計画「三層目 / 用法(i)」)。
-
-なぜ要るか: Step 1 は hit→値抽出を ``HackerNewsSource`` から HN Reader へ
-*移動*する操作。最も起きやすい退行は「移行元の per-item drop (url=None /
-空 title skip) が抽出と一緒に Reader へ流れ込む」こと。これが起きても普遍
-オラクルは緑のまま (typed 箱の形しか見ない) = 偽 all-clear。本テストが
-その退行を**発見**する唯一の oracle。
-
-契約は **Reader の公開メソッド ``HackerNewsReader.search_recent_stories``
-を通して**確かめる。差し替えるのは HTTP transport (``make_safe_async_client``)
-**のみ**で、json decode / hit→Entry 抽出は Reader 内部で本物が動く。本テストが
-知るのは公開 entrypoint と ``HackerNewsEntry`` だけで、``normalize_hit`` 等の
-Reader 内臓は一切 import しない (C1 が ``normalize_entry`` を import しないのと
-同形)。
-
-見る性質:
-
-- **R3 no-drop = count parity**: Reader 出力の件数は録画 payload の hit 件数
-  と 1:1。これが真の no-drop 不変条件 (per-item drop が抽出と一緒に Reader
-  へ部分的にでも漏れれば件数が減る = 検出)。``any(url is None)`` だけの
-  witness では部分漏れを緑で見逃すため不十分。期待件数は標本から導出し
-  literal を直書きしない (録り直しに自己追従 = litmus 適合)。``url=None``
-  の Ask HN / Show HN 系 hit が出力に現れることを「標本が degenerate な形を
-  実際に踏む」provenance の非空虚証明として併置する (要否判定は後段
-  converter の責務)。Algolia HN feed は常に Ask HN テキスト投稿 (url=None)
-  を含むため非空虚 (Ask HN 投稿が feed から消える日が来たら R3 標本を
-  選び直す = provenance 規律であって CI flake ではない)。
-- **R4 typed-error 境界**: HTTP status / transport 例外 = payload **全体**の
-  失敗のみ ``ExternalFetchError`` 系に写る。個別 hit の値不良では raise
-  しない (= R3 の no-drop で表現される。値不良 → ``AcquisitionConversionRejection`` は
-  後段 converter/fetcher 層が既所有)。
-
-**赤の triage (厳守)**: red は ``algolia_hn_reader.py`` の修正 (実挙動が真の
-契約に反する = 抽出移動で drop が Reader へ漏れた等) か、assert の over-claim
-認定のどちらかで解消する。**現コードの偶発出力に合わせて assert を緩める
-ことは禁止** (C1 と同 doctrine)。
-
-litmus: 標本を録り直して赤くなるなら中身を見ていた = 間違い。count parity は
-標本由来件数との比較なので録り直しに自己追従し、HN Reader が永遠に守る性質
-しか見ないため feed の文面が変わっても赤くならない。
+公開メソッド ``HackerNewsReader.search_recent_stories`` に録画 transport を
+渡し、Reader が hit を drop しないこと (R3) と、payload 全体の失敗だけを
+typed error に写すこと (R4) を確認する。個別 hit の要否判定は後段の責務。
 """
 
 from __future__ import annotations
@@ -118,17 +77,14 @@ async def _reader_entries() -> list[HackerNewsEntry]:
 async def test_reader_drops_no_recorded_hit() -> None:
     """R3 真の no-drop: Reader 出力件数は録画 hit 件数と 1:1。
 
-    旧 ``HackerNewsSource.collect`` は url 無し / 空 title hit を ``continue``
-    で silent drop していた。抽出を Reader へ移すとき、その判定が一緒に
-    Reader へ漏れれば件数が減る = 検出。期待件数は標本から導出 (literal 直書き
-    しない = 録り直し自己追従)。``url=None`` witness は標本が degenerate な形を
-    実際に踏む非空虚証明として併置 (判定は後段 converter の責務)。
+    url 無しなどの hit 判定が Reader へ漏れれば件数が減る。期待件数は標本から
+    導出し、``url=None`` の hit が含まれることも確認する。
     """
     entries = await _reader_entries()
     assert len(entries) == len(_raw_hits())  # 真の no-drop (件数 1:1)
     assert any(e.url is None for e in entries), [
         e.url for e in entries
-    ]  # 非空虚 witness (degenerate な形を標本が踏む provenance 証明)
+    ]  # url 無し hit を標本が含むことの確認
 
 
 async def _raise_through(status_code: int) -> None:
@@ -215,8 +171,7 @@ async def test_unreadable_payload_classified_by_reason(
     """接続成功だが構造化不能な payload は read 段固有の ``UnreadableResponseError``
     に写り、**どこがどう壊れたか** を reason + field で自己記述する (接続境界
     ``ExternalFetchError`` とは別系統。生 ``JSONDecodeError`` / ``AttributeError`` を
-    上位へ漏らさない)。空 body / decode 失敗 / envelope shape 不正を別 reason に
-    切り分けるのが本テストの非空虚 oracle (旧 single-CODE では全て同一に潰れていた)。
+    上位へ漏らさない)。
     """
     with pytest.raises(UnreadableResponseError) as raised:
         await _fetch_body(body)

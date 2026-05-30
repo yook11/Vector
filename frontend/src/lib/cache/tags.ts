@@ -1,16 +1,13 @@
 /**
- * Next.js Server Component の `'use cache'` / fetch `next.tags` / Server Action
- * `updateTag` で共通利用する cache tag literal の中央 registry。
+ * Next.js cache tag literal の中央 registry。
  *
  * tag 文字列を const に集約することで、typo 1 文字で invalidation chain が
- * silent に死ぬ事故 (compile error も runtime error も出ない) を構造的に防ぐ。
+ * silent に死ぬ事故を防ぐ。
  *
- * 増設方針:
- * - features/ に新しい resource (cache 単位) を足したら、まずここに entry 追加
  * - 命名規約: `<resource>` または `<resource>:<scope>` (区切り `:` 固定)
  * - `<resource>` は features/ ドメイン単位 (`watchlist`, `sources`, `articles`,
  *   `categories`, `digest` 等)
- * - per-user は `:me`、特定 ID なら `:<id>` を後置 (例: 将来 `articles:42`)
+ * - per-user は `:me`、特定 ID なら `:<id>` を後置
  * - TS const 名は camelCase (`watchlistMe`)、tag literal は colon 区切り
  *   (`"watchlist:me"`)
  *
@@ -20,7 +17,7 @@
  * - 認証 / per-user → legacy fetch options (`next: { tags: [...] }`) +
  *   Server Action 後の `updateTag(tag)`
  *
- * cacheLife profile (現状採用済み):
+ * cacheLife profile:
  * - "seconds"  : search 結果など UX 上の即応性が必要 (stale 30s/rev 1s/exp 1m)
  * - "minutes"  : 記事一覧 (ingestion 周期 ~30min に対し rev 1min で十分新鮮)
  * - "hours"    : 記事詳細・カテゴリ・類似記事 (低頻度更新)

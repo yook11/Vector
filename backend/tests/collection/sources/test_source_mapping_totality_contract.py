@@ -1,46 +1,11 @@
-"""Source 写像 totality 発見オラクル (R7/R8) — Step 0。
+"""Source 写像 totality の契約テスト。
 
-Reader Step 0 (``test_reader_role_contract.py``) と並ぶ Source 層の役割契約
-発見オラクル。検証は普遍 / 実装は機構別 strangler。
+``collect`` の yield 件数が、named scope predicate を通った entry 件数と一致
+することを確認する。scope predicate を持たない source は entry 件数そのものを
+期待値にする。
 
-## 軸
-
-- **R7 (mapping totality)**: ``collect`` の yield 件数 == named scope を通った
-  entry 件数 (scope predicate を持たない source は entry 件数そのまま)。
-- **R8 (scope predicate naming)**: per-item の意図的除外があるなら public
-  named callable ``is_collectable_<...>`` として export されている。implicit
-  drop (``continue`` / private filter) は R8 違反。
-
-R7 が直接観測軸。R8 は R7 で count mismatch が出たときの triage の物差し
-(named なら R8 は緑、なければ implicit drop = R8 違反として赤化)。
-
-## fixture invariants
-
-オラクルが純粋に R7 を観測するため fixture は以下を満たす:
-
-1. **cap 未発火**: 各 source の ``MAX_ENTRIES`` より entry 数が少ない
-2. **dedup 未発火**: entries 内に dedup key (URL 等) の重複なし。ORNL は
-   ``ornl_listing_for_oracle.html`` (dup-free variant) を使う。
-3. **fan-out 配線済**: multi-feed source (NASA / Cornell) は per-feed fixture を
-   ``endpoint_url`` で route する ``_FakeMultiFeedRssReader`` で配線済み、
-   disjoint URL 前提で cross-feed dedup を未発火にし R7 を集約後 count parity で
-   clean に観測する。同一 fixture を 6 feed replay すると cross-feed dedup が
-   5 回発火し dedup invariant を破るため、合成された
-   ``nasa_for_oracle_feed_a/b.xml`` / ``cornell_for_oracle_feed_a/b.xml`` で
-   disjoint URL を担保する。per-feed 失敗隔離 (spec L82-83) は本オラクル外で
-   層 2 責務。
-
-これらが発火する観測は本オラクル外:
-
-- cap / dedup の挙動境界 → per-source collect 正本テスト
-  (``test_anthropic_adapter.py:122-143`` / ``test__common_adapter.py``)
-- fan-out の per-feed 失敗隔離 (spec L82-83) → 層 2 の per-source 契約テスト
-
-## 赤の triage は本オラクル外
-
-赤 = 「(b1) 値欠落 implicit drop」または「(b2) 未 named な意図的 scope filter」
-のどちらか。Step N の機構別 strangler で per-source に triage し処置する。
-オラクルは count mismatch を SSoT 化するのみ。
+fixture は cap、dedup、fan-out の失敗隔離が発火しない形にして、per-item drop
+だけを観測する。
 """
 
 from __future__ import annotations
@@ -182,10 +147,8 @@ class _FakeRssReader:
 
 class _FakeMultiFeedRssReader:
     """fan-out source 用 ``RssReader`` の構造的 fake。``endpoint_url`` で
-    per-feed fixture を routing する。本オラクルでは fixture 全体で disjoint な
-    URL を入れ cross-feed dedup を未発火にして R7 を純粋に観測する。map に無い
-    endpoint は空 entries (``multi_feed_rss`` の per-feed 失敗隔離経路を踏まず
-    「その feed には記事が無い」状態を再現)。"""
+    per-feed fixture を routing する。map に無い endpoint は空 entries として
+    扱う。"""
 
     def __init__(self, payloads_by_endpoint: dict[str, bytes]) -> None:
         self._payloads = payloads_by_endpoint
@@ -250,7 +213,7 @@ class _FakeHackerNewsReader:
 
 @dataclass(frozen=True, slots=True)
 class _OracleCase:
-    """1 source 用のオラクル case (entry 列 + 同 fixture を載せた tools)。"""
+    """1 source 用の case (entry 列 + 同 fixture を載せた tools)。"""
 
     tools: ReaderTools
     entries: list[Any]
@@ -312,8 +275,7 @@ async def _multi_feed_rss_case(
     payloads_by_endpoint: dict[str, str],
 ) -> _OracleCase:
     """fan-out 機構: per-feed fixture を endpoint_url で route する fake を渡し、
-    fixture 横断の全 entry を entries として集約する (disjoint URL 前提のため
-    cross-feed dedup は no-op で count parity が clean に観測される)。"""
+    fixture 横断の全 entry を entries として集約する。"""
     payloads: dict[str, bytes] = {
         endpoint: (_FIXTURES_DIR / filename).read_bytes()
         for endpoint, filename in payloads_by_endpoint.items()
@@ -356,8 +318,7 @@ def _multi_feed_rss(payloads_by_endpoint: dict[str, str]) -> CaseFactory:
     return lambda: _multi_feed_rss_case(payloads_by_endpoint)
 
 
-# Source → scope predicate (named-public-contract 一覧の SSoT)。
-# Step N で新 scope predicate を named 化したらここに 1 行追加する。
+# Source → scope predicate (named-public-contract 一覧)。
 _SCOPE_PREDICATES: dict[ArticleSource, Callable[[Any], bool]] = {
     AnthropicSource: is_collectable_anthropic_url,
     ORNLSource: is_collectable_ornl_url,
@@ -369,15 +330,7 @@ _SCOPE_PREDICATES: dict[ArticleSource, Callable[[Any], bool]] = {
 }
 
 
-# 発見オラクルの 2 相運用: Phase 1 (新規発見) は xfail 無しの bare 状態で走らせ
-# 赤を discovery、Phase 2 で発見済赤を xfail-strict + reason string で codify。
-# Step N の機構別 strangler で drop 除去 or named scope predicate 昇格すれば
-# xpass し strict=True が「修正済の xfail を外す」signal を吐く。reason 文字列
-# は赤の *性質* (unrealized scope / value-degenerate drop) で分類し、後続作業者
-# が何を直すべきか即わかる形で書く。
-
 # 45 source × (fixture, case_factory)。順序は ``SOURCES`` レジストリ登録順を踏襲。
-# 2 相運用は上の reason 定数群のコメント参照。
 _ManifestEntry = tuple[ArticleSource, CaseFactory, pytest.MarkDecorator | None]
 _MANIFEST: list[_ManifestEntry] = [
     (VentureBeatSource, _rss("venturebeat_rss.xml"), None),
@@ -478,11 +431,10 @@ async def test_collect_yields_in_scope_count(
     """R7/R8: ``collect`` の yield 件数 == named scope を通った entry 件数。
 
     scope predicate を持たない source は entry 件数そのまま。これに合致しない
-    source は写像内で per-item を裁いている (implicit drop) — Step N で
-    scope predicate へ named 昇格するか drop 除去するかを triage する対象。
+    source は写像内で per-item を裁いている。
 
     fixture invariants: cap / dedup / fan-out が未発火な fixture を使うこと
-    (本オラクル外の orchestration を写像 drop に誤帰属しないため)。
+    (orchestration を写像 drop に誤帰属しないため)。
     """
     case = await factory()
     predicate = _SCOPE_PREDICATES.get(source)

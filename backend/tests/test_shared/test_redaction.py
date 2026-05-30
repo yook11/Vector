@@ -1,4 +1,4 @@
-"""``app.shared.security.redaction.redact_secrets`` のテスト (red-team chain γ-2)。
+"""``app.shared.security.redaction.redact_secrets`` のテスト。
 
 検証する性質:
 1. **網羅性 (must-redact)**: 既知 secret pattern が任意の位置・文脈で `***`

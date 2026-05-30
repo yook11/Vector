@@ -1,22 +1,4 @@
-"""AI Extractor / Assessor / Service のテスト。
-
-PR3 で assessor 系テストの大部分は専用 file に移送された:
-- ``BaseAssessor._call_once`` の bare re-raise guard →
-  ``tests/analysis/assessment/ai/test_base_call_once.py``
-- ``GeminiAssessor._translate_error`` の SDK 翻訳テーブル
-  (leaked-key sanitization 含む) →
-  ``tests/analysis/assessment/ai/test_assessor_gemini_translate_error.py``
-- ``DeepSeekAssessor._translate_error`` →
-  ``tests/analysis/assessment/ai/test_assessor_deepseek_translate_error.py``
-- ``_call_api`` integration →
-  ``test_assessor_{gemini,deepseek}_call_api.py``
-- ``ASSESSMENT_TOOL_SCHEMA`` 整合性 →
-  ``tests/analysis/assessment/ai/test_assessment_prompts.py``
-
-本 file には Stage 4 schema の domain tests と Service 経由の DB 統合 test、および
-Stage 3 (Extraction) の test を残す。Stage 4 mock 戻り値は PR3 で envelope 化された
-``AssessmentCall`` (``_make_assessment_call`` helper 経由) に追従。
-"""
+"""AI curation / assessment domain と Service 統合のテスト。"""
 
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -103,11 +85,7 @@ def _make_in_scope(
 def _make_assessment_call(
     result: AssessmentResult, *, model_name: str = "gemini-2.5-flash-lite"
 ) -> AssessmentCall[InScope] | AssessmentCall[OutOfScope]:
-    """``assessor.assess()`` の戻り値 envelope を生成するヘルパー。
-
-    Service テスト等で mock_assessor.assess の return_value に渡す。
-    raw 情報は audit 焼付用なので、ここでは妥当な test fixture 値を入れる。
-    """
+    """``assessor.assess()`` の戻り値 envelope を生成するヘルパー。"""
     if isinstance(result, InScope):
         raw_category = result.category.value
     else:
@@ -164,9 +142,7 @@ async def _create_article_with_extraction(
 
 
 def test_base_curator_rejects_subclass_without_abstract_properties() -> None:
-    """PR4: BaseCurator は property 契約 (model_name / prompt_version /
-    rate_limit_policy) の abstract method 検査で構造保証する。``__init_subclass__``
-    runtime check は廃止し、abc が instance 化時に TypeError を出す。"""
+    """BaseCurator は必須 property を持たない subclass を instance 化時に拒否する。"""
 
     class BadCurator(BaseCurator):
         async def curate(self, title, content): ...
@@ -271,7 +247,6 @@ async def test_curator_call_once_translates_sdk_error() -> None:
     curator = _create_curator()
     curator._call_api = AsyncMock(side_effect=ConnectionError("timeout"))
 
-    # PR3.5-c で Stage 3 extractor は Layer 2-A (AIProviderNetworkError) を raise
     with pytest.raises(AIProviderNetworkError):
         await curator._call_once("test prompt")
 
@@ -279,9 +254,6 @@ async def test_curator_call_once_translates_sdk_error() -> None:
 async def test_curator_call_once_passes_through_domain_error() -> None:
     curator = _create_curator()
     # AIProviderError サブクラスは _call_api 内で raise 済として透過する
-    # Phase 4: AIProvider*Error は VectorDomainError 継承で __str__ が SAFE_ATTRS
-    # 経路のみ。constructor は accept-and-discard で legacy 互換、test は class 名
-    # で発火経路を pin する (旧 match=message は str(exc) に出ないため不要)。
     curator._call_api = AsyncMock(side_effect=AIProviderServiceUnavailableError())
 
     with pytest.raises(AIProviderServiceUnavailableError):
@@ -302,23 +274,6 @@ async def test_curator_sanitizes_untrusted_input_boundary() -> None:
     # 境界マーカの 1 つだけが残り、入力由来の閉じタグは中立化されている
     assert prompt.count("</untrusted_input>") == 1
     assert prompt.count("[/untrusted_input]") == 2
-
-
-# NOTE: PR3 で assessor 系の単体テストは専用 file に移送された:
-# - BaseAssessor._call_once → tests/analysis/assessment/ai/test_base_call_once.py
-# - GeminiAssessor._translate_error (leaked-key sanitization 含む) →
-#   tests/analysis/assessment/ai/test_assessor_gemini_translate_error.py
-# - DeepSeekAssessor._translate_error →
-#   tests/analysis/assessment/ai/test_assessor_deepseek_translate_error.py
-# - GeminiAssessor._call_api →
-#   tests/analysis/assessment/ai/test_assessor_gemini_call_api.py
-# - DeepSeekAssessor._call_api →
-#   tests/analysis/assessment/ai/test_assessor_deepseek_call_api.py
-# - ASSESSMENT_TOOL_SCHEMA / GEMINI_SCHEMA 整合性 →
-#   tests/analysis/assessment/ai/test_assessment_prompts.py
-# - parse_assessment 単体 →
-#   tests/analysis/assessment/ai/test_parse_assessment.py
-
 
 # --- F. CurationService orchestration tests ---
 
@@ -381,8 +336,7 @@ async def test_extraction_race_loser_returns_none_and_skips_audit(
 ) -> None:
     """race 敗北 (既存 extraction あり) は ``None`` を返し audit / chain を焼かない。
 
-    PR1-c で読戻し経路 (``find_signal_by_article_id``) を撤去し、勝者 SSoT に
-    統一した。敗者 task は何もしない (Stage 4 / Stage 5 と完全対称)。
+    敗者 task は既存 row を上書きせず、audit も二重記録しない。
     """
     article, existing = await _create_article_with_extraction(
         db_session, sample_source, url="https://example.com/race", title="Race"
@@ -579,7 +533,6 @@ async def test_assessment_persists_rejection_when_out_of_scope(
 
     mock_assessor = MagicMock(spec=BaseAssessor)
     mock_assessor.model_name = "gemini-2.5-flash-lite"
-    # PR3: assessor 戻り値を AssessmentCall envelope に追従
     mock_assessor.assess = AsyncMock(
         return_value=_make_assessment_call(
             OutOfScope(investor_take="先端技術の話題ではない")
@@ -615,13 +568,6 @@ async def test_assessment_persists_rejection_when_out_of_scope(
         )
     ).scalar_one_or_none()
     assert analysis is None
-
-
-# Pattern A' (typed-pipeline-preconditions.md) リファクタにより、
-# 「既に assess 済み」「既に rejected 済み」の precondition 判定は
-# `ReadyForAssessment.try_advance_from` に移動した。Service.execute は
-# precondition 分岐を持たず、対応するテストは
-# `tests/test_ready_for_classification.py` に存在する。
 
 
 # --- H. Integration test (API response) ---

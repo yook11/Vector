@@ -1,27 +1,7 @@
-"""EmbeddingService (app.analysis.embedding.service) の DB 統合テスト。
+"""EmbeddingService の DB 統合テスト。
 
-Stage 5 は pipeline 終端のため execute は副作用のみ (永続化) を行い ``None`` を
-返す。Outcome / Entity 復元 / 読み戻しは廃止済み (2026-05-12)。
-
-Service は ACL boundary を持ち、embedder が raise した ``AIProviderError`` を
-``to_embedding_error`` で Stage 5 Layer 1 marker
-(``EmbeddingRecoverableError`` / ``EmbeddingTerminalStageBlockedError`` /
-``EmbeddingTerminalTargetRejectedError``) に詰め替えて raise する。
-Layer 2-B (``EmbeddingResponseInvalidError``) は embedder 境界内で
-詰め替え済 (BC 境界原則: feedback_bc_boundary_guarantees_downstream) で、
-Service はそのまま伝播させる。
-
-検証する経路:
-- 正常系 (新規生成 → 永続化 + 成功 audit → None)
-- 並行 update で先に書かれていた → log + None で短絡 (DB / audit 双方変化なし、
-  actor SSoT — 勝者 task が audit を焼く)
-- AI 層 target-local 例外 (``AIProviderInputRejectedError``) → ACL で
-  ``EmbeddingTerminalTargetRejectedError`` に詰め替えられて raise
-  (Service 内で握らない)
-- AI 層 Recoverable 例外 (Rate/Service/Network) →
-  ``EmbeddingRecoverableError`` に詰め替えられて raise
-- embedder 境界が raise した ``EmbeddingResponseInvalidError`` (Layer 2-B) は
-  Service で握らずそのまま raise されて Task 層 2 marker dispatch に流れる
+正常系の永続化/audit、並行書き込み時の短絡、AIProviderError の ACL 変換、
+``EmbeddingResponseInvalidError`` の透過を確認する。
 """
 
 from __future__ import annotations
@@ -71,9 +51,7 @@ def _mock_embedder(
     """固定 VO を返す (または例外を投げる) モック embedder。
 
     ``embed_document`` は永続化可能性を型レベルで保証する ``EmbeddingVector``
-    を返す契約 (BC 境界原則)。VO 構造違反は embedder 内で
-    ``EmbeddingResponseInvalidError`` に詰め替え済のため、Service テストでは
-    valid VO を返す ``vector`` か、boundary が raise する例外を直接 mock する。
+    を返す契約。Service テストでは valid VO か、境界から出る例外を直接 mock する。
     """
     embedder = MagicMock(spec=BaseEmbedder)
     embedder.model_name = "cl-nagoya/ruri-v3-310m"
@@ -231,7 +209,7 @@ async def test_execute_shortcircuits_when_already_persisted(
 ) -> None:
     """Ready 構築後に他ワーカーが先に書き込んだ場合、save は False を返し
     Service が log + None で短絡する。DB は先行値のまま上書きされない。
-    audit / commit も呼ばない (勝者 task の audit を二重記録しない、actor SSoT)。
+    audit / commit も呼ばない。
     """
     preexisting_vector = [0.4] * EMBEDDING_DIMENSION
     article = await _build_article(
@@ -266,7 +244,7 @@ async def test_execute_shortcircuits_when_already_persisted(
     values = raw.to_list() if hasattr(raw, "to_list") else list(raw)
     assert values[0] == pytest.approx(0.4, abs=1e-3)
 
-    # 敗者経路は audit を焼かない (勝者 task が自身の audit を焼く、actor SSoT)
+    # 敗者経路は audit を焼かない
     rows = (
         (
             await db_session.execute(
@@ -393,7 +371,6 @@ async def test_execute_propagates_response_invalid_from_embedder(
     article_id = article.id
 
     # embedder 境界が VO 構造違反を Layer 2-B に詰め替えた状態を直接 mock
-    # Phase 4: 旧 message 引数廃止 (Layer 2-B も SAFE_ATTRS=("code",) 固定)。
     response_invalid = EmbeddingResponseInvalidError()
     embedder = _mock_embedder(raises=response_invalid)
     svc = EmbeddingService(session_factory)

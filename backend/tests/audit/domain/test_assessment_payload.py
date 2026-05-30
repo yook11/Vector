@@ -1,14 +1,9 @@
 """``AssessmentPayload`` の schema validation / discriminator pin test。
 
-PR5 で ``ClassificationPayload`` → ``AssessmentPayload`` に完全置換した
-状態を固定する。``tests/observability/domain/test_payloads.py`` の PR4
-pin test 3 本の役割を本 file に引き継ぐ:
-
 - discriminator 値が ``"assessment"`` であること
 - ``kind="assessment"`` の dict が discriminated union 経由で
   ``AssessmentPayload`` に dispatch されること
-- ``kind="classification"`` (PR4 以前の旧値) は ``ValidationError`` で reject
-  されること (PR4 後の DB 状態保護を継続)
+- ``kind="classification"`` は ``ValidationError`` で reject されること
 """
 
 from __future__ import annotations
@@ -44,13 +39,7 @@ def test_parses_via_assessment_discriminator() -> None:
 
 
 def test_rejects_legacy_classification_kind() -> None:
-    """PR4 以前の旧値 ``kind="classification"`` を読まない。
-
-    PR4 deploy で既存 row の payload は migration により
-    ``kind="assessment"`` に書き換わっているため、PR5 以降の Pydantic
-    discriminated union は ``"classification"`` discriminator を受理して
-    はならない (DB 状態と schema の一意整合性保証)。
-    """
+    """``kind="classification"`` discriminator を受理しない。"""
     adapter: TypeAdapter[PipelineEventPayload] = TypeAdapter(PipelineEventPayload)
     with pytest.raises(ValidationError):
         adapter.validate_python({"kind": "classification"})
@@ -59,7 +48,7 @@ def test_rejects_legacy_classification_kind() -> None:
 def test_extra_ignore_drops_unknown_field() -> None:
     """``extra="ignore"`` 継承で未知 field を silent drop。
 
-    rolling deploy 中に新 publisher が焼いた未知 field 付き JSONB を旧 worker が
+    rolling deploy 中に新 publisher が焼いた未知 field 付き JSONB を既存 worker が
     ``model_validate`` で読み戻しても ValidationError で死なないことを保証する。
     """
     restored = AssessmentPayload.model_validate(

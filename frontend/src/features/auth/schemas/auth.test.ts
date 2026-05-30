@@ -75,7 +75,7 @@ describe("RegisterSchema", () => {
     });
 
     it("rejects characters outside the allowlist", () => {
-      // 旧 HTML5 pattern (\w\s\-) でも拒否されていたが、本 schema では Unicode regex で拒否
+      // Unicode regex で allowlist 外の文字を拒否する。
       expect(
         RegisterSchema.safeParse({
           ...VALID_INPUT,

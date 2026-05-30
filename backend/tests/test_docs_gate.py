@@ -1,11 +1,9 @@
 """FastAPI 自動 docs (/docs, /redoc, /openapi.json) の production gate テスト。
 
-red-team S-EXFIL-1 / C3 amplifier 防御の構造的不変条件:
 - development では /docs / /redoc / /openapi.json が 200 を返す
 - production では同 path が 404 を返す (FastAPI が router を物理生成しない)
 
-実装変更で settings.env 経路や FastAPI() 引数が壊れた場合に CI で reject する
-ためのガード。docs URL は module ロード時に決定されるため、test 関数ごとに
+docs URL は module ロード時に決定されるため、test 関数ごとに
 app.config / app.main を reload して env を切替える。
 """
 
@@ -46,7 +44,7 @@ def reload_app_with_env(
 
     yield _reload
 
-    # teardown: monkeypatch が ENV を戻した後で再 reload して clean state に戻す
+    # monkeypatch が ENV を戻した後で再 reload して初期状態に戻す。
     monkeypatch.delenv("ENV", raising=False)
     from app import config, main
 
@@ -88,8 +86,7 @@ def test_openapi_declares_400_for_all_operations(
     """全 operation の OpenAPI spec に default 400 response が宣言されることを確認する。
 
     FastAPI が UTF-8 不正 body 等に対して内部生成する HTTPException(400) を、
-    app level の responses 引数で default 宣言している
-    (Schemathesis status_code_conformance finding 対応 / PR-C1a')。
+    app level の responses 引数で default 宣言している。
     endpoint が増えても自動カバーされる構造を維持するための回帰ガード。
     """
     app = reload_app_with_env("development")

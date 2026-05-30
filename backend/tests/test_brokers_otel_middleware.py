@@ -2,39 +2,11 @@
 テスト、および taskiq trace 伝搬 / PII 非含有 / Proxy 遅延束縛の capfire oracle。
 
 検証する性質:
-
-1. **4-1 broker object 状態の不変条件**:
-   - 6 broker すべての middleware tuple の **先頭** が ``OpenTelemetryMiddleware``、
-     その次が ``SimpleRetryMiddleware`` (= pre_execute FIFO で consumer span が
-     retry より外側に open する登録順契約)。
-   - ``OpenTelemetryMiddleware`` instance が各 broker に **1 つだけ** (span/metric
-     重複出力を防ぐ)。
-   - scheduler を持つ 3 broker (metadata / trend_discovery / briefing) に CLIENT_STARTUP
-     hook が **1 つ以上** 登録される。残り 3 broker には登録されない。
-   - WORKER_STARTUP は全 6 broker に登録される (Phase 1/2 既存契約の回帰検知)。
-
-2. **4-2 taskiq trace 伝搬 capfire oracle**:
-   - ``InMemoryBroker`` + ``OpenTelemetryMiddleware`` で kiq → execute フルパスを
-     1 process 内で走らせ、producer / consumer span が **同一 trace_id** で親子接続
-     することを assert (W3C propagation が message.labels 経由で成立)。
-
-3. **4-3 Proxy 遅延束縛 capfire oracle**:
-   - test module top-level (= ``capfire`` fixture の ``logfire.configure(...)`` より
-     時系列的に前) で ``OpenTelemetryMiddleware()`` を持つ broker を構築し、
-     capfire 経由の exporter に span が届くことを assert。
-   - 本テストが落ちる = brokers.py の module-level instantiate を諦め、startup
-     フック内 attach への切替が必要 (= Phase 3 設計 (B) の前提が崩れた合図)。
-
-4. **4-4 task args PII 非含有 capfire oracle**:
-   - OpenTelemetryMiddleware は task の args / kwargs を span attribute に乗せない
-     設計 (Phase 2 4 重防御と整合)。具体的な sensitive 値で全文検索する空虚回避の
-     oracle 化。将来 taskiq が ``messaging.task_args`` のような attribute を生やす
-     変更を入れたら本テストが回帰検知する。
-
-設計スタンス (feedback_per_seam_mapping_totality_oracle):
-- bootstrap 系は global state なので unit テストは「broker object の不変条件」を
-  検査するに留め、実 startup の挙動は capfire 経路 (4-2/4-3/4-4) と実機 dashboard
-  で確認する。
+- 全 broker の middleware 順序、重複、lifecycle hook 登録が正しいこと。
+- ``InMemoryBroker`` + ``OpenTelemetryMiddleware`` の kiq → execute フルパスで
+  producer / consumer span が同一 trace_id で親子接続すること。
+- configure 前に構築した middleware が capfire fixture の exporter に span を流すこと。
+- task の args / kwargs が span attribute に乗らないこと。
 - capfire fixture は内部で ``logfire.configure(send_to_logfire=False, ...)`` を呼ぶ
   ため、本ファイルでは ``setup_logfire`` を直接呼ばない (二重 configure 回避)。
 """
@@ -59,7 +31,7 @@ from app.queue.brokers import (
 )
 
 # ---------------------------------------------------------------------------
-# 4-1. middleware の identity / 順序 unit テスト (broker object 状態の不変条件)
+# middleware の identity / 順序 unit テスト
 # ---------------------------------------------------------------------------
 
 _BROKERS_WITH_SCHEDULER = (
@@ -119,14 +91,10 @@ def test_scheduler_lifecycle_registered_for_cron_brokers_only() -> None:
 
 
 def test_worker_lifecycle_registered_for_all_brokers() -> None:
-    """WORKER_STARTUP は Phase 1/2 既存契約として全 6 broker に登録される。
+    """WORKER_STARTUP は全 6 broker に登録される。
 
-    Phase 3 で追加した ``_register_scheduler_lifecycle`` (CLIENT_STARTUP) が
-    ``_register_lifecycle`` (WORKER_STARTUP) の登録を上書き / 排他にしていない
-    ことの回帰検知。broker_metadata / broker_trend_discovery / broker_briefing は同じ
-    broker object に WORKER_STARTUP と CLIENT_STARTUP の 2 種の hook が共存する
-    (プロセスが違うため発火は競合せず、ワンプロセス内で両方発火する経路は存在
-    しない)。
+    scheduler broker では WORKER_STARTUP と CLIENT_STARTUP の 2 種の hook が
+    同じ broker object に共存する。
     """
     for broker, label in _ALL_BROKERS:
         handlers = broker.event_handlers.get(TaskiqEvents.WORKER_STARTUP, [])
@@ -134,15 +102,10 @@ def test_worker_lifecycle_registered_for_all_brokers() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4-3. capfire oracle: Proxy provider 遅延束縛 (設計根幹の構造的契約)
+# capfire oracle: Proxy provider 遅延束縛
 # ---------------------------------------------------------------------------
-# 重要: ``_PRE_CONFIGURE_BROKER`` は **test module top-level** で構築する。これは
-# pytest collection phase で実行され、capfire fixture の ``logfire.configure(...)``
-# setup より時系列的に前。OpenTelemetryMiddleware が ``trace.get_tracer(...)`` で
-# 取得するのは ProxyTracer になる。capfire fixture が後で configure を呼ぶことで
-# ProxyTracerProvider が real provider に再束縛され、module-level の middleware
-# が持つ tracer も real tracer に再委譲される (logfire/_internal/tracer.py:53-92)。
-# この経路が成立しなければ「configure 前 instantiate」設計が崩れる合図。
+# ``_PRE_CONFIGURE_BROKER`` は capfire fixture setup より前に構築する。
+# configure 後に既存 middleware の tracer が real provider に再束縛されることを検証する。
 
 _PRE_CONFIGURE_BROKER = InMemoryBroker().with_middlewares(OpenTelemetryMiddleware())
 
@@ -156,16 +119,7 @@ async def _delayed_binding_probe() -> str:
 async def test_otel_middleware_binds_lazily_to_logfire_provider(
     capfire: CaptureLogfire,
 ) -> None:
-    """設計根幹 (B): configure 前に作った middleware が configure 後の exporter に
-    span を流す構造的契約。
-
-    module top-level の ``OpenTelemetryMiddleware()`` 生成は pytest collection
-    phase で走る → capfire fixture の ``logfire.configure(...)`` setup より時系列
-    的に前 → ProxyTracerProvider が install 後に既存 tracer を real tracer に再
-    束縛する設計が効いていなければ、span は exporter に到達しない。
-
-    本テストが落ちる = Phase 3 設計の前提が崩れた合図 (brokers.py の module-level
-    instantiate を諦め、startup フック内 attach への切替が必要)。
+    """configure 前に作った middleware が configure 後の exporter に span を流す。
     """
     await _PRE_CONFIGURE_BROKER.startup()
     try:
@@ -187,7 +141,7 @@ async def test_otel_middleware_binds_lazily_to_logfire_provider(
 
 
 # ---------------------------------------------------------------------------
-# 4-2. capfire oracle: kiq → execute フルパスで traceparent が message.labels 経由
+# capfire oracle: kiq → execute フルパスで traceparent が message.labels 経由
 # で伝搬する (producer span / consumer span が同一 trace_id で親子接続)
 # ---------------------------------------------------------------------------
 
@@ -201,8 +155,7 @@ async def test_kiq_propagates_traceparent_via_labels(
 
     本テストは「OpenTelemetryMiddleware が message.labels 経由で traceparent を
     inject → extract する経路全体が成立する」ことを oracle 化する。middleware の
-    object 構造ではなく、kicker → 受信 receiver までの 1 trace 成立を検査する点が
-    4-1 との分業 (4-1 は登録、4-2 は経路)。
+    object 構造ではなく、kicker → 受信 receiver までの 1 trace 成立を検査する。
     """
     broker = InMemoryBroker().with_middlewares(OpenTelemetryMiddleware())
 
@@ -247,7 +200,7 @@ async def test_kiq_propagates_traceparent_via_labels(
 
 
 # ---------------------------------------------------------------------------
-# 4-4. capfire oracle: task args が span attribute に漏れない (PII 非含有契約)
+# capfire oracle: task args が span attribute に漏れない
 # ---------------------------------------------------------------------------
 
 
@@ -256,12 +209,10 @@ async def test_otel_middleware_does_not_leak_task_args_into_spans(
     capfire: CaptureLogfire,
 ) -> None:
     """OpenTelemetryMiddleware は task の args / kwargs を span attribute に乗せ
-    ない (Phase 2 4 重防御と整合)。
+    ない。
 
-    具体的な sensitive 値で oracle 化 (空虚回避): 将来 taskiq が
-    ``messaging.task_args`` のような attribute を生やす変更を入れたら、本テストが
-    回帰検知する。記事本文 / URL / prompt 等が将来 task 引数として渡されたケースで
-    Logfire dashboard に焼かれない構造的契約。
+    具体的な sensitive 値で、記事本文 / URL / prompt 等が task 引数として渡された
+    ケースでも Logfire dashboard に焼かれないことを確認する。
     """
     broker = InMemoryBroker().with_middlewares(OpenTelemetryMiddleware())
 

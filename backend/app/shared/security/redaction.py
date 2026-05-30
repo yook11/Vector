@@ -1,12 +1,7 @@
-"""error_message / log payload に secret prefix が混入する経路を伏字化する。
+"""error_message / log payload に混入した既知 secret 形式を伏字化する。
 
-`pipeline_events.payload` への永続化前に ``str(exc)`` に含まれる API key /
-Authorization header / DSN credential 等を opaque な ``***`` 系トークンに
-置換する best-effort defense-in-depth (red-team chain γ-2)。
-
-完全な検出は不可能なので「既知 pattern を確実に隠す」+「通常テキストを
-過剰に変えない」の 2 軸で組む。網羅性を装って false sense of security を
-作らない。
+完全検出はできないため、API key / Authorization header / DSN credential などの
+高信号 pattern を隠しつつ、通常テキストは過剰に変えない。
 """
 
 from __future__ import annotations

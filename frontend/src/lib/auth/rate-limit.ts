@@ -1,26 +1,14 @@
 /**
  * Application-level rate limit (Redis-backed sliding window log)。
  *
- * Better Auth 内蔵の rate limit は HTTP router (/api/auth/*) にしか効かず、
- * Vector が依拠する `auth.api.getSession({ headers })` 直呼び経路には
- * 完全にバイパスされる (red-team C8 / F17)。本モジュールが proxy.ts で
- * 呼ばれることで、認証済 cookie を保持した攻撃者による DB Pool 飽和 DoS を
- * 構造的に bound する。
+ * Better Auth 内蔵 rate limit は /api/auth/* router 専用のため、
+ * proxy.ts から全 request に適用し、認証済 cookie を持つ request も先に bound する。
  *
- * フェイルオープン: Redis 不通時は throttle を skip して通す。Redis 障害が
- * 全リクエスト 503 に直結しないようにし、一次防衛線は pg.Pool 設定に委ねる
- * (ADR-006 §3)。永続障害が無音にならないよう、warn ログは 60 秒ごとに 1 度出す
- * (red-team C1 / F23 対策。一度きりログだと Redis ダウンを運用が見落とす)。
+ * Redis 不通時は fail-open し、warn は 60 秒ごとに出す。identifier は IP のみに
+ * 統一し、認証状態に応じた緩和は後段に任せる。
  *
- * limit は per-IP の 1 種類 (red-team C1 / F2-F4 対策で identifier を IP に統一)。
- * 認証状態に応じた limit 緩和は本モジュールでは扱わず、後段の Better Auth
- * 内蔵 rate-limit / backend 側に任せる。
- *
- * Redis client (getRateLimitRedisClient) は auth.ts の Better Auth
- * `rateLimit.customStorage` と共有する。frontend 内で同一 REDIS_URL_RL
- * instance を 1 client で扱うことで、Better Auth 経路 (baRateLimit:* key) と
- * proxy.ts 経路 (rl:ip:* key) が論理分離されたまま接続コストを節約する
- * (red-team chain ι 解消の基盤)。
+ * Redis client は auth.ts の Better Auth customStorage と共有し、key prefix で
+ * proxy 経路と Better Auth 経路を分離する。
  */
 
 import "server-only";
@@ -50,16 +38,15 @@ export function calculateLimit(
   return parseLimit(env.RATE_LIMIT_PER_MIN, DEFAULT_LIMIT);
 }
 
-// HMR / vitest module reset で client が複数生成されないよう globalThis にぶら下げる
+// HMR / vitest module reset で client が複数生成されないよう
+// globalThis にぶら下げる。
 const globalForRedis = globalThis as unknown as {
   __vectorRateLimitRedis?: RedisClientType;
   __vectorRateLimitErrorLastMs?: number;
 };
 
 function logRedisError(context: string, err: unknown): void {
-  // 60 秒ごとに 1 度だけ warn を出す。一度きりログにすると Redis 永続障害中に
-  // 運用が気付けず fail-open が長時間続く事故になるため、window-bounded で
-  // 継続出力する (red-team F23 対策)。
+  // Redis 永続障害を無音にしないため、warn は 60 秒ごとに継続出力する。
   const now = Date.now();
   const last = globalForRedis.__vectorRateLimitErrorLastMs;
   if (last !== undefined && now - last < ERROR_LOG_INTERVAL_MS) {
@@ -74,18 +61,15 @@ function logRedisError(context: string, err: unknown): void {
  *
  * 本モジュールの `checkRateLimit` (proxy.ts sliding window log) と
  * `auth.ts` の Better Auth `rateLimit.customStorage` で共有する。
- * 戻り値 `null` は REDIS_URL_RL / REDIS_URL いずれも未設定の状況で、
- * 呼び出し側は fail-open (allow) の判定に使う (ADR-006 §3)。
+ * REDIS_URL_RL / REDIS_URL 未設定時は null を返し、呼び出し側が fail-open する。
  */
 export function getRateLimitRedisClient(): RedisClientType | null {
   if (globalForRedis.__vectorRateLimitRedis) {
     return globalForRedis.__vectorRateLimitRedis;
   }
-  // red-team C9 対策: 既存 REDIS_URL は backend taskiq broker と同 instance のため、
-  // rate-limit ZSET の key 増殖が backend を道連れ shutdown させる構造リスクがある。
-  // REDIS_URL_RL を優先し、空文字列 / undefined のときは REDIS_URL にフォールバック
-  // (managed Redis 単一 instance 構成への退避経路)。空文字列を「明示的に値」と
-  // 解釈する用途は想定しないため `||` で unset と等価扱いとする。
+  // rate-limit 専用 Redis があれば優先し、
+  // 未設定なら既存 REDIS_URL に fallback する。
+  // 空文字列は未設定と同じ扱いにする。
   const url = process.env.REDIS_URL_RL || process.env.REDIS_URL;
   if (!url) return null;
   const c = createClient({ url }) as RedisClientType;

@@ -1,11 +1,6 @@
 """embedding ドメイン層のユニットテスト (DB 不要)。
 
 ``EmbeddingVector`` VO の次元・有限性・サニティ範囲・frozen を検証する。
-``EmbeddingDraft`` は ``EmbeddingVector`` を 1 field でラップしただけの冗長な
-中間型として廃止済み (2026-05-12)。AI 境界の ``list[float]`` は Service が
-``EmbeddingVector(root=tuple(...))`` で直接構造検証する。
-Embedding Entity も 2026-05-12 に廃止済み (Stage 5 は pipeline 終端で Outcome /
-Entity の伝搬価値が無く、Repository.save は bool を返す)。
 """
 
 from __future__ import annotations

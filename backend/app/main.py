@@ -59,8 +59,7 @@ def _drop_endpoint_args_on_success(
     (= 「成功は沈黙、失敗だけ説明する」)。validation error 時は ``errors`` を
     sanitize してから返し、``values`` (parsed body / query) と各 error の
     ``input`` (送信値) は捨てる。article body などが Logfire dashboard に
-    焼かれない構造的契約 (feedback_failure_visibility と
-    整合: 失敗は見せ、成功本文は隠す)。
+    焼かれないよう、失敗の場所だけを見せて入力値は隠す。
     """
     errors = attributes.get("errors")
     if errors:
@@ -81,9 +80,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # の送り先が proxy provider のまま固定される)。
     #
     # kwargs は source default と一致するが、明示で「PII / body を span に乗せ
-    # ない」を構造的契約として固定する (feedback_structural_guarantee)。特に
-    # ``record_send_receive=False`` が将来 True に逆転すると ASGI send/receive
-    # span 経由で body が乗る経路ができるため、明示で塞ぐ意義が大きい。
+    # ない」契約を固定する。特に ``record_send_receive=False`` は ASGI
+    # send/receive span 経由で body が乗る経路を塞ぐため明示する。
     logfire.instrument_fastapi(
         app,
         request_attributes_mapper=_drop_endpoint_args_on_success,
@@ -91,7 +89,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         record_send_receive=False,
         extra_spans=False,
     )
-    # logfire 4.x は AsyncEngine をネイティブで受ける (旧版の .sync_engine 不要)。
+    # logfire は AsyncEngine をネイティブで受ける。
     # 1 query = 1 span として bind param と SQL を span attribute に乗せる。
     # asyncpg instrumentor は意図的に入れない (ORM 層 + driver 層で二重 span
     # を出さないため)。
@@ -101,16 +99,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     await engine.dispose()
 
 
-# production では Swagger UI / ReDoc / openapi.json を無効化して攻撃面を削減
-# (red-team S-EXFIL-1 / C3 amplifier 防御)。/api/v1/admin/* の schema を含む
-# 全 endpoint 構造の偵察経路を物理的に閉じる。development では従来通り /docs
-# 等で閲覧可能。
+# production では Swagger UI / ReDoc / openapi.json を無効化して攻撃面を削減する。
+# development では /docs 等を閲覧可能にする。
 _docs_enabled = settings.env == "development"
 
 # responses: FastAPI が UTF-8 不正 body 等の malformed request に対して内部生成する
 # HTTPException(400, "There was an error parsing the body") を OpenAPI に default
 # 宣言する。proxy / middleware 由来の 400 も any endpoint で発生しうるため app level
-# に置く (Schemathesis status_code_conformance finding 対応 / PR-C1a')。
+# に置く。
 app = FastAPI(
     title="Vector API",
     description="テックニュースの収集と AI 分析プラットフォーム",
@@ -123,7 +119,7 @@ app = FastAPI(
 )
 
 
-# --- セキュリティヘッダ ミドルウェア (4.16.3 / 4.16.9) ---
+# --- セキュリティヘッダ ミドルウェア ---
 # X-Content-Type-Options: nosniff
 #   ブラウザの MIME スニッフィングを無効化する。
 #   Content-Type が application/json でも、ブラウザが中身を見て HTML と推測し
@@ -147,7 +143,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 # CORS ヘッダが設定された後の全レスポンスに適用される。
 app.add_middleware(SecurityHeadersMiddleware)
 
-# --- CORS ミドルウェア (4.16.8) ---
+# --- CORS ミドルウェア ---
 # 最小権限の原則: ワイルドカード ("*") ではなく、実際に使用するメソッドと
 # ヘッダのみを許可する。
 # allow_origins: フロントエンドのオリジンのみ許可

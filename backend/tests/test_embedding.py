@@ -1,15 +1,10 @@
 """BaseEmbedder の ``_embed_once`` / ``_translate_error`` /
 ``embed_document`` (VO 詰め替え境界) 振る舞いテスト。
 
-Stage 5 BC 分離後、``BaseEmbedder`` は ``ReadyForEmbedding`` を受ける document
-専用 hierarchy となった (``embed_query`` / ``embed_documents`` は Search BC 側の
-``app/search/embedding/`` に独立)。本テストは新 interface (``embed_document(ready)``
-+ ``_call_api(text: str) -> list[float]``) を前提に書く。
-
-Stage 5 marker (``Embedding*Error``) のうち Layer 2-A 由来 (``AIProviderError`` →
-Layer 1 marker) の詰め替えは Service 層 ACL の責務で、本テストは扱わない。
-ただし Layer 2-B (``EmbeddingResponseInvalidError``) は embedder 境界内で
-詰め替える契約のため、本テストで検証する。
+``BaseEmbedder`` は ``ReadyForEmbedding`` を受ける document 専用 interface
+(``embed_document(ready)`` + ``_call_api(text: str) -> list[float]``) を持つ。
+``EmbeddingResponseInvalidError`` は embedder 境界内で詰め替える契約のため、
+本テストで検証する。
 """
 
 import math
@@ -90,7 +85,6 @@ class StubEmbedder(BaseEmbedder):
 
     def _translate_error(self, exc: Exception) -> Exception:
         if isinstance(exc, _InvalidInputSDKError):
-            # Phase 4: AIProvider*Error は class 識別のみ (SAFE_ATTRS=CODE)。
             return AIProviderInputRejectedError()
         # マップできない例外は exc をそのまま return (bare re-raise 規約)
         return exc
@@ -134,9 +128,7 @@ async def test_embed_document_wraps_wrong_dimension_in_layer_2b_marker() -> None
 async def test_embed_once_translates_sdk_error() -> None:
     """SDK 例外は _translate_error で AIProvider*Error にマップされる。
 
-    Phase 4: AIProvider*Error は VectorDomainError 継承で __str__ 経路に PII を
-    乗せない。class 名で発火経路を pin する (旧 match=message は str(exc) に
-    出ない)。
+    AIProvider*Error は class 識別のみで検証する。
     """
     embedder = StubEmbedder(side_effects=[_InvalidInputSDKError("bad input")])
     with pytest.raises(AIProviderInputRejectedError):

@@ -1,9 +1,9 @@
 /**
  * UserRole の許可リスト + narrowing。
  *
- * Better Auth `additionalFields.role` の TypeScript 型は `string` で将来追加
- * され得るため、認可境界 (admin layout / BFF→backend JWT 署名) ではこの
- * allowlist を経由した narrowing を必ず通す。
+ * Better Auth `additionalFields.role` の TypeScript 型は `string` のため、
+ * 認可境界 (admin layout / BFF→backend JWT 署名) ではこの allowlist を
+ * 経由した narrowing を必ず通す。
  *
  * backend `UserRole` (`backend/app/dependencies.py`) と整合させる。乖離する
  * と JWT に backend が知らない role を載せてしまう / 逆に admin 判定が通らな

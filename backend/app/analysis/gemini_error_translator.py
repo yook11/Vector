@@ -12,9 +12,6 @@ analysis pipeline 内 (Stage 3 extraction / Stage 4 assessment / Stage 5 embeddi
 Stage 固有の以下は translator に持ち込まない (stage-local で扱う):
 - finish_reason 判定 (SDK response attribute 由来、exception ではない)
 - ValidationError / JSONDecodeError / response shape 違反 (Layer 2-B、stage 責任)
-
-ユーザー任意 query embedding 経路は廃止済み。記事 embedding pipeline は
-Stage 5 document embedding として本 translator を使い続ける。
 """
 
 from __future__ import annotations
@@ -88,10 +85,7 @@ def translate_gemini_error(exc: Exception) -> Exception:
     未知の例外はそのまま返す (呼び出し側で stage-specific 判定があるため、
     translator は SDK 例外オブジェクトだけを引き受ける)。
     """
-    # 1. Network errors (httpx + builtin)。SDK transport の httpx 経由でも到達する。
-    # Phase 4: AIProvider*Error は VectorDomainError 継承で __str__ が SAFE_ATTRS
-    # 経路のみ。SDK 生 message を引き渡しても捨てられるが、call site で str(exc)
-    # 経由を明示的に消すことで PII 含有経路が残っていないことを grep で示す。
+    # Network errors。SDK 生 message を渡さず、PII 含有経路を残さない。
     if isinstance(exc, httpx.TimeoutException | httpx.ConnectError):
         return AIProviderNetworkError()
     if isinstance(exc, TimeoutError | ConnectionError | OSError):
@@ -110,11 +104,7 @@ def translate_gemini_error(exc: Exception) -> Exception:
         raw_message = str(getattr(exc, "message", "")) or str(exc)
         message = raw_message.lower()
 
-        # 3a. Leaked API key は固定文言 (red-team chain γ-1: SDK 生 message に
-        #     key prefix を含む経路があるため、translator 側で生 message を完全に
-        #     遮断する)。Phase 4: AIProviderConfigurationError() の引数は SAFE_ATTRS
-        #     経路から外れるが、leaked 検知文言は audit context として
-        #     logger.warning などで stdout 側に別経路で残す運用に切替。
+        # 3a. Leaked API key は固定文言だけを見て、SDK 生 message は外へ出さない。
         if "reported as leaked" in message:
             return AIProviderConfigurationError()
 

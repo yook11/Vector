@@ -7,16 +7,15 @@
 
 無害化対象:
     - 閉じタグ ``</untrusted_input>`` (大小文字 / 内部空白バリアント含む)
-      -> ``[/untrusted_input]`` (境界脱出防止 / red-team C8 対策)
+      -> ``[/untrusted_input]``
     - 開きタグ ``<untrusted_input>`` (同) -> ``[untrusted_input]``
     - 行頭 ATX マーカ ``^#{1,6}[ \\t　]+`` -> ``#`` と空白の間に ZWSP 挿入
-      (Vector の prompt は ``# Step N`` を section 区切りに使うため、入力に
-      このパターンが混ざると LLM が偽の指示セクションとして再解釈する余地
-      がある。半角空白だけでなくタブ・全角空白 (U+3000) も捕捉 / red-team C3)
+      (Vector の prompt は ``# Step N`` を section 区切りに使うため、同形の
+      入力を偽セクションとして解釈させない。タブ・全角空白も捕捉する)
     - 全角括弧 section header ``【...】`` -> ``【...​】`` (閉じ括弧前 ZWSP)
       briefing prompt が ``【ルール】 ``【出力】`` ``【重要性の判断軸】`` を
-      section delimiter として使うため、入力に同パターンが混ざると LLM が
-      新規セクションとして解釈する余地がある (red-team C3 / F7)
+      section delimiter として使うため、同形の入力を新規セクションとして
+      解釈させない。
 
 設計方針:
     過剰サニタイズによる本文情報損失を避けるため、Vector の現プロンプト構造で
@@ -31,8 +30,6 @@ from __future__ import annotations
 import re
 
 # boundary tag は IGNORECASE + 内部空白許容で全バリアントを 1 regex で捕捉する。
-# 元の string replace では ``</UNTRUSTED_INPUT>`` ``</ untrusted_input >`` 等を
-# 素通りさせていた (red-team C8 / F22)。
 _BOUNDARY_CLOSE = re.compile(r"<\s*/\s*untrusted_input\s*>", re.IGNORECASE)
 _BOUNDARY_CLOSE_NEUTRAL = "[/untrusted_input]"
 _BOUNDARY_OPEN = re.compile(r"<\s*untrusted_input\s*>", re.IGNORECASE)
@@ -42,15 +39,12 @@ _ZWSP = "​"
 
 # ATX header は ASCII 半角空白 / tab / 全角空白 (U+3000) を捕捉する。
 # ``\s`` は改行を含むので multiline 行頭マッチが壊れる。明示的な文字クラスを
-# 使う (red-team C3 / F6)。
+# 使う。
 _ATX_HEADER = re.compile(r"^(#{1,6})[ \t　]+", flags=re.MULTILINE)
 
 # 全角括弧 section header: ``【X】`` を ``【X​】`` (閉じ括弧前に ZWSP) に変換し
-# LLM の section header 解釈経路を崩す。中身の長さに上限を設けず、``【` ``】``
-# で囲まれた区間を全て対象にする (red-team chain β: 旧 ``{1,20}`` 制限下で
-# 21+ 文字の偽 ``【ルール: ...】`` が素通りする bypass が確認されたため)。
-# 本文中の引用元注釈等の長い ``【...】`` も ZWSP 入りになるが、ZWSP は人間に
-# 見えず LLM の内容理解にも影響しない (red-team C3 / F7)。
+# LLM の section header 解釈経路を崩す。中身の長さに上限を設けず、
+# ``【`` と ``】`` で囲まれた区間を全て対象にする。
 _FULLWIDTH_BRACKET_HEADER = re.compile(r"【([^】\n]+)】")
 
 

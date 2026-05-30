@@ -1,19 +1,14 @@
 """``app/queue/tasks/backfill.py`` の年齢削除 metric 記録 oracle。
 
-検証する性質 (Phase 4):
+検証する性質:
 - 削除発生時、``vector.curation.age_deleted`` counter が削除件数分 +N。
 - 0 件 cycle でも ``vector.curation.age_delete_batch_size`` histogram に 0 が
   record される (平常 baseline を分布に残す契約)。
 - attribute は ``{"stage": "curation"}`` 1 key 固定、article_id / URL に類する
   dynamic 値が attribute / dump 全体に混入しない (capfire 全文検索 oracle)。
 
-設計スタンス:
-- 実際の DB session_factory を立てるとテストが integration 寄りになる。本テストは
-  unit 層で metric 経路のみ検証するため、``PipelineBacklog`` / ``ArticleRepository``
-  / ``CurationAuditRepository`` を patch 対象に絞り、metric record の attribute
-  契約を pin する (`feedback_test_invariants_over_change_tracking`)。
-- capfire fixture が ``logfire.configure(...)`` を自前で呼ぶため本テスト内では
-  ``setup_logfire`` を呼ばない (二重 configure 回避)。
+unit 層で metric 経路のみ検証するため、repository 群は patch する。capfire fixture
+が ``logfire.configure(...)`` を呼ぶため、本テスト内では ``setup_logfire`` を呼ばない。
 """
 
 from __future__ import annotations
@@ -29,8 +24,7 @@ from logfire.testing import CaptureLogfire
 from app.queue.tasks.backfill import _delete_aged_out_curations
 
 # ---------------------------------------------------------------------------
-# ヘルパー (test_curation_hold_metrics.py と同形 — module 跨ぎで複製、共通化は
-# 「同じ問題」検出時に括る)
+# ヘルパー
 # ---------------------------------------------------------------------------
 
 
@@ -101,7 +95,7 @@ async def _invoke_with_aged_ids(
 
 
 # ---------------------------------------------------------------------------
-# 4-A. age_deleted counter (削除件数 > 0 経路)
+# age_deleted counter
 # ---------------------------------------------------------------------------
 
 
@@ -131,7 +125,7 @@ async def test_age_deleted_attribute_is_stage_only(
 
 
 # ---------------------------------------------------------------------------
-# 4-B. age_delete_batch_size histogram (0 件 baseline 含む)
+# age_delete_batch_size histogram
 # ---------------------------------------------------------------------------
 
 
@@ -181,7 +175,7 @@ async def test_age_delete_batch_size_records_zero_baseline(
 
 
 # ---------------------------------------------------------------------------
-# 4-C. PII 非含有 oracle: article_id が attribute / dump に混入しない
+# PII 非含有 oracle
 # ---------------------------------------------------------------------------
 
 
@@ -192,9 +186,7 @@ async def test_age_delete_metrics_do_not_leak_article_ids(
     """metric attribute / dump 全体に article_id 値が混入しない (capfire oracle)。
 
     article_id を attribute に乗せると cardinality 爆発する上、削除対象記事の
-    識別情報が SaaS dashboard に流出する。本 oracle が落ちる = backfill 側で
-    attribute 経路に動的値を追加した regression の合図
-    (`feedback_per_seam_mapping_totality_oracle`)。
+    識別情報が SaaS dashboard に流出する。
     """
     # 検出しやすい目印 ID を使う (空虚回避)
     distinctive_ids = [987654321, 123456789]

@@ -124,10 +124,10 @@ class TestSsrfValidation:
 
 
 # ---------------------------------------------------------------------------
-# DNS rebind 防御 (chain δ regression guard)
+# DNS rebind 防御
 # ---------------------------------------------------------------------------
 class TestDnsRebindResistance:
-    """red-team chain δ: validate と connect の間で DNS が切り替わっても
+    """validate と connect の間で DNS が切り替わっても
     TCP 接続は validate 済の最初の IP に pin される (TOCTOU 不成立)。"""
 
     @pytest.mark.asyncio
@@ -135,7 +135,7 @@ class TestDnsRebindResistance:
         self, captured_requests: list[httpx.Request]
     ) -> None:
         """``_resolve_host`` が複数回呼ばれても、TCP 接続先は 1 回目の解決
-        結果のみに依存する (red-team chain δ PoC-4 反転 regression)。
+        結果のみに依存する。
         """
         call_count = 0
 

@@ -1,19 +1,15 @@
 """``app/queue/helpers/stage_hold.py`` の curation Logfire metric 記録 oracle。
 
-検証する性質 (Phase 4):
+検証する性質:
 - ``set_curation_hold`` 成功時に ``vector.curation.hold_set`` counter が +1
   され、attribute は ``{"reason": <CODE 由来>}`` のみ。
 - ``set_curation_hold`` の Redis SET 失敗時は ``vector.curation.hold_set_failed``
   counter が +1 され、成功 counter は increment されない。
 - attribute 経路に PII (article_id / URL 様の dynamic 値) が混入しない構造的
-  契約を capfire の metric dump 全文検索で oracle 化する
-  (``feedback_per_seam_mapping_totality_oracle``)。
+  契約を capfire の metric dump 全文検索で oracle 化する。
 
 capfire fixture が ``logfire.configure(send_to_logfire=False, ...)`` を呼ぶため
-本テスト内では ``setup_logfire`` を呼ばない (二重 configure 回避)。metric counter
-は module top-level で生成され Proxy MeterProvider に遅延束縛されるため、capfire
-fixture setup より時系列的に前に作られていても、configure 後の InMemoryMetricReader
-に値が到達する (Phase 3 で確立済の Proxy 遅延束縛契約と同思想)。
+本テスト内では ``setup_logfire`` を呼ばない。
 """
 
 from __future__ import annotations
@@ -49,7 +45,7 @@ def _attributes_for(metric: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# 4-A. hold_set counter (成功経路)
+# hold_set counter
 # ---------------------------------------------------------------------------
 
 
@@ -100,7 +96,7 @@ async def test_set_curation_hold_does_not_record_failed_counter_on_success(
 
 
 # ---------------------------------------------------------------------------
-# 4-B. hold_set_failed counter (Redis 障害経路)
+# hold_set_failed counter
 # ---------------------------------------------------------------------------
 
 
@@ -112,7 +108,7 @@ async def test_set_curation_hold_failure_increments_failed_counter(
     fake_redis = AsyncMock()
     fake_redis.set.side_effect = RedisConnectionError("connection refused")
 
-    # set_curation_hold は best-effort で例外を呑む (本契約は Phase 1 から維持)。
+    # set_curation_hold は best-effort で例外を呑む。
     await set_curation_hold(fake_redis, reason="ai_error_configuration")
 
     metrics = capfire.get_collected_metrics()
@@ -137,7 +133,7 @@ async def test_set_curation_hold_failure_does_not_record_success_counter(
 
 
 # ---------------------------------------------------------------------------
-# 4-C. PII 非含有 oracle (構造的契約の中心)
+# PII 非含有 oracle
 # ---------------------------------------------------------------------------
 
 
@@ -148,13 +144,9 @@ async def test_hold_metrics_attribute_does_not_leak_dynamic_pii(
     """attribute set に PII 様 dynamic 値が混入しない (capfire 全文検索 oracle)。
 
     将来 ``set_curation_hold`` に article_id / URL 等の引数が追加されて
-    metric attribute に流入する regression を構造的に検知する
-    (``feedback_per_seam_mapping_totality_oracle``)。
+    metric attribute に流入する regression を構造的に検知する。
     """
-    # 空虚回避: 意図的な sensitive 文字列を reason に入れて全文検索で識別
-    # するのではなく、metric dump 全体に「contributor の動的入力に類する語が
-    # 出ない」ことを oracle 化する。reason は SystemConfig 由来 enum-like 値
-    # に限定されているため、攻撃面は将来の追加 attribute。
+    # reason は SystemConfig 由来の enum-like 値に限定される。
     fake_redis = AsyncMock()
     await set_curation_hold(fake_redis, reason="ai_error_configuration")
 

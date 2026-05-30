@@ -1,10 +1,8 @@
 /**
  * Better Auth client の戻り値型から error 型を派生させる。
  *
- * 旧 `RegisterForm.tsx` の手書き `AuthErrorLike` interface は Better Auth が
- * 内部実装を変えるとサイレントに drift していた。本ファイルで `signIn.email` /
- * `signUp.email` の戻り値から `["error"]` を抽出することで、上流仕様変更を
- * コンパイラが教える経路に切り替える。
+ * `signIn.email` / `signUp.email` の戻り値から `["error"]` を抽出し、
+ * 上流仕様変更をコンパイル時に検知する。
  */
 
 import type { signIn, signUp } from "@/lib/auth/auth-client";

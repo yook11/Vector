@@ -18,10 +18,7 @@ import { narrowRole } from "@/lib/auth/role";
 import type { Session } from "@/lib/auth/session";
 import { requireEnv } from "@/lib/env";
 
-// BFF→backend の呼び出し先 host を構造的に絞り込む allowlist。
-// hey-api interceptor は本 URL に BFF_JWT_SIGNING_SECRET 署名済 JWT を
-// 載せて送るため、env 値が攻撃者制御 host に向くと secret 持ち出し経路に
-// なる。backend 側の _validate_internal_frontend_base_url と対称。
+// BFF→backend の JWT を攻撃者制御 host に送らないため、内部 API host を絞る。
 const _ALLOWED_INTERNAL_API_HOSTS = new Set([
   "localhost",
   "127.0.0.1",
@@ -85,8 +82,7 @@ function _loadInternalApiUrl(): string {
 
 export const INTERNAL_API_URL = _loadInternalApiUrl();
 
-// BFF→backend JWT 署名鍵。backend は同じ secret で検証する (red-team C1 で
-// revalidate Bearer と別 secret に分離)。
+// BFF→backend JWT 署名鍵。backend は同じ secret で検証する。
 const BFF_JWT_SIGNING_SECRET = requireEnv(
   "BFF_JWT_SIGNING_SECRET",
   "generate one with `openssl rand -hex 32`",

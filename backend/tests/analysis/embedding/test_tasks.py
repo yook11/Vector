@@ -82,7 +82,7 @@ def _patch_ready_construction(
 
 
 # ---------------------------------------------------------------------------
-# generate_embedding (Stage 5)
+# generate_embedding
 # ---------------------------------------------------------------------------
 
 
@@ -116,7 +116,7 @@ class TestGenerateEmbedding:
     async def test_ready_build_blocked_audits_and_does_not_call_service(self) -> None:
         """Ready build blocked なら rejected audit + return、Service は呼ばない。
 
-        rate limit acquire も試みない (Ready 構築が gatekeeper、案 3 順序)。
+        rate limit acquire も試みない (Ready 構築が gatekeeper)。
         """
         from app.queue.tasks.embedding import generate_embedding
 

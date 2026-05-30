@@ -2,20 +2,13 @@
 
 検証する性質:
 - ``_sanitize_validation_errors``: Pydantic v2 の error dict から ``input``
-  (送信値) / ``ctx`` (型検査文脈) / ``url`` (docs URL) を **必ず** 落とす。
+  (送信値) / ``ctx`` (型検査文脈) / ``url`` (docs URL) を落とす。
   残るのは ``type`` / ``loc`` / ``msg`` のみ。
 - ``_drop_endpoint_args_on_success``: 成功時は ``None`` (log message 不発)、
   validation error 時は sanitize 済 errors のみ (``values`` / 各 error の
-  ``input`` は **絶対に** 漏らさない)。
-- capfire 経由の経路 oracle: 実 FastAPI app に instrument_fastapi を当てて
-  実 request を投げ、捕捉した span / log に rejected input が **1 つも**
-  含まれないことを JSON 全文検索で検証する。
-
-設計スタンス:
-- 「機構が分離していること」ではなく「PII が結果として乗らないこと」を pin する
-  oracle (feedback_per_seam_mapping_totality_oracle)。logfire / FastAPI が将来
-  errors dict の鍵名を rename した場合に sanitize が空振りで通すリスクを
-  capfire 経路で実体検証する (feedback_test_first_discovery_not_confirmatory)。
+  ``input`` を漏らさない)。
+- capfire 経由で実 FastAPI app に instrument_fastapi を当て、捕捉した span / log
+  に rejected input が含まれないことを JSON 全文検索で検証する。
 - capfire fixture は内部で ``logfire.configure(send_to_logfire=False, ...)`` を
   呼ぶため、capfire を使うテストでは ``setup_logfire`` を呼ばない (二重
   configure を避け capfire の TestExporter を活かす)。
@@ -44,8 +37,7 @@ def test_sanitize_drops_input_ctx_url_keeps_type_loc_msg() -> None:
     """``input`` / ``ctx`` / ``url`` を落とし ``type`` / ``loc`` / ``msg`` を残す。
 
     Pydantic v2 ``errors()`` の標準鍵を網羅的に列挙し、残し / 落とし の境界を
-    具体値で pin する。空虚回避のため ``input`` には sensitive value を入れて、
-    返却 dict の全文検索で消えていることを再確認する。
+    具体値で確認する。``input`` は sensitive value を入れて全文検索する。
     """
     sensitive = "sensitive_q_value_abcdef123456"
     raw = [
@@ -133,9 +125,7 @@ def test_mapper_returns_none_when_errors_key_missing() -> None:
 def test_mapper_drops_values_and_input_on_validation_error() -> None:
     """validation error 時は ``errors`` のみ、``values`` と各 ``input`` を除去。
 
-    具体的な sensitive 値で「mapper の返却に sensitive が **1 つも** 残らない」
-    ことを確認 (feedback_per_seam_mapping_totality_oracle: 機構の分離でなく
-    結果として PII が消えていることを oracle 化)。
+    具体的な sensitive 値で、mapper の返却に PII が残らないことを確認する。
     """
     sensitive_value = "sensitive_long_value_xxxxxxxxxxx"
     sensitive_input = "sensitive_rejected_input_zzzzzzzz"
@@ -176,12 +166,6 @@ class _ItemsBody(BaseModel):
 def test_validation_error_span_drops_rejected_input(capfire: CaptureLogfire) -> None:
     """instrument_fastapi 経由でも sanitize が経路上効いていることを実検証。
 
-    本テストは sanitize 関数 unit (上記) + dashboard 目視の隙間を埋める:
-    logfire / FastAPI が将来 errors dict の鍵を rename した場合、unit テストは
-    通るが実 span には漏れる、というシナリオを capfire の TestExporter で
-    捕捉する。送信値 sensitive が span / log の JSON 全文検索で 1 つも出ない
-    ことを oracle とする。
-
     capfire fixture は ``logfire.configure(send_to_logfire=False, ...)`` を
     自前で呼ぶため、本テスト内では ``setup_logfire`` を呼ばない (二重
     configure 回避 / TestExporter を活かす契約)。
@@ -216,11 +200,4 @@ def test_validation_error_span_drops_rejected_input(capfire: CaptureLogfire) -> 
 
 @pytest.fixture(autouse=True)
 def _reset_fastapi_instrumentation() -> None:
-    """テスト間の logfire FastAPI instrumentation 状態を残さない。
-
-    ``logfire.instrument_fastapi`` は app object に対する patch なので、本
-    モジュール内では app をテストごとに新規生成しており理論上 cross-test
-    汚染は無いが、念のため何もしない placeholder として保つ (将来 global
-    state を導入する instrumentor に切り替わったら本 fixture で reset する)。
-    """
     yield

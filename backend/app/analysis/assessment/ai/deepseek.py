@@ -2,25 +2,12 @@
 
 OpenAI SDK を ``base_url=https://api.deepseek.com/beta`` で再利用し、
 Function Calling + ``strict: true`` + inline flat schema で構造化出力を強制する。
-PoC で ``$ref``/``$defs`` 経由の制約は AI が enforce しないことを確認済
-(specs/stage2-deepseek-migration.md)。
+``$ref``/``$defs`` 経由の制約は AI が enforce しないため使わない。
 
 Prompt 文面は ``DeepSeekAssessmentPrompt`` が SSoT、call config (model /
 gen_config / response_schema / tool_name / base_url / version / rate_limit_policy) は
 ``DEEPSEEK_ASSESSMENT_SPEC`` (``spec.py``) が SSoT。本 class は I/O 駆動
 (SDK 例外翻訳) に責務を絞る。
-
-PR3 で:
-- 戻り値を ``AssessmentResult`` 直接 → ``AssessmentCall`` envelope に切り替え
-- ``ClassificationRawResponse.model_validate_json()`` 経由を削除し、
-  tool_call.arguments → ``json.loads`` → ``parse_assessment`` の流れに統一
-- tool_call 欠落 / wrong tool name / arguments JSON 不正は
-  ``AssessmentResponseInvalidError`` (recoverable / cron 救済対象) で raise する。
-  ``AIProviderRequestInvalidError`` (terminal-skip) で raise しないのは、モデルの
-  一時的な tool 省略を「リトライしても無駄」扱いにしないため。
-- ``_translate_error`` を spec の DeepSeek (OpenAI 互換) SDK 翻訳テーブル
-  (``AIProvider*Error`` 系への翻訳) に書き直し、catch-all は exc を return する
-  bare re-raise guard 規約
 """
 
 from __future__ import annotations
@@ -75,7 +62,7 @@ class DeepSeekAssessor(BaseAssessor):
     def __init__(self) -> None:
         api_key = settings.deepseek_api_key.get_secret_value()
         if not api_key:
-            # Phase 4: 引数 message は SAFE_ATTRS 外。CODE と起動ログで識別。
+            # provider error detail に secret や provider message を含めない。
             raise AIProviderConfigurationError()
         self._client = AsyncOpenAI(api_key=api_key, base_url=self.SPEC.base_url)
 
@@ -137,19 +124,15 @@ class DeepSeekAssessor(BaseAssessor):
         choice = resp.choices[0]
         tool_calls = choice.message.tool_calls or []
         if not tool_calls or tool_calls[0].function.name != tool_name:
-            # provider は応答したが期待した tool_call 構造を返さなかった
-            # (= response schema 違反)。AIProviderRequestInvalidError
-            # (terminal-skip / retry 不能) ではなく、AssessmentResponseInvalidError
-            # (recoverable / cron 救済) で raise する。モデル一時的な tool 省略を
-            # 「リトライ無駄」扱いにしないため。
-            # Phase 4: 旧 message 引数廃止 (finish_reason 値は CODE 経路で識別)。
+            # tool_call 構造欠落は AI 応答の schema 違反として扱い、
+            # terminal な request invalid にはしない。
             raise AssessmentResponseInvalidError()
 
         raw_arguments = tool_calls[0].function.arguments or ""
         try:
             payload = json.loads(raw_arguments)
         except json.JSONDecodeError as exc:
-            # Phase 4: 旧 message 引数廃止 (DeepSeek 応答 raw 文字列を含む経路)。
+            # raw AI 応答は例外 message に含めない。
             raise AssessmentResponseInvalidError() from exc
 
         if not isinstance(payload, dict):
@@ -190,10 +173,7 @@ class DeepSeekAssessor(BaseAssessor):
         マップできなければ ``exc`` をそのまま return (caller である
         ``_call_once`` が bare re-raise する規約)。
         """
-        # network 系
-        # Phase 4: AIProvider*Error は VectorDomainError 継承で __str__ が SAFE_ATTRS
-        # 経路のみ。SDK 生 message を引き渡しても捨てられるが、call site で str(exc)
-        # 経由を明示的に消して PII 含有経路が残っていないことを grep で示す。
+        # network 系。SDK 生 message は provider error detail に載せない。
         if isinstance(exc, (APIConnectionError, APITimeoutError)):
             return AIProviderNetworkError()
         if isinstance(exc, (TimeoutError, ConnectionError, OSError)):

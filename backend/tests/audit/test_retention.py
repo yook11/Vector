@@ -1,5 +1,4 @@
-"""``app.queue.tasks.retention.purge_pipeline_events`` のテスト
-(red-team chain γ-4)。
+"""``app.queue.tasks.retention.purge_pipeline_events`` のテスト。
 
 - 90 日経過行が削除され、新しい行は残ること
 - kill switch (`pipeline_events_retention_enabled=False`) で skip すること

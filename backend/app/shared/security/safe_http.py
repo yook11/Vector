@@ -8,34 +8,13 @@
 - 「呼び出し側で ``ensure_host_is_public`` を呼び忘れる」運用ミスを構造的に排除
 - リダイレクト経由 SSRF を default で遮断 (``follow_redirects=False``)
 - DNS rebind / TOCTOU を Custom Transport の IP pin で構造的に閉塞
-- 将来 fetch 箇所が増えても自動で同じ防御が効く
 
-DNS pin の仕組み (red-team chain δ 対策):
-    Transport ``_PinnedDnsTransport`` が ``handle_async_request`` の中で:
-    1. URL host を 1 度だけ ``ensure_host_is_public`` で resolve + 全 IP public 検証
-    2. 最初の resolved IP を URL host に書換 → TCP 接続は IP に対して張る
-    3. ``request.headers["Host"]`` = 元 host (HTTP routing 用)
-    4. ``request.extensions["sni_hostname"]`` = 元 host (TLS cert verify 用)
+DNS pin は ``_PinnedDnsTransport`` が送信直前に host を resolve し、全 IP を public
+検証したうえで最初の IP へ TCP 接続先を固定する。Host header と TLS SNI は元 host
+を保持するため、validate と connect の間で DNS 応答が変わっても TOCTOU が成立しない。
 
-    httpcore 1.x が ``sni_hostname`` extension を ``ssl.server_hostname`` に
-    渡すため、TCP は IP / TLS は元 host で完全分離する。validate と connect の
-    間で DNS server が応答を切り替えても、TCP 接続先は validate 済の IP に
-    pin されるため TOCTOU が成立しない。
-
-例外フロー:
-    transport の ``handle_async_request`` で raise した ``HostBlockedError`` /
-    ``HostResolutionError`` は ``client.get()`` 等から呼び出し側にそのまま伝播
-    する (httpx は wrap しない)。よって呼び出し側は既存の try/except に翻訳
-    1 行ずつ追加するだけで Permanent/Temporary を切り分けられる。
-
-呼び出し例:
-    >>> async with make_safe_async_client(headers=HEADERS, timeout=30.0) as client:
-    ...     try:
-    ...         resp = await client.get(url)
-    ...     except HostBlockedError as e:
-    ...         raise PermanentFetchError(str(e)) from e
-    ...     except HostResolutionError as e:
-    ...         raise TemporaryFetchError(str(e)) from e
+transport の ``HostBlockedError`` / ``HostResolutionError`` は httpx に wrap されず
+呼び出し側へ伝播する。
 """
 
 from __future__ import annotations
@@ -72,13 +51,8 @@ _TRANSPORT_KEYS: tuple[str, ...] = (
 class _PinnedDnsTransport(httpx.AsyncHTTPTransport):
     """ssrf_guard で validate した IP に TCP 接続を pin する Transport。
 
-    ``handle_async_request`` を override し、リクエスト送信直前に DNS を 1 度だけ
-    解決して全 IP が public であることを検証、最初の resolved IP を URL host に
-    書換える。元 host は Host header と TLS SNI に保持するため、TCP 接続は IP /
-    TLS は元 host の証明書で verify される構造的分離が成立する。
-
-    本 transport を経由するリクエストは validate と TCP connect の間で DNS が
-    切り替わっても影響を受けない (TOCTOU 不成立)。
+    送信直前に DNS を解決して全 IP が public であることを検証し、TCP 接続先だけを
+    検証済 IP に差し替える。Host header と TLS SNI は元 host に固定する。
     """
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:

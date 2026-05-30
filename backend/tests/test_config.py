@@ -1,14 +1,7 @@
 """app.config.Settings のバリデータに関するユニットテスト。
 
-PR8 (red-team S-SECRET-1 / S-AUTH-4 / C-CHAIN-D 防御):
-- DATABASE_URL の公開済 dev placeholder / 弱パスワード拒否
-- 必須 settings (database_url / frontend_url / internal_frontend_base_url +
-  bff_jwt_signing_secret / revalidate_bearer_secret) が env 未設定なら起動時
-  ValidationError で fail-fast
-- backend_url 死に変数の削除確認
-
-Phase A (red-team C1 防御 / INTERNAL_API_SECRET の 2 分割):
-- BFF_JWT_SIGNING_SECRET / REVALIDATE_BEARER_SECRET の強度検査 / 同一値拒否
+必須設定の fail-fast、公開済み placeholder の拒否、内部 secret の強度と
+宛先 allowlist を検証する。
 """
 
 import pytest
@@ -22,7 +15,7 @@ _VALID_DATABASE_URL = "postgresql+asyncpg://vector_app:strongpassword@db:5432/ve
 _VALID_FRONTEND_URL = "https://app.example.com"
 _VALID_INTERNAL_FRONTEND_BASE_URL = "http://frontend:3000"
 
-# 強度テストで parametrize する新 secret の field 名。
+# 強度テストで parametrize する内部 secret の field 名。
 _NEW_SECRET_FIELD_NAMES = ["bff_jwt_signing_secret", "revalidate_bearer_secret"]
 
 
@@ -40,12 +33,12 @@ def _isolate_env(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     monkeypatch.setenv("DATABASE_URL", _VALID_DATABASE_URL)
     monkeypatch.setenv("FRONTEND_URL", _VALID_FRONTEND_URL)
     monkeypatch.setenv("INTERNAL_FRONTEND_BASE_URL", _VALID_INTERNAL_FRONTEND_BASE_URL)
-    # 新 secret は必須。baseline は両 secret を valid な別値で設定する。
+    # baseline は両 secret を valid な別値で設定する。
     monkeypatch.setenv("BFF_JWT_SIGNING_SECRET", _VALID_BFF_SECRET)
     monkeypatch.setenv("REVALIDATE_BEARER_SECRET", _VALID_REVALIDATE_SECRET)
 
 
-# --- PR8: required URL settings の fail-fast --------------------------------
+# --- 必須 URL settings の fail-fast -----------------------------------------
 
 
 def test_settings_construct_with_all_required_env() -> None:
@@ -95,10 +88,9 @@ def test_settings_reject_known_weak_database_url(
 def test_settings_accept_ci_dummy_database_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """CI postgres service の汎用 dummy ``vector:vector`` は通る (本命は app role)。
+    """CI postgres service の汎用 dummy ``vector:vector`` は許可する。
 
-    blocklist は application role 露出 (``vector_app:vector_app``) と placeholder
-    残存に絞る。migration role の汎用 dev/CI password はノイズ過多のため検査しない。
+    blocklist は application role 露出と placeholder 残存に絞る。
     """
     monkeypatch.setenv(
         "DATABASE_URL", "postgresql+asyncpg://vector:vector@localhost:5432/vector"
@@ -108,12 +100,12 @@ def test_settings_accept_ci_dummy_database_url(
 
 
 def test_settings_no_longer_has_backend_url_field() -> None:
-    """backend_url 死に変数が削除されていることを構造的に確認。"""
+    """Settings が backend_url field を持たないことを確認。"""
     s = Settings()
     assert not hasattr(s, "backend_url")
 
 
-# --- Phase A: 新 secret の強度検査 / 同一値拒否 ------------------------------
+# --- 内部 secret の強度検査 / 同一値拒否 ------------------------------------
 
 
 def test_strong_new_secrets_are_accepted() -> None:
@@ -165,11 +157,11 @@ def test_reject_when_secrets_equal() -> None:
         )
 
 
-# --- internal_frontend_base_url の宛先 allowlist (notifier secret 持ち出し口防御) ---
+# --- internal_frontend_base_url の宛先 allowlist -----------------------------
 #
 # notifier (FrontendRevalidateNotifier) は SSRF guard をバイパスして
 # REVALIDATE_BEARER_SECRET を Bearer 送信するため、宛先が攻撃者制御に向くと
-# secret 持ち出し経路になる。env 値の正当性を Settings 構築時に構造検証する。
+# secret 持ち出し経路になる。
 
 _VALID_FLYCAST_URL = "http://your-vector-frontend-app.flycast:3000"
 

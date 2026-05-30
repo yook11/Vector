@@ -1,14 +1,12 @@
 """Stage 5 (document 永続化) 専用の抽象 Embedder 基底クラス。
 
-Search BC (query 一時) は独立 hierarchy (``app/search/embedding/``) を持つため、
-本 class は document 埋め込みに専念する。``embed_query`` / ``embed_documents``
-(batch) は本 hierarchy から取り除き、内部 hook も ``str`` 単発に絞ることで公開
-API と一貫させる。
+Search BC (query 一時) は独立 hierarchy (``app/search/embedding/``) を持つ。
+本 class は document 埋め込みに専念し、公開 API と内部 hook を単一 document
+向けに揃える。
 
 サブクラスは ``EmbeddingCallSpec`` (``spec.py``) を ``SPEC`` class attr として
 持ち、``model_name`` / ``dimension`` / ``rate_limit_policy`` の各 property 経由で
-公開する。ClassVar SSoT (``MODEL`` / ``DIMENSION`` / ``RPM`` / ``RPD`` /
-``DOCUMENT_PREFIX``) は Spec に集約済 (Stage 3/4 と同形)。
+公開する。
 """
 
 from __future__ import annotations
@@ -40,8 +38,7 @@ class BaseEmbedder(abc.ABC):
       caller の bare re-raise に委譲する規約 (Stage 4 BaseAssessor と同形)
 
     本 class は Stage 5 (embedding BC) 専用 (``app/analysis/embedding/ai/`` 配下)
-    のため、AI 境界として 2 種のエラーを構造保証する (BC 境界原則:
-    feedback_bc_boundary_guarantees_downstream):
+    のため、AI 境界として 2 種のエラーを構造保証する:
 
     - SDK 例外 → ``AIProvider*Error`` 階層 (Layer 2-A、``_translate_error`` で翻訳)。
       Stage 5 marker への詰め替えは Service 層 ACL の責務
@@ -49,9 +46,8 @@ class BaseEmbedder(abc.ABC):
       を満たさない場合 → ``EmbeddingResponseInvalidError`` (Layer 2-B) として
       本 class 内で詰め替えて raise (下流での再検証を不要にする)
 
-    入力は ``ReadyForEmbedding`` を受ける。Ready 型は処理に必要な値の全揃え
-    (text + audit 用 ID) を構造保証するため、本 class は値 fetch / None チェックを
-    自分で行わず、Ready から直接取り出す (feedback_structural_guarantee)。
+    入力は ``ReadyForEmbedding`` を受ける。Ready 型が処理に必要な値を保証するため、
+    本 class は値 fetch / None チェックを自分で行わず、Ready から直接取り出す。
 
     サブクラスは ``EmbeddingCallSpec`` を保持し、以下 property で契約を満たす:
 
@@ -108,8 +104,7 @@ class BaseEmbedder(abc.ABC):
         try:
             return EmbeddingVector(root=tuple(raw))
         except ValidationError as exc:
-            # Phase 4: 旧 message 引数廃止 (ValidationError は vector 値を含みうる)。
-            # __cause__ 連鎖は残るので debug 時は traceback で辿れる。
+            # ValidationError は vector 値を含みうるため、公開 message には載せない。
             raise EmbeddingResponseInvalidError() from exc
 
     # -- 単発呼び出し ----------------------------------------------------
@@ -117,7 +112,7 @@ class BaseEmbedder(abc.ABC):
     async def _embed_once(self, text: str) -> list[float]:
         """1 回の API call。SDK 例外を ``AIProvider*Error`` 階層に翻訳して raise。
 
-        Pattern (Stage 4 BaseAssessor._call_once と同形):
+        例外処理:
         - 既に階層内 (``AIProviderError`` / ``EmbeddingError``) の例外は **素通し**
           (二重翻訳防止)
         - それ以外は ``_translate_error`` 経由で翻訳。同じ exc が返ったら
@@ -130,7 +125,7 @@ class BaseEmbedder(abc.ABC):
             logger.info("embed_api_success", model=self.model_name)
             return vector
         except (AIProviderError, EmbeddingError):
-            # 既に階層内 — 二重翻訳防止 (Stage 4 BaseAssessor と同形)
+            # 既に階層内の例外は二重翻訳しない。
             raise
         except Exception as exc:
             translated = self._translate_error(exc)

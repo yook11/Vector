@@ -78,18 +78,11 @@ EMBEDDINGS_DAILY_MAX = 1500
 
 
 # ---------------------------------------------------------------------------
-# Logfire metrics (Phase 4: 年齢削除の救済可視化)
+# Logfire metrics (年齢削除の救済可視化)
 # ---------------------------------------------------------------------------
 #
-# 年齢削除 (7日超 child-NULL curation の物理削除) を ``vector.curation.age_deleted``
-# counter + ``vector.curation.age_delete_batch_size`` histogram で計測する。前者で
-# 24h 合計の異常 spike (上流パイプライン障害の疑い)、後者で 1 cycle (15 min) の
-# batch 分布 p99 を見て突発的な大量削除を検知する設計
-# (``specs/logfire-stage3-rescue-dashboard.md`` §panel 3/4)。
-#
-# attribute は ``stage="curation"`` のみ (Phase 5+ で assessment/embedding を追加
-# する場合の dimension)。``article_id`` は attribute に乗せない (cardinality 爆発
-# 防止 + PII 隔離契約、test_maintenance_age_delete_metrics の capfire oracle で pin)。
+# 7日超 child-NULL curation の物理削除を計測する。Logfire attribute は
+# 低 cardinality に保ち、対象 ID は pipeline_events に寄せる。
 
 _age_deleted_counter = logfire.metric_counter(
     "vector.curation.age_deleted",
@@ -283,9 +276,7 @@ async def _delete_aged_out_curations(
             await session.commit()
         deleted += 1
 
-    # Phase 4: 0 件 cycle も histogram に baseline として残す (平常時の分布形を
-    # p99 の参照に活用)。counter 側は 0 件のときの ``add(0, ...)`` は spec 上
-    # 許容されるが metric noise になるため > 0 時のみ。
+    # 0 件 cycle も histogram に残し、counter は noise を避けるため > 0 時のみ。
     _age_delete_batch_size_histogram.record(deleted, attributes={"stage": "curation"})
     if deleted:
         _age_deleted_counter.add(deleted, attributes={"stage": "curation"})
@@ -450,7 +441,7 @@ async def backfill_curations(ctx: Context = TaskiqDepends()) -> None:
        問題) が起きると失敗ハンドラが ``curation:hold`` を立てる。hold 中は
        confirmed に失敗する AI 呼び出しを避けるため run 全体を skip する。
     2. **年齢削除**: 通常窓 (``[after, before)``) から落ちた 7 日超の未処理記事は
-       「分析価値なし」として監査を焼いてから物理削除する (P2 = silent loss 解消)。
+       「分析価値なし」として監査を焼いてから物理削除する。
     3. **通常再投入**: 窓内の child-NULL 記事を ID-only な ``CurationTrigger`` で
        kiq する。precondition 判定 / Ready 構築は下流 Stage 3 task に委ねる
        (Ready build blocked audit で観測可能)。
@@ -641,13 +632,8 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
     """in-scope / out-of-scope assessment が無い Extraction を発見して
     assess_content を再投入する。
 
-    案 3 (厚い Ready + 下流 Stage 自身が処理開始時に構築): maintenance は
-    「投入数を見る」役割に縮退し、precondition 検証 + Ready 構築は下流 Stage 4
-    task に委ねる。各 curation_id を ``AssessmentTrigger`` に詰めて kiq に
-    流すだけ。通常窓から落ちた未 assessment curation は、保全価値のある部分結果
-    を残すため削除せず ``assessment_backfill_exclusions`` に current-state
-    sentinel を作る。stale trigger (既 assess 済など) は Stage 4 task の
-    ``assess_content_skipped`` ログで観測する。
+    maintenance は投入対象を見つけ、precondition 検証と Ready 構築は下流 task に
+    委ねる。通常窓から落ちた未 assessment curation は削除せず exclusion を作る。
     """
     session_factory = ctx.state.session_factory
     run_id = _new_backfill_run_id()
@@ -745,9 +731,7 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
             logger.warning("backfill_assessments_daily_budget_exhausted", found=found)
             return
 
-        # 案 3: maintenance も上流相当 → ID のみ enqueue。precondition 検証は
-        # Stage 4 Task 自身が処理開始時に行う。stale trigger は Stage 4 の
-        # ``assess_content_skipped`` ログで観測する。
+        # ID のみ enqueue し、precondition 検証は Stage 4 task に委ねる。
         enqueued = 0
         failed = 0
         for target in targets[:granted]:
@@ -839,11 +823,8 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
 async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
     """embedding NULL の analysis を発見し ``generate_embedding`` を再投入する。
 
-    案 3 (厚い Ready + 下流 Stage 自身が処理開始時に構築): maintenance は
-    「投入数を見る」役割に縮退し、precondition 検証 + Ready 構築は下流 Stage 5
-    task に委ねる。各 analysis_id を ``EmbeddingTrigger`` に詰めて kiq に流すだけ。
-    stale trigger (既 embedded など) は Stage 5 task の
-    ``generate_embedding_skipped`` ログで観測する。
+    maintenance は投入対象を見つけ、precondition 検証と Ready 構築は下流 task に
+    委ねる。既に処理済みの stale trigger は Stage 5 task 側で観測する。
     """
     session_factory = ctx.state.session_factory
     run_id = _new_backfill_run_id()
@@ -939,9 +920,7 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
             logger.warning("backfill_embeddings_daily_budget_exhausted", found=found)
             return
 
-        # 案 3: maintenance も上流相当 → ID のみ enqueue。precondition 検証は
-        # Stage 5 Task 自身が処理開始時に行う。stale trigger は Stage 5 の
-        # ``generate_embedding_skipped`` ログで観測する。
+        # ID のみ enqueue し、precondition 検証は Stage 5 task に委ねる。
         enqueued = 0
         failed = 0
         for target in targets[:granted]:

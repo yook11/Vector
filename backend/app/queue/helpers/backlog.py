@@ -193,14 +193,7 @@ class PipelineBacklog:
         created_after: datetime,
         limit: int,
     ) -> list[int]:
-        """curation はあるが analysis / rejection が無い Curation ID を返す
-        (Stage 2b 残)。
-
-        article 基準の age window を維持しつつ、返却列を ``Article.id`` から
-        ``ArticleCuration.id`` に変えた版 (案 3: backfill_assessments が
-        ``AssessmentTrigger(curation_id=...)`` を kiq するため、Article 起点
-        の 2-hop fetch は不要)。
-        """
+        """curation はあるが analysis / rejection が無い Curation ID を返す。"""
         stmt = (
             select(ArticleCuration.id)
             .join(Article, Article.id == ArticleCuration.article_id)

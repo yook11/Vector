@@ -1,8 +1,7 @@
 """``app.analysis.gemini_error_translator`` の golden table テスト。
 
-analysis pipeline 内 Stage 3/4/5 で共有される SDK 例外 → ``AIProvider*Error`` 分類を
-1 ファイルに集約する。Stage 固有の判定 (ValidationError / response shape /
-finish_reason) は本テストの対象外 — stage-local test に残る。
+analysis pipeline 内で共有される SDK 例外 → ``AIProvider*Error`` 分類を検証する。
+ValidationError / response shape / finish_reason など stage 固有の判定は対象外。
 
 ``is_context_length_error`` は status guard (INVALID_ARGUMENT / DEADLINE_EXCEEDED)
 を持つため、無関係 status の APIError に偶然 pattern が混入しても誤分類しない
@@ -48,7 +47,7 @@ def _server_error(
 def _api_error(
     *, code: int, status: str, message: str = "msg"
 ) -> genai_errors.APIError:
-    """legacy ``APIError`` 直接 (Stage 3 既存テスト互換ルート)。"""
+    """``APIError`` 直接の分類ルート。"""
     response_json = {"error": {"code": code, "status": status, "message": message}}
     return genai_errors.APIError(code, response_json)
 
@@ -91,11 +90,10 @@ def test_server_error_translates_to_service_unavailable() -> None:
 
 
 def test_leaked_key_message_is_fixed_string_not_sdk_echo() -> None:
-    """red-team chain γ-1: key prefix を含む SDK message が ``__str__`` に出ない。
+    """key prefix を含む SDK message が ``__str__`` に出ない。
 
-    Phase 4: translator は ``AIProviderConfigurationError()`` を引数なしで返し、
-    ``__str__`` は SAFE_ATTRS=("CODE",) 経路で ``CODE='ai_error_configuration'``
-    のみを返す (= SDK 由来の key prefix / URL が構造的に乗らない契約)。
+    translator は ``AIProviderConfigurationError()`` を引数なしで返し、
+    ``__str__`` は ``CODE='ai_error_configuration'`` のみを返す。
     """
     sdk_message = (
         "API key AIzaSyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q has been "
@@ -123,7 +121,7 @@ def test_leaked_key_message_is_fixed_string_not_sdk_echo() -> None:
         (401, "UNAUTHENTICATED"),
         (403, "PERMISSION_DENIED"),
         (404, "NOT_FOUND"),
-        (400, "FAILED_PRECONDITION"),  # status 優先評価の証跡
+        (400, "FAILED_PRECONDITION"),  # status 優先評価の確認
     ],
 )
 def test_config_status_translates_to_configuration_error(
@@ -227,12 +225,12 @@ def test_code_429_without_status_routes_to_rate_or_quota() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Legacy APIError shape (Stage 3 既存 test 互換)
+# APIError 形状
 # ---------------------------------------------------------------------------
 
 
 def test_legacy_api_error_unauthenticated_classifies_as_configuration() -> None:
-    """``APIError`` 直接でも分類が成立する (Stage 3 既存テストの形状)。"""
+    """``APIError`` 直接でも分類が成立する。"""
     exc = _api_error(code=401, status="UNAUTHENTICATED", message="invalid key")
     translated = translate_gemini_error(exc)
     assert isinstance(translated, AIProviderConfigurationError)

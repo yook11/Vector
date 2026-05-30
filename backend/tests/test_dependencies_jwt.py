@@ -1,6 +1,6 @@
-"""内部 JWT decode の構造的検証テスト (red-team C2 / AUTH-N3 + AUTH-N2)。
+"""内部 JWT decode の構造的検証テスト。
 
-C2 修正後の `_decode_internal_jwt` が以下を構造的に reject することを担保する:
+`_decode_internal_jwt` が以下を構造的に reject することを担保する:
 - exp 不在 (永続 admin 化攻撃の起点)
 - exp 切れ
 - iss 不一致 / 不在
@@ -51,7 +51,7 @@ class TestInternalJwtDecode:
         assert str(user.id) == _USER_ID
 
     async def test_missing_exp_rejected(self) -> None:
-        """C2 直接修正: exp 不在は 401 (PR 前は素通りして永続 admin 化)。"""
+        """exp 不在は 401。"""
         claims = _valid_claims()
         del claims["exp"]
         token = _encode(claims)

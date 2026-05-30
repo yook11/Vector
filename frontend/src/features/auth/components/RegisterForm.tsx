@@ -19,9 +19,9 @@ import { signUp } from "@/lib/auth/auth-client";
 import { RegisterSchema } from "../schemas/auth";
 import type { SignUpError } from "./_auth-types";
 
-// Better Auth signUp.email が返す既知エラーコード → ユーザ向け固定文言。
-// allowlist 設計: 未知コードは generic 文言に丸めて内部実装語彙の漏洩を防ぐ。
-// コード根拠: node_modules/@better-auth/core/dist/error/codes.mjs
+// Better Auth signUp.email の既知エラーコードだけを
+// ユーザ向け文言に変換する。
+// 未知コードは generic 文言に丸め、内部実装語彙を出さない。
 const REGISTER_ERROR_MESSAGES: Record<string, string> = {
   USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL:
     "An account with this email already exists",
@@ -70,8 +70,8 @@ function resolveAuthError(authError: SignUpError): {
       return { fieldErrors: { email: message }, focus: "email" };
     }
     if (code === "PASSWORD_TOO_SHORT" || code === "PASSWORD_TOO_LONG") {
-      // 旧コードは PASSWORD 系も displayName ref に focus する bug があった。
-      // ここで password に振り分けることで bug を構造的に解消。
+      // password 系エラーは password field に紐付け、
+      // focus 先も password に固定する。
       return { fieldErrors: { password: message }, focus: "password" };
     }
   }
@@ -177,10 +177,8 @@ export function RegisterForm() {
               {formError}
             </div>
           )}
-          {/* XSS 対策 Step 1: フロントエンド側の入力ガイド。
-              maxLength は UX の即時フィードバック、検証本体は zod (regex は
-              Unicode `\p{L}\p{N}` で日本語通過、HTML5 pattern は撤去済)。
-              セキュリティ本体は backend (攻撃者は browser を経由せず叩ける)。 */}
+          {/* displayName の入力ガイド。
+              maxLength は UX 用で、検証本体は zod schema 側に集約する。 */}
           <div className="space-y-2">
             <Label htmlFor="displayName">Display Name</Label>
             <Input

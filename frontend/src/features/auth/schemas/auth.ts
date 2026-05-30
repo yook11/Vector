@@ -10,10 +10,8 @@ export const LoginSchema = z.object({
   password: z.string().min(1, "Password is required"),
 });
 
-// HTML5 input pattern は `u` flag を持たず `\w` が ASCII のみ評価されるため、
-// 旧 RegisterForm.tsx の `pattern="[\w\s\-]+"` は日本語 displayName を弾いていた
-// (i18n bug)。検証本体を zod 側 (Unicode property `\p{L}` `\p{N}`) に移し、
-// HTML5 pattern 属性は撤去する。
+// HTML5 input pattern は `u` flag を持たないため使わず、
+// zod の Unicode property regex で displayName を検証する。
 const DISPLAY_NAME_PATTERN = /^[\p{L}\p{N}_ -]+$/u;
 
 // 空文字 ("") を undefined に正規化したい一方、`.regex(...)` は空文字を fail させる。

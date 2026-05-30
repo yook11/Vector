@@ -2,10 +2,6 @@
 
 プロバイダー独立な判定プロンプト (``ASSESSMENT_PROMPT``) を保持する。
 Gemini / DeepSeek の両 assessor から import される。
-
-PR3 で ``to_domain`` 関数 (``ClassificationRawResponse`` → ``AssessmentResult``
-詰め替え) を削除した。詰め替えは ``parse.py::parse_assessment`` (PR2 で導入) に
-集約されている。
 """
 
 from __future__ import annotations

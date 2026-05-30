@@ -80,6 +80,5 @@ def parse_assessment(payload: dict[str, Any]) -> AssessmentResult:
             events=events,
         )
     except (KeyError, ValueError, ValidationError) as exc:
-        # Phase 4: 旧 message 引数廃止 (Pydantic ValidationError は payload 値を
-        # 含みうる経路)。__cause__ 連鎖は残るので debug 時は traceback で辿れる。
+        # ValidationError は payload 値を含みうるため、公開 message には載せない。
         raise AssessmentResponseInvalidError() from exc
