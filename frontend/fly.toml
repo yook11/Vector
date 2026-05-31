@@ -30,4 +30,5 @@ primary_region = 'nrt'
 # frontend/src/lib/api/internal-config.ts が起動時に host が *.flycast で
 # 終わることを fail-closed 検証する (NODE_ENV=production narrowing)。
 [env]
-  INTERNAL_API_URL = "http://your-vector-backend-app.flycast:8000/api/v1"
+  INTERNAL_API_URL = "http://your-vector-core-app.flycast:8000/api/v1"
+  BETTER_AUTH_URL = "https://your-vector-frontend-app.fly.dev"

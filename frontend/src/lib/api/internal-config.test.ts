@@ -35,7 +35,7 @@ const DEV_HOST_URLS = [
   "http://127.0.0.1:8000/api/v1",
 ] as const;
 
-const FLYCAST_URL = "http://your-vector-backend-app.flycast:8000/api/v1";
+const FLYCAST_URL = "http://your-vector-core-app.flycast:8000/api/v1";
 
 describe("assertAllowedInternalApiUrl — global allowlist (全環境共通)", () => {
   it.each(DEV_HOST_URLS)("development では dev host を許可: %s", (url) => {
