@@ -79,6 +79,11 @@ primary_region = 'nrt'
 # (deploy 設定の可視化を優先)。
 [env]
   ENV = "production"
+  # ブラウザ起源の CORS allow_origins 用 (config.py の frontend_url、production 必須)。
+  # 独自ドメインは当面使わないため Fly デフォルト公開ドメイン (frontend は
+  # force_https)。独自ドメイン化する場合は fly certs add 後に本値と frontend の
+  # BETTER_AUTH_URL を更新する。非秘密のため [env] に置いて commit する。
+  FRONTEND_URL = "https://your-vector-frontend-app.fly.dev"
   # backend → frontend revalidate 通知の宛先 (flycast 内部通信)。
   # backend/app/config.py の _enforce_flycast_in_production が production で
   # *.flycast 以外を拒否するため、本値と ENV="production" の組合せで起動時に
