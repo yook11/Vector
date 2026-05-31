@@ -5,22 +5,37 @@
 # stock redis image を使い、AOF + volume で永続化し、broker message を絶対 evict
 # しない (noeviction)。
 #
+# 認証は Redis ACL で 2 user に分離する (v1 shared-password は廃止):
+# - core   = 全 stream / 全 key / 全 command (crown-jewel 側、信頼)。
+# - collect = 自分が触る stream (pipeline:metadata/content/analysis) と
+#   autoclaim lock / result key のみ。embedding/maintenance/trend/briefing stream・
+#   *:hold / backfill:budget:* / ratelimit:* は **不可視**。FLUSHALL/CONFIG/KEYS 等の
+#   @dangerous も拒否。これで collect 侵害時の Redis blast radius を自 stream に限定。
+#   残留リスク: collect は自 3 stream への XADD/EVAL を持つため自 stream の flood/削除と
+#   共有 result key (taskiq:*) の読取は可能。前者は maxlen=10_000 + 各 stage の DB
+#   precondition 再検証、後者は result が記事派生データ (秘密無) であることで受容。
+#
 # 前提 volume (初回のみ):
 #   fly volumes create vector_redis_data -a your-vector-redis-app -r nrt -s 1
-# secret (初回のみ、強 random):
-#   fly secrets set REDIS_PASSWORD=<random> -a your-vector-redis-app
+# secret (初回のみ、各々 強 random・空白/引用符を含まない charset):
+#   fly secrets set REDIS_CORE_PASSWORD=<random> REDIS_COLLECT_PASSWORD=<random> \
+#     -a your-vector-redis-app
 # deploy:
 #   fly deploy -c infra/redis/fly.toml
 #   fly ips list -a your-vector-redis-app   # public IP が無い (空) ことを確認
 #
-# core/collect 側の REDIS_URL secret:
-#   redis://:<REDIS_PASSWORD>@your-vector-redis-app.internal:6379/0
+# core/collect 側の REDIS_URL secret (user 名込み):
+#   core:    redis://core:<CORE_PW>@your-vector-redis-app.internal:6379/0
+#   collect: redis://collect:<COLLECT_PW>@your-vector-redis-app.internal:6379/0
+#   ※app 境界 = secret 境界。各 Fly app に対応 user の URL だけを set する
+#     (brokers.py は settings.redis_url を読むのみ。code 変更不要)。
 #
-# v1 のリスク受容: requirepass は単一 password で、collect も同じ URL を持つため
-# collect 侵害時は Redis 全体 (全 stream write / hold・budget key 改竄 / stream 削除)
-# に届く。compensating controls (DB precondition 再検証 / AI daily budget / stage
-# hold) で受け止め、collect を自 stream に限定する Redis ACL は fast-follow
-# (plan file Part 4 / Part 6)。
+# ACL command/key 集合は taskiq RedisStreamBroker + RedisAsyncResultBackend +
+# autoclaim lock の実発行コマンドから導出 (XADD/XREADGROUP/XACK/XAUTOCLAIM/XGROUP
+# = @stream, result SET/GET/EXISTS = @read/@write, lock SET/EVAL = @write/@scripting,
+# AUTH/HELLO = @connection)。**deploy 前に dev で collect user creds に絞り
+# collection→completion→analysis 橋渡しが通ることを必ず検証する** (redis-py が接続時に
+# 発行する周辺コマンドの取りこぼしはここで顕在化する)。
 #
 # See https://fly.io/docs/reference/configuration/
 
@@ -34,15 +49,17 @@ primary_region = 'nrt'
 # .internal アドレスを与えるため、同 org の core/collect は public IP 無しで
 # your-vector-redis-app.internal:6379 に到達できる。
 #
-# $REDIS_PASSWORD を展開させるため sh -c 経由で起動する (redis image の ENTRYPOINT
-# は password を直接展開しない)。設計値:
-# - requirepass: REDIS_PASSWORD secret で AUTH 必須化 (no-auth 接続を拒否)
+# 起動は sh -c 経由: secret の 2 password を展開して ACL file を /tmp に生成し
+# (durable volume には password を置かない)、--aclfile で起動する。設計値:
+# - user 分離 (上のヘッダ参照): default off / core 全権 / collect 最小権限。
+#   default off により no-user / 旧 requirepass 接続を拒否 (fail-closed)。
 # - appendonly yes + --dir /data (volume): restart で in-flight message を失わない
+#   (ACL file は /tmp で揮発し restart 毎に secret から再生成)。
 # - maxmemory-policy noeviction: broker message を絶対に evict しない
-#   (stream 長は broker 側 maxlen=10_000 で bounded: app/queue/brokers.py)
-# - bind :: : 6PN (IPv6) で listen する
+#   (stream 長は broker 側 maxlen=10_000 で bounded: app/queue/brokers.py)。
+# - bind :: : 6PN (IPv6) で listen する。
 [processes]
-  redis = "sh -c 'exec redis-server --requirepass \"$REDIS_PASSWORD\" --appendonly yes --dir /data --maxmemory 256mb --maxmemory-policy noeviction --bind ::'"
+  redis = "sh -c 'umask 077; { echo \"user default off\"; echo \"user core on >$REDIS_CORE_PASSWORD ~* &* +@all\"; echo \"user collect on >$REDIS_COLLECT_PASSWORD resetchannels ~pipeline:metadata ~pipeline:content ~pipeline:analysis ~autoclaim:taskiq:pipeline:metadata ~autoclaim:taskiq:pipeline:content ~taskiq:* +@connection +@read +@write +@stream +@scripting -@dangerous\"; } > /tmp/users.acl; exec redis-server --aclfile /tmp/users.acl --appendonly yes --dir /data --maxmemory 256mb --maxmemory-policy noeviction --bind ::'"
 
 [mounts]
   source = "vector_redis_data"

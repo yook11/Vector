@@ -48,6 +48,11 @@ def _make_broker(queue_name: str) -> RedisStreamBroker:
             RedisAsyncResultBackend(
                 redis_url=settings.redis_url,
                 result_ex_time=3600,
+                # result key を taskiq:<task_id> に名前空間化する。prefix_str 無しだと
+                # bare uuid となり Redis ACL で stream key と区別できない。collect の
+                # ~taskiq:* grant を実在させ set_result の NOPERM を防ぐ
+                # (infra/redis/fly.toml の ACL と対)。
+                prefix_str="taskiq",
             )
         )
         # OTel middleware を **最初** に挿す。pre_execute は登録順 (FIFO) ・
