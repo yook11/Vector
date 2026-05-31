@@ -2,7 +2,7 @@
 # chain α Better Auth 側補強 + chain ι 解消の手動 PoC。
 #
 # 前提:
-#   - docker compose up -d frontend redis-rl
+#   - docker compose up -d frontend redis-rl db
 #   - frontend は dev (NODE_ENV=development) で起動。production fail-closed は
 #     fly deploy 後に別途 Step 4 で観察する (plan の検証手順参照)。
 #
@@ -11,8 +11,10 @@
 #   B) rotation-XFF 8 連発 → dev では bucket 別 (Better Auth が
 #      ["fly-client-ip", "x-forwarded-for"] で fallback する設定のため)、
 #      production deploy 後は単一 bucket に集約される
-#   C) redis-rl 内に baRateLimit:* (Better Auth 経由) と rl:ip:* (proxy.ts 経由)
-#      の 2 系統 key が分離して存在する
+#   C) Better Auth ログイン limiter は DB-backed (ADR-007) に移行済み:
+#      - redis-rl 内に baRateLimit:* は **存在しない** (auth カウンターは Redis を使わない)
+#      - 代わりに auth."rateLimit" テーブルの行が増える
+#      - rl:ip:* (proxy.ts 経由) は従来どおり redis-rl に存在する
 set -euo pipefail
 TARGET="${TARGET:-http://localhost:3000/api/auth/sign-in/email}"
 PAYLOAD='{"email":"red-team-test@local","password":"WRONG"}'
@@ -41,8 +43,11 @@ for i in $(seq 1 8); do
 done
 
 echo ""
-echo "=== C: redis-rl bucket 観察 ==="
-echo "--- baRateLimit:* (Better Auth 経由 / chain ι 解消の証跡) ---"
+echo "=== C: limiter 保存先の観察 (auth=DB / proxy=redis-rl) ==="
+echo "--- baRateLimit:* in redis-rl (期待: 空 = auth は Redis を使わない / ADR-007) ---"
 docker compose exec -T redis-rl redis-cli KEYS "baRateLimit:*" | head -10
-echo "--- rl:ip:* (proxy.ts sliding window log 経由) ---"
+echo "--- auth.\"rateLimit\" rows in DB (期待: A/B の試行で行が増える) ---"
+docker compose exec -T db psql -U vector -d vector \
+  -c 'SELECT "key","count","lastRequest" FROM auth."rateLimit" ORDER BY "lastRequest" DESC LIMIT 10;'
+echo "--- rl:ip:* in redis-rl (proxy.ts sliding window log 経由 / 従来どおり存在) ---"
 docker compose exec -T redis-rl redis-cli KEYS "rl:ip:*" | head -10

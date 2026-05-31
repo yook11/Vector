@@ -11,6 +11,8 @@
 //   - 本ファイルの betterAuth(...) 引数は schema に効く範囲で `./auth.ts` と
 //     一致させること。具体的には: database / emailAndPassword /
 //     user.additionalFields / session の各フィールド。
+//   - rateLimit は schema (auth.rateLimit テーブル) に効くため `auth-config.ts`
+//     に集約し runtime と import 共有する (手動同期不要)。
 //   - 例外として `advanced.database.generateId` は意図的に異なる値を持つ:
 //       * runtime (auth.ts): `() => uuidv7()` で UUID v7 (時刻順) を生成
 //       * CLI (本ファイル):  `"uuid"` 文字列で Better Auth CLI に uuid 列型
@@ -21,6 +23,7 @@
 import { betterAuth } from "better-auth";
 import type { PoolClient } from "pg";
 import { Pool } from "pg";
+import { authRateLimit } from "@/lib/auth/auth-config";
 import { poolConfigFromUrl } from "@/lib/auth/pool-ssl";
 import { requireEnv } from "@/lib/env";
 
@@ -52,6 +55,10 @@ export const auth = betterAuth({
     cookieCache: { enabled: false },
   },
   trustedOrigins: [requireEnv("BETTER_AUTH_URL")],
+  // rateLimit.storage:"database" を CLI 側にも渡し、migrate が auth.rateLimit
+  // テーブルを生成するようにする (storage が database でないとテーブルは作られない)。
+  // 設定は runtime (auth.ts) と auth-config.ts で共有する。
+  rateLimit: authRateLimit,
   advanced: {
     database: {
       // 文字列 "uuid" を渡すと CLI は uuid 列型で schema を生成する。runtime

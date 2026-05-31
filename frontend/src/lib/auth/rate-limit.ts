@@ -7,8 +7,9 @@
  * Redis 不通時は fail-open し、warn は 60 秒ごとに出す。identifier は IP のみに
  * 統一し、認証状態に応じた緩和は後段に任せる。
  *
- * Redis client は auth.ts の Better Auth customStorage と共有し、key prefix で
- * proxy 経路と Better Auth 経路を分離する。
+ * 本モジュールの Redis client は proxy.ts の IP limiter 専用 (key prefix rl:ip:*)。
+ * Better Auth のログイン limiter は DB-backed (storage:"database") に移行済みで
+ * Redis を使わない (ADR-007)。
  */
 
 import "server-only";
@@ -59,11 +60,10 @@ function logRedisError(context: string, err: unknown): void {
 /**
  * frontend 内の rate-limit 用 Redis client (singleton)。
  *
- * 本モジュールの `checkRateLimit` (proxy.ts sliding window log) と
- * `auth.ts` の Better Auth `rateLimit.customStorage` で共有する。
+ * proxy.ts の sliding window log (`checkRateLimit`) 専用。
  * REDIS_URL_RL / REDIS_URL 未設定時は null を返し、呼び出し側が fail-open する。
  */
-export function getRateLimitRedisClient(): RedisClientType | null {
+function getRateLimitRedisClient(): RedisClientType | null {
   if (globalForRedis.__vectorRateLimitRedis) {
     return globalForRedis.__vectorRateLimitRedis;
   }

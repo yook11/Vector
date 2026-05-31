@@ -1,6 +1,11 @@
 # ADR-006: Frontend rate limit / cookieCache の戦略
 
 > 日付: 2026-05 / ステータス: Accepted (PR10 で identifier 信頼境界を Fly-Client-IP に切替済)
+>
+> 補足 (2026-05): Better Auth 内蔵ログイン limiter (`/api/auth/*` 専用) の storage を
+> Redis customStorage から DB (`storage:"database"`) へ変更した。Alternative D を
+> DB-storage で実現したもので、Redis 障害時の fail-open 穴を構造的に除去する。
+> 詳細は ADR-007 を参照。本 ADR が扱う proxy.ts の IP limiter は無変更 (Redis + fail-open のまま)。
 
 ## Context
 

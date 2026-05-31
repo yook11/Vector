@@ -293,12 +293,18 @@ services:
   # と物理分離して OOM 道連れを防ぐ。volume なし = restart で 60 秒 sliding window
   # の履歴が消えるが、運用上は許容 (1 分以内に新 bucket が作られる)。internal
   # network 限定で host port expose なし。
+  #
+  # Better Auth のログイン limiter は DB-backed (storage:"database") へ移行済みで
+  # ここには載らない (ADR-007)。本 instance のキーは proxy IP limiter のみで全て
+  # 60 秒 TTL を持つため、eviction は volatile-ttl (残 TTL 短いものから捨てる) が
+  # 正しい。allkeys-lru / noeviction は不可: 後者は満杯時に write を拒否し proxy の
+  # fail-open コードと相まって「満杯時に全体 bypass」を招く。
   redis-rl:
     image: redis:7-alpine
     command: >
       redis-server
       --maxmemory 64mb
-      --maxmemory-policy allkeys-lru
+      --maxmemory-policy volatile-ttl
       --save ""
       --appendonly no
     healthcheck:

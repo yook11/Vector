@@ -123,7 +123,8 @@ Browser
 Redis (taskiq broker) ◄── worker-fetch / worker-analysis (analysis+embedding) / worker-insights
                        ◄── scheduler (metadata / trend_discovery / briefing cron)
 
-Redis (rate-limit, ephemeral) ◄── proxy.ts sliding window log
+Redis (rate-limit, ephemeral) ◄── proxy.ts IP sliding window log (rl:ip:*)
+                                   ※ Better Auth ログイン limiter は DB (auth.rateLimit) 側
 ```
 
 ### Docker Compose サービス一覧 (9 services)
@@ -134,7 +135,7 @@ Redis (rate-limit, ephemeral) ◄── proxy.ts sliding window log
 | `backend` | FastAPI — internal network 限定 |
 | `db` | PostgreSQL 18 + pgvector (`internal: true`、host port 非公開) |
 | `redis` | taskiq broker (本体)、`maxmemory 256mb` + `allkeys-lru` |
-| `redis-rl` | frontend rate-limit 専用 (本体 redis と OOM 道連れを防ぐ物理分離) |
+| `redis-rl` | proxy.ts の IP rate-limit (`rl:ip:*`) 専用 / `volatile-ttl` (本体 redis と OOM 道連れを防ぐ物理分離)。Better Auth ログイン limiter は DB-backed (`auth.rateLimit`, ADR-007) |
 | `worker-fetch` | metadata + content fetch worker (supervisord Pattern B) |
 | `worker-analysis` | AI 分類 / 分析 + Embedding 生成 worker (supervisord Pattern B) |
 | `worker-insights` | Trend Discovery + briefing worker (supervisord Pattern B) |
@@ -240,7 +241,7 @@ stage モジュールは [backend/app/audit/stages/](backend/app/audit/stages/) 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `REDIS_URL` | `redis://redis:6379/0` | taskiq broker (本体) |
-| `REDIS_URL_RL` | `redis://redis-rl:6379/0` | frontend rate-limit 専用 (未設定なら REDIS_URL に fallback) |
+| `REDIS_URL_RL` | `redis://redis-rl:6379/0` | proxy.ts の IP rate-limit (`rl:ip:*`) 専用 (未設定なら REDIS_URL に fallback)。Better Auth ログイン limiter は DB-backed のため Redis 不要 |
 | `REDIS_PORT` | `6379` | host から起動するときの参考値 |
 | `RATE_LIMIT_PER_MIN` | `60` | proxy.ts per-IP sliding window 上限 |
 
