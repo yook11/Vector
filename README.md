@@ -14,10 +14,9 @@ AIで翻訳・要約・インパクト分析を行う投資ダッシュボード
 
 ### 主要機能
 
-- テックニュースの自動収集（**44+ source fetchers** — RSS / Atom / HTML listing / Sitemap、Hacker News API 含む）
-- AI翻訳・要約・インパクト分析（**Gemini + DeepSeek + OpenAI** の multi-provider）
+- テックニュースの自動収集（**45 source fetchers** — RSS / Atom / HTML listing / Sitemap、Hacker News API 含む）
+- AI翻訳・要約・分析（**Gemini + DeepSeek** の multi-provider）
 - 類似記事推薦（pgvector）
-- 重複記事の自動検出・グループ化
 - ウォッチリスト（記事ブックマーク）
 - **Trend Discovery** (`weekly_trends_snapshots`) と **週次 LLM ブリーフィング**
 - **Pipeline Events 監査基盤** — 全ステージの成功/失敗/AI raw response を SQL で再構成可能
@@ -28,23 +27,22 @@ AIで翻訳・要約・インパクト分析を行う投資ダッシュボード
 
 | Layer | Technology | Notes |
 |-------|-----------|-------|
-| Frontend | Next.js 16 (App Router) + TypeScript | Tailwind CSS + shadcn/ui + Biome |
+| Frontend | Next.js 16 (App Router) + React 19 + TypeScript | Tailwind CSS v4 + shadcn/ui + Biome |
 | Backend | FastAPI + **Python 3.13** + SQLModel (SQLAlchemy 2.0 async) | Pydantic v2、非同期処理 |
 | Auth | Better Auth (BFF Proxy) | Cookie ベースセッション + 内部 API ヘッダー認証 |
 | Database | PostgreSQL 18 + pgvector | Alembic マイグレーション、**三重ロール** (vector_app / vector_auth / vector_collect) |
-| AI | **Gemini + DeepSeek + OpenAI** (multi-provider) | Pure DI で `backend/app/brokers.py` に hardcode |
+| AI | **Gemini + DeepSeek** (multi-provider) | Pure DI で [backend/app/queue/composition.py](backend/app/queue/composition.py) に hardcode。Gemini=curation/embedding、DeepSeek=assessment/briefing |
 | Embedding | `gemini-embedding-001` (768-dim halfvec) | pgvector |
-| Task Queue | taskiq + Redis (**6 broker 分離**) | metadata / content / analysis / embedding / trend_discovery / briefing |
+| Task Queue | taskiq + Redis (**7 broker 分離**) | metadata / content / analysis / embedding / trend_discovery / briefing / maintenance |
 | CI/CD | GitHub Actions | lint + test + type check + 4 系統 security gate |
-| Infrastructure | Docker Compose (dev) | **9 services**、internal network 中心 |
+| Infrastructure | Docker Compose (dev) | **13 services** (常駐 9 + db-init 4)、internal network 中心 |
 | Deployment | Fly.io (nrt region, 5 app) | core [fly.core.toml](backend/fly.core.toml) / collect [fly.collect.toml](backend/fly.collect.toml) / frontend [fly.toml](frontend/fly.toml) / redis [fly.toml](infra/redis/fly.toml) / redis-rl [fly.toml](infra/redis-rl/fly.toml) |
 
 ## Prerequisites
 
 - Docker & Docker Compose
-- **Gemini API Key** ([Google AI Studio](https://aistudio.google.com/) で取得) — Stage 1 と Embedding に使用
-- **DeepSeek API Key** (DeepSeek 公式) — Stage 4 (assessor) に使用
-- **OpenAI API Key** (任意) — fallback / 比較用
+- **Gemini API Key** ([Google AI Studio](https://aistudio.google.com/) で取得) — curation (Stage 3) と embedding (Stage 5) に使用
+- **DeepSeek API Key** (DeepSeek 公式) — assessment (Stage 4) と週次ブリーフィングに使用
 
 ## Getting Started
 
@@ -52,10 +50,10 @@ AIで翻訳・要約・インパクト分析を行う投資ダッシュボード
 # 1. Clone & setup
 cp .env.example .env
 # .env に以下を設定:
-#   - GEMINI_API_KEY / DEEPSEEK_API_KEY / OPENAI_API_KEY
-#   - POSTGRES_PASSWORD / POSTGRES_AUTH_PASSWORD / POSTGRES_APP_PASSWORD (それぞれ openssl rand -hex 32)
-#   - BETTER_AUTH_SECRET / INTERNAL_API_SECRET (それぞれ openssl rand -hex 32)
-#   ※ secrets が未設定または弱い値だと backend / frontend は起動拒否
+#   - GEMINI_API_KEY / DEEPSEEK_API_KEY
+#   - POSTGRES_PASSWORD / POSTGRES_AUTH_PASSWORD / POSTGRES_APP_PASSWORD / POSTGRES_COLLECT_PASSWORD (それぞれ openssl rand -hex 32)
+#   - BETTER_AUTH_SECRET / BFF_JWT_SIGNING_SECRET / REVALIDATE_BEARER_SECRET (それぞれ openssl rand -hex 32、後者 2 つは別の値)
+#   ※ secrets が未設定・弱い値・BFF と revalidate が同値だと backend / frontend は起動拒否
 
 # 2. Start all services
 docker compose up -d --build
@@ -108,26 +106,26 @@ Browser
   └─► Next.js Frontend / BFF (localhost:3000)
         ├── Better Auth (Cookie-based session, auth schema in PG)
         ├── Server Components → INTERNAL_API_URL (Docker internal)
-        ├── BFF Proxy (/api/proxy/*) → Backend (header auth)
+        ├── BFF Proxy (/api/proxy/*) → Backend (JWT header auth)
         ├── Rate limit (proxy.ts) → redis-rl (separate Redis instance)
         │
         └─► FastAPI Backend (Docker internal only)
-              ├── Header Auth (X-User-ID / X-Internal-Secret)
-              ├── collection/   — News Fetcher (44+ sources: RSS/Atom/HTML/Sitemap)
-              ├── analysis/     — AI 分析 (Gemini extractor / DeepSeek assessor / Gemini embedder)
-              ├── insights/     — trend_discovery (weekly_trends) / briefing (weekly LLM brief)
-              ├── observability/— pipeline_events 監査 (Discriminated Union payload)
-              ├── maintenance/  — back-fill backlog / budget / policy
+              ├── Header Auth (HS256 JWT, BFF_JWT_SIGNING_SECRET)
+              ├── collection/  — News Fetcher (45 sources: RSS/Atom/HTML/Sitemap + Hacker News API)
+              ├── analysis/    — AI 分析 (Gemini curator / DeepSeek assessor / Gemini embedder)
+              ├── insights/    — trend_discovery (weekly_trends) / briefing (weekly LLM brief)
+              ├── audit/       — pipeline_events 監査 (Discriminated Union payload)
+              ├── queue/       — taskiq broker / scheduler / composition (Pure DI)
               └── PostgreSQL 18 + pgvector (三重ロール: vector_app / vector_auth / vector_collect)
 
-Redis (taskiq broker) ◄── worker-fetch / worker-analysis (analysis+embedding) / worker-insights
-                       ◄── scheduler (metadata / trend_discovery / briefing cron)
+Redis (taskiq broker) ◄── worker-fetch / worker-analysis (analysis+embedding+maintenance) / worker-insights
+                       ◄── scheduler (metadata / trend_discovery / briefing / maintenance cron)
 
 Redis (rate-limit, ephemeral) ◄── proxy.ts IP sliding window log (rl:ip:*)
                                    ※ Better Auth ログイン limiter は DB (auth.rateLimit) 側
 ```
 
-### Docker Compose サービス一覧 (9 services)
+### Docker Compose サービス一覧 (常駐 9 + db-init 4 = 13 services)
 
 | Service | Description |
 |---------|------------|
@@ -159,6 +157,7 @@ Redis (rate-limit, ephemeral) ◄── proxy.ts IP sliding window log (rl:ip:*)
 | 週次トレンドスナップショット | 週次ダイジェスト用の集約結果 | `WeeklyTrendsSnapshot` |
 | 週次ブリーフィング | 週次 LLM 生成サマリー (カテゴリ別) | `WeeklyBriefing` |
 | パイプラインイベント | 全 stage 監査ログ (Discriminated Union payload) | `PipelineEvent` |
+
 ### ニュース処理パイプライン
 
 ```
@@ -170,14 +169,14 @@ taskiq scheduler (cron) → broker_metadata 投函
   ↓
 [Stage 2] completion       — 全文取得 (trafilatura) で記事本体を充足
   ↓
-[Stage 3] curation         — Gemini extractor (タイトル正規化 / 構造抽出)
+[Stage 3] curation         — Gemini curator (gemini-2.5-flash-lite、タイトル正規化 / 構造抽出)
   ↓
-[Stage 4] assessment       — DeepSeek assessor (signal/noise + Category + Topic)
+[Stage 4] assessment       — DeepSeek assessor (deepseek-v4-flash、signal/noise + Category + Topic)
   ↓
 [Stage 5] embedding        — Gemini Embedding (gemini-embedding-001, 768-dim halfvec)
 
-並行: back-fill 3 系統 (curation / assessment / embedding、kill switch あり)
-並行: Trend Discovery cron (weekly_trends snapshot)、briefing cron (週次 LLM ブリーフィング)
+並行 (broker_maintenance): back-fill 3 系統 (curation / assessment / embedding、kill switch あり) + pipeline_events retention purge
+並行 (insights): Trend Discovery cron (weekly_trends snapshot) / 週次 briefing (DeepSeek)
 
 各 stage は pipeline_events に監査記録 (Discriminated Union payload)。
 業務処理と監査書込はアトミック (成功/skip パスは同 tx 内、失敗は別 tx で永続化)。
@@ -187,92 +186,44 @@ stage モジュールは [backend/app/audit/stages/](backend/app/audit/stages/) 
 
 ## Environment Variables
 
-`.env.example` を参照。主要な変数 (全 26 種):
+全変数の網羅は [.env.example](.env.example) が SSoT (現状 26 種)。ここでは README で補足すべき**非自明な制約**のみ挙げる。
 
-### Deployment
+### 起動時に検証される secrets ([backend/app/config.py](backend/app/config.py))
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ENV` | `development` | `production` で `/docs` `/redoc` `/openapi.json` を無効化 |
+| 変数 | 制約 |
+|------|------|
+| `BFF_JWT_SIGNING_SECRET` | BFF→Backend の HS256 JWT 署名鍵。**32 文字未満 / 既知の弱い値で起動拒否** |
+| `REVALIDATE_BEARER_SECRET` | Backend→Frontend revalidate 通知の Bearer。同じく強度検証。**`BFF_JWT_SIGNING_SECRET` と同値だと起動拒否** (片方漏洩で両境界が陥落するため) |
+| `BETTER_AUTH_SECRET` | Better Auth セッション署名。`openssl rand -hex 32` |
+| `DATABASE_URL` | 公開済 dev placeholder / 弱秘密パターンを起動拒否。`ENV=production` では `sslmode=require` 以上を強制 (平文不可) |
+| `INTERNAL_FRONTEND_BASE_URL` | host allowlist (`localhost` / `127.0.0.1` / `frontend` / `*.flycast`)。`ENV=production` では `*.flycast` のみ (revalidate 通知先の SSRF 遮断) |
 
-### Database (三重ロール)
+> dev fallback は撤去済み。weak default / placeholder は Settings 検証で起動失敗する。
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `POSTGRES_USER` | `vector` | Table owner / migration runner |
-| `POSTGRES_PASSWORD` | — | `vector` ロールのパスワード (必須、強い乱数) |
-| `POSTGRES_DB` | `vector` | DB 名 |
-| `POSTGRES_AUTH_PASSWORD` | — | `vector_auth` ロール (frontend Better Auth 専用) |
-| `POSTGRES_APP_PASSWORD` | — | `vector_app` ロール (backend core: api / worker-analysis / worker-insights / scheduler) |
-| `POSTGRES_COLLECT_PASSWORD` | — | `vector_collect` ロール (collect worker 専用、acquisition+completion が触る 4 table のみの最小権限) |
+### Database — 三重ロール
 
-### AI
+table owner / migration runner の `vector` を頂点に、用途別の最小権限ロールを分離する:
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `GEMINI_API_KEY` | — | Stage 1 (extraction) + Embedding 用 (必須) |
-| `DEEPSEEK_API_KEY` | — | Stage 2 (classification) 用 (必須) |
-| `OPENAI_API_KEY` | — | fallback / 比較用 (任意) |
+| ロール | 担当 | パスワード変数 |
+|--------|------|----------------|
+| `vector_app` | backend core (api / worker-analysis / worker-insights / scheduler) の `public.*` DML | `POSTGRES_APP_PASSWORD` |
+| `vector_auth` | frontend Better Auth の `auth.*` DML | `POSTGRES_AUTH_PASSWORD` |
+| `vector_collect` | collect worker 専用、acquisition + completion が触る 4 table のみの最小権限 | `POSTGRES_COLLECT_PASSWORD` |
 
-> Provider 切替は `backend/app/brokers.py` に hardcode する Pure DI 設計。
-> env による provider switch は持たない。
+本番 (Neon) では `DATABASE_URL` / `MIGRATION_DATABASE_URL` / `AUTH_DATABASE_URL` をロール別に分け、いずれも SSL verify-full に格上げする。
 
-### News Fetcher
+### AI provider
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `FETCH_INTERVAL_HOURS` | `12` | スケジューラー実行間隔 |
-| `MAX_ARTICLES_PER_FETCH` | `50` | 1 回のフェッチ上限 |
-| `MAX_ANALYSIS_PER_RUN` | `10` | 1 回の分析対象上限 |
-| `CONTENT_MAX_LENGTH` | `8000` | 全文抽出の最大文字数 |
+`GEMINI_API_KEY` / `DEEPSEEK_API_KEY` のみ使用 (Gemini=curation/embedding、DeepSeek=assessment/briefing)。provider・model 切替は [backend/app/queue/composition.py](backend/app/queue/composition.py) に hardcode する Pure DI 設計で、env による switch は持たない。`OPENAI_API_KEY` は `.env.example` に残るが現状 AI 分析には未使用 (RSS source "OpenAI News" の取得のみ)。
 
-### Auth (Better Auth + BFF Proxy)
+### Redis
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `BETTER_AUTH_SECRET` | — | **未設定なら起動拒否**。`openssl rand -hex 32` で生成 |
-| `BETTER_AUTH_URL` | `http://localhost:3000` | コールバック URL |
-| `INTERNAL_API_SECRET` | — | **未設定または 32 文字未満なら起動拒否**。BFF→Backend 認証 |
+`REDIS_URL` (taskiq broker / 本体) と `REDIS_URL_RL` (proxy.ts の IP rate-limit `rl:ip:*` 専用) を物理分離し、rate-limit 側の OOM が broker を道連れにしない設計。`REDIS_URL_RL` 未設定時は `REDIS_URL` に fallback。Better Auth ログイン limiter は DB-backed (`auth.rateLimit`, ADR-007) のため Redis 非依存。
 
-> dev fallback は撤去済み (PR #405 / #406 / #407)。weak default や placeholder は
-> backend の Settings 検証で起動失敗する。
+### その他
 
-### Task Queue
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `REDIS_URL` | `redis://redis:6379/0` | taskiq broker (本体) |
-| `REDIS_URL_RL` | `redis://redis-rl:6379/0` | proxy.ts の IP rate-limit (`rl:ip:*`) 専用 (未設定なら REDIS_URL に fallback)。Better Auth ログイン limiter は DB-backed のため Redis 不要 |
-| `REDIS_PORT` | `6379` | host から起動するときの参考値 |
-| `RATE_LIMIT_PER_MIN` | `60` | proxy.ts per-IP sliding window 上限 |
-
-### Backfill kill switches
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `BACKFILL_EXTRACTIONS_ENABLED` | `true` | extraction back-fill の有効化 |
-| `BACKFILL_CLASSIFICATIONS_ENABLED` | `true` | classification back-fill の有効化 |
-| `BACKFILL_EMBEDDINGS_ENABLED` | `true` | embedding back-fill の有効化 |
-
-### App URLs
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `FRONTEND_URL` | `http://localhost:3000` | CORS 許可オリジン |
-| `INTERNAL_API_URL` | `http://backend:8000/api/v1` | SSR からの Backend 接続先 (Docker 内部) |
-| `INTERNAL_FRONTEND_BASE_URL` | `http://frontend:3000` | backend → frontend internal (revalidate 通知など) |
-| `NEXT_PUBLIC_API_URL` | `http://localhost:8000/api/v1` | Frontend public API base |
-
-### E2E Test Seed (CI 専用、本番設定禁止)
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `E2E_SEED_USER_EMAIL` | `e2e@example.com` | seed_e2e_users.py が読む |
-| `E2E_SEED_USER_PASSWORD` | `Password123!` | 同上 |
-| `E2E_SEED_ADMIN_EMAIL` | `e2e-admin@example.com` | 同上 |
-| `E2E_SEED_ADMIN_PASSWORD` | `Password123!` | 同上 |
-
-> seed script は `ENV=production` で fail-fast。env 自体を本番に置かないのが第一の防護壁。
+- Backfill kill switch: `BACKFILL_CURATIONS_ENABLED` / `BACKFILL_ASSESSMENTS_ENABLED` / `BACKFILL_EMBEDDINGS_ENABLED`
+- E2E seed (`E2E_SEED_*`) は CI 専用。seed script は `ENV=production` で fail-fast するため本番 env には置かない
 
 ## Development
 
@@ -288,49 +239,22 @@ uvx pre-commit install
 
 ### CI security gate
 
-PR / push に対し以下のセキュリティスキャンが GitHub Actions 上で **blocking gate** として自動実行される
-([.github/workflows/security-pr.yml](.github/workflows/security-pr.yml)):
+PR / push に対し GitHub Actions 上で **blocking gate** が自動実行される。詳細設定は各 workflow が SSoT:
 
-- **osv-scanner**: `backend/uv.lock` + `frontend/package-lock.json` を OSV.dev 脆弱性 DB と照合 (`fail-on-vuln: true`)
-- **npm audit**: frontend の production 依存を npm Advisory DB と照合 (`--audit-level=high`)
-- **Semgrep CE**: backend / frontend のソースを `p/owasp-top-ten` + `p/security-audit` ruleset で静的解析
+- [security-pr.yml](.github/workflows/security-pr.yml) — osv-scanner (lockfile SCA) + npm audit (`--audit-level=high`) + Semgrep CE (`p/owasp-top-ten` + `p/security-audit`)
+- [security-nightly.yml](.github/workflows/security-nightly.yml) — Trivy fs / config scan (HIGH+CRITICAL)
+- [schemathesis-nightly.yml](.github/workflows/schemathesis-nightly.yml) — FastAPI `/openapi.json` と実装の適合性 fuzz (Schemathesis, GET 中心)
+- [ci.yml](.github/workflows/ci.yml) — Ruff / Biome / tsc + unit / integration test + Playwright E2E smoke
 
-新規 finding は CI fail として PR を block する。検出結果は GitHub Actions の Artifacts
-(`osv-results.sarif` / `semgrep-sarif` / `npm-audit-json`) として triage 用に保存される。
-回避策が複雑な finding は `# nosemgrep` (rule 単位) または dep update / 例外 PR で対応する。
-
-加えて nightly に [.github/workflows/security-nightly.yml](.github/workflows/security-nightly.yml) の Trivy fs/config scan が
-HIGH+CRITICAL を `exit-code: '1'` で blocking 実行する。
-
-> **Note**: Vector は private repo + GitHub Free のため Code scanning (GHAS) が
-> 無効。SARIF を Security tab に upload せず Actions Artifacts に保存する設計。
-> GHAS 契約 or repo public 化で `upload-sarif: true` に戻せば Security tab で
-> 一覧確認可能になる。
+新規 finding は CI fail として PR を block する。検出結果は Actions Artifacts に退避する (private repo + GitHub Free のため GHAS Code scanning が無効。SARIF を Security tab に上げず Artifacts に保存する設計)。
 
 ローカル再現:
 
 ```bash
-# OSV-Scanner (Docker 経由)
-docker run --rm -v "${PWD}:/src" -w /src ghcr.io/google/osv-scanner:v2 -r ./
-
-# npm audit
-cd frontend && npm audit --omit=dev --audit-level=high
-
-# Semgrep CE
-pip install semgrep
-semgrep --config=p/owasp-top-ten --config=p/security-audit .
+docker run --rm -v "${PWD}:/src" -w /src ghcr.io/google/osv-scanner:v2 -r ./   # OSV
+cd frontend && npm audit --omit=dev --audit-level=high                          # npm audit
+pip install semgrep && semgrep --config=p/owasp-top-ten --config=p/security-audit .  # Semgrep
 ```
-
-### Schemathesis (API 仕様適合性 fuzz)
-
-[.github/workflows/schemathesis-nightly.yml](.github/workflows/schemathesis-nightly.yml) が nightly (JST 03:37) に
-FastAPI `/openapi.json` と実装の適合性を Schemathesis (Hypothesis ベース
-property-based fuzz) で検査する。3 check (`not_a_server_error` /
-`status_code_conformance` / `response_schema_conformance`) を初回は GET only +
-25 examples で **warn-only** 実行し、findings は Actions Artifacts
-(`schemathesis-results`) に JUnit XML + VCR cassette で 14 日保存する。
-triage 完了後に blocking 化、その後 mutation method (POST/PUT/DELETE) や
-stateful 拡張を別 PR で順次着手する予定。
 
 ### テスト・lint 実行
 
@@ -361,19 +285,6 @@ make test-integration PYTEST_ARGS='-k "search and quota"'
 
 `uv run pytest` を直接叩くと `.env` 不在時に conftest が dummy DB (`unreachable.invalid`) にフォールバックするため、DB 接続が要るテストは必ず `make test-integration` 経由で回すこと。終了時は `trap` で `down -v --remove-orphans` するため tmpfs ごと毎回 fresh。
 
-### DB 操作
-
-```bash
-# マイグレーション実行
-docker compose exec backend alembic upgrade head
-
-# ロールバック
-docker compose exec backend alembic downgrade -1
-
-# DB 接続
-docker compose exec db psql -U vector -d vector
-```
-
 ### 型生成パイプライン
 
 Backend の Pydantic schemas が SSoT (Single Source of Truth)。変更後は型を再生成する:
@@ -382,42 +293,3 @@ Backend の Pydantic schemas が SSoT (Single Source of Truth)。変更後は型
 # Backend 起動中に実行
 cd frontend && npm run generate-types
 ```
-
-### Worktree 運用
-
-`.env` は `.gitignore` 対象のため `git worktree add` には追従しない。`docker compose up` や `docker compose exec backend ...` を worktree 側から叩く場合に必要なので、専用ヘルパで main worktree の `.env` を symlink する。
-
-```bash
-# 新規 worktree 作成 (git worktree add の引数をそのまま渡す)
-scripts/worktree-add.sh ../Vector-foo feature/foo
-
-# 既存 worktree のうち .env が欠落しているものを一括補修
-scripts/worktree-fix-env.sh --dry-run   # まず差分確認
-scripts/worktree-fix-env.sh             # 実行
-```
-
-- 既存の `.env` (通常ファイル / symlink どちらも) は **絶対に上書きしない** — `WARN` / `SKIP` で報告するだけ
-- symlink 元は既定で main worktree の `.env`。`VECTOR_ENV_SOURCE=/path/to/.env` で上書き可能
-- DB を要するテスト (`-m integration`) は `.env` 不要なので `make test-integration` 経由が第一選択（上記「DB を要するテスト」参照）
-
-## Documentation
-
-コードから導出可能な情報（ディレクトリ構成、DB スキーマ、API 仕様）はドキュメント化せず、
-コード自体を SSoT とする方針。`docs/` には「コードに書けないもの」のみを残す。
-
-### 設計判断記録 (ADR)
-
-- [`docs/adr/001_taskiq_over_arq.md`](docs/adr/001_taskiq_over_arq.md) — タスクキュー選定（taskiq 採用理由）
-- [`docs/adr/002_auth_schema_separation.md`](docs/adr/002_auth_schema_separation.md) — PostgreSQL スキーマ分離（auth / public）
-- [`docs/adr/003_bff_proxy_pattern.md`](docs/adr/003_bff_proxy_pattern.md) — BFF プロキシパターンによる認証
-- [`docs/adr/004_unit_of_work_service_convention.md`](docs/adr/004_unit_of_work_service_convention.md) — Unit of Work / Service 規約
-- [`docs/adr/005_rsc_test_strategy.md`](docs/adr/005_rsc_test_strategy.md) — RSC ユニットテスト戦略 (Vitest projects 分離 + page-models)
-- [`docs/adr/006_better_auth_rate_limit_strategy.md`](docs/adr/006_better_auth_rate_limit_strategy.md) — Better Auth + proxy.ts 二段 rate limit
-- [`docs/adr/sqlmodel-to-declarative-migration.md`](docs/adr/sqlmodel-to-declarative-migration.md) — SQLModel → SQLAlchemy declarative 移行プラン
-- [`docs/adr/value_objects_sqlalchemy_migration.md`](docs/adr/value_objects_sqlalchemy_migration.md) — Value Objects の SQLAlchemy 移行プラン
-
-### その他
-
-- [`docs/observability/pipeline-events-design.md`](docs/observability/pipeline-events-design.md) — pipeline_events 監査基盤 ADR
-- [`docs/prompt_design.md`](docs/prompt_design.md) — AI 分析プロンプト設計ガイドライン
-- [`specs/domain.md`](specs/domain.md) — ドメインモデルの棚卸し
