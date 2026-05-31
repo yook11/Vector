@@ -26,7 +26,7 @@ primary_region = 'nrt'
 # 評価される (NEXT_PUBLIC_ プレフィックスを持たないため client bundle に
 # 出ない)。値は publicly-derivable な接続先識別子で秘密ではないため Fly
 # secrets ではなく fly.toml [env] に置いて commit する (deploy 設定の
-# 可視化を優先 — backend/fly.toml [env] ENV="production" と同じ思想)。
+# 可視化を優先 — backend/fly.core.toml [env] ENV="production" と同じ思想)。
 # frontend/src/lib/api/internal-config.ts が起動時に host が *.flycast で
 # 終わることを fail-closed 検証する (NODE_ENV=production narrowing)。
 [env]

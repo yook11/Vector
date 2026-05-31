@@ -57,10 +57,12 @@ describe("buildCspDirectives", () => {
     expect(directives[8]).toBe("base-uri 'self'");
   });
 
-  it("embeds the nonce and 'strict-dynamic' in script-src", () => {
+  it("keeps nonce for inline scripts without strict-dynamic", () => {
     const directives = buildCspDirectives("abc123", false);
-    expect(directives[1]).toContain("'nonce-abc123'");
-    expect(directives[1]).toContain("'strict-dynamic'");
+    expect(directives[1]).toBe(
+      "script-src 'self' 'nonce-abc123' 'sha256-7mu4H06fwDCjmnxxr/xNHyuQC6pLTHr4M2E4jXw5WZs='",
+    );
+    expect(directives[1]).not.toContain("'strict-dynamic'");
   });
 
   it("adds 'unsafe-eval' in script-src when isDev=true (HMR support)", () => {
@@ -93,7 +95,10 @@ describe("buildCspHeader", () => {
   it("composes a valid header from buildCspDirectives output", () => {
     const header = buildCspHeader(buildCspDirectives("xyz", false));
     expect(header).toContain("default-src 'self'");
-    expect(header).toContain("'nonce-xyz'");
+    expect(header).toContain("script-src 'self' 'nonce-xyz'");
+    expect(header).toContain(
+      "sha256-7mu4H06fwDCjmnxxr/xNHyuQC6pLTHr4M2E4jXw5WZs=",
+    );
     expect(header).toContain("frame-ancestors 'none'");
     // separator must be "; " (CSP grammar)
     expect(header.split("; ")).toHaveLength(9);

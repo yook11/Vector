@@ -14,11 +14,12 @@ export function generateNonce(): string {
 }
 
 export function buildCspDirectives(nonce: string, isDev: boolean): string[] {
+  const nextStaticShellBootstrapHash =
+    "'sha256-7mu4H06fwDCjmnxxr/xNHyuQC6pLTHr4M2E4jXw5WZs='";
   return [
     "default-src 'self'",
-    // 'strict-dynamic' により nonce 付きスクリプトが読み込む子スクリプトも信頼される
-    // (Next.js のコード分割チャンク読み込みに必要)。dev のみ HMR の eval を許可。
-    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${isDev ? " 'unsafe-eval'" : ""}`,
+    // PPR の static shell script は self で許可し、inline script は nonce で縛る。
+    `script-src 'self' 'nonce-${nonce}' ${nextStaticShellBootstrapHash}${isDev ? " 'unsafe-eval'" : ""}`,
     // Tailwind の動的クラス挿入のため unsafe-inline を許容 (将来的に nonce 化検討)
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data:",

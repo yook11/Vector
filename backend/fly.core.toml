@@ -40,7 +40,9 @@ primary_region = 'nrt'
 # public IP release 後も動く (Fly proxy 経路に依存しない)。
 # 多 process app では check を api process のみに scope する (worker/scheduler は
 # HTTP を listen しないため processes 指定が無いと全 Machine で fail する)。
-[[checks]]
+# Fly のトップレベル check は名前付きテーブル ([checks.<name>]) で宣言する
+# (配列テーブル [[checks]] は "check item name not a string" で reject される)。
+[checks.api_health]
   port = 8000
   type = "http"
   interval = "15s"
@@ -99,14 +101,19 @@ primary_region = 'nrt'
 
 # 同一 image を 4 process group で起動する。process 名は [[services]] /
 # [[checks]] / [[vm]] の processes 指定と一致必須。
-# - api: FastAPI (本番は --reload なし。Dockerfile CMD と整合)
+# - api: FastAPI (本番は --reload なし)。--host は空文字列 = IPv4+IPv6 dual-stack
+#   で bind する (uvicorn が 0.0.0.0 と :: の両 socket を開く)。理由: Fly の machine
+#   health check は IPv4 loopback (127.0.0.1) に接続するため `--host ::` (IPv6-only。
+#   Firecracker VM は bindv6only=1) だと check が connection refused で永久に critical
+#   になり deploy が最初の api machine で停止する。一方 flycast 実トラフィックは
+#   6PN=IPv6 で届くため IPv4-only (`0.0.0.0`) も不可。空文字列で両 family を listen する。
 # - worker-analysis: analysis (curation+assessment) + embedding + maintenance
 #   (back-fill 救済 + retention purge) を 1 container に同居 (supervisord 管理)
 # - worker-insights: trend discovery + briefing cron worker
 # - scheduler: 全 cron の発火元 (metadata / trend_discovery / briefing /
 #   maintenance の 4 scheduler)。singleton 厳守 (fly scale count scheduler=1)。
 [processes]
-  api = "uvicorn app.main:app --host :: --port 8000"
+  api = "uvicorn app.main:app --host '' --port 8000"
   worker-analysis = "supervisord -n -c /app/supervisord/analysis.conf"
   worker-insights = "supervisord -n -c /app/supervisord/insights.conf"
   scheduler = "supervisord -n -c /app/supervisord/scheduler.conf"

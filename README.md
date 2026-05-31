@@ -37,7 +37,7 @@ AIで翻訳・要約・インパクト分析を行う投資ダッシュボード
 | Task Queue | taskiq + Redis (**6 broker 分離**) | metadata / content / analysis / embedding / trend_discovery / briefing |
 | CI/CD | GitHub Actions | lint + test + type check + 4 系統 security gate |
 | Infrastructure | Docker Compose (dev) | **9 services**、internal network 中心 |
-| Deployment | Fly.io (`your-vector-backend-app`, nrt region) | 本番設定は [backend/fly.toml](backend/fly.toml) |
+| Deployment | Fly.io (nrt region, 5 app) | core [fly.core.toml](backend/fly.core.toml) / collect [fly.collect.toml](backend/fly.collect.toml) / frontend [fly.toml](frontend/fly.toml) / redis [fly.toml](infra/redis/fly.toml) / redis-rl [fly.toml](infra/redis-rl/fly.toml) |
 
 ## Prerequisites
 

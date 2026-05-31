@@ -1,0 +1,49 @@
+# infra/redis-rl/fly.toml — vector-redis-rl (frontend rate-limit 専用)
+#
+# frontend (proxy.ts) の IP sliding-window rate limit 専用 Redis。broker 用の
+# vector-redis とは別 app に分離する (信頼境界・揮発性・eviction 方針が真逆のため)。
+# dev の redis-rl サービス (docker-compose.yml) と同一設計に ACL 認証だけ足したもの。
+# volume / AOF を持たず、再起動でカウンタが消えても次 window で回復する。
+#
+# 認証は ACL 単一 user `rl` を最小権限で絞る (default off で no-auth 拒否):
+# - key は ~rl:* のみ (rate-limit.ts の rl:ip:*)。
+# - command は明示列挙で最小権限化 (node-redis 5.12.1 で接続+Lua 実行を実測確認):
+#   +auth +client|setinfo (接続時) / +eval +zadd +zcard +zremrangebyscore +expire
+#   (sliding-window script)。RESP3 を使う場合のみ +hello を追加。
+#
+# eviction = volatile-ttl: 全キーが 60s TTL を持つため残 TTL 短いものから捨てる。
+#   noeviction は満杯時 write 拒否 → proxy fail-open と相まって「満杯時に全体 bypass」を
+#   招くため禁止 (dev コメントの設計判断を踏襲)。
+#
+# singleton 厳守: in-memory カウンタを持つため複数 Machine 化すると .internal が分散し
+#   sliding-window が割れる (実効レートが Machine 数倍に緩む)。--ha=false で 1 Machine 固定。
+# 初回手順 (A/B は同一 shell — Fly secret は後から読めないため RL_PW を変数で共有):
+#   RL_PW=$(openssl rand -hex 24)
+#   fly apps create your-vector-redis-rl-app
+#   fly secrets set REDIS_RL_PASSWORD="$RL_PW" -a your-vector-redis-rl-app
+#   fly deploy --ha=false -c infra/redis-rl/fly.toml
+#   fly machine list -a your-vector-redis-rl-app   # Machine が 1 個
+#   fly ips list -a your-vector-redis-rl-app        # public IP が空 (外部非公開)
+# frontend 側 secret (同じ RL_PW を使う):
+#   fly secrets set REDIS_URL_RL="redis://rl:${RL_PW}@your-vector-redis-rl-app.internal:6379/0" \
+#     -a your-vector-frontend-app
+#
+# ※ 上記コマンド集合は node-redis 5.12.1 (RESP2) で接続+Lua 実行を実測確認済。
+#   RESP3 へ切替える場合のみ +hello を追加する。
+#
+# See https://fly.io/docs/reference/configuration/
+
+app = 'your-vector-redis-rl-app'
+primary_region = 'nrt'
+
+[build]
+  image = 'redis:7-alpine'
+
+# inbound public service を持たない ([[services]] 非宣言) → public IP 無し。
+# 同 org の frontend は 6PN 経由で your-vector-redis-rl-app.internal:6379 に届く。
+[processes]
+  redis = "sh -c 'umask 077; { echo \"user default off\"; echo \"user rl on >$REDIS_RL_PASSWORD resetchannels ~rl:* +auth +client|setinfo +eval +zadd +zcard +zremrangebyscore +expire\"; } > /tmp/users.acl; exec redis-server --aclfile /tmp/users.acl --save \"\" --appendonly no --maxmemory 64mb --maxmemory-policy volatile-ttl --bind ::'"
+
+[[vm]]
+  memory = '256mb'
+  cpus = 1
