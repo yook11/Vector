@@ -12,6 +12,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   buildAuth: vi.fn(async () => ({ Authorization: "Bearer test-token" })),
   getSession: vi.fn(),
+  logServerEvent: vi.fn(),
 }));
 
 vi.mock("server-only", () => ({}));
@@ -25,8 +26,12 @@ vi.mock("@/lib/auth/guards", () => ({
   getCurrentSession: mocks.getSession,
 }));
 
+vi.mock("@/lib/observability/server-log", () => ({
+  logServerEvent: mocks.logServerEvent,
+}));
+
 import { client } from "@/types/client.gen";
-import { ApiError } from "./error";
+import { ApiError, InternalFetchError } from "./error";
 // 副作用 import で interceptor を登録する。実 production runtime では各 sdk call
 // site が `import "@/lib/api/hey-api-interceptors"` または publicClient の named
 // import 経由で module evaluation をトリガする。
@@ -82,6 +87,7 @@ describe("hey-api error interceptor — ApiError 正規化", () => {
       status: 404,
       detail: "Article not found",
     });
+    expect(mocks.logServerEvent).not.toHaveBeenCalled();
   });
 
   it("Pydantic validation array を 'field: msg' 形式に整形", async () => {
@@ -140,6 +146,144 @@ describe("hey-api error interceptor — ApiError 正規化", () => {
     expect(error).toBeInstanceOf(ApiError);
     expect((error as ApiError).status).toBe(0);
     expect((error as ApiError).detail).toBe("HTTP 0");
+    expect(mocks.logServerEvent).not.toHaveBeenCalled();
+  });
+
+  it("InternalFetchError timeout は message を保持して構造化ログを出す", async () => {
+    const fn = client.interceptors.error.fns[0];
+    if (!fn) throw new Error("error interceptor not registered");
+
+    const error = await (
+      fn(
+        new InternalFetchError("timeout", "Request timeout after 10000ms"),
+        undefined,
+        { method: "GET", url: "/api/v1/articles" } as never,
+      ) as Promise<unknown>
+    ).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).status).toBe(0);
+    expect((error as ApiError).detail).toBe("Request timeout after 10000ms");
+    expect((error as ApiError).meta).toMatchObject({
+      kind: "timeout",
+      method: "GET",
+      path: "/api/v1/articles",
+    });
+    expect(mocks.logServerEvent).toHaveBeenCalledWith(
+      "error",
+      "frontend_internal_api_failure",
+      {
+        kind: "timeout",
+        method: "GET",
+        path: "/api/v1/articles",
+        detail: "Request timeout after 10000ms",
+      },
+    );
+  });
+
+  it("InternalFetchError network は message を保持して構造化ログを出す", async () => {
+    const fn = client.interceptors.error.fns[0];
+    if (!fn) throw new Error("error interceptor not registered");
+
+    const error = await (
+      fn(new InternalFetchError("network", "fetch failed"), undefined, {
+        method: "GET",
+        url: "/api/v1/categories",
+      } as never) as Promise<unknown>
+    ).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).detail).toBe("fetch failed");
+    expect((error as ApiError).meta).toMatchObject({
+      kind: "network",
+      path: "/api/v1/categories",
+    });
+    expect(mocks.logServerEvent).toHaveBeenCalledWith(
+      "error",
+      "frontend_internal_api_failure",
+      {
+        kind: "network",
+        method: "GET",
+        path: "/api/v1/categories",
+        detail: "fetch failed",
+      },
+    );
+  });
+
+  it("HTTP 429 は warn の構造化ログを出す", async () => {
+    const fn = client.interceptors.error.fns[0];
+    if (!fn) throw new Error("error interceptor not registered");
+
+    const response = new Response(null, {
+      status: 429,
+      statusText: "Too Many Requests",
+    });
+
+    await expect(
+      fn({ detail: "rate limited" }, response, {
+        method: "GET",
+        url: "/api/v1/articles",
+      } as never),
+    ).rejects.toMatchObject({
+      name: "ApiError",
+      status: 429,
+      detail: "rate limited",
+      meta: {
+        kind: "http_429",
+        method: "GET",
+        path: "/api/v1/articles",
+        status: 429,
+      },
+    });
+    expect(mocks.logServerEvent).toHaveBeenCalledWith(
+      "warn",
+      "frontend_internal_api_failure",
+      {
+        kind: "http_429",
+        method: "GET",
+        path: "/api/v1/articles",
+        status: 429,
+        detail: "rate limited",
+      },
+    );
+  });
+
+  it("HTTP 5xx は error の構造化ログを出す", async () => {
+    const fn = client.interceptors.error.fns[0];
+    if (!fn) throw new Error("error interceptor not registered");
+
+    const response = new Response(null, {
+      status: 500,
+      statusText: "Internal Server Error",
+    });
+
+    await expect(
+      fn("oops not json", response, {
+        method: "GET",
+        url: "/api/v1/articles",
+      } as never),
+    ).rejects.toMatchObject({
+      name: "ApiError",
+      status: 500,
+      detail: "Internal Server Error",
+      meta: {
+        kind: "http_5xx",
+        method: "GET",
+        path: "/api/v1/articles",
+        status: 500,
+      },
+    });
+    expect(mocks.logServerEvent).toHaveBeenCalledWith(
+      "error",
+      "frontend_internal_api_failure",
+      {
+        kind: "http_5xx",
+        method: "GET",
+        path: "/api/v1/articles",
+        status: 500,
+        detail: "Internal Server Error",
+      },
+    );
   });
 });
 

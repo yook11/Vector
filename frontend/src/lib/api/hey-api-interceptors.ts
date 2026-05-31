@@ -22,22 +22,71 @@
 
 import "server-only";
 
-import { ApiError, normalizeErrorDetail } from "@/lib/api/error";
+import {
+  ApiError,
+  InternalFetchError,
+  normalizeErrorDetail,
+} from "@/lib/api/error";
 import { createClientConfig } from "@/lib/api/hey-api.config";
 import { buildInternalAuthHeaders } from "@/lib/api/internal-config";
 import { getCurrentSession } from "@/lib/auth/guards";
+import { logServerEvent } from "@/lib/observability/server-log";
 import { createClient, createConfig } from "@/types/client";
+import type { ResolvedRequestOptions } from "@/types/client/types.gen";
 import { client } from "@/types/client.gen";
 import type { ClientOptions } from "@/types/types.gen";
+
+type RequestOptionsWithMethod = ResolvedRequestOptions & { method?: string };
+
+function requestMetadata(options: ResolvedRequestOptions | undefined): {
+  method?: string | undefined;
+  path?: string | undefined;
+} {
+  const method =
+    options &&
+    "method" in options &&
+    typeof (options as RequestOptionsWithMethod).method === "string"
+      ? (options as RequestOptionsWithMethod).method
+      : undefined;
+  return { method, path: options?.url };
+}
 
 const errorInterceptor = async (
   error: unknown,
   response: Response | undefined,
+  options: ResolvedRequestOptions | undefined,
 ) => {
+  const { method, path } = requestMetadata(options);
+  if (error instanceof InternalFetchError) {
+    logServerEvent("error", "frontend_internal_api_failure", {
+      kind: error.kind,
+      method,
+      path,
+      detail: error.message,
+    });
+    throw new ApiError(0, error.message, { kind: error.kind, method, path });
+  }
+
   const status = response?.status ?? 0;
   const detail =
     normalizeErrorDetail(error) || response?.statusText || `HTTP ${status}`;
-  throw new ApiError(status, detail);
+  if (status === 429 || status >= 500) {
+    const kind = status === 429 ? "http_429" : "http_5xx";
+    logServerEvent(
+      status >= 500 ? "error" : "warn",
+      "frontend_internal_api_failure",
+      {
+        kind,
+        method,
+        path,
+        status,
+        detail,
+      },
+    );
+    throw new ApiError(status, detail, { kind, method, path, status });
+  }
+
+  throw new ApiError(status, detail, { method, path, status });
 };
 
 if (client.interceptors.request.fns.length === 0) {

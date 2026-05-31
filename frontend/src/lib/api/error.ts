@@ -4,13 +4,33 @@
 
 import type { ValidationError } from "@/types/types.gen";
 
+export type InternalFetchErrorKind = "timeout" | "network";
+
+export interface ApiErrorMeta {
+  kind?: InternalFetchErrorKind | "http_429" | "http_5xx" | undefined;
+  method?: string | undefined;
+  path?: string | undefined;
+  status?: number | undefined;
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
     public detail: string,
+    public meta?: ApiErrorMeta,
   ) {
     super(detail);
     this.name = "ApiError";
+  }
+}
+
+export class InternalFetchError extends Error {
+  constructor(
+    public kind: InternalFetchErrorKind,
+    message: string,
+  ) {
+    super(message);
+    this.name = "InternalFetchError";
   }
 }
 

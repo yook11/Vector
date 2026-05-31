@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
     throw new Error(`REDIRECT:${url}`);
   }),
   getSession: vi.fn(),
+  logServerEvent: vi.fn(),
 }));
 
 vi.mock("next/headers", () => ({
@@ -30,10 +31,15 @@ vi.mock("@/lib/auth/auth", () => ({
   auth: { api: { getSession: mocks.getSession } },
 }));
 
+vi.mock("@/lib/observability/server-log", () => ({
+  logServerEvent: mocks.logServerEvent,
+}));
+
 const {
   headersGet: headersGetMock,
   redirect: redirectMock,
   getSession: getSessionMock,
+  logServerEvent: logServerEventMock,
 } = mocks;
 
 import {
@@ -67,6 +73,42 @@ describe("getCurrentSession", () => {
   it("returns null when no session", async () => {
     getSessionMock.mockResolvedValue(null);
     expect(await getCurrentSession()).toBeNull();
+  });
+
+  it("logs slow auth session lookup without exposing user details", async () => {
+    const nowSpy = vi
+      .spyOn(performance, "now")
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(1601);
+    try {
+      getSessionMock.mockResolvedValue(adminSession);
+      expect(await getCurrentSession()).toBe(adminSession);
+      expect(logServerEventMock).toHaveBeenCalledWith(
+        "warn",
+        "frontend_auth_session_slow",
+        { elapsedMs: 1601, hasSession: true },
+      );
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("logs auth session errors with error name only", async () => {
+    getSessionMock.mockRejectedValue(new Error("database.example.internal"));
+
+    await expect(getCurrentSession()).rejects.toThrow(
+      "database.example.internal",
+    );
+    expect(logServerEventMock).toHaveBeenCalledWith(
+      "error",
+      "frontend_auth_session_error",
+      { detail: "Error" },
+    );
+    expect(logServerEventMock).not.toHaveBeenCalledWith(
+      "error",
+      "frontend_auth_session_error",
+      { detail: "database.example.internal" },
+    );
   });
 });
 

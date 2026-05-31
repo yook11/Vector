@@ -24,6 +24,9 @@ import { auth } from "@/lib/auth/auth";
 import { buildLoginCallbackUrl } from "@/lib/auth/login-redirect-url";
 import { narrowRole } from "@/lib/auth/role";
 import type { Session } from "@/lib/auth/session";
+import { logServerEvent } from "@/lib/observability/server-log";
+
+const AUTH_SESSION_SLOW_MS = 1500;
 
 /**
  * 現在の Better Auth session を取得する。
@@ -37,9 +40,25 @@ import type { Session } from "@/lib/auth/session";
  * cross-request leak は構造的に発生しない (`cache` は per-Request scope)。
  */
 export const getCurrentSession = cache(async (): Promise<Session | null> => {
-  return auth.api.getSession({
-    headers: await headers(),
-  });
+  const start = performance.now();
+  try {
+    const session = await auth.api.getSession({
+      headers: await headers(),
+    });
+    const elapsedMs = Math.round(performance.now() - start);
+    if (elapsedMs >= AUTH_SESSION_SLOW_MS) {
+      logServerEvent("warn", "frontend_auth_session_slow", {
+        elapsedMs,
+        hasSession: session !== null,
+      });
+    }
+    return session;
+  } catch (err) {
+    logServerEvent("error", "frontend_auth_session_error", {
+      detail: err instanceof Error ? err.name : "unknown",
+    });
+    throw err;
+  }
 });
 
 export async function requireSession(): Promise<Session> {

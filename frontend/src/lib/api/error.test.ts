@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ApiError, normalizeErrorDetail } from "./error";
+import { ApiError, InternalFetchError, normalizeErrorDetail } from "./error";
 
 describe("ApiError", () => {
   it("exposes status and detail, sets name to 'ApiError'", () => {
@@ -8,6 +8,29 @@ describe("ApiError", () => {
     expect(err.detail).toBe("Not found");
     expect(err.message).toBe("Not found");
     expect(err.name).toBe("ApiError");
+    expect(err).toBeInstanceOf(Error);
+  });
+
+  it("keeps optional diagnostic meta without breaking two-arg calls", () => {
+    const err = new ApiError(0, "fetch failed", {
+      kind: "network",
+      method: "GET",
+      path: "/api/v1/articles",
+    });
+    expect(err.meta).toEqual({
+      kind: "network",
+      method: "GET",
+      path: "/api/v1/articles",
+    });
+  });
+});
+
+describe("InternalFetchError", () => {
+  it("exposes kind, message, and Error name", () => {
+    const err = new InternalFetchError("timeout", "Request timeout");
+    expect(err.kind).toBe("timeout");
+    expect(err.message).toBe("Request timeout");
+    expect(err.name).toBe("InternalFetchError");
     expect(err).toBeInstanceOf(Error);
   });
 });

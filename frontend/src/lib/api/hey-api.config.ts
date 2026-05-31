@@ -9,13 +9,13 @@
  * baseUrl: openapi-fetch 経路と同じ origin のみ (`/api/v1` prefix は generated
  * の path key 側に含まれる)。
  *
- * customFetch: timeout 10s + AbortSignal merge。timeout は Error として throw
- * し、error interceptor (`hey-api-interceptors.ts`) で `ApiError(0, ...)` に
- * 包まれる。
+ * customFetch: timeout 10s + AbortSignal merge。response 不在の失敗は
+ * `InternalFetchError` に分類し、error interceptor 側で診断ログに載せる。
  */
 
 import "server-only";
 
+import { InternalFetchError } from "@/lib/api/error";
 import { INTERNAL_API_URL } from "@/lib/api/internal-config";
 import type { CreateClientConfig } from "@/types/client.gen";
 
@@ -39,7 +39,13 @@ const customFetch: typeof fetch = async (input, init) => {
       err.name === "AbortError" &&
       timeoutController.signal.aborted
     ) {
-      throw new Error(`Request timeout after ${REQUEST_TIMEOUT_MS}ms`);
+      throw new InternalFetchError(
+        "timeout",
+        `Request timeout after ${REQUEST_TIMEOUT_MS}ms`,
+      );
+    }
+    if (err instanceof Error) {
+      throw new InternalFetchError("network", err.message);
     }
     throw err;
   } finally {
