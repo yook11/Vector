@@ -75,6 +75,8 @@ jobs:
       BETTER_AUTH_SECRET: ci1111111111111111111111111111111111111111111111111111111111111111
       POSTGRES_AUTH_PASSWORD: ci2222222222222222222222222222222222222222222222222222222222222222
       POSTGRES_APP_PASSWORD: ci3333333333333333333333333333333333333333333333333333333333333333
+      # vector_collect は alembic z14_grant_collect_role の GRANT 対象 (ci.yml と同値)。
+      POSTGRES_COLLECT_PASSWORD: ci6666666666666666666666666666666666666666666666666666666666666666
       FRONTEND_URL: http://localhost:3000
       # PR8 (red-team S-AUTH-4) で default 撤去 → env 必須化された URL 系。
       INTERNAL_FRONTEND_BASE_URL: http://frontend:3000
@@ -147,12 +149,13 @@ jobs:
         run: npx --yes @better-auth/cli@1.4.21 migrate --config src/lib/auth/auth.cli.ts -y
         working-directory: frontend
 
-      # red-team AUTH-N4: alembic n3_grant_app_db_users が GRANT を流す前提として
-      # vector_auth / vector_app role が存在する必要がある。本番では init script
+      # red-team AUTH-N4: alembic n3_grant_app_db_users / z14_grant_collect_role が
+      # GRANT を流す前提として vector_auth / vector_app / vector_collect role が
+      # 存在する必要がある。本番では init script
       # (infra/db/init/01_create_app_users.sh) が docker entrypoint init で作るが、
       # GitHub Actions の service container は initdb.d を ignore するため、
-      # ここで psql 経由で idempotent に role を作成する (ci.yml lines 316-330 と同形)。
-      - name: Create application Postgres roles (vector_auth, vector_app)
+      # ここで psql 経由で idempotent に role を作成する (ci.yml と同形)。
+      - name: Create application Postgres roles (vector_auth, vector_app, vector_collect)
         env:
           PGPASSWORD: vector
         run: |
@@ -164,6 +167,9 @@ jobs:
             END IF;
             IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'vector_app') THEN
               CREATE ROLE vector_app  WITH LOGIN PASSWORD '${{ env.POSTGRES_APP_PASSWORD }}';
+            END IF;
+            IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'vector_collect') THEN
+              CREATE ROLE vector_collect WITH LOGIN PASSWORD '${{ env.POSTGRES_COLLECT_PASSWORD }}';
             END IF;
           END \$\$;
           EOF

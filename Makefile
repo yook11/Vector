@@ -152,6 +152,7 @@ test-integration: test-integration-up  ## db-test を立てて pytest -m integra
 	  MIGRATION_DATABASE_URL=postgresql+asyncpg://vector:test-vector-password@127.0.0.1:$$port/vector \
 	  POSTGRES_AUTH_PASSWORD=test-auth-password \
 	  POSTGRES_APP_PASSWORD=test-app-password \
+	  POSTGRES_COLLECT_PASSWORD=test-collect-password \
 	  INTERNAL_API_SECRET=test-only-collect-bootstrap-xxxxxxxxxxxx \
 	  FRONTEND_URL=http://localhost:3000 \
 	  INTERNAL_FRONTEND_BASE_URL=http://localhost:3000 \

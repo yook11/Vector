@@ -246,9 +246,10 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required; set a strong value in .env}
       POSTGRES_DB: ${POSTGRES_DB:-vector}
       # red-team AUTH-N4: application-level role passwords. init script で
-      # vector_auth / vector_app role を作るときに psql に渡す。
+      # vector_auth / vector_app / vector_collect role を作るときに psql に渡す。
       POSTGRES_AUTH_PASSWORD: ${POSTGRES_AUTH_PASSWORD:?POSTGRES_AUTH_PASSWORD is required for vector_auth role}
       POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:?POSTGRES_APP_PASSWORD is required for vector_app role}
+      POSTGRES_COLLECT_PASSWORD: ${POSTGRES_COLLECT_PASSWORD:?POSTGRES_COLLECT_PASSWORD is required for vector_collect role}
     volumes:
       # PG18 以降の Docker image は major-version 別ディレクトリ
       # (/var/lib/postgresql/18/docs/) にデータを置く設計に変わったため、

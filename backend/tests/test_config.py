@@ -290,3 +290,30 @@ def test_development_allows_database_url_without_sslmode(
     monkeypatch.setenv("DATABASE_URL", _NEON_DB_URL_NO_SSL)
     s = Settings()  # env は default の development
     assert s.database_url == _NEON_DB_URL_NO_SSL
+
+
+# --- application role password の任意設定 (権限境界テスト用 settings 経由読取) -----
+#
+# postgres_collect_password は本番 runtime では単体 password としては読まず、
+# test_db_user_isolation の guard 統合テストが os.environ 直読みを避けて settings
+# 経由で vector_collect 接続を張るためだけに存在する。未設定なら None で guard が
+# skip し、設定時は SecretStr として読める、という 2 つの不変条件を固定する。
+
+
+def test_postgres_collect_password_defaults_to_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POSTGRES_COLLECT_PASSWORD 未設定なら None (guard 統合テストが skip する条件)。"""
+    monkeypatch.delenv("POSTGRES_COLLECT_PASSWORD", raising=False)
+    s = Settings()
+    assert s.postgres_collect_password is None
+
+
+def test_postgres_collect_password_loaded_as_secretstr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """設定時は SecretStr として読め、get_secret_value で元値を取り出せる。"""
+    monkeypatch.setenv("POSTGRES_COLLECT_PASSWORD", "test-collect-password")
+    s = Settings()
+    assert isinstance(s.postgres_collect_password, SecretStr)
+    assert s.postgres_collect_password.get_secret_value() == "test-collect-password"

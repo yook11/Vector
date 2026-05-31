@@ -91,6 +91,23 @@ async def app_conn():
         await conn.close()
 
 
+@pytest.fixture
+async def collect_conn():
+    """vector_collect role での asyncpg 接続を提供する (本番 vector db)。"""
+    if settings.postgres_collect_password is None:
+        pytest.skip("POSTGRES_COLLECT_PASSWORD not configured")
+    conn = await asyncpg.connect(
+        **_connection_kwargs(
+            "vector_collect", settings.postgres_collect_password.get_secret_value()
+        )
+    )
+    try:
+        await _require_alembic_applied_schema(conn)
+        yield conn
+    finally:
+        await conn.close()
+
+
 class TestVectorAuthIsolation:
     async def test_cannot_select_from_public_table(self, auth_conn) -> None:
         """vector_auth は public.watchlist_entries SELECT で権限拒否される。"""
@@ -138,3 +155,112 @@ class TestVectorAppIsolation:
             await app_conn.execute(
                 "DELETE FROM public.categories WHERE slug = 'isolationtest'"
             )
+
+
+class TestVectorCollectIsolation:
+    """vector_collect (collect worker 専用) が acquisition+completion の触る 4 table
+    だけに最小権限で閉じ込められていることを構造的に保証する。
+
+    collect は articles / pipeline_events を DELETE できず、実 INSERT の cleanup が
+    できないため、正の write 権限は副作用ゼロの has_*_privilege catalog 関数で検証
+    する (read と cross-boundary の負側は実クエリの権限拒否で振る舞い検証する)。
+    """
+
+    # --- 正: 読み取り (実 SELECT で schema USAGE + table SELECT を通しで確認) ---
+
+    async def test_can_select_news_sources(self, collect_conn) -> None:
+        """vector_collect は news_sources を SELECT できる (dispatch が読む)。"""
+        rows = await collect_conn.fetch("SELECT id FROM public.news_sources LIMIT 1")
+        assert isinstance(rows, list)
+
+    async def test_can_select_articles(self, collect_conn) -> None:
+        """vector_collect は articles を SELECT できる (dedup / 監査逆引き)。"""
+        rows = await collect_conn.fetch("SELECT id FROM public.articles LIMIT 1")
+        assert isinstance(rows, list)
+
+    async def test_can_select_incomplete_articles(self, collect_conn) -> None:
+        """vector_collect は incomplete_articles を SELECT できる。"""
+        rows = await collect_conn.fetch(
+            "SELECT id FROM public.incomplete_articles LIMIT 1"
+        )
+        assert isinstance(rows, list)
+
+    # --- 正: 書き込み権限 (副作用ゼロの catalog 関数で grant を確認) ---
+
+    async def test_has_full_dml_on_incomplete_articles(self, collect_conn) -> None:
+        """incomplete_articles は SELECT/INSERT/UPDATE/DELETE すべて持つ
+        (completion の lease 状態機械が全 DML を要する)。"""
+        granted = await collect_conn.fetchval(
+            "SELECT has_table_privilege('public.incomplete_articles', 'SELECT') "
+            "AND has_table_privilege('public.incomplete_articles', 'INSERT') "
+            "AND has_table_privilege('public.incomplete_articles', 'UPDATE') "
+            "AND has_table_privilege('public.incomplete_articles', 'DELETE')"
+        )
+        assert granted is True
+
+    async def test_can_insert_articles(self, collect_conn) -> None:
+        """articles は INSERT を持つ (両 stage が新規記事を INSERT する)。"""
+        granted = await collect_conn.fetchval(
+            "SELECT has_table_privilege('public.articles', 'INSERT')"
+        )
+        assert granted is True
+
+    async def test_cannot_update_or_delete_articles(self, collect_conn) -> None:
+        """articles は INSERT 専用で UPDATE/DELETE は持たない (記事本文の事後改竄や
+        消去を collect 侵害から構造的に閉塞する)。"""
+        denied = await collect_conn.fetchval(
+            "SELECT has_table_privilege('public.articles', 'UPDATE') "
+            "OR has_table_privilege('public.articles', 'DELETE')"
+        )
+        assert denied is False
+
+    async def test_can_insert_pipeline_events(self, collect_conn) -> None:
+        """pipeline_events は INSERT を持つ (監査 append-only)。"""
+        granted = await collect_conn.fetchval(
+            "SELECT has_table_privilege('public.pipeline_events', 'INSERT')"
+        )
+        assert granted is True
+
+    async def test_can_select_id_and_occurred_at_on_pipeline_events(
+        self, collect_conn
+    ) -> None:
+        """pipeline_events は RETURNING に出る id, occurred_at の 2 列だけ SELECT
+        できる (ORM session.add の INSERT...RETURNING に必要)。"""
+        granted = await collect_conn.fetchval(
+            "SELECT has_column_privilege('public.pipeline_events', 'id', 'SELECT') "
+            "AND has_column_privilege("
+            "'public.pipeline_events', 'occurred_at', 'SELECT')"
+        )
+        assert granted is True
+
+    async def test_cannot_select_payload_on_pipeline_events(self, collect_conn) -> None:
+        """pipeline_events.payload (本文 / 外部入力) は読めず append-only 性を維持。"""
+        granted = await collect_conn.fetchval(
+            "SELECT has_column_privilege('public.pipeline_events', 'payload', 'SELECT')"
+        )
+        assert granted is False
+
+    async def test_has_sequence_usage_for_inserted_tables(self, collect_conn) -> None:
+        """INSERT する 3 table の id sequence に USAGE を持つ (serial 採番に必要)。"""
+        granted = await collect_conn.fetchval(
+            "SELECT has_sequence_privilege("
+            "pg_get_serial_sequence('public.incomplete_articles', 'id'), 'USAGE') "
+            "AND has_sequence_privilege("
+            "pg_get_serial_sequence('public.articles', 'id'), 'USAGE') "
+            "AND has_sequence_privilege("
+            "pg_get_serial_sequence('public.pipeline_events', 'id'), 'USAGE')"
+        )
+        assert granted is True
+
+    # --- 負: 分離 (4 table 外 / 別 schema は権限拒否で振る舞い確認) ---
+
+    async def test_cannot_select_analysis_table(self, collect_conn) -> None:
+        """analysis BC の article_curations は SELECT で権限拒否される
+        (collect 侵害から分析結果を遮断)。"""
+        with pytest.raises(asyncpg.InsufficientPrivilegeError):
+            await collect_conn.fetch("SELECT * FROM public.article_curations LIMIT 1")
+
+    async def test_cannot_access_auth_schema(self, collect_conn) -> None:
+        """auth schema は USAGE すら無く auth.user SELECT で権限拒否される。"""
+        with pytest.raises(asyncpg.InsufficientPrivilegeError):
+            await collect_conn.fetch('SELECT id FROM auth."user" LIMIT 1')

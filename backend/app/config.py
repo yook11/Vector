@@ -93,6 +93,7 @@ class Settings(BaseSettings):
     # 取得し、production runtime では password 単体としては読まない。
     postgres_auth_password: SecretStr | None = None
     postgres_app_password: SecretStr | None = None
+    postgres_collect_password: SecretStr | None = None
 
     # AI
     # Stage 3 (extraction) と Stage 4 (assessment) のアダプター選択は env では

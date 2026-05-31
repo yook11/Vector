@@ -141,10 +141,11 @@ _INTEGRATION_FIXTURES = frozenset(
         "sample_hn_source",
         "sample_av_source",
         # test_db_user_isolation.py が直接 asyncpg.connect する権限境界テスト
-        # 用 fixture。実 Postgres + vector_auth / vector_app role を要求する
-        # ため必ず integration 側に分類する。
+        # 用 fixture。実 Postgres + vector_auth / vector_app / vector_collect role
+        # を要求するため必ず integration 側に分類する。
         "auth_conn",
         "app_conn",
+        "collect_conn",
     }
 )
 

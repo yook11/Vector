@@ -31,7 +31,7 @@ AIで翻訳・要約・インパクト分析を行う投資ダッシュボード
 | Frontend | Next.js 16 (App Router) + TypeScript | Tailwind CSS + shadcn/ui + Biome |
 | Backend | FastAPI + **Python 3.13** + SQLModel (SQLAlchemy 2.0 async) | Pydantic v2、非同期処理 |
 | Auth | Better Auth (BFF Proxy) | Cookie ベースセッション + 内部 API ヘッダー認証 |
-| Database | PostgreSQL 18 + pgvector | Alembic マイグレーション、**二重ロール** (vector_app / vector_auth) |
+| Database | PostgreSQL 18 + pgvector | Alembic マイグレーション、**三重ロール** (vector_app / vector_auth / vector_collect) |
 | AI | **Gemini + DeepSeek + OpenAI** (multi-provider) | Pure DI で `backend/app/brokers.py` に hardcode |
 | Embedding | `gemini-embedding-001` (768-dim halfvec) | pgvector |
 | Task Queue | taskiq + Redis (**6 broker 分離**) | metadata / content / analysis / embedding / trend_discovery / briefing |
@@ -118,7 +118,7 @@ Browser
               ├── insights/     — trend_discovery (weekly_trends) / briefing (weekly LLM brief)
               ├── observability/— pipeline_events 監査 (Discriminated Union payload)
               ├── maintenance/  — back-fill backlog / budget / policy
-              └── PostgreSQL 18 + pgvector (二重ロール: vector_app / vector_auth)
+              └── PostgreSQL 18 + pgvector (三重ロール: vector_app / vector_auth / vector_collect)
 
 Redis (taskiq broker) ◄── worker-fetch / worker-analysis (analysis+embedding) / worker-insights
                        ◄── scheduler (metadata / trend_discovery / briefing cron)
@@ -195,7 +195,7 @@ stage モジュールは [backend/app/audit/stages/](backend/app/audit/stages/) 
 |----------|---------|-------------|
 | `ENV` | `development` | `production` で `/docs` `/redoc` `/openapi.json` を無効化 |
 
-### Database (二重ロール)
+### Database (三重ロール)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -203,7 +203,8 @@ stage モジュールは [backend/app/audit/stages/](backend/app/audit/stages/) 
 | `POSTGRES_PASSWORD` | — | `vector` ロールのパスワード (必須、強い乱数) |
 | `POSTGRES_DB` | `vector` | DB 名 |
 | `POSTGRES_AUTH_PASSWORD` | — | `vector_auth` ロール (frontend Better Auth 専用) |
-| `POSTGRES_APP_PASSWORD` | — | `vector_app` ロール (backend / worker / scheduler 専用) |
+| `POSTGRES_APP_PASSWORD` | — | `vector_app` ロール (backend core: api / worker-analysis / worker-insights / scheduler) |
+| `POSTGRES_COLLECT_PASSWORD` | — | `vector_collect` ロール (collect worker 専用、acquisition+completion が触る 4 table のみの最小権限) |
 
 ### AI
 

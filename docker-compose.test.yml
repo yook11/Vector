@@ -12,8 +12,8 @@
 # 構造:
 # - image: 本体と同じ pgvector/pgvector:0.8.2-pg18-bookworm
 # - infra/db/init: 本体と同じ init script を mount → vector / vector_auth /
-#   vector_app の 3 role 名 + extension が本番と揃う。GRANT 戦略は alembic
-#   migration 側のため本 compose では再現しない (conftest の
+#   vector_app / vector_collect の 4 role 名 + extension が本番と揃う。GRANT 戦略は
+#   alembic migration 側のため本 compose では再現しない (conftest の
 #   metadata.create_all() でテーブル定義のみを再現する)
 # - tmpfs: コンテナ down で全データ消失 (毎回 initdb から再構築)。過去の
 #   "残ったデータでテストが偶然 pass する" 事故を構造的に閉塞
@@ -32,6 +32,7 @@ services:
       POSTGRES_DB: vector
       POSTGRES_AUTH_PASSWORD: test-auth-password
       POSTGRES_APP_PASSWORD: test-app-password
+      POSTGRES_COLLECT_PASSWORD: test-collect-password
     volumes:
       - ./infra/db/init:/docker-entrypoint-initdb.d:ro
     tmpfs:
