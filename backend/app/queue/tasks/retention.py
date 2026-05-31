@@ -24,7 +24,7 @@ from sqlalchemy import text
 from taskiq import Context, TaskiqDepends
 
 from app.config import settings
-from app.queue.brokers import broker_metadata
+from app.queue.brokers import broker_maintenance
 from app.queue.schedule import CRON_PIPELINE_EVENTS_PURGE
 
 logger = structlog.get_logger(__name__)
@@ -34,7 +34,7 @@ BATCH_SIZE = 1_000
 INTER_BATCH_SLEEP_SECONDS = 0.1
 
 
-@broker_metadata.task(
+@broker_maintenance.task(
     task_name="purge_pipeline_events",
     timeout=60,
     max_retries=0,

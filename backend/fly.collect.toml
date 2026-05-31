@@ -1,0 +1,47 @@
+# fly.collect.toml — vector-collect (secret-thin fetch worker)
+#
+# 本番バックエンドを 2 app に分割した「外部 web を fetch し untrusted HTML を
+# parse する」側。RCE/SSRF の攻撃面を持つため、AI 鍵も本物 BFF 鍵も保持しない。
+# 保持する秘密は DB (collection 最小権限 role) と Redis (AUTH) のみで、config が
+# import 時に要求する未使用の必須鍵 (bff_jwt / revalidate) は throwaway random を
+# secret で与える (plan file Part 5)。fly.core.toml と同一 image を deploy する。
+#
+# See https://fly.io/docs/reference/configuration/
+
+app = 'your-vector-collect-app'
+primary_region = 'nrt'
+
+[build]
+
+# inbound を一切持たない: [[services]] を宣言せず public IP も割り当てない。
+# worker-fetch は Redis stream を pull し外部 web へ egress するのみ
+# (broker_metadata=acquisition+dispatch / broker_content=completion)。
+# HTTP を listen しないため [[checks]] も置かない。永続バグは supervisord の
+# fail_fast eventlistener が FATAL → container exit させ、Fly が restart loop で
+# 可視化する (fetch.conf 参照)。
+
+[[vm]]
+  memory = '512mb'
+  cpus = 1
+  processes = ['worker-fetch']
+
+[env]
+  ENV = "production"
+  # collect は API も revalidate も持たないため以下 2 値は未使用だが、
+  # backend/app/config.py が import 時に必須フィールドとして要求する。
+  # _enforce_flycast_in_production が production で *.flycast 以外を拒否するため
+  # placeholder も *.flycast 形式にする (誤った内部 DNS を持ち込むと crashloop)。
+  INTERNAL_FRONTEND_BASE_URL = "http://your-vector-frontend-app.flycast:3000"
+  # frontend_url は CORS allow_origins 用で collect では未使用。非秘密のため
+  # placeholder を [env] に置き、本物は core のみが持つ (collect 侵害でも本物の
+  # 公開 URL 設定すら漏らさない、というより単に不要)。
+  FRONTEND_URL = "http://vector-collect-unused.invalid"
+
+# worker-fetch のみ。fetch.conf は broker_metadata (acquisition+completion dispatch)
+# と broker_content (completion) を 1 container で消化する。back-fill / retention は
+# broker_maintenance に分離済で core 側 (worker-analysis) が担うため本 app には無い。
+[processes]
+  worker-fetch = "supervisord -n -c /app/supervisord/fetch.conf"
+
+# release_command は無し (migration は core/collect いずれの Fly runtime でも実行
+# しない。CI/手元のみ。plan file "deploy runbook" 参照)。

@@ -26,6 +26,7 @@ from app.queue.brokers import (
     broker_briefing,
     broker_content,
     broker_embedding,
+    broker_maintenance,
     broker_metadata,
     broker_trend_discovery,
 )
@@ -38,6 +39,7 @@ _BROKERS_WITH_SCHEDULER = (
     (broker_metadata, "metadata"),
     (broker_trend_discovery, "trend_discovery"),
     (broker_briefing, "briefing"),
+    (broker_maintenance, "maintenance"),
 )
 _BROKERS_WITHOUT_SCHEDULER = (
     (broker_content, "content"),
@@ -71,7 +73,7 @@ def test_otel_middleware_singleton_per_broker() -> None:
 
 
 def test_scheduler_lifecycle_registered_for_cron_brokers_only() -> None:
-    """CLIENT_STARTUP hook が cron 駆動 3 broker のみに登録される。
+    """CLIENT_STARTUP hook が cron 駆動 4 broker のみに登録される。
 
     scheduler を持たない broker (content / analysis / embedding) に登録すると、
     将来「.kiq() の遅延副作用で broker.startup() が走る」変更が入ったときに
@@ -91,7 +93,7 @@ def test_scheduler_lifecycle_registered_for_cron_brokers_only() -> None:
 
 
 def test_worker_lifecycle_registered_for_all_brokers() -> None:
-    """WORKER_STARTUP は全 6 broker に登録される。
+    """WORKER_STARTUP は全 7 broker に登録される。
 
     scheduler broker では WORKER_STARTUP と CLIENT_STARTUP の 2 種の hook が
     同じ broker object に共存する。

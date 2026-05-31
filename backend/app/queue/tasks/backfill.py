@@ -1,6 +1,6 @@
 """Back-fill cron タスク 3 本 (curations / assessments / embeddings)。
 
-各タスクは broker_metadata 上で cron 駆動し、塩漬け化した記事 ID を発見して
+各タスクは broker_maintenance 上で cron 駆動し、塩漬け化した記事 ID を発見して
 対応するメインフロー task を ``kiq`` で再投入する。kill switch (Settings)
 が False のときは即 return し、日次予算 (Redis) で暴走を防ぐ。
 
@@ -36,7 +36,7 @@ from app.models.backfill_exclusion import (
 )
 from app.models.in_scope_assessment import InScopeAssessment
 from app.models.out_of_scope_assessment import OutOfScopeAssessment
-from app.queue.brokers import broker_metadata
+from app.queue.brokers import broker_maintenance
 from app.queue.helpers.backlog import BackfillTarget, PipelineBacklog
 from app.queue.helpers.budget import consume_daily_budget
 from app.queue.helpers.stage_hold import (
@@ -425,7 +425,7 @@ async def _exclude_aged_out_embeddings(
 # ---------------------------------------------------------------------------
 
 
-@broker_metadata.task(
+@broker_maintenance.task(
     task_name="backfill_curations",
     timeout=120,
     max_retries=0,
@@ -621,7 +621,7 @@ async def backfill_curations(ctx: Context = TaskiqDepends()) -> None:
 # ---------------------------------------------------------------------------
 
 
-@broker_metadata.task(
+@broker_maintenance.task(
     task_name="backfill_assessments",
     timeout=120,
     max_retries=0,
@@ -813,7 +813,7 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
 # ---------------------------------------------------------------------------
 
 
-@broker_metadata.task(
+@broker_maintenance.task(
     task_name="backfill_embeddings",
     timeout=120,
     max_retries=0,

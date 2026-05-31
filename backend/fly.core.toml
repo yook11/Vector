@@ -1,0 +1,112 @@
+# fly.core.toml — vector-core (secret-heavy backend)
+#
+# 本番バックエンドを 2 app に分割した crown-jewel 側。AI 鍵 / 本物 BFF 鍵 /
+# revalidate 鍵を保持し、API + 分析 (analysis/embedding) + insights + scheduler +
+# 保守 (maintenance) を担う。外部 web を fetch する acquisition/completion worker は
+# vector-collect (fly.collect.toml) に分離し、本 app に同居させない。
+# 同一 image を 2 fly.toml で deploy する (process group で役割を分ける)。
+#
+# See https://fly.io/docs/reference/configuration/
+
+app = 'your-vector-core-app'
+primary_region = 'nrt'
+
+[build]
+
+# transport 層 internal-only 化 (defense in depth): backend (api) は flycast 経由
+# のみ到達可能とする。Better Auth で frontend を信用する設計の「frontend からしか
+# backend に届かない」境界をネットワーク層でも担保する (application 層の
+# BFF_JWT_SIGNING_SECRET 検証と組合せて 2 層防御)。
+# - [http_service] を撤去: public hostname (.fly.dev) への自動 binding を消す
+# - [[services]] で internal_port=8000 だけ宣言、processes=['api'] に scope:
+#   public IP を release 済なら flycast (org-private DNS) からのみ届く
+# - flycast は HTTP-only (TLS 終端なし) のため force_https は宣言しない
+# 初回 deploy 手順: plan file の "deploy runbook" 参照
+# (fly ips allocate-v6 --private → fly ips release <public>)。
+[[services]]
+  internal_port = 8000
+  protocol = "tcp"
+  processes = ['api']
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[services.ports]]
+    port = 8000
+    handlers = ["http"]
+
+# [http_service] の暗黙 healthcheck が消えるため、Machine-local HTTP probe を
+# 独立宣言する。Fly agent が Machine 内 localhost:8000 を probe するので
+# public IP release 後も動く (Fly proxy 経路に依存しない)。
+# 多 process app では check を api process のみに scope する (worker/scheduler は
+# HTTP を listen しないため processes 指定が無いと全 Machine で fail する)。
+[[checks]]
+  port = 8000
+  type = "http"
+  interval = "15s"
+  timeout = "2s"
+  grace_period = "10s"
+  method = "GET"
+  path = "/api/v1/health"
+  processes = ['api']
+
+# process 別 VM。全 process 1GB を避け、負荷に応じて分ける (実値は計測後に調整)。
+# AI 分析 (analysis+embedding+maintenance) は最もメモリを使うため 1GB。
+[[vm]]
+  memory = '512mb'
+  cpus = 1
+  processes = ['api']
+
+[[vm]]
+  memory = '1gb'
+  cpus = 1
+  processes = ['worker-analysis']
+
+[[vm]]
+  memory = '512mb'
+  cpus = 1
+  processes = ['worker-insights']
+
+[[vm]]
+  memory = '512mb'
+  cpus = 1
+  processes = ['scheduler']
+
+# production では FastAPI の /docs / /redoc / /openapi.json を無効化する
+# (red-team S-EXFIL-1 / C3 amplifier 防御)。settings.env field 経由で
+# backend/app/main.py が判定する。値は publicly-derivable な「環境識別子」で
+# 秘密ではないため Fly secrets ではなく [env] に置いて commit する
+# (deploy 設定の可視化を優先)。
+[env]
+  ENV = "production"
+  # backend → frontend revalidate 通知の宛先 (flycast 内部通信)。
+  # backend/app/config.py の _enforce_flycast_in_production が production で
+  # *.flycast 以外を拒否するため、本値と ENV="production" の組合せで起動時に
+  # fail-closed 検証される (誤って "frontend" (compose DNS) や localhost を
+  # 本番に持ち込んだ瞬間 Machine が crashloop する)。
+  INTERNAL_FRONTEND_BASE_URL = "http://your-vector-frontend-app.flycast:3000"
+  # back-fill 救済網 (maintenance worker)。config.py の default は
+  # assessments/embeddings とも False のため、本番では明示的に有効化する
+  # (Redis 永続化と併せて Stage4/5 の塩漬け記事を確実に再投入する)。
+  # Fly [env] の値は文字列必須 ("true")。
+  BACKFILL_ASSESSMENTS_ENABLED = "true"
+  BACKFILL_EMBEDDINGS_ENABLED = "true"
+
+# 同一 image を 4 process group で起動する。process 名は [[services]] /
+# [[checks]] / [[vm]] の processes 指定と一致必須。
+# - api: FastAPI (本番は --reload なし。Dockerfile CMD と整合)
+# - worker-analysis: analysis (curation+assessment) + embedding + maintenance
+#   (back-fill 救済 + retention purge) を 1 container に同居 (supervisord 管理)
+# - worker-insights: trend discovery + briefing cron worker
+# - scheduler: 全 cron の発火元 (metadata / trend_discovery / briefing /
+#   maintenance の 4 scheduler)。singleton 厳守 (fly scale count scheduler=1)。
+[processes]
+  api = "uvicorn app.main:app --host :: --port 8000"
+  worker-analysis = "supervisord -n -c /app/supervisord/analysis.conf"
+  worker-insights = "supervisord -n -c /app/supervisord/insights.conf"
+  scheduler = "supervisord -n -c /app/supervisord/scheduler.conf"
+
+# release_command は撤去する。Neon には schema migration を適用済みで、migration の
+# owner URL (MIGRATION_DATABASE_URL) を Fly runtime secret に置かない方針のため。
+# 今後の migration は CI / 手元から owner URL + full Settings env で実行する
+# (plan file の "deploy runbook" 参照)。

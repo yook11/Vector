@@ -1,0 +1,53 @@
+# infra/redis/fly.toml — vector-redis (跨 app broker)
+#
+# vector-core / vector-collect が共有する taskiq RedisStreamBroker のバックエンド。
+# 専用 Fly app として立て、public IP を割り当てず 6PN (.internal) のみで到達させる。
+# stock redis image を使い、AOF + volume で永続化し、broker message を絶対 evict
+# しない (noeviction)。
+#
+# 前提 volume (初回のみ):
+#   fly volumes create vector_redis_data -a your-vector-redis-app -r nrt -s 1
+# secret (初回のみ、強 random):
+#   fly secrets set REDIS_PASSWORD=<random> -a your-vector-redis-app
+# deploy:
+#   fly deploy -c infra/redis/fly.toml
+#   fly ips list -a your-vector-redis-app   # public IP が無い (空) ことを確認
+#
+# core/collect 側の REDIS_URL secret:
+#   redis://:<REDIS_PASSWORD>@your-vector-redis-app.internal:6379/0
+#
+# v1 のリスク受容: requirepass は単一 password で、collect も同じ URL を持つため
+# collect 侵害時は Redis 全体 (全 stream write / hold・budget key 改竄 / stream 削除)
+# に届く。compensating controls (DB precondition 再検証 / AI daily budget / stage
+# hold) で受け止め、collect を自 stream に限定する Redis ACL は fast-follow
+# (plan file Part 4 / Part 6)。
+#
+# See https://fly.io/docs/reference/configuration/
+
+app = 'your-vector-redis-app'
+primary_region = 'nrt'
+
+[build]
+  image = 'redis:7-alpine'
+
+# inbound public service を持たない ([[services]] を宣言しない)。6PN は全 Machine に
+# .internal アドレスを与えるため、同 org の core/collect は public IP 無しで
+# your-vector-redis-app.internal:6379 に到達できる。
+#
+# $REDIS_PASSWORD を展開させるため sh -c 経由で起動する (redis image の ENTRYPOINT
+# は password を直接展開しない)。設計値:
+# - requirepass: REDIS_PASSWORD secret で AUTH 必須化 (no-auth 接続を拒否)
+# - appendonly yes + --dir /data (volume): restart で in-flight message を失わない
+# - maxmemory-policy noeviction: broker message を絶対に evict しない
+#   (stream 長は broker 側 maxlen=10_000 で bounded: app/queue/brokers.py)
+# - bind :: : 6PN (IPv6) で listen する
+[processes]
+  redis = "sh -c 'exec redis-server --requirepass \"$REDIS_PASSWORD\" --appendonly yes --dir /data --maxmemory 256mb --maxmemory-policy noeviction --bind ::'"
+
+[mounts]
+  source = "vector_redis_data"
+  destination = "/data"
+
+[[vm]]
+  memory = '512mb'
+  cpus = 1

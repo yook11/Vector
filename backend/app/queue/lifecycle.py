@@ -1,6 +1,6 @@
 """broker / scheduler の lifecycle event hook を attach する。
 
-本 module を import するだけで broker × 6 + scheduler broker × 3 に対する
+本 module を import するだけで broker × 7 + scheduler broker × 4 に対する
 WORKER_STARTUP / WORKER_SHUTDOWN / CLIENT_STARTUP / CLIENT_SHUTDOWN hook が
 登録される (副作用)。AI adapter wiring (Pure DI composition root) は本 module
 ではなく ``composition.py`` の責務。本 module は engine 生成 / Logfire bootstrap /
@@ -23,6 +23,7 @@ from app.queue.brokers import (
     broker_briefing,
     broker_content,
     broker_embedding,
+    broker_maintenance,
     broker_metadata,
     broker_trend_discovery,
 )
@@ -66,8 +67,8 @@ def _register_scheduler_lifecycle(broker: RedisStreamBroker, label: str) -> None
     ``broker.startup()`` を呼ばず ``.kiq()`` は AsyncKicker による lazy 経路なので、
     CLIENT_STARTUP は **scheduler プロセスでのみ発火する** (no gate required)。
     cron 駆動を持つ broker (broker_metadata / broker_trend_discovery /
-    broker_briefing) のみに本関数を当てる。content / analysis / embedding broker は
-    scheduler が存在しないため不要。
+    broker_briefing / broker_maintenance) のみに本関数を当てる。content / analysis /
+    embedding broker は scheduler が存在しないため不要。
 
     Scheduler 自身は DB を触らない (全 cron task は worker 側で実行され、
     state.engine も session_factory も WORKER_STARTUP でしか初期化されない) ため、
@@ -92,12 +93,14 @@ _register_worker_lifecycle(broker_analysis, "analysis")
 _register_worker_lifecycle(broker_embedding, "embedding")
 _register_worker_lifecycle(broker_trend_discovery, "trend_discovery")
 _register_worker_lifecycle(broker_briefing, "briefing")
+_register_worker_lifecycle(broker_maintenance, "maintenance")
 
-# broker_metadata / broker_trend_discovery / broker_briefing は worker process と
-# scheduler process の両方で同じ broker object を共有するため、
+# broker_metadata / broker_trend_discovery / broker_briefing / broker_maintenance は
+# worker process と scheduler process の両方で同じ broker object を共有するため、
 # _register_worker_lifecycle (WORKER_STARTUP) と _register_scheduler_lifecycle
 # (CLIENT_STARTUP) の両方を呼ぶ。
 # プロセスが違うのでイベント発火が衝突することはない。
 _register_scheduler_lifecycle(broker_metadata, "metadata")
 _register_scheduler_lifecycle(broker_trend_discovery, "trend_discovery")
 _register_scheduler_lifecycle(broker_briefing, "briefing")
+_register_scheduler_lifecycle(broker_maintenance, "maintenance")
