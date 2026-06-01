@@ -20,9 +20,11 @@ on:
 
 # 同一 branch / PR の古い run を新しい push で cancel する。force push / 連打時の
 # 計算資源消費を抑制。schemathesis-nightly は schedule 専用で別の concurrency 設定。
+# ただし main (= 自動 deploy が走る) では cancel しない: deploy 進行中に後続 push が
+# 来ても release を中断させない (中途半端な deploy を防ぐ)。
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   # E2E smoke を path-filter で関連変更 PR のみに走らせるため、changed file
@@ -43,12 +45,24 @@ jobs:
       pull-requests: read
     outputs:
       e2e: ${{ steps.filter.outputs.e2e }}
+      # deploy-production の per-area gate 用。backend/frontend のどちらが変わったかで
+      # release step を出し分け、migrations 変更は自動 deploy を block する。
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      migrations: ${{ steps.filter.outputs.migrations }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d  # v4.0.1
         id: filter
         with:
           filters: |
+            backend:
+              - 'backend/**'
+            frontend:
+              - 'frontend/**'
+            # 自動 deploy を止める判定 (本 slice は migration を手動運用)。
+            migrations:
+              - 'backend/alembic/versions/**'
             e2e:
               # frontend auth コア
               - 'frontend/src/lib/auth/**'
@@ -515,3 +529,137 @@ jobs:
           pip install pre-commit
           pre-commit run gitleaks --all-files --show-diff-on-failure
           pre-commit run hadolint-docker --all-files --show-diff-on-failure
+
+  # ---- CI gate (全必須チェックの集約) ----
+  # deploy-production が個別テスト job で先走らないよう、全テスト job を 1 つに
+  # 集約する単一ゲート。deploy は本 job の success だけを待てばよい。
+  # frontend-e2e-smoke は path 条件で skip されうるため success|skipped を許容し、
+  # それ以外 (backend-unit / backend-integration / frontend / pre-commit) は
+  # success 必須とする。
+  ci-gate:
+    name: CI gate
+    needs: [backend-unit, backend-integration, frontend, frontend-e2e-smoke, pre-commit]
+    # 一部 needs が skip (e2e) されても本 job 自体は評価したいので !cancelled()。
+    # 失敗 needs があっても下の script で明示判定して exit 1 する。
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all checks (frontend-e2e-smoke は skip 許容)
+        run: |
+          fail=0
+          for r in \
+            "backend-unit=${{ needs.backend-unit.result }}" \
+            "backend-integration=${{ needs.backend-integration.result }}" \
+            "frontend=${{ needs.frontend.result }}" \
+            "pre-commit=${{ needs.pre-commit.result }}"; do
+            if [ "${r#*=}" != "success" ]; then
+              echo "::error::${r%%=*} = ${r#*=} (success required)"
+              fail=1
+            fi
+          done
+          e2e="${{ needs.frontend-e2e-smoke.result }}"
+          case "$e2e" in
+            success|skipped) echo "frontend-e2e-smoke = $e2e (ok)" ;;
+            *) echo "::error::frontend-e2e-smoke = $e2e (success or skipped required)"; fail=1 ;;
+          esac
+          exit $fail
+
+  # ---- 本番デプロイ (main merge → git SHA tag で build once → core/collect/frontend) ----
+  # 業界標準の核: Build once / immutable artifact = git SHA / tested artifact を deploy。
+  # 1 job で step を順序実行し backend (core→collect 同一 image) → frontend の順に release。
+  # ci-gate の success だけを gate にするので個別テスト結果には依存しない。
+  deploy-production:
+    name: Deploy production (backend -> frontend)
+    needs: [ci-gate, changes]
+    # main への push かつ ci-gate 成功、かつ backend/frontend のいずれかが変わったときのみ。
+    # ci-gate / changes は常に完走する (skip されない) ため result == 'success' で素直に gate できる。
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main'
+            && needs.ci-gate.result == 'success'
+            && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true') }}
+    runs-on: ubuntu-latest
+    # Fly の health check 待ち等で release が stuck したとき、main は直列化されるため
+    # 後続 deploy が無限に待たされる。45 分で打ち切り (前 run を手動 cancel 不要に)。
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    # deploy 同士は直列化する (並行 release で image race を避ける)。CI 全体の
+    # concurrency とは別 group にし、進行中の deploy は cancel しない。
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    env:
+      # org-scoped token (collect が core の registry image を cross-app pull するため
+      # 必須)。GitHub repo secret に登録する。手動前提は plan file / runbook 参照。
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+    steps:
+      # deploy 判定を Step Summary に焼く: paths-filter の結果と SHA を可視化し、
+      # 「deploy したつもりが skip されていた」を run 概要から追えるようにする。
+      - name: Summarize deploy decision
+        run: |
+          {
+            echo "## Deploy decision"
+            echo ""
+            echo "| field | value |"
+            echo "| --- | --- |"
+            echo "| sha | \`${{ github.sha }}\` |"
+            echo "| backend | ${{ needs.changes.outputs.backend }} |"
+            echo "| frontend | ${{ needs.changes.outputs.frontend }} |"
+            echo "| migrations | ${{ needs.changes.outputs.migrations }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # migration blocker: 本 slice は migration を手動運用するため、alembic versions が
+      # 変わった merge は自動 deploy を明示 fail で止める (gate 自動化は次タスク)。
+      # 赤くなるだけだと CI 故障と区別がつかないため、意図的 block であることを
+      # Step Summary に明記する。
+      - name: Block auto-deploy on migration changes (gate = next task)
+        if: ${{ needs.changes.outputs.migrations == 'true' }}
+        run: |
+          {
+            echo "## ⛔ Deployment intentionally blocked"
+            echo ""
+            echo "Deployment intentionally blocked because migration files changed."
+            echo "Run production migration manually before deploy."
+            echo ""
+            echo "- backend/alembic/versions changed in this merge"
+            echo "- Apply the migration manually (expand-only / owner URL), then deploy manually"
+            echo "- Migration gate automation is the next task"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::error::backend/alembic/versions changed — auto-deploy is intentionally blocked in this slice."
+          echo "Apply the migration manually (expand-only / owner URL), deploy manually, then continue."
+          echo "Migration gate automation is the next task."
+          exit 1
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1  # v1.6
+
+      # ---- backend を先に: build once → core / collect を同一 image で release ----
+      # --build-only --push で build + registry push のみ (release しない)。image-label に
+      # git SHA を焼くと ref は registry.fly.io/<app>:<SHA> に確定する。
+      - name: Build & push backend image once (label = SHA)
+        if: ${{ needs.changes.outputs.backend == 'true' }}
+        working-directory: backend
+        run: |
+          flyctl deploy -c fly.core.toml -a your-vector-core-app \
+            --remote-only --build-only --push --image-label "${{ github.sha }}"
+
+      - name: Release vector-core (prebuilt image)
+        if: ${{ needs.changes.outputs.backend == 'true' }}
+        working-directory: backend
+        run: |
+          flyctl deploy -c fly.core.toml -a your-vector-core-app \
+            --image "registry.fly.io/your-vector-core-app:${{ github.sha }}"
+
+      - name: Release vector-collect (same image as core)
+        if: ${{ needs.changes.outputs.backend == 'true' }}
+        working-directory: backend
+        run: |
+          flyctl deploy -c fly.collect.toml -a your-vector-collect-app \
+            --image "registry.fly.io/your-vector-core-app:${{ github.sha }}"
+
+      # ---- frontend を後に: build + release (こちらは共有しないので通常 deploy) ----
+      - name: Deploy frontend (build + release, label = SHA)
+        if: ${{ needs.changes.outputs.frontend == 'true' }}
+        working-directory: frontend
+        run: |
+          flyctl deploy -c fly.toml -a your-vector-frontend-app \
+            --remote-only --image-label "${{ github.sha }}"
